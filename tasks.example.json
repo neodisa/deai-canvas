@@ -1,0 +1,11 @@
+{
+  "current": "demo",
+  "design_work_root": "~/deai-work",
+  "tasks": {
+    "demo": {
+      "title": "Demo task",
+      "dir": "~/deai-work/demo",
+      "profile": ""
+    }
+  }
+}

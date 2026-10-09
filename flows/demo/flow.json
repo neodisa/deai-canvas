@@ -1,0 +1,19 @@
+{
+  "flow": "demo",
+  "title": "Демо: віджет списку",
+  "nodes": [
+    {"id": "step-01", "title": "Вхід на картку", "ia_anchor": "Компанія → Досьє",
+     "shell": "demo-shell", "user_goal": "зрозуміти, куди потрапив",
+     "entry_from": [], "states": ["default", "empty"], "pos": {"col": 1, "row": 1}},
+    {"id": "step-02", "title": "Віджет — список", "ia_anchor": "Компанія → Досьє → Віджет",
+     "shell": "demo-shell", "user_goal": "оцінити дані списку",
+     "entry_from": ["step-01"], "states": ["default", "empty"], "pos": {"col": 2, "row": 1}},
+    {"id": "step-03", "title": "Деталка запису", "ia_anchor": "Компанія → … → Запис",
+     "shell": "demo-shell", "user_goal": "зрозуміти деталі запису",
+     "entry_from": ["step-02"], "states": ["default"], "pos": {"col": 3, "row": 1}}
+  ],
+  "edges": [
+    {"from": "step-01", "to": "step-02", "action": "клік по віджету"},
+    {"from": "step-02", "to": "step-03", "action": "клік по рядку"}
+  ]
+}

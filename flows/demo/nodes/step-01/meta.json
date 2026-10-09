@@ -1,0 +1,11 @@
+{
+  "canon": "v1",
+  "variants": {
+    "v1": {"label": "таблиця", "created": "13.07.2026", "state_pages": {"empty": "v1.empty.html"}},
+    "v2": {"label": "картки", "created": "13.07.2026", "state_pages": {}}
+  },
+  "notes": [
+    {"variant": "v2", "text": "картки з'їдають вертикаль", "status": "open", "author": "local", "date": "13.07.2026"}
+  ],
+  "history": []
+}

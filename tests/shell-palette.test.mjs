@@ -1,0 +1,722 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+import { DICT, setLang, t } from "../app/i18n.js";
+import { ico } from "../app/icons.js";
+import {
+  filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
+} from "../app/shell-palette.js";
+
+test.beforeEach(() => setLang("uk"));
+
+const S = (o = {}) => ({
+  mode: "layout", view: "grid", hasIteration: true,
+  pagesError: "", flowRaw: true, flowError: "",
+  published: true, iterPub: true, pagePub: true, pickedPage: "main",
+  gl: "sync", iterLabel: "Іт.3",
+  shots: { have: 3, stale: 0, total: 3, running: false, bad: false, done: 0 },
+  lang: "uk", commentMode: "local", ...o,
+});
+
+/* ── стереження зі спеки задачі ──────────────────────────────────────────── */
+
+/* 1. Кожна дія має `labelKey`, який ІСНУЄ у словнику — той самий клас
+   перевірки, що `tests/i18n-keys.test.mjs` для решти коду, тут — по самому
+   реєстру: без цього `t()` кине виняток замість підпису на першому ж
+   рендері палітри. Перевіряємо в ОБОХ мовах, бо `deepEqual(en,uk)` набору
+   ключів (`tests/i18n.test.mjs`) не рятує від дірки в САМЕ ЦЬОМУ реєстрі,
+   якщо ключ узагалі вигаданий і не потрапив у жоден словник. */
+test("кожна дія несе labelKey, який є в обох словниках", () => {
+  const actions = paletteActions(S());
+  assert.ok(actions.length > 10, `дій лише ${actions.length} — реєстр порожній чи майже`);
+  for (const a of actions) {
+    assert.ok(a.labelKey, `дія «${a.id}» без labelKey`);
+    assert.ok(DICT.uk[a.labelKey] !== undefined, `«${a.labelKey}» немає в DICT.uk (дія «${a.id}»)`);
+    assert.ok(DICT.en[a.labelKey] !== undefined, `«${a.labelKey}» немає в DICT.en (дія «${a.id}»)`);
+  }
+});
+
+/* Той самий обов'язок — для `whyKey` вимкнених дій (стереження 4 нижче
+   перевіряє САМ ФАКТ наявності `whyKey`; тут — що це ІМ'Я, яке `t()` не
+   відкине). */
+test("whyKey кожної вимкненої дії теж є в обох словниках", () => {
+  const actions = paletteActions(S({
+    flowRaw: null, pagesError: "500", pickedPage: null, published: false, gl: "off",
+  }));
+  const disabled = actions.filter((a) => a.disabled);
+  assert.ok(disabled.length > 0, "жодної вимкненої дії — гілку не перевірено");
+  for (const a of disabled) {
+    assert.ok(a.whyKey, `дія «${a.id}» вимкнена без whyKey`);
+    assert.ok(DICT.uk[a.whyKey] !== undefined, `whyKey «${a.whyKey}» немає в DICT.uk (дія «${a.id}»)`);
+  }
+});
+
+/* 2. Фільтр знаходить дію мови ОБОМА мовами — виправлена вада прототипу
+   (шапка `shell-palette.js`): без псевдонімів пошук іншою мовою, ніж
+   поточна, не знаходив нічого. */
+test("пошук мови працює обома мовами — латиницею в українському інтерфейсі, кирилицею в англійському", () => {
+  setLang("uk");
+  const actionsUk = paletteActions(S({ lang: "uk" }));
+  const foundLatin = filterActions(actionsUk, "language");
+  assert.ok(foundLatin.some((a) => a.id === "lang-en"),
+    "запит «language» в українському інтерфейсі не знайшов пункту мови");
+
+  setLang("en");
+  const actionsEn = paletteActions(S({ lang: "en" }));
+  const foundCyrillic = filterActions(actionsEn, "мова");
+  assert.ok(foundCyrillic.some((a) => a.id === "lang-uk"),
+    "запит «мова» в англійському інтерфейсі не знайшов пункту мови");
+  setLang("uk");
+});
+
+/* 3. Підпис мови — завжди в ПОТОЧНІЙ мові й називає ЦІЛЬОВУ; поточна мова
+   позначена вибраною (whyKey) і не діє (disabled). */
+test("підпис перемикача мови — поточною мовою, ціль — інша; поточна позначена й вимкнена", () => {
+  setLang("uk");
+  let actions = paletteActions(S({ lang: "uk" }));
+  let uk = actions.find((a) => a.id === "lang-uk");
+  let en = actions.find((a) => a.id === "lang-en");
+  assert.equal(uk.disabled, true, "поточна мова (uk) мусить бути вимкнена");
+  assert.equal(uk.whyKey, "langCur");
+  assert.equal(en.disabled, false, "цільова мова (en) мусить діяти");
+  assert.equal(t(uk.labelKey), "Мова інтерфейсу: українська", "підпис поточною мовою (uk)");
+  assert.equal(t(en.labelKey), "Мова інтерфейсу: English", "підпис поточною мовою (uk), називає English");
+
+  setLang("en");
+  actions = paletteActions(S({ lang: "en" }));
+  uk = actions.find((a) => a.id === "lang-uk");
+  en = actions.find((a) => a.id === "lang-en");
+  assert.equal(en.disabled, true, "поточна мова (en) мусить бути вимкнена");
+  assert.equal(uk.disabled, false, "цільова мова (uk) мусить діяти");
+  assert.equal(t(en.labelKey), "Interface language: English", "підпис поточною мовою (en)");
+  assert.equal(t(uk.labelKey), "Interface language: Ukrainian", "підпис поточною мовою (en), називає Ukrainian");
+  setLang("uk");
+});
+
+/* 3b. Аудиторія коментарів у ⌘K — НЕ дубль вкладок у панелі коментатора, а
+   АВАРІЙНИЙ ВИХІД. Коли коментатор не піднявся (мертвий CDN → банер
+   `__clDown` у рамці, `COMMENT_SNIPPET` у `serve.py`), разом із ним зникають
+   і вкладки — і вернутись у локальний канал стало б нічим, бо зі смуги
+   перемикач прибрано принципом 6 PRODUCT.md. Повне ЧОМУ — коментар над
+   групою `gSet` у `app/shell-palette.js`; ці тести стережуть, щоб «прибрати
+   дубль» не стало тихою правкою.
+
+   `act` мусить бути ТОЙ САМИЙ, що в приймача `postMessage` і вкладок
+   (`BAR_ACTIONS.aud` → `setAudience`): друга реалізація перемикання
+   коштувала б розходження позначки в оболонці з тим, що показано в рамці —
+   рівно того, від чого спека забороняє коментатору навігувати самому. */
+test("аудиторія коментарів є в палітрі, у групі налаштувань, і йде через act:aud", () => {
+  const actions = paletteActions(S());
+  const local = actions.find((a) => a.id === "aud-local");
+  const project = actions.find((a) => a.id === "aud-project");
+  assert.ok(local, "немає аварійного виходу в локальний канал (⌘K)");
+  assert.ok(project, "немає аварійного виходу в командний канал (⌘K)");
+  for (const a of [local, project]) {
+    assert.equal(a.act, "aud", `дія «${a.id}» не йде через ту саму реалізацію, що вкладки`);
+    assert.equal(a.group, "gSet", `дія «${a.id}» не в групі налаштувань, поруч із мовою`);
+  }
+  assert.equal(local.val, "local");
+  assert.equal(project.val, "project");
+});
+
+/* Поточна аудиторія позначена ТИМ САМИМ способом, що поточна мова —
+   `disabled` + видима причина (`whyKey`). Іншого способу позначки реєстр не
+   має (`itemHTML` показує `whyKey` рівно замість клавіші), і вигадувати
+   третій заради двох пунктів означало б розійтись із сусідом по групі. */
+test("поточна аудиторія позначена й не діє, друга діє — в обох напрямках", () => {
+  for (const [cur, other] of [["local", "project"], ["project", "local"]]) {
+    const actions = paletteActions(S({ commentMode: cur }));
+    const on = actions.find((a) => a.id === `aud-${cur}`);
+    const off = actions.find((a) => a.id === `aud-${other}`);
+    assert.equal(on.disabled, true, `поточна аудиторія «${cur}» мусить бути вимкнена`);
+    assert.equal(on.whyKey, "audCur", `поточна аудиторія «${cur}» без причини`);
+    assert.equal(off.disabled, false, `аудиторія «${other}» мусить діяти з каналу «${cur}»`);
+  }
+});
+
+/* Аварійний вихід мусить бути ЗНАХОДЖУВАНИЙ: вихід, якого не знайти, — не
+   вихід. `t()` віддає лише ПОТОЧНУ мову, тож без псевдонімів запит
+   «audience» в українському інтерфейсі не знаходив би нічого — рівно та вада
+   прототипу, яку для мови вже виправлено (шапка `shell-palette.js`). */
+test("аудиторія знаходиться в ⌘K обома мовами", () => {
+  setLang("uk");
+  const uk = filterActions(paletteActions(S({ lang: "uk" })), "audience");
+  assert.ok(uk.some((a) => a.id === "aud-local"),
+    "запит «audience» в українському інтерфейсі не знайшов аудиторії");
+  setLang("en");
+  const en = filterActions(paletteActions(S({ lang: "en" })), "аудиторія");
+  assert.ok(en.some((a) => a.id === "aud-local"),
+    "запит «аудиторія» в англійському інтерфейсі не знайшов аудиторії");
+  setLang("uk");
+});
+
+/* 4. Вимкнена дія несе `whyKey`, а не просто зникає (за винятком свідомо
+   ОМІТОВАНИХ груп — gIter/go-iter/gFrames без ітерації, задокументовано в
+   шапці `paletteActions`: там немає самого ПОНЯТТЯ дії, а не «дія, яку не
+   можна виконати»). Перевіряємо на реальних дизʼюнктивних станах. */
+test("вимкнена дія завжди несе whyKey", () => {
+  const scenarios = [
+    S({ flowRaw: null, flowError: null }),               // «Флоу» без flow.json
+    S({ pagesError: "500" }),                             // сторінки не завантажились
+    S({ pickedPage: null }),                               // сторінку не обрано
+    S({ published: false }),                               // прев'ю нема
+    S({ gl: "sync" }),                                     // GitLab уже збігається
+    S({ shots: { have: 5, stale: 0, total: 5, running: false, bad: false, done: 0 } }), // усе свіже
+    S({ lang: "uk" }),                                     // поточна мова
+    S({ mode: "overview" }),                               // «В Figma» в «Огляді»
+  ];
+  for (const st of scenarios) {
+    for (const a of paletteActions(st)) {
+      if (a.disabled) assert.ok(a.whyKey, `дія «${a.id}» вимкнена без whyKey (стан ${JSON.stringify(st)})`);
+    }
+  }
+});
+
+/* 5. Кожна дія має або `act` (є куди виконати), або явно позначена як
+   «лише перехід» (`navOnly: true`) — дія без обробника це кнопка, що нічого
+   не робить. Перевіряємо на кількох різних станах, щоб зловити дію, яка
+   з'являється лише за певної гілки (наприклад `glsetup`/`glpull`). */
+test("кожна дія має act або явно позначена navOnly — третього не дано", () => {
+  const states = [
+    S(), S({ mode: "overview" }), S({ gl: "off" }), S({ gl: "behind" }),
+    S({ hasIteration: false, shots: null, pickedPage: null }),
+  ];
+  let sawNavOnly = false;
+  let sawAct = false;
+  for (const st of states) {
+    for (const a of paletteActions(st)) {
+      if (a.navOnly) { sawNavOnly = true; assert.ok(!a.act, `дія «${a.id}» одночасно navOnly й act`); }
+      else { sawAct = true; assert.ok(a.act, `дія «${a.id}» без act і без navOnly — кнопка в нікуди`); }
+    }
+  }
+  assert.ok(sawNavOnly, "жодної navOnly дії не побачено — перевірку не пройдено по суті");
+  assert.ok(sawAct, "жодної дії з act не побачено — перевірку не пройдено по суті");
+});
+
+/* Мутаційний доказ до (5): реєстр без пари act/navOnly має ловитись. Symуluje
+   "забутий act" прямо тут — без правки самого модуля. */
+test("мутація: дія без act і без navOnly — тест вище її ловить", () => {
+  const broken = [...paletteActions(S()), { id: "broken", group: "gGo", labelKey: "tasks", icon: "task" }];
+  const bad = broken.filter((a) => !a.navOnly && !a.act);
+  assert.equal(bad.length, 1, "зіпсована дія мусить бути рівно одна — фікстура тесту, не модуль");
+  assert.equal(bad[0].id, "broken");
+});
+
+/* «Задачі» у ⌘K — той самий вхід, що логотип у смузі (`act:"home"`), а не
+   `navOnly`, що розкривав дропдаун крихти. Раніше `go-tasks` міг бути «переходом»,
+   бо екрана не було; тепер це екран, і третього шляху до нього бути не мусить. */
+test("go-tasks — act:home (екран «Задачі»), не navOnly", () => {
+  const a = paletteActions(S()).find((x) => x.id === "go-tasks");
+  assert.ok(a, "go-tasks зник із реєстру");
+  assert.equal(a.act, "home");
+  assert.ok(!a.navOnly, "go-tasks знову navOnly — ⌘K «Задачі» відкриє дропдаун, а не екран");
+  // і без ітерації (задача лише що заведена) двері на екран лишаються
+  const bare = paletteActions(S({ hasIteration: false, shots: null, pickedPage: null }));
+  assert.equal(bare.find((x) => x.id === "go-tasks")?.act, "home");
+});
+
+/* ── розмітка ──────────────────────────────────────────────────────────── */
+
+test("paletteHTML: підкладка, поле пошуку і список у розмітці", () => {
+  const html = paletteHTML(paletteActions(S()), "", 0);
+  assert.match(html, /class="scrim" data-act="closeoverlay"/);
+  assert.match(html, /data-stop="1"/);
+  assert.match(html, /id="palq"/);
+  assert.match(html, /class="pal-list"/);
+});
+
+test("paletteListHTML і paletteHTML не розходяться: один і той самий уміст списку", () => {
+  const actions = paletteActions(S());
+  const list = paletteListHTML(actions, "", 0);
+  const full = paletteHTML(actions, "", 0);
+  assert.ok(full.includes(list), "paletteHTML мусить нести РІВНО той самий список, що paletteListHTML");
+});
+
+test("пункти згруповані заголовками груп, кожна група — існуючий ключ словника", () => {
+  const html = paletteListHTML(paletteActions(S()), "", 0);
+  const groups = [...html.matchAll(/class="pal-grp">([^<]*)</g)].map((m) => m[1]);
+  assert.ok(groups.length >= 4, `груп лише ${groups.length}`);
+});
+
+test("порожній результат пошуку показує palNone, а не порожній список", () => {
+  const html = paletteListHTML(paletteActions(S()), "щосьнеіснуючещо12345", 0);
+  assert.match(html, /class="pal-none"/);
+  assert.doesNotMatch(html, /class="pal-it"/);
+});
+
+test("курсор клемпиться в межі відфільтрованого списку — не падає й не губить підсвітку", () => {
+  const actions = paletteActions(S());
+  assert.doesNotThrow(() => paletteListHTML(actions, "", 9999));
+  const html = paletteListHTML(actions, "", 9999);
+  assert.match(html, /pal-it--cur/, "після клемпу підсвітка мусить лишитись на останньому пункті");
+});
+
+test("данжер-дії мають клас pal-it--danger", () => {
+  const html = paletteListHTML(paletteActions(S()), "видалити", 0);
+  assert.match(html, /pal-it--danger/);
+});
+
+test("текст із даних екранується (data-стан не сміє стати розміткою)", () => {
+  // iterLabel потрапляє у підпис glPush/glPull через t(labelKey, val) —
+  // перевіряємо саме цей шлях, а не вигадану дірку.
+  const html = paletteListHTML(paletteActions(S({ gl: "behind", iterLabel: '<img src=x onerror=1>' })), "gitlab", 0);
+  assert.ok(!html.includes("<img src=x"), "неекранований текст доїхав до розмітки");
+});
+
+test("keysHTML: підкладка, довідка і клавіші I/M/Esc/⌘K", () => {
+  const html = keysHTML();
+  assert.match(html, /class="scrim" data-act="closeoverlay"/);
+  assert.match(html, /data-stop="1"/);
+  assert.match(html, /<kbd>⌘K<\/kbd>/);
+  assert.match(html, /<kbd>Esc<\/kbd>/);
+  assert.match(html, /<kbd>I<\/kbd>/);
+});
+
+/* ── кожна підказка клавіші має обробник ─────────────────────────────────
+ *
+ * ⚠️ Тут раніше стояла перевірка, прибита до ДВОХ ГЛІФІВ: `doesNotMatch(⌥↓)`
+ * і `doesNotMatch(⌥↑)`. Вона називала себе інваріантом «клавіші, якої немає,
+ * ми не документуємо» — і лишалась зеленою при вже порушеному інваріанті:
+ * `keysHTML()` документував `⌥M`, `⌘\` і `⌘⏎`, у яких обробника не було НІ
+ * ДЕ, а реєстр віз ще п'ять (`⌘⇧T`/`⌘⇧I`/`⌘⇧P`/`⇧N`/`⇧P`). Мутація, яку
+ * вона пропускала, — рядок із будь-яким гліфом, крім двох названих
+ * (виміряно: `${row(t("kMode"), "⌥→")}` дає 25 pass / 0 fail).
+ *
+ * Тепер це той інваріант, який перевірка обіцяла: КОЖНА `kbd`-підказка —
+ * і з `keysHTML()`, і з колонки реєстру `paletteActions()` — мусить мати
+ * знайдену в коді прив'язку з ТИМИ САМИМИ модифікаторами.
+ *
+ * ── Межа перевірки (як саме читаються прив'язки і чого цей спосіб не бачить)
+ *
+ * Читаються ТРИ файли, і кожен — бо він справді власник частини підказок:
+ *   · `app/app.js` — акорди оболонки (`⌘K`, `?`, `⌥M`, `⌘\`, `Esc`);
+ *   · `app/vendor/inspector.js` — `I` (увімкнути) і `M` (каскад/лінійка).
+ *     Це вендор, чіпати його заборонено, але ЧИТАТИ — саме те, що робить
+ *     перевірку не «повіримо на слово»: якщо інспектор загубить свою
+ *     прив'язку, охоронець упаде разом із ним;
+ *   · `app/vendor/comment-layer.min.js` — `C`/`P`/`H` (рядки під зіркою).
+ *
+ * Спосіб — статичний розбір, і в нього рівно три записані обмеження:
+ *   1. Модифікатори читаються з УМОВИ найближчого `if (…)`, що охоплює
+ *      порівняння клавіші. Охоронна клауза ПОЗА цим `if`
+ *      (`if (e.metaKey||e.altKey) return;` на початку `_onKey` інспектора)
+ *      у набір не потрапляє — тому прив'язка інспектора читається як «голе
+ *      `I`», що для нього ПРАВИЛЬНО (він і працює без модифікаторів), але
+ *      формально це послаблення, не строгість.
+ *   2. `comment-layer.min.js` мініфікований: його умови не розбираються
+ *      взагалі, беруться лише ЛІТЕРИ, з якими порівнюється псевдонім
+ *      `.key.toLowerCase()`. Тобто для трьох рядків під зіркою перевірка
+ *      відповідає на «літера в його обробнику взагалі є?», а не на «з
+ *      якими модифікаторами». Розбирати умови в одному рядку на 300 КБ
+ *      означало б вгадувати, а не міряти.
+ *   3. Прив'язка, зібрана зі ЗМІННОЇ (`const k = KEYS.mode; if (ev.key === k)`),
+ *      статично не видима — її не бачить ні цей розбір, ні будь-який інший
+ *      без запуску. У трьох читаних файлах такого немає (виміряно), а якби
+ *      з'явилось — охоронець упав би на живій підказці, тобто помилився б у
+ *      БЕЗПЕЧНИЙ бік: змусив би дописати або прив'язку явно, або виняток із
+ *      причиною.
+ *
+ * Інваріант СВІДОМО односторонній: «підказка без обробника» — брехня
+ * інтерфейсу, а «обробник без підказки» — лише незадокументована зручність
+ * (Escape у полі вводу, ↑↓ у палітрі), і вимагати рядок у довідці для
+ * кожного натиску означало б роздути її до непотребу.
+ */
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const src = (rel) => readFileSync(path.join(REPO, "app", rel), "utf8");
+
+/* Гліфи модифікаторів → імена прапорців події. */
+const MOD_GLYPH = { "⌘": "meta", "⌃": "meta", "⌥": "alt", "⇧": "shift" };
+/* Гліфи й скорочення НЕлітерних клавіш → `KeyboardEvent.key` у нижньому
+   регістрі. Довідка малює їх символами (так і в затвердженому прототипі),
+   код порівнює імена — без цієї таблиці перевірка звіряла б «⏎» з «enter». */
+const KEY_GLYPH = {
+  "⏎": "enter", "↵": "enter", "esc": "escape", "⎋": "escape",
+  "↑": "arrowup", "↓": "arrowdown", "←": "arrowleft", "→": "arrowright",
+  "⇥": "tab", "␣": " ", "⌫": "backspace",
+};
+/* `KeyboardEvent.code` → `key`: `code` беремо там, де `key` залежить від
+   розкладки (macOS ⌥M віддає `µ`, українська — `ь`, обидві — `KeyM`). */
+function codeToKey(code) {
+  const m = /^Key([A-Z])$/.exec(code);
+  if (m) return m[1].toLowerCase();
+  return { Backslash: "\\", Slash: "/", Enter: "enter", Escape: "escape", Space: " " }[code] || code.toLowerCase();
+}
+
+/** Підказку («⌘⇧T», «Esc», «I») — у `{key, mods:Set, shown}`. */
+function parseHint(shown) {
+  const mods = new Set();
+  let rest = shown;
+  while (rest.length && MOD_GLYPH[rest[0]]) { mods.add(MOD_GLYPH[rest[0]]); rest = rest.slice(1); }
+  const low = rest.toLowerCase();
+  return { shown, mods, key: KEY_GLYPH[low] || KEY_GLYPH[rest] || low };
+}
+
+/** Умови всіх `if (…)` файла: `[{open, close, text}]`, дужки збалансовані. */
+function ifConditions(source) {
+  const out = [];
+  for (const m of source.matchAll(/\bif\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === "(") depth += 1;
+      else if (source[i] === ")") {
+        depth -= 1;
+        if (depth === 0) { out.push({ open, close: i, text: source.slice(open, i + 1) }); break; }
+      }
+    }
+  }
+  return out;
+}
+
+const MOD_RE = {
+  meta: /\b(?:meta|metaKey|ctrlKey)\b/g,
+  alt: /\b(?:alt|altKey)\b/g,
+  shift: /\b(?:shift|shiftKey)\b/g,
+};
+
+/** Модифікатор ПОТРІБЕН, якщо згадується без заперечення. `!meta`/`!ev.altKey`
+ *  — навпаки, ЗАБОРОНА, і вона лишає модифікатор поза набором: саме так
+ *  «?» відрізняється від «⌥?» в одному й тому самому слухачі. */
+function requiredMods(cond) {
+  const mods = new Set();
+  for (const [name, re] of Object.entries(MOD_RE)) {
+    for (const m of cond.matchAll(re)) {
+      const before = cond.slice(0, m.index).replace(/[\s\w.$]*$/, "");
+      if (!before.endsWith("!")) { mods.add(name); break; }
+    }
+  }
+  return mods;
+}
+
+/** Прив'язки з НЕмініфікованого джерела: `[{key, mods}]`. */
+function bindings(source, file) {
+  const ifs = ifConditions(source);
+  const modsAt = (at) => {
+    const inner = ifs.filter((c) => c.open < at && at < c.close)
+      .sort((a, b) => b.open - a.open)[0];
+    return inner ? requiredMods(inner.text) : new Set();
+  };
+  const out = [];
+  const push = (key, at) => out.push({ key: String(key).toLowerCase(), mods: modsAt(at), file });
+  // `ev.key === 'Escape'`, `ev.key.toLowerCase() === 'k'`, `e.key === '?'`
+  for (const m of source.matchAll(/\.key(?:\.toLowerCase\(\))?\s*===?\s*(['"])([^'"]{1,12})\1/g)) {
+    push(m[2], m.index);
+  }
+  // `/^[mMьЬ]$/.test(e.key)` — форма, якою інспектор ловить обидві розкладки
+  for (const m of source.matchAll(/\/\^\[([^\]]+)\]\$\/[gimsuy]*\.test\(\s*[\w.$]*\.key/g)) {
+    for (const ch of new Set(m[1].toLowerCase())) push(ch, m.index);
+  }
+  // `ev.code === 'KeyM'` — прив'язка, незалежна від розкладки
+  for (const m of source.matchAll(/\.code\s*===?\s*(['"])([^'"]{1,16})\1/g)) {
+    push(codeToKey(m[2]), m.index);
+  }
+  return out;
+}
+
+/** Мініфіковане джерело: ЛИШЕ літери, без розбору умов (межа 2 у шапці). */
+function bareKeys(source) {
+  const alias = new Set();
+  for (const m of source.matchAll(/\b([A-Za-z_$][\w$]*)\s*=\s*[\w$.]+\.key(?:\.toLowerCase\(\))?/g)) {
+    alias.add(m[1]);
+  }
+  const keys = new Set();
+  for (const m of source.matchAll(/([A-Za-z_$][\w$]*)\s*===?\s*(['"])([^'"]{1,12})\2/g)) {
+    if (alias.has(m[1])) keys.add(m[3].toLowerCase());
+  }
+  for (const m of source.matchAll(/\.key(?:\.toLowerCase\(\))?\s*===?\s*(['"])([^'"]{1,12})\1/g)) {
+    keys.add(m[2].toLowerCase());
+  }
+  return [...keys].map((key) => ({ key, mods: new Set(), file: "comment-layer.min.js" }));
+}
+
+const sameMods = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+
+/** Усі підказки, які взагалі показує оболонка: довідка `?` + колонка реєстру. */
+function allHints() {
+  const out = [];
+  // `row()` у `keysHTML` малює рівно `<dt>підпис</dt><dd><kbd>клавіша</kbd></dd>`
+  for (const m of keysHTML().matchAll(/<dt>([^<]*)<\/dt><dd><kbd>([^<]*)<\/kbd><\/dd>/g)) {
+    out.push({ from: `довідка «${m[1].trim()}»`, ...parseHint(m[2]) });
+  }
+  /* Реєстр — на кількох станах: частина дій існує лише в своїй гілці
+     (`inspector` тільки в макеті, `newit` тільки з ітерацією), і на одному
+     стані їхні підказки просто не з'явились би. */
+  for (const st of [S(), S({ mode: "overview" }), S({ gl: "off" }), S({ gl: "behind" }),
+    S({ hasIteration: false, shots: null, pickedPage: null })]) {
+    for (const a of paletteActions(st)) {
+      if (a.kbd) out.push({ from: `реєстр «${a.id}»`, ...parseHint(a.kbd) });
+    }
+  }
+  return out;
+}
+
+test("кожна kbd-підказка (довідка + реєстр) має обробник у коді", () => {
+  const bound = [
+    ...bindings(src("app.js"), "app.js"),
+    ...bindings(src(path.join("vendor", "inspector.js")), "vendor/inspector.js"),
+    ...bareKeys(src(path.join("vendor", "comment-layer.min.js"))),
+  ];
+
+  /* Свідок проти вакуумного проходу — і він рахує ЗНАЙДЕНІ ПРИВ'ЯЗКИ, а не
+     прочитані файли: зламаний регексп дав би нуль прив'язок, і тоді впала б
+     кожна підказка (тобто впав би тест), — але зламана ТАБЛИЦЯ гліфів дала б
+     нуль ПІДКАЗОК, і тест зеленів би на порожньому циклі. Стережемо обидва
+     кінці. */
+  const hints = allHints();
+  assert.ok(hints.length >= 8,
+    `знайдено лише ${hints.length} підказок — розбір розмітки довідки чи реєстру зламаний`);
+  assert.ok(bound.length >= 8,
+    `знайдено лише ${bound.length} прив'язок — розбір джерел зламаний`);
+  assert.ok(hints.some((h) => h.mods.size > 0) && hints.some((h) => h.mods.size === 0),
+    "перевірено лише один клас підказок (акорди АБО голі клавіші) — інваріант не пройдено по суті");
+
+  /* `[...new Set(…)]` — та сама підказка приходить із реєстру на кожному зі
+     п'яти станів (`allHints` це й задумано), і п'ять однакових рядків у
+     падінні лише ховають решту сиріт. */
+  const orphans = [...new Set(hints
+    .filter((h) => !bound.some((b) => b.key === h.key && sameMods(b.mods, h.mods)))
+    .map((h) => `«${h.shown}» (${h.from}) → key=${JSON.stringify(h.key)} `
+      + `mods=[${[...h.mods].sort().join(",")}] — обробника немає`))];
+
+  assert.deepEqual(orphans, [],
+    "підказка клавіші без обробника — рівно та брехня, від якої застерігає "
+    + `докстрінг keysHTML():\n${orphans.join("\n")}`);
+});
+
+/* ── гейти станів (той самий принцип, що bar-model.js) ───────────────────── */
+
+test("без ітерації немає гдІтер-групи і кадрів, є go-tasks/go-pages, немає go-iter", () => {
+  const actions = paletteActions(S({ hasIteration: false, shots: null, pickedPage: null }));
+  assert.ok(!actions.some((a) => ["newit", "renit", "dupit", "delit", "shoot"].includes(a.id)),
+    "дії над ітерацією/кадрами лишились без ітерації");
+  assert.ok(actions.some((a) => a.id === "go-tasks"));
+  assert.ok(actions.some((a) => a.id === "go-pages"));
+  assert.ok(!actions.some((a) => a.id === "go-iter"), "«перейти до ітерацій» без жодної ітерації — нікуди йти");
+});
+
+/* Той самий гейт, що в решти дій над ітерацією: без ітерації `projectId`
+   (`dc/<задача>/<ітерація>[/internal]`) не існує зовсім, рамка стоїть на
+   `about:blank` (`applyMode` в `app.js`), і перемикати канал було б ні для
+   чого. ОМІТ, а не «вимкнено з причиною», — той самий вибір, що для gIter. */
+test("без ітерації аудиторії в палітрі немає — канал ні до чого привʼязати", () => {
+  const actions = paletteActions(S({ hasIteration: false, shots: null, pickedPage: null }));
+  assert.ok(!actions.some((a) => a.id === "aud-local" || a.id === "aud-project"),
+    "аудиторія лишилась без ітерації");
+});
+
+test("інспектор і сегмент Сітка/Флоу існують лише у своєму режимі", () => {
+  assert.ok(paletteActions(S({ mode: "layout" })).some((a) => a.id === "inspector"));
+  assert.ok(!paletteActions(S({ mode: "overview" })).some((a) => a.id === "inspector"));
+  assert.ok(!paletteActions(S({ mode: "layout" })).some((a) => a.id === "view-grid"));
+  assert.ok(paletteActions(S({ mode: "overview" })).some((a) => a.id === "view-grid"));
+});
+
+test("GitLab: off показує лише glsetup, behind додає glpull, sync вимикає glpush", () => {
+  const off = paletteActions(S({ gl: "off" }));
+  assert.ok(off.some((a) => a.id === "glsetup"));
+  assert.ok(!off.some((a) => a.id === "glpush" || a.id === "glpull"));
+
+  const behind = paletteActions(S({ gl: "behind" }));
+  assert.ok(behind.some((a) => a.id === "glpull"));
+  assert.ok(behind.some((a) => a.id === "glpush" && !a.disabled));
+
+  const sync = paletteActions(S({ gl: "sync" }));
+  assert.ok(!sync.some((a) => a.id === "glpull"));
+  const push = sync.find((a) => a.id === "glpush");
+  assert.equal(push.disabled, true);
+  assert.equal(push.whyKey, "glSync");
+});
+
+test("gFrames: підпис і іконка відповідають реальному тумблеру старт/стоп PANEL_ACTIONS.shoot", () => {
+  const idle = paletteActions(S({ shots: { have: 0, stale: null, total: null, running: false, bad: false, done: 0 } }))
+    .find((a) => a.id === "shoot");
+  assert.equal(idle.labelKey, "shotsTakeBare");
+  assert.equal(idle.disabled, false);
+
+  const stale = paletteActions(S({ shots: { have: 3, stale: 2, total: 3, running: false, bad: false, done: 0 } }))
+    .find((a) => a.id === "shoot");
+  assert.equal(stale.labelKey, "shotsUpdateBare");
+
+  const running = paletteActions(S({ shots: { have: 3, stale: null, total: 5, running: true, bad: false, done: 2 } }))
+    .find((a) => a.id === "shoot");
+  assert.equal(running.labelKey, "shotsStop");
+
+  const fresh = paletteActions(S({ shots: { have: 3, stale: 0, total: 3, running: false, bad: false, done: 0 } }))
+    .find((a) => a.id === "shoot");
+  assert.equal(fresh.disabled, true);
+  assert.equal(fresh.whyKey, "whyFresh");
+});
+
+/* Виправлена вада прототипу (шапка модуля, п.1): «Відкрити превью» несе
+   act, а не лишається кнопкою-нопом, як у docs/proto/shell.html. */
+test("openpreview несе act — не повторює вади прототипу (кнопка без обробника)", () => {
+  const a = paletteActions(S()).find((x) => x.id === "openpreview");
+  assert.ok(a);
+  assert.equal(a.act, "openpreview");
+  assert.ok(!a.navOnly);
+});
+
+/* «В Figma» у ⌘K — та сама дія, що в смузі (`act:"figma"`), з тією самою
+   причиною вимкнення: друга реалізація причини розійшлася б із першою. */
+test("«В Figma» є в палітрі, у групі публікації, і вимикається тією ж причиною", () => {
+  const f = (o) => paletteActions(S(o)).find((a) => a.id === "figma");
+  assert.ok(f(), "дії «В Figma» немає в палітрі");
+  assert.equal(f().act, "figma");
+  assert.equal(f().group, "gPub");
+  assert.equal(f().disabled, false);
+  assert.deepEqual([f({ mode: "overview" }).disabled, f({ mode: "overview" }).whyKey],
+    [true, "whyFigmaOverview"]);
+});
+
+/* ── B4: дерево — команди групи gPage ────────────────────────────────────── */
+test("gPage: склад команд дерева (newfolder замість newpage)", () => {
+  const ids = paletteActions(S({ pickedKind: "folder", pickedHasParent: true }))
+    .filter((a) => a.group === "gPage").map((a) => a.id);
+  for (const id of ["newfolder", "groupsel", "ungroup", "outdent", "focusbranch", "togglekind"]) {
+    assert.ok(ids.includes(id), `немає команди ${id}`);
+  }
+  assert.ok(!ids.includes("newpage"), "newpage мав піти в B3");
+});
+
+test("«Розгрупувати» вимкнене, коли обрано не теку, і каже чому", () => {
+  const c = paletteActions(S({ pickedPage: "p", pickedKind: "page" })).find((x) => x.id === "ungroup");
+  assert.equal(c.disabled, true);
+  assert.equal(c.whyKey, "whyNotFolder");
+  const f = paletteActions(S({ pickedPage: "p", pickedKind: "folder", pickedHasChildren: true })).find((x) => x.id === "ungroup");
+  assert.ok(!f.disabled);
+  const empty = paletteActions(S({ pickedKind: "folder", pickedHasChildren: false })).find((x) => x.id === "ungroup");
+  assert.equal(empty.disabled, true);
+  assert.equal(empty.whyKey, "whyEmptyFolder");
+  const noIt = paletteActions(S({ hasIteration: false, shots: null, pickedKind: "folder", pickedHasChildren: true }))
+    .find((x) => x.id === "ungroup");
+  assert.equal(noIt.whyKey, "panelNoIt", "ungroup гейтиться тим самим treeWhy, що сусіди");
+});
+
+test("«Винести на рівень вище» вимкнене на верхньому рівні", () => {
+  const top = paletteActions(S({ pickedKind: "page", pickedHasParent: false })).find((x) => x.id === "outdent");
+  assert.equal(top.disabled, true);
+  assert.equal(top.whyKey, "whyTopLevel");
+  const deep = paletteActions(S({ pickedKind: "page", pickedHasParent: true })).find((x) => x.id === "outdent");
+  assert.ok(!deep.disabled);
+});
+
+test("«Це стан / Це сторінка»: підпис називає дію; для теки вимкнено", () => {
+  const find = (o) => paletteActions(S(o)).find((x) => x.id === "togglekind");
+  assert.equal(find({ pickedKind: "state" }).labelKey, "menuToPage");
+  assert.equal(find({ pickedKind: "page" }).labelKey, "menuToState");
+  const fold = find({ pickedKind: "folder" });
+  assert.equal(fold.disabled, true);
+  assert.equal(fold.whyKey, "treeErrBadKind");
+});
+
+test("команди дерева без обраного вузла вимкнені з причиною", () => {
+  for (const id of ["groupsel", "outdent", "focusbranch", "togglekind"]) {
+    const c = paletteActions(S({ pickedPage: null, pickedKind: null })).find((x) => x.id === id);
+    assert.equal(c.disabled, true, id);
+    assert.ok(c.whyKey, id);
+  }
+});
+
+test("палітра при множинному виборі: групувати можна, решта — «виберіть один шар»", () => {
+  const st = { selCount: 3, pickedPage: "p", pickedKind: "folder", pickedHasChildren: true, pickedHasParent: true };
+  const by = (id) => paletteActions(S(st)).find((x) => x.id === id);
+  assert.ok(!by("groupsel").disabled);
+  for (const id of ["ungroup", "outdent", "focusbranch", "togglekind"]) {
+    assert.equal(by(id).disabled, true, id);
+    assert.equal(by(id).whyKey, "whySelectOne", id);
+  }
+});
+
+test("groupsel: вибір є — дозволено навіть без цілі; нічого немає — причина", () => {
+  const g = (o) => paletteActions(S(o)).find((x) => x.id === "groupsel");
+  assert.ok(!g({ selCount: 2, pickedPage: null, pickedKind: null }).disabled);
+  assert.ok(!g({ selCount: 0, pickedKind: "page" }).disabled);
+  assert.equal(g({ selCount: 0, pickedKind: null }).whyKey, "whyNoPageSelected");
+  assert.equal(g({ hasIteration: false, shots: null }).whyKey, "panelNoIt");
+});
+
+/* Екран «Задачі» (батч 1.52): палітра ⌘K мусить бути такою ж чесною, як смуга.
+   Смуга в цьому стані не має публікації, «Макет/Огляд», ітерацій — і палітра,
+   що пропонує «Опублікувати» чи «Нова ітерація», діяла б на задачу, якої
+   людина зараз не бачить. Вибір — ОМІТ, а не «вимкнено з причиною»: так палітра
+   вже поводиться з цілими групами, безглуздими в режимі (`gIter` без ітерації,
+   `inspector` в «Огляді»), а причина поруч із вимкненим контролом (принцип 2)
+   потрібна там, де контрол ЛИШАЄТЬСЯ в режимі — тут цілий режим не про задачу. */
+test("екран «Задачі»: палітра не пропонує жодної дії над задачею", () => {
+  const ids = paletteActions(S({ homeOpen: true })).map((a) => a.id);
+  const taskScoped = ["mode", "view-grid", "view-flow", "vp-desktop", "vp-tablet", "vp-mobile",
+    "inspector", "panel", "clean", "newit", "renit", "dupit", "newfolder", "renpage", "hidepage",
+    "groupsel", "ungroup", "outdent", "focusbranch", "togglekind", "shoot", "figma", "publish",
+    "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup", "aud-local",
+    "aud-project", "delit", "delpage", "go-iter", "go-pages"];
+  for (const id of taskScoped) {
+    assert.ok(!ids.includes(id), `дія «${id}» не має бути в палітрі на екрані «Задачі»`);
+  }
+  // Те, що до задачі не стосується, лишається — мова й надалі досяжна.
+  assert.ok(ids.includes("lang-en"), "мова зникла разом із діями задачі");
+  assert.ok(ids.length > 0);
+});
+
+/* Дзеркало: без `homeOpen` реєстр цілий. Без цього тест вище був би зеленим і
+   на порожньому реєстрі. */
+test("поза екраном «Задачі» дії задачі на місці", () => {
+  const ids = paletteActions(S({ homeOpen: false })).map((a) => a.id);
+  for (const id of ["go-tasks", "mode", "publish", "newit", "figma"]) {
+    assert.ok(ids.includes(id), `дії «${id}» немає в звичайному стані`);
+  }
+});
+
+/* «Встановити Deai Canvas як застосунок» (PWA, P1). Пункт ЛИШЕ тоді, коли Chrome
+   віддав `beforeinstallprompt` (`canInstall`) і вікно ще не встановлене
+   (`standalone` хибне): у встановленому вікні пропонувати встановлення нічого, а
+   без події `prompt()` нема що викликати — тому ОМІТ, а не «вимкнено з
+   причиною». Це дія самого застосунку, як мова, тож вона є і на екрані
+   «Задачі». */
+const installIds = (st) => paletteActions(S(st)).filter((a) => a.id === "pwa-install");
+
+test("встановлення: пункт є лише коли canInstall і не standalone — у звичайному стані", () => {
+  assert.equal(installIds({}).length, 0, "без події встановлення пункту бути не має");
+  assert.equal(installIds({ canInstall: false, standalone: false }).length, 0);
+  assert.equal(installIds({ canInstall: true, standalone: true }).length, 0,
+    "у встановленому вікні пропонувати встановити нема чого");
+  assert.equal(installIds({ canInstall: true, standalone: false }).length, 1);
+});
+
+test("встановлення: те саме правило на екрані «Задачі»", () => {
+  const home = (o) => paletteActions(S({ homeOpen: true, ...o })).filter((a) => a.id === "pwa-install");
+  assert.equal(home({}).length, 0);
+  assert.equal(home({ canInstall: true, standalone: true }).length, 0);
+  assert.equal(home({ canInstall: true, standalone: false }).length, 1,
+    "дія застосунку, а не задачі — на екрані «Задачі» теж доречна");
+});
+
+test("встановлення: пункт діє через act:pwainstall, має іконку й підпис в обох словниках", () => {
+  const [a] = installIds({ canInstall: true });
+  assert.equal(a.act, "pwainstall");
+  assert.equal(a.group, "gSet");
+  assert.ok(!a.disabled, "пункт або є, або його нема — вимкненим він не буває");
+  assert.ok(ico(a.icon), "іконки пункту немає у спрайті");
+  for (const lang of ["uk", "en"]) {
+    assert.ok(DICT[lang][a.labelKey], `«${a.labelKey}» немає в DICT.${lang}`);
+  }
+  assert.match(DICT.uk[a.labelKey], /Deai Canvas/);
+  assert.match(DICT.en[a.labelKey], /Deai Canvas/);
+});
+
+test("встановлення: знаходиться в ⌘K обома мовами (install / встановити / застосунок)", () => {
+  const list = paletteActions(S({ canInstall: true }));
+  for (const [lang, q] of [["uk", "install"], ["uk", "встанови"], ["en", "встанови"], ["en", "install"], ["uk", "pwa"]]) {
+    setLang(lang);
+    assert.ok(filterActions(list, q).some((a) => a.id === "pwa-install"), `«${q}» (${lang}) не знаходить пункту`);
+  }
+});
+
+test("встановлення: решта палітри не зачеплена присутністю пункту", () => {
+  const without = paletteActions(S()).map((a) => a.id);
+  const withIt = paletteActions(S({ canInstall: true })).map((a) => a.id);
+  assert.deepEqual(withIt.filter((id) => id !== "pwa-install"), without);
+});

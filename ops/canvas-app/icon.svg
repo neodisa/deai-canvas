@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    Іконка Design Canvas.app: сітка кадрів «Огляду», один — виділений (--sel).
+    Поле 100 px і тінь — за сіткою іконок macOS. Кольори — токени app/styles.css.
+
+    Зібрати DesignCanvas.icns (з design-canvas/):
+      node ops/canvas-app/render-icon.mjs            # → $TMPDIR/dc-icon/icon-1024.png
+      I=$TMPDIR/dc-icon/DesignCanvas.iconset; mkdir -p $I
+      for s in 16 32 128 256 512; do
+        sips -z $s $s $TMPDIR/dc-icon/icon-1024.png --out $I/icon_${s}x${s}.png
+        sips -z $((s*2)) $((s*2)) $TMPDIR/dc-icon/icon-1024.png --out $I/icon_${s}x${s}@2x.png
+      done
+      iconutil -c icns $I -o ops/canvas-app/DesignCanvas.icns
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2C323B"/>
+      <stop offset="1" stop-color="#15181D"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="#F4F6F9" stroke-opacity="0.08" stroke-width="3"/>
+
+  <!-- кадри -->
+  <g fill="#F4F6F9">
+    <rect x="532" y="298" width="232" height="196" rx="24" fill-opacity="0.10" stroke="#F4F6F9" stroke-opacity="0.26" stroke-width="6"/>
+    <rect x="260" y="530" width="232" height="196" rx="24" fill-opacity="0.10" stroke="#F4F6F9" stroke-opacity="0.26" stroke-width="6"/>
+    <rect x="532" y="530" width="232" height="196" rx="24" fill-opacity="0.10" stroke="#F4F6F9" stroke-opacity="0.26" stroke-width="6"/>
+    <!-- «вміст сторінки» в сірих кадрах -->
+    <g fill-opacity="0.30">
+      <rect x="560" y="328" width="176" height="22" rx="11"/>
+      <rect x="560" y="368" width="128" height="14" rx="7"/>
+      <rect x="560" y="396" width="152" height="14" rx="7"/>
+      <rect x="288" y="560" width="176" height="22" rx="11"/>
+      <rect x="288" y="600" width="140" height="14" rx="7"/>
+      <rect x="288" y="628" width="104" height="14" rx="7"/>
+      <rect x="560" y="560" width="176" height="22" rx="11"/>
+      <rect x="560" y="600" width="112" height="14" rx="7"/>
+      <rect x="560" y="628" width="148" height="14" rx="7"/>
+    </g>
+  </g>
+
+  <!-- виділений кадр -->
+  <rect x="260" y="298" width="232" height="196" rx="24" fill="#025CFF"/>
+  <g fill="#FFFFFF">
+    <rect x="288" y="328" width="176" height="22" rx="11"/>
+    <rect x="288" y="368" width="140" height="14" rx="7" fill-opacity="0.75"/>
+    <rect x="288" y="396" width="112" height="14" rx="7" fill-opacity="0.75"/>
+  </g>
+</svg>

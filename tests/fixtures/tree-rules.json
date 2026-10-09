@@ -1,0 +1,92 @@
+{
+  "_about": "Спільні кейси правил дерева: ганяють і app/test_pages_model.py (op_move/validate), і tests/tree-model.test.mjs (applyMove/validate). Розійдуться рушії — впадуть обидва. Дерево — форма pages.json без полів, що не стосуються правил. `tree`: BASE або LEGACY — копія відповідного trees.* цього файла (LEGACY — без жодного kind: тип виводиться з положення). `tree`: DEEP:N — N тек одна в одній (id f1…fN, назви F1…FN), її будує сам тест. `err` — очікуваний код TreeError або null, коли операція має пройти. `order` — очікувані id дітей названих вузлів після переміщення (корінь не перевіряється). `noop: true` — дерево після операції має лишитись без жодних змін. `kinds` — очікуваний тип вузлів ПІСЛЯ операції, порахований сплющенням усього дерева (kind_of із типом батька): легасі-вузол не змінює тип через зміну батька. Кейси `validate` про зіпсований руками pages.json: `name` не рядок/null → `empty-name`; `children` не список (обʼєкт, рядок, число) → `corrupt` (той самий код, що й для битого файла: обхід цього дерева неможливий) — його кидають і `_validate_node`/`_precheck` (Python), і `validate`/`precheck` (JS); `children: null` — валідно. `visible` — правило видимості превʼю: `tree` як вище; `visible` — id УСІХ видимих вузлів (теки теж) у порядку дерева (`pages_model._visible` / `tree-model.visibleIds`); `open` — з них лише відкривані, не теки (`pm.preview_flat`). Ховає ТІЛЬКИ буквальне `published: false` на вузлі чи будь-якому предку; явне `true` під схованим предком нічого не скасовує; `0`/`null`/`\"false\"`/`\"\"` не ховають. Крім того node-тест звіряє з цим же набором `published` кожної картки `buildRows`.",
+  "validate": [
+    {"name": "стан у сторінці", "tree": [{"id": "p", "name": "P", "kind": "page", "children": [{"id": "s", "name": "S", "kind": "state"}]}], "err": null},
+    {"name": "стан у теці всередині сторінки", "tree": [{"id": "p", "name": "P", "kind": "page", "children": [{"id": "w", "name": "W", "kind": "folder", "children": [{"id": "s", "name": "S", "kind": "state"}]}]}], "err": null},
+    {"name": "дубль id у різних гілках", "tree": [{"id": "p", "name": "P", "kind": "page"}, {"id": "q", "name": "Q", "kind": "page"}, {"id": "q", "name": "Q2", "kind": "page"}], "err": "dup-id"},
+    {"name": "стан у корені", "tree": [{"id": "s", "name": "S", "kind": "state"}], "err": "state-outside-page"},
+    {"name": "стан у теці в корені", "tree": [{"id": "f", "name": "F", "kind": "folder", "children": [{"id": "s", "name": "S", "kind": "state"}]}], "err": "state-outside-page"},
+    {"name": "стан із дітьми", "tree": [{"id": "p", "name": "P", "kind": "page", "children": [{"id": "s", "name": "S", "kind": "state", "children": [{"id": "x", "name": "X", "kind": "page"}]}]}], "err": "state-has-children"},
+    {"name": "легасі: дитина сторінки без kind = стан, валідно", "tree": [{"id": "p", "name": "P", "children": [{"id": "c", "name": "C"}]}], "err": null},
+    {"name": "легасі: дитина теки без kind = сторінка, валідно", "tree": [{"id": "g", "name": "G", "isGroup": true, "children": [{"id": "c", "name": "C"}]}], "err": null},
+    {"name": "легасі-стан із дітьми", "tree": [{"id": "p", "name": "P", "children": [{"id": "c", "name": "C", "children": [{"id": "d", "name": "D"}]}]}], "err": "state-has-children"},
+    {"name": "невідомий kind", "tree": [{"id": "p", "name": "P", "kind": "widget"}], "err": "bad-kind"},
+    {"name": "дубль id на різних рівнях", "tree": [{"id": "a", "name": "A", "kind": "folder", "children": [{"id": "a", "name": "A2", "kind": "page"}]}], "err": "dup-id"},
+    {"name": "порожня назва", "tree": [{"id": "a", "name": "  ", "kind": "page"}], "err": "empty-name"},
+    {"name": "id із ../ — id стає іменем теки, а її потім rmtree", "tree": [{"id": "../x", "name": "X", "kind": "page"}], "err": "bad-id"},
+    {"name": "id зі слешем", "tree": [{"id": "a/b", "name": "X", "kind": "page"}], "err": "bad-id"},
+    {"name": "порожній id", "tree": [{"id": "", "name": "X", "kind": "page"}], "err": "bad-id"},
+    {"name": "id із завершальним переводом рядка", "tree": [{"id": "abc\n", "name": "X", "kind": "page"}], "err": "bad-id"},
+    {"name": "без id", "tree": [{"name": "X", "kind": "page"}], "err": "bad-id"},
+    {"name": "id не рядок", "tree": [{"id": 5, "name": "X", "kind": "page"}], "err": "bad-id"},
+    {"name": "кирилиця в id — валідно (обидва рушії)", "tree": [{"id": "сторінка", "name": "С", "kind": "page"}], "err": null},
+    {"name": "стан з порожнім children — валідно", "tree": [{"id": "p", "name": "P", "kind": "page", "children": [{"id": "s", "name": "S", "kind": "state", "children": []}]}], "err": null},
+    {"name": "глибина 10 тек — валідно", "tree": "DEEP:10", "err": null},
+    {"name": "глибина 32 — ще валідно", "tree": "DEEP:32", "err": null},
+    {"name": "глибина 33 — занадто", "tree": "DEEP:33", "err": "too-deep"},
+    {"name": "name не рядок — empty-name", "tree": [{"id": "p", "name": 5, "kind": "page"}], "err": "empty-name"},
+    {"name": "name null — empty-name", "tree": [{"id": "p", "name": null, "kind": "page"}], "err": "empty-name"},
+    {"name": "children — обʼєкт: corrupt", "tree": [{"id": "p", "name": "P", "kind": "page", "children": {"id": "x"}}], "err": "corrupt"},
+    {"name": "children — рядок: corrupt", "tree": [{"id": "p", "name": "P", "kind": "page", "children": "abc"}], "err": "corrupt"},
+    {"name": "children — число: corrupt", "tree": [{"id": "p", "name": "P", "kind": "page", "children": 7}], "err": "corrupt"},
+    {"name": "children null — валідно", "tree": [{"id": "p", "name": "P", "kind": "page", "children": null}], "err": null}
+  ],
+  "move": [
+    {"name": "стан в іншу сторінку", "tree": "BASE", "ids": ["s1"], "parent": "q", "index": 0, "err": null, "order": {"q": ["s1", "t1"], "w": ["s2"]}},
+    {"name": "тека зі станами в корінь — заборона", "tree": "BASE", "ids": ["w"], "parent": null, "index": 9, "err": "state-outside-page"},
+    {"name": "сторінку в теку-віджет — дозволено", "tree": "BASE", "ids": ["q"], "parent": "w", "index": 0, "err": null, "order": {"w": ["q", "s1", "s2"]}},
+    {"name": "у власного нащадка — цикл", "tree": "BASE", "ids": ["p"], "parent": "w", "index": 0, "err": "cycle"},
+    {"name": "у себе — цикл", "tree": "BASE", "ids": ["w"], "parent": "w", "index": 0, "err": "cycle"},
+    {"name": "у стан — заборона", "tree": "BASE", "ids": ["q"], "parent": "s1", "index": 0, "err": "state-has-children"},
+    {"name": "невідомий батько", "tree": "BASE", "ids": ["q"], "parent": "zzz", "index": 0, "err": "not-found"},
+    {"name": "невідомий вузол", "tree": "BASE", "ids": ["zzz"], "parent": null, "index": 0, "err": "not-found"},
+    {"name": "два стани разом, порядок дерева, індекс обрізається", "tree": "BASE", "ids": ["s2", "s1"], "parent": "q", "index": 99, "err": null, "order": {"q": ["t1", "s1", "s2"], "w": []}},
+    {"name": "тека й її дитина разом — рухається лише тека", "tree": "BASE", "ids": ["s1", "w"], "parent": "q", "index": 0, "err": null, "order": {"q": ["w", "t1"], "w": ["s1", "s2"]}},
+    {"name": "на те саме місце — нічого не змінилось", "tree": "BASE", "ids": ["q"], "parent": null, "index": 1, "err": null, "noop": true},
+    {"name": "від'ємний індекс — на початок", "tree": "BASE", "ids": ["t1"], "parent": "w", "index": -5, "err": null, "order": {"w": ["t1", "s1", "s2"]}},
+    {"name": "індекс -1 — теж на початок, а не перед останнім", "tree": "BASE", "ids": ["t1"], "parent": "w", "index": -1, "err": null, "order": {"w": ["t1", "s1", "s2"]}},
+    {"name": "індекс не число", "tree": "BASE", "ids": ["q"], "parent": null, "index": "top", "err": "bad-index"},
+    {"name": "легасі-стан у теку своєї сторінки лишається станом", "tree": "LEGACY", "ids": ["s1"], "parent": "w", "index": 0, "err": null, "order": {"w": ["s1"]}, "kinds": {"s1": "state"}},
+    {"name": "легасі-стан у кореневу теку — заборона, а не тихе перетворення на сторінку", "tree": "LEGACY", "ids": ["s1"], "parent": "g", "index": 0, "err": "state-outside-page"},
+    {"name": "no-op на дереві зі стороннім порожнім children — файл не переписується", "tree": "STRAY", "ids": ["q"], "parent": null, "index": 1, "err": null, "noop": true},
+    {"name": "перестановка легасі-стану в межах свого батька — без закріплення типу, байт-у-байт", "tree": "LEGACY", "ids": ["s1"], "parent": "p", "index": 0, "err": null, "noop": true},
+    {"name": "перенос на дереві з дублем id — dup-id", "tree": [{"id": "p", "name": "P", "kind": "page"}, {"id": "q", "name": "Q", "kind": "page"}, {"id": "q", "name": "Q2", "kind": "page"}], "ids": ["p"], "parent": null, "index": 1, "err": "dup-id"},
+    {"name": "вузол без id у дереві — bad-id, а не збій", "tree": "NOID", "ids": ["p"], "parent": null, "index": 1, "err": "bad-id"}
+  ],
+  "visible": [
+    {"name": "нічого не сховано", "tree": "BASE", "visible": ["p", "w", "s1", "s2", "q", "t1"], "open": ["p", "s1", "s2", "q", "t1"]},
+    {"name": "схована тека ховає сторінку всередині", "tree": [{"id": "f", "name": "F", "kind": "folder", "published": false, "children": [{"id": "p", "name": "P", "kind": "page"}]}, {"id": "q", "name": "Q", "kind": "page"}], "visible": ["q"], "open": ["q"]},
+    {"name": "схована сторінка ховає свої стани", "tree": [{"id": "p", "name": "P", "kind": "page", "published": false, "children": [{"id": "s", "name": "S", "kind": "state"}]}, {"id": "q", "name": "Q", "kind": "page", "children": [{"id": "t", "name": "T", "kind": "state"}]}], "visible": ["q", "t"], "open": ["q", "t"]},
+    {"name": "явне true під схованим предком не скасовує", "tree": [{"id": "f", "name": "F", "kind": "folder", "published": false, "children": [{"id": "p", "name": "P", "kind": "page", "published": true, "children": [{"id": "s", "name": "S", "kind": "state", "published": true}]}]}, {"id": "q", "name": "Q", "kind": "page"}], "visible": ["q"], "open": ["q"]},
+    {"name": "ховає лише буквальне false", "tree": [{"id": "a", "name": "A", "kind": "page", "published": 0}, {"id": "b", "name": "B", "kind": "page", "published": null}, {"id": "c", "name": "C", "kind": "page", "published": "false"}, {"id": "d", "name": "D", "kind": "page", "published": ""}, {"id": "e", "name": "E", "kind": "page", "published": false}], "visible": ["a", "b", "c", "d"], "open": ["a", "b", "c", "d"]},
+    {"name": "схований лише стан", "tree": [{"id": "p", "name": "P", "kind": "page", "children": [{"id": "s", "name": "S", "kind": "state", "published": false}, {"id": "u", "name": "U", "kind": "state"}]}], "visible": ["p", "u"], "open": ["p", "u"]},
+    {"name": "схована тека всередині видимої сторінки", "tree": [{"id": "p", "name": "P", "kind": "page", "children": [{"id": "w", "name": "W", "kind": "folder", "published": false, "children": [{"id": "s", "name": "S", "kind": "state"}]}, {"id": "t", "name": "T", "kind": "state"}]}], "visible": ["p", "t"], "open": ["p", "t"]},
+    {"name": "легасі без published — усе видно, isGroup — тека", "tree": "LEGACY", "visible": ["p", "s1", "s2", "w", "g"], "open": ["p", "s1", "s2"]},
+    {"name": "явний kind page із зайвим isGroup — сторінка, тож відкривана", "tree": [{"id": "p", "name": "P", "kind": "page", "isGroup": true}], "visible": ["p"], "open": ["p"]}
+  ],
+  "trees": {
+    "BASE": [
+      {"id": "p", "name": "Картка", "kind": "page", "children": [
+        {"id": "w", "name": "Віджет", "kind": "folder", "children": [
+          {"id": "s1", "name": "Порожньо", "kind": "state"},
+          {"id": "s2", "name": "Помилка", "kind": "state"}]}]},
+      {"id": "q", "name": "Особа", "kind": "page", "children": [
+        {"id": "t1", "name": "Порожньо", "kind": "state"}]}
+    ],
+    "LEGACY": [
+      {"id": "p", "name": "P", "children": [
+        {"id": "s1", "name": "S1"},
+        {"id": "s2", "name": "S2"},
+        {"id": "w", "name": "W", "isGroup": true}]},
+      {"id": "g", "name": "G", "isGroup": true}
+    ],
+    "STRAY": [
+      {"id": "p", "name": "P", "kind": "page", "children": []},
+      {"id": "q", "name": "Q", "kind": "page"}
+    ],
+    "NOID": [
+      {"id": "p", "name": "P", "kind": "page"},
+      {"name": "X", "kind": "page"}
+    ]
+  }
+}

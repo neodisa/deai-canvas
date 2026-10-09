@@ -1,0 +1,9 @@
+{
+  "canon": null,
+  "variants": {
+    "v1": {"label": "таблиця", "created": "13.07.2026", "state_pages": {}},
+    "v2": {"label": "картки", "created": "13.07.2026", "state_pages": {}}
+  },
+  "notes": [],
+  "history": []
+}

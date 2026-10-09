@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>inspector-dom cases</title>
+<style>
+  html { font-size: 16px; }
+
+  :root {
+    --n-100: #ffffff;
+    --bw: 1px;
+    --c-border: #cccccc;
+    --s-100: 8px;
+    --c-true: #111111;
+    --c-base-media: #333333;
+    --c-base-supports: #444444;
+    --c-hover: #ff0000;
+    --c-normal: #00ff00;
+    --c-is: #555555;
+    --s-rem: 1rem;
+    --lh-100: 1.5;
+    --c-nest: #666666;
+  }
+
+  /* 1. background: var(--x) */
+  .case-bg { background: var(--n-100); }
+
+  /* 2/3. border: <var> solid <var> — width і color з РІЗНИХ частин ОДНОГО шортката */
+  .case-border { border: var(--bw) solid var(--c-border); }
+
+  /* 4/5. padding: var(--x) проти пізнішого лонгхенда (override лише однієї сторони).
+     Значення НЕ нуль: нуль інспектор свідомо понижує до 'unlinked' (жодна ДС не
+     вимагає токена, щоб написати 0), і кейс перестав би відрізняти «знайшли
+     літерал» від «не знайшли нічого» — тобто доводити те, заради чого написаний. */
+  .case-box { padding: var(--s-100); }
+  .case-box.override { padding-top: 1px; }
+
+  /* 6. !important на шорткаті має перемогти пізніший НЕважливий лонгхенд */
+  .imp-b { padding: var(--s-100) !important; }
+  .imp-a { padding: 4px; }
+
+  /* 7. літерал, що збігається зі значенням токена → hardcode + hint */
+  .case-hint { margin-top: 8px; }
+
+  /* 8/9. @media істинний і хибний */
+  .media-base { color: var(--c-base-media); }
+  @media (min-width: 1px) {
+    .case-media-true { color: var(--c-true); }
+  }
+  @media (min-width: 999999px) {
+    .case-media-false { color: var(--c-hover); } /* не має застосуватись */
+  }
+
+  /* 10. @supports хибний */
+  .supports-base { background-color: var(--c-base-supports); }
+  @supports (foo: bar) {
+    .case-supports-false { background-color: var(--c-hover); } /* не має застосуватись */
+  }
+
+  /* 11. @container — ми свідомо НЕ вгадуємо його істинність, завжди пропускаємо */
+  .container-base { padding-left: var(--s-100); }
+  @container (min-width: 9999px) {
+    .case-container-false { padding-left: 99px; } /* не має застосуватись */
+  }
+
+  /* 12. :hover не повинен вигравати базовий звіт */
+  .case-hover { background-color: var(--c-normal); }
+  .case-hover:hover { background-color: var(--c-hover); }
+
+  /* 13. :is(.a, .b) у селекторі — кома ВСЕРЕДИНІ дужок, не верхнього рівня */
+  :is(.case-is-a, .case-is-b) .child { color: var(--c-is); }
+
+  /* 14. токен у rem */
+  .case-rem { margin-left: var(--s-rem); }
+
+  /* 15. line-height безрозмірним токеном */
+  .case-lh { line-height: var(--lh-100); font-size: 20px; }
+
+  /* 16. значення з @layer, який ми свідомо не оцінюємо (partial) —
+     нешарове оголошення тут НЕ !important, тому шарове !important
+     все одно виграє каскад (важливість завжди сильніша за шари) —
+     наша модель, що не бачить шарів, помилиться і мусить це визнати. */
+  .case-unknown { padding-right: 4px; }
+  @layer far-layer {
+    .case-unknown { padding-right: 20px !important; }
+  }
+
+  /* 18-20. ХАРДКОД у відносних одиницях: щоб побачити його, звірка raw↔computed
+     мусить розкрити одиниці так само, як для токена. Без цього дизайнер бачив би
+     сірий «?» замість «хардкод» — на rem-макеті це кожен рядок типографіки. */
+  .case-rem-hard { padding-top: 1rem; }
+  .case-em-hard { margin-top: 2em; font-size: 16px; }
+  .case-lh-hard { line-height: 1.5; font-size: 20px; }
+
+  /* 21. а те, що точно порахувати НЕ можемо (%, auto, calc), лишається 'unknown' */
+  .case-pct { padding-bottom: 50%; }
+
+  /* бонус: нативна CSS-вкладеність */
+  .nest-parent {
+    .nest-child { color: var(--c-nest); }
+  }
+</style>
+</head>
+<body>
+  <div class="case-bg" data-case="1-background-var" data-prop="background-color" data-expect-verdict="token" data-expect-token="--n-100"></div>
+
+  <div class="case-border" data-case="2-border-color-var" data-prop="border-color" data-expect-verdict="token" data-expect-token="--c-border"></div>
+  <div class="case-border" data-case="3-border-width-var" data-prop="border-width" data-expect-verdict="token" data-expect-token="--bw"></div>
+
+  <div class="case-box override" data-case="4-box-override-top" data-prop="padding-top" data-expect-verdict="hardcode" data-expect-raw="1px"></div>
+  <div class="case-box override" data-case="5-box-override-right" data-prop="padding-right" data-expect-verdict="token" data-expect-token="--s-100"></div>
+
+  <div class="imp-b imp-a" data-case="6-important-shorthand" data-prop="padding-left" data-expect-verdict="token" data-expect-token="--s-100"></div>
+
+  <div class="case-hint" data-case="7-hardcode-hint" data-prop="margin-top" data-expect-verdict="hardcode" data-expect-hint="--s-100"></div>
+
+  <div class="media-base case-media-true" data-case="8-media-true" data-prop="color" data-expect-verdict="token" data-expect-token="--c-true"></div>
+  <div class="media-base case-media-false" data-case="9-media-false" data-prop="color" data-expect-verdict="token" data-expect-token="--c-base-media"></div>
+
+  <div class="supports-base case-supports-false" data-case="10-supports-false" data-prop="background-color" data-expect-verdict="token" data-expect-token="--c-base-supports"></div>
+
+  <div class="container-base case-container-false" data-case="11-container-false" data-prop="padding-left" data-expect-verdict="token" data-expect-token="--s-100"></div>
+
+  <div class="case-hover" data-case="12-hover-not-win" data-prop="background-color" data-expect-verdict="token" data-expect-token="--c-normal"></div>
+
+  <div class="case-is-a"><span class="child" data-case="13-is-selector" data-prop="color" data-expect-verdict="token" data-expect-token="--c-is"></span></div>
+
+  <div class="case-rem" data-case="14-rem-token" data-prop="margin-left" data-expect-verdict="token" data-expect-token="--s-rem"></div>
+
+  <div class="case-lh" data-case="15-line-height-token" data-prop="line-height" data-expect-verdict="token" data-expect-token="--lh-100"></div>
+
+  <div class="case-unknown" data-case="16-unknown-layer" data-prop="padding-right" data-expect-verdict="unknown"></div>
+
+  <div class="case-rem-hard" data-case="18-rem-hardcode" data-prop="padding-top" data-expect-verdict="hardcode" data-expect-raw="1rem"></div>
+  <div class="case-em-hard" data-case="19-em-hardcode" data-prop="margin-top" data-expect-verdict="hardcode" data-expect-raw="2em"></div>
+  <div class="case-lh-hard" data-case="20-line-height-hardcode" data-prop="line-height" data-expect-verdict="hardcode" data-expect-raw="1.5"></div>
+
+  <div class="case-pct" data-case="21-percent-unknown" data-prop="padding-bottom" data-expect-verdict="unknown"></div>
+
+  <div class="nest-parent"><span class="nest-child" data-case="17-native-nesting" data-prop="color" data-expect-verdict="token" data-expect-token="--c-nest"></span></div>
+
+<pre id="out">running…</pre>
+<script type="module">
+import { describe, collectRules } from '../../app/vendor/inspector-dom.js';
+
+const lines = [];
+let pass = 0, total = 0;
+
+function check(name, ok, detail) {
+  total++;
+  if (ok) { pass++; lines.push(`PASS ${name}`); }
+  else { lines.push(`FAIL ${name} — ${detail}`); }
+}
+
+for (const el of document.querySelectorAll('[data-prop]')) {
+  const prop = el.dataset.prop;
+  const name = el.dataset.case || `${el.tagName}#${el.id}`;
+  const r = describe(el, prop);
+  const expectVerdict = el.dataset.expectVerdict;
+  const expectToken = el.dataset.expectToken;
+  const expectRaw = el.dataset.expectRaw;
+  const expectHint = el.dataset.expectHint;
+
+  let ok = r.verdict === expectVerdict;
+  const details = [];
+  if (!ok) details.push(`verdict expected=${expectVerdict} got=${r.verdict}`);
+
+  if (ok && expectToken !== undefined) {
+    const tokOk = r.token === expectToken;
+    if (!tokOk) { ok = false; details.push(`token expected=${expectToken} got=${r.token}`); }
+  }
+  if (ok && expectRaw !== undefined) {
+    const rawOk = String(r.raw) === expectRaw;
+    if (!rawOk) { ok = false; details.push(`raw expected=${expectRaw} got=${r.raw}`); }
+  }
+  if (ok && expectHint !== undefined) {
+    const hintOk = Array.isArray(r.hint) && r.hint.includes(expectHint);
+    if (!hintOk) { ok = false; details.push(`hint expected to include=${expectHint} got=${JSON.stringify(r.hint)}`); }
+  }
+  if (!ok && !details.length) details.push(`raw=${r.raw} token=${r.token} computed=${r.computed}`);
+
+  check(name, ok, details.join('; '));
+}
+
+// мета-перевірки: не привʼязані до одного елемента
+{
+  const cr = collectRules(document);
+  check('meta-partial-true (пропущені @layer/@container мають підняти прапорець)', cr.partial === true, `partial=${cr.partial}`);
+  check('meta-not-blocked (усе same-origin, inline <style>)', cr.blocked === false, `blocked=${cr.blocked}`);
+}
+
+const summary = `${pass}/${total}`;
+lines.push('', `SUMMARY ${summary}`);
+const text = lines.join('\n');
+document.getElementById('out').textContent = text;
+console.log(text);
+window.__inspectorFixtureResult = { pass, total, lines };
+</script>
+</body>
+</html>

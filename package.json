@@ -1,0 +1,14 @@
+{
+  "name": "deai-canvas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs && node tests/inspector-core.test.mjs && python3 -m unittest discover -s tests && python3 -m unittest discover -s bin -p 'test_*.py' && python3 -m unittest discover -s app -p 'test_*.py'",
+    "test:live": "node --test --test-concurrency=4 tests/live/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  },
+  "license": "MIT",
+  "version": "1.53.0"
+}

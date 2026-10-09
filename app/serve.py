@@ -1,0 +1,4823 @@
+#!/usr/bin/env python3
+"""Design Canvas v2 — менеджер итераций макета.
+
+Открываешь инструмент → видишь текущий макет задачи (live из design-work).
+Ядро: итерации (замороженные копии), публикация на Vercel со свитчером,
+comment-layer с каналами: internal (локально, для Claude) / external (Vercel).
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, quote, urlparse
+
+import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
+from task_state import task_state  # легкий стан задачі: спільний із пушером реєстру
+# Розбір подій прогресу зʼємки. Формат рядка — контракт МІЖ процесами:
+# пише bin/shots-progress.mjs, читає цей модуль (звірку маркера тримає
+# окремий тест у tests/test_shoot_progress.py).
+from shoot_progress import ShootProgress, parse_progress_line
+# Спільний лист писарів стану. Той самий лок і той самий суфікс, що бачить
+# pages_model — два незалежні локи одне одного не бачили б (див. atomic_io).
+from atomic_io import TMP_SUFFIX, WRITE_LOCK, atomic_write_json  # noqa: E402
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_DIR = os.path.join(ROOT, 'app')
+# Час старту ЦЬОГО процесу. Обгортка превʼю не лежить готовим файлом — її збирає
+# сам сервер у момент публікації (`preview_index_html`), тому правка в app/*.py
+# доїжджає на зовнішній URL лише після ДВОХ кроків: перезапуск канваса + ПОВТОРНА
+# публікація. Другий крок легко пропустити: 25.08.2026 на Vercel лишалась стара
+# обгортка, хоча джерело на диску вже мало нову. Мітка — база для попередження.
+SERVER_STARTED_AT = time.time()
+NAME_RE = re.compile(r'^[\w-]+$')
+# Ключ кадру: сама сторінка (`poshuk`) АБО сторінка зі станом (`poshuk~30d36f19`),
+# і будь-яке з двох — з шириною суфіксом (`poshuk~30d36f19@390`).
+# Хвіст стану рахує `shotKey` у app/flow-model.js — рівно 8 шістнадцяткових цифр;
+# суфікс ширини — `frameKey` у app/viewport.js (типова ширина суфікса НЕ додає).
+# Окреме правило, а не послаблений NAME_RE: ані `~`, ані `@` не входять у `\w`,
+# тому без них кадр лежав би на диску, а полотно отримувало б 400 і малювало
+# «немає знімка» — тиха неправда рівно на шві клієнта й сервера. Ширина тут це
+# ЦИФРИ (2–4), тож ані '/' ані '..' крізь неї не пролізуть; слеш і `..` замкнені
+# так само, як і були, а realpath нижче лишається другим замком.
+SHOT_RE = re.compile(r'^[\w-]+(~[0-9a-f]{8})?(@[1-9]\d{1,3})?$')
+# Межі ширини прогону — ті самі MIN_W/MAX_W, що в app/viewport.js і bin/shoot.mjs.
+# Дублікат числами свідомий: Python сюди JS-модуль не імпортує, а розійтися межі
+# можуть лише в бік «сервер пустив те, що дитина відкине гучно» — це видно одразу.
+MIN_VP, MAX_VP = 240, 3840
+SHOOT_TIMEOUT_S = 900   # 15 хвилин: стеля на зʼємку однієї ітерації
+HARD_KILL_S = 15        # SIGTERM → стільки чекаємо на добровільний вихід → SIGKILL
+
+# Активні зʼємки: (задача, ітерація) →
+# {'proc': Popen | None, 'progress': ShootProgress, 'hard': Timer | None}.
+# `proc: None` — заглушка на час fork+exec (ключ уже взято, процесу ще нема),
+# `hard` — озброєний SIGKILL після SIGTERM. Перевірка свіжості (`--check`) сюди
+# НЕ пишеться взагалі: вона браузера не піднімає й на ту саму теку не претендує.
+# У ПАМʼЯТІ процесу, під замком: автостарт робить паралельну зʼємку звичайною
+# справою (два входи в «Огляд», дві вкладки, дизайнер плюс Stop-хук автосинку), а
+# прапорець `shooting` у канвасі живе в ОДНІЙ вкладці й цього не ловить.
+# ⚠️ Замок не переживає другого ПРОЦЕСУ серверу (дві копії інструмента на різних
+# портах) — це лишається TD-6 у звуженому вигляді. Обіцяти файловий замок, якого
+# немає, гірше за відсутність замка.
+_SHOOTS = {}
+_SHOOTS_LOCK = threading.Lock()
+
+# Звірка ревізії пакета тюнера і запис — одна дія, а сервер багатопотоковий:
+# без замка запис Клода міг лягти МІЖ звіркою і записом вкладки, і `base_rev`
+# пропустив би рівно той випадок, заради якого його заведено. Та сама межа, що
+# в `_SHOOTS_LOCK`: другий процес сервера замок не бачить.
+_TUNER_LOCK = threading.Lock()
+
+# Кожен маршрут, який обробляє наш do_GET, МУСИТЬ бути тут. Усе, чого в цьому переліку
+# немає, фолбек у Routed.do_GET намагається віддати як статику з теки ітерації,
+# визначеної з Referer — і тоді власні перевірки обробника не діють. Саме розбіжність
+# між цим переліком і ланцюгом if у do_GET дала перехоплення /shot.
+HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot')
+
+# Репо макетов по направлению (profile). Структура у всех одна — mockup/<task-id>,
+# поэтому направления разъезжаются только репозиторием, а не логикой.
+PROFILE_REPOS = {
+    'united': 'git@gitlab.internal.example:ORG/united-design.git',
+    'liga360': 'git@gitlab.internal.example:ORG/liga360-design.git',
+    'seo': 'git@gitlab.internal.example:ORG/ligaseo-design.git',
+}
+# Останній рубіж, якщо в tasks.json немає нічого. Історична тека United — саме
+# тому вона й муляє: у ній лежали задачі всіх трьох напрямків.
+FALLBACK_WORK_ROOT = '~/deai-work'
+
+
+def work_root(cfg, profile):
+    """Корінь робочих тек ДЛЯ ЦЬОГО НАПРЯМКУ.
+
+    Вимога користувача 31.08.2026: три напрямки — три теки і три репозиторії.
+    Репозиторії вже три (`PROFILE_REPOS`), а корінь був один на всіх: SEO-задача
+    фізично лежала в теці з назвою United, і назва теки брехала про напрямок.
+
+    Порядок: свій корінь профілю → спільний `design_work_root` → історичний
+    фолбек. Профіль без власного кореня НЕ вигадується: краще чесно покласти в
+    спільний корінь і сказати про це (`bin/roots.py`), ніж створити теку за
+    вигаданим шляхом.
+    """
+    roots = cfg.get('design_work_roots') or {}
+    return os.path.expanduser(roots.get(profile)
+                              or cfg.get('design_work_root')
+                              or FALLBACK_WORK_ROOT)
+
+# Shared pilot backend comment-layer (публичный ключ, см. comment-layer/INTEGRATION.md).
+SUPABASE_URL = 'https://REDACTED-PROJECT-REF.supabase.co'
+SUPABASE_KEY = 'sb_publishable_REDACTED'
+
+
+def supabase_config():
+    """Тонкий геттер спільного Supabase-конфіга comment-layer для інших скриптів
+    (напр. bin/overview_push.py) — щоб не дублювати URL/ключ."""
+    return SUPABASE_URL, SUPABASE_KEY
+
+# Служебное, что НЕ копируется в итерации/публикацию из папки задачи
+SKIP = {'iterations', 'iterations.json', 'publish', 'node_modules', '.git',
+        '.vercel', '.DS_Store'}
+
+# Стан публікації, який їде колегам разом з макетом (див. gitlab_sync/gitlab_pull).
+# Крапка на початку — свідомо: copy_mockup і _mockup_files ігнорують dot-файли,
+# тому файл не потрапляє ні в хеш макета, ні в чужу ітерацію після Підтягнути.
+STATE_FILE = '.canvas-state.json'
+
+NODE_MISSING_HINT = (
+    'Node/npx не знайдено — опублікувати на Vercel з цієї машини не вийде.\n'
+    '1) Встанови Node LTS: https://nodejs.org (або `brew install node`).\n'
+    '2) Один раз авторизуйся: `npx vercel login`.\n'
+    '3) Перезапусти інструмент: ./stop.command і ./start.command.\n'
+    'Якщо Node стоїть через nvm — запускай ./start.command з ТЕРМІНАЛА, '
+    'а не подвійним кліком з Finder (див. _node_bin).\n'
+    'Макет уже зібрано локально — можна попросити Андрія опублікувати.')
+
+
+def _ssl_context():
+    """Проверенный TLS: certifi, если есть (фикс macOS python.org)."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+#: Правила, які інструмент тримає в `.gitignore` ТЕКИ ЗАДАЧІ.
+#:
+#: `git_autocommit` нижче робить `git add -A`, тож усе, чого тут немає, лягає в
+#: історію макета — а за налаштованим remote і пушиться колегам.
+#:
+#: `*.tmp` — осиротілий недописаний файл `atomic_write_json` (той самий клас,
+#: що `*.bak`). `publish/` — зібрана статика. `comments-for-ai*` — вивантаження
+#: коментарів. `.pages.lock` — порожній службовий файл міжпроцесного лока
+#: `pages_model.pages_lock` (лежить у кожній теці ітерації, куди хтось писав
+#: дерево); без правила він потрапив би в історію макета й до колег.
+#:
+#: ⛔ `.dc-tuner.json` і `.dc-local-comments.json` — РОБОЧЕ ЛИСТУВАННЯ дизайнера
+#: з Клодом, а не частина макета: пакет рекомендацій тюнера (з полем `note`
+#: вільним текстом) і локальні пін-коментарі. Рішення власника 18.09.2026: не
+#: пушити ні те, ні те. Колезі вони шум, а записка тюнера писалась не для
+#: чужих очей. Обидва лежать у КОРЕНІ теки задачі, тобто рівно там, куди
+#: дивиться `git add -A`.
+TASK_IGNORE = ('publish/', '*.bak', '*.tmp', '.DS_Store', 'comments-for-ai*',
+               '.vercel/', '.dc-tuner.json', '.dc-local-comments.json',
+               '.pages.lock')
+
+
+def ensure_task_gitignore(task_dir):
+    """Дописати в `.gitignore` теки задачі правила, яких там ще немає.
+
+    ⛔ ДОПИСАТИ, А НЕ ПОСІЯТИ ПРИ `git init`. Так було до 18.09.2026, і це
+    покривало рівно нові теки: у кожної вже заведеної задачі `.git` існує,
+    отже нове правило не доїхало б туди НІКОЛИ. А знахідка саме про вже
+    заведені — файли лягають в історію щодня.
+
+    Ідемпотентно й лише додає: чужі рядки (скажімо, `refs/` дизайнера)
+    лишаються. Зворотний бік названий чесно: правило, свідомо ВИДАЛЕНЕ руками,
+    наступний автокоміт поверне. Це правила інструмента, і він за них
+    відповідає; кому треба возити `publish/` у репо макета — це розмова, а не
+    локальна правка.
+
+    ⚠️ МЕЖА, і вона тут головна: `.gitignore` не знімає з обліку те, що вже
+    ВІДСТЕЖУЄТЬСЯ. У теках, де `.dc-local-comments.json` уже потрапив у
+    історію (на 18.09.2026 — сім задач), він і далі комітиться, і вивести його
+    може тільки `git rm --cached` — тобто рішення власника, а не тиха правка
+    інструмента. Не написати цього тут означало б лишити запис, який
+    ЗАСПОКОЮЄ, не даючи захисту, — той самий клас, що на `check_anon_write_scope`.
+
+    @returns список дописаних правил (порожній — усе вже було).
+    """
+    gi = os.path.join(task_dir, '.gitignore')
+    text = ''
+    if os.path.isfile(gi):
+        with open(gi, encoding='utf-8') as f:
+            text = f.read()
+    have = {ln.strip() for ln in text.splitlines()}
+    missing = [p for p in TASK_IGNORE if p not in have]
+    if not missing:
+        return []
+    with open(gi, 'a', encoding='utf-8') as f:
+        if text and not text.endswith('\n'):
+            f.write('\n')
+        f.write('\n'.join(missing) + '\n')
+    return missing
+
+
+def git_autocommit(task_dir, msg):
+    """Автосохранение папки задачи в git — скриптом, без участия AI.
+    init при первом вызове; push best-effort, если настроен remote (GitLab)."""
+    try:
+        if not os.path.isdir(os.path.join(task_dir, '.git')):
+            subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
+        # ПЕРЕД `add -A` і на КОЖНОМУ виклику, не лише при `init`: див. докстрінг.
+        ensure_task_gitignore(task_dir)
+        subprocess.run(['git', 'add', '-A'], cwd=task_dir, check=True, timeout=30)
+        subprocess.run(['git', 'commit', '-q', '-m', msg],
+                       cwd=task_dir, capture_output=True, text=True, timeout=30)
+        h = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                           cwd=task_dir, capture_output=True, text=True, timeout=10)
+        sha = h.stdout.strip() if h.returncode == 0 else None
+        pushed = False
+        rem = subprocess.run(['git', 'remote'], cwd=task_dir,
+                             capture_output=True, text=True, timeout=10)
+        if rem.returncode == 0 and rem.stdout.strip():
+            p = subprocess.run(['git', 'push', '-q'], cwd=task_dir,
+                               capture_output=True, text=True, timeout=60)
+            pushed = p.returncode == 0
+        return {'sha': sha, 'pushed': pushed}
+    except (OSError, subprocess.SubprocessError):
+        return {'sha': None, 'pushed': False}
+
+
+def _node_bin(name='npx'):
+    """Абсолютний шлях до npx/node або None.
+
+    ⚠️ Чому не досить голого `subprocess.run(['npx', …])`: сервер піднімається
+    через `nohup python3 app/serve.py` зі start.command. Якщо .command запустили
+    подвійним кліком з Finder, zsh стартує як non-interactive login — читає
+    .zprofile, але НЕ .zshrc, а саме туди nvm/volta прописують PATH. Через це
+    деплой падав з `[Errno 2] No such file or directory: 'npx'`, хоча в
+    терміналі npx працює (інцидент у дизайнера, 03.08.2026).
+
+    Порядок: PATH процесу → типові місця встановлення → login+interactive zsh.
+    """
+    p = shutil.which(name)
+    if p:
+        return p
+    cands = [f'/opt/homebrew/bin/{name}',            # brew, Apple Silicon
+             f'/usr/local/bin/{name}',               # brew Intel / інсталятор nodejs.org
+             os.path.expanduser(f'~/.volta/bin/{name}')]
+    nvm = os.path.expanduser('~/.nvm/versions/node')
+    if os.path.isdir(nvm):
+        def _ver(d):  # числове сортування, щоб v20 не програвало v9
+            return [int(x) if x.isdigit() else 0 for x in d.lstrip('v').split('.')]
+        try:
+            for d in sorted(os.listdir(nvm), key=_ver, reverse=True):
+                cands.append(os.path.join(nvm, d, 'bin', name))
+        except OSError:
+            pass
+    for c in cands:
+        if os.access(c, os.X_OK):
+            return c
+    try:  # крайній засіб: -lic читає ~/.zshrc, де живе ініціалізація nvm
+        r = subprocess.run(['zsh', '-lic', f'command -v {name}'],
+                           capture_output=True, text=True, timeout=15)
+        lines = [x.strip() for x in (r.stdout or '').splitlines() if x.strip()]
+        if r.returncode == 0 and lines and os.access(lines[-1], os.X_OK):
+            return lines[-1]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _deploy_hint(err):
+    """Технічний stderr vercel → людська підказка дизайнеру (або None).
+    ⛔ Не вигадуємо причину: якщо не впізнали патерн — віддаємо сирий текст."""
+    e = (err or '').lower()
+    if any(k in e for k in ('not authenticated', 'credentials', 'please log in',
+                            'vercel login', 'no existing credentials')):
+        return ('Vercel не авторизований на цій машині — виконай у терміналі '
+                '`npx vercel login`, тоді натисни «Опублікувати» ще раз.')
+    # Скоуп перевіряємо ПЕРЕД загальним «немає доступу»: тексти перетинаються, а
+    # причина тут конкретніша й підказка інша.
+    if any(k in e for k in ('--scope', 'scope not found', 'no such team',
+                            'not a member of', "don't have access to the team",
+                            'team not found')):
+        return ('Проєкт цієї задачі живе в ІНШОМУ Vercel-скоупі, і цей акаунт до '
+                'нього не має доступу. Публікація звідси створила б ДРУГЕ '
+                'посилання, а те, що вже в менеджера, тихо застаріло б — тому '
+                'vercel відмовив. Попроси власника задачі опублікувати; щоб '
+                'публікувати могли всі, потрібна спільна Vercel-команда, і її '
+                'треба вписати в tasks.json → vercel_scope.')
+    if any(k in e for k in ('forbidden', 'not authorized', 'access denied',
+                            'do not have permission')):
+        return ('Немає доступу до Vercel-проєкту під цим акаунтом — або увійди '
+                'тим, що має доступ, або попроси Андрія опублікувати.')
+    return None
+
+
+def _file_hash(path):
+    import hashlib
+    try:
+        with open(path, 'rb') as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def tasks_path():
+    """Шлях до конфігу задач. DC_TASKS_FILE дає тестам (і будь-кому) підмінити
+    його, не торкаючись живого файла.
+
+    До 03.08.2026 перевизначення не було, і tests/test_serve.py писав фікстуру
+    ПОВЕРХ робочого tasks.json. Наслідки: тестові рядки `fixture`/`demo2` поїхали
+    в прод-Supabase на командний дашборд, а падіння тесту між setUp і tearDown
+    лишало робочий конфіг фікстурою. Взірець — DC_MIRRORS_DIR нижче.
+
+    ⚠️ Оточення читається на КОЖЕН виклик (не кешується в константу): інакше
+    порядок імпорту serve відносно виставлення змінної став би значущим.
+    """
+    return os.environ.get('DC_TASKS_FILE') or os.path.join(ROOT, 'tasks.json')
+
+
+def load_tasks():
+    with open(tasks_path(), encoding='utf-8') as f:
+        return json.load(f)
+
+
+def save_tasks(cfg):
+    # WRITE_LOCK склеює копію в .bak і сам запис в одну дію — інакше два запити
+    # знімають копію з ОДНІЄЇ версії, і .bak відстає на два кроки. Межі лока
+    # (він не рятує від read-modify-write) розписані в atomic_io.
+    p = tasks_path()
+    with WRITE_LOCK:
+        shutil.copy2(p, p + '.bak')   # про людську помилку, не про краш — лишаємо
+        atomic_write_json(p, cfg)
+
+
+def load_meta(task):
+    p = os.path.join(task['dir'], 'iterations.json')
+    if os.path.isfile(p):
+        with open(p, encoding='utf-8') as f:
+            return json.load(f)
+    return {'iterations': [], 'publish_url': None}
+
+
+def task_iterations(task):
+    return load_meta(task).get('iterations', [])
+
+
+def save_meta(task, meta):
+    p = os.path.join(task['dir'], 'iterations.json')
+    with WRITE_LOCK:
+        if os.path.isfile(p):
+            shutil.copy2(p, p + '.bak')
+        atomic_write_json(p, meta)
+
+
+def _is_tool_junk(name):
+    """Службове інструмента у КОРЕНІ макета. Спільний предикат copy_mockup і
+    _mockup_files — доти вони збігалися лише на слово в докстрінгу.
+
+    ⚠️ Хто відсіює `.tmp`, а хто ні — точний перелік, без «на всіх рівнях»:
+    ВІДСІЮЮТЬ — відбиток (`_mockup_files`), експорт колегам (`copy_mockup`),
+    штамп зʼємки (`bin/shots-stamp.mjs`) і `.gitignore`, який сіє
+    `git_autocommit`. НЕ ВІДСІЮЄ — `_pages_from_iterations`: він переносить
+    вміст старих ітерацій сирим listdir+copytree і взагалі не знає предиката.
+    Осиротілий tmp туди потрапить; це відома межа, а не недогляд, бо привести
+    той шлях до предиката — окрема правка з власним ризиком для міграції.
+    """
+    return (name in SKIP or name.endswith(('.py', '.bak', '.zip', '.patch', TMP_SUFFIX))
+            or name.startswith(('comments-for-ai', '.')))
+
+
+def copy_mockup(src_dir, dst_dir):
+    """Копия макета без служебного (py-скрипты не тянем)."""
+    os.makedirs(dst_dir, exist_ok=True)
+    for name in os.listdir(src_dir):
+        if _is_tool_junk(name):
+            continue
+        s, d = os.path.join(src_dir, name), os.path.join(dst_dir, name)
+        if os.path.isdir(s):
+            # ⚠️ У ПІДТЕКАХ відсіюємо РІВНО .tmp, а не весь предикат вище. Це
+            # свідома асиметрія: підтеки завжди їхали цілком, і розширити фільтр
+            # означало б тихо перестати возити файли, які возяться сьогодні
+            # (напр. shared/notes.py). Прибираємо лише той клас, який породила
+            # ця сама задача.
+            shutil.copytree(s, d, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('*' + TMP_SUFFIX))
+        else:
+            shutil.copy2(s, d)
+
+
+# ---------- GitLab-синхронизация (T-18) ----------
+# Модель: локальная папка задачи = рабочая копия (tool-состояние + свой git).
+# Синхронизация = экспорт ЧИСТОГО макета (copy_mockup) в tool-managed клон общего
+# репо и push. Клон-зеркало живёт в .mirrors/<repo>, не коммитится в инструмент.
+
+
+def gitlab_cfg(cfg, task):
+    """Git-sync конфиг задачи или None. cfg = весь tasks.json (для дефолтного ssh)."""
+    gl = task.get('gitlab')
+    if not gl or not gl.get('repo') or not gl.get('path'):
+        return None
+    key = gl.get('ssh_key') or cfg.get('gitlab_ssh_key')
+    return {'repo': gl['repo'], 'path': gl['path'].strip('/'),
+            'ssh_key': os.path.expanduser(key) if key else None,
+            'branch': gl.get('branch', 'main'),
+            # Адреса хоста для повтору при збої резолвера (`_git`). Береться з
+            # конфіга задачі або зі спільного кореня tasks.json; немає — повтору
+            # не буде, і це правильніше за вигадану адресу.
+            'host_ip': gl.get('host_ip') or cfg.get('gitlab_host_ip')}
+
+
+def gitlab_web(gl):
+    """SSH-репо → веб-URL історії коммітів по нашому шляху (для лінка в UI)."""
+    m = re.match(r'git@([^:]+):(.+?)(?:\.git)?$', gl['repo'])
+    if not m:
+        return None
+    return f'https://{m.group(1)}/{m.group(2)}/-/commits/{gl["branch"]}/{gl["path"]}'
+
+
+_RESOLVER_FAIL = 'could not resolve hostname'
+
+
+def _git_once(args, cwd, gl, timeout=120, ip=None):
+    """Один виклик git. `ip` — підміна хоста адресою (див. `_git`)."""
+    env = dict(os.environ)
+    ssh = []
+    if gl.get('ssh_key'):
+        ssh = [f'ssh -i {gl["ssh_key"]}', '-o IdentitiesOnly=yes',
+               '-o StrictHostKeyChecking=accept-new']
+    pre = []
+    if ip:
+        host = re.match(r'git@([^:]+):', gl.get('repo', ''))
+        if host:
+            # `url.…insteadOf` замість правки самого аргументу: у fetch/push
+            # адреса взагалі не в аргументах (там `origin`), тож підміняти треба
+            # на рівні git, а не рядка команди.
+            pre = ['-c', f'url.git@{ip}:.insteadOf=git@{host.group(1)}:']
+            # HostKeyAlias — щоб ключ хоста збігся з тим, що вже в known_hosts:
+            # інакше повтор упреться в перевірку ключа й виглядатиме як інша
+            # помилка, ніж резолвер.
+            ssh = ssh or ['ssh']
+            ssh.append(f'-o HostKeyAlias={host.group(1)}')
+    if ssh:
+        env['GIT_SSH_COMMAND'] = ' '.join(ssh)
+    return subprocess.run(['git', *pre, *args], cwd=cwd, env=env,
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def _git(args, cwd, gl, timeout=120):
+    """git з потрібним SSH-ключем; на збої резолвера — ОДИН повтор по IP.
+
+    Рассинхрон резолвера macOS (split-DNS) роняє push із `Could not resolve
+    hostname`, хоча DNS-сервер відповідає. Обхід відомий і робився руками щоразу:
+    `git@<ip>:…` плюс `-o HostKeyAlias=<host>`. Кожен дизайнер спотикається на
+    цьому й думає, що зламався синк.
+
+    ⛔ Адресу НЕ хардкодимо — вона приходить із `tasks.json` (`gitlab.host_ip`).
+    Немає її в конфізі — повтору немає: вигадати IP означало б піти стукати
+    невідомо куди. Повтор лише на резолвері: інакше кожна відмова (права,
+    конфлікт) коштувала б подвійного часу й ховала справжню причину.
+    """
+    r = _git_once(args, cwd, gl, timeout)
+    ip = gl.get('host_ip')
+    if r.returncode != 0 and ip and _RESOLVER_FAIL in (r.stderr or '').lower():
+        return _git_once(args, cwd, gl, timeout, ip=ip)
+    return r
+
+
+def _mirror_dir(gl):
+    base = os.environ.get('DC_MIRRORS_DIR') or os.path.join(ROOT, '.mirrors')
+    slug = re.sub(r'[^\w.-]+', '-', gl['repo'].split(':')[-1]).strip('-')
+    return os.path.join(base, slug)
+
+
+def ensure_mirror(gl, fetch=True):
+    """Гарантирует локальный клон репо-зеркала; возвращает путь (или бросает OSError)."""
+    md = _mirror_dir(gl)
+    if not os.path.isdir(os.path.join(md, '.git')):
+        os.makedirs(os.path.dirname(md), exist_ok=True)
+        r = _git(['clone', '--branch', gl['branch'], gl['repo'], md], ROOT, gl, 180)
+        if r.returncode != 0:
+            raise OSError(f'clone failed: {(r.stderr or r.stdout)[-300:]}')
+    else:
+        _align_mirror_remote(md, gl)
+        if fetch:
+            # ⛔ Не ковтати відмову fetch: без свіжого origin ми не знаємо, чи
+            # відстали, і будь-який push іде вслід наосліп. Раніше тут гинув VPN —
+            # дзеркало лишалось старим, behind=0, guard не спрацьовував, «✓» брехало.
+            r = _git(['fetch', '--quiet', 'origin', gl['branch']], md, gl)
+            if r.returncode != 0:
+                raise OSError(f'fetch failed: {(r.stderr or r.stdout)[-300:]}')
+    return md
+
+
+def _align_mirror_remote(md, gl):
+    """origin дзеркала = адреса з конфіга задачі. Розійшлись — переписати й сказати.
+
+    ⛔ fb-29092026-d64d35 (boss-interface). Тека дзеркала називається за шляхом
+    репо ПІСЛЯ двокрапки (`_mirror_dir`), тож `git@10.0.0.7:X` і
+    `git@gitlab.internal.example:X` — одна й та сама тека. Дзеркало, склоноване
+    25.08.2026 з обхідною IP-адресою, так і тримало її в origin: `tasks.json`
+    полагодили, а fetch/push ішли туди, куди SSH-ключ не пускає, — і ітерації
+    8–14 жили лише на Vercel. Лікувалось руками, `git remote set-url`.
+    Джерело правди про адресу — конфіг задачі, а не історія клону.
+    """
+    # ЗАПИСАНЕ значення, а не `remote get-url`: той розгортає `url.*.insteadOf`,
+    # і на машині з таким правилом звірка «не збіглась» би щоразу (ревʼю 29.09).
+    r = _git(['config', '--get', 'remote.origin.url'], md, gl)
+    have = (r.stdout or '').strip() if r.returncode == 0 else ''
+    if have == gl['repo']:
+        return
+    s = _git(['remote', 'set-url', 'origin', gl['repo']], md, gl)
+    if s.returncode != 0:
+        raise OSError(f'remote set-url failed: {(s.stderr or s.stdout)[-300:]}')
+    print(f'дзеркало {os.path.basename(md)}: origin {have or "—"} → {gl["repo"]} '
+          f'(за tasks.json)', file=sys.stderr)
+
+
+def _mockup_files(src_dir):
+    """Файлы чистого макета (те же правила, что copy_mockup: без .py/служебного)."""
+    out = []
+    for name in sorted(os.listdir(src_dir)):
+        if _is_tool_junk(name):
+            continue
+        p = os.path.join(src_dir, name)
+        if os.path.isdir(p):
+            for root, dirnames, names in os.walk(p):
+                # Теку з іменем *.tmp теж геть, і на місці: copytree відсіює її
+                # через ignore_patterns, а os.walk без цього рядка заходив би
+                # усередину — і відбиток розійшовся б із експортом.
+                dirnames[:] = [n for n in dirnames if not n.endswith(TMP_SUFFIX)]
+                # Той самий вузький фільтр, що і в copytree у copy_mockup: інакше
+                # відбиток бачив би файли, яких експорт уже не возить, і кожен
+                # осиротілий tmp вічно кричав би «є що синхронізувати».
+                out += [os.path.join(root, n) for n in names
+                        if not n.endswith(TMP_SUFFIX)]
+        else:
+            out.append(p)
+    return sorted(out)
+
+
+def mockup_hash(src_dir):
+    """Отпечаток чистого макета — чтобы понять, есть ли что синхронизировать."""
+    import hashlib
+    h = hashlib.md5()
+    for f in _mockup_files(src_dir):
+        h.update(os.path.relpath(f, src_dir).encode())
+        h.update((_file_hash(f) or '').encode())
+    return h.hexdigest()
+
+
+_identity_cache = None
+
+
+def machine_identity():
+    """Підпис ЦІЄЇ машини: `(імʼя, ключ)`. Порожні рядки — коли особи немає.
+
+    Джерело те саме, що вже використовують `bin/registry.py` і
+    `bin/overview_push.py` для `owner`/`owner_key`: глобальний git-конфіг.
+    Третьої моделі особи в інструменті не заводимо.
+
+    ⛔ Фолбека на конкретну людину тут НЕМАЄ — на відміну від
+    `_commit_identity()`, де константа лише підписує коміт у дзеркало. Тут
+    значення їде в `author` ітерації, тобто фолбек означав би ПРИПИСАТИ чужу
+    роботу конкретному імені. Порожньо — чесно: така ітерація вважається своєю
+    на будь-якій машині (див. `iteration_is_mine`).
+
+    `DC_IDENTITY_NAME`/`DC_IDENTITY_EMAIL` перекривають конфіг: тестам треба
+    вміти зіграти ДВОХ дизайнерів в одному процесі, а машина без git-конфіга
+    має де назватись, не правлячи глобальний конфіг.
+    """
+    env_name = os.environ.get('DC_IDENTITY_NAME')
+    env_key = os.environ.get('DC_IDENTITY_EMAIL')
+    if env_name is not None or env_key is not None:
+        # ⛔ Env-гілка НЕ кешується: тести в одному процесі грають двох
+        # дизайнерів, і закешована відповідь зробила б другого першим.
+        return (env_name or '').strip(), (env_key or '').strip()
+    global _identity_cache
+    if _identity_cache is not None:
+        return _identity_cache
+    out = []
+    for key in ('user.name', 'user.email'):
+        try:
+            r = subprocess.run(['git', 'config', '--get', key],
+                               capture_output=True, text=True, timeout=5)
+            out.append(r.stdout.strip() if r.returncode == 0 else '')
+        except (OSError, subprocess.SubprocessError):
+            out.append('')
+    # Кеш на життя процесу: `/api/task` канвас ПОЛИТЬ, а git-конфіг машини за
+    # цей час не міняється. Без кешу кожен опит смуги коштував би двох
+    # процесів `git config` заради константної відповіді.
+    #
+    # ⛔ Кешуємо ЛИШЕ непорожнє. `git config` може впасти транзієнтно (таймаут,
+    # index.lock, dubious ownership), і закешована порожнеча означала б, що до
+    # перезапуску сервера — а він живе днями — усі нові ітерації народжуються
+    # без підпису, а всі чужі раптом стають своїми. Те саме, якщо дизайнер
+    # полагодить `user.email`, не зупиняючи канвас.
+    if out[0] or out[1]:
+        _identity_cache = (out[0], out[1])
+    return out[0], out[1]
+
+
+def iteration_is_mine(it, my_key):
+    """Чи ця ітерація МОЯ. Порівняння по ключу, не по імені.
+
+    Дві межі, обидві на користь «своя» — бо «чужа» відводить роботу у форк і
+    забороняє пуш, тобто хибне спрацювання тут коштує дорожче за пропущене:
+      · у записі немає `author_key` (уся історія до цієї задачі) — своя;
+      · на машині немає особи — своє все, тобто сьогоднішня поведінка.
+    """
+    key = (it or {}).get('author_key') or ''
+    return not key or not my_key or key == my_key
+
+
+def _stamp_author(entry):
+    """Підписати ЗАПИС ітерації особою цієї машини. Порожня особа — без полів.
+
+    ⛔ Саме БЕЗ полів, а не з порожніми рядками: `author: ''` читалось би як
+    «автор відомий і безіменний», а `iteration_is_mine` мусить бачити різницю
+    між «підпису немає» і «підпис чужий».
+    """
+    name, key = machine_identity()
+    if name or key:
+        entry['author'], entry['author_key'] = name, key
+    return entry
+
+
+def _commit_identity():
+    """Аргументи -c для коміту в дзеркало: підпис ВЛАСНИКА машини.
+
+    Раніше тут був жорстко зашитий Designer One — через це пуш будь-якого
+    дизайнера приходив від імені автора інструменту, а gitlab_pull, який бере
+    автора з `log -1 --format=%an` для підпису ітерації, завжди писав те саме
+    ім'я. Тепер особу дає `machine_identity()` — ОДНЕ джерело на весь
+    інструмент, те саме, що підписує ітерації.
+
+    ⛔ Константний фолбек лишається ЛИШЕ тут і лише тому, що git без
+    `user.email` взагалі відмовляється комітити. У дані (`author` ітерації) він
+    не потрапляє ніколи: `machine_identity()` там віддає порожньо, і
+    `_stamp_author` не пише полів — бо константа в даних означала б приписати
+    роботу конкретній людині. Без цього поділу вигадане імʼя витікало довгим
+    шляхом: порожній `author` у `.canvas-state.json` → колега падає на
+    запасний `git log -1 --format=%an` → а комітив дзеркало саме цей фолбек.
+    """
+    name, key = machine_identity()
+    return ['-c', f'user.name={name or "Designer One"}',
+            '-c', f'user.email={key or "designer.one@example.com"}']
+
+
+def _rev_count(md, gl, rng, path=None):
+    """Кількість комітів у діапазоні; `path` звужує до однієї теки (`-- <path>`)."""
+    args = ['rev-list', '--count', rng] + (['--', path] if path else [])
+    rc = _git(args, md, gl)
+    return int(rc.stdout.strip()) if rc.returncode == 0 and rc.stdout.strip().isdigit() else 0
+
+
+def _on_remote(md, gl):
+    """Чи існує тека задачі на origin. Не змогли спитати — None, а не False.
+
+    Без цього «синхронізовано» друкувалось і для задачі, якої в репо НЕМА
+    взагалі: `behind=0` (нам нічого не наздоганяти), `dirty=False` — і статус
+    читався як «усе доїхало». 29.07.2026 так виглядали dobFilter і riskFactors,
+    а bgSanctions мав ще й записаний synced_at при sha=None — тобто мета
+    вважала синхронізованим пуш, якого не було.
+
+    Три стани, а не два: True / False / None («не питали, дзеркало без origin»).
+    Зливати None у False не можна — це рівно те вигадування впевненості, через
+    яке баг і виглядав правдою.
+    """
+    r = _git(['cat-file', '-e', f'origin/{gl["branch"]}:{gl["path"]}'], md, gl)
+    if r.returncode == 0:
+        return True
+    # Гілки origin нема (порожнє/нове дзеркало) — питання не має відповіді.
+    if _git(['rev-parse', '--verify', f'origin/{gl["branch"]}'], md, gl).returncode != 0:
+        return None
+    return False
+
+
+def _behind_count(md, gl):
+    """Скільки комітів origin попереду локального дзеркала.
+
+    ⛔ Свідомо БЕЗ `-- <path>`. Раніше рахувалось лише по теці задачі — і будь-який
+    коміт мимо `mockup/<tid>` (CI-конфіг, макет іншої задачі) давав behind=0:
+    pull-first guard не спрацьовував, дзеркало тихо йшло в non-fast-forward, push
+    відбивався НАЗАВЖДИ і блокував усі задачі цього репо. Ціна ширшого guard —
+    підтягувати доводиться частіше; вона того варта.
+    """
+    return _rev_count(md, gl, f'{gl["branch"]}..origin/{gl["branch"]}')
+
+
+def _behind_path_count(md, gl):
+    """Скільки комітів origin попереду ТЕКИ ЗАДАЧІ — на відміну від усього репо.
+
+    Дві величини, два різні висновки, і їх злиття коштувало дорого:
+    · «репо попереду» (CI-конфіг, макет сусідньої задачі) — наздогнати дзеркало
+      і пушити далі. Блокувати тут нема чого: нашої роботи ніхто не чіпав;
+    · «ТЕКА ЗАДАЧІ попереду» — ось це блокує, бо пуш поверх мовчки затер би
+      чужий макет.
+
+    Поки величина була одна, 90% блокувань казали «тебе обігнали» там, де теку
+    ніхто не чіпав, а перший пуш НОВОЇ задачі не проходив узагалі: guard
+    блокував, а `gitlab_pull` падав із `path … not found in repo`. Вийти можна
+    було лише `git merge --ff-only` руками в теці дзеркала (фідбек 04.09.2026).
+    """
+    return _rev_count(md, gl, f'{gl["branch"]}..origin/{gl["branch"]}', gl['path'])
+
+
+def _ahead_count(md, gl):
+    """Скільки локальних комітів дзеркала ще не на origin (незапушені)."""
+    return _rev_count(md, gl, f'origin/{gl["branch"]}..{gl["branch"]}')
+
+
+def _behind_top(md, gl):
+    """Хто і коли зробив верхній коміт origin — щоб не ГАДАТИ, хто нас обігнав.
+
+    03.08.2026 хук сказав «там працював інший дизайнер», а насправді це була та
+    сама людина з іншої копії інструменту — і повідомлення відправило діагностику
+    хибним слідом. Автор і дата беруться з дзеркала, без мережі.
+    """
+    r = _git(['log', '-1', '--format=%an%x1f%ad%x1f%s', '--date=format:%d.%m.%Y %H:%M',
+              f'origin/{gl["branch"]}'], md, gl)
+    if r.returncode != 0 or '\x1f' not in r.stdout:
+        return {}
+    author, date, subject = (r.stdout.strip().split('\x1f') + ['', '', ''])[:3]
+    return {'author': author, 'date': date, 'subject': subject[:120]}
+
+
+def _iter_dir(task, it):
+    return os.path.join(task['dir'], 'iterations', it)
+
+
+def iteration_pages(task, it):
+    return pm.read_pages(_iter_dir(task, it))
+
+
+def _page_dir(task, it, page):
+    """Тека сторінки в теці ітерації ('' для неявної main → корінь ітерації)."""
+    return os.path.join(_iter_dir(task, it), pm.page_rel(page))
+
+
+def _pick_page(task, it, page_id):
+    """Об'єкт сторінки за id; None-безпечно повертає першу відкривану
+    (тека — `kind: folder` чи легасі-`isGroup` — не відкривається: теж падаємо
+    на першу відкривану)."""
+    pages = iteration_pages(task, it)
+    op = pm.openable_pages(pages)
+    if page_id:
+        p, _ = pm.find_page(pages, page_id)
+        # відкривається рівно те, що входить в `op` (те саме джерело, що й запасний
+        # варіант нижче): тип вузла без батька ми б вивели наново й, можливо, інакше
+        if p is not None and any(q is p for q in op):
+            return p
+    return op[0] if op else None
+
+
+def gitlab_sync(tid, task, gl, it):
+    """Экспорт ВЫБРАННОЙ итерации в mockup/<путь> зеркала → commit → push.
+    Pull-first guard: если на GitLab новее по нашему пути — не пушим поверх
+    (иначе молча затрём чужой макет), просим сперва Підтягнути."""
+    src = _iter_dir(task, it)
+    if not os.path.isdir(src):
+        raise OSError('iteration not found')
+    # ⛔ Чуже не пушимо. Відправити ітерацію колеги під своїм підписом означає
+    # стерти авторство рівно так, як воно стиралось до цієї задачі — тільки
+    # тепер уже маючи підпис на руках. Перевірка стоїть ПЕРЕД дзеркалом: ні
+    # мережі, ні fetch заради відмови.
+    _entry = next((x for x in load_meta(task).get('iterations', [])
+                   if x['id'] == it), {})
+    _, _my_key = machine_identity()
+    if not iteration_is_mine(_entry, _my_key):
+        return {'ok': False, 'synced': False, 'blocked': 'foreign', 'it': it,
+                'author': _entry.get('author') or _entry.get('author_key') or ''}
+    md = ensure_mirror(gl, fetch=True)
+    co = _git(['checkout', gl['branch']], md, gl)
+    if co.returncode != 0:
+        raise OSError(f'checkout {gl["branch"]} failed: {(co.stderr or co.stdout)[-200:]}')
+    behind = _behind_count(md, gl)
+    if behind > 0:
+        behind_path = _behind_path_count(md, gl)
+        if behind_path > 0:
+            # Теку задачі СПРАВДІ оновили — пуш поверх затер би чужий макет.
+            return {'ok': False, 'synced': False, 'blocked': 'behind', 'behind': behind,
+                    'behind_path': behind_path,
+                    'remote': f'{gl["repo"]}:{gl["path"]}',
+                    'behind_top': _behind_top(md, gl)}
+        # Попереду лише РЕПО (CI-конфіг, макет сусідньої задачі) — наздоганяємо
+        # дзеркало самі. Інваріант, заради якого guard і писався, від цього не
+        # страждає, а виконується сильнішим способом: push іде з дзеркала, яке
+        # вже не відстає, тобто non-fast-forward неможливий за побудовою.
+        ff = _git(['merge', '--ff-only', f'origin/{gl["branch"]}'], md, gl)
+        if ff.returncode != 0:
+            # Дзеркало розійшлось (є свої коміти поверх origin) — це вже не
+            # «наздогнати», а розводити руками. Кажемо вголос і НЕ пушимо.
+            return {'ok': False, 'synced': False, 'blocked': 'diverged',
+                    'behind': behind, 'ahead': _ahead_count(md, gl),
+                    'remote': f'{gl["repo"]}:{gl["path"]}',
+                    'behind_top': _behind_top(md, gl),
+                    'error': (ff.stderr or ff.stdout)[-200:]}
+    dst = os.path.join(md, gl['path'])
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)  # чтобы удалённые в макете файлы ушли и из репо
+    copy_mockup(src, dst)
+    pages = pm.read_pages(src)
+    if len(pm.openable_pages(pages)) > 1:
+        # Глибина — відступом, тека — рядком БЕЗ теки (`—`): на диску її нема, і
+        # `<id>/` у колонці «Тека» вів би в нікуди. Вкладеність тепер довільна,
+        # а `↳ ` на будь-якій глибині виглядав однаково.
+        # `&emsp;`, а не пробіли: GFM обрізає пробіли на початку комірки, і глибина
+        # зникла б (а колись була видима — `↳ `). Назва в один рядок: перенос
+        # усередині розірвав би рядок таблиці.
+        def _row(f):
+            name = ' '.join(f['page']['name'].split()).replace('|', '/')
+            indent = '&emsp;' * f['depth']
+            if f['kind'] == 'folder':
+                return f"| — | {indent}📁 {name} |"
+            return f"| `{pm.page_rel(f['page']) or '.'}/` | {indent}{name} |"
+        rows = '\n'.join(_row(f) for f in pm.flatten(pages))
+        with open(os.path.join(dst, 'README.md'), 'w', encoding='utf-8') as fh:
+            fh.write(f"# {task.get('title', tid).replace(chr(10), ' ')}\n\n"
+                     f"Мультисторінковий макет (design-canvas, задача `{tid}`). "
+                     f"Не редагувати тут напряму.\n\n"
+                     f"| Тека | Сторінка |\n|---|---|\n{rows}\n")
+    meta_now = load_meta(task)
+    it_entry = next((x for x in meta_now.get('iterations', []) if x['id'] == it), {})
+    # Стан публікації — колегам. Без нього в чужому канвасі ітерації завжди
+    # виглядають неопублікованими: iterations.json лежить у SKIP і нікуди не їде.
+    # ⛔ Жодних міток часу «коли синкнули» — інакше файл мінявся б щоразу і
+    # автосинк робив би порожній коміт на кожну відповідь Claude.
+    # Підпис автора — ЗАЯВА тієї машини, що синкає. Колега читає саме її
+    # (`gitlab_pull`), а не `git log`: лог це властивість коміту й розходиться
+    # з автором макета на першому ж ребейсі чи пуші з CI.
+    _author, _author_key = machine_identity()
+    with open(os.path.join(dst, STATE_FILE), 'w', encoding='utf-8') as fh:
+        json.dump({'task': tid, 'source_it': it,
+                   'author': _author, 'author_key': _author_key,
+                   'published': bool(it_entry.get('published')),
+                   'publish_url': meta_now.get('publish_url'),
+                   'published_at': meta_now.get('published_at')},
+                  fh, ensure_ascii=False, indent=2)
+    _git(['add', '-A', gl['path']], md, gl)
+    st = _git(['status', '--porcelain', gl['path']], md, gl)
+    remote = f'{gl["repo"]}:{gl["path"]}'
+    if not st.stdout.strip():
+        # Макет не змінився — але це ще НЕ означає «лежить на GitLab»: попередній
+        # коміт міг не доїхати (див. bgSanctions, 12 днів «✓» при незапушеному
+        # коміті). Якщо локальні коміти є — доганяємо, і лише тоді synced.
+        if _ahead_count(md, gl) == 0:
+            return {'ok': True, 'synced': True, 'changed': False, 'pushed': False,
+                    'remote': remote}
+        p = _git(['push', '--quiet', 'origin', gl['branch']], md, gl)
+        return {'ok': p.returncode == 0, 'synced': p.returncode == 0, 'changed': False,
+                'pushed': p.returncode == 0, 'catchup': True, 'remote': remote,
+                'error': None if p.returncode == 0 else (p.stderr or p.stdout)[-300:]}
+    title = task.get('title', tid)
+    # rich-повідомлення: щоб pull/історія були самопояснювальні й легше вирішувати конфлікти
+    note = (it_entry.get('note') or '').strip()
+    subject = f'design-canvas: sync {gl["path"]} ({title}) · {it}'
+    body = f'Ітерація: {it} · Хеш: {mockup_hash(src)[:12]} · {time.strftime("%d.%m.%Y %H:%M")}'
+    if note:
+        body += f'\nЩо змінено: {note}'
+    _git(_commit_identity() + ['commit', '-q', '-m', subject + '\n\n' + body], md, gl)
+    p = _git(['push', '--quiet', 'origin', gl['branch']], md, gl)
+    sha = _git(['rev-parse', '--short', 'HEAD'], md, gl).stdout.strip()
+    return {'ok': p.returncode == 0, 'synced': p.returncode == 0, 'changed': True,
+            'pushed': p.returncode == 0, 'sha': sha, 'remote': remote,
+            'error': None if p.returncode == 0 else (p.stderr or p.stdout)[-300:]}
+
+
+def gitlab_status(task, gl, meta, it):
+    """Есть ли локальные изменения ВЫБРАННОЙ итерации к отправке / новее на GitLab."""
+    try:
+        md = ensure_mirror(gl, fetch=True)
+    except OSError as e:
+        return {'configured': True, 'error': str(e)[:200]}
+    g = meta.get('gitlab') or {}
+    src = _iter_dir(task, it)
+    # dirty относительно последней синхронизации ИМЕННО этой итерации
+    # багатосторінкова задача (sync-all): порівнюємо з хешем ЦІЄЇ ітерації,
+    # бо на GitLab лежать усі, а не одна вибрана
+    per_it = (g.get('synced_hashes') or {})
+    if it in per_it:
+        dirty = (not os.path.isdir(src)) or (mockup_hash(src) != per_it[it])
+    else:
+        dirty = (not os.path.isdir(src)) or (g.get('synced_it') != it) \
+            or (mockup_hash(src) != g.get('synced_hash'))
+    # яка локальна ітерація ЗАРАЗ == версії на GitLab (за хешем останньої синхр.)
+    sh = g.get('synced_hash')
+    gitlab_it = None
+    if sh:
+        for itd in (meta.get('iterations') or []):
+            d = _iter_dir(task, itd['id'])
+            if os.path.isdir(d) and mockup_hash(d) == sh:
+                gitlab_it = itd['id']
+                break
+    return {'configured': True, 'behind': _behind_count(md, gl),
+            # Окремо від `behind`: «репо попереду» і «теку задачі попереду» —
+            # різні новини, і перше не заважає працювати (див. `_behind_path_count`).
+            'behind_path': _behind_path_count(md, gl),
+            # незапушені локальні коміти дзеркала — щоб «✓» більше не могло
+            # означати «лежить у мене, а не на GitLab» (див. bgSanctions/22.07)
+            'unpushed': _ahead_count(md, gl),
+            # чи є тека задачі на origin: «ніколи не пушилось» ≠ «синхронізовано»
+            'on_remote': _on_remote(md, gl),
+            'dirty': bool(dirty), 'synced_at': g.get('synced_at'),
+            'synced_it': g.get('synced_it'), 'gitlab_it': gitlab_it,
+            'remote_path': gl['path'], 'web': gitlab_web(gl)}
+
+
+def _read_state(src_dir):
+    """Стан публікації з макета, що прийшов від колеги (див. STATE_FILE)."""
+    p = os.path.join(src_dir, STATE_FILE)
+    if not os.path.isfile(p):
+        return {}
+    try:
+        with open(p, encoding='utf-8') as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _dir_mtime(d):
+    """Найсвіжіший mtime файлів у теці — де щойно працювали.
+
+    Dot-файли не рахуємо: `.pages.lock` (створюється справжнім записом дерева) і
+    `.DS_Store` — службове, а не робота. Вибір робочої ітерації в `autosync` іде
+    саме за цим числом, тож свіжий лок-файл на старій ітерації переставив би
+    вибір. Так само рахує `_authored_mtime`."""
+    newest = 0.0
+    for root, _, names in os.walk(d):
+        for n in names:
+            if n.startswith('.'):
+                continue
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, n)))
+            except OSError:
+                continue
+    return newest
+
+
+def _authored_mtime(d, skip=None):
+    """Коли в ітерації востаннє ПРАЦЮВАЛИ: найсвіжіший mtime файлів без `shots/`.
+
+    Кадри перезнімаються самі (автозʼємка при вході в «Огляд», T-34), тож
+    свіжий `shots/` означає «інструмент перезняв», а не «дизайнер правив».
+    Порівнюється з `_authored_at_origin` — там кадри виключені так само.
+    Dot-файли (`.DS_Store` від Finder) — теж не робота: їх не везе й експорт
+    (`_is_tool_junk`), тобто на origin їх немає, і рахувати їх лише з одного
+    боку означало б «молодшати» тижневу ітерацію від відкриття теки.
+    `skip(name)` — предикат для файлів КОРЕНЯ, які не рахуються (`_content_mtime`).
+    """
+    newest = 0.0
+    for root, dirs, names in os.walk(d):
+        if root == d:
+            dirs[:] = [n for n in dirs if n != 'shots']
+        dirs[:] = [n for n in dirs if not n.startswith('.')]
+        for n in names:
+            if n.startswith('.') or (skip and root == d and skip(n)):
+                continue
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, n)))
+            except OSError:
+                continue
+    return newest
+
+
+#: Файли кореня ітерації, що НЕ є вмістом рамки: дерево перечитує панель
+#: (`refreshPanelFromDisk`), а `flow.json` пише сам канвас на драг вузла.
+_NOT_CONTENT = ('pages.json', 'flow.json')
+
+
+def _content_mtime(d):
+    """Коли востаннє змінився ВМІСТ ітерації — те, що показує рамка
+    (fb-01102026-309e3b). Як `_authored_mtime`, плюс без `_NOT_CONTENT` і без
+    службового (`_is_tool_junk`: `.bak`, `.tmp`…): інакше власний жест дизайнера
+    перезавантажував би макет — драг вузла флоу пише `flow.json`, а КОЖНА дія
+    над деревом знімає `pages.json.bak` через `copy2` з mtime попередньої
+    версії (ревʼю батча 1.47, D1)."""
+    return _authored_mtime(d, lambda n: n in _NOT_CONTENT or _is_tool_junk(n))
+
+
+#: Скільки живе серцебиття Клода (секунди) — за статусом. Ідея 02.09.2026: статус
+#: тримається на доказі, що СПЛИВАЄ, а не на прапорці. «Працює» — коротко: мод
+#: pipeline-band бʼє на кожному інструменті (не частіше разу на 15 с), тож 3 хв
+#: тиші = Клод упав, сесію закрили або довга команда без жодного інструменту
+#: (тоді чесніше згаснути, ніж збрехати). «Чекає» / «заблоковано» — стани ходу,
+#: між ударами довше, але й вони не вічні: закрита сесія — не «чекає».
+CLAUDE_TTL = {'in_progress': 180, 'waiting': 1800, 'blocked': 1800, 'done': 600}
+_CLAUDE_STATE = {'in_progress': 'working', 'waiting': 'waiting', 'blocked': 'blocked', 'done': 'done'}
+CLAUDE_PHASES = ('understanding', 'design', 'dev', 'checks', 'fixation')
+#: Удари за сесією (у памʼяті процесу: рестарт сервера = «нічого не знаю», чесно).
+CLAUDE_BEATS = {}
+#: Сервер багатопотоковий: запис/витіснення й читання ударів — під одним локом.
+CLAUDE_LOCK = threading.Lock()
+
+
+def _local_origin(origin):
+    """Origin відсутній (мод Claude Code, CLI) або локальний — так; чужий сайт — ні."""
+    if not origin:
+        return True
+    host = (urlparse(origin).hostname or '').lower()
+    return host in ('localhost', '127.0.0.1', '::1')
+#: Сторінка «змінена щойно» — файли молодші за стільки секунд.
+RECENT_PAGE_S = 120
+
+
+def claude_view(beats, now, task_id):
+    """Що показати на канвасі для задачі `task_id`. Чиста функція.
+
+    Найсвіжіший удар САМЕ цієї задачі; прострочений за `CLAUDE_TTL` — `state: None`,
+    тобто нічого. Так падіння Клода гасить статус саме собою, без нічийого cleanup."""
+    mine = [b for b in beats.values() if b.get('task') == task_id]
+    if not mine:
+        return {'state': None}
+    b = max(mine, key=lambda x: x.get('at') or 0)
+    age = max(0, int(now - (b.get('at') or 0)))
+    if age > CLAUDE_TTL.get(b.get('status'), 0):
+        return {'state': None}
+    return {'state': _CLAUDE_STATE[b['status']], 'phase': b.get('phase'),
+            'note': b.get('note') or '', 'age_s': age}
+
+
+def recent_pages(idir, now=None):
+    """Id сторінок, чиї файли змінились за `RECENT_PAGE_S` — «де саме міняє»."""
+    now = time.time() if now is None else now
+    try:
+        tree = pm.read_pages(idir)
+    except pm.TreeError:
+        return []
+    out = []
+    for f in pm.flatten(tree):
+        rel = pm.page_rel(f['page']) if f['kind'] != 'folder' else ''
+        d = os.path.join(idir, rel) if rel else None
+        if d and os.path.isdir(d) and now - _authored_mtime(d) < RECENT_PAGE_S:
+            out.append(f['page']['id'])
+    return out
+
+
+def _authored_at_origin(md, path, gl):
+    """Unix-час останнього коміту в теку задачі на origin (без комітів лише
+    кадрів) або None. Це час, коли версію ЗРОБИЛИ, а не коли її завантажили:
+    файли дзеркала мають mtime чекауту, тобто «щойно»."""
+    r = _git(['log', '-1', '--format=%ct', '--', path, f':(exclude){path}/shots'], md, gl)
+    try:
+        return int((r.stdout or '').strip())
+    except ValueError:
+        return None
+
+
+def _touch_tree(d):
+    """Проставити файлам теки поточний час.
+
+    ⛔ Не косметика. `copy_mockup` іде через `shutil.copy2`, який зберігає mtime
+    ДЖЕРЕЛА, а `autosync` вибирає робочу ітерацію саме за mtime. Свіжий форк із
+    чужими старими часами означав би, що Stop-хук відправить у дзеркало іншу
+    ітерацію — ту, де я працював учора.
+    """
+    now = time.time()
+    for root, _, names in os.walk(d):
+        for n in names:
+            try:
+                os.utime(os.path.join(root, n), (now, now))
+            except OSError:
+                continue
+
+
+def _record_sync(task, it, sha):
+    """Відбиток відправленої ітерації.
+
+    `synced_hashes` накопичуємо по ітераціях і НЕ затираємо: саме за ним автосинк
+    розуміє, що ітерація вже поїхала. Без цього кожна відповідь Claude
+    закінчувалась би зайвим походом у мережу.
+    """
+    meta = load_meta(task)
+    if not sha:
+        # ⛔ Без sha відбитка НЕ пишемо. Запис `synced_at`/`synced_it` при
+        # `sha=None` — це готова брехня в мета: саме так bgSanctions вважався
+        # синхронізованим 22.07.2026, хоча теки на origin не існувало.
+        # Мовчати теж не можна: інакше «не записали» не відрізнити від «записали».
+        print(f'⚠ синк {it}: немає sha — відбиток не записано, '
+              f'наступний синк спробує знову', file=sys.stderr)
+        return meta
+    g = dict(meta.get('gitlab') or {})
+    hashes = dict(g.get('synced_hashes') or {})
+    hashes[it] = mockup_hash(_iter_dir(task, it))
+    meta['gitlab'] = {**g, 'synced_at': time.strftime('%d.%m.%Y %H:%M'),
+                      'synced_it': it, 'synced_hash': hashes[it],
+                      'synced_hashes': hashes, 'sha': sha}
+    save_meta(task, meta)
+    return meta
+
+
+def autosync(tid, task, gl):
+    """Один крок автосинку: брудна ітерація → локальний коміт → пуш на GitLab.
+
+    Кличе Stop-хук після кожної відповіді Claude — правило «макет пушимо після
+    КОЖНОГО оновлення, а не в кінці задачі» (30.07.2026) перестає залежати від
+    того, чи згадав про нього Claude.
+
+    Дешевий шлях без мережі: якщо робоча ітерація збігається з відбитком
+    останньої синхронізації — виходимо одразу, жодного `git fetch`.
+    """
+    meta = load_meta(task)
+    live = [(x['id'], _iter_dir(task, x['id'])) for x in meta.get('iterations', [])]
+    live = [(i, d) for i, d in live if os.path.isdir(d)]
+    if not live:
+        return {'ok': True, 'changed': False, 'reason': 'no-iterations'}
+    # Беремо ОДНУ ітерацію — найсвіжішу за mtime (у канвасі за замовчуванням
+    # обрана саме та, в якій працюють). ⛔ Свідомо не скануємо всю історію: тоді
+    # ітерація, яку ніколи не пушили, вважалась би брудною вічно, і автосинк
+    # вивіз би в репо якусь it1 з минулого тижня замість поточної.
+    # ⛔ Чужі ітерації автосинк не розглядає взагалі: відправити чуже під своїм
+    # підписом — рівно та втрата авторства, проти якої написана вся задача про
+    # іменні ітерації. Мовчазний вибір «хоч чогось», коли своїх немає, був би
+    # тим самим — тому причина називається вголос.
+    _, my_key = machine_identity()
+    by_id = {x['id']: x for x in meta.get('iterations', [])}
+    mine = [(i, d) for i, d in live if iteration_is_mine(by_id.get(i, {}), my_key)]
+    if not mine:
+        return {'ok': True, 'changed': False, 'reason': 'foreign-only'}
+    it = max(mine, key=lambda p: _dir_mtime(p[1]))[0]
+    g = meta.get('gitlab') or {}
+    known = (g.get('synced_hashes') or {}).get(it)
+    if known is None and g.get('synced_it') == it:
+        known = g.get('synced_hash')  # синк до появи per-iteration відбитків
+    if known is not None and mockup_hash(_iter_dir(task, it)) == known:
+        return {'ok': True, 'changed': False, 'reason': 'clean', 'it': it}
+    local = git_autocommit(task['dir'], f'{it}: автосинк (design-canvas)')
+    try:
+        r = gitlab_sync(tid, task, gl, it)
+    except OSError as e:
+        # Немає мережі/VPN — це не привід сварити дизайнера після кожної відповіді.
+        # Але й «синхронізовано» не пишемо: відбиток лишається старим, і синк
+        # повторить спробу наступного разу.
+        return {'ok': False, 'synced': False, 'changed': False, 'reason': 'offline',
+                'it': it, 'error': str(e)[:300], 'local_sha': local.get('sha')}
+    # ⛔ Гейт саме по `synced`, а не по `ok`: `ok` буває True і тоді, коли макет не
+    # змінився, а попередній коміт так і не доїхав до origin. Саме через це
+    # bgSanctions 12 днів показував «✓» при незапушеному коміті.
+    if r.get('synced'):
+        _record_sync(task, it, r.get('sha'))
+    return {**r, 'it': it, 'local_sha': local.get('sha')}
+
+
+def _task_is_mine(task):
+    """Чи ЦЯ машина — власник задачі (`owner_key`). Без власника чи без особи — так."""
+    owner = (task or {}).get('owner_key') or ''
+    _, me = machine_identity()
+    return not owner or not me or owner == me
+
+
+def _not_task_link(task):
+    """Імʼя власника, якщо превʼю з ЦІЄЇ машини — НЕ посилання задачі; інакше None.
+
+    Рішення власника 29.09.2026 (fb-29092026-69e9c7, 210ec1): посилання задачі —
+    превʼю ВЛАСНИКА; не-власник публікує у своє, і канвас каже це вголос.
+    """
+    if _task_is_mine(task):
+        return None
+    return (task or {}).get('owner') or (task or {}).get('owner_key')
+
+
+def _adopt_publish_state(meta, state, task):
+    """Публікація — задачного рівня і належить тому, хто деплоїв.
+
+    ⛔ Лише від ВЛАСНИКА задачі (рішення 29.09.2026). Інакше не-власник, що
+    опублікував у СВОЄ превʼю й синкнув макет, підміняв би колегам посилання
+    задачі своїм — а в Vercel другого акаунта це взагалі інший проєкт
+    (`pv-XXXX-<суфікс>`). Без власника чи без підпису автора — як було.
+
+    Переносимо URL до себе, щоб у канвасі колеги був живий лінк «превью ↗», а не
+    порожнеча. Винесено окремо, бо тепер це роблять ДВІ гілки `gitlab_pull`:
+    і та, що заводить ітерацію, і та, що впізнала власний вміст і ітерації не
+    заводить. Забути другу означало б «підтягнув — і лінк не приїхав».
+    """
+    owner = (task or {}).get('owner_key')
+    author = state.get('author_key')
+    if owner and author and owner != author:
+        return
+    if state.get('publish_url'):
+        meta['publish_url'] = state['publish_url']
+        meta['published_at'] = state.get('published_at')
+
+
+def gitlab_pull(task, gl):
+    """Чужие правки с GitLab → новая итерация локально (рабочий макет не трогаем)."""
+    md = ensure_mirror(gl, fetch=True)
+    co = _git(['checkout', gl['branch']], md, gl)
+    if co.returncode != 0:
+        raise OSError(f'checkout {gl["branch"]} failed: {(co.stderr or co.stdout)[-200:]}')
+    # ⛔ Не ковтати відмову pull: при розходженні дзеркала --ff-only падає, і раніше
+    # ми копіювали в нову ітерацію ЗАСТАРІЛЕ дзеркало, підписавши його
+    # «оновлення з GitLab · <колега>». Дизайнер отримував фальшиве чуже оновлення.
+    pl = _git(['pull', '--ff-only', '--quiet', 'origin', gl['branch']], md, gl)
+    if pl.returncode != 0:
+        ahead = _ahead_count(md, gl)
+        hint = (f' Дзеркало має {ahead} локальний(х) коміт(ів) поверх origin — '
+                f'розходження треба розвести вручну.' if ahead else '')
+        raise OSError(f'pull --ff-only failed: {(pl.stderr or pl.stdout)[-200:]}.{hint}')
+    src = os.path.join(md, gl['path'])
+    if not os.path.isdir(src):
+        raise OSError(f'path {gl["path"]} not found in repo')
+    # автор последнего коммита по нашему пути — в подпись итерации
+    a = _git(['log', '-1', '--format=%an', '--', gl['path']], md, gl)
+    author = a.stdout.strip() if a.returncode == 0 else ''
+    # ⛔ Імені автора в ПРИМІТЦІ більше немає (15.09.2026). Воно тут стояло,
+    # поки в ітерації не було власного поля `author` — і тихо витікало в
+    # ПУБЛІЧНЕ превʼю: `publish_manifest` везе `note` як є, а `manifest.json`
+    # віддається без пароля (заміряно 11.09.2026). Рішення власника —
+    # підпис лише всередині інструмента, тож автор їде полем, а не текстом.
+    note = 'оновлення з GitLab'
+    state = _read_state(src)
+    meta = load_meta(task)
+    its = meta.setdefault('iterations', [])
+    # ⛔ ІДЕМПОТЕНТНІСТЬ. Якщо вміст теки задачі на origin збігається з якоюсь
+    # ітерацією, що вже лежить локально, — нової ітерації НЕ заводимо. Інакше
+    # виходило так: guard блокував пуш «у репо новіше» (через чужий коміт мимо
+    # нашої теки), дизайнер тиснув «Підтягнути», і той створював копію СТАРОГО
+    # стану, яка ставала «останньою». Канвас відкривав її за перезавантаженням,
+    # `state.py` писав «ПРОДОВЖУЄМО з Іт.N», autosync вибирає робочу ітерацію за
+    # mtime — тобто зʼявлявся шанс відправити старий макет. Прибрати артефакт
+    # користувач не міг: видалення ітерації справедливо блокує класифікатор.
+    remote_hash = mockup_hash(src)
+    for i in its:
+        d = os.path.join(task['dir'], 'iterations', i['id'])
+        if os.path.isdir(d) and mockup_hash(d) == remote_hash:
+            # ⚠️ Стан ПУБЛІКАЦІЇ переносимо однаково — він задачного рівня, а не
+            # ітераційного, і нічого не «привезти» тут було б новою тихою
+            # втратою: колега тягне макет саме щоб побачити лінк на превʼю.
+            _adopt_publish_state(meta, state, task)
+            its_by_id = {x['id']: x for x in its}
+            its_by_id[i['id']]['published'] = bool(state.get('published'))
+            # Дзеркало вже підтягнуте (ff вище), тож відбиток ставимо: стан
+            # «нас обігнали» знято, і повторний pull не крутитиме те саме.
+            meta['gitlab'] = {**(meta.get('gitlab') or {}), 'synced_hash': remote_hash}
+            save_meta(task, meta)
+            return {'ok': True, 'unchanged': True, 'iteration': None, 'same_as': i['id']}
+    nums = [int(m.group(1)) for i in its if (m := re.match(r'^it(\d+)$', i['id']))]
+    new_id = f'it{max(nums, default=0) + 1}'
+    copy_mockup(src, os.path.join(task['dir'], 'iterations', new_id))
+    entry = {'id': new_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
+             'note': note, 'published': bool(state.get('published')),
+             'from_gitlab': True}
+    # Автор — із ЗАЯВИ колеги (`.canvas-state.json`). `git log` лишається лише
+    # запасним шляхом для станів, записаних версією без підпису: там автор
+    # хоча б показується, але ключа немає, тож така ітерація вважається своєю
+    # (`iteration_is_mine`) — свідома деградація, не тиха помилка.
+    if state.get('author') or state.get('author_key') or author:
+        entry['author'] = state.get('author') or author
+        entry['author_key'] = state.get('author_key') or ''
+    _, my_key = machine_identity()
+    # Моя робота ДО цього pull — кандидат на продовження (див. нижче, d64d35).
+    mine_before = [(i['id'], d) for i in its if iteration_is_mine(i, my_key)
+                   and os.path.isdir(d := os.path.join(task['dir'], 'iterations', i['id']))]
+    its.append(entry)
+    # ФОРК ОДРАЗУ (рішення власника 15.09.2026): робота ніколи не починається
+    # поверх ЧУЖОЇ ітерації. Альтернатива «форкати на першій правці» вимагала б
+    # детектора запису, а правки в макет вносить Claude прямо на диску, повз
+    # сервер — тобто форк був би заднім числом, уже по чужому.
+    #
+    # ⛔ Саме чужої. Приїхав мій власний вміст (друга машина того самого
+    # дизайнера, або мій же пуш, що повернувся) — форк був би копією моєї
+    # роботи без жодної причини, тобто сміттям у переліку ітерацій.
+    fork, continue_from = None, None
+    if not iteration_is_mine(entry, my_key):
+        # Номер ітерації В АВТОРА — лише на ЧУЖІЙ. Саме він зникав назовсім: it3
+        # чужої машини ставало it1 моєї, і питання «а це та версія, яку вона
+        # показувала?» лишалось без відповіді. Локальний id не чіпаємо — він
+        # зашитий у ключах зʼємки, шляхах публікації й глибоких посиланнях.
+        # ⛔ На СВОЇЙ ітерації `origin` не має сенсу («у неї це Іт.3» про власний
+        # макет) — тому присвоєння стоїть саме тут, а не до перевірки.
+        if state.get('source_it'):
+            entry['origin'] = {'it': state['source_it'],
+                               'at': time.strftime('%d.%m.%Y %H:%M')}
+        fork_id = f'it{int(new_id[2:]) + 1}'
+        fork_dir = os.path.join(task['dir'], 'iterations', fork_id)
+        copy_mockup(os.path.join(task['dir'], 'iterations', new_id), fork_dir)
+        _touch_tree(fork_dir)
+        fork = _stamp_author({'id': fork_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
+                              'note': f'продовження після {note}',
+                              'published': False, 'from': new_id})
+        its.append(fork)
+    elif mine_before:
+        # ⛔ Приїхало МОЄ, але СТАРШЕ за мою роботу тут (fb-29092026-d64d35,
+        # boss-interface 29.09.2026). Модель «своє з GitLab = продовження»
+        # мовчки припускала, що origin новіший. А там лежала Іт.7 від 08.09
+        # (пуш із другої машини падав через repo з IP), тут — Іт.14 від
+        # сьогодні. Привезене ставало ОСТАННІМ і з mtime «щойно», тож на старе
+        # переїжджали всі три вказівники: `state.py` («продовжуємо з…»),
+        # `inbox.py` і автосинк (о 11:48 він тричі обрав it6 замість it5).
+        # Рішення власника 29.09.2026: привезене лягає історією, а слідом —
+        # форк моєї найсвіжішої роботи, як він і зробив руками о 11:56.
+        # Порівняння — на секундах: `%ct` цілий, mtime дробовий, і в одній
+        # секунді «щойно запушене з другої машини» не мусить ставати старшим.
+        work_id, work_dir = max(mine_before, key=lambda p: _authored_mtime(p[1]))
+        pulled_at = _authored_at_origin(md, gl['path'], gl)
+        if pulled_at is not None and int(_authored_mtime(work_dir)) > pulled_at:
+            fork_id = f'it{int(new_id[2:]) + 1}'
+            fork_dir = os.path.join(task['dir'], 'iterations', fork_id)
+            copy_mockup(work_dir, fork_dir)
+            _touch_tree(fork_dir)
+            fork = _stamp_author({'id': fork_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
+                                  'note': 'продовження моєї роботи — з GitLab '
+                                          'приїхала старша версія',
+                                  'published': False, 'from': work_id})
+            its.append(fork)
+            continue_from = work_id
+    _adopt_publish_state(meta, state, task)
+    # после подтягивания зеркало = origin → отпечаток «синхронизировано с этой версией»
+    meta['gitlab'] = {**(meta.get('gitlab') or {}), 'synced_hash': mockup_hash(src)}
+    save_meta(task, meta)
+    git_autocommit(task['dir'], f'iteration {new_id}: {note}'
+                   + (f'; {fork["id"]}: форк для продовження' if fork else ''))
+    return {'ok': True, 'iteration': entry, 'fork': fork, 'continue_from': continue_from}
+
+
+def mark_opened(cfg, tid):
+    """Позначити, що задачу ЩОЙНО відкрили: `opened` (ISO UTC) на записі задачі.
+
+    ⛔ НАВІЩО (fb-22092026-ca6975). Дропдаун задач ішов у порядку ВСТАВКИ в
+    `tasks.json`, тобто створення: на 20+ задачах ті, з якими працюєш зараз,
+    опинялись унизу, за краєм екрана. «Останні відкриті зверху» було неможливим
+    узагалі — мітки відкриття не існувало в жодному полі.
+
+    Поле МАШИННЕ: у `registry.SHARED` його немає, тож у спільний реєстр воно не
+    їде — «що я відкривав» у кожного своє. ISO-рядок, а не число: сортується
+    лексикографічно й читається очима в самому файлі.
+    """
+    task = cfg.get('tasks', {}).get(tid)
+    if task is not None:
+        task['opened'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def tasks_by_recent(cfg):
+    """Задачі для перемикача: останні відкриті зверху, решта — у хвіст у
+    колишньому порядку (задачі, заведені до мітки, не мусять перемішатись).
+    Сортування стабільне, тож рівні мітки теж зберігають порядок файла."""
+    items = list(cfg.get('tasks', {}).items())
+    return sorted(items, key=lambda kv: kv[1].get('opened') or '', reverse=True)
+
+
+# ---------- Екран «Задачі»: мої + команда (батч 1.52) ----------
+
+#: Колонки `overview_projects`, потрібні екрану. Без `select=*`: таблицю пише
+#: пушер реєстру, і зайві поля, що там зʼявляться, не мають їхати в кожну
+#: відповідь і в кеш.
+TEAM_COLS = ('id,name,jira,jira_status,jira_status_cat,open_comments,thumb_url,'
+             'code_url,updated_at,designer,iterations,pages')
+TEAM_TTL = 60          # кеш рядків дашборда, с
+TEAM_ERR_TTL = 10      # помилку кешуємо коротше — щоб «Спробувати ще» мало сенс
+_TEAM_CACHE = {'at': 0.0, 'rows': None, 'error': None, 'rowsAt': None}
+_TEAM_LOCK = threading.Lock()
+
+
+def _team_fetch():
+    """Один справжній прохід за рядками команди: `(rows, error)`, не кидає.
+
+    Порядок джерел важливий, і ⛔ другий пункт — закон ізоляції (той самий, що в
+    `teams_rpc` і `_registry_push`): `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають
+    «стан не справжній цієї машини», тож ходити з нього в живий Supabase не можна.
+    1. `DC_TEAM_FAKE` — локальний JSON-масив замість бази (шов для тестів);
+    2. ізольований прогін без шва — мережі НЕМАЄ, чесне пояснення замість рядків;
+    3. інакше GET `overview_projects` з коротким таймаутом: екран «Задачі» — перша
+       сторінка, і висіти на ній через мертвий VPN довше за 3 с не можна.
+    `except Exception`, а не вузький перелік: контракт «ніколи не кидає» тримає екран
+    живим для «Моїх» навіть тоді, коли відповідь бази — не те, що очікували."""
+    try:
+        fake = os.environ.get('DC_TEAM_FAKE')
+        if fake:
+            with open(fake, encoding='utf-8') as fh:
+                data = json.load(fh)
+        elif os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
+            return [], 'вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)'
+        else:
+            url = f'{SUPABASE_URL}/rest/v1/overview_projects?select={TEAM_COLS}&limit=500'
+            req = urllib.request.Request(url, headers={
+                'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}'})
+            with urllib.request.urlopen(req, timeout=3, context=_ssl_context()) as res:
+                data = json.loads(res.read().decode('utf-8'))
+        if not isinstance(data, list):
+            raise ValueError('очікувався масив рядків overview_projects')
+        return [r for r in data if isinstance(r, dict)], None
+    except Exception as e:  # noqa: BLE001 — «Мої» мусять жити без команди
+        if not isinstance(e, (OSError, ValueError)):
+            # Не мережа й не формат даних — імовірно, ПОМИЛКА КОДУ: у stderr, щоб
+            # вона не маскувалась під «команда недоступна». Поведінка та сама.
+            print(f'team_rows: {type(e).__name__}: {e}', file=sys.stderr)
+        return [], (str(e) or type(e).__name__)[:200]
+
+
+def team_snapshot(now=None, refresh=False):
+    """`(rows, error, rows_at)`: як `team_rows`, плюс епоха ОСТАННЬОГО УСПІШНОГО
+    читання (`None` — успіху ще не було). Не кидає.
+
+    Кеш на `TEAM_TTL`, помилка — на коротший `TEAM_ERR_TTL`; `refresh=True` його
+    оминає. Без кешу кожен вхід на екран був би запитом у Supabase, а сервер
+    багатопотоковий — тому читання й запис кешу під `_TEAM_LOCK`, ВКЛЮЧНО з самим
+    запитом: другий потік чекає перший і бере вже готове, а не б'є в базу ще раз.
+    ⛔ Збій НЕ стирає останні відомі рядки: мертвий VPN на хвилину не має робити
+    вкладку «Команда» порожньою. На помилці оновлюються лише `error` і `at`
+    (щоб повтор ішов за `TEAM_ERR_TTL`); рядки й `rowsAt` лишаються з останнього
+    успіху, а екран за `rows_at` пише «дані на <час>».
+    `now` — шов для тестів (епоха, с); `0 <= now - at` стереже годинник, що
+    стрибнув назад: інакше застарілий кеш жив би, поки час не наздожене."""
+    now = time.time() if now is None else now
+    with _TEAM_LOCK:
+        c = _TEAM_CACHE
+        ttl = TEAM_ERR_TTL if c['error'] else TEAM_TTL
+        if not refresh and c['rows'] is not None and 0 <= now - c['at'] < ttl:
+            return list(c['rows']), c['error'], c['rowsAt']
+        rows, error = _team_fetch()
+        if error:
+            rows = c['rows'] or []
+            c.update(at=now, rows=rows, error=error)
+        else:
+            c.update(at=now, rows=rows, error=None, rowsAt=now)
+        return list(rows), error, c['rowsAt']
+
+
+def team_rows(now=None, refresh=False):
+    """`(rows, error)` — `team_snapshot` без `rows_at`."""
+    return team_snapshot(now, refresh)[:2]
+
+
+def task_thumb_path(task):
+    """`(abs_path, sha)` кадру для картки задачі, або None. Не кидає.
+
+    Кадр беремо з ОСТАННЬОЇ ітерації (`task_state()['last_iter']`): картка показує
+    те, над чим працюють зараз. Спершу відкривані сторінки в їхньому порядку (перша
+    сторінка — обличчя задачі), потім решта ключів манифеста; серед решти ширини
+    (`…@390`) — у хвіст, щоб картка не показала мобільний кадр, коли є звичайний.
+    Береться перший ключ із записом у манифесті І файлом `<key>.webp`.
+
+    ⛔ Ключ із манифеста — чужий ввід (файл правлять руками й `gitlab_pull`): він
+    проходить `SHOT_RE`, а realpath файла мусить лежати всередині realpath
+    `shots/` — інакше symlink `home.webp → /etc/hosts` віддав би будь-який файл
+    диска. Ті самі два замки, що в `_shot`; ціна помилки та сама."""
+    try:
+        it = task_state(task).get('last_iter')
+        if not isinstance(it, str) or not NAME_RE.fullmatch(it):
+            return None
+        idir = _iter_dir(task, it)
+        base = os.path.realpath(os.path.join(idir, 'shots'))
+        with open(os.path.join(base, 'manifest.json'), encoding='utf-8') as fh:
+            man = json.load(fh)
+        shots = man.get('shots') if isinstance(man, dict) else None
+        if not isinstance(shots, dict):
+            return None
+        try:
+            ordered = [p.get('id') for p in pm.openable_pages(pm.read_pages(idir))
+                       if isinstance(p, dict)]
+        except (OSError, ValueError):     # pages.json зіпсований: лишаються ключі манифеста
+            ordered = []
+        rest = sorted((k for k in shots if k not in ordered), key=lambda k: '@' in str(k))
+        for key in ordered + rest:
+            entry = shots.get(key) if isinstance(key, str) else None
+            if not isinstance(entry, dict) or not SHOT_RE.fullmatch(key):
+                continue
+            target = os.path.realpath(os.path.join(base, key + '.webp'))
+            if not target.startswith(base + os.sep) or not os.path.isfile(target):
+                continue
+            sha = entry.get('sha')
+            return target, (sha if isinstance(sha, str) else '')
+        return None
+    except Exception:  # noqa: BLE001 — картка без кадру, а не 500 на весь екран
+        return None
+
+
+def _thumb_url(tid, sha):
+    """URL кадру картки. `v=<sha>` — ключ вічного кешу (хеш БАЙТІВ кадру, як у
+    `shotVersion`): перезйомка дає інший URL. Без sha (старий манифест) `v` не
+    додаємо — `/api/task-thumb` тоді віддасть `no-cache`, а не вічний кеш на нічому."""
+    return f'/api/task-thumb?task={quote(tid, safe="")}' + (
+        f'&v={quote(sha, safe="")}' if sha else '')
+
+
+def _last_changed(task, st):
+    """Епоха (с) останньої РОБОТИ в останній ітерації, або None. Той самий
+    `_authored_mtime`, що рахує автосинк: свіжі кадри `shots/` — це «інструмент
+    перезняв», а не «дизайнер правив», і картка не мусить молодшати від зйомки."""
+    it = st.get('last_iter')
+    if not st['dir_exists'] or not isinstance(it, str) or not NAME_RE.fullmatch(it):
+        return None
+    m = _authored_mtime(_iter_dir(task, it))
+    return int(m) if m else None
+
+
+def tasks_overview(cfg, team, now=None, rows_at=None):
+    """Відповідь `/api/tasks-overview` без `current`. ЧИСТА збірка: мережі нема,
+    `team` = `(rows, error)` від `team_rows()`.
+
+    `mine` — задачі цієї машини в порядку `tasks_by_recent`; `team.rows` — рядки
+    дашборда, з позначкою `mine`. Поля Jira й лічильник коментарів живуть ЛИШЕ в
+    дашборді, тож до своєї задачі вони підмішуються за id; немає рядка — `None`
+    («невідомо»), а не 0: екран не обіцяє тиші, якої не знає.
+    Кадр своєї задачі — локальний (свіжіший), інакше `thumb_url` дашборда; у рядку
+    команди — навпаки: те, що бачать усі, а локальний — лише коли його нема.
+    `fetchedAt` — епоха, коли зібрано відповідь; `rowsAt` — коли рядки команди
+    востаннє успішно прочитано з бази (`None` — ніколи; при помилці з кешованими
+    рядками екран пише «дані на <rowsAt>»)."""
+    now = time.time() if now is None else now
+    rows, error = team
+    by_id = {r['id']: r for r in rows
+             if isinstance(r, dict) and isinstance(r.get('id'), str)}
+    mine, local = [], {}
+    for tid, task in tasks_by_recent(cfg):
+        st = task_state(task)
+        found = task_thumb_path(task) if NAME_RE.fullmatch(tid) else None
+        if found:
+            local[tid] = _thumb_url(tid, found[1])
+        row = by_id.get(tid)
+        mine.append({
+            'id': tid, 'jira': task.get('jira'), 'title': task.get('title', tid),
+            'profile': task.get('profile'), 'opened': task.get('opened'),
+            'iterations': st['iterations'], 'pages': st['pages'],
+            'iter': st['last_iter'], 'changed': _last_changed(task, st),
+            'published': st['code_url'], 'missing': not st['dir_exists'],
+            'thumb': local.get(tid) or (row.get('thumb_url') if row else None) or None,
+            'jiraStatus': row.get('jira_status') if row else None,
+            'jiraCat': row.get('jira_status_cat') if row else None,
+            'comments': (row.get('open_comments') or 0) if row else None,
+        })
+    tasks = cfg.get('tasks', {})
+    team_out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get('id')
+        is_mine = isinstance(rid, str) and rid in tasks
+        team_out.append({
+            'id': rid, 'title': r.get('name') or rid, 'jira': r.get('jira'),
+            'jiraStatus': r.get('jira_status'), 'jiraCat': r.get('jira_status_cat'),
+            'comments': r.get('open_comments') or 0,
+            'thumb': r.get('thumb_url') or (local.get(rid) if is_mine else None) or None,
+            'preview': r.get('code_url'), 'updated': r.get('updated_at'),
+            'designer': r.get('designer'), 'iterations': r.get('iterations'),
+            'pages': r.get('pages'), 'mine': is_mine,
+        })
+    return {'mine': mine,
+            'team': {'rows': team_out, 'error': error, 'fetchedAt': now,
+                     'rowsAt': rows_at}}
+
+
+def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None):
+    """Бутстрап задачи: папка в design-work (или clone из GitLab) + запись в tasks.json.
+    Идемпотентность обеспечивает вызывающий (проверка на существование)."""
+    if not NAME_RE.match(tid):
+        raise ValueError('bad task id')
+    if tid in cfg.get('tasks', {}):
+        raise ValueError('task already exists')
+    tdir = os.path.join(work_root(cfg, profile), tid)
+    it1 = os.path.join(tdir, 'iterations', 'it1')   # первая итерация = стартовый макет
+    # gitlab-маппинг по умолчанию — репо направления (см. PROFILE_REPOS)
+    if gitlab is None and profile in PROFILE_REPOS:
+        gitlab = {'repo': PROFILE_REPOS[profile], 'path': f'mockup/{tid}'}
+    cloned = False
+    cloned_state = {}
+    if gitlab:
+        gl = gitlab_cfg(cfg, {'gitlab': gitlab})
+        try:  # если макет уже есть в репо — берём его в it1, не начинаем с нуля
+            md = ensure_mirror(gl, fetch=True)
+            # ⛔ `ensure_mirror` лише ФЕТЧИТЬ — робоче дерево дзеркала лишається
+            # там, де його лишив попередній синк. Для НОВОЇ задачі дзеркало
+            # клонується свіжим, але якщо дизайнер уже працював із цим репо, на
+            # диску лежить старий чекаут — і задача заводилась із тижневого
+            # зрізу чужого макета, ще й із протухлим підписом у
+            # `.canvas-state.json`. Наздоганяємо тим самим ff-only, що й
+            # «Підтягнути»; не вийшло — падаємо в ту саму гілку, що й
+            # недоступне дзеркало (порожній стартовий макет), а не мовчки
+            # беремо застаріле.
+            pl = _git(['pull', '--ff-only', '--quiet', 'origin', gl['branch']], md, gl)
+            if pl.returncode != 0:
+                raise OSError(f'mirror ff-only failed: {(pl.stderr or pl.stdout)[-200:]}')
+            src = os.path.join(md, gl['path'])
+            if os.path.isfile(os.path.join(src, 'index.html')):
+                copy_mockup(src, it1)
+                cloned = True
+                cloned_state = _read_state(src)
+        except OSError:
+            pass
+    if not cloned:
+        os.makedirs(it1, exist_ok=True)
+        with open(os.path.join(it1, 'index.html'), 'w', encoding='utf-8') as f:
+            f.write('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
+                    f'<title>{title or tid}</title></head><body>'
+                    f'<h1>{title or tid}</h1>'
+                    '<p>Нова ітерація — почни проєктувати.</p></body></html>')
+    # meta с первой итерацией
+    #
+    # ⛔ Підпис БУТСТРАПА не завжди мій. Якщо макет склонований з репо, його
+    # зробив хтось інший — і підписати його собою означало б записати на себе
+    # чужу роботу (саме той випадок, з якого почалась задача про іменні
+    # ітерації: LIGA-7012, «авторство зникло назовсім»; неправильне авторство
+    # гірше за відсутнє). Ба більше: після синку цей підпис поїхав би назад, і
+    # справжня авторка дістала б ВЛАСНИЙ макет як чужий — із форком і
+    # забороною пушу. Тому автор береться з заяви колеги в `.canvas-state.json`,
+    # а коли її немає — не пишемо нічого.
+    it1_entry = {'id': 'it1', 'date': time.strftime('%d.%m.%Y %H:%M'),
+                 'note': 'початкова', 'published': False}
+    its = [it1_entry]
+    if cloned:
+        # Порожнє поле не пишемо (правило `_stamp_author`): `author: ''`
+        # читалось би як «автор відомий і безіменний».
+        if cloned_state.get('author'):
+            it1_entry['author'] = cloned_state['author']
+        if cloned_state.get('author_key'):
+            it1_entry['author_key'] = cloned_state['author_key']
+        _, my_key = machine_identity()
+        if not iteration_is_mine(it1_entry, my_key):
+            # ПАРА, як у «Підтягнути»: без форку задача починалась без жодної
+            # СВОЄЇ ітерації, і `bin/state.py` казав про ту саму Іт.1 дві
+            # протилежні речі — «остання своя» і «чужа, read-only». Одна модель
+            # на обидва входи чужого макета, а не дві.
+            fork_dir = os.path.join(tdir, 'iterations', 'it2')
+            copy_mockup(it1, fork_dir)
+            _touch_tree(fork_dir)
+            its.append(_stamp_author(
+                {'id': 'it2', 'date': time.strftime('%d.%m.%Y %H:%M'),
+                 'note': 'продовження макета з GitLab', 'published': False,
+                 'from': 'it1'}))
+    else:
+        _stamp_author(it1_entry)
+    with open(os.path.join(tdir, 'iterations.json'), 'w', encoding='utf-8') as f:
+        json.dump({'iterations': its, 'publish_url': None},
+                  f, ensure_ascii=False, indent=2)
+    entry = {'dir': tdir, 'title': title or tid, 'jira': jira, 'profile': profile}
+    if gitlab:
+        entry['gitlab'] = gitlab
+    cfg.setdefault('tasks', {})[tid] = entry
+    cfg['current'] = tid
+    mark_opened(cfg, tid)
+    save_tasks(cfg)
+    git_autocommit(tdir, f'task {tid}: bootstrap '
+                   f'({"clone from gitlab" if cloned else "new"})')
+    registered = _registry_push(tid)
+    return {'ok': True, 'id': tid, 'cloned': cloned, 'dir': tdir,
+            'registered': registered}
+
+
+def _registry_push(tid):
+    """Отдать задачу в реестр (design-office/registry) — он источник истины, поэтому
+    коллега увидит задачу без ручного шага. Best-effort: без VPN бутстрап не валим.
+
+    ⛔ Підмінений конфіг = ЗАБОРОНА писати у спільний стан. `DC_TASKS_FILE` виставляють
+    тести й будь-який ізольований прогін; це означає «стан не справжній цієї машини»,
+    тому пушити його всій команді не можна НІ В ЯКОМУ РАЗІ.
+
+    Інцидент 03.08.2026, знайдений уже після релізу: `tests/test_serve.py` створює
+    задачу `demo2` через `/api/task-new`, а цей рядок пушив її у СПІЛЬНУ гілку
+    `registry` на GitLab. Кожен прогін сюїти повертав `demo2` у реєстр команди —
+    видалив о 16:05, о 16:11 воно було знову. `DC_NO_OVERVIEW` цей шлях не покривав:
+    він глушить лише синк Supabase (`_overview_sync`), а тут окремий, git-овий.
+    """
+    if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
+        return False
+    try:
+        sys.path.insert(0, os.path.join(ROOT, 'bin'))
+        import registry
+        res = registry.push_tasks([tid])
+        # ⛔ Задачу, що вказує в тимчасову теку, `push_tasks` сам відмовляє
+        # (інцидент `nova` 15.09.2026: конфіг тоді НЕ був підмінений, тож
+        # гвард вище не спрацював). «Зареєстровано» для неї — неправда.
+        return tid not in getattr(res, 'refused', {})
+    except Exception:  # noqa: BLE001 — нет сети/доступа: задача уже создана локально
+        return False
+
+
+def supabase_pins(project):
+    """Пины comment-layer для projectId. Бросает OSError при недоступности."""
+    url = (f'{SUPABASE_URL}/rest/v1/comments'
+           f'?select=id,text,status,author,ts,meta,born_v,fp,html_snapshot,resolved_v,resolve_reason'
+           f'&project_id=eq.{quote(project, safe="")}')
+    req = urllib.request.Request(url, headers={
+        'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}'})
+    with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as res:
+        return json.loads(res.read().decode('utf-8'))
+
+
+def teams_rpc(name, body):
+    """RPC тиші Teams (`teams_mute_state` / `teams_mute_set`, батч 1.52).
+
+    ⛔ Підмінений конфіг = ЗАБОРОНА чіпати спільний стан — той самий закон, що в
+    `_registry_push`: `DC_TASKS_FILE`/`DC_NO_OVERVIEW` ставлять тести й будь-який
+    ізольований прогін, і замовчати чи увімкнути живий канал Teams команди з
+    фікстури не можна НІ В ЯКОМУ РАЗІ. `DC_TEAMS_FAKE` — локальний JSON замість
+    бази для живих тестів (шов, а не другий шлях: він не пише нікуди, крім файла).
+    Кидає OSError при недоступності."""
+    fake = os.environ.get('DC_TEAMS_FAKE')
+    if fake:
+        try:
+            with open(fake, encoding='utf-8') as fh:
+                db = json.load(fh)
+        except (OSError, ValueError):
+            db = {}
+        if name == 'teams_mute_set':
+            if body['p_muted']:
+                db[body['p_project']] = {'muted_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                                         'muted_by': body.get('p_by', '')}
+            else:
+                db.pop(body['p_project'], None)
+            atomic_write_json(fake, db)
+            return body['p_muted']
+        return [{'project_id': k, **v} for k, v in sorted(db.items())]
+    if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
+        raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
+    req = urllib.request.Request(
+        f'{SUPABASE_URL}/rest/v1/rpc/{name}', method='POST',
+        data=json.dumps(body).encode('utf-8'),
+        headers={'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}',
+                 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as res:
+        return json.loads(res.read().decode('utf-8'))
+
+
+def mute_signature():
+    """Хто замовчав канал — БЕЗ ПІБ і пошти: `teams_mute_state` читає будь-хто з
+    ключем сторінки (ревʼю 1.52). Короткий хеш пошти з git-конфіга: канвас
+    порівнює його зі своїм і пише «ти»/«колега», доктор показує сам хеш."""
+    import hashlib
+    key = machine_identity()[1].strip().lower()
+    return 'k:' + hashlib.sha256(key.encode('utf-8')).hexdigest()[:12] if key else ''
+
+
+def teams_mute_view(channel, rows):
+    """Чи замовчано канал задачі. Тиша каналу покриває його підканали
+    (`<канал>/internal`) — так само рахує `cl_send_teams` у базі."""
+    for r in rows or []:
+        pid = r.get('project_id') or ''
+        if pid and (channel == pid or channel.startswith(pid + '/')):
+            by = r.get('muted_by') or ''
+            return {'channel': channel, 'muted': True, 'muted_by': by,
+                    'mine': bool(by) and by == mute_signature(),
+                    'muted_at': r.get('muted_at'), 'via': pid}
+    return {'channel': channel, 'muted': False}
+
+
+def iter_num(iid):
+    """Реальний номер ітерації для показу: 'it4' -> '4' (щоб свитчер збігався з
+    інструментом Іт.1/Іт.4, а не нумерував опубліковані позиційно 1,2)."""
+    m = re.match(r'it(\d+)$', iid)
+    return m.group(1) if m else iid
+
+
+def iteration_note(it):
+    """Очищена примітка ітерації: явний `label` → `note` без префікса
+    «LIGA-1234 · » → порожній рядок. БЕЗ префікса «Іт.N».
+
+    Це ДАНІ, не презентація, і тому вони лишаються в Python: яку з двох
+    підписок брати й який префікс тікета зрізати — одне правило на всі мови.
+    А от «Іт.N» спереду — це вже ПРЕЗЕНТАЦІЯ, і мову для неї вибирає ГЛЯДАЧ у
+    своєму браузері (`dc-lang`), тобто складати її мусить словник, а не Python.
+    Звідси розділ: `publish_manifest` везе в маніфест `num` і `note`, а тег
+    ліпить `t('iterTag', num)` уже в оболонці.
+
+    ⛔ ОДНЕ місце очищення на двох консументів (`iteration_label` для
+    `/api/task` і маніфест превʼю). Два власні `re.sub` розійшлися б на першій
+    же правці формату тікета, і видно це було б лише в чужому браузері: канвас
+    показує одне, превʼю інше. Парний інваріант тримає тест.
+    """
+    lbl = (it.get('label') or '').strip()
+    if not lbl:
+        lbl = re.sub(r'^\s*[A-Z]+-\d+\s*[·:-]\s*', '', it.get('note') or '').strip()
+    return lbl
+
+
+def iteration_label(it):
+    """Готовий підпис ітерації для `/api/task` (`label_text`): «Іт.N · примітка».
+
+    Дзеркалило itLabel() у app.js — тепер правило ЛИШЕ тут, а канвас бере
+    готове поле `label_text`. Коли підпис є, номер лишається спереду: ним
+    говорять state.py і синк, тому втрачати його не можна.
+
+    ⚠️ Раніше цим же підписом живився й маніфест зовнішнього превʼю, і
+    докстрінг це виправдовував: «тримати одне правило у двох мовах означало б
+    гарантовано їх розсинхронити». Для СТАРОЇ обгортки це була правда — у неї
+    словника не було. У нової є (`publish/shell/i18n.js` копіюється
+    публікацією), тому підпис туди більше не пече: маніфест везе `num` і
+    `note`, а «Іт.N»/«It.N» складає `iterTag` мовою глядача. Тут же префікс
+    лишається кирилицею СВІДОМО — цей рядок читає канвас, який працює на
+    машині дизайнера й сам зрізає той префікс регекспом (`app.js`).
+    """
+    lbl = iteration_note(it)
+    n = iter_num(it['id'])
+    # Номер СПЕРЕДУ: у дропдауні довгий підпис обрізається з хвоста, а номер —
+    # ідентифікатор, ним говорять state.py і синк. «Design v2 · правки менеджера
+    # · Іт.3» у 190px показувало «Design v2 · правки менед…», тобто рівно те, що
+    # треба бачити, і зникало (перевірено в браузері 04.08.2026).
+    return f'Іт.{n} · {lbl}' if lbl else f'Іт.{n}'
+
+
+def task_api_iterations(meta):
+    """Ітерації для /api/task із доданим `label_text`.
+
+    ⛔ КОПІЯ кожної ітерації, не мутація: `meta` — це вміст iterations.json, і
+    дописане поле поїхало б у файл при наступному save_meta, тобто службове
+    поле осіло б у даних задачі назавжди.
+    """
+    return [{**it, 'label_text': iteration_label(it)}
+            for it in (meta or {}).get('iterations', [])]
+
+
+def comment_channel(task, tid, internal=False):
+    """Єдиний канал коментарів на ЗАДАЧУ (не на ітерацію): історію проєкту і
+    коментарі колег тримаємо в одному потоці, а конкретну ітерацію коментаря
+    несе `version` у CommentLayer.init (тег + перенос відкритих по fp). Канал
+    береться з tasks.json `comment_project`; internal → підканал робочих пінів."""
+    base = task.get('comment_project') or f'dc/{tid}'
+    return base + ('/internal' if internal else '')
+
+
+COMMENT_SNIPPET = """
+<script>
+/* Банер — ПЕРШИМ тегом, ДО трьох `<script src>` нижче: без async/defer вони
+   виконуються ПОСЛІДОВНО, і `onerror` кожного з них спрацьовує РАНІШЕ, ніж
+   встиг би виконатись цей код, якби він (як було до ревʼю) жив у скрипті
+   ініціалізації внизу. У тій версії заблокований CDN не показував банер
+   ЗОВСІМ: `window.__clDown` на момент `onerror` ще не існував, і охоронець
+   `window.__clDown&&…` мовчки гасив виклик — перевірено живцем. Порядок тут
+   несучий, а не косметика. */
+window.__clDown = function (why) {{
+  if (document.getElementById('cl-down')) return;
+  var d = document.createElement('div');
+  d.id = 'cl-down';
+  d.textContent = 'Коментарі недоступні: ' + why;
+  d.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;'
+    + 'background:#d14343;color:#fff;font:13px/1.4 system-ui,sans-serif;'
+    + 'padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.3)';
+  (document.body || document.documentElement).appendChild(d);
+}};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="window.__clDown('бібліотека Supabase не завантажилась')"></script>
+<script src="{assets}/supabase-adapter.min.js" onerror="window.__clDown('адаптер коментарів не завантажився')"></script>
+<script src="{assets}/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>{inspector}
+<script>
+(function () {{
+  var init = function () {{
+    if (!window.CommentLayerSupabase || !window.CommentLayer) {{
+      window.__clDown('шар коментарів не піднявся');
+      return;
+    }}
+    /* Синхронний try/catch, а НЕ лише `.catch()` на `store.ready` нижче:
+       `CommentLayerSupabase(...)` сам, ПОЗА промісом, кличе
+       `window.supabase.createClient(...)` — коли CDN не піднявся (мережевий
+       збій АБО 200 із порожнім/битим тілом, який `onerror` вище не ловить
+       узагалі), `window.supabase` не існує, і виклик кидає ДО того, як
+       `store`/`store.ready` встигли зʼявитись. Без цієї гілки виняток летів
+       необробленим у консоль (перевірено живцем:
+       `TypeError: Cannot read properties of undefined (reading 'createClient')`),
+       а банер так і не малювався. */
+    var store;
+    try {{
+      store = window.CommentLayerSupabase({{
+        url: '{sb_url}', anonKey: '{sb_key}', projectId: '{project}',
+      }});
+    }} catch (e) {{
+      window.__clDown((e && e.message) || 'адаптер не зміг піднятись');
+      return;
+    }}
+    store.ready.then(function () {{
+      window.CommentLayer.init({{ projectId: '{project}', storage: store,
+        version: '{version}'{audiences} }});
+    }}).catch(function (e) {{
+      window.__clDown((e && e.message) || 'база не відповіла');
+    }});
+  }};
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+}})();
+</script>"""
+
+
+# Інспектор ДС — окремим тегом і за ПРАПОРЦЕМ, не назавжди в шаблоні.
+#
+# Чому прапорець: `COMMENT_SNIPPET` має двох адресатів — `/commented?ch=project`
+# (робоче місце дизайнера) і `_publish` (статика для колег). Спека тримає межу:
+# інспектор це інструмент дизайнера, зовнішньому глядачеві його не давали, а в
+# `publish/comment-layer/` їдуть рівно два бандли — `inspector*.js` там немає,
+# тобто тег «у шаблоні завжди» був би ще й 404 у справжньому превʼю.
+#
+# Чому ПІСЛЯ трьох скриптів коментарів: порядок у цьому сніпеті несучий (див.
+# докстрінг банера вище — банер мусить бути першим тегом, це ловили живцем).
+# `type="module"` відкладений за визначенням, тож стоячи в хвості він нічого не
+# затримує й послідовності класичних скриптів не рушить.
+#
+# Чому БЕЗ `onerror="window.__clDown(…)"`: той банер каже «Коментарі
+# недоступні». Інспектор до коментарів не має стосунку — його падіння збрехало б
+# дизайнеру про справні коментарі, і причину він шукав би в Supabase.
+# `?ds=<напрямок>` — єдиний спосіб, яким документ макета дізнається про
+# напрямок задачі (`profile` у tasks.json): сам він про задачу не знає нічого,
+# а ДС вибирається саме за напрямком (`united`/`liga360`; у `seo` ДС немає, і
+# інспектор має сказати це словами, а не мовчки звіряти з чужою). Чому
+# параметром URL, а не зайвим тегом чи глобальною змінною — у `inspector.js`,
+# там же й виміряна причина (порядок тегів у сніпеті несучий).
+INSPECTOR_TAG = '\n<script type="module" src="{assets}/inspector.js{ds}"></script>'
+
+
+def inspector_ds_arg(profile):
+    """`?ds=united` або порожньо. Порожньо — і коли напрямку немає, і коли він
+    не схожий на напрямок: у параметр URL, що їде в розмітку, не сміє потрапити
+    нічого, крім простого імені, а невідомий напрямок і так ВИМИКАЄ звірку з ДС
+    (краще не звіряти, ніж звіряти з вигаданою)."""
+    p = (profile or '').strip()
+    return f'?ds={p}' if re.fullmatch(r'[a-z0-9-]{1,32}', p) else ''
+
+
+# Вкладки аудиторій — аргументом `init`, і теж за ПРАПОРЦЕМ на виклику.
+#
+# Перемикач «кому їде цей фідбек» до 02.09.2026 стояв у дропдауні крошки
+# ітерації (`data-act="cmode"`) — тобто контрол коментатора у смузі
+# інструмента, проти принципу 6 PRODUCT.md. Новий дім — панель самого
+# коментатора; спека: «коментарі я розрішаю».
+#
+# Чому прапорець, а не завжди: `COMMENT_SNIPPET` має двох адресатів, і другий —
+# `_publish`. Вкладка «Клод» у статиці для колег вела б у локальний файл на
+# машині дизайнера (404 у глядача) і запрошувала б слати робочий фідбек у
+# нікуди. Це вимога конфіденційності зі спеки, не косметика.
+#
+# Чому АРГУМЕНТОМ `init`, а не окремим `<script>` із конфігом: порядок тегів у
+# сніпеті Supabase несучий (див. докстрінг банера `__clDown` вище — баг ловили
+# живцем), і зайвий тег між банером і трьома `<script src>` знову зламав би
+# показ банера при мертвому CDN.
+#
+# Чому `active` рахує СЕРВЕР, а не клієнт: канал вибрав роут, тобто сніпет знає
+# його точно, а `commentMode` в `app.js` — лише те, що лежить у localStorage.
+# Підсвічена «Клод» на сторінці, яка пише в Supabase, означала б фідбек,
+# відправлений не туди, кого бачив дизайнер.
+#
+# Чому `onAudience` не навігує сам: стан каналу тоді жив би у двох місцях —
+# у рамці й у `commentMode` оболонки, — і позначка в смузі розійшлась би з тим,
+# що показано. Рамка лише ПОВІДОМЛЯЄ; навігацію робить приймач у `app.js`, і
+# він перевіряє І тип посилки, І джерело (`ev.source === frame.contentWindow`).
+#
+# Підписи українською, без словника: панель коментатора — чужий продукт із
+# власним (англійським) словником, у неї нема куди передати мову оболонки, а
+# сам `serve.py` мови клієнта не знає (вона в localStorage). Той самий вибір,
+# що вже зроблено для банера «Коментарі недоступні» вище.
+# Підписи вкладок бере КЛІЄНТ, а не сервер. Причина: мова інтерфейсу — вибір
+# людини в `localStorage` (`dc-lang`), а цей сніпет пише сервер, який про той
+# вибір не знає й знати не мусить (рамка того самого походження, тож
+# `localStorage` там читається). До 02.09.2026 підписи були захардкожені
+# українською й лишались «Клод»/«Команда» серед англійського інтерфейсу —
+# знайдено живим прогоном, тим самим способом, що й «Іт.N» днем раніше.
+#
+# Дві копії рядків (тут і в `app/i18n.js`) неминучі: Python не імпортує
+# JS-словник. Тому їх приколює тест `test_audience_labels_match_dictionary` —
+# той самий підхід, що вже тримає пару `comment_layer_src_hash`.
+AUDIENCES_TMPL = """,
+        audiences: (function () {{
+          var uk = {{ local: 'Клод', team: 'Команда' }};
+          var en = {{ local: 'Claude', team: 'Team' }};
+          var L = uk;
+          try {{ if (localStorage.getItem('dc-lang') === 'en') L = en; }} catch (e) {{}}
+          // `icon` — імена з набору САМОГО коментатора (`bot`/`team`), не наші
+          // канали: віджет малює іконку за іменем і не дізнається, що таке
+          // «local». Стоїть у хвості обʼєкта свідомо — так регексп охоронця
+          // `AudienceTabsPerChannel`, що приколює пару «id ↔ підпис ↔ active»,
+          // лишається чинним і не мусить знати про іконки.
+          return [{{ id: 'local', label: L.local, active: {local}, icon: 'bot' }},
+                  {{ id: 'project', label: L.team, active: {project}, icon: 'team' }}];
+        }})(),
+        onAudience: function (id) {{
+          window.parent.postMessage({{ type: 'dc-audience', ch: id }}, '*');
+        }}"""
+
+
+def audiences_arg(active):
+    """Аргумент `audiences`+`onAudience` для `init`, або порожній рядок.
+
+    `active` — id каналу цього сніпета (`'local'`/`'project'`) або `None`, коли
+    вкладок не має бути зовсім (publish). Порожній рядок, а не `audiences: []`:
+    контракт коментатора — «немає `audiences` → рядка вкладок немає ЗОВСІМ»
+    (`comment-layer/src/audiences.js`), і порожній масив був би зайвим знанням
+    про канали в чужому продукті.
+    """
+    if not active:
+        return ''
+    js = lambda flag: 'true' if flag else 'false'   # noqa: E731
+    return AUDIENCES_TMPL.format(local=js(active == 'local'),
+                                 project=js(active == 'project'))
+
+
+# Внутрішні пін-коментарі — сині (щоб відрізняти від зовнішніх, у колег звичайні).
+INTERNAL_TINT = """
+<script>
+(function () {
+  var tries = 0;
+  var t = setInterval(function () {
+    tries++;
+    var hosts = Array.prototype.filter.call(
+      document.querySelectorAll('*'), function (e) { return e.shadowRoot; });
+    hosts.forEach(function (h) {
+      if (h.shadowRoot.getElementById('cv-internal-tint')) return;
+      var s = document.createElement('style');
+      s.id = 'cv-internal-tint';
+      s.textContent = '.pin{background:#2d6ae3 !important;box-shadow:0 4px 14px rgba(0,0,0,.4),0 0 0 2px #b7d1ff !important}';
+      h.shadowRoot.appendChild(s);
+    });
+    if (hosts.length || tries > 40) clearInterval(t);
+  }, 500);
+})();
+</script>"""
+
+
+LOCAL_COMMENT_SNIPPET = """
+<script src="{assets}/local-adapter.js"></script>
+<script src="{assets}/comment-layer.min.js"></script>
+<script type="module" src="{assets}/inspector.js{ds}"></script>
+<script>
+(function () {{
+  var init = function () {{
+    var store = window.CommentLayerLocal({{ endpoint: '{endpoint}' }});
+    store.ready.then(function () {{
+      window.CommentLayer.init({{ projectId: '{project}', storage: store,
+        version: '{version}', local: true{audiences} }});
+    }});
+  }};
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+}})();
+</script>"""
+
+
+def inject_local_comment_layer(html, endpoint, project, assets_base, version='',
+                               audiences=False, profile=''):
+    """Локальний канал (фідбек Клоду у файл задачі). `audiences=True` — рядок
+    вкладок у панелі коментатора; цей сніпет їде ЛИШЕ в робоче місце, але
+    прапорець тут симетричний проєктному свідомо: обидва канали мусять уміти
+    сказати «немає вкладок», інакше межа publish трималась би на тому, що
+    другий сніпет туди просто не потрапляє."""
+    snippet = LOCAL_COMMENT_SNIPPET.format(
+        endpoint=endpoint, project=project, assets=assets_base, version=version,
+        ds=inspector_ds_arg(profile),
+        audiences=audiences_arg('local' if audiences else None))
+    out, n = re.subn(r'</body>', snippet + '</body>', html, count=1, flags=re.I)
+    return out if n else html + snippet
+
+
+def inject_comment_layer(html, project, assets_base, internal=False, version='',
+                         inspector=False, audiences=False, profile=''):
+    """Канал коментарів Supabase. `inspector=True` і `audiences=True` — лише для
+    робочого місця дизайнера (`/commented?ch=project`); у publish обидві межі
+    лишаються (див. `INSPECTOR_TAG` і `audiences_arg`)."""
+    snippet = COMMENT_SNIPPET.format(
+        project=project, assets=assets_base, version=version,
+        sb_url=SUPABASE_URL, sb_key=SUPABASE_KEY,
+        inspector=INSPECTOR_TAG.format(
+            assets=assets_base, ds=inspector_ds_arg(profile)) if inspector else '',
+        audiences=audiences_arg('project' if audiences else None))
+    if internal:
+        snippet += INTERNAL_TINT
+    return _insert_before_body(html, snippet)
+
+
+def _insert_before_body(html, snippet):
+    """Вставити фрагмент перед `</body>` (або в кінець, якщо тега немає).
+
+    ⛔ НЕ через `re.sub`/`re.subn`: там рядок ЗАМІНИ обробляє бекслеші як escape,
+    і фрагмент із `\\uXXXX` (json.dumps кирилиці) або `\\1` тихо ламається або
+    кидає `re.error`. Знаходимо позицію регуляркою, склеюємо звичайними рядками.
+    """
+    m = re.search(r'</body>', html, flags=re.I)
+    if not m:
+        return html + snippet
+    return html[:m.start()] + snippet + html[m.start():]
+
+
+def _inject_gate(html, gate):
+    """Вставити гейт у сторінку макета. Ідемпотентно: повторний виклик нічого не
+    додає (сторінка може вже мати гейт, якщо публікують перепубліковане).
+
+    Заголовок вкладки теж нейтралізуємо: до пароля назва задачі й номер тікета не
+    мають світитись навіть у title (правило 30.07.2026 — обгортка його дотримує, а
+    внутрішня сторінка світила «Віджет «Суди» · … · LIGA-7003»). Після входу
+    справжній заголовок повертаємо.
+    """
+    if 'id="authgate"' in html:
+        return html
+    m = re.search(r'<title>(.*?)</title>', html, flags=re.I | re.S)
+    if m:
+        # Скрипт СТАВИМО ПЕРЕД гейтом: його IIFE може розблокувати сторінку
+        # одразу (sessionStorage) і мусить уже бачити __origTitle.
+        gate = (f'<script>window.__origTitle={json.dumps(m.group(1))};</script>'
+                + gate)
+        html = html[:m.start()] + '<title>Перегляд макета</title>' + html[m.end():]
+    return _insert_before_body(html, gate)
+
+
+GATE_SNIPPET = """
+<style>#authgate{{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#E8EFEB;font-family:system-ui,sans-serif}}
+#authform{{width:320px;background:#fff;border:1px solid #D4DBD7;padding:32px 28px;display:flex;flex-direction:column;gap:14px}}
+#authform input{{height:40px;padding:0 12px;border:1px solid #D4DBD7;font-size:14px}}
+#authform button{{height:44px;background:#1A231E;color:#E2EAE6;border:0;font-size:14px;cursor:pointer}}
+#agerr{{display:none;font-size:12px;color:#c0362c}}</style>
+<div id="authgate"><form id="authform">
+  <!-- До входу назви задачі/тікета НА ЕКРАНІ не показуємо (правило 30.07.2026).
+       ⚠️ Але це оверлей у браузері, а не замок: пароль вшитий у джерело цієї ж
+       сторінки (`P` нижче), ключ сесії несе id задачі, а `manifest.json` і самі
+       сторінки макета лежать статикою й віддаються без жодної перевірки. Тому
+       підпис НЕ каже «захищено»: обіцянка захисту тут була б неправдою, а
+       повірить у неї не глядач, а дизайнер, який відправляє посилання.
+       Справжня приватність = серверний захист (Vercel Deployment Protection). -->
+  <b>Перегляд макета</b><span style="font-size:13px;color:#5D6661">внутрішній матеріал · введіть пароль</span>
+  <input id="agpass" type="password" autocomplete="current-password" placeholder="Пароль">
+  <div id="agerr">Невірний пароль</div><button type="submit">Увійти</button>
+</form></div>
+<script>(function(){{var KEY={key_js},P={pw_js};
+function unlock(){{var g=document.getElementById('authgate');if(g)g.remove();
+  // Справжній заголовок — лише після входу (до нього в title нейтральний текст).
+  try{{if(window.__origTitle)document.title=window.__origTitle;}}catch(e){{}}
+  // Хук для обгортки: вона НЕ вантажить iframe до розблокування, інакше внутрішня
+  // сторінка (у якої тепер теж є гейт) показала б свій гейт усередині рамки.
+  window.__gateOpen=true;if(window.__onGateOpen)window.__onGateOpen();}}
+function save(){{try{{sessionStorage.setItem(KEY,'1')}}catch(e){{}}}}
+// Безшовний вхід із Liga Design Office: токен у hash (#k=<код>) → авто-розблокування.
+// ⛔ Прибираємо з hash ЛИШЕ свій `k=`, решту лишаємо: там їде `p=<сторінка>` —
+// глибоке посилання обгортки. Раніше тут стояв голий pathname+search, і hash
+// зносився цілком, тобто посилання «відкрий саме цю ітерацію» гинуло на вході.
+try{{var h=location.hash||'',m=h.match(/(?:^#|&)k=([^&]+)/);
+  if(m&&decodeURIComponent(m[1])===P){{save();
+    var rest=h.replace(/^#/,'').split('&').filter(function(s){{
+      return s&&s.indexOf('k=')!==0;}}).join('&');
+    history.replaceState(null,'',location.pathname+location.search+(rest?'#'+rest:''));
+    unlock();return;}}}}catch(e){{}}
+try{{if(sessionStorage.getItem(KEY)==='1'){{unlock();return;}}}}catch(e){{}}
+document.getElementById('authform').addEventListener('submit',function(e){{
+  e.preventDefault();
+  if(document.getElementById('agpass').value===P){{save();unlock();}}
+  else document.getElementById('agerr').style.display='block';}});}})();</script>"""
+
+
+PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Нейтральний заголовок: URL превʼю може потрапити кому завгодно, а справжню
+     назву задачі оболонка ставить уже під ВІДКРИТИМ гейтом (правило
+     30.07.2026). Тут її нема звідки взяти — див. `preview_index_html`. -->
+<title>Перегляд макета</title>
+<link rel="stylesheet" href="shell/styles.css">
+</head><body>
+{gate}
+<div id="sprite"></div>
+<div id="bar" class="bar-mount"></div>
+<div id="stage" class="cv-stage"><iframe id="frame" class="cv-frame"></iframe></div>
+<!-- Пароль — рівно для «Копіювати посилання» (`#k=…`, безшовний вхід колеги).
+     У маніфест він НЕ їде: той файл читає оболонка, і пароль задачі їй знати
+     нізащо, а лежить він і так у тексті гейта поруч. -->
+<script>window.__extPw={pw_js};</script>
+<script type="module" src="shell/ext-shell.js"></script>
+</body></html>"""
+
+
+# ── Що везе публікація, крім самих макетів ────────────────────────────────────
+# Три переліки в одному місці, бо всі три відповідають на одне питання: «що
+# мусить лежати в publish/, щоб опубліковане превʼю працювало без сервера».
+# Розкидані по коду, вони мовчки розходяться з тим, що превʼю справді вантажить,
+# а побачить розбіжність не тест і не дизайнер, а ГЛЯДАЧ — бо `publish/` в
+# щоденній роботі не відкривається.
+
+#: Бандли коментатора в publish/comment-layer/.
+BUNDLES = ('comment-layer.min.js', 'supabase-adapter.min.js')
+
+#: Спільні модулі оболонки в publish/shell/ — копіюються з app/ БЕЗ правок.
+#: Саме тому вони й зроблені чистими (ні DOM-глобалів, ні fetch, ні
+#: localStorage): у статиці на Vercel джерела правди, крім `manifest.json`,
+#: немає. Перелік мусить бути ЗАМКНУТИМ по імпортах — забутий лист це 404 на
+#: `shell/<модуль>` і оболонка, що не піднялась (замкнутість стереже тест).
+#: Останні два — ВЛАСНІ модулі зовнішньої оболонки (в інструменті їх немає
+#: зовсім): `ext-shell.js` вантажить обгортка, `ext-bar.js` він імпортує.
+#: `ask.js` — оверлей замість `prompt()`: фолбек «Копіювати посилання», коли
+#: буфер обміну недоступний (правило проєкту, `tests/browser-dialogs.test.mjs`).
+#: `esc.js` — спільне екранування (TD-12, 18.09.2026): `shell-panel.js` і
+#: `ext-bar.js` більше не носять по власній копії, тож лист став обовʼязковим.
+#: Забути його тут означало б 404 і НІМУ оболонку в глядача — і саме це
+#: спіймав `test_list_is_closed_under_imports` у ту ж хвилину, коли копії
+#: зникли: замкнутість переліку рахується, а не тримається на памʼяті.
+#: `tree-model.js` — правила дерева сторінок: від нього залежать `rows-model.js`
+#: і `ext-shell.js` (обидва беруть лише `kindOf`), тож без нього оболонка превʼю
+#: ловить 404 на імпорті (A7).
+#: Правки в спільних модулях «під зовнішній режим» заборонені свідомо — вони
+#: їдуть звідси байт у байт, і гілка «а в превʼю інакше» ламала б інструмент.
+SHELL_MODULES = ('i18n.js', 'icons.js', 'shell-panel.js', 'viewport.js',
+                 'camera.js', 'canvas-geom.js', 'layout.js', 'rows-model.js',
+                 'styles.css', 'ask.js', 'esc.js', 'ext-shell.js', 'ext-bar.js',
+                 'tree-model.js', 'clean-view.js')
+
+#: Типова ширина кадру. МУСИТЬ дорівнювати `CANVAS_W` у app/viewport.js:
+#: саме на ній тримається правило ключа («типова ширина суфікса не додає»), і
+#: розбіжність означала б, що публікація складає `frames` за одними ключами, а
+#: зовнішній «Огляд» шукає кадри за іншими. Звірку тримає тест.
+CANVAS_W = 1280
+
+# Порт `splitFrameKey` з app/viewport.js — включно з тим, що все не схоже на
+# ширину лишається частиною ключа: манифест приїжджає з чужої машини, і сміття
+# не сміє прикидатись шириною.
+# `\Z`, а не `$`: у Python `$` збігається ще й ПЕРЕД кінцевим переносом рядка,
+# тобто `'main@768\n'` розібрався б на ширину тут і НЕ розібрався б у браузері —
+# порт, який розходиться з оригіналом рівно на одному символі, гірший за явно
+# інший алгоритм, бо виглядає однаковим.
+_FRAME_W_RE = re.compile(r'^(.*)@([1-9]\d{1,3})\Z')
+
+
+def split_frame_key(fid):
+    """`'main@768'` → `('main', 768)`; `'main'` → `('main', CANVAS_W)`."""
+    m = _FRAME_W_RE.match(str(fid))
+    return (m.group(1), int(m.group(2))) if m else (str(fid), CANVAS_W)
+
+
+def _frame_size(rec):
+    """`{'w': …, 'h': …}` із запису зʼємки — або ПОРОЖНЄ, якщо міряного немає.
+
+    ⛔ Валідація, а не довіра. `shots/manifest.json` пише наш же конвейєр зʼємки,
+    але читаємо ми його як ДАНІ, а не як обіцянку: файл лежить на диску, його
+    правлять руками, і прогон могло перервати посередині (та сама межа, заради
+    якої вище стоїть попередження про битий манифест).
+
+    Нуль і відʼємне гірші за відсутність: зовнішнє полотно рахує пропорцію
+    картки як `h * cardW / w`, тобто нуль у знаменнику дав би `Infinity`, а
+    рядок — `NaN`; `rowsLayout` (`app/layout.js`) на такому кидає виняток —
+    на світі, який глядач мав побачити. Тому непридатний розмір не їде взагалі,
+    і вигаданого числа замість нього теж немає: маніфест не сміє СТВЕРДЖУВАТИ
+    розмір, якого ніхто не міряв. Оболонка тоді спитає пропорцію в самого
+    знімка (`onFrameLoad` в `ext-shell.js`) — робоча дорога, не аварійна.
+
+    Розмір — ПАРА: половина його не варта нічого, бо пропорція вимагає обох.
+    `bool` відсікаємо явно, бо в python `True` — це `int`: без цього `h: true`
+    стало б висотою 1px, і то «за даними».
+    """
+    if not isinstance(rec, dict):
+        return {}
+    w, h = rec.get('w'), rec.get('h')
+    ok = all(isinstance(v, int) and not isinstance(v, bool) and v > 0
+             for v in (w, h))
+    return {'w': w, 'h': h} if ok else {}
+
+
+def publish_frames(task, it_id, pages, dst_dir):
+    """Кадри ітерації в `publish/<it>/_frames/`.
+
+    → `({frameKey: {'path': relPath, 'w': …, 'h': …}}, warning|None)`, де `w`/`h`
+    — розмір ЗНІМКА в пікселях, заміряний зʼємкою, і його може не бути (див.
+    `_frame_size`). Зайві поля запису зʼємки (`sha`, `bytes`, `stable`…) не
+    їдуть: маніфест лежить статикою в чужому браузері, і там нема кому їх
+    читати.
+
+    ⚠️ `w` тут — НЕ ширина вьюпорта. Кадр, знятий із подвоєною щільністю, має
+    `w` удвічі більше за ширину в своєму ключі, і саме тому пропорцію рахують
+    діленням на `w`, а не беруть `h` як висоту картки. Ширина вьюпорта живе
+    ТІЛЬКИ в ключі (`split_frame_key`) — звідти її й бере `publish_manifest`.
+
+    ⛔ Фільтр — ТОЙ САМИЙ, що в сторінок: у превʼю їде кадр лише тієї сторінки,
+    яка сама туди їде. Це вимога конфіденційності, а не вага: сторінку знімають
+    з превʼю руками, і кадр знятої сторінки показав би менеджеру в «Огляді»
+    рівно те, що від нього прибрали. Тому відповідь про «що опубліковано» тут не
+    рахується вдруге, а береться з `published_pages` — тієї самої функції, що
+    вирішує це для сторінок (див. її докстрінг: дві копії фільтра — рівно та
+    пара, що розходиться молча).
+
+    Кадр СТАНУ (`page~30d36f19`) успадковує публікацію своєї сторінки — те саме
+    правило, що в `rows-model.js`: стан це та сама сторінка в іншому вигляді, і
+    крапки «у превʼю» на одному екрані не сміють суперечити одна одній.
+
+    Джерело переліку — `shots/manifest.json`, а не `listdir`: манифест і є
+    записом про те, що зʼємка справді зробила (файл без запису — це або сміття
+    від перерваного прогону, або кадр, який зʼємка вже визнала непотрібним).
+
+    ⚠️ Друге значення — попередження, і воно тут не для симетрії. Битий манифест
+    не сміє валити публікацію (макети готові, посилання чекають), але й тиха
+    гілка була б найгіршою з трьох: превʼю зібралось, «Огляд» у глядача
+    порожній, і ніде жодного слова про причину. Тиша належить ЛИШЕ «файла нема»
+    — ітерацію могли просто ще не знімати (та сама межа, що в `_shots_manifest`
+    і `_flow_get`); усе інше — биті права, тека замість файла, валідний JSON, що
+    не обʼєкт — доходить до дизайнера словами.
+
+    ⚠️ Свідома різниця з `_shots_manifest`: там манифест без `shots` тихо стає
+    порожнім, бо той роут живить полотно й мусить деградувати до «ще не знімали».
+    Тут навпаки: публікація буває раз, після неї йде посилання менеджеру, і
+    другого разу подивитись у цей файл ніхто не прийде.
+    """
+    wanted = {p['page']['id'] for p in pages if p['it'] == it_id}
+    src_dir = os.path.join(_iter_dir(task, it_id), 'shots')
+    man = os.path.join(src_dir, 'manifest.json')
+    try:
+        with open(man, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        # ⛔ Ця гілка мусить стояти ВИЩЕ за OSError (FileNotFoundError — його
+        # підклас), інакше «ще не знімали» почало б виглядати помилкою.
+        return {}, None
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        return {}, f'{it_id}: shots/manifest.json не читається ({e}) — кадри не поїхали'
+    shots = data.get('shots') if isinstance(data, dict) else None
+    if not isinstance(shots, dict):
+        return {}, (f'{it_id}: у shots/manifest.json немає обʼєкта `shots` '
+                    f'(лежить {type(shots).__name__}) — кадри не поїхали')
+    frames = {}
+    for fid in sorted(shots):
+        # ⛔ Ключ із манифеста стає ІМЕНЕМ ФАЙЛА в publish/ — тому та сама
+        # перевірка, що стереже роут /shot, а не послаблена «майже така». Без
+        # неї `../../..` у ключі писав би кудись за межі превʼю.
+        if not SHOT_RE.match(str(fid)):
+            continue
+        base, _w = split_frame_key(fid)
+        if base.split('~')[0] not in wanted:
+            continue
+        src = os.path.join(src_dir, f'{fid}.webp')
+        if not os.path.isfile(src):
+            continue      # запис є, файла немає — кадр просто не малюватиметься
+        os.makedirs(dst_dir, exist_ok=True)
+        shutil.copy2(src, os.path.join(dst_dir, f'{fid}.webp'))
+        # Розмір — із ЦЬОГО ж запису: інакше зовнішнє полотно не знає висоти
+        # картки, поки кадр не приїхав, і світ «сідає» під справжні пропорції
+        # вже на очах глядача (розкид справжніх висот заміряний — 900…8000px).
+        frames[fid] = {'path': f'{it_id}/_frames/{fid}.webp',
+                       **_frame_size(shots[fid])}
+    return frames, None
+
+
+def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None):
+    """`publish/manifest.json` — ЄДИНЕ джерело правди зовнішньої оболонки.
+
+    Без `serve.py` у превʼю немає ні `/api/task`, ні `/api/iteration-pages`, ні
+    `/api/shots`; усе, що оболонка знає про задачу, лежить у цьому файлі. Тому
+    склад полів стережеться тестом, а не «складеться сам».
+
+    `outline` — усе видиме дерево З ТЕКАМИ для панелі превʼю (рядки
+    `{id, it, key, name, kind, depth[, path]}`; у теки `path` нема — файла немає,
+    а `id` лежить у тому ж просторі `<it>/<id>`, що й `out_rel` сторінок).
+    `pages` лишається переліком ВІДКРИВАНИХ вузлів — з нього живуть сторінка за
+    замовчуванням, картки полотна, `pageById`; тому теки туди НЕ додаємо, а
+    веземо окремим ключем. Обидва перелічені одним правилом видимості
+    (`pm.preview_flat` / `pm.preview_outline`).
+
+    `trees` — `{it: дерево}`, знятий `_publish` ОДИН раз на всю збірку: `outline`
+    і `pages` тоді рахуються з того самого знімка, а не з двох читань pages.json
+    (дизайнер міг змінити дерево між ними). Без `trees` читаємо самі.
+
+    Поля `id` і `key` у сторінці — РІЗНІ рядки, і злити їх в одне не можна:
+    `id` — шлях у publish (ним ходить глибоке посилання `#p=`), `key` — база
+    ключа КАДРУ. У неявної «Головної» вони розходяться назовсім: `id` = `it1`,
+    а кадр лежить під `main`. Одне поле на дві ролі означало б «Огляд» без
+    кадрів, і причину шукали б у зʼємці.
+
+    `iters` і `frames` накриті ОДНИМ переліком ітерацій — тих, у яких є що
+    показати. Правило не нове: дропдаун обгортки відкинув ітерації без сторінок
+    саме тому, що інакше він брехав про те, що можна відкрити (`preview_index_html`).
+
+    `iters` — `{'id', 'num', 'note'}`, тобто ІДЕНТИФІКАТОР і ДАНІ, БЕЗ підпису.
+    Той самий розділ, що вже двічі лікували 02.09.2026 (`Іт.N` шаблонним
+    літералом у `app.js`; підписи вкладок аудиторій, спечені сервером): усе, що
+    людина ЧИТАЄ, складає словник у браузері, бо мову вибирає глядач, а не
+    збірка. Деталі й межа — у `iteration_note()`.
+
+    `frames` — `{it: {frameKey: {'path': relPath, 'w': …, 'h': …}}}` від
+    `publish_frames`; `w`/`h` це розмір ЗНІМКА в пікселях, і його може не бути
+    (запис зʼємки не пройшов валідацію — див. `_frame_size`). Оболонці він
+    потрібен, щоб знати висоту картки ДО завантаження кадру: без нього «Огляд»
+    стоїть заглушкою й сідає під справжні пропорції на очах глядача.
+
+    ⛔ `widths` рахує `split_frame_key`, тобто КЛЮЧІ, і `w` поруч на це не
+    впливає. Це не дубль інформації, а дві різні ширини: `w` — скільки пікселів
+    у знімку (при подвоєній щільності вдвічі більше), а сегмент ширин пропонує
+    глядачу ширини ВЬЮПОРТА, під якими кадри взагалі шукаються. Порахуй його по
+    `w` — і в смузі зʼявиться «1536», якого не має ні один ключ: кнопка, що не
+    знаходить кадрів.
+
+    ⚠️ Межа, названа вголос: файл лежить статикою, тобто читається БЕЗ гейту.
+    Перевірено живою публікацією 11.09.2026: `GET /manifest.json` без пароля
+    віддає 200 і в тілі назву задачі, тікет і нотатки всіх ітерацій (там же
+    трапляються посилання на Figma-вузли); `GET /itN/<сторінка>/index.html` —
+    повний макет. Новим каналом витоку це не є: гейт — оверлей у браузері, а не
+    серверний замок, і пароль лежить у тексті `index.html` (`gate_html`), а ключ
+    сесії `<tid>_auth` несе id задачі.
+
+    ⛔ Ховати ці поля в ІНШИЙ статичний файл сенсу не має — це той самий
+    відкритий GET, лише менш очевидний. Чесних шляхів два: серверний захист
+    (Vercel Deployment Protection) або шифрування контексту паролем. Рішення
+    власника 14.09.2026: у цьому батчі не ховаємо нічого, а прибираємо ОБІЦЯНКУ
+    захисту з інтерфейсу й доків — щоб посилання не відправляли туди, куди не
+    можна, вважаючи його закритим.
+    """
+    with_pages = {p['it'] for p in pages}
+    live = [it for it in its if it['id'] in with_pages]
+    man = {
+        'task': task.get('title', tid),
+        # `num` і `note` ОКРЕМО, не спечений підпис: префікс «Іт.N» — це
+        # презентація, і мову для неї вибирає ГЛЯДАЧ (`dc-lang` у його
+        # браузері), а не Python на машині дизайнера. Спечений тут підпис
+        # приїжджав у смугу кирилицею навіть при `dc-lang=en` (заміряно
+        # 03.09.2026: «Layout / Overview / Copy link» і поруч «Іт.1 ·
+        # фікстура»). Тег складає `iterTag` в оболонці; очищення примітки
+        # лишається тут, бо це дані — див. `iteration_note`.
+        'iters': [{'id': it['id'], 'num': iter_num(it['id']),
+                   'note': iteration_note(it)} for it in live],
+        'pages': [{'id': p['out_rel'], 'it': p['it'], 'key': p['page']['id'],
+                   'name': p['name'], 'depth': p['depth'],
+                   'path': f"{p['out_rel']}/index.html"}
+                  for p in pages],
+        'frames': {it['id']: frames.get(it['id'], {}) for it in live},
+        'widths': sorted({split_frame_key(k)[1]
+                          for it in live for k in frames.get(it['id'], {})}),
+    }
+    outline = []
+    for it in live:
+        tree = iteration_pages(task, it['id']) if trees is None else trees[it['id']]
+        for f in pm.preview_outline(tree):
+            node = f['page']
+            folder = f['kind'] == 'folder'
+            row = {'id': _out_rel(it['id'], node, folder),
+                   'it': it['id'], 'key': node['id'], 'name': node['name'],
+                   'kind': f['kind'], 'depth': f['depth']}
+            if not folder:      # у теки файла немає
+                row['path'] = f"{row['id']}/index.html"
+            outline.append(row)
+    man['outline'] = outline
+    with open(os.path.join(dst_dir, 'manifest.json'), 'w', encoding='utf-8') as fh:
+        json.dump(man, fh, ensure_ascii=False, indent=1)
+    return man
+
+
+def _out_rel(it_id, node, folder=False):
+    """Шлях вузла в `publish/`: `<it>/<rel>`, а для неявної «Головної» — сам `<it>`.
+    У теки каталогу нема, тож її id — `<it>/<id>` у тому ж просторі, і правило
+    неявної main (`page_rel` дає '' для id `main`) на неї не поширюється."""
+    rel = node['id'] if folder else pm.page_rel(node)
+    return f"{it_id}/{rel}" if rel else it_id
+
+
+def published_pages(task, its, trees=None):
+    """Сторінки, які їдуть у превʼю: [{it, rel, out_rel, name, depth, page}].
+
+    ЄДИНЕ місце, де вирішується «що потрапляє в публікацію». Консументи:
+    `_publish` (копіює файли й вставляє гейт) і `ops/reseal_gate.py`
+    (перезбирає лише обгортку). До 04.08.2026 кожен мав власний обхід із
+    власним фільтром — та сама пара «джерело й копія розходяться молча», через
+    яку написана вся серія релізів 1.10–1.14.
+
+    Правило видимості — `pm.preview_flat` (приховування на піддерево, рішення
+    власника 30.09.2026): схований вузол не везе нікого зі свого піддерева, а
+    теки тут узагалі не сторінки — їх відсіює той самий `preview_flat`.
+    """
+    out = []
+    for it in its:
+        tree = iteration_pages(task, it['id']) if trees is None else trees[it['id']]
+        for f in pm.preview_flat(tree):
+            page = f['page']
+            rel = pm.page_rel(page)
+            out.append({'it': it['id'], 'rel': rel, 'page': page,
+                        'out_rel': _out_rel(it['id'], page),
+                        'name': page['name'], 'depth': f['depth']})
+    return out
+
+
+def copy_iteration_shared(task, it_id, dst_dir, tree=None):
+    """Спільні файли ітерації в publish/<it>/: усе з кореня, крім тек СТОРІНОК.
+
+    ⛔ Без цього кроку багатосторінкова ітерація публікувалась порожньою.
+    Цикл у `_publish` копіює лише теки сторінок, а `assets/`, `icons/`, `fonts/`
+    лежать у КОРЕНІ ітерації і їхали тільки як побічний ефект сторінки з
+    `rel == ''` (неявна `main`). Прибрав кореневу сторінку — і кожна сторінка
+    почала тягнути `../assets/united.css` у 404: превʼю відкривалось білим, а
+    виглядало як «немає макетів» (LIGA-7010, 31.08.2026).
+
+    Теки сторінок свідомо ВИКЛЮЧЕНІ — і опубліковані, і зняті з превʼю: перші
+    везе цикл (з гейтом і комментатором), а другі не мають потрапити в превʼю
+    взагалі, інакше «зняти сторінку з публікації» перестало б працювати.
+    """
+    src_dir = os.path.join(task['dir'], 'iterations', it_id)
+    if not os.path.isdir(src_dir):
+        return []
+    # Тека (kind=folder / isGroup) каталогу на диску НЕ має — її id не імʼя теки,
+    # тож у виняток вона не йде: тека «Icons» (id `icons`) інакше відсіяла б
+    # справжній спільний `icons/`, і превʼю лишилось би без стилів.
+    page_dirs = {pm.page_rel(f['page'])
+                 for f in pm.flatten(iteration_pages(task, it_id) if tree is None else tree)
+                 if f['kind'] != 'folder'}
+    page_dirs.discard('')
+    os.makedirs(dst_dir, exist_ok=True)
+    carried = []
+    for name in sorted(os.listdir(src_dir)):
+        # ⛔ `shots/` — сирий склад кадрів, БЕЗ фільтра публікації. Возити його
+        # цілком означало б віддати глядачу і кадри сторінок, знятих із превʼю
+        # (виміряно на boss-interface 02.09.2026: `publish/it3/shots/` уже лежав
+        # у зібраному превʼю й деплоївся). Кадри їдуть окремо й під фільтром
+        # сторінок — `publish_frames` → `publish/<it>/_frames/`; фільтр там був
+        # би театром, поки поруч лежить повна копія без фільтра.
+        # ⛔ pages.json і flow.json — не для превʼю: вони називають і будують
+        # структуру СХОВАНИХ вузлів, а читача в оболонці нема (вона живе з
+        # manifest.json; ext-shell.js прямо каже, що flow.json не їде).
+        s, d = os.path.join(src_dir, name), os.path.join(dst_dir, name)
+        # ⛔ HTML-документи КОРЕНЯ — це сторінка `main` (rel ''), а не спільний
+        # файл. Їх везе `copy_root_files`, і лише коли `main` опублікована. Тут
+        # вони їхали завжди — і знята з превʼю `main` потрапляла в превʼю, ще й
+        # БЕЗ гейта: гейт ставить цикл сторінок, а цієї сторінки в ньому нема.
+        # Знайдено 07.10.2026 (батч 1.52) звіркою пароля по всіх сторінках:
+        # живе превʼю smida-shareholders віддавало `/it2/` без пароля.
+        if os.path.isfile(s) and name.lower().endswith(('.html', '.htm')):
+            continue
+        if (name in page_dirs or name == 'shots' or _is_tool_junk(name)
+                or name in ('pages.json', 'flow.json')):
+            continue
+        if os.path.isdir(s):
+            shutil.copytree(s, d, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('*' + TMP_SUFFIX))
+        else:
+            shutil.copy2(s, d)
+        carried.append(name)
+    return carried
+
+
+def copy_root_files(src_dir, dst_dir):
+    """Файли КОРЕНЯ ітерації для сторінки з `rel == ''` (явна `main`) — без тек.
+
+    ⛔ Її src — уся тека ітерації, і `copy_mockup` повіз би в превʼю ВСЕ: теки
+    інших (зокрема СХОВАНИХ) сторінок, `shots/`, а з ними й `pages.json` та
+    `flow.json` (A4 ревʼю). Спільні теки (assets/icons/fonts) уже привіз
+    `copy_iteration_shared`, тож тут лише файли; pages.json і flow.json —
+    ті самі виключення, що й там.
+    """
+    os.makedirs(dst_dir, exist_ok=True)
+    for name in os.listdir(src_dir):
+        s = os.path.join(src_dir, name)
+        if (os.path.isdir(s) or _is_tool_junk(name)
+                or name in ('pages.json', 'flow.json')):
+            continue
+        shutil.copy2(s, os.path.join(dst_dir, name))
+
+
+def js_literal(value):
+    """Значення як JS-літерал усередині `<script>`.
+
+    ⛔ НЕ `_html.escape`: HTML-ентіті в `<script>` не декодуються. Пароль `a'b`
+    ставав `a&#x27;b`, тому кнопка «Копіювати посилання» збирала `#k=` з
+    екранованого, гейт порівнював із сирим — і безшовний вхід тихо не працював.
+    А сирий апостроф у самому гейті — це синтаксична помилка JS, після якої IIFE
+    не запускається й оверлей не зникає НІКОЛИ: превʼю не відкрити жодним паролем.
+
+    ⛔ І не голий `json.dumps`: він не чіпає `</`, тому назва сторінки
+    `</script><img src=x onerror=…>` (назви пише дизайнер) рвала скрипт, панель
+    вмирала, картинка виконувалась — а в тому ж скрипті лежить пароль превʼю.
+    Перевірено живцем 04.08.2026. `\\u2028/\\u2029` — бо `ensure_ascii=False`
+    віддає їх сирими, а в JS вони розділювачі рядків.
+    """
+    return (json.dumps(value, ensure_ascii=False)
+            .replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+            .replace('\u2028', '\\u2028').replace('\u2029', '\\u2029'))
+
+
+def preview_index_html(gate, pw):
+    """HTML обгортки превʼю — ТОНКИЙ КАРКАС. ЄДИНЕ місце збірки: і публікація,
+    і `ops/reseal_gate.py` кличуть саме її.
+
+    ⛔ Ні назви задачі, ні переліку ітерацій, ні переліку сторінок ця функція
+    БІЛЬШЕ НЕ ПРИЙМАЄ, і вузька сигнатура тут — запобіжник, не косметика.
+    Стан оболонки живе в `publish/manifest.json`, який пише ЛИШЕ `_publish`, а
+    `ops/reseal_gate.py` перезбирає тільки `index.html` і кадрів не рахує
+    взагалі: інлайнений стан означав би, що після кожного перепечатування
+    гейту обгортка везе НОВИЙ скрипт і СТАРІ дані — тихо, без жодної ознаки.
+    Тепер їй просто нізвідки їх узяти.
+
+    Заодно зникає цілий клас багів, а не один випадок: до 02.09.2026 назви
+    сторінок їхали в обгортку JS-літералом, і назва `</script><img src=x
+    onerror=…>` рвала скрипт, у якому лежить пароль превʼю (перевірено живцем
+    04.08.2026). Через `<script>` вони більше не проходять — назви лежать у
+    JSON-файлі, а екранує їх `esc()` у `shell-panel.js`/`ext-bar.js`.
+
+    Ітерації без опублікованих сторінок відсіює тепер `publish_manifest` — там
+    же, де складається сам перелік (правило те саме: дропдаун не сміє
+    пропонувати те, що не відкривається).
+    """
+    return PAGES_PREVIEW_PAGE.format(gate=gate, pw_js=js_literal(str(pw)))
+
+
+def _loaded_app_sources():
+    """Python-файли з `app/`, ЗАВАНТАЖЕНІ в цей процес.
+
+    Перелік беремо з sys.modules, а не хардкодимо: обгортку збирає serve.py
+    разом із pages_model (розкрій сторінок) і atomic_io, і будь-який новий сусід
+    потрапить сюди сам. Захардкоджений список мовчки застарів би — рівно та
+    порода розходження «джерело / те, що поїхало», проти якої це й ставиться.
+    """
+    out = set()
+    for mod in list(sys.modules.values()):
+        path = getattr(mod, '__file__', None)
+        if not path:
+            continue
+        path = os.path.abspath(path)
+        if path.startswith(APP_DIR + os.sep) and path.endswith('.py'):
+            out.add(path)
+    return sorted(out)
+
+
+def server_code_staleness(started_at=None):
+    """Текст попередження, якщо код на диску новіший за процес; інакше None.
+
+    ⛔ Публікацію НЕ блокує: дизайнер має право свідомо публікувати зі старого
+    коду. Це попередження — але голосне, бо інакше на Vercel мовчки лишається
+    обгортка, зібрана процесом, а джерело на диску вже інше.
+    ⛔ І «не знаю» теж голосне: не прочитався mtime — кажемо про це, а не
+    вдаємо, що все свіже.
+    """
+    started_at = SERVER_STARTED_AT if started_at is None else started_at
+    newer, unknown = [], []
+    for path in _loaded_app_sources():
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError as e:
+            unknown.append(f'{os.path.basename(path)} ({e.strerror or e})')
+            continue
+        if mtime > started_at:
+            newer.append(os.path.basename(path))
+    parts = []
+    if newer:
+        # ⛔ Текст відповідає на ТРИ питання, а не лише «щось старе»
+        # (fb-22092026-3a9764): ЩО саме зібрано старим кодом, чи ВАЛІДНЕ
+        # опубліковане, і чи треба перевидавати. До цього дизайнер бачив лише
+        # «працює зі старішим кодом» і не знав, чи зіпсовано те, що вже в
+        # менеджера. Сторінки макета копіюються з диска в момент публікації —
+        # вони завжди свіжі; зі старого коду в памʼяті процесу — лише обгортка.
+        built = 'обгортку превʼю (оболонка, маніфест, гейт'
+        if 'pages_model.py' in newer:
+            built += ', розкрій сторінок'
+        built += ')'
+        parts.append(
+            '⚠ Канвас працює зі СТАРІШИМ кодом, ніж на диску: після старту '
+            'сервера змінено ' + ', '.join(sorted(newer)) + '.\n'
+            '· Сторінки макета взято з диска — вони актуальні.\n'
+            f'· Зі старого коду зібрано лише {built}: опубліковане працює, це '
+            'обгортка у версії до правки.\n'
+            '· Перевидавати треба, лише якщо правка в цих файлах стосується '
+            'самого превʼю: після перезапуску канваса (./stop.command → '
+            './start.command) опублікуй ще раз — адреса лишиться та сама.')
+    if unknown:
+        parts.append(
+            '⚠ Час зміни не прочитався: ' + ', '.join(sorted(unknown)) +
+            ' — чи працює канвас з актуальним кодом, невідомо.')
+    return '\n\n'.join(parts) or None
+
+
+def _deploy_urls(stdout, stderr):
+    """Реальні URL з виводу `vercel deploy --prod`.
+
+    ⚠️ URL НЕ вгадуємо. Раніше тут стояло f'https://{proj}.vercel.app' — і це
+    вистрелило: ім'я `dc-blog` у зоні vercel.app зайняте ЧУЖИМ проєктом, тому
+    канвас видавав дизайнеру посилання на сторонній сайт (30.07.2026).
+    Ім'я проєкту в акаунті і хост у vercel.app — різні простори імен.
+    """
+    urls = re.findall(r'https://[a-z0-9.-]+\.vercel\.app', (stdout or '') + '\n' + (stderr or ''))
+    # прибрати дублі, зберігши порядок
+    seen, out = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _preview_domain_warning(url, proj):
+    """Попередження, якщо Vercel видав НЕ `<проєкт>.vercel.app`, або None.
+
+    fb-29092026-210ec1: короткий хост зайняв проєкт із тим самим імʼям в ІНШОМУ
+    акаунті — цей отримав `pv-XXXX-<суфікс>.vercel.app`. Дизайнери не помічали,
+    що в них РІЗНІ посилання, а кожна публікація заміняє деплой цілком.
+    """
+    host = re.sub(r'^https?://', '', url or '').split('/')[0]
+    want = f'{proj}.vercel.app'
+    if not proj or not host or host == want:
+        return None
+    return (f'Vercel видав {host}, а не {want}: проєкт із цим імʼям уже є в ІНШОМУ '
+            f'акаунті, тож у тебе й у колеги РІЗНІ посилання, і публікація не бачить '
+            f'ітерацій колеги. Звір прив\'язку задачі (vercel_scope у tasks.json).')
+
+
+DEFAULT_PREVIEW_PW = '1100'
+
+
+def preview_password(cfg, task):
+    """Пароль превʼю задачі. `preview_password` у tasks.json, інакше спільний 1100.
+
+    До 03.08.2026 пароль був захардкожений один на ВСІ задачі й усіх людей: одна
+    злита ссилка відкривала будь-яке превʼю. Тепер його можна задати на задачу й
+    ротувати. Поле per-machine (tasks.json поза git), тому в спільний репо не їде.
+
+    ⚠️ Це гейт у DOM, а не автентифікація: пароль лежить у джерелі сторінки, тому
+    хто має URL — може прочитати HTML. Сенс поля — обмежити радіус зливу однією
+    задачею, а не зробити превʼю приватним. Справжня приватність = захист на
+    рівні Vercel (Deployment Protection), і вона ламає цей гейт.
+    """
+    return str((task or {}).get('preview_password')
+               or (cfg or {}).get('preview_password') or DEFAULT_PREVIEW_PW)
+
+
+PREVIEW_PW_MAX = 64
+_GATE_STATE_CACHE = {}
+
+
+def check_preview_password(value):
+    """Пароль із інтерфейсу: рядок без керуючих символів, до PREVIEW_PW_MAX.
+    Порожній (після strip) — «повернути типовий». Повертає (пароль|None, помилка)."""
+    if not isinstance(value, str):
+        return None, 'password must be a string'
+    value = value.strip()
+    if not value:
+        return '', None
+    if len(value) > PREVIEW_PW_MAX:
+        return None, f'password is longer than {PREVIEW_PW_MAX}'
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return None, 'password has control characters'
+    return value, None
+
+
+def _publish_pages(pub):
+    """Усі сторінки зібраного превʼю, що мусять нести гейт: обгортка й кожна
+    внутрішня сторінка. Службові теки (бандли, оболонка, кадри) — без гейта."""
+    out = []
+    for dirpath, dirnames, files in os.walk(pub):
+        rel = os.path.relpath(dirpath, pub)
+        if rel.split(os.sep)[0] in ('comment-layer', 'shell', '.vercel') or \
+                '_frames' in rel.split(os.sep):
+            dirnames[:] = []
+            continue
+        if 'index.html' in files:
+            out.append(os.path.join(dirpath, 'index.html'))
+    return out
+
+
+def preview_gate_state(task, pw):
+    """Чи ЗІБРАНЕ превʼю (`publish/`) уже з паролем `pw` — на КОЖНІЙ сторінці.
+
+    ⛔ Дивимось не лише обгортку: `ops/reseal_gate.py` перепечатує ЛИШЕ її, а
+    гейт стоїть і в кожній внутрішній сторінці. Обгортка з новим паролем при
+    старому в сторінках — це «пароль змінено» на словах, а пряме посилання на
+    сторінку відкривається старим. Тому `stale` — кількість сторінок БЕЗ
+    поточного пароля, включно з обгорткою.
+
+    Повертає {'state': 'none'|'current'|'stale'|'ungated', 'stale': n,
+    'ungated': n, 'inner_stale': n, 'pages': n}. `stale` — сторінки З гейтом, але
+    з ІНШИМ паролем (вони й роблять посилання з новим ключем непрацюючим);
+    `ungated` — сторінки БЕЗ гейта зовсім (зібрані до фікса TD-37): це не
+    «пароль змінено», і плутати їх у підписі — збрехати про причину (ревʼю 1.52).
+    `inner_stale` — stale без обгортки: `reseal_gate.py` питає саме його ДО того,
+    як перепише обгортку.
+    Кеш — за паролем і mtime обгортки: публікація й reseal обидва її пишуть.
+    """
+    pub = os.path.join(task['dir'], 'publish')
+    wrapper = os.path.join(pub, 'index.html')
+    try:
+        mt = os.stat(wrapper).st_mtime_ns
+    except OSError:
+        return {'state': 'none', 'stale': 0, 'ungated': 0, 'inner_stale': 0, 'pages': 0}
+    key = (pub, pw, mt)
+    hit = _GATE_STATE_CACHE.get(pub)
+    if hit and hit[0] == key:
+        return dict(hit[1])
+    want = f'P={js_literal(str(pw))};'
+    pages = _publish_pages(pub)
+    stale = ungated = inner_stale = 0
+    for f in pages:
+        try:
+            with open(f, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            text = ''
+        if want in text:
+            continue
+        if 'id="authgate"' in text:
+            stale += 1
+            if f != wrapper:
+                inner_stale += 1
+        else:
+            ungated += 1
+    state = 'stale' if stale else ('ungated' if ungated else 'current')
+    res = {'state': state, 'stale': stale, 'ungated': ungated,
+           'inner_stale': inner_stale, 'pages': len(pages)}
+    _GATE_STATE_CACHE[pub] = (key, res)
+    return dict(res)
+
+
+def gate_html(tid, pw):
+    """Гейт для сторінки превʼю. Ключ sessionStorage — на задачу, тому пройдений
+    гейт обгортки автоматично відкриває і внутрішні сторінки (той самий origin).
+
+    Пароль і ключ ідуть як JS-літерали (`js_literal`), а не в лапках у шаблоні:
+    апостроф у паролі робив із гейта синтаксично невалідний JS, і оверлей уже не
+    прибирався НІЯКИМ паролем. Пароль задається руками в tasks.json, тому це
+    питання часу, а не гіпотеза."""
+    return GATE_SNIPPET.format(key_js=js_literal(f'{tid}_auth'),
+                               pw_js=js_literal(str(pw)))
+
+
+def _vercel_project(tid, task):
+    """Опакове ім'я Vercel-проєкту для задачі.
+
+    Правило користувача (30.07.2026): у публічному превью-URL не має бути ні
+    назви задачі, ні клієнта, ні номера тікета — лише умовна нумерація. Раніше
+    ім'я виводилось із id задачі (`dc-blog`), тобто URL сам розповідав контекст.
+
+    Генерується ОДИН раз і зберігається в tasks.json → prod-URL стабільний і
+    не змінюється з кожною публікацією.
+
+    ⛔ Якщо задача ВЖЕ публікувалась, а поля немає — не мінтимо нове імʼя молча:
+    це змінило б prod-URL, який уже може бути в менеджера. Ризик реальний:
+    `publish/` затирається щопублікації разом із `.vercel`, тому зв'язок
+    задача→проєкт лишається тільки в цьому полі (03.08.2026 його не було в
+    чотирьох задач із живими превʼю). Кидаємо помилку з інструкцією — краще
+    відмовити, ніж тихо видати нове посилання.
+    """
+    if task.get('vercel_project'):
+        return task['vercel_project']
+    prev = (load_meta(task) or {}).get('publish_url')
+    # Не-власник отримав адресу ВЛАСНИКА через «Підтягнути» — це не його посилання,
+    # змінювати він його не може, тож і відмовляти нема за що: своє превʼю.
+    if prev and _task_is_mine(task):
+        raise OSError(
+            f'задача вже публікувалась ({prev}), але vercel_project у tasks.json '
+            f'немає — нове імʼя змінило б URL, який уже може бути в менеджера. '
+            f'Впиши в tasks.json["tasks"]["{tid}"]["vercel_project"] імʼя '
+            f'наявного проєкту (видно у Vercel або в publish/.vercel/project.json) '
+            f'і повтори публікацію.')
+    import secrets
+    name = 'pv-' + ''.join(secrets.choice('0123456789') for _ in range(8))
+    cfg = load_tasks()
+    cfg.setdefault('tasks', {}).setdefault(tid, {})['vercel_project'] = name
+    save_tasks(cfg)
+    task['vercel_project'] = name
+    return name
+
+
+def _remember_vercel_scope(tid, task, pub):
+    """Запамʼятати Vercel-скоуп задачі (`orgId` із `publish/.vercel/project.json`).
+
+    Навіщо окремо від імені: імʼя саме по собі посилання не тримає. У ЧУЖОМУ
+    акаунті `vercel link --project <те саме імʼя>` створює ІНШИЙ проєкт — і в
+    менеджера з'являється друге посилання, а перше тихо застаріває. Прив'язка =
+    пара імʼя+скоуп, тому обидва їдуть у реєстр і обидва підставляються в
+    наступну публікацію (`--scope`).
+
+    Best-effort: немає файлу або поля — просто не записуємо. Це не аварія:
+    `--scope` тоді не підставиться, а інваріант `vercel-binding-unshared` скаже
+    про неповну прив'язку вголос.
+    """
+    if task.get('vercel_scope'):
+        return
+    try:
+        with open(os.path.join(pub, '.vercel', 'project.json'), encoding='utf-8') as f:
+            org = (json.load(f) or {}).get('orgId')
+    except (OSError, ValueError):
+        return
+    if not org:
+        return
+    cfg = load_tasks()
+    cfg.setdefault('tasks', {}).setdefault(tid, {})['vercel_scope'] = org
+    save_tasks(cfg)
+    task['vercel_scope'] = org
+
+
+def _stable_alias(dep_url, cwd, extra=()):
+    """Стабільний публічний prod-URL деплою (щоб посилання не мінялось щопублікації).
+
+    Беремо НАЙКОРОТШИЙ з усіх кандидатів (вивід deploy + аліаси `vercel inspect`).
+    Перевірено на живому деплої: короткий `<проєкт>.vercel.app` віддає макет
+    (200), а довгий, з-іменем-акаунта `<проєкт>-<акаунт>.vercel.app` — 302 на
+    SSO команди. Тому саме найкоротший, і виключати dep_url НЕ можна: часто він
+    і є цим коротким.
+    """
+    cands = list(extra) + [dep_url]
+    npx = _node_bin('npx')
+    if npx:
+        try:
+            r = subprocess.run([npx, '--yes', 'vercel', 'inspect', dep_url],
+                               cwd=cwd, capture_output=True, text=True, timeout=120)
+            cands += _deploy_urls(r.stdout, r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return min(cands, key=len) if cands else dep_url
+
+
+def _check_published(url):
+    """Чи віддає URL наш макет. Ловимо дві реальні поломки:
+    Vercel Deployment Protection (302 на vercel.com/sso-api — тоді наш гейт 1100
+    навіть не рендериться) і взагалі не наш вміст."""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw):
+            return None
+    try:
+        # certifi-контекст: на macOS python.org системні сертифікати не підхоплюються
+        # і перевірка падала на CERTIFICATE_VERIFY_FAILED (див. _ssl_context)
+        op = urllib.request.build_opener(
+            NoRedirect, urllib.request.HTTPSHandler(context=_ssl_context()))
+        with op.open(url, timeout=20) as r:
+            body = r.read(60000).decode('utf-8', 'replace')
+            if 'authgate' in body:
+                return {'verified': True}
+            return {'verified': False,
+                    'reason': 'на URL відповідає не наш макет (немає гейта)'}
+    except urllib.error.HTTPError as e:
+        loc = (e.headers.get('location') or '') if e.headers else ''
+        if e.code in (301, 302, 303, 307, 308) and 'vercel.com/sso' in loc:
+            return {'verified': False, 'reason': 'vercel_protection',
+                    'hint': 'Vercel Deployment Protection увімкнена: Project → '
+                            'Settings → Deployment Protection → Vercel '
+                            'Authentication → Disabled. Інакше замість макета '
+                            'редірект на SSO, і наш пароль 1100 не показується.'}
+        return {'verified': False, 'reason': f'HTTP {e.code}'}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return {'verified': False, 'reason': str(e)[:200]}
+
+
+
+def _killpg(child, sig):
+    """Сигнал ГРУПІ процесів дитини, а не прямій дитині.
+
+    Chromium — ОНУК процесу node: сигнал самому node до браузера не доходить, і
+    headless-Chromium лишався б жити безстроково. Дитина могла померти сама між
+    перевіркою і сигналом — це не помилка, тому ProcessLookupError гасимо.
+    """
+    try:
+        os.killpg(child.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _shoot_alive(entry):
+    """Чи ще жива зʼємка за цим записом реєстру.
+
+    Заглушка (`proc: None`) — це вікно між взяттям ключа й Popen, і вона
+    рахується ЖИВОЮ свідомо. Інакше два запити, що розійшлися в межах fork+exec,
+    обидва пройшли б перевірку «чи є жива» й підняли по Chromium на ту саму теку.
+    """
+    proc = entry.get('proc')
+    return proc is None or proc.poll() is None
+
+
+def _arm_hard_kill(entry):
+    """Озброїти SIGKILL через HARD_KILL_S — РІВНО раз на зʼємку.
+
+    ⚠️ Кличеться ПІД `_SHOOTS_LOCK` (тому власного замка не бере: він не
+    реєнтрантний). Це не формальність: озброєння мусить бути в тому самому
+    входженні в замок, що й читання запису з реєстру, інакше `finally` у `_shoot`
+    встигне між ними прибрати запис — і лишиться таймер, який ніхто не скасує, а
+    pid дитини до його спрацювання може вже належати чужому процесу.
+
+    Ескалацію ставлять двоє: сторож на SHOOT_TIMEOUT_S і ручна «Зупинити».
+    Без неї ручна зупинка лишалась половинною: node, який не відреагував на
+    SIGTERM, добігає цикл, `child.stdout.read()` тримає потік обробника, запис
+    висить у реєстрі — і нову зʼємку в цій ітерації вже не запустити.
+
+    Таймер живе в САМОМУ записі, а не в локальній змінній `_shoot`: інакше
+    «Зупинити» (інший запит, інший потік) не мала б до чого дотягнутись, а два
+    озброєння підряд дали б `RuntimeError` (Timer стартує рівно раз).
+    """
+    proc = entry.get('proc')
+    if proc is None or entry.get('hard') is not None:
+        return
+    timer = threading.Timer(HARD_KILL_S, lambda: _killpg(proc, signal.SIGKILL))
+    timer.daemon = True
+    entry['hard'] = timer
+    timer.start()
+
+
+def _consume_stderr_line(line, progress, tail):
+    """Один рядок stderr дитини: або подія прогресу, або текст причини.
+
+    Розділення несуче. Текст причини — це те, що побачить дизайнер, коли зʼємка
+    впаде ДО звіту (класика: не встановлений chromium), і його зрізають до
+    останніх 2000 байт. Пустити туди 22 події прогресу означало б витіснити
+    справжню причину рівно тоді, коли вона потрібна.
+    """
+    ev = parse_progress_line(line)
+    if ev is None:
+        tail.append(line)
+        return
+    progress.apply(ev)
+
+
+class Handler(SimpleHTTPRequestHandler):
+    # Маніфест застосунку (PWA) — `application/manifest+json`. ЯВНИЙ запис, а не
+    # везіння версії Python: у таблиці `mimetypes` старих збірок (системний
+    # python3 macOS) `.webmanifest` може не бути, і тоді статика віддала б його як
+    # `application/octet-stream`. `sw.js` окремого запису не потребує: `.js` —
+    # JavaScript в усіх версіях, а `no-cache` йому дає `end_headers` нижче, як і
+    # решті статики.
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
+                      '.webmanifest': 'application/manifest+json'}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=ROOT, **kwargs)
+
+    def end_headers(self):
+        # dev-инструмент: иначе браузер кэширует ES-модули и «не видит» правок.
+        # Але тільки якщо відповідь ще НЕ поставила свій Cache-Control сама
+        # (кадр у `_shot` уже поставив): два заголовки Cache-Control браузер
+        # читає як один через кому, і `no-cache` у хвості змушує його звіряти
+        # кожен кадр з сервером знову — тобто гасить immutable нанівець мовчки,
+        # без жодної помилки. Знайдено живим тестом K1: перебудова й далі тягла
+        # всі кадри з мережі, хоч заголовок нижче стояв правильний.
+        # `_headers_buffer` — ПРИВАТНИЙ, недокументований атрибут реалізації
+        # `http.server` (список сирих байтових рядків, накопичених `send_header`
+        # ДО `end_headers`). Він може зникнути чи перейменуватись у майбутній
+        # версії Python — тоді `getattr(..., [])` тихо поверне порожній список,
+        # `any(...)` стане `False`, і код мовчки відкотиться до старої поведінки
+        # (подвійний Cache-Control, immutable знову мертвий). Альтернатива —
+        # явний прапорець-параметр на кшталт `send_response(..., cacheable=True)`
+        # чи власний реєстр «шляхів із власним кешем» — але вона дублювала б
+        # знання про те, ЩО САМЕ ставить свій Cache-Control, у другому місці,
+        # яке довелось би синхронізувати руками. Обрано ризик мовчазного
+        # відкату разом із цим коментарем як компенсацію: якщо колись побачите
+        # цей рядок і `_headers_buffer` більше нема — перевірте руками, чи не
+        # повернувся подвійний заголовок (issue Task 2, коміт bc56e67).
+        buf = getattr(self, '_headers_buffer', [])
+        if not any(h.lower().startswith(b'cache-control:') for h in buf):
+            self.send_header('Cache-Control', 'no-cache')
+        super().end_headers()
+
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    # Код відмови дерева → HTTP-статус; усе інше — 400. `stale` — 409 (панель
+    # читає заново й повторює), `busy` — 503 (чужий писар тримає лок: повтор
+    # виправить), `not-found` — 404 (ітерації чи вузла нема), `corrupt` — 500
+    # (pages.json на диску не розбирається: це не помилка запиту, і повтор її не
+    # виправить).
+    _TREE_STATUS = {'stale': 409, 'busy': 503, 'not-found': 404, 'corrupt': 500}
+
+    def _tree_error(self, e):
+        """Відмова правил дерева — JSON із кодом, а не send_error: у send_error
+        причина йде в рядок статусу latin-1, і українська назва правила
+        впала б UnicodeEncodeError замість відповіді."""
+        code = getattr(e, 'code', 'bad-request')
+        self._send_json({'ok': False, 'error': str(e), 'code': code},
+                        status=self._TREE_STATUS.get(code, 400))
+
+    def _iteration_or_400(self, it):
+        """Імʼя ітерації за правилом `NAME_RE` або None (JSON 400 `bad-iteration`
+        уже надіслано). Одне місце для ВСІХ обробників сторінок: не-рядок (`5`,
+        `null`, список) у `NAME_RE.match` кидав TypeError, і зʼєднання рвалось без
+        відповіді. `fullmatch`, а не `match`: `$` у `^…$` пропускає імʼя з переносом рядка в кінці."""
+        if not isinstance(it, str) or not NAME_RE.fullmatch(it):
+            self._tree_error(pm.TreeError('bad-iteration', 'bad iteration'))
+            return None
+        return it
+
+    def _ids_or_400(self, payload):
+        """`ids` запиту — непорожній список рядків, або None (JSON 400 `bad-ids`
+        уже надіслано). Форма — вхід, а не правило дерева, але відповідаємо так
+        само JSON-ом: клієнт розбирає тіло відмови однаково. Не-рядок у списку
+        інакше впав би TypeError у `set(ids)` (500)."""
+        ids = payload.get('ids')
+        if (not isinstance(ids, list) or not ids
+                or not all(isinstance(i, str) for i in ids)):
+            self._tree_error(pm.TreeError('bad-ids', 'ids must be a non-empty list of ids'))
+            return None
+        return ids
+
+    def _legacy_args(self, payload, need_page=True):
+        """Вступ старих обробників сторінок: `(task, idir, it, page)` або None
+        (JSON 400 уже надіслано). `page` — порожній рядок, коли `need_page=False`."""
+        it = self._iteration_or_400(payload.get('it'))
+        if it is None:
+            return None
+        page = payload.get('page', '')
+        if need_page and not page:
+            self._tree_error(pm.TreeError('bad-page', 'page is required'))
+            return None
+        _, task = self._current_task()
+        return task, _iter_dir(task, it), it, page
+
+    def _tree_op(self, payload, change, msg, after=None, need_rev=True):
+        """Один шлях для всіх нових дій над деревом: лок + rev + validate +
+        автокоміт. `change(pages)` → `(дерево, extra)`; повертає
+        `{'extra', 'rev', 'idir'}` або None, якщо відповідь (помилку) вже надіслано.
+
+        `need_rev` — ключ `rev` (рядок, може бути порожнім) обовʼязковий, інакше
+        400 `missing-rev`: клієнт, що забув rev, мовчки втрачав би захист від
+        чужої правки. Порожній рядок — законний rev («файла нема»).
+
+        `after(extra)` іде ПІД тим самим локом одразу після запису (див.
+        `pm.mutate`): видалення тек сторінок тут не дає паралельному `page-new`
+        з тим самим slug втратити щойно створену теку. rev теж знімає `mutate`
+        під локом (`with_rev`), а не окремий `pages_rev` після виходу з нього —
+        інакше сусідній запис між ними дав би клієнту відбиток стану, якого він
+        не бачив. Коміт у git — лише коли `mutate` щось записав: порожній рух
+        інакше підмів би в коміт усе стороннє під повідомленням, якого не робили."""
+        it = self._iteration_or_400(payload.get('it'))
+        if it is None:
+            return None
+        if need_rev and not isinstance(payload.get('rev'), str):
+            self._tree_error(pm.TreeError('missing-rev', 'rev (string) is required'))
+            return None
+        _, task = self._current_task()
+        idir = _iter_dir(task, it)
+        try:
+            extra, new_rev, changed = pm.mutate(idir, change, rev=payload.get('rev'),
+                                                after=after, with_rev=True)
+        except pm.TreeError as e:
+            self._tree_error(e)
+            return None
+        if changed:
+            # автокоміт — ПОЗА локом: git і пуш повільні, а лок тримає писарів
+            git_autocommit(task['dir'], msg)
+        return {'extra': extra, 'rev': new_rev, 'idir': idir}
+
+    def _current_task(self):
+        cfg = load_tasks()
+        tid = cfg['current']
+        return tid, cfg['tasks'][tid]
+
+    # ---------- GET ----------
+
+    def do_GET(self):
+        if self.path == '/api/task':
+            tid, task = self._current_task()
+            meta = load_meta(task)
+            pw = preview_password(load_tasks(), task)
+            self._send_json({'id': tid, 'title': task.get('title', tid),
+                             'jira': task.get('jira'),
+                             'profile': task.get('profile'),
+                             'iterations': task_api_iterations(meta),
+                             # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
+                             # «своя/чужа» ітерація рахується саме по ньому.
+                             # Імʼя окремо не шлемо — воно вже в кожному записі.
+                             'my_key': machine_identity()[1],
+                             'publish_url': meta.get('publish_url'),
+                             'published_at': meta.get('published_at'),
+                             # пароль потрібен канвасу, щоб зібрати посилання
+                             # «#k=<код>&p=<сторінка>» для менеджера; він і так
+                             # лежить у коді опублікованої сторінки
+                             'preview_password': pw,
+                             # Свій пароль задачі чи спільний типовий — підпис у
+                             # дропдауні публікації не сміє плутати одне з іншим.
+                             'preview_password_custom': bool(task.get('preview_password')),
+                             # Чи ЗІБРАНЕ превʼю вже з цим паролем (на кожній
+                             # сторінці). `stale` — «Копіювати посилання» дало б
+                             # менеджеру ключ, який превʼю не відкриває.
+                             'preview_gate': preview_gate_state(task, pw)})
+            return
+        if self.path == '/api/teams-mute':
+            tid, task = self._current_task()
+            channel = comment_channel(task, tid)
+            try:
+                self._send_json(teams_mute_view(channel, teams_rpc('teams_mute_state', {})))
+            except (OSError, ValueError) as e:
+                # «Не знаю» — це не «увімкнено»: перемикач мусить показати невідомість.
+                self._send_json({'channel': channel, 'error': str(e)[:200]})
+            return
+        if self.path == '/api/tasks':
+            cfg = load_tasks()
+            # `missing` — теки задачі нема на ЦІЙ машині (реєстр їде в git, теки
+            # ні): перемикач не пускає в таку задачу й каже причину наперед.
+            # Лише `isdir`, без читання вмісту — відповідь лишається дешевою.
+            self._send_json({'current': cfg.get('current'), 'tasks': [
+                {'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
+                 'profile': v.get('profile'),
+                 'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir']))}
+                for k, v in tasks_by_recent(cfg)]})
+            return
+        if self.path.split('?')[0] == '/api/tasks-overview':
+            q = parse_qs(urlparse(self.path).query)
+            cfg = load_tasks()
+            rows, err, rows_at = team_snapshot(refresh=q.get('refresh', [''])[0] == '1')
+            self._send_json({'current': cfg.get('current'),
+                             **tasks_overview(cfg, (rows, err), rows_at=rows_at)})
+            return
+        if self.path.split('?')[0] == '/api/task-thumb':
+            self._task_thumb()
+            return
+        if self.path.startswith('/api/local-comments'):
+            self._local_comments_get()
+            return
+        if self.path.startswith('/api/tuner'):
+            self._tuner_get()
+            return
+        if self.path.startswith('/api/it-stamp'):
+            # Опитування вкладки раз на 2 с — без лока й без запису (див. коментар
+            # у /api/iteration-pages: лок зсуває mtime теки).
+            q = parse_qs(urlparse(self.path).query)
+            it = self._iteration_or_400(q.get('it', [''])[0])
+            if it is None:
+                return
+            _, task = self._current_task()
+            idir = _iter_dir(task, it)
+            here = os.path.isdir(idir)
+            self._send_json({'it': it, 'stamp': _content_mtime(idir) if here else 0,
+                             'recent': recent_pages(idir) if here else []})
+            return
+        if self.path == '/api/claude-status':
+            tid, _ = self._current_task()
+            with CLAUDE_LOCK:
+                beats = dict(CLAUDE_BEATS)
+            self._send_json(claude_view(beats, time.time(), tid))
+            return
+        if self.path.startswith('/api/iteration-pages'):
+            q = parse_qs(urlparse(self.path).query)
+            it = self._iteration_or_400(q.get('it', [''])[0])
+            if it is None:
+                return
+            _, task = self._current_task()
+            idir = _iter_dir(task, it)
+            # Неіснуюча ітерація — порожньо, як було (а не 404).
+            if not os.path.isdir(idir):
+                self._send_json({'it': it, 'pages': [], 'rev': ''})
+                return
+            # ⛔ БЕЗ pages_lock. Лок створює `.pages.lock` у теці ітерації, а це
+            # піднімає її mtime — за ним автосинк вибирає робочу ітерацію, і
+            # простий перегляд тижневої ітерації робив би її «свіжою». Він же падає
+            # PermissionError на теці «лише для читання» і змушує читача чекати
+            # писаря (чи rmtree). Лок тут і не потрібен: `atomic_write_json`
+            # підміняє файл цілком, тож одне читання — узгоджений знімок, а
+            # `read_pages_rev` бере і дерево, і rev з тих самих байтів.
+            try:
+                pages, rev = pm.read_pages_rev(idir)
+            except pm.TreeError as e:     # corrupt: pages.json не розбирається
+                self._tree_error(e)
+                return
+            self._send_json({'it': it, 'pages': pages, 'rev': rev})
+            return
+        # Точне порівняння шляху без query, а не startswith: широкий префікс зловив
+        # би будь-який майбутній /shots-* і став би тихим перехопленням.
+        if self.path.split('?')[0] == '/shot':
+            self._shot()
+            return
+        if self.path.split('?')[0] == '/shot-geo':
+            self._shot_geo()
+            return
+        if self.path.split('?')[0] == '/api/comment-config':
+            self._comment_config()
+            return
+        if self.path.split('?')[0] == '/api/shots':
+            self._shots_manifest()
+            return
+        if self.path.split('?')[0] == '/api/shoot-progress':
+            self._shoot_progress()
+            return
+        if self.path.split('?')[0] == '/api/flow':
+            self._flow_get()
+            return
+        if self.path.startswith('/commented'):
+            self._commented()
+            return
+        if self.path.startswith('/comments'):
+            self._comments()
+            return
+        if self.path.startswith('/api/gitlab-status'):
+            self._gitlab_status()
+            return
+        super().do_GET()
+
+    def _commented(self):
+        """Ітерація макета з comment-layer (локально — канал internal)."""
+        q = parse_qs(urlparse(self.path).query)
+        it = q.get('it', [''])[0]
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        tid, task = self._current_task()
+        page = _pick_page(task, it, q.get('page', [''])[0])
+        if page is None:
+            self.send_error(404, 'no pages in iteration')
+            return
+        rel = pm.page_rel(page)
+        if rel and not NAME_RE.match(rel):
+            self.send_error(400, 'bad page')
+            return
+        page_file = os.path.join(_iter_dir(task, it), rel, 'index.html')
+        if not os.path.isfile(page_file):
+            self.send_error(404, 'page not found')
+            return
+        with open(page_file, encoding='utf-8') as f:
+            html = f.read()
+        base = f'http://{self.headers.get("Host", "")}/it-assets/{it}/{rel + "/" if rel else ""}'
+        html, n = re.subn(r'<head([^>]*)>', rf'<head\1><base href="{base}">',
+                          html, count=1, flags=re.I)
+        if not n:
+            html = f'<base href="{base}">' + html
+        # bare=1 — чистый макет без comment-layer (для замороженного обзору на холсте)
+        if q.get('bare', ['0'])[0] != '1':
+            origin = f'http://{self.headers.get("Host", "localhost:8765")}'
+            ch = q.get('ch', ['local'])[0]
+            # version МУСИТЬ збігатися з publish-конвенцією (iter_num: it1→"1"),
+            # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
+            # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
+            ver = pm.page_version_tag(it, page)
+            if ch == 'project':
+                # режим «Проєкт»: канал Supabase (колеги + історія, як в опублікованому).
+                # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек,
+                # а не те, чиїми очима дивляться на макет — це та сама локальна
+                # машина дизайнера. До 02.09.2026 інспектор тут був мертвий, і
+                # кнопка в смузі тихо нічого не робила (виміряно в браузері).
+                html = inject_comment_layer(html, comment_channel(task, tid),
+                                            f'{origin}/app/vendor', version=ver,
+                                            inspector=True, audiences=True,
+                                            profile=task.get('profile') or '')
+            else:
+                # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
+                local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
+                html = inject_local_comment_layer(
+                    html, f'{origin}/api/local-comments', local_key,
+                    f'{origin}/app/vendor', version=ver, audiences=True,
+                    profile=task.get('profile') or '')
+        body = html.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _task_thumb(self):
+        """Кадр картки екрана «Задачі»: останній кадр ОБРАНОЇ задачі (не поточної).
+        Id — `fullmatch`: простий `match` пропустив би хвостовий `\\n`. Тільки задачі
+        з `tasks.json`: відкрити так довільну теку диска не вийде."""
+        q = parse_qs(urlparse(self.path).query)
+        tid, ver = q.get('task', [''])[0], q.get('v', [''])[0]
+        if not NAME_RE.fullmatch(tid):
+            self.send_error(400, 'bad task')
+            return
+        task = load_tasks().get('tasks', {}).get(tid)
+        found = task_thumb_path(task) if isinstance(task, dict) else None
+        if not found:
+            self.send_error(404, 'no thumb')
+            return
+        try:
+            with open(found[0], 'rb') as f:
+                body = f.read()
+        except OSError:
+            self.send_error(404, 'no thumb')
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', 'image/webp')
+        self.send_header('Content-Length', str(len(body)))
+        # `v` — хеш байтів кадру (його кладе в URL `tasks_overview`): різні байти —
+        # різний URL, тож кеш вічний, але ⛔ лише коли `v` збігається з ПОТОЧНИМ
+        # sha: після перезйомки старий `v` отримав би нові байти під вічним кешем.
+        # Без `v` чи з чужим — `no-cache`. `private` — не для спільних проксі.
+        self.send_header('Cache-Control', 'private, max-age=31536000, immutable'
+                         if ver and ver == found[1] else 'no-cache')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _shot(self):
+        """Кадр вузла з теки ітерації. Тільки .webp, тільки всередині задачі."""
+        q = parse_qs(urlparse(self.path).query)
+        it, node = q.get('it', [''])[0], q.get('node', [''])[0]
+        if not NAME_RE.match(it) or not SHOT_RE.match(node):
+            self.send_error(400, 'bad shot')
+            return
+        _, task = self._current_task()
+        base = os.path.realpath(os.path.join(_iter_dir(task, it), 'shots'))
+        target = os.path.realpath(os.path.join(base, node + '.webp'))
+        # NAME_RE вже не пускає '/' і '..'; realpath — другий замок, бо ціна
+        # помилки тут це віддача будь-якого файла з диска
+        if not target.startswith(base + os.sep) or not os.path.isfile(target):
+            self.send_error(404, 'no shot')
+            return
+        with open(target, 'rb') as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', 'image/webp')
+        self.send_header('Content-Length', str(len(body)))
+        # Кадр НЕЗМІННИЙ під своїм ключем, тому кеш вічний. Ключ у `<img>` рахує
+        # `shotVersion` (app/flow-model.js), і несе він хеш САМИХ БАЙТІВ кадру
+        # (`sha` в манифесті) — інші дві складові ключа для цього не годяться:
+        # `stamp` це хеш ДЖЕРЕЛ (перезнім при незмінних файлах його не рухає), а
+        # `capturedAt` має точність до ХВИЛИНИ.
+        # ⚠️ Формулювання тут двічі було неправдою, і другий раз тонкою.
+        # Спершу писалось, що досить `stamp`. Потім — що `capturedAt` знімає
+        # причину, через яку тут стояв `no-store`: насправді він лише ЗВУЗИВ
+        # вікно з «назавжди» до «в межах хвилини», тобто рівно до того вікна, у
+        # яке лягає ручна перезйомка («Перезняти» → кадр битий → «Перезняти» ще
+        # раз). Причину знімає саме хеш байтів: різні байти = різний URL, і це
+        # твердження вже не залежить від годинника.
+        self.send_header('Cache-Control', 'public, max-age=31536000, immutable')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _shot_geo(self):
+        """Геометрія кадру (T-45): де на знімку лежить кожен елемент сторінки,
+        щоб піни сіли на «Огляді» туди ж, куди в живому виді. Ті самі два замки,
+        що в `_shot`: імʼя за `SHOT_RE` і realpath усередині теки кадрів."""
+        q = parse_qs(urlparse(self.path).query)
+        it, node = q.get('it', [''])[0], q.get('node', [''])[0]
+        if not NAME_RE.match(it) or not SHOT_RE.match(node):
+            self.send_error(400, 'bad geo')
+            return
+        _, task = self._current_task()
+        base = os.path.realpath(os.path.join(_iter_dir(task, it), 'shots'))
+        target = os.path.realpath(os.path.join(base, node + '.geo.json'))
+        if not target.startswith(base + os.sep) or not os.path.isfile(target):
+            self.send_error(404, 'no geo')
+            return
+        with open(target, 'rb') as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        # Як кадр: під ключем версії (`v` = sha кадру) вміст незмінний — кеш
+        # вічний. Без `v` ключ нічого не каже про вміст, і вічний кеш віддавав би
+        # стару геометрію після перезйомки.
+        self.send_header('Cache-Control',
+                         'public, max-age=31536000, immutable' if q.get('v', [''])[0] else 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _comment_config(self):
+        """Канал коментарів для оболонки — режим «полотно» comment-layer на
+        «Огляді» (T-45). Рівно той вибір, що `_commented` робить для рамки:
+        «Огляд» і живий вид мусять писати в ОДНЕ місце, інакше пін, лишений на
+        полотні, у живому виді не знайшовся б."""
+        q = parse_qs(urlparse(self.path).query)
+        ch, it = q.get('ch', ['local'])[0], q.get('it', [''])[0]
+        if ch not in ('local', 'project') or not NAME_RE.match(it):
+            self.send_error(400, 'bad comment config')
+            return
+        tid, task = self._current_task()
+        # Тег ІТЕРАЦІЇ, без сторінки: у полотні видно всі сторінки ітерації, а
+        # скоуп пінів comment-layer рахує саме за ітерацією (`iterationOf`).
+        ver = pm.page_version_tag(it, {'id': pm.IMPLICIT_ID})
+        # Особа машини — запасне імʼя автора коментаря (коли `prompt()` недоступний,
+        # як у вбудованому браузері). Лише ЛОКАЛЬНА оболонка: у сніпет рамки й
+        # публікацію імʼя не йде — ПІБ у відкритому превʼю на Vercel неприпустиме.
+        name, _ = machine_identity()
+        user = {'user': {'name': name}} if name else {}
+        if ch == 'project':
+            self._send_json({'ch': ch, 'project': comment_channel(task, tid), 'version': ver,
+                             'sbUrl': SUPABASE_URL, 'sbKey': SUPABASE_KEY, **user})
+        else:
+            # Той самий файл, що в рамки (`_local_comments_*`); `project` — лише
+            # ключ бекапу й нумерації в localStorage, як `local_key` у `_commented`.
+            self._send_json({'ch': ch, 'project': f'{tid}/local', 'version': ver,
+                             'endpoint': '/api/local-comments', **user})
+
+    def _shots_manifest(self):
+        """Манифест знімків ітерації. Немає файла — порожній, а не помилка:
+        ітерацію могли просто ще не знімати."""
+        q = parse_qs(urlparse(self.path).query)
+        it = q.get('it', [''])[0]
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        _, task = self._current_task()
+        path_ = os.path.join(_iter_dir(task, it), 'shots', 'manifest.json')
+        try:
+            with open(path_, encoding='utf-8') as f:
+                data = json.load(f)
+            # Валідний JSON, який НЕ обʼєкт (список, рядок, число), — це теж «немає
+            # манифеста». Без цієї перевірки наступний рядок кидав TypeError ПОЗА
+            # try, зʼєднання рвалось без жодної HTTP-відповіді, і метод, який
+            # обіцяє «ніколи не 500», падав саме там.
+            if not isinstance(data, dict):
+                data = {'checkedAt': None, 'shots': {}}
+        except (FileNotFoundError, json.JSONDecodeError):
+            # Тільки ці дві: «файла нема» і «файл не JSON». PermissionError та інші
+            # проблеми доступу мусять бути ГУЧНИМИ — інакше биті права виглядали б
+            # як «кадрів немає», і дизайнер шукав би причину в зʼємці.
+            data = {'checkedAt': None, 'shots': {}}
+        data['it'] = it
+        data.setdefault('shots', {})
+        self._send_json(data)
+
+    def _flow_path(self, task, it):
+        return os.path.join(_iter_dir(task, it), 'flow.json')
+
+    def _flow_get(self):
+        """Граф ітерації. Немає файла — порожньо, а не помилка: флоу ще не описували.
+        Усе інше мусить сказати про себе: мовчазне «порожньо» значило б «флоу немає»,
+        і дизайнер шукав би пропажу в інструменті, а не у файлі.
+
+        Логіка та сама, що в _shots_manifest поруч: тиша належить ЛИШЕ «файла нема»,
+        биті права й решта проблем доступу лишаються гучними. Відрізняється тільки
+        те, ЧИМ бути гучним. Там гучність = неспійманий виняток; тут у відповіді вже
+        є поле `error`, тому тека замість файла, відібрані права й валідний JSON, що
+        не обʼєкт, доходять до канваса причиною, а не обірваним зʼєднанням.
+        """
+        q = parse_qs(urlparse(self.path).query)
+        it = q.get('it', [''])[0]
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        _, task = self._current_task()
+        try:
+            with open(self._flow_path(task, it), encoding='utf-8') as f:
+                flow = json.load(f)
+        except FileNotFoundError:
+            self._send_json({'flow': None})
+            return
+        # OSError — це IsADirectoryError і PermissionError; FileNotFoundError теж
+        # OSError, тому його гілка мусить стояти ВИЩЕ за цю, інакше «файла нема»
+        # почало б виглядати помилкою. Ширше за OSError не глушимо.
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+            self._send_json({'flow': None, 'error': f'flow.json не читається: {e}'})
+            return
+        # Валідний JSON, який НЕ обʼєкт (список, рядок, число), — це не граф. Той
+        # самий урок, що дав isinstance у _shots_manifest: віддати список далі
+        # означає перекласти падіння на клієнта, далеко від причини.
+        if not isinstance(flow, dict):
+            self._send_json({'flow': None, 'error': 'flow.json не читається: '
+                             f'очікувався обʼєкт, а лежить {type(flow).__name__}'})
+            return
+        self._send_json({'flow': flow})
+
+    def _flow_save(self, payload):
+        it = payload.get('it', '')
+        flow = payload.get('flow')
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        # Тільки обʼєкт: список чи рядок ляжуть на диск і впадуть у клієнта пізніше,
+        # далеко від місця помилки.
+        if not isinstance(flow, dict):
+            self.send_error(400, 'flow must be an object')
+            return
+        _, task = self._current_task()
+        path_ = self._flow_path(task, it)
+        try:
+            # Цей писар був ПРООБРАЗОМ atomic_write_json — і сам лишався третьою
+            # копією патерну, доки не поїхав сюди. Разом із хелпером приходить
+            # те, чого власна копія не мала: збереження режиму цілі (flow.json
+            # їде колегам через copy_mockup, і 0600 їхав би з ним) і прибирання
+            # tmp навіть після Ctrl-C.
+            atomic_write_json(path_, flow)
+        except OSError as e:
+            # Теку ітерації прибрали в сусідній вкладці, відібрали права, скінчилось
+            # місце. Раніше це вилітало з обробника, і канвас бачив обірване
+            # зʼєднання — «мережа впала» замість «не зберіг, і ось чому». Саме
+            # OSError, не Exception: причина мусить лишитись гучною в тексті.
+            # Прибирання tmp тут більше не потрібне — хелпер робить його сам.
+            self._send_json({'ok': False,
+                             'error': f'не вдалося зберегти flow.json: {e}'})
+            return
+        self._send_json({'ok': True})
+
+    def _shoot(self, payload):
+        """Зняти кадри ітерації: запускає bin/shoot.mjs (Node + Playwright).
+
+        Дитина стукає назад у ЦЕЙ сервер за переліком сторінок і за самими
+        сторінками — тому передаємо власний порт, а не 8765 зі здогадки. Дедлоку
+        немає: сервер ThreadingHTTPServer.
+        """
+        it = payload.get('it', '')
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        # Ширина прогону. Відсутня — прапорця не додаємо, і типову бере сам
+        # shoot.mjs (одне місце з дефолтом, а не два розбіжні).
+        # Невалідна — 400, а НЕ тихий дефолт: мовчазна підміна дала б кадри однієї
+        # ширини під ключами іншої, тобто неправду в манифесті — і симптом
+        # найгіршого сорту, бо кадри є, вони свіжі, вони просто не ті.
+        # `bool` названо окремо, хоч діапазон його й так відсік би (`True == 1`):
+        # у Python `bool` це підклас `int`, і без цього рядка `isinstance(vp, int)`
+        # читалось би як «`vp: true` тут дозволено», а воно не ширина.
+        vp = payload.get('vp')
+        if vp is not None:
+            if isinstance(vp, bool) or not isinstance(vp, int) \
+                    or not (MIN_VP <= vp <= MAX_VP):
+                self.send_error(400, 'bad viewport')
+                return
+        tid, task = self._current_task()
+        node = _node_bin('node')
+        if not node:
+            self._send_json({'ok': False, 'error': 'node не знайдено — постав Node 22+'})
+            return
+        args = [node, os.path.join(ROOT, 'bin', 'shoot.mjs'),
+                '--dir', _iter_dir(task, it), '--it', it,
+                '--url', f'http://127.0.0.1:{self.server.server_address[1]}',
+                '--json']
+        if vp is not None:
+            args += ['--vp', str(vp)]
+        if payload.get('all'):
+            args.append('--all')
+        # Рух. Типово знімаємо з `prefers-reduced-motion: reduce` (див. shoot.mjs):
+        # інакше макет із GL чи rAF-циклом дає `stable:false` на КОЖНОМУ кадрі, і
+        # бейдж «недостовірний» стоїть вічно. `motion: true` повертає рух — коли
+        # зняти треба саме його.
+        if payload.get('motion'):
+            args.append('--motion')
+        # Перевірка свіжості (`freshen()` у канвасі) ходить ЦИМ САМИМ маршрутом,
+        # але це НЕ зʼємка: `--check` браузера не піднімає, тільки перезважує
+        # штампи. Далі вона свідомо не бере замка й не пишеться в реєстр.
+        # ⚠️ Ціна відома й прийнята: `--check` усе-таки ПЕРЕПИСУЄ
+        # `shots/manifest.json` (runCheck у bin/shoot.mjs), тож перевірка поряд із
+        # живою зʼємкою — це «останній запис виграв»: свіжий кадр може на час
+        # випасти з манифеста й піти на перезнім наступним прогоном. Запис
+        # атомарний (tmp+rename), кадри на диску цілі, стан самолікується. Обмін
+        # свідомий: мовчазна брехня «нічого не застаріло» коштувала дорожче.
+        check = bool(payload.get('check'))
+        if check:
+            args.append('--check')
+        if payload.get('only'):
+            args += ['--only', ','.join(payload['only'])]
+
+        key = (tid, it)
+        progress = ShootProgress()
+        # Запис створюємо завжди, але в РЕЄСТР кладемо лише справжню зʼємку.
+        # Коли ключ замка не знав про `--check`, перевірка свіжості під час живої
+        # зʼємки отримувала `{ok: true, already: true}` БЕЗ `report` — і канвас
+        # записував `stale: []`, тобто «нічого не застаріло» як правду. Друга
+        # вкладка бачила «Перезняти» без числа рівно тоді, коли застаріло все.
+        entry = {'proc': None, 'progress': progress, 'hard': None}
+        if not check:
+            with _SHOOTS_LOCK:
+                live = _SHOOTS.get(key)
+                if live and _shoot_alive(live):
+                    # Не черга і не помилка: друга спроба ПРИЄДНУЄТЬСЯ до наявної.
+                    # Інакше автостарт із двох вкладок підняв би другий Chromium на
+                    # ту саму теку, і два процеси писали б ті самі .webp навперейми.
+                    self._send_json({'ok': True, 'already': True,
+                                     'progress': live['progress'].snapshot()})
+                    return
+                # Заглушка ПІД ТИМ САМИМ входженням у замок, що й перевірка вище.
+                # Поки між ними лежав Popen, два запити, що розійшлися в межах
+                # fork+exec, обидва проходили перевірку. `proc` доллємо нижче.
+                _SHOOTS[key] = entry
+
+        # ГРУПА ПРОЦЕСІВ, а не subprocess.run(timeout=…). На таймауті `run` вбиває
+        # лише ПРЯМУ дитину (node), а Chromium — це ОНУК: сигнал до нього не доходить
+        # і headless-браузер лишається жити безстроково. Кожне натискання
+        # «Перезняти» на застряглій ітерації додавало б ще один браузер у памʼять
+        # машини дизайнера. Відтворено живцем на осиротілому процесі.
+        # Спершу SIGTERM групі — щоб Node встиг закрити браузер сам, — і лише потім
+        # SIGKILL (див. _arm_hard_kill).
+        tail = []
+        child = reader = watchdog = None
+        timed_out = threading.Event()
+        try:
+            try:
+                child = subprocess.Popen(args, cwd=ROOT, text=True,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         start_new_session=True)
+            except (OSError, subprocess.SubprocessError) as e:
+                # Вузьке, але реальне вікно: node міг зникнути після перевірки
+                # _node_bin. Заглушку з реєстру знімає `finally` нижче — інакше
+                # ключ лишився б зайнятим назавжди.
+                self._send_json({'ok': False,
+                                 'error': f'не вийшло запустити зʼємку: {e}'})
+                return
+            with _SHOOTS_LOCK:
+                entry['proc'] = child
+
+            def pump():
+                """Читає stderr ПОРЯДКОВО, поки дитина жива.
+
+                Не `communicate()`: він віддає все лише в кінці, тобто прогрес
+                приїхав би разом із результатом — тобто не приїхав би зовсім. І з
+                `communicate()` цей потік не вживається взагалі: обидва читали б ту
+                саму трубу.
+                """
+                for raw in child.stderr:
+                    _consume_stderr_line(raw.rstrip('\n'), progress, tail)
+
+            reader = threading.Thread(target=pump, daemon=True)
+            reader.start()
+
+            # Сторож замість `communicate(timeout=)`: убивство ГРУПИ закриває труби,
+            # тому `stdout.read()` нижче повертається сам. Chromium — ОНУК процесу
+            # node, і сигнал прямій дитині до нього не доходить.
+            def on_timeout():
+                timed_out.set()
+                # SIGKILL другим кроком: node, який не відреагував на SIGTERM,
+                # тримав би `stdout.read()` вічно, а разом з ним — і потік
+                # обробника запиту. Той самий хелпер, що й у «Зупинити».
+                with _SHOOTS_LOCK:
+                    _killpg(child, signal.SIGTERM)
+                    _arm_hard_kill(entry)
+
+            watchdog = threading.Timer(SHOOT_TIMEOUT_S, on_timeout)
+            watchdog.daemon = True
+            watchdog.start()
+            out = child.stdout.read()
+            child.wait()
+        except BaseException:
+            # Виняток дорогою — класика `RuntimeError: can't start new thread` на
+            # `reader.start()`. Раніше він летів повз прибирання: запис лишався в
+            # реєстрі НАЗАВЖДИ з `running: true`, а дитина (з Chromium-онуком)
+            # працювала без нагляду. Дитину — під ніж, решту прибере `finally`.
+            if child is not None:
+                _killpg(child, signal.SIGTERM)
+            raise
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+            with _SHOOTS_LOCK:
+                hard = entry.pop('hard', None)
+                # `is entry`, а не просто наявність ключа: перевірка свіжості свого
+                # запису в реєстр не клала й не сміє винести звідти чужий, живий.
+                if _SHOOTS.get(key) is entry:
+                    del _SHOOTS[key]
+            if hard is not None:
+                hard.cancel()
+            if reader is not None:
+                reader.join(timeout=5)
+            # ЗАВЖДИ, а не лише на `done`: дитину могли вбити, і тоді події
+            # `done` не буде ніколи, а `running` мусить згаснути.
+            progress.finish()
+
+        err = '\n'.join(tail)
+        if timed_out.is_set():
+            self._send_json({'ok': False, 'error': 'зʼємка не вклалася у 15 хвилин'})
+            return
+        if progress.stopped:
+            # Зупинив дизайнер — це не провал: кадри, що встигли лягти на диск,
+            # лишаються, і канвас має показати саме їх, а не текст помилки.
+            self._send_json({'ok': True, 'stopped': True,
+                             'progress': progress.snapshot()})
+            return
+        try:
+            report = json.loads(out or '{}')
+        except json.JSONDecodeError:
+            # Не глушимо: канвас мусить показати, що саме сказала дитина
+            report = {'raw': (out or '')[-2000:]}
+        # `ok` — це «дитина дійшла до кінця без падіння», а НЕ «усе знято»: скрипт
+        # виходить кодом 1, щойно в звіті є хоч один `failed`, навіть коли решта
+        # сторінок знялась і вже лежить на диску. Той, хто малює тост, мусить
+        # дивитись на `report.shot` і `report.failed` ОКРЕМО, інакше скаже «не знято
+        # нічого» там, де знято сім із восьми.
+        self._send_json({'ok': child.returncode == 0, 'report': report,
+                         'stderr': (err or '')[-2000:]})
+
+    def _shoot_progress(self):
+        """Стан зʼємки цієї ітерації. Немає зʼємки — `running: false`, а не 404:
+        клієнт опитує РЕГУЛЯРНО, і 404 у консолі виглядав би як поломка."""
+        q = parse_qs(urlparse(self.path).query)
+        it = q.get('it', [''])[0]
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        tid, _ = self._current_task()
+        with _SHOOTS_LOCK:
+            live = _SHOOTS.get((tid, it))
+            snap = live['progress'].snapshot() if live else None
+        self._send_json(snap or {'running': False, 'total': None, 'done': 0,
+                                 'current': None, 'frames': [], 'failed': [],
+                                 'stopped': False})
+
+    def _shoot_stop(self, payload):
+        """Зупинити зʼємку: SIGTERM ГРУПІ, а через HARD_KILL_S — SIGKILL.
+
+        Ескалація тут не менш обовʼязкова, ніж на таймауті: node, який SIGTERM
+        проігнорував, добігає цикл і тримає `child.stdout.read()` у `_shoot`, а
+        разом з ним потік обробника й запис у реєстрі — і нову зʼємку цієї
+        ітерації вже не запустити. Таймер скасовує `finally` у `_shoot`.
+        """
+        it = payload.get('it', '')
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        tid, _ = self._current_task()
+        # УСЕ під ОДНИМ входженням у замок: між читанням запису й озброєнням
+        # ескалації не сміє встрянути `finally` у `_shoot` — інакше SIGKILL-таймер
+        # лишився б без того, хто його скасує.
+        with _SHOOTS_LOCK:
+            live = _SHOOTS.get((tid, it))
+            proc = live.get('proc') if live else None
+            if proc is not None and proc.poll() is None:
+                # Прапорець ДО сигналу: інакше `_shoot` встиг би віддати відповідь
+                # про обірвану дитину як про звичайне падіння.
+                live['progress'].stopped = True
+                _killpg(proc, signal.SIGTERM)
+                _arm_hard_kill(live)
+            else:
+                proc = None
+        if proc is None:
+            # Зупиняти нічого. Це не помилка: канвас тисне «Зупинити» наосліп,
+            # і зʼємка могла добігти саме між опитуванням і натисканням. Сюди ж
+            # потрапляє заглушка (`proc: None`): ключ уже взято, а процесу ще
+            # немає — сигналити нема кому, і канвас опитує прогрес далі.
+            self._send_json({'ok': True, 'stopped': False})
+            return
+        self._send_json({'ok': True, 'stopped': True})
+
+    def _comments(self):
+        q = parse_qs(urlparse(self.path).query)
+        it = q.get('it', [''])[0]
+        channel = q.get('channel', ['internal'])[0]
+        tid, task = self._current_task()
+        project = comment_channel(task, tid, internal=(channel == 'internal'))
+        try:
+            pins = supabase_pins(project)
+            self._send_json({'project': project, 'comments': pins})
+        except (OSError, json.JSONDecodeError) as e:
+            self._send_json({'project': project, 'comments': [], 'error': str(e)})
+
+    # ---------- Локальні коментарі (фідбек Claude, НЕ в Supabase, у файлі) ----------
+    def _local_file(self, task):
+        return os.path.join(task['dir'], '.dc-local-comments.json')
+
+    def _local_comments_get(self):
+        tid, task = self._current_task()
+        f = self._local_file(task)
+        try:
+            data = json.loads(open(f, encoding='utf-8').read()) if os.path.isfile(f) else []
+        except (OSError, json.JSONDecodeError):
+            data = []
+        self._send_json({'comments': data})
+
+    def _local_comments_post(self, payload):
+        tid, task = self._current_task()
+        comments = payload.get('comments')
+        if not isinstance(comments, list):
+            self.send_error(400, 'comments must be a list')
+            return
+        atomic_write_json(self._local_file(task), comments, indent=1)
+        self._send_json({'ok': True, 'count': len(comments)})
+
+    # ---------- Пакет ТЮНЕРА (рекомендації Клоду, НЕ правки макета) ----------
+    def _tuner_file(self, task):
+        """⛔ ОКРЕМИЙ файл ПОРУЧ із `.dc-local-comments.json`, а не всередині нього.
+
+        `comment-layer` — окремий продукт зі своїм каналом і своїм форматом;
+        спільний файл означав би, що запис тюнера здатен зіпсувати чужі
+        коментарі (і навпаки), а «скинути накручене» чіпало б чуже.
+        Тека ЗАДАЧІ, як і в коментатора: пакет описує роботу над цією задачею,
+        і переживати перемикання задач у спільному місці йому нічого.
+        """
+        return os.path.join(task['dir'], '.dc-tuner.json')
+
+    @staticmethod
+    def _tuner_rev(f):
+        """Ревізія файла пакета: `mtime_ns-розмір`, або `None`, коли файла немає.
+
+        ⛔ НАВІЩО (fb-22092026-c11bff, 22.09.2026). Пакет пишуть ДВОЄ: вкладка
+        канваса (на кожен поворот ручки) і Клод (очищає, коли застосував). Вкладка
+        читає файл один раз на старті й далі пише ПОВНИЙ пакет зі своєї памʼяті,
+        тож перший же її запис після того, як Клод очистив пакет, клав назад
+        старий `ready` — і дизайнер бачив «чекає на Клода» на вже застосованих
+        правках. Ревізія дає вкладці спосіб сказати «я пишу поверх ОСЬ ЦЬОГО» і
+        почути відмову, якщо файл тим часом змінив хтось інший.
+
+        mtime_ns, а не секунди: вкладка пише кілька разів на секунду, і секундна
+        точність зливала б сусідні записи в одну ревізію.
+        """
+        try:
+            st = os.stat(f)
+        except OSError:
+            return None
+        return f'{st.st_mtime_ns}-{st.st_size}'
+
+    def _tuner_read(self, task):
+        """(пакет або None, ревізія). Побитий файл — `None`, а не 500: єдине, що
+        канвас може з ним зробити, — почати заново, і повідомляти про це
+        помилкою транспорту означало б назвати відсутність даних поломкою."""
+        f = self._tuner_file(task)
+        try:
+            data = json.loads(open(f, encoding='utf-8').read()) if os.path.isfile(f) else None
+        except (OSError, json.JSONDecodeError):
+            data = None
+        return data, self._tuner_rev(f)
+
+    def _tuner_get(self):
+        _, task = self._current_task()
+        data, rev = self._tuner_read(task)
+        self._send_json({'package': data, 'rev': rev})
+
+    def _tuner_post(self, payload):
+        """Записати пакет. Перевіряємо ФОРМУ, а не довіряємо.
+
+        ⛔ Перевірка не косметична: цей файл читає Клод в ІНШІЙ сесії й робить
+        за ним правки в коді. Пакет, у якому `elements` — рядок або `note` —
+        обʼєкт, тихо ліг би на диск і зіпсував би не інтерфейс, а РОБОТУ, яку
+        за ним зроблять. Тому те, від чого залежить сенс пакета, звіряється
+        тут, а не «якось розбереться читач».
+
+        Межа перевірки: форма контейнера (`elements` — список, кожен елемент —
+        обʼєкт із списком `edits`, `note` — рядок). ВМІСТ правок не звіряємо:
+        його формує чиста модель (`app/tuner-model.js`), у неї свої тести, і
+        друга, серверна копія знання про поля правки розійшлася б із першою.
+
+        ОЧИЩЕННЯ — `{"action": "clear"}` (і рівнозначне `{"package": null}`, яке
+        сесії пробували першим). Це крок Клода ПІСЛЯ того, як він застосував
+        пакет (fb-22092026-728266): до цього виправлення очистити можна було лише
+        вгадавши форму `{"elements": [], …}`, а `{"package": null}` відбивався
+        400 і не міняв нічого — хоча виглядав як очищення.
+
+        `base_rev` — ревізія, поверх якої пише ВКЛАДКА (`_tuner_rev`). Не збіглась
+        → 409 разом із тим, що лежить на диску, і файл НЕ чіпаємо: вкладка
+        підхоплює чужу зміну, замість мовчки її затерти. Клод `base_rev` не шле —
+        його запис безумовний, бо він і є тим «іншим», від кого вкладку береже
+        ця перевірка. У файл `base_rev` не потрапляє: це про запит, а не про пакет.
+        """
+        if not isinstance(payload, dict):
+            self.send_error(400, 'package must be an object')
+            return
+        _, task = self._current_task()
+        f = self._tuner_file(task)
+        if payload.get('action') == 'clear' or ('package' in payload and payload['package'] is None):
+            with _TUNER_LOCK:
+                try:
+                    os.remove(f)
+                except FileNotFoundError:
+                    pass
+            self._send_json({'ok': True, 'cleared': True, 'rev': None})
+            return
+        if 'action' in payload:
+            self.send_error(400, f'unknown action: {payload.get("action")!r}')
+            return
+        has_base = 'base_rev' in payload
+        base = payload.pop('base_rev', None)
+        elements = payload.get('elements')
+        if not isinstance(elements, list):
+            self.send_error(400, 'elements must be a list')
+            return
+        for el in elements:
+            if not isinstance(el, dict) or not isinstance(el.get('edits'), list):
+                self.send_error(400, 'each element must carry a list of edits')
+                return
+        if not isinstance(payload.get('note', ''), str):
+            self.send_error(400, 'note must be a string')
+            return
+        with _TUNER_LOCK:
+            if has_base:
+                cur_data, cur_rev = self._tuner_read(task)
+                if base != cur_rev:
+                    self._send_json({'error': 'conflict', 'rev': cur_rev,
+                                     'package': cur_data}, status=409)
+                    return
+            atomic_write_json(f, payload, indent=1)
+            rev = self._tuner_rev(f)
+        self._send_json({'ok': True, 'elements': len(elements), 'rev': rev})
+
+    # ---------- POST ----------
+
+    def do_POST(self):
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            payload = json.loads(self.rfile.read(length)) if length else {}
+        except RecursionError:
+            # глибоко вкладений JSON: це не ValueError, і зʼєднання рвалось без відповіді
+            self._tree_error(pm.TreeError('bad-body', 'body is nested too deeply'))
+            return
+        except (json.JSONDecodeError, ValueError):
+            self.send_error(400, 'bad payload')
+            return
+        # Валідний JSON, але не обʼєкт (`[]`, `"x"`, `5`, `null`): кожен обробник
+        # починає з `payload.get(...)` і впав би AttributeError — зʼєднання рвалось
+        # без відповіді. Одна перевірка тут, а не в кожному обробнику.
+        if not isinstance(payload, dict):
+            self._tree_error(pm.TreeError('bad-body', 'body must be a JSON object'))
+            return
+        if self.path == '/api/iteration':
+            self._new_iteration(payload)
+        elif self.path == '/api/iteration-rename':
+            self._iteration_rename(payload)
+        elif self.path == '/api/iteration-delete':
+            self._iteration_delete(payload)
+        elif self.path == '/api/publish-toggle':
+            self._publish_toggle(payload)
+        elif self.path == '/api/page-new':
+            self._page_new(payload)
+        elif self.path == '/api/page-rename':
+            self._page_rename(payload)
+        elif self.path == '/api/page-delete':
+            self._page_delete(payload)
+        elif self.path == '/api/page-reparent':
+            self._page_reparent(payload)
+        elif self.path == '/api/page-move':
+            self._page_move(payload)
+        elif self.path == '/api/page-publish-toggle':
+            self._page_publish_toggle(payload)
+        elif self.path == '/api/folder-add':
+            self._folder_add(payload)
+        elif self.path == '/api/page-group':
+            self._page_group(payload)
+        elif self.path == '/api/page-ungroup':
+            self._page_ungroup(payload)
+        elif self.path == '/api/page-kind':
+            self._page_kind(payload)
+        elif self.path == '/api/page-restore':
+            self._page_restore(payload)
+        elif self.path == '/api/claude-status':
+            self._claude_status(payload)
+        elif self.path == '/api/pages-from-iterations':
+            self._pages_from_iterations(payload)
+        elif self.path == '/api/publish':
+            self._publish(payload)
+        elif self.path == '/api/preview-password':
+            self._preview_password(payload)
+        elif self.path == '/api/teams-mute':
+            self._teams_mute(payload)
+        elif self.path == '/api/local-comments':
+            self._local_comments_post(payload)
+        elif self.path == '/api/tuner':
+            self._tuner_post(payload)
+        elif self.path == '/api/shoot':
+            self._shoot(payload)
+        elif self.path == '/api/shoot-stop':
+            self._shoot_stop(payload)
+        elif self.path == '/api/flow-save':
+            self._flow_save(payload)
+        elif self.path == '/api/gitlab-sync':
+            self._gitlab_sync(payload)
+        elif self.path == '/api/autosync':
+            self._autosync(payload)
+        elif self.path == '/api/gitlab-pull':
+            self._gitlab_pull(payload)
+        elif self.path == '/api/task-switch':
+            self._task_switch(payload)
+        elif self.path == '/api/task-new':
+            self._task_new(payload)
+        else:
+            self.send_error(404)
+
+    def _new_iteration(self, payload):
+        """Створити ітерацію КОПІЄЮ з обраної (from) — форк. Без from: порожня стартова."""
+        tid, task = self._current_task()
+        meta = load_meta(task)
+        its = meta.setdefault('iterations', [])
+        nums = [int(m.group(1)) for i in its if (m := re.match(r'^it(\d+)$', i['id']))]
+        new_id = f'it{max(nums, default=0) + 1}'
+        dst = os.path.join(task['dir'], 'iterations', new_id)
+        src_id = payload.get('from')
+        if src_id and any(i['id'] == src_id for i in its):
+            copy_mockup(os.path.join(task['dir'], 'iterations', src_id), dst)
+        else:  # немає джерела (перша ітерація) — порожній стартовий макет
+            src_id = None
+            os.makedirs(dst, exist_ok=True)
+            with open(os.path.join(dst, 'index.html'), 'w', encoding='utf-8') as f:
+                f.write('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
+                        f'<title>{task.get("title", tid)}</title></head><body>'
+                        '<h1>Нова ітерація</h1><p>Порожній макет — почни проєктувати.</p>'
+                        '</body></html>')
+        entry = _stamp_author({'id': new_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
+                               'note': str(payload.get('note', ''))[:300],
+                               'published': False})
+        if src_id:
+            entry['from'] = src_id
+        its.append(entry)
+        save_meta(task, meta)
+        g = git_autocommit(task['dir'], f'iteration {new_id}: '
+                           f'{("копія " + src_id + " · ") if src_id else ""}'
+                           f'{entry["note"] or "без примітки"}')
+        if g['sha']:
+            entry['git'] = g['sha']
+            save_meta(task, meta)
+        self._send_json({'ok': True, 'iteration': entry, 'git': g})
+
+    def _iteration_delete(self, payload):
+        """Видалити ітерацію (папку + запис). Git-коміт зберігає слід."""
+        tid, task = self._current_task()
+        iid = payload.get('id', '')
+        if not NAME_RE.match(iid):
+            self.send_error(400, 'bad id')
+            return
+        meta = load_meta(task)
+        its = meta.get('iterations', [])
+        if not any(i['id'] == iid for i in its):
+            self.send_error(404, 'iteration not found')
+            return
+        meta['iterations'] = [i for i in its if i['id'] != iid]
+        folder = os.path.join(task['dir'], 'iterations', iid)
+        if os.path.isdir(folder):
+            shutil.rmtree(folder)
+        save_meta(task, meta)
+        git_autocommit(task['dir'], f'delete iteration {iid}')
+        self._send_json({'ok': True, 'deleted': iid})
+
+    def _iteration_rename(self, payload):
+        """Перейменувати ітерацію: `label` — короткий підпис на пілюлі,
+        `note` — повна примітка (тултіп/Огляд). Потрібно для задач, де ітерації
+        це РІЗНІ СТОРІНКИ одного макета, а не версії однієї (напр. епік блогу):
+        «Іт.2» нічого не каже, «Категорія» — каже."""
+        tid, task = self._current_task()
+        iid = payload.get('id', '')
+        if not NAME_RE.match(iid):
+            self.send_error(400, 'bad id')
+            return
+        meta = load_meta(task)
+        for it in meta.get('iterations', []):
+            if it['id'] != iid:
+                continue
+            if 'label' in payload:
+                lbl = str(payload.get('label') or '').strip()[:40]
+                if lbl:
+                    it['label'] = lbl
+                else:
+                    it.pop('label', None)  # порожнє = прибрати, вернутись до «Іт.N»
+            if 'note' in payload:
+                it['note'] = str(payload.get('note') or '').strip()[:300]
+            save_meta(task, meta)
+            git_autocommit(task['dir'],
+                           f'rename iteration {iid}: {it.get("label") or it.get("note") or "—"}')
+            self._send_json({'ok': True, 'id': iid,
+                             'label': it.get('label'), 'note': it.get('note')})
+            return
+        self.send_error(404, 'iteration not found')
+
+    def _preview_password(self, payload):
+        """Задати пароль превʼю задачі з інтерфейсу (ідея 02.09.2026).
+
+        Пишемо ЛИШЕ в tasks.json — гейт у `publish/` не чіпаємо. Перепечатати
+        тут саму обгортку (як `ops/reseal_gate.py`) означало б збрехати: у
+        внутрішніх сторінках лишився б старий пароль. Новий пароль доїжджає в
+        превʼю наступною публікацією, а до того `/api/task` чесно каже `stale`.
+
+        ⚠️ Поле per-machine (tasks.json поза git): колега, що перепублікує цю
+        задачу зі своєї машини, поставить СВІЙ пароль. Відповідь це не ховає.
+        """
+        # Пароль — не той запит, який може зробити будь-яка сторінка в браузері
+        # простим `text/plain` POST (ревʼю 1.51, той самий клас, що claude-status).
+        if not _local_origin(self.headers.get('Origin')):
+            self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+            return
+        pw, err = check_preview_password(payload.get('password'))
+        if err:
+            self._send_json({'ok': False, 'error': err}, status=400)
+            return
+        cfg = load_tasks()
+        tid = cfg['current']
+        task = cfg['tasks'][tid]
+        if pw:
+            task['preview_password'] = pw
+        else:
+            task.pop('preview_password', None)
+        save_tasks(cfg)
+        now = preview_password(cfg, task)
+        self._send_json({'ok': True, 'preview_password': now,
+                         'preview_password_custom': bool(task.get('preview_password')),
+                         'preview_gate': preview_gate_state(task, now)})
+
+    def _teams_mute(self, payload):
+        """Замовчати / увімкнути Teams-сповіщення для КАНАЛУ задачі (проєкт цілком,
+        для всіх, хто його коментує). Підпис «хто» — особа машини."""
+        if not _local_origin(self.headers.get('Origin')):
+            self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+            return
+        muted = payload.get('muted')
+        if not isinstance(muted, bool):
+            self._send_json({'ok': False, 'error': 'muted must be boolean'}, status=400)
+            return
+        tid, task = self._current_task()
+        channel = comment_channel(task, tid)
+        try:
+            teams_rpc('teams_mute_set', {'p_project': channel, 'p_muted': muted,
+                                         'p_by': mute_signature()})
+            view = teams_mute_view(channel, teams_rpc('teams_mute_state', {}))
+        except (OSError, ValueError) as e:
+            self._send_json({'ok': False, 'channel': channel, 'error': str(e)[:200]}, status=502)
+            return
+        self._send_json({'ok': True, **view})
+
+    def _publish_toggle(self, payload):
+        """Позначити ітерацію видимою на превью / зняти з публікації."""
+        tid, task = self._current_task()
+        meta = load_meta(task)
+        for it in meta.get('iterations', []):
+            if it['id'] == payload.get('id'):
+                it['published'] = not it.get('published')
+                save_meta(task, meta)
+                self._send_json({'ok': True, 'id': it['id'],
+                                 'published': it['published']})
+                return
+        self.send_error(404, 'iteration not found')
+
+    # ---------- Сторінки ітерації (multi-page) ----------
+
+    # Обробники нижче, що пишуть в ІСНУЮЧУ ітерацію, читають-міняють-пишуть
+    # pages.json ПІД `pm.pages_lock` (старі — прямо, нові — через
+    # `_tree_op`/`pm.mutate`). Без цього старий обробник гнав би паралельну
+    # правку нового: обидва прочитали б той самий стан, і другий запис затер би
+    # перший. Поза цим — `_pages_from_iterations` і створення ітерації: вони
+    # пишуть у НОВУ теку, якої ще ніхто не читає, тож лока там нема.
+    # ⚠️ Лок не реентерабельний: всередині `with pm.pages_lock` не можна кликати
+    # `pm.mutate` чи інший `pages_lock` — `rename_page`/`set_published`/
+    # `add_page`/`move_page`/`reparent_page` самі лок не беруть, тож їх огортати
+    # можна. Відповіді й `git_autocommit` — ПОЗА локом: повільний клієнт чи git
+    # не мають тримати писарів. Відмова правил дерева (`pm.TreeError`) — JSON із
+    # `code` через `_tree_error`; широкого `except ValueError` тут нема, щоб не
+    # глушити чужі помилки.
+
+    def _page_new(self, payload):
+        args = self._legacy_args(payload, need_page=False)
+        if args is None:
+            return
+        task, idir, it, _ = args
+        try:
+            with pm.pages_lock(idir):
+                pages = pm.read_pages(idir)
+                pages, page = pm.add_page(idir, pages, payload.get('name') or 'Сторінка',
+                                          parent_id=payload.get('parent') or None,
+                                          kind=payload.get('kind') or 'page')
+        except pm.TreeError as e:
+            self._tree_error(e)
+            return
+        git_autocommit(task['dir'], f'page {page["id"]}: new in {it}')
+        self._send_json({'ok': True, 'page': page})
+
+    def _page_rename(self, payload):
+        args = self._legacy_args(payload)
+        if args is None:
+            return
+        task, idir, _, page = args
+        try:
+            with pm.pages_lock(idir):
+                pm.rename_page(idir, pm.read_pages(idir), page, payload.get('name') or '')
+        except pm.TreeError as e:      # busy / not-found / corrupt / правило дерева
+            self._tree_error(e)
+            return
+        git_autocommit(task['dir'], f'page {page}: rename')
+        self._send_json({'ok': True})
+
+    def _page_delete(self, payload):
+        """Видалити вузол: `mode` 'all' (за замовчуванням) — з усім піддеревом,
+        'unwrap' — діти лишаються на його місці.
+
+        Форма з `mode` — нова й вимагає `rev`; без `mode` — стара (так кличе
+        нинішня панель), і rev їй не потрібен.
+
+        Теки файлів стираємо в `after` — ПІД тим самим локом і лише після запису
+        дерева: відмова запису інакше лишала б стерті файли під старим
+        pages.json, а стирання поза локом дозволило б паралельному `page-new` з
+        тим самим slug втратити щойно створену теку."""
+        args = self._legacy_args(payload)
+        if args is None:
+            return
+        _, idir, _, page = args
+        mode = payload.get('mode') or 'all'
+        failed = []       # теки, які не вдалось стерти: дерево вже записано, це не відмова
+        r = self._tree_op(payload, lambda pages: pm.op_delete(pages, page, mode),
+                          f'page {page}: delete ({mode})',
+                          after=lambda removed: failed.extend(pm.remove_dirs(idir, removed)),
+                          need_rev='mode' in payload)
+        if r:
+            out = {'ok': True, 'rev': r['rev']}
+            if failed:
+                out['failed'] = failed
+            self._send_json(out)
+
+    def _page_reparent(self, payload):
+        args = self._legacy_args(payload)
+        if args is None:
+            return
+        _, idir, _, page = args
+        try:
+            with pm.pages_lock(idir):
+                pm.reparent_page(idir, pm.read_pages(idir), page, payload.get('parent') or None)
+        except pm.TreeError as e:      # цикл, правила, not-found, busy, corrupt
+            self._tree_error(e)
+            return
+        self._send_json({'ok': True})
+
+    def _page_move(self, payload):
+        """Переставити сторінку.
+
+        Нова форма — `{it, ids: [...], parent, index, rev}`: перенести вузли
+        (разом, у порядку дерева) під `parent` (None — корінь) на позицію `index`
+        серед дітей. Правила дерева й rev перевіряє `_tree_op`, відмова — JSON
+        із `code`.
+
+        Стара — `{it, page, index}` (позиція ПІСЛЯ переставлення) або
+        `{it, page, delta: ±1}` для «Підняти/Опустити» (fb-09092026-24e49a: форма
+        запиту — дослівно з записки): лише серед сусідів, без rev. `parent` у
+        старій формі — 400 `bad-form`: переносити під батька вона не вміє, і
+        мовчки проігнорувати його означало б виконати не те, про що просили.
+
+        `delta` рахуємо ТУТ, від порядку на диску, а не у вкладці: вкладка могла
+        показувати застарілий список (колега щойно переставив), і «на одну вище»
+        від застарілого індексу поставило б сторінку не туди. Кривий ввід — 400,
+        а не 500: так само, як решта обробників сторінок."""
+        if 'ids' in payload:
+            ids = self._ids_or_400(payload)
+            if ids is None:
+                return
+            r = self._tree_op(payload, lambda pages: (pm.op_move(
+                pages, ids, payload.get('parent') or None, payload.get('index')), None),
+                f'page {ids[0]}: move')
+            if r:
+                self._send_json({'ok': True, 'rev': r['rev']})
+            return
+        if 'parent' in payload:
+            self._tree_error(pm.TreeError(
+                'bad-form', 'parent needs the ids form: {ids, parent, index, rev}'))
+            return
+        args = self._legacy_args(payload)
+        if args is None:
+            return
+        task, idir, _, page = args
+        try:
+            with pm.pages_lock(idir):
+                pages = pm.read_pages(idir)
+                index = payload.get('index')
+                if 'delta' in payload:
+                    delta = payload.get('delta')
+                    if delta not in (-1, 1) or isinstance(delta, bool):
+                        raise ValueError('delta must be -1 or 1')
+                    _, siblings = pm.find_page(pages, page)
+                    if siblings is None:
+                        raise ValueError('page not found')
+                    index = [p['id'] for p in siblings].index(page) + delta
+                pm.move_page(idir, pages, page, index)
+        except pm.TreeError as e:      # busy / not-found / corrupt / правило дерева
+            self._tree_error(e)
+            return
+        except ValueError as e:        # кривий ввід старої форми (move_page, delta)
+            self.send_error(400, str(e))
+            return
+        git_autocommit(task['dir'], f'page {page}: move')
+        self._send_json({'ok': True})
+
+    def _page_publish_toggle(self, payload):
+        args = self._legacy_args(payload)
+        if args is None:
+            return
+        _, idir, _, page = args
+        try:
+            with pm.pages_lock(idir):
+                pages = pm.read_pages(idir)
+                cur, _ = pm.find_page(pages, page)
+                if cur is not None:
+                    pm.set_published(idir, pages, page, not cur.get('published', True))
+        except pm.TreeError as e:
+            self._tree_error(e)
+            return
+        if cur is None:
+            self._tree_error(pm.TreeError('not-found', f'page not found: {page}'))
+            return
+        self._send_json({'ok': True})
+
+    # Нові дії над деревом — через `_tree_op`: лок, rev (обовʼязковий; 409 на
+    # застарілий), правила дерева (JSON-відмова з `code`) і автокоміт в одному місці.
+
+    def _folder_add(self, payload):
+        r = self._tree_op(payload, lambda pages: pm.op_add_folder(
+            pages, payload.get('name') or '', parent=payload.get('parent') or None,
+            index=payload.get('index')), 'folder: add')
+        if r:
+            self._send_json({'ok': True, 'node': r['extra'], 'rev': r['rev']})
+
+    def _page_group(self, payload):
+        ids = self._ids_or_400(payload)
+        if ids is None:
+            return
+        r = self._tree_op(payload, lambda pages: pm.op_group(
+            pages, ids, payload.get('name') or ''), f'folder: group {len(ids)}')
+        if r:
+            self._send_json({'ok': True, 'node': r['extra'], 'rev': r['rev']})
+
+    def _page_ungroup(self, payload):
+        nid = payload.get('id', '')
+        # «Тека, а не сторінка» — правило моделі (`pm.op_ungroup`): розгрупувати
+        # сторінку значило б прибрати її з дерева, не стерши файли.
+        r = self._tree_op(payload, lambda pages: (pm.op_ungroup(pages, nid), None),
+                          f'folder {nid}: ungroup')
+        if r:
+            self._send_json({'ok': True, 'rev': r['rev']})
+
+    def _page_kind(self, payload):
+        nid, kind = payload.get('id', ''), payload.get('kind', '')
+        r = self._tree_op(payload, lambda pages: (pm.op_set_kind(pages, nid, kind), None),
+                          f'page {nid}: kind {kind}')
+        if r:
+            self._send_json({'ok': True, 'rev': r['rev']})
+
+    def _claude_status(self, payload):
+        """Серцебиття від мода pipeline-band. Час удару ставить СЕРВЕР, а не клієнт:
+        інакше будь-хто «освіжив» би статус заднім числом."""
+        # Ревʼю 1.51: будь-яка сторінка в браузері могла простим POST `text/plain`
+        # намалювати «Claude працює». Браузер ставить Origin на кросс-доменний POST.
+        if not _local_origin(self.headers.get('Origin')):
+            self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+            return
+        task, phase, status = payload.get('task'), payload.get('phase'), payload.get('status')
+        note, sess = payload.get('note', ''), payload.get('session', '')
+        ok = (isinstance(task, str) and 0 < len(task) <= 200 and phase in CLAUDE_PHASES
+              and status in CLAUDE_TTL and isinstance(note, str) and len(note) <= 200
+              and isinstance(sess, str) and len(sess) <= 200)
+        if not ok:
+            self._send_json({'ok': False, 'error': 'bad heartbeat'}, status=400)
+            return
+        with CLAUDE_LOCK:
+            CLAUDE_BEATS[sess or task] = {'task': task, 'phase': phase, 'status': status,
+                                          'note': note, 'session': sess, 'at': time.time()}
+            if len(CLAUDE_BEATS) > 50:      # старі сесії не копляться вічно
+                for k in sorted(CLAUDE_BEATS, key=lambda k: CLAUDE_BEATS[k]['at'])[:-50]:
+                    CLAUDE_BEATS.pop(k, None)
+        self._send_json({'ok': True})
+
+    def _page_restore(self, payload):
+        """«Відновити» з плашки «дерево перезаписали ззовні» (fb-01102026-71980b):
+        теки й типи з дерева, яке бачила панель, поверх того, що на диску зараз."""
+        prev = payload.get('prev')
+        r = self._tree_op(payload, lambda pages: pm.op_restore(pages, prev),
+                          'tree: restore folders')
+        if r:
+            self._send_json({'ok': True, 'restored': r['extra'], 'rev': r['rev']})
+
+    def _pages_from_iterations(self, payload):
+        """Зводить обрані itN (де ітерації використовувались як сторінки) у сторінки
+        нової ітерації. Оригінали не чіпаємо (git-історія ціла)."""
+        _, task = self._current_task()
+        meta = load_meta(task)
+        it_ids = [i for i in (payload.get('itIds') or []) if NAME_RE.match(str(i))]
+        src_its = [i for i in meta.get('iterations', []) if i['id'] in it_ids]
+        if len(src_its) < 2:
+            self.send_error(400, 'need >= 2 iterations')
+            return
+        nums = [int(m.group(1)) for i in meta['iterations']
+                if (m := re.match(r'^it(\d+)$', i['id']))]
+        new_id = f'it{max(nums, default=0) + 1}'
+        new_dir = _iter_dir(task, new_id)
+        pages = []
+        for it in src_its:
+            name = (it.get('label') or it.get('note') or it['id']).strip() or it['id']
+            pages, pg = pm.add_page(new_dir, pages, name)
+            # перенести вміст старої ітерації в теку нової сторінки (крім pages.json)
+            src_dir = _iter_dir(task, it['id'])
+            for n in os.listdir(src_dir):
+                # `.pages.lock` — службовий файл лока (див. TASK_IGNORE): у теці
+                # нової сторінки він був би порожнім сміттям, що їде колегам
+                if n in ('pages.json', 'pages.json.bak', '.pages.lock'):
+                    continue
+                s = os.path.join(src_dir, n)
+                d = os.path.join(new_dir, pg['id'], n)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(s, d)  # перезаписує seed index.html вмістом старої ітерації
+        meta['iterations'].append(_stamp_author(
+            {'id': new_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
+             'note': 'зведено зі сторінок', 'published': False}))
+        save_meta(task, meta)
+        git_autocommit(task['dir'], f'iteration {new_id}: pages from {",".join(it_ids)}')
+        self._send_json({'ok': True, 'iteration': new_id, 'pages': len(pages)})
+
+    # ---------- GitLab-синхронизация ----------
+
+    def _gitlab_status(self):
+        cfg = load_tasks()
+        tid, task = self._current_task()
+        gl = gitlab_cfg(cfg, task)
+        if not gl:
+            self._send_json({'configured': False})
+            return
+        it = parse_qs(urlparse(self.path).query).get('it', [''])[0]
+        try:
+            self._send_json(gitlab_status(task, gl, load_meta(task), it))
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_json({'configured': True, 'error': str(e)[:200]})
+
+    def _gitlab_sync(self, payload):
+        cfg = load_tasks()
+        tid, task = self._current_task()
+        gl = gitlab_cfg(cfg, task)
+        if not gl:
+            self.send_error(400, 'no gitlab configured for this task')
+            return
+        it = payload.get('it', '')
+        if not NAME_RE.match(it):
+            self.send_error(400, 'bad iteration')
+            return
+        try:
+            r = gitlab_sync(tid, task, gl, it)
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_json({'ok': False, 'error': str(e)[:300]})
+            return
+        if r.get('synced'):  # відбиток — лише коли origin реально має наш макет
+            _record_sync(task, it, r.get('sha'))
+            self._overview_sync()
+        self._send_json(r)
+
+    def _autosync(self, payload):
+        """Тихий крок автосинку для Stop-хука. Задача без GitLab-мапінгу —
+        не помилка, а нормальний стан: просто нічого не робимо."""
+        cfg = load_tasks()
+        tid, task = self._current_task()
+        gl = gitlab_cfg(cfg, task)
+        if not gl:
+            self._send_json({'ok': True, 'changed': False, 'reason': 'no-gitlab'})
+            return
+        try:
+            r = autosync(tid, task, gl)
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_json({'ok': False, 'error': str(e)[:300]})
+            return
+        if r.get('changed'):
+            self._overview_sync()
+        self._send_json(r)
+
+    def _gitlab_pull(self, payload):
+        cfg = load_tasks()
+        tid, task = self._current_task()
+        gl = gitlab_cfg(cfg, task)
+        if not gl:
+            self.send_error(400, 'no gitlab configured for this task')
+            return
+        try:
+            self._send_json(gitlab_pull(task, gl))
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_json({'ok': False, 'error': str(e)[:300]})
+
+    def _overview_sync(self):
+        """Best-effort: оновити реєстр овервью (bin/overview_push.py sync) після
+        publish/gitlab-sync. Фоново, не блокує основну дію; помилки ковтаємо."""
+        if os.environ.get('DC_NO_OVERVIEW'):
+            # ⛔ Тести й будь-який офлайн-прогін не мають писати в ПРОД-Supabase.
+            # Інцидент 03.08.2026: на командному дашборді (overview_projects)
+            # висіли рядки `fixture` (jira=TEST-1) і `demo2` — приїхали саме
+            # звідси. Прогін tests/test_serve.py тримав підмінений конфіг задач,
+            # а цей Popen успадковував оточення і пушив фікстуру в реальну базу.
+            return
+        try:
+            env = {**os.environ, 'SUPABASE_URL': SUPABASE_URL, 'SUPABASE_KEY': SUPABASE_KEY}
+            # Вивід — у той самий лог, що й у планового синку, а НЕ в /dev/null.
+            # Досі цей пуш був подвійно німим: виняток ковтав except, а те, що
+            # написав сам скрипт, ішло в нікуди. Саме так ховається клас збоїв
+            # «на дашборді старі дані, і ніхто не знає чому».
+            log = open(os.path.expanduser(
+                '~/.claude/pipeline-feedback/overview-sync.log'), 'a', encoding='utf-8')
+            subprocess.Popen(
+                ['python3', os.path.join(ROOT, 'bin', 'overview_push.py'), 'sync'],
+                env=env, stdout=log, stderr=subprocess.STDOUT)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---------- Реестр задач (интеграция dev-pipeline) ----------
+
+    def _task_switch(self, payload):
+        cfg = load_tasks()
+        tid = payload.get('id', '')
+        if tid not in cfg.get('tasks', {}):
+            self.send_error(404, 'task not found')
+            return
+        cfg['current'] = tid
+        mark_opened(cfg, tid)
+        save_tasks(cfg)
+        self._send_json({'ok': True, 'current': tid})
+
+    def _task_new(self, payload):
+        cfg = load_tasks()
+        try:
+            r = task_new(cfg, payload.get('id', ''),
+                         title=str(payload.get('title', ''))[:200],
+                         jira=str(payload.get('jira', ''))[:40],
+                         profile=payload.get('profile') or 'united',
+                         gitlab=payload.get('gitlab'))
+            self._send_json(r)
+        except ValueError as e:
+            self.send_error(400, str(e))
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_json({'ok': False, 'error': str(e)[:300]})
+
+    def _publish(self, payload):
+        """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer.
+        Затем vercel deploy (скриптом, без AI); URL сохраняется в iterations.json."""
+        tid, task = self._current_task()
+        meta = load_meta(task)
+        its = [i for i in meta.get('iterations', []) if i.get('published')]
+        if not its:
+            self.send_error(400, 'no iterations marked for publish - '
+                                 'toggle the green dot first')
+            return
+        pub = os.path.join(task['dir'], 'publish')
+        if os.path.isdir(pub):
+            shutil.rmtree(pub)
+        os.makedirs(pub)
+        # бандлы комментатора один раз
+        vend = os.path.join(pub, 'comment-layer')
+        os.makedirs(vend)
+        for b in BUNDLES:
+            shutil.copy2(os.path.join(ROOT, 'app', 'vendor', b), os.path.join(vend, b))
+        # Спільні модулі зовнішньої оболонки — статика, від сторінок не залежать,
+        # тому їдуть тут же, одразу після `rmtree` (порядок важливий: усе нове
+        # везеться ПІСЛЯ затирання publish/).
+        shell = os.path.join(pub, 'shell')
+        os.makedirs(shell)
+        for m in SHELL_MODULES:
+            shutil.copy2(os.path.join(ROOT, 'app', m), os.path.join(shell, m))
+        pw = preview_password(load_tasks(), task)
+        gate = gate_html(tid, pw)
+        # ОДИН знімок дерев на всю збірку: сторінки, спільні файли й `outline`
+        # маніфесту рахуються з нього, а не з окремих читань pages.json.
+        trees = {it['id']: iteration_pages(task, it['id']) for it in its}
+        pages = published_pages(task, its, trees)
+        # Спільні файли ітерації (assets/icons/fonts) — до циклу сторінок:
+        # сторінки посилаються на них через `../`, а цикл везе лише свої теки.
+        for it in its:
+            copy_iteration_shared(task, it['id'], os.path.join(pub, it['id']), trees[it['id']])
+        for p in pages:
+            src = os.path.join(task['dir'], 'iterations', p['it'], p['rel'])
+            dst = os.path.join(pub, p['out_rel'])
+            if p['rel']:
+                copy_mockup(src, dst)
+            else:
+                copy_root_files(src, dst)
+            page_file = os.path.join(dst, 'index.html')
+            with open(page_file, encoding='utf-8') as fh:
+                html = fh.read()
+            depth_up = '../' * (p['out_rel'].count('/') + 1)
+            html = inject_comment_layer(html, comment_channel(task, tid),
+                                        f'{depth_up}comment-layer',
+                                        version=pm.page_version_tag(p['it'], p['page']))
+            # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
+            # пряме посилання на неї минало пароль: перевірено живцем —
+            # dc-sample.vercel.app/ пароль просив, а /it4/ віддавав макет.
+            html = _inject_gate(html, gate)
+            with open(page_file, 'w', encoding='utf-8') as fh:
+                fh.write(html)
+        # Кадри — ПІСЛЯ сторінок і з тим самим `pages`: фільтр публікації
+        # рахується один раз і однаково для обох.
+        frames, frame_warnings = {}, []
+        for it in its:
+            fr, warn = publish_frames(task, it['id'], pages,
+                                      os.path.join(pub, it['id'], '_frames'))
+            frames[it['id']] = fr
+            if warn:
+                frame_warnings.append(warn)
+        publish_manifest(task, tid, its, pages, frames, pub, trees)
+        wrapper = preview_index_html(gate, pw)
+        with open(os.path.join(pub, 'index.html'), 'w', encoding='utf-8') as fh:
+            fh.write(wrapper)
+        result = {'ok': True, 'dir': pub, 'iterations': len(its),
+                  'frames': sum(len(f) for f in frames.values())}
+        # ⛔ Публікація не сміє мовчати про те, що кадри не поїхали: далі йде
+        # деплой і посилання менеджеру, а порожній «Огляд» виглядає як «дизайнер
+        # нічого не зняв».
+        if frame_warnings:
+            result['frames_warnings'] = frame_warnings
+        # Попередження їде в КОЖНІЙ відповіді публікації — і при build_only, і при
+        # ранньому виході без Node: обгортка вже зібрана кодом процесу, і дизайнер
+        # мусить побачити, що вона старіша за диск (фідбек 25.08.2026).
+        stale = server_code_staleness()
+        if stale:
+            result['code_stale'] = stale
+        if not payload.get('build_only'):
+            # Ім'я проєкту — опакове (див. _vercel_project): у публічному URL не
+            # має бути ні назви задачі, ні клієнта, ні тікета.
+            proj = _vercel_project(tid, task)
+            npx = _node_bin('npx')
+            if not npx:
+                # ⛔ Не мовчазний Errno 2: дизайнер має зрозуміти, що робити.
+                result['deploy_error'] = NODE_MISSING_HINT
+                result['deploy_blocked'] = 'no-node'
+                git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
+                self._overview_sync()
+                self._send_json(result)
+                return
+            # `--scope` — якщо прив'язка вже відома. Без нього `link` у чужому
+            # акаунті СТВОРИВ БИ проєкт із тим самим імʼям, і задача отримала б
+            # друге посилання; зі скоупом vercel відмовляє вголос (_deploy_hint).
+            scope = task.get('vercel_scope')
+            scope_args = ['--scope', scope] if scope else []
+            try:
+                subprocess.run(
+                    [npx, '--yes', 'vercel', 'link', '--yes', *scope_args,
+                     '--project', proj],
+                    cwd=pub, capture_output=True, text=True, timeout=120)
+                out = subprocess.run(
+                    [npx, '--yes', 'vercel', 'deploy', '--prod', '--yes', *scope_args],
+                    cwd=pub, capture_output=True, text=True, timeout=300)
+                if out.returncode == 0:
+                    # ⛔ URL НЕ вгадуємо (див. _deploy_urls): раніше тут було
+                    # f'https://{proj}.vercel.app' — і посилання вело на чужий сайт.
+                    urls = _deploy_urls(out.stdout, out.stderr)
+                    if not urls:
+                        result['deploy_error'] = (
+                            'деплой пройшов, але URL у виводі vercel не знайдено — '
+                            'посилання не зберігаю, щоб не вигадати неправильне')
+                    else:
+                        url = _stable_alias(urls[-1], pub, extra=urls)
+                        check = _check_published(url)
+                        # Прив'язка задача→превʼю мусить поїхати В РЕЄСТР, а не
+                        # лишитись у tasks.json (per-machine). Раніше `vercel_project`
+                        # мінтився тут, а в реєстр їхав ЛИШЕ при створенні задачі —
+                        # тобто ніколи для вже опублікованих: 03.08.2026 у 5 задач із 6
+                        # прив'язка була тільки на диску мейнтейнера, і публікація з
+                        # іншої машини видала б менеджеру друге посилання.
+                        _remember_vercel_scope(tid, task, pub)
+                        _registry_push(tid)
+                        meta['publish_url'] = url
+                        meta['published_at'] = time.strftime('%d.%m.%Y %H:%M')
+                        meta['publish_verified'] = check.get('verified', False)
+                        save_meta(task, meta)
+                        result['url'] = url
+                        result['deploy_url'] = urls[-1]
+                        warn = _preview_domain_warning(url, proj)
+                        if warn:
+                            result['domain_warning'] = warn
+                        owner = _not_task_link(task)
+                        if owner:
+                            result['not_task_link'] = owner
+                        result['verified'] = check.get('verified', False)
+                        if not check.get('verified'):
+                            result['verify_error'] = check.get('reason')
+                            if check.get('hint'):
+                                result['verify_hint'] = check['hint']
+                else:
+                    raw = (out.stderr or out.stdout)
+                    hint = _deploy_hint(raw)
+                    result['deploy_error'] = f'{hint}\n\n— вивід vercel —\n{raw[-300:]}' \
+                        if hint else raw[-400:]
+            except (OSError, subprocess.TimeoutExpired) as e:
+                result['deploy_error'] = str(e)
+            git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
+        self._overview_sync()
+        self._send_json(result)
+
+
+def make_server(port=0):
+    handler = Handler
+    # /it-assets/<it>/... — статика итераций текущей задачи
+    class Routed(handler):
+        def _send_iter_file(self, target):
+            # ВАЛІДАТОР. Без нього `Cache-Control: no-cache` (його дописує
+            # `end_headers`) означає «тягни заново ЩОРАЗУ»: кожне відкриття
+            # макета перекачувало кожен шрифт і кожну іконку з кодом 200. Для
+            # United це переверстка тексту рівно у вікні анімації входу — «весь
+            # інтерфейс трохи дьоргається» на першому вході, і в того, у кого
+            # шрифти теплі, не відтворюється взагалі: дефект виглядає як баг
+            # макета, хоч це кеш сервера.
+            #
+            # ETag із mtime_ns+розміру, і САМЕ ETag, а не `Last-Modified`:
+            # у `If-Modified-Since` секундна точність, а дизайнер править файл
+            # по кілька разів на секунду — правка в тій самій секунді читалась
+            # би як «не мінялось», і сервер віддав би застаріле. Наносекунди
+            # такої дірки не мають. `no-cache` лишається: перезвірка щоразу,
+            # але без тіла.
+            try:
+                st = os.stat(target)
+                etag = '"%x-%x"' % (st.st_mtime_ns, st.st_size)
+            except OSError:
+                etag = None
+            if etag:
+                inm = self.headers.get('If-None-Match', '')
+                if etag in [x.strip() for x in inm.split(',') if x.strip()]:
+                    self.send_response(304)
+                    self.send_header('ETag', etag)
+                    self.end_headers()
+                    return
+            with open(target, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            if etag:
+                self.send_header('ETag', etag)
+            # MIME matters: ES-module <script type=module> is refused by
+            # the browser without a JS content-type. guess_type covers
+            # .js/.css/.json/.svg/.otf/.woff2 → multi-file builds (Angular)
+            # render, not just single-file HTML mockups.
+            ctype = self.guess_type(target)
+            if isinstance(ctype, tuple):  # py<3.11 returns (type, enc)
+                ctype = ctype[0]
+            if target.endswith('.js') or target.endswith('.mjs'):
+                ctype = 'text/javascript'
+            self.send_header('Content-Type', ctype or 'application/octet-stream')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _serve_from_iteration(self, it, rel):
+            _, task = self._current_task()
+            if not task:
+                return False
+            target = os.path.realpath(os.path.join(
+                task['dir'], 'iterations', it, rel))
+            base = os.path.realpath(os.path.join(task['dir'], 'iterations'))
+            if target.startswith(base + os.sep) and os.path.isfile(target):
+                self._send_iter_file(target)
+                return True
+            return False
+
+        def _iter_from_referer(self):
+            ref = self.headers.get('Referer', '')
+            if not ref:
+                return None
+            u = urlparse(ref)
+            q = parse_qs(u.query)
+            if q.get('it'):               # /commented?it=itN
+                return q['it'][0]
+            mm = re.match(r'^/it-assets/([\w-]+)/', u.path)  # /it-assets/itN/…
+            if mm:
+                return mm.group(1)
+            return None
+
+        def do_GET(self):
+            m = re.match(r'^/it-assets/([\w-]+)/(.+)$', self.path)
+            if m:
+                if not self._serve_from_iteration(m.group(1), m.group(2).split('?')[0]):
+                    # 404 НАЗИВАЄ ПОТОЧНУ ЗАДАЧУ. Ітерації нумеруються всередині
+                    # задачі (`it1` є в кожній), тому з URL не видно, чиєї саме
+                    # ітерації просять. Коли `current` перемкнувся (наприклад,
+                    # синхронізація реєстру відкотила його — див.
+                    # `_save_registry_state` у bin/registry.py), ассети раптом
+                    # дають 404, а перелік сторінок приходить порожній: виглядає
+                    # як зламана ітерація, і дизайнер іде шукати поломку в
+                    # макеті. Один рядок перетворює загадку на факт.
+                    try:
+                        tid, task = self._current_task()
+                        who = f"{tid} ({task.get('title') or tid})"
+                    except (KeyError, OSError, ValueError):
+                        who = '—'
+                    self.send_error(
+                        404, 'iteration asset not found',
+                        f'Поточна задача — {who}, і в ній цього файлу немає. '
+                        f'Якщо очікувалась інша задача, вона перемкнулась: '
+                        f'ітерації нумеруються всередині задачі, тож {m.group(1)} '
+                        f'іншої задачі сюди не належить.')
+                return
+            # Angular builds emit some ROOT-ABSOLUTE asset URLs (leading '/'),
+            # e.g. the compliance icon service → /assets/compliance-shared-
+            # components/icons/<brand>/<Icon>.svg rendered as CSS mask-image.
+            # A leading-slash URL ignores <base href>, so it never reaches the
+            # /it-assets/<it>/ route → 404 → blank icons. Resolve it against the
+            # iteration the request came FROM (Referer) so multi-file builds
+            # render fully, not just their relative-path assets.
+            if not self.path.startswith(HANDLED_PREFIXES):
+                it = self._iter_from_referer()
+                if it and self._serve_from_iteration(
+                        it, self.path.split('?')[0].lstrip('/')):
+                    return
+            super().do_GET()
+    return ThreadingHTTPServer(('127.0.0.1', port), Routed)
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8765))
+    print(f'Design Canvas v2: http://localhost:{port}/app/')
+    make_server(port).serve_forever()

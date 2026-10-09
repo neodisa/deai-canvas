@@ -1,0 +1,1419 @@
+:root{
+  /* ПАЛІТРА ОБОЛОНКИ — шкала від кольору логотипа Deai Canvas (#969F9A, OKLCH
+     H≈162°; ступінь 400 = сам логотип). Погоджено власником 09.10.2026 у
+     прототипі, див. docs/superpowers/specs/2026-10-09-tasks-navigation-design.md,
+     розділ «Палітра». Оболонка має СВОЮ палітру; comment-layer лишається
+     з власною (окремий продукт, принцип 6) і сюди не підв'язаний. */
+  --g50:#F3F8F5;--g100:#E8EFEB;--g200:#D4DBD7;--g300:#B7C0BB;--g400:#969F9A;
+  --g450:#89928D;--g500:#7E8782;--g600:#5D6661;--g700:#3D4641;--g750:#2F3833;
+  --g800:#252E29;--g850:#1D2521;--g900:#151D19;--g950:#0D1511;
+  /* Світлий контент (сцена, картки «Огляду», діалоги) — на сходинках шкали. */
+  --bg:var(--g100);--card:#fff;--border:var(--g200);--text:var(--g900);
+  --muted:var(--g600);--accent:var(--sel-ink);
+  /* «Приподнята» глибина: поверхні оболонки на середньо-темних ступенях, де
+     тон логотипа читається (на найтемніших смуга була б колишньою синьо-сірою). */
+  --s0:#1A231E;--s1:#29332E;--s2:#323C36;--s3:#3C4741;--s4:#4B5550;
+  --line:#3C4741;--line2:#545E58;
+  --hi:#F3F8F5;--mid:#CBD3CF;--ok:#6AD09D;--open:#FBBC55;--onwhite:var(--g900);
+  /* --lo лишається для меж і декору; для ТЕКСТУ він не годиться (2.83:1 на
+     --s1). Дрібний текст бере --dim: 5.81:1 на --s1, 5.09:1 на --s2. */
+  --lo:#6E7772;--dim:#A6AFAA;
+  --on-hi:#1A231E;
+  /* Логотип у смузі. Токени, а не літерали в SVG. */
+  --logo:var(--g400);--logo-in:#fff;
+  /* МОНО-АКЦЕНТ: кнопки й активні стани — світла шавлія з темним текстом (як
+     білий прямокутник всередині логотипа), без синього. Насичена шавлія
+     відкинута: тон 162° збігається з --ok (зелений «Done»). `--sel` — заливка
+     на ТЕМНІЙ поверхні оболонки, `--on-sel` — текст на ній, `--sel-text` — акцент-
+     ТЕКСТ на темному (бейдж статусу, «відкрита зараз»), `--sel-tint*` — тінти. */
+  --sel:#E2EAE6;--sel-hover:#F2F6F4;--on-sel:#1A231E;
+  --sel-tint:rgba(226,234,230,.12);--sel-tint-2:rgba(226,234,230,.26);
+  --sel-text:#D4E2DA;
+  /* Виділення, намальоване ПОВЕРХ СВІТЛОГО контенту (сцена, кадри й картки
+     «Огляду» на --bg): світла шавлія там не видна, потрібна глибока. Той самий
+     токен — `--accent` (діалоги на білому). */
+  --sel-ink:#2F6B52;
+  --bad:#F37373;
+  /* Сітка висот. Вісім різних висот у смузі 46px — те, з чого почався аудит;
+     тепер їх три, і вони токени, а не числа в правилах. Охоронець
+     `tests/css-guards.test.mjs` не пускає число поза цією сіткою. */
+  --h-ctl:32px; --h-sm:28px; --h-xs:24px; --h-bar:46px;
+  --r:8px; --r-sm:6px; --r-lg:10px;
+  /* Ширина панелі шарів (Task 4 Плану B), токеном, бо те саме число потрібне
+     і тут (ширина `.panel`/`.panel--rail`), і у зсуві сцени/полотна нижче
+     (`body.with-panel .cv-stage`…) — двома літералами воно рано чи пізно
+     розійшлось би, як уже було з `--sel`/`--bad`/`--s4` до токенів. */
+  --panel-w:246px; --panel-rail-w:46px;
+  /* Ширина правої панелі інспектора (Task 5 Плану B), тим самим прийомом:
+     токен, бо число потрібне і `.insp` нижче, і зсуву сцени/полотна
+     (`body.with-insp …`). На відміну від лівої панелі, рейки в цієї немає —
+     вона або є цілком, або її нема в DOM зовсім (`inspectHTML` віддає `''`). */
+  --insp-w:308px;
+  /* Семантична шкала z-index замість 100/90/200/300 «на око»: порядок
+     читається з імен, і новий шар не треба вгадувати числом. */
+  --z-canvas:1; --z-panel:20; --z-widget:60; --z-bar:100;
+  --z-dd:200; --z-overlay:300; --z-toast:400;
+  --dur:170ms; --ease:cubic-bezier(.2,.8,.2,1);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);background:var(--bg)}
+/* ===== верхня панель — темна, зоновано (Напрямок A) ===== */
+.cv-bar{position:fixed;top:0;left:0;right:0;height:46px;background:var(--s1);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;
+  padding:0 12px;z-index:100;color:var(--hi)}
+.cv-bar b{font-size:14px;white-space:nowrap;color:var(--hi)}
+/* ітерації переїхали в дропдаун панелі шарів (див. .pp-itsel нижче) —
+   .cv-pills/.cv-pill тут більше немає й не потрібні */
+.cv-plus{border:1px dashed var(--line2);background:none;color:var(--mid);border-radius:8px;
+  min-width:30px;height:30px;padding:0 9px;font-size:13px;line-height:1;cursor:pointer;
+  flex:none;white-space:nowrap}
+/* контекст роботи — компактно, деталі у title */
+.cv-work{font-size:12px;color:var(--mid);white-space:nowrap;display:inline-flex;
+  align-items:center;gap:5px;cursor:default}
+/* перемикач режиму коментарів: локальні (мені) / проєкт (колеги) */
+.cv-cmode{display:inline-flex;background:var(--s2);border:1px solid var(--line);border-radius:9px;padding:2px}
+/* --- перемикач ширини макета (вьюпорт) --- */
+/* Той самий сегмент-контрол, що й режим коментарів вище, і зумисно тією самою
+   мовою: у смузі вони стоять поруч, і два різні вигляди читались би як різна
+   вага рішень. Поле своєї ширини живе ВСЕРЕДИНІ того самого контейнера — окремо
+   воно виглядало б як не пов'язане з сегментами керування. */
+.cv-vp{display:inline-flex;align-items:center;background:var(--s2);
+  border:1px solid var(--line);border-radius:9px;padding:2px;flex:none}
+/* `type=number` заради клавіатури й стрілок, але без спінерів: у 52px вони
+   з'їдають половину поля, а ширину набирають цифрами, не кліками. */
+.cv-vpw{width:54px;height:24px;flex:none;margin-left:2px;padding:0 4px;
+  font:inherit;font-size:12px;text-align:center;background:transparent;color:var(--hi);
+  border:0;border-left:1px solid var(--line);border-radius:0;appearance:textfield}
+/* Неактивний перемикач смуги (наприклад «Флоу», коли flow.json немає). Пригашення
+   дає `.cv-actions button:disabled` вище; тут знімаємо ОБІЦЯНКИ — палець і
+   підсвітку під мишею. Кнопка, що світиться під курсором і не робить нічого,
+   читається як зламана, а не як вимкнена; причину каже тултіп. */
+.cv-ghost:disabled{cursor:default}
+/* увімкнений режим-перемикач у смузі (інспектор): активний стан має читатись
+   з одного погляду, бо сам оверлей живе в iframe і кнопки там більше немає */
+.cv-ghost.on{background:var(--sel);border-color:var(--sel);color:var(--on-sel)}
+#publish{border:0;background:var(--sel);color:var(--on-sel);border-radius:8px;padding:7px 14px;
+  cursor:pointer;font:inherit;font-size:13px;font-weight:500;white-space:nowrap}
+#publish:hover{background:var(--sel-hover)}
+/* .pp-err (панель сторінок) ділить колір з .cv-err (смуга): те саме «збій
+   запиту» не потребує другого відтінку червоного — власний шрифт/відступи в
+   .pp-err нижче, поруч із рештою .pp-*. */
+.cv-err,.pp-err{color:var(--bad)}
+.cv-dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--ok);vertical-align:1px}
+.cv-toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(8px);
+  background:var(--s1);color:var(--hi);border:1px solid var(--line2);border-radius:10px;
+  padding:10px 16px;font-size:13px;box-shadow:0 16px 44px rgba(0,0,0,.5);z-index:300;
+  opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;max-width:80vw}
+.cv-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* Стійка плашка з дією (батч 1.47): на відміну від тосту не зникає сама —
+   «дерево перезаписали» чи «макет змінився» мусять дочекатись рішення людини.
+   Вище за тост, щоб тост «Відновлено» не накрив кнопки сусідньої плашки. */
+.cv-notice{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:310;
+  display:flex;gap:10px;align-items:center;max-width:80vw;
+  background:var(--s1);color:var(--hi);border:1px solid var(--line2);border-radius:10px;
+  padding:8px 10px 8px 16px;font-size:13px;box-shadow:0 16px 44px rgba(0,0,0,.5)}
+.cv-notice button{border:1px solid var(--line2);background:var(--s3);color:var(--hi);
+  font:inherit;font-size:13px;padding:6px 12px;border-radius:7px;cursor:pointer}
+.cv-notice button[data-act="dismiss"]{background:none;border-color:transparent}
+/* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
+   !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
+   специфічності; чистий режим мусить перекрити їх усі разом. */
+html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean .cv-notice,
+html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,
+html.cv-clean [data-comment-layer]{display:none!important}
+html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
+.cv-unclean{position:fixed;top:10px;right:10px;z-index:400;padding:6px 12px;border-radius:8px;
+  font:inherit;font-size:12px;cursor:pointer;color:var(--hi);background:var(--s1);border:1px solid var(--line2);
+  opacity:.55;box-shadow:0 6px 20px rgba(0,0,0,.35);transition:opacity .15s ease}
+.cv-unclean:hover,.cv-unclean:focus-visible{opacity:1}
+/* Статус Клода в зоні 1 (ідея 02.09.2026) і «змінено щойно» в рядках панелі. */
+.claude-chip{display:inline-flex;align-items:center;gap:6px;margin-left:8px;padding:3px 9px;border-radius:999px;
+  font-size:12px;white-space:nowrap;color:var(--hi);background:var(--s3);border:1px solid var(--line2);min-width:0}
+.claude-chip .lbl-claude{overflow:hidden;text-overflow:ellipsis}
+.claude-dot{width:7px;height:7px;border-radius:50%;background:var(--lo);flex:none}
+.claude-chip--working .claude-dot{background:#3fb950;animation:claude-pulse 1.6s ease-in-out infinite}
+.claude-chip--waiting .claude-dot{background:#d29922}
+.claude-chip--blocked .claude-dot{background:#f85149}
+.claude-chip--done .claude-dot{background:var(--sel)}
+@keyframes claude-pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.claude-chip--working .claude-dot{animation:none}}
+.row-recent-dot{width:6px;height:6px;border-radius:50%;background:var(--sel);flex:none;margin-left:4px}
+.cv-ctx{position:fixed;z-index:200;background:var(--s1);border:1px solid var(--line2);
+  border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:4px;min-width:190px;
+  display:flex;flex-direction:column}
+.cv-ctx button{border:0;background:none;text-align:left;font:inherit;font-size:13px;
+  padding:8px 12px;border-radius:6px;cursor:pointer;color:var(--hi)}
+.cv-ctx button:hover{background:var(--s3)}
+/* Оверлей питань канваса (`app/ask.js`) — заміна `prompt`/`confirm`/`alert`.
+   Підкладка на весь екран і шар ВИЩЕ за все, крізь що ці питання ставлять:
+   полотно, смуга (`z-index:100`), панель сторінок (`90`) і контекстні меню
+   (`200`), з яких іде перейменування й видалення. План задачі просив `60` — це
+   нижче за панель і смугу, тобто прямо проти власної вимоги «над панеллю».
+   Нижче за тост (`300`) навмисно: тост стоїть унизу й нічого не накриває.
+   Підкладка не лише затемнює — вона ЛОВИТЬ кліки, і саме в цьому сенс (див.
+   `app/ask.js`): наші питання, на відміну від `prompt()`, сторінку не спиняють.
+   `overflow:auto` — бо в повідомлення їде перелік незнятих кадрів, а він буває
+   довшим за екран. */
+.cv-ask-scrim{position:fixed;inset:0;z-index:250;background:rgba(21,29,25,.34);
+  display:flex;justify-content:center;align-items:flex-start;
+  padding:18vh 16px 24px;overflow:auto}
+.cv-ask{display:flex;flex-direction:column;gap:10px;width:520px;max-width:100%;
+  background:var(--card);border:1px solid var(--border);border-radius:8px;
+  padding:16px 18px;box-shadow:0 12px 40px rgba(0,0,0,.22)}
+/* `pre-wrap` — бо в повідомленнях справжні `\n` (три рядки про GitLab, перелік
+   кадрів); без нього вони злипаються в одне полотно тексту. */
+.cv-ask label,.cv-ask p{margin:0;font-size:13px;color:var(--g700);line-height:1.45;
+  white-space:pre-wrap;max-height:52vh;overflow:auto}
+.cv-ask input{font:inherit;font-size:14px;padding:8px 10px;min-width:0;
+  border:1px solid var(--border);border-radius:6px}
+.cv-ask-row{display:flex;justify-content:flex-end;gap:8px}
+.cv-ask button{font:inherit;font-size:13px;padding:6px 14px;border-radius:6px;
+  border:1px solid var(--border);background:var(--g50);cursor:pointer}
+.cv-ask button[data-a="ok"]{background:var(--accent);border-color:var(--accent);color:#fff}
+/* Руйнівна дія має ВИГЛЯДАТИ руйнівною: та сама кнопка, що й «Гаразд», на
+   видаленні теки читалась як звичайне підтвердження. */
+.cv-ask button[data-a="ok"].cv-ask-danger{background:#c2362e;border-color:#c2362e}
+/* Варіанти `askChoice` не мають data-a="ok", тож небезпечний варіант фарбуємо
+   за класом окремо. */
+.cv-ask button.cv-ask-danger{background:#c2362e;border-color:#c2362e;color:#fff}
+/* Перелік того, що зникне при видаленні теки (до 30 рядків + «…і ще N»). */
+.cv-ask-list{margin:0 0 10px;padding-left:18px;max-height:160px;overflow:auto;color:var(--dim);font-size:12px}
+.cv-ask button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* ⌘K палітра команд і довідка клавіш (Task 6 Плану B, `app/shell-palette.js`).
+   Класи й значення — дослівно з прототипу (`docs/proto/shell.html`, секції
+   «⌘K палітра» / «? гарячі клавіші»), КРІМ ДВОХ речей:
+     1. Позиціювання: прототипна `.scrim{position:absolute}` рахує на предка з
+        `position:relative`, якого в бойовій розкладці нема (тут усе, від
+        смуги до панелей, — `position:fixed` на весь екран, той самий вибір,
+        що вже стоїть у `.cv-ask-scrim` вище). `--z-overlay:300` — токен,
+        заведений разом з рештою z-шарів (Task 2 Плану B) і досі ніким не
+        вжитий: саме під цей оверлей він і був зарезервований.
+     2. Колір дрібного тексту: прототип фарбує підпис групи (`.pal-grp`),
+        клавішу-підказку (`.pal-it .sp`) і заголовок колонки довідки
+        (`.keysheet h6`) токеном `--lo` — тим самим, що розділ A цього файла
+        (`tests/css-guards.test.mjs`) забороняє для ТЕКСТУ: 3.87:1 на --s1,
+        нижче за AA. Тут — `--dim` (5.65:1), той самий токен, яким уже
+        пофарбовано аналогічні написи смуги (`.dd-kbd`, `.dd-head`,
+        `shell-bar.js`). Мутаційно доведено: перша чернетка копіювала
+        прототип буквально й падала на «--lo ніколи не є кольором тексту». */
+.scrim{position:fixed;inset:0;z-index:var(--z-overlay);
+  background:rgba(13,21,17,.62);display:flex;justify-content:center;
+  align-items:flex-start;padding-top:88px}
+.pal{width:min(560px,84%);background:var(--s1);border:1px solid var(--line2);
+  border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,.6);overflow:hidden;
+  display:flex;flex-direction:column;max-height:420px;
+  animation:pal var(--dur) var(--ease)}
+@keyframes pal{from{transform:translateY(-10px) scale(.985)}to{transform:none}}
+.pal-in{display:flex;align-items:center;gap:10px;padding:13px 15px;
+  border-bottom:1px solid var(--line)}
+.pal-in input{flex:1;border:0;background:none;color:var(--hi);font-size:15px}
+.pal-in input:focus{outline:none}
+.pal-in input::placeholder{color:var(--dim)}
+.pal-list{overflow:auto;padding:6px}
+.pal-grp{padding:9px 10px 4px;font-size:10.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim)}
+.pal-it{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;
+  border:0;background:none;border-radius:var(--r-sm);color:var(--hi);
+  text-align:left;cursor:pointer;font-size:13.5px}
+.pal-it .ico{flex:none;color:var(--mid)}
+.pal-it--cur{background:var(--s3)}
+.pal-it--cur .ico{color:var(--hi)}
+.pal-it--danger{color:#F79A9A}
+.pal-it--danger .ico{color:#F79A9A}
+/* Причина видима замість інлайнового `style="opacity:.5"` прототипу — той
+   самий підхід, що решта смуги (`dd-item`/`seg`): вимкнена дія позначається
+   атрибутом, а не рядком стилю, зібраним по місцю. */
+.pal-it:disabled{opacity:.5;cursor:default}
+.pal-it .sp{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap}
+.pal-none{padding:22px 14px;text-align:center;color:var(--dim);font-size:13px}
+.keysheet{width:min(560px,84%);background:var(--s1);border:1px solid var(--line2);
+  border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,.6);padding:18px 20px 20px;
+  animation:pal var(--dur) var(--ease)}
+.keysheet h3{margin:0 0 14px;font-size:15px;font-weight:600}
+.keysheet-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 26px}
+.keysheet dl{margin:0;display:grid;grid-template-columns:1fr auto;gap:7px 12px}
+.keysheet dt{font-size:12.5px;color:var(--mid)}
+.keysheet dd{margin:0;text-align:right}
+.keysheet h6{margin:0 0 8px;font-size:10.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim);font-weight:500}
+.keysheet kbd{background:var(--s3);border:1px solid var(--line2);border-radius:4px;
+  padding:2px 6px;font:inherit;font-size:11.5px;color:var(--hi)}
+/* Сцена — фіксована область під смугою, у якій лежить рамка макета. Існує рівно
+   для того, щоб рамка могла бути ВУЖЧОЮ за область: тоді навколо неї видно
+   підкладку, вона центрується, а задана ширина більша за екран дає прокрутку
+   замість обрізаного макета. До перемикача вьюпорта (01.09.2026) рамка сама була
+   `position:fixed` на всю область і обгортки не потребувала. */
+/* ⛔ Тут свідомо НЕМА `display`. Сцена ховається атрибутом `hidden` (`applyMode`),
+   а `hidden` — це лише `display:none` з таблиці браузера: будь-яке наше правило
+   `display` на цьому селекторі його переб'є, і сцена лишиться на екрані,
+   накриваючи «Огляд» світлим прямокутником. Потрібен `display:flex` — тоді
+   ОБОВ'ЯЗКОВО дописуй і `.cv-stage[hidden]{display:none}`.
+   Сторожить це живий тест C у `tests/live/viewport.test.mjs` (він міряє
+   `getComputedStyle(stage).display` у режимі «Огляд»). Рядок-страхування
+   `[hidden]{display:none}` тут стояв і прибраний свідомо: під власною мутацією
+   тест лишався зеленим, тобто охоронець не ніс ваги, а вдавав, що несе. */
+.cv-stage{position:fixed;top:46px;left:0;right:0;bottom:0;background:var(--bg);
+  overflow-x:auto;overflow-y:hidden}
+/* явна ширина, а не auto: iframe — replaced-елемент, width:auto дав би йому
+   інтринсик ~300px → макет рендериться у мобільній вузькій колонці.
+   Центруємо `margin:0 auto`, а НЕ flex-ом на сцені. Виміряно на мутації
+   (`display:flex;justify-content:center`): при ширині, більшій за сцену,
+   прокрутки не виникає ВЗАГАЛІ — `scrollWidth` лишається рівним `clientWidth`,
+   і макет ріжеться з обох боків. Стереже жива перевірка D. */
+.cv-frame{display:block;width:100%;height:100%;margin:0 auto;border:0;background:#fff}
+/* Задана ширина. Рамка мусить читатись як пристрій на столі, а не як обрізаний
+   макет, — звідси контур і тінь: без них білий макет на світлій підкладці
+   зливається, і незрозуміло, де закінчується сторінка, а де починається фон. */
+body.vp-fixed .cv-frame{width:var(--cv-vpw);
+  box-shadow:0 0 0 1px var(--border),0 10px 34px rgba(21,29,25,.13)}
+/* --- режим «Огляд»: bird-view холст (T-23) --- */
+/* `user-select:none` на все полотно — від скарги «кадри синіють, коли тягнеш».
+   Синій — це ВИДІЛЕННЯ браузера, а не наш стиль: протяг по полотну тягне справжній
+   `Range` (виміряно: `isCollapsed === false`, у тексті — підписи ребер і підказка
+   внизу), а кадр, накритий діапазоном, Chrome заливає кольором виділення. Жест
+   панорами нічого виділяти й не мусить: усе, що на полотні читають, читають зумом,
+   а текст беруть із самого макета. */
+.cv-canvas{position:fixed;top:46px;left:0;right:0;bottom:0;overflow:hidden;
+  background:var(--g200);cursor:grab;touch-action:none;
+  user-select:none;-webkit-user-select:none}
+/* Картинку кадру браузер тягне СВОЇМ жестом (native drag), і виділення до цього
+   стосунку не має: без цього кадр «відтягується» з полотна як файл. Атрибут
+   `draggable="false"` на самому `<img>` ставить `cardEl` — тут лишається стиль,
+   бо атрибут не діє на дітей, а стиль читається однаково в обох видах. */
+.cv-card img{-webkit-user-drag:none;user-drag:none}
+.cv-canvas.dragging{cursor:grabbing}
+/* Режим коментування на «Огляді» (етап 2 T-45): приціл, як у живому виді. */
+.cv-canvas.cv-commenting,.cv-canvas.cv-commenting .cv-card-body{cursor:crosshair}
+/* Без will-change: світ буває шириною десятки тисяч пікселів, а шар такого
+   розміру перевищує максимальну текстуру GPU — браузер падає на повільний шлях,
+   і пан стає гіршим саме від цієї «оптимізації». */
+/* `--hairline` — ОДНЕ джерело контр-масштабованої товщини межі для
+   `.cv-card`/`.cv-card-head`/`.cv-band` (і їхніх ховерів): раніше
+   `calc(1px / var(--cv-scale, 1))` стояв літералом у п'яти місцях, і будь-яка
+   майбутня правка (інша товщина, перейменування `--cv-scale`) майже напевно
+   зачепила б не всі. Оголошено на `.cv-world` — тому самому елементі, куди
+   `applyT()` пише `--cv-scale` inline-стилем, — і успадковується вниз до всіх
+   карток/смуг. */
+.cv-world{position:absolute;top:0;left:0;transform-origin:0 0;
+  --hairline:calc(1px / var(--cv-scale, 1))}
+/* Обводка через box-shadow замість border: усередині трансформованого світу
+   `border:1px` — межа СВІТОВОГО розміру, тобто на bird-view (масштаб буває
+   0.06) вона підпіксельна й мерехтить, а на зумі 2.5+ розпухає до кількох
+   екранних пікселів. `var(--hairline)` заздалегідь ділить товщину на масштаб
+   світу, тож після трансформації на екрані лишається рівно 1px завжди. Другий
+   шар — той самий дроп-тінь, що раніше був окремим `box-shadow`. */
+.cv-card{position:absolute;background:#fff;
+  box-shadow:0 0 0 var(--hairline) var(--border), 0 6px 22px rgba(0,0,0,.12);
+  border-radius:8px;overflow:hidden;
+  display:flex;flex-direction:column;cursor:pointer}
+.cv-card.sel{outline:3px solid var(--sel-ink);outline-offset:2px}
+.cv-card-head{height:34px;flex:0 0 34px;display:flex;align-items:center;gap:7px;
+  padding:0 12px;font-size:13px;font-weight:600;
+  background:var(--card);
+  /* Шов голови кадру — це МЕЖА ЗНИЗУ, а не рамка з чотирьох боків: тут
+     box-shadow (як у `.cv-card` вище) не годиться — `0 0 0 Npx` обвів би голову
+     звідусіль. Замість `border-bottom` — градієнтна підкладка сталої екранної
+     товщини: суцільний колір від низу шва до `var(--hairline)`, далі прозоро.
+     `background-image` лягає ПОВЕРХ кольору з `background:` вище — шорткод
+     `background` скидає лише картинку (на `none`), сам колір лишається. */
+  background-image:linear-gradient(to top, var(--border) 0 var(--hairline),
+    transparent var(--hairline));
+  white-space:nowrap;overflow:hidden;user-select:none}
+.cv-card-head .cv-dot{margin:0}
+.cv-card-head small{font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.cv-card-body{flex:1;position:relative;background:#fff}
+/* макет на холсті заморожений — «картинка», клік по картці відкриває в повний розмір */
+.cv-card-body iframe,.cv-card-body img{position:absolute;inset:0;width:100%;height:100%;border:0;
+  object-fit:cover;object-position:top center;pointer-events:none}
+.cv-badge{margin-left:6px;padding:1px 6px;border-radius:999px;font-style:normal;font-size:11px;
+  background:var(--s3);color:var(--mid)}
+.cv-badge-warn{background:rgba(251,188,85,.15);color:var(--open)}
+/* `.cv-open` теж лежить УСЕРЕДИНІ трансформованого світу, тобто `border:1px`
+   тут — той самий клас межі світового розміру, який лікує цей коміт (рамка
+   рендериться ~5-6 device-px на зумі 2.5 замість 2, і в частки пікселя на
+   bird-view, де сам бокс кнопки — 4.9×1.1 CSS px). Задача явно каже цю кнопку
+   не займати — вона масштабується разом із кадром свідомо, — тому лишається
+   залишком: свідомо названим, а не мовчазним. */
+.cv-open{margin-left:auto;flex:0 0 auto;font:inherit;font-size:11px;padding:2px 8px;
+  border:1px solid var(--line);border-radius:999px;background:var(--s3);color:var(--mid);cursor:pointer}
+.cv-open:hover{border-color:var(--sel);color:var(--hi)}
+/* Було `border-color:var(--accent)` — тепер межа не border, а контр-масштабоване
+   кільце вище: на ховері перефарбовуємо саме його, тим самим `--hairline`,
+   інакше рамка на ховері зникала б зовсім (лишався б тільки зовнішній
+   дроп-тінь). */
+.cv-card:hover{box-shadow:0 0 0 var(--hairline) var(--sel-ink),
+    0 8px 28px color-mix(in srgb,var(--sel-ink) 22%,transparent)}
+.cv-card-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:22px;background:repeating-linear-gradient(45deg,var(--g50),var(--g50) 10px,var(--g100) 10px,var(--g100) 20px)}
+/* --- флоу-вид «Огляду»: смуги сценаріїв і група «не у флоу» --- */
+/* Фон під граф, щоб було видно, де кінчається один сценарій. Ширину ставить
+   `buildFlowView` числом: `#world` абсолютний і має нульову ширину, тож
+   `width:100%` дав би невидиму смугу. */
+/* Підкладка ВИДИМА і спокійна: на 5% тіні `--sel-ink` смуги не було видно
+   зовсім — на полотні `--g200` це різниця в один-два тони, і межа сценарію читалась
+   лише по тому, що кадри стоять окремо. Тепер це біла картка з ледь шавлієвим відтінком
+   і тонкою межею; поля навколо кадрів (`BAND_PAD_*` у `canvas-geom.js`) дають ту
+   рамку, яка робить смугу навмисною, а не обведенням по габариту. */
+/* Той самий `--hairline`, що в `.cv-card`: `border:1px` тут теж межа
+   світового розміру. Друге кільце в списку — наявний внутрішній підсвіт
+   (`inset`), його не займаємо. */
+.cv-band{position:absolute;background:color-mix(in srgb,var(--sel-ink) 5.5%,transparent);
+  box-shadow:0 0 0 var(--hairline) color-mix(in srgb,var(--sel-ink) 16%,transparent),
+    inset 0 1px 0 rgba(255,255,255,.5);
+  border-radius:28px;pointer-events:none}
+/* Підпис смуги живе У СВІТІ, тобто масштабується разом із ним: на «вписати все»
+   демо-графа (0.05) 22px світу — це 1.1px екрана, тобто підпису немає. Кегль
+   рахуємо ВІД МАСШТАБУ, який `applyT` кладе в `--cv-scale`: `22px / scale` тримає
+   на екрані ті самі 22px на будь-якому зумі.
+
+   Обидві межі несущі. Стеля 260px — щоб на дрібному зумі підпис не роздувався у
+   світі без кінця (там він однаково більший за верхнє поле смуги, і чим більший,
+   тим глибше лізе на кадри); підлога 22px — щоб на 250% зумі підпис не сходив у
+   волосину світових пікселів. Між ними екранний кегль постійний.
+
+   `--cv-scale` без значення (сітковий вид, перший кадр до `applyT`) дає 1 — тобто
+   рівно ті 22px, що стояли тут раніше.
+
+   Росте підпис УНИЗ від своєї лінії, а не в обидва боки від центра поля: у центрі
+   (як стояло спершу) на дрібному зумі його верх виходив ВИЩЕ нуля світу — на 36px
+   при стелі 260px, — а вище нуля камера не дивиться зовсім, і «вписати все»
+   зрізало підпис першої смуги рівно тоді, коли він найпотрібніший. Тепер уверх він
+   не лізе ніколи, а вниз лізе на поле, під яким однаково порожньо. */
+.cv-band-title{position:absolute;
+  font-size:clamp(22px, calc(22px / var(--cv-scale, 1)), 260px);
+  font-weight:600;color:var(--g700);white-space:nowrap;
+  /* `pointer-events:none` — НЕСУЩЕ, а не гігієна. Поки підпис жив усередині
+     `.cv-band`, він мовчки успадковував це від підкладки; окремим дитям світу він
+     став пасткою: на дрібному зумі кегль у нього великий, коробка накриває верх
+     кадру, і `pointerdown` приходить у ПІДПИС — `closest('.cv-card-head')` дає
+     null, драг вузла стає панорамою, і позиція не пишеться нікуди. Зловила це
+     жива перевірка N (запас там був 1px: коробка підпису кінчалась на 199,
+     кадр починався на 200). Те саме — на підписі «не у флоу». */
+  pointer-events:none;
+  /* Підкладка в EM, а не в пікселях: кегль тут плаває з масштабом, і плашка мусить
+     плавати з ним разом. Навіщо взагалі — на дрібному зумі підпис неминуче накриває
+     верх кадрів (у світі він РОСТЕ), і на темній шапці макета простий текст читався
+     б плямою. Та сама відповідь, що на підписах ребер, лише без JS: ширину рядка
+     тут міряти не треба, бо це звичайний блок, а не SVG. */
+  background:rgba(255,255,255,.78);padding:.02em .3em;border-radius:.22em}
+/* Підпис ряду в СІТЦІ. Кегль контр-масштабований — той самий прийом, що в
+   `.cv-band-title`: на bird-view імʼя сторінки мусить лишатись читабельним,
+   інакше підпис не вирішує задачу, заради якої існує.
+
+   Росте підпис УНИЗ від своєї лінії, як `.cv-band-title`, і місце під нього дає
+   зсув усіх рядів на `ROW_TITLE_TOP` (`app/canvas-geom.js`): `#world` не має
+   відʼємних координат, і підпис, який поїхав вище нуля, «вписати все» зрізає.
+
+   СТЕЛЯ 132px і `line-height:1.2` — одна пара з `ROW_TITLE_TOP = 160`, а не два
+   смаки. Коробка рядка дорівнює `кегль × line-height` рівно, тобто 132 × 1.2 =
+   158.4 ≤ 160: підпис не вилазить зі своєї смуги й на ВЛАСНИЙ кадр не лізе. Зі
+   стелею 260, з якою це приїхало зі спеки, коробка була 306 світових px і
+   накривала 186px кадру — усю голову плюс 152px знімка (виміряно на задачі з 8
+   сторінок, її fit 0.0816). `line-height` заданий ЯВНО, бо `normal` — це метрики
+   шрифту (тут 1.177), тобто на іншій платформі стеля, порахована від них, тихо
+   перестала б сходитись.
+
+   ПІДКЛАДКИ, як у `.cv-band-title`, тут навмисно НЕМА, і це не забудькуватість.
+   Плашка там існує рівно тому, що підпис смуги СВОЮ смугу не влазить (260 × 1.177
+   = 306 проти `BAND_PAD_TOP` 200) і неминуче лягає на темну шапку макета. Тут
+   стеля цю неминучість прибрала: коробка не виходить за смугу над рядом, а смуга
+   — це зазор між рядами, де кадрів немає ніколи. Плашка захищала б від накриття,
+   якого більше не буває, тобто була б окрасою з фальшивим ЧОМУ.
+
+   `pointer-events:none` лишається НЕСУЧИМ і без накриття по вертикалі: підпис
+   тягнеться ВПРАВО через увесь зазор (`nowrap`), а на дрібному зумі коробка
+   стоїть впритул до верху кадру. `pointerdown` у підпис означає
+   `closest('.cv-card-head') === null`, тобто драг вузла стає панорамою — те саме
+   вже ловила жива перевірка N на підписі смуги, і запас там був 1px.
+
+   ШИРИНУ не обмежуємо і в габарит світу (`worldBox`) підпис не беремо. Це
+   рішення, а не недогляд: ширина підпису у СВІТІ = ширина тексту на екрані /
+   масштаб, а масштаб «вписати все» рахується з габариту світу — включити підпис
+   означало б завести цикл «ширший світ → дрібніший масштаб → ширший підпис».
+   Ціни при цьому немає: на стелі екранна ширина підпису МЕНША за його ширину при
+   22px (бо там кегль × масштаб < 22), тож за край полотна він виїде лише тоді,
+   коли імʼя сторінки не влазить у полотно навіть кеглем 22px. Тоді не поможе
+   ніщо, крім обрізання, а обрізане імʼя не вирішує задачу підпису. */
+.cv-row-title{position:absolute;
+  font-size:clamp(22px, calc(22px / var(--cv-scale, 1)), 132px);line-height:1.2;
+  font-weight:600;color:var(--g700);white-space:nowrap;pointer-events:none}
+/* `nowrap` тут не косметика: `#world` абсолютний і має нульову ширину, тож без
+   нього підпис переносить КОЖНЕ слово на свій рядок і сповзає на кадри під ним.
+
+   Кегль — той самий, що в підпису смуги: два заголовки в одному світі, з яких
+   один читається на bird-view, а другий ні, виглядають як недороблена правка, а
+   не як рішення. Росте підпис УГОРУ (`translateY(-100%)`), у порожнє місце між
+   смугами й рядком «не у флоу»: рости вниз означало б лізти на самі кадри рівно
+   на дрібному зумі, де кегль найбільший. */
+.cv-orphans-title{position:absolute;transform:translateY(-100%);pointer-events:none;
+  font-size:clamp(22px, calc(22px / var(--cv-scale, 1)), 260px);
+  font-weight:600;color:var(--muted);white-space:nowrap}
+/* Сторінка поза графом лишається на полотні, але блідішою: вона тут не зайва, а
+   просто ще не описана у флоу. */
+.cv-orphan{opacity:.72}
+/* Голова кадру у флоу-виді — ручка вузла (тіло лишається пановою поверхнею), тож
+   без цієї підказки нема як здогадатись, за що тягнути. Клас ставить
+   `buildCanvas`: у сітці `pos` не має сенсу, і ручки там немає. */
+.cv-canvas.cv-flow .cv-card-head{cursor:grab}
+/* `dragging` на холст у цьому жесті не ставиться (драг вузла — не панорама), тож
+   курсор «взяв» показуємо самою ручкою. */
+.cv-canvas.cv-flow .cv-card-head:active{cursor:grabbing}
+/* Стрілки живуть У СВІТІ, поруч із кадрами: спільний трансформ — єдине, що не дає
+   лінії відʼїхати від кадру на зумі чи пані. Ціна — товщина теж масштабувалась би,
+   тому лінію виводимо з-під масштабу `non-scaling-stroke`. `overflow:visible`:
+   підпис ребра виступає за габарит смуги, а різати його нема за що. */
+.cv-edges{position:absolute;overflow:visible;pointer-events:none}
+/* По класу, а не по голому `path`: наконечник — теж `path`, і `fill:none`
+   перетворив би його на порожній контур. */
+.cv-edges .cv-edge{fill:none;stroke:var(--muted);stroke-width:2;
+  vector-effect:non-scaling-stroke}
+/* Наконечник навпаки — суцільна заливка без обведення: це трикутник, а не лінія.
+   Розмір у нього СВІТОВИЙ, тобто на дрібному зумі він меншає разом із кадрами —
+   так і треба, бо на великому інакше вийшов би лопух на волосині. */
+.cv-edges .cv-arrow{fill:var(--muted)}
+/* Підпис стоїть на ПЛАШЦІ (`<rect>` під ним, розмір із `getBBox()`), а не в «гало»
+   з товстого обведення: обведення лишає між літерами просвіти фону, і на кадрі чи
+   на лінії підпис читається плямами. Плашка ж дає суцільний контраст на будь-якому
+   фоні — і на полотні, і на смузі, і поверх кадру. */
+.cv-edges text{fill:var(--g850);font-size:20px;font-weight:500}
+/* Заливка суцільна (не напівпрозора): напівпрозора плашка поверх кадру віддає
+   під текст той самий шум, від якого й ховається. Межа виводиться з-під масштабу
+   тим самим `non-scaling-stroke`, що й лінія ребра, — інакше на 6% зумі вона
+   зникає, а на 250% стає рамою. */
+.cv-edges .cv-edge-plate{fill:#fff;stroke:color-mix(in srgb,var(--sel-ink) 35%,transparent);stroke-width:1;
+  vector-effect:non-scaling-stroke}
+/* Перелік викинутого. У канвасі, а не у світі: він мусить читатись на будь-якому
+   зумі, бо світ їздить і масштабується, а скарга — ні. */
+.cv-flow-problems{position:absolute;right:14px;top:14px;max-width:420px;z-index:5;
+  /* Виділення тут ПОВЕРТАЄМО: полотно його не має (див. `.cv-canvas`), а текст
+     помилки — єдине, що з холста справді треба винести назовні, щоб показати
+     мейнтейнеру. Панель лежить у канвасі, отже під тим самим `none`. */
+  user-select:text;-webkit-user-select:text;
+  /* Стеля висоти й власна прокрутка. Скарг буває стільки ж, скільки вузлів, а
+     закрити панель нічим — без стелі граф із десятками скарг зникає під нею
+     цілком. `28px` — це `top:14px` і такий самий відступ від низу полотна. */
+  max-height:calc(100% - 28px);overflow-y:auto;
+  background:rgba(26,35,30,.9);color:#fff;font-size:12px;padding:10px 14px;border-radius:10px}
+.cv-flow-problems ul{margin:6px 0 0;padding-left:18px}
+/* Індикатор масштабу — у канвасі, тобто в екранних координатах: він мусить стояти
+   на місці й читатись на будь-якому зумі. Ліворуч унизу, бо центр низу зайняла
+   підказка, а правий верх — панель скарг на `flow.json`. */
+.cv-zoom{position:absolute;left:14px;bottom:14px;min-width:52px;text-align:center;
+  background:rgba(26,35,30,.82);color:#fff;font-size:12px;font-variant-numeric:tabular-nums;
+  padding:6px 10px;border-radius:20px;pointer-events:none}
+.cv-canvas-hint{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+  background:rgba(26,35,30,.82);color:#fff;font-size:12px;padding:6px 14px;
+  border-radius:20px;pointer-events:none;white-space:nowrap}
+/* --- панель шарів (ітерація + сторінки) --- */
+.pages-panel{position:fixed;top:46px;left:0;bottom:0;width:220px;z-index:90;
+  background:var(--s1);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  transition:width .12s ease}
+/* Панель зсуває СЦЕНУ, а не рамку: рамка з 01.09.2026 лежить у потоці сцени й
+   свою ширину бере від вьюпорта, тому зсув мусить прикладатись до області.
+   Ширина — токеном `--panel-w` (Task 4 Плану B): те саме число живе й у
+   `.panel` нижче (новий словник панелі), а не тут другим літералом — інакше
+   вони розійшлись би так само тихо, як `.view-more{display:none}` уже
+   розходилось у Плані A. */
+body.with-panel .cv-stage,body.with-panel .cv-canvas{left:var(--panel-w);width:calc(100% - var(--panel-w))}
+/* згорнута — рейка: лишається лише стрілка, макет майже на всю ширину */
+body.with-panel.panel-collapsed .cv-stage,
+body.with-panel.panel-collapsed .cv-canvas{left:var(--panel-rail-w);width:calc(100% - var(--panel-rail-w))}
+/* Права панель інспектора (Task 5 Плану B) звужує ту саму область СПРАВА.
+   `width`, а не `right`: `.cv-stage`/`.cv-canvas` уже мають `left`/`right`
+   з базового правила (рядок вище в файлі) — додати сюди ЩЕ й `right` разом
+   із явним `left`+`width` означало б перевизначити розмір ТРИЧІ одразу
+   (left+width проти right), а CSS у такому конфлікті («over-constrained»)
+   мовчки ІГНОРУЄ `right` і рахує розмір з `left`+`width` — тобто друге
+   правило з голим `right` тут узагалі нічого не зробило б. Тому кожна
+   комбінація «яка панель відкрита» — окремий явний `width`, а не спроба
+   скласти зсуви композицією `left`+`right`.
+   Числа: 1024 (найвужчий working-екран, який перевіряє Task 7) мінус обидві
+   панелі (246+308 чи 46+308) лишає 470/670px полотну — над межею ≥420px. */
+body.with-insp .cv-stage,body.with-insp .cv-canvas{width:calc(100% - var(--insp-w))}
+body.with-panel.with-insp .cv-stage,
+body.with-panel.with-insp .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
+body.with-panel.panel-collapsed.with-insp .cv-stage,
+body.with-panel.panel-collapsed.with-insp .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+/* `.pages-panel`/`.pp-*` нижче — розмітка старої панелі (План B Task 4 її
+   замінив на `.panel`/`.panel--rail`/`.row*`/`.shots*`, кінець файла).
+   Лишені НЕ вживаними свідомо, тим самим рядком думки, що вже стоїть для
+   старої смуги (`.cv-tasksel`, `.cv-pills` тощо, досі в цьому файлі): «мертвий
+   CSS» — окрема задача (Task 8 Плану B, «перевір грепом, а не на око»), а не
+   побічний ефект перенесення розмітки. */
+.pp-top{display:flex;align-items:center;gap:6px;padding:7px 8px}
+/* Дії над ітерацією — окремим рядом, а не в одному з дропдауном: у 220px усе
+   разом не влазило й підпис ітерації обрізався на півслові. Заодно ＋ тут
+   підписаний «ітерація» — інакше він читався як другий ＋ для сторінок. */
+.pp-itacts{display:flex;align-items:center;gap:5px;
+  padding:0 8px 8px 34px;border-bottom:1px solid var(--line)}
+/* Стан «є застарілі кадри» на кнопці «Перезняти». Окреме правило, бо .cv-mini.cv-warn
+   (смуга) на .pp-add не діє — а без нього «Перезняти (3)» виглядало б рівно так само,
+   як «Перезняти», і сигнал жив би тільки в дужках. Ті самі кольори, що в смузі. */
+.pp-add.cv-warn{background:rgba(251,188,85,.13);border-color:var(--open);color:var(--open)}
+/* Каретка згортання. Своя ширина є завжди — і в сторінок без дітей теж
+   (.pp-caret--none), інакше назви стрибали б на 14px залежно від наявності
+   станів, і список читався б як рваний. */
+.pp-caret{width:18px;height:18px;flex:none;padding:0;border:0;background:none;
+  color:inherit;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:4px;opacity:.75;cursor:pointer}
+/* Словник контролів нової оболонки. Джерело вигляду — затверджений прототип
+   `docs/proto/shell.html`; значення перенесені без змін, окрім двох речей:
+   · `--sel` / `--bad` / `--s4` заведені токенами тут, а не літералами — перший
+     перенос підставив їх числом у шести місцях;
+   · чотири правила, де прототип сам собі суперечив (обіцяв `--lo` лише для
+     меж, а ставив кольором дрібного тексту — 3.87:1, нижче AA), переведені на
+     `--dim`. Це не покращення прототипу, а виконання його ж декларації, і
+     проєктний охоронець `tests/css-guards.test.mjs` цього вимагає. */
+
+/* `#bar` — лише точка монтування; сама смуга це `.bar`, яку віддає
+   `barHTML()`. Два вузли, а не один, і клас у них РІЗНИЙ навмисно: доти
+   обидва звались `.bar`, обидва були `position:fixed`, і переповнення
+   внутрішнього ніколи не потрапляло в `scrollWidth` зовнішнього — живий
+   охоронець геометрії, націлений на `#bar`, був би зеленим назавжди
+   (виміряно: внутрішній форсований до 2197px, зовнішній лишився 1024).
+   Точка монтування несе лише тло й висоту — щоб «Завантаження…» до першого
+   рендера не блимало білим. */
+.bar-mount{position:fixed;top:0;left:0;right:0;height:var(--h-bar);
+  background:var(--s1);color:var(--mid);display:flex;align-items:center;
+  padding:0 12px;z-index:var(--z-bar)}
+/* ── смуга: три зони ───────────────────────────────────────────────────── */
+/* Позиція та сама, що була: `position:fixed` і висота 46px — від них рахують
+   свою геометрію `#stage`, `#canvas` і камера, і зміна тут поїхала б по всьому
+   полотну. Нове — грид замість flex: центр `auto`, боки `minmax(0,1fr)`, тож
+   «як дивлюсь» стоїть оптично посередині, а крошки й публікація ділять решту.
+   `container-type` стоїть НА СМУЗІ, а не на зовнішній оболонці: інструмент
+   живе у вікні, яке рідко розгорнуте на весь екран, і медіа-запит по вікну
+   брехав би — смуга мусить міряти себе. */
+.bar{position:fixed;top:0;left:0;right:0;height:var(--h-bar);
+  container-type:inline-size;
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:center;gap:10px;padding:0 10px;color:var(--hi);
+  background:var(--s1);border-bottom:1px solid var(--line);z-index:var(--z-bar)}
+/* ── контроли: одна мова на всю оболонку ───────────────────────────────── */
+.ctl{display:inline-flex;align-items:center;gap:6px;height:var(--h-ctl);
+  padding:0 9px;border:1px solid transparent;border-radius:var(--r);
+  background:none;color:var(--mid);cursor:pointer;white-space:nowrap;min-width:0;
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
+.ctl:hover{background:var(--s3);color:var(--hi)}
+.ctl[aria-expanded=true]{background:var(--s3);color:var(--hi)}
+.ctl--out{border-color:var(--line2)}
+.ctl--out:hover{border-color:var(--mid)}
+.ctl--on{background:var(--sel);border-color:var(--sel);color:var(--on-sel)}
+.ctl--on:hover{background:var(--sel-hover);color:var(--on-sel)}
+.ctl:disabled{cursor:default;opacity:.55}
+.ctl:disabled:hover{background:none;color:var(--mid)}
+.ctl .ico{flex:none;color:currentColor}
+.ctl .txt{overflow:hidden;text-overflow:ellipsis}
+.ctl--icon{width:var(--h-ctl);padding:0;justify-content:center}
+/* Логотип — кнопка входу на «Задачі». Рамка фарбується `currentColor`, тож
+   колір веде сама кнопка: спокійний сірий, на hover — яскравіший (`--hi`), на
+   активному (`ctl--on`, екран «Задачі» відкритий) — теж, але фон не акцентний, як
+   у сегмента: логотип — марка, а не перемикач режиму. Білий внутрішній
+   прямокутник (`--logo-in`) лишається білим у всіх станах. */
+.logo-btn{color:var(--logo)}
+.logo-btn:hover,.logo-btn[aria-pressed=true]{color:var(--hi)}
+.logo-btn.ctl--on{background:var(--s3);border-color:var(--line2)}
+.logo-btn.ctl--on:hover{background:var(--s3);color:var(--hi)}
+.logo-btn .logo{display:block;flex:none}
+.caret{flex:none;opacity:.7}
+/* хлібні крошки: три дропдауни одного патерну */
+.crumbs{display:flex;align-items:center;gap:2px;min-width:0}
+/* --lo дав би тут 3.87:1 на --s1 — нижче AA для 12px тексту; охоронець
+   tests/css-guards.test.mjs (розділ A) забороняє --lo як колір тексту
+   у всьому файлі, тож тут --dim, як прототип і сам собі обіцяв у шапці. */
+.crumb-sep{flex:none;color:var(--dim)}
+.crumb{max-width:260px;min-width:0}
+/* Нерухома крихта — той самий БОКС, що в `.ctl`, без його інтерактивних
+   обіцянок. Потрібна зовнішній оболонці превʼю: там назва задачі й (коли
+   ітерація одна) крихта ітерації нічого не відкривають, тож `.ctl` брехав би
+   курсором і підсвіткою. Але без БОКСА вони лишались голим `<span>` — іконка
+   впритул до тексту, висота 19px замість 32, жодних відступів. Саме це
+   власник побачив на скріншоті 02.09.2026 і назвав «некрасиво».
+   `border:1px solid transparent` — не косметика: `box-sizing:border-box`
+   глобальний, тож без рамки висота розійшлася б із `.ctl` на 2px. */
+.crumb--flat{display:inline-flex;align-items:center;gap:6px;
+  height:var(--h-ctl);padding:0 9px;border:1px solid transparent;
+  color:var(--mid);white-space:nowrap}
+
+.txt--fix{flex:none}
+.txt--soft{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.crumb .txt{font-weight:500;color:var(--hi)}
+/* Обрізання — ТІЛЬКИ крошці задачі. `max-width` сам по собі стискає лише БОКС,
+   а гліфи, що не влізли, малюються поверх сусідів: пара `overflow`+`ellipsis`
+   живе в `.ctl .txt` (:542) і в `.txt--soft`, а плоска крошка навмисно не
+   `.ctl` (v1.30.0: `.ctl` брехав би курсором і підсвіткою). Тому правило тут.
+   ⛔ НЕ вішати на `.crumb--flat .txt` загалом: тоді обріжеться «Іт.3», а
+   «тег не обрізається НІКОЛИ» — несучий інваріант крошки ітерації.
+   Повну назву несе `title` (`app/ext-bar.js`), тож прочитати обрізане можна. */
+.crumb--task .txt{max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.crumb--iter .txt--soft{max-width:112px;min-width:2.5em}
+.crumb-marks{display:inline-flex;gap:3px;flex:none}
+/* Чужа ітерація — ВИДИМА ознака, а не лише текст у title: про межу («тут
+   працювати не треба») дизайнер мусить дізнатись ДО того, як почав правити, а
+   не після. Пунктир, бо колір у смузі вже несе інші значення (превью,
+   GitLab), і ще один відтінок читався б як стан синку. */
+.crumb--foreign{border:1px dashed var(--dim)}
+.crumb--foreign .txt--soft{opacity:.75}
+.dd-item--foreign .dd-t{opacity:.85}
+.dd-item--foreign{box-shadow:inset 2px 0 0 var(--dim)}
+/* сегмент-контрол — один вигляд на всі перемикачі */
+.seg{display:inline-flex;align-items:center;background:var(--s2);
+  border:1px solid var(--line);border-radius:var(--r-lg);padding:2px;flex:none}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:var(--h-sm);
+  padding:0 10px;border:0;background:none;border-radius:7px;color:var(--mid);
+  cursor:pointer;white-space:nowrap;
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
+.seg button:hover{color:var(--hi)}
+.seg button[aria-pressed=true]{background:var(--sel);color:var(--on-sel);font-weight:500}
+.seg button:disabled{cursor:default;opacity:.5}
+.seg button:disabled:hover{color:var(--mid)}
+.seg--icons button{width:var(--h-ctl);padding:0;justify-content:center}
+.seg-div{width:1px;align-self:stretch;background:var(--line);margin:2px 2px}
+.vpw{width:56px;height:var(--h-sm);border:0;background:none;color:var(--hi);
+  text-align:center;font-size:13px;font-variant-numeric:tabular-nums;
+  appearance:textfield}
+.vpw::-webkit-outer-spin-button,.vpw::-webkit-inner-spin-button{appearance:none;margin:0}
+.vpw::placeholder{color:var(--dim)}
+.vpw:focus{outline:none;color:var(--hi)}
+/* split-кнопка публікації — головна дія, яка не зникає ніколи */
+.split{display:inline-flex;flex:none;border-radius:var(--r);overflow:hidden;
+  background:var(--sel);color:var(--on-sel)}
+.split button{border:0;background:none;color:inherit;cursor:pointer;
+  height:var(--h-ctl);display:inline-flex;align-items:center;gap:6px;
+  transition:background var(--dur) var(--ease)}
+.split .split-main{padding:0 13px;font-weight:600}
+.split .split-more{padding:0 7px;border-left:1px solid rgba(0,0,0,.16)}
+.split button:hover{background:var(--sel-hover)}
+.split--ghost{background:none;color:var(--mid);box-shadow:inset 0 0 0 1px var(--line2)}
+.split--ghost button:hover{background:var(--s3);color:var(--hi)}
+.split--ghost .split-more{border-left-color:var(--line2)}
+/* точка стану поруч з іконкою (GitLab, публікація) */
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--mid)}
+.dot--ok{background:var(--ok)} .dot--warn{background:var(--open)}
+.dot--bad{background:var(--bad)} .dot--off{background:var(--lo)}
+/* лічильник (бейдж коментатора у смузі/панелі) */
+.cnt{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;
+  flex:none;border-radius:9px;background:var(--open);color:#2A1E00;
+  font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+.ctl--on .cnt{background:var(--on-sel);color:var(--sel)}
+.cnt--team{background:var(--sel);color:var(--on-sel)}
+.cnt--zero{background:var(--s4);color:var(--dim);font-weight:500}
+/* ── дропдауни ─────────────────────────────────────────────────────────── */
+.ddhost{position:relative;display:inline-flex;min-width:0}
+.crumb-h{min-width:0}
+.crumb-h.crumb--iter{flex-shrink:3}
+.crumb-h.crumb--task{flex-shrink:1}
+.dd{position:absolute;top:calc(100% + 6px);left:0;z-index:var(--z-dd);
+  min-width:250px;max-width:340px;padding:5px;
+  background:var(--s1);border:1px solid var(--line2);border-radius:var(--r-lg);
+  box-shadow:0 18px 44px rgba(0,0,0,.55);
+  display:flex;flex-direction:column;gap:1px;
+  /* Межа висоти (fb-22092026-ca6975): абсолютний список ріс за нижній край
+     вікна, і задачі внизу списку були недосяжні — прокрутки не було. Той самий
+     прийом, що вже стоїть у палітри (`.pal-list`). 72px — смуга зверху плюс
+     зазор, щоб і нижній край списку не впирався в край вікна. */
+  max-height:calc(100vh - 72px);overflow-y:auto;overscroll-behavior:contain;
+  animation:dd var(--dur) var(--ease)}
+/* Пункти НЕ стискаються (скрин 09.10.2026, 31 задача): у flex-колонці з
+   max-height вони за замовчуванням flex-shrink:1, і замість прокрутки flex
+   стискав кожен нижче висоти тексту — назви й підписи лягали одне на одне.
+   Стереже tests/live/task-dropdown.test.mjs. */
+.dd>*{flex-shrink:0}
+.dd--right{left:auto;right:0}
+/* Навмисно ЛИШЕ transform, без opacity: headless-рендер `bin/shoot.mjs` не
+   чекає кадр анімації так, як людське око, і дропдаун приїжджав би порожнім
+   у знімку. Не «покращуй» додаванням прозорості — це стереже
+   tests/css-guards.test.mjs (розділ B). */
+@keyframes dd{from{transform:translateY(-5px)}to{transform:none}}
+.dd-note{padding:8px 10px 9px;font-size:12px;color:var(--dim);line-height:1.4}
+.dd-note b{color:var(--hi);font-weight:600}
+/* --dim замість прототипного --lo — та сама причина, що в .crumb-sep вище */
+.dd-head{padding:8px 10px 5px;font-size:11px;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--dim)}
+.dd-sep{height:1px;background:var(--line);margin:5px 0}
+.dd-item{display:flex;align-items:center;gap:9px;width:100%;
+  padding:8px 10px;min-height:var(--h-sm);border:0;background:none;
+  border-radius:var(--r-sm);color:var(--hi);text-align:left;cursor:pointer;
+  text-decoration:none;font-size:13px}
+.dd-item:hover{background:var(--s3)}
+.dd-item .ico{flex:none;color:var(--mid)}
+.dd-item:hover .ico{color:var(--hi)}
+.dd-item[aria-checked=true] .ico{color:var(--sel)}
+.dd-item--on{background:var(--s3)}
+.dd-item--on .dd-t{font-weight:600}
+.dd-item--danger{color:#F79A9A}
+.dd-item--danger:hover{background:rgba(243,115,115,.14)}
+.dd-item--danger .ico{color:#F79A9A}
+.dd-item:disabled{cursor:default;opacity:1}
+.dd-item:disabled:hover{background:none}
+/* --dim замість прототипного --lo — та сама причина, що в .crumb-sep вище */
+.dd-item:disabled .dd-t{color:var(--dim)}
+.dd-body{min-width:0;flex:1}
+.dd-t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ПРИЧИНА ВИДИМА: чому пункт вимкнений — рядком, не в title */
+.dd-why{display:block;font-size:11.5px;color:var(--open);margin-top:2px;
+  white-space:normal;line-height:1.35}
+.dd-sub{display:block;font-size:11.5px;color:var(--dim);margin-top:2px;
+  white-space:normal;line-height:1.35}
+/* Попередження в пункті, який лишається ЖИВИМ (пароль превʼю): не `.dd-why`
+   — той для вимкнених і несе `disabled`. */
+.dd-item--warn .dd-sub{color:var(--open)}
+/* --dim замість прототипного --lo — та сама причина, що в .crumb-sep вище */
+.dd-kbd{flex:none;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.dd-marks{flex:none;display:inline-flex;gap:4px;align-items:center}
+/* ── дропдаун задач: пошук, список, футер (батч 1.52, Task 5) ──────────────
+   Прокручується ЛИШЕ `.dd-list`: пошук нагорі й «Усі задачі» внизу лишаються
+   видимими при будь-якій кількості задач. `.dd>*{flex-shrink:0}` вище стосується
+   прямих дітей — список мусить стискатись (`min-height:0`), інакше він росте за
+   `max-height` дропдауна, і прокрутка переїжджає назад на весь `.dd`. А діти
+   списку, навпаки, НЕ стискаються — той самий урок, що й над `.dd>*` (скрин
+   09.10.2026: пункти лягали одне на одне). */
+.dd--tasks{overflow:hidden;min-width:280px}
+.dd--tasks>.dd-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;gap:1px}
+.dd--tasks>.dd-list>*{flex-shrink:0}
+.dd-search{display:flex;align-items:center;gap:8px;height:var(--h-sm);padding:0 10px;
+  margin-bottom:4px;border-bottom:1px solid var(--line);color:var(--mid);cursor:text}
+.dd-search input{flex:1;min-width:0;border:0;background:none;color:var(--hi);font-size:13px}
+.dd-search input:focus{outline:none}
+.dd-search input::placeholder{color:var(--dim)}
+.dd-foot{display:flex;align-items:center;gap:8px;margin-top:4px;padding-top:4px;
+  border-top:1px solid var(--line)}
+.dd-foot .dd-item{flex:1;width:auto;min-width:0}
+.dd-hint{flex:none;padding:0 6px;font-size:11px;color:var(--dim);white-space:nowrap}
+/* Активний пункт клавіатури: смужка зліва, а не лише фон — поточна задача (`--on`)
+   теж має фон, і без смужки «де я» та «куди натисне Enter» зливались би. */
+.dd-item--cur{background:var(--s3);box-shadow:inset 2px 0 0 var(--sel)}
+.dd-k{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.dd-item--missing .dd-t{color:var(--dim)}
+.dd-item--missing .dd-k{color:var(--open)}
+.dd mark{background:var(--sel-tint-2);color:inherit;
+  border-radius:2px}
+.chk{width:16px;height:16px;flex:none;border:1px solid var(--line2);
+  border-radius:4px;display:grid;place-items:center;color:transparent}
+.chk--on{background:var(--sel);border-color:var(--sel);color:var(--on-sel)}
+/* ── кнопка-іконка (ліва панель) ──────────────────────────────────────── */
+.icob{display:inline-grid;place-items:center;width:var(--h-sm);height:var(--h-sm);
+  flex:none;border:0;background:none;border-radius:var(--r-sm);
+  color:var(--mid);cursor:pointer;transition:background var(--dur) var(--ease)}
+.icob:hover{background:var(--s3);color:var(--hi)}
+.icob:disabled{cursor:default;opacity:.5}
+.icob:disabled:hover{background:none;color:var(--mid)}
+/* смуга помилки під баром — замість «смуга перетворилась на текст» */
+/* Смуга помилки МУСИТЬ мати власне позиціювання, і це не оформлення.
+   `barHTML()` віддає її сусідом `.bar` усередині `#bar`, а `#bar` — це
+   `position:fixed` стрічка рівно `--h-bar`. `.bar` у ній теж `position:fixed`
+   і з `z-index`, тобто позиційований елемент, а статичний `.errbar`
+   малюється ШАРОМ НИЖЧЕ — і повідомлення «tasks.json не читається» було
+   накрите зоною 1 смуги. Не видно було ніяк: щоб побачити, треба зламати
+   `/api/tasks`. Прожило від `d1e9861` до 02.09.2026, знайдено аудитом.
+
+   `top:var(--h-bar)` — під смугою, і свідомо ПОВЕРХ сцени: у цьому стані
+   інструмент не знає своїх задач, і закривати верх макета тут доречно —
+   робити під ним однаково нічого. Охоронець — `tests/live/shell.test.mjs`,
+   перевірка 0: вона питає браузер, що лежить у ТОЧЦІ центру смуги, бо і
+   `isVisible()`, і наявність у DOM були зелені на зламаному стані. */
+.errbar{position:fixed;top:var(--h-bar);left:0;right:0;z-index:var(--z-bar);
+  display:flex;align-items:center;gap:10px;padding:9px 12px;
+  /* Тло МУСИТЬ бути непрозорим, і це наслідок позиціювання вище: доки смуга
+     лежала (невидимо) в темній стрічці, 12% червоного по `--s1` читалось. Над
+     сценою під нею — макет клієнта, часто білий, і той самий колір дав би
+     бліде рожеве з текстом `#FFD9D9` поверх, тобто повідомлення про поломку,
+     якого не прочитати. Тому відтінок кладеться шаром НА `--s1`, а не замість
+     нього. Охоронець міряє альфу `background-color`. */
+  background:linear-gradient(0deg, rgba(243,115,115,.12), rgba(243,115,115,.12)),
+    var(--s1);
+  border-bottom:1px solid rgba(243,115,115,.35);
+  color:#FFD9D9;font-size:12.5px}
+.errbar .ico{color:var(--bad);flex:none}
+.errbar .ctl{margin-left:auto;border-color:rgba(243,115,115,.45);color:#FFD9D9}
+/* три зони смуги */
+.zone{display:flex;align-items:center;gap:6px;min-width:0}
+/* Двері в палітру — у голові зони 1, відділені рискою: вона не про «де я»,
+   і риска це й каже. Своєї колонки сітки не отримує свідомо — четверта
+   колонка збила б центрування зони 2 (див. `bar-model.js`, zone1). */
+.pal-open{display:flex;align-items:center;flex:none;
+  padding-right:6px;margin-right:2px;border-right:1px solid var(--s4)}
+.pal-open .lbl-pal{font-variant-numeric:tabular-nums;letter-spacing:.02em}
+
+.zone-2{justify-content:center}
+.zone-3{justify-content:flex-end}
+/* ── контейнерні запити смуги ─────────────────────────────────────────── */
+/* Смуга міряє СЕБЕ, а не вікно: інструмент живе у вікні, яке рідко на весь
+   екран, і медіа-запит по вікну брехав би. Типова умова — ПЕРЕД запитами:
+   у Плані A на цьому вже спіткнулись — `.view-more{display:none}` після блоку
+   з рівною специфічністю перебивало його, і на 1024 керування виглядом
+   ставало недосяжним ЗОВСІМ: `view-extra` ховався, а заміни не з'являлось. */
+/* `.shell` у бою немає — контейнером для запитів є сама `.bar` (див. вище).
+   Правило лишається для прототипу, який рендериться в рамці з `.shell`. */
+.shell{container-type:inline-size}
+.view-more{display:none}
+/* Латка до бага, знайденого живим тестом: без цього правила «⋯» лишається
+   `display:none` на БУДЬ-ЯКІЙ ширині ширшій за 1060px, і перемикач аудиторії
+   коментарів (живе ВИКЛЮЧНО в цьому дропдауні, `ddMore()` у shell-bar.js)
+   недосяжний на типовій ширині вікна — попри те, що коментар над `ddMore()`
+   обіцяє йому «повну досяжність». Специфічність (дві клас-селектора) навмисно
+   вища за `.view-more{display:none}` вище: інакше повторили б баг Плану A,
+   згаданий коментарем вище («на 1024 керування виглядом ставало недосяжним
+   ЗОВСІМ»), лише для нового контролу. */
+@container (max-width:1300px){ .lbl-gl{display:none} }
+@container (max-width:1180px){ .lbl-mode,.lbl-pal{display:none} }
+@container (max-width:1060px){
+  .view-extra{display:none}
+  .view-more{display:inline-flex}
+}
+/* ── панель шарів (Task 4 Плану B) ─────────────────────────────────────────
+   Джерело вигляду — прототип (`docs/proto/shell.html`, секція «ліва панель»).
+   Значення перенесені без змін, окрім двох речей:
+   · `position:fixed` замість прототипного `position:relative` — у прототипі
+     панель лежить flex-дитиною `.shell`, а в бою сцена й полотно вже
+     `position:fixed` (`.cv-stage`/`.cv-canvas`), і панель мусить грати за
+     тими самими правилами, інакше вони розʼїдуться геометрично;
+   · шість правил, де прототип узяв `--lo` кольором тексту чи іконки замість
+     межі/декору, переведені на `--dim` — та сама вада й те саме виправлення,
+     що вже стоїть коментарем вище для смуги (`tests/css-guards.test.mjs`,
+     розділ A, забороняє `--lo` як `color:` де завгодно, не лише в тексті).
+   Ширина — токенами `--panel-w`/`--panel-rail-w` (`:root` вище): те саме
+   число потрібне і зсуву сцени/полотна (`body.with-panel .cv-stage`…). */
+.panel{position:fixed;top:var(--h-bar);left:0;bottom:0;z-index:var(--z-panel);
+  width:var(--panel-w);
+  background:var(--s2);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;
+  transition:width var(--dur) var(--ease)}
+/* Специфічність вища за голе `.panel`, щоб `[hidden]` завжди перемагав
+   `display:flex` вище — той самий запобіжник, який `.cv-stage[hidden]`
+   (коментар над ним) уже пояснює: авторський клас інакше переб'є типову
+   поведінку браузера на будь-якій рівній специфічності. */
+.panel[hidden]{display:none}
+.panel--rail{width:var(--panel-rail-w)}
+.panel-top{display:flex;align-items:center;gap:6px;height:40px;padding:0 6px;
+  border-bottom:1px solid var(--line);flex:none}
+.panel-title{font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--dim);padding-left:4px;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Колонка, а не блок, — заради `.panel-fill` нижче: у блоковому контейнері
+   дитина не може дорости до вільної висоти, а порожнє місце під деревом мусить
+   бути САМЕ нею (клік по ньому згортає панель).
+   `> *{flex:none}` — запобіжник проти того, чим колонка небезпечна: у ній
+   діти типово СТИСКАЮТЬСЯ (`flex-shrink:1`) замість того, щоб скролитись.
+   Виміряно мутаціями (живий тест G, `tests/live/panel-click.test.mjs`):
+   прибрати `flex:none` САМЕ СОБОЮ — і нічого не змінюється, рядок тримає свої
+   28px власним вмістом (каретка й «⋯» самі по 28px, тобто min-content рядка й
+   є 28); прибрати `flex:none` І додати дітям `min-height:0` — звичну в цьому
+   файлі приправу до flex-колонок (див. `min-height:0` рядком нижче) — і
+   рядок сплющується до 16.45px, а скрол зникає. Тобто правило стереже не
+   сьогоднішній рядок, а рівно той наступний крок. */
+.panel-body{flex:1;min-height:0;overflow:auto;padding:6px 6px 10px;
+  display:flex;flex-direction:column}
+.panel-body > *{flex:none}
+/* Порожнє місце під деревом = контрол «згорнути панель» (`data-act="panel"`,
+   `shell-panel.js`). `flex:1` — щоб воно було рівно тим, що бачить око як
+   порожнє; `min-height` — щоб і при дереві на всю висоту лишалась смужка,
+   якою панель можна згорнути, і саме `--h-sm` (28px), бо заповнювач — це
+   `[data-act]`, тобто клікабельна ціль, а живий інваріант 6
+   (`tests/live/shell.test.mjs`) вимагає від таких цілей ≥28px по КОРОТКІЙ
+   стороні. При двох сторінках у фікстурі коротка сторона — ширина панелі, і
+   24px пройшли б; при дереві на всю висоту — уже висота, і охоронець упав би
+   не на дизайні, а на цій константі. Курсор каже, куди поїде край: панель
+   ліва, тож згортання — це рух на захід. Селектор із двома класами свідомо:
+   перебиває `> *{flex:none}` вище незалежно від порядку правил. */
+/* Обгортка перемальовуваної частини (крихти + дерево) лише для JS: у розкладці
+   її нема (`contents`), діти лишаються flex-елементами `.panel-body`. `flex:none`
+   повторено, бо правило вище вже не дістає їх як прямих дітей, а без нього
+   рядки сплющились би, як і описано вище. */
+.tree-body{display:contents}
+.tree-body > *{flex:none}
+.panel-body > .panel-fill{flex:1 1 auto;min-height:var(--h-sm);cursor:w-resize}
+.panel--rail .panel-body{overflow:visible;display:flex;flex-direction:column;
+  align-items:center;gap:4px;padding:6px 0}
+/* Рейка — одна велика кнопка «розгорнути»: обгортка несе `data-act="panel"`
+   (`railHTML`), а колонкою мусить бути тому, що стала між `.panel` і його
+   колишніми дітьми (`.panel-top`/`.panel-body`/`.shots` розраховують на
+   flex-колонку-предка). Курсор — дзеркальний до `.panel-fill`: край поїде на
+   схід. */
+.panel-rail{flex:1;min-height:0;display:flex;flex-direction:column;
+  cursor:e-resize}
+/* дерево сторінок */
+.row{display:flex;align-items:center;gap:6px;height:var(--h-sm);
+  padding:0 7px 0 0;border-radius:var(--r-sm);cursor:pointer;color:var(--mid);
+  transition:background var(--dur) var(--ease)}
+/* `background-color`, не шорткат: напрямні рівнів — background-image рядка,
+   а `background:` його скидає (напрямні зникали б на hover/виділенні). */
+.row:hover{background-color:var(--s3);color:var(--hi)}
+/* «Відкрита сторінка» (смужка зліва + жирний) і «вибране» (.row--multi, тло) —
+   різні знаки: інакше при множинному виборі не видно, яка з виділених відкрита. */
+.row--sel{color:var(--hi);box-shadow:inset 2px 0 0 var(--sel)}
+.row--sel .row-name{font-weight:600}
+.row--sel .row-ic{color:var(--sel)}
+.row-caret{width:var(--h-sm);height:var(--h-sm);flex:none;border:0;background:none;
+  color:var(--dim);cursor:pointer;display:grid;place-items:center;border-radius:4px}
+.row-caret:hover{color:var(--hi);background:var(--s4)}
+.row-caret--none{cursor:default;visibility:hidden}
+.row-ic{flex:none;color:var(--dim)}
+.row:hover .row-ic{color:var(--mid)}
+.row-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:13px}
+/* Куди ляже сторінка, яку тягнуть (`wirePageDrag`, app.js): лінія по краю
+   рядка, а не підсвітка всього рядка — підсвічений рядок читався б як «покладу
+   ВСЕРЕДИНУ», тобто як зміна вкладеності, а перетягування її свідомо не робить
+   (`page-order.js`). */
+.row--drop-before{box-shadow:inset 0 2px 0 var(--sel)}
+.row--drop-after{box-shadow:inset 0 -2px 0 var(--sel)}
+.row-mark{flex:none}
+.row-more{width:var(--h-sm);height:var(--h-sm);flex:none;border:0;background:none;
+  color:var(--dim);cursor:pointer;display:grid;place-items:center;border-radius:4px;
+  opacity:0}
+/* «⋯» — видима завжди на рядку, обраному клавіатурою чи миш'ю (:focus-visible),
+   не лише на ховері: дія над сторінкою мусить бути досяжна БЕЗ миші (спека
+   Task 4, п.1 — вона ж причина, чому «⋯» взагалі стоїть у рядку). */
+.row:hover .row-more,.row--sel .row-more,.row-more:focus-visible{opacity:1}
+.row-more:hover{color:var(--hi);background:var(--s4)}
+/* Відступ глибини — padding, а не margin: у полі відступу малюються напрямні
+   рівнів (фон), а margin фону не має. `--d` ставить рядок (≤7, далі бейдж). */
+.row{padding-left:calc(var(--d,0) * 14px);
+  background-image:repeating-linear-gradient(to right,transparent 0 13px,var(--line) 13px 14px);
+  background-size:calc(var(--d,0) * 14px) 100%;background-repeat:no-repeat;
+  user-select:none}
+.row--multi{background-color:color-mix(in srgb,var(--sel) 18%,var(--s2))}
+.row--multi:hover{background-color:color-mix(in srgb,var(--sel) 22%,var(--s2))}
+.row[data-kind="folder"] .row-ic{color:var(--open)}
+.row-cnt{flex:none;font-size:11px;color:var(--dim)}
+.row-deep{flex:none;font-size:10px;color:var(--dim);border:1px solid var(--line2);
+  border-radius:3px;padding:0 3px}
+/* Куди ляже: «всередину» — рамка на ВЕСЬ рядок (інакше, ніж лінія «поруч»):
+   зміна вкладеності мусить виглядати зміною вкладеності. */
+.row--in{box-shadow:inset 0 0 0 2px var(--sel)}
+.row--nope{box-shadow:inset 0 0 0 1px var(--bad)}
+.row--drag{opacity:.4}
+.panel-fill--drop{box-shadow:inset 0 2px 0 var(--sel)}
+.tree-filter{display:flex;align-items:center;gap:6px;height:var(--h-sm);margin:2px 4px 4px;
+  padding:0 0 0 8px;border:1px solid var(--line);border-radius:var(--r-sm);color:var(--dim);background:var(--s1)}
+.tree-filter:focus-within{outline:2px solid var(--sel);outline-offset:1px}
+.tree-filter input{flex:1;min-width:0;border:0;outline:0;background:none;color:var(--hi);font:inherit;
+  /* Сам <input> без цього 18px у 28px-рамці — ціль кліку менша за мінімум смуги/панелі.
+     stretch + мінус рамка (1px зверху й знизу) = рівно висота поля; правий відступ
+     переїхав з рамки в інпут, щоб він доходив до краю. */
+  align-self:stretch;margin:-1px 0;padding:0 8px 0 0}
+.tree-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:0 6px 4px;
+  font-size:11px;color:var(--dim)}
+.crumb{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb-sep{color:var(--line2)}
+/* Колір --mid (#CBD3CF на --s1 ≈ 8.6:1): дрібний 11px-текст тримаємо із запасом.
+   Ціль — 28px по короткій стороні (--h-sm), як усі контроли панелі. */
+.crumb-all{display:inline-flex;align-items:center;min-height:var(--h-sm);border:0;background:none;
+  color:var(--mid);font:inherit;cursor:pointer;padding:0 8px;border-radius:var(--r-sm)}
+.crumb-all:hover{color:var(--hi);background-color:var(--s3)}
+.drag-ghost{position:fixed;z-index:var(--z-dd);pointer-events:none;display:flex;align-items:center;gap:6px;
+  background:var(--s4);border:1px solid var(--line2);color:var(--hi);border-radius:var(--r-sm);
+  padding:4px 8px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:240px}
+.drag-ghost b{font-weight:500;background:var(--sel);color:var(--on-sel);border-radius:8px;padding:0 6px}
+.drag-tip{position:fixed;z-index:var(--z-dd);pointer-events:none;border-radius:var(--r-sm);
+  padding:4px 8px;font-size:12px;max-width:260px;background:var(--s3);color:var(--hi);border:1px solid var(--line2)}
+.drag-tip--no{color:var(--bad);border-color:var(--bad)}
+.tree-head{display:flex;align-items:center;gap:4px;padding:8px 4px 4px}
+.tree-head span{flex:1;font-size:11px;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--dim)}
+/* секція «Кадри» — єдине місце керування зʼємкою (спека Task 4, п.2):
+   стан текстом, а не лише написом на кнопці. */
+.shots{flex:none;border-top:1px solid var(--line);padding:9px 10px 10px}
+.panel--rail .shots{padding:8px 0;display:flex;justify-content:center}
+.shots-h{display:flex;align-items:baseline;gap:6px;margin-bottom:2px}
+.shots-h b{font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--dim);font-weight:500}
+/* Заголовок-контрол: той самий вигляд, що й заголовок-текст, лише клікабельний
+   (є лише коли блок МОЖНА згорнути — див. `shotsHTML`). `align-items:center`
+   перебиває `baseline` вище: шеврон — іконка, і базової лінії в неї немає. */
+.shots-h--btn{width:100%;padding:0;border:0;background:none;cursor:pointer;
+  align-items:center;justify-content:space-between;color:var(--dim);font:inherit}
+.shots-h--btn:hover b{color:var(--hi)}
+.shots-h--btn .ico{flex:none;color:currentColor}
+.shots-s{font-size:12px;color:var(--dim);margin:0 0 8px;line-height:1.35}
+.shots-s--warn{color:var(--open)}
+.shots-s--bad{color:var(--bad)}
+.shots-btn{width:100%;justify-content:center;border:1px solid var(--line2);
+  height:var(--h-sm)}
+.shots-btn.ctl--warn{border-color:rgba(251,188,85,.5);
+  background:rgba(251,188,85,.12);color:var(--open)}
+.shots-btn.ctl--warn:hover{background:rgba(251,188,85,.2);color:var(--open)}
+/* Тихий стан секції: усе свіже — блок згортається в ОДИН рядок-кнопку.
+   Виміряно 02.09.2026 у живому браузері: при повній свіжості блок казав те
+   саме чотири рази (заголовок, стан, вимкнена кнопка, причина). Виглядом
+   рядок навмисно з дерева сторінок (`.row` вище: та сама висота, той самий
+   радіус, той самий ховер), а не з `.ctl`: кнопка з межею читалась би як
+   «натисни, щоб зняти кадри», тобто як дія, якої тут робити не треба.
+   Межу `.shots` рядок лишає — вона й тримає секцію приліпленою до низу. */
+.shots--quiet{padding:6px}
+.shots-quiet{display:flex;align-items:center;gap:6px;width:100%;
+  height:var(--h-sm);padding:0 7px;border:0;border-radius:var(--r-sm);
+  background:none;color:var(--dim);font:inherit;font-size:12px;text-align:left;
+  cursor:pointer;transition:background var(--dur) var(--ease),
+  color var(--dur) var(--ease)}
+.shots-quiet:hover{background:var(--s3);color:var(--hi)}
+.shots-quiet .ico{flex:none;color:currentColor}
+.prog{height:4px;border-radius:2px;background:var(--s4);overflow:hidden;
+  margin:0 0 8px}
+.prog i{display:block;height:100%;background:var(--open);border-radius:2px;
+  transition:width 300ms var(--ease)}
+/* ── права панель: інспектор (Task 5 Плану B) ────────────────────────────
+   Джерело вигляду — прототип (`docs/proto/shell.html`, `.insp*`). Ширина —
+   токеном `--insp-w` (`:root` вище), той самий прийом, що `--panel-w`.
+   `z-index:var(--z-panel)` — той САМИЙ шар, що ліва панель шарів: обидві
+   стоять по краях і одна одну ніколи не перекривають, тож ділити з нею
+   рівень — не помилка, а точна відповідність «панель оболонки». */
+.insp{position:fixed;top:var(--h-bar);right:0;bottom:0;z-index:var(--z-panel);
+  width:var(--insp-w);
+  background:var(--s2);border-left:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0}
+/* Специфічність вища за голе `.insp`, той самий запобіжник, що в `.panel[hidden]`
+   і `.cv-stage[hidden]` вище: авторський `display:flex` інакше перебив би
+   типову поведінку браузера на рівній специфічності. */
+.insp[hidden]{display:none}
+.insp-top{display:flex;align-items:center;gap:6px;height:40px;padding:0 6px 0 10px;
+  border-bottom:1px solid var(--line);flex:none}
+.insp-top .panel-title{padding-left:0}
+.insp-tabs{padding:8px 10px 0}
+.insp-body{flex:1;min-height:0;overflow:auto;padding:10px}
+.insp-hint{margin:0;font-size:12px;color:var(--dim);line-height:1.5}
+/* ── Звіт інспектора (T-39) ───────────────────────────────────────────────
+   Джерело вигляду — ДРУГИЙ затверджений макет, `docs/proto/tuner-panel.html`,
+   варіант А. Крихти лишились із прототипу оболонки (`docs/proto/shell.html`,
+   `.crumbline`), решта розкладки переписана.
+
+   ⛔ НЕСУЧЕ ПРАВИЛО ВСЬОГО БЛОКУ: висота поля СТАЛА, нічого не переноситься.
+   Зміряно на живому макеті до правки: накручений рядок розганявся з 16px до
+   44px, бо перекреслене «було», поле, «px» і бейдж вироку не влазили в
+   колонку 185px і переносились, — і все нижче зʼїжджало на 28px за КОЖНУ
+   правку. Це і є «скаче», на яке скаржився дизайнер. Тому тут: `height`
+   замість `min-height`, `white-space:nowrap` + `text-overflow:ellipsis` на
+   значеннях, одиниця ВСЕРЕДИНІ поля (ширина поля не залежить від довжини
+   значення) і вирок крапкою замість бейджа з іменем токена. */
+.insp-crumbs{display:flex;flex-wrap:wrap;gap:3px;align-items:center;
+  font-size:11.5px;color:var(--dim);margin-bottom:10px}
+.insp-crumbs button{border:0;background:none;color:var(--dim);cursor:pointer;
+  padding:2px 4px;border-radius:4px;font-size:11.5px}
+.insp-crumbs button:hover{background:var(--s3);color:var(--hi)}
+.insp-crumbs button:last-child{color:var(--hi);background:var(--s3)}
+.insp-spec{border-top:1px solid var(--line);padding:9px 0}
+.insp-spec:first-of-type{border-top:0;padding-top:0}
+/* Прототип малював заголовок секції `color:var(--lo)` — тут навмисно
+   `--dim`: живий охоронець у tests/css-guards.test.mjs забороняє `--lo` як
+   колір ТЕКСТУ (3.87:1 на --s1, нижче AA), лишаючи його межам і декору;
+   `--dim` (5.65:1) — той самий приглушений відтінок, але з контрастом,
+   що проходить. */
+.insp-spec h6{margin:0 0 7px;font-size:10.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim);font-weight:500}
+/* Поле. `height` — токеном сітки (--h-sm), а не числом: воно й є тією сталою
+   висотою, заради якої все переписано. */
+.insp-f{display:flex;align-items:center;gap:5px;min-width:0;
+  height:var(--h-sm);padding:0 6px;background:var(--s3);
+  border:1px solid transparent;border-radius:var(--r-sm)}
+.insp-f:hover{background:var(--s4)}
+.insp-f:focus-within{background:var(--s2);border-color:var(--sel)}
+/* Стан — АТРИБУТАМИ, не другим класом. Причина записана в `fieldHTML`
+   (`app/vendor/insp-report.js`): охоронець css-guards читає імена класів
+   регекспом по атрибуту `class` у сирці, тож три незалежні модифікатори
+   означали б вісім повних літералів класу на одне поле. Той самий прийом уже
+   живе в оболонці — `.seg button[aria-pressed=true]`. */
+.insp-f[data-wide]{grid-column:1/-1}
+/* Нема чого крутити — нема й відгуку на наведення: піднята підкладка обіцяє
+   контрол, якого в цьому полі немає. */
+.insp-f[data-ro]:hover{background:var(--s3)}
+/* «Я це крутив». Тінт акценту — той самий, що вже означає в цій панелі «наше,
+   інструментове». Перекресленого «було» поруч більше немає: воно в списку
+   змін у підвалі й у титулі поля. */
+.insp-f[data-tuned]{background:var(--sel-tint);border-color:var(--sel-tint-2)}
+.insp-f[data-tuned] .insp-num{color:var(--sel-text)}
+/* Той самий стан у САМОМУ полі звіту: поле лишається накрученим (правка
+   справжня), але число в ньому — сторінчине, недоторкане. Пунктир каже, що
+   бейдж «накручено» тут про ПАКЕТ, а не про те, що видно на макеті. */
+.insp-f[data-miss]{border-style:dashed;border-color:var(--open)}
+.insp-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+/* Чотири відступи однією смугою (прийом Figma): секція «Відступи» стиснулась
+   із восьми рядків до двох смуг. Поля тісніші за звичайні — на чотири
+   колонки в 288px інакше не лишається місця числу. */
+.insp-quad{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.insp-quad .insp-f{padding:0 4px;gap:3px}
+.insp-lbl{margin:0 0 4px;font-size:11px;color:var(--dim)}
+.insp-pairlbl{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 4px}
+.insp-pairlbl span{font-size:11px;color:var(--dim)}
+/* Проміжки між блоками — сусідськими селекторами, а не полем на кожному
+   блоці: перший блок секції не мусить відсувати заголовок. */
+.insp-grid + .insp-grid{margin-top:6px}
+.insp-grid + .insp-lbl,.insp-quad + .insp-lbl{margin-top:7px}
+.insp-grid + .insp-pairlbl,.insp-quad + .insp-pairlbl{margin-top:7px}
+.insp-ico{flex:none;width:13px;text-align:center;font-size:10.5px;color:var(--dim)}
+.insp-quad .insp-ico{width:auto}
+.insp-nm{flex:none;font-size:11.5px;color:var(--dim);white-space:nowrap}
+/* Довге значення УСІКАЄТЬСЯ, повне лежить у титулі поля. До T-39
+   `font-family` розповзався на три рядки — і рядок звіту ставав утричі
+   вищим за сусідні. */
+.insp-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px;color:var(--mid)}
+/* Крутилка більше не має власної рамки й ширини: рамка тепер у поля, а
+   ширина — уся, що лишилась. Нативні стрілки прибрані (у полі 62px вони
+   зʼїли б половину); крок дає клавіатура, і саме про неї каже титул. */
+.insp-num{flex:1;min-width:0;width:100%;padding:0;background:none;border:0;
+  color:var(--hi);font:inherit;font-size:12px;font-variant-numeric:tabular-nums;
+  outline:none;-moz-appearance:textfield}
+.insp-num::-webkit-outer-spin-button,
+.insp-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+/* Одиниця — праворуч від числа, ВСЕРЕДИНІ поля (прийом Figma). Саме це й
+   знімає танець ширини: поле однакове на «8px» і на «676.8px». */
+.insp-unit{flex:none;font-size:11px;color:var(--dim)}
+/* Пікер ПІДМІНЯЄ собою зразок (`.insp-sw`), а не стає поруч із ним: два
+   кольорові квадрати в одному полі читались би як два різні кольори.
+   `::-webkit-color-swatch` без рамки — інакше плитка всередині плитки. */
+.insp-pick{flex:none;width:16px;height:14px;padding:0;cursor:pointer;
+  background:none;border:1px solid var(--line2);border-radius:3px}
+.insp-pick::-webkit-color-swatch{border:0;border-radius:2px}
+.insp-pick::-webkit-color-swatch-wrapper{padding:0}
+.insp-sw{flex:none;width:12px;height:12px;border-radius:3px;
+  border:1px solid var(--line2)}
+/* Вирок КРАПКОЮ: зелена — токен, бурштинова — хардкод, сіра — не розібрали.
+   Імʼя токена й підказки переїхали в титул поля, і разом із ними — правило
+   честі: для `unlinked`/`unknown` імені там немає ніколи (`verdictText`,
+   `app/vendor/insp-report.js`).
+   `--lo` тут законний: це ТЛО декоративної крапки, а не колір тексту —
+   заборона розділу A охоронця css-guards стосується саме тексту. */
+.insp-dot{flex:none;width:7px;height:7px;border-radius:50%}
+.insp-dot--tok{background:var(--ok)}
+.insp-dot--hard{background:var(--open)}
+.insp-dot--unk{background:var(--lo)}
+/* T-40 — два вироки про ДИЗАЙН-СИСТЕМУ, і вага в них навмисно різна.
+   `--over` (перевизначений токен ДС) бере `--bad` — той самий червоний, що
+   «перекриття» в лінійці: це єдині два вироки, що кажуть про ВАДУ, і на
+   макетах перевизначення не буває нормою ніколи (виміряно: 110 у `courts`,
+   усі — розходження з ДС).
+   `--offds` — КІЛЬЦЕ, а не заливка: на лендінгу таких змінних законно сотні
+   (198 із 589 у `bf360`), і суцільна кольорова крапка на кожному другому
+   рядку перестала б бути сигналом — рівно те, що сталося з зеленою до T-40.
+   Кільце тримає той самий розмір 7px, тобто геометрія рядка не рухається. */
+.insp-dot--over{background:var(--bad)}
+.insp-dot--offds{background:transparent;box-shadow:inset 0 0 0 2px var(--dim)}
+/* Дорога назад у ДС — кнопка ОБГОРТАЄ крапку (чому саме так — `snapHTML`,
+   insp-report.js). Відʼємні поля зʼїдають зайві 7px ширини, тож поле не
+   розʼїжджається й у смузі відступів, де на кожне лишається ~45px. Висота
+   14px нижча за вміст рядка, тобто стала висота поля (несуче правило T-39)
+   не рухається. */
+.insp-snap{flex:none;display:flex;align-items:center;justify-content:center;
+  width:14px;height:14px;margin:-3px -4px -3px -3px;padding:0;border:0;
+  border-radius:4px;background:none;cursor:pointer}
+.insp-snap:hover{background:var(--s4)}
+.insp-snap:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+/* Рядок про саму ДС — НЕ застереження: відсутність ДС у напрямку `seo` не
+   вада макета, а факт про задачу. Тому `--dim` (5.65:1 на --s1), а не
+   бурштиновий `--warn`-тон: бурштин тут читався б як «щось не так». */
+.insp-note{margin:0 0 10px;font-size:11.5px;line-height:1.45;color:var(--dim)}
+.insp-warn{margin:0 0 10px;font-size:11.5px;line-height:1.45;color:var(--open)}
+/* Підсумок ЛІНІЙКИ (`measureHTML`, insp-report.js) — єдине, що лишилось на
+   каркасі `dl`/`dt`/`dd`: там справді «підпис : число», по одному рядку на
+   напрямну, і ніякої розкладки полів. Звіт про елемент цей каркас покинув
+   разом із бейджами (T-39). */
+.insp-spec dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;
+  align-items:baseline}
+.insp-spec dt{font-size:12px;color:var(--dim)}
+.insp-spec dd{margin:0;font-size:12px;color:var(--hi);text-align:right;
+  font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere}
+/* `text-transform:none` — бо бейдж виду виміру стоїть і в `h6`, а той увесь у
+   капітелі: без скидання «перекриття» кричало б гучніше за саме число.
+   Кольори: `--bad` перекриттю (єдиний вид, що несе ваду — і оверлей малює
+   його червоним), `--open` контейнерній межі (оверлей малює її помаранчевою,
+   `.rg.box`), решті `--dim` — це прочитані відстані, а не вироки. */
+.insp-kind{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;
+  font-size:11px;font-weight:400;letter-spacing:0;text-transform:none;
+  color:var(--dim);background:var(--s3)}
+.insp-kind--box{color:var(--open);background:rgba(251,188,85,.15)}
+.insp-kind--bad{color:var(--bad);background:rgba(243,115,115,.15)}
+/* ── Підвал панелі (T-39, `tuneFootHTML` у shell-inspect.js) ──────────────
+   Список накрученого, записка Клоду й дві дії — прибиті до низу тієї самої
+   вкладки, де крутять. Окремої вкладки «Тюнер» більше немає.
+   `flex:none` — підвал не бере участі в прокрутці тіла: він мусить лишатись
+   на екрані, поки дизайнер крутить у списку вище. */
+.insp-foot{flex:none;background:var(--s1);border-top:1px solid var(--line);
+  padding:10px}
+.insp-tune-sum{margin:0 0 8px;display:flex;align-items:center;gap:8px;
+  font-size:11.5px;color:var(--dim)}
+/* «Готово» — зеленим, як усе доведене в цій панелі. Кажемо саме «чекає», а не
+   «надіслано»: події відправлення не існує, пакет і так лежить на диску. */
+.insp-ready{color:var(--ok);font-size:11px}
+/* «Скинути все» червоніє лише під курсором: незворотна дія не мусить кричати
+   з екрана постійно, але й не сміє виглядати як звичайна кнопка в мить
+   натискання. Підтвердження стоїть окремо, в `app.js`. */
+.insp-tune-all{margin-left:auto;padding:2px 7px;border:1px solid var(--line2);
+  background:none;border-radius:var(--r-sm);color:var(--dim);font:inherit;
+  font-size:11px;cursor:pointer}
+.insp-tune-all:hover{color:var(--bad);border-color:var(--bad)}
+/* Межа росту підвалу: список змін прокручується, а не витісняє тіло панелі.
+   190px — це приблизно вісім рядків правок; далі підвал перестав би бути
+   підвалом. */
+.insp-chg{max-height:190px;overflow:auto;margin:0 0 6px}
+/* Блок одного елемента у списку змін. `text-transform` не чіпаємо: у
+   заголовку стоїть селектор (`p.card`), а капітель зробила б із нього
+   `P.CARD` — тобто неправду про регістр імені, яке в CSS чутливе до
+   регістру. */
+.insp-chg-el{margin:0 0 6px}
+.insp-chg-el h6{margin:0 0 3px;font-size:11px;font-weight:500;color:var(--hi);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Рядок змін — теж СТАЛОЇ висоти й теж без переносів: підвал росте від
+   кожної правки, і рядок, що переноситься, зʼїв би тіло панелі. */
+.insp-chg-row{margin:0;display:flex;align-items:center;gap:4px;min-width:0;
+  height:var(--h-xs);font-size:11.5px}
+.insp-chg-prop{flex:none;max-width:96px;color:var(--dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Було / стало. Перекреслене «було» живе тепер ТІЛЬКИ тут — у рядку звіту
+   воно коштувало 28px висоти на кожну правку.
+   `--dim`, а не `--lo`: `--lo` заборонений як колір ТЕКСТУ (3.87:1, нижче
+   AA — розділ A охоронця css-guards). */
+.insp-tune-from{color:var(--dim);text-decoration:line-through;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.insp-tune-arr{flex:none;color:var(--dim)}
+/* Той самий акцент «наше, інструментове», що в накрученому полі. */
+.insp-tune-to{color:var(--sel-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ⛔ «Не лягло на цю сторінку». Правка в пакеті лишається — вона описує
+   зроблене дизайнером, — але малювати її так само, як ту, що стоїть на
+   макеті, означає стверджувати зміну, якої на екрані немає. Бурштиновий
+   (`--open`), а не червоний `--bad`: це не помилка дизайнера й не збій
+   інструмента, а факт про сторінку. Пояснення — у титулі самого знака
+   (`inspTunerNotApplied`), бо позначка без слів читалась би як «правку
+   загублено». Стоїть ОДРАЗУ за значенням, а не біля хрестика: вона про це
+   значення, а `margin-left:auto` хрестика однаково відтискає його вправо. */
+.insp-miss{flex:none;color:var(--open);line-height:0}
+/* «Стало», якого на макеті немає, не сміє світитись тим самим акцентом «наше,
+   інструментове», що й накладене: колір — те, що в цьому списку читають
+   боковим зором, ще до знака й титулу. */
+.insp-chg-row[data-miss] .insp-tune-to{color:var(--dim)}
+.insp-tune-x{margin-left:auto;flex:none;padding:0;border:0;background:none;
+  color:var(--dim);cursor:pointer;line-height:0}
+.insp-tune-x:hover{color:var(--bad)}
+.insp-tune-other{margin:0 0 8px;font-size:11.5px;color:var(--dim)}
+/* ⛔ Записка — поле ТЮНЕРА, не коментар: `comment-layer` окремий продукт зі
+   своєю панеллю. Підпису над нею немає (його роль грає підказка в самому
+   полі), але `aria-label` є: читач з екрана інакше почув би порожнє поле. */
+.insp-note-ta{display:block;width:100%;box-sizing:border-box;resize:vertical;
+  min-height:48px;background:var(--s3);border:1px solid var(--line);
+  border-radius:var(--r-sm);color:var(--hi);font:inherit;font-size:12px;
+  line-height:1.45;padding:6px 7px}
+.insp-note-ta:focus{outline:0;border-color:var(--sel)}
+.insp-note-ta::placeholder{color:var(--dim)}
+.insp-acts{display:flex;gap:6px;margin-top:8px}
+/* ⛔ «Надіслати» НІЧОГО НЕ НАДСИЛАЄ: пакет пишеться на диск на кожну правку і
+   без неї. Вона ставить `status: ready` — каже читачеві, що дизайнер
+   закінчив. Головна кнопка підвалу, тому й акцентна. */
+.insp-send{flex:1;height:var(--h-ctl);border:1px solid transparent;
+  border-radius:var(--r-sm);background:var(--sel);color:var(--on-sel);font:inherit;
+  font-size:12.5px;font-weight:500;cursor:pointer}
+.insp-send:hover{background:var(--sel-hover)}
+.insp-cancel{height:var(--h-ctl);padding:0 12px;border:1px solid var(--line2);
+  border-radius:var(--r-sm);background:none;color:var(--dim);font:inherit;
+  font-size:12.5px;cursor:pointer}
+.insp-cancel:hover{color:var(--hi)}
+/* Клавіші — останній рядок підвалу, а не хвіст тіла: вони про макет, а не
+   про те, що зараз у списку, і прокручуватись разом зі звітом їм нема за чим.
+   Власної лінії згори не мають — її вже дає сам підвал; окрема лінія
+   зʼявляється тільки коли над ними щось є. */
+.insp-keys{margin:0;font-size:11px;color:var(--dim);line-height:1.6}
+.insp-acts + .insp-keys{margin-top:9px;border-top:1px solid var(--line);
+  padding-top:9px}
+.insp-keys kbd{background:var(--s3);border:1px solid var(--line2);border-radius:4px;
+  padding:1px 5px;font:inherit;font-size:11px;color:var(--hi)}
+
+/* Запит дерева в дорозі (`treePost`): дії панелі не приймають кліків, щоб другий
+   запит не зіткнувся з першим на ревізії. Перегляд (скрол, hover) лишається. */
+.panel--busy .row-more,.panel--busy .icob,.panel--busy .row-caret{pointer-events:none}
+.panel--busy .tree-body{cursor:progress}
+
+/* ── екран «Задачі» (батч 1.52, Task 6) ─────────────────────────────────────
+   Клас `home-open` на `body` ставить `app.js` разом із `homeOpen`. Ховаємо СЦЕНУ,
+   ПОЛОТНО, обидві панелі й шар коментатора на «Огляді» (`data-comment-layer`
+   лежить у `body`, не в сцені) правилом, а не атрибутом `hidden`: `render()`
+   (його кличуть опитування й дії поза екраном) ставить `stage.hidden=false` у
+   `applyMode` і повернув би макет над екраном; правило з класом цього не
+   відміняє. `!important` — з тієї самої причини, що в `html.cv-clean` вище:
+   розкладку сцени задають правила `body.with-panel…` вищої специфічності.
+   Класи екрана — з префіксом `th-`: сітка висот (`css-guards`) стереже лише
+   `ctl|seg|icob|dd-item|cm-|row`, і екрану не потрібні її винятки. Кольори —
+   лише токени; відтінок — `color-mix` від токена, а не новий літерал. */
+body.home-open #stage,body.home-open #canvas,body.home-open #pages-panel,
+body.home-open #insp-panel,body.home-open [data-comment-layer],
+body.home-open .cv-notice{display:none!important}
+#tasks-home{position:fixed;top:var(--h-bar);left:0;right:0;bottom:0;overflow-y:auto;
+  background:var(--s1);color:var(--hi);z-index:var(--z-panel)}
+#tasks-home[hidden]{display:none}
+.th-in{max-width:1320px;margin:0 auto;padding:22px 28px 60px}
+.th-h{margin:0 0 14px;font-size:20px;font-weight:600;letter-spacing:-.01em}
+.th-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.th-tab{height:calc(var(--h-ctl) + 4px);padding:0 12px;border:0;background:none;color:var(--mid);
+  font:inherit;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.th-tab:hover{color:var(--hi)}
+.th-tab--on{color:var(--hi);border-bottom-color:var(--hi);font-weight:500}
+.th-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.th-search{flex:1;min-width:260px;max-width:520px;display:flex;align-items:center;gap:8px;
+  height:var(--h-ctl);padding:0 10px;border:1px solid var(--line2);border-radius:var(--r);
+  background:var(--s2);color:var(--dim)}
+.th-search:focus-within{border-color:var(--sel)}
+.th-search input{flex:1;min-width:0;border:0;outline:0;background:none;color:var(--hi);font:inherit}
+.th-search input::placeholder{color:var(--dim)}
+.th-slash{font-size:11px;border:1px solid var(--line2);border-radius:4px;padding:0 5px;color:var(--dim)}
+.th-sel{height:var(--h-ctl);padding:0 28px 0 10px;border:1px solid var(--line2);border-radius:var(--r);
+  background:var(--s2);color:var(--hi);font:inherit;appearance:none;cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--mid) 50%),linear-gradient(135deg,var(--mid) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px;background-size:5px 5px;background-repeat:no-repeat}
+.th-sel:focus-visible,.th-tab:focus-visible,.th-chip:focus-visible,.th-lnk:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.th-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.th-chip{height:var(--h-xs);padding:0 10px;border:1px solid var(--line2);border-radius:999px;
+  background:none;color:var(--mid);cursor:pointer;font:inherit;font-size:12px}
+.th-chip:hover{color:var(--hi);border-color:var(--mid)}
+/* `:hover` у списку: `.th-chip:hover` вище специфічніший за `.th-chip--on` і
+   на активному чіпі фарбував би текст у `--hi` по фону `--hi` — підпис
+   зникав під мишею (видно на скріні після кліку). */
+.th-chip--on,.th-chip--on:hover{background:var(--sel);border-color:var(--sel);color:var(--on-sel)}
+.th-gap{width:10px}
+.th-count{margin-left:auto;color:var(--dim);font-size:12px}
+.th-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.th-card{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r-lg);
+  background:var(--s2);overflow:hidden;cursor:pointer;text-align:left;color:inherit;
+  transition:border-color var(--dur) var(--ease),transform var(--dur) var(--ease)}
+.th-card[role=group]{cursor:default}
+.th-card:hover{border-color:var(--line2);transform:translateY(-1px)}
+.th-card:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.th-card--cur{border-color:var(--sel)}
+.th-thumb{aspect-ratio:16/10;background:var(--s3);overflow:hidden;position:relative}
+.th-img{width:100%;height:100%;object-fit:cover;object-position:top;display:block}
+.th-none{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  gap:6px;color:var(--dim);font-size:12px}
+.th-card--miss .th-img{filter:grayscale(1) brightness(.5)}
+.th-cbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px;min-height:96px}
+.th-krow{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+.th-curb{color:var(--sel-text);font-weight:500}
+.th-ttl{font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.th-meta{font-size:12px;color:var(--dim)}
+.th-card mark{background:color-mix(in srgb,var(--open) 40%,transparent);color:inherit;border-radius:2px}
+.th-badges{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:6px}
+.th-bdg{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;line-height:16px;
+  border-radius:5px;font-size:12px;background:var(--s4);color:var(--mid)}
+.th-bdg--ind{background:color-mix(in srgb,var(--sel) 18%,transparent);color:var(--sel-text)}
+.th-bdg--done{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.th-bdg--warn,.th-bdg--com{background:color-mix(in srgb,var(--open) 14%,transparent);color:var(--open)}
+.th-bdg .ico{width:13px;height:13px}
+.th-lnk{margin-left:auto;display:inline-flex;align-items:center;gap:4px;padding:3px 6px;line-height:16px;
+  border-radius:5px;color:var(--mid);font:inherit;font-size:12px;text-decoration:none;border:0;
+  background:none;cursor:pointer}
+.th-lnk:hover{background:var(--s4);color:var(--hi)}
+.th-empty{grid-column:1/-1;padding:60px 20px;text-align:center;color:var(--dim)}
+.th-empty b{display:block;color:var(--hi);font-size:15px;font-weight:500;margin-bottom:6px}
+.th-empty .th-lnk{margin-left:0}
+.th-note{padding:60px 20px;text-align:center;color:var(--dim)}
+.th-banner{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:14px;
+  border-radius:var(--r);background:color-mix(in srgb,var(--bad) 10%,transparent);
+  border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);color:var(--hi)}
+.th-banner .ico{color:var(--bad);flex:none}
+.th-bmsg{flex:1;min-width:0}
+.th-stale{color:var(--dim);white-space:nowrap}
+/* Логотип і двері в палітру — окремі речі: рискою зліва `.pal-open` стає
+   такою ж «оправою», як справа від неї (там вона відділяє від крихт). Селектор
+   по сусідству, а не новий вузол у розмітці смуги: порядок «логотип → палітра»
+   стереже `tests/shell-bar.test.mjs`. */
+.logo-btn + .pal-open{margin-left:4px;padding-left:8px;border-left:1px solid var(--s4)}
