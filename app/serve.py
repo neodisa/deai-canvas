@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 from task_state import task_state  # легкий стан задачі: спільний із пушером реєстру
@@ -329,6 +329,44 @@ def tasks_path():
 def load_tasks():
     with open(tasks_path(), encoding='utf-8') as f:
         return json.load(f)
+
+
+class UnknownTask(LookupError):
+    pass
+
+
+class TaskNotHere(UnknownTask):
+    """Задача Є в реєстрі, але на ЦІЙ машині її теки нема (`/api/tasks` позначає
+    такі `missing`): реєстр їде в git, теки — ні. Підклас `UnknownTask`, тож
+    кожен, хто вміє відмовити невідомій задачі, відмовить і цій; а хто хоче
+    розрізнити причину (CLI, `_take_task`), ловить її ПЕРЕД батьком."""
+
+
+def task_for(cfg, tid=None):
+    """(id, задача): названа явно (заголовок `X-Canvas-Task`, префікс `/t/<id>/`,
+    `--task`) або поточна машини.
+
+    fb-07102026-e627c2: `current` один на машину, і паралельна сесія Claude, що
+    його перемкнула, відправляла синк і публікацію цієї сесії в ЧУЖУ задачу — без
+    жодного сигналу. Невідома назва — `UnknownTask`, а НЕ тихий відкат на поточну:
+    інакше помилка в id знову била б у чужу задачу. Рядок мусить бути ключем
+    `tasks` дослівно, тож `../x` чи `5` задачею не є й теку диска так не відкрити.
+
+    Названа задача ще й мусить БУТИ на цій машині (`TaskNotHere`): запис без `dir`
+    (лише реєстр) валив обробник `KeyError`-ом і рвав зʼєднання, а запис із `dir`,
+    якої нема на диску, пропускав далі — і `POST /t/gone/api/iteration` САМ
+    створював дерево, а CLI казали «нова/порожня задача». Поточна (`tid is None`)
+    — як було: це «задача, в якій працює машина», і її стан не перевіряємо."""
+    if tid is None:
+        tid = cfg['current']
+        return tid, cfg['tasks'][tid]
+    if not isinstance(tid, str) or tid not in cfg['tasks']:
+        raise UnknownTask(tid)
+    task = cfg['tasks'][tid]
+    d = task.get('dir')
+    if not isinstance(d, str) or not os.path.isdir(d):
+        raise TaskNotHere(tid)
+    return tid, task
 
 
 def save_tasks(cfg):
@@ -1012,12 +1050,17 @@ def _local_origin(origin):
 RECENT_PAGE_S = 120
 
 
-def claude_view(beats, now, task_id):
+def claude_view(beats, now, task_id, aliases=()):
     """Що показати на канвасі для задачі `task_id`. Чиста функція.
 
     Найсвіжіший удар САМЕ цієї задачі; прострочений за `CLAUDE_TTL` — `state: None`,
-    тобто нічого. Так падіння Клода гасить статус саме собою, без нічийого cleanup."""
-    mine = [b for b in beats.values() if b.get('task') == task_id]
+    тобто нічого. Так падіння Клода гасить статус саме собою, без нічийого cleanup.
+
+    `aliases` — інші імена тієї ж задачі (її Jira-ключ): мод шле `jira ?? id`, модель —
+    тікет Jira (знахідка 12.10.2026). Порожні імена не рахуються."""
+    # Лише рядки: ручна правка tasks.json (`"jira": [..]`) не сміє класти опит у 500.
+    keys = {k for k in (task_id, *aliases) if k and isinstance(k, str)}
+    mine = [b for b in beats.values() if b.get('task') in keys]
     if not mine:
         return {'state': None}
     b = max(mine, key=lambda x: x.get('at') or 0)
@@ -3111,10 +3154,106 @@ class Handler(SimpleHTTPRequestHandler):
             git_autocommit(task['dir'], msg)
         return {'extra': extra, 'rev': new_rev, 'idir': idir}
 
+    #: Задача, названа ЗАПИТОМ (`X-Canvas-Task` чи `/t/<id>/`); None — поточна
+    #: машини. Ставиться на вході КОЖНОГО запиту (`_take_task`): обробник живе,
+    #: поки живе зʼєднання, і задача першого запиту не сміє прилипнути до другого.
+    _task_override = None
+
+    #: `/t/<id>/решта` → id і решта шляху (з запитом). Префікс, а не `?task=`:
+    #: `?task=` уже зайнятий `/api/task-thumb`, а корене-абсолютні ассети
+    #: Angular-збірки (`/assets/…`) заголовка не несуть — лише Referer, у якому
+    #: префікс і лежить.
+    _TASK_PREFIX = re.compile(r'^/t/([^/?#]+)(/.*)$')
+
+    #: Маршрути РЕЄСТРУ задач: діють на машину (`current`, список задач), а не на
+    #: дані якоїсь задачі. Заголовок `X-Canvas-Task` тут не береться й не
+    #: перевіряється: `task-new` із заголовком на ЩЕ НЕ зареєстрований id давав
+    #: «невідома задача», хоча саме вона й створюється; префіксна форма
+    #: (`/t/x/api/task-new`) безглузда й відхиляється.
+    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch')
+
+    def _take_task(self):
+        """Вхід запиту: зняти з `self.path` префікс `/t/<id>/`, прочитати
+        `X-Canvas-Task`, перевірити. False — відповідь (404 JSON із назвою)
+        уже надіслано, далі обробляти не треба.
+
+        Префікс сильніший за заголовок: він у самому URL і видний у логах.
+        Невідома задача — 404, а НЕ мовчазний відкат на поточну (див. `task_for`);
+        так само задача, якої на цій машині нема (є в реєстрі, теки нема).
+        Порожній заголовок — 400: «назва є, але порожня» не те саме, що «назви
+        нема», а мовчки читати його як «нема» означало б знову бити в поточну.
+        Лише `do_GET` і `do_POST` (див. `Routed`); `do_HEAD` від
+        `SimpleHTTPRequestHandler` до `_current_task` не доходить."""
+        self._task_override = None
+        m = self._TASK_PREFIX.match(self.path)
+        if m:
+            tid = unquote(m.group(1))
+            self.path = m.group(2)
+            # Інтерфейс канваса не привʼязаний до задачі: `/t/beta/app/` відкрив би
+            # той самий канвас ПОТОЧНОЇ задачі під адресою beta, тобто адреса
+            # брехала б. Лише префіксна форма: заголовок до статики не доходить.
+            if self.path == '/app' or self.path.startswith('/app/'):
+                self._drain_body()
+                self._send_json({'ok': False, 'error': 'інтерфейс канваса не привʼязаний '
+                                 'до задачі: відкривай /app/ без префікса /t/<id>/'},
+                                status=404)
+                return False
+            if self.path.split('?')[0] in self._REGISTRY_ROUTES:
+                self._drain_body()
+                self._send_json({'ok': False, 'error': 'реєстр задач не привʼязаний до '
+                                 'задачі: звертайся до /api/task-new і /api/task-switch '
+                                 'без префікса /t/<id>/'}, status=400)
+                return False
+        else:
+            if self.path.split('?')[0] in self._REGISTRY_ROUTES:
+                return True          # заголовок тут не діє (див. `_REGISTRY_ROUTES`)
+            raw = self.headers.get('X-Canvas-Task')
+            if raw is None:
+                return True
+            tid = raw.strip()
+            if not tid:
+                self._drain_body()
+                self._send_json({'ok': False, 'error': 'empty X-Canvas-Task'}, status=400)
+                return False
+        try:
+            task_for(load_tasks(), tid)
+        except TaskNotHere:
+            self._drain_body()
+            self._send_json({'ok': False, 'error': f'task not on this machine: {tid}'},
+                            status=404)
+            return False
+        except UnknownTask:
+            self._drain_body()
+            self._send_json({'ok': False, 'error': f'unknown task: {tid}'}, status=404)
+            return False
+        self._task_override = tid
+        return True
+
+    def _drain_body(self):
+        """Вичитати тіло POST, яке відмова на вході лишила б непрочитаним: закрити
+        зʼєднання з непрочитаним у буфері — це RST, і клієнт міг би не побачити
+        навіть самої відмови (ConnectionResetError замість 404/403). Стеля 1 МіБ:
+        більшого тіла від локального клієнта не чекаємо."""
+        if self.command != 'POST':
+            return
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            return
+        if n > 0:
+            self.rfile.read(min(n, 1 << 20))
+
+    def _task_prefix(self):
+        """Префікс `/t/<id>` для адрес, що ми віддаємо клієнтові (`<base>`, `--url`
+        зʼємки): задачу НАЗВАНО запитом — отже й посилання в ньому мусять її
+        називати, бо ассети сторінки та зворотні виклики дитини заголовка не несуть
+        і без префікса пішли б у ПОТОЧНУ. Порожній — задачу не названо."""
+        if self._task_override is None:
+            return ''
+        return f'/t/{quote(self._task_override, safe="")}'
+
     def _current_task(self):
-        cfg = load_tasks()
-        tid = cfg['current']
-        return tid, cfg['tasks'][tid]
+        return task_for(load_tasks(), self._task_override)
 
     # ---------- GET ----------
 
@@ -3195,10 +3334,10 @@ class Handler(SimpleHTTPRequestHandler):
                              'recent': recent_pages(idir) if here else []})
             return
         if self.path == '/api/claude-status':
-            tid, _ = self._current_task()
+            tid, task = self._current_task()
             with CLAUDE_LOCK:
                 beats = dict(CLAUDE_BEATS)
-            self._send_json(claude_view(beats, time.time(), tid))
+            self._send_json(claude_view(beats, time.time(), tid, (task.get('jira'),)))
             return
         if self.path.startswith('/api/iteration-pages'):
             q = parse_qs(urlparse(self.path).query)
@@ -3263,6 +3402,17 @@ class Handler(SimpleHTTPRequestHandler):
         if not NAME_RE.match(it):
             self.send_error(400, 'bad iteration')
             return
+        bare = q.get('bare', ['0'])[0] == '1'
+        if self._task_override is not None and not bare:
+            # Коментатор пише піни на `/api/local-comments` і тягне бандли з
+            # `/app/vendor` БЕЗ префікса — тобто пін, поставлений на сторінці
+            # названої задачі, ліг би в `.dc-local-comments.json` ПОТОЧНОЇ. Чесніше
+            # відмовити, ніж віддати сторінку з коментатором, що пише не туди.
+            self._send_json({'ok': False,
+                             'error': 'коментування під названою задачею не підтримується '
+                                      '— коментуй у канвасі (вікно поточної задачі)'},
+                            status=400)
+            return
         tid, task = self._current_task()
         page = _pick_page(task, it, q.get('page', [''])[0])
         if page is None:
@@ -3278,13 +3428,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
         with open(page_file, encoding='utf-8') as f:
             html = f.read()
-        base = f'http://{self.headers.get("Host", "")}/it-assets/{it}/{rel + "/" if rel else ""}'
+        # Під названою задачею `<base>` несе префікс: відносні ассети сторінки
+        # інакше йшли б у `/it-assets/` ПОТОЧНОЇ задачі (корене-абсолютні й так
+        # рятує Referer, див. `Routed._referer_context`).
+        base = (f'http://{self.headers.get("Host", "")}{self._task_prefix()}'
+                f'/it-assets/{it}/{rel + "/" if rel else ""}')
         html, n = re.subn(r'<head([^>]*)>', rf'<head\1><base href="{base}">',
                           html, count=1, flags=re.I)
         if not n:
             html = f'<base href="{base}">' + html
         # bare=1 — чистый макет без comment-layer (для замороженного обзору на холсте)
-        if q.get('bare', ['0'])[0] != '1':
+        if not bare:
             origin = f'http://{self.headers.get("Host", "localhost:8765")}'
             ch = q.get('ch', ['local'])[0]
             # version МУСИТЬ збігатися з publish-конвенцією (iter_num: it1→"1"),
@@ -3571,7 +3725,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         args = [node, os.path.join(ROOT, 'bin', 'shoot.mjs'),
                 '--dir', _iter_dir(task, it), '--it', it,
-                '--url', f'http://127.0.0.1:{self.server.server_address[1]}',
+                # Названа задача — і в адресі: `bin/shoot.mjs` будує з нього
+                # `${url}/api/iteration-pages`, `${url}/api/flow` і
+                # `${url}/commented?…&bare=1`, а заголовка не шле. Без префікса
+                # дитина питала б ПОТОЧНУ задачу, а кадри писала б у названу.
+                '--url', f'http://127.0.0.1:{self.server.server_address[1]}'
+                         f'{self._task_prefix()}',
                 '--json']
         if vp is not None:
             args += ['--vp', str(vp)]
@@ -3929,6 +4088,19 @@ class Handler(SimpleHTTPRequestHandler):
     # ---------- POST ----------
 
     def do_POST(self):
+        # ⛔ Origin — ОДНА перевірка на ВСІ POST, до розбору задачі й тіла. Префікс
+        # `/t/<id>/` робить POST із назвою задачі «простим запитом», який чужа
+        # вебсторінка шле без preflight (CORS нічого не питає); раніше Origin
+        # дивились лише `preview-password`, `teams-mute` і `claude-status`.
+        # Свої клієнти проходять: канвас шле Origin localhost/127.0.0.1, а curl і
+        # мод Claude Code не шлють його зовсім (`_local_origin` пускає обох).
+        # Обробникові перевірки лишено — вони нешкідливі й дублюють це.
+        if not _local_origin(self.headers.get('Origin')):
+            self._drain_body()
+            self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+            return
+        if not self._take_task():
+            return
         try:
             length = int(self.headers.get('Content-Length', 0))
             payload = json.loads(self.rfile.read(length)) if length else {}
@@ -4113,8 +4285,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'error': err}, status=400)
             return
         cfg = load_tasks()
-        tid = cfg['current']
-        task = cfg['tasks'][tid]
+        # Не `cfg['current']`: пароль піде в ту задачу, яку названо запитом.
+        _, task = task_for(cfg, self._task_override)
         if pw:
             task['preview_password'] = pw
         else:
@@ -4764,20 +4936,40 @@ def make_server(port=0):
                 return True
             return False
 
-        def _iter_from_referer(self):
+        def _referer_context(self):
+            """`(задача, ітерація)`, із яких прийшов запит (Referer); `(None, None)` —
+            Referer не годиться. НІЧОГО не міняє на запиті: задачу ставить викликач
+            (`do_GET`), щоб побічний ефект був видний там, де його роблять.
+
+            Задача — лише з префікса `/t/<id>/` у Referer (`None` — префікса нема, і
+            діє поточна машини). Невідома задача в Referer — Referer ігнорується
+            ЦІЛИМ, а не лише її назва: інакше ітерацію «чужої» задачі мовчки віддала б
+            поточна."""
             ref = self.headers.get('Referer', '')
             if not ref:
-                return None
+                return None, None
             u = urlparse(ref)
+            path, tid = u.path, None
+            m = self._TASK_PREFIX.match(path)
+            if m:
+                path, tid = m.group(2), unquote(m.group(1))
+                try:
+                    task_for(load_tasks(), tid)
+                except UnknownTask:
+                    return None, None
             q = parse_qs(u.query)
             if q.get('it'):               # /commented?it=itN
-                return q['it'][0]
-            mm = re.match(r'^/it-assets/([\w-]+)/', u.path)  # /it-assets/itN/…
+                return tid, q['it'][0]
+            mm = re.match(r'^/it-assets/([\w-]+)/', path)  # /it-assets/itN/…
             if mm:
-                return mm.group(1)
-            return None
+                return tid, mm.group(1)
+            return None, None
 
         def do_GET(self):
+            # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
+            # вдруге її не бере (префікс уже знято з `self.path`).
+            if not self._take_task():
+                return
             m = re.match(r'^/it-assets/([\w-]+)/(.+)$', self.path)
             if m:
                 if not self._serve_from_iteration(m.group(1), m.group(2).split('?')[0]):
@@ -4792,8 +4984,22 @@ def make_server(port=0):
                     try:
                         tid, task = self._current_task()
                         who = f"{tid} ({task.get('title') or tid})"
-                    except (KeyError, OSError, ValueError):
+                    # `UnknownTask` — ЯВНО в переліку, а не підкласом `KeyError`:
+                    # підклас мовчки ковтав би будь-який майбутній `except KeyError`
+                    # навколо конфіга, тобто повернув би «тиху невідому задачу», проти
+                    # якої `task_for` і зроблено. Тут же це лише текст відмови: названу
+                    # задачу могли вилучити між входом запиту й цим рядком.
+                    except (KeyError, UnknownTask, OSError, ValueError):
                         who = '—'
+                    if self._task_override is not None:
+                        # Задачу НАЗВАНО запитом: «вона перемкнулась» тут було б
+                        # брехнею — перемикатись нічому, файлу в названій немає.
+                        self.send_error(
+                            404, 'iteration asset not found',
+                            f'Названа задача — {who}, і в ній цього файлу немає: '
+                            f'ітерації нумеруються всередині задачі, тож '
+                            f'{m.group(1)} іншої задачі сюди не належить.')
+                        return
                     self.send_error(
                         404, 'iteration asset not found',
                         f'Поточна задача — {who}, і в ній цього файлу немає. '
@@ -4809,10 +5015,15 @@ def make_server(port=0):
             # iteration the request came FROM (Referer) so multi-file builds
             # render fully, not just their relative-path assets.
             if not self.path.startswith(HANDLED_PREFIXES):
-                it = self._iter_from_referer()
-                if it and self._serve_from_iteration(
-                        it, self.path.split('?')[0].lstrip('/')):
-                    return
+                ref_tid, it = self._referer_context()
+                if it:
+                    # Задачу з Referer ставимо ТУТ і лише коли запит сам її не
+                    # назвав (заголовок чи префікс сильніші).
+                    if self._task_override is None and ref_tid is not None:
+                        self._task_override = ref_tid
+                    if self._serve_from_iteration(
+                            it, self.path.split('?')[0].lstrip('/')):
+                        return
             super().do_GET()
     return ThreadingHTTPServer(('127.0.0.1', port), Routed)
 

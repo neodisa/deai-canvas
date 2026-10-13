@@ -4,7 +4,8 @@
 Для Claude:
   `python3 bin/inbox.py` — усе до відпрацювання скопом;
   `python3 bin/inbox.py resolve <id> --reason "що зроблено"` — закрити пін(и);
-  `python3 bin/inbox.py -h` — довідка.
+  `python3 bin/inbox.py -h` — довідка;
+  `python3 bin/inbox.py --task <id> …` — про названу задачу, а не поточну.
 ДВА джерела:
   • ЛОКАЛЬНІ · мені — фідбек користувача мені, у локальному файлі
     (`<task>/.dc-local-comments.json`), НЕ в Supabase. Пини фіолетові, без номера.
@@ -21,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -33,7 +35,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 from serve import (load_tasks, supabase_pins, comment_channel,  # noqa: E402
                    task_iterations, iter_num, machine_identity,
-                   iteration_is_mine, supabase_config, _ssl_context)
+                   iteration_is_mine, supabase_config, _ssl_context,
+                   task_for, UnknownTask, TaskNotHere)
 from atomic_io import atomic_write_json  # noqa: E402
 
 LOCAL_FILE = '.dc-local-comments.json'
@@ -230,10 +233,14 @@ def pin_target(p):
     return None
 
 
-def where_lookup(pins):
+def where_lookup(pins, task_id=None):
     """Віджет і двійники кожного відкритого піна (fb-30092026-e53eaa) через
     `bin/pin-where.mjs` у браузері. Повертає (мапа id→відповідь, None) або
-    (None, причина) — інструмент підказки не сміє валити inbox."""
+    (None, причина) — інструмент підказки не сміє валити inbox.
+
+    `task_id` — задачу НАЗВАНО (`--task`): браузер відкриває сторінки за
+    `/t/<id>/commented?…`. Без префікса канвас віддав би ПОТОЧНУ задачу машини,
+    і віджети шукались би на сторінках чужого макета."""
     items = []
     for p in pins:
         t = pin_target(p) if _is_open(p) else None
@@ -242,6 +249,8 @@ def where_lookup(pins):
     if not items:
         return {}, None
     url = f'http://localhost:{os.environ.get("PORT", "8765")}'
+    if task_id is not None:
+        url += f'/t/{quote(task_id, safe="")}'
     try:
         r = subprocess.run(['node', os.path.join(ROOT, 'bin', 'pin-where.mjs'), '--url', url],
                            input=json.dumps(items), capture_output=True, text=True, timeout=120)
@@ -297,10 +306,30 @@ def show_pins(pins, label, tag, where=None):
     return len(openp)
 
 
-def cmd_list(where=False):
-    cfg = load_tasks()
-    tid = cfg['current']
-    task = cfg['tasks'][tid]
+def resolve_task(wanted):
+    """(id, задача) названої `--task` (None — поточна) або None, коли такої немає:
+    тоді `error: …` уже надруковано в stderr і виходити з кодом 2.
+
+    Невідома назва НЕ відкочується на поточну: це і була вада (fb-07102026-e627c2) —
+    помилка в id тихо читала б і закривала піни чужої задачі."""
+    try:
+        return task_for(load_tasks(), wanted)
+    except TaskNotHere:
+        # Задача Є в реєстрі, але теки на цій машині нема: «порожній інбокс» тут
+        # був би брехнею, а відкат на поточну — тією самою вадою.
+        print(f"error: задачі '{wanted}' немає на цій машині "
+              '(є в реєстрі, теки нема)', file=sys.stderr)
+        return None
+    except UnknownTask:
+        print(f'error: немає задачі {wanted!r} у tasks.json', file=sys.stderr)
+        return None
+
+
+def cmd_list(where=False, task_id=None):
+    got = resolve_task(task_id)
+    if got is None:
+        return 2
+    tid, task = got
     local = read_local(task)
     try:
         proj, proj_err = supabase_pins(comment_channel(task, tid)), None
@@ -308,7 +337,8 @@ def cmd_list(where=False):
         proj, proj_err = [], e
     wmap = None
     if where:
-        wmap, why = where_lookup([p for p in local if isinstance(p, dict)] + list(proj))
+        wmap, why = where_lookup([p for p in local if isinstance(p, dict)] + list(proj),
+                                 task_id)
         if why:
             print(f'⚠ --where не спрацював (канвас запущено? {why}) — друкую без віджетів\n')
     now = datetime.now()
@@ -332,7 +362,9 @@ def cmd_list(where=False):
         print('  (немає відкритих)')
     print(f'\nРазом до відпрацювання: {total} локальних + {ext} проєктних')
     if total + ext:
-        print('Закрити: python3 bin/inbox.py resolve <id> --reason "що зроблено"')
+        # Підказку копіюють дослівно: без `--task` вона закрила б пін ПОТОЧНОЇ задачі.
+        flag = f' --task {shlex.quote(tid)}' if task_id is not None else ''
+        print(f'Закрити: python3 bin/inbox.py{flag} resolve <id> --reason "що зроблено"')
     return 0
 
 
@@ -493,9 +525,10 @@ def cmd_resolve(a):
     а не впасти на пінах, які вже в потрібному стані. Ненульовий код — рівно
     коли хоч один пін лишився відкритим: не знайдено, неоднозначно, мережа.
     """
-    cfg = load_tasks()
-    tid = cfg['current']
-    task = cfg['tasks'][tid]
+    got = resolve_task(a.task)
+    if got is None:
+        return 2
+    tid, task = got
     n = a.it if a.it is not None else default_iteration(task)
     if n is None:
         print('⚠ не вдалося визначити номер робочої ітерації — задай --it N')
@@ -587,6 +620,10 @@ EPILOG = """\
 Закрити пін (id — перші символи з виводу, «[3f2a9c1b · автор]»):
   python3 bin/inbox.py resolve 3f2a9c1b --reason "кнопку перенесено в шапку"
   python3 bin/inbox.py resolve 3f2a9c 7d41e0 --reason "..." --it 4 --dry-run
+Паралельні сесії: `current` один на машину, тож називай свою задачу — `--task` стоїть
+ПЕРЕД підкомандою (після неї — помилка):
+  python3 bin/inbox.py --task bf360
+  python3 bin/inbox.py --task bf360 resolve 3f2a9c1b --reason "..."
 Подробиці: python3 bin/inbox.py resolve -h
 """
 
@@ -594,18 +631,24 @@ EPILOG = """\
 def build_parser():
     ap = argparse.ArgumentParser(
         prog='inbox.py',
-        description='Коментарі-піни поточної задачі: локальні (мені) + '
-                    'проєктні (Supabase). Без аргументів — перелік відкритих.',
+        description='Коментарі-піни поточної (або названої --task) задачі: '
+                    'локальні (мені) + проєктні (Supabase). Без аргументів — '
+                    'перелік відкритих.',
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--task', metavar='ID',
+                    help='задача з tasks.json замість поточної — для паралельних сесій '
+                         '(перед підкомандою); невідомий id чи задача без теки на цій '
+                         'машині — помилка, а не поточна задача')
     ap.add_argument('--where', action='store_true',
                     help='для кожного відкритого піна — віджет і скільки таких самих '
                          'елементів на сторінці (браузер; потрібен запущений канвас)')
     sub = ap.add_subparsers(dest='cmd', metavar='{resolve}')
     rp = sub.add_parser(
         'resolve', help='закрити пін(и) з причиною',
-        description='Закрити відкриті піни поточної задачі. Шукає спершу '
-                    'локальні, потім проєктні; неоднозначний префікс — відмова '
-                    'з переліком кандидатів, уже закритий — пропуск.',
+        description='Закрити відкриті піни поточної (або названої --task) '
+                    'задачі. Шукає спершу локальні, потім проєктні; '
+                    'неоднозначний префікс — відмова з переліком кандидатів, '
+                    'уже закритий — пропуск.',
         epilog='Приклад: python3 bin/inbox.py resolve 3f2a9c1b '
                '--reason "кнопку перенесено в шапку"',
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -633,7 +676,7 @@ def main(argv=None):
         if short:
             rp.error(f'префікс коротший за {MIN_PREFIX} символів: {", ".join(short)}')
         return cmd_resolve(a)
-    return cmd_list(where=a.where)
+    return cmd_list(where=a.where, task_id=a.task)
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — early private extraction (v1.53.0, from `d0d3c4c`).**
+> **Status — early private extraction (v1.54.0, from `5d95dde`).**
 > This snapshot was extracted from an in-house tool. The core works standalone; a few
 > integrations (team dashboard, git sync, shared comments, Vercel publishing) are still
 > wired for the original setup and are being turned into optional, per-project modules

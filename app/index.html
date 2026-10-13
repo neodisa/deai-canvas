@@ -15,6 +15,9 @@
   <div id="cv-zoom" class="cv-zoom">100%</div>
   <div id="canvas-hint" class="cv-canvas-hint">тягни — рух · колесо — зум · клік по макету — відкрити в повний розмір (там живий інтерактив і коментарі)</div>
 </div>
+<!-- Статус Клода (12.10.2026): острівець унизу робочої області. `role="status"` —
+     на ПОСТІЙНОМУ вузлі: острівець усередині оновлюється на місці (`app.js` paintClaude). -->
+<div id="claude-hud" class="cv-hud" role="status"></div>
 <div id="insp-panel" class="insp" hidden></div>
 <!-- comment-layer у режимі «полотно» для пінів на «Огляді» (T-45). Класичні
      скрипти ДО модуля: `app.js` їх не імпортує, а бере з window. supabase-js із

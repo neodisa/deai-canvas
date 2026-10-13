@@ -524,5 +524,165 @@ class DryRun(InboxCase):
         self.assertNotRegex(out, re.compile(r'^✓', re.M))
 
 
+class TaskFlag(InboxCase):
+    """`--task <id>` (fb-07102026-e627c2): `current` один на машину, а паралельна
+    сесія його перемикає — тож без явної задачі inbox і `resolve` читали й ПИСАЛИ
+    пін чужої задачі. Тут `current` = fx, а працюємо з `other`."""
+
+    def setUp(self):
+        super().setUp()
+        self.other_dir = os.path.join(self.tmp, 'other')
+        os.makedirs(self.other_dir)
+        with open(os.path.join(self.other_dir, 'iterations.json'), 'w',
+                  encoding='utf-8') as f:
+            json.dump({'iterations': [{'id': 'it1'}, {'id': 'it4'}]}, f)
+        self.other_local = os.path.join(self.other_dir, '.dc-local-comments.json')
+        with open(self.other_local, 'w', encoding='utf-8') as f:
+            json.dump([_pin('99999999-oooo', 'пін чужої задачі',
+                       meta={'version': '4/holovna', 'seq': 1})], f)
+        with open(self.tasks_file, encoding='utf-8') as f:
+            cfg = json.load(f)
+        cfg['tasks']['other'] = {'title': 'Інша', 'dir': self.other_dir,
+                                 'comment_project': 'dc/other-inbox-test'}
+        # лише реєстр: запису `dir` нема / `dir` є, а теки на диску немає
+        self.gone_dir = os.path.join(self.tmp, 'gone-here')
+        cfg['tasks']['nodir'] = {'title': 'Без теки'}
+        cfg['tasks']['gone'] = {'title': 'Зникла', 'dir': self.gone_dir}
+        with open(self.tasks_file, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f)
+        self.set_local([_pin('11111111-aaaa', 'пін поточної',
+                             meta={'version': '1/holovna', 'seq': 1})])
+
+    def test_without_flag_it_is_the_current_task(self):
+        rc, out, _ = self.run_main([])
+        self.assertEqual(rc, 0)
+        self.assertIn('«Фікстура»', out)
+        self.assertIn('пін поточної', out)
+        self.assertNotIn('пін чужої задачі', out)
+
+    def test_list_reads_the_named_task_and_its_channel(self):
+        rc, out, _ = self.run_main(['--task', 'other'])
+        self.assertEqual(rc, 0)
+        self.assertIn('«Інша»', out)
+        self.assertIn('пін чужої задачі', out)
+        self.assertNotIn('пін поточної', out)
+        urls = ' '.join(c['url'] for c in self.net.calls)
+        self.assertIn('other-inbox-test', urls, 'канал Supabase — не названої задачі')
+        self.assertNotIn('fixture-inbox-test', urls)
+
+    def test_resolve_closes_the_pin_of_the_named_task_only(self):
+        current_before = self.local_bytes()
+        rc, out, _ = self.run_main(['--task', 'other', 'resolve', '999999',
+                                    '--reason', 'готово', '--it', '4'])
+        self.assertEqual(rc, 0, out)
+        with open(self.other_local, encoding='utf-8') as f:
+            got = json.load(f)[0]
+        self.assertEqual(got['status'], 'resolved')
+        self.assertEqual(got['resolvedV'], 4)
+        self.assertEqual(self.local_bytes(), current_before,
+                         'пін ПОТОЧНОЇ задачі переписано')
+
+    def test_resolve_default_iteration_is_the_named_tasks(self):
+        """Без `--it` номер береться з робочої ітерації НАЗВАНОЇ задачі (it4), а не
+        поточної (it1)."""
+        rc, out, _ = self.run_main(['--task', 'other', 'resolve', '999999',
+                                    '--reason', 'готово'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Іт.4', out)
+
+    def test_resolve_does_not_find_a_pin_of_the_current_task(self):
+        """Пін поточної задачі, названий префіксом, коли працюємо в `other`, —
+        «не знайдено», а не тихе закриття чужого."""
+        raw = self.local_bytes()
+        rc, out, _ = self.run_main(['--task', 'other', 'resolve', '111111',
+                                    '--reason', 'x', '--it', '1'])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.local_bytes(), raw)
+
+    def test_unknown_task_is_exit_2_and_says_nothing_about_current(self):
+        raw = self.local_bytes()
+        rc, out, err = self.run_main(['--task', 'nope'])
+        self.assertEqual(rc, 2)
+        self.assertIn("error: немає задачі 'nope' у tasks.json", err)
+        self.assertEqual(out, '', 'про поточну задачу не сказано ні слова')
+        self.assertEqual(self.net.calls, [], 'мережу чіпали, хоча задачі немає')
+        rc, out, err = self.run_main(['--task', 'nope', 'resolve', '111111',
+                                      '--reason', 'x', '--it', '1'])
+        self.assertEqual(rc, 2)
+        self.assertIn("error: немає задачі 'nope' у tasks.json", err)
+        self.assertEqual(out, '')
+        self.assertEqual(self.net.calls, [])
+        self.assertEqual(self.local_bytes(), raw, 'resolve змінив пін поточної задачі')
+
+    def test_task_missing_on_this_machine_is_exit_2_not_a_traceback(self):
+        """Задача є в реєстрі, теки тут нема: раніше `KeyError: 'dir'`, а з `dir`
+        у нікуди — порожній інбокс, тобто «пінів нема», хоч ми їх просто не
+        бачимо. Тепер — окрема помилка, код 2; нічого не читаємо й не пишемо."""
+        raw = self.local_bytes()
+        for tid in ('nodir', 'gone'):
+            for argv in (['--task', tid],
+                         ['--task', tid, 'resolve', '111111', '--reason', 'x',
+                          '--it', '1']):
+                with self.subTest(tid=tid, argv=argv):
+                    rc, out, err = self.run_main(argv)
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"error: задачі '{tid}' немає на цій машині "
+                                  '(є в реєстрі, теки нема)', err)
+                    self.assertNotIn('Traceback', err)
+                    self.assertEqual(out, '', 'про поточну задачу не сказано ні слова')
+                    self.assertEqual(self.net.calls, [], 'мережу чіпали, хоча теки нема')
+        self.assertFalse(os.path.exists(self.gone_dir), 'теку створено')
+        self.assertEqual(self.local_bytes(), raw)
+
+    def test_where_opens_the_named_task_not_the_current(self):
+        """Браузер для `--where` ходить на канвас за `/commented?…` — без префікса
+        `/t/<id>/` там відкрилась би ПОТОЧНА задача машини."""
+        urls = []
+
+        def fake(cmd, **kw):
+            urls.append(cmd[cmd.index('--url') + 1])
+            return mock.Mock(returncode=0, stdout='{}', stderr='')
+        with mock.patch.object(inbox.subprocess, 'run', side_effect=fake):
+            self.run_main(['--task', 'other', '--where'])
+            self.run_main(['--where'])
+        self.assertTrue(urls[0].endswith('/t/other'), urls[0])
+        self.assertNotIn('/t/', urls[1])
+
+    def test_close_hint_repeats_the_flag(self):
+        """Підказку «Закрити: …» копіюють дослівно — без `--task` вона закрила б
+        пін поточної задачі."""
+        _, named, _ = self.run_main(['--task', 'other'])
+        self.assertIn('python3 bin/inbox.py --task other resolve <id>', named)
+        _, plain, _ = self.run_main([])
+        self.assertIn('python3 bin/inbox.py resolve <id>', plain)
+        self.assertNotIn('--task', plain)
+
+    def test_flag_is_in_help_before_the_subcommand(self):
+        rc, out, _ = self.run_main(['-h'])
+        self.assertEqual(rc, 0)
+        self.assertIn('--task', out)
+        self.assertIn('паралельних сесій', out)
+
+    def test_descriptions_do_not_claim_the_task_is_always_the_current(self):
+        """Описи казали «поточної задачі», хоч із `--task` це названа."""
+        for argv in (['-h'], ['resolve', '-h']):
+            with self.subTest(argv=argv):
+                rc, out, _ = self.run_main(argv)
+                self.assertEqual(rc, 0)
+                flat = ' '.join(out.split())
+                self.assertIn('поточної (або названої --task) задачі', flat)
+                self.assertNotIn('поточної задачі', flat)
+
+    def test_flag_after_the_subcommand_is_an_error_not_silence(self):
+        """`--task` — глобальний, ПЕРЕД підкомандою; після неї argparse відмовляє
+        голосно (код 2), а не мовчки закриває пін поточної задачі."""
+        raw = self.local_bytes()
+        rc, _, err = self.run_main(['resolve', '111111', '--reason', 'x', '--it', '1',
+                                    '--task', 'other'])
+        self.assertEqual(rc, 2)
+        self.assertIn('--task', err)
+        self.assertEqual(self.local_bytes(), raw)
+
+
 if __name__ == '__main__':
     unittest.main()

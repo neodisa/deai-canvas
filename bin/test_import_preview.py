@@ -10,12 +10,16 @@ fb-29092026-210ec1: дві машини публікували одну зада
   · ітерація — ЧУЖА (джерело — превʼю) + моя робоча копія поруч (правило
     15.09.2026: робота не починається поверх чужої ітерації).
 """
+import contextlib
+import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -213,6 +217,438 @@ class ImportIteration(unittest.TestCase):
         rep = ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
         self.assertEqual(sorted(os.listdir(os.path.join(self.d, 'iterations'))), before)
         self.assertGreater(rep['files'], 5)
+
+
+def legacy_wrapper(data, pw='1100'):
+    """Обгортка превʼю старого формату (04.08–02.09.2026): дані інлайном у `var D`."""
+    return ('<!DOCTYPE html><html><head><title>t</title></head><body><script>'
+            f'var D={serve.js_literal(data)},PW={serve.js_literal(pw)},P=D.pages,I=D.iters,cur=null;'
+            '</script></body></html>')
+
+
+class LegacyWrapper(unittest.TestCase):
+    """fb-09102026-8b12a5: превʼю до 02.09.2026 не мають manifest.json — дані в обгортці."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.makedirs(os.path.join(self.d, 'iterations', 'it1'))
+        with open(os.path.join(self.d, 'iterations.json'), 'w') as f:
+            json.dump({'iterations': [{'id': 'it1', 'date': '01.10.2026 10:00', 'note': 'моя', 'published': True}]}, f)
+        self.base = 'https://pv-old.vercel.app'
+        self.data = {
+            'iters': [{'id': 'it2', 'label': 'Іт.2'}, {'id': 'it4', 'label': 'Іт.4'}],
+            'pages': [
+                {'id': 'it4', 'it': 'it4', 'name': 'Головна', 'depth': 0, 'path': 'it4/index.html'},
+                {'id': 'it4/kartka', 'it': 'it4', 'name': 'Картка }," },PW=', 'depth': 0, 'path': 'it4/kartka/index.html'},
+                {'id': 'it4/kartka-empty', 'it': 'it4', 'name': 'Порожньо', 'depth': 1, 'path': 'it4/kartka-empty/index.html'},
+                {'id': 'it2', 'it': 'it2', 'name': 'Стара', 'depth': 0, 'path': 'it2/index.html'},
+            ]}
+        self.site = {
+            f'{self.base}/': legacy_wrapper(self.data, pw='секрет-1100').encode(),
+            f'{self.base}/it4/index.html': published(PAGE.replace('../', ''), '').encode(),
+            f'{self.base}/it4/kartka/index.html': published(PAGE).encode(),
+            f'{self.base}/it4/kartka-empty/index.html': published(PAGE).encode(),
+            f'{self.base}/it4/assets/app.css': b'', f'{self.base}/it4/icons/a.svg': b'<svg/>',
+            f'{self.base}/it4/main.js': b'', f'{self.base}/it4/icons/a@2x.svg': b'<svg/>',
+        }
+        self.down = set()
+        self.log = []
+
+    def fetch(self, url):
+        self.log.append(url)
+        if url in self.down:
+            raise ip.FetchError(f'{url}: timed out')
+        if url in self.site:
+            return self.site[url]
+        raise ip.FetchError(f'404 {url}', code=404)
+
+    def snapshot(self):
+        """Усе, що лежить у теці задачі: {шлях: байти}."""
+        out = {}
+        for dp, _, fs in os.walk(self.d):
+            for name in fs:
+                with open(os.path.join(dp, name), 'rb') as f:
+                    out[os.path.relpath(os.path.join(dp, name), self.d)] = f.read()
+        return out
+
+    def wrapper_with(self, js_data):
+        """Обгортка, де після `var D=` стоїть СИРИЙ текст (кривий JSON теж)."""
+        return ('<!DOCTYPE html><html><head><title>t</title></head><body><script>'
+                f'var D={js_data},PW="{SECRET}",P=D.pages;</script></body></html>').encode()
+
+    def test_legacy_manifest_shape(self):
+        man = ip.legacy_manifest(self.data)
+        self.assertEqual([(i['id'], i['num']) for i in man['iters']], [('it2', 2), ('it4', 4)])
+        self.assertEqual([(p['it'], p['key'], p['path']) for p in man['pages'] if p['it'] == 'it4'],
+                         [('it4', 'main', 'it4/index.html'), ('it4', 'kartka', 'it4/kartka/index.html'),
+                          ('it4', 'kartka-empty', 'it4/kartka-empty/index.html')])
+        self.assertEqual([(r['key'], r['depth']) for r in man['outline'] if r['it'] == 'it4'],
+                         [('main', 0), ('kartka', 0), ('kartka-empty', 1)])
+
+    def test_imports_latest_from_legacy_wrapper_with_tree(self):
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch)
+        self.assertEqual((rep['source_it'], rep['format']), ('it4', 'legacy-wrapper'))
+        root = os.path.join(self.d, 'iterations', rep['imported'])
+        self.assertTrue(os.path.isfile(os.path.join(root, 'index.html')))
+        self.assertTrue(os.path.isfile(os.path.join(root, 'kartka', 'index.html')))
+        with open(os.path.join(root, 'pages.json'), encoding='utf-8') as f:
+            tree = json.load(f)['pages']
+        kartka = next(p for p in tree if p['id'] == 'kartka')
+        self.assertEqual([c['id'] for c in kartka.get('children', [])], ['kartka-empty'],
+                         'стан під сторінкою загубився — дерево не відновлено за глибиною')
+
+    def test_password_from_legacy_wrapper_goes_nowhere(self):
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch)
+        self.assertNotIn('секрет-1100', json.dumps(rep, ensure_ascii=False))
+        for dp, _, fs in os.walk(self.d):
+            for name in fs:
+                with open(os.path.join(dp, name), 'rb') as f:
+                    self.assertNotIn('секрет-1100'.encode(), f.read(), os.path.join(dp, name))
+
+    def test_network_error_on_manifest_is_not_a_reason_to_guess(self):
+        self.down = {f'{self.base}/manifest.json'}
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('manifest.json', str(ctx.exception))
+
+    def test_no_manifest_and_no_legacy_data_says_both(self):
+        self.site[f'{self.base}/'] = b'<html><body>not a canvas</body></html>'
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('var D', str(ctx.exception))
+
+    def test_manifest_preview_reports_its_format(self):
+        self.site[f'{self.base}/manifest.json'] = json.dumps(ip.legacy_manifest(self.data)).encode()
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertEqual(rep['format'], 'manifest')
+
+    # ── ревʼю P1 · I1: старі шаблони сніпета, гейт із паролем ────────────────────
+
+    def test_old_snippet_pages_import_without_the_password(self):
+        """Превʼю 04.08–27.08.2026 мають СТАРИЙ сніпет (з Supabase-тегом першим). Якщо
+        його не зняти, гейт із ПАРОЛЕМ відкритим текстом потрапляє у файли імпорту — а
+        канвас потім комітить їх у GitLab."""
+        for variant in ('38b4080', '5ed9bf7'):
+            with self.subTest(variant=variant):
+                self.setUp()
+                for rel, html in (('it4/index.html', PAGE.replace('../', '')),
+                                  ('it4/kartka/index.html', PAGE), ('it4/kartka-empty/index.html', PAGE)):
+                    self.site[f'{self.base}/{rel}'] = published_old(html, variant).encode()
+                self.assertIn(SECRET.encode(), self.site[f'{self.base}/it4/kartka/index.html'], 'фікстура без пароля')
+                rep = ip.import_iteration(self.d, self.base, fetch=self.fetch)
+                self.assertEqual(rep['unstripped'], [])
+                root = os.path.join(self.d, 'iterations', rep['imported'])
+                with open(os.path.join(root, 'kartka', 'index.html'), encoding='utf-8') as f:
+                    self.assertEqual(f.read(), PAGE)
+                for path, data in self.snapshot().items():
+                    self.assertNotIn(SECRET.encode(), data, path)
+                    self.assertNotIn(b'authgate', data, path)
+
+    def test_page_with_unknown_gate_is_refused_before_anything_is_written(self):
+        """Запобіжник, незалежний від шаблонів: сторінка, з якої гейт зняти не вдалось
+        (невідомий шаблон), не пишеться — інакше пароль потрапив би у файли. І нічого
+        не пишеться ВЗАГАЛІ: ні файлів, ні теки ітерації, ні запису в iterations.json."""
+        unknown_start = serve._inject_gate(
+            serve._insert_before_body(PAGE, '\n<script src="https://example.com/other-layer.js"></script>'),
+            serve.gate_html('t', SECRET))
+        unknown_end = published_old(PAGE, '5ed9bf7').replace('})();</script>', '})();/*v2*/</script>')
+        for name, page in (('невідомий початок', unknown_start), ('невідомий кінець гейта', unknown_end)):
+            for dry in (True, False):
+                with self.subTest(case=name, dry_run=dry):
+                    self.setUp()
+                    self.site[f'{self.base}/it4/kartka/index.html'] = page.encode()
+                    before = self.snapshot()
+                    with self.assertRaises(ip.ImportError_) as ctx:
+                        ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=dry)
+                    self.assertIn('гейтом', str(ctx.exception))
+                    self.assertIn('kartka/index.html', str(ctx.exception))
+                    self.assertNotIn(SECRET, str(ctx.exception))
+                    self.assertEqual(self.snapshot(), before, 'щось записано попри відмову')
+
+    # ── ревʼю P1 · I2: криві дані старої обгортки — помилка, не traceback ────────
+
+    def test_malformed_legacy_data_is_an_error_not_a_traceback(self):
+        unexpected = 'дані старої обгортки (var D) мають несподіваний вигляд'
+        digits = '9' * 5000
+        cases = [
+            ('D — масив', '[1,2]', 'var D'),
+            ('D — null', 'null', 'var D'),
+            ('iters — не список', '{"iters": 5, "pages": []}', unexpected),
+            ('pages — рядок', '{"iters": [], "pages": "x"}', unexpected),
+            ('елементи — не обʼєкти', '{"iters": [1, "a", null], "pages": [1, null, "p"]}', 'немає ітерацій'),
+            ('id/it — не рядки', '{"iters": [{"id": 5}, {"id": null}], "pages": [{"id": 7, "it": [1]}]}', 'немає ітерацій'),
+            ('id ітерації з 5000 цифр',
+             f'{{"iters": [{{"id": "it{digits}"}}], "pages": [{{"id": "it{digits}", "it": "it{digits}", '
+             f'"name": "x", "depth": 0, "path": "p"}}]}}', 'підозрілий шлях'),
+            ('глибока вкладеність масивів', '[' * 100000, 'var D'),
+            ('глибока вкладеність обʼєктів', '{"a":' * 100000, 'var D'),
+        ]
+        for name, js, fragment in cases:
+            with self.subTest(case=name):
+                self.site[f'{self.base}/'] = self.wrapper_with(js)
+                with self.assertRaises(ip.ImportError_) as ctx:
+                    ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+                msg = str(ctx.exception)
+                self.assertIn(fragment, msg)
+                if fragment == unexpected:
+                    self.assertEqual(msg, unexpected, 'текст винятку не мусить просочуватись у повідомлення')
+
+    def test_deeply_nested_manifest_json_is_an_error_not_recursion_error(self):
+        self.site[f'{self.base}/manifest.json'] = b'[' * 100000
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('manifest.json', str(ctx.exception))
+
+    def test_manifest_json_that_is_not_an_object_is_an_error(self):
+        self.site[f'{self.base}/manifest.json'] = b'[1, 2]'
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('manifest.json', str(ctx.exception))
+
+    def test_legacy_depth_is_coerced_into_a_valid_range(self):
+        """`depth` із чужих даних: сміття → 0, завелике → стеля `pm.MAX_DEPTH - 1` (щоб
+        дерево з рядків не вийшло за межу вкладеності й не впало у validate)."""
+        top = ip.pm.MAX_DEPTH - 1
+        for raw, want in (('abc', 0), (None, 0), (True, 0), (-5, 0), (2.5, 0), (float('inf'), 0),
+                          (0, 0), (1, 1), (10 ** 30, top)):
+            with self.subTest(depth=raw):
+                man = ip.legacy_manifest({'iters': [{'id': 'it1'}], 'pages': [
+                    {'id': 'it1/a', 'it': 'it1', 'name': 'a', 'depth': raw, 'path': 'it1/a/index.html'}]})
+                self.assertEqual(man['outline'][0]['depth'], want)
+
+    def test_long_chain_of_depths_still_makes_a_valid_tree(self):
+        pages = [{'id': f'it1/p{i}', 'it': 'it1', 'name': f'p{i}', 'depth': i, 'path': f'it1/p{i}/index.html'}
+                 for i in range(100)]
+        man = ip.legacy_manifest({'iters': [{'id': 'it1'}], 'pages': pages})
+        ip.pm.validate(ip.outline_tree(man['outline'], 'it1'))
+
+    def test_iteration_id_with_thousands_of_digits_does_not_crash_the_numbering(self):
+        man = ip.legacy_manifest({'iters': [{'id': 'it' + '9' * 5000}, {'id': 'it3'}]})
+        self.assertEqual([i['num'] for i in man['iters']], [0, 3])
+
+    # ── ревʼю P1 · I3: дерево перевіряється ДО запису й у dry-run ───────────────
+
+    def test_duplicate_pages_in_legacy_data_fail_before_any_write_and_any_crawl(self):
+        data = {**self.data, 'pages': self.data['pages'] + [
+            {'id': 'it4/kartka', 'it': 'it4', 'name': 'Дубль', 'depth': 0, 'path': 'it4/kartka/index.html'}]}
+        self.site[f'{self.base}/'] = legacy_wrapper(data).encode()
+        for dry in (True, False):
+            with self.subTest(dry_run=dry):
+                self.log.clear()
+                before = self.snapshot()
+                with self.assertRaises(ip.ImportError_) as ctx:
+                    ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=dry)
+                self.assertIn('kartka', str(ctx.exception))
+                self.assertEqual(self.snapshot(), before, 'щось записано попри невалідне дерево')
+                self.assertEqual(sorted(os.listdir(os.path.join(self.d, 'iterations'))), ['it1'])
+                self.assertFalse([u for u in self.log if '/it4/' in u], 'файли качались до перевірки дерева')
+
+    # ── ревʼю P1 · M2/M3/M1 ──────────────────────────────────────────────────────
+
+    def test_var_d_in_title_or_in_an_earlier_script_does_not_hide_the_real_data(self):
+        html = legacy_wrapper(self.data).replace('<title>t</title>', '<title>Fix var D= parser</title>')
+        html = html.replace('<script>var D=', '<script>var D=null;var D=', 1)
+        self.site[f'{self.base}/'] = html.encode()
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertEqual((rep['source_it'], rep['format']), ('it4', 'legacy-wrapper'))
+
+    def test_legacy_errors_do_not_blame_manifest_json_but_manifest_ones_do(self):
+        self.site[f'{self.base}/'] = legacy_wrapper({'iters': [], 'pages': []}).encode()
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('даних превʼю', str(ctx.exception))
+        self.assertNotIn('manifest.json', str(ctx.exception))
+        bad = {**self.data, 'pages': [{'id': 'it4', 'it': 'it4', 'name': 'x', 'depth': 0, 'path': '../evil.html'}]}
+        self.site[f'{self.base}/'] = legacy_wrapper(bad).encode()
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('даних превʼю', str(ctx.exception))
+        self.assertNotIn('manifest.json', str(ctx.exception))
+        self.site[f'{self.base}/manifest.json'] = json.dumps({'iters': [], 'pages': []}).encode()
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('manifest.json', str(ctx.exception))
+
+    def test_missing_wrapper_is_404_but_unreachable_wrapper_is_not(self):
+        del self.site[f'{self.base}/']
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('404', str(ctx.exception))
+        self.down = {f'{self.base}/'}
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
+        self.assertIn('timed out', str(ctx.exception))
+        self.assertIn('повтори', str(ctx.exception))
+        self.assertNotIn('404', str(ctx.exception))
+
+    def test_cli_says_the_legacy_tree_is_approximate(self):
+        def run(fmt):
+            err = io.StringIO()
+            rep = {'format': fmt, 'failed': [], 'broken': [], 'unstripped': []}
+            with mock.patch.object(ip, 'import_iteration', return_value=rep), \
+                    contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ip.main(['--task-dir', self.d, self.base]), 0)
+            return err.getvalue()
+        note = run('legacy-wrapper')
+        self.assertIn('наближено', note)
+        self.assertIn('теки-організатори', note)
+        self.assertEqual(run('manifest'), '')
+
+
+
+# ── Старі шаблони публікації ───────────────────────────────────────────────────
+# БУКВАЛЬНО з історії (`git show <sha>:design-canvas/app/serve.py`), а не імпорт
+# чинного коду: тест мусить зберігати те, що колись справді потрапило у світ.
+# Превʼю 04.08–27.08.2026 мають сніпет коментатора, що починається тегом
+# бібліотеки Supabase (38b4080 — без `onerror`, 5ed9bf7 — з ним); чинний шаблон
+# (6ced2ae) починається банером. Гейт у всіх версіях однаковий, крім рядка з
+# KEY/P: у 38b4080 пароль у лапках шаблону, з 5ed9bf7 — JS-літералом.
+_OLD_COMMENT_38B4080 = """
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="{assets}/supabase-adapter.min.js"></script>
+<script src="{assets}/comment-layer.min.js"></script>
+<script>
+(function () {{
+  var init = function () {{
+    var store = window.CommentLayerSupabase({{
+      url: '{sb_url}', anonKey: '{sb_key}', projectId: '{project}',
+    }});
+    store.ready.then(function () {{
+      window.CommentLayer.init({{ projectId: '{project}', storage: store, version: '{version}' }});
+    }});
+  }};
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+}})();
+</script>"""
+
+_OLD_COMMENT_5ED9BF7 = """
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="window.__clDown&&window.__clDown('бібліотека Supabase не завантажилась')"></script>
+<script src="{assets}/supabase-adapter.min.js" onerror="window.__clDown&&window.__clDown('адаптер коментарів не завантажився')"></script>
+<script src="{assets}/comment-layer.min.js" onerror="window.__clDown&&window.__clDown('шар коментарів не завантажився')"></script>
+<script>
+(function () {{
+  /* Банер оголошений ПЕРШИМ і на window: `onerror` тегів вище спрацьовує до того,
+     як цей скрипт виконається, тому вони кличуть його через `window.__clDown` з
+     охоронцем. Мовчазний збій тут — найгірший стан на превʼю: колега бачить
+     сторінку без пінів і робить висновок, що коментарів немає, хоча вони є. */
+  window.__clDown = function (why) {{
+    if (document.getElementById('cl-down')) return;
+    var d = document.createElement('div');
+    d.id = 'cl-down';
+    d.textContent = 'Коментарі недоступні: ' + why;
+    d.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;'
+      + 'background:#d14343;color:#fff;font:13px/1.4 system-ui,sans-serif;'
+      + 'padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.3)';
+    (document.body || document.documentElement).appendChild(d);
+  }};
+  var init = function () {{
+    if (!window.CommentLayerSupabase || !window.CommentLayer) {{
+      window.__clDown('шар коментарів не піднявся');
+      return;
+    }}
+    var store = window.CommentLayerSupabase({{
+      url: '{sb_url}', anonKey: '{sb_key}', projectId: '{project}',
+    }});
+    store.ready.then(function () {{
+      window.CommentLayer.init({{ projectId: '{project}', storage: store, version: '{version}' }});
+    }}).catch(function (e) {{
+      window.__clDown((e && e.message) || 'база не відповіла');
+    }});
+  }};
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+}})();
+</script>"""
+
+_OLD_GATE_38B4080 = """
+<style>#authgate{{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#eef0f2;font-family:system-ui,sans-serif}}
+#authform{{width:320px;background:#fff;border:1px solid #d5d9dd;padding:32px 28px;display:flex;flex-direction:column;gap:14px}}
+#authform input{{height:40px;padding:0 12px;border:1px solid #d5d9dd;font-size:14px}}
+#authform button{{height:44px;background:#2d6ae3;color:#fff;border:0;font-size:14px;cursor:pointer}}
+#agerr{{display:none;font-size:12px;color:#c0362c}}</style>
+<div id="authgate"><form id="authform">
+  <!-- До входу назви задачі/тікета не показуємо: URL превью може потрапити
+       кому завгодно, а контекст має бути за паролем (правило 30.07.2026). -->
+  <b>Перегляд макета</b><span style="font-size:13px;color:#6b7280">захищено · введіть пароль</span>
+  <input id="agpass" type="password" autocomplete="current-password" placeholder="Пароль">
+  <div id="agerr">Невірний пароль</div><button type="submit">Увійти</button>
+</form></div>
+<script>(function(){{var KEY='{key}',P='{pw}';
+function unlock(){{var g=document.getElementById('authgate');if(g)g.remove();
+  // Справжній заголовок — лише після входу (до нього в title нейтральний текст).
+  try{{if(window.__origTitle)document.title=window.__origTitle;}}catch(e){{}}
+  // Хук для обгортки: вона НЕ вантажить iframe до розблокування, інакше внутрішня
+  // сторінка (у якої тепер теж є гейт) показала б свій гейт усередині рамки.
+  window.__gateOpen=true;if(window.__onGateOpen)window.__onGateOpen();}}
+function save(){{try{{sessionStorage.setItem(KEY,'1')}}catch(e){{}}}}
+// Безшовний вхід із Liga Design Office: токен у hash (#k=<код>) → авто-розблокування.
+// ⛔ Прибираємо з hash ЛИШЕ свій `k=`, решту лишаємо: там їде `p=<сторінка>` —
+// глибоке посилання обгортки. Раніше тут стояв голий pathname+search, і hash
+// зносився цілком, тобто посилання «відкрий саме цю ітерацію» гинуло на вході.
+try{{var h=location.hash||'',m=h.match(/(?:^#|&)k=([^&]+)/);
+  if(m&&decodeURIComponent(m[1])===P){{save();
+    var rest=h.replace(/^#/,'').split('&').filter(function(s){{
+      return s&&s.indexOf('k=')!==0;}}).join('&');
+    history.replaceState(null,'',location.pathname+location.search+(rest?'#'+rest:''));
+    unlock();return;}}}}catch(e){{}}
+try{{if(sessionStorage.getItem(KEY)==='1'){{unlock();return;}}}}catch(e){{}}
+document.getElementById('authform').addEventListener('submit',function(e){{
+  e.preventDefault();
+  if(document.getElementById('agpass').value===P){{save();unlock();}}
+  else document.getElementById('agerr').style.display='block';}});}})();</script>"""
+
+_OLD_GATE_5ED9BF7 = _OLD_GATE_38B4080.replace(
+    "var KEY='{key}',P='{pw}';", "var KEY={key_js},P={pw_js};")
+assert _OLD_GATE_5ED9BF7 != _OLD_GATE_38B4080
+
+SECRET = 'секрет-1100'  # вигаданий пароль: у тестах «пароль превʼю» — лише він
+
+
+def published_old(html, variant, depth_up='../', pw=SECRET):
+    """Сторінка, опублікована СТАРИМ шаблоном (`variant` — sha коміту). Вставка перед
+    `</body>` і нейтралізація title — рівно як у тодішніх `inject_comment_layer` і
+    `_inject_gate` (в обох версіях однакові)."""
+    kw = dict(assets=f'{depth_up}comment-layer', sb_url='https://x.supabase.co', sb_key='anon-key',
+              project='chan', version='1/kartka')
+    if variant == '38b4080':
+        snippet, gate = _OLD_COMMENT_38B4080.format(**kw), _OLD_GATE_38B4080.format(key='t_auth', pw=pw)
+    else:
+        snippet = _OLD_COMMENT_5ED9BF7.format(**kw)
+        gate = _OLD_GATE_5ED9BF7.format(key_js=serve.js_literal('t_auth'), pw_js=serve.js_literal(pw))
+
+    def before_body(page, frag):
+        m = re.search(r'</body>', page, flags=re.I)
+        return page + frag if not m else page[:m.start()] + frag + page[m.start():]
+    page = before_body(html, snippet)
+    m = re.search(r'<title>(.*?)</title>', page, flags=re.I | re.S)
+    if m:
+        gate = f'<script>window.__origTitle={json.dumps(m.group(1))};</script>' + gate
+        page = page[:m.start()] + '<title>Перегляд макета</title>' + page[m.end():]
+    return before_body(page, gate)
+
+
+class OldTemplates(unittest.TestCase):
+    """Ревʼю P1 · I1: старі сніпети знімаються так само, як чинний — байт у байт."""
+
+    def test_each_old_template_strips_back_to_the_original_page(self):
+        no_title = PAGE.replace('<title>Картка «Ромашка»</title>', '')
+        for variant in ('38b4080', '5ed9bf7'):
+            for name, page in (('з title', PAGE), ('без title', no_title)):
+                with self.subTest(variant=variant, page=name):
+                    pub = published_old(page, variant)
+                    self.assertIn(SECRET, pub, 'фікстура без пароля — тест нічого б не довів')
+                    self.assertEqual(ip.strip_publish(pub), (page, True))
+
+    def test_gate_marker_is_in_every_known_gate(self):
+        """Запобіжник стоїть на маркері, за яким `serve._inject_gate` розпізнає гейт: він
+        мусить бути і в чинному гейті, і в обох старих (інакше запобіжник сліпий)."""
+        for name, gate in (('чинний', serve.gate_html('t', SECRET)),
+                           ('38b4080', _OLD_GATE_38B4080.format(key='t_auth', pw=SECRET)),
+                           ('5ed9bf7', _OLD_GATE_5ED9BF7.format(key_js='"t_auth"', pw_js=f'"{SECRET}"'))):
+            with self.subTest(gate=name):
+                self.assertIn(ip._GATE_MARK, gate)
 
 
 if __name__ == '__main__':

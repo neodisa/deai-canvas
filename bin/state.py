@@ -5,7 +5,12 @@
 щоб продовжити роботу, а НЕ верстати макет з нуля. Показує: ітерації (яка
 остання/опублікована), публікацію, стан GitLab (новіше від іншого дизайнера?),
 відкриті пін-коментарі.
+
+`--task <id>` — про названу задачу, а не про поточну. Поточна (`tasks.json` →
+`current`) одна на машину, і паралельна сесія Claude її перемикає: без явної
+назви «де ми зараз» раптом розповідає про ЧУЖУ задачу (fb-07102026-e627c2).
 """
+import argparse
 import json
 import os
 import sys
@@ -15,10 +20,13 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E402
                    gitlab_cfg, gitlab_status, supabase_pins, comment_channel,
-                   machine_identity, iteration_is_mine, iteration_pages)
+                   machine_identity, iteration_is_mine, iteration_pages,
+                   task_for, UnknownTask, TaskNotHere)
 import registry  # noqa: E402
 import pages_model as pm  # noqa: E402
+import shlex  # noqa: E402
 import urllib.request  # noqa: E402
+from urllib.parse import quote  # noqa: E402
 
 #: Де шукати живий канвас: `PORT` оточення (так його й піднімають на
 #: нестандартному порту), потім типовий 8765 і кілька сусідніх — рівно ті, що
@@ -26,8 +34,18 @@ import urllib.request  # noqa: E402
 CANVAS_PORTS = (8765, 8766, 8767, 8768)
 
 
-def gitlab_line(st, path):
+def _api_prefix(tid):
+    """`/t/<id>` для підказок із ЕНДПОЇНТОМ, які копіюють дослівно; порожній, коли
+    задачу не названо. Без префікса `POST /api/…` б'є в ПОТОЧНУ задачу машини —
+    тобто після `--task beta` підказка форкала б чужу задачу (ревʼю 12.10.2026)."""
+    return f'/t/{quote(tid, safe="")}' if tid is not None else ''
+
+
+def gitlab_line(st, path, tid=None):
     """Рядок стану GitLab. Чиста функція — тому й перевіряється тестами.
+
+    `tid` — задачу НАЗВАНО (`--task`): підказки з ендпоїнтом несуть префікс
+    `/t/<id>/`, а кнопки канваса названі як діючі на ПОТОЧНУ задачу канваса.
 
     Порядок гілок несучий. «Ще не в репо» стоїть ВИЩЕ за «синхронізовано», бо це
     найтихіший стан із можливих: наздоганяти нічого (`behind=0`), локально все на
@@ -37,8 +55,15 @@ def gitlab_line(st, path):
     if st.get('error'):
         return f'GitLab ({path}): помилка — {st["error"]}'
     if st.get('on_remote') is False:
+        if tid is not None:
+            # Кнопка в канвасі діє на ПОТОЧНУ задачу канваса, а не на названу.
+            send = (f'POST {_api_prefix(tid)}/api/gitlab-sync {{"it": "itN"}} '
+                    '(кнопка «↑ Надіслати Іт.N» в канвасі діє на поточну задачу '
+                    'канваса, не на названу)')
+        else:
+            send = 'У канвасі: «↑ Надіслати Іт.N»'
         return (f'GitLab ({path}): ⚠ ЩЕ НЕ В РЕПО — макет ніколи не пушився, '
-                f'робота існує в одному екземплярі. У канвасі: «↑ Надіслати Іт.N»')
+                f'робота існує в одному екземплярі. {send}')
     if st.get('behind'):
         # ⛔ ДВІ РІЗНІ НОВИНИ. `behind` рахується по ВСЬОМУ репо свідомо (інакше
         # дзеркало йде в non-fast-forward), тому верхній коміт СУСІДНЬОЇ задачі
@@ -47,8 +72,11 @@ def gitlab_line(st, path):
         # Розбивки немає (старий статус) — лишаємось гучними: немає факту, немає
         # й підстав заспокоювати.
         if st.get('behind_path') or 'behind_path' not in st:
+            pull = (f' (POST {_api_prefix(tid)}/api/gitlab-pull)' if tid is not None
+                    else '')
             return (f'GitLab ({path}): ⚠ на GitLab НОВІШЕ ({st["behind"]}) — '
-                    f'хтось (інший дизайнер/машина) оновив макет. Спершу Підтягнути!')
+                    f'хтось (інший дизайнер/машина) оновив макет. '
+                    f'Спершу Підтягнути!{pull}')
         return (f'GitLab ({path}): репо попереду на {st["behind"]} коміт(ів), але '
                 f'теку задачі ніхто не чіпав — пуш не заблокований, дзеркало '
                 f'наздожене себе саме')
@@ -91,7 +119,7 @@ def working_iteration(its, my_key=''):
     return (mine or its)[-1]
 
 
-def continue_line(its, my_key=''):
+def continue_line(its, my_key='', tid=None):
     """Рядок «з чого продовжуємо» — з останньої СВОЄЇ ітерації.
 
     Остання може бути ЧУЖОЮ: «Підтягнути» заводить пару «чужа + мій форк», а
@@ -101,6 +129,10 @@ def continue_line(its, my_key=''):
 
     `my_key` з дефолтом: функцію кличуть і тести старим способом, одним
     аргументом, і поведінка там мусить лишитись колишньою.
+
+    `tid` — задачу НАЗВАНО (`--task`): ендпоїнт у підказці несе префікс `/t/<id>/`.
+    Без нього скопійований дослівно `POST /api/iteration` форкав би ПОТОЧНУ задачу
+    машини, а не названу.
     """
     last = working_iteration(its, my_key)
     foreign = [it for it in its if not iteration_is_mine(it, my_key)]
@@ -113,7 +145,7 @@ def continue_line(its, my_key=''):
         who = f.get('author') or f.get('author_key') or 'колега'
         return (f'\n→ СВОЇХ ітерацій немає: остання — Іт.{iter_num(f["id"])} від '
                 f'{who}. Працювати поверх чужої не можна: зроби копію '
-                f'(POST /api/iteration {{"from": "{f["id"]}"}}) і працюй у ній. '
+                f'(POST {_api_prefix(tid)}/api/iteration {{"from": "{f["id"]}"}}) і працюй у ній. '
                 'Макет вже є — НЕ верстати з нуля.')
     tail = ''
     if foreign:
@@ -127,20 +159,31 @@ def continue_line(its, my_key=''):
             'відкрити обрану ітерацію і працювати далі.' + tail)
 
 
-def find_canvas_port(tid, ports=None, timeout=0.4):
+def find_canvas_port(tid, ports=None, timeout=0.4, explicit=False):
     """Порт, на якому живий канвас віддає САМЕ цю задачу, або None.
 
     Питаємо `/api/task`, а не просто «чи слухає порт»: на сусідньому порту
     може сидіти інша копія інструмента з іншою поточною задачею (так було в
     bf360 на 8766), і адреса звідти відкрила б чужий макет.
+
+    `explicit` — задачу НАЗВАНО (`--task`): тоді питаємо про неї ПРЕФІКСОМ,
+    `/t/<id>/api/task`, а не заголовком `X-Canvas-Task`. Без цього `/api/task`
+    відповідає про поточну задачу канваса, і названа, але не поточна, виглядала б
+    «канвас не відповідає». Саме префікс, бо адреси, які ми друкуємо далі, теж із
+    префіксом: старий (не перезапущений) канвас заголовка не знає й відповів би
+    про ПОТОЧНУ, тобто «підійшов» би, а його `/t/<id>/…` дав би 404. Невідома там
+    задача — 404 (це `OSError`), порт пропускаємо. Без `explicit` префікса немає
+    свідомо: порт підходить лише тоді, коли ТАМ поточна саме ця задача — бо адреси
+    без префікса `/t/<id>/` відкривають поточну.
     """
     env = os.environ.get('PORT')
     order = ([int(env)] if env and env.isdigit() else []) + [
         p for p in (ports or CANVAS_PORTS) if str(p) != env]
+    path = f'{_api_prefix(tid)}/api/task' if explicit else '/api/task'
     for port in order:
         try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/task',
-                                        timeout=timeout) as res:
+            req = urllib.request.Request(f'http://127.0.0.1:{port}{path}')
+            with urllib.request.urlopen(req, timeout=timeout) as res:
                 if json.loads(res.read().decode('utf-8')).get('id') == tid:
                     return port
         except (OSError, ValueError):
@@ -148,7 +191,7 @@ def find_canvas_port(tid, ports=None, timeout=0.4):
     return None
 
 
-def local_url_line(task, its, my_key, port):
+def local_url_line(task, its, my_key, port, tid=None):
     """Де відкрити робочу ітерацію в браузері, щоб зміряти верстку.
 
     ⛔ НАВІЩО (fb-22092026-79ae76, 22.09.2026). Маршрут існував завжди
@@ -160,11 +203,22 @@ def local_url_line(task, its, my_key, port):
     Порт не вгадуємо: `find_canvas_port` питає живий канвас, чи ця задача в
     нього поточна. Немає — кажемо, що робити, а не друкуємо адресу, яка
     відкриє 404 або чужу задачу.
+
+    `tid` — задачу НАЗВАНО (`--task`): адреси несуть префікс `/t/<id>/`. Без
+    нього вони відкривають ПОТОЧНУ задачу канваса, тобто після `--task beta`
+    вели б у чужий макет, щойно інша сесія перемкне канвас.
     """
     work = working_iteration(its, my_key)
     if not work:
         return None
     if port is None:
+        if tid is not None:
+            # Названа задача: перемикати канвас НЕ треба — префікс `/t/<id>/`
+            # відкриває її за будь-якої поточної. Треба лише, щоб канвас ЖИВ.
+            return ('Локально: канвас не відповідає (8765…) — підніми ./start.command; '
+                    'перемикатись на задачу не треба, адреси з префіксом /t/<id>/ '
+                    'відкривають названу; сторінки ітерації тоді — '
+                    f'{_api_prefix(tid)}/it-assets/<itN>/<сторінка>/index.html')
         return ('Локально: канвас із цією задачею не відповідає (8765…) — '
                 'підніми ./start.command і перемкнись на задачу; сторінки '
                 'ітерації тоді відкриваються за /it-assets/<itN>/<сторінка>/index.html')
@@ -173,7 +227,8 @@ def local_url_line(task, its, my_key, port):
         pages = pm.openable_pages(iteration_pages(task, it))
     except (OSError, ValueError):
         pages = []
-    base = f'http://127.0.0.1:{port}'
+    prefix = _api_prefix(tid)
+    base = f'http://127.0.0.1:{port}{prefix}'
     if not pages:
         return f'Локально: {base}/it-assets/{it}/index.html'
     first = pages[0]
@@ -185,9 +240,18 @@ def local_url_line(task, its, my_key, port):
     line = (f'Локально (Іт.{iter_num(it)}): {base}/it-assets/{it}/{rel + "/" if rel else ""}index.html'
             f' — сира сторінка «{first.get("name", first["id"])}»')
     if len(pages) > 1:
-        line += f' (ще {len(pages) - 1}: /it-assets/{it}/<id сторінки>/index.html)'
-    line += (f'\n  з коментатором: {base}/commented?it={it}&page={first["id"]}&ch=local'
-             ' · обидві адреси — лише для поточної задачі канваса')
+        line += f' (ще {len(pages) - 1}: {prefix}/it-assets/{it}/<id сторінки>/index.html)'
+    if tid is None:
+        line += (f'\n  з коментатором: {base}/commented?it={it}&page={first["id"]}&ch=local'
+                 ' · обидві адреси — лише для поточної задачі канваса')
+    else:
+        # ⛔ `/t/<id>/commented` без `bare=1` сервер відхиляє (400): коментатор пише
+        # піни на `/api/local-comments` без префікса, тобто в локальні коментарі
+        # ПОТОЧНОЇ задачі, а не названої. Друкувати адресу, що веде в 400, не
+        # можна — лишаємо те, що працює, і кажемо, куди йти коментувати.
+        line += (f'\n  коментувати — у канвасі: http://127.0.0.1:{port}/app/ (вікно поточної '
+                 'задачі канваса; під названою задачею коментатора нема) · адреса '
+                 'сторінки вище з префіксом /t/<id>/ від поточної не залежить')
     return line
 
 
@@ -235,10 +299,31 @@ def _pipeline_version():
     return 'dev'
 
 
-def main():
+def build_parser():
+    ap = argparse.ArgumentParser(
+        prog='state.py',
+        description='Де ми зараз по задачі: ітерації, публікація, GitLab, '
+                    'відкриті коментарі. Без аргументів — про поточну задачу.')
+    ap.add_argument('--task', metavar='ID',
+                    help='задача з tasks.json замість поточної — для паралельних сесій')
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
     cfg = load_tasks()
-    tid = cfg['current']
-    task = cfg['tasks'][tid]
+    try:
+        tid, task = task_for(cfg, a.task)
+    except TaskNotHere:
+        # Назва ЯВНА, тож відкат на поточну неприпустимий; і «нова/порожня
+        # задача» тут була б брехнею: задача є, лише теки на цій машині нема.
+        print(f"error: задачі '{a.task}' немає на цій машині "
+              '(є в реєстрі, теки нема)', file=sys.stderr)
+        return 2
+    except UnknownTask:
+        print(f'error: немає задачі {a.task!r} у tasks.json', file=sys.stderr)
+        return 2
+    named = a.task is not None      # назва ЯВНА: адреси й підказки її повторюють
     meta = load_meta(task)
     its = task_iterations(task)
     print(f'=== ДЕ МИ ЗАРАЗ · «{task.get("title", tid)}» ({tid}) ===')
@@ -261,7 +346,7 @@ def main():
         try:
             work = working_iteration(its, machine_identity()[1])
             st = gitlab_status(task, gl, meta, work['id'] if work else None)
-            print(gitlab_line(st, gl['path']))
+            print(gitlab_line(st, gl['path'], tid if named else None))
         except Exception as e:  # noqa: BLE001
             print(f'GitLab: не дістати статус ({e})')
     else:
@@ -274,14 +359,17 @@ def main():
     except (OSError, ValueError):
         local = 0
     external = _open_pins(comment_channel(task, tid))
+    # Підказку копіюють дослівно: без `--task` вона відкрила б інбокс ПОТОЧНОЇ задачі.
+    inbox_cmd = 'python3 bin/inbox.py' + (f' --task {shlex.quote(tid)}' if named else '')
     print(f'Відкриті коментарі: {local} локальних (мені) + {external} проєктних'
-          f'{" → python3 bin/inbox.py" if local + external else ""}')
+          f'{" → " + inbox_cmd if local + external else ""}')
 
-    loc = local_url_line(task, its, machine_identity()[1], find_canvas_port(tid))
+    loc = local_url_line(task, its, machine_identity()[1],
+                         find_canvas_port(tid, explicit=named), tid if named else None)
     if loc:
         print(loc)
 
-    print(continue_line(its, machine_identity()[1]))
+    print(continue_line(its, machine_identity()[1], tid if named else None))
     return 0
 
 

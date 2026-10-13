@@ -471,20 +471,6 @@ function paletteBtn(model) {
     >${ico("search")}<span class="lbl-pal">${esc(t("paletteOpen"))}</span></button></div>`;
 }
 
-/* Фішка статусу Клода. Вік останнього удару — частина правди: «працює · 2 хв
-   тому» чесніше за голе «працює», коли довга команда йде без жодного інструменту. */
-function claudeChip(model) {
-  const c = model.zone1.find((x) => x.id === "claude");
-  if (!c) return "";
-  const states = ["working", "waiting", "blocked", "done"];
-  const st = states.includes(c.state) ? c.state : "working";
-  const age = c.ageS < 60 ? t("ageSec", c.ageS) : t("ageMin", Math.floor(c.ageS / 60));
-  const label = st === "working" ? t("claudeWorking", age) : t(`claude_${st}`);
-  const title = c.note ? `${label} · ${c.note}` : label;
-  return `<span class="claude-chip claude-chip--${st}" role="status" title="${esc(title)}">`
-    + `<span class="claude-dot"></span><span class="lbl-claude">${esc(label)}</span></span>`;
-}
-
 /* Логотип — вхід на екран «Задачі». Імʼя несе `aria-label`: усередині лише
    декоративний SVG. `ctl--on` — «ми зараз там»; `aria-current="page"` дублює
    це для читача, бо колір сам по собі стану не оголошує. НЕ `aria-pressed`:
@@ -517,7 +503,7 @@ export function barHTML(model, state) {
   const zone1 = home
     ? `${homeBtn(model)}${paletteBtn(model)}${homeCrumbs(model)}`
     : `${homeBtn(model)}${paletteBtn(model)}<div class="crumbs">`
-      + `${crumbTask(model, state, openDd)}${crumbIter(model, openDd)}</div>${claudeChip(model)}`;
+      + `${crumbTask(model, state, openDd)}${crumbIter(model, openDd)}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */
   const zone2 = home ? "" : zone2HTML(model, state, openDd);

@@ -47,6 +47,28 @@ class ClaudeView(unittest.TestCase):
         self.assertEqual(serve.claude_view({'s': rec('blocked')}, T0 + 1, 'demo')['state'], 'blocked')
         self.assertEqual(serve.claude_view({'s': rec('done')}, T0 + 1, 'demo')['state'], 'done')
 
+    def test_beat_by_jira_key_is_shown(self):
+        """Знахідка 12.10.2026: мод шле ключ задачі `jira ?? id`, модель за інструкцією
+        скіла — тікет Jira, а сервер звіряв лише з id. У 23 з 32 задач (jira ≠ id)
+        статус не світився НІКОЛИ — «хибне нічого»."""
+        v = serve.claude_view({'s': rec(task='LIGA-1')}, T0 + 1, 'demo', aliases=('LIGA-1',))
+        self.assertEqual(v['state'], 'working')
+
+    def test_foreign_jira_key_is_not_shown(self):
+        v = serve.claude_view({'s': rec(task='LIGA-2')}, T0 + 1, 'demo', aliases=('LIGA-1',))
+        self.assertIsNone(v['state'])
+
+    def test_empty_alias_matches_nothing(self):
+        """Задача без Jira: порожній псевдонім не сміє збігтися з ударом без ключа."""
+        v = serve.claude_view({'s': rec(task='')}, T0 + 1, 'demo', aliases=(None, ''))
+        self.assertIsNone(v['state'])
+
+    def test_non_string_alias_is_ignored(self):
+        """Ревʼю 12.10.2026: `jira` у tasks.json правлять руками; список у ньому валив
+        `GET /api/claude-status` (TypeError: unhashable), а опит б'є кожні 5 с."""
+        v = serve.claude_view({'s': rec()}, T0 + 1, 'demo', aliases=(['LIGA-1'], 7))
+        self.assertEqual(v['state'], 'working')
+
 
 if __name__ == '__main__':
     unittest.main()

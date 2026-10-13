@@ -990,6 +990,17 @@ class ServeTest(unittest.TestCase):
         with urllib.request.urlopen(own) as r:
             self.assertEqual(r.status, 200, 'власна сторінка канваса не сміє отримати 403')
 
+    def test_claude_status_matches_task_jira(self):
+        """Знахідка 12.10.2026: удар із Jira-ключем поточної задачі (фікстура: `TEST-1`)
+        світиться на канвасі. Стереже САМ виклик у `GET`: чиста функція з псевдонімами
+        не допоможе, якщо `do_GET` їх не передасть."""
+        st, body = self._post_json('/api/claude-status', {
+            'task': 'TEST-1', 'phase': 'design', 'status': 'in_progress', 'note': 'by-jira', 'session': 'sj'})
+        self.assertEqual(st, 200, body)
+        with urllib.request.urlopen(f'{self.base}/api/claude-status') as r:
+            got = json.load(r)
+        self.assertEqual((got['state'], got.get('note')), ('working', 'by-jira'))
+
     def test_it_stamp_lists_recently_changed_pages(self):
         """«Де саме міняє»: сторінка, чиї файли змінились за останні 2 хв."""
         idir = self._tree_it('it32', [{'id': 'p', 'name': 'p', 'kind': 'page'},
@@ -5169,10 +5180,6 @@ class ServerCodeStalenessTest(unittest.TestCase):
         self.assertIn('pages_model.py', names)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class IterAssetRevalidation(unittest.TestCase):
     """Ассети ітерації мусять ПЕРЕЗВІРЯТИСЬ, а не перекачуватись.
 
@@ -5403,3 +5410,694 @@ class IterationAuthorStamp(unittest.TestCase):
         e = serve._stamp_author({'id': 'it2'})
         self.assertNotIn('author', e)
         self.assertNotIn('author_key', e)
+
+
+class TaskPerRequest(unittest.TestCase):
+    """Задача ЗАПИТУ, а не «поточна машини» (fb-07102026-e627c2).
+
+    Сервер тримав ОДНУ поточну задачу на машину (`tasks.json` → `current`), і
+    паралельна сесія Claude, що перемкнула її, відправляла `/it-assets`, синк і
+    публікацію ПЕРШОЇ сесії в чужу задачу — без жодного сигналу. Тепер запит
+    може назвати задачу сам: заголовок `X-Canvas-Task` або префікс `/t/<id>/`.
+    Невідома назва — 404 з назвою, а НЕ тихий відкат на поточну: інакше помилка
+    в id знову била б у чужу задачу.
+
+    ⛔ Конфіг — ТИМЧАСОВИЙ (`DC_TASKS_FILE`): охоронці `LiveConfigUntouched` і
+    `TestsCannotWriteLiveConfig` стежать, щоб жоден тест не писав у живий.
+    Фікстура перестворюється на КОЖЕН тест: тести пишуть (нова ітерація, пароль,
+    перемикання `current`), і сусід не сміє успадкувати чужий стан.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cfgdir = tempfile.mkdtemp(prefix='dc-taskreq-cfg-')
+        cls.root = tempfile.mkdtemp(prefix='dc-taskreq-')
+        cls.tasks_file = os.path.join(cls.cfgdir, 'tasks.json')
+        os.environ['DC_TASKS_FILE'] = cls.tasks_file
+        os.environ['DC_NO_OVERVIEW'] = '1'
+        cls.httpd = serve.make_server(0)
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        cls.base = f'http://127.0.0.1:{cls.port}'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        os.environ.pop('DC_TASKS_FILE', None)
+        os.environ.pop('DC_NO_OVERVIEW', None)
+        for d in (cls.cfgdir, cls.root):
+            shutil.rmtree(d, ignore_errors=True)
+
+    def setUp(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+        self.dirs = {}
+        for tid in ('alpha', 'beta'):
+            d = os.path.join(self.root, tid)
+            it1 = os.path.join(d, 'iterations', 'it1')
+            os.makedirs(os.path.join(it1, 'assets'))
+            with open(os.path.join(it1, 'index.html'), 'w', encoding='utf-8') as f:
+                f.write(f'<!DOCTYPE html><html><body><h1>{tid}</h1></body></html>')
+            with open(os.path.join(it1, 'assets', 'x.css'), 'w', encoding='utf-8') as f:
+                f.write(f'.mark-{tid}{{color:red}}')
+            with open(os.path.join(d, 'iterations.json'), 'w', encoding='utf-8') as f:
+                json.dump({'iterations': [{'id': 'it1', 'date': '12.10.2026 10:00',
+                                           'note': tid, 'published': False}],
+                           'publish_url': None}, f)
+            self.dirs[tid] = d
+        with open(self.tasks_file, 'w', encoding='utf-8') as f:
+            json.dump({'current': 'alpha', 'design_work_root': self.cfgdir,
+                       'tasks': {'alpha': {'dir': self.dirs['alpha'], 'title': 'Альфа'},
+                                 'beta': {'dir': self.dirs['beta'], 'title': 'Бета'}}}, f)
+
+    def _cfg(self):
+        with open(self.tasks_file, encoding='utf-8') as f:
+            return json.load(f)
+
+    def _meta(self, tid):
+        with open(os.path.join(self.dirs[tid], 'iterations.json'), encoding='utf-8') as f:
+            return json.load(f)
+
+    def get(self, path, headers=None):
+        """(статус, тіло як текст) — і для 200, і для відмов."""
+        req = urllib.request.Request(self.base + path, headers=headers or {})
+        try:
+            r = urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode('utf-8', 'replace')
+        return r.status, r.read().decode('utf-8')
+
+    def send_post(self, path, payload, headers=None):
+        req = urllib.request.Request(
+            self.base + path, data=json.dumps(payload).encode(), method='POST',
+            headers={'Content-Type': 'application/json', **(headers or {})})
+        try:
+            r = urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode('utf-8', 'replace')
+        return r.status, r.read().decode('utf-8')
+
+    def test_1_header_names_the_task_and_does_not_stick_to_the_connection(self):
+        """Заголовок діє на ОДИН запит. Обробник живе, поки живе зʼєднання, тож
+        задачу, названу першим запитом, наступний запит БЕЗ заголовка успадкував би.
+
+        Реальний сервер говорить HTTP/1.0 (зʼєднання на кожен запит), і з ним цей
+        тест був би вакуумно зеленим. Тому окремий сервер на HTTP/1.1, а що
+        зʼєднання таки одне — доводить `conn.sock` до й після."""
+        import http.client
+        httpd = serve.make_server(0)
+        httpd.RequestHandlerClass.protocol_version = 'HTTP/1.1'
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        conn = http.client.HTTPConnection('127.0.0.1', httpd.server_address[1], timeout=10)
+        try:
+            def ask(headers):
+                conn.request('GET', '/api/task', headers=headers)
+                r = conn.getresponse()
+                return json.loads(r.read())['id'], r
+            plain, r0 = ask({})
+            named, r1 = ask({'X-Canvas-Task': 'beta'})
+            sock = conn.sock
+            after, r2 = ask({})
+            self.assertEqual((plain, named, after), ('alpha', 'beta', 'alpha'),
+                             'задача з заголовка прилипла до наступного запиту')
+            self.assertFalse(r1.will_close, 'сервер закрив зʼєднання — тест не про keep-alive')
+            self.assertIs(conn.sock, sock, 'зʼєднання перевідкрите — тест не про keep-alive')
+        finally:
+            conn.close()
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_1b_header_works_on_a_plain_connection_too(self):
+        st, body = self.get('/api/task')
+        self.assertEqual(json.loads(body)['id'], 'alpha')
+        st, body = self.get('/api/task', {'X-Canvas-Task': 'beta'})
+        self.assertEqual((st, json.loads(body)['id']), (200, 'beta'))
+
+    def test_2_prefix_names_the_task_for_it_assets(self):
+        st, body = self.get('/t/beta/it-assets/it1/index.html')
+        self.assertEqual(st, 200)
+        self.assertIn('<h1>beta</h1>', body)
+        st, body = self.get('/it-assets/it1/index.html')
+        self.assertIn('<h1>alpha</h1>', body, 'без префікса — поточна задача машини')
+        # хвіст із запитом лишається цілим після зняття префікса
+        st, body = self.get('/t/beta/it-assets/it1/assets/x.css?v=3')
+        self.assertIn('.mark-beta', body)
+        # префікс доходить і до API, не лише до статики
+        st, body = self.get('/t/beta/api/task')
+        self.assertEqual(json.loads(body)['id'], 'beta')
+
+    def test_3_unknown_task_is_404_naming_it_never_a_fallback(self):
+        for path, headers, named in (
+                ('/t/nope/it-assets/it1/index.html', None, 'nope'),
+                ('/api/task', {'X-Canvas-Task': 'nope'}, 'nope'),
+                ('/it-assets/it1/index.html', {'X-Canvas-Task': 'nope'}, 'nope'),
+                # обхід теки через id: це не задача з tasks.json
+                ('/t/..%2Fx/it-assets/it1/index.html', None, '../x'),
+                ('/api/task', {'X-Canvas-Task': '../x'}, '../x')):
+            with self.subTest(path=path, headers=headers):
+                st, body = self.get(path, headers)
+                self.assertEqual(st, 404)
+                self.assertIn(named, body)
+                self.assertNotIn('alpha', body, 'невідома задача відкотилась на поточну')
+        # POST із тілом: відмова не змінює нічого й не губить відповідь
+        before = (self._meta('alpha'), self._meta('beta'))
+        st, body = self.send_post('/api/iteration', {'from': 'it1', 'note': 'x'},
+                                  {'X-Canvas-Task': 'nope'})
+        self.assertEqual(st, 404)
+        self.assertIn('nope', body)
+        self.assertEqual((self._meta('alpha'), self._meta('beta')), before)
+        self.assertFalse(os.path.isdir(os.path.join(self.dirs['alpha'], 'iterations', 'it2')))
+
+    def test_4_root_absolute_asset_resolves_through_the_referer_task(self):
+        """Angular-збірка просить `/assets/x.css` (корене-абсолютно): шлях не
+        каже, чия це ітерація, і до цього її брали з Referer і з ПОТОЧНОЇ задачі.
+        Тепер задача береться з префікса в Referer теж."""
+        ref = f'{self.base}/t/beta/it-assets/it1/index.html'
+        st, body = self.get('/assets/x.css', {'Referer': ref})
+        self.assertEqual(st, 200)
+        self.assertIn('.mark-beta', body)
+        # Referer без префікса — як і раніше, поточна задача
+        st, body = self.get('/assets/x.css',
+                            {'Referer': f'{self.base}/it-assets/it1/index.html'})
+        self.assertIn('.mark-alpha', body)
+        # явна задача запиту сильніша за Referer
+        st, body = self.get('/assets/x.css', {'Referer': ref, 'X-Canvas-Task': 'alpha'})
+        self.assertIn('.mark-alpha', body)
+
+    def test_4c_commented_referer_with_a_prefix_names_the_task_too(self):
+        """Сторінка зʼємки відкрита як `/t/beta/commented?it=…&bare=1`: її
+        корене-абсолютні ассети мають Referer саме з нею, а не з `/it-assets/`."""
+        ref = f'{self.base}/t/beta/commented?it=it1&page=main&bare=1'
+        st, body = self.get('/assets/x.css', {'Referer': ref})
+        self.assertEqual(st, 200)
+        self.assertIn('.mark-beta', body)
+
+    def test_4b_referer_with_unknown_task_is_ignored_not_served_from_current(self):
+        """Чужий чи застарілий Referer не сміє тихо віддати ітерацію ПОТОЧНОЇ
+        задачі: це та сама брехня, проти якої вся зміна."""
+        ref = f'{self.base}/t/nope/it-assets/it1/index.html'
+        st, body = self.get('/assets/x.css', {'Referer': ref})
+        self.assertEqual(st, 404)
+        self.assertNotIn('.mark-alpha', body)
+
+    def test_5_post_goes_to_the_named_task_and_current_stays(self):
+        st, body = self.send_post('/api/iteration', {'from': 'it1', 'note': 'нова'},
+                                  {'X-Canvas-Task': 'beta'})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(json.loads(body)['iteration']['id'], 'it2')
+        self.assertEqual([i['id'] for i in self._meta('beta')['iterations']], ['it1', 'it2'])
+        self.assertEqual([i['id'] for i in self._meta('alpha')['iterations']], ['it1'],
+                         'ітерація потрапила в поточну, а не названу задачу')
+        self.assertTrue(os.path.isdir(os.path.join(self.dirs['beta'], 'iterations', 'it2')))
+        self.assertFalse(os.path.isdir(os.path.join(self.dirs['alpha'], 'iterations', 'it2')))
+        self.assertEqual(self._cfg()['current'], 'alpha', 'явна задача запиту перемкнула current')
+
+    def test_6_task_for_is_pure_and_strict(self):
+        # Названа задача мусить БУТИ на цій машині — тож у фікстурі справжні теки.
+        a = {'title': 'A', 'dir': self.dirs['alpha']}
+        b = {'title': 'B', 'dir': self.dirs['beta']}
+        cfg = {'current': 'alpha', 'tasks': {'alpha': a, 'beta': b}}
+        self.assertEqual(serve.task_for(cfg), ('alpha', a))
+        self.assertEqual(serve.task_for(cfg, None), ('alpha', a))
+        self.assertEqual(serve.task_for(cfg, 'beta'), ('beta', b))
+        for bad in ('nope', '../x', '', 5, ['beta']):
+            with self.subTest(bad=bad):
+                with self.assertRaises(serve.UnknownTask):
+                    serve.task_for(cfg, bad)
+
+    # ---- прямі читачі `cfg['current']`: що мусить слухати запит, а що ні ----
+
+    def test_7_preview_password_lands_in_the_named_task(self):
+        """`_preview_password` читав `cfg['current']` напряму, повз `_current_task`
+        — заголовок мовчки писав би пароль у поточну задачу."""
+        st, body = self.send_post('/api/preview-password', {'password': 'tajne'},
+                                  {'X-Canvas-Task': 'beta'})
+        self.assertEqual(st, 200, body)
+        tasks = self._cfg()['tasks']
+        self.assertEqual(tasks['beta'].get('preview_password'), 'tajne')
+        self.assertNotIn('preview_password', tasks['alpha'])
+
+    def test_8_registry_endpoints_keep_machine_current_whatever_the_header(self):
+        """`task-switch` / `/api/tasks` — про МАШИНУ, а не про запит: заголовок
+        сесії не має ні перемикати чужу `current` на свою, ні ховати справжню."""
+        st, body = self.get('/api/tasks', {'X-Canvas-Task': 'beta'})
+        self.assertEqual(json.loads(body)['current'], 'alpha')
+        st, body = self.send_post('/api/task-switch', {'id': 'beta'},
+                                  {'X-Canvas-Task': 'alpha'})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self._cfg()['current'], 'beta')
+        self.assertEqual(json.loads(body)['current'], 'beta')
+
+    def test_9_missing_asset_404_says_named_for_an_explicit_task(self):
+        st, body = self.get('/it-assets/it9/index.html')
+        self.assertEqual(st, 404)
+        self.assertIn('Поточна задача', body)
+        self.assertNotIn('Названа задача', body)
+        st, body = self.get('/t/beta/it-assets/it9/index.html')
+        self.assertEqual(st, 404)
+        self.assertIn('Названа задача', body)
+        self.assertIn('beta', body)
+        self.assertNotIn('перемкнулась', body,
+                         'для явної задачі підказка «перемкнулась» — брехня')
+
+    # ---- ревʼю: /commented, зʼємка, Origin, дрібниці ----
+
+    def _base_href(self, html):
+        m = re.search(r'<base href="([^"]+)">', html)
+        self.assertIsNotNone(m, f'у сторінці нема <base href>: {html[:200]}')
+        return m.group(1)
+
+    def test_10_commented_under_a_named_task_is_bare_only(self):
+        """`/commented` під названою задачею: коментатор пише піни на
+        `/api/local-comments` БЕЗ префікса — тобто в `.dc-local-comments.json`
+        ПОТОЧНОЇ задачі, хоч пін поставлено на сторінці названої. Тому дозволено
+        лише `bare=1` (шлях зʼємки й pin-where, коментатора там нема), а `<base>`
+        мусить нести префікс: відносні ассети сторінки інакше йдуть у ПОТОЧНУ."""
+        from urllib.parse import urljoin
+        for path, headers in (('/t/beta/commented?it=it1&bare=1', None),
+                              ('/commented?it=it1&bare=1', {'X-Canvas-Task': 'beta'})):
+            with self.subTest(path=path, headers=headers):
+                st, html = self.get(path, headers)
+                self.assertEqual(st, 200, html[:200])
+                self.assertIn('<h1>beta</h1>', html)
+                self.assertNotIn('CommentLayer.init', html)
+                self.assertNotIn('local-adapter.js', html)
+                base = self._base_href(html)
+                self.assertEqual(base, f'{self.base}/t/beta/it-assets/it1/')
+                # відносний ассет з `<base>` справді віддає файл названої задачі
+                asset = urljoin(base, 'assets/x.css')
+                st, css = self.get(asset[len(self.base):])
+                self.assertEqual(st, 200)
+                self.assertIn('.mark-beta', css)
+        # без назви — як було: `<base>` без префікса, поточна задача
+        st, html = self.get('/commented?it=it1&bare=1')
+        self.assertEqual(self._base_href(html), f'{self.base}/it-assets/it1/')
+        self.assertIn('<h1>alpha</h1>', html)
+
+    def test_10b_commented_with_the_layer_is_refused_under_a_named_task(self):
+        for path, headers in (('/t/beta/commented?it=it1', None),
+                              ('/t/beta/commented?it=it1&bare=0', None),
+                              ('/t/beta/commented?it=it1&ch=project', None),
+                              ('/commented?it=it1', {'X-Canvas-Task': 'beta'})):
+            with self.subTest(path=path, headers=headers):
+                st, body = self.get(path, headers)
+                self.assertEqual(st, 400)
+                self.assertIn('коментування під названою задачею не підтримується', body)
+                self.assertNotIn('CommentLayer', body)
+                self.assertNotIn('local-adapter.js', body)
+                self.assertNotIn('<h1>', body, 'макет віддано, хоч коментатора до нього не додано')
+        # без назви коментатор на місці (відмова — лише для названої задачі)
+        st, html = self.get('/commented?it=it1')
+        self.assertEqual(st, 200)
+        self.assertIn('local-adapter.js', html)
+
+    def test_11_shoot_child_gets_the_task_prefix_in_its_url(self):
+        """`bin/shoot.mjs` стукає назад за `${url}/api/iteration-pages`,
+        `${url}/api/flow` і `${url}/commented?…&bare=1`. Без префікса в `--url`
+        він питав би ПОТОЧНУ задачу, а кадри писав би в названу."""
+        seen = []
+        real_popen = subprocess.Popen
+
+        def fake_popen(args, *a, **kw):
+            if isinstance(args, (list, tuple)) and any(str(x).endswith('shoot.mjs') for x in args):
+                seen.append(list(args))
+                raise OSError('stub')    # далі — гілка «не вийшло запустити»
+            return real_popen(args, *a, **kw)
+        with mock.patch.object(serve, '_node_bin', return_value='/fake/node'), \
+                mock.patch.object(serve.subprocess, 'Popen', fake_popen):
+            st, body = self.send_post('/api/shoot', {'it': 'it1', 'check': True},
+                                      {'X-Canvas-Task': 'beta'})
+            self.assertEqual(st, 200, body)
+            st, body = self.send_post('/t/alpha/api/shoot', {'it': 'it1', 'check': True})
+            st, body = self.send_post('/api/shoot', {'it': 'it1', 'check': True})
+        self.assertEqual(len(seen), 3, f'Popen не викликано як треба: {seen}')
+
+        def arg(args, flag):
+            return args[args.index(flag) + 1]
+        base = f'http://127.0.0.1:{self.port}'
+        self.assertEqual(arg(seen[0], '--url'), f'{base}/t/beta')
+        self.assertEqual(arg(seen[0], '--dir'),
+                         os.path.join(self.dirs['beta'], 'iterations', 'it1'))
+        self.assertEqual(arg(seen[1], '--url'), f'{base}/t/alpha',
+                         'названа задача, хоч і збігається з поточною, лишається названою')
+        self.assertEqual(arg(seen[2], '--url'), base, 'без назви — адреса без префікса, як було')
+
+    def test_12_foreign_origin_cannot_post_anywhere(self):
+        """Префікс робить POST «простим запитом», який чужа вебсторінка шле без
+        preflight, а Origin там перевіряли лише три обробники з тридцяти. Тепер
+        перевірка одна, на вході `do_POST`: чужий Origin — 403 до будь-якого
+        обробника (і до розбору задачі)."""
+        before = (self._meta('alpha'), self._meta('beta'))
+        evil = {'Origin': 'http://evil.example'}
+        for path, headers in (('/t/beta/api/iteration', evil),
+                              ('/api/iteration', evil),
+                              ('/api/iteration', {**evil, 'X-Canvas-Task': 'beta'}),
+                              ('/t/nope/api/iteration', evil),
+                              ('/api/iteration', {'Origin': 'null'})):
+            with self.subTest(path=path, headers=headers):
+                st, body = self.send_post(path, {'from': 'it1'}, headers)
+                self.assertEqual(st, 403, body)
+                self.assertIn('foreign origin', body)
+        self.assertEqual((self._meta('alpha'), self._meta('beta')), before)
+        self.assertFalse(os.path.isdir(os.path.join(self.dirs['beta'], 'iterations', 'it2')))
+        # свої — як було: без Origin (curl, мод Claude Code) і з локальним
+        for origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765', 'http://[::1]:8765'):
+            with self.subTest(origin=origin):
+                headers = {'Origin': origin} if origin else {}
+                st, body = self.send_post('/t/beta/api/iteration', {'from': 'it1'}, headers)
+                self.assertEqual(st, 200, body)
+
+    def test_13_prefix_beats_the_header(self):
+        st, body = self.get('/t/beta/api/task', {'X-Canvas-Task': 'alpha'})
+        self.assertEqual(json.loads(body)['id'], 'beta')
+
+    def test_14_unknown_task_with_a_big_body_still_gets_its_404(self):
+        """Відмова до читання тіла POST лишає його в буфері; закрите з непрочитаним
+        — це RST, і клієнт міг би не побачити навіть 404 (ConnectionResetError)."""
+        import http.client
+        body = b'{"pad":"' + b'x' * 900_000 + b'"}'
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        try:
+            conn.request('POST', '/api/iteration', body,
+                         {'Content-Type': 'application/json', 'X-Canvas-Task': 'nope'})
+            r = conn.getresponse()
+            self.assertEqual(r.status, 404)
+            self.assertIn('nope', r.read().decode('utf-8', 'replace'))
+        finally:
+            conn.close()
+
+    def test_15_the_app_ui_is_not_task_scoped(self):
+        """`/t/beta/app/` відкрив би той самий канвас ПОТОЧНОЇ задачі під адресою
+        beta — адреса брехала б. Інтерфейс не привʼязаний до задачі."""
+        st, body = self.get('/app/')
+        self.assertEqual(st, 200)
+        for path in ('/t/beta/app/', '/t/beta/app/index.html', '/t/beta/app'):
+            with self.subTest(path=path):
+                st, body = self.get(path)
+                self.assertEqual(st, 404)
+
+    def test_16_task_vanishing_mid_request_gives_a_404_not_a_dropped_connection(self):
+        """Названу задачу вилучили між входом запиту й текстом 404: збірка тексту
+        не сміє впасти (відповіді не було б взагалі) — `who` стає «—», як і в
+        випадку зниклої поточної."""
+        calls = [('beta', {}), serve.UnknownTask('beta')]
+        with mock.patch.object(serve.Handler, '_current_task', side_effect=calls):
+            st, body = self.get('/t/beta/it-assets/it1/index.html')
+        self.assertEqual(st, 404)
+        self.assertIn('Названа задача — —', body)
+
+    def test_17_referer_task_does_not_leak_into_a_request_without_a_prefix(self):
+        """Задачу з Referer ставить запиту викликач, і лише для корене-абсолютного
+        ассета: звичайний запит із чужим Referer не міняє, чия це задача."""
+        ref = f'{self.base}/t/beta/it-assets/it1/index.html'
+        st, body = self.get('/api/task', {'Referer': ref})
+        self.assertEqual(json.loads(body)['id'], 'alpha')
+
+    # ---- ревʼю ч.2: задача без теки, реєстр, порожній заголовок ----
+
+    def _with_registry_only_tasks(self):
+        """Додати до реєстру `nodir` (запису `dir` нема взагалі) і `gone` (`dir`
+        є, теки на диску нема). Реєстр їде в git, теки — ні: так виглядає задача
+        колеги на цій машині. Повертає шлях `gone`."""
+        cfg = self._cfg()
+        gone = os.path.join(self.root, 'gone')
+        cfg['tasks']['nodir'] = {'title': 'Без теки'}
+        cfg['tasks']['gone'] = {'dir': gone, 'title': 'Зникла'}
+        with open(self.tasks_file, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f)
+        return gone
+
+    def test_18_task_not_on_this_machine_is_a_clean_404_and_creates_nothing(self):
+        """Названа задача без `dir` валила обробник `KeyError: 'dir'` і рвала
+        зʼєднання; названа з `dir`, якої нема на диску, пропускалась далі — і
+        `POST /t/gone/api/iteration` САМ створював дерево теки. Тепер — 404 JSON
+        із причиною, а на диску й у реєстрі нічого не змінюється."""
+        gone = self._with_registry_only_tasks()
+        registry_before = open(self.tasks_file, 'rb').read()
+        metas_before = (self._meta('alpha'), self._meta('beta'))
+        for tid in ('nodir', 'gone'):
+            want = {'ok': False, 'error': f'task not on this machine: {tid}'}
+            for path, headers in ((f'/t/{tid}/api/task', None),
+                                  ('/api/task', {'X-Canvas-Task': tid}),
+                                  (f'/t/{tid}/it-assets/it1/index.html', None),
+                                  (f'/t/{tid}/commented?it=it1&bare=1', None),
+                                  ('/it-assets/it1/index.html', {'X-Canvas-Task': tid})):
+                with self.subTest(method='GET', path=path, headers=headers):
+                    st, body = self.get(path, headers)
+                    self.assertEqual(st, 404)
+                    self.assertEqual(json.loads(body), want)
+                    self.assertNotIn('alpha', body, 'відкат на поточну задачу')
+            for path, headers in ((f'/t/{tid}/api/iteration', None),
+                                  ('/api/iteration', {'X-Canvas-Task': tid}),
+                                  (f'/t/{tid}/api/iteration-delete', None)):
+                with self.subTest(method='POST', path=path, headers=headers):
+                    st, body = self.send_post(path, {'from': 'it1', 'id': 'it1'}, headers)
+                    self.assertEqual(st, 404)
+                    self.assertEqual(json.loads(body), want)
+        self.assertFalse(os.path.exists(gone), 'POST створив теку задачі, якої тут нема')
+        self.assertEqual((self._meta('alpha'), self._meta('beta')), metas_before)
+        self.assertEqual(open(self.tasks_file, 'rb').read(), registry_before)
+        # невідома задача лишається ІНШОЮ відмовою: «нема в реєстрі» ≠ «нема теки»
+        st, body = self.get('/t/nope/api/task')
+        self.assertEqual(json.loads(body)['error'], 'unknown task: nope')
+
+    def test_18b_not_on_this_machine_with_a_big_body_still_gets_its_404(self):
+        """Відмова до читання тіла POST — як і для невідомої: тіло вичитується,
+        інакше закрите зʼєднання з ним у буфері — RST замість 404."""
+        import http.client
+        self._with_registry_only_tasks()
+        body = b'{"pad":"' + b'x' * 900_000 + b'"}'
+        for path, headers in (('/api/iteration', {'X-Canvas-Task': 'nodir'}),
+                              ('/t/gone/api/iteration', {})):
+            with self.subTest(path=path):
+                conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+                try:
+                    conn.request('POST', path, body,
+                                 {'Content-Type': 'application/json', **headers})
+                    r = conn.getresponse()
+                    self.assertEqual(r.status, 404)
+                    self.assertIn('task not on this machine', r.read().decode('utf-8'))
+                finally:
+                    conn.close()
+
+    def test_18c_referer_naming_a_task_not_here_is_ignored_like_an_unknown_one(self):
+        self._with_registry_only_tasks()
+        ref = f'{self.base}/t/nodir/it-assets/it1/index.html'
+        st, body = self.get('/assets/x.css', {'Referer': ref})
+        self.assertEqual(st, 404)
+        self.assertNotIn('.mark-alpha', body)
+
+    def test_18d_task_for_raises_task_not_here_only_for_a_named_task(self):
+        d = self.dirs['alpha']
+        cfg = {'current': 'cur', 'tasks': {
+            'cur': {'title': 'C'},                      # поточна без dir — як було
+            'ok': {'dir': d},
+            'nodir': {'title': 'N'},
+            'none': {'dir': None}, 'num': {'dir': 5}, 'blank': {'dir': ''},
+            'gone': {'dir': os.path.join(self.root, 'no-such-dir')},
+            'file': {'dir': os.path.join(d, 'iterations.json')}}}   # файл, не тека
+        self.assertTrue(issubclass(serve.TaskNotHere, serve.UnknownTask))
+        self.assertEqual(serve.task_for(cfg), ('cur', {'title': 'C'}),
+                         'поточна задача (ніхто не названий) змінила поведінку')
+        self.assertEqual(serve.task_for(cfg, 'ok'), ('ok', {'dir': d}))
+        for tid in ('nodir', 'none', 'num', 'blank', 'gone', 'file'):
+            with self.subTest(tid=tid):
+                with self.assertRaises(serve.TaskNotHere):
+                    serve.task_for(cfg, tid)
+        # невідома — НЕ «нема тут»: це різні відмови
+        with self.assertRaises(serve.UnknownTask) as ctx:
+            serve.task_for(cfg, 'nope')
+        self.assertNotIsInstance(ctx.exception, serve.TaskNotHere)
+
+    def test_19_task_new_takes_no_header_the_new_id_is_not_registered_yet(self):
+        """`X-Canvas-Task: <новий id>` на `task-new` давав 404 «невідома задача»:
+        id ще не в реєстрі, бо саме його й створюють. Реєстр — про машину, а не
+        про дані задачі, тож заголовок там не береться й не перевіряється."""
+        for tid in ('gamma', 'delta'):
+            self.addCleanup(shutil.rmtree, os.path.join(self.cfgdir, tid), True)
+        st, body = self.send_post('/api/task-new',
+                                  {'id': 'gamma', 'title': 'Гамма', 'profile': 'tool'},
+                                  {'X-Canvas-Task': 'gamma'})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(json.loads(body)['id'], 'gamma')
+        self.assertIn('gamma', self._cfg()['tasks'])
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.cfgdir, 'gamma', 'iterations', 'it1', 'index.html')))
+        # заголовок не про створювану задачу — теж не береться
+        st, body = self.send_post('/api/task-new',
+                                  {'id': 'delta', 'title': 'Дельта', 'profile': 'tool'},
+                                  {'X-Canvas-Task': 'nope'})
+        self.assertEqual(st, 200, body)
+        self.assertIn('delta', self._cfg()['tasks'])
+
+    def test_19b_task_switch_with_a_header_still_switches_to_the_body_id(self):
+        for header in ('alpha', 'nope', 'nodir'):
+            with self.subTest(header=header):
+                cfg = {**self._cfg(), 'current': 'alpha'}   # читаємо ДО відкриття на запис
+                with open(self.tasks_file, 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f)
+                st, body = self.send_post('/api/task-switch', {'id': 'beta'},
+                                          {'X-Canvas-Task': header})
+                self.assertEqual(st, 200, body)
+                self.assertEqual(self._cfg()['current'], 'beta')
+
+    def test_20_the_prefix_form_makes_no_sense_on_registry_routes(self):
+        """`/t/x/api/task-new` — безглуздя: реєстр не привʼязаний до задачі.
+        Відмова 400 (а не 404 «невідома» чи мовчки виконати без префікса), і
+        нічого не створено / не перемкнено."""
+        before = open(self.tasks_file, 'rb').read()
+        for path in ('/t/x/api/task-new', '/t/alpha/api/task-new',
+                     '/t/beta/api/task-switch', '/t/nope/api/task-switch'):
+            with self.subTest(path=path):
+                st, body = self.send_post(path, {'id': 'beta', 'title': 'T',
+                                                 'profile': 'tool'})
+                self.assertEqual(st, 400, body)
+                self.assertFalse(json.loads(body)['ok'])
+                self.assertIn('реєстр задач не привʼязаний', json.loads(body)['error'])
+        self.assertEqual(open(self.tasks_file, 'rb').read(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.cfgdir, 'x')))
+        # звичайні маршрути з префіксом — як було (200 для відомої)
+        st, _ = self.get('/t/beta/api/task')
+        self.assertEqual(st, 200)
+
+    def test_21_blank_task_header_is_a_400_not_the_current_task(self):
+        """`X-Canvas-Task:` порожній — це «назву дали, а вона порожня», а не
+        «назви нема». Мовчки читати його як «нема» = бити в поточну задачу, від
+        чого весь механізм і захищає."""
+        before = (self._meta('alpha'), self._meta('beta'))
+        for value in ('', '   '):
+            with self.subTest(value=value):
+                st, body = self.get('/api/task', {'X-Canvas-Task': value})
+                self.assertEqual(st, 400)
+                self.assertEqual(json.loads(body),
+                                 {'ok': False, 'error': 'empty X-Canvas-Task'})
+                st, body = self.send_post('/api/iteration', {'from': 'it1'},
+                                          {'X-Canvas-Task': value})
+                self.assertEqual(st, 400)
+                self.assertEqual(json.loads(body),
+                                 {'ok': False, 'error': 'empty X-Canvas-Task'})
+        self.assertEqual((self._meta('alpha'), self._meta('beta')), before)
+        self.assertFalse(os.path.isdir(os.path.join(self.dirs['alpha'], 'iterations', 'it2')))
+        # без заголовка — поточна, як було; префікс сильніший за заголовок
+        self.assertEqual(json.loads(self.get('/api/task')[1])['id'], 'alpha')
+        st, body = self.get('/t/beta/api/task', {'X-Canvas-Task': ''})
+        self.assertEqual((st, json.loads(body)['id']), (200, 'beta'))
+
+    def test_21b_blank_header_with_a_big_body_still_gets_its_400(self):
+        import http.client
+        body = b'{"pad":"' + b'x' * 900_000 + b'"}'
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        try:
+            conn.request('POST', '/api/iteration', body,
+                         {'Content-Type': 'application/json', 'X-Canvas-Task': ''})
+            r = conn.getresponse()
+            self.assertEqual(r.status, 400)
+            self.assertIn('empty X-Canvas-Task', r.read().decode('utf-8'))
+        finally:
+            conn.close()
+
+
+def current_reads(source):
+    """Усі прямі читання/записи `current` реєстру в тексті модуля: список
+    `(рядок, найближча функція, у якому /api/tasks…-блоці)`. Дивиться в AST, а не
+    в рядки: `'current'` у докстрінгах, ключах відповіді (`{'current': …}`) і
+    значеннях `state` — не звернення до реєстру, а grep їх не відрізнив би.
+
+    Звернення — це `x['current']` (будь-який контекст) і `x.get/pop/setdefault
+    ('current', …)`. «Найближча функція» — за іменем; для `do_GET` (один великий
+    обробник) додатково — чи стоїть звернення у тілі `if`, що перевіряє шлях
+    `/api/tasks` чи `/api/tasks-overview`."""
+    import ast
+
+    def is_current(node):
+        if isinstance(node, ast.Subscript):
+            return isinstance(node.slice, ast.Constant) and node.slice.value == 'current'
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ('get', 'pop', 'setdefault') and node.args):
+            return isinstance(node.args[0], ast.Constant) and node.args[0].value == 'current'
+        return False
+
+    def lists_tasks(test):
+        return any(isinstance(n, ast.Constant) and n.value in ('/api/tasks',
+                                                               '/api/tasks-overview')
+                   for n in ast.walk(test))
+
+    hits = []
+
+    def visit(node, func, in_listing):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func, in_listing = node.name, False
+        if is_current(node):
+            hits.append((node.lineno, func, in_listing))
+        for field, value in ast.iter_fields(node):
+            kids = value if isinstance(value, list) else [value]
+            for kid in kids:
+                if isinstance(kid, ast.AST):
+                    # лише ТІЛО `if` із шляхом реєстру; `else`/`elif` — вже чужі обробники
+                    inside = in_listing or (isinstance(node, ast.If) and field == 'body'
+                                            and lists_tasks(node.test))
+                    visit(kid, func, inside)
+
+    visit(ast.parse(source), None, False)
+    return sorted(hits)
+
+
+class CurrentTaskReadGuard(unittest.TestCase):
+    """`tasks.json` → `current` — ОДИН на машину, і паралельна сесія його
+    перемикає. Тому читати його напряму не можна ніде, крім реєстру: задачу запиту
+    дає `task_for` (через `Handler._current_task()`), інакше обробник мовчки б'є в
+    ЧУЖУ задачу — це й була вада fb-07102026-e627c2. Перший прохід пропустив
+    `_preview_password`, що читав `cfg['current']` повз `_current_task`; цей
+    охоронець ловить наступного такого."""
+
+    #: функції реєстру, що ЗВІДСИ мають право торкатись `current`
+    ALLOWED = ('task_for', 'task_new', '_task_switch')
+
+    def _violations(self, source):
+        return [(line, func) for line, func, listing in current_reads(source)
+                if not (func in self.ALLOWED or (func == 'do_GET' and listing))]
+
+    def test_serve_reads_current_only_through_task_for_and_the_registry_routes(self):
+        with open(serve.__file__, encoding='utf-8') as f:
+            source = f.read()
+        bad = self._violations(source)
+        self.assertEqual(
+            bad, [],
+            'пряме читання `current` поза task_for/task_new/_task_switch і поза '
+            'обробниками /api/tasks, /api/tasks-overview (рядок, функція): '
+            f'{bad}. Задачу запиту бери через `task_for(cfg, tid)` / '
+            '`self._current_task()`: `current` один на машину і міг перемкнутись.')
+
+    def test_the_scan_sees_the_real_registry_reads(self):
+        """Охоронець, що нічого не бачить, нічого й не ловить: усі дозволені
+        місця серед знайдених, і обидва /api/tasks-обробники теж."""
+        with open(serve.__file__, encoding='utf-8') as f:
+            hits = current_reads(f.read())
+        self.assertEqual({func for _, func, _ in hits if func != 'do_GET'},
+                         set(self.ALLOWED))
+        self.assertEqual(sum(1 for _, func, listing in hits if func == 'do_GET' and listing), 2)
+        self.assertEqual([h for h in hits if h[1] == 'do_GET' and not h[2]], [])
+
+    def test_the_scan_flags_a_direct_read_in_another_handler(self):
+        """Самоперевірка сканера на синтетичному коді: кожна форма звернення, у
+        будь-якій функції, крім дозволених, — порушення; дозволені — ні."""
+        src = (
+            "def task_for(cfg):\n    return cfg['current']\n"
+            "class H:\n"
+            "    def _publish(self):\n        cfg = load()\n        return cfg['current']\n"
+            "    def _other(self, cfg):\n        return cfg.get('current')\n"
+            "    def _third(self, cfg):\n        cfg['current'] = 'x'\n"
+            "    def _fourth(self, cfg):\n        return cfg.pop('current', None)\n"
+            "    def _docs(self, cfg):\n"
+            "        'current'\n        return {'current': 1, 'state': 'current'}\n"
+            "    def do_GET(self):\n"
+            "        if self.path == '/api/tasks':\n            return cfg.get('current')\n"
+            "        elif self.path == '/api/x':\n            return cfg.get('current')\n"
+            "        if self.path == '/api/y':\n            return cfg['current']\n")
+        got = {(func, line) for line, func in self._violations(src)}
+        self.assertEqual(got, {('_publish', 6), ('_other', 8), ('_third', 10),
+                               ('_fourth', 12), ('do_GET', 20), ('do_GET', 22)})
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -145,7 +145,7 @@ test("пошук: ↓ доходить до футера «Усі задачі»
 });
 
 test("пошук: перемальовка смуги під час набору не губить значення, фокус і позицію курсора", async (t) => {
-  const { page, url } = await bootSearch(t, PORT_BASE + 300);
+  const { page } = await bootSearch(t, PORT_BASE + 300);
   await page.click('[data-dd="task"]');
   await page.waitForSelector("#task-q");
   await page.keyboard.type("Задача 7");
@@ -159,14 +159,13 @@ test("пошук: перемальовка смуги під час набору
   });
   assert.deepEqual(before, [6, 6]);
 
-  /* Справжній тригер `paintBar()` — опитування статусу Клода (раз на 5 с): удар
-     серцебиття міняє `claudeView`, смуга перемальовується ЦІЛКОМ і з'являється
-     фішка. Нічого нового в застосунок не виставляємо: це той самий шлях, яким
-     смуга оновлюється в житті, поки дизайнер набирає запит. */
-  const r = await fetch(`${url}/api/claude-status`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task: "fixture", phase: "design", status: "in_progress", note: "", session: "dd" }) });
-  assert.ok(r.ok);
-  await page.waitForSelector(".claude-chip", { timeout: 12000 });
+  /* Справжній тригер `paintBar()` — завантаження рамки: Claude змінив макет,
+     автооновлення перезавантажило рамку, і її `load` перемальовує смугу ЦІЛКОМ
+     (обробник `frame` 'load' в app.js). Нічого нового в застосунок не виставляємо.
+     (До 1.54 тригером був опит статусу Клода — тепер він живе в острівці й смуги
+     не чіпає.) */
+  await page.evaluate(() => document.getElementById("frame").contentWindow.location.reload());
+  await page.waitForFunction(() => !window.__q.isConnected, null, { timeout: 12000 });
 
   assert.equal(await page.evaluate(() => window.__q.isConnected), false,
     "смугу справді перемалювали (старе поле замінене) — інакше тест нічого не доводить");
@@ -265,10 +264,9 @@ test("прокрутка: після перемальовки смуги акт�
   assert.ok(before.top > 0 && before.inView, "передумова: список прокручено, активний видно");
 
   await page.evaluate(() => { window.__l = document.querySelector(".dd-list"); });
-  const r = await fetch(`${url}/api/claude-status`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task: "fixture", phase: "design", status: "in_progress", note: "", session: "sc" }) });
-  assert.ok(r.ok);
-  await page.waitForSelector(".claude-chip", { timeout: 12000 });
+  // Тригер — завантаження рамки (див. тест курсора вище).
+  await page.evaluate(() => document.getElementById("frame").contentWindow.location.reload());
+  await page.waitForFunction(() => !window.__l.isConnected, null, { timeout: 12000 });
   assert.equal(await page.evaluate(() => window.__l.isConnected), false, "смугу справді перемалювали");
   const after = await geo();
   assert.ok(after.top > 0, "прокрутка списку не скинулась на 0");

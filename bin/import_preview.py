@@ -6,13 +6,18 @@
 Колега публікує ту саму задачу у свій Vercel-проєкт — і його ітерації живуть лише
 там. Раніше їх переносили руками: зняти сніпет коментатора й гейт, відновити
 title з `__origTitle`. Ця команда:
-  1. читає `<url>/manifest.json` (джерело правди оболонки превʼю): ітерації,
-     сторінки, дерево `outline`; без `--it` бере ОСТАННЮ;
+  1. читає `<url>/manifest.json` (джерело правди оболонки превʼю), а для превʼю
+     до 02.09.2026 — дані `var D` з обгортки: ітерації, сторінки, дерево
+     `outline`; без `--it` бере ОСТАННЮ. Дерево зі старої обгортки відновлюється
+     НАБЛИЖЕНО — за глибиною рядків (теки-організатори `isGroup` у ній існували,
+     але в превʼю не публікувались);
   2. збирає файли за посиланнями зі сторінок, CSS і JS — статичний хостинг
      переліку файлів не віддає, тож інакше спільні assets/icons/fonts і ліниві
      чанки SPA не знайти; чого не знайшлось — каже переліком, а не мовчить;
   3. вирізає зі сторінок вставки публікації (сніпет коментатора, гейт,
-     нейтральний title) — рівно ті, що вставляє `serve._publish`;
+     нейтральний title) — рівно ті, що вставляє `serve._publish`, і ті, що вставляли
+     його старі версії. ⛔ Гейт несе ПАРОЛЬ превʼю відкритим текстом: сторінка, з якої
+     гейт зняти не вдалось, не пишеться — імпорт зупиняється ще до запису;
   4. кладе ітерацію новою `itN` як ЧУЖУ (джерело — превʼю) і поруч МОЮ робочу
      копію: робота не починається поверх чужої ітерації (рішення 15.09.2026,
      так само робить pull з GitLab).
@@ -54,6 +59,14 @@ class ImportError_(Exception):  # noqa: N801 — не плутати з вбуд
 # поміняється — межа поміняється разом із ним (коловий тест стереже).
 _SNIPPET_HEAD = serve.COMMENT_SNIPPET.lstrip('\n').split('\n', 2)
 _SNIPPET_START = '\n' + _SNIPPET_HEAD[0] + '\n' + _SNIPPET_HEAD[1]
+# Сніпет коментатора ДО 27.08.2026 (6ced2ae) починався тегом бібліотеки Supabase —
+# спершу без `onerror` (466b172…38b4080), потім з ним (5ed9bf7). Префікс без `>` бере
+# обидва. Превʼю тієї доби ще живі, а гейт у них той самий (`_gate_end` не залежить
+# від версії). Старі шаблони стерегтиме `OldTemplates` — вони там БУКВАЛЬНІ.
+_OLD_SNIPPET_START = '\n<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"'
+_SNIPPET_STARTS = (_SNIPPET_START, _OLD_SNIPPET_START)
+# Той самий маркер, за яким `serve._inject_gate` розпізнає, що гейт уже є.
+_GATE_MARK = 'id="authgate"'
 _NEUTRAL_TITLE = '<title>Перегляд макета</title>'
 _ORIG_RE = re.compile(r'<script>window\.__origTitle=(".*?");</script>', re.S)
 
@@ -71,7 +84,8 @@ def strip_publish(html):
     Порядок у `_publish`: перед `</body>` спершу сніпет коментатора, потім
     `<script>window.__origTitle=…</script>` і гейт; title замінено нейтральним.
     Вирізаємо від початку сніпета до кінця гейта — між ними лише наше."""
-    start = html.find(_SNIPPET_START)
+    found = [i for i in (html.find(a) for a in _SNIPPET_STARTS) if i >= 0]
+    start = min(found) if found else -1
     end_mark = _gate_end()
     end = html.find(end_mark, start if start >= 0 else 0)
     if start < 0 or end < 0:
@@ -83,14 +97,21 @@ def strip_publish(html):
     return out, True
 
 
+def _depth(v):
+    """Глибина рядка зі ЧУЖИХ даних: лише невідʼємне ціле, не глибше за
+    `pm.MAX_DEPTH - 1` (щоб дерево з рядків не вийшло за межу вкладеності); сміття → 0."""
+    v = v if isinstance(v, int) and not isinstance(v, bool) else 0
+    return max(0, min(v, pm.MAX_DEPTH - 1))
+
+
 def outline_tree(outline, it):
     """Пласкі рядки `manifest.outline` однієї ітерації → дерево pages.json."""
     tree, stack = [], []
     for row in outline:
-        if row.get('it') != it:
+        if not isinstance(row, dict) or row.get('it') != it:
             continue
-        node = {'id': row['key'], 'name': row.get('name') or row['key'], 'kind': row.get('kind') or 'page'}
-        depth = int(row.get('depth') or 0)
+        node = {'id': row.get('key'), 'name': row.get('name') or row.get('key'), 'kind': row.get('kind') or 'page'}
+        depth = _depth(row.get('depth'))
         del stack[depth:]
         if stack:
             stack[-1].setdefault('children', []).append(node)
@@ -98,6 +119,96 @@ def outline_tree(outline, it):
             tree.append(node)
         stack.append(node)
     return tree
+
+
+_LEGACY_D = 'var D='
+_LEGACY_BAD = 'дані старої обгортки (var D) мають несподіваний вигляд'
+
+
+def legacy_manifest(d):
+    """Дані обгортки превʼю старого формату (04.08–02.09.2026, `var D` інлайном) →
+    маніфест того вигляду, що читає імпорт (fb-09102026-8b12a5). Номер ітерації — з її
+    id; тека сторінки = її id (`pm.page_rel`), корінь ітерації — неявна `main`.
+    Дерево відновлюється НАБЛИЖЕНО — за `depth` рядків: теки-організатори (`isGroup`)
+    в обгортці існували, але в превʼю не публікувались, тож їх не відновити.
+
+    Дані ЧУЖІ: форма перевіряється тут. Не обʼєкт чи не списки — ValueError (викликач
+    скаже «несподіваний вигляд»); елементи не того типу й сторінки без рядкових
+    id/it пропускаються; `depth` — через `_depth`; номер ітерації — до 9 цифр (id з
+    тисячами цифр не валить `int()`)."""
+    if not isinstance(d, dict):
+        raise ValueError('D не обʼєкт')
+    iters_raw, pages_raw = d.get('iters') or [], d.get('pages') or []
+    if not isinstance(iters_raw, list) or not isinstance(pages_raw, list):
+        raise ValueError('iters/pages не списки')
+    iters = []
+    for it in iters_raw:
+        if not isinstance(it, dict) or not isinstance(it.get('id'), str):
+            continue
+        m = re.fullmatch(r'it(\d{1,9})', it['id'])
+        iters.append({'id': it['id'], 'num': int(m.group(1)) if m else 0})
+    pages, outline = [], []
+    for p in pages_raw:
+        if not isinstance(p, dict):
+            continue
+        it, out = p.get('it'), p.get('id')
+        if not (isinstance(it, str) and it and isinstance(out, str)):
+            continue
+        key = out[len(it) + 1:] if out.startswith(f'{it}/') else (pm.IMPLICIT_ID if out == it else None)
+        if not key:
+            continue
+        name = p['name'] if isinstance(p.get('name'), str) and p['name'].strip() else key
+        path = p['path'] if isinstance(p.get('path'), str) else None
+        pages.append({'it': it, 'key': key, 'name': name, 'path': path})
+        outline.append({'it': it, 'key': key, 'name': name, 'kind': 'page', 'depth': _depth(p.get('depth'))})
+    return {'iters': iters, 'pages': pages, 'outline': outline}
+
+
+def load_manifest(base, fetch):
+    """(маніфест, формат). Новий формат — `manifest.json`; на його 404 (і лише 404:
+    мережевий збій — не привід гадати) — `var D` з обгортки старого формату.
+    ⛔ `PW=` (пароль превʼю відкритим текстом у старій обгортці) не читаємо: розбираємо
+    лише обʼєкт після `var D=` (`raw_decode`), а не регексом до `,PW=` — назва сторінки
+    може містити будь-що."""
+    try:
+        man = json.loads(fetch(f'{base}/manifest.json'))
+    except FetchError as e:
+        if e.code != 404:
+            raise ImportError_(f'manifest.json не прочитано ({e}) — це точно превʼю канваса?') from None
+    except (ValueError, RecursionError) as e:
+        raise ImportError_(f'manifest.json не прочитано ({e}) — це точно превʼю канваса?') from None
+    else:
+        if not isinstance(man, dict):
+            raise ImportError_('manifest.json має несподіваний вигляд (не обʼєкт) — це точно превʼю канваса?')
+        return man, 'manifest'
+    try:
+        html = fetch(f'{base}/').decode('utf-8', 'replace')
+    except FetchError as e:
+        if e.code == 404:
+            raise ImportError_('ні manifest.json, ні обгортки превʼю (404) — це точно превʼю канваса?') from None
+        raise ImportError_(f'manifest.json немає, а обгортку превʼю не прочитано ({e}) — повтори імпорт') from None
+    at = html.find(_LEGACY_D)
+    if at < 0:
+        raise ImportError_('manifest.json немає, і в обгортці немає даних старого формату (var D) — '
+                           'це точно превʼю канваса?')
+    # `var D=` може траплятись і деінде (title задачі «Fix var D= parser», раніший
+    # скрипт) — беремо перше входження, що розбирається в ОБʼЄКТ.
+    d = None
+    while at >= 0 and d is None:
+        try:
+            cand, _ = json.JSONDecoder().raw_decode(html, at + len(_LEGACY_D))
+        except (ValueError, RecursionError):
+            cand = None
+        if isinstance(cand, dict):
+            d = cand
+        else:
+            at = html.find(_LEGACY_D, at + 1)
+    if d is None:
+        raise ImportError_('дані старої обгортки (var D) не розібрано')
+    try:
+        return legacy_manifest(d), 'legacy-wrapper'
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        raise ImportError_(_LEGACY_BAD) from None
 
 
 _ASSET = r'[\w\-./@%]+\.(?:js|mjs|css|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|eot|json|mp4|webm)'
@@ -241,13 +352,11 @@ def _next_ids(its):
 
 def import_iteration(task_dir, url, src_it=None, fetch=default_fetch, dry_run=False):
     base = url.rstrip('/')
-    try:
-        man = json.loads(fetch(f'{base}/manifest.json'))
-    except (FetchError, ValueError) as e:
-        raise ImportError_(f'manifest.json не прочитано ({e}) — це точно превʼю канваса?') from None
+    man, fmt = load_manifest(base, fetch)
+    src = 'manifest.json' if fmt == 'manifest' else 'даних превʼю'  # звідки дані — те й називаємо в помилках
     iters = man.get('iters') or []
     if not iters:
-        raise ImportError_('у manifest.json немає ітерацій')
+        raise ImportError_(f'у {src} немає ітерацій')
     if src_it is None:
         src_it = max(iters, key=lambda i: int(i.get('num') or 0))['id']
     elif not any(i.get('id') == src_it for i in iters):
@@ -260,8 +369,15 @@ def import_iteration(task_dir, url, src_it=None, fetch=default_fetch, dry_run=Fa
         path = safe_rel(p.get('path'))
         rel = safe_rel(posixpath.relpath(path, src_it)) if path and path.startswith(f'{src_it}/') else None
         if rel is None:
-            raise ImportError_(f'підозрілий шлях сторінки в manifest.json: {p.get("path")!r} — імпорт зупинено')
+            raise ImportError_(f'підозрілий шлях сторінки в {src}: {p.get("path")!r} — імпорт зупинено')
         entries.append(rel)
+    # Дерево — ДО качання й запису (і в dry-run): дублікат id чи завелика глибина
+    # інакше виявились би аж у `pm.write_pages`, коли файли вже лежать у теці ітерації.
+    tree = outline_tree(man.get('outline') or [], src_it)
+    try:
+        pm.validate(tree)
+    except pm.TreeError as e:
+        raise ImportError_(f'дерево сторінок у {src} не пройшло перевірку ({e}) — імпорт зупинено') from None
     files, broken, failed = crawl(base, src_it, entries, fetch)
     unstripped = []
     for rel in entries:
@@ -270,12 +386,19 @@ def import_iteration(task_dir, url, src_it=None, fetch=default_fetch, dry_run=Fa
             files[rel] = clean.encode('utf-8')
             if not ok:
                 unstripped.append(rel)
-    tree = outline_tree(man.get('outline') or [], src_it)
+    # ⛔ Запобіжник, незалежний від шаблонів: гейт несе ПАРОЛЬ превʼю відкритим текстом.
+    # Якщо після зняття вставок він лишився (невідома версія шаблону) — не пишемо
+    # нічого: канвас потім комітить теку ітерації в GitLab.
+    for rel, data in sorted(files.items()):
+        if _kind(rel) == 'html' and _GATE_MARK.encode() in data:
+            raise ImportError_(f'сторінка {rel} лишилась із гейтом превʼю (пароль) — імпорт зупинено; '
+                               f'онови шаблони strip_publish')
     meta = serve.load_meta({'dir': task_dir})
     its = meta.setdefault('iterations', [])
     new_id, work_id = _next_ids(its)
     report = {'source_it': src_it, 'imported': new_id, 'working': work_id, 'files': len(files),
-              'broken': broken, 'failed': failed, 'unstripped': unstripped, 'pages': len(entries)}
+              'broken': broken, 'failed': failed, 'unstripped': unstripped, 'pages': len(entries),
+              'format': fmt}
     if dry_run:
         return report
     root = os.path.join(task_dir, 'iterations', new_id)
@@ -319,6 +442,10 @@ def main(argv=None):
         print(f'error: {e}', file=sys.stderr)
         return 2
     print(json.dumps(rep, ensure_ascii=False))
+    if rep.get('format') == 'legacy-wrapper':
+        print('· превʼю старого формату (до 02.09.2026, без manifest.json): дерево сторінок '
+              'відновлено наближено — за глибиною; теки-організатори в превʼю не публікувались',
+              file=sys.stderr)
     if rep['failed']:
         print(f'⛔ не скачано {len(rep["failed"])} файлів (мережа) — повтори імпорт: '
               f'{", ".join(rep["failed"][:5])}', file=sys.stderr)

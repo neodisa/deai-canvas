@@ -26,6 +26,7 @@ import { overviewComments } from './overview-comments.js';
 import { esc } from './esc.js';
 import { apiProblem } from './api-guard.js';
 import { barModel } from './bar-model.js';
+import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status.js';
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, taskKey } from './tasks-model.js';
@@ -725,7 +726,6 @@ function barState() {
         : (glCache.unpushed > 0 || glCache.dirty) ? 'ahead'
           : 'sync';
   return {
-    claude: claudeView,
     mode: canvas ? 'overview' : 'layout',
     view: canvasView,
     vp, vpw: vpWidth === null ? '' : String(vpWidth),
@@ -3394,20 +3394,83 @@ document.addEventListener('visibilitychange', () => {
 const STAMP_EVERY_MS = 2000;
 let reloadState = null;
 
-/* ===== Статус Клода на канвасі (ідея 02.09.2026) =====
+/* ===== Статус Клода (ідея 02.09.2026; острівець і бейдж — 12.10.2026) =====
    Сервер віддає статус лише поки серцебиття від мода pipeline-band свіже (TTL у
-   `serve.claude_view`), тож тут ми нічого не «знімаємо» — просто питаємо. Будь-який
-   вид, лише видима вкладка; запит легкий (памʼять сервера, без диска). */
+   `serve.claude_view`), тож тут ми нічого не «знімаємо» — просто питаємо. Острівець
+   оновлюється НА МІСЦІ: жива область — постійний `#claude-hud`, і підпис стану
+   переписуємо лише тоді, коли він справді змінився (вік — `aria-hidden`).
+   ⛔ Опит іде і в ПРИХОВАНОМУ вікні: бейдж на іконці дивляться саме тоді, коли вікно
+   канваса перекрите вікном Claude. Пропуск прихованих (як було до 1.54) заморожував
+   би бейдж у старому стані — «працює» після того, як Клод зупинився. Запит легкий
+   (удари — у памʼяті сервера; `tasks.json` читається, але він малий); у фоні Chrome
+   сам рідшає таймери (до ~1 хв). */
 const CLAUDE_EVERY_MS = 5000;
-setInterval(async () => {
-  if (document.visibilityState !== 'visible') return;
+const claudeHud = document.getElementById('claude-hud');
+/** Останній застосований вид бейджа (`badgeFor`): API не смикаємо кожні 5 с. */
+let claudeBadge = null;
+function paintClaude(force = false) {
+  const p = islandParts(claudeView);
+  document.body.classList.toggle('claude-on', !!p);
+  if (!p) { claudeHud.replaceChildren(); document.body.classList.remove('claude-lift'); }
+  else {
+    if (!claudeHud.firstElementChild) claudeHud.innerHTML = ISLAND_SHELL;
+    const el = claudeHud.firstElementChild;
+    el.className = `claude-island claude-island--${p.state}`;
+    const lbl = el.querySelector('.lbl-claude');
+    if (lbl.textContent !== p.label) lbl.textContent = p.label;
+    /* Без пробілу попереду: відступ уже дає `gap` острівця, інакше перед «·» дві щілини. */
+    el.querySelector('.claude-age').textContent = p.age ? `· ${p.age}` : '';
+  }
+  const kind = badgeFor(claudeView);
+  if (force || kind !== claudeBadge) { claudeBadge = kind; applyBadge(navigator, kind); }
+}
+async function pollClaude() {
   let r;
   try { r = await api('/api/claude-status'); } catch (e) { r = null; }
   const next = r && r.state ? r : null;
   if (JSON.stringify(next) === JSON.stringify(claudeView)) return;
   claudeView = next;
-  paintBar();
-}, CLAUDE_EVERY_MS);
+  paintClaude();
+}
+/* Бейдж належить ЗАСТОСУНКУ, а не вікну: закрили одне вікно канваса — воно зняло
+   бейдж за всіх. Решта вікон чує це й ставлять свій стан знову. */
+const badgeChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('deai-canvas-badge') : null;
+badgeChannel?.addEventListener('message', () => paintClaude(true));
+setInterval(pollClaude, CLAUDE_EVERY_MS);
+/* Старт: спершу ЗНЯТИ бейдж, що міг лишитись від упалого вікна (`pagehide` тоді не
+   прийшов), — інакше перший опит з «нічого» дорівнював би початковому `null`, і
+   застарілий бейдж висів би, поки статус не зміниться. Потім — перший опит одразу. */
+paintClaude(true);
+pollClaude();
+/* Повернулись до вікна — правду одразу, не через 5 с; бейдж — ще раз, якщо система
+   його скинула. */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { paintClaude(true); pollClaude(); }
+});
+/* Вікно закрили — опитувати більше нікому, і бейдж без нагляду брехав би. Решту вікон
+   канваса про це сповіщаємо: бейдж спільний, вони поставлять його знову. */
+addEventListener('pagehide', () => {
+  claudeBadge = 'none';
+  applyBadge(navigator, 'none');
+  badgeChannel?.postMessage('gone');
+});
+/* Сторінку повернули з bfcache — бейдж знято на pagehide, а відповідь сервера та
+   сама, тож `pollClaude` його б не повернув. Опитуємо й одразу: `claudeView` у
+   відновленої сторінки може бути годинної давнини. */
+addEventListener('pageshow', (e) => { if (e.persisted) { paintClaude(true); pollClaude(); } });
+/** Чи відкрита смужка режимів коментатора (`.modes.show`) — у рамці («Макет») чи на
+ *  полотні («Огляд»). Острівець тоді піднімається над нею: інакше він накривав би
+ *  «Area»/«Freeze» саме тоді, коли дизайнер коментує. Заглядаємо в тіньовий DOM
+ *  коментатора так само, як `frameHeld()`; сам коментатор не чіпаємо (окремий продукт). */
+function layerModesShown() {
+  const shown = (doc) => !!doc?.querySelector('[data-comment-layer]')?.shadowRoot?.querySelector('.modes.show');
+  try { if (shown(document)) return true; } catch (e) { /* немає полотна — далі рамка */ }
+  try { return shown(frame.contentDocument); } catch (e) { return false; }
+}
+setInterval(() => {
+  if (!document.body.classList.contains('claude-on')) return;
+  document.body.classList.toggle('claude-lift', layerModesShown());
+}, 500);
 /** Чи є в рамці щось, що перезавантаження знищило б: відкритий інспектор
  *  (запінений елемент) або набір коментаря. Не можемо подивитись — вважаємо,
  *  що є: зайва плашка дешевша за знищений текст. Стан тюнера живе тут, у

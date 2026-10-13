@@ -3,6 +3,7 @@
 Фідбек 29.07.2026: для задачі, якої на GitLab узагалі немає, друкувалось
 «синхронізовано» — бо наздоганяти нічого і локально все чисто.
 """
+import json
 import os
 import sys
 import unittest
@@ -57,6 +58,30 @@ class GitlabLine(unittest.TestCase):
         немає розбивки — немає підстав заспокоювати."""
         line = state.gitlab_line({'behind': 2, 'dirty': False, 'on_remote': True}, 'p')
         self.assertIn('НОВІШЕ (2)', line)
+
+    def test_named_task_hints_carry_the_prefix(self):
+        """Ревʼю 12.10.2026: «Спершу Підтягнути!» і «Надіслати» під `--task` без
+        префікса вели в ПОТОЧНУ задачу — копія дослівно тягнула б чужу."""
+        behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
+        line = state.gitlab_line(behind, 'p', tid='beta')
+        self.assertIn('Спершу Підтягнути!', line)
+        self.assertIn('POST /t/beta/api/gitlab-pull', line)
+        never = {'behind': 0, 'dirty': False, 'on_remote': False}
+        line = state.gitlab_line(never, 'p', tid='beta')
+        self.assertIn('POST /t/beta/api/gitlab-sync', line)
+        self.assertIn('діє на поточну задачу канваса, не на названу', line,
+                      'кнопка канваса діє на ПОТОЧНУ — під названою про це мовчати не можна')
+        # id із керівними символами не ламає шлях
+        line = state.gitlab_line(behind, 'p', tid='a b/c')
+        self.assertIn('POST /t/a%20b%2Fc/api/gitlab-pull', line)
+
+    def test_unnamed_hints_stay_exactly_as_before(self):
+        behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
+        line = state.gitlab_line(behind, 'p')
+        self.assertTrue(line.endswith('Спершу Підтягнути!'), line)
+        line = state.gitlab_line({'behind': 0, 'dirty': False, 'on_remote': False}, 'p')
+        self.assertTrue(line.endswith('У канвасі: «↑ Надіслати Іт.N»'), line)
+        self.assertNotIn('/t/', line)
 
 
 class IterationLine(unittest.TestCase):
@@ -126,6 +151,18 @@ class IterationLine(unittest.TestCase):
         self.assertIn('СВОЇХ ітерацій немає', line)
         self.assertIn('Ольга', line)
 
+    def test_continue_line_endpoint_carries_the_named_task(self):
+        """`(POST /api/iteration {"from": …})` копіюють дослівно, і без префікса
+        вона форкала б ПОТОЧНУ задачу машини, а не названу (ревʼю 12.10.2026)."""
+        its = [{'id': 'it1', 'author': 'Ольга', 'author_key': 'designer2@example.com'}]
+        named = state.continue_line(its, 'lead@example.com', tid='beta')
+        self.assertIn('POST /t/beta/api/iteration {"from": "it1"}', named)
+        plain = state.continue_line(its, 'lead@example.com')
+        self.assertIn('POST /api/iteration {"from": "it1"}', plain)
+        self.assertNotIn('/t/', plain)
+        self.assertIn('POST /t/a%20b/api/iteration',
+                      state.continue_line(its, 'lead@example.com', tid='a b'))
+
     def test_continue_unchanged_without_authors(self):
         """Стара задача без підписів поводиться рівно як раніше."""
         line = state.continue_line([{'id': 'it1'}, {'id': 'it4'}], 'lead@example.com')
@@ -180,10 +217,38 @@ class LocalUrl(unittest.TestCase):
         self.assertIn('ще 1', line, 'про інші сторінки ітерації не сказано')
         self.assertNotIn('/preview/', line)
 
+    def test_named_task_prints_only_urls_that_work(self):
+        """Під названою задачею `/commented` без `bare=1` сервер відмовляє (пін
+        ліг би в локальні коментарі ПОТОЧНОЇ задачі), тож друкувати такий URL —
+        вести в 400. Сира сторінка — з префіксом; коментувати — у канвасі."""
+        line = state.local_url_line(self.task, self.its, '', 8766, tid='beta')
+        self.assertIn('http://127.0.0.1:8766/t/beta/it-assets/it2/poshuk/index.html', line)
+        self.assertNotIn('/commented', line, 'адреса, що відповість 400')
+        self.assertIn('ще 1: /t/beta/it-assets/it2/<id сторінки>/index.html', line,
+                      'підказка про інші сторінки без префікса веде в поточну задачу')
+        self.assertIn('http://127.0.0.1:8766/app/', line)
+        self.assertIn('поточної задачі', line, 'не сказано, чиє це вікно канваса')
+        # без назви — як було, і коментатор на місці
+        plain = state.local_url_line(self.task, self.its, '', 8766)
+        self.assertIn('/commented?it=it2&page=poshuk&ch=local', plain)
+
     def test_no_live_canvas_gives_advice_not_a_dead_url(self):
         line = state.local_url_line(self.task, self.its, '', None)
         self.assertIn('start.command', line)
         self.assertNotIn('http://', line, 'адреса, яка відкриє 404 чи чужу задачу')
+
+    def test_named_task_without_a_live_canvas_does_not_ask_to_switch(self):
+        """Під `--task` перемикати канвас на задачу НЕ треба (префікс `/t/<id>/`
+        відкриває названу за будь-якої поточної): досить, щоб канвас ЖИВ."""
+        line = state.local_url_line(self.task, self.its, '', None, tid='beta')
+        self.assertIn('start.command', line)
+        self.assertNotIn('перемкнись', line)
+        self.assertIn('перемикатись на задачу не треба', line)
+        self.assertIn('/t/beta/it-assets/<itN>/<сторінка>/index.html', line)
+        self.assertNotIn('http://', line, 'адреса, яка відкриє 404 чи чужу задачу')
+        # без назви — стара порада: канвас мусить мати ЦЮ задачу поточною
+        plain = state.local_url_line(self.task, self.its, '', None)
+        self.assertIn('перемкнись на задачу', plain)
 
     def test_port_is_asked_not_guessed(self):
         """Порт — той, де канвас віддає САМЕ цю задачу. Інша копія інструмента
@@ -214,6 +279,247 @@ class LocalUrl(unittest.TestCase):
         self.assertEqual(state.find_canvas_port('bf360', ports=[port]), port)
         self.assertIsNone(state.find_canvas_port('courts', ports=[port]),
                           'канвас з ЧУЖОЮ поточною задачею прийнято за наш')
+
+
+class TaskFlag(unittest.TestCase):
+    """`--task <id>` (fb-07102026-e627c2): `state.py` без нього читає `current`,
+    а `current` один на машину — паралельна сесія його перемикає, і «де ми зараз»
+    раптом розповідає про ЧУЖУ задачу.
+
+    ⛔ Ізоляція: `DC_TASKS_FILE` — тимчасова фікстура (живий `tasks.json` не
+    чіпається); мережа вимкнена — реєстр, Supabase і пошук живого канваса
+    (8765…) підмінені, тож тест не питає нічийого сервера.
+    """
+
+    def setUp(self):
+        import json
+        import shutil
+        import tempfile
+        from unittest import mock
+        self.tmp = tempfile.mkdtemp(prefix='st-task-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        dirs = {}
+        for tid, its in (('alpha', ['it1']), ('beta', ['it1', 'it2'])):
+            dirs[tid] = os.path.join(self.tmp, tid)
+            os.makedirs(dirs[tid])
+            with open(os.path.join(dirs[tid], 'iterations.json'), 'w', encoding='utf-8') as fh:
+                json.dump({'iterations': [{'id': i} for i in its]}, fh)
+        # Локальний пін є ЛИШЕ в beta: «Відкриті коментарі» має назвати 1 саме там.
+        with open(os.path.join(dirs['beta'], '.dc-local-comments.json'), 'w',
+                  encoding='utf-8') as fh:
+            json.dump([{'id': 'b1', 'status': 'open', 'text': 'x'}], fh)
+        # `theirs` — усі ітерації чужі (для підказки «зроби копію»).
+        dirs['theirs'] = os.path.join(self.tmp, 'theirs')
+        os.makedirs(dirs['theirs'])
+        with open(os.path.join(dirs['theirs'], 'iterations.json'), 'w', encoding='utf-8') as fh:
+            json.dump({'iterations': [{'id': 'it1', 'author': 'Ольга',
+                                       'author_key': 'designer2@example.test'}]}, fh)
+        # `nodir` — лише реєстр (запису `dir` нема); `gone` — `dir` є, теки на
+        # диску немає (реєстр їде в git, теки — ні).
+        self.gone_dir = os.path.join(self.tmp, 'gone-here')
+        tasks_file = os.path.join(self.tmp, 'tasks.json')
+        with open(tasks_file, 'w', encoding='utf-8') as fh:
+            json.dump({'current': 'alpha', 'tasks': {
+                'alpha': {'title': 'Альфа', 'dir': dirs['alpha'], 'profile': 'tool'},
+                'beta': {'title': 'Бета', 'dir': dirs['beta'], 'profile': 'tool'},
+                'theirs': {'title': 'Чужа', 'dir': dirs['theirs'], 'profile': 'tool'},
+                'nodir': {'title': 'Без теки', 'profile': 'tool'},
+                'gone': {'title': 'Зникла', 'dir': self.gone_dir, 'profile': 'tool'}}}, fh)
+        saved = {k: os.environ.get(k) for k in
+                 ('DC_TASKS_FILE', 'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL')}
+        os.environ['DC_TASKS_FILE'] = tasks_file
+        os.environ['DC_IDENTITY_NAME'] = 'Я'
+        os.environ['DC_IDENTITY_EMAIL'] = 'me@example.test'
+
+        def restore():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.addCleanup(restore)
+        self.port_calls = []
+
+        def fake_port(tid, ports=None, timeout=0.4, explicit=False):
+            self.port_calls.append({'tid': tid, 'explicit': explicit})
+            return 8766
+        for name, repl in (('_registry_line', lambda cfg: 'Реєстр: тест'),
+                           ('supabase_pins', lambda project: []),
+                           ('find_canvas_port', fake_port)):
+            patcher = mock.patch.object(state, name, repl)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_main(self, argv):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = state.main(argv)
+            except SystemExit as e:
+                rc = e.code
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_without_flag_it_is_the_current_task(self):
+        rc, out, _ = self.run_main([])
+        self.assertEqual(rc, 0)
+        self.assertIn('«Альфа» (alpha)', out)
+        self.assertIn('Ітерації (1)', out)
+
+    def test_flag_names_the_other_task(self):
+        """`current` = alpha, але `--task beta` розповідає про beta: назва, дві
+        ітерації (в alpha — одна) і ЛОКАЛЬНИЙ пін, який є лише там."""
+        rc, out, _ = self.run_main(['--task', 'beta'])
+        self.assertEqual(rc, 0)
+        self.assertIn('«Бета» (beta)', out)
+        self.assertNotIn('Альфа', out)
+        self.assertIn('Ітерації (2)', out)
+        self.assertIn('1 локальних', out)
+
+    def test_unknown_task_is_exit_2_and_says_nothing_about_current(self):
+        rc, out, err = self.run_main(['--task', 'nope'])
+        self.assertEqual(rc, 2)
+        self.assertIn("error: немає задачі 'nope' у tasks.json", err)
+        self.assertEqual(out, '', 'про поточну задачу не сказано ні слова')
+        self.assertEqual(self.port_calls, [], 'мережу чіпали, хоча задачі немає')
+
+    def test_task_missing_on_this_machine_is_exit_2_not_a_traceback(self):
+        """Задача є в реєстрі, але теки тут нема (немає `dir` взагалі чи `dir`
+        вказує в нікуди): раніше `KeyError: 'dir'` або «нова/порожня задача» — а це
+        брехня. Тепер — окрема помилка, код 2, про поточну ні слова, мережі нема."""
+        for tid in ('nodir', 'gone'):
+            with self.subTest(tid=tid):
+                self.port_calls.clear()
+                rc, out, err = self.run_main(['--task', tid])
+                self.assertEqual(rc, 2)
+                self.assertIn(f"error: задачі '{tid}' немає на цій машині "
+                              '(є в реєстрі, теки нема)', err)
+                self.assertNotIn('Traceback', err)
+                self.assertNotIn('нова/порожня', out)
+                self.assertEqual(out, '', 'про поточну задачу не сказано ні слова')
+                self.assertEqual(self.port_calls, [], 'мережу чіпали, хоча теки нема')
+        self.assertFalse(os.path.exists(self.gone_dir), 'теку створено')
+        # без назви поточна задача — як було
+        rc, out, _ = self.run_main([])
+        self.assertEqual(rc, 0)
+        self.assertIn('«Альфа» (alpha)', out)
+
+    def test_named_task_hints_with_an_endpoint_carry_the_prefix(self):
+        """Через `main()`, а не лише чисті функції: `tid if named else None` має
+        дійти до обох підказок із ендпоїнтом."""
+        from unittest import mock
+        behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
+        with mock.patch.object(state, 'gitlab_cfg', lambda cfg, task: {'path': 'p'}), \
+                mock.patch.object(state, 'gitlab_status', lambda *a, **k: behind):
+            _, named, _ = self.run_main(['--task', 'theirs'])
+            _, plain, _ = self.run_main([])
+        self.assertIn('POST /t/theirs/api/gitlab-pull', named)
+        self.assertIn('POST /t/theirs/api/iteration {"from": "it1"}', named)
+        self.assertNotIn('POST /api/', named, 'підказка без префікса б\'є в поточну')
+        self.assertNotIn('/t/', plain)
+        self.assertNotIn('gitlab-pull', plain)
+
+    def test_empty_id_is_not_the_current_task(self):
+        """`--task ''` — це ЯВНА (порожня) назва, а не «не задано»."""
+        rc, out, err = self.run_main(['--task', ''])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, '')
+
+    def test_flag_is_in_help(self):
+        rc, out, _ = self.run_main(['--help'])
+        self.assertEqual(rc, 0)
+        self.assertIn('--task', out)
+        self.assertIn('паралельних сесій', out)
+
+    def test_unknown_argument_is_an_error_not_silence(self):
+        rc, _, err = self.run_main(['--tsak', 'beta'])
+        self.assertEqual(rc, 2)
+        self.assertIn('--tsak', err)
+
+    def test_canvas_is_asked_for_the_named_task(self):
+        """Задачу названо — живий канвас питаємо про НЕЇ, а не про його поточну."""
+        self.run_main(['--task', 'beta'])
+        self.run_main([])
+        self.assertEqual(self.port_calls, [{'tid': 'beta', 'explicit': True},
+                                           {'tid': 'alpha', 'explicit': False}])
+
+    def test_printed_urls_carry_the_task_prefix_only_when_named(self):
+        """Без префікса `/t/<id>/` адреса відкриє ПОТОЧНУ задачу канваса — тобто
+        після `--task beta` вела б у чужий макет, коли current інший."""
+        _, named, _ = self.run_main(['--task', 'beta'])
+        self.assertIn('http://127.0.0.1:8766/t/beta/it-assets/it2/index.html', named)
+        self.assertNotIn('/t/beta/commented', named)
+        _, plain, _ = self.run_main([])
+        self.assertIn('http://127.0.0.1:8766/it-assets/it1/index.html', plain)
+        self.assertNotIn('/t/', plain)
+
+    def test_inbox_hint_repeats_the_flag(self):
+        """Підказка «→ python3 bin/inbox.py» копіюється дослівно: без `--task`
+        вона відкрила б інбокс поточної задачі, а не названої."""
+        _, named, _ = self.run_main(['--task', 'beta'])
+        self.assertIn('→ python3 bin/inbox.py --task beta', named)
+
+
+class CanvasProbe(unittest.TestCase):
+    """`find_canvas_port`: з `explicit` питає `/t/<id>/api/task` (без заголовка)."""
+
+    def _probe(self, tid='beta', **kw):
+        from unittest import mock
+        seen = []
+
+        class R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps({'id': tid}).encode()
+
+        def fake(req, timeout=None):
+            seen.append({'url': req.full_url,
+                         'headers': {k.lower(): v for k, v in req.header_items()}})
+            return R()
+        with mock.patch('urllib.request.urlopen', fake):
+            port = state.find_canvas_port(tid, ports=[9], **kw)
+        return port, seen
+
+    def test_named_task_is_probed_through_the_prefix(self):
+        """Адреси, які друкує `state.py`, несуть префікс `/t/<id>/`, тож і порт
+        перевіряємо ним. Заголовок `X-Canvas-Task` старий (не перезапущений)
+        канвас ігнорує й відповідає про ПОТОЧНУ — «підходить», а друковані
+        адреси далі дали б йому 404."""
+        port, seen = self._probe(explicit=True)
+        self.assertEqual(port, 9)
+        self.assertEqual(seen[0]['url'], 'http://127.0.0.1:9/t/beta/api/task')
+        self.assertNotIn('x-canvas-task', seen[0]['headers'])
+
+    def test_named_task_id_is_quoted_in_the_probe_path(self):
+        _, seen = self._probe('a b/c', explicit=True)
+        self.assertEqual(seen[0]['url'], 'http://127.0.0.1:9/t/a%20b%2Fc/api/task')
+
+    def test_old_canvas_without_the_prefix_is_not_a_match(self):
+        """Старий канвас на `/t/beta/api/task` дає 404 → порт пропущено, хоч
+        його поточна задача — саме beta (так «збіг» був би хибним)."""
+        from unittest import mock
+        import urllib.error
+
+        def fake(req, timeout=None):
+            if '/t/' in req.full_url:
+                raise urllib.error.HTTPError(req.full_url, 404, 'nf', {}, None)
+            raise AssertionError('named probe fell back to the bare path')
+        with mock.patch('urllib.request.urlopen', fake):
+            self.assertIsNone(state.find_canvas_port('beta', ports=[9], explicit=True))
+
+    def test_current_task_sends_no_header_and_no_prefix(self):
+        """Без явної задачі семантика стара: порт підходить, лише якщо ТАМ
+        поточна саме ця задача — тож ні заголовок, ні префікс не годяться."""
+        port, seen = self._probe()
+        self.assertEqual(port, 9)
+        self.assertEqual(seen[0]['url'], 'http://127.0.0.1:9/api/task')
+        self.assertNotIn('x-canvas-task', seen[0]['headers'])
 
 
 if __name__ == '__main__':

@@ -120,24 +120,49 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
 html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean .cv-notice,
-html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,
+html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
 html.cv-clean [data-comment-layer]{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
 .cv-unclean{position:fixed;top:10px;right:10px;z-index:400;padding:6px 12px;border-radius:8px;
   font:inherit;font-size:12px;cursor:pointer;color:var(--hi);background:var(--s1);border:1px solid var(--line2);
   opacity:.55;box-shadow:0 6px 20px rgba(0,0,0,.35);transition:opacity .15s ease}
 .cv-unclean:hover,.cv-unclean:focus-visible{opacity:1}
-/* Статус Клода в зоні 1 (ідея 02.09.2026) і «змінено щойно» в рядках панелі. */
-.claude-chip{display:inline-flex;align-items:center;gap:6px;margin-left:8px;padding:3px 9px;border-radius:999px;
-  font-size:12px;white-space:nowrap;color:var(--hi);background:var(--s3);border:1px solid var(--line2);min-width:0}
-.claude-chip .lbl-claude{overflow:hidden;text-overflow:ellipsis}
+/* Статус Клода — острівець унизу робочої області (12.10.2026; до того — фішка в
+   зоні 1, що з'їдала крихти на вузькому вікні). `.cv-hud` — смужка нульової висоти
+   з тими самими left/width, що й `.cv-canvas` (правила панелей нижче, ті самі
+   селектори), тож острівець центрується по ВИДИМІЙ області й їде разом із панелями.
+   Кліків не перехоплює: під ним живий макет. `--z-widget` — шар плаваючих віджетів
+   над макетом: вище за панелі (`--z-panel`), нижче за смугу (`--z-bar`), тож
+   випадаючі меню смуги його накривають, а тост (300) і плашки (310) — тим паче. */
+.cv-hud{position:fixed;left:0;right:0;bottom:0;height:0;z-index:var(--z-widget);pointer-events:none}
+.claude-island{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+  display:inline-flex;align-items:center;gap:7px;max-width:calc(100% - 28px);
+  background:rgba(26,35,30,.9);color:#fff;font-size:12px;padding:6px 14px;
+  border-radius:999px;white-space:nowrap;transition:bottom .2s ease}
+.claude-island .lbl-claude{overflow:hidden;text-overflow:ellipsis}
+.claude-island .claude-age{color:rgba(255,255,255,.7);flex:none}
 .claude-dot{width:7px;height:7px;border-radius:50%;background:var(--lo);flex:none}
-.claude-chip--working .claude-dot{background:#3fb950;animation:claude-pulse 1.6s ease-in-out infinite}
-.claude-chip--waiting .claude-dot{background:#d29922}
-.claude-chip--blocked .claude-dot{background:#f85149}
-.claude-chip--done .claude-dot{background:var(--sel)}
+.claude-island--working .claude-dot{background:#3fb950;animation:claude-pulse 1.6s ease-in-out infinite}
+.claude-island--waiting .claude-dot{background:#d29922}
+.claude-island--blocked .claude-dot{background:#f85149}
+.claude-island--done .claude-dot{background:var(--sel)}
 @keyframes claude-pulse{50%{opacity:.35}}
-@media (prefers-reduced-motion:reduce){.claude-chip--working .claude-dot{animation:none}}
+@media (prefers-reduced-motion:reduce){.claude-island{transition:none}.claude-island--working .claude-dot{animation:none}}
+/* Смужка режимів коментатора (`.modes.show`: низ на 20px, висота 42px — виміряно
+   на 1440 і 1024) стоїть там само, де острівець, — тоді він піднімається над нею
+   (клас ставить `app.js`, `layerModesShown`). 76px = 20 + 42 + проміжок 14px, той
+   самий, що в спокої між острівцем і краєм вікна. */
+body.claude-lift .claude-island{bottom:76px}
+/* Поки острівець видно: підказка «Огляду» стоїть на тому самому місці — ховаємо;
+   тост і стійкі плашки піднімаються над острівцем (обидва центровані внизу) —
+   лише коли острівець справді видно: не в чистому перегляді й не на «Задачах»,
+   де він схований, а тост без причини висів би задертим над порожнечею. */
+body.claude-on #canvas-hint{visibility:hidden}
+html:not(.cv-clean) body.claude-on:not(.home-open) .cv-toast{bottom:58px}
+html:not(.cv-clean) body.claude-on:not(.home-open) .cv-notice{bottom:100px}
+/* Екран «Задачі»: статус про відкритий макет, а його тут не видно. */
+body.home-open .cv-hud{display:none!important}
+/* «Змінено щойно» в рядках панелі. */
 .row-recent-dot{width:6px;height:6px;border-radius:50%;background:var(--sel);flex:none;margin-left:4px}
 .cv-ctx{position:fixed;z-index:200;background:var(--s1);border:1px solid var(--line2);
   border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:4px;min-width:190px;
@@ -515,10 +540,11 @@ body.vp-fixed .cv-frame{width:var(--cv-vpw);
    `.panel` нижче (новий словник панелі), а не тут другим літералом — інакше
    вони розійшлись би так само тихо, як `.view-more{display:none}` уже
    розходилось у Плані A. */
-body.with-panel .cv-stage,body.with-panel .cv-canvas{left:var(--panel-w);width:calc(100% - var(--panel-w))}
+body.with-panel .cv-stage,body.with-panel .cv-canvas,body.with-panel .cv-hud{left:var(--panel-w);width:calc(100% - var(--panel-w))}
 /* згорнута — рейка: лишається лише стрілка, макет майже на всю ширину */
 body.with-panel.panel-collapsed .cv-stage,
-body.with-panel.panel-collapsed .cv-canvas{left:var(--panel-rail-w);width:calc(100% - var(--panel-rail-w))}
+body.with-panel.panel-collapsed .cv-canvas,
+body.with-panel.panel-collapsed .cv-hud{left:var(--panel-rail-w);width:calc(100% - var(--panel-rail-w))}
 /* Права панель інспектора (Task 5 Плану B) звужує ту саму область СПРАВА.
    `width`, а не `right`: `.cv-stage`/`.cv-canvas` уже мають `left`/`right`
    з базового правила (рядок вище в файлі) — додати сюди ЩЕ й `right` разом
@@ -530,11 +556,13 @@ body.with-panel.panel-collapsed .cv-canvas{left:var(--panel-rail-w);width:calc(1
    скласти зсуви композицією `left`+`right`.
    Числа: 1024 (найвужчий working-екран, який перевіряє Task 7) мінус обидві
    панелі (246+308 чи 46+308) лишає 470/670px полотну — над межею ≥420px. */
-body.with-insp .cv-stage,body.with-insp .cv-canvas{width:calc(100% - var(--insp-w))}
+body.with-insp .cv-stage,body.with-insp .cv-canvas,body.with-insp .cv-hud{width:calc(100% - var(--insp-w))}
 body.with-panel.with-insp .cv-stage,
-body.with-panel.with-insp .cv-canvas{width:calc(100% - var(--panel-w) - var(--insp-w))}
+body.with-panel.with-insp .cv-canvas,
+body.with-panel.with-insp .cv-hud{width:calc(100% - var(--panel-w) - var(--insp-w))}
 body.with-panel.panel-collapsed.with-insp .cv-stage,
-body.with-panel.panel-collapsed.with-insp .cv-canvas{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+body.with-panel.panel-collapsed.with-insp .cv-canvas,
+body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
 /* `.pages-panel`/`.pp-*` нижче — розмітка старої панелі (План B Task 4 її
    замінив на `.panel`/`.panel--rail`/`.row*`/`.shots*`, кінець файла).
    Лишені НЕ вживаними свідомо, тим самим рядком думки, що вже стоїть для

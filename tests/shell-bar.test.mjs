@@ -14,8 +14,6 @@ const S = (o = {}) => ({
   right: null, tasksErr: false, ...o,
 });
 
-const CLAUDE = { state: "working", age_s: 5, note: "", phase: "" };
-
 const html = (o) => barHTML(barModel(S(o)), S(o));
 
 /* Три зони мусять бути трьома вузлами: на них тримається грид
@@ -68,7 +66,7 @@ test("логотип — кнопка data-act=home перед палітрою,
 /* Екран «Задачі»: три зони лишаються в DOM (грид на них тримається), але
    склад інший — лише «де я» і шлях назад. */
 test("екран «Задачі»: крошка «Задачі» і «Назад до …», без макета й публікації", () => {
-  const h = html({ homeOpen: true, claude: CLAUDE });
+  const h = html({ homeOpen: true });
   assert.equal((h.match(/class="zone /g) || []).length, 3, "зон мусить лишитись три");
   assert.match(h, /crumb--flat[^>]*>[\s\S]*?Задачі/, "немає плоскої крошки «Задачі»");
   const back = /<button[^>]*data-act="back"[\s\S]*?<\/button>/.exec(h);
@@ -79,10 +77,6 @@ test("екран «Задачі»: крошка «Задачі» і «Назад
   assert.ok(!/data-dd="iter"/.test(h), "крошка ітерації на екрані «Задачі» зайва");
   assert.ok(!/data-act="publish"/.test(h), "публікація без вигляду задачі безглузда");
   assert.ok(!/data-act="mode"/.test(h), "сегмент «Макет/Огляд» без задачі безглуздий");
-  assert.ok(!/claude-chip/.test(h), "фішка Клода про макет, якого тут немає");
-  // Свідок: з тим самим станом Клода ПОЗА екраном «Задачі» фішка є. Без нього
-  // перевірка вище була б зеленою на фікстурі, де фішки й так не існує.
-  assert.match(html({ claude: CLAUDE }), /claude-chip/, "фікстура не створює фішки — перевірка порожня");
   assert.match(h, /data-act="home"/, "логотип мусить лишитись");
   assert.match(h, /data-act="palette"/, "палітра мусить лишитись");
 });
@@ -471,17 +465,16 @@ test("«В Figma» в «Огляді» без підпису, але з aria-lab
   assert.match(ov, /aria-label="В Figma"/);
 });
 
-/* Статус Клода (ідея 02.09.2026): у зоні 1 — лише коли сервер каже, що удар
-   свіжий. `state: null` (серцебиття згасло) — фішки НЕМАЄ зовсім, а не «нічого». */
-test("фішка Клода в зоні 1 — лише за живим статусом", () => {
-  assert.equal(barModel(S()).zone1.some((x) => x.id === "claude"), false);
-  assert.equal(barModel(S({ claude: { state: null } })).zone1.some((x) => x.id === "claude"), false);
-  const out = html({ claude: { state: "working", age_s: 20, note: "Іт.2", phase: "design" } });
-  const z1 = out.slice(out.indexOf("zone-1"), out.indexOf("zone-2"));
-  assert.match(z1, /claude-chip claude-chip--working/);
-  assert.match(z1, /Claude працює · 20 с тому/);
-  assert.match(html({ claude: { state: "waiting", age_s: 400 } }), /Claude чекає відповіді/);
-  assert.match(html({ claude: { state: "working", age_s: 125 } }), /2 хв тому/);
+/* Статус Клода з 12.10.2026 живе в острівці внизу робочої області (`claude-status.js`,
+   `#claude-hud`), а не в смузі: на вузькому вікні фішка з'їдала крихти задачі й
+   ітерації. Смуга не має знати про статус узагалі — навіть живий не малює фішки. */
+test("у смузі статусу Клода немає ніколи — він в острівці", () => {
+  const live = { state: "working", age_s: 20, note: "Іт.2", phase: "design" };
+  assert.equal(barModel(S({ claude: live })).zone1.some((x) => x.id === "claude"), false);
+  for (const o of [{ claude: live }, { claude: { state: "waiting", age_s: 400 } }, { homeOpen: true, claude: live }]) {
+    const h = html(o);
+    assert.ok(!/claude-chip|claude-island|Claude працює|Claude чекає/.test(h), JSON.stringify(o));
+  }
 });
 
 /* Пароль превʼю в дропдауні публікації (ідея 02.09.2026). Пункт ЖИВИЙ завжди —
