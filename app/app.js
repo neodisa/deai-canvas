@@ -12,7 +12,7 @@ import { flatten as flattenTree, pathOf, topIds, visibleIds, visibleRows, statsO
 import { canMove } from './page-order.js';
 import { readFlow, shotKey, shotVersion, stateQuery } from './flow-model.js';
 import { flowLayout } from './flow-layout.js';
-import { ask, askChoice, askYesNo, tell } from './ask.js';
+import { ask, askChoice, askForm, askYesNo, tell } from './ask.js';
 import { composeDeleteNote, deleteDialogModel, resolveDrop, shouldCommitDrop, shouldRefreshPanel, vanishedFolders, zoneOfHit, groupTargetIds, pageMenuItems, runSequential, treeBusyGate, treeTarget as pickTreeTarget } from './tree-actions.js';
 import {
   CANVAS_PRESETS, CANVAS_W, MAX_W, MIN_W, PRESETS, activePreset, frameKey, parseWidth,
@@ -30,7 +30,15 @@ import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, taskKey } from './tasks-model.js';
-import { homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
+import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
+import {
+  FORM_POST_TIMEOUT_MS, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, healTarget,
+  isReadErrKey, needsWelcome, readErrKey, rovingIndex, shouldRefreshHome, spaceChanged, spaceErrField,
+  spaceErrKey, taskErrField, taskErrKey, taskFormError,
+} from './spaces-model.js';
+import {
+  spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
+} from './space-dialogs.js';
 import { panelHTML } from './shell-panel.js';
 import { inspectHTML } from './shell-inspect.js';
 import {
@@ -196,6 +204,34 @@ let tasksErr = false;
 /* Причина помилки смуги, коли вона точніша за типову (`tasksErrPort`).
    Окремо від `tasksErr`: факт помилки і її причина — різні величини. */
 let tasksErrKey = null;
+
+/* ===== Простори (Deai 1.0, етап 1): стан, якого нема більш ніде ===== */
+/* Остання відповідь `/api/spaces`: `{current, spaces:[{id,name,color,path,legacy,
+   integrations,tasks,available}]}`; `{off:true,…}` — шар просторів вимкнено; `null` —
+   ще не питали або реєстр не читається. Живе ТУТ, а не в `curTask.space`, бо потрібна
+   й тоді, коли задачі нема зовсім (порожній простір, привітання, недоступний файл): без
+   неї смузі не було б з чого намалювати фішку, а «просторів нема» не відрізнялось би
+   від «ще не питали». Оновлюється при відкритті дропдауна й палітри, на екрані «Задачі»
+   та після кожної дії над просторами — не на кожен `render()`. */
+let spacesResp = null;
+/* Лічильник запитів: відповідь, що вилетіла ДО новішого запиту, не перезаписує його. */
+let spacesSeq = 0;
+/* Дропдаун просторів був відкритий на ПОПЕРЕДНЬОМУ малюванні: відрізняє «щойно
+   відкрили» (фокус на поточний рядок) від «перемалювали відкритий» (фокус лишається
+   на тому рядку, де був). Той самий прийом, що `taskDdWasOpen`. */
+let spaceDdWasOpen = false;
+
+/** Поточний простір (`{id, name, color, integrations, …}`) або `null`: шар вимкнено,
+ *  просторів нема. Джерело — задача, що відкрита (`curTask.space`), інакше реєстр. */
+const spaceNow = () => curTask?.space ?? currentSpace(spacesResp);
+/** Простір без інтеграцій: усе, що ходить НАЗОВНІ (GitLab, Teams, публікація, командні
+ *  коментарі), там не опитується взагалі. Простору, про який ми знаємо, — рівно
+ *  `=== false` (невідомість красти в людини GitLab не має, так само, як `bar-model.js`).
+ *  Просторів на машині немає зовсім (привітання) — теж «назовні нічого»: задач нема, і
+ *  опитувати нікого (`refreshGitlab`, `loadTeamsMute` без цього питали б порожнечу). */
+const noOutward = () => spaceNow()?.integrations === false || needsWelcome(spacesResp);
+/** Канал коментарів, який ДІЄ (див. `effectiveCommentMode`). `commentMode` у сховищі не чіпаємо. */
+const effMode = () => effectiveCommentMode(spaceNow(), commentMode);
 
 /* Ширина рамки макета в робочому вигляді: число пікселів або `null` — вільна
    ширина вікна («Десктоп»). ОДНА величина на весь стан: який сегмент підсвічений,
@@ -627,6 +663,26 @@ const post = (path, body) => api(path, {
   body: JSON.stringify(body || {}),
 });
 
+/**
+ * Запит діалогу просторів і «Нової задачі» — зі СТЕЛЕЮ часу (`FORM_POST_TIMEOUT_MS`). Поки форма
+ * чекає відповіді, вона «зайнята»: Esc і «Скасувати» не діють, а підкладка накриває весь канвас.
+ * Без стелі завислий сервер лишив би людину під нею назавжди. Минув строк — запит обривається
+ * (`AbortController`: і очікування відповіді, і читання тіла) й падає з `code: 'timeout'`;
+ * `spaceErrKey`/`taskErrKey` дають йому текст `formTimeout`, форма знову вільна й закривається.
+ * Сервер за цей час міг устигнути виконати запит — текст про це й каже.
+ */
+function formApi(path, opts = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FORM_POST_TIMEOUT_MS);
+  return api(path, { ...opts, signal: ctl.signal })
+    .catch((e) => { throw e?.name === 'AbortError' ? Object.assign(new Error('timeout'), { code: 'timeout' }) : e; })
+    .finally(() => clearTimeout(timer));
+}
+const postForm = (path, body) => formApi(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body || {}),
+});
+
 // ненав'язливе повідомлення (нема змін / надіслано тощо)
 function toast(msg) {
   let t = document.getElementById('cv-toast');
@@ -807,8 +863,15 @@ function barState() {
     /* Смуга цього поля вже НЕ читає (принцип 6 PRODUCT.md — перемикач
        аудиторії переїхав у панель коментатора). Лишається, бо `paletteState()`
        будується з `barState()` і бере поточну аудиторію звідси — другий шлях
-       до того самого модульного `commentMode` розійшовся б із першим. */
-    commentMode,
+       до того самого модульного `commentMode` розійшовся б із першим.
+       Віддаємо ДІЮЧИЙ канал (`effMode`), а не збережений: у просторі без
+       інтеграцій збережений `project` там не працює, і палітра, що позначила б
+       його вибраним, збрехала б. */
+    commentMode: effMode(),
+    /* Простір для фішки й дропдауна (див. «Простори» вгорі файла). Без `space`
+       фішки в смузі нема зовсім: шар вимкнено або просторів ще нема. */
+    space: spaceNow(),
+    spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : [],
   };
 }
 
@@ -851,9 +914,32 @@ function paintBar() {
   const fresh = openDd === 'task' && !taskDdWasOpen;
   taskDdWasOpen = openDd === 'task';
   if (fresh) { taskQ = ''; taskCursor = initialTaskCursor(); }
+  /* Фокус дропдауна просторів — те саме: `innerHTML` знищує вузол, а з ним і фокус.
+     Запамʼятовуємо ІНДЕКС рядка (ідентичність вузла після перемальовки інша) і те,
+     що фокус стояв на фішці. */
+  const spDd = bar.querySelector('.dd--spaces');
+  const spRow = spDd && spDd.contains(document.activeElement)
+    ? [...spDd.querySelectorAll('.dd-item')].indexOf(document.activeElement) : -1;
+  const chipHadFocus = !!document.activeElement
+    && document.activeElement === bar.querySelector('.space-chip');
+  const spFresh = openDd === 'space' && !spaceDdWasOpen;
+  spaceDdWasOpen = openDd === 'space';
   const st = barState();
   bar.innerHTML = barHTML(barModel(st), st);
   paintInsp();
+  if (openDd === 'space') {
+    /* Щойно відкрили — фокус на ПОТОЧНИЙ рядок (там людина й так хоче почати); інакше —
+       на той самий рядок, де стояв. Клавіатура далі йде по `.dd--spaces .dd-item`. */
+    const rows = [...bar.querySelectorAll('.dd--spaces .dd-item')];
+    const cur = rows.findIndex((r) => r.getAttribute('aria-current') === 'true');
+    const at = spRow >= 0 ? spRow : (spFresh ? Math.max(cur, 0) : -1);
+    if (rows[at]) rows[at].focus({ preventScroll: true });
+    else if (chipHadFocus) bar.querySelector('.space-chip')?.focus({ preventScroll: true });
+  } else if (chipHadFocus) {
+    /* Дропдаун закрили (Esc, повторне натискання), коли фокус був на фішці, — вузол
+       новий, фокус вертаємо. */
+    bar.querySelector('.space-chip')?.focus({ preventScroll: true });
+  }
   /* Прокрутка списку: `innerHTML` створює новий `.dd-list` з `scrollTop = 0`, і
      активний пункт, до якого дійшли стрілками в довгому списку, виїжджав би за
      межі видимого. Повертаємо те, що було (а не `scrollIntoView` активного:
@@ -881,19 +967,46 @@ async function render() {
   try {
     task = await api('/api/task');
     taskList = await api('/api/tasks');
+    /* Простір відповіді інший, ніж у задачі, яку ми показували: його змінив агент чи сусідня
+       вкладка (клацання тут проходить через `afterSpaceChange`/`switchTask`, які скидають
+       самі, і тоді `curTask` вже `null`). Усе, що належало тому простору, — пакет тюнера з
+       ревізією, позначки зʼємки, кеш GitLab, фільтри екрана — належить не цій задачі:
+       забуваємо ДО того, як хоч щось із нього буде прочитано. `loadTune()` усередині
+       `resetPerTaskState` бере пакет НОВОЇ задачі (сервер уже в новому просторі) і ставить
+       `tuneRev`; без цього перший поворот ручки пішов би без `base_rev` і затер би
+       її `.dc-tuner.json`. Екран «Задачі», якщо відкритий, лишається екраном — як в
+       `afterSpaceChange`. */
+    if (curTask && spaceChanged(curTask.space?.id, task.space?.id)) {
+      await resetSpaceState();
+      if (homeOpen) enterHome({ spaces: false });
+    }
     curTask = task; curTaskList = taskList; tasksErr = false; tasksErrKey = null;
     currentTaskId = taskList.current ?? currentTaskId;
+    /* Пакет тюнера не читався для цієї задачі ні разу (`tuneRev` невизначена): задачі не
+       було, коли стартував канвас або коли її «забув» `showNoTask`, і вона зʼявилась сама
+       (агент). Запис без ревізії затер би чужий `.dc-tuner.json`, тож перечитуємо тут. */
+    if (tuneRev === undefined) await loadTune();
   } catch (e) {
+    /* У поточному просторі нема жодної задачі (щойно створений, порожній) або просторів
+       нема зовсім — це не поломка, а місце для «Нової задачі» чи привітання. Тому не
+       `tasksErr`: червона смуга «не читається» там брехала б. */
+    if (e?.code === 'no-task') { await showNoTask(); return; }
     tasksErr = true;
-    tasksErrKey = e?.key || null;
+    /* Причина: чужий процес на порту (`e.key`), файл задач простору не читається чи
+       реєстр просторів битий (`e.code` — сервер шле його завжди разом з `error`).
+       Невідомий код лишає типову причину смуги. */
+    tasksErrKey = e?.key || readErrKey(e?.code) || null;
     /* Перше завантаження впало ЦІЛКОМ: `curTask` іще `null`, крихтам нема з
        чого малюватись, а `applyMode`/`renderPanel` нижче читають
        `task.iterations` і впали б на `null`. Малюємо саму смугу помилки й
        зупиняємось — той самий короткий вихід, що стояв тут до Task 3.
        Транзиентний збій ПІСЛЯ вдалого першого разу деградує інакше: крихти
        лишаються зі СТАРИМИ даними (`curTask` не чіпаємо), смуга помилки
-       з'являється ПІД ними (`bar-model.js`, поле `error`), а не замість. */
-    if (!curTask) { paintBar(); return; }
+       з'являється ПІД ними (`bar-model.js`, поле `error`), а не замість.
+       Простори питаємо ТУТ: без задачі фішку нема з чого малювати, а саме з неї
+       можна піти з недоступного простору в інший. Сцену чистимо — після переходу
+       з іншого простору під смугою помилки стояв би ЧУЖИЙ макет. */
+    if (!curTask) { await loadSpaces(); blankStage(); paintBar(); return; }
     task = curTask; taskList = curTaskList;
   }
   // picked = обрана ітерація (у ній працюєш). За замовч. — остання; нормалізуємо.
@@ -971,6 +1084,9 @@ async function dupIteration() {
  *     ПРИПИСАВ би чужу роботу. Канал ще й пише повний пакет, тож без
  *     `loadTune()` перший же поворот ручки в новій задачі знищив би її власний
  *     файл — рівно та діра, від якої застерігає докстрінг `loadTune`;
+ *   · відповідь перевірки свіжості (`lastCheck`) — вона про ітерацію ПОПЕРЕДНЬОЇ задачі: `it1`
+ *     є в кожній, тож `checkOf()` (звіряє лише id ітерації) віддав би її новій задачі, і
+ *     кнопка зʼємки показала б чуже число застарілих кадрів;
  *   · рядки останнього звіту — вони описують документ, якого вже немає.
  *     Це ГІГІЄНА, і сказати це чесно важливіше, ніж записати рядок у заслуги:
  *     `paintInsp` перебирає мапу наново на КОЖНІЙ перемальовці, а дістати з
@@ -990,8 +1106,273 @@ async function resetPerTaskState() {
      дістав би 409 і «пакет змінено поза вкладкою» на рівному місці. */
   tuneRev = undefined;
   inspDecls = new Map();
+  lastCheck = null;
   await loadTune();
   picked = null;
+}
+
+/**
+ * Забути ВСЕ, що належить ОДНОМУ ПРОСТОРУ, — і дізнатись, у якому ми тепер. Кличуть
+ * перемикач простору, створення простору й `switchTask`, коли `task-switch` перевів у
+ * простір іншої задачі. Надмножина `resetPerTaskState`: задача простору — теж чужа.
+ *
+ * ⛔ Той самий клас пастки, що в `resetPerTaskState`: перелік того, що належить
+ * простору, живе В ОДНОМУ місці, інакше другий вхід перепише половину. Що забуваємо:
+ *   · задачу, список задач, дані екрана «Задачі» й `currentTaskId` — усе чуже;
+ *   · лічильники `taskSwitchGen`/`homeSeq`: відповіді, що вилетіли ДО зміни простору
+ *     (їх запити йшли до ІНШОГО файла задач), не сміють перемалювати екран;
+ *   · кеш GitLab і стан тиші Teams — вони про репозиторій і канал ТІЄЇ задачі;
+ *   · помилку смуги: «файл не читається» була про попередній простір;
+ *   · фільтри екрана «Задачі» за напрямком і дизайнером та пошук — значення з даних
+ *     ТОГО простору (`pruneFilters` лишив би їх, бо в порожньому новому просторі
+ *     прибирати нема за чим), і список мовчки виглядав би порожнім.
+ * Вкладку, сортування й статус не чіпаємо: це смак людини, а не дані простору.
+ *
+ * Наприкінці — `loadSpaces()` (крім `reload: false`: викликач щойно сам його перечитав,
+ * `showNoTask` після лікування): фішка й дропдаун мусять бачити НОВИЙ поточний простір ще
+ * до `render()`.
+ */
+async function resetSpaceState({ reload = true } = {}) {
+  await resetPerTaskState();
+  curTask = null; curTaskList = null; homeData = null; currentTaskId = null;
+  taskSwitchGen += 1; homeSeq += 1;
+  glCache = null; teamsMute = null;
+  tasksErr = false; tasksErrKey = null;
+  homeUi.q = ''; homeUi.profiles.clear(); homeUi.designers.clear(); saveHomeUi();
+  taskQ = ''; taskCursor = 0;
+  if (reload) await loadSpaces();
+}
+
+/**
+ * Перелік просторів машини (`/api/spaces`) у `spacesResp`. Не кидає: реєстр, що не
+ * читається, — це `spacesResp = null` (фішки нема), а САМУ причину людині показує
+ * `render()` (503 `spaces-unreadable` на `/api/task`).
+ *
+ * `heal` — лікувати ВИСЯЧИЙ `current` (його вилучили руками чи агентом — `healTarget`): сервер
+ * у запиті бачить таке як «простору нема», тож `/api/task` дає `no-task`, екран «Задачі»
+ * порожній, а фішки нема, щоб піти. Перемикаємо на перший доступний (так само робить
+ * `active_space()` поза запитом) і перечитуємо. Лікують лише ті, хто й так вирішує, що
+ * показати, — `render()` і `loadHome()`; відкриття дропдауна чи палітри лише ПОКАЗУЄ
+ * перелік і сервер за людину не перемикає. Одна спроба: збій перемикання лишає реєстр як є,
+ * а не крутить цикл.
+ *
+ * Повертає `true`, коли ЛІКУВАЛО і реєстр тепер не висить: відповідь викликача про «задачі
+ * нема» застаріла, пер-задачний стан належав іншому простору. Явне значення, а не прапорець
+ * модуля, який хтось мусив би скинути перед викликом і прочитати одразу після.
+ */
+async function loadSpaces({ heal = false } = {}) {
+  const seq = ++spacesSeq;
+  let r = null;
+  try { r = await api('/api/spaces'); } catch (e) { r = null; }
+  let healed = false;
+  const to = heal ? healTarget(r) : null;
+  if (to) {
+    try {
+      await post('/api/space-switch', { id: to });
+      r = await api('/api/spaces');
+      healed = healTarget(r) === null;
+    } catch (e) { /* лишаємо як є: людина перемкне сама, фішка тепер без поточного */ }
+  }
+  if (seq === spacesSeq) spacesResp = r;
+  return healed;
+}
+
+/**
+ * Простір змінився (перемкнули, створили): забути старий, показати новий. Екран «Задачі»
+ * (якщо відкритий) лишається екраном — людина перемикала простір ЗВІДТИ, і чекає список
+ * задач нового, а не стрибок у макет. Без нього — `render()` сам вирішує: є задача —
+ * малює її, нема — піднімає екран «Задачі» (`showNoTask`). Коли екран відкритий, `render()`
+ * іде ще й ПІД ним: він тягне задачу нового простору, і кнопка «назад» (крошка задачі)
+ * знову має куди вести.
+ */
+async function afterSpaceChange() {
+  await resetSpaceState();
+  /* Перелік просторів `resetSpaceState` щойно перечитав — екран його вдруге не питає. */
+  if (homeOpen) enterHome({ spaces: false });
+  await render();
+  /* Статус GitLab нового простору — ПІСЛЯ рендера: його питають по обраній ітерації
+     (`picked`), а вона нормалізується саме в `render()`. Без цього крапка GitLab у
+     просторі з інтеграціями лишалась би «нема», доки щось інше не освіжить кеш
+     (`resetSpaceState` його обнулив). Простір без інтеграцій `refreshGitlab` не питає. */
+  await refreshGitlab();
+  paintBar();
+}
+
+/**
+ * У поточному просторі задачі нема (`404 no-task`): спершу полікувати висячий `current`
+ * (`loadSpaces({heal})`), далі — екран «Задачі» (там і привітання, коли просторів нема
+ * зовсім: `paintHome` його вибирає за `spacesResp`).
+ *
+ * Лікування — це зміна простору, якої ми не робили: пер-задачний стан (пакет тюнера, його
+ * ревізія, позначки зʼємки) належав задачі, якої вже нема, а на старті не був прочитаний
+ * зовсім (`loadTune` до першого рендера теж отримав `no-task`) — без `resetSpaceState`
+ * перший поворот ручки в нової задачі пішов би БЕЗ `base_rev` і затер би її `.dc-tuner.json`.
+ * Не вилікувано, а задача була — забуваємо й її пер-задачний стан: інакше він переїхав би в
+ * наступну задачу, яка зʼявиться тут сама (агент створив).
+ */
+async function showNoTask() {
+  const healed = await loadSpaces({ heal: true });
+  if (healed) {
+    await resetSpaceState({ reload: false });
+    if (homeOpen) enterHome({ spaces: false });
+    return render();
+  }
+  if (curTask) await resetPerTaskState();
+  curTask = null; curTaskList = null; currentTaskId = null;
+  tasksErr = false; tasksErrKey = null;
+  blankStage();
+  enterHome({ spaces: false });
+  return undefined;
+}
+
+/**
+ * Прибрати зі сцени й панелі все, що належало ЗАДАЧІ, якої більше нема на екрані (нема
+ * задачі, простір недоступний). Без цього під смугою помилки стояв би макет з
+ * ПОПЕРЕДНЬОГО простору — той, що вже не відповідає жодній відкритій задачі.
+ */
+function blankStage() {
+  ovc.leave();
+  canvasEl.hidden = true; stage.hidden = false;
+  if (frame.getAttribute('src') !== 'about:blank') frame.src = 'about:blank';
+  picked = null; pickedPage = null; pickedState = null;
+  panelPages = []; panelRev = ''; panelPagesIt = null; pagesError = null;
+  renderPanel();
+}
+
+/* ── діалоги просторів і нової задачі ────────────────────────────────────────
+   Оболонку (одиночність, Esc, фокус-пастка, відправка, помилка на місці) дає
+   `askForm`; розмітку й проводку полів — `space-dialogs.js`; правила (id з назви,
+   коди відмов → ключі) — `spaces-model.js`. Тут лише мережа й стан модуля.
+   ⛔ Запит іде ВСЕРЕДИНІ `onSubmit`, а не після закриття діалогу: відмова сервера
+   («тека надто широка», «такий id уже є») мусить лишитись там, де людина щойно
+   набрала значення, а не тостом поверх закритого вікна, з якого вона вже вийшла. */
+
+/** Фішка простору в смузі (свіжий вузол: смуга міняє `innerHTML` цілком). */
+const chipEl = () => bar.querySelector('.space-chip');
+/** Фокус на фішку: після дропдауна, чий рядок щойно зник разом із ним, клавіатура лишилась би на `body`. */
+const focusChip = () => chipEl()?.focus({ preventScroll: true });
+
+/**
+ * Куди повернути фокус після діалогу просторів, коли вузол, що його мав, перемальовано
+ * (`askForm` сам запамʼятовує відкривача, це — запасний): фішка в смузі, а на привітанні, де
+ * її ще нема, — кнопка «Створити простір».
+ */
+const spaceDialogFocusBack = () => chipEl() ?? homeNode()?.querySelector('[data-th="spacenew"]');
+
+/**
+ * «Новий простір…»: назва, колір, тека → `POST /api/space-new` → перемкнутись на нього.
+ * Перший простір на машині отримує назву «Особисте» (тека тоді `~/deai-work/personal`).
+ * Колір — перший невикористаний, щоб фішки різнились з першого дня; тека — перша ВІЛЬНА
+ * (не зайнята іншим простором: друге «Особисте» лягло б на теку першого).
+ * ⛔ Перехід на новий простір — ВСЕРЕДИНІ `onSubmit`, одразу після відповіді сервера, а не
+ * після `await askForm`: діалог може закритися, не дійшовши до кінця (його перебило інше
+ * питання), а простір уже створено, і UI лишився б у старому — сервер і екран розійшлись би.
+ */
+async function openSpaceNew() {
+  const name0 = needsWelcome(spacesResp) ? t('personalName') : '';
+  const color0 = freeColor(spacesResp?.spaces);
+  const taken = () => (spacesResp?.spaces ?? []).map((x) => x.path);
+  await askForm(
+    () => spaceDialogHTML({ mode: 'new', name: name0, color: color0, path: defaultSpacePath(name0, '~', taken()) }),
+    {
+      onMount: (form) => wireSpaceDialog(form, {
+        mode: 'new', taken, peek: (p) => api(`/api/space-peek?path=${encodeURIComponent(p)}`),
+      }),
+      focusBack: spaceDialogFocusBack,
+      onSubmit: async (vals, ctl) => {
+        const name = vals.name.trim();
+        if (!name) { ctl.focus('name'); return t('spaceErrName'); }
+        try { await postForm('/api/space-new', { name, color: vals.color, path: vals.path.trim() }); }
+        catch (e) {
+          const field = spaceErrField(e.code);
+          if (field) ctl.focus(field);
+          return t(spaceErrKey(e.code));
+        }
+        /* Простір створено. Збій самого переходу (рендер) — не збій створення: діалог не
+           мусить показувати «не вдалося» для простору, який уже є (повтор дав би `path-registered`). */
+        try { await afterSpaceChange(); }
+        catch (e) { toast(t('errFailed', e.message)); }
+        return undefined;
+      },
+    });
+}
+
+/** «Назва й колір…»: лише імʼя й колір поточного простору (`POST /api/space-update`); теку міняти не можна. */
+async function openSpaceEdit() {
+  const cur = spaceNow();
+  if (!cur) return;
+  await askForm(
+    () => spaceDialogHTML({ mode: 'edit', name: cur.name, color: cur.color }),
+    {
+      onMount: (form) => wireSpaceDialog(form, { mode: 'edit' }),
+      focusBack: spaceDialogFocusBack,
+      onSubmit: async (vals, ctl) => {
+        const name = vals.name.trim();
+        if (!name) { ctl.focus('name'); return t('spaceErrName'); }
+        let saved;
+        try { saved = await postForm('/api/space-update', { id: cur.id, name, color: vals.color }); }
+        catch (e) {
+          const field = spaceErrField(e.code);
+          if (field) ctl.focus(field);
+          return t(spaceErrKey(e.code));
+        }
+        applySpaceMeta(cur.id, saved);
+        return undefined;
+      },
+    });
+}
+
+/** Нова назва й колір — у всі місця, що їх показують, БЕЗ перезавантаження макета (`render()` перезавантажив би рамку). */
+function applySpaceMeta(id, { name, color }) {
+  const patch = (x) => (x && x.id === id ? { ...x, name, color } : x);
+  if (spacesResp?.spaces) spacesResp = { ...spacesResp, spaces: spacesResp.spaces.map(patch) };
+  if (curTask?.space) curTask = { ...curTask, space: patch(curTask.space) };
+  if (homeData?.space) homeData = { ...homeData, space: patch(homeData.space) };
+  paintBar();
+  if (homeOpen) paintHome();
+}
+
+/**
+ * «Нова задача» на екрані «Задачі»: назва + id (з назви, поки його не правили руками) →
+ * `POST /api/task-new {id, title, space}` → задача стає поточною, виходимо з екрана.
+ * `space` називаємо ЯВНО (поточний): без нього сервер пішов би в простір з інтеграціями
+ * (потік dev-pipeline ЛІГА) і завів би «особисту» задачу в реєстр компанії.
+ * Перелік зайнятих id — з усіх просторів (`?all=1`): id унікальний на машині. Він може
+ * приїхати вже після відкриття діалогу — форма перерахує id, а відправка його дочекається.
+ * Перехід до створеної задачі — ВСЕРЕДИНІ `onSubmit` (причина — у `openSpaceNew`).
+ */
+async function newTaskDialog() {
+  const sp = spaceNow();
+  if (!sp) return;
+  const taken = formApi('/api/tasks?all=1').then((r) => (r.tasks || []).map((x) => x.id)).catch(() => []);
+  await askForm(() => taskFormHTML(), {
+    onMount: (form) => wireTaskForm(form, { taken }),
+    focusBack: () => homeNode()?.querySelector('[data-th="newtask"]'),
+    onSubmit: async (vals, ctl) => {
+      const key = taskFormError(vals, await taken);
+      if (key) { ctl.focus(taskErrField(key)); return t(key); }
+      let made;
+      try { made = await postForm('/api/task-new', { id: vals.id, title: vals.title.trim(), space: sp.id }); }
+      catch (e) {
+        const key2 = taskErrKey(e.code);
+        const field = taskErrField(key2);
+        if (field) ctl.focus(field);
+        return t(key2);
+      }
+      /* Нова задача — поточна: усе пер-задачне попереднього чуже. Простір відповіді
+         порівнюємо з відомим, як у `switchTask`. `homeData` — застарілий (задачі в
+         ньому ще нема), тож не показуємо його при наступному вході. */
+      try {
+        if (spaceChanged(sp.id, made.space)) await resetSpaceState();
+        else await resetPerTaskState();
+        homeData = null;
+        currentTaskId = made.id; taskSwitchGen += 1;
+        await refreshGitlab();
+        await leaveHome();
+      } catch (e) { toast(t('errFailed', e.message)); }
+      return undefined;
+    },
+  });
 }
 
 /**
@@ -1024,7 +1405,12 @@ async function resetPerTaskState() {
  */
 function setAudience(ch) {
   if (ch !== 'local' && ch !== 'project') return;
-  if (commentMode === ch) return;
+  /* Командного каналу в просторі без інтеграцій нема — відмова, а не тиха зміна
+     збереженого вибору. І порівнюємо з ДІЮЧИМ каналом: у такому просторі `project`
+     зі сховища й так читається як `local`, тож `local` тут не «зміна» і не мусить
+     переписувати вибір, що в ЛІГА лишається. */
+  if (ch === 'project' && noOutward()) return;
+  if (effMode() === ch) return;
   commentMode = ch;
   try { localStorage.setItem('dc-comment-mode', commentMode); } catch (e) {}
   render();
@@ -1070,7 +1456,7 @@ frame.addEventListener('load', () => syncFrame(frame, cleanView, () => toggleCle
  */
 async function switchTask(val) {
   try {
-    await post('/api/task-switch', { id: val });
+    const sw = await post('/api/task-switch', { id: val });
     /* Увесь пер-задачний стан — ОДНИМ викликом (`resetPerTaskState`, його
        докстрінг): перелік того, що належить задачі, не сміє лежати в тілі
        кнопки, інакше другий вхід перепише половину. Це ЄДИНИЙ вхід до зміни
@@ -1078,8 +1464,15 @@ async function switchTask(val) {
        через цю функцію (⌘K «Задачі» веде на екран, а не міняє задачу сам), а
        `POST /api/task-new` (бутстрап Liga Design Office) канвас не кличе
        взагалі — його зміну поточної задачі вкладка бачить лише після
-       перезавантаження, де `loadTune()` і так читає файл нової задачі. */
-    await resetPerTaskState();
+       перезавантаження, де `loadTune()` і так читає файл нової задачі.
+
+       Задача може бути з ІНШОГО простору (сервер перемикає й простір: `task-switch`
+       шукає по всіх): тоді відповідь називає інший `space`, і забути треба не лише
+       задачу, а й усе, що належить простору (`resetSpaceState`, його докстрінг).
+       Порівнюємо з тим, що ми знали (`spaceNow`), а не просто скидаємо завжди:
+       перемикання в межах простору не має чистити кеш GitLab і мигати смугою. */
+    if (spaceChanged(spaceNow()?.id, sw?.space)) await resetSpaceState();
+    else await resetPerTaskState();
     await refreshGitlab();
     currentTaskId = val; taskSwitchGen += 1;
     if (homeReady()) homeData = { ...homeData, current: val };
@@ -1115,6 +1508,21 @@ const BAR_ACTIONS = {
     if (refuseMissingTask(val)) return;
     if (await switchTask(val)) render();
   },
+
+  /* Простори (Deai 1.0, етап 1). `space` — рядок дропдауна фішки (`data-val` = id) і
+     пункт ⌘K; `spacenew`/`spaceedit` — його ж футер і привітання. Розкриває дропдаун
+     `data-dd="space"` (делегація нижче), а не ці дії: `data-act` закривав би його й
+     одразу відкривав. Недоступний простір ПЕРЕМИКАЄМО теж: сервер перемикає реєстр, а
+     причину («файл не читається») людина бачить смугою помилки після `render()` —
+     єдиний спосіб її дізнатись, тому рядок такого простору лише приглушений. */
+  space: async (val) => {
+    if (!val || val === spaceNow()?.id) return;
+    try { await post('/api/space-switch', { id: val }); }
+    catch (e) { tell(t('errFailed', e.message)); return; }
+    await afterSpaceChange();
+  },
+  spacenew: () => openSpaceNew(),
+  spaceedit: () => openSpaceEdit(),
 
   mode: async (val) => {
     const wantCanvas = val === 'overview';
@@ -1454,6 +1862,9 @@ const BAR_ACTIONS = {
 /* Стан тиші Teams для дропдауна публікації. Помилка — це стан («не знаю»),
    а не виняток: пункт показує причину замість вигаданого «увімкнено». */
 async function loadTeamsMute() {
+  /* Простір без інтеграцій: сервер відповів би 409, а `catch` нижче перетворив би це
+     на «помилку» в дропдауні публікації. Тут стану тиші нема взагалі — без запиту. */
+  if (noOutward()) { teamsMute = null; return; }
   try { teamsMute = await api('/api/teams-mute'); }
   catch (e) { teamsMute = { error: e.message }; }
   if (openDd === 'pub') paintBar();
@@ -1543,6 +1954,11 @@ bar.addEventListener('click', (ev) => {
     // Свіжий стан щоразу: канал залежить від задачі, і чужий «вимкнено» з
     // попередньої задачі на мить — теж неправда.
     if (openDd === 'pub') { teamsMute = null; loadTeamsMute(); }
+    /* Перелік і лічильники задач у дропдауні просторів — свіжі на момент відкриття:
+       простір міг зʼявитись чи зламатись поза вкладкою (агент, інша машина). Малюємо
+       зразу з тим, що є, а коли відповідь прийде — перемальовуємо, якщо дропдаун ще
+       відкритий. */
+    if (openDd === 'space') loadSpaces().then(() => { if (openDd === 'space') paintBar(); });
     paintBar();
     return;
   }
@@ -1551,6 +1967,8 @@ bar.addEventListener('click', (ev) => {
      ще вибирає, а закритий список після відмови змусив би відкривати його знову. */
   if (act === 'task' && refuseMissingTask(el.dataset.val)) return;
   const hadOpenDd = !!openDd;
+  /* Рядок дропдауна просторів — фокус після закриття вернемо на фішку (див. нижче). */
+  const fromSpaces = openDd === 'space' && !!el.closest('.dd--spaces');
   openDd = null;
   /* `publish` малює власний тимчасовий стан («Публікую…», `disabled`)
      СИНХРОННО до першого `await` — негайна перемальовка тут стерла б його
@@ -1560,6 +1978,10 @@ bar.addEventListener('click', (ev) => {
      самі живуть УСЕРЕДИНІ дропдауна, який щойно був відкритий, щоб до них
      дотягнутись. */
   if (hadOpenDd && act !== 'publish') paintBar();
+  /* Enter (чи клік) на рядку дропдауна просторів: рядок зник разом із ним, і фокус лишився б
+     на `body` — клавіатурна людина губиться. Повертаємо на фішку, що дропдаун відкрила; діалог
+     (`spacenew`/`spaceedit`) далі запамʼятає її як відкривача. */
+  if (fromSpaces) focusChip();
   BAR_ACTIONS[act]?.(el.dataset.val, el, ev);
 });
 
@@ -1575,7 +1997,40 @@ document.addEventListener('click', (ev) => {
 document.addEventListener('keydown', (ev) => {
   /* Esc під час IME-композиції скасовує ЇЇ, а не дропдаун: інакше людина, що
      передумала набирати, втрачала б ще й відкритий список. */
-  if (ev.key === 'Escape' && openDd && !ev.isComposing) { openDd = null; paintBar(); }
+  if (ev.key === 'Escape' && openDd && !ev.isComposing) {
+    const wasSpaces = openDd === 'space';
+    openDd = null;
+    paintBar();
+    /* З дропдауна просторів фокус вертається на фішку, що його відкрила: рядок, на
+       якому він стояв, зник разом з дропдауном, і клавіатура лишилась би на `body`. */
+    if (wasSpaces) focusChip();
+  }
+});
+
+/* Клавіатура дропдауна просторів — справжній roving focus по `.dd--spaces .dd-item`:
+   ↑/↓ ходять по рядках, Home/End — крайні, Enter/пробіл — нативний клік кнопки
+   (делегація вище). З фішки ↓ відкриває дропдаун (патерн «меню-кнопка»), а в
+   відкритому — веде на поточний рядок. Правило «куди йти» — `rovingIndex` (модель);
+   чужу клавішу він повертає як `null`, і `preventDefault` її не гасить. */
+bar.addEventListener('keydown', (ev) => {
+  if (ev.isComposing || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+  const dd = ev.target.closest?.('.dd--spaces');
+  if (dd) {
+    const rows = [...dd.querySelectorAll('.dd-item')];
+    const to = rovingIndex(rows.indexOf(document.activeElement), rows.length, ev.key);
+    if (to === null) return;
+    ev.preventDefault();
+    rows[to].focus({ preventScroll: true });
+    return;
+  }
+  const chip = ev.target.closest?.('.space-chip');
+  if (chip && ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    if (openDd !== 'space') { chip.click(); return; }
+    const rows = [...bar.querySelectorAll('.dd--spaces .dd-item')];
+    const cur = rows.findIndex((r) => r.getAttribute('aria-current') === 'true');
+    rows[Math.max(cur, 0)]?.focus({ preventScroll: true });
+  }
 });
 
 /**
@@ -1658,14 +2113,19 @@ function focusKey(a) {
   }
   return null;
 }
-/** `redo()` перемальовує `root`; фокус, що був усередині, вертається. */
+/** `redo()` перемальовує `root`; фокус, що був усередині, вертається.
+ *  Селектор може збігатись з кількома вузлами: `data-th="newtask"` стоїть двічі в
+ *  порожньому просторі (голова й порожній стан). Тому запамʼятовуємо ще й ПОРЯДКОВИЙ
+ *  номер серед збігів — інакше фокус з нижньої кнопки перестрибував би на верхню. */
 function keepFocus(root, redo) {
   const a = document.activeElement;
   const key = root.contains(a) && a !== root ? focusKey(a) : null;
+  const nth = key ? [...root.querySelectorAll(key)].indexOf(a) : -1;
   const caret = key === '#th-q' ? [a.selectionStart, a.selectionEnd] : null;
   redo();
   if (!key) return;
-  const n = root.querySelector(key);
+  const all = root.querySelectorAll(key);
+  const n = all[nth] ?? all[0];
   if (!n) return;
   n.focus({ preventScroll: true });
   if (caret) { try { n.setSelectionRange(caret[0], caret[1]); } catch (e) {} }
@@ -1678,7 +2138,10 @@ function paintHome() {
   if (homeComposing) { homePaintPending = true; return; }
   homePaintPending = false;
   const top = el.scrollTop;
-  keepFocus(el, () => { el.innerHTML = homeHTML(homeView(), homeData); });
+  /* Просторів на машині нема зовсім — замість списку привітання (дорога звідси одна:
+     створити перший простір). Рішає `spacesResp`, а не `homeData`: порожній `mine` без
+     простору — це «нема де», а не «нічого не знайдено». */
+  keepFocus(el, () => { el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML() : homeHTML(homeView(), homeData); });
   el.scrollTop = top;
 }
 /** Лише чіпи й сітка — поле пошуку лишається тим самим вузлом. */
@@ -1688,10 +2151,32 @@ function paintHomeLower() {
   keepFocus(lower, () => { lower.innerHTML = homeGridHTML(homeView(), homeData); });
 }
 
-async function loadHome(refresh = false) {
+/**
+ * `spaces: false` — перелік просторів щойно перечитано (`afterSpaceChange`, `showNoTask`): другий
+ * запит поспіль нічого б не додав.
+ */
+async function loadHome(refresh = false, { spaces = true } = {}) {
   const seq = ++homeSeq;
   const gen = taskSwitchGen;
   try {
+    /* Простори — ПЕРШИМИ й послідовно: вони лікують висячий `current`, а відповідь
+       екрана про задачі має бути вже про вилікуваний. Тут же вирішується привітання
+       (просторів нема — списку нема що тягнути) й оновлюється фішка: екран — головне
+       місце, де цей перелік міг змінитись без нашого відома (агент завів простір). */
+    if (spaces) {
+      const healed = await loadSpaces({ heal: true });
+      if (seq !== homeSeq || !homeOpen) return;
+      /* Лікування — зміна простору, якої ми не робили: задача й усе пер-просторове в
+         памʼяті — з видаленого. Забуваємо й починаємо екран заново (він візьме список уже
+         вилікуваного простору). */
+      if (healed) { await resetSpaceState({ reload: false }); if (homeOpen) enterHome({ spaces: false }); return; }
+    }
+    paintBar();
+    if (needsWelcome(spacesResp)) {
+      homeData = { current: null, mine: [], team: null, space: null };
+      paintHome();
+      return;
+    }
     const r = await api(`/api/tasks-overview${refresh ? '?refresh=1' : ''}`);
     if (seq !== homeSeq || !homeOpen) return;
     /* Переключили задачу, поки відповідь летіла, — її `current` застарів. */
@@ -1701,17 +2186,26 @@ async function loadHome(refresh = false) {
   } catch (e) {
     if (seq !== homeSeq || !homeOpen) return;
     const why = (e && e.message) || String(e);
+    /* Файл задач простору не читається / реєстр битий: причина мовою глядача — ще й
+       смугою помилки (як на екрані задачі), а не лише сирим текстом сервера в банері. */
+    const key = readErrKey(e?.code);
+    if (key) { tasksErr = true; tasksErrKey = key; paintBar(); }
     /* Дані вже є — лишаємо їх і додаємо банер (`loadError`); `{failed}` лише коли
        показувати нічого. Повторний запит, що не вдався, не стирає екран. */
     homeData = homeReady() ? { ...homeData, loadError: why } : { failed: why };
     paintHome();
     return;
   }
+  /* Огляд прочитався — простір читається: червона смуга про файл задач / реєстр, яку виставив
+     попередній збій (цей самий `catch` вище або `render()`), більше не про правду. Інші
+     причини (чужий процес на порту) від успіху огляду не минають — їх не чіпаємо. */
+  if (tasksErr && isReadErrKey(tasksErrKey)) { tasksErr = false; tasksErrKey = null; paintBar(); }
   if (pruneFilters(homeUi, homeData)) saveHomeUi();
   paintHome();
 }
 
-function enterHome() {
+/** `spaces: false` — не перепитувати перелік просторів (див. `loadHome`). */
+function enterHome({ spaces = true } = {}) {
   const was = homeOpen;
   /* Чистий перегляд ховає смугу, а екран під нею (`html.cv-clean #tasks-home`)
      теж — вхід із нього (⌘K) дав би порожній екран без дороги назад. */
@@ -1726,11 +2220,13 @@ function enterHome() {
   paintBar();
   /* Старі дані (з попереднього відкриття) показуємо одразу, нові їх замінять:
      порожнє «вантажу» на кожен вхід — це блимання, яке нікому не потрібне. */
-  if (!homeReady()) homeData = { loading: true };
+  /* `space` у «вантажу»: заголовок («Задачі · X») і ховання вкладки «Команда»
+     вже тепер, без мигання, поки відповідь у дорозі (`homeHTML`, `loading`). */
+  if (!homeReady()) homeData = { loading: true, space: spaceNow() };
   else if (currentTaskId) homeData = { ...homeData, current: currentTaskId };
   paintHome();
-  el.querySelector('#th-q')?.focus({ preventScroll: true });
-  loadHome();
+  (el.querySelector('#th-q') ?? el.querySelector('[data-th="spacenew"]'))?.focus({ preventScroll: true });
+  loadHome(false, { spaces });
 }
 
 async function leaveHome() {
@@ -1746,6 +2242,28 @@ async function leaveHome() {
      був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». */
   bar.querySelector('[data-act="home"]')?.focus({ preventScroll: true });
 }
+
+/* Екран «Задачі» відкритий, а людина була деінде — у терміналі, де агент заводить простори й
+   задачі тим самим API. Без перечитування привітання лишалось би «просторів нема», а список —
+   старим, доки людина не клікне щось сама. `focus` вікна й `visibilitychange` приходять парою
+   за одне повернення — `shouldRefreshHome` пропускає другий; застарілі відповіді відкидає
+   сам `loadHome` (`homeSeq`). */
+let homeRefreshedAt = 0;
+/* «Спробувати ще» (`loadHome(true)`) у польоті: звичайне перечитування з фокуса його б перебило
+   (`homeSeq`), і повтор лишився б без примусу. */
+let homeForced = false;
+async function retryHome() {
+  homeForced = true;
+  try { await loadHome(true); } finally { homeForced = false; }
+}
+function refreshHomeOnReturn() {
+  const now = Date.now();
+  if (!shouldRefreshHome({ open: homeOpen, visible: document.visibilityState === 'visible', last: homeRefreshedAt, now, forced: homeForced })) return;
+  homeRefreshedAt = now;
+  loadHome();
+}
+window.addEventListener('focus', refreshHomeOnReturn);
+document.addEventListener('visibilitychange', refreshHomeOnReturn);
 
 /** Відкрити задачу з картки: нема теки — причина тостом і ми лишаємось; уже
  *  поточна — просто вийти з екрана; інакше переключити й вийти. */
@@ -1784,10 +2302,15 @@ function wireHome(el) {
     switch (b.dataset.th) {
       case 'open': homeOpenTask(b.dataset.id); break;
       case 'tab':
-        if (homeUi.tab === v) break;
+        /* Порівнюємо з вкладкою, що справді малюється (`effectiveTab`): у просторі без
+           «Команди» збережена `team` читається як `mine`, і клік по єдиній вкладці
+           «Мої» не має переписувати збережений вибір (він живий у ЛІГА). */
+        if (effectiveTab(homeUi, homeData) === v) break;
         homeUi.tab = v; saveHomeUi();
         paintHome();
         break;
+      case 'newtask': newTaskDialog(); break;
+      case 'spacenew': openSpaceNew(); break;
       case 'status': homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
       case 'profile': case 'designer': {
         const set = b.dataset.th === 'profile' ? homeUi.profiles : homeUi.designers;
@@ -1800,7 +2323,7 @@ function wireHome(el) {
         saveHomeUi(); paintHome();
         el.querySelector('#th-q')?.focus({ preventScroll: true });
         break;
-      case 'retry': loadHome(true); break;
+      case 'retry': retryHome(); break;
     }
   });
   el.addEventListener('input', (ev) => {
@@ -1998,6 +2521,9 @@ let glCache = null;
    й так робить перемальовка. Дії (`glpush`/`glpull`/`glsetup`/`glhistory`)
    тепер у `BAR_ACTIONS`. */
 async function refreshGitlab() {
+  /* Простір без інтеграцій GitLab не має: статус там — «нема», а не запит, що
+     повертає `configured:false` (і не мережа, і не рядок у журналі сервера). */
+  if (noOutward()) { glCache = null; return; }
   try { glCache = await api(`/api/gitlab-status?it=${encodeURIComponent(picked || '')}`); }
   catch { glCache = null; }
 }
@@ -2981,7 +3507,7 @@ const ovc = overviewComments({
   cards: () => cards,
   cardW,
   picked: () => picked,
-  channel: () => commentMode,
+  channel: () => effMode(),
   frameKeyOf: (card) => frameKey(card.id, canvasW),
   shotOf: (card) => shotManifest.shots?.[frameKey(card.id, canvasW)] || null,
   camTo: (target) => { userMoved = true; camTo(target); },
@@ -2990,10 +3516,13 @@ const ovc = overviewComments({
     camTo(focusBox({ x: card.x, y: card.y, w: cardW() },
                    { w: canvasEl.clientWidth, h: canvasEl.clientHeight }));
   },
-  audiences: () => [
-    { id: 'local', label: t('audTabLocal'), active: commentMode === 'local', icon: 'bot' },
-    { id: 'project', label: t('audTabTeam'), active: commentMode === 'project', icon: 'team' },
-  ],
+  /* Без інтеграцій вкладок аудиторій нема ЗОВСІМ: порожній перелік коментатор читає
+     як «рядка нема» (контракт `audiences`), а єдина вкладка «Клод» була б вибором без
+     вибору. Активна — за ДІЮЧИМ каналом, не за збереженим. */
+  audiences: () => (noOutward() ? [] : [
+    { id: 'local', label: t('audTabLocal'), active: effMode() === 'local', icon: 'bot' },
+    { id: 'project', label: t('audTabTeam'), active: effMode() === 'project', icon: 'team' },
+  ]),
   onAudience: (ch) => setAudience(ch),
   onArmed: (on) => { commentArmed = !!on; canvasEl.classList.toggle('cv-commenting', commentArmed); },
   offLabel: (n) => t('pinsOffFrame', n),
@@ -4262,8 +4791,8 @@ function applyMode(task) {
        параметри стан перебити не може — це стереже `checkState`. */
     frame.src = (picked && pickedPage)
       ? `/commented?it=${encodeURIComponent(picked)}&page=${encodeURIComponent(pickedPage)}`
-        + `&ch=${commentMode}${stateQuery(pickedState)}`
-      : (picked ? `/commented?it=${encodeURIComponent(picked)}&ch=${commentMode}` : 'about:blank');
+        + `&ch=${effMode()}${stateQuery(pickedState)}`
+      : (picked ? `/commented?it=${encodeURIComponent(picked)}&ch=${effMode()}` : 'about:blank');
   }
 }
 
@@ -5397,6 +5926,12 @@ function paletteState() {
        читає (принцип 6): другий шлях до того самого модульного `commentMode`
        розійшовся б із першим на першій же правці. */
     commentMode: st.commentMode,
+    /* Простори для ⌘K: МАСИВ лише коли шар увімкнено (`off` / не питали — `undefined`,
+       і пунктів просторів нема зовсім, а не «Новий простір…» без реєстру). `space` —
+       вимикач: без інтеграцій палітра ховає публікацію, GitLab і командний канал. */
+    spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
+    spaceId: st.space?.id ?? null,
+    space: st.space ? { id: st.space.id, integrations: st.space.integrations } : null,
   };
 }
 
@@ -5461,10 +5996,17 @@ function paintOverlay() {
 }
 
 function openPalette() {
+  /* Під відкритим діалогом (`.cv-ask-scrim`: форма простору, «Нова задача», питання) палітра не
+     відкривається: підкладка ловить кліки, але не клавіатуру, і ⌘K поверх зайнятої форми
+     дозволив би виконати дію палітри (перемкнути простір) просто під запитом, що вже летить. */
+  if (document.querySelector('.cv-ask-scrim')) return;
   document.getElementById('cv-ctx')?.remove(); // контекстне меню сторінки не сміє висіти під палітрою
   paletteOverlay = 'pal'; palQuery = ''; palCursor = 0;
   if (openDd) { openDd = null; paintBar(); }    // дропдаун смуги закритий ДО відкриття — драбинці нема з чим змагатись
   paintOverlay();
+  /* Перелік просторів у палітрі — свіжий, як і в дропдауні: малюємо одразу з відомим,
+     перемальовуємо список, коли відповідь прийде (якщо палітра ще відкрита). */
+  loadSpaces().then(() => { if (paletteOverlay === 'pal') repaintPaletteList(); });
 }
 function openKeys() { paletteOverlay = 'keys'; paintOverlay(); }
 function closeOverlay() { paletteOverlay = null; paintOverlay(); }

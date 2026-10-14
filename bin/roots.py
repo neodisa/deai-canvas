@@ -16,6 +16,7 @@
 правильна.
 """
 import argparse
+import contextlib
 import os
 import shutil
 import sys
@@ -23,6 +24,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spaces  # noqa: E402
 from serve import load_tasks, save_tasks, work_root  # noqa: E402
 
 
@@ -102,13 +104,47 @@ def cmd_migrate(cfg, apply):
     return 0
 
 
+class NoLegacySpace(Exception):
+    """Шар просторів увімкнено, а простору `legacy` у реєстрі нема (і старого файла теж)."""
+
+
+def _legacy_space():
+    """Простір ЛІГА (`legacy`) на час команди: `roots.py` — інструмент ЛІГА, він працює зі
+    СТАРИМ файлом, а не з файлом «поточного простору машини». Шар вимкнено — нічого не
+    фіксуємо (файл і так один, `DC_TASKS_FILE`). Шар увімкнено — `load_registry()`: він мігрує
+    старий файл у реєстр, якщо той зʼявився вже після створення реєстру. Реєстр не прочитати —
+    `SpacesError`; простору `legacy` усе одно нема — `NoLegacySpace`: мовчки взятий файл
+    «поточного простору» означав би, що `migrate --apply` переселяє теки іншого простору."""
+    if not spaces.layer_on():
+        return contextlib.nullcontext()
+    sp = next((s for s in spaces.load_registry()['spaces'] if s.get('legacy')), None)
+    if sp is None:
+        raise NoLegacySpace()
+    return spaces.request_space(sp['id'])
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description='корені робочих тек по напрямках')
     ap.add_argument('cmd', nargs='?', default='status', choices=['status', 'migrate'])
     ap.add_argument('--apply', action='store_true', help='справді переселити')
     a = ap.parse_args(argv)
-    cfg = load_tasks()
-    return cmd_status(cfg) if a.cmd == 'status' else cmd_migrate(cfg, a.apply)
+    try:
+        space = _legacy_space()
+    except spaces.SpacesError as e:
+        print(f'error: реєстр просторів недоступний — {e}', file=sys.stderr)
+        return 2
+    except NoLegacySpace:
+        # Той самий рядок для двох різних бід: «файла нема» лікується запуском із ЛІГИ, а «файл є, але
+        # `load_registry()` його не змігрував» (битий JSON, не обʼєкт, більше 1 МіБ) — правкою файла.
+        legacy = spaces.legacy_tasks_file()
+        why = (f'старий файл {legacy} є, але його не вдалося прочитати як JSON-обʼєкт ≤1 МіБ'
+               if os.path.isfile(legacy) else 'старого tasks.json не знайдено')
+        print(f'error: простору ЛІГА (legacy) нема — {why}, roots.py '
+              'нічого не переселяє (інший простір він не чіпає)', file=sys.stderr)
+        return 2
+    with space:
+        cfg = load_tasks()
+        return cmd_status(cfg) if a.cmd == 'status' else cmd_migrate(cfg, a.apply)
 
 
 if __name__ == '__main__':

@@ -720,3 +720,178 @@ test("встановлення: решта палітри не зачеплен�
   const withIt = paletteActions(S({ canInstall: true })).map((a) => a.id);
   assert.deepEqual(withIt.filter((id) => id !== "pwa-install"), without);
 });
+
+/* ── простори (Deai 1.0, етап 1) ──────────────────────────────────────────────
+   «Простір: X» — у `gGo` (переходи), по рядку на кожен ІНШИЙ простір, плюс
+   «Новий простір…». Підпис несе ім'я простору (дані користувача), тож він
+   `labelKey` + `labelArgs`, а не готовий рядок: реєстр не кличе `t()` (шапка
+   файла), а `itemHTML`/`searchText` розгортають аргументи. Без масиву
+   `spaces` (шар вимкнено) пунктів нема. Простір без інтеграцій ховає з
+   палітри те саме, що з смуги: публікацію й GitLab. */
+const SPS = [{ id: "a", name: "A" }, { id: "b", name: "B" }];
+
+test("простори: «Простір: B» для кожного ІНШОГО простору й «Новий простір…» — у gGo", () => {
+  const acts = paletteActions(S({ spaces: SPS, spaceId: "a" }));
+  const go = acts.find((a) => a.id === "space-go-b");
+  assert.deepEqual(go, {
+    id: "space-go-b", group: "gGo", labelKey: "spaceGo", labelArgs: ["B"], icon: go.icon,
+    act: "space", val: "b",
+  });
+  assert.ok(ico(go.icon), "іконки пункту немає у спрайті");
+  assert.ok(!acts.some((a) => a.id === "space-a"), "перейти в поточний простір — нічого не робити");
+  const nw = acts.find((a) => a.id === "space-new");
+  assert.equal(nw.group, "gGo");
+  assert.equal(nw.labelKey, "spaceNew");
+  assert.equal(nw.act, "spacenew");
+  assert.ok(ico(nw.icon));
+  assert.ok(!nw.disabled && !nw.navOnly);
+});
+
+test("простори: пункти складають суцільний блок gGo (заголовок групи не повторюється)", () => {
+  const html = paletteListHTML(paletteActions(S({ spaces: SPS, spaceId: "a" })), "", 0);
+  assert.equal((html.match(/class="pal-grp">Перейти</g) || []).length, 1, "група gGo розірвана");
+});
+
+test("простори: на екрані «Задачі» ті самі пункти є, дій над задачею як не було", () => {
+  const acts = paletteActions(S({ homeOpen: true, spaces: SPS, spaceId: "a" }));
+  const ids = acts.map((a) => a.id);
+  assert.ok(ids.includes("space-go-b") && ids.includes("space-new"));
+  assert.ok(!ids.includes("space-a"));
+  assert.ok(!ids.includes("publish") && !ids.includes("mode"), "дії задачі просочились на екран «Задачі»");
+  assert.ok(ids.includes("lang-en"), "мова лишилась");
+});
+
+test("простори: без масиву `spaces` (шар вимкнено) пунктів просторів нема — в обох гілках", () => {
+  for (const o of [{}, { homeOpen: true }, { spaces: null }, { spaces: undefined }, { spaces: "x" }]) {
+    const ids = paletteActions(S(o)).map((a) => a.id);
+    assert.ok(!ids.some((id) => id.startsWith("space-")), JSON.stringify(o));
+  }
+});
+
+test("простори: порожній масив — лише «Новий простір…» (перейти нікуди)", () => {
+  const ids = paletteActions(S({ spaces: [], spaceId: null })).map((a) => a.id).filter((id) => id.startsWith("space-"));
+  assert.deepEqual(ids, ["space-new"]);
+});
+
+test("простори: поточний — зі spaceId або зі space.id", () => {
+  const byId = (o) => paletteActions(S({ spaces: SPS, ...o })).filter((a) => a.act === "space").map((a) => a.val);
+  assert.deepEqual(byId({ spaceId: "a" }), ["b"]);
+  assert.deepEqual(byId({ space: { id: "b", integrations: true } }), ["a"]);
+  assert.deepEqual(byId({}), ["a", "b"], "поточний невідомий — усі пропонуємо");
+});
+
+test("простори: недоступний простір — пункт є, вимкнений із причиною", () => {
+  const acts = paletteActions(S({
+    spaces: [{ id: "a", name: "A" }, { id: "g", name: "G", available: false }], spaceId: "a",
+  }));
+  const g = acts.find((a) => a.id === "space-go-g");
+  assert.equal(g.disabled, true);
+  assert.equal(g.whyKey, "spaceUnavailable");
+  assert.ok(DICT.uk.spaceUnavailable !== undefined && DICT.en.spaceUnavailable !== undefined);
+});
+
+test("простори: підпис — «Простір: B», і в списку, і в пошуку (за ім'ям простору)", () => {
+  const acts = paletteActions(S({ spaces: SPS, spaceId: "a" }));
+  const html = paletteListHTML(acts, "", 0);
+  assert.match(html, /<span>Простір: B<\/span>/);
+  assert.match(html, /<span>Новий простір…<\/span>/);
+  assert.deepEqual(filterActions(acts, "простір: b").map((a) => a.id), ["space-go-b"]);
+  // ім'я простору — дані користувача: пошук знаходить за ним, а не за ключем словника
+  const named = paletteActions(S({ spaces: [{ id: "a", name: "A" }, { id: "x", name: "Клієнт Ікс" }], spaceId: "a" }));
+  assert.ok(filterActions(named, "ікс").some((a) => a.id === "space-go-x"));
+});
+
+test("простори: пошук знаходить обома мовами («space» в українському, «простір» — в англійському)", () => {
+  const acts = paletteActions(S({ spaces: SPS, spaceId: "a" }));
+  for (const lang of ["uk", "en"]) {
+    setLang(lang);
+    for (const q of ["space", "простір"]) {
+      const found = filterActions(acts, q).map((a) => a.id);
+      assert.ok(found.includes("space-go-b") && found.includes("space-new"), `«${q}» (${lang}): ${found}`);
+    }
+  }
+});
+
+test("простори: ім'я простору в підписі екранується", () => {
+  const acts = paletteActions(S({ spaces: [{ id: "a", name: "A" }, { id: "e", name: "<img src=x onerror=1>" }], spaceId: "a" }));
+  const html = paletteListHTML(acts, "", 0);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img src=x/);
+});
+
+test("простори: англійський підпис «Space: B»", () => {
+  setLang("en");
+  const html = paletteListHTML(paletteActions(S({ spaces: SPS, spaceId: "a" })), "", 0);
+  assert.match(html, /<span>Space: B<\/span>/);
+  assert.match(html, /<span>New space…<\/span>/);
+});
+
+test("простори: кожна нова дія має labelKey в обох словниках, а act — навігаційний або dialog", () => {
+  const acts = paletteActions(S({ spaces: SPS, spaceId: "a" })).filter((a) => a.id.startsWith("space-"));
+  assert.equal(acts.length, 2);
+  for (const a of acts) {
+    assert.ok(DICT.uk[a.labelKey] !== undefined && DICT.en[a.labelKey] !== undefined, a.id);
+    assert.ok(a.act, `дія «${a.id}» без act`);
+  }
+});
+
+test("простір без інтеграцій: з палітри йдуть публікація, посилання, превʼю, GitLab, аудиторія команди", () => {
+  const off = (o = {}) => paletteActions(S({ space: { integrations: false }, gl: "behind", ...o })).map((a) => a.id);
+  const ids = off();
+  for (const id of ["aud-project", "publish", "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup"]) {
+    assert.ok(!ids.includes(id), `«${id}» мусить піти з палітри простору без інтеграцій`);
+  }
+  assert.ok(!off({ gl: "off" }).includes("glsetup"), "glsetup — теж GitLab");
+  // що лишається: усе, що не ходить назовні
+  for (const id of ["figma", "aud-local", "mode", "newit", "shoot", "lang-en", "delit"]) {
+    assert.ok(ids.includes(id), `«${id}» не мав зникати`);
+  }
+});
+
+test("простір З інтеграціями (або без відомостей): палітра ціла, як була", () => {
+  const baseIds = paletteActions(S({ gl: "behind" })).map((a) => a.id);
+  for (const space of [{ integrations: true }, {}, null, undefined]) {
+    const ids = paletteActions(S({ space, gl: "behind" })).map((a) => a.id);
+    assert.deepEqual(ids, baseIds, JSON.stringify(space));
+  }
+  for (const id of ["aud-project", "publish", "copylink", "openpreview", "glpull", "glpush"]) {
+    assert.ok(baseIds.includes(id), id);
+  }
+});
+
+test("простір без інтеграцій: решта палітри не зачеплена — відрізняється рівно набором прихованих", () => {
+  const all = paletteActions(S({ gl: "behind" })).map((a) => a.id);
+  const off = paletteActions(S({ space: { integrations: false }, gl: "behind" })).map((a) => a.id);
+  const gone = all.filter((id) => !off.includes(id)).sort();
+  assert.deepEqual(gone, ["aud-project", "copylink", "glpull", "glpush", "openpreview", "publish", "togglepub"]);
+});
+
+test("простори: id дій унікальні навіть для простору з id `new` (колізія зі `space-new`)", () => {
+  const acts = paletteActions(S({
+    spaces: [{ id: "a", name: "A" }, { id: "new", name: "Нова" }, { id: "go-b", name: "G" }], spaceId: "a",
+  }));
+  const ids = acts.map((a) => a.id);
+  assert.equal(new Set(ids).size, ids.length, `дублі id: ${ids.filter((x, i) => ids.indexOf(x) !== i)}`);
+  assert.equal(acts.find((a) => a.id === "space-new").act, "spacenew", "«Новий простір…» лишився собою");
+  const go = acts.find((a) => a.act === "space" && a.val === "new");
+  assert.equal(go.id, "space-go-new");
+  assert.equal(go.labelArgs[0], "Нова");
+  // і на екрані «Задачі» теж
+  const home = paletteActions(S({ homeOpen: true, spaces: [{ id: "new", name: "N" }], spaceId: "a" })).map((a) => a.id);
+  assert.equal(new Set(home).size, home.length);
+});
+
+/* Рядки блоку публікації пересунуті під `if (!noOutward)` (простори) — а покриття їхнього
+   `disabled` досі трималось лише на тому, що вимкнений пункт має `whyKey`. Тут — сам
+   стан: посилання й превʼю вимкнені, поки задачу не опубліковано, з тією ж причиною,
+   що в смузі (`linkWhyKey`, `bar-model.js`). */
+test("палітра: «Копіювати посилання» і «Відкрити превʼю» вимкнені з причиною, поки не опубліковано", () => {
+  const f = (o, id) => paletteActions(S(o)).find((a) => a.id === id);
+  const st = (a) => [a.disabled, a.whyKey];
+  assert.deepEqual(st(f({ published: false }, "openpreview")), [true, "whyNoPublish"]);
+  assert.deepEqual(st(f({ published: false }, "copylink")), [true, "whyNoPublish"]);
+  assert.deepEqual(st(f({ iterPub: false }, "copylink")), [true, "whyItOff"]);
+  assert.deepEqual(st(f({ pagePub: false }, "copylink")), [true, "whyPageOff"]);
+  assert.deepEqual(st(f({}, "openpreview")), [false, ""]);
+  assert.deepEqual(st(f({}, "copylink")), [false, ""]);
+});

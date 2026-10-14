@@ -6,11 +6,11 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — early private extraction (v1.54.0, from `5d95dde`).**
-> This snapshot was extracted from an in-house tool. The core works standalone; a few
+> **Status — v0.1.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> Spaces are in (several projects on one machine, each with its own task list). A few
 > integrations (team dashboard, git sync, shared comments, Vercel publishing) are still
-> wired for the original setup and are being turned into optional, per-project modules
-> with a first-run onboarding. See *Roadmap* below.
+> wired for the original setup and only run in a migrated legacy space; they are being
+> turned into optional per-space modules with a first-run onboarding. See *Roadmap*.
 
 ## What it does
 
@@ -60,7 +60,7 @@ tests/      unit, Python and live (Playwright) tests
 
 ## Roadmap
 
-1. **Projects** — open the canvas for different projects/companies, each with its own settings.
+1. ✅ **Spaces** (0.1) — several projects/companies on one machine, each with its own task list and settings.
 2. **Modules** — git sync, shared comments backend, publishing target, design-system tokens,
    issue tracker, team dashboard: optional modules you connect per project.
 3. **Onboarding** — a first-run flow that sets up a project and connects modules from the UI.

@@ -16,13 +16,14 @@ sys.path.insert(0, os.path.join(ROOT, "app"))
 # віддає serve. До 04.08.2026 цей скрипт мав власний обхід сторінок із власним
 # фільтром — копія логіки публікації, яка мовчки розійшлась би з нею.
 from serve import (gate_html, load_meta, preview_gate_state,  # noqa: E402
-                   preview_index_html, preview_password, tasks_path)
+                   preview_index_html, preview_password, legacy_tasks_path)
 
 
 def load_tasks():
-    # Через serve.tasks_path(), а не свій join: інакше цей скрипт читав би інший
-    # файл, ніж сервер, коли DC_TASKS_FILE перевизначено (тести, ізольований прогін).
-    with open(tasks_path(), encoding="utf-8") as f:
+    # Через serve.legacy_tasks_path(), а не свій join: інакше цей скрипт читав би інший
+    # файл, ніж сервер, коли DC_TASKS_FILE перевизначено (тести, ізольований прогін). Саме
+    # СТАРИЙ файл, а не файл «поточного простору»: це інструмент ЛІГА (Vercel-превʼю її задач).
+    with open(legacy_tasks_path(), encoding="utf-8") as f:
         return json.load(f)
 
 

@@ -19,8 +19,18 @@
  *            profiles: Set, designers: Set, now?: мс }
  *          (`cursorId` екрана тут НЕ читається: фокус повертає `app.js`.)
  *   data = відповідь `/api/tasks-overview` (`{current, mine, team:{rows, error,
- *          fetchedAt, rowsAt}}`), АБО `null`/`{loading:true}` до відповіді,
- *          АБО `{failed: "причина"}`, коли запит не вдався.
+ *          fetchedAt, rowsAt}|null, space:{name, integrations}|null}`), АБО
+ *          `null`/`{loading:true[, space]}` до відповіді, АБО `{failed: "причина"}`,
+ *          коли запит не вдався.
+ *
+ * Простори (Deai 1.0, етап 1): `data.space` дає заголовок «Задачі · <простір>».
+ * Простір без інтеграцій (`integrations === false`) не має дашборда команди —
+ * `team: null`: вкладки «Команда» нема, а збережена в UI вкладка `team`
+ * читається як `mine` (`effectiveTab`; без цього екран малював би порожній
+ * список під вкладкою, якої нема), і в голові зʼявляється «Нова задача» — єдиний
+ * спосіб завести задачу не з реєстру Jira. Порожній такий простір показує не
+ * «Нічого не знайдено» (фільтрувати нема що), а підказку з тією ж кнопкою й
+ * порадою попросити агента.
  *
  * ⛔ Усе, що приходить із даних (назва, ключ, дизайнер, статус Jira, причина
  * помилки), іде в розмітку ЛИШЕ через `esc()`/`mark()`: рядки команди пише
@@ -93,6 +103,28 @@ export function thumbBrokenHTML() {
 }
 
 const ready = (data) => !!(data && Array.isArray(data.mine));
+
+/** Простір без інтеграцій: рівно `integrations === false` (див. `bar-model.js`, «Вимикач»). */
+const noIntegrations = (data) => data?.space?.integrations === false;
+
+/** Чи є в екрана вкладка «Команда». Є дані — рішає `team` (`null` або ключа нема =
+ *  дашборда нема; обʼєкт, навіть із помилкою, = є). Даних ще нема — вкладка
+ *  стоїть, як і раніше «поки вантажиться», АЛЕ відомий простір без інтеграцій
+ *  ховає її вже зараз, щоб вона не мигала на мить завантаження. */
+const hasTeam = (data) => (ready(data) ? data.team != null : !noIntegrations(data));
+
+/** Вкладка, яка справді малюється: збережена `team` без вкладки «Команда» — `mine`.
+ *  Експортована: `app.js` вибирає за нею ще й пошук/сортування/повторний запит. */
+export const effectiveTab = (ui, data) => (ui.tab === "team" && !hasTeam(data) ? "mine" : ui.tab);
+
+/** `ui` із вже виправленою вкладкою (копія, лише коли довелось виправити). */
+const withTab = (ui, data) => {
+  const tab = effectiveTab(ui, data);
+  return tab === ui.tab ? ui : { ...ui, tab };
+};
+
+/** «Нова задача»: кнопка в голові екрана й у порожньому стані (`data-th="newtask"`). */
+const newTaskBtn = () => `<button class="ctl ctl--pri" data-th="newtask">${ico("plus")}${esc(t("newTask"))}</button>`;
 
 /** Рядки вкладки: «мої» або рядки дашборда команди. */
 function source(ui, data) {
@@ -214,6 +246,7 @@ function chipsHTML(ui, data, src, shown) {
 
 /** Нижня частина екрана: чіпи, банер, сітка (або стани «вантажу»/«збій»). */
 export function homeGridHTML(ui, data) {
+  ui = withTab(ui, data);
   if (!ready(data)) {
     return data && data.failed
       ? bannerHTML(t("thLoadErr", data.failed))
@@ -235,8 +268,14 @@ export function homeGridHTML(ui, data) {
      і банер, а не стираємо екран заради «не вдалося». */
   const banner = (data.loadError ? bannerHTML(t("thLoadErr", data.loadError)) : "")
     + (err ? bannerHTML(t("thTeamErr", err), stale ? t("thStale", stale) : "") : "");
-  const empty = `<div class="th-empty"><b>${esc(t("thEmpty"))}</b>${esc(t("thEmptyHint"))} `
-    + `<button class="th-lnk" data-th="reset">${esc(t("thReset"))}</button></div>`;
+  /* Порожній простір без інтеграцій — не «порожня видача»: скидати нічого, і кнопка
+     «Скинути фільтри» вела б у нікуди. Замість неї — шлях до першої задачі. */
+  const empty = noIntegrations(data) && !src.length
+    ? `<div class="th-empty th-empty--space"><b>${esc(t("spaceEmpty"))}</b>`
+      + `${esc(t("spaceEmptyAgent", data.space.name))}`
+      + `<div class="th-empty-act">${newTaskBtn()}</div></div>`
+    : `<div class="th-empty"><b>${esc(t("thEmpty"))}</b>${esc(t("thEmptyHint"))} `
+      + `<button class="th-lnk" data-th="reset">${esc(t("thReset"))}</button></div>`;
   const grid = err && !src.length ? ""
     : `<div class="th-grid" id="th-grid" role="group" aria-label="${esc(t("thGridLabel"))}">`
       + `${list.map((x) => cardHTML(x, ui, data.current)).join("") || empty}</div>`;
@@ -246,6 +285,7 @@ export function homeGridHTML(ui, data) {
 /** Повний екран. Вкладки й поле пошуку є завжди — навіть поки дані вантажаться:
  *  фокус на пошук ставиться одразу при відкритті, а не після відповіді. */
 export function homeHTML(ui, data) {
+  ui = withTab(ui, data);
   const team = ui.tab === "team";
   const isReady = ready(data);
   const nMine = isReady ? data.mine.length : "—";
@@ -256,9 +296,14 @@ export function homeHTML(ui, data) {
   const sort = effectiveSort(ui);
   const opts = sortsFor(ui.tab).map((k) =>
     `<option value="${k}"${sort === k ? " selected" : ""}>${esc(t(`sort_${k}`))}</option>`).join("");
+  /* Кнопка «Нова задача» живе в голові лише коли вона є: без неї розмітка голови —
+     як була (один `<h1>`), і екран простору з інтеграціями (ЛІГА) не змінюється. */
+  const h1 = `<h1 class="th-h">${esc(data?.space ? t("tasksIn", data.space.name) : t("tasks"))}</h1>`;
+  const head = noIntegrations(data) ? `<div class="th-head">${h1}${newTaskBtn()}</div>` : h1;
+  const tabs = tab("mine", t("thTabMine", nMine)) + (hasTeam(data) ? tab("team", t("thTabTeam", nTeam)) : "");
   return `<div class="th-in">
-    <h1 class="th-h">${esc(t("tasks"))}</h1>
-    <div class="th-tabs" role="tablist" aria-label="${esc(t("thTabsLabel"))}">${tab("mine", t("thTabMine", nMine))}${tab("team", t("thTabTeam", nTeam))}</div>
+    ${head}
+    <div class="th-tabs" role="tablist" aria-label="${esc(t("thTabsLabel"))}">${tabs}</div>
     <div class="th-tools">
       <label class="th-search">${ico("search")}<input id="th-q" type="text" autocomplete="off" spellcheck="false"
         aria-label="${esc(t("thSearchLabel"))}" placeholder="${esc(t(team ? "thSearchTeam" : "thSearchMine"))}"

@@ -21,7 +21,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E402
                    gitlab_cfg, gitlab_status, supabase_pins, comment_channel,
                    machine_identity, iteration_is_mine, iteration_pages,
-                   task_for, UnknownTask, TaskNotHere)
+                   task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
+                   SpaceUnavailable)
+import spaces  # noqa: E402
 import registry  # noqa: E402
 import pages_model as pm  # noqa: E402
 import shlex  # noqa: E402
@@ -256,7 +258,12 @@ def local_url_line(task, its, my_key, port, tid=None):
 
 
 def _registry_line(cfg):
-    """Свежесть локального кеша задач против реестра (источник истины)."""
+    """Свежесть локального кеша задач против реестра (источник истины).
+
+    Простір без інтеграцій: реєстру команди для нього нема, рядок не друкується (порожній) і
+    `registry.staleness` — а це `git ls-remote` — не кличеться."""
+    if not spaces.integrations_on():
+        return ''
     try:
         st = registry.staleness(cfg)
     except Exception as e:  # noqa: BLE001 — состояние реестра не должно ронять state
@@ -310,10 +317,21 @@ def build_parser():
 
 
 def main(argv=None):
-    a = build_parser().parse_args(argv)
-    cfg = load_tasks()
+    # Простір, який `task_anywhere` фіксує на потоці, не сміє пережити команду: `main()` кличуть
+    # і в процесі (тести, інші скрипти), а потік — той самий.
     try:
-        tid, task = task_for(cfg, a.task)
+        return _main(argv)
+    finally:
+        spaces.clear_request_space()
+
+
+def _main(argv):
+    a = build_parser().parse_args(argv)
+    # СПЕРШУ задача (вона ж фіксує простір), ПОТІМ `load_tasks()`: інакше конфіг читався б
+    # з поточного простору машини, а названа задача жила б в іншому.
+    try:
+        tid, task = task_anywhere(a.task, load=load_tasks)
+        cfg = load_tasks()
     except TaskNotHere:
         # Назва ЯВНА, тож відкат на поточну неприпустимий; і «нова/порожня
         # задача» тут була б брехнею: задача є, лише теки на цій машині нема.
@@ -323,13 +341,26 @@ def main(argv=None):
     except UnknownTask:
         print(f'error: немає задачі {a.task!r} у tasks.json', file=sys.stderr)
         return 2
+    except NoTask as e:
+        # «Створи простір» тут брехало б, коли задачі є в інших просторах (див. `no_task_message`).
+        print(f'error: {spaces.no_task_message(e)}', file=sys.stderr)
+        return 2
+    except AmbiguousTask:
+        print(f'error: задача {a.task!r} є в кількох просторах — перейменуй одну з них '
+              '(або онови id в tasks.json простору)', file=sys.stderr)
+        return 2
+    except (SpaceUnavailable, spaces.SpacesError) as e:
+        print(f'error: простір недоступний — {e}', file=sys.stderr)
+        return 2
     named = a.task is not None      # назва ЯВНА: адреси й підказки її повторюють
     meta = load_meta(task)
     its = task_iterations(task)
     print(f'=== ДЕ МИ ЗАРАЗ · «{task.get("title", tid)}» ({tid}) ===')
-    print(f'Пайплайн v{_pipeline_version()} · Профіль: {task.get("profile", "?")}'
+    print(f'Пайплайн v{_pipeline_version()} · Профіль: {task.get("profile") or "—"}'
           f' · Jira: {task.get("jira", "—")}')
-    print(_registry_line(cfg))
+    line = _registry_line(cfg)
+    if line:                        # порожній рядок друкувати нічого
+        print(line)
 
     if not its:
         print('Ітерацій ще немає — це нова/порожня задача, можна починати макет.')
@@ -341,7 +372,10 @@ def main(argv=None):
     else:
         print('Опубліковано: ще ні')
 
-    gl = gitlab_cfg(cfg, task)
+    # Інтеграції простору (не лише «команда»): без них немає ні GitLab, ні командних коментарів.
+    integrations = spaces.integrations_on()
+    # Без інтеграцій GitLab-маппінг у файлі простору ігнорується — як для задачі без нього.
+    gl = gitlab_cfg(cfg, task) if integrations else None
     if gl:
         try:
             work = working_iteration(its, machine_identity()[1])
@@ -358,10 +392,12 @@ def main(argv=None):
         local = len([p for p in ld if p.get('status') != 'resolved'])
     except (OSError, ValueError):
         local = 0
-    external = _open_pins(comment_channel(task, tid))
+    # Без інтеграцій командних коментарів нема: «нема», а не «+ 0» (нуль читався б як «питали — тихо»).
+    external = _open_pins(comment_channel(task, tid)) if integrations else 0
     # Підказку копіюють дослівно: без `--task` вона відкрила б інбокс ПОТОЧНОЇ задачі.
     inbox_cmd = 'python3 bin/inbox.py' + (f' --task {shlex.quote(tid)}' if named else '')
-    print(f'Відкриті коментарі: {local} локальних (мені) + {external} проєктних'
+    team_part = f' + {external} проєктних' if integrations else ', проєктних нема'
+    print(f'Відкриті коментарі: {local} локальних (мені){team_part}'
           f'{" → " + inbox_cmd if local + external else ""}')
 
     loc = local_url_line(task, its, machine_identity()[1],

@@ -426,3 +426,59 @@ test("«В Figma» в «Огляді» — лише іконка, у «Маке�
   assert.equal(f({ mode: "overview" }).iconOnly, true);
   assert.equal(f({}).iconOnly, false);
 });
+
+/* ── простори (Deai 1.0, етап 1) ──────────────────────────────────────────────
+   Фішка простору — у зоні 1 («де я»), ПЕРЕД крошкою задачі: задача живе в
+   просторі, тож шлях читається зліва направо. Без `space` (шар просторів
+   вимкнено чи просторів ще нема) смуга така, як була, — жодного порожнього
+   місця під фішку. `integrations === false` прибирає з зони 3 рівно те, що
+   ходить назовні (GitLab і публікацію); «В Figma» лишається — вона працює по
+   живому макету, а не по зовнішній службі. */
+const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", integrations: false, ...o });
+
+test("простір: фішка в зоні 1 між палітрою й задачею, з назвою і кольором", () => {
+  const m = barModel({ ...base, space: SP() });
+  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "space", "task", "iter"]);
+  const chip = m.zone1[2];
+  assert.equal(chip.label, "P");
+  assert.equal(chip.color, "space-2");
+  assert.equal(chip.tier, 0, "фішку ховати нікуди: у зоні 1 немає «⋯»");
+});
+
+test("простір: без `space` — смуга як була, фішки нема (шар вимкнено / просторів нема)", () => {
+  for (const space of [undefined, null]) {
+    const m = barModel({ ...base, space });
+    assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "task", "iter"]);
+    assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"]);
+  }
+});
+
+test("простір на екрані «Задачі»: фішка є, між палітрою й крошкою «Задачі»", () => {
+  const m = barModel({ ...base, space: SP(), homeOpen: true });
+  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "space", "crumb-tasks", "back"]);
+  assert.equal(m.zone1[2].label, "P");
+});
+
+test("простір без інтеграцій: у зоні 3 нема GitLab і публікації, «В Figma» лишається", () => {
+  const m = barModel({ ...base, space: SP({ integrations: false }) });
+  assert.deepEqual(m.zone3.map((x) => x.id), ["figma"]);
+});
+
+test("простір З інтеграціями: зона 3 — як була", () => {
+  for (const integrations of [true, undefined]) {
+    const m = barModel({ ...base, space: SP({ integrations }) });
+    assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"], String(integrations));
+  }
+});
+
+test("вимикач інтеграцій — рівно `integrations === false`, а не «нема значення»", () => {
+  // `space` без поля `integrations` (відповідь старої форми) не має красти GitLab у людини.
+  const m = barModel({ ...base, space: { id: "p", name: "P", color: "space-1" } });
+  assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"]);
+});
+
+test("простір: id у всій смузі лишаються унікальними", () => {
+  const m = barModel({ ...base, space: SP() });
+  const ids = [...m.zone1, ...m.zone2, ...m.zone3].map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+});

@@ -1,3 +1,4 @@
+import ast
 import contextlib
 import io
 import json
@@ -800,6 +801,17 @@ class ServeTest(unittest.TestCase):
         import registry
         self.assertNotIn('opened', registry.SHARED,
                          '«що я відкривав» поїхало б у спільний реєстр')
+
+    def test_task_list_ignores_a_hand_written_opened_that_is_not_a_string(self):
+        """`opened` — ISO-рядок, але файл правлять і руками: число, список, `true`, `null`, обʼєкт.
+        Порівняння `int` із `str` валило сортування (`TypeError`) і з ним увесь `/api/tasks`.
+        Не-рядок — «без мітки»: у хвіст, у порядку файла, між собою не порівнюється."""
+        cfg = {'tasks': {'n1': {'opened': 5}, 'b': {'opened': '2026-01-20T10:00:00Z'},
+                         'n2': {'opened': None}, 'c': {'opened': '2026-01-27T09:00:00Z'},
+                         'n3': {'opened': ['2026']}, 'n4': {'opened': True}, 'n5': {'opened': {}},
+                         'n6': {'opened': 1.5}, 'n7': {}}}
+        self.assertEqual([k for k, _ in serve.tasks_by_recent(cfg)],
+                         ['c', 'b', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'])
 
     def test_task_switch_stamps_opened(self):
         # Мітку спершу ЗНІМАЄМО: конфіг класу спільний, і перемикання в
@@ -1866,6 +1878,11 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
     мусить у тому ж файлі задавати `DC_TASKS_FILE`. Мутація, якою доводиться:
     прибери рядок `os.environ['DC_TASKS_FILE']` із `tests/test_gitlab_sync.py`
     — цей тест червоніє, не чіпаючи нічийого конфіга.
+
+    Те саме для РЕЄСТРУ просторів `<DEAI_HOME>/spaces.json` (нижче, `SPACE_WRITERS`): файл, що
+    пише простори, мусить присвоювати `DEAI_HOME` і підключати `tests/spaces_guard.py` у
+    `setUpModule`/`tearDownModule`. Присвоєння й хуки шукає `ast`, а не текст: закоментований
+    рядок чи згадка в докстрінгу ізоляцією не вважаються.
     """
 
     #: Усе, що всередині доходить до `save_tasks()`.
@@ -1911,6 +1928,218 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
                                     'охоронець вище нічого не стереже')
 
 
+    # ---- простори (`<DEAI_HOME>/spaces.json`): те саме, але для справжнього РЕЄСТРУ машини ----
+
+    #: Усе, що пише простори: HTTP-маршрути й три мутатори `app/spaces.py`. ОКРЕМИЙ кортеж, не
+    #: розширення `WRITERS`: `tests/test_gitlab_sync.py` кличе `task_new(` і ізолює лише
+    #: `DC_TASKS_FILE` — він не пише простори, і спільне правило зробило б його хибно червоним.
+    #: `/api/task-new` і `/api/task-switch` тут, а не лише в `WRITERS`: з увімкненим шаром обидва
+    #: ЗАВЕРШУЮТЬСЯ `spaces.switch_space(...)` — тобто пишуть `current` справжнього реєстру, коли
+    #: файл тестів не ізолював `DEAI_HOME` (з вимкненим шаром `switch_space` — no-op, тож
+    #: `test_serve.py`, що ганяє їх лише з `DC_TASKS_FILE`, під правило не потрапляє: його тут не скануємо).
+    SPACE_WRITERS = ('/api/space-', '/api/task-new', '/api/task-switch',
+                     'create_space(', 'switch_space(', 'update_space(')
+
+    #: Форми ПРИСВОЄННЯ `DEAI_HOME`, які приймає `_assigns_deai_home`. Лежать окремо, щоб повідомлення
+    #: про провал казало автору, що саме охоронець уважає ізоляцією, а не змушувало гадати.
+    SPACE_ISOLATION_FORMS = (
+        "os.environ['DEAI_HOME'] = …",
+        "os.environ.update({…, 'DEAI_HOME': …})  або  os.environ.update(DEAI_HOME=…)",
+        "mock.patch.dict(os.environ, {…, 'DEAI_HOME': …})  або  patch.dict(os.environ, DEAI_HOME=…)",
+        "subprocess.run/Popen/call/check_call/check_output(…, env={…, 'DEAI_HOME': …})",
+    )
+
+    #: Виклики породження процесу, чий `env={…}` приймається як ізоляція.
+    _SPAWNERS = ('run', 'Popen', 'call', 'check_call', 'check_output')
+
+    @staticmethod
+    def _assigns_deai_home(src):
+        """Чи ПРИСВОЮЄ код `DEAI_HOME` (форми — `SPACE_ISOLATION_FORMS`). Розбір через `ast`: коментар,
+        докстрінг, читання `os.environ['DEAI_HOME']`, `env(DEAI_HOME=…)` і таблиця випадків
+        `({'DEAI_HOME': '/x'}, True)` присвоєнням не є, а текстовий регексп їх приймав (закоментований
+        рядок давав зелене для файла без ізоляції).
+
+        ⚠️ Це ПРИСУТНІСТЬ присвоєння у файлі, не доказ, що воно діє на кожен тест (так само, як
+        `ISOLATED` вище), а `subprocess(env=…)` ізолює лише дитину. Доказ — динамічний
+        `tests/spaces_guard.py`: знімок справжнього `~/.deai` на вході в модуль і звірка на виході."""
+
+        def is_environ(n):
+            return ((isinstance(n, ast.Attribute) and n.attr == 'environ'
+                     and isinstance(n.value, ast.Name) and n.value.id == 'os')
+                    or (isinstance(n, ast.Name) and n.id == 'environ'))
+
+        def has_key(n):
+            return isinstance(n, ast.Dict) and any(
+                isinstance(k, ast.Constant) and k.value == 'DEAI_HOME' for k in n.keys)
+
+        def passes_it(args, keywords):
+            """Позиційний літерал-словник із ключем, `DEAI_HOME=…` або `**{…літерал…}`."""
+            return (any(has_key(a) for a in args)
+                    or any(k.arg == 'DEAI_HOME' or (k.arg is None and has_key(k.value)) for k in keywords))
+
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.Assign):
+                if any(isinstance(t, ast.Subscript) and is_environ(t.value)
+                       and isinstance(t.slice, ast.Constant) and t.slice.value == 'DEAI_HOME'
+                       for t in n.targets):
+                    return True
+            elif isinstance(n, ast.Call):
+                f = n.func
+                name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+                if name == 'update' and isinstance(f, ast.Attribute) and is_environ(f.value):
+                    if passes_it(n.args, n.keywords):
+                        return True
+                elif name == 'dict' and isinstance(f, ast.Attribute) and n.args and (
+                        is_environ(n.args[0])
+                        or (isinstance(n.args[0], ast.Constant) and n.args[0].value == 'os.environ')):
+                    if passes_it(n.args[1:], n.keywords):
+                        return True
+                elif name in TestsCannotWriteLiveConfig._SPAWNERS:
+                    if any(k.arg == 'env' and has_key(k.value) for k in n.keywords):
+                        return True
+        return False
+
+    def _space_writer_sources(self):
+        """[(імʼя файла, джерело)] тестових файлів, що кличуть писарів просторів (без цього файла:
+        тут імена писарів — лише дані)."""
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        out = []
+        for name in sorted(os.listdir(tests_dir)):
+            if not (name.startswith('test_') and name.endswith('.py')):
+                continue
+            if name == os.path.basename(__file__):
+                continue
+            with open(os.path.join(tests_dir, name), encoding='utf-8') as fh:
+                src = fh.read()
+            if self._is_space_writer(src):
+                out.append((name, src))
+        return out
+
+    @classmethod
+    def _is_space_writer(cls, src):
+        """Чи кличе джерело писаря просторів (`SPACE_WRITERS`)."""
+        return any(w in src for w in cls.SPACE_WRITERS)
+
+    def test_every_space_writing_test_file_isolates_deai_home(self):
+        offenders = [name for name, src in self._space_writer_sources()
+                     if not self._assigns_deai_home(src)]
+        self.assertEqual(offenders, [], 'тести пишуть простори без власного DEAI_HOME — це справжній '
+                                        '~/.deai: ' + ', '.join(offenders) + '. Охоронець приймає присвоєння '
+                                        '(коментар і докстрінг не рахуються): '
+                                        + '; '.join(self.SPACE_ISOLATION_FORMS))
+
+    def test_space_guard_sees_the_writers_it_claims_to_see(self):
+        """Свідок проти вакууму: обидві перевірки просторів зелені й тоді, коли жоден файл не кличе
+        писарів, — тобто коли вони не стережуть нічого (перейменували мутатор — і охоронець осліп)."""
+        seen = {name for name, _ in self._space_writer_sources()}
+        self.assertLessEqual({'test_spaces.py', 'test_spaces_serve.py', 'test_integrations_off.py'},
+                             seen, 'писарі просторів зникли з тестів — SPACE_WRITERS застарів')
+
+    def test_the_task_routes_that_end_in_a_space_switch_count_as_space_writers(self):
+        """`task-new`/`task-switch` з увімкненим шаром роблять простір задачі поточним — це запис
+        реєстру. Файл, що їх викликає без власного `DEAI_HOME`, мусить бути спійманий; читальні
+        маршрути (`/api/task`, `/api/tasks`, `/api/tasks-overview`) — ні."""
+        for src in ("self.post('/api/task-new', {'id': 'x'})",
+                    'post("/api/task-switch", {"id": "a"})',
+                    "urlopen(base + '/api/task-new')",
+                    "self.post('/api/space-new', {})",
+                    "spaces.switch_space('p')"):
+            self.assertTrue(self._is_space_writer(src), src)
+        for src in ("self.get('/api/task')", "self.get('/api/tasks?all=1')",
+                    "self.get('/api/tasks-overview')", "# /api/tasks", "x = 1"):
+            self.assertFalse(self._is_space_writer(src), src)
+
+    def test_the_isolation_check_tells_an_assignment_from_a_mention(self):
+        """Охоронець, який не може впасти, гірший за відсутній: перевірка має ловити саме присвоєння в
+        оточення і не вестись на згадку імені (коментар, докстрінг, читання, таблиця випадків, `env(…)`)."""
+        assigns = {
+            'присвоєння': "os.environ['DEAI_HOME'] = tmp",
+            'присвоєння без пробілів': 'os.environ["DEAI_HOME"]=tmp',
+            'update зі словником': "os.environ.update({'A': f'{x}/h', 'DEAI_HOME': d})",
+            'update з kwarg': 'os.environ.update(DEAI_HOME=d)',
+            'update з **словник': "os.environ.update(**{'DEAI_HOME': d})",
+            'patch.dict зі словником': "mock.patch.dict(os.environ, {'DEAI_HOME': d})",
+            'patch.dict з kwarg': 'patch.dict(os.environ, DEAI_HOME=d)',
+            'patch.dict зі словником (імʼя рядком)': "mock.patch.dict('os.environ', {'DEAI_HOME': d})",
+            'subprocess.run(env=)': "subprocess.run(cmd, env={'DEAI_HOME': d, 'HOME': h})",
+            'Popen(env=)': "Popen(cmd, env={'DEAI_HOME': d})",
+            'у гілці': "if layer:\n    os.environ['DEAI_HOME'] = tmp",
+        }
+        mentions = {
+            'коментар': "# os.environ['DEAI_HOME'] = tmp\npass",
+            'докстрінг': '"""\nos.environ[\'DEAI_HOME\'] = tmp\n"""',
+            'читання': "x = os.environ['DEAI_HOME']",
+            'порівняння': "os.environ['DEAI_HOME'] == d",
+            'pop': "os.environ.pop('DEAI_HOME', None)",
+            'del': "del os.environ['DEAI_HOME']",
+            'таблиця випадків': "cases = [({'DEAI_HOME': '/x'}, True)]",
+            'хелпер env()': 'env(DEAI_HOME=deai)',
+            '_ENV-кортеж': "_ENV = ('HOME', 'DEAI_HOME')",
+            'не оточення (підскрипт)': "other['DEAI_HOME'] = d",
+            'не оточення (update)': "other.update({'DEAI_HOME': d})",
+            'словник без присвоєння': "d = {'DEAI_HOME': d}",
+            'update без ключа': "os.environ.update({'HOME': h}); d = {'DEAI_HOME': d}",
+            'subprocess без ключа': "subprocess.run(cmd, env=os.environ.copy())",
+            'patch.dict без ключа': "mock.patch.dict(os.environ, {'X': 1})",
+            'словник не в env=': "subprocess.run(cmd, cwd={'DEAI_HOME': d})",
+        }
+        for what, src in assigns.items():
+            self.assertTrue(self._assigns_deai_home(src), f'{what}: {src!r}')
+        for what, src in mentions.items():
+            self.assertFalse(self._assigns_deai_home(src), f'{what}: {src!r}')
+
+    def test_every_space_writing_module_wires_the_real_registry_guard(self):
+        """Файл, що пише простори, мусить на рівні МОДУЛЯ знімати `spaces_guard.snapshot()` (без аргументів)
+        і звіряти ЦЕЙ ЖЕ знімок: `spaces_guard.assert_untouched(<знімок>)`. Обидва виклики — ПРЯМІ
+        інструкції тіла хука: під `if False:`, у `try`/`except` чи у вкладеній `def` вони існують у
+        тексті, але не виконуються (або їхній провал ковтається) — і без охоронця все лишається
+        зеленим. Один позиційний аргумент, без keyword-ів: `assert_untouched(snap, homes=())` звіряв би
+        порожній список тек. Розбір через `ast`, а не підрядок: закоментований виклик чи перейменований
+        хук підрядок би не побачив."""
+
+        def guard_call(node, attr):
+            """`spaces_guard.<attr>(…)` → Call, інакше None."""
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == attr and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == 'spaces_guard'):
+                return node
+            return None
+
+        offenders = []
+        for name, src in self._space_writer_sources():
+            hooks = {}
+            for node in ast.parse(src).body:       # лише верхній рівень; пізніший `def` перекриває
+                if isinstance(node, ast.FunctionDef):
+                    hooks[node.name] = node
+            up, down = hooks.get('setUpModule'), hooks.get('tearDownModule')
+            if up is None or down is None:
+                offenders.append(f'{name}: нема {"setUpModule" if up is None else "tearDownModule"}')
+                continue
+            # setUpModule: `global _REAL` + пряма інструкція `_REAL = spaces_guard.snapshot()`
+            declared = {n for st in up.body if isinstance(st, ast.Global) for n in st.names}
+            stored = set()
+            for st in up.body:
+                call = guard_call(st.value, 'snapshot') if isinstance(st, ast.Assign) else None
+                if call is not None and not call.args and not call.keywords:
+                    stored |= {t.id for t in st.targets if isinstance(t, ast.Name)}
+            stored &= declared
+            if not stored:
+                offenders.append(f'{name}: setUpModule не зберігає знімок прямою інструкцією '
+                                 '`global X; X = spaces_guard.snapshot()` (без аргументів)')
+            # tearDownModule: пряма інструкція `spaces_guard.assert_untouched(X)`
+            ok = False
+            for st in down.body:
+                call = guard_call(st.value, 'assert_untouched') if isinstance(st, ast.Expr) else None
+                if (call is not None and not call.keywords and len(call.args) == 1
+                        and isinstance(call.args[0], ast.Name) and call.args[0].id in stored):
+                    ok = True
+            if not ok:
+                offenders.append(f'{name}: tearDownModule не звіряє збережений знімок прямою інструкцією '
+                                 '`spaces_guard.assert_untouched(X)` (один аргумент, без keyword-ів)')
+        self.assertEqual(offenders, [], 'тести пишуть простори без охоронця справжнього реєстру: '
+                                        + '; '.join(offenders))
+
+
 class OverviewSyncGuard(unittest.TestCase):
     """DC_NO_OVERVIEW має повністю глушити пуш реєстру в прод-Supabase.
 
@@ -1944,6 +2173,80 @@ class OverviewSyncGuard(unittest.TestCase):
         with mock.patch.object(serve.subprocess, 'Popen') as popen:
             serve.Handler._overview_sync(None)
         self.assertEqual(popen.call_count, 1)
+
+
+class OverviewSyncLog(unittest.TestCase):
+    """`_overview_sync` відкриває лог синку ДО `Popen` і мусить його закрити сам: дитина вже має
+    власну копію дескриптора, а батьківський файловий обʼєкт лишався відкритим — на збої `Popen`
+    назавжди (ResourceWarning), на успіху до збирача сміття. ⛔ Лог — у ТИМЧАСОВІЙ домівці: справжній
+    `~/.claude/pipeline-feedback/overview-sync.log` тут не відкривається."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='ovsync-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        os.makedirs(os.path.join(self.tmp, '.claude', 'pipeline-feedback'))
+        saved = os.environ.get('DC_NO_OVERVIEW')
+        os.environ.pop('DC_NO_OVERVIEW', None)
+
+        def restore():
+            if saved is None:
+                os.environ.pop('DC_NO_OVERVIEW', None)
+            else:
+                os.environ['DC_NO_OVERVIEW'] = saved
+        self.addCleanup(restore)
+
+    def sync(self, popen_error=None):
+        """Один `_overview_sync` з підміненим `Popen`; повертає файлові обʼєкти, що дістали `stdout`."""
+        seen = []
+
+        def popen(*args, **kw):
+            seen.append(kw['stdout'])
+            self.assertFalse(kw['stdout'].closed, 'до Popen лог мусить бути відкритий')
+            if popen_error:
+                raise popen_error
+            return mock.MagicMock()
+        with mock.patch.dict(os.environ, {'HOME': self.tmp}), \
+                mock.patch.object(serve.subprocess, 'Popen', side_effect=popen):
+            serve.Handler._overview_sync(None)      # self не використовується
+        return seen
+
+    def test_the_log_is_closed_when_popen_fails(self):
+        seen = self.sync(OSError('no python3'))
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].closed, 'лог лишився відкритим після збою Popen')
+
+    def test_the_log_is_closed_after_a_successful_start_too(self):
+        seen = self.sync()
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].closed, 'батьківська копія логу лишилась відкритою (дитина має свою)')
+
+    def test_no_resource_warning_when_popen_fails(self):
+        import gc
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', ResourceWarning)
+            self.sync(OSError('no python3'))
+            gc.collect()
+        self.assertEqual([str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], [])
+
+    def test_a_log_that_fails_to_close_does_not_make_the_best_effort_sync_raise(self):
+        """`close()` на файлі з незбереженим буфером (диск повний) кидає `OSError`: метод «ковтаємо
+        помилки» не має кидати з `finally`, ні коли `Popen` стартував, ні коли ні."""
+        for popen_error in (None, OSError('no python3')):
+            fake = mock.MagicMock()
+            fake.close.side_effect = OSError('ENOSPC')
+            with self.subTest(popen_error=popen_error):
+                with mock.patch.dict(os.environ, {'HOME': self.tmp}), \
+                        mock.patch.object(serve, 'open', create=True, return_value=fake), \
+                        mock.patch.object(serve.subprocess, 'Popen', side_effect=popen_error or mock.DEFAULT):
+                    serve.Handler._overview_sync(None)        # не кидає
+                fake.close.assert_called_once_with()
+
+    def test_a_log_that_cannot_be_opened_is_swallowed_and_nothing_starts(self):
+        """Тека логу відсутня → `open` кидає ще до `Popen`: best-effort метод не має кидати далі
+        (закриття в `finally` не сміє впасти на ще не створеному обʼєкті)."""
+        shutil.rmtree(os.path.join(self.tmp, '.claude'))
+        self.assertEqual(self.sync(), [])
 
 
 class PreviewGate(unittest.TestCase):
@@ -2042,6 +2345,80 @@ class PreviewGate(unittest.TestCase):
         self.assertIn('window.__origTitle', out)
         # скрипт із заголовком мусить іти ДО гейта, інакше unlock його не побачить
         self.assertLess(out.index('__origTitle'), out.index('id="authgate"'))
+
+    @staticmethod
+    def _orig_title(out):
+        """Значення `window.__origTitle` з виходу `_inject_gate`: літерал від присвоєння до ПЕРШОГО
+        закриття скрипта (`;</script>`). Літерал `js_literal` — сумісний з JSON (`\\uXXXX`)."""
+        start = out.index('window.__origTitle=') + len('window.__origTitle=')
+        end = out.index(';</script>', start)
+        return json.loads(out[start:end])
+
+    def test_a_title_cannot_break_out_of_the_origtitle_script(self):
+        """Назву сторінки пише дизайнер: `</script>` у ній рвав скрипт, а в тому ж гейті лежить
+        пароль превʼю (той самий клас, що інцидент 04.08.2026) — літерал іде через `js_literal`."""
+        evil = '</script><b>x'
+        out = serve._inject_gate(f'<html><head><title>{evil}</title></head><body>x</body></html>',
+                                 serve.gate_html('t1', '1100'))
+        self.assertNotIn(evil, out)
+        self.assertNotIn('</script><b>', out)
+        self.assertEqual(self._orig_title(out), evil)       # а значення — те саме, що ввели
+        # Скрипт із назвою — рівно один, і він закривається ДО гейта: проривайся `</script>`,
+        # перед гейтом стояло б два закриття.
+        head = out[:out.index('id="authgate"')]
+        self.assertEqual(head.count('</script>'), 1)
+
+    # Значення, що ламали б `<script>` чи JS-літерал: закриття/відкриття скрипта й коментаря, амперсанд
+    # (сутності в `<script>` не декодуються, але `&` у літералі — ще й «чужа» розмітка для парсерів),
+    # роздільники рядків JS U+2028/U+2029 (`ensure_ascii=False` віддає їх СИРИМИ), переводи рядка.
+    HOSTILE = ('</script>', '</SCRIPT >', '<!--', '<!-- <script>', '-->', '<script>alert(1)</script>',
+               'a&b', '&lt;/script&gt;', '&#60;', '\u2028x\u2029', 'a\u2028', '\u2029', 'l1\nl2\r\nl3',
+               'q"uote\\back', "ap'os", '</\u2028script>')
+
+    @staticmethod
+    def _assert_inert_literal(case, lit):
+        """Літерал годиться всередині `<script>`: жодного сирого `<`, `>`, `&`, U+2028/2029, переводів
+        рядка, тож ні `</script>`, ні `<!--`, ні `-->` не можуть ні закрити скрипт, ні відкрити коментар."""
+        for ch, name in (('<', '<'), ('>', '>'), ('&', '&'), ('\u2028', 'U+2028'), ('\u2029', 'U+2029'),
+                         ('\n', 'LF'), ('\r', 'CR')):
+            case.assertNotIn(ch, lit, f'сирий {name} у літералі')
+        low = lit.lower()
+        case.assertNotIn('</script', low)
+        case.assertNotIn('<!--', lit)
+        case.assertNotIn('-->', lit)
+
+    def test_js_literal_is_inert_inside_a_script_block(self):
+        for value in self.HOSTILE:
+            with self.subTest(value=value):
+                lit = serve.js_literal(value)
+                self._assert_inert_literal(self, lit)
+                self.assertEqual(json.loads(lit), value)          # а значення — те саме
+
+    def test_the_origtitle_literal_is_inert_for_any_title(self):
+        """Те саме по ДОРОЗІ `_inject_gate`: заголовок сторінки (сутності розекрановуються) → область між
+        `window.__origTitle=` і `;</script>` не містить сирого нічого небезпечного."""
+        for src in ('&lt;/script&gt;', '&lt;!--', 'a &amp; b', 'x\u2028y', 'x\u2029y', '</script>', '<!-- t', 'l1\nl2'):
+            with self.subTest(title=src):
+                out = serve._inject_gate(f'<html><head><title>{src}</title></head><body>x</body></html>',
+                                         serve.gate_html('t1', '1100'))
+                start = out.index('window.__origTitle=') + len('window.__origTitle=')
+                lit = out[start:out.index(';</script>', start)]
+                self._assert_inert_literal(self, lit)
+
+    def test_an_escaped_title_is_unescaped_for_the_tab(self):
+        """У `<title>` сутності — текст (`R&amp;D` у вкладці = «R&D»); `document.title` — тоже текст,
+        тож після входу вкладка мусить показати «R&D», а не буквальні `&amp;`."""
+        for raw, shown in (('R&amp;D', 'R&D'),
+                           ('Тарифи &laquo;Про&raquo; &#39;x&#39;', "Тарифи «Про» 'x'"),
+                           ('A &lt;/script&gt; &amp; B', 'A </script> & B'),
+                           ('&amp;amp;', '&amp;'),                 # одна розекранівка, не дві
+                           ('без сутностей', 'без сутностей')):
+            with self.subTest(raw=raw):
+                out = serve._inject_gate(f'<html><head><title>{raw}</title></head><body>x</body></html>',
+                                         serve.gate_html('t1', '1100'))
+                self.assertEqual(self._orig_title(out), shown)
+                self.assertNotIn('</script> &', out)
+                self.assertIn('<title>Перегляд макета</title>', out)
 
     def test_page_without_title_still_gated(self):
         out = serve._inject_gate('<html><body>x</body></html>',
@@ -6042,6 +6419,29 @@ def current_reads(source):
     return sorted(hits)
 
 
+def spaces_current_uses(source):
+    """Усі звернення до `current` реєстру ПРОСТОРІВ через модуль `spaces`: `spaces.current_id` і
+    `spaces.space_current_task` (виклик ЧИ посилання — `cur = spaces.current_id` теж звернення).
+    Список `(рядок, найближча функція, імʼя)`. Дивиться в AST: `current_reads` ловить лише ключ
+    `'current'`, а ці дві функції віддають його, не називаючи, — і обробник, що кличе їх повз
+    `task_for`, б'є в поточну задачу тим самим способом, що й `cfg['current']`."""
+    import ast
+    hits = []
+
+    def visit(node, func):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node.name
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == 'spaces'
+                and node.attr in ('current_id', 'space_current_task')):
+            hits.append((node.lineno, func, node.attr))
+        for kid in ast.iter_child_nodes(node):
+            visit(kid, func)
+
+    visit(ast.parse(source), None)
+    return sorted(hits)
+
+
 class CurrentTaskReadGuard(unittest.TestCase):
     """`tasks.json` → `current` — ОДИН на машину, і паралельна сесія його
     перемикає. Тому читати його напряму не можна ніде, крім реєстру: задачу запиту
@@ -6097,6 +6497,47 @@ class CurrentTaskReadGuard(unittest.TestCase):
         got = {(func, line) for line, func in self._violations(src)}
         self.assertEqual(got, {('_publish', 6), ('_other', 8), ('_third', 10),
                                ('_fourth', 12), ('do_GET', 20), ('do_GET', 22)})
+
+    #: Функції serve.py, яким дозволено питати `spaces` про `current` реєстру, і ЩО саме. Кожна — не
+    #: обробник даних задачі: `_pin_current_space` фіксує простір запиту на вході, `task_anywhere`
+    #: — CLI-шлях без запиту, `_space_switch` віддає поточну задачу щойно перемкненого простору.
+    SPACES_CURRENT_ALLOWED = {('_pin_current_space', 'current_id'), ('task_anywhere', 'current_id'),
+                              ('_space_switch', 'space_current_task')}
+
+    def _spaces_violations(self, source):
+        return [(line, func, name) for line, func, name in spaces_current_uses(source)
+                if (func, name) not in self.SPACES_CURRENT_ALLOWED]
+
+    def test_serve_asks_spaces_for_the_current_only_in_the_allowed_functions(self):
+        with open(serve.__file__, encoding='utf-8') as f:
+            bad = self._spaces_violations(f.read())
+        self.assertEqual(
+            bad, [],
+            'звернення до `spaces.current_id`/`spaces.space_current_task` поза дозволеними функціями '
+            f'(рядок, функція, імʼя): {bad}. Поточну задачу запиту дає `task_for` / '
+            '`self._current_task()`, поточний простір запиту — `spaces.active_space()`.')
+
+    def test_the_spaces_scan_sees_exactly_the_allowed_calls(self):
+        """Свідок проти вакууму: сканер знаходить кожне дозволене звернення й нічого зайвого."""
+        with open(serve.__file__, encoding='utf-8') as f:
+            hits = spaces_current_uses(f.read())
+        self.assertEqual({(func, name) for _, func, name in hits}, self.SPACES_CURRENT_ALLOWED)
+
+    def test_the_spaces_scan_flags_a_stray_call_or_reference(self):
+        src = (
+            "def _pin_current_space(self):\n    spaces.current_id()\n"
+            "def task_anywhere():\n    spaces.current_id()\n"
+            "class H:\n"
+            "    def _space_switch(self):\n        return spaces.space_current_task('x')\n"
+            "    def _publish(self):\n        return spaces.current_id()\n"
+            "    def _other(self):\n        f = spaces.space_current_task\n        return f('x')\n"
+            "    def _swapped(self):\n        return spaces.space_current_task('x')\n"
+            "    def _pin_current_space(self):\n        return spaces.space_current_task('x')\n"
+            "    def _fine(self):\n        return spaces.active_space() or spaces.layer_on() or other.current_id()\n")
+        got = {(func, name) for _, func, name in self._spaces_violations(src)}
+        self.assertEqual(got, {('_publish', 'current_id'), ('_other', 'space_current_task'),
+                               ('_swapped', 'space_current_task'),
+                               ('_pin_current_space', 'space_current_task')})
 
 
 if __name__ == '__main__':

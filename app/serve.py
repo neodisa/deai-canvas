@@ -5,6 +5,8 @@
 Ядро: итерации (замороженные копии), публикация на Vercel со свитчером,
 comment-layer с каналами: internal (локально, для Claude) / external (Vercel).
 """
+import contextlib
+import functools
 import json
 import os
 import re
@@ -15,10 +17,12 @@ import sys
 import threading
 import time
 import urllib.request
+from html import escape as html_escape, unescape as html_unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
+import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 from task_state import task_state  # легкий стан задачі: спільний із пушером реєстру
 # Розбір подій прогресу зʼємки. Формат рядка — контракт МІЖ процесами:
 # пише bin/shots-progress.mjs, читає цей модуль (звірку маркера тримає
@@ -209,9 +213,29 @@ def ensure_task_gitignore(task_dir):
     return missing
 
 
-def git_autocommit(task_dir, msg):
+def _outbound_ok():
+    """`spaces.integrations_on()` для best-effort викликів, що не мають права кидати (пуш автокоміту,
+    реєстр, овервʼю): реєстр просторів, що зіпсувався посеред запиту
+    (`SpacesError`), — «назовні не ходимо». Те, що ВЖЕ зроблено (коміт, нова задача), через це
+    не стає 503, а кожен виклик назовні, якому потрібна відповідь, питає `spaces` напряму
+    (`require_integrations`) і дає центральний 503."""
+    try:
+        return spaces.integrations_on()
+    except spaces.SpacesError:
+        return False
+
+
+def git_autocommit(task_dir, msg, push=None):
     """Автосохранение папки задачи в git — скриптом, без участия AI.
-    init при первом вызове; push best-effort, если настроен remote (GitLab)."""
+    init при первом вызове; push best-effort, если настроен remote (GitLab).
+
+    Простір без інтеграцій (`spaces.integrations_on()`) коміт робить, а `git push` — НІ: його
+    папка може мати `origin` (клон чужого репо, рука дизайнера), але зовнішніх викликів із такого
+    простору не буває. `push` — явне рішення викликача (`True`/`False`); `None` — за простором.
+
+    ⚠️ Питаємо простір ЛІНИВО й лише коли `origin` є: автокоміт без `origin` (кожна нова задача,
+    кожна правка сторінки) не читає реєстр просторів. Реєстр, що не читається, — «не пушимо»
+    (`_outbound_ok`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш."""
     try:
         if not os.path.isdir(os.path.join(task_dir, '.git')):
             subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
@@ -227,9 +251,12 @@ def git_autocommit(task_dir, msg):
         rem = subprocess.run(['git', 'remote'], cwd=task_dir,
                              capture_output=True, text=True, timeout=10)
         if rem.returncode == 0 and rem.stdout.strip():
-            p = subprocess.run(['git', 'push', '-q'], cwd=task_dir,
-                               capture_output=True, text=True, timeout=60)
-            pushed = p.returncode == 0
+            if push is None:
+                push = _outbound_ok()
+            if push:
+                p = subprocess.run(['git', 'push', '-q'], cwd=task_dir,
+                                   capture_output=True, text=True, timeout=60)
+                pushed = p.returncode == 0
         return {'sha': sha, 'pushed': pushed}
     except (OSError, subprocess.SubprocessError):
         return {'sha': None, 'pushed': False}
@@ -312,9 +339,26 @@ def _file_hash(path):
 
 
 def tasks_path():
-    """Шлях до конфігу задач. DC_TASKS_FILE дає тестам (і будь-кому) підмінити
-    його, не торкаючись живого файла.
+    """Файл задач, що діє для ЦЬОГО запиту (потоку). Звідси `load_tasks()`/`save_tasks()`
+    автоматично працюють з файлом простору запиту — у `cfg` нічого не додається, файл лишається
+    байт-у-байт сумісним зі старим.
 
+    Звідки файл (спека 2026-10-13-deai-spaces-design.md, «Звідки старий файл…»):
+
+    | оточення                           | шар просторів | файл                                   |
+    |------------------------------------|---------------|----------------------------------------|
+    | лише `DC_TASKS_FILE` (усі тести)   | ВИМКНЕНО      | `DC_TASKS_FILE`, реєстр не читається   |
+    | `DEAI_HOME` (+ `DC_TASKS_FILE`)    | увімкнено     | файл активного простору; старий файл — |
+    |                                    |               | простір `legacy` (`DC_TASKS_FILE` або  |
+    |                                    |               | `ROOT/tasks.json`)                     |
+    | нічого (робота)                    | увімкнено     | те саме, реєстр у `~/.deai`            |
+
+    Активний простір — той, що фіксує вхід запиту (`_take_task`): простір названої задачі або
+    поточний машини; поза запитом (CLI) — поточний машини. Просторів нема — `NoTask`; але коли
+    старий файл є й не читається (міграція його не взяла), це `SpaceUnavailable(<файл>)`:
+    зіпсований `tasks.json` не сміє виглядати як чиста машина.
+
+    DC_TASKS_FILE дає тестам (і будь-кому) підмінити файл, не торкаючись живого.
     До 03.08.2026 перевизначення не було, і tests/test_serve.py писав фікстуру
     ПОВЕРХ робочого tasks.json. Наслідки: тестові рядки `fixture`/`demo2` поїхали
     в прод-Supabase на командний дашборд, а падіння тесту між setUp і tearDown
@@ -322,13 +366,73 @@ def tasks_path():
 
     ⚠️ Оточення читається на КОЖЕН виклик (не кешується в константу): інакше
     порядок імпорту serve відносно виставлення змінної став би значущим.
+
+    ⚠️ Може мігрувати (писати реєстр, беручи `WRITE_LOCK`): ніколи не кликати під цим локом.
     """
-    return os.environ.get('DC_TASKS_FILE') or os.path.join(ROOT, 'tasks.json')
+    if not spaces.layer_on():
+        return os.environ['DC_TASKS_FILE']
+    try:
+        return spaces.active_tasks_file()
+    except spaces.NoTask:
+        # Просторів нема, але старий файл є й не читається (міграція його не взяла): це не
+        # «чиста машина» — 503 `space-unavailable` з назвою файла замість 404 `no-task`/привітання.
+        raise_if_legacy_unreadable()
+        raise
+
+
+def raise_if_legacy_unreadable(reg=None):
+    """`SpaceUnavailable(<старий файл>)`, коли `spaces.legacy_unreadable(reg)` каже, що старий
+    `tasks.json` є, а простору з нього нема, бо його не прочитати; інакше нічого не робить.
+    Шар вимкнено — завжди нічого (поведінка як до просторів)."""
+    bad = spaces.legacy_unreadable(reg)
+    if bad:
+        raise SpaceUnavailable(bad)
+
+
+def legacy_tasks_path():
+    """Старий файл задач (простір `legacy`) — для інструментів ЛІГА (доктор, `roots.py`,
+    `ops/reseal_gate.py`): вони працюють із ним, у який би простір не дивився запит."""
+    return spaces.legacy_tasks_file()
+
+
+def load_legacy_tasks():
+    """Старий файл як є; нема — `FileNotFoundError`, як `load_tasks` до просторів."""
+    with open(legacy_tasks_path(), encoding='utf-8') as f:
+        return json.load(f)
+
+
+class SpaceUnavailable(OSError, ValueError):
+    """Файл задач простору не прочитати чи він битий (нема, не JSON, не обʼєкт). Одночасно
+    `OSError` і `ValueError` — як `io.UnsupportedOperation`: наявні `except (OSError,
+    ValueError)` у викликачів деградують чесно, а центральний обробник віддає 503
+    `space-unavailable` замість обриву зʼєднання. `path` — файл, який не вдалось прочитати."""
+
+    def __init__(self, path):
+        super().__init__(f'tasks file of the space is unreadable: {path}')
+        self.path = path
 
 
 def load_tasks():
-    with open(tasks_path(), encoding='utf-8') as f:
-        return json.load(f)
+    p = tasks_path()
+    if not spaces.layer_on():
+        with open(p, encoding='utf-8') as f:     # шар вимкнено — рівно як було
+            return json.load(f)
+    try:
+        with open(p, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError, RecursionError) as e:
+        # RecursionError — глибоко вкладений JSON: не ValueError, і зʼєднання рвалось би без відповіді.
+        raise SpaceUnavailable(p) from e
+    if not spaces.valid_tasks_cfg(cfg):
+        # `[]`, `5`, `{"tasks": []}`, `{"tasks": {"x": 5}}`: кожен викликач далі чекає обʼєкт задач з
+        # обʼєктів і падав би `AttributeError`-ом посеред відповіді (зʼєднання рветься без слова).
+        raise SpaceUnavailable(p)
+    return cfg
+
+
+# `NoTask`/`AmbiguousTask` — з `spaces`, щоб серверний код і CLI ловили одні й ті самі типи.
+NoTask = spaces.NoTask
+AmbiguousTask = spaces.AmbiguousTask
 
 
 class UnknownTask(LookupError):
@@ -356,10 +460,16 @@ def task_for(cfg, tid=None):
     (лише реєстр) валив обробник `KeyError`-ом і рвав зʼєднання, а запис із `dir`,
     якої нема на диску, пропускав далі — і `POST /t/gone/api/iteration` САМ
     створював дерево, а CLI казали «нова/порожня задача». Поточна (`tid is None`)
-    — як було: це «задача, в якій працює машина», і її стан не перевіряємо."""
+    — як було: це «задача, в якій працює машина», і її стан не перевіряємо.
+
+    Поточної нема (новий порожній простір, `current` відсутній / `null` / застарілий) —
+    `NoTask`, а не `KeyError`: центральний обробник відповідає 404 `no-task`, CLI — повідомленням.
+    `NoTask.space` — простір запиту (шар вимкнено — `None`: простору там нема)."""
     if tid is None:
-        tid = cfg['current']
-        return tid, cfg['tasks'][tid]
+        cur, tasks = cfg.get('current'), cfg.get('tasks')
+        if not isinstance(tasks, dict) or not isinstance(cur, str) or cur not in tasks:
+            raise NoTask((spaces.request_space_id() if spaces.layer_on() else None) or None)
+        return cur, tasks[cur]
     if not isinstance(tid, str) or tid not in cfg['tasks']:
         raise UnknownTask(tid)
     task = cfg['tasks'][tid]
@@ -369,10 +479,38 @@ def task_for(cfg, tid=None):
     return tid, task
 
 
+def task_anywhere(tid=None, load=None):
+    """(id, задача) для CLI (`bin/state.py`, `bin/inbox.py`): названа `tid` — у БУДЬ-ЯКОМУ
+    просторі, `None` — поточна задача поточного простору. Простір фіксується на потоці
+    (`spaces.set_request_space`): далі `load_tasks()`/`save_tasks()` та інтеграції
+    працюють саме з ним. Хто викликає, мусить у `finally` зробити
+    `spaces.clear_request_space()` (CLI-обгортки `main()` так і роблять).
+
+    Невідома задача — `UnknownTask`; дубль в кількох просторах — `AmbiguousTask`; просторів чи
+    поточної задачі нема — `NoTask`; файл простору не прочитати — `SpaceUnavailable` (і старий
+    файл, з якого простір не мігровано, бо він не читається, — теж, замість «невідомої»/«просторів
+    нема»); реєстр — `spaces.SpacesError`.
+
+    `load` — чим читати конфіг (типово `load_tasks`): CLI передає СВІЙ імпорт `load_tasks`, і
+    тести-пастки (`test_inbox.Help` патчить `inbox.load_tasks`, щоб довести «до розбору
+    аргументів задач не читаємо») лишаються здатними впасти."""
+    if tid is not None:
+        sp = spaces.find_task(tid)
+        if sp is None:
+            raise_if_legacy_unreadable()    # задача могла лежати в старому файлі, який не читається
+            raise UnknownTask(tid)
+        spaces.set_request_space(sp['id'])
+    else:
+        spaces.set_request_space(spaces.current_id() or '')
+    return task_for((load or load_tasks)(), tid)
+
+
 def save_tasks(cfg):
     # WRITE_LOCK склеює копію в .bak і сам запис в одну дію — інакше два запити
     # знімають копію з ОДНІЄЇ версії, і .bak відстає на два кроки. Межі лока
     # (він не рятує від read-modify-write) розписані в atomic_io.
+    # ⚠️ `tasks_path()` — ПОЗА локом: перша ж його відповідь може мігрувати реєстр, а міграція
+    # сама бере `WRITE_LOCK` (він не реентерабельний) — під ним це був би дедлок.
     p = tasks_path()
     with WRITE_LOCK:
         shutil.copy2(p, p + '.bak')   # про людську помилку, не про краш — лишаємо
@@ -1387,7 +1525,72 @@ def tasks_by_recent(cfg):
     колишньому порядку (задачі, заведені до мітки, не мусять перемішатись).
     Сортування стабільне, тож рівні мітки теж зберігають порядок файла."""
     items = list(cfg.get('tasks', {}).items())
-    return sorted(items, key=lambda kv: kv[1].get('opened') or '', reverse=True)
+    return sorted(items, key=lambda kv: _opened_mark(kv[1]), reverse=True)
+
+
+def _opened_mark(task):
+    """Мітка «відкрито» для сортування: лише рядок (ISO, її ставить `mark_opened`). `opened`
+    правлять і руками — число, список, `true`, `null`: порівняння `int` із `str` — `TypeError`, і
+    ним падав `/api/tasks` (зʼєднання рвалось без відповіді). Не-рядок = «без мітки» (`''`):
+    у хвіст, у порядку файла, як задачі, заведені до мітки."""
+    opened = task.get('opened')
+    return opened if isinstance(opened, str) else ''
+
+
+#: Текст відмови `task-new` (409 `no-integrations-space`): куди дивитись, коли простору ЛІГА нема.
+NO_INTEGRATIONS_SPACE_MSG = ('простір ЛІГА береться з design-canvas/tasks.json '
+                             '(копія tasks.example.json), а не з «Новий простір»')
+
+
+def _liga_flow(payload):
+    """Тіло `task-new` несе ознаки потоку ЛІГА (Jira → профіль напрямку → GitLab-бутстрап):
+    `jira` — непорожній (не лише пробіли) рядок, `profile` — один із `PROFILE_REPOS`, `gitlab`
+    непорожній. Не-рядок у `jira`/`profile` ознакою не є (так само як порожнє й `null`)."""
+    jira, profile = payload.get('jira'), payload.get('profile')
+    return bool((isinstance(jira, str) and jira.strip())
+                or (isinstance(profile, str) and profile in PROFILE_REPOS)
+                or payload.get('gitlab'))
+
+
+def _space_id(sp):
+    """Id простору для відповідей API; `None`, коли простору нема: шар вимкнено (неявний
+    простір — не простір для UI, див. `spaces.describe`) чи просторів нема взагалі."""
+    return sp['id'] if sp is not None and spaces.layer_on() else None
+
+
+def _task_rows(cfg):
+    """Рядки `GET /api/tasks` одного файла задач (перемикач задач).
+
+    `missing` — теки задачі нема на ЦІЙ машині (реєстр їде в git, теки ні): перемикач не
+    пускає в таку задачу й каже причину наперед. Лише `isdir`, без читання вмісту —
+    відповідь лишається дешевою."""
+    return [{'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
+             'profile': v.get('profile'),
+             'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir']))}
+            for k, v in tasks_by_recent(cfg)]
+
+
+def _all_space_task_rows():
+    """Рядки `GET /api/tasks?all=1`: задачі ВСІХ просторів реєстру, кожна з `space` (id
+    простору; `None`, коли шар вимкнено). Порядок — реєстру, всередині простору — як у
+    перемикачі. Простір, файл задач якого не прочитати чи не зібрати в рядки, пропускається:
+    список решти просторів важливіший за один битий. Id, що є у двох просторах, видно двічі —
+    це й є дубль, який треба побачити.
+
+    Простір запиту переключається `request_space` і ПОВЕРТАЄТЬСЯ: хто кличе, лишається у
+    своєму просторі (`with` повертає попереднє значення навіть після винятку).
+    Реєстр читається `read_registry()`: вхід запиту вже мігрував його (`_pin_current_space`)."""
+    rows = []
+    for sp in spaces.read_registry()['spaces']:
+        try:
+            with spaces.request_space(sp['id']):
+                cfg = load_tasks()
+            rows += [{**r, 'space': _space_id(sp)} for r in _task_rows(cfg)]
+        except (SpaceUnavailable, AttributeError, TypeError):
+            # Файл, який `load_tasks` пропустив, але рядки з нього не збираються (ручна правка:
+            # `opened` різних типів ламає сортування, `TypeError`), — такий самий битий простір.
+            continue
+    return rows
 
 
 # ---------- Екран «Задачі»: мої + команда (батч 1.52) ----------
@@ -1452,7 +1655,18 @@ def team_snapshot(now=None, refresh=False):
     (щоб повтор ішов за `TEAM_ERR_TTL`); рядки й `rowsAt` лишаються з останнього
     успіху, а екран за `rows_at` пише «дані на <час>».
     `now` — шов для тестів (епоха, с); `0 <= now - at` стереже годинник, що
-    стрибнув назад: інакше застарілий кеш жив би, поки час не наздожене."""
+    стрибнув назад: інакше застарілий кеш жив би, поки час не наздожене.
+
+    Простір без інтеграцій: команди нема, запиту нема — рання відповідь тієї ж форми, що в гілки
+    ізоляції `_team_fetch` (`[]` + пояснення), БЕЗ кешу: кеш спільний на процес, і відмова
+    одного простору не мусить стати «останнім відомим» станом іншого."""
+    try:
+        on = spaces.integrations_on()
+    except spaces.SpacesError as e:
+        # Не «простір без інтеграцій», а збій реєстру: причина називається, запиту так само нема.
+        return [], f'реєстр просторів не читається ({e.code})', None
+    if not on:
+        return [], 'вимкнено в просторі без інтеграцій', None
     now = time.time() if now is None else now
     with _TEAM_LOCK:
         c = _TEAM_CACHE
@@ -1592,14 +1806,32 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
                      'rowsAt': rows_at}}
 
 
-def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None):
+class TaskRefused(ValueError):
+    """`task_new` відмовила на вході. Підклас `ValueError` із ТИМ САМИМ текстом, що був у голого
+    `ValueError`; код — атрибут (`/api/task-new` відображає за `.code`, а не за текстом)."""
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=None):
     """Бутстрап задачи: папка в design-work (или clone из GitLab) + запись в tasks.json.
-    Идемпотентность обеспечивает вызывающий (проверка на существование)."""
-    if not NAME_RE.match(tid):
-        raise ValueError('bad task id')
+    Идемпотентность обеспечивает вызывающий (проверка на существование).
+
+    `root` — теку, у якій лягає тека задачі, задає ВИКЛИКАЧ (простір без інтеграцій: `path`
+    простору); без нього — `work_root(cfg, profile)`, як було. `profile` може бути `None`
+    (простір без інтеграцій: ніякого United-ДС в інспекторі й ніякого репо профілю).
+
+    `fullmatch`, а не `match`: `$` в `NAME_RE` пускав id із хвостовим переводом рядка, і
+    тека задачі діставала його в назві. Не-рядок (`5`, `null`) — теж «поганий id», а не
+    TypeError, що рве зʼєднання.
+
+    `title` — ввід людини (форма «Нова задача»): у стартовий `index.html` він лягає ЕКРАНОВАНИМ."""
+    if not isinstance(tid, str) or not NAME_RE.fullmatch(tid):
+        raise TaskRefused('bad-task-id', 'bad task id')
     if tid in cfg.get('tasks', {}):
-        raise ValueError('task already exists')
-    tdir = os.path.join(work_root(cfg, profile), tid)
+        raise TaskRefused('task-exists', 'task already exists')
+    tdir = os.path.join(root or work_root(cfg, profile), tid)
     it1 = os.path.join(tdir, 'iterations', 'it1')   # первая итерация = стартовый макет
     # gitlab-маппинг по умолчанию — репо направления (см. PROFILE_REPOS)
     if gitlab is None and profile in PROFILE_REPOS:
@@ -1607,6 +1839,11 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None):
     cloned = False
     cloned_state = {}
     if gitlab:
+        # ⛔ ПЕРЕД `try` нижче: `IntegrationsOff` — підклас `OSError`, а `except OSError: pass`
+        # там читає це як «дзеркало недоступне → порожній стартовий макет» і мовчки записав би
+        # в простір без інтеграцій GitLab-маппінг. Маршрут `task-new` такий `gitlab` відхиляє
+        # раніше (400); тут — другий замок для будь-якого іншого викликача.
+        spaces.require_integrations()
         gl = gitlab_cfg(cfg, {'gitlab': gitlab})
         try:  # если макет уже есть в репо — берём его в it1, не начинаем с нуля
             md = ensure_mirror(gl, fetch=True)
@@ -1632,9 +1869,10 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None):
     if not cloned:
         os.makedirs(it1, exist_ok=True)
         with open(os.path.join(it1, 'index.html'), 'w', encoding='utf-8') as f:
+            shown = html_escape(str(title or tid))
             f.write('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
-                    f'<title>{title or tid}</title></head><body>'
-                    f'<h1>{title or tid}</h1>'
+                    f'<title>{shown}</title></head><body>'
+                    f'<h1>{shown}</h1>'
                     '<p>Нова ітерація — почни проєктувати.</p></body></html>')
     # meta с первой итерацией
     #
@@ -1701,7 +1939,12 @@ def _registry_push(tid):
     `registry` на GitLab. Кожен прогін сюїти повертав `demo2` у реєстр команди —
     видалив о 16:05, о 16:11 воно було знову. `DC_NO_OVERVIEW` цей шлях не покривав:
     він глушить лише синк Supabase (`_overview_sync`), а тут окремий, git-овий.
+
+    Простір без інтеграцій (`spaces.integrations_on()`) у спільний реєстр команди не пише НІКОЛИ:
+    його задачі — особисті, і «зареєструвати» їх колегам означало б вивести їх з простору.
     """
+    if not _outbound_ok():
+        return False
     if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
         return False
     try:
@@ -1716,8 +1959,19 @@ def _registry_push(tid):
         return False
 
 
+def integrations_off_body(what):
+    """Тіло 409 маршруту, що ходить назовні, коли простір запиту БЕЗ інтеграцій. Модульна
+    функція, а не метод `Handler`: зовнішні заглушки обробника (`boss_autopublish.py`) мають
+    лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод їх зламав би."""
+    return {'ok': False, 'code': 'integrations-off', 'error': what}
+
+
 def supabase_pins(project):
-    """Пины comment-layer для projectId. Бросает OSError при недоступности."""
+    """Пины comment-layer для projectId. Бросает OSError при недоступности.
+
+    Простір без інтеграцій — `spaces.IntegrationsOff` (це `OSError`: наявні `except OSError`
+    навколо цього виклику деградують чесно; маршрут, якому треба 409, ловить його раніше)."""
+    spaces.require_integrations()
     url = (f'{SUPABASE_URL}/rest/v1/comments'
            f'?select=id,text,status,author,ts,meta,born_v,fp,html_snapshot,resolved_v,resolve_reason'
            f'&project_id=eq.{quote(project, safe="")}')
@@ -1752,6 +2006,10 @@ def teams_rpc(name, body):
             atomic_write_json(fake, db)
             return body['p_muted']
         return [{'project_id': k, **v} for k, v in sorted(db.items())]
+    # Після шва `DC_TEAMS_FAKE` (він пише лише у свій локальний файл), але ДО будь-якої мережі.
+    # Простір без інтеграцій: `IntegrationsOff` (`OSError`) — викликач, що ловить `OSError`,
+    # деградує чесно, маршрут тиші Teams відповідає 409 ще до цього виклику.
+    spaces.require_integrations()
     if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
         raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
     req = urllib.request.Request(
@@ -2130,7 +2388,11 @@ def _inject_gate(html, gate):
     if m:
         # Скрипт СТАВИМО ПЕРЕД гейтом: його IIFE може розблокувати сторінку
         # одразу (sessionStorage) і мусить уже бачити __origTitle.
-        gate = (f'<script>window.__origTitle={json.dumps(m.group(1))};</script>'
+        # ⛔ Назву пише дизайнер: літерал — лише через `js_literal` (голий `json.dumps` не чіпає
+        # `</`, і `</script>` у `<title>` проривав скрипт — клас інциденту 04.08.2026). І значення
+        # РОЗЕКРАНОВУЄМО: у `<title>` сутності — розмітка (`R&amp;D`), а `document.title` — вже
+        # текст, тож без `unescape` вкладка після входу показувала б буквальне `R&amp;D`.
+        gate = (f'<script>window.__origTitle={js_literal(html_unescape(m.group(1)))};</script>'
                 + gate)
         html = html[:m.start()] + '<title>Перегляд макета</title>' + html[m.end():]
     return _insert_before_body(html, gate)
@@ -2980,6 +3242,26 @@ def _shoot_alive(entry):
     return proc is None or proc.poll() is None
 
 
+def _in_space(fn):
+    """Загорнути тіло фонового потоку чи таймера в простір запиту, що його ЗАПУСТИВ.
+
+    Простір запиту живе в `threading.local`, а потік, який запускає сервер (читач виводу
+    зʼємки, сторож, таймер вбивства), його НЕ успадковує: без явного простору він жив би з
+    УВІМКНЕНИМИ інтеграціями (`spaces.integrations_on()` без простору → так) і з файлом задач
+    ПОТОЧНОГО простору машини, а не того, чиїм запитом його запущено. Простір береться
+    тут, у потоці запиту, ДО старту; кожен `threading.Thread`/`threading.Timer` у цьому файлі
+    мусить отримати ціль через цю функцію (стереже `tests/test_spaces_serve.py`)."""
+    sid = spaces.request_space_id()
+
+    # `wraps` лишає цілі її імʼя/`__qualname__`: за ним тести (і відлагодження) впізнають, ЯКИЙ
+    # саме потік це — без нього всі вони звались би `_in_space.<locals>.run`.
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with spaces.request_space(sid):
+            return fn(*args, **kwargs)
+    return run
+
+
 def _arm_hard_kill(entry):
     """Озброїти SIGKILL через HARD_KILL_S — РІВНО раз на зʼємку.
 
@@ -3001,7 +3283,7 @@ def _arm_hard_kill(entry):
     proc = entry.get('proc')
     if proc is None or entry.get('hard') is not None:
         return
-    timer = threading.Timer(HARD_KILL_S, lambda: _killpg(proc, signal.SIGKILL))
+    timer = threading.Timer(HARD_KILL_S, _in_space(lambda: _killpg(proc, signal.SIGKILL)))
     timer.daemon = True
     entry['hard'] = timer
     timer.start()
@@ -3020,6 +3302,17 @@ def _consume_stderr_line(line, progress, tail):
         tail.append(line)
         return
     progress.apply(ev)
+
+
+def _guarded_request(method):
+    """Декоратор `do_GET`/`do_POST`: тіло методу виконується під `Handler._guarded` (центральні
+    відповіді `no-task` / `space-unavailable` / `spaces-*` / `ambiguous-task`). Саме декоратор, а
+    не винесення тіла в окремий метод: код маршрутів лишається в `do_POST`/`do_GET`, де його
+    шукають і люди, і тести (`inspect.getsource` розгортає `__wrapped__`)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        return self._guarded(lambda: method(self, *args, **kwargs))
+    return wrapper
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -3068,6 +3361,62 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    #: Відповідь цього запиту вже почата (рядок статусу пішов). Виставляє `send_response_only`;
+    #: скидає `_guarded` на вході кожного запиту.
+    _resp_started = False
+    #: Тіло POST уже вичитане. Виставляє `do_POST` одразу після `rfile.read`; без нього
+    #: центральна відмова ДО читання тіла лишила б його в буфері (RST замість відповіді).
+    _body_read = False
+
+    def send_response_only(self, code, message=None):
+        # Сигнал «відповідь почата» саме тут, а не з `_headers_buffer`: після `flush_headers`
+        # буфер порожній, тож «порожній» не значить «нічого не надіслано» — а друга відповідь
+        # поверх першої зіпсувала б потік байтів. Через `send_response_only` проходить і
+        # `send_response`, і `send_error`.
+        super().send_response_only(code, message)
+        self._resp_started = True
+
+    def _space_error(self, status, code, error, **extra):
+        """Центральна відмова простору: JSON із кодом замість обірваного зʼєднання.
+        Відповідь уже почата — другої не шлемо, зʼєднання закриваємо. До читання тіла POST —
+        тіло вичитуємо (див. `_body_read`)."""
+        if self._resp_started:
+            self.close_connection = True
+            return
+        if self.command == 'POST' and not self._body_read:
+            self._drain_body()
+        self._send_json({'ok': False, 'code': code, **extra, 'error': error}, status=status)
+
+    def _guarded(self, run):
+        """Обгортка `do_GET`/`do_POST`: чотири виняткові стани простору — одні й ті самі
+        відповіді для КОЖНОГО маршруту, а не кожен обробник зі своїм `try`:
+
+        | виняток                          | відповідь                                      |
+        |----------------------------------|------------------------------------------------|
+        | `NoTask` (просторів чи поточної задачі нема) | 404 `no-task` + `space` (id чи `null`) |
+        | `SpaceUnavailable` (файл простору битий/нема) | 503 `space-unavailable` + `path`   |
+        | `SpacesError` (реєстр не прочитати/не записати) | 503 `spaces-unreadable` / `spaces-unwritable` + `path` |
+        | `AmbiguousTask` (id у двох просторах) | 409 `ambiguous-task`                        |
+
+        `finally` скидає простір запиту — захист для keep-alive (потік обробника живе довше за
+        запит). Мутаційно він не доводиться: `_take_task` і так скидає простір першим рядком."""
+        self._resp_started = False
+        self._body_read = False
+        try:
+            return run()
+        except spaces.NoTask as e:
+            self._space_error(404, 'no-task', 'no task in this space', space=e.space)
+        except SpaceUnavailable as e:
+            self._space_error(503, 'space-unavailable', str(e), path=e.path)
+        except spaces.SpacesError as e:
+            self._space_error(503, e.code, str(e), path=e.path)
+        except spaces.AmbiguousTask as e:
+            tid = e.args[0] if e.args else ''
+            self._space_error(409, 'ambiguous-task',
+                              f'task {tid!r} exists in several spaces — rename one of them')
+        finally:
+            spaces.clear_request_space()
 
     # Код відмови дерева → HTTP-статус; усе інше — 400. `stale` — 409 (панель
     # читає заново й повторює), `busy` — 503 (чужий писар тримає лок: повтор
@@ -3165,26 +3514,52 @@ class Handler(SimpleHTTPRequestHandler):
     #: префікс і лежить.
     _TASK_PREFIX = re.compile(r'^/t/([^/?#]+)(/.*)$')
 
-    #: Маршрути РЕЄСТРУ задач: діють на машину (`current`, список задач), а не на
-    #: дані якоїсь задачі. Заголовок `X-Canvas-Task` тут не береться й не
-    #: перевіряється: `task-new` із заголовком на ЩЕ НЕ зареєстрований id давав
+    #: Маршрути РЕЄСТРУ (задач і просторів): діють на машину (`current`, список задач,
+    #: список просторів), а не на дані якоїсь задачі. Заголовок `X-Canvas-Task` тут не
+    #: береться й не перевіряється: `task-new` із заголовком на ЩЕ НЕ зареєстрований id давав
     #: «невідома задача», хоча саме вона й створюється; префіксна форма
-    #: (`/t/x/api/task-new`) безглузда й відхиляється.
-    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch')
+    #: (`/t/x/api/task-new`) безглузда й відхиляється. Те саме стосується `/api/space*`.
+    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/spaces',
+                        '/api/space-peek', '/api/space-new', '/api/space-update',
+                        '/api/space-switch')
+
+    def _pin_current_space(self):
+        """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
+        його, навіть коли хтось перемкне поточний посеред обробки (друге вікно канваса, агент).
+
+        Реєстр не прочитати чи не записати (міграція): API-запит НЕ виконується — `SpacesError`
+        летить до центрального обробника (503). Без зафіксованого простору `integrations_on()`
+        каже «так», тож обробник, що дійшов би до мережі, ходив би назовні при битому реєстрі.
+        Єдиний виняток — статика UI (`/app/*` та все, що не з `HANDLED_PREFIXES`): вона не читає
+        задач, і мусить віддатись, щоб UI показав смугу помилки; простір лишається
+        незафіксованим, а перший же `load_tasks()` (якщо він колись буде) підніме ту саму помилку."""
+        try:
+            spaces.set_request_space(spaces.current_id() or '')
+        except spaces.SpacesError:
+            if self.path.startswith(HANDLED_PREFIXES) and not self.path.startswith('/app'):
+                raise
 
     def _take_task(self):
         """Вхід запиту: зняти з `self.path` префікс `/t/<id>/`, прочитати
-        `X-Canvas-Task`, перевірити. False — відповідь (404 JSON із назвою)
-        уже надіслано, далі обробляти не треба.
+        `X-Canvas-Task`, перевірити, ЗАФІКСУВАТИ ПРОСТІР запиту. False — відповідь (404 JSON
+        із назвою) уже надіслано, далі обробляти не треба.
 
         Префікс сильніший за заголовок: він у самому URL і видний у логах.
         Невідома задача — 404, а НЕ мовчазний відкат на поточну (див. `task_for`);
         так само задача, якої на цій машині нема (є в реєстрі, теки нема).
         Порожній заголовок — 400: «назва є, але порожня» не те саме, що «назви
         нема», а мовчки читати його як «нема» означало б знову бити в поточну.
+
+        Простір запиту (`spaces`, `threading.local`): названа задача — простір, де вона є
+        (`find_task`; дубль у двох просторах — `AmbiguousTask`, а помилка реєстру —
+        `SpacesError` летять до центрального обробника, див. `_guarded`); не названа — поточний
+        простір машини на вході (`_pin_current_space`).
         Лише `do_GET` і `do_POST` (див. `Routed`); `do_HEAD` від
         `SimpleHTTPRequestHandler` до `_current_task` не доходить."""
         self._task_override = None
+        # ПЕРШИЙ рядок: обробник живе, поки живе keep-alive зʼєднання, і той самий потік
+        # веде кілька запитів поспіль — простір попереднього не сміє прилипнути до цього.
+        spaces.clear_request_space()
         m = self._TASK_PREFIX.match(self.path)
         if m:
             tid = unquote(m.group(1))
@@ -3201,20 +3576,31 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path.split('?')[0] in self._REGISTRY_ROUTES:
                 self._drain_body()
                 self._send_json({'ok': False, 'error': 'реєстр задач не привʼязаний до '
-                                 'задачі: звертайся до /api/task-new і /api/task-switch '
-                                 'без префікса /t/<id>/'}, status=400)
+                                 'задачі: звертайся до /api/task-new, /api/task-switch і '
+                                 '/api/space* без префікса /t/<id>/'}, status=400)
                 return False
         else:
             if self.path.split('?')[0] in self._REGISTRY_ROUTES:
+                self._pin_current_space()
                 return True          # заголовок тут не діє (див. `_REGISTRY_ROUTES`)
             raw = self.headers.get('X-Canvas-Task')
             if raw is None:
+                self._pin_current_space()
                 return True
             tid = raw.strip()
             if not tid:
                 self._drain_body()
                 self._send_json({'ok': False, 'error': 'empty X-Canvas-Task'}, status=400)
                 return False
+        sp = spaces.find_task(tid)
+        if sp is None:
+            # Названа задача могла лежати в старому файлі, який не читається (простору з нього
+            # нема): «невідома» збрехало б, тож 503 з назвою файла (центральний обробник).
+            raise_if_legacy_unreadable()
+            self._drain_body()
+            self._send_json({'ok': False, 'error': f'unknown task: {tid}'}, status=404)
+            return False
+        spaces.set_request_space(sp['id'])
         try:
             task_for(load_tasks(), tid)
         except TaskNotHere:
@@ -3223,6 +3609,7 @@ class Handler(SimpleHTTPRequestHandler):
                             status=404)
             return False
         except UnknownTask:
+            # Вилучили між `find_task` і цим читанням: так само «невідома».
             self._drain_body()
             self._send_json({'ok': False, 'error': f'unknown task: {tid}'}, status=404)
             return False
@@ -3258,6 +3645,13 @@ class Handler(SimpleHTTPRequestHandler):
     # ---------- GET ----------
 
     def do_GET(self):
+        if self.path.split('?')[0] == '/api/spaces':
+            # Шар вимкнено → `{current: null, spaces: [], off: true}` (рішає `spaces.listing`).
+            self._send_json(spaces.listing())
+            return
+        if self.path.split('?')[0] == '/api/space-peek':
+            self._send_json(spaces.peek(parse_qs(urlparse(self.path).query).get('path', [''])[0]))
+            return
         if self.path == '/api/task':
             tid, task = self._current_task()
             meta = load_meta(task)
@@ -3265,6 +3659,13 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'id': tid, 'title': task.get('title', tid),
                              'jira': task.get('jira'),
                              'profile': task.get('profile'),
+                             # Простір задачі (`describe`: id, name, color, path, legacy,
+                             # integrations; `null` — шар вимкнено) і канал коментарів. Канал
+                             # лише з інтеграціями: без них командних коментарів нема, і скіл
+                             # `comments` не мусить вгадувати це зі старого файла.
+                             'space': spaces.describe(spaces.active_space()),
+                             'comment_channel': (comment_channel(task, tid)
+                                                 if spaces.integrations_on() else None),
                              'iterations': task_api_iterations(meta),
                              # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
                              # «своя/чужа» ітерація рахується саме по ньому.
@@ -3285,6 +3686,10 @@ class Handler(SimpleHTTPRequestHandler):
                              'preview_gate': preview_gate_state(task, pw)})
             return
         if self.path == '/api/teams-mute':
+            if not spaces.integrations_on():
+                self._send_json(integrations_off_body(
+                    'сповіщень Teams у просторі без інтеграцій нема'), status=409)
+                return
             tid, task = self._current_task()
             channel = comment_channel(task, tid)
             try:
@@ -3293,23 +3698,44 @@ class Handler(SimpleHTTPRequestHandler):
                 # «Не знаю» — це не «увімкнено»: перемикач мусить показати невідомість.
                 self._send_json({'channel': channel, 'error': str(e)[:200]})
             return
-        if self.path == '/api/tasks':
-            cfg = load_tasks()
-            # `missing` — теки задачі нема на ЦІЙ машині (реєстр їде в git, теки
-            # ні): перемикач не пускає в таку задачу й каже причину наперед.
-            # Лише `isdir`, без читання вмісту — відповідь лишається дешевою.
-            self._send_json({'current': cfg.get('current'), 'tasks': [
-                {'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
-                 'profile': v.get('profile'),
-                 'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir']))}
-                for k, v in tasks_by_recent(cfg)]})
+        if self.path.split('?')[0] == '/api/tasks':
+            every = parse_qs(urlparse(self.path).query).get('all', [''])[0] == '1'
+            cfg = None
+            try:
+                cfg = load_tasks()
+            except spaces.NoTask:
+                # Просторів нема зовсім: це порожній СПИСОК, а не відмова — UI саме за
+                # ним іде на привітання. Єдина задача (`/api/task`) лишається 404 `no-task`.
+                if not every:
+                    self._send_json({'current': None, 'tasks': [], 'space': None})
+                    return
+            except SpaceUnavailable:
+                if not every:
+                    raise
+            # `?all=1` (dev-pipeline питає «задача вже є?») від простору запиту НЕ залежить: його
+            # нема чи файл битий — рядки решти просторів усе одно віддаються, а `current` —
+            # `null`. `space` — простір ЗАПИТУ, і береться ПІСЛЯ обходу (словник рахується
+            # зліва направо): обхід мусить його повернути.
+            self._send_json({'current': cfg.get('current') if cfg is not None else None,
+                             'tasks': _all_space_task_rows() if every else _task_rows(cfg),
+                             'space': spaces.describe(spaces.active_space())})
             return
         if self.path.split('?')[0] == '/api/tasks-overview':
             q = parse_qs(urlparse(self.path).query)
-            cfg = load_tasks()
-            rows, err, rows_at = team_snapshot(refresh=q.get('refresh', [''])[0] == '1')
-            self._send_json({'current': cfg.get('current'),
-                             **tasks_overview(cfg, (rows, err), rows_at=rows_at)})
+            try:
+                cfg = load_tasks()
+            except spaces.NoTask:
+                self._send_json({'current': None, 'mine': [], 'team': None, 'space': None})
+                return
+            if spaces.integrations_on():
+                rows, err, rows_at = team_snapshot(refresh=q.get('refresh', [''])[0] == '1')
+                out = tasks_overview(cfg, (rows, err), rows_at=rows_at)
+            else:
+                # Без інтеграцій команди нема: запиту в Supabase немає, `team: null` (UI ховає
+                # вкладку «Команда»). `tasks_overview` чиста збірка — порожні рядки їй безпечні.
+                out = {**tasks_overview(cfg, ([], None)), 'team': None}
+            self._send_json({'current': cfg.get('current'), **out,
+                             'space': spaces.describe(spaces.active_space())})
             return
         if self.path.split('?')[0] == '/api/task-thumb':
             self._task_thumb()
@@ -3441,6 +3867,13 @@ class Handler(SimpleHTTPRequestHandler):
         if not bare:
             origin = f'http://{self.headers.get("Host", "localhost:8765")}'
             ch = q.get('ch', ['local'])[0]
+            # Простір без інтеграцій: канал Supabase (і CDN із supabase-js) недоступний, тож
+            # `ch=project` ПОНИЖУЄТЬСЯ до локального; вкладок аудиторій нема зовсім — контракт
+            # коментатора «нема `audiences` → нема рядка» (з одним «Клод» перемикач був би
+            # порожнім жестом, а «Команда» вела б у відмову).
+            integrations = spaces.integrations_on()
+            if ch == 'project' and not integrations:
+                ch = 'local'
             # version МУСИТЬ збігатися з publish-конвенцією (iter_num: it1→"1"),
             # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
             # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
@@ -3453,14 +3886,14 @@ class Handler(SimpleHTTPRequestHandler):
                 # кнопка в смузі тихо нічого не робила (виміряно в браузері).
                 html = inject_comment_layer(html, comment_channel(task, tid),
                                             f'{origin}/app/vendor', version=ver,
-                                            inspector=True, audiences=True,
+                                            inspector=True, audiences=integrations,
                                             profile=task.get('profile') or '')
             else:
                 # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
                 local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
                 html = inject_local_comment_layer(
                     html, f'{origin}/api/local-comments', local_key,
-                    f'{origin}/app/vendor', version=ver, audiences=True,
+                    f'{origin}/app/vendor', version=ver, audiences=integrations,
                     profile=task.get('profile') or '')
         body = html.encode('utf-8')
         self.send_response(200)
@@ -3574,6 +4007,11 @@ class Handler(SimpleHTTPRequestHandler):
         ch, it = q.get('ch', ['local'])[0], q.get('it', [''])[0]
         if ch not in ('local', 'project') or not NAME_RE.match(it):
             self.send_error(400, 'bad comment config')
+            return
+        if ch == 'project' and not spaces.integrations_on():
+            # Канал Supabase — лише з інтеграціями; `local` працює скрізь.
+            self._send_json(integrations_off_body(
+                'командних коментарів у просторі без інтеграцій нема'), status=409)
             return
         tid, task = self._current_task()
         # Тег ІТЕРАЦІЇ, без сторінки: у полотні видно всі сторінки ітерації, а
@@ -3816,7 +4254,7 @@ class Handler(SimpleHTTPRequestHandler):
                 for raw in child.stderr:
                     _consume_stderr_line(raw.rstrip('\n'), progress, tail)
 
-            reader = threading.Thread(target=pump, daemon=True)
+            reader = threading.Thread(target=_in_space(pump), daemon=True)
             reader.start()
 
             # Сторож замість `communicate(timeout=)`: убивство ГРУПИ закриває труби,
@@ -3831,7 +4269,7 @@ class Handler(SimpleHTTPRequestHandler):
                     _killpg(child, signal.SIGTERM)
                     _arm_hard_kill(entry)
 
-            watchdog = threading.Timer(SHOOT_TIMEOUT_S, on_timeout)
+            watchdog = threading.Timer(SHOOT_TIMEOUT_S, _in_space(on_timeout))
             watchdog.daemon = True
             watchdog.start()
             out = child.stdout.read()
@@ -3937,6 +4375,11 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'stopped': True})
 
     def _comments(self):
+        if not spaces.integrations_on():
+            # 409, а не порожній список: порожнє читалось би як «коментарів нема», а їх не ЧИТАЛИ.
+            self._send_json(integrations_off_body(
+                'командних коментарів у просторі без інтеграцій нема'), status=409)
+            return
         q = parse_qs(urlparse(self.path).query)
         it = q.get('it', [''])[0]
         channel = q.get('channel', ['internal'])[0]
@@ -4087,6 +4530,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ---------- POST ----------
 
+    @_guarded_request
     def do_POST(self):
         # ⛔ Origin — ОДНА перевірка на ВСІ POST, до розбору задачі й тіла. Префікс
         # `/t/<id>/` робить POST із назвою задачі «простим запитом», який чужа
@@ -4103,7 +4547,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get('Content-Length', 0))
-            payload = json.loads(self.rfile.read(length)) if length else {}
+            raw_body = self.rfile.read(length) if length else b''
+            self._body_read = True      # далі центральна відмова тіло вже не вичитує
+            payload = json.loads(raw_body) if length else {}
         except RecursionError:
             # глибоко вкладений JSON: це не ValueError, і зʼєднання рвалось без відповіді
             self._tree_error(pm.TreeError('bad-body', 'body is nested too deeply'))
@@ -4177,6 +4623,12 @@ class Handler(SimpleHTTPRequestHandler):
             self._task_switch(payload)
         elif self.path == '/api/task-new':
             self._task_new(payload)
+        elif self.path == '/api/space-new':
+            self._space_new(payload)
+        elif self.path == '/api/space-update':
+            self._space_update(payload)
+        elif self.path == '/api/space-switch':
+            self._space_switch(payload)
         else:
             self.send_error(404)
 
@@ -4196,7 +4648,7 @@ class Handler(SimpleHTTPRequestHandler):
             os.makedirs(dst, exist_ok=True)
             with open(os.path.join(dst, 'index.html'), 'w', encoding='utf-8') as f:
                 f.write('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
-                        f'<title>{task.get("title", tid)}</title></head><body>'
+                        f'<title>{html_escape(str(task.get("title", tid)))}</title></head><body>'
                         '<h1>Нова ітерація</h1><p>Порожній макет — почни проєктувати.</p>'
                         '</body></html>')
         entry = _stamp_author({'id': new_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
@@ -4280,6 +4732,11 @@ class Handler(SimpleHTTPRequestHandler):
         if not _local_origin(self.headers.get('Origin')):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
+        if not spaces.integrations_on():
+            # Origin — першим (як у `_teams_mute`): чужа сторінка не дізнається навіть про вимикач.
+            # Пароль — частина публікації (гейт превʼю), а її без інтеграцій нема.
+            self._send_json(integrations_off_body('публікація зʼявиться з модулями'), status=409)
+            return
         pw, err = check_preview_password(payload.get('password'))
         if err:
             self._send_json({'ok': False, 'error': err}, status=400)
@@ -4302,6 +4759,10 @@ class Handler(SimpleHTTPRequestHandler):
         для всіх, хто його коментує). Підпис «хто» — особа машини."""
         if not _local_origin(self.headers.get('Origin')):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+            return
+        if not spaces.integrations_on():
+            self._send_json(integrations_off_body(
+                'сповіщень Teams у просторі без інтеграцій нема'), status=409)
             return
         muted = payload.get('muted')
         if not isinstance(muted, bool):
@@ -4602,11 +5063,16 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'iteration': new_id, 'pages': len(pages)})
 
     # ---------- GitLab-синхронизация ----------
+    #
+    # Простір без інтеграцій: `gl` = None, і далі йде наявна гілка «у задачі нема GitLab» —
+    # відповіді дослівно ті, що сьогодні для задачі без маппінгу (UI опитує `gitlab-status` на
+    # кожному старті, тож не 409). Перевірка тут, у маршрутах, а НЕ в `gitlab_cfg`: його кличе
+    # доктор, і він мусить бачити GitLab-конфіг будь-якої задачі.
 
     def _gitlab_status(self):
         cfg = load_tasks()
         tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task)
+        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
         if not gl:
             self._send_json({'configured': False})
             return
@@ -4619,7 +5085,7 @@ class Handler(SimpleHTTPRequestHandler):
     def _gitlab_sync(self, payload):
         cfg = load_tasks()
         tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task)
+        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
         if not gl:
             self.send_error(400, 'no gitlab configured for this task')
             return
@@ -4642,7 +5108,7 @@ class Handler(SimpleHTTPRequestHandler):
         не помилка, а нормальний стан: просто нічого не робимо."""
         cfg = load_tasks()
         tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task)
+        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
         if not gl:
             self._send_json({'ok': True, 'changed': False, 'reason': 'no-gitlab'})
             return
@@ -4658,7 +5124,7 @@ class Handler(SimpleHTTPRequestHandler):
     def _gitlab_pull(self, payload):
         cfg = load_tasks()
         tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task)
+        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
         if not gl:
             self.send_error(400, 'no gitlab configured for this task')
             return
@@ -4669,7 +5135,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _overview_sync(self):
         """Best-effort: оновити реєстр овервью (bin/overview_push.py sync) після
-        publish/gitlab-sync. Фоново, не блокує основну дію; помилки ковтаємо."""
+        publish/gitlab-sync. Фоново, не блокує основну дію; помилки ковтаємо.
+
+        Простір без інтеграцій у дашборд команди не пише: його задач там нема й бути не може."""
+        if not _outbound_ok():
+            return
         if os.environ.get('DC_NO_OVERVIEW'):
             # ⛔ Тести й будь-який офлайн-прогін не мають писати в ПРОД-Supabase.
             # Інцидент 03.08.2026: на командному дашборді (overview_projects)
@@ -4677,6 +5147,7 @@ class Handler(SimpleHTTPRequestHandler):
             # звідси. Прогін tests/test_serve.py тримав підмінений конфіг задач,
             # а цей Popen успадковував оточення і пушив фікстуру в реальну базу.
             return
+        log = None
         try:
             env = {**os.environ, 'SUPABASE_URL': SUPABASE_URL, 'SUPABASE_KEY': SUPABASE_KEY}
             # Вивід — у той самий лог, що й у планового синку, а НЕ в /dev/null.
@@ -4690,37 +5161,199 @@ class Handler(SimpleHTTPRequestHandler):
                 env=env, stdout=log, stderr=subprocess.STDOUT)
         except Exception:  # noqa: BLE001
             pass
+        finally:
+            # Дитина вже має власну копію дескриптора; наш файловий обʼєкт закриваємо сами — і
+            # коли `Popen` упав (інакше ResourceWarning і дескриптор до збирача сміття).
+            if log is not None:
+                with contextlib.suppress(OSError):      # best-effort: збій закриття не кидає з `finally`
+                    log.close()
 
     # ---------- Реестр задач (интеграция dev-pipeline) ----------
 
     def _task_switch(self, payload):
-        cfg = load_tasks()
+        """Перемкнути поточну задачу машини — і поточний ПРОСТІР, якщо задача з іншого.
+
+        Задача шукається в УСІХ просторах (`find_task`; той самий id у двох — `AmbiguousTask`,
+        центральні 409). Простір запиту фіксується на ЇЇ просторі, тож `load_tasks`/`save_tasks`
+        нижче — файл ЦЬОГО простору, а не поточного на вході (воно може бути іншим).
+
+        ⚠️ Порядок запису (спека, «Файл задач запиту»): СПЕРШУ файл задач цільового простору
+        (`current`, `opened`), ПОТІМ `current` реєстру. Збій другого кроку лишає файл простору
+        уже оновленим, а збій першого НЕ перемикає реєстр на простір, у якому `current` ще
+        старий — і наступний `space-switch` не відкриє «не ту» задачу."""
         tid = payload.get('id', '')
-        if tid not in cfg.get('tasks', {}):
+        sp = spaces.find_task(tid)
+        if sp is None:
+            raise_if_legacy_unreadable()       # задача могла лежати в файлі, який не читається
+            self.send_error(404, 'task not found')
+            return
+        spaces.set_request_space(sp['id'])
+        cfg = load_tasks()
+        if tid not in cfg.get('tasks', {}):         # вилучили між `find_task` і читанням
             self.send_error(404, 'task not found')
             return
         cfg['current'] = tid
         mark_opened(cfg, tid)
         save_tasks(cfg)
-        self._send_json({'ok': True, 'current': tid})
+        spaces.switch_space(sp['id'])
+        self._send_json({'ok': True, 'current': tid, 'space': _space_id(sp)})
 
     def _task_new(self, payload):
-        cfg = load_tasks()
+        """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір з
+        інтеграціями: мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без
+        `space` — простір з інтеграціями, якщо він є, інакше поточний (усі сьогоднішні виклики
+        без поля — потік dev-pipeline ЛІГА). Просторів нема зовсім — 409 `no-space`.
+        ⛔ Простору з інтеграціями нема, а тіло несе ознаки потоку ЛІГА (`_liga_flow`) — 409
+        `no-integrations-space` (теж коли просторів нема зовсім), нічого не створено: інакше
+        Jira/GitLab-бутстрап тихо став би локальною задачею з `profile: null` в «особистому».
+        Без ознак — поточний простір, як було. Явний `space` цього правила не торкається.
+
+        Id унікальний на машині через УСІ простори (`find_task`), не лише в цільовому. Але
+        `find_task` вважає нечитабельний файл задач порожнім, а id, що лежить у ньому, невидимий:
+        тож ПЕРЕД створенням усі файли просторів мусять читатись (`unreadable_task_files`) — інакше
+        503 `space-unavailable` із назвою файла, а не дубль через простори.
+        Простір без інтеграцій: `gitlab` у тілі — 400, `profile` — `null`, тека задачі — у `path`
+        простору (ніколи `FALLBACK_WORK_ROOT`). Успіх робить цільовий простір поточним —
+        як `task_new` уже робить поточною саму задачу; коли реєстр у цю мить не записати, задача
+        вже СТВОРЕНА, тож відповідь 200 з `space_switched: false`, а не 503, що збрехав би.
+
+        ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
+        поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
+        profile = payload.get('profile')
+        if profile is not None and not isinstance(profile, str):
+            self._space_error(400, 'bad-profile', 'profile must be a string')
+            return
+        # Старий файл є, а простору з нього нема, бо він не читається: id в ньому невидимі, тож
+        # створювати нічого (як і при інших нечитабельних файлах нижче). ПЕРЕД `no-space` /
+        # `no-integrations-space`: «створіть простір» чи «потрібен простір з інтеграціями» тут
+        # брехали б — задачі й простір ЛІГА лежать у файлі, який треба лише полагодити.
+        raise_if_legacy_unreadable(spaces.read_registry())
+        want = payload.get('space')
+        if want is None:
+            sp = spaces.default_new_task_space()
+            if not spaces.integrations_for(sp) and _liga_flow(payload):
+                # ДО `no-space`: простору ЛІГА нема (і «Новий простір» його не дасть) — це чесніша
+                # відмова, ніж «створіть простір». ДО фіксації простору й будь-якого запису.
+                self._space_error(409, 'no-integrations-space', NO_INTEGRATIONS_SPACE_MSG)
+                return
+            if sp is None:
+                self._space_error(409, 'no-space', 'no space to put the task in — create a space first')
+                return
+        else:
+            sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == want), None)
+            if sp is None:
+                self._space_error(400, 'unknown-space', 'unknown space')
+                return
+        spaces.set_request_space(sp['id'])
+        tid = payload.get('id', '')
+        broken = spaces.unreadable_task_files(spaces.read_registry())
+        if broken:
+            raise SpaceUnavailable(broken[0])
         try:
-            r = task_new(cfg, payload.get('id', ''),
+            taken = spaces.find_task(tid) is not None
+        except spaces.AmbiguousTask:
+            taken = True                       # у двох просторах одразу: тим паче зайнятий
+        if taken:
+            self._space_error(400, 'task-exists', 'task already exists')
+            return
+        if spaces.integrations_for(sp):
+            profile, root = profile or 'united', None
+        elif payload.get('gitlab'):
+            self._space_error(400, 'gitlab-needs-integrations',
+                              'gitlab mapping is not available in a space without integrations')
+            return
+        else:
+            profile, root = None, sp['path']
+        cfg = load_tasks()                     # ПІСЛЯ фіксації простору: файл ЦІЛЬОВОГО простору
+        try:
+            r = task_new(cfg, tid,
                          title=str(payload.get('title', ''))[:200],
                          jira=str(payload.get('jira', ''))[:40],
-                         profile=payload.get('profile') or 'united',
-                         gitlab=payload.get('gitlab'))
-            self._send_json(r)
+                         profile=profile, gitlab=payload.get('gitlab'), root=root)
+        except TaskRefused as e:
+            self._space_error(400, e.code, str(e))
+            return
+        except SpaceUnavailable:
+            raise
         except ValueError as e:
-            self.send_error(400, str(e))
+            self._space_error(400, 'bad-request', str(e))
+            return
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': str(e)[:300]})
+            self._space_error(500, 'task-create-failed', str(e)[:300])
+            return
+        try:
+            spaces.switch_space(sp['id'])
+            switched = True
+        except spaces.SpacesError:
+            switched = False
+        self._send_json({**r, 'space': _space_id(sp), 'space_switched': switched})
+
+    # ---------- Простори (реєстр машини: `spaces.py`) ----------
+
+    #: Код відмови валідації простору → HTTP-статус; усе інше (`InputError`) — 400. Конфлікти зі
+    #: СТАНОМ — 409, файл задач, що не читається, — 503 (як центральний `space-unavailable`).
+    _SPACE_STATUS = {'path-registered': 409, 'task-id-collision': 409, 'space-unavailable': 503}
+
+    def _space_failed(self, e):
+        """Спільне відображення відмов `space-new|update|switch` ЗА ТИПОМ і АТРИБУТОМ (не за
+        текстом): `InputError.code` → `{ok: false, code, error[, path]}` зі статусом із
+        `_SPACE_STATUS` (типово 400); `KeyError` — 404 `unknown-space`; `spaces-off` — 409.
+        Усе інше (`spaces-unreadable|unwritable`, чужий виняток) летить далі — до центрального
+        обробника (503) чи в журнал: тут його НЕ ковтаємо. Викликати лише з `except`-блоку."""
+        if isinstance(e, KeyError):
+            self._space_error(404, 'unknown-space', f'unknown space: {e.args[0] if e.args else ""}')
+        elif isinstance(e, spaces.SpacesError) and e.code == 'spaces-off':
+            self._space_error(409, 'spaces-off', str(e))
+        elif isinstance(e, spaces.InputError):
+            self._space_error(self._SPACE_STATUS.get(e.code, 400), e.code, str(e),
+                              **({'path': e.path} if e.path else {}))
+        else:
+            raise
+
+    def _space_new(self, payload):
+        """Створити простір (тека, `space.json`, `tasks.json`, запис у реєстр) і зробити поточним."""
+        try:
+            sid = spaces.create_space(payload.get('name'), payload.get('color'), payload.get('path'))
+        except (spaces.InputError, KeyError, spaces.SpacesError) as e:
+            self._space_failed(e)
+            return
+        self._send_json({'ok': True, 'id': sid})
+
+    def _space_update(self, payload):
+        """Змінити назву й колір простору (`space.json`); решта його ключів лишається."""
+        sid = payload.get('id')
+        try:
+            meta = spaces.update_space(sid, payload.get('name'), payload.get('color'))
+        except (spaces.InputError, KeyError, spaces.SpacesError) as e:
+            self._space_failed(e)
+            return
+        self._send_json({'ok': True, 'id': sid, **meta})
+
+    def _space_switch(self, payload):
+        """Зробити простір поточним; відповідь — його поточна задача (`null`, коли її нема).
+
+        Шар вимкнено → 409 `spaces-off` ЯВНО: `switch_space` там навмисний no-op (і для
+        невідомого id), а відповідь `ok` збрехала б, що простір перемкнуто."""
+        sid = payload.get('id')
+        try:
+            if not spaces.layer_on():
+                raise spaces.SpacesError('spaces-off', spaces.registry_path(), 'spaces layer is off')
+            spaces.switch_space(sid)
+            task = spaces.space_current_task(sid)
+        except (KeyError, spaces.SpacesError) as e:
+            self._space_failed(e)
+            return
+        self._send_json({'ok': True, 'current': sid, 'task': task})
 
     def _publish(self, payload):
         """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer.
         Затем vercel deploy (скриптом, без AI); URL сохраняется в iterations.json."""
+        if not spaces.integrations_on():
+            # ПЕРШИМ рядком, до збірки `publish/` (вона `rmtree`-ить теку): Vercel, npx і дашборд
+            # команди з простору без інтеграцій недосяжні. Лише `self._send_json` — зовнішні
+            # заглушки обробника мають лише його (`_current_task/send_error/_send_json/…`).
+            self._send_json(integrations_off_body('публікація зʼявиться з модулями'), status=409)
+            return
         tid, task = self._current_task()
         meta = load_meta(task)
         its = [i for i in meta.get('iterations', []) if i.get('published')]
@@ -4937,34 +5570,44 @@ def make_server(port=0):
             return False
 
         def _referer_context(self):
-            """`(задача, ітерація)`, із яких прийшов запит (Referer); `(None, None)` —
-            Referer не годиться. НІЧОГО не міняє на запиті: задачу ставить викликач
+            """`(задача, ітерація, простір)`, із яких прийшов запит (Referer); `(None, None, None)` —
+            Referer не годиться. НІЧОГО не міняє на запиті: задачу й простір ставить викликач
             (`do_GET`), щоб побічний ефект був видний там, де його роблять.
 
             Задача — лише з префікса `/t/<id>/` у Referer (`None` — префікса нема, і
-            діє поточна машини). Невідома задача в Referer — Referer ігнорується
-            ЦІЛИМ, а не лише її назва: інакше ітерацію «чужої» задачі мовчки віддала б
-            поточна."""
+            діє поточна машини; простір тоді теж `None`). Невідома задача в Referer — Referer
+            ігнорується ЦІЛИМ, а не лише її назва: інакше ітерацію «чужої» задачі мовчки віддала б
+            поточна. «Невідома» — це й задача, якої нема в жодному просторі, і дубль у двох
+            (`AmbiguousTask`), і задача без теки на цій машині (`TaskNotHere` — підклас
+            `UnknownTask`). Перевірка йде в ЇЇ просторі (`request_space`), а не в поточному."""
             ref = self.headers.get('Referer', '')
             if not ref:
-                return None, None
+                return None, None, None
             u = urlparse(ref)
-            path, tid = u.path, None
+            path, tid, sp = u.path, None, None
             m = self._TASK_PREFIX.match(path)
             if m:
                 path, tid = m.group(2), unquote(m.group(1))
                 try:
-                    task_for(load_tasks(), tid)
+                    sp = spaces.find_task(tid)
+                except spaces.AmbiguousTask:
+                    return None, None, None
+                if sp is None:
+                    return None, None, None
+                try:
+                    with spaces.request_space(sp['id']):
+                        task_for(load_tasks(), tid)
                 except UnknownTask:
-                    return None, None
+                    return None, None, None
             q = parse_qs(u.query)
             if q.get('it'):               # /commented?it=itN
-                return tid, q['it'][0]
+                return tid, q['it'][0], sp
             mm = re.match(r'^/it-assets/([\w-]+)/', path)  # /it-assets/itN/…
             if mm:
-                return tid, mm.group(1)
-            return None, None
+                return tid, mm.group(1), sp
+            return None, None, None
 
+        @_guarded_request
         def do_GET(self):
             # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
             # вдруге її не бере (префікс уже знято з `self.path`).
@@ -4988,8 +5631,9 @@ def make_server(port=0):
                     # підклас мовчки ковтав би будь-який майбутній `except KeyError`
                     # навколо конфіга, тобто повернув би «тиху невідому задачу», проти
                     # якої `task_for` і зроблено. Тут же це лише текст відмови: названу
-                    # задачу могли вилучити між входом запиту й цим рядком.
-                    except (KeyError, UnknownTask, OSError, ValueError):
+                    # задачу могли вилучити між входом запиту й цим рядком, а в простору
+                    # запиту — зникнути поточна (`NoTask`).
+                    except (KeyError, UnknownTask, NoTask, OSError, ValueError):
                         who = '—'
                     if self._task_override is not None:
                         # Задачу НАЗВАНО запитом: «вона перемкнулась» тут було б
@@ -5015,12 +5659,13 @@ def make_server(port=0):
             # iteration the request came FROM (Referer) so multi-file builds
             # render fully, not just their relative-path assets.
             if not self.path.startswith(HANDLED_PREFIXES):
-                ref_tid, it = self._referer_context()
+                ref_tid, it, ref_sp = self._referer_context()
                 if it:
-                    # Задачу з Referer ставимо ТУТ і лише коли запит сам її не
-                    # назвав (заголовок чи префікс сильніші).
+                    # Задачу з Referer (і її простір) ставимо ТУТ і лише коли запит сам
+                    # її не назвав (заголовок чи префікс сильніші).
                     if self._task_override is None and ref_tid is not None:
                         self._task_override = ref_tid
+                        spaces.set_request_space(ref_sp['id'])
                     if self._serve_from_iteration(
                             it, self.path.split('?')[0].lstrip('/')):
                         return

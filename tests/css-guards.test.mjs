@@ -116,6 +116,13 @@ test("--dim на --s2: дрібний текст на картках і поля
   assert.ok(ratio >= 4.5, `--dim (${a}) на --s2 (${b}) дає ${ratio.toFixed(2)}:1`);
 });
 
+test("--bad-ink на --card: рамка помилкового поля діалогу >= 3:1 (нетекстовий контраст); --bad для цього не годиться", () => {
+  const { a, b, ratio } = pairRatio("bad-ink", "card");
+  assert.ok(ratio >= 3, `--bad-ink (${a}) на --card (${b}) дає ${ratio.toFixed(2)}:1`);
+  /* Свідок, що тест міряє справжню різницю: токен для ТЕМНОЇ поверхні на білій картці рамці не годиться. */
+  assert.ok(pairRatio("bad", "card").ratio < 3, "--bad на білому вже ≥ 3:1: окремий --bad-ink став зайвим");
+});
+
 test("--muted на --bg і на --card: вторинний текст на світлому >= 4.5:1", () => {
   for (const bg of ["bg", "card"]) {
     const { a, b, ratio } = pairRatio("muted", bg);

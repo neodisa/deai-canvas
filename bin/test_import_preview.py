@@ -52,6 +52,62 @@ class Strip(unittest.TestCase):
     def test_page_without_injections_is_untouched_and_said(self):
         self.assertEqual(ip.strip_publish(PAGE), (PAGE, False))
 
+    # Назва з сутностями. `serve._inject_gate` кладе в `__origTitle` РОЗЕКРАНОВАНИЙ текст
+    # (`document.title` — текст, не розмітка), а імпорт пише його назад у `<title>` як РОЗМІТКУ:
+    # без екранування `A &lt;/title&gt;&lt;b&gt;x&lt;/b&gt;` ставала справжньою розміткою в ітерації.
+    # (Єдине, що не відновлюється: видима назва з ЛІТЕРАЛЬНОЮ сутністю — вихідний `&amp;amp;`. У новому
+    # форматі в `__origTitle` це текст `&amp;`, а в старому сирому — готова сутність: розрізнити їх
+    # нічим, і старі превʼю не подвоюємо — це важливіше за таку назву.)
+    ENTITY_TITLES = ('R&amp;D', 'A &lt;/title&gt;&lt;b&gt;x&lt;/b&gt;', '&lt;/script&gt;&lt;img src=x&gt;',
+                     'Тарифи &laquo;Про&raquo; &#39;x&#39;', 'a &amp; b &lt; c',
+                     'Фін. &quot;звіт&quot; &#x26; ко')
+
+    def entity_page(self, src):
+        return PAGE.replace('<title>Картка «Ромашка»</title>', f'<title>{src}</title>')
+
+    @staticmethod
+    def title_of(page):
+        m = re.search(r'<title>(.*?)</title>', page, flags=re.S)
+        return m.group(1) if m else None
+
+    def test_an_entity_title_never_becomes_markup_after_import(self):
+        import html
+        for src in self.ENTITY_TITLES:
+            with self.subTest(title=src):
+                page = self.entity_page(src)
+                clean, ok = ip.strip_publish(published(page))
+                self.assertTrue(ok)
+                inner = self.title_of(clean)
+                self.assertIsNotNone(inner)
+                self.assertNotIn('<', inner, 'назва стала розміткою')
+                self.assertNotIn('>', inner)
+                self.assertEqual(clean.count('<title>'), 1)
+                self.assertEqual(clean.count('</title>'), 1)
+                self.assertNotIn('<b>x</b>', clean)
+                self.assertNotIn('<img src=x>', clean)
+                # тут видима назва та сама, що була (сутності ↔ символи)
+                self.assertEqual(html.unescape(inner), html.unescape(src))
+                # решта сторінки — байт у байт; відрізняється лише запис назви
+                self.assertEqual(clean.replace(f'<title>{inner}</title>', ''),
+                                 page.replace(f'<title>{src}</title>', ''))
+
+    def test_the_common_entity_titles_come_back_byte_for_byte(self):
+        for src in ('R&amp;D', 'A &lt;/title&gt;&lt;b&gt;x&lt;/b&gt;', 'a &amp; b &lt; c'):
+            with self.subTest(title=src):
+                page = self.entity_page(src)
+                self.assertEqual(ip.strip_publish(published(page)), (page, True))
+
+    def test_a_title_with_a_lone_ampersand_or_angle_brackets_is_escaped_not_doubled(self):
+        """Сирий `&` (не сутність) → `&amp;`, а вже екранований не подвоюється; `<`/`>` — завжди сутності."""
+        import html
+        for src, want in (('AT&T', 'AT&amp;T'), ('R&amp;D &amp; Q&A', 'R&amp;D &amp; Q&amp;A'),
+                          ('a <b> c', 'a &lt;b&gt; c')):
+            with self.subTest(title=src):
+                clean, ok = ip.strip_publish(published(self.entity_page(src)))
+                self.assertTrue(ok)
+                self.assertEqual(self.title_of(clean), want)
+                self.assertEqual(html.unescape(want), html.unescape(src))
+
 
 class Outline(unittest.TestCase):
     def test_flat_outline_becomes_tree_of_one_iteration(self):
@@ -639,6 +695,18 @@ class OldTemplates(unittest.TestCase):
                 with self.subTest(variant=variant, page=name):
                     pub = published_old(page, variant)
                     self.assertIn(SECRET, pub, 'фікстура без пароля — тест нічого б не довів')
+                    self.assertEqual(ip.strip_publish(pub), (page, True))
+
+    def test_an_old_format_entity_title_is_not_double_escaped(self):
+        """До виправлення `__origTitle` ніс СИРИЙ вихідний текст заголовка (`json.dumps(m.group(1))`):
+        сутності в ньому вже були сутностями. Такі превʼю ще живі — імпорт не має їх подвоювати
+        (`R&amp;D` → `R&amp;amp;D`) і не має робити розміткою."""
+        for variant in ('38b4080', '5ed9bf7'):
+            for src in ('R&amp;D', 'A &lt;/title&gt;&lt;b&gt;x&lt;/b&gt;', 'Тарифи &laquo;Про&raquo;'):
+                with self.subTest(variant=variant, title=src):
+                    page = PAGE.replace('<title>Картка «Ромашка»</title>', f'<title>{src}</title>')
+                    pub = published_old(page, variant)
+                    self.assertIn(f'window.__origTitle={json.dumps(src)}', pub, 'фікстура не старого формату')
                     self.assertEqual(ip.strip_publish(pub), (page, True))
 
     def test_gate_marker_is_in_every_known_gate(self):

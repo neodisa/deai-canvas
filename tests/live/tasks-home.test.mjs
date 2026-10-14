@@ -297,7 +297,11 @@ function watchApi(page) {
   });
   return seen;
 }
-const QUIET_OK = /\/api\/(claude-status|tasks-overview|task-thumb|tuner|shoot-progress)$/;
+/* `spaces`: повернення фокуса на відкритий екран «Задачі» перечитує його (`refreshHomeOnReturn` →
+   `loadHome` → перелік просторів, потім огляд) — це «звичайне» перечитування самого екрана, а не
+   запит до схованого макета. Жоден ІНШИЙ `space*` (`space-peek`, `space-new`…) у цей список не
+   потрапляє: без діалогу вони під екраном мовчать (їх теж стереже перевірка нижче). */
+const QUIET_OK = /\/api\/(claude-status|tasks-overview|task-thumb|tuner|shoot-progress|spaces)$/;
 
 test("під екраном «Задачі» канвас спить: фокус вікна й опитування відбитка не б'ють у схований макет", async (t) => {
   const { page } = await boot(t, PORT_BASE + 900);
@@ -313,6 +317,23 @@ test("під екраном «Задачі» канвас спить: фокус
   const bad = seen.filter((x) => !QUIET_OK.test(x.split(" ")[1]));
   assert.deepEqual(bad, [], `схований макет отримав запити під екраном: ${bad.join(", ")}`);
   assert.equal(await page.locator('.cv-notice[data-notice="frame-changed"]').count(), 0);
+});
+
+test("повернення до вікна під екраном «Задачі»: пара focus+visibilitychange — рівно одне перечитування екрана, жодного іншого `space*`", async (t) => {
+  const { page } = await boot(t, PORT_BASE + 1900);
+  await page.waitForSelector("#frame");
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  await page.waitForTimeout(1000);   // gap 800 мс від можливого попереднього оновлення
+  const seen = watchApi(page);
+  /* Одне повернення до вікна браузер сповіщає двома подіями. */
+  await page.evaluate(() => { window.dispatchEvent(new Event("focus")); document.dispatchEvent(new Event("visibilitychange")); });
+  await page.waitForTimeout(1200);
+  const n = (what) => seen.filter((x) => x === what).length;
+  assert.equal(n("GET /api/spaces"), 1, `GET /api/spaces ×${n("GET /api/spaces")} на пару focus+visibilitychange (${seen.join(", ")})`);
+  assert.equal(n("GET /api/tasks-overview"), 1, `GET /api/tasks-overview ×${n("GET /api/tasks-overview")} на пару focus+visibilitychange`);
+  const other = seen.filter((x) => /\/api\/space[^s]|\/api\/space-/.test(x));
+  assert.deepEqual(other, [], `екран питає ще й інше про простори: ${other.join(", ")}`);
 });
 
 test("те саме в «Огляді»: фокус вікна не перебудовує полотно й не запускає зйомку під екраном", async (t) => {

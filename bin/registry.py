@@ -460,6 +460,17 @@ def _say_junk(junk, stream=None):
 
 
 def cmd_pull(_a):
+    # Модульного шляху до app/ тут нема (лише лінивий у `_work_root`), а `spaces` потрібен
+    # одразу: реєстр командний, і задача колеги не мусить ліпитись у старий файл, якщо її id
+    # уже живе в ІНШОМУ просторі цієї машини.
+    sys.path.insert(0, os.path.join(ROOT, 'app'))
+    import spaces
+    # Перевірка між просторами має сенс лише коли pull оновлює САМЕ старий файл (простір
+    # `legacy`) при увімкненому шарі. Інший `TASKS_PATH` (тести підміняють його на тимчасовий)
+    # — це не простір, і лізти заради нього в справжній `~/.deai` (читати й, чого доброго,
+    # мігрувати) не можна.
+    cross_check = (spaces.layer_on()
+                   and os.path.abspath(TASKS_PATH) == os.path.abspath(spaces.legacy_tasks_file()))
     cfg = load_tasks()
     d = ensure_clone(cfg)
     _git(['reset', '--hard', f'origin/{BRANCH}'], d, cfg)
@@ -475,6 +486,21 @@ def cmd_pull(_a):
     for tid, e in reg.items():
         local = tasks.get(tid)
         if local is None:
+            if cross_check:
+                try:
+                    other = spaces.find_task(tid)
+                except spaces.AmbiguousTask:
+                    other = {'legacy': False}
+                except spaces.SpacesError as err:
+                    # Реєстр просторів не прочитати: pull ЛІГА через це не блокуємо, але вголос.
+                    print(f'   ⚠ реєстр просторів не прочитати ({err.code}) — перевірку id між '
+                          f'просторами пропущено', file=sys.stderr)
+                    cross_check = False
+                    other = None
+                if other is not None and not other.get('legacy'):
+                    print(f'   ⚠ {tid}: такий id уже є в іншому просторі — пропущено',
+                          file=sys.stderr)
+                    continue
             local = tasks[tid] = {}
             added.append(tid)
         else:

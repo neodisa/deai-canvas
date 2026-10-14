@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { barModel } from "../app/bar-model.js";
 import { barHTML, taskListHTML } from "../app/shell-bar.js";
-import { t } from "../app/i18n.js";
+import { setLang, t } from "../app/i18n.js";
 
 const S = (o = {}) => ({
   mode: "layout", view: "grid", vp: "desktop", vpw: "",
@@ -546,4 +546,218 @@ test("екран «Задачі»: помилка tasks.json лишається 
   assert.ok(barModel(S(o)).error, "модель втратила помилку в стані «Задачі»");
   assert.match(html(o), /class="errbar"/, "смуги помилки немає в розмітці");
   assert.ok(!/class="errbar"/.test(html({ homeOpen: true })), "смуга помилки без помилки");
+});
+
+/* ── простори (Deai 1.0, етап 1) ──────────────────────────────────────────────
+   Фішка простору — `data-dd="space"` (делегація смуги відкриває дропдауни за
+   `data-dd`), а не `data-act`: клік має відкрити перелік, не виконати дію. Без
+   `space` у моделі фішки нема ВЗАГАЛІ. Окремо — пастка, яку знайшов огляд
+   плану: `zoneGl`/`zonePublish` читали `c.labelTier`/`c.published` з `undefined`
+   і кидали, коли модель (простір без інтеграцій) цих контролів не віддає. */
+const SPACES = [
+  { id: "liga", name: "ЛІГА", color: "space-1", path: "/w/liga", tasks: 12, available: true },
+  { id: "p", name: "P", color: "space-2", path: "/w/p", tasks: 1, available: true },
+  { id: "gone", name: "G", color: "space-3", path: "/w/gone", tasks: 0, available: false },
+];
+const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", integrations: false, ...o });
+const chip = (h) => /<button[^>]*data-dd="space"[\s\S]*?<\/button>/.exec(h)?.[0];
+
+test("простір без інтеграцій: розмітка не кидає, без GitLab і публікації, Figma лишається", () => {
+  let h;
+  assert.doesNotThrow(() => { h = html({ space: { integrations: false } }); });
+  assert.doesNotMatch(h, /data-dd="gl"/);
+  assert.doesNotMatch(h, /data-act="publish"/);
+  assert.doesNotMatch(h, /data-dd="pub"/);
+  assert.match(h, /data-act="figma"/, "«В Figma» не залежить від зовнішніх служб");
+  assert.equal((h.match(/class="zone /g) || []).length, 3, "три зони лишились");
+});
+
+test("простір без інтеграцій: відкриті дропдауни GitLab/публікації не кидають (стан від колишнього екрана)", () => {
+  for (const openDd of ["gl", "pub"]) {
+    const st = S({ space: SP(), openDd });
+    assert.doesNotThrow(() => barHTML(barModel(st), st), openDd);
+  }
+});
+
+test("фішка простору: data-dd=space, кольорова крапка зі змінної, назва, шеврон", () => {
+  const h = html({ space: SP() });
+  const c = chip(h);
+  assert.ok(c, "фішки data-dd=space немає");
+  assert.match(c, /class="space-dot"[^>]*style="background:var\(--space-2\)"/);
+  assert.match(c, />P</, "назви простору немає у фішці");
+  assert.match(c, /<svg/, "шеврона/стрілки дропдауна немає");
+  assert.match(c, /aria-haspopup="true"/);
+  assert.match(c, /aria-expanded="false"/);
+  assert.ok(!/data-act=/.test(c), "фішка відкриває дропдаун, а не виконує дію");
+});
+
+test("фішка простору: повна назва — у `title` (довга обрізається трикрапкою), екранована", () => {
+  const long = "Дуже довга назва простору клієнта «Альфа» & Co";
+  const c = chip(html({ space: SP({ name: long }) }));
+  assert.match(c, /data-dd="space" title="Дуже довга назва простору клієнта «Альфа» &amp; Co"/);
+  const evil = chip(html({ space: SP({ name: '"><img src=x onerror=alert(1)>' }) }));
+  assert.doesNotMatch(evil, /<img/, "назва з даних не стала тегом");
+  assert.match(evil, /title="&quot;&gt;&lt;img/);
+});
+
+test("фішка стоїть після палітри й ПЕРЕД крошками задачі", () => {
+  const h = html({ space: SP() });
+  const pal = h.indexOf('data-act="palette"');
+  const sp = h.indexOf('data-dd="space"');
+  const crumbs = h.indexOf('class="crumbs"');
+  assert.ok(pal !== -1 && sp !== -1 && crumbs !== -1);
+  assert.ok(pal < sp && sp < crumbs, "порядок: палітра → простір → крошки");
+});
+
+test("без `space` фішки нема ніде — ні в смузі задачі, ні на екрані «Задачі»", () => {
+  assert.doesNotMatch(html(), /data-dd="space"/);
+  assert.doesNotMatch(html({ homeOpen: true }), /data-dd="space"/);
+  assert.doesNotMatch(html({ space: null }), /space-dot/);
+});
+
+test("на екрані «Задачі» фішка є — це той самий перемикач, а не крошка", () => {
+  const h = html({ space: SP(), homeOpen: true });
+  assert.ok(chip(h), "на екрані «Задачі» фішки нема");
+  assert.ok(h.indexOf('data-dd="space"') < h.indexOf("crumb--flat"), "фішка перед крошкою «Задачі»");
+});
+
+test("назва простору екранується: <b> не стає тегом, лапка не виходить з атрибута", () => {
+  const evil = '<b>x</b>" onclick="alert(1)';
+  const h = html({ space: SP({ name: evil }) });
+  assert.doesNotMatch(h, /<b>x<\/b>/, "назва стала розміткою");
+  assert.match(chip(h), /&lt;b&gt;x&lt;\/b&gt;/);
+  assert.doesNotMatch(h, /onclick="alert/, "лапка вийшла з атрибута");
+});
+
+test("колір: лише space-1…6; усе інше — space-1, а не довільний CSS у style", () => {
+  const dot = (color) => /class="space-dot"[^>]*style="([^"]*)"/.exec(chip(html({ space: SP({ color }) })))[1];
+  assert.equal(dot("space-4"), "background:var(--space-4)");
+  for (const bad of ["red", "space-2);position:fixed;(", "space-9", undefined]) {
+    assert.equal(dot(bad), "background:var(--space-1)", String(bad));
+  }
+});
+
+test("дропдаун просторів: закритий — нема; відкритий — перелік із ✓, підписом і діями", () => {
+  assert.doesNotMatch(html({ space: SP(), spaces: SPACES }), /Простори/);
+  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  assert.match(chip(h), /aria-expanded="true"/);
+  assert.match(h, /class="dd-head">Простори</);
+  const rows = [...h.matchAll(/<button[^>]*data-act="space"[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
+  assert.equal(rows.length, 3, "рядок на кожен простір");
+  assert.match(rows[0], /data-val="liga"/);
+  assert.match(rows[0], /12 задач · \/w\/liga/);
+  assert.match(rows[0], /style="background:var\(--space-1\)"/);
+  assert.doesNotMatch(rows[0], /dd-item--on/, "✓ не на поточному");
+  assert.doesNotMatch(rows[0], /dd-marks/, "галочка не на поточному");
+  assert.match(rows[1], /data-val="p"/);
+  assert.match(rows[1], /dd-item--on/, "поточний простір без позначки");
+  assert.match(rows[1], /1 задача · \/w\/p/);
+  assert.match(rows[1], /dd-marks">\s*<svg/, "галочки у поточного нема");
+  assert.match(h, /data-act="spacenew"[\s\S]*?Новий простір…/);
+  assert.match(h, /data-act="spaceedit"[\s\S]*?Назва й колір…/);
+});
+
+test("дропдаун просторів: недоступний простір приглушений, не вимкнений, і каже чому", () => {
+  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const gone = /<button[^>]*data-val="gone"[\s\S]*?<\/button>/.exec(h)[0];
+  assert.match(gone, /dd-item--muted/);
+  assert.doesNotMatch(gone, / disabled/, "вимкнений пункт не клікнути — а перейти й побачити причину треба");
+  assert.match(gone, /файл задач недоступний/);
+  assert.doesNotMatch(gone, /0 задач/, "«0 задач» про недоступний простір — брехня");
+});
+
+test("дропдаун просторів: назви й шляхи з реєстру екрануються", () => {
+  const spaces = [{ id: "e", name: "<img src=x onerror=1>", color: "space-1", path: '"><script>', tasks: 1 }];
+  const h = html({ space: SP({ id: "e" }), spaces, openDd: "space" });
+  assert.doesNotMatch(h, /<img src=x/);
+  assert.doesNotMatch(h, /<script>/);
+});
+
+test("дропдаун просторів без переліку не падає: лише дії «Новий…» і «Назва й колір…»", () => {
+  const h = html({ space: SP(), openDd: "space" });
+  assert.match(h, /data-act="spacenew"/);
+  assert.match(h, /data-act="spaceedit"/);
+  assert.doesNotMatch(h, /data-act="space"/);
+});
+
+test("дропдаун просторів у англійському інтерфейсі — англійською", () => {
+  setLang("en");
+  try {
+    const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+    assert.match(h, /class="dd-head">Spaces</);
+    assert.match(h, /12 tasks · \/w\/liga/);
+    assert.match(h, /1 task · \/w\/p/);
+    assert.match(h, /New space…/);
+  } finally { setLang("uk"); }
+});
+
+/* Друга точка, де реєстр просторів стає `style=`: колір РЯДКА дропдауна (перша —
+   крапка фішки). Реєстр правлять руками, `esc` лишає цілими лапки, але не `;` —
+   тож без токена в рядок літав би довільний CSS. `data-val` — id простору, теж
+   із реєстру: його екранування не повинно залежати від того, що в `title`. */
+test("дропдаун просторів: колір рядка йде крізь токен, id в data-val екранований", () => {
+  const evil = [{
+    id: '"><script>', name: "<b>x</b>", color: "space-2);position:fixed;(", path: "/p", tasks: 1,
+  }];
+  const h = html({ space: SP({ id: "p" }), spaces: evil, openDd: "space" });
+  const row = /<button[^>]*data-act="space"[^>]*>[\s\S]*?<\/button>/.exec(h)?.[0];
+  assert.ok(row, "рядок простору не знайдено");
+  assert.deepEqual([...row.matchAll(/style="([^"]*)"/g)].map((m) => m[1]), ["background:var(--space-1)"],
+    "колір рядка — рівно токен space-1, ніякого стороннього CSS");
+  assert.doesNotMatch(h, /position:fixed/);
+  assert.match(row, /data-val="&quot;&gt;&lt;script&gt;"/);
+  assert.doesNotMatch(h, /<script>|<b>x<\/b>/);
+});
+
+/* `aria-current` на поточному рядку: клас `dd-item--on` оком видно, читач його не
+   чує. Рішення ревʼю Task 6 (план, Додаток Б): рядки лишаються `ddItem`, а Task 7
+   дає roving focus по `.dd--spaces .dd-item`. */
+test("дропдаун просторів: aria-current лише на поточному рядку; решта дропдаунів без нього", () => {
+  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const rows = [...h.matchAll(/<button[^>]*data-act="space"[^>]*>/g)].map((m) => m[0]);
+  assert.equal(rows.length, 3);
+  assert.doesNotMatch(rows[0], /aria-current/);
+  assert.match(rows[1], /data-val="p"[^>]*aria-current="true"/);
+  assert.doesNotMatch(rows[2], /aria-current/);
+  assert.equal((h.match(/aria-current/g) || []).length, 1, "поточний — один на весь дропдаун");
+  // `current` — необовʼязковий параметр `ddItem`: решта дропдаунів його не знає
+  const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
+  for (const openDd of ["iter", "gl", "pub", "more"]) {
+    assert.doesNotMatch(html({ openDd, iterList, gl: "behind" }), /aria-current/, openDd);
+  }
+});
+
+test("дропдаун просторів: роздільник перед «Новий простір…» є з переліком і нема без нього", () => {
+  const withList = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  assert.match(withList,
+    /data-val="gone"[\s\S]*?<\/button>\s*<div class="dd-sep"><\/div>\s*<button[^>]*data-act="spacenew"/);
+  assert.doesNotMatch(html({ space: SP(), openDd: "space" }), /dd-sep/, "порожній перелік — роздільника нема");
+});
+
+/* Снапшот-страж: простір З інтеграціями змінює смугу рівно на фішку — ні байтом
+   більше. Це те, що береже ЛІГА (legacy-простір) від випадкових змін розмітки. */
+test("розмітка зі space{integrations:true} = розмітка без space мінус блок фішки — побайтно", () => {
+  const stripChip = (h) => h.replace(/<div class="ddhost space-h">[\s\S]*?<\/div>/, "");
+  const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
+  for (const o of [{}, { homeOpen: true }, { openDd: "pub" }, { openDd: "gl", gl: "behind" },
+    { openDd: "iter", iterList }, { openDd: "more" }, { hasIteration: false }, { tasksErr: true }]) {
+    const withSpace = html({ ...o, space: SP({ integrations: true }) });
+    assert.ok(chip(withSpace), `фішки нема: ${JSON.stringify(o)}`);
+    assert.equal(stripChip(withSpace), html(o), `розмітка розійшлась: ${JSON.stringify(o)}`);
+  }
+});
+
+/* Розмітка фішки й дропдауна збалансована: рядок із шаблону легко лишає
+   незакриту `<button>`, а тести, що шукають `<button…</button>` регекспом, цього
+   не помічають — вони «дочитують» до чужого закривального тега. */
+test("розмітка зі space збалансована: кожен <button> і <div> закрито", () => {
+  const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
+  for (const o of [{}, { openDd: "space" }, { openDd: "space", spaces: SPACES }, { homeOpen: true },
+    { homeOpen: true, openDd: "space", spaces: SPACES }, { openDd: "iter", iterList }]) {
+    const h = html({ space: SP(), ...o });
+    for (const tag of ["button", "div"]) {
+      assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length,
+        (h.match(new RegExp(`</${tag}>`, "g")) || []).length, `<${tag}> не збалансовано: ${JSON.stringify(o)}`);
+    }
+  }
 });

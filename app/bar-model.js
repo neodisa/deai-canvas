@@ -41,6 +41,9 @@
  */
 export const TIERS = { gl: 1300, mode: 1180, view: 1060 };
 
+/** Контроли зони 3, що ходять назовні, — їх немає в просторі без інтеграцій (див. `barModel`). */
+const OUTWARD = new Set(["gl", "publish"]);
+
 /**
  * Причина, з якої «Флоу» недоступний у сегменті «Сітка/Флоу». Три РІЗНІ
  * стани, і ревʼю Task 8 (п.2) попросило записати їх явно — бо їх сплутали
@@ -151,6 +154,15 @@ export function barModel(s) {
      підсвітку. */
   const home = { id: "home", tier: 0, on: !!s.homeOpen };
   const palette = { id: "palette", tier: 0, labelTier: TIERS.mode };
+  /* Фішка простору (Deai 1.0, етап 1) — «де я» ще на рівень вище за задачу:
+     задача живе в просторі, тож шлях читається зліва направо, і фішка стоїть
+     ПЕРЕД крошкою задачі (і на екрані «Задачі», де крошка — «Задачі»). `s.space`
+     нема, коли шар просторів вимкнено чи просторів ще нема, — тоді фішки НЕМАЄ
+     в моделі, а не стоїть порожньою: смуга така, як була до просторів. `color` —
+     токен (`space-1…6`); у стилі його робить розмітка, там же його й валідує. */
+  const spaceChip = s.space
+    ? [{ id: "space", tier: 0, label: s.space.name, color: s.space.color }]
+    : [];
 
   /* Екран «Задачі» — склад смуги змінюється ЦІЛКОМ тут, а не приховуванням у
      розмітці: модель описує склад, розмітка його малює. Принцип 5 PRODUCT.md
@@ -161,7 +173,7 @@ export function barModel(s) {
      тримається, і зона 2 порожня не зсуває нікого — вона `auto`. Без `taskId`
      «Назад» вести нікуди, тож його немає, а не мертвий. */
   if (s.homeOpen) {
-    const zone1 = [home, palette, { id: "crumb-tasks", tier: 0, labelKey: "tasks" }];
+    const zone1 = [home, palette, ...spaceChip, { id: "crumb-tasks", tier: 0, labelKey: "tasks" }];
     if (s.taskId) zone1.push({ id: "back", tier: 0, label: s.taskId });
     return { zone1, zone2: [], zone3: [], error: tasksError(s) };
   }
@@ -169,6 +181,7 @@ export function barModel(s) {
   const zone1 = [
     home,
     palette,
+    ...spaceChip,
     { id: "task", tier: 0, label: s.taskId },
   ];
   if (s.hasIteration) {
@@ -267,7 +280,7 @@ export function barModel(s) {
 
   const linkWhy = linkWhyKey(s);
   const figmaWhy = figmaWhyKey(s);
-  const zone3 = [
+  const zone3Full = [
     /* «В Figma» (T-41) — ПЕРЕД GitLab, щоб головна кнопка публікації лишалась
        крайньою справа (рішення власника 28.09.2026). В «Огляді» не зникає, як
        інспектор, а стоїть вимкненою з причиною: зона 3 не сміє стрибати при
@@ -318,6 +331,17 @@ export function barModel(s) {
       ],
     },
   ];
+  /* Вимикач інтеграцій (спека просторів, розділ «Вимикач»): простір, де
+     `integrations === false`, не має ні GitLab, ні публікації — вони ходять
+     назовні (git push, Vercel, дашборд команди), а там цього нема. Контрол не
+     «вимикається з причиною», а ЗНИКАЄ з моделі: причина «тут нема служби» не
+     лікується жодним кліком, і мертва кнопка читалась би як «щось зламалось».
+     «В Figma» лишається — вона працює по живому макету. Рівно `=== false`, а не
+     «нема значення»: простір без відомостей про інтеграції (стара форма
+     відповіді, шар вимкнено) не має красти в людини GitLab. */
+  const zone3 = s.space?.integrations === false
+    ? zone3Full.filter((x) => !OUTWARD.has(x.id))
+    : zone3Full;
 
   // Стан «tasks.json не читається» (ревʼю Task 8, п.6): у прототипі
   // (`renderBar`) під трьома зонами зʼявляється смуга помилки з причиною й

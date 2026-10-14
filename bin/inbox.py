@@ -36,7 +36,9 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 from serve import (load_tasks, supabase_pins, comment_channel,  # noqa: E402
                    task_iterations, iter_num, machine_identity,
                    iteration_is_mine, supabase_config, _ssl_context,
-                   task_for, UnknownTask, TaskNotHere)
+                   task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
+                   SpaceUnavailable)
+import spaces  # noqa: E402
 from atomic_io import atomic_write_json  # noqa: E402
 
 LOCAL_FILE = '.dc-local-comments.json'
@@ -311,9 +313,13 @@ def resolve_task(wanted):
     тоді `error: …` уже надруковано в stderr і виходити з кодом 2.
 
     Невідома назва НЕ відкочується на поточну: це і була вада (fb-07102026-e627c2) —
-    помилка в id тихо читала б і закривала піни чужої задачі."""
+    помилка в id тихо читала б і закривала піни чужої задачі.
+
+    Названа задача шукається в УСІХ просторах (`task_anywhere`), і простір, де вона є,
+    лишається зафіксованим на потоці до кінця команди (її скине `main()`)."""
     try:
-        return task_for(load_tasks(), wanted)
+        # `load_tasks` — мій імпорт, а не `serve`-івський: тести-пастки патчать його тут.
+        return task_anywhere(wanted, load=load_tasks)
     except TaskNotHere:
         # Задача Є в реєстрі, але теки на цій машині нема: «порожній інбокс» тут
         # був би брехнею, а відкат на поточну — тією самою вадою.
@@ -323,6 +329,17 @@ def resolve_task(wanted):
     except UnknownTask:
         print(f'error: немає задачі {wanted!r} у tasks.json', file=sys.stderr)
         return None
+    except NoTask as e:
+        # «Створи простір» тут брехало б, коли задачі є в інших просторах (див. `no_task_message`).
+        print(f'error: {spaces.no_task_message(e)}', file=sys.stderr)
+        return None
+    except AmbiguousTask:
+        print(f'error: задача {wanted!r} є в кількох просторах — перейменуй одну з них '
+              '(або онови id в tasks.json простору)', file=sys.stderr)
+        return None
+    except (SpaceUnavailable, spaces.SpacesError) as e:
+        print(f'error: простір недоступний — {e}', file=sys.stderr)
+        return None
 
 
 def cmd_list(where=False, task_id=None):
@@ -331,8 +348,12 @@ def cmd_list(where=False, task_id=None):
         return 2
     tid, task = got
     local = read_local(task)
+    team_off = False
     try:
         proj, proj_err = supabase_pins(comment_channel(task, tid)), None
+    except spaces.IntegrationsOff:
+        # Простір без інтеграцій: командних коментарів у ньому нема, а не «не дістати».
+        proj, proj_err, team_off = [], None, True
     except Exception as e:  # noqa: BLE001
         proj, proj_err = [], e
     wmap = None
@@ -352,13 +373,16 @@ def cmd_list(where=False, task_id=None):
     if not total:
         print('  (немає відкритих)')
     print('\n-- ПРОЄКТ (колеги + історія, Supabase) --')
-    if proj_err is None:
+    if team_off:
+        print('  командних коментарів у цьому просторі нема')
+        ext = 0
+    elif proj_err is None:
         print(_newest_line(proj))
         ext = show_pins(proj, 'проєкт', 'P', wmap)
     else:
         print(f'  проєкт: (не дістати: {proj_err})')
         ext = 0
-    if not ext:
+    if not ext and not team_off:
         print('  (немає відкритих)')
     print(f'\nРазом до відпрацювання: {total} локальних + {ext} проєктних')
     if total + ext:
@@ -426,6 +450,8 @@ def find_target(prefix, local, project_loader):
         return 'local', hits[0]
     try:
         project = project_loader()
+    except spaces.IntegrationsOff:
+        project = []        # простір без інтеграцій: проєктних пінів нема, шукаємо лише серед локальних
     except Exception as e:  # noqa: BLE001
         # ⛔ Не «не знайдено»: ми не знаємо, чи він там є.
         closed = [p for p in _match(local, prefix) if not _is_open(p)]
@@ -499,6 +525,7 @@ def patch_project_pin(pin_id, n, reason):
     тож тихий нуль можливий лише тоді, коли пін видалили між читанням і
     записом. HTTP-помилка ж підіймається з `urlopen` гучно.
     """
+    spaces.require_integrations()
     url, key = supabase_config()
     req = urllib.request.Request(
         f'{url}/rest/v1/comments?id=eq.{quote(pin_id, safe="")}',
@@ -665,6 +692,15 @@ def build_parser():
 
 
 def main(argv=None):
+    # Простір, який `resolve_task` фіксує на потоці, не сміє пережити команду (`main()` кличуть
+    # і в процесі — тести, інші скрипти).
+    try:
+        return _main(argv)
+    finally:
+        spaces.clear_request_space()
+
+
+def _main(argv):
     ap, rp = build_parser()
     a = ap.parse_args(argv)
     if a.cmd == 'resolve':

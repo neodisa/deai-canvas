@@ -1,0 +1,758 @@
+/**
+ * Простори (Deai 1.0, етап 1, Task 8) — живі СЦЕНАРІЇ ПОВЕДІНКИ, які юніти й `spaces.test.mjs`
+ * не бачать: що вкладка робить, коли простір міняється ПОЗА нею (агент, друге вікно, ручна
+ * правка реєстру), що діалоги чесно тримають фокус і стан під запитом, що екран «Задачі»
+ * оновлюється на поверненні до вікна й не стрибає від повторних запитів.
+ *
+ * Сервер справжній, «машина» ізольована (`startServer(…, {spaces})`: тимчасові `HOME` і
+ * `DEAI_HOME`, реєстр пишеться заздалегідь), Chromium справжній. Сценарії перенесено зі скриптів
+ * ревʼю Task 7 (`rev-t7{b,c,d,e,g,h}`): там вони лише друкували числа, тут — стверджують.
+ *
+ * Мапа «сценарій → запобіжник», знята мутаційно (прибери охорону — подивись, чи червоніє):
+ *   T1 heal на старті     — ДВА незалежні запобіжники (`app.js`): `resetSpaceState` у `showNoTask` і
+ *        `if (tuneRev === undefined) await loadTune()` у `render()`. Кожен окремо страхує другий (прибрати
+ *        один — тест зелений, бо другий читає пакет), обидва разом — червоніє («рівно 2 GET» стає 1).
+ *   T2 агент перемкнув    — `spaceChanged` у `render()`: скидання пер-просторового стану, пакет Y не береться з X.
+ *   T3 повтор після збою  — `if (tuneRev === undefined) await loadTune()` у `render()` (T10 — теж).
+ *   T4 space-2/space-3    — `defaultSpacePath(…, taken)`: вільна тека для кириличної назви.
+ *   T5 зареєстрована тека — `peekRegistered` (слово сервера `registered` + запасне порівняння).
+ *   T6 зайнята форма      — `busy` у `ask.js`, `.cv-ask-scrim` у `openPalette`; T6b — `aria-invalid` + стиль.
+ *   T6c стеля часу        — `formApi`/`FORM_POST_TIMEOUT_MS`: завислий запит не тримає канвас під підкладкою.
+ *   T7 фокус              — `focusBackTarget` у `done` (`ask.js`; прибрати виклик — червоніє, «завжди вертати» —
+ *        теж, через рамку макета). `focusChip` перед дією дублює `spaceDialogFocusBack`: окремо його не прибрати
+ *        без вимірювання — сторожить юніт (`tests/spaces-wiring.test.mjs`).
+ *   T8 повернення         — `refreshHomeOnReturn` + `shouldRefreshHome`: один запит на пару focus+visibilitychange.
+ *   T8b «Спробувати ще»   — `homeForced`: фокус не перебиває примусовий повтор.
+ *   T9 червона смуга      — успішний `loadHome` знімає смугу, виставлену ним самим.
+ *   T10 перша задача      — агент завів задачу в порожньому просторі: екран оновився, запис тюнера з `base_rev`.
+ *   T11 лічильники        — скільки `/api/*` коштує відкриття дропдауна, перемикання, вхід на екран.
+ */
+import assert from "node:assert/strict";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { chromium } from "playwright";
+import {
+  VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, waitText,
+} from "./_spaces-kit.mjs";
+import { startServer, taskFixture } from "./fixture.mjs";
+
+/* Своя база: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що
+   жодна база не збігається з чужою). Тести ТЕКСТОВОГО файла йдуть послідовно, тож одна смуга. */
+const PORT_BASE = 12600;
+
+/** Сторінка з елементом, що має що крутити в тюнері (`#target` з відступом) і маркер задачі. */
+const PAGE = (mark) => (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}
+:root{--sp-4:16px}
+body{margin:0;height:900px;font:14px/1.4 sans-serif;
+  background:repeating-linear-gradient(37deg,#e11 0 10px,#18a 10px 20px,#2c3 20px 30px,#fd0 30px 40px)}
+#wrap{margin:30px;padding:40px;background:#fff;display:flex;gap:24px}
+.card{margin:0;padding:var(--sp-4);background:#eef;width:260px;height:160px;color:#123456}
+</style></head><body data-mark="${mark}">
+<div id="wrap" class="row"><p id="target" class="card">Картка ${mark}/${id}</p></div>
+</body></html>`;
+
+let browser;
+test.before(async () => { browser = await chromium.launch(); });
+test.after(async () => { await browser?.close(); });
+
+/* ── машини ────────────────────────────────────────────────────────────── */
+
+/** Два простори P (задача x) і Q (задача y), поточний — перший; сторінка вже відкрита. */
+async function twoSpaces(t, { open = true, extra = {} } = {}) {
+  const X = taskFixture({ html: PAGE("X"), pages: ["holovna"] });
+  const Y = taskFixture({ html: PAGE("Y"), pages: ["holovna"] });
+  const server = await startServer(null, {
+    portBase: PORT_BASE,
+    spaces: [
+      { name: "P", id: "p", color: "space-3", tasks: { x: { dir: X.dir, title: "X" } } },
+      { name: "Q", id: "q", color: "space-4", tasks: { y: { dir: Y.dir, title: "Y" } } },
+    ],
+    ...extra,
+  });
+  t.after(() => stop(server.child));
+  const context = await browser.newContext({ viewport: VIEW });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  if (open) {
+    await page.goto(`${server.url}/app/`);
+    await page.waitForSelector("#bar .space-chip");
+  }
+  return { X, Y, server, page, context, url: server.url, home: server.home };
+}
+
+/** Порожня машина: привітання. */
+async function welcome(t) {
+  const server = await startServer(null, { portBase: PORT_BASE, spaces: [] });
+  t.after(() => stop(server.child));
+  const context = await browser.newContext({ viewport: VIEW });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${server.url}/app/`);
+  await page.waitForSelector("#tasks-home .th-welcome");
+  return { server, page, context, url: server.url, home: server.home };
+}
+
+/** Усі `/api/*` запити сторінки з моменту виклику: `["GET /api/spaces", …]`. */
+function watchApi(page) {
+  const seen = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname.startsWith("/api/")) seen.push(`${r.method()} ${u.pathname}`);
+  });
+  return seen;
+}
+const count = (seen, what) => seen.filter((x) => x === what).length;
+
+/* ── тюнер: прилади ────────────────────────────────────────────────────── */
+
+/** `GET`-и й `POST`-и `/api/tuner` — що саме вкладка читала й писала. */
+function trackTuner(page) {
+  const posts = [];
+  const gets = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname !== "/api/tuner") return;
+    if (r.method() === "POST") posts.push(JSON.parse(r.postData() || "{}")); else gets.push(r.url());
+  });
+  return { posts, gets };
+}
+
+/** Рамка завантажила сторінку задачі з цим маркером і в ній підвішено інспектор. */
+const markLoaded = (page, mark) => page.waitForFunction((m) => {
+  const f = document.getElementById("frame");
+  const doc = f && f.contentDocument;
+  return !!(doc && doc.body && doc.body.dataset.mark === m && f.contentWindow.CanvasInspector);
+}, mark, { timeout: 15000 });
+
+async function turnInspectorOn(page) {
+  await page.waitForFunction(() => {
+    const f = document.getElementById("frame");
+    return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
+  }, null, { timeout: 15000 });
+  await page.click('#bar [data-act="inspector"]');
+  await page.waitForFunction(() => document.getElementById("frame").contentWindow.CanvasInspector.on === true, null, { timeout: 5000 });
+}
+
+/** Закріпити елемент у рамці кліком по ньому. */
+async function pin(page, sel) {
+  const box = await page.frameLocator("#frame").locator(sel).boundingBox();
+  assert.ok(box, `не знайшов ${sel}`);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForFunction((s) => {
+    const api = document.getElementById("frame").contentWindow.CanvasInspector;
+    return !!api.pinned && api.pinned.id === s.replace("#", "");
+  }, sel, { timeout: 5000 });
+}
+
+/** Крутнути ручку тюнера (Shift+↑ у полі властивості). */
+async function bump(page, prop) {
+  const field = `#insp-panel [data-act="insptune"][data-prop="${prop}"]`;
+  await page.locator(field).waitFor({ timeout: 5000 });
+  await page.focus(field);
+  await page.keyboard.press("Shift+ArrowUp");
+}
+
+/** Пакет тюнера на диску задачі (`.dc-tuner.json`) або `null`. */
+function pkg(dir) {
+  const f = path.join(dir, ".dc-tuner.json");
+  if (!existsSync(f)) return null;
+  try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; }
+}
+
+/** Дочекатись, поки пакет на диску матиме `count` правок. */
+async function waitPkg(page, dir, n) {
+  for (let i = 0; i < 80; i += 1) {
+    const p = pkg(dir);
+    if (p && p.editCount === n) return p;
+    await page.waitForTimeout(50);
+  }
+  const p = pkg(dir);
+  assert.equal(p && p.editCount, n, `пакет у ${dir} не дочекався ${n} правок: ${JSON.stringify(p)}`);
+  return p;
+}
+
+/** Властивості, які пакет записав, плоским переліком. */
+const props = (p) => p.elements.flatMap((e) => e.edits.map((x) => x.prop));
+
+/* ── діалоги: прилади ──────────────────────────────────────────────────── */
+
+/** Відкрити «Новий простір…» з дропдауна фішки (рядки дропдауна дочекатись: див. `spaces.test.mjs`). */
+async function openNewSpace(page, rows = 1) {
+  await page.click("#bar .space-chip");
+  await page.waitForFunction((n) => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length >= n,
+    rows, { timeout: 15000 });
+  await page.click('.dd--spaces [data-act="spacenew"]');
+  await page.waitForSelector('form[data-form="space"][data-mode="new"]');
+}
+
+/** Що показує діалог простору про вказану теку. */
+const hints = (page) => page.evaluate(() => ({
+  found: document.getElementById("sp-found").hidden ? null : document.getElementById("sp-found").textContent,
+  reg: document.getElementById("sp-registered").hidden ? null : document.getElementById("sp-registered").textContent,
+  nameRO: document.getElementById("sp-name").readOnly,
+  colorsDisabled: document.querySelector(".cv-colors").getAttribute("aria-disabled"),
+  path: document.getElementById("sp-path").value,
+  name: document.getElementById("sp-name").value,
+}));
+
+/** Ввести теку й дочекатись, поки відповість peek (дебаунс 300 мс + запит). */
+async function typePath(page, p) {
+  await page.fill("#sp-path", p);
+  await page.waitForTimeout(900);
+  return hints(page);
+}
+
+/** Що зараз у фокусі: тег, id й клас — для повідомлень і порівнянь. */
+const active = (page) => page.evaluate(() => {
+  const a = document.activeElement;
+  if (!a) return null;
+  return { tag: a.tagName, id: a.id, cls: typeof a.className === "string" ? a.className : "", th: a.dataset?.th ?? null };
+});
+
+/* ═══════════════════════════ тюнер і зміна простору ═══════════════════════════ */
+
+test("T1 висячий current на старті: екран лікується, рівно два GET тюнера, пакет вилікуваної задачі підхоплено, запис іде з base_rev", async (t) => {
+  const { X, server, page, url } = await twoSpaces(t, { open: false });
+  await page.goto(`${url}/app/`);
+  await markLoaded(page, "X");
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-top");
+  await waitPkg(page, X.dir, 1);
+
+  /* Реєстр вказує на простір, якого нема (ручна правка, видалений простір). */
+  const regFile = path.join(server.deaiHome, "spaces.json");
+  const reg = JSON.parse(readFileSync(regFile, "utf8"));
+  reg.current = "ghost";
+  writeFileSync(regFile, JSON.stringify(reg));
+
+  const tr = trackTuner(page);
+  await page.reload();
+  await markLoaded(page, "X");
+  await waitText(page, "#bar .space-name", "P");
+  await page.waitForTimeout(500);
+  /* Перший GET — до першого рендера (задачі нема), другий — після лікування, коли пер-задачний
+     стан скинуто й пакет читається ЗНОВУ. Третій означав би зайве читання, нуль чи один —
+     що пакет вилікуваної задачі не прочитано взагалі. */
+  assert.equal(tr.gets.length, 2, `GET /api/tuner після лікування: ${tr.gets.length} (очікувалось рівно 2)`);
+
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-left");
+  const p = await waitPkg(page, X.dir, 2);
+  assert.ok(tr.posts.length >= 1, "правка не записалась");
+  assert.ok("base_rev" in tr.posts[0], "перший запис після лікування без base_rev: затер би пакет, якого вкладка не читала");
+  assert.deepEqual(props(p).sort(), ["padding-left", "padding-top"], "стара правка зникла з пакета: його не підхоплено з диска");
+});
+
+test("T2 агент (або інша вкладка) перемкнув ПРОСТІР, поки вкладка відкрита: render() скидає пер-просторовий стан і читає пакет нової задачі", async (t) => {
+  const { X, Y, page, url } = await twoSpaces(t);
+  await page.waitForSelector("#frame");
+  await markLoaded(page, "X");
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-top");
+  await waitPkg(page, X.dir, 1);
+
+  const tr = trackTuner(page);
+  const sw = await postJson(url, "/api/space-switch", { id: "q" });
+  assert.equal(sw.status, 200);
+  /* Вкладка про це не знає: бачить лише наступний `render()` — його дає перемикач режиму. */
+  await page.click('#bar [data-act="mode"][data-val="overview"]');
+  await page.waitForTimeout(600);
+  await page.click('#bar [data-act="mode"][data-val="layout"]');
+  await markLoaded(page, "Y");
+  await waitText(page, "#bar .space-name", "Q");
+  assert.ok(tr.gets.length >= 1, "пакет нової задачі не читався після зміни простору");
+
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-left");
+  const py = await waitPkg(page, Y.dir, 1);
+  assert.ok("base_rev" in tr.posts[tr.posts.length - 1], "запис у новому просторі без base_rev");
+  assert.deepEqual(props(py), ["padding-left"], "правка з пакета ЧУЖОЇ задачі протекла в пакет Y");
+  assert.equal(pkg(X.dir).editCount, 1, "пакет задачі старого простору хтось чіпав");
+});
+
+test("T3 повтор після збою читання (смуга помилки → «Спробувати ще»): пакет перечитано, запис іде з base_rev, не затирає", async (t) => {
+  const { X, server, page } = await twoSpaces(t);
+  await markLoaded(page, "X");
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-top");
+  await waitPkg(page, X.dir, 1);
+
+  const tasksFile = path.join(server.spaces[0].path, "tasks.json");
+  const good = readFileSync(tasksFile, "utf8");
+  writeFileSync(tasksFile, "{broken");
+  await page.reload();
+  await page.waitForSelector(".errbar", { timeout: 15000 });
+
+  writeFileSync(tasksFile, good);
+  const tr = trackTuner(page);
+  await page.click('.errbar [data-act="retry"]');
+  await markLoaded(page, "X");
+  await page.waitForSelector(".errbar", { state: "detached", timeout: 15000 });
+  assert.ok(tr.gets.length >= 1, "після повтору пакет не перечитано: tuneRev лишилась невизначеною");
+
+  await turnInspectorOn(page);
+  await pin(page, "#target");
+  await bump(page, "padding-left");
+  const p = await waitPkg(page, X.dir, 2);
+  assert.ok("base_rev" in tr.posts[0], "запис після повтору без base_rev");
+  assert.deepEqual(props(p).sort(), ["padding-left", "padding-top"], "повтор затер пакет, що лежав на диску");
+});
+
+/* ═══════════════════════════ діалог простору: тека, зайнятість, помилки ═══════════════════════════ */
+
+test("T4 друга й третя кирилична назва: тека вільна (space-2, space-3), діалог не заблоковано, простори створюються", async (t) => {
+  const { page, url, home } = await welcome(t);
+  await page.click('#tasks-home .th-welcome [data-th="spacenew"]');
+  await page.waitForSelector('form[data-form="space"][data-mode="new"]');
+  assert.equal(await page.inputValue("#sp-path"), "~/deai-work/personal");
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await waitText(page, "#tasks-home h1.th-h", "Задачі · Особисте");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+
+  /* Друге «кириличне» ім'я: слаг порожній, `personal` уже зайнято першим простором. Раніше діалог
+     відкривався з тією ж текою й одразу заблокованим («у цій теці вже є простір»). */
+  await openNewSpace(page);
+  await page.fill("#sp-name", "Клієнт");
+  await page.waitForTimeout(800);
+  const h = await hints(page);
+  assert.equal(h.path, "~/deai-work/space-2", "друга кирилична назва лягла на зайняту теку");
+  assert.equal(h.found, null, "порожня тека названа знайденим простором");
+  assert.equal(h.reg, null, "вільна тека названа вже доданою");
+  assert.equal(h.nameRO, false, "поле назви заблоковане");
+  assert.equal(h.colorsDisabled, null, "кружки кольору заблоковані");
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await waitText(page, "#bar .space-name", "Клієнт");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  const reg = await spacesApi(url);
+  assert.deepEqual(reg.spaces.map((x) => x.path),
+    [path.join(home, "deai-work", "personal"), path.join(home, "deai-work", "space-2")]);
+
+  /* Третє — теж кирилицею: далі лічильник. */
+  await openNewSpace(page, 2);
+  await page.fill("#sp-name", "Інший");
+  assert.equal(await page.inputValue("#sp-path"), "~/deai-work/space-3");
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await waitText(page, "#bar .space-name", "Інший");
+  assert.deepEqual((await spacesApi(url)).spaces.map((x) => path.basename(x.path)), ["personal", "space-2", "space-3"]);
+});
+
+test("T5 зареєстрована тека: «~», абсолютний, хвостовий слеш, //, NFD, варіант регістру — підказка «вже додано», а не «знайдено»", async (t) => {
+  const { page, url, home } = await welcome(t);
+  await page.click('#tasks-home .th-welcome [data-th="spacenew"]');
+  await page.waitForSelector('form[data-form="space"][data-mode="new"]');
+  await page.fill("#sp-name", "Київ");
+  await page.fill("#sp-path", "~/deai-work/Київ");
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await waitText(page, "#tasks-home h1.th-h", "Задачі · Київ");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+
+  await openNewSpace(page);
+  const res = {};
+  for (const [k, p] of [
+    ["tilde", "~/deai-work/Київ"],
+    ["tilde-slash", "~/deai-work/Київ/"],
+    ["abs", `${home}/deai-work/Київ`],
+    ["abs-slash", `${home}/deai-work/Київ/`],
+    ["dblslash", `${home}/deai-work//Київ`],
+    ["NFD", `${home}/deai-work/${"Київ".normalize("NFD")}`],
+    ["NFD-tilde", `~/deai-work/${"Київ".normalize("NFD")}`],
+    ["other", "~/deai-work/other"],
+  ]) {
+    const h = await typePath(page, p);
+    res[k] = { reg: Boolean(h.reg), found: Boolean(h.found), nameRO: h.nameRO };
+  }
+  for (const k of ["tilde", "tilde-slash", "abs", "abs-slash", "dblslash", "NFD", "NFD-tilde"]) {
+    assert.deepEqual(res[k], { reg: true, found: false, nameRO: false }, `${k}: зареєстрована тека показана не як «вже додано»`);
+  }
+  assert.deepEqual(res.other, { reg: false, found: false, nameRO: false }, "вільна тека названа доданою");
+
+  /* Слово СЕРВЕРА (`registered` у відповіді peek): простір завів агент, вкладка про нього не знає —
+     клієнтський реєстр цієї теки не бачить, а діалог мусить її впізнати. */
+  const made = await postJson(url, "/api/space-new", { name: "CaseA", color: "space-1", path: path.join(home, "deai-work", "caseA") });
+  assert.equal(made.status, 200, "агент не зміг завести простір");
+  const exact = await typePath(page, `${home}/deai-work/caseA`);
+  assert.ok(exact.reg, "тека простору, якого вкладка ще не бачила, не впізнана: слово сервера `registered` проігноровано");
+  assert.equal(exact.found, null, "чужий простір названо знайденим");
+  assert.equal(exact.nameRO, false);
+
+  /* Варіант регістру: на macOS (APFS без урахування регістру) це та сама тека. Де ФС регістр розрізняє —
+     це інша тека, і перевірка не про що. */
+  if (existsSync(path.join(home, "deai-work", "CASEA"))) {
+    const variant = await typePath(page, `${home}/deai-work/CASEa`);
+    assert.ok(variant.reg, "варіант регістру зареєстрованої теки названо вільним (сервер відмовить path-registered)");
+    assert.equal(variant.found, null, "варіант регістру показано як знайдений простір");
+  }
+});
+
+test("T6 зайнята форма: ⌘K поверх діалогу не відкривається, Esc і «Скасувати» під час запиту не закривають, перехід один", async (t) => {
+  const { page, url } = await twoSpaces(t);
+  await page.route("**/api/space-new", async (route) => { await sleep(1500); await route.continue(); });
+  const seen = watchApi(page);
+
+  /* Свідок: без діалогу ⌘K палітру відкриває (інакше «не відкрилась» нічого б не доводило). */
+  await page.keyboard.press("Control+k");
+  await page.locator(".pal").waitFor({ timeout: 5000 });
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelectorAll(".pal").length === 0);
+
+  await openNewSpace(page, 2);
+  await page.fill("#sp-name", "Client");
+  await page.keyboard.press("Control+k");
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator(".pal").count(), 0, "⌘K відкрив палітру поверх відкритої форми");
+  assert.equal(await page.locator('form[data-form="space"]').count(), 1, "форму закрито ⌘K");
+
+  seen.length = 0;
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await page.waitForFunction(() => document.querySelector('form[data-form="space"]')?.getAttribute("aria-busy") === "true");
+  await page.keyboard.press("Escape");
+  await page.click('form[data-form="space"] [data-a="cancel"]', { force: true });
+  await page.keyboard.press("Control+k");
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator('form[data-form="space"]').count(), 1, "форму закрито під час запиту");
+  assert.equal(await page.locator(".pal").count(), 0, "палітра відкрилась поверх зайнятої форми");
+
+  await waitText(page, "#bar .space-name", "Client");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  await page.waitForTimeout(600);
+  assert.equal(count(seen, "POST /api/space-new"), 1, `запитів на створення: ${count(seen, "POST /api/space-new")}`);
+  assert.equal((await spacesApi(url)).current, "client", "перехід на створений простір не стався або стався не туди");
+  assert.deepEqual((await spacesApi(url)).spaces.map((x) => x.id), ["p", "q", "client"]);
+});
+
+test("T6b помилка сервера лишається в діалозі: рамка й aria-invalid — на ТОМУ полі, фокус там, знімається правкою; текстова помилка — про інше поле", async (t) => {
+  const { page } = await twoSpaces(t);
+  await openNewSpace(page, 2);
+  await page.fill("#sp-name", "Dup");
+  await page.fill("#sp-path", "relative/path");
+  const before = await page.evaluate(() => getComputedStyle(document.getElementById("sp-path")).borderTopColor);
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await page.waitForFunction(() => {
+    const e = document.querySelector("[data-form-error]");
+    return Boolean(e && !e.hidden && e.textContent.trim());
+  });
+  const st = await page.evaluate(() => ({
+    path: document.getElementById("sp-path").getAttribute("aria-invalid"),
+    name: document.getElementById("sp-name").getAttribute("aria-invalid"),
+    focus: document.activeElement.id,
+    border: getComputedStyle(document.getElementById("sp-path")).borderTopColor,
+    other: getComputedStyle(document.getElementById("sp-name")).borderTopColor,
+  }));
+  assert.equal(st.path, "true", "поле теки не позначено aria-invalid");
+  assert.equal(st.name, null, "чуже поле позначено aria-invalid");
+  assert.equal(st.focus, "sp-path", "фокус не на полі з помилкою");
+  assert.notEqual(st.border, before, "поле з помилкою не змінило рамку: aria-invalid без видимого вигляду");
+  assert.equal(st.border, "rgb(194, 54, 46)", `рамка поля з помилкою — не --bad-ink: ${st.border}`);
+  assert.notEqual(st.other, st.border, "чуже поле теж червоне");
+
+  /* Правка поля знімає відмову разом з рамкою. */
+  await page.fill("#sp-path", "~/deai-work/dup");
+  assert.equal(await page.getAttribute("#sp-path", "aria-invalid"), null);
+  assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById("sp-path")).borderTopColor), before, "рамка лишилась червоною після правки");
+
+  /* Помилка про назву — на назві, а не на тецi (стара відмова поля теки не повертається). */
+  await page.fill("#sp-name", "");
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await page.waitForFunction(() => { const e = document.querySelector("[data-form-error]"); return e && !e.hidden; });
+  assert.equal(await page.getAttribute("#sp-name", "aria-invalid"), "true");
+  assert.equal(await page.getAttribute("#sp-path", "aria-invalid"), null);
+  assert.equal(await page.evaluate(() => document.activeElement.id), "sp-name");
+});
+
+test("T6c завислий сервер не тримає канвас під підкладкою: за 20 с запит обривається, форма вільна й каже про це, повтор працює", async (t) => {
+  const { page, url } = await twoSpaces(t);
+  await page.route("**/api/space-new", () => { /* ніколи не відповідає: ні continue, ні fulfill */ });
+  const seen = watchApi(page);
+  await openNewSpace(page, 2);
+  await page.fill("#sp-name", "Slow");
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await page.waitForFunction(() => document.querySelector('form[data-form="space"]')?.getAttribute("aria-busy") === "true");
+
+  /* Під запитом Esc форму не закриває (сервер міг би створити простір за закритим вікном). */
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator('form[data-form="space"]').count(), 1, "Esc закрив зайняту форму");
+  const started = Date.now();
+
+  /* Стеля: форма знову вільна — і каже чому. */
+  await page.waitForFunction(() => document.querySelector('form[data-form="space"]')?.getAttribute("aria-busy") !== "true",
+    null, { timeout: 40000 });
+  const waited = Date.now() - started;
+  assert.ok(waited >= 15000 && waited <= 35000, `стеля спрацювала за ${waited} мс (очікувалось близько 20 с)`);
+  const msg = await page.textContent("[data-form-error]");
+  assert.match(msg, /не відповів вчасно/, `текст про завислий запит: ${msg}`);
+  assert.equal(await page.evaluate(() => document.querySelector('form[data-form="space"] [data-a="ok"]').disabled), false, "«Створити» лишилась вимкненою");
+  assert.equal(await page.locator("[data-form-invalid], [aria-invalid]").count(), 0, "таймаут — не вина поля: aria-invalid не ставиться");
+  assert.equal((await spacesApi(url)).spaces.length, 2, "запит, якого сервер не отримав, щось створив");
+
+  /* Повтор у ТІЙ САМІЙ формі: сервер тепер відповідає — простір створюється, діалог закривається. */
+  await page.unroute("**/api/space-new");
+  seen.length = 0;
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await waitText(page, "#bar .space-name", "Slow");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  assert.equal(count(seen, "POST /api/space-new"), 1, "повтор після таймауту пішов не одним запитом");
+  assert.deepEqual((await spacesApi(url)).spaces.map((x) => x.id), ["p", "q", "slow"]);
+});
+
+/* ═══════════════════════════ фокус після діалогів ═══════════════════════════ */
+
+test("T7 фокус після діалогу: фішка (Esc, «Скасувати», «Зберегти»), кнопка «Нова задача» на екрані, рамка макета свого фокуса не віддає", async (t) => {
+  const { page } = await twoSpaces(t);
+  await page.waitForSelector("#frame");
+  const chipFocused = async (what) => {
+    const a = await active(page);
+    assert.ok(a && a.cls.split(" ").includes("space-chip"), `${what}: фокус не на фішці простору, а на ${JSON.stringify(a)}`);
+  };
+  const openDd = async () => {
+    await page.click("#bar .space-chip");
+    await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
+  };
+
+  /* (i) дропдаун → «Новий простір…» клавіатурою → Esc. */
+  await openDd();
+  await page.focus('.dd--spaces [data-act="spacenew"]');
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('form[data-form="space"]');
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  await chipFocused("Esc з діалогу нового простору");
+
+  /* (i-b) «Назва й колір…» → «Скасувати». */
+  await openDd();
+  await page.focus('.dd--spaces [data-act="spaceedit"]');
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('form[data-mode="edit"]');
+  await page.click('form[data-mode="edit"] [data-a="cancel"]');
+  await page.waitForFunction(() => !document.querySelector('form[data-mode="edit"]'));
+  await chipFocused("«Скасувати» в діалозі правки");
+
+  /* (i-c) збереження: смуга перемальована (вузол фішки — новий), фокус усе одно на ній. */
+  await openDd();
+  await page.focus('.dd--spaces [data-act="spaceedit"]');
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('form[data-mode="edit"]');
+  await page.fill("#sp-name", "P2");
+  await page.click('form[data-mode="edit"] [data-a="ok"]');
+  await page.waitForFunction(() => !document.querySelector('form[data-mode="edit"]'));
+  await waitText(page, "#bar .space-name", "P2");
+  await chipFocused("збереження в діалозі правки");
+
+  /* (ii) екран «Задачі»: «Нова задача» → «Скасувати» — фокус на кнопці, якою діалог відкрили. */
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  await page.click('#tasks-home .th-head [data-th="newtask"]');
+  await page.waitForSelector('form[data-form="task"]');
+  await page.click('form[data-form="task"] [data-a="cancel"]');
+  await page.waitForFunction(() => !document.querySelector('form[data-form="task"]'));
+  assert.equal((await active(page))?.th, "newtask", `після «Скасувати» у формі задачі фокус не на кнопці «Нова задача»: ${JSON.stringify(await active(page))}`);
+
+  /* (iii) фокус У РАМЦІ макета: діалог закривається, фокус лишається там, куди людина його віддала. */
+  await page.click('#bar [data-act="back"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"));
+  await openDd();
+  await page.click('.dd--spaces [data-act="spacenew"]');
+  await page.waitForSelector('form[data-form="space"]');
+  await page.evaluate(() => document.getElementById("frame").focus());
+  assert.equal((await active(page))?.id, "frame", "свідок: фокус не перейшов у рамку");
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  assert.equal((await active(page))?.id, "frame", "діалог украв фокус у рамки макета");
+});
+
+test("T7b відчеплений відкривач: привітання → діалог → оновлення на фокусі перемальовує екран → Esc → фокус на кнопці привітання", async (t) => {
+  const { page } = await welcome(t);
+  await page.click('#tasks-home .th-welcome [data-th="spacenew"]');
+  await page.waitForSelector('form[data-form="space"]');
+  await page.evaluate(() => { window.__old = document.querySelector('#tasks-home [data-th="spacenew"]'); });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForFunction(() => !window.__old.isConnected, null, { timeout: 5000 })
+    .catch(() => { throw new Error("свідок: оновлення екрана не перемалювало привітання — сценарій не відтворює відчеплений відкривач"); });
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  const a = await active(page);
+  assert.equal(a?.th, "spacenew", `фокус не на кнопці привітання: ${JSON.stringify(a)}`);
+  assert.equal(await page.evaluate(() => document.activeElement.isConnected), true);
+});
+
+/* ═══════════════════════════ екран «Задачі»: повернення до вікна ═══════════════════════════ */
+
+test("T8 повернення до вікна: простір, який завів агент, зʼявляється; пара focus+visibilitychange — один запит, серія — теж", async (t) => {
+  const { page, url, home } = await welcome(t);
+  const seen = watchApi(page);
+  /* Агент заводить простір, поки екран привітання відкритий. */
+  const made = await postJson(url, "/api/space-new", { name: "Agent", color: "space-1", path: path.join(home, "deai-work", "agentspace") });
+  assert.equal(made.status, 200);
+
+  seen.length = 0;
+  await page.evaluate(() => { window.dispatchEvent(new Event("focus")); document.dispatchEvent(new Event("visibilitychange")); });
+  await waitText(page, "#tasks-home h1.th-h", "Задачі · Agent");
+  await page.waitForTimeout(500);
+  assert.equal(count(seen, "GET /api/spaces"), 1, `пара focus+visibilitychange: GET /api/spaces ×${count(seen, "GET /api/spaces")}`);
+  assert.equal(count(seen, "GET /api/tasks-overview"), 1, `пара focus+visibilitychange: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+  assert.equal(await page.locator("#tasks-home .th-welcome").count(), 0, "привітання лишилось після того, як простір зʼявився");
+
+  /* Серія focus поспіль (alt-tab кілька разів) — теж один запит: gap 800 мс. */
+  await page.waitForTimeout(900);
+  seen.length = 0;
+  for (let i = 0; i < 3; i += 1) await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(600);
+  assert.equal(count(seen, "GET /api/tasks-overview"), 1, `серія з трьох focus: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+
+  /* Через gap — знову один (оновлення не заглухло назавжди). */
+  await page.waitForTimeout(900);
+  seen.length = 0;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(600);
+  assert.equal(count(seen, "GET /api/tasks-overview"), 1, "після gap повернення до вікна не оновило екран");
+});
+
+test("T8b «Спробувати ще» (`loadHome(true)`) у польоті — перечитування з фокуса його не перебиває: один запит, з refresh=1", async (t) => {
+  const { page } = await twoSpaces(t);
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+
+  /* Збій огляду: дані вже є — зверху банер із кнопкою повтору. */
+  await page.route("**/api/tasks-overview*", (r) => r.abort());
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForSelector('#tasks-home [data-th="retry"]', { timeout: 10000 });
+  await page.unroute("**/api/tasks-overview*");
+
+  /* Повтор іде повільно: поки він у польоті, людина повертається до вікна. */
+  const reqs = [];
+  await page.route("**/api/tasks-overview*", async (route) => {
+    reqs.push(route.request().url());
+    await sleep(1500);
+    await route.continue();
+  });
+  await page.waitForTimeout(900);   // gap від попереднього оновлення
+  await page.click('#tasks-home [data-th="retry"]');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForSelector('#tasks-home [data-th="retry"]', { state: "detached", timeout: 10000 });
+  await page.waitForTimeout(300);
+  assert.equal(reqs.length, 1, `під час повтору пішло ще ${reqs.length - 1} запит(ів) огляду: фокус перебив примусовий повтор`);
+  assert.match(reqs[0], /refresh=1/, "повтор пішов без примусу");
+});
+
+test("T9 червона смуга «простір не читається» знімається, щойно екран «Задачі» успішно перечитав огляд", async (t) => {
+  const { page, server } = await twoSpaces(t);
+  const tasksFile = path.join(server.spaces[0].path, "tasks.json");
+  const good = readFileSync(tasksFile, "utf8");
+  writeFileSync(tasksFile, "{broken");
+  await page.reload();
+  await page.waitForSelector(".errbar", { timeout: 15000 });
+
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home", { state: "visible" });
+  await page.waitForTimeout(800);
+  assert.equal(await page.locator(".errbar").count(), 1, "свідок: смуга помилки зникла ще до виправлення файла");
+
+  writeFileSync(tasksFile, good);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForSelector("#tasks-home .th-card", { timeout: 10000 });
+  await page.waitForFunction(() => !document.querySelector(".errbar"), null, { timeout: 5000 })
+    .catch(() => { throw new Error("червона смуга лишилась після успішного перечитування екрана «Задачі»"); });
+});
+
+/* ═══════════════════════════ порожній простір, лічильники запитів ═══════════════════════════ */
+
+test("T10 агент завів першу задачу в порожньому поточному просторі: екран оновився на фокусі, картка відкривається, запис тюнера з base_rev", async (t) => {
+  const server = await startServer(null, { portBase: PORT_BASE, spaces: [{ name: "P", id: "p", color: "space-3", tasks: {} }] });
+  t.after(() => stop(server.child));
+  const context = await browser.newContext({ viewport: VIEW });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const tr = trackTuner(page);
+  await page.goto(`${server.url}/app/`);
+  await page.waitForSelector("#tasks-home .th-empty--space");
+  assert.equal(await page.locator("#tasks-home .th-card").count(), 0, "свідок: у порожньому просторі вже є картки");
+
+  const made = await postJson(server.url, "/api/task-new", { id: "t1", title: "T1", space: "p" });
+  assert.equal(made.status, 200, `агент не зміг завести задачу: ${await made.text()}`);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForSelector('#tasks-home .th-card[data-id="t1"]', { timeout: 10000 });
+
+  await page.click('#tasks-home .th-card[data-id="t1"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"));
+  await waitText(page, "#bar .crumb--task .txt", "t1");
+  await turnInspectorOn(page);
+  const box = await page.frameLocator("#frame").locator("h1").boundingBox();
+  assert.ok(box, "стартовий макет задачі без заголовка: нема що закріпити");
+  await page.mouse.click(box.x + 5, box.y + 5);
+  await page.waitForFunction(() => Boolean(document.getElementById("frame").contentWindow.CanvasInspector.pinned), null, { timeout: 5000 });
+  const field = '#insp-panel [data-act="insptune"]';
+  await page.locator(field).first().waitFor({ timeout: 5000 });
+  await page.locator(field).first().focus();
+  await page.keyboard.press("Shift+ArrowUp");
+  for (let i = 0; i < 80 && !tr.posts.length; i += 1) await page.waitForTimeout(50);
+  assert.ok(tr.posts.length >= 1, "правка тюнера не записалась");
+  assert.ok("base_rev" in tr.posts[0], "перший запис у щойно відкритій задачі без base_rev");
+});
+
+test("T11 лічильники запитів: дропдаун, перемикання простору, вхід на екран — без зайвих перечитувань реєстру", async (t) => {
+  const { page } = await twoSpaces(t);
+  await page.waitForTimeout(1500);
+  const seen = watchApi(page);
+  const spacesN = () => count(seen, "GET /api/spaces");
+
+  seen.length = 0;
+  await page.click("#bar .space-chip");
+  await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
+  await page.waitForTimeout(300);
+  assert.equal(spacesN(), 1, `відкриття дропдауна: GET /api/spaces ×${spacesN()}`);
+
+  seen.length = 0;
+  await page.click('.dd--spaces .dd-item[data-val="q"]');
+  await waitText(page, "#bar .space-name", "Q");
+  await page.waitForTimeout(1200);
+  assert.equal(count(seen, "POST /api/space-switch"), 1, "перемикання — не один space-switch");
+  assert.equal(spacesN(), 1, `одне перемикання простору — ${spacesN()}× GET /api/spaces (було 5)`);
+  assert.equal(count(seen, "GET /api/task"), 1, `перемикання: GET /api/task ×${count(seen, "GET /api/task")}`);
+
+  seen.length = 0;
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  await page.waitForTimeout(800);
+  assert.equal(spacesN(), 1, `вхід на екран: GET /api/spaces ×${spacesN()}`);
+  assert.equal(count(seen, "GET /api/tasks-overview"), 1, `вхід на екран: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+
+  /* Перемикання, коли екран «Задачі» відкритий: він лишається екраном і не питає зайвого. */
+  await page.click("#bar .space-chip");
+  await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
+  seen.length = 0;
+  await page.click('.dd--spaces .dd-item[data-val="p"]');
+  await waitText(page, "#bar .space-name", "P");
+  await page.waitForTimeout(1200);
+  assert.equal(spacesN(), 1, `перемикання на екрані «Задачі»: GET /api/spaces ×${spacesN()}`);
+  assert.equal(count(seen, "GET /api/tasks-overview"), 1, `перемикання на екрані: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+});
+
+test("T11b привітання не опитує нічого назовні, а створення з привітання — один простір і один перехід", async (t) => {
+  const { page } = await welcome(t);
+  const seen = watchApi(page);
+  await page.waitForTimeout(3000);
+  const polled = [...new Set(seen)].filter((x) => !/\/api\/(spaces|tasks-overview|claude-status|shoot-progress)$/.test(x.split(" ")[1]));
+  assert.deepEqual(polled, [], `привітання щось опитує: ${polled.join(", ")}`);
+
+  await page.click('#tasks-home .th-welcome [data-th="spacenew"]');
+  await page.waitForSelector('form[data-form="space"]');
+  await page.waitForTimeout(600);
+  seen.length = 0;
+  await page.click('form[data-form="space"] [data-a="ok"]');
+  await page.waitForFunction(() => document.querySelector("#tasks-home h1.th-h")?.textContent.includes("Особисте"));
+  await page.waitForTimeout(1200);
+  assert.equal(count(seen, "POST /api/space-new"), 1);
+  assert.ok(count(seen, "GET /api/spaces") <= 2, `створення з привітання: GET /api/spaces ×${count(seen, "GET /api/spaces")}`);
+  /* Два, не один: `afterSpaceChange` повертає екран «Задачі» (`enterHome`), а порожній новий простір
+     ще й `showNoTask` (теж `enterHome`); перший запит відкидає `homeSeq`. Стеля, а не вимога: зростання
+     вище двох — це вже зайве перечитування. */
+  assert.ok(count(seen, "GET /api/tasks-overview") <= 2, `створення з привітання: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+});
+
+guardRealDeai();

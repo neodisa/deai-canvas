@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { setLang } from "../app/i18n.js";
+import { DICT, setLang } from "../app/i18n.js";
 import {
-  cardHTML, defaultSort, effectiveSort, homeGridHTML, homeHTML, profileLabel, pruneFilters, safeThumb,
+  cardHTML, defaultSort, effectiveSort, effectiveTab, homeGridHTML, homeHTML, profileLabel, pruneFilters, safeThumb,
   safeUrl, sortsFor, thumbBrokenHTML,
 } from "../app/tasks-home.js";
 
@@ -292,4 +292,151 @@ test("повторний запит не вдався, дані вже є: ря�
 test("вкладена кнопка «Відкрити в канвасі» має data-id (щоб після перемальовки фокус вернувся на ту саму)", () => {
   assert.match(cardHTML(DATA.team.rows[0], UI({ tab: "team", sort: "changed" }), "z"),
     /<button class="th-lnk" data-th="open" data-id="edr">/);
+});
+
+/* ── простори (Deai 1.0, етап 1) ──────────────────────────────────────────────
+   `data.space` — те, що `/api/tasks-overview` віддає поруч з `mine`/`team`.
+   Простір без інтеграцій: дашборда команди нема (`team: null`) — вкладки
+   «Команда» немає, а збережена в UI вкладка `team` читається як `mine` (інакше
+   екран малював би порожній список під вкладкою, якої нема). «Нова задача» —
+   єдиний спосіб завести задачу не з Jira-реєстру, тож кнопка стоїть у голові
+   екрана саме там, де інтеграцій нема. */
+const OFF = { name: "P", integrations: false };
+const D_OFF = (o = {}) => ({ current: null, mine: [], team: null, space: OFF, ...o });
+
+test("простір без інтеграцій: заголовок «Задачі · P», вкладки «Команда» нема, є «Нова задача»", () => {
+  const h = homeHTML(UI(), D_OFF());
+  assert.match(h, /<h1 class="th-h">Задачі · P<\/h1>/);
+  assert.doesNotMatch(h, /data-v="team"/, "вкладка команди без дашборда");
+  assert.doesNotMatch(h, /Команда/);
+  assert.match(h, /data-v="mine"/);
+  assert.match(h, /<button[^>]*class="ctl ctl--pri"[^>]*data-th="newtask"|<button[^>]*data-th="newtask"[^>]*class="ctl ctl--pri"/);
+  assert.match(h, /Нова задача/);
+});
+
+test("простір без інтеграцій і без задач: порожній стан із підказкою агентові й кнопкою", () => {
+  const h = homeHTML(UI(), D_OFF());
+  assert.match(h, /class="th-empty[ "]/);
+  assert.match(h, /Тут ще нема задач/);
+  assert.match(h, /простор[іу] P/i, "підказка агентові не називає простір");
+  assert.equal((h.match(/data-th="newtask"/g) || []).length, 2, "кнопка в голові + кнопка в порожньому стані");
+  const box = /<div class="th-empty th-empty--space">[\s\S]*?<\/div><\/div>/.exec(h)?.[0];
+  assert.ok(box, "порожній стан простору — окремий вузол th-empty--space");
+  assert.match(box, /<div class="th-empty-act"><button[^>]*data-th="newtask"/, "кнопка в обгортці th-empty-act");
+  assert.doesNotMatch(h, /Нічого не знайдено/, "це не «порожня видача», а порожній простір");
+  assert.doesNotMatch(h, /data-th="reset"/, "скидати нічого");
+});
+
+test("порожній стан простору — і в нижній частині, що перемальовується окремо", () => {
+  const g = homeGridHTML(UI(), D_OFF());
+  assert.match(g, /Тут ще нема задач/);
+  assert.match(g, /id="th-grid"/);
+});
+
+test("простір без інтеграцій із задачами: картки, без порожнього стану; «Нова задача» лише в голові", () => {
+  const h = homeHTML(UI(), D_OFF({ mine: [A, B], current: "edr" }));
+  assert.equal(cards(h), 2);
+  assert.doesNotMatch(h, /Тут ще нема задач/);
+  assert.equal((h.match(/data-th="newtask"/g) || []).length, 1);
+});
+
+test("простір без інтеграцій: фільтр сховав усе — це «Нічого не знайдено», не «порожній простір»", () => {
+  const h = homeHTML(UI({ q: "zzzнемає" }), D_OFF({ mine: [A, B] }));
+  assert.match(h, /Нічого не знайдено/);
+  assert.doesNotMatch(h, /Тут ще нема задач/);
+});
+
+test("збережена вкладка `team` при `team: null` малюється як `mine`", () => {
+  const ui = UI({ tab: "team", sort: "changed" });
+  const h = homeHTML(ui, D_OFF({ mine: [A, B] }));
+  assert.match(h, /aria-selected="true" data-th="tab" data-v="mine"/);
+  assert.equal(cards(h), 2, "картки «Моїх» мусять бути видні");
+  assert.match(h, /placeholder="Номер, назва, статус…"/, "плейсхолдер вкладки «Мої»");
+  assert.doesNotMatch(h, /Відкрити в канвасі/, "картка команди просочилась");
+  assert.equal(effectiveTab(ui, D_OFF()), "mine");
+  // і нижня частина, що перемальовується окремо, читає вкладку так само
+  assert.equal(cards(homeGridHTML(ui, D_OFF({ mine: [A, B] }))), 2);
+  // сортування вкладки «Мої» (є recent), а не збережене командне
+  assert.match(h, /<option value="changed" selected>/, "changed існує і на «Моїх» — лишається");
+  const recent = homeHTML(UI({ tab: "team", sort: "recent" }), D_OFF({ mine: [A, B] }));
+  assert.match(recent, /<option value="recent" selected>/);
+});
+
+test("effectiveTab: `team` лишається, коли команда є; мої — завжди мої", () => {
+  assert.equal(effectiveTab(UI({ tab: "team" }), DATA), "team");
+  assert.equal(effectiveTab(UI({ tab: "mine" }), DATA), "mine");
+  assert.equal(effectiveTab(UI({ tab: "mine" }), D_OFF()), "mine");
+  // команда з помилкою — усе ще команда (`team` — обʼєкт)
+  const err = { ...DATA, team: { rows: [], error: "VPN", fetchedAt: 1, rowsAt: null } };
+  assert.equal(effectiveTab(UI({ tab: "team" }), err), "team");
+});
+
+test("до відповіді: вкладки на місці; відомий простір без інтеграцій ховає «Команду» одразу", () => {
+  // без відомостей про простір — як було (вкладки є «поки вантажиться»)
+  assert.match(homeHTML(UI(), { loading: true }), /data-v="team"/);
+  assert.match(homeHTML(UI(), null), /data-v="team"/);
+  // а простір відомий — вкладка не мигає на мить завантаження
+  const h = homeHTML(UI(), { loading: true, space: OFF });
+  assert.doesNotMatch(h, /data-v="team"/);
+  assert.match(h, /Задачі · P/);
+  assert.match(h, /Завантажую задачі/);
+  assert.equal((h.match(/data-th="newtask"/g) || []).length, 1, "кнопка в голові є й до відповіді; порожнього стану ще нема");
+});
+
+test("з інтеграціями: кнопки «Нова задача» нема, вкладки й заголовок як були", () => {
+  const withInt = { name: "ЛІГА", integrations: true };
+  const h = homeHTML(UI(), { ...DATA, space: withInt });
+  assert.doesNotMatch(h, /data-th="newtask"/);
+  assert.match(h, /data-v="team"/);
+  assert.match(h, /Мої · 3/);
+  assert.match(h, /<h1 class="th-h">Задачі · ЛІГА<\/h1>/, "назва простору в заголовку — і з інтеграціями");
+  // порожні «мої» в просторі З інтеграціями — звичайне «Нічого не знайдено», не екран агента
+  const empty = homeHTML(UI(), { ...DATA, mine: [], space: withInt });
+  assert.doesNotMatch(empty, /Тут ще нема задач/);
+});
+
+test("без `space` екран такий, як був: заголовок «Задачі», кнопки нема", () => {
+  const h = homeHTML(UI(), DATA);
+  assert.match(h, /<h1 class="th-h">Задачі<\/h1>/);
+  assert.doesNotMatch(h, /data-th="newtask"/);
+  assert.match(h, /data-v="team"/);
+  const nulled = homeHTML(UI(), { ...DATA, space: null });
+  assert.match(nulled, /<h1 class="th-h">Задачі<\/h1>/);
+});
+
+test("команда без ключа `team` (стара форма відповіді) — вкладки нема, як і при null", () => {
+  const { team, ...noTeam } = DATA;
+  const h = homeHTML(UI({ tab: "team" }), noTeam);
+  assert.doesNotMatch(h, /data-v="team"/);
+  assert.match(h, /aria-selected="true" data-th="tab" data-v="mine"/);
+});
+
+test("назва простору екранується в заголовку й у підказці агентові", () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const h = homeHTML(UI(), D_OFF({ space: { name: evil, integrations: false } }));
+  assert.doesNotMatch(h, /<img src=x/);
+  assert.match(h, /&lt;img src=x/);
+});
+
+test("pruneFilters при `team: null` не кидає і не чіпає дизайнерів", () => {
+  const ui = UI({ designers: new Set(["Хтось"]), profiles: new Set() });
+  assert.doesNotThrow(() => pruneFilters(ui, D_OFF({ mine: [A] })));
+  assert.ok(ui.designers.has("Хтось"), "дизайнерів без команди не чистимо: «не знаю» ≠ «нема»");
+});
+
+test("простір без інтеграцій: ключі словника екрана є в обох мовах", () => {
+  for (const k of ["tasksIn", "newTask", "spaceEmpty", "spaceEmptyAgent"]) {
+    assert.ok(DICT.uk[k] !== undefined && DICT.en[k] !== undefined, k);
+    assert.equal(typeof DICT.en[k], typeof DICT.uk[k], k);
+  }
+});
+
+test("англійською: «Tasks · P», «New task»", () => {
+  setLang("en");
+  try {
+    const h = homeHTML(UI(), D_OFF());
+    assert.match(h, /<h1 class="th-h">Tasks · P<\/h1>/);
+    assert.match(h, /New task/);
+    assert.match(h, /No tasks here yet/);
+  } finally { setLang("uk"); }
 });

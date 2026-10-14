@@ -93,8 +93,18 @@ def strip_publish(html):
     m = _ORIG_RE.search(html, start, end + len(end_mark))
     out = html[:start] + html[end + len(end_mark):]
     if m and _NEUTRAL_TITLE in out:
-        out = out.replace(_NEUTRAL_TITLE, f'<title>{json.loads(m.group(1))}</title>', 1)
+        out = out.replace(_NEUTRAL_TITLE, f'<title>{_title_source(json.loads(m.group(1)))}</title>', 1)
     return out, True
+
+
+def _title_source(text):
+    """Назва зі `__origTitle` → вміст `<title>` як ВИХІДНИЙ КОД. Чинна публікація кладе туди
+    РОЗЕКРАНОВАНИЙ текст (`document.title` — текст, не розмітка: `serve._inject_gate`), тож
+    `<` і `>` мусять стати сутностями — інакше `A </title><b>x</b>` стає справжньою розміткою в
+    імпортованій ітерації. Сирий `&` теж екранується, але лише коли це не вже готова сутність
+    (`&amp;`, `&#39;`): превʼю, опубліковані ДО цього контракту, несуть у `__origTitle` СИРИЙ
+    вихідний текст, і їхні сутності не можна подвоювати (`R&amp;D` → `R&amp;amp;D`)."""
+    return re.sub(r'&(?!#?\w+;)', '&amp;', text.replace('<', '&lt;').replace('>', '&gt;'))
 
 
 def _depth(v):

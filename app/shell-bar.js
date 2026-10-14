@@ -33,6 +33,7 @@ import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { cleanTitle, matches, taskKey } from "./tasks-model.js";
+import { spaceColorToken, spaceRows } from "./spaces-model.js";
 
 /** Клас, яким контейнерний запит ховає лише ПІДПИС контролу (іконка лишається).
  *  Значення `labelTier` у моделі — це саме пороги `TIERS.mode`/`TIERS.gl`, а
@@ -44,22 +45,75 @@ const lblCls = (labelTier) => {
 };
 
 /* ── дропдаун-пункт: та сама розмітка для GitLab і публікації ───────────── */
-const ddItem = ({ act, val = "", icon = "", title, sub = "", why = "",
-  on = false, danger = false, marks = "", cls: extra = "" } = {}) => {
+/* `title`/`sub`/`why`/`val` — ДАНІ: йдуть крізь `esc`. `marks` і `lead` — СИРА
+   довірена розмітка, без `esc`: лише те, що збирає цей файл (крапка простору
+   `spaceDot`, галочка, крапка стану), — дані користувача сюди не передавати.
+   `current` — `aria-current="true"` на «де я зараз» (поточний простір): колір
+   `dd-item--on` стан не оголошує, а читач мусить його почути. Без `current`
+   розмітка пункту побайтно та сама, що була. */
+const ddItem = ({ act, val = "", icon = "", lead = "", title, sub = "", why = "",
+  on = false, danger = false, marks = "", cls: extra = "", current = false } = {}) => {
   const cls = `dd-item${on ? " dd-item--on" : ""}${danger ? " dd-item--danger" : ""}`
     + `${extra ? ` ${extra}` : ""}`;
-  return `<button class="${cls}" data-act="${esc(act)}" data-val="${esc(val)}"${why ? " disabled" : ""}>
-    ${icon ? ico(icon) : '<span class="ico" style="width:16px"></span>'}
+  return `<button class="${cls}" data-act="${esc(act)}" data-val="${esc(val)}"${current ? ' aria-current="true"' : ""}${why ? " disabled" : ""}>
+    ${lead || (icon ? ico(icon) : '<span class="ico" style="width:16px"></span>')}
     <span class="dd-body"><span class="dd-t">${esc(title)}</span>
     ${why ? `<span class="dd-why">${esc(why)}</span>` : ""}
     ${sub && !why ? `<span class="dd-sub">${esc(sub)}</span>` : ""}</span>
     ${marks}</button>`;
 };
 
-/* ── зона 1: крошки задачі й ітерації ────────────────────────────────────── */
+/* ── зона 1: простір, крошки задачі й ітерації ───────────────────────────── */
+/* Кольорова крапка простору. Токен проходить `spaceColorToken`: реєстр правлять
+   руками, а значення іде в `style` — `esc` не рятує від ін'єкції CSS (лапки
+   цілі, а `;position:fixed` — ні). */
+const spaceDot = (color) =>
+  `<span class="space-dot" style="background:var(--${spaceColorToken(color)})"></span>`;
+
 /**
- * Список задач у дропдауні крошки — ТРЕТЄ, що бере із `state` в обхід моделі
- * (перші два названо в шапці `barHTML` нижче): `state.taskList` і
+ * Дропдаун просторів. Перелік — `state.spaces` (масив з `/api/spaces`), поточний —
+ * `state.space.id`: ТЕ, чого модель смуги свідомо не несе (як `taskList` для
+ * задач) — вона описує склад смуги, а не перелічує сутності. Недоступний простір
+ * (`muted`) приглушений, але НЕ вимкнений: перейти в нього й побачити причину
+ * (`tasksErrSpaceUnavailable`) — єдиний спосіб її дізнатись, а вимкнений пункт
+ * мовчав би. Підпис такого рядка — причина, а не «0 задач»: «0 задач» про
+ * простір, якого ми не змогли прочитати, — брехня.
+ */
+function ddSpaces(state) {
+  const rows = spaceRows({ current: state?.space?.id, spaces: state?.spaces });
+  const list = rows.map((r) => ddItem({
+    act: "space", val: r.id, lead: spaceDot(r.color), title: r.name,
+    sub: r.muted ? t("spaceUnavailable") : t("spaceTasks", r.sub.n, r.sub.path),
+    on: r.on, current: r.on, cls: r.muted ? "dd-item--muted" : "",
+    marks: r.on ? `<span class="dd-marks">${ico("check", 14)}</span>` : "",
+  })).join("");
+  return `<div class="dd dd--spaces"><div class="dd-head">${esc(t("spaces"))}</div>
+    ${list}${list ? '<div class="dd-sep"></div>' : ""}
+    ${ddItem({ act: "spacenew", icon: "plus", title: t("spaceNew") })}
+    ${ddItem({ act: "spaceedit", icon: "pencil", title: t("spaceEdit") })}</div>`;
+}
+
+/* Фішка простору: `data-dd="space"` — делегація смуги відкриває дропдауни за
+   `data-dd`, а не за `data-act` (клік тут розкриває перелік, не виконує дію).
+   Стоїть ПОЗА `.crumbs`, як палітра: крошки стискаються на вузькому вікні, а
+   фішка — «де я» найвищого рівня — не мусить пропадати разом із ними. `title` — повна назва:
+   довга обрізається трикрапкою (`.space-name`), а інакше її ніде прочитати. */
+function spaceChip(model, state, openDd) {
+  const c = model.zone1.find((x) => x.id === "space");
+  if (!c) return "";
+  const open = openDd === "space";
+  return `<div class="ddhost space-h">
+    <button class="ctl ctl--out space-chip" data-dd="space" title="${esc(c.label)}"
+      aria-expanded="${open}" aria-haspopup="true">
+      ${spaceDot(c.color)}<span class="txt space-name">${esc(c.label)}</span>
+      ${ico("chevdown", 14, "ico caret")}</button>
+    ${open ? ddSpaces(state) : ""}
+  </div>`;
+}
+
+/**
+ * Список задач у дропдауні крошки — одне з речей, що беруться зі `state` в обхід
+ * моделі (усі названо в шапці `barHTML` нижче): `state.taskList` і
  * `state.curTaskId`. `bar-model.js` свідомо не знає списку задач — це той
  * самий контракт, що й для `iterLabel`: модель описує СКЛАД смуги, а не
  * перелічує сутності, яких не бачить (список задач приходить з `/api/tasks`,
@@ -367,6 +421,10 @@ function ddGitlab(model, iterLabel) {
 
 function zoneGl(model, state, openDd) {
   const c = model.zone3.find((x) => x.id === "gl");
+  /* Простір без інтеграцій: модель не віддає GitLab (`bar-model.js`, «Вимикач»).
+     Без цієї охорони `c.labelTier` на `undefined` кидав би на першому ж рендері
+     такого простору — і вся смуга лишалась би порожньою. */
+  if (!c) return "";
   const open = openDd === "gl";
   return `<div class="ddhost">
     <button class="ctl ctl--out" data-dd="gl" aria-expanded="${open}">
@@ -429,6 +487,7 @@ function ddPublish(c) {
 }
 
 function zonePublish(c, openDd) {
+  if (!c) return ""; // простір без інтеграцій: публікації в моделі нема (див. `zoneGl`)
   const open = openDd === "pub";
   return `<div class="ddhost">
     <div class="split ${c.published ? "" : "split--ghost"}">
@@ -449,7 +508,10 @@ function zonePublish(c, openDd) {
  * (підпис поточної ітерації для «Надіслати Іт.3 на GitLab» — текст, що
  * складає вже DOM-шар, не модель, за її ж контрактом `t()`-виклику лише тут),
  * `state.taskList`/`state.curTaskId` (перелік задач для дропдауна крошки —
- * модель бачить лише ПОТОЧНУ задачу, список приходить окремим запитом).
+ * модель бачить лише ПОТОЧНУ задачу, список приходить окремим запитом),
+ * `state.space`/`state.spaces` (ПОТОЧНИЙ простір і перелік для дропдауна
+ * фішки: `space` — обʼєкт `{id, name, color, integrations}` з `/api/task`,
+ * `spaces` — масив `/api/spaces`; без `space` фішки нема зовсім).
  *
  * ⛔ `state.commentMode` тут БІЛЬШЕ НЕ читається: смуга нічого не знає про
  * аудиторію коментарів (принцип 6 PRODUCT.md, коментар над `crumbIter`).
@@ -501,8 +563,8 @@ export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks");
   const zone1 = home
-    ? `${homeBtn(model)}${paletteBtn(model)}${homeCrumbs(model)}`
-    : `${homeBtn(model)}${paletteBtn(model)}<div class="crumbs">`
+    ? `${homeBtn(model)}${paletteBtn(model)}${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
+    : `${homeBtn(model)}${paletteBtn(model)}${spaceChip(model, state, openDd)}<div class="crumbs">`
       + `${crumbTask(model, state, openDd)}${crumbIter(model, openDd)}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */

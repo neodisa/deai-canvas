@@ -109,6 +109,11 @@ import { ico } from "./icons.js";
  *     використано; standalone: boolean — вікно вже встановленого застосунку
  *     (`display-mode: standalone`). Пункт встановлення є лише за
  *     `canInstall && !standalone` (див. `installActions`).
+ *   spaces: [{id, name, available?}] | undefined — перелік просторів з `/api/spaces`;
+ *     без МАСИВУ пунктів просторів нема зовсім (шар вимкнено). spaceId: string|null —
+ *     поточний простір (за його відсутності — `space.id`); поточний у переліку
+ *     не пропонується. space: {id, integrations}|null — поточний простір;
+ *     `integrations === false` прибирає публікацію, GitLab і командний канал.
  */
 /* Мова інтерфейсу — єдина група, що не залежить від задачі: її читає і звичайний
    реєстр, і екран «Задачі». Одна функція на обох, щоб два місця не розійшлись. */
@@ -138,10 +143,48 @@ function installActions(s) {
   return [{ id: "pwa-install", group: "gSet", labelKey: "pwaInstall", icon: "download", act: "pwainstall" }];
 }
 
+/* Простори (Deai 1.0, етап 1) — «Простір: X» для кожного ІНШОГО простору й «Новий
+   простір…», у `gGo`: це переходи, а не налаштування. Читає і звичайний реєстр, і
+   екран «Задачі» — простір не залежить від задачі, як мова. Лише коли є МАСИВ
+   `s.spaces` (шар вимкнено — нема й пунктів, а не «Новий простір…» без реєстру,
+   який його прийняв би).
+
+   Ім'я простору — дані користувача, тож підпис — `labelKey` + `labelArgs`, а не
+   готовий рядок: реєстр не кличе `t()` (шапка файла), `itemHTML`/`searchText`
+   розгортають аргументи. Поточний простір не пропонуємо: перейти в те місце, де
+   ти є, — дія, що нічого не робить. Поточний — `spaceId` або `space.id`.
+   Недоступний (`available === false`) тут ВИМКНЕНИЙ з причиною, а в смузі лише
+   приглушений і КЛІКАБЕЛЬНИЙ — і це не неузгодженість, а різні способи показати
+   одну причину. У смузі рядок показує `spaceUnavailable`, але справжній текст
+   («файл задач не читається», `tasksErrSpaceUnavailable`) людина побачить лише
+   перейшовши в простір, тож клік мусить працювати. Палітра цей текст друкує
+   САМА: `itemHTML` ставить `whyKey` на місце клавіші, і причину видно в списку,
+   не відкриваючи нічого, — а пункт, що веде на екран помилки, там зайвий.
+
+   `id` = `space-go-<id простору>`, а «Новий простір…» — `space-new`: простір із
+   id `new` (сервер такий приймає) давав би два однакові `space-new`. */
+function spaceActions(s) {
+  if (!Array.isArray(s.spaces)) return [];
+  const cur = s.spaceId ?? s.space?.id;
+  const out = s.spaces.filter((x) => x.id !== cur).map((x) => ({
+    id: `space-go-${x.id}`, group: "gGo", labelKey: "spaceGo", labelArgs: [x.name], icon: "folder",
+    act: "space", val: x.id,
+    ...(x.available === false ? { disabled: true, whyKey: "spaceUnavailable" } : {}),
+  }));
+  out.push({ id: "space-new", group: "gGo", labelKey: "spaceNew", icon: "plus", act: "spacenew" });
+  return out;
+}
+
 export function paletteActions(state) {
   const s = state || {};
   const hasIteration = !!s.hasIteration;
   const out = [];
+  /* Простір без інтеграцій (`space.integrations === false`): палітра не пропонує
+     того, чого немає в смузі, — публікацію й GitLab (`bar-model.js`, «Вимикач»), а
+     з ними все, що без публікації безглузде: показ ітерації в превʼю, посилання,
+     відкриття превʼю й командний канал коментарів. ОМІТ, не «вимкнено з причиною»
+     (той самий вибір, що для груп, безглуздих у режимі). Рівно `=== false`. */
+  const noOutward = s.space?.integrations === false;
 
   /* Екран «Задачі» (`homeOpen`, батч 1.52): смуга в цьому стані не має ні
      публікації, ні «Макет/Огляд», ні ітерацій — і палітра не сміє пропонувати
@@ -151,7 +194,7 @@ export function paletteActions(state) {
      причина поруч (принцип 2) потрібна контролу, що ЛИШАЄТЬСЯ в режимі. `go-tasks`
      теж не пропонуємо: людина вже там, а «відкрити екран, на якому ти є»
      значило б дію, що нічого не робить. */
-  if (s.homeOpen) return [...langActions(s), ...installActions(s)];
+  if (s.homeOpen) return [...spaceActions(s), ...langActions(s), ...installActions(s)];
 
   /* ── gGo: переходи. `go-iter`/`go-pages` — «лише перехід», немає в
      BAR_ACTIONS/PANEL_ACTIONS свідомо; `go-tasks` має `act` ───── */
@@ -168,6 +211,7 @@ export function paletteActions(state) {
   // «Сторінки», навпаки, ЗАВЖДИ доречні: панель сама пояснює порожній стан
   // (`panelNoIt`), тобто перехід сюди ніколи не є нопом.
   out.push({ id: "go-pages", group: "gGo", labelKey: "pages", icon: "page", navOnly: true });
+  out.push(...spaceActions(s));
 
   /* ── gView: та сама зона 2, що в bar-model.js — тут не КЛИЧЕ barModel(),
      бо тому потрібен куди ширший стан (taskId, iterList…), не потрібний
@@ -268,11 +312,10 @@ export function paletteActions(state) {
   /* ── gFrames: ОДИН перемикач старт/стоп — той самий `PANEL_ACTIONS.shoot`,
      не два статичні пункти прототипу («Зняти»/«Оновити», обидва на act:
      'shoot'). Підписи БЕЗ числа (`shotsTakeBare`/`shotsUpdateBare`/
-     `shotsStop`): форма дії тут не несе аргументів `t()` (див. шапку файла
-     — контракт `{id,group,labelKey,...}` не має поля для аргументів
-     функції-значення словника, а дублювати `iterLabel`-подібний параметр
-     заради самого лише лічильника кадрів — зайва складність для рідкісної
-     дії). Секція взагалі не існує без ітерації — той самий гейт, що ховає
+     `shotsStop`): аргументи `t()` форма дії тепер уміє (`labelArgs`, див.
+     `spaceActions` — там імʼя простору), але лічильник кадрів заради
+     рідкісної дії не вартий ні другого джерела правди про нього, ні
+     перемальовки палітри на кожен кадр. Секція взагалі не існує без ітерації — той самий гейт, що ховає
      секцію «Кадри» в самій панелі (`state.hasIteration`, `openHTML`). */
   if (hasIteration && s.shots) {
     const { running, have, stale, bad } = s.shots;
@@ -299,37 +342,39 @@ export function paletteActions(state) {
     id: "figma", group: "gPub", labelKey: "toFigma", icon: "figma", act: "figma",
     disabled: !!figmaWhy, whyKey: figmaWhy,
   });
-  out.push({
-    id: "publish", group: "gPub", labelKey: s.published ? "update" : "publish",
-    icon: "up", act: "publish",
-  });
-  out.push({ id: "togglepub", group: "gPub", labelKey: "showInPreview", icon: "eye", act: "togglepub" });
-  const linkWhy = linkWhyKey(s);
-  out.push({
-    id: "copylink", group: "gPub", labelKey: "copyLink", icon: "link", act: "copylink",
-    disabled: !!linkWhy, whyKey: linkWhy,
-  });
-  out.push({
-    id: "openpreview", group: "gPub", labelKey: "openPreview", icon: "ext", act: "openpreview",
-    disabled: !s.published, whyKey: s.published ? "" : "whyNoPublish",
-  });
-  // Той самий трьохгілковий розгляд, що `glItems` у `bar-model.js`
-  // (`barModel`): «off» — лише «Налаштувати», інакше «Підтягнути» з'являється
-  // ЛИШЕ при «behind», «Надіслати» є завжди, вимкнене з причиною при «sync».
-  if (s.gl === "off") {
-    out.push({ id: "glsetup", group: "gPub", labelKey: "glSetup", icon: "cloud", act: "glsetup" });
-  } else {
-    if (s.gl === "behind") {
+  if (!noOutward) {
+    out.push({
+      id: "publish", group: "gPub", labelKey: s.published ? "update" : "publish",
+      icon: "up", act: "publish",
+    });
+    out.push({ id: "togglepub", group: "gPub", labelKey: "showInPreview", icon: "eye", act: "togglepub" });
+    const linkWhy = linkWhyKey(s);
+    out.push({
+      id: "copylink", group: "gPub", labelKey: "copyLink", icon: "link", act: "copylink",
+      disabled: !!linkWhy, whyKey: linkWhy,
+    });
+    out.push({
+      id: "openpreview", group: "gPub", labelKey: "openPreview", icon: "ext", act: "openpreview",
+      disabled: !s.published, whyKey: s.published ? "" : "whyNoPublish",
+    });
+    // Той самий трьохгілковий розгляд, що `glItems` у `bar-model.js`
+    // (`barModel`): «off» — лише «Налаштувати», інакше «Підтягнути» з'являється
+    // ЛИШЕ при «behind», «Надіслати» є завжди, вимкнене з причиною при «sync».
+    if (s.gl === "off") {
+      out.push({ id: "glsetup", group: "gPub", labelKey: "glSetup", icon: "cloud", act: "glsetup" });
+    } else {
+      if (s.gl === "behind") {
+        out.push({
+          id: "glpull", group: "gPub", labelKey: "glPull", icon: "down",
+          act: "glpull", val: s.iterLabel,
+        });
+      }
       out.push({
-        id: "glpull", group: "gPub", labelKey: "glPull", icon: "down",
-        act: "glpull", val: s.iterLabel,
+        id: "glpush", group: "gPub", labelKey: "glPush", icon: "cloud",
+        act: "glpush", val: s.iterLabel,
+        disabled: s.gl === "sync", whyKey: s.gl === "sync" ? "glSync" : "",
       });
     }
-    out.push({
-      id: "glpush", group: "gPub", labelKey: "glPush", icon: "cloud",
-      act: "glpush", val: s.iterLabel,
-      disabled: s.gl === "sync", whyKey: s.gl === "sync" ? "glSync" : "",
-    });
   }
 
   /* ── gSet: мова інтерфейсу — дім якраз тут (спека задачі, крок 4). Дію
@@ -372,6 +417,9 @@ export function paletteActions(state) {
       ["aud-local", "local", "audLocal", "comment"],
       ["aud-project", "project", "audProject", "globe"],
     ]) {
+      /* Командного каналу в просторі без інтеграцій нема (`GET /comments`, `?ch=project`
+         → 409): локальний — єдиний, і аварійний вихід «до локального» лишається. */
+      if (noOutward && ch === "project") continue;
       out.push({
         id, group: "gSet", labelKey, icon, act: "aud", val: ch,
         disabled: s.commentMode === ch, whyKey: s.commentMode === ch ? "audCur" : "",
@@ -410,9 +458,22 @@ const ALIASES = {
      («локальні»/«команда»), яким його звали в смузі до переїзду. */
   "aud-local": "аудиторія audience коментар comment клод claude локальні local",
   "aud-project": "аудиторія audience коментар comment команда team проєкт project",
+  /* Простір: обома мовами, як мова вище, — «space» в українському інтерфейсі й
+     «простір» в англійському. Ключ — не `id` дії, а слово `space`: пункти просторів
+     мають динамічні id, див. `aliasOf`. */
+  space: "простір space workspace",
 };
 
-const searchText = (a) => `${t(a.labelKey, a.val)} ${ALIASES[a.id] || ""}`.toLowerCase();
+/* Підпис дії мовою інтерфейсу: аргументи — `labelArgs` (ім'я простору), інакше
+   `val` (номер ітерації для `glpush`/`glpull`). Одне місце на розмітку й пошук:
+   розійдись вони — пошук знаходив би пункт за текстом, якого людина не бачить. */
+const labelOf = (a) => t(a.labelKey, ...(a.labelArgs ?? [a.val]));
+
+/* Пошукові псевдоніми. Пункти просторів мають динамічні id (`space-<id>`), тож
+   для них — за `act`: «space»/«простір» знаходять їх обома мовами. */
+const aliasOf = (a) => ALIASES[a.id] || (a.act === "space" || a.act === "spacenew" ? ALIASES.space : "");
+
+const searchText = (a) => `${labelOf(a)} ${aliasOf(a)}`.toLowerCase();
 
 /** Фільтр за запитом (порожній запит — усе). Пошук ігнорує регістр і пробіли з країв. */
 export function filterActions(actions, query) {
@@ -422,7 +483,7 @@ export function filterActions(actions, query) {
 }
 
 const itemHTML = (a, i, cur) => {
-  const label = esc(t(a.labelKey, a.val));
+  const label = esc(labelOf(a));
   const sp = a.disabled ? esc(t(a.whyKey || "")) : esc(a.kbd || "");
   const cls = `pal-it${i === cur ? " pal-it--cur" : ""}${a.danger ? " pal-it--danger" : ""}`;
   return `<button class="${cls}" data-act="pal" data-val="${i}"${a.disabled ? " disabled" : ""}>
