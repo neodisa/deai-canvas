@@ -1,0 +1,5 @@
+{"api": 1, "id": "css-tokens", "name": "Токени з CSS", "version": "1.0.0",
+ "roles": ["tokens"],
+ "settings": [
+   {"key": "file", "type": "path", "label": "CSS-файл із токенами дизайн-системи", "required": true}
+ ]}
