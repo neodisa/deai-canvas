@@ -102,6 +102,10 @@ class SelectorsTest(unittest.TestCase):
         self.assertEqual(parse('.a, :root , .b{--a:1}'), {'--a': ['1']})
         self.assertEqual(parse('.a,\n  html.dark{--a:1}'), {'--a': ['1']})
 
+    def test_html_as_an_attribute_or_part_of_a_word_is_not_html(self):
+        css = '.card[html]{--c1:1} a[data-html]{--c2:2} .x-html{--c3:3} .my_html{--c4:4} htmlx{--c5:5} xhtml{--c6:6}'
+        self.assertEqual(parse(css), {})
+
     def test_other_selectors_are_ignored(self):
         css = ('.card{--c1:1} body{--c2:2} div.html{--c3:3} .html{--c4:4} #html{--c5:5} '
                '[title="html"]{--c6:6} [data-x=root]{--c7:7} a:hover{--c8:8} *{--c9:9} .root-x{--c10:10}')
@@ -120,6 +124,9 @@ class SelectorsTest(unittest.TestCase):
         self.assertEqual(parse('.card:has(> .a ~ .b){--c:1}'), {})
         self.assertEqual(parse(r'.a\,b, :root{--d:1}'), {'--d': ['1']})
         self.assertEqual(parse('.a[title="["] :root .x{--c:1}'), {})              # `[` у рядку не відкриває дужку
+        self.assertEqual(parse(r'[title="a\" , :root"]{--c:1}'), {})
+        self.assertEqual(parse(r'[title="a\" b"] :root .x{--c:1}'), {})           # `\"` не закриває рядок
+        self.assertEqual(parse(r'[title="a\" b"] :root{--c:1}'), {'--c': ['1']})
         self.assertEqual(parse('.a[title="["] :root{--c:1}'), {'--c': ['1']})
 
     def test_declarations_are_taken_only_for_custom_properties(self):
@@ -130,6 +137,56 @@ class SelectorsTest(unittest.TestCase):
 
     def test_last_declaration_without_semicolon_and_spaces(self):
         self.assertEqual(parse(':root{--a :  1 ;--b:2}'), {'--a': ['1'], '--b': ['2']})
+
+
+class ThemeFormsTest(unittest.TestCase):
+    """Теми, які дизайнери справді пишуть: Bootstrap 5.3 (`[data-bs-theme]`) і Tailwind v4 (`@theme`)."""
+
+    def test_any_data_attribute_with_theme_in_its_name_qualifies(self):
+        css = ('[data-bs-theme=dark]{--a:1} [data-color-theme="x"]{--b:2} html[data-bs-theme]{--c:3}'
+               ' [ data-theme-x ]{--d:4} body[DATA-BS-THEME=light]{--e:5} :root[data-mantine-theme]{--f:6}')
+        self.assertEqual(set(parse(css)), {'--a', '--b', '--c', '--d', '--e', '--f'})
+
+    def test_bootstrap_dark_theme_gives_a_second_value(self):
+        css = ':root, [data-bs-theme=light]{--bs-body-bg:#fff} [data-bs-theme=dark]{--bs-body-bg:#212529}'
+        self.assertEqual(parse(css), {'--bs-body-bg': ['#fff', '#212529']})
+
+    def test_other_attributes_and_bare_classes_are_not_root_level(self):
+        """`.dark { … }` (голий клас) НЕ береться: клас може стояти на будь-якому елементі, тож це були б
+        і токени, і локальні змінні компонентів впереміш."""
+        css = ('.dark{--n1:1} .theme-dark{--n2:2} [data-mode=dark]{--n3:3} [bs-theme=dark]{--n4:4}'
+               ' [data-bs-mode]{--n5:5} [theme]{--n6:6} [data-bs-theme=dark] .card{--n7:7}'
+               ' [data-x=theme]{--n8:8} [title="data-theme"]{--n9:9} body.dark{--n10:10}')
+        self.assertEqual(parse(css), {})
+
+    def test_tailwind_4_theme_block(self):
+        css = ('@theme { --color-brand: #f00; --font-sans: "Inter", sans-serif; --spacing: 0.25rem; }'
+               ' @theme inline { --color-fg: var(--text) } :root { --text: #111 }')
+        self.assertEqual(parse(css), {'--color-brand': ['#f00'], '--font-sans': ['"Inter", sans-serif'],
+                                      '--spacing': ['0.25rem'], '--color-fg': ['#111'], '--text': ['#111']})
+
+    def test_tailwind_theme_modifiers_and_nesting(self):
+        css = ('@theme static { --a: 1 } @THEME default { --b: 2 } @layer theme { @theme { --c: 3 } }'
+               ' @media print { @theme { --d: 4 } }')
+        self.assertEqual(parse(css), {'--a': ['1'], '--b': ['2'], '--c': ['3'], '--d': ['4']})
+
+    def test_tailwind_namespace_reset_is_not_a_token(self):
+        css = '@theme { --color-*: initial; --font-*: initial; --color-brand: #f00 }'
+        self.assertEqual(parse(css), {'--color-brand': ['#f00']})
+
+    def test_tailwind_theme_inner_at_rules_give_no_tokens(self):
+        css = ('@theme { --animate-wiggle: wiggle 1s; @keyframes wiggle { 0% { --k: 1 } to { --k: 2 } }'
+               ' --after: 5 }')
+        self.assertEqual(parse(css), {'--animate-wiggle': ['wiggle 1s'], '--after': ['5']})
+
+    def test_only_the_theme_at_rule_itself(self):
+        css = ('@themes { --a: 1 } @theme-x { --b: 2 } @thème { --c: 3 } @font-face { --d: 4 }'
+               ' @property --p { initial-value: 1 } .x { @theme { --e: 5 } }')
+        self.assertEqual(parse(css), {'--e': ['5']})          # внутрішній `@theme` — теж `@theme`; решта ні
+
+    def test_a_theme_block_with_selector_after_it_closes_properly(self):
+        css = '@theme { --a: 1 } .card { --nope: 2 } :root { --b: 3 }'
+        self.assertEqual(parse(css), {'--a': ['1'], '--b': ['3']})
 
 
 class NestingTest(unittest.TestCase):
@@ -253,6 +310,11 @@ class QuotesAndUrlTest(unittest.TestCase):
         css = root('--a: url("a;b}c.png"); --b: URL(x;y.png); --c: 3')
         self.assertEqual(parse(css), {'--a': ['url("a;b}c.png")'], '--b': ['URL(x;y.png)'], '--c': ['3']})
 
+    def test_a_quoted_url_with_a_paren_inside_the_string(self):
+        css = root('--u: url("a)b;c}"); --k: 2')
+        self.assertEqual(parse(css), {'--u': ['url("a)b;c}")'], '--k': ['2']})
+        self.assertEqual(parse(root("--u: url( 'a)b;c}' ); --k: 2")), {'--u': ["url( 'a)b;c}' )"], '--k': ['2']})
+
     def test_url_not_at_a_word_boundary_is_not_a_url(self):
         """`curl(…)` — звичайна функція, а не `url(…)`: коментар усередині неї прибирається."""
         self.assertEqual(parse(root('--a: curl(/* c */ x); --b: url(/* c */ x)')),
@@ -288,6 +350,31 @@ class ImportantTest(unittest.TestCase):
     def test_important_inside_a_string_stays(self):
         self.assertEqual(parse(root('--a: "x !important"')), {'--a': ['"x !important"']})
 
+    def test_stripping_important_is_linear_in_whitespace_runs(self):
+        """`\\s*!\\s*important\\s*\\Z` із невиверненим `sub` — квадрат на довгих проміжках: 100 КБ пробілів
+        у лапках = 7 с, 2 МіБ ≈ 45 хв, і сервер стоїть. Тепер — лінійно."""
+        gap = ' ' * 200_000
+        inputs = {
+            'string': root('--a: "' + gap + '"'),
+            'unquoted url': root('--a: url(' + gap + 'x)'),
+            'bang in string': root('--a: "!' + gap + '"'),
+            'many bangs': root('--a: "' + '! ' * 100_000 + '"'),
+            'bang then spaces then word': root('--a: "x !' + gap + 'importan"'),
+            'quoted url': root("--a: url('" + gap + "')"),
+        }
+        for name, css in inputs.items():
+            t0 = time.monotonic()
+            got = parse(css)
+            dt = time.monotonic() - t0
+            self.assertLess(dt, 1.0, f'{name}: {dt:.1f} с')
+            self.assertEqual(len(got['--a']), 1, name)
+
+    def test_important_after_a_long_value_and_inside_functions(self):
+        gap = ' ' * 50_000
+        self.assertEqual(parse(root('--a: "x' + gap + 'y" !important'))['--a'], ['"x' + gap + 'y"'])
+        self.assertEqual(parse(root('--a: calc(1px + 2px) !important'))['--a'], ['calc(1px + 2px)'])
+        self.assertEqual(parse(root('--a: red\t\n!\n important\n'))['--a'], ['red'])
+
     def test_important_does_not_create_a_second_value(self):
         self.assertEqual(parse(root('--a: 1') + root('--a: 1 !important')), {'--a': ['1']})
 
@@ -316,6 +403,12 @@ class VarTest(unittest.TestCase):
 
     def test_fallback_is_dropped_when_the_target_is_defined(self):
         self.assertEqual(parse(root('--b: red; --a: var(--b, blue)'))['--a'], ['red'])
+
+    def test_a_paren_or_comma_inside_a_string_of_the_fallback_does_not_end_the_var(self):
+        self.assertEqual(parse(root('--a: 1; --b: var(--a, ")")'))['--b'], ['1'])
+        self.assertEqual(parse(root("--a: 1; --b: var(--a, ')')"))['--b'], ['1'])
+        self.assertEqual(parse(root('--a: 1; --b: var(--a, url(x)y)'))['--b'], ['1'])
+        self.assertEqual(parse(root('--a: 1; --b: var(--a, url(")"))'))['--b'], ['1'])
 
     def test_nested_var_in_the_fallback_does_not_confuse_the_scan(self):
         self.assertEqual(parse(root('--b: red; --a: var(--b, var(--zzz, 1))'))['--a'], ['red'])
@@ -377,6 +470,30 @@ class VarTest(unittest.TestCase):
         """`@import` не відстежується: змінна з чужого файла — невизначена."""
         self.assertEqual(parse('@import "other.css"; ' + root('--a: var(--from-other)')), {'--a': []})
 
+    @staticmethod
+    def themed(name, n, prefix):
+        """`--name` із `n` різними значеннями (кореневе + `n-1` тем)."""
+        out = [f':root{{--{name}: {prefix}0}}']
+        out += [f'[data-theme=t{prefix}{i}]{{--{name}: {prefix}{i}}}' for i in range(1, n)]
+        return ''.join(out)
+
+    def test_exactly_the_combination_limit_is_allowed(self):
+        self.assertEqual(S.MAX_COMBOS, 64)
+        css = self.themed('p', 4, 'p') + self.themed('q', 4, 'q') + self.themed('r', 4, 'r')
+        got = parse(css + root('--ok: var(--p) var(--q) var(--r)') + root('--bad: var(--p) var(--q) var(--r) x'))
+        self.assertEqual(len(got['--ok']), 64)
+        self.assertEqual(len(set(got['--ok'])), 64)
+        self.assertEqual(len(got['--bad']), 64)               # 4·4·4·1 — ще 64
+        css = self.themed('p', 4, 'p') + self.themed('q', 4, 'q') + self.themed('r', 5, 'r')
+        got = parse(css + root('--over: var(--p) var(--q) var(--r)'))
+        self.assertEqual(got['--over'], [])                   # 4·4·5 = 80
+
+    def test_the_combination_limit_is_for_one_value_not_for_a_dependent_chain(self):
+        css = self.themed('a', 8, 'a') + root('--b: var(--a)') + root('--c: var(--b) var(--b)')
+        got = parse(css)
+        self.assertEqual(len(got['--b']), 8)
+        self.assertEqual(len(got['--c']), 64)                 # 8·8
+
     def test_too_many_combinations_gives_an_empty_list(self):
         themes = ''.join(f'[data-theme=t{i}]{{--p:{i};--q:{i};--r:{i}}}' for i in range(5))
         got = parse(root('--p:x;--q:y;--r:z;--big: var(--p) var(--q) var(--r)') + themes)
@@ -394,6 +511,54 @@ class VarTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 5)
         self.assertEqual(got['--v1'], ['1'])
         self.assertEqual(got['--v400'], [])        # понад п'ять стрибків або понад 64 комбінації
+
+
+class ExpansionBudgetTest(unittest.TestCase):
+    """`var()`-розгортання множить значення: без стелі «тема × правило» вибухає пам'яттю."""
+    themed = staticmethod(VarTest.themed)
+
+    def test_the_limits_are_what_the_docs_say(self):
+        self.assertEqual((S.MAX_VALUES, S.MAX_EXPANDED), (1024, 20000))
+
+    def test_many_rules_of_one_token_over_themes_are_capped_per_token(self):
+        css = self.themed('a', 64, 'a') + ''.join(f':root{{--b: var(--a) {n}}}' for n in range(20000))
+        t0 = time.monotonic()
+        got = parse(css)
+        self.assertLess(time.monotonic() - t0, 3)
+        self.assertEqual(len(got['--a']), 64)
+        self.assertEqual(got['--b'], [])
+        self.assertLess(len(json.dumps(got)), 2000)
+
+    def test_exactly_the_per_token_limit_is_allowed(self):
+        rules = lambda k: ''.join(f':root{{--b: var(--a) {n}}}' for n in range(k))        # noqa: E731
+        got = parse(self.themed('a', 64, 'a') + rules(S.MAX_VALUES // 64))
+        self.assertEqual(len(got['--b']), S.MAX_VALUES)
+        got = parse(self.themed('a', 64, 'a') + rules(S.MAX_VALUES // 64 + 1))
+        self.assertEqual(got['--b'], [])
+
+    def test_the_cap_counts_expansions_even_when_they_collapse_to_the_same_values(self):
+        """Дубльовані розгортання не лишають слідів у виході, але коштують часу: стеля — на роботу."""
+        aliases = ''.join(f':root{{--b: var(--a, {n})}}' for n in range(5000))
+        t0 = time.monotonic()
+        got = parse(self.themed('a', 64, 'a') + aliases)
+        self.assertLess(time.monotonic() - t0, 3)
+        self.assertEqual(got['--b'], [])
+
+    def test_literal_values_are_not_capped(self):
+        n = S.MAX_VALUES * 3
+        got = parse(''.join(f':root{{--lit: v{i}}}' for i in range(n)))
+        self.assertEqual(len(got['--lit']), n)
+
+    def test_many_tokens_over_themes_are_capped_per_file(self):
+        per = 50
+        self.assertEqual(S.MAX_EXPANDED % per, 0)
+        fit = S.MAX_EXPANDED // per
+        css = self.themed('a', per, 'a') + ''.join(f':root{{--b{i}: var(--a)}}' for i in range(fit + 300))
+        got = parse(css)
+        lens = [len(got[f'--b{i}']) for i in range(fit + 300)]
+        self.assertEqual(lens[:fit], [per] * fit)             # рівно стеля — ще можна
+        self.assertEqual(lens[fit:], [0] * 300)               # далі — «значень не знаємо»
+        self.assertLessEqual(sum(lens), S.MAX_EXPANDED)
 
 
 class BigInputTest(unittest.TestCase):
@@ -454,7 +619,8 @@ class ReadTest(Fs):
 
     def test_bom_and_crlf_and_invalid_utf8_are_tolerated(self):
         p = self.write(b'\xef\xbb\xbf@media (min-width:1px){:root{\r\n--a: 1;\r\n--b: \xff\xfe;\r\n}}', mode='wb')
-        got = self.tokens(p)['tokens']              # BOM перед `@media` не мусить зробити його «звичайним правилом»
+        got = self.tokens(p)['tokens']              # BOM, CRLF і биті байти читанню не шкодять (саме зняття BOM
+        #                                             не спостережне: розбір толерантний до U+FEFF на початку)
         self.assertEqual(got['--a'], ['1'])
         self.assertEqual(len(got['--b']), 1)
 
@@ -462,6 +628,35 @@ class ReadTest(Fs):
         with self.assertRaises(self.s.TokensError) as cx:
             self.tokens(self.path('nope.css'))
         self.assertIn('not found', str(cx.exception))
+
+    def test_a_path_the_os_cannot_even_encode_is_a_tokens_error(self):
+        for bad in ('a\0b.css', '\ud800.css', self.path('x\0')):
+            with self.assertRaises(self.s.TokensError, msg=repr(bad)) as cx:
+                self.tokens(bad)
+            self.assertEqual(str(cx.exception), 'file: bad path')
+
+    def test_fstat_failure_is_a_tokens_error_and_closes_the_descriptor(self):
+        p = self.write(root('--a: 1'))
+        closed, opened = [], []
+        real_open, real_close = os.open, os.close
+
+        def spy_open(*a, **k):
+            fd = real_open(*a, **k)
+            opened.append(fd)
+            return fd
+
+        def spy_close(fd):
+            closed.append(fd)
+            return real_close(fd)
+
+        def boom(fd):
+            raise OSError(5, 'Input/output error')
+        with mock.patch.object(self.s.os, 'open', spy_open), mock.patch.object(self.s.os, 'close', spy_close), \
+                mock.patch.object(self.s.os, 'fstat', boom):
+            with self.assertRaises(self.s.TokensError) as cx:
+                self.tokens(p)
+        self.assertIn('cannot be read', str(cx.exception))
+        self.assertEqual(sorted(opened), sorted(closed))
 
     def test_no_file_setting(self):
         for settings in ({}, {'file': ''}, {'file': '   '}, {'file': None}, {'file': 3}):
@@ -675,6 +870,18 @@ class CacheTest(Fs):
             self.tokens(self.write(root(f'--a{i}: 1'), f'f{i}.css'))
         self.assertLessEqual(len(self.s._CACHE), self.s._CACHE_MAX)
 
+    def test_a_new_version_of_a_file_replaces_the_old_entry_of_the_same_path(self):
+        p = self.write(root('--a: 1'))
+        other = self.write(root('--o: 1'), 'other.css')
+        self.tokens(other)
+        for i in range(2, 6):
+            self.write(root(f'--a: {i}; --pad: {"x" * i}'))
+            self.bump(p, i)
+            self.assertEqual(self.tokens(p)['tokens']['--a'], [str(i)])
+            self.assertEqual(len([k for k in self.s._CACHE if k[0] == p]), 1)
+        self.assertEqual(len([k for k in self.s._CACHE if k[0] == other]), 1)      # чужий шлях не зачеплено
+        self.assertEqual(len(self.s._CACHE), 2)
+
     def test_the_oldest_entry_goes_first(self):
         files = [self.write(root(f'--a{i}: 1'), f'f{i}.css') for i in range(self.s._CACHE_MAX + 3)]
         for f in files:
@@ -713,6 +920,16 @@ class CheckTest(Fs):
         self.assertFalse(res['ok'])
         self.assertIn(':root', res['error'])
 
+    def test_check_never_raises_whatever_the_path(self):
+        for bad in ('a\0b.css', '\ud800.css', '', '   ', None, 3, '/dev/null/x', self.tmp, self.path('nope')):
+            res = self.s.check(self.ctx(bad))
+            self.assertEqual(res['ok'], False, repr(bad))
+            self.assertIsInstance(res['error'], str)
+        self.assertEqual(self.check('a\0b.css'), {'ok': False, 'error': 'file: bad path'})
+        self.assertEqual(self.check('\ud800.css'), {'ok': False, 'error': 'file: bad path'})
+        self.assertEqual(self.s.check({}), {'ok': False, 'error': 'file: not set'})
+        self.assertEqual(self.s.check(None), {'ok': False, 'error': 'file: not set'})
+
     def test_unreadable_is_not_ok_and_does_not_raise(self):
         self.assertEqual(self.check(self.path('nope.css')), {'ok': False, 'error': 'file: not found'})
         os.mkdir(self.path('d.css'))
@@ -734,8 +951,10 @@ class CheckTest(Fs):
 # -------------------------------------------------------------------------------- вигляд модуля
 
 class SourceShapeTest(unittest.TestCase):
-    @unittest.skipUnless(hasattr(sys, 'stdlib_module_names'), 'Python 3.10+')
-    def test_pure_stdlib_and_no_core_imports(self):
+    #: Усе, що `server.py` може імпортувати (exec-иться ядром: без `serve`, ядра, сусідів, `importlib`).
+    ALLOWED_IMPORTS = {'itertools', 'os', 're', 'stat', 'threading'}
+
+    def test_imports_are_an_explicit_stdlib_allowlist(self):
         with open(SERVER, encoding='utf-8') as f:
             tree = ast.parse(f.read())
         mods = set()
@@ -746,10 +965,15 @@ class SourceShapeTest(unittest.TestCase):
                 self.assertEqual(node.level, 0, 'відносний імпорт: модуль exec-иться, сусідів нема')
                 mods.add((node.module or '').split('.')[0])
         self.assertTrue(mods, 'очікували хоч один імпорт')
-        for m in mods:
-            self.assertIn(m, sys.stdlib_module_names, f'{m}: не stdlib')
-        for forbidden in ('serve', 'deai_modules', 'spaces', 'importlib', 'imp'):
-            self.assertNotIn(forbidden, mods)
+        self.assertEqual(mods - self.ALLOWED_IMPORTS, set(), 'імпорт поза списком дозволених')
+
+    def test_no_dynamic_code_or_imports(self):
+        with open(SERVER, encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        self.assertEqual(names & {'__import__', 'exec', 'eval', 'compile', 'importlib'}, set())
+        self.assertEqual(attrs & {'__import__', 'exec', 'eval', 'import_module', 'system', 'popen'}, set())
 
     def test_no_file_relative_loading(self):
         with open(SERVER, encoding='utf-8') as f:

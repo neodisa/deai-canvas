@@ -7,26 +7,32 @@
 `deai_modules` чи сусідніх файлів, без читання власного шляху.
 
 Що вважається токеном
-  * декларація `--імʼя: значення` у правилі, чий РІВЕНЬ КОРЕНЯ — `:root`, `html` або
-    атрибутний селектор `[data-theme…]`. Рівень кореня — крайній складений селектор
-    (суб'єкт): `[data-theme=dark] .card { --x }` задає змінну картці, а не темі, тож токеном
-    не є, а `html.dark`, `:root[data-theme=dark]`, `.dark :root` — є. Достатньо одного такого
-    селектора в списку;
+  * декларація `--імʼя: значення` у правилі РІВНЯ КОРЕНЯ: крайній складений селектор (суб'єкт) хоч
+    одного селектора списку — `html`, `:root` або атрибут `[data-…theme…]` (`[data-theme=dark]`,
+    `[data-bs-theme=dark]` Bootstrap 5.3, `[data-color-theme]`). `[data-theme=dark] .card { --x }`
+    задає змінну картці, а не темі, тож токеном не є, а `html.dark`, `:root[data-theme=dark]`,
+    `.dark :root` — є. Голий клас (`.dark { … }`) НЕ береться навмисно: клас стоїть на будь-якому
+    елементі, і токени змішалися б із локальними змінними компонентів;
+  * декларації ПРЯМО в `@theme { … }` (Tailwind v4; також `@theme inline|static|default`) — токени
+    самі по собі, а скидання простору імен `--color-*: initial` (імʼя з `*`) — ні;
   * правила будь-якої вкладеності в at-правилах (`@media`, `@layer`, `@supports`, `@container`,
     `@scope`, `@-moz-document`…) розгортаються — кожне правило оцінюється за власним селектором, тож
-    `@keyframes`/`@font-face`/`@page` токенів не дають; декларації ПРЯМО в at-правилі — токени лише
-    для умовних груп (`@media`/`@layer`/`@supports`/`@container`/`@document`), вкладених у сам
-    `:root`-рядок (CSS nesting: `:root { @media … { --a: 1 } &[data-theme=x] {…} }`);
+    `@keyframes`/`@font-face`/`@page` токенів не дають; декларації ПРЯМО в умовних групах
+    (`@media`/`@layer`/`@supports`/`@container`/`@document`) — токени, лише коли група вкладена в сам
+    рядок кореня (CSS nesting: `:root { @media … { --a: 1 } &[data-theme=x] {…} }`);
   * значення збираються СПИСКОМ на імʼя (теми, медіа), без повторів, у порядку появи. Коментарі
     прибираються, пробіли стискаються, `!important` відкидається. `;` і `}` усередині лапок,
     `url(…)`, дужок `()`/`[]` і значення-блоку `--x: { … }` значення не ріжуть; рядок без
     закривної лапки (до кінця рядка) робить недійсною всю декларацію — як у браузері;
   * `var(--x)` розгортається, якщо `--x` визначено в ЦЬОМУ файлі (до `MAX_HOPS` стрибків, без
-    циклів; значення-список цілі множиться на теми, ≤ `MAX_COMBOS` комбінацій), запасне значення
-    `var(--x, …)` ігнорується: невизначена змінна може бути задана деінде. Не вдалось розгорнути
-    ХОЧА Б ОДНЕ значення токена (цикл, невизначена, надто глибоко, кривий `var()`) — список токена
-    порожній: імʼя відоме, а значення звіряти нема з чим (неповний список дав би хибне
-    «перевизначено» для теми, що в нього не потрапила). `@import` не відстежується.
+    циклів; значення-список цілі множиться на теми), запасне значення `var(--x, …)` ігнорується:
+    невизначена змінна може бути задана деінде. Не вдалось розгорнути ХОЧА Б ОДНЕ значення токена
+    (цикл, невизначена, надто глибоко, кривий `var()`, стеля нижче) — список токена порожній: імʼя
+    відоме, а значення звіряти нема з чим (неповний список дав би хибне «перевизначено» для теми, що
+    в нього не потрапила). Стелі (множення значень інакше вибухає пам'яттю й часом): `MAX_COMBOS`
+    комбінацій в одному значенні, `MAX_VALUES` — у всіх `var()`-значень одного токена разом,
+    `MAX_EXPANDED` — у всіх токенах файла разом (порядок — за першою появою імені; значення без
+    `var()` не рахуються). `@import` не відстежується.
 
 Читання: лише звичайний файл (`S_ISREG`, перевірка на ДЕСКРИПТОРІ — між `stat` і `open` файл не
 підміниш на FIFO), ≤ 2 МіБ (читаємо не більше за ліміт + 1 байт), `utf-8` з толерантністю до BOM і
@@ -40,11 +46,15 @@ import threading
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_HOPS = 5            # скільки разів поспіль `var()` може вести до іншого `var()`
-MAX_COMBOS = 64         # комбінацій теми·теми в одному значенні; більше — не розгортаємо
+MAX_COMBOS = 64         # комбінацій теми·теми в ОДНОМУ значенні; більше — не розгортаємо
+MAX_VALUES = 1024       # скільки комбінацій усіх `var()`-значень ОДНОГО токена разом; більше — `[]`
+MAX_EXPANDED = 10 ** 9    # скільки комбінацій усіх токенів ФАЙЛА разом; решта токенів із `var()` — `[]`
 _CACHE_MAX = 8
 
 #: Умовні групові at-правила: декларації прямо в них належать правилу, у якому вони вкладені.
 _GROUP_AT = frozenset(('media', 'supports', 'layer', 'container', 'document'))
+#: At-правила, декларації яких — токени самі по собі (Tailwind v4: `@theme { --color-brand: … }`).
+_TOKEN_AT = frozenset(('theme',))
 
 
 class TokensError(ValueError):
@@ -77,10 +87,13 @@ _STRINGS = re.compile(_STR)
 
 _DECL = re.compile(r'(--[^\s:;{}]+)\s*:([\s\S]*)\Z')
 _DECL_START = re.compile(r'--[^\s:;{}]+\s*:')
-_IMPORTANT = re.compile(r'\s*!\s*important\s*\Z', re.I)
+#: `!important` у кінці значення. Без `\s*` ПЕРЕД `!`: невивернений `sub` із ним — квадрат на довгих
+#: проміжках пробілів (100 КБ у лапках = 7 с); значення перед ним уже `strip()`-нуте.
+_IMPORTANT = re.compile(r'!\s*important\Z', re.I)
 _AT = re.compile(r'@([\w-]+)')
-#: Складений селектор «рівня кореня» (рядки в лапках вже замінено на `""`).
-_ROOTISH = re.compile(r'(?<![\w.#:\[-])html(?![\w-])|:root(?![\w-])|\[\s*data-theme', re.I)
+#: Складений селектор «рівня кореня» (рядки в лапках вже замінено на `""`): `html`, `:root` чи атрибут
+#: `[data-…theme…]` (`[data-theme]`, `[data-bs-theme=dark]`). Голий клас (`.dark`) — ні.
+_ROOTISH = re.compile(r'(?<![\w.#:\[-])html(?![\w-])|:root(?![\w-])|\[\s*data-[\w-]*theme', re.I)
 _VAR_OPEN = re.compile(r'(?<![\w-])var\(', re.I)
 
 
@@ -138,13 +151,14 @@ def _qualifies(prelude, parent_q):
 
 def _frame(prelude, parent_q):
     """`q` для блоку з прелюдією `prelude`, вкладеного в блок з `parent_q`: чи є декларації тут
-    токенами. Умовне групове at-правило (`@media`…) успадковує `q` рядка, у якому вкладене (CSS
-    nesting: `:root { @media … { --a: 1 } }`); будь-яке інше at-правило (`@font-face`, `@keyframes`,
+    токенами. `@theme` (Tailwind v4) — завжди токени; умовне групове at-правило (`@media`…)
+    успадковує `q` рядка, у якому вкладене (CSS nesting: `:root { @media … { --a: 1 } }`); будь-яке інше at-правило (`@font-face`, `@keyframes`,
     `@scope`, `@-moz-document`…) токенів САМЕ ПО СОБІ не дає, але його вміст проглядається: правило
     всередині (`@scope (…) { :root { … } }`) кваліфікується за власним селектором."""
     if prelude.startswith('@'):
         m = _AT.match(prelude)
-        return parent_q and bool(m) and m.group(1).lower() in _GROUP_AT
+        name = m.group(1).lower() if m else ''
+        return name in _TOKEN_AT or (parent_q and name in _GROUP_AT)
     return _qualifies(prelude, parent_q)
 
 
@@ -169,8 +183,10 @@ def _parse_raw(text):
         m = _DECL.match(s)
         if not m:
             return
+        if '*' in m.group(1):                       # `@theme { --color-*: initial }` — скидання простору імен
+            return
         vals = raw.setdefault(m.group(1), {})       # dict як впорядкована множина: без повторів і без O(n²)
-        v = _IMPORTANT.sub('', m.group(2)).strip()
+        v = _IMPORTANT.sub('', m.group(2).strip()).strip()
         if v:
             vals[v] = None
 
@@ -260,12 +276,16 @@ def _segments(value):
     return segs
 
 
-def _fill(per_value, done):
-    """Усі значення токена з підставленими цілями `var()`; `None`, якщо якусь ціль ще не розгорнуто
-    чи комбінацій забагато."""
-    out = {}
+def _fill(per_value, done, budget):
+    """Усі значення токена з підставленими цілями `var()`, або `None` — не розгортається (поки: якусь
+    ціль ще не розгорнуто; назавжди: забагато комбінацій в одному значенні, в токені чи в файлі —
+    стелі не слабшають, тож наступні раунди дадуть те саме, але дешево). Спершу перевірка готовності й стель на всіх значеннях (дешево), потім — саме добуток; стеля
+    рахує КОМБІНАЦІЇ, а не різні результати: дубльовані розгортання не лишають слідів у виході, але
+    коштують часу. Значення без `var()` не рахуються (вихід не більший за вхід). У `budget[0]` лишок
+    стелі файла; списується лише при успіху."""
+    plans, spent = [], 0
     for segs in per_value:
-        parts, size = [], 1
+        parts, size, has_var = [], 1, False
         for sg in segs:
             if isinstance(sg, str):
                 parts.append((sg,))
@@ -273,32 +293,43 @@ def _fill(per_value, done):
             vals = done.get(sg[1])
             if not vals:
                 return None
+            has_var = True
             parts.append(vals)
             size *= len(vals)
             if size > MAX_COMBOS:
                 return None
+        if has_var:
+            spent += size
+            if spent > MAX_VALUES or spent > budget[0]:
+                return None
+        plans.append(parts)
+    out = {}
+    for parts in plans:
         for combo in itertools.product(*parts):
             v = ''.join(combo).strip()
             if v:
                 out[v] = None
+    budget[0] -= spent
     return list(out) or None
 
 
 def _resolve(raw):
     """Розгорнути `var()` раундами: раунд `k` розгортає імена, чиї цілі вже розгорнуто в раундах
     `< k` (тобто ланцюжок із `k` стрибків). Цикл і невизначена ціль не розгортаються ніколи; після
-    `MAX_HOPS` раундів решта — надто глибока. Без рекурсії й без експоненти."""
+    `MAX_HOPS` раундів решта — надто глибока. Без рекурсії й без експоненти; сумарна робота обмежена
+    `MAX_VALUES` на токен і `MAX_EXPANDED` на файл (порядок — за першою появою імені)."""
     info = {}
     for name, vals in raw.items():
         per = [_segments(v) for v in vals]
         info[name] = per if vals and all(p is not None for p in per) else None
     done = {}
+    budget = [MAX_EXPANDED]
     for _ in range(MAX_HOPS + 1):
         fresh = {}
         for name, per in info.items():
             if per is None or name in done:
                 continue
-            got = _fill(per, done)
+            got = _fill(per, done, budget)
             if got is not None:
                 fresh[name] = got
         if not fresh:
@@ -331,10 +362,15 @@ def _open_regular(path):
         fd = os.open(path, flags)
     except FileNotFoundError:
         raise TokensError('file: not found') from None
+    except ValueError:                                  # NUL у шляху, непередаваний сурогат: це `ValueError`, не `OSError`
+        raise TokensError('file: bad path') from None
     except OSError as e:
         raise TokensError(f'file: cannot be opened ({e.strerror or type(e).__name__})') from None
     try:
-        st = os.fstat(fd)
+        try:
+            st = os.fstat(fd)
+        except OSError as e:
+            raise TokensError(f'file: cannot be read ({e.strerror or type(e).__name__})') from None
         if not stat.S_ISREG(st.st_mode):
             raise TokensError('file: not a regular file')
         if st.st_size > MAX_BYTES:
@@ -380,7 +416,8 @@ def tokens(ctx):
         if hit is None:
             hit = parse_css_tokens(_read_all(fd).decode('utf-8-sig', 'replace'))
             with _LOCK:
-                _CACHE.pop(key, None)
+                for old in [k for k in _CACHE if k[0] == path]:     # старі версії цього ж файла
+                    del _CACHE[old]
                 _CACHE[key] = hit
                 while len(_CACHE) > _CACHE_MAX:
                     del _CACHE[next(iter(_CACHE))]
