@@ -16,10 +16,12 @@
 
 Контракт помилок — `ModuleError(code, status=None, message='')`; код і HTTP-статус:
   bad-manifest 500 · module-error 502 · role-taken 409 · unknown-module 404 · bad-settings 400 ·
-  space-json-unreadable 409 · spaces-off 409 · check-timeout 504 · і два додаткові, яких вимагає
-  чесна поведінка: secrets-unreadable 409 (є `secrets.json`, але не читається — НЕ вважати його
-  порожнім: це мовчки зняло б пароль превʼю) та unwritable 500 (не записати `space.json` чи
-  `secrets.json`). Другий аргумент-рядок розуміється як `message`.
+  space-json-unreadable 409 · spaces-off 409 · check-timeout 504 · bad-folder 409 (його кидає модуль
+  публікації, див. нижче) · і два додаткові, яких вимагає чесна поведінка: secrets-unreadable 409 (є
+  `secrets.json`, але не читається — НЕ вважати його порожнім: це мовчки зняло б пароль превʼю) та
+  unwritable 500 (не записати `space.json` чи `secrets.json`). Другий аргумент-рядок розуміється як `message`.
+  `ModuleError`, яку кидає САМ модуль із кодом із цієї таблиці, `call()` пропускає як є (текст очищено від
+  секретів, ≤300; статус — з таблиці); невідомий код стає `module-error`.
 
 Правила, які тримають решту коду чесним:
   * Завантаження — `exec(compile(…))` у свіжий `types.ModuleType('deai_mod_<id>')`: без `importlib`,
@@ -38,8 +40,13 @@
     знати явні рішення, тож нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)`.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
     ключ `error` (див. функцію).
-  * Правила теки публікації живуть тут (`published_root`, `folder_ok`), щоб їх ділили `serve.py`
-    і модуль; код модулів НЕ імпортує `serve` (а `import deai_modules` — можна).
+  * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
+    `serve.py` і модуль; код модулів НЕ імпортує `serve` (а `import deai_modules` — можна). `ctx` модуля для
+    `serve.py` — `module_ctx()`.
+  * Межі `exec`-завантаження (модуль — не в `sys.modules`): `@dataclass` разом з `from __future__ import
+    annotations` падає (`dataclasses` шукає `sys.modules[cls.__module__]`), класи з `exec`-модулів не
+    піклюються (`pickle`, `multiprocessing` у режимі spawn), `importlib.reload` не працює. Модулям вистачає
+    функцій і простих структур.
   * Вимкнений шар просторів (лише `DC_TASKS_FILE`) нічого не пише: `write_module_state` і
     `write_secrets` → `spaces-off`, `read_secrets` → `{}` без звернення до диска.
 """
@@ -47,6 +54,7 @@ import json
 import os
 import re
 import threading
+import time
 import types
 from urllib.parse import quote
 
@@ -72,7 +80,7 @@ MAX_MESSAGE = 300
 
 STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-module': 404,
           'bad-settings': 400, 'space-json-unreadable': 409, 'spaces-off': 409,
-          'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500}
+          'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409}
 
 
 class ModuleError(Exception):
@@ -136,6 +144,9 @@ _STATE_LOCK = threading.Lock()
 _LAST_CHECK = {}
 #: `capabilities`: `{id простору: (ключ, результат)}`.
 _CAPS = {}
+#: Вхідні дані `folder_ok` (реєстр + теки задач) на `FOLDER_INPUTS_TTL` секунд: `{'v': (ключ, момент, значення)}`.
+_FOLDER_INPUTS = {}
+FOLDER_INPUTS_TTL = 2
 
 
 def reset_caches():
@@ -145,6 +156,7 @@ def reset_caches():
     with _STATE_LOCK:
         _LAST_CHECK.clear()
         _CAPS.clear()
+        _FOLDER_INPUTS.clear()
 
 
 def _sig(path):
@@ -187,12 +199,21 @@ def _scan():
     return base, out
 
 
+def _encodable(v):
+    """Рядок можна записати в UTF-8 файл: самотній сурогат (`\\ud800` із JSON-екрана) — ні, і падав би на записі."""
+    try:
+        v.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _value_ok(s, v):
     """Значення `v` придатне для налаштування `s` (без підстановок). Секрет — ніколи."""
     t = s['type']
     if t == 'bool':
         return isinstance(v, bool)
-    if t == 'secret' or not isinstance(v, str) or len(v) > MAX_VALUE_LEN:
+    if t == 'secret' or not isinstance(v, str) or len(v) > MAX_VALUE_LEN or not _encodable(v):
         return False
     if t == 'path':
         return bool(v.strip()) and spaces._usable_path_text(v)
@@ -577,7 +598,7 @@ def write_module_state(space, module_id, enabled=None, settings=None):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             spaces._write_public(path, data)
-        except OSError as e:
+        except (OSError, ValueError) as e:        # ValueError: UnicodeEncodeError, NUL у шляху
             raise ModuleError('unwritable', message=f'space.json: {type(e).__name__}') from None
         return _entry_state(m, space, _normalize(mods))
 
@@ -594,17 +615,90 @@ def published_root(space, module):
     return resolve_settings(space, m, _entry_state(m, space, explicit)['settings']).get('folder')
 
 
-def folder_ok(space, folder):
+def _now():
+    return time.monotonic()
+
+
+def folder_inputs():
+    """`(реєстр, теки задач)` для `folder_ok` або `None`, коли реєстр чи ФАЙЛ ЗАДАЧ ЯКОГОСЬ простору не
+    читається (`spaces.unreadable_task_files`: `all_task_dirs` читає такий файл як порожній, а в ньому могли
+    лежати теки задач, — тож перевірку «пускаємо» робити не можна). Результат кешується на
+    `FOLDER_INPUTS_TTL` с (`folder_ok` кличуть на кожен роздаваний файл); відмову не кешуємо. Кеш прив'язаний до
+    `DEAI_HOME`, файла старих задач і стану шару. Повернуті обʼєкти не змінювати."""
+    key = (spaces.layer_on(), spaces.registry_path(), spaces.legacy_tasks_file())
+    now = _now()
+    with _STATE_LOCK:
+        hit = _FOLDER_INPUTS.get('v')
+    if hit is not None and hit[0] == key and 0 <= now - hit[1] < FOLDER_INPUTS_TTL:
+        return hit[2]
+    try:
+        reg = spaces.read_registry()
+        if spaces.unreadable_task_files(reg):
+            return None
+        val = (reg, spaces.all_task_dirs(reg))
+    except (spaces.SpacesError, OSError, ValueError):
+        return None
+    with _STATE_LOCK:
+        _FOLDER_INPUTS['v'] = (key, now, val)
+    return val
+
+
+def _home_walk(p):
+    """За ФАЙЛОВОЮ системою (samefile, без урахування регістру): `(True, перша_складова)`, коли `p` лежить у
+    домівці `~` (`перша_складова` — шлях на рівень під домівкою, `None`, якщо `p` — сама домівка);
+    `(False, None)` — коли ні."""
+    home = os.path.expanduser('~')
+    a, child = p, None
+    while True:
+        if spaces._same_dir(a, home):
+            return True, child
+        parent = os.path.dirname(a)
+        if parent == a:
+            return False, None
+        a, child = parent, a
+
+
+def _fs_rules(pt):
+    """Правила, яких текстове порівняння `spaces.check_new_path` не бачить на ФС без урахування регістру
+    (`<ДОМІВКА великими>/.ssh`, `<тека інструмента великими>`): код причини або `None`."""
+    if spaces._fs_under(pt, spaces.ROOT) or spaces._fs_under(spaces.ROOT, pt):
+        return 'path-tool'
+    inside, child = _home_walk(pt)
+    if inside:
+        if child and (os.path.basename(child).startswith('.')
+                      or spaces._same_dir(child, os.path.join(os.path.expanduser('~'), 'Library'))):
+            return 'path-system'                        # `~/Library` і будь-яка прихована тека домівки
+        return None
+    sysdirs = {*spaces.SYSTEM_DIRS, *(os.path.realpath(d) for d in spaces.SYSTEM_DIRS)}
+    if any(spaces._fs_under(pt, d) for d in sysdirs):
+        return 'path-system'
+    return None
+
+
+def folder_ok(space, folder, *, reg=None, task_dirs=None):
     """Чи можна публікувати в теку `folder` (відносна — від теки простору): `(True, None)` або
-    `(False, код)`. Правила (за `realpath`, у NFC, плюс порівняння файловою системою — без урахування
-    регістру на macOS): `spaces.check_new_path` над усіма просторами реєстру й теками всіх задач
-    (`path-not-absolute`, `path-too-broad` — домівка й її предки, `path-system`, `path-tool` — тека
-    інструмента, `path-not-dir`, `path-registered`/`path-overlap` — дорівнює, всередині чи НАД текою
-    простору чи задачі) і ще `path-deai-home` — дорівнює, ВСЕРЕДИНІ чи НАД `DEAI_HOME` (`spaces.home()`).
-    Реєстр не прочитати — `(False, 'spaces-unreadable')`, будь-який збій перевірки шляху — `(False,
-    'path-invalid')`: відмовляємо, а не пускаємо. Виклик — при КОЖНІЙ публікації й роздачі, не лише при
-    вмиканні. Простори без `path` (неявний, шар вимкнено) у порівнянні не беруть участі, а теки задач
-    старого файла беруться."""
+    `(False, код)`. Кличуть при КОЖНІЙ публікації й роздачі, не лише при вмиканні.
+
+    Правила — `spaces.check_new_path` над усіма просторами реєстру й теками всіх задач
+    (`path-not-absolute`; `path-too-broad` — домівка й її предки; `path-system`; `path-tool` — тека
+    інструмента; `path-not-dir`; `path-registered`/`path-overlap` — дорівнює, всередині чи НАД текою простору
+    чи задачі; порівняння за `realpath`, у NFC й — для збігу з просторами та теками задач — за файловою
+    системою) плюс:
+      * `path-deai-home` — дорівнює, ВСЕРЕДИНІ чи НАД `DEAI_HOME` (`spaces.home()`): за текстом, за
+        `realpath` обох (висяче посилання на `DEAI_HOME` теж), у NFC й за файловою системою;
+      * за файловою системою (`samefile`, бо на macOS регістр не різнить теки, а текст його бачить): `path-tool`
+        — тека інструмента, її підтека чи предок; `path-system` — `~/Library`, будь-яка прихована тека
+        домівки чи системна тека (`/Applications`, `/System`…) в іншому написанні. Теку в домівці від
+        системних тек FS-перевірка відрізняє так само, як текст (тимчасова домівка macOS живе під `/var`).
+    Відмовляємо, а не пускаємо: реєстр чи файл задач будь-якого простору не читається —
+    `(False, 'spaces-unreadable')` (`all_task_dirs` читав би його як порожній); збій перевірки шляху —
+    `(False, 'path-invalid')`. Простори без `path` (неявний, шар вимкнено) у порівнянні не беруть участі,
+    а теки задач старого файла беруться.
+
+    `reg`/`task_dirs` — готові вхідні дані (з `folder_inputs()`): обидва задані — читання з диска нема;
+    інакше бракуюче береться з диска (реєстр — свіжий, файли задач перевіряються на читабельність), а без обох
+    — з `folder_inputs()` (кеш `FOLDER_INPUTS_TTL` с). Простір створено/додано щойно — у межах TTL
+    перевірка може його ще не знати."""
     if not isinstance(folder, str) or not folder.strip() or not spaces._usable_path_text(folder):
         return False, 'path-not-absolute'
     p = os.path.expanduser(folder)
@@ -614,13 +708,26 @@ def folder_ok(space, folder):
             return False, 'path-not-absolute'
         p = os.path.join(sp, p)
     try:
-        reg = spaces.read_registry()
+        if reg is None and task_dirs is None:
+            inputs = folder_inputs()
+            if inputs is None:
+                return False, 'spaces-unreadable'
+            reg, task_dirs = inputs
+        elif reg is None or task_dirs is None:
+            if reg is None:
+                reg = spaces.read_registry()
+            if spaces.unreadable_task_files(reg):
+                return False, 'spaces-unreadable'
+            if task_dirs is None:
+                task_dirs = spaces.all_task_dirs(reg)
     except spaces.SpacesError:
         return False, 'spaces-unreadable'
     try:
-        task_dirs = spaces.all_task_dirs(reg)
         pt, why = spaces.check_new_path(
             p, {'spaces': [sp for sp in reg['spaces'] if sp.get('path')]}, task_dirs)
+        if why:
+            return False, why
+        why = _fs_rules(pt)
         if why:
             return False, why
         deai = os.path.abspath(spaces.home())
@@ -680,7 +787,7 @@ def write_secrets(space_id, module_id, patch):
     Повертає імена ключів, що тепер задані (значень не віддає)."""
     if not spaces.layer_on():
         raise ModuleError('spaces-off', message='spaces layer is off')
-    if not isinstance(space_id, str) or not space_id:
+    if not isinstance(space_id, str) or not space_id or not _encodable(space_id):
         raise _bad('space: expected an id')
     m = _need_module(module_id)                         # ДО локу
     if not isinstance(patch, dict):
@@ -689,7 +796,7 @@ def write_secrets(space_id, module_id, patch):
     for k, v in patch.items():
         if k not in allowed:
             raise _bad(f'{str(k)[:40]!r}: not a secret of {m.id}')
-        if v is not None and not (isinstance(v, str) and len(v) <= MAX_VALUE_LEN):
+        if v is not None and not (isinstance(v, str) and len(v) <= MAX_VALUE_LEN and _encodable(v)):
             raise _bad(f'{k}: expected a string or null')
     with spaces.WRITE_LOCK:
         data = _load_secrets()
@@ -724,6 +831,13 @@ def write_secrets(space_id, module_id, patch):
                 atomic_write_json(path, data)
                 _secure(path, 0o600)
                 _secure(home, 0o700)
+            except (OSError, ValueError) as e:          # ValueError: UnicodeEncodeError (сурогат, що вже лежить у файлі)
+                raise ModuleError('unwritable', message=f'secrets.json: {type(e).__name__}') from None
+        else:
+            try:                                        # нічого не змінилось, але права підтягуємо в будь-якому разі
+                if os.path.exists(_secrets_path()):
+                    _secure(_secrets_path(), 0o600)
+                    _secure(spaces.home(), 0o700)
             except OSError as e:
                 raise ModuleError('unwritable', message=f'secrets.json: {type(e).__name__}') from None
         return sorted(k for k, v in cur.items() if isinstance(v, str))
@@ -746,12 +860,19 @@ def _scrub(text, secrets):
 
 
 def _run(f, ctx, args, secrets):
+    """(True, результат) або (False, (код, текст)). `ModuleError` модуля з кодом, відомим ядру (`STATUS`),
+    проходить як є — лише з вирізаними секретами й ≤300 символів (його код читає API: `bad-folder`…);
+    усе інше (невідомий код, `SystemExit`, `ValueError`…) — `module-error`."""
     try:
         return True, f(ctx, *args)
     except KeyboardInterrupt:
         raise
+    except ModuleError as e:
+        if e.code in STATUS:
+            return False, (e.code, _scrub(e.message, secrets)[:MAX_MESSAGE])
+        return False, ('module-error', _scrub(_exc_text(e), secrets)[:MAX_MESSAGE])
     except BaseException as e:  # noqa: BLE001 — SystemExit, GeneratorExit… теж `module-error`
-        return False, _scrub(_exc_text(e), secrets)[:MAX_MESSAGE]   # СПЕРШУ вирізати, ПОТІМ різати
+        return False, ('module-error', _scrub(_exc_text(e), secrets)[:MAX_MESSAGE])   # СПЕРШУ вирізати, ПОТІМ різати
 
 
 def _resolve_fn(module, fn):
@@ -768,7 +889,9 @@ def _resolve_fn(module, fn):
 def call(module, fn, ctx, *args, timeout=None):
     """Викликати функцію модуля (`fn` — роль, `'check'` чи сама функція) як `f(ctx, *args)`.
     Результат — як є; будь-який `BaseException` (окрім `KeyboardInterrupt`) → `ModuleError('module-error')`
-    з текстом ≤300 символів без значень `ctx['secrets']` і без прикріпленого першоджерела.
+    з текстом ≤300 символів без значень `ctx['secrets']` і без прикріпленого першоджерела. Виняток:
+    `ModuleError` модуля з кодом із `STATUS` (`bad-folder`, `role-taken`…) проходить як є (код і статус
+    — з таблиці, текст очищений); невідомий код — `module-error`.
     `timeout` (секунди) — виклик у робочому потоці (він успадковує простір запиту); не вклались —
     `check-timeout` (потік-сирота доживає свій час: `daemon`, його результат викидається)."""
     f, name = _resolve_fn(module, fn)
@@ -784,7 +907,7 @@ def call(module, fn, ctx, *args, timeout=None):
                 with spaces.request_space(sid):
                     box.append(_run(f, ctx, args, secrets))
             except BaseException as e:  # noqa: BLE001 — `KeyboardInterrupt` з модуля (його `_run` не ловить)
-                box.append((False, type(e).__name__))
+                box.append((False, ('module-error', type(e).__name__)))
         t = threading.Thread(target=work, name=f'deai-module-{module.id}-{name}', daemon=True)
         t.start()
         t.join(timeout)
@@ -792,15 +915,26 @@ def call(module, fn, ctx, *args, timeout=None):
             raise ModuleError('check-timeout', message=f'{module.id}.{name}: no answer in {timeout} s')
         ok, val = box[0]
     if not ok:
-        raise ModuleError('module-error', message=val)      # поза `except`: без __context__ з секретом
+        raise ModuleError(val[0], message=val[1])           # поза `except`: без __context__ з секретом
     return val
 
 
 def _ctx(space, m):
     explicit = space_modules(space)
     settings = resolve_settings(space, m, _entry_state(m, space, explicit)['settings'])
+    # секрети читаємо лише в модуля, що їх оголосив: зіпсований `secrets.json` не ламає css-tokens
+    secrets = read_secrets(_space_id(space), m.id) if m.secret_keys() else {}
     return {'space': {'id': _space_id(space), 'path': _space_path(space)},
-            'settings': settings, 'secrets': read_secrets(_space_id(space), m.id)}
+            'settings': settings, 'secrets': secrets}
+
+
+def module_ctx(space, module):
+    """`ctx` для функцій модуля — `{"space": {id, path}, "settings": {…підставлені…}, "secrets": {…лише
+    його оголошені…}}`; `module` — `Module` чи id. Саме це отримує `check`; для `serve.py` (`/api/ds-tokens`,
+    диспетчер публікації). Може кинути `unknown-module`, `bad-settings`, `space-json-unreadable`,
+    `secrets-unreadable`. Статус модуля не перевіряє (це робить `call`)."""
+    m = module if isinstance(module, Module) else _need_module(module)
+    return _ctx(space, m)
 
 
 def _remember(space, module_id, res):
@@ -889,8 +1023,10 @@ def provider(role, space=None):
     каталогу (як `spaces.integrations_on()`). Явно переданий `space` вирішується сам по собі, незалежно
     від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
     `integrations` і роль `publish` → `'legacy'`; інакше `None`.
-    ⚠️ Може кинути `ModuleError('space-json-unreadable')` (простір без інтеграцій, `space.json` є, але
-    не читається) — для списків і опитування є `capabilities()`, яка не кидає."""
+    ⚠️ НІКОЛИ не кликати під `spaces.WRITE_LOCK`: для простору запиту це `spaces.active_space()`, а той може
+    мігрувати реєстр (бере лок), а `catalog()` виконує код модулів. Може кинути `spaces.SpacesError` (реєстр
+    не прочитати) і `ModuleError('space-json-unreadable')` (простір без інтеграцій, `space.json` є, але не
+    читається) — для списків і опитування є `capabilities()`, яка не кидає."""
     if space is None:
         if not spaces.layer_on() or spaces.request_space_id() is None:
             return 'legacy' if role == 'publish' else None
@@ -912,8 +1048,8 @@ def capabilities(space):
     `space.json`), віддає `{"publish": None, "tokens": None, "error": <код>}` (`publish` — `'legacy'`, коли
     у просторі є інтеграції); без помилки ключа `error` нема. Кеш за (простір, прапорець
     `integrations`, відбиток `space.json`, відбитки `module.json` і `server.py` кожного вбудованого
-    модуля); повертає копію. `None` замість простору — нічого не вміє."""
-    if not space:
+    модуля); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
+    if not isinstance(space, dict) or not space:
         return {'publish': None, 'tokens': None}
     try:
         key = _caps_key(space)                          # ДО обчислення: зміна під час нього — промах, не застарілий хіт
