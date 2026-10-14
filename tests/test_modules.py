@@ -164,6 +164,10 @@ def publish(ctx, build_dir, task):
         raise deai_modules.ModuleError("bad-folder", 200, "wrong status is ignored")
     if kind == "weird":
         raise deai_modules.ModuleError("weird-code", 418, "teapot " + ctx["secrets"]["password"])
+    if kind == "straddle":
+        raise deai_modules.ModuleError("bad-folder", 409, "y" * 290 + ctx["secrets"]["password"])
+    if kind == "weird-straddle":
+        raise deai_modules.ModuleError("weird-code", 418, "y" * 270 + ctx["secrets"]["password"])
     return {"path": "/ok"}
 """
 
@@ -683,6 +687,42 @@ class CallTest(Env):
             self.assertEqual((e.code, e.status), ('module-error', 502))
             self.assertIn('weird-code', e.message)
             self.assertNotIn('hunter2-secret', e.message)
+
+    def test_a_secret_straddling_the_cut_does_not_leak_a_prefix_through_a_passed_through_error(self):
+        """`ModuleError` ріже текст до 300 ще в конструкторі; вирізати секрет треба з ПОВНОГО тексту."""
+        self.mk('passer', server=PASS_SERVER, settings=[{'key': 'password', 'type': 'secret'}])
+        m = dm.catalog()['passer']
+        ctx = {'space': {'id': 's', 'path': '/x'}, 'settings': {}, 'secrets': {'password': 'hunter2-secret'}}
+        for kind in ('straddle', 'weird-straddle'):
+            for timeout in (None, 3):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.call(m, 'publish', ctx, '/b', {'kind': kind}, timeout=timeout)
+                msg = cm.exception.message
+                self.assertLessEqual(len(msg), 300, kind)
+                self.assertNotIn('hunter2', msg, f'{kind}: {msg[-30:]!r}')
+                self.assertIn('***', msg, kind)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.call(m, 'publish', ctx, '/b', {'kind': 'straddle'})
+        self.assertEqual(cm.exception.code, 'bad-folder')
+
+    def test_the_error_keeps_the_full_text_but_exposes_300_characters(self):
+        e = dm.ModuleError('bad-folder', 409, 'z' * 1000)
+        self.assertEqual(len(e.message), 300)
+        self.assertEqual(len(str(e)), len('bad-folder: ') + 300)
+
+    def test_a_lone_surrogate_already_in_secrets_json_does_not_break_the_scrubbing(self):
+        self.mk('passer', server=PASS_SERVER, settings=[{'key': 'password', 'type': 'secret'}])
+        sp = self.new_space()
+        os.makedirs(self.deai, exist_ok=True)
+        _write(self.secrets_file, '{"%s": {"passer": {"password": "\\ud800hunter2"}}}' % sp['id'])
+        ctx = dm.module_ctx(sp, 'passer')
+        self.assertEqual(ctx['secrets']['password'], '\ud800hunter2')
+        m = dm.catalog()['passer']
+        for timeout in (None, 3):
+            with self.assertRaises(dm.ModuleError) as cm:        # а не `UnicodeEncodeError` із `quote()`
+                dm.call(m, 'publish', ctx, '/b', {'kind': 'weird'}, timeout=timeout)
+            self.assertEqual(cm.exception.code, 'module-error')
+            self.assertNotIn('hunter2', cm.exception.message)
 
     def test_a_check_that_raises_a_known_code_is_remembered_under_that_code(self):
         self.mk('passer', server=PASS_SERVER, settings=[{'key': 'password', 'type': 'secret'}])
@@ -1583,6 +1623,43 @@ class FolderTest(Env):
         self.assertEqual(self.code(sp, os.path.join(self.hp('lnk'), '..', 'stuff', 'deai', 'pub')),
                          'path-deai-home')
 
+    def test_the_home_folder_and_its_ancestors_in_another_spelling_are_too_broad(self):
+        self.need_case_insensitive_fs()
+        other = tempfile.mkdtemp(prefix='deai-other-')
+        self.addCleanup(shutil.rmtree, other, ignore_errors=True)
+        os.environ['DEAI_HOME'] = other                          # поза домівкою й без просторів: рішає лише це правило
+        sp = {'id': 'x', 'path': '', 'legacy': False, 'integrations': False}
+        with mock.patch.object(spaces, 'SYSTEM_DIRS', ()):       # тимчасова домівка під `/var`: без цього відмовило б текстове правило
+            self.assertEqual(self.code(sp, self.home.upper()), 'path-too-broad')                          # сама домівка
+            self.assertEqual(self.code(sp, os.path.dirname(self.home).upper()), 'path-too-broad')         # предок
+            self.assertEqual(self.code(sp, os.path.dirname(os.path.dirname(self.home)).upper()), 'path-too-broad')
+            self.assertIsNone(self.code(sp, self.home.upper() + '/PUB'))                                  # а підтека — можна
+
+    def test_the_home_rule_comes_before_the_tool_rule(self):
+        """Та сама причина, що й для самої `~` за текстом: `path-too-broad`, а не `path-tool` (теку інструмента
+        на машині власника саму лежить у домівці)."""
+        self.need_case_insensitive_fs()
+        other = tempfile.mkdtemp(prefix='deai-other-')
+        self.addCleanup(shutil.rmtree, other, ignore_errors=True)
+        os.environ['DEAI_HOME'] = other
+        sp = {'id': 'x', 'path': '', 'legacy': False, 'integrations': False}
+        tool = self.tool_dir()
+        with mock.patch.object(spaces, 'SYSTEM_DIRS', ()), mock.patch.object(spaces, 'ROOT', tool):
+            self.assertEqual(self.code(sp, self.home.upper()), 'path-too-broad')
+            self.assertEqual(self.code(sp, self.hp('TOOLS', 'DC')), 'path-tool')
+
+    def test_a_symlink_in_the_home_to_a_system_folder_in_another_spelling_is_refused(self):
+        self.need_case_insensitive_fs()
+        if not os.path.isdir('/Applications'):
+            self.skipTest('нема /Applications')
+        sp = self.new_space()
+        os.symlink('/APPLICATIONS', self.hp('lnk'))
+        self.assertEqual(self.code(sp, self.hp('lnk', 'pub')), 'path-system')
+        self.assertEqual(self.code(sp, self.hp('lnk')), 'path-system')
+        os.makedirs(self.hp('real'))
+        os.symlink(self.hp('real'), self.hp('ok-lnk'))
+        self.assertIsNone(self.code(sp, self.hp('ok-lnk', 'pub')))     # посилання на звичайну теку — можна
+
     def test_deai_home_is_compared_in_nfc(self):
         deai = self.hp('stuff', unicodedata.normalize('NFC', 'déai'))
         os.environ['DEAI_HOME'] = deai                            # теки нема: порівнює лише текст
@@ -1642,6 +1719,59 @@ class FolderTest(Env):
             dm.folder_ok(sp, self.hp('pub'))
             self.assertEqual(len(calls), 2)
 
+    def test_the_inputs_key_follows_the_registry_and_the_legacy_file(self):
+        """Простір щойно створили чи змінили старий файл задач — читаємо знову, не чекаючи кінця TTL."""
+        sp = self.new_space()
+        calls, patch = self.spy_registry()
+
+        def reads_after(change):
+            """Скільки разів прочитано реєстр після `change` при двох підряд викликах (другий — із кешу)."""
+            change()
+            calls.clear()
+            dm.folder_ok(sp, self.hp('pub'))
+            dm.folder_ok(sp, self.hp('pub'))
+            return len(calls)
+        with patch, mock.patch.object(dm, '_now', lambda: 1000.0):
+            self.assertEqual(reads_after(lambda: None), 1)
+            self.assertEqual(reads_after(lambda: self.new_space('Beta')), 1)             # змінився реєстр
+            self.assertEqual(reads_after(lambda: _write(self.legacy, {'tasks': {}})), 1)    # зʼявився файл старих задач
+            self.assertEqual(reads_after(lambda: _write(
+                self.legacy, {'tasks': {'t': {'dir': self.hp('d', 't')}}})), 1)           # змінився
+            _write(self.legacy, '{broken')                                                # а тепер не читається — одразу відмова
+            self.assertEqual(dm.folder_ok(sp, self.hp('pub')), (False, 'spaces-unreadable'))
+            _write(self.legacy, {'tasks': {}})
+            self.assertEqual(reads_after(lambda: os.environ.update(
+                DC_TASKS_FILE=self.hp('other-tasks.json'))), 1)                           # інший шлях старого файла
+
+    def test_the_inputs_key_follows_the_paths_even_when_no_file_exists(self):
+        """Реєстру й старого файла нема за жодним зі шляхів — відбитки однакові (`None`), різнить лише шлях."""
+        os.environ['DEAI_HOME'] = self.hp('d1')
+        calls, patch = self.spy_registry()
+        sp = {'id': 'x', 'path': '', 'legacy': False, 'integrations': False}
+        with patch, mock.patch.object(dm, '_now', lambda: 1000.0):
+            dm.folder_ok(sp, self.hp('pub'))
+            dm.folder_ok(sp, self.hp('pub'))
+            self.assertEqual(len(calls), 1)
+            os.environ['DEAI_HOME'] = self.hp('d2')                       # інший (теж неіснуючий) реєстр
+            dm.folder_ok(sp, self.hp('pub'))
+            self.assertEqual(len(calls), 2)
+            os.environ['DC_TASKS_FILE'] = self.hp('nowhere', 'tasks.json')  # інший (теж неіснуючий) старий файл
+            dm.folder_ok(sp, self.hp('pub'))
+            self.assertEqual(len(calls), 3)
+
+    def test_the_layer_flag_is_part_of_the_inputs_key(self):
+        os.environ['DEAI_HOME'] = self.hp('.deai')                # шар увімкнено, але шлях реєстру той самий, що в `~/.deai`
+        sp = {'id': 'x', 'path': '', 'legacy': False, 'integrations': False}
+        calls, patch = self.spy_registry()
+        with patch, mock.patch.object(dm, '_now', lambda: 1000.0):
+            dm.folder_ok(sp, self.hp('pub'))
+            self.assertEqual(len(calls), 1)
+            del os.environ['DEAI_HOME']                           # шар вимкнено: `registry_path()` і шлях старого файла — ті самі
+            self.assertFalse(spaces.layer_on())
+            self.assertEqual(spaces.registry_path(), self.hp('.deai', 'spaces.json'))
+            dm.folder_ok(sp, self.hp('pub'))
+            self.assertEqual(len(calls), 2)
+
     def test_reset_caches_drops_the_inputs(self):
         sp = self.new_space()
         calls, patch = self.spy_registry()
@@ -1659,6 +1789,24 @@ class FolderTest(Env):
             self.assertEqual(dm.folder_ok(a, self.hp('pub')), (False, 'spaces-unreadable'))
             _write(os.path.join(b['path'], 'tasks.json'), {'tasks': {}})
             self.assertEqual(dm.folder_ok(a, self.hp('pub')), (True, None))     # тієї ж миті
+
+    def test_an_unreadable_registry_refusal_is_not_cached_even_under_the_same_signature(self):
+        """Відбиток зіпсованого й полагодженого реєстру збігається (той самий inode, розмір і mtime): якби
+        відмову закешували, наступний виклик віддав би її знову."""
+        sp = self.new_space()
+        good = _bytes(self.reg_file)
+        bad = good[:-1] + b' '                                      # обірваний JSON тієї ж довжини
+        with open(self.reg_file, 'wb') as f:
+            f.write(bad)
+        st = os.stat(self.reg_file)
+        with mock.patch.object(dm, '_now', lambda: 1000.0):
+            self.assertEqual(dm.folder_ok(sp, self.hp('pub')), (False, 'spaces-unreadable'))
+            with open(self.reg_file, 'wb') as f:
+                f.write(good)
+            os.utime(self.reg_file, ns=(st.st_atime_ns, st.st_mtime_ns))
+            now = os.stat(self.reg_file)
+            self.assertEqual((now.st_ino, now.st_size, now.st_mtime_ns), (st.st_ino, st.st_size, st.st_mtime_ns))
+            self.assertEqual(dm.folder_ok(sp, self.hp('pub')), (True, None))
 
     def test_an_unreadable_registry_is_not_cached(self):
         sp = self.new_space()

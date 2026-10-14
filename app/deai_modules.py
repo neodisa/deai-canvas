@@ -77,6 +77,7 @@ CHECK_TIMEOUT = 5
 MAX_SERVER_BYTES = 1 << 20
 MAX_VALUE_LEN = 4096
 MAX_MESSAGE = 300
+MAX_FULL_MESSAGE = 1 << 16
 
 STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-module': 404,
           'bad-settings': 400, 'space-json-unreadable': 409, 'spaces-off': 409,
@@ -85,14 +86,17 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
 
 class ModuleError(Exception):
     """`code` — з таблиці `STATUS`, `status` — HTTP, `message` — текст (≤300, без секретів).
-    `ModuleError('x', 409)`, `ModuleError('x', message='…')` і `ModuleError('x', '…')` — усе дозволено."""
+    `ModuleError('x', 409)`, `ModuleError('x', message='…')` і `ModuleError('x', '…')` — усе дозволено.
+    Повний текст (до 64 КіБ) лишається в `_full`: `_run` вирізає секрети з НЬОГО й лише потім ріже до 300 —
+    секрет, що перетинає межу, інакше пролізав би обрізаним початком."""
 
     def __init__(self, code, status=None, message=''):
         if isinstance(status, str):
             status, message = (message if isinstance(message, int) else None), status
         self.code = code
         self.status = status if isinstance(status, int) else STATUS.get(code, 500)
-        self.message = str(message or '')[:MAX_MESSAGE]
+        self._full = str(message or '')[:MAX_FULL_MESSAGE]
+        self.message = self._full[:MAX_MESSAGE]
         super().__init__(f'{code}: {self.message}' if self.message else code)
 
 
@@ -625,7 +629,9 @@ def folder_inputs():
     лежати теки задач, — тож перевірку «пускаємо» робити не можна). Результат кешується на
     `FOLDER_INPUTS_TTL` с (`folder_ok` кличуть на кожен роздаваний файл); відмову не кешуємо. Кеш прив'язаний до
     `DEAI_HOME`, файла старих задач і стану шару. Повернуті обʼєкти не змінювати."""
-    key = (spaces.layer_on(), spaces.registry_path(), spaces.legacy_tasks_file())
+    reg_path, legacy_path = spaces.registry_path(), spaces.legacy_tasks_file()
+    # Відбитки обох файлів у ключі: щойно створений простір чи змінений старий файл задач не чекають кінця TTL.
+    key = (spaces.layer_on(), reg_path, legacy_path, _sig(reg_path), _sig(legacy_path))
     now = _now()
     with _STATE_LOCK:
         hit = _FOLDER_INPUTS.get('v')
@@ -660,7 +666,10 @@ def _home_walk(p):
 
 def _fs_rules(pt):
     """Правила, яких текстове порівняння `spaces.check_new_path` не бачить на ФС без урахування регістру
-    (`<ДОМІВКА великими>/.ssh`, `<тека інструмента великими>`): код причини або `None`."""
+    (`<ДОМІВКА великими>`, `<ДОМІВКА великими>/.ssh`, `<тека інструмента великими>`): код причини або `None`."""
+    home = os.path.expanduser('~')
+    if spaces._fs_under(home, pt):
+        return 'path-too-broad'                         # сама домівка чи її предок в іншому написанні
     if spaces._fs_under(pt, spaces.ROOT) or spaces._fs_under(spaces.ROOT, pt):
         return 'path-tool'
     inside, child = _home_walk(pt)
@@ -727,11 +736,11 @@ def folder_ok(space, folder, *, reg=None, task_dirs=None):
             p, {'spaces': [sp for sp in reg['spaces'] if sp.get('path')]}, task_dirs)
         if why:
             return False, why
-        why = _fs_rules(pt)
+        pr = spaces._real(p)
+        why = _fs_rules(pt) or _fs_rules(pr)            # `pr` — куди веде посилання (`~/lnk -> /APPLICATIONS`)
         if why:
             return False, why
         deai = os.path.abspath(spaces.home())
-        pr = spaces._real(p)
         for a, b in ((pt, spaces._text(deai)), (pr, spaces._real(deai))):
             if spaces._under(a, b) or spaces._under(b, a):
                 return False, 'path-deai-home'
@@ -852,7 +861,7 @@ def _scrub(text, secrets):
         for v in secrets.values():
             if isinstance(v, str) and v:
                 vals |= {v, repr(v)[1:-1], json.dumps(v)[1:-1], json.dumps(v, ensure_ascii=False)[1:-1],
-                         quote(v, safe='')}
+                         quote(v, safe='', errors='surrogatepass')}
     for v in sorted(vals, key=len, reverse=True):
         if v:
             text = text.replace(v, '***')
@@ -869,8 +878,9 @@ def _run(f, ctx, args, secrets):
         raise
     except ModuleError as e:
         if e.code in STATUS:
-            return False, (e.code, _scrub(e.message, secrets)[:MAX_MESSAGE])
-        return False, ('module-error', _scrub(_exc_text(e), secrets)[:MAX_MESSAGE])
+            return False, (e.code, _scrub(e._full, secrets)[:MAX_MESSAGE])
+        text = f'ModuleError: {e.code}: {e._full}' if e._full else f'ModuleError: {e.code}'
+        return False, ('module-error', _scrub(text, secrets)[:MAX_MESSAGE])
     except BaseException as e:  # noqa: BLE001 — SystemExit, GeneratorExit… теж `module-error`
         return False, ('module-error', _scrub(_exc_text(e), secrets)[:MAX_MESSAGE])   # СПЕРШУ вирізати, ПОТІМ різати
 
