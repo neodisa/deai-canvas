@@ -63,6 +63,46 @@ import spaces_guard  # noqa: E402
 from atomic_io import atomic_write_json  # noqa: E402
 
 _REAL = None
+#: Справжній `~/deai-published` машини дизайнера (домівка — з бази користувачів, як у `spaces_guard`: `$HOME` тести
+#: підміняють). Знімок фіксується ПРИ ІМПОРТІ (`discover` імпортує все раніше, ніж щось запустить), тож витік з іншого
+#: файла тестів не видасться за чистий старт. Копія `_published_snapshot` з `test_static_publish.py` (імена й mtime
+#: верхнього рівня, без читання вмісту й без слідування за посиланнями).
+_REAL_PUBLISHED = os.path.join(spaces_guard.REAL_USER_HOME, 'deai-published')
+#: Справжні `tasks.json` репозиторію й змінна `DC_TASKS_FILE` середовища прогону: роздача й публікація пишуть лише у
+#: тимчасовий світ тестів, а `DC_TASKS_FILE` лишається таким, яким був (його підміна — `mock.patch.dict`).
+_REAL_TASKS = os.path.join(ROOT, 'tasks.json')
+
+
+def _published_snapshot():
+    try:
+        st = os.lstat(_REAL_PUBLISHED)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return ('unreadable', type(e).__name__)
+    if not os.path.isdir(_REAL_PUBLISHED) or os.path.islink(_REAL_PUBLISHED):
+        return ('not-a-dir', st.st_mtime_ns)
+    try:
+        with os.scandir(_REAL_PUBLISHED) as it:
+            entries = sorted((e.name, e.stat(follow_symlinks=False).st_mtime_ns) for e in it)
+    except OSError as e:
+        return ('unreadable', type(e).__name__)
+    return ('dir', st.st_mtime_ns, entries)
+
+
+def _tasks_snapshot():
+    """`(md5, mtime_ns)` справжнього `tasks.json` репозиторію; `None` — файла нема."""
+    try:
+        with open(_REAL_TASKS, 'rb') as fh:
+            digest = hashlib.md5(fh.read()).hexdigest()
+        return digest, os.stat(_REAL_TASKS).st_mtime_ns
+    except OSError:
+        return None
+
+
+_REAL_PUBLISHED_BEFORE = _published_snapshot()
+_REAL_TASKS_BEFORE = _tasks_snapshot()
+_REAL_TASKS_ENV_BEFORE = os.environ.get('DC_TASKS_FILE')
 
 
 def setUpModule():
@@ -72,6 +112,59 @@ def setUpModule():
 
 def tearDownModule():
     spaces_guard.assert_untouched(_REAL)
+    now = _published_snapshot()
+    if now != _REAL_PUBLISHED_BEFORE:
+        raise AssertionError(f'тести змінили справжній {_REAL_PUBLISHED}: було {_REAL_PUBLISHED_BEFORE!r}, тепер {now!r}')
+    if _tasks_snapshot() != _REAL_TASKS_BEFORE:
+        raise AssertionError(f'тести змінили справжній {_REAL_TASKS}')
+    if os.environ.get('DC_TASKS_FILE') != _REAL_TASKS_ENV_BEFORE:
+        raise AssertionError('DC_TASKS_FILE у середовищі прогону змінено й не повернуто: '
+                             f'було {_REAL_TASKS_ENV_BEFORE!r}, тепер {os.environ.get("DC_TASKS_FILE")!r}')
+
+
+class RealStateGuards(unittest.TestCase):
+    """Охоронці справжнього стану самі мають вміти падати: знімок бачить зʼявлення теки, нові імена й зміну часу
+    `~/deai-published`, а також правку справжнього `tasks.json`."""
+
+    def test_the_published_snapshot_sees_a_new_folder_a_new_name_and_a_touch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pub = os.path.join(tmp, 'deai-published')
+            with mock.patch.dict(globals(), {'_REAL_PUBLISHED': pub}):
+                none = _published_snapshot()
+                os.mkdir(pub)
+                empty = _published_snapshot()
+                os.mkdir(os.path.join(pub, 'off'))
+                one = _published_snapshot()
+                self.assertEqual(_published_snapshot(), one)                  # стабільний, коли нічого не міняли
+                os.utime(os.path.join(pub, 'off'), ns=(1, 1))
+                touched = _published_snapshot()
+        self.assertIsNone(none)
+        self.assertEqual(len({repr(x) for x in (none, empty, one, touched)}), 4, (none, empty, one, touched))
+
+    def test_the_module_teardown_raises_when_real_state_changed(self):
+        """Сам `tearDownModule` — не декорація: підмінений «знімок до» (інший за справжній стан) його валить."""
+        tearDownModule()                                                      # контроль: зараз усе чисто
+        for name, bogus in (('_REAL_PUBLISHED_BEFORE', ('dir', 1, [('сторонній', 1)])),
+                            ('_REAL_TASKS_BEFORE', ('0' * 32, 1)),
+                            ('_REAL_TASKS_ENV_BEFORE', '/інший/tasks.json')):
+            with self.subTest(name), mock.patch.dict(globals(), {name: bogus}):
+                with self.assertRaises(AssertionError):
+                    tearDownModule()
+
+    def test_the_real_paths_are_the_real_ones_and_the_world_never_points_at_them(self):
+        self.assertEqual(_REAL_PUBLISHED, os.path.join(spaces_guard.REAL_USER_HOME, 'deai-published'))
+        self.assertEqual(_REAL_TASKS, os.path.join(ROOT, 'tasks.json'))
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, 'tasks.json')
+            with mock.patch.dict(globals(), {'_REAL_TASKS': fake}):
+                self.assertIsNone(_tasks_snapshot())
+                with open(fake, 'w') as fh:
+                    fh.write('{}')
+                first = _tasks_snapshot()
+                with open(fake, 'w') as fh:
+                    fh.write('{"a": 1}')
+                self.assertNotEqual(_tasks_snapshot(), first)
+        self.assertNotEqual(os.environ.get('DEAI_HOME'), os.path.join(spaces_guard.REAL_USER_HOME, '.deai'))
 
 
 def _post(url, payload):
@@ -1585,7 +1678,6 @@ class PublishedRoute(DispatchWorld):
         self.gone(self.root + 'nope.txt')                                   # 404 у межах опублікованого
         self.gone('/published/nope/tx/')                                    # 404 до жодного читання теки
         self.gone('/published/')
-        self.gone('/published')
 
     def test_the_content_type_of_a_404_is_plain_text(self):
         hd = self.gone(self.root + 'nope.txt')
@@ -1639,21 +1731,33 @@ class PublishedRoute(DispatchWorld):
                 self.gone('/published/s2/tx/who.txt', headers)              # задача іншого простору тут не існує
                 self.gone('/published/off/t2/who.txt', headers)
 
-    def test_a_referer_from_an_iteration_changes_nothing(self):
-        """Усе поза `HANDLED_PREFIXES` статичний фолбек віддає з теки ітерації за Referer. Приманки лежать в самій
-        ітерації: `published/off/tx/decoy.txt` (шлях роздачі) і `publishedx` (лише ПРЕФІКС: його тримає саме
-        запис `/published` у переліку)."""
-        self.assertIn('/published', serve.HANDLED_PREFIXES)
+    def test_a_referer_from_an_iteration_still_works_outside_published_and_changes_nothing_inside(self):
+        """Усе поза `HANDLED_PREFIXES` статичний фолбек віддає з теки ітерації за Referer. Перелік має `/published/` (зі
+        слешем): `/publishedx` і голий `/published` лишаються там, де були ДО роздачі, — під фолбеком (приманки в
+        ітераціях віддаються, як і раніше), а `/published/…` — наш, і приманка `published/off/tx/decoy.txt` НЕ віддається."""
+        self.assertIn('/published/', serve.HANDLED_PREFIXES)
+        self.assertNotIn('/published', serve.HANDLED_PREFIXES)
         it1 = os.path.join(self.tx_dir, 'iterations', 'it1')
+        it2 = os.path.join(self.tx_dir, 'iterations', 'it2')
         self.put(os.path.join(it1, 'published', 'off', 'tx', 'decoy.txt'), 'DECOY')
-        self.put(os.path.join(it1, 'publishedx'), 'DECOY')
-        ref = {'Referer': f'{self.base}/it-assets/it1/alpha/index.html'}
-        control = self.fetch('/it-assets/it1/publishedx', ref)
-        self.assertEqual((control[0], control[2]), (200, b'DECOY'), 'свідок: через /it-assets приманка віддається')
-        self.gone(self.root + 'decoy.txt', ref)
-        st, _, body = self.fetch('/publishedx', ref)
-        self.assertNotEqual(body, b'DECOY', '/publishedx віддано з теки ітерації за Referer')
-        self.assertEqual(self.ok(self.root + 'it2/index.html', ref)[1], _bytes(os.path.join(self.dest, 'it2', 'index.html')))
+        self.put(os.path.join(it1, 'publishedx'), 'DECOY-X')
+        self.put(os.path.join(it2, 'published'), 'DECOY-BARE')
+        ref1 = {'Referer': f'{self.base}/it-assets/it1/alpha/index.html'}
+        ref2 = {'Referer': f'{self.base}/it-assets/it2/index.html'}
+        self.assertEqual(self.fetch('/it-assets/it1/publishedx', ref1)[2], b'DECOY-X')     # свідок: через /it-assets віддається
+        st, hd, body = self.fetch('/publishedx', ref1)
+        self.assertEqual((st, body), (200, b'DECOY-X'), '/publishedx мусить лишитись під фолбеком за Referer')
+        st, hd, body = self.fetch('/published', ref2)
+        self.assertEqual((st, body), (200, b'DECOY-BARE'), 'голий /published мусить лишитись під фолбеком за Referer')
+        self.assertNotIn('content-security-policy', hd, 'голий /published не наш маршрут')
+        self.gone(self.root + 'decoy.txt', ref1)
+        self.assertEqual(self.ok(self.root + 'it2/index.html', ref1)[1], _bytes(os.path.join(self.dest, 'it2', 'index.html')))
+
+    def test_a_bare_published_is_not_our_route(self):
+        st, hd, body = self.fetch('/published')
+        self.assertEqual(st, 404)
+        self.assertNotIn('content-security-policy', hd)
+        self.assertNotEqual(body, b'not found\n')
 
     def test_a_folder_the_rules_refuse_serves_nothing_even_if_the_task_dir_looks_published(self):
         """Правило теки (`folder_ok`) діє на КОЖНУ видачу, а не лише при публікації: налаштування змінили на теку,
@@ -1853,11 +1957,203 @@ class PublishedRoute(DispatchWorld):
         self.assertEqual((st, body.get('ok')), (403, False), body)
         self.assertFalse(os.path.exists(os.path.join(self.tx_dir, 'publish')), 'публікація виконалась попри чужий Origin')
 
+    # ---- підміна між перевіркою й відкриттям (TOCTOU) ----
+
+    def after_resolve(self, mutate):
+        """Підміна `published_target`: рішення ухвалено (усі перевірки шляху пройдено), і ЛИШЕ ТОДІ диск змінюється — рівно
+        той проміжок між перевіркою й відкриттям файла, який використовує гонка з посиланнями."""
+        real = serve.published_target
+
+        def hooked(path):
+            found = real(path)
+            mutate()
+            return found
+        return mock.patch.object(serve, 'published_target', hooked)
+
+    def test_a_file_swapped_for_a_symlink_after_the_checks_is_not_followed(self):
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        victim = self.put(os.path.join(self.dest, 'swap.txt'), 'REAL')
+        self.put(os.path.join(self.dest, 'inside.txt'), 'INSIDE')
+        self.assertEqual(self.ok(self.root + 'swap.txt')[1], b'REAL')                         # контроль: без підміни віддається
+
+        def to(target):
+            def swap():
+                os.remove(victim)
+                os.symlink(target, victim)
+            return swap
+        with self.after_resolve(to(outside)):                  # назовні: це ловить і перевірка шляху дескриптора
+            self.gone(self.root + 'swap.txt')
+        os.remove(victim)
+        self.put(victim, 'REAL')
+        with self.after_resolve(to(os.path.join(self.dest, 'inside.txt'))):     # усередину: лише `O_NOFOLLOW`
+            self.gone(self.root + 'swap.txt')
+
+    def test_without_a_descriptor_path_the_fallback_still_refuses_an_escape(self):
+        """ОС без шляху дескриптора (Windows): запасний варіант — `realpath(target)` ПІСЛЯ відкриття. Слабший, але
+        підміну, що вже сталась до відкриття, ловить, а звичайні файли віддаються."""
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        with mock.patch.object(serve, '_published_fd_path', return_value=None):
+            self.assertEqual(self.ok(self.root + 'it2/index.html')[1], _bytes(os.path.join(self.dest, 'it2', 'index.html')))
+            self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
+            self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
+
+            def swap_dir():
+                os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
+                os.symlink(os.path.dirname(outside), os.path.join(self.dest, 'sub'))
+            self.put(os.path.join(self.folder, 'page.txt'), 'OUT')
+            with self.after_resolve(swap_dir):
+                self.gone(self.root + 'sub/page.txt')
+
+    def test_an_intermediate_directory_swapped_for_a_symlink_after_the_checks_is_not_followed(self):
+        """`O_NOFOLLOW` дивиться лише на ОСТАННЮ складову: проміжну теку підмінили посиланням — відкриття веде за межі,
+        і ловить його тільки перевірка, де дескриптор лежить насправді."""
+        self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
+        out = self.put(os.path.join(self.folder, 'elsewhere', 'page.txt'), 'OUT')
+        self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
+
+        def swap():
+            os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
+            os.symlink(os.path.dirname(out), os.path.join(self.dest, 'sub'))
+        with self.after_resolve(swap):
+            self.gone(self.root + 'sub/page.txt')
+
+    def test_a_fifo_swapped_in_after_the_checks_is_404_and_does_not_hang_a_thread(self):
+        if not hasattr(os, 'mkfifo'):
+            self.skipTest('нема mkfifo')
+        victim = self.put(os.path.join(self.dest, 'it2', 'pipe.txt'), 'REAL')
+        self.assertEqual(self.ok(self.root + 'it2/pipe.txt')[1], b'REAL')
+
+        def swap():
+            os.remove(victim)
+            os.mkfifo(victim)
+        t0 = time.monotonic()
+        with self.after_resolve(swap):
+            self.gone(self.root + 'it2/pipe.txt')
+        self.assertLess(time.monotonic() - t0, 5, '`open` на FIFO завис')
+
+    def test_a_hard_link_to_a_file_outside_is_404(self):
+        """Копії модуля мають `st_nlink == 1`; жорстке посилання на чужий файл — ні, і `islink` його не бачить."""
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        link = os.path.join(self.dest, 'hard.txt')
+        try:
+            os.link(outside, link)
+        except OSError:
+            self.skipTest('ФС без жорстких посилань')
+        self.assertEqual(os.stat(link).st_nlink, 2, 'свідок: файл справді має два імені')
+        self.put(os.path.join(self.dest, 'copy.txt'), 'SECRET')                               # контроль: копія з тим самим вмістом
+        self.assertEqual(self.ok(self.root + 'copy.txt')[1], b'SECRET')
+        self.gone(self.root + 'hard.txt')
+
+    def test_a_folder_setting_in_another_letter_case_still_serves(self):
+        """На ФС без урахування регістру (macOS) налаштування `~/Deai-Published` і справжня `~/deai-published` — одна
+        тека; шлях ВІДКРИТОГО файла ядро віддає зі справжнім регістром диска, тож тека задачі беретиться в тій самій
+        формі (з дескриптора), а не `realpath` написаного: інакше порівняння двох написань дало б хибний 404."""
+        upper = os.path.join(self.home, 'DEAI-PUBLISHED', 'off')
+        if not os.path.isdir(upper):
+            self.skipTest('ФС розрізняє регістр')
+        self.set_folder(upper)
+        self.assertEqual(dm.published_root(self.off, MID), upper)
+        self.assertTrue(dm.folder_ok(self.off, upper)[0])
+        self.ok(self.root + 'manifest.json')
+        self.ok(self.root + 'it1/alpha/index.html')
+
+    def test_rejected_opens_do_not_leak_descriptors(self):
+        if not os.path.isdir('/dev/fd'):
+            self.skipTest('нема /dev/fd')
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        hard = os.path.join(self.dest, 'hard.txt')
+        os.link(outside, hard)
+        real_dest = serve._published_real_dir(self.dest)
+        fds = lambda: len(os.listdir('/dev/fd'))
+        before = fds()
+        for _ in range(150):
+            self.assertIsNone(serve.open_published_file(hard, real_dest))                    # nlink 2
+            self.assertIsNone(serve.open_published_file(self.dest, real_dest))               # тека, не файл
+            self.assertIsNone(serve.open_published_file(outside, real_dest))                 # поза текою задачі
+            self.assertIsNone(serve.open_published_file(os.path.join(self.dest, 'нема'), real_dest))
+        self.assertLess(fds() - before, 10, 'відхилені відкриття лишають дескриптори')
+        opened = serve.open_published_file(os.path.join(self.dest, 'manifest.json'), real_dest)
+        self.assertIsNotNone(opened)
+        os.close(opened[0])                                                                  # власність перейшла до нас
+
+    def test_a_large_file_is_streamed_in_chunks_and_arrives_intact(self):
+        data = bytes(range(256)) * 20480                                                         # 5 МіБ
+        self.put(os.path.join(self.dest, 'big.bin'), data, 'wb')
+        sizes, real_fdopen = [], os.fdopen
+
+        class Spy:
+            def __init__(self, f):
+                self.f = f
+
+            def read(self, n=-1):
+                sizes.append(n)
+                return self.f.read(n)
+
+            def __getattr__(self, name):
+                return getattr(self.f, name)
+
+        with mock.patch.object(os, 'fdopen', lambda *a, **kw: Spy(real_fdopen(*a, **kw))):
+            hd, body = self.ok(self.root + 'big.bin')
+        self.assertEqual(hd['content-length'], str(len(data)))
+        self.assertEqual(hashlib.sha256(body).hexdigest(), hashlib.sha256(data).hexdigest())
+        self.assertEqual(hd['content-type'], 'application/octet-stream')
+        self.assertGreaterEqual(len(sizes), len(data) // serve.PUBLISHED_CHUNK)
+        self.assertTrue(all(0 < n <= serve.PUBLISHED_CHUNK for n in sizes), f'файл читався не шматками: {sizes[:3]}')
+
+    def test_control_characters_in_a_name_are_refused_even_where_the_name_is_legal(self):
+        for name in ('ctl\x1f.txt', 'del\x7f.txt', 'nl\x0a.txt'):
+            self.put(os.path.join(self.dest, name), 'CTL')
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, name)), f'свідок: файл {name!r} існує')
+            self.gone(self.root + urllib.parse.quote(name, safe=''))
+        self.put(os.path.join(self.dest, 'ctl.txt'), 'OK')                                       # контроль: без керівного
+        self.assertEqual(self.ok(self.root + 'ctl.txt')[1], b'OK')
+
+    def raw_head(self, target):
+        """Сирий запит із ТОЧНИМИ байтами цілі (http.client відмовив би на керівних): `(статус, {заголовок: байти}, голова)`."""
+        with socket.create_connection(('127.0.0.1', self.port), timeout=10) as sock:
+            sock.sendall(b'GET ' + target + b' HTTP/1.0\r\nHost: x\r\n\r\n')
+            data = b''
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        head = data.partition(b'\r\n\r\n')[0]
+        lines = head.split(b'\r\n')
+        headers = {}
+        for line in lines[1:]:
+            name, _, value = line.partition(b': ')
+            headers[name.lower().decode('ascii')] = value
+        return int(lines[0].split()[1]), headers, head
+
+    def test_the_redirect_location_stays_inside_published_whatever_the_query_holds(self):
+        expected = {'server', 'date', 'location', 'content-length', 'content-security-policy',
+                    'x-content-type-options', 'access-control-allow-origin', 'cache-control'}
+        queries = (b'a=1#frag//evil.com', b'//evil.com', b'\\\\evil.com', b'x=%0d%0aSet-Cookie:%20a=b',
+                   b'q=\x01\x02\x7f\xe9\xff', b'u=http://evil.com/%2e%2e', b'a=1&b=%D0%B6', b'')
+        for q in queries:
+            with self.subTest(query=q):
+                target = b'/published/off/tx' + (b'?' + q if q else b'')
+                st, headers, head = self.raw_head(target)
+                self.assertEqual(st, 301, head)
+                loc = headers['location']
+                self.assertTrue(loc.startswith(b'/published/off/tx/'), loc)
+                self.assertFalse(loc.startswith(b'//'), loc)
+                self.assertTrue(all(0x21 <= c <= 0x7e for c in loc), f'Location несе керівні чи не-ASCII байти: {loc!r}')
+                self.assertNotIn(b'#', loc, 'фрагмент не став `%23`')
+                self.assertNotIn(b'\r', head.replace(b'\r\n', b''), 'CR усередині заголовків')
+                self.assertLessEqual(set(headers), expected, 'зʼявився вставлений заголовок')
+                self.assertEqual(head.count(b'\r\n'), len(headers), 'зайвий рядок у голові відповіді')
+        st, headers, _ = self.raw_head(b'/published/off/tx?a=1#frag')
+        self.assertEqual(headers['location'], b'/published/off/tx/?a=1%23frag')
+        st, headers, _ = self.raw_head(b'/published/off/tx?x=%0d%0aSet-Cookie:%20a=b')
+        self.assertEqual(headers['location'], b'/published/off/tx/?x=%0d%0aSet-Cookie:%20a=b')   # `%0d%0a` лишився ТЕКСТОМ
+
     def test_a_file_that_vanishes_between_the_check_and_the_read_is_404(self):
         """Публікація посеред заміни теки: файл був у перевірці, а до читання зник — порожній 404 із захисними
         заголовками, а не обрив зʼєднання."""
         gone = os.path.join(self.dest, 'vanished.txt')
-        with mock.patch.object(serve, 'published_target', return_value=('file', gone)):
+        with mock.patch.object(serve, 'published_target', return_value=('file', gone, self.dest)):
             self.gone(self.root + 'vanished.txt')
 
     def test_nothing_leaves_the_machine(self):

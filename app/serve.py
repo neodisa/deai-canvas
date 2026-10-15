@@ -85,7 +85,7 @@ _TUNER_LOCK = threading.Lock()
 # немає, фолбек у Routed.do_GET намагається віддати як статику з теки ітерації,
 # визначеної з Referer — і тоді власні перевірки обробника не діють. Саме розбіжність
 # між цим переліком і ланцюгом if у do_GET дала перехоплення /shot.
-HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published')
+HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published/')
 
 # Репо макетов по направлению (profile). Структура у всех одна — mockup/<task-id>,
 # поэтому направления разъезжаются только репозиторием, а не логикой.
@@ -6138,16 +6138,89 @@ def _published_marked(base):
         return False
 
 
-def _published_inside(real_base, path):
-    """`realpath(path)` лежить у `real_base` (чи дорівнює йому). Друга лінія за перевіркою посилань: теки-стики
-    (junction) Windows `os.path.islink` посиланням не вважає, а `realpath` веде за межі."""
-    real, base = os.path.normcase(os.path.realpath(path)), os.path.normcase(real_base)
+try:
+    import fcntl                       # немає у Windows: там шлях відкритого дескриптора — запасним способом
+except ImportError:
+    fcntl = None
+
+#: Прапорці відкриття файла `/published`. `O_NOFOLLOW` — відмова на посиланні в ОСТАННІЙ складовій (проміжні
+#: теки дескриптор не відсікає — їх стереже `_published_fd_path`); `O_NONBLOCK` — `open` на FIFO без писаря не
+#: висить (інакше потік обробника стояв би вічно); `O_CLOEXEC` — дескриптор не тече в підпроцеси; `O_BINARY` —
+#: Windows не перекладає кінці рядків. Прапорців, яких ОС не має (Windows: `O_NOFOLLOW`), просто нема — `0`.
+_PUBLISHED_OPEN = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+                   | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_BINARY', 0))
+PUBLISHED_CHUNK = 64 * 1024
+
+
+def _published_fd_path(fd):
+    """Шлях, яким ЯДРО бачить відкритий дескриптор (де він справді лежить зараз, а не куди вів рядок шляху при
+    відкритті): macOS — `fcntl(F_GETPATH)`, Linux — `/proc/self/fd/<fd>`. `None` — ОС не дає (Windows)."""
+    if fcntl is not None and hasattr(fcntl, 'F_GETPATH'):
+        try:
+            return os.fsdecode(fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).split(b'\0', 1)[0]) or None
+        except OSError:
+            return None
+    try:
+        return os.readlink(f'/proc/self/fd/{fd}')
+    except OSError:
+        return None
+
+
+def _published_real_dir(path):
+    """Канонічний шлях теки `path` В ТІЙ САМІЙ формі, що й `_published_fd_path` файлів (макОС віддає справжній
+    регістр імен диска, а `realpath` лишає написане в налаштуванні — порівняння двох форм дало б хибний 404 для
+    `~/Deai-Published`). Береться з дескриптора теки; нема такого способу — `realpath`."""
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_DIRECTORY', 0)
+                     | getattr(os, 'O_CLOEXEC', 0))
+        real = _published_fd_path(fd)
+    except OSError:
+        real = None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return real or os.path.realpath(path)
+
+
+def _published_inside(real_base, real):
+    """Шлях `real` лежить у `real_base` (чи дорівнює йому); обидва вже канонічні."""
+    real, base = os.path.normcase(real), os.path.normcase(real_base)
     return real == base or real.startswith(base + os.sep)
 
 
+def open_published_file(target, real_base):
+    """Відкрити `target` для віддачі ОДИН раз і перевірити саме ВІДКРИТЕ: `(fd, fstat)` або `None` (404). Не кидає.
+
+    Перевірки `published_target` (посилання, `isfile`) і `open` за шляхом розділені проміжком, у який файл чи
+    проміжну теку можна підмінити посиланням, — тож авторитетна лише перевірка ДЕСКРИПТОРА:
+      * `O_NOFOLLOW` — остання складова не посилання; `O_NONBLOCK` — FIFO не вішає потік;
+      * `fstat`: звичайний файл (`S_ISREG`: не FIFO, не пристрій) і `st_nlink == 1` (копії модуля завжди
+        мають 1; жорстке посилання на чужий файл — ні);
+      * де дескриптор лежить зараз (`_published_fd_path`) — усередині `real_base` (проміжні теки `O_NOFOLLOW`
+        не відсікає). Де ОС шляху дескриптора не дає (Windows), — запасний варіант: `realpath(target)` ПІСЛЯ
+        відкриття; слабший (підміна між відкриттям і цією перевіркою не ловиться), але нічого кращого там нема.
+    ETag і довжина далі — з цього ж `fstat`, тіло — з цього ж дескриптора."""
+    fd = None
+    try:
+        fd = os.open(target, _PUBLISHED_OPEN)
+        st = os.fstat(fd)
+        if stat.S_ISREG(st.st_mode) and st.st_nlink == 1:
+            real = _published_fd_path(fd) or os.path.realpath(target)
+            if _published_inside(real_base, real):
+                opened, fd = (fd, st), None            # власність дескриптора переходить викликачу
+                return opened
+    except OSError:
+        pass
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return None
+
+
 def published_target(path):
-    """Що відповісти на `GET path` (шлях БЕЗ `?query`): `('file', абсолютний_шлях)`, `('redirect', '<шлях>/')`
-    або `None` (404). НІКОЛИ не кидає: будь-який виняток (зіпсований `space.json`, реєстр, `ModuleError`, помилка
+    """Що відповісти на `GET path` (шлях БЕЗ `?query`): `('file', шлях, канонічна_тека_задачі)`,
+    `('redirect', '<шлях>/')` або `None` (404). НІКОЛИ не кидає: будь-який виняток (зіпсований `space.json`, реєстр, `ModuleError`, помилка
     ФС) — теж `None`.
 
     Порядок — від дешевого до дорогого, і ДО першого читання диска сегменти вже синтаксично чисті:
@@ -6159,10 +6232,11 @@ def published_target(path):
       4. тека — `published_root` ЗАНОВО на кожен запит (не `publish_local.path`: налаштування могли змінити), і
          `folder_ok` на КОЖНУ видачу (`folder_inputs()` — раз на запит);
       5. `<тека>/<задача>` — справжня тека (не посилання) з маркером модуля; жодного посилання на шляху вниз до
-         файла (`islink` кожної складової), і `realpath` файла всередині `realpath(<тека>/<задача>)`;
+         файла (`islink` кожної складової);
       6. тека без завершального `/` — переадресація; з ним — її `index.html` (нема — 404).
-    Зазор між перевіркою й читанням (хтось підмінив файл посиланням за мікросекунди) тут прийнятий: писар теки —
-    сама людина чи модуль, не недовірений клієнт."""
+    Усе це — РАННЯ відмова, а не замок: між цими перевірками й відкриттям файл чи проміжну теку можна підмінити
+    посиланням. Рішення про САМ файл приймає `open_published_file` — відкриває один раз і перевіряє відкритий
+    дескриптор (звичайний файл, одне жорстке посилання, лежить усередині теки задачі)."""
     try:
         segs = _published_segments(path)
         if segs is None:
@@ -6185,7 +6259,7 @@ def published_target(path):
         base = os.path.join(folder, tid)
         if os.path.islink(base) or not os.path.isdir(base) or not _published_marked(base):
             return None
-        real_base = os.path.realpath(base)
+        real_base = _published_real_dir(base)
         target = base
         for seg in rel:
             target = os.path.join(target, seg)
@@ -6200,8 +6274,8 @@ def published_target(path):
                 return None
         elif trailing:
             return None
-        if os.path.isfile(target) and _published_inside(real_base, target):
-            return 'file', target
+        if os.path.isfile(target):                      # РІШЕННЯ про файл — лише `open_published_file`
+            return 'file', target, real_base
         return None
     except Exception:  # noqa: BLE001 — статичний файл для чужої сторінки не розповідає, що саме зламалось
         return None
@@ -6211,12 +6285,15 @@ def make_server(port=0):
     handler = Handler
     # /it-assets/<it>/... — статика итераций текущей задачи
     class Routed(handler):
-        def _send_iter_file(self, target, extra_headers=(), utf8=False):
+        def _send_iter_file(self, target, extra_headers=(), utf8=False, opened=None):
             # `extra_headers` — пари (імʼя, значення) на КОЖНУ відповідь цього файла, і на 304 теж (`/published`:
             # захисні заголовки сторінки в пісочниці; 304 без них лишив би кеш без захисту). `utf8` — текстовим
             # типам дописати `; charset=utf-8` (`/published`: сторінки збірка пише в UTF-8, а без `<meta charset>`
             # у макеті браузер читав би їх як windows-1252 — гейт-оверлей, який вкладаємо МИ, виходив кракозябрами;
-            # Vercel віддає статику так само, з charset).
+            # Vercel віддає статику так само, з charset). `opened` — `(fd, fstat)` від `open_published_file`
+            # (`/published`): файл уже ВІДКРИТО й перевірено, тож ETag, довжина й тіло беруться з того самого
+            # дескриптора (а не з другого `open` за шляхом), тіло йде шматками `PUBLISHED_CHUNK`; дескриптор
+            # закривається тут за будь-якого виходу.
             # ВАЛІДАТОР. Без нього `Cache-Control: no-cache` (його дописує
             # `end_headers`) означає «тягни заново ЩОРАЗУ»: кожне відкриття
             # макета перекачувало кожен шрифт і кожну іконку з кодом 200. Для
@@ -6231,22 +6308,36 @@ def make_server(port=0):
             # би як «не мінялось», і сервер віддав би застаріле. Наносекунди
             # такої дірки не мають. `no-cache` лишається: перезвірка щоразу,
             # але без тіла.
+            stream = st = None
+            if opened is not None:
+                stream, st = os.fdopen(opened[0], 'rb'), opened[1]
             try:
-                st = os.stat(target)
+                if opened is None:
+                    st = os.stat(target)
                 etag = '"%x-%x"' % (st.st_mtime_ns, st.st_size)
             except OSError:
                 etag = None
-            if etag:
-                inm = self.headers.get('If-None-Match', '')
-                if etag in [x.strip() for x in inm.split(',') if x.strip()]:
-                    self.send_response(304)
-                    self.send_header('ETag', etag)
-                    for key, value in extra_headers:
-                        self.send_header(key, value)
-                    self.end_headers()
-                    return
-            with open(target, 'rb') as f:
-                data = f.read()
+            try:
+                if etag:
+                    inm = self.headers.get('If-None-Match', '')
+                    if etag in [x.strip() for x in inm.split(',') if x.strip()]:
+                        self.send_response(304)
+                        self.send_header('ETag', etag)
+                        for key, value in extra_headers:
+                            self.send_header(key, value)
+                        self.end_headers()
+                        return
+                if stream is None:
+                    with open(target, 'rb') as f:
+                        data = f.read()
+                self._send_iter_body(target, st, etag, data if stream is None else None, stream,
+                                     extra_headers, utf8)
+            finally:
+                if stream is not None:
+                    stream.close()
+
+        def _send_iter_body(self, target, st, etag, data, stream, extra_headers, utf8):
+            """200 для `_send_iter_file`: заголовки й тіло — з пам'яті (`data`) або шматками зі `stream`."""
             self.send_response(200)
             if etag:
                 self.send_header('ETag', etag)
@@ -6262,11 +6353,21 @@ def make_server(port=0):
             if utf8 and ctype and ctype.startswith('text/'):
                 ctype += '; charset=utf-8'
             self.send_header('Content-Type', ctype or 'application/octet-stream')
-            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Content-Length', str(len(data) if stream is None else st.st_size))
             for key, value in extra_headers:
                 self.send_header(key, value)
             self.end_headers()
-            self.wfile.write(data)
+            if stream is None:
+                self.wfile.write(data)
+                return
+            left = st.st_size                       # рівно стільки, скільки обіцяв Content-Length
+            while left > 0:
+                chunk = stream.read(min(PUBLISHED_CHUNK, left))
+                if not chunk:                       # файл усох під час віддачі: обіцянку не виконати
+                    self.close_connection = True
+                    return
+                self.wfile.write(chunk)
+                left -= len(chunk)
 
         def _send_published_404(self):
             """404 `/published/…`: ті самі захисні заголовки й ПОРОЖНЯ відповідь — без шляху, без причини."""
@@ -6289,7 +6390,7 @@ def make_server(port=0):
             if found is None:
                 self._send_published_404()
                 return
-            kind, value = found
+            kind, value = found[:2]
             if kind == 'redirect':
                 if query:
                     value += '?' + quote(query, safe="%/?:@&=+$,;!*'()~")
@@ -6300,11 +6401,15 @@ def make_server(port=0):
                     self.send_header(key, hv)
                 self.end_headers()
                 return
+            opened = open_published_file(value, found[2])
+            if opened is None:                      # зник, підмінений посиланням/FIFO/жорстким посиланням, чи поза текою
+                self._send_published_404()
+                return
             try:
-                self._send_iter_file(value, extra_headers=PUBLISHED_HEADERS, utf8=True)
+                self._send_iter_file(value, extra_headers=PUBLISHED_HEADERS, utf8=True, opened=opened)
             except OSError:
-                # файл зник між перевіркою й читанням (публікація посеред заміни теки): 404, якщо відповідь
-                # ще не почата; почату обриваємо (друга відповідь поверх першої зіпсувала б потік)
+                # обрив під час віддачі: 404, якщо відповідь ще не почата; почату обриваємо (друга відповідь поверх
+                # першої зіпсувала б потік)
                 if self._resp_started:
                     self.close_connection = True
                 else:
@@ -6366,7 +6471,7 @@ def make_server(port=0):
             # `/t/<id>/`) і поточний простір машини не мають значення, а нечитабельний реєстр чи невідома задача
             # дали б JSON-відмову (503/404/400) БЕЗ захисних заголовків і з шляхом — для статичного файла в
             # пісочниці це витік; `published_target` усі відмови зводить до порожнього 404.
-            if self.path.split('?')[0] == '/published' or self.path.startswith(PUBLISHED_PREFIX):
+            if self.path.startswith(PUBLISHED_PREFIX):
                 self._serve_published()
                 return
             # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
