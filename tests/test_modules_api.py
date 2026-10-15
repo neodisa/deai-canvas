@@ -94,12 +94,15 @@ def _manifest(mid, roles=(), settings=()):
 #: Модулі-фікстури для `builtin_dir`, що підміняється: id → (ролі, налаштування, `server.py`).
 FIXTURES = {
     # друга роль `publish`: проти неї `role-taken`
-    'alt-publish': (['publish'], [{'key': 'note', 'type': 'text', 'label': 'Note'}],
+    'alt-publish': (['publish'], [{'key': 'note', 'type': 'text', 'label': 'Note'},
+                                  {'key': 'token', 'type': 'secret', 'label': 'Token'}],
                     "def check(ctx):\n    return {'ok': True}\n\ndef publish(ctx, built, *a, **k):\n    return {}\n"),
     # синтаксична помилка: модуль у каталозі зі `status: error`
     'broken': (['tokens'], [], 'def check(ctx:\n'),
     # свій `ok: false`
     'fail-check': ([], [], "def check(ctx):\n    return {'ok': False, 'error': 'nope', 'detail': 'because'}\n"),
+    # своя відмова з кодом ядра (його клас модуль бере з `ctx`): після запису стану це вердикт, а не HTTP-збій
+    'bad-folder': ([], [], "def check(ctx):\n    raise ctx['ModuleError']('bad-folder', message='path-system')\n"),
     'slow': ([], [], "import time\n\ndef check(ctx):\n    time.sleep(1.5)\n    return {'ok': True}\n"),
     # сам виводить секрет у `detail` чи кидає його у винятку — ядро мусить вирізати
     'vault': ([], [{'key': 'token', 'type': 'secret', 'label': 'Token'},
@@ -143,6 +146,17 @@ class Http:
 
     def post(self, path, payload=None, headers=None):
         return self._call('POST', path, {} if payload is None else payload, headers)
+
+    def headers_of(self, method, path, payload=None):
+        """Заголовки відповіді (`{імʼя в нижньому регістрі: значення}`) разом зі статусом."""
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(self.base + path, data=data, method=method,
+                                     headers={'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, {k.lower(): v for k, v in r.headers.items()}
+        except urllib.error.HTTPError as e:
+            return e.code, {k.lower(): v for k, v in e.headers.items()}
 
     def refused(self, st, body, status, code):
         """Відмова в єдиній формі ядра: `{ok: false, code, error}` зі статусом із таблиці кодів."""
@@ -302,14 +316,13 @@ class Routes(World):
                     self.assertEqual(st, 200, (r, body))
 
     def test_the_task_prefix_is_refused_on_every_route(self):
-        for r in ROUTES_GET:
-            st, body = self.get('/t/tx' + r)
+        for r in ROUTES_GET + ROUTES_POST:
+            st, body = self.get('/t/tx' + r) if r in ROUTES_GET else self.post('/t/tx' + r, {'id': 'css-tokens'})
             self.assertEqual(st, 400, r)
             self.assertIn('реєстр задач не привʼязаний', body['error'])
-        for r in ROUTES_POST:
-            st, body = self.post('/t/tx' + r, {'id': 'css-tokens'})
-            self.assertEqual(st, 400, r)
-            self.assertIn('реєстр задач не привʼязаний', body['error'])
+            # текст відмови називає й маршрути модулів, а не лише `/api/space*`
+            for named in ('/api/modules', '/api/module-*', '/api/ds-tokens'):
+                self.assertIn(named, body['error'])
 
     def test_a_foreign_origin_is_refused_on_every_post_and_nothing_is_written(self):
         before = self.sj_bytes()
@@ -323,6 +336,20 @@ class Routes(World):
         # власний origin проходить: перевірка не «глуха»
         st, body = self.post('/api/module-check', {'id': 'css-tokens'}, {'Origin': self.base})
         self.assertEqual(st, 200, body)
+
+    def test_the_reads_carry_no_cors_header(self):
+        """Чужа вебсторінка не мусить читати конфігурацію модулів і токени ДС: ні `Access-Control-Allow-Origin`, ні на
+        200, ні на відмові (`/published/…` його має — там інший розмір; тут — ні)."""
+        self.enable_tokens()
+        for path in ('/api/modules', '/api/ds-tokens', '/api/modules?space=ghost', '/api/ds-tokens?space=ghost'):
+            with self.subTest(path=path):
+                st, headers = self.headers_of('GET', path)
+                self.assertIn(st, (200, 404))
+                self.assertNotIn('access-control-allow-origin', headers)
+                self.assertEqual(headers['content-type'], 'application/json')
+        st, headers = self.headers_of('POST', '/api/module-check', {'id': 'css-tokens'})
+        self.assertEqual(st, 200)
+        self.assertNotIn('access-control-allow-origin', headers)
 
     def test_the_default_space_is_the_pinned_one_and_follows_the_current_space(self):
         self.assertTrue(self.entry('static-publish')['implicit'])           # поточний `off`: без інтеграцій
@@ -361,6 +388,30 @@ class Routes(World):
         for r in ROUTES_GET:
             st, body = self.get(r + '?space=ghost')
             self.refused(st, body, 404, 'unknown-space')
+
+    def test_a_lone_surrogate_is_a_json_404_not_a_dropped_connection(self):
+        """`{"space": "\\ud800"}` — валідний JSON, а в Python це рядок, що не кодується в UTF-8: текст відмови
+        з ним раніше валив `_send_json` (`ensure_ascii=False` + `.encode()`), і зʼєднання рвалось без відповіді. Тепер
+        — звичайна JSON-відмова (екранована); наявний маршрут просторів — теж."""
+        for route, payload, code in (('/api/module-check', {'space': '\ud800'}, 'unknown-space'),
+                                     ('/api/module-check', {'id': '\ud800'}, 'unknown-module'),
+                                     ('/api/module-enable', {'id': '\ud800'}, 'unknown-module'),
+                                     ('/api/space-switch', {'id': '\ud800'}, 'unknown-space')):
+            with self.subTest(route=route, payload=payload):
+                st, body = self.post(route, payload)
+                self.refused(st, body, 404, code)
+                self.assertIn('\ud800', body['error'])
+        st, body = self.get('/api/modules?space=%ED%A0%80')       # у query сурогат не виживає, але маршрут тримається
+        self.assertEqual(st, 404)
+
+    def test_ordinary_responses_stay_raw_utf8(self):
+        """Запасний шлях `_send_json` (екранування) — лише для відмови кодування; решта відповідей — як і була,
+        з живою кирилицею, байт у байт."""
+        st, body = self.get('/api/modules')
+        self.assertEqual(st, 200)
+        raw = self.raw[-1][2]
+        self.assertIn('Токени з CSS', raw)
+        self.assertNotIn('\\u0422', raw)
 
     def test_a_blank_query_space_means_the_default(self):
         st, body = self.get('/api/modules?space=')
@@ -414,7 +465,10 @@ class Listing(World):
         self.assertIn(SECRET, _read(self.secrets_path).decode('utf-8'))     # він записаний — просто не віддається
 
     def test_an_empty_secret_does_not_count_as_set(self):
-        self.post('/api/module-settings', {'space': 'on', 'id': 'static-publish', 'secrets': {'password': ''}})
+        st, body = self.post('/api/module-settings', {'space': 'on', 'id': 'static-publish',
+                                                      'secrets': {'password': ''}})
+        self.assertEqual((st, body['ok']), (200, True), body)
+        self.assertEqual(_json(self.secrets_path), {'on': {'static-publish': {'password': ''}}})   # записано, але не «задано»
         self.assertIs(self.entry('static-publish', 'on')['settings'][1]['set'], False)
 
     def test_the_select_options_and_bool_values_pass_through(self):
@@ -510,6 +564,17 @@ class Enable(World):
         self.assertEqual((body['module']['enabled'], body['module']['status'], body['module']['error']),
                          (True, 'error', 'bad-settings'))
         self.assertTrue(self.sj()['modules']['css-tokens']['enabled'])
+
+    def test_a_coded_error_of_the_module_itself_is_a_verdict_after_the_state_was_written(self):
+        """Свій `ctx['ModuleError']('bad-folder', …)` з `check`: стан уже записано, тож це вердикт (200), а не 409."""
+        self.modules(extra=('bad-folder',), copy=())
+        for route in ('/api/module-enable', '/api/module-settings', '/api/module-check'):
+            with self.subTest(route=route):
+                st, body = self.post(route, {'id': 'bad-folder'})
+                self.assertEqual((st, body['ok']), (200, True), body)
+                self.assertEqual(body['check'], {'ok': False, 'error': 'bad-folder', 'detail': 'path-system'})
+        e = self.entry('bad-folder')
+        self.assertEqual((e['enabled'], e['status'], e['error']), (True, 'error', 'bad-folder'))
 
     def test_enabling_twice_is_fine(self):
         self.enable_tokens()
@@ -761,6 +826,134 @@ class DisableAndSettings(World):
         self.refused(st, body, 400, 'bad-settings')
 
 
+class MissingModule(World):
+    """Модуль, ЯВНО увімкнений у `space.json`, а на цій машині його нема (`status: missing`): його можна лише
+    ВИМКНУТИ — інакше запис лишався б у списку назавжди (ядро кидало `unknown-module`, бо каталог його не знає)."""
+
+    def put_modules(self, mods, space=None):
+        sp = space or self.off
+        sj = self.sj(sp)
+        sj['modules'] = mods
+        _write(os.path.join(sp['path'], 'space.json'), json.dumps(sj))
+
+    def test_a_missing_module_can_be_disabled_and_is_no_longer_listed(self):
+        self.put_modules({'gone-mod': {'enabled': True, 'settings': {'x': 1}}, 'other-gone': {'enabled': True}})
+        self.assertEqual(self.entry('gone-mod')['status'], 'missing')
+        before = self.sj()
+        st, body = self.post('/api/module-disable', {'id': 'gone-mod'})
+        # запису модуля вже нема в списку (вимкнений відсутній не показується) — `module: null` тут нормальний
+        self.assertEqual((st, body), (200, {'ok': True, 'module': None}))
+        after = self.sj()
+        self.assertEqual(after['modules']['gone-mod'], {'enabled': False, 'settings': {'x': 1}})    # налаштування живуть
+        self.assertEqual(after['modules']['other-gone'], {'enabled': True})                          # решта не зачеплена
+        self.assertEqual({k: v for k, v in after.items() if k != 'modules'},
+                         {k: v for k, v in before.items() if k != 'modules'})
+        mods = self.listing()
+        self.assertNotIn('gone-mod', mods)
+        self.assertEqual(mods['other-gone']['status'], 'missing')
+        # повторне вимкнення — так само нормальна відповідь
+        self.assertEqual(self.post('/api/module-disable', {'id': 'gone-mod'}), (200, {'ok': True, 'module': None}))
+
+    def test_an_id_that_is_not_in_the_file_is_still_404_and_nothing_is_written(self):
+        self.put_modules({'gone-mod': {'enabled': True}, 'weird': 5})
+        before = self.sj_bytes()
+        for mid in ('ghost', 'weird', '', 5):
+            with self.subTest(id=mid):
+                st, body = self.post('/api/module-disable', {'id': mid})
+                self.refused(st, body, 404, 'unknown-module')
+        self.assertEqual(self.sj_bytes(), before)
+
+    def test_only_the_disabling_is_open_to_a_missing_module(self):
+        self.put_modules({'gone-mod': {'enabled': True}})
+        before = self.sj_bytes()
+        for route in ('/api/module-enable', '/api/module-settings', '/api/module-check'):
+            with self.subTest(route=route):
+                st, body = self.post(route, {'id': 'gone-mod'})
+                self.refused(st, body, 404, 'unknown-module')
+        # і саме `enabled=False` без налаштувань: патч налаштувань чи `enabled=True` — як було
+        space = dict(self.off)
+        for kw in ({'enabled': False, 'settings': {'x': 1}}, {'enabled': True}, {'settings': {'x': 1}}, {}):
+            with self.subTest(core=kw):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.write_module_state(space, 'gone-mod', **kw)
+                self.assertEqual(cm.exception.code, 'unknown-module')
+        self.assertEqual(self.sj_bytes(), before)
+
+    def test_the_core_answer_for_a_missing_module(self):
+        self.put_modules({'gone-mod': {'enabled': True, 'settings': {'x': 1}}})
+        st = dm.write_module_state(dict(self.off), 'gone-mod', enabled=False)
+        self.assertEqual(st, {'enabled': False, 'implicit': False, 'settings': {'x': 1}})
+        self.assertEqual(self.sj()['modules']['gone-mod'], {'enabled': False, 'settings': {'x': 1}})
+
+    def test_the_disabling_does_not_pass_role_taken_and_needs_no_role(self):
+        """Вимкнення нічого не займає: ні `role-taken`, ні перевірки ролей (модуля в каталозі нема)."""
+        self.put_modules({'gone-mod': {'enabled': True}, 'static-publish': {'enabled': True}})
+        self.assertEqual(self.post('/api/module-disable', {'id': 'gone-mod'})[0], 200)
+        self.assertTrue(self.entry('static-publish')['enabled'])
+
+    def test_an_unreadable_space_json_is_409_not_404(self):
+        _write(os.path.join(self.off_path, 'space.json'), '{not json')
+        st, body = self.post('/api/module-disable', {'id': 'gone-mod'})
+        self.refused(st, body, 409, 'space-json-unreadable')
+        self.assertEqual(self.sj_bytes(), b'{not json')
+
+
+class SecretPreflight(World):
+    """Секрет пишеться РАНІШЕ за `space.json` (спека), тож усе, що можна знати до запису, перевіряється ДО нього
+    (читання без запису): нечитабельна `space.json` і `role-taken`. Відмова після живого секрету — 409, а пароль
+    уже новий; це якраз той випадок, який перевірка до запису закриває."""
+
+    def seed_secret(self):
+        self.post('/api/module-settings', {'space': 'on', 'id': 'static-publish', 'secrets': {'password': 'old-pw'}})
+        return _read(self.secrets_path)
+
+    def stops_the_secret(self, route):
+        before_secrets = self.seed_secret()
+        _write(os.path.join(self.on_path, 'space.json'), '{not json')
+        st, body = self.post(route, {'space': 'on', 'id': 'static-publish', 'secrets': {'password': SECRET}})
+        self.refused(st, body, 409, 'space-json-unreadable')
+        self.assertEqual(_read(self.secrets_path), before_secrets)                  # пароль НЕ змінився (байт у байт)
+        self.assertEqual(self.sj_bytes(self.on), b'{not json')
+        self.assert_never_seen(SECRET)
+
+    def test_an_unreadable_space_json_stops_a_secret_write_on_settings(self):
+        self.stops_the_secret('/api/module-settings')
+
+    def test_an_unreadable_space_json_stops_a_secret_write_on_enable(self):
+        self.stops_the_secret('/api/module-enable')
+
+    def test_an_unreadable_space_json_writes_no_secrets_file_at_all(self):
+        _write(os.path.join(self.on_path, 'space.json'), '{not json')
+        st, body = self.post('/api/module-settings', {'space': 'on', 'id': 'static-publish',
+                                                      'secrets': {'password': SECRET}})
+        self.refused(st, body, 409, 'space-json-unreadable')
+        self.assertFalse(os.path.exists(self.secrets_path))
+
+    def test_role_taken_is_known_before_the_secret_is_written(self):
+        self.modules(extra=('alt-publish',))
+        st, body = self.post('/api/module-enable', {'id': 'alt-publish', 'secrets': {'token': SECRET}})
+        self.refused(st, body, 409, 'role-taken')                      # `off`: static-publish тримає `publish` неявно
+        self.assertFalse(os.path.exists(self.secrets_path))
+        self.assert_never_seen(SECRET)
+        # у просторі з інтеграціями роль вільна — секрет пишеться
+        st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'alt-publish', 'secrets': {'token': SECRET}})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(_json(self.secrets_path), {'on': {'alt-publish': {'token': SECRET}}})
+
+    def test_the_settings_of_a_module_that_stays_disabled_are_not_blocked_by_a_role_it_does_not_take(self):
+        """Пре-перевірка `role-taken` — лише для вмикання: налаштування й секрет модуля, який вимкнений і НЕ вмикається
+        (`static-publish` тримає `publish` у `off`), ролі не займають — 200, секрет записано, `enabled` лишився `false`."""
+        self.modules(extra=('alt-publish',))
+        st, body = self.post('/api/module-settings', {'id': 'alt-publish', 'secrets': {'token': SECRET}})
+        self.assertEqual((st, body['ok'], body['module']['enabled']), (200, True, False), body)
+        self.assertEqual(_json(self.secrets_path), {'off': {'alt-publish': {'token': SECRET}}})
+
+    def test_a_readable_space_json_does_not_change_the_flow(self):
+        st, body = self.post('/api/module-settings', {'space': 'on', 'id': 'static-publish',
+                                                      'secrets': {'password': SECRET}})
+        self.assertEqual((st, body['module']['settings'][1]['set']), (200, True))
+
+
 class Check(World):
 
     def test_check_runs_and_is_remembered(self):
@@ -834,6 +1027,11 @@ class LayerOff(Http, unittest.TestCase):
                 self.assertEqual((st, body['ok'], body['code']), (409, False, 'spaces-off'), body)
         self.assert_nothing_written()
         self.assert_never_seen(SECRET)
+
+    def test_disabling_an_unknown_or_missing_id_is_spaces_off_before_anything_else(self):
+        st, body = self.post('/api/module-disable', {'id': 'gone-mod'})
+        self.assertEqual((st, body['code']), (409, 'spaces-off'), body)
+        self.assert_nothing_written()
 
     def test_the_listing_and_the_check_still_answer(self):
         st, body = self.get('/api/modules')
@@ -954,11 +1152,17 @@ class Capabilities(World):
         self.assertEqual(caps['on'], self.LEGACY_SHAPE)             # шлях ЛІГА недоторканий
 
     def test_a_broken_catalog_does_not_break_the_listing(self):
+        """Не завантажений модуль УВІМКНЕНО (роль `tokens`) — він постачальником не стає, а списки відповідають."""
         self.modules(extra=('broken',))
+        st, body = self.post('/api/module-enable', {'id': 'broken'})
+        self.assertEqual((st, body['module']['enabled'], body['module']['status']), (200, True, 'error'), body)
         st, body = self.get('/api/spaces')
         self.assertEqual(st, 200, body)
-        self.assertEqual({s['id']: s['capabilities']['publish'] for s in body['spaces']},
-                         {'off': 'static-publish', 'on': 'legacy'})
+        self.assertEqual({s['id']: s['capabilities'] for s in body['spaces']},
+                         {'off': {'publish': 'static-publish', 'tokens': None},
+                          'on': {'publish': 'legacy', 'tokens': None}})
+        st, body = self.get('/api/task')
+        self.assertEqual((st, body['space']['capabilities']), (200, {'publish': 'static-publish', 'tokens': None}))
 
 
 # ================================================================================================== /api/ds-tokens

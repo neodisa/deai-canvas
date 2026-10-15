@@ -3621,13 +3621,15 @@ def _consume_stderr_line(line, progress, tail):
 # `/api/ds-tokens` — РЕЄСТРОВІ (`Handler._REGISTRY_ROUTES`): простір — параметр `space`, а не заголовок задачі.
 # Уся логіка тут — модульні функції (тестуються без сокета); методи `Handler` лише розбирають запит.
 
-#: Відмови `deai_modules.check`, що стосуються САМОГО модуля (його налаштувань, коду, секретів), а не запиту: у
-#: відповіді вони — вердикт `check: {ok: false, error: <код>, detail}` (HTTP 200), так само, як `ok: false` від
-#: самого модуля, а `GET /api/modules` показує їх тим самим `status: error`. Для `module-enable|settings` це ще й
-#: чесність: до `check` стан УЖЕ записано, і 400/502/504/409 збрехали б, що нічого не змінилось. Решта
-#: (`unknown-module`, `space-json-unreadable`) — про запит чи простір: HTTP-відмова центрального обробника
-#: (`Handler._guarded`), а `spaces-off`/`role-taken`/`unwritable`/`bad-settings` запису — до `check` і не доходять.
-MODULE_VERDICT_CODES = ('bad-manifest', 'bad-settings', 'module-error', 'check-timeout', 'secrets-unreadable')
+#: Відмови `deai_modules.check`, які НЕ стають вердиктом: `unknown-module` (такого модуля нема — нічого перевіряти)
+#: і `space-json-unreadable` (простір не прочитати — це про простір, не про модуль): HTTP-відмова центрального
+#: обробника (`Handler._guarded`). УСЕ ІНШЕ, що кинула `check` — `bad-settings`, `module-error`, `check-timeout`,
+#: `secrets-unreadable`, `bad-manifest` і власна відмова модуля з кодом ядра (`bad-folder`…), — вердикт
+#: `check: {ok: false, error: <код>, detail}` (HTTP 200), так само, як `ok: false` від самого модуля, а `GET
+#: /api/modules` показує їх тим самим `status: error`. Для `module-enable|settings` це ще й чесність: до `check` стан
+#: УЖЕ записано, і 400/409/502/504 збрехали б, що нічого не змінилось (а новий код модуля чи ядра не лишився б
+#: HTTP-збоєм через те, що його забули дописати в білий список).
+CHECK_NOT_A_VERDICT = ('unknown-module', 'space-json-unreadable')
 
 
 def space_view(sp):
@@ -3737,28 +3739,31 @@ def module_entry(space, mid):
 
 
 def module_check_verdict(space, mid):
-    """`deai_modules.check` з відмовами САМОГО модуля (`MODULE_VERDICT_CODES`), перетвореними на вердикт
-    `{ok: false, error, detail}` — рівно той, що `check` запамʼятав для `last_check`. Решта винятків летять."""
+    """`deai_modules.check` з усіма відмовами, крім `CHECK_NOT_A_VERDICT`, перетвореними на вердикт
+    `{ok: false, error, detail}` — рівно той, що `check` запамʼятав для `last_check` (там, де запамʼятав). Решта летить."""
     try:
         return deai_modules.check(space, mid)
     except deai_modules.ModuleError as e:
-        if e.code in MODULE_VERDICT_CODES:
-            return {'ok': False, 'error': e.code, 'detail': e.message}
-        raise
+        if e.code in CHECK_NOT_A_VERDICT:
+            raise
+        return {'ok': False, 'error': e.code, 'detail': e.message}
 
 
 def module_write(space, mid, action, settings, secrets):
     """Запис `module-enable|settings|disable` у ПОРЯДКУ СПЕКИ: валідація налаштувань (нічого не пише) →
-    СЕКРЕТИ → `space.json` → (`enable`/`settings`) `check`. Секрет ПЕРШИМ: сирітський секрет нешкідливий,
-    а увімкнений модуль без секрету — ні (невдалий запис секрету зупиняє вмикання до `space.json`). Валідація
-    налаштувань стоїть ДО запису секрету: інакше 400 за кривим налаштуванням лишив би змінений пароль. Відмова,
-    яку видно лише під локом `space.json` (`role-taken`, `space-json-unreadable`), настає вже ПІСЛЯ запису
-    секрету — спека це приймає: сирітський секрет нешкідливий. `disable` налаштувань і секретів НЕ чіпає й не
-    читає (серед аргументів воно ігнорується). Повертає вердикт `check` або `None` (`disable`)."""
+    пре-перевірка → СЕКРЕТИ → `space.json` → (`enable`/`settings`) `check`. Секрет ПЕРШИМ: сирітський секрет
+    нешкідливий, а увімкнений модуль без секрету — ні (невдалий запис секрету зупиняє вмикання до `space.json`).
+    Усе, що видно ДО запису, відмовляє ДО нього: валідація налаштувань (`bad-settings`) і читання без запису
+    (`deai_modules.preflight`: `unknown-module`, `space-json-unreadable`, для вмикання — `role-taken`), інакше 400/409
+    лишили б змінений живий пароль. Те, що пре-перевірка бачить інакше за лок (гонка з паралельною правкою) або не
+    може записати (`unwritable`), відмовить уже ПІСЛЯ секрету — спека це приймає: сирітський секрет нешкідливий.
+    `disable` налаштувань і секретів НЕ чіпає й не читає (серед аргументів воно ігнорується); для відсутнього в
+    каталозі (`missing`) модуля це єдина дозволена дія. Повертає вердикт `check` або `None` (`disable`)."""
     if action == 'disable':
         deai_modules.write_module_state(space, mid, enabled=False)
         return None
     deai_modules.validate_settings(mid, settings)
+    deai_modules.preflight(space, mid, enabling=(action == 'enable'))
     if secrets is not None:
         deai_modules.write_secrets(space['id'], mid, secrets)
     deai_modules.write_module_state(space, mid, enabled=True if action == 'enable' else None, settings=settings)
@@ -3851,7 +3856,13 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def _send_json(self, obj, status=200):
-        body = json.dumps(obj, ensure_ascii=False).encode()
+        try:
+            body = json.dumps(obj, ensure_ascii=False).encode()
+        except UnicodeEncodeError:
+            # Самотній сурогат (`{"space": "\ud800"}` — валідний JSON, а в Python рядок, що не кодується в UTF-8) у
+            # тексті відмови: без запасного шляху `.encode()` падав, і зʼєднання рвалось без відповіді. Екранування
+            # (`\ud800`) віддається клієнтові як є; уся решта відповідей (живий UTF-8) іде першим шляхом без змін.
+            body = json.dumps(obj, ensure_ascii=True).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -4085,8 +4096,9 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path.split('?')[0] in self._REGISTRY_ROUTES:
                 self._drain_body()
                 self._send_json({'ok': False, 'error': 'реєстр задач не привʼязаний до '
-                                 'задачі: звертайся до /api/task-new, /api/task-switch і '
-                                 '/api/space* без префікса /t/<id>/'}, status=400)
+                                 'задачі: звертайся до /api/task-new, /api/task-switch, '
+                                 '/api/space*, /api/modules, /api/module-* і /api/ds-tokens '
+                                 'без префікса /t/<id>/'}, status=400)
                 return False
         else:
             if self.path.split('?')[0] in self._REGISTRY_ROUTES:
@@ -5887,7 +5899,7 @@ class Handler(SimpleHTTPRequestHandler):
     def _module_space(self, want):
         """Простір маршрутів модулів: `want` — параметр `space` (`None`/відсутній — простір, зафіксований
         на вході, `spaces.active_space()`); запис реєстру або `None` (відповідь уже надіслана: 404
-        `unknown-space` через `_space_failed`, як і в інших маршрутах просторів). Простору нема зовсім —
+        `unknown-space`, та сама форма, що в `_space_failed` інших маршрутів просторів). Простору нема зовсім —
         теж `unknown-space`. Названий простір стає простором запиту (воркер `deai_modules.call` його
         успадковує). Порожній `space=` у запиті GET — «не задано» (`parse_qs` відкидає порожні значення);
         у тілі POST порожній рядок — вже невідомий простір."""
@@ -5899,10 +5911,7 @@ class Handler(SimpleHTTPRequestHandler):
             return sp
         sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == want), None)
         if sp is None:
-            try:
-                raise KeyError(str(want)[:60])
-            except KeyError as e:
-                self._space_failed(e)
+            self._space_error(404, 'unknown-space', f'unknown space: {str(want)[:60]}')     # ті самі код і форма, що `_space_failed`
             return None
         spaces.set_request_space(sp['id'])
         return sp
@@ -5939,7 +5948,8 @@ class Handler(SimpleHTTPRequestHandler):
     def _module_post(self, payload, action):
         """`POST /api/module-enable|disable|settings|check` `{space?, id, settings?, secrets?}`:
         `{ok: true, module: <запис>[, check: <вердикт>]}` (порядок запису й коди — `module_write`,
-        `module_check_verdict`). `ModuleError` (`unknown-module` 404, `bad-settings` 400, `role-taken` 409,
+        `module_check_verdict`). `module` — `null`, коли запису вже нема в списку: так буває лише після `module-disable`
+        відсутнього в каталозі (`missing`) модуля — вимкнений відсутній не показується. `ModuleError` (`unknown-module` 404, `bad-settings` 400, `role-taken` 409,
         `space-json-unreadable`/`spaces-off` 409, `unwritable` 500…) відповідає `_guarded` — одна форма
         `{ok: false, code, error}` на всі маршрути; текст уже без секретів, а значення секретів сюди не
         доходять взагалі (відповідь будується з прапорців `set`)."""

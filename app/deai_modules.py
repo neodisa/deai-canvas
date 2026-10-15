@@ -562,19 +562,86 @@ def _require_writable(space):
         raise ModuleError('spaces-off', message='spaces layer is off or the space has no folder')
 
 
+def _role_conflict(m, cat, space, explicit):
+    """Текст `role-taken` для модуля `m`, якщо хтось інший із `cat` уже тримає його роль у `explicit` (неявно
+    ввімкнений `static-publish` теж); інакше `None`. Не завантажені модулі ролей не тримають."""
+    mine = set(m.roles)
+    for oid in sorted(cat):
+        other = cat[oid]
+        shared = mine & set(other.roles)
+        if oid == m.id or other.status != 'ok' or not shared:
+            continue
+        if _enabled_in(other, space, explicit)[0]:
+            return f'{sorted(shared)[0]} is already provided by {oid}'
+    return None
+
+
+def preflight(space, module_id, enabling=False):
+    """Читання БЕЗ запису і без локу: чи можна взагалі писати стан модуля. `unknown-module` (нема в каталозі),
+    `space-json-unreadable` (`space_modules`) і — лише для вмикання — `role-taken`. Для API, що пише секрет
+    РАНІШЕ за `space.json` (спека): усе, що видно ДО запису, мусить відмовити ДО нього, інакше клієнт із 409 у руках
+    мав би вже новий живий пароль. Це best-effort: авторитетні перевірки лишаються в `write_module_state` під
+    локом, а те, що вони побачать іншим (гонка з паралельною правкою між пре-перевіркою й локом) чи не зможуть
+    записати (`unwritable`), відмовить уже ПІСЛЯ секрету — спека це приймає (сирітський секрет нешкідливий).
+    ⚠️ Виконує код модулів (каталог) — НЕ кликати під `WRITE_LOCK`."""
+    cat = catalog()
+    m = cat.get(module_id) if isinstance(module_id, str) else None
+    if m is None:
+        raise ModuleError('unknown-module', message=str(module_id)[:60])
+    explicit = space_modules(space)
+    if enabling:
+        why = _role_conflict(m, cat, space, explicit)
+        if why:
+            raise ModuleError('role-taken', message=why)
+
+
+def _disable_missing(space, module_id):
+    """Вимкнути модуль, ЯВНО записаний у `space.json`, але відсутній у каталозі (`status: missing`): без цього запис
+    лишався б увімкненим назавжди (`write_module_state` не знає модуля). Лише `enabled: false` — налаштування й решта
+    запису живуть (повернеться модуль — повернуться й вони); ролей модуль не має, тож `role-taken` тут нема. id,
+    якого в файлі нема чи чий запис не обʼєкт, — `unknown-module`, як і було. Під `WRITE_LOCK`; каталог уже
+    прочитано (код модулів під локом не виконується). Повертає `{enabled: False, implicit: False, settings: <збережені>}`."""
+    path = _space_json_path(space)
+    with spaces.WRITE_LOCK:
+        data = _load_space_json(path)
+        mods = dict(_raw_modules(data))
+        old = mods.get(module_id)
+        if not isinstance(old, dict):
+            raise ModuleError('unknown-module', message=module_id[:60])
+        st = old.get('settings')
+        state = {'enabled': False, 'implicit': False, 'settings': dict(st) if isinstance(st, dict) else {}}
+        if old.get('enabled') is False:
+            return state                                # вже вимкнений: файл не переписуємо
+        entry = dict(old)
+        entry['enabled'] = False
+        mods[module_id] = entry
+        data['modules'] = mods
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            spaces._write_public(path, data)
+        except (OSError, ValueError) as e:
+            raise ModuleError('unwritable', message=f'space.json: {type(e).__name__}') from None
+        return state
+
+
 def write_module_state(space, module_id, enabled=None, settings=None):
     """Змінити вмикання й/чи налаштування модуля в `space.json` простору. Читання-зміна-запис
     ПІД `WRITE_LOCK`; каталог — ДО локу; `role-taken` — на свіжо прочитаному стані під локом (неявно
     ввімкнений `static-publish` теж займає роль `publish`); невідомі ключі файла й запису модуля
     зберігаються; `settings` — патч (`None` значення знімає ключ); секрет у ньому — `bad-settings`.
     Новий запис модуля бере `enabled` із поточного ефективного стану, тож запис налаштувань не
-    перемикає неявно ввімкнений `static-publish`. Повертає новий стан модуля."""
+    перемикає неявно ввімкнений `static-publish`. Повертає новий стан модуля.
+
+    Єдиний виняток для модуля, якого НЕМАЄ в каталозі (`missing`): `enabled=False` без налаштувань вимикає його
+    запис у файлі, якщо той там є (`_disable_missing`); решта — `unknown-module`."""
     _require_writable(space)
     if enabled is not None and not isinstance(enabled, bool):
         raise _bad('enabled: expected a boolean')
     cat = catalog()                                     # ДО локу: виконує код модулів
     m = cat.get(module_id) if isinstance(module_id, str) else None
     if m is None:
+        if enabled is False and (settings is None or settings == {}) and isinstance(module_id, str):
+            return _disable_missing(space, module_id)
         raise ModuleError('unknown-module', message=str(module_id)[:60])
     patch = _validate_patch(m, settings)
     path = _space_json_path(space)
@@ -586,14 +653,9 @@ def write_module_state(space, module_id, enabled=None, settings=None):
         if enabled is None and not patch:
             return _entry_state(m, space, explicit)
         if enabled is True:
-            mine = set(m.roles)
-            for oid in sorted(cat):
-                other = cat[oid]
-                shared = mine & set(other.roles)
-                if oid == m.id or other.status != 'ok' or not shared:
-                    continue
-                if _enabled_in(other, space, explicit)[0]:
-                    raise ModuleError('role-taken', message=f'{sorted(shared)[0]} is already provided by {oid}')
+            why = _role_conflict(m, cat, space, explicit)
+            if why:
+                raise ModuleError('role-taken', message=why)
         old = mods.get(module_id)
         entry = dict(old) if isinstance(old, dict) else {}
         entry['enabled'] = enabled if enabled is not None else cur
