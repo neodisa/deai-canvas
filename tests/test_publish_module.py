@@ -1228,6 +1228,74 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(serve._publish_key(os.path.join(self.tmp, 'p'), nfc),
                          serve._publish_key(os.path.join(self.tmp, 'p'), nfd))
 
+    def test_the_build_dir_of_one_task_is_locked_even_if_the_folder_setting_changes_mid_flight(self):
+        """`build_preview` завжди пише `<тека задачі>/publish/`, а замок призначення ключиться за (тека, задача):
+        налаштування `folder` змінили, поки перша публікація стоїть, — друга мала б ІНШЕ призначення, вільний
+        замок і зайшла б у збірку тієї ж `publish/` разом із першою. Тож задачу замикає ще й її тека збірки."""
+        f2 = os.path.join(self.home, 'pubs', 'two')
+        entered, inside, second, release, kwargs = self._slow(serve, 'build_preview')
+
+        def second_run():
+            self.set_folder(f2)                                 # інше призначення → замок призначення вільний
+            return self.post('/api/publish')
+
+        first, sec, seen = self._concurrent(lambda: self.post('/api/publish'), second_run, entered, inside, release)
+        self.assert_busy(*sec)
+        self.assertEqual(seen, 1, 'друга збірка тієї ж задачі почалась, поки перша ще пише `publish/`')
+        self.assertEqual((first[0], first[1]['ok']), (200, True), first)
+        self.assertFalse(os.path.exists(f2), 'відмова створила теку нового призначення')
+        self.assertEqual(self.post('/api/publish')[0], 200, 'замок теки збірки не відпущено')
+
+    def test_the_task_dir_lock_key_is_the_real_case_folded_dir(self):
+        real = os.path.join(self.tmp, 'real-task')
+        os.makedirs(real)
+        alias = os.path.join(self.tmp, 'alias-task')
+        os.symlink(real, alias)
+        key = serve._task_dir_key(real)
+        self.assertEqual(serve._task_dir_key(alias), key)                   # посилання на теку — та сама тека
+        self.assertEqual(serve._task_dir_key(real.upper()), key)            # macOS: `Foo` і `foo` — одна тека
+        self.assertEqual(serve._task_dir_key(real + '/'), key)
+        self.assertNotEqual(serve._task_dir_key(os.path.join(self.tmp, 'other')), key)
+        # у спільному словнику замків ключ теки збірки не збігається з ключем призначення (одинак проти пари)
+        self.assertNotEqual(key, serve._publish_key(real, 'x'))
+        self.assertEqual(len(key), 1)
+
+    def test_both_locks_are_taken_in_a_fixed_order_and_released_together(self):
+        """Порядок — тека збірки, потім призначення; обидва без очікування; зайнятий другий не лишає взятим перший."""
+        folder = os.path.join(self.tmp, 'dest')
+        os.makedirs(folder)
+        tdir = os.path.join(self.tmp, 'task')
+        os.makedirs(tdir)
+        build, dest = serve._publish_lock(serve._task_dir_key(tdir)), serve._publish_lock(serve._publish_key(folder, 't'))
+        with serve._try_publish_locks(tdir, folder, 't') as got:
+            self.assertTrue(got)
+            self.assertTrue(build.locked() and dest.locked())
+            with serve._try_publish_locks(tdir, folder, 't') as again:
+                self.assertFalse(again)
+        self.assertFalse(build.locked() or dest.locked(), 'замок не відпущено після виходу з блоку')
+        dest.acquire()                                                      # призначення зайняте кимось іншим
+        try:
+            with serve._try_publish_locks(tdir, folder, 't') as got:
+                self.assertFalse(got)
+            self.assertFalse(build.locked(), 'зайняте призначення лишило замок теки збірки взятим')
+        finally:
+            dest.release()
+        with self.assertRaises(RuntimeError):                               # виняток у блоці теж відпускає
+            with serve._try_publish_locks(tdir, folder, 't'):
+                raise RuntimeError('впало')
+        self.assertFalse(build.locked() or dest.locked())
+
+    def test_a_path_outside_the_destination_says_the_files_may_already_have_been_written(self):
+        """До цієї відмови модуль УЖЕ відпрацював: текст не сміє натякати, що нічого не сталося."""
+        module = dm.catalog()[MID]
+        other = os.path.join(self.home, 'elsewhere', 'tx')
+        with mock.patch.dict(module._fns, {'publish': lambda ctx, build, task: {'path': other}}):
+            st, body = self.post('/api/publish')
+        self.assertEqual((st, body.get('ok'), body.get('code')), (502, False, 'module-error'), body)
+        self.assertIn('may already have been written', body['error'])
+        self.assertNotIn(other, body['error'], 'шлях із відповіді модуля потрапив у текст помилки')
+        self.assertLessEqual(len(body['error']), dm.MAX_MESSAGE)
+
     def test_the_folder_that_is_checked_locked_and_written_is_one_value(self):
         """`ctx` будується ОДИН раз, тека береться з нього: налаштування, змінене між перевіркою `folder_ok` і
         записом, не розводить ключ замка (і перевірену теку) з текою, у яку модуль справді пише."""
@@ -1326,6 +1394,60 @@ class Dispatch(unittest.TestCase):
         self.assertEqual((st, body['ok'], body['preview_password']), (200, True, 'abcd'), body)
         with open(os.path.join(self.on_path, 'tasks.json'), encoding='utf-8') as fh:
             self.assertEqual(json.load(fh)['tasks']['ty']['preview_password'], 'abcd')
+
+
+class TaskIdParity(unittest.TestCase):
+    """Правило id задачі живе ДВІЧІ: у `static-publish` (`ID_RE`, `MAX_ID`, `_RESERVED`) і в ядрі
+    (`serve.publish_id_ok`: диспетчер відмовляє до збірки, роздача `/published/…` пускає лише такі id).
+    Друга копія розійшлась би з першою мовчки — тож обидві стороні дається ОДИН корпус, і приймати чи
+    відмовляти вони мусять однаково. Модуль — справжній (з каталогу), `publish` із рукописним `ctx`: перша
+    його дія — перевірка id, тож «відмовив через id» видно з тексту помилки (`task id:`), а прийнятий id
+    доходить до наступного кроку (теки), що в `ctx` без налаштувань кидає вже ІНШУ помилку."""
+
+    CORPUS = [
+        '', '-', '_', '--', 'a', 'A', 'z-Z_9', '0', '9', 'task-1', 'Task_1-b',
+        '\u0663', '\u0663\u0664', 'a\u0663', '\u0661', 'COM\u0661',      # юнікодні цифри (арабо-індійські)
+        '\u212a', 'a\u212a', '\u017f', 'a\u017f', 'NU\u017f', '\u0130', '\u0131',   # `K` (Кельвін), `ſ`, `İ`, `ı`
+        'K', 'k', 'ſ', 'a\n', '\n', 'a\nb', '\na', 'a\r', 'a\x00', '\x00', 'a\x00b', 'a b', ' a', 'a ',
+        'a.b', '.', '..', '.a', 'a/b', 'a\\b', 'a:b', 'a%2f', '\u0437\u0430\u0434\u0430\u0447\u0430', 'a\u0301', 'a\u200b',
+        'COM0', 'COM1', 'COM9', 'COM10', 'com1', 'Com5', 'LPT0', 'LPT1', 'lpt9', 'LPT10', 'CON', 'con', 'Con', 'console',
+        'CON1', 'PRN', 'prn', 'AUX', 'aux', 'NUL', 'nul', 'NULL', 'COM', 'LPT', 'CONN', 'xCON', 'CON-', 'CON_1',
+        'CON.txt', 'NUL ', 'a-b-c', '-a', 'a-', '_a', 'a_',
+        'x' * 1, 'x' * 127, 'x' * 128, 'x' * 129, 'x' * 255, 'x' * 1000, '-' * 128, '-' * 129, '1' * 128,
+        None, 5, 1.5, b'abc', ['a'], ('a',), True,
+    ]
+
+    def _module_accepts(self, tid):
+        publish = dm.catalog()[MID].fn('publish')
+        try:
+            publish({}, '/nonexistent', {'id': tid})
+        except Exception as e:  # noqa: BLE001 — важить лише, ЧОМУ відмовлено
+            self.assertIsInstance(e, RuntimeError, e)               # рукописний `ctx` без класу помилки ядра
+            return 'task id' not in str(e)
+        self.fail(f'publish із ctx без налаштувань не мав успіху ({tid!r})')
+
+    def test_the_core_and_the_module_accept_and_refuse_the_same_ids(self):
+        verdicts = {}
+        for tid in self.CORPUS:
+            with self.subTest(tid=repr(tid)[:40]):
+                core, module = serve.publish_id_ok(tid), self._module_accepts(tid)
+                self.assertEqual(core, module, f'розбіжність для {tid!r:.60}: ядро {core}, модуль {module}')
+                verdicts[repr(tid)[:60]] = core
+        # свідки: корпус справді має і прийняті, і відмовлені (інакше «однаково» нічого не доводило б)
+        self.assertGreater(sum(verdicts.values()), 10)
+        self.assertGreater(len(verdicts) - sum(verdicts.values()), 40)
+
+    def test_the_corpus_pins_the_known_edges(self):
+        """Корпус — не лише «однаково», а й «правильно» на межах, заради яких він складений."""
+        accepted = ('a', '0', 'task-1', 'Task_1-b', 'console', 'COM10', 'COM0', 'LPT0', 'x' * 128, '-', '_', 'CONN')
+        refused = ('', 'x' * 129, '\u0663', '\u212a', '\u017f', 'a\n', 'a\x00', 'CON', 'con', 'NUL', 'COM1', 'lpt9',
+                   'a.b', 'a/b', '..', 'a b', '\u0437\u0430\u0434\u0430\u0447\u0430', None, 5)
+        for tid in accepted:
+            self.assertTrue(serve.publish_id_ok(tid), repr(tid))
+            self.assertTrue(self._module_accepts(tid), repr(tid))
+        for tid in refused:
+            self.assertFalse(serve.publish_id_ok(tid), repr(tid))
+            self.assertFalse(self._module_accepts(tid), repr(tid))
 
 
 class ResealModuleBuilds(TaskFixture):

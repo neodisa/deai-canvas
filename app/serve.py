@@ -3218,6 +3218,21 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
 # (`boss_autopublish.py`) мають лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод
 # їх зламав би. Обробник `h` сюди передається, але з нього береться лише те, що `_publish` кликав завжди.
 
+#: Правило id задачі для ТЕКИ ПУБЛІКАЦІЇ — ДЗЕРКАЛО `static-publish` (`ID_RE`, `MAX_ID`, `_RESERVED`): `NAME_RE`
+#: сервера пускає Unicode, а модуль відмовляє такий id вже ПІСЛЯ збірки (502 `module-error`: `rmtree` + повна
+#: збірка задарма), тож диспетчер відмовляє раніше, а роздача `/published/…` пускає лише ті id, що можна
+#: опублікувати. Змінюючи правило модуля, міняй і це — паритет стереже `TaskIdParity` (корпус проти обох).
+_PUBLISH_ID_RE = re.compile(r'[A-Za-z0-9_-]{1,128}', re.ASCII)
+_PUBLISH_ID_RESERVED = re.compile(r'CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]', re.ASCII | re.IGNORECASE)
+
+
+def publish_id_ok(tid):
+    """Чи годиться `tid` як імʼя теки публікації: латиниця, цифри, `_`, `-`, 1..128 символів, не імʼя пристрою
+    Windows. Тотальна: не-рядок — `False`. `fullmatch`, а не `$`: «a\\n» не проходить."""
+    return (isinstance(tid, str) and _PUBLISH_ID_RE.fullmatch(tid) is not None
+            and _PUBLISH_ID_RESERVED.fullmatch(tid) is None)
+
+
 def no_publish_module_body():
     """Тіло 409, коли в просторі нема КОМУ публікувати: простір без інтеграцій, де `static-publish` явно
     вимкнено (а ЛІГА там нема за побудовою)."""
@@ -3231,17 +3246,29 @@ _PUBLISH_LOCKS = {}
 _PUBLISH_LOCKS_GUARD = threading.Lock()
 
 
+def _fold(text):
+    """Регістр і юнікодна форма знімаються так, як їх не розрізняє файлова система macOS: NFC до `casefold` і
+    після нього (`й` = U+0439 чи `и`+U+0306; `folder_ok` нормалізує так само)."""
+    return unicodedata.normalize('NFC', unicodedata.normalize('NFC', text).casefold())
+
+
 def _publish_key(folder, tid):
     """Ключ замка публікації — ПРИЗНАЧЕННЯ `<тека>/<задача>`, а не пара (простір, задача). Правило `folder_ok`
     пускає ту саму теку для двох просторів (і тека одного — типова тека іншого), тож задачі `t1` двох просторів
     діляться одним `<тека>/t1`: замок на (простір, задача) не виключав би їх одну від одної. `realpath` — бо
     посилання на теку й сама тека суть одне призначення; регістр знімаємо в обох частинах (`casefold`), а
     перед ним і після нього — NFC: файлова система macOS не розрізняє `Foo`/`foo` та NFC/NFD-написання
-    (`й` = U+0439 чи `и`+U+0306; `folder_ok` нормалізує так само), а зайва серіалізація шкоди не робить
-    (замок лише відмовляє другому, див. `publish_with_module`)."""
-    def fold(text):
-        return unicodedata.normalize('NFC', unicodedata.normalize('NFC', text).casefold())
-    return (fold(os.path.realpath(folder)), fold(tid))
+    (див. `_fold`), а зайва серіалізація шкоди не робить (замок лише відмовляє другому, див.
+    `publish_with_module`)."""
+    return (_fold(os.path.realpath(folder)), _fold(tid))
+
+
+def _task_dir_key(task_dir):
+    """Ключ замка ТЕКИ ЗБІРКИ задачі. `build_preview` завжди пише `<тека задачі>/publish/`, хоч би в яке
+    призначення йшла публікація: замок призначення (`_publish_key`) не виключає двох публікацій тієї самої
+    задачі в РІЗНІ теки (налаштування `folder` змінили між двома кліками), а вони стерли б і писали б одну
+    `publish/` разом. Одноелементний кортеж — не збігається з ключем призначення (пара) в спільному словнику."""
+    return (_fold(os.path.realpath(task_dir)),)
 
 
 def _publish_lock(key):
@@ -3250,6 +3277,28 @@ def _publish_lock(key):
         if lock is None:
             lock = _PUBLISH_LOCKS[key] = threading.Lock()
         return lock
+
+
+@contextlib.contextmanager
+def _try_publish_locks(task_dir, folder, tid):
+    """Обидва замки публікації БЕЗ очікування, у ФІКСОВАНОМУ порядку: СПОЧАТКУ тека збірки задачі
+    (`_task_dir_key`), ПОТІМ призначення (`_publish_key`). Дає `True` — обидва взято; `False` — котрийсь
+    зайнятий (те, що вже взято, одразу відпускається: інакше зайняте призначення лишило б задачу «зайнятою»
+    назавжди). Усе, що взято, відпускається в ОДНОМУ `finally` — на будь-якому виході з блоку `with`.
+    Порядок без очікування взаємного блокування не дає, але він фіксований: зворотний відпуск (`reversed`) і
+    читання коду не мають залежати від того, котрий замок упіймано першим."""
+    taken = []
+    try:
+        for key in (_task_dir_key(task_dir), _publish_key(folder, tid)):
+            lock = _publish_lock(key)
+            if not lock.acquire(blocking=False):
+                yield False
+                return
+            taken.append(lock)
+        yield True
+    finally:
+        for lock in reversed(taken):
+            lock.release()
 
 
 def publish_with_module(h, prov, payload):
@@ -3265,12 +3314,15 @@ def publish_with_module(h, prov, payload):
     (7) `build_only` — відповідь про збірку; інакше `publish` модуля й `publish_local` в `iterations.json`, коли
     модуль повернув саме `<тека>/<задача>`.
 
-    Збірка й `publish` модуля йдуть ПІД замком призначення (`_publish_key`): збірка стирає й пише
-    `<задача>/publish/`, з якого модуль копіює, — друга публікація тієї самої задачі посеред копіювання
-    лишила б напівзібрану теку. Замок беремо БЕЗ очікування: зайнятий — одразу 409 `publish-busy` (зависла
-    мережева тека не нагромаджує потоки, що чекають, а повторний клік дістає чітку відповідь); це стосується й
-    `build_only`. `publish` кличемо БЕЗ `timeout=`: так виклик іде в робочий потік, а той, що не вклався,
-    копіював би далі вже БЕЗ замка.
+    Збірка й `publish` модуля йдуть ПІД ДВОМА замками (`_try_publish_locks`): (а) тека збірки задачі
+    (`_task_dir_key`) — збірка стирає й пише `<задача>/publish/` незалежно від призначення, а налаштування
+    `folder` могли змінити між двома кліками, тож замок призначення сам двох збірок однієї теки не розвів би;
+    (б) призначення (`_publish_key`) — друга публікація в той самий `<тека>/<задача>` (навіть із ІНШОГО
+    простору) посеред копіювання лишила б напівзібрану теку. Порядок фіксований: спершу (а), потім (б). Замки
+    беремо БЕЗ очікування: зайнятий будь-який — одразу 409 `publish-busy` (зависла мережева тека не нагромаджує
+    потоки, що чекають, а повторний клік дістає чітку відповідь); це стосується й `build_only`. `publish`
+    кличемо БЕЗ `timeout=`: так виклик іде в робочий потік, а той, що не вклався, копіював би далі вже БЕЗ
+    замків.
 
     Ніяких виходів назовні: ні `git_autocommit` (він пушить), ні `_registry_push`, ні `_overview_sync`, ні
     Vercel, ні мережі. `ctx` не серіалізується й не логується: у ньому замикання й клас ядра.
@@ -3285,11 +3337,8 @@ def publish_with_module(h, prov, payload):
         h.send_error(400, 'no iterations marked for publish - '
                           'toggle the green dot first')
         return
-    # Дзеркало правила `static-publish` (`ID_RE`, `MAX_ID`, імена пристроїв Windows): `NAME_RE` сервера пускає
-    # Unicode, а модуль відмовляє такий id вже ПІСЛЯ збірки (502 `module-error`: `rmtree` + повна збірка
-    # задарма) — тож відмовляємо тут, до будь-якої збірки. Змінюючи правило модуля, міняй і цей рядок.
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', tid, re.ASCII) or \
-            re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]', tid, re.ASCII | re.IGNORECASE):
+    # id, який модуль відмовив би, — 400 ДО будь-якої збірки (правило й причина — коло `publish_id_ok`).
+    if not publish_id_ok(tid):
         h._send_json({'ok': False, 'code': 'bad-task-id',
                       'error': 'id задачі не годиться для теки публікації: потрібні лише латинські літери, цифри, '
                                '_ і - (до 128 символів), не імʼя пристрою Windows'}, status=400)
@@ -3301,13 +3350,12 @@ def publish_with_module(h, prov, payload):
         h._send_json({'ok': False, 'code': 'bad-folder', 'error': why}, status=409)
         return
     gate_pw = ctx['secrets'].get('password') or None
-    lock = _publish_lock(_publish_key(folder, tid))
-    if not lock.acquire(blocking=False):
-        h._send_json({'ok': False, 'code': 'publish-busy',
-                      'error': 'ця задача вже публікується в ту саму теку — зачекайте завершення і повторіть'},
-                     status=409)
-        return
-    try:
+    with _try_publish_locks(task['dir'], folder, tid) as got:
+        if not got:
+            h._send_json({'ok': False, 'code': 'publish-busy',
+                          'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
+                         status=409)
+            return
         built = build_preview(task, tid, its, comments=False, gate_pw=gate_pw)
         if payload.get('build_only'):
             result = {'ok': True, **built}
@@ -3318,9 +3366,15 @@ def publish_with_module(h, prov, payload):
             if not isinstance(path, str) or not path:
                 raise deai_modules.ModuleError('module-error', message='publish returned no path')
             # ⛔ Шлях у `local`/`publish_local` — той, що ПЕРЕВІРЕНО й ЗАМКНЕНО: `<тека>/<задача>` (за `realpath`).
-            # Інший — відповідь модуля, якій не вірити: `publish_local` не пишемо.
+            # Інший — відповідь модуля, якій не вірити: `publish_local` не пишемо. Текст чесний: до цього місця
+            # модуль уже ВІДПРАЦЮВАВ, тож файли могли лягти — і в призначення, і за вказаним ним шляхом
+            # (самого шляху в тексті нема: це відповідь модуля, а не те, що ядро перевірило).
             if os.path.realpath(path) != os.path.realpath(os.path.join(folder, tid)):
-                raise deai_modules.ModuleError('module-error', message='publish returned a path outside the destination')
+                raise deai_modules.ModuleError(
+                    'module-error',
+                    message='publish returned a path outside the destination; the module has already run, so '
+                            'files may already have been written (to the destination or elsewhere) — check the '
+                            'publish folder')
             # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: збірка й копіювання тривали, а дизайнер міг за
             # цей час перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на вході,
             # відкотив би її. Пишемо лише своє поле; `publish_url`/`publish_verified` — шлях ЛІГА, не чіпаємо.
@@ -3334,8 +3388,6 @@ def publish_with_module(h, prov, payload):
                       'iterations': built['iterations'], 'frames': built['frames']}
             if 'frames_warnings' in built:
                 result['frames_warnings'] = built['frames_warnings']
-    finally:
-        lock.release()
     stale = server_code_staleness()
     if stale:
         result['code_stale'] = stale
