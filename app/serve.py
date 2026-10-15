@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
+import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 from task_state import task_state  # легкий стан задачі: спільний із пушером реєстру
 # Розбір подій прогресу зʼємки. Формат рядка — контракт МІЖ процесами:
 # пише bin/shots-progress.mjs, читає цей модуль (звірку маркера тримає
@@ -3206,6 +3207,126 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
     return result
 
 
+# ---------------------------------------------------------------------------------------------------
+# Диспетчер ролі `publish` (етап 2а, Task 4b). `Handler._publish` питає `deai_modules.provider('publish')`:
+#   `'legacy'` — зашитий шлях ЛІГА (збірка з коментатором + vercel deploy), відповіді незмінні;
+#   `None`     — 409 `no-publish-module`;
+#   `Module`   — `publish_with_module` нижче: збірка БЕЗ коментатора в локальну теку модуля, без жодного
+#                виходу назовні (ні Vercel, ні дашборд команди, ні реєстр, ні git-пуш, ні мережа).
+# ⛔ Усі помічники — МОДУЛЬНІ функції, а не методи `Handler`: зовнішні заглушки обробника
+# (`boss_autopublish.py`) мають лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод
+# їх зламав би. Обробник `h` сюди передається, але з нього береться лише те, що `_publish` кликав завжди.
+
+def no_publish_module_body():
+    """Тіло 409, коли в просторі нема КОМУ публікувати: простір без інтеграцій, де `static-publish` явно
+    вимкнено (а ЛІГА там нема за побудовою)."""
+    return {'ok': False, 'code': 'no-publish-module',
+            'error': 'у просторі немає модуля публікації — увімкніть його в налаштуваннях простору'}
+
+
+#: Замки публікацій модулем: `{ключ призначення: Lock}`. Ключ — `_publish_key`. Словник росте лише парами
+#: (тека, задача), яких на машині небагато, тож чистити його нема потреби.
+_PUBLISH_LOCKS = {}
+_PUBLISH_LOCKS_GUARD = threading.Lock()
+
+
+def _publish_key(folder, tid):
+    """Ключ замка публікації — ПРИЗНАЧЕННЯ `<тека>/<задача>`, а не пара (простір, задача). Правило `folder_ok`
+    пускає ту саму теку для двох просторів (і тека одного — типова тека іншого), тож задачі `t1` двох просторів
+    діляться одним `<тека>/t1`: замок на (простір, задача) не виключав би їх одну від одної. `realpath` — бо
+    посилання на теку й сама тека суть одне призначення; регістр знімаємо в обох частинах (`casefold`): файлова
+    система macOS не розрізняє `Foo`/`foo`, а зайва серіалізація шкоди не робить (замок лише чекає)."""
+    return (os.path.realpath(folder).casefold(), tid.casefold())
+
+
+def _publish_lock(key):
+    with _PUBLISH_LOCKS_GUARD:
+        lock = _PUBLISH_LOCKS.get(key)
+        if lock is None:
+            lock = _PUBLISH_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def publish_with_module(h, prov, payload):
+    """Гілка `Handler._publish` для простору, де публікує МОДУЛЬ `prov` (`Module` із роллю `publish`).
+
+    Порядок — і він спостережуваний: (1) «жодної ітерації не позначено» — 400 з тим самим текстом, що в ЛІГА, ДО
+    збірки; (2) тека модуля проходить `folder_ok` — інакше 409 `bad-folder` ДО збірки (модуль перевіряє її ще раз
+    сам, але `publish/` до того вже було б зібрано: `rmtree` + повна збірка задарма); (3) `ctx` модуля, пароль —
+    його секрет `password` (порожній рядок = «пароля нема» → `None`: `''` у `build_preview` — гейт, що
+    відчиняється порожнім полем); (4) збірка БЕЗ коментатора; (5) `build_only` — відповідь про збірку; інакше
+    `publish` модуля й `publish_local` в `iterations.json`.
+
+    Збірка й `publish` модуля йдуть ПІД замком призначення (`_publish_key`): збірка стирає й пише
+    `<задача>/publish/`, з якого модуль копіює, — друга публікація тієї самої задачі посеред копіювання
+    лишила б напівзібрану теку. `publish` кличемо БЕЗ `timeout=`: так виклик іде в робочий потік, а той, що
+    не вклався, копіював би далі вже БЕЗ замка.
+
+    Ніяких виходів назовні: ні `git_autocommit` (він пушить), ні `_registry_push`, ні `_overview_sync`, ні
+    Vercel, ні мережі. `ctx` не серіалізується й не логується: у ньому замикання й клас ядра.
+    Помилки модулів (`ModuleError`) летять до `Handler._guarded` — одна відповідь для всіх маршрутів."""
+    space = spaces.active_space()
+    if space is None:
+        h._send_json(no_publish_module_body(), status=409)
+        return
+    tid, task = h._current_task()
+    its = [i for i in load_meta(task).get('iterations', []) if i.get('published')]
+    if not its:
+        h.send_error(400, 'no iterations marked for publish - '
+                          'toggle the green dot first')
+        return
+    folder = deai_modules.published_root(space, prov)
+    ok, why = deai_modules.folder_ok(space, folder)
+    if not ok:
+        h._send_json({'ok': False, 'code': 'bad-folder', 'error': why}, status=409)
+        return
+    ctx = deai_modules.module_ctx(space, prov)
+    gate_pw = ctx['secrets'].get('password') or None
+    with _publish_lock(_publish_key(folder, tid)):
+        built = build_preview(task, tid, its, comments=False, gate_pw=gate_pw)
+        if payload.get('build_only'):
+            result = {'ok': True, **built}
+        else:
+            res = deai_modules.call(prov, 'publish', ctx, built['dir'],
+                                    {'id': tid, 'title': task.get('title', tid), 'dir': task['dir']})
+            path = res.get('path') if isinstance(res, dict) else None
+            if not isinstance(path, str) or not path:
+                raise deai_modules.ModuleError('module-error', message='publish returned no path')
+            # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: збірка й копіювання тривали, а дизайнер міг за
+            # цей час перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на вході,
+            # відкотив би її. Пишемо лише своє поле; `publish_url`/`publish_verified` — шлях ЛІГА, не чіпаємо.
+            meta = load_meta(task)
+            meta['publish_local'] = {'module': prov.id, 'path': path,
+                                     'published_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+            save_meta(task, meta)
+            result = {'ok': True,
+                      'local': {'path': path,
+                                'url': f'/published/{quote(space["id"], safe="")}/{quote(tid, safe="")}/'},
+                      'iterations': built['iterations'], 'frames': built['frames']}
+            if 'frames_warnings' in built:
+                result['frames_warnings'] = built['frames_warnings']
+    stale = server_code_staleness()
+    if stale:
+        result['code_stale'] = stale
+    h._send_json(result)
+
+
+#: `preview_gate` для `/api/task`, коли публікує модуль: ТА САМА форма, що в `preview_gate_state` (UI читає ті
+#: самі ключі), але `state: 'module'` і нулі — локальна збірка без пароля не «ungated» (це не попередження).
+MODULE_GATE_STATE = {'state': 'module', 'stale': 0, 'ungated': 0, 'inner_stale': 0, 'pages': 0}
+
+
+def task_preview_gate(task, pw, space):
+    """`preview_gate` для `/api/task`. Питаємо `deai_modules.capabilities` (ТОТАЛЬНА, не кидає), а не
+    `provider`: зіпсований `space.json` не мусить гасити весь `/api/task`. Шар вимкнено чи простір запиту не
+    зафіксовано — модулів нема (як у `provider`: без читання реєстру й каталогу модулів)."""
+    if space and spaces.layer_on() and spaces.request_space_id() is not None:
+        pub = deai_modules.capabilities(space).get('publish')
+        if pub not in (None, 'legacy'):
+            return dict(MODULE_GATE_STATE)
+    return preview_gate_state(task, pw)
+
+
 def _vercel_project(tid, task):
     """Опакове ім'я Vercel-проєкту для задачі.
 
@@ -3505,6 +3626,12 @@ class Handler(SimpleHTTPRequestHandler):
         | `SpaceUnavailable` (файл простору битий/нема) | 503 `space-unavailable` + `path`   |
         | `SpacesError` (реєстр не прочитати/не записати) | 503 `spaces-unreadable` / `spaces-unwritable` + `path` |
         | `AmbiguousTask` (id у двох просторах) | 409 `ambiguous-task`                        |
+        | `deai_modules.ModuleError` (провайдер ролі, `call`, налаштування модуля) | `e.status` + `e.code`, без `ctx` |
+
+        `ModuleError` кидають `provider()`, `module_ctx`, `published_root` і сам `call` — із багатьох
+        маршрутів; відповідь одна: `{ok: false, code, error}` зі статусом ядра модулів (`deai_modules.STATUS`).
+        Текст `e.message` ядро вже очистило від значень секретів і обрізало до 300 символів, тож `ctx` і
+        налаштування у відповідь не потрапляють НІКОЛИ (ні `ctx`, ні `settings` тут не читаються).
 
         `finally` скидає простір запиту — захист для keep-alive (потік обробника живе довше за
         запит). Мутаційно він не доводиться: `_take_task` і так скидає простір першим рядком."""
@@ -3522,6 +3649,8 @@ class Handler(SimpleHTTPRequestHandler):
             tid = e.args[0] if e.args else ''
             self._space_error(409, 'ambiguous-task',
                               f'task {tid!r} exists in several spaces — rename one of them')
+        except deai_modules.ModuleError as e:
+            self._space_error(e.status, e.code, e.message)
         finally:
             spaces.clear_request_space()
 
@@ -3763,34 +3892,41 @@ class Handler(SimpleHTTPRequestHandler):
             tid, task = self._current_task()
             meta = load_meta(task)
             pw = preview_password(load_tasks(), task)
-            self._send_json({'id': tid, 'title': task.get('title', tid),
-                             'jira': task.get('jira'),
-                             'profile': task.get('profile'),
-                             # Простір задачі (`describe`: id, name, color, path, legacy,
-                             # integrations; `null` — шар вимкнено) і канал коментарів. Канал
-                             # лише з інтеграціями: без них командних коментарів нема, і скіл
-                             # `comments` не мусить вгадувати це зі старого файла.
-                             'space': spaces.describe(spaces.active_space()),
-                             'comment_channel': (comment_channel(task, tid)
-                                                 if spaces.integrations_on() else None),
-                             'iterations': task_api_iterations(meta),
-                             # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
-                             # «своя/чужа» ітерація рахується саме по ньому.
-                             # Імʼя окремо не шлемо — воно вже в кожному записі.
-                             'my_key': machine_identity()[1],
-                             'publish_url': meta.get('publish_url'),
-                             'published_at': meta.get('published_at'),
-                             # пароль потрібен канвасу, щоб зібрати посилання
-                             # «#k=<код>&p=<сторінка>» для менеджера; він і так
-                             # лежить у коді опублікованої сторінки
-                             'preview_password': pw,
-                             # Свій пароль задачі чи спільний типовий — підпис у
-                             # дропдауні публікації не сміє плутати одне з іншим.
-                             'preview_password_custom': bool(task.get('preview_password')),
-                             # Чи ЗІБРАНЕ превʼю вже з цим паролем (на кожній
-                             # сторінці). `stale` — «Копіювати посилання» дало б
-                             # менеджеру ключ, який превʼю не відкриває.
-                             'preview_gate': preview_gate_state(task, pw)})
+            sp = spaces.active_space()
+            out = {'id': tid, 'title': task.get('title', tid),
+                   'jira': task.get('jira'),
+                   'profile': task.get('profile'),
+                   # Простір задачі (`describe`: id, name, color, path, legacy,
+                   # integrations; `null` — шар вимкнено) і канал коментарів. Канал
+                   # лише з інтеграціями: без них командних коментарів нема, і скіл
+                   # `comments` не мусить вгадувати це зі старого файла.
+                   'space': spaces.describe(sp),
+                   'comment_channel': (comment_channel(task, tid)
+                                       if spaces.integrations_on() else None),
+                   'iterations': task_api_iterations(meta),
+                   # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
+                   # «своя/чужа» ітерація рахується саме по ньому.
+                   # Імʼя окремо не шлемо — воно вже в кожному записі.
+                   'my_key': machine_identity()[1],
+                   'publish_url': meta.get('publish_url'),
+                   'published_at': meta.get('published_at'),
+                   # пароль потрібен канвасу, щоб зібрати посилання
+                   # «#k=<код>&p=<сторінка>» для менеджера; він і так
+                   # лежить у коді опублікованої сторінки
+                   'preview_password': pw,
+                   # Свій пароль задачі чи спільний типовий — підпис у
+                   # дропдауні публікації не сміє плутати одне з іншим.
+                   'preview_password_custom': bool(task.get('preview_password')),
+                   # Чи ЗІБРАНЕ превʼю вже з цим паролем (на кожній
+                   # сторінці). `stale` — «Копіювати посилання» дало б
+                   # менеджеру ключ, який превʼю не відкриває. Публікує
+                   # модуль — `state: 'module'` (див. `task_preview_gate`).
+                   'preview_gate': task_preview_gate(task, pw, sp)}
+            # Остання ЛОКАЛЬНА публікація модуля (`{module, path, published_at}`) — лише коли вона була:
+            # відповідь простору з ЛІГА лишається такою, якою була.
+            if meta.get('publish_local'):
+                out['publish_local'] = meta['publish_local']
+            self._send_json(out)
             return
         if self.path == '/api/teams-mute':
             if not spaces.integrations_on():
@@ -4839,9 +4975,15 @@ class Handler(SimpleHTTPRequestHandler):
         if not _local_origin(self.headers.get('Origin')):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
-        if not spaces.integrations_on():
-            # Origin — першим (як у `_teams_mute`): чужа сторінка не дізнається навіть про вимикач.
-            # Пароль — частина публікації (гейт превʼю), а її без інтеграцій нема.
+        # Origin — першим (як у `_teams_mute`): чужа сторінка не дізнається навіть про вимикач.
+        # Цей пароль — гейт ЛІГА-превʼю (`build_preview(comments=True)`); модуль публікації має власний
+        # (секрет `password`), тож для простору, де публікує модуль чи не публікує ніхто, — та сама 409, що й була
+        # без інтеграцій. Нечитабельний `space.json` (`ModuleError`) — теж «не ЛІГА», а не окрема помилка.
+        try:
+            league = deai_modules.provider('publish') == 'legacy'
+        except deai_modules.ModuleError:
+            league = False
+        if not league:
             self._send_json(integrations_off_body('публікація зʼявиться з модулями'), status=409)
             return
         pw, err = check_preview_password(payload.get('password'))
@@ -5455,12 +5597,20 @@ class Handler(SimpleHTTPRequestHandler):
     def _publish(self, payload):
         """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer
         (сама сборка — `build_preview`, общая с модулями публикации).
-        Затем vercel deploy (скриптом, без AI); URL сохраняется в iterations.json."""
-        if not spaces.integrations_on():
-            # ПЕРШИМ рядком, до збірки `publish/` (вона `rmtree`-ить теку): Vercel, npx і дашборд
-            # команди з простору без інтеграцій недосяжні. Лише `self._send_json` — зовнішні
-            # заглушки обробника мають лише його (`_current_task/send_error/_send_json/…`).
-            self._send_json(integrations_off_body('публікація зʼявиться з модулями'), status=409)
+        Затем vercel deploy (скриптом, без AI); URL сохраняется в iterations.json.
+
+        Хто публікує, вирішує `deai_modules.provider('publish')` — ПЕРШИМ рядком, до збірки `publish/` (вона
+        `rmtree`-ить теку): `'legacy'` — цей шлях (простір з інтеграціями, шар вимкнено, простір запиту не
+        зафіксовано — інструменти ЛІГА й зовнішні заглушки обробника); `None` — 409 `no-publish-module`;
+        модуль — `publish_with_module` (локальна тека, нічого назовні). Лише `self._send_json`,
+        `send_error`, `_current_task`, `_overview_sync`: зовнішні заглушки обробника мають лише їх, тож
+        нові помічники — модульні функції."""
+        prov = deai_modules.provider('publish')
+        if prov is None:
+            self._send_json(no_publish_module_body(), status=409)
+            return
+        if prov != 'legacy':
+            publish_with_module(self, prov, payload)
             return
         tid, task = self._current_task()
         meta = load_meta(task)
@@ -5532,10 +5682,14 @@ class Handler(SimpleHTTPRequestHandler):
                         # іншої машини видала б менеджеру друге посилання.
                         _remember_vercel_scope(tid, task, pub)
                         _registry_push(tid)
-                        meta['publish_url'] = url
-                        meta['published_at'] = time.strftime('%d.%m.%Y %H:%M')
-                        meta['publish_verified'] = check.get('verified', False)
-                        save_meta(task, meta)
+                        # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: деплой тривав хвилини, і дизайнер
+                        # міг перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на
+                        # вході (з якого взято `its`), відкотив би її. Пишемо лише власні поля публікації.
+                        fresh = load_meta(task)
+                        fresh['publish_url'] = url
+                        fresh['published_at'] = time.strftime('%d.%m.%Y %H:%M')
+                        fresh['publish_verified'] = check.get('verified', False)
+                        save_meta(task, fresh)
                         result['url'] = url
                         result['deploy_url'] = urls[-1]
                         warn = _preview_domain_warning(url, proj)

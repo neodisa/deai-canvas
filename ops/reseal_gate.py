@@ -75,6 +75,15 @@ def main():
         task = cfg.get("tasks", {}).get(tid)
         if not task:
             print(f"⚠ {tid}: немає в tasks.json"); continue
+        # ⛔ Збірку МОДУЛЯ публікації (`static-publish`) не перепечатуємо й не деплоїмо: вона локальна, і її
+        # гейт — пароль модуля, а не пароль ЛІГА (`preview_gate_state` нижче назвав би його «старим»).
+        # Рішення — за АРТЕФАКТОМ, а не за `iterations.json` (метадані можна втратити, а збірку не
+        # сплутаєш): збірка ЛІГА має `publish/comment-layer/` завжди, збірка модуля (`comments=False`) — ніколи.
+        # Питаємо ПЕРШИМ, до гейта, `rebuild_index` і `deploy`.
+        pub_dir = os.path.join(task["dir"], "publish")
+        if os.path.isdir(pub_dir) and not os.path.isdir(os.path.join(pub_dir, "comment-layer")):
+            print(f"·  {tid}: publish/ — локальна збірка модуля (без comment-layer), не для Vercel — пропуск")
+            continue
         # ⛔ Питаємо ДО перезапису обгортки (ревʼю 1.52): інакше після відмови
         # локальний publish/ уже мав би обгортку з новим паролем, а деплой — ні.
         pw = preview_password(cfg, task)

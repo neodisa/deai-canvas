@@ -852,15 +852,34 @@ class Routes(World):
         st, body = self.jpost('/api/teams-mute', {}, {'Origin': 'https://evil.example'})
         self.assertEqual(st, 403)
 
-    def test_publish_and_preview_password_are_refused(self):
+    def test_publish_works_locally_without_integrations_and_preview_password_is_still_refused(self):
+        # Етап 2а: у просторі без інтеграцій публікує неявний модуль `static-publish` — ЛОКАЛЬНО (тека поза
+        # простором, жодної мережі, жодного Vercel/дашборда); раніше тут була 409 `integrations-off`. Пароль
+        # превʼю — гейт ЛІГА-превʼю, а в модуля публікації свій (секрет), тож цей маршрут лишається закритим.
         self.restore_bytes(self.p_file)
+        self.restore_bytes(os.path.join(self.x_dir, 'iterations.json'))
+        self.addCleanup(shutil.rmtree, os.path.join(self.x_dir, 'publish'), True)
+        self.addCleanup(shutil.rmtree, os.path.join(self.home, 'deai-published'), True)
         before = _bytes(self.p_file)
-        self.assert_off(*self.jpost('/api/publish', {}))
+        st, body = self.jpost('/api/publish', {})
+        self.assertEqual(st, 200, body)
+        want = os.path.join(self.home, 'deai-published', self.p_id, 'x')
+        self.assertEqual(body['local'], {'path': want, 'url': f'/published/{self.p_id}/x/'})
+        self.assertTrue(os.path.isfile(os.path.join(want, 'index.html')))
+        self.assertEqual(_read(os.path.join(self.x_dir, 'iterations.json'))['publish_local']['path'], want)
+        self.assertEqual(self.trip.hits, [], 'публікація модулем вийшла назовні')
         self.assert_off(*self.jpost('/api/preview-password', {'password': 'abcd'}))
         self.assertEqual(self.trip.hits, [])
-        self.assertFalse(os.path.exists(os.path.join(self.x_dir, 'publish')),
-                         'збірка publish/ почалась до відмови')
         self.assertEqual(_bytes(self.p_file), before, 'пароль превʼю записано в простір без інтеграцій')
+        # без позначених ітерацій — те саме 400, що й у ЛІГА, і збірки нема
+        _write(os.path.join(self.x_dir, 'iterations.json'),
+               {'iterations': [{'id': 'it1', 'date': '01.01.2026 10:00', 'note': 'start', 'published': False}],
+                'publish_url': None})
+        shutil.rmtree(os.path.join(self.x_dir, 'publish'), True)
+        st, body = self.post('/api/publish', {})
+        self.assertEqual(st, 400, body)
+        self.assertFalse(os.path.exists(os.path.join(self.x_dir, 'publish')), 'збірка publish/ почалась до відмови')
+        self.assertEqual(self.trip.hits, [])
         # контроль: у просторі з інтеграціями публікація доходить далі (тут — до «нема що
         # публікувати», бо ітерація `a` не позначена), а пароль записується
         self.restore_bytes(self.legacy_file)
