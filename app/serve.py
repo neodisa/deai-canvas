@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -84,7 +85,7 @@ _TUNER_LOCK = threading.Lock()
 # немає, фолбек у Routed.do_GET намагається віддати як статику з теки ітерації,
 # визначеної з Referer — і тоді власні перевірки обробника не діють. Саме розбіжність
 # між цим переліком і ланцюгом if у do_GET дала перехоплення /shot.
-HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot')
+HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published')
 
 # Репо макетов по направлению (profile). Структура у всех одна — mockup/<task-id>,
 # поэтому направления разъезжаются только репозиторием, а не логикой.
@@ -5798,11 +5799,146 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json(result)
 
 
+# ---------------------------------------------------------------------------------------------------
+# Роздача опублікованого (етап 2а, Task 5): `GET /published/<простір>/<задача>/<файл>` віддає те, що
+# `static-publish` поклав у теку публікації, — у ПІСОЧНИЦІ. Тека лежить ПОЗА простором, тож «що дозволено»
+# вирішують не права ФС, а ці перевірки; кожна НЕпройдена — той самий порожній 404 (`not found`): ні шляху, ні
+# причини, ні `space-json-unreadable` (статичний файл у чужій сторінці не сміє розповідати про машину).
+
+#: Заголовки КОЖНОЇ відповіді `/published/…` (200, 304, переадресація, 404).
+#:  * `sandbox …` БЕЗ `allow-same-origin` — документ дістає непрозорий (opaque) origin: сторінка превʼю не бачить
+#:    ні `localStorage` канваса, ні його cookie, а її `fetch` до API канваса йде з `Origin: null`, який `do_POST`
+#:    відхиляє (403, `_local_origin`). Скрипти й форми дозволені — макети живі;
+#:  * `nosniff` — файл не стане скриптом чи HTML лише через вміст;
+#:  * `Access-Control-Allow-Origin: *` — без нього в непрозорому origin не вантажаться ні `<script type=module>`
+#:    (модульні скрипти завжди CORS), ні `fetch('manifest.json')`, ні шрифти.
+PUBLISHED_HEADERS = (
+    ('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups'),
+    ('X-Content-Type-Options', 'nosniff'),
+    ('Access-Control-Allow-Origin', '*'),
+)
+PUBLISHED_PREFIX = '/published/'
+#: Роздає лише ТЕ, що публікує цей модуль (інший publisher простору — ЛІГА, інший модуль — не наш файловий формат).
+PUBLISHED_MODULE = 'static-publish'
+#: Маркер, яким модуль позначає свої теки (`MARKER` у `modules/static-publish/server.py`): без нього теку НЕ
+#: віддаємо. Налаштування `folder` може вказувати на теку з чужим вмістом (вона пройшла `folder_ok`), а `*` у
+#: CORS дав би його читати будь-якій сторінці; модуль так само не чіпає немарковану теку. Паритет стереже тест.
+PUBLISHED_MARKER = '.deai-published'
+
+
+def _published_segments(path):
+    """`/published/<простір>/<задача>/<rel…>` → `(простір, задача, [rel…], зі_слешем)` або `None`.
+
+    `unquote` — КОЖНОГО сегмента окремо й суворо (`errors='strict'`: `%ff`, `%c0%af` — не U+FFFD, а відмова):
+    `%2f` усередині сегмента лишається слешем ВСЕРЕДИНІ імені, тож не створює ні сегмента, ні виходу за теку;
+    `%00` теж відмова. Кожен сегмент `rel` — непорожній, БЕЗ крапки на початку (`.`/`..`, `.deai-published`,
+    `.tmp-*`/`.old-*`, будь-який прихований файл), без `/`, `\\` (роздільник Windows), `:` (диск і потік NTFS
+    `a::$DATA`) і керівних символів. Порожній лише останній (завершальний `/`)."""
+    if not path.startswith(PUBLISHED_PREFIX):
+        return None
+    try:
+        parts = [unquote(p, errors='strict') for p in path[len(PUBLISHED_PREFIX):].split('/')]
+    except ValueError:                                    # UnicodeDecodeError — підклас ValueError
+        return None
+    if len(parts) < 2:
+        return None
+    sid, tid, rel = parts[0], parts[1], parts[2:]
+    trailing = bool(rel) and rel[-1] == ''
+    if trailing:
+        rel = rel[:-1]
+    for seg in rel:
+        if (not seg or seg.startswith('.') or any(c in '/\\:' or ord(c) < 32 or ord(c) == 127 for c in seg)):
+            return None
+    return sid, tid, rel, trailing
+
+
+def _published_marked(base):
+    """У теці `base` є маркер модуля — ЗВИЧАЙНИЙ файл (посилання на чужий файл маркером не вважаємо)."""
+    try:
+        return stat.S_ISREG(os.lstat(os.path.join(base, PUBLISHED_MARKER)).st_mode)
+    except OSError:
+        return False
+
+
+def _published_inside(real_base, path):
+    """`realpath(path)` лежить у `real_base` (чи дорівнює йому). Друга лінія за перевіркою посилань: теки-стики
+    (junction) Windows `os.path.islink` посиланням не вважає, а `realpath` веде за межі."""
+    real, base = os.path.normcase(os.path.realpath(path)), os.path.normcase(real_base)
+    return real == base or real.startswith(base + os.sep)
+
+
+def published_target(path):
+    """Що відповісти на `GET path` (шлях БЕЗ `?query`): `('file', абсолютний_шлях)`, `('redirect', '<шлях>/')`
+    або `None` (404). НІКОЛИ не кидає: будь-який виняток (зіпсований `space.json`, реєстр, `ModuleError`, помилка
+    ФС) — теж `None`.
+
+    Порядок — від дешевого до дорогого, і ДО першого читання диска сегменти вже синтаксично чисті:
+      1. сегменти (`_published_segments`), id простору — `spaces.SPACE_ID_RE`, id задачі — `publish_id_ok` (те
+         саме правило, що в диспетчері: опублікувати можна лише такі id, тож інші й не віддаємо);
+      2. ПРОСТІР — З URL (реєстр, лише читання), а не простір запиту: `X-Canvas-Task`, поточний простір машини
+         і навіть нечитабельний реєстр запиту тут нічого не вирішують;
+      3. його publisher — `static-publish` (простір із ЛІГА чи без модуля — 404);
+      4. тека — `published_root` ЗАНОВО на кожен запит (не `publish_local.path`: налаштування могли змінити), і
+         `folder_ok` на КОЖНУ видачу (`folder_inputs()` — раз на запит);
+      5. `<тека>/<задача>` — справжня тека (не посилання) з маркером модуля; жодного посилання на шляху вниз до
+         файла (`islink` кожної складової), і `realpath` файла всередині `realpath(<тека>/<задача>)`;
+      6. тека без завершального `/` — переадресація; з ним — її `index.html` (нема — 404).
+    Зазор між перевіркою й читанням (хтось підмінив файл посиланням за мікросекунди) тут прийнятий: писар теки —
+    сама людина чи модуль, не недовірений клієнт."""
+    try:
+        segs = _published_segments(path)
+        if segs is None:
+            return None
+        sid, tid, rel, trailing = segs
+        if not spaces.SPACE_ID_RE.fullmatch(sid) or not publish_id_ok(tid):
+            return None
+        space = next((sp for sp in spaces.read_registry()['spaces'] if sp.get('id') == sid), None)
+        if space is None:
+            return None
+        prov = deai_modules.provider('publish', space)
+        if not isinstance(prov, deai_modules.Module) or prov.id != PUBLISHED_MODULE:
+            return None
+        folder = deai_modules.published_root(space, prov)
+        inputs = deai_modules.folder_inputs()
+        if not isinstance(folder, str) or not folder or inputs is None:
+            return None
+        if not deai_modules.folder_ok(space, folder, reg=inputs[0], task_dirs=inputs[1])[0]:
+            return None
+        base = os.path.join(folder, tid)
+        if os.path.islink(base) or not os.path.isdir(base) or not _published_marked(base):
+            return None
+        real_base = os.path.realpath(base)
+        target = base
+        for seg in rel:
+            target = os.path.join(target, seg)
+            if os.path.islink(target):
+                return None
+        if os.path.isdir(target):
+            if not trailing:
+                return 'redirect', ''.join(['/published/', quote(sid, safe=''), '/', quote(tid, safe=''), '/',
+                                            *(quote(seg, safe='') + '/' for seg in rel)])
+            target = os.path.join(target, 'index.html')
+            if os.path.islink(target):
+                return None
+        elif trailing:
+            return None
+        if os.path.isfile(target) and _published_inside(real_base, target):
+            return 'file', target
+        return None
+    except Exception:  # noqa: BLE001 — статичний файл для чужої сторінки не розповідає, що саме зламалось
+        return None
+
+
 def make_server(port=0):
     handler = Handler
     # /it-assets/<it>/... — статика итераций текущей задачи
     class Routed(handler):
-        def _send_iter_file(self, target):
+        def _send_iter_file(self, target, extra_headers=(), utf8=False):
+            # `extra_headers` — пари (імʼя, значення) на КОЖНУ відповідь цього файла, і на 304 теж (`/published`:
+            # захисні заголовки сторінки в пісочниці; 304 без них лишив би кеш без захисту). `utf8` — текстовим
+            # типам дописати `; charset=utf-8` (`/published`: сторінки збірка пише в UTF-8, а без `<meta charset>`
+            # у макеті браузер читав би їх як windows-1252 — гейт-оверлей, який вкладаємо МИ, виходив кракозябрами;
+            # Vercel віддає статику так само, з charset).
             # ВАЛІДАТОР. Без нього `Cache-Control: no-cache` (його дописує
             # `end_headers`) означає «тягни заново ЩОРАЗУ»: кожне відкриття
             # макета перекачувало кожен шрифт і кожну іконку з кодом 200. Для
@@ -5827,6 +5963,8 @@ def make_server(port=0):
                 if etag in [x.strip() for x in inm.split(',') if x.strip()]:
                     self.send_response(304)
                     self.send_header('ETag', etag)
+                    for key, value in extra_headers:
+                        self.send_header(key, value)
                     self.end_headers()
                     return
             with open(target, 'rb') as f:
@@ -5843,10 +5981,56 @@ def make_server(port=0):
                 ctype = ctype[0]
             if target.endswith('.js') or target.endswith('.mjs'):
                 ctype = 'text/javascript'
+            if utf8 and ctype and ctype.startswith('text/'):
+                ctype += '; charset=utf-8'
             self.send_header('Content-Type', ctype or 'application/octet-stream')
             self.send_header('Content-Length', str(len(data)))
+            for key, value in extra_headers:
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_published_404(self):
+            """404 `/published/…`: ті самі захисні заголовки й ПОРОЖНЯ відповідь — без шляху, без причини."""
+            body = b'not found\n'
+            self.send_response(404)
+            for key, value in PUBLISHED_HEADERS:
+                self.send_header(key, value)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_published(self):
+            """`GET /published/…` (рішення — `published_target`; кожна відмова — `_send_published_404`).
+            Переадресація зберігає `?query`: кладемо його в `Location` ПЕРЕКОДОВАНИМ (`#`, пробіл і не-ASCII
+            стають `%XX`), а шлях — зібраним з уже перевірених сегментів, тож `Location` завжди лишається
+            у `/published/…` на тому ж origin (не `//хост`, не CRLF)."""
+            path, _, query = self.path.partition('?')
+            found = published_target(path)
+            if found is None:
+                self._send_published_404()
+                return
+            kind, value = found
+            if kind == 'redirect':
+                if query:
+                    value += '?' + quote(query, safe="%/?:@&=+$,;!*'()~")
+                self.send_response(301)
+                self.send_header('Location', value)
+                self.send_header('Content-Length', '0')
+                for key, hv in PUBLISHED_HEADERS:
+                    self.send_header(key, hv)
+                self.end_headers()
+                return
+            try:
+                self._send_iter_file(value, extra_headers=PUBLISHED_HEADERS, utf8=True)
+            except OSError:
+                # файл зник між перевіркою й читанням (публікація посеред заміни теки): 404, якщо відповідь
+                # ще не почата; почату обриваємо (друга відповідь поверх першої зіпсувала б потік)
+                if self._resp_started:
+                    self.close_connection = True
+                else:
+                    self._send_published_404()
 
         def _serve_from_iteration(self, it, rel):
             _, task = self._current_task()
@@ -5900,6 +6084,13 @@ def make_server(port=0):
 
         @_guarded_request
         def do_GET(self):
+            # ⛔ `/published/…` — ДО `_take_task`: простір тут бере URL, а не запит. Задача запиту (`X-Canvas-Task`,
+            # `/t/<id>/`) і поточний простір машини не мають значення, а нечитабельний реєстр чи невідома задача
+            # дали б JSON-відмову (503/404/400) БЕЗ захисних заголовків і з шляхом — для статичного файла в
+            # пісочниці це витік; `published_target` усі відмови зводить до порожнього 404.
+            if self.path.split('?')[0] == '/published' or self.path.startswith(PUBLISHED_PREFIX):
+                self._serve_published()
+                return
             # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
             # вдруге її не бере (префікс уже знято з `self.path`).
             if not self._take_task():

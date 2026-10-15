@@ -33,6 +33,7 @@ Task 4b (`Dispatch`, `ResealModuleBuilds`, один тест у `BuildPreview`) 
 """
 import contextlib
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -606,9 +607,10 @@ class _Stub:
         self.overview += 1
 
 
-class Dispatch(unittest.TestCase):
-    """Світ: шар просторів увімкнено; `off` (без інтеграцій, задача `tx`, поточний) і `on` (з інтеграціями,
-    задача `ty`); сервер у процесі; розтяжка; шпигуни за точками виходу ЛІГА."""
+class DispatchWorld(unittest.TestCase):
+    """Світ (без тестів — їх додають `Dispatch` і `PublishedRoute`): шар просторів увімкнено; `off` (без
+    інтеграцій, задача `tx`, поточний) і `on` (з інтеграціями, задача `ty`); сервер у процесі; розтяжка;
+    шпигуни за точками виходу ЛІГА."""
 
     def setUp(self):
         self.tmp = os.path.realpath(tempfile.mkdtemp(prefix='dc-disp-'))
@@ -720,6 +722,10 @@ class Dispatch(unittest.TestCase):
 
     def assert_nothing_built(self):
         self.assertFalse(os.path.exists(os.path.join(self.tx_dir, 'publish')), 'publish/ зібрано до відмови')
+
+
+class Dispatch(DispatchWorld):
+    """Диспетчер ролі `publish` у `Handler._publish` (Task 4b): хто публікує, куди, під якими замками."""
 
     # ---- публікація у простір без інтеграцій ----
 
@@ -1448,6 +1454,416 @@ class TaskIdParity(unittest.TestCase):
         for tid in refused:
             self.assertFalse(serve.publish_id_ok(tid), repr(tid))
             self.assertFalse(self._module_accepts(tid), repr(tid))
+
+
+class PublishedRoute(DispatchWorld):
+    """Роздача опублікованого: `GET /published/<простір>/<задача>/<файл>` (Task 5).
+
+    Світ — той самий, що в `Dispatch`; у `setUp` задача `tx` простору `off` публікується справжнім модулем
+    (`static-publish`) у `<домівка>/deai-published/off/tx`. Усе, що не має віддаватись, ЛЕЖИТЬ на диску (файл за
+    посиланням, крапковий файл, тека не того id…) — «404» там, де нічого нема, нічого б не доводило; а контроль
+    поруч доводить, що сам файл віддавався б.
+
+    Відповіді зчитуються `http.client`-ом із сирим шляхом (urllib склав би `..` і не дав би перевірити `%2e%2e`)
+    і БЕЗ слідування за переадресацією."""
+
+    CSP = 'sandbox allow-scripts allow-forms allow-popups'
+
+    def setUp(self):
+        super().setUp()
+        st, body = self.post('/api/publish')
+        self.assertEqual(st, 200, body)
+        self.root = '/published/off/tx/'
+        self.addCleanup(self.assert_quiet)          # розтяжка й шпигуни — після КОЖНОГО тесту: роздача нічого не кличе назовні
+
+    # ---- допоміжне ----
+
+    def fetch(self, path, headers=None):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)
+        try:
+            conn.request('GET', path, headers=headers or {})
+            r = conn.getresponse()
+            return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+        finally:
+            conn.close()
+
+    def assert_sandboxed(self, hd, what=''):
+        self.assertEqual(hd.get('content-security-policy'), self.CSP, f'CSP: {what}')
+        self.assertEqual(hd.get('x-content-type-options'), 'nosniff', f'nosniff: {what}')
+        self.assertEqual(hd.get('access-control-allow-origin'), '*', f'ACAO: {what}')
+
+    def ok(self, path, headers=None):
+        st, hd, body = self.fetch(path, headers)
+        self.assertEqual(st, 200, f'{path} → {st}')
+        self.assert_sandboxed(hd, path)
+        return hd, body
+
+    def gone(self, path, headers=None):
+        """404 БЕЗ подробиць (ні шляху, ні причини) і з тими самими захисними заголовками."""
+        st, hd, body = self.fetch(path, headers)
+        self.assertEqual(st, 404, f'{path} → {st}')
+        self.assert_sandboxed(hd, path)
+        self.assertEqual(body, b'not found\n', f'{path}: тіло 404 несе подробиці')
+        return hd
+
+    def put(self, path, text='x', mode='w'):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, mode, encoding=None if 'b' in mode else 'utf-8') as fh:
+            fh.write(text)
+        return path
+
+    # ---- що віддається ----
+
+    def test_the_wrapper_a_page_a_module_script_a_style_and_the_manifest_are_served(self):
+        hd, body = self.ok(self.root)
+        self.assertEqual((hd['content-type'], body), ('text/html; charset=utf-8', _bytes(os.path.join(self.dest, 'index.html'))))
+        self.assertEqual(self.ok(self.root + 'index.html')[1], body)
+        for rel in SOURCE_PAGES:
+            hd, body = self.ok(self.root + rel)
+            self.assertEqual((hd['content-type'], body), ('text/html; charset=utf-8', _bytes(os.path.join(self.dest, rel))), rel)
+        scripts = sorted(n for n in os.listdir(os.path.join(self.dest, 'shell')) if n.endswith('.js'))
+        self.assertIn('ext-shell.js', scripts)
+        for name in scripts:                        # `<script type=module>` без JS-MIME браузер відкидає
+            hd, body = self.ok(f'{self.root}shell/{name}')
+            self.assertEqual(hd['content-type'], 'text/javascript; charset=utf-8', name)
+            self.assertEqual(body, _bytes(os.path.join(self.dest, 'shell', name)), name)
+        hd, body = self.ok(self.root + 'shell/styles.css')
+        self.assertEqual(hd['content-type'], 'text/css; charset=utf-8')
+        hd, body = self.ok(self.root + 'manifest.json')
+        self.assertEqual(hd['content-type'], 'application/json')
+        self.assertEqual(json.loads(body), json.loads(_read(os.path.join(self.dest, 'manifest.json'))))
+
+    def test_a_page_without_meta_charset_is_served_as_utf8(self):
+        """Збірка пише сторінки в UTF-8, а макет може не мати `<meta charset>`: без `charset` у заголовку браузер
+        читав би їх як windows-1252, і гейт-оверлей, що його вкладаємо МИ (українською), виходив кракозябрами —
+        це видно було в живому браузері. Тут сторінка має кирилицю й не має `<meta charset>`."""
+        page = _bytes(os.path.join(self.dest, 'it2', 'index.html'))
+        self.assertNotIn(b'charset', page.lower(), 'свідок: у сторінці нема своєї кодировки')
+        self.put(os.path.join(self.dest, 'it2', 'cyr.html'), '<p>Привіт</p>')
+        hd, body = self.ok(self.root + 'it2/cyr.html')
+        self.assertEqual(hd['content-type'], 'text/html; charset=utf-8')
+        self.assertEqual(body.decode('utf-8'), '<p>Привіт</p>')
+        self.assertEqual(self.ok(self.root + 'manifest.json')[0]['content-type'], 'application/json')   # JSON — без charset
+
+    def test_percent_encoding_is_decoded_per_segment(self):
+        self.ok('/published/%6ff%66/%74x/%69ndex.html')                  # `off`, `tx`, `index.html`
+        self.ok('/published/off/tx/it1/%61lpha/index.html')
+
+    def test_a_directory_with_a_slash_serves_its_index_and_without_one_redirects_keeping_the_query(self):
+        self.assertEqual(self.ok(self.root + 'it1/alpha/')[1], _bytes(os.path.join(self.dest, 'it1', 'alpha', 'index.html')))
+        for path, want in (('/published/off/tx', '/published/off/tx/'),
+                           ('/published/off/tx?a=1&b=%D0%B6', '/published/off/tx/?a=1&b=%D0%B6'),
+                           ('/published/off/tx/it1/alpha', '/published/off/tx/it1/alpha/'),
+                           ('/published/off/tx/it1/alpha?z=1', '/published/off/tx/it1/alpha/?z=1'),
+                           ('/published/off/tx/it1/alpha?', '/published/off/tx/it1/alpha/')):
+            with self.subTest(path=path):
+                st, hd, body = self.fetch(path)
+                self.assertIn(st, (301, 302), path)
+                self.assertEqual(hd['location'], want)
+                self.assert_sandboxed(hd, path)
+        # тека без `index.html`: перенаправлення на `…/`, а там 404 (не нескінченний цикл)
+        self.put(os.path.join(self.dest, 'bare', 'a.txt'))                  # тека без index.html
+        self.assertEqual(self.fetch(self.root + 'bare')[0], 301)
+        self.gone(self.root + 'bare/')
+        self.gone(self.root + 'index.html/')                                # файл зі слешем — не файл
+        self.gone(self.root + 'no-such.html')
+        self.gone(self.root + 'no-such/')
+
+    def test_every_response_is_sandboxed_200_304_redirect_and_404(self):
+        hd, _ = self.ok(self.root + 'manifest.json')
+        etag = hd['etag']
+        st, hd2, body = self.fetch(self.root + 'manifest.json', {'If-None-Match': etag})
+        self.assertEqual((st, body), (304, b''))
+        self.assertEqual(hd2['etag'], etag)
+        self.assert_sandboxed(hd2, '304')
+        st, hd3, _ = self.fetch(self.root + 'manifest.json', {'If-None-Match': '"other"'})
+        self.assertEqual(st, 200, 'чужий ETag не дає 304')
+        self.assert_sandboxed(hd3, '200 після чужого ETag')
+        st, hd4, _ = self.fetch('/published/off/tx')
+        self.assertIn(st, (301, 302))
+        self.assert_sandboxed(hd4, 'redirect')
+        self.gone(self.root + 'nope.txt')                                   # 404 у межах опублікованого
+        self.gone('/published/nope/tx/')                                    # 404 до жодного читання теки
+        self.gone('/published/')
+        self.gone('/published')
+
+    def test_the_content_type_of_a_404_is_plain_text(self):
+        hd = self.gone(self.root + 'nope.txt')
+        self.assertEqual(hd['content-type'], 'text/plain; charset=utf-8')
+
+    # ---- чия це теки, і чи вона ще дозволена ----
+
+    def test_a_space_whose_publisher_is_not_static_publish_serves_nothing(self):
+        """`on` має інтеграції → publisher `'legacy'` (ЛІГА): `/published/on/…` не віддає нічого, хоч файли ЛЕЖАТЬ у
+        типовій теці модуля. Контроль: явно ввімкнений `static-publish` у `on` — і той самий файл віддається."""
+        on_dest = os.path.join(self.home, 'deai-published', 'on', 'ty')
+        self.put(os.path.join(on_dest, 'index.html'), 'on-index')
+        self.put(os.path.join(on_dest, '.deai-published'), 'marker')
+        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        self.gone('/published/on/ty/')
+        self.gone('/published/on/ty/index.html')
+        dm.write_module_state(self.on, MID, enabled=True)
+        self.assertEqual(self.ok('/published/on/ty/index.html')[1], b'on-index')
+
+    def test_a_space_where_the_module_is_switched_off_serves_nothing_any_more(self):
+        self.ok(self.root + 'manifest.json')
+        dm.write_module_state(self.off, MID, enabled=False)
+        self.gone(self.root + 'manifest.json')
+        self.gone(self.root)
+        dm.write_module_state(self.off, MID, enabled=True)
+        self.ok(self.root + 'manifest.json')
+
+    def test_an_unknown_space_or_task_is_404(self):
+        for path in ('/published/nope/tx/manifest.json', '/published/OFF/tx/manifest.json',
+                     '/published/off/nope/manifest.json',
+                     '/published/off//manifest.json', '/published//tx/manifest.json', '/published/off',
+                     '/published/off/', '/published/o%66f/tx/%2e/manifest.json'):
+            with self.subTest(path=path):
+                self.gone(path)
+
+    def test_the_space_comes_from_the_url_not_from_the_request(self):
+        """`/published/<простір>/…` вирішує URL: ні поточний простір машини, ні `X-Canvas-Task` (навіть невідомий чи
+        порожній — на API це 404/400) не мають значення. Тут два простори зі СВОЇМИ теками й задачами."""
+        self._register(self._space('s2', os.path.join(self.home, 'deai-work', 's2'), False, 't2'))
+        st, body = self.post('/api/publish', headers={'X-Canvas-Task': 't2'})
+        self.assertEqual(st, 200, body)
+        s2_dest = os.path.join(self.home, 'deai-published', 's2', 't2')
+        self.assertEqual(body['local']['path'], s2_dest)
+        self.put(os.path.join(self.dest, 'who.txt'), 'off/tx')
+        self.put(os.path.join(s2_dest, 'who.txt'), 's2/t2')
+        for headers in ({}, {'X-Canvas-Task': 'tx'}, {'X-Canvas-Task': 't2'}, {'X-Canvas-Task': 'no-such-task'},
+                        {'X-Canvas-Task': ''}, {'X-Canvas-Task': ' '}):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.ok('/published/s2/t2/who.txt', headers)[1], b's2/t2')
+                self.assertEqual(self.ok('/published/off/tx/who.txt', headers)[1], b'off/tx')
+                self.gone('/published/s2/tx/who.txt', headers)              # задача іншого простору тут не існує
+                self.gone('/published/off/t2/who.txt', headers)
+
+    def test_a_referer_from_an_iteration_changes_nothing(self):
+        """Усе поза `HANDLED_PREFIXES` статичний фолбек віддає з теки ітерації за Referer. Приманки лежать в самій
+        ітерації: `published/off/tx/decoy.txt` (шлях роздачі) і `publishedx` (лише ПРЕФІКС: його тримає саме
+        запис `/published` у переліку)."""
+        self.assertIn('/published', serve.HANDLED_PREFIXES)
+        it1 = os.path.join(self.tx_dir, 'iterations', 'it1')
+        self.put(os.path.join(it1, 'published', 'off', 'tx', 'decoy.txt'), 'DECOY')
+        self.put(os.path.join(it1, 'publishedx'), 'DECOY')
+        ref = {'Referer': f'{self.base}/it-assets/it1/alpha/index.html'}
+        control = self.fetch('/it-assets/it1/publishedx', ref)
+        self.assertEqual((control[0], control[2]), (200, b'DECOY'), 'свідок: через /it-assets приманка віддається')
+        self.gone(self.root + 'decoy.txt', ref)
+        st, _, body = self.fetch('/publishedx', ref)
+        self.assertNotEqual(body, b'DECOY', '/publishedx віддано з теки ітерації за Referer')
+        self.assertEqual(self.ok(self.root + 'it2/index.html', ref)[1], _bytes(os.path.join(self.dest, 'it2', 'index.html')))
+
+    def test_a_folder_the_rules_refuse_serves_nothing_even_if_the_task_dir_looks_published(self):
+        """Правило теки (`folder_ok`) діє на КОЖНУ видачу, а не лише при публікації: налаштування змінили на теку,
+        яку вона відмовила б, — і те, що там лежить (файли задачі!), не віддається. Марковану теку задачі кладемо
+        самі, щоб між файлом і відповіддю стояло лише правило теки."""
+        self.ok(self.root + 'manifest.json')
+        bad = {'тека простору': self.off_path, 'домівка': self.home, 'усередині DEAI_HOME': os.path.join(self.deai, 'pub'),
+               'тека інструмента': os.path.join(self.tool, 'pub')}
+        for what, folder in bad.items():
+            with self.subTest(what):
+                self.put(os.path.join(folder, 'tx', '.deai-published'), 'marker')
+                self.put(os.path.join(folder, 'tx', 'secret.txt'), 'сек')
+                self.set_folder(folder)
+                self.assertFalse(dm.folder_ok(self.off, folder)[0], 'свідок: правило справді відмовляє цю теку')
+                self.gone(self.root + 'secret.txt')
+                self.gone(self.root)
+        self.set_folder(os.path.join(self.home, 'deai-published', 'off'))
+        self.ok(self.root + 'manifest.json')
+
+    def test_unreadable_inputs_of_the_folder_rules_serve_nothing(self):
+        self.ok(self.root + 'manifest.json')
+        with mock.patch.object(dm, 'folder_inputs', return_value=None):
+            self.gone(self.root + 'manifest.json')
+        self.ok(self.root + 'manifest.json')
+
+    def test_a_broken_space_json_is_404_without_details(self):
+        self.put(os.path.join(self.off_path, 'space.json'), '{ не json')
+        for path in (self.root + 'manifest.json', self.root, self.root + 'index.html', self.root + 'shell/ext-shell.js'):
+            self.gone(path)                                     # `gone` вимагає порожнє тіло: ні шляху, ні причини
+
+    def test_a_broken_registry_is_404_not_a_503_with_a_path(self):
+        """На API нечитабельний реєстр — 503 `spaces-unreadable` із шляхом; для статичного файла в пісочниці це
+        витік подробиць (і сторінка в iframe показала б шлях), тож тут — той самий порожній 404."""
+        self.put(os.path.join(self.deai, 'spaces.json'), '{')
+        self.gone(self.root + 'manifest.json')
+        self.gone('/published/off/tx/')
+        st, _, _ = self.fetch('/api/task')
+        self.assertEqual(st, 503, 'свідок: API на тому самому реєстрі справді 503')
+
+    # ---- вихід за межі ----
+
+    def test_traversal_in_any_spelling_is_404(self):
+        secret = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        self.put(os.path.join(self.folder, 'sibling', 'index.html'), 'SIBLING')           # сусідня задача:
+        self.put(os.path.join(self.folder, 'sibling', '.deai-published'), 'm')            # сама по собі віддається
+        self.assertEqual(self.ok('/published/off/sibling/index.html')[1], b'SIBLING')     # контроль
+        self.assertEqual(self.ok(self.root + 'manifest.json')[0]['content-type'], 'application/json')    # контроль
+        self.assertTrue(os.path.isfile(secret))
+        for path in ('/published/off/tx/../secret.txt', '/published/off/tx/%2e%2e/secret.txt',
+                     '/published/off/tx/%2E%2E/secret.txt', '/published/off/tx/..%2fsecret.txt',
+                     '/published/off/tx/%2e%2e%2fsecret.txt', '/published/off/tx/%2e%2e%5csecret.txt',
+                     '/published/off/tx/..%5csecret.txt', '/published/off/tx/.%2e/secret.txt',
+                     '/published/off/%2e%2e/off/tx/manifest.json', '/published/off/tx/it1/../manifest.json',
+                     '/published/off/tx/./manifest.json', '/published/off/tx/%2e/manifest.json',
+                     '/published/off/..%2ftx/manifest.json', '/published/off%2ftx/manifest.json',
+                     '/published/off/tx%2fmanifest.json', '/published/off/tx/it1%2f..%2fmanifest.json',
+                     '/published/off/tx/%252e%252e/secret.txt', '/published/off/tx//manifest.json',
+                     '/published/off/tx/it1//alpha/index.html', '/published/off/tx/%2fsecret.txt',
+                     '/published/off/tx/../sibling/index.html', '/published/off/tx/%2e%2e/sibling/index.html'):
+            with self.subTest(path=path):
+                self.gone(path)
+        # `%2f` усередині сегмента не стає сегментом: це ОДНЕ імʼя `it1/alpha/index.html`, а не шлях до сторінки
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, 'it1', 'alpha', 'index.html')))
+        self.gone('/published/off/tx/it1%2falpha%2findex.html')
+
+    def test_broken_encodings_are_404(self):
+        for path in ('/published/off/tx/%00', '/published/off/tx/manifest.json%00', '/published/off/tx/%00manifest.json',
+                     '/published/off/tx/%ff', '/published/off/tx/%c0%af', '/published/off/tx/%', '/published/off/tx/%zz',
+                     '/published/off/tx/%1fmanifest.json', '/published/off/tx/%7fmanifest.json',
+                     '/published/off/tx/a%3ab', '/published/off/%00/manifest.json', '/published/%ff/tx/', '/published/off/%ff/'):
+            with self.subTest(path=path):
+                self.gone(path)
+
+    def test_an_invalid_utf8_escape_does_not_alias_a_file_named_with_the_replacement_character(self):
+        """`%ff` — не UTF-8: `unquote` без `errors='strict'` дав би U+FFFD, тобто адресу ІНШОГО (наявного) файла."""
+        self.put(os.path.join(self.dest, '\ufffd.txt'), 'REPL')
+        self.assertEqual(self.ok(self.root + '%EF%BF%BD.txt')[1], b'REPL')                  # контроль: справжній U+FFFD
+        self.gone(self.root + '%ff.txt')
+        self.gone(self.root + '%c0%af.txt')
+
+    def test_windows_separators_and_stream_syntax_are_refused_even_where_the_name_is_legal(self):
+        """`\\` і `:` — законні в імені на POSIX, але на Windows це роздільник і потік NTFS (`a::$DATA`); сегмент із
+        ними не віддаємо ніде: роздача мусить поводитись однаково на обох системах."""
+        for name in ('we\\ird.txt', 'co:lon.txt'):
+            self.put(os.path.join(self.dest, name), 'ODD')
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, name)), f'свідок: файл {name!r} існує')
+            self.gone(self.root + urllib.parse.quote(name, safe=''))
+        self.gone(self.root + 'it1%5c..%5cmanifest.json')
+
+    def test_a_symlink_file_is_404_even_when_it_points_inside_the_published_folder(self):
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        os.symlink(outside, os.path.join(self.dest, 'out.txt'))                       # назовні
+        os.symlink(os.path.join(self.dest, 'manifest.json'), os.path.join(self.dest, 'in.json'))   # усередину
+        self.put(os.path.join(self.dest, 'copy.json'), _read(os.path.join(self.dest, 'manifest.json')))
+        self.ok(self.root + 'copy.json')                                              # контроль: звичайний файл тут віддається
+        self.gone(self.root + 'out.txt')
+        self.gone(self.root + 'in.json')
+        # `index.html` теки — теж посилання (звичайна тека, а її індекс веде всередину)
+        os.makedirs(os.path.join(self.dest, 'lnkidx'))
+        os.symlink(os.path.join(self.dest, 'index.html'), os.path.join(self.dest, 'lnkidx', 'index.html'))
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, 'lnkidx', 'index.html')))
+        self.gone(self.root + 'lnkidx/')
+        self.gone(self.root + 'lnkidx/index.html')
+
+    def test_a_symlink_dir_is_404_even_when_it_points_inside_the_published_folder(self):
+        out = os.path.join(self.folder, 'elsewhere')
+        self.put(os.path.join(out, 'index.html'), 'OUT')
+        self.put(os.path.join(out, 'a.txt'), 'OUT')
+        os.symlink(out, os.path.join(self.dest, 'outdir'))                            # назовні
+        os.symlink(os.path.join(self.dest, 'it1'), os.path.join(self.dest, 'indir'))  # усередину
+        self.ok(self.root + 'it1/alpha/index.html')                                   # контроль
+        for path in ('outdir/', 'outdir/index.html', 'outdir/a.txt', 'outdir', 'indir/alpha/index.html', 'indir/alpha/',
+                     'indir/pages.json', 'indir', 'indir/'):
+            with self.subTest(path=path):
+                self.gone(self.root + path)             # навіть без слеша: посилання відсікається ДО перенаправлення
+
+    def test_a_symlinked_task_folder_is_404(self):
+        real = os.path.join(self.folder, 'real-tx')
+        os.rename(self.dest, real)
+        os.symlink(real, self.dest)
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, 'manifest.json')), 'свідок: через посилання файл читається')
+        for path in ('manifest.json', '', 'index.html', 'shell/ext-shell.js'):
+            self.gone(self.root + path)
+
+    def test_the_realpath_check_holds_even_when_islink_lies(self):
+        """Друга лінія: теки-стики Windows (junction) `os.path.islink` не вважає посиланням (до Python 3.12), а
+        `realpath` веде за межі. Тут `islink` підмінено на «ні» — і посилання назовні все одно не віддається."""
+        out = os.path.join(self.folder, 'elsewhere')
+        self.put(os.path.join(out, 'a.txt'), 'OUT')
+        self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        os.symlink(out, os.path.join(self.dest, 'outdir'))
+        os.symlink(os.path.join(self.folder, 'secret.txt'), os.path.join(self.dest, 'out.txt'))
+        with mock.patch.object(os.path, 'islink', return_value=False):
+            self.gone(self.root + 'outdir/a.txt')
+            self.gone(self.root + 'out.txt')
+            self.ok(self.root + 'manifest.json')
+
+    def test_dotfiles_and_dot_folders_are_404(self):
+        self.put(os.path.join(self.dest, '.hidden', 'x'), 'H')
+        self.put(os.path.join(self.dest, '.hidden', 'index.html'), 'H')
+        self.put(os.path.join(self.dest, 'it1', '.env'), 'ENV')
+        self.put(os.path.join(self.dest, '.well-known', 'a.txt'), 'W')
+        self.put(os.path.join(self.dest, '.tmp-tx-deadbeef', 'index.html'), 'T')
+        self.put(os.path.join(self.dest, '.old-tx-cafebabe', 'index.html'), 'O')
+        self.put(os.path.join(self.folder, '.tmp-tx-deadbeef', 'index.html'), 'T')
+        self.put(os.path.join(self.folder, '.old-tx-cafebabe', '.deai-published'), 'O')
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, serve.PUBLISHED_MARKER)), 'свідок: маркер модуля там, де ядро його шукає')
+        for path in ('.deai-published', '.hidden/x', '.hidden/index.html', '.hidden/', 'it1/.env', '.well-known/a.txt',
+                     '.tmp-tx-deadbeef/index.html', '.old-tx-cafebabe/index.html', '%2edeai-published', '.HIDDEN/x'):
+            with self.subTest(path=path):
+                self.gone(self.root + path)
+        self.gone('/published/off/.tmp-tx-deadbeef/index.html')
+        self.gone('/published/off/.old-tx-cafebabe/.deai-published')
+
+    def test_task_ids_the_module_could_never_publish_are_404(self):
+        """Id задачі — те саме правило, що в диспетчері й модулі (`publish_id_ok`): Unicode, імена пристроїв Windows
+        і 129 символів не віддаються, хоч би така тека лежала в теці публікації."""
+        names = {'юнікод': 'задача', 'CON': 'CON', 'con': 'con', 'NUL': 'NUL', 'COM1': 'COM1', '129': 'x' * 129,
+                 'крапка': 'a.b', 'пробіл': 'a b'}
+        for what, name in names.items():
+            try:
+                self.put(os.path.join(self.folder, name, 'index.html'), 'BAD')
+                self.put(os.path.join(self.folder, name, '.deai-published'), 'm')
+            except OSError:
+                continue                                    # ФС не дозволяє таку теку (Windows: CON) — і гаразд
+            with self.subTest(what):
+                self.gone('/published/off/' + urllib.parse.quote(name, safe='') + '/')
+                self.gone('/published/off/' + urllib.parse.quote(name, safe='') + '/index.html')
+        # контроль: межа 128 і `console` (не імʼя пристрою) віддаються
+        for name in ('x' * 128, 'console', 'COM10', 'Task_1-b'):
+            self.put(os.path.join(self.folder, name, 'index.html'), 'GOOD')
+            self.put(os.path.join(self.folder, name, '.deai-published'), 'm')
+            self.assertEqual(self.ok(f'/published/off/{name}/')[1], b'GOOD', name)
+
+    def test_only_a_folder_the_module_marked_is_served(self):
+        """Теку `<тека>/<id>` без маркера модуля не віддаємо: налаштування `folder` може вказувати на теку з чужим
+        вмістом (вона пройшла `folder_ok`), а `Access-Control-Allow-Origin: *` дав би його читати будь-якій
+        сторінці. Маркер — те, що модуль пише сам (`.deai-published`) і за чим відрізняє свої теки."""
+        self.put(os.path.join(self.folder, 'foreign', 'index.html'), 'FOREIGN')
+        self.put(os.path.join(self.folder, 'foreign', 'notes.txt'), 'FOREIGN')
+        self.gone('/published/off/foreign/')
+        self.gone('/published/off/foreign/notes.txt')
+        self.put(os.path.join(self.folder, 'foreign', '.deai-published'), 'm')
+        self.assertEqual(self.ok('/published/off/foreign/notes.txt')[1], b'FOREIGN')       # контроль
+        os.remove(os.path.join(self.dest, '.deai-published'))
+        self.gone(self.root + 'manifest.json')
+        os.symlink(os.path.join(self.folder, 'foreign', 'notes.txt'), os.path.join(self.dest, '.deai-published'))
+        self.gone(self.root + 'manifest.json')                                              # маркер — звичайний файл, не посилання
+
+    # ---- довкола ----
+
+    def test_a_post_with_origin_null_is_still_refused(self):
+        """Сторінка в пісочниці без `allow-same-origin` має Origin `null`; API канваса такі POST відхиляє, тож
+        опублікована сторінка не може керувати канвасом (CORS їй для цього й не дає)."""
+        shutil.rmtree(os.path.join(self.tx_dir, 'publish'))
+        st, body = self.post('/api/publish', headers={'Origin': 'null'})
+        self.assertEqual((st, body.get('ok')), (403, False), body)
+        self.assertFalse(os.path.exists(os.path.join(self.tx_dir, 'publish')), 'публікація виконалась попри чужий Origin')
+
+    def test_a_file_that_vanishes_between_the_check_and_the_read_is_404(self):
+        """Публікація посеред заміни теки: файл був у перевірці, а до читання зник — порожній 404 із захисними
+        заголовками, а не обрив зʼєднання."""
+        gone = os.path.join(self.dest, 'vanished.txt')
+        with mock.patch.object(serve, 'published_target', return_value=('file', gone)):
+            self.gone(self.root + 'vanished.txt')
+
+    def test_nothing_leaves_the_machine(self):
+        for path in (self.root, self.root + 'manifest.json', '/published/off/tx', self.root + 'nope', '/published/nope/x/'):
+            self.fetch(path)
+        self.assert_quiet()
 
 
 class ResealModuleBuilds(TaskFixture):
