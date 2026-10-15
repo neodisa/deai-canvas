@@ -125,6 +125,7 @@ class SelectorsTest(unittest.TestCase):
         self.assertEqual(parse(r'.a\,b, :root{--d:1}'), {'--d': ['1']})
         self.assertEqual(parse('.a[title="["] :root .x{--c:1}'), {})              # `[` у рядку не відкриває дужку
         self.assertEqual(parse(r'[title="a\" , :root"]{--c:1}'), {})
+        self.assertEqual(parse(r'[title="a\"] , :root"]{--c:1}'), {})            # `\"` не закриває рядок: `]` і кома далі — ще в ньому
         self.assertEqual(parse(r'[title="a\" b"] :root .x{--c:1}'), {})           # `\"` не закриває рядок
         self.assertEqual(parse(r'[title="a\" b"] :root{--c:1}'), {'--c': ['1']})
         self.assertEqual(parse('.a[title="["] :root{--c:1}'), {'--c': ['1']})
@@ -514,7 +515,11 @@ class VarTest(unittest.TestCase):
 
 
 class ExpansionBudgetTest(unittest.TestCase):
-    """`var()`-розгортання множить значення: без стелі «тема × правило» вибухає пам'яттю."""
+    """`var()`-розгортання множить значення: без стелі «тема × правило» вибухає пам'яттю.
+
+    УСІ розміри входу тут — ЛІТЕРАЛИ (1024, 20000), а не `S.MAX_VALUES`/`S.MAX_EXPANDED`: тест, що міряє вхід
+    за константою, при підвищеній константі (мутація, помилка в правці) будує мільйони правил і їсть гігабайти
+    замість того, щоб швидко впасти. Самі значення констант прибиває `test_the_limits_are_what_the_docs_say`."""
     themed = staticmethod(VarTest.themed)
 
     def test_the_limits_are_what_the_docs_say(self):
@@ -531,10 +536,10 @@ class ExpansionBudgetTest(unittest.TestCase):
 
     def test_exactly_the_per_token_limit_is_allowed(self):
         rules = lambda k: ''.join(f':root{{--b: var(--a) {n}}}' for n in range(k))        # noqa: E731
-        got = parse(self.themed('a', 64, 'a') + rules(S.MAX_VALUES // 64))
-        self.assertEqual(len(got['--b']), S.MAX_VALUES)
-        got = parse(self.themed('a', 64, 'a') + rules(S.MAX_VALUES // 64 + 1))
-        self.assertEqual(got['--b'], [])
+        got = parse(self.themed('a', 64, 'a') + rules(16))
+        self.assertEqual(len(got['--b']), 1024)               # 16 правил · 64 теми
+        got = parse(self.themed('a', 64, 'a') + rules(17))
+        self.assertEqual(got['--b'], [])                      # 1088
 
     def test_the_cap_counts_expansions_even_when_they_collapse_to_the_same_values(self):
         """Дубльовані розгортання не лишають слідів у виході, але коштують часу: стеля — на роботу."""
@@ -545,20 +550,25 @@ class ExpansionBudgetTest(unittest.TestCase):
         self.assertEqual(got['--b'], [])
 
     def test_literal_values_are_not_capped(self):
-        n = S.MAX_VALUES * 3
-        got = parse(''.join(f':root{{--lit: v{i}}}' for i in range(n)))
-        self.assertEqual(len(got['--lit']), n)
+        got = parse(''.join(f':root{{--lit: v{i}}}' for i in range(3072)))
+        self.assertEqual(len(got['--lit']), 3072)
 
     def test_many_tokens_over_themes_are_capped_per_file(self):
-        per = 50
-        self.assertEqual(S.MAX_EXPANDED % per, 0)
-        fit = S.MAX_EXPANDED // per
+        per, fit = 50, 400                                    # 400 токенів · 50 тем = рівно 20000
         css = self.themed('a', per, 'a') + ''.join(f':root{{--b{i}: var(--a)}}' for i in range(fit + 300))
         got = parse(css)
         lens = [len(got[f'--b{i}']) for i in range(fit + 300)]
         self.assertEqual(lens[:fit], [per] * fit)             # рівно стеля — ще можна
         self.assertEqual(lens[fit:], [0] * 300)               # далі — «значень не знаємо»
-        self.assertLessEqual(sum(lens), S.MAX_EXPANDED)
+        self.assertEqual(sum(lens), 20000)
+
+    def test_literal_values_do_not_eat_the_per_file_budget(self):
+        """Стеля файла рахує лише розгортання `var()`: тисячі літералів їй не заважають."""
+        css = (self.themed('a', 50, 'a') + ''.join(f':root{{--lit{i}: x{i}}}' for i in range(30000))
+               + ''.join(f':root{{--b{i}: var(--a)}}' for i in range(400)))
+        got = parse(css)
+        self.assertEqual([len(got[f'--b{i}']) for i in (0, 399)], [50, 50])
+        self.assertEqual(got['--lit29999'], ['x29999'])
 
 
 class BigInputTest(unittest.TestCase):
@@ -617,12 +627,20 @@ class ReadTest(Fs):
     def test_a_file_without_tokens_is_an_empty_dict_not_an_error(self):
         self.assertEqual(self.tokens(self.write('body{color:red}'))['tokens'], {})
 
-    def test_bom_and_crlf_and_invalid_utf8_are_tolerated(self):
-        p = self.write(b'\xef\xbb\xbf@media (min-width:1px){:root{\r\n--a: 1;\r\n--b: \xff\xfe;\r\n}}', mode='wb')
-        got = self.tokens(p)['tokens']              # BOM, CRLF і биті байти читанню не шкодять (саме зняття BOM
-        #                                             не спостережне: розбір толерантний до U+FEFF на початку)
+    def test_crlf_and_invalid_utf8_are_tolerated(self):
+        p = self.write(b'@media (min-width:1px){:root{\r\n--a: 1;\r\n--b: \xff\xfe;\r\n}}', mode='wb')
+        got = self.tokens(p)['tokens']
         self.assertEqual(got['--a'], ['1'])
         self.assertEqual(len(got['--b']), 1)
+
+    def test_a_utf8_bom_is_dropped_before_parsing(self):
+        """Пинить `utf-8-sig`. BOM перед `:root` чи `@media` розбору не шкодить (`:root` шукається будь-де в
+        складеному селекторі, а `@media` лише відкриває блок), тож перевіряємо те, де він ЛАМАЄ: `@theme` на
+        початку файла (Tailwind 4 — майже завжди так) — прелюдія `U+FEFF@theme` уже не починається з `@`."""
+        p = self.write(b'\xef\xbb\xbf@theme { --color-brand: #f00 }', mode='wb')
+        self.assertEqual(self.tokens(p)['tokens'], {'--color-brand': ['#f00']})
+        p = self.write(b'\xef\xbb\xbf:root{--a: 1}', mode='wb', name='b.css')
+        self.assertEqual(self.tokens(p)['tokens'], {'--a': ['1']})
 
     def test_missing_file(self):
         with self.assertRaises(self.s.TokensError) as cx:
@@ -918,7 +936,12 @@ class CheckTest(Fs):
     def test_no_tokens_is_not_ok(self):
         res = self.check(self.write('body{color:red} .a{--x:1}'))
         self.assertFalse(res['ok'])
-        self.assertIn(':root', res['error'])
+        for where in (':root', 'html', '[data-', '@theme'):      # де саме модуль шукає токени
+            self.assertIn(where, res['error'])
+
+    def test_a_tailwind_theme_only_file_is_ok(self):
+        res = self.check(self.write('@theme { --color-brand: #f00 }'))
+        self.assertEqual(res, {'ok': True, 'detail': '1 tokens'})
 
     def test_check_never_raises_whatever_the_path(self):
         for bad in ('a\0b.css', '\ud800.css', '', '   ', None, 3, '/dev/null/x', self.tmp, self.path('nope')):
