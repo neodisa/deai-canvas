@@ -167,7 +167,7 @@ def publish(ctx, build_dir, task):
     if kind == "straddle":
         raise deai_modules.ModuleError("bad-folder", 409, "y" * 290 + ctx["secrets"]["password"])
     if kind == "weird-straddle":
-        raise deai_modules.ModuleError("weird-code", 418, "y" * 270 + ctx["secrets"]["password"])
+        raise deai_modules.ModuleError("weird-code", 418, "y" * 260 + ctx["secrets"]["password"])
     return {"path": "/ok"}
 """
 
@@ -689,17 +689,22 @@ class CallTest(Env):
             self.assertNotIn('hunter2-secret', e.message)
 
     def test_a_secret_straddling_the_cut_does_not_leak_a_prefix_through_a_passed_through_error(self):
-        """`ModuleError` ріже текст до 300 ще в конструкторі; вирізати секрет треба з ПОВНОГО тексту."""
+        """`ModuleError` ріже текст до 300 ще в конструкторі; вирізати секрет треба з ПОВНОГО тексту.
+        Секрет довгий навмисно: у гілці `module-error` до тексту додається префікс `ModuleError: код: `, тож
+        у вікно ≤300 потрапляють лише перші ~275 символів повідомлення, а недорізаний секрет (його початок
+        стоїть ДО 275 і кінець ПІСЛЯ 300) лишив би там видимий префікс."""
         self.mk('passer', server=PASS_SERVER, settings=[{'key': 'password', 'type': 'secret'}])
         m = dm.catalog()['passer']
-        ctx = {'space': {'id': 's', 'path': '/x'}, 'settings': {}, 'secrets': {'password': 'hunter2-secret'}}
+        secret = 'hunter2-' + 'Q' * 50
+        ctx = {'space': {'id': 's', 'path': '/x'}, 'settings': {}, 'secrets': {'password': secret}}
         for kind in ('straddle', 'weird-straddle'):
             for timeout in (None, 3):
                 with self.assertRaises(dm.ModuleError) as cm:
                     dm.call(m, 'publish', ctx, '/b', {'kind': kind}, timeout=timeout)
                 msg = cm.exception.message
                 self.assertLessEqual(len(msg), 300, kind)
-                self.assertNotIn('hunter2', msg, f'{kind}: {msg[-30:]!r}')
+                for piece in ('hun', 'QQ'):                          # навіть короткий початок чи шматок секрету — витік
+                    self.assertNotIn(piece, msg, f'{kind}: {msg[-30:]!r}')
                 self.assertIn('***', msg, kind)
         with self.assertRaises(dm.ModuleError) as cm:
             dm.call(m, 'publish', ctx, '/b', {'kind': 'straddle'})
@@ -709,6 +714,14 @@ class CallTest(Env):
         e = dm.ModuleError('bad-folder', 409, 'z' * 1000)
         self.assertEqual(len(e.message), 300)
         self.assertEqual(len(str(e)), len('bad-folder: ') + 300)
+        self.assertEqual(e._full, 'z' * 1000)                   # а `_run` вирізає секрети саме з нього
+
+    def test_the_full_text_is_capped_at_64_kib(self):
+        """Повний текст — для вирізання секретів, а не безмежне сховище: модуль може кинути гігабайтний рядок."""
+        self.assertEqual(dm.MAX_FULL_MESSAGE, 65536)
+        e = dm.ModuleError('bad-folder', 409, 'z' * 200000)
+        self.assertEqual(len(e._full), 65536)
+        self.assertEqual(len(e.message), 300)
 
     def test_a_lone_surrogate_already_in_secrets_json_does_not_break_the_scrubbing(self):
         self.mk('passer', server=PASS_SERVER, settings=[{'key': 'password', 'type': 'secret'}])
