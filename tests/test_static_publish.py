@@ -36,8 +36,31 @@ _REAL = None
 #: Справжній `~/deai-published` машини дизайнера. Домівка — з бази користувачів (як у `spaces_guard`), а не з `$HOME`,
 #: який тести підміняють; стан фіксується ПРИ ІМПОРТІ (`unittest discover` імпортує все раніше, ніж щось запустить), тож
 #: витік з іншого файла тестів не видасться за чистий старт. Тести пишуть лише в тимчасову домівку (`{home}`).
+#: Порівнюється знімок (імена й mtime верхнього рівня), а не лише наявність теки.
 _REAL_PUBLISHED = os.path.join(spaces_guard.REAL_USER_HOME, 'deai-published')
-_REAL_PUBLISHED_EXISTED = os.path.lexists(_REAL_PUBLISHED)
+
+
+def _published_snapshot():
+    """Знімок справжнього `~/deai-published`: `None`, якщо його нема; інакше (власний mtime, [(імʼя, mtime)] верхнього
+    рівня) без читання вмісту файлів і без слідування за посиланнями — чужа публікація, додана чи змінена тестом,
+    помітна за зміною імен чи часу, а не лише за появою самої теки."""
+    try:
+        st = os.lstat(_REAL_PUBLISHED)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return ('unreadable', type(e).__name__)
+    if not os.path.isdir(_REAL_PUBLISHED) or os.path.islink(_REAL_PUBLISHED):
+        return ('not-a-dir', st.st_mtime_ns)
+    try:
+        with os.scandir(_REAL_PUBLISHED) as it:
+            entries = sorted((e.name, e.stat(follow_symlinks=False).st_mtime_ns) for e in it)
+    except OSError as e:
+        return ('unreadable', type(e).__name__)
+    return ('dir', st.st_mtime_ns, entries)
+
+
+_REAL_PUBLISHED_BEFORE = _published_snapshot()
 
 
 def setUpModule():
@@ -47,9 +70,9 @@ def setUpModule():
 
 def tearDownModule():
     spaces_guard.assert_untouched(_REAL)
-    now = os.path.lexists(_REAL_PUBLISHED)
-    if now != _REAL_PUBLISHED_EXISTED:
-        raise AssertionError(f'тести змінили справжній {_REAL_PUBLISHED}: існував={_REAL_PUBLISHED_EXISTED}, тепер={now}')
+    now = _published_snapshot()
+    if now != _REAL_PUBLISHED_BEFORE:
+        raise AssertionError(f'тести змінили справжній {_REAL_PUBLISHED}: було {_REAL_PUBLISHED_BEFORE!r}, тепер {now!r}')
 
 
 def _fs_case_insensitive(path):
@@ -310,6 +333,19 @@ class StaticPublish(unittest.TestCase):
         self.assertEqual(self.read('Foo', 'index.html'), 'other')
         self.assertEqual(os.listdir(self.folder), ['Foo'])
 
+    def test_an_unlistable_folder_is_reported_as_such_not_as_a_case_clash(self):
+        if os.geteuid() == 0:
+            self.skipTest('root обходить права доступу')
+        self.pub('t1')
+        os.chmod(self.folder, 0o300)                                      # писати й заходити можна, читати список — ні
+        self.addCleanup(os.chmod, self.folder, 0o700)                     # до rmtree з setUp
+        with self.refused() as cx:
+            self.pub('t1')
+        self.assertIn('cannot be listed', cx.exception.message)
+        self.assertNotIn('letter case', cx.exception.message)
+        os.chmod(self.folder, 0o700)
+        self.assertEqual(self.read('t1', 'index.html'), '<h1>v1</h1>')     # нічого не замінено
+
     def test_the_task_id_has_a_length_cap(self):
         for bad in ('a' * 129, 'a' * 1000):
             with self.refused('module-error', 502) as cx:
@@ -391,15 +427,24 @@ class StaticPublish(unittest.TestCase):
         self.assertEqual(tree(self.folder), before)
 
     # ------------------------------------------------------------------------ залишки .tmp/.old
+    @staticmethod
+    def stamp(d, marker, folder):
+        """Час публікації версії — mtime МАРКЕРА (його пишуть раз, наприкінці копії); mtime самої теки до нього не
+        привʼязаний (частково невдалий `rmtree` його посуває), тож тест розводить їх навмисно."""
+        os.utime(os.path.join(d, MARKER), (marker, marker))
+        os.utime(d, (folder, folder))
+
     def crash_between_the_renames(self, tid='t1'):
-        """Збій посеред заміни: `<id>/` уже стала `.old-…`, а нова ще не стала на місце. Повертає (найновіша, старіша)."""
+        """Збій посеред заміни: `<id>/` уже стала `.old-…`, а нова ще не стала на місце. Повертає (найновіша, старіша).
+        Старіша версія має БІЛЬШЕ імʼя й найсвіжіший mtime теки (ніби напівневдалий `rmtree` її зачепив): за іменем
+        чи за mtime теки обрали б її, а правильно — за міткою публікації."""
         self.pub(tid)
         shutil.rmtree(os.path.join(self.folder, tid))
-        older = self.leftover(f'.old-{tid}-aaaaaaaa', body='older')
-        newest = self.leftover(f'.old-{tid}-bbbbbbbb', body='newest')
+        older = self.leftover(f'.old-{tid}-bbbbbbbb', body='older')
+        newest = self.leftover(f'.old-{tid}-aaaaaaaa', body='newest')
         now = 1_700_000_000
-        os.utime(older, (now - 1000, now - 1000))
-        os.utime(newest, (now, now))
+        self.stamp(older, marker=now - 1000, folder=now + 500)
+        self.stamp(newest, marker=now, folder=now - 500)
         return newest, older
 
     def test_a_missing_task_folder_is_restored_from_the_newest_marked_old_version(self):
@@ -407,6 +452,7 @@ class StaticPublish(unittest.TestCase):
         self.crash_between_the_renames()
         unmarked = self.leftover('.old-t1-cccccccc', marked=False, body='unmarked')     # новіша, але без маркера
         os.utime(unmarked, (1_700_000_100, 1_700_000_100))
+        self.assertFalse(os.path.exists(os.path.join(unmarked, MARKER)))                # без мітки — не кандидат
         victim = os.path.join(self.tmp, 'victim')
         put(os.path.join(victim, 'f.txt'), 'victim')
         put(os.path.join(victim, MARKER), '')
@@ -423,10 +469,36 @@ class StaticPublish(unittest.TestCase):
         self.assertEqual(self.read('t1', 'f.txt'), 'newest')
         self.assertTrue(self.is_marked('t1'))
         left = sorted(os.listdir(self.folder))
-        self.assertEqual(left, ['.old-t1-cccccccc', '.old-t1-eeeeeeee', 't1'])       # решта марковане — прибрано
+        self.assertEqual(left, ['.old-t1-cccccccc', '.old-t1-eeeeeeee', 't1'])       # решта марковане — прибрано (в т.ч. старіша)
         self.assertFalse(os.path.exists(tmp))
         self.assertEqual(self.read('.old-t1-cccccccc', 'f.txt'), 'unmarked')
         self.assertEqual(tree(victim), before_victim)
+
+    def test_old_versions_survive_when_the_restore_rename_fails(self):
+        """Відновлення не вдалось (відкритий дескриптор у Windows, антивірус): `.old-*` може бути ЄДИНОЮ робочою версією,
+        поки `<id>/` нема, — `_sweep` її не видаляє; наступна публікація відновить."""
+        self.crash_between_the_renames()
+        dest = os.path.join(self.folder, 't1')
+        real = os.rename
+
+        def flaky(src, dst, *a, **k):
+            if os.path.basename(src).startswith('.old-') and dst == dest:
+                raise OSError('handle is open')
+            return real(src, dst, *a, **k)
+
+        def boom(src, dst, *a, **k):
+            raise OSError('disk full')
+        with mock.patch.object(os, 'rename', flaky), mock.patch.object(shutil, 'copytree', side_effect=boom):
+            with self.refused('module-error', 502):
+                self.pub('t1')
+        self.assertFalse(os.path.exists(dest))
+        self.assertEqual(sorted(os.listdir(self.folder)), ['.old-t1-aaaaaaaa', '.old-t1-bbbbbbbb'])
+        self.assertEqual(self.read('.old-t1-aaaaaaaa', 'f.txt'), 'newest')
+        with mock.patch.object(shutil, 'copytree', side_effect=boom):                  # тепер перейменування працює
+            with self.refused('module-error', 502):
+                self.pub('t1')
+        self.assertEqual(self.read('t1', 'f.txt'), 'newest')
+        self.assertEqual(sorted(os.listdir(self.folder)), ['t1'])
 
     def test_after_a_crash_the_next_successful_publish_replaces_the_restored_version(self):
         self.crash_between_the_renames()
@@ -937,6 +1009,31 @@ class StaticPublish(unittest.TestCase):
         res = self.pub('t1')
         self.assertEqual(res['path'], self.hp('elsewhere', self.sp['id'], 't1'))
         self.assertFalse(os.path.exists(self.folder))
+
+
+# ------------------------------------------------------------------------- охоронець справжньої теки
+
+class RealFolderGuard(unittest.TestCase):
+    """Охоронець `~/deai-published` має сам вміти падати: знімок бачить зʼявлення теки, нові імена й зміну часу.
+    Перевіряється на тимчасовій теці (справжньої тест не чіпає ні тут, ні деінде)."""
+
+    def test_the_snapshot_notices_a_new_folder_new_names_and_changed_times(self):
+        tmp = os.path.normpath(tempfile.mkdtemp(prefix='statpub-guard-'))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        pub = os.path.join(tmp, 'deai-published')
+        with mock.patch.dict(globals(), {'_REAL_PUBLISHED': pub}):
+            none = _published_snapshot()
+            self.assertIsNone(none)
+            os.makedirs(pub)
+            empty = _published_snapshot()
+            self.assertIsNotNone(empty)
+            self.assertNotEqual(empty, none)
+            put(os.path.join(pub, 'space-a', 'index.html'), 'x')
+            one = _published_snapshot()
+            self.assertNotEqual(one, empty)
+            self.assertEqual(_published_snapshot(), one)                  # знімок стабільний, коли нічого не міняли
+            os.utime(os.path.join(pub, 'space-a'), (1_700_000_000, 1_700_000_000))
+            self.assertNotEqual(_published_snapshot(), one)              # час запису верхнього рівня
 
 
 # -------------------------------------------------------------------------------- вигляд модуля
