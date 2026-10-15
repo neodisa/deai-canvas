@@ -33,6 +33,11 @@ MID = 'static-publish'
 SECRET = 'hunter2-SECRET-pw'
 _ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE')
 _REAL = None
+#: Справжній `~/deai-published` машини дизайнера. Домівка — з бази користувачів (як у `spaces_guard`), а не з `$HOME`,
+#: який тести підміняють; стан фіксується ПРИ ІМПОРТІ (`unittest discover` імпортує все раніше, ніж щось запустить), тож
+#: витік з іншого файла тестів не видасться за чистий старт. Тести пишуть лише в тимчасову домівку (`{home}`).
+_REAL_PUBLISHED = os.path.join(spaces_guard.REAL_USER_HOME, 'deai-published')
+_REAL_PUBLISHED_EXISTED = os.path.lexists(_REAL_PUBLISHED)
 
 
 def setUpModule():
@@ -42,6 +47,16 @@ def setUpModule():
 
 def tearDownModule():
     spaces_guard.assert_untouched(_REAL)
+    now = os.path.lexists(_REAL_PUBLISHED)
+    if now != _REAL_PUBLISHED_EXISTED:
+        raise AssertionError(f'тести змінили справжній {_REAL_PUBLISHED}: існував={_REAL_PUBLISHED_EXISTED}, тепер={now}')
+
+
+def _fs_case_insensitive(path):
+    """Чи файлова система в `path` не розрізняє регістр (APFS за замовчуванням): на чутливій тест про `Foo`/`foo`
+    нічого б не довів, тож пропускається (так само, як у test_modules)."""
+    os.makedirs(os.path.join(path, 'CaseProbe-x'), exist_ok=True)
+    return os.path.isdir(os.path.join(path, 'caseprobe-x'))
 
 
 def put(path, text='x'):
@@ -164,6 +179,10 @@ class StaticPublish(unittest.TestCase):
         with open(os.path.join(self.folder, *parts), encoding='utf-8') as f:
             return f.read()
 
+    def read_at(self, root, *parts):
+        with open(os.path.join(root, *parts), encoding='utf-8') as f:
+            return f.read()
+
     def is_marked(self, *parts):
         return os.path.isfile(os.path.join(self.folder, *parts, MARKER))
 
@@ -275,6 +294,41 @@ class StaticPublish(unittest.TestCase):
         for tid in ('t-1', 'T_2', '123', 'a-b-c'):
             self.assertEqual(self.pub(tid), {'path': os.path.join(self.folder, tid)})
 
+    # ------------------------------------------------- імʼя теки: регістр, довжина, імена пристроїв Windows
+    def test_a_task_id_differing_only_in_case_never_replaces_another_tasks_preview(self):
+        """На ФС без урахування регістру `foo` і `Foo` — одна тека: `lexists(foo)` істинне, але «наша» тека — чужа."""
+        if not _fs_case_insensitive(self.tmp):
+            self.skipTest('файлова система розрізняє регістр — тест про Foo/foo нічого б не довів')
+        self.pub('Foo')
+        before = tree(self.folder)
+        self.make_build({'index.html': 'other'})
+        with self.refused() as cx:
+            self.pub('foo')
+        self.assertIn('letter case', cx.exception.message)
+        self.assertEqual(tree(self.folder), before)                        # нічого не замінено й не створено
+        self.assertEqual(self.pub('Foo'), {'path': os.path.join(self.folder, 'Foo')})   # свою — можна
+        self.assertEqual(self.read('Foo', 'index.html'), 'other')
+        self.assertEqual(os.listdir(self.folder), ['Foo'])
+
+    def test_the_task_id_has_a_length_cap(self):
+        for bad in ('a' * 129, 'a' * 1000):
+            with self.refused('module-error', 502) as cx:
+                self.pub(bad)
+            self.assertIn('128', cx.exception.message)
+            self.assertFalse(os.path.exists(os.path.dirname(self.folder)))
+        longest = 'a' * 128
+        self.assertEqual(self.pub(longest), {'path': os.path.join(self.folder, longest)})
+        self.assertEqual(self.pub(longest)['path'], os.path.join(self.folder, longest))      # і повторна — теж
+
+    def test_windows_device_names_are_refused_as_task_ids(self):
+        for bad in ('CON', 'con', 'Nul', 'PRN', 'aux', 'COM1', 'com9', 'LPT1', 'lpt9'):
+            with self.refused('module-error', 502) as cx:
+                self.pub(bad)
+            self.assertIn('reserved', cx.exception.message, bad)
+            self.assertFalse(os.path.exists(os.path.dirname(self.folder)), bad)
+        for fine in ('COM0', 'COM10', 'LPT0', 'CONSOLE', 'con-1', 'nul_', 'AUXX', 'x-con'):
+            self.assertEqual(self.pub(fine), {'path': os.path.join(self.folder, fine)}, fine)
+
     # ----------------------------------------------------------- наявна тека задачі: маркер
     def test_an_existing_folder_without_the_marker_is_refused_and_untouched(self):
         dest = os.path.join(self.folder, 't1')
@@ -292,8 +346,12 @@ class StaticPublish(unittest.TestCase):
         os.makedirs(self.folder)
         os.symlink(victim, os.path.join(self.folder, 't1'))
         before_v, before_f = tree(victim), tree(self.folder)
-        with self.refused():
-            self.pub('t1')
+        # Перша лінія оборони — перевірка ДО перейменування (друга, після нього, дала б той самий видимий результат):
+        # посилання на місці теки задачі не можна навіть перейменувати.
+        with mock.patch.object(os, 'rename', wraps=os.rename) as spy:
+            with self.refused():
+                self.pub('t1')
+        self.assertNotIn(os.path.join(self.folder, 't1'), {c.args[0] for c in spy.call_args_list})
         self.assertEqual(tree(victim), before_v)
         self.assertEqual(tree(self.folder), before_f)
         self.assertTrue(os.path.islink(os.path.join(self.folder, 't1')))
@@ -333,6 +391,69 @@ class StaticPublish(unittest.TestCase):
         self.assertEqual(tree(self.folder), before)
 
     # ------------------------------------------------------------------------ залишки .tmp/.old
+    def crash_between_the_renames(self, tid='t1'):
+        """Збій посеред заміни: `<id>/` уже стала `.old-…`, а нова ще не стала на місце. Повертає (найновіша, старіша)."""
+        self.pub(tid)
+        shutil.rmtree(os.path.join(self.folder, tid))
+        older = self.leftover(f'.old-{tid}-aaaaaaaa', body='older')
+        newest = self.leftover(f'.old-{tid}-bbbbbbbb', body='newest')
+        now = 1_700_000_000
+        os.utime(older, (now - 1000, now - 1000))
+        os.utime(newest, (now, now))
+        return newest, older
+
+    def test_a_missing_task_folder_is_restored_from_the_newest_marked_old_version(self):
+        """Не видаляти ОСТАННЮ робочу версію: якщо публікація впала, `<id>/` лишається з нею (за mtime — найновішою)."""
+        self.crash_between_the_renames()
+        unmarked = self.leftover('.old-t1-cccccccc', marked=False, body='unmarked')     # новіша, але без маркера
+        os.utime(unmarked, (1_700_000_100, 1_700_000_100))
+        victim = os.path.join(self.tmp, 'victim')
+        put(os.path.join(victim, 'f.txt'), 'victim')
+        put(os.path.join(victim, MARKER), '')
+        os.utime(victim, (1_700_000_200, 1_700_000_200))
+        os.symlink(victim, os.path.join(self.folder, '.old-t1-eeeeeeee'))
+        tmp = self.leftover('.tmp-t1-dddddddd')
+        before_victim = tree(victim)
+
+        def boom(src, dst, *a, **k):
+            raise OSError('disk full')
+        with mock.patch.object(shutil, 'copytree', side_effect=boom):
+            with self.refused('module-error', 502):
+                self.pub('t1')
+        self.assertEqual(self.read('t1', 'f.txt'), 'newest')
+        self.assertTrue(self.is_marked('t1'))
+        left = sorted(os.listdir(self.folder))
+        self.assertEqual(left, ['.old-t1-cccccccc', '.old-t1-eeeeeeee', 't1'])       # решта марковане — прибрано
+        self.assertFalse(os.path.exists(tmp))
+        self.assertEqual(self.read('.old-t1-cccccccc', 'f.txt'), 'unmarked')
+        self.assertEqual(tree(victim), before_victim)
+
+    def test_after_a_crash_the_next_successful_publish_replaces_the_restored_version(self):
+        self.crash_between_the_renames()
+        self.make_build({'index.html': 'v2'})
+        self.assertEqual(self.pub('t1'), {'path': os.path.join(self.folder, 't1')})
+        self.assertEqual(self.read('t1', 'index.html'), 'v2')
+        self.assertFalse(os.path.exists(os.path.join(self.folder, 't1', 'f.txt')))
+        self.assertEqual(os.listdir(self.folder), ['t1'])
+
+    def test_nothing_is_restored_while_the_task_folder_exists_or_for_other_tasks(self):
+        self.pub('t1')
+        self.pub('t2')
+        shutil.rmtree(os.path.join(self.folder, 't2'))
+        self.leftover('.old-t2-aaaaaaaa', body='t2-old')
+        self.leftover('.old-t1-bbbbbbbb', body='t1-old')                               # t1 є — чужого нічого не повертаємо
+        self.make_build({'index.html': 'v2'})
+        self.pub('t1')
+        self.assertEqual(self.read('t1', 'index.html'), 'v2')
+        self.assertFalse(os.path.exists(os.path.join(self.folder, 't1', 'f.txt')))
+        self.assertFalse(os.path.exists(os.path.join(self.folder, 't2')))              # t2 цей виклик не стосувався
+        self.assertEqual(self.read('.old-t2-aaaaaaaa', 'f.txt'), 't2-old')
+        self.pub('t3')                              # t3 ще не було, а єдине марковане `.old-` — чужої задачі t2
+        self.assertEqual(self.read('t3', 'index.html'), 'v2')
+        self.assertFalse(os.path.exists(os.path.join(self.folder, 't3', 'f.txt')))
+        self.assertFalse(os.path.exists(os.path.join(self.folder, 't2')))
+        self.assertEqual(self.read('.old-t2-aaaaaaaa', 'f.txt'), 't2-old')
+
     def leftover(self, name, marked=True, body='stale'):
         d = os.path.join(self.folder, name)
         put(os.path.join(d, 'f.txt'), body)
@@ -631,11 +752,90 @@ class StaticPublish(unittest.TestCase):
             if os.path.basename(dst).startswith('.tmp-'):
                 put(os.path.join(dest, 'someone-elses.txt'), 'theirs')
             return r
-        with mock.patch.object(shutil, 'copytree', racing):
+        with mock.patch.object(shutil, 'copytree', racing), mock.patch.object(os, 'rename', wraps=os.rename) as spy:
             with self.refused():
                 self.pub('t1')
+        # друга перевірка спрацьовує ДО перейменування: чужу теку навіть не зсуваємо з місця
+        self.assertNotIn(dest, {c.args[0] for c in spy.call_args_list})
         self.assertEqual(os.listdir(self.folder), ['t1'])                  # .tmp-* прибрано
         self.assertEqual(os.listdir(dest), ['someone-elses.txt'])
+
+    def inject_into_fresh_old(self, action):
+        """Підміна `_fresh` у просторі імен модуля: коли модуль уже перевірив маркер і вибирає імʼя для `.old-…` (тобто
+        безпосередньо перед `os.rename(dest, old)`), `action()` підсуває щось інше в `<folder>/<id>`."""
+        glb = self.m.fn('publish').__globals__
+        real = glb['_fresh']
+
+        def fresh(ctx, folder, kind, tid):
+            p = real(ctx, folder, kind, tid)
+            if kind == 'old':
+                action()
+            return p
+        return mock.patch.dict(glb, {'_fresh': fresh})
+
+    def test_a_folder_swapped_in_between_the_check_and_the_rename_is_not_deleted(self):
+        """Перевірка маркера ПЕРЕД `rename(dest, old)` не атомарна з ним: чужу немарковану теку, що стала на місце за цей
+        проміжок, модуль не має права видалити — він перевіряє те, що перейменував, і повертає назад."""
+        self.pub('t1')
+        dest = os.path.join(self.folder, 't1')
+        self.make_build({'index.html': 'v2'})
+
+        def swap():
+            shutil.rmtree(dest)
+            put(os.path.join(dest, 'precious.txt'), 'theirs')
+        with self.inject_into_fresh_old(swap):
+            with self.refused() as cx:
+                self.pub('t1')
+        self.assertIn('changed during publish', cx.exception.message)
+        self.assertEqual(os.listdir(self.folder), ['t1'])                  # ні .tmp-, ні .old-
+        self.assertEqual(os.listdir(dest), ['precious.txt'])
+        self.assertEqual(self.read('t1', 'precious.txt'), 'theirs')
+        self.assertFalse(self.is_marked('t1'))
+
+    def test_a_symlink_swapped_in_between_the_check_and_the_rename_is_put_back(self):
+        self.pub('t1')
+        dest = os.path.join(self.folder, 't1')
+        victim = os.path.join(self.tmp, 'victim')
+        put(os.path.join(victim, 'keep.txt'), 'keep')
+        put(os.path.join(victim, MARKER), '')
+        before = tree(victim)
+        self.make_build({'index.html': 'v2'})
+
+        def swap():
+            shutil.rmtree(dest)
+            os.symlink(victim, dest)
+        with self.inject_into_fresh_old(swap):
+            with self.refused():
+                self.pub('t1')
+        self.assertTrue(os.path.islink(dest))
+        self.assertEqual(os.readlink(dest), victim)
+        self.assertEqual(tree(victim), before)
+        self.assertEqual(os.listdir(self.folder), ['t1'])
+
+    def test_a_foreign_folder_is_left_where_it_is_when_the_task_folder_is_taken_again(self):
+        """Повертати чуже нікуди, якщо `<id>` між тим зайняли знову: лишаємо його під `.old-…` цілим і не затираємо нове."""
+        self.pub('t1')
+        dest = os.path.join(self.folder, 't1')
+        self.make_build({'index.html': 'v2'})
+        glb = self.m.fn('publish').__globals__
+        real = glb['_marked']
+
+        def marked(d):
+            if os.path.basename(d).startswith('.old-'):                    # саме перевірка того, що перейменували
+                put(os.path.join(dest, 'newer.txt'), 'newer')
+            return real(d)
+
+        def swap():
+            shutil.rmtree(dest)
+            put(os.path.join(dest, 'precious.txt'), 'theirs')
+        with self.inject_into_fresh_old(swap), mock.patch.dict(glb, {'_marked': marked}):
+            with self.refused():
+                self.pub('t1')
+        self.assertEqual(os.listdir(dest), ['newer.txt'])
+        olds = [n for n in os.listdir(self.folder) if n.startswith('.old-t1-')]
+        self.assertEqual(len(olds), 1)
+        self.assertEqual(os.listdir(os.path.join(self.folder, olds[0])), ['precious.txt'])
+        self.assertEqual([n for n in os.listdir(self.folder) if n.startswith('.tmp-')], [])
 
     def test_the_marker_is_only_written_to_the_tmp_copy_after_the_content(self):
         """Маркер — ознака завершеної копії: поки копіюється, `.tmp-*` його не має (прибирання залишків його не зачепить)."""
@@ -677,12 +877,18 @@ class StaticPublish(unittest.TestCase):
             self.assertNotIn(SECRET, t)
 
     def test_a_secret_that_lands_in_a_message_is_scrubbed_by_the_core(self):
-        """Підстраховка ядра, не модуля: навіть коли пароль збігається з частиною шляху, у відповіді його нема."""
-        dm.write_secrets(self.sp['id'], MID, {'password': 'deai-published'})
-        self.set_folder(os.path.join(self.sp['path']))
+        """Підстраховка ядра, не модуля: пароль, що збігся з ТЕКСТОМ, який модуль справді кладе в помилку
+        (код правила `path-registered`), у відповіді вирізано."""
+        self.set_folder(self.sp['path'])
         with self.refused('bad-folder', 409) as cx:
             self.pub('t1')
-        self.assertNotIn('deai-published', cx.exception.message)
+        self.assertEqual(cx.exception.message, 'path-registered')           # без пароля текст саме такий
+        dm.write_secrets(self.sp['id'], MID, {'password': 'path-registered'})
+        with self.refused('bad-folder', 409) as cx:
+            self.pub('t1')
+        self.assertNotIn('path-registered', cx.exception.message)
+        self.assertNotIn('path-registered', str(cx.exception))
+        self.assertEqual(cx.exception.message, '***')
 
     # -------------------------------------------------------------------------- ядро й диспетчер
     def test_publish_goes_through_the_cores_provider_and_call_with_the_real_ctx(self):
@@ -691,6 +897,40 @@ class StaticPublish(unittest.TestCase):
         res = dm.call(prov, 'publish', dm.module_ctx(self.sp, prov), self.build, {'id': 't1', 'title': 'T', 'dir': 'd'})
         self.assertEqual(res['path'], os.path.join(self.folder, 't1'))
         self.assertTrue(self.is_marked('t1'))
+
+    def test_a_folder_that_is_a_symlink_to_an_allowed_directory_works_and_writes_only_into_the_target(self):
+        real = self.hp('real-pub')
+        link = self.hp('link-pub')
+        os.makedirs(real)
+        os.symlink(real, link)
+        self.set_folder(link)
+        self.assertEqual(dm.check(self.sp, MID), {'ok': True, 'detail': link})
+        before = tree(self.tmp)
+        res = self.pub('t1')
+        self.assertEqual(res, {'path': os.path.join(link, 't1')})
+        self.assertEqual(self.read_at(real, 't1', 'index.html'), '<h1>v1</h1>')
+        self.assertTrue(os.path.isfile(os.path.join(real, 't1', MARKER)))
+        self.make_build({'index.html': 'v2'})
+        self.pub('t1')                                                     # повторна публікація теж працює
+        self.assertEqual(self.read_at(real, 't1', 'index.html'), 'v2')
+        after = tree(self.tmp)
+        new = {k for k in after if k not in before}
+        self.assertTrue(new and all(k == os.path.join('home', 'real-pub', 't1') or
+                                    k.startswith(os.path.join('home', 'real-pub', 't1') + os.sep) for k in new), new)
+        self.assertEqual(sorted(os.listdir(real)), ['t1'])
+        self.assertTrue(os.path.islink(link))
+        self.assertFalse(os.path.exists(self.folder))                      # типова тека не створена
+
+    def test_a_folder_that_is_a_symlink_to_a_forbidden_directory_is_refused(self):
+        link = self.hp('link-to-space')
+        os.symlink(self.sp['path'], link)
+        self.set_folder(link)
+        before = tree(self.sp['path'])
+        with self.refused():
+            self.pub('t1')
+        self.assertEqual(tree(self.sp['path']), before)
+        res = dm.check(self.sp, MID)
+        self.assertEqual((res['ok'], res['error']), (False, 'bad-folder'))
 
     def test_the_folder_may_be_changed_in_the_space_settings(self):
         self.set_folder('~/elsewhere/{space_id}')
@@ -753,6 +993,7 @@ class SourceShape(unittest.TestCase):
         exec(compile(self.src, SERVER, 'exec', dont_inherit=True), ns)
         self.assertEqual(ns['MARKER'], MARKER)
         self.assertEqual(ns['ID_RE'].pattern, r'[\w-]+')
+        self.assertEqual(ns['MAX_ID'], 128)
         self.assertTrue(ns['ID_RE'].flags & re.ASCII)
 
 
