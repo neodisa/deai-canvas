@@ -45,6 +45,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import unittest
 import urllib.error
 import urllib.parse
@@ -847,6 +848,70 @@ class Dispatch(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.home, 'deai-published')))
         self.assert_quiet()
 
+    # ---- id задачі, який модуль відмовить, і шлях, який він повернув ----
+
+    def _task_space(self, sid, tid):
+        """Простір без інтеграцій `sid` із задачею `tid`, зроблений поточним (запис реєстру мимо `switch_space`)."""
+        rec = self._register(self._space(sid, os.path.join(self.home, 'deai-work', sid), False, tid))
+        path = os.path.join(self.deai, 'spaces.json')
+        with open(path, encoding='utf-8') as fh:
+            reg = json.load(fh)
+        reg['current'] = sid
+        atomic_write_json(path, reg)
+        return rec
+
+    def test_a_task_id_the_module_would_refuse_is_400_before_any_build(self):
+        """`NAME_RE` сервера пускає Unicode, `static-publish` — лише `[A-Za-z0-9_-]{1,128}` і не імена пристроїв
+        Windows: раніше такий id давав 502 `module-error` ПІСЛЯ збірки (`rmtree` + повна збірка задарма)."""
+        for i, tid in enumerate(('задача', 'x' * 129, 'NUL', 'com1', 'Aux')):
+            with self.subTest(tid=tid[:20]):
+                rec = self._task_space(f'bad{i}', tid)
+                task_dir = os.path.join(rec['path'], tid)
+                for payload in ({}, {'build_only': True}):
+                    st, body = self.post('/api/publish', payload)
+                    self.assertEqual((st, body.get('ok'), body.get('code')), (400, False, 'bad-task-id'), body)
+                    self.assertTrue(body['error'])
+                    self.assertFalse(os.path.exists(os.path.join(task_dir, 'publish')), 'publish/ зібрано до відмови')
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'deai-published')), 'тека публікації зачеплена')
+        self.assert_quiet()
+
+    def test_task_ids_the_module_accepts_still_publish(self):
+        """Контроль до тесту вище: перевірка не різе зайвого (межа 128, великі літери, `_` і `-`)."""
+        for i, tid in enumerate(('x' * 128, 'Task_1-b', 'console')):
+            with self.subTest(tid=tid[:20]):
+                self._task_space(f'ok{i}', tid)
+                st, body = self.post('/api/publish')
+                self.assertEqual(st, 200, body)
+                self.assertEqual(body['local']['path'], os.path.join(self.home, 'deai-published', f'ok{i}', tid))
+
+    def test_a_module_that_returns_a_path_other_than_the_destination_is_502_and_writes_nothing(self):
+        """Адреса в `publish_local` і в `local` мусить бути тією, що перевірено й замкнено: `<тека>/<задача>`."""
+        module = dm.catalog()[MID]
+        other = os.path.join(self.home, 'elsewhere', 'tx')
+        with mock.patch.dict(module._fns, {'publish': lambda ctx, build, task: {'path': other}}):
+            st, body = self.post('/api/publish')
+        self.assertEqual((st, body.get('ok'), body.get('code')), (502, False, 'module-error'), body)
+        self.assertNotIn('publish_local', self.meta())
+
+    def test_the_destination_through_a_symlinked_folder_is_still_the_destination(self):
+        """Порівняння — за `realpath`: модуль, що повернув шлях через посилання на ту саму теку, не відмовляється."""
+        real = os.path.join(self.home, 'pubs', 'real')
+        os.makedirs(real)
+        alias = os.path.join(self.home, 'pubs', 'alias')
+        os.symlink(real, alias)
+        self.set_folder(real)
+        module = dm.catalog()[MID]
+        real_publish = module.fn('publish')
+
+        def via_alias(ctx, build, task):
+            real_publish(ctx, build, task)
+            return {'path': os.path.join(alias, task['id'])}
+
+        with mock.patch.dict(module._fns, {'publish': via_alias}):
+            st, body = self.post('/api/publish')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.meta()['publish_local']['path'], os.path.join(alias, 'tx'))
+
     # ---- пароль ----
 
     def test_a_password_secret_gates_the_wrapper_and_every_page(self):
@@ -1027,43 +1092,86 @@ class Dispatch(unittest.TestCase):
         self.addCleanup(patch.stop)
         return entered, inside, second, release, kwargs
 
-    def _concurrent(self, first, second_run, entered, inside, second, release):
-        """Запустити `first`, дочекатись, що вона всередині модуля, запустити `second_run` і перевірити, що
-        друга НЕ входить у модуль, поки перша не вийшла. Повертає `(відповіді, друга_увійшла_завчасно)`."""
-        results = []
-        t1 = threading.Thread(target=lambda: results.append(first()), daemon=True)
-        t2 = threading.Thread(target=lambda: results.append(second_run()), daemon=True)
+    def _concurrent(self, first, second_run, entered, inside, release):
+        """Запустити `first`, дочекатись, що вона всередині (стоїть), запустити `second_run` в окремому потоці й
+        дати їй 5 с: вона мусить ВІДПОВІСТИ (замок зайнятий — одразу 409, інше призначення — працює), а не чекати.
+        Потім відпустити першу. Повертає `(відповідь першої, відповідь другої, скільки викликів увійшло в патч,
+        поки перша стояла)`."""
+        box = {}
+        t1 = threading.Thread(target=lambda: box.__setitem__('first', first()), daemon=True)
+        t2 = threading.Thread(target=lambda: box.__setitem__('second', second_run()), daemon=True)
         t1.start()
-        self.assertTrue(inside.wait(15), 'перша публікація не дійшла до модуля')
+        self.assertTrue(inside.wait(15), 'перша публікація не дійшла до патча')
         t2.start()
-        early = second.wait(1.0)
+        t2.join(5)
+        waited = t2.is_alive()
+        seen = len(entered)
         release.set()
         t1.join(30)
         t2.join(30)
         self.assertFalse(t1.is_alive() or t2.is_alive(), 'публікація зависла')
-        return results, early
+        self.assertFalse(waited, 'друга публікація ЧЕКАЛА (замок мусить відповідати одразу: 409 publish-busy)')
+        return box['first'], box['second'], seen
 
-    def test_the_lock_serializes_two_publishes_of_one_task(self):
+    def _publish_in(self, sid, payload=None):
+        """Публікація в просторі `sid` напряму через `Handler._publish` із заглушкою: відповідь — `(статус, тіло)`."""
+        def run():
+            stub = _Stub()
+            with spaces.request_space(sid):
+                serve.Handler._publish(stub, {} if payload is None else payload)
+            return stub.sent[0]
+        return run
+
+    def assert_busy(self, st, body):
+        self.assertEqual((st, body.get('ok'), body.get('code')), (409, False, 'publish-busy'), body)
+        self.assertTrue(body['error'])
+
+    def test_a_second_publish_of_one_task_is_409_busy_while_the_first_runs(self):
+        """Замок БЕЗ очікування: зависла мережева тека не нагромаджує потоки, що чекають, а повторний клік дістає
+        чітку відповідь одразу. Коли перша публікація вийшла, замок вільний."""
         entered, inside, second, release, kwargs = self._slow()
-        results, early = self._concurrent(lambda: self.post('/api/publish'), lambda: self.post('/api/publish'),
-                                          entered, inside, second, release)
-        self.assertFalse(early, 'друга публікація тієї ж задачі зайшла в модуль, поки перша ще всередині')
-        self.assertEqual([st for st, _ in results], [200, 200], results)
-        self.assertEqual([a[1] for a in entered], ['publish', 'publish'])
+        first, sec, seen = self._concurrent(lambda: self.post('/api/publish'), lambda: self.post('/api/publish'),
+                                            entered, inside, release)
+        self.assert_busy(*sec)
+        self.assertEqual(seen, 1, 'друга публікація тієї ж задачі зайшла в модуль, поки перша ще всередині')
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(self.post('/api/publish')[0], 200, 'замок не відпущено після першої публікації')
         # `timeout=` перетворив би виклик на робочий потік: що не вклався, копіював би далі БЕЗ замка
         self.assertEqual(kwargs, [{}, {}], 'publish кликано з timeout')
         self.assertEqual(os.listdir(self.folder), ['tx'])
         self.assertTrue(os.path.isfile(os.path.join(self.dest, '.deai-published')))
 
+    def test_build_only_obeys_the_same_lock(self):
+        """`build_only` теж стирає `<задача>/publish/`, з якого перша публікація копіює: те саме 409."""
+        entered, inside, second, release, kwargs = self._slow()
+        first, sec, seen = self._concurrent(lambda: self.post('/api/publish'),
+                                            lambda: self.post('/api/publish', {'build_only': True}),
+                                            entered, inside, release)
+        self.assert_busy(*sec)
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(self.post('/api/publish', {'build_only': True})[0], 200)
+
     def test_the_build_runs_under_the_lock_too(self):
         """Збірка стирає й пише `<задача>/publish/`, з якого модуль копіює: друга публікація тієї самої задачі не
-        сміє почати збірку, поки перша ще копіює (лишила б напівзібрану теку під першою)."""
+        сміє почати збірку, поки перша ще триває (лишила б напівзібрану теку під першою)."""
         entered, inside, second, release, kwargs = self._slow(serve, 'build_preview')
-        results, early = self._concurrent(lambda: self.post('/api/publish'), lambda: self.post('/api/publish'),
-                                          entered, inside, second, release)
-        self.assertFalse(early, 'друга збірка тієї ж задачі почалась, поки перша публікація ще триває')
-        self.assertEqual([st for st, _ in results], [200, 200], results)
-        self.assertEqual(len(entered), 2)
+        first, sec, seen = self._concurrent(lambda: self.post('/api/publish'), lambda: self.post('/api/publish'),
+                                            entered, inside, release)
+        self.assert_busy(*sec)
+        self.assertEqual(seen, 1, 'друга збірка тієї ж задачі почалась, поки перша публікація ще триває')
+        self.assertEqual(first[0], 200, first)
+
+    def test_the_lock_is_released_after_a_failed_publish(self):
+        """Замок без очікування, який не відпущено після збою, зробив би задачу «зайнятою» назавжди."""
+        module = dm.catalog()[MID]
+
+        def crashes(ctx, build, task):
+            raise RuntimeError('впало')
+
+        with mock.patch.dict(module._fns, {'publish': crashes}):
+            self.assertEqual(self.post('/api/publish')[0], 502)
+        st, body = self.post('/api/publish')
+        self.assertEqual(st, 200, body)
 
     def test_the_lock_is_keyed_by_the_destination_not_by_the_space(self):
         """Правило `folder_ok` пускає ту саму теку для двох просторів (і тека одного — типова теку іншого): задачі
@@ -1075,41 +1183,26 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(dm.published_root(s1, MID), shared)
         self.assertEqual(dm.published_root(s2, MID), shared)
         entered, inside, second, release, kwargs = self._slow()
-
-        def publish_in(sid):
-            def run():
-                stub = _Stub()
-                with spaces.request_space(sid):
-                    serve.Handler._publish(stub, {})
-                return stub.sent
-            return run
-
-        results, early = self._concurrent(publish_in('s1'), publish_in('s2'), entered, inside, second, release)
-        self.assertFalse(early, 'публікації двох просторів у ТУ САМУ теку не виключають одна одну')
-        self.assertEqual([(sent[0][0], sent[0][1]['ok']) for sent in results], [(200, True), (200, True)], results)
-        self.assertEqual(kwargs, [{}, {}])
+        first, sec, seen = self._concurrent(self._publish_in('s1'), self._publish_in('s2'), entered, inside, release)
+        self.assert_busy(*sec)
+        self.assertEqual(seen, 1, 'публікації двох просторів у ТУ САМУ теку не виключають одна одну')
+        self.assertEqual((first[0], first[1]['ok']), (200, True), first)
+        self.assertEqual(kwargs, [{}])
+        self.assertEqual(self._publish_in('s2')()[0], 200, 'після першої публікації друга проходить')
         self.assertEqual(sorted(os.listdir(shared)), ['t1'])
         self.assertTrue(os.path.isfile(os.path.join(shared, 't1', '.deai-published')))
         for rec in (s1, s2):
             pl = self.meta(os.path.join(rec['path'], 't1'))['publish_local']
             self.assertEqual(pl['path'], os.path.join(shared, 't1'))
 
-    def test_tasks_with_different_destinations_do_not_wait_for_each_other(self):
-        """Замок — на призначення, не глобальний: публікація однієї задачі не тримає іншу."""
-        s1 = self._register(self._space('s1', os.path.join(self.home, 'deai-work', 's1'), False, 't1'))
+    def test_tasks_with_different_destinations_do_not_block_each_other(self):
+        """Замок — на призначення, не глобальний: публікація однієї задачі не тримає іншу (ні 409, ні очікування)."""
+        self._register(self._space('s1', os.path.join(self.home, 'deai-work', 's1'), False, 't1'))
         entered, inside, second, release, kwargs = self._slow()
-
-        def publish_in(sid):
-            def run():
-                stub = _Stub()
-                with spaces.request_space(sid):
-                    serve.Handler._publish(stub, {})
-                return stub.sent
-            return run
-
-        results, early = self._concurrent(publish_in('off'), publish_in('s1'), entered, inside, second, release)
-        self.assertTrue(early, 'різні призначення чекали одне одного')
-        self.assertEqual([sent[0][0] for sent in results], [200, 200])
+        first, sec, seen = self._concurrent(self._publish_in('off'), self._publish_in('s1'), entered, inside, release)
+        self.assertEqual((sec[0], sec[1]['ok']), (200, True), sec)
+        self.assertEqual(seen, 2, 'різні призначення чекали одне одного')
+        self.assertEqual(first[0], 200)
 
     def test_the_lock_key_is_the_real_folder_and_the_case_folded_task_id(self):
         real = os.path.join(self.tmp, 'real-folder')
@@ -1124,6 +1217,42 @@ class Dispatch(unittest.TestCase):
         self.assertNotEqual(serve._publish_key(os.path.join(self.tmp, 'other'), 'task-1'), key)
         self.assertIs(serve._publish_lock(key), serve._publish_lock(serve._publish_key(alias, 'task-1')))
         self.assertIsNot(serve._publish_lock(key), serve._publish_lock(serve._publish_key(real, 'task-2')))
+
+    def test_the_lock_key_folds_nfc_and_nfd_spellings_of_a_cyrillic_folder(self):
+        """macOS бачить `й` (U+0439) і `и`+U+0306 як одну теку: ключ нормалізується в NFC (`folder_ok` теж)."""
+        nfc = unicodedata.normalize('NFC', 'Тека-й-ї')
+        nfd = unicodedata.normalize('NFD', 'Тека-й-ї')
+        self.assertNotEqual(nfc, nfd, 'свідок: у тесті справді два різні написання')
+        self.assertEqual(serve._publish_key(os.path.join(self.tmp, nfc), 'T'),
+                         serve._publish_key(os.path.join(self.tmp, nfd), 'T'))
+        self.assertEqual(serve._publish_key(os.path.join(self.tmp, 'p'), nfc),
+                         serve._publish_key(os.path.join(self.tmp, 'p'), nfd))
+
+    def test_the_folder_that_is_checked_locked_and_written_is_one_value(self):
+        """`ctx` будується ОДИН раз, тека береться з нього: налаштування, змінене між перевіркою `folder_ok` і
+        записом, не розводить ключ замка (і перевірену теку) з текою, у яку модуль справді пише."""
+        f1, f2 = os.path.join(self.home, 'pubs', 'one'), os.path.join(self.home, 'pubs', 'two')
+        self.set_folder(f1)
+        real_ok, real_key = dm.folder_ok, serve._publish_key
+        checked, keyed = [], []
+
+        def changing(space, folder, **kw):
+            checked.append(folder)
+            res = real_ok(space, folder, **kw)
+            self.set_folder(f2)                                 # налаштування змінили ПІСЛЯ перевірки
+            return res
+
+        def spy(folder, tid):
+            keyed.append(folder)
+            return real_key(folder, tid)
+
+        with mock.patch.object(dm, 'folder_ok', changing), mock.patch.object(serve, '_publish_key', spy):
+            st, body = self.post('/api/publish')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['local']['path'], os.path.join(f1, 'tx'))
+        self.assertEqual((set(checked), keyed), ({f1}, [f1]))
+        self.assertTrue(os.path.isfile(os.path.join(f1, 'tx', 'index.html')))
+        self.assertFalse(os.path.exists(f2), 'модуль писав у теку, якої не перевіряли й не замикали')
 
     def test_publish_local_is_written_from_a_fresh_read_of_iterations_json(self):
         """Між публікацією (`call`) і записом `publish_local` дизайнер перемкнув зелену крапку: запис зі старого
