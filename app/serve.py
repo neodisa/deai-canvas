@@ -3099,6 +3099,108 @@ def gate_html(tid, pw):
                                pw_js=js_literal(str(pw)))
 
 
+#: Гейт-заглушка превʼю БЕЗ пароля: обгортка не чекає розблокування, бо розблоковувати нічого. Той самий
+#: хук, який ставить справжній гейт в `unlock()` (`window.__gateOpen`): `app/ext-shell.js` відкриває
+#: оболонку лише по ньому (`if (window.__gateOpen) open()`), тож без нього превʼю стояло б порожнім.
+NO_GATE_OPEN = '<script>window.__gateOpen=true;</script>'
+
+
+def build_preview(task, tid, its, *, comments=True, gate_pw):
+    """Зібрати `publish/` з ОПУБЛІКОВАНИХ ітерацій `its`: сторінки, спільні файли ітерацій, оболонка,
+    кадри, маніфест, обгортка. ЄДИНА збірка превʼю: нею користуються і ЛІГА (`Handler._publish`, далі
+    vercel deploy), і модулі публікації (статика в локальну теку) — друга копія збірки розійшлась би з
+    першою мовчки.
+
+    `comments=False` — без коментатора: ні `publish/comment-layer/` (бандли), ні ін'єкції в сторінки.
+    Потрібно там, де Supabase недосяжний або недоречний.
+
+    `gate_pw` — пароль гейта, ОБОВʼЯЗКОВИЙ іменований аргумент (забути його не вдасться). `None` — превʼю
+    БЕЗ гейта: сторінки не чіпаємо взагалі (`_inject_gate` ще й переписує `<title>`), а обгортка
+    відкривається сама (`NO_GATE_OPEN`), із порожнім паролем для «Копіювати посилання». ⚠️ `''` — це НЕ
+    «без гейта», а гейт, що відчиняється порожнім полем; «без гейта» лише `None`. Гейт-хелпери кличемо
+    лише коли він є: без пароля `gate_html` не має що вшивати, а `str(None)` дав би пароль «None».
+
+    ⛔ Хелпери (`gate_html`, `_inject_gate`, `preview_index_html`, `inject_comment_layer`, `BUNDLES`…)
+    беремо з модуля ПРИ ВИКЛИКУ, а не захоплюємо аргументами за замовчуванням: наявні тести підміняють
+    їх на `serve`, і захоплене значення тихо обійшло б підміну.
+
+    Тут НЕ живе: 400 «немає ітерацій» (збірка отримує вже готовий перелік `its`), `code_stale`, деплой.
+    → `{'dir', 'iterations', 'frames'[, 'frames_warnings']}`; `ok` і `code_stale` додає викликач.
+    """
+    pub = os.path.join(task['dir'], 'publish')
+    if os.path.isdir(pub):
+        shutil.rmtree(pub)
+    os.makedirs(pub)
+    if comments:
+        # бандлы комментатора один раз
+        vend = os.path.join(pub, 'comment-layer')
+        os.makedirs(vend)
+        for b in BUNDLES:
+            shutil.copy2(os.path.join(ROOT, 'app', 'vendor', b), os.path.join(vend, b))
+    # Спільні модулі зовнішньої оболонки — статика, від сторінок не залежать,
+    # тому їдуть тут же, одразу після `rmtree` (порядок важливий: усе нове
+    # везеться ПІСЛЯ затирання publish/).
+    shell = os.path.join(pub, 'shell')
+    os.makedirs(shell)
+    for m in SHELL_MODULES:
+        shutil.copy2(os.path.join(ROOT, 'app', m), os.path.join(shell, m))
+    gate = gate_html(tid, gate_pw) if gate_pw is not None else None
+    # ОДИН знімок дерев на всю збірку: сторінки, спільні файли й `outline`
+    # маніфесту рахуються з нього, а не з окремих читань pages.json.
+    trees = {it['id']: iteration_pages(task, it['id']) for it in its}
+    pages = published_pages(task, its, trees)
+    # Спільні файли ітерації (assets/icons/fonts) — до циклу сторінок:
+    # сторінки посилаються на них через `../`, а цикл везе лише свої теки.
+    for it in its:
+        copy_iteration_shared(task, it['id'], os.path.join(pub, it['id']), trees[it['id']])
+    for p in pages:
+        src = os.path.join(task['dir'], 'iterations', p['it'], p['rel'])
+        dst = os.path.join(pub, p['out_rel'])
+        if p['rel']:
+            copy_mockup(src, dst)
+        else:
+            copy_root_files(src, dst)
+        page_file = os.path.join(dst, 'index.html')
+        with open(page_file, encoding='utf-8') as fh:
+            html = fh.read()
+        if comments:
+            depth_up = '../' * (p['out_rel'].count('/') + 1)
+            html = inject_comment_layer(html, comment_channel(task, tid),
+                                        f'{depth_up}comment-layer',
+                                        version=pm.page_version_tag(p['it'], p['page']))
+        if gate is not None:
+            # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
+            # пряме посилання на неї минало пароль: перевірено живцем —
+            # dc-sample.vercel.app/ пароль просив, а /it4/ віддавав макет.
+            html = _inject_gate(html, gate)
+        with open(page_file, 'w', encoding='utf-8') as fh:
+            fh.write(html)
+    # Кадри — ПІСЛЯ сторінок і з тим самим `pages`: фільтр публікації
+    # рахується один раз і однаково для обох.
+    frames, frame_warnings = {}, []
+    for it in its:
+        fr, warn = publish_frames(task, it['id'], pages,
+                                  os.path.join(pub, it['id'], '_frames'))
+        frames[it['id']] = fr
+        if warn:
+            frame_warnings.append(warn)
+    publish_manifest(task, tid, its, pages, frames, pub, trees)
+    if gate is None:
+        wrapper = preview_index_html(NO_GATE_OPEN, '')
+    else:
+        wrapper = preview_index_html(gate, gate_pw)
+    with open(os.path.join(pub, 'index.html'), 'w', encoding='utf-8') as fh:
+        fh.write(wrapper)
+    result = {'dir': pub, 'iterations': len(its),
+              'frames': sum(len(f) for f in frames.values())}
+    # ⛔ Публікація не сміє мовчати про те, що кадри не поїхали: далі йде
+    # деплой і посилання менеджеру, а порожній «Огляд» виглядає як «дизайнер
+    # нічого не зняв».
+    if frame_warnings:
+        result['frames_warnings'] = frame_warnings
+    return result
+
+
 def _vercel_project(tid, task):
     """Опакове ім'я Vercel-проєкту для задачі.
 
@@ -5346,7 +5448,8 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'current': sid, 'task': task})
 
     def _publish(self, payload):
-        """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer.
+        """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer
+        (сама сборка — `build_preview`, общая с модулями публикации).
         Затем vercel deploy (скриптом, без AI); URL сохраняется в iterations.json."""
         if not spaces.integrations_on():
             # ПЕРШИМ рядком, до збірки `publish/` (вона `rmtree`-ить теку): Vercel, npx і дашборд
@@ -5361,72 +5464,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(400, 'no iterations marked for publish - '
                                  'toggle the green dot first')
             return
-        pub = os.path.join(task['dir'], 'publish')
-        if os.path.isdir(pub):
-            shutil.rmtree(pub)
-        os.makedirs(pub)
-        # бандлы комментатора один раз
-        vend = os.path.join(pub, 'comment-layer')
-        os.makedirs(vend)
-        for b in BUNDLES:
-            shutil.copy2(os.path.join(ROOT, 'app', 'vendor', b), os.path.join(vend, b))
-        # Спільні модулі зовнішньої оболонки — статика, від сторінок не залежать,
-        # тому їдуть тут же, одразу після `rmtree` (порядок важливий: усе нове
-        # везеться ПІСЛЯ затирання publish/).
-        shell = os.path.join(pub, 'shell')
-        os.makedirs(shell)
-        for m in SHELL_MODULES:
-            shutil.copy2(os.path.join(ROOT, 'app', m), os.path.join(shell, m))
+        # Пароль ЛІГА — завжди є (типовий 1100, якщо не задано): гейт тут обовʼязковий, і лише
+        # модуль без пароля передає `gate_pw=None` (див. `build_preview`).
         pw = preview_password(load_tasks(), task)
-        gate = gate_html(tid, pw)
-        # ОДИН знімок дерев на всю збірку: сторінки, спільні файли й `outline`
-        # маніфесту рахуються з нього, а не з окремих читань pages.json.
-        trees = {it['id']: iteration_pages(task, it['id']) for it in its}
-        pages = published_pages(task, its, trees)
-        # Спільні файли ітерації (assets/icons/fonts) — до циклу сторінок:
-        # сторінки посилаються на них через `../`, а цикл везе лише свої теки.
-        for it in its:
-            copy_iteration_shared(task, it['id'], os.path.join(pub, it['id']), trees[it['id']])
-        for p in pages:
-            src = os.path.join(task['dir'], 'iterations', p['it'], p['rel'])
-            dst = os.path.join(pub, p['out_rel'])
-            if p['rel']:
-                copy_mockup(src, dst)
-            else:
-                copy_root_files(src, dst)
-            page_file = os.path.join(dst, 'index.html')
-            with open(page_file, encoding='utf-8') as fh:
-                html = fh.read()
-            depth_up = '../' * (p['out_rel'].count('/') + 1)
-            html = inject_comment_layer(html, comment_channel(task, tid),
-                                        f'{depth_up}comment-layer',
-                                        version=pm.page_version_tag(p['it'], p['page']))
-            # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
-            # пряме посилання на неї минало пароль: перевірено живцем —
-            # dc-sample.vercel.app/ пароль просив, а /it4/ віддавав макет.
-            html = _inject_gate(html, gate)
-            with open(page_file, 'w', encoding='utf-8') as fh:
-                fh.write(html)
-        # Кадри — ПІСЛЯ сторінок і з тим самим `pages`: фільтр публікації
-        # рахується один раз і однаково для обох.
-        frames, frame_warnings = {}, []
-        for it in its:
-            fr, warn = publish_frames(task, it['id'], pages,
-                                      os.path.join(pub, it['id'], '_frames'))
-            frames[it['id']] = fr
-            if warn:
-                frame_warnings.append(warn)
-        publish_manifest(task, tid, its, pages, frames, pub, trees)
-        wrapper = preview_index_html(gate, pw)
-        with open(os.path.join(pub, 'index.html'), 'w', encoding='utf-8') as fh:
-            fh.write(wrapper)
-        result = {'ok': True, 'dir': pub, 'iterations': len(its),
-                  'frames': sum(len(f) for f in frames.values())}
-        # ⛔ Публікація не сміє мовчати про те, що кадри не поїхали: далі йде
-        # деплой і посилання менеджеру, а порожній «Огляд» виглядає як «дизайнер
-        # нічого не зняв».
-        if frame_warnings:
-            result['frames_warnings'] = frame_warnings
+        built = build_preview(task, tid, its, comments=True, gate_pw=pw)
+        # ⛔ `pub` потрібен ДАЛІ — деплою (`cwd=pub`, `_stable_alias`, `_remember_vercel_scope`); його
+        # читає лише гілка без `build_only`, тож вилучення збірки без цього рядка ламає тільки справжній
+        # деплой (`NameError` посеред відповіді), а `build_only`-тести лишаються зеленими.
+        pub = built['dir']
+        # `ok` — ПЕРШИМ ключем: порядок ключів JSON спостережуваний (відповідь байт у байт як до
+        # виносу збірки), тому результат збірки розгортається ПІСЛЯ нього.
+        result = {'ok': True, **built}
         # Попередження їде в КОЖНІЙ відповіді публікації — і при build_only, і при
         # ранньому виході без Node: обгортка вже зібрана кодом процесу, і дизайнер
         # мусить побачити, що вона старіша за диск (фідбек 25.08.2026).
