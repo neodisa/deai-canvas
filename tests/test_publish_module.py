@@ -1549,8 +1549,12 @@ class TaskIdParity(unittest.TestCase):
             self.assertFalse(self._module_accepts(tid), repr(tid))
 
 
-class PublishedRoute(DispatchWorld):
-    """Роздача опублікованого: `GET /published/<простір>/<задача>/<файл>` (Task 5).
+class _PublishedTests:
+    """Спільні тести роздачі опублікованого: `GET /published/<простір>/<задача>/<файл>` (Task 5). НЕ `TestCase`: їх
+    запускають два набори з одним і тим самим світом — `PublishedRoute` (обхід теки ДЕСКРИПТОРАМИ, як на macOS і
+    Linux) і `PublishedRouteFallback` (запасний шляховий спосіб, який використовує ОС без `dir_fd`, — його ввімкнено
+    підміною `_PUBLISHED_DIRFD`). Поведінка зовні (що віддається, заголовки, 404) мусить бути однаковою; різні лише
+    тести підміни між перевіркою й відкриттям, і вони в самих наборах.
 
     Світ — той самий, що в `Dispatch`; у `setUp` задача `tx` простору `off` публікується справжнім модулем
     (`static-publish`) у `<домівка>/deai-published/off/tx`. Усе, що не має віддаватись, ЛЕЖИТЬ на диску (файл за
@@ -1957,80 +1961,6 @@ class PublishedRoute(DispatchWorld):
         self.assertEqual((st, body.get('ok')), (403, False), body)
         self.assertFalse(os.path.exists(os.path.join(self.tx_dir, 'publish')), 'публікація виконалась попри чужий Origin')
 
-    # ---- підміна між перевіркою й відкриттям (TOCTOU) ----
-
-    def after_resolve(self, mutate):
-        """Підміна `published_target`: рішення ухвалено (усі перевірки шляху пройдено), і ЛИШЕ ТОДІ диск змінюється — рівно
-        той проміжок між перевіркою й відкриттям файла, який використовує гонка з посиланнями."""
-        real = serve.published_target
-
-        def hooked(path):
-            found = real(path)
-            mutate()
-            return found
-        return mock.patch.object(serve, 'published_target', hooked)
-
-    def test_a_file_swapped_for_a_symlink_after_the_checks_is_not_followed(self):
-        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
-        victim = self.put(os.path.join(self.dest, 'swap.txt'), 'REAL')
-        self.put(os.path.join(self.dest, 'inside.txt'), 'INSIDE')
-        self.assertEqual(self.ok(self.root + 'swap.txt')[1], b'REAL')                         # контроль: без підміни віддається
-
-        def to(target):
-            def swap():
-                os.remove(victim)
-                os.symlink(target, victim)
-            return swap
-        with self.after_resolve(to(outside)):                  # назовні: це ловить і перевірка шляху дескриптора
-            self.gone(self.root + 'swap.txt')
-        os.remove(victim)
-        self.put(victim, 'REAL')
-        with self.after_resolve(to(os.path.join(self.dest, 'inside.txt'))):     # усередину: лише `O_NOFOLLOW`
-            self.gone(self.root + 'swap.txt')
-
-    def test_without_a_descriptor_path_the_fallback_still_refuses_an_escape(self):
-        """ОС без шляху дескриптора (Windows): запасний варіант — `realpath(target)` ПІСЛЯ відкриття. Слабший, але
-        підміну, що вже сталась до відкриття, ловить, а звичайні файли віддаються."""
-        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
-        with mock.patch.object(serve, '_published_fd_path', return_value=None):
-            self.assertEqual(self.ok(self.root + 'it2/index.html')[1], _bytes(os.path.join(self.dest, 'it2', 'index.html')))
-            self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
-            self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
-
-            def swap_dir():
-                os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
-                os.symlink(os.path.dirname(outside), os.path.join(self.dest, 'sub'))
-            self.put(os.path.join(self.folder, 'page.txt'), 'OUT')
-            with self.after_resolve(swap_dir):
-                self.gone(self.root + 'sub/page.txt')
-
-    def test_an_intermediate_directory_swapped_for_a_symlink_after_the_checks_is_not_followed(self):
-        """`O_NOFOLLOW` дивиться лише на ОСТАННЮ складову: проміжну теку підмінили посиланням — відкриття веде за межі,
-        і ловить його тільки перевірка, де дескриптор лежить насправді."""
-        self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
-        out = self.put(os.path.join(self.folder, 'elsewhere', 'page.txt'), 'OUT')
-        self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
-
-        def swap():
-            os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
-            os.symlink(os.path.dirname(out), os.path.join(self.dest, 'sub'))
-        with self.after_resolve(swap):
-            self.gone(self.root + 'sub/page.txt')
-
-    def test_a_fifo_swapped_in_after_the_checks_is_404_and_does_not_hang_a_thread(self):
-        if not hasattr(os, 'mkfifo'):
-            self.skipTest('нема mkfifo')
-        victim = self.put(os.path.join(self.dest, 'it2', 'pipe.txt'), 'REAL')
-        self.assertEqual(self.ok(self.root + 'it2/pipe.txt')[1], b'REAL')
-
-        def swap():
-            os.remove(victim)
-            os.mkfifo(victim)
-        t0 = time.monotonic()
-        with self.after_resolve(swap):
-            self.gone(self.root + 'it2/pipe.txt')
-        self.assertLess(time.monotonic() - t0, 5, '`open` на FIFO завис')
-
     def test_a_hard_link_to_a_file_outside_is_404(self):
         """Копії модуля мають `st_nlink == 1`; жорстке посилання на чужий файл — ні, і `islink` його не бачить."""
         outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
@@ -2056,25 +1986,6 @@ class PublishedRoute(DispatchWorld):
         self.assertTrue(dm.folder_ok(self.off, upper)[0])
         self.ok(self.root + 'manifest.json')
         self.ok(self.root + 'it1/alpha/index.html')
-
-    def test_rejected_opens_do_not_leak_descriptors(self):
-        if not os.path.isdir('/dev/fd'):
-            self.skipTest('нема /dev/fd')
-        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
-        hard = os.path.join(self.dest, 'hard.txt')
-        os.link(outside, hard)
-        real_dest = serve._published_real_dir(self.dest)
-        fds = lambda: len(os.listdir('/dev/fd'))
-        before = fds()
-        for _ in range(150):
-            self.assertIsNone(serve.open_published_file(hard, real_dest))                    # nlink 2
-            self.assertIsNone(serve.open_published_file(self.dest, real_dest))               # тека, не файл
-            self.assertIsNone(serve.open_published_file(outside, real_dest))                 # поза текою задачі
-            self.assertIsNone(serve.open_published_file(os.path.join(self.dest, 'нема'), real_dest))
-        self.assertLess(fds() - before, 10, 'відхилені відкриття лишають дескриптори')
-        opened = serve.open_published_file(os.path.join(self.dest, 'manifest.json'), real_dest)
-        self.assertIsNotNone(opened)
-        os.close(opened[0])                                                                  # власність перейшла до нас
 
     def test_a_large_file_is_streamed_in_chunks_and_arrives_intact(self):
         data = bytes(range(256)) * 20480                                                         # 5 МіБ
@@ -2149,6 +2060,55 @@ class PublishedRoute(DispatchWorld):
         st, headers, _ = self.raw_head(b'/published/off/tx?x=%0d%0aSet-Cookie:%20a=b')
         self.assertEqual(headers['location'], b'/published/off/tx/?x=%0d%0aSet-Cookie:%20a=b')   # `%0d%0a` лишився ТЕКСТОМ
 
+    def test_a_symlinked_publish_folder_is_still_served(self):
+        """Сама тека публікації може бути посиланням (як при публікації: `realpath` розвʼязується ОДИН раз)."""
+        real = os.path.join(self.home, 'pubs', 'real')
+        alias = os.path.join(self.home, 'pubs', 'alias')
+        os.makedirs(real)
+        os.symlink(real, alias)
+        self.set_folder(alias)
+        st, body = self.post('/api/publish')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['local']['path'], os.path.join(alias, 'tx'))
+        self.assertTrue(os.path.isfile(os.path.join(real, 'tx', 'index.html')))
+        self.ok(self.root + 'manifest.json')
+        self.ok(self.root + 'it1/alpha/')
+
+    def fd_count(self):
+        if not os.path.isdir('/dev/fd'):
+            self.skipTest('нема /dev/fd')
+        return len(os.listdir('/dev/fd'))
+
+    def settled_fd_growth(self, before, limit=12):
+        """Дескриптори вирівнюються не миттєво (потік обробника дописує після відповіді клієнту): чекаємо до 5 с."""
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            growth = self.fd_count() - before
+            if growth < limit:
+                return growth
+            time.sleep(0.1)
+        return self.fd_count() - before
+
+    def test_serving_leaks_no_descriptors_on_200_304_404_and_a_dropped_client(self):
+        data = bytes(range(256)) * 20480                                                         # 5 МіБ: не вміщається в буфери сокета
+        self.put(os.path.join(self.dest, 'big.bin'), data, 'wb')
+        etag = self.ok(self.root + 'manifest.json')[0]['etag']
+        before = self.fd_count()
+        for _ in range(60):
+            self.assertEqual(self.fetch(self.root + 'manifest.json')[0], 200)
+            self.assertEqual(self.fetch(self.root + 'manifest.json', {'If-None-Match': etag})[0], 304)
+            self.assertEqual(self.fetch(self.root + 'nope.txt')[0], 404)
+            self.assertEqual(self.fetch(self.root + 'it1/alpha')[0], 301)
+        self.assertLess(self.settled_fd_growth(before), 12, '200/304/404/301 лишають дескриптори')
+        before = self.fd_count()
+        for _ in range(25):                                                                      # клієнт іде посеред відповіді
+            sock = socket.create_connection(('127.0.0.1', self.port), timeout=10)
+            sock.sendall(b'GET ' + self.root.encode() + b'big.bin HTTP/1.0\r\nHost: x\r\n\r\n')
+            sock.recv(4096)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\x00\x00\x00\x00\x00\x00\x00')   # RST при закритті
+            sock.close()
+        self.assertLess(self.settled_fd_growth(before), 12, 'обрив клієнта посеред файла лишає дескриптор')
+
     def test_a_file_that_vanishes_between_the_check_and_the_read_is_404(self):
         """Публікація посеред заміни теки: файл був у перевірці, а до читання зник — порожній 404 із захисними
         заголовками, а не обрив зʼєднання."""
@@ -2160,6 +2120,341 @@ class PublishedRoute(DispatchWorld):
         for path in (self.root, self.root + 'manifest.json', '/published/off/tx', self.root + 'nope', '/published/nope/x/'):
             self.fetch(path)
         self.assert_quiet()
+
+
+class PublishedRoute(_PublishedTests, DispatchWorld):
+    """Роздача на ОС з `dir_fd` (macOS, Linux): обхід теки дескрипторами (`serve._published_walk`), закрито по збою.
+    Підміну диска вставляємо ШВАМИ — `_published_openat`/`_published_statat`/`_published_fstat`, що їх обхід кличе між
+    кроками: перед відкриттям імені диск змінюється (посилання замість файла, теки, жорстке посилання…) — і відповідь
+    мусить бути 404 (чи, коли підміна після відкриття, лишитись відповіддю про те, що вже відкрито)."""
+
+    def setUp(self):
+        if not serve._PUBLISHED_DIRFD:
+            if sys.platform in ('darwin', 'linux'):          # тут обхід МУСИТЬ діяти: мовчазний пропуск знищив би тести
+                self.fail('на macOS/Linux обхід дескрипторами вимкнено (`_PUBLISHED_DIRFD` хибне)')
+            self.skipTest('ОС без dir_fd: обхід дескрипторами не діє')
+        super().setUp()
+
+    def seam(self, name, when, mutate, after=False):
+        """Шов `serve.<name>`: на першому виклику, для якого `when(*args)` істинне, виконується `mutate()` — ПЕРЕД
+        справжнім викликом (`after=True` — ПІСЛЯ нього). `fired` — чи спрацював (хук, що не спрацював, нічого б не доводив)."""
+        real = getattr(serve, name)
+        fired = []
+
+        def wrapper(*args, **kw):
+            hit = not fired and when(*args, **kw)
+            if hit and not after:
+                fired.append(1)
+                mutate()
+            out = real(*args, **kw)
+            if hit and after:
+                fired.append(1)
+                mutate()
+            return out
+        patch = mock.patch.object(serve, name, wrapper)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return fired
+
+    def test_the_walk_is_the_one_in_charge_here(self):
+        found = serve.published_target('/published/off/tx/manifest.json')
+        self.assertEqual(found[0], 'opened')
+        os.close(found[2][0])
+
+    # ---- файл: імʼя зайняли між lstat і open ----
+
+    def test_a_file_swapped_for_a_symlink_between_the_lstat_and_the_open_is_refused(self):
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        victim = self.put(os.path.join(self.dest, 'swap.txt'), 'REAL')
+        self.put(os.path.join(self.dest, 'inside.txt'), 'INSIDE')
+        self.assertEqual(self.ok(self.root + 'swap.txt')[1], b'REAL')                         # контроль: без підміни віддається
+        for target in (outside, os.path.join(self.dest, 'inside.txt')):                       # назовні й усередину — обидва `O_NOFOLLOW`
+            with self.subTest(target=os.path.basename(target)):
+                if os.path.lexists(victim):
+                    os.remove(victim)                                      # без `put` крізь посилання в чужий файл
+                self.put(victim, 'REAL')
+
+                def swap(target=target):
+                    os.remove(victim)
+                    os.symlink(target, victim)
+                fired = self.seam('_published_openat', lambda name, *a, **kw: name == 'swap.txt', swap)
+                self.gone(self.root + 'swap.txt')
+                self.assertTrue(fired, 'підміна не відбулась: тест порожній')
+                self.assertEqual(_read(target), 'SECRET' if target == outside else 'INSIDE')
+
+    def test_a_file_replaced_by_another_regular_file_between_the_lstat_and_the_open_is_refused(self):
+        """Той самий `(st_dev, st_ino)`, що в `lstat`, або відмова: імʼя між `lstat` і `open` не сміє вказати на інший файл."""
+        victim = self.put(os.path.join(self.dest, 'swap.txt'), 'REAL')
+
+        def swap():
+            self.put(victim + '.new', 'NEW-CONTENT')
+            os.replace(victim + '.new', victim)
+        self.assertEqual(self.ok(self.root + 'swap.txt')[1], b'REAL')
+        fired = self.seam('_published_openat', lambda name, *a, **kw: name == 'swap.txt', swap)
+        self.gone(self.root + 'swap.txt')
+        self.assertTrue(fired)
+
+    def test_a_file_swapped_after_the_open_is_served_as_it_was_opened(self):
+        """Те, що вже відкрито, не міняється від підміни імені ПІСЛЯ відкриття: віддається відкритий файл, не нове імʼя."""
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        victim = self.put(os.path.join(self.dest, 'swap.txt'), 'REAL')
+
+        def swap():
+            os.remove(victim)
+            os.symlink(outside, victim)
+        fired = self.seam('_published_fstat', lambda fd: True, swap, after=True)       # імʼя підмінено ПІСЛЯ `fstat`
+        hd, body = self.ok(self.root + 'swap.txt')
+        self.assertEqual(body, b'REAL')
+        self.assertTrue(fired)
+
+    def test_a_fifo_swapped_in_between_the_lstat_and_the_open_is_404_and_does_not_hang_a_thread(self):
+        if not hasattr(os, 'mkfifo'):
+            self.skipTest('нема mkfifo')
+        victim = self.put(os.path.join(self.dest, 'it2', 'pipe.txt'), 'REAL')
+        self.assertEqual(self.ok(self.root + 'it2/pipe.txt')[1], b'REAL')
+
+        def swap():
+            os.remove(victim)
+            os.mkfifo(victim)
+        fired = self.seam('_published_openat', lambda name, *a, **kw: name == 'pipe.txt', swap)
+        t0 = time.monotonic()
+        self.gone(self.root + 'it2/pipe.txt')
+        self.assertLess(time.monotonic() - t0, 5, '`open` на FIFO завис')
+        self.assertTrue(fired)
+
+    # ---- жорсткі посилання ----
+
+    def test_a_hard_link_dropped_between_the_open_and_the_fstat_is_still_refused(self):
+        """Файл має два імені на момент `lstat`; друге імʼя прибирається, поки ми відкриваємо, — `fstat` побачив би
+        `nlink == 1` і той самий `ino`, і лише перевірка `nlink` ДО відкриття (в `lstat`) відмовляє. Тож шов `fstat`
+        з незвʼязуванням у нормі НЕ спрацьовує (відмова вже була), а без цієї перевірки спрацьовує і файл віддається —
+        на цьому тримається доведення мутацією."""
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        link = os.path.join(self.dest, 'h.txt')
+        os.link(outside, link)
+        self.assertEqual(os.stat(outside).st_nlink, 2, 'свідок: на момент `lstat` файл має два імені')
+        self.seam('_published_fstat', lambda fd: True, lambda: os.unlink(link))
+        hd, body = self.fetch(self.root + 'h.txt')[1:]
+        self.assertNotIn(b'SECRET', body)
+        self.gone(self.root + 'h.txt')
+
+    def test_a_hard_link_made_between_the_lstat_and_the_open_is_refused(self):
+        """Файл мав одне імʼя на момент `lstat`; другим іменем його зв'язали, поки ми відкривали: `fstat` — `nlink == 2`
+        (той самий `ino`, тож порівняння `ino` цього не бачить)."""
+        victim = self.put(os.path.join(self.dest, 'h3.txt'), 'REAL')
+        self.assertEqual(self.ok(self.root + 'h3.txt')[1], b'REAL')
+        fired = self.seam('_published_openat', lambda name, *a, **kw: name == 'h3.txt',
+                          lambda: os.link(victim, os.path.join(self.folder, 'alias.txt')))
+        self.gone(self.root + 'h3.txt')
+        self.assertTrue(fired)
+
+    # ---- проміжні теки й тека задачі ----
+
+    def test_an_intermediate_directory_swapped_for_a_symlink_before_its_open_is_refused(self):
+        self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
+        out = self.put(os.path.join(self.folder, 'elsewhere', 'page.txt'), 'OUT')
+        self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
+
+        def swap():
+            os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
+            os.symlink(os.path.dirname(out), os.path.join(self.dest, 'sub'))
+        fired = self.seam('_published_openat', lambda name, *a, **kw: name == 'sub', swap)
+        self.gone(self.root + 'sub/page.txt')
+        self.assertTrue(fired)
+
+    def outside_task(self):
+        """Тека ПОЗА `<тека>/<задача>`, що має маркер і файл — приманка для підміни теки задачі посиланням."""
+        out = os.path.join(self.home, 'outside-task')
+        self.put(os.path.join(out, '.deai-published'), 'm')
+        self.put(os.path.join(out, 'index.html'), 'SECRET-OUTSIDE')
+        self.put(os.path.join(out, 'manifest.json'), 'SECRET-OUTSIDE')
+        return out
+
+    def test_the_task_folder_swapped_for_a_symlink_before_its_open_is_refused(self):
+        out = self.outside_task()
+
+        def swap():
+            os.rename(self.dest, self.dest + '.moved')
+            os.symlink(out, self.dest)
+        self.assertEqual(self.ok(self.root + 'manifest.json')[0]['content-type'], 'application/json')
+        fired = self.seam('_published_openat', lambda name, *a, **kw: name == 'tx', swap)
+        self.gone(self.root + 'index.html')
+        self.assertTrue(fired)
+
+    def test_the_task_folder_swapped_for_a_symlink_after_the_marker_check_never_serves_the_outside(self):
+        """Підміна ПІСЛЯ перевірки маркера: тека задачі вже відкрита дескриптором, тож далі йде ТА, що відкрито, — і
+        нічого з чужої теки (раніше `realpath` вів за посиланням, і «своєю» ставала чужа тека)."""
+        out = self.outside_task()
+
+        def swap():
+            os.rename(self.dest, self.dest + '.moved')
+            os.symlink(out, self.dest)
+        fired = self.seam('_published_statat', lambda name, dir_fd: name == '.deai-published', swap, after=True)
+        hd, body = self.ok(self.root + 'index.html')
+        self.assertNotIn(b'SECRET-OUTSIDE', body)
+        self.assertEqual(body, _bytes(os.path.join(self.dest + '.moved', 'index.html')))
+        self.assertTrue(fired)
+
+    def test_an_ancestor_of_the_folder_swapped_between_the_realpath_and_the_open_is_refused(self):
+        """Предка теки публікації підмінили посиланням: відкриття веде до іншої теки, і шлях ВІДКРИТОГО дескриптора
+        (ядро) не збігається зі схваленим `realpath` — відмова, хоч остання складова й справжня тека."""
+        root = os.path.join(self.home, 'deai-published')
+        outside_root = os.path.join(self.home, 'outside-root')
+        self.put(os.path.join(outside_root, 'off', 'tx', '.deai-published'), 'm')
+        self.put(os.path.join(outside_root, 'off', 'tx', 'index.html'), 'SECRET-OUTSIDE')
+
+        def swap():
+            os.rename(root, root + '.moved')
+            os.symlink(outside_root, root)
+        self.assertEqual(self.ok(self.root + 'index.html')[1], _bytes(os.path.join(self.dest, 'index.html')))
+        fired = self.seam('_published_openat', lambda name, flags, dir_fd=None: dir_fd is None, swap)
+        self.gone(self.root + 'index.html')
+        self.assertTrue(fired)
+
+    # ---- закрито по збою ----
+
+    def test_without_a_descriptor_path_nothing_is_served_on_a_platform_that_has_one(self):
+        """Шлях дескриптора теки недоступний (збій `F_GETPATH`: довгий шлях; Python без нього) — на ОС, що його ДАЄ, це
+        відмова, а не відкат на `realpath`."""
+        self.ok(self.root + 'manifest.json')
+        with mock.patch.object(serve, '_published_fd_path', return_value=None):
+            self.gone(self.root + 'manifest.json')
+            self.gone(self.root)
+            self.assertIsNone(serve.published_target('/published/off/tx/manifest.json'))
+
+    def test_a_failing_getpath_is_a_404_and_not_a_fallback(self):
+        if serve.fcntl is None or not hasattr(serve.fcntl, 'F_GETPATH'):
+            self.skipTest('ОС без F_GETPATH')
+        real = serve.fcntl.fcntl
+
+        def failing(fd, cmd, *a):
+            if cmd == serve.fcntl.F_GETPATH:
+                raise OSError(28, 'No space left on device')
+            return real(fd, cmd, *a)
+        with mock.patch.object(serve.fcntl, 'fcntl', failing):
+            self.gone(self.root + 'manifest.json')
+        self.ok(self.root + 'manifest.json')
+
+    def test_a_missing_marker_or_a_foreign_marker_kind_on_the_task_folder_is_refused_by_the_fd_check(self):
+        """Маркер перевіряється `lstat`-ом у ВІДКРИТІЙ теці: тека (не файл) чи посилання з тим самим іменем — не маркер."""
+        os.remove(os.path.join(self.dest, '.deai-published'))
+        os.mkdir(os.path.join(self.dest, '.deai-published'))
+        self.gone(self.root + 'manifest.json')
+
+    def test_the_capability_check_is_what_picks_the_walk(self):
+        self.assertTrue(serve._PUBLISHED_DIRFD)
+        with mock.patch.object(serve, '_PUBLISHED_DIRFD', False):
+            found = serve.published_target('/published/off/tx/manifest.json')
+            self.assertEqual(found[0], 'file')
+
+
+class PublishedRouteFallback(_PublishedTests, DispatchWorld):
+    """Той самий набір поведінки на ОС БЕЗ `dir_fd` (Windows): `_PUBLISHED_DIRFD` вимкнено, і роздача йде запасним шляховим
+    способом (`_published_target_by_path` + `open_published_file`). Він слабший — і документований як такий; тут
+    доводиться те, що він усе ж робить: відмовляє підміну, яка вже сталась до відкриття, віддає звичайні файли."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(serve, '_PUBLISHED_DIRFD', False)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_path_based_fallback_is_what_runs(self):
+        found = serve.published_target('/published/off/tx/manifest.json')
+        self.assertEqual(found[0], 'file')
+
+    # ---- підміна між перевіркою й відкриттям (лише запасний спосіб: рішення і `open` розділені) ----
+
+    def after_resolve(self, mutate):
+        """Підміна `published_target`: рішення ухвалено (усі перевірки шляху пройдено), і ЛИШЕ ТОДІ диск змінюється — рівно
+        той проміжок між перевіркою й відкриттям файла, який використовує гонка з посиланнями."""
+        real = serve.published_target
+
+        def hooked(path):
+            found = real(path)
+            mutate()
+            return found
+        return mock.patch.object(serve, 'published_target', hooked)
+
+    def test_a_file_swapped_for_a_symlink_after_the_checks_is_not_followed(self):
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        victim = self.put(os.path.join(self.dest, 'swap.txt'), 'REAL')
+        self.put(os.path.join(self.dest, 'inside.txt'), 'INSIDE')
+        self.assertEqual(self.ok(self.root + 'swap.txt')[1], b'REAL')                         # контроль: без підміни віддається
+
+        def to(target):
+            def swap():
+                os.remove(victim)
+                os.symlink(target, victim)
+            return swap
+        with self.after_resolve(to(outside)):                  # назовні: це ловить і перевірка шляху дескриптора
+            self.gone(self.root + 'swap.txt')
+        os.remove(victim)
+        self.put(victim, 'REAL')
+        with self.after_resolve(to(os.path.join(self.dest, 'inside.txt'))):     # усередину: лише `O_NOFOLLOW`
+            self.gone(self.root + 'swap.txt')
+
+    def test_without_a_descriptor_path_the_fallback_still_refuses_an_escape(self):
+        """ОС без шляху дескриптора (Windows): запасний варіант — `realpath(target)` ПІСЛЯ відкриття. Слабший, але
+        підміну, що вже сталась до відкриття, ловить, а звичайні файли віддаються."""
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        with mock.patch.object(serve, '_published_fd_path', return_value=None):
+            self.assertEqual(self.ok(self.root + 'it2/index.html')[1], _bytes(os.path.join(self.dest, 'it2', 'index.html')))
+            self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
+            self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
+
+            def swap_dir():
+                os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
+                os.symlink(os.path.dirname(outside), os.path.join(self.dest, 'sub'))
+            self.put(os.path.join(self.folder, 'page.txt'), 'OUT')
+            with self.after_resolve(swap_dir):
+                self.gone(self.root + 'sub/page.txt')
+
+    def test_an_intermediate_directory_swapped_for_a_symlink_after_the_checks_is_not_followed(self):
+        """`O_NOFOLLOW` дивиться лише на ОСТАННЮ складову: проміжну теку підмінили посиланням — відкриття веде за межі,
+        і ловить його тільки перевірка, де дескриптор лежить насправді."""
+        self.put(os.path.join(self.dest, 'sub', 'page.txt'), 'REAL')
+        out = self.put(os.path.join(self.folder, 'elsewhere', 'page.txt'), 'OUT')
+        self.assertEqual(self.ok(self.root + 'sub/page.txt')[1], b'REAL')
+
+        def swap():
+            os.rename(os.path.join(self.dest, 'sub'), os.path.join(self.dest, 'sub.moved'))
+            os.symlink(os.path.dirname(out), os.path.join(self.dest, 'sub'))
+        with self.after_resolve(swap):
+            self.gone(self.root + 'sub/page.txt')
+
+    def test_a_fifo_swapped_in_after_the_checks_is_404_and_does_not_hang_a_thread(self):
+        if not hasattr(os, 'mkfifo'):
+            self.skipTest('нема mkfifo')
+        victim = self.put(os.path.join(self.dest, 'it2', 'pipe.txt'), 'REAL')
+        self.assertEqual(self.ok(self.root + 'it2/pipe.txt')[1], b'REAL')
+
+        def swap():
+            os.remove(victim)
+            os.mkfifo(victim)
+        t0 = time.monotonic()
+        with self.after_resolve(swap):
+            self.gone(self.root + 'it2/pipe.txt')
+        self.assertLess(time.monotonic() - t0, 5, '`open` на FIFO завис')
+
+    def test_rejected_fallback_opens_do_not_leak_descriptors(self):
+        if not os.path.isdir('/dev/fd'):
+            self.skipTest('нема /dev/fd')
+        outside = self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        hard = os.path.join(self.dest, 'hard.txt')
+        os.link(outside, hard)
+        real_dest = serve._published_real_dir(self.dest)
+        fds = lambda: len(os.listdir('/dev/fd'))
+        before = fds()
+        for _ in range(150):
+            self.assertIsNone(serve.open_published_file(hard, real_dest))                    # nlink 2
+            self.assertIsNone(serve.open_published_file(self.dest, real_dest))               # тека, не файл
+            self.assertIsNone(serve.open_published_file(outside, real_dest))                 # поза текою задачі
+            self.assertIsNone(serve.open_published_file(os.path.join(self.dest, 'нема'), real_dest))
+        self.assertLess(fds() - before, 10, 'відхилені відкриття лишають дескриптори')
+        opened = serve.open_published_file(os.path.join(self.dest, 'manifest.json'), real_dest)
+        self.assertIsNotNone(opened)
+        os.close(opened[0])                                                                  # власність перейшла до нас
 
 
 class ResealModuleBuilds(TaskFixture):

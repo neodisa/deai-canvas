@@ -6140,31 +6140,25 @@ def _published_segments(path):
     return sid, tid, rel, trailing
 
 
-def _published_marked(base):
-    """У теці `base` є маркер модуля — ЗВИЧАЙНИЙ файл (посилання на чужий файл маркером не вважаємо)."""
-    try:
-        return stat.S_ISREG(os.lstat(os.path.join(base, PUBLISHED_MARKER)).st_mode)
-    except OSError:
-        return False
-
-
 try:
-    import fcntl                       # немає у Windows: там шлях відкритого дескриптора — запасним способом
+    import fcntl                       # немає у Windows: там `/published` іде запасним, шляховим способом
 except ImportError:
     fcntl = None
 
-#: Прапорці відкриття файла `/published`. `O_NOFOLLOW` — відмова на посиланні в ОСТАННІЙ складовій (проміжні
-#: теки дескриптор не відсікає — їх стереже `_published_fd_path`); `O_NONBLOCK` — `open` на FIFO без писаря не
-#: висить (інакше потік обробника стояв би вічно); `O_CLOEXEC` — дескриптор не тече в підпроцеси; `O_BINARY` —
-#: Windows не перекладає кінці рядків. Прапорців, яких ОС не має (Windows: `O_NOFOLLOW`), просто нема — `0`.
+#: Прапорці відкриття файла `/published`: `O_NOFOLLOW` — остання складова не посилання; `O_NONBLOCK` — `open` на
+#: FIFO без писаря не висить (інакше потік обробника стояв би вічно); `O_CLOEXEC` — дескриптор не тече в
+#: підпроцеси; `O_BINARY` — Windows не перекладає кінці рядків. Прапорців, яких ОС не має, просто нема — `0`.
 _PUBLISHED_OPEN = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
                    | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_BINARY', 0))
+#: Прапорці відкриття ТЕКИ при обході: лише тека (`O_DIRECTORY`) і не посилання (`O_NOFOLLOW`).
+_PUBLISHED_OPEN_DIR = (os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+                       | getattr(os, 'O_CLOEXEC', 0))
 PUBLISHED_CHUNK = 64 * 1024
 
 
 def _published_fd_path(fd):
     """Шлях, яким ЯДРО бачить відкритий дескриптор (де він справді лежить зараз, а не куди вів рядок шляху при
-    відкритті): macOS — `fcntl(F_GETPATH)`, Linux — `/proc/self/fd/<fd>`. `None` — ОС не дає (Windows)."""
+    відкритті): macOS — `fcntl(F_GETPATH)`, Linux — `/proc/self/fd/<fd>`. `None` — ОС не дає чи збій (довгий шлях)."""
     if fcntl is not None and hasattr(fcntl, 'F_GETPATH'):
         try:
             return os.fsdecode(fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).split(b'\0', 1)[0]) or None
@@ -6176,14 +6170,137 @@ def _published_fd_path(fd):
         return None
 
 
+#: Роздача ходить по ТЕЦІ дескрипторами (`_published_walk`), а не за шляхом, коли ОС дає `open(dir_fd=)`,
+#: `stat(dir_fd=, follow_symlinks=False)`, `O_DIRECTORY`/`O_NOFOLLOW` І шлях відкритого дескриптора
+#: (`F_GETPATH` / `/proc/self/fd`) — macOS і Linux. Решта (Windows) — запасний шляховий спосіб
+#: (`_published_target_by_path`): слабший, обрано ЯВНО цією перевіркою можливостей, а не `except`-ом.
+_PUBLISHED_DIRFD = (os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
+                    and os.stat in os.supports_follow_symlinks
+                    and hasattr(os, 'O_DIRECTORY') and hasattr(os, 'O_NOFOLLOW')
+                    and ((fcntl is not None and hasattr(fcntl, 'F_GETPATH')) or os.path.isdir('/proc/self/fd')))
+
+
+def _published_openat(name, flags, dir_fd=None):
+    """`open(name)` відносно відкритої теки `dir_fd` (чи за шляхом, коли `None`). Окрема функція — шов для тестів:
+    між попередньою перевіркою й відкриттям диск можна змінити саме тут."""
+    return os.open(name, flags, dir_fd=dir_fd)
+
+
+def _published_statat(name, dir_fd):
+    """`lstat` імені в теці `dir_fd` (без переходу за посиланням); шов для тестів, як `_published_openat`."""
+    return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+
+
+def _published_fstat(fd):
+    return os.fstat(fd)
+
+
+def _published_same_dir_path(kernel, wanted):
+    """Шлях дескриптора теки (`kernel`) і шлях, який ми схвалили (`wanted`, `realpath`), — те саме місце. Рівність
+    тексту; де ОС шлях віддає зі справжнім регістром диска (macOS: `F_GETPATH`), а `realpath` лишає написане в
+    налаштуванні (`~/Deai-Published`) чи в іншій юнікодній формі, — рівність після `casefold` і NFC. Порівняння
+    ТЕКСТОМ, а не `samefile`: підміну предка посиланням `samefile` не відрізнив би (обидва шляхи вели б туди ж)."""
+    if kernel == wanted:
+        return True
+    return (fcntl is not None and hasattr(fcntl, 'F_GETPATH')
+            and _fold(kernel) == _fold(wanted))
+
+
+def _published_open_file(name, dir_fd):
+    """Відкрити файл `name` теки `dir_fd` для віддачі: `(fd, fstat)` або `None`. Кидає `OSError`, коли файла нема.
+
+    Порядок і причини: (1) `lstat` ДО відкриття — звичайний файл (`S_ISREG`) з `st_nlink == 1`: жорстке посилання
+    на чужий файл відсікається ще тут; (2) `open` з `O_NOFOLLOW|O_NONBLOCK` відносно теки (імʼя, а не шлях: підміна
+    предка нічого не дає); (3) `fstat` ВІДКРИТОГО — знов `S_ISREG` і `st_nlink == 1` (FIFO, підміна на пристрій чи
+    жорстке посилання за мить між (1) і (2)) і ТОЙ САМИЙ `(st_dev, st_ino)`, що в (1): між `lstat` і `open` імʼя
+    не вказало на інший файл. Підміна ПІСЛЯ (3) уже нічого не змінює: віддається відкритий дескриптор."""
+    st0 = _published_statat(name, dir_fd)
+    if not (stat.S_ISREG(st0.st_mode) and st0.st_nlink == 1):
+        return None
+    fd = _published_openat(name, _PUBLISHED_OPEN, dir_fd)
+    try:
+        st = _published_fstat(fd)
+        if (stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+                and (st.st_dev, st.st_ino) == (st0.st_dev, st0.st_ino)):
+            opened, fd = (fd, st), None                # власність дескриптора переходить викликачу
+            return opened
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return None
+
+
+def _published_walk(folder, tid, rel, trailing):
+    """Обхід теки ДЕСКРИПТОРАМИ, ніколи за шляхом: `'redirect'`, `(імʼя_файла, (fd, fstat))` або `None`. Не кидає
+    (`OSError` — `None`; усі проміжні дескриптори закриваються в `finally`). ЗАКРИТО ПО ЗБОЮ: нема шляху дескриптора
+    чи він не збігається — відмова, а не відкат на `realpath`.
+
+      a) `folder` — те, що схвалив `folder_ok`; сама тека може бути посиланням — розвʼязуємо ОДИН раз
+         (`realpath`), відкриваємо, і шлях ВІДКРИТОГО дескриптора (ядро) мусить збігатися з розвʼязаним
+         (`_published_same_dir_path`): предка підмінили посиланням між `realpath` і `open` — дескриптор лежить деінде;
+      b) `<задача>` — `open(O_DIRECTORY|O_NOFOLLOW, dir_fd=…)` (посилання на задачу — відмова); маркер модуля —
+         `lstat` у ЦІЙ теці, звичайний файл;
+      c) кожна проміжна тека — так само відносно попередньої; кожне імʼя — одна складова, шляху нема;
+      d) останнє імʼя — `lstat`: тека → переадресація без `/`, з `/` — її `index.html`; звичайний файл — лише без `/`;
+         файл відкриває `_published_open_file`.
+    Тож підмінити можна що завгодно ПІСЛЯ відповідного відкриття — вже відкрите не зміниться; а що ПЕРЕД — стане
+    `ELOOP`/`ENOTDIR`/різним `ino` і відмовою."""
+    fds = []
+    try:
+        real_folder = os.path.realpath(folder)
+        fd0 = _published_openat(real_folder, _PUBLISHED_OPEN_DIR)
+        fds.append(fd0)
+        kernel = _published_fd_path(fd0)
+        if kernel is None or not _published_same_dir_path(kernel, real_folder):
+            return None
+        cur = _published_openat(tid, _PUBLISHED_OPEN_DIR, fd0)
+        fds.append(cur)
+        if not stat.S_ISREG(_published_statat(PUBLISHED_MARKER, cur).st_mode):
+            return None
+        for seg in rel[:-1]:
+            cur = _published_openat(seg, _PUBLISHED_OPEN_DIR, cur)
+            fds.append(cur)
+        name = 'index.html'
+        if rel:
+            last = rel[-1]
+            kind = _published_statat(last, cur).st_mode
+            if stat.S_ISDIR(kind):
+                if not trailing:
+                    return 'redirect'
+                cur = _published_openat(last, _PUBLISHED_OPEN_DIR, cur)
+                fds.append(cur)
+            elif stat.S_ISREG(kind) and not trailing:
+                name = last
+            else:
+                return None
+        elif not trailing:
+            return 'redirect'
+        opened = _published_open_file(name, cur)
+        return None if opened is None else (name, opened)
+    except OSError:
+        return None
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+# ---- запасний шляховий спосіб (ОС без `dir_fd`: Windows) ----
+
+def _published_marked(base):
+    """У теці `base` є маркер модуля — ЗВИЧАЙНИЙ файл (посилання на чужий файл маркером не вважаємо)."""
+    try:
+        return stat.S_ISREG(os.lstat(os.path.join(base, PUBLISHED_MARKER)).st_mode)
+    except OSError:
+        return False
+
+
 def _published_real_dir(path):
-    """Канонічний шлях теки `path` В ТІЙ САМІЙ формі, що й `_published_fd_path` файлів (макОС віддає справжній
-    регістр імен диска, а `realpath` лишає написане в налаштуванні — порівняння двох форм дало б хибний 404 для
-    `~/Deai-Published`). Береться з дескриптора теки; нема такого способу — `realpath`."""
+    """Канонічний шлях теки `path` в тій самій формі, що й `_published_fd_path` файлів (де ОС її дає), інакше
+    `realpath`. ⚠️ Запасний шлях: збій відкриття теки мовчки веде до `realpath` (посилання, що підмінило теку
+    задачі, розвʼяжеться, і «своєю» стане чужа тека) — на ОС з `dir_fd` цього нема (`_published_walk`)."""
     fd = None
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_DIRECTORY', 0)
-                     | getattr(os, 'O_CLOEXEC', 0))
+        fd = os.open(path, _PUBLISHED_OPEN_DIR)
         real = _published_fd_path(fd)
     except OSError:
         real = None
@@ -6200,17 +6317,11 @@ def _published_inside(real_base, real):
 
 
 def open_published_file(target, real_base):
-    """Відкрити `target` для віддачі ОДИН раз і перевірити саме ВІДКРИТЕ: `(fd, fstat)` або `None` (404). Не кидає.
-
-    Перевірки `published_target` (посилання, `isfile`) і `open` за шляхом розділені проміжком, у який файл чи
-    проміжну теку можна підмінити посиланням, — тож авторитетна лише перевірка ДЕСКРИПТОРА:
-      * `O_NOFOLLOW` — остання складова не посилання; `O_NONBLOCK` — FIFO не вішає потік;
-      * `fstat`: звичайний файл (`S_ISREG`: не FIFO, не пристрій) і `st_nlink == 1` (копії модуля завжди
-        мають 1; жорстке посилання на чужий файл — ні);
-      * де дескриптор лежить зараз (`_published_fd_path`) — усередині `real_base` (проміжні теки `O_NOFOLLOW`
-        не відсікає). Де ОС шляху дескриптора не дає (Windows), — запасний варіант: `realpath(target)` ПІСЛЯ
-        відкриття; слабший (підміна між відкриттям і цією перевіркою не ловиться), але нічого кращого там нема.
-    ETag і довжина далі — з цього ж `fstat`, тіло — з цього ж дескриптора."""
+    """ЗАПАСНИЙ спосіб (ОС без `dir_fd`): відкрити `target` ОДИН раз і перевірити відкрите: `(fd, fstat)` або
+    `None` (404). Не кидає. `O_NOFOLLOW` (де є) і `O_NONBLOCK`; `fstat`: звичайний файл з `st_nlink == 1`; шлях
+    дескриптора (де ОС його дає) чи, без нього, `realpath(target)` ПІСЛЯ відкриття — усередині `real_base`.
+    ⚠️ Слабший за `_published_walk`: підміна проміжної теки чи жорстке посилання, додане й прибране за мить,
+    тут не ловляться повністю (немає ні відкриття відносно теки, ні порівняння `ino` з попереднім `lstat`)."""
     fd = None
     try:
         fd = os.open(target, _PUBLISHED_OPEN)
@@ -6228,10 +6339,41 @@ def open_published_file(target, real_base):
     return None
 
 
+def _published_target_by_path(folder, tid, rel, trailing, sid):
+    """Запасний обхід за шляхом (ОС без `dir_fd`): `('redirect', url)`, `('file', шлях, канонічна_тека_задачі)` або
+    `None`. Перевірки тут РАННІ й обходяться підміною; рішення про файл — `open_published_file`."""
+    base = os.path.join(folder, tid)
+    if os.path.islink(base) or not os.path.isdir(base) or not _published_marked(base):
+        return None
+    real_base = _published_real_dir(base)
+    target = base
+    for seg in rel:
+        target = os.path.join(target, seg)
+        if os.path.islink(target):
+            return None
+    if os.path.isdir(target):
+        if not trailing:
+            return 'redirect', _published_redirect_url(sid, tid, rel)
+        target = os.path.join(target, 'index.html')
+        if os.path.islink(target):
+            return None
+    elif trailing:
+        return None
+    if os.path.isfile(target):
+        return 'file', target, real_base
+    return None
+
+
+def _published_redirect_url(sid, tid, rel):
+    return ''.join(['/published/', quote(sid, safe=''), '/', quote(tid, safe=''), '/',
+                    *(quote(seg, safe='') + '/' for seg in rel)])
+
+
 def published_target(path):
-    """Що відповісти на `GET path` (шлях БЕЗ `?query`): `('file', шлях, канонічна_тека_задачі)`,
-    `('redirect', '<шлях>/')` або `None` (404). НІКОЛИ не кидає: будь-який виняток (зіпсований `space.json`, реєстр, `ModuleError`, помилка
-    ФС) — теж `None`.
+    """Що відповісти на `GET path` (шлях БЕЗ `?query`): `('redirect', '<шлях>/')`; `('opened', імʼя, (fd, fstat))` —
+    файл УЖЕ відкрито й перевірено (ОС з `dir_fd`: macOS, Linux; fd віддається викликачу); `('file', шлях,
+    канонічна_тека_задачі)` — запасний спосіб (Windows: відкриває викликач через `open_published_file`); або `None`
+    (404). НІКОЛИ не кидає: будь-який виняток (зіпсований `space.json`, реєстр, `ModuleError`, помилка ФС) — теж `None`.
 
     Порядок — від дешевого до дорогого, і ДО першого читання диска сегменти вже синтаксично чисті:
       1. сегменти (`_published_segments`), id простору — `spaces.SPACE_ID_RE`, id задачі — `publish_id_ok` (те
@@ -6241,12 +6383,11 @@ def published_target(path):
       3. його publisher — `static-publish` (простір із ЛІГА чи без модуля — 404);
       4. тека — `published_root` ЗАНОВО на кожен запит (не `publish_local.path`: налаштування могли змінити), і
          `folder_ok` на КОЖНУ видачу (`folder_inputs()` — раз на запит);
-      5. `<тека>/<задача>` — справжня тека (не посилання) з маркером модуля; жодного посилання на шляху вниз до
-         файла (`islink` кожної складової);
-      6. тека без завершального `/` — переадресація; з ним — її `index.html` (нема — 404).
-    Усе це — РАННЯ відмова, а не замок: між цими перевірками й відкриттям файл чи проміжну теку можна підмінити
-    посиланням. Рішення про САМ файл приймає `open_published_file` — відкриває один раз і перевіряє відкритий
-    дескриптор (звичайний файл, одне жорстке посилання, лежить усередині теки задачі)."""
+      5. сам обхід: `_published_walk` (дескрипторами, закрито по збою) або, де ОС не дає `dir_fd`, запасний
+         `_published_target_by_path`. Вибір — за можливостями ОС (`_PUBLISHED_DIRFD`), а не за винятком.
+    ⚠️ Передумови й межі: тека публікації не змінюється ПІД ЧАС обходу в бік «чужого» — це обіцяє лише обхід
+    дескрипторами (macOS/Linux); запасний спосіб слабший (див. його докстрінги). Файл, що вже відкритий, віддається
+    таким, яким відкрито, навіть якщо його потім видалили чи замінили."""
     try:
         segs = _published_segments(path)
         if segs is None:
@@ -6266,27 +6407,14 @@ def published_target(path):
             return None
         if not deai_modules.folder_ok(space, folder, reg=inputs[0], task_dirs=inputs[1])[0]:
             return None
-        base = os.path.join(folder, tid)
-        if os.path.islink(base) or not os.path.isdir(base) or not _published_marked(base):
+        if not _PUBLISHED_DIRFD:
+            return _published_target_by_path(folder, tid, rel, trailing, sid)
+        walked = _published_walk(folder, tid, rel, trailing)
+        if walked is None:
             return None
-        real_base = _published_real_dir(base)
-        target = base
-        for seg in rel:
-            target = os.path.join(target, seg)
-            if os.path.islink(target):
-                return None
-        if os.path.isdir(target):
-            if not trailing:
-                return 'redirect', ''.join(['/published/', quote(sid, safe=''), '/', quote(tid, safe=''), '/',
-                                            *(quote(seg, safe='') + '/' for seg in rel)])
-            target = os.path.join(target, 'index.html')
-            if os.path.islink(target):
-                return None
-        elif trailing:
-            return None
-        if os.path.isfile(target):                      # РІШЕННЯ про файл — лише `open_published_file`
-            return 'file', target, real_base
-        return None
+        if walked == 'redirect':
+            return 'redirect', _published_redirect_url(sid, tid, rel)
+        return 'opened', walked[0], walked[1]
     except Exception:  # noqa: BLE001 — статичний файл для чужої сторінки не розповідає, що саме зламалось
         return None
 
@@ -6300,8 +6428,8 @@ def make_server(port=0):
             # захисні заголовки сторінки в пісочниці; 304 без них лишив би кеш без захисту). `utf8` — текстовим
             # типам дописати `; charset=utf-8` (`/published`: сторінки збірка пише в UTF-8, а без `<meta charset>`
             # у макеті браузер читав би їх як windows-1252 — гейт-оверлей, який вкладаємо МИ, виходив кракозябрами;
-            # Vercel віддає статику так само, з charset). `opened` — `(fd, fstat)` від `open_published_file`
-            # (`/published`): файл уже ВІДКРИТО й перевірено, тож ETag, довжина й тіло беруться з того самого
+            # Vercel віддає статику так само, з charset). `opened` — `(fd, fstat)` від обходу `/published`
+            # (`_published_walk` чи `open_published_file`): файл уже ВІДКРИТО й перевірено, тож ETag, довжина й тіло беруться з того самого
             # дескриптора (а не з другого `open` за шляхом), тіло йде шматками `PUBLISHED_CHUNK`; дескриптор
             # закривається тут за будь-якого виходу.
             # ВАЛІДАТОР. Без нього `Cache-Control: no-cache` (його дописує
@@ -6320,7 +6448,11 @@ def make_server(port=0):
             # але без тіла.
             stream = st = None
             if opened is not None:
-                stream, st = os.fdopen(opened[0], 'rb'), opened[1]
+                try:
+                    stream, st = os.fdopen(opened[0], 'rb'), opened[1]
+                except BaseException:
+                    os.close(opened[0])
+                    raise
             try:
                 if opened is None:
                     st = os.stat(target)
@@ -6411,7 +6543,10 @@ def make_server(port=0):
                     self.send_header(key, hv)
                 self.end_headers()
                 return
-            opened = open_published_file(value, found[2])
+            if kind == 'opened':                    # ОС з `dir_fd`: файл уже відкрито й перевірено обходом дескрипторами
+                opened = found[2]
+            else:                                   # запасний шляховий спосіб: відкриваємо тут, раз, і перевіряємо відкрите
+                opened = open_published_file(value, found[2])
             if opened is None:                      # зник, підмінений посиланням/FIFO/жорстким посиланням, чи поза текою
                 self._send_published_404()
                 return
