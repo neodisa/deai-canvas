@@ -3121,12 +3121,16 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
     лише коли він є: без пароля `gate_html` не має що вшивати, а `str(None)` дав би пароль «None».
 
     ⛔ Хелпери (`gate_html`, `_inject_gate`, `preview_index_html`, `inject_comment_layer`, `BUNDLES`…)
-    беремо з модуля ПРИ ВИКЛИКУ, а не захоплюємо аргументами за замовчуванням: наявні тести підміняють
-    їх на `serve`, і захоплене значення тихо обійшло б підміну.
+    беремо з модуля ПРИ ВИКЛИКУ, а не захоплюємо аргументами за замовчуванням: так `serve.<хелпер>`
+    лишається підмінюваним для майбутніх тестів і модулів (захоплене значення тихо обійшло б підміну).
 
-    Тут НЕ живе: 400 «немає ітерацій» (збірка отримує вже готовий перелік `its`), `code_stale`, деплой.
+    `its` — вже відфільтровані ОПУБЛІКОВАНІ ітерації, і порожній перелік — це `ValueError` ДО будь-якої
+    зміни на диску: інакше збірка затерла б `publish/` і записала порожній маніфест. Решта «немає
+    ітерацій» (400 для дизайнера), `code_stale` і деплой лишаються викликачу.
     → `{'dir', 'iterations', 'frames'[, 'frames_warnings']}`; `ok` і `code_stale` додає викликач.
     """
+    if not its:
+        raise ValueError('build_preview: порожній перелік ітерацій — нема що збирати')
     pub = os.path.join(task['dir'], 'publish')
     if os.path.isdir(pub):
         shutil.rmtree(pub)
@@ -3144,7 +3148,8 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
     os.makedirs(shell)
     for m in SHELL_MODULES:
         shutil.copy2(os.path.join(ROOT, 'app', m), os.path.join(shell, m))
-    gate = gate_html(tid, gate_pw) if gate_pw is not None else None
+    gated = gate_pw is not None       # ЄДИНЕ рішення «з гейтом чи без»: далі — лише `gated`
+    gate = gate_html(tid, gate_pw) if gated else None
     # ОДИН знімок дерев на всю збірку: сторінки, спільні файли й `outline`
     # маніфесту рахуються з нього, а не з окремих читань pages.json.
     trees = {it['id']: iteration_pages(task, it['id']) for it in its}
@@ -3168,7 +3173,7 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
             html = inject_comment_layer(html, comment_channel(task, tid),
                                         f'{depth_up}comment-layer',
                                         version=pm.page_version_tag(p['it'], p['page']))
-        if gate is not None:
+        if gated:
             # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
             # пряме посилання на неї минало пароль: перевірено живцем —
             # dc-sample.vercel.app/ пароль просив, а /it4/ віддавав макет.
@@ -3185,10 +3190,10 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
         if warn:
             frame_warnings.append(warn)
     publish_manifest(task, tid, its, pages, frames, pub, trees)
-    if gate is None:
-        wrapper = preview_index_html(NO_GATE_OPEN, '')
-    else:
+    if gated:
         wrapper = preview_index_html(gate, gate_pw)
+    else:
+        wrapper = preview_index_html(NO_GATE_OPEN, '')
     with open(os.path.join(pub, 'index.html'), 'w', encoding='utf-8') as fh:
         fh.write(wrapper)
     result = {'dir': pub, 'iterations': len(its),
@@ -5465,7 +5470,8 @@ class Handler(SimpleHTTPRequestHandler):
                                  'toggle the green dot first')
             return
         # Пароль ЛІГА — завжди є (типовий 1100, якщо не задано): гейт тут обовʼязковий, і лише
-        # модуль без пароля передає `gate_pw=None` (див. `build_preview`).
+        # модуль без пароля передає `gate_pw=None` (див. `build_preview`). Читаємо його ДО збірки (раніше
+        # — після `rmtree`): збій читання tasks.json більше не лишає напівзібраний `publish/`.
         pw = preview_password(load_tasks(), task)
         built = build_preview(task, tid, its, comments=True, gate_pw=pw)
         # ⛔ `pub` потрібен ДАЛІ — деплою (`cwd=pub`, `_stable_alias`, `_remember_vercel_scope`); його

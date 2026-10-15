@@ -144,9 +144,14 @@ class BuildPreview(unittest.TestCase):
         return f'http://127.0.0.1:{httpd.server_address[1]}'
 
     @staticmethod
-    def _mentions(root, needle):
-        """Чи є в БУДЬ-ЯКОМУ файлі дерева `needle` (без урахування регістру)."""
-        for dirpath, _dirs, files in os.walk(root):
+    def _mentions(root, needle, skip_top=('shell',)):
+        """Чи є в файлі дерева `needle` (без урахування регістру). Без `shell/`: це наші ж модулі
+        оболонки, їхні коментарі — не артефакт коментатора, і майбутня згадка слова там не мусить
+        червонити тест не з тієї причини. Лишаються сторінки, обгортка, маніфест, `comment-layer/`."""
+        for dirpath, dirs, files in os.walk(root):
+            if os.path.relpath(dirpath, root).split(os.sep)[0] in skip_top:
+                dirs[:] = []
+                continue
             for fn in files:
                 with open(os.path.join(dirpath, fn), 'rb') as fh:
                     if needle in fh.read().lower():
@@ -282,13 +287,41 @@ class BuildPreview(unittest.TestCase):
             self.assertIn('id="authgate"', _read(os.path.join(pub, rel)), rel)
 
     def test_gate_helpers_are_looked_up_at_call_time(self):
-        """Наявні тести підміняють `serve.gate_html` / `serve.preview_index_html`; збірка мусить брати
-        їх із модуля при виклику, а не захоплювати значенням за замовчуванням."""
+        """`serve.gate_html` лишається підмінюваним: збірка бере його з модуля при виклику, а не
+        захоплює значенням за замовчуванням (так само `preview_index_html` — тест нижче)."""
         with mock.patch.object(serve, 'gate_html', lambda tid, pw: f'<!--GATE:{tid}:{pw}-->'):
             pub = self._build(comments=False, gate_pw='pw1')['dir']
         self.assertIn('<!--GATE:fixture:pw1-->', _read(os.path.join(pub, 'index.html')))
         for rel in self._inner_pages(pub):
             self.assertIn('<!--GATE:fixture:pw1-->', _read(os.path.join(pub, rel)), rel)
+
+    def test_preview_index_html_is_looked_up_at_call_time(self):
+        """Те саме для обгортки: підміна `serve.preview_index_html` бачить і гейт, і пароль — справжні для
+        ЛІГА, `NO_GATE_OPEN` і порожній пароль для превʼю без гейта."""
+        seen = lambda gate, pw: f'<!--W:{gate}|{pw}-->'     # noqa: E731
+        with mock.patch.object(serve, 'preview_index_html', seen), \
+             mock.patch.object(serve, 'gate_html', lambda tid, pw: '<!--G-->'):
+            # обидві збірки лягають в ОДНУ `publish/` (кожна її затирає) — читаємо відразу після своєї
+            wrapper = os.path.join(self._build(comments=False, gate_pw='pw2')['dir'], 'index.html')
+            self.assertEqual(_read(wrapper), '<!--W:<!--G-->|pw2-->')
+            wrapper = os.path.join(self._build(comments=False, gate_pw=None)['dir'], 'index.html')
+            self.assertEqual(_read(wrapper), f'<!--W:{serve.NO_GATE_OPEN}|-->')
+
+    def test_empty_iteration_list_raises_before_touching_the_disk(self):
+        """Порожній `its` — `ValueError` ДО будь-якої зміни: інакше збірка затерла б `publish/` і записала
+        порожній маніфест (400 для дизайнера лишається в `_publish`)."""
+        pub = os.path.join(self.tmp, 'publish')
+        os.makedirs(pub)
+        keep = os.path.join(pub, 'keep.txt')
+        with open(keep, 'w', encoding='utf-8') as fh:
+            fh.write('попередня збірка')
+        task, tid, _its = self._args()
+        for gate_pw in ('x', None):
+            with self.subTest(gate_pw=gate_pw):
+                with self.assertRaises(ValueError):
+                    serve.build_preview(task, tid, [], comments=True, gate_pw=gate_pw)
+                self.assertEqual(os.listdir(pub), ['keep.txt'])
+                self.assertEqual(_read(keep), 'попередня збірка')
 
     # ---- шлях ЛІГА ---------------------------------------------------------------------------
 
