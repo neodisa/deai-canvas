@@ -41,8 +41,9 @@
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
     ключ `error` (див. функцію).
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
-    `serve.py` і модуль; код модулів НЕ імпортує `serve` (а `import deai_modules` — можна). `ctx` модуля для
-    `serve.py` — `module_ctx()`.
+    `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
+    явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
+    (`ctx['folder_ok']`, `ctx['ModuleError']`). `ctx` модуля для `serve.py` — `module_ctx()`.
   * Межі `exec`-завантаження (модуль — не в `sys.modules`): `@dataclass` разом з `from __future__ import
     annotations` падає (`dataclasses` шукає `sys.modules[cls.__module__]`), класи з `exec`-модулів не
     піклюються (`pickle`, `multiprocessing` у режимі spawn), `importlib.reload` не працює. Модулям вистачає
@@ -932,20 +933,35 @@ def call(module, fn, ctx, *args, timeout=None):
     return val
 
 
+def _folder_rule(space):
+    """`ctx['folder_ok']`: правила теки публікації (`folder_ok`), привʼязані до простору `space`, — `f(folder) ->
+    (True, None) | (False, код)`. Модуль публікації не імпортує ні `serve`, ні це ядро, тож перевіряє теку
+    ще раз (на кожній публікації й у `check`) саме цим викликом."""
+    def folder_ok_here(folder):
+        return folder_ok(space, folder)
+    return folder_ok_here
+
+
 def _ctx(space, m):
     explicit = space_modules(space)
     settings = resolve_settings(space, m, _entry_state(m, space, explicit)['settings'])
     # секрети читаємо лише в модуля, що їх оголосив: зіпсований `secrets.json` не ламає css-tokens
     secrets = read_secrets(_space_id(space), m.id) if m.secret_keys() else {}
+    # `folder_ok` і `ModuleError` — не дані, а засоби: модуль їх не імпортує (див. docstring модуля), а `call()`
+    # пропускає як є лише `ModuleError` ядра, тож свою помилку з кодом (`bad-folder`) модуль кидає цим класом.
+    # `ctx` нікуди не серіалізується: у `call`/`check` з нього береться лише `secrets`.
     return {'space': {'id': _space_id(space), 'path': _space_path(space)},
-            'settings': settings, 'secrets': secrets}
+            'settings': settings, 'secrets': secrets,
+            'folder_ok': _folder_rule(space), 'ModuleError': ModuleError}
 
 
 def module_ctx(space, module):
     """`ctx` для функцій модуля — `{"space": {id, path}, "settings": {…підставлені…}, "secrets": {…лише
-    його оголошені…}}`; `module` — `Module` чи id. Саме це отримує `check`; для `serve.py` (`/api/ds-tokens`,
-    диспетчер публікації). Може кинути `unknown-module`, `bad-settings`, `space-json-unreadable`,
-    `secrets-unreadable`. Статус модуля не перевіряє (це робить `call`)."""
+    його оголошені…}, "folder_ok": f(folder) -> (ok, код), "ModuleError": клас}`; `module` — `Module` чи id.
+    Перші три — дані, останні два — засоби ядра для модуля, що не імпортує ядро (`static-publish`).
+    Саме це отримує `check`; для `serve.py` (`/api/ds-tokens`, диспетчер публікації). Може кинути
+    `unknown-module`, `bad-settings`, `space-json-unreadable`, `secrets-unreadable`. Статус модуля не
+    перевіряє (це робить `call`)."""
     m = module if isinstance(module, Module) else _need_module(module)
     return _ctx(space, m)
 

@@ -1,0 +1,7 @@
+{"api": 1, "id": "static-publish", "name": "Публікація в теку", "version": "1.0.0",
+ "roles": ["publish"],
+ "settings": [
+   {"key": "folder", "type": "path", "label": "Тека для превʼю",
+    "default": "{home}/deai-published/{space_id}", "required": true},
+   {"key": "password", "type": "secret", "label": "Пароль превʼю (необовʼязково)"}
+ ]}

@@ -78,6 +78,16 @@ def _bump(path, seconds=5):
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + seconds * 10 ** 9))
 
 
+#: Що ядро кладе в `ctx` для модуля, але що НЕ дані: правило теки публікації (модуль не імпортує
+#: `deai_modules`, тож отримує його в `ctx`) і клас помилки (його `call()` пропускає як є).
+CORE_CTX_KEYS = ('folder_ok', 'ModuleError')
+
+
+def _plain(ctx):
+    """`ctx` без частин, які ядро додає модулю як ЗАСОБИ (не дані): решту можна порівнювати словником."""
+    return {k: v for k, v in ctx.items() if k not in CORE_CTX_KEYS}
+
+
 def _fs_case_insensitive(path):
     """Чи файлова система в `path` не розрізняє регістр (APFS за замовчуванням): тести «варіант регістру»
     на чутливій ФС нічого б не доводили, тож пропускаються."""
@@ -2085,7 +2095,8 @@ class CheckTest(Env):
         dm.write_secrets(self.sp['id'], 'other', {'password': 'pw-other', 'token': 'tk-other'})
         dm.write_module_state(self.sp, 'chk', enabled=True, settings={'folder': '{home}/mine/{space_id}'})
         self.assertEqual(dm.check(self.sp, 'chk'), {'ok': True})
-        self.assertEqual(builtins._DEAI_SEEN, {
+        # `_plain`: до даних ctx ядро додає ще два засоби (`folder_ok`, `ModuleError`) — їх окремий тест нижче
+        self.assertEqual(_plain(builtins._DEAI_SEEN), {
             'space': {'id': self.sp['id'], 'path': self.sp['path']},
             'settings': {'folder': os.path.join(self.home, 'mine', self.sp['id'])},
             'secrets': {'password': 'pw-chk'}})
@@ -2096,13 +2107,31 @@ class CheckTest(Env):
         want = {'space': {'id': self.sp['id'], 'path': self.sp['path']},
                 'settings': {'folder': os.path.join(self.home, 'pub', self.sp['id'])},
                 'secrets': {'password': 'pw-chk'}}
-        self.assertEqual(dm.module_ctx(self.sp, 'chk'), want)
-        self.assertEqual(dm.module_ctx(self.sp, dm.catalog()['chk']), want)
+        self.assertEqual(_plain(dm.module_ctx(self.sp, 'chk')), want)
+        self.assertEqual(_plain(dm.module_ctx(self.sp, dm.catalog()['chk'])), want)
         dm.check(self.sp, 'chk')
-        self.assertEqual(builtins._DEAI_SEEN, want)
+        self.assertEqual(_plain(builtins._DEAI_SEEN), want)
         with self.assertRaises(dm.ModuleError) as cm:
             dm.module_ctx(self.sp, 'ghost')
         self.assertEqual(cm.exception.code, 'unknown-module')
+
+    def test_ctx_carries_the_folder_rule_and_the_error_class_for_modules_that_cannot_import_the_core(self):
+        """Модуль публікації не імпортує ні `serve`, ні `deai_modules`: правило теки (привʼязане до ЦЬОГО простору)
+        й клас `ModuleError` (його код `call()` пропускає як є) він бере з `ctx`."""
+        ctx = dm.module_ctx(self.sp, 'chk')
+        self.assertEqual(set(ctx) - set(CORE_CTX_KEYS), {'space', 'settings', 'secrets'})
+        self.assertIs(ctx['ModuleError'], dm.ModuleError)
+        rule = ctx['folder_ok']
+        self.assertTrue(callable(rule))
+        self.assertEqual(rule(self.hp('pub', 'x')), (True, None))
+        self.assertEqual(rule(self.sp['path']), (False, 'path-registered'))        # той самий простір, що в ctx
+        self.assertEqual(rule(self.home), (False, 'path-too-broad'))
+        self.assertEqual(rule('rel/pub'), dm.folder_ok(self.sp, 'rel/pub'))        # відносна — від теки ЦЬОГО простору
+        other = self.new_space('Beta')
+        self.assertEqual(dm.module_ctx(other, 'chk')['folder_ok'](other['path']), (False, 'path-registered'))
+        self.assertEqual(dm.module_ctx(other, 'chk')['folder_ok'](self.sp['path']), (False, 'path-registered'))
+        # ctx живе лише в пам'яті ядра: дані з нього серіалізуються без засобів
+        json.dumps(_plain(ctx))
 
     def test_secrets_are_read_only_for_modules_that_declare_them(self):
         """Зіпсований `secrets.json` не мусить ламати модуль без секретів (css-tokens)."""
