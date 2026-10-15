@@ -19,7 +19,7 @@ import { t } from "../i18n.js";
    `setEdit` звіряє повернення до початкового, — і скидання ручки перестало б
    спрацьовувати рівно на кольорах. Ядро чисте (ні DOM, ні CSSOM), тож
    охоронець чистоти цього модуля лишається чинним. */
-import { normalizeValue } from "./inspector-core.js";
+import { isSpaceProfile, normalizeValue } from "./inspector-core.js";
 
 /** Заголовки секцій. Ключі — з `GROUPS` (`inspector-dom.js`). `flex`
  *  приходить і для grid-контейнера, тож назва нейтральна — щоб не брехати. */
@@ -539,12 +539,22 @@ function sectionHTML(key, items, tunedMap, tunable) {
  * Коли ДС Є — теж рядок, і теж не декоративний: вирок «перевизначено»
  * спирається на конкретний коміт знімка, і дизайнер має право бачити, на
  * який саме, не питаючи нікого.
+ *
+ * ДС ПРОСТОРУ (профіль `space:<id>`, етап 2а) коміту не має — її токени
+ * читаються з CSS-файла на льоту, — тож замість коміту рядок називає ФАЙЛ
+ * (`info.source`). Сам профіль у текст не їде: `space:<id>` — внутрішній ключ
+ * простору, не те, що дизайнер упізнає; файл — упізнає.
  */
 function dsNote(info) {
   if (!info || typeof info !== "object") return "";
-  const text = info.known
-    ? t("inspDsOn", String(info.profile || ""), String(info.commit || "").slice(0, 12))
-    : t("inspDsNone", String(info.profile || ""));
+  let text;
+  if (info.known && isSpaceProfile(info.profile)) {
+    text = t("inspDsSpace", String(info.source || ""));
+  } else if (info.known) {
+    text = t("inspDsOn", String(info.profile || ""), String(info.commit || "").slice(0, 12));
+  } else {
+    text = t("inspDsNone", String(info.profile || ""));
+  }
   return `<p class="insp-note">${esc(text)}</p>`;
 }
 

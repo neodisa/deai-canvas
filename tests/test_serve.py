@@ -3126,6 +3126,102 @@ class InspectorDsProfile(unittest.TestCase):
             self.assertNotIn("ds=", html)
 
 
+class InspectorSpaceParam(unittest.TestCase):
+    """`sp=<id простору>` у URL інспектора (етап 2а, Task 7).
+
+    Простір має свій постачальник токенів ДС (`/api/ds-tokens?space=<id>`), але документ
+    макета про простір не знає нічого — так само, як про напрямок. Єдина дорога — параметр
+    власного URL. Межі, які тут стережуться:
+      * `?ds=<напрямок>` ЗАВЖДИ першим (старі тести й розбір в `inspector.js` на це спираються);
+      * `sp` лише коли простір РЕАЛЬНИЙ (`spaces.describe(sp) is not None`): шар вимкнено →
+        неявний простір `legacy` без шляху, і `/api/ds-tokens?space=legacy` питав би про простір,
+        якого в реєстрі нема;
+      * у параметр URL, що їде в розмітку, нічого, крім простого id.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='dc-sp-')
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
+        cls.real = {'id': 'design-1', 'path': cls.tmp, 'legacy': False, 'integrations': False}
+        cls.implicit = dict(serve.spaces.IMPLICIT)
+
+    def test_profile_only(self):
+        self.assertEqual(serve.inspector_ds_arg('united', None), '?ds=united')
+        self.assertEqual(serve.inspector_ds_arg('united'), '?ds=united')
+
+    def test_space_only_starts_the_query(self):
+        self.assertEqual(serve.inspector_ds_arg('', self.real), '?sp=design-1')
+        self.assertEqual(serve.inspector_ds_arg(None, self.real), '?sp=design-1')
+
+    def test_both_profile_first_then_space(self):
+        self.assertEqual(serve.inspector_ds_arg('united', self.real), '?ds=united&sp=design-1')
+
+    def test_nothing_means_nothing(self):
+        self.assertEqual(serve.inspector_ds_arg('', None), '')
+        self.assertEqual(serve.inspector_ds_arg(None, None), '')
+
+    def test_layer_off_implicit_space_gets_no_sp(self):
+        """Шар вимкнено → `active_space()` віддає неявний простір: `describe` для нього `None`,
+        і `sp` не їде ні з профілем, ні без."""
+        self.assertIsNone(serve.spaces.describe(self.implicit))
+        self.assertEqual(serve.inspector_ds_arg('united', self.implicit), '?ds=united')
+        self.assertEqual(serve.inspector_ds_arg('', self.implicit), '')
+
+    def test_junk_never_reaches_the_markup(self):
+        for junk in ('x"><script>', '../x', 'a b', 'A', '-a', 'x' * 41, ''):
+            sp = {'id': junk, 'path': self.tmp, 'legacy': False, 'integrations': False}
+            self.assertEqual(serve.inspector_ds_arg('united', sp), '?ds=united', repr(junk))
+            self.assertEqual(serve.inspector_ds_arg('', sp), '', repr(junk))
+
+    def test_project_channel_carries_it(self):
+        html = serve.inject_comment_layer(
+            "<html><body></body></html>", "p", "/vendor",
+            inspector=True, profile="united", space=self.real)
+        self.assertIn('inspector.js?ds=united&sp=design-1"', html)
+
+    def test_local_channel_carries_it(self):
+        html = serve.inject_local_comment_layer(
+            "<html><body></body></html>", "/e", "p", "/vendor", profile="liga360", space=self.real)
+        self.assertIn('inspector.js?ds=liga360&sp=design-1"', html)
+
+    def test_no_space_means_the_old_markup_byte_for_byte(self):
+        """Без простору розмітка така сама, як до Task 7: гарантія для публікації й для старих задач."""
+        a = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+                                       inspector=True, profile="united")
+        b = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+                                       inspector=True, profile="united", space=None)
+        self.assertEqual(a, b)
+        self.assertNotIn('sp=', a)
+        c = serve.inject_local_comment_layer("<html><body></body></html>", "/e", "p", "/vendor",
+                                             profile="united")
+        self.assertNotIn('sp=', c)
+
+    def test_no_space_argument_never_falls_back_to_the_active_space(self):
+        """Простір — ЯВНИЙ аргумент викликача, а не «що зараз активне»: інакше кожен, хто кличе
+        інʼєкцію без простору (публікація, майбутні виклики), мовчки отримав би `sp=` робочого місця.
+        Активним тут зроблено справжній простір — інакше (шар вимкнено) витік був би невидимий."""
+        with mock.patch.object(serve.spaces, 'active_space', return_value=self.real):
+            self.assertEqual(serve.inspector_ds_arg('united'), '?ds=united')
+            self.assertEqual(serve.inspector_ds_arg(''), '')
+            for html in (
+                serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+                                           inspector=True, profile="united"),
+                serve.inject_local_comment_layer("<html><body></body></html>", "/e", "p", "/vendor",
+                                                 profile="united"),
+            ):
+                self.assertNotIn('sp=', html)
+
+    def test_space_without_inspector_adds_nothing(self):
+        """`inspector=False` (публікація, `build_preview`) — тега інспектора нема, а отже й `sp`:
+        параметр простору сам по собі розмітку не змінює."""
+        base = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor")
+        withsp = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+                                            space=self.real)
+        self.assertEqual(base, withsp)
+        self.assertNotIn('inspector', base)
+
+
 class CommentSnippetSelfReports(unittest.TestCase):
     """Шар коментарів, який не піднявся, мусить сказати це на сторінці.
 

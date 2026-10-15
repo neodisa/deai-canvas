@@ -523,3 +523,48 @@ test("лінійка: невідомий ключ і невідомий вид �
 test("лінійка: секція та сама, що у звіту — один каркас, не два", () => {
   assert.match(measureHTML(M()), /<section class="insp-spec"><h6>/);
 });
+
+/* ── Рядок про ДС: токени ПРОСТОРУ (етап 2а, Task 7) ───────────────────────
+   Знімок ДС напрямку називає коміт; токени простору коміту не мають — вони
+   читаються з файла на льоту, і єдине, що можна сказати про їхнє походження,
+   — ЯКИЙ файл. Профіль `space:<id>` у текст не їде: id простору — внутрішній
+   ключ, а не те, що дизайнер упізнає. */
+
+test("рядок про ДС простору — файл, а не коміт і не id простору", () => {
+  const h = reportHTML(P({ dsInfo: { profile: "space:s1", known: true, source: "tokens.css" } }));
+  assert.match(h, /<p class="insp-note">[^<]*tokens\.css[^<]*<\/p>/);
+  assert.doesNotMatch(h, /space:s1/);
+  assert.doesNotMatch(h, /знімок/, "знімка в токенів простору немає");
+});
+
+test("рядок про ДС простору без імені файла — речення без дірки", () => {
+  const h = reportHTML(P({ dsInfo: { profile: "space:s1", known: true, source: "" } }));
+  const note = h.match(/<p class="insp-note">([^<]+)<\/p>/);
+  assert.ok(note, "рядок є");
+  assert.doesNotMatch(note[1], /\(\)|«»|undefined|null/);
+});
+
+test("імʼя файла з розмітки екранується", () => {
+  const h = reportHTML(P({ dsInfo: { profile: "space:s1", known: true, source: '<b>"x"</b>.css' } }));
+  assert.doesNotMatch(h, /<b>"x"/);
+  assert.match(h, /&lt;b&gt;/);
+});
+
+test("рядок про ДС напрямку — як був: коміт знімка", () => {
+  const h = reportHTML(P({ dsInfo: { profile: "united", known: true,
+    commit: "5f7050d77ab5fe6ce9d0185bff703748202ede9f", figma: "UI" } }));
+  assert.match(h, /«united»/);
+  assert.match(h, /5f7050d77ab5/);
+});
+
+test("рядок про ДС простору — англійською теж", async () => {
+  const { setLang } = await import("../app/i18n.js");
+  setLang("en");
+  try {
+    const h = reportHTML(P({ dsInfo: { profile: "space:s1", known: true, source: "tokens.css" } }));
+    assert.match(h, /tokens\.css/);
+    assert.doesNotMatch(h, /Звірено/);
+  } finally {
+    setLang("uk");
+  }
+});

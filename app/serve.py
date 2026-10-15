@@ -2206,13 +2206,32 @@ window.__clDown = function (why) {{
 INSPECTOR_TAG = '\n<script type="module" src="{assets}/inspector.js{ds}"></script>'
 
 
-def inspector_ds_arg(profile):
-    """`?ds=united` або порожньо. Порожньо — і коли напрямку немає, і коли він
-    не схожий на напрямок: у параметр URL, що їде в розмітку, не сміє потрапити
-    нічого, крім простого імені, а невідомий напрямок і так ВИМИКАЄ звірку з ДС
-    (краще не звіряти, ніж звіряти з вигаданою)."""
+def inspector_ds_arg(profile, sp=None):
+    """Хвіст URL інспектора: `?ds=united`, `?ds=united&sp=design-1`, `?sp=design-1` або порожньо.
+
+    `?ds=` — ЗАВЖДИ першим (старі розмітки, тести й розбір у `inspector.js` на це спираються); `sp`
+    дописується до нього через `&`, а коли напрямку нема — відкриває рядок запиту сам.
+    Порожньо — і коли напрямку немає, і коли він не схожий на напрямок: у параметр URL, що їде в
+    розмітку, не сміє потрапити нічого, крім простого імені, а невідомий напрямок і так ВИМИКАЄ
+    звірку з ДС (краще не звіряти, ніж звіряти з вигаданою).
+
+    `sp` — простір СТОРІНКИ (запис реєстру, `spaces.active_space()`; етап 2а, Task 7): документ
+    макета про простір не знає нічого, а інспектор мусить спитати `/api/ds-tokens?space=<id>`, тож
+    єдина дорога — параметр власного URL. Їде ЛИШЕ коли `spaces.describe(sp)` не `None`, тобто шар
+    просторів увімкнено й сторінка належить справжньому простору: неявний простір (шар вимкнено) має id
+    `legacy` без шляху, і питати про нього `/api/ds-tokens` — питати про простір, якого в реєстрі нема.
+    Id перевіряється так само, як напрямок (`SPACE_ID_RE`): реєстр і так не пропустить іншого, але
+    розмітка не повинна триматись на тому, що хтось колись не забув перевірити.
+
+    ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `build_preview` кличе `inject_comment_layer` без
+    `inspector`, `profile` і `space` — опублікована сторінка (Vercel, тека) до `/api/ds-tokens` не
+    дістанеться, а збірка ЛІГА лишається байт-у-байт такою, як була."""
     p = (profile or '').strip()
-    return f'?ds={p}' if re.fullmatch(r'[a-z0-9-]{1,32}', p) else ''
+    out = f'?ds={p}' if re.fullmatch(r'[a-z0-9-]{1,32}', p) else ''
+    d = spaces.describe(sp)
+    if d is not None and spaces.SPACE_ID_RE.fullmatch(str(d['id'])):
+        out += ('&' if out else '?') + f'sp={d["id"]}'
+    return out
 
 
 # Вкладки аудиторій — аргументом `init`, і теж за ПРАПОРЦЕМ на виклику.
@@ -2333,30 +2352,33 @@ LOCAL_COMMENT_SNIPPET = """
 
 
 def inject_local_comment_layer(html, endpoint, project, assets_base, version='',
-                               audiences=False, profile=''):
+                               audiences=False, profile='', space=None):
     """Локальний канал (фідбек Клоду у файл задачі). `audiences=True` — рядок
     вкладок у панелі коментатора; цей сніпет їде ЛИШЕ в робоче місце, але
     прапорець тут симетричний проєктному свідомо: обидва канали мусять уміти
     сказати «немає вкладок», інакше межа publish трималась би на тому, що
-    другий сніпет туди просто не потрапляє."""
+    другий сніпет туди просто не потрапляє. `space` — простір сторінки (запис
+    реєстру) для `sp=` у URL інспектора, див. `inspector_ds_arg`."""
     snippet = LOCAL_COMMENT_SNIPPET.format(
         endpoint=endpoint, project=project, assets=assets_base, version=version,
-        ds=inspector_ds_arg(profile),
+        ds=inspector_ds_arg(profile, space),
         audiences=audiences_arg('local' if audiences else None))
     out, n = re.subn(r'</body>', snippet + '</body>', html, count=1, flags=re.I)
     return out if n else html + snippet
 
 
 def inject_comment_layer(html, project, assets_base, internal=False, version='',
-                         inspector=False, audiences=False, profile=''):
+                         inspector=False, audiences=False, profile='', space=None):
     """Канал коментарів Supabase. `inspector=True` і `audiences=True` — лише для
     робочого місця дизайнера (`/commented?ch=project`); у publish обидві межі
-    лишаються (див. `INSPECTOR_TAG` і `audiences_arg`)."""
+    лишаються (див. `INSPECTOR_TAG` і `audiences_arg`). `space` — простір
+    сторінки для `sp=` у URL інспектора (`inspector_ds_arg`); без `inspector`
+    він розмітку не міняє зовсім."""
     snippet = COMMENT_SNIPPET.format(
         project=project, assets=assets_base, version=version,
         sb_url=SUPABASE_URL, sb_key=SUPABASE_KEY,
         inspector=INSPECTOR_TAG.format(
-            assets=assets_base, ds=inspector_ds_arg(profile)) if inspector else '',
+            assets=assets_base, ds=inspector_ds_arg(profile, space)) if inspector else '',
         audiences=audiences_arg('project' if audiences else None))
     if internal:
         snippet += INTERNAL_TINT
@@ -4413,6 +4435,13 @@ class Handler(SimpleHTTPRequestHandler):
             # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
             # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
             ver = pm.page_version_tag(it, page)
+            # Простір СТОРІНКИ для `sp=` у URL інспектора (етап 2а, Task 7). Це простір ЗАДАЧІ, чию
+            # сторінку віддаємо: `task` прочитано з файла задач простору запиту (`_current_task` →
+            # `load_tasks` → `spaces.active_space()`), а під НАЗВАНОЮ задачею сторінка з коментатором
+            # не віддається взагалі (400 вище) — тож розбіжності між «простором запиту» і «простором
+            # задачі» тут бути не може. Беремо ОДИН раз і передаємо в обидва канали: запит зафіксував
+            # простір на вході, а реєстр до рендера міг перемкнутись.
+            page_space = spaces.active_space()
             if ch == 'project':
                 # режим «Проєкт»: канал Supabase (колеги + історія, як в опублікованому).
                 # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек,
@@ -4422,14 +4451,15 @@ class Handler(SimpleHTTPRequestHandler):
                 html = inject_comment_layer(html, comment_channel(task, tid),
                                             f'{origin}/app/vendor', version=ver,
                                             inspector=True, audiences=integrations,
-                                            profile=task.get('profile') or '')
+                                            profile=task.get('profile') or '',
+                                            space=page_space)
             else:
                 # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
                 local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
                 html = inject_local_comment_layer(
                     html, f'{origin}/api/local-comments', local_key,
                     f'{origin}/app/vendor', version=ver, audiences=integrations,
-                    profile=task.get('profile') or '')
+                    profile=task.get('profile') or '', space=page_space)
         body = html.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')

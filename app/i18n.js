@@ -493,6 +493,11 @@ const UK = {
   inspDsNone: (profile) =>
     `Для напрямку «${profile}» дизайн-системи немає — значення ні з чим звіряти.`,
   inspDsOn: (profile, commit) => `Звірено з ДС «${profile}» (знімок ${commit}).`,
+  // ДС ПРОСТОРУ (етап 2а): токени читаються з CSS-файла на льоту, коміту в них
+  // нема — називаємо файл. Порожнє імʼя — речення без дірки.
+  inspDsSpace: (source) => source
+    ? `Звірено з токенами простору (файл ${source}).`
+    : 'Звірено з токенами простору.',
   // Дорога назад у ДС. Обидва рядки називають ТОКЕН, а не «правильне
   // значення»: дизайнер повертається саме до токена, і пакет Клоду мусить
   // сказати те саме.
@@ -1193,6 +1198,9 @@ const EN = {
   inspDsNone: (profile) =>
     `There is no design system for the "${profile}" track — nothing to check values against.`,
   inspDsOn: (profile, commit) => `Checked against the "${profile}" DS (snapshot ${commit}).`,
+  inspDsSpace: (source) => source
+    ? `Checked against the space's tokens (file ${source}).`
+    : 'Checked against the space\'s tokens.',
   inspSnapTo: (token) => `Snap back to token ${token}`,
   inspSnapKnob: (token, value) => `Press the dot to snap back to ${token} (${value})`,
 

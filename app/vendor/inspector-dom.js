@@ -3,7 +3,7 @@
 import {
   specificity, compareSpec, pickWinner, varsIn, splitTop, splitBox, normalizeValue,
   tokenIndex, verdict, splitTopLevel, propFamilies, hintFor, orderHints,
-  dsIndex, dsVerdict, DS_NONE,
+  dsIndex, dsVerdict, DS_NONE, isSpaceProfile, pickDsRaw, spaceTokensFrom,
 } from './inspector-core.js';
 import { DS_PROFILES, DS_SOURCE } from './ds-tokens.js';
 
@@ -118,29 +118,95 @@ export function collectRules(doc = document) {
    словами. */
 let dsProfile = null;
 let dsCache = null;
+/* Токени ПРОСТОРУ (етап 2а, Task 7): `{ profile: 'space:<id>', tokens, source }`
+   — відповідь `/api/ds-tokens`, що пройшла `spaceTokensFrom`. Приходять у ФОНІ,
+   після реєстрації модуля, тож до відповіді (а при збої — назавжди) діє те, що
+   було: статичний напрямок із `?ds=` або `DS_NONE`. Профіль `space:…` статикою не
+   живиться (`pickDsRaw`), тому окремого «режиму простору» тут немає — є лише
+   одне поле, яке `setDsTokens` заповнює, а `setDsProfile` скидає. */
+let dsLive = null;
 
 /** Напрямок задачі (`united`/`liga360`/`seo`/…). Порожнє — «не знаємо», і це
  *  той самий стан, що «ДС немає»: мовчазна звірка проти невідомої ДС гірша за
- *  чесне «не звіряли». */
+ *  чесне «не звіряли». Скидає й токени простору: це ПОВЕРНЕННЯ до статичного
+ *  напрямку, а не доповнення до живих токенів. */
 export function setDsProfile(profile) {
   dsProfile = typeof profile === 'string' && profile ? profile : null;
+  dsLive = null;
   dsCache = null;
 }
 
-/** Індекс ДС для поточного напрямку. */
+/** Токени ПРОСТОРУ замість статичного напрямку: профіль `space:<id>`, мапа
+ *  `{імʼя: [значення…]}` (рівно те, що чекає `dsIndex`) і імʼя файла-джерела.
+ *  Кеш індексу скидається ТУТ: прогрітий до відповіді `ds()` тримав би
+ *  `DS_NONE`, і токени приїхали б, а вироки лишились би старими. Перемальовку
+ *  піна після цього просить той, хто кликав (`loadSpaceTokens` → `onTokens`). */
+export function setDsTokens(profile, tokens, source) {
+  dsProfile = profile;
+  dsLive = { profile, tokens, source: typeof source === 'string' ? source : '' };
+  dsCache = null;
+}
+
+/** Скільки чекаємо відповідь `/api/ds-tokens`. Довший за серверний тайм-аут
+ *  модуля (5 с, `deai_modules.CHECK_TIMEOUT`): інакше ми скасовували б запит
+ *  РАНІШЕ, ніж сервер встигне сказати `{profile:null, error:'check-timeout'}`, і
+ *  відрізнити «сервер повільний» від «сервер мертвий» не вийшло б ніде. */
+const SPACE_TOKENS_TIMEOUT_MS = 7000;
+
+/**
+ * Фоновий запит токенів простору: `fetch` → перевірка → `setDsTokens` →
+ * `onTokens` (перемальовка). Повертає `true`, якщо токени застосовано.
+ *
+ * ⛔ НІКОЛИ не кидає і не відхиляється. Це спроба, а не залежність: мережа,
+ * тайм-аут (`AbortError`), 404/503, `{profile:null}`, не-JSON, відповідь про
+ * чужий простір — усе однаково «токенів простору немає», тобто лишається те, що
+ * було (статичний `?ds=` або `DS_NONE`). Без повторів: макет живий, і спроба, що
+ * висить у фоні, гірша за чесне «не звіряли». Виняток із `onTokens` теж ковтаємо
+ * — перемальовка ходить по живому CSSOM чужого макета, а токени вже застосовані.
+ *
+ * Параметри — для тестів і для `inspector.js`: `fetchFn` (типово глобальний
+ * `fetch`, читається при виклику), `url` (типово корене-відносний), `timeoutMs`.
+ */
+export async function loadSpaceTokens(sp, opts = {}) {
+  const { fetchFn = globalThis.fetch, timeoutMs = SPACE_TOKENS_TIMEOUT_MS, onTokens } = opts;
+  try {
+    /* Адреса — ВСЕРЕДИНІ `try`: `encodeURIComponent` кидає на самотньому
+       сурогаті, а обіцянка «не відхиляється» не має винятків. */
+    const url = opts.url || `/api/ds-tokens?space=${encodeURIComponent(sp)}`;
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res || !res.ok) return false;
+    const got = spaceTokensFrom(await res.json(), sp);
+    if (!got) return false;
+    setDsTokens(got.profile, got.tokens, got.source);
+  } catch (e) {
+    return false;
+  }
+  if (typeof onTokens === 'function') {
+    try { onTokens(); } catch (e) { /* токени вже на місці; перемальовка — найближча подія */ }
+  }
+  return true;
+}
+
+/** Індекс ДС для поточного профілю (напрямок задачі або токени простору). */
 export function ds() {
   if (!dsCache) {
-    const raw = dsProfile ? DS_PROFILES[dsProfile] : null;
+    const raw = pickDsRaw(dsProfile, dsLive, DS_PROFILES);
     dsCache = raw ? dsIndex(dsProfile, raw) : { ...DS_NONE, profile: dsProfile };
   }
   return dsCache;
 }
 
-/** Що сказати про ДС у панелі: напрямок, чи є для нього ДС, і з чого знімок.
+/** Що сказати про ДС у панелі: напрямок, чи є для нього ДС, і з чого вона.
  *  Походження їде В ПАНЕЛЬ, а не лишається у файлі: вирок «перевизначено»
- *  спирається на конкретний коміт, і дизайнер має право спитати, на який. */
+ *  спирається на конкретне джерело, і дизайнер має право спитати, на яке.
+ *  Для статичного напрямку джерело — коміт знімка й версія Figma; для токенів
+ *  простору — імʼя CSS-файла (`source`): коміту в них нема, вони читаються з
+ *  файла на льоту. */
 export function dsInfo() {
   const d = ds();
+  if (isSpaceProfile(d.profile)) {
+    return { profile: d.profile, known: d.known, source: dsLive ? dsLive.source : '' };
+  }
   return { profile: d.profile, known: d.known,
     commit: DS_SOURCE.commit, figma: DS_SOURCE.figma };
 }

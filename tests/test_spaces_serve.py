@@ -32,6 +32,7 @@ import http.client
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -441,6 +442,84 @@ class RequestSpace(Fixture):
             st, body = self.get('/it-assets/it1/nope.css')
         self.assertEqual(st, 404)
         self.assertIn('Поточна задача — —', body)
+
+
+class InspectorSpace(Fixture):
+    """Етап 2а, Task 7: інспектор у документі макета дізнається про простір з `sp` у власному URL
+    і питає `/api/ds-tokens?space=<id>`. Простір — той, ЧИЯ задача віддає сторінку: `/commented`
+    читає задачу з файла простору запиту, тож `active_space()` і є простором задачі (під НАЗВАНОЮ
+    задачею сторінка з коментатором не віддається взагалі — 400, див. нижче)."""
+
+    @staticmethod
+    def _query(html):
+        """Хвіст URL тега інспектора: `?ds=…&sp=…` (порожній рядок, якщо параметрів нема)."""
+        m = re.search(r'src="[^"]*/inspector\.js([^"]*)"', html)
+        assert m, 'у сторінці нема тега інспектора'
+        return m.group(1)
+
+    def _page(self, query='', headers=None):
+        st, html = self.get('/commented?it=it1' + query, headers)
+        self.assertEqual(st, 200, html[:200])
+        return html
+
+    def test_local_channel_names_the_current_space(self):
+        self.assertEqual(self._query(self._page()), f'?ds=tool&sp={self.legacy_id}')
+        spaces.switch_space(self.p_id)
+        self.assertEqual(self._query(self._page()), f'?ds=tool&sp={self.p_id}')
+
+    def test_project_channel_names_it_too(self):
+        """`ch=project` — другий виклик інʼєкції. Старий простір має інтеграції (маркер `registry`),
+        тож канал справді проєктний, а не знижений до локального."""
+        html = self._page('&ch=project')
+        self.assertIn('dc/a', html)
+        self.assertNotIn('local-adapter.js', html)
+        self.assertEqual(self._query(html), f'?ds=tool&sp={self.legacy_id}')
+
+    def test_project_channel_demoted_in_a_space_without_integrations_still_names_it(self):
+        spaces.switch_space(self.p_id)
+        html = self._page('&ch=project')
+        self.assertIn('local-adapter.js', html)                 # знижено до локального
+        self.assertEqual(self._query(html), f'?ds=tool&sp={self.p_id}')
+
+    def test_the_space_is_the_one_of_the_pinned_request_not_a_later_switch(self):
+        """Простір запиту фіксується НА ВХОДІ; `sp` береться з нього, а не з реєстру на мить рендера.
+        Поточний простір перемикається ПІСЛЯ того, як задачу прочитано, але ДО рендера сторінки (як
+        друге вікно канваса посеред запиту): задача — з P, і `sp` мусить назвати P, а не новий
+        поточний."""
+        spaces.switch_space(self.p_id)
+        real = serve.Handler._current_task
+
+        def switching(handler):
+            out = real(handler)
+            spaces.switch_space(self.legacy_id)
+            return out
+        with mock.patch.object(serve.Handler, '_current_task', switching):
+            html = self._page()
+        self.assertIn('<h1>x</h1>', html, 'сторінка — задачі `x` простору P')
+        self.assertEqual(self._query(html), f'?ds=tool&sp={self.p_id}')
+        self.assertEqual(spaces.read_registry()['current'], self.legacy_id, 'контроль: перемикання відбулось')
+
+    def test_no_inspector_no_sp_in_the_bare_page(self):
+        st, html = self.get('/commented?it=it1&bare=1')
+        self.assertEqual(st, 200)
+        self.assertNotIn('inspector.js', html)
+        self.assertNotIn('sp=', html)
+
+    def test_a_named_task_gets_no_commented_page_so_sp_cannot_name_a_foreign_space(self):
+        st, body = self.get('/t/x/commented?it=it1')
+        self.assertEqual(st, 400, body[:200])
+        st, body = self.get('/commented?it=it1', {'X-Canvas-Task': 'x'})
+        self.assertEqual(st, 400, body[:200])
+
+    def test_the_sp_the_page_names_is_one_the_tokens_route_accepts(self):
+        """Дорога ціла: id із сторінки → `/api/ds-tokens?space=<id>` → 200 (не `unknown-space`)."""
+        for sid in (self.legacy_id, self.p_id):
+            spaces.switch_space(sid)
+            sp = self._query(self._page()).split('sp=')[1]
+            self.assertEqual(sp, sid)
+            st, body = self.jget(f'/api/ds-tokens?space={sp}')
+            self.assertEqual(st, 200, body)
+            self.assertIn('profile', body)
 
 
 class TaskPathAndHelpers(Fixture):
@@ -2393,6 +2472,17 @@ class LayerOff(Bare):
         self.assertIsNone(body['space'])
         body = self.jget('/api/tasks-overview')[1]
         self.assertEqual((body['current'], body['space']), ('a', None))
+
+    def test_the_inspector_gets_no_sp_when_the_layer_is_off(self):
+        """Неявний простір (`legacy` без шляху) — не простір реєстру: `/api/ds-tokens?space=legacy`
+        питав би про те, чого нема. Напрямок їде як і раніше."""
+        for q in ('', '&ch=project'):
+            st, html = self.get('/commented?it=it1' + q)
+            self.assertEqual(st, 200, html[:200])
+            m = re.search(r'src="[^"]*/inspector\.js([^"]*)"', html)
+            self.assertIsNotNone(m, q)
+            self.assertEqual(m.group(1), '?ds=tool', q)
+            self.assertNotIn('sp=', m.group(1))
 
     def test_a_broken_old_file_adds_nothing_to_the_listing_when_the_layer_is_off(self):
         """`legacy_error` — лише про шар просторів: вимкнений читає й пише як до просторів."""

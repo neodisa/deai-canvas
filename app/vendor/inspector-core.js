@@ -459,6 +459,69 @@ export function dsIndex(profile, tokens) {
   return { known: true, profile, tokens: map, byValue };
 }
 
+/* ── Токени ДС ПРОСТОРУ (етап 2а, Task 7) ──────────────────────────────────
+
+   Окрім статичного знімка напрямку (`ds-tokens.js`, ключ — напрямок задачі)
+   у простору може бути свій постачальник токенів (модуль `css-tokens` читає
+   CSS-файл), і сервер віддає їх на `GET /api/ds-tokens?space=<id>`. Профіль
+   такої ДС має вигляд `space:<id>` — і береться ЛИШЕ з відповіді сервера, ніколи
+   зі статики: знімок на диску про токени простору знати не може.
+
+   Функції нижче ЧИСТІ (ні DOM, ні мережі, ні стану модуля): стан і запит живуть
+   у `inspector-dom.js`, а тут — лише рішення «що це за відповідь» і «з чого
+   будувати індекс», щоб їх можна було перевірити без браузера. */
+
+const SPACE_PREFIX = 'space:';
+
+/** Профіль ДС простору (`space:<id>`), а не напрямку (`united`). */
+export function isSpaceProfile(profile) {
+  return typeof profile === 'string' && profile.length > SPACE_PREFIX.length
+    && profile.startsWith(SPACE_PREFIX);
+}
+
+/**
+ * Відповідь `/api/ds-tokens` → `{ profile, tokens, source }` або `null`.
+ *
+ * `null` — це «токенів простору немає», і це ОДИН стан для всього, що не є
+ * придатною відповіддю: `{profile:null}` (постачальника нема), `{profile:null,
+ * error}` (модуль упав), відповідь про ІНШИЙ простір, порожня мапа, значення не
+ * списком. Сервер уже перевіряє форму (`_token_map`), але інспектор не довіряє
+ * наосліп те, що тримає між собою й вироком «повз ДС» на кожен токен сторінки.
+ *
+ * ⛔ ПОРОЖНЯ МАПА — теж `null`, не «ДС без токенів»: словник без імен оголосив
+ * би кожну змінну сторінки повз дизайн-систему (див. `DS_NONE`).
+ * А ось токен з порожнім СПИСКОМ значень — валідний: імʼя відоме, значення ні
+ * (`var()`, що не розкрилась); вирок для нього — `dsVerdict`.
+ */
+export function spaceTokensFrom(body, sp) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  if (typeof sp !== 'string' || !sp || body.profile !== SPACE_PREFIX + sp) return null;
+  const tokens = body.tokens;
+  if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) return null;
+  const names = Object.keys(tokens);
+  if (!names.length) return null;
+  for (const n of names) {
+    const v = tokens[n];
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return null;
+  }
+  return { profile: body.profile, tokens, source: typeof body.source === 'string' ? body.source : '' };
+}
+
+/**
+ * Сира мапа `{імʼя: [значення…]}` для профілю, або `null` — «ДС невідома».
+ *   · `space:<id>` — з `live` (відповідь сервера, пройшла `spaceTokensFrom`),
+ *     і лише якщо вона про ТОЙ САМИЙ профіль; статика цього профілю не знає;
+ *   · напрямок (`united`) — зі статичного знімка `statics`, ВЛАСНА властивість:
+ *     `statics['constructor']` без цієї перевірки віддав би функцію `Object`, і
+ *     `dsIndex` зібрав би з неї «відому» ДС без жодного токена.
+ */
+export function pickDsRaw(profile, live, statics) {
+  if (typeof profile !== 'string' || !profile) return null;
+  if (isSpaceProfile(profile)) return live && live.profile === profile ? live.tokens : null;
+  if (!statics || !Object.prototype.hasOwnProperty.call(statics, profile)) return null;
+  return statics[profile] || null;
+}
+
 /**
  * Другий вирок: чи є джерело значення дизайн-системою.
  *   'token'      — ім'я знає ДС, і макетне значення збіглось із приписаним;
@@ -473,6 +536,12 @@ export function dsVerdict(ds, token, value) {
   if (!ds || !ds.known || !token) return { state: 'token', want: null };
   const want = ds.tokens.get(token);
   if (!want) return { state: 'off-ds', want: null };
+  /* ПОРОЖНІЙ список — імʼя ДС знає, а що воно приписує, ні (токен простору з
+     `var()`, яку модуль не розкрив). Порівнювати нема з чим, і «перевизначено»
+     без приписаного значення — звинувачення, яке нічим підперти: гірше за
+     пропущене (див. шапку вище). Тому 'token'; `want` лишається порожнім, і
+     панель нічого не дописує. */
+  if (!want.length) return { state: 'token', want };
   const have = normalizeValue(value);
   if (have && want.some((v) => normalizeValue(v) === have)) return { state: 'token', want };
   return { state: 'overridden', want };

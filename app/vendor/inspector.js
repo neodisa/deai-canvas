@@ -7,7 +7,9 @@
    у режимі «Проєкт» кнопка інспектора в смузі тихо нічого не робила.
    Це ВЕРХНІЙ шар: він тільки малює й ловить події. Жодного рішення про
    токени тут немає — усе, що показується, приходить з inspector-dom.js. */
-import { declsFor, describeAll, invalidate, pickWinner, setDsProfile, trail, label } from './inspector-dom.js';
+import {
+  declsFor, describeAll, invalidate, loadSpaceTokens, pickWinner, setDsProfile, trail, label,
+} from './inspector-dom.js';
 import { between, measure } from './inspector-measure.js';
 import { reportHTML } from './insp-report.js';
 /* Свій екземпляр i18n — неминучий: оверлей живе в ДОКУМЕНТІ МАКЕТА, тобто в
@@ -42,6 +44,25 @@ try {
   setDsProfile(new URL(import.meta.url).searchParams.get('ds'));
 } catch (e) {
   setDsProfile(null);
+}
+
+/* ПРОСТІР СТОРІНКИ — з того самого URL, параметром `sp` (етап 2а, Task 7).
+   Простір має свій постачальник токенів ДС, і сервер віддає їх на
+   `/api/ds-tokens?space=<id>`; документ макета про простір не знає нічого, тож
+   дорога та сама, що й для `ds`, і з тих самих причин (див. вище).
+
+   Параметра немає — опублікована сторінка, шар просторів вимкнено, стара
+   розмітка, голий макет — запиту немає взагалі, і діє лише статичний `?ds=`.
+   Адресу будуємо від URL САМОГО МОДУЛЯ, а не від документа: макет живе під
+   `<base>` підстановки ассетів, а модуль завантажено рівно з того origin, де
+   стоїть API. */
+let SPACE = null;
+try {
+  const self = new URL(import.meta.url);
+  const id = self.searchParams.get('sp');
+  if (id) SPACE = { id, url: new URL(`/api/ds-tokens?space=${encodeURIComponent(id)}`, self).href };
+} catch (e) {
+  SPACE = null;
 }
 
 const CL_HOST = '[data-comment-layer]';
@@ -519,6 +540,29 @@ const Inspector = {
   },
 
   toggle() { this.set(!this.on); },
+
+  /**
+   * Токени ДС ПРОСТОРУ приїхали — перемалювати те, що вже показано.
+   *
+   * Запит іде у ФОНІ (`loadSpaceTokens` нижче, після реєстрації модуля), тож
+   * дизайнер може встигнути запінити елемент ДО відповіді, і панель показує
+   * вироки за статичним напрямком (або без звірки взагалі). Без перемальовки
+   * вони так і лишились би — «звірено» з ДС, якої вже не діє.
+   *
+   * Перемальовка — ТОЙ САМИЙ шлях, що й після ручки тюнера (`_tuned`): звіт про
+   * запінений елемент змінився, елемент той самий, тож покоління звіту треба
+   * зрушити руками, інакше `_emit` не побачить різниці й панель оболонки
+   * лишиться зі старим. Нема піна — перемальовувати нічого: наступний же пін
+   * порахує звіт по вже новому `ds()`.
+   *
+   * `invalidate()` — кеш правил документа. Від ДС він не залежить, але звіт
+   * мусить прочитати макет наново: поки запит висів (до 7 с), макет міг
+   * перемалюватись, а кеш тримав би його попередній стан.
+   */
+  _dsArrived() {
+    invalidate();
+    if (this.pinned) this._tuned();
+  },
 
   /** Режим оверлея. Це РЕЖИМ, а не другий інструмент: ховер, `deepTarget`,
    *  Escape, перемалювання на скрол і ресайз уже написані й перевірені один
@@ -1559,3 +1603,13 @@ const Inspector = {
 window.CanvasInspector = Inspector;
 if (document.readyState !== 'loading') Inspector.init();
 else document.addEventListener('DOMContentLoaded', () => Inspector.init());
+
+/* Токени простору — у ФОНІ і ПІСЛЯ реєстрації: ні `await` на верхньому рівні,
+   ні очікування перед `window.CanvasInspector`. Канвас бере рамку макета
+   одним `load` (`app.js`, `frame.addEventListener('load', …)`) і одразу
+   чіпає `CanvasInspector`; модуль, який висить на мережі, доїхав би вже після
+   цього `load` — і кнопка інспектора, і тюнер лишились би мертвими до
+   перезавантаження. Тому реєстрація синхронна, як і була, а запит — окремо.
+   `loadSpaceTokens` не кидає й не відхиляється (див. його докстрінг): збій —
+   це «токенів простору немає», і діє статичний `?ds=`. */
+if (SPACE) loadSpaceTokens(SPACE.id, { url: SPACE.url, onTokens: () => Inspector._dsArrived() });

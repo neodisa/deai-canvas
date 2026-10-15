@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import {
   specificity, compareSpec, pickWinner,
   varsIn, splitTop, splitBox, normalizeValue, tokenIndex, verdict, splitTopLevel,
-  propFamilies, hintFor, valueShape, nameClaims,
+  propFamilies, hintFor, valueShape, nameClaims, dsIndex, dsVerdict,
 } from '../app/vendor/inspector-core.js';
 
 // специфічність: [id, клас/атрибут/псевдоклас, тег/псевдоелемент]
@@ -260,5 +260,17 @@ assert.deepStrictEqual(hintFor('font-weight', ['--fw-bold'], null, '700'),
   [{ name: '--fw-bold', tier: 'shape' }]);
 assert.deepStrictEqual(hintFor('font-weight', null, new Map(), '700'), []);
 assert.deepStrictEqual(hintFor('font-weight', ['--x'], new Map(), null), []);
+
+// dsVerdict: токен ДС із ПОРОЖНІМ списком значень (var(), що не розкрилась —
+// імʼя відоме, значення ні) — це 'token', а не 'overridden': порівнювати нема з
+// чим, і звинувачувати макет у перевизначенні, не знаючи приписаного, — брехня.
+const dsE = dsIndex('space:s', { '--a': [], '--b': ['#ffffff'] });
+assert.deepStrictEqual(dsVerdict(dsE, '--a', '#123456'), { state: 'token', want: [] });
+assert.strictEqual(dsVerdict(dsE, '--b', '#123456').state, 'overridden'); // контроль: непорожній — як раніше
+assert.strictEqual(dsVerdict(dsE, '--b', '#ffffff').state, 'token');
+assert.strictEqual(dsVerdict(dsE, '--zzz', '#ffffff').state, 'off-ds');
+assert.deepStrictEqual(dsVerdict(dsE, null, '#ffffff'), { state: 'token', want: null });
+assert.deepStrictEqual(dsE.tokens.get('--a'), []);
+assert.strictEqual(dsE.byValue.size, 1, 'порожній список у зворотний індекс нічого не кладе');
 
 console.log('inspector-core: OK');

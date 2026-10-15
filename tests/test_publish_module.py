@@ -335,6 +335,32 @@ class BuildPreview(TaskFixture):
         self.assertTrue(self._mentions(pub, b'supabase'),
                         'контроль: з коментарями supabase у дереві МАЄ бути')
 
+    def test_published_pages_never_carry_the_space_or_the_inspector(self):
+        """Етап 2а, Task 7: `sp=<id простору>` іде в URL інспектора ЛИШЕ на робочому місці дизайнера
+        (`/commented`). Опублікована сторінка (Vercel чи тека) до `/api/ds-tokens` дістатись не може, а
+        збірка ЛІГА мусить лишитись байт-у-байт такою, як була: `build_preview` кличе
+        `inject_comment_layer` без `inspector`, `profile` і `space`. Простір ТУТ підставлено справжній
+        (інакше шар вимкнено, `describe` дає `None`, і тест не бачив би витоку, навіть якби він був)."""
+        real = {'id': 'design-1', 'path': self.tmp, 'legacy': False, 'integrations': False}
+        self.assertIsNotNone(serve.spaces.describe(real), 'контроль: цей простір для describe реальний')
+        calls = []
+        orig = serve.inject_comment_layer
+
+        def spy(*a, **kw):
+            calls.append(kw)
+            return orig(*a, **kw)
+        with mock.patch.object(serve.spaces, 'active_space', return_value=real), \
+                mock.patch.object(serve, 'inject_comment_layer', spy):
+            pub = self._build(comments=True, gate_pw='x')['dir']
+        self.assertEqual(len(calls), len(SOURCE_PAGES), 'кожна сторінка пройшла через інʼєкцію')
+        for kw in calls:
+            self.assertEqual(set(kw) - {'version'}, set(), f'публікація передала зайве: {sorted(kw)}')
+        for rel in self._inner_pages(pub) + ['index.html']:
+            html = _read(os.path.join(pub, rel))
+            self.assertNotIn('sp=', html, rel)
+            self.assertNotIn('inspector', html, rel)
+            self.assertNotIn('ds-tokens', html, rel)
+
     def test_comments_off_leaves_no_supabase_no_layer_folder_no_injection(self):
         for gate_pw in ('x', None):
             with self.subTest(gate_pw=gate_pw):
