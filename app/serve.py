@@ -3616,6 +3616,190 @@ def _consume_stderr_line(line, progress, tail):
     progress.apply(ev)
 
 
+# ---------------------------------------------------------------------------------------------------------
+# Модулі: API (етап 2а, Task 6). Маршрути `/api/modules`, `/api/module-enable|disable|settings|check`,
+# `/api/ds-tokens` — РЕЄСТРОВІ (`Handler._REGISTRY_ROUTES`): простір — параметр `space`, а не заголовок задачі.
+# Уся логіка тут — модульні функції (тестуються без сокета); методи `Handler` лише розбирають запит.
+
+#: Відмови `deai_modules.check`, що стосуються САМОГО модуля (його налаштувань, коду, секретів), а не запиту: у
+#: відповіді вони — вердикт `check: {ok: false, error: <код>, detail}` (HTTP 200), так само, як `ok: false` від
+#: самого модуля, а `GET /api/modules` показує їх тим самим `status: error`. Для `module-enable|settings` це ще й
+#: чесність: до `check` стан УЖЕ записано, і 400/502/504/409 збрехали б, що нічого не змінилось. Решта
+#: (`unknown-module`, `space-json-unreadable`) — про запит чи простір: HTTP-відмова центрального обробника
+#: (`Handler._guarded`), а `spaces-off`/`role-taken`/`unwritable`/`bad-settings` запису — до `check` і не доходять.
+MODULE_VERDICT_CODES = ('bad-manifest', 'bad-settings', 'module-error', 'check-timeout', 'secrets-unreadable')
+
+
+def space_view(sp):
+    """`spaces.describe(sp)` + `capabilities` (ТОТАЛЬНА: нечитабельна `space.json` лягає в `capabilities.error`,
+    а не в 5xx). `capabilities` додаємо ТУТ, а не в `describe`: точні тести рівності `describe`/`listing`, а
+    головне — опитування й списки не мусять вантажити модулі. `None` (шар вимкнено) лишається `None`."""
+    out = spaces.describe(sp)
+    if out is not None:
+        out['capabilities'] = deai_modules.capabilities(sp)
+    return out
+
+
+def spaces_listing():
+    """`spaces.listing()` + `capabilities` у кожному записі. Запис реєстру відновлюється з самого запису
+    списку: реєстр валідує прапорці як справжні `bool`, тож `describe.integrations` те саме, що `integrations_for`
+    (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
+    `capabilities` не кидає."""
+    out = spaces.listing()
+    for e in out['spaces']:
+        e['capabilities'] = deai_modules.capabilities(
+            {'id': e['id'], 'path': e['path'], 'integrations': e['integrations']})
+    return out
+
+
+def _secret_flags(space_id, m):
+    """({ключ секрету: задано}, код помилки | `None`). «Задано» — є НЕПОРОЖНЄ значення (порожній рядок —
+    не пароль). Файл секретів не читається — `set` невідомий (`None`), а код іде в статус модуля: «не задано»
+    збрехало б, а мовчазне зникнення пароля з вікна — рівно те, проти чого `secrets-unreadable`."""
+    keys = m.secret_keys()
+    if not keys:
+        return {}, None
+    try:
+        got = deai_modules.read_secrets(space_id, m.id)
+    except deai_modules.ModuleError as e:
+        return {k: None for k in keys}, e.code
+    return {k: bool(got.get(k)) for k in keys}, None
+
+
+def _module_status(m, last, secrets_error):
+    """`(status, error)` модуля каталогу:
+      * `error`     — не завантажився (`m.status != 'ok'`; текст — `m.error`), чи файл секретів не читається
+                      (`secrets-unreadable`), чи ОСТАННІЙ `check` не ok (`error` — його `error`: код ядра
+                      `bad-settings|module-error|check-timeout` або власний текст модуля; `detail` — у `last_check`);
+      * `unchecked` — завантажився, `check` ще не було (`last` — `None`; сервер щойно стартував чи нічого не
+                      запускали: GET модулі НЕ виконує, лише читає запамʼятоване);
+      * `ok`        — останній `check` ok.
+    `missing` (увімкнений, а в каталозі нема) — окремо, у `module_list`. Вмикання на статус не впливає: це про
+    ЗДОРОВ'Я модуля, а не про його роль. Запамʼятований `check` не інвалідується правкою `space.json` руками."""
+    if m.status != 'ok':
+        return 'error', m.error
+    if secrets_error:
+        return 'error', secrets_error
+    if last is None:
+        return 'unchecked', None
+    if last.get('ok') is True:
+        return 'ok', None
+    return 'error', last.get('error') or 'check failed'
+
+
+def module_list(space):
+    """Записи `GET /api/modules` для простору `space`: модулі каталогу (за абеткою), далі `missing` — модулі,
+    ЯВНО увімкнені в `space.json`, яких на цій машині нема (вимкнений відсутній — не показуємо: це лише
+    залишок налаштувань). Секрет — ЛИШЕ `set: true|false|null`, значення сюди не доходить (читаємо лише
+    прапорці). Налаштування — СИМВОЛЬНІ (`{home}`, `{space}`…), з типовими значеннями маніфесту.
+    Може кинути `ModuleError('space-json-unreadable')` (центральна 409)."""
+    sid = space['id']
+    cat = deai_modules.catalog()
+    state = deai_modules.effective_state(space)
+    explicit = deai_modules.space_modules(space)
+    out = []
+    for mid, m in cat.items():
+        st = state.get(mid)
+        if st is None:                                  # каталог змінився між двома читаннями
+            continue
+        flags, secrets_err = _secret_flags(sid, m)
+        last = deai_modules.last_check(sid, mid)
+        status, error = _module_status(m, last, secrets_err)
+        settings = []
+        for s in m.settings:
+            v = {'key': s['key'], 'type': s['type'], 'label': s['label'], 'required': s['required']}
+            if s['type'] == 'secret':
+                v['set'] = flags[s['key']]
+            elif s['key'] in st['settings']:
+                v['value'] = st['settings'][s['key']]
+            if 'options' in s:
+                v['options'] = [dict(o) for o in s['options']]
+            settings.append(v)
+        e = {'id': mid, 'name': m.name, 'version': m.version, 'api': m.api, 'roles': list(m.roles),
+             'builtin': True, 'enabled': st['enabled'], 'implicit': st['implicit'], 'status': status,
+             'settings': settings}
+        if last is not None:
+            e['last_check'] = last
+        if error is not None:
+            e['error'] = error
+        out.append(e)
+    for mid in sorted(explicit):
+        if mid not in cat and explicit[mid]['enabled']:
+            out.append({'id': mid, 'name': mid, 'version': '', 'api': None, 'roles': [], 'builtin': False,
+                        'enabled': True, 'implicit': False, 'status': 'missing', 'settings': [],
+                        'error': 'module is not installed on this machine'})
+    return out
+
+
+def module_entry(space, mid):
+    """Запис одного модуля (`module_list`); `None`, коли його щойно не стало."""
+    return next((e for e in module_list(space) if e['id'] == mid), None)
+
+
+def module_check_verdict(space, mid):
+    """`deai_modules.check` з відмовами САМОГО модуля (`MODULE_VERDICT_CODES`), перетвореними на вердикт
+    `{ok: false, error, detail}` — рівно той, що `check` запамʼятав для `last_check`. Решта винятків летять."""
+    try:
+        return deai_modules.check(space, mid)
+    except deai_modules.ModuleError as e:
+        if e.code in MODULE_VERDICT_CODES:
+            return {'ok': False, 'error': e.code, 'detail': e.message}
+        raise
+
+
+def module_write(space, mid, action, settings, secrets):
+    """Запис `module-enable|settings|disable` у ПОРЯДКУ СПЕКИ: валідація налаштувань (нічого не пише) →
+    СЕКРЕТИ → `space.json` → (`enable`/`settings`) `check`. Секрет ПЕРШИМ: сирітський секрет нешкідливий,
+    а увімкнений модуль без секрету — ні (невдалий запис секрету зупиняє вмикання до `space.json`). Валідація
+    налаштувань стоїть ДО запису секрету: інакше 400 за кривим налаштуванням лишив би змінений пароль. Відмова,
+    яку видно лише під локом `space.json` (`role-taken`, `space-json-unreadable`), настає вже ПІСЛЯ запису
+    секрету — спека це приймає: сирітський секрет нешкідливий. `disable` налаштувань і секретів НЕ чіпає й не
+    читає (серед аргументів воно ігнорується). Повертає вердикт `check` або `None` (`disable`)."""
+    if action == 'disable':
+        deai_modules.write_module_state(space, mid, enabled=False)
+        return None
+    deai_modules.validate_settings(mid, settings)
+    if secrets is not None:
+        deai_modules.write_secrets(space['id'], mid, secrets)
+    deai_modules.write_module_state(space, mid, enabled=True if action == 'enable' else None, settings=settings)
+    return module_check_verdict(space, mid)
+
+
+def _token_map(raw):
+    """`{імʼя: [значення…]}` з відповіді `tokens` модуля, або `None`, коли форма не та (ключі — рядки, значення —
+    списки рядків): такий результат не можна віддати інспектору, і він не мусить упасти на ньому."""
+    if not isinstance(raw, dict):
+        return None
+    for k, v in raw.items():
+        if not isinstance(k, str) or not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            return None
+    return raw
+
+
+def ds_tokens_view(space):
+    """Тіло `GET /api/ds-tokens` для простору `space`: `{profile: 'space:<id>', tokens, source}`; нема
+    постачальника ролі `tokens` чи мапа порожня — `{profile: null}`; помилка модуля (`ModuleError` будь-якого
+    коду, зокрема `check-timeout`, нечитабельний `space.json`, не та форма відповіді) — `{profile: null, error:
+    <код>}`. НІКОЛИ не 5xx: інспектор мусить працювати й без токенів. `tokens` модуля лише читає, тож тайм-аут
+    (`CHECK_TIMEOUT`) тут безпечний — потік-сирота нічого не зіпсує."""
+    try:
+        prov = deai_modules.provider('tokens', space)
+        if not isinstance(prov, deai_modules.Module):
+            return {'profile': None}
+        res = deai_modules.call(prov, 'tokens', deai_modules.module_ctx(space, prov),
+                                timeout=deai_modules.CHECK_TIMEOUT)
+    except deai_modules.ModuleError as e:
+        return {'profile': None, 'error': e.code}
+    tokens = _token_map(res.get('tokens')) if isinstance(res, dict) else None
+    if tokens is None:
+        return {'profile': None, 'error': 'module-error'}
+    if not tokens:
+        return {'profile': None}
+    source = res.get('source')
+    return {'profile': f'space:{space["id"]}', 'tokens': tokens,
+            'source': source if isinstance(source, str) else ''}
+
+
 def _guarded_request(method):
     """Декоратор `do_GET`/`do_POST`: тіло методу виконується під `Handler._guarded` (центральні
     відповіді `no-task` / `space-unavailable` / `spaces-*` / `ambiguous-task`). Саме декоратор, а
@@ -3839,9 +4023,14 @@ class Handler(SimpleHTTPRequestHandler):
     #: береться й не перевіряється: `task-new` із заголовком на ЩЕ НЕ зареєстрований id давав
     #: «невідома задача», хоча саме вона й створюється; префіксна форма
     #: (`/t/x/api/task-new`) безглузда й відхиляється. Те саме стосується `/api/space*`.
+    #: Модулі (етап 2а): `/api/modules`, `/api/module-*`, `/api/ds-tokens` — теж реєстрові: простір — параметр
+    #: `space`, не задача. Точна відповідність (шлях без query), КОЖЕН маршрут окремо: широкий префікс
+    #: `/api/module` зловив би будь-який майбутній маршрут.
     _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/spaces',
                         '/api/space-peek', '/api/space-new', '/api/space-update',
-                        '/api/space-switch')
+                        '/api/space-switch',
+                        '/api/modules', '/api/module-enable', '/api/module-disable',
+                        '/api/module-settings', '/api/module-check', '/api/ds-tokens')
 
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
@@ -3967,7 +4156,14 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.split('?')[0] == '/api/spaces':
             # Шар вимкнено → `{current: null, spaces: [], off: true}` (рішає `spaces.listing`).
-            self._send_json(spaces.listing())
+            # Кожен запис ще й несе `capabilities` (див. `spaces_listing`).
+            self._send_json(spaces_listing())
+            return
+        if self.path.split('?')[0] == '/api/modules':
+            self._modules_get()
+            return
+        if self.path.split('?')[0] == '/api/ds-tokens':
+            self._ds_tokens_get()
             return
         if self.path.split('?')[0] == '/api/space-peek':
             self._send_json(spaces.peek(parse_qs(urlparse(self.path).query).get('path', [''])[0]))
@@ -3981,10 +4177,10 @@ class Handler(SimpleHTTPRequestHandler):
                    'jira': task.get('jira'),
                    'profile': task.get('profile'),
                    # Простір задачі (`describe`: id, name, color, path, legacy,
-                   # integrations; `null` — шар вимкнено) і канал коментарів. Канал
+                   # integrations + `capabilities`; `null` — шар вимкнено) і канал коментарів. Канал
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
                    # `comments` не мусить вгадувати це зі старого файла.
-                   'space': spaces.describe(sp),
+                   'space': space_view(sp),
                    'comment_channel': (comment_channel(task, tid)
                                        if spaces.integrations_on() else None),
                    'iterations': task_api_iterations(meta),
@@ -4045,7 +4241,7 @@ class Handler(SimpleHTTPRequestHandler):
             # зліва направо): обхід мусить його повернути.
             self._send_json({'current': cfg.get('current') if cfg is not None else None,
                              'tasks': _all_space_task_rows() if every else _task_rows(cfg),
-                             'space': spaces.describe(spaces.active_space())})
+                             'space': space_view(spaces.active_space())})
             return
         if self.path.split('?')[0] == '/api/tasks-overview':
             q = parse_qs(urlparse(self.path).query)
@@ -4062,7 +4258,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # вкладку «Команда»). `tasks_overview` чиста збірка — порожні рядки їй безпечні.
                 out = {**tasks_overview(cfg, ([], None)), 'team': None}
             self._send_json({'current': cfg.get('current'), **out,
-                             'space': spaces.describe(spaces.active_space())})
+                             'space': space_view(spaces.active_space())})
             return
         if self.path.split('?')[0] == '/api/task-thumb':
             self._task_thumb()
@@ -4956,6 +5152,14 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_update(payload)
         elif self.path == '/api/space-switch':
             self._space_switch(payload)
+        elif self.path == '/api/module-enable':
+            self._module_enable(payload)
+        elif self.path == '/api/module-disable':
+            self._module_disable(payload)
+        elif self.path == '/api/module-settings':
+            self._module_settings(payload)
+        elif self.path == '/api/module-check':
+            self._module_check(payload)
         else:
             self.send_error(404)
 
@@ -5677,6 +5881,80 @@ class Handler(SimpleHTTPRequestHandler):
             self._space_failed(e)
             return
         self._send_json({'ok': True, 'current': sid, 'task': task})
+
+    # ---------- Модулі (етап 2а, Task 6; логіка — модульні функції `module_*`/`ds_tokens_view` вище) ----------
+
+    def _module_space(self, want):
+        """Простір маршрутів модулів: `want` — параметр `space` (`None`/відсутній — простір, зафіксований
+        на вході, `spaces.active_space()`); запис реєстру або `None` (відповідь уже надіслана: 404
+        `unknown-space` через `_space_failed`, як і в інших маршрутах просторів). Простору нема зовсім —
+        теж `unknown-space`. Названий простір стає простором запиту (воркер `deai_modules.call` його
+        успадковує). Порожній `space=` у запиті GET — «не задано» (`parse_qs` відкидає порожні значення);
+        у тілі POST порожній рядок — вже невідомий простір."""
+        if want is None:
+            sp = spaces.active_space()
+            if sp is None:
+                self._space_error(404, 'unknown-space', 'no space: nothing to ask about')
+                return None
+            return sp
+        sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == want), None)
+        if sp is None:
+            try:
+                raise KeyError(str(want)[:60])
+            except KeyError as e:
+                self._space_failed(e)
+            return None
+        spaces.set_request_space(sp['id'])
+        return sp
+
+    def _modules_get(self):
+        """`GET /api/modules?space=` → `{modules: [...]}` (`module_list`). Модулі НЕ виконуються (лише
+        завантажуються й читається запамʼятований `check`): запит дешевий і безпечний для опитування."""
+        sp = self._module_space(parse_qs(urlparse(self.path).query).get('space', [None])[0])
+        if sp is None:
+            return
+        self._send_json({'modules': module_list(sp)})
+
+    def _ds_tokens_get(self):
+        """`GET /api/ds-tokens?space=` → `ds_tokens_view`: завжди 200 для відомого простору (інспектор мусить
+        працювати без токенів); невідомий простір — 404."""
+        sp = self._module_space(parse_qs(urlparse(self.path).query).get('space', [None])[0])
+        if sp is None:
+            return
+        self._send_json(ds_tokens_view(sp))
+
+    # По обробнику на маршрут (як скрізь у `do_POST`: тест «тіло не обʼєкт» розбирає `self._xxx(payload)`).
+    def _module_enable(self, payload):
+        self._module_post(payload, 'enable')
+
+    def _module_disable(self, payload):
+        self._module_post(payload, 'disable')
+
+    def _module_settings(self, payload):
+        self._module_post(payload, 'settings')
+
+    def _module_check(self, payload):
+        self._module_post(payload, 'check')
+
+    def _module_post(self, payload, action):
+        """`POST /api/module-enable|disable|settings|check` `{space?, id, settings?, secrets?}`:
+        `{ok: true, module: <запис>[, check: <вердикт>]}` (порядок запису й коди — `module_write`,
+        `module_check_verdict`). `ModuleError` (`unknown-module` 404, `bad-settings` 400, `role-taken` 409,
+        `space-json-unreadable`/`spaces-off` 409, `unwritable` 500…) відповідає `_guarded` — одна форма
+        `{ok: false, code, error}` на всі маршрути; текст уже без секретів, а значення секретів сюди не
+        доходять взагалі (відповідь будується з прапорців `set`)."""
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        mid = payload.get('id')
+        if action == 'check':
+            verdict = module_check_verdict(sp, mid)
+        else:
+            verdict = module_write(sp, mid, action, payload.get('settings'), payload.get('secrets'))
+        out = {'ok': True, 'module': module_entry(sp, mid)}
+        if action != 'disable':
+            out['check'] = verdict
+        self._send_json(out)
 
     def _publish(self, payload):
         """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer

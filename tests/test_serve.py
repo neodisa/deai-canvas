@@ -1937,8 +1937,14 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
     #: ЗАВЕРШУЮТЬСЯ `spaces.switch_space(...)` — тобто пишуть `current` справжнього реєстру, коли
     #: файл тестів не ізолював `DEAI_HOME` (з вимкненим шаром `switch_space` — no-op, тож
     #: `test_serve.py`, що ганяє їх лише з `DC_TASKS_FILE`, під правило не потрапляє: його тут не скануємо).
+    #: Модулі (етап 2а, Task 6) пишуть теж — свідомо в цьому ж кортежі: `write_module_state(` змінює
+    #: `<тека простору>/space.json`, `write_secrets(` СТВОРЮЄ `<DEAI_HOME>/secrets.json`, а `/api/module-` (enable,
+    #: disable, settings, check) кличе обидва з сервера. Тест, що їх кличе без власного `DEAI_HOME`, створив би
+    #: `secrets.json` у справжньому `~/.deai` дизайнера (пароль превʼю!), а `spaces_guard` бачить зміну імен файлів
+    #: у теці реєстру. `/api/modules` (читання списку) сюди не входить: `/api/module-` його не збігає.
     SPACE_WRITERS = ('/api/space-', '/api/task-new', '/api/task-switch',
-                     'create_space(', 'switch_space(', 'update_space(')
+                     'create_space(', 'switch_space(', 'update_space(',
+                     'write_secrets(', 'write_module_state(', '/api/module-')
 
     #: Форми ПРИСВОЄННЯ `DEAI_HOME`, які приймає `_assigns_deai_home`. Лежать окремо, щоб повідомлення
     #: про провал казало автору, що саме охоронець уважає ізоляцією, а не змушувало гадати.
@@ -2032,7 +2038,8 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
         """Свідок проти вакууму: обидві перевірки просторів зелені й тоді, коли жоден файл не кличе
         писарів, — тобто коли вони не стережуть нічого (перейменували мутатор — і охоронець осліп)."""
         seen = {name for name, _ in self._space_writer_sources()}
-        self.assertLessEqual({'test_spaces.py', 'test_spaces_serve.py', 'test_integrations_off.py'},
+        self.assertLessEqual({'test_spaces.py', 'test_spaces_serve.py', 'test_integrations_off.py',
+                              'test_modules.py', 'test_modules_api.py'},
                              seen, 'писарі просторів зникли з тестів — SPACE_WRITERS застарів')
 
     def test_the_task_routes_that_end_in_a_space_switch_count_as_space_writers(self):
@@ -2043,10 +2050,15 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
                     'post("/api/task-switch", {"id": "a"})',
                     "urlopen(base + '/api/task-new')",
                     "self.post('/api/space-new', {})",
-                    "spaces.switch_space('p')"):
+                    "spaces.switch_space('p')",
+                    "self.post('/api/module-enable', {'id': 'css-tokens'})",
+                    "post('/api/module-check', {})",
+                    "dm.write_module_state(space, 'css-tokens', enabled=True)",
+                    "deai_modules.write_secrets('s', 'static-publish', {})"):
             self.assertTrue(self._is_space_writer(src), src)
         for src in ("self.get('/api/task')", "self.get('/api/tasks?all=1')",
-                    "self.get('/api/tasks-overview')", "# /api/tasks", "x = 1"):
+                    "self.get('/api/tasks-overview')", "# /api/tasks", "x = 1",
+                    "self.get('/api/modules?space=a')", "self.get('/api/ds-tokens')", "dm.read_secrets('s', 'm')"):
             self.assertFalse(self._is_space_writer(src), src)
 
     def test_the_isolation_check_tells_an_assignment_from_a_mention(self):

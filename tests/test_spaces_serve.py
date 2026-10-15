@@ -1212,9 +1212,12 @@ class SpaceRoutes(Fixture):
         self.assertEqual([s['id'] for s in body['spaces']], [self.legacy_id, self.p_id, self.e_id])
         self.assertNotIn('off', body)
         for s in body['spaces']:
+            # `capabilities` (етап 2а, Task 6) додає `serve.spaces_listing`; `spaces.listing()` і `describe` — без нього
             self.assertEqual(set(s), {'id', 'name', 'color', 'path', 'tasks', 'available',
-                                      'integrations', 'legacy'})
+                                      'integrations', 'legacy', 'capabilities'})
         legacy, p, e = body['spaces']
+        self.assertEqual(legacy['capabilities'], {'publish': 'legacy', 'tokens': None})              # з інтеграціями
+        self.assertEqual(p['capabilities'], {'publish': 'static-publish', 'tokens': None})         # без — локальна публікація
         self.assertEqual((legacy['integrations'], legacy['legacy'], legacy['tasks'], legacy['available']),
                          (True, True, 1, True))
         self.assertEqual((p['name'], p['color'], p['path'], p['integrations'], p['legacy']),
@@ -1468,9 +1471,11 @@ class TaskResponses(Fixture):
     def test_task_names_its_space_and_the_comment_channel(self):
         st, body = self.jget('/api/task')
         self.assertEqual(st, 200)
+        # `capabilities` — поле відповіді (етап 2а, Task 6), його додає `serve.space_view`, а не `spaces.describe`
         self.assertEqual(body['space'], {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
                                          'color': 'space-1', 'path': os.path.dirname(self.a_dir),
-                                         'legacy': True, 'integrations': True})
+                                         'legacy': True, 'integrations': True,
+                                         'capabilities': {'publish': 'legacy', 'tokens': None}})
         self.assertEqual(body['comment_channel'], 'dc/a')
         # задача іншого простору — його простір, і без інтеграцій каналу коментарів немає
         st, body = self.jget('/t/x/api/task')

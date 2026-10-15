@@ -549,6 +549,14 @@ def _need_module(module_id):
     return m
 
 
+def validate_settings(module_id, settings):
+    """Перевірка патча налаштувань БЕЗ запису: `unknown-module` / `bad-settings` (ті самі, що кине
+    `write_module_state`). Для API, що пише секрети РАНІШЕ за `space.json`: відмова налаштувань мусить
+    настати до запису секрету, інакше клієнт із 400 у руках мав би вже змінений пароль. Нічого не пише, лок
+    не бере (каталог виконує код модулів)."""
+    return _validate_patch(_need_module(module_id), settings)
+
+
 def _require_writable(space):
     if not spaces.layer_on() or not _space_path(space):
         raise ModuleError('spaces-off', message='spaces layer is off or the space has no folder')
