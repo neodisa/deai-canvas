@@ -355,7 +355,8 @@ test("клавіатура дропдауна просторів: roving focus �
 });
 
 test("api(): помилка несе `code` і `status` (сервер просторів завжди шле `code` разом з `error`)", () => {
-  assert.match(fn("api"), /Object\.assign\(new Error\(msg\.slice\(0, 200\) \|\| String\(res\.status\)\), \{ status: res\.status, code \}\)/);
+  /* `statusText` і `body` — додатково (Task 8 follow-up): причина code-less 400 лежить там, а не в `code`. */
+  assert.match(fn("api"), /Object\.assign\(new Error\(msg\.slice\(0, 200\) \|\| String\(res\.status\)\),\s+\{ status: res\.status, code, statusText: res\.statusText, body: txt\.slice\(0, 1000\) \}\)/);
 });
 
 test("blankStage: чистить сцену, полотно й панель — під смугою помилки не лишається чужий макет", () => {
@@ -416,14 +417,15 @@ test("смуга: `published` — publish_url АБО publish_local, ціль п�
 test("публікація: відповідь модуля (`local`) — плашка «Опубліковано локально» з «Відкрити», а не «деплой не вдався»", () => {
   const body = barAct("publish");
   assert.match(body, /if \(r\.url\) \{ render\(\); return; \}/, "шлях ЛІГА змінено");
-  assert.match(body, /const local = safeLocalUrl\(r\.local\?\.url\);/);
+  assert.match(body, /const local = safeLocalUrl\(r\.local\?\.url, location\.origin\);/, "адресу з відповіді звіряємо з оригіном канваса");
   assert.match(body, /if \(r\.local\) \{/);
   assert.match(body, /notice\('publish-local', t\('publishLocalDone'\)/);
   assert.match(body, /act: 'open'/);
-  assert.match(body, /window\.open\(local, '_blank'\)/);
+  assert.match(body, /window\.open\(local, '_blank', 'noopener'\)/, "без noopener відкрита сторінка бачить `window.opener`");
   /* `publishDeployFailed` — лише для відповіді без `url` і без `local` (ЛІГА без деплою). */
-  assert.ok(body.indexOf("r.local") < body.indexOf("publishDeployFailed"), "гілка `local` стоїть ПІСЛЯ «деплой не вдався»");
-  assert.match(body, /const m = publishErr\(e\);\n\s+tell\(t\(m\.key, \.\.\.m\.args\)\);/, "відмова повз `publishErr`");
+  assert.ok(body.indexOf("r.local") < body.indexOf("publishDeployFailed"),
+    "гілка `local` мусить стояти ДО «деплой не вдався» (інакше успішна публікація модулем читається як невдалий деплой)");
+  assert.match(body, /const m = publishErr\(e\);\n\s+tell\(t\(m\.key, \.\.\.\(m\.reasonKey \? \[t\(m\.reasonKey\)\] : m\.args\)\)\);/, "відмова повз `publishErr`");
   assert.doesNotMatch(body, /catch \(e\) \{ tell\(t\('errFailed', e\.message\)\); \}/, "стара загальна відмова лишилась");
 });
 
@@ -458,4 +460,12 @@ test("`noOutward` у app.js лишається на інтеграціях (пу
 test("дропдаун публікації: підпис «локально» й застереження про ЛІГА-гейт — за моделлю", () => {
   assert.match(bar, /const subText = sub\.subKey \? t\(sub\.subKey, \.\.\.\(sub\.subArgs \|\| \[\]\)\) : "";\n\s+return ddItem\(\{ act: sub\.id, icon, title: t\(sub\.labelKey\), why, sub: subText \}\);/);
   assert.match(bar, /c\.legacy \? `<div class="dd-note">\$\{t\("pubGateTruth"\)\}<\/div>` : ""/);
+});
+
+test("плашка «Опубліковано локально» гаситься разом із задачею; відмова несе statusText і тіло", () => {
+  /* Стійка плашка без таймера не сміє пережити свою задачу: `resetPerTaskState` кличуть і перемикання задачі, і
+     простору (`resetSpaceState`), і створення задачі. */
+  assert.match(fn("resetPerTaskState"), /^\{[^]*?dropNotice\('publish-local'\);/);
+  /* Причина code-less 400 лежить у рядку статусу й тілі, а `message` розмітку ріже по 200 знаків — `api()` їх віддає. */
+  assert.match(fn("api"), /statusText: res\.statusText, body: txt\.slice\(0, 1000\)/);
 });

@@ -646,7 +646,11 @@ async function api(path, opts) {
     let code;
     try { const j = JSON.parse(txt); if (j && typeof j.error === 'string') { msg = j.error; code = j.code; } }
     catch (e) { /* не JSON — лишаємо сирий текст, як було */ }
-    throw Object.assign(new Error(msg.slice(0, 200) || String(res.status)), { status: res.status, code });
+    /* `statusText` і початок тіла — для відмов, у яких причина НЕ в `code`: `send_error(400, …)` кладе
+       текст у рядок статусу й у розмітку, а `message` ріже розмітку по 200 знаків ДО причини
+       (`publishErr`, `spaces-model.js`, розрізняє так «жодної ітерації не позначено» і `bad payload`). */
+    throw Object.assign(new Error(msg.slice(0, 200) || String(res.status)),
+      { status: res.status, code, statusText: res.statusText, body: txt.slice(0, 1000) });
   }
   /* ТИП ВІДПОВІДІ — ДО розбору. Без цього рядка чужий процес на нашому порту
      (у власника двічі: `python -m http.server`, IPv6-сокет виграє в
@@ -1114,6 +1118,9 @@ async function dupIteration() {
  * і на макет ляже пакет ПОПЕРЕДНЬОЇ задачі.
  */
 async function resetPerTaskState() {
+  /* Плашка «Опубліковано локально» — про ТУ задачу, яку щойно опублікували (стійка, без таймера): на
+     іншій задачі чи в іншому просторі вона бреше про те, що опубліковано. */
+  dropNotice('publish-local');
   autoShootStopped.clear(); autoShootOff.clear(); autoShootSig.clear();
   tuneState = emptyTune();
   /* Ревізія — теж пер-задачна: з ревізією задачі A перший запис у задачі B
@@ -1696,17 +1703,20 @@ const BAR_ACTIONS = {
          (`safeLocalUrl`), а плашка з «Відкрити» — стійка (`notice`), бо тост за 3 с зникав би раніше,
          ніж людина встигне натиснути. */
       if (r.local) {
-        const local = safeLocalUrl(r.local?.url);
+        const local = safeLocalUrl(r.local?.url, location.origin);
         render();
+        /* Плашка стійка, а значить може пережити свою задачу: її гасить `resetPerTaskState` (перемикання
+           задачі й простору). `noopener` — відкрита сторінка (чужий код макета під пісочницею) не має
+           доступу до `window.opener`, тобто до канваса. */
         notice('publish-local', t('publishLocalDone'),
-          local ? [{ act: 'open', label: t('publishOpen'), run: () => window.open(local, '_blank') }] : []);
+          local ? [{ act: 'open', label: t('publishOpen'), run: () => window.open(local, '_blank', 'noopener') }] : []);
         return;
       }
       tell(t('publishDeployFailed', r.iterations, r.dir, r.deploy_error || '—'));
     } catch (e) {
       /* Коди відмов модульної публікації — людським текстом (`publishErr`), решта — як було. */
       const m = publishErr(e);
-      tell(t(m.key, ...m.args));
+      tell(t(m.key, ...(m.reasonKey ? [t(m.reasonKey)] : m.args)));
     }
     el.disabled = false;
     if (lbl) lbl.textContent = prevText;

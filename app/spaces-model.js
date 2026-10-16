@@ -453,12 +453,29 @@ export function copyUrl(target, { origin = "", pageId = "", password = "" } = {}
 }
 
 /**
- * Адреса з ВІДПОВІДІ сервера, яку можна відкрити вікном: лише відносний шлях `/published/<…>`.
- * Решту (абсолютний URL, `//хост`, `javascript:`, пробіли, зворотний слеш) відкидаємо — `window.open`
- * від відповіді, яку пише інший код, не мусить вести куди завгодно.
+ * Адреса з ВІДПОВІДІ сервера, яку можна відкрити вікном: відносний шлях `/published/<…>` на ТОМУ САМОМУ
+ * оригіні. Лише регекспу мало: `/published/../api/task` і `/published/%2e%2e/api/task` схожі на публікацію,
+ * але браузер зводить `..` (і `%2e%2e`) і веде в `/api/task`. Тому, крім форми, адресу РОЗВʼЯЗУЄМО (`new URL`
+ * від `origin`) і вимагаємо: оригін не змінився, шлях розвʼязаного лишився під `/published/`, а жодна
+ * складова вхідного шляху — навіть після розкодування — не є `.` чи `..` (так відсікаємо й `..%2f..`, який
+ * браузер не зводить, а сервер міг би розкодувати). Решту (абсолютний URL, `//хост`, `javascript:`, пробіли,
+ * зворотний слеш) відкидаємо ще регекспом. `origin` — оригін канваса (`location.origin`); у Node-тестах його
+ * передають явно.
  */
-export const safeLocalUrl = (url) =>
-  (typeof url === "string" && /^\/published\/[^/\\\s][^\\\s]*$/.test(url) ? url : null);
+export function safeLocalUrl(url, origin = globalThis.location?.origin ?? "http://localhost") {
+  if (typeof url !== "string" || !/^\/published\/[^/\\\s][^\\\s]*$/.test(url)) return null;
+  let resolved;
+  let base;
+  try { base = new URL(origin); resolved = new URL(url, base); } catch { return null; }
+  if (resolved.origin !== base.origin || !resolved.pathname.startsWith("/published/")) return null;
+  const pathPart = url.split(/[?#]/)[0];
+  for (const seg of pathPart.split("/")) {
+    let plain;
+    try { plain = decodeURIComponent(seg); } catch { return null; }
+    if (plain.split(/[\\/]/).some((x) => x === "." || x === "..")) return null;
+  }
+  return url;
+}
 
 /**
  * Пароль превʼю й попередження про нього. Живе окремо від `barState`, бо «чий це пароль» — правило:
@@ -491,17 +508,30 @@ const PUBLISH_ERR_KEYS = new Map([
    бути сама тека, а шляхи в тексті відмови нам не потрібні. */
 const FOLDER_CODE_RE = /^(?:path|spaces)-[a-z-]{1,30}$/;
 
+/* Текст, яким сервер каже «жодної ітерації не позначено»: `send_error(400, …)` — НЕ JSON, а розмітка, і
+   причина лежить у рядку статусу (`statusText`) та тілі, а не в `code`. `api()` (`app.js`) кладе їх на помилку. */
+const NO_ITERATIONS_RE = /no iterations marked/i;
+
 /**
- * Що сказати людині, коли публікація впала: `{key, args}` для `t(key, ...args)`. Відомі коди модульної
- * публікації мають свій людський текст; `module-error` — БЕЗ тексту модуля (там бувають шляхи); `bad-folder`
- * несе лише код `path-*`/`spaces-*`. 400 БЕЗ коду — це `send_error` «жодної ітерації не позначено» (HTML,
- * не JSON), і сирий розбір його тіла показав би розмітку. Решта — загальне «Не вдалося: …» з текстом сервера.
+ * Що сказати людині, коли публікація впала: `{key, args, reasonKey?}`; `app.js` робить
+ * `t(key, ...(reasonKey ? [t(reasonKey)] : args))`. Відомі коди модульної публікації мають свій людський
+ * текст; `module-error` — БЕЗ тексту модуля (там бувають шляхи); `bad-folder` несе причину: для `path-*`, які
+ * знає діалог просторів, — його ж людський текст (`spaceErrKey`, `reasonKey`), для решти (`path-deai-home`,
+ * `path-invalid`, `spaces-unreadable`) — сам код як запасний варіант, і більш нічого з відповіді.
+ * 400 БЕЗ коду — це `send_error`: «жодної ітерації не позначено» лише коли ТЕКСТ це каже (рядок статусу чи
+ * тіло), а інший 400 (`bad payload`) — загальна відмова. Решта — «Не вдалося: …» з текстом сервера.
  */
 export function publishErr(e) {
   const code = e?.code;
   const key = typeof code === "string" ? PUBLISH_ERR_KEYS.get(code) : undefined;
-  if (key === "publishErrBadFolder") return { key, args: [FOLDER_CODE_RE.test(e?.message ?? "") ? e.message : ""] };
+  if (key === "publishErrBadFolder") {
+    const why = FOLDER_CODE_RE.test(e?.message ?? "") ? e.message : "";
+    const reasonKey = why ? spaceErrKey(why) : "spaceErrGeneric";
+    return reasonKey !== "spaceErrGeneric" ? { key, args: [], reasonKey } : { key, args: [why] };
+  }
   if (key) return { key, args: [] };
-  if (e?.status === 400 && !code) return { key: "publishErrNoIterations", args: [] };
+  if (e?.status === 400 && !code && NO_ITERATIONS_RE.test(`${e.statusText ?? ""}\n${e.body ?? ""}\n${e.message ?? ""}`)) {
+    return { key: "publishErrNoIterations", args: [] };
+  }
   return { key: "errFailed", args: [e?.message ?? ""] };
 }

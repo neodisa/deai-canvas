@@ -1,0 +1,299 @@
+[
+  {
+    "id": "go-tasks",
+    "group": "gGo",
+    "labelKey": "tasks",
+    "icon": "task",
+    "act": "home"
+  },
+  {
+    "id": "go-iter",
+    "group": "gGo",
+    "labelKey": "iterations",
+    "icon": "iter",
+    "navOnly": true
+  },
+  {
+    "id": "go-pages",
+    "group": "gGo",
+    "labelKey": "pages",
+    "icon": "page",
+    "navOnly": true
+  },
+  {
+    "id": "mode",
+    "group": "gView",
+    "labelKey": "modeToggle",
+    "icon": "layout",
+    "kbd": "⌥M",
+    "act": "mode",
+    "val": "overview"
+  },
+  {
+    "id": "vp-desktop",
+    "group": "gView",
+    "labelKey": "vpDesktop",
+    "icon": "desktop",
+    "act": "vp",
+    "val": "desktop"
+  },
+  {
+    "id": "vp-tablet",
+    "group": "gView",
+    "labelKey": "vpTablet",
+    "icon": "tablet",
+    "act": "vp",
+    "val": "tablet"
+  },
+  {
+    "id": "vp-mobile",
+    "group": "gView",
+    "labelKey": "vpMobile",
+    "icon": "mobile",
+    "act": "vp",
+    "val": "mobile"
+  },
+  {
+    "id": "inspector",
+    "group": "gView",
+    "labelKey": "inspector",
+    "icon": "inspect",
+    "kbd": "I",
+    "act": "inspector"
+  },
+  {
+    "id": "panel",
+    "group": "gView",
+    "labelKey": "layers",
+    "icon": "panel",
+    "kbd": "⌘\\",
+    "act": "panel"
+  },
+  {
+    "id": "clean",
+    "group": "gView",
+    "labelKey": "cleanView",
+    "icon": "eye",
+    "kbd": "⇧⌘\\",
+    "act": "clean"
+  },
+  {
+    "id": "newit",
+    "group": "gIter",
+    "labelKey": "newIteration",
+    "icon": "plus",
+    "act": "newit"
+  },
+  {
+    "id": "renit",
+    "group": "gIter",
+    "labelKey": "renameIteration",
+    "icon": "pencil",
+    "act": "renit"
+  },
+  {
+    "id": "dupit",
+    "group": "gIter",
+    "labelKey": "dupIteration",
+    "icon": "copy",
+    "act": "dupit"
+  },
+  {
+    "id": "newfolder",
+    "group": "gPage",
+    "labelKey": "newFolder",
+    "icon": "folderplus",
+    "act": "newfolder",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "renpage",
+    "group": "gPage",
+    "labelKey": "renamePage",
+    "icon": "pencil",
+    "act": "renpage",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "hidepage",
+    "group": "gPage",
+    "labelKey": "hidePage",
+    "icon": "eye",
+    "act": "hidepage",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "groupsel",
+    "group": "gPage",
+    "labelKey": "menuGroup",
+    "icon": "folder",
+    "act": "groupsel",
+    "disabled": true,
+    "whyKey": "whyNoPageSelected"
+  },
+  {
+    "id": "ungroup",
+    "group": "gPage",
+    "labelKey": "menuUngroup",
+    "icon": "folder",
+    "act": "ungroup",
+    "disabled": true,
+    "whyKey": "whyNoPageSelected"
+  },
+  {
+    "id": "outdent",
+    "group": "gPage",
+    "labelKey": "menuOutdent",
+    "icon": "chevleft",
+    "act": "outdent",
+    "disabled": true,
+    "whyKey": "whyNoPageSelected"
+  },
+  {
+    "id": "focusbranch",
+    "group": "gPage",
+    "labelKey": "menuFocus",
+    "icon": "chevright",
+    "act": "focusbranch",
+    "disabled": true,
+    "whyKey": "whyNoPageSelected"
+  },
+  {
+    "id": "togglekind",
+    "group": "gPage",
+    "labelKey": "menuToState",
+    "icon": "state",
+    "act": "togglekind",
+    "disabled": true,
+    "whyKey": "whyNoPageSelected"
+  },
+  {
+    "id": "shoot",
+    "group": "gFrames",
+    "labelKey": "shotsUpdateBare",
+    "icon": "refresh",
+    "act": "shoot",
+    "disabled": true,
+    "whyKey": "whyFresh"
+  },
+  {
+    "id": "figma",
+    "group": "gPub",
+    "labelKey": "toFigma",
+    "icon": "figma",
+    "act": "figma",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "publish",
+    "group": "gPub",
+    "labelKey": "update",
+    "icon": "up",
+    "act": "publish"
+  },
+  {
+    "id": "togglepub",
+    "group": "gPub",
+    "labelKey": "showInPreview",
+    "icon": "eye",
+    "act": "togglepub"
+  },
+  {
+    "id": "copylink",
+    "group": "gPub",
+    "labelKey": "copyLink",
+    "icon": "link",
+    "act": "copylink",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "openpreview",
+    "group": "gPub",
+    "labelKey": "openPreview",
+    "icon": "ext",
+    "act": "openpreview",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "glpull",
+    "group": "gPub",
+    "labelKey": "glPull",
+    "icon": "down",
+    "act": "glpull",
+    "val": "Іт.3"
+  },
+  {
+    "id": "glpush",
+    "group": "gPub",
+    "labelKey": "glPush",
+    "icon": "cloud",
+    "act": "glpush",
+    "val": "Іт.3",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "lang-uk",
+    "group": "gSet",
+    "labelKey": "langUk",
+    "icon": "lang",
+    "act": "lang",
+    "val": "uk",
+    "disabled": true,
+    "whyKey": "langCur"
+  },
+  {
+    "id": "lang-en",
+    "group": "gSet",
+    "labelKey": "langEn",
+    "icon": "lang",
+    "act": "lang",
+    "val": "en",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "aud-local",
+    "group": "gSet",
+    "labelKey": "audLocal",
+    "icon": "comment",
+    "act": "aud",
+    "val": "local",
+    "disabled": true,
+    "whyKey": "audCur"
+  },
+  {
+    "id": "aud-project",
+    "group": "gSet",
+    "labelKey": "audProject",
+    "icon": "globe",
+    "act": "aud",
+    "val": "project",
+    "disabled": false,
+    "whyKey": ""
+  },
+  {
+    "id": "delit",
+    "group": "gDanger",
+    "labelKey": "delIteration",
+    "icon": "trash",
+    "act": "delit",
+    "danger": true
+  },
+  {
+    "id": "delpage",
+    "group": "gDanger",
+    "labelKey": "delPage",
+    "icon": "trash",
+    "act": "delpage",
+    "danger": true,
+    "disabled": false,
+    "whyKey": ""
+  }
+]
