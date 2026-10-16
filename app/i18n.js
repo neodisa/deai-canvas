@@ -370,6 +370,16 @@ const UK = {
   publishErrBadTaskId: 'Id задачі не годиться для теки публікації: потрібні лише латинські літери, цифри, _ і - (до 128 символів) і не імʼя пристрою Windows (CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9).',
   publishErrModule: 'Модуль публікації відмовив. Перевірте його налаштування й теку публікації та повторіть.',
   publishErrNoIterations: 'Жодної ітерації не позначено для публікації — увімкніть «Показувати в превью» (зелена крапка біля ітерації).',
+  /* Публікація на свій Vercel (2b-1, Task 3): плашка після відповіді з `url`, застереження дропдауна й дві відмови.
+     Керувати модулем у 0.3.0 можна лише через API чи агента (екран «Підключення» — етап 3), тож тексти не обіцяють кнопки.
+     `vercel-auth` — не лише відхилений токен, а й будь-яка інша відмова доступу (403: права токена, тариф, команда), тому
+     текст не стверджує «токен не прийнято»; текст сервера (уже без секретів, ≤ 300) іде другим абзацом (`why`). */
+  publishRemoteDone: 'Опубліковано на Vercel',
+  publishRemoteUnverified: 'Не вдалося перевірити, що превʼю відкривається без входу — відкрийте посилання й переконайтесь самі.',
+  publishPublicWarn: 'Превʼю публічне: будь-хто з посиланням його бачить.',
+  publishGateStale: 'Пароль змінено — перепублікуйте, щоб він потрапив у превʼю.',
+  publishErrVercelAuth: (why) => `Vercel відмовив у доступі — перевірте токен і команду (team) у налаштуваннях модуля Vercel (через API чи агента) і повторіть.${why ? `\n\n${why}` : ''}`,
+  publishErrVercelBusy: 'Vercel тимчасово відмовляє (ліміт запитів чи зайнято). Зачекайте хвилину й повторіть.',
   /* «В Figma» (T-41). Причини вимкнення — рядком у title кнопки й у ⌘K. Тексти
      помилок радять РЕАЛЬНЕ: у вбудованому браузері Claude буфер заборонений
      самим браузером (виміряно пілотом), а в Chrome друга спроба швидша, бо
@@ -1135,6 +1145,12 @@ const EN = {
   publishErrBadTaskId: 'The task id does not fit a publish folder: only Latin letters, digits, _ and - (up to 128 characters), and not a Windows device name (CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9).',
   publishErrModule: 'The publish module refused. Check its settings and the publish folder, then try again.',
   publishErrNoIterations: 'No iteration is marked for publishing — turn on “Show in preview” (the green dot next to the iteration).',
+  publishRemoteDone: 'Published on Vercel',
+  publishRemoteUnverified: 'Could not verify that the preview opens without signing in — open the link and check for yourself.',
+  publishPublicWarn: 'The preview is public: anyone with the link can see it.',
+  publishGateStale: 'The password changed — republish so it reaches the preview.',
+  publishErrVercelAuth: (why) => `Vercel denied access — check the token and the team in the Vercel module settings (through the API or the agent) and try again.${why ? `\n\n${why}` : ''}`,
+  publishErrVercelBusy: 'Vercel is temporarily refusing requests (rate limit or busy). Wait a minute and try again.',
   toFigma: 'To Figma',
   toFigmaTitle: 'Copy the current mockup to the clipboard — then ⌘V in a Figma file',
   whyFigmaOverview: 'Overview frames are snapshots; copying works on the live mockup in Layout',

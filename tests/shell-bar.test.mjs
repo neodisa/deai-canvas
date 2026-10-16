@@ -824,3 +824,65 @@ test("розмітка публікації модулем збалансова�
       (h.match(new RegExp(`</${tag}>`, "g")) || []).length, `<${tag}> не збалансовано`);
   }
 });
+
+/* ── публікація на свій Vercel (2b-1, Task 3): застереження в дропдауні ───────────────────────
+   Модель дає `notes` (`bar-model.js`), розмітка малює кожне як `.dd-note` — того самого стилю, що застереження ЛІГА,
+   але з власним модифікатором, щоб тести ЛІГА-застереження (`class="dd-note"` дослівно) лишились про нього. */
+const NOTE_RE = (id) => new RegExp(`<div class="dd-note dd-note--${id}">([^<]*)</div>`);
+
+test("Vercel без пароля: дропдаун публікації має застереження «превʼю публічне» (текст зі словника)", () => {
+  setLang("uk");
+  const h = html({ space: CAPS_SP("vercel-publish"), openDd: "pub", pubGate: false });
+  const m = NOTE_RE("public").exec(h);
+  assert.ok(m, "застереження немає в розмітці");
+  assert.equal(m[1], t("publishPublicWarn"));
+  assert.doesNotMatch(h, /dd-note--stale/);
+  assert.doesNotMatch(h, /class="dd-note"/, "застереження ЛІГА тут нема");
+});
+
+test("Vercel: пароль змінено — «перепублікуйте» окремим застереженням", () => {
+  setLang("uk");
+  const h = html({ space: CAPS_SP("vercel-publish"), openDd: "pub", pubGate: true, pubGateStale: true });
+  assert.equal(NOTE_RE("stale").exec(h)?.[1], t("publishGateStale"));
+  assert.doesNotMatch(h, /dd-note--public/);
+});
+
+test("Vercel: без `publish_gate` у відповіді (чи з паролем) — жодного застереження", () => {
+  for (const o of [{}, { pubGate: true }, { pubGate: undefined, pubGateStale: undefined }]) {
+    const h = html({ space: CAPS_SP("vercel-publish"), openDd: "pub", ...o });
+    assert.doesNotMatch(h, /dd-note/, JSON.stringify(o));
+  }
+});
+
+test("застереження Vercel — англійською, коли мова en", () => {
+  setLang("en");
+  try {
+    const h = html({ space: CAPS_SP("vercel-publish"), openDd: "pub", pubGate: false, pubGateStale: true });
+    assert.equal(NOTE_RE("public").exec(h)?.[1], t("publishPublicWarn"));
+    assert.match(NOTE_RE("public").exec(h)[1], /public/);
+    assert.match(NOTE_RE("stale").exec(h)[1], /republish/);
+  } finally { setLang("uk"); }
+});
+
+test("ЛІГА: `pubGate: false` у стані не дає модульних застережень — лишається одне `dd-note` про публічність ЛІГА", () => {
+  setLang("uk");
+  const h = html({ space: CAPS_SP("legacy", { integrations: true }), openDd: "pub", pubGate: false, pubGateStale: true });
+  assert.equal((h.match(/class="dd-note"/g) || []).length, 1);
+  assert.doesNotMatch(h, /dd-note--/);
+});
+
+test("static-publish: сервер полів не дає — у дропдауні жодного `dd-note` (розмітка як у 0.2.0)", () => {
+  setLang("uk");
+  const h = html({ space: CAPS_SP("static-publish"), openDd: "pub" });
+  assert.doesNotMatch(h, /dd-note/);
+});
+
+test("застереження малюються лише у відкритому дропдауні й не ламають баланс тегів", () => {
+  setLang("uk");
+  const closed = html({ space: CAPS_SP("vercel-publish"), pubGate: false });
+  assert.doesNotMatch(closed, /dd-note/);
+  const h = html({ space: CAPS_SP("vercel-publish"), openDd: "pub", pubGate: false, pubGateStale: true });
+  for (const tag of ["div", "button", "span"]) {
+    assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
+  }
+});

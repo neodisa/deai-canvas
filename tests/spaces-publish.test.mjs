@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  copyUrl, hasPublish, isLegacyPublish, isPublished, localPublishUrl, previewTarget, publishErr, pwView,
-  safeLocalUrl,
+  copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, localPublishUrl, previewTarget, publishErr,
+  pwView, remoteNoticeLines, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
 } from "../app/spaces-model.js";
 
 /* Публікація за `capabilities.publish` (модулі 2а, Task 8) — чисті правила, які приймає `app.js`:
@@ -354,5 +355,222 @@ test("словник: publishErrBadTaskId називає зарезервова�
     for (const name of ["CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9"]) {
       assert.ok(DICT[lang].publishErrBadTaskId.includes(name), `${lang}: нема ${name}`);
     }
+  }
+});
+
+/* ── публікація на свій Vercel (2b-1, Task 3): модуль «за адресою» ─────────────────────────────
+   `capabilities.publish === 'vercel-publish'`; сервер (Tasks 1–2) віддає в `/api/task`
+   `publish_remote = {module, state, published_at, url, gated}`, `publish_url`, `publish_gate`,
+   `publish_gate_stale` і `publish_share_url` (= `publish_url` + `#k=<пароль>`, СКЛАДЕНИЙ сервером).
+   UI нічого не складає сам: «Скопіювати» кладе `publish_share_url` дослівно. */
+
+const VER = { id: "v", integrations: false, capabilities: { publish: "vercel-publish", tokens: null } };
+const VURL = "https://pv-12345678.vercel.app";
+const REMOTE = (o = {}) => ({
+  module: "vercel-publish", state: { project: "pv-12345678" }, published_at: "2026-10-16T10:00:00Z", url: VURL, gated: true, ...o,
+});
+const VTASK = (o = {}) => ({
+  id: "blog", publish_url: VURL, published_at: "16.10.2026 12:30", publish_remote: REMOTE(), publish_gate: true,
+  publish_share_url: `${VURL}#k=1100`, ...o,
+});
+
+test("isRemotePublish: так лише коли постачальник — модуль, а слід `publish_remote` саме його і саме на цю адресу", () => {
+  assert.equal(isRemotePublish(VTASK(), VER), true);
+  assert.equal(isRemotePublish(VTASK(), LEG), false, "ЛІГА: слід модуля — не про ЛІГА-публікацію");
+  assert.equal(isRemotePublish(VTASK({ publish_remote: REMOTE({ module: "legacy" }) }), LEG), false,
+    "навіть якщо слід назвав постачальника «legacy»: у ЛІГА свій шлях посилання (`#k=` у `copyUrl`)");
+  assert.equal(isRemotePublish(VTASK(), MOD), false, "інший модуль-постачальник (static-publish): слід Vercel не його");
+  assert.equal(isRemotePublish(VTASK(), NONE), false);
+  assert.equal(isRemotePublish(VTASK({ publish_remote: REMOTE({ module: "other-publish" }) }), VER), false);
+  assert.equal(isRemotePublish(VTASK({ publish_url: "https://інша.example/" }), VER), false,
+    "адресу виправили вручну чи перезаписала ЛІГА — слід модуля більше не її");
+  assert.equal(isRemotePublish(VTASK({ publish_remote: REMOTE({ url: undefined }) }), VER), false);
+  assert.equal(isRemotePublish({ id: "blog", publish_url: VURL }, VER), false, "нема `publish_remote`");
+  assert.equal(isRemotePublish(VTASK({ publish_url: "" }), VER), false);
+  assert.equal(isRemotePublish(VTASK({ publish_remote: "рядок" }), VER), false, "`publish_remote` — обʼєкт");
+  assert.equal(isRemotePublish(VTASK({ publish_remote: [REMOTE()] }), VER), false);
+  assert.equal(isRemotePublish(null, VER), false);
+  assert.equal(isRemotePublish(VTASK(), null), false);
+  assert.equal(isRemotePublish(VTASK(), { id: "x", integrations: false }), false, "стара форма: постачальник невідомий");
+});
+
+test("previewTarget: модуль «за адресою» — зовнішня адреса з `publish_url` і готовим посиланням для колег", () => {
+  const tg = previewTarget(VTASK(), VER);
+  assert.deepEqual(tg, { kind: "external", url: VURL, at: null, remote: true, share: `${VURL}#k=1100` });
+});
+
+test("previewTarget: модуль без пароля — `publish_share_url` = сама адреса (так її й віддає сервер)", () => {
+  const tg = previewTarget(VTASK({ publish_gate: false, publish_share_url: VURL, publish_remote: REMOTE({ gated: false }) }), VER);
+  assert.equal(tg.share, VURL);
+  assert.ok(!tg.share.includes("#k="));
+});
+
+test("previewTarget: нема `publish_share_url` (чи він чужий) — ділимось голою адресою, не вигадуємо пароль", () => {
+  assert.equal(previewTarget(VTASK({ publish_share_url: undefined }), VER).share, VURL);
+  assert.equal(previewTarget(VTASK({ publish_share_url: 42 }), VER).share, VURL);
+  assert.equal(previewTarget(VTASK({ publish_share_url: "https://інша.example/#k=1" }), VER).share, VURL,
+    "посилання не на цю адресу — не копіюємо");
+});
+
+test("previewTarget: слід Vercel + старий слід static-publish — перемагає той, що відповідає постачальнику (Vercel)", () => {
+  const task = VTASK({ publish_local: LOCAL });
+  assert.equal(previewTarget(task, VER).kind, "external");
+  assert.equal(previewTarget(task, VER).remote, true);
+  assert.equal(previewTarget(task, MOD).kind, "local", "постачальник знову static-publish: його слід, як і було");
+});
+
+test("previewTarget: ЛІГА зі слідом модуля — як було (зовнішня, без `remote`, без `share`)", () => {
+  assert.deepEqual(previewTarget(VTASK(), LEG), { kind: "external", url: VURL, at: null });
+});
+
+test("previewTarget: модуль, але `publish_url` не від нього — стара поведінка 0.2.0 (відкриваємо, `remote` нема)", () => {
+  const tg = previewTarget({ id: "blog", publish_url: "https://pv-1.example.app" }, VER);
+  assert.deepEqual(tg, { kind: "external", url: "https://pv-1.example.app", at: null });
+});
+
+test("copyUrl: модуль «за адресою» — `publish_share_url` ДОСЛІВНО, фрагмент `#k=` UI не складає і не дописує вдруге", () => {
+  const tg = previewTarget(VTASK(), VER);
+  const url = copyUrl(tg, { origin: "http://localhost:8765", pageId: "it1/home", password: "ЛІГА-пароль" });
+  assert.equal(url, `${VURL}#k=1100`);
+  assert.equal((url.match(/#/g) || []).length, 1, "один фрагмент");
+  assert.equal((url.match(/k=/g) || []).length, 1, "`k=` один раз");
+  assert.ok(!url.includes("ЛІГА-пароль") && !url.includes("&p="), "ні пароль ЛІГА, ні сторінка не дописуються");
+});
+
+test("copyUrl: модуль без пароля — гола адреса без жодного фрагмента, навіть коли UI знає пароль ЛІГА", () => {
+  const tg = previewTarget(VTASK({ publish_gate: false, publish_share_url: VURL, publish_remote: REMOTE({ gated: false }) }), VER);
+  assert.equal(copyUrl(tg, { pageId: "it1", password: "1100" }), VURL);
+});
+
+test("copyUrl: ЛІГА і зовнішня без `remote` — як було (`#k=…&p=…`)", () => {
+  const tg = previewTarget(VTASK(), LEG);
+  assert.equal(copyUrl(tg, { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`);
+});
+
+test("safeRemoteUrl: лише абсолютний https:// без облікових даних і лише ASCII", () => {
+  for (const ok of [VURL, "https://pv-1.vercel.app/", "https://example.com:8443/a/b?x=1", "https://xn--e1afmkfd.xn--p1ai/"]) {
+    assert.equal(safeRemoteUrl(ok), ok, ok);
+  }
+  for (const bad of [
+    "javascript:alert(1)", "JAVASCRIPT:alert(1)", "data:text/html,<b>", "http://pv-1.vercel.app", "HTTP://x.example/",
+    "//evil.example/", "/published/p/t/", "ftp://x.example/", "vercel.app", "https:", "https://", "https:///x", "https://?x", "https://#x",
+    "https://user:pw@pv-1.vercel.app/", "https://user@pv-1.vercel.app/", "https://@pv-1.vercel.app/", "https://:@pv-1.vercel.app/",
+    "https://pv-1.vercel.app\\@evil.example/", "https://pv 1.vercel.app/", "https://pv-1.vercel.app/ x", " https://pv-1.vercel.app/",
+    "https://pv-1.vercel.app/\n", "https://pv-1.vercel.app/\t", "https://пв-1.vercel.app/", "https://pv-1.vercel.app/привіт",
+    "https://pv-1.vercel.app:port/", "https://pv-1.vercel.app:99999/",
+    "", null, undefined, 42, {}, ["https://pv-1.vercel.app"],
+  ]) {
+    assert.equal(safeRemoteUrl(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("remoteShareUrl: `publish_share_url` оновленої задачі, коли він про цю адресу; інакше сама адреса з відповіді", () => {
+  assert.equal(remoteShareUrl({ publish_share_url: `${VURL}#k=1100` }, VURL), `${VURL}#k=1100`);
+  assert.equal(remoteShareUrl({ publish_share_url: VURL }, VURL), VURL);
+  assert.equal(remoteShareUrl({}, VURL), VURL, "задачу не оновили — без пароля");
+  assert.equal(remoteShareUrl(null, VURL), VURL);
+  assert.equal(remoteShareUrl({ publish_share_url: "https://стара.example/#k=1" }, VURL), VURL,
+    "посилання від ПОПЕРЕДНЬОЇ адреси (оновлення задачі не вдалось) не копіюємо");
+  assert.equal(remoteShareUrl({ publish_share_url: 7 }, VURL), VURL);
+  assert.equal(remoteShareUrl({}, ""), null);
+  assert.equal(remoteShareUrl({}, undefined), null);
+});
+
+test("remoteNoticeLines: `warnings` — рядки плашки (як є, як ТЕКСТ), без попереджень і `verified: false` — нейтральна підказка", () => {
+  assert.deepEqual(remoteNoticeLines({ warnings: ["Увімкнено Deployment Protection", "Старі публікації не прибрано"], verified: false }),
+    [{ text: "Увімкнено Deployment Protection" }, { text: "Старі публікації не прибрано" }]);
+  assert.deepEqual(remoteNoticeLines({ verified: false }), [{ key: "publishRemoteUnverified" }]);
+  assert.deepEqual(remoteNoticeLines({ verified: false, warnings: [] }), [{ key: "publishRemoteUnverified" }]);
+  assert.deepEqual(remoteNoticeLines({ verified: true }), []);
+  assert.deepEqual(remoteNoticeLines({ verified: true, warnings: ["щось"] }), [{ text: "щось" }], "попередження показуємо й при verified");
+  assert.deepEqual(remoteNoticeLines({}), [], "модуль не сказав про перевірку — мовчимо, а не лякаємо");
+  assert.deepEqual(remoteNoticeLines(null), []);
+});
+
+test("remoteNoticeLines: розмітка в попередженні — просто текст; сміття й надлишок відсікаються", () => {
+  const html = "<img src=x onerror=alert(1)>";
+  assert.deepEqual(remoteNoticeLines({ warnings: [html] }), [{ text: html }], "екранує вставка (textContent), модель текст не чіпає");
+  assert.deepEqual(remoteNoticeLines({ warnings: ["", "  ", 5, null, {}, "  ок  "] }), [{ text: "ок" }]);
+  assert.deepEqual(remoteNoticeLines({ warnings: "не масив", verified: false }), [{ key: "publishRemoteUnverified" }]);
+  assert.equal(remoteNoticeLines({ warnings: Array.from({ length: 9 }, (_, i) => `w${i}`) }).length, 5, "не більше п'яти");
+  assert.equal(remoteNoticeLines({ warnings: ["я".repeat(900)] })[0].text.length, 300, "не довше 300 символів");
+});
+
+test("publishErr: `vercel-busy` — свій людський текст, без тексту сервера", () => {
+  const b = publishErr(E("vercel-busy", { status: 409, message: "Too many requests, token=abc123" }));
+  assert.deepEqual(b, { key: "publishErrVercelBusy", args: [] });
+});
+
+test("publishErr: `vercel-auth` — свій ключ і ТЕКСТ СЕРВЕРА другим абзацом (причину 403 людина може виправити)", () => {
+  const msg = "Vercel відмовив у доступі (HTTP 403): токен без прав на команду";
+  assert.deepEqual(publishErr(E("vercel-auth", { status: 409, message: msg })), { key: "publishErrVercelAuth", args: [msg] });
+  assert.deepEqual(publishErr(E("vercel-auth", { status: 409, message: "" })), { key: "publishErrVercelAuth", args: [""] },
+    "без тексту — без другого абзацу, але й без падіння");
+  assert.deepEqual(publishErr(E("vercel-auth", { status: 409, message: undefined })).args, [""]);
+});
+
+test("publishErr: `vercel-auth` — повний `error` із тіла (api() ріже `message` по 200), ≤ 300, без керівних символів", () => {
+  const long = `Vercel відмовив у доступі (HTTP 403): ${"я".repeat(400)}`;
+  const body = JSON.stringify({ ok: false, code: "vercel-auth", error: long });
+  const r = publishErr(E("vercel-auth", { status: 409, message: long.slice(0, 200), body }));
+  assert.equal(r.args[0].length, 300, "текст із тіла (не обрізаний api() до 200), але не довше 300");
+  assert.ok(r.args[0].startsWith("Vercel відмовив у доступі (HTTP 403): яя"));
+  const ctl = publishErr(E("vercel-auth", { status: 409, message: "a\u0000b\nc\u001bd" }));
+  assert.equal(ctl.args[0], "a b c d", "керівні символи → пробіл");
+  /* тіло не JSON чи без `error` — лишається `message` */
+  assert.deepEqual(publishErr(E("vercel-auth", { message: "текст", body: "<html>" })).args, ["текст"]);
+  assert.deepEqual(publishErr(E("vercel-auth", { message: "текст", body: JSON.stringify({ ok: false }) })).args, ["текст"]);
+  assert.deepEqual(publishErr(E("vercel-auth", { message: "текст", body: JSON.stringify({ error: 5 }) })).args, ["текст"]);
+});
+
+test("publishErr: текст сервера не потрапляє в розмітку — `tell` кладе його `textContent` (проводка, `ask.js`)", () => {
+  const ask = readFileSync(new URL("../app/ask.js", import.meta.url), "utf8");
+  assert.match(ask, /head\.textContent = text;/);
+  assert.match(ask, /export const tell = \(message\) => overlay\(message, 'tell'\);/);
+});
+
+test("словник: плашка й застереження Vercel — обидві мови; тексти обіцяють лише наявне", () => {
+  const text = (lang, k, ...a) => (typeof DICT[lang][k] === "function" ? DICT[lang][k](...a) : DICT[lang][k]);
+  for (const k of ["publishRemoteDone", "publishRemoteUnverified", "publishPublicWarn", "publishGateStale",
+    "publishErrVercelAuth", "publishErrVercelBusy"]) {
+    for (const lang of ["uk", "en"]) {
+      assert.equal(typeof text(lang, k, ""), "string", `${lang}: «${k}» бракує або це не рядок`);
+      assert.ok(text(lang, k, "").length > 8, `${lang}: «${k}» порожній`);
+    }
+  }
+  assert.equal(DICT.uk.publishRemoteDone, "Опубліковано на Vercel");
+  assert.equal(DICT.en.publishRemoteDone, "Published on Vercel");
+  assert.match(DICT.uk.publishPublicWarn, /публічн/);
+  assert.match(DICT.en.publishPublicWarn, /public/i);
+  assert.match(DICT.uk.publishGateStale, /перепублікуйте/);
+  assert.match(DICT.en.publishGateStale, /republish/i);
+  for (const lang of ["uk", "en"]) {
+    const a = text(lang, "publishErrVercelAuth", "");
+    assert.match(a, /token|токен/i, `${lang}: «токен» не названо`);
+    assert.match(a, /team|команд/i, `${lang}: «команду» не названо — 403 буває й через неї`);
+    /* `vercel-auth` — не лише відхилений токен (403: права, тариф, команда): не стверджуємо «токен не прийнято». */
+    assert.doesNotMatch(a, /не прийня|not accept|rejected|invalid|недійсн/i, `${lang}: стверджує, що токен не прийнято`);
+    /* Екрана налаштувань модулів у 0.3.0 нема (етап 3): керують через API чи агента — не обіцяємо кнопки. */
+    assert.doesNotMatch(a, /натисніть|press|click|кнопк|button|екран|screen/i, `${lang}: обіцяє екран налаштувань`);
+  }
+  assert.match(DICT.uk.publishErrVercelAuth(""), /API|агент/);
+  assert.match(DICT.en.publishErrVercelAuth(""), /API|agent/i);
+  assert.match(DICT.uk.publishErrVercelAuth(""), /^Vercel відмовив у доступі/);
+  assert.match(DICT.en.publishErrVercelAuth(""), /^Vercel denied access/);
+});
+
+test("словник: `publishErrVercelAuth(why)` — текст сервера другим абзацом; без нього — без висячих абзаців", () => {
+  for (const lang of ["uk", "en"]) {
+    const f = DICT[lang].publishErrVercelAuth;
+    assert.ok(f("HTTP 403: причина-ТЕКСТ").endsWith("\n\nHTTP 403: причина-ТЕКСТ"), lang);
+    assert.doesNotMatch(f(""), /\n\n|\n$/, `${lang}: без причини — без порожнього абзацу`);
+    assert.doesNotMatch(f(""), /undefined|null/);
+  }
+});
+
+test("publishErr: нові ключі є у словнику обох мов", () => {
+  for (const code of ["vercel-auth", "vercel-busy"]) {
+    const k = publishErr(E(code)).key;
+    assert.ok(DICT.uk[k] !== undefined && DICT.en[k] !== undefined, k);
   }
 });

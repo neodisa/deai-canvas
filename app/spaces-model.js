@@ -407,6 +407,27 @@ const localOf = (task) => {
 /** Задача опублікована: у ЛІГА (`publish_url`) або локально модулем (`publish_local`). */
 export const isPublished = (task) => !!task?.publish_url || !!localOf(task);
 
+/** Слід публікації модулем «за адресою» з `/api/task` (`{module, state, published_at, url, gated}`) — обʼєкт або `null`. */
+const remoteOf = (task) => {
+  const p = task?.publish_remote;
+  return p && typeof p === "object" && !Array.isArray(p) ? p : null;
+};
+
+/**
+ * Чи превʼю задачі опублікував МОДУЛЬ «за адресою» (Vercel, 2b-1) — саме той, що є постачальником
+ * простору, і саме на ту адресу, що зараз у `publish_url`. Рівно ця умова стоїть і на сервері перед
+ * `publish_share_url`: слід ІНШОГО модуля, адреса, яку правили вручну чи перезаписала ЛІГА, — не наша
+ * публікація, і посилання з паролем про неї було б вигадкою. ЛІГА — завжди ні: її публікація має свій
+ * шлях (`preview_password`, `#k=` у `copyUrl`).
+ */
+export function isRemotePublish(task, space) {
+  const provider = space?.capabilities?.publish;
+  if (isLegacyPublish(space) || typeof provider !== "string" || !provider) return false;
+  const r = remoteOf(task);
+  const url = typeof task?.publish_url === "string" ? task.publish_url : "";
+  return !!r && !!url && r.module === provider && r.url === url;
+}
+
 /**
  * Адреса локальної публікації на ОРИГІНІ КАНВАСА: `/published/<простір>/<задача>/` (так її і віддає
  * сервер у `local.url`). Для `/api/task` будуємо її самі зі ЗНАНИХ id — сегменти через
@@ -427,6 +448,11 @@ export function localPublishUrl(space, task) {
  * цього поля в UI не потребує). Коли є обидва сліди, перемагає той, що відповідає постачальнику
  * простору: модуль → локальна, ЛІГА → зовнішня. Другий лишається запасним: простір міг змінити
  * постачальника після публікації, а слід, на який людина ще може клікнути, не губимо.
+ *
+ * Виняток із «модуль → локальна» — модуль «за адресою» (Vercel): коли `publish_remote` належить
+ * саме постачальнику простору й адресі (`isRemotePublish`), перемагає ВІН, навіть якщо від колишнього
+ * `static-publish` лишився `publish_local`. Така ціль несе `remote: true` і `share` — посилання для колег,
+ * яке склав СЕРВЕР (`publish_share_url`, з `#k=<пароль>`, коли превʼю з паролем): UI його не складає.
  */
 export function previewTarget(task, space) {
   const local = localOf(task) ? localPublishUrl(space, task) : null;
@@ -437,6 +463,9 @@ export function previewTarget(task, space) {
   };
   const asExternal = () => ({ kind: "external", url: ext, at: null });
   if (isLegacyPublish(space)) return ext ? asExternal() : (local ? asLocal() : null);
+  if (isRemotePublish(task, space)) {
+    return { ...asExternal(), remote: true, share: remoteShareUrl(task, ext) };
+  }
   return local ? asLocal() : (ext ? asExternal() : null);
 }
 
@@ -444,11 +473,15 @@ export function previewTarget(task, space) {
  * Посилання, яке кладуть у буфер. ЗОВНІШНЄ — як було до модулів: `<url>/#k=<пароль>&p=<сторінка>`
  * (обидва значення закодовано). ЛОКАЛЬНЕ — абсолютна адреса канваса БЕЗ фрагмента: пароль
  * модуля — секрет, UI його не знає, а ЛІГА-шний сюди не належить; хто відкриє, введе його сам
- * (якщо гейт увімкнено).
+ * (якщо гейт увімкнено). МОДУЛЬ «за адресою» — готове `target.share` від сервера, дослівно.
  */
 export function copyUrl(target, { origin = "", pageId = "", password = "" } = {}) {
   if (!target) return null;
   if (target.kind === "local") return `${origin}${target.url}`;
+  /* Модуль «за адресою» (Vercel): посилання склав сервер — `publish_share_url`, з `#k=<пароль>` лише для
+     збірки з паролем, що не змінився. Кладемо ДОСЛІВНО: `password` тут — ЛІГА-шний (`preview_password`), чужий для цієї
+     публікації, а друге `#k=` зіпсувало б посилання. */
+  if (target.remote) return target.share || target.url;
   return `${target.url.replace(/\/+$/, "")}/#k=${encodeURIComponent(password)}&p=${encodeURIComponent(pageId)}`;
 }
 
@@ -478,6 +511,54 @@ export function safeLocalUrl(url, origin = globalThis.location?.origin ?? "http:
 }
 
 /**
+ * Зовнішня адреса з ВІДПОВІДІ сервера, яку можна відкрити вікном: абсолютний `https://` з непорожнім хостом, БЕЗ
+ * облікових даних (`user:pw@`, навіть порожніх) і лише друковний ASCII — без пробілів, керівних, зворотного слеша
+ * (який браузер читає як `/`) і кирилиці (IDN лише як punycode). Усе інше — `null`, і кнопки «Відкрити» нема: сервер
+ * свою адресу вже перевірив (Task 1), але відповідь модуля й слід у `iterations.json` — дані, а не наказ, і
+ * `javascript:`/`data:` у `window.open` — вже не посилання. Повертає РЯДОК як є (не нормалізований).
+ */
+export function safeRemoteUrl(url) {
+  if (typeof url !== "string" || !/^https:\/\/[\x21-\x5b\x5d-\x7e]+$/.test(url)) return null;
+  const authority = url.slice("https://".length).split(/[/?#]/, 1)[0];
+  if (!authority || authority.includes("@")) return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" || !u.hostname || u.username || u.password) return null;
+  } catch { return null; }
+  return url;
+}
+
+/**
+ * Посилання для колег після публікації модулем «за адресою»: `publish_share_url` ОНОВЛЕНОЇ задачі (сервер уже
+ * дописав `#k=<пароль>`), але лише коли воно про ЦЮ адресу (`url` з відповіді публікації): якщо оновлення задачі не
+ * вдалось, у `task` лишилось посилання від попередньої публікації — його не копіюємо. Нема — сама адреса. Нема й її — `null`.
+ */
+export function remoteShareUrl(task, url) {
+  const u = typeof url === "string" && url ? url : null;
+  const share = task?.publish_share_url;
+  return u && typeof share === "string" && share.startsWith(u) ? share : u;
+}
+
+/* Скільки попереджень модуля й якої довжини показує плашка: сервер уже тримає ≤ 5 по ≤ 300, але відповідь — дані. */
+const NOTICE_MAX_LINES = 5;
+const NOTICE_MAX_LEN = 300;
+
+/**
+ * Додаткові рядки плашки «Опубліковано на Vercel»: `[{text}]` — попередження модуля (як ТЕКСТ: `app.js` кладе їх
+ * через `textContent`, розмітки тут немає), а коли попереджень нема, але перевірка превʼю без входу не вдалась
+ * (`verified === false`) — одна нейтральна підказка `[{key}]`. `verified` не названо взагалі — мовчимо: тривога без
+ * підстави гірша за її відсутність.
+ */
+export function remoteNoticeLines(r) {
+  const warns = (Array.isArray(r?.warnings) ? r.warnings : [])
+    .filter((w) => typeof w === "string" && w.trim())
+    .slice(0, NOTICE_MAX_LINES)
+    .map((w) => ({ text: w.trim().slice(0, NOTICE_MAX_LEN) }));
+  if (warns.length) return warns;
+  return r?.verified === false ? [{ key: "publishRemoteUnverified" }] : [];
+}
+
+/**
  * Пароль превʼю й попередження про нього. Живе окремо від `barState`, бо «чий це пароль» — правило:
  * у просторі, де публікує МОДУЛЬ, `preview_password` у відповіді сервера — це ЛІГА-шний, і ні він, ні
  * `stale`/`ungated` (лічильники ЛІГА-збірки; для модуля сервер віддає `preview_gate.state ===
@@ -502,7 +583,22 @@ const PUBLISH_ERR_KEYS = new Map([
   ["publish-busy", "publishErrBusy"],
   ["bad-task-id", "publishErrBadTaskId"],
   ["module-error", "publishErrModule"],
+  ["vercel-auth", "publishErrVercelAuth"],
+  ["vercel-busy", "publishErrVercelBusy"],
 ]);
+
+/* Текст відмови з відповіді сервера для другого абзацу: `error` із тіла JSON (`api()` ріже `message` по 200 знаків, а тіло
+   лишає до 1000), інакше `message`; керівні символи — пробілом, не довше 300. Це лише ТЕКСТ: `tell` кладе його через
+   `textContent`. */
+const DETAIL_MAX = 300;
+function serverText(e) {
+  let text = typeof e?.message === "string" ? e.message : "";
+  try {
+    const j = JSON.parse(e?.body);
+    if (typeof j?.error === "string") text = j.error;
+  } catch { /* тіло не JSON — лишаємо `message` */ }
+  return text.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, DETAIL_MAX);
+}
 
 /* Код теки, який можна показати: `path-…` (відмова `folder_ok`) або `spaces-…`. Усе інше — це могла б
    бути сама тека, а шляхи в тексті відмови нам не потрібні. */
@@ -518,12 +614,17 @@ const NO_ITERATIONS_RE = /no iterations marked/i;
  * текст; `module-error` — БЕЗ тексту модуля (там бувають шляхи); `bad-folder` несе причину: для `path-*`, які
  * знає діалог просторів, — його ж людський текст (`spaceErrKey`, `reasonKey`), для решти (`path-deai-home`,
  * `path-invalid`, `spaces-unreadable`) — сам код як запасний варіант, і більш нічого з відповіді.
+ * `vercel-auth` несе ТЕКСТ СЕРВЕРА (`args: [текст]`, ≤ 300): модуль уже вирізав із нього секрети, а причина
+ * («Vercel відмовив у доступі (HTTP 403): …») — те, що людина може виправити.
  * 400 БЕЗ коду — це `send_error`: «жодної ітерації не позначено» лише коли ТЕКСТ це каже (рядок статусу чи
  * тіло), а інший 400 (`bad payload`) — загальна відмова. Решта — «Не вдалося: …» з текстом сервера.
  */
 export function publishErr(e) {
   const code = e?.code;
   const key = typeof code === "string" ? PUBLISH_ERR_KEYS.get(code) : undefined;
+  /* `vercel-auth` — єдина модульна відмова з другим абзацом: «Vercel відмовив у доступі (HTTP 403): …» — причина, яку
+     людина може виправити (права токена, тариф, команда), а сервер уже вирізав із неї секрети й обмежив довжину. */
+  if (key === "publishErrVercelAuth") return { key, args: [serverText(e)] };
   if (key === "publishErrBadFolder") {
     const why = FOLDER_CODE_RE.test(e?.message ?? "") ? e.message : "";
     const reasonKey = why ? spaceErrKey(why) : "spaceErrGeneric";

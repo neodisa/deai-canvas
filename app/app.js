@@ -33,9 +33,9 @@ import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, healTarget,
-  isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, pwView, readErrKey, rovingIndex,
-  safeLocalUrl, shouldRefreshHome, spaceChanged, spaceErrField, spaceErrKey, taskErrField, taskErrKey,
-  taskFormError,
+  isLegacyPublish, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, pwView, readErrKey,
+  remoteNoticeLines, remoteShareUrl, rovingIndex, safeLocalUrl, safeRemoteUrl, shouldRefreshHome, spaceChanged,
+  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError,
 } from './spaces-model.js';
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -701,8 +701,10 @@ function toast(msg) {
  * Стійка плашка з дією (батч 1.47). Одна на `id`: повторний виклик замінює текст.
  * `actions` — [{act, label, run}]; кнопка «Закрити» додається завжди, `onDismiss` —
  * що ще зробити при закритті. `data-h2d-ignore` — щоб «В Figma» не забрав плашку.
+ * `lines` — додаткові рядки під основним (попередження модуля публікації): це ДАНІ, тож лише
+ * `textContent`, ніколи розмітка. Без них розмітка плашки та сама, що була (один `span`).
  */
-function notice(id, text, actions = [], onDismiss = null) {
+function notice(id, text, actions = [], onDismiss = null, lines = []) {
   let el = document.querySelector(`.cv-notice[data-notice="${id}"]`);
   if (!el) {
     el = document.createElement('div');
@@ -715,7 +717,20 @@ function notice(id, text, actions = [], onDismiss = null) {
   el.replaceChildren();
   const span = document.createElement('span');
   span.textContent = text;
-  el.appendChild(span);
+  if (lines.length) {
+    const body = document.createElement('div');
+    body.className = 'cv-notice-body';
+    body.appendChild(span);
+    for (const line of lines) {
+      const sub = document.createElement('span');
+      sub.className = 'cv-notice-sub';
+      sub.textContent = line;
+      body.appendChild(sub);
+    }
+    el.appendChild(body);
+  } else {
+    el.appendChild(span);
+  }
   const dismiss = { act: 'dismiss', label: t('noticeDismiss'), run: () => { dropNotice(id); onDismiss?.(); } };
   for (const a of [...actions, dismiss]) {
     const b = document.createElement('button');
@@ -850,6 +865,11 @@ function barState() {
     /* Опублікована: у ЛІГА (`publish_url`) АБО локально модулем (`publish_local`) — `isPublished`
        (`spaces-model.js`). Куди веде превʼю й чи воно «локальне» — `previewTarget`. */
     published: isPublished(curTask),
+    /* Застереження модуля «за адресою» (Vercel): рівно те, що віддав сервер (`/api/task`: `publish_gate` — чи
+       ОПУБЛІКОВАНЕ превʼю з паролем, `publish_gate_stale` — пароль з того часу змінили). Для ЛІГА й модуля «у теку»
+       полів нема — `undefined` доходить до моделі як є (нема поля — нема тривоги), а вона сама ЛІГА їх не читає. */
+    pubGate: curTask?.publish_gate,
+    pubGateStale: curTask?.publish_gate_stale === true,
     pubLocal: pubTarget?.kind === 'local',
     /* Відносний час («5 хв тому»), а не сирий ISO UTC з `publish_local.published_at`: той самий
        `relTime`, що в екрана «Задачі». Невідомий час — порожньо, підпис тоді просто «локально». */
@@ -1121,6 +1141,8 @@ async function resetPerTaskState() {
   /* Плашка «Опубліковано локально» — про ТУ задачу, яку щойно опублікували (стійка, без таймера): на
      іншій задачі чи в іншому просторі вона бреше про те, що опубліковано. */
   dropNotice('publish-local');
+  /* Те саме для плашки «Опубліковано на Vercel» (2b-1): вона про щойно опубліковану задачу, а не про наступну. */
+  dropNotice('publish-remote');
   autoShootStopped.clear(); autoShootOff.clear(); autoShootSig.clear();
   tuneState = emptyTune();
   /* Ревізія — теж пер-задачна: з ревізією задачі A перший запис у задачі B
@@ -1696,7 +1718,25 @@ const BAR_ACTIONS = {
         r.not_task_link && r.url ? t('publishNotTaskLink', r.not_task_link, r.url) : null,
         r.domain_warning].filter(Boolean);
       if (warn.length) tell(warn.join('\n\n'));
-      if (r.url) { render(); return; }
+      if (r.url) {
+        /* ЛІГА (зашитий код) — рівно як було: лише `render()`. */
+        if (isLegacyPublish(spaceNow())) { render(); return; }
+        /* Модуль «за адресою» (Vercel, 2b-1): відповідь має `url` і не має `local`. Спершу оновлюємо задачу —
+           сервер у ній уже склав `publish_share_url` (з фрагментом-паролем, коли превʼю з паролем), і кнопка
+           «Скопіювати» бере посилання саме звідти: UI його не складає. Плашка стійка (`notice`), бо тост за 3 с
+           зникав би раніше, ніж людина встигне натиснути; її гасить `resetPerTaskState`. Адреса з відповіді
+           відкривається лише коли вона безпечна (`safeRemoteUrl`: https, без облікових даних, ASCII), `noopener` —
+           щоб відкрита сторінка не мала `window.opener`. Попередження модуля (`warnings`) чи нейтральна підказка
+           (`verified: false`) — другим рядком, як текст. */
+        await render();
+        const openUrl = safeRemoteUrl(r.url);
+        const lines = remoteNoticeLines(r).map((l) => (l.key ? t(l.key) : l.text));
+        notice('publish-remote', t('publishRemoteDone'), [
+          ...(openUrl ? [{ act: 'open', label: t('publishOpen'), run: () => window.open(openUrl, '_blank', 'noopener') }] : []),
+          { act: 'copy', label: t('copyLink'), run: () => copyLinkText(remoteShareUrl(curTask, r.url)) },
+        ], null, lines);
+        return;
+      }
       /* Публікація МОДУЛЕМ (простір без інтеграцій, `static-publish`): відповідь без `url` і без `dir`,
          зате з `local` — адресою на оригіні канваса. Без цієї гілки вона падала б нижче в «Деплой не
          вдався: —», хоч публікація вдалась. Адресу з відповіді відкриваємо лише відносною
@@ -1837,9 +1877,12 @@ const BAR_ACTIONS = {
   },
 
   openpreview: () => {
-    /* Ціль — з моделі: ЛІГА-URL або локальна адреса `/published/<простір>/<задача>/` канваса. */
+    /* Ціль — з моделі: ЛІГА-URL, локальна адреса `/published/<простір>/<задача>/` канваса або адреса,
+       яку опублікував модуль «за адресою» (Vercel): її відкриваємо лише після `safeRemoteUrl`. */
     const target = previewTarget(curTask, spaceNow());
-    if (target) window.open(target.url, '_blank', 'noopener');
+    if (!target) return;
+    const url = target.remote ? safeRemoteUrl(target.url) : target.url;
+    if (url) window.open(url, '_blank', 'noopener');
   },
 
   /* Тиша Teams на канал задачі. Вимкнути — спільна дія (тиша для ВСІХ, хто
@@ -1892,18 +1935,29 @@ const BAR_ACTIONS = {
     const pageId = pickedPage && pickedPage !== 'main' ? `${picked}/${pickedPage}` : picked;
     /* Локальне посилання — адреса канваса БЕЗ фрагмента з паролем: пароль модуля — секрет, якого UI не
        знає (посилання збирає `copyUrl`, `spaces-model.js`); ЛІГА-посилання — як було, з паролем і сторінкою. */
+    /* Публікація модулем «за адресою» (Vercel): `copyUrl` кладе `publish_share_url` ДОСЛІВНО — фрагмент із паролем
+       склав сервер, і ЛІГА-шний `preview_password` тут не бере участі. */
     const url = copyUrl(target, { origin: location.origin, pageId, password: curTask.preview_password || '' });
-    try {
-      await navigator.clipboard.writeText(url);
-      toast(t('toastCopied'));
-    } catch (e) {
-      /* Фолбек, коли clipboard недоступний (не-https, відмовлені права):
-         показуємо, а не питаємо. Поле лишається виділюваним для копіювання
-         руками; на результат ніщо не спирається, тому без `await`. */
-      ask(t('askCopyLinkPrompt'), url, { readOnly: true });
-    }
+    await copyLinkText(url);
   },
 };
+
+/**
+ * Кладе посилання в буфер й каже про це тостом; спільний для «Скопіювати посилання» в дропдауні і в плашці
+ * «Опубліковано на Vercel». `url` порожній — нічого не робимо (нема що копіювати).
+ */
+async function copyLinkText(url) {
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast(t('toastCopied'));
+  } catch (e) {
+    /* Фолбек, коли clipboard недоступний (не-https, відмовлені права):
+       показуємо, а не питаємо. Поле лишається виділюваним для копіювання
+       руками; на результат ніщо не спирається, тому без `await`. */
+    ask(t('askCopyLinkPrompt'), url, { readOnly: true });
+  }
+}
 
 /* Стан тиші Teams для дропдауна публікації. Помилка — це стан («не знаю»),
    а не виняток: пункт показує причину замість вигаданого «увімкнено». */

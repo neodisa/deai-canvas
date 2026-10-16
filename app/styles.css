@@ -127,6 +127,10 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
 .cv-notice button{border:1px solid var(--line2);background:var(--s3);color:var(--hi);
   font:inherit;font-size:13px;padding:6px 12px;border-radius:7px;cursor:pointer}
 .cv-notice button[data-act="dismiss"]{background:none;border-color:transparent}
+/* Плашка з додатковими рядками (попередження модуля): основний рядок і підрядки стовпчиком, кнопки — збоку. */
+.cv-notice-body{display:flex;flex-direction:column;gap:3px;min-width:0}
+.cv-notice-sub{display:block;font-size:12px;color:var(--open);line-height:1.4;overflow-wrap:anywhere}
+.cv-notice[data-notice="publish-remote"] button{flex:none;white-space:nowrap}
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
@@ -807,6 +811,8 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 @keyframes dd{from{transform:translateY(-5px)}to{transform:none}}
 .dd-note{padding:8px 10px 9px;font-size:12px;color:var(--dim);line-height:1.4}
 .dd-note b{color:var(--hi);font-weight:600}
+/* Застереження модуля «за адресою» (Vercel): «пароль змінено» — тривога кольору попереджень, «превʼю публічне» — звичайна примітка. */
+.dd-note--stale{color:var(--open)}
 /* --dim замість прототипного --lo — та сама причина, що в .crumb-sep вище */
 .dd-head{padding:8px 10px 5px;font-size:11px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--dim)}

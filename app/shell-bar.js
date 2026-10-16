@@ -487,8 +487,12 @@ function ddPublish(c) {
      дані користувача сюди не потрапляють узагалі. Лише для ЛІГА: воно про ЗОВНІШНЄ посилання, яке
      роздають менеджеру, а локальну публікацію модуля віддає цей самий канвас, і «посилання фактично
      публічне» там було б чужою тривогою. */
+  /* Застереження модуля «за адресою» (Vercel; `notes` з `bar-model.js`) — того самого `.dd-note`, але з модифікатором за
+     `id` (`public`/`stale`): `class="dd-note"` дослівно лишається лише ЛІГА-шному. Текст зі словника — з `esc` усе одно. У ЛІГА
+     й у модуля «у теку» `notes` порожній — розмітка тоді та сама, що була, байт у байт. */
+  const notes = (c.notes || []).map((n) => `<div class="dd-note dd-note--${n.id}">${esc(t(n.key))}</div>`).join("");
   return `<div class="dd dd--right">${parts}`
-    + `${c.legacy ? `<div class="dd-note">${t("pubGateTruth")}</div>` : ""}</div>`;
+    + `${c.legacy ? `<div class="dd-note">${t("pubGateTruth")}</div>` : ""}${notes}</div>`;
 }
 
 function zonePublish(c, openDd) {

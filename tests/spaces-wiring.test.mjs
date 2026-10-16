@@ -416,7 +416,7 @@ test("смуга: `published` — publish_url АБО publish_local, ціль п�
 
 test("публікація: відповідь модуля (`local`) — плашка «Опубліковано локально» з «Відкрити», а не «деплой не вдався»", () => {
   const body = barAct("publish");
-  assert.match(body, /if \(r\.url\) \{ render\(\); return; \}/, "шлях ЛІГА змінено");
+  assert.match(body, /if \(isLegacyPublish\(spaceNow\(\)\)\) \{ render\(\); return; \}/, "шлях ЛІГА змінено: лише `render()`, без плашки");
   assert.match(body, /const local = safeLocalUrl\(r\.local\?\.url, location\.origin\);/, "адресу з відповіді звіряємо з оригіном канваса");
   assert.match(body, /if \(r\.local\) \{/);
   assert.match(body, /notice\('publish-local', t\('publishLocalDone'\)/);
@@ -468,4 +468,99 @@ test("плашка «Опубліковано локально» гаситьс�
   assert.match(fn("resetPerTaskState"), /^\{[^]*?dropNotice\('publish-local'\);/);
   /* Причина code-less 400 лежить у рядку статусу й тілі, а `message` розмітку ріже по 200 знаків — `api()` їх віддає. */
   assert.match(fn("api"), /statusText: res\.statusText, body: txt\.slice\(0, 1000\)/);
+});
+
+/* ── публікація на свій Vercel (2b-1, Task 3): проводка плашки, посилань і застережень ──────────
+   Правила (`safeRemoteUrl`, `remoteShareUrl`, `remoteNoticeLines`, `isRemotePublish`, `previewTarget`/`copyUrl`)
+   тестує `tests/spaces-publish.test.mjs`; тут — що `app.js` ними користується і що не лишилось другого шляху повз них. */
+
+/** Гілка відповіді з `url` у дії «Опублікувати»: від `if (r.url) {` до `if (r.local)`. */
+const remoteBranch = () => {
+  const body = barAct("publish");
+  const from = body.indexOf("if (r.url) {");
+  assert.ok(from > 0, "гілки `if (r.url) {` нема");
+  return body.slice(from, body.indexOf("if (r.local)", from));
+};
+
+test("публікація: відповідь з `url` у просторі модуля — плашка «Опубліковано на Vercel»; ЛІГА — лише render()", () => {
+  const br = remoteBranch();
+  assert.match(br, /if \(isLegacyPublish\(spaceNow\(\)\)\) \{ render\(\); return; \}/, "ЛІГА-відповідь мусить лишитись `render()` без плашки");
+  /* оновлена задача (`publish_share_url`) — ДО плашки; кнопка «Скопіювати» читає її вже з `curTask` */
+  assert.match(br, /await render\(\);/);
+  assert.ok(br.indexOf("await render()") < br.indexOf("notice('publish-remote'"), "плашка раніше за оновлення задачі");
+  assert.match(br, /notice\('publish-remote', t\('publishRemoteDone'\),/);
+  assert.match(br, /remoteNoticeLines\(r\)/, "другий рядок плашки (`warnings`/підказка) — через модель");
+});
+
+test("плашка Vercel: «Відкрити» — лише для безпечного https-посилання, `noopener`; «Скопіювати» — `publish_share_url` оновленої задачі", () => {
+  const br = remoteBranch();
+  assert.match(br, /const openUrl = safeRemoteUrl\(r\.url\);/, "адресу з відповіді відкриваємо лише після `safeRemoteUrl`");
+  assert.match(br, /\.\.\.\(openUrl \? \[\{ act: 'open'/, "без безпечної адреси кнопки «Відкрити» нема");
+  assert.match(br, /window\.open\(openUrl, '_blank', 'noopener'\)/, "без noopener відкрита сторінка бачить `window.opener`");
+  assert.equal([...br.matchAll(/window\.open\(/g)].length, 1, "інших window.open у гілці нема — кожен мусив би мати свій захист");
+  assert.match(br, /act: 'open'/);
+  assert.match(br, /act: 'copy'/);
+  assert.match(br, /label: t\('copyLink'\)/);
+  assert.match(br, /remoteShareUrl\(curTask, r\.url\)/, "посилання з паролем — від оновленої задачі, а не вигадане в UI");
+  assert.doesNotMatch(br, /#k=/, "фрагмент із паролем складає сервер");
+  assert.doesNotMatch(br, /window\.open\(r\.url/, "сира адреса з відповіді повз `safeRemoteUrl`");
+});
+
+test("гілка `url` стоїть раніше за `local` і за «деплой не вдався»", () => {
+  const body = barAct("publish");
+  assert.ok(body.indexOf("if (r.url) {") < body.indexOf("if (r.local)"));
+  assert.ok(body.indexOf("if (r.url) {") < body.indexOf("publishDeployFailed"));
+});
+
+test("`notice()` вміє додаткові рядки (textContent, не розмітка); без них розмітка плашки та сама", () => {
+  assert.match(src, /function notice\(id, text, actions = \[\], onDismiss = null, lines = \[\]\) \{/);
+  const body = fn("notice");
+  assert.match(body, /cv-notice-sub/);
+  assert.match(body, /\.textContent = /);
+  assert.doesNotMatch(body, /innerHTML/, "рядки попереджень модуля — дані, не розмітка");
+  assert.match(body, /cv-notice-body/);
+  assert.match(body, /lines\.length/, "без рядків — звичайний `span`, як для інших плашок");
+});
+
+test("плашка `publish-remote` гаситься разом із задачею — поряд із `publish-local`", () => {
+  assert.match(fn("resetPerTaskState"), /^\{[^]*?dropNotice\('publish-remote'\);/);
+  assert.match(fn("resetPerTaskState"), /dropNotice\('publish-local'\);/, "плашку локальної публікації не прибрано");
+});
+
+test("«Відкрити превью» для публікації модулем: адреса проходить `safeRemoteUrl`, `noopener`", () => {
+  const open = barAct("openpreview");
+  assert.match(open, /safeRemoteUrl\(target\.url\)/);
+  assert.match(open, /'noopener'/);
+  assert.match(open, /target\.remote/, "перевірка лише для зовнішньої модульної цілі — ЛІГА як було");
+});
+
+test("«Скопіювати посилання»: ціль і готове посилання — з моделі (`copyUrl`), UI `#k=` не складає; запис у буфер спільний з плашкою", () => {
+  const copy = barAct("copylink");
+  assert.match(copy, /copyUrl\(target, \{/);
+  assert.doesNotMatch(copy, /#k=|encodeURIComponent/, "посилання з паролем складає лише модель (`copyUrl`)");
+  assert.match(copy, /await copyLinkText\(url\)/);
+  const helper = fn("copyLinkText");
+  assert.match(helper, /navigator\.clipboard\.writeText\(url\)/);
+  assert.match(helper, /toast\(t\('toastCopied'\)\)/);
+  assert.match(helper, /ask\(t\('askCopyLinkPrompt'\), url, \{ readOnly: true \}\)/, "фолбек без буфера лишився");
+  const br = remoteBranch();
+  assert.match(br, /copyLinkText\(/, "плашка копіює тим самим шляхом, що й дропдаун");
+});
+
+test("смуга: застереження Vercel — те, що віддав сервер (`publish_gate`/`publish_gate_stale`), без вигадок", () => {
+  const body = fn("barState");
+  assert.match(body, /pubGate: curTask\?\.publish_gate,/, "`undefined` (поля нема) мусить дійти до моделі як є: нема поля — нема тривоги");
+  assert.match(body, /pubGateStale: curTask\?\.publish_gate_stale === true,/);
+});
+
+test("імпорти: нові правила Vercel беруться з моделі просторів", () => {
+  const head = src.slice(0, src.indexOf("} from './spaces-model.js'"));
+  for (const name of ["isLegacyPublish", "remoteNoticeLines", "remoteShareUrl", "safeRemoteUrl"]) {
+    assert.match(head, new RegExp(`\\b${name}\\b`), `${name} не імпортовано`);
+  }
+});
+
+test("розмітка дропдауна: застереження Vercel малюються з `c.notes`, текст — через `esc(t(…))`", () => {
+  assert.match(bar, /\(c\.notes \|\| \[\]\)\.map\(\(n\) => `<div class="dd-note dd-note--\$\{n\.id\}">\$\{esc\(t\(n\.key\)\)\}<\/div>`\)/);
+  assert.match(bar, /\$\{c\.legacy \? `<div class="dd-note">\$\{t\("pubGateTruth"\)\}<\/div>` : ""\}\$\{notes\}<\/div>`/);
 });

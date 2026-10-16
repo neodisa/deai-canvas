@@ -131,3 +131,31 @@ test("поле з помилкою (`aria-invalid=true`) має червону �
   const outside = css.replace(/:root\s*\{[^{}]*\}/, "");
   assert.doesNotMatch(outside, /#c2362e/i, "літерал червоного діалогів повернувся поза :root — розійдеться з токеном");
 });
+
+/* ── публікація на свій Vercel (2b-1, Task 3): стилі застережень і плашки ─────────────────────────
+   Розмітка (`shell-bar.js` — `.dd-note--public/--stale`; `app.js` — `.cv-notice-body/.cv-notice-sub`) без правил — тиха
+   поломка «рядок без вигляду». Кольори — лише токени оболонки, жодного hex/rgb. */
+test("`.dd-note--stale` — колір попереджень (токен), `.dd-note--public` лишається звичайною приміткою", () => {
+  const stale = rule(".dd-note--stale");
+  assert.ok(stale, "правила .dd-note--stale немає");
+  assert.match(stale, /color:var\(--open\)/);
+  assert.doesNotMatch(stale, /#[0-9a-f]{3,8}\b|rgba?\(/i, "колір не токеном");
+  assert.equal(rule(".dd-note--public"), null, "примітка «публічне» успадковує `.dd-note` — власного правила не треба");
+  assert.ok(rule(".dd-note"), "базове `.dd-note` на місці");
+});
+
+test("плашка з додатковими рядками: `.cv-notice-body` — стовпчик, `.cv-notice-sub` — токен попередження й перенос довгих слів", () => {
+  const body = rule(".cv-notice-body");
+  assert.ok(body, "правила .cv-notice-body немає");
+  assert.match(body, /flex-direction:column/);
+  assert.match(body, /min-width:0/, "без цього довгий рядок розпирає плашку за 80vw");
+  const sub = rule(".cv-notice-sub");
+  assert.ok(sub, "правила .cv-notice-sub немає");
+  assert.match(sub, /color:var\(--open\)/);
+  assert.match(sub, /overflow-wrap:anywhere/, "довга адреса в попередженні не мусить виходити за плашку");
+  assert.doesNotMatch(`${body}${sub}`, /#[0-9a-f]{3,8}\b|rgba?\(/i, "колір не токеном");
+  const btn = rule('.cv-notice[data-notice="publish-remote"] button');
+  assert.ok(btn, "кнопки плашки Vercel без правила: «Скопіювати посилання» переноситься на два рядки");
+  assert.match(btn, /white-space:nowrap/);
+  assert.match(btn, /flex:none/);
+});

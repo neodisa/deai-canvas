@@ -332,6 +332,15 @@ export function barModel(s) {
       warnArgs: s.pwUngated ? [s.pwUngated] : [],
     }] : []),
   ];
+  /* Застереження модуля «за адресою» (Vercel, 2b-1): `s.pubGate`/`s.pubGateStale` — те, що віддав сервер
+     (`publish_gate`/`publish_gate_stale`, `app.js` лише переказує). РІВНО булеві: поле не прийшло (`undefined`) —
+     мовчимо, а не лякаємо. Лише для МОДУЛЯ: у ЛІГА своє застереження (`pubGateTruth`, розмітка), і її попередження
+     про сталість пароля — `pubPw*` — живуть в іншому місці; а там, де публікує модуль «у теку», сервер цих полів не дає.
+     Дані (`id` + ключ), а не текст: мову вибирає глядач (`shell-bar.js`). */
+  const notes = legacy ? [] : [
+    ...(s.pubGate === false ? [{ id: "public", key: "publishPublicWarn" }] : []),
+    ...(s.pubGateStale === true ? [{ id: "stale", key: "publishGateStale" }] : []),
+  ];
   const zone3 = [
     /* «В Figma» (T-41) — ПЕРЕД GitLab, щоб головна кнопка публікації лишалась
        крайньою справа (рішення власника 28.09.2026). В «Огляді» не зникає, як
@@ -359,6 +368,7 @@ export function barModel(s) {
       /* Чий це постачальник: розмітка ховає застереження про «публічне ЛІГА-посилання»
          (`pubGateTruth`) там, де публікує модуль. */
       legacy,
+      notes,
       labelKey: s.published ? "update" : "publish",
       items: publishItems,
     }] : []),

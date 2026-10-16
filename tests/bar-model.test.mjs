@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DICT } from "../app/i18n.js";
 import {
   TIERS, barModel, figmaWhyKey, flowWhyKey, labelVisibleAt, linkWhyKey, overflowAt, visibleAt,
 } from "../app/bar-model.js";
@@ -573,4 +574,59 @@ test("публікація для `published`: непублікована — «
   assert.equal(pub.labelKey, "publish");
   assert.equal(pub.items.find((x) => x.id === "openpreview").whyKey, "whyNoPublish");
   assert.equal(pub.items.find((x) => x.id === "copylink").whyKey, "whyNoPublish");
+});
+
+/* ── публікація на свій Vercel (2b-1, Task 3): застереження в дропдауні ───────────────────────
+   Сервер віддає для простору з модулем «за адресою» `publish_gate` (`false` — превʼю публічне) і, коли пароль
+   змінено після публікації, `publish_gate_stale: true`. Смуга (`barState`) переказує їх як `pubGate` і
+   `pubGateStale`; модель каже, які ЗАСТЕРЕЖЕННЯ малювати (`notes` на контролі публікації) — даними (ключ словника),
+   а не готовим текстом. Лише для МОДУЛЬНОГО постачальника: ЛІГА має своє (`pubGateTruth`), а поле відсутнє — мовчання. */
+const VERCEL = CAPS("vercel-publish");
+const notesOf = (o) => barModel({ ...base, ...o }).zone3.find((x) => x.id === "publish")?.notes;
+
+test("Vercel без пароля (`pubGate: false`): застереження «превʼю публічне»", () => {
+  assert.deepEqual(notesOf({ space: VERCEL, pubGate: false }), [{ id: "public", key: "publishPublicWarn" }]);
+});
+
+test("Vercel із паролем (`pubGate: true`) — застережень нема", () => {
+  assert.deepEqual(notesOf({ space: VERCEL, pubGate: true }), []);
+});
+
+test("Vercel: пароль змінено після публікації (`pubGateStale`) — «перепублікуйте»; разом із публічним — обидва, публічне першим", () => {
+  assert.deepEqual(notesOf({ space: VERCEL, pubGate: true, pubGateStale: true }), [{ id: "stale", key: "publishGateStale" }]);
+  assert.deepEqual(notesOf({ space: VERCEL, pubGate: false, pubGateStale: true }),
+    [{ id: "public", key: "publishPublicWarn" }, { id: "stale", key: "publishGateStale" }]);
+});
+
+test("поля від сервера НЕМАЄ (undefined/null/не булеве) — нічого не малюємо: мовчання краще за вигадану тривогу", () => {
+  for (const pubGate of [undefined, null, 0, "", "false", []]) {
+    assert.deepEqual(notesOf({ space: VERCEL, pubGate }), [], `pubGate=${JSON.stringify(pubGate)}`);
+  }
+  for (const pubGateStale of [undefined, null, false, 1, "true"]) {
+    assert.deepEqual(notesOf({ space: VERCEL, pubGate: true, pubGateStale }), [], `pubGateStale=${JSON.stringify(pubGateStale)}`);
+  }
+  assert.deepEqual(notesOf({ space: VERCEL }), []);
+});
+
+test("ЛІГА: навіть із `pubGate: false`/`pubGateStale: true` у стані — жодних модульних застережень (в неї своє, `pubGateTruth`)", () => {
+  for (const space of [CAPS("legacy", { integrations: true }), undefined, { id: "x", integrations: true }]) {
+    assert.deepEqual(notesOf({ space, pubGate: false, pubGateStale: true }), [], JSON.stringify(space));
+  }
+});
+
+test("static-publish (модуль «у теку»): сервер полів не дає — застережень нема", () => {
+  assert.deepEqual(notesOf({ space: CAPS("static-publish") }), []);
+});
+
+test("застереження Vercel не додають пунктів у дропдаун і не чіпають `legacy`", () => {
+  assert.deepEqual(pubItems({ space: VERCEL, pubGate: false, pubGateStale: true, teams: null }), ["togglepub", "openpreview", "copylink"]);
+  const ctl = barModel({ ...base, space: VERCEL, pubGate: false }).zone3.find((x) => x.id === "publish");
+  assert.equal(ctl.legacy, false);
+});
+
+test("ключі застережень Vercel є у словнику обох мов", () => {
+  for (const n of notesOf({ space: VERCEL, pubGate: false, pubGateStale: true })) {
+    assert.equal(typeof DICT.uk[n.key], "string", n.key);
+    assert.equal(typeof DICT.en[n.key], "string", n.key);
+  }
 });
