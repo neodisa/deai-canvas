@@ -514,11 +514,20 @@ class Base(unittest.TestCase):
             return self.fn('check')(ctx if ctx is not None else self.ctx())
 
     # ---- перевірки
+    @staticmethod
+    def msg(e):
+        """Текст, який побачить людина: `message` помилки ядра (без префікса `module-error: ` з `str`) чи `str`."""
+        m = getattr(e, 'message', None)
+        return m if isinstance(m, str) else str(e)
+
     def assertUncoded(self, e):
-        """Збій без власного коду: звичайний `RuntimeError` або (з приміткою про проєкт) `module-error` ядра — ядро
-        відповідає на обидва 502 `module-error`. Коди `vercel-auth`/`vercel-busy` сюди не підходять."""
-        self.assertIsInstance(e, (RuntimeError, dm.ModuleError))
-        self.assertIn(getattr(e, 'code', None), (None, 'module-error'), repr(e))
+        """Збій без власного коду: `ModuleError('module-error')` ядра (502) — і з чистим текстом: без імені класу
+        (`RuntimeError: …`, `_NetworkError: …`, `_HttpError: …`), яке ядро дописало б само до звичайного винятку й яке
+        людина побачила б у діалозі. Коди `vercel-auth`/`vercel-busy` сюди не підходять."""
+        self.assertIsInstance(e, dm.ModuleError, repr(e))
+        self.assertEqual(e.code, 'module-error', repr(e))
+        self.assertNotRegex(e.message, r'^_?\w*(?:Error|Exception)\b', 'у тексті — імʼя класу винятку')
+        self.assertTrue(e.message.strip(), 'порожній текст помилки')
 
     @staticmethod
     def blob(rec, skip_auth=False):
@@ -764,7 +773,7 @@ class Waiting(Base):
         self.api.states = ['BUILDING', 'ERROR']
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('Build failed: boom', str(e))
+        self.assertIn('Build failed: boom', self.msg(e))
         self.assertEqual([r for r in self.api.reqs('GET', '/v6/deployments') if 'target' in r['query']], [])   # без успіху старе не прибирається
         self.assertEqual(self.site.requests, [])
 
@@ -780,20 +789,20 @@ class Waiting(Base):
         self.api.error_message = 'Canceled by user'
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('Canceled by user', str(e))
+        self.assertIn('Canceled by user', self.msg(e))
 
     def test_an_error_state_without_a_message_still_says_what_happened(self):
         self.api.states = ['ERROR']
         self.api.error_message = None
         e = self.fails()
-        self.assertIn('ERROR', str(e))
+        self.assertIn('ERROR', self.msg(e))
 
     def test_a_poll_that_never_finishes_times_out(self):
         self.api.states = ['BUILDING']
         t0 = time.monotonic()
         e = self.fails(POLL_MAX_S=0.1, POLL_S=0.02)
         self.assertUncoded(e)
-        self.assertIn('timeout', str(e))
+        self.assertIn('timeout', self.msg(e))
         self.assertLess(time.monotonic() - t0, 3)
         self.assertGreaterEqual(len(self.api.reqs('GET', '/v13/deployments/')), 2)
         self.assertEqual([r for r in self.api.reqs('GET', '/v6/deployments') if 'target' in r['query']], [])
@@ -803,7 +812,7 @@ class Waiting(Base):
         self.api.states = ['ERROR']
         self.api.error_message = 'x' * 5000
         e = self.fails()
-        self.assertLessEqual(len(str(e)), 300)
+        self.assertLessEqual(len(self.msg(e)), 300)
 
 
 # --------------------------------------------------------------------------------------------- адреса
@@ -1012,11 +1021,11 @@ class Errors(Base):
         self.assertEqual(cm.exception.code, 'vercel-busy')
         self.assertTrue(cm.exception.message)
 
-    def test_other_http_errors_are_plain_runtime_errors_with_the_vercel_text(self):
+    def test_other_http_errors_are_module_errors_with_the_vercel_text(self):
         self.api.override('POST', '/v13/deployments', 500, {'error': {'code': 'internal', 'message': 'Boom happened'}})
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('Boom happened', str(e))
+        self.assertIn('Boom happened', self.msg(e))
         with self.assertRaises(dm.ModuleError) as cm:
             self.publish(core=True)
         self.assertEqual((cm.exception.code, cm.exception.status), ('module-error', 502))
@@ -1024,20 +1033,20 @@ class Errors(Base):
     def test_a_long_vercel_message_is_cut_to_200(self):
         self.api.override('POST', '/v13/deployments', 400, {'error': {'message': 'm' * 3000}})
         e = self.fails()
-        self.assertLessEqual(len(str(e)), 200)
+        self.assertLessEqual(len(self.msg(e)), 200)
 
     def test_a_string_error_body_is_used_as_the_text(self):
         self.api.override('POST', '/v13/deployments', 400, {'error': 'Plain string error'})
-        self.assertIn('Plain string error', str(self.fails()))
+        self.assertIn('Plain string error', self.msg(self.fails()))
         self.api.overrides = []
         self.api.override('POST', '/v13/deployments', 400, {'message': 'Top level message'})
-        self.assertIn('Top level message', str(self.fails()))
+        self.assertIn('Top level message', self.msg(self.fails()))
 
     def test_an_http_error_without_a_readable_body_names_the_status(self):
         self.api.override('POST', '/v13/deployments', 502, 'Bad gateway <html>')
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('502', str(e))
+        self.assertIn('502', self.msg(e))
 
     def test_a_non_json_success_is_an_error(self):
         self.api.override('POST', '/v13/deployments', 200, 'not json at all')
@@ -1047,11 +1056,11 @@ class Errors(Base):
         self.api.override('POST', '/v13/deployments', 200, {'url': 'x.vercel.app'})
         self.assertUncoded(self.fails())
 
-    def test_the_network_being_down_is_a_plain_runtime_error(self):
+    def test_the_network_being_down_is_a_module_error(self):
         self.api.stop()
         e = self.fails()
         self.assertUncoded(e)
-        self.assertRegex(str(e), r'^Vercel недоступний \(\w+\)$')
+        self.assertRegex(self.msg(e), r'^Vercel недоступний \(\w+\)$')
         with self.assertRaises(dm.ModuleError) as cm:
             self.publish(core=True)
         self.assertEqual((cm.exception.code, cm.exception.status), ('module-error', 502))
@@ -1081,7 +1090,7 @@ class Errors(Base):
         self.api.override('POST', '/v13/deployments', 307, None, {'Location': self.evil.base + '/steal'})
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('307', str(e))
+        self.assertIn('307', self.msg(e))
 
     def test_check_does_not_follow_redirects_either(self):
         for team, prefix in ((None, '/v2/user'), ('acme', '/v6/deployments')):
@@ -1155,6 +1164,65 @@ class Errors(Base):
         self.assertIsInstance(e, RuntimeError)
         self.assertEqual(getattr(e, 'code', None), 'vercel-auth')
         self.assertIn('vercel-auth', str(e))
+
+    def test_without_a_core_error_class_a_plain_failure_stays_a_runtime_error(self):
+        ctx = self.ctx()
+        del ctx['ModuleError']
+        self.api.override('POST', '/v13/deployments', 500, {'error': {'message': 'Boom happened'}})
+        e = self.fails(ctx=ctx)
+        self.assertIsInstance(e, RuntimeError)
+        self.assertIsNone(getattr(e, 'code', None))
+        self.assertIn('Boom happened', str(e))
+
+    def test_every_plain_failure_reaches_the_core_as_a_module_error_without_a_class_prefix(self):
+        """Звичайний виняток ядро показує як `<Клас>: <текст>`, а цей текст людина бачить у діалозі: модуль кидає
+        `ModuleError('module-error')` сам, з чистим текстом (кожна родина збоїв: HTTP, мережа, відповідь, очікування,
+        збірка)."""
+        big = {f'f{i}.txt': str(i) for i in range(4)}
+        cases = {
+            '5xx on the deployment': (lambda: self.api.override('POST', '/v13/deployments', 500, {'error': {'message': 'Boom'}}), {}, None),
+            '4xx on a probe': (lambda: self.api.override('GET', '/v9/projects/', 400, {'error': {'message': 'Bad'}}), {}, None),
+            'a redirect': (lambda: self.api.override('POST', '/v13/deployments', 307, None, {'Location': self.evil.base}), {}, None),
+            'not json': (lambda: self.api.override('POST', '/v13/deployments', 200, 'not json'), {}, None),
+            'a JSON array': (lambda: self.api.override('POST', '/v13/deployments', 200, [1]), {}, None),
+            'no deployment id': (lambda: self.api.override('POST', '/v13/deployments', 200, {'url': 'x.vercel.app'}), {}, None),
+            'an error state': (lambda: setattr(self.api, 'states', ['ERROR']), {}, None),
+            'blocked': (lambda: setattr(self.api, 'states', ['BLOCKED']), {}, None),
+            'deleted': (lambda: setattr(self.api, 'states', ['DELETED']), {}, None),
+            'polling timeout': (lambda: setattr(self.api, 'states', ['BUILDING']), {'POLL_MAX_S': 0.05, 'POLL_S': 0.01}, None),
+            'a poll that is refused (404)': (lambda: self.api.override('GET', '/v13/deployments/', 404, {'error': {'message': 'x'}}), {}, None),
+            'too many files': (lambda: None, {'MAX_FILES': 3}, big),
+            'a file over the limit': (lambda: None, {'MAX_FILE_BYTES': 0}, {'index.html': 'x'}),
+            'an empty build': (lambda: None, {}, {}),
+            'the upload deadline': (lambda: self.api.override('POST', '/v2/files', 200, {}, delay=0.06), {'UPLOAD_TOTAL_S': 0.05}, big),
+            'the network is down': (lambda: self.api.stop(), {}, None),
+        }
+        for name, (setup, extra, build) in cases.items():
+            with self.subTest(name):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.states = ['QUEUED', 'READY']
+                if build is not None:
+                    self.make_build(build)
+                setup()
+                with self.assertRaises(dm.ModuleError) as cm:
+                    self.publish(core=True, **extra)
+                e = cm.exception
+                self.assertEqual((e.code, e.status), ('module-error', 502))
+                self.assertTrue(e.message.strip())
+                self.assertNotRegex(e.message, r'^_?\w*(?:Error|Exception)\b')
+                for cls_name in ('RuntimeError', '_HttpError', '_NetworkError', 'ModuleError', 'Traceback'):
+                    self.assertNotIn(cls_name, e.message)
+                if name == 'the network is down':
+                    break                                                         # сервера більше нема
+
+    def test_a_failure_the_module_does_not_know_keeps_its_class_name_for_the_bug_report(self):
+        """Не `RuntimeError`-родина (помилка в самому модулі) модуль не маскує: ядро покаже `<Клас>: <текст>`."""
+        g = self.fn('publish').__globals__
+        with mock.patch.dict(g, {'_scan': mock.Mock(side_effect=KeyError('x'))}):
+            with self.assertRaises(dm.ModuleError) as cm:
+                self.publish(core=True)
+        self.assertTrue(cm.exception.message.startswith('KeyError'), cm.exception.message)
 
 
 # ------------------------------------------------------------------------------------------- токен
@@ -1530,74 +1598,71 @@ class Naming(Base):
         self.assertNotEqual(body['name'], 'pv-12345678')
         self.assertTrue(any('новий проєкт' in w for w in res['warnings']))
 
-    def test_a_project_renamed_in_the_dashboard_is_still_ours(self):
-        self.api.projects.clear()
-        self.api.projects['my-pretty-name'] = 'prj_mine'
-        self.api.listing = entries(6, name='my-pretty-name')
-        res = self.publish(state=STATE)
-        self.assertEqual([r['path'] for r in self.api.reqs('GET', '/v9/projects')], ['/v9/projects/prj_mine'])
-        self.assertEqual([r['path'] for r in self.api.reqs('GET', '/v13/deployments/dpl_old')], ['/v13/deployments/dpl_old'])
-        (body,) = self.api.bodies('/v13/deployments')
-        self.assertEqual((body['name'], body['project']), ('my-pretty-name',) * 2)       # деплоїмо під поточним імʼям
-        self.assertEqual(res['state'], {'project': 'pv-12345678', 'project_id': 'prj_mine', 'deployment': 'dpl_cur',
-                                        'task': 't1'})                                    # у стані — первинне імʼя
-        self.assertEqual(res['warnings'], [])
-        self.assertEqual(sorted(r['path'].rsplit('/', 1)[1] for r in self.api.reqs('DELETE')), ['o3', 'o4', 'o5'])
-        self.api.requests.clear()
-        self.api.dep_id = 'dpl_two'
-        self.api.known_deployments['dpl_cur'] = 'prj_mine'
-        again = self.publish(state=res['state'])                                          # і наступного разу теж
-        (body,) = self.api.bodies('/v13/deployments')
-        self.assertEqual(body['name'], 'my-pretty-name')
-        self.assertEqual(again['state']['project'], 'pv-12345678')
-
-    def test_a_rename_is_not_accepted_without_proof_that_the_project_is_ours(self):
-        """`project_id` на чужий проєкт (з `.vercel/project.json`, що потрапив у репо) не мусить вести туди деплой:
-        інше імʼя — доказ потрібен (остання записана публікація належить цьому проєкту)."""
-        victim = 'victim-prod-site'
-        cases = {
-            'the recorded deployment belongs to another project': lambda: self.api.known_deployments.update(dpl_old='prj_other'),
-            'the recorded deployment does not exist': lambda: self.api.known_deployments.clear(),
-            'the proof request fails': lambda: self.api.override('GET', '/v13/deployments/dpl_old', 500, {'error': {}}),
-            'the proof request is refused': lambda: self.api.override('GET', '/v13/deployments/dpl_old', 403, {'error': {}}),
-        }
-        for name, setup in cases.items():
-            with self.subTest(name):
-                self.api.overrides = []
+    def test_a_project_under_another_name_than_the_state_is_foreign_whatever_the_reason(self):
+        """Перейменування НЕ підтримується: `project_id` зі стану збігається, а `name` — ні (перейменували в панелі чи
+        `project_id` підроблено на чужий проєкт) — це «не наш»: нового проєкту `pv-…` і попередження, у той — жодного
+        `POST` і жодного `DELETE`, а доказу «остання публікація належить проєкту» модуль більше не шукає."""
+        for other in ('my-pretty-name', 'acme-production-site', 'pv-87654321', 'PV-12345678', 'pv-12345678-x'):
+            with self.subTest(other):
                 self.api.requests.clear()
                 self.api.projects.clear()
-                self.api.projects[victim] = 'prj_mine'                              # id збігається, імʼя — ЧУЖЕ
+                self.api.projects[other] = 'prj_mine'                            # id збігається, імʼя — ІНШЕ
                 self.api.known_deployments['dpl_old'] = 'prj_mine'
-                self.api.project_id = 'prj_new'                                     # новий проєкт отримає СВІЙ id
-                setup()
-                self.api.listing = entries(6, pid='prj_mine', name=victim)
+                self.api.project_id = 'prj_new'                                  # новий проєкт отримає СВІЙ id
+                self.api.listing = entries(6, pid='prj_mine', name=other)
                 res = self.publish(state=STATE)
                 (body,) = self.api.bodies('/v13/deployments')
-                self.assertRegex(body['name'], r'^pv-\d{8}$')                        # у чужий проєкт не деплоїли
-                self.assertNotEqual(body['name'], victim)
-                self.assertTrue(any('новий проєкт' in w for w in res['warnings']), res['warnings'])
-                self.assertEqual(self.api.reqs('DELETE'), [])
-                self.assertNotIn(victim.encode(), b''.join(self.blob(r) for r in self.api.reqs('POST')))
+                self.assertRegex(body['name'], r'^pv-\d{8}$')
+                self.assertNotIn(body['name'], (other, 'pv-12345678'))           # ні в той проєкт, ні під записаним імʼям
+                self.assertEqual(body['name'], body['project'])
+                self.assertTrue(any('новий проєкт' in w and 'не збігається' in w for w in res['warnings']), res['warnings'])
+                self.assertEqual(self.api.reqs('DELETE'), [])                    # старі публікації «того» проєкту не чіпали
+                for r in self.api.reqs('GET', '/v6/deployments'):                # старі публікації «того» проєкту навіть не читали
+                    self.assertEqual(r['query']['projectId'], 'prj_new')
+                self.assertEqual(self.api.reqs('GET', '/v13/deployments/dpl_old'), [])   # доказу перейменування нема
+                self.assertEqual(res['state'], {'project': body['name'], 'project_id': 'prj_new',
+                                                'deployment': 'dpl_cur', 'task': 't1'})
+                self.assertNotIn(other.encode(), b''.join(self.blob(r) for r in self.api.reqs('POST')))
 
-    def test_a_rename_needs_a_recorded_deployment(self):
+    def test_a_forged_state_with_a_victim_project_id_and_a_victim_deployment_changes_nothing_there(self):
+        """Відтворення зауваження ревʼю: склонований чи підроблений `iterations.json` із
+        `{project: pv-…, project_id: <id чужого проєкту>, deployment: <публікація чужого проєкту>, task: <ця задача>}`.
+        Раніше реальне імʼя відрізнялось → «перейменований», а записана публікація «доводила» належність (її теж можна
+        підробити): модуль деплоїв у чужий проєкт і видаляв його старі публікації. Тепер — нуль деплоїв у нього й нуль `DELETE`."""
+        victim = 'acme-production-site'
         self.api.projects.clear()
-        self.api.projects['my-pretty-name'] = 'prj_mine'
-        res = self.publish(state={k: v for k, v in STATE.items() if k != 'deployment'})
-        self.assertEqual(self.api.reqs('GET', '/v13/deployments/dpl_old'), [])       # доказу нема — його й не шукаємо
-        self.assertEqual([r['path'] for r in self.api.reqs('GET', '/v13/deployments/') if r['path'] != '/v13/deployments/dpl_cur'], [])
+        self.api.projects[victim] = 'prj_victim'
+        self.api.known_deployments['dpl_victim_old'] = 'prj_victim'
+        self.api.listing = entries(8, pid='prj_victim', name=victim)               # старі продакшн-публікації жертви
+        self.api.project_id = 'prj_new'
+        forged = {'project': 'pv-12345678', 'project_id': 'prj_victim', 'deployment': 'dpl_victim_old', 'task': 't1'}
+        res = self.publish(state=forged)
         (body,) = self.api.bodies('/v13/deployments')
         self.assertRegex(body['name'], r'^pv-\d{8}$')
-        self.assertTrue(any('новий проєкт' in w for w in res['warnings']))
+        self.assertEqual(self.api.projects[body['name']], 'prj_new')                 # публікація лягла в НОВИЙ проєкт
+        self.assertEqual(self.api.projects[victim], 'prj_victim')                    # жертва — як була
+        self.assertEqual(self.api.reqs('DELETE'), [])                                # жодного `DELETE`: ні публікацій, ні проєктів
+        for r in self.api.reqs('GET', '/v6/deployments'):
+            self.assertEqual(r['query']['projectId'], 'prj_new')                     # публікації жертви навіть не читали
+        self.assertEqual(self.api.reqs('GET', '/v13/deployments/dpl_victim_old'), []) # підроблений «доказ» не читався
+        for r in self.api.reqs('POST'):
+            self.assertNotIn(victim.encode(), self.blob(r))
+            self.assertNotIn(b'prj_victim', self.blob(r))
+        self.assertEqual(res['state']['project_id'], 'prj_new')
+        self.assertTrue(any('не збігається' in w for w in res['warnings']), res['warnings'])
+        # і наступна публікація зі СПРАВЖНІМ станом іде вже в свій проєкт
+        self.api.requests.clear()
+        self.api.dep_id = 'dpl_two'
+        self.publish(state=res['state'])
+        (body2,) = self.api.bodies('/v13/deployments')
+        self.assertEqual(body2['name'], body['name'])
+        self.assertEqual(self.api.reqs('DELETE'), [])
 
-    def test_a_renamed_project_with_an_unusable_name_is_not_ours(self):
-        for weird in ('has space', 'a/b', '', 'x' * 101, '../x', 'ü'):
-            with self.subTest(weird):
-                self.api.requests.clear()
-                self.api.projects.clear()
-                self.api.projects[weird] = 'prj_mine'
-                self.publish(state=STATE)
-                (body,) = self.api.bodies('/v13/deployments')
-                self.assertRegex(body['name'], r'^pv-\d{8}$')
+    def test_the_state_project_must_match_by_id_and_exact_name_to_be_reused(self):
+        res = self.publish(state=STATE)                                              # імʼя й id збігаються — свій проєкт
+        (body,) = self.api.bodies('/v13/deployments')
+        self.assertEqual(body['name'], 'pv-12345678')
+        self.assertEqual(res['warnings'], [])
 
     def test_a_missing_project_id_is_looked_up_by_name_after_ready(self):
         self.api.omit_project_id = True
@@ -1625,7 +1690,7 @@ class Naming(Base):
 
     def test_a_state_probe_that_is_neither_ours_nor_404_stops_the_publish(self):
         self.api.override('GET', '/v9/projects/', 500, {'error': {'message': 'boom'}})
-        self.assertIsInstance(self.fails(state=STATE), RuntimeError)
+        self.assertUncoded(self.fails(state=STATE))
         self.assertEqual(self.api.reqs('POST'), [])
 
     def test_a_task_without_a_state_key_works(self):
@@ -1692,7 +1757,7 @@ class BuildInput(Base):
         with mock.patch.object(os, 'walk', walk):
             e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('UTF-8', str(e))
+        self.assertIn('UTF-8', self.msg(e))
         self.assertEqual(self.api.requests, [])
 
     def test_an_empty_build_is_refused_before_any_request(self):
@@ -2021,8 +2086,8 @@ class Resilience(Base):
         self.api.error_message = 'Policy violation'
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('заблок', str(e).lower())
-        self.assertIn('Policy violation', str(e))
+        self.assertIn('заблок', self.msg(e).lower())
+        self.assertIn('Policy violation', self.msg(e))
         self.assertEqual(len(self.dep_gets()), 2)
         self.assertEqual(self.site.requests, [])
 
@@ -2030,7 +2095,7 @@ class Resilience(Base):
         self.api.states = ['DELETED']
         e = self.fails()
         self.assertUncoded(e)
-        self.assertIn('видален', str(e).lower())
+        self.assertIn('видален', self.msg(e).lower())
         self.assertEqual(len(self.dep_gets()), 1)
 
     # ---- сироти: проєкт, створений ЦИМ викликом
@@ -2055,9 +2120,9 @@ class Resilience(Base):
                 dels = self.project_deletes()
                 self.assertEqual([r['path'] for r in dels], ['/v9/projects/prj_mine'])
                 probe = self.api.reqs('GET', '/v9/projects/')[0]['path'].rsplit('/', 1)[1]
-                self.assertIn(f'Створений проєкт {probe} видалено.', str(e))   # назва видаленого проєкту — в тексті
-                self.assertNotIn('не вдалося', str(e).lower())
-                self.assertLessEqual(len(str(e)), 300)                       # примітка не обрізається ядром
+                self.assertIn(f'Створений проєкт {probe} видалено.', self.msg(e))   # назва видаленого проєкту — в тексті
+                self.assertNotIn('не вдалося', self.msg(e).lower())
+                self.assertLessEqual(len(self.msg(e)), 300)                       # примітка не обрізається ядром
 
     def test_the_project_removal_carries_the_team_parameter(self):
         self.api.states = ['ERROR']
@@ -2071,11 +2136,11 @@ class Resilience(Base):
         self.api.states = ['ERROR']
         self.api.project_delete_fail = True
         e = self.fails()
-        self.assertIn('не вдалося видалити', str(e).lower())
+        self.assertIn('не вдалося видалити', self.msg(e).lower())
         probe = self.api.reqs('GET', '/v9/projects/')[0]['path'].rsplit('/', 1)[1]
-        self.assertIn(probe, str(e))
-        self.assertIn('Build failed: boom', str(e))                          # першопричина не загубилась
-        self.assertNotIn('видалено', str(e))
+        self.assertIn(probe, self.msg(e))
+        self.assertIn('Build failed: boom', self.msg(e))                          # першопричина не загубилась
+        self.assertNotIn('видалено', self.msg(e))
 
     def test_a_publish_on_the_state_path_never_removes_a_project(self):
         for name, setup, extra in self.failing():
@@ -2086,8 +2151,8 @@ class Resilience(Base):
                 setup()
                 e = self.fails(state=STATE, **extra)
                 self.assertEqual(self.project_deletes(), [])
-                self.assertNotIn('створений проєкт', str(e).lower())         # жодної примітки про видалення проєкту
-                self.assertNotIn('видалити створений', str(e).lower())
+                self.assertNotIn('створений проєкт', self.msg(e).lower())         # жодної примітки про видалення проєкту
+                self.assertNotIn('видалити створений', self.msg(e).lower())
 
     def test_a_project_recreated_under_a_state_name_counts_as_created_here(self):
         del self.api.projects['pv-12345678']                                 # у панелі видалили → створюється наново
@@ -2126,6 +2191,36 @@ class Resilience(Base):
         self.assertLessEqual(len(e.message), 300)
         self.assertTrue(e.message.endswith('видалено.'), e.message[-60:])
 
+    def test_the_removal_note_always_follows_a_full_stop(self):
+        """«… станом ERROR. Створений проєкт … видалено.»: основний текст завершується крапкою перед приміткою, а коли
+        вона вже є (чи там `!`/`?`) — другої не додається."""
+        for name, setup, extra in self.failing():
+            with self.subTest(name):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.states = ['QUEUED', 'READY']
+                setup()
+                e = self.fails(**extra)
+                self.assertRegex(self.msg(e), r'[^\s.!?…]\. Створений проєкт pv-\d{8} видалено\.$')
+        for tail, joined in (('Build failed.', 'Build failed. Створений'), ('Why?', 'Why? Створений'),
+                             ('Stop!', 'Stop! Створений')):
+            with self.subTest(tail):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.states = ['ERROR']
+                self.api.error_message = tail
+                e = self.fails()
+                self.assertIn(joined, self.msg(e))
+                self.assertNotIn('..', self.msg(e))
+                self.assertNotIn('?.', self.msg(e))
+                self.assertNotIn('!.', self.msg(e))
+
+    def test_the_not_removed_note_follows_a_full_stop_too(self):
+        self.api.states = ['ERROR']
+        self.api.listing = [{'uid': 'dpl_cur', 'created': 2}, {'uid': 'dpl_foreign', 'created': 1, 'projectId': 'prj_mine'}]
+        e = self.fails()
+        self.assertRegex(self.msg(e), r'boom\. Проєкт pv-\d{8} не видалено: ')
+
     # ---- I-A: перевірки ПЕРЕД видаленням проєкту
     def checks_before_delete(self):
         return [(r['method'], r['path']) for r in self.api.requests if r['method'] != 'POST'][-4:]
@@ -2147,10 +2242,10 @@ class Resilience(Base):
         self.api.listing = [{'uid': 'dpl_cur', 'created': 2}, {'uid': 'dpl_foreign', 'created': 1, 'projectId': 'prj_mine'}]
         e = self.fails()
         self.assertEqual(self.project_deletes(), [])
-        self.assertIn('не видалено', str(e))
-        self.assertIn('інші публікації', str(e))
-        self.assertIn('Build failed: boom', str(e))
-        self.assertNotIn('Створений проєкт', str(e))
+        self.assertIn('не видалено', self.msg(e))
+        self.assertIn('інші публікації', self.msg(e))
+        self.assertIn('Build failed: boom', self.msg(e))
+        self.assertNotIn('Створений проєкт', self.msg(e))
 
     def test_a_listing_we_cannot_read_stops_the_removal(self):
         shapes = {'500': lambda: self.api.override('GET', '/v6/deployments', 500, {'error': {'message': 'x'}}),
@@ -2167,16 +2262,16 @@ class Resilience(Base):
                 setup()
                 e = self.fails()
                 self.assertEqual(self.project_deletes(), [])
-                self.assertIn('не видалено', str(e))
-                self.assertIn('не вдалося перевірити', str(e))
+                self.assertIn('не видалено', self.msg(e))
+                self.assertIn('не вдалося перевірити', self.msg(e))
 
     def test_a_project_under_another_name_stops_the_removal(self):
         self.api.states = ['ERROR']
         self.api.override('GET', '/v9/projects/prj_mine', 200, {'id': 'prj_mine', 'name': 'someone-elses-site'})
         e = self.fails()
         self.assertEqual(self.project_deletes(), [])
-        self.assertIn('не видалено', str(e))
-        self.assertIn('інший проєкт', str(e))
+        self.assertIn('не видалено', self.msg(e))
+        self.assertIn('інший проєкт', self.msg(e))
 
     def test_a_project_we_cannot_look_up_stops_the_removal(self):
         for status in (404, 500, 401):
@@ -2187,7 +2282,7 @@ class Resilience(Base):
                 self.api.override('GET', '/v9/projects/prj_mine', status, {'error': {'message': 'x'}})
                 e = self.fails()
                 self.assertEqual(self.project_deletes(), [])
-                self.assertIn('не видалено', str(e))
+                self.assertIn('не видалено', self.msg(e))
 
     def test_an_id_that_is_not_a_prj_id_stops_the_removal_without_any_request(self):
         self.api.project_id = 'weird-id'
@@ -2196,15 +2291,15 @@ class Resilience(Base):
         self.assertEqual(self.project_deletes(), [])
         self.assertEqual(self.api.reqs('GET', '/v6/deployments'), [])
         self.assertEqual(self.api.reqs('GET', '/v9/projects/weird-id'), [])
-        self.assertIn('не видалено', str(e))
-        self.assertIn('не вдалося перевірити', str(e))
+        self.assertIn('не видалено', self.msg(e))
+        self.assertIn('не вдалося перевірити', self.msg(e))
 
     def test_an_empty_listing_is_fine(self):
         self.api.states = ['ERROR']
         self.api.listing = []
         e = self.fails()
         self.assertEqual(len(self.project_deletes()), 1)
-        self.assertIn('Створений проєкт', str(e))
+        self.assertIn('Створений проєкт', self.msg(e))
 
     def test_every_failure_scenario_goes_through_the_same_checks(self):
         for name, setup, extra in self.failing():
@@ -2253,6 +2348,48 @@ class Resilience(Base):
             self.assertNotIn(TOKEN, text)
 
 
+# --------------------------------------------------------------------------------- самотні сурогати
+
+class Surrogates(Base):
+    """`\\ud800` у JSON Vercel — самотній сурогат у рядку. Ядро не може записати такий рядок в UTF-8 `iterations.json` і
+    відмовило б УСЮ вже вдалу публікацію через один знак у попередженні (`_url_result_warnings_ok`)."""
+
+    @staticmethod
+    def encodable(text):
+        try:
+            text.encode('utf-8')
+        except UnicodeEncodeError:
+            return False
+        return True
+
+    def test_a_lone_surrogate_in_an_alias_error_does_not_break_a_successful_publish(self):
+        for err in ({'message': 'bad \ud800 alias'}, 'plain \udc00 text', {'message': '\ud83d'}):
+            with self.subTest(err=err):
+                self.api.alias_error = err
+                res = self.publish()
+                self.assertTrue(res['warnings'])
+                for w in res['warnings']:
+                    self.assertTrue(self.encodable(w), repr(w))
+                url, state, verified, warnings = serve._checked_url_result(res)      # ядро це приймає
+                self.assertEqual(warnings, res['warnings'])
+
+    def test_a_lone_surrogate_in_a_failure_text_still_leaves_an_encodable_message(self):
+        self.api.states = ['ERROR']
+        self.api.error_message = 'oops \ud800 here'
+        with self.assertRaises(dm.ModuleError) as cm:
+            self.publish(core=True)
+        self.assertTrue(self.encodable(cm.exception.message), repr(cm.exception.message))
+        self.assertIn('oops', cm.exception.message)
+
+    def test_every_warning_is_sanitized_again_before_the_result_leaves(self):
+        """Друга лінія оборони: попередження, що не пройшло через `_clean` (нове місце в коді), теж очищається на виході."""
+        g = self.fn('publish').__globals__
+        with mock.patch.dict(g, {'_verify': lambda url, project: (False, 'perevirka \ud800 ne vdalas')}):
+            res = self.publish()
+        self.assertEqual(res['warnings'], ['perevirka ? ne vdalas'])
+        serve._checked_url_result(res)
+
+
 # ------------------------------------------------------------------------------------------------ межі
 
 class Limits(Base):
@@ -2260,8 +2397,8 @@ class Limits(Base):
         self.make_build({f'f{i}.txt': str(i) for i in range(4)})
         e = self.fails(MAX_FILES=3)
         self.assertUncoded(e)
-        self.assertIn('файл', str(e))
-        self.assertIn('3', str(e))
+        self.assertIn('файл', self.msg(e))
+        self.assertIn('3', self.msg(e))
         self.assertEqual(self.api.requests, [])
         self.publish(MAX_FILES=4)                                           # рівно на межі — гаразд
 
@@ -2269,7 +2406,7 @@ class Limits(Base):
         self.make_build({'index.html': 'x', 'big/video.bin': 'y' * 11})
         e = self.fails(MAX_FILE_BYTES=10)
         self.assertUncoded(e)
-        self.assertIn('big/video.bin', str(e))
+        self.assertIn('big/video.bin', self.msg(e))
         self.assertEqual(self.api.requests, [])
         self.make_build({'index.html': 'x', 'big/video.bin': 'y' * 10})
         self.publish(MAX_FILE_BYTES=10)
@@ -2279,7 +2416,7 @@ class Limits(Base):
         self.api.override('POST', '/v2/files', 200, {}, delay=0.06)
         e = self.fails(UPLOAD_TOTAL_S=0.1)
         self.assertUncoded(e)
-        self.assertIn('timeout', str(e))
+        self.assertIn('timeout', self.msg(e))
         n = len(self.api.reqs('POST', '/v2/files'))
         self.assertTrue(1 <= n < 4, n)
         self.assertEqual(self.api.reqs('POST', '/v13/deployments'), [])

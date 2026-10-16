@@ -1773,9 +1773,13 @@ const BAR_ACTIONS = {
       /* Коди відмов модульної публікації — людським текстом (`publishErr`), решта — як було. */
       const m = publishErr(e);
       tell(t(m.key, ...(m.reasonKey ? [t(m.reasonKey)] : m.args)));
+    } finally {
+      /* Кнопка оживає на ВСІХ шляхах — і після раннього `return` (тост, ЛІГА, плашка), і коли `render()` чи `notice()` кинули:
+         інакше стара кнопка (її не замінила перемальовка, бо та не відбулась) лишалась би вимкненою з «Публікую…» назавжди.
+         Перемальована смуга дає нову кнопку, а цей `el` уже відчеплений, тож і там нічого не псується. */
+      el.disabled = false;
+      if (lbl) lbl.textContent = prevText;
     }
-    el.disabled = false;
-    if (lbl) lbl.textContent = prevText;
   },
 
   retry: () => { render(); },

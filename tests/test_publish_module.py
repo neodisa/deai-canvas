@@ -3525,10 +3525,31 @@ class UrlTarget(DispatchWorld):
             '.a.b': 'https://.a.b/', 'a.b.': 'https://a.b./', '-a.b': 'https://-a.b/', 'a-.b': 'https://a-.b/',
             'a.-b': 'https://a.-b/', 'підкреслення': 'https://a_b.c/', 'IPv6': 'https://[::1]/',
             'мітка 64': 'https://' + 'a' * 64 + '.example/', 'хост 254': 'https://' + '.'.join(['a' * 50] * 5) + '.bcd/',
+            # IP-адреси в будь-якій формі й одномітковий хост — не адреса превʼю (докстрінг `_url_host_ok`)
+            'IPv4': 'https://127.0.0.1/', 'IPv4 десяткове': 'https://2130706433/', 'IPv4 hex': 'https://0x7f.1/',
+            'IPv4 hex повне': 'https://0x7f.0x0.0x0.0x1/', 'IPv4 скорочене': 'https://127.1/',
+            'метадані хмари': 'https://169.254.169.254/latest', 'IPv4 і порт': 'https://10.0.0.1:8080/',
+            'localhost': 'https://localhost/', 'localhost і порт': 'https://localhost:3000/', 'одна мітка': 'https://intranet/',
+            'остання мітка цифрова': 'https://a.b.123/', 'IPv6 і порт': 'https://[::1]:8443/',
         }
         for what, url in bad.items():
             with self.subTest(what):
                 self.refused(result(url=url), what)
+
+    def test_the_host_rule_is_two_or_more_dns_labels_with_an_alphabetic_last_one(self):
+        """Саме правило, без розбору адреси: докстрінг `_url_host_ok` обіцяв «IP-адреси не пускаємо», а крапкова IPv4 за
+        формою збігалась з міткою й проходила."""
+        ok = ('pv-1.vercel.app', 'a.b', 'xn--e1afmkfd.xn--p1ai', 'a-b.c-d.example', '1.example', '0x7f.example',
+              'a' * 63 + '.example')
+        bad = ('127.0.0.1', '2130706433', '0x7f.1', '0x7f.0x0.0x0.0x1', '127.1', '169.254.169.254', '10.0.0.1',
+               'localhost', 'intranet', 'a', '1', 'a.b.1', 'a.b.0x7f', '::1', '[::1]', '', '.', 'a..b', 'a.b.', '.a.b',
+               'a.-b', 'A.B', None, 5, b'a.b')
+        for host in ok:
+            with self.subTest(ok=host):
+                self.assertTrue(serve._url_host_ok(host), host)
+        for host in bad:
+            with self.subTest(bad=host):
+                self.assertFalse(serve._url_host_ok(host), host)
 
     def test_ascii_urls_with_ports_and_punycode_hosts_are_still_accepted(self):
         for url in ('https://pv-1.vercel.app:443/', 'https://a.b:1/', 'https://a.b:65535/x',

@@ -433,9 +433,9 @@ test("previewTarget: ЛІГА зі слідом модуля — як було (
   assert.deepEqual(previewTarget(VTASK(), LEG), { kind: "external", url: VURL, at: null });
 });
 
-test("previewTarget: модуль, але `publish_url` не від нього — стара поведінка 0.2.0 (відкриваємо, `remote` нема)", () => {
+test("previewTarget: модуль, але `publish_url` не від нього — стара поведінка 0.2.0 (відкриваємо, `remote` нема), позначено `leftover`", () => {
   const tg = previewTarget({ id: "blog", publish_url: "https://pv-1.example.app" }, VER);
-  assert.deepEqual(tg, { kind: "external", url: "https://pv-1.example.app", at: null });
+  assert.deepEqual(tg, { kind: "external", url: "https://pv-1.example.app", at: null, leftover: true });
 });
 
 test("copyUrl: модуль «за адресою» — `publish_share_url` ДОСЛІВНО, фрагмент `#k=` UI не складає і не дописує вдруге", () => {
@@ -457,6 +457,45 @@ test("copyUrl: ЛІГА і зовнішня без `remote` — як було (`
   assert.equal(copyUrl(tg, { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`);
 });
 
+test("copyUrl: залишок Vercel після перемикання на `static-publish`/інший модуль — гола адреса, без ЛІГА-шного `#k=…&p=…`", () => {
+  /* `publish_url` лишився від Vercel, а простір вже публікує `static-publish` (або модуля нема): `previewTarget` дає «зовнішню» ціль, але
+     ЛІГА-шний `preview_password` до цієї адреси не належить — раніше `copyUrl` дописував його як `#k=<пароль ЛІГА>&p=<сторінка>`. */
+  const other = { id: "o", integrations: false, capabilities: { publish: "other-publish", tokens: null } };
+  for (const space of [MOD, NONE, other]) {
+    for (const task of [VTASK({ publish_remote: REMOTE({ module: "vercel-publish" }) }),      // слід Vercel, постачальник — інший
+                        { id: "blog", publish_url: VURL },                                      // сліду модуля нема взагалі
+                        VTASK({ publish_remote: REMOTE({ url: "https://інша.example/" }) })]) { // слід про іншу адресу
+      const tg = previewTarget(task, space);
+      assert.equal(tg.kind, "external");
+      assert.equal(tg.leftover, true);
+      const url = copyUrl(tg, { origin: "http://localhost:8765", pageId: "it1/home", password: "ЛІГА-пароль 1100" });
+      assert.equal(url, VURL, `${space.id}: тільки адреса`);
+      assert.ok(!url.includes("#") && !url.includes("k=") && !url.includes("&p="), "жодного фрагмента");
+      assert.ok(!url.includes("1100") && !url.includes("ЛІГА"), "пароль ЛІГА не просочується");
+    }
+  }
+});
+
+test("copyUrl: залишок із НЕбезпечною адресою — `null` (копіювати нічого), а не `javascript:…#k=…`", () => {
+  for (const bad of ["javascript:alert(1)", "http://pv-1.vercel.app", "https://u:p@pv-1.vercel.app/", "https://127.0.0.1/", "https://пв.example/"]) {
+    const tg = previewTarget({ id: "blog", publish_url: bad }, MOD);
+    assert.equal(tg.leftover, true, bad);
+    assert.equal(copyUrl(tg, { pageId: "it1", password: "1100" }), null, bad);
+  }
+});
+
+test("copyUrl: ЛІГА-шний фрагмент `#k=…&p=…` — ЛИШЕ для постачальника `legacy` (і для залишку не з'являється)", () => {
+  const task = { id: "blog", publish_url: VURL };
+  assert.equal(copyUrl(previewTarget(task, LEG), { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`, "ЛІГА — як було");
+  assert.equal(copyUrl(previewTarget({ ...task, publish_remote: REMOTE() }, LEG), { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`,
+    "слід модуля в просторі ЛІГА — як було");
+  assert.equal(copyUrl(previewTarget(task, { id: "old" }), { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`,
+    "стара форма відповіді (без `capabilities`) з інтеграціями — це ЛІГА, як було");
+  for (const space of [MOD, NONE, VER]) {
+    assert.equal(copyUrl(previewTarget(task, space), { pageId: "it4", password: "1100" }), VURL, space.id);
+  }
+});
+
 test("safeRemoteUrl: лише абсолютний https:// без облікових даних і лише ASCII", () => {
   for (const ok of [VURL, "https://pv-1.vercel.app/", "https://example.com:8443/a/b?x=1", "https://xn--e1afmkfd.xn--p1ai/"]) {
     assert.equal(safeRemoteUrl(ok), ok, ok);
@@ -471,6 +510,25 @@ test("safeRemoteUrl: лише абсолютний https:// без обліко�
     "", null, undefined, 42, {}, ["https://pv-1.vercel.app"],
   ]) {
     assert.equal(safeRemoteUrl(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("safeRemoteUrl: хост — DNS-імʼя (як у ядра): IP-адреси в будь-якій формі й `localhost` не проходять", () => {
+  /* Рівно ті, що ядро (`serve._url_host_ok`) відхиляє після виправлення докстрінга: остання мітка мусить починатись з літери,
+     міток — не менше двох. `URL` зводить `2130706433` і `0x7f.1` до `127.0.0.1`, тож перевіряється і записане, і нормалізоване. */
+  for (const bad of [
+    "https://127.0.0.1/", "https://127.0.0.1:8443/x", "https://2130706433/", "https://0x7f.1/", "https://0x7f.0x0.0x0.0x1/",
+    "https://127.1/", "https://169.254.169.254/latest", "https://10.0.0.1/", "https://192.168.0.1:3000/",
+    "https://localhost/", "https://localhost:3000/", "https://intranet/", "https://[::1]/", "https://[::1]:8443/", "https://[::ffff:127.0.0.1]/",
+    "https://a.b.123/", "https://a.b.0x7f/", "https://pv-1.vercel.app./", "https://.pv-1.vercel.app/", "https://pv..vercel.app/",
+    "https://-pv.vercel.app/", "https://pv-.vercel.app/", "https://pv_1.vercel.app/", `https://${"a".repeat(64)}.example/`,
+    "https://pv-1.vercel%2eapp/", "https://pv-1%2Evercel.app/", "https://%31%32%37.0.0.1/", "https://pv-1.vercel.%61pp/",   // `URL` розкодував би
+  ]) {
+    assert.equal(safeRemoteUrl(bad), null, bad);
+    assert.equal(remoteOpenUrl(`${bad}#k=1`, bad), null, `«Відкрити» теж: ${bad}`);
+  }
+  for (const ok of ["https://a.b", "https://1.example/", "https://0x7f.example/", "https://PV-1.Vercel.App/x", "https://a-b.c-d.example:443/", `https://${"a".repeat(63)}.example/`]) {
+    assert.equal(safeRemoteUrl(ok), ok, ok);
   }
 });
 

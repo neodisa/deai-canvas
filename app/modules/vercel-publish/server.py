@@ -8,8 +8,10 @@
 Із `ctx` береться лише:
   * `ctx['secrets']['token']` — токен Vercel; `ctx['settings']['team']` — команда (необовʼязково);
   * `ctx['ModuleError']` — клас помилки ядра: `call()` пропускає як є лише його, з кодом із таблиці `STATUS`
-    (`vercel-auth`, `vercel-busy` → 409). Без класу в `ctx` (рукописний `ctx`) модуль кидає `RuntimeError` із тим самим
-    кодом у тексті — тихої відмови нема.
+    (`vercel-auth`, `vercel-busy` → 409). Усе інше, що йде з `publish` вгору, — теж `ModuleError('module-error')` з
+    чистим текстом (без `RuntimeError: `/`_NetworkError: `: ядро дописало б імʼя класу, а людина бачить цей текст у
+    діалозі). Без класу в `ctx` (рукописний `ctx`) модуль кидає `RuntimeError` (із кодом у тексті для `vercel-auth`/
+    `vercel-busy`) — тихої відмови нема.
 Пароль превʼю (`ctx['secrets']['password']`) модуль НЕ читає: його вкладає в сторінки збірка (ядро).
 
 Токен
@@ -20,17 +22,18 @@
 Стан задачі НЕ довіряється (`iterations.json` можна склонувати чи поділити). Проєкт зі стану береться лише коли його
 імʼя — `pv-<8 цифр>` (те, що створює сам модуль), є непорожній `project_id` і `task` збігається з id ЦІЄЇ задачі
 (скопійований із іншої задачі стан — «стану нема»). Навіть тоді ПЕРЕД будь-яким завантаженням проєкт шукається за `id`
-(`GET /v9/projects/<project_id>`, тож перейменування в панелі його не губить): 200 — деплоїмо в нього під його ПОТОЧНИМ
-імʼям (якщо воно відрізняється від записаного, спершу перевіряємо, що записана в стані остання публікація справді
-належить цьому проєкту, інакше — «не наш»); 404 — проєкт видалено, і лише якщо записане імʼя теж вільне
-(`GET /v9/projects/<імʼя>` → 404) створюємо наново під ним, інакше нове імʼя. У стані завжди лежить ПЕРВИННЕ імʼя
-`pv-<8 цифр>`, а не перейменоване.
+(`GET /v9/projects/<project_id>`): деплоїмо в нього лише коли відповідь — 200, `id` збігається з записаним і ТОЧНЕ `name`
+дорівнює записаному. Інше імʼя — проєкт «не наш» (підроблений `project_id` на чужий проєкт, чи його перейменували в
+панелі): у нього НЕ деплоїмо й нічого не видаляємо, створюється новий `pv-…` з попередженням «проєкт у стані не
+збігається — створено новий». Перейменування НЕ підтримується: доказ «остання публікація зі стану належить цьому
+проєкту» теж лежить у стані, тож його можна підробити так само, як `project_id`. 404 — проєкт видалено, і лише якщо
+записане імʼя теж вільне (`GET /v9/projects/<імʼя>` → 404) створюємо наново під ним, інакше нове імʼя.
 
 Що робить `publish(ctx, build_dir, task)` (`task = {id, title, dir, state}`; `state` — те, що модуль повернув минулого
 разу, або `{}`)
   0. збірка читається ЦІЛКОМ І ЛОКАЛЬНО до першого запиту: будь-яке символічне посилання (файл чи тека), не звичайний
-     файл, понад `MAX_FILES` файлів, файл понад `MAX_FILE_BYTES`, імʼя не з UTF-8 чи порожня збірка — `RuntimeError`,
-     нічого не завантажено;
+     файл, понад `MAX_FILES` файлів, файл понад `MAX_FILE_BYTES`, імʼя не з UTF-8 чи порожня збірка — відмова
+     (`module-error`), нічого не завантажено;
   1. проєкт: див. вище; нове імʼя — непрозоре `pv-<8 цифр>` (в адресі ні назви задачі, ні клієнта), перевірене
      `GET /v9/projects/<імʼя>` → 404, інакше (чужий проєкт із таким імʼям) інше імʼя, ≤ 3 спроби;
   2. файли: `POST /v2/files` по разу на вміст (SHA-1), 60 с на файл, ≤ `UPLOAD_TOTAL_S` усього; кожен файл — один повтор
@@ -49,13 +52,16 @@
      публікації збігається зі `state.project_id` (або проєкт створив САМЕ цей виклик); чужий проєкт не чіпаємо взагалі;
      видаляється лише запис, ПОЗИТИВНО впізнаний як цього проєкту (`projectId` збігається, а коли його нема — збігається
      `name`); будь-який збій — попередження, не помилка;
-  8. повертає `{url, verified, warnings, state: {project, project_id, deployment, task}}`.
+  8. повертає `{url, verified, warnings, state: {project, project_id, deployment, task}}`; кожне попередження — рядок без
+     самотніх сурогатів і ≤ `WARN_MAX` (ядро відмовило б уже вдалу публікацію через один такий знак).
 Збій ПІСЛЯ `POST /v13/deployments`, коли проєкт створив САМЕ цей виклик (перша публікація задачі, або проєкт зі стану
 було видалено в панелі й створено наново в цьому ж виклику), — best-effort `DELETE /v9/projects/<id>` цього проєкту
 (лише `pv-<8 цифр>`; на шляху зі станом, коли проєкт існував, — НІКОЛИ). «Створений цим викликом» — висновок із 404-проби,
 а між пробою й `POST` проєкт міг створити хтось інший, тож ПЕРЕД видаленням: `id` починається з `prj_`, у проєкті
 (`GET /v6/deployments?projectId=<id>&limit=5`) нема жодної публікації, крім цього виклику, і `GET /v9/projects/<id>`
 дає те саме імʼя; інакше проєкт не видаляється, а текст помилки каже чому. Текст помилки завжди каже, видалено проєкт чи ні.
+Усі збої `publish` з `RuntimeError`-родини (`_HttpError`, `_NetworkError`, відмови модуля) на виході стають
+`ModuleError('module-error')` із текстом ≤ `ERR_MAX` без імені класу (`publish` — тонка обгортка над `_publish`).
 Очікування alias після `READY` НЕОБОВʼЯЗКОВЕ: будь-який збій у ньому (мережа, 5xx, 4xx, авторизація, ліміт) лишає
 останню відповідь `READY` і веде до адреси публікації з попередженням — готова публікація не стає помилкою.
 
@@ -110,8 +116,6 @@ MAX_WARNINGS = 5
 UA = 'deai-canvas-vercel-publish/1.0'
 #: Імʼя проєкту, яке створює САМ модуль (і єдине, яке береться зі стану): `pv-<8 цифр>`, ASCII.
 OWN_NAME_RE = re.compile(r'pv-[0-9]{8}', re.ASCII)
-#: Поточне імʼя проєкту, повернуте Vercel (його можна перейменувати в панелі): звичайні символи імен проєктів Vercel.
-REAL_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}', re.ASCII)
 #: Імʼя хоста з відповіді API (alias, url публікації): мітки через крапку, без пробілів, `/`, `@`, `#`, `\`.
 _LABEL = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
 HOST_RE = re.compile(rf'(?:{_LABEL}\.)*{_LABEL}', re.ASCII)
@@ -184,9 +188,16 @@ def _team(ctx):
     return {'teamId': team} if team.startswith('team_') else {'slug': team}
 
 
+def _utf8(text):
+    """Рядок, який можна записати в UTF-8: самотній сурогат (з `\\ud800` у JSON Vercel) стає `?`. Ядро відмовило б усю
+    вже вдалу публікацію через один такий знак у попередженні."""
+    return text.encode('utf-8', 'replace').decode('utf-8')
+
+
 def _clean(text, token, limit):
-    """Рядок для тексту помилки: без переносів і зайвих пробілів, без токена, не довше `limit`."""
-    text = ' '.join(str(text).split())
+    """Рядок для тексту помилки й попередження: без переносів і зайвих пробілів, без токена, без самотніх сурогатів,
+    не довше `limit`."""
+    text = _utf8(' '.join(str(text).split()))
     if token:
         text = text.replace(token, '***')
     return text[:limit]
@@ -372,25 +383,13 @@ def _own_state(state, task_id):
     return None, None
 
 
-def _renamed_is_ours(ctx, project_id, state):
-    """Проєкт із записаним `project_id` має інше імʼя, ніж записано (перейменовано в панелі — чи `project_id` підроблено на
-    чужий проєкт). Доводимо, що він наш: записана в стані остання публікація існує й належить саме цьому проєкту."""
-    dep = _state_str(state, 'deployment')
-    if not dep:
-        return False
-    try:
-        d = _req(ctx, 'GET', '/v13/deployments/' + urllib.parse.quote(dep, safe=''))
-    except Exception:  # noqa: BLE001 — не вдалось довести: вважаємо чужим
-        return False
-    return d.get('projectId') == project_id
-
-
 def _pick_project(ctx, state, task_id):
-    """`(імʼя_для_Vercel, імʼя_для_стану, projectId | None, створено_цим_викликом, попередження | None)`.
-    Стан не довіряється. Проєкт зі стану шукається за `id` (`GET /v9/projects/<project_id>`) ДО будь-якого завантаження:
-    200 — деплоїмо в нього під його поточним імʼям (перейменований — лише якщо `_renamed_is_ours`); 404 — видалено:
-    наново під записаним імʼям, лише якщо й воно вільне (404). Усе інше — нове `pv-<8 цифр>`, перевірене
-    `GET /v9/projects/<імʼя>` → 404 (200 — чужий проєкт). У стан завжди йде ПЕРВИННЕ імʼя `pv-<8 цифр>`."""
+    """`(імʼя, projectId | None, створено_цим_викликом, попередження | None)`. Стан не довіряється. Проєкт зі стану
+    шукається за `id` (`GET /v9/projects/<project_id>`) ДО будь-якого завантаження: 200 — деплоїмо в нього, лише коли
+    `id` збігається з записаним і ТОЧНЕ `name` дорівнює записаному (інше імʼя — чужий проєкт чи перейменований, тож
+    «не наш»: нове `pv-<8 цифр>` із попередженням, у чужий — жодного `POST`/`DELETE`); 404 — видалено: наново під
+    записаним імʼям, лише якщо й воно вільне (404). Усе інше — нове `pv-<8 цифр>`, перевірене `GET /v9/projects/<імʼя>`
+    → 404 (200 — чужий проєкт)."""
     name, pid = _own_state(state, task_id)
     note = None
     if name:
@@ -406,13 +405,10 @@ def _pick_project(ctx, state, task_id):
             except _HttpError as e:
                 if e.status != 404:
                     raise
-                return name, name, None, True, None                # імʼя вільне: створюємо наново під ним
-        else:
-            real = got.get('name')
-            if got.get('id') == pid and isinstance(real, str) and REAL_NAME_RE.fullmatch(real) and (
-                    real == name or _renamed_is_ours(ctx, pid, state)):
-                return real, name, pid, False, None
-        note = ('Проєкт цієї задачі у Vercel змінився (інший ідентифікатор) — створено новий проєкт; '
+                return name, None, True, None                      # імʼя вільне: створюємо наново під ним
+        elif got.get('id') == pid and got.get('name') == name:
+            return name, pid, False, None
+        note = ('Проєкт у стані не збігається з проєктом у Vercel — створено новий проєкт; '
                 'адреса може відрізнятись від попередньої.')
     for _ in range(NAME_TRIES):
         name = f'pv-{secrets.randbelow(10 ** 8):08d}'
@@ -420,7 +416,7 @@ def _pick_project(ctx, state, task_id):
             _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(name, safe=''))
         except _HttpError as e:
             if e.status == 404:
-                return name, name, None, True, note
+                return name, None, True, note
             raise
     raise RuntimeError(f'Не вдалося підібрати вільне імʼя проєкту у Vercel ({NAME_TRIES} спроби)')
 
@@ -679,12 +675,27 @@ def _drop_created_project(ctx, project, project_id, dep_id):
 def _with_note(ctx, e, note):
     """Той самий збій з приміткою в кінці. Код збережено; безкодовий збій стає `module-error` ядра (а не `RuntimeError`:
     ядро додало б до тексту `RuntimeError: ` і відрізало б примітку на 300 знаках). Основний текст стискається так,
-    щоб примітка вмістилась у `ERR_MAX` цілою."""
+    щоб примітка вмістилась у `ERR_MAX` цілою, і завершується крапкою перед нею («… станом ERROR. Створений проєкт … видалено.»)."""
     msg = getattr(e, 'message', None)
     base = msg if isinstance(msg, str) else str(e)
-    text = _clean(base, _token(ctx), max(ERR_MAX - len(note) - 1, 0)) + ' ' + note
+    base = _clean(base, _token(ctx), max(ERR_MAX - len(note) - 2, 0))     # 2 — крапка й пробіл перед приміткою
+    if base and base[-1] not in '.!?…':
+        base += '.'
     code = getattr(e, 'code', None)
-    return _error(ctx, code if isinstance(code, str) else 'module-error', text)
+    return _error(ctx, code if isinstance(code, str) else 'module-error', f'{base} {note}' if base else note)
+
+
+def _module_error(ctx, e):
+    """Звичайний збій `publish` (HTTP, мережа, збірка, очікування…) → `ModuleError('module-error')` ядра з чистим текстом
+    (≤ `ERR_MAX`, без токена й без імені класу). Збій із кодом (`vercel-auth`, `vercel-busy`, помилка ядра з приміткою)
+    чи без класу помилки в `ctx` (рукописний `ctx`) лишається як є."""
+    cls = ctx.get('ModuleError') if isinstance(ctx, dict) else None
+    if not (isinstance(cls, type) and issubclass(cls, Exception)):
+        return e
+    if isinstance(e, (_CodedError, cls)):
+        return e
+    msg = getattr(e, 'message', None)
+    return cls('module-error', message=_clean(msg if isinstance(msg, str) else str(e), _token(ctx), ERR_MAX))
 
 
 # -------------------------------------------------------------------------------------------------- роль
@@ -726,14 +737,14 @@ def _finish(ctx, project, state_pid, created_here, dep, warnings):
     return url, verified, (state_pid if state_pid is not None else pid)
 
 
-def publish(ctx, build_dir, task):
+def _publish(ctx, build_dir, task):
     _need_token(ctx)
     state = task.get('state') if isinstance(task, dict) else None
     if not isinstance(build_dir, str) or not os.path.isdir(build_dir):
         raise RuntimeError('Збірка превʼю не є текою')
     files = _scan(build_dir)                                        # ДО будь-якого запиту
     task_id = task.get('id') if isinstance(task, dict) and isinstance(task.get('id'), str) else ''
-    project, state_name, state_pid, created_here, note = _pick_project(ctx, state, task_id)
+    project, state_pid, created_here, note = _pick_project(ctx, state, task_id)
     warnings = [note] if note else []
     sent = set()
     deadline = time.monotonic() + UPLOAD_TOTAL_S
@@ -758,9 +769,21 @@ def publish(ctx, build_dir, task):
         if created_here and OWN_NAME_RE.fullmatch(project) and isinstance(created_id, str) and created_id:
             raise _with_note(ctx, e, _drop_created_project(ctx, project, created_id, dep_id)) from None
         raise
+    # усі попередження — рядки без самотніх сурогатів (інакше ядро відмовить уже вдалу публікацію), ≤ `WARN_MAX`
     return {'url': url, 'verified': verified,
-            'warnings': [w[:WARN_MAX] for w in warnings[:MAX_WARNINGS]],
-            'state': {'project': state_name, 'project_id': rec_pid, 'deployment': dep_id, 'task': task_id}}
+            'warnings': [_utf8(w)[:WARN_MAX] for w in warnings[:MAX_WARNINGS]],
+            'state': {'project': project, 'project_id': rec_pid, 'deployment': dep_id, 'task': task_id}}
+
+
+def publish(ctx, build_dir, task):
+    """Роль `publish`: див. докстрінг модуля. Усі звичайні збої йдуть вгору як `ModuleError('module-error')` з чистим текстом."""
+    try:
+        return _publish(ctx, build_dir, task)
+    except RuntimeError as e:      # `_HttpError`, `_NetworkError` і звичайні відмови модуля; код ядра чи `_CodedError` — як є
+        out = _module_error(ctx, e)
+        if out is e:
+            raise
+        raise out from None
 
 
 def check(ctx):

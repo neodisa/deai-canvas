@@ -463,24 +463,31 @@ export function previewTarget(task, space) {
   };
   const asExternal = () => ({ kind: "external", url: ext, at: null });
   if (isLegacyPublish(space)) return ext ? asExternal() : (local ? asLocal() : null);
+  /* Зовнішня адреса в просторі, де публікує НЕ ЛІГА, і не слід цього модуля (залишок: простір перемкнули з Vercel на
+     `static-publish`, чи інший модуль, а `publish_url` лишився): ціль позначена `leftover` — `copyUrl` не дописує до неї ЛІГА-шний
+     `#k=<preview_password>&p=…` (пароль ЛІГА до цієї адреси не належить), лише саму адресу, і лише безпечну. */
+  const asLeftover = () => ({ ...asExternal(), leftover: true });
   if (isRemotePublish(task, space)) {
     /* Слід модуля з адресою, яку не можна відкривати (`javascript:`, `http:` — файл правили вручну), цілі не дає: ні «Відкрити», ні
        копіювання. Лишається запасна локальна, якщо вона є. */
     if (safeRemoteUrl(ext)) return { ...asExternal(), remote: true, share: remoteShareUrl(task, ext) };
     return local ? asLocal() : null;
   }
-  return local ? asLocal() : (ext ? asExternal() : null);
+  return local ? asLocal() : (ext ? asLeftover() : null);
 }
 
 /**
- * Посилання, яке кладуть у буфер. ЗОВНІШНЄ — як було до модулів: `<url>/#k=<пароль>&p=<сторінка>`
- * (обидва значення закодовано). ЛОКАЛЬНЕ — абсолютна адреса канваса БЕЗ фрагмента: пароль
- * модуля — секрет, UI його не знає, а ЛІГА-шний сюди не належить; хто відкриє, введе його сам
- * (якщо гейт увімкнено). МОДУЛЬ «за адресою» — готове `target.share` від сервера, дослівно.
+ * Посилання, яке кладуть у буфер. ЗОВНІШНЄ ЛІГА — як було до модулів: `<url>/#k=<пароль>&p=<сторінка>`
+ * (обидва значення закодовано); ЛІГА-шний фрагмент — ЛИШЕ для цілі, яку `previewTarget` дав постачальнику `legacy`.
+ * ЗАЛИШОК (`leftover`: адреса не від поточного постачальника — простір перемкнули з Vercel на `static-publish` чи інший
+ * модуль) — сама адреса без фрагмента й лише безпечна (`safeRemoteUrl`; небезпечної — `null`, копіювати нічого). ЛОКАЛЬНЕ —
+ * абсолютна адреса канваса БЕЗ фрагмента: пароль модуля — секрет, UI його не знає, а ЛІГА-шний сюди не належить; хто відкриє,
+ * введе його сам (якщо гейт увімкнено). МОДУЛЬ «за адресою» — готове `target.share` від сервера, дослівно.
  */
 export function copyUrl(target, { origin = "", pageId = "", password = "" } = {}) {
   if (!target) return null;
   if (target.kind === "local") return `${origin}${target.url}`;
+  if (target.leftover) return safeRemoteUrl(target.url);
   /* Модуль «за адресою» (Vercel): посилання склав сервер — `publish_share_url`, з `#k=<пароль>` лише для
      збірки з паролем, що не змінився. Кладемо ДОСЛІВНО: `password` тут — ЛІГА-шний (`preview_password`), чужий для цієї
      публікації, а друге `#k=` зіпсувало б посилання. */
@@ -513,8 +520,19 @@ export function safeLocalUrl(url, origin = globalThis.location?.origin ?? "http:
   return url;
 }
 
+/* Хост — DNS-імʼя, а не IP: рівно правило ядра (`serve._url_host_ok`). Дві й більше непорожні мітки (`a.b`; одномітковий
+   `localhost` і десяткове `2130706433` — ні), кожна — літери/цифри/дефіс, не з дефіса й не на дефіс, ≤ 63; ≤ 253 усього; ОСТАННЯ
+   мітка починається з літери (TLD: `app`, `xn--p1ai`) — тож `127.0.0.1`, `0x7f.1`, `169.254.169.254` не проходять. */
+const HOST_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+function isDnsHost(host) {
+  if (typeof host !== "string" || !host || host.length > 253) return false;
+  const labels = host.split(".");
+  return labels.length >= 2 && labels.every((l) => HOST_LABEL_RE.test(l)) && /^[a-z]/i.test(labels[labels.length - 1]);
+}
+
 /**
- * Зовнішня адреса з ВІДПОВІДІ сервера, яку можна відкрити вікном: абсолютний `https://` з непорожнім хостом, БЕЗ
+ * Зовнішня адреса з ВІДПОВІДІ сервера, яку можна відкрити вікном: абсолютний `https://` з хостом-DNS-імʼям (не IP-адреса в
+ * жодній формі — `127.0.0.1`, `2130706433`, `0x7f.1`, `[::1]` — і не одномітковий `localhost`; ті самі правила, що в ядра), БЕЗ
  * облікових даних (`user:pw@`, навіть порожніх) і лише друковний ASCII — без пробілів, керівних, зворотного слеша
  * (який браузер читає як `/`) і кирилиці (IDN лише як punycode). Усе інше — `null`, і кнопки «Відкрити» нема: сервер
  * свою адресу вже перевірив (Task 1), але відповідь модуля й слід у `iterations.json` — дані, а не наказ, і
@@ -524,6 +542,11 @@ export function safeRemoteUrl(url) {
   if (typeof url !== "string" || !/^https:\/\/[\x21-\x5b\x5d-\x7e]+$/.test(url)) return null;
   const authority = url.slice("https://".length).split(/[/?#]/, 1)[0];
   if (!authority || authority.includes("@")) return null;
+  /* Хост — ТАК, ЯК НАПИСАНО, а не як його нормалізує `URL`: `0x7f.1` і `2130706433` браузер зведе до `127.0.0.1`, а `%2e` у хості —
+     до крапки (ядро бачить `hostname` буквально й такі форми відхиляє). Лише ASCII-мітки, остання — з літери: нормалізація
+     з такого запису IP зробити не може. */
+  const written = authority.startsWith("[") ? authority : authority.split(":")[0];
+  if (!isDnsHost(written)) return null;
   try {
     const u = new URL(url);
     if (u.protocol !== "https:" || !u.hostname || u.username || u.password) return null;

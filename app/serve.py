@@ -3456,6 +3456,8 @@ URL_RESULT_MAX_WARNING_LEN = 300
 URL_RESULT_MIN_SECRET = 8
 #: Мітка DNS: літери/цифри/дефіс, не з дефіса й не на дефіс, ≤ 63; імена не-ASCII — лише punycode (`xn--…`).
 _URL_HOST_LABEL = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', re.ASCII)
+#: Остання мітка (TLD) починається з літери: цифрова (`1` у `127.0.0.1`, `0x7f`) — це IP, а не імʼя.
+_URL_HOST_TLD_START = re.compile(r'[a-z]', re.ASCII)
 
 
 def _utf8_ok(text):
@@ -3468,11 +3470,17 @@ def _utf8_ok(text):
 
 
 def _url_host_ok(host):
-    """Імʼя хоста — DNS-імʼя з непорожніх міток (`a.b`, `xn--e1afmkfd.example`): без порожніх міток (`.`, `a..b`,
-    крапки на початку чи в кінці), без дефіса на краю мітки, ≤ 253 знаків усього. IP-адреси й `[::1]` — не адреса
-    превʼю, їх не пускаємо."""
-    return (isinstance(host, str) and 0 < len(host) <= 253
-            and all(_URL_HOST_LABEL.fullmatch(label) for label in host.split('.')))
+    """Імʼя хоста — DNS-імʼя з ДВОХ і більше непорожніх міток (`a.b`, `xn--e1afmkfd.example`): без порожніх міток (`.`,
+    `a..b`, крапки на початку чи в кінці), без дефіса на краю мітки, ≤ 253 знаків усього, а ОСТАННЯ мітка починається з
+    літери (TLD: `com`, `app`, `xn--p1ai`). Тому не проходять IP-адреси в будь-якій формі — `127.0.0.1`, `2130706433`
+    (одна мітка з цифр), `0x7f.1` (остання мітка цифрова), `169.254.169.254` — і одномітковий `localhost`; `[::1]`
+    не складається з міток. Це не адреса превʼю, а вихід у внутрішню мережу людини: їх не пускаємо. (Імʼя, що
+    резолвиться в локальну адресу — `127.0.0.1.nip.io`, — синтаксисом не відсіяти: ядро DNS не питає.)"""
+    if not (isinstance(host, str) and 0 < len(host) <= 253):
+        return False
+    labels = host.split('.')
+    return (len(labels) >= 2 and all(_URL_HOST_LABEL.fullmatch(label) for label in labels)
+            and _URL_HOST_TLD_START.match(labels[-1]) is not None)
 
 
 def _url_result_url_ok(url):

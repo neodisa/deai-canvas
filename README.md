@@ -100,7 +100,12 @@ no CLI, no Node on the machine.
 
   The answer carries `check`: it asks Vercel whose token this is (and whether the team is
   reachable) and creates nothing. The token is stored in `~/.deai/secrets.json` and is sent
-  only to `api.vercel.com`.
+  only to `api.vercel.com`. The core gives `check` 5 seconds, so on a slow link the enable
+  can answer `check-timeout`: the module is enabled and still works, run
+  `POST /api/module-check` again later. That endpoint, and `POST /api/module-settings`, run
+  `check()` — a read-only request to `api.vercel.com` — **even for a disabled module** when
+  you call them explicitly; nothing automatic does (opening the canvas, `GET /api/modules`
+  or publishing with another module never reach Vercel).
 - *Password (optional).* Set the secret `password` of the same module (`POST
   /api/module-settings`, `"secrets":{"password":"<PASSWORD>"}`): the pages get the
   client-side gate, and «Open» and «Copy link» append `#k=<password>`, so the link opens
@@ -110,9 +115,22 @@ no CLI, no Node on the machine.
 - *What it creates in your account.* One project per task, named `pv-<8 digits>` (no task or
   client name in the address). Each publish uploads the built pages, makes a production
   deployment, waits until it is ready and checks that the project's `*.vercel.app` address
-  opens without signing in. Old deployments of that project are deleted — the current one
-  and two more are kept. Projects the module did not create are never touched. Limits:
-  5000 files and 50 MB per file, plus whatever your Vercel plan allows.
+  opens without signing in. The address is the shortest `*.vercel.app` alias Vercel assigns
+  to the deployment — usually `https://pv-<8 digits>.vercel.app`; if Vercel assigns none, the
+  module falls back to the address of the single deployment and warns that Vercel usually
+  protects it. Old deployments of that project are deleted — the current one and two more
+  are kept. The module deploys only into the `pv-` project recorded for the task and
+  verified on every publish by id **and** exact name (a project that was renamed in the
+  Vercel dashboard, or a recorded id that points to another project, is treated as foreign:
+  a new `pv-` project is created with a warning). It deletes deployments only of that
+  project, and deletes a project only when it created it in the same call and the publish
+  then failed. Limits: 5000 files and 50 MB per file, plus whatever your Vercel plan allows.
+- *Upload budget.* Files are uploaded one after another, the whole build on every publish
+  (a file is sent once per content, but nothing is skipped between publishes), within 300
+  seconds in total; a bigger build on a slow link fails with a timeout. If the network drops
+  right after the deployment was requested, before Vercel's answer arrives, an empty `pv-`
+  project may be left in your account: the module never saw the deployment id, so it cannot
+  clean up. Delete it in the Vercel dashboard; the next publish starts a new project.
 - *Deployment Protection.* Vercel can ask for a login even on a production address
   (Project → Settings → Deployment Protection → Vercel Authentication). The module cannot
   and does not change that; if the check fails the notice says so. Turn it off for these

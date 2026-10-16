@@ -41,7 +41,11 @@ Design and the list of deviations from the original spec:
   «the password changed — republish» when it differs from the published one. Human
   texts (uk, en) for `vercel-auth`, `vercel-busy` and `module-error`, with the server's
   reason as a second paragraph. If you switch to another task while a publish is running,
-  the result is a toast with the task name instead of a notice on the wrong task.
+  the result is a toast with the task name instead of a notice on the wrong task. «Copy
+  link» for an address left over from another provider (the space was switched from Vercel
+  to `static-publish`) copies the bare address; the legacy `#k=<password>&p=<page>` fragment
+  is added only for the legacy provider. The Publish button comes back on every path, also
+  when redrawing the bar throws.
 
 ### Security
 
@@ -50,16 +54,27 @@ Design and the list of deviations from the original spec:
   preview check (it carries no credentials and follows no redirects), not into error
   texts; API requests do not follow redirects either.
 - The core does not take a module's word for its result: `url` must be `https://` with an
-  ASCII DNS host, no credentials and no fragment; `state` a flat object of at most 4096
+  ASCII DNS host (at least two labels, the last one starting with a letter, so IP addresses
+  in any form — `127.0.0.1`, `2130706433`, `0x7f.1` — and `localhost` are refused; the UI
+  applies the same rule before it opens or copies an address), no credentials and no fragment; `state` a flat object of at most 4096
   characters; `warnings` at most 5 lines of 300 characters. A result that contains a secret
   of the module (8 characters or more; the preview `password` is the exception, because it
   is baked into the pages by design) is refused and not recorded, and warnings are scrubbed
   of every secret.
-- The stored state is not trusted (`iterations.json` can be copied or shared): it is used
-  only as `pv-<8 digits>` plus a project id plus the id of this task. The project is looked
-  up by id before any upload; a project renamed in the panel is accepted only when the
-  recorded last deployment belongs to it; a project deleted in the panel is recreated only
-  under the recorded name and only if that name is free.
+- The stored state is not trusted (`iterations.json` can be copied, shared or forged): it is
+  used only as `pv-<8 digits>` plus a project id plus the id of this task. The project is
+  looked up by id before any upload and used only when the id **and the exact name** match
+  the record. Any other name is a foreign project (a forged project id, or a rename in the
+  Vercel dashboard): nothing is deployed into it or deleted from it, a new `pv-` project is
+  created with a warning. Renaming is deliberately not supported — the proof that «the
+  recorded deployment belongs to the project» lived in the same forgeable state. A project
+  deleted in the panel is recreated only under the recorded name and only if that name is
+  free.
+- Module failures reach the dialog as clean texts: everything that has no code of its own is
+  raised as `module-error` without a class prefix (`RuntimeError: …`), and a text that is
+  cut for the removal note ends with a full stop before it. A lone surrogate in a text
+  from Vercel (`\ud800` in JSON) is replaced before the result leaves the module, so one
+  bad character cannot make the core refuse an already successful publish.
 - A project is deleted (after a failed publish) only if the same call created it, and only
   after three checks: the id starts with `prj_`, the project has no deployments except this
   call's, and its name is the expected one. A project taken from the state is never deleted.
@@ -83,13 +98,36 @@ Design and the list of deviations from the original spec:
 - Module management has no UI yet (stage 3): enable and configure it over the API.
 - A `publish_remote.state` written by development builds before 0.3.0 (without the task
   binding) is ignored: the next publish creates a new project.
+- A project renamed in the Vercel dashboard is no longer the task's project: the next
+  publish creates a new `pv-` project (new address) and warns; the renamed one stays as it
+  was.
+- If the network drops right after the deployment was requested but before Vercel's answer
+  arrives, an empty `pv-` project may be left in the account (the module never saw the
+  deployment id). Delete it in the dashboard.
+- Uploads are sequential and the whole build is sent on every publish (a file once per
+  content), within 300 seconds in total.
+- The core gives `check` 5 seconds: on a slow link enabling the module can answer
+  `check-timeout`, the module still works. Explicit `POST /api/module-check` and
+  `POST /api/module-settings` run `check()` against `api.vercel.com` even for a disabled
+  module; nothing automatic does.
+- A DNS name that resolves to a local address (`127.0.0.1.nip.io`) is not caught by the
+  syntax check of the result address.
 - The comment layer is not on the Vercel preview (shared comments are stage 2b-2, 0.4.0).
 
 ### Tests
 
-`npm test` at 0.3.0 is green: 1252 node tests (plus `inspector-core`), 1921 Python tests in
+`npm test` at 0.3.0 is green: 1258 node tests (plus `inspector-core`), 1938 Python tests in
 `tests/` (1 skipped), 156 in `bin/`, 170 in `app/` (0.2.0: 1195 and 1684). The three Python
-suites also pass on Python 3.9.6, the oldest supported. Live: the new
+suites also pass on Python 3.9.6, the oldest supported. New before the tag:
+`tests/test_vercel_integration.py` joins the real module with the real dispatcher
+(`POST /api/publish`, `/api/task`, `iterations.json`) against the in-process fake API under
+two network tripwires — first publish, republish into the same project, the password table
+(none / set after publish / gated publish / changed / removed), a failed first publish, a
+forged state, a lone surrogate, and «the token is nowhere but `secrets.json`» (the guard is
+itself proven able to fail). Each fix of the pre-tag review was proven by a mutation
+(accepting a different project name, no clean error text, no full stop before the note, no
+surrogate cleaning, the old host rule, the old copy fragment, the Publish button restored
+only on fall-through): each turns its tests red. Live: the new
 `tests/live/vercel.test.mjs` (7 tests: publish with a password, the dropdown warnings, error
 dialogs, the switch-task race, the legacy space unchanged, no request leaves the machine,
 the real `~/.deai` untouched) passes together with `modules.test.mjs` and `spaces.test.mjs`

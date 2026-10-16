@@ -10,6 +10,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import {
+  publishErr, publishReaction, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, spaceChanged,
+} from "../app/spaces-model.js";
+
 const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
 const bar = readFileSync(new URL("../app/shell-bar.js", import.meta.url), "utf8");
 const pal = readFileSync(new URL("../app/shell-palette.js", import.meta.url), "utf8");
@@ -514,6 +518,59 @@ test("гонка з перемиканням задачі: простір і з�
   const br = remoteBranch();
   assert.match(br, /const late = publishReaction\(r, sp0, sameTask\(\)\);\s*if \(late\.show === 'toast'\) \{ toast\(t\(late\.key, label0\)\); return; \}/);
   assert.ok(br.indexOf("late.show") < br.indexOf("notice('publish-remote'"));
+});
+
+/* Дія `publish` з `app.js`, ЗІБРАНА З ДЖЕРЕЛА й запущена з підставними залежностями (DOM нема): поведінка, а не лише текст. Правила
+   (`publishReaction`, `remoteShareUrl`…) — справжні, з моделі; решта (`post`, `render`, `notice`…) — підставні й записують виклики. */
+function publishAction(env) {
+  const body = barAct("publish");
+  const expr = body.slice(body.indexOf("async (val, el)"), body.lastIndexOf("}") + 1);
+  const deps = {
+    t: (key) => key, tell: () => {}, toast: () => {}, notice: () => {}, copyLinkText: () => {}, post: async () => ({}),
+    render: async () => {}, window: { open: () => {} }, location: { origin: "http://localhost:8765" },
+    currentTaskId: "t1", curTask: { id: "t1" }, spaceNow: () => ({ id: "v", capabilities: { publish: "vercel-publish" } }),
+    publishErr, publishReaction, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, spaceChanged, ...env,
+  };
+  const names = Object.keys(deps);
+  return new Function(...names, `return (${expr});`)(...names.map((n) => deps[n]));
+}
+const publishButton = () => {
+  const lbl = { textContent: "Опублікувати" };
+  return { lbl, el: { disabled: false, querySelector: (sel) => (sel === ".lbl-pub" ? lbl : null) } };
+};
+
+test("публікація: кнопка оживає на ВСІХ шляхах (`finally`) — і коли `render()` чи `notice()` кидають у гілці Vercel", async () => {
+  const ok = { ok: true, url: "https://pv-12345678.vercel.app", verified: true, warnings: [] };
+  const flipSpace = () => { let n = 0; return () => (n++ === 0 ? { id: "v", capabilities: { publish: "vercel-publish" } } : { id: "other", capabilities: { publish: "vercel-publish" } }); };
+  const scenarios = {
+    "render() кидає синхронно": { post: async () => ok, render: () => { throw new Error("render boom"); } },
+    "render() відхиляє проміс": { post: async () => ok, render: async () => { throw new Error("render boom"); } },
+    "notice() кидає": { post: async () => ok, notice: () => { throw new Error("notice boom"); } },
+    "успіх Vercel (плашка)": { post: async () => ok },
+    "людина перейшла на іншу задачу (тост, ранній return)": { post: async () => ok, spaceNow: flipSpace() },
+    "публікація ЛІГА (`render()` і return)": { post: async () => ({ ok: true, url: "https://pv-1.example.app" }),
+      spaceNow: () => ({ id: "liga", integrations: true, capabilities: { publish: "legacy" } }) },
+    "локальна публікація (плашка й return)": { post: async () => ({ ok: true, local: { path: "/x", url: "/published/p/t/" } }),
+      spaceNow: () => ({ id: "p", capabilities: { publish: "static-publish" } }) },
+    "відмова сервера (catch)": { post: async () => { throw Object.assign(new Error("boom"), { code: "module-error" }); } },
+  };
+  for (const [name, env] of Object.entries(scenarios)) {
+    const { el, lbl } = publishButton();
+    const calls = [];
+    const act = publishAction({ tell: (m) => calls.push(["tell", m]), ...env });
+    try { await act("", el); } catch (e) { assert.fail(`${name}: дія не мусить кидати назовні — ${e.message}`); }
+    assert.equal(el.disabled, false, `${name}: кнопка лишилась вимкненою`);
+    assert.equal(lbl.textContent, "Опублікувати", `${name}: підпис лишився «публікую…»`);
+  }
+});
+
+test("публікація: поки запит іде, кнопка вимкнена й підписана «publishBusy» (контроль — без нього «оживає» ні про що)", async () => {
+  const { el, lbl } = publishButton();
+  let seen = null;
+  const act = publishAction({ post: async () => { seen = { disabled: el.disabled, text: lbl.textContent }; return { ok: true, url: "https://pv-1.vercel.app" }; } });
+  await act("", el);
+  assert.deepEqual(seen, { disabled: true, text: "publishBusy" });
+  assert.equal(el.disabled, false);
 });
 
 test("плашка Vercel: «Відкрити» — посилання з паролем (`remoteOpenUrl`) лише для безпечного https, `noopener`; «Скопіювати» — те саме посилання", () => {
