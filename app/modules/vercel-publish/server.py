@@ -18,9 +18,13 @@
   * запити API не йдуть за редиректами (інакше `urllib` віддав би заголовок на чужий хост): 3xx — це помилка.
 
 Стан задачі НЕ довіряється (`iterations.json` можна склонувати чи поділити). Проєкт зі стану береться лише коли його
-імʼя — `pv-<8 цифр>` (те, що створює сам модуль) І є непорожній `project_id`; навіть тоді ПЕРЕД будь-яким
-завантаженням `GET /v9/projects/<імʼя>` мусить дати проєкт із тим самим `id`: 404 (проєкт видалено в панелі) — створюємо
-наново під тим самим вільним імʼям; інший `id` — у проєкт НЕ деплоїмо, беремо нове імʼя.
+імʼя — `pv-<8 цифр>` (те, що створює сам модуль), є непорожній `project_id` і `task` збігається з id ЦІЄЇ задачі
+(скопійований із іншої задачі стан — «стану нема»). Навіть тоді ПЕРЕД будь-яким завантаженням проєкт шукається за `id`
+(`GET /v9/projects/<project_id>`, тож перейменування в панелі його не губить): 200 — деплоїмо в нього під його ПОТОЧНИМ
+імʼям (якщо воно відрізняється від записаного, спершу перевіряємо, що записана в стані остання публікація справді
+належить цьому проєкту, інакше — «не наш»); 404 — проєкт видалено, і лише якщо записане імʼя теж вільне
+(`GET /v9/projects/<імʼя>` → 404) створюємо наново під ним, інакше нове імʼя. У стані завжди лежить ПЕРВИННЕ імʼя
+`pv-<8 цифр>`, а не перейменоване.
 
 Що робить `publish(ctx, build_dir, task)` (`task = {id, title, dir, state}`; `state` — те, що модуль повернув минулого
 разу, або `{}`)
@@ -45,9 +49,15 @@
      публікації збігається зі `state.project_id` (або проєкт створив САМЕ цей виклик); чужий проєкт не чіпаємо взагалі;
      видаляється лише запис, ПОЗИТИВНО впізнаний як цього проєкту (`projectId` збігається, а коли його нема — збігається
      `name`); будь-який збій — попередження, не помилка;
-  8. повертає `{url, verified, warnings, state: {project, project_id, deployment}}`.
-Збій ПІСЛЯ `POST /v13/deployments` у ПЕРШІЙ публікації (проєкт створив цей виклик) — best-effort `DELETE /v9/projects/<id>`
-цього проєкту (лише `pv-<8 цифр>`, ніколи на шляху зі станом), а текст помилки каже, видалено його чи ні.
+  8. повертає `{url, verified, warnings, state: {project, project_id, deployment, task}}`.
+Збій ПІСЛЯ `POST /v13/deployments`, коли проєкт створив САМЕ цей виклик (перша публікація задачі, або проєкт зі стану
+було видалено в панелі й створено наново в цьому ж виклику), — best-effort `DELETE /v9/projects/<id>` цього проєкту
+(лише `pv-<8 цифр>`; на шляху зі станом, коли проєкт існував, — НІКОЛИ). «Створений цим викликом» — висновок із 404-проби,
+а між пробою й `POST` проєкт міг створити хтось інший, тож ПЕРЕД видаленням: `id` починається з `prj_`, у проєкті
+(`GET /v6/deployments?projectId=<id>&limit=5`) нема жодної публікації, крім цього виклику, і `GET /v9/projects/<id>`
+дає те саме імʼя; інакше проєкт не видаляється, а текст помилки каже чому. Текст помилки завжди каже, видалено проєкт чи ні.
+Очікування alias після `READY` НЕОБОВʼЯЗКОВЕ: будь-який збій у ньому (мережа, 5xx, 4xx, авторизація, ліміт) лишає
+останню відповідь `READY` і веде до адреси публікації з попередженням — готова публікація не стає помилкою.
 
 Ядро кличе `publish` БЕЗ тайм-ауту, тож кожен запит має свій: 30 с на запит API, 60 с на файл, 20 с на перевірку.
 
@@ -100,6 +110,8 @@ MAX_WARNINGS = 5
 UA = 'deai-canvas-vercel-publish/1.0'
 #: Імʼя проєкту, яке створює САМ модуль (і єдине, яке береться зі стану): `pv-<8 цифр>`, ASCII.
 OWN_NAME_RE = re.compile(r'pv-[0-9]{8}', re.ASCII)
+#: Поточне імʼя проєкту, повернуте Vercel (його можна перейменувати в панелі): звичайні символи імен проєктів Vercel.
+REAL_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}', re.ASCII)
 #: Імʼя хоста з відповіді API (alias, url публікації): мітки через крапку, без пробілів, `/`, `@`, `#`, `\`.
 _LABEL = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
 HOST_RE = re.compile(rf'(?:{_LABEL}\.)*{_LABEL}', re.ASCII)
@@ -350,31 +362,56 @@ def _state_str(state, key):
     return v if isinstance(v, str) and v else None
 
 
-def _own_state(state):
-    """`(імʼя, project_id)` зі стану — лише коли це справді те, що створює модуль: `pv-<8 цифр>` і непорожній id.
-    Усе інше (чужа назва зі склонованого `iterations.json`, стан без id…) — «стану нема»."""
-    name, pid = _state_str(state, 'project'), _state_str(state, 'project_id')
-    if name and OWN_NAME_RE.fullmatch(name) and pid and len(pid) <= 200:
+def _own_state(state, task_id):
+    """`(імʼя, project_id)` зі стану — лише коли це справді те, що створює модуль для ЦІЄЇ задачі: `pv-<8 цифр>`,
+    непорожній id і `task` = id задачі. Усе інше (чужа назва зі склонованого `iterations.json`, стан без id, стан
+    іншої задачі…) — «стану нема»."""
+    name, pid, tid = _state_str(state, 'project'), _state_str(state, 'project_id'), _state_str(state, 'task')
+    if name and OWN_NAME_RE.fullmatch(name) and pid and len(pid) <= 200 and tid == task_id:      # `tid` — не порожній рядок чи None
         return name, pid
     return None, None
 
 
-def _pick_project(ctx, state):
-    """`(імʼя, projectId | None, створено_цим_викликом, попередження | None)`.
-    Стан не довіряється: проєкт зі стану береться, лише якщо `GET /v9/projects/<імʼя>` дав проєкт із тим самим `id`
-    (ДО будь-якого завантаження); 404 — видалено в панелі, створюємо наново під тим самим вільним імʼям; інший `id` —
-    туди НЕ деплоїмо. Інакше нове `pv-<8 цифр>`, перевірене `GET /v9/projects/<імʼя>` → 404 (200 — чужий проєкт)."""
-    name, pid = _own_state(state)
+def _renamed_is_ours(ctx, project_id, state):
+    """Проєкт із записаним `project_id` має інше імʼя, ніж записано (перейменовано в панелі — чи `project_id` підроблено на
+    чужий проєкт). Доводимо, що він наш: записана в стані остання публікація існує й належить саме цьому проєкту."""
+    dep = _state_str(state, 'deployment')
+    if not dep:
+        return False
+    try:
+        d = _req(ctx, 'GET', '/v13/deployments/' + urllib.parse.quote(dep, safe=''))
+    except Exception:  # noqa: BLE001 — не вдалось довести: вважаємо чужим
+        return False
+    return d.get('projectId') == project_id
+
+
+def _pick_project(ctx, state, task_id):
+    """`(імʼя_для_Vercel, імʼя_для_стану, projectId | None, створено_цим_викликом, попередження | None)`.
+    Стан не довіряється. Проєкт зі стану шукається за `id` (`GET /v9/projects/<project_id>`) ДО будь-якого завантаження:
+    200 — деплоїмо в нього під його поточним імʼям (перейменований — лише якщо `_renamed_is_ours`); 404 — видалено:
+    наново під записаним імʼям, лише якщо й воно вільне (404). Усе інше — нове `pv-<8 цифр>`, перевірене
+    `GET /v9/projects/<імʼя>` → 404 (200 — чужий проєкт). У стан завжди йде ПЕРВИННЕ імʼя `pv-<8 цифр>`."""
+    name, pid = _own_state(state, task_id)
     note = None
     if name:
+        got = None
         try:
-            got = _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(name, safe=''))
+            got = _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(pid, safe=''))
         except _HttpError as e:
             if e.status != 404:
                 raise
-            return name, None, True, None
-        if got.get('id') == pid:
-            return name, pid, False, None
+        if got is None:                                            # id такого проєкту нема: видалено в панелі
+            try:
+                _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(name, safe=''))
+            except _HttpError as e:
+                if e.status != 404:
+                    raise
+                return name, name, None, True, None                # імʼя вільне: створюємо наново під ним
+        else:
+            real = got.get('name')
+            if got.get('id') == pid and isinstance(real, str) and REAL_NAME_RE.fullmatch(real) and (
+                    real == name or _renamed_is_ours(ctx, pid, state)):
+                return real, name, pid, False, None
         note = ('Проєкт цієї задачі у Vercel змінився (інший ідентифікатор) — створено новий проєкт; '
                 'адреса може відрізнятись від попередньої.')
     for _ in range(NAME_TRIES):
@@ -383,7 +420,7 @@ def _pick_project(ctx, state):
             _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(name, safe=''))
         except _HttpError as e:
             if e.status == 404:
-                return name, None, True, note
+                return name, name, None, True, note
             raise
     raise RuntimeError(f'Не вдалося підібрати вільне імʼя проєкту у Vercel ({NAME_TRIES} спроби)')
 
@@ -465,22 +502,26 @@ def _alias_error(ctx, dep):
 def _wait_alias(ctx, dep_id, ready, streak):
     """Після `READY` alias може запізнитись. Опитуємо далі кожні `POLL_S` до `ALIAS_MAX_S`, доки: зʼявився `*.vercel.app`,
     або `aliasAssigned` став правдою (призначено, але `.vercel.app` нема — далі чекати нема чого), або Vercel
-    повідомив `aliasError`. Повертає `(остання відповідь, текст aliasError | None)`."""
+    повідомив `aliasError`. Повертає `(остання відповідь, текст aliasError | None)`. НІКОЛИ не кидає: це очікування
+    необовʼязкове, а публікація вже `READY` (її збій у цьому місці — не збій публікації)."""
     deadline = time.monotonic() + ALIAS_MAX_S
-    while True:
-        if _vercel_app_aliases(ready):
-            return ready, None
-        err = _alias_error(ctx, ready)
-        if err:
-            return ready, err
-        if ready.get('aliasAssigned'):
-            return ready, None
-        if time.monotonic() >= deadline:
-            return ready, None
-        time.sleep(POLL_S)
-        nxt = _get_dep(ctx, dep_id, streak)
-        if nxt is not None and nxt.get('readyState') == 'READY':
-            ready = nxt
+    try:
+        while True:
+            if _vercel_app_aliases(ready):
+                return ready, None
+            err = _alias_error(ctx, ready)
+            if err:
+                return ready, err
+            if ready.get('aliasAssigned'):
+                return ready, None
+            if time.monotonic() >= deadline:
+                return ready, None
+            time.sleep(POLL_S)
+            nxt = _get_dep(ctx, dep_id, streak)
+            if nxt is not None and nxt.get('readyState') == 'READY':
+                ready = nxt
+    except Exception:  # noqa: BLE001 — очікування alias НЕОБОВʼЯЗКОВЕ: публікація вже READY, тож що б не сталось (мережа,
+        return ready, None                    # 5xx, 4xx, авторизація, ліміт), лишаємо останню READY і падаємо на адресу публікації
 
 
 def _main_url(ready, created):
@@ -602,9 +643,32 @@ def _cleanup(ctx, project_id, project, current_id):
 
 # ------------------------------------------------------------------------------------------------ сироти
 
-def _drop_created_project(ctx, project, project_id):
-    """Best-effort `DELETE /v9/projects/<id>` проєкту, який створив ЦЕЙ виклик, коли публікація в ньому не вдалась.
-    Повертає речення для тексту помилки: видалено чи ні."""
+def _drop_created_project(ctx, project, project_id, dep_id):
+    """Best-effort `DELETE /v9/projects/<id>` проєкту, який (як ми вважаємо) створив ЦЕЙ виклик, коли публікація в ньому не
+    вдалась. «Створив цей виклик» — висновок із 404-проби імені, а між пробою й `POST` проєкт міг створити хтось інший
+    (особливо на шляху «видалено в панелі → створено наново», де імʼя спільне для всіх клонів стану). Тому ПЕРЕД
+    видаленням: `id` починається з `prj_`; у проєкті (`GET /v6/deployments?projectId=<id>&limit=5`) нема жодної публікації,
+    крім цього виклику (порожній список — гаразд); `GET /v9/projects/<id>` дає те саме імʼя. Інакше — НЕ видаляємо й кажемо
+    чому. Повертає речення для тексту помилки."""
+    skip = f'Проєкт {project} не видалено: '
+    if not project_id.startswith('prj_'):
+        return skip + 'не вдалося перевірити, що він створений цим викликом — перевірте його у Vercel.'
+    try:
+        lst = _req(ctx, 'GET', '/v6/deployments', query={'projectId': project_id, 'limit': 5})
+        items = lst.get('deployments')
+        if not isinstance(items, list):
+            raise RuntimeError('unexpected list')
+        for it in items:
+            uid = (it.get('uid') or it.get('id')) if isinstance(it, dict) else None
+            if not isinstance(uid, str) or not uid:
+                raise RuntimeError('unreadable list item')               # запис, якого не прочитати, — не «наш»: не видаляємо
+            if uid != dep_id:
+                return skip + 'у ньому є інші публікації — перевірте його у Vercel.'
+        got = _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(project_id, safe=''))
+        if got.get('name') != project:
+            return skip + 'під цим ідентифікатором у Vercel інший проєкт.'
+    except Exception:  # noqa: BLE001 — не вдалось перевірити: краще лишити проєкт, ніж видалити чужий
+        return skip + 'не вдалося перевірити, що в ньому нема чужих публікацій — перевірте його у Vercel.'
     try:
         _req(ctx, 'DELETE', '/v9/projects/' + urllib.parse.quote(project_id, safe=''))
         return f'Створений проєкт {project} видалено.'
@@ -613,13 +677,14 @@ def _drop_created_project(ctx, project, project_id):
 
 
 def _with_note(ctx, e, note):
-    """Той самий збій (з тим самим кодом, якщо він був), але з приміткою в кінці: основний текст стискається так, щоб
-    примітка вмістилась у `ERR_MAX` цілою (ядро ріже довші тексти, а примітку не можна загубити)."""
+    """Той самий збій з приміткою в кінці. Код збережено; безкодовий збій стає `module-error` ядра (а не `RuntimeError`:
+    ядро додало б до тексту `RuntimeError: ` і відрізало б примітку на 300 знаках). Основний текст стискається так,
+    щоб примітка вмістилась у `ERR_MAX` цілою."""
     msg = getattr(e, 'message', None)
     base = msg if isinstance(msg, str) else str(e)
     text = _clean(base, _token(ctx), max(ERR_MAX - len(note) - 1, 0)) + ' ' + note
     code = getattr(e, 'code', None)
-    return _error(ctx, code, text) if isinstance(code, str) else RuntimeError(text)
+    return _error(ctx, code if isinstance(code, str) else 'module-error', text)
 
 
 # -------------------------------------------------------------------------------------------------- роль
@@ -632,6 +697,12 @@ def _finish(ctx, project, state_pid, created_here, dep, warnings):
     ready, alias_err = _wait_alias(ctx, dep_id, ready, streak)
     pid = ready.get('projectId') if isinstance(ready.get('projectId'), str) and ready.get('projectId') else dep.get('projectId')
     pid = pid if isinstance(pid, str) and pid else None
+    if pid is None:                                                 # Vercel не віддав projectId: беремо його за імʼям, щоб стан не загубився
+        try:
+            gid = _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(project, safe='')).get('id')
+            pid = gid if isinstance(gid, str) and gid else None
+        except Exception:  # noqa: BLE001 — без id публікація лишається успішною (стан просто без id)
+            pid = None
     url, has_alias = _main_url(ready, dep)
     if not has_alias:
         if alias_err:
@@ -661,7 +732,8 @@ def publish(ctx, build_dir, task):
     if not isinstance(build_dir, str) or not os.path.isdir(build_dir):
         raise RuntimeError('Збірка превʼю не є текою')
     files = _scan(build_dir)                                        # ДО будь-якого запиту
-    project, state_pid, created_here, note = _pick_project(ctx, state)
+    task_id = task.get('id') if isinstance(task, dict) and isinstance(task.get('id'), str) else ''
+    project, state_name, state_pid, created_here, note = _pick_project(ctx, state, task_id)
     warnings = [note] if note else []
     sent = set()
     deadline = time.monotonic() + UPLOAD_TOTAL_S
@@ -684,11 +756,11 @@ def publish(ctx, build_dir, task):
     except Exception as e:  # noqa: BLE001 — збій після створення публікації: проєкт, створений ЦИМ викликом, не лишаємо сиротою
         created_id = dep.get('projectId')
         if created_here and OWN_NAME_RE.fullmatch(project) and isinstance(created_id, str) and created_id:
-            raise _with_note(ctx, e, _drop_created_project(ctx, project, created_id)) from None
+            raise _with_note(ctx, e, _drop_created_project(ctx, project, created_id, dep_id)) from None
         raise
     return {'url': url, 'verified': verified,
             'warnings': [w[:WARN_MAX] for w in warnings[:MAX_WARNINGS]],
-            'state': {'project': project, 'project_id': rec_pid, 'deployment': dep_id}}
+            'state': {'project': state_name, 'project_id': rec_pid, 'deployment': dep_id, 'task': task_id}}
 
 
 def check(ctx):
