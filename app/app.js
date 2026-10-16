@@ -33,8 +33,8 @@ import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, healTarget,
-  isLegacyPublish, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, pwView, readErrKey,
-  remoteNoticeLines, remoteShareUrl, rovingIndex, safeLocalUrl, safeRemoteUrl, shouldRefreshHome, spaceChanged,
+  isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
+  remoteNoticeLines, remoteOpenUrl, remoteShareUrl, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError,
 } from './spaces-model.js';
 import {
@@ -1701,6 +1701,14 @@ const BAR_ACTIONS = {
     const prevText = lbl ? lbl.textContent : null;
     el.disabled = true;
     if (lbl) lbl.textContent = t('publishBusy');
+    /* Публікація Vercel триває хвилини, і людина встигає перейти на іншу задачу чи в інший простір. Тому «хто, де й чия» захоплюється
+       ДО запиту: рішення «ЛІГА чи модуль» — за простором ВИКЛИКУ (`sp0`), а не поточним (інакше модульна відповідь у ЛІГА-просторі нової
+       задачі не давала б жодного підтвердження, а ЛІГА-відповідь у модульному — чужу плашку), і плашка з `render()` належать лише
+       задачі, з якої публікували (`sameTask`); на іншій — короткий тост із назвою (`publishReaction`). */
+    const t0 = currentTaskId;
+    const sp0 = spaceNow();
+    const label0 = curTask ? (curTask.jira || curTask.id || '') : '';
+    const sameTask = () => currentTaskId === t0 && !spaceChanged(sp0?.id, spaceNow()?.id);
     try {
       const r = await post('/api/publish', {});
       // Обгортку превʼю збирає САМ сервер у момент публікації, тому правка в
@@ -1718,22 +1726,30 @@ const BAR_ACTIONS = {
         r.not_task_link && r.url ? t('publishNotTaskLink', r.not_task_link, r.url) : null,
         r.domain_warning].filter(Boolean);
       if (warn.length) tell(warn.join('\n\n'));
-      if (r.url) {
-        /* ЛІГА (зашитий код) — рівно як було: лише `render()`. */
-        if (isLegacyPublish(spaceNow())) { render(); return; }
+      const view = publishReaction(r, sp0, sameTask());
+      /* Людина вже на іншій задачі: тост із назвою — і ВСЕ. Ні `render()`, ні плашки: вони належали б новій задачі. */
+      if (view.show === 'toast') { toast(t(view.key, label0)); return; }
+      /* ЛІГА (зашитий код) — рівно як було: лише `render()`. */
+      if (view.kind === 'legacy') { render(); return; }
+      if (view.kind === 'remote') {
         /* Модуль «за адресою» (Vercel, 2b-1): відповідь має `url` і не має `local`. Спершу оновлюємо задачу —
-           сервер у ній уже склав `publish_share_url` (з фрагментом-паролем, коли превʼю з паролем), і кнопка
-           «Скопіювати» бере посилання саме звідти: UI його не складає. Плашка стійка (`notice`), бо тост за 3 с
-           зникав би раніше, ніж людина встигне натиснути; її гасить `resetPerTaskState`. Адреса з відповіді
-           відкривається лише коли вона безпечна (`safeRemoteUrl`: https, без облікових даних, ASCII), `noopener` —
-           щоб відкрита сторінка не мала `window.opener`. Попередження модуля (`warnings`) чи нейтральна підказка
-           (`verified: false`) — другим рядком, як текст. */
-        await render();
-        const openUrl = safeRemoteUrl(r.url);
+           сервер у ній уже склав `publish_share_url` (з фрагментом-паролем, коли превʼю з паролем), і обидві кнопки
+           беруть посилання звідти: UI його не складає. Збій перемальовки — не збій публікації (вона вдалась): без
+           `try` він потрапив би в `catch` нижче й показав «Не вдалося» без плашки. Плашка стійка (`notice`), бо тост за
+           3 с зникав би раніше, ніж людина встигне натиснути; її гасить `resetPerTaskState`. «Відкрити» веде на посилання з
+           паролем (власник не впирається в гейт), але лише коли воно безпечне (`remoteOpenUrl`: https, без облікових даних,
+           ASCII), `noopener` — щоб відкрита сторінка не мала `window.opener`. Попередження модуля (`warnings`) чи
+           нейтральна підказка (`verified: false`) — другим рядком, як текст. */
+        try { await render(); } catch (e) { /* публікація вдалась; плашка нижче все одно потрібна */ }
+        /* Перемальовка — це `await`: людина могла встигнути перейти, поки вона йшла. */
+        const late = publishReaction(r, sp0, sameTask());
+        if (late.show === 'toast') { toast(t(late.key, label0)); return; }
+        const share = remoteShareUrl(curTask, r.url);
+        const openUrl = remoteOpenUrl(share, r.url);
         const lines = remoteNoticeLines(r).map((l) => (l.key ? t(l.key) : l.text));
-        notice('publish-remote', t('publishRemoteDone'), [
+        notice('publish-remote', t(view.key), [
           ...(openUrl ? [{ act: 'open', label: t('publishOpen'), run: () => window.open(openUrl, '_blank', 'noopener') }] : []),
-          { act: 'copy', label: t('copyLink'), run: () => copyLinkText(remoteShareUrl(curTask, r.url)) },
+          { act: 'copy', label: t('copyLink'), run: () => copyLinkText(share) },
         ], null, lines);
         return;
       }
@@ -1742,13 +1758,13 @@ const BAR_ACTIONS = {
          вдався: —», хоч публікація вдалась. Адресу з відповіді відкриваємо лише відносною
          (`safeLocalUrl`), а плашка з «Відкрити» — стійка (`notice`), бо тост за 3 с зникав би раніше,
          ніж людина встигне натиснути. */
-      if (r.local) {
+      if (view.kind === 'local') {
         const local = safeLocalUrl(r.local?.url, location.origin);
         render();
         /* Плашка стійка, а значить може пережити свою задачу: її гасить `resetPerTaskState` (перемикання
            задачі й простору). `noopener` — відкрита сторінка (чужий код макета під пісочницею) не має
            доступу до `window.opener`, тобто до канваса. */
-        notice('publish-local', t('publishLocalDone'),
+        notice('publish-local', t(view.key),
           local ? [{ act: 'open', label: t('publishOpen'), run: () => window.open(local, '_blank', 'noopener') }] : []);
         return;
       }
@@ -1878,10 +1894,11 @@ const BAR_ACTIONS = {
 
   openpreview: () => {
     /* Ціль — з моделі: ЛІГА-URL, локальна адреса `/published/<простір>/<задача>/` канваса або адреса,
-       яку опублікував модуль «за адресою» (Vercel): її відкриваємо лише після `safeRemoteUrl`. */
+       яку опублікував модуль «за адресою» (Vercel): її відкриваємо лише після `safeRemoteUrl`, і саме за посиланням з паролем
+       (`remoteOpenUrl`), щоб власник не впирався у власний гейт. */
     const target = previewTarget(curTask, spaceNow());
     if (!target) return;
-    const url = target.remote ? safeRemoteUrl(target.url) : target.url;
+    const url = target.remote ? remoteOpenUrl(target.share, target.url) : target.url;
     if (url) window.open(url, '_blank', 'noopener');
   },
 

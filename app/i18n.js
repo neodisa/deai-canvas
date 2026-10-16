@@ -359,7 +359,8 @@ const UK = {
   askCopyLinkPrompt: 'Скопіюй посилання:',
   /* Публікація модулем у теку (модулі 2а, Task 8): локальна публікація, її підписи й відмови сервера.
      Підпис «локально» — на «Відкрити превью» (з відносним часом, не сирим ISO) і «Скопіювати посилання».
-     Відмови — людською й без шляхів: у `bad-folder` лише код `path-*`, у `module-error` — без тексту модуля. */
+     Відмови — людською й без шляхів: у `bad-folder` лише код `path-*`; у `module-error` і `vercel-auth` — текст сервера другим абзацом
+     (ядро вже вирізало секрети, ≤ 300), бо для url-модуля саме він каже, що сталось із проєктом (видалено чи лишився). */
   publishLocalDone: 'Опубліковано локально',
   publishOpen: 'Відкрити',
   publishLocalSub: (when) => (when ? `локально · ${when}` : 'локально'),
@@ -368,13 +369,18 @@ const UK = {
   publishErrBadFolder: (why) => `Тека публікації з налаштувань модуля не пройшла перевірку.${why ? `\n\n${why}` : ''}`,
   publishErrBusy: 'Ця задача вже публікується — зачекайте завершення й повторіть.',
   publishErrBadTaskId: 'Id задачі не годиться для теки публікації: потрібні лише латинські літери, цифри, _ і - (до 128 символів) і не імʼя пристрою Windows (CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9).',
-  publishErrModule: 'Модуль публікації відмовив. Перевірте його налаштування й теку публікації та повторіть.',
+  publishErrModule: (why) => `Модуль публікації відмовив — перевірте його налаштування й повторіть.${why ? `\n\n${why}` : ''}`,
   publishErrNoIterations: 'Жодної ітерації не позначено для публікації — увімкніть «Показувати в превью» (зелена крапка біля ітерації).',
   /* Публікація на свій Vercel (2b-1, Task 3): плашка після відповіді з `url`, застереження дропдауна й дві відмови.
      Керувати модулем у 0.3.0 можна лише через API чи агента (екран «Підключення» — етап 3), тож тексти не обіцяють кнопки.
      `vercel-auth` — не лише відхилений токен, а й будь-яка інша відмова доступу (403: права токена, тариф, команда), тому
      текст не стверджує «токен не прийнято»; текст сервера (уже без секретів, ≤ 300) іде другим абзацом (`why`). */
   publishRemoteDone: 'Опубліковано на Vercel',
+  publishRemoteDoneGeneric: 'Опубліковано',
+  /* Тост замість плашки, коли відповідь прийшла вже на ІНШІЙ задачі (публікація Vercel триває хвилини): називає, ЧИЯ це публікація. */
+  publishToastDone: (task) => `Опубліковано: ${task}`,
+  publishToastLocal: (task) => `Опубліковано локально: ${task}`,
+  publishToastRemote: (task) => `Опубліковано на Vercel: ${task}`,
   publishRemoteUnverified: 'Не вдалося перевірити, що превʼю відкривається без входу — відкрийте посилання й переконайтесь самі.',
   publishPublicWarn: 'Превʼю публічне: будь-хто з посиланням його бачить.',
   publishGateStale: 'Пароль змінено — перепублікуйте, щоб він потрапив у превʼю.',
@@ -1143,9 +1149,13 @@ const EN = {
   publishErrBadFolder: (why) => `The publish folder from the module settings failed validation.${why ? `\n\n${why}` : ''}`,
   publishErrBusy: 'This task is already being published — wait for it to finish and try again.',
   publishErrBadTaskId: 'The task id does not fit a publish folder: only Latin letters, digits, _ and - (up to 128 characters), and not a Windows device name (CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9).',
-  publishErrModule: 'The publish module refused. Check its settings and the publish folder, then try again.',
+  publishErrModule: (why) => `The publish module refused — check its settings and try again.${why ? `\n\n${why}` : ''}`,
   publishErrNoIterations: 'No iteration is marked for publishing — turn on “Show in preview” (the green dot next to the iteration).',
   publishRemoteDone: 'Published on Vercel',
+  publishRemoteDoneGeneric: 'Published',
+  publishToastDone: (task) => `Published: ${task}`,
+  publishToastLocal: (task) => `Published locally: ${task}`,
+  publishToastRemote: (task) => `Published on Vercel: ${task}`,
   publishRemoteUnverified: 'Could not verify that the preview opens without signing in — open the link and check for yourself.',
   publishPublicWarn: 'The preview is public: anyone with the link can see it.',
   publishGateStale: 'The password changed — republish so it reaches the preview.',

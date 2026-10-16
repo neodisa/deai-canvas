@@ -4,8 +4,8 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, localPublishUrl, previewTarget, publishErr,
-  pwView, remoteNoticeLines, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
+  copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
+  publishErr, publishReaction, pwView, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
 } from "../app/spaces-model.js";
 
 /* Публікація за `capabilities.publish` (модулі 2а, Task 8) — чисті правила, які приймає `app.js`:
@@ -257,9 +257,19 @@ test("publishErr: bad-folder показує лише код path-*/spaces-*, а 
   }
 });
 
-test("publishErr: module-error не несе тексту модуля (там можуть бути шляхи)", () => {
-  const r = publishErr(E("module-error", { status: 502, message: "boom at /Users/ivan/deai-published/p/blog" }));
-  assert.deepEqual(r.args, []);
+/* Свідоме рішення (ревʼю 32791e1, п.1): `module-error` РАНІШЕ не несла тексту модуля («там бувають шляхи»), але для url-модуля
+   (Vercel) це найчастіша відмова — збірка `ERROR`, тайм-аут, «Vercel недоступний» — а в тексті сервера саме те, що людині треба:
+   «проєкт видалено» чи «видаліть вручну». Сервер уже вирізає секрети й обмежує текст (≤ 300), тож він іде другим абзацом
+   (той самий `serverText`, що й для `vercel-auth`); `tell` кладе його через `textContent`. */
+test("publishErr: module-error несе ТЕКСТ СЕРВЕРА другим абзацом (≤ 300, керівні символи → пробіл)", () => {
+  const msg = "Публікація не вдалась: збірка ERROR. Проєкт pv-12345678 видалено.";
+  assert.deepEqual(publishErr(E("module-error", { status: 502, message: msg })), { key: "publishErrModule", args: [msg] });
+  assert.deepEqual(publishErr(E("module-error", { status: 502, message: "" })), { key: "publishErrModule", args: [""] });
+  assert.deepEqual(publishErr(E("module-error", { status: 502, message: undefined })).args, [""]);
+  assert.equal(publishErr(E("module-error", { message: "a\u0000b\nc" })).args[0], "a b c");
+  const long = JSON.stringify({ ok: false, code: "module-error", error: `Vercel недоступний: ${"я".repeat(500)}` });
+  const r = publishErr(E("module-error", { status: 502, message: "Vercel недоступний: яя", body: long }));
+  assert.equal(r.args[0].length, 300, "повний текст із тіла, але не довше 300");
 });
 
 test("publishErr: 400 без коду з текстом «no iterations marked» (рядок статусу чи тіло) — окремий текст", () => {
@@ -573,4 +583,107 @@ test("publishErr: нові ключі є у словнику обох мов", (
     const k = publishErr(E(code)).key;
     assert.ok(DICT.uk[k] !== undefined && DICT.en[k] !== undefined, k);
   }
+});
+
+/* ── ревʼю 32791e1: тексти помилок модуля, межі посилання, гонка з перемиканням задачі ───────────────── */
+
+test("словник: `publishErrModule` — нейтральний (не про теку публікації), з текстом сервера другим абзацом", () => {
+  for (const lang of ["uk", "en"]) {
+    const f = DICT[lang].publishErrModule;
+    assert.equal(typeof f, "function", `${lang}: текст приймає причину`);
+    assert.doesNotMatch(f(""), /тек[уиі]|folder/i, `${lang}: для url-модуля «тека публікації» — неправда`);
+    assert.doesNotMatch(f(""), /\n\n|\n$|undefined|null/, `${lang}: без причини — без порожнього абзацу`);
+    assert.ok(f("ПРИЧИНА-ТЕКСТ").endsWith("\n\nПРИЧИНА-ТЕКСТ"), lang);
+    assert.match(f(""), lang === "uk" ? /налаштуванн/ : /settings/i);
+  }
+  assert.match(DICT.uk.publishErrModule(""), /^Модуль публікації відмовив — перевірте його налаштування й повторіть\./);
+});
+
+test("remoteShareUrl: межа — посилання або дорівнює адресі, або продовжує її фрагментом (`#`), а не будь-яким хвостом", () => {
+  assert.equal(remoteShareUrl({ publish_share_url: `${VURL}#k=1100` }, VURL), `${VURL}#k=1100`);
+  assert.equal(remoteShareUrl({ publish_share_url: VURL }, VURL), VURL);
+  for (const tail of [".evil.example/#k=1", "9#k=1", "/x#k=1", "?q=1#k=1", "@evil.example/#k=1"]) {
+    assert.equal(remoteShareUrl({ publish_share_url: `${VURL}${tail}` }, VURL), VURL, `хвіст «${tail}» — не наша адреса`);
+  }
+});
+
+test("previewTarget: слід модуля з НЕбезпечною адресою (`javascript:`, `http:`) — ні цілі, ні копіювання; лишається локальна, якщо є", () => {
+  for (const bad of ["javascript:alert(1)", "http://pv-1.vercel.app", "data:text/html,x", "https://u:p@pv-1.vercel.app/", "https://пв.example/"]) {
+    const task = VTASK({ publish_url: bad, publish_share_url: bad, publish_remote: REMOTE({ url: bad }) });
+    assert.equal(isRemotePublish(task, VER), true, `свідок: слід «${bad}» збігається, тож це перевірка саме адреси`);
+    assert.equal(previewTarget(task, VER), null, bad);
+    assert.equal(previewTarget({ ...task, publish_local: LOCAL }, VER).kind, "local", `${bad}: запасний локальний слід лишається`);
+  }
+});
+
+test("isVercelPublish: лише `capabilities.publish === 'vercel-publish'`", () => {
+  assert.equal(isVercelPublish(VER), true);
+  assert.equal(isVercelPublish(MOD), false);
+  assert.equal(isVercelPublish(LEG), false);
+  assert.equal(isVercelPublish({ id: "x", integrations: false, capabilities: { publish: "other-publish" } }), false);
+  assert.equal(isVercelPublish(null), false);
+  assert.equal(isVercelPublish({ integrations: true }), false);
+});
+
+test("remoteOpenUrl: «Відкрити» веде на посилання з паролем (`#k=`), коли воно про цю адресу й безпечне; інакше — на адресу", () => {
+  assert.equal(remoteOpenUrl(`${VURL}#k=1100`, VURL), `${VURL}#k=1100`, "власник не впирається в гейт");
+  assert.equal(remoteOpenUrl(VURL, VURL), VURL);
+  assert.equal(remoteOpenUrl(undefined, VURL), VURL);
+  assert.equal(remoteOpenUrl(null, VURL), VURL);
+  assert.equal(remoteOpenUrl(`${VURL}.evil.example/#k=1`, VURL), VURL, "чуже посилання не відкриваємо");
+  assert.equal(remoteOpenUrl("https://інша.example/#k=1", VURL), VURL);
+  assert.equal(remoteOpenUrl(`${VURL}#k=a b`, VURL), VURL, "небезпечний фрагмент (пробіл) — лише адреса");
+  assert.equal(remoteOpenUrl(`${VURL}#k=пароль`, VURL), VURL, "не-ASCII у фрагменті — лише адреса");
+  for (const bad of ["javascript:alert(1)", "http://pv-1.vercel.app", "", null, undefined, 5, "//x.example/"]) {
+    assert.equal(remoteOpenUrl(`${bad}#k=1`, bad), null, `адреса «${bad}» небезпечна — не відкриваємо ні її, ні посилання`);
+    assert.equal(remoteOpenUrl(bad, bad), null, String(bad));
+  }
+});
+
+test("publishReaction: що показати, коли відповідь публікації прийшла — рішення з простору, ЯКИМ ВИКЛИКАЛИ, а не поточного", () => {
+  const URLR = { ok: true, url: VURL, verified: true };
+  const LOCR = { ok: true, local: { path: "/x", url: "/published/p/blog/" } };
+  /* та сама задача */
+  assert.deepEqual(publishReaction(URLR, LEG, true), { kind: "legacy", show: "render" });
+  assert.deepEqual(publishReaction(URLR, VER, true), { kind: "remote", show: "plash", key: "publishRemoteDone" });
+  assert.deepEqual(publishReaction(URLR, { ...VER, capabilities: { publish: "other-publish" } }, true),
+    { kind: "remote", show: "plash", key: "publishRemoteDoneGeneric" }, "не Vercel — без слова «Vercel»");
+  assert.deepEqual(publishReaction(LOCR, MOD, true), { kind: "local", show: "plash", key: "publishLocalDone" });
+  /* людина перейшла на іншу задачу: тост із назвою, плашки нема — ні поверх нової задачі, ні мовчання (ЛІГА) */
+  assert.deepEqual(publishReaction(URLR, LEG, false), { kind: "legacy", show: "toast", key: "publishToastDone" });
+  assert.deepEqual(publishReaction(URLR, VER, false), { kind: "remote", show: "toast", key: "publishToastRemote" });
+  assert.deepEqual(publishReaction(URLR, { ...VER, capabilities: { publish: "other-publish" } }, false),
+    { kind: "remote", show: "toast", key: "publishToastDone" });
+  assert.deepEqual(publishReaction(LOCR, MOD, false), { kind: "local", show: "toast", key: "publishToastLocal" });
+  /* ЛІГА без деплою (`dir`, `deploy_error`, без `url`) і порожня відповідь — діалог, як було */
+  assert.deepEqual(publishReaction({ ok: true, dir: "/d", deploy_error: "x" }, LEG, true), { kind: "failed", show: "dialog" });
+  assert.deepEqual(publishReaction({ ok: true, dir: "/d" }, LEG, false), { kind: "failed", show: "dialog" });
+  assert.deepEqual(publishReaction({}, VER, true), { kind: "failed", show: "dialog" });
+  assert.deepEqual(publishReaction(null, VER, true), { kind: "failed", show: "dialog" });
+  /* «та сама задача» — лише строго `true`: невизначеність не дає плашку невідомо де */
+  assert.equal(publishReaction(URLR, VER, undefined).show, "toast");
+  assert.equal(publishReaction(URLR, VER, 1).show, "toast");
+});
+
+test("publishReaction: простір береться з ВИКЛИКУ — модульна відповідь у `legacy`-просторі нової задачі не читається як ЛІГА", () => {
+  /* Гонка: публікація Vercel почалась у T1, людина перейшла в ЛІГА-простір T2. Рішення — з простору T1 (`VER`). */
+  assert.equal(publishReaction({ ok: true, url: VURL }, VER, false).kind, "remote");
+  assert.equal(publishReaction({ ok: true, url: VURL }, LEG, false).kind, "legacy");
+});
+
+test("словник: ключі гонки й загальної плашки — обидві мови; тост називає задачу", () => {
+  for (const k of ["publishRemoteDoneGeneric", "publishToastDone", "publishToastLocal", "publishToastRemote"]) {
+    for (const lang of ["uk", "en"]) assert.ok(DICT[lang][k] !== undefined, `${lang}: «${k}» бракує`);
+  }
+  assert.equal(DICT.uk.publishRemoteDoneGeneric, "Опубліковано");
+  assert.equal(DICT.en.publishRemoteDoneGeneric, "Published");
+  assert.doesNotMatch(DICT.uk.publishRemoteDoneGeneric, /Vercel/);
+  for (const lang of ["uk", "en"]) {
+    for (const k of ["publishToastDone", "publishToastLocal", "publishToastRemote"]) {
+      assert.match(DICT[lang][k]("LIGA-7003"), /LIGA-7003/, `${lang}: ${k} без назви задачі`);
+    }
+  }
+  assert.match(DICT.uk.publishToastRemote("X"), /Vercel/);
+  assert.match(DICT.en.publishToastRemote("X"), /Vercel/);
+  assert.doesNotMatch(DICT.uk.publishToastDone("X"), /Vercel/);
 });

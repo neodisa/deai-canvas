@@ -128,7 +128,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
   font:inherit;font-size:13px;padding:6px 12px;border-radius:7px;cursor:pointer}
 .cv-notice button[data-act="dismiss"]{background:none;border-color:transparent}
 /* Плашка з додатковими рядками (попередження модуля): основний рядок і підрядки стовпчиком, кнопки — збоку. */
-.cv-notice-body{display:flex;flex-direction:column;gap:3px;min-width:0}
+.cv-notice-body{display:flex;flex-direction:column;gap:3px;min-width:0;max-height:40vh;overflow:auto}
 .cv-notice-sub{display:block;font-size:12px;color:var(--open);line-height:1.4;overflow-wrap:anywhere}
 .cv-notice[data-notice="publish-remote"] button{flex:none;white-space:nowrap}
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.

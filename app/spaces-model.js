@@ -464,7 +464,10 @@ export function previewTarget(task, space) {
   const asExternal = () => ({ kind: "external", url: ext, at: null });
   if (isLegacyPublish(space)) return ext ? asExternal() : (local ? asLocal() : null);
   if (isRemotePublish(task, space)) {
-    return { ...asExternal(), remote: true, share: remoteShareUrl(task, ext) };
+    /* Слід модуля з адресою, яку не можна відкривати (`javascript:`, `http:` — файл правили вручну), цілі не дає: ні «Відкрити», ні
+       копіювання. Лишається запасна локальна, якщо вона є. */
+    if (safeRemoteUrl(ext)) return { ...asExternal(), remote: true, share: remoteShareUrl(task, ext) };
+    return local ? asLocal() : null;
   }
   return local ? asLocal() : (ext ? asExternal() : null);
 }
@@ -535,8 +538,22 @@ export function safeRemoteUrl(url) {
  */
 export function remoteShareUrl(task, url) {
   const u = typeof url === "string" && url ? url : null;
-  const share = task?.publish_share_url;
-  return u && typeof share === "string" && share.startsWith(u) ? share : u;
+  return u && isShareOf(task?.publish_share_url, u) ? task.publish_share_url : u;
+}
+
+/* Посилання `share` — це ЦЯ адреса `url`: або вона сама, або вона з фрагментом (`url#…`). Просто `startsWith(url)` пропустило б
+   `https://pv-1.vercel.app.evil.example/…` (адреса — префікс чужого хоста), тому межа — рівно кінець рядка чи `#`. */
+const isShareOf = (share, url) => typeof share === "string" && (share === url || share.startsWith(`${url}#`));
+
+/**
+ * Куди веде «Відкрити» після публікації модулем «за адресою»: на ПОСИЛАННЯ З ПАРОЛЕМ (`share`, з `#k=`), щоб власник не впирався в
+ * власний гейт, коли воно про цю адресу й саме безпечне (`safeRemoteUrl`: ASCII-фрагмент без пробілів); інакше — на адресу, якщо
+ * безпечна; інакше `null`. Адреса небезпечна — не відкриваємо нічого, навіть посилання: його база — та сама адреса.
+ */
+export function remoteOpenUrl(share, url) {
+  const u = safeRemoteUrl(url);
+  if (!u) return null;
+  return isShareOf(share, u) && safeRemoteUrl(share) ? share : u;
 }
 
 /* Скільки попереджень модуля й якої довжини показує плашка: сервер уже тримає ≤ 5 по ≤ 300, але відповідь — дані. */
@@ -556,6 +573,39 @@ export function remoteNoticeLines(r) {
     .map((w) => ({ text: w.trim().slice(0, NOTICE_MAX_LEN) }));
   if (warns.length) return warns;
   return r?.verified === false ? [{ key: "publishRemoteUnverified" }] : [];
+}
+
+/** Id вбудованого модуля публікації на Vercel — єдиний, чиє імʼя можна називати в текстах UI. */
+const VERCEL_MODULE = "vercel-publish";
+
+/** Чи публікує простір саме Vercel-модулем: слово «Vercel» у плашці й тості — лише тоді (`isRemotePublish` — для будь-якого url-модуля). */
+export const isVercelPublish = (space) => space?.capabilities?.publish === VERCEL_MODULE;
+
+/**
+ * Що показати людині, коли відповідь `POST /api/publish` прийшла: `{kind, show, key?}`.
+ *   · `kind` — `legacy` (ЛІГА: `url`), `remote` (модуль «за адресою»: `url`), `local` (модуль у теку: `local`), `failed` (решта — ЛІГА без
+ *     деплою тощо);
+ *   · `show` — `render` (ЛІГА: лише перемальована смуга), `plash` (стійка плашка з діями), `toast` (короткий тост із назвою задачі),
+ *     `dialog` (діалог «деплой не вдався»);
+ *   · `key` — ключ словника тексту плашки чи тосту.
+ * `space` — простір, у якому публікацію ВИКЛИКАЛИ, а не поточний: Vercel-публікація триває хвилини, і людина встигає перейти на іншу
+ * задачу чи в інший простір; рішення «ЛІГА чи модуль» за ПОТОЧНИМ простором показало б чужу плашку (або ніякої — для ЛІГА). `sameTask` —
+ * чи людина досі на тій самій задачі (рівно `true`): плашка й `render()` належать лише їй, інакше — тост із назвою, а нова задача
+ * лишається недоторканою.
+ */
+export function publishReaction(r, space, sameTask) {
+  const here = sameTask === true;
+  if (r?.url) {
+    if (isLegacyPublish(space)) return here ? { kind: "legacy", show: "render" } : { kind: "legacy", show: "toast", key: "publishToastDone" };
+    const vercel = isVercelPublish(space);
+    return here
+      ? { kind: "remote", show: "plash", key: vercel ? "publishRemoteDone" : "publishRemoteDoneGeneric" }
+      : { kind: "remote", show: "toast", key: vercel ? "publishToastRemote" : "publishToastDone" };
+  }
+  if (r?.local) {
+    return here ? { kind: "local", show: "plash", key: "publishLocalDone" } : { kind: "local", show: "toast", key: "publishToastLocal" };
+  }
+  return { kind: "failed", show: "dialog" };
 }
 
 /**
@@ -583,6 +633,9 @@ const PUBLISH_ERR_KEYS = new Map([
   ["publish-busy", "publishErrBusy"],
   ["bad-task-id", "publishErrBadTaskId"],
   ["module-error", "publishErrModule"],
+  /* Код `vercel-auth` — контракт саме Vercel-модуля (ядро знає лише його статус), тож слово «Vercel» у тексті відмови доречне
+     без звірки з постачальником простору; плашка ж і тост, які буває показує ЛЮБИЙ url-модуль, називають Vercel лише тоді,
+     коли постачальник — `vercel-publish` (`publishReaction`, `isVercelPublish`). */
   ["vercel-auth", "publishErrVercelAuth"],
   ["vercel-busy", "publishErrVercelBusy"],
 ]);
@@ -611,11 +664,11 @@ const NO_ITERATIONS_RE = /no iterations marked/i;
 /**
  * Що сказати людині, коли публікація впала: `{key, args, reasonKey?}`; `app.js` робить
  * `t(key, ...(reasonKey ? [t(reasonKey)] : args))`. Відомі коди модульної публікації мають свій людський
- * текст; `module-error` — БЕЗ тексту модуля (там бувають шляхи); `bad-folder` несе причину: для `path-*`, які
+ * текст; `bad-folder` несе причину: для `path-*`, які
  * знає діалог просторів, — його ж людський текст (`spaceErrKey`, `reasonKey`), для решти (`path-deai-home`,
  * `path-invalid`, `spaces-unreadable`) — сам код як запасний варіант, і більш нічого з відповіді.
- * `vercel-auth` несе ТЕКСТ СЕРВЕРА (`args: [текст]`, ≤ 300): модуль уже вирізав із нього секрети, а причина
- * («Vercel відмовив у доступі (HTTP 403): …») — те, що людина може виправити.
+ * `vercel-auth` і `module-error` несуть ТЕКСТ СЕРВЕРА (`args: [текст]`, ≤ 300): ядро й модуль уже вирізали з нього секрети, а причина
+ * («Vercel відмовив у доступі (HTTP 403): …», «збірка ERROR; проєкт видалено») — те, що людина може виправити чи перевірити.
  * 400 БЕЗ коду — це `send_error`: «жодної ітерації не позначено» лише коли ТЕКСТ це каже (рядок статусу чи
  * тіло), а інший 400 (`bad payload`) — загальна відмова. Решта — «Не вдалося: …» з текстом сервера.
  */
@@ -624,7 +677,7 @@ export function publishErr(e) {
   const key = typeof code === "string" ? PUBLISH_ERR_KEYS.get(code) : undefined;
   /* `vercel-auth` — єдина модульна відмова з другим абзацом: «Vercel відмовив у доступі (HTTP 403): …» — причина, яку
      людина може виправити (права токена, тариф, команда), а сервер уже вирізав із неї секрети й обмежив довжину. */
-  if (key === "publishErrVercelAuth") return { key, args: [serverText(e)] };
+  if (key === "publishErrVercelAuth" || key === "publishErrModule") return { key, args: [serverText(e)] };
   if (key === "publishErrBadFolder") {
     const why = FOLDER_CODE_RE.test(e?.message ?? "") ? e.message : "";
     const reasonKey = why ? spaceErrKey(why) : "spaceErrGeneric";

@@ -416,14 +416,15 @@ test("смуга: `published` — publish_url АБО publish_local, ціль п�
 
 test("публікація: відповідь модуля (`local`) — плашка «Опубліковано локально» з «Відкрити», а не «деплой не вдався»", () => {
   const body = barAct("publish");
-  assert.match(body, /if \(isLegacyPublish\(spaceNow\(\)\)\) \{ render\(\); return; \}/, "шлях ЛІГА змінено: лише `render()`, без плашки");
+  assert.match(body, /if \(view\.kind === 'legacy'\) \{ render\(\); return; \}/, "шлях ЛІГА змінено: лише `render()`, без плашки");
+  assert.doesNotMatch(body, /isLegacyPublish\(spaceNow\(\)\)/, "ЛІГА чи модуль — за простором ВИКЛИКУ (`sp0`), а не поточним: людина могла перейти");
   assert.match(body, /const local = safeLocalUrl\(r\.local\?\.url, location\.origin\);/, "адресу з відповіді звіряємо з оригіном канваса");
-  assert.match(body, /if \(r\.local\) \{/);
-  assert.match(body, /notice\('publish-local', t\('publishLocalDone'\)/);
+  assert.match(body, /if \(view\.kind === 'local'\) \{/);
+  assert.match(body, /notice\('publish-local', t\(view\.key\)/, "текст плашки — з рішення моделі (`publishReaction`: `publishLocalDone`)");
   assert.match(body, /act: 'open'/);
   assert.match(body, /window\.open\(local, '_blank', 'noopener'\)/, "без noopener відкрита сторінка бачить `window.opener`");
   /* `publishDeployFailed` — лише для відповіді без `url` і без `local` (ЛІГА без деплою). */
-  assert.ok(body.indexOf("r.local") < body.indexOf("publishDeployFailed"),
+  assert.ok(body.indexOf("view.kind === 'local'") < body.indexOf("publishDeployFailed"),
     "гілка `local` мусить стояти ДО «деплой не вдався» (інакше успішна публікація модулем читається як невдалий деплой)");
   assert.match(body, /const m = publishErr\(e\);\n\s+tell\(t\(m\.key, \.\.\.\(m\.reasonKey \? \[t\(m\.reasonKey\)\] : m\.args\)\)\);/, "відмова повз `publishErr`");
   assert.doesNotMatch(body, /catch \(e\) \{ tell\(t\('errFailed', e\.message\)\); \}/, "стара загальна відмова лишилась");
@@ -474,42 +475,66 @@ test("плашка «Опубліковано локально» гаситьс�
    Правила (`safeRemoteUrl`, `remoteShareUrl`, `remoteNoticeLines`, `isRemotePublish`, `previewTarget`/`copyUrl`)
    тестує `tests/spaces-publish.test.mjs`; тут — що `app.js` ними користується і що не лишилось другого шляху повз них. */
 
-/** Гілка відповіді з `url` у дії «Опублікувати»: від `if (r.url) {` до `if (r.local)`. */
+/** Гілка модульної відповіді з `url` у дії «Опублікувати»: від `if (view.kind === 'remote') {` до гілки `local`. */
 const remoteBranch = () => {
   const body = barAct("publish");
-  const from = body.indexOf("if (r.url) {");
-  assert.ok(from > 0, "гілки `if (r.url) {` нема");
-  return body.slice(from, body.indexOf("if (r.local)", from));
+  const from = body.indexOf("if (view.kind === 'remote') {");
+  assert.ok(from > 0, "гілки `if (view.kind === 'remote') {` нема");
+  return body.slice(from, body.indexOf("if (view.kind === 'local')", from));
 };
 
-test("публікація: відповідь з `url` у просторі модуля — плашка «Опубліковано на Vercel»; ЛІГА — лише render()", () => {
+test("публікація: відповідь з `url` у просторі модуля — плашка (текст із моделі); ЛІГА — лише render()", () => {
+  const body = barAct("publish");
   const br = remoteBranch();
-  assert.match(br, /if \(isLegacyPublish\(spaceNow\(\)\)\) \{ render\(\); return; \}/, "ЛІГА-відповідь мусить лишитись `render()` без плашки");
-  /* оновлена задача (`publish_share_url`) — ДО плашки; кнопка «Скопіювати» читає її вже з `curTask` */
-  assert.match(br, /await render\(\);/);
+  assert.match(body, /const view = publishReaction\(r, sp0, sameTask\(\)\);/, "рішення — з простору ВИКЛИКУ (`sp0`) і чи людина досі на задачі");
+  assert.match(body, /if \(view\.kind === 'legacy'\) \{ render\(\); return; \}/, "ЛІГА-відповідь мусить лишитись `render()` без плашки");
+  /* оновлена задача (`publish_share_url`) — ДО плашки; кнопки беруть посилання від неї */
+  assert.match(br, /try \{ await render\(\); \} catch \(e\) \{/, "збій перемальовки ПІСЛЯ вдалої публікації не робить із неї «Не вдалося»");
   assert.ok(br.indexOf("await render()") < br.indexOf("notice('publish-remote'"), "плашка раніше за оновлення задачі");
-  assert.match(br, /notice\('publish-remote', t\('publishRemoteDone'\),/);
+  assert.match(br, /notice\('publish-remote', t\(view\.key\),/, "текст плашки — з рішення моделі (Vercel чи загальний)");
   assert.match(br, /remoteNoticeLines\(r\)/, "другий рядок плашки (`warnings`/підказка) — через модель");
 });
 
-test("плашка Vercel: «Відкрити» — лише для безпечного https-посилання, `noopener`; «Скопіювати» — `publish_share_url` оновленої задачі", () => {
+test("гонка з перемиканням задачі: простір і задача захоплюються ДО запиту; не на тій задачі — тост, а нова задача не чіпається", () => {
+  /* Без коментарів: у них самих трапляється «`render()`» і «`notice`» — порядок міряємо за КОДОМ. */
+  const body = barAct("publish").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/[^\n]*/g, "");
+  const post = body.indexOf("await post('/api/publish'");
+  assert.ok(post > 0);
+  for (const decl of ["const t0 = currentTaskId;", "const sp0 = spaceNow();", "const label0 = "]) {
+    const at = body.indexOf(decl);
+    assert.ok(at > 0 && at < post, `${decl} мусить стояти ДО запиту (Vercel-публікація триває хвилини)`);
+  }
+  assert.match(body, /const sameTask = \(\) => currentTaskId === t0 && !spaceChanged\(sp0\?\.id, spaceNow\(\)\?\.id\);/);
+  /* тост — одразу після рішення, до будь-якого render()/notice() */
+  const toastAt = body.indexOf("if (view.show === 'toast') { toast(t(view.key, label0)); return; }");
+  assert.ok(toastAt > post, "тосту для чужої задачі нема");
+  assert.ok(toastAt < body.indexOf("render()", post), "`render()` нової задачі не мусить виконуватись на тості");
+  assert.ok(toastAt < body.indexOf("notice('publish-"), "плашка мусить стояти ПІСЛЯ перевірки задачі");
+  /* після `await render()` людина могла встигнути перейти — перевіряємо ще раз */
   const br = remoteBranch();
-  assert.match(br, /const openUrl = safeRemoteUrl\(r\.url\);/, "адресу з відповіді відкриваємо лише після `safeRemoteUrl`");
+  assert.match(br, /const late = publishReaction\(r, sp0, sameTask\(\)\);\s*if \(late\.show === 'toast'\) \{ toast\(t\(late\.key, label0\)\); return; \}/);
+  assert.ok(br.indexOf("late.show") < br.indexOf("notice('publish-remote'"));
+});
+
+test("плашка Vercel: «Відкрити» — посилання з паролем (`remoteOpenUrl`) лише для безпечного https, `noopener`; «Скопіювати» — те саме посилання", () => {
+  const br = remoteBranch();
+  assert.match(br, /const share = remoteShareUrl\(curTask, r\.url\);/, "посилання з паролем — від оновленої задачі, а не вигадане в UI");
+  assert.match(br, /const openUrl = remoteOpenUrl\(share, r\.url\);/, "«Відкрити» — повз сиру адресу з відповіді; гейт власника проходить через `#k=`");
   assert.match(br, /\.\.\.\(openUrl \? \[\{ act: 'open'/, "без безпечної адреси кнопки «Відкрити» нема");
   assert.match(br, /window\.open\(openUrl, '_blank', 'noopener'\)/, "без noopener відкрита сторінка бачить `window.opener`");
   assert.equal([...br.matchAll(/window\.open\(/g)].length, 1, "інших window.open у гілці нема — кожен мусив би мати свій захист");
   assert.match(br, /act: 'open'/);
   assert.match(br, /act: 'copy'/);
   assert.match(br, /label: t\('copyLink'\)/);
-  assert.match(br, /remoteShareUrl\(curTask, r\.url\)/, "посилання з паролем — від оновленої задачі, а не вигадане в UI");
+  assert.match(br, /run: \(\) => copyLinkText\(share\)/, "копіюємо те саме посилання, що відкриваємо");
   assert.doesNotMatch(br, /#k=/, "фрагмент із паролем складає сервер");
   assert.doesNotMatch(br, /window\.open\(r\.url/, "сира адреса з відповіді повз `safeRemoteUrl`");
 });
 
-test("гілка `url` стоїть раніше за `local` і за «деплой не вдався»", () => {
+test("гілка модульної відповіді стоїть раніше за `local` і за «деплой не вдався»", () => {
   const body = barAct("publish");
-  assert.ok(body.indexOf("if (r.url) {") < body.indexOf("if (r.local)"));
-  assert.ok(body.indexOf("if (r.url) {") < body.indexOf("publishDeployFailed"));
+  assert.ok(body.indexOf("if (view.kind === 'remote') {") < body.indexOf("if (view.kind === 'local')"));
+  assert.ok(body.indexOf("if (view.kind === 'remote') {") < body.indexOf("publishDeployFailed"));
 });
 
 test("`notice()` вміє додаткові рядки (textContent, не розмітка); без них розмітка плашки та сама", () => {
@@ -529,7 +554,8 @@ test("плашка `publish-remote` гаситься разом із задач�
 
 test("«Відкрити превью» для публікації модулем: адреса проходить `safeRemoteUrl`, `noopener`", () => {
   const open = barAct("openpreview");
-  assert.match(open, /safeRemoteUrl\(target\.url\)/);
+  assert.match(open, /remoteOpenUrl\(target\.share, target\.url\)/, "«Відкрити» веде на посилання з паролем, коли воно безпечне");
+  assert.doesNotMatch(open, /safeRemoteUrl\(target\.url\)/, "стара перевірка лише адреси — власник упирався б у гейт");
   assert.match(open, /'noopener'/);
   assert.match(open, /target\.remote/, "перевірка лише для зовнішньої модульної цілі — ЛІГА як було");
 });
@@ -555,7 +581,7 @@ test("смуга: застереження Vercel — те, що віддав с
 
 test("імпорти: нові правила Vercel беруться з моделі просторів", () => {
   const head = src.slice(0, src.indexOf("} from './spaces-model.js'"));
-  for (const name of ["isLegacyPublish", "remoteNoticeLines", "remoteShareUrl", "safeRemoteUrl"]) {
+  for (const name of ["publishReaction", "remoteNoticeLines", "remoteOpenUrl", "remoteShareUrl", "spaceChanged"]) {
     assert.match(head, new RegExp(`\\b${name}\\b`), `${name} не імпортовано`);
   }
 });

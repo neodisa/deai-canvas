@@ -149,6 +149,8 @@ test("плашка з додатковими рядками: `.cv-notice-body` �
   assert.ok(body, "правила .cv-notice-body немає");
   assert.match(body, /flex-direction:column/);
   assert.match(body, /min-width:0/, "без цього довгий рядок розпирає плашку за 80vw");
+  assert.match(body, /max-height:40vh/, "5 попереджень по 300 знаків + кнопки в один рядок — плашка не вище 40% екрана");
+  assert.match(body, /overflow:auto/);
   const sub = rule(".cv-notice-sub");
   assert.ok(sub, "правила .cv-notice-sub немає");
   assert.match(sub, /color:var\(--open\)/);
