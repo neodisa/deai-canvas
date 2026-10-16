@@ -29,12 +29,13 @@ import { barModel } from './bar-model.js';
 import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status.js';
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
-import { HOME_STATUSES, matches, taskKey } from './tasks-model.js';
+import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, healTarget,
-  isReadErrKey, needsWelcome, readErrKey, rovingIndex, shouldRefreshHome, spaceChanged, spaceErrField,
-  spaceErrKey, taskErrField, taskErrKey, taskFormError,
+  FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, healTarget,
+  isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, pwView, readErrKey, rovingIndex,
+  safeLocalUrl, shouldRefreshHome, spaceChanged, spaceErrField, spaceErrKey, taskErrField, taskErrKey,
+  taskFormError,
 } from './spaces-model.js';
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -752,8 +753,18 @@ function taskDdState() {
   };
 }
 
+/** Відносний час локальної публікації для підпису («5 хв тому»); час невідомий (`null`) — порожньо. */
+function pubWhenText(at) {
+  if (typeof at !== 'number') return '';
+  const r = relTime(at, Date.now());
+  return t(r.key, r.n);
+}
+
 function barState() {
   const its = (curTask && curTask.iterations) || [];
+  /* Куди веде превʼю цієї задачі (ЛІГА-URL чи локальна адреса канваса) — одне рішення для смуги
+     (`pubLocal`/`pubWhen`) і для дій «Відкрити»/«Скопіювати» (`BAR_ACTIONS`). */
+  const pubTarget = previewTarget(curTask, spaceNow());
   const pickedIt = its.find((it) => it.id === picked) || null;
   const canvas = mode === 'canvas';
   // Пресет читаємо з РІЗНОЇ ширини залежно від виду — те саме розгалуження,
@@ -832,7 +843,13 @@ function barState() {
     pagesError, flowRaw, flowError,
     right: inspectorApi()?.on ? 'inspector' : null,
     gl,
-    published: !!(curTask && curTask.publish_url),
+    /* Опублікована: у ЛІГА (`publish_url`) АБО локально модулем (`publish_local`) — `isPublished`
+       (`spaces-model.js`). Куди веде превʼю й чи воно «локальне» — `previewTarget`. */
+    published: isPublished(curTask),
+    pubLocal: pubTarget?.kind === 'local',
+    /* Відносний час («5 хв тому»), а не сирий ISO UTC з `publish_local.published_at`: той самий
+       `relTime`, що в екрана «Задачі». Невідомий час — порожньо, підпис тоді просто «локально». */
+    pubWhen: pubTarget?.kind === 'local' ? pubWhenText(pubTarget.at) : '',
     /* «Превью застаріло відносно ітерацій» — сигнал, якого жодна наявна
        точка API не рахує (треба порівнювати час публікації з часом останньої
        зміни кожної ітерації/сторінки, а такого поля ніде нема). Вигадувати
@@ -841,19 +858,16 @@ function barState() {
        Тому `false` завжди, як і в старій смузі (там цього сигналу не було
        взагалі) — іконка публікації просто ніколи не показує ⚠. */
     pubStale: false,
-    /* Пароль превʼю: сам пароль, свій/типовий і чи ЗІБРАНЕ превʼю вже з ним на
-       кожній сторінці (`preview_gate` рахує сервер — reseal міняв би лише
-       обгортку, а сторінки лишались старими). */
-    pw: curTask?.preview_password || '',
-    pwCustom: !!curTask?.preview_password_custom,
-    /* Лише для ОПУБЛІКОВАНОЇ задачі: `publish/`, зібраний без деплою, нікому не
-       роздано, і «превʼю зі старим паролем» там була б тривогою ні про що. */
+    /* Пароль превʼю, свій/типовий і чи ЗІБРАНЕ превʼю вже з ним на кожній сторінці
+       (`preview_gate` рахує сервер — reseal міняв би лише обгортку, а сторінки лишались
+       старими) — через `pwView` (`spaces-model.js`): стале/без-гейта лише для ОПУБЛІКОВАНОЇ
+       в ЛІГА задачі (`publish/`, зібраний без деплою, нікому не роздано, і «превʼю зі старим
+       паролем» там була б тривогою ні про що); а в просторі, де публікує МОДУЛЬ, пароль у
+       відповіді сервера — ЛІГА-шний, і ні він, ні попередження про нього не показуються.
+       «Сторінки БЕЗ гейта» (зібрані до фікса TD-37) — інша причина, інший підпис; посилання
+       при цьому працює, тож його не вимикаємо. */
+    ...pwView(curTask, spaceNow()),
     teams: teamsMute,
-    pwStale: !!curTask?.publish_url && curTask?.preview_gate?.state === 'stale',
-    /* Сторінки БЕЗ гейта (зібрані до фікса TD-37) — інша причина, інший підпис;
-       посилання при цьому працює, тож його не вимикаємо. */
-    pwUngated: curTask?.publish_url && curTask?.preview_gate?.state === 'ungated'
-      ? curTask.preview_gate.ungated : 0,
     pagePub: !pickedPg || visibleIds(panelPages).has(pickedPg.id),
     figmaBusy,
     tasksErr,
@@ -1676,8 +1690,24 @@ const BAR_ACTIONS = {
         r.domain_warning].filter(Boolean);
       if (warn.length) tell(warn.join('\n\n'));
       if (r.url) { render(); return; }
+      /* Публікація МОДУЛЕМ (простір без інтеграцій, `static-publish`): відповідь без `url` і без `dir`,
+         зате з `local` — адресою на оригіні канваса. Без цієї гілки вона падала б нижче в «Деплой не
+         вдався: —», хоч публікація вдалась. Адресу з відповіді відкриваємо лише відносною
+         (`safeLocalUrl`), а плашка з «Відкрити» — стійка (`notice`), бо тост за 3 с зникав би раніше,
+         ніж людина встигне натиснути. */
+      if (r.local) {
+        const local = safeLocalUrl(r.local?.url);
+        render();
+        notice('publish-local', t('publishLocalDone'),
+          local ? [{ act: 'open', label: t('publishOpen'), run: () => window.open(local, '_blank') }] : []);
+        return;
+      }
       tell(t('publishDeployFailed', r.iterations, r.dir, r.deploy_error || '—'));
-    } catch (e) { tell(t('errFailed', e.message)); }
+    } catch (e) {
+      /* Коди відмов модульної публікації — людським текстом (`publishErr`), решта — як було. */
+      const m = publishErr(e);
+      tell(t(m.key, ...m.args));
+    }
     el.disabled = false;
     if (lbl) lbl.textContent = prevText;
   },
@@ -1796,7 +1826,11 @@ const BAR_ACTIONS = {
     catch (e) { tell(t('errFailed', e.message)); }
   },
 
-  openpreview: () => { if (curTask?.publish_url) window.open(curTask.publish_url, '_blank'); },
+  openpreview: () => {
+    /* Ціль — з моделі: ЛІГА-URL або локальна адреса `/published/<простір>/<задача>/` канваса. */
+    const target = previewTarget(curTask, spaceNow());
+    if (target) window.open(target.url, '_blank');
+  },
 
   /* Тиша Teams на канал задачі. Вимкнути — спільна дія (тиша для ВСІХ, хто
      коментує цей проєкт), тому з підтвердженням; увімкнути — без. */
@@ -1843,10 +1877,12 @@ const BAR_ACTIONS = {
   figma: () => copyToFigma(),
 
   copylink: async () => {
-    if (!curTask?.publish_url) return;
+    const target = previewTarget(curTask, spaceNow());
+    if (!target) return;
     const pageId = pickedPage && pickedPage !== 'main' ? `${picked}/${pickedPage}` : picked;
-    const url = `${curTask.publish_url.replace(/\/+$/, '')}/#k=${encodeURIComponent(curTask.preview_password || '')}`
-      + `&p=${encodeURIComponent(pageId)}`;
+    /* Локальне посилання — адреса канваса БЕЗ фрагмента з паролем: пароль модуля — секрет, якого UI не
+       знає (посилання збирає `copyUrl`, `spaces-model.js`); ЛІГА-посилання — як було, з паролем і сторінкою. */
+    const url = copyUrl(target, { origin: location.origin, pageId, password: curTask.preview_password || '' });
     try {
       await navigator.clipboard.writeText(url);
       toast(t('toastCopied'));
@@ -5931,7 +5967,7 @@ function paletteState() {
        вимикач: без інтеграцій палітра ховає публікацію, GitLab і командний канал. */
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
-    space: st.space ? { id: st.space.id, integrations: st.space.integrations } : null,
+    space: st.space ? { id: st.space.id, integrations: st.space.integrations, capabilities: st.space.capabilities } : null,
   };
 }
 

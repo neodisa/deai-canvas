@@ -76,6 +76,7 @@
  */
 
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
+import { hasPublish } from "./spaces-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -180,10 +181,14 @@ export function paletteActions(state) {
   const hasIteration = !!s.hasIteration;
   const out = [];
   /* Простір без інтеграцій (`space.integrations === false`): палітра не пропонує
-     того, чого немає в смузі, — публікацію й GitLab (`bar-model.js`, «Вимикач»), а
-     з ними все, що без публікації безглузде: показ ітерації в превʼю, посилання,
-     відкриття превʼю й командний канал коментарів. ОМІТ, не «вимкнено з причиною»
-     (той самий вибір, що для груп, безглуздих у режимі). Рівно `=== false`. */
+     того, чого немає в смузі, — GitLab (`bar-model.js`, «Вимикач») і командний канал
+     коментарів. ОМІТ, не «вимкнено з причиною» (той самий вибір, що для груп,
+     безглуздих у режимі). Рівно `=== false`.
+     ПУБЛІКАЦІЯ (`publish`, `togglepub`, `copylink`, `openpreview`) від інтеграцій більше
+     не залежить (модулі 2а, Task 8): вона йде на `hasPublish` (`capabilities.publish`) —
+     простір без інтеграцій публікує вбудованим модулем у теку, і з палітри її забирає
+     лише відсутність постачальника (`publish: null`). Тому колишній спільний
+     `if (!noOutward)` розщеплено нижче на два. */
   const noOutward = s.space?.integrations === false;
 
   /* Екран «Задачі» (`homeOpen`, батч 1.52): смуга в цьому стані не має ні
@@ -342,7 +347,7 @@ export function paletteActions(state) {
     id: "figma", group: "gPub", labelKey: "toFigma", icon: "figma", act: "figma",
     disabled: !!figmaWhy, whyKey: figmaWhy,
   });
-  if (!noOutward) {
+  if (hasPublish(s.space)) {
     out.push({
       id: "publish", group: "gPub", labelKey: s.published ? "update" : "publish",
       icon: "up", act: "publish",
@@ -357,6 +362,8 @@ export function paletteActions(state) {
       id: "openpreview", group: "gPub", labelKey: "openPreview", icon: "ext", act: "openpreview",
       disabled: !s.published, whyKey: s.published ? "" : "whyNoPublish",
     });
+  }
+  if (!noOutward) {
     // Той самий трьохгілковий розгляд, що `glItems` у `bar-model.js`
     // (`barModel`): «off» — лише «Налаштувати», інакше «Підтягнути» з'являється
     // ЛИШЕ при «behind», «Надіслати» є завжди, вимкнене з причиною при «sync».

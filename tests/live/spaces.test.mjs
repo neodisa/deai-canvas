@@ -16,9 +16,10 @@
  *
  * Мапа «перевірка → запобіжник», знята мутаційно (прибери охорону — подивись, чи
  * червоніє):
- *   1 (перемикання)  — `space` у `BAR_ACTIONS` (`app.js`) і `integrations` у `bar-model.js`.
- *        Мутація «`space` не кличе `space-switch`» червонить 1; «зони GitLab/публікації
- *        без `integrations`» — теж 1.
+ *   1 (перемикання)  — `space` у `BAR_ACTIONS` (`app.js`), `integrations` (GitLab) і `hasPublish`
+ *        (публікація, `capabilities.publish`) у `bar-model.js`.
+ *        Мутація «`space` не кличе `space-switch`» червонить 1; «зона GitLab без `integrations`» і
+ *        «публікація не за `hasPublish`» — теж 1.
  *   2 (нова задача)  — `space: sp.id` у `newTaskDialog` і `task_new(root=sp['path'])`.
  *   3 (новий простір) — `check_new_path` (типова тека не мусить перетинатись зі старим
  *        простором) і `afterSpaceChange`.
@@ -138,10 +139,17 @@ test("1: перемикання на «P» без інтеграцій — см�
     "у перемикачі задач чужі задачі іншого простору");
   await page.keyboard.press("Escape");
 
-  /* Зони назовні — немає. */
+  /* Зони назовні: GitLab — немає (він на `integrations`). Публікація — Є: з модулями 2а (Task 8) вона
+     стоїть на `capabilities.publish`, а в «P» без інтеграцій публікує вбудований `static-publish` (локальна
+     тека, нічого назовні). Дропдаун публікації — лише показ, відкриття й посилання: без пароля ЛІГА і без
+     Teams-каналу (його стан у просторі без інтеграцій не питається, і пункт висів би вічним «перевіряю»). */
   const acts = await barActs(page);
   assert.ok(!acts.includes("dd:gl"), `зона GitLab лишилась без інтеграцій (${acts})`);
-  assert.ok(!acts.includes("publish") && !acts.includes("dd:pub"), `публікація лишилась без інтеграцій (${acts})`);
+  assert.ok(acts.includes("publish") && acts.includes("dd:pub"), `публікація модулем зникла в просторі без інтеграцій (${acts})`);
+  await page.click('#bar [data-dd="pub"]');
+  assert.deepEqual(await page.$$eval("#bar .dd--right [data-act]", (els) => els.map((e) => e.dataset.act)),
+    ["togglepub", "openpreview", "copylink"], "дропдаун публікації модулем: пароль ЛІГА чи Teams там не мають бути");
+  await page.keyboard.press("Escape");
 
   /* Екран «Задачі»: заголовок із простором, лише x, без «Команди». */
   await openHome(page);

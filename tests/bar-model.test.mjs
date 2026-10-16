@@ -482,3 +482,95 @@ test("простір: id у всій смузі лишаються унікал�
   const ids = [...m.zone1, ...m.zone2, ...m.zone3].map((x) => x.id);
   assert.equal(new Set(ids).size, ids.length);
 });
+
+/* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
+   Зона 3 більше не питає «є інтеграції?» про ВСЕ назовні разом: GitLab і Teams
+   лишились на `integrations`, а публікація пішла на `hasPublish`
+   (`spaces-model.js`) — простір без інтеграцій публікує вбудованим модулем у
+   теку. Пункти дропдауна фільтруються поштучно: пароль ЛІГА (`pubpw`) — лише
+   коли публікує саме ЛІГА, Teams — лише з інтеграціями. */
+const CAPS = (publish, o = {}) => ({
+  id: "p", name: "P", color: "space-2", integrations: false, capabilities: { publish, tokens: null }, ...o,
+});
+const pubItems = (s) => barModel({ ...base, ...s }).zone3.find((x) => x.id === "publish")?.items.map((x) => x.id);
+
+test("простір без інтеграцій з модулем публікації: публікація є, GitLab нема", () => {
+  const m = barModel({ ...base, space: CAPS("static-publish") });
+  assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "publish"]);
+});
+
+test("публікація модулем: у дропдауні лише показ, відкриття й посилання — без пароля ЛІГА і без Teams", () => {
+  assert.deepEqual(pubItems({ space: CAPS("static-publish"), teams: null }), ["togglepub", "openpreview", "copylink"]);
+  assert.deepEqual(pubItems({ space: CAPS("static-publish"), teams: { channel: "dc/x", muted: false } }),
+    ["togglepub", "openpreview", "copylink"], "інтеграцій нема — Teams нема, хоч би дані й були");
+});
+
+test("простір без постачальника публікації (`publish: null`): ні публікації, ні GitLab — лишається «В Figma»", () => {
+  assert.deepEqual(barModel({ ...base, space: CAPS(null) }).zone3.map((x) => x.id), ["figma"]);
+  assert.deepEqual(barModel({ ...base, space: CAPS(null, { integrations: true }) }).zone3.map((x) => x.id),
+    ["figma", "gl"], "публікації нема (її вимкнено), GitLab лишився на інтеграціях");
+});
+
+test("простір ЛІГА (`publish: 'legacy'`): усе як було, пароль превʼю й Teams — на місці", () => {
+  const sp = CAPS("legacy", { integrations: true });
+  assert.deepEqual(barModel({ ...base, space: sp }).zone3.map((x) => x.id), ["figma", "gl", "publish"]);
+  assert.deepEqual(pubItems({ space: sp, teams: { channel: "dc/x", muted: false } }),
+    ["togglepub", "openpreview", "copylink", "teamsnotify", "pubpw"]);
+});
+
+test("`pubpw` — лише коли публікує ЛІГА: ні для модуля, ні там, де модуль підмінив ЛІГА при інтеграціях", () => {
+  assert.ok(!pubItems({ space: CAPS("static-publish") }).includes("pubpw"));
+  assert.ok(!pubItems({ space: CAPS("static-publish", { integrations: true }) }).includes("pubpw"));
+  assert.ok(pubItems({ space: CAPS("legacy", { integrations: true }) }).includes("pubpw"));
+  assert.ok(pubItems({ space: { id: "x", integrations: true } }).includes("pubpw"), "стара форма з інтеграціями");
+  assert.ok(pubItems({}).includes("pubpw"), "без `space` — як було");
+});
+
+test("Teams у дропдауні — лише з інтеграціями; без них пункт не висить вічним «перевіряю…»", () => {
+  // Без інтеграцій `app.js` тримає `teams: null` ВІЧНО (стану тиші там нема, `/api/teams-mute` → 409).
+  assert.ok(!pubItems({ space: CAPS("static-publish"), teams: null }).includes("teamsnotify"));
+  // З інтеграціями `null` — це коротка мить завантаження: пункт стоїть вимкненим з причиною.
+  const it = barModel({ ...base, space: CAPS("legacy", { integrations: true }), teams: null }).zone3
+    .find((x) => x.id === "publish").items.find((x) => x.id === "teamsnotify");
+  assert.equal(it.disabled, true);
+  assert.equal(it.whyKey, "whyTeamsLoading");
+  // модуль при ввімкнених інтеграціях: Teams живий, пароля ЛІГА нема
+  assert.ok(pubItems({ space: CAPS("static-publish", { integrations: true }), teams: { channel: "c", muted: false } })
+    .includes("teamsnotify"));
+});
+
+test("стара форма відповіді (без `capabilities`) — рішення за `integrations`, як і було", () => {
+  assert.deepEqual(barModel({ ...base, space: { id: "p", integrations: false } }).zone3.map((x) => x.id), ["figma"]);
+  assert.deepEqual(barModel({ ...base, space: { id: "p", integrations: true } }).zone3.map((x) => x.id),
+    ["figma", "gl", "publish"]);
+  assert.deepEqual(barModel({ ...base, space: { id: "p" } }).zone3.map((x) => x.id), ["figma", "gl", "publish"]);
+});
+
+test("публікація: `legacy` на контролі каже, чий це постачальник (розмітка ховає застереження про ЛІГА-гейт)", () => {
+  const ctl = (space) => barModel({ ...base, space }).zone3.find((x) => x.id === "publish");
+  assert.equal(ctl(CAPS("legacy", { integrations: true })).legacy, true);
+  assert.equal(ctl(CAPS("static-publish")).legacy, false);
+  assert.equal(ctl(undefined).legacy, true);
+});
+
+test("локальна публікація: «Відкрити» і «Скопіювати» несуть підпис «локально» (з часом, коли він відомий)", () => {
+  const items = (o) => Object.fromEntries(barModel({ ...base, space: CAPS("static-publish"), ...o }).zone3
+    .find((x) => x.id === "publish").items.map((x) => [x.id, x]));
+  const local = items({ pubLocal: true, pubWhen: "5 хв тому" });
+  assert.equal(local.openpreview.subKey, "publishLocalSub");
+  assert.deepEqual(local.openpreview.subArgs, ["5 хв тому"]);
+  assert.equal(local.copylink.subKey, "publishLocalLinkSub");
+  const noWhen = items({ pubLocal: true });
+  assert.deepEqual(noWhen.openpreview.subArgs, [""]);
+  const ext = items({});
+  assert.equal(ext.openpreview.subKey, undefined, "не локальна — без підпису");
+  assert.equal(ext.copylink.subKey, undefined);
+});
+
+test("публікація для `published`: непублікована — «Опублікувати» й вимкнені відкриття/посилання з причиною", () => {
+  const m = barModel({ ...base, published: false, space: CAPS("static-publish") });
+  const pub = m.zone3.find((x) => x.id === "publish");
+  assert.equal(pub.labelKey, "publish");
+  assert.equal(pub.items.find((x) => x.id === "openpreview").whyKey, "whyNoPublish");
+  assert.equal(pub.items.find((x) => x.id === "copylink").whyKey, "whyNoPublish");
+});

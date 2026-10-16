@@ -372,3 +372,136 @@ export function peekRegistered(res, taken = []) {
   if (!res || res.error) return false;
   return res.registered === true || isRegisteredPath(res.path, taken);
 }
+
+/* ── що додав Task 8 (модулі 2а): публікація за `capabilities.publish` ──────────────────
+   До модулів «публікація» й «усе назовні» були одним питанням — `integrations`: простір без
+   інтеграцій не мав ні GitLab, ні кнопки «Опублікувати». Тепер у такому просторі публікує
+   вбудований `static-publish` (локальна тека, `/published/<простір>/<задача>/`), тож питань
+   стало два: чи є ХТОСЬ, хто публікує (`hasPublish`), і чи це саме ЛІГА (`isLegacyPublish`).
+   GitLab, Teams, командний канал і вкладка «Команда» лишились на `integrations`.
+
+   Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | 'legacy' | null, tokens,
+   [error]}`): нечитабельний `space.json` лягає в `capabilities.error`, а не в 5xx. Відповіді
+   СТАРОЇ форми (без `capabilities`) лишаються валідними — тоді рішення за `integrations`, рівно
+   `=== false`, як скрізь: простір без відомостей публікації в людини не краде. */
+
+/** Чи є в просторі постачальник публікації (модуль або ЗАШИТИЙ код ЛІГА). Предикат зі спеки 2а. */
+export const hasPublish = (space) =>
+  (space?.capabilities ? !!space.capabilities.publish : space?.integrations !== false);
+
+/**
+ * Чи публікує саме ЛІГА (Vercel, пароль превʼю в `tasks.json`, Teams-канал задачі). Лише тоді мають
+ * сенс пароль превʼю та його попередження: модуль має свій пароль — СЕКРЕТ, якого UI не знає, —
+ * а `preview_password` у відповіді `/api/task` лишається ЛІГА-шним і в модульному просторі
+ * показав би чужий пароль під чужою публікацією.
+ */
+export const isLegacyPublish = (space) =>
+  (space?.capabilities ? space.capabilities.publish === "legacy" : space?.integrations !== false);
+
+/** Слід ЛОКАЛЬНОЇ публікації з `/api/task` (`{module, path, published_at}`) — обʼєкт або `null`. */
+const localOf = (task) => {
+  const p = task?.publish_local;
+  return p && typeof p === "object" && !Array.isArray(p) ? p : null;
+};
+
+/** Задача опублікована: у ЛІГА (`publish_url`) або локально модулем (`publish_local`). */
+export const isPublished = (task) => !!task?.publish_url || !!localOf(task);
+
+/**
+ * Адреса локальної публікації на ОРИГІНІ КАНВАСА: `/published/<простір>/<задача>/` (так її і віддає
+ * сервер у `local.url`). Для `/api/task` будуємо її самі зі ЗНАНИХ id — сегменти через
+ * `encodeURIComponent`, як `quote(…, safe="")` на сервері. Нема id простору чи задачі — `null`:
+ * адреси не вигадуємо.
+ */
+export function localPublishUrl(space, task) {
+  const sid = space?.id;
+  const tid = task?.id;
+  if (typeof sid !== "string" || !sid || typeof tid !== "string" || !tid) return null;
+  return `/published/${encodeURIComponent(sid)}/${encodeURIComponent(tid)}/`;
+}
+
+/**
+ * Куди веде «Відкрити превью» / «Скопіювати посилання»: `{kind: 'local' | 'external', url, at}` або
+ * `null`. `at` — мілісекунди публікації для ЛОКАЛЬНОЇ (`published_at` у ISO UTC; не розбирається —
+ * `null`), для ЗОВНІШНЬОЇ — `null` (її `published_at` — локальний `ДД.ММ.РРРР ГГ:ХХ`, і сервер
+ * цього поля в UI не потребує). Коли є обидва сліди, перемагає той, що відповідає постачальнику
+ * простору: модуль → локальна, ЛІГА → зовнішня. Другий лишається запасним: простір міг змінити
+ * постачальника після публікації, а слід, на який людина ще може клікнути, не губимо.
+ */
+export function previewTarget(task, space) {
+  const local = localOf(task) ? localPublishUrl(space, task) : null;
+  const ext = typeof task?.publish_url === "string" && task.publish_url ? task.publish_url : null;
+  const asLocal = () => {
+    const ms = Date.parse(localOf(task).published_at);
+    return { kind: "local", url: local, at: Number.isFinite(ms) ? ms : null };
+  };
+  const asExternal = () => ({ kind: "external", url: ext, at: null });
+  if (isLegacyPublish(space)) return ext ? asExternal() : (local ? asLocal() : null);
+  return local ? asLocal() : (ext ? asExternal() : null);
+}
+
+/**
+ * Посилання, яке кладуть у буфер. ЗОВНІШНЄ — як було до модулів: `<url>/#k=<пароль>&p=<сторінка>`
+ * (обидва значення закодовано). ЛОКАЛЬНЕ — абсолютна адреса канваса БЕЗ фрагмента: пароль
+ * модуля — секрет, UI його не знає, а ЛІГА-шний сюди не належить; хто відкриє, введе його сам
+ * (якщо гейт увімкнено).
+ */
+export function copyUrl(target, { origin = "", pageId = "", password = "" } = {}) {
+  if (!target) return null;
+  if (target.kind === "local") return `${origin}${target.url}`;
+  return `${target.url.replace(/\/+$/, "")}/#k=${encodeURIComponent(password)}&p=${encodeURIComponent(pageId)}`;
+}
+
+/**
+ * Адреса з ВІДПОВІДІ сервера, яку можна відкрити вікном: лише відносний шлях `/published/<…>`.
+ * Решту (абсолютний URL, `//хост`, `javascript:`, пробіли, зворотний слеш) відкидаємо — `window.open`
+ * від відповіді, яку пише інший код, не мусить вести куди завгодно.
+ */
+export const safeLocalUrl = (url) =>
+  (typeof url === "string" && /^\/published\/[^/\\\s][^\\\s]*$/.test(url) ? url : null);
+
+/**
+ * Пароль превʼю й попередження про нього. Живе окремо від `barState`, бо «чий це пароль» — правило:
+ * у просторі, де публікує МОДУЛЬ, `preview_password` у відповіді сервера — це ЛІГА-шний, і ні він, ні
+ * `stale`/`ungated` (лічильники ЛІГА-збірки; для модуля сервер віддає `preview_gate.state ===
+ * 'module'`) не про цю публікацію. Для ЛІГА — рівно як було: попередження лише для ОПУБЛІКОВАНОЇ
+ * в ЛІГА задачі (`publish_url`): `publish/`, зібраний без деплою, нікому не роздано.
+ */
+export function pwView(task, space) {
+  if (!task || !isLegacyPublish(space)) return { pw: "", pwCustom: false, pwStale: false, pwUngated: 0 };
+  const gate = task.preview_gate;
+  return {
+    pw: task.preview_password || "",
+    pwCustom: !!task.preview_password_custom,
+    pwStale: !!task.publish_url && gate?.state === "stale",
+    pwUngated: task.publish_url && gate?.state === "ungated" ? gate.ungated : 0,
+  };
+}
+
+/* Відмови `POST /api/publish` (`code`) → ключі словника. `Map`, не обʼєкт (як `ERR_KEYS`). */
+const PUBLISH_ERR_KEYS = new Map([
+  ["no-publish-module", "publishErrNoModule"],
+  ["bad-folder", "publishErrBadFolder"],
+  ["publish-busy", "publishErrBusy"],
+  ["bad-task-id", "publishErrBadTaskId"],
+  ["module-error", "publishErrModule"],
+]);
+
+/* Код теки, який можна показати: `path-…` (відмова `folder_ok`) або `spaces-…`. Усе інше — це могла б
+   бути сама тека, а шляхи в тексті відмови нам не потрібні. */
+const FOLDER_CODE_RE = /^(?:path|spaces)-[a-z-]{1,30}$/;
+
+/**
+ * Що сказати людині, коли публікація впала: `{key, args}` для `t(key, ...args)`. Відомі коди модульної
+ * публікації мають свій людський текст; `module-error` — БЕЗ тексту модуля (там бувають шляхи); `bad-folder`
+ * несе лише код `path-*`/`spaces-*`. 400 БЕЗ коду — це `send_error` «жодної ітерації не позначено» (HTML,
+ * не JSON), і сирий розбір його тіла показав би розмітку. Решта — загальне «Не вдалося: …» з текстом сервера.
+ */
+export function publishErr(e) {
+  const code = e?.code;
+  const key = typeof code === "string" ? PUBLISH_ERR_KEYS.get(code) : undefined;
+  if (key === "publishErrBadFolder") return { key, args: [FOLDER_CODE_RE.test(e?.message ?? "") ? e.message : ""] };
+  if (key) return { key, args: [] };
+  if (e?.status === 400 && !code) return { key: "publishErrNoIterations", args: [] };
+  return { key: "errFailed", args: [e?.message ?? ""] };
+}

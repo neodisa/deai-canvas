@@ -357,6 +357,19 @@ const UK = {
   publishNotTaskLink: (owner, url) => `Це ТВОЄ превʼю (${url}), а не посилання задачі: задача веде на превʼю власника — ${owner}. Менеджеру давай його посилання.`,
   toastCopied: 'Посилання скопійовано',
   askCopyLinkPrompt: 'Скопіюй посилання:',
+  /* Публікація модулем у теку (модулі 2а, Task 8): локальна публікація, її підписи й відмови сервера.
+     Підпис «локально» — на «Відкрити превью» (з відносним часом, не сирим ISO) і «Скопіювати посилання».
+     Відмови — людською й без шляхів: у `bad-folder` лише код `path-*`, у `module-error` — без тексту модуля. */
+  publishLocalDone: 'Опубліковано локально',
+  publishOpen: 'Відкрити',
+  publishLocalSub: (when) => (when ? `локально · ${when}` : 'локально'),
+  publishLocalLinkSub: 'локально · адреса цього канваса',
+  publishErrNoModule: 'У цьому просторі немає модуля публікації — його вимкнено. Увімкнути можна в налаштуваннях простору.',
+  publishErrBadFolder: (why) => `Тека публікації не пройшла перевірку${why ? ` (${why})` : ''}: її задають налаштування модуля публікації простору.`,
+  publishErrBusy: 'Ця задача вже публікується — зачекайте завершення й повторіть.',
+  publishErrBadTaskId: 'Id задачі не годиться для теки публікації: потрібні лише латинські літери, цифри, _ і - (до 128 символів).',
+  publishErrModule: 'Модуль публікації відмовив. Перевірте його налаштування й теку публікації та повторіть.',
+  publishErrNoIterations: 'Жодної ітерації не позначено для публікації — увімкніть «Показувати в превью» (зелена крапка біля ітерації).',
   /* «В Figma» (T-41). Причини вимкнення — рядком у title кнопки й у ⌘K. Тексти
      помилок радять РЕАЛЬНЕ: у вбудованому браузері Claude буфер заборонений
      самим браузером (виміряно пілотом), а в Chrome друга спроба швидша, бо
@@ -1112,6 +1125,16 @@ const EN = {
   publishNotTaskLink: (owner, url) => `This is YOUR preview (${url}), not the task link: the task points to its owner's preview — ${owner}. Give the manager that link.`,
   toastCopied: 'Link copied',
   askCopyLinkPrompt: 'Copy the link:',
+  publishLocalDone: 'Published locally',
+  publishOpen: 'Open',
+  publishLocalSub: (when) => (when ? `local · ${when}` : 'local'),
+  publishLocalLinkSub: 'local · this canvas address',
+  publishErrNoModule: 'This space has no publish module — it is turned off. You can turn it on in the space settings.',
+  publishErrBadFolder: (why) => `The publish folder failed validation${why ? ` (${why})` : ''}: it is set by the space's publish module settings.`,
+  publishErrBusy: 'This task is already being published — wait for it to finish and try again.',
+  publishErrBadTaskId: 'The task id does not fit a publish folder: only Latin letters, digits, _ and - (up to 128 characters).',
+  publishErrModule: 'The publish module refused. Check its settings and the publish folder, then try again.',
+  publishErrNoIterations: 'No iteration is marked for publishing — turn on “Show in preview” (the green dot next to the iteration).',
   toFigma: 'To Figma',
   toFigmaTitle: 'Copy the current mockup to the clipboard — then ⌘V in a Figma file',
   whyFigmaOverview: 'Overview frames are snapshots; copying works on the live mockup in Layout',

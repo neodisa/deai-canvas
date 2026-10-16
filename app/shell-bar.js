@@ -477,13 +477,18 @@ function ddPublish(c) {
     }
     const icon = sub.id === "openpreview" ? "ext" : "link";
     const why = sub.disabled ? t(sub.whyKey) : "";
-    return ddItem({ act: sub.id, icon, title: t(sub.labelKey), why });
+    /* Підпис «локально» (публікація модулем, `bar-model.js`): ключ і аргументи з моделі, а не склеєний
+       там рядок — мову вибирає глядач. Час — уже текст (`app.js`, відносний: «5 хв тому»), не сирий ISO. */
+    const subText = sub.subKey ? t(sub.subKey, ...(sub.subArgs || [])) : "";
+    return ddItem({ act: sub.id, icon, title: t(sub.labelKey), why, sub: subText });
   }).join("");
   /* Застереження про гейт — БЕЗ `esc`, і це свідомо: рядок наш, зі словника, і
      несе один `<b>`. Той самий виняток, що вже діє для підписів із розміткою;
-     дані користувача сюди не потрапляють узагалі. */
+     дані користувача сюди не потрапляють узагалі. Лише для ЛІГА: воно про ЗОВНІШНЄ посилання, яке
+     роздають менеджеру, а локальну публікацію модуля віддає цей самий канвас, і «посилання фактично
+     публічне» там було б чужою тривогою. */
   return `<div class="dd dd--right">${parts}`
-    + `<div class="dd-note">${t("pubGateTruth")}</div></div>`;
+    + `${c.legacy ? `<div class="dd-note">${t("pubGateTruth")}</div>` : ""}</div>`;
 }
 
 function zonePublish(c, openDd) {

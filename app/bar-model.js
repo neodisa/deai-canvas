@@ -33,6 +33,8 @@
  * смузі: на вузькому вікні фішка з'їдала крихти задачі й ітерації.
  */
 
+import { hasPublish, isLegacyPublish } from "./spaces-model.js";
+
 /**
  * Яруси зникнення в зоні 2, ширина вікна в пікселях. Значення підтверджені
  * прототипом (`docs/proto/shell.html`, секція «СМУГА: три зони»): `gl` і
@@ -41,8 +43,10 @@
  */
 export const TIERS = { gl: 1300, mode: 1180, view: 1060 };
 
-/** Контроли зони 3, що ходять назовні, — їх немає в просторі без інтеграцій (див. `barModel`). */
-const OUTWARD = new Set(["gl", "publish"]);
+/* Раніше тут був спільний набір «контролів назовні» (`gl` + `publish`), які разом зникали з простору
+   без інтеграцій (`integrations === false`). З модулями 2а їх розщеплено: GitLab лишився на
+   `integrations`, а публікація пішла на `hasPublish` (`capabilities.publish`) — простір без інтеграцій
+   публікує вбудованим модулем у теку (див. `barModel`, «Вимикач»). */
 
 /**
  * Причина, з якої «Флоу» недоступний у сегменті «Сітка/Флоу». Три РІЗНІ
@@ -280,7 +284,55 @@ export function barModel(s) {
 
   const linkWhy = linkWhyKey(s);
   const figmaWhy = figmaWhyKey(s);
-  const zone3Full = [
+  /* Вимикач інтеграцій (спека просторів, розділ «Вимикач») і публікація модулем (спека 2а).
+     Два РІЗНІ питання, і розщепив їх Task 8 модулів:
+       · `noInteg` — простір, де `integrations === false`: він не має GitLab, Teams-каналу
+         задачі й командного каналу — вони ходять назовні (git push, дашборд команди), а там цього
+         нема. Рівно `=== false`, а не «нема значення»: простір без відомостей (стара форма
+         відповіді, шар вимкнено) не має красти в людини GitLab.
+       · `hasPublish` — чи є в просторі ХТОСЬ, хто публікує: зашитий код ЛІГА (`'legacy'`) або
+         модуль (`static-publish`, локальна тека, нічого назовні). Без інтеграцій публікує модуль, тож
+         кнопка «Опублікувати» там ЖИВА. `capabilities.publish === null` (модуль вимкнено) — публікації
+         нема, і вона ЗНИКАЄ з моделі, а не стоїть мертвою кнопкою: причина «публікувати нічим» не
+         лікується кліком.
+     «В Figma» лишається завжди — вона працює по живому макету. */
+  const noInteg = s.space?.integrations === false;
+  const legacy = isLegacyPublish(s.space);
+  /* Підпис «локально» — дані (ключ + аргументи), а не готовий текст: мову вибирає глядач. Лише для
+     ЛОКАЛЬНОЇ публікації (`pubLocal`, її каже `previewTarget` в `app.js`). */
+  const localSub = (key, args = []) => (s.pubLocal ? { subKey: key, subArgs: args } : {});
+  const publishItems = [
+    { id: "togglepub", labelKey: "showInPreview", on: !!s.iterPub },
+    {
+      id: "openpreview", labelKey: "openPreview",
+      disabled: !s.published, whyKey: s.published ? "" : "whyNoPublish",
+      ...localSub("publishLocalSub", [s.pubWhen || ""]),
+    },
+    {
+      id: "copylink", labelKey: "copyLink",
+      disabled: !!linkWhy, whyKey: linkWhy,
+      ...localSub("publishLocalLinkSub"),
+    },
+    /* Тиша Teams на канал задачі (батч 1.52). Невідомо (ще вантажиться чи
+       база недосяжна) — пункт вимкнений З ПРИЧИНОЮ: показати «увімкнено»
+       навмання — та сама брехня, від якої тиша мусить бути видимою.
+       Лише з інтеграціями: без них `app.js` тримає `teams: null` ВІЧНО (стану
+       тиші немає, `/api/teams-mute` там відповідає 409), і пункт висів би
+       вічним «перевіряю стан у базі…». З інтеграціями `null` — коротка мить
+       завантаження, і саме для неї причина й потрібна. */
+    ...(noInteg ? [] : [teamsItem(s.teams)]),
+    /* Пароль превʼю (ідея 02.09.2026). НЕ вимикається ніколи: задати пароль
+       до першої публікації — нормальний порядок. `warnKey` — «новий пароль
+       ще не в превʼю», це попередження, а не причина вимкнення. Лише ЛІГА: у
+       модуля свій пароль — секрет, якого UI не знає (`spaces-model.js`, `pwView`). */
+    ...(legacy ? [{
+      id: "pubpw", labelKey: "pubPw", pw: s.pw || "",
+      subKey: s.pwCustom ? "pubPwCustom" : "pubPwDefault",
+      warnKey: s.pwStale ? "pubPwStale" : (s.pwUngated ? "pubPwUngated" : ""),
+      warnArgs: s.pwUngated ? [s.pwUngated] : [],
+    }] : []),
+  ];
+  const zone3 = [
     /* «В Figma» (T-41) — ПЕРЕД GitLab, щоб головна кнопка публікації лишалась
        крайньою справа (рішення власника 28.09.2026). В «Огляді» не зникає, як
        інспектор, а стоїть вимкненою з причиною: зона 3 не сміє стрибати при
@@ -294,54 +346,23 @@ export function barModel(s) {
       iconOnly: s.mode === "overview",
       busy: !!s.figmaBusy, disabled: !!figmaWhy, whyKey: figmaWhy,
     },
-    {
+    ...(noInteg ? [] : [{
       id: "gl", tier: 0, labelTier: TIERS.gl,
       labelKey: "gitlab", status: s.gl, items: glItems,
-    },
-    {
+    }]),
+    ...(hasPublish(s.space) ? [{
       id: "publish", tier: 0,
       // Іконка є ЗАВЖДИ, у кожному стані — саме тут живий інструмент ставав
       // 20-піксельним обрубком: підпис ховався, а іконки не було.
       icon: s.pubStale ? "warn" : "up",
       published: !!s.published, stale: !!s.pubStale,
+      /* Чий це постачальник: розмітка ховає застереження про «публічне ЛІГА-посилання»
+         (`pubGateTruth`) там, де публікує модуль. */
+      legacy,
       labelKey: s.published ? "update" : "publish",
-      items: [
-        { id: "togglepub", labelKey: "showInPreview", on: !!s.iterPub },
-        {
-          id: "openpreview", labelKey: "openPreview",
-          disabled: !s.published, whyKey: s.published ? "" : "whyNoPublish",
-        },
-        {
-          id: "copylink", labelKey: "copyLink",
-          disabled: !!linkWhy, whyKey: linkWhy,
-        },
-        /* Тиша Teams на канал задачі (батч 1.52). Невідомо (ще вантажиться чи
-           база недосяжна) — пункт вимкнений З ПРИЧИНОЮ: показати «увімкнено»
-           навмання — та сама брехня, від якої тиша мусить бути видимою. */
-        teamsItem(s.teams),
-        /* Пароль превʼю (ідея 02.09.2026). НЕ вимикається ніколи: задати пароль
-           до першої публікації — нормальний порядок. `warnKey` — «новий пароль
-           ще не в превʼю», це попередження, а не причина вимкнення. */
-        {
-          id: "pubpw", labelKey: "pubPw", pw: s.pw || "",
-          subKey: s.pwCustom ? "pubPwCustom" : "pubPwDefault",
-          warnKey: s.pwStale ? "pubPwStale" : (s.pwUngated ? "pubPwUngated" : ""),
-          warnArgs: s.pwUngated ? [s.pwUngated] : [],
-        },
-      ],
-    },
+      items: publishItems,
+    }] : []),
   ];
-  /* Вимикач інтеграцій (спека просторів, розділ «Вимикач»): простір, де
-     `integrations === false`, не має ні GitLab, ні публікації — вони ходять
-     назовні (git push, Vercel, дашборд команди), а там цього нема. Контрол не
-     «вимикається з причиною», а ЗНИКАЄ з моделі: причина «тут нема служби» не
-     лікується жодним кліком, і мертва кнопка читалась би як «щось зламалось».
-     «В Figma» лишається — вона працює по живому макету. Рівно `=== false`, а не
-     «нема значення»: простір без відомостей про інтеграції (стара форма
-     відповіді, шар вимкнено) не має красти в людини GitLab. */
-  const zone3 = s.space?.integrations === false
-    ? zone3Full.filter((x) => !OUTWARD.has(x.id))
-    : zone3Full;
 
   // Стан «tasks.json не читається» (ревʼю Task 8, п.6): у прототипі
   // (`renderBar`) під трьома зонами зʼявляється смуга помилки з причиною й

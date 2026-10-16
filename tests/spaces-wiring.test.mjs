@@ -332,7 +332,9 @@ test("палітра ⌘K: простори — масив лише коли ш�
   const body = fn("paletteState");
   assert.match(body, /spaces: spacesResp && !spacesResp\.off \? spacesResp\.spaces : undefined,/);
   assert.match(body, /spaceId: st\.space\?\.id \?\? null,/);
-  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, integrations: st\.space\.integrations \} : null,/);
+  /* Task 8 (модулі 2а): до вимикача додано `capabilities` — на них тепер стоїть публікація в ⌘K
+     (`hasPublish`), а лише `integrations` не відрізняє «публікує модуль» від «публікації нема». */
+  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, integrations: st\.space\.integrations, capabilities: st\.space\.capabilities \} : null,/);
   assert.match(fn("openPalette"), /loadSpaces\(\)\.then\(\(\) => \{ if \(paletteOverlay === 'pal'\) repaintPaletteList\(\); \}\);/);
 });
 
@@ -384,4 +386,76 @@ test("дропдаун просторів: після Enter/кліку на ря
   assert.ok(tail.indexOf("openDd = null;") < tail.indexOf("if (fromSpaces) focusChip();"), "фішку фокусуємо ПІСЛЯ закриття дропдауна");
   assert.ok(tail.indexOf("paintBar();") < tail.indexOf("if (fromSpaces) focusChip();"), "і після перемальовки смуги (вузол фішки новий)");
   assert.ok(tail.indexOf("if (fromSpaces) focusChip();") < tail.indexOf("BAR_ACTIONS[act]?.("), "і ДО дії: діалог бере відкривача з activeElement");
+});
+
+/* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
+   Правила — у `spaces-model.js` (`tests/spaces-publish.test.mjs`); тут — що `app.js` ними
+   КОРИСТУЄТЬСЯ і що не лишилось другого шляху повз правило. `noOutward` НЕ змінено: на ньому
+   стоять опитування GitLab/Teams і командний канал, а публікація пішла на `hasPublish`. */
+
+/** Тіло дії `BAR_ACTIONS`: від `\n  <name>:` до наступної дії рівня 2 пробілів (або кінця мапи). */
+function barAct(name) {
+  const i = src.indexOf(`\n  ${name}: `);
+  assert.ok(i > 0, `BAR_ACTIONS.${name} немає`);
+  const m = /\n  [a-zA-Z]+: |\n};/.exec(src.slice(i + 5));
+  return src.slice(i, i + 5 + (m ? m.index : 4000));
+}
+
+test("смуга: `published` — publish_url АБО publish_local, ціль превʼю і пароль — через модель", () => {
+  const body = fn("barState");
+  assert.match(body, /published: isPublished\(curTask\),/);
+  assert.doesNotMatch(body, /published: !!\(curTask && curTask\.publish_url\)/, "старий шлях лишився");
+  assert.match(body, /\.\.\.pwView\(curTask, spaceNow\(\)\),/, "пароль і попередження про гейт — повз правило");
+  assert.doesNotMatch(body, /curTask\?\.preview_password/, "сирий пароль ЛІГА в смузі повз `pwView`");
+  assert.doesNotMatch(body, /preview_gate\?\.state === 'stale'/, "pwStale повз `pwView`");
+  assert.match(body, /pubLocal: /);
+  assert.match(body, /pubWhen: /);
+  assert.match(body, /previewTarget\(curTask, spaceNow\(\)\)/);
+});
+
+test("публікація: відповідь модуля (`local`) — плашка «Опубліковано локально» з «Відкрити», а не «деплой не вдався»", () => {
+  const body = barAct("publish");
+  assert.match(body, /if \(r\.url\) \{ render\(\); return; \}/, "шлях ЛІГА змінено");
+  assert.match(body, /const local = safeLocalUrl\(r\.local\?\.url\);/);
+  assert.match(body, /if \(r\.local\) \{/);
+  assert.match(body, /notice\('publish-local', t\('publishLocalDone'\)/);
+  assert.match(body, /act: 'open'/);
+  assert.match(body, /window\.open\(local, '_blank'\)/);
+  /* `publishDeployFailed` — лише для відповіді без `url` і без `local` (ЛІГА без деплою). */
+  assert.ok(body.indexOf("r.local") < body.indexOf("publishDeployFailed"), "гілка `local` стоїть ПІСЛЯ «деплой не вдався»");
+  assert.match(body, /const m = publishErr\(e\);\n\s+tell\(t\(m\.key, \.\.\.m\.args\)\);/, "відмова повз `publishErr`");
+  assert.doesNotMatch(body, /catch \(e\) \{ tell\(t\('errFailed', e\.message\)\); \}/, "стара загальна відмова лишилась");
+});
+
+test("«Відкрити превью» і «Скопіювати посилання»: ціль — з моделі, локальне посилання без пароля", () => {
+  const open = barAct("openpreview");
+  assert.match(open, /previewTarget\(curTask, spaceNow\(\)\)/);
+  assert.match(open, /window\.open\(/);
+  assert.doesNotMatch(open, /curTask\?\.publish_url/, "відкриття повз `previewTarget`");
+  const copy = barAct("copylink");
+  assert.match(copy, /previewTarget\(curTask, spaceNow\(\)\)/);
+  assert.match(copy, /copyUrl\(target, \{/);
+  assert.match(copy, /origin: location\.origin/);
+  assert.doesNotMatch(copy, /#k=/, "фрагмент із паролем збирається лише в моделі (`copyUrl`)");
+});
+
+test("палітра й смуга: публікація — на hasPublish, GitLab і командний канал — на integrations", () => {
+  assert.match(pal, /import \{ hasPublish \} from "\.\/spaces-model\.js";/);
+  assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
+  assert.match(pal, /if \(!noOutward\) \{\n    \/\/ Той самий трьохгілковий розгляд/);
+  assert.match(pal, /if \(noOutward && ch === "project"\) continue;/);
+  const model = readFileSync(new URL("../app/bar-model.js", import.meta.url), "utf8");
+  assert.match(model, /hasPublish\(s\.space\)/);
+  assert.match(model, /isLegacyPublish\(s\.space\)/);
+  assert.doesNotMatch(model, /const OUTWARD = /, "спільний набір «назовні» мав розщепитись на gl і publish");
+});
+
+test("`noOutward` у app.js лишається на інтеграціях (публікація його не питає)", () => {
+  assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/);
+  assert.doesNotMatch(src, /hasPublish\(spaceNow\(\)\)[^;]*noOutward|noOutward\(\)[^;]*hasPublish/);
+});
+
+test("дропдаун публікації: підпис «локально» й застереження про ЛІГА-гейт — за моделлю", () => {
+  assert.match(bar, /const subText = sub\.subKey \? t\(sub\.subKey, \.\.\.\(sub\.subArgs \|\| \[\]\)\) : "";\n\s+return ddItem\(\{ act: sub\.id, icon, title: t\(sub\.labelKey\), why, sub: subText \}\);/);
+  assert.match(bar, /c\.legacy \? `<div class="dd-note">\$\{t\("pubGateTruth"\)\}<\/div>` : ""/);
 });

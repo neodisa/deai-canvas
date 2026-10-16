@@ -895,3 +895,65 @@ test("палітра: «Копіювати посилання» і «Відкр�
   assert.deepEqual(st(f({}, "openpreview")), [false, ""]);
   assert.deepEqual(st(f({}, "copylink")), [false, ""]);
 });
+
+/* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
+   Спільний `if (!noOutward)` розщеплено: `publish`/`togglepub`/`copylink`/`openpreview`
+   ходять на `hasPublish` (`spaces-model.js`), а GitLab (`gl*`) і командний канал
+   (`aud-project`) лишились на `integrations`. Простір без інтеграцій, де публікує
+   вбудований модуль, отримує публікацію, але не GitLab. */
+{
+  const MODS = { id: "p", integrations: false, capabilities: { publish: "static-publish", tokens: null } };
+  const LEGS = { id: "liga", integrations: true, capabilities: { publish: "legacy", tokens: null } };
+  const NOPUB = { id: "n", integrations: false, capabilities: { publish: null, tokens: null } };
+  const PUB = ["publish", "togglepub", "copylink", "openpreview"];
+  const GL = ["glpush", "glpull", "glsetup"];
+  const ids = (space, o = {}) => paletteActions(S({ space, gl: "behind", ...o })).map((a) => a.id);
+
+  test("публікація модулем: у палітрі публікація, превʼю й посилання — без GitLab і командного каналу", () => {
+    const got = ids(MODS);
+    for (const id of PUB) assert.ok(got.includes(id), `«${id}» мусить бути в палітрі простору з модулем`);
+    for (const id of [...GL, "aud-project"]) assert.ok(!got.includes(id), `«${id}» — на інтеграціях, а їх тут нема`);
+    assert.ok(got.includes("aud-local"), "аварійний вихід до локального каналу лишається");
+    assert.ok(!ids(MODS, { gl: "off" }).includes("glsetup"));
+  });
+
+  test("простір без постачальника публікації (`publish: null`): жодної з чотирьох дій публікації", () => {
+    const got = ids(NOPUB);
+    for (const id of [...PUB, ...GL, "aud-project"]) assert.ok(!got.includes(id), id);
+    assert.ok(ids({ ...NOPUB, integrations: true }).includes("glpush"), "GitLab — на інтеграціях, не на публікації");
+    assert.ok(!ids({ ...NOPUB, integrations: true }).includes("publish"));
+  });
+
+  test("простір ЛІГА (`legacy`): палітра ціла, як була", () => {
+    const got = ids(LEGS);
+    for (const id of [...PUB, ...GL.slice(0, 2), "aud-project"]) assert.ok(got.includes(id), id);
+    assert.deepEqual(got, ids(null), "те саме, що без відомостей про простір");
+  });
+
+  test("простір з модулем: відрізняється від ЛІГА рівно GitLab і командним каналом", () => {
+    const mod = ids(MODS);
+    const gone = ids(LEGS).filter((id) => !mod.includes(id)).sort();
+    assert.deepEqual(gone, ["aud-project", "glpull", "glpush"]);
+  });
+
+  test("модуль публікації при ввімкнених інтеграціях: GitLab і командний канал живі", () => {
+    const got = ids({ ...MODS, integrations: true });
+    for (const id of [...PUB, "glpush", "glpull", "aud-project"]) assert.ok(got.includes(id), id);
+  });
+
+  test("порядок групи gPub не змінився: figma, publish, togglepub, copylink, openpreview, потім GitLab", () => {
+    const order = paletteActions(S({ space: LEGS, gl: "behind" })).filter((a) => a.group === "gPub").map((a) => a.id);
+    assert.deepEqual(order, ["figma", "publish", "togglepub", "copylink", "openpreview", "glpull", "glpush"]);
+    const mod = paletteActions(S({ space: MODS, gl: "behind" })).filter((a) => a.group === "gPub").map((a) => a.id);
+    assert.deepEqual(mod, ["figma", "publish", "togglepub", "copylink", "openpreview"]);
+  });
+
+  test("публікація модулем у палітрі: «Опублікувати»/«Оновити» — за `published`, `openpreview` вимкнено без публікації", () => {
+    const find = (o, id) => paletteActions(S({ space: MODS, ...o })).find((a) => a.id === id);
+    assert.equal(find({ published: false }, "publish").labelKey, "publish");
+    assert.equal(find({ published: true }, "publish").labelKey, "update");
+    assert.equal(find({ published: false }, "openpreview").disabled, true);
+    assert.equal(find({ published: false }, "openpreview").whyKey, "whyNoPublish");
+    assert.ok(!find({ published: true }, "openpreview").disabled);
+  });
+}

@@ -761,3 +761,66 @@ test("розмітка зі space збалансована: кожен <button> 
     }
   }
 });
+
+/* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
+   Розмітка читає те, що віддала модель: простір без інтеграцій з модулем публікації
+   має кнопку «Опублікувати» і дропдаун — без GitLab, пароля ЛІГА, Teams і
+   застереження про «публічність» ЛІГА-посилання (воно про зовнішній URL). Підпис
+   «локально» — на «Відкрити» й «Скопіювати». */
+const CAPS_SP = (publish, o = {}) => ({
+  id: "p", name: "P", color: "space-2", integrations: false, capabilities: { publish, tokens: null }, ...o,
+});
+const btn = (h, act) => (h.match(new RegExp(`<button[^>]*data-act="${act}"[^]*?</button>`)) || [null])[0];
+
+test("модуль публікації без інтеграцій: кнопка й дропдаун публікації є, GitLab нема", () => {
+  const h = html({ space: CAPS_SP("static-publish"), openDd: "pub", teams: null });
+  assert.ok(btn(h, "publish"), "кнопки «Опублікувати» нема");
+  assert.match(h, /data-dd="pub"/);
+  assert.doesNotMatch(h, /data-dd="gl"/);
+  for (const act of ["togglepub", "openpreview", "copylink"]) assert.ok(btn(h, act), `${act} не намальовано`);
+  for (const act of ["teamsnotify", "pubpw"]) assert.equal(btn(h, act), null, `${act} не мусить бути без ЛІГА`);
+  assert.doesNotMatch(h, /class="dd-note"/, "застереження про публічне ЛІГА-посилання тут не про те");
+  assert.doesNotMatch(h, /перевіряю/, "вічного «перевіряю стан» нема");
+});
+
+test("ЛІГА-простір: застереження про публічність і пароль — на місці", () => {
+  const h = html({ space: CAPS_SP("legacy", { integrations: true }), openDd: "pub", pw: "1100", teams: { channel: "c", muted: false } });
+  assert.match(h, /class="dd-note"/);
+  assert.ok(btn(h, "pubpw"));
+  assert.ok(btn(h, "teamsnotify"));
+  assert.match(h, /data-dd="gl"/);
+});
+
+test("простір без постачальника публікації: ні кнопки, ні дропдауна публікації (і розмітка не кидає)", () => {
+  let h;
+  assert.doesNotThrow(() => { h = html({ space: CAPS_SP(null), openDd: "pub" }); });
+  assert.equal(btn(h, "publish"), null);
+  assert.doesNotMatch(h, /data-dd="pub"/);
+  assert.ok(btn(h, "figma"), "«В Figma» лишається");
+});
+
+test("локальна публікація: підпис «локально» (з часом) на «Відкрити», адреса канваса на «Скопіювати»", () => {
+  const h = html({ space: CAPS_SP("static-publish"), openDd: "pub", pubLocal: true, pubWhen: "5 хв тому" });
+  assert.match(btn(h, "openpreview"), /локально · 5 хв тому/);
+  assert.match(btn(h, "copylink"), /локально/);
+  assert.doesNotMatch(btn(h, "openpreview"), /disabled/);
+  const plain = html({ space: CAPS_SP("static-publish"), openDd: "pub" });
+  assert.doesNotMatch(btn(plain, "openpreview"), /локально/);
+});
+
+test("локальна публікація англійською: «local» без сирого ISO", () => {
+  setLang("en");
+  try {
+    const h = html({ space: CAPS_SP("static-publish"), openDd: "pub", pubLocal: true, pubWhen: "5 min ago" });
+    assert.match(btn(h, "openpreview"), /local · 5 min ago/);
+    assert.doesNotMatch(h, /\d{4}-\d\d-\d\dT/);
+  } finally { setLang("uk"); }
+});
+
+test("розмітка публікації модулем збалансована: кожен <button> і <div> закрито", () => {
+  const h = html({ space: CAPS_SP("static-publish"), openDd: "pub", pubLocal: true, pubWhen: "щойно" });
+  for (const tag of ["button", "div"]) {
+    assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length,
+      (h.match(new RegExp(`</${tag}>`, "g")) || []).length, `<${tag}> не збалансовано`);
+  }
+});
