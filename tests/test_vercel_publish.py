@@ -111,6 +111,9 @@ class _Server:
                 with outer._lock:
                     outer.requests.append(rec)
                 status, payload, headers = respond(rec)
+                if status == 'drop':                    # обрив: зʼєднання закрито без відповіді
+                    self.close_connection = True
+                    return
                 ctype = 'application/json'
                 if payload is None:
                     data = b''
@@ -169,13 +172,21 @@ class FakeVercel(_Server):
         self.delete_fail = set()
         self.overrides = []
         self.digest_mismatch = []
+        self.projects = {}                              # імʼя → id проєктів, що «вже є в акаунті»
+        self.project_delete_fail = False
+        self.bad_token_status = 401                     # 401 чи 403+invalidToken — Vercel роблять обидва
+        self.alias_lag = 0                              # скільки відповідей READY іще БЕЗ alias (`aliasAssigned: null`)
+        self.alias_never = False                        # alias так і не призначається
+        self.alias_error = None                         # `aliasError` у відповіді READY
+        self.ready_polls = 0
         self._state_lock = threading.Lock()
         super().__init__(self.respond)
 
     # ---- сценарій
-    def override(self, method, prefix, status, body=None, headers=None, delay=0):
+    def override(self, method, prefix, status, body=None, headers=None, delay=0, times=None):
+        """Перебити маршрут; `times=N` — лише N перших разів; `status='drop'` — обрив зʼєднання без відповіді."""
         self.overrides.append({'method': method, 'prefix': prefix, 'status': status, 'body': body,
-                               'headers': headers or {}, 'delay': delay})
+                               'headers': headers or {}, 'delay': delay, 'times': times})
 
     def reqs(self, method=None, prefix=None):
         return [r for r in self.requests
@@ -188,11 +199,19 @@ class FakeVercel(_Server):
     def respond(self, rec):
         for o in self.overrides:
             if o['method'] == rec['method'] and rec['path'].startswith(o['prefix']):
+                with self._state_lock:
+                    if o['times'] is not None:
+                        if o['times'] <= 0:
+                            continue
+                        o['times'] -= 1
+                if o['status'] == 'pass':               # цей виклик — звичайна відповідь (для чергування збоїв і успіхів)
+                    break
                 if o['delay']:
                     time.sleep(o['delay'])
                 return o['status'], o['body'], o['headers']
         if rec['headers'].get('authorization') != 'Bearer ' + self.token:
-            return 401, {'error': {'code': 'forbidden', 'message': 'Not authorized', 'invalidToken': True}}, {}
+            return self.bad_token_status, {'error': {'code': 'forbidden', 'message': 'Not authorized',
+                                                      'invalidToken': True}}, {}
         m, p = rec['method'], rec['path']
         pid = self.dep_project_id or self.project_id
         if m == 'GET' and p == '/v2/user':
@@ -204,14 +223,25 @@ class FakeVercel(_Server):
                 taken = self.taken > 0
                 if taken:
                     self.taken -= 1
+            name = p.rsplit('/', 1)[1]
             if taken:
-                return 200, {'id': 'prj_taken', 'name': p.rsplit('/', 1)[1]}, {}
+                return 200, {'id': 'prj_taken', 'name': name}, {}
+            if name in self.projects:
+                return 200, {'id': self.projects[name], 'name': name}, {}
             return 404, {'error': {'code': 'not_found', 'message': 'Project not found'}}, {}
+        if m == 'DELETE' and p.startswith('/v9/projects/'):
+            if self.project_delete_fail:
+                return 500, {'error': {'code': 'internal', 'message': 'cannot delete project'}}, {}
+            return 200, {}, {}
         if m == 'POST' and p == '/v2/files':
             if rec['headers'].get('x-vercel-digest') != sha1(rec['body']):
                 self.digest_mismatch.append(rec['headers'].get('x-vercel-digest'))
             return 200, {'urls': []}, {}
         if m == 'POST' and p == '/v13/deployments':
+            try:
+                self.projects.setdefault(json.loads(rec['body'])['name'], pid)     # проєкт «створився» разом із публікацією
+            except (ValueError, KeyError):
+                pass
             return 200, {'id': self.dep_id, 'url': self.deployment_url, 'readyState': 'QUEUED',
                          'projectId': pid}, {}
         if m == 'GET' and p.startswith('/v13/deployments/'):
@@ -219,8 +249,14 @@ class FakeVercel(_Server):
                 st = self.states.pop(0) if len(self.states) > 1 else self.states[0]
             body = {'id': p.rsplit('/', 1)[1], 'readyState': st, 'url': self.deployment_url, 'projectId': pid}
             if st == 'READY':
-                body['alias'] = list(self.aliases)
-            if st in ('ERROR', 'CANCELED'):
+                with self._state_lock:
+                    self.ready_polls += 1
+                    assigned = not self.alias_never and not self.alias_error and self.ready_polls > self.alias_lag
+                body['alias'] = list(self.aliases) if assigned else []
+                body['aliasAssigned'] = 1760000000000 if assigned else None
+                if self.alias_error:
+                    body['aliasError'] = dict(self.alias_error) if isinstance(self.alias_error, dict) else self.alias_error
+            if st in ('ERROR', 'CANCELED', 'BLOCKED', 'DELETED'):
                 body['errorMessage'] = self.error_message
             return 200, body, {}
         if m == 'GET' and p == '/v6/deployments':
@@ -238,10 +274,11 @@ class FakeSite(_Server):
 
     def __init__(self):
         self.mode = '200'
+        self.script = []                                # режими «по одному на запит», далі — `mode`
         super().__init__(self.respond)
 
     def respond(self, rec):
-        m = self.mode
+        m = self.script.pop(0) if self.script else self.mode
         if m == '200':
             return 200, '<h1>preview</h1>', {}
         if m == 'login':
@@ -257,6 +294,24 @@ class FakeSite(_Server):
         if m in ('401', '403', '404', '500'):
             return int(m), 'nope', {}
         raise AssertionError(m)
+
+
+class _TimeGuard:
+    """Підміна `time` у глобалах модуля: рахує `sleep` і після `LIMIT` кидає `AssertionError`. Цикл опитування, що
+    (через помилку в модулі) не закінчується, падає за секунди, а не висить до тайм-ауту всього прогону."""
+    LIMIT = 3000
+
+    def __init__(self):
+        self.sleeps = 0
+
+    def sleep(self, seconds):
+        self.sleeps += 1
+        if self.sleeps > self.LIMIT:
+            raise AssertionError('runaway polling loop in the module')
+        time.sleep(seconds)
+
+    def monotonic(self):
+        return time.monotonic()
 
 
 class Tripwire:
@@ -305,11 +360,11 @@ class Tripwire:
         self._patches = []
 
 
-def entries(n, pid='prj_mine', current='dpl_cur'):
+def entries(n, pid='prj_mine', current='dpl_cur', name='pv-12345678'):
     """Список публікацій для `GET /v6/deployments`: `current` найновіша, далі `o1`…`o<n-1>` усе старішими. Порядок у
     відповіді — НЕ за часом (модуль сортує сам)."""
-    out = [{'uid': current, 'created': 1000, 'projectId': pid}]
-    out += [{'uid': f'o{i}', 'created': 1000 - i * 10, 'projectId': pid} for i in range(1, n)]
+    out = [{'uid': current, 'created': 1000, 'projectId': pid, 'name': name}]
+    out += [{'uid': f'o{i}', 'created': 1000 - i * 10, 'projectId': pid, 'name': name} for i in range(1, n)]
     return out[1:] + out[:1]
 
 
@@ -354,6 +409,7 @@ class Base(unittest.TestCase):
         self.addCleanup(self.api.stop)
         self.site = FakeSite()
         self.addCleanup(self.site.stop)
+        self.api.projects['pv-12345678'] = 'prj_mine'    # проєкт зі `STATE` у акаунті є
         self.evil = _Server(lambda rec: (200, {'stolen': True}, {}))     # «чужий хост», куди токен потрапляти не мусить
         self.addCleanup(self.evil.stop)
         # розтяжка — ПІСЛЯ серверів; системні проксі не мають підмінити loopback на машині дизайнера
@@ -411,7 +467,8 @@ class Base(unittest.TestCase):
             self.preview_urls.append(url)
             sp = urllib.parse.urlsplit(url)
             return real_fetch(f'http://127.0.0.1:{self.site.port}{sp.path or "/"}', *a, **k)
-        over = {'API_BASE': self.api.base, 'POLL_S': 0.001, 'POLL_MAX_S': 10, '_fetch_preview': mapped}
+        over = {'API_BASE': self.api.base, 'POLL_S': 0.001, 'POLL_MAX_S': 10, 'ALIAS_MAX_S': 1,
+                'VERIFY_RETRY_S': 0.001, '_fetch_preview': mapped, 'time': _TimeGuard()}
         over.update(extra)
         return mock.patch.dict(g, over)
 
@@ -478,6 +535,9 @@ class Catalog(Base):
         g = self.fn('publish').__globals__
         self.assertEqual((g['API_BASE'], g['POLL_S'], g['POLL_MAX_S'], g['KEEP']),
                          ('https://api.vercel.com', 1.5, 180, 3))
+        self.assertEqual((g['ALIAS_MAX_S'], g['UPLOAD_TOTAL_S'], g['CLEANUP_MAX_S'], g['MAX_FILES'], g['MAX_FILE_BYTES'],
+                          g['VERIFY_RETRIES'], g['VERIFY_RETRY_S'], g['POLL_TRANSIENT'], g['UPLOAD_RETRIES']),
+                         (30, 300, 60, 5000, 50 << 20, 2, 1.5, 3, 1))
 
 
 # ------------------------------------------------------------------------------------------ повний цикл
@@ -541,12 +601,13 @@ class FullCycle(Base):
         up = self.api.reqs('POST', '/v2/files')
         self.assertEqual(sorted(r['body'] for r in up), [b'other', b'same'])
 
-    def test_the_second_publish_with_the_state_does_not_probe_the_project(self):
+    def test_the_second_publish_with_the_state_checks_that_project_and_reuses_it(self):
         first = self.publish()
         self.api.requests.clear()
         self.api.dep_id = 'dpl_two'
         second = self.publish(state=first['state'])
-        self.assertEqual(self.api.reqs('GET', '/v9/projects'), [])
+        probes = self.api.reqs('GET', '/v9/projects')
+        self.assertEqual([r['path'] for r in probes], ['/v9/projects/' + first['state']['project']])   # одна: те саме імʼя
         (body,) = self.api.bodies('/v13/deployments')
         self.assertEqual((body['name'], body['project']), (first['state']['project'],) * 2)
         self.assertEqual(second['state'], {'project': first['state']['project'], 'project_id': 'prj_mine',
@@ -605,7 +666,7 @@ class FullCycle(Base):
             with self.assertRaises(RuntimeError) as cm:
                 g['_req'](self.ctx(), 'GET', '/v9/projects/pv-1', timeout=0.2)
         self.assertLess(time.monotonic() - t0, 1.2)
-        self.assertEqual(str(cm.exception), 'Vercel недоступний')
+        self.assertRegex(str(cm.exception), r'^Vercel недоступний \(\w+\)$')      # з імʼям класу збою, без подробиць
 
 
 # ------------------------------------------------------------------------------------------------ team
@@ -838,6 +899,40 @@ class Verification(Base):
         self.assertNotIn(TOKEN.encode(), self.blob(rec))
         self.assertEqual(self.preview_urls, [SITE_URL])
 
+    def test_a_preview_that_is_not_there_yet_is_retried(self):
+        self.site.script = ['404', '500']
+        res = self.publish()
+        self.assertIs(res['verified'], True)
+        self.assertEqual(res['warnings'], [])
+        self.assertEqual(len(self.site.requests), 3)
+
+    def test_it_gives_up_after_two_retries(self):
+        self.site.mode = '404'
+        res = self.publish()
+        self.assertIs(res['verified'], False)
+        self.assertEqual(len(self.site.requests), 3)                              # спроба + 2 повтори
+        self.assertTrue(res['warnings'])
+
+    def test_no_answer_is_retried_too(self):
+        self.site.stop()
+        res = self.publish()
+        self.assertIs(res['verified'], False)
+        self.assertEqual(self.preview_urls, [SITE_URL] * 3)
+
+    def test_the_retries_are_spaced(self):
+        self.site.mode = '500'
+        t0 = time.monotonic()
+        self.publish(VERIFY_RETRY_S=0.1)
+        self.assertGreaterEqual(time.monotonic() - t0, 0.19)
+
+    def test_protection_and_redirects_are_not_retried(self):
+        for mode in ('login', '401', '403', 'sso', 'same-host', 'lookalike'):
+            with self.subTest(mode):
+                self.site.requests.clear()
+                self.site.mode = mode
+                self.publish()
+                self.assertEqual(len(self.site.requests), 1)
+
     def test_the_verification_helper_refuses_non_http_schemes(self):
         g = self.fn('publish').__globals__
         self.assertEqual(g['_fetch_preview']('file:///etc/passwd'), (None, ''))
@@ -861,7 +956,7 @@ class Errors(Base):
                     self.assertEqual((cm.exception.code, cm.exception.status), ('vercel-auth', 409))
                     self.assertIn('Not authorized', cm.exception.message)
 
-    def test_vercel_auth_also_on_the_state_path_without_the_probe(self):
+    def test_vercel_auth_also_on_the_state_path(self):
         self.api.override('POST', '/v2/files', 401, {'error': {'message': 'Not authorized'}})
         with self.assertRaises(dm.ModuleError) as cm:
             self.publish(state=STATE, core=True)
@@ -929,17 +1024,82 @@ class Errors(Base):
         self.api.stop()
         e = self.fails()
         self.assertIsInstance(e, RuntimeError)
-        self.assertEqual(str(e), 'Vercel недоступний')
+        self.assertRegex(str(e), r'^Vercel недоступний \(\w+\)$')
         with self.assertRaises(dm.ModuleError) as cm:
             self.publish(core=True)
         self.assertEqual((cm.exception.code, cm.exception.status), ('module-error', 502))
         self.assertIn('Vercel недоступний', cm.exception.message)
 
-    def test_a_redirect_from_the_api_is_not_followed_and_the_token_goes_nowhere_else(self):
+    def test_no_redirect_from_the_api_is_followed_for_any_request_type(self):
+        """`urllib` сам НЕ йде за 307/308 на POST, але йде за 301/302/303 на GET (і POST → GET): заголовок Authorization
+        поїхав би на чужий хост. Тому — КОЖЕН тип запиту й усі коди редиректу, а «чужий хост» — справжній сервер, що
+        записує все, що до нього дійшло."""
+        steps = [('GET', '/v9/projects/', None), ('POST', '/v2/files', None), ('POST', '/v13/deployments', None),
+                 ('GET', '/v13/deployments/', None), ('GET', '/v6/deployments', STATE),
+                 ('DELETE', '/v13/deployments/', STATE)]
+        for method, prefix, state in steps:
+            for status in (301, 302, 303, 307, 308):
+                with self.subTest(step=f'{method} {prefix}', status=status):
+                    self.api.overrides = []
+                    self.api.requests.clear()
+                    self.api.listing = entries(6)
+                    self.api.override(method, prefix, status, None, {'Location': self.evil.base + '/steal'})
+                    try:
+                        self.publish(state=state)
+                    except Exception:  # noqa: BLE001 — тут важить лише, чи дійшло що-небудь до чужого хоста
+                        pass
+                    self.assertEqual(self.evil.requests, [])
+
+    def test_a_redirect_from_the_api_is_an_error_not_a_success(self):
         self.api.override('POST', '/v13/deployments', 307, None, {'Location': self.evil.base + '/steal'})
         e = self.fails()
         self.assertIsInstance(e, RuntimeError)
-        self.assertEqual(self.evil.requests, [])
+        self.assertIn('307', str(e))
+
+    def test_check_does_not_follow_redirects_either(self):
+        for team, prefix in ((None, '/v2/user'), ('acme', '/v6/deployments')):
+            for status in (301, 302, 303, 307, 308):
+                with self.subTest(prefix=prefix, status=status):
+                    self.api.overrides = []
+                    self.api.override('GET', prefix, status, None, {'Location': self.evil.base + '/steal'})
+                    res = self.check(self.ctx(team=team))
+                    self.assertEqual((res['ok'], res['error']), (False, 'vercel-error'))
+                    self.assertEqual(self.evil.requests, [])
+
+    def test_a_plain_403_says_access_denied_not_a_rejected_token(self):
+        self.api.override('POST', '/v2/files', 403, {'error': {'code': 'forbidden', 'message': 'Plan limit reached'}})
+        with self.assertRaises(dm.ModuleError) as cm:
+            self.publish(core=True)
+        self.assertEqual((cm.exception.code, cm.exception.status), ('vercel-auth', 409))
+        self.assertIn('Vercel відмовив у доступі (HTTP 403)', cm.exception.message)
+        self.assertIn('Plan limit reached', cm.exception.message)
+        self.assertNotIn('не прийняв токен', cm.exception.message)
+        self.api.overrides = []
+        self.api.override('POST', '/v2/files', 403, None)
+        with self.assertRaises(dm.ModuleError) as cm:
+            self.publish(core=True)
+        self.assertIn('Vercel відмовив у доступі (HTTP 403)', cm.exception.message)
+
+    def test_a_401_and_a_403_with_invalid_token_say_the_token_was_not_accepted(self):
+        for status, body in ((401, {'error': {'message': 'Nope'}}), (401, None),
+                             (403, {'error': {'message': 'Nope', 'invalidToken': True}})):
+            with self.subTest(status=status, body=body):
+                self.api.overrides = []
+                self.api.override('POST', '/v2/files', status, body)
+                with self.assertRaises(dm.ModuleError) as cm:
+                    self.publish(core=True)
+                self.assertEqual(cm.exception.code, 'vercel-auth')
+                self.assertIn('Vercel не прийняв токен', cm.exception.message)
+
+    def test_a_bad_token_answered_with_403_and_invalid_token_is_a_rejected_token(self):
+        self.api.bad_token_status = 403
+        with self.assertRaises(dm.ModuleError) as cm:
+            self.publish(ctx=self.ctx(token='vcp_wrong'), core=True)
+        self.assertEqual(cm.exception.code, 'vercel-auth')
+        self.assertIn('Vercel не прийняв токен', cm.exception.message)
+        res = self.check(self.ctx(token='vcp_wrong'))
+        self.assertEqual((res['ok'], res['error']), (False, 'vercel-auth'))
+        self.assertIn('токен', res['detail'])
 
     def test_an_invalid_token_is_refused_before_any_request(self):
         for token in ('', '   ', 'bad token', 'tok\nen', 'tök', 'a' * 5 + '\r\nX-Evil: 1'):
@@ -1099,10 +1259,42 @@ class Cleanup(Base):
         self.publish(state=STATE)
         self.assertEqual(self.deleted(), ['o3', 'o4', 'o5'])
 
+    def test_entries_without_a_project_id_need_a_matching_name(self):
+        """Позитивне розпізнавання: `projectId` збігається, АБО його нема й `name` — наш проєкт. Інакше — не чіпаємо
+        (якщо Vercel проігнорував фільтр, у списку можуть бути чужі публікації без `projectId`)."""
+        lst = entries(6)
+        names = {'o1': 'pv-12345678', 'o2': 'pv-12345678', 'o3': 'someone-elses-site', 'o4': 'someone-elses-site',
+                 'o5': 'pv-12345678'}
+        for e in lst:
+            if e['uid'] != 'dpl_cur':
+                e.pop('projectId')
+                e['name'] = names[e['uid']]
+        lst += [{'uid': 'o6', 'created': 1}, {'uid': 'o7', 'created': 2, 'name': None},
+                {'uid': 'o8', 'created': 3, 'projectId': None, 'name': 'someone-elses-site'}]
+        self.api.listing = lst
+        self.publish(state=STATE)
+        self.assertEqual(self.deleted(), ['o5'])                                  # лише впізнані: o1, o2 лишились, o5 — на видалення
+
+    def test_an_entry_with_a_foreign_project_id_is_skipped_even_if_its_name_matches(self):
+        lst = entries(6)
+        lst += [{'uid': 'x1', 'created': 1, 'projectId': 'prj_other', 'name': 'pv-12345678'}]
+        self.api.listing = lst
+        self.publish(state=STATE)
+        self.assertEqual(self.deleted(), ['o3', 'o4', 'o5'])
+
+    def test_a_slow_cleanup_is_cut_with_a_warning(self):
+        self.api.listing = entries(8)                                             # 5 на видалення
+        self.api.override('DELETE', '/v13/deployments/', 200, {}, delay=0.06)
+        res = self.publish(state=STATE, CLEANUP_MAX_S=0.1)
+        n = len(self.api.reqs('DELETE'))
+        self.assertTrue(1 <= n < 5, n)
+        self.assertTrue(any('часом' in w for w in res['warnings']), res['warnings'])
+        self.assertEqual(res['url'], SITE_URL)
+
     def test_entries_without_a_usable_created_or_uid_are_left_alone(self):
         lst = entries(5)
         lst += [{'uid': 'nodate', 'projectId': 'prj_mine'}, {'uid': 'bad', 'created': 'yesterday', 'projectId': 'prj_mine'},
-                {'created': 5, 'projectId': 'prj_mine'}, 'junk', None, {'uid': 'bool', 'created': True},
+                {'created': 5, 'projectId': 'prj_mine'}, 'junk', None, {'uid': 'bool', 'created': True, 'projectId': 'prj_mine'},
                 {'uid': 'nan', 'created': float('nan'), 'projectId': 'prj_mine'},
                 {'uid': 'inf', 'created': float('inf'), 'projectId': 'prj_mine'}]
         self.api.listing = lst
@@ -1114,14 +1306,6 @@ class Cleanup(Base):
         res = self.publish()                             # стану нема → проєкт створив САМЕ цей виклик
         self.assertEqual(self.deleted(), ['o3', 'o4', 'o5'])
         self.assertEqual(res['state']['project_id'], 'prj_mine')
-
-    def test_state_without_a_project_id_is_not_cleaned_but_adopts_the_id(self):
-        self.api.listing = entries(6)
-        res = self.publish(state={'project': 'pv-12345678'})
-        self.assertEqual(self.api.reqs('DELETE'), [])
-        self.assertEqual(res['state']['project_id'], 'prj_mine')
-        self.assertEqual(res['state']['project'], 'pv-12345678')
-        self.assertEqual(res['warnings'], [])
 
     def test_a_failing_delete_is_a_warning_not_an_error(self):
         self.api.listing = entries(6)
@@ -1195,21 +1379,94 @@ class Naming(Base):
         self.assertEqual(len(self.api.reqs('GET', '/v9/projects')), 3)
         self.assertEqual(self.api.reqs('POST'), [])
 
-    def test_the_state_project_is_reused_without_a_probe(self):
+    def test_the_state_project_is_checked_by_name_before_any_upload(self):
         res = self.publish(state=STATE)
-        self.assertEqual(self.api.reqs('GET', '/v9/projects'), [])
+        order = [(r['method'], r['path']) for r in self.api.requests]
+        self.assertEqual(order[0], ('GET', '/v9/projects/pv-12345678'))
+        self.assertEqual(len(self.api.reqs('GET', '/v9/projects')), 1)
+        self.assertLess(order.index(('GET', '/v9/projects/pv-12345678')), order.index(('POST', '/v2/files')))
         (body,) = self.api.bodies('/v13/deployments')
         self.assertEqual((body['name'], body['project']), ('pv-12345678',) * 2)
         self.assertEqual(res['state'], {'project': 'pv-12345678', 'project_id': 'prj_mine', 'deployment': 'dpl_cur'})
+        self.assertEqual(res['warnings'], [])
 
     def test_a_state_that_is_not_ours_is_ignored(self):
-        for bad in ({'project': 'Bad Name!/x'}, {'project': 5}, {'project': ''}, {'project': 'UPPER'},
-                    {'project': 'x' * 200}, {'project_id': 'prj_mine'}, 'nonsense', None, []):
+        """`iterations.json` можна склонувати чи поділити: стан із чужою назвою не має привести публікацію в чужий проєкт."""
+        victim = 'victim-prod-site'
+        bad_states = [
+            {'project': victim, 'project_id': 'prj_victim'},                       # чужа назва
+            {'project': 'PV-12345678', 'project_id': 'prj_mine'},
+            {'project': 'pv-1234567', 'project_id': 'prj_mine'},
+            {'project': 'pv-123456789', 'project_id': 'prj_mine'},
+            {'project': 'pv-12345678 ', 'project_id': 'prj_mine'},
+            {'project': 'pv-12345678\n', 'project_id': 'prj_mine'},
+            {'project': 'pv-\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668', 'project_id': 'prj_mine'},   # арабські цифри
+            {'project': 'pv-12345678'},                                             # без project_id
+            {'project': 'pv-12345678', 'project_id': ''},
+            {'project': 'pv-12345678', 'project_id': 5},
+            {'project': 5, 'project_id': 'prj_mine'}, {'project': '', 'project_id': 'prj_mine'},
+            {'project_id': 'prj_mine'}, 'nonsense', None, []]
+        for bad in bad_states:
             with self.subTest(bad=bad):
                 self.api.requests.clear()
+                self.api.projects[victim] = 'prj_victim'
+                self.api.listing = entries(6, pid='prj_victim', name=victim)       # старі продакшн-публікації жертви
                 res = self.publish(state=bad)
-                self.assertEqual(len(self.api.reqs('GET', '/v9/projects')), 1)
+                probes = self.api.reqs('GET', '/v9/projects')
+                self.assertEqual(len(probes), 1)                                    # лише перевірка НОВОГО імені
+                new = probes[0]['path'].rsplit('/', 1)[1]
+                self.assertRegex(new, r'^pv-\d{8}$')
+                (body,) = self.api.bodies('/v13/deployments')
+                self.assertEqual((body['name'], body['project']), (new, new))
                 self.assertRegex(res['state']['project'], r'^pv-\d{8}$')
+                self.assertEqual(self.api.reqs('DELETE'), [])
+                for r in self.api.requests:
+                    self.assertNotIn(victim.encode(), self.blob(r))
+                    self.assertNotIn(b'prj_victim', self.blob(r))
+
+    def test_a_forged_state_never_deploys_to_or_deletes_in_a_foreign_project(self):
+        victim = 'victim-prod-site'
+        self.api.projects[victim] = 'prj_victim'
+        self.api.listing = entries(6, pid='prj_victim', name=victim)
+        first = self.publish(state={'project': victim, 'project_id': 'prj_victim'})
+        second = self.publish(state=first['state'])                                  # наступна публікація — уже зі своїм станом
+        self.assertEqual(self.api.reqs('DELETE'), [])
+        for body in self.api.bodies('/v13/deployments'):
+            self.assertRegex(body['name'], r'^pv-\d{8}$')
+        self.assertEqual(second['state']['project'], first['state']['project'])
+
+    def test_a_state_project_that_was_deleted_in_the_dashboard_is_recreated_under_the_same_name(self):
+        del self.api.projects['pv-12345678']
+        self.api.project_id = 'prj_new'
+        self.api.listing = entries(6, pid='prj_new')
+        res = self.publish(state=STATE)
+        self.assertEqual([r['path'] for r in self.api.reqs('GET', '/v9/projects')], ['/v9/projects/pv-12345678'])
+        (body,) = self.api.bodies('/v13/deployments')
+        self.assertEqual((body['name'], body['project']), ('pv-12345678',) * 2)
+        self.assertEqual(res['state'], {'project': 'pv-12345678', 'project_id': 'prj_new', 'deployment': 'dpl_cur'})
+        self.assertEqual(sorted(r['path'].rsplit('/', 1)[1] for r in self.api.reqs('DELETE')), ['o3', 'o4', 'o5'])
+
+    def test_a_state_project_with_another_id_is_not_deployed_to_and_gets_a_new_project(self):
+        self.api.projects['pv-12345678'] = 'prj_someone_else'
+        self.api.listing = entries(6, pid='prj_someone_else')
+        res = self.publish(state=STATE)
+        probes = [r['path'] for r in self.api.reqs('GET', '/v9/projects')]
+        self.assertEqual(probes[0], '/v9/projects/pv-12345678')
+        self.assertEqual(len(probes), 2)
+        self.assertRegex(probes[1], r'^/v9/projects/pv-\d{8}$')
+        self.assertNotEqual(probes[1], probes[0])
+        order = [(r['method'], r['path']) for r in self.api.requests]
+        self.assertLess(order.index(('GET', probes[0])), order.index(('POST', '/v2/files')))
+        (body,) = self.api.bodies('/v13/deployments')
+        self.assertEqual((body['name'], body['project']), (probes[1].rsplit('/', 1)[1],) * 2)
+        self.assertEqual(self.api.reqs('DELETE'), [])
+        self.assertTrue(any('новий проєкт' in w for w in res['warnings']), res['warnings'])
+        self.assertEqual(res['state']['project'], probes[1].rsplit('/', 1)[1])
+
+    def test_a_state_probe_that_is_neither_ours_nor_404_stops_the_publish(self):
+        self.api.override('GET', '/v9/projects/', 500, {'error': {'message': 'boom'}})
+        self.assertIsInstance(self.fails(state=STATE), RuntimeError)
+        self.assertEqual(self.api.reqs('POST'), [])
 
     def test_a_task_without_a_state_key_works(self):
         ctx = self.ctx()
@@ -1328,13 +1585,25 @@ class Check(Base):
         for r in self.api.requests:
             self.assertEqual(r['query'], {'teamId': 'team_abc'})
 
-    def test_a_team_slug_is_checked_too(self):
+    def test_a_team_slug_is_checked_with_a_read_only_scope_probe(self):
         res = self.check(self.ctx(team='acme'))
         self.assertTrue(res['ok'])
+        self.assertIn('acme', res['detail'])
         self.assertEqual([(r['method'], r['path']) for r in self.api.requests],
-                         [('GET', '/v2/user'), ('GET', '/v2/teams/acme')])
-        for r in self.api.requests:
-            self.assertEqual(r['query'], {'slug': 'acme'})
+                         [('GET', '/v2/user'), ('GET', '/v6/deployments')])          # НЕ `/v2/teams/<slug>`
+        self.assertEqual(self.api.requests[0]['query'], {'slug': 'acme'})
+        self.assertEqual(self.api.requests[1]['query'], {'limit': '1', 'slug': 'acme'})
+
+    def test_a_team_slug_that_is_refused_is_vercel_auth(self):
+        self.api.override('GET', '/v6/deployments', 403, {'error': {'message': 'Not a member of this team'}})
+        res = self.check(self.ctx(team='acme'))
+        self.assertEqual((res['ok'], res['error']), (False, 'vercel-auth'))
+        self.assertIn('Not a member', res['detail'])
+
+    def test_a_team_slug_probe_failing_otherwise_is_a_verdict(self):
+        self.api.override('GET', '/v6/deployments', 404, {'error': {'message': 'Team not found'}})
+        res = self.check(self.ctx(team='acme'))
+        self.assertEqual((res['ok'], res['error']), (False, 'vercel-error'))
 
     def test_401_and_403_are_vercel_auth(self):
         for status in (401, 403):
@@ -1369,7 +1638,7 @@ class Check(Base):
         self.api.stop()
         res = self.check()
         self.assertEqual((res['ok'], res['error']), (False, 'network'))
-        self.assertTrue(res['detail'])
+        self.assertRegex(res['detail'], r'^Vercel недоступний \(\w+\)$')
 
     def test_no_token_means_no_request_at_all(self):
         for secrets in ({}, {'token': ''}, {'token': '  '}):
@@ -1396,6 +1665,311 @@ class Check(Base):
             res = dm.check(self.sp, MID)
         self.assertEqual((res['ok'], res['error']), (False, 'vercel-auth'))
         self.assertEqual(dm.last_check(self.sp['id'], MID), res)
+
+
+# --------------------------------------------------------------------------------- alias після READY
+
+class AliasWait(Base):
+    def gets(self):
+        return self.api.reqs('GET', '/v13/deployments/')
+
+    def test_an_alias_that_appears_after_ready_is_used(self):
+        self.api.states = ['READY']
+        self.api.alias_lag = 3                                     # три відповіді READY ще без alias
+        res = self.publish()
+        self.assertEqual(res['url'], SITE_URL)
+        self.assertEqual(res['warnings'], [])                      # жодного «нема постійної адреси»
+        self.assertEqual(len(self.gets()), 4)
+        self.assertEqual(self.preview_urls, [SITE_URL])
+
+    def test_the_wait_polls_at_the_poll_interval(self):
+        self.api.states = ['READY']
+        self.api.alias_lag = 2
+        t0 = time.monotonic()
+        self.publish(POLL_S=0.1)
+        self.assertGreaterEqual(time.monotonic() - t0, 0.19)
+
+    def test_no_extra_polling_once_the_alias_is_there(self):
+        self.api.states = ['READY']
+        self.publish()
+        self.assertEqual(len(self.gets()), 1)
+
+    def test_alias_assigned_without_a_vercel_app_alias_stops_the_wait_at_once(self):
+        self.api.aliases = ['preview.example.com']                 # aliasAssigned є, а `.vercel.app` нема
+        res = self.publish()
+        self.assertEqual(len(self.gets()), 3)                      # QUEUED, BUILDING, READY — і все
+        self.assertEqual(res['url'], 'https://pv-x-abc123-team.vercel.app')
+        self.assertEqual(len(res['warnings']), 1)
+
+    def test_an_alias_error_stops_the_wait_and_is_named_in_a_warning(self):
+        for err in ({'code': 'conflict', 'message': 'Domain conflict'}, 'Domain conflict'):
+            with self.subTest(err=err):
+                self.api.requests.clear()
+                self.api.ready_polls = 0
+                self.api.states = ['QUEUED', 'BUILDING', 'READY']
+                self.api.alias_error = err
+                res = self.publish()
+                self.assertEqual(len(self.gets()), 3)
+                self.assertEqual(res['url'], 'https://pv-x-abc123-team.vercel.app')
+                self.assertEqual(len([w for w in res['warnings'] if 'Domain conflict' in w]), 1, res['warnings'])
+
+    def test_an_alias_that_never_comes_falls_back_after_alias_max_s(self):
+        self.api.alias_never = True
+        t0 = time.monotonic()
+        res = self.publish(ALIAS_MAX_S=0.15, POLL_S=0.02)
+        el = time.monotonic() - t0
+        self.assertGreaterEqual(el, 0.15)
+        self.assertLess(el, 3)
+        self.assertGreater(len(self.gets()), 4)                    # ще й опитували
+        self.assertEqual(res['url'], 'https://pv-x-abc123-team.vercel.app')
+        self.assertTrue(res['warnings'])
+
+    def test_the_alias_wait_is_bounded_by_its_own_limit_not_the_poll_limit(self):
+        self.api.alias_never = True
+        res = self.publish(ALIAS_MAX_S=0.05, POLL_S=0.01, POLL_MAX_S=10)
+        self.assertEqual(res['url'], 'https://pv-x-abc123-team.vercel.app')
+
+    def test_a_transient_error_while_waiting_for_the_alias_is_tolerated(self):
+        self.api.states = ['READY']
+        self.api.alias_lag = 2
+        self.api.override('GET', '/v13/deployments/', 'pass', times=1)
+        self.api.override('GET', '/v13/deployments/', 503, {'error': {'message': 'Unavailable'}}, times=1)
+        res = self.publish()
+        self.assertEqual(res['url'], SITE_URL)
+
+
+# -------------------------------------------------------------------------------- повтори, BLOCKED, сироти
+
+class Resilience(Base):
+    def dep_gets(self):
+        return self.api.reqs('GET', '/v13/deployments/')
+
+    def project_deletes(self):
+        return self.api.reqs('DELETE', '/v9/projects/')
+
+    def transients(self):
+        return (('network', 'drop', None), ('503', 503, {'error': {'message': 'Unavailable'}}), ('502 html', 502, 'bad gateway'))
+
+    # ---- опитування
+    def test_up_to_three_consecutive_transient_poll_errors_are_tolerated(self):
+        for kind, status, body in self.transients():
+            with self.subTest(kind):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.states = ['BUILDING', 'READY']
+                self.api.override('GET', '/v13/deployments/', status, body, times=3)
+                res = self.publish()
+                self.assertEqual(res['url'], SITE_URL)
+                self.assertEqual(len(self.dep_gets()), 3 + 2)
+
+    def test_four_consecutive_transient_poll_errors_fail(self):
+        for kind, status, body in self.transients():
+            with self.subTest(kind):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.override('GET', '/v13/deployments/', status, body, times=4)
+                e = self.fails()
+                self.assertIsInstance(e, RuntimeError)
+                self.assertEqual(len(self.dep_gets()), 4)
+
+    def test_a_success_resets_the_transient_counter(self):
+        self.api.states = ['BUILDING', 'BUILDING', 'READY']
+        for status in ('drop', 'drop', 'drop', 'pass', 'drop', 'drop', 'drop', 'pass'):
+            self.api.override('GET', '/v13/deployments/', status, None, times=1)
+        res = self.publish()
+        self.assertEqual(res['url'], SITE_URL)
+
+    def test_a_client_error_or_auth_while_polling_is_not_retried(self):
+        for status, expect in ((404, RuntimeError), (400, RuntimeError), (401, dm.ModuleError), (429, dm.ModuleError)):
+            with self.subTest(status):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.override('GET', '/v13/deployments/', status, {'error': {'message': 'nope'}})
+                self.assertIsInstance(self.fails(), expect)
+                self.assertEqual(len(self.dep_gets()), 1)
+
+    # ---- завантаження
+    def test_an_upload_is_retried_once(self):
+        for kind, status, body in self.transients():
+            with self.subTest(kind):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.override('POST', '/v2/files', status, body, times=1)
+                res = self.publish()
+                self.assertEqual(res['url'], SITE_URL)
+                self.assertEqual(len(self.api.reqs('POST', '/v2/files')), 2 + 1)      # 2 файли + 1 повтор
+                self.assertEqual(self.api.digest_mismatch, [])
+
+    def test_a_second_failure_on_the_same_file_is_final(self):
+        for kind, status, body in self.transients():
+            with self.subTest(kind):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.override('POST', '/v2/files', status, body, times=2)
+                self.assertIsInstance(self.fails(), RuntimeError)
+                self.assertEqual(len(self.api.reqs('POST', '/v2/files')), 2)
+                self.assertEqual(self.api.reqs('POST', '/v13/deployments'), [])
+
+    def test_a_client_error_or_auth_on_upload_is_not_retried(self):
+        for status in (400, 401, 403, 429):
+            with self.subTest(status):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.override('POST', '/v2/files', status, {'error': {'message': 'nope'}})
+                self.fails()
+                self.assertEqual(len(self.api.reqs('POST', '/v2/files')), 1)
+
+    # ---- термінальні стани
+    def test_blocked_is_a_terminal_failure_with_a_clear_text(self):
+        self.api.states = ['BUILDING', 'BLOCKED']
+        self.api.error_message = 'Policy violation'
+        e = self.fails()
+        self.assertIsInstance(e, RuntimeError)
+        self.assertIn('заблок', str(e).lower())
+        self.assertIn('Policy violation', str(e))
+        self.assertEqual(len(self.dep_gets()), 2)
+        self.assertEqual(self.site.requests, [])
+
+    def test_deleted_is_a_terminal_failure_with_a_clear_text(self):
+        self.api.states = ['DELETED']
+        e = self.fails()
+        self.assertIsInstance(e, RuntimeError)
+        self.assertIn('видален', str(e).lower())
+        self.assertEqual(len(self.dep_gets()), 1)
+
+    # ---- сироти: проєкт, створений ЦИМ викликом
+    def failing(self):
+        """Сценарії збою ПІСЛЯ `POST /v13/deployments`: `(назва, налаштування, глобали)`."""
+        yield 'error', lambda: setattr(self.api, 'states', ['BUILDING', 'ERROR']), {}
+        yield 'blocked', lambda: setattr(self.api, 'states', ['BLOCKED']), {}
+        yield 'canceled', lambda: setattr(self.api, 'states', ['CANCELED']), {}
+        yield 'deleted', lambda: setattr(self.api, 'states', ['DELETED']), {}
+        yield 'timeout', lambda: setattr(self.api, 'states', ['BUILDING']), {'POLL_MAX_S': 0.05, 'POLL_S': 0.01}
+        yield 'network', lambda: self.api.override('GET', '/v13/deployments/', 'drop', times=4), {}
+        yield '5xx', lambda: self.api.override('GET', '/v13/deployments/', 503, {'error': {'message': 'x'}}, times=4), {}
+
+    def test_a_first_publish_that_fails_after_the_deployment_removes_the_project_it_created(self):
+        for name, setup, extra in self.failing():
+            with self.subTest(name):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.states = ['QUEUED', 'READY']
+                setup()
+                e = self.fails(**extra)
+                dels = self.project_deletes()
+                self.assertEqual([r['path'] for r in dels], ['/v9/projects/prj_mine'])
+                probe = self.api.reqs('GET', '/v9/projects/')[0]['path'].rsplit('/', 1)[1]
+                self.assertIn(f'Створений проєкт {probe} видалено.', str(e))   # назва видаленого проєкту — в тексті
+                self.assertNotIn('не вдалося', str(e).lower())
+                self.assertLessEqual(len(str(e)), 300)                       # примітка не обрізається ядром
+
+    def test_the_project_removal_carries_the_team_parameter(self):
+        self.api.states = ['ERROR']
+        self.fails(ctx=self.ctx(team='team_abc'))
+        (d,) = self.project_deletes()
+        self.assertEqual(d['query'], {'teamId': 'team_abc'})
+
+    def test_when_the_project_cannot_be_removed_the_text_says_so(self):
+        self.api.states = ['ERROR']
+        self.api.project_delete_fail = True
+        e = self.fails()
+        self.assertIn('не вдалося видалити', str(e).lower())
+        probe = self.api.reqs('GET', '/v9/projects/')[0]['path'].rsplit('/', 1)[1]
+        self.assertIn(probe, str(e))
+        self.assertIn('Build failed: boom', str(e))                          # першопричина не загубилась
+        self.assertNotIn('видалено', str(e))
+
+    def test_a_publish_on_the_state_path_never_removes_a_project(self):
+        for name, setup, extra in self.failing():
+            with self.subTest(name):
+                self.api.overrides = []
+                self.api.requests.clear()
+                self.api.states = ['QUEUED', 'READY']
+                setup()
+                e = self.fails(state=STATE, **extra)
+                self.assertEqual(self.project_deletes(), [])
+                self.assertNotIn('створений проєкт', str(e).lower())         # жодної примітки про видалення проєкту
+                self.assertNotIn('видалити створений', str(e).lower())
+
+    def test_a_project_recreated_under_a_state_name_counts_as_created_here(self):
+        del self.api.projects['pv-12345678']                                 # у панелі видалили → створюється наново
+        self.api.states = ['ERROR']
+        self.fails(state=STATE)
+        self.assertEqual(len(self.project_deletes()), 1)
+
+    def test_a_failure_before_the_deployment_removes_nothing(self):
+        self.api.override('POST', '/v2/files', 400, {'error': {'message': 'bad file'}})
+        self.fails()
+        self.assertEqual(self.project_deletes(), [])
+        self.api.overrides = []
+        self.api.requests.clear()
+        self.api.override('POST', '/v13/deployments', 500, {'error': {'message': 'boom'}})
+        self.fails()
+        self.assertEqual(self.project_deletes(), [])                         # id проєкту ще невідомий
+
+    def test_a_coded_failure_keeps_its_code_and_gets_the_note(self):
+        self.api.override('GET', '/v13/deployments/', 401, {'error': {'message': 'Not authorized'}})
+        e = self.fails()
+        self.assertEqual(getattr(e, 'code', None), 'vercel-auth')
+        self.assertIn('Not authorized', getattr(e, 'message', ''))
+        self.assertEqual(len(self.project_deletes()), 1)
+        self.assertIn('Створений проєкт', e.message)
+
+    def test_a_long_failure_text_keeps_the_removal_note_whole(self):
+        """Текст помилки ядро ріже до 300; примітка про видалення проєкту не має загубитись: основний текст
+        стискається, а не вона."""
+        self.api.override('GET', '/v13/deployments/', 401, {'error': {'message': 'm' * 300}})
+        self.api.project_delete_fail = True
+        e = self.fails()
+        self.assertLessEqual(len(e.message), 300)
+        self.assertTrue(e.message.endswith('вручну.'), e.message[-60:])
+        self.api.project_delete_fail = False
+        e = self.fails()
+        self.assertLessEqual(len(e.message), 300)
+        self.assertTrue(e.message.endswith('видалено.'), e.message[-60:])
+
+    def test_the_removal_note_never_contains_the_token(self):
+        self.api.states = ['ERROR']
+        self.api.error_message = f'saw {TOKEN}'
+        e = self.fails()
+        for text in self.exc_texts(e):
+            self.assertNotIn(TOKEN, text)
+
+
+# ------------------------------------------------------------------------------------------------ межі
+
+class Limits(Base):
+    def test_too_many_files_are_refused_before_any_request(self):
+        self.make_build({f'f{i}.txt': str(i) for i in range(4)})
+        e = self.fails(MAX_FILES=3)
+        self.assertIsInstance(e, RuntimeError)
+        self.assertIn('файл', str(e))
+        self.assertIn('3', str(e))
+        self.assertEqual(self.api.requests, [])
+        self.publish(MAX_FILES=4)                                           # рівно на межі — гаразд
+
+    def test_a_file_over_the_size_limit_is_refused_before_any_request(self):
+        self.make_build({'index.html': 'x', 'big/video.bin': 'y' * 11})
+        e = self.fails(MAX_FILE_BYTES=10)
+        self.assertIsInstance(e, RuntimeError)
+        self.assertIn('big/video.bin', str(e))
+        self.assertEqual(self.api.requests, [])
+        self.make_build({'index.html': 'x', 'big/video.bin': 'y' * 10})
+        self.publish(MAX_FILE_BYTES=10)
+
+    def test_the_uploads_have_a_total_deadline(self):
+        self.make_build({f'f{i}.txt': str(i) for i in range(4)})              # чотири різні вмісти
+        self.api.override('POST', '/v2/files', 200, {}, delay=0.06)
+        e = self.fails(UPLOAD_TOTAL_S=0.1)
+        self.assertIsInstance(e, RuntimeError)
+        self.assertIn('timeout', str(e))
+        n = len(self.api.reqs('POST', '/v2/files'))
+        self.assertTrue(1 <= n < 4, n)
+        self.assertEqual(self.api.reqs('POST', '/v13/deployments'), [])
+        self.assertEqual(self.project_deletes(), [])                          # проєкту ще нема: видаляти нічого
+
+    def project_deletes(self):
+        return self.api.reqs('DELETE', '/v9/projects/')
 
 
 # ------------------------------------------------------------------------------------- вигляд модуля

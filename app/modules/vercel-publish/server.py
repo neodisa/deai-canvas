@@ -17,31 +17,43 @@
     аргументи/оточення процесів, ні в тексти винятків (тексти Vercel, що його повторили б, вичищаються);
   * запити API не йдуть за редиректами (інакше `urllib` віддав би заголовок на чужий хост): 3xx — це помилка.
 
+Стан задачі НЕ довіряється (`iterations.json` можна склонувати чи поділити). Проєкт зі стану береться лише коли його
+імʼя — `pv-<8 цифр>` (те, що створює сам модуль) І є непорожній `project_id`; навіть тоді ПЕРЕД будь-яким
+завантаженням `GET /v9/projects/<імʼя>` мусить дати проєкт із тим самим `id`: 404 (проєкт видалено в панелі) — створюємо
+наново під тим самим вільним імʼям; інший `id` — у проєкт НЕ деплоїмо, беремо нове імʼя.
+
 Що робить `publish(ctx, build_dir, task)` (`task = {id, title, dir, state}`; `state` — те, що модуль повернув минулого
 разу, або `{}`)
-  0. збірка читається ЦІЛКОМ І ЛОКАЛЬНО до першого запиту: будь-яке символічне посилання (файл чи тека) чи не звичайний
-     файл — `RuntimeError`, нічого не завантажено; порожня збірка теж;
-  1. проєкт: із `state.project` (+ `state.project_id`) або НОВЕ непрозоре імʼя `pv-<8 цифр>` (в адресі ні назви
-     задачі, ні клієнта), перевірене `GET /v9/projects/<імʼя>` — мусить дати 404, інакше (чужий проєкт із таким
-     імʼям) інше імʼя, ≤ 3 спроби;
-  2. файли: `POST /v2/files` по разу на вміст (SHA-1), 60 с на файл;
+  0. збірка читається ЦІЛКОМ І ЛОКАЛЬНО до першого запиту: будь-яке символічне посилання (файл чи тека), не звичайний
+     файл, понад `MAX_FILES` файлів, файл понад `MAX_FILE_BYTES`, імʼя не з UTF-8 чи порожня збірка — `RuntimeError`,
+     нічого не завантажено;
+  1. проєкт: див. вище; нове імʼя — непрозоре `pv-<8 цифр>` (в адресі ні назви задачі, ні клієнта), перевірене
+     `GET /v9/projects/<імʼя>` → 404, інакше (чужий проєкт із таким імʼям) інше імʼя, ≤ 3 спроби;
+  2. файли: `POST /v2/files` по разу на вміст (SHA-1), 60 с на файл, ≤ `UPLOAD_TOTAL_S` усього; кожен файл — один повтор
+     при збої мережі/5xx (завантаження ідемпотентне за SHA-1);
   3. `POST /v13/deployments` (`target: production`, без збірки: превʼю вже зібране);
-  4. опитування `GET /v13/deployments/<id>` кожні `POLL_S` до `READY` (`ERROR`/`CANCELED` → помилка з текстом Vercel,
-     понад `POLL_MAX_S` — `timeout`);
-  5. адреса: найкоротший `alias` на `.vercel.app` (продакшн-адреса проєкту); нема — адреса самої публікації + попередження
-     (її Vercel зазвичай закриває захистом);
+  4. опитування `GET /v13/deployments/<id>` кожні `POLL_S` до `READY` (`ERROR`/`CANCELED`/`BLOCKED`/`DELETED` → помилка
+     з текстом Vercel, понад `POLL_MAX_S` — `timeout`); до `POLL_TRANSIENT` збоїв мережі/5xx ПОСПІЛЬ терпимо;
+  5. адреса: після `READY` alias може запізнитись — ще опитуємо до `ALIAS_MAX_S`, доки `aliasAssigned` не стане правдою
+     чи не зʼявиться `*.vercel.app`; `aliasError` зупиняє очікування (його текст — у попередженні). Найкоротший alias на
+     `.vercel.app` — продакшн-адреса проєкту; нема — адреса самої публікації + попередження (її Vercel зазвичай
+     закриває захистом);
   6. перевірка `GET <адреса>` без жодних облікових даних і БЕЗ переходів: 200 — `verified`; 401/403 чи редирект на
-     `vercel.com` — не `verified` + попередження про Deployment Protection; усе інше — не `verified`, публікація
-     не зупиняється;
-  7. прибирання старих публікацій проєкту (тримаємо `KEEP` разом із поточною) — лише коли `projectId` публікації збігається
-     зі `state.project_id` (або проєкт створив САМЕ цей виклик); чужий проєкт не чіпаємо взагалі; будь-який збій —
-     попередження, не помилка;
+     `vercel.com` — не `verified` + попередження про Deployment Protection; 404/5xx/без відповіді — до `VERIFY_RETRIES`
+     повторів (розкатка запізнюється); усе інше — не `verified`, публікація не зупиняється;
+  7. прибирання старих публікацій проєкту (тримаємо `KEEP` разом із поточною, ≤ `CLEANUP_MAX_S`) — лише коли `projectId`
+     публікації збігається зі `state.project_id` (або проєкт створив САМЕ цей виклик); чужий проєкт не чіпаємо взагалі;
+     видаляється лише запис, ПОЗИТИВНО впізнаний як цього проєкту (`projectId` збігається, а коли його нема — збігається
+     `name`); будь-який збій — попередження, не помилка;
   8. повертає `{url, verified, warnings, state: {project, project_id, deployment}}`.
+Збій ПІСЛЯ `POST /v13/deployments` у ПЕРШІЙ публікації (проєкт створив цей виклик) — best-effort `DELETE /v9/projects/<id>`
+цього проєкту (лише `pv-<8 цифр>`, ніколи на шляху зі станом), а текст помилки каже, видалено його чи ні.
 
 Ядро кличе `publish` БЕЗ тайм-ауту, тож кожен запит має свій: 30 с на запит API, 60 с на файл, 20 с на перевірку.
 
-`check(ctx)` — `GET /v2/user` (+ `GET /v2/teams/<team>`, коли команду задано); нічого не створює й не кидає на звичайних
-збоях (немає токена, не прийнято, мережі нема) — вертає `{"ok": false, "error": <код>, "detail": <причина>}`.
+`check(ctx)` — `GET /v2/user` (+ `GET /v2/teams/<team_…>` для `teamId`; для `slug` — читальна проба доступу
+`GET /v6/deployments?limit=1` у цій команді); нічого не створює й не кидає на звичайних збоях (немає токена, не
+прийнято, мережі нема) — вертає `{"ok": false, "error": <код>, "detail": <причина>}`.
 """
 import hashlib
 import json
@@ -58,21 +70,36 @@ API_BASE = 'https://api.vercel.com'
 #: Інтервал опитування публікації й загальна межа очікування `READY`, секунди (тести ставлять малі).
 POLL_S = 1.5
 POLL_MAX_S = 180
+#: Після `READY` alias може запізнитись: скільки ще чекаємо `aliasAssigned` / `*.vercel.app`, секунди.
+ALIAS_MAX_S = 30
+#: Скільки збоїв мережі/5xx ПОСПІЛЬ терпимо під час опитування; повторів завантаження одного файла.
+POLL_TRANSIENT = 3
+UPLOAD_RETRIES = 1
 #: Скільки публікацій проєкту лишаємо після прибирання (разом із поточною).
 KEEP = 3
 API_TIMEOUT_S = 30
 UPLOAD_TIMEOUT_S = 60
 PREVIEW_TIMEOUT_S = 20
+#: Загальні межі, секунди: усі завантаження разом, усе прибирання.
+UPLOAD_TOTAL_S = 300
+CLEANUP_MAX_S = 60
+#: Перевірка превʼю: скільки повторів і з яким проміжком, коли сторінка ще «не там» (404/5xx/без відповіді).
+VERIFY_RETRIES = 2
+VERIFY_RETRY_S = 1.5
+#: Межі збірки (до першого запиту): файлів і розмір одного файла.
+MAX_FILES = 5000
+MAX_FILE_BYTES = 50 << 20
 #: Більше цього відповіді API не читаємо (це JSON зі списком, а не файли).
 MAX_BODY = 4 << 20
 NAME_TRIES = 3
 #: Довжина тексту Vercel у помилці й у попередженні (ядро ріже до 300 само; ми — раніше й обачніше).
 MSG_MAX = 200
 WARN_MAX = 300
+ERR_MAX = 300
 MAX_WARNINGS = 5
 UA = 'deai-canvas-vercel-publish/1.0'
-#: Імʼя проєкту Vercel: нижній регістр, цифри, `.`, `_`, `-`; ≤ 100.
-PROJECT_RE = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}', re.ASCII)
+#: Імʼя проєкту, яке створює САМ модуль (і єдине, яке береться зі стану): `pv-<8 цифр>`, ASCII.
+OWN_NAME_RE = re.compile(r'pv-[0-9]{8}', re.ASCII)
 #: Імʼя хоста з відповіді API (alias, url публікації): мітки через крапку, без пробілів, `/`, `@`, `#`, `\`.
 _LABEL = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
 HOST_RE = re.compile(rf'(?:{_LABEL}\.)*{_LABEL}', re.ASCII)
@@ -87,6 +114,7 @@ class _CodedError(RuntimeError):
     def __init__(self, code, message):
         super().__init__(f'{code}: {message}')
         self.code = code
+        self.message = message
 
 
 class _HttpError(RuntimeError):
@@ -152,27 +180,40 @@ def _clean(text, token, limit):
     return text[:limit]
 
 
-def _vercel_message(raw, token):
-    """`error.message` (чи `message`) із тіла відповіді Vercel; порожній рядок, якщо тіла нема чи воно не JSON."""
+def _parse_error(raw, token):
+    """`(текст, invalidToken)` із тіла відповіді Vercel: `error.message` (чи рядок `error`, чи `message`); порожній
+    текст, якщо тіла нема чи воно не JSON."""
     try:
         data = json.loads(raw.decode('utf-8', 'replace'))
     except ValueError:
-        return ''
+        return '', False
     err = data.get('error') if isinstance(data, dict) else None
+    invalid = isinstance(err, dict) and err.get('invalidToken') is True
     if isinstance(err, dict):
         msg = err.get('message')
     elif isinstance(err, str):
         msg = err
     else:
         msg = data.get('message') if isinstance(data, dict) else None
-    return _clean(msg, token, MSG_MAX) if isinstance(msg, str) else ''
+    return (_clean(msg, token, MSG_MAX) if isinstance(msg, str) else ''), invalid
+
+
+def _kind(e):
+    """Імʼя КЛАСУ збою для тексту «Vercel недоступний (…)»: лише імʼя, без подробиць (в них могла б бути адреса чи токен)."""
+    reason = getattr(e, 'reason', None)
+    return type(reason if isinstance(reason, BaseException) else e).__name__
+
+
+def _transient(e):
+    """Збій, що минає сам: мережа чи 5xx. Авторизація, ліміт і 4xx — ні."""
+    return isinstance(e, _NetworkError) or (isinstance(e, _HttpError) and e.status >= 500)
 
 
 def _req(ctx, method, path, *, query=None, body=None, raw=None, headers=None, timeout=API_TIMEOUT_S):
     """Один запит до `API_BASE`: ЄДИНЕ місце, де є `Authorization: Bearer <токен>`; параметр команди — до кожного запиту.
     JSON у `body` (або байти в `raw` із заголовками викликача); результат — розібраний JSON-обʼєкт (`{}` для порожнього).
     401/403 → `vercel-auth`, 429 → `vercel-busy` (обидва з текстом Vercel), інший HTTP → `_HttpError`, мережа →
-    `_NetworkError('Vercel недоступний')`. Ні в одному тексті винятку токена нема."""
+    `_NetworkError('Vercel недоступний (<клас збою>)')`. Ні в одному тексті винятку токена нема."""
     token = _need_token(ctx)
     params = dict(query or {})
     params.update(_team(ctx))
@@ -198,12 +239,16 @@ def _req(ctx, method, path, *, query=None, body=None, raw=None, headers=None, ti
                 payload = e.read(MAX_BODY + 1)
             finally:
                 e.close()
-    except Exception:  # noqa: BLE001 — URLError, тайм-аут, обрив, TLS, `http.client.*`: для людини це одне — «недоступний»
-        raise _NetworkError('Vercel недоступний') from None
+    except Exception as e:  # noqa: BLE001 — URLError, тайм-аут, обрив, TLS, `http.client.*`: для людини це одне — «недоступний»
+        raise _NetworkError(f'Vercel недоступний ({_kind(e)})') from None
     if not 200 <= status < 300:                                    # 3xx — теж помилка: за редиректами не йдемо
-        msg = _vercel_message(payload, token)
+        msg, invalid = _parse_error(payload, token)
         if status in (401, 403):
-            raise _error(ctx, 'vercel-auth', 'Vercel не прийняв токен' + (f': {msg}' if msg else f' (HTTP {status})'))
+            if status == 401 or invalid:
+                text = 'Vercel не прийняв токен' + (f': {msg}' if msg else f' (HTTP {status})')
+            else:
+                text = f'Vercel відмовив у доступі (HTTP {status})' + (f': {msg}' if msg else '')
+            raise _error(ctx, 'vercel-auth', text)
         if status == 429:
             raise _error(ctx, 'vercel-busy', msg or 'Vercel: забагато запитів, спробуйте трохи згодом')
         raise _HttpError(status, msg or f'Vercel відповів HTTP {status}')
@@ -222,9 +267,14 @@ def _req(ctx, method, path, *, query=None, body=None, raw=None, headers=None, ti
 
 # ------------------------------------------------------------------------------------------------ збірка
 
+def _mb(n):
+    return f'{n / (1 << 20):.1f}'
+
+
 def _scan(build_dir):
     """`[(відносний шлях через '/', шлях на диску, sha1, розмір)]` за відсортованими шляхами. Символічне посилання (файл чи
-    тека, навіть биті) і не звичайний файл — `RuntimeError`: так само читається все, ДО першого запиту."""
+    тека, навіть биті), не звичайний файл, понад `MAX_FILES` файлів чи файл понад `MAX_FILE_BYTES` — `RuntimeError`: так
+    само читається все, ДО першого запиту."""
     if os.path.islink(build_dir):
         raise RuntimeError('Збірка є символічним посиланням — публікацію зупинено')
 
@@ -242,14 +292,19 @@ def _scan(build_dir):
             except UnicodeEncodeError:                              # імʼя не з UTF-8 (сурогати): у JSON воно б зіпсувалось
                 raise RuntimeError('Імʼя файла у збірці не в UTF-8 — публікацію зупинено') from None
             try:
-                mode = os.lstat(p).st_mode
+                st = os.lstat(p)
             except OSError:
                 raise RuntimeError(f'Не вдалося прочитати {rel} — публікацію зупинено') from None
-            if stat.S_ISLNK(mode):
+            if stat.S_ISLNK(st.st_mode):
                 raise RuntimeError(f'У збірці є символічне посилання ({rel}) — публікацію зупинено')
             if name in filenames:
-                if not stat.S_ISREG(mode):
+                if not stat.S_ISREG(st.st_mode):
                     raise RuntimeError(f'У збірці є не звичайний файл ({rel}) — публікацію зупинено')
+                if len(out) >= MAX_FILES:
+                    raise RuntimeError(f'У збірці понад {MAX_FILES} файлів — публікацію зупинено')
+                if st.st_size > MAX_FILE_BYTES:
+                    raise RuntimeError(f'Файл {rel} завеликий ({_mb(st.st_size)} МБ, межа {_mb(MAX_FILE_BYTES)} МБ) — '
+                                       'публікацію зупинено')
                 digest = hashlib.sha1(usedforsecurity=False)
                 size = 0
                 try:
@@ -267,8 +322,9 @@ def _scan(build_dir):
 
 
 def _upload(ctx, path, sha, size):
-    """`POST /v2/files`: вміст файла за SHA-1. Читаємо знову й звіряємо з тим, що порахували: файл, що змінився між
-    підрахунком і завантаженням, не відправляємо під чужим хешем."""
+    """`POST /v2/files`: вміст файла за SHA-1; один повтор при збої мережі/5xx (за SHA-1 завантаження ідемпотентне).
+    Читаємо знову й звіряємо з тим, що порахували: файл, що змінився між підрахунком і завантаженням, не відправляємо
+    під чужим хешем."""
     try:
         with open(path, 'rb') as f:
             data = f.read()
@@ -276,8 +332,15 @@ def _upload(ctx, path, sha, size):
         raise RuntimeError('Не вдалося прочитати файл збірки — публікацію зупинено') from None
     if len(data) != size or hashlib.sha1(data, usedforsecurity=False).hexdigest() != sha:
         raise RuntimeError('Файл збірки змінився під час публікації — спробуйте ще раз')
-    _req(ctx, 'POST', '/v2/files', raw=data, timeout=UPLOAD_TIMEOUT_S,
-         headers={'Content-Type': 'application/octet-stream', 'x-vercel-digest': sha, 'Content-Length': str(len(data))})
+    for attempt in range(UPLOAD_RETRIES + 1):
+        try:
+            _req(ctx, 'POST', '/v2/files', raw=data, timeout=UPLOAD_TIMEOUT_S,
+                 headers={'Content-Type': 'application/octet-stream', 'x-vercel-digest': sha,
+                          'Content-Length': str(len(data))})
+            return
+        except (_NetworkError, _HttpError) as e:
+            if attempt >= UPLOAD_RETRIES or not _transient(e):
+                raise
 
 
 # -------------------------------------------------------------------------------------------- проєкт, стан
@@ -287,38 +350,83 @@ def _state_str(state, key):
     return v if isinstance(v, str) and v else None
 
 
+def _own_state(state):
+    """`(імʼя, project_id)` зі стану — лише коли це справді те, що створює модуль: `pv-<8 цифр>` і непорожній id.
+    Усе інше (чужа назва зі склонованого `iterations.json`, стан без id…) — «стану нема»."""
+    name, pid = _state_str(state, 'project'), _state_str(state, 'project_id')
+    if name and OWN_NAME_RE.fullmatch(name) and pid and len(pid) <= 200:
+        return name, pid
+    return None, None
+
+
 def _pick_project(ctx, state):
-    """`(імʼя, projectId зі стану | None, створено_цим_викликом)`. Стан задачі — лише справжнє імʼя проєкту; інакше нове
-    `pv-<8 цифр>`, перевірене `GET /v9/projects/<імʼя>` → 404 (200 — чужий проєкт: беремо інше імʼя)."""
-    name = _state_str(state, 'project')
-    if name and PROJECT_RE.fullmatch(name):
-        pid = _state_str(state, 'project_id')
-        return name, (pid if pid and len(pid) <= 200 else None), False
+    """`(імʼя, projectId | None, створено_цим_викликом, попередження | None)`.
+    Стан не довіряється: проєкт зі стану береться, лише якщо `GET /v9/projects/<імʼя>` дав проєкт із тим самим `id`
+    (ДО будь-якого завантаження); 404 — видалено в панелі, створюємо наново під тим самим вільним імʼям; інший `id` —
+    туди НЕ деплоїмо. Інакше нове `pv-<8 цифр>`, перевірене `GET /v9/projects/<імʼя>` → 404 (200 — чужий проєкт)."""
+    name, pid = _own_state(state)
+    note = None
+    if name:
+        try:
+            got = _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(name, safe=''))
+        except _HttpError as e:
+            if e.status != 404:
+                raise
+            return name, None, True, None
+        if got.get('id') == pid:
+            return name, pid, False, None
+        note = ('Проєкт цієї задачі у Vercel змінився (інший ідентифікатор) — створено новий проєкт; '
+                'адреса може відрізнятись від попередньої.')
     for _ in range(NAME_TRIES):
         name = f'pv-{secrets.randbelow(10 ** 8):08d}'
         try:
             _req(ctx, 'GET', '/v9/projects/' + urllib.parse.quote(name, safe=''))
         except _HttpError as e:
             if e.status == 404:
-                return name, None, True
+                return name, None, True, note
             raise
     raise RuntimeError(f'Не вдалося підібрати вільне імʼя проєкту у Vercel ({NAME_TRIES} спроби)')
 
 
 # ----------------------------------------------------------------------------------------- очікування, адреса
 
-def _wait_ready(ctx, dep_id):
+def _get_dep(ctx, dep_id, streak):
+    """`GET /v13/deployments/<id>`. Збій мережі/5xx терпимо — до `POLL_TRANSIENT` ПОСПІЛЬ (`streak[0]`; успіх
+    скидає): тоді `None`. Решта (4xx, авторизація, ліміт) і перевищення — виняток."""
+    try:
+        d = _req(ctx, 'GET', '/v13/deployments/' + urllib.parse.quote(dep_id, safe=''))
+    except (_NetworkError, _HttpError) as e:
+        if not _transient(e):
+            raise
+        streak[0] += 1
+        if streak[0] > POLL_TRANSIENT:
+            raise
+        return None
+    streak[0] = 0
+    return d
+
+
+def _terminal_text(ctx, st, d):
+    why = d.get('errorMessage') if isinstance(d.get('errorMessage'), str) else ''
+    why = _clean(why or (d.get('errorCode') if isinstance(d.get('errorCode'), str) else ''), _token(ctx), MSG_MAX)
+    if st == 'BLOCKED':
+        return 'Vercel заблокував публікацію (BLOCKED)' + (f': {why}' if why else '')
+    if st == 'DELETED':
+        return 'Публікацію видалено у Vercel до завершення (DELETED)' + (f': {why}' if why else '')
+    return 'Vercel: ' + (why or f'публікація завершилась станом {st}')
+
+
+def _wait_ready(ctx, dep_id, streak):
     """Опитування до `READY`: повертає останню відповідь `GET /v13/deployments/<id>`."""
     deadline = time.monotonic() + POLL_MAX_S
     while True:
-        d = _req(ctx, 'GET', '/v13/deployments/' + urllib.parse.quote(dep_id, safe=''))
-        st = d.get('readyState') if isinstance(d.get('readyState'), str) else d.get('status')
-        if st == 'READY':
-            return d
-        if st in ('ERROR', 'CANCELED'):
-            why = d.get('errorMessage') if isinstance(d.get('errorMessage'), str) else ''
-            why = why or (d.get('errorCode') if isinstance(d.get('errorCode'), str) else '')
-            raise RuntimeError('Vercel: ' + (_clean(why, _token(ctx), MSG_MAX) or f'публікація завершилась станом {st}'))
+        d = _get_dep(ctx, dep_id, streak)
+        if d is not None:
+            st = d.get('readyState') if isinstance(d.get('readyState'), str) else d.get('status')
+            if st == 'READY':
+                return d
+            if st in ('ERROR', 'CANCELED', 'BLOCKED', 'DELETED'):
+                raise RuntimeError(_terminal_text(ctx, st, d))
         if time.monotonic() >= deadline:
             raise RuntimeError(f'Vercel не завершив публікацію за {POLL_MAX_S} с (timeout)')
         time.sleep(POLL_S)
@@ -334,14 +442,50 @@ def _host(value):
     return v if len(v) <= 253 and HOST_RE.fullmatch(v) else None
 
 
-def _main_url(ready, created):
-    """`(адреса, є_постійна_адреса)`: найкоротший `alias` на `.vercel.app`; нема — адреса самої публікації."""
-    cands = []
-    aliases = ready.get('alias')
+def _vercel_app_aliases(dep):
+    """Усі `*.vercel.app` серед `alias` публікації (імена хостів, що пройшли `HOST_RE`)."""
+    aliases = dep.get('alias')
+    out = []
     for a in (aliases if isinstance(aliases, list) else []):
         h = _host(a)
         if h and h.endswith('.vercel.app'):
-            cands.append(h)
+            out.append(h)
+    return out
+
+
+def _alias_error(ctx, dep):
+    """Текст `aliasError` (обʼєкт із `message` чи рядок) або `None`."""
+    err = dep.get('aliasError')
+    msg = err.get('message') if isinstance(err, dict) else err
+    if isinstance(msg, str) and msg.strip():
+        return _clean(msg, _token(ctx), 120)
+    return None
+
+
+def _wait_alias(ctx, dep_id, ready, streak):
+    """Після `READY` alias може запізнитись. Опитуємо далі кожні `POLL_S` до `ALIAS_MAX_S`, доки: зʼявився `*.vercel.app`,
+    або `aliasAssigned` став правдою (призначено, але `.vercel.app` нема — далі чекати нема чого), або Vercel
+    повідомив `aliasError`. Повертає `(остання відповідь, текст aliasError | None)`."""
+    deadline = time.monotonic() + ALIAS_MAX_S
+    while True:
+        if _vercel_app_aliases(ready):
+            return ready, None
+        err = _alias_error(ctx, ready)
+        if err:
+            return ready, err
+        if ready.get('aliasAssigned'):
+            return ready, None
+        if time.monotonic() >= deadline:
+            return ready, None
+        time.sleep(POLL_S)
+        nxt = _get_dep(ctx, dep_id, streak)
+        if nxt is not None and nxt.get('readyState') == 'READY':
+            ready = nxt
+
+
+def _main_url(ready, created):
+    """`(адреса, є_постійна_адреса)`: найкоротший `alias` на `.vercel.app`; нема — адреса самої публікації."""
+    cands = _vercel_app_aliases(ready)
     if cands:
         return 'https://' + min(cands, key=lambda h: (len(h), h)), True
     h = _host(ready.get('url')) or _host(created.get('url'))
@@ -378,9 +522,19 @@ def _is_vercel_login(location):
     return host == 'vercel.com' or host.endswith('.vercel.com')
 
 
+def _not_there_yet(status):
+    """Сторінка ще не розкотилась: без відповіді, 404 чи 5xx. Захист, редиректи й 200 — остаточні."""
+    return status is None or status == 404 or status >= 500
+
+
 def _verify(url, project):
-    """`(verified, попередження | None)` за відповіддю сторінки превʼю."""
+    """`(verified, попередження | None)` за відповіддю сторінки превʼю; «ще не там» — до `VERIFY_RETRIES` повторів."""
     status, location = _fetch_preview(url)
+    retries = 0
+    while _not_there_yet(status) and retries < VERIFY_RETRIES:
+        retries += 1
+        time.sleep(VERIFY_RETRY_S)
+        status, location = _fetch_preview(url)
     if status == 200:
         return True, None
     if status in (401, 403) or (status in REDIRECTS and _is_vercel_login(location)):
@@ -393,9 +547,20 @@ def _verify(url, project):
 
 # ---------------------------------------------------------------------------------------------- прибирання
 
-def _cleanup(ctx, project_id, current_id):
-    """Прибирання старих публікацій проєкту: тримаємо `KEEP` разом із поточною. Повертає попередження або `None`; будь-який збій —
-    попередження (публікація вже відбулась). Чіпає лише записи цього проєкту з датою й ідентифікатором."""
+def _ours(item, project_id, project):
+    """ПОЗИТИВНО впізнати запис списку як публікацію цього проєкту: `projectId` збігається, а коли його нема —
+    збігається `name`. Усе інше (чужий `projectId`, нема ні того, ні того) — не наше, не чіпаємо."""
+    pid = item.get('projectId')
+    if pid is not None:
+        return pid == project_id
+    return item.get('name') == project
+
+
+def _cleanup(ctx, project_id, project, current_id):
+    """Прибирання старих публікацій проєкту: тримаємо `KEEP` разом із поточною, не довше `CLEANUP_MAX_S`. Повертає
+    попередження або `None`; будь-який збій — попередження (публікація вже відбулась). Чіпає лише записи, ПОЗИТИВНО
+    впізнані як цього проєкту (`_ours`), з датою й ідентифікатором."""
+    deadline = time.monotonic() + CLEANUP_MAX_S
     try:
         data = _req(ctx, 'GET', '/v6/deployments',
                     query={'projectId': project_id, 'target': 'production', 'limit': 20})
@@ -410,7 +575,7 @@ def _cleanup(ctx, project_id, current_id):
             created = it.get('created')
             if not isinstance(uid, str) or not uid or uid == current_id:
                 continue
-            if it.get('projectId') not in (None, project_id):        # запис чужого проєкту — не наш
+            if not _ours(it, project_id, project):
                 continue
             if isinstance(created, bool) or not isinstance(created, (int, float)) or created - created != 0:
                 continue                                              # не число, bool, NaN чи ±inf (`x - x != 0`)
@@ -419,6 +584,8 @@ def _cleanup(ctx, project_id, current_id):
         doomed = rest[max(KEEP - 1, 0):]                              # поточна лишається завжди, тож «інших» KEEP − 1
         failed = 0
         for i, (_created, uid) in enumerate(doomed):
+            if time.monotonic() >= deadline:
+                return f'Прибирання старих публікацій у Vercel перервано за часом ({CLEANUP_MAX_S} с) — частина лишилась.'
             try:
                 _req(ctx, 'DELETE', '/v13/deployments/' + urllib.parse.quote(uid, safe=''))
             except Exception as e:  # noqa: BLE001 — один збій не зупиняє решти, але авторизація й ліміт — зупиняють
@@ -433,7 +600,60 @@ def _cleanup(ctx, project_id, current_id):
         return 'Не вдалося прибрати старі публікації у Vercel — вони лишились.'
 
 
+# ------------------------------------------------------------------------------------------------ сироти
+
+def _drop_created_project(ctx, project, project_id):
+    """Best-effort `DELETE /v9/projects/<id>` проєкту, який створив ЦЕЙ виклик, коли публікація в ньому не вдалась.
+    Повертає речення для тексту помилки: видалено чи ні."""
+    try:
+        _req(ctx, 'DELETE', '/v9/projects/' + urllib.parse.quote(project_id, safe=''))
+        return f'Створений проєкт {project} видалено.'
+    except Exception:  # noqa: BLE001 — найкращі зусилля: причину помилки публікації це не змінює
+        return f'Не вдалося видалити створений проєкт {project} — видаліть його у Vercel вручну.'
+
+
+def _with_note(ctx, e, note):
+    """Той самий збій (з тим самим кодом, якщо він був), але з приміткою в кінці: основний текст стискається так, щоб
+    примітка вмістилась у `ERR_MAX` цілою (ядро ріже довші тексти, а примітку не можна загубити)."""
+    msg = getattr(e, 'message', None)
+    base = msg if isinstance(msg, str) else str(e)
+    text = _clean(base, _token(ctx), max(ERR_MAX - len(note) - 1, 0)) + ' ' + note
+    code = getattr(e, 'code', None)
+    return _error(ctx, code, text) if isinstance(code, str) else RuntimeError(text)
+
+
 # -------------------------------------------------------------------------------------------------- роль
+
+def _finish(ctx, project, state_pid, created_here, dep, warnings):
+    """Усе після `POST /v13/deployments`: очікування, alias, перевірка, прибирання. Повертає `(url, verified, rec_pid)`."""
+    dep_id = dep['id']
+    streak = [0]
+    ready = _wait_ready(ctx, dep_id, streak)
+    ready, alias_err = _wait_alias(ctx, dep_id, ready, streak)
+    pid = ready.get('projectId') if isinstance(ready.get('projectId'), str) and ready.get('projectId') else dep.get('projectId')
+    pid = pid if isinstance(pid, str) and pid else None
+    url, has_alias = _main_url(ready, dep)
+    if not has_alias:
+        if alias_err:
+            warnings.append(f'Vercel не зміг призначити постійну адресу проєкту ({alias_err}) — взято адресу окремої '
+                            'публікації; Vercel зазвичай закриває її захистом (Deployment Protection).')
+        else:
+            warnings.append('Vercel не призначив постійної адреси проєкту — взято адресу окремої публікації; Vercel зазвичай '
+                            'закриває її захистом (Deployment Protection), тож колеги можуть не відкрити.')
+    verified, why = _verify(url, project)
+    if why:
+        warnings.append(why)
+    # прибирання — лише в проєкті, який створив цей модуль для цієї задачі: його projectId записаний у стані й збігається
+    ours = pid is not None and (created_here or (state_pid is not None and pid == state_pid))
+    if ours:
+        w = _cleanup(ctx, pid, project, dep_id)
+        if w:
+            warnings.append(w)
+    elif state_pid is not None and pid != state_pid:
+        warnings.append('Проєкт у Vercel не збігається з тим, що записано для цієї задачі: старі публікації не прибиралися.')
+    # чужий projectId не «усиновлюємо»: запис у стані лишається тим, що створили ми
+    return url, verified, (state_pid if state_pid is not None else pid)
+
 
 def publish(ctx, build_dir, task):
     _need_token(ctx)
@@ -441,12 +661,17 @@ def publish(ctx, build_dir, task):
     if not isinstance(build_dir, str) or not os.path.isdir(build_dir):
         raise RuntimeError('Збірка превʼю не є текою')
     files = _scan(build_dir)                                        # ДО будь-якого запиту
-    project, state_pid, created_here = _pick_project(ctx, state)
+    project, state_pid, created_here, note = _pick_project(ctx, state)
+    warnings = [note] if note else []
     sent = set()
+    deadline = time.monotonic() + UPLOAD_TOTAL_S
     for _rel, path, sha, size in files:
-        if sha not in sent:
-            _upload(ctx, path, sha, size)
-            sent.add(sha)
+        if sha in sent:
+            continue
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f'Завантаження файлів триває понад {UPLOAD_TOTAL_S} с (timeout)')
+        _upload(ctx, path, sha, size)
+        sent.add(sha)
     dep = _req(ctx, 'POST', '/v13/deployments', body={
         'name': project, 'project': project, 'target': 'production',
         'files': [{'file': rel, 'sha': sha, 'size': size} for rel, _p, sha, size in files],
@@ -454,27 +679,13 @@ def publish(ctx, build_dir, task):
     dep_id = dep.get('id')
     if not isinstance(dep_id, str) or not dep_id:
         raise RuntimeError('Vercel не повернув ідентифікатор публікації')
-    ready = _wait_ready(ctx, dep_id)
-    pid = ready.get('projectId') if isinstance(ready.get('projectId'), str) and ready.get('projectId') else dep.get('projectId')
-    pid = pid if isinstance(pid, str) and pid else None
-    url, has_alias = _main_url(ready, dep)
-    warnings = []
-    if not has_alias:
-        warnings.append('Vercel не призначив постійної адреси проєкту — взято адресу окремої публікації; Vercel зазвичай '
-                        'закриває її захистом (Deployment Protection), тож колеги можуть не відкрити.')
-    verified, why = _verify(url, project)
-    if why:
-        warnings.append(why)
-    # прибирання — лише в проєкті, який створив цей модуль для цієї задачі: його projectId записаний у стані й збігається
-    ours = pid is not None and (created_here or (state_pid is not None and pid == state_pid))
-    if ours:
-        w = _cleanup(ctx, pid, dep_id)
-        if w:
-            warnings.append(w)
-    elif state_pid is not None and pid != state_pid:
-        warnings.append('Проєкт у Vercel не збігається з тим, що записано для цієї задачі: старі публікації не прибиралися.')
-    # чужий projectId не «усиновлюємо»: запис у стані лишається тим, що створили ми
-    rec_pid = state_pid if state_pid is not None else pid
+    try:
+        url, verified, rec_pid = _finish(ctx, project, state_pid, created_here, dep, warnings)
+    except Exception as e:  # noqa: BLE001 — збій після створення публікації: проєкт, створений ЦИМ викликом, не лишаємо сиротою
+        created_id = dep.get('projectId')
+        if created_here and OWN_NAME_RE.fullmatch(project) and isinstance(created_id, str) and created_id:
+            raise _with_note(ctx, e, _drop_created_project(ctx, project, created_id)) from None
+        raise
     return {'url': url, 'verified': verified,
             'warnings': [w[:WARN_MAX] for w in warnings[:MAX_WARNINGS]],
             'state': {'project': project, 'project_id': rec_pid, 'deployment': dep_id}}
@@ -490,14 +701,17 @@ def check(ctx):
         handle = user.get('username') or user.get('name')
         detail = _clean(handle, tok, 80) if isinstance(handle, str) and handle.strip() else 'акаунт Vercel'
         team = _team(ctx)
-        if team:
-            value = next(iter(team.values()))
-            t = _req(ctx, 'GET', '/v2/teams/' + urllib.parse.quote(value, safe=''))
-            label = t.get('name') or t.get('slug') or value
+        if 'teamId' in team:
+            t = _req(ctx, 'GET', '/v2/teams/' + urllib.parse.quote(team['teamId'], safe=''))
+            label = t.get('name') or t.get('slug') or team['teamId']
             detail += ' · команда ' + _clean(label, tok, 80)
+        elif 'slug' in team:
+            # `GET /v2/teams/<slug>` приймає id, а не slug: доступ до команди перевіряємо читальним запитом У ЇЇ ОБСЯЗІ
+            _req(ctx, 'GET', '/v6/deployments', query={'limit': 1})
+            detail += ' · команда ' + _clean(team['slug'], tok, 80)
         return {'ok': True, 'detail': detail}
-    except _NetworkError:
-        return {'ok': False, 'error': 'network', 'detail': 'Vercel недоступний'}
+    except _NetworkError as e:
+        return {'ok': False, 'error': 'network', 'detail': str(e)}
     except Exception as e:  # noqa: BLE001
         code = getattr(e, 'code', None)
         text = _clean(getattr(e, 'message', None) or str(e), tok, MSG_MAX)
