@@ -1,0 +1,7 @@
+{"api": 1, "id": "vercel-publish", "name": "Vercel", "version": "1.0.0",
+ "roles": ["publish"], "publish_target": "url",
+ "settings": [
+   {"key": "token", "type": "secret", "label": "Токен Vercel", "required": true},
+   {"key": "team", "type": "text", "label": "Команда Vercel (slug або team_…; порожньо — особистий акаунт)"},
+   {"key": "password", "type": "secret", "label": "Пароль превʼю (необовʼязково)"}
+ ]}
