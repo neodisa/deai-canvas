@@ -2337,6 +2337,94 @@ class PublishedRoute(_PublishedTests, DispatchWorld):
         self.gone(self.root + 'index.html')
         self.assertTrue(fired)
 
+    # ---- імена, журнал розбіжності, повторна folder_ok ----
+
+    def test_the_walk_refuses_a_name_that_is_not_one_path_component_before_any_openat(self):
+        """Другий замок за `_published_segments`: обхід сам не відкриває ні `..`, ні порожнє, ні імʼя зі `/` чи NUL
+        (`..` відносно теки-дескриптора виводить за межі теки без жодного посилання). Прямий виклик обходу."""
+        self.put(os.path.join(self.folder, 'secret.txt'), 'SECRET')
+        ok = lambda path: True
+        opened = serve._published_walk(self.folder, 'tx', ['manifest.json'], False, ok)       # контроль: звичайне імʼя проходить
+        self.assertEqual(opened[0], 'manifest.json')
+        os.close(opened[1][0])
+        calls = []
+        real = serve._published_openat
+
+        def spy(*args, **kw):
+            calls.append(args[0])
+            return real(*args, **kw)
+        cases = [('tx', ['..', 'secret.txt'], False), ('tx', ['sub', '..', 'secret.txt'], False), ('tx', ['.'], True),
+                 ('tx', [''], False), ('tx', ['a/b'], False), ('tx', ['a\0b'], False), ('tx', ['it1', '..'], True),
+                 ('..', ['tx', 'manifest.json'], False), ('', ['manifest.json'], False), ('.', [], True),
+                 ('tx/..', [], True), ('t\0x', [], True), ('tx', [None], False)]
+        with mock.patch.object(serve, '_published_openat', spy):
+            for tid, rel, trailing in cases:
+                with self.subTest(tid=tid, rel=rel):
+                    self.assertIsNone(serve._published_walk(self.folder, tid, rel, trailing, ok))
+        self.assertEqual(calls, [], f'обхід відкривав щось до відмови: {calls}')
+
+    def test_a_kernel_path_mismatch_is_a_constant_404_with_one_log_line_per_folder(self):
+        """Шлях теки за `realpath` і шлях її відкритого дескриптора розійшлись (зовнішній том, FUSE, iCloud): роздача —
+        порожній 404 (закрито по збою), а оператор отримує ОДИН рядок у stderr сервера (не у відповіді) на теку."""
+        serve._PUBLISHED_WARNED.clear()
+        self.addCleanup(serve._PUBLISHED_WARNED.clear)
+        buf = io.StringIO()
+        with mock.patch.object(serve, '_published_fd_path', return_value='/mnt/other/off'), \
+                mock.patch.object(sys, 'stderr', buf):
+            for _ in range(8):                                              # завантаження сторінки — десятки файлів
+                self.gone(self.root + 'manifest.json')                      # `gone`: тіло завжди `not found\n`
+            self.gone(self.root)
+        lines = [ln for ln in buf.getvalue().splitlines() if ln.startswith('published:')]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn(os.path.realpath(self.folder), lines[0])
+        self.assertIn('/mnt/other/off', lines[0])
+        # інша тека — окремий рядок
+        two = os.path.join(self.home, 'pubs', 'two')
+        self.set_folder(two)
+        self.assertEqual(self.post('/api/publish')[0], 200)
+        buf = io.StringIO()
+        with mock.patch.object(serve, '_published_fd_path', return_value='/mnt/other/two'), mock.patch.object(sys, 'stderr', buf):
+            for _ in range(5):
+                self.gone(self.root + 'manifest.json')
+        lines = [ln for ln in buf.getvalue().splitlines() if ln.startswith('published:')]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn(os.path.realpath(two), lines[0])
+
+    def test_an_unavailable_kernel_path_is_logged_once_too(self):
+        serve._PUBLISHED_WARNED.clear()
+        self.addCleanup(serve._PUBLISHED_WARNED.clear)
+        buf = io.StringIO()
+        with mock.patch.object(serve, '_published_fd_path', return_value=None), mock.patch.object(sys, 'stderr', buf):
+            for _ in range(5):
+                self.gone(self.root + 'manifest.json')
+        lines = [ln for ln in buf.getvalue().splitlines() if ln.startswith('published:')]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn('недоступний', lines[0])
+
+    def test_folder_ok_is_run_again_on_the_folder_that_was_really_opened(self):
+        """Посилання-предка перенаправили МІЖ `folder_ok` і відкриттям (на теку простору): `realpath` і шлях дескриптора
+        збігаються, але вказують на чужу теку — її відсікає лише повторна `folder_ok` на ВІДКРИТІЙ теці. Теку задачі
+        простору позначено маркером, щоб між файлом (`iterations.json`) і відповіддю стояла лише ця перевірка."""
+        self.put(os.path.join(self.tx_dir, '.deai-published'), 'm')
+        root = os.path.join(self.home, 'deai-published')
+        self.gone(self.root + 'iterations.json')                                  # контроль: до підміни це не під текою публікації
+        real = dm.folder_ok
+        fired = []
+
+        def after_first(*args, **kw):
+            out = real(*args, **kw)
+            if not fired:
+                fired.append(1)
+                os.rename(root, root + '.moved')
+                os.symlink(os.path.join(self.home, 'deai-work'), root)           # `<root>/off` тепер = тека простору
+            return out
+        with mock.patch.object(dm, 'folder_ok', after_first):
+            self.gone(self.root + 'iterations.json')
+            self.gone(self.root + 'manifest.json')
+        self.assertTrue(fired)
+        self.assertEqual(os.path.realpath(os.path.join(root, 'off')), os.path.realpath(self.off_path), 'свідок: підміна справді повела в простір')
+        self.assertFalse(dm.folder_ok(self.off, self.off_path)[0], 'свідок: правило відмовляє теку простору')
+
     # ---- закрито по збою ----
 
     def test_without_a_descriptor_path_nothing_is_served_on_a_platform_that_has_one(self):
@@ -2481,6 +2569,51 @@ class PublishedRouteFallback(_PublishedTests, DispatchWorld):
         opened = serve.open_published_file(os.path.join(self.dest, 'manifest.json'), real_dest)
         self.assertIsNotNone(opened)
         os.close(opened[0])                                                                  # власність перейшла до нас
+
+
+class PublishedMode(unittest.TestCase):
+    """Режим захисту `/published` — рядок старту сервера (де можливостей ОС нема, ТИХО діє слабший запасний спосіб:
+    оператор мусить це бачити)."""
+
+    def test_the_line_names_the_active_mode_in_both_modes(self):
+        with mock.patch.object(serve, '_PUBLISHED_DIRFD', True):
+            fd = serve.published_mode_line()
+        with mock.patch.object(serve, '_PUBLISHED_DIRFD', False):
+            path = serve.published_mode_line()
+        self.assertEqual(len(fd.splitlines()), 1)
+        self.assertEqual(len(path.splitlines()), 1)
+        self.assertTrue(fd.startswith('/published:') and path.startswith('/published:'))
+        self.assertIn('дескрипторами', fd)
+        self.assertNotIn('ЗАПАСНИЙ', fd)
+        self.assertIn('ЗАПАСНИЙ', path)
+        self.assertIn('слабший', path)
+        self.assertNotEqual(fd, path)
+
+    def test_the_main_block_prints_the_line_and_a_started_server_really_does(self):
+        src = open(serve.__file__, encoding='utf-8').read()
+        main = src.split("if __name__ == '__main__':")[1]
+        self.assertIn('print(published_mode_line())', main)
+        tmp = tempfile.mkdtemp(prefix='dc-start-')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        env = {**{k: v for k, v in os.environ.items() if k not in ('DEAI_HOME', 'DC_TASKS_FILE', 'PORT')},
+               'HOME': tmp, 'DC_TASKS_FILE': os.path.join(tmp, 'tasks.json'), 'PORT': '0', 'DC_NO_OVERVIEW': '1'}
+        proc = subprocess.Popen([sys.executable, '-u', '-B', serve.__file__], env=env, cwd=tmp,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        lines = []
+        reader = threading.Thread(target=lambda: [lines.append(ln.rstrip('\n')) for ln in proc.stdout], daemon=True)
+        reader.start()
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not any(ln.startswith('/published:') for ln in lines):
+                time.sleep(0.1)
+        finally:
+            proc.kill()                                                    # свій процес, за дескриптором, не за шаблоном
+            proc.wait(10)
+        self.assertTrue(any(ln.startswith('Design Canvas v2:') for ln in lines), lines)
+        mode = [ln for ln in lines if ln.startswith('/published:')]
+        self.assertEqual(len(mode), 1, lines)
+        self.assertEqual(mode[0], serve.published_mode_line())
+        self.assertEqual(lines.index(mode[0]), lines.index(next(ln for ln in lines if ln.startswith('Design Canvas v2:'))) + 1)
 
 
 class ResealModuleBuilds(TaskFixture):

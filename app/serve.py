@@ -6202,12 +6202,23 @@ def _published_fd_path(fd):
 
 #: Роздача ходить по ТЕЦІ дескрипторами (`_published_walk`), а не за шляхом, коли ОС дає `open(dir_fd=)`,
 #: `stat(dir_fd=, follow_symlinks=False)`, `O_DIRECTORY`/`O_NOFOLLOW` І шлях відкритого дескриптора
-#: (`F_GETPATH` / `/proc/self/fd`) — macOS і Linux. Решта (Windows) — запасний шляховий спосіб
-#: (`_published_target_by_path`): слабший, обрано ЯВНО цією перевіркою можливостей, а не `except`-ом.
+#: (`F_GETPATH` / `/proc/self/fd`) — звичайно macOS і Linux. ⚠️ Це перевірка ПРИ ІМПОРТІ: де можливості нема
+#: (Windows; macOS із Python < 3.9 без `F_GETPATH`; Linux без `/proc/self/fd`), ТИХО діє слабший запасний шляховий
+#: спосіб (`_published_target_by_path`). Вибір — цією перевіркою, а не `except`-ом, і режим, що діє, друкується
+#: рядком старту сервера (`published_mode_line`). «Закрито по збою» (нема шляху дескриптора → 404) — це лише в режимі
+#: обходу дескрипторами, коли можливість була, а під час запиту дала збій (довгий шлях тощо).
 _PUBLISHED_DIRFD = (os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
                     and os.stat in os.supports_follow_symlinks
                     and hasattr(os, 'O_DIRECTORY') and hasattr(os, 'O_NOFOLLOW')
                     and ((fcntl is not None and hasattr(fcntl, 'F_GETPATH')) or os.path.isdir('/proc/self/fd')))
+
+
+def published_mode_line():
+    """Рядок старту сервера: який режим захисту `/published` діє (див. `_PUBLISHED_DIRFD`)."""
+    if _PUBLISHED_DIRFD:
+        return '/published: обхід теки дескрипторами (fd walk), закрито по збою'
+    return ('/published: ЗАПАСНИЙ шляховий спосіб — ОС без dir_fd чи без шляху дескриптора (Windows; macOS Python < 3.9; '
+            'Linux без /proc); слабший захист від підміни файлів посиланнями')
 
 
 def _published_openat(name, flags, dir_fd=None):
@@ -6236,6 +6247,33 @@ def _published_same_dir_path(kernel, wanted):
             and _fold(kernel) == _fold(wanted))
 
 
+#: Що вже записано в журнал про розбіжність шляху теки публікації: `{(realpath, шлях_дескриптора_чи_None)}`. Один рядок
+#: на пару за життя процесу (сторінка тягне десятки файлів — журнал не засмічуємо), обмежено, щоб не ріс без меж.
+_PUBLISHED_WARNED = set()
+_PUBLISHED_WARNED_MAX = 64
+
+
+def _published_log_mismatch(real_folder, kernel):
+    """ОДИН рядок у stderr сервера (як решта журналів, НІКОЛИ не у відповіді): шлях теки за `realpath` і шлях її
+    відкритого дескриптора розійшлись, тож роздача (закрито по збою) відповідає 404. Таке буває на зовнішніх томах,
+    FUSE, iCloud — без цього рядка оператор бачить лише порожні 404."""
+    key = (real_folder, kernel)
+    if key in _PUBLISHED_WARNED or len(_PUBLISHED_WARNED) >= _PUBLISHED_WARNED_MAX:
+        return
+    _PUBLISHED_WARNED.add(key)
+    what = ('шлях відкритого дескриптора недоступний' if kernel is None
+            else f'шлях відкритого дескриптора {kernel!r} не збігається зі схваленим')
+    print(f'published: тека {real_folder!r}: {what} — /published віддає 404 (звірка закрита по збою)',
+          file=sys.stderr)
+
+
+def _published_name_ok(name):
+    """Імʼя ОДНІЄЇ складової для `openat`: не порожнє, не `.`/`..`, без `/` і NUL. Другий замок за
+    `_published_segments` (яка й так не пропустить такого): обхід дескрипторами не сміє залежати від того, що
+    викликач почистив імена, бо `..` відносно теки-дескриптора виводить за межі теки без жодного посилання."""
+    return (isinstance(name, str) and name not in ('', '.', '..') and '/' not in name and '\0' not in name)
+
+
 def _published_open_file(name, dir_fd):
     """Відкрити файл `name` теки `dir_fd` для віддачі: `(fd, fstat)` або `None`. Кидає `OSError`, коли файла нема.
 
@@ -6260,14 +6298,19 @@ def _published_open_file(name, dir_fd):
     return None
 
 
-def _published_walk(folder, tid, rel, trailing):
+def _published_walk(folder, tid, rel, trailing, folder_check):
     """Обхід теки ДЕСКРИПТОРАМИ, ніколи за шляхом: `'redirect'`, `(імʼя_файла, (fd, fstat))` або `None`. Не кидає
-    (`OSError` — `None`; усі проміжні дескриптори закриваються в `finally`). ЗАКРИТО ПО ЗБОЮ: нема шляху дескриптора
-    чи він не збігається — відмова, а не відкат на `realpath`.
+    (`OSError` — `None`; усі проміжні дескриптори закриваються в `finally`). Це режим, що діє, коли ОС має потрібні
+    можливості (`_PUBLISHED_DIRFD`, перевіряється при імпорті); де їх нема, роздача взагалі не сюди йде (запасний
+    шляховий спосіб, слабший). ЗАКРИТО ПО ЗБОЮ в цьому режимі: шлях дескриптора теки недоступний чи не збігається —
+    відмова (і рядок у журналі), а не відкат на `realpath`.
 
+      0) імена — кожне одна складова (`_published_name_ok`), ДО першого `openat`;
       a) `folder` — те, що схвалив `folder_ok`; сама тека може бути посиланням — розвʼязуємо ОДИН раз
          (`realpath`), відкриваємо, і шлях ВІДКРИТОГО дескриптора (ядро) мусить збігатися з розвʼязаним
-         (`_published_same_dir_path`): предка підмінили посиланням між `realpath` і `open` — дескриптор лежить деінде;
+         (`_published_same_dir_path`): предка підмінили посиланням між `realpath` і `open` — дескриптор лежить деінде.
+         Потім `folder_check(шлях_дескриптора)` — повторна `folder_ok` на ТЕЦІ, яку справді відкрито: посилання-предка
+         могли перенаправити ще ДО `realpath`, і тоді обидва шляхи збігаються, але вказують на чужу теку;
       b) `<задача>` — `open(O_DIRECTORY|O_NOFOLLOW, dir_fd=…)` (посилання на задачу — відмова); маркер модуля —
          `lstat` у ЦІЙ теці, звичайний файл;
       c) кожна проміжна тека — так само відносно попередньої; кожне імʼя — одна складова, шляху нема;
@@ -6275,6 +6318,8 @@ def _published_walk(folder, tid, rel, trailing):
          файл відкриває `_published_open_file`.
     Тож підмінити можна що завгодно ПІСЛЯ відповідного відкриття — вже відкрите не зміниться; а що ПЕРЕД — стане
     `ELOOP`/`ENOTDIR`/різним `ino` і відмовою."""
+    if not all(_published_name_ok(n) for n in (tid, *rel)):
+        return None
     fds = []
     try:
         real_folder = os.path.realpath(folder)
@@ -6282,6 +6327,9 @@ def _published_walk(folder, tid, rel, trailing):
         fds.append(fd0)
         kernel = _published_fd_path(fd0)
         if kernel is None or not _published_same_dir_path(kernel, real_folder):
+            _published_log_mismatch(real_folder, kernel)
+            return None
+        if not folder_check(kernel):
             return None
         cur = _published_openat(tid, _PUBLISHED_OPEN_DIR, fd0)
         fds.append(cur)
@@ -6416,7 +6464,9 @@ def published_target(path):
       5. сам обхід: `_published_walk` (дескрипторами, закрито по збою) або, де ОС не дає `dir_fd`, запасний
          `_published_target_by_path`. Вибір — за можливостями ОС (`_PUBLISHED_DIRFD`), а не за винятком.
     ⚠️ Передумови й межі: тека публікації не змінюється ПІД ЧАС обходу в бік «чужого» — це обіцяє лише обхід
-    дескрипторами (macOS/Linux); запасний спосіб слабший (див. його докстрінги). Файл, що вже відкритий, віддається
+    дескрипторами; він діє, коли ОС має потрібні можливості (перевірка ПРИ ІМПОРТІ, `_PUBLISHED_DIRFD`; режим друкується
+    рядком старту), інакше ТИХО працює запасний спосіб — слабший (див. його докстрінги). Повторна `folder_ok` на
+    відкритій теці (`folder_check` у обході) є лише в режимі дескрипторів. Файл, що вже відкритий, віддається
     таким, яким відкрито, навіть якщо його потім видалили чи замінили."""
     try:
         segs = _published_segments(path)
@@ -6439,7 +6489,8 @@ def published_target(path):
             return None
         if not _PUBLISHED_DIRFD:
             return _published_target_by_path(folder, tid, rel, trailing, sid)
-        walked = _published_walk(folder, tid, rel, trailing)
+        walked = _published_walk(folder, tid, rel, trailing,
+                                 lambda opened: deai_modules.folder_ok(space, opened, reg=inputs[0], task_dirs=inputs[1])[0])
         if walked is None:
             return None
         if walked == 'redirect':
@@ -6716,4 +6767,5 @@ def make_server(port=0):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8765))
     print(f'Design Canvas v2: http://localhost:{port}/app/')
+    print(published_mode_line())
     make_server(port).serve_forever()
