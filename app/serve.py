@@ -7,6 +7,7 @@ comment-layer с каналами: internal (локально, для Claude) / 
 """
 import contextlib
 import functools
+import hashlib
 import json
 import math
 import os
@@ -3450,6 +3451,11 @@ URL_RESULT_MAX_URL = 2048
 URL_RESULT_MAX_STATE = 4096           # `len(json.dumps(state))`
 URL_RESULT_MAX_WARNINGS = 5
 URL_RESULT_MAX_WARNING_LEN = 300
+#: Значення секретів модуля коротші за це в його відповіді не шукаємо й не вирізаємо: коротке значення (пароль
+#: «1100») збігається зі звичайним текстом, і хибне спрацювання гірше за пропуск.
+URL_RESULT_MIN_SECRET = 8
+#: Мітка DNS: літери/цифри/дефіс, не з дефіса й не на дефіс, ≤ 63; імена не-ASCII — лише punycode (`xn--…`).
+_URL_HOST_LABEL = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', re.ASCII)
 
 
 def _utf8_ok(text):
@@ -3461,19 +3467,30 @@ def _utf8_ok(text):
     return True
 
 
+def _url_host_ok(host):
+    """Імʼя хоста — DNS-імʼя з непорожніх міток (`a.b`, `xn--e1afmkfd.example`): без порожніх міток (`.`, `a..b`,
+    крапки на початку чи в кінці), без дефіса на краю мітки, ≤ 253 знаків усього. IP-адреси й `[::1]` — не адреса
+    превʼю, їх не пускаємо."""
+    return (isinstance(host, str) and 0 < len(host) <= 253
+            and all(_URL_HOST_LABEL.fullmatch(label) for label in host.split('.')))
+
+
 def _url_result_url_ok(url):
-    """`https://` без облікових даних і фрагмента, з непорожнім хостом; без пробілів, керівних символів і
-    зворотної скісної (`urlsplit` мовчки відкидає перенос рядка й табуляцію, тож перевіряємо рядок, а не лише розбір)."""
+    """`https://` без облікових даних і фрагмента, з коректним хостом і портом; ЛИШЕ ASCII (імена IDN — punycode:
+    інакше гомогліф чи символ напрямку тексту підмінив би адресу, яку бачить людина), без пробілів, керівних
+    символів і зворотної скісної (`urlsplit` мовчки відкидає перенос рядка й табуляцію, тож перевіряємо рядок, а
+    не лише розбір). Порт перевіряє `urlsplit` (`:abc`, `:99999` — `ValueError`)."""
     if not isinstance(url, str) or not url.startswith('https://') or len(url) > URL_RESULT_MAX_URL:
         return False
-    if '#' in url or '\\' in url or any(ord(c) <= 32 or ord(c) == 127 for c in url) or not _utf8_ok(url):
+    if not url.isascii() or '#' in url or '\\' in url or any(ord(c) <= 32 or ord(c) == 127 for c in url):
         return False
     try:
         parts = urlsplit(url)
         host = parts.hostname
-    except ValueError:                    # `https://[::1` та подібні
+        parts.port                        # noqa: B018 — сам доступ кидає `ValueError` на поганому порту
+    except ValueError:                    # `https://[::1`, `:abc`, `:99999` та подібні
         return False
-    return bool(host) and '@' not in parts.netloc and not parts.fragment
+    return _url_host_ok(host) and '@' not in parts.netloc and not parts.fragment
 
 
 def _url_result_state_ok(state):
@@ -3525,6 +3542,35 @@ def _checked_url_result(res):
                 f'have happened — check the remote before retrying')
 
 
+def _guarded_url_result_secrets(url, state, warnings, secrets):
+    """Відповідь модуля, що пройшла перевірку ФОРМИ, ще не вільна від секретів: модуль міг покласти токен у
+    адресу (`?t=…`), у `state` чи в попередження — а `url` і `state` лягають в `iterations.json` і йдуть в
+    `/api/task`, `warnings` — у відповідь. Тому: значення секретів модуля (`ctx['secrets']`, не коротші за
+    `URL_RESULT_MIN_SECRET`; форми — як у вирізання помилок ядра: сире, repr, JSON, URL-кодоване) у `url` чи
+    `json.dumps(state)` → `module-error` без запису (текст без значення). ВИНЯТОК — `password`: пароль превʼю не
+    секрет від глядача (вшитий у сторінки), його ядро саме дописує в посилання. У `warnings` вирізаються ВСІ
+    такі значення, пароль теж (`***`). Повертає очищені `warnings`."""
+    blocked = {k: v for k, v in secrets.items()
+               if k != 'password' and isinstance(v, str) and len(v) >= URL_RESULT_MIN_SECRET}
+    for text in (url, json.dumps(state)):
+        if deai_modules._scrub(text, blocked) != text:
+            raise deai_modules.ModuleError(
+                'module-error',
+                message='publish returned a result that contains a secret of the module; the module has already '
+                        'run, so the publish may already have happened — check the remote before retrying; the '
+                        'result was not recorded')
+    everything = {k: v for k, v in secrets.items() if isinstance(v, str) and len(v) >= URL_RESULT_MIN_SECRET}
+    return [deai_modules._scrub(w, everything) for w in warnings]
+
+
+def _gate_hash(password):
+    """Відбиток пароля превʼю для `publish_remote.gate_hash` (ЛИШЕ щоб побачити, що пароль змінився після
+    публікації; пароль у метаданих не зберігається): перші 16 hex `sha256`. Не-кодований у UTF-8 пароль — `None`."""
+    if not isinstance(password, str) or not _utf8_ok(password):
+        return None
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()[:16]
+
+
 def _stored_publish_state(task, prov):
     """`state`, який цей модуль повернув минулого разу (`publish_remote.state` в СВІЖО прочитаному
     `iterations.json`), або `{}`: запису нема, він чужого модуля чи зіпсований."""
@@ -3545,10 +3591,11 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     БЕЗ коментатора; (4) `build_only` — відповідь про збірку, як у `folder`; (5) `publish` модуля БЕЗ `timeout=` (у
     нього свої тайм-аути на запит; `timeout=` пустив би його в робочий потік, що не вклався б і працював далі
     БЕЗ замка) із `task = {id, title, dir, state}`, де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
-    читання `iterations.json`; чужий чи зіпсований запис — `{}`); (6) перевірка відповіді (`_checked_url_result`);
+    читання `iterations.json`; чужий чи зіпсований запис — `{}`); (6) перевірка відповіді (`_checked_url_result`:
+    форма; `_guarded_url_result_secrets`: жодного секрету модуля в `url`/`state`, `warnings` очищено);
     (7) `iterations.json` перечитується ПЕРЕД записом (збірка й публікація тривали, дизайнер міг перемкнути зелену
     крапку) і дістає `publish_url`, `published_at` (`ДД.ММ.РРРР ГГ:ХХ`, як у ЛІГА), `publish_verified` і
-    `publish_remote = {module, state, published_at}`; `publish_local` не чіпається.
+    `publish_remote = {module, state, published_at, url, gated[, gate_hash]}`; `publish_local` не чіпається.
 
     Ніяких виходів назовні з ядра: ні `git_autocommit` (він пушить), ні `_registry_push`, ні `_overview_sync`, ні
     мережі — ходить лише сам модуль."""
@@ -3568,12 +3615,20 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
                         'state': _stored_publish_state(task, prov)}
             res = deai_modules.call(prov, 'publish', ctx, built['dir'], task_arg)
             url, state, verified, warnings = _checked_url_result(res)
+            warnings = _guarded_url_result_secrets(url, state, warnings, ctx['secrets'])
             meta = load_meta(task)
             meta['publish_url'] = url
             meta['published_at'] = time.strftime('%d.%m.%Y %H:%M')
             meta['publish_verified'] = verified
-            meta['publish_remote'] = {'module': prov.id, 'state': state,
-                                      'published_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+            # `url` і `gated`/`gate_hash` — ВЛАСНІ поля ядра (не модуля): що саме опубліковано й з яким паролем.
+            # `/api/task` дає посилання з `#k=` лише до адреси, яку записав цей модуль, і судить про гейт за
+            # опублікованою збіркою, а не за поточним секретом.
+            remote = {'module': prov.id, 'state': state,
+                      'published_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                      'url': url, 'gated': gate_pw is not None}
+            if gate_pw is not None and _gate_hash(gate_pw):
+                remote['gate_hash'] = _gate_hash(gate_pw)
+            meta['publish_remote'] = remote
             save_meta(task, meta)
             result = {'ok': True, 'url': url, 'verified': verified,
                       'iterations': built['iterations'], 'frames': built['frames']}
@@ -3588,15 +3643,27 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
 
 
 def task_publish_share(space, meta):
-    """Поля `/api/task` для простору, де публікує модуль `publish_target: url`: `publish_gate` (чи заданий пароль
-    превʼю — для застереження «превʼю публічне») і, коли адреса вже є, `publish_share_url` = адреса +
-    `#k=<пароль>` (без пароля — сама адреса). Для `legacy`, `folder`-модуля і простору без постачальника — `{}`.
+    """Поля `/api/task` для простору, де публікує модуль `publish_target: url`. Для `legacy`, `folder`-модуля і
+    простору без постачальника — `{}`.
+
+    • `publish_gate` — чи превʼю ОПУБЛІКОВАНЕ з паролем. Коли є `publish_remote` ЦЬОГО модуля з тією самою адресою,
+      що `publish_url` (збіг, див. нижче), — `publish_remote.gated`, тобто те, що справді вийшло (опубліковано без
+      пароля, потім пароль задали — превʼю й далі публічне, і застереження «превʼю публічне» мусить лишитись).
+      Інакше — чи заданий пароль ЗАРАЗ (публікації цього модуля ще не було чи адреса не його).
+    • `publish_gate_stale: true` — лише за збігу й лише коли поточний пароль відрізняється від опублікованого
+      (задали, зняли, змінили; порівнюється відбиток `gate_hash`, пароль у метаданих не зберігається): превʼю
+      треба опублікувати знову.
+    • `publish_share_url` — лише за збігу. Збіг — це `publish_remote.module` == цей модуль І `publish_remote.url`
+      == `publish_url`: посилання, що його записало ядро після публікації цього модуля. Адреса від ЛІГА, інша
+      адреса після перемикання модулів чи вручну виправлена не збігаються — пароль до чужої адреси не клеїмо.
+      Це адреса + `#k=<пароль>`, коли превʼю опубліковане з паролем і він не змінився; інакше сама адреса.
 
     ⚠️ Свідоме виключення з правила «секрети не йдуть в API»: пароль превʼю — не секрет від глядача (вшитий у
     сторінки, гейт клієнтський), а менеджеру потрібне посилання, що відчиняється одразу. ТОКЕН модуля звідси не
-    виходить ніколи: читається лише `password`. ТОТАЛЬНА: нечитабельні секрети, `space.json`, каталог — `{}`,
-    а не 5xx (`/api/task` годує весь інтерфейс); шар вимкнено чи простір запиту не зафіксовано — модулів нема
-    (як у `task_preview_gate`)."""
+    виходить ніколи: читається лише `password`. Пароль, який не записати в UTF-8 (самотній сурогат у
+    `secrets.json`, правленому вручну), — «пароля нема». ТОТАЛЬНА: нечитабельні секрети, `space.json`, каталог,
+    зіпсована мета — `{}` чи менше полів, а не 5xx (`/api/task` годує весь інтерфейс); шар вимкнено чи простір запиту
+    не зафіксовано — модулів нема (як у `task_preview_gate`)."""
     try:
         if not (space and spaces.layer_on() and spaces.request_space_id() is not None):
             return {}
@@ -3608,14 +3675,21 @@ def task_publish_share(space, meta):
             return {}
         # як `deai_modules._ctx`: секрети читаються лише в модуля, що їх оголосив
         secrets = deai_modules.read_secrets(space.get('id'), mod.id) if mod.secret_keys() else {}
+        pw = secrets.get('password')
+        pw = pw if isinstance(pw, str) and pw and _utf8_ok(pw) else None
+        url, remote = meta.get('publish_url'), meta.get('publish_remote')
+        if not (isinstance(remote, dict) and remote.get('module') == mod.id
+                and isinstance(url, str) and url and remote.get('url') == url):
+            return {'publish_gate': pw is not None}
+        gated = remote.get('gated') is True
+        same = gated == (pw is not None) and (not gated or remote.get('gate_hash') == _gate_hash(pw))
+        out = {'publish_gate': gated}
+        if not same:
+            out['publish_gate_stale'] = True
+        out['publish_share_url'] = f'{url}#k={quote(pw, safe="")}' if gated and same and '#' not in url else url
+        return out
     except Exception:  # noqa: BLE001 — тотальність: збій читання не ламає `/api/task`
         return {}
-    pw = secrets.get('password')
-    out = {'publish_gate': bool(pw)}
-    url = meta.get('publish_url')
-    if isinstance(url, str) and url:
-        out['publish_share_url'] = f'{url}#k={quote(pw, safe="")}' if pw else url
-    return out
 
 
 #: `preview_gate` для `/api/task`, коли публікує модуль: ТА САМА форма, що в `preview_gate_state` (UI читає ті
@@ -4443,8 +4517,11 @@ class Handler(SimpleHTTPRequestHandler):
                 out['publish_local'] = meta['publish_local']
             # Остання публікація модуля «за адресою» (`{module, state, published_at}`) і поля для посилання
             # (`publish_gate`, `publish_share_url` — лише коли публікує такий модуль, див. `task_publish_share`).
-            if meta.get('publish_remote'):
-                out['publish_remote'] = meta['publish_remote']
+            # `gate_hash` (відбиток пароля, лише для порівняння на сервері) у відповідь не йде.
+            remote = meta.get('publish_remote')
+            if remote:
+                out['publish_remote'] = ({k: v for k, v in remote.items() if k != 'gate_hash'}
+                                         if isinstance(remote, dict) else remote)
             out.update(task_publish_share(sp, meta))
             self._send_json(out)
             return

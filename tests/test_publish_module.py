@@ -2738,7 +2738,8 @@ class UrlTarget(DispatchWorld):
 
     def module(self, mid, server, roles=('publish',), **manifest):
         man = {'api': 1, 'id': mid, 'name': mid, 'version': '1.0.0', 'roles': list(roles),
-               'settings': [{'key': 'password', 'type': 'secret', 'label': 'Password'}]}
+               'settings': [{'key': 'password', 'type': 'secret', 'label': 'Password'},
+                            {'key': 'token', 'type': 'secret', 'label': 'Token'}]}
         for k, v in manifest.items():
             if v is _GONE:
                 man.pop(k, None)
@@ -2833,8 +2834,9 @@ class UrlTarget(DispatchWorld):
         self.assertEqual(meta['published_at'], time.strftime('%d.%m.%Y %H:%M'), 'формат/час ЛІГА')
         self.assertIs(meta['publish_verified'], True)
         remote = meta['publish_remote']
-        self.assertEqual(set(remote), {'module', 'state', 'published_at'})
-        self.assertEqual((remote['module'], remote['state']), (URL_MID, GOOD_STATE))
+        self.assertEqual(set(remote), {'module', 'state', 'published_at', 'url', 'gated'})
+        self.assertEqual((remote['module'], remote['state'], remote['url'], remote['gated']),
+                         (URL_MID, GOOD_STATE, GOOD_URL, False))
         self.assertRegex(remote['published_at'], r'^' + ISO_UTC.pattern + r'$')
         self.assertEqual(meta['publish_local'], local, '`publish_local` не чіпаємо')
         self.assertEqual([i['published'] for i in meta['iterations']], [True, True])
@@ -3134,12 +3136,21 @@ class UrlTarget(DispatchWorld):
         self.assertEqual(box['first'][0], 200, box['first'])
 
     def test_the_lock_is_shared_with_the_folder_branch_of_the_same_task(self):
-        """Збірка `<задача>/publish/` одна й та сама для обох гілок: `folder`-публікація тієї ж задачі теж чекає."""
+        """Збірка `<задача>/publish/` одна й та сама для обох гілок: поки url-публікація стоїть у модулі, людина
+        перемкнула простір на `folder`-модуль — його публікація тієї ж задачі теж відповідає `publish-busy` одразу
+        (інакше стерла б і писала б `<задача>/publish/` під першою), а коли перша вийшла, замок вільний."""
         gate, t, box = self._hold_first()
-        key = serve._task_dir_key(self.tx_dir)
-        self.assertFalse(serve._publish_lock(key).acquire(blocking=False), 'замок теки збірки не взято')
+        self.enable_folder(self.off)
+        for payload in ({}, {'build_only': True}):
+            st, body = self._answers_at_once(lambda: self.publish(payload))
+            self.assertEqual((st, body.get('ok'), body.get('code')), (409, False, 'publish-busy'), body)
+        self.assertFalse(os.path.exists(self.dest), 'folder-публікація пройшла повз замок теки збірки')
         gate.set()
         t.join(30)
+        self.assertEqual(box['first'][0], 200, box['first'])
+        st, body = self.publish()
+        self.assertEqual((st, list(body)[:2]), (200, ['ok', 'local']), body)
+        self.assertEqual(len(self.cfg['calls']), 1, 'url-модуль кликано для folder-публікації')
 
     def test_the_module_is_called_without_a_timeout(self):
         """`timeout=` перетворив би виклик на робочий потік, що не вклався б і працював далі БЕЗ замка."""
@@ -3216,7 +3227,10 @@ class UrlTarget(DispatchWorld):
         self.assertEqual(self.publish()[0], 200)
         st, task = self.get('/api/task')
         self.assertEqual(task['publish_url'], GOOD_URL)
-        self.assertEqual(task['publish_remote'], self.meta()['publish_remote'])
+        stored = self.meta()['publish_remote']
+        self.assertEqual(stored['gated'], True)
+        self.assertRegex(stored['gate_hash'], r'^[0-9a-f]{16}$')
+        self.assertEqual(task['publish_remote'], {k: v for k, v in stored.items() if k != 'gate_hash'})
         self.assertEqual(task['publish_gate'], True)
         want = GOOD_URL + '#k=' + urllib.parse.quote(pw, safe='')
         self.assertEqual(task['publish_share_url'], want)
@@ -3294,6 +3308,236 @@ class UrlTarget(DispatchWorld):
         st, task = self.get('/api/task')
         self.assertEqual(task['publish_share_url'], GOOD_URL + '#k=' + urllib.parse.quote('модульний', safe=''))
         self.assertNotIn(task['preview_password'], task['publish_share_url'].split('#k=')[1])
+
+    # ---- секрети в результаті модуля ----
+
+    SIMPLE = 'vcp_S3cr3tTokenValue123'
+    SPECIAL = 'tok-Ü/ab c&"d=9'                    # URL-кодована й JSON-екранована форми відрізняються від сирої
+
+    def set_token(self, value):
+        dm.write_secrets('off', URL_MID, {'token': value})
+
+    def set_password(self, value):
+        dm.write_secrets('off', URL_MID, {'password': value})                 # None — прибрати
+
+    def assert_secret_nowhere(self, secret, *responses):
+        """Секрет не в жодній відповіді, не в `iterations.json` і не в `/api/task` — у жодній з його форм."""
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        texts = [self.bytes_meta().decode('utf-8')]
+        for obj in (task, *responses):
+            texts += [json.dumps(obj, ensure_ascii=True), json.dumps(obj, ensure_ascii=False)]
+        forms = {secret, urllib.parse.quote(secret, safe=''), json.dumps(secret)[1:-1],
+                 json.dumps(secret, ensure_ascii=False)[1:-1]}
+        for form in forms:
+            for text in texts:
+                self.assertNotIn(form, text, f'секрет {form!r} лишився у відповіді чи в мета')
+
+    def test_a_secret_in_the_url_or_the_state_is_refused_and_leaks_nowhere(self):
+        simple, special = self.SIMPLE, self.SPECIAL
+        cases = {
+            'адреса: ?t=<токен>': (simple, result(url=GOOD_URL + '/?t=' + simple)),
+            'адреса: шлях': (simple, result(url=GOOD_URL + '/' + simple)),
+            'адреса: URL-кодований': (special, result(url=GOOD_URL + '/?t=' + urllib.parse.quote(special, safe=''))),
+            'state: Bearer <токен>': (simple, result(state={'dbg': 'Bearer ' + simple})),
+            'state: JSON-екранований': (special, result(state={'dbg': 'Bearer ' + special})),
+            'state: ключ': (simple, result(state={simple: 1})),
+        }
+        for what, (secret, res) in cases.items():
+            with self.subTest(what):
+                self.set_token(secret)
+                body = self.refused(res, what)
+                self.assertIn('contains a secret', body['error'])
+                self.assert_secret_nowhere(secret, body)
+
+    def test_a_secret_in_the_warnings_is_cut_out_and_the_publish_goes_on(self):
+        for secret in (self.SIMPLE, self.SPECIAL):
+            with self.subTest(secret):
+                self.set_token(secret)
+                self.cfg['result'] = result(warnings=['oops ' + secret, urllib.parse.quote(secret, safe='') + ' end'])
+                st, body = self.publish()
+                self.assertEqual(st, 200, body)
+                self.assertEqual(body['warnings'], ['oops ***', '*** end'])
+                self.assert_secret_nowhere(secret, body)
+
+    def test_the_password_is_allowed_in_url_and_state_but_is_cut_out_of_warnings(self):
+        """Пароль превʼю — не секрет від глядача (вшитий у сторінки): ядро саме дописує його в посилання, тож у
+        `url`/`state` він відмову не викликає. Попередження ж він не потрібен — там його вирізано, як і токен."""
+        pw = 'pw-visible-1234'
+        self.set_password(pw)
+        self.cfg['result'] = result(url=GOOD_URL + '/?k=' + pw, state={'hint': pw}, warnings=['щось ' + pw])
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.meta()['publish_remote']['state'], {'hint': pw})
+        self.assertEqual(body['warnings'], ['щось ***'])
+
+    def test_short_secrets_are_not_searched_for_but_eight_characters_are(self):
+        self.set_token('abc1234')                                       # 7
+        self.cfg['result'] = result(url=GOOD_URL + '/?q=abc1234', warnings=['abc1234 тут'])
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['warnings'], ['abc1234 тут'])
+        self.set_token('abc12345')                                      # 8
+        self.refused(result(url=GOOD_URL + '/?q=abc12345'), 'вісім знаків')
+
+    def test_a_clean_publish_never_puts_the_token_anywhere(self):
+        self.set_token(self.SIMPLE)
+        self.set_password('pw-Ключ-1234')
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.cfg['calls'][0]['secret_keys'], ['password', 'token'])
+        self.assert_secret_nowhere(self.SIMPLE, body)
+
+    # ---- гейт за опублікованою збіркою й посилання лише до своєї адреси ----
+
+    def api_share(self):
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        return {k: task[k] for k in ('publish_gate', 'publish_gate_stale', 'publish_share_url') if k in task}
+
+    def test_publish_remote_records_the_url_and_the_gate_of_the_published_build(self):
+        self.assertEqual(self.publish()[0], 200)
+        remote = self.meta()['publish_remote']
+        self.assertEqual((remote['url'], remote['gated']), (GOOD_URL, False))
+        self.assertNotIn('gate_hash', remote)
+        self.set_password('pw-Ключ-1')
+        self.assertEqual(self.publish()[0], 200)
+        remote = self.meta()['publish_remote']
+        self.assertEqual((remote['url'], remote['gated']), (GOOD_URL, True))
+        self.assertEqual(remote['gate_hash'], hashlib.sha256('pw-Ключ-1'.encode('utf-8')).hexdigest()[:16])
+        self.assertNotIn('pw-Ключ-1', self.bytes_meta().decode('utf-8'), 'пароль у метаданих')
+        st, task = self.get('/api/task')
+        self.assertNotIn('gate_hash', task['publish_remote'])
+        self.assertNotIn(remote['gate_hash'], json.dumps(task))
+
+    def test_publish_gate_follows_the_published_build_and_flags_a_changed_password(self):
+        self.assertEqual(self.api_share(), {'publish_gate': False})              # ще не публікували: пароль ЗАРАЗ
+        self.set_password('pw-before')
+        self.assertEqual(self.api_share(), {'publish_gate': True})
+        self.set_password(None)
+        # 1. опубліковано БЕЗ пароля — превʼю публічне
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.api_share(), {'publish_gate': False, 'publish_share_url': GOOD_URL})
+        # 2. пароль задали ПІСЛЯ: застереження «публічне» лишається, превʼю пора перепублікувати, ключа в посиланні нема
+        self.set_password('pw-new-1')
+        self.assertEqual(self.api_share(), {'publish_gate': False, 'publish_gate_stale': True,
+                                            'publish_share_url': GOOD_URL})
+        # 3. перепублікували — тепер з гейтом, посилання відчиняється з ключем
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.api_share(), {'publish_gate': True, 'publish_share_url': GOOD_URL + '#k=pw-new-1'})
+        # 4. пароль змінили — посилання з НОВИМ ключем не відчинило б збірку зі старим: ключа не даємо
+        self.set_password('pw-new-2')
+        self.assertEqual(self.api_share(), {'publish_gate': True, 'publish_gate_stale': True,
+                                            'publish_share_url': GOOD_URL})
+        # 5. пароль зняли — збірка й далі з гейтом
+        self.set_password(None)
+        self.assertEqual(self.api_share(), {'publish_gate': True, 'publish_gate_stale': True,
+                                            'publish_share_url': GOOD_URL})
+        # 6. повернули ТОЙ САМИЙ пароль — збірка знову відповідає налаштуванню
+        self.set_password('pw-new-1')
+        self.assertEqual(self.api_share(), {'publish_gate': True, 'publish_share_url': GOOD_URL + '#k=pw-new-1'})
+        # 7. перепублікували без пароля — публічне, без застарілого
+        self.set_password(None)
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.api_share(), {'publish_gate': False, 'publish_share_url': GOOD_URL})
+
+    def test_a_share_link_goes_only_to_the_address_this_module_published(self):
+        self.set_password('pw-1')
+        other = 'https://pv-liga.vercel.app'
+        # ЛІГА-публікація лишила адресу, а модуль ще не публікував
+        self.seed_meta(publish_url=other, published_at='01.01.2026 10:00')
+        self.assertEqual(self.api_share(), {'publish_gate': True})
+        # модуль → ЛІГА → модуль
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.api_share()['publish_share_url'], GOOD_URL + '#k=pw-1')
+        self.seed_meta(publish_url=other, published_at='02.01.2026 10:00', publish_verified=True)
+        self.assertEqual(self.api_share(), {'publish_gate': True}, 'ключ приклеєно до адреси ЛІГА')
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.api_share()['publish_share_url'], GOOD_URL + '#k=pw-1')
+        # запис іншого модуля з тією самою адресою — теж не наш
+        remote = dict(self.meta()['publish_remote'])
+        self.seed_meta(publish_remote={**remote, 'module': 'vercel-publish'})
+        self.assertEqual(self.api_share(), {'publish_gate': True})
+
+    def test_a_hand_edited_or_malformed_publish_url_gets_no_key(self):
+        self.set_password('pw-1')
+        self.assertEqual(self.publish()[0], 200)
+        good = dict(self.meta()['publish_remote'])
+        self.seed_meta(publish_url=GOOD_URL + '#already')
+        self.assertEqual(self.api_share(), {'publish_gate': True}, 'до виправленої вручну адреси ключ не клеїмо')
+        # навіть коли вручну виправлено ОБИДВА поля: подвійний фрагмент `#already#k=…` не складаємо
+        self.seed_meta(publish_url=GOOD_URL + '#already', publish_remote={**good, 'url': GOOD_URL + '#already'})
+        share = self.api_share()
+        self.assertEqual(share['publish_share_url'], GOOD_URL + '#already')
+        self.assertNotIn('#k=', share['publish_share_url'])
+        for bad_url in (5, ['x'], '', None, {'a': 1}):
+            with self.subTest(publish_url=bad_url):
+                self.seed_meta(publish_url=bad_url, publish_remote=good)
+                self.assertEqual(self.api_share(), {'publish_gate': True})
+        for bad_remote in ('рядок', 5, ['x'], {'module': URL_MID}, {**good, 'url': 5},
+                           {k: v for k, v in good.items() if k != 'url'}):      # без `url` — запис попереднього формату
+            with self.subTest(publish_remote=bad_remote):
+                self.seed_meta(publish_url=GOOD_URL, publish_remote=bad_remote)
+                self.assertEqual(self.api_share(), {'publish_gate': True})
+
+    def test_the_gate_hash_is_a_short_total_fingerprint(self):
+        self.assertEqual(serve._gate_hash('pw'), hashlib.sha256(b'pw').hexdigest()[:16])
+        self.assertNotEqual(serve._gate_hash('pw'), serve._gate_hash('pw2'))
+        for bad in (None, 5, b'pw', ['pw'], '\ud800'):
+            with self.subTest(bad=bad):
+                self.assertIsNone(serve._gate_hash(bad))
+
+    def test_a_remote_without_a_hash_counts_as_a_changed_password(self):
+        self.set_password('pw-1')
+        self.assertEqual(self.publish()[0], 200)
+        remote = {k: v for k, v in self.meta()['publish_remote'].items() if k != 'gate_hash'}
+        self.seed_meta(publish_remote=remote)
+        self.assertEqual(self.api_share(), {'publish_gate': True, 'publish_gate_stale': True,
+                                            'publish_share_url': GOOD_URL})
+
+    def test_a_password_that_cannot_be_encoded_is_no_password_and_does_not_break_api_task(self):
+        """Самотній сурогат у `secrets.json`, правленому вручну: `quote` падав би на ньому поза `try` (5xx)."""
+        self.set_password('good-pw')
+        self.assertEqual(self.publish()[0], 200)
+        bad = json.dumps({'off': {URL_MID: {'password': '\ud800x'}}})
+        with open(os.path.join(self.deai, 'secrets.json'), 'w', encoding='utf-8') as fh:
+            fh.write(bad)
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        self.assertEqual({k: task[k] for k in ('publish_gate', 'publish_gate_stale', 'publish_share_url')},
+                         {'publish_gate': True, 'publish_gate_stale': True, 'publish_share_url': GOOD_URL})
+        os.remove(os.path.join(self.tx_dir, 'iterations.json'))             # ще не публікували: «пароля нема»
+        _write_task_files(self.tx_dir)
+        self.assertEqual(self.api_share(), {'publish_gate': False})
+
+    # ---- адреса, що лише схожа на правильну ----
+
+    def test_a_url_that_only_looks_right_is_refused(self):
+        bad = {
+            'bidi override': 'https://pv-1.vercel.app/\u202e', 'bidi isolate': 'https://pv-1.vercel.app/\u2066x',
+            'C1 control NEL': 'https://pv-1.vercel.app/\x85', 'C1 CSI': 'https://pv-1.vercel.app/\x9b',
+            'zero width': 'https://pv-1.vercel.app/\u200b',
+            'кирилична а в хості': 'https://pv-1.vercel.\u0430pp', 'кирилична р': 'https://\u0440v-1.vercel.app',
+            'IDN не punycode': 'https://пв.example', 'fullwidth slash': 'https://pv-1.vercel.app\uff0fx',
+            'порт :abc': 'https://pv-1.vercel.app:abc/', 'порт :99999': 'https://pv-1.vercel.app:99999/',
+            'порт :65536': 'https://pv-1.vercel.app:65536/', 'порт :-1': 'https://pv-1.vercel.app:-1/',
+            'хост .': 'https://./', 'хост -': 'https://-/', 'хост ..': 'https://../', 'a..b': 'https://a..b/',
+            '.a.b': 'https://.a.b/', 'a.b.': 'https://a.b./', '-a.b': 'https://-a.b/', 'a-.b': 'https://a-.b/',
+            'a.-b': 'https://a.-b/', 'підкреслення': 'https://a_b.c/', 'IPv6': 'https://[::1]/',
+            'мітка 64': 'https://' + 'a' * 64 + '.example/', 'хост 254': 'https://' + '.'.join(['a' * 50] * 5) + '.bcd/',
+        }
+        for what, url in bad.items():
+            with self.subTest(what):
+                self.refused(result(url=url), what)
+
+    def test_ascii_urls_with_ports_and_punycode_hosts_are_still_accepted(self):
+        for url in ('https://pv-1.vercel.app:443/', 'https://a.b:1/', 'https://a.b:65535/x',
+                    'https://xn--e1afmkfd.xn--p1ai/', 'https://' + 'a' * 63 + '.example/', 'https://a-b.c-d.example',
+                    'https://a.b:/'):
+            with self.subTest(url=url):
+                self.cfg['result'] = result(url=url)
+                st, body = self.publish()
+                self.assertEqual((st, body.get('url')), (200, url), body)
 
     # ---- контроль: гілка `folder` і ЛІГА не змінились, нічого не вийшло назовні ----
 
