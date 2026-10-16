@@ -32,7 +32,7 @@
  * дизайнер крутить у ньому дві ручки, — тобто зламали б те, заради чого
  * групування й існує («цей блок — ось ці правки»).
  */
-import { normalizeValue } from './vendor/inspector-core.js';
+import { isSpaceProfile, normalizeValue } from './vendor/inspector-core.js';
 
 /** Самоописовість пакета: читач приходить у ІНШІЙ сесії, без цього контексту. */
 export const PKG_KIND = 'design-canvas.tuner.recommendations';
@@ -82,7 +82,7 @@ const INSTRUCTIONS = [
   'Each hint also carries `ds`: true means the token is a real design-system token for this track, false means it is only declared somewhere in the mockup. Two hints that look alike lead opposite ways - one back into the design system, the other into yet another home-made variable. Prefer `ds: true`.',
   '`verdict` "off-ds" means the value did come from a var(), but that variable is NOT in the design system - the mockup invented it. `verdict` "overridden" is the severe one: the variable name IS a design-system token, but the mockup redefined it with a different value, so the code looks correct everywhere while behaving differently; `dsValues` then lists what the design system prescribes for that name.',
   '`snap` is present when the designer pressed the verdict dot to go BACK to the design system. It means the designer chose a TOKEN, not a number: write `var(<snap.token>)` at `rule`, do NOT write the literal in `to`. `to` carries that token design-system value only so you can see what it will look like. When `snap` is present and `from` equals `to`, nothing changed visually and the whole point of the edit is the token.',
-  'The design system checked against is named by `ds` at the top of this package. `ds.known` false means this track has no design system at all (the `seo` site theme lives outside it on purpose), so no verdict here says anything about the design system.',
+  'The design system checked against is named by `ds` at the top of this package. `ds.known` false means this track has no design system at all (the `seo` site theme lives outside it on purpose), so no verdict here says anything about the design system. A `ds.profile` of the form `space:<id>` is NOT a product track and NOT the production design system: it is the designer space own token file, named in `ds.source`, so a verdict there only means "matches the tokens of that file".',
   '`status` tells you whether the designer is done. "draft": they are still tuning, the package is saved after every single knob turn, so treat it as work in progress and do not act on it yet. "ready": they pressed "Send to Claude" - this is the package they mean. Any edit after that flips it back to "draft", so "ready" always describes the package exactly as it stands.',
   'When you have applied the package to the mockup, clear it with one request: POST /api/tuner {"action": "clear"} on the design-canvas server. Do not edit or empty the file by hand: the designer tab picks the change up only through the server, and a stale "ready" left behind reads as "still waiting for Claude".',
 ];
@@ -95,18 +95,39 @@ export function emptyTune() {
     ds: { profile: null, known: false } };
 }
 
+/** `ds` пакета з довільного входу (звіт інспектора, файл на диску): профіль і
+ *  чи ДС відома — і, ЛИШЕ для профілю простору (`space:<id>`), `source`, імʼя
+ *  файла, з якого читались токени.
+ *
+ *  Чому `source` їде в пакет: `space:<id>` каже, ЧИЯ це ДС, але не з чого вона
+ *  зібрана, а Клод у наступній сесії читає пакет без канваса й без простору
+ *  під руками. Статичний напрямок (`united`) у цьому не потребує нічого —
+ *  його ДС відома всім, — тож форма `{profile, known}` для нього лишається
+ *  рівно такою, якою була: `commit`/`figma` звіту інспектора в пакет не їдуть
+ *  (їх читач не може перевірити), а `source`, що прийшов при статичному
+ *  профілі, — чужа рука, і ігнорується. Непридатний `source` простору — порожній
+ *  рядок, а не `undefined`: поле або є рядком, або його немає зовсім. */
+function dsOf(info) {
+  const profile = info && typeof info.profile === 'string' && info.profile
+    ? info.profile : null;
+  const known = !!(info && info.known);
+  if (profile && isSpaceProfile(profile)) {
+    return { profile, known, source: typeof info.source === 'string' ? info.source : '' };
+  }
+  return { profile, known };
+}
+
 /** Записати, під якою ДС читається ця сесія. Окремо від правок: це факт про
  *  ЗАДАЧУ, а не про елемент, і в кожній правці він повторювався б однаково. */
 export function setDs(state, info) {
   const st = stateOf(state);
-  const profile = info && typeof info.profile === 'string' && info.profile
-    ? info.profile : null;
-  const known = !!(info && info.known);
-  if (st.ds && st.ds.profile === profile && st.ds.known === known) return st;
+  const ds = dsOf(info);
+  if (st.ds && st.ds.profile === ds.profile && st.ds.known === ds.known
+      && st.ds.source === ds.source) return st;
   /* НЕ через `drafted`: напрямок задачі — не правка дизайнера, і скидати
      через нього «готово» означало б знімати завершення подією, якої людина
      не робила (та сама причина, що в `setNote` для незміненого тексту). */
-  return { ...st, ds: { profile, known } };
+  return { ...st, ds };
 }
 
 /** Стан пакета з довільного стану, і завжди в бік ОБЕРЕЖНОСТІ: усе, що не є
@@ -383,10 +404,7 @@ export function fromPackage(pkg) {
      інструмента (поля немає) або чужа рука (будь-що), і в обох випадках
      чернетка — єдина чесна відповідь. */
   if (pkg.status === PKG_STATUS_READY) st.status = PKG_STATUS_READY;
-  if (pkg.ds && typeof pkg.ds === 'object') {
-    st.ds = { profile: typeof pkg.ds.profile === 'string' && pkg.ds.profile
-      ? pkg.ds.profile : null, known: !!pkg.ds.known };
-  }
+  if (pkg.ds && typeof pkg.ds === 'object') st.ds = dsOf(pkg.ds);
   const elements = Array.isArray(pkg.elements) ? pkg.elements : [];
   for (const el of elements) {
     if (!el || typeof el !== 'object') continue;

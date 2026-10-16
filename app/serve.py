@@ -2225,7 +2225,8 @@ def inspector_ds_arg(profile, sp=None):
 
     ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `build_preview` кличе `inject_comment_layer` без
     `inspector`, `profile` і `space` — опублікована сторінка (Vercel, тека) до `/api/ds-tokens` не
-    дістанеться, а збірка ЛІГА лишається байт-у-байт такою, як була."""
+    дістанеться. Збірка ЛІГА від цього не міняється: опубліковані сторінки, обгортка й `comment-layer/`
+    байт-у-байт такі, як були; `shell/i18n.js` міняється лише новими ключами словника."""
     p = (profile or '').strip()
     out = f'?ds={p}' if re.fullmatch(r'[a-z0-9-]{1,32}', p) else ''
     d = spaces.describe(sp)

@@ -291,6 +291,22 @@ test("inspector.js: sp у URL → фоновий fetch; реєстрація н�
   }
 });
 
+test("inspector.js: sp у URL кодується — інакше `&` в id розбив би запит", async () => {
+  const restore = stubDom();
+  try {
+    const calls = [];
+    globalThis.fetch = async (url) => { calls.push(String(url)); return OK({ profile: null }); };
+    await importInspector("sp=a%20b%26c%2Fd");          // id: «a b&c/d»
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /\/api\/ds-tokens\?space=a%20b%26c%2Fd$/,
+      "без encodeURIComponent `&` став би другим параметром, а `/` — шляхом");
+    assert.equal(new URL(calls[0]).searchParams.get("space"), "a b&c/d", "сервер прочитає той самий id");
+    assert.equal([...new URL(calls[0]).searchParams.keys()].length, 1);
+  } finally {
+    restore();
+  }
+});
+
 test("inspector.js: нема піна — токени застосовано, перемальовувати нічого", async () => {
   const restore = stubDom();
   try {
@@ -411,6 +427,17 @@ test("inspector.js: жодного top-level await, і реєстрація — 
   const load = src.indexOf("loadSpaceTokens(");
   assert.ok(reg > 0 && load > reg, "loadSpaceTokens стартує ПІСЛЯ реєстрації window.CanvasInspector");
   assert.match(src, /searchParams\.get\(['"]sp['"]\)/, "sp береться з URL власного модуля");
+});
+
+test("дорога `source` до пакета тюнера: dsInfo() → report() → app.js setDs", () => {
+  /* Звіт про ДС їде до пакета без перепакування: `report()` віддає `dsInfo`
+     цілком, а `app.js` кладе його в `setDs`. Якщо хтось почне збирати `dsInfo`
+     поіменно (як інші поля звіту), `source` загубиться тихо — пакет скаже
+     `space:<id>`, а з якого файла ДС, читач не дізнається. */
+  const insp = stripComments(readSource("vendor/inspector.js"));
+  assert.match(insp, /dsInfo:\s*rep\.dsInfo/, "report() віддає dsInfo цілком");
+  const app = stripComments(readSource("app.js"));
+  assert.match(app, /setDs\(tuneState,\s*rep\.dsInfo\)/, "app.js віддає dsInfo цілком у setDs");
 });
 
 test("самоперевірка охоронця: top-level await він справді б упіймав", () => {

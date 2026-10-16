@@ -39,7 +39,7 @@ import test from "node:test";
 
 import {
   PKG_KIND, PKG_VERSION, clearEdit, editCount, elementKey, emptyTune,
-  fromPackage, markReady, packageJSON, setEdit, setNote,
+  fromPackage, markReady, packageJSON, setDs, setEdit, setNote,
 } from "../app/tuner-model.js";
 
 /* Ознаки елемента — рівно те, що віддає `CanvasInspector.identity(prop)`.
@@ -490,4 +490,86 @@ test("markReady чистий: вхідний стан не чіпається", 
   assert.equal(packageJSON(base).status, "draft", "вхідний стан поїхав разом із виходом");
   assert.equal(markReady(ready), ready, "повторне «готово» не робить нового стану");
   assert.equal(editCount(ready), 1, "позначка готовності не сміє чіпати правок");
+});
+
+/* ── Походження ДС у пакеті (етап 2а, Task 7) ──────────────────────────────
+   `ds` пакета називає, з чим звірялись вироки. Для статичного напрямку цього
+   досить (`united`), а для ДС ПРОСТОРУ — ні: `space:<id>` не каже, з ЯКОГО
+   файла токени, а Клод у наступній сесії читає пакет без канваса. Тому в
+   пакет їде й `ds.source` — рівно для профілю простору; статична форма
+   `{profile, known}` не міняється ні на байт. */
+
+const SPACE_INFO = { profile: "space:s1", known: true, source: "tokens.css" };
+const STATIC_INFO = { profile: "united", known: true, commit: "5f7050d77ab5", figma: "UI" };
+
+test("setDs: профіль простору несе `source`, статичний напрямок — ні", () => {
+  assert.deepEqual(setDs(emptyTune(), SPACE_INFO).ds,
+    { profile: "space:s1", known: true, source: "tokens.css" });
+  assert.deepEqual(setDs(emptyTune(), STATIC_INFO).ds, { profile: "united", known: true },
+    "статична форма — рівно {profile, known}: commit/figma у пакет не їдуть");
+  assert.deepEqual(setDs(emptyTune(), { profile: "seo", known: false }).ds,
+    { profile: "seo", known: false });
+  // `source` на статичному профілі — чужа рука: не переноситься
+  assert.deepEqual(setDs(emptyTune(), { ...STATIC_INFO, source: "x.css" }).ds,
+    { profile: "united", known: true });
+});
+
+test("setDs: непридатний `source` простору — порожній рядок, а не undefined і не число", () => {
+  for (const source of [undefined, null, 5, {}, []]) {
+    assert.deepEqual(setDs(emptyTune(), { ...SPACE_INFO, source }).ds,
+      { profile: "space:s1", known: true, source: "" }, String(source));
+  }
+});
+
+test("setDs: той самий об'єкт, коли нічого не змінилось; новий — коли змінився `source`", () => {
+  const a = setDs(emptyTune(), SPACE_INFO);
+  assert.equal(setDs(a, SPACE_INFO), a, "перезапис на кожну перемальовку панелі");
+  const b = setDs(a, { ...SPACE_INFO, source: "other.css" });
+  assert.notEqual(b, a, "файл токенів змінився — у пакеті мусить бути новий");
+  assert.equal(b.ds.source, "other.css");
+  // перехід простір → напрямок: `source` зникає
+  const c = setDs(b, STATIC_INFO);
+  assert.deepEqual(c.ds, { profile: "united", known: true });
+  assert.equal(setDs(c, STATIC_INFO), c);
+});
+
+test("setDs не скидає готовність: ДС — факт про задачу, не правка", () => {
+  const ready = markReady(setEdit(emptyTune(), "it1/holovna", IDENT, TOKEN_DECL, "24px"));
+  assert.equal(packageJSON(setDs(ready, SPACE_INFO)).status, "ready");
+});
+
+test("пакет із ДС простору: packageJSON → fromPackage → packageJSON — `source` переживає диск", () => {
+  const st = setDs(setEdit(emptyTune(), "it1/holovna", IDENT, TOKEN_DECL, "24px"), SPACE_INFO);
+  const pkg = packageJSON(st);
+  assert.deepEqual(pkg.ds, { profile: "space:s1", known: true, source: "tokens.css" });
+  assert.deepEqual(packageJSON(fromPackage(pkg)), pkg,
+    "прогін через диск загубив `source` — наступна сесія не знала б, з якого файла ДС");
+  assert.equal(fromPackage(pkg).ds.source, "tokens.css");
+});
+
+test("пакет зі статичною ДС: форма `ds` не змінилась, і `source` із чужого пакета не підхоплюється", () => {
+  const st = setDs(setEdit(emptyTune(), "it1/holovna", IDENT, TOKEN_DECL, "24px"), STATIC_INFO);
+  const pkg = packageJSON(st);
+  assert.deepEqual(pkg.ds, { profile: "united", known: true });
+  assert.deepEqual(packageJSON(fromPackage(pkg)), pkg);
+  const foreign = { ...pkg, ds: { profile: "united", known: true, source: "x.css" } };
+  assert.deepEqual(fromPackage(foreign).ds, { profile: "united", known: true });
+  // і порожній стан, і пакет без ДС (стара версія) — як були
+  assert.deepEqual(packageJSON(emptyTune()).ds, { profile: null, known: false });
+  assert.deepEqual(fromPackage({ ...pkg, ds: undefined }).ds, { profile: null, known: false });
+});
+
+test("fromPackage: профіль простору без `source` (чужа рука) — порожній рядок", () => {
+  const pkg = packageJSON(setDs(emptyTune(), SPACE_INFO));
+  for (const bad of [undefined, null, 7, {}]) {
+    const st = fromPackage({ ...pkg, ds: { profile: "space:s1", known: true, source: bad } });
+    assert.deepEqual(st.ds, { profile: "space:s1", known: true, source: "" });
+  }
+});
+
+test("інструкція пакета пояснює `space:<id>` і `ds.source`", () => {
+  const text = packageJSON(emptyTune()).instructions.join("\n");
+  assert.match(text, /space:<id>/);
+  assert.match(text, /ds\.source/);
+  assert.match(text, /token file/i);
 });

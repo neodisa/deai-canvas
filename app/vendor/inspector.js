@@ -58,9 +58,9 @@ try {
    стоїть API. */
 let SPACE = null;
 try {
-  const self = new URL(import.meta.url);
-  const id = self.searchParams.get('sp');
-  if (id) SPACE = { id, url: new URL(`/api/ds-tokens?space=${encodeURIComponent(id)}`, self).href };
+  const selfUrl = new URL(import.meta.url);
+  const id = selfUrl.searchParams.get('sp');
+  if (id) SPACE = { id, url: new URL(`/api/ds-tokens?space=${encodeURIComponent(id)}`, selfUrl).href };
 } catch (e) {
   SPACE = null;
 }
