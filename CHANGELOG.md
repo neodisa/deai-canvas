@@ -3,6 +3,99 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.3.0] — 16.10.2026
+
+Stage 2b-1 «Your own Vercel»: a built-in module publishes the task's preview to the
+person's own Vercel account through the REST API (no Node, no CLI), the core learns
+publish modules that return an address instead of a folder, and the UI shows the result.
+Design and the list of deviations from the original spec:
+`docs/superpowers/specs/2026-10-16-vercel-publish-design.md`.
+
+### Added
+
+- **`vercel-publish`** (role `publish`, `publish_target: url`). Settings: `token` (secret,
+  required), `team` (a slug or `team_…`; empty means the personal account), `password`
+  (secret, optional — adds the client-side preview gate). Standard library only, no
+  subprocesses. One publish: the build is read and checked locally (no symlinks, up to
+  5000 files, up to 50 MB per file) → files are uploaded by SHA-1, once per content →
+  a production deployment without a build step → wait for `READY` → wait (up to 30 s) for
+  the project's permanent `*.vercel.app` address → check that the address opens without
+  signing in → clean up old deployments. Each task gets an opaque project `pv-<8 digits>`
+  (no task or client name in the address). `check` reads the account (and the team) and
+  creates nothing. Enable it over the API (see the README); `static-publish` has to be
+  turned off first (`role-taken` otherwise).
+- **Core: publish modules «by address».** The manifest gets an optional `publish_target`
+  (`folder`, the default and the 0.2.0 behaviour, or `url`). A `url` module has no folder:
+  it gets the built preview and the state it returned last time, and returns `{url, state,
+  verified, warnings?}`. The core records `publish_url`, `published_at`, `publish_verified`
+  and `publish_remote` (`{module, state, published_at, url, gated[, gate_hash]}`) in
+  `iterations.json`, builds the preview without the comment layer and, when the module has
+  a `password` secret, with the gate. `/api/task` adds `publish_remote`, `publish_gate`
+  (is the published preview protected by a password), `publish_gate_stale` (the password
+  changed since the publish) and `publish_share_url` (the address plus `#k=<password>` for
+  a protected preview). New error codes `vercel-auth` and `vercel-busy` (409).
+- **UI.** A persistent «Published on Vercel» notice with «Open» and «Copy link»; the module's
+  warnings go under it as plain text. «Open» and «Copy link» (also in the publish dropdown)
+  use the share link with the password, so the owner does not hit their own gate. The
+  dropdown warns «the preview is public» when it is published without a password and
+  «the password changed — republish» when it differs from the published one. Human
+  texts (uk, en) for `vercel-auth`, `vercel-busy` and `module-error`, with the server's
+  reason as a second paragraph. If you switch to another task while a publish is running,
+  the result is a toast with the task name instead of a notice on the wrong task.
+
+### Security
+
+- The token goes only into the `Authorization` header of requests to `api.vercel.com`, from
+  one place in the module. Not into process arguments or the environment, not into the
+  preview check (it carries no credentials and follows no redirects), not into error
+  texts; API requests do not follow redirects either.
+- The core does not take a module's word for its result: `url` must be `https://` with an
+  ASCII DNS host, no credentials and no fragment; `state` a flat object of at most 4096
+  characters; `warnings` at most 5 lines of 300 characters. A result that contains a secret
+  of the module (8 characters or more; the preview `password` is the exception, because it
+  is baked into the pages by design) is refused and not recorded, and warnings are scrubbed
+  of every secret.
+- The stored state is not trusted (`iterations.json` can be copied or shared): it is used
+  only as `pv-<8 digits>` plus a project id plus the id of this task. The project is looked
+  up by id before any upload; a project renamed in the panel is accepted only when the
+  recorded last deployment belongs to it; a project deleted in the panel is recreated only
+  under the recorded name and only if that name is free.
+- A project is deleted (after a failed publish) only if the same call created it, and only
+  after three checks: the id starts with `prj_`, the project has no deployments except this
+  call's, and its name is the expected one. A project taken from the state is never deleted.
+- Cleanup removes only deployments positively identified as the project's own and keeps
+  the newest three (the current one and two more) among the 20 latest production deployments.
+
+### Known limits
+
+- **Not run against the real Vercel in CI.** The module is tested against a faithful
+  in-process fake of the API with a network guard, and the live tests fake the Vercel space
+  in the browser; the module's `check()` is never run live. A first run with a real token
+  should confirm: how long the permanent address takes to appear after `READY`, the item
+  shape of `GET /v6/deployments` (used for cleanup), the team-by-slug access check
+  (`GET /v6/deployments?limit=1` in that team) and the error body of an invalid token.
+- Deployment Protection is a Vercel account/project setting. If it is on, the preview does
+  not open without signing in to Vercel; the module detects it (401/403 or a redirect to
+  the Vercel login) and warns with the place to switch it off, but never changes it.
+- The preview password is not a secret from viewers (it is baked into the pages, the gate
+  is client-side), so `/api/task` returns the share link with it. The **token** never
+  leaves the machine except to `api.vercel.com`.
+- Module management has no UI yet (stage 3): enable and configure it over the API.
+- A `publish_remote.state` written by development builds before 0.3.0 (without the task
+  binding) is ignored: the next publish creates a new project.
+- The comment layer is not on the Vercel preview (shared comments are stage 2b-2, 0.4.0).
+
+### Tests
+
+`npm test` at 0.3.0 is green: 1252 node tests (plus `inspector-core`), 1921 Python tests in
+`tests/` (1 skipped), 156 in `bin/`, 170 in `app/` (0.2.0: 1195 and 1684). The three Python
+suites also pass on Python 3.9.6, the oldest supported. Live: the new
+`tests/live/vercel.test.mjs` (7 tests: publish with a password, the dropdown warnings, error
+dialogs, the switch-task race, the legacy space unchanged, no request leaves the machine,
+the real `~/.deai` untouched) passes together with `modules.test.mjs` and `spaces.test.mjs`
+(20 tests); a mutation run confirmed each scenario guards its rule (`noopener` on «Open»
+turns the first one red).
+
 ## [0.2.0] — 16.10.2026
 
 Stage 2a «Modules»: a module framework, publishing to a folder, design-system tokens from

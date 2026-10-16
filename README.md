@@ -6,11 +6,11 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.2.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.3.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
-> a folder and design-system tokens from a CSS file work in any space. A few integrations
-> (team dashboard, git sync, shared comments, Vercel publishing) are still wired for the
-> original setup and only run in a migrated legacy space; they are being turned into
+> a folder or to your own Vercel account and design-system tokens from a CSS file work in
+> any space. A few integrations (team dashboard, git sync, shared comments) are still wired
+> for the original setup and only run in a migrated legacy space; they are being turned into
 > optional per-space modules with a first-run onboarding. See *Roadmap*.
 
 ## What it does
@@ -24,7 +24,7 @@ links for your team.
 | **Inspector & tuner** | DevTools-style overlay: spacing, typography, colours, a ruler, and — if you connect your design tokens (a CSS file, see *Modules*) — whether each value is on-system. The tuner turns tweaks into a change request for the agent. |
 | **Comments** | Pin comments on any element (via [CommentLayer](https://github.com/neodisa/CommentLayer)); a local channel for the agent, an optional shared channel for the team. |
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
-| **Publish** | Build a static preview of the iterations you marked and publish it to a folder (any space), optionally behind a password gate. Vercel only in a legacy space for now. |
+| **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
@@ -32,8 +32,8 @@ UI in English and Ukrainian.
 
 ## Quick start
 
-Requirements: Python 3.9+, Chrome or Edge. Optional: Node.js 20+ (snapshots via Playwright,
-publishing via the Vercel CLI).
+Requirements: Python 3.9+, Chrome or Edge. Optional: Node.js 20+ (snapshots via Playwright;
+the in-house Vercel CLI publishing of a legacy space — the Vercel module needs no Node).
 
 ```bash
 cp tasks.example.json tasks.json      # edit paths: where your mockups live
@@ -55,20 +55,22 @@ suites (`tests/`, `bin/`, `app/`) are verified on Python 3.9.6, the oldest suppo
 A **module** is a folder `app/modules/<id>/` with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
 calls: `publish` and `tokens` today; `comments`, `vcs`, `tracker`, `dashboard`, `notify`
-are reserved. One provider per role per space. In 0.2 only built-in modules exist; a
+are reserved. One provider per role per space. Only built-in modules exist so far; a
 space's own modules and a UI for connecting them come with stage 3, so for now you manage
 modules over the HTTP API (the agent can do it for you).
 
 Settings and on/off live in the space's `space.json`; **secrets** go to
 `~/.deai/secrets.json` (user-only permissions), never into the space folder, so the folder
 stays safe to commit. Secrets are not encrypted. One deliberate exception: the optional
-`static-publish` `password` is baked into the built pages (`<space>/<task>/publish/` and the
-published folder) because the preview gate is client-side, so treat the password as readable
-by anyone who can open the preview and keep those folders out of public commits.
+`password` of `static-publish` and `vercel-publish` is baked into the built pages
+(`<space>/<task>/publish/` and the published folder or site) because the preview gate is
+client-side, so treat the password as readable by anyone who can open the preview and keep
+those folders out of public commits.
 
 | Module | Role | What it does |
 |---|---|---|
 | `static-publish` | `publish` | Builds the preview and publishes it to a folder, by default `~/deai-published/<space-id>/<task>/` — outside the space. On by default in a space without integrations. Optional `password` secret adds a client-side gate. |
+| `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account** through the REST API (no Node, no CLI): one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Settings: `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
@@ -78,6 +80,44 @@ sandboxed local copy at `http://localhost:8765/published/<space-id>/<task>/`. Th
 is re-checked on every publish and serve; it must not be your home folder, the tool or
 space folders, or a system folder, and a folder without the `.deai-published` marker is
 never overwritten.
+
+**Publishing to your own Vercel.** `vercel-publish` needs only a token — no `vercel login`,
+no CLI, no Node on the machine.
+
+- *Token.* In Vercel: Account Settings → Tokens → create a token. If you publish into a team,
+  scope the token to that team and set the `team` setting (a slug such as `<slug>`, or an id
+  `team_…`); empty means your personal account.
+- *Enable it* over the API. A space without integrations publishes with `static-publish` by
+  default, and a space has one publisher, so turn that one off first (otherwise the enable
+  answers `409 role-taken`):
+
+  ```bash
+  curl -s localhost:8765/api/module-disable -H 'Content-Type: application/json' \
+    -d '{"space":"<id>","id":"static-publish"}'
+  curl -s localhost:8765/api/module-enable -H 'Content-Type: application/json' \
+    -d '{"space":"<id>","id":"vercel-publish","secrets":{"token":"<TOKEN>"},"settings":{"team":"<slug>"}}'
+  ```
+
+  The answer carries `check`: it asks Vercel whose token this is (and whether the team is
+  reachable) and creates nothing. The token is stored in `~/.deai/secrets.json` and is sent
+  only to `api.vercel.com`.
+- *Password (optional).* Set the secret `password` of the same module (`POST
+  /api/module-settings`, `"secrets":{"password":"<PASSWORD>"}`): the pages get the
+  client-side gate, and «Open» and «Copy link» append `#k=<password>`, so the link opens
+  without asking. **Without a password the preview is public: anyone who has the link sees
+  it** — the publish dropdown says so. With one, the gate is a courtesy, not security:
+  the password is baked into the pages.
+- *What it creates in your account.* One project per task, named `pv-<8 digits>` (no task or
+  client name in the address). Each publish uploads the built pages, makes a production
+  deployment, waits until it is ready and checks that the project's `*.vercel.app` address
+  opens without signing in. Old deployments of that project are deleted — the current one
+  and two more are kept. Projects the module did not create are never touched. Limits:
+  5000 files and 50 MB per file, plus whatever your Vercel plan allows.
+- *Deployment Protection.* Vercel can ask for a login even on a production address
+  (Project → Settings → Deployment Protection → Vercel Authentication). The module cannot
+  and does not change that; if the check fails the notice says so. Turn it off for these
+  projects (or the team) if colleagues should open the link.
+- The comment layer is not on this preview yet (shared comments arrive in 0.4).
 
 **Tokens from CSS.** A token is a `--name: value` declaration in a `:root`, `html` or
 `[data-*theme*]` rule (Bootstrap `[data-bs-theme=dark]` too) or directly in Tailwind v4
@@ -94,7 +134,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
-| `GET /published/<space-id>/<task>/…` | the local copy of a published preview |
+| `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
 curl -s localhost:8765/api/module-enable -H 'Content-Type: application/json' \
@@ -114,14 +154,16 @@ curl -s localhost:8765/api/module-enable -H 'Content-Type: application/json' \
 - On Windows (and macOS with Python < 3.9) `/published` uses a weaker path-based fallback;
   the server prints the active mode at startup. Secret file permissions are not set on Windows.
 
-Design and deviations from the spec: `docs/superpowers/specs/2026-10-14-modules-2a-design.md`.
+Design and deviations from the spec: `docs/superpowers/specs/2026-10-14-modules-2a-design.md`
+(modules, folder publishing, tokens) and `docs/superpowers/specs/2026-10-16-vercel-publish-design.md`
+(Vercel).
 Direction: `docs/design/spaces-and-modules.md`. Release notes: `CHANGELOG.md`.
 
 ## Layout
 
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
-app/modules/  built-in modules (static-publish, css-tokens); the core is app/deai_modules.py
+app/modules/  built-in modules (static-publish, vercel-publish, css-tokens); the core is app/deai_modules.py
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
 flows/demo    example flow
@@ -133,7 +175,8 @@ tests/        unit, Python and live (Playwright) tests
 1. ✅ **Spaces** (0.1) — several projects/companies on one machine, each with its own task list and settings.
 2. **Modules**
    - ✅ **2a** (0.2) — module framework, publishing to a folder, design-system tokens from CSS.
-   - **2b** — your own Vercel (publish) and your own Supabase (shared comments) as modules.
+   - ✅ **2b-1** (0.3) — your own Vercel (publish) as a module.
+   - **2b-2** (0.4) — your own Supabase (shared comments) as a module.
    - Later — git sync, team dashboard, issue tracker, notifications: modules you connect per project.
 3. **Onboarding** — a first-run flow that sets up a project and connects modules from the UI;
    a Connections screen; a space's own modules, loaded only after you trust them.

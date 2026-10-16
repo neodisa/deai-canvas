@@ -1,8 +1,9 @@
 # Spaces, modules and onboarding — design (draft)
 
 Status: agreed direction, 2026-10-09. Clickable prototype reviewed by the owner.
-Built so far: stage 1 (spaces, 0.1.0) and stage 2a (module framework, publishing to a
-folder, tokens from CSS, 0.2.0) — see *Status* at the end. Next: stage 2b.
+Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to a
+folder, tokens from CSS, 0.2.0) and stage 2b-1 (publishing to your own Vercel, 0.3.0) — see
+*Status* at the end. Next: stage 2b-2 (your own Supabase for shared comments, 0.4.0).
 
 ## Goal
 
@@ -67,7 +68,8 @@ canvas for their workflow without touching the core.
    (git sync, Supabase comments, Vercel publishing, design tokens, tracker statuses). Split
    into three parts:
    - ✅ **2a** (0.2.0) — the framework, `static-publish`, `css-tokens`;
-   - **2b** — your own Vercel (publish) and your own Supabase (shared comments);
+   - ✅ **2b-1** (0.3.0) — your own Vercel (publish);
+   - **2b-2** (0.4.0) — your own Supabase (shared comments);
    - the in-house integrations (git sync, team dashboard, tracker, team chat notifications)
      follow later as that company's modules.
 3. Onboarding wizard + Connections screen, a space's own modules with the trust dialog.
@@ -107,11 +109,39 @@ Spec (with the list of deviations from its second revision):
 - The hard-wired in-house code path (Vercel publishing, git sync, dashboard, team comments)
   is untouched: it still runs only in a space with `integrations: true`.
 
+### Stage 2b-1 — your own Vercel (0.3.0, 16.10.2026)
+
+Spec (with the list of deviations from its first revision):
+`docs/superpowers/specs/2026-10-16-vercel-publish-design.md`. What is built:
+
+- **Contract of the `publish` role extended.** A manifest may carry `publish_target`:
+  `folder` (the default, as in 0.2) or `url`. A `url` module has no folder and returns
+  `{url, state, verified, warnings?}`; the core validates the result (strict `https://`
+  address, a flat `state` of at most 4096 characters, no secret of the module in the
+  result), records `publish_url`, `published_at`, `publish_verified` and `publish_remote`
+  in `iterations.json`, hands `state` back on the next publish, and in `/api/task` adds
+  `publish_remote`, `publish_gate`, `publish_gate_stale` and `publish_share_url`. The legacy
+  path and `folder` modules answer exactly as before.
+- **`vercel-publish`**: publishes the preview to the person's own Vercel account over the
+  REST API — no Node, no CLI, standard library only. Settings `token` (secret), `team`,
+  optional `password` (secret). One opaque project `pv-<8 digits>` per task; files by SHA-1,
+  a production deployment, wait for `READY` and the permanent address, a check that it opens
+  without signing in, cleanup of old deployments (three kept). The token reaches only
+  `api.vercel.com`. Not enabled implicitly: `static-publish` has to be turned off first.
+- **UI**: a persistent «Published on Vercel» notice with «Open» and «Copy link» (the link
+  carries `#k=<password>` for a protected preview), the module's warnings as text, a
+  «the preview is public» note in the publish dropdown when there is no password, and human
+  texts for `vercel-auth`, `vercel-busy` and `module-error`. The module is managed over the
+  API (the Connections screen is still stage 3).
+- **Not verified against the real Vercel**: the module is tested against a faithful fake
+  API; the first live run should confirm the alias timing after `READY`, the item shape of
+  `GET /v6/deployments`, the team-by-slug check and the invalid-token error body.
+
 ### What stays for later
 
-- **2b**: Vercel as a `publish` module, Supabase as a `comments` module (each with the user's
-  own project); the roles `comments`, `vcs`, `tracker`, `dashboard`, `notify` are reserved
-  names that the core does not call yet.
+- **2b-2** (0.4.0): Supabase as a `comments` module (the user's own project), which also
+  brings the comment layer to the Vercel preview; the roles `comments`, `vcs`, `tracker`,
+  `dashboard`, `notify` are reserved names that the core does not call yet.
 - **Stage 3**: the Connections screen and onboarding wizard; a space's own modules from
   `<space>/modules/` with the trust dialog (hash of the whole folder, no symlinks, trust
   keyed on the real path). Until the Connections screen exists, secrets such as the preview
