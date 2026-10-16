@@ -771,7 +771,7 @@ class CallTest(Env):
         e = cm.exception
         self.assertIsNone(e.__cause__)
         self.assertIsNone(e.__context__)
-        self.assertNotIn(self.SECRET, ''.join(traceback.format_exception(e)))
+        self.assertNotIn(self.SECRET, ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
     def test_timeout_raises_check_timeout_and_does_not_wait(self):
         t0 = time.monotonic()

@@ -44,8 +44,8 @@ def to_iso(dt):
     d, mo, y, hh, mm = m.groups()
     return f"{y}-{mo}-{d}T{int(hh or 0):02d}:{mm or '00'}:00+03:00"
 
-# ---------- Jira статуси (реальний workflow-статус, сайт example-site) ----------
-_JIRA_BASE = "https://example.atlassian.net"
+# ---------- Jira статуси (реальний workflow-статус, сайт команди) ----------
+_JIRA_BASE = "https://jira.example.com"
 
 def _jira_creds():
     """(email, token) з env JIRA_EMAIL/JIRA_TOKEN або файлів у ~/.claude/pipeline-feedback/.

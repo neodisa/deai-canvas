@@ -192,7 +192,7 @@ class ServeTest(unittest.TestCase):
         self.assertNotIn('Головна', wrapper)
         it_page = open(os.path.join(pub, 'it1', 'index.html')).read()
         # ⛔ Гейт у ВНУТРІШНІЙ сторінці, не лише в обгортці. Інцидент 03.08.2026:
-        # `dc-sample.vercel.app/` пароль просив, а `/it4/` віддавав макет. Цикл,
+        # `<превʼю>.vercel.app/` пароль просив, а `/it4/` віддавав макет. Цикл,
         # який вставляє гейт, переписаний 04.08.2026 — сторож саме тут.
         self.assertIn('authgate', it_page)
         self.assertNotIn('inspector', it_page)        # і у ВНУТРІШНІЙ сторінці теж
@@ -1783,7 +1783,7 @@ class ServeTest(unittest.TestCase):
                                                            'p_muted': True, 'p_by': sig}))
             # ⛔ Ні ПІБ, ні пошти в базі: RPC стану читає будь-хто з ключем сторінки.
             self.assertNotIn('Lead', json.dumps(calls))
-            self.assertNotIn('ligazakon', json.dumps(calls))
+            self.assertNotIn('lead@example.com', json.dumps(calls))
             body = json.load(urllib.request.urlopen(self.base + '/api/teams-mute'))
             self.assertTrue(body['muted'])
             st, body = self._post_json('/api/teams-mute', {'muted': False})
@@ -2264,8 +2264,8 @@ class OverviewSyncLog(unittest.TestCase):
 class PreviewGate(unittest.TestCase):
     """Пароль превʼю: гейт на КОЖНІЙ сторінці, і його можна задати на задачу.
 
-    Інцидент 03.08.2026, перевірений живцем: `dc-sample.vercel.app/` пароль просив,
-    а `dc-sample.vercel.app/it4/` віддавав макет — гейт вставлявся лише в обгортку.
+    Інцидент 03.08.2026, перевірений живцем: `<превʼю>.vercel.app/` пароль просив,
+    а `<превʼю>.vercel.app/it4/` віддавав макет — гейт вставлявся лише в обгортку.
 
     ⚠️ Це гейт у DOM, не автентифікація: пароль лежить у джерелі сторінки. Сенс —
     обмежити радіус зливу однією задачею, а не зробити превʼю приватним.
@@ -3034,9 +3034,11 @@ class PreviewWrapper(unittest.TestCase):
         стоїть «Копіювати посилання» (`#k=…`), а маніфест — спільний файл,
         який читає оболонка, і пароль задачі йому знати нізащо."""
         h = self._html(pw="a'b&c")
-        self.assertIn(f'__extPw={serve.js_literal("a\'b&c")}', h)
+        ext_pw = serve.js_literal("a'b&c")       # окремо: бекслеш у виразі f-рядка — лише 3.12+
+        gate_pw = serve.js_literal("a'b")
+        self.assertIn(f'__extPw={ext_pw}', h)
         self.assertNotIn('&#x27;', h, 'HTML-ентіті в <script> не декодуються')
-        self.assertIn(f'P={serve.js_literal("a\'b")}', serve.gate_html('t', "a'b"))
+        self.assertIn(f'P={gate_pw}', serve.gate_html('t', "a'b"))
 
     def test_manifest_is_not_inlined(self):
         """⛔ Маніфест вантажиться `fetch('manifest.json')`, а не інлайном, і

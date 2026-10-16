@@ -31,11 +31,12 @@ a CSS file. Design and the list of deviations from the original spec:
   iterations and publishes it to a folder, by default `~/deai-published/<space-id>/<task>/`
   — outside the space. The folder is re-checked on every publish and every serve (not
   your home or its ancestors, not `DEAI_HOME`, not the tool, not a space or task folder or
-  anything above or inside one, not a system or hidden folder). Replacement is atomic
-  with a `.deai-published` marker, a folder without the marker is never touched, and an
-  interrupted replacement is recovered from `.old-*`. Concurrent publishes of one
-  destination answer `409 publish-busy`. Optional `password` secret adds the client-side
-  preview gate. Module builds carry no comment layer. Result is recorded as `publish_local`
+  anything above or inside one, not a system or hidden folder). Replacement is two renames
+  (old folder aside, new one into place), so a request landing between them gets a brief
+  404; it is guarded by a `.deai-published` marker, a folder without the marker is never
+  touched, and an interrupted replacement is recovered from `.old-*`. Concurrent publishes
+  of one destination answer `409 publish-busy`. Optional `password` secret adds the
+  client-side preview gate. Module builds carry no comment layer. Result is recorded as `publish_local`
   in `iterations.json`.
 - **Local serving** `GET /published/<space>/<task>/…`: every response (200, 304, 301, 404)
   carries `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups`,
@@ -67,8 +68,9 @@ a CSS file. Design and the list of deviations from the original spec:
 - Publishing in a space without integrations no longer answers `409`: it goes to
   `static-publish`. The legacy (in-house) path keeps its responses and builds — the
   existing publish tests pass unchanged, the bar and palette markup of such a space is
-  guarded by a golden-snapshot test, and published builds only gain new keys in
-  `shell/i18n.js`.
+  guarded by a golden-snapshot test, and in published builds only `shell/i18n.js` changes
+  (new keys, plus the reworded `integrationsOff` text in uk and en); pages, wrapper and
+  comment layer are unchanged.
 - The preview build is one function (`build_preview`) shared by the legacy path and modules.
 
 ### Known issues
@@ -90,9 +92,10 @@ a CSS file. Design and the list of deviations from the original spec:
 
 ### Tests
 
-`npm test` at 0.2.0 is green: 1195 node tests (plus `inspector-core`), 1683 Python tests in
-`tests/` (1 skipped), 156 in `bin/`, 170 in `app/`. The live (Playwright) suite is run
-separately (`npm run test:live`); its known failures are listed above.
+`npm test` at 0.2.0 is green: 1195 node tests (plus `inspector-core`), 1684 Python tests in
+`tests/` (1 skipped), 156 in `bin/`, 170 in `app/`. The three Python suites also pass on
+Python 3.9.6 (the oldest supported). The live (Playwright) suite is run separately
+(`npm run test:live`); its known failures are listed above.
 
 ## [0.1.0] — 14.10.2026
 

@@ -94,7 +94,9 @@ Spec (with the list of deviations from its second revision):
   core: `publish`, `tokens`; the others are reserved.
 - **`static-publish`**: publishes the preview to a folder **outside** the space (default
   `~/deai-published/<space-id>/<task>/`), implicit in a space without integrations. The
-  folder is re-checked on every publish and serve; replacement is atomic and marker-guarded.
+  folder is re-checked on every publish and serve; replacement is marker-guarded and done as
+  two renames (old folder aside, new one into place), so a request landing between them
+  gets a brief 404.
   A local sandboxed copy is served at `/published/<space-id>/<task>/`.
 - **`css-tokens`**: tokens from one CSS file (`:root`, `html`, `[data-*theme*]`, Tailwind v4
   `@theme`) for the inspector, through `GET /api/ds-tokens`.

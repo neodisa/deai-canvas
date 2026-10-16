@@ -203,6 +203,19 @@ class Migration(Env):
         sid = spaces.create_space('Особисте', 'space-2', want)
         self.assertEqual([s['id'] for s in spaces.load_registry()['spaces']], ['main', sid])
 
+    def test_quick_start_example_file_leaves_room_for_the_first_new_space(self):
+        """Quick Start каже `cp tasks.example.json tasks.json`: міграція робить із цього файла
+        legacy-простір, а типова тека першого «Нового простору» — `~/deai-work/<slug>`. Приклад
+        із коренем `~/deai-work` ставив legacy НАД нею → `path-overlap` на першому ж просторі."""
+        example = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               'tasks.example.json')
+        _write(self.legacy, _read(example))
+        reg = spaces.load_registry()
+        self.assertEqual([(s['legacy'], s['path']) for s in reg['spaces']],
+                         [(True, self.hp('deai-work', 'main'))])
+        want = self.hp('deai-work', 'personal')
+        self.assertEqual(spaces.check_new_path(want, reg, spaces.all_task_dirs(reg)), (want, None))
+
     def test_second_load_changes_nothing(self):
         self.write_legacy({'a': {'dir': self.hp('Liga', 'a')}}, registry={})
         before_legacy = _md5(self.legacy)

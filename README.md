@@ -32,7 +32,7 @@ UI in English and Ukrainian.
 
 ## Quick start
 
-Requirements: Python 3.9+, Chrome or Edge. Optional: Node.js (snapshots via Playwright,
+Requirements: Python 3.9+, Chrome or Edge. Optional: Node.js 20+ (snapshots via Playwright,
 publishing via the Vercel CLI).
 
 ```bash
@@ -47,7 +47,8 @@ small example. Snapshots for the Overview:
 npm install && npx playwright install chromium
 ```
 
-Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium).
+Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium). The Python
+suites (`tests/`, `bin/`, `app/`) are verified on Python 3.9.6, the oldest supported version.
 
 ## Modules
 
@@ -60,7 +61,10 @@ modules over the HTTP API (the agent can do it for you).
 
 Settings and on/off live in the space's `space.json`; **secrets** go to
 `~/.deai/secrets.json` (user-only permissions), never into the space folder, so the folder
-stays safe to commit. Secrets are not encrypted.
+stays safe to commit. Secrets are not encrypted. One deliberate exception: the optional
+`static-publish` `password` is baked into the built pages (`<space>/<task>/publish/` and the
+published folder) because the preview gate is client-side, so treat the password as readable
+by anyone who can open the preview and keep those folders out of public commits.
 
 | Module | Role | What it does |
 |---|---|---|
@@ -138,4 +142,4 @@ tests/        unit, Python and live (Playwright) tests
 
 ## License
 
-MIT © Sergey Arkhipov
+MIT © neodisa

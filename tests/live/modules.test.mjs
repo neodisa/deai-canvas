@@ -2,7 +2,7 @@
  * Модулі (Deai 1.0, етап 2а, Task 9) — живе проведення: справжній сервер в ізольованій «машині»
  * (тимчасові `HOME` і `DEAI_HOME`, реєстр пишеться заздалегідь), справжній Chromium.
  *
- * Юніти й сервер-тести (`tests/test_publish_module.py`, `tests/test_published.py`, `tests/test_modules_api.py`,
+ * Юніти й сервер-тести (`tests/test_publish_module.py`, `tests/test_static_publish.py`, `tests/test_modules_api.py`,
  * `tests/inspector-space-ds.test.mjs`) доводять кожну ланку окремо; тут те, що їм недоступне, бо живе в
  * браузері: чи сторінка, опублікована в теку, ВІДКРИВАЄТЬСЯ в непрозорому origin пісочниці (модульні скрипти й
  * `fetch` обгортки вимагають CORS), чи плашка «Відкрити» веде туди, де справді лежить публікація, і чи
@@ -425,7 +425,7 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
   assert.match(await noteOf(page), /tokens\.css/);
 
   /* Дорога назад у ДС і тюнер: хардкод, що дорівнює значенню токена, веде до `--brand`, а пакет Клоду
-     несе, що дизайнер вибрав ТОКЕН, і з якого файла токени (`ds.source`, 53fda33). */
+     несе, що дизайнер вибрав ТОКЕН, і з якого файла токени (`ds.source`). */
   await pin(page, "#hard");
   assert.match(await dotOf(page, "color"), /insp-dot--hard\b/);
   const snap = await page.evaluate(() => {

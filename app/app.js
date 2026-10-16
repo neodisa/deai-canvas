@@ -1839,7 +1839,7 @@ const BAR_ACTIONS = {
   openpreview: () => {
     /* Ціль — з моделі: ЛІГА-URL або локальна адреса `/published/<простір>/<задача>/` канваса. */
     const target = previewTarget(curTask, spaceNow());
-    if (target) window.open(target.url, '_blank');
+    if (target) window.open(target.url, '_blank', 'noopener');
   },
 
   /* Тиша Teams на канал задачі. Вимкнути — спільна дія (тиша для ВСІХ, хто
