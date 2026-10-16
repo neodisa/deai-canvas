@@ -303,7 +303,8 @@ class ModuleErrorTest(unittest.TestCase):
     def test_every_code_has_an_http_status(self):
         want = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-module': 404,
                 'bad-settings': 400, 'space-json-unreadable': 409, 'spaces-off': 409,
-                'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409}
+                'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409,
+                'vercel-auth': 409, 'vercel-busy': 409}
         for code, status in want.items():
             self.assertEqual(dm.ModuleError(code).status, status, code)
 
@@ -367,6 +368,27 @@ class ManifestTest(Env):
         self.mk('role-nonstr', patch={'roles': [1]})
         for mid in ('role-unknown', 'role-string', 'role-missing', 'role-nonstr'):
             self.assertIn('roles', self.error_of(mid), mid)
+
+    def test_publish_target_is_optional_folder_or_url_and_validated_for_every_role(self):
+        marker = os.path.join(self.tmp, 'marker')
+        self.mk('pt-none')
+        self.mk('pt-folder', patch={'publish_target': 'folder'})
+        self.mk('pt-url', patch={'publish_target': 'url'})
+        self.mk('pt-tokens', roles=('tokens',), server=CHECK_ONLY + 'def tokens(ctx):\n    return {}\n',
+                patch={'publish_target': 'url'})
+        for mid, bad in (('pt-ftp', 'ftp'), ('pt-empty', ''), ('pt-upper', 'URL'), ('pt-null', None), ('pt-int', 1),
+                         ('pt-list', ['url'])):
+            self.mk(mid, patch={'publish_target': bad}, server=f'open({marker!r}, "w").close()\n' + ALL_FNS)
+        self.mk('pt-bad-tokens', roles=('tokens',), patch={'publish_target': 'nope'})
+        cat = dm.catalog()
+        self.assertEqual([(cat[m].status, cat[m].publish_target)
+                          for m in ('pt-none', 'pt-folder', 'pt-url', 'pt-tokens')],
+                         [('ok', 'folder'), ('ok', 'folder'), ('ok', 'url'), ('ok', 'url')])
+        for mid in ('pt-ftp', 'pt-empty', 'pt-upper', 'pt-null', 'pt-int', 'pt-list', 'pt-bad-tokens'):
+            self.assertIn('publish_target', self.error_of(mid), mid)
+        self.assertFalse(os.path.exists(marker), 'server.py модуля з поганим publish_target не мусить виконуватись')
+        self.assertEqual(dm.Module('m').publish_target, 'folder')
+        self.assertEqual(dm.Module('m', publish_target='url').publish_target, 'url')
 
     def test_called_role_needs_a_function(self):
         self.mk('no-publish', roles=('publish',), server=CHECK_ONLY)

@@ -31,6 +31,7 @@ Task 4b (`Dispatch`, `ResealModuleBuilds`, один тест у `BuildPreview`) 
 сервера). Розтяжка доводить «нуль записів» разом із шпигунами за точками виходу ЛІГА (`_overview_sync`,
 `_registry_push`, `git_autocommit`, `_check_published`…): вони б спрацювали навіть при `DC_NO_OVERVIEW`.
 """
+import builtins
 import contextlib
 import hashlib
 import http.client
@@ -2674,6 +2675,649 @@ class ResealModuleBuilds(TaskFixture):
         out, deployed = self._reseal('fixture')
         self.assertIn('локальна збірка модуля', out)
         self.assertEqual(deployed, [])
+
+
+# ============================================================================ 2b-1, Task 1: «публікація за адресою»
+
+URL_MID = 'url-pub'
+GOOD_URL = 'https://pv-12345678.vercel.app'
+GOOD_STATE = {'project': 'pv-12345678', 'project_id': 'prj_1', 'deployment': 'dpl_1'}
+UA_STAMP = re.compile(r'\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}')
+_GONE = object()          # «прибрати ключ» у `result(…)`
+#: Модуль-фікстура `publish_target: url`: пише в `builtins._URLPUB`, що отримав, і віддає налаштований результат
+#: (словник — як є, виклик — його значення); `gate` (Event) утримує ПЕРШИЙ виклик усередині модуля.
+URL_SERVER = '''import builtins, copy, os
+def check(ctx):
+    return {"ok": True}
+def publish(ctx, build_dir, task):
+    cfg = builtins._URLPUB
+    cfg["calls"].append({"build_dir": build_dir, "task": copy.deepcopy(task),
+                         "built": os.path.isfile(os.path.join(build_dir, "index.html")),
+                         "settings": dict(ctx["settings"]), "secret_keys": sorted(ctx["secrets"])})
+    if cfg["gate"] is not None and len(cfg["calls"]) == 1:
+        cfg["entered"].set()
+        cfg["gate"].wait(20)
+    res = cfg["result"]
+    return res(ctx, build_dir, task) if callable(res) else copy.deepcopy(res)
+'''
+
+
+def result(**over):
+    """Добрий результат `publish` модуля «за адресою» із підміною полів; `_GONE` — прибрати ключ."""
+    out = {'url': GOOD_URL, 'state': dict(GOOD_STATE), 'verified': True, 'warnings': []}
+    for k, v in over.items():
+        if v is _GONE:
+            out.pop(k, None)
+        else:
+            out[k] = v
+    return out
+
+
+class UrlTarget(DispatchWorld):
+    """Модулі `publish_target: url` (2b-1, Task 1): диспетчер не знає про теку, пише `publish_url`/`publish_remote`,
+    перевіряє відповідь модуля й нічого не пушить. Фікстурний модуль `url-pub` — у тимчасовій `builtin_dir` разом із
+    копією справжнього `static-publish` (контроль: його гілка `folder` лишається такою, якою була)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = {'calls': [], 'result': result(), 'gate': None, 'entered': threading.Event()}
+        builtins._URLPUB = self.cfg
+        self.addCleanup(lambda: hasattr(builtins, '_URLPUB') and delattr(builtins, '_URLPUB'))
+        self.mods = os.path.join(self.tmp, 'modules')
+        shutil.copytree(os.path.join(ROOT, 'app', 'modules', MID), os.path.join(self.mods, MID),
+                        ignore=shutil.ignore_patterns('__pycache__'))
+        self.module(URL_MID, URL_SERVER, publish_target='url')
+        patch = mock.patch.object(dm, 'builtin_dir', lambda: self.mods)
+        patch.start()
+        self.addCleanup(patch.stop)
+        dm.reset_caches()
+        self.enable_url(self.off)
+        self.assertEqual(dm.catalog()[URL_MID].status, 'ok', dm.catalog()[URL_MID].error)
+
+    # ---- фікстури ----
+
+    def module(self, mid, server, roles=('publish',), **manifest):
+        man = {'api': 1, 'id': mid, 'name': mid, 'version': '1.0.0', 'roles': list(roles),
+               'settings': [{'key': 'password', 'type': 'secret', 'label': 'Password'}]}
+        for k, v in manifest.items():
+            if v is _GONE:
+                man.pop(k, None)
+            else:
+                man[k] = v
+        _write_json(os.path.join(self.mods, mid, 'module.json'), man)
+        with open(os.path.join(self.mods, mid, 'server.py'), 'w', encoding='utf-8') as fh:
+            fh.write(server)
+
+    def enable_url(self, space):
+        dm.write_module_state(space, MID, enabled=False)
+        dm.write_module_state(space, URL_MID, enabled=True)
+
+    def enable_folder(self, space):
+        dm.write_module_state(space, URL_MID, enabled=False)
+        dm.write_module_state(space, MID, enabled=True)
+
+    def seed_meta(self, task_dir=None, **fields):
+        path = os.path.join(task_dir or self.tx_dir, 'iterations.json')
+        meta = json.loads(_read(path))
+        meta.update(fields)
+        _write_json(path, meta)
+
+    def publish(self, payload=None, headers=None):
+        return self.post('/api/publish', payload, headers)
+
+    def bytes_meta(self):
+        return _bytes(os.path.join(self.tx_dir, 'iterations.json'))
+
+    def refused(self, res, what):
+        """Відповідь `publish` модуля відхилено: 502 `module-error`, мета не чіпана, текст чесний (модуль уже
+        відпрацював — публікація могла відбутись), а самого значення від модуля в тексті нема."""
+        before = self.bytes_meta()
+        self.cfg['result'] = res
+        st, body = self.publish()
+        self.assertEqual((st, body.get('ok'), body.get('code')), (502, False, 'module-error'), (what, body))
+        self.assertIn('already run', body['error'], what)
+        self.assertIn('may already have happened', body['error'], what)
+        self.assertEqual(self.bytes_meta(), before, f'мету записано попри відхилену відповідь: {what}')
+        return body
+
+    # ---- маніфест ----
+
+    def test_publish_target_defaults_to_folder_and_accepts_folder_and_url(self):
+        self.module('t-url', 'def check(ctx):\n    return {"ok": True}\ndef publish(c, b, t):\n    return {}\n',
+                    publish_target='url')
+        self.module('t-folder', 'def check(ctx):\n    return {"ok": True}\ndef publish(c, b, t):\n    return {}\n',
+                    publish_target='folder')
+        self.module('t-none', 'def check(ctx):\n    return {"ok": True}\ndef publish(c, b, t):\n    return {}\n',
+                    publish_target=_GONE)
+        cat = dm.catalog()
+        self.assertEqual([(cat[m].status, cat[m].publish_target) for m in ('t-url', 't-folder', 't-none')],
+                         [('ok', 'url'), ('ok', 'folder'), ('ok', 'folder')])
+        self.assertEqual(cat[MID].publish_target, 'folder')               # справжній `static-publish` не міняв маніфест
+        self.assertEqual(cat[URL_MID].publish_target, 'url')
+
+    def test_any_other_publish_target_is_a_bad_manifest(self):
+        fn = 'def check(ctx):\n    return {"ok": True}\ndef publish(c, b, t):\n    return {}\n'
+        bad = ['ftp', '', 'URL', 'Folder', ' url', None, 1, True, ['url'], {'url': 1}, 0.5]
+        for i, value in enumerate(bad):
+            self.module(f'bad-{i}', fn, publish_target=value)
+        # лише модулі без ролі `publish` теж валідуються: поле не мусить мовчки лишатись сміттям
+        self.module('bad-tokens', 'def check(ctx):\n    return {"ok": True}\ndef tokens(c):\n    return {}\n',
+                    roles=('tokens',), publish_target='nope')
+        cat = dm.catalog()
+        for i, value in enumerate(bad):
+            with self.subTest(value=value):
+                m = cat[f'bad-{i}']
+                self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'), m.error)
+                self.assertIn('publish_target', m.error)
+                self.assertIsNone(m.fn('publish'))
+        self.assertEqual((cat['bad-tokens'].status, cat['bad-tokens'].error_code), ('error', 'bad-manifest'))
+
+    def test_the_new_status_codes_pass_through_the_core(self):
+        self.assertEqual((dm.STATUS['vercel-auth'], dm.STATUS['vercel-busy']), (409, 409))
+        self.assertEqual((dm.ModuleError('vercel-auth').status, dm.ModuleError('vercel-busy').status), (409, 409))
+
+    # ---- запис мети й відповідь ----
+
+    def test_publish_writes_the_four_fields_and_leaves_publish_local_alone(self):
+        local = {'module': 'static-publish', 'path': '/old/tx', 'published_at': '2026-10-01T10:00:00Z'}
+        self.seed_meta(publish_local=local)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'url', 'verified', 'iterations', 'frames'])
+        self.assertEqual((body['ok'], body['url'], body['verified'], body['iterations'], body['frames']),
+                         (True, GOOD_URL, True, 2, 0))
+        self.assertNotIn('local', body)
+        meta = self.meta()
+        self.assertEqual(meta['publish_url'], GOOD_URL)
+        self.assertRegex(meta['published_at'], r'^' + UA_STAMP.pattern + r'$')
+        self.assertEqual(meta['published_at'], time.strftime('%d.%m.%Y %H:%M'), 'формат/час ЛІГА')
+        self.assertIs(meta['publish_verified'], True)
+        remote = meta['publish_remote']
+        self.assertEqual(set(remote), {'module', 'state', 'published_at'})
+        self.assertEqual((remote['module'], remote['state']), (URL_MID, GOOD_STATE))
+        self.assertRegex(remote['published_at'], r'^' + ISO_UTC.pattern + r'$')
+        self.assertEqual(meta['publish_local'], local, '`publish_local` не чіпаємо')
+        self.assertEqual([i['published'] for i in meta['iterations']], [True, True])
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'deai-published')), 'тека публікації зʼявилась')
+        self.assert_quiet()
+
+    def test_verified_false_and_warnings_are_stored_and_returned(self):
+        self.cfg['result'] = result(verified=False, warnings=['Deployment Protection увімкнено', 'другий рядок'])
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'url', 'verified', 'iterations', 'frames', 'warnings'])
+        self.assertEqual((body['verified'], body['warnings']),
+                         (False, ['Deployment Protection увімкнено', 'другий рядок']))
+        self.assertIs(self.meta()['publish_verified'], False)
+
+    def test_empty_or_absent_warnings_are_not_in_the_response(self):
+        for res in (result(warnings=[]), result(warnings=_GONE)):
+            self.cfg['result'] = res
+            st, body = self.publish()
+            self.assertEqual(st, 200, body)
+            self.assertNotIn('warnings', body)
+
+    def test_response_key_order_with_frames_warnings_and_code_stale(self):
+        shots = os.path.join(self.tx_dir, 'iterations', 'it1', 'shots')
+        os.makedirs(shots)
+        with open(os.path.join(shots, 'manifest.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{битий')
+        self.cfg['result'] = result(warnings=['w'])
+        with mock.patch.object(serve, 'server_code_staleness', lambda: 'код новіший за процес'):
+            st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'url', 'verified', 'iterations', 'frames', 'warnings',
+                                      'frames_warnings', 'code_stale'])
+        self.assertTrue(any('it1' in w for w in body['frames_warnings']))
+        self.assertEqual(body['code_stale'], 'код новіший за процес')
+
+    def test_the_module_gets_the_build_dir_and_exactly_the_task_arg(self):
+        self.assertEqual(self.publish()[0], 200)
+        call, = self.cfg['calls']
+        self.assertEqual(call['build_dir'], os.path.join(self.tx_dir, 'publish'))
+        self.assertTrue(call['built'], 'модуль викликано до того, як збірка лягла')
+        self.assertEqual(call['task'], {'id': 'tx', 'title': 'Задача tx', 'dir': self.tx_dir, 'state': {}})
+        self.assertEqual(call['settings'], {})                 # жодного `folder`: теку модуль «за адресою» не знає
+        self.assertEqual(call['secret_keys'], [])
+
+    def test_the_url_branch_has_no_folder_no_bad_task_id_and_no_destination_lock(self):
+        """Для `url` id задачі в адресу не йде (імʼя проєкту непрозоре), тека не потрібна, `bad-folder` неможливий."""
+        for i, tid in enumerate(('задача', 'x' * 129, 'NUL')):
+            with self.subTest(tid=tid[:10]):
+                rec = self._task_space(f'u{i}', tid)
+                self.enable_url(rec)
+                st, body = self.publish()
+                self.assertEqual(st, 200, body)
+                self.assertEqual(body['url'], GOOD_URL)
+                self.assertEqual(self.cfg['calls'][-1]['task']['id'], tid)
+        self.assertFalse(os.path.exists(os.path.join(self.home, 'deai-published')))
+        self.assert_quiet()
+
+    def _task_space(self, sid, tid):
+        rec = self._register(self._space(sid, os.path.join(self.home, 'deai-work', sid), False, tid))
+        path = os.path.join(self.deai, 'spaces.json')
+        with open(path, encoding='utf-8') as fh:
+            reg = json.load(fh)
+        reg['current'] = sid
+        atomic_write_json(path, reg)
+        return rec
+
+    def test_no_iterations_marked_is_the_same_400_before_any_build_or_call(self):
+        meta = self.meta()
+        for it in meta['iterations']:
+            it['published'] = False
+        _write_json(os.path.join(self.tx_dir, 'iterations.json'), meta)
+        st, body = self.publish()
+        self.assertEqual(st, 400)
+        self.assertIn('no iterations marked for publish - toggle the green dot first', body)
+        self.assert_nothing_built()
+        self.assertEqual(self.cfg['calls'], [])
+
+    # ---- `state` туди-назад ----
+
+    def test_state_round_trip_the_second_publish_gets_what_the_first_returned(self):
+        self.assertEqual(self.publish()[0], 200)
+        self.cfg['result'] = result(state={'project': 'pv-12345678', 'project_id': 'prj_1', 'deployment': 'dpl_2',
+                                           'n': 2, 'ok': True, 'ratio': 0.5, 'none': None})
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.cfg['calls'][0]['task']['state'], {})
+        self.assertEqual(self.cfg['calls'][1]['task']['state'], GOOD_STATE)
+        self.cfg['result'] = result()
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.cfg['calls'][2]['task']['state'],
+                         {'project': 'pv-12345678', 'project_id': 'prj_1', 'deployment': 'dpl_2',
+                          'n': 2, 'ok': True, 'ratio': 0.5, 'none': None})
+
+    def test_a_state_stored_by_another_module_is_not_passed(self):
+        self.seed_meta(publish_remote={'module': 'vercel-publish', 'state': {'project': 'чужий'},
+                                       'published_at': '2026-10-01T10:00:00Z'})
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.cfg['calls'][0]['task']['state'], {})
+        # і перезаписаний: тепер там цей модуль
+        self.assertEqual(self.meta()['publish_remote']['module'], URL_MID)
+
+    def test_a_malformed_stored_publish_remote_is_an_empty_state_not_a_crash(self):
+        for bad in ('рядок', 5, None, [], {'module': URL_MID}, {'module': URL_MID, 'state': ['x']},
+                    {'module': URL_MID, 'state': 'x'}, {'state': {'a': 1}}):
+            with self.subTest(bad=bad):
+                self.cfg['calls'].clear()
+                self.seed_meta(publish_remote=bad)
+                st, body = self.publish()
+                self.assertEqual(st, 200, body)
+                self.assertEqual(self.cfg['calls'][0]['task']['state'], {})
+
+    def test_the_state_is_read_fresh_after_the_build_not_at_the_start(self):
+        """Збірка триває: стан, записаний за цей час, мусить дійти до модуля (інакше новіша публікація
+        перезаписалась би застарілим станом)."""
+        real = serve.build_preview
+
+        def build_then_store(*a, **kw):
+            out = real(*a, **kw)
+            self.seed_meta(publish_remote={'module': URL_MID, 'state': {'project': 'нове'},
+                                           'published_at': '2026-10-01T10:00:00Z'})
+            return out
+        with mock.patch.object(serve, 'build_preview', build_then_store):
+            self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.cfg['calls'][0]['task']['state'], {'project': 'нове'})
+
+    def test_meta_is_reread_before_writing_so_a_toggle_made_during_the_publish_survives(self):
+        def toggles(ctx, build, task):
+            path = os.path.join(task['dir'], 'iterations.json')
+            meta = json.loads(_read(path))
+            meta['iterations'][1]['published'] = False
+            meta['custom'] = 'від дизайнера'
+            _write_json(path, meta)
+            return result()
+        self.cfg['result'] = toggles
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        meta = self.meta()
+        self.assertEqual({i['id']: i['published'] for i in meta['iterations']}, {'it1': True, 'it2': False})
+        self.assertEqual(meta['custom'], 'від дизайнера')
+        self.assertEqual(meta['publish_url'], GOOD_URL)
+
+    # ---- перевірка відповіді модуля ----
+
+    def test_a_bad_url_is_refused_and_the_meta_is_untouched(self):
+        bad = ['http://pv-1.vercel.app', 'ftp://pv-1.vercel.app', '//pv-1.vercel.app', 'pv-1.vercel.app', '',
+               'https://', 'https:///path', 'https://:443/', 'https://u:p@pv-1.vercel.app', 'https://u@pv-1.vercel.app',
+               'https://@pv-1.vercel.app', 'https://pv-1.vercel.app/#frag', 'https://pv-1.vercel.app/#',
+               'https://pv-1.vercel.app/ x', 'https://pv-1.vercel.app/\n', 'https://pv-1.vercel.app\\evil',
+               'https://[::1', 'https://pv-1.vercel.app/' + 'a' * 2100,
+               None, 5, True, ['https://pv-1.vercel.app'], b'https://pv-1.vercel.app', {'url': GOOD_URL}, _GONE]
+        for url in bad:
+            with self.subTest(url=url if not isinstance(url, str) else url[:60]):
+                self.refused(result(url=url), 'url')
+
+    def test_good_urls_are_accepted(self):
+        for url in ('https://pv-1.vercel.app', 'https://pv-1.vercel.app/', 'https://pv-1.vercel.app:8443/a/b?x=1&y=2',
+                    'https://xn--e1afmkfd.example/', 'https://a.b'):
+            with self.subTest(url=url):
+                self.cfg['result'] = result(url=url)
+                st, body = self.publish()
+                self.assertEqual((st, body.get('url')), (200, url), body)
+                self.assertEqual(self.meta()['publish_url'], url)
+
+    def test_a_state_over_4096_is_refused_and_exactly_4096_is_accepted(self):
+        pad = 4096 - len(json.dumps({'k': ''}))
+        self.cfg['result'] = result(state={'k': 'x' * pad})
+        self.assertEqual(len(json.dumps(self.cfg['result']['state'])), 4096)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.meta()['publish_remote']['state'], {'k': 'x' * pad})
+        self.refused(result(state={'k': 'x' * (pad + 1)}), 'state 4097')
+        self.refused(result(state={f'k{i}': 'x' * 100 for i in range(60)}), 'state many keys')
+
+    def test_a_state_that_is_not_a_flat_object_of_scalars_is_refused(self):
+        nan, inf = float('nan'), float('inf')
+        bad = {'вкладений обʼєкт': {'a': {'b': 1}}, 'вкладений список': {'a': [1, 2]}, 'кортеж': {'a': (1,)},
+               'байти': {'a': b'x'}, 'множина': {'a': {1}}, 'ключ не рядок': {1: 'a'}, 'NaN': {'a': nan},
+               'inf': {'a': inf}, 'сурогат у значенні': {'a': '\ud800'}, 'сурогат у ключі': {'\ud800': 'a'},
+               'список': ['project'], 'None': None, 'рядок': 'project', 'число': 5, 'відсутній': _GONE}
+        for what, state in bad.items():
+            with self.subTest(what):
+                self.refused(result(state=state), what)
+
+    def test_scalar_values_of_every_allowed_type_are_stored_as_they_are(self):
+        state = {'s': 'рядок', 'i': 3, 'f': 1.5, 'b': False, 'n': None, 'empty': ''}
+        self.cfg['result'] = result(state=state)
+        self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(self.meta()['publish_remote']['state'], state)
+        self.cfg['result'] = result(state={})
+        self.assertEqual(self.publish()[0], 200)                    # порожній стан — теж стан
+        self.assertEqual(self.meta()['publish_remote']['state'], {})
+
+    def test_verified_must_be_a_real_bool(self):
+        for v in (1, 0, 'true', 'yes', None, [], _GONE):
+            with self.subTest(verified=v):
+                self.refused(result(verified=v), 'verified')
+
+    def test_warnings_must_be_a_short_list_of_short_strings(self):
+        bad = {'рядок': 'увага', 'None': None, 'не рядок в списку': ['a', 5], 'шість': ['w'] * 6,
+               'задовгий': ['x' * 301], 'словник': {'a': 'b'}, 'кортеж': ('a',), 'сурогат': ['\ud800']}
+        for what, warnings in bad.items():
+            with self.subTest(what):
+                self.refused(result(warnings=warnings), what)
+        self.cfg['result'] = result(warnings=['x' * 300] * 5)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['warnings'], ['x' * 300] * 5)
+
+    def test_a_result_that_is_not_an_object_is_refused(self):
+        for res in (None, 'https://pv-1.vercel.app', [GOOD_URL], 5, True):
+            with self.subTest(res=res):
+                self.refused(res, 'result')
+
+    def test_the_refusal_text_does_not_echo_the_modules_values(self):
+        dm.write_secrets('off', URL_MID, {'password': 'S3cr3t-pw'})
+        body = self.refused(result(url='http://leak-S3cr3t-pw.example/NOT-HTTPS'), 'url')
+        text = json.dumps(body, ensure_ascii=False)
+        self.assertNotIn('S3cr3t-pw', text)
+        self.assertNotIn('leak-', text)
+        self.assertLessEqual(len(body['error']), 300)
+
+    # ---- помилки модуля ----
+
+    def test_a_vercel_auth_or_busy_error_is_409_with_its_code_and_without_the_secret(self):
+        dm.write_secrets('off', URL_MID, {'password': 'S3cr3t-pw'})
+        before = self.bytes_meta()
+        for code in ('vercel-auth', 'vercel-busy'):
+            with self.subTest(code):
+                def refuses(ctx, build, task, code=code):
+                    raise ctx['ModuleError'](code, message='Vercel відмовив S3cr3t-pw')
+                self.cfg['result'] = refuses
+                st, body = self.publish()
+                self.assertEqual((st, body['ok'], body['code']), (409, False, code), body)
+                self.assertIn('Vercel відмовив', body['error'])
+                self.assertNotIn('S3cr3t-pw', json.dumps(body, ensure_ascii=False))
+                self.assertEqual(self.bytes_meta(), before)
+        self.cfg['result'] = result()
+        self.assertEqual(self.publish()[0], 200, 'замок не відпущено після відмови модуля')
+
+    def test_an_unknown_code_or_a_crash_is_502_module_error(self):
+        def weird(ctx, build, task):
+            raise ctx['ModuleError']('weird-code', message='x')
+
+        def crash(ctx, build, task):
+            raise RuntimeError('впало')
+        for fn in (weird, crash):
+            self.cfg['result'] = fn
+            st, body = self.publish()
+            self.assertEqual((st, body['code']), (502, 'module-error'), body)
+        meta = self.meta()
+        self.assertIsNone(meta['publish_url'])
+        for key in ('published_at', 'publish_verified', 'publish_remote'):
+            self.assertNotIn(key, meta)
+
+    # ---- замок і виклик ----
+
+    def _hold_first(self):
+        gate = threading.Event()
+        self.cfg['gate'] = gate
+        self.addCleanup(gate.set)
+        box = {}
+        t = threading.Thread(target=lambda: box.__setitem__('first', self.publish()), daemon=True)
+        t.start()
+        self.assertTrue(self.cfg['entered'].wait(15), 'перша публікація не дійшла до модуля')
+        return gate, t, box
+
+    def _answers_at_once(self, fn):
+        """Відповідь `fn()` у потоці: вона мусить прийти, поки перша публікація ще стоїть, — а не чекати."""
+        box = {}
+        t = threading.Thread(target=lambda: box.__setitem__('r', fn()), daemon=True)
+        t.start()
+        t.join(5)
+        self.assertFalse(t.is_alive(), 'відповідь ЧЕКАЛА замка (мусить бути одразу: 409 publish-busy)')
+        return box['r']
+
+    def test_a_second_publish_or_build_of_the_task_is_409_busy_while_the_module_runs(self):
+        gate, t, box = self._hold_first()
+        for payload in ({}, {'build_only': True}):
+            st, body = self._answers_at_once(lambda: self.publish(payload))
+            self.assertEqual((st, body.get('ok'), body.get('code')), (409, False, 'publish-busy'), body)
+            self.assertTrue(body['error'])
+        self.assertEqual(len(self.cfg['calls']), 1, 'друга публікація тієї ж задачі зайшла в модуль')
+        gate.set()
+        t.join(30)
+        self.assertEqual(box['first'][0], 200, box['first'])
+        self.assertEqual(self.publish()[0], 200, 'замок не відпущено після публікації')
+
+    def test_the_lock_is_the_build_dir_of_the_task_and_nothing_wider(self):
+        """Інша задача (інший простір) публікується одночасно: замок не глобальний."""
+        self.enable_url(self.on)
+        gate, t, box = self._hold_first()
+        st, body = self._answers_at_once(lambda: self.publish({}, {'X-Canvas-Task': 'ty'}))
+        self.assertEqual((st, body.get('url')), (200, GOOD_URL), body)
+        self.assertEqual(self.cfg['calls'][1]['task']['id'], 'ty')
+        gate.set()
+        t.join(30)
+        self.assertEqual(box['first'][0], 200, box['first'])
+
+    def test_the_lock_is_shared_with_the_folder_branch_of_the_same_task(self):
+        """Збірка `<задача>/publish/` одна й та сама для обох гілок: `folder`-публікація тієї ж задачі теж чекає."""
+        gate, t, box = self._hold_first()
+        key = serve._task_dir_key(self.tx_dir)
+        self.assertFalse(serve._publish_lock(key).acquire(blocking=False), 'замок теки збірки не взято')
+        gate.set()
+        t.join(30)
+
+    def test_the_module_is_called_without_a_timeout(self):
+        """`timeout=` перетворив би виклик на робочий потік, що не вклався б і працював далі БЕЗ замка."""
+        real, seen = dm.call, []
+
+        def spy(*a, **kw):
+            seen.append((a[1], kw))
+            return real(*a, **kw)
+        with mock.patch.object(dm, 'call', spy):
+            self.assertEqual(self.publish()[0], 200)
+        self.assertEqual(seen, [('publish', {})])
+
+    def test_the_lock_is_released_after_a_refused_result(self):
+        self.refused(result(url='http://x.example'), 'url')
+        self.cfg['result'] = result()
+        self.assertEqual(self.publish()[0], 200)
+
+    # ---- `build_only` і пароль ----
+
+    def test_build_only_builds_and_neither_calls_the_module_nor_writes_the_meta(self):
+        before = self.bytes_meta()
+        st, body = self.publish({'build_only': True})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body)[:4], ['ok', 'dir', 'iterations', 'frames'])
+        self.assertEqual(body['dir'], os.path.join(self.tx_dir, 'publish'))
+        self.assertTrue(os.path.isfile(os.path.join(body['dir'], 'index.html')))
+        self.assertFalse(os.path.exists(os.path.join(body['dir'], 'comment-layer')))
+        self.assertEqual(self.cfg['calls'], [])
+        self.assertEqual(self.bytes_meta(), before)
+        for key in ('url', 'local', 'verified'):
+            self.assertNotIn(key, body)
+        self.assert_quiet()
+
+    def test_a_password_secret_gates_the_build_and_never_reaches_the_response_or_the_meta(self):
+        dm.write_secrets('off', URL_MID, {'password': 'pw-Ключ-1'})
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        pub = os.path.join(self.tx_dir, 'publish')
+        wrapper = _read(os.path.join(pub, 'index.html'))
+        self.assertIn('id="authgate"', wrapper)
+        self.assertIn(f'window.__extPw={json.dumps("pw-Ключ-1", ensure_ascii=False)};', wrapper)
+        for rel in SOURCE_PAGES:
+            self.assertIn('id="authgate"', _read(os.path.join(pub, rel)), rel)
+        self.assertNotIn('pw-Ключ-1', json.dumps(body, ensure_ascii=False))
+        self.assertNotIn('pw-Ключ-1', _read(os.path.join(self.tx_dir, 'iterations.json')))
+        self.assertEqual(self.cfg['calls'][0]['secret_keys'], ['password'])
+
+    def test_no_secret_or_an_empty_one_is_no_gate(self):
+        for pw in (None, ''):
+            with self.subTest(password=pw):
+                if pw is not None:
+                    dm.write_secrets('off', URL_MID, {'password': pw})
+                self.assertEqual(self.publish()[0], 200)
+                pub = os.path.join(self.tx_dir, 'publish')
+                self.assertIn('<script>window.__gateOpen=true;</script>', _read(os.path.join(pub, 'index.html')))
+                for rel in SOURCE_PAGES:
+                    html = _read(os.path.join(pub, rel))
+                    self.assertNotIn('authgate', html, rel)
+                    self.assertEqual(_title(html), _title(_read(os.path.join(self.tx_dir, 'iterations', rel))), rel)
+
+    # ---- `/api/task` ----
+
+    def share(self, task):
+        return {k: task[k] for k in ('publish_gate', 'publish_share_url') if k in task}
+
+    def test_api_task_publish_gate_and_share_url_with_a_password(self):
+        pw = 'p@ss w/ö#?&=%+'
+        dm.write_secrets('off', URL_MID, {'password': pw})
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        self.assertEqual(self.share(task), {'publish_gate': True})         # адреси ще нема — посилання нема
+        self.assertEqual(task['preview_gate'], MODULE_GATE)
+        self.assertNotIn('publish_remote', task)
+        self.assertEqual(self.publish()[0], 200)
+        st, task = self.get('/api/task')
+        self.assertEqual(task['publish_url'], GOOD_URL)
+        self.assertEqual(task['publish_remote'], self.meta()['publish_remote'])
+        self.assertEqual(task['publish_gate'], True)
+        want = GOOD_URL + '#k=' + urllib.parse.quote(pw, safe='')
+        self.assertEqual(task['publish_share_url'], want)
+        self.assertEqual(task['publish_share_url'].count('#'), 1)
+        key = task['publish_share_url'].split('#k=', 1)[1]
+        for raw in (' ', '/', '#', '?', '&', '=', '+', 'ö', '@'):
+            self.assertNotIn(raw, key)
+        self.assertEqual(urllib.parse.unquote(key), pw)
+        self.assertIn('%20', want)
+        self.assertIn('%C3%B6', want)
+        self.assertEqual(task['preview_gate'], MODULE_GATE)
+
+    def test_api_task_without_a_password_shares_the_plain_url_and_the_gate_is_false(self):
+        for pw in (None, ''):
+            with self.subTest(password=pw):
+                if pw is not None:
+                    dm.write_secrets('off', URL_MID, {'password': pw})
+                self.assertEqual(self.publish()[0], 200)
+                st, task = self.get('/api/task')
+                self.assertEqual(self.share(task), {'publish_gate': False, 'publish_share_url': GOOD_URL})
+                self.assertNotIn('#', task['publish_share_url'])
+
+    def test_api_task_has_no_share_fields_for_the_folder_module(self):
+        """Навіть коли в мету лишилась адреса від ЛІГА чи від минулого модуля: `folder`-модуль посилання не дає."""
+        self.enable_folder(self.off)
+        self.seed_meta(publish_url='https://pv-old.vercel.app', published_at='01.01.2026 10:00')
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        self.assertEqual(self.share(task), {})
+        self.assertEqual(task['publish_url'], 'https://pv-old.vercel.app')
+        self.assertEqual(self.publish()[0], 200)
+        st, task = self.get('/api/task')
+        self.assertEqual(self.share(task), {})
+        self.assertIn('publish_local', task)
+
+    def test_api_task_has_no_share_fields_for_the_league_path(self):
+        """`legacy` (простір з інтеграціями без явного модуля), навіть коли модуль «за адресою» стоїть у каталозі."""
+        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        self.seed_meta(self.ty_dir, publish_url='https://pv-12345678.vercel.app', published_at='01.01.2026 10:00')
+        st, task = self.get('/api/task', {'X-Canvas-Task': 'ty'})
+        self.assertEqual(st, 200, task)
+        self.assertEqual(self.share(task), {})
+        self.assertNotIn('publish_remote', task)
+
+    def test_api_task_in_a_league_space_with_an_enabled_url_module_has_the_fields(self):
+        """Явно ввімкнений модуль має пріоритет і в просторі ЛІГА (як у 0.2.0)."""
+        self.enable_url(self.on)
+        dm.write_secrets('on', URL_MID, {'password': 'pw1'})
+        st, task = self.get('/api/task', {'X-Canvas-Task': 'ty'})
+        self.assertEqual((st, self.share(task)), (200, {'publish_gate': True}), task)
+        self.assertEqual(self.publish({}, {'X-Canvas-Task': 'ty'})[0], 200)
+        st, task = self.get('/api/task', {'X-Canvas-Task': 'ty'})
+        self.assertEqual(self.share(task), {'publish_gate': True, 'publish_share_url': GOOD_URL + '#k=pw1'})
+
+    def test_api_task_does_not_fail_and_drops_the_fields_on_unreadable_secrets_or_space_json(self):
+        dm.write_secrets('off', URL_MID, {'password': 'pw1'})
+        self.assertEqual(self.publish()[0], 200)
+        with open(os.path.join(self.deai, 'secrets.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{ це не json')
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        self.assertEqual(self.share(task), {})
+        self.assertEqual(task['publish_url'], GOOD_URL)                    # решта задачі на місці
+        self.assertEqual(task['id'], 'tx')
+        os.remove(os.path.join(self.deai, 'secrets.json'))
+        with open(os.path.join(self.off_path, 'space.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{ це не json')
+        st, task = self.get('/api/task')
+        self.assertEqual(st, 200, task)
+        self.assertEqual(self.share(task), {})
+
+    def test_api_task_share_url_uses_the_module_password_not_the_league_one(self):
+        dm.write_secrets('off', URL_MID, {'password': 'модульний'})
+        self.assertEqual(self.publish()[0], 200)
+        st, task = self.get('/api/task')
+        self.assertEqual(task['publish_share_url'], GOOD_URL + '#k=' + urllib.parse.quote('модульний', safe=''))
+        self.assertNotIn(task['preview_password'], task['publish_share_url'].split('#k=')[1])
+
+    # ---- контроль: гілка `folder` і ЛІГА не змінились, нічого не вийшло назовні ----
+
+    def test_a_present_url_module_does_not_change_the_folder_branch(self):
+        self.enable_folder(self.off)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'local', 'iterations', 'frames'])
+        meta = self.meta()
+        self.assertEqual(meta['publish_local']['module'], MID)
+        for key in ('published_at', 'publish_verified', 'publish_remote'):
+            self.assertNotIn(key, meta, f'`{key}` записано для folder-модуля')
+        self.assertIsNone(meta['publish_url'])
+        self.assertEqual(self.cfg['calls'], [])
+        self.assert_quiet()
+
+    def test_nothing_goes_out_from_the_core_on_any_url_path(self):
+        dm.write_secrets('off', URL_MID, {'password': 'pw1'})
+        self.publish()
+        self.publish({'build_only': True})
+        self.cfg['result'] = result(url='http://x.example')
+        self.publish()
+        self.get('/api/task')
+        self.assert_quiet()
 
 
 if __name__ == '__main__':

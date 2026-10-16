@@ -8,6 +8,7 @@ comment-layer с каналами: internal (локально, для Claude) / 
 import contextlib
 import functools
 import json
+import math
 import os
 import re
 import shutil
@@ -21,7 +22,7 @@ import unicodedata
 import urllib.request
 from html import escape as html_escape, unescape as html_unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
@@ -3237,7 +3238,9 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
 #   `'legacy'` — зашитий шлях ЛІГА (збірка з коментатором + vercel deploy), відповіді незмінні;
 #   `None`     — 409 `no-publish-module`;
 #   `Module`   — `publish_with_module` нижче: збірка БЕЗ коментатора в локальну теку модуля, без жодного
-#                виходу назовні (ні Vercel, ні дашборд команди, ні реєстр, ні git-пуш, ні мережа).
+#                виходу назовні (ні Vercel, ні дашборд команди, ні реєстр, ні git-пуш, ні мережа); модуль
+#                `publish_target: url` (2b-1) — `_publish_by_url`: без теки, результат — адреса й `state`
+#                (ходить лише сам модуль; з ядра так само нічого назовні).
 # ⛔ Усі помічники — МОДУЛЬНІ функції, а не методи `Handler`: зовнішні заглушки обробника
 # (`boss_autopublish.py`) мають лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод
 # їх зламав би. Обробник `h` сюди передається, але з нього береться лише те, що `_publish` кликав завжди.
@@ -3325,8 +3328,28 @@ def _try_publish_locks(task_dir, folder, tid):
             lock.release()
 
 
+@contextlib.contextmanager
+def _try_task_dir_lock(task_dir):
+    """Замок ЛИШЕ теки збірки задачі (`_task_dir_key`), БЕЗ очікування: `True` — взято, `False` — зайнятий.
+    Для модулів «публікація за адресою» (`publish_target: url`): призначення в них немає, тож `_publish_key` нема.
+    Той самий ключ, що в `_try_publish_locks`, а не окремий: збірка `<задача>/publish/` одна для обох гілок, тож
+    `folder`-публікація тієї ж задачі теж чекає (відмовляє `publish-busy`)."""
+    lock = _publish_lock(_task_dir_key(task_dir))
+    if not lock.acquire(blocking=False):
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        lock.release()
+
+
 def publish_with_module(h, prov, payload):
     """Гілка `Handler._publish` для простору, де публікує МОДУЛЬ `prov` (`Module` із роллю `publish`).
+
+    ⚠️ Нижче — гілка `folder` (модуль пише в локальну теку). Модуль із `publish_target: url` (результат — адреса на
+    віддаленому хості) після перевірки «жодної ітерації не позначено» йде в `_publish_by_url`: без теки, без
+    `bad-task-id`, із замком лише теки збірки; див. її докстрінг.
 
     Порядок — і він спостережуваний: (1) «жодної ітерації не позначено» — 400 з тим самим текстом, що в ЛІГА, ДО
     збірки; (2) id задачі, який модуль відмовив би, — 400 `bad-task-id` ДО збірки; (3) `ctx` модуля — ОДИН раз, і
@@ -3360,6 +3383,9 @@ def publish_with_module(h, prov, payload):
     if not its:
         h.send_error(400, 'no iterations marked for publish - '
                           'toggle the green dot first')
+        return
+    if prov.publish_target == 'url':
+        _publish_by_url(h, prov, payload, space, tid, task, its)
         return
     # id, який модуль відмовив би, — 400 ДО будь-якої збірки (правило й причина — коло `publish_id_ok`).
     if not publish_id_ok(tid):
@@ -3416,6 +3442,180 @@ def publish_with_module(h, prov, payload):
     if stale:
         result['code_stale'] = stale
     h._send_json(result)
+
+
+#: Межі відповіді модуля «публікація за адресою»: ядро не вірить модулю на слово, бо збережене ляже в
+#: `iterations.json`, а адреса піде в інтерфейс (посилання «Відкрити», «Скопіювати»).
+URL_RESULT_MAX_URL = 2048
+URL_RESULT_MAX_STATE = 4096           # `len(json.dumps(state))`
+URL_RESULT_MAX_WARNINGS = 5
+URL_RESULT_MAX_WARNING_LEN = 300
+
+
+def _utf8_ok(text):
+    """Рядок можна записати в UTF-8 файл (самотній сурогат — ні: `iterations.json` зламався б на записі)."""
+    try:
+        text.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _url_result_url_ok(url):
+    """`https://` без облікових даних і фрагмента, з непорожнім хостом; без пробілів, керівних символів і
+    зворотної скісної (`urlsplit` мовчки відкидає перенос рядка й табуляцію, тож перевіряємо рядок, а не лише розбір)."""
+    if not isinstance(url, str) or not url.startswith('https://') or len(url) > URL_RESULT_MAX_URL:
+        return False
+    if '#' in url or '\\' in url or any(ord(c) <= 32 or ord(c) == 127 for c in url) or not _utf8_ok(url):
+        return False
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:                    # `https://[::1` та подібні
+        return False
+    return bool(host) and '@' not in parts.netloc and not parts.fragment
+
+
+def _url_result_state_ok(state):
+    """`state` — плаский обʼєкт: ключі — рядки, значення — `str`/`int`/`float`/`bool`/`None` (жодних вкладених
+    обʼєктів і списків), скінченні числа, `len(json.dumps(state)) <= 4096`."""
+    if not isinstance(state, dict):
+        return False
+    for key, value in state.items():
+        if not isinstance(key, str) or not _utf8_ok(key):
+            return False
+        if isinstance(value, str):
+            if not _utf8_ok(value):
+                return False
+        elif isinstance(value, float):
+            if not math.isfinite(value):
+                return False
+        elif value is not None and not isinstance(value, (bool, int)):
+            return False
+    try:
+        return len(json.dumps(state)) <= URL_RESULT_MAX_STATE
+    except (TypeError, ValueError):       # надвелике ціле: `json.dumps` відмовляє після 4300 цифр
+        return False
+
+
+def _url_result_warnings_ok(warnings):
+    return (isinstance(warnings, list) and len(warnings) <= URL_RESULT_MAX_WARNINGS
+            and all(isinstance(w, str) and len(w) <= URL_RESULT_MAX_WARNING_LEN and _utf8_ok(w) for w in warnings))
+
+
+def _checked_url_result(res):
+    """`(url, state, verified, warnings)` з відповіді `publish` модуля «за адресою» або `ModuleError('module-error')`.
+    Текст чесний: до цього місця модуль уже ВІДПРАЦЮВАВ, тож публікація могла відбутись, хоч ядро її не прийняло;
+    самих значень від модуля в тексті нема (це його відповідь, а не те, що ядро перевірило)."""
+    if not isinstance(res, dict):
+        what = 'result (expected an object)'
+    elif not _url_result_url_ok(res.get('url')):
+        what = 'url (expected https://host without credentials or a fragment)'
+    elif not _url_result_state_ok(res.get('state')):
+        what = 'state (expected a flat object of strings and numbers, at most 4096 characters as JSON)'
+    elif not isinstance(res.get('verified'), bool):
+        what = 'verified (expected true or false)'
+    elif 'warnings' in res and not _url_result_warnings_ok(res['warnings']):
+        what = 'warnings (expected a list of at most 5 strings of at most 300 characters)'
+    else:
+        return res['url'], res['state'], res['verified'], list(res.get('warnings', []))
+    raise deai_modules.ModuleError(
+        'module-error',
+        message=f'publish returned an invalid {what}; the module has already run, so the publish may already '
+                f'have happened — check the remote before retrying')
+
+
+def _stored_publish_state(task, prov):
+    """`state`, який цей модуль повернув минулого разу (`publish_remote.state` в СВІЖО прочитаному
+    `iterations.json`), або `{}`: запису нема, він чужого модуля чи зіпсований."""
+    remote = load_meta(task).get('publish_remote')
+    if (isinstance(remote, dict) and remote.get('module') == prov.id
+            and isinstance(remote.get('state'), dict)):
+        return remote['state']
+    return {}
+
+
+def _publish_by_url(h, prov, payload, space, tid, task, its):
+    """Гілка `publish_with_module` для модуля `publish_target: url` (етап 2b-1): результат — адреса на віддаленому
+    хості, а не тека. Без `published_root`/`folder_ok`/`bad-task-id`: id задачі в адресу не йде (імʼя проєкту
+    непрозоре — справа модуля), а теки в модуля нема.
+
+    Порядок: (1) `ctx` модуля — ОДИН раз; пароль — його секрет `password` (порожній = «пароля нема» → `None`);
+    (2) замок ЛИШЕ теки збірки задачі (`_try_task_dir_lock`, без очікування: зайнято — 409 `publish-busy`); (3) збірка
+    БЕЗ коментатора; (4) `build_only` — відповідь про збірку, як у `folder`; (5) `publish` модуля БЕЗ `timeout=` (у
+    нього свої тайм-аути на запит; `timeout=` пустив би його в робочий потік, що не вклався б і працював далі
+    БЕЗ замка) із `task = {id, title, dir, state}`, де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
+    читання `iterations.json`; чужий чи зіпсований запис — `{}`); (6) перевірка відповіді (`_checked_url_result`);
+    (7) `iterations.json` перечитується ПЕРЕД записом (збірка й публікація тривали, дизайнер міг перемкнути зелену
+    крапку) і дістає `publish_url`, `published_at` (`ДД.ММ.РРРР ГГ:ХХ`, як у ЛІГА), `publish_verified` і
+    `publish_remote = {module, state, published_at}`; `publish_local` не чіпається.
+
+    Ніяких виходів назовні з ядра: ні `git_autocommit` (він пушить), ні `_registry_push`, ні `_overview_sync`, ні
+    мережі — ходить лише сам модуль."""
+    ctx = deai_modules.module_ctx(space, prov)
+    gate_pw = ctx['secrets'].get('password') or None
+    with _try_task_dir_lock(task['dir']) as got:
+        if not got:
+            h._send_json({'ok': False, 'code': 'publish-busy',
+                          'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
+                         status=409)
+            return
+        built = build_preview(task, tid, its, comments=False, gate_pw=gate_pw)
+        if payload.get('build_only'):
+            result = {'ok': True, **built}
+        else:
+            task_arg = {'id': tid, 'title': task.get('title', tid), 'dir': task['dir'],
+                        'state': _stored_publish_state(task, prov)}
+            res = deai_modules.call(prov, 'publish', ctx, built['dir'], task_arg)
+            url, state, verified, warnings = _checked_url_result(res)
+            meta = load_meta(task)
+            meta['publish_url'] = url
+            meta['published_at'] = time.strftime('%d.%m.%Y %H:%M')
+            meta['publish_verified'] = verified
+            meta['publish_remote'] = {'module': prov.id, 'state': state,
+                                      'published_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+            save_meta(task, meta)
+            result = {'ok': True, 'url': url, 'verified': verified,
+                      'iterations': built['iterations'], 'frames': built['frames']}
+            if warnings:
+                result['warnings'] = warnings
+            if 'frames_warnings' in built:
+                result['frames_warnings'] = built['frames_warnings']
+    stale = server_code_staleness()
+    if stale:
+        result['code_stale'] = stale
+    h._send_json(result)
+
+
+def task_publish_share(space, meta):
+    """Поля `/api/task` для простору, де публікує модуль `publish_target: url`: `publish_gate` (чи заданий пароль
+    превʼю — для застереження «превʼю публічне») і, коли адреса вже є, `publish_share_url` = адреса +
+    `#k=<пароль>` (без пароля — сама адреса). Для `legacy`, `folder`-модуля і простору без постачальника — `{}`.
+
+    ⚠️ Свідоме виключення з правила «секрети не йдуть в API»: пароль превʼю — не секрет від глядача (вшитий у
+    сторінки, гейт клієнтський), а менеджеру потрібне посилання, що відчиняється одразу. ТОКЕН модуля звідси не
+    виходить ніколи: читається лише `password`. ТОТАЛЬНА: нечитабельні секрети, `space.json`, каталог — `{}`,
+    а не 5xx (`/api/task` годує весь інтерфейс); шар вимкнено чи простір запиту не зафіксовано — модулів нема
+    (як у `task_preview_gate`)."""
+    try:
+        if not (space and spaces.layer_on() and spaces.request_space_id() is not None):
+            return {}
+        pub = deai_modules.capabilities(space).get('publish')
+        if pub in (None, 'legacy'):
+            return {}
+        mod = deai_modules.catalog().get(pub)
+        if mod is None or mod.status != 'ok' or mod.publish_target != 'url':
+            return {}
+        # як `deai_modules._ctx`: секрети читаються лише в модуля, що їх оголосив
+        secrets = deai_modules.read_secrets(space.get('id'), mod.id) if mod.secret_keys() else {}
+    except Exception:  # noqa: BLE001 — тотальність: збій читання не ламає `/api/task`
+        return {}
+    pw = secrets.get('password')
+    out = {'publish_gate': bool(pw)}
+    url = meta.get('publish_url')
+    if isinstance(url, str) and url:
+        out['publish_share_url'] = f'{url}#k={quote(pw, safe="")}' if pw else url
+    return out
 
 
 #: `preview_gate` для `/api/task`, коли публікує модуль: ТА САМА форма, що в `preview_gate_state` (UI читає ті
@@ -4241,6 +4441,11 @@ class Handler(SimpleHTTPRequestHandler):
             # відповідь простору з ЛІГА лишається такою, якою була.
             if meta.get('publish_local'):
                 out['publish_local'] = meta['publish_local']
+            # Остання публікація модуля «за адресою» (`{module, state, published_at}`) і поля для посилання
+            # (`publish_gate`, `publish_share_url` — лише коли публікує такий модуль, див. `task_publish_share`).
+            if meta.get('publish_remote'):
+                out['publish_remote'] = meta['publish_remote']
+            out.update(task_publish_share(sp, meta))
             self._send_json(out)
             return
         if self.path == '/api/teams-mute':

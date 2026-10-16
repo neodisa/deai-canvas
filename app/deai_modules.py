@@ -67,6 +67,9 @@ APP = os.path.dirname(os.path.abspath(__file__))
 API_VERSION = 1
 ROLES_CALLED = ('publish', 'tokens')
 ROLES_RESERVED = ('comments', 'vcs', 'tracker', 'dashboard', 'notify')
+#: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
+#: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
+PUBLISH_TARGETS = ('folder', 'url')
 SETTING_TYPES = ('text', 'path', 'bool', 'select', 'secret')
 ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
 KEY_RE = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,63}')
@@ -82,7 +85,9 @@ MAX_FULL_MESSAGE = 1 << 16
 
 STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-module': 404,
           'bad-settings': 400, 'space-json-unreadable': 409, 'spaces-off': 409,
-          'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409}
+          'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409,
+          # модулі «публікація за адресою»: віддалений хост не прийняв токен / вперся в ліміт (текст — від модуля)
+          'vercel-auth': 409, 'vercel-busy': 409}
 
 
 class ModuleError(Exception):
@@ -105,18 +110,20 @@ class Module:
     """Вбудований модуль із каталогу. `status`: `'ok'` — вантажиться й відповідає маніфесту,
     `'error'` — ні (`error` — текст, `error_code` — `bad-manifest` чи `module-error`). Модуль із
     помилкою лишається в каталозі, але нічого не віддає (`fn()` → `None`) і постачальником не є.
-    `fn(role | 'check')` — функція `server.py` або `None`."""
-    __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'status', 'error', 'error_code',
-                 'dir', '_fns')
+    `publish_target` — `'folder'` (типово) чи `'url'` (див. `PUBLISH_TARGETS`): що повертає й куди пише модуль
+    ролі `publish`. `fn(role | 'check')` — функція `server.py` або `None`."""
+    __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'status', 'error',
+                 'error_code', 'dir', '_fns')
 
     def __init__(self, mid, *, name=None, version='', api=None, roles=(), settings=(), status='ok',
-                 error=None, error_code=None, dir='', fns=None):
+                 error=None, error_code=None, dir='', fns=None, publish_target='folder'):
         self.id = mid
         self.name = name if isinstance(name, str) and name.strip() else mid
         self.version = version if isinstance(version, str) else ''
         self.api = api
         self.roles = list(roles)
         self.settings = [dict(s) for s in settings]
+        self.publish_target = publish_target if publish_target in PUBLISH_TARGETS else 'folder'
         self.status = status
         self.error = error
         self.error_code = error_code
@@ -287,6 +294,9 @@ def _check_manifest(man, folder):
     for r in roles:
         if not isinstance(r, str) or r not in ROLES_CALLED + ROLES_RESERVED:
             return None, f'roles: unknown role {str(r)[:40]!r}'
+    target = man.get('publish_target', 'folder')
+    if not isinstance(target, str) or target not in PUBLISH_TARGETS:
+        return None, f'publish_target: must be one of {", ".join(PUBLISH_TARGETS)}'
     raw = man.get('settings', [])
     if not isinstance(raw, list):
         return None, 'settings: must be a list'
@@ -297,14 +307,15 @@ def _check_manifest(man, folder):
             return None, f'settings[{i}]: {why}'
         settings.append(norm)
     return {'name': name, 'version': version, 'roles': list(dict.fromkeys(roles)),
-            'settings': settings}, None
+            'settings': settings, 'publish_target': target}, None
 
 
 def _failed(folder, d, code, text, man=None, meta=None):
     base = dict(status='error', error=str(text)[:MAX_MESSAGE], error_code=code, dir=d)
     if meta:
         return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
-                      roles=meta['roles'], settings=meta['settings'], **base)
+                      roles=meta['roles'], settings=meta['settings'],
+                      publish_target=meta['publish_target'], **base)
     man = man if isinstance(man, dict) else {}
     api = man.get('api')
     return Module(folder, name=man.get('name'), version=man.get('version', ''),
@@ -346,7 +357,8 @@ def _build(d, folder):
             return _failed(folder, d, 'bad-manifest', f'server.py: no callable {need}()', meta=meta)
         fns[need] = f
     return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
-                  roles=meta['roles'], settings=meta['settings'], status='ok', dir=d, fns=fns)
+                  roles=meta['roles'], settings=meta['settings'], publish_target=meta['publish_target'],
+                  status='ok', dir=d, fns=fns)
 
 
 def _load_dir(d, folder):
