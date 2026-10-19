@@ -1295,8 +1295,8 @@ class SpaceRoutes(Fixture):
             self.assertEqual(set(s), {'id', 'name', 'color', 'path', 'tasks', 'available',
                                       'integrations', 'legacy', 'capabilities'})
         legacy, p, e = body['spaces']
-        self.assertEqual(legacy['capabilities'], {'publish': 'legacy', 'tokens': None})              # з інтеграціями
-        self.assertEqual(p['capabilities'], {'publish': 'static-publish', 'tokens': None})         # без — локальна публікація
+        self.assertEqual(legacy['capabilities'], {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})   # з інтеграціями
+        self.assertEqual(p['capabilities'], {'publish': 'static-publish', 'tokens': None, 'comments': None})   # без — локальна публікація
         self.assertEqual((legacy['integrations'], legacy['legacy'], legacy['tasks'], legacy['available']),
                          (True, True, 1, True))
         self.assertEqual((p['name'], p['color'], p['path'], p['integrations'], p['legacy']),
@@ -1554,7 +1554,8 @@ class TaskResponses(Fixture):
         self.assertEqual(body['space'], {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
                                          'color': 'space-1', 'path': os.path.dirname(self.a_dir),
                                          'legacy': True, 'integrations': True,
-                                         'capabilities': {'publish': 'legacy', 'tokens': None}})
+                                         'capabilities': {'publish': 'legacy', 'tokens': None,
+                                                          'comments': 'legacy'}})
         self.assertEqual(body['comment_channel'], 'dc/a')
         # задача іншого простору — його простір, і без інтеграцій каналу коментарів немає
         st, body = self.jget('/t/x/api/task')

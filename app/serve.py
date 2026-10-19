@@ -6791,6 +6791,57 @@ def published_target(path):
         return None
 
 
+# ---------------------------------------------------------------------------------------------------
+# Роздача файлів браузерного адаптера модуля ролі `comments` (етап 2b-2, Task 1):
+# `GET /api/module-client/<модуль>/<файл>`. Адаптер виконується в сторінках канваса (той самий origin, що API), тож віддаємо
+# РІВНО те, що модуль оголосив у `client` свого маніфесту, і лише для справного вбудованого модуля ролі `comments`: жодного
+# файла за межами списку, жодного прихованого, жодного шляху вглиб. Відкриття — з тим самим захистом, що й `/published`
+# (`_published_open_file`: звичайний файл, ні посилання, ні жорсткого посилання, `O_NOFOLLOW`, дескриптор). Файли — не
+# від простору й не від задачі (вбудований ресурс), тому маршрут обробляється ДО `_take_task`, як `/published/`: заголовок
+# `X-Canvas-Task` на ньому не діє, а зіпсований реєстр його не вкладає. Усі відмови — один і той самий 404 зі сталим тілом.
+MODULE_CLIENT_PREFIX = '/api/module-client/'
+MODULE_CLIENT_HEADERS = (('X-Content-Type-Options', 'nosniff'),)
+MODULE_CLIENT_NOT_FOUND = b'not found\n'
+
+
+def module_client_target(path):
+    """`(Module, імʼя файла)` для `path` (БЕЗ `?query`) виду `/api/module-client/<модуль>/<файл>` або `None`. НІКОЛИ не
+    кидає. Кожна складова — рівно одна, розкодована суворо (`%ff`, `%00`, `%2f` усередині складової не дають
+    ні виходу за теку, ні другої складової) і придатна за шаблонами маніфесту (`ID_RE`, `CLIENT_RE`: ні `.`, ні `..`, ні
+    прихованих, ні регістру-двійника); модуль — з каталогу, `status == 'ok'`, роль `comments`, файл — зі списку `client`."""
+    try:
+        if not path.startswith(MODULE_CLIENT_PREFIX):
+            return None
+        parts = [unquote(p, errors='strict') for p in path[len(MODULE_CLIENT_PREFIX):].split('/')]
+        if len(parts) != 2:
+            return None
+        mid, name = parts
+        if not deai_modules.ID_RE.fullmatch(mid) or not deai_modules.CLIENT_RE.fullmatch(name):
+            return None
+        mod = deai_modules.catalog().get(mid)
+        if mod is None or mod.status != 'ok' or 'comments' not in mod.roles or name not in mod.client:
+            return None
+        return mod, name
+    except Exception:  # noqa: BLE001 — статичний файл не розповідає, що саме зламалось
+        return None
+
+
+def open_module_client(mod, name):
+    """`(fd, fstat)` відкритого файла `name` теки модуля `mod` або `None` (404). НЕ кидає. ОС з `dir_fd` (macOS, Linux):
+    теку відкрито `O_DIRECTORY|O_NOFOLLOW` (тека-посилання — відмова), файл — `_published_open_file` відносно її
+    дескриптора; без `dir_fd` (Windows) — запасний `open_published_file`. Власність дескриптора переходить викликачу."""
+    try:
+        if _PUBLISHED_DIRFD:
+            dfd = _published_openat(mod.dir, _PUBLISHED_OPEN_DIR)
+            try:
+                return _published_open_file(name, dfd)
+            finally:
+                os.close(dfd)
+        return open_published_file(os.path.join(mod.dir, name), _published_real_dir(mod.dir))
+    except OSError:
+        return None
+
+
 def make_server(port=0):
     handler = Handler
     # /it-assets/<it>/... — статика итераций текущей задачи
@@ -6894,6 +6945,34 @@ def make_server(port=0):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_module_client_404(self):
+            """404 `/api/module-client/…`: СТАЛЕ тіло й `nosniff` — без шляху, без причини (немає модуля, не та роль, файл
+            не оголошено, підмінений чи зник — усе однаково)."""
+            self.send_response(404)
+            for key, value in MODULE_CLIENT_HEADERS:
+                self.send_header(key, value)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(MODULE_CLIENT_NOT_FOUND)))
+            self.end_headers()
+            self.wfile.write(MODULE_CLIENT_NOT_FOUND)
+
+        def _serve_module_client(self):
+            """`GET /api/module-client/<модуль>/<файл>` (`module_client_target` → `open_module_client`; відповідь —
+            `_send_iter_file`: ETag/304 з відкритого дескриптора, `text/javascript; charset=utf-8`, `nosniff`)."""
+            found = module_client_target(self.path.partition('?')[0])
+            opened = open_module_client(*found) if found else None
+            if opened is None:
+                self._send_module_client_404()
+                return
+            try:
+                self._send_iter_file(os.path.join(found[0].dir, found[1]), extra_headers=MODULE_CLIENT_HEADERS,
+                                     utf8=True, opened=opened)
+            except OSError:
+                if self._resp_started:                  # обрив посеред віддачі: другу відповідь поверх не шлемо
+                    self.close_connection = True
+                else:
+                    self._send_module_client_404()
+
         def _serve_published(self):
             """`GET /published/…` (рішення — `published_target`; кожна відмова — `_send_published_404`).
             Переадресація зберігає `?query`: кладемо його в `Location` ПЕРЕКОДОВАНИМ (`#`, пробіл і не-ASCII
@@ -6990,6 +7069,11 @@ def make_server(port=0):
             # пісочниці це витік; `published_target` усі відмови зводить до порожнього 404.
             if self.path.startswith(PUBLISHED_PREFIX):
                 self._serve_published()
+                return
+            # Так само ДО `_take_task`: файли адаптера модуля коментарів — вбудований ресурс, не дані простору чи задачі
+            # (див. `MODULE_CLIENT_PREFIX`). Заголовок задачі й зіпсований реєстр на них не діють. Адреса — без `/t/<id>/`.
+            if self.path.startswith(MODULE_CLIENT_PREFIX):
+                self._serve_module_client()
                 return
             # Задача запиту береться ТУТ, раз на запит: `super().do_GET()` нижче
             # вдруге її не бере (префікс уже знято з `self.path`).

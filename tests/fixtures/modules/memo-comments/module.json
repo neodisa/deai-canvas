@@ -1,0 +1,7 @@
+{"api": 1, "id": "memo-comments", "name": "Memo (тестові коментарі)", "version": "1.0.0",
+ "roles": ["comments"], "client": ["adapter.js"],
+ "settings": [
+   {"key": "endpoint", "type": "text", "label": "Адреса сервісу коментарів (http://127.0.0.1:<порт>)", "required": true},
+   {"key": "token", "type": "secret", "label": "Токен сервісу (лише сервер модуля; у сторінки не потрапляє)"},
+   {"key": "pubkey", "type": "secret", "public": true, "label": "Публічний ключ (потрапляє в сторінки)"}
+ ]}

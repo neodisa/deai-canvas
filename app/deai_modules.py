@@ -1,8 +1,14 @@
 """Вбудовані модулі Deai Canvas — каркас етапу 2а (спека 2026-10-14-modules-2a-design.md, ревізія 2).
 
 Модуль = тека `app/modules/<id>/` з `module.json` (маніфест) і `server.py` (функції ролей).
-Роль = інтерфейс, який кличе ядро: `publish`, `tokens`; `comments`, `vcs`, `tracker`,
+Роль = інтерфейс, який кличе ядро: `publish`, `tokens`, `comments` (2b-2); `vcs`, `tracker`,
 `dashboard`, `notify` — зарезервовані (ядро їх не кличе). Один постачальник на роль у просторі.
+Роль `comments` — дві половини: браузерний адаптер сховища CommentLayer (`client` у маніфесті — файли теки
+модуля, їх роздає `GET /api/module-client/<id>/<файл>`) і серверні `client_config`/`list`/`resolve`
+(`comments_client`, `channel_for`; налаштування `secret` з `"public": true` дозволено показувати сторінкам).
+Тестовий шов: змінна оточення `DEAI_EXTRA_MODULES` — друга тека вбудованих модулів (`extra_dir`), якої каталог
+додає до `app/modules`; `id`, що вже є серед вбудованих, програє (`shadowed`). Лише для тестів і живих перевірок:
+оточення контролює людина, що запускає сервер, тож модулі звідти вважаються вбудованими.
 Файл названо `deai_modules.py`, а не `modules.py`: `bin/` стоїть у `sys.path` попереду, і імпорт
 був би неоднозначним.
 
@@ -39,7 +45,7 @@
     пошкоджений `space.json` не зачепить зашитий шлях). У просторі БЕЗ інтеграцій `provider()` мусить
     знати явні рішення, тож нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)`.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
-    ключ `error` (див. функцію).
+    ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`) без модуля дають `'legacy'`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
     `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
     явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
@@ -52,8 +58,10 @@
     `write_secrets` → `spaces-off`, `read_secrets` → `{}` без звернення до диска.
 """
 import json
+import math
 import os
 import re
+import stat
 import threading
 import time
 import types
@@ -65,8 +73,12 @@ from atomic_io import atomic_write_json
 APP = os.path.dirname(os.path.abspath(__file__))
 
 API_VERSION = 1
-ROLES_CALLED = ('publish', 'tokens')
-ROLES_RESERVED = ('comments', 'vcs', 'tracker', 'dashboard', 'notify')
+ROLES_CALLED = ('publish', 'tokens', 'comments')
+ROLES_RESERVED = ('vcs', 'tracker', 'dashboard', 'notify')
+#: Функції `server.py`, які мусить мати модуль ролі (понад обовʼязковий `check`).
+ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('client_config', 'list', 'resolve')}
+#: Ролі, що мають зашитий шлях ЛІГА: простір з `integrations` без явного модуля дає `'legacy'` (а не `None`).
+LEGACY_ROLES = ('publish', 'comments')
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
@@ -78,6 +90,16 @@ KEY_RE = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,63}')
 IMPLICIT_MODULE = 'static-publish'
 #: Скільки секунд чекаємо на `check` модуля (виклик у робочому потоці).
 CHECK_TIMEOUT = 5
+#: Тайм-аут `list`/`resolve` модуля ролі `comments` (ходять у мережу сервісу; кличе агент, не сторінка).
+COMMENTS_TIMEOUT = 10
+#: Файли браузерного адаптера (`client` у маніфесті ролі `comments`): імʼя, кількість, розмір одного файла.
+CLIENT_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.js')
+MAX_CLIENT_FILES = 8
+MAX_CLIENT_BYTES = 512 * 1024
+#: `client_config` модуля: плаский JSON-обʼєкт не більший за стільки знаків (`json.dumps`).
+MAX_CLIENT_CONFIG = 4096
+#: Змінна оточення з другою текою вбудованих модулів (тестовий шов, див. docstring модуля).
+EXTRA_ENV = 'DEAI_EXTRA_MODULES'
 MAX_SERVER_BYTES = 1 << 20
 MAX_VALUE_LEN = 4096
 MAX_MESSAGE = 300
@@ -111,12 +133,13 @@ class Module:
     `'error'` — ні (`error` — текст, `error_code` — `bad-manifest` чи `module-error`). Модуль із
     помилкою лишається в каталозі, але нічого не віддає (`fn()` → `None`) і постачальником не є.
     `publish_target` — `'folder'` (типово) чи `'url'` (див. `PUBLISH_TARGETS`): що повертає й куди пише модуль
-    ролі `publish`. `fn(role | 'check')` — функція `server.py` або `None`."""
-    __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'status', 'error',
+    ролі `publish`. `client` — кортеж імен файлів браузерного адаптера (лише роль `comments`, див. `_check_client`),
+    у порядку вантаження. `fn(імʼя)` — функція `server.py` (`'check'`, `'publish'`, `'client_config'`…) або `None`."""
+    __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'client', 'status', 'error',
                  'error_code', 'dir', '_fns')
 
     def __init__(self, mid, *, name=None, version='', api=None, roles=(), settings=(), status='ok',
-                 error=None, error_code=None, dir='', fns=None, publish_target='folder'):
+                 error=None, error_code=None, dir='', fns=None, publish_target='folder', client=()):
         self.id = mid
         self.name = name if isinstance(name, str) and name.strip() else mid
         self.version = version if isinstance(version, str) else ''
@@ -124,6 +147,7 @@ class Module:
         self.roles = list(roles)
         self.settings = [dict(s) for s in settings]
         self.publish_target = publish_target if publish_target in PUBLISH_TARGETS else 'folder'
+        self.client = tuple(client)
         self.status = status
         self.error = error
         self.error_code = error_code
@@ -135,6 +159,10 @@ class Module:
 
     def secret_keys(self):
         return [s['key'] for s in self.settings if s['type'] == 'secret']
+
+    def private_secret_keys(self):
+        """Секрети БЕЗ `"public": true`: їх значення не сміє потрапити в сторінки (`comments_client`)."""
+        return [s['key'] for s in self.settings if s['type'] == 'secret' and not s.get('public')]
 
     def __repr__(self):
         return f'<Module {self.id} {self.status}>'
@@ -194,13 +222,22 @@ def _exc_text(e):
     return f'{type(e).__name__}: {msg}' if msg else type(e).__name__
 
 
-def _scan():
-    """(тека, [(імʼя, шлях)]) — підтеки `builtin_dir()` за абеткою, без прихованих і `__pycache__`."""
-    base = os.path.normpath(builtin_dir())
+def extra_dir():
+    """Друга тека вбудованих модулів зі змінної оточення `DEAI_EXTRA_MODULES` (тестовий шов: живі перевірки й тести
+    кладуть сюди модулі-фікстури) — нормалізований абсолютний шлях або `None`, коли змінної нема чи вона порожня.
+    Читається щоразу, а не при імпорті: тест міняє оточення без перезапуску."""
+    raw = os.environ.get(EXTRA_ENV)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return os.path.normpath(os.path.abspath(raw))
+
+
+def _list_dirs(base):
+    """[(імʼя, шлях)] підтек `base` за абеткою, без прихованих і `__pycache__`; теки нема — порожньо."""
     try:
         names = sorted(os.listdir(base))
     except OSError:
-        return base, []
+        return []
     out = []
     for n in names:
         if n.startswith('.') or n == '__pycache__':
@@ -208,7 +245,35 @@ def _scan():
         d = os.path.join(base, n)
         if os.path.isdir(d):
             out.append((n, d))
-    return base, out
+    return out
+
+
+def _scan():
+    """`(теки, [(імʼя, шлях)], [(імʼя, шлях)])`: теки джерел (`builtin_dir()` і, якщо задана й інша, `extra_dir()`),
+    модулі каталогу за абеткою й ті модулі зайвої теки, чий `id` уже є серед вбудованих (вони програють:
+    `shadowed`). Підтеки — без прихованих і `__pycache__`."""
+    base = os.path.normpath(builtin_dir())
+    items = _list_dirs(base)
+    bases, lost = (base,), []
+    extra = extra_dir()
+    if extra is not None and extra != base:
+        bases = (base, extra)
+        taken = {n for n, _ in items}
+        for n, d in _list_dirs(extra):
+            (lost if n in taken else items).append((n, d))
+        items.sort(key=lambda it: it[0])
+    return bases, items, lost
+
+
+def shadowed():
+    """`{id: Module}` модулів з `DEAI_EXTRA_MODULES`, чий `id` уже має вбудований модуль: вбудований виграє (його не
+    підмінити через оточення), а такий модуль лишається ТУТ — зі `status='error'` і причиною; його `server.py` не
+    виконується. Каталог (`catalog()`) їх не містить."""
+    out = {}
+    for n, d in _scan()[2]:
+        out[n] = Module(n, status='error', error_code='bad-manifest', dir=d,
+                        error=f'id {n!r} is taken by a built-in module; the one in {EXTRA_ENV} is ignored')
+    return out
 
 
 def _encodable(v):
@@ -253,6 +318,13 @@ def _check_setting(s, seen):
     if not isinstance(required, bool):
         return None, f'{key}: required must be a boolean'
     out = {'key': key, 'type': t, 'label': label, 'required': required}
+    if 'public' in s:                                   # лише `secret`: значення живе в `secrets.json`, але може йти в сторінки
+        if t != 'secret':
+            return None, f'{key}: public is only for secret settings'
+        if not isinstance(s['public'], bool):
+            return None, f'{key}: public must be a boolean'
+        if s['public']:
+            out['public'] = True                        # `false` — те саме, що без прапорця: не зберігаємо
     if t == 'select':
         opts = s.get('options')
         if not isinstance(opts, list) or not opts or not all(
@@ -270,8 +342,40 @@ def _check_setting(s, seen):
     return out, None
 
 
-def _check_manifest(man, folder):
-    """(метадані, None) або (None, причина) — перевірка маніфесту без виконання `server.py`."""
+def _check_client(man, roles, d):
+    """`client` маніфесту: `(кортеж імен, None)` або `(None, причина)`. Обовʼязковий для ролі `comments`, заборонений без
+    неї; 1–`MAX_CLIENT_FILES` унікальних імен за `CLIENT_RE`, кожне — звичайний файл теки `d` (`lstat`: ні посилання,
+    ні жорсткого посилання, ні FIFO) не більший за `MAX_CLIENT_BYTES`. Імен у тексті причини — лише ті, що пройшли
+    `CLIENT_RE`."""
+    has_role = 'comments' in roles
+    if 'client' not in man:
+        return ((), None) if not has_role else (None, 'client: required for the comments role')
+    if not has_role:
+        return None, 'client: only for the comments role'
+    raw = man['client']
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_CLIENT_FILES:
+        return None, f'client: must be a list of 1 to {MAX_CLIENT_FILES} file names'
+    names = []
+    for i, n in enumerate(raw):
+        if not isinstance(n, str) or not CLIENT_RE.fullmatch(n):
+            return None, f'client[{i}]: must match [A-Za-z0-9_][A-Za-z0-9_.-]{{0,63}}\\.js'
+        if n in names:
+            return None, f'client[{i}]: {n} is listed twice'
+        try:
+            st = os.lstat(os.path.join(d, n))
+        except OSError:
+            return None, f'client[{i}]: {n} is not a file of the module'
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return None, f'client[{i}]: {n} must be a regular file (no symlink, no hard link)'
+        if st.st_size > MAX_CLIENT_BYTES:
+            return None, f'client[{i}]: {n} is bigger than {MAX_CLIENT_BYTES} bytes'
+        names.append(n)
+    return tuple(names), None
+
+
+def _check_manifest(man, folder, d):
+    """(метадані, None) або (None, причина) — перевірка маніфесту (і файлів `client` у теці `d`) без виконання
+    `server.py`."""
     if not isinstance(man, dict):
         return None, 'module.json: not an object'
     api = man.get('api')
@@ -306,8 +410,12 @@ def _check_manifest(man, folder):
         if why:
             return None, f'settings[{i}]: {why}'
         settings.append(norm)
-    return {'name': name, 'version': version, 'roles': list(dict.fromkeys(roles)),
-            'settings': settings, 'publish_target': target}, None
+    roles = list(dict.fromkeys(roles))
+    client, why = _check_client(man, roles, d)
+    if why:
+        return None, why
+    return {'name': name, 'version': version, 'roles': roles,
+            'settings': settings, 'publish_target': target, 'client': client}, None
 
 
 def _failed(folder, d, code, text, man=None, meta=None):
@@ -315,7 +423,7 @@ def _failed(folder, d, code, text, man=None, meta=None):
     if meta:
         return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
                       roles=meta['roles'], settings=meta['settings'],
-                      publish_target=meta['publish_target'], **base)
+                      publish_target=meta['publish_target'], **base)           # `client` не передаємо: помилковий модуль нічого не віддає
     man = man if isinstance(man, dict) else {}
     api = man.get('api')
     return Module(folder, name=man.get('name'), version=man.get('version', ''),
@@ -330,7 +438,7 @@ def _build(d, folder):
         return _failed(folder, d, 'bad-manifest', 'module.json: not found')
     except (OSError, ValueError) as e:
         return _failed(folder, d, 'bad-manifest', f'module.json: {_short(e)}')
-    meta, why = _check_manifest(man, folder)
+    meta, why = _check_manifest(man, folder, d)
     if why:
         return _failed(folder, d, 'bad-manifest', why, man=man)
     try:
@@ -351,18 +459,36 @@ def _build(d, folder):
     except BaseException as e:  # noqa: BLE001 — SyntaxError, SystemExit у верхньому рівні, ImportError…
         return _failed(folder, d, 'module-error', _exc_text(e), meta=meta)
     fns = {}
-    for need in ('check', *(r for r in meta['roles'] if r in ROLES_CALLED)):
+    for need in ('check', *(fn for r in meta['roles'] for fn in ROLE_FUNCTIONS.get(r, ()))):
         f = ns.__dict__.get(need)
         if not callable(f):
             return _failed(folder, d, 'bad-manifest', f'server.py: no callable {need}()', meta=meta)
         fns[need] = f
     return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
                   roles=meta['roles'], settings=meta['settings'], publish_target=meta['publish_target'],
-                  status='ok', dir=d, fns=fns)
+                  client=meta['client'], status='ok', dir=d, fns=fns)
+
+
+def _client_sig(d):
+    """Відбиток файлів `*.js` теки модуля (`lstat`: підміна файла посиланням чи жорстким посиланням — інший відбиток).
+    Кеш і ключ `capabilities` мусять бачити файли адаптера, бо від них залежить, чи модуль справний."""
+    out = []
+    try:
+        with os.scandir(d) as it:
+            for e in it:
+                if e.name.endswith('.js'):
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    out.append((e.name, st.st_mode, st.st_nlink, st.st_mtime_ns, st.st_size, st.st_ino))
+    except OSError:
+        return None
+    return tuple(sorted(out))
 
 
 def _load_dir(d, folder):
-    sig = (_sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')))
+    sig = (_sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')), _client_sig(d))
     with _LOAD_LOCK:
         hit = _CACHE.get(d)
         if hit is not None and hit[0] == sig:
@@ -373,21 +499,22 @@ def _load_dir(d, folder):
 
 
 def catalog():
-    """`{id: Module}` вбудованих модулів (за абеткою). Модулі з помилкою — тут, зі `status='error'`.
+    """`{id: Module}` вбудованих модулів (за абеткою): `app/modules` і, якщо задана, тека `DEAI_EXTRA_MODULES`
+    (`id` вбудованого виграє — програш у `shadowed()`). Модулі з помилкою — тут, зі `status='error'`.
     ⚠️ Виконує код модулів (першого разу чи після зміни файлів) — НЕ кликати під `WRITE_LOCK`."""
-    base, items = _scan()
+    _, items, _ = _scan()
     out = {name: _load_dir(d, name) for name, d in items}
     live = {d for _, d in items}
     with _LOAD_LOCK:
-        for k in [k for k in _CACHE if os.path.dirname(k) == base and k not in live]:
+        for k in [k for k in _CACHE if k not in live]:      # теки, яких уже нема (чи оточення більше не називає)
             del _CACHE[k]
     return out
 
 
 def _catalog_sig():
-    base, items = _scan()
-    return (base, tuple((n, _sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')))
-                        for n, d in items))
+    bases, items, _ = _scan()
+    return (bases, tuple((n, d, _sig(os.path.join(d, 'module.json')), _sig(os.path.join(d, 'server.py')),
+                          _client_sig(d)) for n, d in items))
 
 
 # ------------------------------------------------------------------------------- простір і space.json
@@ -940,14 +1067,21 @@ def write_secrets(space_id, module_id, patch):
 
 # ---------------------------------------------------------------------------------------- виклик
 
-def _scrub(text, secrets):
-    """Вирізати значення секретів (і їхні repr/JSON/URL-форми) з `text`; довші — першими."""
+def _secret_forms(secrets):
+    """Усі вигляди значень секретів (`{ключ: значення}`): сире, `repr`, JSON (екрановане й ні), URL. Порожнє значення —
+    нема що ховати. Рядки, а не копії словника: їх шукають у чужому тексті (`_scrub`, `comments_client`)."""
     vals = set()
     if isinstance(secrets, dict):
         for v in secrets.values():
             if isinstance(v, str) and v:
                 vals |= {v, repr(v)[1:-1], json.dumps(v)[1:-1], json.dumps(v, ensure_ascii=False)[1:-1],
                          quote(v, safe='', errors='surrogatepass')}
+    return {f for f in vals if f}
+
+
+def _scrub(text, secrets):
+    """Вирізати значення секретів (і їхні repr/JSON/URL-форми) з `text`; довші — першими."""
+    vals = _secret_forms(secrets)
     for v in sorted(vals, key=len, reverse=True):
         if v:
             text = text.replace(v, '***')
@@ -1095,7 +1229,7 @@ def check(space, module_id):
 # ------------------------------------------------------------------------------ постачальник ролі
 
 def _provider_for(role, space):
-    """Модуль, `'legacy'` (лише `publish`) чи `None` — для вже відомого простору `space`.
+    """Модуль, `'legacy'` (лише ролі `LEGACY_ROLES`) чи `None` — для вже відомого простору `space`.
     Простір з `integrations` і без жодного явно ввімкненого модуля — `'legacy'`/`None` ДО каталогу.
     Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`."""
     integrations = spaces.integrations_for(space)
@@ -1105,7 +1239,7 @@ def _provider_for(role, space):
         except ModuleError:
             explicit = {}                                   # пошкоджений файл не ламає шлях ЛІГА
         if not any(e['enabled'] for e in explicit.values()):
-            return 'legacy' if role == 'publish' else None
+            return 'legacy' if role in LEGACY_ROLES else None
     else:
         explicit = space_modules(space)
     cat = catalog()
@@ -1120,27 +1254,28 @@ def _provider_for(role, space):
     if winners:
         winners.sort(key=lambda w: (w[0], w[1]))        # явно ввімкнений — перед неявним
         return winners[0][2]
-    if role == 'publish' and integrations:
+    if role in LEGACY_ROLES and integrations:
         return 'legacy'
     return None
 
 
 def provider(role, space=None):
-    """Хто виконує роль у просторі: `Module`, `'legacy'` (зашитий шлях ЛІГА; лише для `publish`) чи `None`.
+    """Хто виконує роль у просторі: `Module`, `'legacy'` (зашитий шлях ЛІГА; ролі `LEGACY_ROLES` — `publish` і
+    `comments`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); у `comments` його нема.
 
     `space` — запис реєстру; не заданий → простір запиту (`spaces.active_space()`). Шар вимкнено чи
     простір запиту НЕ зафіксовано (`request_space_id() is None`: інструменти ЛІГА, воркери, тести без
-    ізоляції) → `'legacy'` для `publish`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
-    каталогу (як `spaces.integrations_on()`). Явно переданий `space` вирішується сам по собі, незалежно
+    ізоляції) → `'legacy'` для `publish` і `comments`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
+    каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА). Явно переданий `space` вирішується сам по собі, незалежно
     від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
-    `integrations` і роль `publish` → `'legacy'`; інакше `None`.
+    `integrations` і роль із `LEGACY_ROLES` → `'legacy'`; інакше `None`.
     ⚠️ НІКОЛИ не кликати під `spaces.WRITE_LOCK`: для простору запиту це `spaces.active_space()`, а той може
     мігрувати реєстр (бере лок), а `catalog()` виконує код модулів. Може кинути `spaces.SpacesError` (реєстр
     не прочитати) і `ModuleError('space-json-unreadable')` (простір без інтеграцій, `space.json` є, але не
     читається) — для списків і опитування є `capabilities()`, яка не кидає."""
     if space is None:
         if not spaces.layer_on() or spaces.request_space_id() is None:
-            return 'legacy' if role == 'publish' else None
+            return 'legacy' if role in LEGACY_ROLES else None
         space = spaces.active_space()
         if space is None:
             return None
@@ -1154,14 +1289,14 @@ def _caps_key(space):
 
 
 def capabilities(space):
-    """`{"publish": id | 'legacy' | None, "tokens": id | None}` для простору `space` (запис реєстру).
-    ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово нечитабельний
-    `space.json`), віддає `{"publish": None, "tokens": None, "error": <код>}` (`publish` — `'legacy'`, коли
-    у просторі є інтеграції); без помилки ключа `error` нема. Кеш за (простір, прапорець
-    `integrations`, відбиток `space.json`, відбитки `module.json` і `server.py` кожного вбудованого
-    модуля); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
+    """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None}` для простору `space`
+    (запис реєстру). ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово нечитабельний
+    `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "error": <код>}` (`publish` і `comments` —
+    `'legacy'`, коли у просторі є інтеграції); без помилки ключа `error` нема. Кеш за (простір, прапорець
+    `integrations`, відбиток `space.json`, теки джерел модулів (`DEAI_EXTRA_MODULES` теж), відбитки `module.json`,
+    `server.py` і файлів `*.js` адаптера кожного модуля); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
     if not isinstance(space, dict) or not space:
-        return {'publish': None, 'tokens': None}
+        return {role: None for role in ROLES_CALLED}
     try:
         key = _caps_key(space)                          # ДО обчислення: зміна під час нього — промах, не застарілий хіт
         sid = _space_id(space)
@@ -1175,11 +1310,68 @@ def capabilities(space):
                 p = _provider_for(role, space)
                 caps[role] = p.id if isinstance(p, Module) else p
         except ModuleError as e:
-            caps = {'publish': 'legacy' if spaces.integrations_for(space) else None, 'tokens': None,
-                    'error': e.code}
+            legacy = 'legacy' if spaces.integrations_for(space) else None
+            caps = {'publish': legacy, 'tokens': None, 'comments': legacy, 'error': e.code}
         with _STATE_LOCK:
             _CAPS[sid] = (key, dict(caps))
         return dict(caps)
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
-        return {'publish': 'legacy' if space.get('integrations') is True else None, 'tokens': None,
-                'error': 'module-error'}
+        legacy = 'legacy' if space.get('integrations') is True else None
+        return {'publish': legacy, 'tokens': None, 'comments': legacy, 'error': 'module-error'}
+
+
+# ------------------------------------------------------------------------------ роль `comments` (2b-2)
+
+#: Текст відмови, коли `client_config` показує значення НЕпублічного секрету: фіксований, без жодних значень.
+CLIENT_CONFIG_LEAK = 'client_config contains the value of a secret that is not marked public'
+_FLAT_TYPES = (str, int, float, bool, type(None))
+
+
+def _config_refused(why):
+    return ModuleError('module-error', message=f'client_config: {why}')
+
+
+def _check_client_config(secrets, public_keys, cfg):
+    """Перевірка відповіді `client_config`: плаский JSON-обʼєкт ≤ `MAX_CLIENT_CONFIG` (`json.dumps`) зі `str`/`int`/
+    `float`/`bool`/`None`; жодного значення секрету, якого немає серед `public_keys`, у значеннях (підрядок, будь-яка
+    довжина ≥ 1, у сирому чи перекодованому вигляді; числа — як текст). Усі тексти відмов фіксовані: ні значень
+    секретів, ні вмісту конфігу, ні його ключів."""
+    if not isinstance(cfg, dict):
+        raise _config_refused('must be an object')
+    for k, v in cfg.items():
+        if not isinstance(k, str):
+            raise _config_refused('keys must be strings')
+        if type(v) not in _FLAT_TYPES:
+            raise _config_refused('values must be strings, numbers, booleans or null')
+        if type(v) is float and not math.isfinite(v):
+            raise _config_refused('numbers must be finite')
+    if len(json.dumps(cfg)) > MAX_CLIENT_CONFIG:
+        raise _config_refused(f'bigger than {MAX_CLIENT_CONFIG} bytes')
+    forms = _secret_forms({k: v for k, v in secrets.items() if k not in public_keys})
+    texts = [v if isinstance(v, str) else str(v) for v in cfg.values() if v is not None and type(v) is not bool]
+    if any(f in t for f in forms for t in texts):
+        raise ModuleError('module-error', message=CLIENT_CONFIG_LEAK)
+
+
+def comments_client(space, prov):
+    """Публічна конфігурація браузерного адаптера модуля `prov` (ролі `comments`) для сторінок простору `space`:
+    `client_config(ctx)` модуля (тайм-аут `CHECK_TIMEOUT`), перевірена `_check_client_config` — це те, що ядро вставляє в
+    сторінки як `{...конфіг, channel}`. Секрет з `"public": true` показувати можна, решта — ні (`module-error` із
+    фіксованим текстом). Може кинути `bad-settings`, `space-json-unreadable`, `secrets-unreadable`, `check-timeout`,
+    `module-error`. ⚠️ Виконує код модуля: НЕ кликати під `spaces.WRITE_LOCK`."""
+    if not isinstance(prov, Module) or prov.status != 'ok' or 'comments' not in prov.roles:
+        raise ModuleError('module-error', message='comments_client: the provider is not a loaded comments module')
+    ctx = _ctx(space, prov)
+    cfg = call(prov, 'client_config', ctx, timeout=CHECK_TIMEOUT)
+    public = {s['key'] for s in prov.settings if s['type'] == 'secret' and s.get('public')}
+    _check_client_config(ctx['secrets'], public, cfg)
+    return dict(cfg)
+
+
+def channel_for(space, tid, internal=False):
+    """Канал коментарів задачі `tid` простору `space`: `deai/<id простору>/<tid>` (внутрішній — `…/internal`). Ядро
+    будує канал само й віддає модулю готовим: той самий id задачі в двох просторах не ділить коментарі."""
+    sid = _space_id(space) if isinstance(space, dict) else ''
+    if not sid or not isinstance(tid, str) or not tid:
+        raise ModuleError('module-error', message='channel: a space id and a task id are required')
+    return f'deai/{sid}/{tid}' + ('/internal' if internal else '')

@@ -13,6 +13,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -309,8 +310,8 @@ class ModuleErrorTest(unittest.TestCase):
             self.assertEqual(dm.ModuleError(code).status, status, code)
 
     def test_roles(self):
-        self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens'))
-        self.assertEqual(dm.ROLES_RESERVED, ('comments', 'vcs', 'tracker', 'dashboard', 'notify'))
+        self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments'))     # 2b-2: `comments` — роль, яку ядро кличе
+        self.assertEqual(dm.ROLES_RESERVED, ('vcs', 'tracker', 'dashboard', 'notify'))
 
 
 # ------------------------------------------------------------------------------------------ маніфест
@@ -405,10 +406,10 @@ class ManifestTest(Env):
         self.assertIn('check', self.error_of('check-not-callable'))
 
     def test_reserved_roles_need_no_function(self):
-        self.mk('reserved', roles=('comments', 'vcs', 'tracker', 'dashboard', 'notify'), server=CHECK_ONLY)
+        self.mk('reserved', roles=('vcs', 'tracker', 'dashboard', 'notify'), server=CHECK_ONLY)
         m = dm.catalog()['reserved']
         self.assertEqual(m.status, 'ok')
-        self.assertEqual(m.roles, ['comments', 'vcs', 'tracker', 'dashboard', 'notify'])
+        self.assertEqual(m.roles, ['vcs', 'tracker', 'dashboard', 'notify'])
 
     def test_setting_rules(self):
         self.mk('s-bad-type', settings=[{'key': 'a', 'type': 'number'}])
@@ -479,6 +480,234 @@ class ManifestTest(Env):
     def test_builtin_dir_default_is_app_modules(self):
         want = os.path.join(os.path.dirname(os.path.abspath(dm.__file__)), 'modules')
         self.assertEqual(_REAL_BUILTIN_DIR(), want)
+
+
+# ----------------------------------------------------------------------- роль `comments` (2b-2): `client`, `public`
+
+#: Серверна половина модуля ролі `comments`: `client_config`, `list`, `resolve` + обовʼязковий `check`.
+COMMENTS_FNS = (CHECK_ONLY
+                + 'def client_config(ctx):\n    return {}\n'
+                + 'def list(ctx, channel):\n    return []\n'
+                + 'def resolve(ctx, channel, id, reason):\n    return None\n')
+CLIENT_JS = 'window.DeaiComments = { create(cfg) { return {}; } };\n'
+MAX_CLIENT = 512 * 1024            # межа розміру одного файла адаптера (спека 2b-2): рівно 512 КіБ ще можна
+
+
+class ManifestClientTest(Env):
+    """`client` — список файлів браузерного адаптера: обовʼязковий для ролі `comments`, заборонений без неї,
+    1–8 імен за шаблоном, кожне — звичайний файл у теці модуля ≤ 512 КіБ без посилань. Порушення — `bad-manifest`
+    БЕЗ виконання `server.py`."""
+
+    NAME = r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.js'
+
+    def mkc(self, mid, client=('a.js',), files=None, **kw):
+        """Модуль `comments` з файлами адаптера. `files` — `{імʼя: вміст}`; типово — кожне валідне імʼя з `client`."""
+        kw.setdefault('server', COMMENTS_FNS)
+        kw.setdefault('roles', ('comments',))
+        patch = dict(kw.pop('patch', None) or {})
+        patch['client'] = _DEL if client is _DEL else (list(client) if isinstance(client, tuple) else client)
+        d = self.mk(mid, patch=patch, **kw)
+        if files is None:
+            names = client if isinstance(client, (list, tuple)) else ()
+            files = {n: CLIENT_JS for n in names if isinstance(n, str) and re.fullmatch(self.NAME, n)}
+        for name, text in files.items():
+            _write(os.path.join(d, name), text)
+        return d
+
+    def error_of(self, mid, want='client'):
+        m = dm.catalog()[mid]
+        self.assertEqual(m.status, 'error', f'{mid}: модуль мав відмовитись')
+        self.assertEqual(m.error_code, 'bad-manifest', mid)
+        self.assertIn(want, m.error, f'{mid}: {m.error!r}')
+        self.assertIsNone(m.fn('check'))
+        self.assertEqual(m.client, (), 'модуль із помилкою нічого не віддає')
+        return m.error
+
+    def test_a_comments_module_loads_with_its_client_files_in_order(self):
+        self.mkc('cm', client=('b.js', 'a.js', '_c-1.x.js'))
+        m = dm.catalog()['cm']
+        self.assertEqual((m.status, m.error), ('ok', None))
+        self.assertEqual(m.client, ('b.js', 'a.js', '_c-1.x.js'))      # порядок маніфесту — порядок вантаження
+        self.assertIsInstance(m.client, tuple)
+        self.assertEqual(m.roles, ['comments'])
+        for name in ('client_config', 'list', 'resolve', 'check'):
+            self.assertTrue(callable(m.fn(name)), name)
+        self.assertIsNone(m.fn('comments'))
+
+    def test_modules_without_the_role_have_no_client(self):
+        self.mk('plain')
+        self.assertEqual(dm.catalog()['plain'].client, ())
+        self.assertEqual(dm.Module('x').client, ())
+        self.assertEqual(dm.Module('x', client=['a.js']).client, ('a.js',))
+
+    def test_client_is_required_for_the_role(self):
+        self.mkc('no-client', client=_DEL)
+        self.assertIn('comments', self.error_of('no-client'))
+
+    def test_client_is_forbidden_without_the_role(self):
+        self.mkc('pub-client', roles=('publish',), server=ALL_FNS)
+        self.mkc('both-roles', roles=('publish', 'comments'), server=ALL_FNS + COMMENTS_FNS)   # з роллю — можна
+        self.mkc('no-roles', roles=())
+        self.mkc('tok-client', roles=('tokens',), server=ALL_FNS)
+        self.error_of('pub-client')
+        self.error_of('no-roles')
+        self.error_of('tok-client')
+        self.assertEqual(dm.catalog()['both-roles'].status, 'ok')
+
+    def test_client_must_be_a_list_of_one_to_eight(self):
+        for mid, bad in (('c-str', 'a.js'), ('c-dict', {'a.js': 1}), ('c-null', None), ('c-int', 5), ('c-empty', []),
+                         ('c-true', True)):
+            self.mkc(mid, client=bad, files={'a.js': CLIENT_JS})
+            self.error_of(mid)
+        names = [f'f{i}.js' for i in range(9)]
+        self.mkc('c-nine', client=names)
+        self.error_of('c-nine')
+        self.mkc('c-eight', client=names[:8])
+        self.assertEqual(dm.catalog()['c-eight'].status, 'ok')
+        self.mkc('c-one', client=names[:1])
+        self.assertEqual(dm.catalog()['c-one'].status, 'ok')
+
+    def test_entries_must_be_unique_strings(self):
+        for mid, bad in (('e-int', [1]), ('e-null', [None]), ('e-list', [['a.js']]), ('e-dict', [{'a.js': 1}]),
+                         ('e-dup', ['a.js', 'a.js'])):
+            self.mkc(mid, client=bad, files={'a.js': CLIENT_JS})
+            self.error_of(mid)
+
+    def test_names_follow_the_pattern(self):
+        bad = {'dotdot': '../a.js', 'slash': 'a/b.js', 'dotfile': '.a.js', 'ext': 'a.txt', 'upper': 'a.JS',
+               'bare': 'a', 'justext': '.js', 'space': 'a b.js', 'newline': 'a.js\n', 'empty': '',
+               'long': 'a' * 65 + '.js', 'cyr': 'ї.js', 'bslash': 'a\\b.js', 'dash': '-a.js', 'map': 'a.js.map',
+               'abs': '/etc/passwd.js', 'nul': 'a\0.js'}
+        for key, name in bad.items():
+            mid = f'n-{key}'
+            self.mkc(mid, client=[name], files={})
+            self.error_of(mid)
+        self.mkc('n-longest', client=['a' * 64 + '.js'])          # межа: 67 знаків
+        self.mkc('n-misc', client=['_x.js', 'A-b.c_d.js', '0.js', 'a.b.js'])
+        self.assertEqual(dm.catalog()['n-longest'].status, 'ok')
+        self.assertEqual(dm.catalog()['n-misc'].status, 'ok')
+
+    def test_a_declared_file_must_exist_and_be_a_regular_file(self):
+        self.mkc('f-missing', client=['a.js'], files={})
+        d = self.mkc('f-dir', client=['a.js'], files={})
+        os.makedirs(os.path.join(d, 'a.js'))
+        d = self.mkc('f-fifo', client=['a.js'], files={})
+        os.mkfifo(os.path.join(d, 'a.js'))
+        for mid in ('f-missing', 'f-dir', 'f-fifo'):
+            self.error_of(mid)
+
+    def test_a_symlink_is_refused_even_inside_the_folder(self):
+        d = self.mkc('l-in', client=['a.js'], files={'real.js': CLIENT_JS})
+        os.symlink(os.path.join(d, 'real.js'), os.path.join(d, 'a.js'))
+        outside = os.path.join(self.tmp, 'outside.js')
+        _write(outside, CLIENT_JS)
+        d = self.mkc('l-out', client=['a.js'], files={})
+        os.symlink(outside, os.path.join(d, 'a.js'))
+        d = self.mkc('l-dangling', client=['a.js'], files={})
+        os.symlink(os.path.join(self.tmp, 'nowhere.js'), os.path.join(d, 'a.js'))
+        for mid in ('l-in', 'l-out', 'l-dangling'):
+            self.error_of(mid)
+
+    def test_a_hard_link_is_refused(self):
+        """Жорстке посилання на чужий файл — не «лише звичайні файли теки»: роздача його теж не відкриє, тож
+        модуль, що його оголосив, не вважається справним."""
+        outside = os.path.join(self.tmp, 'outside.js')
+        _write(outside, CLIENT_JS)
+        d = self.mkc('h-link', client=['a.js'], files={})
+        os.link(outside, os.path.join(d, 'a.js'))
+        self.error_of('h-link')
+
+    def test_the_size_limit_is_512_kib(self):
+        self.mkc('s-at', client=['a.js'], files={'a.js': 'x' * MAX_CLIENT})
+        self.mkc('s-over', client=['a.js'], files={'a.js': 'x' * (MAX_CLIENT + 1)})
+        self.assertEqual(dm.catalog()['s-at'].status, 'ok')
+        self.error_of('s-over')
+        self.mkc('s-two', client=['a.js', 'b.js'], files={'a.js': CLIENT_JS, 'b.js': 'x' * (MAX_CLIENT + 1)})
+        self.error_of('s-two')                                       # межа — на КОЖЕН файл
+
+    def test_a_bad_client_never_executes_server_py(self):
+        marker = os.path.join(self.tmp, 'marker')
+        code = f'open({marker!r}, "w").close()\n' + COMMENTS_FNS
+        self.mkc('bad', client=['../x.js'], files={}, server=code)
+        self.error_of('bad')
+        self.assertFalse(os.path.exists(marker), 'server.py модуля з поганим client не мусить виконуватись')
+        self.mkc('good', server=code)                                # контроль: валідний — виконується
+        self.assertEqual(dm.catalog()['good'].status, 'ok')
+        self.assertTrue(os.path.exists(marker))
+
+    def test_the_comments_role_needs_its_four_functions(self):
+        base = {'client_config': 'def client_config(ctx):\n    return {}\n',
+                'list': 'def list(ctx, channel):\n    return []\n',
+                'resolve': 'def resolve(ctx, channel, id, reason):\n    return None\n',
+                'check': CHECK_ONLY}
+        for missing in base:
+            mid = f'm-{missing.replace("_", "-")}'
+            self.mkc(mid, server=''.join(v for k, v in base.items() if k != missing))
+            self.error_of(mid, want=missing)
+        self.mkc('m-not-callable', server=COMMENTS_FNS + 'resolve = 5\n')
+        self.error_of('m-not-callable', want='resolve')
+        self.mkc('m-all', server=''.join(base.values()))
+        self.assertEqual(dm.catalog()['m-all'].status, 'ok')
+
+    def test_a_change_of_the_adapter_files_reloads_the_module(self):
+        """Кеш модуля бачить не лише `module.json` і `server.py`, а й файли адаптера: підміна на посилання чи
+        видалення робить модуль помилковим, поява файла — справним."""
+        d = self.mkc('live', client=['a.js'])
+        a = dm.catalog()['live']
+        self.assertEqual(a.status, 'ok')
+        self.assertIs(dm.catalog()['live'], a)                       # без змін — той самий обʼєкт
+        target = os.path.join(d, 'a.js')
+        os.remove(target)
+        self.assertEqual(dm.catalog()['live'].status, 'error')
+        _write(target, CLIENT_JS)
+        self.assertEqual(dm.catalog()['live'].status, 'ok')
+        _write(os.path.join(d, 'real.js'), CLIENT_JS)
+        os.remove(target)
+        os.symlink(os.path.join(d, 'real.js'), target)
+        self.assertEqual(dm.catalog()['live'].status, 'error')
+        os.remove(target)
+        _write(target, 'y' * (MAX_CLIENT + 1))
+        self.assertEqual(dm.catalog()['live'].status, 'error')
+        _write(target, CLIENT_JS)
+        self.assertEqual(dm.catalog()['live'].status, 'ok')
+
+
+class ManifestPublicSecretTest(Env):
+    """`"public": true` — лише на `secret`: значення живе в `secrets.json`, але може потрапити в сторінки."""
+
+    def error_of(self, mid):
+        m = dm.catalog()[mid]
+        self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'), f'{mid}: {m.error!r}')
+        self.assertIn('public', m.error)
+        return m.error
+
+    def test_public_on_a_secret_is_accepted_and_normalised(self):
+        self.mk('pub-ok', roles=(), settings=[
+            {'key': 'a', 'type': 'secret', 'public': True},
+            {'key': 'b', 'type': 'secret', 'public': False},
+            {'key': 'c', 'type': 'secret'}])
+        m = dm.catalog()['pub-ok']
+        self.assertEqual((m.status, m.error), ('ok', None))
+        by = {s['key']: s for s in m.settings}
+        self.assertIs(by['a'].get('public'), True)
+        self.assertFalse(by['b'].get('public'))
+        self.assertFalse(by['c'].get('public'))
+        self.assertEqual(m.secret_keys(), ['a', 'b', 'c'])
+        self.assertEqual(m.private_secret_keys(), ['b', 'c'])        # без `public: true`
+
+    def test_public_on_any_other_type_is_refused(self):
+        for t in ('text', 'path', 'bool', 'select'):
+            extra = {'options': [{'value': 'x', 'label': 'X'}]} if t == 'select' else {}
+            for val in (True, False):
+                mid = f'p-{t}-{str(val).lower()}'
+                self.mk(mid, roles=(), settings=[{'key': 'k', 'type': t, 'public': val, **extra}])
+                self.assertIn('settings[0]', self.error_of(mid))
+
+    def test_public_must_be_a_boolean(self):
+        for key, bad in (('str', 'yes'), ('int1', 1), ('int0', 0), ('null', None), ('list', []), ('dict', {})):
+            mid = f'pb-{key}'
+            self.mk(mid, roles=(), settings=[{'key': 'k', 'type': 'secret', 'public': bad}])
+            self.error_of(mid)
 
 
 # ---------------------------------------------------------------------------------------- завантаження
@@ -1465,7 +1694,7 @@ class ProviderTest(Env):
         with self.untouched():                               # без читання реєстру, space.json і каталогу
             self.assertEqual(dm.provider('publish'), 'legacy')
             self.assertIsNone(dm.provider('tokens'))
-            self.assertIsNone(dm.provider('comments'))
+            self.assertEqual(dm.provider('comments'), 'legacy')      # 2b-2: інструменти ЛІГА мають командні коментарі
 
     def test_request_space_none_is_no_provider(self):
         self.mk('static-publish')
@@ -1497,11 +1726,14 @@ class ProviderTest(Env):
         with self.untouched():
             self.assertEqual(dm.provider('publish'), 'legacy')
             self.assertIsNone(dm.provider('tokens'))
+            self.assertEqual(dm.provider('comments'), 'legacy')
             with spaces.request_space('whatever'):
                 self.assertEqual(dm.provider('publish'), 'legacy')
                 self.assertIsNone(dm.provider('tokens'))
+                self.assertEqual(dm.provider('comments'), 'legacy')
         self.assertEqual(dm.provider('publish', dict(spaces.IMPLICIT)), 'legacy')   # явний простір: диск не потрібен
         self.assertIsNone(dm.provider('tokens', dict(spaces.IMPLICIT)))
+        self.assertEqual(dm.provider('comments', dict(spaces.IMPLICIT)), 'legacy')
 
     def test_a_broken_space_json_is_409_without_integrations_and_harmless_with_them(self):
         self.mk('static-publish')
@@ -1514,6 +1746,7 @@ class ProviderTest(Env):
         _write(self.space_json(ig), '{broken')
         self.assertEqual(dm.provider('publish', ig), 'legacy')   # шлях ЛІГА пошкодженим файлом не ламається
         self.assertIsNone(dm.provider('tokens', ig))
+        self.assertEqual(dm.provider('comments', ig), 'legacy')
 
     def test_integrations_space_without_an_enabled_module_never_touches_the_catalog(self):
         self.mk('pub-a')
@@ -1521,7 +1754,8 @@ class ProviderTest(Env):
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
             self.assertEqual(dm.provider('publish', ig), 'legacy')
             self.assertIsNone(dm.provider('tokens', ig))
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None})
+            self.assertEqual(dm.provider('comments', ig), 'legacy')
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
         dm.write_module_state(ig, 'pub-a', enabled=False)            # явне «вимкнено» — теж не модуль
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
             self.assertEqual(dm.provider('publish', ig), 'legacy')
@@ -1960,18 +2194,18 @@ class CapabilitiesTest(Env):
         self.mk('css-tokens', roles=('tokens',))
         plain = self.new_space('Plain')
         ig = self.new_space('Integ', integrations=True)
-        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None})
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None})
+        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
         dm.write_module_state(plain, 'css-tokens', enabled=True)
-        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': 'css-tokens'})
-        self.assertEqual(dm.capabilities(dict(spaces.IMPLICIT)), {'publish': 'legacy', 'tokens': None})
-        self.assertEqual(dm.capabilities(None), {'publish': None, 'tokens': None})
+        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': 'css-tokens', 'comments': None})
+        self.assertEqual(dm.capabilities(dict(spaces.IMPLICIT)), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
+        self.assertEqual(dm.capabilities(None), {'publish': None, 'tokens': None, 'comments': None})
 
     def test_no_modules_at_all(self):
         plain = self.new_space('Plain')
         ig = self.new_space('Integ', integrations=True)
-        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None})
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None})
+        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
 
     def counting(self):
         calls = []
@@ -2009,7 +2243,7 @@ class CapabilitiesTest(Env):
             _write(os.path.join(d, 'module.json'), man)
             _bump(os.path.join(d, 'module.json'))
             # неявний `static-publish` лишається ввімкненим, але вже з іншою роллю
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': 'static-publish'})
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': 'static-publish', 'comments': None})
             self.assertGreater(len(calls), n)
 
     def test_cache_follows_a_server_py_that_starts_to_fail(self):
@@ -2040,27 +2274,29 @@ class CapabilitiesTest(Env):
         sp = self.new_space()
         _write(self.space_json(sp), '{broken')
         self.assertEqual(dm.capabilities(sp),
-                         {'publish': None, 'tokens': None, 'error': 'space-json-unreadable'})
+                         {'publish': None, 'tokens': None, 'comments': None, 'error': 'space-json-unreadable'})
         _write(self.space_json(sp), json.dumps({'name': 'fixed'}))            # полагодили — помилка зникла
-        self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None})
+        self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None, 'comments': None})
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None})   # ЛІГА-шлях не ламається
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})   # ЛІГА-шлях не ламається
 
     def test_capabilities_is_total(self):
         sp = self.new_space()
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'error': 'bad-manifest'})
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'error': 'bad-manifest'})
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'error': 'bad-manifest'})
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy',
+                                                   'error': 'bad-manifest'})
         dm.reset_caches()
         with mock.patch.object(dm, '_provider_for', side_effect=RuntimeError('bug')):
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'error': 'module-error'})
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'error': 'module-error'})
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'error': 'module-error'})
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy',
+                                                   'error': 'module-error'})
         dm.reset_caches()
         with mock.patch.object(dm, '_catalog_sig', side_effect=OSError('disk')):
             self.assertEqual(dm.capabilities(sp)['error'], 'module-error')
-        self.assertEqual(dm.capabilities({'id': 'x'}), {'publish': None, 'tokens': None})   # чужа форма запису
+        self.assertEqual(dm.capabilities({'id': 'x'}), {'publish': None, 'tokens': None, 'comments': None})   # чужа форма запису
 
     def test_the_cache_key_is_taken_before_the_compute(self):
         """Файл змінився ПІСЛЯ того, як роль обчислено: у кеш іде ключ ДО обчислення, тож наступний виклик
@@ -2082,7 +2318,7 @@ class CapabilitiesTest(Env):
 
     def test_capabilities_is_total_for_non_dict_input(self):
         for bad in ('x', 5, ['a'], ('a',), True, object(), 3.5):
-            self.assertEqual(dm.capabilities(bad), {'publish': None, 'tokens': None}, repr(bad))
+            self.assertEqual(dm.capabilities(bad), {'publish': None, 'tokens': None, 'comments': None}, repr(bad))
 
     def test_the_cache_key_is_per_space_flag_space_json_and_every_module_file(self):
         d = self.mk('pub-a')
