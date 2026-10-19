@@ -2,8 +2,9 @@
 
 Status: agreed direction, 2026-10-09. Clickable prototype reviewed by the owner.
 Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to a
-folder, tokens from CSS, 0.2.0) and stage 2b-1 (publishing to your own Vercel, 0.3.0) — see
-*Status* at the end. Next: stage 2b-2 (your own Supabase for shared comments, 0.4.0).
+folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0) and
+stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0) — see *Status* at
+the end. Next: stage 3 (onboarding, the Connections screen, a space's own modules).
 
 ## Goal
 
@@ -35,7 +36,7 @@ canvas for their workflow without touching the core.
   | Role | Built-in modules |
   |---|---|
   | Mockup sync (`vcs`) | Git (GitHub, GitLab, any remote) |
-  | Team comments (`comments`) | Supabase (your own project), via CommentLayer |
+  | Team comments (`comments`) | Supabase (your own project), via CommentLayer; any other service through a module that follows `docs/modules/comments.md` |
   | Publish previews (`publish`) | Static folder (always available), Vercel |
   | Design-system tokens (`tokens`) | CSS custom properties file or npm package |
   | Issue tracker (`tracker`) | Jira, Linear |
@@ -69,7 +70,7 @@ canvas for their workflow without touching the core.
    into three parts:
    - ✅ **2a** (0.2.0) — the framework, `static-publish`, `css-tokens`;
    - ✅ **2b-1** (0.3.0) — your own Vercel (publish);
-   - **2b-2** (0.4.0) — your own Supabase (shared comments);
+   - ✅ **2b-2** (0.4.0) — the `comments` role and your own Supabase (team comments);
    - the in-house integrations (git sync, team dashboard, tracker, team chat notifications)
      follow later as that company's modules.
 3. Onboarding wizard + Connections screen, a space's own modules with the trust dialog.
@@ -137,11 +138,29 @@ Spec (with the list of deviations from its first revision):
   API; the first live run should confirm the alias timing after `READY`, the item shape of
   `GET /v6/deployments`, the team-by-slug check and the invalid-token error body.
 
+### Stage 2b-2 — the `comments` role and your own Supabase (0.4.0, 19.10.2026)
+
+Spec (with «Відхилення (стан на 0.4.0)»): `docs/superpowers/specs/2026-10-19-comments-role-design.md`.
+Guide for module authors: `docs/modules/comments.md`. What is built:
+
+- **The role `comments` is a contract that does not depend on the service**, in two halves: a
+  browser adapter (`window.DeaiComments.create(cfg)` → the comment layer's store, files listed in
+  the manifest field `client` and served at `GET /api/module-client/<id>/<file>`) and the server
+  functions `client_config`, `list`, `resolve`, `check`. The core builds the channel
+  (`deai/<space>/<task>`), checks `client_config` (only values of secrets marked `"public": true`
+  may appear in it) and puts the adapter into the canvas pages, the Overview, the published
+  previews of both publish modules and the agent's `inbox`. Without a module the space has no team
+  channel; a migrated legacy space keeps its shared service until a module is enabled in it, and
+  a broken module never falls back to that shared service.
+- **`supabase-comments`**: your own Supabase project (a schema you run once, a public key,
+  supabase-js 2.110.0 vendored, no CDN). Proof of universality: the test module `memo-comments`
+  (a tiny HTTP service) passes the same end-to-end checks, live included.
+- **Not verified against a real Supabase** (a faithful fake REST server in CI).
+
 ### What stays for later
 
-- **2b-2** (0.4.0): Supabase as a `comments` module (the user's own project), which also
-  brings the comment layer to the Vercel preview; the roles `comments`, `vcs`, `tracker`,
-  `dashboard`, `notify` are reserved names that the core does not call yet.
+- The roles `vcs`, `tracker`, `dashboard`, `notify` are reserved names that the core does not
+  call yet.
 - **Stage 3**: the Connections screen and onboarding wizard; a space's own modules from
   `<space>/modules/` with the trust dialog (hash of the whole folder, no symlinks, trust
   keyed on the real path). Until the Connections screen exists, secrets such as the preview

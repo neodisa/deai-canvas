@@ -3,6 +3,138 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.4.0] — 19.10.2026
+
+Stage 2b-2 «Team comments as a module»: the role `comments` becomes a contract that does not
+depend on the service — a browser adapter plus four server functions — and the first module on
+it connects the person's own Supabase project. Design and the list of deviations from the
+original spec: `docs/superpowers/specs/2026-10-19-comments-role-design.md`. How to write a
+module for another service: `docs/modules/comments.md`.
+
+### Added
+
+- **The `comments` role** (`app/deai_modules.py`, `app/serve.py`). A module has two halves.
+  The *browser adapter*: the files listed in the new manifest field `client` (1–8 plain `.js`
+  files, up to 512 KiB each, loaded in order); the last one registers
+  `window.DeaiComments.create(cfg)`, which returns the comment layer's store (`load` and `save`;
+  optionally `ready`, `remove`, `subscribe`, `close`). The *server half*: `client_config`,
+  `list`, `resolve`, `check`. The core builds the channel of a task (`deai/<space>/<task>`,
+  `…/internal`) and gives it to both halves; `capabilities` gains `comments`.
+- **`public` secrets.** A `secret` setting may be marked `"public": true`: the value stays out
+  of `space.json` like any secret, but may reach pages. The core checks `client_config` (a flat
+  object of up to 4 KiB; no value of a non-public secret in a key or a value) before it goes
+  anywhere.
+- **Adapter route** `GET /api/module-client/<id>/<file>`: built-in modules of the role, only the
+  files their manifest lists, `text/javascript`, `nosniff`, ETag/304, opened by walking
+  directory descriptors (no symlinks, no hard links); every refusal is the same 404.
+- **Module comments wherever the layer runs.** On the canvas page (`/commented?ch=project`) and
+  the «Team» tab — now also in a space without integrations, as soon as a module provides the
+  role. On the Overview (the adapter loads into the shell; the hard-coded CDN is not used). In
+  the published previews of both publish modules, folder and Vercel (`comment-layer/` holds the
+  layer and the adapter files, relative paths, the task's channel) — the Vercel preview finally
+  has comments. For the agent: `bin/inbox.py`, `bin/state.py` and the `/comments` route read
+  and close project pins through the module's `list` and `resolve`. `resolve` must be idempotent
+  and effective (afterwards `list` shows the comment as resolved).
+- **`supabase-comments`** (role `comments`). Your own Supabase project as the team-comments
+  service. Settings: `url` (`https://<ref>.supabase.co`) and `key` (the public key, a secret that
+  is allowed into pages). `supabase.min.js` is supabase-js 2.110.0 (MIT), vendored unchanged
+  with its licence, so there is no CDN. `schema.sql` (table, row-level security, guard triggers,
+  realtime) is run once by the person; the module never changes the schema. `server.py` is a
+  standard-library REST client: `list`, `resolve`, and `check` with the verdicts `bad-key`,
+  `no-schema`, `network` (and `supabase-error`). Off by default; the README of the module has the four steps.
+- **Guide for module authors** `docs/modules/comments.md`: both halves, the comment shape, the
+  channel, `client`, `public`, CORS (including `Origin: null`), security notes, how to test, a
+  complete minimal example. The reference is the test module
+  `tests/fixtures/modules/memo-comments/` (a tiny HTTP service): it passes the same end-to-end
+  checks as Supabase, which is the proof that the role does not depend on the service.
+  `DEAI_EXTRA_MODULES=<dir>` — a second folder of modules that act as built-in — is a test seam
+  only (the server prints one line about it at start).
+- **Live tests** `tests/live/comments.test.mjs`: a real server in an isolated machine, a real
+  Chromium and a tiny comment service on `127.0.0.1` — the pin on the canvas page and the «Team»
+  tab, on the Overview and in the published preview (the sandbox with `Origin: null`, with a
+  negative control without CORS); a pin created in the UI arriving in the service and in a second
+  window; the ЛІГА space unchanged.
+
+### Security and privacy
+
+- **No silent fallback to the shared in-house comments service.** In a space with integrations
+  the hard-wired channel is a Supabase project shared by the whole company, where pins carry
+  snapshots of private mockups. When a module the person enabled is missing or broken, or
+  `space.json` cannot be read, `provider('comments')` raises instead of answering `'legacy'`:
+  the canvas page shows local comments with a notice, the Overview and `inbox` report the
+  error, a publish goes on without comments and says `comments_unavailable`.
+- `client_config` guard: no value of a non-public secret may appear in a key or a value, in raw,
+  escaped or URL-encoded form; lone surrogates and huge integers are refused; the object is
+  copied before it is checked, and the copy is what pages get. It stops accidents; it is not a
+  trust boundary.
+- **Agent output is sanitised.** Texts of module errors and module comments lose control and
+  invisible characters (ESC and the other C0/C1 codes, zero-width and bidirectional marks,
+  variation selectors, tag characters, surrogates), one-line fields lose line breaks, errors are
+  cut to 300 characters, `meta.shot` is dropped. A comment id must match
+  `[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}` (the layer produces UUIDs or `c-<digits>-<base36>`): any
+  other is skipped, and `resolve` never passes the module another one. At most 5000 comments
+  and 2 MiB per `list`; the number of skipped and cut items is reported.
+- The adapter is served from an opened file descriptor (no symlinks, no hard links), only the
+  files the manifest lists, and its names are compared with the core bundles without regard to
+  letter case (a file named `Comment-Layer.min.js` would overwrite the layer on macOS).
+- The local `/published` sandbox gets `allow-modals` (without it `prompt()` and `confirm()` of the
+  comment layer return `null` and `false`: every author is «Anonymous» and «Delete» does
+  nothing); `allow-same-origin` is still absent.
+
+### Changed
+
+- The `manifest.json` of a preview gains one field, `"build"`: `"legacy"` for the in-house build,
+  `"module"` for a publish module. Everything else of the ЛІГА build is byte for byte the same;
+  `ops/reseal_gate.py` now re-seals exactly the `legacy` builds (old builds without the field
+  fall back to the previous rule).
+- A space with integrations whose `space.json` cannot be read now publishes the ЛІГА way
+  without shared comments and says `comments_unavailable` (before: with the shared Supabase).
+- A publish module (`static-publish`, `vercel-publish`) in a space whose comments are the
+  in-house shared channel (`'legacy'`) publishes without comments, as in 0.3.0.
+- The «Team» tab, the comment mode `project` and the palette follow `capabilities.comments`
+  instead of `integrations`; a response without the key (an older server) falls back to
+  `integrations`.
+- `bin/import_preview.py` knows the comment snippet of a module (with and without the gate).
+
+### Known limits
+
+- The rules in `schema.sql` are open: whoever has the public key — and it is inside every page
+  you publish — reads and writes the comments of that project, other channels included. Use a
+  dedicated Supabase project per team.
+- The adapter's JavaScript runs on the canvas origin, with the power of the canvas page. So only
+  built-in modules load; a space's own modules come with the trust dialog in stage 3.
+- **Not run against a real Supabase in CI.** `supabase-comments` is tested against an in-process
+  fake REST server and a fake supabase-js; a first real run should confirm the realtime
+  delivery, the `no-schema` verdict on a fresh project and the effect of
+  `Prefer: return=representation` on `resolve`.
+- Screenshots of pins are not supported by the role (it has no file storage): the one the layer
+  adds travels inside the comment (`meta.shot`) and the agent side drops it. The layer loads
+  `html2canvas` from jsDelivr when a pin is created (as before modules).
+- The core gives `check` and `client_config` 5 seconds and `list` and `resolve` 10;
+  `supabase-comments` allows 10 seconds per request, so on a slow link enabling it can answer
+  `check-timeout` while the module works.
+- The local `/published` view runs in a sandbox with the opaque origin `null`: the comment
+  service has to allow CORS for it (`Access-Control-Allow-Origin: *`; Supabase does).
+- Four catalog-listing tests (`test_modules`, `test_modules_api`) assume the catalog holds only
+  the built-in modules and fail when `DEAI_EXTRA_MODULES` is exported for the whole Python run;
+  set it per command.
+- Module management has no UI yet (stage 3): enable and configure modules over the API.
+
+### Tests
+
+`npm test` at 0.4.0 is green: 1321 node tests (plus `inspector-core`), 2308 Python tests in
+`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.3.0: 1258, 1938, 156, 170). Of them,
+`supabase-comments` has 77 Python tests (a fake REST server under a network tripwire, end to end
+through the core: the page, the Overview, the adapter route, `inbox`) and 18 node tests (the
+adapter against a fake supabase-js); the generic role is covered on the `memo-comments` fixture.
+The fixes of the per-task reviews carry their mutation proofs in the commit messages. Live: the new
+`tests/live/comments.test.mjs` (7 tests) passes together with `modules.test.mjs`,
+`vercel.test.mjs`, `spaces.test.mjs`, `comment-audience.test.mjs` and
+`overview-comments.test.mjs` — 52 tests in total. Mutation runs confirmed that each scenario
+guards its rule (a refusing adapter route turns the canvas, Overview and UI-creation scenarios
+red; a core without module comments in builds turns the preview scenario red; losing `'legacy'`
+turns the ЛІГА scenario red).
+
 ## [0.3.0] — 16.10.2026
 
 Stage 2b-1 «Your own Vercel»: a built-in module publishes the task's preview to the

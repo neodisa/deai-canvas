@@ -6,12 +6,13 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.3.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.4.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
-> a folder or to your own Vercel account and design-system tokens from a CSS file work in
-> any space. A few integrations (team dashboard, git sync, shared comments) are still wired
-> for the original setup and only run in a migrated legacy space; they are being turned into
-> optional per-space modules with a first-run onboarding. See *Roadmap*.
+> a folder or to your own Vercel account, design-system tokens from a CSS file, and team
+> comments on your own Supabase (or any service, through a small module) work in any space.
+> A few integrations (team dashboard, git sync) are still wired for the original setup and
+> only run in a migrated legacy space; they are being turned into optional per-space modules
+> with a first-run onboarding. See *Roadmap*.
 
 ## What it does
 
@@ -22,7 +23,7 @@ links for your team.
 | **Overview** | All pages of an iteration as a zoomable grid of full-page snapshots (Playwright), re-shot incrementally when a page changes. Desktop / tablet / mobile widths. |
 | **Flow** | Arrange screens as a user flow with arrows (`flow.json`). |
 | **Inspector & tuner** | DevTools-style overlay: spacing, typography, colours, a ruler, and — if you connect your design tokens (a CSS file, see *Modules*) — whether each value is on-system. The tuner turns tweaks into a change request for the agent. |
-| **Comments** | Pin comments on any element (via [CommentLayer](https://github.com/neodisa/CommentLayer)); a local channel for the agent, an optional shared channel for the team. |
+| **Comments** | Pin comments on any element (via [CommentLayer](https://github.com/neodisa/CommentLayer)); a local channel for the agent, an optional team channel on your own service — Supabase or anything else — through a `comments` module (canvas, Overview, published previews, the agent's `inbox`). See *Comments*. |
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters. |
@@ -54,7 +55,7 @@ suites (`tests/`, `bin/`, `app/`) are verified on Python 3.9.6, the oldest suppo
 
 A **module** is a folder `app/modules/<id>/` with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
-calls: `publish` and `tokens` today; `comments`, `vcs`, `tracker`, `dashboard`, `notify`
+calls: `publish`, `tokens` and `comments` today; `vcs`, `tracker`, `dashboard`, `notify`
 are reserved. One provider per role per space. Only built-in modules exist so far; a
 space's own modules and a UI for connecting them come with stage 3, so for now you manage
 modules over the HTTP API (the agent can do it for you).
@@ -72,6 +73,7 @@ those folders out of public commits.
 | `static-publish` | `publish` | Builds the preview and publishes it to a folder, by default `~/deai-published/<space-id>/<task>/` — outside the space. On by default in a space without integrations. Optional `password` secret adds a client-side gate. |
 | `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account** through the REST API (no Node, no CLI): one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Settings: `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
+| `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages). Off by default. See *Comments*. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
 result is a plain static site in the folder (host it anywhere; the task id must be
@@ -135,7 +137,8 @@ no CLI, no Node on the machine.
   (Project → Settings → Deployment Protection → Vercel Authentication). The module cannot
   and does not change that; if the check fails the notice says so. Turn it off for these
   projects (or the team) if colleagues should open the link.
-- The comment layer is not on this preview yet (shared comments arrive in 0.4).
+- With a `comments` module enabled in the space, the preview carries the comment layer and
+  talks to that module's service (see *Comments*); without one it has no comments.
 
 **Tokens from CSS.** A token is a `--name: value` declaration in a `:root`, `html` or
 `[data-*theme*]` rule (Bootstrap `[data-bs-theme=dark]` too) or directly in Tailwind v4
@@ -152,6 +155,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
+| `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists, built-in modules only) |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
@@ -177,11 +181,55 @@ Design and deviations from the spec: `docs/superpowers/specs/2026-10-14-modules-
 (Vercel).
 Direction: `docs/design/spaces-and-modules.md`. Release notes: `CHANGELOG.md`.
 
+## Comments
+
+Comments have two channels. The **local** one is for the agent: pins you leave for it, kept in
+`<task>/.dc-local-comments.json` and read with `bin/inbox.py`. The **team** channel is the
+`comments` *role*: a module connects a comment service, and the same pins then appear on the
+canvas pages (the «Team» tab), on the Overview, in published previews (folder and Vercel) and
+for the agent (`inbox`, `inbox resolve`). A space without a `comments` module has no team
+channel; enabling one adds it. A migrated legacy (in-house) space keeps its original shared
+service until you enable a module there. If an enabled module is broken, a canvas page shows
+local comments with a notice and the Overview and `inbox` report the error — nothing falls
+back silently to the shared service.
+
+**Your own Supabase** (`supabase-comments`), in four steps — the check codes and the security
+notes are in [the module README](app/modules/supabase-comments/README.md):
+
+1. Create a Supabase project — **a dedicated one per team**.
+2. Run [`app/modules/supabase-comments/schema.sql`](app/modules/supabase-comments/schema.sql)
+   in its SQL editor, once (the module never changes your schema).
+3. Take the project URL (`https://<ref>.supabase.co`) and the **public** key (`anon` or
+   `publishable`) from Project Settings → API — never the `service_role` / `secret` key.
+4. Enable the module over the API:
+
+   ```bash
+   curl -s localhost:8765/api/module-enable -H 'Content-Type: application/json' \
+     -d '{"space":"<id>","id":"supabase-comments","settings":{"url":"https://<ref>.supabase.co"},"secrets":{"key":"<public key>"}}'
+   ```
+
+   The answer carries the verdict of `check`: `bad-key`, `no-schema` (run step 2), `network`.
+
+**Your own service.** Any comment service — PocketBase, Firebase, your own API — connects with
+a small module: a browser adapter (`window.DeaiComments.create(cfg)`) and four server
+functions (`client_config`, `list`, `resolve`, `check`). The channel of a task
+(`deai/<space>/<task>`) is given by the core. The guide, with a complete example, is
+[`docs/modules/comments.md`](docs/modules/comments.md). A space's own modules load only after
+the trust dialog of stage 3, so for now the module has to be built in (`app/modules/`).
+
+**Limits.** The rules in `schema.sql` are open: whoever has the public key — and it is inside
+every page you publish — reads and writes the comments of that project, so use a dedicated
+project. The adapter's JavaScript runs on the canvas origin, which is why only built-in modules
+load for now. The service has to allow CORS for the opaque origin `null` too (the local
+`/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
+not a real project. Screenshots of pins are not part of the role (the role has no file storage).
+
 ## Layout
 
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
-app/modules/  built-in modules (static-publish, vercel-publish, css-tokens); the core is app/deai_modules.py
+app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments); the core is app/deai_modules.py
+docs/         design notes and the guide for module authors (docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
 flows/demo    example flow
@@ -194,10 +242,12 @@ tests/        unit, Python and live (Playwright) tests
 2. **Modules**
    - ✅ **2a** (0.2) — module framework, publishing to a folder, design-system tokens from CSS.
    - ✅ **2b-1** (0.3) — your own Vercel (publish) as a module.
-   - **2b-2** (0.4) — your own Supabase (shared comments) as a module.
+   - ✅ **2b-2** (0.4) — the universal `comments` role (browser adapter + server functions) and
+     your own Supabase (team comments) as the first module; a guide for writing your own.
    - Later — git sync, team dashboard, issue tracker, notifications: modules you connect per project.
-3. **Onboarding** — a first-run flow that sets up a project and connects modules from the UI;
-   a Connections screen; a space's own modules, loaded only after you trust them.
+3. **Onboarding** (next) — a first-run flow that sets up a project and connects modules from the UI;
+   a Connections screen; a space's own modules (comments modules for your own service
+   included), loaded only after you trust them.
 4. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 5. **Cross-platform start** — one command on macOS, Windows and Linux.
 
