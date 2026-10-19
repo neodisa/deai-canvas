@@ -1123,16 +1123,19 @@ class Dispatch(DispatchWorld):
         self.assertNotIn('publish_local', self.meta())
 
     def test_a_broken_space_json_with_integrations_still_publishes_the_league_way(self):
-        """Простір з інтеграціями не потребує `space.json` для вибору шляху: `provider` ковтає
-        `space-json-unreadable` і віддає `'legacy'` — ЛІГА-публікація (з коментатором) працює."""
+        """Простір з інтеграціями не потребує `space.json` для вибору ШЛЯХУ: `provider('publish')` ковтає
+        `space-json-unreadable` і віддає `'legacy'` — ЛІГА-публікація (збірка в `publish/`, далі деплой) працює.
+        2b-2: а от КОМЕНТАРІ — ні: не знаючи, чи людина вмикала там власний модуль коментарів, збірка не переходить
+        на спільний Supabase ЛІГА (піни несли б знімки приватних макетів), а лишається без коментарів узагалі, і
+        відповідь каже чому (`comments_unavailable`). До 2b-2 тут стояла збірка з бандлами ЛІГА."""
         with open(os.path.join(self.on_path, 'space.json'), 'w', encoding='utf-8') as fh:
             fh.write('{ це не json')
         self.assertEqual(dm.provider('publish', self.on), 'legacy')
         st, body = self.post('/api/publish', {'build_only': True}, {'X-Canvas-Task': 'ty'})
         self.assertEqual(st, 200, body)
         self.assertEqual(body['dir'], os.path.join(self.ty_dir, 'publish'))
-        self.assertTrue(os.path.isdir(os.path.join(body['dir'], 'comment-layer')), 'це мав бути шлях ЛІГА')
-        self.assertTrue(os.path.isfile(os.path.join(body['dir'], 'comment-layer', serve.BUNDLES[0])))
+        self.assertEqual(body['comments_unavailable'], 'space-json-unreadable')
+        self.assertFalse(os.path.exists(os.path.join(body['dir'], 'comment-layer')), 'спільний Supabase не їде')
 
     # ---- простір ЛІГА, неявний і зафіксований шляхи ----
 
@@ -2659,6 +2662,25 @@ class ResealModuleBuilds(TaskFixture):
                     self.assertEqual(deployed, [], 'збірку модуля відправлено на Vercel')
                     self.assertEqual(_bytes(self._wrapper()), before, 'обгортку модуля перезаписано')
 
+    def test_a_module_build_with_module_comments_is_skipped_too(self):
+        """2b-2: збірка модуля, що несе коментарі МОДУЛЯ, теж має `publish/comment-layer/` — тож саме наявності теки мало:
+        ЛІГА-збірка — це та, де є ОБИДВА бандли ЛІГА (`serve.BUNDLES`); збірка з коментарями модуля їх не має."""
+        prov, _mods = _memo_provider(self)
+        for gate_pw in (None, 'pw-модуля'):
+            for args in (('fixture',), ('--build', 'fixture'), ()):
+                with self.subTest(gate_pw=gate_pw, args=args):
+                    task, tid, its = self._args()
+                    comments = {'module': prov, 'config': {'endpoint': ENDPOINT}, 'channel': 'deai/s/fixture'}
+                    serve.build_preview(task, tid, its, comments=comments, gate_pw=gate_pw)
+                    self.assertTrue(os.path.isdir(os.path.join(self.tmp, 'publish', 'comment-layer')), 'контроль')
+                    before = _bytes(self._wrapper())
+                    out, deployed = self._reseal(*args)
+                    self.assertIn('локальна збірка модуля', out)
+                    self.assertNotIn('передеплоєно', out)
+                    self.assertNotIn('перезібрано', out)
+                    self.assertEqual(deployed, [], 'збірку з коментарями модуля відправлено на Vercel ЛІГА')
+                    self.assertEqual(_bytes(self._wrapper()), before, 'обгортку модуля перезаписано')
+
     def test_the_decision_is_made_from_the_artifact_not_from_iterations_json(self):
         """`publish_local` у `iterations.json` нічого не міняє: збірка ЛІГА з ним усе одно деплоїться, а збірка
         модуля БЕЗ нього (метадані втрачено) усе одно пропускається."""
@@ -3583,6 +3605,754 @@ class UrlTarget(DispatchWorld):
         self.publish()
         self.get('/api/task')
         self.assert_quiet()
+
+
+# ============================================================================ 2b-2, Task 3: превʼю з коментарями модуля
+
+MEMO_ID = 'memo-comments'
+MEMO_SRC = os.path.join(ROOT, 'tests', 'fixtures', 'modules', MEMO_ID)
+LAYER_SRC = os.path.join(ROOT, 'app', 'vendor', 'comment-layer.min.js')
+#: Непублічний секрет (`token`: лише сервер модуля) і публічний (`pubkey`: може потрапити в сторінки).
+TOKEN, PUBKEY = 'tok-SECRET-93', 'pk-OPEN-93'
+ENDPOINT = 'http://127.0.0.1:4777'
+
+
+def _copy_module(src, mods, mid=None):
+    dest = os.path.join(mods, mid or os.path.basename(src))
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns('__pycache__'))
+    return dest
+
+
+def _memo_provider(case):
+    """`(Module memo-comments, тека вбудованих модулів)` у світі, де `dm.builtin_dir` указує на тимчасову теку з
+    фікстурою (`TaskFixture`: шар просторів вимкнено, тож каталог — єдине, що потрібне Module)."""
+    mods = tempfile.mkdtemp(prefix='dc-bp-mods-')
+    case.addCleanup(shutil.rmtree, mods, True)
+    _copy_module(MEMO_SRC, mods)
+    patch = mock.patch.object(dm, 'builtin_dir', lambda: mods)
+    patch.start()
+    case.addCleanup(patch.stop)
+    dm.reset_caches()
+    case.addCleanup(dm.reset_caches)
+    prov = dm.catalog()[MEMO_ID]
+    case.assertEqual(prov.status, 'ok', prov.error)
+    return prov, mods
+
+
+def _files(root, skip_top=('shell',)):
+    """{відносний шлях: байти} усього дерева (без `shell/`: це наші ж модулі оболонки)."""
+    out = {}
+    for dirpath, dirs, files in os.walk(root):
+        if os.path.relpath(dirpath, root).split(os.sep)[0] in skip_top:
+            dirs[:] = []
+            continue
+        for fn in files:
+            p = os.path.join(dirpath, fn)
+            out[os.path.relpath(p, root)] = _bytes(p)
+    return out
+
+
+def _page_cfg(html):
+    """Конфіг сторінки: `window.__deaiCommentsCfg = <літерал>;` → dict (літерал — валідний JSON)."""
+    m = re.search(r'window\.__deaiCommentsCfg = (\{.*?\});\n', html)
+    assert m, 'у сторінці нема window.__deaiCommentsCfg'
+    return json.loads(m.group(1))
+
+
+class CommentsBuild(TaskFixture):
+    """`build_preview(comments={'module': Module, 'config': {…}, 'channel': '…'})` напряму: що кладе збірка в `publish/`."""
+
+    def setUp(self):
+        super().setUp()
+        self.prov, self.mods = _memo_provider(self)
+        self.channel = 'deai/s1/fixture'
+
+    def comments(self, **over):
+        return {'module': self.prov, 'config': {'endpoint': ENDPOINT, 'pubkey': PUBKEY}, 'channel': self.channel, **over}
+
+    def pages(self, pub):
+        man = json.loads(_read(os.path.join(pub, 'manifest.json')))
+        return [p['path'] for p in man['pages']]
+
+    def test_the_build_has_exactly_the_layer_and_the_declared_adapter_files(self):
+        pub = self._build(comments=self.comments(), gate_pw=None)['dir']
+        vend = os.path.join(pub, 'comment-layer')
+        self.assertEqual(sorted(os.listdir(vend)), ['adapter.js', 'comment-layer.min.js'])
+        self.assertEqual(_bytes(os.path.join(vend, 'comment-layer.min.js')), _bytes(LAYER_SRC))
+        self.assertEqual(_bytes(os.path.join(vend, 'adapter.js')), _bytes(os.path.join(MEMO_SRC, 'adapter.js')))
+        self.assertFalse(os.path.exists(os.path.join(vend, 'supabase-adapter.min.js')))
+        for dirpath, dirs, _files_ in os.walk(pub):
+            self.assertNotIn('comment-layer', [d for d in dirs if dirpath != pub], dirpath)    # одна тека, у корені збірки
+
+    def test_a_module_with_several_client_files_ships_each_in_the_manifest_order(self):
+        d = _copy_module(MEMO_SRC, self.mods, 'twin-comments')
+        man = json.loads(_read(os.path.join(d, 'module.json')))
+        man.update(id='twin-comments', client=['lib.js', 'adapter.js'])
+        _write_json(os.path.join(d, 'module.json'), man)
+        with open(os.path.join(d, 'lib.js'), 'w', encoding='utf-8') as fh:
+            fh.write('window.__lib = 1;\n')
+        twin = dm.catalog()['twin-comments']
+        self.assertEqual((twin.status, twin.client), ('ok', ('lib.js', 'adapter.js')), twin.error)
+        pub = self._build(comments=self.comments(module=twin), gate_pw=None)['dir']
+        self.assertEqual(sorted(os.listdir(os.path.join(pub, 'comment-layer'))),
+                         ['adapter.js', 'comment-layer.min.js', 'lib.js'])
+        html = _read(os.path.join(pub, 'it2', 'index.html'))
+        at = [html.index(f'<script src="../comment-layer/{n}"') for n in ('lib.js', 'adapter.js')]
+        self.assertEqual(at, sorted(at))
+        self.assertLess(at[1], html.index('window.__deaiCommentsCfg'))
+
+    def test_every_page_loads_the_layer_and_the_adapter_by_paths_relative_to_its_own_depth(self):
+        pub = self._build(comments=self.comments(), gate_pw=None)['dir']
+        pages = self.pages(pub)
+        self.assertEqual(sorted(pages), sorted(SOURCE_PAGES))
+        self.assertEqual(sorted({p.count('/') for p in pages}), [1, 2], 'фікстура мусить мати сторінки різної глибини')
+        for rel in pages:
+            html = _read(os.path.join(pub, rel))
+            up = '../' * rel.count('/')               # `it1/alpha/index.html` → `../../`, `it2/index.html` → `../`
+            with self.subTest(rel=rel):
+                at = [html.index(s) for s in (
+                    f'<script src="{up}comment-layer/comment-layer.min.js"',
+                    f'<script src="{up}comment-layer/adapter.js"',
+                    'window.__deaiCommentsCfg = ',
+                    'window.DeaiComments.create(')]
+                self.assertEqual(at, sorted(at), 'порядок: шар → адаптер → конфіг → завантажувач')
+                # жодної адреси, що залежала б від хоста канваса чи іншої глибини
+                for src in re.findall(r'<script src="([^"]*)"', html):
+                    self.assertRegex(src, r'^(\.\./)+comment-layer/[a-z.-]+\.js$', src)
+                self.assertNotIn('/app/vendor', html)
+                self.assertNotIn('/api/module-client/', html)
+                # у публікації нема ні інспектора, ні вкладок аудиторій, ні простору в URL, ні CDN Supabase
+                for gone in ('inspector', 'audiences', 'onAudience', 'sp=', 'ds-tokens', 'supabase', 'jsdelivr', 'dc/fixture'):
+                    self.assertNotIn(gone, html.lower() if gone == 'supabase' else html, gone)
+
+    def test_the_page_config_is_the_public_config_plus_the_core_channel_and_the_version(self):
+        pub = self._build(comments=self.comments(), gate_pw=None)['dir']
+        for rel in self.pages(pub):
+            html = _read(os.path.join(pub, rel))
+            self.assertEqual(_page_cfg(html), {'endpoint': ENDPOINT, 'pubkey': PUBKEY, 'channel': self.channel}, rel)
+        html = _read(os.path.join(pub, 'it1', 'alpha', 'index.html'))
+        self.assertIn(f'version: "{serve.pm.page_version_tag("it1", {"id": "alpha"})}"', html)
+
+    def test_the_core_channel_wins_over_a_channel_key_in_the_config(self):
+        cm = self.comments(config={'endpoint': ENDPOINT, 'channel': 'evil/channel', 'onChange': 'x'})
+        pub = self._build(comments=cm, gate_pw=None)['dir']
+        self.assertEqual(_page_cfg(_read(os.path.join(pub, 'it2', 'index.html')))['channel'], self.channel)
+
+    def test_a_hostile_config_value_cannot_break_out_of_the_script(self):
+        hostile = '</script><script>alert(1)</script> &"\'\\'
+        pub = self._build(comments=self.comments(config={'endpoint': hostile}), gate_pw=None)['dir']
+        html = _read(os.path.join(pub, 'it2', 'index.html'))
+        self.assertNotIn('</script><script>alert(1)', html)
+        self.assertNotIn(' ', html)
+        self.assertEqual(_page_cfg(html)['endpoint'], hostile)
+
+    def test_the_gate_still_covers_every_page_of_a_module_build(self):
+        pub = self._build(comments=self.comments(), gate_pw='x')['dir']
+        for rel in self.pages(pub):
+            html = _read(os.path.join(pub, rel))
+            self.assertIn('id="authgate"', html, rel)
+            self.assertIn('window.__deaiCommentsCfg', html, rel)
+        self.assertEqual(serve.preview_gate_state(self._args()[0], 'x')['state'], 'current')
+
+    def test_the_two_kinds_of_snippet_never_borrow_from_each_other(self):
+        """Збірка модуля не кличе шаблон ЛІГА, збірка ЛІГА — шаблон модуля."""
+        with mock.patch.object(serve, 'inject_comment_layer', side_effect=AssertionError('шаблон ЛІГА')):
+            self._build(comments=self.comments(), gate_pw=None)
+        with mock.patch.object(serve, 'inject_module_comment_layer', side_effect=AssertionError('шаблон модуля')):
+            pub = self._build(comments=True, gate_pw=None)['dir']
+        self.assertEqual(sorted(os.listdir(os.path.join(pub, 'comment-layer'))), sorted(serve.BUNDLES))
+        self.assertIn('CommentLayer.init', _read(os.path.join(pub, 'it2', 'index.html')))
+
+    def test_anything_but_true_false_or_a_complete_module_dict_raises_before_touching_the_disk(self):
+        pub = os.path.join(self.tmp, 'publish')
+        os.makedirs(pub)
+        keep = os.path.join(pub, 'keep.txt')
+        with open(keep, 'w', encoding='utf-8') as fh:
+            fh.write('попередня збірка')
+        task, tid, its = self._args()
+        bad = _copy_module(MEMO_SRC, self.mods, 'bad-comments')           # не завантажений модуль: `status` не `ok`
+        os.remove(os.path.join(bad, 'adapter.js'))
+        man = json.loads(_read(os.path.join(bad, 'module.json')))
+        man['id'] = 'bad-comments'
+        _write_json(os.path.join(bad, 'module.json'), man)
+        broken = dm.catalog()['bad-comments']
+        self.assertEqual(broken.status, 'error')
+        cases = {
+            "'legacy' (значення постачальника, а не рішення збірки)": 'legacy', 'None': None, '1': 1, '0': 0,
+            'порожній словник': {},
+            'без channel': {'module': self.prov, 'config': {}},
+            'без config': {'module': self.prov, 'channel': self.channel},
+            'зайвий ключ': {**self.comments(), 'files': []},
+            'module — рядок': self.comments(module=MEMO_ID),
+            'module — не `ok`': self.comments(module=broken),
+            'config — список': self.comments(config=[]),
+            'порожній channel': self.comments(channel=''),
+            'channel — не рядок': self.comments(channel=7),
+        }
+        for what, comments in cases.items():
+            with self.subTest(what):
+                with self.assertRaises(ValueError):
+                    serve.build_preview(task, tid, its, comments=comments, gate_pw=None)
+                self.assertEqual(os.listdir(pub), ['keep.txt'])
+                self.assertEqual(_read(keep), 'попередня збірка')
+
+    def test_a_module_without_the_comments_role_is_refused(self):
+        _copy_module(os.path.join(ROOT, 'app', 'modules', 'css-tokens'), self.mods)
+        tokens = dm.catalog()['css-tokens']
+        self.assertEqual(tokens.status, 'ok', tokens.error)
+        with self.assertRaises(ValueError):
+            self._build(comments=self.comments(module=tokens), gate_pw=None)
+
+    def test_a_symlinked_adapter_file_refuses_the_build_before_the_previous_one_is_wiped(self):
+        outside = os.path.join(self.cfgdir, 'outside.js')
+        with open(outside, 'w', encoding='utf-8') as fh:
+            fh.write('window.OUTSIDE = 1;')
+        first = _tree(self._build(comments=self.comments(), gate_pw=None)['dir'])
+        adapter = os.path.join(self.mods, MEMO_ID, 'adapter.js')
+        os.remove(adapter)
+        os.symlink(outside, adapter)                  # Module вже в памʼяті (з каталогу ДО підміни): це вікно між рішенням і збіркою
+        with self.assertRaises(dm.ModuleError) as cm:
+            self._build(comments=self.comments(), gate_pw=None)
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertIn('adapter.js', cm.exception.message)
+        self.assertEqual(_tree(os.path.join(self.tmp, 'publish')), first, 'попередню збірку не чіпано')
+        self.assertNotIn(b'OUTSIDE', b''.join(_files(os.path.join(self.tmp, 'publish')).values()))
+
+    def test_a_hard_linked_or_vanished_adapter_file_refuses_the_build_too(self):
+        adapter = os.path.join(self.mods, MEMO_ID, 'adapter.js')
+        link = os.path.join(self.cfgdir, 'hard.js')
+        os.link(adapter, link)                        # жорстке посилання: `st_nlink` 2 — файл «ще чийсь»
+        with self.assertRaises(dm.ModuleError):
+            self._build(comments=self.comments(), gate_pw=None)
+        os.remove(link)
+        os.remove(adapter)
+        with self.assertRaises(dm.ModuleError):
+            self._build(comments=self.comments(), gate_pw=None)
+
+    def test_an_adapter_file_that_grew_past_the_limit_after_loading_refuses_the_build(self):
+        with open(os.path.join(self.mods, MEMO_ID, 'adapter.js'), 'a', encoding='utf-8') as fh:
+            fh.write('/*' + 'x' * dm.MAX_CLIENT_BYTES + '*/')
+        with self.assertRaises(dm.ModuleError) as cm:
+            self._build(comments=self.comments(), gate_pw=None)
+        self.assertIn(str(dm.MAX_CLIENT_BYTES), cm.exception.message)
+
+    def test_an_adapter_file_named_like_a_core_bundle_is_refused_before_anything_is_written(self):
+        for core in serve.BUNDLES:
+            with self.subTest(core=core):
+                mid = 'clash-' + core.split('.')[0]
+                d = _copy_module(MEMO_SRC, self.mods, mid)
+                man = json.loads(_read(os.path.join(d, 'module.json')))
+                man.update(id=mid, client=[core])
+                _write_json(os.path.join(d, 'module.json'), man)
+                os.rename(os.path.join(d, 'adapter.js'), os.path.join(d, core))
+                clash = dm.catalog()[mid]
+                self.assertEqual(clash.status, 'ok', clash.error)
+                pub = os.path.join(self.tmp, 'publish')
+                with self.assertRaises(dm.ModuleError):
+                    self._build(comments=self.comments(module=clash), gate_pw=None)
+                self.assertFalse(os.path.exists(pub), 'збірка почалась, хоч файл адаптера підмінив би шар')
+
+
+class PublishCommentsDecision(TaskFixture):
+    """`serve.publish_comments` як таблиця: (постачальник ролі `comments`) × (шлях ЛІГА чи модуль публікації)."""
+
+    SPACE = {'id': 's1', 'path': '/nowhere', 'legacy': False, 'integrations': True}
+
+    def setUp(self):
+        super().setUp()
+        self.prov, _mods = _memo_provider(self)
+
+    def decide(self, prov, *, module_publish, tid='t1', err=None, config=None, config_error=None):
+        asked = []
+        provider = mock.patch.object(serve, 'comments_provider',
+                                     lambda space: (asked.append(space), (prov, err))[1])
+        client = mock.patch.object(dm, 'comments_client', mock.Mock(
+            side_effect=config_error, return_value=config if config is not None else {'endpoint': ENDPOINT}))
+        with provider, client as cc:
+            out = serve.publish_comments(self.SPACE, tid, module_publish=module_publish)
+        self.assertEqual(asked, [self.SPACE], 'простір передається провайдеру як є, один раз')
+        return out, cc
+
+    def test_the_league_comments_are_the_league_snippet_only_on_the_league_path(self):
+        self.assertEqual(self.decide('legacy', module_publish=False)[0], (True, None))
+        self.assertEqual(self.decide('legacy', module_publish=True)[0], (False, None))
+
+    def test_no_provider_means_no_comments_on_both_paths(self):
+        for module_publish in (False, True):
+            self.assertEqual(self.decide(None, module_publish=module_publish)[0], (False, None))
+
+    def test_unexpected_provider_values_mean_no_comments_never_the_league_snippet(self):
+        for odd in ('LEGACY', 'other', 1, True, ['legacy'], {'id': 'x'}):
+            for module_publish in (False, True):
+                with self.subTest(odd=odd, module_publish=module_publish):
+                    self.assertEqual(self.decide(odd, module_publish=module_publish)[0], (False, None))
+
+    def test_a_module_gives_its_module_its_checked_config_and_the_core_channel_on_both_paths(self):
+        for module_publish in (False, True):
+            with self.subTest(module_publish=module_publish):
+                (comments, warn), cc = self.decide(self.prov, module_publish=module_publish,
+                                                   config={'endpoint': ENDPOINT, 'pubkey': 'p'})
+                self.assertIsNone(warn)
+                self.assertEqual(set(comments), {'module', 'config', 'channel'})
+                self.assertIs(comments['module'], self.prov)
+                self.assertEqual(comments['config'], {'endpoint': ENDPOINT, 'pubkey': 'p'})
+                self.assertEqual(comments['channel'], 'deai/s1/t1')
+                cc.assert_called_once_with(self.SPACE, self.prov)        # перевірений `comments_client`, а не сирий виклик
+
+    def test_a_failed_decision_is_false_plus_the_code_never_the_league_snippet(self):
+        for module_publish in (False, True):
+            for err in (dm.ModuleError('module-error', message='x'), dm.ModuleError('space-json-unreadable', message='x')):
+                with self.subTest(module_publish=module_publish, code=err.code):
+                    self.assertEqual(self.decide(None, module_publish=module_publish, err=err)[0], (False, err.code))
+            with self.subTest(module_publish=module_publish, what='client_config'):
+                out, _cc = self.decide(self.prov, module_publish=module_publish,
+                                       config_error=dm.ModuleError('check-timeout', message='slow'))
+                self.assertEqual(out, (False, 'check-timeout'))
+
+    def test_a_bad_channel_is_a_failure_before_any_module_code_runs(self):
+        for tid in ('a/b', '', 'a\nb'):
+            with self.subTest(tid=tid):
+                out, cc = self.decide(self.prov, module_publish=False, tid=tid)
+                self.assertEqual(out, (False, 'module-error'))
+                cc.assert_not_called()
+
+
+class CommentsPublish(DispatchWorld):
+    """Усі шляхи публікації (ЛІГА, `static-publish`, модуль «за адресою») і рішення про коментарі превʼю: воно береться з
+    `provider('comments', простір)` — ОДИН раз на публікацію, з простором ЯВНО, а не з `integrations_on()`.
+
+    Світ — `DispatchWorld` + тека вбудованих модулів: справжній `static-publish`, фікстура `memo-comments`, фікстура
+    `url-pub` (`publish_target: url`). Простір `off` — без інтеграцій (задача `tx`), `on` — з ними (задача `ty`)."""
+
+    URL = 'url-pub'
+
+    def setUp(self):
+        super().setUp()
+        self.mods = os.path.join(self.tmp, 'modules')
+        _copy_module(os.path.join(ROOT, 'app', 'modules', MID), self.mods)
+        _copy_module(MEMO_SRC, self.mods)
+        _write_json(os.path.join(self.mods, self.URL, 'module.json'),
+                    {'api': 1, 'id': self.URL, 'name': self.URL, 'version': '1.0.0', 'roles': ['publish'],
+                     'publish_target': 'url',
+                     'settings': [{'key': 'password', 'type': 'secret', 'label': 'Password'}]})
+        with open(os.path.join(self.mods, self.URL, 'server.py'), 'w', encoding='utf-8') as fh:
+            fh.write('def check(ctx):\n    return {"ok": True}\n'
+                     'def publish(ctx, build_dir, task):\n'
+                     f'    return {{"url": "{GOOD_URL}", "state": {{}}, "verified": True}}\n')
+        patch = mock.patch.object(dm, 'builtin_dir', lambda: self.mods)
+        patch.start()
+        self.addCleanup(patch.stop)
+        dm.reset_caches()
+        self.addCleanup(self.trip_is_quiet)
+
+    def trip_is_quiet(self):
+        self.assertEqual(self.trip.hits, [], 'вихід за межі процесу')
+
+    # ---- фікстури ----
+
+    def enable_memo(self, space, token=TOKEN, pubkey=PUBKEY, endpoint=ENDPOINT):
+        dm.write_module_state(space, MEMO_ID, enabled=True, settings={'endpoint': endpoint})
+        dm.write_secrets(space['id'], MEMO_ID, {'token': token, 'pubkey': pubkey})
+        self.assertIsInstance(dm.provider('comments', space), dm.Module)
+
+    def enable_url(self, space):
+        dm.write_module_state(space, MID, enabled=False)
+        dm.write_module_state(space, self.URL, enabled=True)
+
+    def break_memo(self):
+        """Явно ввімкнений модуль коментарів, що не завантажився (оголошений файл адаптера зник)."""
+        os.remove(os.path.join(self.mods, MEMO_ID, 'adapter.js'))
+        self.assertEqual(dm.catalog()[MEMO_ID].status, 'error')
+
+    def leak_memo(self):
+        """`client_config` модуля показує значення НЕпублічного секрету `token` — ядро мусить це відхилити."""
+        path = os.path.join(self.mods, MEMO_ID, 'server.py')
+        src = _read(path)
+        leaky = src.replace("ctx['secrets'].get('pubkey') or ''", "ctx['secrets'].get('token') or ''")
+        self.assertNotEqual(src, leaky, 'фікстура змінилась: нема що підміняти')
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(leaky)
+
+    def publish(self, payload=None, task=None):
+        return self.post('/api/publish', payload, {'X-Canvas-Task': task} if task else None)
+
+    def assert_module_build(self, root, channel, pages=tuple(SOURCE_PAGES)):
+        """Збірка з коментарями модуля `memo-comments` у `root` (`publish/` або опублікована тека)."""
+        vend = os.path.join(root, 'comment-layer')
+        self.assertEqual(sorted(os.listdir(vend)), ['adapter.js', 'comment-layer.min.js'])
+        self.assertEqual(_bytes(os.path.join(vend, 'comment-layer.min.js')), _bytes(LAYER_SRC))
+        self.assertEqual(_bytes(os.path.join(vend, 'adapter.js')), _bytes(os.path.join(MEMO_SRC, 'adapter.js')))
+        for rel in pages:
+            html = _read(os.path.join(root, rel))
+            up = '../' * rel.count('/')
+            self.assertIn(f'<script src="{up}comment-layer/comment-layer.min.js"', html, rel)
+            self.assertIn(f'<script src="{up}comment-layer/adapter.js"', html, rel)
+            self.assertEqual(_page_cfg(html), {'endpoint': ENDPOINT, 'pubkey': PUBKEY, 'channel': channel}, rel)
+        self.assert_no_secret_and_no_shared_service(root)
+
+    def assert_no_secret_and_no_shared_service(self, root):
+        """Ні секрету модуля, ні спільного Supabase ЛІГА (адреса, ключ, CDN, бандл) в жодному файлі збірки. Шар коментатора
+        (`comment-layer.min.js`, ядрова вендорна копія) у заголовку згадує слово «Supabase» і має власний CDN: для нього
+        перевіряються лише значення (секрет, адреса, ключ), а не слова."""
+        for rel, data in _files(root).items():
+            for needle in (TOKEN, serve.SUPABASE_URL, serve.SUPABASE_KEY, 'sbUrl', 'sbKey'):
+                self.assertNotIn(needle.encode(), data, f'{rel}: {needle}')
+            if os.path.basename(rel) != 'comment-layer.min.js':
+                for word in (b'supabase', b'cdn.jsdelivr.net'):
+                    self.assertNotIn(word, data.lower(), f'{rel}: {word!r}')
+
+    def assert_no_comments(self, root):
+        self.assertFalse(os.path.exists(os.path.join(root, 'comment-layer')))
+        for rel, data in _files(root).items():
+            for needle in (b'CommentLayer', b'comment-layer', b'__deaiCommentsCfg', b'DeaiComments'):
+                self.assertNotIn(needle, data, f'{rel}: {needle!r}')
+        self.assert_no_secret_and_no_shared_service(root)
+
+    def served(self, path):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)
+        try:
+            conn.request('GET', path)
+            r = conn.getresponse()
+            return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+        finally:
+            conn.close()
+
+    # ---- static-publish: простір без інтеграцій ----
+
+    def test_static_publish_ships_the_comments_of_the_module_of_the_space(self):
+        self.enable_memo(self.off)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'local', 'iterations', 'frames'], 'відповідь без нових ключів')
+        self.assertEqual(body['local']['path'], self.dest)
+        self.assert_module_build(self.dest, 'deai/off/tx')
+        self.assert_module_build(os.path.join(self.tx_dir, 'publish'), 'deai/off/tx')
+        self.assertEqual(self.meta()['publish_local']['path'], self.dest)
+        self.assert_quiet()
+
+    def test_build_only_ships_them_too(self):
+        self.enable_memo(self.off)
+        st, body = self.publish({'build_only': True})
+        self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
+        self.assert_module_build(body['dir'], 'deai/off/tx')
+        self.assertFalse(os.path.exists(self.dest), 'build_only нічого не публікує')
+        self.assert_quiet()
+
+    def test_the_channel_is_the_one_of_the_commented_page(self):
+        """Піни, поставлені в канвасі (`/commented?ch=project`), і піни в превʼю мусять лежати в ОДНОМУ каналі."""
+        self.enable_memo(self.off)
+        st, body = self.publish({'build_only': True})
+        self.assertEqual(st, 200, body)
+        pub_cfg = _page_cfg(_read(os.path.join(body['dir'], 'it2', 'index.html')))
+        st, _hd, page = self.served('/commented?it=it1&ch=project')
+        self.assertEqual(st, 200)
+        self.assertEqual(pub_cfg, _page_cfg(page.decode('utf-8')))
+
+    def test_without_a_comments_module_a_plain_space_builds_without_comments_as_before(self):
+        st, body = self.publish()
+        self.assertEqual((st, list(body)), (200, ['ok', 'local', 'iterations', 'frames']), body)
+        self.assert_no_comments(self.dest)
+        self.assertNotIn('comments_unavailable', body)
+
+    def test_a_comments_module_that_was_switched_off_again_means_no_comments(self):
+        self.enable_memo(self.off)
+        dm.write_module_state(self.off, MEMO_ID, enabled=False)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assert_no_comments(self.dest)
+        self.assertNotIn('comments_unavailable', body)
+
+    def test_republishing_after_removing_the_module_leaves_no_comment_layer_behind(self):
+        self.enable_memo(self.off)
+        self.assertEqual(self.publish()[0], 200)
+        self.assertTrue(os.path.isdir(os.path.join(self.dest, 'comment-layer')))
+        dm.write_module_state(self.off, MEMO_ID, enabled=False)
+        self.assertEqual(self.publish()[0], 200)
+        self.assert_no_comments(self.dest)
+
+    # ---- простір з інтеграціями ----
+
+    def test_a_module_publish_in_an_integrations_space_with_the_league_comments_ships_none(self):
+        """Рішення: модуль публікації в просторі ЛІГА, де коментарі — зашитий шлях (`'legacy'`), лишає `comments=False`, як у
+        0.3.0: спільний Supabase ЛІГА (адреса й ключ) не їде в превʼю, що його зібрав модуль."""
+        dm.write_module_state(self.on, MID, enabled=True)
+        self.assertEqual(dm.provider('comments', self.on), 'legacy')
+        st, body = self.publish(task='ty')
+        self.assertEqual((st, list(body)), (200, ['ok', 'local', 'iterations', 'frames']), body)
+        want = os.path.join(self.home, 'deai-published', 'on', 'ty')
+        self.assertEqual(body['local']['path'], want)
+        self.assert_no_comments(want)
+        self.assert_no_comments(os.path.join(self.ty_dir, 'publish'))
+        self.assert_quiet()
+
+    def test_a_url_module_in_an_integrations_space_with_the_league_comments_ships_none(self):
+        """Те саме для модуля «за адресою» (Vercel): зашитий Supabase ЛІГА не їде в превʼю, яке зібрав модуль."""
+        dm.write_module_state(self.on, self.URL, enabled=True)
+        self.assertEqual(dm.provider('comments', self.on), 'legacy')
+        st, body = self.publish(task='ty')
+        self.assertEqual((st, list(body)), (200, ['ok', 'url', 'verified', 'iterations', 'frames']), body)
+        self.assert_no_comments(os.path.join(self.ty_dir, 'publish'))
+
+    def test_a_module_publish_in_an_integrations_space_with_a_comments_module_ships_the_module_comments(self):
+        dm.write_module_state(self.on, MID, enabled=True)
+        self.enable_memo(self.on)
+        st, body = self.publish(task='ty')
+        self.assertEqual(st, 200, body)
+        self.assert_module_build(os.path.join(self.home, 'deai-published', 'on', 'ty'), 'deai/on/ty')
+        self.assert_quiet()
+
+    def test_the_league_path_gets_the_module_snippet_when_the_space_has_a_comments_module(self):
+        self.enable_memo(self.on)
+        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        st, body = self.publish({'build_only': True}, task='ty')
+        self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
+        self.assert_module_build(body['dir'], 'deai/on/ty')
+        for rel in SOURCE_PAGES:                                   # гейт ЛІГА — як був: пароль на кожній сторінці
+            self.assertIn('id="authgate"', _read(os.path.join(body['dir'], rel)), rel)
+
+    def test_the_league_path_with_the_league_comments_is_the_old_build(self):
+        self.assertEqual(dm.provider('comments', self.on), 'legacy')
+        with mock.patch.object(serve, 'build_preview', wraps=serve.build_preview) as bp:
+            st, body = self.publish({'build_only': True}, task='ty')
+        self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
+        self.assertEqual(bp.call_args.kwargs['comments'], True)
+        vend = os.path.join(body['dir'], 'comment-layer')
+        self.assertEqual(sorted(os.listdir(vend)), sorted(serve.BUNDLES))
+        html = _read(os.path.join(body['dir'], 'it2', 'index.html'))
+        self.assertIn('CommentLayer.init', html)
+        self.assertIn('dc/ty', html)
+        self.assertNotIn('__deaiCommentsCfg', html)
+
+    def test_the_league_path_with_a_broken_enabled_comments_module_ships_no_comments_at_all_and_warns(self):
+        """Явно ввімкнений модуль коментарів, що зламався, у просторі ЛІГА: НЕ спільний Supabase (піни несли б знімки
+        приватних макетів у чужий сервіс), а жодних коментарів + попередження. Сама публікація йде."""
+        self.enable_memo(self.on)
+        self.break_memo()
+        with self.assertRaises(dm.ModuleError):
+            dm.provider('comments', self.on)                       # контроль: рішення справді «відмова», а не «legacy»
+        with mock.patch.object(serve, 'build_preview', wraps=serve.build_preview) as bp:
+            st, body = self.publish({'build_only': True}, task='ty')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'dir', 'iterations', 'frames', 'comments_unavailable'])
+        self.assertEqual(body['comments_unavailable'], 'module-error')
+        self.assertIs(bp.call_args.kwargs['comments'], False)
+        self.assert_no_comments(body['dir'])
+
+    def test_the_league_path_with_an_unreadable_space_json_ships_no_comments_and_warns(self):
+        with open(os.path.join(self.on_path, 'space.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{broken')
+        st, body = self.publish({'build_only': True}, task='ty')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['comments_unavailable'], 'space-json-unreadable')
+        self.assert_no_comments(body['dir'])
+
+    def test_a_module_publish_with_a_broken_enabled_comments_module_still_publishes_without_comments(self):
+        dm.write_module_state(self.on, MID, enabled=True)
+        self.enable_memo(self.on)
+        self.break_memo()
+        st, body = self.publish(task='ty')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'local', 'iterations', 'frames', 'comments_unavailable'])
+        self.assertEqual(body['comments_unavailable'], 'module-error')
+        want = os.path.join(self.home, 'deai-published', 'on', 'ty')
+        self.assertEqual(self.meta(self.ty_dir)['publish_local']['path'], want, 'публікація відбулась')
+        self.assert_no_comments(want)
+
+    # ---- відмова самого модуля: жодних коментарів, ніколи не «legacy» ----
+
+    def path_world(self, path):
+        """`(простір, X-Canvas-Task)` для шляху публікації `static` | `league` | `url`: чиста фікстура memo, у просторі
+        ввімкнено рівно потрібний модуль публікації (`league` — жодного: публікує ЛІГА) і memo."""
+        shutil.rmtree(os.path.join(self.mods, MEMO_ID), True)
+        _copy_module(MEMO_SRC, self.mods)
+        dm.reset_caches()
+        secrets = os.path.join(self.deai, 'secrets.json')
+        if os.path.exists(secrets):
+            os.remove(secrets)
+        space, task = (self.on, 'ty') if path == 'league' else (self.off, None)
+        dm.write_module_state(space, MID, enabled=False)
+        dm.write_module_state(space, self.URL, enabled=False)
+        if path == 'static':
+            dm.write_module_state(space, MID, enabled=True)
+        elif path == 'url':
+            dm.write_module_state(space, self.URL, enabled=True)
+        self.enable_memo(space)
+        return space, task
+
+    def test_a_failing_client_config_means_no_comments_and_a_warning_on_every_publish_path(self):
+        def secret_in_config(space):
+            self.leak_memo()
+
+        def no_endpoint(space):
+            dm.write_module_state(space, MEMO_ID, settings={'endpoint': None})
+        for failure, code, inject in (('секрет у client_config', 'module-error', secret_in_config),
+                                      ('нема обовʼязкового налаштування', 'bad-settings', no_endpoint)):
+            for path in ('static', 'league', 'url'):
+                with self.subTest(failure=failure, path=path):
+                    space, task = self.path_world(path)
+                    inject(space)
+                    st, body = self.publish({'build_only': True}, task=task)
+                    self.assertEqual(st, 200, body)
+                    self.assertEqual(body['comments_unavailable'], code, body)
+                    self.assertNotIn(TOKEN, json.dumps(body))
+                    self.assert_no_comments(body['dir'])
+
+    def test_unreadable_secrets_on_the_league_path_mean_no_comments_and_a_warning(self):
+        """Лише ЛІГА: модуль публікації теж читає секрети (пароль), тож на його шляхах відмова приходить раніше й інша."""
+        space, task = self.path_world('league')
+        with open(os.path.join(self.deai, 'secrets.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{broken')
+        st, body = self.publish({'build_only': True}, task=task)
+        self.assertEqual((st, body['comments_unavailable']), (200, 'secrets-unreadable'), body)
+        self.assert_no_comments(body['dir'])
+
+    def test_the_warning_is_the_code_only_never_a_message_or_a_value(self):
+        self.leak_memo()
+        self.enable_memo(self.off)
+        st, body = self.publish()
+        self.assertEqual((st, body['comments_unavailable']), (200, 'module-error'), body)
+        self.assertEqual(sorted(k for k in body if 'comments' in k), ['comments_unavailable'])
+        self.assertNotIn(TOKEN, json.dumps(body))
+        self.assert_no_comments(self.dest)
+
+    # ---- модуль «за адресою» ----
+
+    def test_a_url_module_ships_the_comments_of_the_module_of_the_space(self):
+        self.enable_url(self.off)
+        self.enable_memo(self.off)
+        st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'url', 'verified', 'iterations', 'frames'], 'відповідь без нових ключів')
+        self.assert_module_build(os.path.join(self.tx_dir, 'publish'), 'deai/off/tx')
+
+    def test_a_url_module_without_a_comments_module_builds_without_comments_as_before(self):
+        self.enable_url(self.off)
+        st, body = self.publish()
+        self.assertEqual((st, list(body)), (200, ['ok', 'url', 'verified', 'iterations', 'frames']), body)
+        self.assert_no_comments(os.path.join(self.tx_dir, 'publish'))
+
+    def test_a_url_module_with_a_broken_comments_module_warns_before_code_stale(self):
+        self.enable_url(self.off)
+        self.enable_memo(self.off)
+        self.leak_memo()
+        with mock.patch.object(serve, 'server_code_staleness', lambda: 'код новіший за процес'):
+            st, body = self.publish()
+        self.assertEqual(st, 200, body)
+        self.assertEqual(list(body), ['ok', 'url', 'verified', 'iterations', 'frames', 'comments_unavailable', 'code_stale'])
+        self.assertEqual(body['comments_unavailable'], 'module-error')
+        self.assert_no_comments(os.path.join(self.tx_dir, 'publish'))
+
+    # ---- одне рішення, простір — явно ----
+
+    def comments_asked(self, task=None):
+        """Скільки разів і з яким простором питали `provider('comments', …)` за ОДНУ публікацію."""
+        calls = []
+        real = dm.provider
+
+        def spy(role, space=None):
+            calls.append((role, space))
+            return real(role, space)
+        with mock.patch.object(dm, 'provider', spy):
+            st, body = self.publish({'build_only': True}, task=task)
+        self.assertEqual(st, 200, body)
+        return [space for role, space in calls if role == 'comments']
+
+    def assert_asked_once_about(self, asked, space):
+        self.assertEqual(len(asked), 1, f'рішення про коментарі прийнято {len(asked)} разів')
+        self.assertIsInstance(asked[0], dict, 'простір мусить бути переданий явно (запис реєстру), а не `None`')
+        self.assertEqual(asked[0]['id'], space['id'])
+
+    def test_static_publish_asks_the_comments_provider_once_with_the_explicit_space(self):
+        self.assert_asked_once_about(self.comments_asked(), self.off)
+
+    def test_a_url_module_asks_the_comments_provider_once_with_the_explicit_space(self):
+        self.enable_url(self.off)
+        self.assert_asked_once_about(self.comments_asked(), self.off)
+
+    def test_the_league_path_asks_the_comments_provider_once_with_the_explicit_space(self):
+        self.assert_asked_once_about(self.comments_asked('ty'), self.on)
+
+    def test_a_module_publish_never_asks_which_comments_the_league_would_use(self):
+        """Коментарі модульної публікації в `off` — не за `integrations_on()` (це «чи ввімкнено ЛІГА»), а за постачальником."""
+        self.enable_memo(self.off)
+        with mock.patch.object(spaces, 'integrations_on', side_effect=AssertionError('integrations_on')):
+            st, body = self.publish({'build_only': True})
+        self.assertEqual(st, 200, body)
+        self.assert_module_build(body['dir'], 'deai/off/tx')
+
+    # ---- /published/… роздає скопійовані файли адаптера ----
+
+    def test_published_serves_the_layer_the_adapter_and_the_pages_with_the_snippet_in_the_sandbox(self):
+        self.enable_memo(self.off)
+        self.assertEqual(self.publish()[0], 200)
+        csp = 'sandbox allow-scripts allow-forms allow-popups'
+        for name, source in (('adapter.js', os.path.join(MEMO_SRC, 'adapter.js')),
+                             ('comment-layer.min.js', LAYER_SRC)):
+            st, hd, data = self.served(f'/published/off/tx/comment-layer/{name}')
+            self.assertEqual(st, 200, name)
+            self.assertEqual(data, _bytes(source), name)
+            self.assertEqual(hd['content-type'], 'text/javascript; charset=utf-8', name)
+            self.assertEqual((hd.get('content-security-policy'), hd.get('x-content-type-options'),
+                              hd.get('access-control-allow-origin')), (csp, 'nosniff', '*'), name)
+        st, hd, data = self.served('/published/off/tx/it1/alpha/index.html')
+        self.assertEqual(st, 200)
+        html = data.decode('utf-8')
+        self.assertIn('<script src="../../comment-layer/adapter.js"', html)
+        self.assertEqual(_page_cfg(html)['channel'], 'deai/off/tx')
+        self.assertEqual(self.served('/published/off/tx/comment-layer/supabase-adapter.min.js')[0], 404)   # бандла ЛІГА нема
+
+    # ---- файл адаптера підмінили між рішенням і збіркою ----
+
+    def test_a_symlinked_adapter_file_at_build_time_is_a_502_module_error_that_keeps_the_previous_publish(self):
+        self.enable_memo(self.off)
+        self.assertEqual(self.publish()[0], 200)
+        before = _tree(self.dest)
+        built_before = _tree(os.path.join(self.tx_dir, 'publish'))
+        meta_before = self.meta()['publish_local']
+        outside = os.path.join(self.tmp, 'outside.js')
+        with open(outside, 'w', encoding='utf-8') as fh:
+            fh.write('window.OUTSIDE = 1;')
+        adapter = os.path.join(self.mods, MEMO_ID, 'adapter.js')
+        real = serve.publish_comments
+        calls = []
+
+        def swapped_after_the_decision(*a, **kw):
+            out = real(*a, **kw)
+            calls.append(out)
+            os.remove(adapter)
+            os.symlink(outside, adapter)                       # вікно між рішенням (Module вже вибрано) і збіркою
+            return out
+        with mock.patch.object(serve, 'publish_comments', swapped_after_the_decision):
+            st, body = self.publish()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((st, body.get('ok'), body.get('code')), (502, False, 'module-error'), body)
+        self.assertNotIn('OUTSIDE', json.dumps(body))
+        self.assertEqual(_tree(self.dest), before, 'опубліковане не чіпано')
+        self.assertEqual(_tree(os.path.join(self.tx_dir, 'publish')), built_before, 'збірку не стерто до відмови')
+        self.assertEqual(self.meta()['publish_local'], meta_before)
+        # замки відпущено: після ремонту публікація йде
+        os.remove(adapter)
+        shutil.copy2(os.path.join(MEMO_SRC, 'adapter.js'), adapter)
+        self.assertEqual(self.publish()[0], 200)
+
+    def test_the_league_path_with_a_symlinked_adapter_file_is_the_same_502_and_no_vercel(self):
+        self.enable_memo(self.on)
+        outside = os.path.join(self.tmp, 'outside.js')
+        with open(outside, 'w', encoding='utf-8') as fh:
+            fh.write('window.OUTSIDE = 1;')
+        adapter = os.path.join(self.mods, MEMO_ID, 'adapter.js')
+        real = serve.publish_comments
+
+        def swapped_after_the_decision(*a, **kw):
+            out = real(*a, **kw)
+            os.remove(adapter)
+            os.symlink(outside, adapter)
+            return out
+        with mock.patch.object(serve, 'publish_comments', swapped_after_the_decision):
+            st, body = self.publish({}, task='ty')                 # справжня публікація: без `build_only`
+        self.assertEqual((st, body.get('code')), (502, 'module-error'), body)
+        self.assertEqual(self.spies['_node_bin'].call_count, 0, 'дійшло до деплою')
+        self.assertFalse(os.path.exists(os.path.join(self.ty_dir, 'publish')), 'збірку почато, хоч файл адаптера небезпечний')
 
 
 if __name__ == '__main__':

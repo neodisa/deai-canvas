@@ -5,6 +5,7 @@
 Ядро: итерации (замороженные копии), публикация на Vercel со свитчером,
 comment-layer с каналами: internal (локально, для Claude) / external (Vercel).
 """
+import collections
 import contextlib
 import functools
 import hashlib
@@ -2619,6 +2620,9 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 
 #: Бандли коментатора в publish/comment-layer/.
 BUNDLES = ('comment-layer.min.js', 'supabase-adapter.min.js')
+#: Шар коментатора — єдиний бандл, який їде в збірку і в канал МОДУЛЯ (адаптер сховища дає сам модуль); `supabase-adapter` —
+#: лише ЛІГА. Тож збірка, де є ОБИДВА бандли, — збірка ЛІГА (`ops/reseal_gate.py` за цим відрізняє її від збірки модуля).
+LAYER_BUNDLE = BUNDLES[0]
 
 #: Спільні модулі оболонки в publish/shell/ — копіюються з app/ БЕЗ правок.
 #: Саме тому вони й зроблені чистими (ні DOM-глобалів, ні fetch, ні
@@ -3254,14 +3258,112 @@ def gate_html(tid, pw):
 NO_GATE_OPEN = '<script>window.__gateOpen=true;</script>'
 
 
+#: Файли адаптера модуля коментарів, прочитані для збірки: `module` — `Module`, `config`/`channel` — з рішення
+#: `publish_comments`, `files` — `[(імʼя, байти)]` у порядку маніфесту.
+ModuleCommentsBuild = collections.namedtuple('ModuleCommentsBuild', 'module config channel files')
+
+
+def _read_module_comments(comments):
+    """Перевірка словника `comments` модуля й ПРОЧИТАНІ файли його адаптера → `ModuleCommentsBuild`.
+
+    Форма — рівно `{'module', 'config', 'channel'}`: `Module` зі `status == 'ok'` і роллю `comments`, `config` —
+    обʼєкт, `channel` — непорожній рядок (інакше `ValueError`: помилка викликача, а не відмова модуля). Кожен файл із
+    `client` відкривається `open_module_client` — тим самим захистом, що роздача `/api/module-client/…` (звичайний
+    файл, ні симлінк, ні жорстке посилання, дескриптор) — і читається цілком (≤ `MAX_CLIENT_BYTES`: файл міг
+    вирости після завантаження каталогу). Відмова — `ModuleError('module-error')` БЕЗ тексту файла; імʼя файла
+    (`CLIENT_RE`) і id модуля (`ID_RE`) безпечні для тексту. Імʼя файла, що збігається з бандлом ядра (`BUNDLES`),
+    теж відмова: файл модуля затер б шар коментатора чи прикинувся бандлом ЛІГА.
+    ⚠️ Викликається ДО `rmtree(publish/)`: відмова не стирає попередню збірку."""
+    mod, config, channel = comments.get('module'), comments.get('config'), comments.get('channel')
+    if (set(comments) != {'module', 'config', 'channel'} or not isinstance(mod, deai_modules.Module)
+            or mod.status != 'ok' or 'comments' not in mod.roles or not isinstance(config, dict)
+            or not isinstance(channel, str) or not channel):
+        raise ValueError("build_preview: comments — словник {'module': Module ролі comments, 'config': {…}, "
+                         "'channel': '…'}")
+    files = []
+    for name in mod.client:
+        if name in BUNDLES:
+            raise deai_modules.ModuleError(
+                'module-error', message=f'adapter file {name} of module {mod.id} has the name of a core '
+                                        'comment-layer file')
+        opened = open_module_client(mod, name)
+        if opened is None:
+            raise deai_modules.ModuleError(
+                'module-error', message=f'adapter file {name} of module {mod.id} cannot be opened safely '
+                                        '(a plain regular file is required)')
+        fd, _st = opened
+        try:
+            fh = os.fdopen(fd, 'rb')
+        except Exception:                                  # noqa: BLE001 — дескриптор не лишається висіти
+            os.close(fd)
+            raise
+        with fh:
+            data = fh.read(deai_modules.MAX_CLIENT_BYTES + 1)
+        if len(data) > deai_modules.MAX_CLIENT_BYTES:
+            raise deai_modules.ModuleError(
+                'module-error', message=f'adapter file {name} of module {mod.id} is bigger than '
+                                        f'{deai_modules.MAX_CLIENT_BYTES} bytes')
+        files.append((name, data))
+    return ModuleCommentsBuild(mod, config, channel, files)
+
+
+def publish_comments(space, tid, *, module_publish=False):
+    """`(comments, warning)` — рішення про коментарі превʼю для `build_preview(comments=…)`, ОДИН раз на публікацію.
+
+    Рішення — з ПОСТАЧАЛЬНИКА ролі `comments` ПРОСТОРУ публікації (`deai_modules.provider('comments', space)` через
+    `comments_provider`, простір — явним аргументом), а НЕ з `spaces.integrations_on()`: «ЛІГА ввімкнено» ≠ «коментарі
+    — спільний Supabase» (простір ЛІГА може вести коментарі власним модулем, а простір без інтеграцій — теж). `space`
+    — запис простору, який викликач ВЖЕ вирішив (одне читання реєстру на публікацію); `None` — шар вимкнено чи простір
+    запиту не зафіксовано (інструменти ЛІГА): `comments_provider` тоді віддає `'legacy'` БЕЗ читання реєстру.
+
+        постачальник        шлях ЛІГА (`_publish`)       модуль публікації (`module_publish=True`)
+        Module              словник модуля               словник модуля
+        'legacy'            True (зашитий Supabase)      False — як у 0.3.0
+        None                False                        False
+        ModuleError         False + код відмови          False + код відмови
+
+    ⛔ `'legacy'` у збірці МОДУЛЯ публікації — `False`, не `True`: зашитий Supabase ЛІГА (адреса й ключ спільного проєкту,
+    куди піни несуть знімки макетів) не їде в превʼю, яке зібрав модуль, — це був би новий вихід даних, якого людина
+    не вмикала. ⛔ Відмова (`ModuleError`: явно ввімкнений модуль коментарів загубився, `space.json` не прочитати,
+    `client_config` чи канал не вдались) — ЗАВЖДИ `False` + `warning` (код, без тексту й значень), НІКОЛИ `True`: тихий
+    перехід на спільний сервіс ЛІГА вивіз би приватні макети; сама публікація йде далі, а відповідь несе
+    `comments_unavailable`. Модуль коментарів виконує свій код (`client_config`): НЕ кликати під `spaces.WRITE_LOCK`."""
+    prov, err = comments_provider(space)
+    if err is not None:
+        return False, err.code
+    if isinstance(prov, deai_modules.Module):
+        try:
+            channel = deai_modules.channel_for(space, tid)
+            config = deai_modules.comments_client(space, prov)
+        except deai_modules.ModuleError as e:
+            return False, e.code
+        return {'module': prov, 'config': config, 'channel': channel}, None
+    if prov == 'legacy':
+        return (not module_publish), None
+    return False, None
+
+
 def build_preview(task, tid, its, *, comments=True, gate_pw):
     """Зібрати `publish/` з ОПУБЛІКОВАНИХ ітерацій `its`: сторінки, спільні файли ітерацій, оболонка,
     кадри, маніфест, обгортка. ЄДИНА збірка превʼю: нею користуються і ЛІГА (`Handler._publish`, далі
     vercel deploy), і модулі публікації (статика в локальну теку) — друга копія збірки розійшлась би з
     першою мовчки.
 
-    `comments=False` — без коментатора: ні `publish/comment-layer/` (бандли), ні ін'єкції в сторінки.
-    Потрібно там, де Supabase недосяжний або недоречний.
+    `comments` — рішення про коментарі превʼю, яке приймає ВИКЛИКАЧ (`publish_comments`: з постачальника ролі
+    `comments`, один раз на публікацію), а збірка лише виконує його:
+      * `True` — канал ЛІГА (зашитий Supabase): бандли `BUNDLES` у `publish/comment-layer/` і сніпет `inject_comment_layer`
+        у кожній сторінці — байт у байт як до 2b-2;
+      * `False` — без коментатора: ні `publish/comment-layer/`, ні ін'єкції в сторінки. Потрібно там, де Supabase
+        недосяжний або недоречний;
+      * `{'module': <Module ролі comments>, 'config': {…}, 'channel': '…'}` — канал МОДУЛЯ: у `publish/comment-layer/`
+        лягають `comment-layer.min.js` (ядро) і ЛИШЕ оголошені в `client` файли адаптера (ні `supabase-adapter`, ні CDN),
+        а в сторінки — сніпет модуля з ВІДНОСНИМИ шляхами (`../` за глибиною сторінки) і `{**config, channel}`. `config` —
+        уже перевірена публічна конфігурація (`deai_modules.comments_client`: непублічних секретів у ній нема),
+        `channel` — канал ядра (`deai_modules.channel_for`). Без інспектора й вкладок аудиторій: це публікація.
+        Файли адаптера читаються ДО `rmtree` через `open_module_client` (без симлінків і жорстких посилань,
+        ≤ `MAX_CLIENT_BYTES`): небезпечний файл — `ModuleError('module-error')`, а попередню збірку не стирають.
+    Будь-що інше — `ValueError` ДО змін на диску: `'legacy'` (значення постачальника, а не рішення) чи `1` не мають
+    мовчки стати шляхом ЛІГА.
 
     `gate_pw` — пароль гейта, ОБОВʼЯЗКОВИЙ іменований аргумент (забути його не вдасться). `None` — превʼю
     БЕЗ гейта: сторінки не чіпаємо взагалі (`_inject_gate` ще й переписує `<title>`), а обгортка
@@ -3280,6 +3382,11 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
     """
     if not its:
         raise ValueError('build_preview: порожній перелік ітерацій — нема що збирати')
+    adapter = None
+    if isinstance(comments, dict):
+        adapter = _read_module_comments(comments)        # перевірка й читання файлів адаптера — ДО будь-якої зміни диска
+    elif comments is not True and comments is not False:
+        raise ValueError(f'build_preview: comments — True, False чи словник модуля, а не {comments!r}')
     pub = os.path.join(task['dir'], 'publish')
     if os.path.isdir(pub):
         shutil.rmtree(pub)
@@ -3288,8 +3395,14 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
         # бандлы комментатора один раз
         vend = os.path.join(pub, 'comment-layer')
         os.makedirs(vend)
-        for b in BUNDLES:
-            shutil.copy2(os.path.join(ROOT, 'app', 'vendor', b), os.path.join(vend, b))
+        if adapter is None:
+            for b in BUNDLES:
+                shutil.copy2(os.path.join(ROOT, 'app', 'vendor', b), os.path.join(vend, b))
+        else:
+            shutil.copy2(os.path.join(ROOT, 'app', 'vendor', LAYER_BUNDLE), os.path.join(vend, LAYER_BUNDLE))
+            for name, data in adapter.files:
+                with open(os.path.join(vend, name), 'wb') as fh:
+                    fh.write(data)
     # Спільні модулі зовнішньої оболонки — статика, від сторінок не залежать,
     # тому їдуть тут же, одразу після `rmtree` (порядок важливий: усе нове
     # везеться ПІСЛЯ затирання publish/).
@@ -3319,9 +3432,16 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
             html = fh.read()
         if comments:
             depth_up = '../' * (p['out_rel'].count('/') + 1)
-            html = inject_comment_layer(html, comment_channel(task, tid),
-                                        f'{depth_up}comment-layer',
-                                        version=pm.page_version_tag(p['it'], p['page']))
+            if adapter is None:
+                html = inject_comment_layer(html, comment_channel(task, tid),
+                                            f'{depth_up}comment-layer',
+                                            version=pm.page_version_tag(p['it'], p['page']))
+            else:
+                html = inject_module_comment_layer(
+                    html, f'{depth_up}comment-layer',
+                    [f'{depth_up}comment-layer/{name}' for name, _data in adapter.files],
+                    {**adapter.config, 'channel': adapter.channel},
+                    version=pm.page_version_tag(p['it'], p['page']), inspector=False, audiences=False)
         if gated:
             # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
             # пряме посилання на неї минало пароль: перевірено живцем —
@@ -3359,10 +3479,13 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
 # Диспетчер ролі `publish` (етап 2а, Task 4b). `Handler._publish` питає `deai_modules.provider('publish')`:
 #   `'legacy'` — зашитий шлях ЛІГА (збірка з коментатором + vercel deploy), відповіді незмінні;
 #   `None`     — 409 `no-publish-module`;
-#   `Module`   — `publish_with_module` нижче: збірка БЕЗ коментатора в локальну теку модуля, без жодного
-#                виходу назовні (ні Vercel, ні дашборд команди, ні реєстр, ні git-пуш, ні мережа); модуль
-#                `publish_target: url` (2b-1) — `_publish_by_url`: без теки, результат — адреса й `state`
-#                (ходить лише сам модуль; з ядра так само нічого назовні).
+#   `Module`   — `publish_with_module` нижче: збірка в локальну теку модуля, без жодного виходу назовні (ні Vercel,
+#                ні дашборд команди, ні реєстр, ні git-пуш, ні мережа); модуль `publish_target: url` (2b-1) —
+#                `_publish_by_url`: без теки, результат — адреса й `state` (ходить лише сам модуль; з ядра так само
+#                нічого назовні).
+# Коментарі превʼю (2b-2) НЕ залежать від того, хто публікує: на КОЖНОМУ шляху їх вирішує `publish_comments` — з
+# постачальника ролі `comments` простору публікації, один раз, ДО збірки. Зашитий Supabase ЛІГА (`'legacy'`) їде лише у
+# збірку самої ЛІГА; модуль коментарів (будь-який) — у всі три шляхи; відмова — без коментарів і `comments_unavailable`.
 # ⛔ Усі помічники — МОДУЛЬНІ функції, а не методи `Handler`: зовнішні заглушки обробника
 # (`boss_autopublish.py`) мають лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод
 # їх зламав би. Обробник `h` сюди передається, але з нього береться лише те, що `_publish` кликав завжди.
@@ -3479,9 +3602,11 @@ def publish_with_module(h, prov, payload):
     розводить перевірену теку, ключ замка й теку, куди модуль справді пише; (4) тека проходить `folder_ok` —
     інакше 409 `bad-folder` ДО збірки (модуль перевіряє її ще раз сам, але `publish/` до того вже було б
     зібрано: `rmtree` + повна збірка задарма); (5) пароль — секрет модуля `password` (порожній рядок = «пароля
-    нема» → `None`: `''` у `build_preview` — гейт, що відчиняється порожнім полем); (6) збірка БЕЗ коментатора;
-    (7) `build_only` — відповідь про збірку; інакше `publish` модуля й `publish_local` в `iterations.json`, коли
-    модуль повернув саме `<тека>/<задача>`.
+    нема» → `None`: `''` у `build_preview` — гейт, що відчиняється порожнім полем); (6) коментарі превʼю —
+    `publish_comments` (постачальник ролі `comments` цього простору: модуль → його канал у збірці; зашитий Supabase ЛІГА
+    сюди НЕ їде; відмова → без коментарів + `comments_unavailable` у відповіді), потім збірка; (7) `build_only` —
+    відповідь про збірку; інакше `publish` модуля й `publish_local` в `iterations.json`, коли модуль повернув саме
+    `<тека>/<задача>`.
 
     Збірка й `publish` модуля йдуть ПІД ДВОМА замками (`_try_publish_locks`): (а) тека збірки задачі
     (`_task_dir_key`) — збірка стирає й пише `<задача>/publish/` незалежно від призначення, а налаштування
@@ -3528,7 +3653,10 @@ def publish_with_module(h, prov, payload):
                           'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
                          status=409)
             return
-        built = build_preview(task, tid, its, comments=False, gate_pw=gate_pw)
+        # Коментарі превʼю: з постачальника ролі `comments` ЦЬОГО простору, раз, ДО збірки (`publish_comments`). Зашитий
+        # Supabase ЛІГА (`'legacy'`) у збірку модуля не їде — `False`, як у 0.3.0.
+        comments, comments_warn = publish_comments(space, tid, module_publish=True)
+        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw)
         if payload.get('build_only'):
             result = {'ok': True, **built}
         else:
@@ -3560,6 +3688,8 @@ def publish_with_module(h, prov, payload):
                       'iterations': built['iterations'], 'frames': built['frames']}
             if 'frames_warnings' in built:
                 result['frames_warnings'] = built['frames_warnings']
+    if comments_warn:
+        result['comments_unavailable'] = comments_warn
     stale = server_code_staleness()
     if stale:
         result['code_stale'] = stale
@@ -3716,10 +3846,10 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     непрозоре — справа модуля), а теки в модуля нема.
 
     Порядок: (1) `ctx` модуля — ОДИН раз; пароль — його секрет `password` (порожній = «пароля нема» → `None`);
-    (2) замок ЛИШЕ теки збірки задачі (`_try_task_dir_lock`, без очікування: зайнято — 409 `publish-busy`); (3) збірка
-    БЕЗ коментатора; (4) `build_only` — відповідь про збірку, як у `folder`; (5) `publish` модуля БЕЗ `timeout=` (у
-    нього свої тайм-аути на запит; `timeout=` пустив би його в робочий потік, що не вклався б і працював далі
-    БЕЗ замка) із `task = {id, title, dir, state}`, де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
+    (2) замок ЛИШЕ теки збірки задачі (`_try_task_dir_lock`, без очікування: зайнято — 409 `publish-busy`); (3) коментарі
+    превʼю (`publish_comments`, як у `publish_with_module`) і збірка; (4) `build_only` — відповідь про збірку, як у
+    `folder`; (5) `publish` модуля БЕЗ `timeout=` (у нього свої тайм-аути на запит; `timeout=` пустив би його в
+    робочий потік, що не вклався б і працював далі БЕЗ замка) із `task = {id, title, dir, state}`, де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
     читання `iterations.json`; чужий чи зіпсований запис — `{}`); (6) перевірка відповіді (`_checked_url_result`:
     форма; `_guarded_url_result_secrets`: жодного секрету модуля в `url`/`state`, `warnings` очищено);
     (7) `iterations.json` перечитується ПЕРЕД записом (збірка й публікація тривали, дизайнер міг перемкнути зелену
@@ -3736,7 +3866,8 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
                           'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
                          status=409)
             return
-        built = build_preview(task, tid, its, comments=False, gate_pw=gate_pw)
+        comments, comments_warn = publish_comments(space, tid, module_publish=True)       # див. `publish_with_module`
+        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw)
         if payload.get('build_only'):
             result = {'ok': True, **built}
         else:
@@ -3765,6 +3896,8 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
                 result['warnings'] = warnings
             if 'frames_warnings' in built:
                 result['frames_warnings'] = built['frames_warnings']
+    if comments_warn:
+        result['comments_unavailable'] = comments_warn
     stale = server_code_staleness()
     if stale:
         result['code_stale'] = stale
@@ -6454,7 +6587,12 @@ class Handler(SimpleHTTPRequestHandler):
         зафіксовано — інструменти ЛІГА й зовнішні заглушки обробника); `None` — 409 `no-publish-module`;
         модуль — `publish_with_module` (локальна тека, нічого назовні). Лише `self._send_json`,
         `send_error`, `_current_task`, `_overview_sync`: зовнішні заглушки обробника мають лише їх, тож
-        нові помічники — модульні функції."""
+        нові помічники — модульні функції.
+
+        Коментарі збірки ЛІГА (2b-2) — з `publish_comments`: простір, де публікує ЛІГА, звичайно веде командні коментарі
+        зашитим Supabase (`'legacy'` → `comments=True`, збірка й відповідь байт у байт як до 2b-2), але людина могла
+        ввімкнути там власний модуль коментарів — тоді збірка несе ЙОГО канал; а явно ввімкнений модуль, що зламався, дає
+        збірку без коментарів узагалі (не спільний Supabase) і `comments_unavailable` у відповіді."""
         prov = deai_modules.provider('publish')
         if prov is None:
             self._send_json(no_publish_module_body(), status=409)
@@ -6473,7 +6611,13 @@ class Handler(SimpleHTTPRequestHandler):
         # модуль без пароля передає `gate_pw=None` (див. `build_preview`). Читаємо його ДО збірки (раніше
         # — після `rmtree`): збій читання tasks.json більше не лишає напівзібраний `publish/`.
         pw = preview_password(load_tasks(), task)
-        built = build_preview(task, tid, its, comments=True, gate_pw=pw)
+        # Коментарі превʼю — з постачальника ролі `comments` простору публікації (а не з `integrations_on()`), раз, ДО
+        # збірки: `'legacy'` → `True` (зашитий Supabase ЛІГА, байт у байт як було), модуль → його канал, відмова →
+        # без коментарів узагалі + `comments_unavailable` у відповіді (див. `publish_comments`). Простір береться лише
+        # коли він зафіксований за запитом: інструменти ЛІГА й заглушки обробника його не мають, і реєстру тоді не читаємо.
+        space = spaces.active_space() if spaces.layer_on() and spaces.request_space_id() is not None else None
+        comments, comments_warn = publish_comments(space, tid)
+        built = build_preview(task, tid, its, comments=comments, gate_pw=pw)
         # ⛔ `pub` потрібен ДАЛІ — деплою (`cwd=pub`, `_stable_alias`, `_remember_vercel_scope`); його
         # читає лише гілка без `build_only`, тож вилучення збірки без цього рядка ламає тільки справжній
         # деплой (`NameError` посеред відповіді), а `build_only`-тести лишаються зеленими.
@@ -6481,6 +6625,8 @@ class Handler(SimpleHTTPRequestHandler):
         # `ok` — ПЕРШИМ ключем: порядок ключів JSON спостережуваний (відповідь байт у байт як до
         # виносу збірки), тому результат збірки розгортається ПІСЛЯ нього.
         result = {'ok': True, **built}
+        if comments_warn:
+            result['comments_unavailable'] = comments_warn
         # Попередження їде в КОЖНІЙ відповіді публікації — і при build_only, і при
         # ранньому виході без Node: обгортка вже зібрана кодом процесу, і дизайнер
         # мусить побачити, що вона старіша за диск (фідбек 25.08.2026).
