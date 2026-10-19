@@ -2530,13 +2530,23 @@ def comments_provider(space=None):
 
 #: Скільки коментарів модуля бере агент (решту відкидаємо з позначкою) і скільки байтів вони важать разом після очищення.
 MAX_AGENT_COMMENTS = 5000
-MAX_AGENT_BYTES = 16 << 20
+MAX_AGENT_BYTES = 2 << 20
 _AGENT_ID_MAX = 200
-#: Керівні символи (ESC, CSI та решта C0/C1, крім `\n` і `\t`), роздільники рядків, керування напрямком тексту й сурогати:
-#: текст модуля друкується в ТЕРМІНАЛ агента, тож ні послідовності керування, ні підміна напрямку, ні сурогат (його не
-#: надрукувати — `UnicodeEncodeError`) у нього не потраплять.
-_AGENT_BAD_CHARS = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069'
-                              r'\ud800-\udfff]')
+#: `id` піна: те, що справді дають CommentLayer (`crypto.randomUUID()` чи `c-<цифри>-<base36>`), і нічого більше. `id` іде
+#: прямо в `resolve` модуля (а той може класти його в адресу чи запит), тож пробіл, `/`, `?`, `&`, `%`, `#`, перенос рядка
+#: чи невидимий символ у ньому — відмова (`skipped`), а не «очищення»: очищений `id` уже не той, що знає модуль.
+_AGENT_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}')
+#: Символи, яких не місце в тексті для агента й терміналу: керівні C0/C1 (ESC, CSI, BEL, NUL, CR, VT, FF, DEL; `\n` і `\t`
+#: лишаються — їх прибирає `agent_line` для однорядкових полів), м'який перенос і сполучники (U+00AD, U+034F), мовні
+#: керування (U+061C, U+180B–180F), нульової ширини й керування напрямком (U+200B–200F, U+202A–202E, U+2060–206F:
+#: ізоляти, невидима математика, застарілі формати), роздільники рядка й абзацу (U+2028/9), заповнювачі Hangul (U+3164,
+#: U+FFA0), селектори варіантів (U+FE00–FE0F, U+E0100–E01EF), BOM (U+FEFF), анотації (U+FFF9–FFFB), символи-теги
+#: (U+E0000–E007F) і сурогати (їх не надрукувати — `UnicodeEncodeError`). Текст модуля друкується в ТЕРМІНАЛ і читається
+#: LLM-агентом: керівна послідовність міняє екран, а невидимий символ ховає від людини інструкцію, яку агент побачить.
+_AGENT_BAD_CHARS = re.compile(
+    r'[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u034f\u061c\u180b-\u180f\u200b-\u200f\u2028\u2029\u202a-\u202e'
+    r'\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\ud800-\udfff'
+    r'\U000e0000-\U000e007f\U000e0100-\U000e01ef]')
 _AGENT_VERSION = re.compile(r'[0-9]{1,9}')
 
 
@@ -2560,8 +2570,20 @@ class ModulePins(list):
 
 def _agent_text(v, limit):
     """Текст від модуля: лише `str`, обрізаний ДО очищення (гігантський рядок не проганяємо крізь регулярку), без символів
-    `_AGENT_BAD_CHARS`; не `str` → `''`."""
+    `_AGENT_BAD_CHARS`; не `str` → `''`. Переноси рядка й табуляції лишаються (текст коментаря багаторядковий)."""
     return _AGENT_BAD_CHARS.sub('', v[:limit]) if isinstance(v, str) else ''
+
+
+def agent_line(v, limit):
+    """Те саме, але ОДИН рядок: переноси рядка й табуляції стають пробілами. Для полів, що друкуються всередині рядка (`author`, `ts`, `fp`,
+    `meta.version`, текст помилки): перенос рядка в них підробляв би сусідні рядки виводу (`[dry-run] …`, `• P#9 …`)."""
+    return _agent_text(v.replace('\n', ' ').replace('\t', ' ') if isinstance(v, str) else v, limit)
+
+
+def agent_error(e):
+    """`ModuleError` з ОЧИЩЕНИМ текстом: його `message` — текст винятку, який кинув КОД модуля (тож керує ним модуль), а `inbox`
+    друкує його в термінал. Код — з таблиці ядра, але теж проходить очищення; `status` зберігається (маршрут віддає його)."""
+    return deai_modules.ModuleError(agent_line(e.code, 60) or 'module-error', e.status, agent_line(e.message, 300))
 
 
 def _agent_json(v, budget, depth=0):
@@ -2601,48 +2623,90 @@ def _agent_version(v):
     return None
 
 
+def _agent_meta(meta):
+    """`meta` піна для агента. Усе, що `inbox` друкує чи розбирає, — у строгій формі (одним рядком, малі цілі, обмежені
+    списки); решта — безпечна копія JSON (`_agent_json`). `shot` не беремо: ні `inbox`, ні агентові він не потрібен, а
+    обрізаний base64 гірший за відсутній."""
+    meta = (_agent_json(meta, [300]) if isinstance(meta, dict) else None) or {}
+    meta.pop('shot', None)
+    if 'version' in meta:                                           # друкується тегом `[itN]` і розбирається `pin_target`
+        v = meta['version']
+        v = str(v) if isinstance(v, int) and not isinstance(v, bool) else agent_line(v, 200)
+        if v:
+            meta['version'] = v
+        else:
+            del meta['version']
+    if 'url' in meta:
+        meta['url'] = agent_line(meta['url'], 500)
+    if 'seq' in meta:                                               # `P#<seq>`
+        seq = _agent_version(meta['seq'])
+        if seq is None:
+            del meta['seq']
+        else:
+            meta['seq'] = seq
+    vp = meta.pop('viewport', None)                                 # `ширина: <w>×<h>`
+    if isinstance(vp, dict) and _agent_version(vp.get('w')) is not None:
+        meta['viewport'] = {'w': _agent_version(vp.get('w'))}
+        if _agent_version(vp.get('h')) is not None:
+            meta['viewport']['h'] = _agent_version(vp.get('h'))
+    ctx = meta.pop('ctx', None)                                     # `де: «крок» · розділ «…»`: ≤ 20 × 100 + 200 символів
+    if isinstance(ctx, dict):
+        out = {}
+        if agent_line(ctx.get('heading'), 200):
+            out['heading'] = agent_line(ctx.get('heading'), 200)
+        if isinstance(ctx.get('active'), list):
+            active = [agent_line(a, 100) for a in ctx['active'][:20] if isinstance(a, str)]
+            if active:
+                out['active'] = active
+        if out:
+            meta['ctx'] = out
+    return meta
+
+
+def _agent_fp(fp):
+    """Відбиток елемента для агента: `tag`/`text`/`path[]` — одним рядком і обмежені (друкується `якір: <tag> «text» · path`),
+    решта ключів — безпечна копія JSON (їх читає лише `pin-where`)."""
+    fp = _agent_json(fp, [200]) if isinstance(fp, dict) else None
+    if not fp:
+        return None
+    if 'tag' in fp:
+        fp['tag'] = agent_line(fp['tag'], 50)
+    if 'text' in fp:
+        fp['text'] = agent_line(fp['text'], 200)
+    if 'path' in fp:
+        fp['path'] = ([agent_line(x, 100) for x in fp['path'][:50] if isinstance(x, str)]
+                      if isinstance(fp['path'], list) else [])
+    return fp
+
+
 def agent_pin(c):
     """Коментар модуля (форма CommentLayer: `id, author, text, status, fp, htmlSnapshot, meta, bornV, resolvedV,
     resolveReason, ts`) → рядок у формі REST ЛІГА (`id, text, status, author, ts, meta, born_v, fp, html_snapshot,
     resolved_v, resolve_reason`), яку чекають `inbox` і маршрут `/comments`; `None` — елемент зіпсований.
 
     Лише ці поля й лише потрібних типів: `inbox` робить `fp['path'][-3:]`, `meta['viewport'].get(…)`, `str.strip()` — тож
-    чужий тип у них був би падінням CLI, а не «поганим піном». `id` — не чистимо, а відмовляємо (очищений `id` уже не
-    той, що знає модуль, і `resolve` пішов би не за тим піном). `meta.shot` (base64-знімок, десятки КБ) не беремо:
-    ні `inbox`, ні агентові він не потрібен, а обрізаний base64 гірший за відсутній."""
+    чужий тип у них був би падінням CLI, а не «поганим піном». `id` — за білим списком `_AGENT_ID`, інакше елемент
+    пропускається: чужий `id` іде в `resolve` модуля, а очищений `id` уже не той, що знає модуль. Однорядкові поля (`author`,
+    `ts`, `resolve_reason`, `fp`, `meta.version`…) — без переносів рядка; `text` багаторядковий, як і в Supabase."""
     if not isinstance(c, dict):
         return None
     pid = c.get('id')
-    if (not isinstance(pid, str) or not pid.strip() or len(pid) > _AGENT_ID_MAX or _AGENT_BAD_CHARS.search(pid)):
+    if not isinstance(pid, str) or not _AGENT_ID.fullmatch(pid):
         return None
-    meta = c.get('meta')
-    meta = (_agent_json(meta, [300]) if isinstance(meta, dict) else None) or {}
-    meta.pop('shot', None)
-    for key in ('viewport', 'ctx'):
-        if key in meta and not isinstance(meta[key], dict):
-            del meta[key]
-    fp = c.get('fp')
-    fp = _agent_json(fp, [200]) if isinstance(fp, dict) else None
-    if fp:
-        if 'path' in fp:
-            fp['path'] = [x for x in fp['path'] if isinstance(x, str)] if isinstance(fp['path'], list) else []
-        for key in ('tag', 'text'):
-            if key in fp and not isinstance(fp[key], str):
-                fp[key] = ''
     snap = c.get('htmlSnapshot')
     snap = ({'text': _agent_text(snap.get('text'), 2000), 'outerHTML': _agent_text(snap.get('outerHTML'), 20000)}
             if isinstance(snap, dict) else None)
     return {'id': pid,
             'text': _agent_text(c.get('text'), 10000),
             'status': 'resolved' if c.get('status') == 'resolved' else 'open',
-            'author': _agent_text(c.get('author'), 200),
-            'ts': _agent_text(c.get('ts'), 40),
-            'meta': meta,
+            'author': agent_line(c.get('author'), 200),
+            'ts': agent_line(c.get('ts'), 40),
+            'meta': _agent_meta(c.get('meta')),
             'born_v': _agent_version(c.get('bornV')),
-            'fp': fp or None,
+            'fp': _agent_fp(c.get('fp')),
             'html_snapshot': snap if snap and (snap['text'] or snap['outerHTML']) else None,
             'resolved_v': _agent_version(c.get('resolvedV')),
-            'resolve_reason': _agent_text(c.get('resolveReason'), 2000) or None}
+            'resolve_reason': agent_line(c.get('resolveReason'), 1000) or None}
 
 
 def agent_pins(raw):
@@ -2683,16 +2747,29 @@ class ProjectComments:
     це ЙОГО `supabase_pins`/`patch_project_pin`, тож їхні підміни в тестах лишаються чинними); для `pins` типово —
     `supabase_pins`.
 
+    Простір запиту мусить бути ЗАФІКСОВАНИМ (`task_anywhere`, `_take_task`): `comments_provider` без нього ігнорує `space` і
+    віддав би `'legacy'` (так працюють інструменти ЛІГА без простору). Тут це НЕ годиться: викликач передав запис простору,
+    а запиту без простору немає — це `broken` (`module-error`), а не спільний Supabase. `space=None` без простору запиту — як
+    раніше (`'legacy'`, інструменти ЛІГА).
+
+    Усі `ModuleError` назовні — з ОЧИЩЕНИМ текстом (`agent_error`): текст винятку кидає код модуля, а його друкують у термінал.
+
     ⚠️ Виконує код модуля (`list`/`resolve`): НЕ кликати під `spaces.WRITE_LOCK`."""
 
     def __init__(self, space):
         self.space = space
-        self.prov, self.err = comments_provider(space)
+        if space is not None and spaces.layer_on() and spaces.request_space_id() is None:
+            self.prov, self.err = None, deai_modules.ModuleError(
+                'module-error', message='comments: the request has no pinned space')
+        else:
+            self.prov, self.err = comments_provider(space)
         if isinstance(self.prov, deai_modules.Module) and space is None:
             # Постачальник-модуль без явного простору (його вирішив простір запиту, а викликач не передав запису): без
             # запису не зібрати ні `ctx`, ні канал — це відмова, а не вгадування.
             self.prov, self.err = None, deai_modules.ModuleError(
                 'module-error', message='comments: the space of the request is not known')
+        if self.err is not None:
+            self.err = agent_error(self.err)
 
     @property
     def kind(self):
@@ -2704,8 +2781,9 @@ class ProjectComments:
 
     @property
     def label(self):
-        """Хто джерело — для людини (заголовок `inbox`)."""
-        return f'модуль {self.prov.id}' if self.kind == 'module' else 'Supabase'
+        """Хто джерело — для людини (заголовок `inbox`). «Supabase» — лише коли він справді джерело."""
+        return {'module': lambda: f'модуль {self.prov.id}', 'legacy': lambda: 'Supabase',
+                'broken': lambda: 'модуль недоступний', 'off': lambda: 'не підключено'}[self.kind]()
 
     def channel(self, task, tid, internal=False):
         """Канал задачі: модуль — `deai_modules.channel_for` (канал простору), ЛІГА — `comment_channel`."""
@@ -2719,25 +2797,31 @@ class ProjectComments:
         if self.kind == 'off':
             raise spaces.IntegrationsOff('integrations-off')
 
+    def _module(self, fn, task, tid, internal, *args):
+        """Виклик функції модуля (`list`/`resolve`) для каналу задачі; будь-який `ModuleError` — з очищеним текстом."""
+        try:
+            channel = self.channel(task, tid, internal)
+            ctx = deai_modules.module_ctx(self.space, self.prov)
+            return deai_modules.call(self.prov, fn, ctx, channel, *args, timeout=deai_modules.COMMENTS_TIMEOUT)
+        except deai_modules.ModuleError as e:
+            raise agent_error(e) from None
+
     def pins(self, task, tid, internal=False, legacy=None):
         """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`), `ModuleError` — рішення чи
         виклик модуля не вдались (або відповідь не список), `OSError` — мережа ЛІГА."""
         self._check()
-        channel = self.channel(task, tid, internal)
         if self.kind == 'module':
-            ctx = deai_modules.module_ctx(self.space, self.prov)
-            return agent_pins(deai_modules.call(self.prov, 'list', ctx, channel,
-                                                timeout=deai_modules.COMMENTS_TIMEOUT))
-        return (legacy or supabase_pins)(channel)
+            return agent_pins(self._module('list', task, tid, internal))
+        return (legacy or supabase_pins)(self.channel(task, tid, internal))
 
     def resolve(self, task, tid, pin_id, reason, legacy, internal=False):
         """Закрити пін: модуль — його `resolve(ctx, channel, id, reason)`; ЛІГА — `legacy()`. Номер ітерації модулю не
-        передається (контракт ролі його не має)."""
+        передається (контракт ролі його не має). `id` — лише за білим списком `_AGENT_ID` (як і в `list`)."""
         self._check()
         if self.kind == 'module':
-            ctx = deai_modules.module_ctx(self.space, self.prov)
-            deai_modules.call(self.prov, 'resolve', ctx, self.channel(task, tid, internal), pin_id, reason,
-                              timeout=deai_modules.COMMENTS_TIMEOUT)
+            if not isinstance(pin_id, str) or not _AGENT_ID.fullmatch(pin_id):
+                raise deai_modules.ModuleError('module-error', message='comments: the pin id is not a safe identifier')
+            self._module('resolve', task, tid, internal, pin_id, reason)
             return None
         return legacy()
 

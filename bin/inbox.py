@@ -40,7 +40,7 @@ from serve import (load_tasks, supabase_pins,  # noqa: E402
                    task_iterations, iter_num, machine_identity,
                    iteration_is_mine, supabase_config, _ssl_context,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
-                   SpaceUnavailable, ProjectComments, ModulePins)
+                   SpaceUnavailable, ProjectComments, ModulePins, agent_line)
 import spaces  # noqa: E402
 from atomic_io import atomic_write_json  # noqa: E402
 
@@ -345,6 +345,13 @@ def resolve_task(wanted):
         return None
 
 
+def _say(e):
+    """Текст винятку для ВИВОДУ: одним рядком, без керівних і невидимих символів, ≤ 500. Текст помилки модуля кидає код
+    модуля (`ProjectComments` уже чистить його центрально — тут друга лінія), а ESC/OSC у терміналі агента міняють екран,
+    сурогат валить `print` (`UnicodeEncodeError`), невидимий символ ховає інструкцію від людини, яку побачить агент."""
+    return agent_line(str(e), 500)
+
+
 def project_comments():
     """Хто веде проєктні коментарі простору ЗАДАЧІ, яку щойно знайшов `resolve_task`.
 
@@ -399,7 +406,7 @@ def cmd_list(where=False, task_id=None):
             print(f'  ⚠ {proj.note()}')
         ext = show_pins(proj, 'проєкт', 'P', wmap)
     else:
-        print(f'  проєкт: (не дістати: {proj_err})')
+        print(f'  проєкт: (не дістати: {_say(proj_err)})')
         ext = 0
     if not ext and not team_off:
         print('  (немає відкритих)')
@@ -440,6 +447,10 @@ def default_iteration(task):
 
 
 def _match(pins, prefix):
+    if len(prefix) < MIN_PREFIX:
+        # Короткий збіг — лише ПОВНИЙ id (його пропускає `cmd_resolve` для просторів із модулем коментарів: id модуля
+        # може бути коротшим за `MIN_PREFIX`). Префіксом із двох символів не закривають.
+        return [p for p in pins if (p.get('id') or '').lower() == prefix]
     return [p for p in pins if (p.get('id') or '').lower().startswith(prefix)]
 
 
@@ -476,7 +487,7 @@ def find_target(prefix, local, project_loader):
         closed = [p for p in _match(local, prefix) if not _is_open(p)]
         if closed:
             return 'closed', closed
-        return None, f'локально немає, а проєкт недоступний ({e})'
+        return None, f'локально немає, а проєкт недоступний ({_say(e)})'
     hits = [p for p in _match(project, prefix) if _is_open(p)]
     if len(hits) > 1:
         return None, ('неоднозначний префікс, кандидати: '
@@ -560,7 +571,7 @@ def project_body(n, reason):
     return {'status': 'resolved', 'resolved_v': n, 'resolve_reason': reason}
 
 
-def cmd_resolve(a):
+def cmd_resolve(a, rp=None):
     """`resolve`: закрити пін(и) з причиною.
 
     Навіщо: CLI для цього не було, і сесії щоразу писали ручні скрипти або
@@ -570,13 +581,30 @@ def cmd_resolve(a):
     повторний прогін тієї самої команди після часткового збою мусить пройти,
     а не впасти на пінах, які вже в потрібному стані. Ненульовий код — рівно
     коли хоч один пін лишився відкритим: не знайдено, неоднозначно, мережа.
+
+    Номер ітерації (`--it`, типово — робоча) потрібен лише ЛІГА: локальним пінам (`resolvedV`) і проєктним у Supabase
+    (`resolved_v`). Контракт `resolve` модуля коментарів його не має, тож для пінів модуля він не потрібен і не
+    передається. Префікс коротший за `MIN_PREFIX` — лише у просторі з модулем і лише як ПОВНИЙ id.
     """
     got = resolve_task(a.task)
     if got is None:
         return 2
     tid, task = got
     n = a.it if a.it is not None else default_iteration(task)
-    if n is None:
+    short = [p for p in a.prefixes if len(p.strip()) < MIN_PREFIX]
+    module_space = None
+    if n is None or short:
+        try:
+            module_space = project_comments().kind == 'module'
+        except Exception:  # noqa: BLE001 — рішення «звідки» не вдалось: поводимось як для ЛІГА
+            module_space = False
+    if short and not module_space:
+        msg = f'префікс коротший за {MIN_PREFIX} символів: {", ".join(short)}'
+        if rp is not None:
+            rp.error(msg)
+        print(f'error: {msg}', file=sys.stderr)
+        return 2
+    if n is None and not module_space:
         print('⚠ не вдалося визначити номер робочої ітерації — задай --it N')
         return 1
     reason = a.reason.strip()
@@ -619,6 +647,13 @@ def cmd_resolve(a):
         else:
             seen.add(found['id'])
             (local_ids if kind == 'local' else project_pins).append(found)
+
+    if n is None and local_ids:
+        # Лише простір із модулем дійшов сюди без номера ітерації: пінам модуля він не потрібен, локальним — так.
+        for p in local_ids:
+            print(f'✗ {p["id"][:8]}: не вдалося визначити номер робочої ітерації для локального піна — задай --it N')
+            failed += 1
+        local_ids = []
 
     now_ms = int(time.time() * 1000)
     if local_ids:
@@ -663,7 +698,7 @@ def cmd_resolve(a):
             print(f'✓ {p["id"][:8]} закрито (проєкт{it_tag}): «{reason}»')
         except Exception as e:  # noqa: BLE001 — кожен пін звітує сам за себе
             who = pc.label if from_module else 'Supabase'
-            print(f'✗ {p["id"][:8]}: {who} не прийняв ({e})')
+            print(f'✗ {p["id"][:8]}: {who} не прийняв ({_say(e)})')
             failed += 1
     if a.dry_run:
         print('[dry-run] нічого не записано')
@@ -709,12 +744,14 @@ def build_parser():
                '--reason "кнопку перенесено в шапку"',
         formatter_class=argparse.RawDescriptionHelpFormatter)
     rp.add_argument('prefixes', nargs='+', metavar='ID',
-                    help=f'префікс id піна, не коротший за {MIN_PREFIX} символів')
+                    help=f'префікс id піна, не коротший за {MIN_PREFIX} символів (у просторі з модулем коментарів '
+                         'коротший id — лише повністю)')
     rp.add_argument('--reason', required=True,
                     help='що зроблено — обовʼязково: без причини comment-layer '
                          'показує «resolved manually», і дизайнер не знає, що змінилось')
     rp.add_argument('--it', type=int, metavar='N',
-                    help='номер ітерації, в якій закрито (типово — робоча: остання своя)')
+                    help='номер ітерації, в якій закрито (типово — робоча: остання своя); для пінів модуля '
+                         'коментарів не потрібен і ігнорується (контракт модуля його не має)')
     rp.add_argument('--dry-run', action='store_true',
                     help='надрукувати, що було б записано, нічого не міняючи')
     return ap, rp
@@ -737,10 +774,9 @@ def _main(argv):
             rp.error('--reason порожній: напиши, що зроблено')
         if a.it is not None and a.it < 1:
             rp.error('--it: номер ітерації — ціле від 1')
-        short = [p for p in a.prefixes if len(p.strip()) < MIN_PREFIX]
-        if short:
-            rp.error(f'префікс коротший за {MIN_PREFIX} символів: {", ".join(short)}')
-        return cmd_resolve(a)
+        # Короткий префікс відхиляє `cmd_resolve` — після того, як він знайшов простір задачі: лише в просторі з модулем
+        # коментарів повний id коротший за `MIN_PREFIX` законний.
+        return cmd_resolve(a, rp)
     return cmd_list(where=a.where, task_id=a.task)
 
 

@@ -294,10 +294,13 @@ def _team_comments(task, tid, integrations):
         return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
     if pc.kind == 'module':
         try:
-            n = len([p for p in pc.pins(task, tid) if p.get('status') != 'resolved'])
+            pins = pc.pins(task, tid)
+            n = len([p for p in pins if p.get('status') != 'resolved'])
         except Exception as e:  # noqa: BLE001 — модуль не відповів: «0» читалось би як «тихо», а це «не дістати»
             return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
-        return n, f' + {n} проєктних'
+        # Те, що не ввійшло (зіпсовані елементи, понад межу), — у тому ж рядку: «N відкритих» без цього збрехало б.
+        note = pins.note() if hasattr(pins, 'note') else ''
+        return n, f' + {n} проєктних' + (f' (⚠ {note})' if note else '')
     if pc.kind == 'broken':
         return 0, f', проєктні: не дістати ({pc.err.code})'
     external = _open_pins(comment_channel(task, tid)) if integrations else 0
