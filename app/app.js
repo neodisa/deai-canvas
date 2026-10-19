@@ -225,8 +225,9 @@ let spaceDdWasOpen = false;
 /** Поточний простір (`{id, name, color, integrations, …}`) або `null`: шар вимкнено,
  *  просторів нема. Джерело — задача, що відкрита (`curTask.space`), інакше реєстр. */
 const spaceNow = () => curTask?.space ?? currentSpace(spacesResp);
-/** Простір без інтеграцій: усе, що ходить НАЗОВНІ (GitLab, Teams, публікація, командні
- *  коментарі), там не опитується взагалі. Простору, про який ми знаємо, — рівно
+/** Простір без інтеграцій: усе, що ходить НАЗОВНІ (GitLab, Teams-тиша), там не опитується
+ *  взагалі (публікація йде на `hasPublish`, командний канал коментарів — на `noTeamComments`,
+ *  нижче: їх дають ролі модулів, а не інтеграції). Простору, про який ми знаємо, — рівно
  *  `=== false` (невідомість красти в людини GitLab не має, так само, як `bar-model.js`).
  *  Просторів на машині немає зовсім (привітання) — теж «назовні нічого»: задач нема, і
  *  опитувати нікого (`refreshGitlab`, `loadTeamsMute` без цього питали б порожнечу). */
@@ -6053,7 +6054,8 @@ function paletteState() {
     commentMode: st.commentMode,
     /* Простори для ⌘K: МАСИВ лише коли шар увімкнено (`off` / не питали — `undefined`,
        і пунктів просторів нема зовсім, а не «Новий простір…» без реєстру). `space` —
-       вимикач: без інтеграцій палітра ховає публікацію, GitLab і командний канал. */
+       вимикач: без інтеграцій палітра ховає GitLab; публікацію й командний канал — їхні
+       постачальники (`capabilities.publish`/`capabilities.comments`). */
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
     space: st.space ? { id: st.space.id, integrations: st.space.integrations, capabilities: st.space.capabilities } : null,

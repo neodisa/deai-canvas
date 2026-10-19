@@ -397,7 +397,8 @@ test("дропдаун просторів: після Enter/кліку на ря
 /* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
    Правила — у `spaces-model.js` (`tests/spaces-publish.test.mjs`); тут — що `app.js` ними
    КОРИСТУЄТЬСЯ і що не лишилось другого шляху повз правило. `noOutward` НЕ змінено: на ньому
-   стоять опитування GitLab/Teams і командний канал, а публікація пішла на `hasPublish`. */
+   стоять опитування GitLab/Teams; публікація пішла на `hasPublish`, а командний канал
+   коментарів (2b-2) — на `noTeamComments`/`hasTeamComments` (`capabilities.comments`). */
 
 /** Тіло дії `BAR_ACTIONS`: від `\n  <name>:` до наступної дії рівня 2 пробілів (або кінця мапи). */
 function barAct(name) {
@@ -447,7 +448,7 @@ test("«Відкрити превью» і «Скопіювати посилан
   assert.doesNotMatch(copy, /#k=/, "фрагмент із паролем збирається лише в моделі (`copyUrl`)");
 });
 
-test("палітра й смуга: публікація — на hasPublish, GitLab і командний канал — на integrations", () => {
+test("палітра й смуга: публікація — на hasPublish, командний канал — на hasTeamComments, GitLab — на integrations", () => {
   assert.match(pal, /import \{ hasPublish, hasTeamComments \} from "\.\/spaces-model\.js";/);
   assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
   assert.match(pal, /if \(!noOutward\) \{\n    \/\/ Той самий трьохгілковий розгляд/);

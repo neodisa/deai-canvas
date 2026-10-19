@@ -45,6 +45,7 @@ window.DeaiComments = { create(cfg) { return store; } };
 | `save(comments)` | `Promise`; зберегти весь масив (upsert за `id`) |
 | `remove(ids)` | `Promise`; жорстко видалити (необовʼязково) |
 | `subscribe(fn)` | `fn(comments)` на зовнішні зміни (необовʼязково; realtime) |
+| `close()` | звільнити опитування/зʼєднання сховища (необовʼязково); кличуть `CommentLayer.destroy` і «Огляд», коли запуск застарів |
 
 Коментар — форма CommentLayer: `{id, author, text, status, fp, htmlSnapshot, meta, bornV,
 resolvedV, resolveReason, ts}`. Канал (`channel`) ізолює коментарі задачі.

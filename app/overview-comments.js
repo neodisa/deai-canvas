@@ -50,6 +50,21 @@ function loadScript(src) {
   });
 }
 
+/**
+ * Помилка відповіді `/api/comment-config`: статус і `code` із JSON-тіла центральної відповіді сервера
+ * (`{ok:false, code, error}`, наприклад `module-error` чи `bad-settings`) — «comment-config 502» без причини людині
+ * нічого не каже. Показуємо лише `code` (короткий ідентифікатор), а не `error`: текст відповіді йде в тост, і він не
+ * мусить розповідати більше, ніж потрібно. Тіло не JSON чи без `code` — лише статус.
+ */
+async function configError(res) {
+  let code = null;
+  try {
+    const body = await res.json();
+    if (body && typeof body.code === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(body.code)) code = body.code;
+  } catch { /* не JSON — лишається статус */ }
+  return new Error(t("errCommentConfig", res.status, code));
+}
+
 /** id модуля → фабрика його адаптера (`window.DeaiComments`, захоплена ОДРАЗУ після завантаження його файлів). */
 const FACTORIES = new Map();
 
@@ -71,7 +86,9 @@ const FACTORIES = new Map();
 export async function moduleStore(cfg, { load = loadScript, win = window, factories = FACTORIES } = {}) {
   let factory = factories.get(cfg.module);
   if (!factory) {
-    delete win.DeaiComments;
+    // Присвоєння, а не `delete`: глобал, оголошений `var` (скрипт адаптера), нескидаємий — у строгому режимі модуля
+    // `delete` кинув би TypeError замість скидання.
+    win.DeaiComments = undefined;
     for (const src of new Set(Array.isArray(cfg.client) ? cfg.client : [])) await load(src);
     factory = win.DeaiComments;
     if (!factory || typeof factory.create !== "function") throw new Error(t("errCommentsAdapter"));
@@ -304,7 +321,7 @@ export function overviewComments(env) {
   async function start(key) {
     const [it, ch] = key.split("|");
     const cfg = await fetch(`/api/comment-config?ch=${encodeURIComponent(ch)}&it=${encodeURIComponent(it)}`)
-      .then((r) => { if (!r.ok) throw new Error(`comment-config ${r.status}`); return r.json(); });
+      .then(async (r) => { if (!r.ok) throw await configError(r); return r.json(); });
     if (cfgKey !== key) return;   // поки чекали — перемкнули канал чи ітерацію
     let store;
     if (cfg.module) {

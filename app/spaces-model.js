@@ -207,15 +207,22 @@ export const spaceErrField = (code) => {
 /**
  * Чи є в просторі командний канал коментарів — вкладка «Команда», аудиторія `project`, режим `project`.
  * Його дає РОЛЬ `comments` (етап 2b-2): зашитий Supabase ЛІГА (`'legacy'`, простір з інтеграціями) або модуль
- * (`capabilities.comments` = id модуля — навіть у просторі без інтеграцій); `null` — нікого, лише локальні.
- * Відповіді СТАРОЇ форми (без `capabilities`) лишаються валідними: тоді рішення за `integrations`, рівно
- * `=== false`, як скрізь — простір без відомостей командного каналу в людини не краде.
+ * (`capabilities.comments` = id модуля — навіть у просторі без інтеграцій); явний `null` — нікого, лише локальні.
+ *
+ * Відсутність САМОГО ключа `comments` у `capabilities` — це «не знаємо», а не «нікого»: `capabilities` із форми 2а
+ * (`{publish, tokens}`) віддає сервер, що ще не вміє роль `comments` (оновили `app.js`, а процес Python із попереднім
+ * `serve.py` не перезапустили). Тоді, як і для відповідей без `capabilities`, рішення за `integrations`, рівно `=== false`:
+ * простір без відомостей командного каналу в людини не краде (інакше ЛІГА мовчки втратила б «Команду»).
  *
  * ⚠️ Це НЕ `noOutward` (`app.js`): GitLab, Teams-тиша й дашборд команди ходять назовні й лишаються на
  * `integrations`. Простір із модулем коментарів без інтеграцій має команду коментарів, але не має GitLab.
  */
-export const hasTeamComments = (space) =>
-  (space?.capabilities ? space.capabilities.comments != null : space?.integrations !== false);
+export const hasTeamComments = (space) => {
+  const caps = space?.capabilities;
+  return caps && typeof caps === "object" && "comments" in caps
+    ? caps.comments != null
+    : space?.integrations !== false;
+};
 
 /**
  * Канал коментарів, який справді ДІЄ. Простір без командного каналу (`hasTeamComments`) не має його:
@@ -390,7 +397,8 @@ export function peekRegistered(res, taken = []) {
    інтеграцій не мав ні GitLab, ні кнопки «Опублікувати». Тепер у такому просторі публікує
    вбудований `static-publish` (локальна тека, `/published/<простір>/<задача>/`), тож питань
    стало два: чи є ХТОСЬ, хто публікує (`hasPublish`), і чи це саме ЛІГА (`isLegacyPublish`).
-   GitLab, Teams, командний канал і вкладка «Команда» лишились на `integrations`.
+   GitLab і Teams лишились на `integrations`; командний канал і вкладка «Команда» від 2b-2 — на
+   `capabilities.comments` (`hasTeamComments`, нижче: рішення за роллю `comments`, не за `integrations`).
 
    Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | 'legacy' | null, tokens,
    [error]}`): нечитабельний `space.json` лягає в `capabilities.error`, а не в 5xx. Відповіді

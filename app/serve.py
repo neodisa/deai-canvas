@@ -2417,8 +2417,9 @@ MODULE_CLIENT_TAG = ('\n<script src="{src}" '
 
 # `__deaiCommentsCfg` — `{...client_config модуля, channel}`: публічна конфігурація, яку вже перевірило ядро
 # (`deai_modules.comments_client`), і канал, який будує ЯДРО. `onChange` — гачок із контракту адаптера; шар коментатора
-# працює через `store.subscribe`, тож хосту він порожній. `store.ready` необовʼязковий у контракті — стільки ж, скільки
-# `subscribe`/`remove`: тому `Promise.resolve`. `projectId` — канал: ним коментатор ключує свій локальний стан.
+# працює через `store.subscribe`, тож хосту він порожній. Обовʼязкові в сховища `load` і `save` (їх перевіряємо одразу,
+# усередині `try`: сховище без них — банер, а не тихо мертвий коментатор); `ready` необовʼязковий — як `subscribe`/
+# `remove`/`close`: тому `Promise.resolve`. `projectId` — канал: ним коментатор ключує свій локальний стан.
 MODULE_COMMENT_SNIPPET = '\n' + _COMMENT_DOWN_BANNER + """
 <script src="{assets}/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>{client_tags}{inspector}
 <script>
@@ -2432,6 +2433,9 @@ window.__deaiCommentsCfg = {cfg_js};
     }}
     try {{
       store = window.DeaiComments.create(Object.assign({{}}, cfg, {{ onChange: function () {{}} }}));
+      if (!store || typeof store.load !== 'function' || typeof store.save !== 'function') {{
+        throw new Error('адаптер повернув сховище без load/save');
+      }}
     }} catch (e) {{
       window.__clDown((e && e.message) || 'адаптер не зміг піднятись');
       return;
@@ -2466,11 +2470,12 @@ def inject_module_comment_layer(html, assets_base, client_urls, config, version=
     `config` — вже ПЕРЕВІРЕНА публічна конфігурація з `channel` (див. `deai_modules.comments_client`/`channel_for`): тут вона
     лише екранується як JS-літерал для `<script>` (`js_literal`: `<`, `>`, `&`, U+2028/9). Решта аргументів — як у
     `inject_comment_layer`: `inspector`/`audiences` лише для робочого місця дизайнера, `space` — для `sp=` в інспектора."""
+    assets = html_escape(assets_base, quote=True)         # `origin` береться із заголовка `Host`: в атрибут — лише екранованим
     snippet = MODULE_COMMENT_SNIPPET.format(
-        assets=assets_base,
+        assets=assets,
         client_tags=''.join(MODULE_CLIENT_TAG.format(src=html_escape(u, quote=True)) for u in client_urls),
         inspector=INSPECTOR_TAG.format(
-            assets=assets_base, ds=inspector_ds_arg(profile, space)) if inspector else '',
+            assets=assets, ds=inspector_ds_arg(profile, space)) if inspector else '',
         cfg_js=js_literal(config), version_js=js_literal(version),
         audiences=audiences_arg('project' if audiences else None))
     return _insert_before_body(html, snippet)
@@ -2482,18 +2487,24 @@ def inject_comment_notice(html, why):
     return _insert_before_body(html, COMMENT_NOTICE_SNIPPET.format(why_js=js_literal(why)))
 
 
-def comments_provider():
+def comments_provider(space=None):
     """`(постачальник, відмова)` ролі `comments` для простору ЗАПИТУ: `Module`, `'legacy'` чи `None`; якщо вирішити
     не вдалось (`ModuleError`) — `(None, помилка)`. Хто відповідає людині сторінкою (а не JSON), не мусить ловити виняток
     сам.
+
+    `space` — запис простору, який викликач ВЖЕ вирішив (`spaces.active_space()`, один раз на запит): постачальник, конфіг
+    і канал тоді рахуються з ОДНОГО запису, а не з трьох читань реєстру. Без шару просторів чи без простору запиту
+    (`provider` читає реєстр лише коли простір зафіксовано) аргумент ігнорується — зашитий шлях, як і було.
 
     Помилка НІКОЛИ не перетворюється на `'legacy'`, навіть у просторі з інтеграціями: зашитий шлях ЛІГА — спільний Supabase,
     куди піни несуть знімки приватних макетів, а `provider('comments')` кидає лише тоді, коли людина ЯВНО ввімкнула
     модуль коментарів і той не завантажився (чи `space.json` не прочитати, тож невідомо, що вона вмикала). Сторінка
     тоді лишається на локальному шарі з приміткою (`_commented`), а `/api/comment-config` віддає центральну відповідь
     модулів (`_comment_config`)."""
+    if space is not None and (not spaces.layer_on() or spaces.request_space_id() is None):
+        space = None
     try:
-        return deai_modules.provider('comments'), None
+        return deai_modules.provider('comments', space), None
     except deai_modules.ModuleError as e:
         return None, e
 
@@ -4831,7 +4842,15 @@ class Handler(SimpleHTTPRequestHandler):
             # недоступний, тож `ch=project` ПОНИЖУЄТЬСЯ до локального; вкладок аудиторій нема зовсім — контракт
             # коментатора «нема `audiences` → нема рядка» (з одним «Клод» перемикач був би порожнім жестом, а «Команда»
             # вела б у відмову).
-            prov, prov_err = comments_provider()
+            # Простір СТОРІНКИ для `sp=` у URL інспектора (етап 2а, Task 7). Це простір ЗАДАЧІ, чию
+            # сторінку віддаємо: `task` прочитано з файла задач простору запиту (`_current_task` →
+            # `load_tasks` → `spaces.active_space()`), а під НАЗВАНОЮ задачею сторінка з коментатором
+            # не віддається взагалі (400 вище) — тож розбіжності між «простором запиту» і «простором
+            # задачі» тут бути не може. Беремо ОДИН раз і передаємо в усе: постачальник коментарів, їхня
+            # конфігурація й канал, обидва канали розмітки: запит зафіксував простір на вході, а реєстр
+            # до рендера міг перемкнутись.
+            page_space = spaces.active_space()
+            prov, prov_err = comments_provider(page_space)
             team = prov is not None
             notice = None            # код відмови, який людині ПОКАЗУЄМО на локальній сторінці (див. нижче)
             if ch == 'project' and not team:
@@ -4841,13 +4860,6 @@ class Handler(SimpleHTTPRequestHandler):
             # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
             # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
             ver = pm.page_version_tag(it, page)
-            # Простір СТОРІНКИ для `sp=` у URL інспектора (етап 2а, Task 7). Це простір ЗАДАЧІ, чию
-            # сторінку віддаємо: `task` прочитано з файла задач простору запиту (`_current_task` →
-            # `load_tasks` → `spaces.active_space()`), а під НАЗВАНОЮ задачею сторінка з коментатором
-            # не віддається взагалі (400 вище) — тож розбіжності між «простором запиту» і «простором
-            # задачі» тут бути не може. Беремо ОДИН раз і передаємо в обидва канали: запит зафіксував
-            # простір на вході, а реєстр до рендера міг перемкнутись.
-            page_space = spaces.active_space()
             module_cfg = None
             if ch == 'project' and isinstance(prov, deai_modules.Module):
                 # Командний канал веде МОДУЛЬ: його публічна конфігурація (перевірена ядром) і канал простору. Відмова
@@ -4994,11 +5006,13 @@ class Handler(SimpleHTTPRequestHandler):
         if ch not in ('local', 'project') or not NAME_RE.match(it):
             self.send_error(400, 'bad comment config')
             return
-        prov = None
+        prov = space = None
         if ch == 'project':
             # Командний канал — лише коли його комусь віддано: зашитий ЛІГА (`'legacy'`, інтеграції) чи модуль ролі
             # `comments`; `local` працює скрізь. Не вдалось вирішити (`ModuleError`) — центральна відповідь модулів.
-            prov, prov_err = comments_provider()
+            # Простір — ОДИН раз: з нього постачальник, конфіг і канал.
+            space = spaces.active_space()
+            prov, prov_err = comments_provider(space)
             if prov_err is not None:
                 raise prov_err
             if prov is None:
@@ -5017,7 +5031,6 @@ class Handler(SimpleHTTPRequestHandler):
         if ch == 'project' and isinstance(prov, deai_modules.Module):
             # Командний канал модуля: де його адаптер (кореневі адреси, по порядку), публічна конфігурація, канал.
             # «Огляд» (`overview-comments.js`) складає з цього `DeaiComments.create({...config, channel, onChange})`.
-            space = spaces.active_space()
             channel = deai_modules.channel_for(space, tid)
             self._send_json({'ch': ch, 'module': prov.id, 'client': module_client_urls(prov),
                              'config': deai_modules.comments_client(space, prov), 'channel': channel,

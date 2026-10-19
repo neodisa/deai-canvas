@@ -145,7 +145,7 @@ test("F4: адаптер, що не зареєстрував фабрику, н�
 /** Підставний браузер на `globalThis`; повертає журнали й `restore()`. `scripts[src]` — що робить завантаження файла. */
 function browser({ resp: response, scripts = {} }) {
   const saved = {};
-  const names = ["window", "document", "fetch", "addEventListener", "CommentLayer", "DeaiComments"];
+  const names = ["window", "document", "fetch", "addEventListener", "CommentLayer", "CommentLayerLocal", "DeaiComments"];
   for (const n of names) saved[n] = Object.getOwnPropertyDescriptor(globalThis, n);
   const out = { appended: [], created: [], inits: [], fetched: [], errors: [], destroyed: 0 };
   globalThis.window = globalThis;
@@ -158,7 +158,12 @@ function browser({ resp: response, scripts = {} }) {
       queueMicrotask(() => { (scripts[el.src] || (() => el.onerror()))(el); });
     } },
   };
-  globalThis.fetch = async (url) => { out.fetched.push(url); return { ok: true, json: async () => response }; };
+  // `response` — тіло (200) або функція `(url) => відповідь fetch` для сценаріїв із помилками й різними каналами
+  globalThis.fetch = async (url) => {
+    out.fetched.push(url);
+    return typeof response === "function" ? response(url) : { ok: true, json: async () => response };
+  };
+  globalThis.CommentLayerLocal = () => ({ ready: Promise.resolve(), load: () => [], save() {} });
   globalThis.CommentLayer = { create: () => ({
     init: (o) => { out.inits.push(o); return { destroy() { out.destroyed += 1; }, store: o.storage }; },
   }) };
@@ -231,4 +236,69 @@ test("H3: ЛІГА — відповідь без `module` не торкаєть�
     assert.deepEqual(b.created, [{ url: "https://x.supabase.co", anonKey: "k", projectId: "dc/t" }]);
     assert.equal(b.inits[0].projectId, "dc/t");
   } finally { delete globalThis.supabase; delete globalThis.CommentLayerSupabase; b.restore(); }
+});
+
+test("I: нескидаємий глобал (`var` у скрипті адаптера) не кидає TypeError: скидання — присвоєнням, фабрики немає → помилка словом", async () => {
+  const win = {};
+  Object.defineProperty(win, "DeaiComments", { value: { create: () => ({ stale: true }) }, writable: true, configurable: false });
+  const w = world({ files: {} });
+  await assert.rejects(moduleStore(resp({ module: "m-i", client: ["/m/a.js"] }), { load: w.load, win, factories: new Map() }),
+    (e) => e instanceof Error && !(e instanceof TypeError) && e.message === DICT.uk.errCommentsAdapter,
+    "залишок попереднього модуля не підхоплено, а `delete` не кинув");
+  assert.equal(win.DeaiComments, undefined, "глобал скинуто до завантаження");
+});
+
+test("J: відмова comment-config — у тості код із JSON-тіла (i18n), а не лише «502»; нерозбірне тіло — статус; чужі символи — ні", async () => {
+  const fail = (body, status = 502) => ({ ok: false, status, json: async () => { if (body === "not-json") throw new SyntaxError("x"); return body; } });
+  const cases = [
+    [fail({ ok: false, code: "module-error", error: "приватний текст відповіді" }), DICT.uk.errCommentConfig(502, "module-error")],
+    [fail({ ok: false, code: "bad-settings" }, 400), DICT.uk.errCommentConfig(400, "bad-settings")],
+    [fail("not-json", 500), DICT.uk.errCommentConfig(500, null)],
+    [fail({ code: "<img src=x onerror=1>" }, 409), DICT.uk.errCommentConfig(409, null)],
+    [fail({ code: 7 }, 409), DICT.uk.errCommentConfig(409, null)],
+  ];
+  for (const [res, want] of cases) {
+    const b = browser({ resp: () => res });
+    try {
+      overviewComments(envFor(b)).enter();
+      await settle();
+      assert.deepEqual(b.errors, [want]);
+      assert.equal(b.inits.length, 0);
+    } finally { b.restore(); }
+  }
+  assert.match(DICT.uk.errCommentConfig(502, "module-error"), /502.*module-error/);
+  assert.match(DICT.en.errCommentConfig(502, "module-error"), /502.*module-error/);
+  assert.doesNotMatch(DICT.uk.errCommentConfig(500, null), /null/);
+});
+
+test("K: застарілий запуск (канал перемкнули, поки адаптер готувався) закриває своє сховище й не піднімає другий шар", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const closes = [];
+  const R = resp({ module: "m-k", client: ["/api/module-client/m-k/adapter.js"] });
+  const LOCAL = { ch: "local", project: "x/local", version: "1", endpoint: "/api/local-comments" };
+  const b = browser({
+    resp: (url) => ({ ok: true, json: async () => (url.includes("ch=project") ? R : LOCAL) }),
+    scripts: { "/api/module-client/m-k/adapter.js": (el) => {
+      globalThis.DeaiComments = { create: () => ({ ready: gate, load: () => [], save() {}, close: () => closes.push("closed") }) };
+      el.onload();
+    } },
+  });
+  let channel = "project";
+  try {
+    const oc = overviewComments({ ...envFor(b), channel: () => channel });
+    oc.enter();
+    await settle();                       // адаптер завантажено, create() викликано, ready тримається
+    assert.equal(b.inits.length, 0);
+    channel = "local";
+    oc.rebuild();
+    await settle();                       // локальний запуск піднявся
+    assert.equal(b.inits.length, 1);
+    assert.equal(b.inits[0].local, true);
+    release();
+    await settle();                       // застарілий запуск дочекався ready
+    assert.deepEqual(closes, ["closed"], "сховище застарілого запуску закрито (інакше опитування/realtime тече)");
+    assert.equal(b.inits.length, 1, "другого інстансу коментатора нема");
+    assert.deepEqual(b.errors, []);
+  } finally { b.restore(); }
 });

@@ -898,9 +898,9 @@ test("палітра: «Копіювати посилання» і «Відкр�
 
 /* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
    Спільний `if (!noOutward)` розщеплено: `publish`/`togglepub`/`copylink`/`openpreview`
-   ходять на `hasPublish` (`spaces-model.js`), а GitLab (`gl*`) і командний канал
-   (`aud-project`) лишились на `integrations`. Простір без інтеграцій, де публікує
-   вбудований модуль, отримує публікацію, але не GitLab. */
+   ходять на `hasPublish` (`spaces-model.js`), а GitLab (`gl*`) лишився на `integrations`;
+   командний канал (`aud-project`) від 2b-2 — на `hasTeamComments` (`capabilities.comments`).
+   Простір без інтеграцій, де публікує вбудований модуль, отримує публікацію, але не GitLab. */
 {
   /* `comments` у capabilities — командний канал (2b-2): ЛІГА має зашитий (`legacy`), решта в цих фікстурах — нікого. */
   const MODS = { id: "p", integrations: false, capabilities: { publish: "static-publish", tokens: null, comments: null } };
@@ -957,6 +957,11 @@ test("палітра: «Копіювати посилання» і «Відкр�
     assert.ok(!got.includes("aud-project"));
     assert.ok(got.includes("aud-local"));
     for (const id of GL.slice(0, 2)) assert.ok(got.includes(id), id);
+  });
+
+  test("`aud-project`: capabilities форми 2а (без ключа `comments`) — за `integrations`: ЛІГА зі старим сервером не губить «Команду»", () => {
+    assert.ok(ids({ id: "liga", integrations: true, capabilities: { publish: "legacy", tokens: null } }).includes("aud-project"));
+    assert.ok(!ids({ id: "p", integrations: false, capabilities: { publish: "static-publish", tokens: null } }).includes("aud-project"));
   });
 
   test("`aud-project`: стара форма простору (без capabilities) — за `integrations`, рівно `=== false`", () => {

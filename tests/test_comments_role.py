@@ -1616,5 +1616,213 @@ class ModulePagesTest(PagesEnv):
         self.assertEqual((st, body['code']), (409, 'space-json-unreadable'))
 
 
+# ------------------------------------------------------------ вузькі перевірки сніпета, примітки, еталонів (fixup Task 2)
+
+class GoldenPinTest(unittest.TestCase):
+    """Еталони ЛІГА/«нічого» — зняті з коду bc2d786 ДО Task 2 і є доказом «байт у байт, як було». `UPDATE_COMMENTS_GOLDEN=1`
+    перезнімає їх з коду, що на диску, — тож без цього піна можна було б непомітно «оновити» еталон під зламану розмітку.
+    Хеші нижче — єдиний спосіб змінити еталон свідомо: правка ЛІГА навмисна → перезняти, подивитись diff очима, тут оновити."""
+
+    PINNED = {
+        'config-legacy-project.json': '0dab770156c984497b9c24b8c7f3f860e08754f80e3023a02b82aa5a9bde190a',
+        'config-none-local.json': '02da2eb3d4f6b11c77b32765877cbdd7cd498c2b4bb02af86cb340c5d49024a3',
+        'config-none-project.json': 'c995db0e753b0270167a9e610c1aac33bee715677792cf86cfb430cd50e7bb32',
+        'page-legacy-local.html': '2dc27d049848297412db855195a4a469a9d8e92bd585d74b82aeea34e07aff08',
+        'page-legacy-project.html': '94c5899b220782ece33862b568457f0f37d2c008798481ff2d192fcf923feb12',
+        'page-none-project.html': '56b9b4779251d9157e4ccd490f0ceb2643bde1504aeebdba591259f70acc5dfb',
+    }
+
+    def test_the_golden_files_are_exactly_the_pinned_captures(self):
+        import hashlib
+        have = {n: hashlib.sha256(_read(os.path.join(GOLDEN, n))).hexdigest() for n in sorted(os.listdir(GOLDEN))}
+        self.assertEqual(have, self.PINNED)
+
+
+class SnippetUnitTest(unittest.TestCase):
+    """Екранування у функціях інʼєкції — напряму, без сервера: hostile імена файлів, `assets`, `version`, `why`."""
+
+    HOSTILE = '</script><script>alert(1)</script>"\'&  '
+
+    def inject(self, **kw):
+        args = dict(html='<html><body></body></html>', assets_base='http://h:1/app/vendor', client_urls=['/api/module-client/m/a.js'],
+                    config={'channel': 'c'}, version='1')
+        args.update(kw)
+        return serve.inject_module_comment_layer(args.pop('html'), args.pop('assets_base'), args.pop('client_urls'),
+                                                 args.pop('config'), **args)
+
+    def test_adapter_urls_are_attribute_escaped_and_each_is_one_tag(self):
+        urls = ['/x"><script>alert(1)</script>.js', "/y' onerror='alert(1).js", '/z&amp;.js']
+        out = self.inject(client_urls=urls)
+        self.assertNotIn('"><script>alert(1)', out)
+        self.assertNotIn("' onerror='alert(1)", out.replace('&#x27;', ''))
+        self.assertIn('src="/x&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;.js"', out)
+        self.assertIn('src="/y&#x27; onerror=&#x27;alert(1).js"', out)
+        self.assertIn('src="/z&amp;amp;.js"', out)
+        self.assertEqual(out.count('<script src='), 1 + len(urls))                 # шар + по тегу на файл
+
+    def test_a_hostile_assets_base_cannot_leave_the_src_attribute(self):
+        out = self.inject(assets_base='http://h"><script>alert(1)</script>/app', inspector=True)
+        self.assertNotIn('"><script>alert(1)', out)
+        self.assertIn('http://h&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;/app/comment-layer.min.js', out)
+        self.assertIn('/app/inspector.js', out.replace('&lt;/script&gt;', ''))
+
+    def test_a_hostile_version_is_a_js_literal_that_round_trips(self):
+        out = self.inject(version='1"</script><script>alert(1)// ')
+        self.assertNotIn('</script><script>alert(1)', out)
+        self.assertNotIn(' ', out)
+        m = re.search(r'version: ("(?:[^"\\]|\\.)*")', out)
+        self.assertEqual(json.loads(m.group(1)), '1"</script><script>alert(1)// ')
+
+    def test_a_hostile_config_still_round_trips(self):
+        out = self.inject(config={'channel': 'c', 'k': self.HOSTILE})
+        self.assertNotIn('</script><script>alert(1)', out)
+        self.assertEqual(json.loads(re.search(r'window\.__deaiCommentsCfg = (\{.*?\});\n', out).group(1))['k'], self.HOSTILE)
+
+    def test_the_notice_text_is_a_js_literal_that_round_trips(self):
+        out = serve.inject_comment_notice('<html><body></body></html>', self.HOSTILE)
+        self.assertNotIn('</script><script>alert(1)', out)
+        self.assertNotIn(' ', out)
+        self.assertNotIn(' ', out)
+        m = re.search(r'window\.__clDown\((".*")\);</script>', out)
+        self.assertEqual(json.loads(m.group(1)), self.HOSTILE)
+
+    def test_the_banner_function_is_the_same_as_the_league_one(self):
+        """Копія банера для модульної сторінки не розходиться з ЛІГА-шною (шаблон ЛІГА чіпати не можна, тож копія ЖИВЕ)."""
+        pat = re.compile(r'window\.__clDown = function \(why\) \{\{.*?\n\}\};', re.S)
+        legacy, mine = pat.search(serve.COMMENT_SNIPPET), pat.search(serve._COMMENT_DOWN_BANNER)
+        self.assertIsNotNone(legacy)
+        self.assertIsNotNone(mine)
+        self.assertEqual(mine.group(0), legacy.group(0))
+        self.assertEqual(serve.MODULE_COMMENT_SNIPPET.count(mine.group(0)), 1, 'модульний сніпет несе той самий банер')
+
+
+@unittest.skipUnless(shutil.which('node'), 'node не знайдено')
+class LoaderRuntimeTest(unittest.TestCase):
+    """Завантажувач модульної сторінки ВИКОНУЄТЬСЯ (node, `vm`, підставні `window`/`document`): які сховища пускає в
+    коментатор, а які — у банер. Решта тестів лише читають текст."""
+
+    HARNESS = r"""
+const vm = require('node:vm');
+const { html, mode, noFactory } = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+const banners = [], inits = [], created = [];
+const sb = {};
+sb.window = sb;
+sb.document = { readyState: 'complete', getElementById: () => null, createElement: () => ({ style: {} }),
+  body: { appendChild: (el) => banners.push(el.textContent) }, addEventListener() {} };
+sb.localStorage = { getItem: () => null };
+sb.CommentLayer = { init: (o) => inits.push(o) };
+const ok = () => ({ ready: Promise.resolve(), load: () => [], save: async () => {} });
+const stores = {
+  ok,
+  noready: () => ({ load: () => [], save: async () => {} }),
+  nosave: () => ({ ready: Promise.resolve(), load: () => [] }),
+  noload: () => ({ ready: Promise.resolve(), save: async () => {} }),
+  nostore: () => null,
+  throws: () => { throw new Error('boom'); },
+  rejects: () => ({ ready: Promise.reject(new Error('down')), load: () => [], save: async () => {} }),
+};
+if (!noFactory) sb.DeaiComments = { create: (cfg) => { created.push(cfg); return stores[mode](); } };
+vm.createContext(sb);
+for (const s of scripts) vm.runInContext(s, sb);
+setTimeout(() => console.log(JSON.stringify({
+  banners,
+  inits: inits.map((i) => ({ projectId: i.projectId, version: i.version, storage: !!i.storage, audiences: i.audiences.map((a) => a.id) })),
+  created: created.map((c) => ({ channel: c.channel, endpoint: c.endpoint, onChange: typeof c.onChange })),
+})), 30);
+"""
+
+    def run_loader(self, mode, no_factory=False):
+        import subprocess
+        html = serve.inject_module_comment_layer('<html><body></body></html>', 'http://h/app/vendor', ['/api/module-client/m/a.js'],
+                                                 {'channel': 'deai/s/t', 'endpoint': 'http://svc'}, version='3', audiences=True)
+        r = subprocess.run(['node', '-e', self.HARNESS], input=json.dumps({'html': html, 'mode': mode, 'noFactory': no_factory}),
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr[-500:])
+        return json.loads(r.stdout)
+
+    def test_a_valid_store_boots_the_commenter_with_the_channel_version_and_tabs(self):
+        for mode in ('ok', 'noready'):                                       # `ready` необовʼязковий
+            out = self.run_loader(mode)
+            self.assertEqual(out['banners'], [], mode)
+            self.assertEqual(out['inits'], [{'projectId': 'deai/s/t', 'version': '3', 'storage': True,
+                                             'audiences': ['local', 'project']}], mode)
+            self.assertEqual(out['created'], [{'channel': 'deai/s/t', 'endpoint': 'http://svc', 'onChange': 'function'}], mode)
+
+    def test_a_store_without_load_or_save_is_a_banner_not_a_dead_commenter(self):
+        for mode in ('nosave', 'noload', 'nostore'):
+            out = self.run_loader(mode)
+            self.assertEqual(out['inits'], [], mode)
+            self.assertEqual(len(out['banners']), 1, mode)
+            self.assertIn('load/save', out['banners'][0], mode)
+
+    def test_a_factory_that_throws_or_a_ready_that_rejects_is_a_banner_with_the_reason(self):
+        out = self.run_loader('throws')
+        self.assertEqual((out['inits'], len(out['banners'])), ([], 1))
+        self.assertIn('boom', out['banners'][0])
+        out = self.run_loader('rejects')
+        self.assertEqual((out['inits'], len(out['banners'])), ([], 1))
+        self.assertIn('down', out['banners'][0])
+
+    def test_a_missing_adapter_factory_is_a_banner(self):
+        out = self.run_loader('ok', no_factory=True)
+        self.assertEqual((out['inits'], out['created'], len(out['banners'])), ([], [], 1))
+
+
+class SingleSpaceResolutionTest(PagesEnv):
+    """Простір вирішується ОДИН раз на запит: постачальник, конфіг і канал рахуються з одного запису (див. коментар у
+    `_commented`), а не з трьох читань реєстру."""
+
+    def spy(self):
+        seen = {}
+        real_p, real_c = dm.provider, dm.comments_client
+
+        def p(role, space=None):
+            seen['provider'] = space
+            return real_p(role, space)
+
+        def c(space, prov):
+            seen['client'] = space
+            return real_c(space, prov)
+        for name, fn in (('provider', p), ('comments_client', c)):
+            patch = mock.patch.object(dm, name, fn)
+            patch.start()
+            self.addCleanup(patch.stop)
+        return seen
+
+    def test_the_page_uses_one_space_record_for_the_provider_and_the_config(self):
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        seen = self.spy()
+        self.page('project')
+        self.assertIsNotNone(seen['provider'])
+        self.assertIs(seen['provider'], seen['client'])
+        self.assertEqual(seen['client']['id'], self.plain['id'])
+
+    def test_comment_config_uses_one_space_record_for_the_provider_and_the_config(self):
+        self.enable(self.plain, 'http://127.0.0.1:4555')
+        seen = self.spy()
+        self.assertEqual(self.config('project')[0], 200)
+        self.assertIsNotNone(seen['provider'])
+        self.assertIs(seen['provider'], seen['client'])
+
+    def test_a_league_page_resolves_the_provider_from_the_same_record_too(self):
+        self.use(self.liga)
+        seen = self.spy()
+        self.page('project')
+        self.assertEqual(seen['provider']['id'], self.liga['id'])
+
+    def test_without_the_spaces_layer_the_hardcoded_path_is_asked_without_a_space(self):
+        with mock.patch.object(serve.spaces, 'layer_on', return_value=False):
+            seen = {}
+            real = dm.provider
+
+            def p(role, space=None):
+                seen['provider'] = space
+                return real(role, space)
+            with mock.patch.object(dm, 'provider', p):
+                self.assertEqual(serve.comments_provider({'id': 'legacy', 'path': '', 'integrations': True}), ('legacy', None))
+        self.assertIsNone(seen['provider'])
+
+
 if __name__ == '__main__':
     unittest.main()

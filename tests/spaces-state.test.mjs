@@ -48,9 +48,32 @@ test("hasTeamComments: capabilities.comments — null ні, 'legacy' і id мо�
   }
 });
 
-test("hasTeamComments: capabilities з помилкою (space.json не читається) і порожні — каналу нема", () => {
+test("hasTeamComments: capabilities з помилкою (space.json не читається) і явним `comments: null` — каналу нема", () => {
   assert.equal(hasTeamComments({ integrations: false, capabilities: { publish: null, tokens: null, comments: null, error: "space-json-unreadable" } }), false);
-  assert.equal(hasTeamComments({ integrations: true, capabilities: {} }), false, "capabilities є, а `comments` у них немає");
+  assert.equal(hasTeamComments({ integrations: true, capabilities: { publish: null, tokens: null, comments: null, error: "module-error" } }), false,
+    "явний null — навіть у просторі з інтеграціями (приватність: зашитий спільний Supabase не підміняє зламаний модуль)");
+});
+
+/* Форма 2а: `capabilities` без ключа `comments` віддає сервер, що роль `comments` ще не знає (оновили `app.js`, а процес
+   Python із попереднім `serve.py` не перезапустили). Відсутній ключ — «не знаємо» → за `integrations`; «нікого» каже лише
+   явний `null`. Без цього ЛІГА після оновлення мовчки втрачала б «Команду». */
+test("hasTeamComments: capabilities БЕЗ ключа `comments` (форма 2а) — за `integrations`, рівно `=== false`", () => {
+  const old = { publish: "legacy", tokens: null };
+  assert.equal(hasTeamComments({ integrations: true, capabilities: old }), true, "ЛІГА зі старим сервером зберігає «Команду»");
+  assert.equal(hasTeamComments({ integrations: false, capabilities: { publish: "static-publish", tokens: null } }), false);
+  assert.equal(hasTeamComments({ integrations: true, capabilities: {} }), true);
+  assert.equal(hasTeamComments({ integrations: false, capabilities: {} }), false);
+  for (const space of [{ capabilities: old }, { integrations: undefined, capabilities: old }, { integrations: 0, capabilities: old }]) {
+    assert.equal(hasTeamComments(space), true, `невідомість не краде канал: ${JSON.stringify(space)}`);
+  }
+});
+
+test("hasTeamComments: сміття замість capabilities не кидає (рядок, число, масив) — за `integrations`", () => {
+  for (const caps of ["x", 5, [], true]) {
+    assert.doesNotThrow(() => hasTeamComments({ integrations: true, capabilities: caps }), String(caps));
+  }
+  assert.equal(hasTeamComments({ integrations: false, capabilities: "x" }), false);
+  assert.equal(hasTeamComments({ integrations: true, capabilities: "x" }), true);
 });
 
 test("hasTeamComments: стара форма (без capabilities) — за `integrations`, рівно `=== false`", () => {
@@ -65,6 +88,11 @@ test("effectiveCommentMode: простір без інтеграцій, але �
   const mod = { integrations: false, capabilities: { publish: "static-publish", tokens: null, comments: "memo-comments" } };
   assert.equal(effectiveCommentMode(mod, "project"), "project");
   assert.equal(effectiveCommentMode(mod, "local"), "local");
+});
+
+test("effectiveCommentMode: форма 2а (capabilities без `comments`) у ЛІГА лишає `project`, у просторі без інтеграцій затискає", () => {
+  assert.equal(effectiveCommentMode({ integrations: true, capabilities: { publish: "legacy", tokens: null } }, "project"), "project");
+  assert.equal(effectiveCommentMode({ integrations: false, capabilities: { publish: "static-publish", tokens: null } }, "project"), "local");
 });
 
 test("effectiveCommentMode: простір з інтеграціями, але без постачальника коментарів, затискає `project`", () => {
