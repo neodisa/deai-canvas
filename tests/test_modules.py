@@ -574,18 +574,36 @@ class ManifestClientTest(Env):
             self.error_of(mid)
 
     def test_names_follow_the_pattern(self):
-        bad = {'dotdot': '../a.js', 'slash': 'a/b.js', 'dotfile': '.a.js', 'ext': 'a.txt', 'upper': 'a.JS',
-               'bare': 'a', 'justext': '.js', 'space': 'a b.js', 'newline': 'a.js\n', 'empty': '',
+        """Кожне погане імʼя вказує на РЕАЛЬНИЙ звичайний файл (за адресою, на яку веде `os.path.join(теки_модуля, імʼя)`):
+        відмову дає саме шаблон, а не відсутність файла. Тож розширення шаблону (`../`, `/`, крапка на початку, інший
+        регістр чи розширення) цей тест ловить."""
+        bad = {'dotdot': '../a.js', 'slash': 'a/b.js', 'subdir': 'sub/b.js', 'dotfile': '.a.js', 'ext': 'a.txt',
+               'upper': 'a.JS', 'bare': 'a', 'justext': '.js', 'space': 'a b.js', 'newline': 'a.js\n', 'empty': '',
                'long': 'a' * 65 + '.js', 'cyr': 'ї.js', 'bslash': 'a\\b.js', 'dash': '-a.js', 'map': 'a.js.map',
-               'abs': '/etc/passwd.js', 'nul': 'a\0.js'}
+               'abs': os.path.join(self.tmp, 'abs.js'), 'nul': 'a\0.js', 'dotdot2': '../../a.js'}
         for key, name in bad.items():
             mid = f'n-{key}'
-            self.mkc(mid, client=[name], files={})
-            self.error_of(mid)
+            d = self.mkc(mid, client=[name], files={})
+            target = os.path.join(d, name)
+            if name and '\0' not in name:
+                _write(target, CLIENT_JS)                              # файл Є: інакше відмова була б «нема файла»
+                self.assertTrue(os.path.isfile(target), name)
+            self.error_of(mid, want='must match')
         self.mkc('n-longest', client=['a' * 64 + '.js'])          # межа: 67 знаків
         self.mkc('n-misc', client=['_x.js', 'A-b.c_d.js', '0.js', 'a.b.js'])
         self.assertEqual(dm.catalog()['n-longest'].status, 'ok')
         self.assertEqual(dm.catalog()['n-misc'].status, 'ok')
+
+    def test_the_name_must_be_exactly_the_name_on_disk(self):
+        """ФС без урахування регістру (APFS) віддала б `adapter.js` на запит `ADAPTER.js`, а `["Adapter.js", "adapter.js"]`
+        пройшло б перевірку дублів: імʼя з маніфесту мусить бути в `os.listdir(теки)` БУКВА В БУКВУ."""
+        self.mkc('x-case', client=['ADAPTER.js'], files={'adapter.js': CLIENT_JS})
+        self.mkc('x-dup', client=['Adapter.js', 'adapter.js'], files={'adapter.js': CLIENT_JS})
+        self.mkc('x-lower', client=['adapter.js'], files={'Adapter.js': CLIENT_JS})
+        for mid in ('x-case', 'x-dup', 'x-lower'):
+            self.assertIn('is not a file of the module', self.error_of(mid))
+        self.mkc('x-ok', client=['Adapter.js', 'b.js'], files={'Adapter.js': CLIENT_JS, 'b.js': CLIENT_JS})
+        self.assertEqual(dm.catalog()['x-ok'].client, ('Adapter.js', 'b.js'))
 
     def test_a_declared_file_must_exist_and_be_a_regular_file(self):
         self.mkc('f-missing', client=['a.js'], files={})

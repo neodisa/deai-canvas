@@ -10,12 +10,24 @@
 
 Два нюанси exec-завантаження: `list` ТІНИТЬ вбудовану `list` у цьому файлі (тому нижче `type([])`), а секрет
 `token` іде лише в заголовок запиту сервера — у `client_config` його немає, і ядро це перевірить.
+
+⚠️ Це ФІКСТУРА для loopback-тестів (`http://127.0.0.1:<порт>`), а не взірець безпеки: хто копіює її для свого сервісу,
+мусить вимагати `https://` (і DNS-імʼя хоста), а токен у заголовку не повинен йти за переадресацією — тому нижче
+переадресації не виконуються (`_opener`): відповідь 3xx — помилка, а не новий запит із тим самим `Authorization`.
 """
 import json
 import urllib.request
 from urllib.parse import quote
 
 TIMEOUT = 10        # секунд на запит до сервісу
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None                 # `HTTPError` 3xx замість нового запиту (з тим самим токеном) за чужою адресою
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
 
 
 def _url(ctx, channel, tail=''):
@@ -32,7 +44,7 @@ def _request(ctx, method, url, body=None):
         headers['Authorization'] = 'Bearer ' + token
     data = json.dumps(body).encode('utf-8') if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+    with _opener.open(req, timeout=TIMEOUT) as resp:
         return json.loads(resp.read() or b'null')
 
 

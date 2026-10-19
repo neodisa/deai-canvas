@@ -6647,6 +6647,16 @@ _PUBLISHED_DIRFD = (os.open in os.supports_dir_fd and os.stat in os.supports_dir
                     and ((fcntl is not None and hasattr(fcntl, 'F_GETPATH')) or os.path.isdir('/proc/self/fd')))
 
 
+def extra_modules_line():
+    """Рядок старту сервера (stderr) про `DEAI_EXTRA_MODULES`: друга тека вбудованих модулів діє — це тестовий шов
+    (модулі звідти виконуються як вбудовані), і оператор мусить бачити його в журналі. Одним рядком (шлях — через
+    `repr`, переведення рядка в ньому не пройде); `None`, коли змінної нема чи вона порожня."""
+    d = deai_modules.extra_dir()
+    if d is None:
+        return None
+    return f'DEAI_EXTRA_MODULES: додаткова тека вбудованих модулів {d!r} (тестовий шов; модулі звідти діють як вбудовані)'
+
+
 def published_mode_line():
     """Рядок старту сервера: який режим захисту `/published` діє (див. `_PUBLISHED_DIRFD`)."""
     if _PUBLISHED_DIRFD:
@@ -7286,4 +7296,7 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8765))
     print(f'Design Canvas v2: http://localhost:{port}/app/')
     print(published_mode_line())
+    extra_line = extra_modules_line()
+    if extra_line:
+        print(extra_line, file=sys.stderr)
     make_server(port).serve_forever()

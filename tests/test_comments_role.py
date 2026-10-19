@@ -26,9 +26,11 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -83,7 +85,7 @@ CFG_SETTINGS = [{'key': 'token', 'type': 'secret', 'label': 'Token'},
 
 def cfg_server(body):
     """`server.py` модуля ролі `comments`, чий `client_config` повертає `eval`-вираз `body` (бачить `ctx`)."""
-    return tm.CHECK_ONLY + _fn('client_config(ctx)', f'return {body}') + LIST_RESOLVE
+    return 'import urllib.parse as up\n' + tm.CHECK_ONLY + _fn('client_config(ctx)', f'return {body}') + LIST_RESOLVE
 
 
 class CommentsEnv(tm.Env):
@@ -99,7 +101,10 @@ class CommentsEnv(tm.Env):
         return d
 
     def install_memo(self):
-        shutil.copytree(MEMO, os.path.join(self.mods, 'memo-comments'), ignore=shutil.ignore_patterns('__pycache__'))
+        """Фікстура `memo-comments` у `self.mods`; другий виклик нічого не робить (а не `FileExistsError`)."""
+        dest = os.path.join(self.mods, 'memo-comments')
+        if not os.path.isdir(dest):
+            shutil.copytree(MEMO, dest, ignore=shutil.ignore_patterns('__pycache__'))
 
     def enable_memo(self, sp, endpoint='http://127.0.0.1:9', secrets=None):
         self.install_memo()
@@ -308,6 +313,85 @@ class CommentsClientTest(CommentsEnv):
             for leaked in (t, self.PUB, 'Q', 'stray', 'https://h', 'пароль', 'a%20b'):
                 self.assertNotIn(leaked, str(e) + e.message)
 
+    def test_keys_are_scanned_too(self):
+        for body in ('{"k-" + ctx["secrets"]["token"]: 1}', '{ctx["secrets"]["token"]: "v"}',
+                     '{"x " + ctx["secrets"]["token"] + "/y": 1}', '{up.quote(ctx["secrets"]["token"]): 1}'):
+            e = self.refused(body)
+            self.assertEqual(e.message, dm.CLIENT_CONFIG_LEAK, body)
+        self.assertEqual(self.run_cfg('{"k-ok": 1}'), {'k-ok': 1})
+
+    def test_percent_encoded_forms_are_found_by_decoding_the_text(self):
+        """`quote` (з `/` у safe), `quote_plus` і `urlencode` дають різні вигляди секрету з `+ / = пробіл` (типові для base64):
+        охоронець розкодовує кожен текст (`unquote`, `unquote_plus`) і шукає сирі форми."""
+        b64 = 'ab+c/d=e=='
+        for body, token in (
+                ('{"u": up.quote(ctx["secrets"]["token"])}', b64),
+                ('{"u": up.quote_plus(ctx["secrets"]["token"])}', b64),
+                ('{"u": "https://h/?" + up.urlencode({"k": ctx["secrets"]["token"]})}', b64),
+                ('{"u": up.quote_plus(ctx["secrets"]["token"])}', 'a b c'),          # пробіл → `+`
+                ('{"u": up.quote(ctx["secrets"]["token"])}', 'a b c'),               # пробіл → `%20`
+                ('{up.quote_plus(ctx["secrets"]["token"]): 1}', b64),                # у ключі теж
+        ):
+            with self.subTest(body=body, token=token):
+                e = self.refused(body, {'token': token})
+                self.assertEqual(e.message, dm.CLIENT_CONFIG_LEAK)
+        self.assertEqual(self.run_cfg('{"u": up.quote_plus("zzz+/=")}', {'token': 'a b c'}), {'u': 'zzz%2B%2F%3D'})
+
+    def test_a_giant_int_is_a_refusal_not_a_raw_value_error(self):
+        for body in ('{"n": 10 ** 5000}', '{"n": -10 ** 5000}', '{"n": 10 ** 4400, "s": "x"}'):
+            e = self.refused(body)
+            self.assertEqual(type(e), dm.ModuleError)
+            self.assertIn('serializable', e.message)
+        self.assertEqual(self.run_cfg('{"n": 10 ** 18}'), {'n': 10 ** 18})
+
+    def test_what_is_validated_is_what_is_returned(self):
+        """Копія СПЕРШУ, перевірка копії: підклас `dict`, що показує чистий вигляд методам `items`/`values`/`keys`, а в
+        сховищі тримає витік, не проходить (інакше перевірявся б «вигляд», а віддавалося б `dict(cfg)` зі сховища: CPython
+        копіює такий підклас зі сховища, поки не перевизначено `__iter__`)."""
+        liar = ('class Liar(dict):\n'
+                '    def items(self): return iter([("x", "clean")])\n'
+                '    def values(self): return iter(["clean"])\n'
+                '    def keys(self): return iter(["x"])\n'
+                '    def __getitem__(self, k): return "clean"\n'
+                '    def get(self, k, d=None): return "clean"\n')
+        self.n += 1
+        mid = f'liar-{self.n}'
+        self.mkcm(mid, server=tm.CHECK_ONLY + liar + _fn('client_config(ctx)', 'return Liar({"x": ctx["secrets"]["token"]})')
+                  + LIST_RESOLVE, settings=CFG_SETTINGS)
+        sp = self.new_space('Liar')
+        dm.write_module_state(sp, mid, enabled=True)
+        dm.write_secrets(sp['id'], mid, {'token': self.TOKEN})
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.comments_client(sp, dm.provider('comments', sp))
+        self.assertEqual((cm.exception.code, cm.exception.message), ('module-error', dm.CLIENT_CONFIG_LEAK))
+        # підклас, що кидає при копіюванні, — теж відмова, а не сирий виняток
+        boom = ('class Boom(dict):\n'
+                '    def __iter__(self): raise RuntimeError("boom")\n'
+                '    def keys(self): raise RuntimeError("boom")\n')
+        self.n += 1
+        mid = f'boom-{self.n}'
+        self.mkcm(mid, server=tm.CHECK_ONLY + boom + _fn('client_config(ctx)', 'return Boom({"x": 1})') + LIST_RESOLVE,
+                  settings=CFG_SETTINGS)
+        sp2 = self.new_space('Boom')
+        dm.write_module_state(sp2, mid, enabled=True)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.comments_client(sp2, dm.provider('comments', sp2))
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertNotIn('boom', cm.exception.message)
+
+    def test_the_result_is_a_plain_dict_detached_from_the_module(self):
+        self.n += 1
+        mid = f'keep-{self.n}'
+        server = (tm.CHECK_ONLY + 'CFG = {"x": "one"}\n' + _fn('client_config(ctx)', 'return CFG') + LIST_RESOLVE)
+        self.mkcm(mid, server=server, settings=CFG_SETTINGS)
+        sp = self.new_space('Keep')
+        dm.write_module_state(sp, mid, enabled=True)
+        prov = dm.provider('comments', sp)
+        got = dm.comments_client(sp, prov)
+        self.assertIs(type(got), dict)
+        prov.fn('client_config').__globals__['CFG']['x'] = 'two'                 # модуль змінює свій словник уже після
+        self.assertEqual(got, {'x': 'one'})
+
     def test_a_public_secret_may_appear_and_so_may_an_empty_or_absent_private_one(self):
         self.assertEqual(self.run_cfg('{"pk": ctx["secrets"]["pubkey"], "u": "https://h/?pk=" + ctx["secrets"]["pubkey"]}'),
                          {'pk': self.PUB, 'u': f'https://h/?pk={self.PUB}'})
@@ -372,6 +456,28 @@ class ChannelTest(unittest.TestCase):
                 dm.channel_for(sp, tid)
             self.assertEqual(cm.exception.code, 'module-error')
 
+    def test_a_space_id_must_be_a_valid_space_id(self):
+        """`SPACE_ID_RE` (`[a-z0-9][a-z0-9-]{0,39}`): `a/b` у id простору ламав би розбір каналу на складові."""
+        for bad in ('a/b', 'A', 'a b', '-a', 'a_b', 'a.b', 'a' * 41, 'a\n', 'ї', '..', '/'):
+            with self.assertRaises(dm.ModuleError, msg=repr(bad)):
+                dm.channel_for({'id': bad}, 't')
+        self.assertEqual(dm.channel_for({'id': 'a' * 40}, 't'), 'deai/' + 'a' * 40 + '/t')
+        self.assertEqual(dm.channel_for({'id': 'legacy'}, 't'), 'deai/legacy/t')            # id неявного простору
+
+    def test_a_task_id_has_no_slash_or_control_characters(self):
+        for bad in ('b/t', '/t', 't/', 'a/b/c', 't\n', 't\0', 't\x1f', 't\x7f', '\t'):
+            with self.assertRaises(dm.ModuleError, msg=repr(bad)) as cm:
+                dm.channel_for({'id': 'a'}, bad)
+            self.assertEqual(cm.exception.code, 'module-error')
+        for ok in ('t', 'ABC-1', 't_1.x', 'ї-задача', 't 1', 'internal'):
+            self.assertEqual(dm.channel_for({'id': 'a'}, ok), f'deai/a/{ok}')
+
+    def test_no_two_pairs_make_the_same_channel(self):
+        """`a` + `b/t` і `a/b` + `t` давали б один канал `deai/a/b/t` — тепер обидві пари відмовлено."""
+        for sp, tid in (({'id': 'a'}, 'b/t'), ({'id': 'a/b'}, 't')):
+            with self.assertRaises(dm.ModuleError):
+                dm.channel_for(sp, tid)
+
 
 # ------------------------------------------------------------------------------- підставний сервіс `memo`
 
@@ -381,6 +487,7 @@ class MemoService:
     def __init__(self):
         self.comments = {}            # канал → список
         self.log = []                 # (метод, шлях, заголовок Authorization, тіло)
+        self.redirect = None          # адреса, на яку сервіс відповідає 302 (перевірка «переадресації не виконуються»)
         svc = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -401,12 +508,28 @@ class MemoService:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _redirected(self):
+                if not svc.redirect:
+                    return False
+                self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                self.send_response(302)
+                self.send_header('Location', svc.redirect + self.path)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return True
+
             def do_GET(self):
                 svc.log.append(('GET', self.path, self.headers.get('Authorization'), None))
+                if self._redirected():
+                    return
                 chan, _ = self._chan()
                 self._send(svc.comments.get(chan, []))
 
             def do_POST(self):
+                if svc.redirect:
+                    svc.log.append(('POST', self.path, self.headers.get('Authorization'), None))
+                    self._redirected()
+                    return
                 raw = self.rfile.read(int(self.headers.get('Content-Length') or 0))
                 svc.log.append(('POST', self.path, self.headers.get('Authorization'), json.loads(raw or b'null')))
                 chan, tail = self._chan()
@@ -490,6 +613,27 @@ class MemoFixtureTest(CommentsEnv):
             dm.call(self.prov, 'list', self.ctx, 'deai/x/y')
         self.assertEqual(cm.exception.code, 'module-error')
         self.assertNotIn('tok-memo', cm.exception.message)
+
+    def test_redirects_are_refused_and_the_token_never_follows_them(self):
+        """Сервіс відповідає 302 на сторонню адресу: фікстура не йде за нею (токен у `Authorization` лишився б у чужому
+        запиті) — це `HTTPError`, а на «чужому» сервісі не зʼявляється жодного запиту."""
+        sink = MemoService()
+        self.addCleanup(sink.stop)
+        self.svc.redirect = sink.url
+        chan = dm.channel_for(self.sp, 'task-1')
+        for fn, args in (('list', (chan,)), ('resolve', (chan, 'c1', 'r'))):
+            with self.assertRaises(dm.ModuleError, msg=fn) as cm:
+                dm.call(self.prov, fn, self.ctx, *args)
+            self.assertEqual(cm.exception.code, 'module-error')
+            self.assertIn('302', cm.exception.message)
+            self.assertNotIn('tok-memo', cm.exception.message)
+        self.assertEqual(sink.log, [], 'токен поїхав за переадресацією')
+        self.assertEqual([m for m, *_ in self.svc.log], ['GET', 'POST'])                      # свій сервіс запитано по разу
+
+    def test_install_memo_is_idempotent(self):
+        self.install_memo()
+        self.install_memo()
+        self.assertEqual(dm.catalog()['memo-comments'].status, 'ok')
 
     def test_the_fixture_imports_only_the_stdlib_and_never_the_core(self):
         import ast
@@ -640,6 +784,71 @@ class ExtraModulesTest(CommentsEnv):
         self.assertEqual(dm.check(sp, 'memo-comments'), {'ok': True})
 
 
+class ExtraModulesLineTest(unittest.TestCase):
+    """`DEAI_EXTRA_MODULES` діє мовчки лише для того, хто його виставив: сервер пише про нього ОДИН рядок у stderr
+    (поруч із рядком режиму `/published`)."""
+
+    def test_the_line_names_the_folder_and_is_one_line(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('DEAI_EXTRA_MODULES', None)
+            self.assertIsNone(serve.extra_modules_line())
+            os.environ['DEAI_EXTRA_MODULES'] = '  '
+            self.assertIsNone(serve.extra_modules_line())
+            os.environ['DEAI_EXTRA_MODULES'] = FIXTURES
+            line = serve.extra_modules_line()
+        self.assertEqual(len(line.splitlines()), 1)
+        self.assertTrue(line.startswith('DEAI_EXTRA_MODULES:'))
+        self.assertIn(FIXTURES, line)
+        with mock.patch.dict(os.environ, {'DEAI_EXTRA_MODULES': '/tmp/x\ny'}):          # навіть шлях із переведенням рядка
+            self.assertEqual(len(serve.extra_modules_line().splitlines()), 1)
+
+    def start_server(self, extra):
+        """Справжній процес `serve.py` (PORT=0, шар вимкнено); `(рядки stdout, рядки stderr)` після старту."""
+        tmp = tempfile.mkdtemp(prefix='dc-extra-')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('DEAI_HOME', 'DC_TASKS_FILE', 'PORT', 'DEAI_EXTRA_MODULES')}
+        env.update(HOME=tmp, DC_TASKS_FILE=os.path.join(tmp, 'tasks.json'), PORT='0', DC_NO_OVERVIEW='1')
+        if extra:
+            env['DEAI_EXTRA_MODULES'] = extra
+        proc = subprocess.Popen([sys.executable, '-u', '-B', serve.__file__], env=env, cwd=tmp,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, err = [], []
+        for stream, sink in ((proc.stdout, out), (proc.stderr, err)):
+            threading.Thread(target=lambda st=stream, sk=sink: [sk.append(ln.rstrip('\n')) for ln in st], daemon=True).start()
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not any(ln.startswith('/published:') for ln in out):
+                time.sleep(0.1)
+            if extra:
+                while time.monotonic() < deadline and not any(ln.startswith('DEAI_EXTRA_MODULES:') for ln in err):
+                    time.sleep(0.1)
+            else:
+                time.sleep(0.5)                                              # рядок (якби був) іде одразу за режимом /published
+        finally:
+            proc.kill()                                                      # свій процес, за дескриптором, не за шаблоном
+            proc.wait(10)
+        return out, err
+
+    def test_a_started_server_prints_the_line_once_to_stderr_next_to_the_published_mode(self):
+        src = open(serve.__file__, encoding='utf-8').read()
+        main = src.split("if __name__ == '__main__':")[1]
+        self.assertLess(main.index('print(published_mode_line())'), main.index('extra_modules_line()'))
+        out, err = self.start_server(FIXTURES)
+        self.assertTrue(any(ln.startswith('/published:') for ln in out), out)
+        mine = [ln for ln in err if ln.startswith('DEAI_EXTRA_MODULES:')]
+        self.assertEqual(len(mine), 1, err)
+        with mock.patch.dict(os.environ, {'DEAI_EXTRA_MODULES': FIXTURES}):
+            self.assertEqual(mine[0], serve.extra_modules_line())
+        self.assertIn(FIXTURES, mine[0])
+        self.assertFalse(any('DEAI_EXTRA_MODULES' in ln for ln in out), out)       # не в stdout
+
+    def test_without_the_variable_the_server_stays_silent_about_it(self):
+        out, err = self.start_server(None)
+        self.assertTrue(any(ln.startswith('/published:') for ln in out), out)
+        self.assertEqual([ln for ln in out + err if 'DEAI_EXTRA_MODULES' in ln], [])
+
+
 # --------------------------------------------------------------------------- GET /api/module-client/…
 
 class RouteTest(unittest.TestCase):
@@ -776,6 +985,11 @@ class RouteTest(unittest.TestCase):
                      '/api/module-client/cm/adapter.js%00', '/api/module-client/cm/adapter.js%00.png',
                      '/api/module-client/cm/adapter.js%2f..%2fserver.py', '/api/module-client/cm/adapter.js%5c',
                      '/api/module-client/cm/%ff.js', '/api/module-client/cm/%c0%af.js',
+                     # некоректний UTF-8: «м'яке» розкодування (`ignore`) склало б із них оголошене імʼя
+                     '/api/module-client/cm/adapter%ff.js', '/api/module-client/cm/adap%ffter.js',
+                     '/api/module-client/cm/%ffadapter.js', '/api/module-client/cm/adapter.js%ff',
+                     '/api/module-client/c%ffm/adapter.js', '/api/module-client/%ffcm/adapter.js',
+                     '/api/module-client/cm/adapter%c0%af.js', '/api/module-client/cm/adapter%80.js',
                      '/api/module-client/CM/adapter.js', '/api/module-client/cm%2fx/adapter.js',
                      '/api/module-client/' + 'a' * 4000 + '/adapter.js', '/api/module-client/cm/' + 'a' * 4000 + '.js'):
             with self.subTest(path=path[:100]):

@@ -65,7 +65,7 @@ import stat
 import threading
 import time
 import types
-from urllib.parse import quote
+from urllib.parse import quote, unquote, unquote_plus
 
 import spaces
 from atomic_io import atomic_write_json
@@ -90,7 +90,8 @@ KEY_RE = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,63}')
 IMPLICIT_MODULE = 'static-publish'
 #: Скільки секунд чекаємо на `check` модуля (виклик у робочому потоці).
 CHECK_TIMEOUT = 5
-#: Тайм-аут `list`/`resolve` модуля ролі `comments` (ходять у мережу сервісу; кличе агент, не сторінка).
+#: Тайм-аут `list`/`resolve` модуля ролі `comments` (ходять у мережу сервісу; кличе агент, не сторінка). Поки без
+#: викликача в ядрі: його візьме Task 4 (агент читає й закриває коментарі через модуль) — константу лишаємо навмисно.
 COMMENTS_TIMEOUT = 10
 #: Файли браузерного адаптера (`client` у маніфесті ролі `comments`): імʼя, кількість, розмір одного файла.
 CLIENT_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.js')
@@ -356,13 +357,21 @@ def _check_client(man, roles, d):
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_CLIENT_FILES:
         return None, f'client: must be a list of 1 to {MAX_CLIENT_FILES} file names'
     names = []
+    on_disk = None
     for i, n in enumerate(raw):
         if not isinstance(n, str) or not CLIENT_RE.fullmatch(n):
             return None, f'client[{i}]: must match [A-Za-z0-9_][A-Za-z0-9_.-]{{0,63}}\\.js'
         if n in names:
             return None, f'client[{i}]: {n} is listed twice'
+        if on_disk is None:
+            try:
+                on_disk = set(os.listdir(d))
+            except OSError:
+                return None, 'client: the module folder is not readable'
         try:
-            st = os.lstat(os.path.join(d, n))
+            if n not in on_disk:                        # імʼя — РІВНО як на диску: ФС без урахування регістру
+                raise OSError                           # віддала б `adapter.js` на запит `ADAPTER.js`, а дубль за регістром
+            st = os.lstat(os.path.join(d, n))           # пройшов би перевірку «двічі»
         except OSError:
             return None, f'client[{i}]: {n} is not a file of the module'
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
@@ -1331,11 +1340,21 @@ def _config_refused(why):
     return ModuleError('module-error', message=f'client_config: {why}')
 
 
-def _check_client_config(secrets, public_keys, cfg):
-    """Перевірка відповіді `client_config`: плаский JSON-обʼєкт ≤ `MAX_CLIENT_CONFIG` (`json.dumps`) зі `str`/`int`/
-    `float`/`bool`/`None`; жодного значення секрету, якого немає серед `public_keys`, у значеннях (підрядок, будь-яка
-    довжина ≥ 1, у сирому чи перекодованому вигляді; числа — як текст). Усі тексти відмов фіксовані: ні значень
-    секретів, ні вмісту конфігу, ні його ключів."""
+def _text_views(t):
+    """Текст і його розкодовані `%XX`/`+` вигляди: секрет, перекодований як `quote` (з `/` у safe), `quote_plus` чи
+    `urlencode`, знаходиться тут же, де й сирий."""
+    return {t, unquote(t), unquote_plus(t)}
+
+
+def _check_client_config(cfg, guarded):
+    """Перевірка відповіді `client_config` (`cfg` — уже ЗНІМОК модульного обʼєкта, див. `comments_client`): плаский
+    JSON-обʼєкт ≤ `MAX_CLIENT_CONFIG` (`json.dumps`) зі `str`/`int`/`float`/`bool`/`None`; жодне значення з `guarded`
+    (секрети без `"public": true`) не міститься в КЛЮЧАХ чи значеннях конфігу: підрядок будь-якої довжини ≥ 1 у сирому
+    вигляді, у `repr`/JSON-екрануванні, URL-кодуванні, а також після `unquote`/`unquote_plus` тексту (числа — як текст).
+    Усі тексти відмов фіксовані: ні значень секретів, ні вмісту конфігу, ні його ключів.
+
+    ⚠️ Це охоронець від ВИПАДКОВОГО витоку (модуль поклав секрет у конфіг, склав із ним адресу). Навмисно сховану форму
+    (нижній регістр, base64, шматки, розбиті між полями) він не бачить — це не межа довіри: модулі вбудовані."""
     if not isinstance(cfg, dict):
         raise _config_refused('must be an object')
     for k, v in cfg.items():
@@ -1345,11 +1364,17 @@ def _check_client_config(secrets, public_keys, cfg):
             raise _config_refused('values must be strings, numbers, booleans or null')
         if type(v) is float and not math.isfinite(v):
             raise _config_refused('numbers must be finite')
-    if len(json.dumps(cfg)) > MAX_CLIENT_CONFIG:
+    try:
+        size = len(json.dumps(cfg))
+    except (ValueError, OverflowError, TypeError, RecursionError):      # напр. int із тисяч цифр
+        raise _config_refused('is not serializable') from None
+    if size > MAX_CLIENT_CONFIG:
         raise _config_refused(f'bigger than {MAX_CLIENT_CONFIG} bytes')
-    forms = _secret_forms({k: v for k, v in secrets.items() if k not in public_keys})
-    texts = [v if isinstance(v, str) else str(v) for v in cfg.values() if v is not None and type(v) is not bool]
-    if any(f in t for f in forms for t in texts):
+    forms = _secret_forms(guarded)
+    if not forms:
+        return
+    texts = [*cfg, *(v if isinstance(v, str) else str(v) for v in cfg.values() if v is not None and type(v) is not bool)]
+    if any(f in view for t in texts for view in _text_views(t) for f in forms):
         raise ModuleError('module-error', message=CLIENT_CONFIG_LEAK)
 
 
@@ -1357,21 +1382,33 @@ def comments_client(space, prov):
     """Публічна конфігурація браузерного адаптера модуля `prov` (ролі `comments`) для сторінок простору `space`:
     `client_config(ctx)` модуля (тайм-аут `CHECK_TIMEOUT`), перевірена `_check_client_config` — це те, що ядро вставляє в
     сторінки як `{...конфіг, channel}`. Секрет з `"public": true` показувати можна, решта — ні (`module-error` із
-    фіксованим текстом). Може кинути `bad-settings`, `space-json-unreadable`, `secrets-unreadable`, `check-timeout`,
-    `module-error`. ⚠️ Виконує код модуля: НЕ кликати під `spaces.WRITE_LOCK`."""
+    фіксованим текстом); «решта» — це `Module.private_secret_keys()` і будь-який ключ `secrets.json`, якого нема в
+    маніфесті. Модульний обʼєкт СПЕРШУ копіюється, перевіряється й віддається саме копія: те, що перевірено, і є тим,
+    що піде в сторінки (модуль міг тримати посилання на свій словник чи підсунути підклас `dict`). Може кинути
+    `bad-settings`, `space-json-unreadable`, `secrets-unreadable`, `check-timeout`, `module-error`.
+    ⚠️ Виконує код модуля: НЕ кликати під `spaces.WRITE_LOCK`."""
     if not isinstance(prov, Module) or prov.status != 'ok' or 'comments' not in prov.roles:
         raise ModuleError('module-error', message='comments_client: the provider is not a loaded comments module')
     ctx = _ctx(space, prov)
     cfg = call(prov, 'client_config', ctx, timeout=CHECK_TIMEOUT)
-    public = {s['key'] for s in prov.settings if s['type'] == 'secret' and s.get('public')}
-    _check_client_config(ctx['secrets'], public, cfg)
-    return dict(cfg)
+    if isinstance(cfg, dict):
+        try:
+            cfg = dict(cfg)
+        except Exception:  # noqa: BLE001 — підклас `dict` із власним `keys()`/`__getitem__`, що кидає
+            raise _config_refused('must be a plain object') from None
+    private, declared = set(prov.private_secret_keys()), set(prov.secret_keys())
+    guarded = {k: v for k, v in ctx['secrets'].items() if k in private or k not in declared}
+    _check_client_config(cfg, guarded)
+    return cfg
 
 
 def channel_for(space, tid, internal=False):
     """Канал коментарів задачі `tid` простору `space`: `deai/<id простору>/<tid>` (внутрішній — `…/internal`). Ядро
-    будує канал само й віддає модулю готовим: той самий id задачі в двох просторах не ділить коментарі."""
+    будує канал само й віддає модулю готовим: той самий id задачі в двох просторах не ділить коментарі. Id простору — за
+    `spaces.SPACE_ID_RE`, id задачі — непорожній рядок без `/` і керівних символів: інакше `a`+`b/t` і `a/b`+`t` дали б
+    один канал."""
     sid = _space_id(space) if isinstance(space, dict) else ''
-    if not sid or not isinstance(tid, str) or not tid:
-        raise ModuleError('module-error', message='channel: a space id and a task id are required')
+    if (not spaces.SPACE_ID_RE.fullmatch(sid) or not isinstance(tid, str) or not tid
+            or any(c == '/' or ord(c) < 32 or ord(c) == 127 for c in tid)):
+        raise ModuleError('module-error', message='channel: a valid space id and a task id (no "/" or control characters) are required')
     return f'deai/{sid}/{tid}' + ('/internal' if internal else '')
