@@ -60,6 +60,16 @@ const forbidden = (code) => (code < 0x20 && !ALLOWED.has(code)) || code === 0x7f
  * байтів на 68 634 символи), тож включення не додає ні падінь, ні винятків.
  */
 
+/* ── єдиний вендорений виняток ───────────────────────────────────────────
+ *
+ * `modules/supabase-comments/supabase.min.js` — `@supabase/supabase-js` 2.110.0 (UMD), чужий код БЕЗ ЗМІН (його SHA-256
+ * приколотий у `tests/test_supabase_comments.py`: перекладати його «на екранування» значило б віддати не ту збірку, яку
+ * випустив автор). У двох шаблонних літералах (`join(\`<U+001F>\`)`, склеювання ключів) він має сирий U+001F — не NUL, тож
+ * файл лишається ТЕКСТОМ для наших інструментів: `file(1)` каже «ASCII text», `grep` його читає (виміряно під час
+ * вендорення). Тому виняток якнайвужчий: ОДИН файл, ОДИН код, ТОЧНА кількість. Інший байт у ньому, інший код, більше чи
+ * менше цих двох (збірку замінили іншою) — падіння: виняток не дає вендореному файлу нічого, окрім цих двох байтів. */
+const VENDORED = new Map([["modules/supabase-comments/supabase.min.js", { code: 0x1f, count: 2 }]]);
+
 test("у джерелах app/ немає сирих керуючих байтів — інакше grep їх не бачить", () => {
   const files = sourceFiles();
   const bad = [];
@@ -67,12 +77,19 @@ test("у джерелах app/ немає сирих керуючих байті
   for (const f of files) {
     const src = readSource(f);
     scanned += src.length;
+    const allowed = VENDORED.get(f);
+    let allowedSeen = 0;
     for (let i = 0; i < src.length; i += 1) {
       const code = src.charCodeAt(i);
       if (!forbidden(code)) continue;
+      if (allowed && code === allowed.code) { allowedSeen += 1; continue; }
       const line = src.slice(0, i).split("\n").length;
       const col = i - (src.lastIndexOf("\n", i - 1) + 1);
       bad.push(`${f}:${line}:${col} — U+${code.toString(16).padStart(4, "0").toUpperCase()}`);
+    }
+    if (allowed && allowedSeen !== allowed.count) {
+      bad.push(`${f} — виняток вендореного файла (рівно ${allowed.count} × U+${allowed.code.toString(16).padStart(4, "0").toUpperCase()}) `
+        + `застарів: знайдено ${allowedSeen}`);
     }
   }
   assert.deepEqual(bad, [],

@@ -60,6 +60,8 @@ SECRET = 'S3cr3t-пароль-Zq91!'
 ROUTES_POST = ('/api/module-enable', '/api/module-disable', '/api/module-settings', '/api/module-check')
 ROUTES_GET = ('/api/modules', '/api/ds-tokens')
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
+#: Вбудовані модулі справжнього `app/modules` за абеткою: новий вбудований модуль — тут і лише тут.
+BUILTIN_IDS = ['css-tokens', 'static-publish', 'supabase-comments', 'vercel-publish']
 
 
 def setUpModule():
@@ -451,7 +453,7 @@ class Listing(World):
     def test_the_listing_is_alphabetical_and_has_nothing_else(self):
         st, body = self.get('/api/modules')
         self.assertEqual((st, list(body)), (200, ['modules']))
-        self.assertEqual([m['id'] for m in body['modules']], ['css-tokens', 'static-publish', 'vercel-publish'])
+        self.assertEqual([m['id'] for m in body['modules']], BUILTIN_IDS)
 
     def test_a_secret_is_never_listed_only_whether_it_is_set(self):
         st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'static-publish',
@@ -484,7 +486,7 @@ class Listing(World):
         sj['modules'] = {'gone-mod': {'enabled': True, 'settings': {'x': 1}}, 'also-gone': {'enabled': False}}
         _write(os.path.join(self.off_path, 'space.json'), json.dumps(sj))
         mods = self.listing()
-        self.assertEqual(sorted(mods), ['css-tokens', 'gone-mod', 'static-publish', 'vercel-publish'])    # вимкнений відсутній — без запису
+        self.assertEqual(sorted(mods), sorted([*BUILTIN_IDS, 'gone-mod']))    # вимкнений відсутній — без запису
         self.assertEqual(mods['gone-mod'], {
             'id': 'gone-mod', 'name': 'gone-mod', 'version': '', 'api': None, 'roles': [], 'builtin': False,
             'enabled': True, 'implicit': False, 'status': 'missing', 'settings': [],

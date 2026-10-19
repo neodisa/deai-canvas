@@ -48,6 +48,8 @@ FIXTURES = os.path.join(ROOT, 'tests', 'fixtures', 'modules')
 MEMO = os.path.join(FIXTURES, 'memo-comments')
 ADAPTER = os.path.join(MEMO, 'adapter.js')
 NOT_FOUND = b'not found\n'                                  # тіло КОЖНОЇ відмови маршруту адаптера: ні причини, ні шляху
+#: Вбудовані модулі справжнього `app/modules` за абеткою (каталог без `DEAI_EXTRA_MODULES`): новий вбудований модуль — тут і лише тут.
+BUILTIN_IDS = ['css-tokens', 'static-publish', 'supabase-comments', 'vercel-publish']
 _REAL = None
 
 
@@ -791,7 +793,7 @@ class ExtraModulesTest(CommentsEnv):
         self.assertEqual(m.private_secret_keys(), ['token'])
         for name in ('client_config', 'list', 'resolve', 'check'):
             self.assertTrue(callable(m.fn(name)), name)
-        self.assertEqual([k for k in cat if k != 'memo-comments'], ['css-tokens', 'static-publish', 'vercel-publish'])
+        self.assertEqual([k for k in cat if k != 'memo-comments'], BUILTIN_IDS)
         self.assertTrue(all(cat[k].status == 'ok' for k in cat), {k: cat[k].error for k in cat})
         self.assertEqual(list(cat), sorted(cat))                     # за абеткою, обидві теки разом
         self.assertEqual(dm.shadowed(), {})
@@ -799,7 +801,7 @@ class ExtraModulesTest(CommentsEnv):
     def test_without_the_variable_the_fixture_is_not_there(self):
         cat = self.real_catalog(extra=None)
         self.assertNotIn('memo-comments', cat)
-        self.assertEqual(sorted(cat), ['css-tokens', 'static-publish', 'vercel-publish'])
+        self.assertEqual(sorted(cat), BUILTIN_IDS)
 
     def test_unset_again_drops_the_module_without_a_cache_reset(self):
         self.real_catalog()
@@ -836,13 +838,13 @@ class ExtraModulesTest(CommentsEnv):
 
     def test_the_same_folder_twice_is_not_a_conflict(self):
         cat = self.real_catalog(extra=tm._REAL_BUILTIN_DIR())
-        self.assertEqual(sorted(cat), ['css-tokens', 'static-publish', 'vercel-publish'])
+        self.assertEqual(sorted(cat), BUILTIN_IDS)
         self.assertEqual(dm.shadowed(), {})
 
     def test_a_missing_or_foreign_extra_folder_changes_nothing(self):
         for extra in (os.path.join(self.tmp, 'nowhere'), os.path.join(FIXTURES, 'memo-comments', 'adapter.js')):
             cat = self.real_catalog(extra)
-            self.assertEqual(sorted(cat), ['css-tokens', 'static-publish', 'vercel-publish'], extra)
+            self.assertEqual(sorted(cat), BUILTIN_IDS, extra)
 
     def test_hidden_and_stray_entries_of_the_extra_folder_are_ignored_like_builtin_ones(self):
         extra = os.path.join(self.tmp, 'extra')
@@ -851,7 +853,7 @@ class ExtraModulesTest(CommentsEnv):
         _write(os.path.join(extra, 'stray.txt'), 'x')
         shutil.copytree(MEMO, os.path.join(extra, 'memo-comments'))
         cat = self.real_catalog(extra)
-        self.assertEqual(sorted(cat), ['css-tokens', 'memo-comments', 'static-publish', 'vercel-publish'])
+        self.assertEqual(sorted(cat), sorted([*BUILTIN_IDS, 'memo-comments']))
 
     def test_the_capabilities_cache_follows_the_variable(self):
         """Простір ввімкнув `memo-comments`, а модуля на цій машині ще нема (`missing`): поява теки в оточенні сама
