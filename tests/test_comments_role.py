@@ -11,6 +11,11 @@
   * `DEAI_EXTRA_MODULES`: друга тека вбудованих модулів (тестовий шов): справжній каталог вантажить фікстуру
     `memo-comments`, а `id` вбудованого модуля виграє.
 
+Task 2 (сторінки канваса й «Огляд»): `LegacyPagesTest` — ЛІГА (`'legacy'`) і «нікого» (`None`) байт у байт як до 2b-2 (еталони
+`tests/fixtures/comments-role/`, зняті з коду bc2d786 до правки); `ModulePagesTest` — `/commented?ch=project` і
+`/api/comment-config?ch=project` для модуля: порядок скриптів, публічна конфігурація без непублічних секретів, екранування,
+канал ядра, відмова модуля (локальний шар + видима примітка, ніколи не 5xx), центральна відповідь модулів.
+
 ⛔ Ізоляція: власні тимчасові `HOME`/`DEAI_HOME`/`DC_TASKS_FILE`; справжній `~/.deai` стереже `spaces_guard`. Розтяжка мережі:
 сокет лише на 127.0.0.1 (підставний сервіс `memo` у процесі й власний сервер тесту).
 """
@@ -18,6 +23,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -848,6 +854,379 @@ class RouteTest(unittest.TestCase):
     def test_the_prefix_is_a_handled_prefix_and_the_route_is_not_a_registry_one(self):
         self.assertTrue(self.PATH.startswith(serve.HANDLED_PREFIXES))       # `/api/` уже покриває `/api/module-client/`
         self.assertNotIn('/api/module-client/', serve.Handler._REGISTRY_ROUTES)
+
+
+# ----------------------------------------------------------------- сторінки канваса й `/api/comment-config` (Task 2)
+
+GOLDEN = os.path.join(ROOT, 'tests', 'fixtures', 'comments-role')
+#: `UPDATE_COMMENTS_GOLDEN=1` перезнімає еталони ЛІГА/«нічого» ЗІ СТАНУ КОДУ, який зараз на диску. Знімати їх можна лише
+#: з коду ДО змін Task 2 (чи свідомо, коли ЛІГА змінилась навмисне): еталон і є доказ «байт у байт, як було».
+UPDATE_GOLDEN = os.environ.get('UPDATE_COMMENTS_GOLDEN') == '1'
+TOKEN, PUBKEY = 'tok-SECRET-9', 'pk-OPEN-9'
+
+
+class PagesEnv(CommentsEnv):
+    """Справжній сервер у процесі й два простори: `plain` (без інтеграцій) і `liga` (з інтеграціями); в обох — задача
+    `x` з ітерацією `it1`. Поточний простір перемикає `use()`. Оточення — власне (шар просторів увімкнено, мережа — лише
+    127.0.0.1, особа машини порожня)."""
+
+    def setUp(self):
+        super().setUp()
+        for key, val in (('DC_NO_OVERVIEW', '1'), ('DC_IDENTITY_NAME', ''), ('DC_IDENTITY_EMAIL', '')):
+            prior = os.environ.get(key)
+            os.environ[key] = val
+            self.addCleanup(lambda k=key, v=prior: os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v))
+        loopback_only(self)
+        self.plain = self.new_space('Plain')
+        self.liga = self.new_space('Liga', integrations=True)
+        for sp in (self.plain, self.liga):
+            self.write_task(sp)
+        quiet = mock.patch.object(serve.Handler, 'log_message', lambda *a, **k: None)
+        quiet.start()
+        self.addCleanup(quiet.stop)
+        httpd = serve.make_server(0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+        def stop():
+            httpd.shutdown()
+            httpd.server_close()
+        self.addCleanup(stop)
+        self.port = httpd.server_address[1]
+        self.origin = f'http://127.0.0.1:{self.port}'
+        self.use(self.plain)
+
+    @staticmethod
+    def write_task(sp, tid='x'):
+        d = os.path.join(sp['path'], tid)
+        _write(os.path.join(d, 'iterations.json'), json.dumps(
+            {'iterations': [{'id': 'it1', 'date': '01.01.2026 10:00', 'note': 'start', 'published': False}],
+             'publish_url': None}))
+        _write(os.path.join(d, 'iterations', 'it1', 'index.html'),
+               f'<!DOCTYPE html><html><head><title>t</title></head><body><h1>{tid}</h1></body></html>')
+        _write(os.path.join(sp['path'], 'tasks.json'), json.dumps(
+            {'design_work_root': sp['path'], 'current': tid,
+             'tasks': {tid: {'title': 'Ікс', 'dir': d, 'profile': 'tool'}}}))
+
+    def use(self, sp):
+        spaces.switch_space(sp['id'])
+        self.cur = sp
+
+    def fetch(self, path):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        try:
+            conn.request('GET', path)
+            r = conn.getresponse()
+            return r.status, r.read().decode('utf-8')
+        finally:
+            conn.close()
+
+    def page(self, ch='project', extra=''):
+        st, html = self.fetch(f'/commented?it=it1&ch={ch}{extra}')
+        self.assertEqual(st, 200, html[:300])
+        return html
+
+    def config(self, ch='project'):
+        st, body = self.fetch(f'/api/comment-config?ch={ch}&it=it1')
+        return st, json.loads(body)
+
+    def norm(self, text):
+        """Те, що різниться між прогонами (порт, id простору, публічні сталі ЛІГА), — на плейсхолдери: еталон лишається
+        сталим, а решта розмітки порівнюється побайтно."""
+        return (text.replace(self.origin, '{ORIGIN}').replace(f'sp={self.cur["id"]}', 'sp={SP}')
+                .replace(serve.SUPABASE_URL, '{SB_URL}').replace(serve.SUPABASE_KEY, '{SB_KEY}'))
+
+    def golden(self, name, actual):
+        """Порівняти з еталоном `tests/fixtures/comments-role/<name>`; `UPDATE_COMMENTS_GOLDEN=1` — перезнімає."""
+        path = os.path.join(GOLDEN, name)
+        text = self.norm(actual)
+        if UPDATE_GOLDEN:
+            os.makedirs(GOLDEN, exist_ok=True)
+            with open(path, 'w', encoding='utf-8', newline='') as f:
+                f.write(text)
+            return
+        with open(path, encoding='utf-8', newline='') as f:
+            self.assertEqual(text, f.read(), name)
+
+    def enable(self, sp, endpoint='http://127.0.0.1:9', secrets=None):
+        """`memo-comments` у `sp` (токен непублічний, ключ публічний). Модуль ставиться один раз на тест."""
+        if not os.path.isdir(os.path.join(self.mods, 'memo-comments')):
+            self.install_memo()
+        dm.write_module_state(sp, 'memo-comments', enabled=True, settings={'endpoint': endpoint})
+        dm.write_secrets(sp['id'], 'memo-comments', {'token': TOKEN, 'pubkey': PUBKEY} if secrets is None else secrets)
+        return dm.provider('comments', sp)
+
+    def cfg_of(self, html):
+        """Конфіг сторінки: `window.__deaiCommentsCfg = <літерал>;` → dict (літерал — валідний JSON)."""
+        m = re.search(r'window\.__deaiCommentsCfg = (\{.*?\});\n', html)
+        self.assertIsNotNone(m, 'у сторінці нема window.__deaiCommentsCfg')
+        return json.loads(m.group(1))
+
+
+class LegacyPagesTest(PagesEnv):
+    """ЛІГА й «нічого» — БАЙТ У БАЙТ як до 2b-2: еталони зняті з коду bc2d786 (до Task 2)."""
+
+    def test_the_league_project_page_is_byte_identical(self):
+        self.use(self.liga)
+        self.assertEqual(dm.provider('comments', self.liga), 'legacy')
+        self.golden('page-legacy-project.html', self.page('project'))
+
+    def test_the_league_local_page_is_byte_identical_and_keeps_its_audience_tabs(self):
+        self.use(self.liga)
+        self.golden('page-legacy-local.html', self.page('local'))
+
+    def test_without_a_provider_the_project_page_is_demoted_to_local_byte_identical(self):
+        self.assertIsNone(dm.provider('comments', self.plain))
+        html = self.page('project')
+        self.assertNotIn('audiences:', html)
+        self.assertNotIn('__deaiCommentsCfg', html)
+        self.golden('page-none-project.html', html)
+
+    def test_a_module_that_was_disabled_again_leaves_exactly_the_demotion(self):
+        self.enable(self.plain)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        self.golden('page-none-project.html', self.page('project'))
+
+    def test_a_failure_to_pick_the_provider_never_breaks_the_league_path(self):
+        self.use(self.liga)
+        boom = dm.ModuleError('space-json-unreadable', message='x')
+        with mock.patch.object(dm, 'provider', side_effect=boom):
+            self.golden('page-legacy-project.html', self.page('project'))
+            st, body = self.fetch('/api/comment-config?ch=project&it=it1')
+        self.assertEqual(st, 200)
+        self.golden('config-legacy-project.json', body)
+
+    def test_the_league_space_never_gets_the_module_snippet(self):
+        self.use(self.liga)
+        for ch in ('project', 'local'):
+            html = self.page(ch)
+            self.assertNotIn('__deaiCommentsCfg', html, ch)
+            self.assertNotIn('/api/module-client/', html, ch)
+            self.assertNotIn('DeaiComments', html, ch)
+        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
+
+    def test_comment_config_legacy_none_and_local_keep_their_bodies(self):
+        self.use(self.liga)
+        st, body = self.fetch('/api/comment-config?ch=project&it=it1')
+        self.assertEqual(st, 200)
+        self.golden('config-legacy-project.json', body)
+        self.assertEqual(set(json.loads(body)), {'ch', 'project', 'version', 'sbUrl', 'sbKey'})
+        self.use(self.plain)
+        st, body = self.fetch('/api/comment-config?ch=project&it=it1')
+        self.assertEqual(st, 409)
+        self.golden('config-none-project.json', body)
+        self.assertEqual(json.loads(body)['code'], 'integrations-off')
+        st, body = self.fetch('/api/comment-config?ch=local&it=it1')
+        self.assertEqual(st, 200)
+        self.golden('config-none-local.json', body)
+        self.assertEqual(json.loads(body)['endpoint'], '/api/local-comments')
+
+
+class ModulePagesTest(PagesEnv):
+    def setUp(self):
+        super().setUp()
+        self.prov = self.enable(self.plain, 'http://127.0.0.1:4555')
+
+    def test_the_module_page_loads_core_then_adapter_then_config_then_the_loader(self):
+        html = self.page('project')
+        at = [html.index(s) for s in (
+            'window.__clDown = function',
+            f'<script src="{self.origin}/app/vendor/comment-layer.min.js"',
+            '<script src="/api/module-client/memo-comments/adapter.js"',
+            'window.__deaiCommentsCfg = ',
+            'window.DeaiComments.create(')]
+        self.assertEqual(at, sorted(at), 'порядок скриптів несучий: банер → шар → адаптер → конфіг → завантажувач')
+        self.assertEqual(html.count('/api/module-client/'), 1)
+        self.assertEqual(html.count('comment-layer.min.js'), 1)
+        for gone in ('supabase', 'local-adapter.js', 'CommentLayerSupabase', 'CommentLayerLocal'):
+            self.assertNotIn(gone, html.lower() if gone == 'supabase' else html, gone)
+        self.assertIn('storage: store', html)
+        self.assertIn('window.CommentLayer.init(', html)
+
+    def test_the_adapter_tag_reports_its_own_failure_through_the_banner(self):
+        html = self.page('project')
+        tag = re.search(r'<script src="/api/module-client/memo-comments/adapter\.js"[^>]*>', html).group(0)
+        self.assertRegex(tag, r'onerror="window\.__clDown\(')
+        layer = re.search(r'<script src="[^"]*comment-layer\.min\.js"[^>]*>', html).group(0)
+        self.assertRegex(layer, r'onerror="window\.__clDown\(')
+
+    def test_the_page_config_is_the_public_config_plus_the_channel_and_nothing_else(self):
+        html = self.page('project')
+        self.assertEqual(self.cfg_of(html), {'endpoint': 'http://127.0.0.1:4555', 'pubkey': PUBKEY,
+                                             'channel': f'deai/{self.plain["id"]}/x'})
+        self.assertNotIn(TOKEN, html)
+        self.assertIn('window.CommentLayer.init({ projectId: cfg.channel,', html)
+
+    def test_the_loader_passes_the_version_and_an_onchange_hook_and_survives_a_missing_ready(self):
+        html = self.page('project')
+        ver = serve.pm.page_version_tag('it1', {'id': serve.pm.IMPLICIT_ID})
+        self.assertIn(f'version: "{ver}"', html)
+        self.assertIn('onChange: function', html)
+        self.assertIn('Promise.resolve(store.ready)', html)             # `ready` — необовʼязковий у контракті
+        self.assertRegex(html, r'catch \(e\) \{\s*window\.__clDown\(')   # create() кинув — банер, не мовчки
+
+    def test_the_audience_tabs_and_the_inspector_are_there_like_in_the_league_page(self):
+        html = self.page('project')
+        self.assertIn('audiences:', html)
+        self.assertRegex(html, r"id: 'project', label: L\.team, active: true")
+        self.assertRegex(html, r"id: 'local', label: L\.local, active: false")
+        self.assertRegex(html, r'<script type="module" src="[^"]*/inspector\.js\?ds=tool&sp=' + re.escape(self.plain['id']))
+        self.assertIn('onAudience:', html)
+
+    def test_the_local_page_of_a_module_space_has_the_audience_tabs_with_local_active(self):
+        html = self.page('local')
+        self.assertIn('local-adapter.js', html)
+        self.assertRegex(html, r"id: 'local', label: L\.local, active: true")
+        self.assertRegex(html, r"id: 'project', label: L\.team, active: false")
+        self.assertNotIn('__deaiCommentsCfg', html)
+
+    def test_a_space_with_integrations_and_a_module_gets_the_module_not_the_league_snippet(self):
+        self.use(self.liga)
+        self.enable(self.liga, 'http://127.0.0.1:4556')
+        html = self.page('project')
+        self.assertEqual(self.cfg_of(html)['channel'], f'deai/{self.liga["id"]}/x')
+        for gone in ('supabase', 'dc/x'):
+            self.assertNotIn(gone, html.lower())
+
+    def test_two_spaces_with_the_same_task_id_never_share_a_channel(self):
+        self.use(self.liga)
+        self.enable(self.liga, 'http://127.0.0.1:4556')
+        liga_channel = self.cfg_of(self.page('project'))['channel']
+        self.use(self.plain)
+        self.assertNotEqual(self.cfg_of(self.page('project'))['channel'], liga_channel)
+
+    def test_a_hostile_config_value_cannot_break_out_of_the_script(self):
+        hostile = '</script><script>alert(1)</script>\u2028\u2029&"\'\\'
+        self.mkcm('hostile', server=cfg_server('{"endpoint": ctx["settings"]["note"], "pubkey": ctx["secrets"]["pubkey"]}'),
+                  settings=CFG_SETTINGS)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'hostile', enabled=True, settings={'note': hostile})
+        dm.write_secrets(self.plain['id'], 'hostile', {'token': TOKEN, 'pubkey': PUBKEY})
+        html = self.page('project')
+        self.assertNotIn('</script><script>alert(1)', html)
+        self.assertNotIn('\u2028', html)
+        self.assertNotIn('\u2029', html)
+        self.assertIn('\\u003c/script\\u003e', html)
+        self.assertEqual(self.cfg_of(html)['endpoint'], hostile)           # літерал розбирається назад у те саме значення
+
+    def test_the_channel_is_the_cores_even_if_the_module_config_names_one(self):
+        self.mkcm('chan', server=cfg_server('{"channel": "evil/channel", "onChange": "x", "k": 1}'), settings=CFG_SETTINGS)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'chan', enabled=True)
+        self.assertEqual(self.cfg_of(self.page('project'))['channel'], f'deai/{self.plain["id"]}/x')
+        body = self.config('project')[1]
+        self.assertEqual(body['channel'], f'deai/{self.plain["id"]}/x')
+        self.assertEqual(body['config']['channel'], 'evil/channel')         # конфіг віддаємо як є; склеює і ставить канал ХОСТ
+
+    def test_the_adapter_files_are_loaded_in_the_manifest_order_before_the_config(self):
+        self.mkcm('twin', client=('a.js', 'b.js'), server=cfg_server('{"k": 1}'), settings=CFG_SETTINGS)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'twin', enabled=True)
+        html = self.page('project')
+        at = [html.index(f'<script src="/api/module-client/twin/{n}"') for n in ('a.js', 'b.js')]
+        self.assertEqual(at, sorted(at), 'файли адаптера — у порядку маніфесту')
+        self.assertLess(at[1], html.index('window.__deaiCommentsCfg'))
+
+    # ---- відмова модуля: локальний шар + видима примітка, ніколи не 5xx ----
+    def assert_fallback(self, html, code):
+        self.assertIn('local-adapter.js', html)
+        self.assertNotIn('__deaiCommentsCfg', html)
+        self.assertNotIn('DeaiComments', html)
+        self.assertNotIn('/api/module-client/', html)
+        notice = re.search(r"window\.__clDown\(([^\n]*)\);\s*</script>\s*</body>", html)
+        self.assertIsNotNone(notice, 'примітка про відмову має бути видимою (банер) в кінці сторінки')
+        self.assertIn(code, notice.group(1))
+        self.assertIn('window.__clDown = function', html)
+        for secret in (TOKEN, PUBKEY):
+            self.assertNotIn(secret, html)
+
+    def test_a_private_secret_in_the_config_falls_back_to_the_local_layer_with_a_notice(self):
+        self.mkcm('leaky', server=cfg_server('{"endpoint": ctx["secrets"]["token"]}'), settings=CFG_SETTINGS)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'leaky', enabled=True)
+        dm.write_secrets(self.plain['id'], 'leaky', {'token': TOKEN, 'pubkey': PUBKEY})
+        self.assert_fallback(self.page('project'), 'module-error')
+
+    def test_missing_settings_fall_back_with_the_code(self):
+        dm.write_module_state(self.plain, 'memo-comments', settings={'endpoint': None})        # `None` знімає ключ
+        self.assert_fallback(self.page('project'), 'bad-settings')
+
+    def test_a_module_that_does_not_answer_falls_back_with_check_timeout(self):
+        self.mkcm('slow', server=tm.CHECK_ONLY + 'import time\ndef client_config(ctx):\n    time.sleep(3)\n    return {}\n'
+                  + LIST_RESOLVE)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'slow', enabled=True)
+        with mock.patch.object(dm, 'CHECK_TIMEOUT', 0.2):
+            self.assert_fallback(self.page('project'), 'check-timeout')
+
+    def test_unreadable_secrets_fall_back_with_the_code(self):
+        _write(self.secrets_file, '{broken')
+        self.assert_fallback(self.page('project'), 'secrets-unreadable')
+
+    def test_an_unreadable_space_json_falls_back_to_local_with_the_code_and_without_tabs(self):
+        _write(self.space_json(self.plain), '{broken')
+        html = self.page('project')
+        self.assertIn('local-adapter.js', html)
+        self.assertNotIn('audiences:', html)                               # провайдера не вирішити — вкладок нема
+        self.assertIn('space-json-unreadable', html)
+
+    def test_a_clean_local_page_has_no_notice(self):
+        self.assertNotIn('window.__clDown', self.page('local'))
+
+    # ---- /api/comment-config ----
+    def test_comment_config_of_a_module_names_the_adapter_the_public_config_and_the_channel(self):
+        st, body = self.config('project')
+        self.assertEqual(st, 200)
+        self.assertEqual(body, {
+            'ch': 'project', 'module': 'memo-comments',
+            'client': ['/api/module-client/memo-comments/adapter.js'],
+            'config': {'endpoint': 'http://127.0.0.1:4555', 'pubkey': PUBKEY},
+            'channel': f'deai/{self.plain["id"]}/x',
+            'version': serve.pm.page_version_tag('it1', {'id': serve.pm.IMPLICIT_ID})})
+        self.assertNotIn(TOKEN, json.dumps(body))
+
+    def test_comment_config_carries_the_machine_identity_when_there_is_one(self):
+        os.environ['DC_IDENTITY_NAME'] = 'Lead'
+        self.assertEqual(self.config('project')[1]['user'], {'name': 'Lead'})
+
+    def test_comment_config_client_urls_are_served_by_the_adapter_route(self):
+        for url in self.config('project')[1]['client']:
+            st, body = self.fetch(url)
+            self.assertEqual(st, 200, url)
+            self.assertIn('DeaiComments', body)
+
+    def test_comment_config_local_is_unchanged_in_a_module_space(self):
+        st, body = self.config('local')
+        self.assertEqual((st, body['ch'], body['endpoint']), (200, 'local', '/api/local-comments'))
+        self.assertNotIn('module', body)
+
+    def test_comment_config_module_errors_use_the_central_mapping(self):
+        dm.write_module_state(self.plain, 'memo-comments', settings={'endpoint': None})
+        st, body = self.config('project')
+        self.assertEqual((st, body['ok'], body['code']), (400, False, 'bad-settings'))
+        dm.write_module_state(self.plain, 'memo-comments', settings={'endpoint': 'http://127.0.0.1:9'})
+        _write(self.secrets_file, '{broken')
+        st, body = self.config('project')
+        self.assertEqual((st, body['code']), (409, 'secrets-unreadable'))
+        _write(self.secrets_file, '{}')
+        self.mkcm('leaky', server=cfg_server('{"endpoint": ctx["secrets"]["token"]}'), settings=CFG_SETTINGS)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'leaky', enabled=True)
+        dm.write_secrets(self.plain['id'], 'leaky', {'token': TOKEN, 'pubkey': PUBKEY})
+        st, body = self.config('project')
+        self.assertEqual((st, body['code']), (502, 'module-error'))
+        self.assertNotIn(TOKEN, json.dumps(body))
+        self.mkcm('slow', server=tm.CHECK_ONLY + 'import time\ndef client_config(ctx):\n    time.sleep(3)\n    return {}\n'
+                  + LIST_RESOLVE)
+        dm.write_module_state(self.plain, 'leaky', enabled=False)
+        dm.write_module_state(self.plain, 'slow', enabled=True)
+        with mock.patch.object(dm, 'CHECK_TIMEOUT', 0.2):
+            st, body = self.config('project')
+        self.assertEqual((st, body['code']), (504, 'check-timeout'))
+
+    def test_comment_config_with_an_unreadable_space_json_is_the_modules_409(self):
+        _write(self.space_json(self.plain), '{broken')
+        st, body = self.config('project')
+        self.assertEqual((st, body['code']), (409, 'space-json-unreadable'))
 
 
 if __name__ == '__main__':

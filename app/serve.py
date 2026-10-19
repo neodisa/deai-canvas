@@ -2388,6 +2388,115 @@ def inject_comment_layer(html, project, assets_base, internal=False, version='',
     return _insert_before_body(html, snippet)
 
 
+# ---------- Роль `comments`: коментарі модуля (2b-2, Task 2) ----------
+#
+# Сторінка робочого місця з командним каналом МОДУЛЯ (простір, де роль `comments` виконує модуль, а не зашитий Supabase
+# ЛІГА). Шар коментатора той самий (`comment-layer.min.js`), сховище — з адаптера модуля: `window.DeaiComments.create(cfg)`
+# (контракт — спека 2b-2). Зашитий шлях (`COMMENT_SNIPPET`) і локальний (`LOCAL_COMMENT_SNIPPET`) НЕ змінено ні на байт:
+# їх приколюють еталони `tests/fixtures/comments-role/`, зняті з коду до цієї правки.
+#
+# Банер `window.__clDown` — ПЕРШИМ тегом із тієї ж причини, що в `COMMENT_SNIPPET` (там вона розписана): `onerror` тегів
+# `<script src>` нижче спрацьовує РАНІШЕ, ніж виконався б скрипт ініціалізації. Текст і вигляд банера — ті самі; це окрема
+# копія, бо шаблон ЛІГА чіпати не можна (його розбирає `bin/import_preview.py`).
+_COMMENT_DOWN_BANNER = """<script>
+window.__clDown = function (why) {{
+  if (document.getElementById('cl-down')) return;
+  var d = document.createElement('div');
+  d.id = 'cl-down';
+  d.textContent = 'Коментарі недоступні: ' + why;
+  d.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;'
+    + 'background:#d14343;color:#fff;font:13px/1.4 system-ui,sans-serif;'
+    + 'padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.3)';
+  (document.body || document.documentElement).appendChild(d);
+}};
+</script>"""
+
+#: Тег файла адаптера: його падіння — це падіння КОМЕНТАРІВ, тож іде в банер (на відміну від інспектора).
+MODULE_CLIENT_TAG = ('\n<script src="{src}" '
+                     'onerror="window.__clDown(\'адаптер коментарів не завантажився\')"></script>')
+
+# `__deaiCommentsCfg` — `{...client_config модуля, channel}`: публічна конфігурація, яку вже перевірило ядро
+# (`deai_modules.comments_client`), і канал, який будує ЯДРО. `onChange` — гачок із контракту адаптера; шар коментатора
+# працює через `store.subscribe`, тож хосту він порожній. `store.ready` необовʼязковий у контракті — стільки ж, скільки
+# `subscribe`/`remove`: тому `Promise.resolve`. `projectId` — канал: ним коментатор ключує свій локальний стан.
+MODULE_COMMENT_SNIPPET = '\n' + _COMMENT_DOWN_BANNER + """
+<script src="{assets}/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>{client_tags}{inspector}
+<script>
+window.__deaiCommentsCfg = {cfg_js};
+(function () {{
+  var init = function () {{
+    var cfg = window.__deaiCommentsCfg, store;
+    if (!window.CommentLayer || !window.DeaiComments) {{
+      window.__clDown('шар коментарів не піднявся');
+      return;
+    }}
+    try {{
+      store = window.DeaiComments.create(Object.assign({{}}, cfg, {{ onChange: function () {{}} }}));
+    }} catch (e) {{
+      window.__clDown((e && e.message) || 'адаптер не зміг піднятись');
+      return;
+    }}
+    Promise.resolve(store.ready).then(function () {{
+      window.CommentLayer.init({{ projectId: cfg.channel, storage: store,
+        version: {version_js}{audiences} }});
+    }}).catch(function (e) {{
+      window.__clDown((e && e.message) || 'сервіс коментарів не відповів');
+    }});
+  }};
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+}})();
+</script>"""
+
+#: Видима примітка на ЛОКАЛЬНІЙ сторінці, коли командний канал модуля не піднявся (`comments_client` відмовив).
+COMMENT_NOTICE_SNIPPET = '\n' + _COMMENT_DOWN_BANNER + '\n<script>window.__clDown({why_js});</script>'
+
+
+def module_client_urls(prov):
+    """Кореневі адреси файлів браузерного адаптера модуля `prov` — у порядку маніфесту (`/api/module-client/<id>/<файл>`).
+    Без `/t/<задача>/`: це маршрут простору, а не задачі."""
+    return [f'{MODULE_CLIENT_PREFIX}{prov.id}/{name}' for name in prov.client]
+
+
+def inject_module_comment_layer(html, assets_base, client_urls, config, version='',
+                                inspector=False, audiences=False, profile='', space=None):
+    """Канал коментарів МОДУЛЯ: шар коментатора (`<assets_base>/comment-layer.min.js`), файли адаптера (`client_urls`, по
+    порядку), `window.__deaiCommentsCfg = config` і завантажувач із `storage: DeaiComments.create(…)`.
+
+    `config` — вже ПЕРЕВІРЕНА публічна конфігурація з `channel` (див. `deai_modules.comments_client`/`channel_for`): тут вона
+    лише екранується як JS-літерал для `<script>` (`js_literal`: `<`, `>`, `&`, U+2028/9). Решта аргументів — як у
+    `inject_comment_layer`: `inspector`/`audiences` лише для робочого місця дизайнера, `space` — для `sp=` в інспектора."""
+    snippet = MODULE_COMMENT_SNIPPET.format(
+        assets=assets_base,
+        client_tags=''.join(MODULE_CLIENT_TAG.format(src=html_escape(u, quote=True)) for u in client_urls),
+        inspector=INSPECTOR_TAG.format(
+            assets=assets_base, ds=inspector_ds_arg(profile, space)) if inspector else '',
+        cfg_js=js_literal(config), version_js=js_literal(version),
+        audiences=audiences_arg('project' if audiences else None))
+    return _insert_before_body(html, snippet)
+
+
+def inject_comment_notice(html, why):
+    """Видима примітка внизу сторінки (банер `__clDown`): `why` — коротка причина, БЕЗ значень секретів і без тексту
+    модуля (лише код відмови ядра)."""
+    return _insert_before_body(html, COMMENT_NOTICE_SNIPPET.format(why_js=js_literal(why)))
+
+
+def comments_provider():
+    """`(постачальник, відмова)` ролі `comments` для простору ЗАПИТУ: `Module`, `'legacy'` чи `None`; якщо вирішити
+    не вдалось (`ModuleError`, типово нечитабельний `space.json` простору без інтеграцій) — `(None, помилка)`. Хто
+    відповідає людині сторінкою (а не JSON), не мусить ловити виняток сам.
+
+    Простір З інтеграціями модулями не ламається: збій вибору постачальника там лишає зашитий шлях ЛІГА (`'legacy'`), як
+    було до ролі `comments` (`deai_modules._provider_for` уже так робить для пошкодженого `space.json`)."""
+    try:
+        return deai_modules.provider('comments'), None
+    except deai_modules.ModuleError as e:
+        if spaces.integrations_on():
+            return 'legacy', None
+        return None, e
+
+
 def _insert_before_body(html, snippet):
     """Вставити фрагмент перед `</body>` (або в кінець, якщо тега немає).
 
@@ -4715,13 +4824,18 @@ class Handler(SimpleHTTPRequestHandler):
         if not bare:
             origin = f'http://{self.headers.get("Host", "localhost:8765")}'
             ch = q.get('ch', ['local'])[0]
-            # Простір без інтеграцій: канал Supabase (і CDN із supabase-js) недоступний, тож
-            # `ch=project` ПОНИЖУЄТЬСЯ до локального; вкладок аудиторій нема зовсім — контракт
-            # коментатора «нема `audiences` → нема рядка» (з одним «Клод» перемикач був би
-            # порожнім жестом, а «Команда» вела б у відмову).
-            integrations = spaces.integrations_on()
-            if ch == 'project' and not integrations:
+            # Хто дає командні коментарі простору: `Module` (роль `comments`), `'legacy'` (зашитий Supabase ЛІГА, простір
+            # з інтеграціями) чи `None` (нікого — лише локальні). `team` — чи є вкладка «Команда» й канал `project`
+            # узагалі. Без постачальника (простір без інтеграцій і без модуля) канал Supabase (і CDN із supabase-js)
+            # недоступний, тож `ch=project` ПОНИЖУЄТЬСЯ до локального; вкладок аудиторій нема зовсім — контракт
+            # коментатора «нема `audiences` → нема рядка» (з одним «Клод» перемикач був би порожнім жестом, а «Команда»
+            # вела б у відмову).
+            prov, prov_err = comments_provider()
+            team = prov is not None
+            notice = None            # код відмови, який людині ПОКАЗУЄМО на локальній сторінці (див. нижче)
+            if ch == 'project' and not team:
                 ch = 'local'
+                notice = prov_err.code if prov_err is not None else None
             # version МУСИТЬ збігатися з publish-конвенцією (iter_num: it1→"1"),
             # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
             # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
@@ -4733,7 +4847,20 @@ class Handler(SimpleHTTPRequestHandler):
             # задачі» тут бути не може. Беремо ОДИН раз і передаємо в обидва канали: запит зафіксував
             # простір на вході, а реєстр до рендера міг перемкнутись.
             page_space = spaces.active_space()
-            if ch == 'project':
+            module_cfg = None
+            if ch == 'project' and isinstance(prov, deai_modules.Module):
+                # Командний канал веде МОДУЛЬ: його публічна конфігурація (перевірена ядром) і канал простору. Відмова
+                # модуля — не 5xx: сторінка лишається РОБОЧОЮ (локальні коментарі) і каже, чому нема командних.
+                try:
+                    channel = deai_modules.channel_for(page_space, tid)
+                    module_cfg = {**deai_modules.comments_client(page_space, prov), 'channel': channel}
+                except deai_modules.ModuleError as e:
+                    ch, notice = 'local', e.code
+            if module_cfg is not None:
+                html = inject_module_comment_layer(
+                    html, f'{origin}/app/vendor', module_client_urls(prov), module_cfg, version=ver,
+                    inspector=True, audiences=team, profile=task.get('profile') or '', space=page_space)
+            elif ch == 'project':
                 # режим «Проєкт»: канал Supabase (колеги + історія, як в опублікованому).
                 # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек,
                 # а не те, чиїми очима дивляться на макет — це та сама локальна
@@ -4741,7 +4868,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # кнопка в смузі тихо нічого не робила (виміряно в браузері).
                 html = inject_comment_layer(html, comment_channel(task, tid),
                                             f'{origin}/app/vendor', version=ver,
-                                            inspector=True, audiences=integrations,
+                                            inspector=True, audiences=team,
                                             profile=task.get('profile') or '',
                                             space=page_space)
             else:
@@ -4749,8 +4876,10 @@ class Handler(SimpleHTTPRequestHandler):
                 local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
                 html = inject_local_comment_layer(
                     html, f'{origin}/api/local-comments', local_key,
-                    f'{origin}/app/vendor', version=ver, audiences=integrations,
+                    f'{origin}/app/vendor', version=ver, audiences=team,
                     profile=task.get('profile') or '', space=page_space)
+                if notice:
+                    html = inject_comment_notice(html, f'командні коментарі не піднялись ({notice}), показано локальні')
         body = html.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -4864,11 +4993,17 @@ class Handler(SimpleHTTPRequestHandler):
         if ch not in ('local', 'project') or not NAME_RE.match(it):
             self.send_error(400, 'bad comment config')
             return
-        if ch == 'project' and not spaces.integrations_on():
-            # Канал Supabase — лише з інтеграціями; `local` працює скрізь.
-            self._send_json(integrations_off_body(
-                'командних коментарів у просторі без інтеграцій нема'), status=409)
-            return
+        prov = None
+        if ch == 'project':
+            # Командний канал — лише коли його комусь віддано: зашитий ЛІГА (`'legacy'`, інтеграції) чи модуль ролі
+            # `comments`; `local` працює скрізь. Не вдалось вирішити (`ModuleError`) — центральна відповідь модулів.
+            prov, prov_err = comments_provider()
+            if prov_err is not None:
+                raise prov_err
+            if prov is None:
+                self._send_json(integrations_off_body(
+                    'командних коментарів у просторі без інтеграцій нема'), status=409)
+                return
         tid, task = self._current_task()
         # Тег ІТЕРАЦІЇ, без сторінки: у полотні видно всі сторінки ітерації, а
         # скоуп пінів comment-layer рахує саме за ітерацією (`iterationOf`).
@@ -4878,7 +5013,15 @@ class Handler(SimpleHTTPRequestHandler):
         # публікацію імʼя не йде — ПІБ у відкритому превʼю на Vercel неприпустиме.
         name, _ = machine_identity()
         user = {'user': {'name': name}} if name else {}
-        if ch == 'project':
+        if ch == 'project' and isinstance(prov, deai_modules.Module):
+            # Командний канал модуля: де його адаптер (кореневі адреси, по порядку), публічна конфігурація, канал.
+            # «Огляд» (`overview-comments.js`) складає з цього `DeaiComments.create({...config, channel, onChange})`.
+            space = spaces.active_space()
+            channel = deai_modules.channel_for(space, tid)
+            self._send_json({'ch': ch, 'module': prov.id, 'client': module_client_urls(prov),
+                             'config': deai_modules.comments_client(space, prov), 'channel': channel,
+                             'version': ver, **user})
+        elif ch == 'project':
             self._send_json({'ch': ch, 'project': comment_channel(task, tid), 'version': ver,
                              'sbUrl': SUPABASE_URL, 'sbKey': SUPABASE_KEY, **user})
         else:

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  SPACE_COLORS, colorStep, currentSpace, effectiveCommentMode, freeColor, healTarget,
+  SPACE_COLORS, colorStep, currentSpace, effectiveCommentMode, freeColor, hasTeamComments, healTarget,
   isReadErrKey, needsWelcome, peekFound, peekRegistered, readErrKey, rovingIndex, shouldRefreshHome, spaceChanged, taskErrKey,
 } from "../app/spaces-model.js";
 
@@ -33,6 +33,44 @@ test("effectiveCommentMode: невідомий простір каналу не 
     { integrations: "" }, { integrations: null }]) {
     assert.equal(effectiveCommentMode(space, "project"), "project", JSON.stringify(space));
   }
+});
+
+/* ── командний канал за `capabilities.comments` (2b-2, Task 2) ──────────────────────────────────────
+   Командний канал дає РОЛЬ `comments`: зашитий ЛІГА (`'legacy'`) або модуль; `null` — нікого. Прапорець
+   `integrations` тепер тільки запасний (відповіді старої форми без `capabilities`). */
+
+test("hasTeamComments: capabilities.comments — null ні, 'legacy' і id модуля так, незалежно від integrations", () => {
+  const caps = (comments, integrations) => ({ integrations, capabilities: { publish: null, tokens: null, comments } });
+  for (const integrations of [true, false, undefined]) {
+    assert.equal(hasTeamComments(caps(null, integrations)), false, `null / ${integrations}`);
+    assert.equal(hasTeamComments(caps("legacy", integrations)), true, `legacy / ${integrations}`);
+    assert.equal(hasTeamComments(caps("memo-comments", integrations)), true, `module / ${integrations}`);
+  }
+});
+
+test("hasTeamComments: capabilities з помилкою (space.json не читається) і порожні — каналу нема", () => {
+  assert.equal(hasTeamComments({ integrations: false, capabilities: { publish: null, tokens: null, comments: null, error: "space-json-unreadable" } }), false);
+  assert.equal(hasTeamComments({ integrations: true, capabilities: {} }), false, "capabilities є, а `comments` у них немає");
+});
+
+test("hasTeamComments: стара форма (без capabilities) — за `integrations`, рівно `=== false`", () => {
+  assert.equal(hasTeamComments({ integrations: false }), false);
+  assert.equal(hasTeamComments({ integrations: true }), true);
+  for (const space of [null, undefined, {}, { integrations: undefined }, { integrations: 0 }, { integrations: "" }, { integrations: null }]) {
+    assert.equal(hasTeamComments(space), true, JSON.stringify(space));
+  }
+});
+
+test("effectiveCommentMode: простір без інтеграцій, але з модулем коментарів, лишає `project`", () => {
+  const mod = { integrations: false, capabilities: { publish: "static-publish", tokens: null, comments: "memo-comments" } };
+  assert.equal(effectiveCommentMode(mod, "project"), "project");
+  assert.equal(effectiveCommentMode(mod, "local"), "local");
+});
+
+test("effectiveCommentMode: простір з інтеграціями, але без постачальника коментарів, затискає `project`", () => {
+  const none = { integrations: true, capabilities: { publish: "legacy", tokens: null, comments: null } };
+  assert.equal(effectiveCommentMode(none, "project"), "local");
+  assert.equal(effectiveCommentMode({ ...none, capabilities: { ...none.capabilities, comments: "legacy" } }, "project"), "project");
 });
 
 /* ── зміна простору ────────────────────────────────────────────────────── */

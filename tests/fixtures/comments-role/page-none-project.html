@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><base href="{ORIGIN}/it-assets/it1/"><title>t</title></head><body><h1>x</h1>
+<script src="{ORIGIN}/app/vendor/local-adapter.js"></script>
+<script src="{ORIGIN}/app/vendor/comment-layer.min.js"></script>
+<script type="module" src="{ORIGIN}/app/vendor/inspector.js?ds=tool&sp={SP}"></script>
+<script>
+(function () {
+  var init = function () {
+    var store = window.CommentLayerLocal({ endpoint: '{ORIGIN}/api/local-comments' });
+    store.ready.then(function () {
+      window.CommentLayer.init({ projectId: 'x/local', storage: store,
+        version: '1', local: true });
+    });
+  };
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+})();
+</script></body></html>

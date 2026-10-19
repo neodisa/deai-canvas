@@ -32,7 +32,7 @@ import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, healTarget,
+  FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, hasTeamComments, healTarget,
   isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError,
@@ -231,6 +231,10 @@ const spaceNow = () => curTask?.space ?? currentSpace(spacesResp);
  *  Просторів на машині немає зовсім (привітання) — теж «назовні нічого»: задач нема, і
  *  опитувати нікого (`refreshGitlab`, `loadTeamsMute` без цього питали б порожнечу). */
 const noOutward = () => spaceNow()?.integrations === false || needsWelcome(spacesResp);
+/** Командного каналу коментарів нема: вкладки «Команда» й аудиторії `project` — теж. Це НЕ `noOutward`: канал дає
+ *  роль `comments` (зашитий ЛІГА або модуль, `capabilities.comments`), і простір без інтеграцій, але з модулем
+ *  коментарів його має. Просторів нема зовсім (привітання) — теж без каналу: задач і сторінок нема. */
+const noTeamComments = () => needsWelcome(spacesResp) || !hasTeamComments(spaceNow());
 /** Канал коментарів, який ДІЄ (див. `effectiveCommentMode`). `commentMode` у сховищі не чіпаємо. */
 const effMode = () => effectiveCommentMode(spaceNow(), commentMode);
 
@@ -1448,11 +1452,11 @@ async function newTaskDialog() {
  */
 function setAudience(ch) {
   if (ch !== 'local' && ch !== 'project') return;
-  /* Командного каналу в просторі без інтеграцій нема — відмова, а не тиха зміна
-     збереженого вибору. І порівнюємо з ДІЮЧИМ каналом: у такому просторі `project`
-     зі сховища й так читається як `local`, тож `local` тут не «зміна» і не мусить
-     переписувати вибір, що в ЛІГА лишається. */
-  if (ch === 'project' && noOutward()) return;
+  /* Командного каналу в просторі без постачальника ролі `comments` нема — відмова, а не
+     тиха зміна збереженого вибору. І порівнюємо з ДІЮЧИМ каналом: у такому просторі
+     `project` зі сховища й так читається як `local`, тож `local` тут не «зміна» і не
+     мусить переписувати вибір, що в ЛІГА лишається. */
+  if (ch === 'project' && noTeamComments()) return;
   if (effMode() === ch) return;
   commentMode = ch;
   try { localStorage.setItem('dc-comment-mode', commentMode); } catch (e) {}
@@ -3637,10 +3641,10 @@ const ovc = overviewComments({
     camTo(focusBox({ x: card.x, y: card.y, w: cardW() },
                    { w: canvasEl.clientWidth, h: canvasEl.clientHeight }));
   },
-  /* Без інтеграцій вкладок аудиторій нема ЗОВСІМ: порожній перелік коментатор читає
+  /* Без командного каналу вкладок аудиторій нема ЗОВСІМ: порожній перелік коментатор читає
      як «рядка нема» (контракт `audiences`), а єдина вкладка «Клод» була б вибором без
      вибору. Активна — за ДІЮЧИМ каналом, не за збереженим. */
-  audiences: () => (noOutward() ? [] : [
+  audiences: () => (noTeamComments() ? [] : [
     { id: 'local', label: t('audTabLocal'), active: effMode() === 'local', icon: 'bot' },
     { id: 'project', label: t('audTabTeam'), active: effMode() === 'project', icon: 'team' },
   ]),

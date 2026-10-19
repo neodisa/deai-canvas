@@ -50,6 +50,36 @@ function loadScript(src) {
   });
 }
 
+/** id модуля → фабрика його адаптера (`window.DeaiComments`, захоплена ОДРАЗУ після завантаження його файлів). */
+const FACTORIES = new Map();
+
+/**
+ * Сховище командного каналу МОДУЛЯ для відповіді `/api/comment-config?ch=project` із полем `module` (2b-2): файли
+ * адаптера (`cfg.client`, кореневі адреси) вантажаться ПО ПОРЯДКУ — кожен чекаємо, бо наступний може спиратись на
+ * попередній (бібліотека, потім адаптер) — без дублів у списку; далі `DeaiComments.create({...config, channel, onChange})`.
+ *
+ * ⛔ Фабрику кешуємо ЗА МОДУЛЕМ, а не лишаємо в глобалі: адаптер кожного модуля пише в той самий
+ * `window.DeaiComments`, тож після двох модулів по черзі (перемикання просторів) повернення до першого взяло б чужу
+ * фабрику — командні коментарі пішли б у чужий сервіс. І перед завантаженням глобал скидається: адаптер, що фабрики не
+ * зареєстрував, не повинен підхопити залишок попереднього модуля.
+ *
+ * `channel` і `onChange` — ядра: модуль не перекриє їх ключами свого `config`. `onChange` порожній: шар коментатора живе
+ * через `store.subscribe`. Невдача (файл не завантажився, фабрики нема, `create` кинув) — виняток викликачу; нічого не
+ * кешується, тож наступний вхід в «Огляд» спробує знову, а сам «Огляд» без пінів працює.
+ * @param cfg {{module: string, client?: string[], config?: object, channel: string}}
+ */
+export async function moduleStore(cfg, { load = loadScript, win = window, factories = FACTORIES } = {}) {
+  let factory = factories.get(cfg.module);
+  if (!factory) {
+    delete win.DeaiComments;
+    for (const src of new Set(Array.isArray(cfg.client) ? cfg.client : [])) await load(src);
+    factory = win.DeaiComments;
+    if (!factory || typeof factory.create !== "function") throw new Error(t("errCommentsAdapter"));
+    factories.set(cfg.module, factory);
+  }
+  return factory.create({ ...(cfg.config || {}), channel: cfg.channel, onChange: () => {} });
+}
+
 /**
  * @param env {{
  *   canvasEl: Element, cam: () => {x,y,scale}, cards: () => Array, cardW: () => number,
@@ -277,7 +307,10 @@ export function overviewComments(env) {
       .then((r) => { if (!r.ok) throw new Error(`comment-config ${r.status}`); return r.json(); });
     if (cfgKey !== key) return;   // поки чекали — перемкнули канал чи ітерацію
     let store;
-    if (cfg.ch === "project") {
+    if (cfg.module) {
+      // Командний канал веде модуль ролі `comments`: його адаптер, а не зашитий Supabase ЛІГА.
+      store = await moduleStore(cfg);
+    } else if (cfg.ch === "project") {
       if (!window.supabase) await loadScript(SB_JS);
       store = window.CommentLayerSupabase({ url: cfg.sbUrl, anonKey: cfg.sbKey, projectId: cfg.project });
     } else {
@@ -288,7 +321,7 @@ export function overviewComments(env) {
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }   // друга лінія: інстанс завжди ОДИН
     iterNum = cfg.version;
     cl = window.CommentLayer.create().init({
-      projectId: cfg.project, storage: store, version: cfg.version, local: cfg.ch === "local",
+      projectId: cfg.module ? cfg.channel : cfg.project, storage: store, version: cfg.version, local: cfg.ch === "local",
       anchors: provider, audiences: env.audiences(), onAudience: env.onAudience,
       // особа машини — запасне імʼя автора, коли браузер не показує діалог імені (вбудований)
       defaultUser: cfg.user || null,

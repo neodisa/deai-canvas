@@ -76,7 +76,7 @@
  */
 
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
-import { hasPublish } from "./spaces-model.js";
+import { hasPublish, hasTeamComments } from "./spaces-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -113,8 +113,10 @@ import { ico } from "./icons.js";
  *   spaces: [{id, name, available?}] | undefined — перелік просторів з `/api/spaces`;
  *     без МАСИВУ пунктів просторів нема зовсім (шар вимкнено). spaceId: string|null —
  *     поточний простір (за його відсутності — `space.id`); поточний у переліку
- *     не пропонується. space: {id, integrations}|null — поточний простір;
- *     `integrations === false` прибирає публікацію, GitLab і командний канал.
+ *     не пропонується. space: {id, integrations, capabilities}|null — поточний простір;
+ *     `integrations === false` прибирає GitLab, а публікацію й командний канал — їхні
+ *     постачальники: `capabilities.publish` і `capabilities.comments` (`hasPublish`,
+ *     `hasTeamComments`; стара форма без `capabilities` — за `integrations`).
  */
 /* Мова інтерфейсу — єдина група, що не залежить від задачі: її читає і звичайний
    реєстр, і екран «Задачі». Одна функція на обох, щоб два місця не розійшлись. */
@@ -424,9 +426,12 @@ export function paletteActions(state) {
       ["aud-local", "local", "audLocal", "comment"],
       ["aud-project", "project", "audProject", "globe"],
     ]) {
-      /* Командного каналу в просторі без інтеграцій нема (`GET /comments`, `?ch=project`
-         → 409): локальний — єдиний, і аварійний вихід «до локального» лишається. */
-      if (noOutward && ch === "project") continue;
+      /* Командного каналу в просторі без постачальника ролі `comments` нема (`GET /comments`,
+         `?ch=project` → 409): локальний — єдиний, і аварійний вихід «до локального» лишається.
+         Постачальник — зашитий ЛІГА (інтеграції) АБО модуль, тож це `hasTeamComments`
+         (`capabilities.comments`), а не `integrations`: простір без інтеграцій із модулем
+         коментарів має канал `project`, хоч GitLab у нього й нема. */
+      if (ch === "project" && !hasTeamComments(s.space)) continue;
       out.push({
         id, group: "gSet", labelKey, icon, act: "aud", val: ch,
         disabled: s.commentMode === ch, whyKey: s.commentMode === ch ? "audCur" : "",

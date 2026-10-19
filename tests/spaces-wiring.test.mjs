@@ -72,7 +72,7 @@ test("канал коментарів: усі читання йдуть чере
   assert.doesNotMatch(src, /&ch=\$\{commentMode\}/, "рамка просить `ch` повз затиск");
   assert.equal([...src.matchAll(/&ch=\$\{effMode\(\)\}/g)].length, 2, "обидві гілки applyMode");
   assert.match(src, /channel: \(\) => effMode\(\),/);
-  assert.match(src, /audiences: \(\) => \(noOutward\(\) \? \[\] : \[/, "без інтеграцій вкладок аудиторій нема");
+  assert.match(src, /audiences: \(\) => \(noTeamComments\(\) \? \[\] : \[/, "без командного каналу (роль `comments`) вкладок аудиторій нема");
   assert.match(src, /active: effMode\(\) === 'local'/);
   assert.match(src, /active: effMode\(\) === 'project'/);
   assert.match(src, /commentMode: effMode\(\),/, "палітра й смуга бачать ДІЮЧИЙ канал");
@@ -84,9 +84,10 @@ test("збережений вибір (localStorage) не переписуєть
   assert.match(src, /let commentMode = \(\(\) => \{ try \{ return localStorage\.getItem\('dc-comment-mode'\) \|\| 'local'; \}/,
     "читання при старті — сире значення, без затиску");
   const body = fn("setAudience");
-  assert.match(body, /if \(ch === 'project' && noOutward\(\)\) return;/, "команди без інтеграцій — відмова");
-  assert.match(body, /if \(effMode\(\) === ch\) return;/, "порівняння з ДІЮЧИМ: `local` у просторі без інтеграцій не переписує збережений `project`");
-  assert.ok(body.indexOf("noOutward()") < body.indexOf("effMode() === ch"));
+  assert.match(body, /if \(ch === 'project' && noTeamComments\(\)\) return;/, "команди без постачальника коментарів — відмова");
+  assert.match(body, /if \(effMode\(\) === ch\) return;/, "порівняння з ДІЮЧИМ: `local` у просторі без командного каналу не переписує збережений `project`");
+  assert.ok(body.indexOf("noTeamComments()") < body.indexOf("effMode() === ch"));
+  assert.doesNotMatch(body, /noOutward/, "командний канал — не `noOutward`: його дає роль `comments`");
 });
 
 /* ── скидання стану при зміні простору ─────────────────────────────────── */
@@ -447,14 +448,22 @@ test("«Відкрити превью» і «Скопіювати посилан
 });
 
 test("палітра й смуга: публікація — на hasPublish, GitLab і командний канал — на integrations", () => {
-  assert.match(pal, /import \{ hasPublish \} from "\.\/spaces-model\.js";/);
+  assert.match(pal, /import \{ hasPublish, hasTeamComments \} from "\.\/spaces-model\.js";/);
   assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
   assert.match(pal, /if \(!noOutward\) \{\n    \/\/ Той самий трьохгілковий розгляд/);
-  assert.match(pal, /if \(noOutward && ch === "project"\) continue;/);
+  assert.match(pal, /if \(ch === "project" && !hasTeamComments\(s\.space\)\) continue;/, "командний канал — на `capabilities.comments`, не на інтеграціях");
+  assert.doesNotMatch(pal, /noOutward && ch === "project"/);
   const model = readFileSync(new URL("../app/bar-model.js", import.meta.url), "utf8");
   assert.match(model, /hasPublish\(s\.space\)/);
   assert.match(model, /isLegacyPublish\(s\.space\)/);
   assert.doesNotMatch(model, /const OUTWARD = /, "спільний набір «назовні» мав розщепитись на gl і publish");
+});
+
+test("командний канал у app.js — `noTeamComments` на hasTeamComments; `noOutward` його не питає", () => {
+  assert.match(src, /const noTeamComments = \(\) => needsWelcome\(spacesResp\) \|\| !hasTeamComments\(spaceNow\(\)\);/);
+  assert.match(src, /effectiveCommentMode, freeColor, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
+  // GitLab і Teams-тиша лишились на `noOutward`, а канал `project` на нього більше не спирається
+  assert.doesNotMatch(src, /noOutward\(\)[^;\n]*(?:'project'|audiences)|(?:'project'|audiences)[^;\n]*noOutward\(\)/);
 });
 
 test("`noOutward` у app.js лишається на інтеграціях (публікація його не питає)", () => {
