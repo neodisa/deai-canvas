@@ -9,6 +9,7 @@ import collections
 import contextlib
 import functools
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -2508,6 +2509,237 @@ def comments_provider(space=None):
         return deai_modules.provider('comments', space), None
     except deai_modules.ModuleError as e:
         return None, e
+
+
+# ---------- Агент і командні коментарі (етап 2b-2, Task 4) ----------
+#
+# `bin/inbox.py`, `bin/state.py` і маршрут `/comments` читають (а `inbox` і закриває) проєктні піни. Звідки — вирішує
+# ПОСТАЧАЛЬНИК ролі `comments` ПРОСТОРУ задачі (`ProjectComments`), а не `spaces.integrations_on()`:
+#
+#     постачальник        читання                                   закриття
+#     Module              `list` модуля → піни у формі REST         `resolve` модуля
+#     'legacy'            як було (`supabase_pins`)                 як було (`PATCH` у Supabase ЛІГА)
+#     None                `IntegrationsOff` (як у просторі без      `IntegrationsOff`
+#                         інтеграцій: командних коментарів нема)
+#     ModuleError         `ModuleError` — лише локальні піни        `ModuleError`
+#
+# ⛔ `ModuleError` (явно ввімкнений модуль загубився чи `space.json` не прочитати) НІКОЛИ не перетворюється на `'legacy'`:
+# зашитий Supabase ЛІГА — СПІЛЬНИЙ проєкт, куди піни несуть знімки приватних макетів (той самий закон, що в `_commented`,
+# `_comment_config` і `publish_comments`). Простір — ЯВНИМ аргументом (`spaces.active_space()`, один раз на запит чи
+# команду CLI), а не з `threading.local` усередині: так рішення не залежить від того, чий простір зараз зафіксовано.
+
+#: Скільки коментарів модуля бере агент (решту відкидаємо з позначкою) і скільки байтів вони важать разом після очищення.
+MAX_AGENT_COMMENTS = 5000
+MAX_AGENT_BYTES = 16 << 20
+_AGENT_ID_MAX = 200
+#: Керівні символи (ESC, CSI та решта C0/C1, крім `\n` і `\t`), роздільники рядків, керування напрямком тексту й сурогати:
+#: текст модуля друкується в ТЕРМІНАЛ агента, тож ні послідовності керування, ні підміна напрямку, ні сурогат (його не
+#: надрукувати — `UnicodeEncodeError`) у нього не потраплять.
+_AGENT_BAD_CHARS = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069'
+                              r'\ud800-\udfff]')
+_AGENT_VERSION = re.compile(r'[0-9]{1,9}')
+
+
+class ModulePins(list):
+    """Піни модуля для агента: звичайний список у формі рядків REST (див. `agent_pin`) і лічильники того, що НЕ ввійшло:
+    `skipped` — зіпсовані елементи (не обʼєкт, без придатного `id`, дубль `id`, збій при очищенні), `truncated` — відкинуті
+    понад межі `MAX_AGENT_COMMENTS`/`MAX_AGENT_BYTES`. Мовчки губити їх не можна: «немає відкритих» — інша відповідь,
+    ніж «є, але не прочитались»."""
+    skipped = 0
+    truncated = 0
+
+    def note(self):
+        """Один рядок для людини про те, що не ввійшло, або `''`."""
+        parts = []
+        if self.skipped:
+            parts.append(f'пропущено {self.skipped} зіпсованих елементів')
+        if self.truncated:
+            parts.append(f'відкинуто {self.truncated} понад межу')
+        return ('відповідь модуля коментарів неповна: ' + ', '.join(parts)) if parts else ''
+
+
+def _agent_text(v, limit):
+    """Текст від модуля: лише `str`, обрізаний ДО очищення (гігантський рядок не проганяємо крізь регулярку), без символів
+    `_AGENT_BAD_CHARS`; не `str` → `''`."""
+    return _AGENT_BAD_CHARS.sub('', v[:limit]) if isinstance(v, str) else ''
+
+
+def _agent_json(v, budget, depth=0):
+    """Безпечна копія JSON-значення модуля: `dict`/`list` (глибина ≤ 6, ≤ 100 елементів, разом ≤ `budget[0]` вузлів), рядки
+    ≤ 2000 символів, цілі в межах ±2^53, скінченні дробові, булеві й `None`; усе інше → `None`. Ключі — непорожні рядки."""
+    budget[0] -= 1
+    if budget[0] < 0 or depth > 6:
+        return None
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return v if -2 ** 53 < v < 2 ** 53 else None
+    if isinstance(v, float):
+        return v if math.isfinite(v) else None
+    if isinstance(v, str):
+        return _agent_text(v, 2000)
+    if isinstance(v, (list, tuple)):
+        return [_agent_json(x, budget, depth + 1) for x in v[:100]]
+    if isinstance(v, dict):
+        out = {}
+        for k, x in itertools.islice(v.items(), 100):
+            k = _agent_text(k, 100)
+            if k:
+                out[k] = _agent_json(x, budget, depth + 1)
+        return out
+    return None
+
+
+def _agent_version(v):
+    """Номер версії `bornV`/`resolvedV`: невідʼємне ціле чи рядок із цифр; інакше `None` (у REST ЛІГА це `int4`)."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if 0 <= v < 2 ** 31 else None
+    if isinstance(v, str) and _AGENT_VERSION.fullmatch(v):
+        return int(v)
+    return None
+
+
+def agent_pin(c):
+    """Коментар модуля (форма CommentLayer: `id, author, text, status, fp, htmlSnapshot, meta, bornV, resolvedV,
+    resolveReason, ts`) → рядок у формі REST ЛІГА (`id, text, status, author, ts, meta, born_v, fp, html_snapshot,
+    resolved_v, resolve_reason`), яку чекають `inbox` і маршрут `/comments`; `None` — елемент зіпсований.
+
+    Лише ці поля й лише потрібних типів: `inbox` робить `fp['path'][-3:]`, `meta['viewport'].get(…)`, `str.strip()` — тож
+    чужий тип у них був би падінням CLI, а не «поганим піном». `id` — не чистимо, а відмовляємо (очищений `id` уже не
+    той, що знає модуль, і `resolve` пішов би не за тим піном). `meta.shot` (base64-знімок, десятки КБ) не беремо:
+    ні `inbox`, ні агентові він не потрібен, а обрізаний base64 гірший за відсутній."""
+    if not isinstance(c, dict):
+        return None
+    pid = c.get('id')
+    if (not isinstance(pid, str) or not pid.strip() or len(pid) > _AGENT_ID_MAX or _AGENT_BAD_CHARS.search(pid)):
+        return None
+    meta = c.get('meta')
+    meta = (_agent_json(meta, [300]) if isinstance(meta, dict) else None) or {}
+    meta.pop('shot', None)
+    for key in ('viewport', 'ctx'):
+        if key in meta and not isinstance(meta[key], dict):
+            del meta[key]
+    fp = c.get('fp')
+    fp = _agent_json(fp, [200]) if isinstance(fp, dict) else None
+    if fp:
+        if 'path' in fp:
+            fp['path'] = [x for x in fp['path'] if isinstance(x, str)] if isinstance(fp['path'], list) else []
+        for key in ('tag', 'text'):
+            if key in fp and not isinstance(fp[key], str):
+                fp[key] = ''
+    snap = c.get('htmlSnapshot')
+    snap = ({'text': _agent_text(snap.get('text'), 2000), 'outerHTML': _agent_text(snap.get('outerHTML'), 20000)}
+            if isinstance(snap, dict) else None)
+    return {'id': pid,
+            'text': _agent_text(c.get('text'), 10000),
+            'status': 'resolved' if c.get('status') == 'resolved' else 'open',
+            'author': _agent_text(c.get('author'), 200),
+            'ts': _agent_text(c.get('ts'), 40),
+            'meta': meta,
+            'born_v': _agent_version(c.get('bornV')),
+            'fp': fp or None,
+            'html_snapshot': snap if snap and (snap['text'] or snap['outerHTML']) else None,
+            'resolved_v': _agent_version(c.get('resolvedV')),
+            'resolve_reason': _agent_text(c.get('resolveReason'), 2000) or None}
+
+
+def agent_pins(raw):
+    """Відповідь `list` модуля → `ModulePins`. Не список (чи список, який не читається) — `ModuleError('module-error')`:
+    модуль зламаний, і «порожньо» було б брехнею. Зіпсований елемент пропускається й рахується (`skipped`), дубль `id` — теж
+    (лишається перший); понад `MAX_AGENT_COMMENTS` штук чи `MAX_AGENT_BYTES` байтів — відкидається й рахується
+    (`truncated`)."""
+    if not isinstance(raw, list):
+        raise deai_modules.ModuleError('module-error', message='the comments module must answer list() with a list')
+    out, seen, size = ModulePins(), set(), 0
+    try:
+        total = len(raw)
+        for i, c in enumerate(raw):
+            if len(out) >= MAX_AGENT_COMMENTS or size > MAX_AGENT_BYTES:
+                out.truncated = total - i
+                break
+            try:
+                pin = agent_pin(c)
+            except Exception:  # noqa: BLE001 — чужий об'єкт із норовливим `get`/`items`: це «зіпсований елемент»
+                pin = None
+            if pin is None or pin['id'] in seen:
+                out.skipped += 1
+                continue
+            seen.add(pin['id'])
+            out.append(pin)
+            size += len(json.dumps(pin, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 — список із норовливим `__iter__`/`__len__`
+        raise deai_modules.ModuleError('module-error', message='the comments module answered list() with an unreadable list')
+    return out
+
+
+class ProjectComments:
+    """Хто веде проєктні коментарі простору `space` для АГЕНТА (див. таблицю вище). Рішення береться ОДИН раз у
+    конструкторі, з явного `space`; решта методів лише виконують його для задачі `(task, tid)`.
+
+    `kind`: `'module'` | `'legacy'` | `'off'` (нікого: простір без інтеграцій і без модуля) | `'broken'` (рішення не
+    вдалось, `err` — `ModuleError`). `legacy` у `pins`/`resolve` — те, що викликач виконує для зашитого шляху ЛІГА (в `inbox`
+    це ЙОГО `supabase_pins`/`patch_project_pin`, тож їхні підміни в тестах лишаються чинними); для `pins` типово —
+    `supabase_pins`.
+
+    ⚠️ Виконує код модуля (`list`/`resolve`): НЕ кликати під `spaces.WRITE_LOCK`."""
+
+    def __init__(self, space):
+        self.space = space
+        self.prov, self.err = comments_provider(space)
+        if isinstance(self.prov, deai_modules.Module) and space is None:
+            # Постачальник-модуль без явного простору (його вирішив простір запиту, а викликач не передав запису): без
+            # запису не зібрати ні `ctx`, ні канал — це відмова, а не вгадування.
+            self.prov, self.err = None, deai_modules.ModuleError(
+                'module-error', message='comments: the space of the request is not known')
+
+    @property
+    def kind(self):
+        if isinstance(self.prov, deai_modules.Module):
+            return 'module'
+        if self.prov == 'legacy':
+            return 'legacy'
+        return 'broken' if self.err is not None else 'off'
+
+    @property
+    def label(self):
+        """Хто джерело — для людини (заголовок `inbox`)."""
+        return f'модуль {self.prov.id}' if self.kind == 'module' else 'Supabase'
+
+    def channel(self, task, tid, internal=False):
+        """Канал задачі: модуль — `deai_modules.channel_for` (канал простору), ЛІГА — `comment_channel`."""
+        if self.kind == 'module':
+            return deai_modules.channel_for(self.space, tid, internal=internal)
+        return comment_channel(task, tid, internal=internal)
+
+    def _check(self):
+        if self.err is not None:
+            raise self.err
+        if self.kind == 'off':
+            raise spaces.IntegrationsOff('integrations-off')
+
+    def pins(self, task, tid, internal=False, legacy=None):
+        """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`), `ModuleError` — рішення чи
+        виклик модуля не вдались (або відповідь не список), `OSError` — мережа ЛІГА."""
+        self._check()
+        channel = self.channel(task, tid, internal)
+        if self.kind == 'module':
+            ctx = deai_modules.module_ctx(self.space, self.prov)
+            return agent_pins(deai_modules.call(self.prov, 'list', ctx, channel,
+                                                timeout=deai_modules.COMMENTS_TIMEOUT))
+        return (legacy or supabase_pins)(channel)
+
+    def resolve(self, task, tid, pin_id, reason, legacy, internal=False):
+        """Закрити пін: модуль — його `resolve(ctx, channel, id, reason)`; ЛІГА — `legacy()`. Номер ітерації модулю не
+        передається (контракт ролі його не має)."""
+        self._check()
+        if self.kind == 'module':
+            ctx = deai_modules.module_ctx(self.space, self.prov)
+            deai_modules.call(self.prov, 'resolve', ctx, self.channel(task, tid, internal), pin_id, reason,
+                              timeout=deai_modules.COMMENTS_TIMEOUT)
+            return None
+        return legacy()
 
 
 def _insert_before_body(html, snippet):
@@ -5521,20 +5753,38 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json({'ok': True, 'stopped': True})
 
     def _comments(self):
-        if not spaces.integrations_on():
+        """Проєктні піни задачі для агента. Хто їх веде, вирішує постачальник ролі `comments` ПРОСТОРУ запиту
+        (`ProjectComments`, простір — явним аргументом), а не `integrations_on()`:
+
+            нікого (`None`)        409 — «командних коментарів нема», як у просторі без інтеграцій
+            ЛІГА (`'legacy'`)      як було: зашитий Supabase, відповідь `{project, comments}` побайтно та сама
+            модуль                 `{project, comments}` у тій самій формі рядків REST (+ `warning`, коли щось не ввійшло)
+            рішення не вдалось     центральна відповідь модулів (`{ok: false, code, error}`, 502/409) — НІКОЛИ не
+                                   зашитий Supabase і не порожній список
+            виклик модуля не вдався  `{project, comments: [], error}` — як недоступна мережа ЛІГА"""
+        space = spaces.active_space()
+        pc = ProjectComments(space)
+        if pc.kind == 'off':
             # 409, а не порожній список: порожнє читалось би як «коментарів нема», а їх не ЧИТАЛИ.
             self._send_json(integrations_off_body(
                 'командних коментарів у просторі без інтеграцій нема'), status=409)
             return
+        if pc.kind == 'broken':
+            raise pc.err
         q = parse_qs(urlparse(self.path).query)
         it = q.get('it', [''])[0]
         channel = q.get('channel', ['internal'])[0]
         tid, task = self._current_task()
-        project = comment_channel(task, tid, internal=(channel == 'internal'))
+        internal = (channel == 'internal')
+        project = None
         try:
-            pins = supabase_pins(project)
-            self._send_json({'project': project, 'comments': pins})
-        except (OSError, json.JSONDecodeError) as e:
+            project = pc.channel(task, tid, internal)
+            pins = pc.pins(task, tid, internal)
+            body = {'project': project, 'comments': pins}
+            if isinstance(pins, ModulePins) and pins.note():
+                body['warning'] = pins.note()
+            self._send_json(body)
+        except (OSError, json.JSONDecodeError, deai_modules.ModuleError) as e:
             self._send_json({'project': project, 'comments': [], 'error': str(e)})
 
     # ---------- Локальні коментарі (фідбек Claude, НЕ в Supabase, у файлі) ----------

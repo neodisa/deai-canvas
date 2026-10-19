@@ -22,7 +22,7 @@ from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E4
                    gitlab_cfg, gitlab_status, supabase_pins, comment_channel,
                    machine_identity, iteration_is_mine, iteration_pages,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
-                   SpaceUnavailable)
+                   SpaceUnavailable, ProjectComments)
 import spaces  # noqa: E402
 import registry  # noqa: E402
 import pages_model as pm  # noqa: E402
@@ -281,6 +281,29 @@ def _open_pins(project):
         return 0
 
 
+def _team_comments(task, tid, integrations):
+    """`(відкритих проєктних, хвіст рядка «Відкриті коментарі»)`.
+
+    Хто веде командні коментарі, вирішує постачальник ролі `comments` ПРОСТОРУ задачі (`ProjectComments`; простір —
+    явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не `integrations`: у просторі з модулем
+    коментарів вони є й без інтеграцій, а ЛІГА з модулем, що не завантажився, не має права йти в спільний Supabase.
+    ЛІГА (`'legacy'`) і «нікого» — як було (`_open_pins`, `integrations`)."""
+    try:
+        pc = ProjectComments(spaces.active_space())
+    except Exception as e:  # noqa: BLE001 — реєстр не прочитати: рішення «звідки» невідоме, а не «0» і не Supabase
+        return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
+    if pc.kind == 'module':
+        try:
+            n = len([p for p in pc.pins(task, tid) if p.get('status') != 'resolved'])
+        except Exception as e:  # noqa: BLE001 — модуль не відповів: «0» читалось би як «тихо», а це «не дістати»
+            return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
+        return n, f' + {n} проєктних'
+    if pc.kind == 'broken':
+        return 0, f', проєктні: не дістати ({pc.err.code})'
+    external = _open_pins(comment_channel(task, tid)) if integrations else 0
+    return external, (f' + {external} проєктних' if integrations else ', проєктних нема')
+
+
 def _pipeline_version():
     """Версія пайплайну. Пріоритет: VERSION вгору по дереву (у команди design-canvas
     лежить всередині design-office, де є VERSION); інакше — VERSION встановленого
@@ -393,10 +416,9 @@ def _main(argv):
     except (OSError, ValueError):
         local = 0
     # Без інтеграцій командних коментарів нема: «нема», а не «+ 0» (нуль читався б як «питали — тихо»).
-    external = _open_pins(comment_channel(task, tid)) if integrations else 0
+    external, team_part = _team_comments(task, tid, integrations)
     # Підказку копіюють дослівно: без `--task` вона відкрила б інбокс ПОТОЧНОЇ задачі.
     inbox_cmd = 'python3 bin/inbox.py' + (f' --task {shlex.quote(tid)}' if named else '')
-    team_part = f' + {external} проєктних' if integrations else ', проєктних нема'
     print(f'Відкриті коментарі: {local} локальних (мені){team_part}'
           f'{" → " + inbox_cmd if local + external else ""}')
 

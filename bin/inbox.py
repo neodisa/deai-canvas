@@ -9,7 +9,10 @@
 ДВА джерела:
   • ЛОКАЛЬНІ · мені — фідбек користувача мені, у локальному файлі
     (`<task>/.dc-local-comments.json`), НЕ в Supabase. Пини фіолетові, без номера.
-  • ПРОЄКТ — коментарі колег + історія з Supabase (канал tasks.json `comment_project`).
+  • ПРОЄКТ — коментарі колег + історія: з Supabase ЛІГА (канал tasks.json `comment_project`)
+    або з модуля ролі `comments` простору задачі (канал простору, `list`/`resolve` модуля).
+    Хто саме — вирішує постачальник ролі `comments` ПРОСТОРУ ЗАДАЧІ (`ProjectComments`), а не
+    «чи ввімкнені інтеграції»; зламаний модуль — лише локальні піни й повідомлення, а не Supabase.
 Ітерацію кожного коментаря несе meta.version → показуємо тегом [itN].
 
 Чому тут argparse (fb-22092026-6aed32, 22.09.2026): до цього аргументів не
@@ -33,11 +36,11 @@ from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
-from serve import (load_tasks, supabase_pins, comment_channel,  # noqa: E402
+from serve import (load_tasks, supabase_pins,  # noqa: E402
                    task_iterations, iter_num, machine_identity,
                    iteration_is_mine, supabase_config, _ssl_context,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
-                   SpaceUnavailable)
+                   SpaceUnavailable, ProjectComments, ModulePins)
 import spaces  # noqa: E402
 from atomic_io import atomic_write_json  # noqa: E402
 
@@ -342,6 +345,17 @@ def resolve_task(wanted):
         return None
 
 
+def project_comments():
+    """Хто веде проєктні коментарі простору ЗАДАЧІ, яку щойно знайшов `resolve_task`.
+
+    Простір — ЯВНО: `resolve_task` (`task_anywhere`) зафіксував на потоці простір, де лежить задача (названа `--task` — у
+    БУДЬ-ЯКОМУ просторі, а не лише поточному), і `spaces.active_space()` віддає саме його запис. Далі рішення
+    приймає постачальник ролі `comments` цього запису (`ProjectComments`), а не `spaces.integrations_on()`: простір із
+    модулем коментарів, але без інтеграцій, має командні коментарі, а простір ЛІГА з модулем, що не завантажився, — не
+    має права йти в спільний Supabase."""
+    return ProjectComments(spaces.active_space())
+
+
 def cmd_list(where=False, task_id=None):
     got = resolve_task(task_id)
     if got is None:
@@ -349,12 +363,15 @@ def cmd_list(where=False, task_id=None):
     tid, task = got
     local = read_local(task)
     team_off = False
+    source = 'Supabase'
     try:
-        proj, proj_err = supabase_pins(comment_channel(task, tid)), None
+        pc = project_comments()
+        source = pc.label
+        proj, proj_err = pc.pins(task, tid, legacy=lambda channel: supabase_pins(channel)), None
     except spaces.IntegrationsOff:
-        # Простір без інтеграцій: командних коментарів у ньому нема, а не «не дістати».
+        # Простір без інтеграцій і без модуля коментарів: командних коментарів у ньому нема, а не «не дістати».
         proj, proj_err, team_off = [], None, True
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 — зокрема `ModuleError`: лише локальні піни + повідомлення, не Supabase
         proj, proj_err = [], e
     wmap = None
     if where:
@@ -372,12 +389,14 @@ def cmd_list(where=False, task_id=None):
     total = show_pins(local, 'локальні', 'L', wmap)
     if not total:
         print('  (немає відкритих)')
-    print('\n-- ПРОЄКТ (колеги + історія, Supabase) --')
+    print(f'\n-- ПРОЄКТ (колеги + історія, {source}) --')
     if team_off:
         print('  командних коментарів у цьому просторі нема')
         ext = 0
     elif proj_err is None:
         print(_newest_line(proj))
+        if isinstance(proj, ModulePins) and proj.note():
+            print(f'  ⚠ {proj.note()}')
         ext = show_pins(proj, 'проєкт', 'P', wmap)
     else:
         print(f'  проєкт: (не дістати: {proj_err})')
@@ -571,7 +590,8 @@ def cmd_resolve(a):
         # чекав би свій таймаут заново.
         if 'pins' not in cache:
             try:
-                cache['pins'] = supabase_pins(comment_channel(task, tid))
+                cache['pc'] = project_comments()
+                cache['pins'] = cache['pc'].pins(task, tid, legacy=lambda channel: supabase_pins(channel))
             except Exception as e:  # noqa: BLE001
                 cache['pins'] = e
         if isinstance(cache['pins'], Exception):
@@ -623,18 +643,27 @@ def cmd_resolve(a):
                 else:
                     print(f'✗ {p["id"][:8]}: не закрито в локальному файлі')
                     failed += 1
+    pc = cache.get('pc')            # є, коли хоч один проєктний пін знайдено: його знайшов `project_loader`
+    from_module = pc is not None and pc.kind == 'module'
     for p in project_pins:
         if a.dry_run:
+            if from_module:
+                print(f'[dry-run] {pc.label}: resolve {pc.channel(task, tid)} {p["id"]} '
+                      f'{json.dumps(reason, ensure_ascii=False)}')
+                continue
             url, _ = supabase_config()
             print(f'[dry-run] PATCH {url}/rest/v1/comments?id=eq.'
                   f'{quote(p["id"], safe="")} '
                   f'{json.dumps(project_body(n, reason), ensure_ascii=False)}')
             continue
         try:
-            patch_project_pin(p['id'], n, reason)
-            print(f'✓ {p["id"][:8]} закрито (проєкт, Іт.{n}): «{reason}»')
+            pc.resolve(task, tid, p['id'], reason, legacy=lambda p=p: patch_project_pin(p['id'], n, reason))
+            # Номер ітерації — лише в ЛІГА: контракт `resolve` модуля його не має, і «Іт.N» про такий пін було б неправдою.
+            it_tag = '' if from_module else f', Іт.{n}'
+            print(f'✓ {p["id"][:8]} закрито (проєкт{it_tag}): «{reason}»')
         except Exception as e:  # noqa: BLE001 — кожен пін звітує сам за себе
-            print(f'✗ {p["id"][:8]}: Supabase не прийняв ({e})')
+            who = pc.label if from_module else 'Supabase'
+            print(f'✗ {p["id"][:8]}: {who} не прийняв ({e})')
             failed += 1
     if a.dry_run:
         print('[dry-run] нічого не записано')
@@ -659,7 +688,7 @@ def build_parser():
     ap = argparse.ArgumentParser(
         prog='inbox.py',
         description='Коментарі-піни поточної (або названої --task) задачі: '
-                    'локальні (мені) + проєктні (Supabase). Без аргументів — '
+                    'локальні (мені) + проєктні (Supabase ЛІГА чи модуль коментарів). Без аргументів — '
                     'перелік відкритих.',
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--task', metavar='ID',
