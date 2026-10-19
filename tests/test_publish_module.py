@@ -252,6 +252,7 @@ class TaskFixture(unittest.TestCase):
 
     def _build(self, **kw):
         task, tid, its = self._args()
+        kw.setdefault('build', 'legacy')          # хто збирає — обовʼязковий аргумент; за замовчуванням тут «ЛІГА»
         return serve.build_preview(task, tid, its, **kw)
 
     def _server(self):
@@ -319,6 +320,55 @@ class BuildPreview(TaskFixture):
             fh.write('від минулої збірки')
         self._build(comments=False, gate_pw=None)
         self.assertFalse(os.path.exists(os.path.join(pub, 'old')))
+
+    # ---- мітка збирача ------------------------------------------------------------------------
+
+    def test_the_manifest_carries_who_built_it_as_its_last_key(self):
+        for kind in serve.BUILD_KINDS:
+            with self.subTest(build=kind):
+                pub = self._build(comments=False, gate_pw=None, build=kind)['dir']
+                man = json.loads(_read(os.path.join(pub, 'manifest.json')))
+                self.assertEqual(man['build'], kind)
+                self.assertEqual(list(man)[-1], 'build', 'мітка — останній ключ: решта файла лишається як була')
+        self.assertEqual(serve.BUILD_KINDS, ('legacy', 'module'))
+
+    def test_the_mark_is_the_only_difference_in_the_manifest(self):
+        """ЛІГА-збірка змінилась рівно на одне поле маніфесту: прибери його — решта байт у байт та сама."""
+        pub = self._build(comments=True, gate_pw='x')['dir']
+        with_mark = json.loads(_read(os.path.join(pub, 'manifest.json')))
+        self.assertEqual(with_mark.pop('build'), 'legacy')
+        legacy_tree = _tree(pub)
+        legacy_tree.pop('manifest.json')
+        direct = serve.publish_manifest(*self._manifest_args(pub))
+        self.assertEqual(direct, with_mark, 'без `build=` маніфест той самий, що був до мітки')
+        self.assertNotIn('build', direct)
+        self.assertTrue(legacy_tree)
+
+    def _manifest_args(self, pub):
+        task, tid, its = self._args()
+        trees = {it['id']: serve.iteration_pages(task, it['id']) for it in its}
+        pages = serve.published_pages(task, its, trees)
+        return task, tid, its, pages, {}, os.path.join(self.cfgdir), trees
+
+    def test_the_build_kind_is_required_and_checked_before_the_disk_is_touched(self):
+        pub = os.path.join(self.tmp, 'publish')
+        os.makedirs(pub)
+        with open(os.path.join(pub, 'keep.txt'), 'w', encoding='utf-8') as fh:
+            fh.write('попередня збірка')
+        task, tid, its = self._args()
+        with self.assertRaises(TypeError):
+            serve.build_preview(task, tid, its, comments=False, gate_pw=None)           # `build` не названо — не збираємо
+        for bad in ('', 'LEGACY', 'other', None, True, 1, ['legacy']):
+            with self.subTest(build=bad):
+                with self.assertRaises(ValueError):
+                    serve.build_preview(task, tid, its, comments=False, gate_pw=None, build=bad)
+                self.assertEqual(os.listdir(pub), ['keep.txt'])
+
+    def test_the_preview_shell_reads_only_named_fields_so_the_mark_does_not_reach_it(self):
+        """Оболонка (`ext-shell.js`) бере з маніфесту названі поля; нове поле їй не потрібне й нічого не міняє."""
+        src = _read(os.path.join(ROOT, 'app', 'ext-shell.js'))
+        self.assertNotRegex(src, r'\bman\??\.build\b')
+        self.assertNotRegex(src, r'Object\.(keys|entries|values)\(\s*man\s*\)')   # маніфест «цілком» оболонка не обходить
 
     # ---- comments ----------------------------------------------------------------------------
 
@@ -470,7 +520,7 @@ class BuildPreview(TaskFixture):
         for gate_pw in ('x', None):
             with self.subTest(gate_pw=gate_pw):
                 with self.assertRaises(ValueError):
-                    serve.build_preview(task, tid, [], comments=True, gate_pw=gate_pw)
+                    serve.build_preview(task, tid, [], comments=True, gate_pw=gate_pw, build='legacy')
                 self.assertEqual(os.listdir(pub), ['keep.txt'])
                 self.assertEqual(_read(keep), 'попередня збірка')
 
@@ -491,7 +541,7 @@ class BuildPreview(TaskFixture):
                 self.assertTrue(body['ok'], body)
                 self.assertEqual(bp.call_count, 1)
                 args, kwargs = bp.call_args
-                self.assertEqual(kwargs, {'comments': True, 'gate_pw': want})
+                self.assertEqual(kwargs, {'comments': True, 'gate_pw': want, 'build': 'legacy'})
                 self.assertEqual((args[1], [i['id'] for i in args[2]]), ('fixture', ['it1', 'it2']))
                 # гейт справді несе саме цей пароль — на КОЖНІЙ сторінці
                 self.assertEqual(serve.preview_gate_state(args[0], want)['state'], 'current')
@@ -1594,7 +1644,7 @@ class _PublishedTests:
     Відповіді зчитуються `http.client`-ом із сирим шляхом (urllib склав би `..` і не дав би перевірити `%2e%2e`)
     і БЕЗ слідування за переадресацією."""
 
-    CSP = 'sandbox allow-scripts allow-forms allow-popups'
+    CSP = 'sandbox allow-scripts allow-forms allow-popups allow-modals'
 
     def setUp(self):
         super().setUp()
@@ -2642,7 +2692,7 @@ class ResealModuleBuilds(TaskFixture):
     def test_a_league_build_is_resealed_and_deployed(self):
         """Контроль: без нього «модуль пропущено» могло б означати, що reseal не робить нічого."""
         task, tid, its = self._args()
-        serve.build_preview(task, tid, its, comments=True,
+        serve.build_preview(task, tid, its, comments=True, build='legacy',
                             gate_pw=serve.preview_password(serve.load_tasks(), task))
         out, deployed = self._reseal('fixture')
         self.assertIn('передеплоєно', out)
@@ -2653,14 +2703,110 @@ class ResealModuleBuilds(TaskFixture):
             for args in (('fixture',), ('--build', 'fixture'), ()):
                 with self.subTest(gate_pw=gate_pw, args=args):
                     task, tid, its = self._args()
-                    serve.build_preview(task, tid, its, comments=False, gate_pw=gate_pw)
+                    serve.build_preview(task, tid, its, comments=False, gate_pw=gate_pw, build='module')
                     before = _bytes(self._wrapper())
                     out, deployed = self._reseal(*args)
-                    self.assertIn('локальна збірка модуля', out)
+                    self.assertIn('збірка модуля публікації', out)
                     self.assertNotIn('передеплоєно', out)
                     self.assertNotIn('перезібрано', out)
                     self.assertEqual(deployed, [], 'збірку модуля відправлено на Vercel')
                     self.assertEqual(_bytes(self._wrapper()), before, 'обгортку модуля перезаписано')
+
+    def _manifest_path(self):
+        return os.path.join(self.tmp, 'publish', 'manifest.json')
+
+    def _drop_build_mark(self):
+        """Збірка, зроблена ДО мітки: той самий маніфест без ключа `build`."""
+        man = json.loads(_read(self._manifest_path()))
+        self.assertIn('build', man, 'контроль: мітка була')
+        del man['build']
+        with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
+            json.dump(man, fh, ensure_ascii=False, indent=1)
+
+    def test_a_league_build_with_module_comments_is_resealed_and_deployed(self):
+        """ЛІГА + модуль коментарів: у `comment-layer/` лише шар і адаптер (бандлів ЛІГА нема), а збірка йде на Vercel, і
+        ротація пароля мусить дійти до живого превʼю. Рішення — за міткою `build: legacy`, не за складом теки."""
+        prov, _mods = _memo_provider(self)
+        task, tid, its = self._args()
+        comments = {'module': prov, 'config': {'endpoint': ENDPOINT}, 'channel': 'deai/s/fixture'}
+        serve.build_preview(task, tid, its, comments=comments, build='legacy',
+                            gate_pw=serve.preview_password(serve.load_tasks(), task))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, 'publish', 'comment-layer'))),
+                         ['adapter.js', 'comment-layer.min.js'], 'контроль: бандлів ЛІГА там нема')
+        out, deployed = self._reseal('fixture')
+        self.assertIn('передеплоєно', out)
+        self.assertEqual(deployed, [os.path.join(self.tmp, 'publish')])
+
+    def test_a_league_build_without_comments_is_resealed_and_deployed(self):
+        """ЛІГА, де коментарі не піднялись (`comments_unavailable`): `comment-layer/` нема зовсім, збірка — все одно ЛІГА."""
+        task, tid, its = self._args()
+        serve.build_preview(task, tid, its, comments=False, build='legacy',
+                            gate_pw=serve.preview_password(serve.load_tasks(), task))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'publish', 'comment-layer')), 'контроль')
+        out, deployed = self._reseal('fixture')
+        self.assertIn('передеплоєно', out)
+        self.assertEqual(deployed, [os.path.join(self.tmp, 'publish')])
+
+    def test_the_mark_wins_over_the_content_of_comment_layer_in_both_directions(self):
+        task, tid, its = self._args()
+        # `module` + повний набір бандлів ЛІГА → усе одно модуль (не деплоїмо)
+        serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='module')
+        out, deployed = self._reseal('fixture')
+        self.assertIn('мітка збірки build: module', out)
+        self.assertEqual(deployed, [])
+        # `legacy` + порожня збірка без коментарів → ЛІГА
+        serve.build_preview(task, tid, its, comments=False, gate_pw='1100', build='legacy')
+        out, deployed = self._reseal('fixture')
+        self.assertIn('передеплоєно', out)
+        self.assertEqual(len(deployed), 1)
+
+    def test_an_old_league_build_without_the_mark_is_resealed_by_its_bundles(self):
+        task, tid, its = self._args()
+        serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='legacy')
+        self._drop_build_mark()
+        out, deployed = self._reseal('fixture')
+        self.assertIn('передеплоєно', out)
+        self.assertEqual(deployed, [os.path.join(self.tmp, 'publish')])
+
+    def test_an_old_module_build_without_the_mark_is_skipped_and_the_message_says_why(self):
+        task, tid, its = self._args()
+        serve.build_preview(task, tid, its, comments=False, gate_pw=None, build='module')
+        self._drop_build_mark()
+        before = _bytes(self._wrapper())
+        out, deployed = self._reseal('fixture')
+        self.assertIn('мітки збірки нема', out)
+        self.assertIn('збірку модуля', out)
+        self.assertEqual(deployed, [])
+        self.assertEqual(_bytes(self._wrapper()), before)
+
+    def test_the_fallback_compares_bundle_names_exactly_not_case_insensitively(self):
+        """Без мітки адаптер модуля з іменем `Supabase-Adapter.min.js` на macOS/Windows відкрився б як бандл ЛІГА через
+        `isfile` — а це не він. Імена звіряються за переліком теки."""
+        prov, _mods = _memo_provider(self)
+        task, tid, its = self._args()
+        comments = {'module': prov, 'config': {}, 'channel': 'deai/s/fixture'}
+        serve.build_preview(task, tid, its, comments=comments, gate_pw=None, build='module')
+        self._drop_build_mark()
+        layer = os.path.join(self.tmp, 'publish', 'comment-layer')
+        os.rename(os.path.join(layer, 'adapter.js'), os.path.join(layer, 'Supabase-Adapter.min.js'))
+        out, deployed = self._reseal('fixture')
+        self.assertIn('мітки збірки нема', out)
+        self.assertEqual(deployed, [])
+
+    def test_an_unreadable_or_unknown_mark_falls_back_to_the_bundles(self):
+        task, tid, its = self._args()
+        for garbage in ('{broken', '[]', '{"build": "other"}', '{"build": null}', '{"build": 7}'):
+            with self.subTest(manifest=garbage):
+                serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='legacy')
+                with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
+                    fh.write(garbage)
+                out, deployed = self._reseal('fixture')
+                self.assertEqual(len(deployed), 1, out)                 # бандли ЛІГА є → ЛІГА
+                serve.build_preview(task, tid, its, comments=False, gate_pw=None, build='module')
+                with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
+                    fh.write(garbage)
+                out, deployed = self._reseal('fixture')
+                self.assertEqual(deployed, [], out)                     # бандлів нема → модуль
 
     def test_a_module_build_with_module_comments_is_skipped_too(self):
         """2b-2: збірка модуля, що несе коментарі МОДУЛЯ, теж має `publish/comment-layer/` — тож саме наявності теки мало:
@@ -2671,11 +2817,11 @@ class ResealModuleBuilds(TaskFixture):
                 with self.subTest(gate_pw=gate_pw, args=args):
                     task, tid, its = self._args()
                     comments = {'module': prov, 'config': {'endpoint': ENDPOINT}, 'channel': 'deai/s/fixture'}
-                    serve.build_preview(task, tid, its, comments=comments, gate_pw=gate_pw)
+                    serve.build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module')
                     self.assertTrue(os.path.isdir(os.path.join(self.tmp, 'publish', 'comment-layer')), 'контроль')
                     before = _bytes(self._wrapper())
                     out, deployed = self._reseal(*args)
-                    self.assertIn('локальна збірка модуля', out)
+                    self.assertIn('збірка модуля публікації', out)
                     self.assertNotIn('передеплоєно', out)
                     self.assertNotIn('перезібрано', out)
                     self.assertEqual(deployed, [], 'збірку з коментарями модуля відправлено на Vercel ЛІГА')
@@ -2688,14 +2834,14 @@ class ResealModuleBuilds(TaskFixture):
         meta = serve.load_meta(task)
         meta['publish_local'] = {'module': 'static-publish', 'path': '/x', 'published_at': '2026-10-15T10:00:00Z'}
         serve.save_meta(task, meta)
-        serve.build_preview(task, tid, its, comments=True, gate_pw='1100')
+        serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='legacy')
         out, deployed = self._reseal('fixture')
         self.assertEqual(len(deployed), 1, out)
         meta.pop('publish_local')
         serve.save_meta(task, meta)
-        serve.build_preview(task, tid, its, comments=False, gate_pw=None)
+        serve.build_preview(task, tid, its, comments=False, gate_pw=None, build='module')
         out, deployed = self._reseal('fixture')
-        self.assertIn('локальна збірка модуля', out)
+        self.assertIn('збірка модуля', out)
         self.assertEqual(deployed, [])
 
 
@@ -3739,11 +3885,11 @@ class CommentsBuild(TaskFixture):
         self.assertEqual(_page_cfg(_read(os.path.join(pub, 'it2', 'index.html')))['channel'], self.channel)
 
     def test_a_hostile_config_value_cannot_break_out_of_the_script(self):
-        hostile = '</script><script>alert(1)</script> &"\'\\'
+        hostile = '</script><script>alert(1)</script>\u2028&"\'\\'
         pub = self._build(comments=self.comments(config={'endpoint': hostile}), gate_pw=None)['dir']
         html = _read(os.path.join(pub, 'it2', 'index.html'))
         self.assertNotIn('</script><script>alert(1)', html)
-        self.assertNotIn(' ', html)
+        self.assertNotIn('\u2028', html)
         self.assertEqual(_page_cfg(html)['endpoint'], hostile)
 
     def test_the_gate_still_covers_every_page_of_a_module_build(self):
@@ -3792,7 +3938,7 @@ class CommentsBuild(TaskFixture):
         for what, comments in cases.items():
             with self.subTest(what):
                 with self.assertRaises(ValueError):
-                    serve.build_preview(task, tid, its, comments=comments, gate_pw=None)
+                    serve.build_preview(task, tid, its, comments=comments, gate_pw=None, build='module')
                 self.assertEqual(os.listdir(pub), ['keep.txt'])
                 self.assertEqual(_read(keep), 'попередня збірка')
 
@@ -3837,20 +3983,48 @@ class CommentsBuild(TaskFixture):
         self.assertIn(str(dm.MAX_CLIENT_BYTES), cm.exception.message)
 
     def test_an_adapter_file_named_like_a_core_bundle_is_refused_before_anything_is_written(self):
+        """Також ЗА ІНШОГО РЕГІСТРУ: на macOS/Windows `Comment-layer.min.js` — це той самий файл, що й шар коментатора."""
+        n = 0
         for core in serve.BUNDLES:
-            with self.subTest(core=core):
-                mid = 'clash-' + core.split('.')[0]
-                d = _copy_module(MEMO_SRC, self.mods, mid)
-                man = json.loads(_read(os.path.join(d, 'module.json')))
-                man.update(id=mid, client=[core])
-                _write_json(os.path.join(d, 'module.json'), man)
-                os.rename(os.path.join(d, 'adapter.js'), os.path.join(d, core))
-                clash = dm.catalog()[mid]
-                self.assertEqual(clash.status, 'ok', clash.error)
-                pub = os.path.join(self.tmp, 'publish')
-                with self.assertRaises(dm.ModuleError):
-                    self._build(comments=self.comments(module=clash), gate_pw=None)
-                self.assertFalse(os.path.exists(pub), 'збірка почалась, хоч файл адаптера підмінив би шар')
+            for name in (core, core[0].upper() + core[1:], core.replace('layer', 'LAYER').replace('adapter', 'ADAPTER')):
+                n += 1
+                with self.subTest(name=name):
+                    mid = f'clash-{n}'
+                    d = _copy_module(MEMO_SRC, self.mods, mid)
+                    man = json.loads(_read(os.path.join(d, 'module.json')))
+                    man.update(id=mid, client=[name])
+                    _write_json(os.path.join(d, 'module.json'), man)
+                    os.rename(os.path.join(d, 'adapter.js'), os.path.join(d, name))
+                    clash = dm.catalog()[mid]
+                    self.assertEqual(clash.status, 'ok', clash.error)
+                    pub = os.path.join(self.tmp, 'publish')
+                    with self.assertRaises(dm.ModuleError):
+                        self._build(comments=self.comments(module=clash), gate_pw=None)
+                    self.assertFalse(os.path.exists(pub), 'збірка почалась, хоч файл адаптера підмінив би шар')
+
+    def test_the_layer_bundle_name_is_the_literal_one_and_one_of_the_league_bundles(self):
+        self.assertEqual(serve.LAYER_BUNDLE, 'comment-layer.min.js')
+        self.assertIn(serve.LAYER_BUNDLE, serve.BUNDLES)
+
+    def test_built_pages_import_back_to_the_source_for_both_kinds_of_comments_gated_and_not(self):
+        """Коловий тест: сторінки, які справді склала `build_preview`, `bin/import_preview.strip_publish` повертає в ВИХІДНІ
+        (імпорт чужого превʼю з коментарями модуля, 2b-2). ЛІГА — контроль."""
+        sys.path.insert(0, os.path.join(ROOT, 'bin'))
+        self.addCleanup(sys.path.remove, os.path.join(ROOT, 'bin'))
+        import import_preview as ip
+        for label, comments in (('legacy', True), ('module', self.comments())):
+            for gate_pw in ('x', None):
+                with self.subTest(comments=label, gate=gate_pw is not None):
+                    pub = self._build(comments=comments, gate_pw=gate_pw)['dir']
+                    for rel in self.pages(pub):
+                        built = _read(os.path.join(pub, rel))
+                        src = _read(os.path.join(self.tmp, 'iterations', rel))
+                        if label == 'legacy' and gate_pw is None:
+                            continue                   # збірка ЛІГА без гейта не існує (пароль ЛІГА є завжди)
+                        clean, ok = ip.strip_publish(built)
+                        self.assertTrue(ok, rel)
+                        self.assertEqual(clean, src, rel)
+                        self.assertNotIn('__deaiCommentsCfg', clean)
 
 
 class PublishCommentsDecision(TaskFixture):
@@ -4285,7 +4459,7 @@ class CommentsPublish(DispatchWorld):
     def test_published_serves_the_layer_the_adapter_and_the_pages_with_the_snippet_in_the_sandbox(self):
         self.enable_memo(self.off)
         self.assertEqual(self.publish()[0], 200)
-        csp = 'sandbox allow-scripts allow-forms allow-popups'
+        csp = 'sandbox allow-scripts allow-forms allow-popups allow-modals'
         for name, source in (('adapter.js', os.path.join(MEMO_SRC, 'adapter.js')),
                              ('comment-layer.min.js', LAYER_SRC)):
             st, hd, data = self.served(f'/published/off/tx/comment-layer/{name}')
@@ -4300,6 +4474,82 @@ class CommentsPublish(DispatchWorld):
         self.assertIn('<script src="../../comment-layer/adapter.js"', html)
         self.assertEqual(_page_cfg(html)['channel'], 'deai/off/tx')
         self.assertEqual(self.served('/published/off/tx/comment-layer/supabase-adapter.min.js')[0], 404)   # бандла ЛІГА нема
+
+    # ---- мітка збирача в маніфесті кожного шляху ----
+
+    def built_by(self, root):
+        return json.loads(_read(os.path.join(root, 'manifest.json'))).get('build')
+
+    def test_every_publish_path_marks_its_manifest_with_who_built_it(self):
+        st, body = self.publish({'build_only': True}, task='ty')                           # ЛІГА (простір `on`)
+        self.assertEqual((st, self.built_by(body['dir'])), (200, 'legacy'), body)
+        st, body = self.publish({'build_only': True})                                       # static-publish
+        self.assertEqual((st, self.built_by(body['dir'])), (200, 'module'), body)
+        self.enable_url(self.off)
+        st, body = self.publish({'build_only': True})                                       # модуль «за адресою»
+        self.assertEqual((st, self.built_by(body['dir'])), (200, 'module'), body)
+        self.assertEqual(self.built_by(os.path.join(self.tx_dir, 'publish')), 'module')
+
+    def test_a_league_build_with_module_comments_or_without_comments_is_still_marked_league(self):
+        self.enable_memo(self.on)
+        st, body = self.publish({'build_only': True}, task='ty')
+        self.assertEqual((st, self.built_by(body['dir'])), (200, 'legacy'), body)
+        self.break_memo()
+        st, body = self.publish({'build_only': True}, task='ty')
+        self.assertEqual((st, body['comments_unavailable'], self.built_by(body['dir'])), (200, 'module-error', 'legacy'), body)
+
+    # ---- рішення про коментарі — поза замками збірки ----
+
+    def locked_during(self, space_task, publish_kwargs=None):
+        """Чи тримається замок теки збірки задачі, поки йде `publish_comments` і поки йде `build_preview` (контроль)."""
+        lock = serve._publish_lock(serve._task_dir_key(space_task))
+        seen = {}
+        real_pc, real_bp = serve.publish_comments, serve.build_preview
+
+        def pc(*a, **kw):
+            seen['comments'] = lock.locked()
+            return real_pc(*a, **kw)
+
+        def bp(*a, **kw):
+            seen['build'] = lock.locked()
+            return real_bp(*a, **kw)
+        with mock.patch.object(serve, 'publish_comments', pc), mock.patch.object(serve, 'build_preview', bp):
+            st, body = self.publish(**(publish_kwargs or {}))
+        self.assertEqual(st, 200, body)
+        return seen
+
+    def test_the_comments_decision_runs_before_the_build_lock_on_both_module_paths(self):
+        """Рішення виконує код модуля (до 10 с) і нічого не пише: замок збірки тримається ЛИШЕ під збірку й копіювання."""
+        self.enable_memo(self.off)
+        self.assertEqual(self.locked_during(self.tx_dir), {'comments': False, 'build': True})
+        self.enable_url(self.off)
+        self.assertEqual(self.locked_during(self.tx_dir), {'comments': False, 'build': True})
+
+    def test_a_busy_publish_still_answers_409_and_the_comments_decision_does_not_write_anything(self):
+        self.enable_memo(self.off)
+        lock = serve._publish_lock(serve._task_dir_key(self.tx_dir))
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            st, body = self.publish()
+        finally:
+            lock.release()
+        self.assertEqual((st, body.get('code')), (409, 'publish-busy'), body)
+        self.assert_nothing_built()
+
+    # ---- пісочниця `/published`: модальні вікна є, `allow-same-origin` — ні ----
+
+    def test_the_published_sandbox_allows_modals_for_the_prompts_of_the_comment_layer_but_never_the_canvas_origin(self):
+        want = {'sandbox', 'allow-scripts', 'allow-forms', 'allow-popups', 'allow-modals'}
+        csp = dict(serve.PUBLISHED_HEADERS)['Content-Security-Policy']
+        self.assertEqual(set(csp.split()), want)
+        self.assertNotIn('allow-same-origin', csp)
+        self.enable_memo(self.off)
+        self.assertEqual(self.publish()[0], 200)
+        for path, status in (('/published/off/tx/it1/alpha/index.html', 200), ('/published/off/tx/comment-layer/adapter.js', 200),
+                             ('/published/off/tx/nothing', 404), ('/published/off/tx/.deai-published', 404)):
+            got, headers, _body = self.served(path)
+            self.assertEqual(got, status, path)
+            self.assertEqual(set(headers['content-security-policy'].split()), want, path)
 
     # ---- файл адаптера підмінили між рішенням і збіркою ----
 

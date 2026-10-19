@@ -39,6 +39,67 @@ def published(html, depth_up='../'):
     return serve._inject_gate(out, serve.gate_html('t', '1100'))
 
 
+MODULE_CFG = {'endpoint': 'http://127.0.0.1:4777', 'pubkey': 'pk-OPEN', 'channel': 'deai/other-space/t1'}
+
+
+def published_module(html, depth_up='../', gated=True, cfg=None):
+    """Рівно те, що робить `serve.build_preview` зі сторінкою, коли превʼю несе коментарі МОДУЛЯ (2b-2): сніпет модуля
+    (без інспектора й вкладок) і, коли є пароль, гейт. Модуль публікації без пароля — БЕЗ гейта (`gated=False`)."""
+    out = serve.inject_module_comment_layer(
+        html, f'{depth_up}comment-layer', [f'{depth_up}comment-layer/adapter.js'], cfg or MODULE_CFG,
+        version='1/kartka', inspector=False, audiences=False)
+    return serve._inject_gate(out, serve.gate_html('t', '1100')) if gated else out
+
+
+class StripModuleComments(unittest.TestCase):
+    """Сторінка превʼю з коментарями МОДУЛЯ (2b-2): імпорт знімає її сніпет так само, як сніпет ЛІГА, — із гейтом і без."""
+
+    def test_a_gated_module_page_roundtrips_byte_for_byte(self):
+        self.assertEqual(ip.strip_publish(published_module(PAGE)), (PAGE, True))
+
+    def test_an_ungated_module_page_roundtrips_byte_for_byte(self):
+        """Модуль публікації без пароля: гейта нема, `<title>` не чіпали — лишається вирізати сам сніпет."""
+        html = published_module(PAGE, gated=False)
+        self.assertIn('__deaiCommentsCfg', html, 'контроль: сніпет у сторінці справді є')
+        self.assertNotIn('authgate', html)
+        self.assertEqual(ip.strip_publish(html), (PAGE, True))
+
+    def test_a_page_without_a_title_or_a_body_tag_roundtrips_too(self):
+        for gated in (True, False):
+            with self.subTest(gated=gated):
+                page = PAGE.replace('<title>Картка «Ромашка»</title>', '')
+                self.assertEqual(ip.strip_publish(published_module(page, gated=gated)), (page, True))
+                bare = '<div>без body</div>'
+                self.assertEqual(ip.strip_publish(published_module(bare, gated=gated)), (bare, True))
+
+    def test_the_title_comes_back_from_the_gate_only_when_there_was_a_gate(self):
+        page = PAGE.replace('<title>Картка «Ромашка»</title>', '<title>R&amp;D «Суди»</title>')
+        self.assertEqual(ip.strip_publish(published_module(page, gated=True)), (page, True))
+        self.assertEqual(ip.strip_publish(published_module(page, gated=False)), (page, True))
+
+    def test_page_depths_and_hostile_config_values_do_not_confuse_the_cut(self):
+        hostile = {'endpoint': '</script><script>alert(1)</script>\u2028&"\'\\', 'pubkey': 'x', 'channel': 'a/b'}
+        for depth_up in ('', '../', '../../'):
+            for gated in (True, False):
+                with self.subTest(depth_up=depth_up, gated=gated):
+                    self.assertEqual(ip.strip_publish(published_module(PAGE, depth_up, gated, hostile)), (PAGE, True))
+
+    def test_both_kinds_of_snippet_are_cut_by_their_own_template_bounds(self):
+        """Шаблони модуля й ЛІГА різні: межі беруться з обох, а не вгадуються."""
+        self.assertTrue(ip._MODULE_START.startswith('\n<script>\nwindow.__clDown'))
+        self.assertNotEqual(ip._MODULE_START, ip._SNIPPET_START)
+        self.assertIn(ip._MODULE_START, ip._SNIPPET_STARTS)
+        self.assertTrue(ip._module_end().endswith('</script>'))
+        self.assertEqual(ip.strip_publish(published(PAGE)), (PAGE, True), 'контроль: ЛІГА лишилась як була')
+
+    def test_a_drifted_module_template_is_not_stripped_and_says_so(self):
+        """Шаблон змінився, межі не збіглись: `strip_publish` чесно каже «не вирізано» (а імпорт тоді зупиняється)."""
+        for gated in (True, False):
+            with self.subTest(gated=gated):
+                html = published_module(PAGE, gated=gated).replace('function (why) {', 'function (reason) {', 1)
+                self.assertFalse(ip.strip_publish(html)[1])
+
+
 class Strip(unittest.TestCase):
     def test_roundtrip_restores_page_byte_for_byte(self):
         clean, ok = ip.strip_publish(published(PAGE))
@@ -146,7 +207,9 @@ class Refs(unittest.TestCase):
         self.assertEqual(ip.refs('<a href="%23n">x</a><img src="img/a%20b.png">', 'html'), {'img/a b.png'})
 
 
-class ImportIteration(unittest.TestCase):
+class ImportFixture(unittest.TestCase):
+    """Фікстура сайту превʼю колеги й тека задачі: спільна основа `ImportIteration` і `ImportModuleComments`. Тестів нема."""
+
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
@@ -179,6 +242,8 @@ class ImportIteration(unittest.TestCase):
             return self.site[url]
         raise ip.FetchError(f'404 {url}', code=404)
 
+
+class ImportIteration(ImportFixture):
     def test_404_in_source_is_not_an_import_failure_but_network_is(self):
         """Усе, що превʼю віддає 404, бите й у колеги (на boss-interface it15 — 200
         шрифтів із вшитого beasties CSS, на вигляд не впливає). Справжній збій
@@ -273,6 +338,69 @@ class ImportIteration(unittest.TestCase):
         rep = ip.import_iteration(self.d, self.base, fetch=self.fetch, dry_run=True)
         self.assertEqual(sorted(os.listdir(os.path.join(self.d, 'iterations'))), before)
         self.assertGreater(rep['files'], 5)
+
+
+class ImportModuleComments(ImportFixture):
+    """Імпорт цілої ітерації з превʼю з коментарями модуля: та сама фікстура сайту, що в `ImportIteration`, — але
+    сторінка джерела несе сніпет модуля."""
+
+    def serve_page(self, html):
+        self.site[f'{self.base}/it5/kartka/index.html'] = html.encode()
+
+    def written(self):
+        root = os.path.join(self.d, 'iterations')
+        out = {}
+        for dp, _dirs, files in os.walk(root):
+            for f in files:
+                with open(os.path.join(dp, f), 'rb') as fh:
+                    out[os.path.relpath(os.path.join(dp, f), root)] = fh.read()
+        return out
+
+    def test_a_gated_page_with_module_comments_imports_clean(self):
+        self.serve_page(published_module(PAGE))
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch)
+        self.assertEqual(rep['unstripped'], [])
+        with open(os.path.join(self.d, 'iterations', rep['imported'], 'kartka', 'index.html'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), PAGE)
+
+    def test_an_ungated_page_with_module_comments_imports_clean_and_carries_nothing_of_the_other_space(self):
+        self.serve_page(published_module(PAGE, gated=False))
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch)
+        self.assertEqual(rep['unstripped'], [])
+        for name, data in self.written().items():
+            for mark in (b'__deaiCommentsCfg', b'DeaiComments', b'4777', b'pk-OPEN', b'deai/other-space'):
+                self.assertNotIn(mark, data, f'{name}: {mark!r}')
+            self.assertNotIn(b'comment-layer', data, name)
+
+    def test_the_two_working_copies_do_not_get_a_second_layer_on_the_next_publish(self):
+        """Імпортована ітерація публікується знову: коментатор ЇЇ простору додається РІВНО один раз."""
+        self.serve_page(published_module(PAGE, gated=False))
+        rep = ip.import_iteration(self.d, self.base, fetch=self.fetch)
+        with open(os.path.join(self.d, 'iterations', rep['working'], 'kartka', 'index.html'), encoding='utf-8') as f:
+            again = serve.inject_module_comment_layer(
+                f.read(), '../comment-layer', ['../comment-layer/adapter.js'],
+                {'endpoint': 'http://127.0.0.1:1', 'channel': 'deai/mine/t1'}, version='1/kartka')
+        self.assertEqual(again.count('window.__deaiCommentsCfg ='), 1)
+        self.assertEqual(again.count('comment-layer.min.js'), 1)
+
+    def test_a_page_whose_module_snippet_is_not_recognised_is_refused_and_nothing_is_written(self):
+        """Запобіжник, незалежний від шаблонів: коли межі не збіглись, а сніпет (його конфіг) лишився, — імпорт стоп."""
+        drifted = published_module(PAGE, gated=False).replace('function (why) {', 'function (reason) {', 1)
+        self.serve_page(drifted)
+        before = self.written()
+        with self.assertRaises(ip.ImportError_) as ctx:
+            ip.import_iteration(self.d, self.base, fetch=self.fetch)
+        self.assertIn('kartka/index.html', str(ctx.exception))
+        self.assertIn('коментарів модуля', str(ctx.exception))
+        self.assertEqual(self.written(), before, 'зупинений імпорт щось записав')
+        with open(os.path.join(self.d, 'iterations.json'), encoding='utf-8') as f:
+            self.assertEqual([i['id'] for i in json.load(f)['iterations']], ['it1'])
+
+    def test_a_page_that_merely_mentions_the_adapter_global_is_refused_too(self):
+        """Лишився хоч слід адаптера (`DeaiComments`) — не пишемо: це чужий код у ітерації."""
+        self.serve_page(published(PAGE).replace('</body>', '<script>window.DeaiComments = {};</script></body>', 1))
+        with self.assertRaises(ip.ImportError_):
+            ip.import_iteration(self.d, self.base, fetch=self.fetch)
 
 
 def legacy_wrapper(data, pw='1100'):

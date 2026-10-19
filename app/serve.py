@@ -2852,9 +2852,12 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 
 #: Бандли коментатора в publish/comment-layer/.
 BUNDLES = ('comment-layer.min.js', 'supabase-adapter.min.js')
+#: Хто збирає превʼю (`build_preview(build=…)`, `manifest.json` → `"build"`): ЛІГА (далі Vercel) чи модуль публікації.
+BUILD_KINDS = ('legacy', 'module')
 #: Шар коментатора — єдиний бандл, який їде в збірку і в канал МОДУЛЯ (адаптер сховища дає сам модуль); `supabase-adapter` —
-#: лише ЛІГА. Тож збірка, де є ОБИДВА бандли, — збірка ЛІГА (`ops/reseal_gate.py` за цим відрізняє її від збірки модуля).
-LAYER_BUNDLE = BUNDLES[0]
+#: лише ЛІГА. Тож збірка, де є ОБИДВА бандли, — збірка ЛІГА: це запасне правило `ops/reseal_gate.py` для збірок БЕЗ мітки
+#: `build` у маніфесті (зібраних до неї); для решти рішає мітка (`BUILD_KINDS`).
+LAYER_BUNDLE = 'comment-layer.min.js'
 
 #: Спільні модулі оболонки в publish/shell/ — копіюються з app/ БЕЗ правок.
 #: Саме тому вони й зроблені чистими (ні DOM-глобалів, ні fetch, ні
@@ -3012,7 +3015,7 @@ def publish_frames(task, it_id, pages, dst_dir):
     return frames, None
 
 
-def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None):
+def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None, build=None):
     """`publish/manifest.json` — ЄДИНЕ джерело правди зовнішньої оболонки.
 
     Без `serve.py` у превʼю немає ні `/api/task`, ні `/api/iteration-pages`, ні
@@ -3026,6 +3029,10 @@ def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None):
     замовчуванням, картки полотна, `pageById`; тому теки туди НЕ додаємо, а
     веземо окремим ключем. Обидва перелічені одним правилом видимості
     (`pm.preview_flat` / `pm.preview_outline`).
+
+    `build` — мітка збирача (`BUILD_KINDS`: `'legacy'` — ЛІГА, `'module'` — модуль публікації), ключ `"build"` ОСТАННІМ у
+    файлі. Це для `ops/reseal_gate.py`: оболонка ключа не читає (бере лише названі поля), а `None` (виклик без мітки,
+    старі збірки) ключа не пише — тоді reseal сам вгадує за складом `comment-layer/`.
 
     `trees` — `{it: дерево}`, знятий `_publish` ОДИН раз на всю збірку: `outline`
     і `pages` тоді рахуються з того самого знімка, а не з двох читань pages.json
@@ -3109,6 +3116,8 @@ def publish_manifest(task, tid, its, pages, frames, dst_dir, trees=None):
                 row['path'] = f"{row['id']}/index.html"
             outline.append(row)
     man['outline'] = outline
+    if build is not None:
+        man['build'] = build
     with open(os.path.join(dst_dir, 'manifest.json'), 'w', encoding='utf-8') as fh:
         json.dump(man, fh, ensure_ascii=False, indent=1)
     return man
@@ -3513,8 +3522,9 @@ def _read_module_comments(comments):
         raise ValueError("build_preview: comments — словник {'module': Module ролі comments, 'config': {…}, "
                          "'channel': '…'}")
     files = []
+    core = {b.lower() for b in BUNDLES}
     for name in mod.client:
-        if name in BUNDLES:
+        if name.lower() in core:           # без урахування регістру: на macOS/Windows `Comment-Layer.min.js` — той самий файл
             raise deai_modules.ModuleError(
                 'module-error', message=f'adapter file {name} of module {mod.id} has the name of a core '
                                         'comment-layer file')
@@ -3575,7 +3585,7 @@ def publish_comments(space, tid, *, module_publish=False):
     return False, None
 
 
-def build_preview(task, tid, its, *, comments=True, gate_pw):
+def build_preview(task, tid, its, *, comments=True, gate_pw, build):
     """Зібрати `publish/` з ОПУБЛІКОВАНИХ ітерацій `its`: сторінки, спільні файли ітерацій, оболонка,
     кадри, маніфест, обгортка. ЄДИНА збірка превʼю: нею користуються і ЛІГА (`Handler._publish`, далі
     vercel deploy), і модулі публікації (статика в локальну теку) — друга копія збірки розійшлась би з
@@ -3597,6 +3607,13 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
     Будь-що інше — `ValueError` ДО змін на диску: `'legacy'` (значення постачальника, а не рішення) чи `1` не мають
     мовчки стати шляхом ЛІГА.
 
+    `build` — ХТО збирає, ОБОВʼЯЗКОВИЙ іменований аргумент (як `gate_pw`): `'legacy'` — `Handler._publish` (ЛІГА: далі
+    деплой на Vercel), `'module'` — модулі публікації (`publish_with_module`, `_publish_by_url`). Пишеться в
+    `manifest.json` (`"build"`) ПОЗИТИВНОЮ міткою: `ops/reseal_gate.py` перепечатує й деплоїть лише збірки `legacy`.
+    Склад `publish/comment-layer/` для цього рішення не годиться: збірка ЛІГА з коментарями модуля несе там лише шар
+    і файли адаптера, а ЛІГА без коментарів (`comments_unavailable`) — нічого, і обидві не відрізнити від локальної
+    збірки модуля. Інше значення — `ValueError` ДО змін на диску.
+
     `gate_pw` — пароль гейта, ОБОВʼЯЗКОВИЙ іменований аргумент (забути його не вдасться). `None` — превʼю
     БЕЗ гейта: сторінки не чіпаємо взагалі (`_inject_gate` ще й переписує `<title>`), а обгортка
     відкривається сама (`NO_GATE_OPEN`), із порожнім паролем для «Копіювати посилання». ⚠️ `''` — це НЕ
@@ -3614,6 +3631,8 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
     """
     if not its:
         raise ValueError('build_preview: порожній перелік ітерацій — нема що збирати')
+    if build not in BUILD_KINDS:
+        raise ValueError(f'build_preview: build — одне з {BUILD_KINDS}, а не {build!r}')
     adapter = None
     if isinstance(comments, dict):
         adapter = _read_module_comments(comments)        # перевірка й читання файлів адаптера — ДО будь-якої зміни диска
@@ -3690,7 +3709,7 @@ def build_preview(task, tid, its, *, comments=True, gate_pw):
         frames[it['id']] = fr
         if warn:
             frame_warnings.append(warn)
-    publish_manifest(task, tid, its, pages, frames, pub, trees)
+    publish_manifest(task, tid, its, pages, frames, pub, trees, build=build)
     if gated:
         wrapper = preview_index_html(gate, gate_pw)
     else:
@@ -3879,16 +3898,18 @@ def publish_with_module(h, prov, payload):
         h._send_json({'ok': False, 'code': 'bad-folder', 'error': why}, status=409)
         return
     gate_pw = ctx['secrets'].get('password') or None
+    # Коментарі превʼю: з постачальника ролі `comments` ЦЬОГО простору, раз, ДО збірки (`publish_comments`). Зашитий
+    # Supabase ЛІГА (`'legacy'`) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
+    # модуля (до `CHECK_TIMEOUT` = 10 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
+    # для другого кліку (його `publish-busy` приходить тепер лише коли справді йде збірка чи копіювання).
+    comments, comments_warn = publish_comments(space, tid, module_publish=True)
     with _try_publish_locks(task['dir'], folder, tid) as got:
         if not got:
             h._send_json({'ok': False, 'code': 'publish-busy',
                           'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
                          status=409)
             return
-        # Коментарі превʼю: з постачальника ролі `comments` ЦЬОГО простору, раз, ДО збірки (`publish_comments`). Зашитий
-        # Supabase ЛІГА (`'legacy'`) у збірку модуля не їде — `False`, як у 0.3.0.
-        comments, comments_warn = publish_comments(space, tid, module_publish=True)
-        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw)
+        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module')
         if payload.get('build_only'):
             result = {'ok': True, **built}
         else:
@@ -4092,14 +4113,14 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     мережі — ходить лише сам модуль."""
     ctx = deai_modules.module_ctx(space, prov)
     gate_pw = ctx['secrets'].get('password') or None
+    comments, comments_warn = publish_comments(space, tid, module_publish=True)   # поза замком: див. `publish_with_module`
     with _try_task_dir_lock(task['dir']) as got:
         if not got:
             h._send_json({'ok': False, 'code': 'publish-busy',
                           'error': 'ця задача вже публікується — зачекайте завершення і повторіть'},
                          status=409)
             return
-        comments, comments_warn = publish_comments(space, tid, module_publish=True)       # див. `publish_with_module`
-        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw)
+        built = build_preview(task, tid, its, comments=comments, gate_pw=gate_pw, build='module')
         if payload.get('build_only'):
             result = {'ok': True, **built}
         else:
@@ -6867,7 +6888,7 @@ class Handler(SimpleHTTPRequestHandler):
         # коли він зафіксований за запитом: інструменти ЛІГА й заглушки обробника його не мають, і реєстру тоді не читаємо.
         space = spaces.active_space() if spaces.layer_on() and spaces.request_space_id() is not None else None
         comments, comments_warn = publish_comments(space, tid)
-        built = build_preview(task, tid, its, comments=comments, gate_pw=pw)
+        built = build_preview(task, tid, its, comments=comments, gate_pw=pw, build='legacy')
         # ⛔ `pub` потрібен ДАЛІ — деплою (`cwd=pub`, `_stable_alias`, `_remember_vercel_scope`); його
         # читає лише гілка без `build_only`, тож вилучення збірки без цього рядка ламає тільки справжній
         # деплой (`NameError` посеред відповіді), а `build_only`-тести лишаються зеленими.
@@ -6970,12 +6991,15 @@ class Handler(SimpleHTTPRequestHandler):
 #: Заголовки КОЖНОЇ відповіді `/published/…` (200, 304, переадресація, 404).
 #:  * `sandbox …` БЕЗ `allow-same-origin` — документ дістає непрозорий (opaque) origin: сторінка превʼю не бачить
 #:    ні `localStorage` канваса, ні його cookie, а її `fetch` до API канваса йде з `Origin: null`, який `do_POST`
-#:    відхиляє (403, `_local_origin`). Скрипти й форми дозволені — макети живі;
+#:    відхиляє (403, `_local_origin`). Скрипти й форми дозволені — макети живі; `allow-modals` теж: без нього
+#:    `prompt()`/`confirm()` у сторінці повертають `null`/`false`, і шар коментатора в локальному перегляді
+#:    лишає авторів «Anonymous», а «Видалити» нічого не робить (справжній хостинг пісочниці не ставить — локальний
+#:    перегляд мусить поводитись так само). Модальні вікна тут нешкідливі: вони не дають сторінці жодного доступу;
 #:  * `nosniff` — файл не стане скриптом чи HTML лише через вміст;
 #:  * `Access-Control-Allow-Origin: *` — без нього в непрозорому origin не вантажаться ні `<script type=module>`
 #:    (модульні скрипти завжди CORS), ні `fetch('manifest.json')`, ні шрифти.
 PUBLISHED_HEADERS = (
-    ('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups'),
+    ('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-modals'),
     ('X-Content-Type-Options', 'nosniff'),
     ('Access-Control-Allow-Origin', '*'),
 )

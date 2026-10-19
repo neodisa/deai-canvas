@@ -436,6 +436,17 @@ test("публікація: відповідь модуля (`local`) — пла
   assert.doesNotMatch(body, /catch \(e\) \{ tell\(t\('errFailed', e\.message\)\); \}/, "стара загальна відмова лишилась");
 });
 
+test("публікація: `comments_unavailable` з відповіді — рядок у вікні попереджень (код — через модель, текст — зі словника)", () => {
+  const body = barAct("publish");
+  const warn = /const warn = \[([^\]]*)\]\.filter\(Boolean\);/.exec(body);
+  assert.ok(warn, "список попереджень `warn` зник");
+  assert.match(body, /const cmtCode = commentsUnavailableCode\(r\);/, "код — лише через модель (безпечні символи)");
+  assert.match(warn[1], /cmtCode \? t\('publishCommentsUnavailable', cmtCode\) : null/, "рядка про коментарі немає у `warn`");
+  assert.match(warn[1], /r\.code_stale/, "попередження про код не зникло");
+  assert.match(body, /if \(warn\.length\) tell\(warn\.join\('\\n\\n'\)\);/, "усі попередження — одним вікном");
+  assert.match(src, /import \{[^}]*\bcommentsUnavailableCode\b[^}]*\} from '\.\/spaces-model\.js';/);
+});
+
 test("«Відкрити превью» і «Скопіювати посилання»: ціль — з моделі, локальне посилання без пароля", () => {
   const open = barAct("openpreview");
   assert.match(open, /previewTarget\(curTask, spaceNow\(\)\)/);

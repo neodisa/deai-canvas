@@ -64,7 +64,16 @@ _SNIPPET_START = '\n' + _SNIPPET_HEAD[0] + '\n' + _SNIPPET_HEAD[1]
 # обидва. Превʼю тієї доби ще живі, а гейт у них той самий (`_gate_end` не залежить
 # від версії). Старі шаблони стерегтиме `OldTemplates` — вони там БУКВАЛЬНІ.
 _OLD_SNIPPET_START = '\n<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"'
-_SNIPPET_STARTS = (_SNIPPET_START, _OLD_SNIPPET_START)
+# Сніпет коментарів МОДУЛЯ (2b-2, `serve.MODULE_COMMENT_SNIPPET`): починається з копії банера (`window.__clDown`), а не з
+# коментаря ЛІГА-шного шаблону, і має власний хвіст. Ті самі правила: межі беремо з ШАБЛОНУ, не переписуємо тут. Видима
+# примітка про відмову (`COMMENT_NOTICE_SNIPPET`) починається з того самого банера, але в ЗБІРКИ вона не потрапляє —
+# лише в локальну сторінку `/commented`, яку ніхто не публікує.
+_MODULE_HEAD = serve.MODULE_COMMENT_SNIPPET.lstrip('\n').split('\n', 2)
+_MODULE_START = '\n' + _MODULE_HEAD[0] + '\n' + _MODULE_HEAD[1].replace('{{', '{').replace('}}', '}')
+_SNIPPET_STARTS = (_SNIPPET_START, _OLD_SNIPPET_START, _MODULE_START)
+# Що не має лишитись у ЧУЖІЙ ітерації за жодних обставин: чужий простір (адреса сервісу, публічний ключ, канал) і другий
+# шар коментарів після наступної публікації.
+_MODULE_MARKS = ('__deaiCommentsCfg', 'DeaiComments')
 # Той самий маркер, за яким `serve._inject_gate` розпізнає, що гейт уже є.
 _GATE_MARK = 'id="authgate"'
 _NEUTRAL_TITLE = '<title>Перегляд макета</title>'
@@ -78,16 +87,30 @@ def _gate_end():
     return tail[-60:].replace('{{', '{').replace('}}', '}')
 
 
+def _module_end():
+    """Хвіст сніпета коментарів модуля — останні символи шаблону після форматування (параметри стоять раніше)."""
+    tail = serve.MODULE_COMMENT_SNIPPET.rstrip()
+    return tail[-60:].replace('{{', '{').replace('}}', '}')
+
+
 def strip_publish(html):
     """Вирізати вставки публікації. → (чиста сторінка, чи були вставки).
 
     Порядок у `build_preview`: перед `</body>` спершу сніпет коментатора, потім
     `<script>window.__origTitle=…</script>` і гейт; title замінено нейтральним.
-    Вирізаємо від початку сніпета до кінця гейта — між ними лише наше."""
+    Вирізаємо від початку сніпета до кінця гейта — між ними лише наше.
+
+    Сніпет коментарів МОДУЛЯ (2b-2) — те саме, але сторінка може бути БЕЗ гейта (модуль публікації без пароля): тоді
+    вирізаємо від початку сніпета до його власного хвоста (`_module_end`), а title не чіпаємо — його без гейта й не
+    міняли. Без цього сторінка модуля або не проходила імпорт («лишилась із гейтом»), або (без гейта) тягла в чужу
+    ітерацію `__deaiCommentsCfg` іншого простору й після наступної публікації мала б ДРУГИЙ шар коментарів."""
     found = [i for i in (html.find(a) for a in _SNIPPET_STARTS) if i >= 0]
     start = min(found) if found else -1
     end_mark = _gate_end()
     end = html.find(end_mark, start if start >= 0 else 0)
+    if start >= 0 and end < 0 and html.startswith(_MODULE_START, start):
+        end_mark = _module_end()
+        end = html.find(end_mark, start)
     if start < 0 or end < 0:
         return html, False
     m = _ORIG_RE.search(html, start, end + len(end_mark))
@@ -402,6 +425,11 @@ def import_iteration(task_dir, url, src_it=None, fetch=default_fetch, dry_run=Fa
     for rel, data in sorted(files.items()):
         if _kind(rel) == 'html' and _GATE_MARK.encode() in data:
             raise ImportError_(f'сторінка {rel} лишилась із гейтом превʼю (пароль) — імпорт зупинено; '
+                               f'онови шаблони strip_publish')
+        # Те саме для коментарів модуля: їхня конфігурація — це адреса й публічний ключ ІНШОГО простору і канал його
+        # задачі, а лишений шар дав би другий після наступної публікації. Не пишемо нічого.
+        if _kind(rel) == 'html' and any(m.encode() in data for m in _MODULE_MARKS):
+            raise ImportError_(f'сторінка {rel} лишилась зі сніпетом коментарів модуля — імпорт зупинено; '
                                f'онови шаблони strip_publish')
     meta = serve.load_meta({'dir': task_dir})
     its = meta.setdefault('iterations', [])

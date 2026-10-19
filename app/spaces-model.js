@@ -618,6 +618,16 @@ export function remoteNoticeLines(r) {
   return r?.verified === false ? [{ key: "publishRemoteUnverified" }] : [];
 }
 
+/**
+ * Код, яким сервер каже «коментарі до превʼю не додано» (`comments_unavailable` у відповіді публікації), або `null`. Це код
+ * відмови модуля коментарів (`module-error`, `space-json-unreadable`, `bad-settings`…), без тексту й значень; відповідь —
+ * дані, тож код іде в текст лише коли має вигляд коду (`[A-Za-z0-9_-]`, до 64 знаків), а не як довільний рядок сервера.
+ */
+export function commentsUnavailableCode(r) {
+  const c = r?.comments_unavailable;
+  return typeof c === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(c) ? c : null;
+}
+
 /** Id вбудованого модуля публікації на Vercel — єдиний, чиє імʼя можна називати в текстах UI. */
 const VERCEL_MODULE = "vercel-publish";
 

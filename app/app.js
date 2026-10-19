@@ -33,7 +33,7 @@ import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, hasTeamComments, healTarget,
-  isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
+  commentsUnavailableCode, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError,
 } from './spaces-model.js';
@@ -1727,9 +1727,14 @@ const BAR_ACTIONS = {
          дизайнер роздає менеджеру посилання, яке задачею не є. Домен із
          суфіксом — той самий клас з боку Vercel (fb-29092026-210ec1). Усе
          одним вікном: кілька `tell` підряд лягли б одне на одне. */
+      /* Коментарі до превʼю не додано (модуль коментарів недоступний, 2b-2): публікація вдалась, але в превʼю їх нема —
+         без цього рядка людина роздала б посилання й шукала б причину в консолі глядача. Код — з моделі (лише безпечні
+         символи), текст — зі словника. */
+      const cmtCode = commentsUnavailableCode(r);
       const warn = [r.code_stale,
         r.not_task_link && r.url ? t('publishNotTaskLink', r.not_task_link, r.url) : null,
-        r.domain_warning].filter(Boolean);
+        r.domain_warning,
+        cmtCode ? t('publishCommentsUnavailable', cmtCode) : null].filter(Boolean);
       if (warn.length) tell(warn.join('\n\n'));
       const view = publishReaction(r, sp0, sameTask());
       /* Людина вже на іншій задачі: тост із назвою — і ВСЕ. Ні `render()`, ні плашки: вони належали б новій задачі. */

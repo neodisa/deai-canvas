@@ -641,3 +641,20 @@ test("«Огляд» у превʼю не дає картки для теки (�
   assert.ok(cards.length > 0);
   assert.deepEqual(cards.filter((c) => folders.has(c.pageId) || c.pageId === null), []);
 });
+
+test("мітка збирача в маніфесті (`build`) оболонку не торкається: усі адаптери дають те саме з нею й без неї", () => {
+  /* 2b-2: `publish_manifest` пише `"build": "legacy" | "module"` для `ops/reseal_gate.py`. Оболонка бере названі поля,
+     тож нове поле нічого не змінює — і цей тест упаде, якщо хтось почне читати маніфест «цілком». */
+  for (const build of ["legacy", "module"]) {
+    const marked = { ...MAN, build };
+    for (const ui of [UI(), UI({ it: "it3", page: "it3/nova" }), UI({ mode: "overview" })]) {
+      assert.deepEqual(extPanelState(marked, ui), extPanelState(MAN, ui), `${build}: панель`);
+      assert.deepEqual(extBarState(marked, ui), extBarState(MAN, ui), `${build}: смуга`);
+      assert.deepEqual(extRows(marked, ui), extRows(MAN, ui), `${build}: рядки`);
+      assert.deepEqual(overviewRows(marked, ui), overviewRows(MAN, ui), `${build}: «Огляд»`);
+    }
+    assert.equal(startPage(marked, "#p=it1/poshuk"), startPage(MAN, "#p=it1/poshuk"));
+    assert.deepEqual(extTree(marked, "it1"), extTree(MAN, "it1"));
+    assert.equal(overviewWhyKey(marked, "it3"), overviewWhyKey(MAN, "it3"));
+  }
+});

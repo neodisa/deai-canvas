@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
+  commentsUnavailableCode, copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
   publishErr, publishReaction, pwView, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
 } from "../app/spaces-model.js";
 
@@ -744,4 +744,29 @@ test("словник: ключі гонки й загальної плашки �
   assert.match(DICT.uk.publishToastRemote("X"), /Vercel/);
   assert.match(DICT.en.publishToastRemote("X"), /Vercel/);
   assert.doesNotMatch(DICT.uk.publishToastDone("X"), /Vercel/);
+});
+
+/* ── `comments_unavailable`: публікація вдалась, але коментарів у превʼю нема (2b-2) ───────────────────── */
+
+test("commentsUnavailableCode: лише код-рядок безпечного вигляду, решта — null (відповідь сервера — дані)", () => {
+  for (const code of ["module-error", "space-json-unreadable", "bad-settings", "secrets-unreadable", "check-timeout"]) {
+    assert.equal(commentsUnavailableCode({ ok: true, comments_unavailable: code }), code, code);
+  }
+  assert.equal(commentsUnavailableCode({ ok: true }), null, "ключа нема — попередження нема");
+  for (const bad of ["", "<img src=x onerror=1>", "a b", "a".repeat(65), "код", 7, true, null, undefined, ["module-error"], { code: "x" }]) {
+    assert.equal(commentsUnavailableCode({ comments_unavailable: bad }), null, JSON.stringify(bad));
+  }
+  assert.equal(commentsUnavailableCode(null), null);
+  assert.equal(commentsUnavailableCode(undefined), null);
+});
+
+test("словник: publishCommentsUnavailable — обидві мови, називає код і каже, що превʼю опубліковано", () => {
+  for (const lang of ["uk", "en"]) {
+    assert.equal(typeof DICT[lang].publishCommentsUnavailable, "function", `${lang}: ключа бракує`);
+    assert.match(DICT[lang].publishCommentsUnavailable("module-error"), /module-error/, `${lang}: без коду`);
+  }
+  assert.match(DICT.uk.publishCommentsUnavailable("x"), /Коментарі не додано до превʼю/);
+  assert.match(DICT.uk.publishCommentsUnavailable("x"), /опубліковано/);
+  assert.match(DICT.en.publishCommentsUnavailable("x"), /Comments were not added/);
+  assert.match(DICT.en.publishCommentsUnavailable("x"), /published/);
 });

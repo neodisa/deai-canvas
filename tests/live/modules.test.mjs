@@ -39,7 +39,7 @@ import { startServer, taskFixture } from "./fixture.mjs";
    збігається з чужою). Тести ЦЬОГО файла йдуть послідовно, тож одна база на всіх. */
 const PORT_BASE = 12700;
 
-const PUBLISHED_CSP = "sandbox allow-scripts allow-forms allow-popups";
+const PUBLISHED_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals";
 
 /* ── справжня домівка: `~/deai-published` не торкнуто ──────────────────────────────────────────────── */
 

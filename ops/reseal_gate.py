@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(ROOT, "app"))
 # ⛔ Обгортку НЕ збираємо тут своїми руками: і перелік сторінок, і сам HTML
 # віддає serve. До 04.08.2026 цей скрипт мав власний обхід сторінок із власним
 # фільтром — копія логіки публікації, яка мовчки розійшлась би з нею.
-from serve import (BUNDLES, gate_html, load_meta, preview_gate_state,  # noqa: E402
+from serve import (BUILD_KINDS, BUNDLES, gate_html, load_meta, preview_gate_state,  # noqa: E402
                    preview_index_html, preview_password, legacy_tasks_path)
 
 
@@ -54,6 +54,31 @@ def rebuild_index(tid, task):
     return pub
 
 
+def build_kind(pub_dir):
+    """`(вид, за_міткою)` збірки в `pub_dir`: `'legacy'` (збірка ЛІГА — її й перепечатуємо) чи `'module'` (збірка модуля
+    публікації). `за_міткою` — чи вид сказала сама збірка.
+
+    ПОЗИТИВНА мітка — `"build"` у `manifest.json` (її пише `serve.build_preview(build=…)`): `Handler._publish` пише
+    `legacy`, модулі публікації — `module`. Склад `comment-layer/` для цього рішення не годиться (2b-2): збірка ЛІГА з
+    коментарями модуля несе там лише шар і файли адаптера, ЛІГА без коментарів (`comments_unavailable`) — нічого, а
+    локальна збірка модуля може нести те саме, що перша.
+    Збірки БЕЗ мітки (зібрані до неї) — запасне правило: ЛІГА-збірка — та, де в `comment-layer/` є ОБИДВА бандли ЛІГА
+    (`serve.BUNDLES`; імена звіряємо ТОЧНО за переліком теки, а не `isfile`: на macOS/Windows `Supabase-Adapter.min.js`
+    теж «знайшовся б»), решта — модуль. Нечитабельний маніфест чи невідоме значення мітки — теж запасне правило."""
+    try:
+        with open(os.path.join(pub_dir, "manifest.json"), encoding="utf-8") as f:
+            mark = json.load(f).get("build")
+    except (OSError, ValueError, AttributeError):
+        mark = None
+    if mark in BUILD_KINDS:
+        return mark, True
+    try:
+        names = set(os.listdir(os.path.join(pub_dir, "comment-layer")))
+    except OSError:
+        names = set()
+    return ("legacy" if set(BUNDLES) <= names else "module"), False
+
+
 def deploy(pub, task=None):
     # `--scope`, як у публікації (serve._publish): без нього передеплой з машини,
     # де інший дефолтний скоуп, створив би ДРУГИЙ проєкт із тим самим імʼям — і
@@ -75,18 +100,19 @@ def main():
         task = cfg.get("tasks", {}).get(tid)
         if not task:
             print(f"⚠ {tid}: немає в tasks.json"); continue
-        # ⛔ Збірку МОДУЛЯ публікації (`static-publish`) не перепечатуємо й не деплоїмо: вона локальна, і її
-        # гейт — пароль модуля, а не пароль ЛІГА (`preview_gate_state` нижче назвав би його «старим»).
-        # Рішення — за АРТЕФАКТОМ, а не за `iterations.json` (метадані можна втратити, а збірку не
-        # сплутаєш): збірка ЛІГА має в `publish/comment-layer/` ОБИДВА бандли ЛІГА (`serve.BUNDLES`), збірка модуля —
-        # ні (`comments=False` — теки нема взагалі; з коментарями модуля (2b-2) там лише `comment-layer.min.js` і
-        # файли адаптера, а файл адаптера з іменем бандла `build_preview` відмовляє). Самої теки мало: з 2b-2 вона є
-        # й у збірці модуля. Питаємо ПЕРШИМ, до гейта, `rebuild_index` і `deploy`.
+        # ⛔ Збірку МОДУЛЯ публікації (`static-publish`, `vercel-publish`) не перепечатуємо й не деплоїмо на Vercel
+        # ЛІГА: її гейт — пароль модуля, а не пароль ЛІГА (`preview_gate_state` нижче назвав би його «старим»).
+        # Рішення — за АРТЕФАКТОМ, а не за `iterations.json` (метадані можна втратити, а збірку не сплутаєш): за
+        # міткою `"build"` у `publish/manifest.json`, яку пише сама збірка (`build_kind`; для збірок без мітки —
+        # запасне правило за бандлами ЛІГА). Питаємо ПЕРШИМ, до гейта, `rebuild_index` і `deploy`.
         pub_dir = os.path.join(task["dir"], "publish")
-        layer_dir = os.path.join(pub_dir, "comment-layer")
-        if os.path.isdir(pub_dir) and not all(os.path.isfile(os.path.join(layer_dir, b)) for b in BUNDLES):
-            print(f"·  {tid}: publish/ — локальна збірка модуля (без коментатора ЛІГА), не для Vercel — пропуск")
-            continue
+        if os.path.isdir(pub_dir):
+            kind, marked = build_kind(pub_dir)
+            if kind != "legacy":
+                why = ("мітка збірки build: module" if marked
+                       else "мітки збірки нема, бандлів коментатора ЛІГА нема — схоже на збірку модуля")
+                print(f"·  {tid}: publish/ — збірка модуля публікації, не збірка ЛІГА ({why}) — пропуск")
+                continue
         # ⛔ Питаємо ДО перезапису обгортки (ревʼю 1.52): інакше після відмови
         # локальний publish/ уже мав би обгортку з новим паролем, а деплой — ні.
         pw = preview_password(cfg, task)

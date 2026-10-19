@@ -357,6 +357,7 @@ const UK = {
   publishBusy: 'Публікую…',
   publishDeployFailed: (n, dir, err) => `Зібрано ${n} ітерацій у:\n${dir}\n\nДеплой не вдався: ${err}`,
   publishNotTaskLink: (owner, url) => `Це ТВОЄ превʼю (${url}), а не посилання задачі: задача веде на превʼю власника — ${owner}. Менеджеру давай його посилання.`,
+  publishCommentsUnavailable: (code) => `Коментарі не додано до превʼю: модуль коментарів недоступний (${code}). Саме превʼю опубліковано.`,
   toastCopied: 'Посилання скопійовано',
   askCopyLinkPrompt: 'Скопіюй посилання:',
   /* Публікація модулем у теку (модулі 2а, Task 8): локальна публікація, її підписи й відмови сервера.
@@ -1143,6 +1144,7 @@ const EN = {
   publishBusy: 'Publishing…',
   publishDeployFailed: (n, dir, err) => `Collected ${n} iterations into:\n${dir}\n\nDeploy failed: ${err}`,
   publishNotTaskLink: (owner, url) => `This is YOUR preview (${url}), not the task link: the task points to its owner's preview — ${owner}. Give the manager that link.`,
+  publishCommentsUnavailable: (code) => `Comments were not added to the preview: the comments module is unavailable (${code}). The preview itself was published.`,
   toastCopied: 'Link copied',
   askCopyLinkPrompt: 'Copy the link:',
   publishLocalDone: 'Published locally',
