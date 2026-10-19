@@ -3984,7 +3984,7 @@ def publish_with_module(h, prov, payload):
     gate_pw = ctx['secrets'].get('password') or None
     # Коментарі превʼю: з постачальника ролі `comments` ЦЬОГО простору, раз, ДО збірки (`publish_comments`). Зашитий
     # Supabase ЛІГА (`'legacy'`) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
-    # модуля (до `CHECK_TIMEOUT` = 10 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
+    # модуля (до `CHECK_TIMEOUT` = 5 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
     # для другого кліку (його `publish-busy` приходить тепер лише коли справді йде збірка чи копіювання).
     comments, comments_warn = publish_comments(space, tid, module_publish=True)
     with _try_publish_locks(task['dir'], folder, tid) as got:

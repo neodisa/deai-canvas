@@ -3,7 +3,12 @@
 -- Run this ONCE in the SQL editor of YOUR Supabase project (Dashboard -> SQL Editor -> New query -> Run).
 -- The module never changes the schema itself: that would need a service key, and it is deliberately not given one.
 -- The script is idempotent: running it again is safe.
-create table if not exists comments (
+--
+-- !! USE A DEDICATED SUPABASE PROJECT. `create table if not exists` does NOT check what is already there: if the project
+-- !! has a table `public.comments` of its own, this script ADOPTS it — it turns row-level security on, replaces its
+-- !! policies with the open ones below and grants the public (anon) key full read/write access to it. Run it only in a
+-- !! project where `public.comments` is yours to hand over (a fresh one, or one that already holds Deai Canvas comments).
+create table if not exists public.comments (
   -- Client-assigned globally-unique id (uuid string). Sequential ids collide
   -- across reviewers, so the browser layer generates a uuid; the DB never assigns one.
   id             text primary key,
@@ -21,9 +26,9 @@ create table if not exists comments (
   created_at     timestamptz default now()
 );
 
-create index if not exists comments_project_idx on comments(project_id);
+create index if not exists comments_project_idx on public.comments(project_id);
 
-alter table comments enable row level security;
+alter table public.comments enable row level security;
 
 -- Least privilege for the public (anon / publishable) key. It ships inside every published page,
 -- so it cannot be kept secret — bound what it can DO instead.
@@ -31,26 +36,31 @@ alter table comments enable row level security;
 -- Do NOT restore the old single `for all using (true) with check (true)` policy named "anon rw":
 -- with it, anyone holding a preview link can read, rewrite or wipe the comments of EVERY project
 -- sharing the database.
-drop policy if exists "anon rw" on comments;
-drop policy if exists cl_read   on comments;
-drop policy if exists cl_insert on comments;
-drop policy if exists cl_update on comments;
-drop policy if exists cl_delete on comments;
-create policy cl_read   on comments for select using (true);
-create policy cl_insert on comments for insert with check (true);
-create policy cl_update on comments for update using (true) with check (true);
-create policy cl_delete on comments for delete using (true);
+drop policy if exists "anon rw" on public.comments;
+drop policy if exists cl_read   on public.comments;
+drop policy if exists cl_insert on public.comments;
+drop policy if exists cl_update on public.comments;
+drop policy if exists cl_delete on public.comments;
+create policy cl_read   on public.comments for select using (true);
+create policy cl_insert on public.comments for insert with check (true);
+create policy cl_update on public.comments for update using (true) with check (true);
+create policy cl_delete on public.comments for delete using (true);
+
+-- Policies decide which ROWS a role may touch, but a role also needs the table privilege itself, and a fresh project may
+-- not grant the Data API roles access to new tables automatically. Without this the module answers 401/403 right after
+-- the schema ran. Granting is idempotent.
+grant select, insert, update, delete on public.comments to anon, authenticated;
 
 -- Grants and RLS are separate layers: the TRUNCATE privilege ignores policies entirely.
-revoke truncate, references, trigger on comments from anon, authenticated;
+revoke truncate, references, trigger on public.comments from anon, authenticated;
 
 -- project_id is immutable, and one request cannot wipe more than one project's
 -- comments (the browser layer deletes exactly one comment per request). `row_security_active()`
 -- keeps both guards off service_role/owner, which bypass RLS anyway.
-create or replace function cl_project_id_immutable() returns trigger
+create or replace function public.cl_project_id_immutable() returns trigger
 language plpgsql set search_path = pg_catalog, public as $$
 begin
-  if row_security_active('comments')
+  if row_security_active('public.comments')
      and new.project_id is distinct from old.project_id then
     raise exception 'comments.project_id is immutable (% -> %)', old.project_id, new.project_id
       using errcode = 'check_violation';
@@ -58,15 +68,15 @@ begin
   return new;
 end $$;
 
-drop trigger if exists cl_project_id_immutable on comments;
-create trigger cl_project_id_immutable before update on comments
-for each row execute function cl_project_id_immutable();
+drop trigger if exists cl_project_id_immutable on public.comments;
+create trigger cl_project_id_immutable before update on public.comments
+for each row execute function public.cl_project_id_immutable();
 
-create or replace function cl_delete_scope_guard() returns trigger
+create or replace function public.cl_delete_scope_guard() returns trigger
 language plpgsql set search_path = pg_catalog, public as $$
 declare n int; p int;
 begin
-  if not row_security_active('comments') then
+  if not row_security_active('public.comments') then
     return null;
   end if;
   select count(*), count(distinct project_id) into n, p from removed;
@@ -81,10 +91,10 @@ begin
   return null;
 end $$;
 
-drop trigger if exists cl_delete_scope_guard on comments;
-create trigger cl_delete_scope_guard after delete on comments
+drop trigger if exists cl_delete_scope_guard on public.comments;
+create trigger cl_delete_scope_guard after delete on public.comments
 referencing old table as removed
-for each statement execute function cl_delete_scope_guard();
+for each statement execute function public.cl_delete_scope_guard();
 
 -- Still open by design: reading and writing OTHER projects' comments. Real isolation needs a
 -- signed per-project token (a project_id claim checked in the policy), not a shared public key.
@@ -94,7 +104,7 @@ for each statement execute function cl_delete_scope_guard();
 -- Realtime for live multi-reviewer updates (no error when the table is already published).
 do $$
 begin
-  alter publication supabase_realtime add table comments;
+  alter publication supabase_realtime add table public.comments;
 exception when duplicate_object then
   null;
 end $$;

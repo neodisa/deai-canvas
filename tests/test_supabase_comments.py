@@ -13,7 +13,7 @@
 
 Шов мережі. Модуль працює лише з `https://<проєкт>.supabase.co` (це вимога модуля, і її не послаблено), тож локальному HTTP-серверу
 така адреса не підходить, а піднімати TLS заради тесту зайве. Шов — імʼя `_open` у глобалах модуля: ЄДИНЕ місце, де запит іде в
-мережу (`_opener.open(req, timeout=TIMEOUT_S)`). Тест ОБГОРТАЄ справжню функцію: записує, ЩО модуль адресував (повний `https://`-URL,
+мережу (`_opener.open(req, timeout=timeout)`; тайм-аут приходить із виклику: `check` — 4 с, `list`/`resolve` — 8 с). Тест ОБГОРТАЄ справжню функцію: записує, ЩО модуль адресував (повний `https://`-URL,
 метод, заголовки, тіло), а до справжньої `_open` передає той самий запит, переписаний на `http://127.0.0.1:<порт підставного
 сервера>`. Решта шляху справжня: побудова запиту й заголовків, власний обробник редиректів, що нікуди не веде, розбір `HTTPError`.
 У виробничому коді спеціального «тестового» входу нема: `_open(req)` — звичайна функція.
@@ -21,10 +21,12 @@
 Кожен тест має власні `HOME`, `DEAI_HOME`, `DC_TASKS_FILE`; справжній `~/.deai` стереже `spaces_guard`.
 """
 import ast
+import base64
 import hashlib
 import http.client
 import json
 import os
+import random
 import re
 import socket
 import socketserver
@@ -63,6 +65,7 @@ KEY = 'eyJhbGciOiJIUzI1NiJ9.TEST-payload_x.TEST-signature_y'
 #: SHA-256 `supabase-js@2.110.0` UMD (`dist/umd/supabase.js`) — чужий код, вендорений БЕЗ змін.
 BUNDLE_SHA256 = '2db2912f16939a3b21b472980a7ada746b33a6a40708bc555cb0be255c6eb5b1'
 LOOPBACK = ('127.0.0.1',)
+PROXY_VARS = ('http_proxy', 'https_proxy', 'all_proxy', 'ftp_proxy', 'no_proxy')
 TABLE = '/rest/v1/comments'
 _REAL = None
 
@@ -224,10 +227,10 @@ class FakeSupabase:
                 if not v.startswith('eq.'):
                     return self._err(rec, 400, 'PGRST100', f'unsupported operator in {k}')
                 matched = [r for r in matched if str(r.get(k)) == v[3:]]
+        cols = (rec['query'].get('select') or ['*'])[0]
         if rec['method'] == 'GET':
             if (rec['query'].get('order') or [''])[0] == 'id':
                 matched.sort(key=lambda r: r['id'])
-            cols = (rec['query'].get('select') or ['*'])[0]
             if cols != '*':
                 matched = [{c: r.get(c) for c in cols.split(',')} for r in matched]
             lim = (rec['query'].get('limit') or [None])[0]
@@ -239,7 +242,7 @@ class FakeSupabase:
             for r in matched:
                 r.update(patch)
             if 'return=representation' in rec['headers'].get('prefer', ''):
-                return 200, matched, {}, 0
+                return 200, ([{c: r.get(c) for c in cols.split(',')} for r in matched] if cols != '*' else matched), {}, 0
             return 204, None, {}, 0
         return 405, {'message': 'method not allowed'}, {}, 0
 
@@ -292,6 +295,20 @@ class SeamMixin:
     """Підставний світ для тестів модуля: тека/простір/секрети (`tm.Env`), справжній каталог `app/modules`, розтяжка, REST
     Supabase і шов `_open` (див. docstring файла). `self.seen` — те, що МОДУЛЬ адресував (до переписування на loopback)."""
 
+    def no_proxy_env(self):
+        """Проксі з оточення машини вимкнено ДО завантаження модуля (його `_opener` читає оточення при створенні): запит на
+        loopback не мусить іти через чужий проксі. Чіпає лише змінні проксі й відновлює їх."""
+        saved = {k: v for k, v in os.environ.items() if k.lower() in PROXY_VARS}
+        for k in saved:
+            del os.environ[k]
+        os.environ['NO_PROXY'] = os.environ['no_proxy'] = '*'
+
+        def restore():
+            for k in ('NO_PROXY', 'no_proxy'):
+                os.environ.pop(k, None)
+            os.environ.update(saved)
+        self.addCleanup(restore)
+
     def seam_up(self, module=None):
         mod = module or dm.catalog()[MID]
         self.m = mod
@@ -305,13 +322,13 @@ class SeamMixin:
         self.seen = []
         real_open = self.g['_open']
 
-        def mapped(req):
-            self.seen.append({'url': req.full_url, 'method': req.get_method(), 'data': req.data,
+        def mapped(req, timeout):
+            self.seen.append({'url': req.full_url, 'method': req.get_method(), 'data': req.data, 'timeout': timeout,
                               'headers': {k.lower(): v for k, v in req.header_items()}})
             sp = urllib.parse.urlsplit(req.full_url)
             new = urllib.request.Request(f'{self.api.base}{sp.path}' + (f'?{sp.query}' if sp.query else ''),
                                          data=req.data, method=req.get_method(), headers=dict(req.header_items()))
-            return real_open(new)
+            return real_open(new, timeout)
         patch = mock.patch.dict(self.g, {'_open': mapped})
         patch.start()
         self.addCleanup(patch.stop)
@@ -371,6 +388,7 @@ class Base(SeamMixin, tm.Env):
 
     def setUp(self):
         super().setUp()
+        self.no_proxy_env()
         # Простори пишуться в тимчасовий `DEAI_HOME`, а не у справжній `~/.deai`: `Env.setUp` його вже виставив, тут він підтверджений
         # явно (так вимагає охоронець `test_serve.TestsCannotWriteLiveConfig`); оточення відновлює `Env.tearDown`.
         os.environ['DEAI_HOME'] = self.deai
@@ -443,7 +461,9 @@ class CatalogTest(Base):
         self.assertFalse(os.path.exists(os.path.join(MODULE_DIR, '__pycache__')))
 
     def test_the_constants_are_the_documented_ones(self):
-        self.assertEqual((self.g['TIMEOUT_S'], self.g['MAX_ROWS']), (10, 5000))
+        self.assertEqual((self.g['CHECK_TIMEOUT_S'], self.g['CALL_TIMEOUT_S'], self.g['MAX_ROWS']), (4, 8, 5000))
+        self.assertLess(self.g['CHECK_TIMEOUT_S'], dm.CHECK_TIMEOUT, 'модуль мусить відповісти РАНІШЕ за ядро: інакше check-timeout')
+        self.assertLess(self.g['CALL_TIMEOUT_S'], dm.COMMENTS_TIMEOUT)
 
 
 # ------------------------------------------------------------------------------------------ правило адреси
@@ -707,12 +727,20 @@ class ListTest(Base):
         self.assertIn('недоступний', e.message)
 
     def test_a_slow_service_is_cut_off_by_the_timeout(self):
-        self.patch_globals(TIMEOUT_S=0.2)
+        self.patch_globals(CALL_TIMEOUT_S=0.2)
         self.api.override('GET', 200, [], delay=1.5)
         started = time.monotonic()
         e = self.fails('list', self.chan())
         self.assertLess(time.monotonic() - started, 1.4)
         self.assertIn('недоступний', e.message)
+
+    def test_list_and_resolve_use_the_call_budget_and_check_the_shorter_one(self):
+        chan = self.chan()
+        self.api.rows = [row('a', chan)]
+        self.fn('list')(self.ctx(), chan)
+        self.fn('resolve')(self.ctx(), chan, 'a', 'r')
+        self.fn('check')(self.ctx())
+        self.assertEqual([r['timeout'] for r in self.seen], [8, 8, 4])
 
     def test_a_giant_answer_is_refused(self):
         self.patch_globals(MAX_BODY=1000)
@@ -748,9 +776,9 @@ class ResolveTest(Base):
     def test_the_patch_is_filtered_by_the_id_and_the_channel_and_sets_status_and_reason(self):
         self.assertIsNone(self.fn('resolve')(self.ctx(), self.chan1, 'c1', 'виправлено в it2'))
         self.assertEqual([(r['method'], r['url']) for r in self.seen],
-                         [('PATCH', f'{URL}{TABLE}?id=eq.c1&project_id=eq.{q(self.chan1)}')])
+                         [('PATCH', f'{URL}{TABLE}?id=eq.c1&project_id=eq.{q(self.chan1)}&select=id')])
         (rec,) = self.api.requests
-        self.assertEqual(rec['raw_path'], f'{TABLE}?id=eq.c1&project_id=eq.deai%2F{self.sp["id"]}%2Ft1')
+        self.assertEqual(rec['raw_path'], f'{TABLE}?id=eq.c1&project_id=eq.deai%2F{self.sp["id"]}%2Ft1&select=id')
         self.assertEqual(json.loads(rec['body']), {'status': 'resolved', 'resolve_reason': 'виправлено в it2'})
         self.assertEqual(rec['headers']['prefer'], 'return=representation')
         self.assertEqual(rec['headers']['content-type'], 'application/json')
@@ -796,7 +824,7 @@ class ResolveTest(Base):
             e = self.fails('resolve', self.chan1, cid, 'r', ctx=ctx)
             self.assertEqual(e.message, 'коментар не знайдено', repr(cid))
             (rec,) = self.api.requests
-            self.assertEqual(set(rec['query']), {'id', 'project_id'}, repr(cid))
+            self.assertEqual(set(rec['query']), {'id', 'project_id', 'select'}, repr(cid))
             self.assertEqual(rec['query']['id'], ['eq.' + cid], repr(cid))
         self.assertTrue(all(r['status'] == 'open' for r in self.api.rows), 'жоден рядок не закрився')
 
@@ -808,12 +836,21 @@ class ResolveTest(Base):
         self.assertEqual(self.seen, [])
         self.assertTrue(all(r['status'] == 'open' for r in self.api.rows))
 
-    def test_the_reason_may_be_empty_or_missing(self):
+    def test_the_reason_may_be_empty_or_missing_and_then_the_old_one_is_not_wiped(self):
         ctx = self.ctx()
-        for reason in (None, ''):
+        for reason in (None, '', 5, ['x']):
             self.api.requests.clear()
             self.fn('resolve')(ctx, self.chan1, 'c2', reason)
-            self.assertEqual(json.loads(self.api.requests[0]['body']), {'status': 'resolved', 'resolve_reason': None}, repr(reason))
+            self.assertEqual(json.loads(self.api.requests[0]['body']), {'status': 'resolved'}, repr(reason))
+        self.fn('resolve')(ctx, self.chan1, 'c2', 'перша причина')
+        self.fn('resolve')(ctx, self.chan1, 'c2', '')
+        self.assertEqual(next(r for r in self.api.rows if (r['id'], r['project_id']) == ('c2', self.chan1))['resolve_reason'], 'перша причина')
+
+    def test_the_answer_carries_only_ids_and_the_reply_is_counted_not_trusted_for_content(self):
+        self.fn('resolve')(self.ctx(), self.chan1, 'c1', 'ok')
+        self.assertEqual(self.api.requests[0]['query']['select'], ['id'])
+        self.api.override('PATCH', 200, [{'id': 'c1'}])
+        self.assertIsNone(self.fn('resolve')(self.ctx(), self.chan1, 'c1', 'ok'))
 
     def test_a_reply_that_cannot_confirm_the_change_is_an_error(self):
         for status, body in ((204, None), (200, {'message': 'x'}), (200, 'not json'), (200, None), (200, b'null')):
@@ -894,7 +931,7 @@ class CheckTest(Base):
         self.assertIn('недоступний', res['detail'])
 
     def test_a_slow_service_is_network_after_the_timeout(self):
-        self.patch_globals(TIMEOUT_S=0.2)
+        self.patch_globals(CHECK_TIMEOUT_S=0.2)
         self.api.override('GET', 200, [], delay=1.5)
         started = time.monotonic()
         res = self.fn('check')(self.ctx())
@@ -1047,6 +1084,206 @@ class KeySafetyTest(Base):
             self.assertNotIn(banned, names, banned)
 
 
+# ------------------------------------------------------------------------------ сервісний ключ не приймається
+
+def b64u(raw, pad=False):
+    out = base64.urlsafe_b64encode(raw).decode('ascii')
+    return out if pad else out.rstrip('=')
+
+
+def jwt(claims, pad=False, std=False):
+    """JWT у формі Supabase: header.payload.signature; `claims` — корисна частина (dict чи готовий текст)."""
+    raw = (claims if isinstance(claims, str) else json.dumps(claims)).encode('utf-8')
+    payload = b64u(raw, pad)
+    if std:                                                  # стандартний base64 (`+`, `/`) замість base64url — теж читається
+        payload = base64.b64encode(raw).decode('ascii').rstrip('=')
+    return '.'.join([b64u(json.dumps({'alg': 'HS256', 'typ': 'JWT'}).encode()), payload, 'c2lnbmF0dXJlLVRFU1Q'])
+
+
+SERVICE_TEXT = 'key: це сервісний ключ — потрібен публічний anon/publishable'
+SERVICE_CLAIMS = {'iss': 'supabase', 'ref': 'abcdefghijkl', 'role': 'service_role', 'iat': 1700000000, 'exp': 2000000000}
+SERVICE_KEYS = [
+    'sb_secret_' + 'A1b2C3d4' * 5, 'sb_secret_x', 'sb_secret_',
+    jwt(SERVICE_CLAIMS), jwt(SERVICE_CLAIMS, pad=True), jwt(SERVICE_CLAIMS, std=True), jwt({'role': 'service_role'}),
+    jwt('{"role" : "service_role"}'), jwt('{ "exp": 1,\n "role":\t"service_role" }'), jwt({'role': 'service_role', 'role2': 'anon'}),
+    jwt({'role': 'anon', 'role': 'service_role'}),         # у JSON останній ключ перемагає
+    '  ' + jwt(SERVICE_CLAIMS) + '\n',                      # обрізається, як і при читанні налаштувань
+]
+PUBLIC_KEYS = [
+    KEY, 'sb_publishable_' + 'A1b2C3d4' * 4, jwt({'iss': 'supabase', 'ref': 'abcdefghijkl', 'role': 'anon', 'iat': 1, 'exp': 2}),
+    jwt({'role': 'anon'}, pad=True), jwt({'role': 'authenticated'}),
+    # те, що ми не вміємо розібрати, не називаємо сервісним: відмовляти з підозри було б відмовою живим ключам
+    'a.b.c', 'one-part-key', 'a.b', 'a.b.c.d', jwt('not json'), jwt('null'), jwt('[1,2]'), jwt('"service_role"'),
+    jwt({'role': ['service_role']}), jwt({'role': 'Service_Role'}), jwt({'role': 'service_role_x'}), jwt({'x': {'role': 'service_role'}}),
+    jwt('[' * 5000), 'eyJ.!!!.sig', 'sb_Secret_x', 'xsb_secret_x',
+]
+
+
+class ServiceKeyTest(Base):
+    """Ключ модуля — `public: true`: він потрапляє в КОЖНУ сторінку й превʼю. Сервісний ключ (`sb_secret_…` чи JWT з
+    `"role": "service_role"`) обходить усі правила доступу — це повний доступ до бази, тож його модуль не приймає ніде."""
+
+    def test_every_service_key_is_refused_by_every_function_with_one_fixed_text_and_no_request(self):
+        messages = set()
+        for key in SERVICE_KEYS:
+            ctx = self.hand_ctx(secrets={'key': key})
+            for name, args in (('client_config', ()), ('list', (self.chan(),)), ('resolve', (self.chan(), 'c1', 'r'))):
+                with self.assertRaises(dm.ModuleError, msg=f'{name} {key[:24]!r}') as cm:
+                    self.fn(name)(ctx, *args)
+                self.assertEqual((cm.exception.code, cm.exception.status), ('bad-settings', 400))
+                messages.add(cm.exception.message)
+                text = ' '.join(self.exc_texts(cm.exception))
+                for part in key.strip().split('.') + [key.strip()]:
+                    if len(part) > 8:
+                        self.assertNotIn(part, text, 'сервісний ключ у тексті відмови')
+            res = self.fn('check')(ctx)
+            self.assertEqual((res['ok'], res['error'], res['detail']), (False, 'bad-key', SERVICE_TEXT), key[:24])
+        self.assertEqual(messages, {SERVICE_TEXT})
+        self.assertEqual(self.seen, [], 'з сервісним ключем у мережу не ходимо (він пішов би в заголовок)')
+        self.assertEqual(self.api.requests, [])
+
+    def test_public_keys_and_keys_that_cannot_be_read_pass(self):
+        for key in PUBLIC_KEYS:
+            ctx = self.hand_ctx(secrets={'key': key})
+            self.assertEqual(self.fn('client_config')(ctx), {'url': URL, 'key': key.strip()}, key[:24])
+        self.assertEqual(self.seen, [])
+        res = self.fn('check')(self.hand_ctx(secrets={'key': PUBLIC_KEYS[1]}))
+        self.assertEqual(res['error'] if not res['ok'] else 'ok', 'bad-key', 'підставний сервер знає лише KEY, але запит ПІШОВ')
+        self.assertEqual(len(self.seen), 1)
+
+    def test_the_refusal_comes_through_the_core_and_the_key_stays_out_of_every_text(self):
+        key = jwt(SERVICE_CLAIMS)
+        ctx = self.ctx(key=key)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.call(self.m, 'client_config', ctx)
+        self.assertEqual((cm.exception.code, cm.exception.message), ('bad-settings', SERVICE_TEXT))
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.comments_client(self.sp, self.m)
+        self.assertEqual(cm.exception.code, 'bad-settings')
+        verdict = dm.check(self.sp, MID)
+        self.assertEqual((verdict['ok'], verdict['error'], verdict['detail']), (False, 'bad-key', SERVICE_TEXT))
+        self.assertEqual(self.seen, [])
+
+    def test_the_detector_handles_hostile_payloads_without_raising(self):
+        detect = self.g['_is_service_key']
+        for key in ('.' * 2, 'a..', '..c', jwt('\x00' * 10), jwt('{"role":"service_role"'), jwt('\udcff'.encode('utf-8', 'surrogateescape').decode('latin-1')),
+                    'x.' + 'A' * 100000 + '.y', 'x.%%%.y', 'x.====.y', 'x.a.y'):
+            self.assertIs(detect(key), False, key[:30])
+        self.assertIs(detect(jwt(SERVICE_CLAIMS)), True)
+
+
+# ------------------------------------------------------------------- самотні сурогати в значеннях фільтра
+
+class SurrogateTest(Base):
+    """Самотній сурогат (непрочитний байт аргументу CLI) у каналі чи `id` не закодувати в запит: відмова — наша, з фіксованим
+    текстом, а не виняток `quote`, що несе сам символ."""
+
+    def test_a_lone_surrogate_in_the_channel_or_the_id_is_a_clean_refusal_before_any_request(self):
+        for bad in ('deai/x/\ud800', '\udfff', 'a\ud83dz', 'ok\udc80'):
+            for name, args in (('list', (bad,)), ('resolve', (bad, 'c1', 'r')), ('resolve', (self.chan(), bad, 'r'))):
+                e = self.fails(name, *args)
+                self.assertIsInstance(e, dm.ModuleError, (name, bad))
+                self.assertEqual(e.code, 'module-error')
+                self.assertIn('недопустимі символи', e.message)
+                text = ' '.join(self.exc_texts(e)).lower()
+                for frag in ('ud800', 'udfff', 'ud83d', 'udc80', 'codec', 'surrogates not allowed'):
+                    self.assertNotIn(frag, text, (name, frag))
+                self.assertNotIn(bad[-1], ' '.join(self.exc_texts(e)))
+        self.assertEqual(self.seen, [])
+
+    def test_a_lone_surrogate_in_the_reason_does_not_lose_the_closing(self):
+        chan = self.chan('t1')
+        self.api.rows = [row('c1', chan)]
+        self.assertIsNone(self.fn('resolve')(self.ctx(), chan, 'c1', 'готово\ud800!'))
+        self.assertEqual(self.api.rows[0]['status'], 'resolved')
+        self.assertEqual(self.api.rows[0]['resolve_reason'], 'готово?!')
+
+
+# ------------------------------------------------------- зависла служба: власні тайм-аути коротші за ядра
+
+class HungServiceTest(Base):
+    def test_at_the_default_budgets_the_module_answers_before_the_core_gives_up(self):
+        """Служба приймає зʼєднання й мовчить. На ДЕФОЛТНИХ сталих (4 і 8 с) модуль віддає СВОЮ причину раніше, ніж ядро
+        скаже `check-timeout` (5 с) чи обірве `list`/`resolve` (10 с): людина бачить «недоступний», а не «не відповів модуль»."""
+        self.api.override(None, 200, [], delay=15)
+        self.ctx()
+        chan = self.chan()
+        out, lock = {}, threading.Lock()
+
+        def timed(name, fn):
+            def run():
+                t0 = time.monotonic()
+                try:
+                    with spaces.request_space(self.sp['id']):
+                        res = ('ok', fn())
+                except BaseException as e:  # noqa: BLE001
+                    res = ('err', e)
+                with lock:
+                    out[name] = (res, time.monotonic() - t0)
+            t = threading.Thread(target=run, daemon=True)
+            t.start()
+            return t
+        threads = [timed('check', lambda: dm.check(self.sp, MID)),
+                   timed('list', lambda: dm.call(self.m, 'list', dm.module_ctx(self.sp, self.m), chan, timeout=dm.COMMENTS_TIMEOUT)),
+                   timed('resolve', lambda: dm.call(self.m, 'resolve', dm.module_ctx(self.sp, self.m), chan, 'c1', 'r',
+                                                    timeout=dm.COMMENTS_TIMEOUT))]
+        for t in threads:
+            t.join(30)
+        self.assertEqual(set(out), {'check', 'list', 'resolve'})
+        (kind, verdict), took = out['check']
+        self.assertEqual(kind, 'ok', verdict)
+        self.assertEqual((verdict['ok'], verdict['error']), (False, 'network'), 'вердикт МОДУЛЯ, а не `check-timeout` ядра')
+        self.assertIn('недоступний', verdict['detail'])
+        self.assertGreater(took, 3.5, 'дефолтний бюджет — 4 с, а не миттєвий збій')
+        for name in ('list', 'resolve'):
+            (kind, err), took = out[name]
+            self.assertEqual(kind, 'err', name)
+            self.assertEqual((err.code, 'недоступний' in err.message), ('module-error', True), (name, err.code, err.message))
+            self.assertGreater(took, 7.0, name)
+            self.assertLess(took, 9.9, f'{name}: модуль мусить відповісти раніше за ядро (10 с)')
+
+
+# ---------------------------------------------------------- паритет із правилом адреси ядра (`serve._url_host_ok`)
+
+class ParityTest(Base):
+    """Правило хоста модуля — те саме, що в ядра для `url`-модулів (`serve._url_host_ok`): на спільному корпусі вони не
+    розходяться. Адресу модуль приймає ВУЖЧЕ за ядро (лише порожній шлях, порт 1–65535), тож усе, що прийняв він, приймає й ядро."""
+
+    def corpus(self):
+        rng = random.Random(20261019)
+        alphabet = 'ab1-.xn0z9_Aé'
+        hosts = {'a.b', 'a.bc', 'a.b1', 'a.1', '1.a', 'a-.b', '-a.b', 'a.-b', 'a.b-', 'a..b', '.a.b', 'a.b.', 'localhost', '127.0.0.1',
+                 '0x7f.1', '2130706433', 'xn--e1afmkfd.xn--p1ai', 'a' * 63 + '.co', 'a' * 64 + '.co', ('a.' * 126) + 'co', ('a.' * 127) + 'co',
+                 'A.B', 'a.B', 'абв.укр', 'a_b.co', 'a b.co', '', '.', 'a', 'ab.cd.ef.gh', 'x.y.z.1', '1.2.3.4', 'a.1a', 'a.a1'}
+        for _ in range(4000):
+            labels = [''.join(rng.choice(alphabet) for _ in range(rng.randint(0, 5))) for _ in range(rng.randint(1, 4))]
+            hosts.add('.'.join(labels))
+        return sorted(hosts)
+
+    def test_the_host_rule_never_differs_from_the_cores(self):
+        host_ok = self.g['_host_ok']
+        for host in self.corpus():
+            self.assertEqual(host_ok(host), serve._url_host_ok(host), repr(host))
+
+    def test_every_address_the_module_accepts_the_core_accepts_too_and_host_decides_the_rest(self):
+        base = self.g['_base']
+        accepted = 0
+        for host in self.corpus():
+            for tail in ('', '/', ':443', ':1', ':65535', ':0', ':65536', ':', ':x'):
+                url = f'https://{host}{tail}'
+                try:
+                    got = base(self.hand_ctx({'url': url}))
+                except dm.ModuleError:
+                    got = None
+                if got is not None:
+                    accepted += 1
+                    self.assertTrue(serve._url_result_url_ok(got), (url, got))
+                    self.assertTrue(serve._url_host_ok(host.lower()), url)
+                elif tail in ('', '/', ':443') and host.isascii() and all(c.isalnum() or c in '.-' for c in host):
+                    self.assertFalse(serve._url_host_ok(host.lower()), f'ядро прийняло б хост, який відхилив модуль: {url}')
+        self.assertGreater(accepted, 20, 'корпус мусить містити й прийнятні адреси: інакше порівняння порожнє')
+
+
 # ------------------------------------------------------------------------------------ статичні перевірки
 
 class StaticTest(unittest.TestCase):
@@ -1060,7 +1297,7 @@ class StaticTest(unittest.TestCase):
                 mods |= {a.name.split('.')[0] for a in n.names}
             elif isinstance(n, ast.ImportFrom):
                 mods.add((n.module or '').split('.')[0])
-        self.assertEqual(mods, {'json', 're', 'urllib'})
+        self.assertEqual(mods, {'base64', 'json', 're', 'urllib'})
         for core in ('serve', 'deai_modules', 'spaces'):
             self.assertNotIn(core, mods)
 
@@ -1085,7 +1322,7 @@ class StaticTest(unittest.TestCase):
         self.assertEqual(sigs['list'], ['ctx', 'channel'])
         self.assertEqual(sigs['resolve'], ['ctx', 'channel', 'id', 'reason'])
         self.assertEqual(sigs['check'], ['ctx'])
-        self.assertEqual(sigs['_open'], ['req'])
+        self.assertEqual(sigs['_open'], ['req', 'timeout'])
 
     def test_nothing_identifying_ships_in_the_files_we_wrote(self):
         """Файли модуля публічні: ні справжніх імен, ні хостів, ні пошт, ні ref проєкту Supabase (їх 20 малих літер)."""
@@ -1098,17 +1335,26 @@ class StaticTest(unittest.TestCase):
 
     def test_the_schema_keeps_its_guards(self):
         sql = _read(os.path.join(MODULE_DIR, 'schema.sql')).decode('utf-8')
-        for must in ('create table if not exists comments', 'enable row level security', 'cl_project_id_immutable',
-                     'cl_delete_scope_guard', 'revoke truncate, references, trigger', 'supabase_realtime',
-                     'drop policy if exists "anon rw"', 'at most 25 comments may be deleted per request'):
+        for must in ('create table if not exists public.comments', 'alter table public.comments enable row level security',
+                     'public.cl_project_id_immutable', 'public.cl_delete_scope_guard',
+                     'grant select, insert, update, delete on public.comments to anon, authenticated;',
+                     'revoke truncate, references, trigger on public.comments from anon, authenticated;',
+                     'alter publication supabase_realtime add table public.comments',
+                     'drop policy if exists "anon rw" on public.comments', 'at most 25 comments may be deleted per request',
+                     'DEDICATED SUPABASE PROJECT', 'ADOPTS'):
             self.assertIn(must, sql, must)
         active = '\n'.join(ln for ln in sql.splitlines() if not ln.lstrip().startswith('--'))
         self.assertNotIn('for all using (true)', active, 'стара відкрита політика "anon rw" не повертається')
+        self.assertLess(active.index('grant select, insert, update, delete'), active.index('revoke ' + 'truncate'),
+                        'спершу права, потім відібрані зайві (інакше grant повернув би їх)')
+        self.assertEqual(re.findall(r'\b(?:on|table|exists|from|into|add table) comments\b', active), [],
+                         'кожне імʼя таблиці — з `public.` (не залежить від search_path сесії SQL-редактора)')
 
     def test_the_readme_covers_setup_security_and_cors(self):
         text = _read(os.path.join(MODULE_DIR, 'README.md')).decode('utf-8')
         for must in ('schema.sql', 'SQL', '/api/module-enable', '"supabase-comments"', '"url"', '"key"', 'https://<ref>.supabase.co',
-                     'anon', 'publishable', 'CORS', 'null', 'Access-Control-Allow-Origin'):
+                     'anon', 'publishable', 'CORS', 'null', 'Access-Control-Allow-Origin', 'service_role', 'sb_secret_', 'max-rows',
+                     '1000', 'check-timeout', 'grants', 'dedicated project'):
             self.assertIn(must, text, must)
 
 
@@ -1121,6 +1367,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
 
     def setUp(self):
         super().setUp()
+        self.no_proxy_env()
         patch = mock.patch.object(dm, 'builtin_dir', tm._REAL_BUILTIN_DIR)         # `Env` підмінив її на порожню теку
         patch.start()
         self.addCleanup(patch.stop)
@@ -1229,6 +1476,19 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         self.assertNotIn(KEY, html)
         self.assertEqual(len(self.seen), 1, 'після порчі адреси в мережу більше не ходили')
 
+    def test_a_service_key_never_reaches_a_page_or_the_overview_config(self):
+        key = jwt(SERVICE_CLAIMS)
+        body = self.enable_via_api(key=key)
+        self.assertEqual((body['check']['ok'], body['check']['error'], body['check']['detail']), (False, 'bad-key', SERVICE_TEXT))
+        html = self.page('project')
+        self.assertNotIn('window.__deaiCommentsCfg', html, 'модуль не вдався: сторінка лишається локальною')
+        self.assertNotIn(key, html)
+        st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
+        self.assertLess(st, 500, raw)
+        self.assertNotIn(key, raw)
+        self.assertNotIn('"config"', raw)
+        self.assertEqual(self.seen, [], 'з сервісним ключем у мережу не ходили')
+
     def test_the_agent_reads_and_resolves_through_the_module_against_the_service(self):
         self.enable_via_api()
         chan = self.channel('px')
@@ -1244,7 +1504,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         self.assertEqual(pins[0]['meta']['seq'], 7)
         pc.resolve({}, 'px', 'c0ffee01-aaaa', 'кнопку вирівняно', legacy=lambda: self.fail('legacy'))
         patch = self.api.reqs('PATCH')[-1]
-        self.assertEqual(patch['raw_path'], f'{TABLE}?id=eq.c0ffee01-aaaa&project_id=eq.{q(chan)}')
+        self.assertEqual(patch['raw_path'], f'{TABLE}?id=eq.c0ffee01-aaaa&project_id=eq.{q(chan)}&select=id')
         self.assertEqual(json.loads(patch['body']), {'status': 'resolved', 'resolve_reason': 'кнопку вирівняно'})
         after = {p['id']: p for p in pc.pins({}, 'px')}
         self.assertEqual((after['c0ffee01-aaaa']['status'], after['c0ffee01-aaaa']['resolve_reason']), ('resolved', 'кнопку вирівняно'))

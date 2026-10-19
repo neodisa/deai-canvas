@@ -10,13 +10,17 @@ The module changes nothing in the project's schema: you run `schema.sql` yoursel
 ## 1. Create the project and the table
 
 1. Create a project at [supabase.com](https://supabase.com) — **a dedicated one per team** (see "Security" below).
-2. Open **SQL Editor → New query**, paste the whole of [`schema.sql`](schema.sql) and **Run**. It creates the `comments`
-   table, row-level security, two guard triggers (immutable `project_id`, a delete cannot cross channels or exceed 25 rows)
-   and adds the table to the realtime publication. It is safe to run twice.
+2. Open **SQL Editor → New query**, paste the whole of [`schema.sql`](schema.sql) and **Run**. It creates the `public.comments`
+   table, row-level security, the table grants for the public key (a fresh project may not grant them by itself — without
+   them `check` answers `bad-key`/401 right after the schema ran), two guard triggers (immutable `project_id`, a delete cannot
+   cross channels or exceed 25 rows) and adds the table to the realtime publication. It is safe to run twice.
+   **Only in a dedicated project:** the script does not check what is already there — an existing table `public.comments` of
+   your own would be adopted (row-level security on, its policies replaced, the public key granted full access to it).
 3. Take two values from **Project Settings → API** (or **Connect**):
    * the project URL — `https://<ref>.supabase.co` (a custom domain works too);
    * the public key — the `anon` JWT or the new `publishable` key (`sb_publishable_…`). **Never** the `service_role` /
-     `secret` key: it bypasses every rule and must not go into the canvas.
+     `secret` key: it bypasses every rule, and this key goes into every page and preview. The module refuses it
+     (`sb_secret_…`, or a JWT whose payload says `"role": "service_role"`) with `bad-settings`.
 
 ## 2. Enable the module in a space
 
@@ -35,21 +39,27 @@ The answer carries the verdict of `check`:
 | `error` | meaning |
 |---|---|
 | *(ok)* | the table `comments` answers |
-| `bad-key` | Supabase did not accept the key (HTTP 401/403) — re-copy the public key |
+| `bad-key` | Supabase did not accept the key (HTTP 401/403) — re-copy the public key; right after `schema.sql` this also means the table grants are missing (run it again) |
 | `no-schema` | the table does not exist — run `schema.sql` (step 1) |
-| `network` | the project is not reachable (paused project, wrong ref, no internet) |
-| `bad-settings` | the URL is not `https://<name>.<tld>` (no IP addresses, no `localhost`, no path or query) |
+| `network` | the project is not reachable or did not answer within 4 s (paused project, wrong ref, no internet) |
+| `check-timeout` | not a verdict of the module but of the core, which waits 5 s for `check`: it appears only when something below the module's own 4 s budget hangs (typically a DNS lookup that never returns) |
+| `bad-settings` | the URL is not `https://<name>.<tld>` (no IP addresses, no `localhost`, no path or query), or the key is missing, malformed or a service key |
 
 The key is stored outside `space.json` (like a secret) but, being public by design, it **is** put into the pages that
 load the adapter (`"public": true` in the manifest). The URL accepts only `https://`; requests never follow redirects,
-so the key is sent to that one host and nowhere else.
+so the key is sent to that one host and nowhere else. Requests wait at most 4 s (`check`) or 8 s (`list`, `resolve`) per
+socket operation — shorter than the core's own 5 s and 10 s, so a slow project is reported by the module with its reason.
 
 ## 3. What you get
 
 * the **Team** tab and project comments in the canvas, on the overview and in published previews (`static-publish`,
   `vercel-publish`) — one channel per task: `deai/<space-id>/<task-id>` (`…/internal` for the internal one);
-* live updates between reviewers (realtime `postgres_changes` → re-read of the channel);
+* live updates between reviewers (realtime `postgres_changes` → re-read of the channel, once per burst of events);
 * `inbox` and `inbox resolve` for the agent: `list` / `resolve` through the REST API of the same project.
+
+**Row cap.** `list` asks for up to 5001 rows of one channel, but Supabase's API cuts every answer at its own `max-rows`
+setting (default **1000**, *Project Settings → API*) **without telling the module** — a channel with more comments than that
+shows the agent only the first 1000 (ordered by `id`). Raise `max-rows` for the project if your channels can grow that big.
 
 `supabase.min.js` is `@supabase/supabase-js` **2.110.0** (MIT, [license](LICENSE-supabase-js)), the UMD build, unchanged;
 no CDN is involved.

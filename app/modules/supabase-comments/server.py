@@ -2,7 +2,7 @@
 
 Дві половини (контракт ролі — спека 2b-2): браузерна — `adapter.js` + `supabase.min.js` (сторінки канваса, «Огляд», опубліковані
 превʼю); ця — серверна: `client_config` (публічна конфігурація для сторінок), `list`/`resolve` (агент: `inbox`) і `check`.
-Лише stdlib (`urllib`, `json`, `re`): без SDK, без Node, без підпроцесів. Схему таблиці `comments` (RLS, тригери, realtime) людина
+Лише stdlib (`urllib`, `json`, `re`, `base64`): без SDK, без Node, без підпроцесів. Схему таблиці `comments` (RLS, тригери, realtime) людина
 один раз виконує сама з `schema.sql`: модуль її НЕ змінює (це потребувало б сервісного ключа, якого йому не дають).
 
 `server.py` виконується ядром через `exec` у свіжий модуль: без імпорту `serve`, `deai_modules` чи сусідніх файлів. Із `ctx`
@@ -14,37 +14,46 @@
   * `url` — лише `https://`, хост — DNS-імʼя (те саме правило, що в ядра для `url`-модулів: ≥ 2 міток, остання з літери, жодних
     IP і `localhost`), необовʼязковий порт, шлях лише порожній чи `/`, жодних облікових даних, параметрів і фрагмента. Власні
     домени Supabase дозволені. Усе інше — `bad-settings` (текст без самої адреси: у ній могли бути облікові дані);
-  * `key` — публічний ключ (anon / publishable): друковний ASCII без пробілів (інакше зіпсував би заголовок). Він іде ЛИШЕ в
-    заголовки `apikey` і `Authorization: Bearer` запитів до `url`, єдиним місцем — `_request`; ні в адресу, ні в тіло, ні в
-    тексти помилок (тексти Supabase, що його повторили б, вичищаються), ні в журнали;
+  * `key` — публічний ключ (anon / publishable): друковний ASCII без пробілів (інакше зіпсував би заголовок). СЕРВІСНИЙ ключ
+    (`sb_secret_…` чи JWT із `"role": "service_role"`) відхиляється: ключ модуля `public: true` потрапляє в КОЖНУ сторінку й
+    превʼю, а сервісний обходить усі правила доступу — це повний доступ до бази. Ключ іде ЛИШЕ в заголовки `apikey` і
+    `Authorization: Bearer` запитів до `url`, єдиним місцем — `_request`; ні в адресу, ні в тіло, ні в тексти помилок (тексти
+    Supabase, що його повторили б, вичищаються), ні в журнали;
   * запити не йдуть за редиректами (`_NoRedirect`): інакше `urllib` віддав би обидва заголовки на чужий хост. 3xx — це помилка.
 
-Шов мережі. Запит іде в мережу в ОДНОМУ місці — `_open(req)`; тест підміняє саме його (переписує `https://<проєкт>.supabase.co` на
+Тайм-аути. Ядро чекає на `check` `CHECK_TIMEOUT` = 5 с, а на `list`/`resolve` — `COMMENTS_TIMEOUT` = 10 с, і при мовчанні модуля віддає
+`check-timeout` замість причини. Тому запити модуля мають ВЛАСНИЙ, коротший бюджет: `check` — `CHECK_TIMEOUT_S` = 4 с, `list`/`resolve`
+— `CALL_TIMEOUT_S` = 8 с (на кожну операцію сокета: зʼєднання, відповідь); модуль встигає віддати свій `network`/`module-error`.
+
+Шов мережі. Запит іде в мережу в ОДНОМУ місці — `_open(req, timeout)`; тест підміняє саме його (переписує `https://<проєкт>.supabase.co` на
 локальний підставний сервер), а побудова запиту, заголовки й обробка редиректів лишаються справжніми. Вимогу `https` це не
 послаблює: у виробничому коді іншого входу нема.
 
-Що робить кожна функція (REST — `<url>/rest/v1/comments`, тайм-аут `TIMEOUT_S` на запит)
+Що робить кожна функція (REST — `<url>/rest/v1/comments`, тайм-аути — вище)
   * `client_config(ctx)` → `{'url': <канонічна адреса>, 'key': <публічний ключ>}`; у мережу не ходить;
   * `list(ctx, channel)` → коментарі каналу у формі CommentLayer (`rowToComment`: `html_snapshot` → `htmlSnapshot`, `born_v` →
     `bornV`…): `GET ?project_id=eq.<канал>&order=id&select=*&limit=<MAX_ROWS+1>`. Зайвий рядок понад `MAX_ROWS` лишається — ядро
     саме відкине його й ЗАЯВИТЬ про це (`truncated`), а не віддасть «повний» список мовчки;
-  * `resolve(ctx, channel, id, reason)` → `PATCH ?id=eq.<id>&project_id=eq.<канал>` `{status: 'resolved', resolve_reason}` з
-    `Prefer: return=representation` — за відповіддю знаємо, скільки рядків змінено: 0 — `module-error` «коментар не знайдено», а
-    відповідь без підтвердження — теж помилка (агент вірить відповіді й не перечитує сервіс). Повторне закриття — не помилка;
+  * `resolve(ctx, channel, id, reason)` → `PATCH ?id=eq.<id>&project_id=eq.<канал>&select=id` `{status: 'resolved',
+    resolve_reason}` (без `resolve_reason`, коли причини нема) з `Prefer: return=representation` — за відповіддю (лише `id`)
+    знаємо, скільки рядків змінено: 0 — `module-error` «коментар не знайдено», а відповідь без підтвердження — теж помилка (агент вірить відповіді й не перечитує сервіс). Повторне закриття — не помилка;
     `resolved_v` не чіпається (номера ітерації в контракті ролі нема); обидва фільтри — завжди (без `id` чи каналу PATCH зачепив би
     чужі рядки, тож порожні значення відхиляються ДО запиту);
   * `check(ctx)` → `GET ?select=id&limit=1`: 200 → `ok`; 401/403 → `bad-key`; 404 чи код PostgREST `42P01`/`PGRST205` →
     `no-schema` (виконайте `schema.sql`); мережа → `network`; решта → `supabase-error`. Нічого не створює й не кидає на звичайних
     збоях (немає ключа, не прийнято, мережі нема) — вертає `{"ok": false, "error": <код>, "detail": <причина>}`.
 """
+import base64
 import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
-#: Тайм-аут одного запиту до Supabase, секунди (шов `_open` читає його щоразу: тести ставлять малий).
-TIMEOUT_S = 10
+#: Тайм-аут на операцію сокета для запитів до Supabase, секунди: `check` і `list`/`resolve` — РАНІШЕ за тайм-аути ядра (5 і 10 с),
+#: щоб відповісти своїм вердиктом/текстом, а не `check-timeout` (див. docstring). Тести ставлять малі.
+CHECK_TIMEOUT_S = 4
+CALL_TIMEOUT_S = 8
 #: Скільки коментарів каналу бере агент; запитуємо на один більше (див. docstring), решту відсікає й рахує ядро.
 MAX_ROWS = 5000
 #: Більше цього відповідь не читаємо: `list` (рядки з `html_snapshot` і знімками) і решта (один рядок чи помилка).
@@ -66,6 +75,8 @@ _TLD_START = re.compile(r'[a-z]', re.ASCII)
 _KEY_RE = re.compile(r'[\x21-\x7e]+')
 #: Кожен знак керуючого діапазону (C0, DEL, C1) з тексту сервісу прибирається.
 _CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
+#: Перше, що чує людина, коли вставила не той ключ: сервісний ключ у сторінках — це повний доступ до бази.
+_SERVICE_KEY = 'це сервісний ключ — потрібен публічний anon/publishable'
 _BAD_URL = ('url: потрібна адреса проєкту Supabase виду https://<ref>.supabase.co — лише https, імʼя хоста (не IP і не localhost), '
             'без шляху, параметрів і облікових даних')
 
@@ -97,9 +108,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _open(req):
+def _open(req, timeout):
     """ЄДИНЕ місце, де запит іде в мережу (шов для тестів, див. docstring): без переходів за редиректами."""
-    return _opener.open(req, timeout=TIMEOUT_S)
+    return _opener.open(req, timeout=timeout)
 
 
 def _error(ctx, code, message):
@@ -139,12 +150,29 @@ def _key(ctx):
     return key.strip(' \t\r\n') if isinstance(key, str) else ''
 
 
+def _is_service_key(key):
+    """Сервісний ключ: нове `sb_secret_…` чи JWT (три частини через `.`), чия корисна частина (base64url JSON) каже
+    `"role": "service_role"`. Публічні — `sb_publishable_…` і JWT з `"role": "anon"` — проходять. Не розібране — не сервісний."""
+    if key.startswith('sb_secret_'):
+        return True
+    parts = key.split('.')
+    if len(parts) != 3:
+        return False
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(parts[1] + '=' * (-len(parts[1]) % 4)))
+    except (ValueError, RecursionError):            # `binascii.Error` і `UnicodeDecodeError` — підкласи `ValueError`
+        return False
+    return isinstance(claims, dict) and claims.get('role') == 'service_role'
+
+
 def _need_key(ctx):
     key = _key(ctx)
     if not key:
         raise _error(ctx, 'bad-settings', 'key: публічний ключ (anon / publishable) не задано')
     if not _KEY_RE.fullmatch(key):
         raise _error(ctx, 'bad-settings', 'key: ключ має недопустимі символи (очікується один рядок без пробілів)')
+    if _is_service_key(key):
+        raise _error(ctx, 'bad-settings', 'key: ' + _SERVICE_KEY)
     return key
 
 
@@ -166,10 +194,11 @@ def _clean(text, key, limit=MSG_MAX):
     return text[:limit]
 
 
-def _request(ctx, method, query, *, body=None, prefer=None, limit=MAX_SMALL):
+def _request(ctx, method, query, *, timeout, body=None, prefer=None, limit=MAX_SMALL):
     """Один запит до `<url>/rest/v1/comments`: ЄДИНЕ місце, де є `apikey` і `Authorization: Bearer <ключ>`. Повертає
-    `(статус, тіло-байти)` для будь-якої відповіді (4xx/5xx/3xx теж — рішення про них ухвалює викликач); мережа, тайм-аут, обрив —
-    `_NetworkError('Supabase недоступний (<клас збою>)')`; відповідь більша за `limit` — `_ResponseError`. Ключа в текстах нема."""
+    `(статус, тіло-байти)` для будь-якої відповіді (4xx/5xx/3xx теж — рішення про них ухвалює викликач); `timeout` — секунди на
+    операцію сокета. Мережа, тайм-аут, обрив — `_NetworkError('Supabase недоступний (<клас збою>)')`; відповідь більша за
+    `limit` — `_ResponseError`. Ключа в текстах нема."""
     base = _base(ctx)
     key = _need_key(ctx)
     headers = {'apikey': key, 'Authorization': 'Bearer ' + key, 'Accept': 'application/json', 'User-Agent': UA}
@@ -183,7 +212,7 @@ def _request(ctx, method, query, *, body=None, prefer=None, limit=MAX_SMALL):
     status, payload = 0, b''
     try:
         try:
-            with _open(req) as resp:
+            with _open(req, timeout) as resp:
                 status, payload = resp.status, resp.read(limit + 1)
         except urllib.error.HTTPError as e:
             status = e.code
@@ -247,8 +276,14 @@ def _row_to_comment(r):
 
 
 def _need_text(ctx, value, what):
+    """Непорожній рядок, який можна закодувати в UTF-8: самотній сурогат (`\\ud800`, непрочитний байт аргументу CLI) у фільтрі не
+    закодувати, і відмова — наша, з фіксованим текстом, а не виняток `urllib.parse.quote` із символом усередині."""
     if not isinstance(value, str) or not value:
         raise _error(ctx, 'module-error', f'{what} не задано')
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        raise _error(ctx, 'module-error', f'{what}: недопустимі символи (самотній сурогат)') from None
     return value
 
 
@@ -261,7 +296,7 @@ def list(ctx, channel):  # noqa: A001 — імʼя функції ролі
     channel = _need_text(ctx, channel, 'канал коментарів')
     query = f'project_id=eq.{_quote(channel)}&order=id&select=*&limit={MAX_ROWS + 1}'
     try:
-        status, payload = _request(ctx, 'GET', query, limit=MAX_BODY)
+        status, payload = _request(ctx, 'GET', query, timeout=CALL_TIMEOUT_S, limit=MAX_BODY)
     except _ResponseError as e:
         raise _error(ctx, 'module-error', _clean(e, _key(ctx))) from None
     if not 200 <= status < 300:
@@ -275,10 +310,12 @@ def list(ctx, channel):  # noqa: A001 — імʼя функції ролі
 def resolve(ctx, channel, id, reason):  # noqa: A002 — імена аргументів ролі
     channel = _need_text(ctx, channel, 'канал коментарів')
     id = _need_text(ctx, id, 'id коментаря')
-    body = {'status': 'resolved', 'resolve_reason': reason if isinstance(reason, str) and reason else None}
-    query = f'id=eq.{_quote(id)}&project_id=eq.{_quote(channel)}'
+    body = {'status': 'resolved'}
+    if isinstance(reason, str) and reason:
+        body['resolve_reason'] = _utf8(reason)          # текст, а не ідентифікатор: непрочитний знак стає `?`, закриття не губиться
+    query = f'id=eq.{_quote(id)}&project_id=eq.{_quote(channel)}&select=id'      # у відповіді лише `id`: рахуємо змінені рядки
     try:
-        status, payload = _request(ctx, 'PATCH', query, body=body, prefer='return=representation')
+        status, payload = _request(ctx, 'PATCH', query, timeout=CALL_TIMEOUT_S, body=body, prefer='return=representation')
     except _ResponseError as e:
         raise _error(ctx, 'module-error', _clean(e, _key(ctx))) from None
     if not 200 <= status < 300:
@@ -299,7 +336,7 @@ def check(ctx):
     if not _key(ctx):
         return {'ok': False, 'error': 'bad-key', 'detail': 'Публічний ключ (anon / publishable) не задано'}
     try:
-        status, payload = _request(ctx, 'GET', 'select=id&limit=1')
+        status, payload = _request(ctx, 'GET', 'select=id&limit=1', timeout=CHECK_TIMEOUT_S)
     except _NetworkError as e:
         return {'ok': False, 'error': 'network', 'detail': str(e)}
     except Exception as e:  # noqa: BLE001 — зіпсований ключ (`bad-settings`), завелика відповідь: вердикт, а не виняток
