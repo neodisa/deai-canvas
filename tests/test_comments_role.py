@@ -162,13 +162,15 @@ class ProviderTest(CommentsEnv):
         ig = self.new_space('Integ', integrations=True)
         for sp in (plain, ig):
             _write(self.space_json(sp), '{broken')
-        with self.assertRaises(dm.ModuleError) as cm:                # без інтеграцій треба знати явні рішення
-            dm.provider('comments', plain)
-        self.assertEqual((cm.exception.code, cm.exception.status), ('space-json-unreadable', 409))
+        for sp in (plain, ig):               # і без інтеграцій, і з ними: невідомо, що людина вмикала — 409, а не 'legacy'
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.provider('comments', sp)
+            self.assertEqual((cm.exception.code, cm.exception.status), ('space-json-unreadable', 409))
         self.assertEqual(dm.capabilities(plain),
                          {'publish': None, 'tokens': None, 'comments': None, 'error': 'space-json-unreadable'})
-        self.assertEqual(dm.provider('comments', ig), 'legacy')      # шлях ЛІГА пошкодженим файлом не ламається
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
+        self.assertEqual(dm.provider('publish', ig), 'legacy')       # шлях ЛІГА для публікації пошкодженим файлом не ламається
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
+                                               'error': 'space-json-unreadable'})
 
     def test_capabilities_names_exactly_the_three_roles(self):
         sp = self.new_space()
@@ -190,17 +192,88 @@ class ProviderTest(CommentsEnv):
         self.assertEqual(dm.provider('comments', other).id, 'cm-b')
         self.assertEqual(dm.provider('comments', sp).id, 'cm-a')
 
-    def test_a_broken_module_is_not_a_provider_and_leaves_the_legacy_path_alone(self):
+    def test_a_broken_enabled_module_is_not_a_provider_in_a_plain_space(self):
         self.mkcm('cm-bad', client=('a.js',), files={})              # оголошений файл не лежить на диску
         self.assertEqual(dm.catalog()['cm-bad'].status, 'error')
         plain = self.new_space('Plain')
-        ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(plain), json.dumps({'modules': {'cm-bad': {'enabled': True}}}))
-        _write(self.space_json(ig), json.dumps({'modules': {'cm-bad': {'enabled': True}}}))
-        self.assertIsNone(dm.provider('comments', plain))
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertIsNone(dm.provider('comments', plain))            # без інтеграцій «запасного» шляху нема: просто нікого
         self.assertEqual(dm.capabilities(plain)['comments'], None)
+        self.assertNotIn('error', dm.capabilities(plain))
+
+    def enabled_entry(self, sp, *ids):
+        _write(self.space_json(sp), json.dumps({'modules': {mid: {'enabled': True} for mid in ids}}))
+
+    def test_an_enabled_comments_module_that_is_lost_is_an_error_never_the_shared_league_service(self):
+        """Простір з інтеграціями + ЯВНО ввімкнений модуль коментарів, що не завантажився: `'legacy'` повів би піни (зі
+        знімками приватних макетів) у СПІЛЬНИЙ Supabase ЛІГА — тому `module-error`, а `capabilities.comments` — `None`."""
+        self.mkcm('cm-files', client=('a.js',), files={})            # (1) маніфест не пройшов: нема оголошеного файла
+        self.mkcm('cm-syntax', server='def check(:\n')              # (2) `server.py` не компілюється (роль відома)
+        self.mkcm('cm-json')                                         # (3) `module.json` не розібрати (ролі невідомі)
+        _write(os.path.join(self.mods, 'cm-json', 'module.json'), '{broken')
+        for mid in ('cm-files', 'cm-syntax', 'cm-json', 'ghost'):    # (4) запису в каталозі нема взагалі
+            with self.subTest(module=mid):
+                ig = self.new_space(f'Ig{mid.replace("-", "")}', integrations=True)
+                self.enabled_entry(ig, mid)
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.provider('comments', ig)
+                self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message),
+                                 ('module-error', 502, dm.COMMENTS_MODULE_BROKEN))
+                self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
+                                                       'error': 'module-error'})
+        self.assertEqual(dm.catalog()['cm-files'].status, 'error')
+        self.assertEqual(dm.catalog()['cm-syntax'].status, 'error')
+        self.assertEqual(dm.catalog()['cm-json'].status, 'error')
+
+    def test_publish_of_that_space_stays_the_league_path(self):
+        self.mkcm('cm-files', client=('a.js',), files={})
+        ig = self.new_space('Integ', integrations=True)
+        self.enabled_entry(ig, 'cm-files')
+        self.assertEqual(dm.provider('publish', ig), 'legacy')
+
+    def test_the_league_path_returns_once_the_lost_entry_is_gone_or_disabled(self):
+        self.mkcm('cm-files', client=('a.js',), files={})
+        ig = self.new_space('Integ', integrations=True)
+        self.enabled_entry(ig, 'cm-files')
+        with self.assertRaises(dm.ModuleError):
+            dm.provider('comments', ig)
+        _write(self.space_json(ig), json.dumps({'modules': {'cm-files': {'enabled': False}}}))     # вимкнув
+        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
+        self.enabled_entry(ig, 'cm-files')
+        _write(self.space_json(ig), json.dumps({'name': 'x'}))                                     # прибрав запис
+        self.assertEqual(dm.provider('comments', ig), 'legacy')
+
+    def test_a_lost_module_of_another_role_or_a_healthy_one_does_not_block_the_league_path(self):
+        """Блокує лише те, що могло вести коментарі: модуль із розібраним маніфестом БЕЗ ролі `comments` (справний чи
+        зламаний `server.py`) шлях ЛІГА не чіпає."""
+        self.mk('pub-ok')                                            # справний publish
+        self.mk('pub-syntax', server='def check(:\n')               # зламаний publish, але роль відома
+        ig = self.new_space('Integ', integrations=True)
+        self.enabled_entry(ig, 'pub-ok', 'pub-syntax')
+        self.assertEqual(dm.catalog()['pub-syntax'].status, 'error')
+        self.assertEqual(dm.catalog()['pub-syntax'].roles, ['publish'])
+        self.assertEqual(dm.provider('comments', ig), 'legacy')
         self.assertEqual(dm.capabilities(ig)['comments'], 'legacy')
+        self.assertNotIn('error', dm.capabilities(ig))
+
+    def test_a_working_comments_module_wins_over_an_unrelated_lost_entry(self):
+        self.mkcm()
+        ig = self.new_space('Integ', integrations=True)
+        self.enabled_entry(ig, 'cm', 'ghost')
+        self.assertEqual(dm.provider('comments', ig).id, 'cm')
+        self.assertEqual(dm.capabilities(ig)['comments'], 'cm')
+
+    def test_the_decision_follows_the_files_without_a_cache_reset(self):
+        d = self.mkcm()
+        ig = self.new_space('Integ', integrations=True)
+        self.enabled_entry(ig, 'cm')
+        self.assertEqual(dm.capabilities(ig)['comments'], 'cm')
+        os.remove(os.path.join(d, 'adapter.js'))                     # модуль зламався → не 'legacy', а помилка
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
+                                               'error': 'module-error'})
+        _write(os.path.join(d, 'adapter.js'), tm.CLIENT_JS)
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'cm'})
 
     def test_the_capabilities_cache_follows_enabling_and_the_adapter_files(self):
         d = self.mkcm()
@@ -336,6 +409,27 @@ class CommentsClientTest(CommentsEnv):
                 e = self.refused(body, {'token': token})
                 self.assertEqual(e.message, dm.CLIENT_CONFIG_LEAK)
         self.assertEqual(self.run_cfg('{"u": up.quote_plus("zzz+/=")}', {'token': 'a b c'}), {'u': 'zzz%2B%2F%3D'})
+
+    def test_lone_surrogates_are_refused_in_keys_and_values(self):
+        """Рядок, що не кодується в UTF-8, пройшов би перевірку, а потім обривав відповідь сторінки: відмова тут."""
+        for body in ('{"x": "\\ud800"}', '{"x": "a\\udfffb"}', '{"\\ud800": 1}', '{"k": "ok", "x\\udc00y": "v"}',
+                     '{"x": chr(0xD800)}', '{"x": "tail" + chr(0xDBFF)}'):
+            e = self.refused(body)
+            self.assertIn('valid text', e.message, body)
+        self.assertEqual(self.run_cfg('{"x": "\\U0001F600 ї \\u2028", "ключ": "значення"}'),
+                         {'x': '\U0001F600 ї \u2028', 'ключ': 'значення'})              # справжній Unicode — можна
+
+    def test_any_value_error_overflow_or_unicode_error_inside_the_check_is_the_refusal(self):
+        for boom in (ValueError('v'), OverflowError('o'), UnicodeEncodeError('utf-8', 'x', 0, 1, 'u'),
+                     UnicodeDecodeError('utf-8', b'x', 0, 1, 'd')):
+            with self.subTest(boom=type(boom).__name__):
+                with mock.patch.object(dm, '_text_views', side_effect=boom):
+                    e = self.refused('{"x": "anything"}')
+                self.assertEqual(type(e), dm.ModuleError)
+                self.assertIn('serializable', e.message)
+                self.assertNotIn(self.TOKEN, str(e))
+        with mock.patch.object(dm, '_secret_forms', side_effect=OverflowError('o')):
+            self.refused('{"x": 1}')
 
     def test_a_giant_int_is_a_refusal_not_a_raw_value_error(self):
         for body in ('{"n": 10 ** 5000}', '{"n": -10 ** 5000}', '{"n": 10 ** 4400, "s": "x"}'):
@@ -1200,15 +1294,6 @@ class LegacyPagesTest(PagesEnv):
         dm.write_module_state(self.plain, 'memo-comments', enabled=False)
         self.golden('page-none-project.html', self.page('project'))
 
-    def test_a_failure_to_pick_the_provider_never_breaks_the_league_path(self):
-        self.use(self.liga)
-        boom = dm.ModuleError('space-json-unreadable', message='x')
-        with mock.patch.object(dm, 'provider', side_effect=boom):
-            self.golden('page-legacy-project.html', self.page('project'))
-            st, body = self.fetch('/api/comment-config?ch=project&it=it1')
-        self.assertEqual(st, 200)
-        self.golden('config-legacy-project.json', body)
-
     def test_the_league_space_never_gets_the_module_snippet(self):
         self.use(self.liga)
         for ch in ('project', 'local'):
@@ -1233,6 +1318,86 @@ class LegacyPagesTest(PagesEnv):
         self.assertEqual(st, 200)
         self.golden('config-none-local.json', body)
         self.assertEqual(json.loads(body)['endpoint'], '/api/local-comments')
+
+
+class LeaguePrivacyTest(PagesEnv):
+    """Простір ЛІГА (з інтеграціями), де людина ЯВНО ввімкнула модуль коментарів, що потім не завантажився, або де
+    `space.json` не прочитати: сторінка НЕ переходить мовчки на зашитий СПІЛЬНИЙ Supabase ЛІГА (піни несли б знімки
+    приватних макетів), а лишається на локальному шарі з приміткою; `/api/comment-config` — центральна відповідь модулів.
+    Усе — через справжній HTTP."""
+
+    SHARED = ('supabase', 'CommentLayerSupabase', 'cdn.jsdelivr.net')
+
+    def setUp(self):
+        super().setUp()
+        self.use(self.liga)
+
+    def break_module(self):
+        self.enable(self.liga)
+        os.remove(os.path.join(self.mods, 'memo-comments', 'adapter.js'))        # оголошений файл зник → модуль `error`
+        self.assertEqual(dm.catalog()['memo-comments'].status, 'error')
+
+    def assert_local_with_notice(self, html, code):
+        self.assertIn('local-adapter.js', html)
+        self.assertNotIn('__deaiCommentsCfg', html)
+        self.assertNotIn('/api/module-client/', html)
+        self.assertNotIn('audiences:', html)                           # командного каналу нема — вкладки «Команда» теж
+        for shared in self.SHARED + (serve.SUPABASE_URL, serve.SUPABASE_KEY):
+            self.assertNotIn(shared, html, shared)
+        self.assertNotIn('supabase', html.lower())
+        notice = re.search(r"window\.__clDown\(([^\n]*)\);\s*</script>\s*</body>", html)
+        self.assertIsNotNone(notice, 'примітка про відмову має бути видимою')
+        self.assertIn(code, notice.group(1))
+
+    def assert_no_shared_service_in(self, body):
+        for shared in (serve.SUPABASE_URL, serve.SUPABASE_KEY, 'sbUrl', 'sbKey'):
+            self.assertNotIn(shared, body, shared)
+
+    def test_a_broken_enabled_module_leaves_the_page_local_with_a_notice_and_no_shared_snippet(self):
+        self.break_module()
+        self.assert_local_with_notice(self.page('project'), 'module-error')
+
+    def test_a_broken_enabled_module_makes_comment_config_the_central_error(self):
+        self.break_module()
+        st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
+        body = json.loads(raw)
+        self.assertEqual((st, body['ok'], body['code']), (502, False, 'module-error'))
+        self.assertEqual(body['error'], dm.COMMENTS_MODULE_BROKEN)
+        self.assert_no_shared_service_in(raw)
+
+    def test_an_unreadable_space_json_leaves_the_page_local_with_a_notice_and_no_shared_snippet(self):
+        _write(self.space_json(self.liga), '{broken')
+        self.assert_local_with_notice(self.page('project'), 'space-json-unreadable')
+
+    def test_an_unreadable_space_json_makes_comment_config_the_409(self):
+        _write(self.space_json(self.liga), '{broken')
+        st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
+        body = json.loads(raw)
+        self.assertEqual((st, body['ok'], body['code']), (409, False, 'space-json-unreadable'))
+        self.assert_no_shared_service_in(raw)
+
+    def test_the_task_endpoint_reports_no_team_comments_with_the_error(self):
+        _write(self.space_json(self.liga), '{broken')
+        st, raw = self.fetch('/api/task')
+        self.assertEqual(st, 200, raw)
+        self.assertEqual(json.loads(raw)['space']['capabilities'],
+                         {'publish': 'legacy', 'tokens': None, 'comments': None, 'error': 'space-json-unreadable'})
+
+    def test_the_local_page_of_that_space_has_no_shared_snippet_either(self):
+        self.break_module()
+        html = self.page('local')
+        self.assertIn('local-adapter.js', html)
+        for shared in self.SHARED + (serve.SUPABASE_URL, serve.SUPABASE_KEY):
+            self.assertNotIn(shared, html, shared)
+
+    def test_controls_a_disabled_or_absent_entry_keeps_the_league_snippet(self):
+        self.break_module()
+        dm.write_module_state(self.liga, 'memo-comments', enabled=False)             # людина вимкнула — шлях ЛІГА
+        html = self.page('project')
+        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', html)
+        self.assertEqual(self.fetch('/api/comment-config?ch=project&it=it1')[0], 200)
+        _write(self.space_json(self.liga), json.dumps({'name': 'x'}))                # запису нема взагалі
+        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
 
 
 class ModulePagesTest(PagesEnv):
@@ -1382,6 +1547,14 @@ class ModulePagesTest(PagesEnv):
         self.assertIn('local-adapter.js', html)
         self.assertNotIn('audiences:', html)                               # провайдера не вирішити — вкладок нема
         self.assertIn('space-json-unreadable', html)
+
+    def test_a_lone_surrogate_in_the_config_falls_back_with_a_notice_not_a_dropped_connection(self):
+        self.mkcm('surr', server=cfg_server('{"endpoint": "\\ud800"}'), settings=CFG_SETTINGS)
+        dm.write_module_state(self.plain, 'memo-comments', enabled=False)
+        dm.write_module_state(self.plain, 'surr', enabled=True)
+        self.assert_fallback(self.page('project'), 'module-error')
+        st, body = self.config('project')
+        self.assertEqual((st, body['code']), (502, 'module-error'))
 
     def test_a_clean_local_page_has_no_notice(self):
         self.assertNotIn('window.__clDown', self.page('local'))

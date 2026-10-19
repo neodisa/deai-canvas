@@ -1764,7 +1764,9 @@ class ProviderTest(Env):
         _write(self.space_json(ig), '{broken')
         self.assertEqual(dm.provider('publish', ig), 'legacy')   # шлях ЛІГА пошкодженим файлом не ламається
         self.assertIsNone(dm.provider('tokens', ig))
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        with self.assertRaises(dm.ModuleError) as cm:            # а коментарі — ні: спільний Supabase не запасний варіант
+            dm.provider('comments', ig)
+        self.assertEqual((cm.exception.code, cm.exception.status), ('space-json-unreadable', 409))
 
     def test_integrations_space_without_an_enabled_module_never_touches_the_catalog(self):
         self.mk('pub-a')
@@ -2297,19 +2299,20 @@ class CapabilitiesTest(Env):
         self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None, 'comments': None})
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})   # ЛІГА-шлях не ламається
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
+                                               'error': 'space-json-unreadable'})   # publish — ЛІГА-шлях; коментарі — не 'legacy'
 
     def test_capabilities_is_total(self):
         sp = self.new_space()
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
             self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'error': 'bad-manifest'})
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy',
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
                                                    'error': 'bad-manifest'})
         dm.reset_caches()
         with mock.patch.object(dm, '_provider_for', side_effect=RuntimeError('bug')):
             self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'error': 'module-error'})
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy',
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
                                                    'error': 'module-error'})
         dm.reset_caches()
         with mock.patch.object(dm, '_catalog_sig', side_effect=OSError('disk')):

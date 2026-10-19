@@ -44,6 +44,11 @@
     без жодного явно ввімкненого модуля — те саме, ДО каталогу (зламаний вбудований модуль чи
     пошкоджений `space.json` не зачепить зашитий шлях). У просторі БЕЗ інтеграцій `provider()` мусить
     знати явні рішення, тож нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)`.
+    ВИНЯТОК — роль `comments` у просторі з інтеграціями (приватність): зашитий шлях ЛІГА — це СПІЛЬНИЙ Supabase, куди
+    піни несуть знімки приватних макетів, тож мовчки переходити на нього, коли людина ЯВНО ввімкнула модуль коментарів,
+    не можна. Нечитабельний `space.json` — `space-json-unreadable`; явно ввімкнений запис, чий модуль відсутній, не
+    завантажився чи має невизначену роль, — `module-error` (`COMMENTS_MODULE_BROKEN`); `'legacy'` лише коли такого
+    запису нема. `capabilities()` у цих випадках — `comments: None` + `error`.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
     ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`) без модуля дають `'legacy'`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
@@ -93,6 +98,8 @@ CHECK_TIMEOUT = 5
 #: Тайм-аут `list`/`resolve` модуля ролі `comments` (ходять у мережу сервісу; кличе агент, не сторінка). Поки без
 #: викликача в ядрі: його візьме Task 4 (агент читає й закриває коментарі через модуль) — константу лишаємо навмисно.
 COMMENTS_TIMEOUT = 10
+#: Текст відмови `provider('comments')` у просторі з інтеграціями, де явно ввімкнений модуль коментарів не завантажився.
+COMMENTS_MODULE_BROKEN = 'модуль коментарів простору не завантажився — командні коментарі вимкнено'
 #: Файли браузерного адаптера (`client` у маніфесті ролі `comments`): імʼя, кількість, розмір одного файла.
 CLIENT_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.js')
 MAX_CLIENT_FILES = 8
@@ -1237,15 +1244,36 @@ def check(space, module_id):
 
 # ------------------------------------------------------------------------------ постачальник ролі
 
+def _enabled_module_is_lost(cat, explicit):
+    """Чи є в `space.json` ЯВНО ввімкнений запис модуля, що міг бути постачальником `comments`, але ним бути не може: його
+    нема в каталозі, він не завантажився й роль невідома (`roles` порожні: маніфест не розібрано) або серед його ролей
+    є `comments`. Модуль, що завантажився без цієї ролі (і зламаний модуль чужої ролі з розібраним маніфестом), — не в
+    рахунок."""
+    for mid, e in explicit.items():
+        if not e['enabled']:
+            continue
+        m = cat.get(mid)
+        if m is None or (m.status != 'ok' and (not m.roles or 'comments' in m.roles)):
+            return True
+    return False
+
+
 def _provider_for(role, space):
     """Модуль, `'legacy'` (лише ролі `LEGACY_ROLES`) чи `None` — для вже відомого простору `space`.
     Простір з `integrations` і без жодного явно ввімкненого модуля — `'legacy'`/`None` ДО каталогу.
-    Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`."""
+    Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
+
+    ВИНЯТОК для `comments` у просторі з інтеграціями (див. docstring модуля, «приватність»): зашитий шлях — спільний
+    Supabase ЛІГА, тож нечитабельний `space.json` — `space-json-unreadable`, а явно ввімкнений модуль, що не завантажився
+    (`_enabled_module_is_lost`), — `module-error` замість мовчазного `'legacy'`. Для `publish` усе лишається як було."""
     integrations = spaces.integrations_for(space)
+    strict = integrations and role == 'comments'
     if integrations:
         try:
             explicit = space_modules(space)
         except ModuleError:
+            if strict:
+                raise                                       # не знаємо, що людина вмикала: на спільний сервіс не йдемо
             explicit = {}                                   # пошкоджений файл не ламає шлях ЛІГА
         if not any(e['enabled'] for e in explicit.values()):
             return 'legacy' if role in LEGACY_ROLES else None
@@ -1264,6 +1292,8 @@ def _provider_for(role, space):
         winners.sort(key=lambda w: (w[0], w[1]))        # явно ввімкнений — перед неявним
         return winners[0][2]
     if role in LEGACY_ROLES and integrations:
+        if strict and _enabled_module_is_lost(cat, explicit):
+            raise ModuleError('module-error', message=COMMENTS_MODULE_BROKEN)
         return 'legacy'
     return None
 
@@ -1300,8 +1330,10 @@ def _caps_key(space):
 def capabilities(space):
     """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None}` для простору `space`
     (запис реєстру). ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово нечитабельний
-    `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "error": <код>}` (`publish` і `comments` —
-    `'legacy'`, коли у просторі є інтеграції); без помилки ключа `error` нема. Кеш за (простір, прапорець
+    `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "error": <код>}`: кожна роль вирішується
+    окремо, і та, що не вирішилась, — `None`; лише `publish` у просторі з інтеграціями лишається `'legacy'`. Тобто
+    `comments` ніколи не стає `'legacy'` через помилку (спільний Supabase ЛІГА — не запасний варіант, див. `_provider_for`);
+    без помилки ключа `error` нема. Кеш за (простір, прапорець
     `integrations`, відбиток `space.json`, теки джерел модулів (`DEAI_EXTRA_MODULES` теж), відбитки `module.json`,
     `server.py` і файлів `*.js` адаптера кожного модуля); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
     if not isinstance(space, dict) or not space:
@@ -1313,20 +1345,22 @@ def capabilities(space):
             hit = _CAPS.get(sid)
         if hit is not None and hit[0] == key:
             return dict(hit[1])
-        try:
-            caps = {}
-            for role in ROLES_CALLED:
+        caps, error = {}, None
+        for role in ROLES_CALLED:
+            try:
                 p = _provider_for(role, space)
                 caps[role] = p.id if isinstance(p, Module) else p
-        except ModuleError as e:
-            legacy = 'legacy' if spaces.integrations_for(space) else None
-            caps = {'publish': legacy, 'tokens': None, 'comments': legacy, 'error': e.code}
+            except ModuleError as e:
+                error = error or e.code
+                caps[role] = 'legacy' if role == 'publish' and spaces.integrations_for(space) else None
+        if error:
+            caps['error'] = error
         with _STATE_LOCK:
             _CAPS[sid] = (key, dict(caps))
         return dict(caps)
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
         legacy = 'legacy' if space.get('integrations') is True else None
-        return {'publish': legacy, 'tokens': None, 'comments': legacy, 'error': 'module-error'}
+        return {'publish': legacy, 'tokens': None, 'comments': None, 'error': 'module-error'}
 
 
 # ------------------------------------------------------------------------------ роль `comments` (2b-2)
@@ -1355,6 +1389,15 @@ def _check_client_config(cfg, guarded):
 
     ⚠️ Це охоронець від ВИПАДКОВОГО витоку (модуль поклав секрет у конфіг, склав із ним адресу). Навмисно сховану форму
     (нижній регістр, base64, шматки, розбиті між полями) він не бачить — це не межа довіри: модулі вбудовані."""
+    try:
+        _check_client_config_shape(cfg, guarded)
+    except (ValueError, OverflowError):                 # `UnicodeError` — підклас `ValueError`; напр. int із >4300 цифр
+        raise _config_refused('is not serializable') from None
+
+
+def _check_client_config_shape(cfg, guarded):
+    """Тіло `_check_client_config`: відмови `ModuleError` — свої, а будь-який `ValueError`/`UnicodeError`/
+    `OverflowError`, якого ніхто не передбачив, перехоплює обгортка."""
     if not isinstance(cfg, dict):
         raise _config_refused('must be an object')
     for k, v in cfg.items():
@@ -1364,11 +1407,9 @@ def _check_client_config(cfg, guarded):
             raise _config_refused('values must be strings, numbers, booleans or null')
         if type(v) is float and not math.isfinite(v):
             raise _config_refused('numbers must be finite')
-    try:
-        size = len(json.dumps(cfg))
-    except (ValueError, OverflowError, TypeError, RecursionError):      # напр. int із тисяч цифр
-        raise _config_refused('is not serializable') from None
-    if size > MAX_CLIENT_CONFIG:
+        if not _encodable(k) or (type(v) is str and not _encodable(v)):
+            raise _config_refused('strings must be valid text (no lone surrogates)')     # інакше ламає відповідь сторінки
+    if len(json.dumps(cfg)) > MAX_CLIENT_CONFIG:
         raise _config_refused(f'bigger than {MAX_CLIENT_CONFIG} bytes')
     forms = _secret_forms(guarded)
     if not forms:

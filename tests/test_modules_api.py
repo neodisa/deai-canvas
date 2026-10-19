@@ -1144,12 +1144,14 @@ class Capabilities(World):
         self.assertEqual(caps['on'], self.LEGACY_SHAPE)
         self.assertEqual((st2, task['space']['capabilities']['error']), (200, 'module-error'))
 
-    def test_a_broken_space_json_of_a_space_with_integrations_is_still_the_league_path(self):
+    def test_a_broken_space_json_of_a_space_with_integrations_keeps_the_league_publish_but_never_reroutes_comments(self):
         _write(os.path.join(self.on_path, 'space.json'), '{not json')
         st, body = self.get('/api/spaces')
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
-        self.assertEqual(caps['on'], self.LEGACY_SHAPE)             # шлях ЛІГА недоторканий
+        # публікація — шлях ЛІГА недоторканий; коментарі — НЕ 'legacy' (спільний Supabase не запасний варіант) + помилка
+        self.assertEqual(caps['on'], {'publish': 'legacy', 'tokens': None, 'comments': None,
+                                      'error': 'space-json-unreadable'})
 
     def test_a_broken_catalog_does_not_break_the_listing(self):
         """Не завантажений модуль УВІМКНЕНО (роль `tokens`) — він постачальником не стає, а списки відповідають."""
