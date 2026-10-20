@@ -137,13 +137,14 @@ const REFUSAL_KEYS = new Map([
 ]);
 
 /**
- * Відмова HTTP (`api()` кидає `Error` з `code`): `{key, detail}`; `timeout` (`formApi`) — наявний `formTimeout`.
+ * Відмова HTTP (`api()` кидає `Error` з `code`): `{key, detail}`; `timeout` (`formApi`) — свій `cnTimeout`
+ * (не `formTimeout`: той каже «простір чи задача»).
  * Власний ключ відмови стоїть РАНІШЕ за ключ перевірки (`bad-settings` — і те, і те: у формі це «відмова», а не
  * «перевірка»); коди перевірки на запасі, бо сервер віддає їх і відмовою (409 `secrets-unreadable` від запису секретів).
  */
 export function refusalView(err) {
   const code = typeof err?.code === "string" ? err.code : "";
-  if (code === "timeout") return { key: "formTimeout", detail: "" };
+  if (code === "timeout") return { key: "cnTimeout", detail: "" };
   return { key: REFUSAL_KEYS.get(code) ?? CHECK_KEYS.get(code) ?? "cnRefGeneric", detail: clip(typeof err?.message === "string" ? err.message : "") };
 }
 

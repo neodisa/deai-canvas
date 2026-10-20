@@ -186,6 +186,10 @@ let homePage = 'tasks';
 const connState = { spaceId: null, list: null, failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
+/* Запис модулів (`afterModulesChange`) змінив те, що вбудовується в документ рамки при віддачі (адаптер коментарів,
+   токени інспектора). Поки відкритий оверлей, рамку не чіпаємо; при виході (`leaveHome`) документ рамки
+   перезавантажується. Оголошено ТУТ, серед стану модуля: `leaveHome` читає його з першого ж виходу (TDZ). */
+let frameStale = false;
 /* Бічна панель «Підключення» (Task 7): `null` — закрита. Оголошено ТУТ, серед стану модуля, а не біля функцій панелі:
    `enterHome` (його кличе вже перший `render()`) читає її через `closeCnDrawer`, і `let` нижче за місцем виклику дав би
    TDZ-помилку на старті. */
@@ -1025,7 +1029,9 @@ function paintBar() {
   }
 }
 
-async function render() {
+/** `keepFrame: true` — не переприсвоювати `frame.src` (див. `applyMode`): лише `afterModulesChange` під відкритим
+ *  оверлеєм, де рамка схована, а документ однаково перезавантажить `leaveHome`. */
+async function render({ keepFrame = false } = {}) {
   let task, taskList;
   try {
     task = await api('/api/task');
@@ -1078,7 +1084,7 @@ async function render() {
   }
   await loadPages();
   paintBar();
-  applyMode(task);
+  applyMode(task, { keepFrame });
   renderPanel();
 }
 
@@ -2397,7 +2403,11 @@ function enterHome({ spaces = true, page } = {}) {
   el.hidden = false;
   paintBar();
   if (homePage === 'conn') {
-    if (fresh) { connState.list = null; connState.failed = null; connFocusPending = true; }
+    /* Запізнілий `loadHome` (його відповідь летіла, поки людина йшла на «Підключення») не сміє перемалювати сторінку. */
+    homeSeq += 1;
+    /* Свіжий вхід забуває й ПРОСТІР попереднього візиту: «вантаження» малює заголовок поточного простору (`connSpace`
+       без `spaceId` бере `currentSpace`), а `loadConn` побачить зміну й почистить решту (зайнятість, панель). */
+    if (fresh) { connState.spaceId = null; connState.list = null; connState.failed = null; connFocusPending = true; }
     paintHome();
     loadConn({ spaces });
     return;
@@ -2423,6 +2433,8 @@ async function leaveHome() {
   const el = homeNode();
   if (el) el.hidden = true;
   await render();
+  /* Модулі змінились, поки оверлей був відкритий: документ рамки несе старий адаптер коментарів і токени. */
+  if (frameStale) { frameStale = false; reloadFrame(); }
   /* Фокус вертається на логотип — те, чим екран відкривали: вузол, на якому він
      був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». */
   bar.querySelector('[data-act="home"]')?.focus({ preventScroll: true });
@@ -2551,7 +2563,13 @@ function wireHome(el) {
    туди, що людина бачить. */
 
 const connOpen = () => homeOpen && homePage === 'conn';
-const connView = () => ({ space: currentSpace(spacesResp), list: connState.list, failed: connState.failed, busy: connState.busy });
+/* Простір, чиї картки на сторінці: запис реєстру за `connState.spaceId`. `currentSpace` — лише поки сторінка ще не
+   знає свого простору (перший вхід). Не «поточний зараз»: `spacesResp` міг змінитись від дропдауна чи ⌘K без
+   перечитування сторінки, і заголовок та «Зараз» чужого простору опинились би над картками цього. */
+const connSpace = () => (connState.spaceId == null
+  ? currentSpace(spacesResp)
+  : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
+const connView = () => ({ space: connSpace(), list: connState.list, failed: connState.failed, busy: connState.busy });
 
 /** Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). */
 function enterConnections() {
@@ -2592,7 +2610,10 @@ async function loadConn({ spaces = true } = {}) {
   paintHome();
   if (connFocusPending) {
     connFocusPending = false;
-    homeNode()?.querySelector('.cn-card [data-cn], [data-cn="retry"]')?.focus({ preventScroll: true });
+    /* Не з-під палітри чи діалогу: їм фокус належить. */
+    if (!paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
+      homeNode()?.querySelector('.cn-card [data-cn], [data-cn="retry"]')?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -2609,39 +2630,80 @@ function connAction(act, id) {
 
 /** «Перевірити» на картці: вердикт міняє лише `status` модуля — перечитуємо сторінку. */
 async function connCheck(e) {
+  const spaceId = connState.spaceId;
   connState.busy.set(e.id, 'check'); paintHome();
   try { await postForm('/api/module-check', { space: connState.spaceId, id: e.id }); }
   catch (err) { const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n')); }
   finally { connState.busy.delete(e.id); }
   await loadConn();
+  if (connOpen() && connState.spaceId === spaceId) refocusCard(e.id, 'check');
 }
 
-/** «Вимкнути»: питання з наслідками для ролей, які модуль зараз виконує; далі — як після будь-якої зміни модулів. */
+/**
+ * «Вимкнути»: питання з наслідками для ролей, які модуль зараз виконує; далі — як після будь-якої зміни модулів.
+ *
+ * ⛔ Простір береться ДО питання. Поки людина читає діалог, вікно може отримати фокус (`refreshHomeOnReturn` →
+ * `loadConn`) і перевести сторінку в інший простір (агент перемкнув активний) — і `connState.spaceId` після відповіді
+ * вказував би вже на ТОЙ простір: «Так» вимкнуло б у ньому вбудований модуль, якого людина не бачила. Тому знімок
+ * `spaceId` (і запис простору для наслідків) — до `askYesNo`, а після нього сторінка мусить показувати той самий простір,
+ * інакше не пишемо нічого (ні туди, ні сюди).
+ */
 async function connDisable(e) {
-  const sp = currentSpace(spacesResp);
+  const spaceId = connState.spaceId;
+  const sp = connSpace();
   const lines = disableConsequences(e, sp).map((c) => (c.kind === 'legacy'
     ? t('cnDisableLegacy', roleTitle(c.role))
     : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : '')));
   if (!(await askYesNo([t('cnDisableAsk', modName(e)), ...lines].join('\n\n'), { yes: t('cnDisable'), danger: true }))) return;
+  if (!connOpen() || connState.spaceId !== spaceId) return;
   connState.busy.set(e.id, 'disable'); paintHome();
-  try { await postForm('/api/module-disable', { space: connState.spaceId, id: e.id }); }
+  try { await postForm('/api/module-disable', { space: spaceId, id: e.id }); }
   catch (err) {
     connState.busy.delete(e.id); paintHome();
     const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n'));
     return;
   }
-  connState.busy.delete(e.id);
-  await afterModulesChange();
+  /* Зайнятість знімаємо ПІСЛЯ перечитування: застаріла картка (з кнопкою «Вимкнути» вимкненого вже модуля) не
+     клікається, поки свіжий список летить. */
+  try { await afterModulesChange(); }
+  finally {
+    connState.busy.delete(e.id); paintHome();
+    if (connOpen() && connState.spaceId === spaceId) refocusCard(e.id, 'disable');
+  }
+}
+
+/**
+ * Фокус на кнопку картки після перемальовки списку. Натиснута кнопка під час запиту вимикається (зайнятість) і
+ * перемальовка її замінює — фокус пропадає на `body`, і клавіатура лишається «в нікуди». Повертаємо ЛИШЕ коли
+ * він справді втрачений (не крадемо в того, хто вже клікнув деінде) і над сторінкою нема палітри чи діалогу.
+ * Спершу та сама дія; її може вже не бути («Вимкнути» → лишилась «Підключити») — тоді будь-яка кнопка тієї ж картки.
+ */
+function refocusCard(id, act) {
+  const a = document.activeElement;
+  if ((a && a !== document.body && a.isConnected) || paletteOverlay || document.querySelector('.cv-ask-scrim')) return;
+  const home = homeNode();
+  const sel = CSS.escape(id);
+  (home?.querySelector(`[data-cn="${act}"][data-id="${sel}"]:not([disabled])`)
+    ?? home?.querySelector(`[data-cn][data-id="${sel}"]:not([disabled])`))?.focus({ preventScroll: true });
 }
 
 /**
  * Модулі змінились (вмикання, налаштування, вимкнення). Постачальник ролі й його налаштування — частина простору:
- * смуга (кнопки публікації), рамка (адаптер коментарів вбудовується в сторінку при віддачі) й інспектор (токени)
- * мусять побачити нове. Тому той самий шлях, що й зміна простору; сторінка лишається «Підключенням», бо `enterHome`
- * (його кличе `afterSpaceChange`) тримає відкриту сторінку. Пер-задачне (пакет тюнера) перечитується з диска.
+ * смуга (кнопки публікації) мусить побачити нові `capabilities`, а рамка (адаптер коментарів вбудовується в сторінку
+ * при віддачі) й інспектор (токени) — новий документ. ПРОСТІР при цьому не змінився, тож це ЛЕГКИЙ шлях, а не
+ * `afterSpaceChange`: той скидає пер-просторове (обрана ітерація, фільтри «Задач», плашки публікації), і людина, що
+ * вимкнула модуль і повернулась до задачі, бачила б іншу ітерацію. Тут: простори перечитати → `render()` під оверлеєм
+ * (той самий простір — нічого не скидає; свіжі `capabilities` → смуга; `keepFrame`: схована рамка не перезавантажується
+ * вдруге) → рамку позначити застарілою (`leaveHome` перезавантажить її при виході: РІВНО один раз) → список модулів. Якщо `render()` вже сам запустив `loadConn` (задачі нема →
+ * `showNoTask` → `enterHome`), другого запиту не робимо.
  */
 async function afterModulesChange() {
-  await afterSpaceChange();
+  frameStale = true;
+  await loadSpaces();
+  const seq = connState.seq;
+  await render({ keepFrame: true });
+  paintBar();
+  if (connOpen() && connState.seq === seq) await loadConn({ spaces: false });
 }
 
 /* ── бічна панель «Підключення» (`#cn-drawer`) ───────────────────────────────────────────────────────────
@@ -2756,6 +2818,16 @@ function toggleCnErase(btn) {
   syncCnDrawer();
 }
 
+/** Повернути введені секрети в щойно перемальовані поля паролів: лише властивість `.value` (DOM), без розмітки й стану. */
+function restoreCnSecrets(secrets) {
+  const el = cnDrawerNode();
+  for (const [k, v] of Object.entries(secrets)) {
+    const n = el.querySelector(`[data-cn-field="${CSS.escape(k)}"][data-type="secret"]`);
+    if (n && v) n.value = v;
+  }
+  syncCnDrawer();
+}
+
 /**
  * «Підключити» / «Зберегти». Обовʼязкові — до запиту. Підключення модуля, чиї ролі хтось тримає (зокрема неявний
  * `static-publish`), — спершу питання «Замінити?», далі `replace: true` (сервер міняє постачальника одним записом).
@@ -2773,6 +2845,9 @@ async function cnSubmit() {
     cnDrawer.errors = Object.fromEntries(miss.map((k) => [k, 'cnFieldRequired']));
     cnDrawer.result = null;
     paintCnDrawer();
+    /* Перемальовка спорожнила поля паролів (у розмітку секрет не пишеться ніколи) — людина не мусить вводити їх знову
+       через пропущене обовʼязкове поле: повертаємо введене ВЛАСТИВІСТЮ `.value`, а не розміткою чи станом. */
+    restoreCnSecrets(cur.secrets);
     cnDrawerNode().querySelector('[aria-invalid="true"]')?.focus({ preventScroll: true });
     return;
   }
@@ -5284,7 +5359,9 @@ function maybeAutoShoot() {
   shootWithProgress(picked, { auto: true });
 }
 
-function applyMode(task) {
+/* `keepFrame` — лише в «робочому вигляді»: рамка не переприсвоюється (кожне присвоєння `frame.src` перезавантажує
+   документ). Для «Огляду» не діє: полотно перебудовується завжди, рамка там схована. */
+function applyMode(task, { keepFrame = false } = {}) {
   if (mode === 'canvas') {
     // ховаємо СЦЕНУ, а не рамку: рамка лежить у сцені, і сцена зі своєю підкладкою
     // накрила б полотно «Огляду» світлим прямокутником
@@ -5297,10 +5374,12 @@ function applyMode(task) {
     /* Хвіст стану — ОСТАННІМ і вже екранованим (`stateQuery`), рівно як у
        `bin/shoot.mjs`: інакше живий вид і кадр показували б різні екрани. Наші
        параметри стан перебити не може — це стереже `checkState`. */
-    frame.src = (picked && pickedPage)
-      ? `/commented?it=${encodeURIComponent(picked)}&page=${encodeURIComponent(pickedPage)}`
-        + `&ch=${effMode()}${stateQuery(pickedState)}`
-      : (picked ? `/commented?it=${encodeURIComponent(picked)}&ch=${effMode()}` : 'about:blank');
+    if (!keepFrame) {
+      frame.src = (picked && pickedPage)
+        ? `/commented?it=${encodeURIComponent(picked)}&page=${encodeURIComponent(pickedPage)}`
+          + `&ch=${effMode()}${stateQuery(pickedState)}`
+        : (picked ? `/commented?it=${encodeURIComponent(picked)}&ch=${effMode()}` : 'about:blank');
+    }
   }
 }
 

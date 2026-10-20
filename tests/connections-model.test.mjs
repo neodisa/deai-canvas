@@ -109,10 +109,10 @@ test("причина: missing; error з деталлю лише свого last_
   assert.equal(whyOf(null), null);
 });
 
-test("відмова HTTP: код → ключ, timeout → formTimeout, невідома — загальна з текстом", () => {
+test("відмова HTTP: код → ключ, timeout → cnTimeout (не «простір чи задача»), невідома — загальна з текстом", () => {
   assert.deepEqual(refusalView({ code: "role-taken", message: "publish is already provided by x" }),
     { key: "cnRefRoleTaken", detail: "publish is already provided by x" });
-  assert.deepEqual(refusalView({ code: "timeout", message: "timeout" }), { key: "formTimeout", detail: "" });
+  assert.deepEqual(refusalView({ code: "timeout", message: "timeout" }), { key: "cnTimeout", detail: "" });
   assert.deepEqual(refusalView({ message: "boom" }), { key: "cnRefGeneric", detail: "boom" });
   for (const code of ["bad-settings", "unknown-module", "unknown-space", "space-json-unreadable", "spaces-off", "unwritable"]) {
     assert.notEqual(refusalView({ code }).key, "cnRefGeneric", code);
@@ -346,7 +346,7 @@ test("коди: vercel-busy і no-folder; відмова secrets-unreadable бе
   assert.equal(refusalView({ code: "bad-settings" }).key, "cnRefBadSettings", "власний ключ відмови раніше за ключ перевірки");
   assert.equal(refusalView({ code: "role-taken" }).key, "cnRefRoleTaken");
   assert.equal(refusalView({ code: "no-such-code", message: "m" }).key, "cnRefGeneric");
-  assert.equal(refusalView({ code: "timeout" }).key, "formTimeout");
+  assert.equal(refusalView({ code: "timeout" }).key, "cnTimeout");
 });
 
 test("причина: перевірка без коду → сервер пише error 'check failed', і деталь ТАКОЇ перевірки видно", () => {

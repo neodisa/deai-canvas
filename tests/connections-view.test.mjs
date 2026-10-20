@@ -442,6 +442,26 @@ test("панель: підказка шляху, стан секрету й пр
   }
 });
 
+test("панель: «Збережено, але…» із загальним кодом не повторює «Перевірка не пройшла» — голова й деталь; інші види лишають текст ключа", () => {
+  const e = ent([]);
+  const res = (r) => drawer(e, { result: r });
+  const failed = res({ kind: "failed", key: "cnErrGeneric", detail: "memo-says-no — note is fail" });
+  assert.match(failed, /<b>Збережено, але перевірка не пройшла\.<\/b>[\s\S]*memo-says-no — note is fail/);
+  assert.doesNotMatch(failed, /Перевірка не пройшла\./, "ключ cnErrGeneric тут — повтор голови");
+  /* Без деталі лишається одна голова. */
+  assert.doesNotMatch(res({ kind: "failed", key: "cnErrGeneric", detail: "" }), /Перевірка не пройшла\./);
+  /* Конкретний код — свій текст (він не повтор). */
+  assert.match(res({ kind: "failed", key: "cnErrBadSettings", detail: "" }), /Налаштування неповні/);
+  /* Інші види: кнопка «Перевірити» в панелі й HTTP-відмова — без голови, тож текст ключа потрібен. */
+  assert.match(res({ kind: "check-failed", key: "cnErrGeneric", detail: "x" }), /Перевірка не пройшла\./);
+  assert.match(res({ kind: "refused", key: "cnErrGeneric", detail: "x" }), /Перевірка не пройшла\./);
+  /* Англійською так само. */
+  setLang("en");
+  const en = res({ kind: "failed", key: "cnErrGeneric", detail: "d" });
+  assert.doesNotMatch(en, new RegExp(DICT.en.cnErrGeneric.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(en, /<b>Saved, but the check failed\.<\/b>/);
+});
+
 test("панель: результат — role=status для успіху і role=alert для кожної відмови", () => {
   const e = ent([]);
   const res = (r) => drawer(e, { result: r });

@@ -231,7 +231,10 @@ function resultHTML(r) {
     return `<div class="cn-res cn-res--ok" role="status">${ico("check", 13)}<span>${esc(t(r.key))}${detailHTML(r.detail)}</span></div>`;
   }
   const head = r.kind === "failed" ? `<b>${esc(t("cnSavedButFailed"))}</b> ` : "";
-  return `<div class="cn-res cn-res--err" role="alert">${ico("warn", 13)}<span>${head}${esc(t(r.key))}${detailHTML(r.detail)}</span></div>`;
+  /* Після «Збережено, але перевірка не пройшла.» загальне «Перевірка не пройшла.» — повтор голови: лишаємо голову й
+     деталь. Конкретний код (свій текст) і інші види (там голови нема) текст ключа зберігають. */
+  const text = r.kind === "failed" && r.key === "cnErrGeneric" ? "" : esc(t(r.key));
+  return `<div class="cn-res cn-res--err" role="alert">${ico("warn", 13)}<span>${head}${text}${detailHTML(r.detail)}</span></div>`;
 }
 
 /**
