@@ -78,8 +78,14 @@ const spaceDot = (color) =>
  * (`tasksErrSpaceUnavailable`) — єдиний спосіб її дізнатись, а вимкнений пункт
  * мовчав би. Підпис такого рядка — причина, а не «0 задач»: «0 задач» про
  * простір, якого ми не змогли прочитати, — брехня.
+ *
+ * «Підключення…» (етап 3a) — вхід на екран підключень поточного простору. На самій
+ * сторінці `conn` (`state.homePage`) пункту нема: він нічого б не робив, а ⌘K на тій
+ * сторінці свій `space-conn` теж ховає. Лише рівно `"conn"`: на «Задачах», у смузі
+ * задачі й поза оверлеєм (`homePage` — `null`) пункт є.
  */
 function ddSpaces(state) {
+  const onConn = state?.homePage === "conn";
   const rows = spaceRows({ current: state?.space?.id, spaces: state?.spaces });
   const list = rows.map((r) => ddItem({
     act: "space", val: r.id, lead: spaceDot(r.color), title: r.name,
@@ -91,7 +97,7 @@ function ddSpaces(state) {
     ${list}${list ? '<div class="dd-sep"></div>' : ""}
     ${ddItem({ act: "spacenew", icon: "plus", title: t("spaceNew") })}
     ${ddItem({ act: "spaceedit", icon: "pencil", title: t("spaceEdit") })}
-    ${ddItem({ act: "conn", icon: "sliders", title: t("cnOpen") })}</div>`;
+    ${onConn ? "" : ddItem({ act: "conn", icon: "sliders", title: t("cnOpen") })}</div>`;
 }
 
 /* Фішка простору: `data-dd="space"` — делегація смуги відкриває дропдауни за

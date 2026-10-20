@@ -785,6 +785,24 @@ test("простори: «Підключення простору» — підп
   assert.deepEqual(filterActions(plain, "connections").map((a) => a.id), ["space-conn"]);
 });
 
+/* Синонім `space-conn` — обома мовами, як `lang-*` і `pwa-install`: пункт має ЛАТИНСЬКИЙ шлях у ⌘K в українському
+   інтерфейсі («connections», «integrations») і КИРИЛИЧНИЙ в англійському («підключення», «інтеграції»). `t(labelKey)`
+   дає лише поточну мову, тож без псевдоніма «connections» в українському UI не знаходило б нічого. */
+test("простори: «Підключення простору» знаходиться запитом ІНШОЮ мовою (псевдонім обома мовами)", () => {
+  const acts = paletteActions(S({ spaces: SPS, spaceId: "a" }));
+  const ids = (q) => filterActions(acts, q).map((a) => a.id);
+  setLang("uk");
+  assert.deepEqual(ids("connections"), ["space-conn"], "uk-інтерфейс: «connections» не знайшло пункту");
+  assert.deepEqual(ids("integrations"), ["space-conn"]);
+  assert.deepEqual(ids("modules"), ["space-conn"]);
+  setLang("en");
+  assert.deepEqual(ids("підключення"), ["space-conn"], "en-інтерфейс: «підключення» не знайшло пункту");
+  assert.deepEqual(ids("інтеграції"), ["space-conn"]);
+  assert.deepEqual(ids("модулі"), ["space-conn"]);
+  /* Псевдонім не розтікається на пункти просторів: «connections» не знаходить «Простір: B» і «Новий простір…». */
+  assert.ok(!ids("connections").some((id) => id === "space-go-b" || id === "space-new"));
+});
+
 test("простори: пункти складають суцільний блок gGo (заголовок групи не повторюється)", () => {
   const html = paletteListHTML(paletteActions(S({ spaces: SPS, spaceId: "a" })), "", 0);
   assert.equal((html.match(/class="pal-grp">Перейти</g) || []).length, 1, "група gGo розірвана");

@@ -670,6 +670,38 @@ test("дропдаун просторів: «Підключення…» піс�
   assert.match(html({ space: SP(), openDd: "space" }), /data-act="conn"/, "без переліку просторів пункт теж є");
 });
 
+/* Клавіатурний roving по дропдауну просторів іде за `.dd--spaces .dd-item` (`app.js`, `rovingIndex`): пункт без цього
+   класу випав би зі стрілок. Тож «Підключення…» мусить бути саме `ddItem`, а не окремою кнопкою. */
+test("дропдаун просторів: «Підключення…» — `dd-item` у `.dd--spaces`, тож клавіатурний roving його бере", () => {
+  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  const conn = /<button[^>]*data-act="conn"[^>]*>/.exec(h)?.[0];
+  assert.ok(conn, "пункту нема");
+  assert.match(conn, /class="[^"]*\bdd-item\b[^"]*"/, "пункт без `dd-item` випадає з клавіатурного roving");
+  const dd = /<div class="dd dd--spaces">[\s\S]*$/.exec(h)?.[0];
+  assert.ok(dd && dd.includes('data-act="conn"'), "пункт не всередині `.dd--spaces`");
+  /* Той самий рід, що решта футера: «Новий простір…» й «Назва й колір…» теж `dd-item`, і roving (`.dd--spaces .dd-item`)
+     бачить усі три рядки футера підряд. */
+  const rows = [...dd.matchAll(/<button[^>]*class="([^"]*)"[^>]*data-act="(spacenew|spaceedit|conn)"/g)];
+  assert.deepEqual(rows.map((m) => m[2]), ["spacenew", "spaceedit", "conn"], "порядок футера");
+  for (const m of rows) assert.match(m[1], /\bdd-item\b/, m[2]);
+});
+
+/* На самій сторінці «Підключення» пункт нічого б не робив — той самий принцип, що в ⌘K (`space-conn` там теж
+   прихований). На «Задачах» і на смузі задачі він є: ведуть ВІД них. Лише рівно `homePage === "conn"`. */
+test("дропдаун просторів: «Підключення…» нема на самій сторінці «Підключення», є скрізь, де ведуть на неї", () => {
+  const on = (o) => /data-act="conn"/.test(html({ space: SP(), spaces: SPACES, openDd: "space", ...o }));
+  assert.equal(on({ homeOpen: true, homePage: "conn" }), false, "на сторінці — пункт, що нічого не робить");
+  assert.equal(on({ homeOpen: true, homePage: "tasks" }), true, "на «Задачах» пункт є");
+  assert.equal(on({ homeOpen: true }), true, "оверлей без homePage — як «Задачі»");
+  assert.equal(on({}), true, "на смузі задачі пункт є");
+  assert.equal(on({ homePage: null }), true, "поза оверлеєм (`barState` дає null) пункт є");
+  /* Решта футера на сторінці лишається: ховається лише те, що тут безглузде. */
+  const h = html({ space: SP(), spaces: SPACES, openDd: "space", homeOpen: true, homePage: "conn" });
+  assert.match(h, /data-act="spacenew"/);
+  assert.match(h, /data-act="spaceedit"/);
+  assert.match(h, /data-act="space"/);
+});
+
 test("дропдаун просторів: «Connections…» англійською", () => {
   setLang("en");
   try {

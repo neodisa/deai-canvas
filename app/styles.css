@@ -1513,10 +1513,14 @@ body.home-open .cv-notice{display:none!important}
 .th-empty{grid-column:1/-1;padding:60px 20px;text-align:center;color:var(--dim)}
 .th-empty b{display:block;color:var(--hi);font-size:15px;font-weight:500;margin-bottom:6px}
 .th-empty .th-lnk{margin-left:0}
-/* Голова екрана простору БЕЗ інтеграцій: заголовок і «Нова задача» в одному ряду.
-   `.th-h` усередині не має власного відступу — його несе ряд. */
-.th-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px}
-.th-head .th-h{margin:0}
+/* Голова екрана простору БЕЗ інтеграцій: заголовок і кнопки («Підключення», «Нова задача») в одному ряду.
+   `.th-h` усередині не має власного відступу — його несе ряд. Назва простору — дані людини: коли вона не лишає місця
+   кнопкам, ряд ПЕРЕНОСИТЬ (`flex-wrap`) обгортку `.th-head-acts` під заголовок цілком, `row-gap` 8px не дає їй
+   злипнутись із ним. Заголовок мусить уміти скластись: `min-width:0` (флекс-елемент інакше не менший за своє
+   найдовше слово) і `overflow-wrap:anywhere` (довге слово без пробілів ламається, а не виштовхує кнопки за край).
+   Голова ЛІГА — голий `<h1 class="th-h">` без `.th-head`, цих правил не торкається. */
+.th-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin:0 0 14px}
+.th-head .th-h{margin:0;min-width:0;overflow-wrap:anywhere}
 /* Порожній простір без інтеграцій: не «нічого не знайдено» (фільтрувати нема що), а
    шлях до першої задачі. Трохи вище за звичайний порожній стан — кнопка під текстом. */
 .th-empty--space{padding-top:48px}
