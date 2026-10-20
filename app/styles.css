@@ -1537,6 +1537,93 @@ body.home-open .cv-notice{display:none!important}
 .th-banner .ico{color:var(--bad);flex:none}
 .th-bmsg{flex:1;min-width:0}
 .th-stale{color:var(--dim);white-space:nowrap}
+/* ── екран «Підключення» (етап 3a): сторінка `conn` оверлею `#tasks-home` і бічна панель `#cn-drawer` ──
+   Класи з префіксом `cn-`: сітка висот (`css-guards`) стереже лише `ctl|seg|icob|dd-item|cm-|row`, а кнопки
+   екрана — це самі `.ctl`. Охоронець класів — `tests/connections-css.test.mjs`.
+   Контраст. Текст помилки в картках і банері — `--hi`, а червоним (`--bad`) лише значок: `--bad` як колір дрібного
+   тексту на `--s2`/`--s3` дає 4.09 / 3.46:1 (нижче AA). Єдиний `--bad`-текст — `.cn-field-err`, і він стоїть лише на
+   `--s1` панелі (4.67:1). Нейтральний значок — `--mid` на `--s3` (`--dim` там 4.30:1). */
+.th-head-acts{display:flex;align-items:center;gap:8px}
+.cn-in{max-width:1120px}
+.cn-lead{margin:0;max-width:760px;color:var(--dim);font-size:13px;line-height:1.5}
+.cn-loading{margin:24px 0;color:var(--dim)}
+.cn-err{display:flex;align-items:center;gap:10px;margin:18px 0;padding:10px 12px;border:1px solid var(--line2);
+  border-radius:var(--r);background:var(--s2);color:var(--hi)}
+.cn-err .ico{color:var(--bad);flex:none}
+.cn-err .ctl{margin-left:auto;flex:none}
+.cn-sec{margin:26px 0 0}
+.cn-sec-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.cn-sec-h{margin:0;font-size:15px;font-weight:600;color:var(--hi)}
+.cn-now{font-size:12.5px;color:var(--dim)}
+.cn-sec-lead{margin:4px 0 12px;font-size:12.5px;color:var(--dim)}
+/* `min(300px,100%)`: на вузькому вікні (<≈360px) картка стискається до ширини екрана, а не вилазить за неї. */
+.cn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:12px;margin-top:12px}
+.cn-sec-lead + .cn-grid{margin-top:0}
+.cn-card{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s2)}
+.cn-card-top{display:flex;align-items:flex-start;gap:12px}
+.cn-ic{display:flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;border-radius:var(--r);
+  background:var(--s3);color:var(--mid)}
+.cn-card-name{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.cn-card-name b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
+.cn-card-role{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
+.cn-tag{flex:none;padding:1px 7px;border:1px solid var(--line2);border-radius:999px;font-size:11px;color:var(--dim)}
+/* Базовий `.cn-badge` — нейтральний («Не перевірено», «Вимкнено»): окремих правил для цих двох станів нема. */
+.cn-badge{display:inline-flex;align-items:center;gap:5px;flex:none;padding:2px 8px;border-radius:999px;
+  background:var(--s3);color:var(--mid);font-size:12px;white-space:nowrap}
+.cn-badge--ok{color:var(--ok)}
+.cn-badge--error,.cn-badge--missing{color:var(--hi)}
+.cn-badge--error .ico,.cn-badge--missing .ico{color:var(--bad)}
+.cn-card-desc{margin:0;font-size:12.5px;line-height:1.45;color:var(--mid)}
+.cn-why{display:flex;align-items:flex-start;gap:8px;padding:7px 9px;border:1px solid var(--line2);border-radius:var(--r-sm);
+  background:var(--s1);color:var(--hi);font-size:12px;line-height:1.4}
+.cn-why .ico{flex:none;margin-top:1px;color:var(--bad)}
+.cn-why-detail{display:block;margin-top:2px;color:var(--dim);overflow-wrap:anywhere}
+.cn-card-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
+.cn-agent{display:flex;gap:10px;margin-top:30px;padding:14px 16px;border:1px dashed var(--line2);border-radius:var(--r-lg);
+  background:var(--s1);color:var(--mid);font-size:12.5px;line-height:1.5}
+.cn-agent .ico{flex:none;margin-top:2px}
+.cn-code{display:inline-block;margin:6px 6px 0 0;padding:2px 6px;border-radius:var(--r-sm);background:var(--s3);color:var(--hi);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
+/* Бічна панель: окремий вузол `#cn-drawer`, не частина `#tasks-home`. Під смугою (`--h-bar`), над оверлеєм
+   (`--z-widget` > `--z-panel`). Ховається двома шляхами: атрибутом `hidden` (власне правило `[hidden]`, бо авторський
+   `display:flex` інакше перебив би стиль браузера) і правилом `body:not(.home-open)` — оверлей закрито, панелі
+   не бачити, хай би що лишилось у `hidden`. */
+.cn-drawer{position:fixed;top:var(--h-bar);right:0;bottom:0;width:420px;max-width:100%;z-index:var(--z-widget);
+  display:flex;flex-direction:column;background:var(--s1);border-left:1px solid var(--line2);box-shadow:-18px 0 44px rgba(0,0,0,.35)}
+.cn-drawer[hidden]{display:none}
+body:not(.home-open) .cn-drawer{display:none}
+@media (max-width:720px){.cn-drawer{width:100%;border-left:0}}
+.cn-dr-form{display:flex;flex-direction:column;flex:1;min-height:0}
+.cn-dr-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.cn-dr-name{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.cn-dr-name b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
+.cn-dr-body{display:flex;flex-direction:column;gap:14px;flex:1;min-height:0;overflow:auto;padding:16px}
+.cn-dr-none{margin:0;color:var(--dim)}
+.cn-dr-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+.cn-grow{flex:1}
+.cn-field{display:flex;flex-direction:column;gap:6px}
+.cn-lbl{font-size:12px;color:var(--mid)}
+.cn-req{color:var(--open)}
+.cn-inp{box-sizing:border-box;width:100%;height:var(--h-ctl);padding:0 10px;border:1px solid var(--line2);border-radius:var(--r);
+  background:var(--s2);color:var(--hi);font:inherit}
+.cn-inp::placeholder{color:var(--dim)}
+.cn-inp:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.cn-inp[aria-invalid="true"]{border-color:var(--bad)}
+.cn-inp:disabled{opacity:.6}
+.cn-secret-row{display:flex;gap:6px}
+.cn-secret-row .ctl{flex:none}
+.cn-secret{display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:var(--dim)}
+.cn-secret .ico{flex:none}
+.cn-hint{margin:0;font-size:11.5px;line-height:1.4;color:var(--dim)}
+.cn-field-err{margin:0;font-size:12px;color:var(--bad)}
+.cn-check{display:flex;align-items:center;gap:8px;color:var(--hi);font-size:13px}
+/* Системний прапорець за замовчуванням синій — у моно-палітрі оболонки це чужий акцент. */
+.cn-check input{accent-color:var(--sel)}
+.cn-res{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:var(--r-sm);background:var(--s2);
+  color:var(--hi);font-size:12.5px;line-height:1.45}
+.cn-res .ico{flex:none;margin-top:2px}
+.cn-res--ok .ico{color:var(--ok)}
+.cn-res--err .ico{color:var(--bad)}
 /* Логотип і двері в палітру — окремі речі: рискою зліва `.pal-open` стає
    такою ж «оправою», як справа від неї (там вона відділяє від крихт). Селектор
    по сусідству, а не новий вузол у розмітці смуги: порядок «логотип → палітра»
