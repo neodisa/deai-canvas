@@ -6,13 +6,14 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.4.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.5.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, and team
-> comments on your own Supabase (or any service, through a small module) work in any space.
-> A few integrations (team dashboard, git sync) are still wired for the original setup and
-> only run in a migrated legacy space; they are being turned into optional per-space modules
-> with a first-run onboarding. See *Roadmap*.
+> comments on your own Supabase (or any service, through a small module) work in any space,
+> and you connect them on a **Connections** screen — no command line. A few integrations
+> (team dashboard, git sync) are still wired for the original setup and only run in a migrated
+> legacy space; they are being turned into optional per-space modules, and a first-run wizard
+> is next. See *Roadmap*.
 
 ## What it does
 
@@ -27,6 +28,7 @@ links for your team.
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters. |
+| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -49,7 +51,7 @@ npm install && npx playwright install chromium
 ```
 
 Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium). The Python
-suites (`tests/`, `bin/`, `app/`) were run for 0.4.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
+suites (`tests/`, `bin/`, `app/`) were run for 0.5.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
 
 ## Modules
 
@@ -57,8 +59,24 @@ A **module** is a folder `app/modules/<id>/` with `module.json` (manifest and th
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
 calls: `publish`, `tokens` and `comments` today; `vcs`, `tracker`, `dashboard`, `notify`
 are reserved. One provider per role per space. Only built-in modules exist so far; a
-space's own modules and a UI for connecting them come with stage 3, so for now you manage
-modules over the HTTP API (the agent can do it for you).
+space's own modules come with stage 3c.
+
+**Connecting a module — the Connections screen.** Open the space menu (the space chip in the
+top bar) → «Connections…», or press ⌘K and pick «Connections of the space …»; in a space
+without integrations the head of the Tasks page also has a «Connections» button. The page lists
+the modules of the space by role (Publishing, Team comments, Design-system tokens), says who
+provides each role now, shows the state of each module and, for one that fails, the reason in
+plain words. «Connect» and «Configure» open a side panel with the module's settings; secrets
+are written there but never shown again — the panel only says «set» or «not set», and
+«Erase» removes one. «Check» asks the module whether it works. If the role is already taken
+(a space without integrations publishes with `static-publish` by default), the screen asks
+«… is currently handled by “…”. Connect “…” instead?» and swaps the two in one step;
+«Turn off» keeps the settings and secrets, so the module can be connected again. No
+command line is needed.
+
+**Through the agent or a script.** Everything the screen does is the HTTP API (see *Module
+API* below), so an agent can connect modules for you, and the screen shows the routes of
+the current space at its bottom. The `curl` examples in this README are that path.
 
 Settings and on/off live in the space's `space.json`; **secrets** go to
 `~/.deai/secrets.json` (user-only permissions), never into the space folder, so the folder
@@ -89,15 +107,17 @@ no CLI, no Node on the machine.
 - *Token.* In Vercel: Account Settings → Tokens → create a token. If you publish into a team,
   scope the token to that team and set the `team` setting (a slug such as `<slug>`, or an id
   `team_…`); empty means your personal account.
-- *Enable it* over the API. A space without integrations publishes with `static-publish` by
-  default, and a space has one publisher, so turn that one off first (otherwise the enable
-  answers `409 role-taken`):
+- *Enable it* on the Connections screen (Publishing → Vercel → «Connect»: the token and,
+  for a team, its slug). A space has one publisher and a space without integrations publishes
+  with `static-publish` by default, so the screen asks «Publishing is currently handled by …
+  Connect “Vercel” instead?» and swaps them in one step. Over the API, pass `replace: true`:
+  the current publisher is turned off in the same write (without it the enable answers
+  `409 role-taken`; turning the old publisher off first with `POST /api/module-disable` works
+  too, but leaves the space without a publisher in between):
 
   ```bash
-  curl -s localhost:8765/api/module-disable -H 'Content-Type: application/json' \
-    -d '{"space":"<id>","id":"static-publish"}'
   curl -s localhost:8765/api/module-enable -H 'Content-Type: application/json' \
-    -d '{"space":"<id>","id":"vercel-publish","secrets":{"token":"<TOKEN>"},"settings":{"team":"<slug>"}}'
+    -d '{"space":"<id>","id":"vercel-publish","replace":true,"secrets":{"token":"<TOKEN>"},"settings":{"team":"<slug>"}}'
   ```
 
   The answer carries `check`: it asks Vercel whose token this is (and whether the team is
@@ -108,8 +128,8 @@ no CLI, no Node on the machine.
   `check()` — a read-only request to `api.vercel.com` — **even for a disabled module** when
   you call them explicitly; nothing automatic does (opening the canvas, `GET /api/modules`
   or publishing with another module never reach Vercel).
-- *Password (optional).* Set the secret `password` of the same module (`POST
-  /api/module-settings`, `"secrets":{"password":"<PASSWORD>"}`): the pages get the
+- *Password (optional).* Set the secret `password` of the same module (the «Configure» panel,
+  or `POST /api/module-settings` with `"secrets":{"password":"<PASSWORD>"}`): the pages get the
   client-side gate, and «Open» and «Copy link» append `#k=<password>`, so the link opens
   without asking. **Without a password the preview is public: anyone who has the link sees
   it** — the publish dropdown says so. With one, the gate is a courtesy, not security:
@@ -150,7 +170,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | Call | |
 |---|---|
 | `GET /api/modules?space=<id>` | catalog with status and settings; secrets only as `set: true\|false` |
-| `POST /api/module-enable` `{space?, id, settings?, secrets?, replace?}` | enable and configure; answers `{ok, module, check[, replaced]}` — `ok` means «processed», `check.ok` is the verdict; `replace: true` takes the module's roles from their current holders in the same write (their settings stay) and lists them in `replaced` |
+| `POST /api/module-enable` `{space?, id, settings?, secrets?, replace?}` | enable and configure; answers `{ok, module, check[, replaced]}` — `ok` means «processed», `check.ok` is the verdict; `replace: true` takes the module's roles from their current holders in the same write (their settings stay) and lists them in `replaced`; refused with `module-error` / `bad-manifest` if the module did not load, `400 bad-settings` if `replace` is not a boolean |
 | `POST /api/module-settings` `{space?, id, settings?, secrets?}` | change settings or secrets (omit a key to keep it, `null` deletes) |
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
@@ -205,7 +225,8 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 3. Take the project URL (`https://<ref>.supabase.co`) and the **public** key (`anon` or
    `publishable`) from Project Settings → API — never the `service_role` / `secret` key (the
    module refuses it: this key goes into every page).
-4. Enable the module over the API:
+4. Enable the module on the Connections screen (Team comments → Supabase → «Connect»: the
+   project URL and the public key), or over the API:
 
    ```bash
    curl -s localhost:8765/api/module-enable -H 'Content-Type: application/json' \
@@ -219,7 +240,7 @@ a small module: a browser adapter (`window.DeaiComments.create(cfg)`) and four s
 functions (`client_config`, `list`, `resolve`, `check`). The channel of a task
 (`deai/<space>/<task>`) is given by the core. The guide, with a complete example, is
 [`docs/modules/comments.md`](docs/modules/comments.md). A space's own modules load only after
-the trust dialog of stage 3, so for now the module has to be built in (`app/modules/`).
+the trust dialog of stage 3c, so for now the module has to be built in (`app/modules/`).
 
 **Limits.** The rules in `schema.sql` are open: whoever has the public key — and it is inside
 every page you publish — reads and writes the comments of that project, so use a dedicated
@@ -250,9 +271,12 @@ tests/        unit, Python and live (Playwright) tests
    - ✅ **2b-2** (0.4) — the universal `comments` role (browser adapter + server functions) and
      your own Supabase (team comments) as the first module; a guide for writing your own.
    - Later — git sync, team dashboard, issue tracker, notifications: modules you connect per project.
-3. **Onboarding** (next) — a first-run flow that sets up a project and connects modules from the UI;
-   a Connections screen; a space's own modules (comments modules for your own service
-   included), loaded only after you trust them.
+3. **Onboarding**
+   - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
+     modules from the UI; `replace` in `module-enable`.
+   - **3b** (0.6, next) — a first-run wizard: space → modules → settings → first task.
+   - **3c** (0.7) — a space's own modules from `<space>/modules/` (comments modules for your own
+     service included), loaded only after you trust them in a dialog.
 4. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 5. **Cross-platform start** — one command on macOS, Windows and Linux.
 

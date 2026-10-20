@@ -3,8 +3,9 @@
 Status: agreed direction, 2026-10-09. Clickable prototype reviewed by the owner.
 Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to a
 folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0) and
-stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0) — see *Status* at
-the end. Next: stage 3 (onboarding, the Connections screen, a space's own modules).
+stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0) and stage 3a (the
+Connections screen, 0.5.0) — see *Status* at the end. Next: 3b (the first-run wizard, 0.6.0) and
+3c (a space's own modules with a trust dialog, 0.7.0).
 
 ## Goal
 
@@ -45,7 +46,7 @@ canvas for their workflow without touching the core.
 
 - Built-in modules ship in `app/modules/`; a space's own modules live in
   `<space>/modules/` and are loaded the same way — but only after the person trusts them
-  (stage 3: a trust dialog in Connections; until then only built-in modules load). A
+  (stage 3c: a trust dialog in Connections; until then only built-in modules load). A
   module may implement an existing role
   (e.g. publish to Netlify) or add its own integration (e.g. notifications to a chat).
 - **Nothing is required.** Without modules the canvas works fully: local comments for
@@ -55,10 +56,17 @@ canvas for their workflow without touching the core.
 
 - **First run** (no spaces): a wizard — space name, colour and folder → pick modules by
   role → settings with «Check» → first task (new / adopt an existing folder of HTML /
-  let the agent create it).
+  let the agent create it). *Stage 3b, 0.6.0 — not built yet; it reuses the cards and the
+  side panel of the Connections screen.*
 - **Connections** screen per space: module cards with status (connected / error with the
   reason / off), configure in a side panel (secrets marked as stored outside the space),
-  check, disable.
+  check, disable. *Built in stage 3a (0.5.0)*: entered from the space menu, ⌘K, or the head
+  of «Tasks» in a space without integrations; cards grouped by role with a «Now: …» line;
+  secrets shown only as set / not set / unknown; replacing the provider of a role in one
+  step; turning a module off with its consequences. See *Status → Stage 3a*.
+- **A space's own modules** from `<space>/modules/`, loaded only after the person trusts
+  them in a dialog (shown on the Connections screen, with a «custom» mark on the card).
+  *Stage 3c, 0.7.0 — not built yet.*
 - **Agent**: the same operations over the HTTP API, so you can ask the agent
   «connect my GitHub repo and the tokens from this CSS file to space X».
 
@@ -73,7 +81,10 @@ canvas for their workflow without touching the core.
    - ✅ **2b-2** (0.4.0) — the `comments` role and your own Supabase (team comments);
    - the in-house integrations (git sync, team dashboard, tracker, team chat notifications)
      follow later as that company's modules.
-3. Onboarding wizard + Connections screen, a space's own modules with the trust dialog.
+3. Onboarding, split into three parts:
+   - ✅ **3a** (0.5.0) — the Connections screen;
+   - **3b** (0.6.0) — the first-run wizard (space → modules → settings → first task);
+   - **3c** (0.7.0) — a space's own modules from `<space>/modules/` with the trust dialog.
 4. Company-specific integrations move out of the core into that company's space modules.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
@@ -157,14 +168,40 @@ Guide for module authors: `docs/modules/comments.md`. What is built:
   (a tiny HTTP service) passes the same end-to-end checks, live included.
 - **Not verified against a real Supabase** (a faithful fake REST server in CI).
 
+### Stage 3a — the Connections screen (0.5.0, 20.10.2026)
+
+Spec: `docs/superpowers/specs/2026-10-20-connections-screen-design.md`; plan:
+`docs/superpowers/plans/2026-10-20-connections-screen.md`. What is built:
+
+- **The screen** is a page of the home overlay (next to «Tasks»), entered from the space menu
+  («Connections…»), from ⌘K, and from a button in the head of «Tasks» in a space without
+  integrations. It shows module cards grouped by role with a «Now: …» line (who provides the
+  role, from `capabilities`), the state of each module and the reason for an error in plain words;
+  a side panel for settings and secrets (a secret is only ever «set / not set / unknown» and is
+  never shown); check; replacing the provider of a role with a confirmation; turning a module
+  off with its consequences. UI texts in Ukrainian and English. The legacy space is unchanged.
+- **`replace` in `POST /api/module-enable`**: one write of `space.json` turns off the modules
+  that hold the roles of the one being enabled (the implicit `static-publish` included) and
+  turns the new one on — the space is never without a provider between the two steps. The
+  answer lists them in `replaced`. A module that did not load cannot be a target of `replace`
+  (`module-error` / `bad-manifest`). The screen asks for consent again against a fresh list
+  before it sends `replace`.
+- After a change the bar and `capabilities` are refreshed lightly, without resetting the
+  picked iteration, filters or notices of the task under the overlay.
+- **Not verified against a real Vercel or Supabase**: the live tests use a local fixture
+  module (`tests/fixtures/modules-conn/`), because the `check` of those two goes to the network.
+
 ### What stays for later
 
 - The roles `vcs`, `tracker`, `dashboard`, `notify` are reserved names that the core does not
   call yet.
-- **Stage 3**: the Connections screen and onboarding wizard; a space's own modules from
-  `<space>/modules/` with the trust dialog (hash of the whole folder, no symlinks, trust
-  keyed on the real path). Until the Connections screen exists, secrets such as the preview
-  password are set over the API.
+- **Stage 3b**: the first-run wizard (0.6.0).
+- **Stage 3c**: a space's own modules from `<space>/modules/` with the trust dialog (hash of
+  the whole folder, no symlinks, trust keyed on the real path), and a «custom» mark on the
+  card (0.7.0).
+- Left out of 3a: picking a folder with a system dialog; a banner «N connections with an
+  error» on «Tasks»; icons and descriptions from manifests (today only the built-in modules
+  have them).
 - **Not handled in 0.2** (a later security stage or on demand): a `Host`-header check on the
   canvas server (DNS rebinding); keychain storage for secrets (they sit in a `0600` file);
   `HEAD` and `/t/<id>/published/…` on the local copy; design tokens from an npm package;

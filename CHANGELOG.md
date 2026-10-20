@@ -3,6 +3,152 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.5.0] — 20.10.2026
+
+Stage 3a «Connections»: the modules API finally has a screen. Connecting a publisher, team
+comments or design-system tokens no longer takes `curl` or an agent: the space menu opens a page
+with module cards grouped by role, a side panel for settings and secrets, a check, a one-step
+replacement of the provider of a role, and turning a module off. The server gains one thing, an
+atomic `replace` in `module-enable`. Design:
+`docs/superpowers/specs/2026-10-20-connections-screen-design.md`; plan:
+`docs/superpowers/plans/2026-10-20-connections-screen.md`. The legacy (in-house) space is
+unchanged: `tests/legacy-golden.test.mjs` is green without a re-shoot.
+
+### Added
+
+- **`replace` and `replaced` in `POST /api/module-enable`** (`app/deai_modules.py`,
+  `app/serve.py`). `replace: true` turns off every other module that holds one of the roles of
+  the module being enabled (an explicitly enabled one or the implicit `static-publish`) in the
+  SAME write of `space.json`, under the same lock, and the answer lists them in `replaced`
+  (`[]` when nothing was in the way). Their settings and secrets stay. A space is never without
+  a provider between the two steps. Without `replace` the old `409 role-taken` stays; a
+  `replace` that is not a boolean (an explicit `null` too) is `400 bad-settings` before anything
+  is written; `module-settings` and `module-disable` ignore the key. `replace` is refused for a
+  module that did not load (a damaged `module.json` or a `server.py` that fails): the answer is the
+  module's own code, `module-error` or `bad-manifest`, before any secret is written — otherwise the
+  working provider would be turned off and nobody would take the role. Enabling such a module
+  without `replace` works as before: a free role is taken and its `check` says why it does not
+  work.
+- **The «Connections» screen.** A page of the existing home overlay, next to «Tasks» (the same
+  entry, exit and clean view; the bar shows a flat crumb «Connections»). It shows the space that
+  was current on entry; every request carries an explicit `space`, so a write goes where the
+  person is looking even if an agent switches the active space meanwhile. Switching the space
+  with the chip while the page is open keeps you on Connections of the new space. Returning to
+  the window re-reads the modules (an agent may have changed them over the API); an open panel
+  keeps its form.
+  - **Entry points:** the space menu, «Connections…»; ⌘K, «Connections of the space “…”» (also
+    found by «connections», «integrations» and «modules»); and a «Connections» button in the
+    head of the «Tasks» page of a space without integrations (the head of a space with
+    integrations is unchanged). On the page itself the menu and ⌘K entries are not offered.
+  - **Cards by role** — Publishing, Team comments, Design-system tokens, then other roles
+    alphabetically; a module with several roles stands in the section of its first one. Each
+    section carries a line **«Now: …»** with the current provider of the role from
+    `capabilities`: a module, the built-in in-house integration (a module in that role
+    overrides it), or none, with what that means for the role (no publish button in the bar;
+    comments only local; the inspector compares without the space's tokens). Modules that are
+    on in `space.json` but not installed on this computer sit in their own section. A card has
+    the role icon, the name, the roles, a badge (Connected, Not checked, Error, Off, Not
+    installed; the implicit `static-publish` is also marked «default»), a description for the
+    built-in modules, the reason in plain words for a module that is on and fails (the code of
+    the check, plus its `detail`), and the actions: Configure, Check and Turn off, or Connect.
+    The card's «Check» runs `POST /api/module-check` and re-reads the list.
+  - **The side panel** (420 px, full width under 720 px; `role="dialog"`): the fields come from
+    the `settings[]` of the entry — text, path (with the hint on `{home}`, `{space}` and
+    `{space_id}`), a flag, a list, a secret. Required fields are checked before any request;
+    only changed keys are sent. Two modes: «Connect» (`module-enable`) and «Configure» (then
+    «Save», `module-settings`). The footer «Check» checks what is SAVED, so it is disabled while
+    there are unsaved changes. A passed check closes the panel with a toast; a failed one leaves
+    it open with «Saved, but the check failed.» and the cause (the state is already written,
+    as the API has always done); an HTTP refusal is shown in the form, nothing is saved. Esc and
+    the cross close the panel and, with unsaved changes, ask «Discard…». Leaving the page,
+    opening another panel or «Turn off» of the module whose panel is open go through the same
+    question; focus returns to the control it was on after every repaint.
+  - **Secrets are set, not set, or unknown** (the secret store cannot be read) and are never
+    shown: the server never returns a value, the field is always empty (empty means keep), and
+    «Erase» marks an optional secret that is set for erasing (`null` on save). Password fields
+    are cleared after every answer; a typed value lives only as a property of the field, never
+    in the markup (it also survives a language switch).
+  - **Replacing the provider of a role.** If the module's role is held (a module or the implicit
+    `static-publish`), the screen asks «… is currently handled by “…”. Connect “…” instead? “…”
+    will be turned off; its settings stay.» and sends `module-enable` with `replace: true`. The
+    consent is fresh: after «Replace» the list is re-read and compared with whom the question
+    was about; if the holders changed while it was open the screen asks again with the new names
+    (a second change is a refusal, «Another module already holds this role — reload the page and
+    try again», and nothing is written); if the role
+    became free the write goes without `replace`. The toast names the modules that were turned
+    off.
+  - **Turning a module off** asks first, and when the module is the current provider of its
+    role it spells out the consequence (no module left in the role, or the built-in in-house
+    integration takes the role back). Settings and secrets stay; it can be connected again.
+  - **Human texts** for the codes of the check (`bad-settings`, `module-error`,
+    `check-timeout`, `secrets-unreadable`, `bad-manifest`, `bad-folder`, `not-writable`,
+    `no-token`, `vercel-auth`, `vercel-error`, `vercel-busy`, `bad-key`, `no-schema`,
+    `supabase-error`, `network`; an unknown code shows «The check failed.» with its text as the
+    detail) and for HTTP refusals (`role-taken`, `bad-settings`, `unknown-module`,
+    `unknown-space`, `space-json-unreadable`, `spaces-off`, `unwritable`), in Ukrainian and
+    English. Names, descriptions and field labels of the four built-in modules are in the
+    dictionary; for any other module the page shows the manifest's own labels.
+  - **Page errors:** a failed `GET /api/modules` is a banner with «Try again»; an unreadable
+    `space.json` says where to fix it and draws no cards.
+  - **«Through the agent»** — a dashed block at the bottom with the real API routes of this
+    space.
+- **Files:** `app/connections-model.js` (pure logic: grouping, the «Now» line, card, reason,
+  form, patch, role holders, texts of codes) and `app/connections-view.js` (markup), wired into
+  `app/app.js`; `.cn-*` rules in `app/styles.css`; keys `cn*` and `spaceConn` in `app/i18n.js`.
+  Everything that comes from the server or a manifest goes through `esc()`; `detail` is cut to
+  300 characters.
+
+### Changed
+
+- The text of the publish error `vercel-auth` now says where the screen is («space menu →
+  Connections»); before it referred to a screen that did not exist yet.
+- After every successful `module-enable`, `module-settings` and `module-disable` the canvas
+  refreshes lightly (`afterModulesChange`): the spaces are re-read and the bar is re-rendered
+  with the fresh `capabilities` (the publish buttons), without reloading the hidden frame. The
+  frame is refreshed by `render()` when the person leaves the overlay, so the comment adapter and
+  the inspector's tokens are the new ones. The picked iteration, the filters of «Tasks», the
+  publish notices and the tuner's package are not reset. (A first version reloaded the old
+  document over a task opened right after leaving the screen — a 404 in the frame — and a full
+  re-render reset the picked iteration; both are covered by live tests.)
+- `preflight` with `replace` does not check the role: the write frees it under the lock.
+
+### Known limits
+
+- **No real Vercel or Supabase in the live tests.** Their `check` goes to the network from the
+  server process, so the live scenarios use the fixture module `memo-publish` (role `publish`, a
+  local check) behind the `DEAI_EXTRA_MODULES` seam. The two modules themselves are still tested
+  against fakes, as in 0.3.0 and 0.4.0.
+- Not in this release: the first-run wizard (3b, 0.6.0); a space's own modules from
+  `<space>/modules/` with a trust dialog, and a «custom» mark on the card (3c, 0.7.0); picking a
+  folder with a system dialog; a banner «N connections with an error» on «Tasks»; icons and
+  descriptions from manifests (only the built-in modules have them).
+
+### Tests
+
+`npm test` at 0.5.0 is green: 1450 node tests (plus `inspector-core`), 2349 Python tests in
+`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.4.0: 1336, 2332 with 1 skipped, 168, 170).
+The three Python suites were also run on Python 3.9.6, the oldest supported version, with the
+same result (2349 with 1 skipped, 168, 170); `npm test` itself uses Python 3.13. One timing test
+(`test_two_mebibytes_of_css_parse_in_time`, a 4-second budget) fails when two full suites share the
+machine; run alone or in a quiet suite it passes.
+
+New: `tests/connections-model.test.mjs` and `tests/connections-view.test.mjs` (hostile names,
+labels and details are escaped, only known icons, no secret value in the markup);
+`tests/connections-css.test.mjs` (every class of the markup has a rule, long strings wrap, the
+panel is hidden outside the overlay and in the clean view, only tokens);
+`tests/connections-wiring.test.mjs`; the entry points in `tests/shell-bar.test.mjs`,
+`tests/shell-palette.test.mjs` and `tests/tasks-home.test.mjs`. On the server, the class `Replace`
+(17 tests) in `tests/test_modules_api.py`: one write of `space.json` for both changes, the
+implicit and an explicit holder, no conflict, a non-boolean `replace`, a module that did not load,
+the settings of the replaced module stay, `role-taken` without `replace`, parallel replaces.
+
+The live test `tests/live/connections.test.mjs` (a real server in an isolated machine, a real
+Chromium, 19 scenarios, one file at a time) covers the entry from the menu, the sections and the
+«default» mark, connecting `css-tokens`, replacing the publisher with the fixture module,
+declining a replacement, a failed check, erasing a secret, a secret that shows up nowhere (a DOM
+snapshot, a watcher on every DOM mutation, request addresses and response bodies), switching the
+space with a panel open, the frame after leaving the screen, the fresh consent, and focus and Esc.
+
 ## [0.4.0] — 20.10.2026
 
 Stage 2b-2 «Team comments as a module»: the role `comments` becomes a contract that does not
