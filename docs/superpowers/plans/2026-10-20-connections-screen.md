@@ -1900,6 +1900,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 > - кнопка «Стерти» має СТАЛИЙ підпис (стан — лише `aria-pressed` і видима примітка `data-cn-erase-note`): `toggleCnErase` НЕ міняє `textContent`, лише `aria-pressed` і `hidden` примітки, далі `syncCnDrawer()`.
 > - (після фікса Task 3, `46b1613`) примітка «буде стерто…» має `id` (`cn-f-<i>-erase`) і входить в `aria-describedby` поля пароля ЛИШЕ коли секрет позначено до стирання: `toggleCnErase` мусить ще й додати/прибрати цей id в `aria-describedby` відповідного `[data-cn-field="<key>"]` (інші id у атрибуті — `-state`, `-err` — лишаються). Пін на це — у `tests/connections-wiring.test.mjs`.
 > - `drawerHTML` читає `d.busy` як `'save' | 'check' | false`; кнопка закриття не вимикається — закриття під час запиту гасить сам `requestCloseCnDrawer` (`if (!cnDrawer || cnDrawer.busy) return;`).
+> - (після Task 6, `ed0e957`) панель, відкрита для простору A, не лишається відкритою після перемикання на простір B: у `loadConn`, у гілці `if (sp.id !== connState.spaceId)`, — `closeCnDrawer({ focus: false })` (без питання: людина свідомо перейшла в інший простір). Пін і перевірка в браузері.
+> - Імпорти з `connections-model.js`/`connections-view.js` уже є (Task 6) — не дублювати.
 
 - [ ] **Step 1: Падаючі пінни** — дописати в `tests/connections-wiring.test.mjs`:
 
