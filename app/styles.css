@@ -136,7 +136,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
    специфічності; чистий режим мусить перекрити їх усі разом. */
 html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean .cv-notice,
 html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
-html.cv-clean [data-comment-layer]{display:none!important}
+html.cv-clean [data-comment-layer],html.cv-clean .cn-drawer{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
 .cv-unclean{position:fixed;top:10px;right:10px;z-index:400;padding:6px 12px;border-radius:8px;
   font:inherit;font-size:12px;cursor:pointer;color:var(--hi);background:var(--s1);border:1px solid var(--line2);
@@ -1545,25 +1545,31 @@ body.home-open .cv-notice{display:none!important}
    `--s1` панелі (4.67:1). Нейтральний значок — `--mid` на `--s3` (`--dim` там 4.30:1). */
 .th-head-acts{display:flex;align-items:center;gap:8px}
 .cn-in{max-width:1120px}
-.cn-lead{margin:0;max-width:760px;color:var(--dim);font-size:13px;line-height:1.5}
+/* Заголовок сторінки — назва простору (задає людина): довге слово без пробілів не розпирає сторінку вшир. */
+.cn-in .th-h{overflow-wrap:anywhere}
+.cn-lead{margin:0;max-width:760px;color:var(--dim);font-size:13px;line-height:1.5;overflow-wrap:anywhere}
 .cn-loading{margin:24px 0;color:var(--dim)}
 .cn-err{display:flex;align-items:center;gap:10px;margin:18px 0;padding:10px 12px;border:1px solid var(--line2);
   border-radius:var(--r);background:var(--s2);color:var(--hi)}
 .cn-err .ico{color:var(--bad);flex:none}
+.cn-err > span{flex:1;min-width:0;overflow-wrap:anywhere}
 .cn-err .ctl{margin-left:auto;flex:none}
 .cn-sec{margin:26px 0 0}
 .cn-sec-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-.cn-sec-h{margin:0;font-size:15px;font-weight:600;color:var(--hi)}
-.cn-now{font-size:12.5px;color:var(--dim)}
+.cn-sec-h{margin:0;font-size:15px;font-weight:600;color:var(--hi);overflow-wrap:anywhere}
+.cn-now{font-size:12.5px;color:var(--dim);overflow-wrap:anywhere}
 .cn-sec-lead{margin:4px 0 12px;font-size:12.5px;color:var(--dim)}
 /* `min(300px,100%)`: на вузькому вікні (<≈360px) картка стискається до ширини екрана, а не вилазить за неї. */
 .cn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:12px;margin-top:12px}
 .cn-sec-lead + .cn-grid{margin-top:0}
 .cn-card{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s2)}
-.cn-card-top{display:flex;align-items:flex-start;gap:12px}
+/* Шапка переноситься: неявна картка («Публікація в теку» + «типово» + значок) інакше стискала назву до ≈50px, і
+   вона ламалась по літері на три рядки. Назва просить щонайменше `9em` і лишається в ряду з іконкою; «типово» й значок
+   переходять на другий рядок лише тоді, коли не вміщаються. */
+.cn-card-top{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px}
 .cn-ic{display:flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;border-radius:var(--r);
   background:var(--s3);color:var(--mid)}
-.cn-card-name{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.cn-card-name{display:flex;flex-direction:column;gap:2px;flex:1 1 9em;min-width:0}
 .cn-card-name b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
 .cn-card-role{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
 .cn-tag{flex:none;padding:1px 7px;border:1px solid var(--line2);border-radius:999px;font-size:11px;color:var(--dim)}
@@ -1592,7 +1598,8 @@ body.home-open .cv-notice{display:none!important}
   display:flex;flex-direction:column;background:var(--s1);border-left:1px solid var(--line2);box-shadow:-18px 0 44px rgba(0,0,0,.35)}
 .cn-drawer[hidden]{display:none}
 body:not(.home-open) .cn-drawer{display:none}
-@media (max-width:720px){.cn-drawer{width:100%;border-left:0}}
+/* «Менше за 720px» — рівно 720 ще широкий екран, тож 719. */
+@media (max-width:719px){.cn-drawer{width:100%;border-left:0}}
 .cn-dr-form{display:flex;flex-direction:column;flex:1;min-height:0}
 .cn-dr-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
 .cn-dr-name{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
@@ -1602,7 +1609,7 @@ body:not(.home-open) .cn-drawer{display:none}
 .cn-dr-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
 .cn-grow{flex:1}
 .cn-field{display:flex;flex-direction:column;gap:6px}
-.cn-lbl{font-size:12px;color:var(--mid)}
+.cn-lbl{font-size:12px;color:var(--mid);overflow-wrap:anywhere}
 .cn-req{color:var(--open)}
 .cn-inp{box-sizing:border-box;width:100%;height:var(--h-ctl);padding:0 10px;border:1px solid var(--line2);border-radius:var(--r);
   background:var(--s2);color:var(--hi);font:inherit}
@@ -1616,7 +1623,7 @@ body:not(.home-open) .cn-drawer{display:none}
 .cn-secret .ico{flex:none}
 .cn-hint{margin:0;font-size:11.5px;line-height:1.4;color:var(--dim)}
 .cn-field-err{margin:0;font-size:12px;color:var(--bad)}
-.cn-check{display:flex;align-items:center;gap:8px;color:var(--hi);font-size:13px}
+.cn-check{display:flex;align-items:center;gap:8px;color:var(--hi);font-size:13px;overflow-wrap:anywhere}
 /* Системний прапорець за замовчуванням синій — у моно-палітрі оболонки це чужий акцент. */
 .cn-check input{accent-color:var(--sel)}
 .cn-res{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:var(--r-sm);background:var(--s2);
