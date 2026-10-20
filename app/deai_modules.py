@@ -723,23 +723,32 @@ def _require_writable(space):
         raise ModuleError('spaces-off', message='spaces layer is off or the space has no folder')
 
 
+def _holders(m, cat, space, explicit):
+    """Id ІНШИХ модулів `cat`, що зараз тримають хоч одну роль `m` у `explicit` (неявно ввімкнений `static-publish`
+    теж), за абеткою. Не завантажені модулі ролей не тримають."""
+    mine = set(m.roles)
+    out = []
+    for oid in sorted(cat):
+        other = cat[oid]
+        if oid == m.id or other.status != 'ok' or not (mine & set(other.roles)):
+            continue
+        if _enabled_in(other, space, explicit)[0]:
+            out.append(oid)
+    return out
+
+
 def _role_conflict(m, cat, space, explicit):
     """Текст `role-taken` для модуля `m`, якщо хтось інший із `cat` уже тримає його роль у `explicit` (неявно
     ввімкнений `static-publish` теж); інакше `None`. Не завантажені модулі ролей не тримають."""
-    mine = set(m.roles)
-    for oid in sorted(cat):
-        other = cat[oid]
-        shared = mine & set(other.roles)
-        if oid == m.id or other.status != 'ok' or not shared:
-            continue
-        if _enabled_in(other, space, explicit)[0]:
-            return f'{sorted(shared)[0]} is already provided by {oid}'
+    for oid in _holders(m, cat, space, explicit):
+        return f'{sorted(set(m.roles) & set(cat[oid].roles))[0]} is already provided by {oid}'
     return None
 
 
-def preflight(space, module_id, enabling=False):
+def preflight(space, module_id, enabling=False, replace=False):
     """Читання БЕЗ запису і без локу: чи можна взагалі писати стан модуля. `unknown-module` (нема в каталозі),
-    `space-json-unreadable` (`space_modules`) і — лише для вмикання — `role-taken`. Для API, що пише секрет
+    `space-json-unreadable` (`space_modules`) і — лише для вмикання — `role-taken`; з `replace` роль не
+    перевіряється — її звільнить `write_module_state` під локом. Для API, що пише секрет
     РАНІШЕ за `space.json` (спека): усе, що видно ДО запису, мусить відмовити ДО нього, інакше клієнт із 409 у руках
     мав би вже новий живий пароль. Це best-effort: авторитетні перевірки лишаються в `write_module_state` під
     локом, а те, що вони побачать іншим (гонка з паралельною правкою між пре-перевіркою й локом) чи не зможуть
@@ -750,7 +759,7 @@ def preflight(space, module_id, enabling=False):
     if m is None:
         raise ModuleError('unknown-module', message=str(module_id)[:60])
     explicit = space_modules(space)
-    if enabling:
+    if enabling and not replace:
         why = _role_conflict(m, cat, space, explicit)
         if why:
             raise ModuleError('role-taken', message=why)
@@ -785,13 +794,17 @@ def _disable_missing(space, module_id):
         return state
 
 
-def write_module_state(space, module_id, enabled=None, settings=None):
+def write_module_state(space, module_id, enabled=None, settings=None, replace=False):
     """Змінити вмикання й/чи налаштування модуля в `space.json` простору. Читання-зміна-запис
     ПІД `WRITE_LOCK`; каталог — ДО локу; `role-taken` — на свіжо прочитаному стані під локом (неявно
     ввімкнений `static-publish` теж займає роль `publish`); невідомі ключі файла й запису модуля
     зберігаються; `settings` — патч (`None` значення знімає ключ); секрет у ньому — `bad-settings`.
     Новий запис модуля бере `enabled` із поточного ефективного стану, тож запис налаштувань не
     перемикає неявно ввімкнений `static-publish`. Повертає новий стан модуля.
+
+    `replace=True` (лише разом з `enabled=True`): замість `role-taken` — під тим самим локом і в ТОМУ САМОМУ записі
+    файла кожен інший модуль, що тримає роль цього (`_holders`, неявний `static-publish` теж), отримує `enabled: false`
+    (його налаштування лишаються). Тоді в поверненому стані є ключ `replaced` — перелік таких id (може бути порожнім).
 
     Єдиний виняток для модуля, якого НЕМАЄ в каталозі (`missing`): `enabled=False` без налаштувань вимикає його
     запис у файлі, якщо той там є (`_disable_missing`); решта — `unknown-module`."""
@@ -813,10 +826,14 @@ def write_module_state(space, module_id, enabled=None, settings=None):
         cur, _ = _enabled_in(m, space, explicit)
         if enabled is None and not patch:
             return _entry_state(m, space, explicit)
+        replaced = []
         if enabled is True:
-            why = _role_conflict(m, cat, space, explicit)
-            if why:
-                raise ModuleError('role-taken', message=why)
+            if replace:
+                replaced = _holders(m, cat, space, explicit)
+            else:
+                why = _role_conflict(m, cat, space, explicit)
+                if why:
+                    raise ModuleError('role-taken', message=why)
         old = mods.get(module_id)
         entry = dict(old) if isinstance(old, dict) else {}
         entry['enabled'] = enabled if enabled is not None else cur
@@ -829,6 +846,11 @@ def write_module_state(space, module_id, enabled=None, settings=None):
                 else:
                     st[k] = v
             entry['settings'] = st
+        for oid in replaced:                      # колишні постачальники ролі — вимкнені тим самим записом
+            prev = mods.get(oid)
+            off = dict(prev) if isinstance(prev, dict) else {}
+            off['enabled'] = False                # налаштування й решта запису лишаються
+            mods[oid] = off
         mods[module_id] = entry
         data['modules'] = mods
         try:
@@ -836,7 +858,10 @@ def write_module_state(space, module_id, enabled=None, settings=None):
             spaces._write_public(path, data)
         except (OSError, ValueError) as e:        # ValueError: UnicodeEncodeError, NUL у шляху
             raise ModuleError('unwritable', message=f'space.json: {type(e).__name__}') from None
-        return _entry_state(m, space, _normalize(mods))
+        state = _entry_state(m, space, _normalize(mods))
+        if replace and enabled is True:
+            state['replaced'] = replaced
+        return state
 
 
 # ------------------------------------------------------------------------------- тека публікації

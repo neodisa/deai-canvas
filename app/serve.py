@@ -4647,7 +4647,11 @@ def module_check_verdict(space, mid):
         return {'ok': False, 'error': e.code, 'detail': e.message}
 
 
-def module_write(space, mid, action, settings, secrets):
+#: «Ключа `replace` у тілі не було» — відмінне від явного JSON `null` (той — помилка клієнта: `bad-settings`).
+_NO_REPLACE = object()
+
+
+def module_write(space, mid, action, settings, secrets, replace=_NO_REPLACE):
     """Запис `module-enable|settings|disable` у ПОРЯДКУ СПЕКИ: валідація налаштувань (нічого не пише) →
     пре-перевірка → СЕКРЕТИ → `space.json` → (`enable`/`settings`) `check`. Секрет ПЕРШИМ: сирітський секрет
     нешкідливий, а увімкнений модуль без секрету — ні (невдалий запис секрету зупиняє вмикання до `space.json`).
@@ -4656,16 +4660,25 @@ def module_write(space, mid, action, settings, secrets):
     лишили б змінений живий пароль. Те, що пре-перевірка бачить інакше за лок (гонка з паралельною правкою) або не
     може записати (`unwritable`), відмовить уже ПІСЛЯ секрету — спека це приймає: сирітський секрет нешкідливий.
     `disable` налаштувань і секретів НЕ чіпає й не читає (серед аргументів воно ігнорується); для відсутнього в
-    каталозі (`missing`) модуля це єдина дозволена дія. Повертає вердикт `check` або `None` (`disable`)."""
+    каталозі (`missing`) модуля це єдина дозволена дія.
+    `replace` — лише для `enable`: `_NO_REPLACE` (ключа в тілі не було) чи `bool`; будь-що інше, зокрема явний `null`, —
+    `bad-settings` ДО будь-якого запису (до секрету теж). `replace: true` звільняє роль у її поточних постачальників тим
+    самим записом `space.json` (`write_module_state`); для `settings` і `disable` ключ ігнорується.
+    Повертає `(вердикт | None, replaced | None)`: вердикт `check` або `None` (`disable`); `replaced` — список id,
+    звільнених заміною, лише коли `replace is True` (інакше `None`)."""
     if action == 'disable':
         deai_modules.write_module_state(space, mid, enabled=False)
-        return None
+        return None, None
     deai_modules.validate_settings(mid, settings)
-    deai_modules.preflight(space, mid, enabling=(action == 'enable'))
+    if action == 'enable' and replace is not _NO_REPLACE and not isinstance(replace, bool):
+        raise deai_modules.ModuleError('bad-settings', message='replace: expected a boolean')
+    swap = action == 'enable' and replace is True
+    deai_modules.preflight(space, mid, enabling=(action == 'enable'), replace=swap)
     if secrets is not None:
         deai_modules.write_secrets(space['id'], mid, secrets)
-    deai_modules.write_module_state(space, mid, enabled=True if action == 'enable' else None, settings=settings)
-    return module_check_verdict(space, mid)
+    state = deai_modules.write_module_state(space, mid, enabled=True if action == 'enable' else None,
+                                            settings=settings, replace=swap)
+    return module_check_verdict(space, mid), (state.get('replaced') if swap else None)
 
 
 def _token_map(raw):
@@ -6916,9 +6929,11 @@ class Handler(SimpleHTTPRequestHandler):
         self._module_post(payload, 'check')
 
     def _module_post(self, payload, action):
-        """`POST /api/module-enable|disable|settings|check` `{space?, id, settings?, secrets?}`:
-        `{ok: true, module: <запис>[, check: <вердикт>]}` (порядок запису й коди — `module_write`,
-        `module_check_verdict`). `module` — `null`, коли запису вже нема в списку: так буває лише після `module-disable`
+        """`POST /api/module-enable|disable|settings|check` `{space?, id, settings?, secrets?, replace?}`:
+        `{ok: true, module: <запис>[, check: <вердикт>][, replaced: [id…]]}` (порядок запису й коди — `module_write`,
+        `module_check_verdict`). `replaced` — лише для `module-enable` з `replace: true`: id модулів, що тримали роль
+        і вимкнені тим самим записом (порожній список, коли конфліктів не було). `replace` не `bool` (і явний `null`
+        теж) — 400 `bad-settings`. `module` — `null`, коли запису вже нема в списку: так буває лише після `module-disable`
         відсутнього в каталозі (`missing`) модуля — вимкнений відсутній не показується. `ModuleError` (`unknown-module` 404, `bad-settings` 400, `role-taken` 409,
         `space-json-unreadable`/`spaces-off` 409, `unwritable` 500…) відповідає `_guarded` — одна форма
         `{ok: false, code, error}` на всі маршрути; текст уже без секретів, а значення секретів сюди не
@@ -6927,13 +6942,17 @@ class Handler(SimpleHTTPRequestHandler):
         if sp is None:
             return
         mid = payload.get('id')
+        replaced = None
         if action == 'check':
             verdict = module_check_verdict(sp, mid)
         else:
-            verdict = module_write(sp, mid, action, payload.get('settings'), payload.get('secrets'))
+            verdict, replaced = module_write(sp, mid, action, payload.get('settings'), payload.get('secrets'),
+                                             payload.get('replace', _NO_REPLACE))
         out = {'ok': True, 'module': module_entry(sp, mid)}
         if action != 'disable':
             out['check'] = verdict
+        if replaced is not None:
+            out['replaced'] = replaced
         self._send_json(out)
 
     def _publish(self, payload):

@@ -731,6 +731,107 @@ class Enable(World):
         self.assertFalse(os.path.exists(self.secrets_path))
 
 
+class Replace(World):
+    """`replace: true` у `module-enable`: ролі цього модуля звільняються в ТОМУ САМОМУ записі `space.json`."""
+
+    def test_replace_takes_the_role_from_the_implicit_static_publish_in_one_write(self):
+        self.modules(extra=('alt-publish',))
+        writes = []
+        real = spaces._write_public
+
+        def spy(path, data):
+            writes.append((path, json.loads(json.dumps(data))))
+            return real(path, data)
+
+        with mock.patch.object(spaces, '_write_public', spy):
+            st, body = self.post('/api/module-enable', {'id': 'alt-publish', 'replace': True})
+        self.assertEqual((st, body['ok'], body['check']), (200, True, {'ok': True}), body)
+        self.assertEqual(body['replaced'], ['static-publish'])
+        mods = self.sj()['modules']
+        self.assertEqual(mods['static-publish'], {'enabled': False})
+        self.assertEqual(mods['alt-publish'], {'enabled': True})
+        sj_writes = [w for w in writes if w[0].endswith('space.json')]
+        self.assertEqual(len(sj_writes), 1, 'обидві зміни — одним записом файла')
+        self.assertEqual(sj_writes[0][1]['modules']['static-publish']['enabled'], False)
+        self.assertEqual(sj_writes[0][1]['modules']['alt-publish']['enabled'], True)
+        listing = self.listing()
+        self.assertEqual((listing['static-publish']['enabled'], listing['alt-publish']['enabled']), (False, True))
+
+    def test_replace_keeps_the_settings_of_the_replaced_module(self):
+        self.modules(extra=('alt-publish',))
+        st, body = self.post('/api/module-settings', {'id': 'static-publish', 'settings': {'folder': '{home}/pv'}})
+        self.assertEqual(st, 200, body)
+        st, body = self.post('/api/module-enable', {'id': 'alt-publish', 'replace': True})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.sj()['modules']['static-publish'], {'enabled': False, 'settings': {'folder': '{home}/pv'}})
+
+    def test_replace_takes_the_role_from_an_explicit_holder_too(self):
+        self.modules(extra=('alt-publish',))
+        st, _ = self.post('/api/module-enable', {'space': 'on', 'id': 'alt-publish'})
+        self.assertEqual(st, 200)
+        st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'static-publish', 'replace': True})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['replaced'], ['alt-publish'])
+        mods = self.sj(self.on)['modules']
+        self.assertEqual((mods['alt-publish']['enabled'], mods['static-publish']['enabled']), (False, True))
+
+    def test_replace_without_a_conflict_answers_an_empty_list(self):
+        self.css()
+        st, body = self.post('/api/module-enable', {'id': 'css-tokens', 'settings': {'file': '{space}/ds.css'},
+                                                    'replace': True})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['replaced'], [])
+
+    def test_no_replace_key_in_the_answer_without_replace(self):
+        self.css()
+        st, body = self.post('/api/module-enable', {'id': 'css-tokens', 'settings': {'file': '{space}/ds.css'}})
+        self.assertEqual(st, 200, body)
+        self.assertNotIn('replaced', body)
+
+    def test_without_replace_the_role_is_still_taken(self):
+        self.modules(extra=('alt-publish',))
+        before = self.sj_bytes()
+        for payload in ({'id': 'alt-publish'}, {'id': 'alt-publish', 'replace': False}):
+            with self.subTest(payload=payload):
+                st, body = self.post('/api/module-enable', payload)
+                self.refused(st, body, 409, 'role-taken')
+        self.assertEqual(self.sj_bytes(), before)
+
+    def test_replace_must_be_a_boolean_and_nothing_is_written(self):
+        self.modules(extra=('alt-publish',))
+        before = self.sj_bytes()
+        for bad in ('yes', 1, None, [], {}):
+            with self.subTest(replace=bad):
+                st, body = self.post('/api/module-enable', {'id': 'alt-publish', 'replace': bad,
+                                                            'secrets': {'token': SECRET}})
+                self.refused(st, body, 400, 'bad-settings')
+        self.assertEqual(self.sj_bytes(), before)
+        self.assertFalse(os.path.exists(self.secrets_path), 'відмова replace — ДО запису секрету')
+        self.assert_never_seen(SECRET)
+
+    def test_replace_is_ignored_by_the_other_routes(self):
+        self.modules(extra=('alt-publish',))
+        st, body = self.post('/api/module-settings', {'id': 'alt-publish', 'settings': {'note': 'x'}, 'replace': True})
+        self.assertEqual(st, 200, body)
+        self.assertNotIn('replaced', body)
+        self.assertTrue(self.sj()['modules'].get('static-publish', {}).get('enabled', True) is not False,
+                        'settings не вмикає і не замінює')
+
+    def test_preflight_with_replace_does_not_refuse(self):
+        self.modules(extra=('alt-publish',))
+        dm.preflight(self.off, 'alt-publish', enabling=True, replace=True)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.preflight(self.off, 'alt-publish', enabling=True)
+        self.assertEqual(cm.exception.code, 'role-taken')
+
+    def test_write_module_state_reports_what_it_replaced(self):
+        self.modules(extra=('alt-publish',))
+        st = dm.write_module_state(self.off, 'alt-publish', enabled=True, replace=True)
+        self.assertEqual(st['replaced'], ['static-publish'])
+        st = dm.write_module_state(self.off, 'alt-publish', enabled=True)
+        self.assertNotIn('replaced', st)
+
+
 # ================================================================================================= disable / settings
 
 class DisableAndSettings(World):

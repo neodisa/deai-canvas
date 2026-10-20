@@ -150,7 +150,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | Call | |
 |---|---|
 | `GET /api/modules?space=<id>` | catalog with status and settings; secrets only as `set: true\|false` |
-| `POST /api/module-enable` `{space?, id, settings?, secrets?}` | enable and configure; answers `{ok, module, check}` — `ok` means «processed», `check.ok` is the verdict |
+| `POST /api/module-enable` `{space?, id, settings?, secrets?, replace?}` | enable and configure; answers `{ok, module, check[, replaced]}` — `ok` means «processed», `check.ok` is the verdict; `replace: true` takes the module's roles from their current holders in the same write (their settings stay) and lists them in `replaced` |
 | `POST /api/module-settings` `{space?, id, settings?, secrets?}` | change settings or secrets (omit a key to keep it, `null` deletes) |
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
