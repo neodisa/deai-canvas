@@ -22,6 +22,25 @@ const view = (o = {}) => ({ space: SP, list: LIST, failed: null, busy: new Map()
 
 test.beforeEach(() => setLang("uk"));
 
+/* Помічники розбору розмітки: усе — регекспом по рядку, без DOM (node). Тег — від `<` до першого `>`: дані в розмітці
+   екрановані, тож зайвого `>` усередині атрибута бути не може (а якби був — це і є вада, яку ловлять тести). */
+const ent = (settings, o = {}) => ({ id: "m", name: "M", roles: ["publish"], enabled: true, status: "ok", settings, ...o });
+const drawer = (e, over = {}) => {
+  const fields = formFields(e);
+  return drawerHTML({ entry: e, mode: "edit", fields, form: initialForm(fields), busy: false, result: null, errors: {},
+    spaceName: "S", ...over });
+};
+const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Тег поля (`input|select`) за його `data-cn-field` (значення — уже в екранованому вигляді). */
+const fieldTag = (h, key) => new RegExp(`<(?:input|select)\\b[^>]*data-cn-field="${escRe(key)}"[^>]*>`).exec(h)?.[0] ?? null;
+const attr = (tag, name) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag ?? "")?.[1] ?? null;
+const tokens = (tag, name) => (attr(tag, name) ?? "").split(" ").filter(Boolean);
+/** Текст кнопки з даною дією `data-cn="…"` без розмітки всередині (іконка — це `<svg>`). */
+const btnText = (h, act) => {
+  const m = new RegExp(`<button[^>]*data-cn="${act}"[^>]*>([\\s\\S]*?)</button>`).exec(h);
+  return m ? m[1].replace(/<[^>]*>/g, "").trim() : null;
+};
+
 test("сторінка: заголовок, тека, секції в порядку ролей, рядок «Зараз», агент з id простору", () => {
   const h = connPageHTML(view());
   assert.match(h, /Підключення · Studio/);
@@ -41,7 +60,8 @@ test("сторінка: legacy, missing-секція, завантаження, 
   assert.match(h, /вбудована інтеграція ЛІГА/);
   assert.match(h, /Не встановлені на цьому компʼютері/);
   assert.match(h, /data-cn="disable" data-id="gone"/);
-  assert.match(connPageHTML(view({ list: null })), /Вантажу модулі…/);
+  assert.match(connPageHTML(view({ list: null })), /class="cn-loading" role="status">Завантажую модулі…</,
+    "завантаження оголошується читачу екрана (role=status)");
   const failed = connPageHTML(view({ list: null, failed: { code: null, message: "<b>boom</b>" } }));
   assert.match(failed, /Не вдалося прочитати модулі простору/);
   assert.match(failed, /data-cn="retry"/);
@@ -159,13 +179,14 @@ test("панель: введений секрет і позначка «стер
   const base = { entry: e, mode: "edit", fields, busy: false, result: null, errors: {}, spaceName: "Studio" };
   const typed = drawerHTML({ ...base, form: { values: {}, secrets: { token: "S3CR3T-<x>", pw: "ANOTHER" }, erase: [] } });
   assert.doesNotMatch(typed, /S3CR3T|ANOTHER/, "введений секрет не повертається в розмітку");
-  /* Без позначки: кнопка «Стерти», підказка про стирання схована. */
-  assert.match(typed, /data-cn-dr="erase" data-key="pw" aria-pressed="false"[^>]*>Стерти</);
+  /* Без позначки: підпис кнопки СТАЛИЙ («Стерти»), стан — лише `aria-pressed`; примітка про стирання схована. */
+  assert.match(typed, /data-cn-dr="erase" data-key="pw" aria-pressed="false" aria-label="Стерти: Пароль"[^>]*>Стерти</);
   assert.match(typed, /data-cn-erase-note="pw" hidden/);
-  /* З позначкою: «Не стирати», підказка видима. */
+  /* З позначкою: той самий підпис, `aria-pressed="true"`, примітка видима. */
   const marked = drawerHTML({ ...base, form: { values: {}, secrets: {}, erase: ["pw"] } });
-  assert.match(marked, /data-cn-dr="erase" data-key="pw" aria-pressed="true"[^>]*>Не стирати</);
-  assert.match(marked, /data-cn-erase-note="pw">буде стерто при збереженні</);
+  assert.match(marked, /data-cn-dr="erase" data-key="pw" aria-pressed="true" aria-label="Стерти: Пароль"[^>]*>Стерти</);
+  assert.match(marked, /data-cn-erase-note="pw">буде стерто після збереження</);
+  assert.doesNotMatch(marked, /Не стирати/, "підпис кнопки не міняється від стану");
   /* Стан секрету: «не задано» для токена, «задано» для пароля; плейсхолдери різні. */
   assert.match(typed, /не задано · Зберігається поза текою простору/);
   assert.match(typed, /задано · Зберігається/);
@@ -224,12 +245,15 @@ test("панель: режим підключення, помилки полів
   const refused = drawerHTML({ ...base, result: { kind: "refused", key: "cnRefRoleTaken", detail: "" } });
   assert.match(refused, /cn-res--err[\s\S]*Роль уже зайнята/);
   assert.doesNotMatch(refused, /Збережено, але/);
-  const busy = drawerHTML({ ...base, busy: true });
+  const busy = drawerHTML({ ...base, busy: "save" });
   assert.match(busy, /Зберігаю й перевіряю…/);
   assert.match(busy, /data-cn-field="file"[^>]*disabled/);
   assert.match(busy, /data-cn-dr="submit" disabled/);
-  const evil = drawerHTML({ ...base, entry: { ...e, name: "<b>", id: "<i>" }, spaceName: "<s>" });
-  assert.doesNotMatch(evil, /<b>|<i>|<s>/);
+  /* Ворожі назва, роль і імʼя простору — текстом, і САМЕ в тих місцях, де вони виводяться (а не лише «нема сирого»). */
+  const evil = drawerHTML({ ...base, entry: { ...e, id: "evil-mod", name: "<q>n", roles: ["<q>r"] }, spaceName: "<q>s" });
+  assert.doesNotMatch(evil, /<q>/);
+  assert.match(evil, /<b id="cn-dr-title">&lt;q&gt;n<\/b>/);
+  assert.match(evil, /&lt;q&gt;r · &lt;q&gt;s</);
 });
 
 test("панель: без налаштувань — «Налаштувань немає», у панелі є хрестик із підписом", () => {
@@ -257,4 +281,272 @@ test("словник: кожен ключ, який віддає модель, �
     "unwritable", "timeout", "totally-unknown"]) keys.add(refusalView({ code }).key);
   assert.ok(keys.size > 40, `зібрано лише ${keys.size} ключів — обхід зламаний`);
   for (const k of keys) for (const lang of ["uk", "en"]) assert.ok(DICT[lang][k] !== undefined, `${lang}: немає ключа «${k}»`);
+});
+
+/* ───────── Правки після ревʼю Task 3 ───────── */
+
+test("панель: ключі constructor / toString / __proto__ не ламають розмітку (помилки й підписи — лише власні)", () => {
+  /* `d.errors` — звичайний обʼєкт; `errors["constructor"]` без перевірки власності віддав би `Object` (truthy), і `t(err)`
+     кинув би на першому ж рендері. Те саме з підписом вбудованого модуля (`fields[f.key]`). */
+  const keys = ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"];
+  const types = ["path", "bool", "select", "secret", "text"];
+  const settings = keys.map((key, i) => ({ key, type: types[i], label: `L-${i}`, required: i % 2 === 0,
+    ...(types[i] === "select" ? { value: "a", options: [{ value: "a", label: "A" }] } : {}),
+    ...(types[i] === "secret" ? { set: true } : {}) }));
+  for (const base of [ent(settings), ent(settings, { id: "css-tokens" })]) {
+    const clean = drawer(base);
+    assert.equal((clean.match(/data-cn-field=/g) || []).length, 5);
+    assert.doesNotMatch(clean, /aria-invalid|cn-field-err|function|\[object/, "помилок нема — і «помилки» з прототипа теж");
+    for (let i = 0; i < 5; i += 1) assert.match(clean, new RegExp(`L-${i}`), "підпис — з маніфесту, не з прототипа");
+    /* Власна властивість — навіть `__proto__` (так її створює `Object.fromEntries` у контролері) — позначає саме своє поле. */
+    const own = drawer(base, { errors: JSON.parse('{"__proto__":"cnFieldRequired","constructor":"cnFieldRequired"}') });
+    assert.equal((own.match(/aria-invalid="true"/g) || []).length, 2);
+    assert.match(fieldTag(own, "__proto__"), /aria-invalid="true"/);
+    assert.match(fieldTag(own, "constructor"), /aria-invalid="true"/);
+    assert.doesNotMatch(fieldTag(own, "toString"), /aria-invalid/);
+  }
+  /* Форма без значень цих ключів не падає й дає ПОРОЖНЄ, а не текст функції з прототипа (`value="function Object() …"`). */
+  const fields = formFields(ent(settings));
+  const empty = drawerHTML({ entry: ent(settings), mode: "enable", fields, form: { values: {}, secrets: {}, erase: [] },
+    busy: false, result: null, errors: {}, spaceName: "S" });
+  assert.doesNotMatch(empty, /native code|function|\[object/);
+  assert.match(fieldTag(empty, "constructor"), /value=""/);
+  assert.doesNotMatch(fieldTag(empty, "valueOf"), /value="[^"]/);
+});
+
+test("сторінка: ворожі назва, тека й id простору — лише текстом, у заголовку, помилці й блоці агента", () => {
+  const sp = { id: '<q>"I', name: '<q>"N', path: '<q>"P', integrations: false, capabilities: { publish: null, comments: null, tokens: null } };
+  const pages = [
+    connPageHTML(view({ space: sp })),
+    connPageHTML(view({ space: sp, list: null })),
+    connPageHTML(view({ space: sp, list: null, failed: { code: "space-json-unreadable", message: "x" } })),
+    connPageHTML(view({ space: { ...sp, capabilities: { error: "space-json-unreadable" } } })),
+  ];
+  for (const h of pages) {
+    assert.doesNotMatch(h, /<q>/);
+    assert.ok(!h.includes('"N') && !h.includes('"P'), "лапка з даних не виходить з атрибута чи тексту");
+    assert.match(h, /&lt;q&gt;&quot;N/, "назва простору в заголовку");
+    assert.match(h, /&lt;q&gt;&quot;P/, "тека в тексті");
+  }
+  const page = pages[0];
+  /* Блок агента: у запиті — `encodeURIComponent` (він і є екрануванням), у прикладі тіла — `esc`. */
+  assert.match(page, /GET \/api\/modules\?space=%3Cq%3E%22I</);
+  assert.match(page, /\{space: "&lt;q&gt;&quot;I", id, settings, secrets, replace\}/);
+  assert.match(pages[2], /&lt;q&gt;&quot;P[^<]*space\.json/, "у помилці space.json теж");
+});
+
+test("панель: ворожі ключ, підпис, значення варіанта й тип — лише текстом, у всіх місцях виводу", () => {
+  const e = ent([
+    { key: 'k"><q>', type: "path", label: "L<q>", required: false, value: "v" },
+    { key: 's"><q>', type: "select", label: "S", required: false, value: 'o"><q>', options: [{ value: 'o"><q>', label: "O<q>" }] },
+    { key: 'p"><q>', type: "secret", label: "P<q>", required: false, set: true },
+  ]);
+  const h = drawer(e);
+  assert.doesNotMatch(h, /<q>/);
+  assert.match(h, /data-cn-field="k&quot;&gt;&lt;q&gt;"/);
+  assert.match(h, /data-cn-field="s&quot;&gt;&lt;q&gt;"/);
+  assert.match(h, /<option value="o&quot;&gt;&lt;q&gt;" selected>O&lt;q&gt;<\/option>/);
+  assert.match(h, /data-cn-dr="erase" data-key="p&quot;&gt;&lt;q&gt;"/);
+  assert.match(h, /data-cn-erase-note="p&quot;&gt;&lt;q&gt;"/);
+  assert.match(h, /aria-label="Стерти: P&lt;q&gt;"/);
+  assert.match(h, />L&lt;q&gt;</);
+  /* Тип у `data-type` — з моделі білий список, але `drawerHTML` приймає й готові поля: екрануємо й його. */
+  const raw = drawerHTML({ entry: e, mode: "edit", fields: [{ key: "t", type: 'x"><q>', label: "L", required: false }],
+    form: { values: { t: "v" }, secrets: {}, erase: [] }, busy: false, result: null, errors: {}, spaceName: "S" });
+  assert.doesNotMatch(raw, /<q>/);
+  assert.match(raw, /data-type="x&quot;&gt;&lt;q&gt;"/);
+});
+
+test("панель: кожна <label for> має елемент із таким id, id унікальні", () => {
+  const e = ent([
+    { key: "a", type: "text", label: "A", required: true },
+    { key: "b", type: "path", label: "B", required: false },
+    { key: "c", type: "select", label: "C", required: false, options: [{ value: "1", label: "1" }] },
+    { key: "d", type: "secret", label: "D", required: false, set: true },
+    { key: "e", type: "bool", label: "E", required: false, value: false },
+  ]);
+  const h = drawer(e, { errors: { a: "cnFieldRequired" } });
+  const fors = [...h.matchAll(/<label[^>]*\sfor="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(fors.length, 4, "bool огортається в label без for — решта має for");
+  for (const x of fors) assert.ok(h.includes(` id="${x}"`), `label for="${x}" без елемента`);
+  const ids = [...h.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(new Set(ids).size, ids.length, `дублі id: ${ids}`);
+});
+
+test("панель: повідомлення про помилку поля привʼязане до поля — aria-invalid і aria-describedby на кожному типі", () => {
+  const e = ent([
+    { key: "t", type: "text", label: "T", required: true },
+    { key: "s", type: "select", label: "S", required: true, options: [{ value: "1", label: "1" }] },
+    { key: "x", type: "secret", label: "X", required: true, set: false },
+    { key: "b", type: "bool", label: "B", required: false, value: false },
+  ]);
+  const errors = { t: "cnFieldRequired", s: "cnFieldRequired", x: "cnFieldRequired", b: "cnFieldRequired" };
+  const h = drawer(e, { errors });
+  const pIds = [...h.matchAll(/<p class="cn-field-err" id="([^"]+)">Обовʼязкове поле\.<\/p>/g)].map((m) => m[1]);
+  assert.equal(pIds.length, 4);
+  const used = [];
+  for (const key of Object.keys(errors)) {
+    const tag = fieldTag(h, key);
+    assert.match(tag, /aria-invalid="true"/, key);
+    const mine = tokens(tag, "aria-describedby").filter((id) => pIds.includes(id));
+    assert.equal(mine.length, 1, `поле «${key}» не посилається на своє повідомлення: ${tag}`);
+    used.push(...mine);
+  }
+  assert.equal(new Set(used).size, 4, "кожне повідомлення — рівно одне поле");
+  /* Без помилки — ні aria-invalid, ні посилання на неіснуюче повідомлення. */
+  const ok = drawer(e);
+  assert.doesNotMatch(ok, /aria-invalid|cn-field-err/);
+  assert.doesNotMatch(fieldTag(ok, "t"), /aria-describedby/);
+});
+
+test("панель: aria-required на обовʼязкових полях, текстових, списках і секретах — і лише на них", () => {
+  const e = ent([
+    { key: "t", type: "text", label: "T", required: true },
+    { key: "p", type: "path", label: "P", required: true },
+    { key: "s", type: "select", label: "S", required: true, value: "1", options: [{ value: "1", label: "1" }] },
+    { key: "x", type: "secret", label: "X", required: true, set: false },
+    { key: "b", type: "bool", label: "B", required: true, value: false },
+    { key: "t2", type: "text", label: "T2", required: false },
+    { key: "s2", type: "select", label: "S2", required: false, options: [{ value: "1", label: "1" }] },
+    { key: "x2", type: "secret", label: "X2", required: false, set: false },
+  ]);
+  const h = drawer(e);
+  for (const k of ["t", "p", "s", "x"]) assert.match(fieldTag(h, k), /aria-required="true"/, `обовʼязкове «${k}»`);
+  for (const k of ["b", "t2", "s2", "x2"]) assert.doesNotMatch(fieldTag(h, k), /aria-required/, `необовʼязкове «${k}»`);
+});
+
+test("панель: підказка шляху, стан секрету й примітка стирання привʼязані до поля через aria-describedby", () => {
+  const e = ent([
+    { key: "folder", type: "path", label: "F", required: true, value: "x" },
+    { key: "pw", type: "secret", label: "P", required: false, set: true },
+    { key: "plain", type: "text", label: "Q", required: false, value: "" },
+  ]);
+  const idOf = (h, re) => re.exec(h)?.[1];
+  for (const erase of [[], ["pw"]]) {
+    const h = drawer(e, { form: { ...initialForm(formFields(e)), erase }, errors: { folder: "cnFieldRequired", pw: "cnFieldRequired" } });
+    const hint = idOf(h, /<p class="cn-hint" id="([^"]+)">\{home\}/);
+    const state = idOf(h, /<p class="cn-secret" id="([^"]+)">/);
+    const note = idOf(h, /<p class="cn-hint" id="([^"]+)" data-cn-erase-note="pw"/);
+    const errF = idOf(h, /<p class="cn-field-err" id="([^"]+)"/);
+    assert.ok(hint && state && note && errF, "усі четверо мають id");
+    assert.equal(new Set([hint, state, note, errF]).size, 4);
+    const f = tokens(fieldTag(h, "folder"), "aria-describedby");
+    assert.deepEqual(f.filter((x) => x === hint || x === errF), [hint, errF], "підказка шляху, далі помилка");
+    assert.match(attr(fieldTag(h, "folder"), "aria-describedby"), /^\S+ \S+$/, "кілька id — через пробіл");
+    const s = tokens(fieldTag(h, "pw"), "aria-describedby");
+    assert.ok(s.includes(state), "стан секрету описує поле");
+    assert.equal(s.includes(note), erase.length > 0,
+      "примітку про стирання посилання охоплює лише коли вона видима: `hidden`-елемент, на який вказує describedby, усе одно озвучується");
+    assert.equal(s.length, erase.length ? 3 : 2);
+    assert.equal(tokens(fieldTag(h, "plain"), "aria-describedby").length, 0, "звичайне поле — без описів");
+  }
+});
+
+test("панель: результат — role=status для успіху і role=alert для кожної відмови", () => {
+  const e = ent([]);
+  const res = (r) => drawer(e, { result: r });
+  assert.match(res({ kind: "ok", key: "cnCheckOk", detail: "" }), /<div class="cn-res cn-res--ok" role="status">/);
+  for (const kind of ["failed", "check-failed", "refused"]) {
+    const h = res({ kind, key: "cnErrGeneric", detail: "" });
+    assert.match(h, /<div class="cn-res cn-res--err" role="alert">/, kind);
+    assert.doesNotMatch(h, /role="status"/, kind);
+  }
+  assert.doesNotMatch(res(null), /cn-res/);
+});
+
+test("картка: у спокої «Перевірити» без блокування, в польоті — «Перевіряю…», інша дія підпису не міняє", () => {
+  const idle = cardHTML(LIST[1], new Map());
+  assert.equal(btnText(idle, "check"), "Перевірити");
+  assert.equal(btnText(idle, "configure"), "Налаштувати");
+  assert.equal(btnText(idle, "disable"), "Вимкнути");
+  assert.doesNotMatch(idle, /disabled/);
+  const checking = cardHTML(LIST[1], new Map([["static-publish", "check"]]));
+  assert.equal(btnText(checking, "check"), "Перевіряю…");
+  assert.equal((checking.match(/<button[^>]*disabled/g) || []).length, 3, "усі три кнопки вимкнені");
+  const disabling = cardHTML(LIST[1], new Map([["static-publish", "disable"]]));
+  assert.equal(btnText(disabling, "check"), "Перевірити", "підпис «Перевіряю…» — лише для перевірки");
+  assert.equal((disabling.match(/<button[^>]*disabled/g) || []).length, 3);
+  /* Дія в польоті в ІНШОЇ картки цю не чіпає. */
+  assert.doesNotMatch(cardHTML(LIST[1], new Map([["vercel-publish", "check"]])), /disabled/);
+});
+
+test("панель: busy — 'save' чи 'check': усе вимкнено; «Зберігаю й перевіряю…» лише для 'save', «Перевіряю…» лише для 'check'", () => {
+  const e = ent([
+    { key: "a", type: "text", label: "A", required: false },
+    { key: "s", type: "select", label: "S", required: false, options: [{ value: "1", label: "1" }] },
+    { key: "p", type: "secret", label: "P", required: false, set: true },
+    { key: "b", type: "bool", label: "B", required: false, value: false },
+  ]);
+  const controls = (h) => [...h.matchAll(/<(?:input|select|button)\b[^>]*\bdata-cn-(?:field|dr="(?:erase|check|submit)")[^>]*>/g)].map((m) => m[0]);
+  const idle = drawer(e);
+  assert.ok(controls(idle).length >= 7, "поля, «Стерти», «Перевірити», головна");
+  for (const c of controls(idle)) assert.doesNotMatch(c, /disabled/, c);
+  assert.equal(btnText(idle.replace(/data-cn-dr=/g, "data-cn="), "submit"), "Зберегти");
+  const txt = (h, act) => btnText(h.replace(/data-cn-dr=/g, "data-cn="), act);
+
+  const save = drawer(e, { busy: "save" });
+  for (const c of controls(save)) assert.match(c, /disabled/, c);
+  assert.equal(txt(save, "submit"), "Зберігаю й перевіряю…");
+  assert.equal(txt(save, "check"), "Перевірити", "на «Перевірити» під час запису — звичайний підпис");
+
+  const check = drawer(e, { busy: "check" });
+  for (const c of controls(check)) assert.match(c, /disabled/, c);
+  assert.equal(txt(check, "check"), "Перевіряю…");
+  assert.equal(txt(check, "submit"), "Зберегти", "головна під час перевірки не каже «Зберігаю»");
+  assert.doesNotMatch(check, /Зберігаю й перевіряю/);
+  const enable = drawer(e, { busy: "check", mode: "enable" });
+  assert.equal(txt(enable, "submit"), "Підключити");
+  /* EN — ті самі стани. */
+  setLang("en");
+  assert.equal(txt(drawer(e, { busy: "save" }), "submit"), "Saving and checking…");
+  assert.equal(txt(drawer(e, { busy: "check" }), "check"), "Checking…");
+});
+
+test("картка: вимкнений модуль зі status: error причини не показує", () => {
+  const h = cardHTML({ ...LIST[3], enabled: false, status: "error", error: "no-token",
+    last_check: { ok: false, error: "no-token", detail: "Токен Vercel не задано" } }, new Map());
+  assert.doesNotMatch(h, /cn-why|Токен Vercel не задано/);
+  assert.match(h, /cn-badge--off/);
+  assert.match(h, /data-cn="enable"/);
+});
+
+test("сторінка: текст помилки списку обрізається до 300 символів ДО екранування", () => {
+  const detail = (message) => /<span class="cn-why-detail">([^<]*)<\/span>/.exec(
+    connPageHTML(view({ list: null, failed: { code: null, message } })))?.[1];
+  assert.equal(detail("x".repeat(500)).length, 300);
+  assert.equal(detail("y".repeat(300)).length, 300, "рівно 300 — без обрізання");
+  assert.equal(detail("z".repeat(40)), "z".repeat(40));
+  /* Обрізається сирий текст, а не вже екранований: 300 символів `&` → 300 × `&amp;`, а не 60. */
+  assert.equal(detail("&".repeat(500)), "&amp;".repeat(300));
+});
+
+test("англійською: назва вбудованої інтеграції — LIGA, не кирилицею", () => {
+  setLang("en");
+  const liga = { ...SP, integrations: true, capabilities: { publish: "legacy", comments: "legacy", tokens: null } };
+  const h = connPageHTML(view({ space: liga }));
+  assert.match(h, /Now: the built-in LIGA integration \(a module in this role overrides it\)/);
+  assert.doesNotMatch(h, /ЛІГА/);
+  assert.match(nowHTML("comments", { space: liga, list: LIST }), /LIGA/);
+});
+
+test("слова: ключі стирання й нові підписи — в обох мовах, застарілий «Не стирати» прибрано", () => {
+  assert.equal(DICT.uk.cnEraseFor("Пароль"), "Стерти: Пароль");
+  assert.equal(DICT.en.cnEraseFor("Password"), "Erase: Password");
+  assert.equal(DICT.uk.cnEraseUndo, undefined);
+  assert.equal(DICT.en.cnEraseUndo, undefined);
+  assert.equal(DICT.uk.cnNowNobody, "Зараз: нікого", "живий тест спирається на цей рядок");
+  assert.equal(DICT.uk.cnNonePublish, "кнопки публікації в смузі нема", "і на цей");
+  assert.equal(DICT.en.cnNowNobody, "Now: none");
+  assert.equal(DICT.en.cnNowNone("x"), "Now: none — x");
+  assert.equal(DICT.en.cnDisableNone("publish", "x"), "After this, the “publish” role has no module: x.");
+  assert.equal(DICT.en.cnDisableLegacy("publish"), "The built-in LIGA integration takes the “publish” role back.");
+  assert.equal(DICT.en.cnReplaceAsk("R", "H", "N"),
+    "R is currently handled by “H”. Connect “N” instead? “H” will be turned off; its settings stay.");
+  assert.equal(DICT.uk.cnLoading, "Завантажую модулі…");
+  assert.equal(DICT.uk.cnEraseMarked, "буде стерто після збереження");
+  assert.equal(DICT.uk.cnCheckSavedFirst, "Спершу збережіть зміни — перевіряється збережене.");
+  assert.equal(DICT.uk.cnRefRoleTaken, "Роль уже зайнята іншим модулем — оновіть сторінку й спробуйте ще раз.");
+  assert.equal(DICT.uk.cnErrBadKey, "Ключ Supabase не підходить або не заданий.");
+  assert.equal(DICT.uk.cnLead,
+    "Модулі цього простору: куди публікувати превʼю, де зберігати коментарі команди, звідки брати токени. Без жодного модуля канвас працює.");
 });
