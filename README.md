@@ -49,7 +49,7 @@ npm install && npx playwright install chromium
 ```
 
 Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium). The Python
-suites (`tests/`, `bin/`, `app/`) are verified on Python 3.9.6, the oldest supported version.
+suites (`tests/`, `bin/`, `app/`) were run for 0.4.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
 
 ## Modules
 
@@ -189,9 +189,12 @@ Comments have two channels. The **local** one is for the agent: pins you leave f
 canvas pages (the «Team» tab), on the Overview, in published previews (folder and Vercel) and
 for the agent (`inbox`, `inbox resolve`). A space without a `comments` module has no team
 channel; enabling one adds it. A migrated legacy (in-house) space keeps its original shared
-service until you enable a module there. If an enabled module is broken, a canvas page shows
-local comments with a notice and the Overview and `inbox` report the error — nothing falls
-back silently to the shared service.
+service until you enable a module there, and **a disabled module in such a space returns it to
+the shared service** (so does removing its entry from `space.json`). If an enabled module is
+broken — in any space — a canvas page shows local comments with a notice and the Overview and
+`inbox` report the error; nothing falls back silently to the shared service. (A stale entry of
+some unknown module, one that never was a comments module, is not an enabled comments module and
+changes nothing.)
 
 **Your own Supabase** (`supabase-comments`), in four steps — the check codes and the security
 notes are in [the module README](app/modules/supabase-comments/README.md):
@@ -220,7 +223,8 @@ the trust dialog of stage 3, so for now the module has to be built in (`app/modu
 
 **Limits.** The rules in `schema.sql` are open: whoever has the public key — and it is inside
 every page you publish — reads and writes the comments of that project, so use a dedicated
-project. The adapter's JavaScript runs on the canvas origin, which is why only built-in modules
+project; the agent reads those comments as work items, so treat their text as untrusted input.
+The adapter's JavaScript runs on the canvas origin, which is why only built-in modules
 load for now. The service has to allow CORS for the opaque origin `null` too (the local
 `/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
 not a real project. Screenshots of pins are not part of the role (the role has no file storage).

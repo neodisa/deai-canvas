@@ -46,9 +46,14 @@
     знати явні рішення, тож нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)`.
     ВИНЯТОК — роль `comments` у просторі з інтеграціями (приватність): зашитий шлях ЛІГА — це СПІЛЬНИЙ Supabase, куди
     піни несуть знімки приватних макетів, тож мовчки переходити на нього, коли людина ЯВНО ввімкнула модуль коментарів,
-    не можна. Нечитабельний `space.json` — `space-json-unreadable`; явно ввімкнений запис, чий модуль відсутній, не
-    завантажився чи має невизначену роль, — `module-error` (`COMMENTS_MODULE_BROKEN`); `'legacy'` лише коли такого
-    запису нема. `capabilities()` у цих випадках — `comments: None` + `error`.
+    не можна. Нечитабельний `space.json` — `space-json-unreadable`; явно ввімкнений запис, що ВІВ коментарі й загубився
+    (його маніфест оголошує `comments`; або маніфест не розібрано, а id не належить вбудованому модулю іншої ролі; або
+    це відсутній вбудований модуль коментарів — точне правило в `_enabled_module_is_lost`), — `module-error`
+    (`COMMENTS_MODULE_BROKEN`); `'legacy'` лише коли такого запису нема. Застарілий запис чужого модуля шлях ЛІГА не
+    вимикає. ВИДИМІСТЬ: той самий `module-error` — і в просторі БЕЗ інтеграцій (там запасного шляху нема, але тиша
+    «коментарів немає» без причини була б брехнею): сторінка канваса показує примітку, `comment-config` віддає код,
+    `capabilities()` у всіх цих випадках — `comments: None` + `error`; простір без жодного запису про коментарі — просто
+    `None` без помилки.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
     ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`) без модуля дають `'legacy'`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
@@ -1245,16 +1250,38 @@ def check(space, module_id):
 
 # ------------------------------------------------------------------------------ постачальник ролі
 
+#: Вбудовані модулі, що ведуть коментарі (роль `comments`), і вбудовані модулі інших ролей. Нащо вони тут: запис у
+#: `space.json`, якого немає в каталозі чи чий маніфест не розібрано, сам про свої ролі нічого не скаже, а відрізнити
+#: «загубився модуль коментарів» від «лежить застарілий запис якогось іншого модуля» потрібно (див.
+#: `_enabled_module_is_lost`). Новий вбудований модуль — у котрийсь із двох списків (інваріант у `test_comments_role.py`).
+KNOWN_COMMENTS_MODULES = frozenset({'supabase-comments'})
+KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'static-publish', 'vercel-publish'})
+
+
 def _enabled_module_is_lost(cat, explicit):
-    """Чи є в `space.json` ЯВНО ввімкнений запис модуля, що міг бути постачальником `comments`, але ним бути не може: його
-    нема в каталозі, він не завантажився й роль невідома (`roles` порожні: маніфест не розібрано) або серед його ролей
-    є `comments`. Модуль, що завантажився без цієї ролі (і зламаний модуль чужої ролі з розібраним маніфестом), — не в
-    рахунок."""
+    """Чи є в `space.json` ЯВНО ввімкнений запис модуля, що вів коментарі, але ним бути не може. Правило (запис `mid`,
+    `m = cat.get(mid)`; вимкнені записи й справні модулі — не в рахунок):
+
+      * `m` є, не завантажився й його маніфест ОГОЛОШУЄ `comments` (`'comments' in m.roles`) — так;
+      * `m` є, не завантажився, а ролі невідомі (`roles` порожні: маніфест не розібрано чи не пройшов перевірку), — так,
+        КРІМ id вбудованого модуля іншої ролі (`KNOWN_OTHER_MODULES`: зламаний `css-tokens` коментарів не вів);
+      * `m` немає в каталозі, — так лише для id вбудованого модуля коментарів (`KNOWN_COMMENTS_MODULES`); решта —
+        застарілий запис (модуль прибрали, теку джерел більше не названо), і він шлях ЛІГА не вимикає;
+      * модуль завантажився без ролі `comments` (і зламаний модуль чужої ролі з розібраним маніфестом) — ні.
+
+    Тобто мовчки не губиться те, що справді могло вести коментарі, а чужий пил у `space.json` — не привід лишити
+    ЛІГА без її коментарів."""
     for mid, e in explicit.items():
         if not e['enabled']:
             continue
         m = cat.get(mid)
-        if m is None or (m.status != 'ok' and (not m.roles or 'comments' in m.roles)):
+        if m is None:
+            if mid in KNOWN_COMMENTS_MODULES:
+                return True
+            continue
+        if m.status == 'ok':
+            continue
+        if 'comments' in m.roles or (not m.roles and mid not in KNOWN_OTHER_MODULES):
             return True
     return False
 
@@ -1264,9 +1291,11 @@ def _provider_for(role, space):
     Простір з `integrations` і без жодного явно ввімкненого модуля — `'legacy'`/`None` ДО каталогу.
     Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
 
-    ВИНЯТОК для `comments` у просторі з інтеграціями (див. docstring модуля, «приватність»): зашитий шлях — спільний
-    Supabase ЛІГА, тож нечитабельний `space.json` — `space-json-unreadable`, а явно ввімкнений модуль, що не завантажився
-    (`_enabled_module_is_lost`), — `module-error` замість мовчазного `'legacy'`. Для `publish` усе лишається як було."""
+    ВИНЯТОК для `comments` (див. docstring модуля, «приватність» і «видимість»): явно ввімкнений модуль коментарів, що не
+    завантажився (`_enabled_module_is_lost`), — `module-error` у БУДЬ-ЯКОМУ просторі, а не тиша: у просторі з інтеграціями
+    мовчазне `'legacy'` повело б піни в спільний Supabase ЛІГА (і нечитабельний `space.json` там — теж
+    `space-json-unreadable`), а у просторі без них `None` лишив би людину без командних коментарів і без жодної
+    причини. Простір без жодного запису про коментарі лишається `None`. Для `publish` усе лишається як було."""
     integrations = spaces.integrations_for(space)
     strict = integrations and role == 'comments'
     if integrations:
@@ -1292,9 +1321,9 @@ def _provider_for(role, space):
     if winners:
         winners.sort(key=lambda w: (w[0], w[1]))        # явно ввімкнений — перед неявним
         return winners[0][2]
+    if role == 'comments' and _enabled_module_is_lost(cat, explicit):
+        raise ModuleError('module-error', message=COMMENTS_MODULE_BROKEN)
     if role in LEGACY_ROLES and integrations:
-        if strict and _enabled_module_is_lost(cat, explicit):
-            raise ModuleError('module-error', message=COMMENTS_MODULE_BROKEN)
         return 'legacy'
     return None
 

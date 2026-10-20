@@ -37,7 +37,7 @@ function world({ files = {}, failOn = null, slow = false } = {}) {
   return { win, log, created, load };
 }
 const factoryOf = (tag) => (win, created) => {
-  win.DeaiComments = { create: (cfg) => { created.push({ tag, cfg }); return { tag, ready: Promise.resolve() }; } };
+  win.DeaiComments = { create: (cfg) => { created.push({ tag, cfg }); return { tag, ready: Promise.resolve(), load: () => [], save() {} }; } };
 };
 const resp = (o = {}) => ({
   ch: "project", module: "memo-comments", client: ["/api/module-client/memo-comments/adapter.js"],
@@ -184,7 +184,7 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 test("H: «Огляд» із відповіддю модуля вантажить адаптер із головки, create() і CommentLayer — з каналом ядра", async () => {
   const R = resp({ module: "m-h", client: ["/api/module-client/m-h/adapter.js"] });
   const b = browser({ resp: R, scripts: { "/api/module-client/m-h/adapter.js": (el) => {
-    globalThis.DeaiComments = { create: (cfg) => { b.created.push(cfg); return { ready: Promise.resolve(), load: () => [], subscribe() {}, close() {} }; } };
+    globalThis.DeaiComments = { create: (cfg) => { b.created.push(cfg); return { ready: Promise.resolve(), load: () => [], save() {}, subscribe() {}, close() {} }; } };
     el.onload();
   } } });
   try {
@@ -300,5 +300,70 @@ test("K: застарілий запуск (канал перемкнули, п�
     assert.deepEqual(closes, ["closed"], "сховище застарілого запуску закрито (інакше опитування/realtime тече)");
     assert.equal(b.inits.length, 1, "другого інстансу коментатора нема");
     assert.deepEqual(b.errors, []);
+  } finally { b.restore(); }
+});
+
+test("L: сховище без load/save — помилка словом, створене сховище закрито, фабрика лишається в кеші", async () => {
+  const closes = [];
+  const bad = {
+    noSave: () => ({ ready: Promise.resolve(), load: () => [], close: () => closes.push("noSave") }),
+    noLoad: () => ({ ready: Promise.resolve(), save() {}, close: () => closes.push("noLoad") }),
+    notFunctions: () => ({ load: 1, save: "x", close: () => closes.push("notFunctions") }),
+    nothing: () => null,
+    closeThrows: () => ({ close: () => { closes.push("closeThrows"); throw new Error("close впав"); } }),
+  };
+  for (const [name, make] of Object.entries(bad)) {
+    const w = world({ files: { "/m/a.js": (win) => { win.DeaiComments = { create: make }; } } });
+    const factories = new Map();
+    await assert.rejects(moduleStore(resp({ module: "m-l", client: ["/m/a.js"] }), { load: w.load, win: w.win, factories }),
+      (e) => e instanceof Error && !(e instanceof TypeError) && e.message === DICT.uk.errCommentsStore, name);
+    assert.equal(factories.has("m-l"), true, `${name}: фабрика справна — кеш лишається, повторний вхід не вантажить файли знову`);
+  }
+  assert.deepEqual(closes, ["noSave", "noLoad", "notFunctions", "closeThrows"], "кожне створене сховище закрито (`null` — нема що)");
+});
+
+test("L2: справжнє сховище (load і save) проходить; `ready`, `close` і решта — необовʼязкові", async () => {
+  const w = world({ files: { "/m/a.js": (win) => { win.DeaiComments = { create: () => ({ load: () => [], save() {} }) }; } } });
+  const store = await moduleStore(resp({ module: "m-l2", client: ["/m/a.js"] }), { load: w.load, win: w.win, factories: new Map() });
+  assert.equal(typeof store.load, "function");
+});
+
+test("L3: ключ errCommentsStore є в обох словниках", () => {
+  assert.equal(typeof DICT.uk.errCommentsStore, "string");
+  assert.equal(typeof DICT.en.errCommentsStore, "string");
+  assert.notEqual(DICT.uk.errCommentsStore, DICT.en.errCommentsStore);
+});
+
+test("M: `ready` відхилився — сховище закрито ДО відмови (інакше опитування/сокет тече), причина долітає в fail() як є", async () => {
+  for (const closeThrows of [false, true]) {
+    const closes = [];
+    const R = resp({ module: `m-m${closeThrows}`, client: [`/api/module-client/m-m${closeThrows}/adapter.js`] });
+    const b = browser({ resp: R, scripts: { [`/api/module-client/m-m${closeThrows}/adapter.js`]: (el) => {
+      globalThis.DeaiComments = { create: () => ({
+        ready: Promise.reject(new Error("сервіс не відповів")), load: () => [], save() {},
+        close: () => { closes.push("closed"); if (closeThrows) throw new Error("close впав"); },
+      }) };
+      el.onload();
+    } } });
+    try {
+      overviewComments(envFor(b)).enter();
+      await settle();
+      assert.deepEqual(closes, ["closed"], `closeThrows=${closeThrows}`);
+      assert.deepEqual(b.errors, ["сервіс не відповів"], "причина — відхилення `ready`, а не збій закриття");
+      assert.equal(b.inits.length, 0, "без готового сховища коментатор не піднімається");
+    } finally { b.restore(); }
+  }
+});
+
+test("M2: сховище без `close` і з відхиленим `ready` — та сама причина, без TypeError", async () => {
+  const R = resp({ module: "m-m2", client: ["/api/module-client/m-m2/adapter.js"] });
+  const b = browser({ resp: R, scripts: { "/api/module-client/m-m2/adapter.js": (el) => {
+    globalThis.DeaiComments = { create: () => ({ ready: Promise.reject(new Error("впало")), load: () => [], save() {} }) };
+    el.onload();
+  } } });
+  try {
+    overviewComments(envFor(b)).enter();
+    await settle();
+    assert.deepEqual(b.errors, ["впало"]);
   } finally { b.restore(); }
 });

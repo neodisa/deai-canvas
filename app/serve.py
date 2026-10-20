@@ -2502,7 +2502,8 @@ def comments_provider(space=None):
     куди піни несуть знімки приватних макетів, а `provider('comments')` кидає лише тоді, коли людина ЯВНО ввімкнула
     модуль коментарів і той не завантажився (чи `space.json` не прочитати, тож невідомо, що вона вмикала). Сторінка
     тоді лишається на локальному шарі з приміткою (`_commented`), а `/api/comment-config` віддає центральну відповідь
-    модулів (`_comment_config`)."""
+    модулів (`_comment_config`). У просторі БЕЗ інтеграцій те саме: явно ввімкнений і загублений модуль коментарів —
+    помилка, а не мовчазне `None` («нікого»), щоб людина бачила причину (див. `deai_modules._enabled_module_is_lost`)."""
     if space is not None and (not spaces.layer_on() or spaces.request_space_id() is None):
         space = None
     try:
@@ -2539,14 +2540,15 @@ _AGENT_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}')
 #: Символи, яких не місце в тексті для агента й терміналу: керівні C0/C1 (ESC, CSI, BEL, NUL, CR, VT, FF, DEL; `\n` і `\t`
 #: лишаються — їх прибирає `agent_line` для однорядкових полів), м'який перенос і сполучники (U+00AD, U+034F), мовні
 #: керування (U+061C, U+180B–180F), нульової ширини й керування напрямком (U+200B–200F, U+202A–202E, U+2060–206F:
-#: ізоляти, невидима математика, застарілі формати), роздільники рядка й абзацу (U+2028/9), заповнювачі Hangul (U+3164,
-#: U+FFA0), селектори варіантів (U+FE00–FE0F, U+E0100–E01EF), BOM (U+FEFF), анотації (U+FFF9–FFFB), символи-теги
-#: (U+E0000–E007F) і сурогати (їх не надрукувати — `UnicodeEncodeError`). Текст модуля друкується в ТЕРМІНАЛ і читається
+#: ізоляти, невидима математика, застарілі формати), роздільники рядка й абзацу (U+2028/9), заповнювачі Hangul (U+115F,
+#: U+1160, U+3164, U+FFA0), кхмерські невидимі голосні (U+17B4, U+17B5), шрифт Брайля «порожній» (U+2800), музичні
+#: керування групуванням (U+1D173–1D17A), селектори варіантів (U+FE00–FE0F, U+E0100–E01EF), BOM (U+FEFF), анотації
+#: (U+FFF9–FFFB), символи-теги (U+E0000–E007F) і сурогати (їх не надрукувати — `UnicodeEncodeError`). Текст модуля друкується в ТЕРМІНАЛ і читається
 #: LLM-агентом: керівна послідовність міняє екран, а невидимий символ ховає від людини інструкцію, яку агент побачить.
 _AGENT_BAD_CHARS = re.compile(
-    r'[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u034f\u061c\u180b-\u180f\u200b-\u200f\u2028\u2029\u202a-\u202e'
-    r'\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\ud800-\udfff'
-    r'\U000e0000-\U000e007f\U000e0100-\U000e01ef]')
+    r'[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028\u2029'
+    r'\u202a-\u202e\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\ud800-\udfff'
+    r'\U0001d173-\U0001d17a\U000e0000-\U000e007f\U000e0100-\U000e01ef]')
 _AGENT_VERSION = re.compile(r'[0-9]{1,9}')
 
 
@@ -5338,7 +5340,9 @@ class Handler(SimpleHTTPRequestHandler):
                     channel = deai_modules.channel_for(page_space, tid)
                     module_cfg = {**deai_modules.comments_client(page_space, prov), 'channel': channel}
                 except deai_modules.ModuleError as e:
-                    ch, notice = 'local', e.code
+                    # Постачальник є, а його конфіг не піднявся: сторінка локальна, і вкладки «Команда» на ній нема —
+                    # вона вела б у ту саму відмову (контракт коментатора: «нема `audiences` → нема рядка»).
+                    ch, notice, team = 'local', e.code, False
             if module_cfg is not None:
                 html = inject_module_comment_layer(
                     html, f'{origin}/app/vendor', module_client_urls(prov), module_cfg, version=ver,

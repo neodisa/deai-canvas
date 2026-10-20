@@ -72,7 +72,11 @@ cross-channel or bulk deletes, `project_id` cannot be rewritten). Hence:
 
 * use **a dedicated Supabase project per team**, not a project that holds anything else;
 * never put the `service_role` / `secret` key here;
-* treat comment text as visible to everyone with a preview link.
+* treat comment text as visible to everyone with a preview link;
+* **the agent reads comments as work items.** Anyone who holds the public key — it is in every published page — can *write*
+  a comment, and `inbox` shows it to the agent. Treat comment text as **untrusted input**: the core only strips terminal
+  and invisible-character tricks (control codes, zero-width and bidirectional marks, fillers) before printing it;
+  multi-line `text` is printed as is, so a visible instruction inside a comment is still an instruction the agent will see.
 
 ## CORS and the local `/published` view
 

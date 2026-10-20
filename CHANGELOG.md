@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.4.0] — 19.10.2026
+## [0.4.0] — 20.10.2026
 
 Stage 2b-2 «Team comments as a module»: the role `comments` becomes a contract that does not
 depend on the service — a browser adapter plus four server functions — and the first module on
@@ -49,7 +49,8 @@ module for another service: `docs/modules/comments.md`.
   into one re-read, offers `refresh()` to the Overview, and `close()` leaves the channel *and*
   closes the realtime socket. `schema.sql` qualifies every name with `public.`, grants the table
   to the API roles and warns that an existing table `public.comments` of your own would be
-  adopted. Off by default; the README of the module has the four steps.
+  adopted. Off by default; the *Comments* section of the main README has the four steps, and the
+  module README the details, the verdicts of `check` and the security notes.
 - **Guide for module authors** `docs/modules/comments.md`: both halves, the comment shape, the
   channel, `client`, `public`, CORS (including `Origin: null`), security notes, how to test, a
   complete minimal example. The reference is the test module
@@ -70,14 +71,21 @@ module for another service: `docs/modules/comments.md`.
   snapshots of private mockups. When a module the person enabled is missing or broken, or
   `space.json` cannot be read, `provider('comments')` raises instead of answering `'legacy'`:
   the canvas page shows local comments with a notice, the Overview and `inbox` report the
-  error, a publish goes on without comments and says `comments_unavailable`.
+  error, a publish goes on without comments and says `comments_unavailable`. The same error
+  — instead of silence — in a space *without* integrations, where there is no shared service
+  to fall back to but «no team comments» with no reason would be a lie. Only an entry that
+  could have been a comments module counts as lost (its manifest declares `comments`; or the
+  manifest cannot be read and the id is not a built-in module of another role; or it is the
+  built-in `supabase-comments` missing from the catalog): a stale entry of some unknown module
+  does not take the ЛІГА comments away.
 - `client_config` guard: no value of a non-public secret may appear in a key or a value, in raw,
   escaped or URL-encoded form; lone surrogates and huge integers are refused; the object is
   copied before it is checked, and the copy is what pages get. It stops accidents; it is not a
   trust boundary.
 - **Agent output is sanitised.** Texts of module errors and module comments lose control and
   invisible characters (ESC and the other C0/C1 codes, zero-width and bidirectional marks,
-  variation selectors, tag characters, surrogates), one-line fields lose line breaks, errors are
+  Hangul and Khmer fillers, the blank Braille cell, musical beam and tie controls, variation
+  selectors, tag characters, surrogates), one-line fields lose line breaks, errors are
   cut to 300 characters, `meta.shot` is dropped. A comment id must match
   `[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}` (the layer produces UUIDs or `c-<digits>-<base36>`): any
   other is skipped, and `resolve` never passes the module another one. At most 5000 comments
@@ -126,14 +134,23 @@ module for another service: `docs/modules/comments.md`.
 - Supabase's own `max-rows` setting (default 1000) cuts every API answer silently, so `list`
   shows the agent at most that many comments of a channel; raise it for the project if channels
   can grow that big.
+- **Comment text is untrusted input for the agent.** Anyone who holds the public key — it is
+  inside every published page — can *write* comments, and the agent reads them as work items.
+  The sanitiser only removes terminal and invisible-character attacks; multi-line `text` is
+  printed as is, so a visible instruction inside a comment is still an instruction the agent
+  sees.
+- A page that saves its whole cache after it missed a realtime event can re-open a comment the
+  agent resolved in the meantime (the same as the in-house channel always did).
 - The local `/published` view runs in a sandbox with the opaque origin `null`: the comment
   service has to allow CORS for it (`Access-Control-Allow-Origin: *`; Supabase does).
 - Module management has no UI yet (stage 3): enable and configure modules over the API.
 
 ### Tests
 
-`npm test` at 0.4.0 is green: 1331 node tests (plus `inspector-core`), 2320 Python tests in
-`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.3.0: 1258, 1938, 156, 170). Of them,
+`npm test` at 0.4.0 is green: 1336 node tests (plus `inspector-core`), 2332 Python tests in
+`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.3.0: 1258, 1938, 156, 170). The three
+Python suites were also run on Python 3.9.6, the oldest supported version, with the same result
+(2332 with 1 skipped, 168, 170); `npm test` itself uses Python 3.13. Of them,
 `supabase-comments` has 89 Python tests (a fake REST server under a network tripwire, end to end
 through the core: the page, the Overview, the adapter route, `inbox`; service keys, timeouts at
 the default budgets against a hung service, a parity check of the host rule with the core's),
@@ -142,13 +159,13 @@ supabase-js with the adapter in a `vm` (the wire shape, no timers left after `cl
 generic role is covered on the `memo-comments` fixture. The Python suite also passes with
 `DEAI_EXTRA_MODULES` exported for the whole run (the core tests that list or load a catalog unset
 it for their own).
-The fixes of the per-task reviews carry their mutation proofs in the commit messages. Live: the new
-`tests/live/comments.test.mjs` (7 tests) passes together with `modules.test.mjs`,
-`vercel.test.mjs`, `spaces.test.mjs`, `comment-audience.test.mjs` and
-`overview-comments.test.mjs` — 52 tests in total. Mutation runs confirmed that each scenario
-guards its rule (a refusing adapter route turns the canvas, Overview and UI-creation scenarios
-red; a core without module comments in builds turns the preview scenario red; losing `'legacy'`
-turns the ЛІГА scenario red).
+The fixes of the per-task reviews carry their mutation proofs in the commit messages. Live (run on
+20.10.2026): the new `tests/live/comments.test.mjs` (7 tests) passes together with
+`modules.test.mjs` (5), `vercel.test.mjs` (7), `spaces.test.mjs` (8),
+`comment-audience.test.mjs` (4) and `overview-comments.test.mjs` (21) — 52 tests in total.
+Mutation runs confirmed that each scenario guards its rule (a refusing adapter route turns the
+canvas, Overview and UI-creation scenarios red; a core without module comments in builds turns
+the preview scenario red; losing `'legacy'` turns the ЛІГА scenario red).
 
 ## [0.3.0] — 16.10.2026
 

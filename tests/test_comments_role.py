@@ -194,14 +194,34 @@ class ProviderTest(CommentsEnv):
         self.assertEqual(dm.provider('comments', other).id, 'cm-b')
         self.assertEqual(dm.provider('comments', sp).id, 'cm-a')
 
-    def test_a_broken_enabled_module_is_not_a_provider_in_a_plain_space(self):
+    def test_a_broken_enabled_comments_module_is_an_error_in_a_plain_space_too_never_silence(self):
+        """Без інтеграцій запасного шляху нема, але тиша — «коментарів немає» без причини — теж брехня: явно ввімкнений і
+        загублений модуль коментарів дає `module-error` (як у просторі ЛІГА), а `capabilities` несе `error`."""
         self.mkcm('cm-bad', client=('a.js',), files={})              # оголошений файл не лежить на диску
         self.assertEqual(dm.catalog()['cm-bad'].status, 'error')
         plain = self.new_space('Plain')
         _write(self.space_json(plain), json.dumps({'modules': {'cm-bad': {'enabled': True}}}))
-        self.assertIsNone(dm.provider('comments', plain))            # без інтеграцій «запасного» шляху нема: просто нікого
-        self.assertEqual(dm.capabilities(plain)['comments'], None)
-        self.assertNotIn('error', dm.capabilities(plain))
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('comments', plain)
+        self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message),
+                         ('module-error', 502, dm.COMMENTS_MODULE_BROKEN))
+        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None,
+                                                  'error': 'module-error'})
+
+    def test_a_plain_space_without_any_comments_entry_stays_none_without_an_error(self):
+        """Тиша лишається тишею там, де людина про коментарі нічого не вирішувала: порожній `space.json`, лише вимкнений
+        запис, модуль іншої ролі (справний чи зламаний із відомою роллю), застарілий запис невідомого модуля."""
+        self.mk('pub-ok')
+        self.mk('pub-syntax', server='def check(:\n')
+        self.mkcm()
+        plain = self.new_space('Plain')
+        for body in ({}, {'modules': {'cm': {'enabled': False}}}, {'modules': {'pub-ok': {'enabled': True}}},
+                     {'modules': {'pub-syntax': {'enabled': True}}}, {'modules': {'ghost': {'enabled': True}}}):
+            with self.subTest(body=body):
+                _write(self.space_json(plain), json.dumps(body))
+                self.assertIsNone(dm.provider('comments', plain))
+                self.assertEqual(dm.capabilities(plain)['comments'], None)
+                self.assertNotIn('error', dm.capabilities(plain))
 
     def enabled_entry(self, sp, *ids):
         _write(self.space_json(sp), json.dumps({'modules': {mid: {'enabled': True} for mid in ids}}))
@@ -213,7 +233,7 @@ class ProviderTest(CommentsEnv):
         self.mkcm('cm-syntax', server='def check(:\n')              # (2) `server.py` не компілюється (роль відома)
         self.mkcm('cm-json')                                         # (3) `module.json` не розібрати (ролі невідомі)
         _write(os.path.join(self.mods, 'cm-json', 'module.json'), '{broken')
-        for mid in ('cm-files', 'cm-syntax', 'cm-json', 'ghost'):    # (4) запису в каталозі нема взагалі
+        for mid in ('cm-files', 'cm-syntax', 'cm-json', 'supabase-comments'):    # (4) вбудованого модуля коментарів нема в каталозі
             with self.subTest(module=mid):
                 ig = self.new_space(f'Ig{mid.replace("-", "")}', integrations=True)
                 self.enabled_entry(ig, mid)
@@ -226,6 +246,67 @@ class ProviderTest(CommentsEnv):
         self.assertEqual(dm.catalog()['cm-files'].status, 'error')
         self.assertEqual(dm.catalog()['cm-syntax'].status, 'error')
         self.assertEqual(dm.catalog()['cm-json'].status, 'error')
+
+    def test_an_unrelated_stale_entry_does_not_take_the_league_comments_away(self):
+        """Запис, якого нема в каталозі й про який не відомо, що він вів коментарі (модуль прибрали, теку джерел більше не
+        названо), — пил у `space.json`: ЛІГА лишається на своєму шляху, без помилки."""
+        ig = self.new_space('Integ', integrations=True)
+        self.enabled_entry(ig, 'ghost', 'memo-comments')            # обидва — відсутні в каталозі цього тесту
+        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy'})
+
+    def test_a_broken_manifest_of_an_unknown_id_is_lost_but_of_a_known_other_builtin_is_not(self):
+        """Маніфест не розібрано — ролі невідомі: невідомий id вважаємо тим, що міг вести коментарі; а вбудований модуль
+        ІНШОЇ ролі (`KNOWN_OTHER_MODULES`) коментарів не вів ніколи — його поломка шлях не блокує."""
+        for mid in ('static-publish', 'css-tokens', 'vercel-publish'):
+            self.mk(mid)
+            _write(os.path.join(self.mods, mid, 'module.json'), '{broken')
+        self.mk('stranger')
+        _write(os.path.join(self.mods, 'stranger', 'module.json'), '{broken')
+        self.assertTrue(all(dm.catalog()[m].status == 'error' and not dm.catalog()[m].roles
+                            for m in ('static-publish', 'css-tokens', 'vercel-publish', 'stranger')))
+        for kind, integrations in (('league', True), ('plain', False)):
+            for mid in ('static-publish', 'css-tokens', 'vercel-publish'):
+                with self.subTest(kind=kind, module=mid):
+                    sp = self.new_space(f'{kind}{mid.replace("-", "")}', integrations=integrations)
+                    self.enabled_entry(sp, mid)
+                    want = 'legacy' if integrations else None
+                    self.assertEqual(dm.provider('comments', sp), want)
+                    self.assertNotIn('error', dm.capabilities(sp))
+            with self.subTest(kind=kind, module='stranger'):
+                sp = self.new_space(f'{kind}stranger', integrations=integrations)
+                self.enabled_entry(sp, 'stranger')
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.provider('comments', sp)
+                self.assertEqual(cm.exception.code, 'module-error')
+                self.assertEqual(dm.capabilities(sp)['error'], 'module-error')
+
+    def test_a_missing_builtin_comments_module_is_lost_in_both_kinds_of_space(self):
+        for kind, integrations in (('league', True), ('plain', False)):
+            with self.subTest(kind=kind):
+                sp = self.new_space(f'{kind}missing', integrations=integrations)
+                self.enabled_entry(sp, 'supabase-comments')          # у каталозі цього тесту його нема
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.provider('comments', sp)
+                self.assertEqual(cm.exception.message, dm.COMMENTS_MODULE_BROKEN)
+
+    def test_the_lost_entry_rule_is_a_pure_function_of_the_catalog_and_the_entries(self):
+        ok = dm.Module('ok-m', roles=['publish'])
+        broken_cm = dm.Module('b-cm', roles=['comments'], status='error', error='x', error_code='module-error')
+        broken_pub = dm.Module('b-pub', roles=['publish'], status='error', error='x', error_code='module-error')
+        broken_unknown = dm.Module('b-unk', roles=[], status='error', error='x', error_code='bad-manifest')
+        broken_css = dm.Module('css-tokens', roles=[], status='error', error='x', error_code='bad-manifest')
+        cat = {m.id: m for m in (ok, broken_cm, broken_pub, broken_unknown, broken_css)}
+        lost = dm._enabled_module_is_lost
+        on, off = {'enabled': True, 'settings': {}}, {'enabled': False, 'settings': {}}
+        self.assertFalse(lost(cat, {}))
+        self.assertTrue(lost(cat, {'b-cm': on}))
+        self.assertTrue(lost(cat, {'b-unk': on}))
+        self.assertTrue(lost(cat, {'supabase-comments': on}))
+        for quiet in ({'b-cm': off}, {'ok-m': on}, {'b-pub': on}, {'css-tokens': on}, {'ghost': on}, {'b-unk': off},
+                      {'supabase-comments': off}):
+            self.assertFalse(lost(cat, quiet), quiet)
+        self.assertTrue(lost(cat, {'ghost': on, 'b-cm': on}))        # одна справжня втрата серед пилу — втрата
 
     def test_publish_of_that_space_stays_the_league_path(self):
         self.mkcm('cm-files', client=('a.js',), files={})
@@ -262,7 +343,7 @@ class ProviderTest(CommentsEnv):
     def test_a_working_comments_module_wins_over_an_unrelated_lost_entry(self):
         self.mkcm()
         ig = self.new_space('Integ', integrations=True)
-        self.enabled_entry(ig, 'cm', 'ghost')
+        self.enabled_entry(ig, 'cm', 'supabase-comments')           # справжня втрата: вбудованого модуля нема в каталозі
         self.assertEqual(dm.provider('comments', ig).id, 'cm')
         self.assertEqual(dm.capabilities(ig)['comments'], 'cm')
 
@@ -437,7 +518,12 @@ class CommentsClientTest(CommentsEnv):
         for body in ('{"n": 10 ** 5000}', '{"n": -10 ** 5000}', '{"n": 10 ** 4400, "s": "x"}'):
             e = self.refused(body)
             self.assertEqual(type(e), dm.ModuleError)
-            self.assertIn('serializable', e.message)
+            self.assertEqual(e.code, 'module-error')
+            # Причина залежить від версії Python: де є ліміт цифр у `int` (3.11+, 3.9.14+), `json.dumps` кидає
+            # `ValueError` («is not serializable»); де його нема (3.9.6), число серіалізується й упирається в `MAX_CLIENT_CONFIG`.
+            # Обидві відмови — `ModuleError('module-error')` із ФІКСОВАНИМ текстом без значення.
+            self.assertTrue(e.message.endswith(('is not serializable', f'bigger than {dm.MAX_CLIENT_CONFIG} bytes')),
+                            e.message)
         self.assertEqual(self.run_cfg('{"n": 10 ** 18}'), {'n': 10 ** 18})
 
     def test_what_is_validated_is_what_is_returned(self):
@@ -797,6 +883,16 @@ class ExtraModulesTest(CommentsEnv):
         self.assertTrue(all(cat[k].status == 'ok' for k in cat), {k: cat[k].error for k in cat})
         self.assertEqual(list(cat), sorted(cat))                     # за абеткою, обидві теки разом
         self.assertEqual(dm.shadowed(), {})
+
+    def test_the_known_module_lists_are_exactly_the_real_builtins_split_by_the_comments_role(self):
+        """Правило «загубився модуль коментарів» (`_enabled_module_is_lost`) спирається на два списки id; істина — маніфести
+        справжніх вбудованих модулів, а не самі списки: новий вбудований модуль, не записаний ні в один, червонить це."""
+        cat = self.real_catalog(extra=None)
+        comments = {k for k, m in cat.items() if 'comments' in m.roles}
+        self.assertEqual(comments, set(dm.KNOWN_COMMENTS_MODULES))
+        self.assertEqual(set(cat) - comments, set(dm.KNOWN_OTHER_MODULES))
+        self.assertTrue(comments)
+        self.assertEqual(set(dm.KNOWN_COMMENTS_MODULES) & set(dm.KNOWN_OTHER_MODULES), set())
 
     def test_without_the_variable_the_fixture_is_not_there(self):
         cat = self.real_catalog(extra=None)
@@ -1265,6 +1361,31 @@ class PagesEnv(CommentsEnv):
         dm.write_secrets(sp['id'], 'memo-comments', {'token': TOKEN, 'pubkey': PUBKEY} if secrets is None else secrets)
         return dm.provider('comments', sp)
 
+    #: Те, чого не сміє бути на сторінці, що лишилась без командного каналу: зашитий СПІЛЬНИЙ сервіс ЛІГА.
+    SHARED = ('supabase', 'CommentLayerSupabase', 'cdn.jsdelivr.net')
+
+    def break_module(self, sp=None):
+        """Ввімкнути `memo-comments` у `sp` (типово — `self.liga`) і зламати його (оголошений файл зник → модуль `error`)."""
+        self.enable(sp or self.liga)
+        os.remove(os.path.join(self.mods, 'memo-comments', 'adapter.js'))
+        self.assertEqual(dm.catalog()['memo-comments'].status, 'error')
+
+    def assert_local_with_notice(self, html, code):
+        self.assertIn('local-adapter.js', html)
+        self.assertNotIn('__deaiCommentsCfg', html)
+        self.assertNotIn('/api/module-client/', html)
+        self.assertNotIn('audiences:', html)                           # командного каналу нема — вкладки «Команда» теж
+        for shared in self.SHARED + (serve.SUPABASE_URL, serve.SUPABASE_KEY):
+            self.assertNotIn(shared, html, shared)
+        self.assertNotIn('supabase', html.lower())
+        notice = re.search(r"window\.__clDown\(([^\n]*)\);\s*</script>\s*</body>", html)
+        self.assertIsNotNone(notice, 'примітка про відмову має бути видимою')
+        self.assertIn(code, notice.group(1))
+
+    def assert_no_shared_service_in(self, body):
+        for shared in (serve.SUPABASE_URL, serve.SUPABASE_KEY, 'sbUrl', 'sbKey'):
+            self.assertNotIn(shared, body, shared)
+
     def cfg_of(self, html):
         """Конфіг сторінки: `window.__deaiCommentsCfg = <літерал>;` → dict (літерал — валідний JSON)."""
         m = re.search(r'window\.__deaiCommentsCfg = (\{.*?\});\n', html)
@@ -1328,32 +1449,9 @@ class LeaguePrivacyTest(PagesEnv):
     приватних макетів), а лишається на локальному шарі з приміткою; `/api/comment-config` — центральна відповідь модулів.
     Усе — через справжній HTTP."""
 
-    SHARED = ('supabase', 'CommentLayerSupabase', 'cdn.jsdelivr.net')
-
     def setUp(self):
         super().setUp()
         self.use(self.liga)
-
-    def break_module(self):
-        self.enable(self.liga)
-        os.remove(os.path.join(self.mods, 'memo-comments', 'adapter.js'))        # оголошений файл зник → модуль `error`
-        self.assertEqual(dm.catalog()['memo-comments'].status, 'error')
-
-    def assert_local_with_notice(self, html, code):
-        self.assertIn('local-adapter.js', html)
-        self.assertNotIn('__deaiCommentsCfg', html)
-        self.assertNotIn('/api/module-client/', html)
-        self.assertNotIn('audiences:', html)                           # командного каналу нема — вкладки «Команда» теж
-        for shared in self.SHARED + (serve.SUPABASE_URL, serve.SUPABASE_KEY):
-            self.assertNotIn(shared, html, shared)
-        self.assertNotIn('supabase', html.lower())
-        notice = re.search(r"window\.__clDown\(([^\n]*)\);\s*</script>\s*</body>", html)
-        self.assertIsNotNone(notice, 'примітка про відмову має бути видимою')
-        self.assertIn(code, notice.group(1))
-
-    def assert_no_shared_service_in(self, body):
-        for shared in (serve.SUPABASE_URL, serve.SUPABASE_KEY, 'sbUrl', 'sbKey'):
-            self.assertNotIn(shared, body, shared)
 
     def test_a_broken_enabled_module_leaves_the_page_local_with_a_notice_and_no_shared_snippet(self):
         self.break_module()
@@ -1400,6 +1498,62 @@ class LeaguePrivacyTest(PagesEnv):
         self.assertEqual(self.fetch('/api/comment-config?ch=project&it=it1')[0], 200)
         _write(self.space_json(self.liga), json.dumps({'name': 'x'}))                # запису нема взагалі
         self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
+
+
+class PlainSpaceLostModuleTest(PagesEnv):
+    """Простір БЕЗ інтеграцій, де людина ЯВНО ввімкнула модуль коментарів, що потім не завантажився: запасного шляху нема,
+    але й тиші нема — сторінка лишається локальною З приміткою, `comment-config` називає помилку модуля (а не
+    «integrations-off»), `/api/task` несе `capabilities.error`. Простір без жодного запису про коментарі — як і було."""
+
+    def setUp(self):
+        super().setUp()
+        self.use(self.plain)
+
+    def capabilities(self):
+        st, raw = self.fetch('/api/task')
+        self.assertEqual(st, 200, raw)
+        return json.loads(raw)['space']['capabilities']
+
+    def test_the_page_stays_local_with_a_notice_and_no_tabs(self):
+        self.break_module(self.plain)
+        self.assert_local_with_notice(self.page('project'), 'module-error')
+
+    def test_comment_config_names_the_module_error_not_integrations_off(self):
+        self.break_module(self.plain)
+        st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
+        body = json.loads(raw)
+        self.assertEqual((st, body['ok'], body['code']), (502, False, 'module-error'))
+        self.assertEqual(body['error'], dm.COMMENTS_MODULE_BROKEN)
+        self.assertNotIn('integrations-off', raw)
+        self.assert_no_shared_service_in(raw)
+
+    def test_the_task_endpoint_carries_the_error(self):
+        self.break_module(self.plain)
+        self.assertEqual(self.capabilities(),
+                         {'publish': None, 'tokens': None, 'comments': None, 'error': 'module-error'})
+
+    def test_the_local_page_has_no_notice_and_the_local_comments_work(self):
+        self.break_module(self.plain)
+        html = self.page('local')
+        self.assertIn('local-adapter.js', html)
+        self.assertNotIn('window.__clDown(', html)
+
+    def test_without_a_comments_entry_nothing_changes_even_with_a_stale_unrelated_one(self):
+        for body in ({}, {'modules': {'ghost': {'enabled': True}}}):
+            with self.subTest(body=body):
+                _write(self.space_json(self.plain), json.dumps(body))
+                self.golden('page-none-project.html', self.page('project'))
+                st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
+                self.golden('config-none-project.json', raw)
+                self.assertEqual((st, json.loads(raw)['code']), (409, 'integrations-off'))
+                self.assertNotIn('error', self.capabilities())
+
+    def test_a_stale_unrelated_entry_keeps_the_league_snippet_in_a_league_space(self):
+        self.use(self.liga)
+        _write(self.space_json(self.liga), json.dumps({'modules': {'ghost': {'enabled': True}}}))
+        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
+        self.assertEqual(self.fetch('/api/comment-config?ch=project&it=it1')[0], 200)
+        self.assertNotIn('error', self.capabilities())
 
 
 class ModulePagesTest(PagesEnv):
@@ -1513,6 +1667,8 @@ class ModulePagesTest(PagesEnv):
         self.assertNotIn('__deaiCommentsCfg', html)
         self.assertNotIn('DeaiComments', html)
         self.assertNotIn('/api/module-client/', html)
+        self.assertNotIn('audiences:', html)                # вкладка «Команда» вела б у ту саму відмову: на локальній сторінці її нема
+        self.assertNotIn('onAudience', html)
         notice = re.search(r"window\.__clDown\(([^\n]*)\);\s*</script>\s*</body>", html)
         self.assertIsNotNone(notice, 'примітка про відмову має бути видимою (банер) в кінці сторінки')
         self.assertIn(code, notice.group(1))

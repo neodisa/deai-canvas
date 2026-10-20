@@ -94,7 +94,23 @@ export async function moduleStore(cfg, { load = loadScript, win = window, factor
     if (!factory || typeof factory.create !== "function") throw new Error(t("errCommentsAdapter"));
     factories.set(cfg.module, factory);
   }
-  return factory.create({ ...(cfg.config || {}), channel: cfg.channel, onChange: () => {} });
+  const store = factory.create({ ...(cfg.config || {}), channel: cfg.channel, onChange: () => {} });
+  // Контракт сховища: `load` і `save` обовʼязкові (сторінка робочого місця перевіряє те саме й показує банер). Без них
+  // коментатор піднявся б «мертвим» — пін ставиться, а зберегти його нікуди. Створене сховище закриваємо (воно могло
+  // відкрити опитування чи сокет) і відмовляємо помилкою (`errCommentsStore`) тим самим шляхом, що й «фабрики нема»:
+  // виняток викликачу, нічого не кешується, наступний вхід пробує знову.
+  if (!store || typeof store.load !== "function" || typeof store.save !== "function") {
+    closeQuietly(store);
+    throw new Error(t("errCommentsStore"));
+  }
+  return store;
+}
+
+/** Закрити сховище, якщо воно вміє (`close` необовʼязковий у контракті). Збій закриття не має заступити причину,
+ *  заради якої закриваємо, тож тут він проковтується. */
+function closeQuietly(store) {
+  try { if (store && typeof store.close === "function") store.close(); }
+  catch { /* закриття — найкраще зусилля */ }
 }
 
 /**
@@ -333,8 +349,14 @@ export function overviewComments(env) {
     } else {
       store = window.CommentLayerLocal({ endpoint: cfg.endpoint });
     }
-    await store.ready;
-    if (cfgKey !== key) { if (store.close) store.close(); return; }
+    try { await store.ready; }
+    catch (e) {
+      // Сервіс не відповів: сховище вже створене, а шар на ньому не підніметься — закриваємо, інакше його опитування чи
+      // realtime-сокет тече, і кожна наступна спроба додає ще один.
+      closeQuietly(store);
+      throw e;
+    }
+    if (cfgKey !== key) { closeQuietly(store); return; }
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }   // друга лінія: інстанс завжди ОДИН
     iterNum = cfg.version;
     cl = window.CommentLayer.create().init({

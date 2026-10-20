@@ -86,7 +86,8 @@ must also answer `OPTIONS` with `Access-Control-Allow-Headers`. Without it pins 
 
 Loaded by the core with `exec` (not imported): write it against the **standard library only** — it cannot import the core or
 sibling files (a test holds the built-in modules to a stdlib allowlist). Each function gets a
-`ctx`: `{'space': {id, path}, 'settings': {…}, 'secrets': {…only this module's…}, 'ModuleError': <class>}`.
+`ctx`: `{'space': {id, path}, 'settings': {…}, 'secrets': {…only this module's…}, 'ModuleError': <class>}`. (The real `ctx` has one more
+key, `folder_ok`, the output-folder rule of **publish** modules; a `comments` module has no use for it and should ignore it.)
 ⚠️ `def list` shadows the builtin `list` in your file: write `type([])`, never `list(…)`.
 
 | function | contract |
@@ -129,6 +130,10 @@ earlier. A timed-out call is abandoned, its thread finishes in the background.
   about it on stderr). Use it for development, never as an installation method.
 * Pages and previews carry your `client_config`, so keep the service's rules as strict as the service allows: with a public key
   in every page, whoever has it reads and writes. Prefer a dedicated service (project, database) per team.
+* **The agent reads comments as work items, and anyone who can write to your service can write one.** The public key is in every
+  page and published preview, so treat comment text as **untrusted input**. The core removes terminal and invisible-character
+  attacks (control codes, zero-width and bidirectional marks, fillers, tag characters) from what it prints; it does not judge
+  the words, and multi-line `text` is printed as is. Do not give the agent a service whose rules let strangers write.
 * The token goes only into headers of requests to your service, from one place; use `https://` and a DNS name, and never follow
   redirects with credentials (the example below refuses them). Plain `http://127.0.0.1` is for local tests only.
 

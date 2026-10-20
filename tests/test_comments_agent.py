@@ -784,21 +784,25 @@ class DecisionTest(AgentEnv):
 #: з `serve`: охоронець, що бере перелік з коду, який стереже, не може впасти.
 HOSTILE = [('NUL', '\x00'), ('BEL', '\x07'), ('BS', '\x08'), ('VT', '\x0b'), ('FF', '\x0c'), ('CR', '\r'), ('SO', '\x0e'),
            ('ESC', '\x1b'), ('US', '\x1f'), ('DEL', '\x7f'), ('C1 NEL', '\x85'), ('C1 CSI', '\x9b'), ('C1 APC', '\x9f'),
-           ('soft hyphen', '\xad'), ('CGJ', '\u034f'), ('ALM', '\u061c'), ('Mongolian VS1', '\u180b'),
+           ('soft hyphen', '\xad'), ('CGJ', '\u034f'), ('ALM', '\u061c'),
+           ('Hangul choseong filler', '\u115f'), ('Hangul jungseong filler', '\u1160'),
+           ('Khmer inherent vowel Aq', '\u17b4'), ('Khmer inherent vowel Aa', '\u17b5'), ('Mongolian VS1', '\u180b'),
            ('Mongolian VS4', '\u180f'), ('ZWSP', '\u200b'), ('ZWNJ', '\u200c'), ('ZWJ', '\u200d'), ('LRM', '\u200e'),
            ('RLM', '\u200f'), ('LS', '\u2028'), ('PS', '\u2029'), ('LRE', '\u202a'), ('RLE', '\u202b'), ('PDF', '\u202c'),
            ('LRO', '\u202d'), ('RLO', '\u202e'), ('word joiner', '\u2060'), ('function application', '\u2061'),
            ('invisible times', '\u2062'), ('invisible separator', '\u2063'), ('invisible plus', '\u2064'),
            ('U+2065', '\u2065'), ('LRI', '\u2066'), ('RLI', '\u2067'), ('FSI', '\u2068'), ('PDI', '\u2069'),
-           ('inhibit symmetric swapping', '\u206a'), ('nominal digit shapes', '\u206f'), ('Hangul filler', '\u3164'),
+           ('inhibit symmetric swapping', '\u206a'), ('nominal digit shapes', '\u206f'), ('blank Braille', '\u2800'),
+           ('Hangul filler', '\u3164'),
            ('VS1', '\ufe00'), ('VS16', '\ufe0f'), ('BOM', '\ufeff'), ('halfwidth Hangul filler', '\uffa0'),
            ('annotation anchor', '\ufff9'), ('annotation separator', '\ufffa'), ('annotation terminator', '\ufffb'),
+           ('musical begin beam', '\U0001d173'), ('musical end tie', '\U0001d17a'),
            ('VS17', '\U000e0100'), ('VS256', '\U000e01ef'), ('tag NUL', '\U000e0000'), ('tag A', '\U000e0041'),
            ('tag cancel', '\U000e007f'), ('lone high surrogate', '\ud800'), ('lone low surrogate', '\udfff')]
 #: Діапазони, у яких НЕ МОЖНА лишити жодного символа (включно з краями).
-HOSTILE_RANGES = [(0x00, 0x08), (0x0b, 0x1f), (0x7f, 0x9f), (0x180b, 0x180f), (0x200b, 0x200f), (0x2028, 0x202e),
-                  (0x2060, 0x206f), (0xfe00, 0xfe0f), (0xfff9, 0xfffb), (0xd800, 0xdfff), (0xe0000, 0xe007f),
-                  (0xe0100, 0xe01ef)]
+HOSTILE_RANGES = [(0x00, 0x08), (0x0b, 0x1f), (0x7f, 0x9f), (0x115f, 0x1160), (0x17b4, 0x17b5), (0x180b, 0x180f),
+                  (0x200b, 0x200f), (0x2028, 0x202e), (0x2060, 0x206f), (0x2800, 0x2800), (0xfe00, 0xfe0f),
+                  (0xfff9, 0xfffb), (0xd800, 0xdfff), (0x1d173, 0x1d17a), (0xe0000, 0xe007f), (0xe0100, 0xe01ef)]
 HOSTILE_SET = {c for _, c in HOSTILE}
 
 
