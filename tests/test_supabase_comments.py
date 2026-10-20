@@ -1328,9 +1328,21 @@ class StaticTest(unittest.TestCase):
         """Файли модуля публічні: ні справжніх імен, ні хостів, ні пошт, ні ref проєкту Supabase (їх 20 малих літер)."""
         bad = re.compile(r'liga\b|ліга|neodisa|@[a-z0-9.-]+\.[a-z]{2,}|\b[a-z]{20}\.supabase\.co|'
                          r'design-canvas|design office|\.vercel\.app', re.I)
+        # Справжні імена й домен звіряємо за SHA-256 слів: тест сам не повинен їх містити (репо публікується).
+        forbidden = {
+            '1ec49b8f2651da80d5e265bb07aad65d46d1c25279ea6778a14d3b1ed37022f0',
+            'e2d279cba45ada22aa30991a04f8fcc7280c7250dcf6454a41e348de6d4627b1',
+            '33a9c0fc9430786e1aa9f6401b27357191e471b17c74a4703789eafd88613706',
+            '0b16f09772ce87b27dc32a8c609ab5f999f7e5ba7f6cf885621fb81db4a318ef',
+            '30586794ac1f653b9561b422dba527afec6fe4f95f832e293bdfeedc1ecffb42',
+            '5a68fe329bb3d7474b136e44739ed3ea655bf381c6104297c9c536f5387a59a8',
+            '48c6e1190dd76af4a94fcf5827775d9e434743caf23920146c8bb5dc374a8d6a',
+        }
         for name in ('server.py', 'adapter.js', 'schema.sql', 'README.md', 'module.json', 'LICENSE-supabase-js'):
             text = _read(os.path.join(MODULE_DIR, name)).decode('utf-8')
             found = [m.group(0) for m in bad.finditer(text)]
+            found += [w for w in re.findall(r'\w+', text.lower())
+                      if hashlib.sha256(w.encode('utf-8')).hexdigest() in forbidden]
             self.assertEqual(found, [], f'{name}: {found}')
 
     def test_the_schema_keeps_its_guards(self):
