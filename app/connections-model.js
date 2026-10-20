@@ -64,10 +64,15 @@ export function groupModules(list) {
 
 /**
  * Рядок «Зараз» ролі з `capabilities` простору: `{kind: 'module', id, entry|null}`, `{kind: 'legacy'}`,
- * `{kind: 'none', noneKey}`; `null` — роль, якої `capabilities` не знає (нема що казати).
+ * `{kind: 'none', noneKey}`, `{kind: 'error'}`; `null` — роль, якої `capabilities` не знає (нема що казати).
+ *
+ * ⛔ `capabilities.error` (space.json не читається) — окремий стан і перевіряється РАНІШЕ за читання ролі: тоді решта
+ * `capabilities` нічого не варта (стара чи порожня), і показувати з неї «Зараз працює …» було б неправдою.
  */
 export function providerLine(role, caps, list) {
-  if (!caps || typeof caps !== "object" || role === "error" || !has(caps, role)) return null;
+  if (!caps || typeof caps !== "object") return null;
+  if (get(caps, "error")) return { kind: "error" };
+  if (role === "error" || !has(caps, role)) return null;
   const v = caps[role];
   if (v === "legacy") return { kind: "legacy" };
   if (typeof v !== "string" || !v) return { kind: "none", noneKey: roleKeys(role)?.none ?? null };
@@ -90,8 +95,9 @@ const clip = (s) => (typeof s === "string" && s ? (s.length > DETAIL_MAX ? `${s.
 const CHECK_KEYS = new Map([
   ["bad-settings", "cnErrBadSettings"], ["module-error", "cnErrModuleError"], ["check-timeout", "cnErrTimeout"],
   ["secrets-unreadable", "cnErrSecretsUnreadable"], ["bad-manifest", "cnErrBadManifest"],
-  ["bad-folder", "cnErrBadFolder"], ["not-writable", "cnErrNotWritable"],
+  ["bad-folder", "cnErrBadFolder"], ["no-folder", "cnErrBadFolder"], ["not-writable", "cnErrNotWritable"],
   ["no-token", "cnErrNoToken"], ["vercel-auth", "cnErrVercelAuth"], ["vercel-error", "cnErrVercelError"],
+  ["vercel-busy", "cnErrVercelBusy"],
   ["bad-key", "cnErrBadKey"], ["no-schema", "cnErrNoSchema"], ["supabase-error", "cnErrSupabaseError"],
   ["network", "cnErrNetwork"],
 ]);
@@ -119,7 +125,8 @@ export function whyOf(e) {
   if (e.status === "missing") return { key: "cnWhyMissing", detail: "" };
   if (e.status !== "error") return null;
   const lc = e.last_check;
-  const detail = lc && lc.ok === false && lc.error === e.error ? lc.detail : undefined;
+  /* Перевірка, що повернула `ok:false` БЕЗ `error`, лишає на сервері `error: 'check failed'` — її деталь теж ТА САМА. */
+  const detail = lc && lc.ok === false && (lc.error ?? "check failed") === e.error ? lc.detail : undefined;
   return verdictText({ ok: false, error: e.error, detail });
 }
 
@@ -129,14 +136,23 @@ const REFUSAL_KEYS = new Map([
   ["unwritable", "cnRefUnwritable"],
 ]);
 
-/** Відмова HTTP (`api()` кидає `Error` з `code`): `{key, detail}`; `timeout` (`formApi`) — наявний `formTimeout`. */
+/**
+ * Відмова HTTP (`api()` кидає `Error` з `code`): `{key, detail}`; `timeout` (`formApi`) — наявний `formTimeout`.
+ * Власний ключ відмови стоїть РАНІШЕ за ключ перевірки (`bad-settings` — і те, і те: у формі це «відмова», а не
+ * «перевірка»); коди перевірки на запасі, бо сервер віддає їх і відмовою (409 `secrets-unreadable` від запису секретів).
+ */
 export function refusalView(err) {
   const code = typeof err?.code === "string" ? err.code : "";
   if (code === "timeout") return { key: "formTimeout", detail: "" };
-  return { key: REFUSAL_KEYS.get(code) ?? "cnRefGeneric", detail: clip(typeof err?.message === "string" ? err.message : "") };
+  return { key: REFUSAL_KEYS.get(code) ?? CHECK_KEYS.get(code) ?? "cnRefGeneric", detail: clip(typeof err?.message === "string" ? err.message : "") };
 }
 
-/** Хто, КРІМ `e`, зараз тримає хоч одну з його ролей: увімкнені (зокрема неявно) і не `missing`. */
+/**
+ * Хто, КРІМ `e`, зараз тримає хоч одну з його ролей: увімкнені (зокрема неявно) і не `missing`.
+ *
+ * Модуль зі `status: error` теж рахується: він увімкнений і роль за ним — а чи працює він, не наше діло. Зайве
+ * підтвердження «замінити?» для зламаного постачальника безпечне; приховати заміну було б гірше. НЕ звужувати.
+ */
 export function roleHolders(e, list) {
   const mine = new Set(Array.isArray(e?.roles) ? e.roles : []);
   if (!mine.size) return [];
@@ -175,28 +191,48 @@ export function formFields(e) {
     if (type === "select") {
       f.options = (Array.isArray(s.options) ? s.options : []).filter((o) => o && typeof o.value === "string")
         .map((o) => ({ value: o.value, label: typeof o.label === "string" && o.label ? o.label : o.value }));
+      /* `blank` — вʼю малює ПОРОЖНІЙ варіант (і обирає його, коли значення не серед варіантів). Необовʼязковому він
+         потрібен завжди (очистити); обовʼязковому — лише коли дійсного значення нема. Без цього браузер мовчки
+         показав би перший варіант, і форма записала б його, хоча людина нічого не обирала. */
+      f.blank = !f.required || !f.options.some((o) => o.value === String(f.value ?? ""));
     }
     out.push(f);
   }
   return out;
 }
 
-/** Початкові значення форми (секретів нема ніколи): `{values, secrets: {}, erase: []}`. */
+/**
+ * Початкові значення форми (секретів нема ніколи): `{values, secrets: {}, erase: []}`.
+ * Форма стартує з того, що людина БАЧИТЬ: значення списку, якого вже нема серед варіантів, показується порожнім
+ * варіантом, тож і початкове — `""`. Інакше недоторкана форма дала б запис `null` (стирання, якого ніхто не просив).
+ */
 export function initialForm(fields) {
   const values = [];
   for (const f of fields) {
     if (f.type === "secret") continue;
+    if (f.type === "select") {
+      const v = f.value == null ? "" : String(f.value);
+      values.push([f.key, f.options.some((o) => o.value === v) ? v : ""]);
+      continue;
+    }
     values.push([f.key, f.type === "bool" ? f.value === true : (f.value == null ? "" : String(f.value))]);
   }
   return { values: Object.fromEntries(values), secrets: {}, erase: [] };
 }
 
 const trim = (v) => (typeof v === "string" ? v.trim() : v);
+/** Нормалізація значення поля для ПОРІВНЯННЯ: текст і шлях — без країв; список — точно (варіант може бути з пробілом). */
+const norm = (f, v) => (f.type === "select" ? String(v ?? "") : trim(String(v ?? "")));
+
+/** Чи можна стерти секрет: лише заданий і необовʼязковий (спільне для патча й вʼю — кнопка «Стерти»). */
+export const canErase = (f) => f?.type === "secret" && f.set === true && !f.required;
 
 /**
- * Патч запиту: `{settings, secrets}` лише зі зміненого. Текст і шлях обрізаються (вставка з буфера несе пробіли й
- * перенос рядка); очищене поле — `null` (ключ знімається, діє типове маніфесту). Секрет: введене — нове значення;
- * позначене до стирання — `null`, але лише заданий необовʼязковий; введене перемагає стирання.
+ * Патч запиту: `{settings, secrets}` лише зі зміненого. Текст і шлях обрізаються з обох боків порівняння (вставка з
+ * буфера несе пробіли й перенос рядка; збережене з пробілами без правки — не зміна); список порівнюється й іде
+ * ТОЧНО. Очищене поле — `null` (ключ знімається, діє типове маніфесту). Секрет: введене — нове значення (обрізається
+ * СВІДОМО: токен вставляють з переносом рядка); позначене до стирання — `null`, але лише `canErase`; введене
+ * перемагає стирання. Поле, якого нема в `cur.values`, не пишеться: `undefined` не стає ні `null`, ні `false`.
  */
 export function formPatch(fields, init, cur) {
   const settings = [];
@@ -206,17 +242,18 @@ export function formPatch(fields, init, cur) {
     if (f.type === "secret") {
       const typed = trim(get(cur?.secrets, f.key));
       if (typeof typed === "string" && typed) secrets.push([f.key, typed]);
-      else if (erase.has(f.key) && f.set === true && !f.required) secrets.push([f.key, null]);
+      else if (erase.has(f.key) && canErase(f)) secrets.push([f.key, null]);
       continue;
     }
+    if (!has(cur?.values, f.key)) continue;
     if (f.type === "bool") {
       const a = get(init?.values, f.key) === true;
       const b = get(cur?.values, f.key) === true;
       if (a !== b) settings.push([f.key, b]);
       continue;
     }
-    const a = trim(String(get(init?.values, f.key) ?? ""));
-    const b = trim(String(get(cur?.values, f.key) ?? ""));
+    const a = norm(f, get(init?.values, f.key));
+    const b = norm(f, get(cur?.values, f.key));
     if (a !== b) settings.push([f.key, b === "" ? null : b]);
   }
   return { settings: Object.fromEntries(settings), secrets: Object.fromEntries(secrets) };
@@ -232,7 +269,7 @@ export function missingRequired(fields, cur) {
       const typed = trim(get(cur?.secrets, f.key));
       return f.set !== true && !(typeof typed === "string" && typed);
     }
-    return trim(String(get(cur?.values, f.key) ?? "")) === "";
+    return norm(f, get(cur?.values, f.key)) === "";
   }).map((f) => f.key);
 }
 

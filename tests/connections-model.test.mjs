@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  ROLE_ORDER, builtinText, cardView, disableConsequences, formFields, formPatch, groupModules, initialForm,
+  ROLE_ORDER, builtinText, canErase, cardView, disableConsequences, formFields, formPatch, groupModules, initialForm,
   isDirty, missingRequired, providerLine, refusalView, roleHolders, roleIcon, roleKeys, verdictText, whyOf,
   writePayload,
 } from "../app/connections-model.js";
@@ -58,7 +58,7 @@ test("рядок «Зараз»: модуль, legacy, нікого з насл�
   assert.deepEqual(providerLine("comments", { comments: "legacy" }, list), { kind: "legacy" });
   assert.deepEqual(providerLine("tokens", { tokens: null }, list), { kind: "none", noneKey: "cnNoneTokens" });
   assert.equal(providerLine("vcs", { publish: null }, list), null, "роль, якої capabilities не знає");
-  assert.equal(providerLine("error", { error: "x" }, list), null);
+  assert.equal(providerLine("error", { error: "" }, list), null, "роль «error» — не постачальник; непорожній capabilities.error — окремий стан нижче");
   assert.equal(providerLine("publish", null, list), null);
   assert.equal(providerLine("__proto__", {}, list), null);
 });
@@ -235,4 +235,177 @@ test("прогалини: стирання секрету, власник рол
   assert.equal(isDirty({ settings: { a: 1 }, secrets: {} }), true, "лише налаштування");
   assert.equal(isDirty({ settings: {}, secrets: { b: "x" } }), true, "лише секрети");
   assert.equal(isDirty(null), false);
+});
+
+/* ── Фікси після ревʼю задачі 2: списки без значення, capabilities.error, точний патч, коди ─────────────────────── */
+
+const OPTS = [{ value: "a", label: "A" }, { value: "b", label: "B" }];
+const SEL = (o) => formFields({ settings: [{ key: "s", type: "select", label: "S", options: OPTS, ...o }] });
+const CUR = (init, values = init.values) => ({ values: { ...values }, secrets: {}, erase: [] });
+
+test("списки: форма стартує з того, що людина БАЧИТЬ — порожній вибір не стає тихим записом першого варіанта", () => {
+  /* Обовʼязковий без значення: порожньо, «не заповнено», пише лише свідомий вибір. */
+  let f = SEL({ required: true });
+  assert.equal(f[0].blank, true, "обовʼязковий без значення: вʼю малює порожній варіант");
+  let init = initialForm(f);
+  assert.equal(init.values.s, "");
+  assert.deepEqual(missingRequired(f, CUR(init)), ["s"]);
+  assert.deepEqual({ ...formPatch(f, init, CUR(init, { s: "a" })).settings }, { s: "a" });
+  assert.deepEqual(missingRequired(f, CUR(init, { s: "a" })), []);
+
+  /* Обовʼязковий із значенням, якого вже нема серед варіантів: так само порожньо й «не заповнено». */
+  f = SEL({ required: true, value: "gone" });
+  assert.equal(f[0].blank, true);
+  assert.equal(initialForm(f).values.s, "");
+  assert.deepEqual(missingRequired(f, CUR(initialForm(f))), ["s"]);
+
+  /* Необовʼязковий із застарілим значенням: початково "", тож без дотику — НІЧОГО не пишемо (раніше стирали null).
+     ⚠️ cur імітує те, що віддає DOM: вʼю обирає порожній варіант, значення елемента — "". Якби `initialForm` віддав
+     "gone", патч вийшов би `{s: null}` — стирання, якого людина не просила. */
+  f = SEL({ required: false, value: "gone" });
+  init = initialForm(f);
+  assert.equal(f[0].blank, true);
+  assert.equal(init.values.s, "");
+  const untouched = formPatch(f, init, CUR(init, { s: "" }));
+  assert.deepEqual({ ...untouched.settings }, {});
+  assert.equal(isDirty(untouched), false);
+
+  /* Із дійсним значенням: обовʼязковому порожній варіант не потрібен, необовʼязковому — потрібен (очистити). */
+  f = SEL({ required: true, value: "b" });
+  assert.equal(f[0].blank, false);
+  assert.equal(initialForm(f).values.s, "b");
+  f = SEL({ required: false, value: "b" });
+  assert.equal(f[0].blank, true);
+  init = initialForm(f);
+  assert.equal(init.values.s, "b");
+  assert.deepEqual({ ...formPatch(f, init, CUR(init, { s: "" })).settings }, { s: null }, "свідоме очищення необовʼязкового");
+
+  /* Значення-число зіставляється з варіантом за рядком; список без варіантів — порожній. */
+  assert.equal(initialForm(SEL({ value: 5, options: [{ value: "5" }] })).values.s, "5");
+  assert.equal(SEL({ required: true, value: "a", options: [] })[0].blank, true);
+  assert.equal(initialForm(SEL({ value: "a", options: [] })).values.s, "");
+});
+
+test("рядок «Зараз»: непорожній capabilities.error — окремий стан, раніше за читання ролі", () => {
+  const list = [M("vercel-publish")];
+  assert.deepEqual(providerLine("publish", { error: "space-json-unreadable" }, list), { kind: "error" });
+  assert.deepEqual(providerLine("vcs", { error: "x" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає");
+  assert.deepEqual(providerLine("error", { error: "x" }, list), { kind: "error" });
+  assert.deepEqual(providerLine("publish", { publish: "vercel-publish", error: "x" }, list), { kind: "error" },
+    "помилка перемагає застарілого постачальника");
+  assert.equal(providerLine("publish", { publish: "vercel-publish", error: "" }, list).kind, "module");
+  assert.equal(providerLine("publish", { publish: "vercel-publish", error: null }, list).kind, "module");
+  assert.equal(providerLine("publish", null, list), null, "без capabilities — як було");
+});
+
+test("патч: ключ, якого нема в cur.values, не пишеться — undefined не стає null чи false", () => {
+  const f = formFields({ settings: [
+    { key: "t", type: "text", label: "T", value: "x" },
+    { key: "b", type: "bool", label: "B", value: true },
+    { key: "s", type: "select", label: "S", value: "a", options: OPTS },
+  ] });
+  const init = initialForm(f);
+  for (const cur of [{ values: {}, secrets: {}, erase: [] }, { secrets: {}, erase: [] }, null, undefined]) {
+    const p = formPatch(f, init, cur);
+    assert.deepEqual({ ...p.settings }, {}, JSON.stringify(cur));
+    assert.deepEqual({ ...p.secrets }, {});
+  }
+});
+
+test("патч: пробіли по краях — лише для тексту, шляху й секретів; select порівнюється й іде ТОЧНО", () => {
+  const f = formFields({ settings: [
+    { key: "t", type: "text", label: "T", value: "  x " },
+    { key: "p", type: "path", label: "P", value: "\t/a/b\n" },
+    { key: "s", type: "select", label: "S", value: " a ", options: [{ value: "a" }, { value: " a " }] },
+  ] });
+  const init = initialForm(f);
+  assert.deepEqual({ ...init.values }, { t: "  x ", p: "\t/a/b\n", s: " a " }, "форма несе збережене як є");
+  /* ⚠️ Збережене значення з пробілами без правки — НЕ зміна. Раніше це перевіряла лише одна сторона порівняння
+     (обрізалось cur, а init ні), і мутація «прибрати обрізання init» виживала: ніхто не передавав початкове з
+     пробілами. */
+  assert.deepEqual({ ...formPatch(f, init, CUR(init)).settings }, {});
+  assert.deepEqual({ ...formPatch(f, init, CUR(init, { ...init.values, t: "x" })).settings }, {},
+    "зняті пробіли в тексті — та сама зміна, що й нуль");
+  /* select: " a " → "a" — це ІНШИЙ варіант, і він іде як є. */
+  assert.deepEqual({ ...formPatch(f, init, CUR(init, { ...init.values, s: "a" })).settings }, { s: "a" });
+  const g = formFields({ settings: [{ key: "s", type: "select", label: "S", value: "a", options: [{ value: "a" }, { value: " a " }] }] });
+  const ginit = initialForm(g);
+  assert.deepEqual({ ...formPatch(g, ginit, CUR(ginit, { s: " a " })).settings }, { s: " a " }, "пробіл у варіанті не обрізається");
+  /* Секрети обрізаються свідомо: токен вставляють з буфера разом із переносом рядка. */
+  const sec = formFields({ settings: [{ key: "k", type: "secret", label: "K", required: false, set: false }] });
+  assert.deepEqual({ ...formPatch(sec, initialForm(sec), { values: {}, secrets: { k: "\n tk \n" }, erase: [] }).secrets }, { k: "tk" });
+});
+
+test("коди: vercel-busy і no-folder; відмова secrets-unreadable бере текст коду перевірки, власні ключі відмов — вище", () => {
+  assert.deepEqual(verdictText({ ok: false, error: "vercel-busy", detail: "retry" }), { key: "cnErrVercelBusy", detail: "retry" });
+  assert.deepEqual(verdictText({ ok: false, error: "no-folder" }), { key: "cnErrBadFolder", detail: "" });
+  assert.deepEqual(refusalView({ code: "secrets-unreadable", message: "keychain locked" }),
+    { key: "cnErrSecretsUnreadable", detail: "keychain locked" });
+  assert.equal(refusalView({ code: "vercel-busy" }).key, "cnErrVercelBusy");
+  assert.equal(refusalView({ code: "no-folder" }).key, "cnErrBadFolder");
+  assert.equal(refusalView({ code: "bad-settings" }).key, "cnRefBadSettings", "власний ключ відмови раніше за ключ перевірки");
+  assert.equal(refusalView({ code: "role-taken" }).key, "cnRefRoleTaken");
+  assert.equal(refusalView({ code: "no-such-code", message: "m" }).key, "cnRefGeneric");
+  assert.equal(refusalView({ code: "timeout" }).key, "formTimeout");
+});
+
+test("причина: перевірка без коду → сервер пише error 'check failed', і деталь ТАКОЇ перевірки видно", () => {
+  assert.deepEqual(whyOf(M("a", { status: "error", error: "check failed", last_check: { ok: false, detail: "boom" } })),
+    { key: "cnErrGeneric", detail: "check failed — boom" });
+  assert.deepEqual(whyOf(M("a", { status: "error", error: "bad-key", last_check: { ok: false, detail: "boom" } })),
+    { key: "cnErrBadKey", detail: "" }, "перевірка без коду не дає деталь іншій причині");
+});
+
+test("canErase: лише заданий необовʼязковий секрет (спільне для патча й вʼю)", () => {
+  assert.equal(canErase({ type: "secret", set: true, required: false }), true);
+  assert.equal(canErase({ type: "secret", set: true, required: true }), false);
+  assert.equal(canErase({ type: "secret", set: false, required: false }), false);
+  assert.equal(canErase({ type: "secret", set: null, required: false }), false);
+  assert.equal(canErase({ type: "text", set: true, required: false }), false);
+  assert.equal(canErase(null), false);
+  const [a, b, c] = formFields({ settings: [
+    { key: "a", type: "secret", label: "A", set: true }, { key: "b", type: "secret", label: "B", required: true, set: true },
+    { key: "c", type: "secret", label: "C" },
+  ] });
+  assert.deepEqual([canErase(a), canErase(b), canErase(c)], [true, false, false]);
+});
+
+test("ключі constructor, toString та інші члени прототипа — звичайні власні поля в полях, формі й патчі", () => {
+  const f = formFields({ settings: [
+    { key: "constructor", type: "text", label: "c", value: "a" },
+    { key: "toString", type: "text", label: "t" },
+    { key: "valueOf", type: "bool", label: "v", value: true },
+    { key: "hasOwnProperty", type: "select", label: "h", value: "x", options: [{ value: "x" }, { value: "y" }] },
+    { key: "isPrototypeOf", type: "secret", label: "s", required: false, set: true },
+  ] });
+  assert.deepEqual(f.map((x) => x.key), ["constructor", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf"]);
+  const init = initialForm(f);
+  assert.equal(Object.getPrototypeOf(init.values), Object.prototype);
+  assert.deepEqual(Object.keys(init.values), ["constructor", "toString", "valueOf", "hasOwnProperty"]);
+  assert.equal(init.values.constructor, "a");
+  assert.equal(init.values.toString, "");
+  assert.equal(init.values.valueOf, true);
+  assert.equal(init.values.hasOwnProperty, "x");
+  assert.deepEqual({ ...formPatch(f, init, CUR(init)).settings }, {});
+
+  const p = formPatch(f, init, {
+    values: Object.fromEntries([["constructor", "b"], ["toString", "z"], ["valueOf", false], ["hasOwnProperty", "y"]]),
+    secrets: Object.fromEntries([["isPrototypeOf", "tok"]]), erase: [],
+  });
+  assert.equal(Object.getPrototypeOf(p.settings), Object.prototype);
+  assert.deepEqual(Object.keys(p.settings).sort(), ["constructor", "hasOwnProperty", "toString", "valueOf"]);
+  assert.equal(p.settings.constructor, "b");
+  assert.equal(p.settings.valueOf, false);
+  assert.deepEqual(Object.keys(p.secrets), ["isPrototypeOf"]);
+  assert.equal(p.secrets.isPrototypeOf, "tok");
+  const erased = formPatch(f, init, { ...CUR(init), erase: ["isPrototypeOf"] });
+  assert.equal(erased.secrets.isPrototypeOf, null, "стерти заданий необовʼязковий секрет з таким ключем");
+
+  /* Застарілий init без ключів (у живому коді такого нема, але читання не мусить знаходити члени прототипа):
+     порожнє — це порожнє, а не `String(Object)`, тож і запису нема. */
+  const bare = formPatch(f, { values: {}, secrets: {}, erase: [] },
+    CUR(init, Object.fromEntries([["constructor", ""], ["toString", ""], ["valueOf", false], ["hasOwnProperty", ""]])));
+  assert.deepEqual({ ...bare.settings }, {}, "чужий init без ключів: рядки не вигадуються з прототипа");
+  assert.deepEqual(missingRequired(formFields({ settings: [{ key: "constructor", type: "text", label: "c", required: true }] }),
+    { values: {}, secrets: {}, erase: [] }), ["constructor"]);
 });
