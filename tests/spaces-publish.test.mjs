@@ -618,11 +618,14 @@ test("словник: плашка й застереження Vercel — оби
     assert.match(a, /team|команд/i, `${lang}: «команду» не названо — 403 буває й через неї`);
     /* `vercel-auth` — не лише відхилений токен (403: права, тариф, команда): не стверджуємо «токен не прийнято». */
     assert.doesNotMatch(a, /не прийня|not accept|rejected|invalid|недійсн/i, `${lang}: стверджує, що токен не прийнято`);
-    /* Екрана налаштувань модулів у 0.3.0 нема (етап 3): керують через API чи агента — не обіцяємо кнопки. */
-    assert.doesNotMatch(a, /натисніть|press|click|кнопк|button|екран|screen/i, `${lang}: обіцяє екран налаштувань`);
+    /* З 0.5.0 екран «Підключення» є (меню простору), тож текст вказує ШЛЯХ до нього; але конкретної кнопки не
+       обіцяє — крок «куди натиснути» живе в самому екрані й може змінитись. */
+    assert.doesNotMatch(a, /натисніть|press|click|кнопк|button/i, `${lang}: обіцяє кнопку`);
   }
-  assert.match(DICT.uk.publishErrVercelAuth(""), /API|агент/);
-  assert.match(DICT.en.publishErrVercelAuth(""), /API|agent/i);
+  assert.match(DICT.uk.publishErrVercelAuth(""), /меню простору → «Підключення»/);
+  assert.match(DICT.en.publishErrVercelAuth(""), /space menu → Connections/);
+  assert.doesNotMatch(DICT.uk.publishErrVercelAuth(""), /через API чи агента/, "старе формулювання «лише через API» прибрано");
+  assert.doesNotMatch(DICT.en.publishErrVercelAuth(""), /through the API or the agent/, "старе формулювання «лише через API» прибрано");
   assert.match(DICT.uk.publishErrVercelAuth(""), /^Vercel відмовив у доступі/);
   assert.match(DICT.en.publishErrVercelAuth(""), /^Vercel denied access/);
 });
