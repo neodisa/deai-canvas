@@ -35,17 +35,35 @@
  *        (мить — ловить ЛИШЕ `watchLeaks`: знімок наприкінці її не бачить), у атрибуті `body` після успіху і в `value`
  *        після невдалої перевірки (обидві видно й знімку, і стеженню).
  *
- * ⚠️ Сценарій 6 перед повторним відкриттям панелі перезавантажує сторінку: після запису картки ще мить тримають СТАРИЙ
- * список (`afterModulesChange` перечитує його асинхронно), і «Налаштувати», натиснуте в цей проміжок, показало б
- * колишнє «задано». Людині цього вікна не влучити, а тесту — легко; свіжий вхід його не має.
+ * Сценарії ревʼю Task 6–7 (кожен — мутація «прибери виправлення»):
+ *   8, 9 (рамка після виходу) — `reloadFrame()` після `render()` у `leaveHome` (стара вада): після запису модулів і
+ *        виходу в ІНШУ задачу рамка показувала 404 старого документа, а простий «назад» робив два `/commented`.
+ *        Лічильник `load` на `#frame` і мітка документа в рамці (`ЗАДАЧА-2`) — обидва сценарії червоніють.
+ *   10–12 (згода на заміну свіжа) — `cnConfirmReplace`: ігнор свіжого списку (`now = holders`) червонить 10–12; без
+ *        відмови «вдруге змінились» — 11 (питає втретє); роль звільнилась → `return true` (шле `replace` власникові, що
+ *        зʼявиться між кроками) — 12; тост без `cnToastReplaced` — 3 і 10.
+ *   13 (фокус у панелі) — `paintCnDrawer`: без повернення фокуса — 13; без памʼяті `focusWant` (під запитом усе вимкнено,
+ *        фокус на хрестику, після відповіді мусить вернутись у поле) — теж 13.
+ *   14, 15 (панель проти дій карток) — `connAction`: «Вимкнути» власного модуля без закриття панелі — 14; чужа панель
+ *        без закриття попередньої — 15; відмова на «Відкинути?» не зупиняє дію (`await` без `return`) — 14 і 15.
+ *   16 (Esc) — `defaultPrevented` у слухачі панелі або `preventDefault` у слухачі дропдауна: без будь-якого одного Esc
+ *        закриває і дропдаун, і панель.
+ *   17 (логотип, «назад») — `BAR_ACTIONS.home`/`back` без `dismissCnDrawer`: брудну панель губить мовчки.
+ *   18 (мова й секрет) — `restoreCnSecrets` у `switchLang`: без нього зміна мови стирає набране.
+ *   19 (відмова перечитує список) — `cnRefreshAfterRefusal`: без нього картка й панель бачать колишні прапорці `set`.
+ *   6 (відкриття панелі одразу після збереження) — `cnCardBusy(…, true)`: без нього «Налаштувати» відкриває СТАРИЙ запис
+ *        (колишнє «задано» після стирання).
+ *
+ * ⚠️ Стан секрету читаємо ЯКОРЕНИМ: `/^задано ·/`. Голе `/задано/` збігається й із «не задано» — тест 19 тоді лишався
+ * зеленим під мутацією «без перечитування» (стан «не задано» проходив як «задано»).
  */
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, stop } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, postJson, sleep, stop } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
@@ -55,6 +73,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 const MODULES_DIR = path.join(ROOT, "tests", "fixtures", "modules-conn");
 const SECRET = "live-S3cret-Жовтень-7";
 const MOCKUP = () => "<!doctype html><html><body><h1>Макет</h1></body></html>";
+/** Макет із міткою задачі: за нею видно, ЧИЄЇ задачі документ стоїть у рамці. */
+const MARKED = (mark) => () => `<!doctype html><html><body><h1 id="mark">${mark}</h1></body></html>`;
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
@@ -107,11 +127,16 @@ const leaks = (page) => page.evaluate(() => window.__leaks);
 /**
  * Сервер + контекст браузера. Контекст рахує КОЖЕН запит (адреси й тіла `POST`), збирає тіла відповідей API й не
  * пускає нічого за межі машини (`route` → `abort`): якщо код колись піде назовні, тест не постукає на справжній
- * хост, а запис у `outside` його видасть. `two` — другий простір («Atelier»), для сценарію зміни простору.
+ * хост, а запис у `outside` його видасть. `two` — другий простір («Atelier»), для сценарію зміни простору; `marked` —
+ * у «Studio» дві задачі з різними мітками в макеті (`ЗАДАЧА-1` — поточна, `ЗАДАЧА-2` — «Інша»), для сценаріїв про рамку.
  */
-async function boot(t, { two = false } = {}) {
-  const X = taskFixture({ html: MOCKUP });
+async function boot(t, { two = false, marked = false } = {}) {
+  const X = taskFixture({ html: marked ? MARKED("ЗАДАЧА-1") : MOCKUP });
   const spaces = [{ name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: X.dir, title: "Задача" } } }];
+  if (marked) {
+    const Z = taskFixture({ html: MARKED("ЗАДАЧА-2") });
+    spaces[0].tasks.t2 = { dir: Z.dir, title: "Інша" };
+  }
   if (two) {
     const Y = taskFixture({ html: MOCKUP });
     spaces.push({ name: "Atelier", id: "atelier", color: "space-3", tasks: { t2: { dir: Y.dir, title: "Інша" } } });
@@ -231,6 +256,8 @@ test("3: заміна публікації — питання → replace → st
   await page.click('.cv-ask-scrim button[data-a="ok"]');
   await waitBadge(page, "memo-publish", "ok");
   await waitBadge(page, "static-publish", "off");
+  assert.equal(await page.locator("#cv-toast").textContent(), "Підключено: Memo publish (test). Вимкнено: Публікація в теку",
+    "тост після заміни називає вимкнений модуль");
   const mods = spaceJson(spacePath).modules;
   assert.equal(mods["static-publish"].enabled, false);
   assert.equal(mods["memo-publish"].enabled, true);
@@ -296,7 +323,7 @@ test("5: перевірка, що каже «ні» — панель лишає�
   assert.ok(!txt.includes("Перевірка не пройшла"), "загальний рядок після голови не повторюється");
   assert.match(await page.locator('#cn-drawer [data-cn-dr="submit"]').textContent(), /Зберегти/, "далі — режим правки");
   assert.equal(await page.inputValue('#cn-drawer [data-cn-field="token"]'), "", "після відповіді сервера поле пароля порожнє");
-  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /задано/, "секрет збережено, стан — «задано»");
+  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /^задано ·/, "секрет збережено, стан — «задано»");
   await waitBadge(page, "memo-publish", "error");
   await assertSecretNowhere(m);
   assert.deepEqual(outside, []);
@@ -317,7 +344,7 @@ test("6: секрет — «Стерти» позначає (aria-pressed + пр
   const erase = page.locator('#cn-drawer [data-cn-dr="erase"]');
   const note = page.locator('#cn-drawer [data-cn-erase-note="token"]');
   const save = page.locator('#cn-drawer [data-cn-dr="submit"]');
-  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /задано/);
+  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /^задано ·/);
   assert.equal(await erase.textContent(), "Стерти");
   assert.equal(await erase.getAttribute("aria-pressed"), "false");
   assert.equal(await note.isVisible(), false, "примітка стирання схована, доки не позначено");
@@ -343,21 +370,15 @@ test("6: секрет — «Стерти» позначає (aria-pressed + пр
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
   assert.equal(tokenOf(await modulesList(url)).set, false, "список після стирання — set: false");
   assert.equal(secretsJson(deaiHome).studio?.["memo-publish"]?.token, undefined, "ключ стерто в secrets.json");
-  await assertSecretNowhere(m);
 
-  /* Панель, відкрита знову: «не задано», кнопки «Стерти» вже нема (стирати нічого). Спершу — свіжий вхід на сторінку:
-     після запису картки ще мить тримають СТАРИЙ список (`afterModulesChange` перечитує його асинхронно), і «Налаштувати»,
-     натиснуте в цей проміжок, показало б колишнє «задано» — це не те, що тут перевіряється. */
-  await page.reload();
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
-  await watchLeaks(page);
-  await openConnections(page);
+  /* Панель, відкрита знову ОДРАЗУ (без перезавантаження й очікування): «не задано», кнопки «Стерти» вже нема. Картка
+     зайнята (`'save'`) до кінця перечитування списку, тож «Налаштувати» не відкриє СТАРИЙ запис із «задано»: клік
+     Playwright чекає, поки кнопка знову доступна (ревʼю: без цього тут було колишнє «задано»). */
   await page.click('[data-cn="configure"][data-id="memo-publish"]');
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="token"]');
-  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /не задано/);
+  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /^не задано ·/);
   assert.equal(await page.locator('#cn-drawer [data-cn-dr="erase"]').count(), 0);
-  assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM після перезавантаження");
-  assert.deepEqual(await leaks(page), []);
+  await assertSecretNowhere(m);
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -391,6 +412,369 @@ test("7: простір перемкнули з відкритою панелл�
   assert.match(await page.locator(".cn-sec").first().textContent(), /Зараз: Memo publish \(test\)/);
   assert.equal(readFileSync(path.join(atelier.path, "space.json"), "utf8"), atelierBefore, "у новий простір нічого не записано");
   assert.equal(spaceJson(studio.path).modules, undefined, "у старий простір теж");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+/* ── сценарії ревʼю Task 6–7: рамка, згода на заміну, фокус, панель проти дій карток ─────────────────────────────── */
+
+/** Лічильник подій `load` рамки задачі (слухач на елементі `#frame` переживає навігації документа в ній). */
+const countFrameLoads = (page) => page.evaluate(() => {
+  window.__frameLoads = 0;
+  document.getElementById("frame").addEventListener("load", () => { window.__frameLoads += 1; });
+});
+const frameLoads = (page) => page.evaluate(() => window.__frameLoads);
+/** Мітка документа в рамці (`ЗАДАЧА-…`); `null`, коли документа з міткою нема (404, порожньо). */
+const frameMark = (page) => page.evaluate(() => document.getElementById("frame").contentDocument?.getElementById("mark")?.textContent ?? null);
+const commentedRequests = (requests) => requests.filter((u) => u.includes("/commented?")).length;
+
+/** Вимкнути `static-publish` карткою (запис модулів, що змінює постачальника публікації й, отже, документ рамки). */
+async function disableStaticPublish(page) {
+  await page.click('[data-cn="disable"][data-id="static-publish"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await waitBadge(page, "static-publish", "off");
+}
+
+test("8: запис модулів → логотип → ІНША задача: рамка показує нову задачу (не 404), рівно одне завантаження", async (t) => {
+  const { page, requests, outside, errors } = await boot(t, { marked: true });
+  await page.waitForFunction(() => document.getElementById("frame").contentDocument?.getElementById("mark")?.textContent === "ЗАДАЧА-1",
+    null, { timeout: 15000 });
+  await openConnections(page);
+  await disableStaticPublish(page);
+  await countFrameLoads(page);
+  const before = commentedRequests(requests);
+  await page.click('#bar [data-act="home"]');
+  await page.click('#tasks-home .th-card[data-id="t2"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById("frame").contentDocument?.getElementById("mark")?.textContent === "ЗАДАЧА-2",
+    null, { timeout: 15000 });
+  await sleep(500);                                          // другого завантаження (старого документа) не мусить бути
+  assert.equal(await frameMark(page), "ЗАДАЧА-2", "у рамці — документ нової задачі, а не 404 старого");
+  assert.equal(await frameLoads(page), 1, "рамка завантажилась рівно один раз після виходу");
+  assert.equal(commentedRequests(requests) - before, 1, "рівно один запит /commented");
+  assert.equal(await page.locator("#bar .crumb--task .txt").textContent(), "t2", "смуга й рамка — про одну задачу");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("9: запис модулів → логотип → «назад до задачі»: один запит /commented й одне завантаження рамки (було два)", async (t) => {
+  const { page, requests, outside, errors } = await boot(t, { marked: true });
+  await openConnections(page);
+  await disableStaticPublish(page);
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  await countFrameLoads(page);
+  const before = commentedRequests(requests);
+  await page.click('#bar [data-act="back"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById("frame").contentDocument?.getElementById("mark")?.textContent === "ЗАДАЧА-1",
+    null, { timeout: 15000 });
+  await sleep(500);
+  assert.equal(await frameLoads(page), 1, "рамка завантажилась рівно один раз");
+  assert.equal(commentedRequests(requests) - before, 1, "рівно один запит /commented");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+/** Відкрити «Підключити» memo-publish із `note` і натиснути головну кнопку: питання «Замінити?» з'являється. */
+async function askReplaceMemo(page) {
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.fill('#cn-drawer [data-cn-field="note"]', "hello");
+  await page.click('#cn-drawer [data-cn-dr="submit"]');
+  await page.waitForSelector(".cv-ask-scrim");
+}
+const askText = (page) => page.locator(".cv-ask-scrim").textContent();
+const waitAskNames = (page, name) => page.waitForFunction(
+  (n) => (document.querySelector(".cv-ask-scrim")?.textContent ?? "").includes(n), name, { timeout: 15000 });
+/** Тіла `POST`, що несуть запис САМЕ цього модуля (`"id":"memo-publish"` із закривною лапкою — не `memo-publish2`). */
+const postsFor = (posts, id) => posts.filter((b) => b.includes(`"id":"${id}"`));
+
+test("10: згода на заміну СВІЖА — роль заняли, поки питання відкрите: друге питання з новою назвою, до другого «так» нічого не пишеться", async (t) => {
+  const { page, url, spacePath, posts, outside, errors } = await boot(t);
+  await openConnections(page);
+  await askReplaceMemo(page);
+  assert.match(await askText(page), /Публікація в теку/, "перше питання — про того, хто тримав роль");
+  /* Агент (API) займає роль іншим модулем, поки людина читає питання. */
+  const taken = await postJson(url, "/api/module-enable", { space: "studio", id: "memo-publish2", settings: { note: "x" }, replace: true });
+  assert.equal(taken.status, 200);
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await waitAskNames(page, "Memo publish 2 (test)");
+  assert.doesNotMatch(await askText(page), /Публікація в теку/, "друге питання — вже про нового власника");
+  const mods = spaceJson(spacePath).modules;
+  assert.equal(mods["memo-publish"], undefined, "до другого «так» панель нічого не записала");
+  assert.equal(mods["memo-publish2"].enabled, true);
+  assert.equal(postsFor(posts, "memo-publish").length, 0, "жодного запису memo-publish із панелі");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await waitBadge(page, "memo-publish", "ok");
+  await waitBadge(page, "memo-publish2", "off");
+  const after = spaceJson(spacePath).modules;
+  assert.equal(after["memo-publish"].enabled, true);
+  assert.equal(after["memo-publish2"].enabled, false);
+  assert.equal(await page.locator("#cv-toast").textContent(), "Підключено: Memo publish (test). Вимкнено: Memo publish 2 (test)",
+    "тост називає саме того, кого вимкнули насправді");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("11: власники змінились ВДРУГЕ — відмова «роль уже зайнята», нічого не записано; повтор питає про справжнього власника", async (t) => {
+  const { page, url, spacePath, posts, outside, errors } = await boot(t);
+  await openConnections(page);
+  await askReplaceMemo(page);
+  await postJson(url, "/api/module-enable", { space: "studio", id: "memo-publish2", settings: { note: "x" }, replace: true });
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await waitAskNames(page, "Memo publish 2 (test)");
+  /* Поки відкрите ДРУГЕ питання, роль міняє власника ще раз (static-publish вертається). */
+  const again = await postJson(url, "/api/module-enable", { space: "studio", id: "static-publish", settings: {}, replace: true });
+  assert.equal(again.status, 200);
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForSelector("#cn-drawer .cn-res--err");
+  assert.match(await page.locator("#cn-drawer .cn-res--err").textContent(), /Роль уже зайнята іншим модулем/);
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "третього питання нема");
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="note"]'), "hello", "введене лишилось у панелі");
+  assert.equal(spaceJson(spacePath).modules["memo-publish"], undefined, "нічого не записано");
+  assert.equal(postsFor(posts, "memo-publish").length, 0, "жодного запису memo-publish із панелі");
+  /* Повтор: список свіжий, питання — про справжнього власника, і цього разу заміна проходить. */
+  await page.click('#cn-drawer [data-cn-dr="submit"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  assert.match(await askText(page), /Публікація в теку/);
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await waitBadge(page, "memo-publish", "ok");
+  assert.equal(spaceJson(spacePath).modules["static-publish"].enabled, false);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("12: роль звільнилась, поки питання відкрите — запис іде БЕЗ replace (власник, що зʼявиться між кроками, не вимкнеться мовчки)", async (t) => {
+  const { page, url, posts, outside, errors } = await boot(t);
+  await openConnections(page);
+  await askReplaceMemo(page);
+  const freed = await postJson(url, "/api/module-disable", { space: "studio", id: "static-publish" });
+  assert.equal(freed.status, 200);
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await waitBadge(page, "memo-publish", "ok");
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "питати нема про що");
+  const mine = postsFor(posts, "memo-publish");
+  assert.equal(mine.length, 1);
+  assert.equal(JSON.parse(mine[0]).replace, undefined, "replace не надіслано");
+  assert.equal(await page.locator("#cv-toast").textContent(), "Підключено: Memo publish (test)", "заміни не було — «Вимкнено» нема");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("13: фокус у панелі — клавіатурне збереження з невдалою перевіркою лишає фокус на тому самому контролі, і під запитом теж усередині панелі", async (t) => {
+  const { page, outside, errors } = await boot(t);
+  await openConnections(page);
+  /* Запит затримано: видно стан «зайнято» (усе вимкнено), де фокусу нема на чому стояти. */
+  await page.route("**/api/module-enable", async (route) => { await sleep(700); await route.continue(); });
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.focus('#cn-drawer [data-cn-field="note"]');
+  await page.keyboard.type("fail");
+  await page.keyboard.press("Enter");                        // клавіатурне «Підключити»
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForFunction(() => document.querySelector('#cn-drawer [data-cn-dr="submit"]')?.disabled === true, null, { timeout: 15000 });
+  const busy = await page.evaluate(() => ({ inside: !!document.activeElement?.closest("#cn-drawer"), dr: document.activeElement?.dataset?.cnDr ?? null }));
+  assert.deepEqual(busy, { inside: true, dr: "close" }, "під запитом усе вимкнено — фокус на хрестику, а не на body");
+  await page.waitForSelector("#cn-drawer .cn-res--err");
+  const done = await page.evaluate(() => ({ inside: !!document.activeElement?.closest("#cn-drawer"), field: document.activeElement?.dataset?.cnField ?? null }));
+  assert.deepEqual(done, { inside: true, field: "note" }, "після невдалої перевірки фокус там, де людина була (поле), а не на body чи хрестику");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+/** `css-tokens` увімкнено з `{space}/ds.css`; панель закрита, картка вільна. */
+async function connectCssTokens(page, spacePath) {
+  writeFileSync(path.join(spacePath, "ds.css"), ":root{--c-a:#123456;--gap:4px}");
+  await page.click('[data-cn="enable"][data-id="css-tokens"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="file"]');
+  await page.fill('#cn-drawer [data-cn-field="file"]', "{space}/ds.css");
+  await page.click('#cn-drawer [data-cn-dr="submit"]');
+  await waitBadge(page, "css-tokens", "ok");
+}
+const openCssConfig = async (page) => {
+  await page.click('[data-cn="configure"][data-id="css-tokens"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="file"]');
+};
+const drawerTitle = (page) => page.locator("#cn-dr-title").textContent();
+
+test("14: «Вимкнути» на картці модуля з відкритою панеллю — панель спершу закривається (з питанням, коли брудна); module-settings не летить", async (t) => {
+  const { page, spacePath, requests, outside, errors } = await boot(t);
+  await openConnections(page);
+  await connectCssTokens(page, spacePath);
+
+  /* Чиста панель: без питання «Відкинути?» — одразу «Вимкнути?»; відмова на ньому лишає модуль увімкненим, панель закрито. */
+  await openCssConfig(page);
+  await page.click('[data-cn="disable"][data-id="css-tokens"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  assert.match(await askText(page), /Вимкнути «Токени з CSS»/, "чиста панель — питання про вимкнення, не про відкидання");
+  await page.click('.cv-ask-scrim button[data-a="cancel"]');
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  assert.equal(await page.locator("#cn-drawer").isHidden(), true, "панель вимкненого модуля не лишилась");
+  assert.equal(spaceJson(spacePath).modules["css-tokens"].enabled, true);
+
+  /* Брудна панель: спершу «Відкинути?» (відмова лишає все), потім «Вимкнути?». */
+  await openCssConfig(page);
+  await page.fill('#cn-drawer [data-cn-field="file"]', "{space}/ds2.css");
+  await page.click('[data-cn="disable"][data-id="css-tokens"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  assert.match(await askText(page), /Відкинути/);
+  await page.click('.cv-ask-scrim button[data-a="cancel"]');
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  assert.equal(await page.locator("#cn-drawer").isVisible(), true, "відмова — панель лишилась");
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="file"]'), "{space}/ds2.css", "набране збережено");
+  assert.equal(spaceJson(spacePath).modules["css-tokens"].enabled, true, "відмова — модуль увімкнений");
+  await page.click('[data-cn="disable"][data-id="css-tokens"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');       // відкинути
+  await page.waitForSelector("#cn-drawer", { state: "hidden" });
+  await page.waitForFunction(() => /Вимкнути «Токени з CSS»/.test(document.querySelector(".cv-ask-scrim")?.textContent ?? ""), null, { timeout: 15000 });
+  await page.click('.cv-ask-scrim button[data-a="ok"]');       // вимкнути
+  await waitBadge(page, "css-tokens", "off");
+  assert.deepEqual(spaceJson(spacePath).modules["css-tokens"], { enabled: false, settings: { file: "{space}/ds.css" } },
+    "вимкнено, налаштування — як були (брудна правка не збережена)");
+  assert.equal(requests.filter((u) => u.includes("/api/module-settings")).length, 0, "module-settings не летів ні разу");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("15: інша панель поверх відкритої — з питанням, коли брудна (відмова лишає першу); чиста замінюється мовчки", async (t) => {
+  const { page, spacePath, outside, errors } = await boot(t);
+  await openConnections(page);
+  await connectCssTokens(page, spacePath);
+  await openCssConfig(page);
+  await page.fill('#cn-drawer [data-cn-field="file"]', "{space}/ds2.css");
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  assert.match(await askText(page), /Відкинути/);
+  await page.click('.cv-ask-scrim button[data-a="cancel"]');
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  assert.equal(await drawerTitle(page), "Токени з CSS", "відмова — перша панель на місці");
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="file"]'), "{space}/ds2.css", "набране збережено");
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForFunction(() => document.getElementById("cn-dr-title")?.textContent === "Memo publish (test)", null, { timeout: 15000 });
+  assert.equal(await page.locator('#cn-drawer [data-cn-field="note"]').count(), 1, "відкрилась панель другого модуля");
+  /* Чиста панель замінюється без питання. */
+  await page.click('[data-cn="configure"][data-id="css-tokens"]');
+  await page.waitForFunction(() => document.getElementById("cn-dr-title")?.textContent === "Токени з CSS", null, { timeout: 15000 });
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "чиста панель — без питання");
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="file"]'), "{space}/ds.css", "відкрито збережене, а не колишнє набране");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("16: Esc закриває ЛИШЕ дропдаун смуги, коли він відкритий; наступний Esc — панель", async (t) => {
+  const { page, outside, errors } = await boot(t);
+  await openConnections(page);
+  await page.click('[data-cn="enable"][data-id="css-tokens"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="file"]');
+  await openSpaceDd(page);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".dd--spaces", { state: "detached" });
+  assert.equal(await page.locator("#cn-drawer").isVisible(), true, "Esc закрив дропдаун — панель за той самий Esc не закрилась");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#cn-drawer", { state: "hidden" });
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("17: логотип і «назад до задачі» з брудною панеллю питають «Відкинути?»; з чистою — йдуть одразу", async (t) => {
+  const { page, outside, errors } = await boot(t);
+  await openConnections(page);
+  /* Брудна панель + логотип: відмова лишає панель і набране; згода — «Задачі» без панелі. */
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.fill('#cn-drawer [data-cn-field="note"]', "x");
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  assert.match(await askText(page), /Відкинути/);
+  await page.click('.cv-ask-scrim button[data-a="cancel"]');
+  await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
+  assert.equal(await page.locator("#cn-title").count(), 1, "відмова — лишились на «Підключенні»");
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="note"]'), "x", "набране збережено");
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  assert.equal(await page.locator("#cn-title").count(), 0, "згода — на «Задачах»");
+  assert.equal(await page.locator("#cn-drawer").isHidden(), true);
+  /* «Назад до задачі» з брудною панеллю — те саме. */
+  await page.click('#tasks-home [data-th="conn"]');
+  await page.waitForSelector('.cn-card[data-id="static-publish"]');
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.fill('#cn-drawer [data-cn-field="note"]', "y");
+  await page.click('#bar [data-act="back"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  assert.match(await askText(page), /Відкинути/);
+  assert.equal(await page.evaluate(() => document.body.classList.contains("home-open")), true, "поки питання — екран на місці");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  /* Чиста панель: без питання. */
+  await page.click('#bar [data-act="home"]');
+  await page.click('#tasks-home [data-th="conn"]');
+  await page.waitForSelector('.cn-card[data-id="static-publish"]');
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "чиста панель — без питання");
+  assert.equal(await page.locator("#cn-drawer").isHidden(), true);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("18: зміна мови не стирає набраний секрет: він лишається ВЛАСТИВІСТЮ поля, у розмітку не потрапляє", async (t) => {
+  const m = await boot(t);
+  const { page, outside, errors } = m;
+  await openConnections(page);
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="token"]');
+  await page.fill('#cn-drawer [data-cn-field="note"]', "hello");
+  await page.fill('#cn-drawer [data-cn-field="token"]', SECRET);
+  await page.keyboard.press("Control+k");
+  await page.locator("#palq").waitFor({ state: "visible" });
+  await page.fill("#palq", "english");
+  await page.waitForFunction(() => document.querySelectorAll(".pal-it").length === 1, null, { timeout: 5000 });
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector('#cn-drawer [data-cn-dr="submit"]')?.textContent === "Connect", null, { timeout: 15000 });
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="token"]'), SECRET, "секрет пережив перемальовку мовою");
+  assert.equal(await page.inputValue('#cn-drawer [data-cn-field="note"]'), "hello", "і значення полів теж");
+  assert.ok(!(await page.locator("#cn-drawer").evaluate((n) => n.outerHTML)).includes(SECRET), "секрет у розмітці панелі");
+  assert.deepEqual(await leaks(page), [], "секрет побував у розмітці (мутація DOM)");
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("19: відмовлений запис теж перечитує список: секрет, записаний до відмови, видно при наступному відкритті панелі",
+  { skip: process.getuid?.() === 0 && "root ігнорує права на теку — `unwritable` не відтворити" }, async (t) => {
+  const { page, deaiHome, spacePath, outside, errors } = await boot(t);
+  await openConnections(page);
+  /* Тека простору лише для читання: секрет (у `<DEAI_HOME>`) запишеться, а `space.json` — ні (`unwritable`, 500). */
+  chmodSync(spacePath, 0o555);
+  t.after(() => { try { chmodSync(spacePath, 0o755); } catch { /* вже прибрано */ } });
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
+  await page.fill('#cn-drawer [data-cn-field="note"]', "hello");
+  await page.fill('#cn-drawer [data-cn-field="token"]', SECRET);
+  await page.click('#cn-drawer [data-cn-dr="submit"]');
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForSelector("#cn-drawer .cn-res--err");
+  assert.match(await page.locator("#cn-drawer .cn-res--err").textContent(), /Не вдалося записати space\.json/, "HTTP-відмова, а не вердикт перевірки");
+  assert.equal(secretsJson(deaiHome).studio["memo-publish"].token, SECRET, "свідок: сервер записав секрет ДО відмови");
+  assert.equal(spaceJson(spacePath).modules, undefined, "space.json не записано");
+  await page.keyboard.press("Escape");                       // панель брудна: питання «Відкинути?»
+  await page.waitForSelector(".cv-ask-scrim");
+  await page.click('.cv-ask-scrim button[data-a="ok"]');
+  await page.waitForSelector("#cn-drawer", { state: "hidden" });
+  await page.click('[data-cn="enable"][data-id="memo-publish"]');
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="token"]');
+  assert.match(await page.locator("#cn-drawer .cn-secret").textContent(), /^задано ·/, "список перечитано після відмови: секрет уже є");
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });

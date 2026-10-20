@@ -23,8 +23,17 @@ const fnc = (name) => noComments(fn(name));
 
 test("дії смуги: conn веде на сторінку, логотип — завжди на «Задачі»", () => {
   assert.match(src, /\n  conn: \(\) => enterConnections\(\),/);
-  assert.match(src, /\n  home: \(\) => enterHome\(\{ page: 'tasks' \}\),/);
+  assert.match(src, /\n  home: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
   assert.match(fn("wireHome"), /case 'conn': enterConnections\(\); break;/);
+});
+
+test("логотип і «назад до задачі» не гублять брудну панель мовчки: через dismissCnDrawer, а без панелі — синхронно, як було", () => {
+  /* Умова `cnDrawer &&` ПЕРЕД `await`: без панелі дія виконується в тому ж такті (жодного зайвого мікрозавдання). */
+  assert.match(src, /\n  back: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; leaveHome\(\); \},/);
+  assert.match(src, /\n  home: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+  const b = fnc("dismissCnDrawer");
+  assert.match(b, /^\{\s*if \(!cnDrawer\) return true;\s*if \(cnDrawer\.busy\) return false;\s*await requestCloseCnDrawer\(\);\s*return !cnDrawer;\s*\}$/,
+    "нема панелі — true; запит у польоті — false (ігнор); інакше закриття з питанням, і true лише коли панель справді зникла");
 });
 
 test("enterHome тримає відкриту сторінку (перемикання простору й запис модулів лишають «Підключення»)", () => {
@@ -58,17 +67,19 @@ test("після вимкнення — afterModulesChange; він ЛЕГКИЙ:
   assert.match(fn("connDisable"), /await afterModulesChange\(\);/);
   const b = fnc("afterModulesChange");
   assert.doesNotMatch(b, /afterSpaceChange|resetSpaceState|resetPerTaskState|enterHome/, "простір не змінився — скидати нічого");
-  assert.match(b, /^\{\s*frameStale = true;\s*await loadSpaces\(\);\s*const seq = connState\.seq;\s*await render\(\{ keepFrame: true \}\);\s*paintBar\(\);\s*if \(connOpen\(\) && connState\.seq === seq\) await loadConn\(\{ spaces: false \}\);\s*\}$/);
+  assert.match(b, /^\{\s*await loadSpaces\(\);\s*const seq = connState\.seq;\s*await render\(\{ keepFrame: true \}\);\s*paintBar\(\);\s*if \(connOpen\(\) && connState\.seq === seq\) await loadConn\(\{ spaces: false \}\);\s*\}$/);
 });
 
-test("рамка: frameStale оголошено ОДИН раз поряд зі станом сторінки; leaveHome перезавантажує її одразу після render()", () => {
-  assert.equal([...src.matchAll(/\blet frameStale\b/g)].length, 1);
-  assert.ok(src.indexOf("let frameStale = false;") < src.indexOf("async function leaveHome("), "стан оголошено ДО leaveHome (TDZ)");
-  assert.match(fnc("leaveHome"), /await render\(\);\s*if \(frameStale\) \{ frameStale = false; reloadFrame\(\); \}/);
-  /* Позначає застарілою ТІЛЬКИ запис модулів; перевірка статусу (`connCheck`, `cnDrawerCheck`) рамку не чіпає. */
-  assert.deepEqual([...src.matchAll(/frameStale = true;/g)].length, 1);
-  assert.doesNotMatch(fnc("connCheck"), /frameStale/);
-  assert.doesNotMatch(fnc("cnDrawerCheck"), /frameStale/);
+test("рамка: окремого reloadFrame після виходу нема — render() сам присвоює frame.src (інакше перезавантажувався СТАРИЙ документ, 404 у рамці)", () => {
+  /* Ні стану `frameStale`, ні жодного його читання: рамку оновлює лише присвоєння `frame.src` у `render()`. */
+  assert.doesNotMatch(src, /frameStale/, "frameStale не існує: рамку після виходу перезавантажує render()");
+  const b = fnc("leaveHome");
+  assert.doesNotMatch(b, /reloadFrame/, "після render() рамка не перезавантажується вдруге — location.reload() бере старий URL");
+  assert.match(b, /\n  await render\(\);\n/, "render() на виході — єдине, що оновлює рамку");
+  /* `reloadFrame` лишається лише для живого перезавантаження макета (опитування штампа і плашка «Оновити»). */
+  assert.equal([...noComments(src).matchAll(/reloadFrame\(\)/g)].length, 3, "функція + дві дії штампа; leaveHome її не кличе");
+  assert.doesNotMatch(fnc("connCheck"), /frameStale|reloadFrame/);
+  assert.doesNotMatch(fnc("cnDrawerCheck"), /frameStale|reloadFrame/);
 });
 
 test("фокус після перемальовки повертається і на кнопки карток (data-cn + data-id)", () => {
@@ -93,19 +104,45 @@ test("панель: запис іде в простір, відкритий у �
   /* Не лише виклик: умова `if (miss.length)`, помилки полів, перемальовка й ВИХІД — ДО запиту (`if (false)` лишив би виклик). */
   assert.match(b, /const miss = missingRequired\(cnDrawer\.fields, cur\);\s*if \(miss\.length\) \{[\s\S]*?cnDrawer\.errors = Object\.fromEntries\(miss\.map\(\(k\) => \[k, 'cnFieldRequired'\]\)\);[\s\S]*?paintCnDrawer\(\);[\s\S]*?return;\s*\}/);
   assert.ok(b.indexOf("missingRequired(") < b.indexOf("postForm("), "обовʼязкові перевіряються ДО запиту");
-  assert.match(b, /roleHolders\(cnDrawer\.entry, connState\.list\)/);
-  assert.match(b, /t\('cnReplaceAsk', /);
-  assert.match(b, /askYesNo\(q, \{ yes: t\('cnReplace'\) \}\)/);
+  /* Питання «Замінити?» і свіжа згода — у `cnConfirmReplace` (окремий пін нижче); тут лише передача рішення в запис. */
+  assert.match(b, /const verdict = await cnConfirmReplace\(mine\);\s*if \(verdict === null\) return;\s*replace = verdict;/);
   assert.match(b, /writePayload\(mine\.spaceId, mine\.id, patch, replace\)/);
   assert.match(b, /postForm\(mine\.mode === 'enable' \? '\/api\/module-enable' : '\/api\/module-settings', body\)/);
   assert.match(b, /await afterModulesChange\(\);/);
 });
 
-test("панель: `replace = true` стоїть ПІСЛЯ «так» у питанні й після перевірки, що панель та сама (без цього заміна — 409)", () => {
-  /* Голий `writePayload(…, replace)` лишався б зеленим і без цього рядка: змінна була б завжди `false`. */
-  assert.match(fnc("cnSubmit"),
-    /if \(!\(await askYesNo\(q, \{ yes: t\('cnReplace'\) \}\)\)\) return;\s*if \(cnDrawer !== mine\) return;\s*replace = true;/);
+test("згода на заміну СВІЖА: після «так» список перечитується; власники змінились — питаємо ще раз, вдруге — відмова «роль зайнята»", () => {
+  const b = fnc("cnConfirmReplace");
+  assert.match(b, /let holders = roleHolders\(mine\.entry, connState\.list\);\s*if \(!holders\.length\) return false;/, "ніхто не тримає роль — `replace` не потрібен");
+  assert.match(b, /t\('cnReplaceAsk', roleTitle\(shared\[0\]\), holders\.map\(modName\)\.join\(', '\), modName\(mine\.entry\)\)/);
+  /* «Ні» — нічого не пишемо; після відповіді панель мусить бути та сама. */
+  assert.match(b, /if \(!\(await askYesNo\(q, \{ yes: t\('cnReplace'\) \}\)\)\) return null;\s*if \(cnDrawer !== mine\) return null;/);
+  /* Перечитування — ПІСЛЯ питання, в простір панелі (не `connState.spaceId`), а відповідь не стирає введене. */
+  assert.match(b, /formApi\(`\/api\/modules\?space=\$\{encodeURIComponent\(mine\.spaceId\)\}`\)/);
+  assert.ok(b.indexOf("askYesNo(") < b.indexOf("formApi("), "список перечитується ПІСЛЯ «так», а не до питання");
+  assert.match(b, /catch \(err\) \{\s*if \(cnDrawer === mine\) cnShowKept\(mine, \{ kind: 'refused', \.\.\.refusalView\(err\) \}\);\s*return null;\s*\}/, "не вдалось перечитати — відмова без запису");
+  assert.match(b, /if \(cnDrawer !== mine\) return null;\s*if \(!Array\.isArray\(list\)\) list = \[\];\s*if \(connOpen\(\) && connState\.spaceId === mine\.spaceId\) \{ connState\.list = list; paintHome\(\); \}/,
+    "свіжий список оновлює сторінку лише коли вона ще показує той самий простір");
+  /* Рішення: ті самі власники — слати; змінились — ще раз; вдруге змінились — відмова; роль звільнилась — без `replace`. */
+  assert.match(b, /const now = roleHolders\(mine\.entry, list\);\s*if \(sameHolders\(now, holders\)\) return true;\s*if \(!now\.length\) return false;\s*if \(round === 1\) \{ cnShowKept\(mine, \{ kind: 'refused', key: 'cnRefRoleTaken', detail: '' \}\); return null; \}\s*holders = now;/);
+  assert.match(b, /finally \{ mine\.asking = false; \}/, "прапорець «питаємо» знімається за будь-якого виходу");
+  /* Лише ТУТ народжується `replace: true`; у cnSubmit воно дорівнює вердикту. */
   assert.match(fnc("cnSubmit"), /let replace = false;/);
+  assert.equal([...fnc("cnConfirmReplace").matchAll(/return true;/g)].length, 1, "єдиний шлях до `replace: true` — ті самі власники");
+  assert.match(fnc("cnSubmit"), /if \(!cnDrawer \|\| cnDrawer\.busy \|\| cnDrawer\.asking\) return;/, "друге «Підключити» під питанням не стартує");
+  /* Порівняння — за множиною id, без порядку. */
+  assert.match(src, /const sameHolders = \(a, b\) => a\.length === b\.length && a\.every\(\(x\) => b\.some\(\(y\) => y\.id === x\.id\)\);/);
+});
+
+test("після заміни тост називає вимкнені модулі (cnToastReplaced з назвами зі списку, запасний — id)", () => {
+  const b = fnc("cnSubmit");
+  assert.match(b, /const off = cnReplacedNames\(r\);/);
+  assert.match(b, /toast\(off \? t\('cnToastReplaced', name, off\) : t\(mine\.mode === 'enable' \? 'cnToastEnabled' : 'cnToastSaved', name\)\);/);
+  const h = fnc("cnReplacedNames");
+  assert.match(h, /Array\.isArray\(r\?\.replaced\) \? r\.replaced : \[\]/);
+  assert.match(h, /return e \? modName\(e\) : String\(id\);/);
+  /* Назви беруться ДО перечитування списку (`afterModulesChange`), інакше список уже свіжий — теж ок, але запасний id тоді зайвий. */
+  assert.ok(b.indexOf("cnReplacedNames(r)") < b.indexOf("await afterModulesChange()"));
 });
 
 test("панель: зайнятість — 'save' у записі, 'check' у перевірці, ніколи просто true", () => {
@@ -141,7 +178,7 @@ test("панель: перевірка в панелі — module-check прос
 });
 
 test("панель: Esc — запит закриття (з питанням при незбереженому), не під діалогом і не під палітрою", () => {
-  assert.match(src, /document\.addEventListener\('keydown', \(ev\) => \{\n  if \(ev\.key === 'Escape' && cnDrawer && !paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) \{\n    ev\.preventDefault\(\);\n    requestCloseCnDrawer\(\);\n  \}\n\}\);/);
+  assert.match(src, /document\.addEventListener\('keydown', \(ev\) => \{\n  if \(ev\.key === 'Escape' && !ev\.defaultPrevented && cnDrawer && !paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) \{\n    ev\.preventDefault\(\);\n    requestCloseCnDrawer\(\);\n  \}\n\}\);/);
   const b = fnc("requestCloseCnDrawer");
   assert.match(b, /if \(!cnDrawer \|\| cnDrawer\.busy\) return;/, "під час запиту панель не закривається");
   assert.match(b, /const dirty = isDirty\(formPatch\(mine\.fields, mine\.init, readCnForm\(cnDrawerNode\(\)\)\)\);/);
@@ -175,7 +212,8 @@ test("панель: закриття вертає фокус на кнопку �
 });
 
 test("мова: відкрита панель перемальовується разом з екраном", () => {
-  assert.match(fnc("switchLang"), /if \(cnDrawer && !cnDrawer\.busy\) \{ cnDrawer\.form = \{ \.\.\.readCnForm\(cnDrawerNode\(\)\), secrets: \{\} \}; paintCnDrawer\(\); \}/);
+  /* Введений секрет переживає перемальовку: знімок ДО, повернення ВЛАСТИВІСТЮ `.value` ПІСЛЯ (як при порожньому обовʼязковому). */
+  assert.match(fnc("switchLang"), /if \(cnDrawer && !cnDrawer\.busy\) \{\s*const cur = readCnForm\(cnDrawerNode\(\)\);\s*cnDrawer\.form = \{ \.\.\.cur, secrets: \{\} \};\s*paintCnDrawer\(\);\s*restoreCnSecrets\(cur\.secrets\);\s*\}/);
 });
 
 test("фокус: кнопка картки зникла після перемальовки (дія змінилась) — фокус на іншу кнопку ТІЄЇ Ж картки, а не в нікуди", () => {
@@ -208,12 +246,13 @@ test("сторінка малює простір connState.spaceId, а не «п
   assert.match(fnc("enterHome"), /if \(fresh\) \{ connState\.spaceId = null; connState\.list = null; connState\.failed = null; connFocusPending = true; \}/);
 });
 
-test("cnSubmit: питання «Замінити?» стоїть між читанням простору й записом — запис іде у mine.spaceId, а після питання панель мусить бути та сама", () => {
+test("cnSubmit: запис іде у mine.spaceId; після питання панель мусить бути та сама (інакше нічого не пишемо)", () => {
   const b = fnc("cnSubmit");
   assert.match(b, /const mine = cnDrawer;/);
-  assert.match(b, /if \(!\(await askYesNo\(q, \{ yes: t\('cnReplace'\) \}\)\)\) return;\s*if \(cnDrawer !== mine\) return;/);
+  assert.match(fnc("cnConfirmReplace"), /if \(!\(await askYesNo\(q, \{ yes: t\('cnReplace'\) \}\)\)\) return null;\s*if \(cnDrawer !== mine\) return null;/);
   assert.match(b, /writePayload\(mine\.spaceId,/);
   assert.doesNotMatch(b, /connState\.spaceId|currentSpace\(|spaceNow\(/, "простір запису — лише знімок панелі");
+  assert.doesNotMatch(fnc("cnConfirmReplace"), /currentSpace\(|spaceNow\(/);
 });
 
 /* ── фокус після картки (ревʼю Task 6) ─────────────────────────────────────────────────────────────── */
@@ -248,9 +287,59 @@ test("loadConn: `spaces` вирішує, чи перечитувати прос�
 
 test("connAction: дія над модулем, що вже в польоті, ігнорується; кожна дія веде у свою функцію", () => {
   const b = fnc("connAction");
-  assert.match(b, /if \(act === 'retry'\) \{ loadConn\(\); return; \}/);
-  assert.match(b, /const e = \(connState\.list \|\| \[\]\)\.find\(\(x\) => x\.id === id\);\s*if \(!e \|\| connState\.busy\.has\(id\)\) return;/);
-  assert.match(b, /if \(act === 'enable'\) openCnDrawer\(e, 'enable'\);\s*else if \(act === 'configure'\) openCnDrawer\(e, 'edit'\);\s*else if \(act === 'check'\) connCheck\(e\);\s*else if \(act === 'disable'\) connDisable\(e\);/);
+  assert.match(b, /^\{\s*if \(act === 'retry'\) \{ loadConn\(\); return; \}/);
+  assert.match(b, /let e = \(connState\.list \|\| \[\]\)\.find\(\(x\) => x\.id === id\);\s*if \(!e \|\| connState\.busy\.has\(id\)\) return;/);
+  assert.match(b, /if \(act === 'check'\) \{ connCheck\(e\); return; \}/, "«Перевірити» панелі не заважає");
+  assert.match(b, /if \(act === 'enable'\) openCnDrawer\(e, 'enable'\);\s*else if \(act === 'configure'\) openCnDrawer\(e, 'edit'\);\s*else if \(act === 'disable'\) connDisable\(e\);/);
+});
+
+test("connAction: відкрита панель — інша панель і «Вимкнути» її модуля спершу закривають її (з питанням); чужий модуль — без закриття", () => {
+  const b = fnc("connAction");
+  assert.match(src, /async function connAction\(act, id\) \{/);
+  /* Умова: панель відкрита І (це не «Вимкнути», АБО «Вимкнути» саме її модуля). */
+  assert.match(b, /if \(cnDrawer && \(act !== 'disable' \|\| cnDrawer\.id === id\)\) \{\s*const spaceId = connState\.spaceId;\s*if \(!\(await dismissCnDrawer\(\)\)\) return;/,
+    "відмова людини (панель лишилась) чи запит у польоті — дія не йде далі");
+  /* Після питання: той самий простір і свіжа картка, а не знімок до діалогу. */
+  assert.match(b, /if \(!connOpen\(\) \|\| connState\.spaceId !== spaceId\) return;\s*e = \(connState\.list \|\| \[\]\)\.find\(\(x\) => x\.id === id\);\s*if \(!e \|\| connState\.busy\.has\(id\)\) return;/);
+  assert.ok(b.indexOf("dismissCnDrawer()") < b.indexOf("openCnDrawer(e, 'enable')"), "закриття — ДО відкриття іншої панелі");
+  assert.ok(b.indexOf("dismissCnDrawer()") < b.indexOf("connDisable(e)"), "закриття — ДО вимкнення");
+});
+
+test("панель: фокус вертається після перемальовки на той самий контрол (запасний — перший доступний; під запитом — памʼять focusWant)", () => {
+  const k = fnc("cnFocusKey");
+  assert.match(k, /if \(!a \|\| !el\.contains\(a\)\) return null;/, "фокус поза панеллю (палітра мови, діалог) не чіпаємо");
+  assert.match(k, /if \(a\.dataset\.cnField != null\) return `\[data-cn-field="\$\{CSS\.escape\(a\.dataset\.cnField\)\}"\]`;/);
+  assert.match(k, /if \(a\.dataset\.cnDr\) \{\s*return `\[data-cn-dr="\$\{a\.dataset\.cnDr\}"\]\$\{a\.dataset\.key != null \? `\[data-key="\$\{CSS\.escape\(a\.dataset\.key\)\}"\]` : ''\}`;/, "«Стерти» — ще й за ключем секрету");
+  const b = fnc("paintCnDrawer");
+  const iRead = b.indexOf("cnFocusKey(el, document.activeElement)");
+  const iPaint = b.indexOf("el.innerHTML = drawerHTML(");
+  assert.ok(iRead > 0 && iRead < iPaint, "ключ береться ДО перемальовки (після неї старого вузла нема)");
+  assert.match(b, /const want = cnDrawer\.focusWant \?\? live;/);
+  assert.match(b, /if \(usable\(back\)\) \{ cnDrawer\.focusWant = null; back\.focus\(\{ preventScroll: true \}\); return; \}/);
+  assert.match(b, /\.cn-dr-body \[data-cn-field\], \.cn-dr-foot button/, "запасний — перший доступний контрол тіла й футера");
+  assert.match(b, /\.find\(usable\);\s*if \(first\) \{ cnDrawer\.focusWant = null; first\.focus\(\{ preventScroll: true \}\); return; \}/);
+  assert.match(b, /cnDrawer\.focusWant = want;\s*el\.querySelector\('\[data-cn-dr="close"\]'\)\?\.focus\(\{ preventScroll: true \}\);/,
+    "усе вимкнено (запит летить): фокус на хрестику, бажаний контрол запамʼятовано");
+  assert.ok(b.indexOf("const usable") > iPaint, "перевірка «доступний» — після перемальовки (на новому вузлі)");
+});
+
+test("картка зайнята записом панелі ('save') від відповіді до кінця перечитування; відмова теж перечитує список", () => {
+  const b = fnc("cnSubmit");
+  assert.match(b, /cnCardBusy\(mine\.spaceId, mine\.id, true\);\s*try \{/);
+  assert.match(b, /await afterModulesChange\(\);\s*\} finally \{\s*cnCardBusy\(mine\.spaceId, mine\.id, false\);\s*\}/, "знімається ПІСЛЯ перечитування, у finally");
+  assert.ok(b.indexOf("cnCardBusy(mine.spaceId, mine.id, true)") < b.indexOf("closeCnDrawer()"), "картка зайнята ДО закриття панелі");
+  const h = fnc("cnCardBusy");
+  assert.match(h, /if \(!connOpen\(\) \|\| connState\.spaceId !== spaceId\) return;/, "лише той самий простір: чужий busy не чіпаємо");
+  assert.match(h, /if \(on\) connState\.busy\.set\(id, 'save'\); else connState\.busy\.delete\(id\);\s*paintHome\(\);\s*if \(!on\) refocusCard\(id, 'configure'\);/);
+  /* Відмова (HTTP, тайм-аут): сервер пише секрети раніше за решту — список перечитується ДО перевірки «панель та сама». */
+  assert.match(b, /\} catch \(err\) \{\s*cnRefreshAfterRefusal\(mine\.spaceId\);\s*if \(cnDrawer !== mine\) return;/);
+  assert.match(fnc("cnRefreshAfterRefusal"), /if \(connOpen\(\) && connState\.spaceId === spaceId\) loadConn\(\{ spaces: false \}\);/);
+});
+
+test("Esc, що закрив дропдаун смуги, не закриває ще й панель: дропдаун гасить подію, слухач панелі її поважає (і стоїть ПІЗНІШЕ)", () => {
+  assert.match(src, /if \(ev\.key === 'Escape' && openDd && !ev\.isComposing\) \{\s*const wasSpaces = openDd === 'space';\s*openDd = null;\s*(?:\/\*[\s\S]*?\*\/\s*)?ev\.preventDefault\(\);\s*paintBar\(\);/);
+  assert.ok(src.indexOf("ev.key === 'Escape' && openDd && !ev.isComposing") < src.indexOf("ev.key === 'Escape' && !ev.defaultPrevented && cnDrawer"),
+    "слухач дропдауна реєструється РАНІШЕ: інакше `defaultPrevented` ще не виставлено");
 });
 
 test("зайнятість картки: ставиться ДО запиту й знімається в finally/catch; «Вимкнути» знімає її лише коли свіжий список уже прийшов", () => {

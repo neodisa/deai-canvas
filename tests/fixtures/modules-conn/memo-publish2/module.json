@@ -1,0 +1,6 @@
+{"api": 1, "id": "memo-publish2", "name": "Memo publish 2 (test)", "version": "1.0.0",
+ "roles": ["publish"],
+ "settings": [
+   {"key": "note", "type": "text", "label": "Note (test)", "required": true},
+   {"key": "token", "type": "secret", "label": "Token (test)"}
+ ]}

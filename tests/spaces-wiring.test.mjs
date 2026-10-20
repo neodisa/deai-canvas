@@ -270,7 +270,7 @@ test("loadHome: перелік просторів не перепитуєтьс�
   assert.match(lh, /if \(healed\) \{ await resetSpaceState\(\{ reload: false \}\); if \(homeOpen\) enterHome\(\{ spaces: false \}\); return; \}/);
   assert.match(src, /function enterHome\(\{ spaces = true, page \} = \{\}\) \{/);
   assert.match(fn("enterHome"), /loadHome\(false, \{ spaces \}\);/);
-  assert.match(src, /home: \(\) => enterHome\(\{ page: 'tasks' \}\),/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»");
+  assert.match(src, /home: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»; брудна панель «Підключення» спершу питає");
 });
 
 test("loadHome: успішний огляд знімає смугу «простір не читається» (але не чужу причину) і перемальовує смугу", () => {

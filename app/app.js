@@ -186,10 +186,6 @@ let homePage = 'tasks';
 const connState = { spaceId: null, list: null, failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
-/* Запис модулів (`afterModulesChange`) змінив те, що вбудовується в документ рамки при віддачі (адаптер коментарів,
-   токени інспектора). Поки відкритий оверлей, рамку не чіпаємо; при виході (`leaveHome`) документ рамки
-   перезавантажується. Оголошено ТУТ, серед стану модуля: `leaveHome` читає його з першого ж виходу (TDZ). */
-let frameStale = false;
 /* Бічна панель «Підключення» (Task 7): `null` — закрита. Оголошено ТУТ, серед стану модуля, а не біля функцій панелі:
    `enterHome` (його кличе вже перший `render()`) читає її через `closeCnDrawer`, і `let` нижче за місцем виклику дав би
    TDZ-помилку на старті. */
@@ -1030,7 +1026,7 @@ function paintBar() {
 }
 
 /** `keepFrame: true` — не переприсвоювати `frame.src` (див. `applyMode`): лише `afterModulesChange` під відкритим
- *  оверлеєм, де рамка схована, а документ однаково перезавантажить `leaveHome`. */
+ *  оверлеєм, де рамка схована, а документ однаково перезавантажить `render()` при виході (`leaveHome`). */
 async function render({ keepFrame = false } = {}) {
   let task, taskList;
   try {
@@ -1557,11 +1553,12 @@ async function switchTask(val) {
 const BAR_ACTIONS = {
   /* Логотип → екран «Задачі» (`enterHome` нижче: смуга, клас на `body`, запит
      `/api/tasks-overview`). Логотип з «Підключення» теж веде на «Задачі» — тому сторінка названа явно: без
-     неї `enterHome` лишив би відкриту. */
-  home: () => enterHome({ page: 'tasks' }),
+     неї `enterHome` лишив би відкриту. Відкрита панель «Підключення» з незбереженими змінами спершу питає
+     «Відкинути зміни?» (`dismissCnDrawer`; під запитом панелі — ігнор), без панелі — як було, синхронно. */
+  home: async () => { if (cnDrawer && !(await dismissCnDrawer())) return; enterHome({ page: 'tasks' }); },
   /* Назад до задачі: повний `render()` (`leaveHome`), бо під екраном «Задачі»
-     макет міг змінитись, а смуга мусить знову показати свіжий склад. */
-  back: () => leaveHome(),
+     макет міг змінитись, а смуга мусить знову показати свіжий склад. Панель «Підключення» — як у логотипа. */
+  back: async () => { if (cnDrawer && !(await dismissCnDrawer())) return; leaveHome(); },
   clean: () => toggleClean(),
   /* Кнопка робить РІВНО те, що ⌘K, тим самим викликом — не другою копією:
      палітра сама чистить `openDd` і сама вирішує, що показати.
@@ -2160,6 +2157,9 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && openDd && !ev.isComposing) {
     const wasSpaces = openDd === 'space';
     openDd = null;
+    /* Esc закрив дропдаун — він ЗАЙНЯТИЙ: бічна панель «Підключення» (слухач нижче по файлу) за той самий Esc не
+       закривається (`defaultPrevented`). */
+    ev.preventDefault();
     paintBar();
     /* З дропдауна просторів фокус вертається на фішку, що його відкрила: рядок, на
        якому він стояв, зник разом з дропдауном, і клавіатура лишилась би на `body`. */
@@ -2432,9 +2432,12 @@ async function leaveHome() {
   document.body.classList.remove('home-open');
   const el = homeNode();
   if (el) el.hidden = true;
+  /* ⛔ Рамку тут НЕ перезавантажуємо окремо: `render()` присвоює `frame.src` обраної сторінки, а присвоєння і є
+     перезавантаженням — тож документ із новим адаптером коментарів і токенами інспектора прийде сам (модулі могли
+     змінитись, поки оверлей був відкритий: `afterModulesChange` рамку під ним не чіпає). Окремий `reloadFrame()` після
+     `render()` перезавантажував СТАРИЙ документ поверх щойно відкритої іншої задачі (404 у рамці), а при простому
+     «назад» ще й робив другий запит `/commented`. */
   await render();
-  /* Модулі змінились, поки оверлей був відкритий: документ рамки несе старий адаптер коментарів і токени. */
-  if (frameStale) { frameStale = false; reloadFrame(); }
   /* Фокус вертається на логотип — те, чим екран відкривали: вузол, на якому він
      був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». */
   bar.querySelector('[data-act="home"]')?.focus({ preventScroll: true });
@@ -2617,14 +2620,30 @@ async function loadConn({ spaces = true } = {}) {
   }
 }
 
-/** Клік по кнопці картки чи помилки сторінки (`data-cn`). Дія над модулем, що вже в польоті, — ігнор. */
-function connAction(act, id) {
+/**
+ * Клік по кнопці картки чи помилки сторінки (`data-cn`). Дія над модулем, що вже в польоті, — ігнор.
+ *
+ * Відкрита панель стоїть на заваді двом діям: ІНША панель (`enable`/`configure`) не мовчки з'їдає першу, а «Вимкнути»
+ * модуля, чия панель відкрита, не лишає панель, що потім «зберегла» б налаштування вимкненого модуля. В обох випадках
+ * панель спершу закривається — з тим самим питанням «Відкинути зміни?», коли форма брудна (`dismissCnDrawer`); під час
+ * запиту панелі дія ігнорується. «Перевірити» панелі не заважає (перевіряється збережене, форма не чіпається), а
+ * «Вимкнути» ІНШОГО модуля — теж (його панелі нема). Після питання світ міг змінитись (простір, список, зайнятість) —
+ * картка перечитується зі свіжого списку, і дія йде далі лише в тому ж просторі.
+ */
+async function connAction(act, id) {
   if (act === 'retry') { loadConn(); return; }
-  const e = (connState.list || []).find((x) => x.id === id);
+  let e = (connState.list || []).find((x) => x.id === id);
   if (!e || connState.busy.has(id)) return;
+  if (act === 'check') { connCheck(e); return; }
+  if (cnDrawer && (act !== 'disable' || cnDrawer.id === id)) {
+    const spaceId = connState.spaceId;
+    if (!(await dismissCnDrawer())) return;
+    if (!connOpen() || connState.spaceId !== spaceId) return;
+    e = (connState.list || []).find((x) => x.id === id);
+    if (!e || connState.busy.has(id)) return;
+  }
   if (act === 'enable') openCnDrawer(e, 'enable');
   else if (act === 'configure') openCnDrawer(e, 'edit');
-  else if (act === 'check') connCheck(e);
   else if (act === 'disable') connDisable(e);
 }
 
@@ -2694,11 +2713,11 @@ function refocusCard(id, act) {
  * `afterSpaceChange`: той скидає пер-просторове (обрана ітерація, фільтри «Задач», плашки публікації), і людина, що
  * вимкнула модуль і повернулась до задачі, бачила б іншу ітерацію. Тут: простори перечитати → `render()` під оверлеєм
  * (той самий простір — нічого не скидає; свіжі `capabilities` → смуга; `keepFrame`: схована рамка не перезавантажується
- * вдруге) → рамку позначити застарілою (`leaveHome` перезавантажить її при виході: РІВНО один раз) → список модулів. Якщо `render()` вже сам запустив `loadConn` (задачі нема →
- * `showNoTask` → `enterHome`), другого запиту не робимо.
+ * вдруге) → список модулів. Рамку оновить сам `render()` при виході з оверлею (`leaveHome`): він присвоює `frame.src`
+ * обраної сторінки — РІВНО один раз і саме тієї задачі, що відкрита. Якщо `render()` вже сам запустив `loadConn`
+ * (задачі нема → `showNoTask` → `enterHome`), другого запиту не робимо.
  */
 async function afterModulesChange() {
-  frameStale = true;
   await loadSpaces();
   const seq = connState.seq;
   await render({ keepFrame: true });
@@ -2742,13 +2761,42 @@ function readCnForm(el) {
   return { values: Object.fromEntries(values), secrets: Object.fromEntries(secrets), erase };
 }
 
+/** Селектор контрола панелі, що тримає фокус: поле (`data-cn-field`) чи кнопка (`data-cn-dr`, для «Стерти» ще й ключ
+ *  секрету). `null` — фокус поза панеллю чи на чомусь без гачка. */
+function cnFocusKey(el, a) {
+  if (!a || !el.contains(a)) return null;
+  if (a.dataset.cnField != null) return `[data-cn-field="${CSS.escape(a.dataset.cnField)}"]`;
+  if (a.dataset.cnDr) {
+    return `[data-cn-dr="${a.dataset.cnDr}"]${a.dataset.key != null ? `[data-key="${CSS.escape(a.dataset.key)}"]` : ''}`;
+  }
+  return null;
+}
+
+/**
+ * Перемалювати панель. `innerHTML` будує вузли заново — фокус, що стояв на старому контролі, падає на `body`, тож ключ
+ * контрола, який його тримав, береться ДО перемальовки і вертається ПІСЛЯ: зайнятість («Зберігаю й перевіряю…»),
+ * результат (невдала перевірка, відмова), мова. Контрол вимкнено чи його нема — перший доступний контрол тіла й футера
+ * (поля, потім кнопки). Поки запит летить, УСЕ вимкнено, крім хрестика: фокус стає на нього, а бажаний контрол
+ * лишається в `cnDrawer.focusWant` — наступна перемальовка (відповідь) вертає фокус туди, де людина була, а не лишає
+ * на хрестику. Фокус поза панеллю (палітра мови, діалог питання) не чіпаємо.
+ */
 function paintCnDrawer() {
   const el = cnDrawerNode();
   if (!cnDrawer) { el.hidden = true; el.innerHTML = ''; return; }
   const sp = currentSpace(spacesResp);
+  const live = cnFocusKey(el, document.activeElement);
+  const want = cnDrawer.focusWant ?? live;
   el.innerHTML = drawerHTML({ ...cnDrawer, spaceName: sp && sp.id === cnDrawer.spaceId ? sp.name : cnDrawer.spaceId });
   el.hidden = false;
   syncCnDrawer();
+  if (!want) return;
+  const usable = (n) => n && !n.disabled;
+  const back = el.querySelector(want);
+  if (usable(back)) { cnDrawer.focusWant = null; back.focus({ preventScroll: true }); return; }
+  const first = [...el.querySelectorAll('.cn-dr-body [data-cn-field], .cn-dr-foot button')].find(usable);
+  if (first) { cnDrawer.focusWant = null; first.focus({ preventScroll: true }); return; }
+  cnDrawer.focusWant = want;
+  el.querySelector('[data-cn-dr="close"]')?.focus({ preventScroll: true });
 }
 
 /** Кнопки за станом форми: «Зберегти» вимкнена без змін (у правці), «Перевірити» — зі змінами (перевіряє збережене). */
@@ -2796,6 +2844,18 @@ async function requestCloseCnDrawer() {
 }
 
 /**
+ * Панель стоїть на заваді іншій дії (відкрити іншу, вимкнути її модуль, вийти з екрана): закрити її — з питанням
+ * «Відкинути зміни?», коли форма брудна. `true` — панелі більше нема, дію можна продовжувати; `false` — людина відмовилась
+ * чи панель у запиті (тоді дію ігноруємо: запит не перебивається). Без панелі — `true` СИНХРОННО нічого не чекаючи.
+ */
+async function dismissCnDrawer() {
+  if (!cnDrawer) return true;
+  if (cnDrawer.busy) return false;
+  await requestCloseCnDrawer();
+  return !cnDrawer;
+}
+
+/**
  * «Стерти» секрет — без перемальовки (інакше зникли б інші введені секрети). Підпис кнопки СТАЛИЙ: стан — це
  * `aria-pressed` і видима примітка. Примітка читачеві екрана потрібна лише коли секрет позначено, тож її id
  * додається в `aria-describedby` ПОЛЯ рівно тоді (так само, як малює `fieldHTML`: після `-state`), а знімається
@@ -2828,15 +2888,94 @@ function restoreCnSecrets(secrets) {
   syncCnDrawer();
 }
 
+/** Ті самі власники ролі (за id, без порядку)? Для звірки «про кого питали» зі свіжим списком. */
+const sameHolders = (a, b) => a.length === b.length && a.every((x) => b.some((y) => y.id === x.id));
+
+/**
+ * Показати результат у панелі, НЕ посилаючи нічого на сервер: введене лишається — значення полів у стані, секрети
+ * повертаються в поля ВЛАСТИВІСТЮ `.value` (як при порожньому обовʼязковому полі: людина не вводить їх знову).
+ */
+function cnShowKept(mine, result) {
+  const cur = readCnForm(cnDrawerNode());
+  mine.form = { values: cur.values, secrets: {}, erase: cur.erase };
+  mine.errors = {}; mine.result = result;
+  paintCnDrawer();
+  restoreCnSecrets(cur.secrets);
+}
+
+/**
+ * Згода на заміну — СВІЖА. Питання «Замінити?» стоїть, поки людина читає, а агент (API) міг тим часом зайняти роль
+ * іншим модулем — тоді її «Замінити» мовчки вимкнуло б і його. Тому після «так» список перечитується (`GET
+ * /api/modules` простору панелі), і власники ролі звіряються з тими, про кого питали: ті самі — `replace: true`;
+ * змінились — питаємо ще раз з новими назвами; вдруге змінились — відмова «роль уже зайнята», нічого не пишемо.
+ * Роль тим часом звільнилась — заміняти нікого, і `replace` НЕ шлемо (власник, що зʼявиться між двома кроками, інакше
+ * був би вимкнений мовчки: без `replace` сервер скаже `409 role-taken`).
+ *
+ * Повертає `true`/`false` (слати `replace` чи ні) або `null` — писати нічого: людина відмовилась, панель змінилась,
+ * сервер не віддав список чи власники змінились вдруге (причина вже в панелі).
+ */
+async function cnConfirmReplace(mine) {
+  let holders = roleHolders(mine.entry, connState.list);
+  if (!holders.length) return false;
+  mine.asking = true;
+  try {
+    for (let round = 0; ; round += 1) {
+      const shared = (mine.entry.roles || []).filter((r) => holders.some((h) => (h.roles || []).includes(r)));
+      const q = t('cnReplaceAsk', roleTitle(shared[0]), holders.map(modName).join(', '), modName(mine.entry));
+      if (!(await askYesNo(q, { yes: t('cnReplace') }))) return null;
+      if (cnDrawer !== mine) return null;
+      let list;
+      try { list = (await formApi(`/api/modules?space=${encodeURIComponent(mine.spaceId)}`))?.modules; }
+      catch (err) {
+        if (cnDrawer === mine) cnShowKept(mine, { kind: 'refused', ...refusalView(err) });
+        return null;
+      }
+      if (cnDrawer !== mine) return null;
+      if (!Array.isArray(list)) list = [];
+      if (connOpen() && connState.spaceId === mine.spaceId) { connState.list = list; paintHome(); }
+      const now = roleHolders(mine.entry, list);
+      if (sameHolders(now, holders)) return true;
+      if (!now.length) return false;
+      if (round === 1) { cnShowKept(mine, { kind: 'refused', key: 'cnRefRoleTaken', detail: '' }); return null; }
+      holders = now;
+    }
+  } finally { mine.asking = false; }
+}
+
+/** Людські назви модулів, вимкнених заміною (`replaced` відповіді): зі списку сторінки, а нема — сам id. */
+function cnReplacedNames(r) {
+  const ids = Array.isArray(r?.replaced) ? r.replaced : [];
+  return ids.map((id) => {
+    const e = (connState.list || []).find((x) => x.id === id);
+    return e ? modName(e) : String(id);
+  }).join(', ');
+}
+
+/** Картка модуля зайнята записом панелі (`'save'`) — лише коли сторінка ще показує той самий простір. Знявши, вертає
+ *  фокус на кнопку картки, якщо він пропав: кнопки вимкнені на час зайнятості, і закриття панелі не мало куди його вернути. */
+function cnCardBusy(spaceId, id, on) {
+  if (!connOpen() || connState.spaceId !== spaceId) return;
+  if (on) connState.busy.set(id, 'save'); else connState.busy.delete(id);
+  paintHome();
+  if (!on) refocusCard(id, 'configure');
+}
+
+/** Відмовлений запис (HTTP-відмова, тайм-аут) теж міг щось змінити: сервер пише секрети раніше за решту, а тайм-аут —
+ *  це «невідомо». Прапорці `set` на картці й у панелі мусять відповідати диску — перечитуємо, якщо сторінка той самий простір. */
+function cnRefreshAfterRefusal(spaceId) {
+  if (connOpen() && connState.spaceId === spaceId) loadConn({ spaces: false });
+}
+
 /**
  * «Підключити» / «Зберегти». Обовʼязкові — до запиту. Підключення модуля, чиї ролі хтось тримає (зокрема неявний
- * `static-publish`), — спершу питання «Замінити?», далі `replace: true` (сервер міняє постачальника одним записом).
+ * `static-publish`), — спершу питання «Замінити?» зі СВІЖОЮ згодою (`cnConfirmReplace`), далі `replace: true` (сервер
+ * міняє постачальника одним записом); тост після заміни називає вимкнені модулі.
  * Запис іде в простір, відкритий у панелі (`spaceId`), а не в активний зараз. Вердикт `ok` — панель закривається,
  * тост; `ok: false` — стан УЖЕ записано (так працює API), панель лишається з причиною й переходить у режим правки;
  * HTTP-відмова — нічого не збережено, причина в панелі.
  */
 async function cnSubmit() {
-  if (!cnDrawer || cnDrawer.busy) return;
+  if (!cnDrawer || cnDrawer.busy || cnDrawer.asking) return;
   const el = cnDrawerNode();
   const cur = readCnForm(el);
   const miss = missingRequired(cnDrawer.fields, cur);
@@ -2856,14 +2995,9 @@ async function cnSubmit() {
   const mine = cnDrawer;
   let replace = false;
   if (mine.mode === 'enable') {
-    const holders = roleHolders(cnDrawer.entry, connState.list);
-    if (holders.length) {
-      const shared = (mine.entry.roles || []).filter((r) => holders.some((h) => (h.roles || []).includes(r)));
-      const q = t('cnReplaceAsk', roleTitle(shared[0]), holders.map(modName).join(', '), modName(mine.entry));
-      if (!(await askYesNo(q, { yes: t('cnReplace') }))) return;
-      if (cnDrawer !== mine) return;
-      replace = true;
-    }
+    const verdict = await cnConfirmReplace(mine);
+    if (verdict === null) return;
+    replace = verdict;
   }
   const body = writePayload(mine.spaceId, mine.id, patch, replace);
   mine.form = { values: cur.values, secrets: {}, erase: cur.erase };
@@ -2873,24 +3007,33 @@ async function cnSubmit() {
   try {
     r = await postForm(mine.mode === 'enable' ? '/api/module-enable' : '/api/module-settings', body);
   } catch (err) {
+    cnRefreshAfterRefusal(mine.spaceId);
     if (cnDrawer !== mine) return;
     mine.busy = false; mine.result = { kind: 'refused', ...refusalView(err) };
     paintCnDrawer();
     return;
   }
   const name = modName(mine.entry);
-  if (r?.check?.ok === true) {
-    if (cnDrawer === mine) closeCnDrawer();
-    toast(t(mine.mode === 'enable' ? 'cnToastEnabled' : 'cnToastSaved', name));
-  } else if (cnDrawer === mine) {
-    const entry = r?.module ?? mine.entry;
-    const fields = formFields(entry);
-    const init = initialForm(fields);
-    cnDrawer = { ...mine, entry, mode: 'edit', fields, init, form: init, busy: false,
-      result: { kind: 'failed', ...verdictText(r?.check) }, opener: { act: 'configure', id: mine.id } };
-    paintCnDrawer();
+  const off = cnReplacedNames(r);
+  /* Картка зайнята від відповіді до кінця перечитування: список під нею ще СТАРИЙ, і «Налаштувати», натиснуте в цей
+     проміжок, відкрило б колишній запис (стан секрету, значення). Як `connDisable`: знімаємо ПІСЛЯ перечитування. */
+  cnCardBusy(mine.spaceId, mine.id, true);
+  try {
+    if (r?.check?.ok === true) {
+      if (cnDrawer === mine) closeCnDrawer();
+      toast(off ? t('cnToastReplaced', name, off) : t(mine.mode === 'enable' ? 'cnToastEnabled' : 'cnToastSaved', name));
+    } else if (cnDrawer === mine) {
+      const entry = r?.module ?? mine.entry;
+      const fields = formFields(entry);
+      const init = initialForm(fields);
+      cnDrawer = { ...mine, entry, mode: 'edit', fields, init, form: init, busy: false,
+        result: { kind: 'failed', ...verdictText(r?.check) }, opener: { act: 'configure', id: mine.id } };
+      paintCnDrawer();
+    }
+    await afterModulesChange();
+  } finally {
+    cnCardBusy(mine.spaceId, mine.id, false);
   }
-  await afterModulesChange();
 }
 
 /** «Перевірити» в панелі — по збереженому (зі змінами кнопка вимкнена): вердикт у панелі, сторінка перечитується. */
@@ -2928,9 +3071,10 @@ function wireCnDrawer(el) {
   el.addEventListener('change', () => syncCnDrawer());
 }
 
-/* Esc панелі: лише коли над нею нема діалогу питання й палітри (Esc тих — їхній). */
+/* Esc панелі: лише коли над нею нема діалогу питання й палітри (Esc тих — їхній) і коли цей Esc уже не закрив щось
+   інше (відкритий дропдаун смуги: його слухач стоїть раніше й гасить подію через `preventDefault`). */
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && cnDrawer && !paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
+  if (ev.key === 'Escape' && !ev.defaultPrevented && cnDrawer && !paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
     ev.preventDefault();
     requestCloseCnDrawer();
   }
@@ -6538,9 +6682,14 @@ function switchLang(v) {
   /* Екран «Задачі» — окремий вузол зі своєю розміткою: без цього він лишався б
      старою мовою, поки його щось не змусить перемалюватись. */
   if (homeOpen) paintHome();
-  /* Відкрита бічна панель «Підключення» — теж окремий вузол. Введені секрети при цьому зникають (у розмітку вони не
-     пишуться ніколи) — свідома ціна. */
-  if (cnDrawer && !cnDrawer.busy) { cnDrawer.form = { ...readCnForm(cnDrawerNode()), secrets: {} }; paintCnDrawer(); }
+  /* Відкрита бічна панель «Підключення» — теж окремий вузол. У розмітку секрети не пишуться ніколи, тож введені
+     повертаються в поля ВЛАСТИВІСТЮ `.value` (як при порожньому обовʼязковому полі): зміна мови не стирає набране. */
+  if (cnDrawer && !cnDrawer.busy) {
+    const cur = readCnForm(cnDrawerNode());
+    cnDrawer.form = { ...cur, secrets: {} };
+    paintCnDrawer();
+    restoreCnSecrets(cur.secrets);
+  }
 }
 
 function onOverlayClick(ev) {
