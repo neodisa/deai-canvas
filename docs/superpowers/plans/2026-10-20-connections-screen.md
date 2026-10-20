@@ -928,6 +928,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 `publishErrVercelAuth` (UK ≈ 391, EN ≈ 1170): «(через API чи агента)» → «(меню простору → «Підключення»)» / «(through the API or the agent)» → «(space menu → Connections)». Коментар ≈ 379: «Керувати модулем у 0.3.0 можна лише через API чи агента (екран «Підключення» — етап 3), тож тексти не обіцяють кнопки.» → «Модулем керують на екрані «Підключення» (меню простору, 0.5.0) або через API чи агента.»
 
+> **Поправки після ревʼю Task 2 (коміт `43d6c64`) — обовʼязкові для цієї задачі:**
+> - модель тепер експортує `canErase(f)`; поле `f.blank` у `select`; `providerLine` може дати `{kind: "error"}`; нові коди `vercel-busy` → `cnErrVercelBusy`, `no-folder` → `cnErrBadFolder`;
+> - словник: додати `cnErrVercelBusy` (UK `'Vercel тимчасово відмовляє (ліміт запитів) — спробуйте за хвилину.'`, EN `'Vercel is temporarily refusing requests (rate limit) — try again in a minute.'`) і `cnNowError` (UK `'Зараз: невідомо — space.json не читається'`, EN `'Now: unknown — space.json cannot be read'`);
+> - у `connections-view.js`: імпортувати `canErase` і замість `const canErase = f.set === true && !f.required;` брати `const erasable = canErase(f);`; список: порожня опція рендериться, коли `f.blank` (а не `!f.required`), і вибрана, коли значення форми `""`; `nowHTML` для `kind: "error"` — `t("cnNowError")`;
+> - дописати в тест розмітки: обовʼязковий `select` зі значенням з опцій — без порожньої опції; обовʼязковий без значення — з порожньою вибраною; необовʼязковий — завжди з порожньою; `providerLine` error → «Зараз: невідомо».
+
 - [ ] **Step 2: Падаючі тести розмітки** `tests/connections-view.test.mjs`:
 
 ```js
