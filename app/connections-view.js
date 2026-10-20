@@ -6,9 +6,9 @@
  *                     space  — запис `/api/spaces` поточного простору ({id, name, path, integrations, capabilities});
  *                     list   — записи `GET /api/modules` або `null` (вантажиться);
  *                     failed — `{code, message}`, коли список не прочитався;
- *                     busy   — Map id → 'check'|'disable': дія в польоті.
+ *                     busy   — Map id → 'check'|'disable'|'save': дія в польоті (`'save'` — запис із панелі).
  *   cardHTML(e, busy)  одна картка модуля; nowHTML(role, v)  рядок «Зараз» секції.
- *   drawerHTML(d)    d = {entry, mode: 'enable'|'edit', fields, form, busy, result, errors, spaceName};
+ *   drawerHTML(d)    d = {entry, mode: 'enable'|'edit', fields, form, busy: 'save'|'check'|false, result, errors, spaceName};
  *                     busy   — `'save'` (запис: «Зберігаю й перевіряю…»), `'check'` («Перевірити» каже «Перевіряю…»)
  *                              або `false`; будь-яке справжнє значення вимикає всі поля й кнопки (крім хрестика).
  *                     errors — обʼєкт «ключ поля → ключ словника»; читається лише ВЛАСНА властивість (див. `own`).

@@ -130,6 +130,9 @@ export function overviewComments(env) {
   let iterNum = null;   // тег ітерації каналу (`cfg.version`) — для тегу версії нового піна
   const subs = [];
   let inflight = null;  // ensure() у дорозі — другий виклик чекає ЙОГО, а не піднімає свій інстанс
+  /* «Епоха» запусків: `invalidate()` збільшує її. Запуск, що стартував у попередній епосі, застарів, навіть коли його
+     ключ «ітерація|канал» збігається з поточним — модулі змінились, а ключ про це не знає. */
+  let epoch = 0;
   /** fkey → { sha, els } | 'loading'. `sha` — версія КАДРУ: перезняли кадр —
    *  геометрія під ним інша, і стара мусить піти разом зі старим знімком.
    *  `els: null` — невдача САМЕ для цієї версії: не смикаємо сервер щокадру, але
@@ -321,24 +324,28 @@ export function overviewComments(env) {
     if (cfgKey === key && (cl || inflight)) return inflight;
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }
     cfgKey = key;
+    const gen = epoch;
     const run = start(key);
     inflight = run;
     try { await run; }
     catch (e) {
-      /* Падіння ЗАСТАРІЛОГО запуску (канал уже перемкнули) — не наша справа:
+      /* Падіння ЗАСТАРІЛОГО запуску (канал уже перемкнули, чи `invalidate()` змінив епоху) — не наша справа:
          скинути `cfgKey` означало б обнулити поточний запуск, і той тихо
          вийшов би на `cfgKey !== key` без жодного інстансу (NEW-2). */
-      if (cfgKey !== key) return;
+      if (cfgKey !== key || gen !== epoch) return;
       cfgKey = null;
       throw e;
     } finally { if (inflight === run) inflight = null; }
   }
 
   async function start(key) {
+    /* Перший рядок асинхронної функції виконується синхронно, у виклику з `ensure()`: `gen` — епоха саме цього запуску. */
+    const gen = epoch;
+    const stale = () => cfgKey !== key || gen !== epoch;
     const [it, ch] = key.split("|");
     const cfg = await fetch(`/api/comment-config?ch=${encodeURIComponent(ch)}&it=${encodeURIComponent(it)}`)
       .then(async (r) => { if (!r.ok) throw await configError(r); return r.json(); });
-    if (cfgKey !== key) return;   // поки чекали — перемкнули канал чи ітерацію
+    if (stale()) return;   // поки чекали — перемкнули канал чи ітерацію, або `invalidate()` змінив модулі
     let store;
     if (cfg.module) {
       // Командний канал веде модуль ролі `comments`: його адаптер, а не зашитий Supabase ЛІГА.
@@ -356,7 +363,7 @@ export function overviewComments(env) {
       closeQuietly(store);
       throw e;
     }
-    if (cfgKey !== key) { closeQuietly(store); return; }
+    if (stale()) { closeQuietly(store); return; }
     if (cl) { cl.destroy(); cl = null; subs.length = 0; }   // друга лінія: інстанс завжди ОДИН
     iterNum = cfg.version;
     cl = window.CommentLayer.create().init({
@@ -390,6 +397,19 @@ export function overviewComments(env) {
     rebuild() { if (!active) return; measure(); ensure().catch(fail); tick(); },
     /** Кадр камери. */
     tick,
+    /**
+     * Модулі змінились (екран «Підключення» ввімкнув, вимкнув чи перенастроїв постачальника коментарів): ключ
+     * «ітерація|канал» і живий інстанс більше не кажуть, КУДИ йдуть нові піни — без цього вони йшли б у сервіс, з якого
+     * людина щойно пішла, аж до перезавантаження сторінки. Знищуємо шар (його `destroy()` закриває й сховище: опитування
+     * старого сервісу припиняється) і забуваємо ключ — наступний `enter()`/`rebuild()` прочитає comment-config заново.
+     * `epoch` відсікає запуск, що ще летить: його ключ збігається з новим, тож сам `cfgKey` його б не спинив. Фабрики
+     * модулів (`FACTORIES`) лишаються: файли адаптера не змінились, змінилось налаштування. Сам нічого не перебудовує.
+     */
+    invalidate() {
+      epoch += 1;
+      if (cl) { cl.destroy(); cl = null; }
+      subs.length = 0; cfgKey = null; inflight = null;
+    },
     /** Для тестів і діагностики: живий інстанс коментатора. */
     get layer() { return cl; },
   };

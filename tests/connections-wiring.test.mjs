@@ -67,7 +67,23 @@ test("після вимкнення — afterModulesChange; він ЛЕГКИЙ:
   assert.match(fn("connDisable"), /await afterModulesChange\(\);/);
   const b = fnc("afterModulesChange");
   assert.doesNotMatch(b, /afterSpaceChange|resetSpaceState|resetPerTaskState|enterHome/, "простір не змінився — скидати нічого");
-  assert.match(b, /^\{\s*await loadSpaces\(\);\s*const seq = connState\.seq;\s*await render\(\{ keepFrame: true \}\);\s*paintBar\(\);\s*if \(connOpen\(\) && connState\.seq === seq\) await loadConn\(\{ spaces: false \}\);\s*\}$/);
+  assert.match(b, /^\{\s*ovc\.invalidate\(\);\s*await loadSpaces\(\);\s*const seq = connState\.seq;\s*await render\(\{ keepFrame: homeOpen \}\);\s*paintBar\(\);\s*if \(connOpen\(\) && connState\.seq === seq\) await loadConn\(\{ spaces: false \}\);\s*\}$/);
+});
+
+test("afterModulesChange ПЕРШИМ інвалідує коментатор «Огляду» (інакше нові піни йдуть у сервіс, з якого людина щойно пішла)", () => {
+  const b = fnc("afterModulesChange");
+  assert.ok(/^\{\s*ovc\.invalidate\(\);/.test(b), "ovc.invalidate() — перший рядок тіла: раніше за loadSpaces і render()");
+  assert.ok(b.indexOf("ovc.invalidate()") < b.indexOf("render("), "invalidate раніше за render(): той у режимі «Огляд» кличе ovc.enter()");
+  /* Саме `invalidate` коментатора, а не `leave`/`rebuild`: ті ключ «ітерація|канал» не скидають. */
+  assert.equal([...src.matchAll(/ovc\.invalidate\(\)/g)].length, 1, "єдине місце — afterModulesChange (іншим шляхам модулі не міняються)");
+  const oc = readFileSync(new URL("../app/overview-comments.js", import.meta.url), "utf8");
+  assert.match(oc, /invalidate\(\) \{\s*epoch \+= 1;\s*if \(cl\) \{ cl\.destroy\(\); cl = null; \}\s*subs\.length = 0; cfgKey = null; inflight = null;\s*\},/);
+  /* Фабрики модулів лишаються: файли адаптера не змінюються, змінюється налаштування. */
+  assert.doesNotMatch(oc.slice(oc.indexOf("invalidate() {"), oc.indexOf("invalidate() {") + 400), /FACTORIES/);
+});
+
+test("Esc панелі не спрацьовує під час IME-композиції (там Esc скасовує набране, а не закриває панель)", () => {
+  assert.match(src, /if \(ev\.key === 'Escape' && !ev\.isComposing && !ev\.defaultPrevented && cnDrawer && /);
 });
 
 test("рамка: окремого reloadFrame після виходу нема — render() сам присвоює frame.src (інакше перезавантажувався СТАРИЙ документ, 404 у рамці)", () => {
@@ -178,7 +194,7 @@ test("панель: перевірка в панелі — module-check прос
 });
 
 test("панель: Esc — запит закриття (з питанням при незбереженому), не під діалогом і не під палітрою", () => {
-  assert.match(src, /document\.addEventListener\('keydown', \(ev\) => \{\n  if \(ev\.key === 'Escape' && !ev\.defaultPrevented && cnDrawer && !paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) \{\n    ev\.preventDefault\(\);\n    requestCloseCnDrawer\(\);\n  \}\n\}\);/);
+  assert.match(src, /document\.addEventListener\('keydown', \(ev\) => \{\n  if \(ev\.key === 'Escape' && !ev\.isComposing && !ev\.defaultPrevented && cnDrawer && !paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) \{\n    ev\.preventDefault\(\);\n    requestCloseCnDrawer\(\);\n  \}\n\}\);/);
   const b = fnc("requestCloseCnDrawer");
   assert.match(b, /if \(!cnDrawer \|\| cnDrawer\.busy\) return;/, "під час запиту панель не закривається");
   assert.match(b, /const dirty = isDirty\(formPatch\(mine\.fields, mine\.init, readCnForm\(cnDrawerNode\(\)\)\)\);/);
@@ -338,7 +354,7 @@ test("картка зайнята записом панелі ('save') від в
 
 test("Esc, що закрив дропдаун смуги, не закриває ще й панель: дропдаун гасить подію, слухач панелі її поважає (і стоїть ПІЗНІШЕ)", () => {
   assert.match(src, /if \(ev\.key === 'Escape' && openDd && !ev\.isComposing\) \{\s*const wasSpaces = openDd === 'space';\s*openDd = null;\s*(?:\/\*[\s\S]*?\*\/\s*)?ev\.preventDefault\(\);\s*paintBar\(\);/);
-  assert.ok(src.indexOf("ev.key === 'Escape' && openDd && !ev.isComposing") < src.indexOf("ev.key === 'Escape' && !ev.defaultPrevented && cnDrawer"),
+  assert.ok(src.indexOf("ev.key === 'Escape' && openDd && !ev.isComposing") < src.indexOf("ev.key === 'Escape' && !ev.isComposing && !ev.defaultPrevented && cnDrawer"),
     "слухач дропдауна реєструється РАНІШЕ: інакше `defaultPrevented` ще не виставлено");
 });
 
@@ -386,12 +402,15 @@ test("cnSubmit: при невдалій перевірці обовʼязков�
   assert.match(b, /cnDrawer\.form = \{ values: cur\.values, secrets: \{\}, erase: cur\.erase \};\s*cnDrawer\.errors/);
 });
 
-test("рамка: render({ keepFrame }) не переприсвоює frame.src (кожне присвоєння — перезавантаження); лише afterModulesChange його вмикає", () => {
+test("рамка: render({ keepFrame }) не переприсвоює frame.src (кожне присвоєння — перезавантаження); лише afterModulesChange його вмикає — і лише поки оверлей відкритий", () => {
   assert.match(src, /async function render\(\{ keepFrame = false \} = \{\}\) \{/);
   assert.match(fnc("render"), /applyMode\(task, \{ keepFrame \}\);/);
   assert.match(fnc("applyMode"), /if \(!keepFrame\) \{\s*frame\.src = /);
   assert.match(src, /function applyMode\(task, \{ keepFrame = false \} = \{\}\) \{/);
   /* Єдине місце, що тримає рамку: легкий шлях після запису модулів. Усі інші `render()` — з перезавантаженням. */
-  assert.deepEqual([...src.matchAll(/render\(\{ keepFrame: true \}\)/g)].length, 1);
-  assert.match(fnc("afterModulesChange"), /await render\(\{ keepFrame: true \}\);/);
+  assert.deepEqual([...src.matchAll(/render\(\{ keepFrame: [^}]+\}\)/g)].length, 1);
+  assert.deepEqual([...src.matchAll(/render\(\{ keepFrame: true \}\)/g)].length, 0, "безумовного keepFrame: true нема");
+  /* `homeOpen`, а не `true`: якщо людина вийшла з оверлея, поки запис летів, `leaveHome` уже відпрацював зі СТАРИМИ
+     `capabilities`, і наступного не буде — рамку мусить оновити сам `afterModulesChange`. */
+  assert.match(fnc("afterModulesChange"), /await render\(\{ keepFrame: homeOpen \}\);/);
 });

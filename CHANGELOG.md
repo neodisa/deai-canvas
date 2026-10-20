@@ -111,6 +111,15 @@ unchanged: `tests/legacy-golden.test.mjs` is green without a re-shoot.
   document over a task opened right after leaving the screen — a 404 in the frame — and a full
   re-render reset the picked iteration; both are covered by live tests.)
 - `preflight` with `replace` does not check the role: the write frees it under the lock.
+- The Overview commenter re-reads the comments provider after a module change: `afterModulesChange`
+  first calls `overviewComments().invalidate()` (it destroys the layer, which closes the old store
+  and its polling, and forgets the «iteration | channel» key; a start still in flight is dropped
+  by an epoch), so new pins on «Overview» go to the service the person has just configured, not
+  to the one they left, with no reload needed. From the same final review: the frame is kept
+  untouched only while the overlay is open (`render({ keepFrame: homeOpen })`; if the person left
+  before the write answered, nothing would reload it later); the logo is no longer lit as the
+  current page on «Connections» (the crumb names it); Esc during an IME composition no longer
+  closes the panel.
 
 ### Known limits
 
@@ -125,7 +134,7 @@ unchanged: `tests/legacy-golden.test.mjs` is green without a re-shoot.
 
 ### Tests
 
-`npm test` at 0.5.0 is green: 1450 node tests (plus `inspector-core`), 2349 Python tests in
+`npm test` at 0.5.0 is green: 1458 node tests (plus `inspector-core`), 2349 Python tests in
 `tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.4.0: 1336, 2332 with 1 skipped, 168, 170).
 The three Python suites were also run on Python 3.9.6, the oldest supported version, with the
 same result (2349 with 1 skipped, 168, 170); `npm test` itself uses Python 3.13. One timing test
@@ -137,7 +146,10 @@ labels and details are escaped, only known icons, no secret value in the markup)
 `tests/connections-css.test.mjs` (every class of the markup has a rule, long strings wrap, the
 panel is hidden outside the overlay and in the clean view, only tokens);
 `tests/connections-wiring.test.mjs`; the entry points in `tests/shell-bar.test.mjs`,
-`tests/shell-palette.test.mjs` and `tests/tasks-home.test.mjs`. On the server, the class `Replace`
+`tests/shell-palette.test.mjs` and `tests/tasks-home.test.mjs`; `invalidate()` of the Overview
+commenter in `tests/overview-comments-module.test.mjs` (a new store after the change, a start in
+flight at the moment of the change, a stale start that fails) and the logo on «Connections» in
+`tests/bar-model.test.mjs` and `tests/shell-bar.test.mjs`. On the server, the class `Replace`
 (17 tests) in `tests/test_modules_api.py`: one write of `space.json` for both changes, the
 implicit and an explicit holder, no conflict, a non-boolean `replace`, a module that did not load,
 the settings of the replaced module stay, `role-taken` without `replace`, parallel replaces.
@@ -148,6 +160,9 @@ Chromium, 19 scenarios, one file at a time) covers the entry from the menu, the 
 declining a replacement, a failed check, erasing a secret, a secret that shows up nowhere (a DOM
 snapshot, a watcher on every DOM mutation, request addresses and response bodies), switching the
 space with a panel open, the frame after leaving the screen, the fresh consent, and focus and Esc.
+Scenario `e2` of `tests/live/comments.test.mjs` changes the address of the comments service on
+the «Connections» screen and checks that «Overview» then reads the pins of the new service and
+makes no request to the old one.
 
 ## [0.4.0] — 20.10.2026
 

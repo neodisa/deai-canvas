@@ -181,7 +181,7 @@ let homeOpen = false;
    оверлей на всі екрани поза задачею: вхід, вихід, чистий перегляд і палітра в стані `homeOpen` — спільні. */
 let homePage = 'tasks';
 /* Стан сторінки «Підключення»: простір, чий список показано (знімок на момент запиту — кожен запис іде САМЕ туди),
-   записи `GET /api/modules` (`null` — вантажиться), збій читання і дії в польоті (id → 'check'|'disable'). `seq`
+   записи `GET /api/modules` (`null` — вантажиться), збій читання і дії в польоті (id → 'check'|'disable'|'save'). `seq`
    відкидає відповіді, що прийшли після виходу зі сторінки чи після новішого запиту. */
 const connState = { spaceId: null, list: null, failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
@@ -189,7 +189,7 @@ let connFocusPending = false;
 /* Бічна панель «Підключення» (Task 7): `null` — закрита. Оголошено ТУТ, серед стану модуля, а не біля функцій панелі:
    `enterHome` (його кличе вже перший `render()`) читає її через `closeCnDrawer`, і `let` нижче за місцем виклику дав би
    TDZ-помилку на старті. */
-let cnDrawer = null;   // {id, entry, mode: 'enable'|'edit', fields, init, form, busy, result, errors, spaceId, opener}
+let cnDrawer = null;   // {id, entry, mode: 'enable'|'edit', fields, init, form, busy: 'save'|'check'|false, result, errors, spaceId, opener}
 /* «В Figma» (T-41): захоплення вже йде. Живе ТУТ, а не в документі макета, бо
    саме смуга показує «Копіюю…» і не пускає другий клік. Оголошено біля решти
    стану модуля, а не біля `copyToFigma`: `barState()` читає його на першому ж
@@ -1025,8 +1025,9 @@ function paintBar() {
   }
 }
 
-/** `keepFrame: true` — не переприсвоювати `frame.src` (див. `applyMode`): лише `afterModulesChange` під відкритим
- *  оверлеєм, де рамка схована, а документ однаково перезавантажить `render()` при виході (`leaveHome`). */
+/** `keepFrame: true` — не переприсвоювати `frame.src` (див. `applyMode`): лише `afterModulesChange` і лише поки оверлей
+ *  відкритий (`keepFrame: homeOpen`) — рамка там схована, а документ однаково перезавантажить `render()` при виході
+ *  (`leaveHome`). Без оверлея `afterModulesChange` рамку перезавантажує, бо виходу вже не буде. */
 async function render({ keepFrame = false } = {}) {
   let task, taskList;
   try {
@@ -2718,9 +2719,19 @@ function refocusCard(id, act) {
  * (задачі нема → `showNoTask` → `enterHome`), другого запиту не робимо.
  */
 async function afterModulesChange() {
+  /* ПЕРШИМ: коментатор «Огляду» тримає свій шар за ключем «ітерація | канал», а ключ не знає, що постачальник коментарів чи
+     його адреса щойно змінились. Без цього рядка `render()` нижче (він у режимі «Огляд» кличе `ovc.enter()`) лишив би живий
+     шар на старому сервісі, і нові піни йшли б туди до перезавантаження сторінки (фінальне ревʼю 0.5.0). Раніше за
+     `loadSpaces`: інвалідація нічого не читає, а старий шар тим часом не повинен опитувати сервіс, якого вже нема. */
+  ovc.invalidate();
   await loadSpaces();
   const seq = connState.seq;
-  await render({ keepFrame: true });
+  /* `keepFrame` — лише поки оверлей відкритий (`homeOpen`): рамка тоді схована, а при виході `leaveHome` → `render()` її
+     однаково перезавантажить. Якщо людина встигла піти з оверлея, поки запис летів, ЖОДЕН подальший `leaveHome` уже не
+     настане, а попередній `render()` взяв ще СТАРІ `capabilities` — рамку мусимо оновити тут. Саме `homeOpen`, а не
+     `connOpen()`: з оверлея, відкритого на «Задачах», вихід теж іде через `leaveHome`, тож зайве друге перезавантаження
+     було б марним. */
+  await render({ keepFrame: homeOpen });
   paintBar();
   if (connOpen() && connState.seq === seq) await loadConn({ spaces: false });
 }
@@ -3072,9 +3083,10 @@ function wireCnDrawer(el) {
 }
 
 /* Esc панелі: лише коли над нею нема діалогу питання й палітри (Esc тих — їхній) і коли цей Esc уже не закрив щось
-   інше (відкритий дропдаун смуги: його слухач стоїть раніше й гасить подію через `preventDefault`). */
+   інше (відкритий дропдаун смуги: його слухач стоїть раніше й гасить подію через `preventDefault`). Не під час
+   IME-композиції (`isComposing`): там Esc скасовує набране, а не закриває панель чи питає «Відкинути?». */
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && !ev.defaultPrevented && cnDrawer && !paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
+  if (ev.key === 'Escape' && !ev.isComposing && !ev.defaultPrevented && cnDrawer && !paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
     ev.preventDefault();
     requestCloseCnDrawer();
   }

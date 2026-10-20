@@ -29,6 +29,10 @@
  *   d (створення в UI)      — `save` і `subscribe` адаптера фікстури; друге вікно бачить пін без перезавантаження.
  *   e (форма ЛІГА)          — `'legacy'` у `_provider_for` (`deai_modules.py`): без нього ЛІГА-сторінка не має зашитого
  *        сніпета; `memo`, увімкнений в ІНШОМУ просторі, не бачить від ЛІГА жодного запиту.
+ *   e2 (зміна модуля)       — (фінальне ревʼю 0.5.0) `ovc.invalidate()` на початку `afterModulesChange` (`app.js`) і сам
+ *        `invalidate()` у `overview-comments.js`: без нього коментатор «Огляду» тримає інстанс за ключем «ітерація|канал» і
+ *        після зміни адреси на екрані «Підключення» його пін-шар лишається на СТАРОМУ сервісі (червоніє e2: піни A замість B,
+ *        опитування A триває).
  *   f (ізоляція)            — розтяжка `route` → `abort`, `guardRealDeai`, знімок справжнього `~/deai-published`.
  *
  * ⛔ Лише Playwright Chromium: панель Browser застосунку Claude блокує скрипти пісочниці (`ERR_BLOCKED_BY_CLIENT`), і
@@ -598,6 +602,82 @@ test("e: ЛІГА-простір — зашитий шлях (спільний C
   assert.ok(stubbed.length >= 1, "свідок: зашитий шлях ЛІГА не звертався до CDN — сценарій не про те");
   assert.deepEqual([...new Set(stubbed.map((u) => new URL(u).hostname))], [CDN]);
   assert.deepEqual(outside, [], `запити за межі машини, крім підміненого CDN:\n${outside.join("\n")}`);
+});
+
+/* ── e2: зміна адреси сервісу на екрані «Підключення» ──────────────────────────────────────────────── */
+
+test("e2: адресу сервісу коментарів змінили на «Підключенні» — «Огляд» бере НОВИЙ сервіс: піни B, жодного запиту оболонки до A", async (t) => {
+  const env = await boot(t);
+  const { page, url, memo: A, outside } = env;
+  const B = await startMemo();
+  t.after(() => B.close());
+  /* Два сервіси з РІЗНИМИ пінами на одному каналі: за тим, чий пін на полотні, видно, куди дивиться коментатор. */
+  const seedA = await seedPin(env, "memo-seed-A");
+  B.store.set(CHANNEL, [{ ...seedA, id: "memo-seed-B", text: "Пін із сервісу B" }]);
+  const shot = await shootAll(url);
+  assert.ok(shot.ok, `знімки «Огляду»: ${JSON.stringify(shot).slice(0, 300)}`);
+
+  /* Рахуємо запити ОБОЛОНКИ (коментатор «Огляду»), а не рамки макета: рамка того самого походження має свій адаптер зі
+     своїм опитуванням, і лічильник сервісу (`memo.log`) їх не розрізнив би. `request.frame()` кидає лише для запитів
+     service worker-а — їх ігноруємо. */
+  const shell = { A: [], B: [] };
+  page.on("request", (r) => {
+    let fr;
+    try { fr = r.frame(); } catch { return; }
+    if (fr !== page.mainFrame()) return;
+    for (const [k, svc] of [["A", A], ["B", B]]) {
+      if (r.url().startsWith(`${svc.url}/`)) shell[k].push(`${r.method()} ${new URL(r.url()).pathname}`);
+    }
+  });
+
+  await page.addInitScript(() => {
+    if (window !== window.top) return;
+    try { localStorage.setItem("dc-comment-mode", "project"); } catch { /* приватний режим */ }
+  });
+  await page.goto(`${url}/app/`);
+  await waitChannel(page, "project");
+  await page.getByRole("button", { name: /Огляд/ }).click();
+  await page.locator(".cv-card img").first().waitFor();
+  const idsOnCanvas = async () => {
+    try { return (await overviewPins(page)).flatMap((p) => p.ids); } catch { return null; }   // шар ще не піднято
+  };
+  assert.deepEqual(await until(async () => { const ids = await idsOnCanvas(); return ids?.length ? ids : null; },
+    "піни сервісу A на полотні «Огляду»", 20000), ["memo-seed-A"]);
+  /* Свідки: коментатор «Огляду» справді ходить у A (інакше «жодного запиту до A» нічого не доводило б), у B — ні. */
+  assert.ok(shell.A.length >= 1, `оболонка не звертається до A: ${JSON.stringify(shell)}`);
+  assert.deepEqual(shell.B, [], "до зміни оболонка вже ходить у B");
+
+  /* Екран «Підключення» (з дропдауна простору) → «Налаштувати» → нова адреса → «Зберегти». Секрети лишаються (порожнє = лишити). */
+  await page.click('#bar [data-dd="space"]');
+  await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]');
+  await page.click('#bar [data-act="conn"]');
+  await page.waitForSelector(`.cn-card[data-id="${MODULE}"]`);
+  await page.click(`[data-cn="configure"][data-id="${MODULE}"]`);
+  await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="endpoint"]');
+  await page.fill('#cn-drawer [data-cn-field="endpoint"]', B.url);
+  await page.click('#cn-drawer [data-cn-dr="submit"]');
+  /* Перевірка пройшла (B живий) → панель закрилась; картка зайнята до кінця `afterModulesChange`, тож «Налаштувати» знову
+     доступне лише коли перечитування модулів (а з ним `ovc.invalidate()`) уже позаду. */
+  await page.waitForSelector("#cn-drawer", { state: "hidden" });
+  await page.waitForSelector(`[data-cn="configure"][data-id="${MODULE}"]:not([disabled])`);
+  const cfg = await (await fetch(`${url}/api/comment-config?ch=project&it=it1`)).json();
+  assert.equal(cfg.config.endpoint, B.url, "свідок: сервер уже віддає адресу B");
+  const cutA = shell.A.length;
+
+  /* Назад до задачі (вона на «Огляді»): піни — сервісу B. */
+  await page.click('#bar [data-act="back"]');
+  await page.locator(".cv-card img").first().waitFor();
+  /* Чекаємо САМЕ пін B (а не «будь-який»): поки шар перебудовується, на полотні можуть на мить стояти й старі піни. Якщо
+     коментатор лишився на старому сервісі, остання побачена відповідь — `["memo-seed-A"]`, і ця помилка так і скаже. */
+  await until(async () => { const ids = await idsOnCanvas(); return ids && ids.length === 1 && ids[0] === "memo-seed-B" ? ids : null; },
+    "піни сервісу B на полотні «Огляду» (старий сервіс A віддав би memo-seed-A)", 15000);
+  assert.ok(shell.B.includes(`GET /c/${encodeURIComponent(CHANNEL)}`), `оболонка не читала канал із B: ${JSON.stringify(shell.B)}`);
+
+  /* Старий сервіс більше не опитується: два періоди опитування адаптера (1 с) — і жодного нового запиту оболонки до A. */
+  await sleep(2500);
+  assert.deepEqual(shell.A.slice(cutA), [], "після зміни оболонка ще ходить у старий сервіс A");
+  assert.deepEqual(outside, [], `запити за межі машини:\n${outside.join("\n")}`);
+  assert.deepEqual(env.logs.errors, [], `помилки сторінок:\n${env.logs.errors.join("\n")}`);
 });
 
 /* ── f: ізоляція ───────────────────────────────────────────────────────────────────────────────────── */

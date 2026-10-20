@@ -63,6 +63,22 @@ test("логотип — кнопка data-act=home перед палітрою,
   assert.ok(!/aria-current/.test(btn[0]), "поза екраном «Задачі» aria-current не ставимо");
 });
 
+/* Логотип на сторінці «Підключення»: крошка каже «Підключення», тож логотип не світиться й не оголошує себе поточною
+   сторінкою (інакше читач екрана чув би «поточна сторінка» двічі, а око — дві підсвічені «де я»). Кнопка при цьому лишається:
+   вона веде на «Задачі». */
+test("логотип на «Підключенні»: без ctl--on і aria-current, але кнопка й імʼя на місці; на «Задачах» — як було", () => {
+  const conn = /<button[^>]*data-act="home"[\s\S]*?<\/button>/.exec(html({ homeOpen: true, homePage: "conn", taskId: "t1" }));
+  assert.ok(conn, "кнопки логотипа на сторінці «Підключення» нема — дорога на «Задачі» зникла");
+  assert.doesNotMatch(conn[0], /ctl--on/, "логотип світиться на «Підключенні»");
+  assert.doesNotMatch(conn[0], /aria-current/, "логотип оголошує себе поточною сторінкою на «Підключенні»");
+  assert.match(conn[0], /aria-label="[^"]+"/, "кнопка логотипа втратила імʼя");
+  for (const o of [{ homeOpen: true }, { homeOpen: true, homePage: "tasks" }]) {
+    const tasks = /<button[^>]*data-act="home"[^>]*>/.exec(html(o))[0];
+    assert.match(tasks, /ctl--on/, JSON.stringify(o));
+    assert.match(tasks, /aria-current="page"/, JSON.stringify(o));
+  }
+});
+
 /* Екран «Задачі»: три зони лишаються в DOM (грид на них тримається), але
    склад інший — лише «де я» і шлях назад. */
 test("екран «Задачі»: крошка «Задачі» і «Назад до …», без макета й публікації", () => {
@@ -716,10 +732,10 @@ test("смуга на сторінці «Підключення»: плоска 
   assert.match(h, /crumb crumb--flat[\s\S]*?Підключення</);
   assert.doesNotMatch(h, /<span class="txt">Задачі</);
   assert.match(h, /data-act="back"/);
-  /* Екран, а не смуга задачі: зони 2 і 3 порожні, як на «Задачах», і логотип «ми на місці». */
+  /* Екран, а не смуга задачі: зони 2 і 3 порожні, як на «Задачах». Логотип тут НЕ «поточний»: сторінка названа крошкою. */
   assert.equal((h.match(/class="zone /g) || []).length, 3);
   assert.doesNotMatch(h, /data-act="figma"|data-act="publish"|data-dd="iter"/);
-  assert.match(/<button[^>]*data-act="home"[^>]*>/.exec(h)[0], /ctl--on/);
+  assert.doesNotMatch(/<button[^>]*data-act="home"[^>]*>/.exec(h)[0], /ctl--on|aria-current/);
   /* Іконка крошки — `sliders` (та сама, що в дропдауні й палітрі), а не `grid` «Задач». */
   const flat = (x) => /<span class="crumb crumb--flat">[\s\S]*?<\/span><\/span>/.exec(x)[0];
   const tasks = flat(html({ space: SP(), homeOpen: true, taskId: "t1" }));

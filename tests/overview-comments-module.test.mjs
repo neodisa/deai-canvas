@@ -11,6 +11,13 @@
  *   канал — ядра          — `{...config, channel, onChange}` (порядок ключів). Мутація «config після channel» червонить E.
  *   відмови — з текстом   — нема фабрики / падіння `load` / падіння `create`. Мутація «мовчати» червонить F.
  *   ЛІГА не зачеплено     — відповідь БЕЗ `module` у `start()` ходить у CDN Supabase. Охоронець G (по тексту).
+ *   invalidate()          — (фінальне ревʼю 0.5.0) `cl.destroy(); cl = null` у `invalidate()`: без знищення старий шар
+ *                           лишається живим і опитує старий сервіс (червонить N). `epoch` + `stale()` у `start()`: без
+ *                           епохи запуск, що летів під час `invalidate()`, піднімає шар поверх нового (червонить N3);
+ *                           `gen !== epoch` у `catch` `ensure()`: без нього застарілий запуск, що впав, скидає ключ нового й
+ *                           шле помилку в тост (червонить N4). ⚠️ `cfgKey = null` у `invalidate()` мутацією НЕ ловиться — це
+ *                           еквівалентна мутація: `cl = null`, `inflight = null` і `epoch` уже дають той самий ефект; рядок
+ *                           лишено лише щоб стан не брехав («ключ, під яким піднято» — нічого не піднято).
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -365,5 +372,123 @@ test("M2: сховище без `close` і з відхиленим `ready` — �
     overviewComments(envFor(b)).enter();
     await settle();
     assert.deepEqual(b.errors, ["впало"]);
+  } finally { b.restore(); }
+});
+
+/* ── N: invalidate() — «Огляд» після зміни модуля коментарів (фінальне ревʼю 0.5.0) ─────────────────────── */
+
+/** Світ двох сервісів (`mod` — id модуля: кеш фабрик `FACTORIES` спільний на файл, тож кожному тесту свій id): `state.which`
+ *  каже, чия адреса зараз у відповіді comment-config; адаптер модуля реєструє фабрику, що
+ *  складає кожне створене сховище в `made` (з адресою) і пише його закриття в `closes`. `gates[endpoint]` — що тримає
+ *  `ready` цього сховища (запуск «у дорозі»). */
+function twoServices(mod, { gates = {} } = {}) {
+  const state = { which: "http://a", made: [], closes: [] };
+  const b = browser({
+    resp: () => ({ ok: true, json: async () => resp({ module: mod, client: [`/api/module-client/${mod}/adapter.js`], config: { endpoint: state.which } }) }),
+    scripts: { [`/api/module-client/${mod}/adapter.js`]: (el) => {
+      globalThis.DeaiComments = { create: (cfg) => {
+        state.made.push(cfg.endpoint);
+        return { endpoint: cfg.endpoint, ready: gates[cfg.endpoint] ?? Promise.resolve(), load: () => [], save() {}, close: () => state.closes.push(cfg.endpoint) };
+      } };
+      el.onload();
+    } },
+  });
+  return { b, state };
+}
+
+test("N: invalidate() забуває інстанс — наступний вхід читає comment-config заново і піднімає шар на НОВОМУ сервісі", async () => {
+  const { b, state } = twoServices("m-n");
+  try {
+    const oc = overviewComments(envFor(b));
+    oc.enter();
+    await settle();
+    assert.deepEqual(state.made, ["http://a"]);
+    assert.equal(b.inits.length, 1);
+    /* Свідок: БЕЗ invalidate() перебудова полотна нового сервісу не бачить — ключ «ітерація|канал» той самий. Саме це
+       й було вадою: людина міняє адресу на екрані «Підключення», а нові піни йшли б у старий сервіс до перезавантаження. */
+    state.which = "http://b";
+    oc.rebuild();
+    await settle();
+    assert.equal(b.fetched.length, 1, "свідок: ключ той самий — ensure() нічого не перечитує");
+    assert.deepEqual(state.made, ["http://a"]);
+
+    oc.invalidate();
+    assert.equal(b.destroyed, 1, "старий шар знищено (а з ним закрито й сховище: опитування старого сервісу зупиняється)");
+    assert.equal(oc.layer, null, "інстанса нема до наступного входу");
+    oc.rebuild();
+    await settle();
+    assert.equal(b.fetched.length, 2, "comment-config прочитано заново");
+    assert.deepEqual(state.made, ["http://a", "http://b"], "нове сховище — на новій адресі");
+    assert.equal(b.inits.length, 2);
+    assert.equal(b.inits[1].storage.endpoint, "http://b", "живий шар сидить на новому сховищі");
+    assert.equal(b.appended.length, 1, "фабрика модуля в кеші: файли адаптера вдруге не вантажаться");
+    assert.deepEqual(b.errors, []);
+  } finally { b.restore(); }
+});
+
+test("N2: invalidate() у «Огляді», що вже не на екрані, теж працює: наступний enter() піднімає шар заново; порожній invalidate() не падає", async () => {
+  const { b, state } = twoServices("m-n2");
+  try {
+    const oc = overviewComments(envFor(b));
+    assert.doesNotThrow(() => oc.invalidate(), "до першого входу інстанса нема — нема що знищувати");
+    oc.enter();
+    await settle();
+    oc.leave();
+    state.which = "http://b";
+    oc.invalidate();
+    oc.enter();
+    await settle();
+    assert.deepEqual(state.made, ["http://a", "http://b"]);
+    assert.equal(b.inits.length, 2);
+    assert.equal(b.destroyed, 1);
+  } finally { b.restore(); }
+});
+
+test("N3: запуск, що летів ПІД ЧАС invalidate(), не підніме застарілий шар поверх нового (той самий ключ, інша «епоха»)", async () => {
+  let release;
+  const gateA = new Promise((r) => { release = r; });
+  const { b, state } = twoServices("m-n3", { gates: { "http://a": gateA } });
+  try {
+    const oc = overviewComments(envFor(b));
+    oc.enter();
+    await settle();                       // адаптер завантажено, create(a) викликано, ready тримається
+    assert.deepEqual(state.made, ["http://a"]);
+    assert.equal(b.inits.length, 0);
+    state.which = "http://b";
+    oc.invalidate();                      // модулі змінились, поки старий запуск ще чекає свого сховища
+    oc.rebuild();                         // той самий ключ «ітерація|канал» — а запуск уже ІНШИЙ
+    await settle();
+    assert.equal(b.inits.length, 1, "новий шар піднявся на B");
+    release();
+    await settle();                       // застарілий запуск дочекався ready
+    assert.deepEqual(state.closes, ["http://a"], "сховище застарілого запуску закрито");
+    assert.equal(b.inits.length, 1, "застарілий запуск не підняв другий шар (і не затер новий)");
+    assert.equal(b.inits[0].storage.endpoint, "http://b", "живий шар сидить на НОВОМУ сховищі");
+    assert.deepEqual(b.errors, []);
+  } finally { b.restore(); }
+});
+
+test("N4: застарілий запуск, що ВПАВ після invalidate(), мовчить і не скидає ключ нового запуску (інакше новий шар перечитується вдруге, а помилка йде в тост)", async () => {
+  let reject;
+  const gateA = new Promise((_, no) => { reject = no; });
+  const { b, state } = twoServices("m-n4", { gates: { "http://a": gateA } });
+  try {
+    const oc = overviewComments(envFor(b));
+    oc.enter();
+    await settle();                       // create(a) викликано, ready тримається
+    state.which = "http://b";
+    oc.invalidate();
+    oc.rebuild();
+    await settle();
+    assert.equal(b.inits.length, 1, "новий шар піднявся на B");
+    const fetched = b.fetched.length;
+    reject(new Error("старий сервіс не відповів"));
+    await settle();                       // застарілий запуск упав
+    assert.deepEqual(b.errors, [], "падіння застарілого запуску — не наша справа: тосту нема");
+    assert.deepEqual(state.closes, ["http://a"], "його сховище закрито");
+    oc.rebuild();
+    await settle();
+    assert.equal(b.fetched.length, fetched, "ключ нового запуску цілий: ensure() нічого не перечитує");
+    assert.equal(b.inits.length, 1, "другого шару нема");
   } finally { b.restore(); }
 });

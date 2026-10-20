@@ -362,6 +362,18 @@ test("логотип активний рівно коли відкритий е�
   assert.equal(barModel({ ...base, homeOpen: false }).zone1[0].on, false);
 });
 
+/* Сторінка «Підключення» — той самий оверлей, але «де я» там каже крошка «Підключення»; логотип, що світиться як
+   поточна сторінка, суперечив би їй (а читач екрана почув би «поточна сторінка» двічі). Лише рівно `"conn"`: решта значень
+   (ніщо, «tasks», сміття) лишають «Задачі» — як було, і ЛІГА-golden (там `homePage` не задано) не зсувається. */
+test("логотип не активний на сторінці «Підключення»; на решті сторінок оверлея й без нього — як було", () => {
+  assert.equal(barModel({ ...base, homeOpen: true, homePage: "conn" }).zone1[0].on, false, "на «Підключенні» логотип не «поточний»");
+  assert.equal(barModel({ ...base, homeOpen: true, homePage: "conn", taskId: "" }).zone1[0].on, false, "без задачі теж");
+  for (const homePage of [undefined, null, "tasks", "", "CONN"]) {
+    assert.equal(barModel({ ...base, homeOpen: true, homePage }).zone1[0].on, true, `homePage=${String(homePage)}: «Задачі» — логотип активний`);
+  }
+  assert.equal(barModel({ ...base, homeOpen: false, homePage: "conn" }).zone1[0].on, false, "поза оверлеєм він не активний і з homePage");
+});
+
 /* Без ітерації зона 1 — це логотип + палітра + задача, і не більше: палітра не
    сміє зникнути разом із крошкою ітерації (вона до неї не має стосунку). */
 test("палітра лишається, коли ітерації немає", () => {
