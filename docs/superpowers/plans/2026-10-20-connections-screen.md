@@ -1898,6 +1898,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 > **Поправки після ревʼю Task 3 — обовʼязкові для цієї задачі:**
 > - `cnDrawer.busy` — не `true`, а `'save'` (запис у `cnSubmit`) чи `'check'` (`cnDrawerCheck`): розмітка каже «Зберігаю й перевіряю…» лише для `'save'`, а для `'check'` — «Перевіряю…» на кнопці «Перевірити». Скрізь, де план пише `mine.busy = true`, — відповідне значення; `busy = false` лишається.
 > - кнопка «Стерти» має СТАЛИЙ підпис (стан — лише `aria-pressed` і видима примітка `data-cn-erase-note`): `toggleCnErase` НЕ міняє `textContent`, лише `aria-pressed` і `hidden` примітки, далі `syncCnDrawer()`.
+> - (після фікса Task 3, `46b1613`) примітка «буде стерто…» має `id` (`cn-f-<i>-erase`) і входить в `aria-describedby` поля пароля ЛИШЕ коли секрет позначено до стирання: `toggleCnErase` мусить ще й додати/прибрати цей id в `aria-describedby` відповідного `[data-cn-field="<key>"]` (інші id у атрибуті — `-state`, `-err` — лишаються). Пін на це — у `tests/connections-wiring.test.mjs`.
+> - `drawerHTML` читає `d.busy` як `'save' | 'check' | false`; кнопка закриття не вимикається — закриття під час запиту гасить сам `requestCloseCnDrawer` (`if (!cnDrawer || cnDrawer.busy) return;`).
 
 - [ ] **Step 1: Падаючі пінни** — дописати в `tests/connections-wiring.test.mjs`:
 
