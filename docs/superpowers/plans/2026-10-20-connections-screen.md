@@ -1895,6 +1895,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `app/app.js` (замінити заглушки Task 6 на справжні функції; Esc-обробник; `switchLang`)
 - Test: `tests/connections-wiring.test.mjs` (дописати)
 
+> **Поправки після ревʼю Task 3 — обовʼязкові для цієї задачі:**
+> - `cnDrawer.busy` — не `true`, а `'save'` (запис у `cnSubmit`) чи `'check'` (`cnDrawerCheck`): розмітка каже «Зберігаю й перевіряю…» лише для `'save'`, а для `'check'` — «Перевіряю…» на кнопці «Перевірити». Скрізь, де план пише `mine.busy = true`, — відповідне значення; `busy = false` лишається.
+> - кнопка «Стерти» має СТАЛИЙ підпис (стан — лише `aria-pressed` і видима примітка `data-cn-erase-note`): `toggleCnErase` НЕ міняє `textContent`, лише `aria-pressed` і `hidden` примітки, далі `syncCnDrawer()`.
+
 - [ ] **Step 1: Падаючі пінни** — дописати в `tests/connections-wiring.test.mjs`:
 
 ```js
