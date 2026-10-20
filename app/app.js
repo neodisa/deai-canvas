@@ -50,6 +50,11 @@ import {
   filterActions, keysHTML, paletteActions, paletteHTML, paletteListHTML,
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
+import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
+import {
+  disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleHolders,
+  verdictText, writePayload,
+} from './connections-model.js';
 
 /* Спрайт мусить лежати в DOM ДО першого `<use>`: Safari не домальовує
    символи, які зʼявились у документі після посилання на них. Тому це
@@ -172,6 +177,19 @@ let taskDdWasOpen = false;
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
    нижче ставлять ще й клас `home-open` на `body`). */
 let homeOpen = false;
+/* Сторінка оверлею `#tasks-home`: `tasks` (список задач / привітання) чи `conn` («Підключення», етап 3a). Один
+   оверлей на всі екрани поза задачею: вхід, вихід, чистий перегляд і палітра в стані `homeOpen` — спільні. */
+let homePage = 'tasks';
+/* Стан сторінки «Підключення»: простір, чий список показано (знімок на момент запиту — кожен запис іде САМЕ туди),
+   записи `GET /api/modules` (`null` — вантажиться), збій читання і дії в польоті (id → 'check'|'disable'). `seq`
+   відкидає відповіді, що прийшли після виходу зі сторінки чи після новішого запиту. */
+const connState = { spaceId: null, list: null, failed: null, busy: new Map(), seq: 0 };
+/* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
+let connFocusPending = false;
+/* Бічна панель «Підключення» (Task 7): `null` — закрита. Оголошено ТУТ, серед стану модуля, а не біля функцій панелі:
+   `enterHome` (його кличе вже перший `render()`) читає її через `closeCnDrawer`, і `let` нижче за місцем виклику дав би
+   TDZ-помилку на старті. */
+let cnDrawer = null;   // {id, entry, mode: 'enable'|'edit', fields, init, form, busy, result, errors, spaceId, opener}
 /* «В Figma» (T-41): захоплення вже йде. Живе ТУТ, а не в документі макета, бо
    саме смуга показує «Копіюю…» і не пускає другий клік. Оголошено біля решти
    стану модуля, а не біля `copyToFigma`: `barState()` читає його на першому ж
@@ -903,6 +921,8 @@ function barState() {
     tasksErrKey,
     openDd,
     homeOpen,
+    /* Сторінка оверлею (`tasks`/`conn`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
+    homePage: homeOpen ? homePage : null,
     /* Смуга цього поля вже НЕ читає (принцип 6 PRODUCT.md — перемикач
        аудиторії переїхав у панель коментатора). Лишається, бо `paletteState()`
        будується з `barState()` і бере поточну аудиторію звідси — другий шлях
@@ -1530,8 +1550,9 @@ async function switchTask(val) {
 
 const BAR_ACTIONS = {
   /* Логотип → екран «Задачі» (`enterHome` нижче: смуга, клас на `body`, запит
-     `/api/tasks-overview`). */
-  home: () => enterHome(),
+     `/api/tasks-overview`). Логотип з «Підключення» теж веде на «Задачі» — тому сторінка названа явно: без
+     неї `enterHome` лишив би відкриту. */
+  home: () => enterHome({ page: 'tasks' }),
   /* Назад до задачі: повний `render()` (`leaveHome`), бо під екраном «Задачі»
      макет міг змінитись, а смуга мусить знову показати свіжий склад. */
   back: () => leaveHome(),
@@ -1571,6 +1592,8 @@ const BAR_ACTIONS = {
   },
   spacenew: () => openSpaceNew(),
   spaceedit: () => openSpaceEdit(),
+  /* «Підключення» поточного простору (етап 3a): пункт дропдауна фішки, ⌘K і кнопка в голові «Задач». */
+  conn: () => enterConnections(),
 
   mode: async (val) => {
     const wantCanvas = val === 'overview';
@@ -2238,6 +2261,10 @@ function focusKey(a) {
   if (!a || a === document.body) return null;
   if (a.id) return `#${CSS.escape(a.id)}`;
   if (a.classList.contains('th-card')) return `.th-card[data-id="${CSS.escape(a.dataset.id)}"]`;
+  /* Кнопки карток «Підключення»: дія + модуль (`retry` id не має). */
+  if (a.dataset.cn) {
+    return `[data-cn="${a.dataset.cn}"]${a.dataset.id != null ? `[data-id="${CSS.escape(a.dataset.id)}"]` : ''}`;
+  }
   if (a.dataset.th) {
     return `[data-th="${a.dataset.th}"]${a.dataset.v != null ? `[data-v="${CSS.escape(a.dataset.v)}"]` : ''}`
       + `${a.dataset.id != null ? `[data-id="${CSS.escape(a.dataset.id)}"]` : ''}`;
@@ -2272,7 +2299,10 @@ function paintHome() {
   /* Просторів на машині нема зовсім — замість списку привітання (дорога звідси одна:
      створити перший простір). Рішає `spacesResp`, а не `homeData`: порожній `mine` без
      простору — це «нема де», а не «нічого не знайдено». */
-  keepFocus(el, () => { el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML() : homeHTML(homeView(), homeData); });
+  keepFocus(el, () => {
+    el.innerHTML = needsWelcome(spacesResp) ? welcomeHTML()
+      : homePage === 'conn' ? connPageHTML(connView()) : homeHTML(homeView(), homeData);
+  });
   el.scrollTop = top;
 }
 /** Лише чіпи й сітка — поле пошуку лишається тим самим вузлом. */
@@ -2335,9 +2365,19 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
   paintHome();
 }
 
-/** `spaces: false` — не перепитувати перелік просторів (див. `loadHome`). */
-function enterHome({ spaces = true } = {}) {
+/** `spaces: false` — не перепитувати перелік просторів (див. `loadHome`). `page` — `tasks` («Задачі») чи `conn`
+ *  («Підключення»); без нього відкрита сторінка лишається, закрита відкривається на «Задачах». */
+function enterHome({ spaces = true, page } = {}) {
   const was = homeOpen;
+  /* Сторінка: явна (`home` — «Задачі», `conn` — «Підключення»), інакше відкрита лишається відкритою (перемикання
+     простору й запис модулів кличуть `enterHome` через `afterSpaceChange`, і людина лишається там, де була). */
+  const next = page ?? (was ? homePage : 'tasks');
+  /* Бічна панель належить лише «Підключенню»: вихід на «Задачі» її закриває (фокус не вертаємо — його бере екран). */
+  if (next !== 'conn') closeCnDrawer({ focus: false });
+  /* Свіжий вхід на сторінку (з-поза оверлею чи з іншої сторінки) — зі «вантажу», а не з чужого списку; повторний
+     вхід на ту саму (`afterSpaceChange`) лишає показане, поки нове летить. */
+  const fresh = !was || next !== homePage;
+  homePage = next;
   /* Чистий перегляд ховає смугу, а екран під нею (`html.cv-clean #tasks-home`)
      теж — вхід із нього (⌘K) дав би порожній екран без дороги назад. */
   if (cleanView) toggleClean(false);
@@ -2349,6 +2389,12 @@ function enterHome({ spaces = true } = {}) {
   const el = ensureHome();
   el.hidden = false;
   paintBar();
+  if (homePage === 'conn') {
+    if (fresh) { connState.list = null; connState.failed = null; connFocusPending = true; }
+    paintHome();
+    loadConn({ spaces });
+    return;
+  }
   /* Старі дані (з попереднього відкриття) показуємо одразу, нові їх замінять:
      порожнє «вантажу» на кожен вхід — це блимання, яке нікому не потрібне. */
   /* `space` у «вантажу»: заголовок («Задачі · X») і ховання вкладки «Команда»
@@ -2361,6 +2407,7 @@ function enterHome({ spaces = true } = {}) {
 }
 
 async function leaveHome() {
+  closeCnDrawer({ focus: false });
   homeSeq += 1;
   homeComposing = false; homePaintPending = false;
   homeOpen = false;
@@ -2391,7 +2438,8 @@ function refreshHomeOnReturn() {
   const now = Date.now();
   if (!shouldRefreshHome({ open: homeOpen, visible: document.visibilityState === 'visible', last: homeRefreshedAt, now, forced: homeForced })) return;
   homeRefreshedAt = now;
-  loadHome();
+  /* На «Підключенні» агент міг змінити модулі через API — перечитуємо їх, а не список задач. */
+  homePage === 'conn' ? loadConn() : loadHome();
 }
 window.addEventListener('focus', refreshHomeOnReturn);
 document.addEventListener('visibilitychange', refreshHomeOnReturn);
@@ -2427,6 +2475,9 @@ function wireHome(el) {
     /* Посилання «Превʼю ↗» — своя навігація в новій вкладці: без цього рядка клік
        по ньому долітав би до картки й ще й відкривав би задачу. */
     if (ev.target.closest('a')) return;
+    /* Кнопки карток і помилки сторінки «Підключення» (`data-cn` + `data-id`). */
+    const c = ev.target.closest('[data-cn]');
+    if (c) { connAction(c.dataset.cn, c.dataset.id); return; }
     const b = ev.target.closest('[data-th]');
     if (!b) return;
     const v = b.dataset.v;
@@ -2441,6 +2492,7 @@ function wireHome(el) {
         paintHome();
         break;
       case 'newtask': newTaskDialog(); break;
+      case 'conn': enterConnections(); break;
       case 'spacenew': openSpaceNew(); break;
       case 'status': homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
       case 'profile': case 'designer': {
@@ -2485,6 +2537,108 @@ function wireHome(el) {
   }, true);
 }
 
+/* ── сторінка «Підключення» (етап 3a) ────────────────────────────────────────────────────────────────────
+   Друга сторінка оверлею `#tasks-home` (`homePage === 'conn'`): модулі поточного простору за ролями. Розмітку дають
+   `connections-view.js` і `connections-model.js` (чисті, без мережі); тут — стан, запити й дії карток. Кожен запит
+   несе ЯВНИЙ `space` (`connState.spaceId`): агент міг перемкнути активний простір паралельно, а запис мусить піти
+   туди, що людина бачить. */
+
+const connOpen = () => homeOpen && homePage === 'conn';
+const connView = () => ({ space: currentSpace(spacesResp), list: connState.list, failed: connState.failed, busy: connState.busy });
+
+/** Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). */
+function enterConnections() {
+  if (!currentSpace(spacesResp)) return;
+  enterHome({ page: 'conn' });
+}
+
+/**
+ * Список модулів поточного простору. `spaces: false` — перелік просторів щойно перечитано (`afterSpaceChange`).
+ * Простору не стало (вилучили руками чи агентом) — на «Задачі»: там і лікування висячого `current`, і привітання.
+ * Інший простір, ніж показаний (перемкнули фішкою чи агент), — спершу «вантажу», а не чужі картки під новою назвою.
+ */
+async function loadConn({ spaces = true } = {}) {
+  const seq = ++connState.seq;
+  if (spaces) {
+    await loadSpaces();
+    if (seq !== connState.seq || !connOpen()) return;
+    paintBar();
+  }
+  const sp = currentSpace(spacesResp);
+  if (!sp) { enterHome({ page: 'tasks' }); return; }
+  if (sp.id !== connState.spaceId) {
+    connState.spaceId = sp.id; connState.list = null; connState.failed = null; connState.busy.clear();
+    paintHome();
+  }
+  try {
+    const r = await api(`/api/modules?space=${encodeURIComponent(sp.id)}`);
+    if (seq !== connState.seq || !connOpen()) return;
+    connState.list = Array.isArray(r?.modules) ? r.modules : [];
+    connState.failed = null;
+  } catch (e) {
+    if (seq !== connState.seq || !connOpen()) return;
+    connState.failed = { code: e?.code ?? null, message: String(e?.message || e) };
+  }
+  paintHome();
+  if (connFocusPending) {
+    connFocusPending = false;
+    homeNode()?.querySelector('.cn-card [data-cn], [data-cn="retry"]')?.focus({ preventScroll: true });
+  }
+}
+
+/** Клік по кнопці картки чи помилки сторінки (`data-cn`). Дія над модулем, що вже в польоті, — ігнор. */
+function connAction(act, id) {
+  if (act === 'retry') { loadConn(); return; }
+  const e = (connState.list || []).find((x) => x.id === id);
+  if (!e || connState.busy.has(id)) return;
+  if (act === 'enable') openCnDrawer(e, 'enable');
+  else if (act === 'configure') openCnDrawer(e, 'edit');
+  else if (act === 'check') connCheck(e);
+  else if (act === 'disable') connDisable(e);
+}
+
+/** «Перевірити» на картці: вердикт міняє лише `status` модуля — перечитуємо сторінку. */
+async function connCheck(e) {
+  connState.busy.set(e.id, 'check'); paintHome();
+  try { await postForm('/api/module-check', { space: connState.spaceId, id: e.id }); }
+  catch (err) { const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n')); }
+  finally { connState.busy.delete(e.id); }
+  await loadConn();
+}
+
+/** «Вимкнути»: питання з наслідками для ролей, які модуль зараз виконує; далі — як після будь-якої зміни модулів. */
+async function connDisable(e) {
+  const sp = currentSpace(spacesResp);
+  const lines = disableConsequences(e, sp).map((c) => (c.kind === 'legacy'
+    ? t('cnDisableLegacy', roleTitle(c.role))
+    : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : '')));
+  if (!(await askYesNo([t('cnDisableAsk', modName(e)), ...lines].join('\n\n'), { yes: t('cnDisable'), danger: true }))) return;
+  connState.busy.set(e.id, 'disable'); paintHome();
+  try { await postForm('/api/module-disable', { space: connState.spaceId, id: e.id }); }
+  catch (err) {
+    connState.busy.delete(e.id); paintHome();
+    const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n'));
+    return;
+  }
+  connState.busy.delete(e.id);
+  await afterModulesChange();
+}
+
+/**
+ * Модулі змінились (вмикання, налаштування, вимкнення). Постачальник ролі й його налаштування — частина простору:
+ * смуга (кнопки публікації), рамка (адаптер коментарів вбудовується в сторінку при віддачі) й інспектор (токени)
+ * мусять побачити нове. Тому той самий шлях, що й зміна простору; сторінка лишається «Підключенням», бо `enterHome`
+ * (його кличе `afterSpaceChange`) тримає відкриту сторінку. Пер-задачне (пакет тюнера) перечитується з диска.
+ */
+async function afterModulesChange() {
+  await afterSpaceChange();
+}
+
+/* Бічна панель — Task 7: ці дві функції він ЗАМІНИТЬ повністю (тут лише щоб файл парсився й `enterHome`/`connAction`
+   мали що кликати). */
+function closeCnDrawer() {}
+function openCnDrawer() {}
+
 /** Клавіатура екрана. `/` — у пошук; в пошуку: Esc чистить, потім знімає фокус,
  *  ↓ — до першої картки, Enter — відкрити першу; на картці: стрілки ходять по
  *  сітці (стовпців стільки, скільки дає розкладка зараз), Enter/Пробіл
@@ -2492,6 +2646,7 @@ function wireHome(el) {
  *  IME-композиція клавіш екрана не віддають. */
 document.addEventListener('keydown', (ev) => {
   if (!homeOpen || ev.isComposing || paletteOverlay || document.querySelector('.cv-ask-scrim')) return;
+  if (homePage === 'conn') return;   // «Підключення»: клавіші списку задач не діють; Esc панелі — свій обробник
   const el = homeNode();
   if (!el) return;
   const a = document.activeElement;
@@ -6042,6 +6197,7 @@ function paletteState() {
   return {
     mode: st.mode, view: st.view, hasIteration: st.hasIteration,
     homeOpen: st.homeOpen,
+    homePage: st.homePage,
     pagesError: st.pagesError, flowRaw: st.flowRaw, flowError: st.flowError,
     published: st.published, iterPub: st.iterPub, pagePub: st.pagePub,
     figmaBusy: st.figmaBusy,

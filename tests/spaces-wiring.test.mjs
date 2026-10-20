@@ -251,7 +251,8 @@ test("лікування висячого current — лише з render()/loadH
 });
 
 test("екран «Задачі»: привітання за spacesResp, простори — першими в loadHome, помилка простору — смугою", () => {
-  assert.match(fn("paintHome"), /needsWelcome\(spacesResp\) \? welcomeHTML\(\) : homeHTML\(homeView\(\), homeData\)/);
+  /* Привітання — першим і за `spacesResp` на ОБОХ сторінках оверлею; далі «Підключення» чи список задач. */
+  assert.match(fn("paintHome"), /needsWelcome\(spacesResp\) \? welcomeHTML\(\)\s*: homePage === 'conn' \? connPageHTML\(connView\(\)\) : homeHTML\(homeView\(\), homeData\)/);
   const lh = fn("loadHome");
   const iSpaces = lh.indexOf("await loadSpaces({ heal: true })");
   assert.ok(iSpaces >= 0, "loadHome не питає простори взагалі");
@@ -267,9 +268,9 @@ test("loadHome: перелік просторів не перепитуєтьс�
   assert.match(src, /async function loadHome\(refresh = false, \{ spaces = true \} = \{\}\) \{/);
   assert.match(lh, /if \(spaces\) \{\s*const healed = await loadSpaces\(\{ heal: true \}\);\s*if \(seq !== homeSeq \|\| !homeOpen\) return;/);
   assert.match(lh, /if \(healed\) \{ await resetSpaceState\(\{ reload: false \}\); if \(homeOpen\) enterHome\(\{ spaces: false \}\); return; \}/);
-  assert.match(src, /function enterHome\(\{ spaces = true \} = \{\}\) \{/);
+  assert.match(src, /function enterHome\(\{ spaces = true, page \} = \{\}\) \{/);
   assert.match(fn("enterHome"), /loadHome\(false, \{ spaces \}\);/);
-  assert.match(src, /home: \(\) => enterHome\(\),/, "вхід логотипом перепитує простори (там і лікування)");
+  assert.match(src, /home: \(\) => enterHome\(\{ page: 'tasks' \}\),/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»");
 });
 
 test("loadHome: успішний огляд знімає смугу «простір не читається» (але не чужу причину) і перемальовує смугу", () => {
@@ -285,7 +286,7 @@ test("loadHome: успішний огляд знімає смугу «прост
 test("екран «Задачі»: повернення до вікна (focus, visibilitychange) перечитує його — простір, який завів агент, зʼявляється", () => {
   const body = fn("refreshHomeOnReturn");
   assert.match(body, /shouldRefreshHome\(\{ open: homeOpen, visible: document\.visibilityState === 'visible', last: homeRefreshedAt, now, forced: homeForced \}\)/);
-  assert.match(body, /homeRefreshedAt = now;\s*loadHome\(\);/);
+  assert.match(body, /homeRefreshedAt = now;\s*(?:\/\*[\s\S]*?\*\/\s*)?homePage === 'conn' \? loadConn\(\) : loadHome\(\);/);
   assert.match(src, /window\.addEventListener\('focus', refreshHomeOnReturn\);/);
   assert.match(src, /document\.addEventListener\('visibilitychange', refreshHomeOnReturn\);/);
 });
