@@ -90,7 +90,8 @@ function ddSpaces(state) {
   return `<div class="dd dd--spaces"><div class="dd-head">${esc(t("spaces"))}</div>
     ${list}${list ? '<div class="dd-sep"></div>' : ""}
     ${ddItem({ act: "spacenew", icon: "plus", title: t("spaceNew") })}
-    ${ddItem({ act: "spaceedit", icon: "pencil", title: t("spaceEdit") })}</div>`;
+    ${ddItem({ act: "spaceedit", icon: "pencil", title: t("spaceEdit") })}
+    ${ddItem({ act: "conn", icon: "sliders", title: t("cnOpen") })}</div>`;
 }
 
 /* Фішка простору: `data-dd="space"` — делегація смуги відкриває дропдауни за
@@ -556,11 +557,15 @@ function homeBtn(model) {
 
 /* Голова зони 1 екрана «Задачі»: плоска крошка «Задачі» (нерухома — це «де я»,
    не перемикач) і шлях назад до задачі, з якої прийшли. Склад вирішила модель
-   (`homeOpen`), тут лише малюнок. */
+   (`homeOpen`), тут лише малюнок. На сторінці «Підключення» (етап 3a) модель дає
+   `crumb-conn` замість `crumb-tasks` — крошка та сама, але з іконкою `sliders` і
+   підписом «Підключення»; «назад до задачі» лишається, бо вона про задачу, з якої
+   прийшли, а не про сторінку. */
 function homeCrumbs(model) {
   const back = model.zone1.find((x) => x.id === "back");
-  const crumb = `<span class="crumb crumb--flat">${ico("grid")}`
-    + `<span class="txt">${esc(t("tasks"))}</span></span>`;
+  const conn = model.zone1.some((x) => x.id === "crumb-conn");
+  const crumb = `<span class="crumb crumb--flat">${ico(conn ? "sliders" : "grid")}`
+    + `<span class="txt">${esc(t(conn ? "cnTitle" : "tasks"))}</span></span>`;
   if (!back) return `<div class="crumbs">${crumb}</div>`;
   const why = esc(t("backToTask", back.label));
   return `<div class="crumbs">${crumb}</div>
@@ -570,7 +575,7 @@ function homeCrumbs(model) {
 
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
-  const home = model.zone1.some((x) => x.id === "crumb-tasks");
+  const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn");
   const zone1 = home
     ? `${homeBtn(model)}${paletteBtn(model)}${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
     : `${homeBtn(model)}${paletteBtn(model)}${spaceChip(model, state, openDd)}<div class="crumbs">`

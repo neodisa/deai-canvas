@@ -126,6 +126,9 @@ const withTab = (ui, data) => {
 /** «Нова задача»: кнопка в голові екрана й у порожньому стані (`data-th="newtask"`). */
 const newTaskBtn = () => `<button class="ctl ctl--pri" data-th="newtask">${ico("plus")}${esc(t("newTask"))}</button>`;
 
+/** «Підключення» (етап 3a): у голові простору без інтеграцій, поряд із «Нова задача» (`data-th="conn"`). */
+const connBtn = () => `<button class="ctl ctl--out" data-th="conn">${ico("sliders")}${esc(t("cnTitle"))}</button>`;
+
 /** Рядки вкладки: «мої» або рядки дашборда команди. */
 function source(ui, data) {
   if (!ready(data)) return [];
@@ -296,10 +299,12 @@ export function homeHTML(ui, data) {
   const sort = effectiveSort(ui);
   const opts = sortsFor(ui.tab).map((k) =>
     `<option value="${k}"${sort === k ? " selected" : ""}>${esc(t(`sort_${k}`))}</option>`).join("");
-  /* Кнопка «Нова задача» живе в голові лише коли вона є: без неї розмітка голови —
-     як була (один `<h1>`), і екран простору з інтеграціями (ЛІГА) не змінюється. */
+  /* Кнопки «Підключення» й «Нова задача» живуть у голові лише коли вони є (простір без інтеграцій), обидві в
+     обгортці `.th-head-acts`: без них розмітка голови — як була (один `<h1>`), і екран простору з інтеграціями
+     (ЛІГА) не змінюється ні байтом. */
   const h1 = `<h1 class="th-h">${esc(data?.space ? t("tasksIn", data.space.name) : t("tasks"))}</h1>`;
-  const head = noIntegrations(data) ? `<div class="th-head">${h1}${newTaskBtn()}</div>` : h1;
+  const head = noIntegrations(data)
+    ? `<div class="th-head">${h1}<div class="th-head-acts">${connBtn()}${newTaskBtn()}</div></div>` : h1;
   const tabs = tab("mine", t("thTabMine", nMine)) + (hasTeam(data) ? tab("team", t("thTabTeam", nTeam)) : "");
   return `<div class="th-in">
     ${head}

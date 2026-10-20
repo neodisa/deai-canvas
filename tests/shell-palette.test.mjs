@@ -747,6 +747,44 @@ test("простори: «Простір: B» для кожного ІНШОГО
   assert.ok(!nw.disabled && !nw.navOnly);
 });
 
+/* «Підключення простору «A»» (етап 3a) — вхід на екран підключень поточного простору. Лише коли поточний простір
+   є В ПЕРЕЛІКУ: без нього нема чого підключати (і назви для підпису). Не на самій сторінці `conn`: дія, що нічого
+   не робить, — той самий принцип, що для `go-tasks` на «Задачах» і для поточного простору. */
+test("простори: «Підключення простору «A»» для поточного; нема на самій сторінці й без поточного", () => {
+  const acts = paletteActions(S({ spaces: SPS, spaceId: "a" }));
+  const c = acts.find((a) => a.id === "space-conn");
+  assert.deepEqual({ ...c, icon: undefined }, { id: "space-conn", group: "gGo", labelKey: "spaceConn", labelArgs: ["A"],
+    icon: undefined, act: "conn" });
+  assert.ok(ico(c.icon));
+  assert.ok(paletteActions(S({ homeOpen: true, spaces: SPS, spaceId: "a" })).some((a) => a.id === "space-conn"),
+    "на «Задачах» пункт є");
+  assert.ok(!paletteActions(S({ homeOpen: true, homePage: "conn", spaces: SPS, spaceId: "a" })).some((a) => a.id === "space-conn"),
+    "на самій сторінці — дія, що нічого не робить");
+  assert.ok(!paletteActions(S({ spaces: SPS })).some((a) => a.id === "space-conn"), "поточний невідомий — нема");
+  assert.ok(!paletteActions(S({ spaces: SPS, spaceId: "zzz" })).some((a) => a.id === "space-conn"), "поточного нема в переліку");
+  /* Поточний — і зі `space.id`, як для решти пунктів просторів. */
+  assert.equal(paletteActions(S({ spaces: SPS, space: { id: "b", integrations: true } }))
+    .find((a) => a.id === "space-conn")?.labelArgs[0], "B");
+  /* Простір без інтеграцій екрану підключень не позбавлений — навпаки, це його головний вхід. */
+  assert.ok(paletteActions(S({ spaces: SPS, spaceId: "a", space: { id: "a", integrations: false } }))
+    .some((a) => a.id === "space-conn"));
+  /* Без масиву просторів (шар вимкнено) — як і решта пунктів просторів, нема. */
+  assert.ok(!paletteActions(S({ spaceId: "a" })).some((a) => a.id === "space-conn"));
+  assert.ok(!paletteActions(S({ homeOpen: true, spaceId: "a" })).some((a) => a.id === "space-conn"));
+});
+
+test("простори: «Підключення простору» — підпис в обох мовах, ім'я екрановане, пошук знаходить за назвою екрана", () => {
+  const acts = paletteActions(S({ spaces: [{ id: "a", name: "<b>A</b>" }, { id: "b", name: "B" }], spaceId: "a" }));
+  const html = paletteListHTML(acts, "", 0);
+  assert.match(html, /<span>Підключення простору «&lt;b&gt;A&lt;\/b&gt;»<\/span>/);
+  assert.doesNotMatch(html, /<b>A<\/b>/);
+  const plain = paletteActions(S({ spaces: SPS, spaceId: "a" }));
+  assert.deepEqual(filterActions(plain, "підключення").map((a) => a.id), ["space-conn"]);
+  setLang("en");
+  assert.match(paletteListHTML(plain, "", 0), /<span>Connections of the space “A”<\/span>/);
+  assert.deepEqual(filterActions(plain, "connections").map((a) => a.id), ["space-conn"]);
+});
+
 test("простори: пункти складають суцільний блок gGo (заголовок групи не повторюється)", () => {
   const html = paletteListHTML(paletteActions(S({ spaces: SPS, spaceId: "a" })), "", 0);
   assert.equal((html.match(/class="pal-grp">Перейти</g) || []).length, 1, "група gGo розірвана");
@@ -828,7 +866,7 @@ test("простори: англійський підпис «Space: B»", () =>
 
 test("простори: кожна нова дія має labelKey в обох словниках, а act — навігаційний або dialog", () => {
   const acts = paletteActions(S({ spaces: SPS, spaceId: "a" })).filter((a) => a.id.startsWith("space-"));
-  assert.equal(acts.length, 2);
+  assert.equal(acts.length, 3, "перейти в B, «Новий простір…», «Підключення простору»");
   for (const a of acts) {
     assert.ok(DICT.uk[a.labelKey] !== undefined && DICT.en[a.labelKey] !== undefined, a.id);
     assert.ok(a.act, `дія «${a.id}» без act`);

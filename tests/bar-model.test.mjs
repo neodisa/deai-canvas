@@ -386,6 +386,26 @@ test("екран «Задачі»: логотип, палітра, крошка 
     .some((x) => x.id === "back"), false, "без задачі «Назад» вести нікуди");
 });
 
+/* Екран «Підключення» (етап 3a) — та сама сторінка-оверлей, що «Задачі», тому склад смуги той самий. Міняється
+   ЛИШЕ плоска крошка «де я»: `crumb-conn` замість `crumb-tasks`. Порівнюємо зі складом «Задач» з підміною одного id,
+   а не з жорстким списком: так тест падає на будь-якій іншій розбіжності складу, а не лише на крошці. */
+test("екран «Підключення»: крошка `crumb-conn` замість `crumb-tasks`, решта складу та сама", () => {
+  const conn = barModel({ ...base, homeOpen: true, homePage: "conn", taskId: "t1" });
+  const tasks = barModel({ ...base, homeOpen: true, taskId: "t1" });
+  assert.deepEqual(conn.zone1.map((x) => x.id), tasks.zone1.map((x) => (x.id === "crumb-tasks" ? "crumb-conn" : x.id)));
+  assert.equal(conn.zone1.find((x) => x.id === "crumb-conn").labelKey, "cnTitle");
+  assert.ok(!conn.zone1.some((x) => x.id === "crumb-tasks"), "дві плоскі крошки одразу");
+  assert.deepEqual([conn.zone2, conn.zone3], [[], []]);
+  /* Інша сторінка оверлею (чи її відсутність) крошки «Підключення» не дає: лише рівно `conn`. */
+  for (const homePage of [undefined, null, "tasks", "", "CONN"]) {
+    assert.deepEqual(barModel({ ...base, homeOpen: true, homePage }).zone1.map((x) => x.id),
+      tasks.zone1.map((x) => x.id), String(homePage));
+  }
+  /* `homePage` без `homeOpen` — не на оверлеї, смуга задачі як була. */
+  assert.deepEqual(barModel({ ...base, homePage: "conn" }).zone1.map((x) => x.id),
+    barModel(base).zone1.map((x) => x.id));
+});
+
 /* «В Figma» (T-41) — зона 3 «куди віддаю», ПЕРЕД GitLab: головна кнопка
    публікації лишається крайньою справа. Рішення власника 28.09.2026. */
 test("«В Figma» — перший контрол зони 3, підпис ховається разом із GitLab", () => {

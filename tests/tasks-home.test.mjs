@@ -314,6 +314,41 @@ test("простір без інтеграцій: заголовок «Зада�
   assert.match(h, /Нова задача/);
 });
 
+/* Вхід на екран «Підключення» (етап 3a) із голови «Задач». Той самий принцип, що в «Нова задача»: лише там, де
+   інтеграцій нема, — голова простору ЛІГА лишається побайтно як була (один `<h1>`). Обидві кнопки — в обгортці
+   `.th-head-acts`, щоб на вузькому екрані вони переносились разом, а не розповзались по голові. */
+test("голова простору без інтеграцій: «Підключення» поряд із «Нова задача»; простір ЛІГА — без змін", () => {
+  const off = homeHTML(UI(), D_OFF());
+  assert.match(off, /<div class="th-head-acts"><button class="ctl ctl--out" data-th="conn">[\s\S]*?Підключення<\/button><button class="ctl ctl--pri" data-th="newtask">/);
+  const liga = homeHTML(UI(), { ...DATA, space: { name: "Liga", integrations: true } });
+  assert.doesNotMatch(liga, /data-th="conn"/);
+  /* Кнопка з іконкою `sliders`, а голова ЛІГА — як була: без обгортки й без `th-head`. */
+  assert.match(/<button[^>]*data-th="conn">[\s\S]*?<\/button>/.exec(off)[0], /#i-sliders/);
+  assert.doesNotMatch(liga, /th-head/);
+  assert.match(liga, /<div class="th-in">\s*<h1 class="th-h">Задачі · Liga<\/h1>\s*<div class="th-tabs"/);
+  /* Без `space` і з відсутнім/невідомим `integrations` — теж без кнопки: вимикач лише рівно `integrations === false`. */
+  for (const space of [undefined, null, { name: "P" }, { name: "P", integrations: undefined }]) {
+    assert.doesNotMatch(homeHTML(UI(), { ...DATA, space }), /data-th="conn"/, JSON.stringify(space));
+  }
+});
+
+test("«Підключення» в голові — і поки дані вантажаться, рівно одна, поза порожнім станом", () => {
+  const loading = homeHTML(UI(), { loading: true, space: OFF });
+  assert.equal((loading.match(/data-th="conn"/g) || []).length, 1);
+  const h = homeHTML(UI(), D_OFF());
+  assert.equal((h.match(/data-th="conn"/g) || []).length, 1, "порожній стан простору кнопки підключень не дублює");
+  assert.equal((homeHTML(UI(), D_OFF({ mine: [A, B], current: "edr" })).match(/data-th="conn"/g) || []).length, 1);
+  /* Нижня частина (сітка) перемальовується окремо й голови не має. */
+  assert.doesNotMatch(homeGridHTML(UI(), D_OFF()), /data-th="conn"/);
+});
+
+test("«Підключення» в голові — англійською «Connections»", () => {
+  setLang("en");
+  try {
+    assert.match(homeHTML(UI(), D_OFF()), /data-th="conn">[\s\S]*?Connections<\/button>/);
+  } finally { setLang("uk"); }
+});
+
 test("простір без інтеграцій і без задач: порожній стан із підказкою агентові й кнопкою", () => {
   const h = homeHTML(UI(), D_OFF());
   assert.match(h, /class="th-empty[ "]/);

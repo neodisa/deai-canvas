@@ -175,9 +175,16 @@ export function barModel(s) {
      Принцип 3 (головна дія не зникає) тримається: головна дія тут — «назад до
      задачі». Зони лишаються трьома (порожні масиви): грид смуги на них
      тримається, і зона 2 порожня не зсуває нікого — вона `auto`. Без `taskId`
-     «Назад» вести нікуди, тож його немає, а не мертвий. */
+     «Назад» вести нікуди, тож його немає, а не мертвий.
+
+     Сторінка «Підключення» (етап 3a) — ТОЙ САМИЙ оверлей (`homePage === "conn"`), тож і склад смуги той самий:
+     міняється лише плоска крошка «де я» — `crumb-conn` замість `crumb-tasks`. Лише рівно `"conn"`: невідома
+     сторінка не повинна мовчки називатись «Підключення». */
   if (s.homeOpen) {
-    const zone1 = [home, palette, ...spaceChip, { id: "crumb-tasks", tier: 0, labelKey: "tasks" }];
+    const crumb = s.homePage === "conn"
+      ? { id: "crumb-conn", tier: 0, labelKey: "cnTitle" }
+      : { id: "crumb-tasks", tier: 0, labelKey: "tasks" };
+    const zone1 = [home, palette, ...spaceChip, crumb];
     if (s.taskId) zone1.push({ id: "back", tier: 0, label: s.taskId });
     return { zone1, zone2: [], zone3: [], error: tasksError(s) };
   }

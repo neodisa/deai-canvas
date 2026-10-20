@@ -657,6 +657,47 @@ test("дропдаун просторів: закритий — нема; від
   assert.match(h, /data-act="spaceedit"[\s\S]*?Назва й колір…/);
 });
 
+/* Вхід на екран «Підключення» (етап 3a): пункт у футері дропдауна, ПІСЛЯ «Назва й колір…». Той самий `ddItem`, що
+   решта футера, — тому roving focus по `.dd--spaces .dd-item` бере його сам. Пункт лише в ВІДКРИТОМУ дропдауні:
+   закрита смуга (а з нею й ЛІГА-golden) лишається побайтно та сама. */
+test("дропдаун просторів: «Підключення…» після «Назва й колір…»", () => {
+  const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
+  assert.match(h, /data-act="spaceedit"[\s\S]*?<\/button>\s*<button[^>]*data-act="conn"[\s\S]*?Підключення…/);
+  const conn = /<button[^>]*data-act="conn"[\s\S]*?<\/button>/.exec(h)?.[0];
+  assert.match(conn, /<svg/, "пункт без іконки");
+  assert.equal((h.match(/data-act="conn"/g) || []).length, 1, "пункт один");
+  assert.doesNotMatch(html({ space: SP(), spaces: SPACES }), /data-act="conn"/, "закритий дропдаун пункту не несе");
+  assert.match(html({ space: SP(), openDd: "space" }), /data-act="conn"/, "без переліку просторів пункт теж є");
+});
+
+test("дропдаун просторів: «Connections…» англійською", () => {
+  setLang("en");
+  try {
+    assert.match(html({ space: SP(), spaces: SPACES, openDd: "space" }), /data-act="conn"[\s\S]*?Connections…/);
+  } finally { setLang("uk"); }
+});
+
+/* Смуга на сторінці «Підключення»: склад як на «Задачах», крошка інша. Плоска крошка — не кнопка, «назад до задачі»
+   лишається (вона про задачу, з якої прийшли, а не про сторінку). */
+test("смуга на сторінці «Підключення»: плоска крошка «Підключення», «назад до задачі» лишається", () => {
+  const h = html({ space: SP(), homeOpen: true, homePage: "conn", taskId: "t1" });
+  assert.match(h, /crumb crumb--flat[\s\S]*?Підключення</);
+  assert.doesNotMatch(h, /<span class="txt">Задачі</);
+  assert.match(h, /data-act="back"/);
+  /* Екран, а не смуга задачі: зони 2 і 3 порожні, як на «Задачах», і логотип «ми на місці». */
+  assert.equal((h.match(/class="zone /g) || []).length, 3);
+  assert.doesNotMatch(h, /data-act="figma"|data-act="publish"|data-dd="iter"/);
+  assert.match(/<button[^>]*data-act="home"[^>]*>/.exec(h)[0], /ctl--on/);
+  /* Іконка крошки — `sliders` (та сама, що в дропдауні й палітрі), а не `grid` «Задач». */
+  const flat = (x) => /<span class="crumb crumb--flat">[\s\S]*?<\/span><\/span>/.exec(x)[0];
+  const tasks = flat(html({ space: SP(), homeOpen: true, taskId: "t1" }));
+  assert.match(flat(h), /#i-sliders/);
+  assert.doesNotMatch(flat(h), /#i-grid/);
+  assert.match(tasks, /#i-grid[\s\S]*Задачі</, "крошка «Задач» змінилась");
+  /* Без задачі «назад» вести нікуди — і на цій сторінці теж. */
+  assert.doesNotMatch(html({ space: SP(), homeOpen: true, homePage: "conn", taskId: "" }), /data-act="back"/);
+});
+
 test("дропдаун просторів: недоступний простір приглушений, не вимкнений, і каже чому", () => {
   const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
   const gone = /<button[^>]*data-val="gone"[\s\S]*?<\/button>/.exec(h)[0];

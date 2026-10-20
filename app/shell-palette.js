@@ -165,7 +165,12 @@ function installActions(s) {
    не відкриваючи нічого, — а пункт, що веде на екран помилки, там зайвий.
 
    `id` = `space-go-<id простору>`, а «Новий простір…» — `space-new`: простір із
-   id `new` (сервер такий приймає) давав би два однакові `space-new`. */
+   id `new` (сервер такий приймає) давав би два однакові `space-new`.
+
+   «Підключення простору «X»» (`space-conn`, етап 3a) — вхід на екран підключень
+   ПОТОЧНОГО простору: лише коли поточний є в переліку (без нього нема чого
+   підключати й нема назви для підпису) і не на самій сторінці `conn` (дія, що
+   нічого не робить). Його id не перетинається з `space-go-<id>`. */
 function spaceActions(s) {
   if (!Array.isArray(s.spaces)) return [];
   const cur = s.spaceId ?? s.space?.id;
@@ -174,6 +179,10 @@ function spaceActions(s) {
     act: "space", val: x.id,
     ...(x.available === false ? { disabled: true, whyKey: "spaceUnavailable" } : {}),
   }));
+  /* «Підключення» поточного простору (етап 3a). Не на самій сторінці (дія, що нічого не робить) і лише коли поточний
+     є в переліку: без простору нема чого підключати. `space-conn` не перетинається з `space-go-<id>`. */
+  const me = cur != null && s.homePage !== "conn" ? s.spaces.find((x) => x.id === cur) : null;
+  if (me) out.push({ id: "space-conn", group: "gGo", labelKey: "spaceConn", labelArgs: [me.name], icon: "sliders", act: "conn" });
   out.push({ id: "space-new", group: "gGo", labelKey: "spaceNew", icon: "plus", act: "spacenew" });
   return out;
 }
