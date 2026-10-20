@@ -4663,7 +4663,9 @@ def module_write(space, mid, action, settings, secrets, replace=_NO_REPLACE):
     каталозі (`missing`) модуля це єдина дозволена дія.
     `replace` — лише для `enable`: `_NO_REPLACE` (ключа в тілі не було) чи `bool`; будь-що інше, зокрема явний `null`, —
     `bad-settings` ДО будь-якого запису (до секрету теж). `replace: true` звільняє роль у її поточних постачальників тим
-    самим записом `space.json` (`write_module_state`); для `settings` і `disable` ключ ігнорується.
+    самим записом `space.json` (`write_module_state`); ціль заміни мусить бути модулем, що завантажився (інакше відмова
+    його `error_code` — `module-error`/`bad-manifest` — ДО секрету: заміна лишила б роль без виконавця); для `settings`
+    і `disable` ключ ігнорується.
     Повертає `(вердикт | None, replaced | None)`: вердикт `check` або `None` (`disable`); `replaced` — список id,
     звільнених заміною, лише коли `replace is True` (інакше `None`)."""
     if action == 'disable':
@@ -6933,7 +6935,8 @@ class Handler(SimpleHTTPRequestHandler):
         `{ok: true, module: <запис>[, check: <вердикт>][, replaced: [id…]]}` (порядок запису й коди — `module_write`,
         `module_check_verdict`). `replaced` — лише для `module-enable` з `replace: true`: id модулів, що тримали роль
         і вимкнені тим самим записом (порожній список, коли конфліктів не було). `replace` не `bool` (і явний `null`
-        теж) — 400 `bad-settings`. `module` — `null`, коли запису вже нема в списку: так буває лише після `module-disable`
+        теж) — 400 `bad-settings`; ціль, що не завантажилась, — відмова її `error_code` (`module-error` 502 /
+        `bad-manifest` 500). `module` — `null`, коли запису вже нема в списку: так буває лише після `module-disable`
         відсутнього в каталозі (`missing`) модуля — вимкнений відсутній не показується. `ModuleError` (`unknown-module` 404, `bad-settings` 400, `role-taken` 409,
         `space-json-unreadable`/`spaces-off` 409, `unwritable` 500…) відповідає `_guarded` — одна форма
         `{ok: false, code, error}` на всі маршрути; текст уже без секретів, а значення секретів сюди не

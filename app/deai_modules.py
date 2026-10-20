@@ -745,10 +745,22 @@ def _role_conflict(m, cat, space, explicit):
     return None
 
 
+def _check_replace_target(m):
+    """`replace` лише НА модуль, що завантажився. Модуль із дійсним манифестом, але зламаним `server.py`, лишається в
+    каталозі з УСІМА своїми ролями (`_failed(meta=…)`), тож заміна на нього вимкнула б робочого постачальника, а нового не
+    дала б (`provider()` → `None`) — простір без постачальника ролі, чого спека не допускає. Код відмови —
+    `error_code` модуля (`module-error` чи `bad-manifest`), як і в його `check`. Без `replace` вмикати такий модуль можна
+    (як і було): вільну роль він займе, а `check` скаже, чому не працює."""
+    if m.status != 'ok':
+        raise ModuleError(m.error_code or 'module-error',
+                          message=f'cannot replace with a module that did not load: {str(m.error or "")[:200]}')
+
+
 def preflight(space, module_id, enabling=False, replace=False):
     """Читання БЕЗ запису і без локу: чи можна взагалі писати стан модуля. `unknown-module` (нема в каталозі),
     `space-json-unreadable` (`space_modules`) і — лише для вмикання — `role-taken`; з `replace` роль не
-    перевіряється — її звільнить `write_module_state` під локом. Для API, що пише секрет
+    перевіряється — її звільнить `write_module_state` під локом, — але ціль мусить бути завантаженим модулем
+    (`_check_replace_target`). Для API, що пише секрет
     РАНІШЕ за `space.json` (спека): усе, що видно ДО запису, мусить відмовити ДО нього, інакше клієнт із 409 у руках
     мав би вже новий живий пароль. Це best-effort: авторитетні перевірки лишаються в `write_module_state` під
     локом, а те, що вони побачать іншим (гонка з паралельною правкою між пре-перевіркою й локом) чи не зможуть
@@ -759,7 +771,9 @@ def preflight(space, module_id, enabling=False, replace=False):
     if m is None:
         raise ModuleError('unknown-module', message=str(module_id)[:60])
     explicit = space_modules(space)
-    if enabling and not replace:
+    if enabling and replace:
+        _check_replace_target(m)
+    elif enabling:
         why = _role_conflict(m, cat, space, explicit)
         if why:
             raise ModuleError('role-taken', message=why)
@@ -805,6 +819,7 @@ def write_module_state(space, module_id, enabled=None, settings=None, replace=Fa
     `replace=True` (лише разом з `enabled=True`): замість `role-taken` — під тим самим локом і в ТОМУ САМОМУ записі
     файла кожен інший модуль, що тримає роль цього (`_holders`, неявний `static-publish` теж), отримує `enabled: false`
     (його налаштування лишаються). Тоді в поверненому стані є ключ `replaced` — перелік таких id (може бути порожнім).
+    Ціль `replace` мусить бути завантаженим модулем (`status: ok`), інакше відмова `error_code` модуля й нічого не пишеться.
 
     Єдиний виняток для модуля, якого НЕМАЄ в каталозі (`missing`): `enabled=False` без налаштувань вимикає його
     запис у файлі, якщо той там є (`_disable_missing`); решта — `unknown-module`."""
@@ -829,6 +844,7 @@ def write_module_state(space, module_id, enabled=None, settings=None, replace=Fa
         replaced = []
         if enabled is True:
             if replace:
+                _check_replace_target(m)                  # `m` — з каталогу ДО локу: той самий, що бачила пре-перевірка
                 replaced = _holders(m, cat, space, explicit)
             else:
                 why = _role_conflict(m, cat, space, explicit)

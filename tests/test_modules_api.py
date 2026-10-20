@@ -6,7 +6,7 @@
   GET  /api/modules?space=         → {modules: [{id, name, version, api, roles, builtin, enabled, implicit,
                                        status, last_check?, settings: [{key, type, label, required, value? | set,
                                        options?}], error?}]}
-  POST /api/module-enable          {space?, id, settings?, secrets?} → {ok, module, check}
+  POST /api/module-enable          {space?, id, settings?, secrets?, replace?} → {ok, module, check[, replaced]}
   POST /api/module-disable         {space?, id}                      → {ok, module}
   POST /api/module-settings        {space?, id, settings?, secrets?} → {ok, module, check}
   POST /api/module-check           {space?, id}                      → {ok, module, check}
@@ -22,6 +22,10 @@
     записаним (перевірка до запису);
   * `check`, що ВІДБУВСЯ, — вердикт у тілі (200): `bad-settings`, `module-error`, `check-timeout`, `bad-manifest`
     лягають у `check: {ok: false, error, detail}`; `unknown-module`/`space-json-unreadable`/`spaces-off` — HTTP-відмови;
+  * `replace: true` у `module-enable`: ролі модуля звільняються в ТОМУ САМОМУ записі `space.json` під локом
+    (`replaced` — кого звільнено); не `bool` і явний `null` — `bad-settings` ДО секрету; на модуль, що не
+    завантажився, — відмова (`module-error`/`bad-manifest`) ДО секрету й до запису, інакше простір лишився б без
+    постачальника; два паралельні `replace` лишають рівно одного постачальника ролі;
   * `status` модуля: `missing` (увімкнений, але не в каталозі), `error` (не завантажився / останній `check` не ok),
     `unchecked` (завантажився, `check` ще не було), `ok`;
   * `capabilities` — поле `space.capabilities` у `/api/task|tasks|tasks-overview` і `capabilities` у кожному записі
@@ -101,6 +105,11 @@ FIXTURES = {
                     "def check(ctx):\n    return {'ok': True}\n\ndef publish(ctx, built, *a, **k):\n    return {}\n"),
     # синтаксична помилка: модуль у каталозі зі `status: error`
     'broken': (['tokens'], [], 'def check(ctx:\n'),
+    # той самий дефект, але з роллю `publish` (манифест дійсний → роль лишається за ним): ціль для `replace`
+    'broken-publish': (['publish'], [{'key': 'token', 'type': 'secret', 'label': 'Token'}], 'def check(ctx:\n'),
+    # роль `publish`, а функції `publish()` нема → `bad-manifest` (інший `error_code`, ніж у синтаксичної помилки)
+    'headless-publish': (['publish'], [{'key': 'token', 'type': 'secret', 'label': 'Token'}],
+                         "def check(ctx):\n    return {'ok': True}\n"),
     # свій `ok: false`
     'fail-check': ([], [], "def check(ctx):\n    return {'ok': False, 'error': 'nope', 'detail': 'because'}\n"),
     # своя відмова з кодом ядра (його клас модуль бере з `ctx`): після запису стану це вердикт, а не HTTP-збій
@@ -810,12 +819,26 @@ class Replace(World):
         self.assert_never_seen(SECRET)
 
     def test_replace_is_ignored_by_the_other_routes(self):
+        """`replace` має сенс лише в `module-enable`: на `settings` і `disable` ключ мовчки ігнорується — і `True`, і
+        нетиповий (`None`, `'x'`: помилкою він є лише там, де його читають)."""
         self.modules(extra=('alt-publish',))
-        st, body = self.post('/api/module-settings', {'id': 'alt-publish', 'settings': {'note': 'x'}, 'replace': True})
-        self.assertEqual(st, 200, body)
-        self.assertNotIn('replaced', body)
-        self.assertTrue(self.sj()['modules'].get('static-publish', {}).get('enabled', True) is not False,
-                        'settings не вмикає і не замінює')
+        for bad in (True, None, 'x'):
+            with self.subTest(route='settings', replace=bad):
+                st, body = self.post('/api/module-settings', {'id': 'alt-publish', 'settings': {'note': 'x'},
+                                                              'replace': bad})
+                self.assertEqual(st, 200, body)
+                self.assertNotIn('replaced', body)
+        self.assertNotIn('static-publish', self.sj()['modules'], 'settings не вмикає і не замінює')
+        listing = self.listing()
+        self.assertEqual((listing['static-publish']['enabled'], listing['alt-publish']['enabled']), (True, False))
+        for bad in (True, None, 'x'):
+            with self.subTest(route='disable', replace=bad):
+                st, body = self.post('/api/module-disable', {'id': 'static-publish', 'replace': bad})
+                self.assertEqual(st, 200, body)
+                self.assertNotIn('replaced', body)
+        listing = self.listing()
+        self.assertEqual((listing['static-publish']['enabled'], listing['alt-publish']['enabled']), (False, False),
+                         'disable вимикає лише названий модуль')
 
     def test_preflight_with_replace_does_not_refuse(self):
         self.modules(extra=('alt-publish',))
@@ -830,6 +853,139 @@ class Replace(World):
         self.assertEqual(st['replaced'], ['static-publish'])
         st = dm.write_module_state(self.off, 'alt-publish', enabled=True)
         self.assertNotIn('replaced', st)
+
+    # ---- краї ----
+
+    def test_a_non_object_entry_of_the_holder_does_not_crash_and_ends_sane(self):
+        """Запис `static-publish` у `space.json` — не обʼєкт: `_normalize` його пропускає, неявний типовий лишається
+        постачальником, `replace` перезаписує запис нормальним `{enabled: false}`."""
+        self.modules(extra=('alt-publish',))
+        data = self.sj()
+        data['modules'] = {'static-publish': 'x'}
+        _write(os.path.join(self.off_path, 'space.json'), json.dumps(data))
+        st, body = self.post('/api/module-enable', {'id': 'alt-publish', 'replace': True})
+        self.assertEqual((st, body['ok'], body['replaced']), (200, True, ['static-publish']), body)
+        self.assertEqual(self.sj()['modules'], {'static-publish': {'enabled': False}, 'alt-publish': {'enabled': True}})
+        listing = self.listing()
+        self.assertEqual((listing['static-publish']['enabled'], listing['alt-publish']['enabled']), (False, True))
+
+    def test_replace_in_the_space_with_integrations_takes_the_role_from_an_explicit_static_publish(self):
+        self.modules(extra=('alt-publish',))
+        st, _ = self.post('/api/module-enable', {'space': 'on', 'id': 'static-publish'})
+        self.assertEqual(st, 200)
+        st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'alt-publish', 'replace': True})
+        self.assertEqual((st, body['ok'], body['replaced']), (200, True, ['static-publish']), body)
+        mods = self.sj(self.on)['modules']
+        self.assertEqual((mods['static-publish']['enabled'], mods['alt-publish']['enabled']), (False, True))
+
+    # ---- ціль, що не завантажилась ----
+
+    def test_replace_onto_a_module_that_did_not_load_is_refused_and_nothing_changes(self):
+        """Модуль із дійсним манифестом, але зламаним `server.py`, ТРИМАЄ свої ролі (`status: error`, а не «нема»):
+        заміна на нього вимкнула б робочого постачальника, лишивши роль без виконавця. Відмова — ДО секрету й до
+        `space.json`; код — `error_code` модуля (`module-error` 502 / `bad-manifest` 500)."""
+        self.modules(extra=('broken-publish', 'headless-publish'))
+        before = self.sj_bytes()
+        for mid, status, code in (('broken-publish', 502, 'module-error'), ('headless-publish', 500, 'bad-manifest')):
+            with self.subTest(module=mid):
+                self.assertEqual(self.entry(mid)['status'], 'error')
+                st, body = self.post('/api/module-enable', {'id': mid, 'replace': True, 'secrets': {'token': SECRET}})
+                self.refused(st, body, status, code)
+                self.assertIn('cannot replace with a module that did not load', body['error'])
+                self.assertEqual(self.sj_bytes(), before)
+                self.assertFalse(os.path.exists(self.secrets_path), 'відмова — ДО запису секрету')
+                self.assertEqual(dm.provider('publish', self.off).id, 'static-publish')
+                self.assertTrue(self.entry('static-publish')['enabled'])
+        self.assert_never_seen(SECRET)
+
+    def test_the_refusal_is_in_preflight_and_again_in_write_module_state(self):
+        """Дві межі: пре-перевірка (до секрету) і запис під локом (гонка: каталог міг змінитись між ними)."""
+        self.modules(extra=('broken-publish',))
+        before = self.sj_bytes()
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.preflight(self.off, 'broken-publish', enabling=True, replace=True)
+        self.assertEqual(cm.exception.code, 'module-error')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.write_module_state(self.off, 'broken-publish', enabled=True, replace=True)
+        self.assertEqual((cm.exception.code, cm.exception.status), ('module-error', 502))
+        self.assertEqual(self.sj_bytes(), before)
+
+    def test_enabling_a_module_that_did_not_load_without_replace_is_unchanged(self):
+        """Без `replace` усе як було: вільна роль — вмикається (а `check` каже, чому не працює), зайнята — `role-taken`."""
+        self.modules(extra=('broken-publish',))
+        st, body = self.post('/api/module-enable', {'id': 'broken-publish'})
+        self.refused(st, body, 409, 'role-taken')                       # static-publish тримає `publish`
+        st, body = self.post('/api/module-disable', {'id': 'static-publish'})
+        self.assertEqual(st, 200, body)
+        st, body = self.post('/api/module-enable', {'id': 'broken-publish'})
+        self.assertEqual((st, body['ok'], body['check']['ok'], body['module']['enabled']), (200, True, False, True))
+
+    # ---- гонка двох замін ----
+
+    def _race(self, first, second):
+        """Два ПАРАЛЕЛЬНІ `module-enable` із `replace` (по одному на модуль). Порядок детермінований: обидва запити
+        спершу ДОХОДЯТЬ до `WRITE_LOCK` (уся робота до локу — каталог, пре-перевірка, будь-яке читання `space.json` —
+        вже зроблена), а далі `first` бере лок раніше за `second`. Тому читання «хто тримає роль» до локу дало б
+        застаріле знання: правильна реалізація дивиться на файл під локом."""
+        arrived = threading.Barrier(2, timeout=15)
+        first_done = threading.Event()
+        mine = threading.local()
+        real_lock, real_write = spaces.WRITE_LOCK, dm.write_module_state
+        test = self
+
+        def tagged(space, module_id, *a, **kw):
+            mine.mid = module_id                                       # який модуль пише ЦЕЙ потік
+            return real_write(space, module_id, *a, **kw)
+
+        class Gate:
+            def __enter__(self):
+                mid = getattr(mine, 'mid', None)
+                if mid is not None and not getattr(mine, 'passed', False):
+                    mine.passed = True
+                    arrived.wait()
+                    if mid != first:
+                        test.assertTrue(first_done.wait(15), 'перший запис не завершився')
+                real_lock.acquire()
+
+            def __exit__(self, *exc):
+                real_lock.release()
+                if getattr(mine, 'mid', None) == first:
+                    first_done.set()
+                return False
+
+        out = {}
+
+        def call(mid):
+            out[mid] = self.post('/api/module-enable', {'id': mid, 'replace': True})
+
+        threads = [threading.Thread(target=call, args=(mid,)) for mid in (first, second)]
+        with mock.patch.object(dm, 'write_module_state', tagged), mock.patch.object(spaces, 'WRITE_LOCK', Gate()):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(60)
+        self.assertFalse(any(t.is_alive() for t in threads), 'запит завис')
+        for mid in (first, second):
+            self.assertEqual((out[mid][0], out[mid][1].get('ok')), (200, True), out[mid])
+        mods = self.sj()['modules']
+        on = [mid for mid in ('alt-publish', 'static-publish') if mods.get(mid, {}).get('enabled') is True]
+        self.assertEqual(len(on), 1, f'рівно один постачальник `publish`, а в файлі {mods}')
+        listing = self.listing()
+        self.assertEqual(sorted(mid for mid in ('alt-publish', 'static-publish') if listing[mid]['enabled']), on)
+        self.assertEqual(dm.provider('publish', self.off).id, on[0])
+        return out
+
+    def test_two_parallel_replaces_leave_exactly_one_provider_alt_publish_goes_first(self):
+        self.modules(extra=('alt-publish',))
+        out = self._race('alt-publish', 'static-publish')
+        self.assertEqual(out['alt-publish'][1]['replaced'], ['static-publish'])
+        self.assertEqual(out['static-publish'][1]['replaced'], ['alt-publish'])
+
+    def test_two_parallel_replaces_leave_exactly_one_provider_static_publish_goes_first(self):
+        self.modules(extra=('alt-publish',))
+        out = self._race('static-publish', 'alt-publish')
+        self.assertEqual(out['static-publish'][1]['replaced'], [])
+        self.assertEqual(out['alt-publish'][1]['replaced'], ['static-publish'])
 
 
 # ================================================================================================= disable / settings
