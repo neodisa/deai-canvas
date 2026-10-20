@@ -41,7 +41,15 @@ module for another service: `docs/modules/comments.md`.
   with its licence, so there is no CDN. `schema.sql` (table, row-level security, guard triggers,
   realtime) is run once by the person; the module never changes the schema. `server.py` is a
   standard-library REST client: `list`, `resolve`, and `check` with the verdicts `bad-key`,
-  `no-schema`, `network` (and `supabase-error`). Off by default; the README of the module has the four steps.
+  `no-schema`, `network` (and `supabase-error`). It refuses a **service key** (`sb_secret_…`, or a
+  JWT whose payload says `"role": "service_role"`) with `bad-settings`: the key is public by design
+  and goes into every page and preview, so a service key there would be full access to the
+  database. The adapter creates its supabase-js client without user authentication (no token
+  refresh interval, no `BroadcastChannel`, no session writes), smooths a burst of realtime events
+  into one re-read, offers `refresh()` to the Overview, and `close()` leaves the channel *and*
+  closes the realtime socket. `schema.sql` qualifies every name with `public.`, grants the table
+  to the API roles and warns that an existing table `public.comments` of your own would be
+  adopted. Off by default; the README of the module has the four steps.
 - **Guide for module authors** `docs/modules/comments.md`: both halves, the comment shape, the
   channel, `client`, `public`, CORS (including `Origin: null`), security notes, how to test, a
   complete minimal example. The reference is the test module
@@ -111,22 +119,29 @@ module for another service: `docs/modules/comments.md`.
   adds travels inside the comment (`meta.shot`) and the agent side drops it. The layer loads
   `html2canvas` from jsDelivr when a pin is created (as before modules).
 - The core gives `check` and `client_config` 5 seconds and `list` and `resolve` 10;
-  `supabase-comments` allows 10 seconds per request, so on a slow link enabling it can answer
-  `check-timeout` while the module works.
+  `supabase-comments` answers inside shorter budgets of its own — 4 seconds for `check`, 8 for a
+  `list` or `resolve` request (per socket operation) — so a slow project is reported as
+  `network` with its reason. A DNS lookup that never returns lies outside that budget and can
+  still end as the core's `check-timeout`.
+- Supabase's own `max-rows` setting (default 1000) cuts every API answer silently, so `list`
+  shows the agent at most that many comments of a channel; raise it for the project if channels
+  can grow that big.
 - The local `/published` view runs in a sandbox with the opaque origin `null`: the comment
   service has to allow CORS for it (`Access-Control-Allow-Origin: *`; Supabase does).
-- Four catalog-listing tests (`test_modules`, `test_modules_api`) assume the catalog holds only
-  the built-in modules and fail when `DEAI_EXTRA_MODULES` is exported for the whole Python run;
-  set it per command.
 - Module management has no UI yet (stage 3): enable and configure modules over the API.
 
 ### Tests
 
-`npm test` at 0.4.0 is green: 1321 node tests (plus `inspector-core`), 2308 Python tests in
+`npm test` at 0.4.0 is green: 1331 node tests (plus `inspector-core`), 2320 Python tests in
 `tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.3.0: 1258, 1938, 156, 170). Of them,
-`supabase-comments` has 77 Python tests (a fake REST server under a network tripwire, end to end
-through the core: the page, the Overview, the adapter route, `inbox`) and 18 node tests (the
-adapter against a fake supabase-js); the generic role is covered on the `memo-comments` fixture.
+`supabase-comments` has 89 Python tests (a fake REST server under a network tripwire, end to end
+through the core: the page, the Overview, the adapter route, `inbox`; service keys, timeouts at
+the default budgets against a hung service, a parity check of the host rule with the core's),
+25 node tests (the adapter against a fake supabase-js) and 3 that run the REAL vendored
+supabase-js with the adapter in a `vm` (the wire shape, no timers left after `close()`); the
+generic role is covered on the `memo-comments` fixture. The Python suite also passes with
+`DEAI_EXTRA_MODULES` exported for the whole run (the core tests that list or load a catalog unset
+it for their own).
 The fixes of the per-task reviews carry their mutation proofs in the commit messages. Live: the new
 `tests/live/comments.test.mjs` (7 tests) passes together with `modules.test.mjs`,
 `vercel.test.mjs`, `spaces.test.mjs`, `comment-audience.test.mjs` and

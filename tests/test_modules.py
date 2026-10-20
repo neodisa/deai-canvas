@@ -31,7 +31,7 @@ import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 
-_ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE')
+_ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE', 'DEAI_EXTRA_MODULES')
 _REAL = None
 _DEL = object()          # «прибрати ключ» у `manifest_patch`
 _REAL_BUILTIN_DIR = dm.builtin_dir     # до того, як `Env.setUp` її підмінить
@@ -196,6 +196,9 @@ class Env(unittest.TestCase):
         os.environ['HOME'] = self.home
         os.environ['DEAI_HOME'] = self.deai
         os.environ['DC_TASKS_FILE'] = self.legacy
+        # Каталог тесту — рівно `self.mods`: друга тека вбудованих модулів із оточення (`DEAI_EXTRA_MODULES`, шов тестів 2b-2) сюди
+        # не належить, і її модулі не можна ні перелічувати, ні — головне — переписувати (`tearDown` повертає змінну).
+        os.environ.pop('DEAI_EXTRA_MODULES', None)
         spaces.clear_request_space()
         self.mods = os.path.join(self.tmp, 'builtin')
         os.makedirs(self.mods)
@@ -839,6 +842,8 @@ class LoadTest(Env):
 
         def build_then_edit(dd, folder):
             m = real(dd, folder)
+            if os.path.dirname(dd) != self.mods:          # правимо лише модулі ЦЬОГО тесту, а не чужі теки (фікстури репо)
+                return m
             sv = os.path.join(dd, 'server.py')
             _write(sv, 'def check(ctx):\n    return {"ok": 1234}\n')
             _bump(sv)

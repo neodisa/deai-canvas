@@ -61,6 +61,7 @@ is overridden. `onChange` is an empty hook — the comment layer listens through
 | `ready` | optional `Promise`, settled after the first load. The layer starts only after it settles, so **resolve it even when the service is down** (with an empty cache): a rejection shows the red banner «Коментарі недоступні», and a promise that never settles hangs the layer. |
 | `remove(ids)` | optional. `Promise`. Hard-delete. |
 | `subscribe(fn)` | optional. Call `fn(comments)` on external changes (polling, websocket, realtime). |
+| `refresh()` | optional. `Promise`. Re-read the service now: the Overview calls it when the person returns to it, so changes made meanwhile show up even if your push channel missed them. |
 | `close()` | optional. Release timers and sockets. The layer calls it on `destroy` and the Overview calls it when a run is stale; make it idempotent. |
 
 If `create` throws, or the store has no `load`/`save`, the page shows the banner instead of the layer.
@@ -158,8 +159,8 @@ The core's own Python suite does not run your module. Three loops:
    the module enabled over the API, a seeded pin seen on the canvas, on the Overview and in the preview, a pin created in the UI
    arriving in the service. Point its `MODULES_DIR`, module id and fake service at yours.
 
-Set `DEAI_EXTRA_MODULES` per command, not for a whole `unittest discover` run: four tests of the core that list the catalog
-(`test_modules`, `test_modules_api`) assume it holds only the built-in modules and fail when an extra one is present.
+You may export `DEAI_EXTRA_MODULES` for a whole `unittest discover -s tests` run: the tests of the core that list or load the
+catalog unset it themselves for their own temporary catalog and put it back afterwards.
 
 ## 6. A minimal complete example
 

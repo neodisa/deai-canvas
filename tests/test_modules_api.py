@@ -221,6 +221,7 @@ class World(Http, unittest.TestCase):
             'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x'})
         env.start()
         self.addCleanup(env.stop)
+        os.environ.pop('DEAI_EXTRA_MODULES', None)       # каталог тесту — лише `app/modules`; `env.stop` повертає змінну
         tool = mock.patch.object(spaces, 'ROOT', self.tool)
         tool.start()
         self.addCleanup(tool.stop)
