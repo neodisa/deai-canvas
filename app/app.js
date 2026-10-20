@@ -2284,7 +2284,14 @@ function keepFocus(root, redo) {
   if (!key) return;
   const all = root.querySelectorAll(key);
   const n = all[nth] ?? all[0];
-  if (!n) return;
+  if (!n) {
+    /* Кнопка картки «Підключення» зникла разом зі своєю дією (після запису «Підключити» стало «Налаштувати»): фокус — на
+       іншу кнопку тієї ж картки, а не в нікуди (закриття панелі вертає його саме сюди, ще ДО перемальовки списку). */
+    if (a.dataset?.cn && a.dataset.id != null) {
+      root.querySelector(`[data-cn][data-id="${CSS.escape(a.dataset.id)}"]`)?.focus({ preventScroll: true });
+    }
+    return;
+  }
   n.focus({ preventScroll: true });
   if (caret) { try { n.setSelectionRange(caret[0], caret[1]); } catch (e) {} }
 }
@@ -2567,6 +2574,9 @@ async function loadConn({ spaces = true } = {}) {
   const sp = currentSpace(spacesResp);
   if (!sp) { enterHome({ page: 'tasks' }); return; }
   if (sp.id !== connState.spaceId) {
+    /* Панель, відкрита для іншого простору, не лишається: людина свідомо перейшла (питання не треба), а запис із неї
+       пішов би в простір, якого вона вже не бачить. */
+    closeCnDrawer({ focus: false });
     connState.spaceId = sp.id; connState.list = null; connState.failed = null; connState.busy.clear();
     paintHome();
   }
@@ -2634,10 +2644,222 @@ async function afterModulesChange() {
   await afterSpaceChange();
 }
 
-/* Бічна панель — Task 7: ці дві функції він ЗАМІНИТЬ повністю (тут лише щоб файл парсився й `enterHome`/`connAction`
-   мали що кликати). */
-function closeCnDrawer() {}
-function openCnDrawer() {}
+/* ── бічна панель «Підключення» (`#cn-drawer`) ───────────────────────────────────────────────────────────
+   Окремий вузол поза `#tasks-home`: перемальовка сторінки (перечитування списку, «Перевіряю…» на картці) не
+   сміє стирати введене в полях. Поки панель відкрита, значення полів живуть у DOM; `cnDrawer.form` — знімок для
+   перемальовки самої панелі (зайнятість, результат, мова). ⛔ Секрет у знімку не тримаємо й у розмітку не пишемо:
+   після будь-якої відповіді сервера поля паролів порожні. Стан `cnDrawer` оголошено вгорі файла (Task 6).
+   `cnDrawer.busy` — ВИД зайнятості, а не прапорець: `'save'` (запис у `cnSubmit`) чи `'check'` (`cnDrawerCheck`);
+   розмітка підписує за ним кнопки («Зберігаю й перевіряю…» лише для `'save'`, «Перевіряю…» лише для `'check'`). */
+
+function cnDrawerNode() {
+  let el = document.getElementById('cn-drawer');
+  if (el) return el;
+  el = document.createElement('aside');
+  el.id = 'cn-drawer';
+  el.className = 'cn-drawer';
+  el.hidden = true;
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-labelledby', 'cn-dr-title');
+  document.body.appendChild(el);
+  wireCnDrawer(el);
+  return el;
+}
+
+/** Поточні значення панелі з DOM: `{values, secrets, erase}` (мапи — `Object.fromEntries`: ключ `__proto__` — поле). */
+function readCnForm(el) {
+  const values = [];
+  const secrets = [];
+  for (const n of el.querySelectorAll('[data-cn-field]')) {
+    const k = n.dataset.cnField;
+    if (n.dataset.type === 'secret') secrets.push([k, n.value]);
+    else if (n.dataset.type === 'bool') values.push([k, n.checked]);
+    else values.push([k, n.value]);
+  }
+  const erase = [...el.querySelectorAll('[data-cn-dr="erase"][aria-pressed="true"]')].map((b) => b.dataset.key);
+  return { values: Object.fromEntries(values), secrets: Object.fromEntries(secrets), erase };
+}
+
+function paintCnDrawer() {
+  const el = cnDrawerNode();
+  if (!cnDrawer) { el.hidden = true; el.innerHTML = ''; return; }
+  const sp = currentSpace(spacesResp);
+  el.innerHTML = drawerHTML({ ...cnDrawer, spaceName: sp && sp.id === cnDrawer.spaceId ? sp.name : cnDrawer.spaceId });
+  el.hidden = false;
+  syncCnDrawer();
+}
+
+/** Кнопки за станом форми: «Зберегти» вимкнена без змін (у правці), «Перевірити» — зі змінами (перевіряє збережене). */
+function syncCnDrawer() {
+  if (!cnDrawer) return;
+  const el = cnDrawerNode();
+  const dirty = isDirty(formPatch(cnDrawer.fields, cnDrawer.init, readCnForm(el)));
+  const submit = el.querySelector('[data-cn-dr="submit"]');
+  if (submit) submit.disabled = !!cnDrawer.busy || (cnDrawer.mode === 'edit' && !dirty);
+  const check = el.querySelector('[data-cn-dr="check"]');
+  if (check) { check.disabled = !!cnDrawer.busy || dirty; check.title = dirty ? t('cnCheckSavedFirst') : ''; }
+}
+
+function openCnDrawer(e, mode) {
+  const fields = formFields(e);
+  const init = initialForm(fields);
+  cnDrawer = { id: e.id, entry: e, mode, fields, init, form: init, busy: false, result: null, errors: {},
+    spaceId: connState.spaceId, opener: { act: mode === 'enable' ? 'enable' : 'configure', id: e.id } };
+  paintCnDrawer();
+  const el = cnDrawerNode();
+  (el.querySelector('[data-cn-field]') ?? el.querySelector('[data-cn-dr="submit"]'))?.focus({ preventScroll: true });
+}
+
+/** Закрити без питань. Фокус — на кнопку картки, що відкрила панель (після запису дія могла змінитись: «Підключити» →
+ *  «Налаштувати», тому запасний варіант — будь-яка кнопка тієї ж картки). */
+function closeCnDrawer({ focus = true } = {}) {
+  if (!cnDrawer) return;
+  const op = cnDrawer.opener;
+  cnDrawer = null;
+  paintCnDrawer();
+  if (!focus || !op) return;
+  const home = homeNode();
+  const id = CSS.escape(op.id);
+  (home?.querySelector(`[data-cn="${op.act}"][data-id="${id}"]`) ?? home?.querySelector(`[data-cn][data-id="${id}"]`))
+    ?.focus({ preventScroll: true });
+}
+
+/** Хрестик і Esc: з незбереженими змінами — спершу питання. Під час запиту панель не закривається. */
+async function requestCloseCnDrawer() {
+  if (!cnDrawer || cnDrawer.busy) return;
+  const mine = cnDrawer;
+  const dirty = isDirty(formPatch(mine.fields, mine.init, readCnForm(cnDrawerNode())));
+  if (dirty && !(await askYesNo(t('cnDiscardAsk'), { yes: t('cnDiscard'), danger: true }))) return;
+  if (cnDrawer === mine) closeCnDrawer();
+}
+
+/**
+ * «Стерти» секрет — без перемальовки (інакше зникли б інші введені секрети). Підпис кнопки СТАЛИЙ: стан — це
+ * `aria-pressed` і видима примітка. Примітка читачеві екрана потрібна лише коли секрет позначено, тож її id
+ * додається в `aria-describedby` ПОЛЯ рівно тоді (так само, як малює `fieldHTML`: після `-state`), а знімається
+ * при поверненні; чужі id атрибута (`-state`, `-err`) лишаються.
+ */
+function toggleCnErase(btn) {
+  const on = btn.getAttribute('aria-pressed') !== 'true';
+  btn.setAttribute('aria-pressed', String(on));
+  const el = cnDrawerNode();
+  const key = btn.dataset.key;
+  const note = el.querySelector(`[data-cn-erase-note="${CSS.escape(key)}"]`);
+  if (note) note.hidden = !on;
+  const field = el.querySelector(`[data-cn-field="${CSS.escape(key)}"]`);
+  if (field && note?.id) {
+    const ids = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter((x) => x && x !== note.id);
+    if (on) ids.splice(ids.findIndex((x) => x.endsWith('-state')) + 1, 0, note.id);
+    if (ids.length) field.setAttribute('aria-describedby', ids.join(' '));
+    else field.removeAttribute('aria-describedby');
+  }
+  syncCnDrawer();
+}
+
+/**
+ * «Підключити» / «Зберегти». Обовʼязкові — до запиту. Підключення модуля, чиї ролі хтось тримає (зокрема неявний
+ * `static-publish`), — спершу питання «Замінити?», далі `replace: true` (сервер міняє постачальника одним записом).
+ * Запис іде в простір, відкритий у панелі (`spaceId`), а не в активний зараз. Вердикт `ok` — панель закривається,
+ * тост; `ok: false` — стан УЖЕ записано (так працює API), панель лишається з причиною й переходить у режим правки;
+ * HTTP-відмова — нічого не збережено, причина в панелі.
+ */
+async function cnSubmit() {
+  if (!cnDrawer || cnDrawer.busy) return;
+  const el = cnDrawerNode();
+  const cur = readCnForm(el);
+  const miss = missingRequired(cnDrawer.fields, cur);
+  if (miss.length) {
+    cnDrawer.form = { values: cur.values, secrets: {}, erase: cur.erase };
+    cnDrawer.errors = Object.fromEntries(miss.map((k) => [k, 'cnFieldRequired']));
+    cnDrawer.result = null;
+    paintCnDrawer();
+    cnDrawerNode().querySelector('[aria-invalid="true"]')?.focus({ preventScroll: true });
+    return;
+  }
+  const patch = formPatch(cnDrawer.fields, cnDrawer.init, cur);
+  if (cnDrawer.mode === 'edit' && !isDirty(patch)) return;
+  const mine = cnDrawer;
+  let replace = false;
+  if (mine.mode === 'enable') {
+    const holders = roleHolders(cnDrawer.entry, connState.list);
+    if (holders.length) {
+      const shared = (mine.entry.roles || []).filter((r) => holders.some((h) => (h.roles || []).includes(r)));
+      const q = t('cnReplaceAsk', roleTitle(shared[0]), holders.map(modName).join(', '), modName(mine.entry));
+      if (!(await askYesNo(q, { yes: t('cnReplace') }))) return;
+      if (cnDrawer !== mine) return;
+      replace = true;
+    }
+  }
+  const body = writePayload(mine.spaceId, mine.id, patch, replace);
+  mine.form = { values: cur.values, secrets: {}, erase: cur.erase };
+  mine.errors = {}; mine.result = null; mine.busy = 'save';
+  paintCnDrawer();
+  let r;
+  try {
+    r = await postForm(mine.mode === 'enable' ? '/api/module-enable' : '/api/module-settings', body);
+  } catch (err) {
+    if (cnDrawer !== mine) return;
+    mine.busy = false; mine.result = { kind: 'refused', ...refusalView(err) };
+    paintCnDrawer();
+    return;
+  }
+  const name = modName(mine.entry);
+  if (r?.check?.ok === true) {
+    if (cnDrawer === mine) closeCnDrawer();
+    toast(t(mine.mode === 'enable' ? 'cnToastEnabled' : 'cnToastSaved', name));
+  } else if (cnDrawer === mine) {
+    const entry = r?.module ?? mine.entry;
+    const fields = formFields(entry);
+    const init = initialForm(fields);
+    cnDrawer = { ...mine, entry, mode: 'edit', fields, init, form: init, busy: false,
+      result: { kind: 'failed', ...verdictText(r?.check) }, opener: { act: 'configure', id: mine.id } };
+    paintCnDrawer();
+  }
+  await afterModulesChange();
+}
+
+/** «Перевірити» в панелі — по збереженому (зі змінами кнопка вимкнена): вердикт у панелі, сторінка перечитується. */
+async function cnDrawerCheck() {
+  if (!cnDrawer || cnDrawer.busy) return;
+  const mine = cnDrawer;
+  mine.form = { ...readCnForm(cnDrawerNode()), secrets: {} };
+  mine.busy = 'check'; mine.result = null;
+  paintCnDrawer();
+  try {
+    const r = await postForm('/api/module-check', { space: mine.spaceId, id: mine.id });
+    if (cnDrawer !== mine) return;
+    mine.result = { kind: r?.check?.ok === true ? 'ok' : 'check-failed', ...verdictText(r?.check) };
+  } catch (err) {
+    if (cnDrawer !== mine) return;
+    mine.result = { kind: 'refused', ...refusalView(err) };
+  } finally {
+    mine.busy = false;
+  }
+  if (cnDrawer === mine) paintCnDrawer();
+  loadConn();
+}
+
+function wireCnDrawer(el) {
+  el.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-cn-dr]');
+    if (!b || b.disabled) return;
+    const a = b.dataset.cnDr;
+    if (a === 'close') requestCloseCnDrawer();
+    else if (a === 'check') cnDrawerCheck();
+    else if (a === 'erase') toggleCnErase(b);
+  });
+  el.addEventListener('submit', (ev) => { ev.preventDefault(); cnSubmit(); });
+  el.addEventListener('input', () => syncCnDrawer());
+  el.addEventListener('change', () => syncCnDrawer());
+}
+
+/* Esc панелі: лише коли над нею нема діалогу питання й палітри (Esc тих — їхній). */
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && cnDrawer && !paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
+    ev.preventDefault();
+    requestCloseCnDrawer();
+  }
+});
 
 /** Клавіатура екрана. `/` — у пошук; в пошуку: Esc чистить, потім знімає фокус,
  *  ↓ — до першої картки, Enter — відкрити першу; на картці: стрілки ходять по
@@ -6237,6 +6459,9 @@ function switchLang(v) {
   /* Екран «Задачі» — окремий вузол зі своєю розміткою: без цього він лишався б
      старою мовою, поки його щось не змусить перемалюватись. */
   if (homeOpen) paintHome();
+  /* Відкрита бічна панель «Підключення» — теж окремий вузол. Введені секрети при цьому зникають (у розмітку вони не
+     пишуться ніколи) — свідома ціна. */
+  if (cnDrawer && !cnDrawer.busy) { cnDrawer.form = { ...readCnForm(cnDrawerNode()), secrets: {} }; paintCnDrawer(); }
 }
 
 function onOverlayClick(ev) {
