@@ -125,6 +125,8 @@ test("форма задачі: гачки Task 8, значення екрану�
 test("привітання: кнопка data-th=spacenew, заголовок, підводка про агента, логотип", () => {
   const h = welcomeHTML();
   assert.match(h, /<button class="ctl ctl--pri" data-th="spacenew">/);
+  assert.match(h, /<button class="ctl ctl--out" data-th="spaceopen">/);
+  assert.match(h, /Відкрити наявну теку простору/);
   assert.match(h, /<h1 class="th-h">Вітаю в Deai Canvas<\/h1>/);
   assert.match(h, /створи простір Клієнт X/);
   assert.match(h, /<svg class="logo"/);
@@ -570,4 +572,39 @@ test("форма задачі: форма вже закрита — перелі
   resolve(["alpha"]);
   await tick(5);
   assert.equal(d.idI.value, "alpha", "закрита форма не перераховується");
+});
+
+test("`new` з `pathTouched: true`: тека за назвою не йде (перемальовка майстра не скидає ручну правку)", async () => {
+  const d = spaceForm({ name: "", path: "~/mine/x" });
+  wireSpaceDialog(d.form, { mode: "new", peek: async () => ({}), debounceMs: 1, pathTouched: true });
+  d.nameI.value = "Client";
+  d.nameI.fire("input");
+  assert.equal(d.pathI.value, "~/mine/x");
+  await tick(20);
+});
+
+test("форма задачі з `idTouched: false`: непорожній id (автопідстановка до перемальовки) і далі йде за назвою", () => {
+  const d = taskForm("alpha");
+  wireTaskForm(d.form, { taken: [], idTouched: false });
+  d.title.value = "Beta";
+  d.title.fire("input");
+  assert.equal(d.idI.value, "beta");
+});
+
+test("форма задачі з `idTouched: true`: порожній id (правили й стерли до перемальовки) не підставляється за назвою", () => {
+  const d = taskForm("");
+  wireTaskForm(d.form, { taken: [], idTouched: true });
+  d.title.value = "Beta";
+  d.title.fire("input");
+  assert.equal(d.idI.value, "", "людина свідомо лишила id порожнім — не чіпаємо");
+});
+
+test("`new` без `pathTouched`: тека йде за назвою (типово не змінилось)", async () => {
+  const d = spaceForm({ name: "", path: "~/deai-work/personal" });
+  wireSpaceDialog(d.form, { mode: "new", peek: async () => ({}), debounceMs: 1 });
+  d.nameI.value = "Client";
+  d.nameI.fire("input");
+  assert.notEqual(d.pathI.value, "~/deai-work/personal");
+  assert.match(d.pathI.value, /client/);
+  await tick(20);
 });

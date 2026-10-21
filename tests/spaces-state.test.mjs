@@ -188,6 +188,12 @@ test("taskErrKey: коди task-new → ключі; невідомий (і ме�
     "unknown-space": "taskErrSpaceGone",
     "space-unavailable": "tasksErrSpaceUnavailable",
     timeout: "formTimeout",
+    "from-not-found": "wzErrFromNotFound",
+    "from-no-index": "wzErrFromNoIndex",
+    "from-contains-space": "wzErrFromContains",
+    "from-too-big": "wzErrFromTooBig",
+    "from-needs-plain-space": "wzErrFromPlain",
+    "task-dir-exists": "wzErrTaskDirExists",
   };
   for (const [code, key] of Object.entries(map)) {
     assert.equal(taskErrKey(code), key, code);

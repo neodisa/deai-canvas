@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DICT, setLang } from "../app/i18n.js";
-import { cardHTML, connPageHTML, drawerHTML, modName, nowHTML, roleTitle } from "../app/connections-view.js";
+import { cardHTML, connPageHTML, drawerHTML, fieldHTML, modName, nowHTML, roleTitle } from "../app/connections-view.js";
 import {
   builtinText, formFields, initialForm, refusalView, roleKeys, verdictText,
 } from "../app/connections-model.js";
@@ -569,4 +569,15 @@ test("слова: ключі стирання й нові підписи — в 
   assert.equal(DICT.uk.cnErrBadKey, "Ключ Supabase не підходить або не заданий.");
   assert.equal(DICT.uk.cnLead,
     "Модулі цього простору: куди публікувати превʼю, де зберігати коментарі команди, звідки брати токени. Без жодного модуля канвас працює.");
+});
+
+test("поле з префіксом майстра: id і похідні id (-state, -err) з префіксом; типово — cn-f", () => {
+  const e = { id: "memo", settings: [] };
+  const f = { key: "token", type: "secret", label: "Token", required: false, set: true };
+  const h = fieldHTML(e, f, 2, { errors: { token: "cnFieldRequired" }, form: { values: {}, erase: [] }, busy: false }, "wz-f-1");
+  assert.match(h, /id="wz-f-1-2"/);
+  assert.match(h, /id="wz-f-1-2-state"/);
+  assert.match(h, /id="wz-f-1-2-err"/);
+  assert.doesNotMatch(h, /cn-f-/);
+  assert.match(fieldHTML(e, f, 0, { errors: {}, form: { values: {}, erase: [] }, busy: false }), /id="cn-f-0"/);
 });

@@ -20,7 +20,7 @@
  *                    `#tf-id` (`name="id"`);
  *   спільне          слот помилки `[data-form-error]`, кнопки `button[data-a="ok"]`
  *                    (type=submit) і `button[data-a="cancel"]`;
- *   привітання       кнопка `[data-th="spacenew"]` у `.th-welcome`.
+ *   привітання       кнопки `[data-th="spacenew"]` і `[data-th="spaceopen"]` у `.th-welcome`.
  */
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -125,7 +125,8 @@ export function welcomeHTML() {
     <div class="th-welcome-logo">${LOGO_SVG}</div>
     <h1 class="th-h">${esc(t("welcomeTitle"))}</h1>
     <p class="th-welcome-lead">${esc(t("welcomeLead"))}</p>
-    <div class="th-welcome-act"><button class="ctl ctl--pri" data-th="spacenew">${ico("plus")}${esc(t("welcomeCreate"))}</button></div>
+    <div class="th-welcome-act"><button class="ctl ctl--pri" data-th="spacenew">${ico("plus")}${esc(t("welcomeCreate"))}</button>
+      <button class="ctl ctl--out" data-th="spaceopen">${ico("folder")}${esc(t("welcomeOpen"))}</button></div>
     <p class="th-welcome-agent">${esc(t("welcomeAgent"))}</p></div>`;
 }
 
@@ -145,8 +146,10 @@ export function welcomeHTML() {
  *     Чи зареєстрована, каже передусім сам сервер (`registered` у відповіді peek: він бачить і
  *     варіант регістру), а лише без нього — порівняння за переліком `taken` (`peekRegistered`).
  * Відповіді peek, що прийшли не в порядку чи вже після закриття діалогу, відкидаються.
+ * `pathTouched` — теку вже правили руками до цієї проводки (майстер перемальовує крок і проводить форму заново: без цього
+ * тека знову пішла б за назвою).
  */
-export function wireSpaceDialog(form, { mode = "new", peek, debounceMs = 300, taken = [] } = {}) {
+export function wireSpaceDialog(form, { mode = "new", peek, debounceMs = 300, taken = [], pathTouched: touched0 = false } = {}) {
   const takenNow = () => (typeof taken === "function" ? taken() : taken) ?? [];
   const name = form.querySelector("#sp-name");
   const path = form.querySelector("#sp-path");
@@ -181,7 +184,7 @@ export function wireSpaceDialog(form, { mode = "new", peek, debounceMs = 300, ta
 
   if (mode === "edit" || !path) return;
 
-  let pathTouched = false;
+  let pathTouched = touched0 === true;
   let stash = null;           // що людина набрала сама, поки поля показують чужий простір
   let seq = 0;
   let timer = null;
@@ -237,12 +240,14 @@ export function wireSpaceDialog(form, { mode = "new", peek, debounceMs = 300, ta
  * машини (`/api/tasks?all=1`). Доки `id` не правили руками, він іде за назвою
  * (`taskIdFrom` дає вільний, без регістру); очистили поле — автопідстановка вертається.
  * `taken` може приїхати ПІСЛЯ відкриття діалогу — тоді `id` перераховується.
+ * `idTouched` — id правили руками до цієї проводки (перемальовка майстра); без нього — як було: непорожній id вважається
+ * правленим.
  */
-export function wireTaskForm(form, { taken = [] } = {}) {
+export function wireTaskForm(form, { taken = [], idTouched: touched0 } = {}) {
   const title = form.querySelector("#tf-title");
   const id = form.querySelector("#tf-id");
   let ids = Array.isArray(taken) ? taken : [];
-  let idTouched = id.value !== "";
+  let idTouched = typeof touched0 === "boolean" ? touched0 : id.value !== "";
   const sync = () => {
     if (!idTouched) id.value = title.value.trim() ? taskIdFrom(title.value, ids) : "";
   };

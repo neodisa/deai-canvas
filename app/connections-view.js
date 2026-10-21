@@ -16,6 +16,9 @@
  * Гачки для `app.js`: `data-cn="<дія>" data-id="<модуль>"` на картках і в помилці сторінки, `data-cn-dr="<дія>"` у
  * панелі, `data-cn-field="<ключ>" data-type="<тип>"` на полях.
  *
+ * Спільне з майстром 3b (`wizard-view.js`): `fieldHTML` (з префіксом id), `resultHTML`, `badgeHTML`, `rolesLine` —
+ * майстер малює ті самі поля, бейдж і результат запису, що й бічна панель, щоб вони не розійшлись.
+ *
  * ⛔ Усе з даних (назви, підписи, опції, тека, `error`, `detail`, id) — лише через `esc()`. ⛔ Значення секрету НІКОЛИ
  * не потрапляє в розмітку: поле пароля завжди порожнє (навіть коли `d.form.secrets` несе щойно введене — форма
  * тримає його для запиту, а не для малювання).
@@ -53,13 +56,13 @@ const fieldLabel = (e, f) => {
   return k ? t(k) : f.label;
 };
 
-const rolesLine = (e) => (Array.isArray(e?.roles) ? e.roles : []).map(roleTitle).join(" · ");
+export const rolesLine = (e) => (Array.isArray(e?.roles) ? e.roles : []).map(roleTitle).join(" · ");
 
 const BADGES = {
   ok: ["cnBadgeOk", "check"], error: ["cnBadgeError", "warn"], unchecked: ["cnBadgeUnchecked", null],
   off: ["cnBadgeOff", null], missing: ["cnBadgeMissing", "warn"],
 };
-const badgeHTML = (kind) => {
+export const badgeHTML = (kind) => {
   const [key, icon] = BADGES[kind];
   return `<span class="cn-badge cn-badge--${kind}">${icon ? ico(icon, 13) : ""}${esc(t(key))}</span>`;
 };
@@ -166,14 +169,16 @@ const describedBy = (...ids) => {
  * Поле форми. Звʼязки для читача екрана: `<label for>` ↔ `id`; обовʼязкове — `aria-required`; помилка — `aria-invalid`
  * + `aria-describedby` на її `<p id>`; підказка шляху, рядок стану секрету й примітка стирання теж описують поле —
  * ідентифікатори похідні від `cn-f-<i>` (`-hint`, `-state`, `-erase`, `-err`) і ідуть в одному атрибуті через пробіл.
+ * `prefix` — голова id полів: панель 3a — `cn-f` (типово), майстер — `wz-f-<картка>` (кілька карток на сторінці, id не
+ * мусять збігатися); похідні id (`-hint`, `-state`, …) наслідують її.
  *
  * ⚠️ Примітку стирання (`-erase`) у `aria-describedby` кладемо лише коли секрет ПОЗНАЧЕНО до стирання: елемент із
  * `hidden`, на який указує `aria-describedby`, усе одно озвучується — «буде стерто після збереження» звучало б при
  * кожному непозначеному секреті. Хто перемикає позначку без перемальовки (`toggleCnErase`), мусить так само
  * додати/зняти цей id в атрибуті поля.
  */
-function fieldHTML(e, f, i, d) {
-  const id = `cn-f-${i}`;
+export function fieldHTML(e, f, i, d, prefix = "cn-f") {
+  const id = `${prefix}-${i}`;
   /* Ключ словника помилки; невідомий ключ кине в `t()` на першому ж рендері — так і задумано (як скрізь в `i18n.js`). */
   const err = own(d.errors, f.key) ? d.errors[f.key] : "";
   const errId = err ? `${id}-err` : "";
@@ -225,7 +230,7 @@ function fieldHTML(e, f, i, d) {
   return `<div class="cn-field"><label class="cn-lbl" for="${id}">${label}</label>${ctl}${errHTML}</div>`;
 }
 
-function resultHTML(r) {
+export function resultHTML(r) {
   if (!r) return "";
   if (r.kind === "ok") {
     return `<div class="cn-res cn-res--ok" role="status">${ico("check", 13)}<span>${esc(t(r.key))}${detailHTML(r.detail)}</span></div>`;
