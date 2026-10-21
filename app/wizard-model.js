@@ -1,0 +1,151 @@
+/**
+ * Модель майстра нового простору (Deai 0.6.0, етап 3b; спека
+ * `docs/superpowers/specs/2026-10-21-first-run-wizard-design.md`). Чисті функції: ні DOM, ні fetch, ні `t()` — як
+ * `connections-model.js`, на якій вона стоїть. Вхід — записи `GET /api/modules` (`{id, roles, enabled, implicit,
+ * status, settings[]}`).
+ *
+ * Вибір кроку 2 — МНОЖИНА id модулів (`pick`), радіокнопки лише її показують: модуль кількох ролей стоїть у секції
+ * кожної своєї ролі, і вибрати його = прибрати з `pick` усіх, хто ділить із ним хоч одну роль.
+ *
+ * ⛔ Ролі — ДАНІ (з маніфестів): мапи ролей — лише `Map` (роль `__proto__` — звичайний ключ, а не прототип).
+ */
+import { ROLE_ORDER, formPatch, isDirty } from "./connections-model.js";
+
+/** Кроки майстра — у порядку спеки; номер кроку = індекс + 1. */
+export const WZ_STEPS = ["space", "modules", "settings", "task"];
+
+const list0 = (list) => (Array.isArray(list) ? list : []);
+const rolesOf = (e) => [...new Set(Array.isArray(e?.roles) ? e.roles.filter((r) => typeof r === "string" && r) : [])];
+/* Запис, з яким майстер працює: обʼєкт з id і не `missing` (тим місце в «Підключенні»). */
+const valid = (e) => !!e && typeof e === "object" && typeof e.id === "string" && !!e.id && e.status !== "missing";
+/* Тримає роль: увімкнений (зокрема неявно). Зламаний (`status: error`) теж тримає — як `roleHolders` у 3a. */
+const holds = (e) => valid(e) && e.enabled === true;
+const entryOf = (list, id) => list0(list).find((e) => valid(e) && e.id === id) ?? null;
+
+/** Секції кроку 2: `[{role, modules}]` — ролі `ROLE_ORDER`, далі інші за абеткою; модуль кількох ролей — у КОЖНІЙ. */
+export function wizardSections(list) {
+  const byRole = new Map();
+  for (const e of list0(list)) {
+    if (!valid(e)) continue;
+    for (const r of rolesOf(e)) {
+      if (!byRole.has(r)) byRole.set(r, []);
+      byRole.get(r).push(e);
+    }
+  }
+  const named = [...byRole.keys()].filter((r) => !ROLE_ORDER.includes(r)).sort();
+  return [...ROLE_ORDER.filter((r) => byRole.has(r)), ...named].map((role) => ({ role, modules: byRole.get(role) }));
+}
+
+/** Хто зараз тримає кожну роль: `Map<роль, id[]>`, id відсортовані. Знімок кроку 2 — основа «свіжості». */
+export function holdersByRole(list) {
+  const out = new Map();
+  for (const e of list0(list)) {
+    if (!holds(e)) continue;
+    for (const r of rolesOf(e)) {
+      if (!out.has(r)) out.set(r, []);
+      out.get(r).push(e.id);
+    }
+  }
+  for (const v of out.values()) v.sort();
+  return out;
+}
+
+/** Початковий вибір: усі, хто зараз тримає хоч одну роль. */
+export const initialPick = (list) => new Set(list0(list).filter((e) => holds(e) && rolesOf(e).length).map((e) => e.id));
+
+/** Вибрати модуль: прибрати з вибору кожен інший, що ділить із ним роль (і ті, кого вже нема в списку). */
+export function pickModule(pick, list, id) {
+  const e = entryOf(list, id);
+  if (!e) return new Set(pick);
+  const mine = new Set(rolesOf(e));
+  const out = new Set([...pick].filter((x) => {
+    const o = entryOf(list, x);
+    return !!o && !rolesOf(o).some((r) => mine.has(r) && x !== id);
+  }));
+  out.add(id);
+  return out;
+}
+
+/** «Без модуля» в ролі: прибрати з вибору всіх, хто її тримає. */
+export const pickNone = (pick, list, role) =>
+  new Set([...pick].filter((x) => { const o = entryOf(list, x); return !!o && !rolesOf(o).includes(role); }));
+
+/** Вибраний постачальник ролі (перший за порядком списку) або `null` — «Без модуля». */
+export const pickedFor = (pick, list, role) =>
+  list0(list).find((e) => valid(e) && pick.has(e.id) && rolesOf(e).includes(role))?.id ?? null;
+
+/** Вибрані модулі в порядку секцій; модуль кількох ролей — один раз, на першій. */
+export function pickedInOrder(list, pick) {
+  const seen = new Set();
+  const out = [];
+  for (const s of wizardSections(list)) {
+    for (const e of s.modules) {
+      if (pick.has(e.id) && !seen.has(e.id)) { seen.add(e.id); out.push(e); }
+    }
+  }
+  return out;
+}
+
+/** Рядки «Без модуля» кроку 3: ролі без вибраного постачальника, які хтось тримає, → `[{role, holder}]`. */
+export function offRows(list, pick) {
+  const out = [];
+  for (const s of wizardSections(list)) {
+    if (pickedFor(pick, list, s.role)) continue;
+    for (const e of s.modules) if (holds(e)) out.push({ role: s.role, holder: e });
+  }
+  return out;
+}
+
+const sameIds = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** Ролі, тримачі яких зараз (`fresh`) не ті, що бачив крок 2 (`atPick`): запис у такій ролі не шлемо. */
+export const staleRoles = (roles, atPick, fresh) =>
+  roles.filter((r) => !sameIds(atPick?.get?.(r) ?? [], fresh?.get?.(r) ?? []));
+
+/**
+ * План записів кроку 3 зі СВІЖОГО списку: `[{op, id, roles, stale}]`, у порядку:
+ *   gone     — вибраний, якого вже нема у списку (писати нема що; картка скаже чому);
+ *   enable   — вибраний, ще не ввімкнений (контролер шле `replace: true` — згода дана вибором на кроці 2);
+ *   settings — вибраний, увімкнений, форма змінена (`formPatch` → `isDirty`); без форми чи без змін — нічого;
+ *   disable  — тримач ролі з «Без модуля», якого не вимикає жоден `enable`: заміна вимикає тримачів УСІХ ролей нового
+ *              модуля, тож тримач кількох ролей міг піти разом із заміною в іншій ролі.
+ * `forms` — `Map<id, {fields, init, cur}>`; `atPick` — `holdersByRole` списку, який бачила людина на кроці 2.
+ * `stale` — ролі запису, тримачі яких змінились після кроку 2 (для `settings` не рахується: роль не міняється).
+ */
+export function writePlan({ list, pick, forms, atPick }) {
+  const fresh = holdersByRole(list);
+  const ops = [];
+  for (const id of pick) if (!entryOf(list, id)) ops.push({ op: "gone", id, roles: [], stale: [] });
+  const freed = new Set();
+  for (const e of pickedInOrder(list, pick)) {
+    const roles = rolesOf(e);
+    if (e.enabled !== true) {
+      const stale = staleRoles(roles, atPick, fresh);
+      if (!stale.length) roles.forEach((r) => freed.add(r));
+      ops.push({ op: "enable", id: e.id, roles, stale });
+      continue;
+    }
+    const f = forms?.get?.(e.id);
+    if (f && isDirty(formPatch(f.fields, f.init, f.cur))) ops.push({ op: "settings", id: e.id, roles, stale: [] });
+  }
+  const off = new Set();
+  for (const { role, holder } of offRows(list, pick)) {
+    if (off.has(holder.id) || rolesOf(holder).some((r) => freed.has(r))) continue;
+    off.add(holder.id);
+    ops.push({ op: "disable", id: holder.id, roles: [role], stale: staleRoles([role], atPick, fresh) });
+  }
+  return ops;
+}
+
+/** Чи всі результати проходу — успіх (запис прийнято й перевірка `ok`, або вимкнено). Порожньо — так. */
+export const allOk = (results) => results.every((r) => r?.kind === "ok");
+
+/** Крок «Назад»: 2→1, 3→2, 4→3; 4→2, коли крок 3 пропущено (модулі не прочитались). */
+export const prevStep = (step, skipped3 = false) => (step === 4 && skipped3 ? 2 : Math.max(1, step - 1));
+
+/** Назва задачі з теки-джерела: останній сегмент шляху без хвостових слешів; «~» і порожнє — ''. */
+export function titleFromFolder(p) {
+  const s = String(p ?? "").trim().replace(/[\\/]+$/, "");
+  const base = s.split(/[\\/]/).pop() ?? "";
+  return base === "~" ? "" : base;
+}

@@ -311,13 +311,26 @@ const TASK_ERR_KEYS = new Map([
   ["unknown-space", "taskErrSpaceGone"],
   ["space-unavailable", "tasksErrSpaceUnavailable"],
   ["timeout", "formTimeout"],
+  /* Задача з наявної теки (`from`, майстер 3b): ключ — за КОДОМ відмови, ніколи за текстом повідомлення. */
+  ["from-not-found", "wzErrFromNotFound"],
+  ["from-no-index", "wzErrFromNoIndex"],
+  ["from-contains-space", "wzErrFromContains"],
+  ["from-too-big", "wzErrFromTooBig"],
+  ["from-needs-plain-space", "wzErrFromPlain"],
+  ["task-dir-exists", "wzErrTaskDirExists"],
 ]);
 
 /** Ключ словника для відмови створення задачі; невідомий код (і мережа) — загальний. */
 export const taskErrKey = (code) => TASK_ERR_KEYS.get(code) ?? "taskErrGeneric";
 
-/** Поле форми «Нова задача», про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id` або `null`. */
-export const taskErrField = (key) => (key === "titleRequired" ? "title" : (key === "idBad" || key === "idTaken" ? "id" : null));
+/* Ключі помилок, що стосуються поля «Тека» майстра (`from`). `wzErrFromPlain` сюди НЕ входить: простір без інтеграцій
+   людина в майстрі не вибирає, тож це не помилка поля. */
+const FROM_KEYS = new Set(["wzFromRequired", "wzErrFromNotFound", "wzErrFromNoIndex", "wzErrFromContains", "wzErrFromTooBig"]);
+
+/** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `from` (тека майстра) або `null`. */
+export const taskErrField = (key) => (key === "titleRequired" ? "title"
+  : (key === "idBad" || key === "idTaken" || key === "wzErrTaskDirExists") ? "id"
+    : FROM_KEYS.has(key) ? "from" : null);
 
 /**
  * Колір для нового простору: перший з шести, якого ще не використано, — щоб фішки в смузі

@@ -4,7 +4,7 @@ import test from "node:test";
 import { DICT } from "../app/i18n.js";
 import {
   FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  spaceErrKey, spaceRows, spaceSlug, taskErrField, taskFormError, taskIdFrom, validTaskId,
+  spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -182,6 +182,36 @@ test("taskErrField: title / id / null за ключем помилки форм�
   for (const k of ["taskErrGeneric", "taskErrSpaceGone", "tasksErrSpaceUnavailable", null, undefined]) {
     assert.equal(taskErrField(k), null, String(k));
   }
+});
+
+test("коди відмов задачі з теки → ключі й поле форми", () => {
+  assert.equal(taskErrKey("from-too-big"), "wzErrFromTooBig");
+  assert.equal(taskErrKey("task-dir-exists"), "wzErrTaskDirExists");
+  assert.equal(taskErrField("wzErrFromNoIndex"), "from");
+  assert.equal(taskErrField("wzFromRequired"), "from");
+  assert.equal(taskErrField("wzErrTaskDirExists"), "id");
+  assert.equal(taskErrField("wzErrFromPlain"), null);
+  assert.equal(taskErrField("idTaken"), "id");
+});
+
+test("кожен код відмови `from` на сервері має свій ключ; поле — лише те, що людина виправляє сама", () => {
+  const map = {
+    "from-not-found": ["wzErrFromNotFound", "from"],
+    "from-no-index": ["wzErrFromNoIndex", "from"],
+    "from-contains-space": ["wzErrFromContains", "from"],
+    "from-too-big": ["wzErrFromTooBig", "from"],
+    "from-needs-plain-space": ["wzErrFromPlain", null],
+    "task-dir-exists": ["wzErrTaskDirExists", "id"],
+  };
+  for (const [code, [key, field]] of Object.entries(map)) {
+    assert.equal(taskErrKey(code), key, code);
+    assert.equal(taskErrField(taskErrKey(code)), field, code);
+  }
+  /* `bad-request` (from не рядок) і `bad-task-id` — не про поле «Тека»: перший загальний, другий — як і раніше id. */
+  assert.equal(taskErrKey("bad-request"), "taskErrGeneric");
+  assert.equal(taskErrKey("bad-task-id"), "idBad");
+  assert.equal(taskErrKey("from-щось-нове"), "taskErrGeneric");
+  assert.equal(taskErrKey(undefined), "taskErrGeneric");
 });
 
 /* ── рядки перемикача ──────────────────────────────────────────────────── */
