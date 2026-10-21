@@ -343,14 +343,11 @@ test("словник: підписи локальної публікації —
   assert.doesNotMatch(DICT.en.publishErrBadFolder(""), /\(\)|:\s*$/);
 });
 
-/* Тексти не обіцяють того, чого в 2а нема: керування модулями в UI — етап 3 (у 2а лише API), а публікація
-   у просторі без інтеграцій ПРАЦЮЄ (у локальну теку) — і «зʼявиться з модулями» про неї вже неправда. */
-test("словник: ні публікація «зʼявиться з модулями», ні «налаштування простору» як дверей, яких нема", () => {
+/* Тексти не обіцяють того, чого в 2а нема: керування модулями в UI — етап 3 (у 2а лише API). Ключ `integrationsOff`
+   («публікація зʼявиться з модулями») прибрано в 3b разом із діалогом «Новий простір» — єдиним, хто його показував. */
+test("словник: тексти відмов публікації не обіцяють «налаштування простору» як дверей, яких нема", () => {
   for (const lang of ["uk", "en"]) {
     const d = DICT[lang];
-    assert.doesNotMatch(d.integrationsOff, lang === "uk" ? /публікація, GitLab/ : /publishing, GitLab/, `${lang}: integrationsOff`);
-    assert.match(d.integrationsOff, lang === "uk" ? /публікація йде в локальну теку/ : /publishing goes to a local folder/);
-    assert.match(d.integrationsOff, /GitLab/);
     for (const k of ["publishErrNoModule", "publishErrBadFolder"]) {
       const text = typeof d[k] === "function" ? d[k]("") : d[k];
       assert.doesNotMatch(text, /налаштуваннях простору|space settings|You can turn/i, `${lang}: ${k} обіцяє UI налаштувань`);

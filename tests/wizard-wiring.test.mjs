@@ -199,7 +199,7 @@ test("входи: дропдаун/⌘K і привітання ведуть у 
   assert.match(fn(A, "wireHome"), /case 'spacenew': openWizard\(\); break;/);
   assert.match(fn(A, "wireHome"), /case 'spaceopen': openWizard\(\{ folderFirst: true \}\); break;/);
   assert.doesNotMatch(A, /function openSpaceNew\(/, "старий діалог «Новий простір» лишився");
-  assert.match(fn(A, "openWizard"), /wiz\.open\(\{ folderFirst \}\);\s*enterHome\(\{ page: 'wiz' \}\);\s*wiz\.focusStep\(\);/);
+  assert.match(fn(A, "openWizard"), /wiz\.open\(\{ folderFirst \}\);\s*enterHome\(\{ page: 'wiz' \}\);[\s\S]*?wiz\.focusStep\(\);/);
 });
 
 test("сторінка wiz: paintHome малює майстер раніше за привітання; enterHome не тягне список задач; вихід — reset", () => {
@@ -261,7 +261,7 @@ test("wizBack: «Скасувати» до створення вертає ту�
   const b = fn(A, "wizBack");
   assert.match(b, /if \(wizFrom === null && currentTaskId\) await leaveHome\(\);/);
   assert.match(b, /else enterHome\(\{ page: wizFrom === 'conn' \? 'conn' : 'tasks' \}\);/);
-  assert.match(b, /chipEl\(\)\?\.focus\(\{ preventScroll: true \}\);/);
+  assert.match(b, /\(chipEl\(\) \?\? homeNode\(\)\?\.querySelector\(`\[data-th="\$\{wizOpener\}"\]`\)\)\?\.focus\(\{ preventScroll: true \}\);/);
   assert.match(fn(A, "openWizard"), /wizFrom = homeOpen \? homePage : null;/);
   assert.match(fn(A, "openWizard"), /if \(spacesResp\?\.off\) return;/);
 });
@@ -282,4 +282,46 @@ test("wizOpenTask: як «Нова задача» на «Задачах» — п
 
 test("barState віддає homePage лише при відкритому оверлеї (смуга й ⌘K знають `wiz`)", () => {
   assert.match(A, /homePage: homeOpen \? homePage : null,/);
+});
+
+/* ══ після ревʼю 1c000c3 ═════════════════════════════════════════════════════════════════════════════════════════ */
+
+test("R1: поки крок 1 «зайнятий» (створення, перемальовка з `afterSpaceChange` чи мови), форму проводять як `edit` — без peek: інакше щойно створену теку видно як «вже додано»", () => {
+  assert.match(fn(W, "wire"), /mode: wz\.created \|\| wz\.busy \? "edit" : "new"/);
+});
+
+test("R2: «Скасувати» на «Підключення» не віддає фокус першій картці: connFocusPending скидається, фокус — фішка (або кнопка-відкривач привітання)", () => {
+  const b = fn(A, "wizBack");
+  assert.match(b, /if \(wizFrom === 'conn'\) connFocusPending = false;/);
+  assert.ok(b.indexOf("enterHome(") < b.indexOf("connFocusPending = false"), "скидання — ПІСЛЯ enterHome (він ставить прапорець)");
+  assert.ok(b.indexOf("connFocusPending = false") < b.indexOf(".focus("), "скидання — до фокуса");
+});
+
+test("R3: майстер відкривається з верху, а не зі скролом списку задач (скидання ПІСЛЯ enterHome: paint повертає старий скрол)", () => {
+  const b = fn(A, "openWizard");
+  const i = b.indexOf("enterHome({ page: 'wiz' })");
+  assert.match(b, /homeNode\(\)\.scrollTop = 0;|if \(home\) home\.scrollTop = 0;/);
+  assert.ok(b.search(/scrollTop = 0/) > i && b.search(/scrollTop = 0/) < b.indexOf("wiz.focusStep()"), "між enterHome і focusStep");
+});
+
+test("R4: «Скасувати» з привітання вертає фокус на кнопку, якою майстер відкрили (spaceopen / spacenew)", () => {
+  const b = fn(A, "openWizard");
+  assert.match(b, /wizOpener = folderFirst \? 'spaceopen' : 'spacenew';/);
+  assert.match(A, /let wizOpener = 'spacenew';/);
+});
+
+/* Заміна pin-ів колишнього діалогу `openSpaceNew`: його логіка тепер у контролері майстра. */
+test("R5: перший простір — «Особисте», колір — перший невикористаний, тека — перша ВІЛЬНА (реєстр), «відкрити теку» — порожня назва й тека", () => {
+  const b = fn(W, "open");
+  assert.match(b, /const name = needsWelcome\(info\) && !folderFirst \? t\("personalName"\) : "";/);
+  assert.match(b, /color: freeColor\(info\?\.spaces\)/);
+  assert.match(b, /path: folderFirst \? "" : defaultSpacePath\(name, "~", deps\.takenPaths\(\)\)/);
+});
+
+test("R6: крок 1 — запит `space-new` з назвою, кольором і текою; відмова → ключ словника за `e.code` (spaceErrKey) і поле (spaceErrField); `e.key` не читається", () => {
+  const b = fn(W, "submit1");
+  assert.match(b, /deps\.post\("\/api\/space-new", \{ name, color: mine\.s1\.color, path: mine\.s1\.path\.trim\(\) \}\)/);
+  assert.match(b, /catch \(e\) \{\s*if \(wz !== mine\) return;\s*setBusy\(form, false\);\s*showError\(form, spaceErrKey\(e\?\.code\), spaceErrField\(e\?\.code\)\);\s*return;\s*\}/);
+  assert.doesNotMatch(b, /e\??\.key\b/);
+  assert.match(b, /showError\(form, "spaceErrName", "name"\)/, "порожня назва — до запиту");
 });

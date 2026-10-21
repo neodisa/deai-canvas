@@ -1356,6 +1356,8 @@ const wiz = createWizard({
 /* Звідки майстер відкрили: `null` — полотно задачі (оверлей був закритий), інакше сторінка оверлею. Потрібно лише
    «Скасувати» до створення: простору нема, і людина вертається туди, де була. */
 let wizFrom = null;
+/* Кнопка привітання, якою відкрили майстер (`spacenew` чи `spaceopen`): «Скасувати» вертає фокус саме на неї. */
+let wizOpener = 'spacenew';
 
 /** Відкрити майстер на кроці 1. Шар просторів вимкнено — входу нема (як і «Новий простір…» у дропдауні). Бічна панель
  *  «Підключення» з незбереженим (там можуть бути секрети) спершу питає — як логотип: `enterHome` закрив би її мовчки. Без
@@ -1364,19 +1366,26 @@ async function openWizard({ folderFirst = false } = {}) {
   if (spacesResp?.off) return;
   if (cnDrawer && !(await dismissCnDrawer())) return;
   wizFrom = homeOpen ? homePage : null;
+  wizOpener = folderFirst ? 'spaceopen' : 'spacenew';
   wiz.open({ folderFirst });
   enterHome({ page: 'wiz' });
+  /* Майстер — нова сторінка: з верху, а не зі скролом списку задач (`wiz.paint` повертає скрол, що був у вузлі). */
+  const home = homeNode();
+  if (home) home.scrollTop = 0;
   wiz.focusStep();
 }
 
 /**
  * «Скасувати» до створення — туди, звідки прийшли: на полотно задачі (коли вона є) чи на сторінку оверлею; фокус — на
- * фішку простору, як після колишнього діалогу. На першому запуску фішки нема — фокус ставить `enterHome` (кнопка привітання).
+ * фішку простору, як після колишнього діалогу. На першому запуску фішки нема — на кнопку привітання, якою майстер відкрили.
+ * `enterHome` на «Підключення» ставить `connFocusPending` (фокус на першу картку після завантаження списку) — тут це
+ * крадіжка: людина щойно скасувала дію з фішки простору.
  */
 async function wizBack() {
   if (wizFrom === null && currentTaskId) await leaveHome();
   else enterHome({ page: wizFrom === 'conn' ? 'conn' : 'tasks' });
-  chipEl()?.focus({ preventScroll: true });
+  if (wizFrom === 'conn') connFocusPending = false;
+  (chipEl() ?? homeNode()?.querySelector(`[data-th="${wizOpener}"]`))?.focus({ preventScroll: true });
 }
 
 /**

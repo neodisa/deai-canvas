@@ -153,7 +153,9 @@ export function createWizard(deps) {
     if (wz.step === 1) {
       const form = el.querySelector('form[data-wz-step="1"]');
       if (form) {
-        wireSpaceDialog(form, { mode: wz.created ? "edit" : "new", peek: deps.peek, taken: deps.takenPaths,
+        /* Зайнятий крок (запит створення летить, `afterSpaceChange` перемальовує сторінку, чи змінили мову) — теж без peek:
+           тека вже створюється, і проводка `new` спитала б сервер про неї й показала б «Цю теку вже додано». */
+        wireSpaceDialog(form, { mode: wz.created || wz.busy ? "edit" : "new", peek: deps.peek, taken: deps.takenPaths,
           pathTouched: wz.s1.pathTouched });
       }
     } else if (wz.step === 4) {
