@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   WZ_STEPS, allOk, errOffRows, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedFor, pickedInOrder, prevStep,
-  staleRoles, titleFromFolder, wizardSections, writePlan,
+  prunePick, staleRoles, titleFromFolder, wizardSections, writePlan,
 } from "../app/wizard-model.js";
 
 const M = (id, roles, extra = {}) => ({ id, name: id, roles, enabled: false, status: "unchecked", settings: [], ...extra });
@@ -637,4 +637,36 @@ test("stale disable: errored-тримач звільненої ролі (pass 2)
     { op: "enable", id: "cm", roles: ["comments"], stale: ["comments"] },
     { op: "disable", id: "mh", roles: ["publish"], stale: ["comments"], after: ["memo"] },
   ]);
+});
+
+/* ── prunePick: вибір без id, яких модель вважає відсутніми ───────────────────────────────────────────────── */
+
+test("prunePick: лишає присутні, скидає відсутні, missing і сміття; порядок вставки; новий Set, вхід не змінюється", () => {
+  const list = [...LIST, M("gone", ["publish"], { status: "missing", enabled: true }), null, { id: 5 }, { id: "" }];
+  const pick = new Set(["vercel-publish", "ghost", "gone", "static-publish", 5, "", null, undefined, "css-tokens"]);
+  const before = [...pick];
+  const out = prunePick(pick, list);
+  assert.deepEqual([...out], ["vercel-publish", "static-publish", "css-tokens"], "порядок вставки збережено");
+  assert.notEqual(out, pick, "новий Set");
+  assert.deepEqual([...pick], before, "вхід не змінено");
+  out.add("x");
+  assert.equal(pick.has("x"), false, "результат не повʼязаний із входом");
+  const all = new Set(["css-tokens", "supabase-comments"]);
+  assert.notEqual(prunePick(all, LIST), all, "новий Set і тоді, коли нічого не скинуто");
+  assert.deepEqual([...prunePick(all, LIST)], ["css-tokens", "supabase-comments"]);
+});
+
+test("prunePick: порожній, null і не-колекція — порожній Set; список-сміття — теж", () => {
+  for (const bad of [new Set(), null, undefined, 42, "abc"]) {
+    const out = prunePick(bad, LIST);
+    assert.ok(out instanceof Set, String(bad));
+    assert.equal(out.size, 0, String(bad));
+  }
+  assert.equal(prunePick(new Set(["css-tokens"]), undefined).size, 0);
+  assert.equal(prunePick(new Set(["css-tokens"]), null).size, 0);
+  assert.equal(prunePick(new Set(["css-tokens"]), "junk").size, 0);
+});
+
+test("prunePick: масив теж приймається (ітерабельне)", () => {
+  assert.deepEqual([...prunePick(["css-tokens", "ghost"], LIST)], ["css-tokens"]);
 });

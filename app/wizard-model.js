@@ -70,6 +70,14 @@ export function pickModule(pick, list, id) {
 export const pickNone = (pick, list, role) =>
   new Set([...pick].filter((x) => { const o = entryOf(list, x); return !!o && !rolesOf(o).includes(role); }));
 
+/**
+ * Вибір без id, яких модель вважає відсутніми: нема у списку, `status: missing`, сміття (ті самі правила, що в `entryOf`).
+ * НОВИЙ `Set` у порядку вставки, вхід не змінюється; не-колекція (`null`, число) — порожній. Для контролера: звіряти вибір
+ * із кожним новим списком кроку 2.
+ */
+export const prunePick = (pick, list) =>
+  new Set((pick != null && typeof pick[Symbol.iterator] === "function" ? [...pick] : []).filter((id) => entryOf(list, id) !== null));
+
 /** Вибраний постачальник ролі (перший за порядком списку) або `null` — «Без модуля». */
 export const pickedFor = (pick, list, role) =>
   list0(list).find((e) => valid(e) && pick.has(e.id) && rolesOf(e).includes(role))?.id ?? null;
