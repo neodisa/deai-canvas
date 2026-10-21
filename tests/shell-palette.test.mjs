@@ -785,6 +785,26 @@ test("простори: «Підключення простору» — підп
   assert.deepEqual(filterActions(plain, "connections").map((a) => a.id), ["space-conn"]);
 });
 
+/* Сторінка майстра (етап 3b): перемкнути простір посеред кроків означало б лишити майстер над чужим простором, а «Новий
+   простір» на ньому нічого не робить, «Підключення» ж вели б повз незбережений вибір. Дій простору нема зовсім — але дії самого
+   застосунку (мова, встановлення) лишаються, як на «Задачах». */
+test("на сторінці майстра ⌘K не пропонує дій простору: ні перемикання, ні «Підключення», ні «Новий простір»", () => {
+  const acts = paletteActions(S({ spaces: [{ id: "a", name: "A" }, { id: "b", name: "B" }], spaceId: "a", homeOpen: true, homePage: "wiz" }));
+  assert.ok(!acts.some((a) => a.id.startsWith("space-")), acts.map((a) => a.id).join(","));
+  const tasks = paletteActions(S({ spaces: [{ id: "a", name: "A" }, { id: "b", name: "B" }], spaceId: "a", homeOpen: true, homePage: "tasks" }));
+  assert.ok(tasks.some((a) => a.id === "space-new") && tasks.some((a) => a.id === "space-go-b"), "свідок: на «Задачах» дії є");
+  assert.ok(tasks.some((a) => a.id === "space-conn"), "свідок: «Підключення» на «Задачах» є");
+  /* Решта палітри не зникла: мова й встановлення — дії застосунку, а не простору. */
+  const ids = acts.map((a) => a.id);
+  assert.ok(ids.includes("lang-en"), "мова зникла разом із діями простору");
+  assert.ok(paletteActions(S({ homeOpen: true, homePage: "wiz", canInstall: true, standalone: false })).some((a) => a.id === "pwa-install"),
+    "встановлення зникло разом із діями простору");
+  /* Лише рівно `wiz`: інша сторінка оверлею дій простору не втрачає. */
+  for (const homePage of ["WIZ", "wizard", "", null, undefined]) {
+    assert.ok(paletteActions(S({ spaces: SPS, spaceId: "a", homeOpen: true, homePage })).some((a) => a.id === "space-new"), String(homePage));
+  }
+});
+
 /* Синонім `space-conn` — обома мовами, як `lang-*` і `pwa-install`: пункт має ЛАТИНСЬКИЙ шлях у ⌘K в українському
    інтерфейсі («connections», «integrations») і КИРИЛИЧНИЙ в англійському («підключення», «інтеграції»). `t(labelKey)`
    дає лише поточну мову, тож без псевдоніма «connections» в українському UI не знаходило б нічого. */

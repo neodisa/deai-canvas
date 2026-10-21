@@ -746,6 +746,42 @@ test("смуга на сторінці «Підключення»: плоска 
   assert.doesNotMatch(html({ space: SP(), homeOpen: true, homePage: "conn", taskId: "" }), /data-act="back"/);
 });
 
+/* Смуга на сторінці майстра (етап 3b): плоска крошка «Новий простір» з іконкою `plus`; жодної фішки простору й кнопки
+   «назад до задачі» (модель їх не дає — розмітка не малює). Дві перевірки: на готовій моделі (контракт `crumb-wiz`) і наскрізно
+   через `barModel` (склад, який справді збирає застосунок). */
+test("крошка майстра: іконка plus і «Новий простір», жодної фішки простору й кнопки «назад»", () => {
+  const model = { zone1: [{ id: "home", tier: 0, on: false }, { id: "palette", tier: 0 }, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }], zone2: [], zone3: [] };
+  const h = barHTML(model, {});
+  assert.match(h, /<span class="crumb crumb--flat">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
+  assert.doesNotMatch(h, /data-act="back"/);
+  assert.doesNotMatch(h, /space-chip/);
+  /* Це «головний» склад оверлею: зони 2 і 3 порожні, жодного контрола задачі. */
+  assert.equal((h.match(/class="zone /g) || []).length, 3);
+  assert.doesNotMatch(h, /data-act="figma"|data-act="publish"|data-dd="iter"|data-dd="task"/);
+});
+
+test("смуга на сторінці майстра: з простором і задачею в стані — без фішки й «назад», крошка «Новий простір», логотип не світиться", () => {
+  const h = html({ space: SP(), spaces: SPACES, homeOpen: true, homePage: "wiz", taskId: "t1" });
+  assert.match(h, /<span class="crumb crumb--flat">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
+  assert.doesNotMatch(h, /data-dd="space"/, "фішка простору на майстрі");
+  assert.doesNotMatch(h, /data-act="back"/, "«назад до задачі» на майстрі");
+  assert.doesNotMatch(h, /<span class="txt">Задачі<\/span>|<span class="txt">Підключення<\/span>/, "чужа крошка");
+  const logo = /<button[^>]*data-act="home"[^>]*>/.exec(h);
+  assert.ok(logo, "дорога на «Задачі» (логотип) мусить лишитись");
+  assert.doesNotMatch(logo[0], /ctl--on|aria-current/);
+  assert.match(logo[0], /aria-label="[^"]+"/);
+  assert.match(h, /data-act="palette"/, "двері в палітру на місці");
+  /* Англійською крошка — своє слово. */
+  setLang("en");
+  try {
+    assert.match(html({ space: SP(), homeOpen: true, homePage: "wiz" }), /<span class="txt">New space<\/span>/);
+  } finally { setLang("uk"); }
+  /* Свідок: на «Задачах» із тим самим станом фішка й «назад» є. */
+  const tasks = html({ space: SP(), spaces: SPACES, homeOpen: true, taskId: "t1" });
+  assert.match(tasks, /data-dd="space"/);
+  assert.match(tasks, /data-act="back"/);
+});
+
 test("дропдаун просторів: недоступний простір приглушений, не вимкнений, і каже чому", () => {
   const h = html({ space: SP(), spaces: SPACES, openDd: "space" });
   const gone = /<button[^>]*data-val="gone"[\s\S]*?<\/button>/.exec(h)[0];

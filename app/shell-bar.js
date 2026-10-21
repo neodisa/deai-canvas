@@ -566,12 +566,14 @@ function homeBtn(model) {
    (`homeOpen`), тут лише малюнок. На сторінці «Підключення» (етап 3a) модель дає
    `crumb-conn` замість `crumb-tasks` — крошка та сама, але з іконкою `sliders` і
    підписом «Підключення»; «назад до задачі» лишається, бо вона про задачу, з якої
-   прийшли, а не про сторінку. */
+   прийшли, а не про сторінку. Сторінка майстра нового простору (етап 3b) — `crumb-wiz`: іконка `plus`, «Новий простір»;
+   фішки простору й «назад до задачі» там модель не дає, тож розмітка їх і не малює. */
 function homeCrumbs(model) {
   const back = model.zone1.find((x) => x.id === "back");
+  const wiz = model.zone1.some((x) => x.id === "crumb-wiz");
   const conn = model.zone1.some((x) => x.id === "crumb-conn");
-  const crumb = `<span class="crumb crumb--flat">${ico(conn ? "sliders" : "grid")}`
-    + `<span class="txt">${esc(t(conn ? "cnTitle" : "tasks"))}</span></span>`;
+  const [icon, key] = wiz ? ["plus", "wzCrumb"] : conn ? ["sliders", "cnTitle"] : ["grid", "tasks"];
+  const crumb = `<span class="crumb crumb--flat">${ico(icon)}<span class="txt">${esc(t(key))}</span></span>`;
   if (!back) return `<div class="crumbs">${crumb}</div>`;
   const why = esc(t("backToTask", back.label));
   return `<div class="crumbs">${crumb}</div>
@@ -581,7 +583,7 @@ function homeCrumbs(model) {
 
 export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
-  const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn");
+  const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   const zone1 = home
     ? `${homeBtn(model)}${paletteBtn(model)}${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
     : `${homeBtn(model)}${paletteBtn(model)}${spaceChip(model, state, openDd)}<div class="crumbs">`

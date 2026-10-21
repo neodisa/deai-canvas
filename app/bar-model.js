@@ -157,8 +157,9 @@ export function barModel(s) {
      заводимо. `on` — «зараз відкритий екран Задачі», з нього розмітка бере
      підсвітку. */
   /* Логотип «ми на екрані Задачі»: на сторінці «Підключення» (той самий оверлей, `homePage === "conn"`) він НЕ підсвічений
-     і не `aria-current="page"` — поточна сторінка там названа крошкою «Підключення», а логотип веде на «Задачі». */
-  const home = { id: "home", tier: 0, on: !!s.homeOpen && s.homePage !== "conn" };
+     і не `aria-current="page"` — поточна сторінка там названа крошкою «Підключення», а логотип веде на «Задачі».
+     І на майстрі (`wiz`) теж: там поточну сторінку називає крошка «Новий простір». */
+  const home = { id: "home", tier: 0, on: !!s.homeOpen && s.homePage !== "conn" && s.homePage !== "wiz" };
   const palette = { id: "palette", tier: 0, labelTier: TIERS.mode };
   /* Фішка простору (Deai 1.0, етап 1) — «де я» ще на рівень вище за задачу:
      задача живе в просторі, тож шлях читається зліва направо, і фішка стоїть
@@ -183,6 +184,12 @@ export function barModel(s) {
      міняється лише плоска крошка «де я» — `crumb-conn` замість `crumb-tasks`. Лише рівно `"conn"`: невідома
      сторінка не повинна мовчки називатись «Підключення». */
   if (s.homeOpen) {
+    /* Майстер нового простору (етап 3b) — та сама сторінка оверлею, але без фішки простору й без «назад до задачі»:
+       майстер привʼязаний до СВОГО простору (перемикач посеред кроків лише плутав би), а вихід із нього — свої кнопки
+       й логотип (`BAR_ACTIONS.home` питає про незбережене). Лише рівно `"wiz"`, як і `"conn"`. */
+    if (s.homePage === "wiz") {
+      return { zone1: [home, palette, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }], zone2: [], zone3: [], error: tasksError(s) };
+    }
     const crumb = s.homePage === "conn"
       ? { id: "crumb-conn", tier: 0, labelKey: "cnTitle" }
       : { id: "crumb-tasks", tier: 0, labelKey: "tasks" };

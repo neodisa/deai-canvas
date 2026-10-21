@@ -173,6 +173,9 @@ function installActions(s) {
    нічого не робить). Його id не перетинається з `space-go-<id>`. */
 function spaceActions(s) {
   if (!Array.isArray(s.spaces)) return [];
+  /* Майстер нового простору (етап 3b): дії простору тут не пропонуються — перемкнути простір посеред кроків означало б
+     лишити майстер над чужим простором, а «Новий простір» на ньому нічого не робить. */
+  if (s.homePage === "wiz") return [];
   const cur = s.spaceId ?? s.space?.id;
   const out = s.spaces.filter((x) => x.id !== cur).map((x) => ({
     id: `space-go-${x.id}`, group: "gGo", labelKey: "spaceGo", labelArgs: [x.name], icon: "folder",

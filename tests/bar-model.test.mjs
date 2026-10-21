@@ -418,6 +418,37 @@ test("екран «Підключення»: крошка `crumb-conn` замі�
     barModel(base).zone1.map((x) => x.id));
 });
 
+/* Майстер нового простору (етап 3b) — третя сторінка того самого оверлею (`homePage === "wiz"`). Склад смуги ІНШИЙ, ніж на
+   «Задачах» і «Підключенні»: нема фішки простору (майстер привʼязаний до СВОГО простору — перемикач посеред кроків лише
+   плутав би) і нема «назад до задачі» (вихід із майстра — його власні кнопки й логотип, що питає про незбережене). Логотип
+   не «поточна сторінка»: її називає крошка. Лише рівно `"wiz"`. */
+test("майстер: логотип, палітра й крошка `crumb-wiz` — без фішки простору й без «назад до задачі»", () => {
+  const m = barModel({ ...base, homeOpen: true, homePage: "wiz", space: { name: "Studio", color: "space-2" }, taskId: "t1" });
+  assert.deepEqual(m.zone1.map((x) => x.id), ["home", "palette", "crumb-wiz"]);
+  assert.equal(m.zone1.find((x) => x.id === "crumb-wiz").labelKey, "wzCrumb");
+  assert.equal(m.zone1.find((x) => x.id === "crumb-wiz").tier, 0, "крошку «де я» ховати нікуди");
+  assert.equal(m.zone1.find((x) => x.id === "home").on, false, "логотип на майстрі не «поточна сторінка»");
+  assert.deepEqual([m.zone2, m.zone3], [[], []]);
+  /* Свідок: на «Задачах» з тим самим станом фішка й «назад» є — тож їхня відсутність вище не випадковість стану. */
+  const tasks = barModel({ ...base, homeOpen: true, space: { name: "Studio", color: "space-2" }, taskId: "t1" });
+  assert.ok(tasks.zone1.some((x) => x.id === "space") && tasks.zone1.some((x) => x.id === "back"));
+  /* Без задачі й без простору склад той самий — майстер від них не залежить. */
+  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "wiz", taskId: "" }).zone1.map((x) => x.id),
+    ["home", "palette", "crumb-wiz"]);
+});
+
+test("майстер: лише рівно `wiz` і лише на оверлеї; смуга помилки читання задач лишається", () => {
+  const tasks = barModel({ ...base, homeOpen: true, taskId: "t1" }).zone1.map((x) => x.id);
+  for (const homePage of ["WIZ", "wiz ", "wizard", "", null, undefined]) {
+    assert.deepEqual(barModel({ ...base, homeOpen: true, homePage, taskId: "t1" }).zone1.map((x) => x.id), tasks, String(homePage));
+  }
+  /* `homePage: "wiz"` без `homeOpen` — не на оверлеї, смуга задачі як була, і логотип не світиться з чужої причини. */
+  assert.deepEqual(barModel({ ...base, homePage: "wiz" }).zone1.map((x) => x.id), barModel(base).zone1.map((x) => x.id));
+  /* Помилка `tasks.json` спільна для всього оверлею: на майстрі її не ховаємо. */
+  assert.deepEqual(barModel({ ...base, homeOpen: true, homePage: "wiz", tasksErr: "x" }).error, { whyKey: "tasksErr", retry: true });
+  assert.equal(barModel({ ...base, homeOpen: true, homePage: "wiz" }).error, null);
+});
+
 /* «В Figma» (T-41) — зона 3 «куди віддаю», ПЕРЕД GitLab: головна кнопка
    публікації лишається крайньою справа. Рішення власника 28.09.2026. */
 test("«В Figma» — перший контрол зони 3, підпис ховається разом із GitLab", () => {
