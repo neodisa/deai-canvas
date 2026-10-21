@@ -1691,7 +1691,8 @@ test("заміна в ролі — `replace` лише для enable; stale-за�
 test("план записів знає список кроку 2 (зниклий вибір не вимикає постачальника); вибір чиститься від зниклих", () => {
   assert.match(fn(W, "submit3"), /prevList: mine\.list2/);
   assert.match(fn(W, "loadStep2"), /mine\.list2 = mine\.list/);
-  assert.match(fn(W, "loadStep2"), /filter\(\(id\) => mine\.list\.some/);
+  assert.match(fn(W, "loadStep2"), /prunePick\(mine\.pick, mine\.list\)/);
+  assert.match(fn(W, "loadStep3"), /prunePick\(mine\.pick, mine\.list\)\.size !== mine\.pick\.size/);
 });
 
 test("залежне вимкнення — лише після записаної заміни; рядки «вимкнеться» — з `replaced` відповіді", () => {
@@ -1700,6 +1701,13 @@ test("залежне вимкнення — лише після записано
   assert.match(b, /pass\.replaced\.has\(op\.id\)/);
   assert.match(b, /r\?\.replaced/);
   assert.ok(b.indexOf("pass.written.has") < b.indexOf("deps.post("), "перевірка заміни — до запиту");
+});
+
+test("після проходу знімок свіжості переходить на новий стан лише для ролей, яких торкнувся сам прохід", () => {
+  const b = fn(W, "submit3");
+  assert.match(b, /for \(const role of pass\.touched\) mine\.atPick\.set\(role, now\.get\(role\) \?\? \[\]\)/);
+  assert.match(fn(W, "runOp"), /pass\.touched\.add\(role\)/);
+  assert.doesNotMatch(b, /mine\.atPick = holdersByRole/);
 });
 
 test("обовʼязкові поля — до будь-якого запиту кроку 3", () => {
@@ -1782,7 +1790,8 @@ import {
   taskFormError,
 } from "./spaces-model.js";
 import {
-  allOk, errOffRows, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedInOrder, prevStep, titleFromFolder, writePlan,
+  allOk, errOffRows, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedInOrder, prevStep, prunePick,
+  titleFromFolder, writePlan,
 } from "./wizard-model.js";
 import { wizardHTML } from "./wizard-view.js";
 
@@ -2028,7 +2037,7 @@ export function createWizard(deps) {
       mine.list = Array.isArray(r?.modules) ? r.modules : [];
       mine.list2 = mine.list;
       /* Вибір, що пережив «Назад», чистимо від модулів, яких уже нема: радіо показали б «Без модуля», а план — ні. */
-      mine.pick = mine.pick ? new Set([...mine.pick].filter((id) => mine.list.some((e) => e?.id === id))) : initialPick(mine.list);
+      mine.pick = mine.pick ? prunePick(mine.pick, mine.list) : initialPick(mine.list);
       mine.atPick = holdersByRole(mine.list);
     } catch (e) {
       if (wz !== mine || seq !== mine.seq) return;
@@ -2069,6 +2078,13 @@ export function createWizard(deps) {
     }
     if (wz !== mine || seq !== mine.seq) return;
     mine.list = Array.isArray(list) ? list : [];
+    /* Вибраний модуль зник між кроками: картки для нього нема, тож назад на крок 2 — він покаже, що лишилось. */
+    if (prunePick(mine.pick, mine.list).size !== mine.pick.size) {
+      mine.s3loading = false;
+      deps.toast(t(refusalView({ code: "unknown-module" }).key));
+      go(2);
+      return;
+    }
     mine.cards = pickedInOrder(mine.list, mine.pick).map(cardFrom);
     /* «Без модуля» + тримачі з помилкою, яких `replace` не вимикає (сервер їх не рахує тримачами) — майстер вимкне їх сам. */
     mine.offs = [...offRows(mine.list, mine.pick), ...errOffRows(mine.list, mine.pick)].map((o) => ({ ...o, result: null }));
@@ -2120,6 +2136,12 @@ export function createWizard(deps) {
         : writePayload(mine.spaceId, op.id, formPatch(f.fields, f.init, f.cur), op.op === "enable");
       try {
         const r = await deps.post(path, body);
+        /* Ролі, які змінив САМ цей прохід (модуль і кого вимкнула заміна): повтор звіряє свіжість по них від нового стану. */
+        if (op.op !== "settings") {
+          for (const id of [op.id, ...(op.op === "enable" && Array.isArray(r?.replaced) ? r.replaced : [])]) {
+            for (const role of fresh.find((e) => e?.id === id)?.roles ?? []) pass.touched.add(role);
+          }
+        }
         if (op.op === "disable") result = { kind: "ok", key: "wzOffDone", detail: "" };
         else {
           if (op.op === "enable") {
@@ -2183,7 +2205,7 @@ export function createWizard(deps) {
     if (wz !== mine) return;
     const ops = writePlan({ list: fresh, pick: mine.pick, forms, atPick: mine.atPick, prevList: mine.list2 });
     const results = [];
-    const pass = { written: new Set(), replaced: new Set() };
+    const pass = { written: new Set(), replaced: new Set(), touched: new Set() };
     let changed = false;
     for (const op of ops) {
       if (wz !== mine) break;
@@ -2193,6 +2215,17 @@ export function createWizard(deps) {
       if (res.kind === "ok" || res.kind === "failed") changed = true;
     }
     mine.busy = false;
+    /* Знімок кроку 2 для ролей, які змінив сам цей прохід, — на стан після проходу: інакше повтор вважав би власні записи
+       «зміною агента» й застряг на свіжості. Ролі, яких прохід не торкався, лишаються зі знімком кроку 2. */
+    if (changed && pass.touched.size) {
+      try {
+        const l = (await deps.api(`/api/modules?space=${encodeURIComponent(mine.spaceId)}`))?.modules;
+        if (wz === mine && Array.isArray(l)) {
+          const now = holdersByRole(l);
+          for (const role of pass.touched) mine.atPick.set(role, now.get(role) ?? []);
+        }
+      } catch (e) { /* лишаємо знімок кроку 2 */ }
+    }
     if (changed) { try { await deps.afterModulesChange(); } catch (e) { /* екран оновиться при наступному вході */ } }
     if (wz !== mine) return;
     if (allOk(results)) { go(4); return; }
