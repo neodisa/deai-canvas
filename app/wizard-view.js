@@ -16,7 +16,9 @@
  * кнопка `[data-a="ok"]` (type=submit); «Скасувати» `[data-a="cancel"]`; інші кнопки `[data-wz="back|close|skip|copy|retry"]`;
  * радіо кроку 2 `input[data-wz-pick][data-role]` (value — id модуля, порожнє — «Без модуля»), id `wz-o-<секція>-<варіант|none>`;
  * картка кроку 3 `.wz-card[data-id]` з полями 3a (`data-cn-field`, id `wz-f-<картка>-<поле>`); рядок «Без модуля»
- * `.wz-off[data-id]`; крок 4 — `#tf-title`, `#tf-id`, `input[name="wz-src"]`, `#wz-from`; слот помилки `#wz-err` (кроки 1 і 4:
+ * `.wz-off[data-id]` (обидва — `tabindex="-1"`: контролер ставить фокус на контейнер збійної картки/рядка без контролів);
+ * «Спробувати ще» `[data-wz="retry"]` — на кроках 2 і 3, коли список модулів не прочитався (на кроці 3 «Зберегти й далі» тоді
+ * вимкнена); крок 4 — `#tf-title`, `#tf-id`, `input[name="wz-src"]`, `#wz-from`; слот помилки `#wz-err` (кроки 1 і 4:
  * лише їхні форми правляться на місці; кроки 2–3 перемальовуються, їхні відмови живуть у картках і рядках).
  * Ідентифікатори кроку 1 (`#sp-name`, `#sp-path`, `#sp-found`, `#sp-registered`, `.cv-colors`, `input[name=color]`) — ті,
  * що чекає `wireSpaceDialog`; кроку 4 (`#tf-title`, `#tf-id`) — ті, що чекає `wireTaskForm`.
@@ -28,7 +30,7 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { DETAIL_MAX, builtinText, cardView, roleHolders, roleIcon, roleKeys, whyOf } from "./connections-model.js";
-import { badgeHTML, fieldHTML, modName, resultHTML, roleTitle, rolesLine } from "./connections-view.js";
+import { badgeHTML, fieldHTML, modName, resultHTML, roleTitle, rolesLine, whyHTML } from "./connections-view.js";
 import { SPACE_COLORS, spaceColorToken } from "./spaces-model.js";
 import { pickedFor, wizardSections } from "./wizard-model.js";
 
@@ -141,8 +143,9 @@ function step2HTML(v) {
   } else {
     body = wizardSections(s.list).map((sec, i) => {
       const k = roleKeys(sec.role)?.lead;
-      return `<fieldset class="wz-sec"><legend class="cn-sec-h">${esc(roleTitle(sec.role))}</legend>`
-        + `${k ? `<p class="cn-sec-lead">${esc(t(k))}</p>` : ""}<div class="wz-opts">`
+      /* Лід секції читач екрана чує разом із групою: `aria-describedby` лише коли лід є (висяче посилання — вада). */
+      return `<fieldset class="wz-sec"${k ? ` aria-describedby="wz-sl-${i}"` : ""}><legend class="cn-sec-h">${esc(roleTitle(sec.role))}</legend>`
+        + `${k ? `<p class="cn-sec-lead" id="wz-sl-${i}">${esc(t(k))}</p>` : ""}<div class="wz-opts">`
         + sec.modules.map((e, j) => optionHTML(e, i, j, sec.role, s, dis)).join("")
         + noneHTML(i, sec.role, s, dis) + `</div></fieldset>`;
     }).join("");
@@ -162,11 +165,13 @@ function cardHTML(c, i, busy) {
   const roles = rolesLine(e);
   const d = { errors: c.errors ?? {}, form: { values: c.values ?? {}, erase: c.erase ?? [] }, busy };
   const fields = (c.fields ?? []).map((f, j) => fieldHTML(e, f, j, d, `wz-f-${i}`)).join("");
-  return `<section class="cn-card wz-card" data-id="${esc(e.id)}" aria-labelledby="wz-c-${i}">
+  /* `tabindex="-1"` — контролер ставить фокус на контейнер, коли в збійної картки нема контролів. */
+  return `<section class="cn-card wz-card" data-id="${esc(e.id)}" tabindex="-1" aria-labelledby="wz-c-${i}">
     <div class="cn-card-top"><span class="cn-ic">${ico(roleIcon(e.roles?.[0]))}</span>
       <div class="cn-card-name"><b id="wz-c-${i}">${esc(modName(e))}</b>${roles ? `<span class="cn-card-role">${esc(roles)}</span>` : ""}</div>
       ${badge}</div>
     ${desc ? `<p class="cn-card-desc">${esc(t(desc))}</p>` : ""}
+    ${cardView(e).why ? whyHTML(e) : ""}
     ${fields}<div class="wz-res" data-wz-res="${esc(e.id)}">${resultHTML(c.result)}</div></section>`;
 }
 
@@ -174,7 +179,7 @@ function offHTML(o) {
   const k = roleKeys(o.role)?.none;
   const text = k ? t("wzOffRow", roleTitle(o.role), modName(o.holder), t(k))
     : t("wzOffRowPlain", roleTitle(o.role), modName(o.holder));
-  return `<li class="wz-off" data-id="${esc(o.holder.id)}">${ico("x", 13)}<span>${esc(text)}</span>${resultHTML(o.result)}</li>`;
+  return `<li class="wz-off" data-id="${esc(o.holder.id)}" tabindex="-1">${ico("x", 13)}<span>${esc(text)}</span>${resultHTML(o.result)}</li>`;
 }
 
 function step3HTML(v) {
@@ -182,8 +187,11 @@ function step3HTML(v) {
   const busy = !!v.busy;
   let body;
   if (s.loading) body = `<p class="cn-loading" role="status">${esc(t("cnLoading"))}</p>`;
-  else if (s.failed) body = `<div class="cn-err" role="alert">${ico("warn")}<span>${esc(t("cnErrLoad"))}${detail(s.failed.message)}</span></div>`;
-  else {
+  else if (s.failed) {
+    /* Як на кроці 2: не глухий кут — «Спробувати ще», а «Зберегти й далі» вимкнена (список не прочитався, писати нема що). */
+    body = `<div class="cn-err" role="alert">${ico("warn")}<span>${esc(t("cnErrLoad"))}${detail(s.failed.message)}</span>`
+      + `${btn('data-wz="retry"', t("retry"), { icon: "refresh" })}</div>`;
+  } else {
     const offs = s.offs.length ? `<ul class="wz-offs">${s.offs.map(offHTML).join("")}</ul>` : "";
     const cards = s.cards.length
       ? `<fieldset class="wz-cards"${busy ? " disabled" : ""}>${s.cards.map((c, i) => cardHTML(c, i, busy)).join("")}</fieldset>`
@@ -192,7 +200,7 @@ function step3HTML(v) {
   }
   return `${head("wzS3Title", t("wzS3Lead"))}
     <form class="wz-form" data-wz-step="3" novalidate>${body}
-      ${foot(`${backBtn(busy)}${closeBtn(busy)}`, ok(busy ? t("wzSaving") : t("wzSaveNext"), busy || s.loading))}</form>`;
+      ${foot(`${backBtn(busy)}${closeBtn(busy)}`, ok(busy ? t("wzSaving") : t("wzSaveNext"), busy || s.loading || !!s.failed))}</form>`;
 }
 
 /* ── крок 4 · Перша задача ───────────────────────────────────────────────────────────────────────── */
@@ -229,6 +237,7 @@ function step4HTML(v) {
 
 /** Уся сторінка майстра для `#tasks-home`. */
 export function wizardHTML(v) {
-  const body = [step1HTML, step2HTML, step3HTML, step4HTML][v.step - 1](v);
-  return `<div class="th-in wz" data-step="${v.step}">${stepsHTML(v.step)}${body}</div>`;
+  const step = Number(v.step);          // у розмітку — лише число (`data-step` не бере рядок із даних як є)
+  const body = [step1HTML, step2HTML, step3HTML, step4HTML][step - 1](v);
+  return `<div class="th-in wz" data-step="${step}">${stepsHTML(step)}${body}</div>`;
 }

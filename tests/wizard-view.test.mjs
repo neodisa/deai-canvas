@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getLang, setLang } from "../app/i18n.js";
+import { DICT, getLang, setLang } from "../app/i18n.js";
 import { wizardHTML } from "../app/wizard-view.js";
 
 const CYR = /[а-яіїєґА-ЯІЇЄҐ]/;
@@ -93,7 +93,7 @@ test("крок 1 зайнятий після створення (правка): 
 
 test("крок 2: секції-fieldset з legend, радіо на модуль + «Без модуля», вибране з pick, «типово», «замість»", () => {
   const h = wizardHTML(V({ step: 2 }));
-  assert.match(h, /<fieldset class="wz-sec"><legend class="cn-sec-h">Публікація<\/legend>/);
+  assert.match(h, /<fieldset class="wz-sec" aria-describedby="wz-sl-0"><legend class="cn-sec-h">Публікація<\/legend>/);
   assert.match(h, /<input type="radio" id="wz-o-0-0" name="wz-r-0" value="static-publish" data-wz-pick data-role="publish" checked>/);
   assert.match(h, /<input type="radio" id="wz-o-0-1" name="wz-r-0" value="vercel-publish" data-wz-pick data-role="publish">/);
   assert.match(h, /<input type="radio" id="wz-o-0-none" name="wz-r-0" value="" data-wz-pick data-role="publish">/);
@@ -107,7 +107,7 @@ test("крок 2: секції-fieldset з legend, радіо на модуль 
 test("крок 2: тексти — лід ролі, опис вбудованого модуля, наслідок «Без модуля»; чужий модуль без опису", () => {
   const list = [...LIST, M("custom", ["publish"], { name: "Мій <модуль>" })];
   const h = wizardHTML(V({ step: 2, s2: { list, failed: null, capsError: false, pick: new Set(["static-publish"]), path: "/p" } }));
-  assert.match(h, /<p class="cn-sec-lead">Куди канвас викладає превʼю задачі\.<\/p>/);
+  assert.match(h, /<p class="cn-sec-lead" id="wz-sl-0">Куди канвас викладає превʼю задачі\.<\/p>/);
   assert.match(h, /<span class="wz-opt-desc">Збирає превʼю в теку на цьому компʼютері\./);
   assert.match(h, /<span class="wz-opt-desc">кнопки публікації в смузі нема<\/span>/);
   assert.match(h, /<b>Мій &lt;модуль&gt;<\/b>/, "чужий модуль — `name` маніфесту, екранований");
@@ -189,7 +189,7 @@ test("крок 3: картка з полями (id з префіксом кар�
   assert.match(h, /<section class="cn-card wz-card" data-id="vercel-publish"/);
   assert.match(h, /id="wz-f-0-0"/);
   assert.match(h, /Буде підключено/);
-  assert.match(h, /<li class="wz-off" data-id="css-tokens">/);
+  assert.match(h, /<li class="wz-off" data-id="css-tokens" tabindex="-1">/);
   assert.match(h, /вимкнеться — інспектор звіряє без токенів простору\./);
   assert.match(h, /type="password" id="wz-f-0-0"(?![^>]*value=)/);
   assert.match(h, /data-a="ok">Зберегти й далі/);
@@ -230,7 +230,7 @@ test("крок 3: рядки «Без модуля» — результат ви
   const row = (result, role = "tokens") => ({ role, holder, result });
   const page = (offs) => wizardHTML(V({ step: 3, s3: { cards: [], offs, failed: null, loading: false } }));
   const ok = page([row({ kind: "ok", key: "wzOffDone", detail: "" })]);
-  assert.match(ok, /<li class="wz-off" data-id="css-tokens">[\s\S]*cn-res cn-res--ok[\s\S]*Вимкнено\./);
+  assert.match(ok, /<li class="wz-off" data-id="css-tokens" tabindex="-1">[\s\S]*cn-res cn-res--ok[\s\S]*Вимкнено\./);
   assert.doesNotMatch(ok, /Нічого не підключаємо/, "рядок вимкнення є — це не «нічого»");
   const blocked = page([row({ kind: "refused", key: "wzOffBlocked", detail: "" })]);
   assert.match(blocked, /cn-res cn-res--err[\s\S]*Не вимкнено: заміну не записано — спершу виправте картку модуля, що його замінює\./);
@@ -246,6 +246,13 @@ test("крок 3: не читається — помилка (текст сер�
   assert.match(bad, /Не вдалося прочитати модулі простору\.[\s\S]*&lt;u&gt;m&lt;\/u&gt;/);
   assert.doesNotMatch(bad, /<u>/);
   assert.doesNotMatch(bad, /Нічого не підключаємо/);
+  /* Не глухий кут: «Спробувати ще» є, а «Зберегти й далі» вимкнена — писати нема що (список не прочитався). */
+  assert.match(bad, /data-wz="retry"/);
+  assert.match(bad, /data-a="ok" disabled>Зберегти й далі/);
+  assert.match(bad, /data-wz="back">/, "«Назад» і «Закрити майстер» доступні");
+  assert.match(bad, /data-wz="close">/);
+  assert.doesNotMatch(wizardHTML(V({ step: 3 })), /data-wz="retry"/, "без помилки «Спробувати ще» нема");
+  assert.doesNotMatch(wizardHTML(V({ step: 3 })), /data-a="ok" disabled/);
   const load = wizardHTML(V({ step: 3, s3: { cards: [], offs: [], failed: null, loading: true } }));
   assert.match(load, /Завантажую модулі…/);
   assert.match(load, /data-a="ok" disabled>Зберегти й далі/);
@@ -331,31 +338,171 @@ test("екранується й крок 3 (назви модулів і рол�
   assert.doesNotMatch(h, /<img/);
 });
 
-test("англійська: жодної кирилиці в розмітці кожного кроку з латинськими даними", () => {
+test("екранування: імена тримачів у «замість «X»» (крок 2) і шлях у режимі правки (крок 1)", () => {
+  const evil = "<img src=x onerror=alert(1)>";
+  const list = [M("holder", ["publish"], { name: evil, enabled: true }), M("vercel-publish", ["publish"])];
+  const h = wizardHTML(V({ step: 2, s2: { list, failed: null, capsError: false, pick: new Set(["holder"]), path: "/p" } }));
+  assert.match(h, /замість «&lt;img src=x onerror=alert\(1\)&gt;»/, "імʼя тримача — екрановане в підписі «замість»");
+  assert.doesNotMatch(h, /<img/);
+  const e = wizardHTML(V({ created: true, s1: { name: evil, color: "space-1", path: evil, folderFirst: false } }));
+  assert.match(e, /id="sp-path" name="path" type="text" value="&lt;img src=x onerror=alert\(1\)&gt;" readonly/);
+  assert.doesNotMatch(e, /<img/);
+});
+
+/* ── усі стани сторінки: один перелік для перевірок зв'язків і мов ─────────────────────────────────── */
+
+const LATIN = { s1: { name: "X", color: "space-1", path: "~/x", folderFirst: false },
+  s4: { title: "", id: "", source: "empty", from: "", spaceName: "X", tasks: 0 } };
+const S2 = (o) => ({ list: LIST, failed: null, capsError: false, pick: new Set(["static-publish"]), path: "/p", ...o });
+const S3 = (o) => ({ cards: [], offs: [], failed: null, loading: false, ...o });
+
+/** Усі стани розмітки. `mk` — конструктор вʼю з даними потрібної мови (`V` — кирилиця в типових даних, `L` — латиниця). */
+function allStates(mk) {
+  const holder = M("css-tokens", ["tokens"], { enabled: true });
+  const rich = [
+    { entry: M("vercel-publish", ["publish"], { enabled: true, status: "error", error: "no-token", last_check: { ok: false, error: "no-token", detail: "d" } }),
+      fields: [{ key: "token", type: "secret", label: "T", required: false, set: true }, { key: "team", type: "text", label: "t", required: true },
+        { key: "dir", type: "path", label: "p" }, { key: "on", type: "bool", label: "b" },
+        { key: "mode", type: "select", label: "m", options: [{ value: "a", label: "A" }], blank: true }],
+      values: {}, erase: ["token"], errors: { team: "cnFieldRequired", token: "cnFieldRequired" }, result: { kind: "failed", key: "cnErrNoToken", detail: "x" } },
+    { entry: M("css-tokens", ["tokens"]), fields: [{ key: "file", type: "path", label: "f", required: true, set: false }, { key: "key", type: "secret", label: "K", required: true, set: false }],
+      values: { file: "/a.css" }, erase: [], errors: {}, result: null },
+    { entry: M("static-publish", ["publish"], { enabled: true, status: "ok" }), fields: [], values: {}, erase: [], errors: {}, result: { kind: "ok", key: "cnCheckOk", detail: "" } },
+  ];
+  const lists = [
+    LIST,
+    [M("both", ["publish", "tokens"]), M("x", ["weird"]), M("e", ["publish"], { enabled: true, status: "error", error: "no-token" })],
+  ];
+  return [
+    mk({ step: 1 }), mk({ step: 1, created: true }), mk({ step: 1, busy: "save" }), mk({ step: 1, created: true, busy: "save" }),
+    mk({ step: 2 }), mk({ step: 2, busy: "save" }),
+    ...lists.map((list) => mk({ step: 2, s2: S2({ list, pick: new Set(["both"]) }) })),
+    mk({ step: 2, s2: S2({ list: null }) }),
+    mk({ step: 2, s2: S2({ list: null, failed: { code: "x", message: "m" } }) }),
+    mk({ step: 2, s2: S2({ list: null, capsError: true }) }),
+    mk({ step: 3 }), mk({ step: 3, busy: "save" }),
+    mk({ step: 3, s3: S3({ cards: rich, offs: [{ role: "tokens", holder, result: { kind: "refused", key: "wzOffBlocked", detail: "" } },
+      { role: "comments", holder, result: { kind: "ok", key: "wzOffDone", detail: "" } }, { role: "tokens", holder, result: null }] }) }),
+    mk({ step: 3, busy: "save", s3: S3({ cards: rich }) }),
+    mk({ step: 3, s3: S3({ loading: true }) }),
+    mk({ step: 3, s3: S3({ failed: { code: "x", message: "m" } }) }),
+    mk({ step: 4 }), mk({ step: 4, busy: "save" }),
+    mk({ step: 4, s4: { title: "T", id: "t", source: "folder", from: "~/m", spaceName: "X", tasks: 2 } }),
+  ];
+}
+const L = (o) => V({ ...LATIN, ...o });
+
+/** Кожне посилання (`aria-describedby`, `aria-labelledby`, `label[for]`) веде рівно на один id; id не дублюються. */
+function assertRefs(h, label) {
+  const count = new Map();
+  for (const m of h.matchAll(/\sid="([^"]+)"/g)) count.set(m[1], (count.get(m[1]) ?? 0) + 1);
+  for (const [id, n] of count) assert.equal(n, 1, `${label}: id «${id}» повторюється ${n} рази`);
+  const refs = [];
+  for (const m of h.matchAll(/\saria-(?:describedby|labelledby)="([^"]*)"/g)) refs.push(...m[1].split(/\s+/).filter(Boolean));
+  for (const m of h.matchAll(/<label\b[^>]*\sfor="([^"]+)"/g)) refs.push(m[1]);
+  for (const r of refs) assert.equal(count.get(r), 1, `${label}: посилання на «${r}» не веде на один id`);
+  return refs.length;
+}
+
+test("зв'язки доступності в усіх станах (UK і EN): кожне посилання веде рівно на один id, id не дублюються", () => {
+  const before = getLang();
+  try {
+    for (const lang of ["uk", "en"]) {
+      setLang(lang);
+      const states = allStates(lang === "uk" ? V : L);
+      assert.ok(states.length >= 20);
+      let refs = 0;
+      states.forEach((v, i) => { refs += assertRefs(wizardHTML(v), `${lang} стан ${i} (крок ${v.step})`); });
+      assert.ok(refs > 100, "перевірка не порожня");
+    }
+  } finally { setLang(before); }
+});
+
+test("перевірка зв'язків справді ловить: висяче посилання й дубль id", () => {
+  assert.throws(() => assertRefs('<input id="a" aria-describedby="a b">', "x"), /«b»/);
+  assert.throws(() => assertRefs('<i id="a"></i><b id="a"></b>', "x"), /повторюється/);
+  assert.throws(() => assertRefs('<label for="q">x</label>', "x"), /«q»/);
+  assert.equal(assertRefs('<label for="q">x</label><input id="q" aria-labelledby="q">', "x"), 2);
+});
+
+test("англійська: жодної кирилиці в розмітці кожного кроку з латинськими даними — у всіх станах", () => {
   const before = getLang();
   setLang("en");
   try {
-    for (const step of [1, 2, 3, 4]) {
-      const h = wizardHTML(V({ step, s1: { name: "X", color: "space-1", path: "~/x", folderFirst: false }, s4: { title: "", id: "", source: "empty", from: "", spaceName: "X", tasks: 0 } }));
-      assert.doesNotMatch(h, CYR, `крок ${step}`);
-    }
-    /* Станів із додатковими текстами — теж: помилки, рядки вимкнення, зайнятість, редагування, задачі в просторі. */
-    const holder = M("css-tokens", ["tokens"], { enabled: true });
-    const card = { entry: M("vercel-publish", ["publish"]), fields: [{ key: "token", type: "secret", label: "T", required: true, set: false }],
-      values: {}, erase: [], errors: { token: "cnFieldRequired" }, result: { kind: "failed", key: "cnErrNoToken", detail: "" } };
-    /* Дані — латиницею: перевіряємо тексти кроку, а не «Клієнт» із типових даних `V`. */
-    const L = (o) => V({ s1: { name: "X", color: "space-1", path: "~/x", folderFirst: false },
-      s4: { title: "", id: "", source: "empty", from: "", spaceName: "X", tasks: 0 }, ...o });
-    const pages = [
-      L({ created: true }), L({ busy: "save" }), L({ created: true, busy: "save" }),
-      L({ step: 2, s2: { list: null, failed: { code: "x", message: "m" }, capsError: false, pick: new Set(), path: "" } }),
-      L({ step: 2, s2: { list: null, failed: null, capsError: true, pick: new Set(), path: "/p" } }),
-      L({ step: 2, s2: { list: null, failed: null, capsError: false, pick: new Set(), path: "" } }),
-      L({ step: 3, s3: { cards: [card], offs: [{ role: "tokens", holder, result: { kind: "refused", key: "wzOffBlocked", detail: "" } },
-        { role: "comments", holder, result: { kind: "ok", key: "wzOffDone", detail: "" } }], failed: null, loading: false } }),
-      L({ step: 3, busy: "save" }), L({ step: 3, s3: { cards: [], offs: [], failed: { code: "x", message: "m" }, loading: false } }),
-      L({ step: 4, s4: { title: "", id: "", source: "folder", from: "~/m", spaceName: "X", tasks: 2 } }), L({ step: 4, busy: "save" }),
-    ];
-    pages.forEach((p, i) => assert.doesNotMatch(wizardHTML(p), CYR, `стан ${i}`));
+    allStates(L).forEach((v, i) => assert.doesNotMatch(wizardHTML(v), CYR, `стан ${i} (крок ${v.step})`));
   } finally { setLang(before); }
+});
+
+/* ── точкові пінни доступності ─────────────────────────────────────────────────────────────────────── */
+
+test("кружки кольору: у кожному — галочка (не лише колір показує вибір); картки й секції названі через aria-labelledby", () => {
+  const h = wizardHTML(V());
+  const sw = [...h.matchAll(/<button type="button" class="cv-color" role="radio"[\s\S]*?<\/button>/g)].map((m) => m[0]);
+  assert.equal(sw.length, 6);
+  for (const b of sw) assert.match(b, /<use href="#i-check"\/>/);
+  assert.match(h, /<div class="cv-colors wz-colors" role="radiogroup" aria-labelledby="sp-color-l">/);
+  assert.match(h, /<span class="cn-lbl" id="sp-color-l">Колір<\/span>/);
+  const card = { entry: M("css-tokens", ["tokens"]), fields: [], values: {}, erase: [], errors: {}, result: null };
+  const c = wizardHTML(V({ step: 3, s3: S3({ cards: [card, { ...card, entry: M("vercel-publish", ["publish"]) }] }) }));
+  assert.match(c, /<section class="cn-card wz-card" data-id="css-tokens"[^>]* aria-labelledby="wz-c-0"/);
+  assert.match(c, /<b id="wz-c-0">Токени з CSS<\/b>/);
+  assert.match(c, /<section class="cn-card wz-card" data-id="vercel-publish"[^>]* aria-labelledby="wz-c-1"/);
+  assert.match(c, /<b id="wz-c-1">Vercel<\/b>/);
+});
+
+test("поля, що описують себе підказками: #sp-path (нове й правка) і #wz-from, #sp-name, #tf-title, #tf-id", () => {
+  const n = wizardHTML(V());
+  assert.match(n, /id="sp-path"[^>]*aria-describedby="sp-found sp-registered wz-s1-hint wz-err"/);
+  assert.match(n, /id="sp-name"[^>]*aria-describedby="wz-err"/);
+  const e = wizardHTML(V({ created: true }));
+  assert.match(e, /id="sp-path"[^>]*readonly aria-describedby="wz-s1-hint"/);
+  const t4 = wizardHTML(V({ step: 4 }));
+  assert.match(t4, /id="wz-from"[^>]*aria-describedby="wz-from-hint wz-err"/);
+  assert.match(t4, /id="tf-title"[^>]*aria-describedby="wz-err"/);
+  assert.match(t4, /id="tf-id"[^>]*aria-describedby="wz-err"/);
+  assert.match(t4, /<p class="cn-hint" id="wz-from-hint">/);
+});
+
+test("крок 2: лід секції привʼязаний до її fieldset через aria-describedby (id унікальні); без ліду — без атрибута", () => {
+  const h = wizardHTML(V({ step: 2 }));
+  assert.match(h, /<fieldset class="wz-sec" aria-describedby="wz-sl-0"><legend class="cn-sec-h">Публікація<\/legend><p class="cn-sec-lead" id="wz-sl-0">/);
+  assert.match(h, /<fieldset class="wz-sec" aria-describedby="wz-sl-1"><legend class="cn-sec-h">Токени дизайн-системи<\/legend><p class="cn-sec-lead" id="wz-sl-1">/);
+  /* Чужа роль без своїх текстів: ліду нема — і describedby нема (висяче посилання було б вадою). */
+  const odd = wizardHTML(V({ step: 2, s2: S2({ list: [M("x", ["weird"])], pick: new Set() }) }));
+  assert.match(odd, /<fieldset class="wz-sec"><legend class="cn-sec-h">weird<\/legend>/);
+  assert.doesNotMatch(odd, /wz-sl-/);
+});
+
+test("контейнери картки й рядка «Без модуля» фокусовні програмно (tabindex=-1): контролер веде фокус на збій без контролів", () => {
+  const e = M("css-tokens", ["tokens"]);
+  const h = wizardHTML(V({ step: 3, s3: S3({ cards: [{ entry: e, fields: [], values: {}, erase: [], errors: {}, result: null }],
+    offs: [{ role: "tokens", holder: M("x", ["tokens"], { enabled: true }), result: null }] }) }));
+  assert.match(h, /<section class="cn-card wz-card" data-id="css-tokens" tabindex="-1" aria-labelledby="wz-c-0">/);
+  assert.match(h, /<li class="wz-off" data-id="x" tabindex="-1">/);
+});
+
+test("крок 3: ввімкнений модуль із помилкою показує причину, як картка 3a (cn-why); решта станів — без неї", () => {
+  const card = (extra) => ({ entry: M("vercel-publish", ["publish"], extra), fields: [], values: {}, erase: [], errors: {}, result: null });
+  const page = (extra) => wizardHTML(V({ step: 3, s3: S3({ cards: [card(extra)] }) }));
+  const bad = page({ enabled: true, status: "error", error: "no-token", last_check: { ok: false, error: "no-token", detail: "<i>d</i>" } });
+  assert.match(bad, /<div class="cn-why"><svg[^>]*><use href="#i-warn"\/><\/svg><span>Токен Vercel не задано\.<span class="cn-why-detail">&lt;i&gt;d&lt;\/i&gt;<\/span><\/span><\/div>/);
+  assert.match(bad, /cn-badge cn-badge--error/);
+  assert.doesNotMatch(bad, /<i>/);
+  assert.doesNotMatch(page({ enabled: true, status: "ok" }), /cn-why/);
+  assert.doesNotMatch(page({ enabled: true, status: "unchecked" }), /cn-why/);
+  assert.doesNotMatch(page({ enabled: false, status: "error", error: "no-token" }), /cn-why/, "ще не ввімкнений — «Буде підключено», без причини");
+});
+
+test("data-step — число: рядок із пробілами нормалізується; крок вибирається за числом", () => {
+  const h = wizardHTML(V({ step: " 3 " }));
+  assert.match(h, /<div class="th-in wz" data-step="3">/);
+  assert.match(h, /data-wz-step="3"/);
+  assert.match(h, /wz-step--cur" aria-current="step"><span class="wz-step-bar" aria-hidden="true"><\/span><span class="wz-step-name">Налаштування/);
+});
+
+test("словник: тексти за спекою — «Простір більше недоступний», запитання про відкидання налаштувань", () => {
+  assert.equal(DICT.uk.wzSpaceGone, "Простір більше недоступний.");
+  assert.equal(DICT.en.wzSpaceGone, "The space is no longer available.");
+  assert.equal(DICT.uk.wzDiscardAsk, "Відкинути незбережені налаштування?");
+  assert.equal(DICT.en.wzDiscardAsk, "Discard unsaved settings?");
 });

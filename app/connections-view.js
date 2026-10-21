@@ -16,8 +16,8 @@
  * Гачки для `app.js`: `data-cn="<дія>" data-id="<модуль>"` на картках і в помилці сторінки, `data-cn-dr="<дія>"` у
  * панелі, `data-cn-field="<ключ>" data-type="<тип>"` на полях.
  *
- * Спільне з майстром 3b (`wizard-view.js`): `fieldHTML` (з префіксом id), `resultHTML`, `badgeHTML`, `rolesLine` —
- * майстер малює ті самі поля, бейдж і результат запису, що й бічна панель, щоб вони не розійшлись.
+ * Спільне з майстром 3b (`wizard-view.js`): `fieldHTML` (з префіксом id), `resultHTML`, `badgeHTML`, `rolesLine`, `whyHTML` —
+ * майстер малює ті самі поля, бейдж, причину збою й результат запису, що й бічна панель, щоб вони не розійшлись.
  *
  * ⛔ Усе з даних (назви, підписи, опції, тека, `error`, `detail`, id) — лише через `esc()`. ⛔ Значення секрету НІКОЛИ
  * не потрапляє в розмітку: поле пароля завжди порожнє (навіть коли `d.form.secrets` несе щойно введене — форма
@@ -77,7 +77,7 @@ const ACTIONS = {
 
 const detailHTML = (d) => (d ? `<span class="cn-why-detail">${esc(d)}</span>` : "");
 
-function whyHTML(e) {
+export function whyHTML(e) {
   const w = whyOf(e);
   if (!w) return "";
   return `<div class="cn-why">${ico("warn", 13)}<span>${esc(t(w.key))}${detailHTML(w.detail)}</span></div>`;
