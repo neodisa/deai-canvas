@@ -183,12 +183,13 @@ test("свіжість: роль, що набула чи втратила три
   assert.deepEqual(staleRoles(["publish"], undefined, undefined), []);
 });
 
-test("план: enable зі stale НЕ звільняє ролі — disable тримача кількох ролей лишається", () => {
+test("план: enable зі stale НЕ звільняє ролі — disable тримача кількох ролей лишається в плані (застарілий за ролями тримача)", () => {
   const list = [M("multi", ["publish", "comments"], { enabled: true }), M("memo", ["publish"])];
-  /* на кроці 2 публікацію не тримав ніхто (atPick порожній), тепер тримає multi → enable memo застарілий */
-  const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: new Map() });
-  assert.deepEqual(ops.map((o) => [o.op, o.id, o.stale]),
-    [["enable", "memo", ["publish"]], ["disable", "multi", ["comments"]]]);
+  /* на кроці 2 публікацію не тримав ніхто (atPick), тепер тримає multi → enable memo застарілий; comments без змін */
+  const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: new Map([["comments", ["multi"]]]) });
+  assert.deepEqual(ops.map((o) => [o.op, o.id, o.roles, o.stale]),
+    [["enable", "memo", ["publish"], ["publish"]], ["disable", "multi", ["comments"], ["publish"]]],
+    "disable лишається в плані (стоїть на ролі comments), але застарілий за publish — контролер його не шле");
 });
 
 test("план: вибраний увімкнений без форми — нічого й без винятку", () => {
@@ -480,7 +481,8 @@ test("after: застарілий enable в after не потрапляє (йо�
   const atPick = new Map([["publish", []], ["comments", ["mh"]]]);
   const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick });
   assert.deepEqual(ops.map((o) => [o.op, o.id, o.stale, o.after]),
-    [["enable", "memo", ["publish"], undefined], ["disable", "mh", [], []]]);
+    [["enable", "memo", ["publish"], undefined], ["disable", "mh", ["publish"], []]],
+    "after без застарілого enable; а stale disable — за publish (роль тримача, що застаріла): не шлемо");
 });
 
 test("after: у Без-модуля-гілці з ok-тримачем звільненої ролі disable нема (replace сам) — отже after не потрібен", () => {
@@ -591,4 +593,48 @@ test("інваріант, вичерпно: усі списки з ≤3 моду
     }
   }
   assert.ok(checked > 10000, `перебір не порожній (${checked})`);
+});
+
+/* ── stale у disable — за ВСІМА ролями тримача (не лише за роллю рядка) ───────────────────────────────────── */
+
+test("stale disable: тримач кількох ролей, застаріла ВЛАСНЕ інша роль — disable застарілий (контролер не шле)", () => {
+  /* errored mh тримає publish і comments; на publish вибрано memo (enable застарілий), у comments «Без модуля» */
+  const mh = E("mh", ["publish", "comments"], "error");
+  const list = [mh, M("memo", ["publish"])];
+  const atPick = new Map([["publish", []], ["comments", ["mh"]]]);
+  const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick });
+  assert.deepEqual(ops, [
+    { op: "enable", id: "memo", roles: ["publish"], stale: ["publish"] },
+    { op: "disable", id: "mh", roles: ["comments"], stale: ["publish"], after: [] },
+  ]);
+});
+
+test("stale disable: рядок на одній ролі, змінилась друга роль того ж тримача — stale містить саме її", () => {
+  const h = E("h", ["publish", "comments"], "ok");
+  const list = [h];
+  const atPick = new Map([["publish", ["h"]], ["comments", []]]);
+  const ops = writePlan({ list, pick: new Set(), forms: new Map(), atPick });
+  assert.deepEqual(ops, [{ op: "disable", id: "h", roles: ["publish"], stale: ["comments"], after: [] }],
+    "рядок — publish (перша роль), а застаріла comments");
+});
+
+test("stale disable: «вибраний уже ввімкнений» (Minor 1) — теж за всіма ролями тримача", () => {
+  const p = E("p", ["publish"], "ok");
+  const h = E("h", ["publish", "comments"], "ok");
+  const list = [p, h];
+  const atPick = new Map([["publish", ["h", "p"]], ["comments", []]]);
+  const ops = writePlan({ list, pick: new Set(["p"]), forms: new Map(), atPick });
+  assert.deepEqual(ops, [{ op: "disable", id: "h", roles: ["publish"], stale: ["comments"], after: [] }]);
+});
+
+test("stale disable: errored-тримач звільненої ролі (pass 2) — теж за всіма ролями; незастарілий enable лишається в after", () => {
+  const mh = E("mh", ["publish", "comments"], "error");
+  const list = [mh, M("memo", ["publish"]), M("cm", ["comments"])];
+  const atPick = new Map([["publish", ["mh"]], ["comments", []]]);
+  const ops = writePlan({ list, pick: new Set(["memo", "cm"]), forms: new Map(), atPick });
+  assert.deepEqual(ops, [
+    { op: "enable", id: "memo", roles: ["publish"], stale: [] },
+    { op: "enable", id: "cm", roles: ["comments"], stale: ["comments"] },
+    { op: "disable", id: "mh", roles: ["publish"], stale: ["comments"], after: ["memo"] },
+  ]);
 });

@@ -155,7 +155,8 @@ export const staleRoles = (roles, atPick, fresh) =>
  *              заміною в іншій ролі), і errored-тримач звільненої ролі (`errOffRows`).
  * `forms` — `Map<id, {fields, init, cur}>`; `atPick` — `holdersByRole` списку, який бачила людина на кроці 2;
  * `prevList` — сам той список кроку 2: з нього `gone` бере ролі зниклого модуля (свіжий список його вже не має).
- * `stale` — ролі запису, тримачі яких змінились після кроку 2 (для `settings` не рахується: роль не міняється).
+ * `stale` — ролі запису, тримачі яких змінились після кроку 2 (для `settings` не рахується: роль не міняється; для `disable` —
+ * за УСІМА ролями тримача, а не лише за роллю його рядка: вимкнення зачіпає кожну).
  * `after` (лише `disable`) — id НЕзастарілих `enable` цього плану (у порядку плану, тобто секцій), чиї ролі перетинаються з
  * ролями тримача: він іде ЛИШЕ після запису одного з них. Інакше збій `enable` лишив би роль без постачальника (тримач
  * вимкнений, замінника нема). Звичайний «Без модуля» — `after: []`. Контролер пропускає `disable` з непорожнім `after`, поки
@@ -205,20 +206,22 @@ export function writePlan({ list, pick, forms, atPick, prevList }) {
     return enables.filter((x) => x.roles.some((r) => mine.includes(r))).map((x) => x.id);
   };
   const off = new Set();
-  const disable = (holder, role, stale) => {
+  /* `stale` — за УСІМА ролями тримача, а не лише за роллю рядка: вимкнення зачіпає кожну його роль, тож якщо в будь-якій
+     змінились тримачі після кроку 2, не чіпаємо (контролер відмовляє, людина повертається на крок 2). */
+  const disable = (holder, role) => {
     if (off.has(holder.id)) return;
     off.add(holder.id);
-    ops.push({ op: "disable", id: holder.id, roles: [role], stale, after: afterOf(holder) });
+    ops.push({ op: "disable", id: holder.id, roles: [role], stale: staleRoles(rolesOf(holder), atPick, fresh), after: afterOf(holder) });
   };
   /* Тримач, що ділить роль із зниклим, або тримач, якого вже вимкне заміна, — не наш: gone його не чіпає, replace вимкне сам. */
   for (const { role, holder } of offRows(list, pick)) {
     const mine = rolesOf(holder);
     if (mine.some((r) => goneRoles.has(r))) continue;
     if (mine.some((r) => freed.has(r)) && holder.status !== "error") continue;
-    disable(holder, role, staleRoles([role], atPick, fresh));
+    disable(holder, role);
   }
   for (const { role, holder } of erroredOfFreed(list, pick, freed)) {
-    if (!rolesOf(holder).some((r) => goneRoles.has(r))) disable(holder, role, []);
+    if (!rolesOf(holder).some((r) => goneRoles.has(r))) disable(holder, role);
   }
   return ops;
 }
