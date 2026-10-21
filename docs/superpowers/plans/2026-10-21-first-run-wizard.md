@@ -853,6 +853,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzOffRow: (role, name, then) => `${role}: «${name}» вимкнеться — ${then}.`,
   wzOffRowPlain: (role, name) => `${role}: «${name}» вимкнеться.`,
   wzOffDone: 'Вимкнено.',
+  wzOffBlocked: 'Не вимкнено: заміну не записано — спершу виправте картку модуля, що його замінює.',
   wzStale: 'Поки ви вибирали, роль змінилась — поверніться на крок «Модулі».',
   wzSaveNext: 'Зберегти й далі',
   wzS4Title: 'Перша задача',
@@ -917,6 +918,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzOffRow: (role, name, then) => `${role}: “${name}” turns off — ${then}.`,
   wzOffRowPlain: (role, name) => `${role}: “${name}” turns off.`,
   wzOffDone: 'Turned off.',
+  wzOffBlocked: 'Not turned off: the replacement was not saved — fix the replacing module’s card first.',
   wzStale: 'The role changed while you were choosing — go back to the Modules step.',
   wzSaveNext: 'Save and continue',
   wzS4Title: 'First task',
@@ -1692,6 +1694,14 @@ test("план записів знає список кроку 2 (зниклий
   assert.match(fn(W, "loadStep2"), /filter\(\(id\) => mine\.list\.some/);
 });
 
+test("залежне вимкнення — лише після записаної заміни; рядки «вимкнеться» — з `replaced` відповіді", () => {
+  const b = fn(W, "runOp");
+  assert.match(b, /op\.after\.some\(\(id\) => pass\.written\.has\(id\)\)/);
+  assert.match(b, /pass\.replaced\.has\(op\.id\)/);
+  assert.match(b, /r\?\.replaced/);
+  assert.ok(b.indexOf("pass.written.has") < b.indexOf("deps.post("), "перевірка заміни — до запиту");
+});
+
 test("обовʼязкові поля — до будь-якого запиту кроку 3", () => {
   const b = fn(W, "submit3");
   assert.ok(b.indexOf("missingRequired(") < b.indexOf("deps.api("), "missingRequired після запиту");
@@ -2083,10 +2093,20 @@ export function createWizard(deps) {
     });
   }
 
-  async function runOp(mine, op, fresh, forms) {
+  /**
+   * Один запис плану. `pass` — стан проходу: `written` (id увімкнених без HTTP-помилки; провалена перевірка — теж
+   * записано) і `replaced` (що сервер вимкнув заміною, з відповіді `module-enable`). Залежне вимкнення (`op.after`
+   * непорожній — тримач звільненої ролі, якого `replace` міг не вимкнути) іде лише після записаної заміни: інакше роль
+   * лишилась би без постачальника, а повтор уперся б у «свіжість».
+   */
+  async function runOp(mine, op, fresh, forms, pass) {
     const card = mine.cards.find((c) => c.entry.id === op.id) ?? null;
     let result;
-    if (op.op === "gone") {
+    if (op.op === "disable" && op.after.length && pass.replaced.has(op.id)) {
+      result = { kind: "ok", key: "wzOffDone", detail: "" };
+    } else if (op.op === "disable" && op.after.length && !op.after.some((id) => pass.written.has(id))) {
+      result = { kind: "refused", key: "wzOffBlocked", detail: "" };
+    } else if (op.op === "gone") {
       result = { kind: "refused", ...refusalView({ code: "unknown-module" }) };
     } else if (op.stale.length) {
       const now = holdersByRole(fresh);
@@ -2102,6 +2122,14 @@ export function createWizard(deps) {
         const r = await deps.post(path, body);
         if (op.op === "disable") result = { kind: "ok", key: "wzOffDone", detail: "" };
         else {
+          if (op.op === "enable") {
+            pass.written.add(op.id);
+            /* Кого вимкнула сама заміна — рядки «вимкнеться» отримують результат з відповіді сервера, не з плану. */
+            for (const id of Array.isArray(r?.replaced) ? r.replaced : []) {
+              pass.replaced.add(id);
+              for (const o of mine.offs) if (o.holder.id === id) o.result = { kind: "ok", key: "wzOffDone", detail: "" };
+            }
+          }
           result = { kind: r?.check?.ok === true ? "ok" : "failed", ...verdictText(r?.check) };
           /* Новий базис картки: збережене вже не «зміна», і стан секрету («задано») — з відповіді. */
           if (card && r?.module) Object.assign(card, cardFrom(r.module));
@@ -2155,10 +2183,11 @@ export function createWizard(deps) {
     if (wz !== mine) return;
     const ops = writePlan({ list: fresh, pick: mine.pick, forms, atPick: mine.atPick, prevList: mine.list2 });
     const results = [];
+    const pass = { written: new Set(), replaced: new Set() };
     let changed = false;
     for (const op of ops) {
       if (wz !== mine) break;
-      const res = await runOp(mine, op, fresh, forms);
+      const res = await runOp(mine, op, fresh, forms, pass);
       if (res.kind === "gone-space") { mine.busy = false; spaceGone(); return; }
       results.push(res);
       if (res.kind === "ok" || res.kind === "failed") changed = true;
