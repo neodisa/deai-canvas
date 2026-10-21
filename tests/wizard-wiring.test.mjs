@@ -189,3 +189,97 @@ test("M4: «Назад» і «Закрити» перевіряють після
   assert.match(fn(W, "requestExit"), /const mine = wz;\s*if \(dirty\(\) && !\(await askDiscard\(\)\)\) return;\s*if \(wz !== mine\) return;/);
   assert.match(fn(W, "back"), /const mine = wz;\s*if \(wz\.step === 3 && dirty\(\) && !\(await askDiscard\(\)\)\) return;\s*if \(wz !== mine\) return;/);
 });
+
+/* ══ app.js: третя сторінка оверлею `wiz`, входи, прибрано діалог «Новий простір» (Task 7) ═══════════════════════════ */
+
+const A = read("app.js");
+
+test("входи: дропдаун/⌘K і привітання ведуть у майстер, «Відкрити наявну теку» — з фокусом у теці", () => {
+  assert.match(A, /\n  spacenew: \(\) => openWizard\(\),/);
+  assert.match(fn(A, "wireHome"), /case 'spacenew': openWizard\(\); break;/);
+  assert.match(fn(A, "wireHome"), /case 'spaceopen': openWizard\(\{ folderFirst: true \}\); break;/);
+  assert.doesNotMatch(A, /function openSpaceNew\(/, "старий діалог «Новий простір» лишився");
+  assert.match(fn(A, "openWizard"), /wiz\.open\(\{ folderFirst \}\);\s*enterHome\(\{ page: 'wiz' \}\);\s*wiz\.focusStep\(\);/);
+});
+
+test("сторінка wiz: paintHome малює майстер раніше за привітання; enterHome не тягне список задач; вихід — reset", () => {
+  const p = fn(A, "paintHome");
+  assert.ok(p.indexOf("homePage === 'wiz'") > -1 && p.indexOf("homePage === 'wiz'") < p.indexOf("needsWelcome("),
+    "майстер мусить малюватись і тоді, коли просторів ще нема (перший запуск)");
+  const e = fn(A, "enterHome");
+  assert.match(e, /if \(next !== 'wiz'\) wiz\.reset\(\);/);
+  assert.match(e, /if \(homePage === 'wiz'\) \{\s*homeSeq \+= 1;\s*paintHome\(\);\s*return;\s*\}/);
+  assert.match(fn(A, "leaveHome"), /wiz\.reset\(\);/);
+});
+
+test("логотип на майстрі — вихід через майстер (питає про незбережене)", () => {
+  assert.match(A, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+});
+
+test("події сторінки майстра йдуть у контролер раніше за обробники «Задач»", () => {
+  const w = fn(A, "wireHome");
+  assert.match(w, /if \(homePage === 'wiz'\) \{ wiz\.click\(ev\); return; \}/);
+  assert.match(w, /addEventListener\('submit', \(ev\) => \{ if \(homePage === 'wiz'\) wiz\.submit\(ev\); \}\)/);
+  assert.match(w, /if \(homePage === 'wiz'\) \{ wiz\.input\(ev\); return; \}/);
+  /* Радіо модулів і джерела макета працюють на `change`, поля — на `input`: обидва слухачі мусять віддавати подію контролеру. */
+  const line = "if (homePage === 'wiz') { wiz.input(ev); return; }";
+  assert.equal(w.split(line).length - 1, 2, "wiz.input мусить стояти і в слухачі `input`, і в слухачі `change`");
+  const iChange = w.indexOf("addEventListener('change'");
+  assert.ok(w.indexOf(line) < iChange && w.indexOf(line, iChange) > iChange, "один — у слуханні `input`, другий — після `change`");
+});
+
+test("клавіші «Задач» діють лише на «Задачах»; повернення у вікно майстра не перечитує", () => {
+  assert.match(A, /if \(homePage !== 'tasks'\) return;\s+\/\/ «Підключення» й майстер/);
+  assert.match(fn(A, "refreshHomeOnReturn"), /if \(homePage === 'wiz'\) return;/);
+});
+
+test("залежності контролера: запис модулів — легкий шлях 3a, простір — afterSpaceChange, задача — wizOpenTask", () => {
+  assert.match(A, /afterModulesChange: \(\) => afterModulesChange\(\),/);
+  assert.match(A, /afterSpaceCreated: \(\) => afterSpaceChange\(\),/);
+  assert.match(A, /openTask: \(made\) => wizOpenTask\(made\),/);
+  assert.match(A, /exit: \(\{ back = false \} = \{\}\) => \(back \? wizBack\(\) : enterHome\(\{ page: 'tasks' \}\)\),/);
+});
+
+/* ── поправка після ревʼю Task 6 (8а) і запити зі стелею часу ──────────────────────────────────────────────────── */
+
+test("8а: секрети живуть у `.value` полів кроку 3 — розмітка майстра зникає з DOM при виході (leaveHome і enterHome з wiz)", () => {
+  const l = fn(A, "leaveHome");
+  assert.match(l, /wiz\.reset\(\);/);
+  assert.match(l, /homeNode\(\)\?\.querySelector\('\.wz'\)\?\.remove\(\);/);
+  assert.ok(l.indexOf("querySelector('.wz')") < l.indexOf("await render()"), "прибирання — ДО будь-якого await");
+  const e = fn(A, "enterHome");
+  assert.match(e, /if \(homePage === 'wiz' && next !== 'wiz'\) homeNode\(\)\?\.querySelector\('\.wz'\)\?\.remove\(\);/);
+  assert.ok(e.indexOf("querySelector('.wz')") < e.indexOf("paintHome();"), "прибирання — до перемальовки сторінки");
+});
+
+test("запити майстра (space-new, task-new, space-update) — через postForm зі стелею часу, а не голий post", () => {
+  assert.match(A, /post: \(p, body\) => postForm\(p, body\),/);
+  assert.match(A, /takenTaskIds: \(\) => formApi\('\/api\/tasks\?all=1'\)/);
+});
+
+test("wizBack: «Скасувати» до створення вертає туди, звідки прийшли, і ставить фокус на фішку простору", () => {
+  const b = fn(A, "wizBack");
+  assert.match(b, /if \(wizFrom === null && currentTaskId\) await leaveHome\(\);/);
+  assert.match(b, /else enterHome\(\{ page: wizFrom === 'conn' \? 'conn' : 'tasks' \}\);/);
+  assert.match(b, /chipEl\(\)\?\.focus\(\{ preventScroll: true \}\);/);
+  assert.match(fn(A, "openWizard"), /wizFrom = homeOpen \? homePage : null;/);
+  assert.match(fn(A, "openWizard"), /if \(spacesResp\?\.off\) return;/);
+});
+
+test("openWizard не губить брудну панель «Підключення» мовчки: dismissCnDrawer ДО enterHome (як логотип); без панелі — без await", () => {
+  const b = fn(A, "openWizard");
+  assert.match(b, /if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return;/);
+  assert.ok(b.indexOf("dismissCnDrawer") < b.indexOf("wizFrom ="), "питання — до запису `wizFrom` (стан міг змінитись, поки питали)");
+  assert.ok(b.indexOf("dismissCnDrawer") < b.indexOf("enterHome("), "питання — до того, як `enterHome` закриє панель");
+});
+
+test("wizOpenTask: як «Нова задача» на «Задачах» — простір відповіді порівнюється з відомим, homeData скинуто, перехід через leaveHome", () => {
+  const b = fn(A, "wizOpenTask");
+  assert.match(b, /if \(spaceChanged\(spaceNow\(\)\?\.id, made\.space\)\) await resetSpaceState\(\);\s*else await resetPerTaskState\(\);/);
+  assert.match(b, /homeData = null;\s*currentTaskId = made\.id; taskSwitchGen \+= 1;/);
+  assert.match(b, /await leaveHome\(\);/);
+});
+
+test("barState віддає homePage лише при відкритому оверлеї (смуга й ⌘K знають `wiz`)", () => {
+  assert.match(A, /homePage: homeOpen \? homePage : null,/);
+});

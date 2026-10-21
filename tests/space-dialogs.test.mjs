@@ -22,16 +22,14 @@ const tick = (ms = 30) => new Promise((done) => setTimeout(done, ms));
 
 /* ── розмітка діалогу простору ─────────────────────────────────────────── */
 
-test("діалог нового простору: гачки Task 8 на місці", () => {
-  const h = spaceDialogHTML({ mode: "new", name: "Клієнт", color: "space-3", path: "~/deai-work/klient" });
-  assert.match(h, /<form class="cv-form" data-form="space" data-mode="new"/);
+test("діалог простору (`edit`): гачки на місці — назва, прихований колір, слот помилки, кнопки, фокус у назву", () => {
+  const h = spaceDialogHTML({ name: "Клієнт", color: "space-3" });
+  assert.match(h, /<form class="cv-form" data-form="space" data-mode="edit"/);
   assert.match(h, /<input id="sp-name" name="name" type="text" value="Клієнт"/);
-  assert.match(h, /<input id="sp-path" name="path" type="text" value="~\/deai-work\/klient"/);
   assert.match(h, /<input type="hidden" name="color" value="space-3">/);
-  assert.match(h, /id="sp-found" role="status" hidden/, "підказка «тека вже простір» схована, поки не знайдено");
   assert.match(h, /<p class="cv-form-err" id="cv-form-err" role="alert" data-form-error hidden><\/p>/);
   assert.match(h, /<button type="button" data-a="cancel">/);
-  assert.match(h, /<button type="submit" data-a="ok">Створити простір<\/button>/);
+  assert.match(h, /<button type="submit" data-a="ok">Зберегти<\/button>/);
   assert.match(h, /data-autofocus/, "фокус — у назву");
 });
 
@@ -48,25 +46,15 @@ test("діалог: шість кружків role=radio, вибраний рі�
   assert.match(radios[0], /<svg[^>]*><use href="#i-check"/, "галочка всередині: колір сам стан не оголошує");
 });
 
-test("діалог: `edit` — без теки, інша назва кнопки й заголовок, без підводки про теку", () => {
-  const h = spaceDialogHTML({ mode: "edit", name: "ЛІГА", color: "space-2" });
+test("діалог: без теки, назва кнопки й заголовок «Назва й колір», без підводки про теку", () => {
+  const h = spaceDialogHTML({ name: "ЛІГА", color: "space-2" });
   assert.match(h, /data-mode="edit"/);
   assert.doesNotMatch(h, /sp-path|name="path"/, "теку простору міняти не можна");
-  assert.doesNotMatch(h, /sp-found/);
+  assert.doesNotMatch(h, /sp-found|sp-registered/, "підказки про теку — лише в кроці 1 майстра");
   assert.match(h, /<h2 class="cv-form-h" id="sp-h">Назва й колір<\/h2>/);
   assert.match(h, /data-a="ok">Зберегти<\/button>/);
   assert.doesNotMatch(h, /cv-form-lead/);
   assert.match(h, /value="ЛІГА"/);
-});
-
-test("діалог: знайдений простір — назва тільки для читання, кружки заблоковані, підказка видима з імʼям", () => {
-  const h = spaceDialogHTML({ mode: "new", name: "Знайдений", path: "~/p", found: { name: "Знайдений" } });
-  assert.match(h, /<input id="sp-name"[^>]*readonly/);
-  assert.match(h, /role="radiogroup"[^>]*aria-disabled="true"/);
-  assert.match(h, /<p class="cv-hint" id="sp-found" role="status">У цій теці вже є простір «Знайдений»/);
-  const free = spaceDialogHTML({ mode: "new", name: "X", path: "~/p" });
-  assert.doesNotMatch(free, /readonly/);
-  assert.doesNotMatch(free, /aria-disabled/);
 });
 
 test("діалог: початкова помилка — текст зі словника за ключем, слот видимий", () => {
@@ -75,15 +63,11 @@ test("діалог: початкова помилка — текст зі сло
   assert.doesNotMatch(h, /data-form-error hidden/);
 });
 
-test("діалог: кожне поле посилається на слот помилки (aria-describedby), id слота один", () => {
-  const h = spaceDialogHTML({ mode: "new", name: "X", path: "~/p" });
+test("діалог: поле назви посилається на слот помилки (aria-describedby), id слота один; форма задачі — теж", () => {
+  const h = spaceDialogHTML({ name: "X" });
   assert.equal([...h.matchAll(/id="cv-form-err"/g)].length, 1);
-  for (const id of ["sp-name", "sp-path"]) {
-    const input = new RegExp(`<input id="${id}"[^>]*>`).exec(h)[0];
-    assert.match(input, /aria-describedby="[^"]*\bcv-form-err\b[^"]*"/, `${id} не повʼязаний зі слотом помилки`);
-  }
-  assert.match(/<input id="sp-path"[^>]*>/.exec(h)[0], /aria-describedby="sp-found sp-registered cv-form-err"/,
-    "поле теки читач озвучує разом з обома підказками про неї");
+  const input = /<input id="sp-name"[^>]*>/.exec(h)[0];
+  assert.match(input, /aria-describedby="[^"]*\bcv-form-err\b[^"]*"/, "sp-name не повʼязаний зі слотом помилки");
   const task = taskFormHTML({});
   for (const id of ["tf-title", "tf-id"]) {
     assert.match(new RegExp(`<input id="${id}"[^>]*aria-describedby="cv-form-err"`).exec(task)?.[0] ?? "", /cv-form-err/, id);
@@ -93,14 +77,9 @@ test("діалог: кожне поле посилається на слот п�
   assert.doesNotMatch(task, /aria-invalid/);
 });
 
-test("діалог: слот підказки «цю теку вже додано» є лише в `new`, схований і живий для читача", () => {
-  assert.match(spaceDialogHTML({ mode: "new" }), /<p class="cv-hint" id="sp-registered" role="status" hidden><\/p>/);
-  assert.doesNotMatch(spaceDialogHTML({ mode: "edit" }), /sp-registered/);
-});
-
 test("діалог: усе, що приходить із даних, екранується; колір — лише токен", () => {
   const evil = `"><img src=x onerror=alert(1)>`;
-  const h = spaceDialogHTML({ name: evil, path: evil, color: "red;position:fixed", found: { name: evil } });
+  const h = spaceDialogHTML({ name: evil, color: "red;position:fixed" });
   assert.doesNotMatch(h, /<img/, "розмітка з даних не стала тегом");
   assert.ok(h.includes("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"));
   assert.doesNotMatch(h, /position:fixed/);
@@ -137,8 +116,7 @@ test("англійська: жодної кирилиці в розмітці з
   const before = getLang();
   setLang("en");
   try {
-    for (const h of [spaceDialogHTML({ mode: "new" }), spaceDialogHTML({ mode: "edit" }),
-      spaceDialogHTML({ found: { name: "X" } }), taskFormHTML({}), welcomeHTML()]) {
+    for (const h of [spaceDialogHTML({}), spaceDialogHTML({ name: "X" }), taskFormHTML({}), welcomeHTML()]) {
       assert.ok(!CYR.test(h), `кирилиця в англійській розмітці: ${h.match(/.{0,30}[а-яіїєґ].{0,30}/i)?.[0]}`);
     }
     assert.match(taskFormHTML({}), /New task/);

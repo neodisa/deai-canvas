@@ -1,6 +1,7 @@
 /**
- * Діалоги просторів: розмітка діалогу простору, форми «Нова задача» й привітання,
- * плюс проводка полів цих форм. Розмітка — ЧИСТІ рядки (як `shell-bar.js`): ні
+ * Діалоги просторів: розмітка діалогу простору («Назва й колір…»), форми «Нова задача» й привітання,
+ * плюс проводка полів цих форм. Діалог простору — лише `edit`: новий простір створює майстер (`wizard.js`, етап 3b),
+ * який бере звідси `wireSpaceDialog` і `wireTaskForm`; розмітку кроку 1 малює `wizard-view.js`. Розмітка — ЧИСТІ рядки (як `shell-bar.js`): ні
  * мережі, ні стану модуля; проводка — функції `wire*`, що беруть готовий вузол
  * `<form>` і залежності ЗВЕРХУ (`peek`, `taken`), тож тут нема жодного `fetch` і
  * жодного імпорту `app.js`. Оболонку діалогу (одиночність, Esc, фокус-пастка, відправка,
@@ -10,12 +11,11 @@
  * ЛИШЕ через `esc()`; колір — лише через `spaceColorToken` (токен у `style`, а не рядок
  * із реєстру, який правлять руками).
  *
- * Стабільні гачки для живих тестів (Task 8) — це контракт, а не косметика:
- *   діалог простору  `form[data-form="space"][data-mode="new|edit"]`; поля `#sp-name`
- *                    (`name="name"`), `#sp-path` (`name="path"`, лише в `new`),
- *                    прихований `name="color"`; кружки `.cv-color[role=radio][data-val]`;
- *                    підказка «тека вже простір» `#sp-found`; підказка «цю теку вже додано»
- *                    (тека є в реєстрі) `#sp-registered`;
+ * Стабільні гачки для живих тестів — це контракт, а не косметика:
+ *   діалог простору  `form[data-form="space"][data-mode="edit"]`; поле `#sp-name`
+ *                    (`name="name"`), прихований `name="color"`; кружки
+ *                    `.cv-color[role=radio][data-val]`. Поле теки `#sp-path` і підказки `#sp-found` («тека вже
+ *                    простір»), `#sp-registered` («цю теку вже додано») тепер лише в кроці 1 майстра (`wizard-view.js`);
  *   форма задачі     `form[data-form="task"]`; поля `#tf-title` (`name="title"`),
  *                    `#tf-id` (`name="id"`);
  *   спільне          слот помилки `[data-form-error]`, кнопки `button[data-a="ok"]`
@@ -51,48 +51,34 @@ const buttons = (okKey) => `<div class="cv-ask-row">
  * дає `wireSpaceDialog`. Вибраний позначений не лише рамкою, а й галочкою — колір
  * сам стан не оголошує.
  */
-function colorGroup(colorIn, locked) {
+function colorGroup(colorIn) {
   const color = spaceColorToken(colorIn);   // токен, не рядок із реєстру: іде в `style` і `value`
   const items = SPACE_COLORS.map((c, i) => `<button type="button" class="cv-color" role="radio"
     data-val="${c}" aria-checked="${c === color}" tabindex="${c === color ? 0 : -1}"
     aria-label="${esc(t("spaceColorName", i + 1))}" style="background:var(--${c})">${ico("check", 14)}</button>`).join("");
-  return `<div class="cv-colors" role="radiogroup" aria-labelledby="sp-color-l"${locked ? ' aria-disabled="true"' : ""}>${items}</div>
+  return `<div class="cv-colors" role="radiogroup" aria-labelledby="sp-color-l">${items}</div>
     <input type="hidden" name="color" value="${color}">`;
 }
 
 /**
- * Діалог простору. `mode`: `new` — назва, колір, ТЕКА; `edit` — лише назва й колір
- * (теку простору міняти не можна: на ній стоїть реєстр і його задачі). `found` —
- * `{name}` простору, що вже лежить у вказаній теці (див. `peekFound`): тоді назва й
- * колір — ЙОГО, а не набрані (сервер `space.json` не перезаписує), тож поле назви
- * тільки для читання, кружки заблоковані, а підказка пояснює чому.
+ * Діалог простору «Назва й колір…»: лише назва й колір (теку простору міняти не можна: на ній стоїть реєстр і його
+ * задачі). Новий простір — з полем теки й підказкою «тека вже простір» — створює майстер (`wizard.js`).
  */
-export function spaceDialogHTML({ mode = "new", name = "", color = SPACE_COLORS[0], path = "", found = null, errorKey = "" } = {}) {
-  const isNew = mode !== "edit";
-  const folder = isNew ? `<div class="cv-field">
-    <label for="sp-path">${esc(t("spaceFolder"))}</label>
-    <input id="sp-path" name="path" type="text" value="${esc(path)}" autocomplete="off" spellcheck="false"
-      aria-describedby="sp-found sp-registered ${ERR_ID}">
-    <p class="cv-hint" id="sp-found" role="status"${found ? "" : " hidden"}>${found ? esc(t("spaceFound", found.name)) : ""}</p>
-    <p class="cv-hint" id="sp-registered" role="status" hidden></p>
-    <p class="cv-hint">${esc(t("spaceFolderHint"))}</p>
-    <p class="cv-hint">${esc(t("integrationsOff"))}</p></div>` : "";
-  return `<form class="cv-form" data-form="space" data-mode="${isNew ? "new" : "edit"}" novalidate
+export function spaceDialogHTML({ name = "", color = SPACE_COLORS[0], errorKey = "" } = {}) {
+  return `<form class="cv-form" data-form="space" data-mode="edit" novalidate
     role="dialog" aria-modal="true" aria-labelledby="sp-h">
-    <h2 class="cv-form-h" id="sp-h">${esc(t(isNew ? "spaceNewTitle" : "spaceEditTitle"))}</h2>
-    ${isNew ? `<p class="cv-form-lead">${esc(t("spaceNewLead"))}</p>` : ""}
+    <h2 class="cv-form-h" id="sp-h">${esc(t("spaceEditTitle"))}</h2>
     <div class="cv-field">
       <label for="sp-name">${esc(t("spaceName"))}</label>
       <input id="sp-name" name="name" type="text" value="${esc(name)}" maxlength="60" autocomplete="off"
-        spellcheck="false" placeholder="${esc(t("spaceNamePh"))}"${found ? " readonly" : ""} aria-describedby="${ERR_ID}" data-autofocus>
+        spellcheck="false" placeholder="${esc(t("spaceNamePh"))}" aria-describedby="${ERR_ID}" data-autofocus>
     </div>
     <div class="cv-field">
       <span class="cv-lbl" id="sp-color-l">${esc(t("spaceColor"))}</span>
-      ${colorGroup(color, !!found)}
+      ${colorGroup(color)}
     </div>
-    ${folder}
     ${errorSlot(errorKey)}
-    ${buttons(isNew ? "spaceCreate" : "spaceSave")}
+    ${buttons("spaceSave")}
   </form>`;
 }
 

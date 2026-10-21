@@ -32,7 +32,7 @@ import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, defaultSpacePath, effectiveCommentMode, freeColor, hasTeamComments, healTarget,
+  FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
   commentsUnavailableCode, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError,
@@ -40,6 +40,7 @@ import {
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
 } from './space-dialogs.js';
+import { createWizard } from './wizard.js';
 import { panelHTML } from './shell-panel.js';
 import { inspectHTML } from './shell-inspect.js';
 import {
@@ -177,8 +178,9 @@ let taskDdWasOpen = false;
    (`barState().homeOpen` міняє її склад) і сам екран (`enterHome`/`leaveHome`
    нижче ставлять ще й клас `home-open` на `body`). */
 let homeOpen = false;
-/* Сторінка оверлею `#tasks-home`: `tasks` (список задач / привітання) чи `conn` («Підключення», етап 3a). Один
-   оверлей на всі екрани поза задачею: вхід, вихід, чистий перегляд і палітра в стані `homeOpen` — спільні. */
+/* Сторінка оверлею `#tasks-home`: `tasks` — «Задачі» (список задач / привітання), `conn` — «Підключення» (етап 3a),
+   `wiz` — майстер нового простору (етап 3b). Один оверлей на всі екрани поза задачею: вхід, вихід, чистий перегляд і
+   палітра в стані `homeOpen` — спільні. */
 let homePage = 'tasks';
 /* Стан сторінки «Підключення»: простір, чий список показано (знімок на момент запиту — кожен запис іде САМЕ туди),
    записи `GET /api/modules` (`null` — вантажиться), збій читання і дії в польоті (id → 'check'|'disable'|'save'). `seq`
@@ -921,7 +923,7 @@ function barState() {
     tasksErrKey,
     openDd,
     homeOpen,
-    /* Сторінка оверлею (`tasks`/`conn`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
+    /* Сторінка оверлею (`tasks`/`conn`/`wiz`) — для крихти смуги й пункту ⌘K; поза оверлеєм — `null`. */
     homePage: homeOpen ? homePage : null,
     /* Смуга цього поля вже НЕ читає (принцип 6 PRODUCT.md — перемикач
        аудиторії переїхав у панель коментатора). Лишається, бо `paletteState()`
@@ -1330,42 +1332,64 @@ const focusChip = () => chipEl()?.focus({ preventScroll: true });
  */
 const spaceDialogFocusBack = () => chipEl() ?? homeNode()?.querySelector('[data-th="spacenew"]');
 
+/* ── майстер нового простору (етап 3b) ─────────────────────────────────────────────────────────────────────
+   Третя сторінка оверлею `#tasks-home` (`homePage === 'wiz'`). Стан і проводку тримає `wizard.js`; тут — лише входи
+   й залежності. «Новий простір…» (дропдаун, ⌘K) і привітання ведуть сюди; діалог простору лишився для «Назва й колір…». */
+const wiz = createWizard({
+  node: () => ensureHome(),
+  api: (p) => api(p),
+  post: (p, body) => postForm(p, body),
+  askYesNo,
+  toast,
+  spaces: () => spacesResp,
+  peek: (p) => api(`/api/space-peek?path=${encodeURIComponent(p)}`),
+  takenPaths: () => (spacesResp?.spaces ?? []).map((x) => x.path),
+  takenTaskIds: () => formApi('/api/tasks?all=1').then((r) => (r.tasks || []).map((x) => x.id)).catch(() => []),
+  afterSpaceCreated: () => afterSpaceChange(),
+  afterSpaceEdited: (id, saved) => applySpaceMeta(id, saved),
+  afterModulesChange: () => afterModulesChange(),
+  openTask: (made) => wizOpenTask(made),
+  exit: ({ back = false } = {}) => (back ? wizBack() : enterHome({ page: 'tasks' })),
+  copy: (s) => navigator.clipboard.writeText(s),
+});
+
+/* Звідки майстер відкрили: `null` — полотно задачі (оверлей був закритий), інакше сторінка оверлею. Потрібно лише
+   «Скасувати» до створення: простору нема, і людина вертається туди, де була. */
+let wizFrom = null;
+
+/** Відкрити майстер на кроці 1. Шар просторів вимкнено — входу нема (як і «Новий простір…» у дропдауні). Бічна панель
+ *  «Підключення» з незбереженим (там можуть бути секрети) спершу питає — як логотип: `enterHome` закрив би її мовчки. Без
+ *  панелі `await` не виконується, і вхід лишається синхронним. */
+async function openWizard({ folderFirst = false } = {}) {
+  if (spacesResp?.off) return;
+  if (cnDrawer && !(await dismissCnDrawer())) return;
+  wizFrom = homeOpen ? homePage : null;
+  wiz.open({ folderFirst });
+  enterHome({ page: 'wiz' });
+  wiz.focusStep();
+}
+
 /**
- * «Новий простір…»: назва, колір, тека → `POST /api/space-new` → перемкнутись на нього.
- * Перший простір на машині отримує назву «Особисте» (тека тоді `~/deai-work/personal`).
- * Колір — перший невикористаний, щоб фішки різнились з першого дня; тека — перша ВІЛЬНА
- * (не зайнята іншим простором: друге «Особисте» лягло б на теку першого).
- * ⛔ Перехід на новий простір — ВСЕРЕДИНІ `onSubmit`, одразу після відповіді сервера, а не
- * після `await askForm`: діалог може закритися, не дійшовши до кінця (його перебило інше
- * питання), а простір уже створено, і UI лишився б у старому — сервер і екран розійшлись би.
+ * «Скасувати» до створення — туди, звідки прийшли: на полотно задачі (коли вона є) чи на сторінку оверлею; фокус — на
+ * фішку простору, як після колишнього діалогу. На першому запуску фішки нема — фокус ставить `enterHome` (кнопка привітання).
  */
-async function openSpaceNew() {
-  const name0 = needsWelcome(spacesResp) ? t('personalName') : '';
-  const color0 = freeColor(spacesResp?.spaces);
-  const taken = () => (spacesResp?.spaces ?? []).map((x) => x.path);
-  await askForm(
-    () => spaceDialogHTML({ mode: 'new', name: name0, color: color0, path: defaultSpacePath(name0, '~', taken()) }),
-    {
-      onMount: (form) => wireSpaceDialog(form, {
-        mode: 'new', taken, peek: (p) => api(`/api/space-peek?path=${encodeURIComponent(p)}`),
-      }),
-      focusBack: spaceDialogFocusBack,
-      onSubmit: async (vals, ctl) => {
-        const name = vals.name.trim();
-        if (!name) { ctl.focus('name'); return t('spaceErrName'); }
-        try { await postForm('/api/space-new', { name, color: vals.color, path: vals.path.trim() }); }
-        catch (e) {
-          const field = spaceErrField(e.code);
-          if (field) ctl.focus(field);
-          return t(spaceErrKey(e.code));
-        }
-        /* Простір створено. Збій самого переходу (рендер) — не збій створення: діалог не
-           мусить показувати «не вдалося» для простору, який уже є (повтор дав би `path-registered`). */
-        try { await afterSpaceChange(); }
-        catch (e) { toast(t('errFailed', e.message)); }
-        return undefined;
-      },
-    });
+async function wizBack() {
+  if (wizFrom === null && currentTaskId) await leaveHome();
+  else enterHome({ page: wizFrom === 'conn' ? 'conn' : 'tasks' });
+  chipEl()?.focus({ preventScroll: true });
+}
+
+/**
+ * Задачу з кроку 4 створено (`task-new` уже зробив її простір і її поточними) — відкрити, як «Нова задача» на «Задачах»:
+ * простір відповіді порівнюємо з відомим (`spaceChanged`), пер-задачний стан попередньої — чужий.
+ */
+async function wizOpenTask(made) {
+  if (spaceChanged(spaceNow()?.id, made.space)) await resetSpaceState();
+  else await resetPerTaskState();
+  homeData = null;
+  currentTaskId = made.id; taskSwitchGen += 1;
+  await refreshGitlab();
+  await leaveHome();
 }
 
 /** «Назва й колір…»: лише імʼя й колір поточного простору (`POST /api/space-update`); теку міняти не можна. */
@@ -1373,7 +1397,7 @@ async function openSpaceEdit() {
   const cur = spaceNow();
   if (!cur) return;
   await askForm(
-    () => spaceDialogHTML({ mode: 'edit', name: cur.name, color: cur.color }),
+    () => spaceDialogHTML({ name: cur.name, color: cur.color }),
     {
       onMount: (form) => wireSpaceDialog(form, { mode: 'edit' }),
       focusBack: spaceDialogFocusBack,
@@ -1410,7 +1434,8 @@ function applySpaceMeta(id, { name, color }) {
  * (потік dev-pipeline ЛІГА) і завів би «особисту» задачу в реєстр компанії.
  * Перелік зайнятих id — з усіх просторів (`?all=1`): id унікальний на машині. Він може
  * приїхати вже після відкриття діалогу — форма перерахує id, а відправка його дочекається.
- * Перехід до створеної задачі — ВСЕРЕДИНІ `onSubmit` (причина — у `openSpaceNew`).
+ * Перехід до створеної задачі — ВСЕРЕДИНІ `onSubmit`: діалог може закритися, не дійшовши до кінця (його перебило інше
+ * питання), а задачу вже створено, і екран лишився б без переходу.
  */
 async function newTaskDialog() {
   const sp = spaceNow();
@@ -1555,8 +1580,9 @@ const BAR_ACTIONS = {
   /* Логотип → екран «Задачі» (`enterHome` нижче: смуга, клас на `body`, запит
      `/api/tasks-overview`). Логотип з «Підключення» теж веде на «Задачі» — тому сторінка названа явно: без
      неї `enterHome` лишив би відкриту. Відкрита панель «Підключення» з незбереженими змінами спершу питає
-     «Відкинути зміни?» (`dismissCnDrawer`; під запитом панелі — ігнор), без панелі — як було, синхронно. */
-  home: async () => { if (cnDrawer && !(await dismissCnDrawer())) return; enterHome({ page: 'tasks' }); },
+     «Відкинути зміни?» (`dismissCnDrawer`; під запитом панелі — ігнор), без панелі — як було, синхронно. На сторінці
+     майстра (3b) логотип — те саме, що «Закрити майстер» (до створення — «Скасувати»): питає про незбережене кроку 3. */
+  home: async () => { if (homeOpen && homePage === 'wiz') { await wiz.requestExit(); return; } if (cnDrawer && !(await dismissCnDrawer())) return; enterHome({ page: 'tasks' }); },
   /* Назад до задачі: повний `render()` (`leaveHome`), бо під екраном «Задачі»
      макет міг змінитись, а смуга мусить знову показати свіжий склад. Панель «Підключення» — як у логотипа. */
   back: async () => { if (cnDrawer && !(await dismissCnDrawer())) return; leaveHome(); },
@@ -1594,7 +1620,7 @@ const BAR_ACTIONS = {
     catch (e) { tell(t('errFailed', e.message)); return; }
     await afterSpaceChange();
   },
-  spacenew: () => openSpaceNew(),
+  spacenew: () => openWizard(),
   spaceedit: () => openSpaceEdit(),
   /* «Підключення» поточного простору (етап 3a): пункт дропдауна фішки, ⌘K і кнопка в голові «Задач». */
   conn: () => enterConnections(),
@@ -2309,6 +2335,8 @@ function paintHome() {
   if (!el) return;
   if (homeComposing) { homePaintPending = true; return; }
   homePaintPending = false;
+  /* Майстер (етап 3b) — раніше за привітання: на першому запуску просторів ще нема, а майстер уже відкритий. */
+  if (homePage === 'wiz') { wiz.paint(); return; }
   const top = el.scrollTop;
   /* Просторів на машині нема зовсім — замість списку привітання (дорога звідси одна:
      створити перший простір). Рішає `spacesResp`, а не `homeData`: порожній `mine` без
@@ -2388,6 +2416,11 @@ function enterHome({ spaces = true, page } = {}) {
   const next = page ?? (was ? homePage : 'tasks');
   /* Бічна панель належить лише «Підключенню»: вихід на «Задачі» її закриває (фокус не вертаємо — його бере екран). */
   if (next !== 'conn') closeCnDrawer({ focus: false });
+  /* Пішли з майстра будь-яким шляхом (⌘K, агент) — його стан більше не потрібен: простір, якщо створено, уже є. */
+  if (next !== 'wiz') wiz.reset();
+  /* Секрети кроку 3 живуть лише у `.value` полів, а `reset()` DOM не чистить: розмітка майстра зникає разом зі
+     сторінкою — ДО перемальовки нижче (і до будь-якого await). */
+  if (homePage === 'wiz' && next !== 'wiz') homeNode()?.querySelector('.wz')?.remove();
   /* Свіжий вхід на сторінку (з-поза оверлею чи з іншої сторінки) — зі «вантажу», а не з чужого списку; повторний
      вхід на ту саму (`afterSpaceChange`) лишає показане, поки нове летить. */
   const fresh = !was || next !== homePage;
@@ -2403,6 +2436,13 @@ function enterHome({ spaces = true, page } = {}) {
   const el = ensureHome();
   el.hidden = false;
   paintBar();
+  if (homePage === 'wiz') {
+    /* Майстер малює себе сам (`wiz.paint` через `paintHome`); фокус ставить `openWizard`/крок. Запізніле `loadHome` не
+       сміє перемалювати сторінку. */
+    homeSeq += 1;
+    paintHome();
+    return;
+  }
   if (homePage === 'conn') {
     /* Запізнілий `loadHome` (його відповідь летіла, поки людина йшла на «Підключення») не сміє перемалювати сторінку. */
     homeSeq += 1;
@@ -2426,6 +2466,10 @@ function enterHome({ spaces = true, page } = {}) {
 
 async function leaveHome() {
   closeCnDrawer({ focus: false });
+  /* Майстер (3b): стан скинуто, а розмітку прибрано з DOM — оверлей лише ховається, і поля кроку 3 (секрети живуть у
+     їхніх `.value`) лишились би в документі. ДО `await render()` нижче. */
+  wiz.reset();
+  homeNode()?.querySelector('.wz')?.remove();
   homeSeq += 1;
   homeComposing = false; homePaintPending = false;
   homeOpen = false;
@@ -2460,6 +2504,8 @@ async function retryHome() {
 function refreshHomeOnReturn() {
   const now = Date.now();
   if (!shouldRefreshHome({ open: homeOpen, visible: document.visibilityState === 'visible', last: homeRefreshedAt, now, forced: homeForced })) return;
+  /* Майстер (3b) тримає свої дані сам. Штамп не витрачаємо: перечитування потрібне вже на «Задачах», куди людина вийде. */
+  if (homePage === 'wiz') return;
   homeRefreshedAt = now;
   /* На «Підключенні» агент міг змінити модулі через API — перечитуємо їх, а не список задач. */
   homePage === 'conn' ? loadConn() : loadHome();
@@ -2498,6 +2544,8 @@ function wireHome(el) {
     /* Посилання «Превʼю ↗» — своя навігація в новій вкладці: без цього рядка клік
        по ньому долітав би до картки й ще й відкривав би задачу. */
     if (ev.target.closest('a')) return;
+    /* Сторінка майстра (3b) — усі її кліки в контролері; обробники «Задач» і «Підключення» її не бачать. */
+    if (homePage === 'wiz') { wiz.click(ev); return; }
     /* Кнопки карток і помилки сторінки «Підключення» (`data-cn` + `data-id`). */
     const c = ev.target.closest('[data-cn]');
     if (c) { connAction(c.dataset.cn, c.dataset.id); return; }
@@ -2516,7 +2564,8 @@ function wireHome(el) {
         break;
       case 'newtask': newTaskDialog(); break;
       case 'conn': enterConnections(); break;
-      case 'spacenew': openSpaceNew(); break;
+      case 'spacenew': openWizard(); break;
+      case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
       case 'profile': case 'designer': {
         const set = b.dataset.th === 'profile' ? homeUi.profiles : homeUi.designers;
@@ -2533,6 +2582,7 @@ function wireHome(el) {
     }
   });
   el.addEventListener('input', (ev) => {
+    if (homePage === 'wiz') { wiz.input(ev); return; }
     if (ev.target.id !== 'th-q' || ev.isComposing) return;
     homeUi.q = ev.target.value;
     paintHomeLower();
@@ -2544,10 +2594,14 @@ function wireHome(el) {
     homeUi.q = ev.target.value;
     if (homePaintPending) paintHome(); else paintHomeLower();
   });
+  /* Радіо кроків 2 і 4 майстра працюють на `change`, а не на `input`. */
   el.addEventListener('change', (ev) => {
+    if (homePage === 'wiz') { wiz.input(ev); return; }
     if (ev.target.id !== 'th-sort') return;
     homeUi.sort = ev.target.value; saveHomeUi(); paintHomeLower();
   });
+  /* Відправка форм майстра (Enter у полі й клік по головній кнопці — один шлях). */
+  el.addEventListener('submit', (ev) => { if (homePage === 'wiz') wiz.submit(ev); });
   /* `error` не спливає — ловимо на захопленні. Кадр, що не завантажився
      (вічний кеш на файлі, якого вже нема), міняємо на заглушку, а не лишаємо
      картку зі значком зламаного зображення. */
@@ -3099,7 +3153,7 @@ document.addEventListener('keydown', (ev) => {
  *  IME-композиція клавіш екрана не віддають. */
 document.addEventListener('keydown', (ev) => {
   if (!homeOpen || ev.isComposing || paletteOverlay || document.querySelector('.cv-ask-scrim')) return;
-  if (homePage === 'conn') return;   // «Підключення»: клавіші списку задач не діють; Esc панелі — свій обробник
+  if (homePage !== 'tasks') return;   // «Підключення» й майстер: клавіші списку задач не діють; Esc панелі — свій обробник
   const el = homeNode();
   if (!el) return;
   const a = document.activeElement;

@@ -146,24 +146,10 @@ test("newTaskDialog: простір називається ЯВНО, зайня�
   assert.match(body, /ctl\.focus\(taskErrField\(key\)\)/, "поле помилки — aria-invalid");
 });
 
-test("діалоги простору: запит і перехід — усередині onSubmit (помилка лишається в діалозі), focusBack, перша вільна тека", () => {
-  const nu = fn("openSpaceNew");
-  assert.match(nu, /onSubmit: async \(vals, ctl\) => \{[\s\S]*?postForm\('\/api\/space-new'/);
-  assert.match(nu, /catch \(e\) \{[\s\S]*?return t\(spaceErrKey\(e\.code\)\);/, "код відмови → ключ словника, e.code, не e.key");
-  assert.match(nu, /api\(`\/api\/space-peek\?path=\$\{encodeURIComponent\(p\)\}`\)/);
-  assert.match(nu, /needsWelcome\(spacesResp\) \? t\('personalName'\)/, "перший простір — «Особисте»");
-  /* Тека — вільна: реєстр передається і в початковий шлях, і в проводку (там — функцією, щоб бачити оновлення). */
-  assert.match(nu, /const taken = \(\) => \(spacesResp\?\.spaces \?\? \[\]\)\.map\(\(x\) => x\.path\);/);
-  assert.match(nu, /path: defaultSpacePath\(name0, '~', taken\(\)\)/);
-  assert.match(nu, /wireSpaceDialog\(form, \{\s*mode: 'new', taken, peek:/);
-  /* Перехід — після відповіді сервера, ВСЕРЕДИНІ onSubmit; ззовні (після await askForm) його нема. */
-  const sub = nu.slice(nu.indexOf("onSubmit:"));
-  assert.ok(sub.indexOf("postForm('/api/space-new'") < sub.indexOf("await afterSpaceChange();"));
-  assert.match(sub, /try \{ await afterSpaceChange\(\); \}\s*catch \(e\) \{ toast\(t\('errFailed', e\.message\)\); \}\s*return undefined;/);
-  assert.doesNotMatch(nu.slice(0, nu.indexOf("onSubmit:")), /afterSpaceChange/);
-  assert.doesNotMatch(nu, /if \(!v \|\| !made\)/, "перехід не залежить від результату askForm");
-  assert.match(nu, /focusBack: spaceDialogFocusBack,/);
-  assert.match(nu, /const field = spaceErrField\(e\.code\);\s*if \(field\) ctl\.focus\(field\);/);
+test("діалог простору (лише «Назва й колір…»): запит і оновлення — усередині onSubmit (помилка лишається в діалозі), focusBack", () => {
+  /* Новий простір створює майстер (`wizard.js`, етап 3b): його запити, перехід і «Особисте» стережуть `tests/wizard-wiring.test.mjs`
+     й `tests/wizard-model.test.mjs`; діалог `new` у `app.js` більше нема. */
+  assert.doesNotMatch(src, /function openSpaceNew\(/);
   const ed = fn("openSpaceEdit");
   assert.match(ed, /postForm\('\/api\/space-update', \{ id: cur\.id, name, color: vals\.color \}\)/);
   assert.match(ed, /applySpaceMeta\(cur\.id, saved\)/);
@@ -270,7 +256,7 @@ test("loadHome: перелік просторів не перепитуєтьс�
   assert.match(lh, /if \(healed\) \{ await resetSpaceState\(\{ reload: false \}\); if \(homeOpen\) enterHome\(\{ spaces: false \}\); return; \}/);
   assert.match(src, /function enterHome\(\{ spaces = true, page \} = \{\}\) \{/);
   assert.match(fn("enterHome"), /loadHome\(false, \{ spaces \}\);/);
-  assert.match(src, /home: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»; брудна панель «Підключення» спершу питає");
+  assert.match(src, /home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/, "вхід логотипом перепитує простори (там і лікування) і веде саме на «Задачі»; брудна панель «Підключення» спершу питає, майстер — через wiz.requestExit");
 });
 
 test("loadHome: успішний огляд знімає смугу «простір не читається» (але не чужу причину) і перемальовує смугу", () => {
@@ -311,7 +297,7 @@ test("діалоги: запити space-new / space-update / task-new і пер
     "обрив стає `code: 'timeout'` (spaceErrKey/taskErrKey → formTimeout), решта помилок — як були");
   assert.match(fa, /\.finally\(\(\) => clearTimeout\(timer\)\)/, "таймер знімається, інакше він обрізав би вже завершений запит");
   assert.match(src, /const postForm = \(path, body\) => formApi\(path, \{\s*method: 'POST'/);
-  for (const [name, url] of [["openSpaceNew", "space-new"], ["openSpaceEdit", "space-update"], ["newTaskDialog", "task-new"]]) {
+  for (const [name, url] of [["openSpaceEdit", "space-update"], ["newTaskDialog", "task-new"]]) {
     const b = fn(name);
     assert.match(b, new RegExp(`postForm\\('/api/${url}'`), `${name}: запит без стелі`);
     assert.doesNotMatch(b, new RegExp(`[^m]post\\('/api/${url}'`), `${name}: лишився голий post`);
@@ -323,7 +309,7 @@ test("екран «Задачі»: вкладка — за effectiveTab (збе�
   assert.match(src, /if \(effectiveTab\(homeUi, homeData\) === v\) break;/);
   assert.doesNotMatch(src, /if \(homeUi\.tab === v\) break;/, "стара перевірка вернулась");
   assert.match(src, /case 'newtask': newTaskDialog\(\); break;/);
-  assert.match(src, /case 'spacenew': openSpaceNew\(\); break;/);
+  assert.match(src, /case 'spacenew': openWizard\(\); break;/);
 });
 
 test("keepFocus: порядковий номер серед збігів — подвійна кнопка «Нова задача» не краде фокус", () => {
@@ -474,7 +460,7 @@ test("палітра й смуга: публікація — на hasPublish, к
 
 test("командний канал у app.js — `noTeamComments` на hasTeamComments; `noOutward` його не питає", () => {
   assert.match(src, /const noTeamComments = \(\) => needsWelcome\(spacesResp\) \|\| !hasTeamComments\(spaceNow\(\)\);/);
-  assert.match(src, /effectiveCommentMode, freeColor, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
+  assert.match(src, /effectiveCommentMode, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
   // GitLab і Teams-тиша лишились на `noOutward`, а канал `project` на нього більше не спирається
   assert.doesNotMatch(src, /noOutward\(\)[^;\n]*(?:'project'|audiences)|(?:'project'|audiences)[^;\n]*noOutward\(\)/);
 });

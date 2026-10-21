@@ -23,14 +23,14 @@ const fnc = (name) => noComments(fn(name));
 
 test("дії смуги: conn веде на сторінку, логотип — завжди на «Задачі»", () => {
   assert.match(src, /\n  conn: \(\) => enterConnections\(\),/);
-  assert.match(src, /\n  home: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+  assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
   assert.match(fn("wireHome"), /case 'conn': enterConnections\(\); break;/);
 });
 
 test("логотип і «назад до задачі» не гублять брудну панель мовчки: через dismissCnDrawer, а без панелі — синхронно, як було", () => {
   /* Умова `cnDrawer &&` ПЕРЕД `await`: без панелі дія виконується в тому ж такті (жодного зайвого мікрозавдання). */
   assert.match(src, /\n  back: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; leaveHome\(\); \},/);
-  assert.match(src, /\n  home: async \(\) => \{ if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
+  assert.match(src, /\n  home: async \(\) => \{ if \(homeOpen && homePage === 'wiz'\) \{ await wiz\.requestExit\(\); return; \} if \(cnDrawer && !\(await dismissCnDrawer\(\)\)\) return; enterHome\(\{ page: 'tasks' \}\); \},/);
   const b = fnc("dismissCnDrawer");
   assert.match(b, /^\{\s*if \(!cnDrawer\) return true;\s*if \(cnDrawer\.busy\) return false;\s*await requestCloseCnDrawer\(\);\s*return !cnDrawer;\s*\}$/,
     "нема панелі — true; запит у польоті — false (ігнор); інакше закриття з питанням, і true лише коли панель справді зникла");
@@ -48,8 +48,8 @@ test("barState і paletteState несуть homePage", () => {
   assert.match(src, /homePage: st\.homePage,/);
 });
 
-test("клавіші сторінки «Задачі» на «Підключенні» не діють", () => {
-  assert.match(src, /if \(!homeOpen \|\| ev\.isComposing \|\| paletteOverlay \|\| document\.querySelector\('\.cv-ask-scrim'\)\) return;\n  if \(homePage === 'conn'\) return;/);
+test("клавіші сторінки «Задачі» на «Підключенні» й майстрі не діють", () => {
+  assert.match(src, /if \(!homeOpen \|\| ev\.isComposing \|\| paletteOverlay \|\| document\.querySelector\('\.cv-ask-scrim'\)\) return;\n  if \(homePage !== 'tasks'\) return;/);
 });
 
 test("перечитування при поверненні у вікно: на «Підключенні» — loadConn", () => {
