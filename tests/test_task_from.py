@@ -257,8 +257,19 @@ class TaskFrom(Fixture):
         for bad in ('.', os.path.basename(self.src), '../' + os.path.basename(os.path.dirname(self.src)) + '/'
                     + os.path.basename(self.src), '~no-such-user-hopefully/x'):
             with self.subTest(bad=bad):
-                self.refused({'id': 'ad4r', 'space': self.p_id, 'from': bad}, 400, 'from-not-found')
+                body = self.refused({'id': 'ad4r', 'space': self.p_id, 'from': bad}, 400, 'from-not-found')
+                self.assertIn('absolute', body['error'], 'причина — відносний шлях, текст мусить так і казати')
         self.assert_nothing('ad4r')
+
+    def test_the_refusal_text_names_the_real_reason(self):
+        """Код один (`from-not-found`), а текст — за причиною: нема теки чи вона нечитабельна — це не «потрібен
+        абсолютний шлях» (шлях якраз абсолютний)."""
+        gone = self.refused({'id': 'ad4t', 'space': self.p_id, 'from': os.path.join(self.src, 'nope')}, 400,
+                            'from-not-found')
+        self.assertNotIn('absolute', gone['error'])
+        self.assertIn('no such folder', gone['error'])
+        nul = self.refused({'id': 'ad4t', 'space': self.p_id, 'from': '/tmp/x\x00y'}, 400, 'from-not-found')
+        self.assertNotIn('absolute', nul['error'])
 
     def test_an_unreadable_subfolder_refuses_the_whole_folder(self):
         if os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0):
@@ -268,8 +279,37 @@ class TaskFrom(Fixture):
         locked = os.path.join(self.src, 'locked')
         os.chmod(locked, 0)
         self.addCleanup(os.chmod, locked, 0o755)
-        self.refused({'id': 'ad4u', 'space': self.p_id, 'from': self.src}, 400, 'from-not-found')
+        body = self.refused({'id': 'ad4u', 'space': self.p_id, 'from': self.src}, 400, 'from-not-found')
+        self.assertIn('not readable', body['error'])
+        self.assertNotIn(self.src, body['error'], 'шлях з диска в тексті відмови')
         self.assert_nothing('ad4u')
+
+    def test_an_unreadable_file_refuses_the_whole_folder_up_front(self):
+        """`getsize` читати не просить, тож без `os.access` обхід пропустив би такий файл, а копія впала б 500
+        `task-create-failed` з абсолютним шляхом у тексті. Відмова — ДО будь-якого запису, і без шляху в тексті."""
+        if os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0):
+            self.skipTest('chmod 000 не діє (Windows чи root)')
+        self.put('index.html')
+        locked = self.put('secret.css')
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o644)
+        body = self.refused({'id': 'ad4f', 'space': self.p_id, 'from': self.src}, 400, 'from-not-found')
+        self.assertIn('not readable', body['error'])
+        self.assertNotIn(self.src, body['error'], 'шлях з диска в тексті відмови')
+        self.assert_nothing('ad4f')
+
+    def test_an_unreadable_file_that_is_not_copied_anyway_does_not_matter(self):
+        """Читабельність питаємо лише про те, що ПЕРЕЛІЧЕНО до копії: службовий файл у корені відсіяно раніше."""
+        if os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0):
+            self.skipTest('chmod 000 не діє (Windows чи root)')
+        self.put('index.html')
+        junk = self.put('build.py')                    # службове в корені — не копіюється
+        os.chmod(junk, 0)
+        self.addCleanup(os.chmod, junk, 0o644)
+        self.made('ad4g')
+        st, body = self.post('/api/task-new', {'id': 'ad4g', 'space': self.p_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.it1_files('ad4g'), {'index.html'})
 
     def test_a_directory_named_index_html_is_not_an_index(self):
         os.makedirs(os.path.join(self.src, 'index.html'))

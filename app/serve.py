@@ -7,6 +7,7 @@ comment-layer с каналами: internal (локально, для Claude) / 
 """
 import collections
 import contextlib
+import errno
 import functools
 import hashlib
 import itertools
@@ -1847,7 +1848,8 @@ def adopt_scan(src):
     текою-джерелом), `_ADOPT_SKIP_ANY` на будь-якому рівні, службове інструмента в корені (`_is_tool_junk`) і стан
     публікації `STATE_FILE` у корені (підпис чужої публікації в новій задачі збрехав би). Сокети й fifo — не файли.
     Більше `ADOPT_MAX_FILES` файлів чи `ADOPT_MAX_BYTES` байтів — `AdoptRefused('from-too-big', 413)` одразу, не
-    дочитуючи (з числами на момент зупинки). Нечитабельна підтека — `OSError` (див. `_adopt_walk_error`)."""
+    дочитуючи (з числами на момент зупинки). Нечитабельна підтека чи файл, який мав бути скопійований, — `OSError`
+    (підтека: `_adopt_walk_error`; файл: `PermissionError` тут) — маршрут відмовляє 400 `from-not-found`."""
     files, total, links = [], 0, 0
     for dirpath, dirnames, filenames in os.walk(src, followlinks=False, onerror=_adopt_walk_error):
         rel = os.path.relpath(dirpath, src)
@@ -1870,6 +1872,9 @@ def adopt_scan(src):
                 continue
             if not os.path.isfile(p):
                 continue
+            if not os.access(p, os.R_OK):
+                # `getsize` читати не просить: без цього файл пройшов би обхід і впав би на копії (500 із шляхом у тексті)
+                raise PermissionError(errno.EACCES, 'a file of the folder is not readable')
             files.append(f if top else os.path.join(rel, f))
             total += os.path.getsize(p)
             if len(files) > ADOPT_MAX_FILES or total > ADOPT_MAX_BYTES:
@@ -6877,15 +6882,18 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         # Шлях мусить бути АБСОЛЮТНИМ після `~`: відносний розкривався б від теки, звідки запущено сервер. NUL чи
         # самотній сурогат у рядку — `ValueError` із `realpath`: це «нема такої теки», а не обірване зʼєднання.
-        real = None
+        real, absolute = None, False
         try:
             path = os.path.expanduser(src.strip())
-            if os.path.isabs(path):
+            absolute = os.path.isabs(path)
+            if absolute:
                 real = os.path.realpath(path)
         except (ValueError, OSError):
             pass
         if real is None or not os.path.isdir(real):
-            self._space_error(400, 'from-not-found', 'no such folder (an absolute path is required)')
+            # Код один, текст — за справжньою причиною: відносний шлях чи абсолютний, якого нема.
+            self._space_error(400, 'from-not-found',
+                              'no such folder' if absolute else 'the path must be absolute (or start with ~)')
             return None
         idx = os.path.join(real, 'index.html')
         if os.path.islink(idx) or not os.path.isfile(idx):
