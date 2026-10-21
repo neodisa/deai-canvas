@@ -799,6 +799,31 @@ class GitlabSyncHonesty(unittest.TestCase):
             os.path.join(r['dir'], 'iterations', 'it2', 'index.html')),
             'теки форку на диску немає')
 
+    def test_a_new_task_with_a_reachable_mirror_but_no_mockup_yet_gets_the_starter_index(self):
+        """⛔ Дзеркало ДОСТУПНЕ, а `mockup/<tid>` у ньому ще нема — звичайний випадок для зовсім нової задачі.
+
+        Регресія релізу 0.6.0 (`from` у `task-new`): параметр `src` («тека з наявного макета») затінювався локальним
+        `src = os.path.join(md, gl['path'])` гілки GitLab; `cloned` лишався False, гілка «із теки» діставала шлях
+        НЕІСНУЮЧОГО макета в дзеркалі й порожній перелік — і `it1` лягала ПОРОЖНЬОЮ, без стартового `index.html`.
+
+        Мутація, якою доводиться: поверни параметр під назвою `src` (чи прибери `adopt_` з імен) — тест червоніє.
+        """
+        os.environ['DC_IDENTITY_NAME'] = 'Lead'
+        os.environ['DC_IDENTITY_EMAIL'] = 'lead@example.com'
+        try:
+            cfg = {'tasks': {}, 'design_work_root': os.path.join(self.tmp, 'dw'), 'gitlab': {}}
+            r = self.serve.task_new(cfg, 'fresh', title='Свіжа задача',
+                                    gitlab={'repo': self.origin, 'path': 'mockup/never-existed'})
+        finally:
+            os.environ.pop('DC_IDENTITY_NAME', None)
+            os.environ.pop('DC_IDENTITY_EMAIL', None)
+        self.assertFalse(r['cloned'])
+        self.assertNotIn('adopted', r)
+        index = os.path.join(r['dir'], 'iterations', 'it1', 'index.html')
+        self.assertTrue(os.path.isfile(index), 'стартового index.html нема: it1 порожня')
+        with open(index, encoding='utf-8') as fh:
+            self.assertIn('Свіжа задача', fh.read())
+
     def test_autosync_never_picks_a_foreign_iteration(self):
         """Чужа ітерація найсвіжіша — і все одно не їде під моїм підписом.
 

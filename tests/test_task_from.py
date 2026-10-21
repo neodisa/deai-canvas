@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -67,6 +68,7 @@ class TaskFrom(Fixture):
         self.put('page.css', b'h1{color:red}')
         self.put('img/a.png', b'\x89PNG')
         self.put('sub/keep.py', b'1')                 # .py у ПІДТЕЦІ — не службове (асиметрія `_is_tool_junk`)
+        self.put('sub/.hidden/x', b'1')               # і крапкова тека в ПІДТЕЦІ — теж: службове лише в корені
         self.put('.git/config', b'[core]')
         self.put('node_modules/x/i.js', b'1')
         self.put('sub/.git/config', b'[core]')        # `.git`/`node_modules` — на БУДЬ-ЯКОМУ рівні, не лише в корені
@@ -95,9 +97,9 @@ class TaskFrom(Fixture):
         st, body = self.post('/api/task-new', {'id': 'ad1', 'title': 'Ad', 'space': self.p_id, 'from': self.src})
         self.assertEqual(st, 200, body)
         self.assertEqual(self.it1_files('ad1'), {'index.html', 'page.css', os.path.join('img', 'a.png'),
-                                                 os.path.join('sub', 'keep.py')})
-        sizes = sum(len(x) for x in (b'<!doctype html><h1>Adopted</h1>', b'h1{color:red}', b'\x89PNG', b'1'))
-        self.assertEqual(body['copied'], {'files': 4, 'bytes': sizes, 'skipped_links': 2})
+                                                 os.path.join('sub', 'keep.py'), os.path.join('sub', '.hidden', 'x')})
+        sizes = sum(len(x) for x in (b'<!doctype html><h1>Adopted</h1>', b'h1{color:red}', b'\x89PNG', b'1', b'1'))
+        self.assertEqual(body['copied'], {'files': 5, 'bytes': sizes, 'skipped_links': 2})
         self.assertEqual((body['space'], body['dir']), (self.p_id, tdir))
         with open(os.path.join(tdir, 'iterations', 'it1', 'index.html'), encoding='utf-8') as f:
             self.assertIn('Adopted', f.read(), 'стартовий макет замість теки-джерела')
@@ -137,10 +139,8 @@ class TaskFrom(Fixture):
         self.assert_nothing('ad3')
 
     def test_bad_from_values(self):
-        for bad in (5, '', '   ', None):
+        for bad in (5, '', '   '):                    # `from: null` — поля нема (див. `test_from_null_means_no_from`)
             with self.subTest(bad=bad):
-                if bad is None:
-                    continue                          # `from: null` — поля нема (див. наступний тест)
                 self.refused({'id': 'ad4', 'space': self.p_id, 'from': bad}, 400, 'bad-request')
         self.assert_nothing('ad4')
 
@@ -172,11 +172,12 @@ class TaskFrom(Fixture):
         self.refused({'id': 'ad6', 'space': self.p_id, 'from': parent}, 400, 'from-contains-space')
         self.assert_nothing('ad6')
 
-    def test_folders_on_different_drives_do_not_contain_each_other(self):
-        """Windows: `commonpath` на різних дисках кидає `ValueError` — це «не містить», а не обірваний запит."""
+    def test_an_ancestor_that_cannot_be_compared_does_not_break_the_request(self):
+        """Windows: порівняння теки з предком (`samefile`) між дисками може кинути `OSError` — це «не та сама
+        тека», а не обірваний запит."""
         self.put('index.html')
         self.made('ad6d')
-        with mock.patch.object(serve.os.path, 'commonpath', side_effect=ValueError('Paths don\'t have the same drive')):
+        with mock.patch.object(serve.os.path, 'samefile', side_effect=OSError('different drives')):
             st, body = self.post('/api/task-new', {'id': 'ad6d', 'space': self.p_id, 'from': self.src})
         self.assertEqual(st, 200, body)
         self.assertEqual(self.it1_files('ad6d'), {'index.html'})
@@ -226,6 +227,202 @@ class TaskFrom(Fixture):
             st, body = self.post('/api/task-new', {'id': 'ad9', 'space': self.p_id, 'from': self.src})
         self.assertEqual((st, body['code']), (500, 'task-create-failed'), body)
         self.assert_nothing('ad9')
+
+    # ---------- Ревʼю a8ae345: відмови, відкат, гонки ----------
+
+    def test_a_differently_cased_path_of_the_space_is_still_the_space(self):
+        """APFS не розрізняє регістр: `<тека простору>.upper()` — та сама тека, і рядкове порівняння її не бачить."""
+        up = self.p_path.upper()
+        if not os.path.exists(up):
+            self.skipTest('файлова система розрізняє регістр')
+        with open(os.path.join(self.p_path, 'index.html'), 'w', encoding='utf-8') as f:
+            f.write('<h1>space root</h1>')
+        self.addCleanup(os.remove, os.path.join(self.p_path, 'index.html'))
+        self.refused({'id': 'ad6c', 'space': self.p_id, 'from': up}, 400, 'from-contains-space')
+        self.assert_nothing('ad6c')
+
+    def test_a_path_that_cannot_exist_is_not_found_not_a_dropped_connection(self):
+        for bad in ('/tmp/x\x00y', '/tmp/\ud800x'):      # NUL і самотній сурогат → ValueError у `realpath`
+            with self.subTest(bad=bad):
+                self.refused({'id': 'ad4v', 'space': self.p_id, 'from': bad}, 400, 'from-not-found')
+        self.assert_nothing('ad4v')
+
+    def test_a_relative_from_is_refused_not_resolved_against_the_server_cwd(self):
+        """Сервер — той самий процес, що й тест: `chdir` у теку-джерело робить `.` і імʼя теки РЕАЛЬНИМИ шляхами, тож
+        відмова доводить саме вимогу абсолютного шляху, а не те, що такої теки нема."""
+        self.put('index.html')
+        before = os.getcwd()
+        self.addCleanup(os.chdir, before)
+        os.chdir(os.path.dirname(self.src))
+        for bad in ('.', os.path.basename(self.src), '../' + os.path.basename(os.path.dirname(self.src)) + '/'
+                    + os.path.basename(self.src), '~no-such-user-hopefully/x'):
+            with self.subTest(bad=bad):
+                self.refused({'id': 'ad4r', 'space': self.p_id, 'from': bad}, 400, 'from-not-found')
+        self.assert_nothing('ad4r')
+
+    def test_an_unreadable_subfolder_refuses_the_whole_folder(self):
+        if os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0):
+            self.skipTest('chmod 000 не діє (Windows чи root)')
+        self.put('index.html')
+        self.put('locked/a.txt')
+        locked = os.path.join(self.src, 'locked')
+        os.chmod(locked, 0)
+        self.addCleanup(os.chmod, locked, 0o755)
+        self.refused({'id': 'ad4u', 'space': self.p_id, 'from': self.src}, 400, 'from-not-found')
+        self.assert_nothing('ad4u')
+
+    def test_a_directory_named_index_html_is_not_an_index(self):
+        os.makedirs(os.path.join(self.src, 'index.html'))
+        self.refused({'id': 'ad5d', 'space': self.p_id, 'from': self.src}, 400, 'from-no-index')
+        self.assert_nothing('ad5d')
+
+    def test_a_fifo_in_the_source_is_skipped_not_opened(self):
+        """`copy2` на fifo блокується назавжди; `isfile` у обході — єдина перепона."""
+        if not hasattr(os, 'mkfifo'):
+            self.skipTest('нема os.mkfifo')
+        self.put('index.html')
+        os.mkfifo(os.path.join(self.src, 'pipe'))
+        self.made('ad5f')
+        st, body = self.post('/api/task-new', {'id': 'ad5f', 'space': self.p_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.it1_files('ad5f'), {'index.html'})
+        self.assertEqual(body['copied'], {'files': 1, 'bytes': 1, 'skipped_links': 0})
+
+    def test_a_dangling_symlink_is_counted_as_a_skipped_link(self):
+        self.put('index.html')
+        os.symlink(os.path.join(self.tmp, 'no-such-target'), os.path.join(self.src, 'dangling.txt'))
+        self.made('ad5l')
+        st, body = self.post('/api/task-new', {'id': 'ad5l', 'space': self.p_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.it1_files('ad5l'), {'index.html'})
+        self.assertEqual(body['copied']['skipped_links'], 1)
+
+    def test_the_limits_are_inclusive(self):
+        """Рівно ліміт — приймаємо, на одиницю більше — відмова (`>`, не `>=`)."""
+        self.put('index.html', b'12345')
+        self.put('a.css', b'1234')
+        self.made('ad8b')
+        with mock.patch.object(serve, 'ADOPT_MAX_BYTES', 9), mock.patch.object(serve, 'ADOPT_MAX_FILES', 2):
+            st, body = self.post('/api/task-new', {'id': 'ad8b', 'space': self.p_id, 'from': self.src})
+            self.assertEqual((st, body['copied']['files'], body['copied']['bytes']), (200, 2, 9), body)
+        self.made('ad8c')
+        with mock.patch.object(serve, 'ADOPT_MAX_BYTES', 8):
+            self.refused({'id': 'ad8c', 'space': self.p_id, 'from': self.src}, 413, 'from-too-big')
+        with mock.patch.object(serve, 'ADOPT_MAX_FILES', 1):
+            self.refused({'id': 'ad8c', 'space': self.p_id, 'from': self.src}, 413, 'from-too-big')
+        self.assert_nothing('ad8c')
+
+    def test_copied_files_get_a_fresh_mtime(self):
+        """`copy2` зберігає mtime джерела; свіжа задача зі старою датою збрехала б у `_last_changed` і в «Задачах»."""
+        old = 946684800                               # 01.01.2000
+        for rel in ('index.html', 'img/a.png'):
+            os.utime(self.put(rel), (old, old))
+        self.made('ad12')
+        st, body = self.post('/api/task-new', {'id': 'ad12', 'space': self.p_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+        it1 = os.path.join(self.p_path, 'ad12', 'iterations', 'it1')
+        for rel in ('index.html', os.path.join('img', 'a.png')):
+            self.assertGreater(os.path.getmtime(os.path.join(it1, rel)), time.time() - 300, rel)
+
+    def test_a_failure_after_the_copy_still_leaves_nothing_and_a_retry_works(self):
+        """Не лише `adopt_copy`: збій запису реєстру теж прибирає теку, інакше повтор отримав би `task-dir-exists`."""
+        self.put('index.html')
+        self.made('ad10')
+        with mock.patch.object(serve, 'save_tasks', side_effect=OSError('disk full')):
+            st, body = self.post('/api/task-new', {'id': 'ad10', 'space': self.p_id, 'from': self.src})
+        self.assertEqual((st, body['code']), (500, 'task-create-failed'), body)
+        self.assert_nothing('ad10')
+        st, body = self.post('/api/task-new', {'id': 'ad10', 'space': self.p_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+
+    def test_a_folder_that_appears_after_the_check_is_not_touched(self):
+        """Гонка: другий запит створив теку між перевіркою `lexists` і записом. Теку займає `makedirs` БЕЗ
+        `exist_ok` — відмова `409`, і прибирання не зачіпає чужу теку."""
+        self.put('index.html')
+        tdir = self.made('ad11')
+        real_scan = serve.adopt_scan
+
+        def scan_then_lose_the_race(src):
+            out = real_scan(src)
+            os.makedirs(tdir)
+            with open(os.path.join(tdir, 'mine.txt'), 'w', encoding='utf-8') as f:
+                f.write('чужий файл')
+            return out
+
+        with mock.patch.object(serve, 'adopt_scan', scan_then_lose_the_race):
+            self.refused({'id': 'ad11', 'space': self.p_id, 'from': self.src}, 409, 'task-dir-exists')
+        self.assertEqual(os.listdir(tdir), ['mine.txt'], 'чужу теку зачеплено')
+        self.assertNotIn('ad11', _read(self.p_file)['tasks'])
+
+    def test_a_subfolder_swapped_for_a_link_after_the_scan_is_not_followed(self):
+        """TOCTOU: обхід бачив звичайну підтеку, а до копії її підмінили на посилання назовні."""
+        self.put('index.html')
+        self.put('sub/a.txt', b'inside')
+        secret = os.path.join(self.tmp, 'secret-dir')
+        os.makedirs(secret, exist_ok=True)
+        self.addCleanup(shutil.rmtree, secret, True)
+        with open(os.path.join(secret, 'a.txt'), 'w', encoding='utf-8') as f:
+            f.write('SECRET-OUTSIDE')
+        real_scan = serve.adopt_scan
+
+        def scan_then_swap(src):
+            out = real_scan(src)
+            shutil.rmtree(os.path.join(src, 'sub'))
+            os.symlink(secret, os.path.join(src, 'sub'))
+            return out
+
+        self.made('ad13')
+        with mock.patch.object(serve, 'adopt_scan', scan_then_swap):
+            st, body = self.post('/api/task-new', {'id': 'ad13', 'space': self.p_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.it1_files('ad13'), {'index.html'}, 'вміст посилання назовні скопійовано')
+        self.assertEqual(body['copied'], {'files': 1, 'bytes': 1, 'skipped_links': 1},
+                         'відповідь мусить казати, що скопійовано насправді, а не що бачив обхід')
+
+
+class AdoptCopy(unittest.TestCase):
+    """`adopt_copy` без сервера: що між обходом і копією змінили на диску."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='adopt-copy-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.src = os.path.join(self.tmp, 'src')
+        self.dst = os.path.join(self.tmp, 'dst')
+        os.makedirs(os.path.join(self.src, 'sub', 'deep'))
+        for rel, data in (('index.html', 'x'), ('sub/a.txt', 'inside'), ('sub/deep/b.txt', 'deeper')):
+            with open(os.path.join(self.src, rel), 'w', encoding='utf-8') as f:
+                f.write(data)
+        self.outside = os.path.join(self.tmp, 'outside')
+        os.makedirs(os.path.join(self.outside, 'deep'))
+        for rel in ('a.txt', 'deep/b.txt'):
+            with open(os.path.join(self.outside, rel), 'w', encoding='utf-8') as f:
+                f.write('SECRET-OUTSIDE')
+
+    def test_a_plain_copy_reports_what_it_copied(self):
+        files, total, links = serve.adopt_scan(self.src)
+        self.assertEqual(serve.adopt_copy(self.src, self.dst, files), (3, total, 0))
+        self.assertEqual(total, len('x') + len('inside') + len('deeper'))
+
+    def test_a_subfolder_swapped_for_a_link_is_skipped_and_counted(self):
+        files, _, _ = serve.adopt_scan(self.src)
+        shutil.rmtree(os.path.join(self.src, 'sub'))
+        os.symlink(self.outside, os.path.join(self.src, 'sub'))
+        self.assertEqual(serve.adopt_copy(self.src, self.dst, files), (1, 1, 2))
+        self.assertFalse(os.path.lexists(os.path.join(self.dst, 'sub')))
+
+    def test_a_deeper_component_swapped_for_a_link_is_skipped_too(self):
+        files, _, _ = serve.adopt_scan(self.src)
+        shutil.rmtree(os.path.join(self.src, 'sub', 'deep'))
+        os.symlink(os.path.join(self.outside, 'deep'), os.path.join(self.src, 'sub', 'deep'))
+        self.assertEqual(serve.adopt_copy(self.src, self.dst, files), (2, len('x') + len('inside'), 1))
+        self.assertFalse(os.path.lexists(os.path.join(self.dst, 'sub', 'deep', 'b.txt')))
+
+    def test_a_file_swapped_for_a_link_is_skipped_and_counted(self):
+        files, _, _ = serve.adopt_scan(self.src)
+        os.remove(os.path.join(self.src, 'sub', 'a.txt'))
+        os.symlink(os.path.join(self.outside, 'a.txt'), os.path.join(self.src, 'sub', 'a.txt'))
+        self.assertEqual(serve.adopt_copy(self.src, self.dst, files), (2, len('x') + len('deeper'), 1))
+        self.assertFalse(os.path.lexists(os.path.join(self.dst, 'sub', 'a.txt')))
 
 
 if __name__ == '__main__':
