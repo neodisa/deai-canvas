@@ -873,7 +873,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzCopy: 'Скопіювати',
   wzCopied: 'Скопійовано.',
   wzCopyFailed: 'Не вдалося скопіювати — виділіть фразу вручну.',
-  wzErrFromNotFound: 'Такої теки нема або вона не читається.',
+  wzErrFromNotFound: 'Такої теки нема або вона не читається. Шлях — повний (можна з ~).',
   wzErrFromNoIndex: 'У теці нема index.html.',
   wzErrFromContains: 'Ця тека містить сам простір — виберіть теку макета всередині нього.',
   wzErrFromTooBig: 'Тека завелика для макета (понад 2000 файлів чи 200 МБ) — виберіть теку самого макета.',
@@ -937,7 +937,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzCopy: 'Copy',
   wzCopied: 'Copied.',
   wzCopyFailed: 'Could not copy — select the phrase by hand.',
-  wzErrFromNotFound: 'No such folder, or it cannot be read.',
+  wzErrFromNotFound: 'No such folder, or it cannot be read. Use a full path (~ is fine).',
   wzErrFromNoIndex: 'The folder has no index.html.',
   wzErrFromContains: 'This folder contains the space itself — pick the mockup folder inside it.',
   wzErrFromTooBig: 'The folder is too big for a mockup (over 2000 files or 200 MB) — pick the mockup folder itself.',
@@ -948,6 +948,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzSpaceGone: "The wizard's space is gone.",
   welcomeOpen: 'Open an existing space folder',
 ```
+
+  Охоронець (поправка після ревʼю Task 2): у `tests/spaces-state.test.mjs` тест «taskErrKey: коди task-new → ключі; … ключі є в словниках» (≈ рядок 183) доповнити новими кодами: `from-not-found` → `wzErrFromNotFound`, `from-no-index` → `wzErrFromNoIndex`, `from-contains-space` → `wzErrFromContains`, `from-too-big` → `wzErrFromTooBig`, `from-needs-plain-space` → `wzErrFromPlain`, `task-dir-exists` → `wzErrTaskDirExists` — тоді він сам перевірить, що ключі є в обох мовах.
 
 - [ ] **Step 2: Спільні частини панелі 3a — експорт.** У `app/connections-view.js`:
   - `const rolesLine = …` → `export const rolesLine = …`;
@@ -1684,6 +1686,12 @@ test("заміна в ролі — `replace` лише для enable; stale-за�
   assert.ok(b.indexOf("op.stale.length") < b.indexOf("deps.post("), "перевірка свіжості — до запиту");
 });
 
+test("план записів знає список кроку 2 (зниклий вибір не вимикає постачальника); вибір чиститься від зниклих", () => {
+  assert.match(fn(W, "submit3"), /prevList: mine\.list2/);
+  assert.match(fn(W, "loadStep2"), /mine\.list2 = mine\.list/);
+  assert.match(fn(W, "loadStep2"), /filter\(\(id\) => mine\.list\.some/);
+});
+
 test("обовʼязкові поля — до будь-якого запиту кроку 3", () => {
   const b = fn(W, "submit3");
   assert.ok(b.indexOf("missingRequired(") < b.indexOf("deps.api("), "missingRequired після запиту");
@@ -1764,7 +1772,7 @@ import {
   taskFormError,
 } from "./spaces-model.js";
 import {
-  allOk, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedInOrder, prevStep, titleFromFolder, writePlan,
+  allOk, errOffRows, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedInOrder, prevStep, titleFromFolder, writePlan,
 } from "./wizard-model.js";
 import { wizardHTML } from "./wizard-view.js";
 
@@ -2008,7 +2016,9 @@ export function createWizard(deps) {
       const r = await deps.api(`/api/modules?space=${encodeURIComponent(mine.spaceId)}`);
       if (wz !== mine || seq !== mine.seq) return;
       mine.list = Array.isArray(r?.modules) ? r.modules : [];
-      if (!mine.pick) mine.pick = initialPick(mine.list);
+      mine.list2 = mine.list;
+      /* Вибір, що пережив «Назад», чистимо від модулів, яких уже нема: радіо показали б «Без модуля», а план — ні. */
+      mine.pick = mine.pick ? new Set([...mine.pick].filter((id) => mine.list.some((e) => e?.id === id))) : initialPick(mine.list);
       mine.atPick = holdersByRole(mine.list);
     } catch (e) {
       if (wz !== mine || seq !== mine.seq) return;
@@ -2050,7 +2060,8 @@ export function createWizard(deps) {
     if (wz !== mine || seq !== mine.seq) return;
     mine.list = Array.isArray(list) ? list : [];
     mine.cards = pickedInOrder(mine.list, mine.pick).map(cardFrom);
-    mine.offs = offRows(mine.list, mine.pick).map((o) => ({ ...o, result: null }));
+    /* «Без модуля» + тримачі з помилкою, яких `replace` не вимикає (сервер їх не рахує тримачами) — майстер вимкне їх сам. */
+    mine.offs = [...offRows(mine.list, mine.pick), ...errOffRows(mine.list, mine.pick)].map((o) => ({ ...o, result: null }));
     mine.s3loading = false;
     paint();
   }
@@ -2142,7 +2153,7 @@ export function createWizard(deps) {
       return;
     }
     if (wz !== mine) return;
-    const ops = writePlan({ list: fresh, pick: mine.pick, forms, atPick: mine.atPick });
+    const ops = writePlan({ list: fresh, pick: mine.pick, forms, atPick: mine.atPick, prevList: mine.list2 });
     const results = [];
     let changed = false;
     for (const op of ops) {
