@@ -180,7 +180,9 @@ test("M2: зайнятість кроку 3 тримається до кінця
 });
 
 test("M3: після перейменування оболонка дізнається ДО перевірки «майстер ще той»", () => {
-  assert.match(fn(W, "submit1"), /deps\.afterSpaceEdited\(mine\.spaceId, saved\);\s*if \(wz !== mine\) return;/);
+  assert.match(fn(W, "submit1"),
+    /try \{ deps\.afterSpaceEdited\(mine\.spaceId, saved\); \} catch \(e\) \{ deps\.toast\(t\("errFailed", e\?\.message \?\? ""\)\); \}\s*if \(wz !== mine\) return;/,
+    "afterSpaceEdited у try (збій оболонки не заклинює форму) і раніше за перевірку");
 });
 
 test("M4: «Назад» і «Закрити» перевіряють після питання, що майстер той самий", () => {

@@ -293,7 +293,9 @@ export function createWizard(deps) {
         showError(form, spaceErrKey(e?.code), spaceErrField(e?.code));
         return;
       }
-      deps.afterSpaceEdited(mine.spaceId, saved);      // сервер уже перейменував — оболонка мусить знати й тоді, коли майстер закрито
+      /* Сервер уже перейменував — оболонка мусить знати й тоді, коли майстер закрито. Її збій не заклинює сторінку (форма
+         лишилась би вимкненою): тост, як у гілці створення. */
+      try { deps.afterSpaceEdited(mine.spaceId, saved); } catch (e) { deps.toast(t("errFailed", e?.message ?? "")); }
       if (wz !== mine) return;
       mine.busy = false;
       go(2);
