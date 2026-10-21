@@ -96,6 +96,35 @@ export function offRows(list, pick) {
   return out;
 }
 
+/**
+ * Errored-тримачі, яких `replace` НЕ вимкне, але які мусять піти разом із заміною (`freed` — ролі, що їх звільняють
+ * enable-и), у порядку секцій, раз на тримача (на першій звільненій ролі): тримач (`holds`) зі `status: error` (сервер
+ * `deai_modules._holders` рахує тримачами лише завантажені модулі), не вибраний людиною і без власного рядка в `offRows`.
+ * Спільне для `errOffRows` (що показує вʼю) і `writePlan` (що шле контролер) — щоб вони не розійшлись.
+ */
+function erroredOfFreed(list, pick, freed) {
+  const listed = new Set(offRows(list, pick).map((o) => o.holder.id));
+  const out = [];
+  for (const s of wizardSections(list)) {
+    if (!freed.has(s.role)) continue;
+    for (const e of s.modules) {
+      if (!holds(e) || e.status !== "error" || pick.has(e.id) || listed.has(e.id)) continue;
+      listed.add(e.id);
+      out.push({ role: s.role, holder: e });
+    }
+  }
+  return out;
+}
+
+/**
+ * Рядки «буде вимкнено» кроку 3 для errored-тримачів ролі, яку замінить вибраний ще не ввімкнений модуль: `[{role, holder}]`
+ * (`offRows` їх не знає — роль має вибраного). Рівно ті, кому `writePlan` дасть окремий `disable`, коли нічого не застаріло
+ * (`stale` рахує лише `writePlan`) і нічого не зникло (`gone`): без цих рядків людина не бачила б, що вимкнеться, а збій
+ * їхнього `disable` лишив би `allOk` хибним, а картку — без видимої причини.
+ */
+export const errOffRows = (list, pick) =>
+  erroredOfFreed(list, pick, new Set(pickedInOrder(list, pick).filter((e) => e.enabled !== true).flatMap(rolesOf)));
+
 const sameIds = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** Ролі, тримачі яких зараз (`fresh`) не ті, що бачив крок 2 (`atPick`): запис у такій ролі не шлемо. */
@@ -118,7 +147,7 @@ export const staleRoles = (roles, atPick, fresh) =>
  * чи коментарі лишились би без нікого, а людина просила іншого) і для тримача, що має хоч одну таку роль. Ролі зниклого
  * НЕВІДОМІ (його нема й у `prevList`, чи `prevList` не передали) — тоді disable не шлемо взагалі: не знаємо, чию роль він займав.
  *
- * Errored-тримач звільненої ролі (`status: error`): сервер `deai_modules._holders` рахує тримачами лише модулі, що
+ * Errored-тримач звільненої ролі (`status: error`; список — `errOffRows`, його ж бачить вʼю): сервер `deai_modules._holders` рахує тримачами лише модулі, що
  * завантажились (`m.status == 'ok'`), тож `replace: true` такого НЕ вимикає, а явний `module-disable` дозволений будь-якому
  * модулю каталогу (звіряно в `write_module_state`). Тому для нього — окремий `disable`, один на тримача. Статус `error` у
  * списку — і «не завантажився», і «остання перевірка впала»: у другому випадку `replace` вимикає сам, і зайвий `disable` після нього
@@ -162,11 +191,8 @@ export function writePlan({ list, pick, forms, atPick, prevList }) {
     if (mine.some((r) => freed.has(r)) && holder.status !== "error") continue;
     disable(holder, role, staleRoles([role], atPick, fresh));
   }
-  for (const s of wizardSections(list)) {
-    if (!freed.has(s.role)) continue;
-    for (const e of s.modules) {
-      if (holds(e) && e.status === "error" && !pick.has(e.id) && !rolesOf(e).some((r) => goneRoles.has(r))) disable(e, s.role, []);
-    }
+  for (const { role, holder } of erroredOfFreed(list, pick, freed)) {
+    if (!rolesOf(holder).some((r) => goneRoles.has(r))) disable(holder, role, []);
   }
   return ops;
 }

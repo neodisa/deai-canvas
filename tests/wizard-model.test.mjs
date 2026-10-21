@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  WZ_STEPS, allOk, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedFor, pickedInOrder, prevStep,
+  WZ_STEPS, allOk, errOffRows, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedFor, pickedInOrder, prevStep,
   staleRoles, titleFromFolder, wizardSections, writePlan,
 } from "../app/wizard-model.js";
 
@@ -360,4 +360,89 @@ test("назва з теки: обрізає базу, «.» і «..» — по�
   assert.equal(titleFromFolder("~/proj/."), "");
   assert.equal(titleFromFolder("./site"), "site");
   assert.equal(titleFromFolder("..hidden"), "..hidden", "лише «.» і «..» цілком — не їхні префікси");
+});
+
+/* ── рядки «буде вимкнено» для errored-тримачів звільненої ролі (errOffRows) ──────────────────────────────── */
+
+const rows = (r) => r.map((x) => [x.role, x.holder.id]);
+const disableIds = (ops) => ops.filter((o) => o.op === "disable").map((o) => o.id).sort();
+
+test("errOffRows: errored-тримач ролі, яку замінить ще не ввімкнений вибраний модуль", () => {
+  const h = M("h", ["publish"], { enabled: true, status: "error" });
+  const memo = M("memo", ["publish"]);
+  const list = [h, memo];
+  assert.deepEqual(rows(errOffRows(list, new Set(["memo"]))), [["publish", "h"]]);
+  assert.equal(errOffRows(list, new Set(["memo"]))[0].holder, h, "holder — сам запис списку (для вʼю)");
+  assert.deepEqual(errOffRows(list, new Set()), [], "заміни нема — і звільнених ролей нема (це справа offRows)");
+});
+
+test("errOffRows: не тримач, не errored, вибраний або вже в offRows — рядка нема", () => {
+  const memo = M("memo", ["publish"]);
+  const none = (h) => errOffRows([h, memo], new Set(["memo"]));
+  assert.deepEqual(none(M("h", ["publish"], { enabled: false, status: "error" })), [], "вимкнений — не тримач");
+  assert.deepEqual(none(M("h", ["publish"], { enabled: true, status: "ok" })), [], "replace вимкне сам");
+  assert.deepEqual(none(M("h", ["publish"], { enabled: true, status: "unchecked" })), [], "replace вимкне сам");
+  assert.deepEqual(none(M("h", ["publish"], { enabled: true, status: "missing" })), [], "missing — не тримач");
+  const picked = M("e", ["publish", "tokens"], { enabled: true, status: "error" });
+  assert.deepEqual(errOffRows([picked, memo], new Set(["memo", "e"])), [], "явно вибраного не вимикаємо");
+  /* уже має рядок «Без модуля» (comments без вибраного) — другого рядка не треба */
+  const mh = M("mh", ["publish", "comments"], { enabled: true, status: "error" });
+  assert.deepEqual(offRows([mh, memo], new Set(["memo"])).map((o) => o.holder.id), ["mh"]);
+  assert.deepEqual(errOffRows([mh, memo], new Set(["memo"])), []);
+});
+
+test("errOffRows: звільняють лише ще не ввімкнені вибрані; ввімкнений вибраний нічого не замінює", () => {
+  const x = M("x", ["tokens"], { enabled: true, status: "ok" });
+  const h = M("h", ["tokens"], { enabled: true, status: "error" });
+  assert.deepEqual(errOffRows([x, h], new Set(["x"])), []);
+  const y = M("y", ["tokens"]);
+  assert.deepEqual(rows(errOffRows([x, h, y], new Set(["y"]))), [["tokens", "h"]]);
+});
+
+test("errOffRows: порядок секцій, раз на тримача (на першій звільненій ролі), без сміття на вході", () => {
+  const e1 = M("e1", ["comments"], { enabled: true, status: "error" });
+  const e2 = M("e2", ["publish"], { enabled: true, status: "error" });
+  const both = M("both", ["tokens", "comments", "publish"], { enabled: true, status: "error" });
+  const list = [e1, e2, both, M("memo", ["publish"]), M("sb", ["comments"]), M("css", ["tokens"])];
+  assert.deepEqual(rows(errOffRows(list, new Set(["memo", "sb", "css"]))), [["publish", "e2"], ["publish", "both"], ["comments", "e1"]],
+    "publish раніше за comments; both — один раз, на publish");
+  assert.deepEqual(errOffRows(undefined, new Set(["a"])), []);
+  assert.deepEqual(errOffRows([null, { id: 3 }], new Set(["a"])), []);
+});
+
+test("узгодженість: disable-операції writePlan (без stale й gone) = offRows ∪ errOffRows — вʼю не бреше про те, що вимкнеться", () => {
+  const E = (id, roles, status = "error") => M(id, roles, { enabled: true, status });
+  const cases = [
+    [[E("h", ["publish"]), M("memo", ["publish"])], ["memo"]],
+    [[E("mh", ["publish", "comments"]), M("memo", ["publish"])], ["memo"]],
+    [[E("h1", ["publish"]), E("h2", ["publish"]), M("memo", ["publish"])], ["memo"]],
+    [[E("old", ["tokens"], "ok"), M("memo", ["publish"])], []],
+    [[E("e1", ["publish"]), E("c", ["comments"], "ok"), M("sb", ["x"]), M("memo", ["publish"]), M("cm", ["comments"], { enabled: false })], ["memo"]],
+    [[E("h", ["publish"]), E("t", ["tokens"], "ok"), M("memo", ["publish"])], ["memo"]],
+    [[E("x", ["tokens"], "ok"), E("h", ["tokens"])], ["x"]],
+  ];
+  for (const [list, picked] of cases) {
+    const pick = new Set(picked);
+    const ops = writePlan({ list, pick, forms: new Map(), atPick: holdersByRole(list), prevList: list });
+    const shown = [...offRows(list, pick), ...errOffRows(list, pick)].map((o) => o.holder.id).sort();
+    assert.deepEqual(disableIds(ops), shown, JSON.stringify(list.map((e) => e.id)));
+  }
+});
+
+test("узгодженість: тримач, якого вимкне сама заміна (ok), має рядок, але окремого disable нема — disable ⊆ рядків", () => {
+  const mh = M("mh", ["publish", "comments"], { enabled: true, status: "ok" });
+  const list = [mh, M("memo", ["publish"])];
+  const pick = new Set(["memo"]);
+  const ops = writePlan({ list, pick, forms: new Map(), atPick: holdersByRole(list), prevList: list });
+  assert.deepEqual(disableIds(ops), []);
+  assert.deepEqual(offRows(list, pick).map((o) => o.holder.id), ["mh"], "а рядок «буде вимкнено» є — його вимкне replace");
+});
+
+test("errored-тримач: gone накрив ту саму роль, що й вибраний замінник (суперечливий вибір) — disable не шлемо", () => {
+  /* типово gone і замінник тієї ж ролі разом не трапляються (pickModule скидає зниклого), але writePlan не мусить на це розраховувати */
+  const h = M("h", ["publish"], { enabled: true, status: "error" });
+  const memo = M("memo", ["publish"]);
+  const prevList = [h, memo, M("g", ["publish"])];
+  const ops = writePlan({ list: [h, memo], pick: new Set(["g", "memo"]), forms: new Map(), atPick: holdersByRole(prevList), prevList });
+  assert.deepEqual(ops.map((o) => [o.op, o.id]), [["gone", "g"], ["enable", "memo"]]);
 });
