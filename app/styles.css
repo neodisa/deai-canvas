@@ -1532,7 +1532,7 @@ body.home-open .cv-notice{display:none!important}
 .th-welcome-logo svg{display:block;width:76px;height:76px}
 .th-welcome .th-h{margin-bottom:10px;font-size:24px}
 .th-welcome-lead{max-width:540px;margin:0 auto 22px;color:var(--mid);font-size:14px;line-height:1.55}
-.th-welcome-act{display:flex;justify-content:center}
+.th-welcome-act{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
 .th-welcome-agent{margin:22px 0 0;color:var(--dim);font-size:12px}
 .th-note{padding:60px 20px;text-align:center;color:var(--dim)}
 .th-banner{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:14px;
@@ -1635,6 +1635,69 @@ body:not(.home-open) .cn-drawer{display:none}
 .cn-res .ico{flex:none;margin-top:2px}
 .cn-res--ok .ico{color:var(--ok)}
 .cn-res--err .ico{color:var(--bad)}
+/* ── майстер нового простору (етап 3b): сторінка `wiz` оверлею `#tasks-home` ──────────────────────────────────────────
+   Класи `wz-`; поля, картки, бейджі й результат — спільні з «Підключенням» (`cn-*`). Охоронець — `tests/wizard-css.test.mjs`.
+   Кружки кольору: правила діалогу (`.cv-ask .cv-color`) світлі й прив'язані до `.cv-ask`, тож тут — свої, на темному тлі. */
+.wz{max-width:760px}
+.wz-steps{display:flex;gap:6px;margin:0 0 10px;padding:0;list-style:none}
+.wz-step{flex:1;min-width:0}
+.wz-step-bar{display:block;height:4px;border-radius:2px;background:var(--s3)}
+.wz-step--done .wz-step-bar{background:var(--logo)}
+.wz-step--cur .wz-step-bar{background:var(--sel)}
+.wz-step--todo .wz-step-bar{background:var(--s3)}
+.wz-step-name{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.wz-of{margin:0 0 18px;font-size:12px;color:var(--dim)}
+.wz-h{outline:none}
+.wz-h:focus-visible{outline:2px solid var(--sel);outline-offset:4px;border-radius:var(--r-sm)}
+.wz-lead{margin:-6px 0 22px;max-width:640px;color:var(--mid);font-size:13.5px;line-height:1.55}
+.wz-form{display:flex;flex-direction:column;gap:16px;margin:0}
+.wz-colors{display:flex;gap:8px;flex-wrap:wrap}
+.wz .cv-color{width:28px;height:28px;padding:0;border:1px solid var(--line2);border-radius:var(--r);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.wz .cv-color .ico{display:none;color:var(--g900)}
+.wz .cv-color[aria-checked=true]{box-shadow:0 0 0 2px var(--s1),0 0 0 4px var(--hi)}
+.wz .cv-color[aria-checked=true] .ico{display:block}
+.wz .cv-color:focus-visible{outline:2px solid var(--sel);outline-offset:3px}
+/* `.cn-field{display:flex}` перебиває UA-правило `[hidden]` — без цього поле теки кроку 4 видиме завжди. Лише в майстрі. */
+.wz .cn-field[hidden]{display:none}
+.wz-err{margin:0;padding:8px 10px;border:1px solid var(--line2);border-radius:var(--r-sm);background:var(--s2);
+  color:var(--hi);font-size:12.5px;line-height:1.45}
+.wz-err[hidden]{display:none}
+.wz-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;padding-top:14px;border-top:1px solid var(--line)}
+.wz-sec{margin:0;padding:0;border:0;min-width:0}
+.wz-sec + .wz-sec{margin-top:18px}
+.wz-sec legend{padding:0}
+.wz-opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr));gap:10px;margin-top:8px}
+.wz-opt{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--line);border-radius:var(--r-lg);
+  background:var(--s2);cursor:pointer}
+.wz-opt input{flex:none;margin:2px 0 0;accent-color:var(--sel)}
+.wz-opt:has(input:checked){border-color:var(--sel);background:var(--s3)}
+.wz-opt:has(input:focus-visible){outline:2px solid var(--sel);outline-offset:2px}
+.wz-opt:has(input:disabled){cursor:default;opacity:.6}
+.wz-opt--none{border-style:dashed}
+.wz-opt-body{display:flex;flex-direction:column;gap:4px;min-width:0}
+.wz-opt-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.wz-opt-top b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
+.wz-opt-desc{font-size:12.5px;line-height:1.45;color:var(--mid)}
+.wz-opt-instead{font-size:12px;color:var(--dim)}
+.wz-opt-why{display:flex;gap:6px;font-size:12px;color:var(--hi)}
+.wz-opt-why .ico{flex:none;margin-top:1px;color:var(--bad)}
+.wz-offs{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+.wz-off{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border:1px dashed var(--line2);
+  border-radius:var(--r);color:var(--mid);font-size:12.5px}
+.wz-off .ico{flex:none}
+.wz-off .cn-res{flex-basis:100%}
+.wz-cards{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;border:0;min-width:0}
+.wz-card{gap:12px}
+.wz-res:empty{display:none}
+.wz-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);gap:18px;align-items:start}
+.wz-task{padding:14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s2)}
+.wz-src{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;border:0}
+.wz-src legend{padding:0;margin-bottom:6px}
+.wz-acts{display:flex;flex-wrap:wrap;gap:8px}
+.wz-agent{margin-top:0}
+/* `.th-in` дає `padding:22px 28px 60px`; тут те саме правило пізніше й тієї ж специфічності — вузьке вікно його перебиває. */
+@media (max-width:719px){.wz{padding:16px 16px 48px}.wz-two{grid-template-columns:1fr}}
 /* Логотип і двері в палітру — окремі речі: рискою зліва `.pal-open` стає
    такою ж «оправою», як справа від неї (там вона відділяє від крихт). Селектор
    по сусідству, а не новий вузол у розмітці смуги: порядок «логотип → палітра»
