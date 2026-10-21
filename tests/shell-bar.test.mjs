@@ -737,7 +737,7 @@ test("смуга на сторінці «Підключення»: плоска 
   assert.doesNotMatch(h, /data-act="figma"|data-act="publish"|data-dd="iter"/);
   assert.doesNotMatch(/<button[^>]*data-act="home"[^>]*>/.exec(h)[0], /ctl--on|aria-current/);
   /* Іконка крошки — `sliders` (та сама, що в дропдауні й палітрі), а не `grid` «Задач». */
-  const flat = (x) => /<span class="crumb crumb--flat">[\s\S]*?<\/span><\/span>/.exec(x)[0];
+  const flat = (x) => /<span class="crumb crumb--flat crumb--page">[\s\S]*?<\/span><\/span>/.exec(x)[0];
   const tasks = flat(html({ space: SP(), homeOpen: true, taskId: "t1" }));
   assert.match(flat(h), /#i-sliders/);
   assert.doesNotMatch(flat(h), /#i-grid/);
@@ -752,7 +752,7 @@ test("смуга на сторінці «Підключення»: плоска 
 test("крошка майстра: іконка plus і «Новий простір», жодної фішки простору й кнопки «назад»", () => {
   const model = { zone1: [{ id: "home", tier: 0, on: false }, { id: "palette", tier: 0 }, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }], zone2: [], zone3: [] };
   const h = barHTML(model, {});
-  assert.match(h, /<span class="crumb crumb--flat">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
+  assert.match(h, /<span class="crumb crumb--flat crumb--page">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
   assert.doesNotMatch(h, /data-act="back"/);
   assert.doesNotMatch(h, /space-chip/);
   /* Це «головний» склад оверлею: зони 2 і 3 порожні, жодного контрола задачі. */
@@ -762,7 +762,7 @@ test("крошка майстра: іконка plus і «Новий прост�
 
 test("смуга на сторінці майстра: з простором і задачею в стані — без фішки й «назад», крошка «Новий простір», логотип не світиться", () => {
   const h = html({ space: SP(), spaces: SPACES, homeOpen: true, homePage: "wiz", taskId: "t1" });
-  assert.match(h, /<span class="crumb crumb--flat">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
+  assert.match(h, /<span class="crumb crumb--flat crumb--page">[\s\S]*?#i-plus[\s\S]*?<span class="txt">Новий простір<\/span>/);
   assert.doesNotMatch(h, /data-dd="space"/, "фішка простору на майстрі");
   assert.doesNotMatch(h, /data-act="back"/, "«назад до задачі» на майстрі");
   assert.doesNotMatch(h, /<span class="txt">Задачі<\/span>|<span class="txt">Підключення<\/span>/, "чужа крошка");
@@ -780,6 +780,19 @@ test("смуга на сторінці майстра: з простором і 
   const tasks = html({ space: SP(), spaces: SPACES, homeOpen: true, taskId: "t1" });
   assert.match(tasks, /data-dd="space"/);
   assert.match(tasks, /data-act="back"/);
+});
+
+/* Крошка сторінки оверлею («Задачі», «Підключення», «Новий простір») має модифікатор `crumb--page`: за ним CSS знімає ліміт
+   110px, що перебивав `.crumb{max-width:260px}` і стискав іконку до 0px. Модифікатор — ЛИШЕ на цих крошках: смуга задачі
+   (канвас) й зовнішня оболонка превʼю (`ext-bar.js`) лишаються з розміткою, яка була. */
+test("крошка сторінки оверлею має `crumb--page` — на «Задачах», «Підключенні» й майстрі; смуга задачі його не має", () => {
+  for (const homePage of [undefined, "tasks", "conn", "wiz"]) {
+    const h = html({ space: SP(), homeOpen: true, homePage, taskId: "t1" });
+    assert.equal((h.match(/class="crumb crumb--flat crumb--page"/g) ?? []).length, 1, `homePage=${String(homePage)}`);
+  }
+  const task = html({ space: SP(), taskId: "t1" });
+  assert.doesNotMatch(task, /crumb--page/, "смуга задачі не повинна мати модифікатор сторінки");
+  assert.doesNotMatch(html({ taskId: "t1" }), /crumb--page/);
 });
 
 test("дропдаун просторів: недоступний простір приглушений, не вимкнений, і каже чому", () => {

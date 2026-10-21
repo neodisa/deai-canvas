@@ -573,7 +573,9 @@ function homeCrumbs(model) {
   const wiz = model.zone1.some((x) => x.id === "crumb-wiz");
   const conn = model.zone1.some((x) => x.id === "crumb-conn");
   const [icon, key] = wiz ? ["plus", "wzCrumb"] : conn ? ["sliders", "cnTitle"] : ["grid", "tasks"];
-  const crumb = `<span class="crumb crumb--flat">${ico(icon)}<span class="txt">${esc(t(key))}</span></span>`;
+  /* `crumb--page` — крошка сторінки оверлею без ліміту ширини (див. `.crumb.crumb--page` у styles.css): інакше глобальний
+     `.crumb{max-width:110px}` стискав іконку до 0px. */
+  const crumb = `<span class="crumb crumb--flat crumb--page">${ico(icon)}<span class="txt">${esc(t(key))}</span></span>`;
   if (!back) return `<div class="crumbs">${crumb}</div>`;
   const why = esc(t("backToTask", back.label));
   return `<div class="crumbs">${crumb}</div>

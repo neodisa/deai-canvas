@@ -718,6 +718,10 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 .crumb--flat{display:inline-flex;align-items:center;gap:6px;
   height:var(--h-ctl);padding:0 9px;border:1px solid transparent;
   color:var(--mid);white-space:nowrap}
+/* Крошка СТОРІНКИ оверлею `#tasks-home` («Задачі», «Підключення», «Новий простір»): назва коротка й обрізати її нічим. Пізніше в
+   файлі `.crumb{max-width:110px}` (крошки дерева шарів) перебиває ліміт 260px зверху, і в UK іконка стискалась до 0px.
+   Два класи — щоб перемагати незалежно від порядку; `.crumb--flat` загалом НЕ чіпаємо: ним користується зовнішня оболонка превʼю. */
+.crumb.crumb--page{max-width:none}
 
 .txt--fix{flex:none}
 .txt--soft{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -1657,7 +1661,10 @@ body:not(.home-open) .cn-drawer{display:none}
 .wz .cv-color .ico{display:none;color:var(--g900)}
 .wz .cv-color[aria-checked=true]{box-shadow:0 0 0 2px var(--s1),0 0 0 4px var(--hi)}
 .wz .cv-color[aria-checked=true] .ico{display:block}
-.wz .cv-color:focus-visible{outline:2px solid var(--sel);outline-offset:3px}
+/* Кільце фокуса не мусить накладатись на кільце вибору (`box-shadow` 2+4px): відступ 5px лишає між ними просвіт. */
+.wz .cv-color:focus-visible{outline:2px solid var(--sel);outline-offset:5px}
+/* Зайнятий майстер вимикає кружки — вони мусять і виглядати вимкненими (як `.wz-opt:has(input:disabled)`). */
+.wz .cv-color:disabled{cursor:default;opacity:.55}
 /* `.cn-field{display:flex}` перебиває UA-правило `[hidden]` — без цього поле теки кроку 4 видиме завжди. Лише в майстрі. */
 .wz .cn-field[hidden]{display:none}
 .wz-err{margin:0;padding:8px 10px;border:1px solid var(--line2);border-radius:var(--r-sm);background:var(--s2);
@@ -1674,12 +1681,16 @@ body:not(.home-open) .cn-drawer{display:none}
 .wz-opt:has(input:checked){border-color:var(--sel);background:var(--s3)}
 .wz-opt:has(input:focus-visible){outline:2px solid var(--sel);outline-offset:2px}
 .wz-opt:has(input:disabled){cursor:default;opacity:.6}
+/* Вибрана картка — `--s3`, а `--dim` на ній лише 4.30:1: дрібний приглушений текст у вибраній картці світліє до `--mid`. */
+.wz-opt:has(input:checked) .wz-opt-instead,.wz-opt:has(input:checked) .cn-tag,.wz-opt:has(input:checked) .cn-why-detail{color:var(--mid)}
 .wz-opt--none{border-style:dashed}
 .wz-opt-body{display:flex;flex-direction:column;gap:4px;min-width:0}
 .wz-opt-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .wz-opt-top b{font-weight:600;color:var(--hi);overflow-wrap:anywhere}
 .wz-opt-desc{font-size:12.5px;line-height:1.45;color:var(--mid)}
 .wz-opt-instead{font-size:12px;color:var(--dim)}
+/* Довга назва модуля без пробілів (дані з маніфесту) не мусить розпирати картку й рядок «Без модуля». */
+.wz-opt-instead,.wz-off > span{overflow-wrap:anywhere;min-width:0}
 .wz-opt-why{display:flex;gap:6px;font-size:12px;color:var(--hi)}
 .wz-opt-why .ico{flex:none;margin-top:1px;color:var(--bad)}
 .wz-offs{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
@@ -1689,6 +1700,8 @@ body:not(.home-open) .cn-drawer{display:none}
 .wz-off .cn-res{flex-basis:100%}
 .wz-cards{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;border:0;min-width:0}
 .wz-card{gap:12px}
+/* `--bad` на `--s2` дає лише 4.09:1 для 12px тексту (3a сама каже, що ця пара годиться тільки на `--s1`): текст помилки — примішуємо `--hi`, червоний лишається в рамці поля (`.cn-inp[aria-invalid]`). Охоронець перераховує контраст. */
+.wz-card .cn-field-err{color:color-mix(in srgb,var(--bad) 55%,var(--hi))}
 .wz-res:empty{display:none}
 .wz-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);gap:18px;align-items:start}
 .wz-task{padding:14px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--s2)}
