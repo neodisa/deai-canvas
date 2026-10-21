@@ -1813,6 +1813,73 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
                      'rowsAt': rows_at}}
 
 
+# ---------- Задача з наявної теки (етап 3b, спека 2026-10-21-first-run-wizard-design.md) ----------
+
+#: Стеля теки-джерела: випадково вибрана домашня тека чи корінь проєкту не мусить скопіювати півдиска. Константи
+#: модуля — тест їх зменшує (`mock.patch.object`).
+ADOPT_MAX_FILES = 2000
+ADOPT_MAX_BYTES = 200 * 1024 * 1024
+#: На БУДЬ-ЯКОМУ рівні теки-джерела не копіюються: історія git, залежності, сміття Finder.
+_ADOPT_SKIP_ANY = frozenset({'.git', 'node_modules', '.DS_Store'})
+
+
+class AdoptRefused(Exception):
+    """Відмова прийняти теку-джерело: `code`, HTTP-`status` і додаткові поля тіла відповіді (`extra`)."""
+
+    def __init__(self, code, status, message, **extra):
+        super().__init__(message)
+        self.code, self.status, self.extra = code, status, extra
+
+
+def adopt_scan(src):
+    """Обхід теки-джерела ДО будь-якого запису: `(файли, байти, пропущені посилання)`, де файли — відносні шляхи, які
+    скопіює `adopt_copy`. Не копіюються ніколи: символьні посилання (файли й теки — копія лягла б вмістом поза
+    текою-джерелом), `_ADOPT_SKIP_ANY` на будь-якому рівні, службове інструмента в корені (`_is_tool_junk`) і стан
+    публікації `STATE_FILE` у корені (підпис чужої публікації в новій задачі збрехав би). Сокети й fifo — не файли.
+    Більше `ADOPT_MAX_FILES` файлів чи `ADOPT_MAX_BYTES` байтів — `AdoptRefused('from-too-big', 413)` одразу, не
+    дочитуючи (з числами на момент зупинки)."""
+    files, total, links = [], 0, 0
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        rel = os.path.relpath(dirpath, src)
+        top = rel == os.curdir
+        keep = []
+        for d in sorted(dirnames):
+            if os.path.islink(os.path.join(dirpath, d)):
+                links += 1
+            elif d not in _ADOPT_SKIP_ANY and not (top and _is_tool_junk(d)):
+                keep.append(d)
+        dirnames[:] = keep
+        for f in sorted(filenames):
+            p = os.path.join(dirpath, f)
+            if os.path.islink(p):
+                links += 1
+                continue
+            if f in _ADOPT_SKIP_ANY or (top and (_is_tool_junk(f) or f == STATE_FILE)):
+                continue
+            if not os.path.isfile(p):
+                continue
+            files.append(f if top else os.path.join(rel, f))
+            total += os.path.getsize(p)
+            if len(files) > ADOPT_MAX_FILES or total > ADOPT_MAX_BYTES:
+                raise AdoptRefused('from-too-big', 413,
+                                   f'the folder is too big for a mockup: over {ADOPT_MAX_FILES} files '
+                                   f'or {ADOPT_MAX_BYTES // (1024 * 1024)} MB',
+                                   files=len(files), bytes=total)
+    return files, total, links
+
+
+def adopt_copy(src, dst, files):
+    """Копія переліку `adopt_scan` у `dst`. Файл, що між обходом і копією став посиланням, пропускається."""
+    os.makedirs(dst, exist_ok=True)
+    for rel in files:
+        s = os.path.join(src, rel)
+        if os.path.islink(s):
+            continue
+        d = os.path.join(dst, rel)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy2(s, d)
+
+
 class TaskRefused(ValueError):
     """`task_new` відмовила на вході. Підклас `ValueError` із ТИМ САМИМ текстом, що був у голого
     `ValueError`; код — атрибут (`/api/task-new` відображає за `.code`, а не за текстом)."""
@@ -1821,7 +1888,7 @@ class TaskRefused(ValueError):
         self.code = code
 
 
-def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=None):
+def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=None, src=None, src_files=()):
     """Бутстрап задачи: папка в design-work (или clone из GitLab) + запись в tasks.json.
     Идемпотентность обеспечивает вызывающий (проверка на существование).
 
@@ -1833,7 +1900,11 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=No
     тека задачі діставала його в назві. Не-рядок (`5`, `null`) — теж «поганий id», а не
     TypeError, що рве зʼєднання.
 
-    `title` — ввід людини (форма «Нова задача»): у стартовий `index.html` він лягає ЕКРАНОВАНИМ."""
+    `title` — ввід людини (форма «Нова задача»): у стартовий `index.html` він лягає ЕКРАНОВАНИМ.
+
+    `src` — тека-джерело (`from` маршруту, вже перевірена `_adopt_source`), `src_files` — її перелік з `adopt_scan`: тоді
+    перша ітерація — копія теки, а не стартовий `index.html`. Збій копії прибирає теку задачі (її створила саме ця
+    спроба: маршрут відмовляє, коли тека вже існує) і летить далі як `OSError` (маршрут: 500 `task-create-failed`)."""
     if not isinstance(tid, str) or not NAME_RE.fullmatch(tid):
         raise TaskRefused('bad-task-id', 'bad task id')
     if tid in cfg.get('tasks', {}):
@@ -1874,13 +1945,20 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=No
         except OSError:
             pass
     if not cloned:
-        os.makedirs(it1, exist_ok=True)
-        with open(os.path.join(it1, 'index.html'), 'w', encoding='utf-8') as f:
-            shown = html_escape(str(title or tid))
-            f.write('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
-                    f'<title>{shown}</title></head><body>'
-                    f'<h1>{shown}</h1>'
-                    '<p>Нова ітерація — почни проєктувати.</p></body></html>')
+        if src is not None:
+            try:
+                adopt_copy(src, it1, src_files)
+            except OSError:
+                shutil.rmtree(tdir, ignore_errors=True)
+                raise
+        else:
+            os.makedirs(it1, exist_ok=True)
+            with open(os.path.join(it1, 'index.html'), 'w', encoding='utf-8') as f:
+                shown = html_escape(str(title or tid))
+                f.write('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
+                        f'<title>{shown}</title></head><body>'
+                        f'<h1>{shown}</h1>'
+                        '<p>Нова ітерація — почни проєктувати.</p></body></html>')
     # meta с первой итерацией
     #
     # ⛔ Підпис БУТСТРАПА не завжди мій. Якщо макет склонований з репо, його
@@ -1927,7 +2005,7 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=No
     mark_opened(cfg, tid)
     save_tasks(cfg)
     git_autocommit(tdir, f'task {tid}: bootstrap '
-                   f'({"clone from gitlab" if cloned else "new"})')
+                   f'({"clone from gitlab" if cloned else "from folder" if src is not None else "new"})')
     registered = _registry_push(tid)
     return {'ok': True, 'id': tid, 'cloned': cloned, 'dir': tdir,
             'registered': registered}
@@ -6732,6 +6810,49 @@ class Handler(SimpleHTTPRequestHandler):
         spaces.switch_space(sp['id'])
         self._send_json({'ok': True, 'current': tid, 'space': _space_id(sp)})
 
+    def _adopt_source(self, sp, tid, src, payload):
+        """Перевірки `from` ДО будь-якого запису (спека 3b, «Сервер: задача з наявної теки»): `(тека, файли, байти,
+        посилання)` або `None` — відмову вже надіслано. Порядок несучий: простір і тип поля — раніше за id (поле не
+        для цього простору — відмова без огляду решти), id — раніше за диск (`adopt_scan` не ходить по теці заради
+        задачі, якої однаково не буде)."""
+        if spaces.integrations_for(sp) or payload.get('gitlab'):
+            self._space_error(400, 'from-needs-plain-space', 'from is only for a space without integrations')
+            return None
+        if not isinstance(src, str) or not src.strip():
+            self._space_error(400, 'bad-request', 'from must be a non-empty string')
+            return None
+        if not isinstance(tid, str) or not NAME_RE.fullmatch(tid):
+            self._space_error(400, 'bad-task-id', 'bad task id')
+            return None
+        real = os.path.realpath(os.path.expanduser(src.strip()))
+        if not os.path.isdir(real):
+            self._space_error(400, 'from-not-found', 'no such folder')
+            return None
+        idx = os.path.join(real, 'index.html')
+        if os.path.islink(idx) or not os.path.isfile(idx):
+            self._space_error(400, 'from-no-index', 'the folder has no index.html')
+            return None
+        tdir = os.path.join(sp['path'], tid)
+        try:
+            inside = os.path.commonpath([real, os.path.realpath(tdir)]) == real
+        except ValueError:                     # Windows: теки на різних дисках — одна в одній бути не може
+            inside = False
+        if inside:
+            self._space_error(400, 'from-contains-space', 'the folder contains the task folder itself')
+            return None
+        if os.path.lexists(tdir):
+            self._space_error(409, 'task-dir-exists', 'the task folder already exists in the space')
+            return None
+        try:
+            files, total, links = adopt_scan(real)
+        except AdoptRefused as e:
+            self._space_error(e.status, e.code, str(e), **e.extra)
+            return None
+        except OSError as e:
+            self._space_error(400, 'from-not-found', f'the folder is not readable: {type(e).__name__}')
+            return None
+        return real, files, total, links
+
     def _task_new(self, payload):
         """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір з
         інтеграціями: мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без
@@ -6750,6 +6871,10 @@ class Handler(SimpleHTTPRequestHandler):
         простору (ніколи `FALLBACK_WORK_ROOT`). Успіх робить цільовий простір поточним —
         як `task_new` уже робить поточною саму задачу; коли реєстр у цю мить не записати, задача
         вже СТВОРЕНА, тож відповідь 200 з `space_switched: false`, а не 503, що збрехав би.
+
+        Етап 3b: необовʼязкове `from` — тека з `index.html`, яку сервер копіює в першу ітерацію замість стартового
+        макета (лише простір без інтеграцій; усі перевірки й обхід — `_adopt_source`, до будь-якого запису; відповідь
+        несе `copied: {files, bytes, skipped_links}`). `from: null` — поля нема.
 
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
         поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
@@ -6790,6 +6915,12 @@ class Handler(SimpleHTTPRequestHandler):
         if taken:
             self._space_error(400, 'task-exists', 'task already exists')
             return
+        # Задача з наявної теки (етап 3b). `from: null` — поля нема (як і без нього).
+        adopt = None
+        if payload.get('from') is not None:
+            adopt = self._adopt_source(sp, tid, payload.get('from'), payload)
+            if adopt is None:
+                return
         if spaces.integrations_for(sp):
             profile, root = profile or 'united', None
         elif payload.get('gitlab'):
@@ -6803,7 +6934,8 @@ class Handler(SimpleHTTPRequestHandler):
             r = task_new(cfg, tid,
                          title=str(payload.get('title', ''))[:200],
                          jira=str(payload.get('jira', ''))[:40],
-                         profile=profile, gitlab=payload.get('gitlab'), root=root)
+                         profile=profile, gitlab=payload.get('gitlab'), root=root,
+                         src=adopt[0] if adopt else None, src_files=adopt[1] if adopt else ())
         except TaskRefused as e:
             self._space_error(400, e.code, str(e))
             return
@@ -6820,7 +6952,10 @@ class Handler(SimpleHTTPRequestHandler):
             switched = True
         except spaces.SpacesError:
             switched = False
-        self._send_json({**r, 'space': _space_id(sp), 'space_switched': switched})
+        out = {**r, 'space': _space_id(sp), 'space_switched': switched}
+        if adopt:
+            out['copied'] = {'files': len(adopt[1]), 'bytes': adopt[2], 'skipped_links': adopt[3]}
+        self._send_json(out)
 
     # ---------- Простори (реєстр машини: `spaces.py`) ----------
 

@@ -176,6 +176,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists, built-in modules only) |
+| `POST /api/task-new` `{id, title?, space?, from?, …}` | create a task. `from` — a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}`. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
