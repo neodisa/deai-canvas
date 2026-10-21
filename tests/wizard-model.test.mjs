@@ -63,10 +63,11 @@ test("модуль кількох ролей: вибір прибирає три
   assert.equal(pickedFor(p, list, "publish"), null);
 });
 
-test("вибрані в порядку секцій, кожен раз", () => {
+test("вибрані — у порядку секцій; модуль кількох ролей — один раз, на першій", () => {
   const list = [...LIST, M("multi", ["tokens", "publish"])];
-  const p = new Set(["css-tokens", "multi", "supabase-comments"].filter((x) => x !== "css-tokens"));
-  assert.deepEqual(pickedInOrder(list, p).map((e) => e.id), ["multi", "supabase-comments"]);
+  const p = new Set(["multi", "supabase-comments"]);
+  assert.deepEqual(pickedInOrder(list, p).map((e) => e.id), ["multi", "supabase-comments"],
+    "multi стоїть і в publish, і в tokens — але в результаті раз, на першій секції");
 });
 
 test("рядки «Без модуля»: роль без вибраного, яку хтось тримає", () => {
@@ -218,4 +219,145 @@ test("назва з теки: слеші-хвости, пробіли, «~/», �
   assert.equal(titleFromFolder("/"), "");
   assert.equal(titleFromFolder(undefined), "");
   assert.equal(titleFromFolder(42), "42");
+});
+
+/* ── рецензія ca594d5: gone без disable, порядок операцій, повні операції, errored-тримач, назва з теки ───────── */
+
+test("gone: вибраний замінник зник — тримач його ролі НЕ вимикається (disable лише для ролей поза gone)", () => {
+  const h = M("h", ["publish"], { enabled: true });
+  const prevList = [h, M("g", ["publish"])];
+  const fresh = [h];
+  const ops = writePlan({ list: fresh, pick: new Set(["g"]), forms: new Map(), atPick: holdersByRole(prevList), prevList });
+  assert.deepEqual(ops, [{ op: "gone", id: "g", roles: ["publish"], stale: [] }]);
+});
+
+test("gone: тримач кількох ролей, одну з яких накрив gone, не вимикається; інша роль без gone — вимикається", () => {
+  const mh = M("mh", ["publish", "comments"], { enabled: true });
+  const g = M("g", ["publish"]);
+  const prevList = [mh, g];
+  const atPick = holdersByRole(prevList);
+  assert.deepEqual(writePlan({ list: [mh], pick: new Set(["g"]), forms: new Map(), atPick, prevList }),
+    [{ op: "gone", id: "g", roles: ["publish"], stale: [] }], "mh тримає і publish: вимкнути його = лишити publish без нікого");
+  const c = M("c", ["comments"], { enabled: true });
+  const h = M("h", ["publish"], { enabled: true });
+  const prev2 = [h, c, g];
+  const ops = writePlan({ list: [h, c], pick: new Set(["g"]), forms: new Map(), atPick: holdersByRole(prev2), prevList: prev2 });
+  assert.deepEqual(ops.map((o) => [o.op, o.id]), [["gone", "g"], ["disable", "c"]], "comments gone не накрив — «Без модуля» лишається");
+});
+
+test("gone з невідомими ролями (нема в prevList чи prevList нема) — жодного disable взагалі; enable лишаються", () => {
+  const h = M("h", ["publish"], { enabled: true });
+  const c = M("c", ["comments"], { enabled: true });
+  const t = M("t", ["tokens"]);
+  const list = [h, c, t];
+  for (const prevList of [undefined, [], [h, c, t]]) {
+    const ops = writePlan({ list, pick: new Set(["ghost", "t"]), forms: new Map(), atPick: holdersByRole(list), prevList });
+    assert.deepEqual(ops, [
+      { op: "gone", id: "ghost", roles: [], stale: [] },
+      { op: "enable", id: "t", roles: ["tokens"], stale: [] },
+    ], String(prevList && prevList.length));
+  }
+});
+
+test("порядок: gone першими, далі enable/settings у порядку секцій (не «усі enable, потім settings»), disable останніми", () => {
+  const list = [
+    M("static-publish", ["publish"], { enabled: true, implicit: true, status: "ok" }),
+    M("supabase-comments", ["comments"]),
+    M("tok", ["tokens"], { enabled: true }),
+  ];
+  const forms = new Map([["static-publish", form(F, { folder: "a" }, { folder: "b" })]]);
+  const pick = new Set(["static-publish", "supabase-comments", "tok", "ghost"]);
+  const prevList = [...list, M("ghost", ["tokens"])];
+  const ops = writePlan({ list, pick, forms, atPick: holdersByRole(list), prevList });
+  assert.deepEqual(ops.map((o) => [o.op, o.id]), [["gone", "ghost"], ["settings", "static-publish"], ["enable", "supabase-comments"]],
+    "settings секції publish раніше за enable секції comments");
+  const off = writePlan({ list: [...list, M("old", ["x"], { enabled: true })], pick, forms, atPick: new Map([["x", ["old"]]]), prevList });
+  assert.deepEqual(off.map((o) => o.op), ["gone", "settings", "enable", "disable"], "disable — після enable/settings");
+});
+
+test("повні операції: op, id, roles, stale — для gone, settings, enable і disable", () => {
+  /* на кроці 2 публікацію тримав хтось інший (atPick), токени не тримав ніхто; тепер publish тримає static-publish, а tokens — old */
+  const atPick = new Map([["publish", ["other"]], ["comments", []]]);
+  const list = [
+    M("static-publish", ["publish"], { enabled: true, status: "ok" }),
+    M("sb", ["comments"]),
+    M("old", ["tokens"], { enabled: true }),
+  ];
+  const prevList = [...list, M("ghost", ["publish", "comments"])];
+  const forms = new Map([["static-publish", form(F, { folder: "a" }, { folder: "b" })]]);
+  const ops = writePlan({ list, pick: new Set(["static-publish", "sb", "ghost"]), forms, atPick, prevList });
+  assert.deepEqual(ops, [
+    { op: "gone", id: "ghost", roles: ["publish", "comments"], stale: [] },
+    /* settings: тримачі publish змінились після кроку 2, але роль у settings не міняється — stale завжди [] */
+    { op: "settings", id: "static-publish", roles: ["publish"], stale: [] },
+    { op: "enable", id: "sb", roles: ["comments"], stale: [] },
+    { op: "disable", id: "old", roles: ["tokens"], stale: ["tokens"] },
+  ]);
+});
+
+test("errored-тримач звільненої ролі: replace його не вимикає (сервер: _holders лише status ok) — explicit disable, раз на тримача", () => {
+  const h = M("h", ["publish"], { enabled: true, status: "error" });
+  const memo = M("memo", ["publish"]);
+  const list = [h, memo];
+  const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: holdersByRole(list) });
+  assert.deepEqual(ops, [
+    { op: "enable", id: "memo", roles: ["publish"], stale: [] },
+    { op: "disable", id: "h", roles: ["publish"], stale: [] },
+  ]);
+  /* два errored-тримачі — обидва, по одному разу */
+  const h2 = M("h2", ["publish"], { enabled: true, status: "error" });
+  const two = [h, h2, memo];
+  assert.deepEqual(writePlan({ list: two, pick: new Set(["memo"]), forms: new Map(), atPick: holdersByRole(two) }).map((o) => [o.op, o.id]),
+    [["enable", "memo"], ["disable", "h"], ["disable", "h2"]]);
+});
+
+test("тримач зі status ok/unchecked звільненої ролі: replace вимкне сам — окремого disable нема", () => {
+  for (const status of ["ok", "unchecked"]) {
+    const list = [M("h", ["publish"], { enabled: true, status }), M("memo", ["publish"])];
+    const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: holdersByRole(list) });
+    assert.deepEqual(ops.map((o) => [o.op, o.id]), [["enable", "memo"]], status);
+  }
+});
+
+test("errored-тримач кількох ролей: звільнена одна, у другій «Без модуля» — один disable, не два", () => {
+  const mh = M("mh", ["publish", "comments"], { enabled: true, status: "error" });
+  const list = [mh, M("memo", ["publish"])];
+  const ops = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: holdersByRole(list) });
+  assert.deepEqual(ops.map((o) => [o.op, o.id, o.roles]), [["enable", "memo", ["publish"]], ["disable", "mh", ["comments"]]]);
+});
+
+test("errored-тримач: застарілий enable роль не звільняє — окремого disable нема (контролер enable не шле); вибраний не вимикається", () => {
+  const h = M("h", ["publish"], { enabled: true, status: "error" });
+  const list = [h, M("memo", ["publish"])];
+  const stale = writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: new Map() });
+  assert.deepEqual(stale.map((o) => [o.op, o.id, o.stale]), [["enable", "memo", ["publish"]]]);
+  /* людина вибрала САМЕ його (разом із замінником іншої його ролі) — явно вибране не вимикаємо */
+  const both = [M("e", ["publish", "tokens"], { enabled: true, status: "error" }), M("memo", ["publish"])];
+  const ops = writePlan({ list: both, pick: new Set(["memo", "e"]), forms: new Map(), atPick: holdersByRole(both) });
+  assert.deepEqual(ops.map((o) => [o.op, o.id]), [["enable", "memo"]]);
+});
+
+test("errored-тримач: вимкнений не чіпаємо; а той, що ділить роль зі зниклим, — теж (gone його роль не чіпає)", () => {
+  const off = M("off", ["publish"], { enabled: false, status: "error" });
+  const memo = M("memo", ["publish"]);
+  const list = [off, memo];
+  assert.deepEqual(writePlan({ list, pick: new Set(["memo"]), forms: new Map(), atPick: holdersByRole(list) }).map((o) => [o.op, o.id]),
+    [["enable", "memo"]], "вимкнений errored — не тримач");
+  /* memo замінює publish, g (comments) зник; h тримає і publish, і comments, errored — gone накрив його роль comments */
+  const h = M("h", ["publish", "comments"], { enabled: true, status: "error" });
+  const prevList = [h, memo, M("g", ["comments"])];
+  const ops = writePlan({ list: [h, memo], pick: new Set(["memo", "g"]), forms: new Map(), atPick: holdersByRole(prevList), prevList });
+  assert.deepEqual(ops.map((o) => [o.op, o.id]), [["gone", "g"], ["enable", "memo"]]);
+});
+
+test("назва з теки: обрізає базу, «.» і «..» — порожньо, хвіст із пробілом і слешем", () => {
+  assert.equal(titleFromFolder("/a/b /"), "b");
+  assert.equal(titleFromFolder("/a/b / /"), "b");
+  assert.equal(titleFromFolder("/a/ b"), "b");
+  assert.equal(titleFromFolder("."), "");
+  assert.equal(titleFromFolder(".."), "");
+  assert.equal(titleFromFolder("~/proj/.."), "");
+  assert.equal(titleFromFolder("~/proj/."), "");
+  assert.equal(titleFromFolder("./site"), "site");
+  assert.equal(titleFromFolder("..hidden"), "..hidden", "лише «.» і «..» цілком — не їхні префікси");
 });

@@ -103,19 +103,39 @@ export const staleRoles = (roles, atPick, fresh) =>
   roles.filter((r) => !sameIds(atPick?.get?.(r) ?? [], fresh?.get?.(r) ?? []));
 
 /**
- * План записів кроку 3 зі СВІЖОГО списку: `[{op, id, roles, stale}]`, у порядку:
- *   gone     — вибраний, якого вже нема у списку (писати нема що; картка скаже чому);
- *   enable   — вибраний, ще не ввімкнений (контролер шле `replace: true` — згода дана вибором на кроці 2);
- *   settings — вибраний, увімкнений, форма змінена (`formPatch` → `isDirty`); без форми чи без змін — нічого;
- *   disable  — тримач ролі з «Без модуля», якого не вимикає жоден `enable`: заміна вимикає тримачів УСІХ ролей нового
- *              модуля, тож тримач кількох ролей міг піти разом із заміною в іншій ролі.
- * `forms` — `Map<id, {fields, init, cur}>`; `atPick` — `holdersByRole` списку, який бачила людина на кроці 2.
+ * План записів кроку 3 зі СВІЖОГО списку: `[{op, id, roles, stale}]`. Порядок:
+ *   gone     — вибраний, якого вже нема у свіжому списку (писати нема що; картка скаже чому): ПЕРШИМИ;
+ *   enable / settings — далі У ПОРЯДКУ СЕКЦІЙ, по одному («по черзі», як хоче спека), а не «усі enable, потім усі settings»:
+ *              enable — вибраний, ще не ввімкнений (контролер шле `replace: true` — згода дана вибором на кроці 2);
+ *              settings — вибраний, увімкнений, форма змінена (`formPatch` → `isDirty`); без форми чи без змін — нічого;
+ *   disable  — ОСТАННІМИ: тримач ролі з «Без модуля», якого не вимикає жоден `enable` (заміна вимикає тримачів УСІХ ролей
+ *              нового модуля, тож тримач кількох ролей міг піти разом із заміною в іншій ролі), і errored-тримач звільненої ролі.
+ * `forms` — `Map<id, {fields, init, cur}>`; `atPick` — `holdersByRole` списку, який бачила людина на кроці 2;
+ * `prevList` — сам той список кроку 2: з нього `gone` бере ролі зниклого модуля (свіжий список його вже не має).
  * `stale` — ролі запису, тримачі яких змінились після кроку 2 (для `settings` не рахується: роль не міняється).
+ *
+ * ⛔ Роль, яку мав зайняти зниклий (`gone`) модуль, не чіпаємо: НІЯКОГО disable для неї (тримач лишається — інакше публікація
+ * чи коментарі лишились би без нікого, а людина просила іншого) і для тримача, що має хоч одну таку роль. Ролі зниклого
+ * НЕВІДОМІ (його нема й у `prevList`, чи `prevList` не передали) — тоді disable не шлемо взагалі: не знаємо, чию роль він займав.
+ *
+ * Errored-тримач звільненої ролі (`status: error`): сервер `deai_modules._holders` рахує тримачами лише модулі, що
+ * завантажились (`m.status == 'ok'`), тож `replace: true` такого НЕ вимикає, а явний `module-disable` дозволений будь-якому
+ * модулю каталогу (звіряно в `write_module_state`). Тому для нього — окремий `disable`, один на тримача. Статус `error` у
+ * списку — і «не завантажився», і «остання перевірка впала»: у другому випадку `replace` вимикає сам, і зайвий `disable` після нього
+ * безпечний (повторне вимкнення вимкненого — нічого не пише).
  */
-export function writePlan({ list, pick, forms, atPick }) {
+export function writePlan({ list, pick, forms, atPick, prevList }) {
   const fresh = holdersByRole(list);
   const ops = [];
-  for (const id of pick) if (!entryOf(list, id)) ops.push({ op: "gone", id, roles: [], stale: [] });
+  const goneRoles = new Set();
+  let goneBlind = false;
+  for (const id of pick) {
+    if (entryOf(list, id)) continue;
+    const was = rolesOf(entryOf(prevList, id));
+    if (!was.length) goneBlind = true;
+    was.forEach((r) => goneRoles.add(r));
+    ops.push({ op: "gone", id, roles: was, stale: [] });
+  }
   const freed = new Set();
   for (const e of pickedInOrder(list, pick)) {
     const roles = rolesOf(e);
@@ -128,11 +148,25 @@ export function writePlan({ list, pick, forms, atPick }) {
     const f = forms?.get?.(e.id);
     if (f && isDirty(formPatch(f.fields, f.init, f.cur))) ops.push({ op: "settings", id: e.id, roles, stale: [] });
   }
+  if (goneBlind) return ops;
   const off = new Set();
-  for (const { role, holder } of offRows(list, pick)) {
-    if (off.has(holder.id) || rolesOf(holder).some((r) => freed.has(r))) continue;
+  const disable = (holder, role, stale) => {
+    if (off.has(holder.id)) return;
     off.add(holder.id);
-    ops.push({ op: "disable", id: holder.id, roles: [role], stale: staleRoles([role], atPick, fresh) });
+    ops.push({ op: "disable", id: holder.id, roles: [role], stale });
+  };
+  /* Тримач, що ділить роль із зниклим, або тримач, якого вже вимкне заміна, — не наш: gone його не чіпає, replace вимкне сам. */
+  for (const { role, holder } of offRows(list, pick)) {
+    const mine = rolesOf(holder);
+    if (mine.some((r) => goneRoles.has(r))) continue;
+    if (mine.some((r) => freed.has(r)) && holder.status !== "error") continue;
+    disable(holder, role, staleRoles([role], atPick, fresh));
+  }
+  for (const s of wizardSections(list)) {
+    if (!freed.has(s.role)) continue;
+    for (const e of s.modules) {
+      if (holds(e) && e.status === "error" && !pick.has(e.id) && !rolesOf(e).some((r) => goneRoles.has(r))) disable(e, s.role, []);
+    }
   }
   return ops;
 }
@@ -143,9 +177,9 @@ export const allOk = (results) => results.every((r) => r?.kind === "ok");
 /** Крок «Назад»: 2→1, 3→2, 4→3; 4→2, коли крок 3 пропущено (модулі не прочитались). */
 export const prevStep = (step, skipped3 = false) => (step === 4 && skipped3 ? 2 : Math.max(1, step - 1));
 
-/** Назва задачі з теки-джерела: останній сегмент шляху без хвостових слешів; «~» і порожнє — ''. */
+/** Назва задачі з теки-джерела: останній сегмент шляху без хвостових слешів і пробілів, обрізаний; «~», «.», «..» і порожнє — ''. */
 export function titleFromFolder(p) {
-  const s = String(p ?? "").trim().replace(/[\\/]+$/, "");
-  const base = s.split(/[\\/]/).pop() ?? "";
-  return base === "~" ? "" : base;
+  const s = String(p ?? "").replace(/[\s\\/]+$/, "");
+  const base = (s.split(/[\\/]/).pop() ?? "").trim();
+  return base === "~" || base === "." || base === ".." ? "" : base;
 }
