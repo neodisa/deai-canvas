@@ -96,8 +96,15 @@ test("вихід із незбереженим кроком 3 питає; Esc с
 
 test("простір створено — оболонка дізнається навіть тоді, коли майстер тим часом закрили", () => {
   const b = fn(W, "submit1");
-  assert.ok(b.indexOf("await deps.afterSpaceCreated()") < b.indexOf("if (wz !== mine) return;\n    go(2)"),
-    "перевірка «майстер ще той» — ПІСЛЯ повідомлення оболонки");
+  const asc = b.indexOf("await deps.afterSpaceCreated()");
+  const guard = b.indexOf("if (wz !== mine) return;", asc);
+  assert.ok(asc > 0 && guard > asc, "перевірка «майстер ще той» — ПІСЛЯ повідомлення оболонки");
+  assert.ok(b.indexOf("go(2)", guard) > guard);
+  /* `created` і `busy` — після повідомлення оболонки, а не до: перемальовка у вікні `afterSpaceCreated` не має перемикати
+     крок на режим правки з доступним «Далі». `spaceId` — раніше (оболонка читає простір майстра). */
+  assert.equal(b.split("mine.created = true").length - 1, 1, "created ставиться один раз");
+  assert.ok(b.indexOf("mine.created = true") > guard, "created ставиться після перевірки «майстер ще той»");
+  assert.ok(b.indexOf("mine.spaceId = r.id") < asc, "spaceId — до повідомлення оболонки");
 });
 
 /* ── що додано після живого прогону контролера (стенд у Chromium): гарди, яких не було в плані ──────────────────── */
@@ -132,4 +139,51 @@ test("фокус не губиться: після «Спробувати ще»
 test("правка поля картки кроку 3 знімає і `aria-invalid`, і текст помилки (без позначки він висів би)", () => {
   assert.match(fn(W, "input"), /dropFieldError\(n\)/);
   assert.match(fn(W, "dropFieldError"), /delete card\.errors\[/);
+});
+
+/* ── після ревʼю 616c025 (I1–I3, M1–M4) ──────────────────────────────────────────────────────────────────────── */
+
+test("I1: перехід кроку — з верху сторінки; помилки кроку 3 фокусуються з прокруткою (без preventScroll)", () => {
+  assert.match(fn(W, "go"), /scrollTop = 0/);
+  assert.ok(fn(W, "go").indexOf("scrollTop = 0") < fn(W, "go").indexOf("focusStep()"), "скрол нагору — до фокуса заголовка");
+  const b = fn(W, "submit3");
+  assert.match(b, /\[aria-invalid="true"\]'\)\?\.focus\(\);/);
+  assert.match(b, /\?\? box\)\?\.focus\(\);/);
+});
+
+test("I2: щойно записана картка не перечитується з DOM (її базис — відповідь сервера): `fresh` ставить runOp, знімає capture", () => {
+  assert.match(fn(W, "runOp"), /Object\.assign\(card, cardFrom\(r\.module\), \{ fresh: true \}\)/);
+  assert.match(fn(W, "capture"), /if \(card\.fresh\) \{ delete card\.fresh; continue; \}/);
+});
+
+test("I3: збій свіжого списку на початку «Зберегти» не губить набране (без s3failed): тост і фокус на «Зберегти»", () => {
+  const b = fn(W, "submit3");
+  const i = b.indexOf("catch (e)");
+  const tail = b.slice(i, b.indexOf("if (wz !== mine) return;", i + 40));
+  assert.doesNotMatch(tail.slice(tail.indexOf("mine.busy = false")), /s3failed/);
+  assert.match(tail, /deps\.toast\(t\("cnErrLoad"\)\)/);
+  assert.match(tail, /data-a="ok"\]'\)\?\.focus\(\)/);
+});
+
+test("M1: після очікування переліку id крок 4 перевіряється ще раз (Назад/Закрити в цьому вікні не створюють задачу)", () => {
+  assert.match(fn(W, "submit4"), /if \(wz !== mine \|\| mine\.step !== 4\) return;/);
+});
+
+test("M2: зайнятість кроку 3 тримається до кінця проходу (після знімка й afterModulesChange), `busy` кроку 1 — після afterSpaceCreated", () => {
+  const b = fn(W, "submit3");
+  const am = b.indexOf("await deps.afterModulesChange()");
+  const off = b.indexOf("mine.busy = false;", am);
+  assert.ok(am > 0 && off > am, "busy=false — після afterModulesChange");
+  assert.ok(off < b.indexOf("go(4)"), "busy=false — до go(4)/останньої перемальовки");
+  const loop = b.slice(b.indexOf("for (const op of ops)"), am);
+  assert.doesNotMatch(loop.replace(/gone-space[^\n]*\n/, ""), /mine\.busy = false/, "між проходом і afterModulesChange busy не знімається");
+});
+
+test("M3: після перейменування оболонка дізнається ДО перевірки «майстер ще той»", () => {
+  assert.match(fn(W, "submit1"), /deps\.afterSpaceEdited\(mine\.spaceId, saved\);\s*if \(wz !== mine\) return;/);
+});
+
+test("M4: «Назад» і «Закрити» перевіряють після питання, що майстер той самий", () => {
+  assert.match(fn(W, "requestExit"), /const mine = wz;\s*if \(dirty\(\) && !\(await askDiscard\(\)\)\) return;\s*if \(wz !== mine\) return;/);
+  assert.match(fn(W, "back"), /const mine = wz;\s*if \(wz\.step === 3 && dirty\(\) && !\(await askDiscard\(\)\)\) return;\s*if \(wz !== mine\) return;/);
 });

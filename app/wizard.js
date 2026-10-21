@@ -131,6 +131,8 @@ export function createWizard(deps) {
       wz.s1.color = q('input[name="color"]')?.value ?? wz.s1.color;
     } else if (step === 3) {
       for (const card of wz.cards) {
+        /* Щойно записана картка: її базис — відповідь сервера (`runOp`), а DOM ще несе набране ДО запису: не читати. */
+        if (card.fresh) { delete card.fresh; continue; }
         const root = q(`.wz-card[data-id="${CSS.escape(card.entry.id)}"]`);
         if (!root) continue;
         const cur = readFields(root);
@@ -194,6 +196,9 @@ export function createWizard(deps) {
     wz.step = step;
     if (step === 4) wz.taskIds = null;     // свіжий перелік зайнятих id на кожен вхід
     paint();
+    /* Новий крок — з верху сторінки: `paint` повертає старий скрол, а заголовок фокусується без прокрутки (`focusStep`) —
+       на довгому кроці він лишився б над кадром. */
+    if (deps.node()) deps.node().scrollTop = 0;
     focusStep();
     if (step === 2) loadStep2();
     else if (step === 3) loadStep3();
@@ -288,9 +293,9 @@ export function createWizard(deps) {
         showError(form, spaceErrKey(e?.code), spaceErrField(e?.code));
         return;
       }
+      deps.afterSpaceEdited(mine.spaceId, saved);      // сервер уже перейменував — оболонка мусить знати й тоді, коли майстер закрито
       if (wz !== mine) return;
       mine.busy = false;
-      deps.afterSpaceEdited(mine.spaceId, saved);
       go(2);
       return;
     }
@@ -306,10 +311,12 @@ export function createWizard(deps) {
     /* Простір УЖЕ створено й зроблено поточним (так робить сервер) — оболонка мусить дізнатись навіть тоді, коли
        майстер тим часом закрили (⌘K): інакше смуга й сервер розійшлися б. */
     mine.spaceId = r.id;
-    mine.created = true;
-    mine.busy = false;
     try { await deps.afterSpaceCreated(); } catch (e) { deps.toast(t("errFailed", e?.message ?? "")); }
     if (wz !== mine) return;
+    /* `created` і `busy` — лише тепер: перемальовка у вікні `afterSpaceCreated` (мова) ще малює крок 1 «створення» зайнятим,
+       а не режим правки з доступним «Далі». */
+    mine.created = true;
+    mine.busy = false;
     go(2);
   }
 
@@ -457,7 +464,7 @@ export function createWizard(deps) {
           }
           result = { kind: r?.check?.ok === true ? "ok" : "failed", ...verdictText(r?.check) };
           /* Новий базис картки: збережене вже не «зміна», і стан секрету («задано») — з відповіді. */
-          if (card && r?.module) Object.assign(card, cardFrom(r.module));
+          if (card && r?.module) Object.assign(card, cardFrom(r.module), { fresh: true });
         }
       } catch (e) {
         if (e?.code === "unknown-space") return { kind: "gone-space" };
@@ -491,7 +498,7 @@ export function createWizard(deps) {
     });
     if (bad) {
       paint();
-      deps.node()?.querySelector('.wz [aria-invalid="true"]')?.focus({ preventScroll: true });
+      deps.node()?.querySelector('.wz [aria-invalid="true"]')?.focus();      // без preventScroll: помилка має опинитись у кадрі
       return;
     }
     const forms = new Map(mine.cards.map((c, i) => [c.entry.id, { fields: c.fields, init: c.init, cur: curOf(c, i) }]));
@@ -502,10 +509,12 @@ export function createWizard(deps) {
     catch (e) {
       if (wz !== mine) return;
       if (e?.code === "unknown-space") { spaceGone(); return; }
+      /* Нічого не відправлено: картки, набране й секрети лишаються — збій читання не дає права їх губити (`s3failed` лише для
+         читання кроку 3). Тост, а «Зберегти» під рукою — повтор шле те саме. */
       mine.busy = false;
-      mine.s3failed = { code: e?.code ?? null, message: String(e?.message || e) };
       paint();
-      deps.node()?.querySelector('[data-wz="retry"]')?.focus({ preventScroll: true });
+      deps.toast(t("cnErrLoad"));
+      deps.node()?.querySelector('.wz [data-a="ok"]')?.focus();
       return;
     }
     if (wz !== mine) return;
@@ -520,7 +529,6 @@ export function createWizard(deps) {
       results.push(res);
       if (res.kind === "ok" || res.kind === "failed") changed = true;
     }
-    mine.busy = false;
     /* Знімок кроку 2 для ролей, які змінив сам цей прохід, — на стан після проходу: інакше повтор вважав би власні записи
        «зміною агента» й застряг на свіжості. Ролі, яких прохід не торкався, лишаються зі знімком кроку 2. */
     if (changed && pass.touched.size) {
@@ -534,11 +542,12 @@ export function createWizard(deps) {
     }
     if (changed) { try { await deps.afterModulesChange(); } catch (e) { /* екран оновиться при наступному вході */ } }
     if (wz !== mine) return;
+    mine.busy = false;           // лише тепер: перемальовка в проміжку (мова) має малювати форму зайнятою, а не доступною
     if (allOk(results)) { go(4); return; }
     paint();
     /* Перше поле картки/рядка з відмовою; рядок «вимкнеться» чи картка без полів — сам контейнер (`tabindex="-1"`). */
     const box = deps.node()?.querySelector(".wz-card .cn-res--err, .wz-off .cn-res--err")?.closest(".wz-card, .wz-off");
-    (box?.querySelector("input, select, button") ?? box)?.focus({ preventScroll: true });
+    (box?.querySelector("input, select, button") ?? box)?.focus();
   }
 
   /* ── крок 4 · Перша задача ───────────────────────────────────────────────────────────────────────── */
@@ -557,7 +566,7 @@ export function createWizard(deps) {
     let ids;
     try { ids = await Promise.resolve(mine.taskIds ?? []); } catch (e) { ids = []; }
     mine.checking = false;
-    if (wz !== mine) return;
+    if (wz !== mine || mine.step !== 4) return;      // поки перевірявся перелік, людина могла піти «Назад» чи закрити майстер
     const key = taskFormError(vals, ids);
     if (key) { showError(form, key, taskErrField(key)); return; }
     const folder = mine.s4.source === "folder";
@@ -592,18 +601,19 @@ export function createWizard(deps) {
 
   async function back() {
     if (!wz || wz.busy) return;
+    const mine = wz;
     if (wz.step === 3 && dirty() && !(await askDiscard())) return;
-    if (!wz) return;
-    go(prevStep(wz.step, wz.skipped3));
+    if (wz !== mine) return;           // питання висіло, а майстер тим часом закрили чи відкрили наново
+    go(prevStep(mine.step, mine.skipped3));
   }
 
   /** «Закрити майстер», «Пропустити», логотип: незбережене кроку 3 — питання; створений простір — тост «готовий». Ще не
       створений (логотип на кроці 1) — те саме, що «Скасувати»: назад, звідки майстер відкрили (спека, «Вихід із майстра»). */
   async function requestExit() {
     if (!wz || wz.busy) return;
-    if (dirty() && !(await askDiscard())) return;
     const mine = wz;
-    if (!mine) return;
+    if (dirty() && !(await askDiscard())) return;
+    if (wz !== mine) return;           // питання висіло, а майстер тим часом закрили чи відкрили наново (інакше закрили б чужий)
     exit(mine.created ? t("wzReady", spaceRec()?.name ?? mine.s1.name) : null, !mine.created);
   }
 
