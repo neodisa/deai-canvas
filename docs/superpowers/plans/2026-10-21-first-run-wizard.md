@@ -882,7 +882,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzErrTaskDirExists: 'У просторі вже є тека з таким ідентифікатором — змініть його.',
   wzSkippedLinks: (n) => `Символьні посилання не скопійовано: ${n}.`,
   wzReady: (name) => `Простір «${name}» готовий. Підключення — у меню простору.`,
-  wzSpaceGone: 'Простору майстра більше нема.',
+  wzSpaceGone: 'Простір більше недоступний.',
+  wzDiscardAsk: 'Відкинути незбережені налаштування?',
   welcomeOpen: 'Відкрити наявну теку простору',
 ```
 
@@ -947,7 +948,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   wzErrTaskDirExists: 'The space already has a folder with this ID — change it.',
   wzSkippedLinks: (n) => `Symbolic links not copied: ${n}.`,
   wzReady: (name) => `The space “${name}” is ready. Connections are in the space menu.`,
-  wzSpaceGone: "The wizard's space is gone.",
+  wzSpaceGone: 'The space is no longer available.',
+  wzDiscardAsk: 'Discard unsaved settings?',
   welcomeOpen: 'Open an existing space folder',
 ```
 
@@ -1535,6 +1537,14 @@ test("майстер — частина `#tasks-home`: чистий перегл
 @media (max-width:719px){.wz{padding:16px 16px 48px}.wz-two{grid-template-columns:1fr}}
 ```
 
+  Поправки після ревʼю Task 3 (обидві — справжні вади, виміряні в Chromium):
+  - `.cn-field{display:flex}` перебиває UA-правило `[hidden]`, тож поле теки `#wz-from-f` видиме завжди. Додати
+    `.wz .cn-field[hidden]{display:none}` (лише в майстрі — 3a не чіпати).
+  - Друга кнопка привітання впритул до першої: наявне правило `.th-welcome-act{display:flex;justify-content:center}`
+    доповнити `gap:10px;flex-wrap:wrap` (саме це правило, без дубля).
+  Обидва — запіни в `tests/wizard-css.test.mjs` (Step 1): `rule(".wz .cn-field[hidden]")` містить `display:none`;
+  `rule(".th-welcome-act")` містить `gap:` і `flex-wrap:wrap`.
+
   ⚠️ `.th-in` дає `padding:22px 28px 60px`; `@media` перебиває його для `.wz` (та сама специфічність, правило пізніше). Якщо в `styles.css` нема токена `--g900` чи `--logo` — узяти той, що є (`grep -- '--logo' app/styles.css`), не вводити літерал.
 
 - [ ] **Step 4: Тести зелені.** Run: `python3 "$G" 120 1500 node --test tests/wizard-css.test.mjs tests/css-guards.test.mjs tests/connections-css.test.mjs` → PASS. `css-guards` стереже сітку висот і контраст: якщо він червоніє на новому правилі — підкоригувати правило (а не охоронця).
@@ -1710,6 +1720,15 @@ test("після проходу знімок свіжості переходит
   assert.doesNotMatch(b, /mine\.atPick = holdersByRole/);
 });
 
+test("крок 3 без списку: «Повторити» перечитує крок 3, а «Зберегти» спершу повторює; фокус після відмови не губиться", () => {
+  assert.match(fn(W, "click"), /if \(wz\.step === 3\) loadStep3\(\); else loadStep2\(\);/);
+  const b = fn(W, "submit3");
+  assert.ok(b.indexOf("if (wz.s3failed)") < b.indexOf("capture("), "перевірка s3failed — до читання форми");
+  assert.match(b, /\?\? box\)\?\.focus/);
+  assert.match(fn(W, "submit1"), /clearError\(form\)/);
+  assert.match(fn(W, "submit4"), /clearError\(form\)/);
+});
+
 test("обовʼязкові поля — до будь-якого запиту кроку 3", () => {
   const b = fn(W, "submit3");
   assert.ok(b.indexOf("missingRequired(") < b.indexOf("deps.api("), "missingRequired після запиту");
@@ -1832,7 +1851,7 @@ export function createWizard(deps) {
 
   const spaceRec = () => (Array.isArray(deps.spaces()?.spaces) ? deps.spaces().spaces : []).find((x) => x.id === wz?.spaceId) ?? null;
   const painted = (el) => Number(el?.querySelector(".wz")?.dataset.step) || 0;
-  const askDiscard = () => deps.askYesNo(t("cnDiscardAsk"), { yes: t("cnDiscard"), danger: true });
+  const askDiscard = () => deps.askYesNo(t("wzDiscardAsk"), { yes: t("cnDiscard"), danger: true });
 
   /** Відкрити на кроці 1. `folderFirst` — «Відкрити наявну теку простору»: порожня назва, фокус у теці. */
   function open({ folderFirst = false } = {}) {
@@ -1968,6 +1987,12 @@ export function createWizard(deps) {
   }
 
   /** Текст помилки в `#wz-err`; поле (`name`) — `aria-invalid` і фокус. Правка поля знімає позначку (`input`). */
+  /** Сховати слот помилки кроку (1 чи 4): старий текст не має висіти, коли людина вже виправила поле. */
+  function clearError(form) {
+    const slot = form?.querySelector("#wz-err");
+    if (slot) { slot.textContent = ""; slot.hidden = true; }
+  }
+
   function showError(form, key, field) {
     const slot = form.querySelector("#wz-err");
     if (slot) { slot.textContent = t(key); slot.hidden = false; }
@@ -1983,6 +2008,7 @@ export function createWizard(deps) {
     const form = el.querySelector('form[data-wz-step="1"]');
     const mine = wz;
     capture(el);
+    clearError(form);
     const name = mine.s1.name.trim();
     if (!name) { showError(form, "spaceErrName", "name"); return; }
     if (mine.created) {
@@ -2169,6 +2195,8 @@ export function createWizard(deps) {
   }
 
   async function submit3() {
+    /* Список кроку 3 не прочитався — карток нема, писати нема з чого (форма без картки дала б TypeError): спершу повтор. */
+    if (wz.s3failed) { loadStep3(); return; }
     const el = deps.node();
     const mine = wz;
     const keep = capture(el);
@@ -2230,8 +2258,9 @@ export function createWizard(deps) {
     if (wz !== mine) return;
     if (allOk(results)) { go(4); return; }
     paint();
-    deps.node()?.querySelector(".wz-card .cn-res--err, .wz-off .cn-res--err")?.closest(".wz-card, .wz-off")
-      ?.querySelector("input, select, button")?.focus({ preventScroll: true });
+    /* Перше поле картки/рядка з відмовою; рядок «вимкнеться» чи картка без полів — сам контейнер (`tabindex="-1"`). */
+    const box = deps.node()?.querySelector(".wz-card .cn-res--err, .wz-off .cn-res--err")?.closest(".wz-card, .wz-off");
+    (box?.querySelector("input, select, button") ?? box)?.focus({ preventScroll: true });
   }
 
   /* ── крок 4 · Перша задача ───────────────────────────────────────────────────────────────────────── */
@@ -2241,6 +2270,7 @@ export function createWizard(deps) {
     const form = el.querySelector('form[data-wz-step="4"]');
     const mine = wz;
     capture(el);
+    clearError(form);
     const vals = { title: mine.s4.title, id: mine.s4.id };
     const key = taskFormError(vals, await Promise.resolve(mine.taskIds ?? []).catch(() => []));
     if (wz !== mine) return;
@@ -2306,7 +2336,7 @@ export function createWizard(deps) {
     const a = b.dataset.wz;
     if (a === "back") back();
     else if (a === "close" || a === "skip") requestExit();
-    else if (a === "retry") loadStep2();
+    else if (a === "retry") { if (wz.step === 3) loadStep3(); else loadStep2(); }
     else if (a === "copy") copyPhrase();
   }
 
@@ -2325,7 +2355,7 @@ export function createWizard(deps) {
   function input(ev) {
     if (!wz) return;
     const n = ev.target;
-    if (n.getAttribute?.("aria-invalid") === "true") n.removeAttribute("aria-invalid");
+    if (n.getAttribute?.("aria-invalid") === "true") { n.removeAttribute("aria-invalid"); clearError(n.closest?.("form")); }
     if (ev.type === "input") {
       if (n.id === "sp-path") wz.s1.pathTouched = true;
       else if (n.id === "tf-id") wz.s4.idTouched = n.value !== "";
