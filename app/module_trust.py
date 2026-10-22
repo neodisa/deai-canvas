@@ -15,12 +15,20 @@
 import errno
 import hashlib
 import os
+import re
+import secrets
+import shutil
 import stat
+import subprocess
+import sys
+import tempfile
 import threading
+import time
 import unicodedata
 from collections import namedtuple
 
 import spaces
+from atomic_io import WRITE_LOCK, atomic_write_json
 
 MAX_FILES = 200
 MAX_BYTES = 5 * 1024 * 1024
@@ -320,4 +328,409 @@ def tilde(p):
     return p
 
 
-_REC_CACHE = {}      # Task 2: кеш записів `trust.json`
+
+# ------------------------------------------------------------------------------------- записи довіри
+
+HASH_RE = re.compile(r'[0-9a-f]{64}')
+#: Залишки `.tmp-*`/`.old-*` у `trusted/`, старші за стільки секунд, прибирає `sweep`.
+STALE_S = 3600
+
+#: Кеш `load_records`: `{'v': (відбиток файла, записи)}`.
+_REC_CACHE = {}
+
+
+class TrustUnreadable(Exception):
+    """`trust.json` є, але не читається чи не тієї форми: довіра НЕ вважається порожньою, і файл не переписується
+    (інакше мовчки зникли б інші довіри)."""
+
+
+class SnapshotGone(Exception):
+    """Знімка, на який мав би вказати запис, уже нема (паралельне «Забрати довіру» відсунуло його)."""
+
+
+def trust_file():
+    return os.path.join(spaces.home(), 'trust.json')
+
+
+def trusted_root():
+    return os.path.join(spaces.home(), 'trusted')
+
+
+def snapshot_dir(h):
+    return os.path.join(trusted_root(), h)
+
+
+def key_for(space_path, mid):
+    """Ключ запису довіри — `realpath(<простір>/modules/<id>)`; рахується й для теки, якої вже нема."""
+    return os.path.realpath(os.path.join(space_path, 'modules', mid))
+
+
+def _secure(path, mode):
+    if os.name != 'nt':
+        os.chmod(path, mode)
+
+
+def _sig(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def records_sig():
+    """Відбиток `trust.json` для ключів кешів ядра; шар вимкнено — `None`."""
+    return _sig(trust_file()) if spaces.layer_on() else None
+
+
+def _valid_record(r):
+    return (isinstance(r, dict) and isinstance(r.get('id'), str) and isinstance(r.get('hash'), str)
+            and bool(HASH_RE.fullmatch(r['hash'])) and isinstance(r.get('files'), list))
+
+
+def _read_file():
+    """Вміст `trust.json` як `{'version': 1, 'modules': {…}}`; файла нема — порожній; не читається чи не та форма —
+    `TrustUnreadable`."""
+    try:
+        data = spaces._read_json(trust_file())
+    except FileNotFoundError:
+        return {'version': 1, 'modules': {}}
+    except (OSError, ValueError):
+        raise TrustUnreadable('trust.json is unreadable') from None
+    if not isinstance(data, dict) or not isinstance(data.get('modules', {}), dict):
+        raise TrustUnreadable('trust.json: "modules" is not an object')
+    data = dict(data)
+    data['modules'] = dict(data.get('modules', {}))
+    data.setdefault('version', 1)
+    return data
+
+
+def load_records():
+    """`{ключ: запис}` з `trust.json` (лише записи правильної форми). Файла нема чи шар просторів вимкнено — `{}` без
+    звернення до диска; не читається — `TrustUnreadable`. Кеш за відбитком файла; віддає новий словник."""
+    if not spaces.layer_on():
+        return {}
+    sig = _sig(trust_file())
+    with _CACHE_LOCK:
+        hit = _REC_CACHE.get('v')
+    if hit is not None and sig is not None and hit[0] == sig:
+        return dict(hit[1])
+    recs = {k: v for k, v in _read_file()['modules'].items() if isinstance(k, str) and _valid_record(v)}
+    if sig is not None:
+        with _CACHE_LOCK:
+            _REC_CACHE['v'] = (sig, recs)
+    return dict(recs)
+
+
+def _require_layer():
+    if not spaces.layer_on():
+        raise RuntimeError('spaces layer is off: trust is not written')
+
+
+def _write_file(data):
+    home, path = spaces.home(), trust_file()
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    _secure(home, 0o700)
+    if os.path.exists(path):
+        _secure(path, 0o600)                         # ДО запису: атомарна заміна переносить режим цілі
+    atomic_write_json(path, data)
+    _secure(path, 0o600)
+    with _CACHE_LOCK:
+        _REC_CACHE.clear()
+
+
+def put_record(key, rec):
+    """Записати довіру `rec` під ключем `key`: під `WRITE_LOCK` лише читання-зміна-запис файла (атомарно, 0600). Форма
+    запису — як у `load_records` (інакше `ValueError`: `rec['hash']` іде в шлях знімка, а запис не тієї форми однаково
+    не завантажився б). Знімок `rec['hash']` мусить існувати — перевірка під тим самим локом, інакше `SnapshotGone`.
+    ⚠️ Знімок пишуть ДО (`ensure_snapshot`), кеші ядра скидають ПІСЛЯ — і те, і те поза локом."""
+    _require_layer()
+    if not _valid_record(rec):
+        raise ValueError('put_record: malformed record')
+    with WRITE_LOCK:
+        data = _read_file()
+        if not _real_dir(snapshot_dir(rec['hash'])):
+            raise SnapshotGone(rec['hash'])
+        data['modules'][key] = rec
+        _write_file(data)
+
+
+def drop_record(key):
+    """Прибрати довіру `key`; `True`, якщо запис був. Знімок, на який більше не посилається жоден запис, відсувається в
+    `.old-*` ПІД тим самим локом (паралельна довіра того ж хешу побачить його відсутність і відмовить), видаляється —
+    після локу."""
+    _require_layer()
+    aside = None
+    with WRITE_LOCK:
+        data = _read_file()
+        rec = data['modules'].pop(key, None)
+        if rec is None:
+            return False
+        h = rec.get('hash') if isinstance(rec, dict) else None
+        still = any(isinstance(r, dict) and r.get('hash') == h for r in data['modules'].values())
+        if isinstance(h, str) and HASH_RE.fullmatch(h) and not still and _real_dir(snapshot_dir(h)):
+            aside = _aside(snapshot_dir(h))
+        _write_file(data)
+    if aside:
+        _rmtree(aside)
+    sweep()
+    return True
+
+
+# ------------------------------------------------------------------------------------------- знімки
+
+def _real_dir(p):
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and not _is_link(st)
+
+
+def _aside(d):
+    """Атомарно перейменувати теку `d` в `.old-<випадкове>` поруч; новий шлях."""
+    dst = os.path.join(os.path.dirname(d), f'.old-{secrets.token_hex(8)}')
+    os.rename(d, dst)
+    forget(d)
+    return dst
+
+
+def _rmtree(p):
+    """Видалити теку знімка: спершу повернути теки на запис (знімок — 0500/0400)."""
+    for dp, _dns, _fns in os.walk(p):
+        try:
+            _secure(dp, 0o700)
+        except OSError:
+            pass
+    shutil.rmtree(p, ignore_errors=True)
+
+
+def sweep(now=None):
+    """Прибрати в `trusted/` теки `.tmp-*`/`.old-*`, старші за `STALE_S` (залишки обірваних записів і видалень)."""
+    root = trusted_root()
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    for n in names:
+        if not (n.startswith('.tmp-') or n.startswith('.old-')):
+            continue
+        p = os.path.join(root, n)
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if now - st.st_mtime > STALE_S and stat.S_ISDIR(st.st_mode) and not _is_link(st):
+            _rmtree(p)
+
+
+def verify_snapshot(h):
+    """Знімок `h` цілий: справжня тека `trusted/<h>` (не посилання) і її хеш (сканер з кешем відбитка) дорівнює `h`."""
+    if not (isinstance(h, str) and HASH_RE.fullmatch(h)):
+        return False
+    d = snapshot_dir(h)
+    if not _real_dir(d):
+        return False
+    try:
+        return scan(d).hash == h
+    except Refused:
+        return False
+
+
+def ensure_snapshot(sc):
+    """Знімок рівно байтів `sc` (з `scan(…, with_data=True)`) у `trusted/<sc.hash>/`: файли 0400, теки 0500. Цілий знімок
+    із цим хешем лишається; пошкоджений — відсувається й пишеться наново. Пишеться в `.tmp-*` і перейменовується (та
+    сама тека-батько — атомарно). Повертає теку знімка."""
+    if sc.data is None:
+        raise ValueError('ensure_snapshot: scan(…, with_data=True) is required')
+    _require_layer()
+    sweep()
+    root = trusted_root()
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    _secure(spaces.home(), 0o700)
+    _secure(root, 0o700)
+    final = snapshot_dir(sc.hash)
+    if _real_dir(final):
+        if verify_snapshot(sc.hash):
+            return final
+        _rmtree(_aside(final))
+    elif os.path.lexists(final):
+        os.unlink(final)                              # посилання чи файл на місці знімка
+    tmp = tempfile.mkdtemp(prefix='.tmp-', dir=root)
+    try:
+        for rel, raw in sc.data.items():
+            p = os.path.join(tmp, *rel.split('/'))
+            os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+                         | getattr(os, 'O_BINARY', 0), 0o600)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(raw)
+        for dp, _dns, fns in os.walk(tmp, topdown=False):
+            for n in fns:
+                _secure(os.path.join(dp, n), 0o400)
+            _secure(dp, 0o500)
+        try:
+            os.rename(tmp, final)
+        except OSError:
+            if not verify_snapshot(sc.hash):          # паралельний запис того ж хешу встиг першим — тоді ок
+                raise
+            _rmtree(tmp)
+        tmp = None
+    finally:
+        if tmp:
+            _rmtree(tmp)
+    forget(final)
+    return final
+
+
+# ------------------------------------------------------------------------------------ системне вікно
+
+CONFIRM_TIMEOUT = 120
+DECLINE_COOLDOWN = 30
+SEAM_ENV = 'DEAI_TRUST_CONFIRM'
+
+#: Тексти рідного вікна. Мова — з `lang` запиту довіри; невідома — `uk`.
+CONFIRM_TEXT = {
+    'uk': {'title': 'Deai Canvas', 'yes': 'Довіряю', 'no': 'Скасувати',
+           'ask': 'Довіритись модулю «{name}» ({id}, відбиток {hash})?\n\n'
+                  'Його код виконуватиметься на цьому компʼютері з вашими правами.\n\nТека: {path}'},
+    'en': {'title': 'Deai Canvas', 'yes': 'Trust', 'no': 'Cancel',
+           'ask': 'Trust the module “{name}” ({id}, fingerprint {hash})?\n\n'
+                  'Its code will run on this computer with your permissions.\n\nFolder: {path}'},
+}
+
+_OSA = '''on run argv
+  set msg to item 1 of argv
+  set ttl to item 2 of argv
+  set yesB to item 3 of argv
+  set noB to item 4 of argv
+  tell me to activate
+  try
+    set r to display dialog msg with title ttl buttons {noB, yesB} default button noB cancel button noB with icon caution giving up after 120
+  on error number -128
+    return "no"
+  end try
+  if gave up of r then return "no"
+  if button returned of r is yesB then return "yes"
+  return "no"
+end run'''
+
+_PS = ("Add-Type -AssemblyName System.Windows.Forms; "
+       "$r = [System.Windows.Forms.MessageBox]::Show($env:DEAI_CONFIRM_MSG, $env:DEAI_CONFIRM_TITLE, 'YesNo', 'Warning', 'Button2'); "
+       "if ($r -eq 'Yes') { 'yes' } else { 'no' }")
+
+
+def _clean(s, n=80):
+    """Рядок для системного вікна: без `Cc`/`Cf`/`Cs`/`Zl`/`Zp`, не довший за `n` (з «…»). `Cs` — самотній сурогат
+    (`"\\ud800"` з `module.json`): у `argv` підпроцесу він дав би `UnicodeEncodeError` замість вікна."""
+    s = ''.join(c for c in str(s) if unicodedata.category(c) not in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp'))
+    return s if len(s) <= n else s[:n - 1] + '…'
+
+
+def confirm_texts(lang, name, mid, h, path):
+    """`(заголовок, текст, «так», «ні»)` вікна довіри мовою `lang` (`uk`/`en`, інакше `uk`)."""
+    tx = CONFIRM_TEXT.get(lang) or CONFIRM_TEXT['uk']
+    msg = tx['ask'].format(name=_clean(name), id=_clean(mid), hash=str(h)[:12], path=_clean(path))
+    return tx['title'], msg, tx['yes'], tx['no']
+
+
+def confirm_command(platform, title, msg, yes, no, which=shutil.which, env=None):
+    """`(argv, додаткове оточення)` рідного вікна для `platform` (`sys.platform`) або `None` — нема чим показати. Текст
+    іде АРГУМЕНТОМ (macOS, Linux) чи ЗМІННОЮ ОТОЧЕННЯ (Windows) — ніколи не підставляється в код скрипта."""
+    env = os.environ if env is None else env
+    if platform == 'darwin':
+        return ['osascript', '-e', _OSA, msg, title, yes, no], {}
+    if platform.startswith('win'):
+        return (['powershell', '-NoProfile', '-NonInteractive', '-Command', _PS],
+                {'DEAI_CONFIRM_MSG': msg, 'DEAI_CONFIRM_TITLE': title})
+    if not (env.get('DISPLAY') or env.get('WAYLAND_DISPLAY')):
+        return None
+    if which('zenity'):
+        return ['zenity', '--question', '--no-markup', '--title', title, '--text', msg,
+                '--ok-label', yes, '--cancel-label', no, f'--timeout={CONFIRM_TIMEOUT}'], {}
+    if which('kdialog'):
+        return ['kdialog', '--title', title, '--yes-label', yes, '--no-label', no, '--warningyesno', msg], {}
+    return None
+
+
+def _interpret(argv0, proc):
+    """Відповідь вікна з завершеного процесу: `yes`/`no`/`unavailable`."""
+    if argv0 in ('osascript', 'powershell'):
+        if proc.returncode != 0:
+            return 'unavailable'
+        return 'yes' if (proc.stdout or '').strip().lower() == 'yes' else 'no'
+    if proc.returncode == 0:
+        return 'yes'
+    if proc.returncode in (1, 5):                     # zenity: 1 — «ні», 5 — тайм-аут; kdialog: 1 — «ні»
+        return 'no'
+    return 'unavailable'
+
+
+def _real_default_home():
+    """Справжній типовий `~/.deai` — з бази користувачів (POSIX), а не з `$HOME`, який тест чи оточення могли підмінити."""
+    try:
+        import pwd
+        base = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError):
+        base = os.path.expanduser('~')
+    return os.path.realpath(os.path.join(base, '.deai'))
+
+
+def seam_value(env=None):
+    """Тестовий шов `DEAI_TRUST_CONFIRM` (`yes`/`no`/`unavailable`) або `None`. Діє ЛИШЕ коли `DEAI_HOME` задано й це не
+    справжній типовий `~/.deai`: на робочій машині змінна, що випадково лишилась, нічого не робить."""
+    env = os.environ if env is None else env
+    v = env.get(SEAM_ENV)
+    home = env.get('DEAI_HOME')
+    if v not in ('yes', 'no', 'unavailable') or not home:
+        return None
+    if os.path.realpath(os.path.expanduser(home)) == _real_default_home():
+        return None
+    return v
+
+
+def confirm(title, msg, yes, no):
+    """Рідне вікно ОС → `'yes'`/`'no'`/`'unavailable'`. Блокує потік до відповіді; тайм-аут — `'no'`."""
+    seam = seam_value()
+    if seam is not None:
+        return seam
+    cmd = confirm_command(sys.platform, title, msg, yes, no)
+    if cmd is None:
+        return 'unavailable'
+    argv, extra = cmd
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=CONFIRM_TIMEOUT + 10,
+                              env={**os.environ, **extra}, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return 'no'
+    except OSError:
+        return 'unavailable'
+    return _interpret(argv[0], proc)
+
+
+_ASK_LOCK = threading.Lock()
+_DECLINED = {}
+
+
+def clear_declined():
+    """Забути відмови (тести)."""
+    _DECLINED.clear()
+
+
+def ask(key, h, texts, now=time.monotonic):
+    """Системне підтвердження довіри `(key, h)`: `'yes'`/`'no'`/`'unavailable'`, `'busy'` (уже відкрите інше вікно) чи
+    `'declined'` (той самий `(key, h)` відхилено менш як `DECLINE_COOLDOWN` с тому — вікна не показуємо). Поза локами
+    ядра: блокує лише свій потік."""
+    t = _DECLINED.get((key, h))
+    if t is not None and now() - t < DECLINE_COOLDOWN:
+        return 'declined'
+    if not _ASK_LOCK.acquire(blocking=False):
+        return 'busy'
+    try:
+        r = confirm(*texts)
+    finally:
+        _ASK_LOCK.release()
+    if r == 'no':
+        _DECLINED[(key, h)] = now()
+    return r

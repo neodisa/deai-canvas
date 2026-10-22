@@ -1942,9 +1942,13 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
     #: disable, settings, check) кличе обидва з сервера. Тест, що їх кличе без власного `DEAI_HOME`, створив би
     #: `secrets.json` у справжньому `~/.deai` дизайнера (пароль превʼю!), а `spaces_guard` бачить зміну імен файлів
     #: у теці реєстру. `/api/modules` (читання списку) сюди не входить: `/api/module-` його не збігає.
+    #: Довіра до своїх модулів (етап 3c) пише `<DEAI_HOME>/trust.json` і `<DEAI_HOME>/trusted/<хеш>/` — теж у справжню
+    #: домівку, коли тест не ізолював `DEAI_HOME`: `put_record(`/`drop_record(`/`ensure_snapshot(` — писарі `module_trust`,
+    #: `grant_trust(`/`revoke_trust(` — обгортки ядра модулів над ними.
     SPACE_WRITERS = ('/api/space-', '/api/task-new', '/api/task-switch',
                      'create_space(', 'switch_space(', 'update_space(',
-                     'write_secrets(', 'write_module_state(', '/api/module-')
+                     'write_secrets(', 'write_module_state(', '/api/module-',
+                     'put_record(', 'drop_record(', 'ensure_snapshot(', 'grant_trust(', 'revoke_trust(')
 
     #: Форми ПРИСВОЄННЯ `DEAI_HOME`, які приймає `_assigns_deai_home`. Лежать окремо, щоб повідомлення
     #: про провал казало автору, що саме охоронець уважає ізоляцією, а не змушувало гадати.
@@ -2039,7 +2043,7 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
         писарів, — тобто коли вони не стережуть нічого (перейменували мутатор — і охоронець осліп)."""
         seen = {name for name, _ in self._space_writer_sources()}
         self.assertLessEqual({'test_spaces.py', 'test_spaces_serve.py', 'test_integrations_off.py',
-                              'test_modules.py', 'test_modules_api.py'},
+                              'test_modules.py', 'test_modules_api.py', 'test_module_trust.py'},
                              seen, 'писарі просторів зникли з тестів — SPACE_WRITERS застарів')
 
     def test_the_task_routes_that_end_in_a_space_switch_count_as_space_writers(self):
@@ -2054,11 +2058,14 @@ class TestsCannotWriteLiveConfig(unittest.TestCase):
                     "self.post('/api/module-enable', {'id': 'css-tokens'})",
                     "post('/api/module-check', {})",
                     "dm.write_module_state(space, 'css-tokens', enabled=True)",
-                    "deai_modules.write_secrets('s', 'static-publish', {})"):
+                    "deai_modules.write_secrets('s', 'static-publish', {})",
+                    "module_trust.put_record(key, rec)", "mt.drop_record(key)", "mt.ensure_snapshot(sc)",
+                    "dm.grant_trust(space, 'netlify', h)", "deai_modules.revoke_trust(space, 'netlify')"):
             self.assertTrue(self._is_space_writer(src), src)
         for src in ("self.get('/api/task')", "self.get('/api/tasks?all=1')",
                     "self.get('/api/tasks-overview')", "# /api/tasks", "x = 1",
-                    "self.get('/api/modules?space=a')", "self.get('/api/ds-tokens')", "dm.read_secrets('s', 'm')"):
+                    "self.get('/api/modules?space=a')", "self.get('/api/ds-tokens')", "dm.read_secrets('s', 'm')",
+                    "mt.load_records()", "mt.verify_snapshot(h)", "mt.scan(root)"):
             self.assertFalse(self._is_space_writer(src), src)
 
     def test_the_isolation_check_tells_an_assignment_from_a_mention(self):
