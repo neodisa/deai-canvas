@@ -3,6 +3,152 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.6.0] — 22.10.2026
+
+Stage 3b: the new-space wizard. A new space is no longer a dialog with three fields and an empty
+screen after it: four steps lead from the space through its modules and their settings to the first
+task, which can now come from a mockup folder that already exists on disk. Design:
+`docs/superpowers/specs/2026-10-21-first-run-wizard-design.md`; plan:
+`docs/superpowers/plans/2026-10-21-first-run-wizard.md`. The legacy (in-house) space is unchanged:
+`tests/legacy-golden.test.mjs` is green without a re-shoot.
+
+### Added
+
+- **The new-space wizard** (`app/wizard.js`, `app/wizard-model.js`, `app/wizard-view.js`): the third
+  page of the home overlay, next to «Tasks» and «Connections» (the same entry, exit and clean view).
+  Four steps: Space → Modules → Settings → First task. The first run (no spaces) and «New space…»
+  (the space menu, ⌘K) open the same page. The space is created on step 1 with the real
+  `POST /api/space-new`, and every later request carries an explicit `space`, so closing the wizard
+  at any step leaves a working space whose connections can be finished on «Connections»; if an agent
+  switches the active space meanwhile, the wizard keeps writing to its own. A space that disappears
+  under the wizard closes it with a toast.
+  - **Space** (step 1): the fields of the old dialog (name, colour, folder, with the «this folder is
+    already a space» and «already added» hints). «Back» to step 1 after the creation shows the same
+    step in edit mode: name and colour can change (one `space-update`, only when something changed),
+    the folder is read-only.
+  - **Modules** (step 2): the sections of the Connections screen, one choice per role — a module
+    or «No module» with what that means for the role. The option that would take the role from the
+    current provider says so («instead of …»; the choice is the consent, so the next step does not
+    ask again). A current provider that fails stays selectable and shows its reason in plain words.
+    The initial choice is who provides each role now, the implicit `static-publish` included.
+    Nothing is written on this step.
+  - **Settings** (step 3): a card per chosen module with the same fields as the Connections side
+    panel, secrets included (never rendered, shown only as set / not set / unknown, and cleared after
+    every server response), and a line for each provider that «No module» turns off. «Save and
+    continue» checks the required fields first (no request until they are filled), then re-reads the
+    module list and writes one by one: `module-enable` with `replace` and `module-settings` in the
+    order of the sections, then the switch-offs. A switch-off that depends on a replacement waits until
+    the replacement is saved, so a role is never left empty by a failed write. A role that an agent
+    changed while the person was choosing is not written: the card says «The role changed while you
+    were choosing — go back to the Modules step» and names who holds it now; the other roles are
+    written as usual. If a picked module has disappeared by the time the step opens, the wizard returns
+    to Modules with a notice. Each answer is drawn in its card (connected and checked, saved but the
+    check failed with the reason, or not saved with the reason); when anything failed the wizard stays
+    on the step, and pressing the button again repeats only what is not written. If the module list
+    cannot be read at «Save», the toast says so, nothing is sent and what was typed (secrets
+    included) stays.
+  - **First task** (step 4): a blank page, **an existing mockup folder** (copied into the first
+    iteration; the task title is taken from the folder name until the person types one), or a phrase
+    to give the agent (with «Copy»); or «Skip» (the label is «Go to tasks» when the space already has
+    some). A refusal of the server (`from-*`, `task-dir-exists`) is shown in plain words in the form,
+    and the field it is about gets the focus.
+  - **Leaving.** «Cancel» (only before the space exists; the logo does the same there) returns to
+    where the wizard was opened — the welcome screen, «Tasks», «Connections» or the canvas of a task.
+    «Close the wizard» (after the creation) and the logo go to «Tasks» of the new space with a toast.
+    Unsaved fields of step 3 are asked about first («Discard unsaved settings?»); Esc closes nothing,
+    as this is a page and a stray Esc must not throw away a typed token. The bar shows a flat crumb
+    «New space» with no space chip, and ⌘K has no space actions there.
+- **`from` in `POST /api/task-new`** — copies a folder that has an `index.html` into the first
+  iteration of the new task (`app/serve.py`: `adopt_scan`, `adopt_copy`, `AdoptRefused`; the limits
+  are the constants `ADOPT_MAX_FILES` and `ADOPT_MAX_BYTES`). Only in a space without integrations
+  (`400 from-needs-plain-space`, also for `gitlab`). The path must be absolute (`~` is expanded) and
+  is resolved to the real folder. Every check and the walk of the folder come before any write:
+  `400 bad-request` (not a non-empty string), `400 bad-task-id` (the id is checked before the disk),
+  `400 from-not-found` (not a folder, a relative path, a NUL in the path, an unreadable file or
+  subfolder), `400 from-no-index` (no plain `index.html` at the root), `400 from-contains-space` (the
+  task folder would lie inside the source, so the copy would go into itself; compared with
+  `samefile` over the ancestors, so `~/WORK` and `~/work` on a case-insensitive disk are one folder),
+  `409 task-dir-exists` (the task folder is claimed atomically: of two requests with the same id the
+  second is refused, and a folder that is not ours is never touched), `413 from-too-big` (more than
+  2000 files or 200 MB, the limits themselves are allowed; the answer carries `files` and `bytes` at
+  the moment of the stop, so picking a home folder by mistake does not copy half a disk). Symbolic links are never copied (a file or a folder, and every
+  file is checked again at copy time against a swap after the walk); `.git`, `node_modules` and
+  `.DS_Store` are skipped at any level, the tool's own junk and the publish state
+  `.canvas-state.json` at the root. Copied files get a fresh modification time, so the task does not
+  show the date of the old folder. Any failure up to and including the write of `tasks.json` removes
+  the task folder, writes nothing to `tasks.json` and answers `500 task-create-failed`; a retry with
+  the same id goes through. The answer is the usual one plus `copied: {files, bytes, skipped_links}` —
+  what was actually copied, not what the walk saw. Without `from` the endpoint answers as before.
+- The welcome screen gets a second button, «Open an existing space folder»: it opens step 1 with an
+  empty name and the cursor in the folder field, and a folder that already is a space fills in its own
+  name and colour.
+
+### Changed
+
+- «New space…» in the space menu and in ⌘K, and «Create a space» on the welcome screen, lead to the
+  wizard instead of the dialog. The space dialog stays only for «Name and colour…».
+
+### Fixed
+
+- The crumb of a home page («Tasks», «Connections», «New space») no longer collapses its icon to zero
+  width in Ukrainian: the 110 px `max-width` meant for the crumbs of the layer tree overrode the
+  260 px limit of the bar's crumbs. Home-page crumbs now carry their own modifier (`crumb--page`, no
+  cap); the flat crumb of the external preview shell is untouched.
+
+### Removed
+
+- The «New space» dialog (mode `new` of the space dialog) and its dictionary keys.
+
+### Known issues
+
+- At window widths below about 680 px the logo button and the page crumbs in the top bar are squeezed.
+  This is older than the wizard and is tracked separately.
+
+### Not in this release
+
+- Picking a folder with the system dialog (both folder fields are text); resuming an unfinished
+  wizard after a restart (the space already exists; the rest is on «Connections» and «Tasks»); a space's
+  own modules and the trust dialog (3c, 0.7.0); starting an agent from the wizard (step 4 only gives
+  the phrase to say to it).
+
+### Tests
+
+`npm test` at 0.6.0 is green: 1629 node tests (plus `inspector-core`), 2381 Python tests in
+`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.5.0: 1458, 2349 with 1 skipped, 168, 170), on
+Python 3.13. The new server tests, `tests/test_task_from.py`, also pass on Python 3.9.6, the oldest
+supported version; the full Python suites were not repeated there for this release.
+
+New: unit tests `tests/wizard-model.test.mjs` (the choice per role, the plan of writes and its
+order, freshness, the dependent switch-off, names from the folder; roles are data, so a role named
+`__proto__` is an ordinary key), `tests/wizard-view.test.mjs` (every step, the hooks, `aria-current`,
+`fieldset` and `legend`, everything from data is escaped, secret fields are empty),
+`tests/wizard-css.test.mjs` (every class of the markup has a rule, narrow widths, the clean view hides
+the page, only tokens, contrast of the selected card) and `tests/wizard-wiring.test.mjs` (the entry
+points, the explicit `space` in every request of steps 2–4, the light path after a write); the bar,
+palette and dialog tests were extended (`tests/shell-bar.test.mjs`, `tests/bar-model.test.mjs`,
+`tests/shell-palette.test.mjs`, `tests/ext-bar.test.mjs`, `tests/space-dialogs.test.mjs`,
+`tests/spaces-wiring.test.mjs`). On the
+server, `tests/test_task_from.py` (31 tests): every refusal of `from`, the limits (inclusive, lowered
+in the test), symbolic links not copied and counted (also one swapped in after the walk), `.git`,
+`node_modules` and a fifo skipped, a folder that contains the space or its parent, a differently cased
+path, a failure in the middle of the copy or after it leaves no folder and no record (a retry works),
+a task folder that appears after the check is not touched, a fresh modification time, a space with
+integrations refuses.
+
+The live test `tests/live/wizard.test.mjs` (a real server in an isolated machine, a real Chromium,
+15 scenarios, one file at a time) covers the first run from the welcome screen to a task, replacing
+the provider («instead of …») with the fixture module `memo-publish`, a secret that shows up nowhere,
+a task from a folder with a symbolic link (the toast, the copy, the mockup in the frame), a refusal on
+step 1 and «Cancel» back to the canvas, «Back» to step 1 and the rename, unsaved fields (Esc, the logo,
+«Back», «Close the wizard»), a role that an agent took while the person was choosing, opening an
+existing space folder, a failed read of the list at «Save», a saved card that is no longer «changed»,
+the focus on the first failed card, a server refusal that still clears the password field, a language
+switch in the middle of step 1, «No module» for publishing, and ⌘K while the creation request is in
+flight. The live tests of the old dialog (`tests/live/spaces.test.mjs`, `tests/live/spaces-flows.test.mjs`)
+now go through step 1 of the wizard. The leak watchers of `tests/live/wizard.test.mjs` and
+`tests/live/connections.test.mjs` compare request addresses in three shapes (raw, percent-encoded,
+decoded), so a secret that reaches a URL percent-encoded is caught.
+
 ## [0.5.0] — 20.10.2026
 
 Stage 3a «Connections»: the modules API finally has a screen. Connecting a publisher, team

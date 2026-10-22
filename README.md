@@ -6,14 +6,15 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.5.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.6.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, and team
-> comments on your own Supabase (or any service, through a small module) work in any space,
-> and you connect them on a **Connections** screen — no command line. A few integrations
+> comments on your own Supabase (or any service, through a small module) work in any space.
+> A **wizard** creates a space and takes you through its modules and a first task, and a
+> **Connections** screen manages the modules afterwards — no command line. A few integrations
 > (team dashboard, git sync) are still wired for the original setup and only run in a migrated
-> legacy space; they are being turned into optional per-space modules, and a first-run wizard
-> is next. See *Roadmap*.
+> legacy space; they are being turned into optional per-space modules, and a space's own
+> modules are next. See *Roadmap*.
 
 ## What it does
 
@@ -28,6 +29,7 @@ links for your team.
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters. |
+| **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
 | **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
@@ -51,7 +53,42 @@ npm install && npx playwright install chromium
 ```
 
 Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium). The Python
-suites (`tests/`, `bin/`, `app/`) were run for 0.5.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
+suites (`tests/`, `bin/`, `app/`) were run for 0.5.0 on Python 3.9.6, the oldest supported version, and on Python 3.13;
+for 0.6.0, on Python 3.13, with the new `tests/test_task_from.py` also on 3.9.6.
+
+## Spaces
+
+A **space** is a company, a client or your own work: a folder on disk with a `space.json` (name,
+colour, the enabled modules and their settings) and the space's tasks. The spaces of a machine are
+listed in `~/.deai/spaces.json`; the space chip in the top bar switches between them.
+
+**Creating a space — the wizard.** The welcome screen (no spaces yet) and «New space…» in the
+space menu and in ⌘K open the same four-step page; the welcome screen also has «Open an existing
+space folder», which starts with the cursor in the folder field.
+
+1. **Space** — name, colour and folder (a text field; `~` is expanded). A folder that already is a
+   space — say, one shared through git — is recognised: it keeps its own name and colour and brings
+   its tasks and modules. The space is created here, for real, so closing the wizard at any later
+   step leaves a working space; «Back» to this step edits its name and colour (the folder cannot
+   change), and «Cancel» before the creation returns to where you were.
+2. **Modules** — one choice per role (publishing, team comments, design-system tokens): a module,
+   or «No module» with what that means. A choice that replaces the current provider says «instead of
+   …». Nothing is required, and nothing is written yet.
+3. **Settings** — the fields of each chosen module, the same as in the Connections side panel
+   (secrets are written, never shown). One pass writes the choices and checks each module; if
+   something fails, the wizard stays on the step with the reason in the card. If an agent changed a
+   role while you were choosing, that module is not written and its card says so.
+4. **First task** — a blank page, **an existing folder with an `index.html`** (the server copies it
+   into the first iteration; the original is untouched), or a phrase to tell your agent. «Skip» goes
+   to the tasks of the new space.
+
+Unsaved settings are asked about before «Back» or «Close the wizard»; Esc does not close the page.
+Not part of the wizard: picking a folder with the system dialog, and resuming an unfinished wizard
+after a restart (what was created stays, and the rest is on «Connections»).
+
+**A task from an existing folder** is also available over the API: `POST /api/task-new` with
+`from` (see *Module API* below). It works in a space without integrations only; symbolic links,
+`.git` and `node_modules` are not copied, and a folder of more than 2000 files or 200 MB is refused.
 
 ## Modules
 
@@ -176,7 +213,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists, built-in modules only) |
-| `POST /api/task-new` `{id, title?, space?, from?, …}` | create a task. `from` — an absolute path (`~` is expanded) to a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
+| `POST /api/task-new` `{id, title?, space?, from?, …}` | create a task. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
@@ -275,8 +312,9 @@ tests/        unit, Python and live (Playwright) tests
 3. **Onboarding**
    - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
      modules from the UI; `replace` in `module-enable`.
-   - **3b** (0.6, next) — a first-run wizard: space → modules → settings → first task.
-   - **3c** (0.7) — a space's own modules from `<space>/modules/` (comments modules for your own
+   - ✅ **3b** (0.6) — the new-space wizard: space → modules → settings → first task, and a task
+     from an existing mockup folder (`from` in `task-new`).
+   - **3c** (0.7, next) — a space's own modules from `<space>/modules/` (comments modules for your own
      service included), loaded only after you trust them in a dialog.
 4. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 5. **Cross-platform start** — one command on macOS, Windows and Linux.

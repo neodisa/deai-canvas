@@ -3,9 +3,9 @@
 Status: agreed direction, 2026-10-09. Clickable prototype reviewed by the owner.
 Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to a
 folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0) and
-stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0) and stage 3a (the
-Connections screen, 0.5.0) — see *Status* at the end. Next: 3b (the first-run wizard, 0.6.0) and
-3c (a space's own modules with a trust dialog, 0.7.0).
+stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3a (the
+Connections screen, 0.5.0) and stage 3b (the new-space wizard, 0.6.0) — see *Status* at the end.
+Next: 3c (a space's own modules with a trust dialog, 0.7.0).
 
 ## Goal
 
@@ -56,8 +56,8 @@ canvas for their workflow without touching the core.
 
 - **First run** (no spaces): a wizard — space name, colour and folder → pick modules by
   role → settings with «Check» → first task (new / adopt an existing folder of HTML /
-  let the agent create it). *Stage 3b, 0.6.0 — not built yet; it reuses the cards and the
-  side panel of the Connections screen.*
+  let the agent create it). The same wizard serves «New space…». *Built in stage 3b
+  (0.6.0)* — see *Status → Stage 3b*.
 - **Connections** screen per space: module cards with status (connected / error with the
   reason / off), configure in a side panel (secrets marked as stored outside the space),
   check, disable. *Built in stage 3a (0.5.0)*: entered from the space menu, ⌘K, or the head
@@ -83,7 +83,7 @@ canvas for their workflow without touching the core.
      follow later as that company's modules.
 3. Onboarding, split into three parts:
    - ✅ **3a** (0.5.0) — the Connections screen;
-   - **3b** (0.6.0) — the first-run wizard (space → modules → settings → first task);
+   - ✅ **3b** (0.6.0) — the new-space wizard (space → modules → settings → first task);
    - **3c** (0.7.0) — a space's own modules from `<space>/modules/` with the trust dialog.
 4. Company-specific integrations move out of the core into that company's space modules.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
@@ -191,17 +191,41 @@ Spec: `docs/superpowers/specs/2026-10-20-connections-screen-design.md`; plan:
 - **Not verified against a real Vercel or Supabase**: the live tests use a local fixture
   module (`tests/fixtures/modules-conn/`), because the `check` of those two goes to the network.
 
+### Stage 3b — the new-space wizard (0.6.0, 22.10.2026)
+
+Spec: `docs/superpowers/specs/2026-10-21-first-run-wizard-design.md`; plan:
+`docs/superpowers/plans/2026-10-21-first-run-wizard.md`. What is built:
+
+- **The wizard** is the third page of the home overlay (`wiz`, next to «Tasks» and «Connections»):
+  Space → Modules → Settings → First task. The first run and «New space…» (space menu, ⌘K) open the
+  same page; the «New space» dialog is gone (the space dialog stays for «Name and colour…»). The
+  space is created for real on step 1, so closing the wizard anywhere leaves a working space.
+- **Steps 2 and 3 reuse the model and the fields of the Connections screen**: one choice per role
+  («instead of …» names the provider it replaces — that is the consent), then one pass of writes
+  (`module-enable` with `replace`, `module-settings`, `module-disable`) against a freshly read list.
+  A role an agent changed in the meantime is refused, not overwritten; secrets live only in the
+  field and are cleared after each answer.
+- **`from` in `POST /api/task-new`**: step 4 can copy an existing folder with an `index.html` into
+  the first iteration. Space without integrations only; every check and the walk come before any
+  write; symbolic links, `.git` and `node_modules` are never copied; at most 2000 files and 200 MB;
+  the task folder is claimed atomically and removed on any failure; the answer says what was
+  actually copied.
+- **Not verified against a real Vercel or Supabase**: as in 3a, the live tests use a local fixture
+  module, because the `check` of those two goes to the network.
+
 ### What stays for later
 
 - The roles `vcs`, `tracker`, `dashboard`, `notify` are reserved names that the core does not
   call yet.
-- **Stage 3b**: the first-run wizard (0.6.0).
 - **Stage 3c**: a space's own modules from `<space>/modules/` with the trust dialog (hash of
   the whole folder, no symlinks, trust keyed on the real path), and a «custom» mark on the
   card (0.7.0).
 - Left out of 3a: picking a folder with a system dialog; a banner «N connections with an
   error» on «Tasks»; icons and descriptions from manifests (today only the built-in modules
   have them).
+- Left out of 3b: resuming an unfinished wizard after a restart (the space already exists; the
+  rest is on «Connections» and «Tasks»); starting an agent from the wizard (step 4 only gives the
+  phrase to say to it).
 - **Not handled in 0.2** (a later security stage or on demand): a `Host`-header check on the
   canvas server (DNS rebinding); keychain storage for secrets (they sit in a `0600` file);
   `HEAD` and `/t/<id>/published/…` on the local copy; design tokens from an npm package;
