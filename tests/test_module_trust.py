@@ -740,6 +740,77 @@ class RecordsTest(Base):
         self.assertTrue(os.path.isdir(victim))
         self.assertEqual(json.loads(_slurp(mt.trust_file()))['modules'], {})
 
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_put_refuses_a_snapshot_that_is_a_link(self):
+        decoy = os.path.join(self.tmp, 'decoy')                     # посилання на теку «зі знімком» — чужа, змінна тека
+        os.makedirs(decoy)
+        os.makedirs(mt.trusted_root())
+        os.symlink(decoy, mt.snapshot_dir('a' * 64))
+        with self.assertRaises(mt.SnapshotGone):
+            mt.put_record('/k', self.rec())
+        self.assertFalse(os.path.exists(mt.trust_file()))
+
+    def test_a_hash_with_a_valid_prefix_and_a_path_tail_is_refused(self):
+        # `HASH_RE.match` пропустив би `<64 hex>/../x` — а це шлях до `trusted/x`.
+        bad = 'a' * 64 + '/../x'
+        os.makedirs(mt.snapshot_dir('a' * 64))
+        os.makedirs(os.path.join(mt.trusted_root(), 'x'))
+        with self.assertRaises(ValueError):
+            mt.put_record('/k', self.rec(bad))
+        self.assertFalse(os.path.exists(mt.trust_file()))
+        self.write_raw({'version': 1, 'modules': {'/k': {**self.rec(), 'hash': bad}}})    # рукописний файл теж не шкодить
+        self.assertTrue(mt.drop_record('/k'))
+        self.assertTrue(os.path.isdir(os.path.join(mt.trusted_root(), 'x')))
+
+    def test_drop_works_when_the_snapshot_is_already_gone(self):
+        self.snap()
+        mt.put_record('/k', self.rec())
+        os.rmdir(mt.snapshot_dir('a' * 64))
+        self.assertTrue(mt.drop_record('/k'))                      # «Забрати довіру» знімає запис і без знімка
+        self.assertEqual(mt.load_records(), {})
+
+    def test_put_and_drop_wait_for_the_write_lock(self):
+        # Детерміновано: лок тримаємо ми — писар у потоці мусить чекати, а не писати поруч із чужим читанням-зміною-записом.
+        self.snap()
+        mt.put_record('/k', self.rec())
+        calls = {'put': lambda: mt.put_record('/k2', self.rec()), 'drop': lambda: mt.drop_record('/k')}
+        for name, call in calls.items():
+            with self.subTest(name):
+                th = threading.Thread(target=call, daemon=True)
+                mt.WRITE_LOCK.acquire()
+                try:
+                    th.start()
+                    th.join(0.3)
+                    waiting = th.is_alive()
+                finally:
+                    mt.WRITE_LOCK.release()
+                th.join(5)
+                self.assertTrue(waiting, f'{name} не чекав лока')
+                self.assertFalse(th.is_alive())
+
+    def test_the_snapshot_is_set_aside_under_the_write_lock(self):
+        self.snap()
+        mt.put_record('/k', self.rec())
+        real, seen = mt._aside, []
+
+        def spy(d):
+            seen.append(mt.WRITE_LOCK.locked())
+            return real(d)
+        with mock.patch.object(mt, '_aside', spy):
+            mt.drop_record('/k')
+        self.assertEqual(seen, [True])
+
+    def test_a_failed_write_puts_the_snapshot_back_and_keeps_the_record(self):
+        sc = mt.scan(self.mod, with_data=True)
+        mt.ensure_snapshot(sc)
+        mt.put_record('/k', self.rec(sc.hash))
+        with mock.patch.object(mt, 'atomic_write_json', side_effect=OSError(errno.EIO, 'disk')):
+            with self.assertRaises(OSError):
+                mt.drop_record('/k')
+        self.assertIn('/k', mt.load_records())                      # довіра лишилась…
+        self.assertTrue(mt.verify_snapshot(sc.hash))                # …і знімок на місці, цілий
+        self.assertEqual([n for n in os.listdir(mt.trusted_root()) if n.startswith('.old-')], [])
+
     def test_concurrent_puts_do_not_lose_records(self):
         self.snap()
         real, errs = mt._read_file, []
@@ -905,15 +976,33 @@ class SnapshotTest(Base):
         mt.ensure_snapshot(sc)
         self.assertFalse(os.path.exists(old))
 
-    def test_a_snapshot_never_overwrites_a_file_inside_itself(self):
-        # На ФС, нечутливій до регістру (APFS, NTFS), `a.py` і `A.py` — один файл: запис другого мусить впасти, а не мовчки
-        # підмінити перший (хеш у знімку розійшовся б із вмістом).
-        if not _case_insensitive(self.tmp):
-            self.skipTest('ФС чутлива до регістру: колізії імен не створити')
-        sc = mt.Scan('f' * 64, (), 0, None, {'a.py': b'1', 'A.py': b'2'})
-        with self.assertRaises(FileExistsError):
-            mt.ensure_snapshot(sc)
-        self.assertEqual([n for n in os.listdir(mt.trusted_root()) if n.startswith('.tmp-')], [])
+    def test_a_snapshot_never_writes_into_a_file_that_is_already_there(self):
+        # Платформонезалежно: у «щойно створеній» теці вже лежить файл (жорстке посилання на чужий) — без `O_EXCL` запис
+        # пішов би крізь нього в чужий файл (а на ФС без урахування регістру так само зіткнулись би `a.py` і `A.py`).
+        sc = mt.Scan('f' * 64, (), 0, None, {'a.py': b'1'})
+        outside = _put(self.tmp, 'outside.txt', b'outside')
+        planted = os.path.join(mt.trusted_root(), '.tmp-planted')
+        os.makedirs(planted)
+        os.link(outside, os.path.join(planted, 'a.py'))
+        with mock.patch.object(mt.tempfile, 'mkdtemp', return_value=planted):
+            with self.assertRaises(FileExistsError):
+                mt.ensure_snapshot(sc)
+        self.assertEqual(_slurp(outside), b'outside')
+        self.assertFalse(os.path.exists(mt.snapshot_dir('f' * 64)))
+
+    def test_ensure_refuses_a_hash_that_is_not_a_hash(self):
+        # Хеш іде в шлях знімка, а `ensure_snapshot` уміє відсунути й видалити теку на цьому шляху: з реального `scan` такий
+        # хеш недосяжний, але рукотворний `Scan` не мусить зачепити чужу теку.
+        victims = [os.path.join(self.deai, 'victim'), os.path.join(mt.trusted_root(), 'victim')]
+        os.makedirs(mt.snapshot_dir('a' * 64))
+        for v in victims:
+            os.makedirs(v, exist_ok=True)
+        for bad in ('../victim', 'a' * 64 + '/../victim', 'A' * 64, '', None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    mt.ensure_snapshot(mt.Scan(bad, (), 0, None, {'a.py': b'1'}))
+                for v in victims:
+                    self.assertTrue(os.path.isdir(v), v)
 
     def test_sweep_removes_only_old_leftovers(self):
         root = mt.trusted_root()
@@ -985,6 +1074,18 @@ class ConfirmTest(Base):
         self.assertEqual(argv[0], 'zenity')
         self.assertIn(f'--timeout={mt.CONFIRM_TIMEOUT}', argv)
 
+    def test_zenity_shows_the_text_literally(self):
+        argv, _ = mt.confirm_command('linux', *self.TEXTS, which=lambda n: '/usr/bin/' + n, env={'DISPLAY': ':0'})
+        self.assertIn('--no-markup', argv)
+
+    def test_the_default_answer_is_no_on_macos_and_windows(self):
+        self.assertIn('default button noB', mt._OSA)
+        self.assertIn('cancel button noB', mt._OSA)
+        self.assertIn("'Button2'", mt._PS)
+
+    def test_the_macos_script_times_out_with_the_constant(self):
+        self.assertIn(f'giving up after {mt.CONFIRM_TIMEOUT}', mt._OSA)
+
     def test_interpret(self):
         P = lambda rc, out='': mock.Mock(returncode=rc, stdout=out)  # noqa: E731
         self.assertEqual(mt._interpret('osascript', P(0, 'yes\n')), 'yes')
@@ -1018,6 +1119,35 @@ class ConfirmTest(Base):
         en = mt.confirm_texts('en', 'n', 'i', 'f' * 64, '/p')
         self.assertEqual((en[2], en[3]), ('Trust', 'Cancel'))
 
+    def test_a_lang_that_is_not_a_string_falls_back_to_uk(self):
+        want = mt.confirm_texts('uk', 'n', 'i', 'f' * 64, '/p')
+        for lang in ([], {}, None, 5, b'en'):
+            self.assertEqual(mt.confirm_texts(lang, 'n', 'i', 'f' * 64, '/p'), want, repr(lang))
+
+    def test_line_and_paragraph_separators_are_cleaned(self):
+        msg = mt.confirm_texts('uk', 'a\u2028b\u2029c', 'i', 'f' * 64, '/p')[1]
+        self.assertNotIn('\u2028', msg)
+        self.assertNotIn('\u2029', msg)
+        self.assertIn('abc', msg)
+
+    def test_the_module_id_is_cleaned_too(self):
+        msg = mt.confirm_texts('uk', 'n', 'i\u202ed\x07', 'f' * 64, '/p')[1]
+        self.assertNotIn('\u202e', msg)
+        self.assertNotIn('\x07', msg)
+        self.assertIn('(id,', msg)                                  # `i` + `d` зійшлись після очищення
+
+    def test_a_long_path_is_clipped_in_the_middle_so_the_module_dir_stays_visible(self):
+        path = '/h/' + 'd' * 200 + '/space/modules/netlify'
+        msg = mt.confirm_texts('uk', 'n', 'i', 'f' * 64, path)[1]
+        self.assertIn('/space/modules/netlify', msg)               # кінець шляху — сама тека модуля
+        self.assertIn('/h/ddd', msg)                                # голова теж
+        self.assertIn('…', msg)
+        self.assertNotIn('d' * 55, msg)
+        s = 'abcdefghij' * 20
+        self.assertEqual(mt._clean(s, n=10, middle=True), 'abc…efghij')       # 3 + «…» + 6 = 10
+        self.assertEqual(mt._clean(s, n=10), 'abcdefghi…')                    # без `middle` — з кінця
+        self.assertEqual(mt._clean('short', n=10, middle=True), 'short')
+
     def test_seam_needs_a_non_default_deai_home(self):
         with mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes'}):
             self.assertEqual(mt.seam_value(), 'yes')
@@ -1027,6 +1157,50 @@ class ConfirmTest(Base):
             self.assertIsNone(mt.seam_value())
         with mock.patch.dict(os.environ, {mt.SEAM_ENV: 'maybe'}):
             self.assertIsNone(mt.seam_value())
+
+    def test_seam_is_off_for_the_default_home_spelled_with_a_tilde(self):
+        default = os.path.join(self.home, '.deai')                  # теки ще нема: рішає лише текст шляху
+        with mock.patch.object(mt, '_real_default_home', lambda: os.path.realpath(default)), \
+                mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': '~/.deai', 'HOME': self.home}):
+            self.assertIsNone(mt.seam_value())
+
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_seam_is_off_for_a_link_to_a_default_home_that_does_not_exist_yet(self):
+        default = os.path.join(self.tmp, 'default-deai')            # перший запуск: типової теки ще нема — лише `realpath`
+        link = os.path.join(self.tmp, 'link')
+        os.symlink(default, link)
+        with mock.patch.object(mt, '_real_default_home', lambda: os.path.realpath(default)), \
+                mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': link}):
+            self.assertIsNone(mt.seam_value())
+
+    def test_seam_is_off_for_the_default_home_in_another_letter_case(self):
+        default = os.path.join(self.tmp, 'Default-Deai')
+        os.makedirs(default)
+        other = os.path.join(self.tmp, 'default-deai')
+        if not os.path.exists(other):
+            self.skipTest('ФС чутлива до регістру: ту саму теку іншим написанням не відкрити')
+        with mock.patch.object(mt, '_real_default_home', lambda: os.path.realpath(default)), \
+                mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': other}):
+            self.assertNotEqual(os.path.realpath(other), os.path.realpath(default))   # рядки різні, тека — та сама
+            self.assertIsNone(mt.seam_value())
+
+    @unittest.skipIf(os.name == 'nt', 'pwd і посилання')
+    def test_the_default_home_is_resolved_through_a_linked_user_home(self):
+        user = os.path.join(self.tmp, 'user')
+        os.makedirs(user)
+        link = os.path.join(self.tmp, 'user-link')
+        os.symlink(user, link)
+        with mock.patch('pwd.getpwuid', return_value=types.SimpleNamespace(pw_dir=link)):
+            self.assertEqual(mt._real_default_home(), os.path.join(user, '.deai'))
+            with mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': os.path.join(user, '.deai')}):
+                self.assertIsNone(mt.seam_value())
+
+    def test_the_default_home_comes_from_the_user_database_not_from_HOME(self):
+        # HOME підмінено на тимчасову (так роблять усі тести): `DEAI_HOME` під нею — НЕ справжній `~/.deai`, шов діє.
+        own = os.path.join(self.home, '.deai')
+        self.assertNotEqual(mt._real_default_home(), os.path.realpath(own))
+        with mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': own}):
+            self.assertEqual(mt.seam_value(), 'yes')
 
     def test_confirm_uses_the_seam_and_never_a_window(self):
         for v in ('yes', 'no', 'unavailable'):

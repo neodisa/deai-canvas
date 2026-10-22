@@ -328,7 +328,6 @@ def tilde(p):
     return p
 
 
-
 # ------------------------------------------------------------------------------------- записи довіри
 
 HASH_RE = re.compile(r'[0-9a-f]{64}')
@@ -407,7 +406,8 @@ def _read_file():
 
 def load_records():
     """`{ключ: запис}` з `trust.json` (лише записи правильної форми). Файла нема чи шар просторів вимкнено — `{}` без
-    звернення до диска; не читається — `TrustUnreadable`. Кеш за відбитком файла; віддає новий словник."""
+    звернення до диска; не читається — `TrustUnreadable`. Кеш за відбитком файла; віддає новий словник, але самі записи
+    спільні з кешем — викликачі їх не змінюють."""
     if not spaces.layer_on():
         return {}
     sig = _sig(trust_file())
@@ -458,7 +458,7 @@ def put_record(key, rec):
 def drop_record(key):
     """Прибрати довіру `key`; `True`, якщо запис був. Знімок, на який більше не посилається жоден запис, відсувається в
     `.old-*` ПІД тим самим локом (паралельна довіра того ж хешу побачить його відсутність і відмовить), видаляється —
-    після локу."""
+    після локу. Запис файла не вдався — знімок повертається на місце (best effort) і виняток іде далі: довіра лишилась."""
     _require_layer()
     aside = None
     with WRITE_LOCK:
@@ -470,7 +470,15 @@ def drop_record(key):
         still = any(isinstance(r, dict) and r.get('hash') == h for r in data['modules'].values())
         if isinstance(h, str) and HASH_RE.fullmatch(h) and not still and _real_dir(snapshot_dir(h)):
             aside = _aside(snapshot_dir(h))
-        _write_file(data)
+        try:
+            _write_file(data)
+        except BaseException:
+            if aside:
+                try:
+                    os.rename(aside, snapshot_dir(h))
+                except OSError:
+                    pass                              # поруч уже новий знімок того ж хешу — `.old-*` прибере `sweep`
+            raise
     if aside:
         _rmtree(aside)
     sweep()
@@ -544,6 +552,8 @@ def ensure_snapshot(sc):
     сама тека-батько — атомарно). Повертає теку знімка."""
     if sc.data is None:
         raise ValueError('ensure_snapshot: scan(…, with_data=True) is required')
+    if not HASH_RE.fullmatch(str(sc.hash)):           # хеш іде в шлях знімка (і в `_aside` + `_rmtree`): лише 64 hex
+        raise ValueError('ensure_snapshot: malformed hash')
     _require_layer()
     sweep()
     root = trusted_root()
@@ -621,17 +631,23 @@ _PS = ("Add-Type -AssemblyName System.Windows.Forms; "
        "if ($r -eq 'Yes') { 'yes' } else { 'no' }")
 
 
-def _clean(s, n=80):
+def _clean(s, n=80, middle=False):
     """Рядок для системного вікна: без `Cc`/`Cf`/`Cs`/`Zl`/`Zp`, не довший за `n` (з «…»). `Cs` — самотній сурогат
-    (`"\\ud800"` з `module.json`): у `argv` підпроцесу він дав би `UnicodeEncodeError` замість вікна."""
+    (`"\\ud800"` з `module.json`): у `argv` підпроцесу він дав би `UnicodeEncodeError` замість вікна. Зайве зрізається
+    з кінця, а з `middle` — із СЕРЕДИНИ (голова, «…», хвіст): у шляху важливий саме кінець — тека модуля."""
     s = ''.join(c for c in str(s) if unicodedata.category(c) not in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp'))
-    return s if len(s) <= n else s[:n - 1] + '…'
+    if len(s) <= n:
+        return s
+    if middle:
+        head = (n - 1) // 3
+        return s[:head] + '…' + s[len(s) - (n - 1 - head):]
+    return s[:n - 1] + '…'
 
 
 def confirm_texts(lang, name, mid, h, path):
     """`(заголовок, текст, «так», «ні»)` вікна довіри мовою `lang` (`uk`/`en`, інакше `uk`)."""
-    tx = CONFIRM_TEXT.get(lang) or CONFIRM_TEXT['uk']
-    msg = tx['ask'].format(name=_clean(name), id=_clean(mid), hash=str(h)[:12], path=_clean(path))
+    tx = (CONFIRM_TEXT.get(lang) if isinstance(lang, str) else None) or CONFIRM_TEXT['uk']
+    msg = tx['ask'].format(name=_clean(name), id=_clean(mid), hash=str(h)[:12], path=_clean(path, middle=True))
     return tx['title'], msg, tx['yes'], tx['no']
 
 
@@ -685,7 +701,8 @@ def seam_value(env=None):
     home = env.get('DEAI_HOME')
     if v not in ('yes', 'no', 'unavailable') or not home:
         return None
-    if os.path.realpath(os.path.expanduser(home)) == _real_default_home():
+    here, default = os.path.realpath(os.path.expanduser(home)), _real_default_home()
+    if here == default or spaces._same_dir(here, default):      # тека на диску та сама (APFS: інший регістр, NFD)
         return None
     return v
 
