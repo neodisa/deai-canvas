@@ -45,6 +45,7 @@
 9. Нові ключі «Підключень» перевіряє новий `tests/connections-own.test.mjs` (свій тест «кожен ключ моделі є в обох мовах»), а не перелік у `connections-view.test.mjs`.
 10. Майстер, крок 3: модуль, вибраний на кроці 2, що тепер потребує довіри й ще не ввімкнений (довіру забрали між кроками), — назад на крок 2 з тостом `cnRefUntrusted`; у `writePlan` такий модуль дає операцію `untrusted` (відмова без запиту), а не `enable` — `runOp` без картки інакше впав би на `forms.get(id).fields`.
 11. Роль «на папері» (свій модуль, що тут не працює) у `capabilities` — `None` БЕЗ ключа `error`: клієнт (`connPageHTML`, `providerLine`, крок 2 майстра) читає `capabilities.error` як «space.json не читається» і сховав би всі картки — разом із «Довіритись…» у сценарії «колега закомітив». Рядок «Зараз» такої ролі — «Зараз: «<назва>» — чекає довіри на цьому компʼютері» (`providerLine` → `kind: 'waiting'`, ключ `cnNowWaiting`).
+12. Ревʼю плану проти коду (22.10.2026), виправлено до старту Task 2: (а) Task 6 — тест рядка довіри шукав «Є зміни в теці», а текст ключа — «У теці є зміни»; (б) Tasks 3/5 — нові файли тестів САМІ присвоюють `DEAI_HOME` (охоронець `test_serve.SPACE_WRITERS` розбирає джерело файла, присвоєння в імпортованому `Env`/`World` не бачить) і повертають права знімкам перед `rmtree`; (в) Task 6 — наявний пін `loadConn` у `connections-wiring` оновлюється разом із `notes = []`; (г) Task 4 — `_holders`/`_role_conflict`/`grant_trust` беруть ролі й із запису `space.json` (`_roles_of`): зламаний маніфест чи тека, що не приїхала, теж тримають роль «на папері» — інакше пройшов би другий постачальник, а `_paper_failure` затінив би робочого; (ґ) Task 10 — застарілі речення README і `comments.md`, обмеження «старі знімки не прибираються».
 
 ## Структура файлів
 
@@ -1424,9 +1425,23 @@ def resolve(ctx, channel, pin_id, resolved):
 '''
 
 
+def _unlock(tree):
+    """Знімки довіри — 0500/0400, а тести ставлять ще й chmod 0: `rmtree(…, ignore_errors=True)` мовчки лишив би такі
+    теки на диску. Повертає право запису ТЕКАМ (файлам не треба: видалення — право теки, що їх містить)."""
+    for root, dirs, _files in os.walk(tree):
+        for d in dirs:
+            try:
+                os.chmod(os.path.join(root, d), 0o700)
+            except OSError:
+                pass
+
+
 class OwnEnv(Env):
     def setUp(self):
         super().setUp()
+        # Власне присвоєння, хоч `Env` уже поставив те саме: охоронець `test_serve` (`SPACE_WRITERS` →
+        # `_assigns_deai_home`) розбирає джерело САМЕ цього файла — присвоєння в імпортованому `Env` він не бачить
+        os.environ['DEAI_HOME'] = self.deai
         self.canary = os.path.join(self.tmp, 'canary.log')
         os.environ['DEAI_OWN_CANARY'] = self.canary
         self.addCleanup(os.environ.pop, 'DEAI_OWN_CANARY', None)
@@ -1434,6 +1449,10 @@ class OwnEnv(Env):
         self.addCleanup(os.environ.pop, mt.SEAM_ENV, None)
         mt.clear_declined()
         self.sp = self.new_space()
+
+    def tearDown(self):
+        _unlock(self.tmp)                  # до `Env.tearDown`: той робить `rmtree(…, ignore_errors=True)`
+        super().tearDown()
 
     def own(self, mid='acme', roles=('publish',), sp=None, server=OWN_SERVER, settings=None, extra=None):
         d = os.path.join((sp or self.sp)['path'], 'modules', mid)
@@ -1907,7 +1926,7 @@ def forget_check(space_id, module_id):
 
 - [ ] **Step 4: Прогін — зелені + старі модулі**
 
-Run: `python3 "$G" 300 2500 python3 -m unittest tests.test_modules_own tests.test_modules tests.test_modules_api tests.test_comments_role -v 2>&1 | tail -15`
+Run: `python3 "$G" 600 2500 python3 -m unittest tests.test_modules_own tests.test_modules tests.test_modules_api tests.test_comments_role tests.test_serve -v 2>&1 | tail -15`
 Expected: PASS. Якщо падає наявний тест через `mock.patch.object(dm, 'catalog', spy)` зі `spy()` без аргументів — зміни `spy` на `spy(space=None)` (лише сигнатуру шпигуна; перевірки не чіпати).
 
 - [ ] **Step 5: Мутації** (`python3 -B`, по одній)
@@ -1959,6 +1978,19 @@ class RolesTest(OwnEnv):
         st = dm.write_module_state(self.sp, 'pub', enabled=True, replace=True)
         self.assertEqual(st['replaced'], ['acme'])
         self.assertFalse(dm.space_modules(self.sp)['acme']['enabled'])
+
+    def test_missing_or_broken_own_module_still_holds_its_role(self):
+        self.mk('pub')
+        self.enable_raw('ghost', ('publish',))                 # тека не приїхала з git — ролі лише в записі
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.write_module_state(self.sp, 'pub', enabled=True)
+        self.assertEqual((cm.exception.code, cm.exception.message), ('role-taken', 'publish is already provided by ghost'))
+        _write(os.path.join(self.sp['path'], 'modules', 'acme', 'module.json'), '{oops')   # маніфест не розбирається
+        self.enable_raw('acme', ('publish',))
+        st = dm.write_module_state(self.sp, 'pub', enabled=True, replace=True)
+        self.assertEqual(st['replaced'], ['acme', 'ghost'])
+        mods = dm.space_modules(self.sp)
+        self.assertEqual((mods['acme']['enabled'], mods['ghost']['enabled'], mods['pub']['enabled']), (False, False, True))
 
     def test_provider_raises_for_untrusted_own_without_falling_back(self):
         self.mk('static-publish')                              # неявний типовий у просторі без інтеграцій
@@ -2154,11 +2186,37 @@ def _holds(o, space, explicit):
     return o.origin == 'space' and explicit.get(o.id, {}).get('enabled') is True
 
 
+def _roles_of(oid, cat, explicit):
+    """Ролі модуля `oid`: з маніфесту (каталог) і — для СВОГО модуля чи теки, якої в каталозі нема, — ще й із запису
+    `space.json` (їх пише вмикання свого модуля). Маніфест зламаний (ролей у каталозі нема) чи тека не приїхала з git —
+    роль усе одно за ним «на папері», а не вільна для другого постачальника."""
+    o = cat.get(oid)
+    out = set(o.roles) if o is not None else set()
+    if o is None or o.origin == 'space':
+        out |= set(explicit.get(oid, {}).get('roles', ()))
+    return out
+
+
 def _holders(m, cat, space, explicit):
-    """Id ІНШИХ модулів `cat`, що зараз тримають хоч одну роль `m` (`_holds`), за абеткою."""
+    """Id ІНШИХ модулів, що зараз тримають хоч одну роль `m`, за абеткою: з каталогу — за `_holds`; явно ввімкнений
+    запис `space.json`, чиєї теки в каталозі нема, — теж (ролі з запису, «на папері»)."""
     mine = set(m.roles)
-    return [oid for oid in sorted(cat)
-            if oid != m.id and mine & set(cat[oid].roles) and _holds(cat[oid], space, explicit)]
+    out = []
+    for oid in sorted(set(cat) | set(explicit)):
+        if oid == m.id or not (mine & _roles_of(oid, cat, explicit)):
+            continue
+        o = cat.get(oid)
+        if _holds(o, space, explicit) if o is not None else explicit[oid]['enabled'] is True:
+            out.append(oid)
+    return out
+```
+
+`_role_conflict` (≈741) — текст із тих самих ролей: `cat[oid]` для теки, якої нема, дав би `KeyError`, а порожній
+перетин із ролями маніфесту — `IndexError`:
+
+```python
+    for oid in _holders(m, cat, space, explicit):
+        return f'{sorted(set(m.roles) & _roles_of(oid, cat, explicit))[0]} is already provided by {oid}'
 ```
 
 3c. Перед `_provider_for`:
@@ -2263,7 +2321,8 @@ def _trust_setting(s):
 
 def trust_view(space, mid):
     """Дані діалогу довіри (`GET /api/module-trust`): тека сканується (з кешем відбитка) і порівнюється із записом
-    довіри; назва, версія, ролі й налаштування — з маніфесту ТЕКИ (нової версії). Нічого не виконує."""
+    довіри; назва, версія, ролі й налаштування — з маніфесту ТЕКИ (нової версії). Код теки не виконує (для вже
+    довіреного модуля `own_modules` вантажить хіба його ЗНІМОК — той, що й так працює)."""
     src = _own_or_404(space, mid)
     m = own_modules(space).get(mid)
     try:
@@ -2315,12 +2374,10 @@ def grant_trust(space, mid, want_hash, lang='uk'):
         raise ModuleError('module-changed', message='the module folder changed after the dialog was opened')
     explicit = space_modules(space)
     if explicit.get(mid, {}).get('enabled') is True:
-        cat = catalog(space)
-        mine = set(meta['roles'])
-        for oid in sorted(cat):
-            o = cat[oid]
-            if oid != mid and mine & set(o.roles) and _holds(o, space, explicit):
-                raise ModuleError('role-taken', message=f'{sorted(mine & set(o.roles))[0]} is already provided by {oid}')
+        probe = types.SimpleNamespace(id=mid, roles=list(meta['roles']))      # ролі НОВОЇ версії теки
+        why = _role_conflict(probe, catalog(space), space, explicit)
+        if why:
+            raise ModuleError('role-taken', message=why)
     texts = module_trust.confirm_texts(lang, meta['name'], mid, sc.hash, module_trust.tilde(src))
     answer = module_trust.ask(key, sc.hash, texts)
     if answer != 'yes':
@@ -2367,6 +2424,9 @@ Expected: PASS.
 | мутація | має впасти |
 |---|---|
 | `_holds`: прибрати гілку `origin == 'space'` (повертати `False` для не-`ok`) | `test_untrusted_enabled_own_module_holds_its_role_on_paper` |
+| `_roles_of`: прибрати `out |= …` (ролі з запису) | `test_missing_or_broken_own_module_still_holds_its_role` |
+| `_holders`: `sorted(set(cat) | set(explicit))` → `sorted(cat)` | `test_missing_or_broken_own_module_still_holds_its_role` |
+| `grant_trust`: прибрати `raise ModuleError('role-taken', …)` | `test_grant_refuses_a_second_provider` |
 | `_provider_for`: прибрати `raise paper` | `test_provider_raises_for_untrusted_own_without_falling_back`, `test_integrations_space_no_legacy_…` |
 | `_paper_failure`: прибрати гілку `elif role in e.get('roles', ())` | `test_missing_own_comments_module_is_an_error_not_legacy` |
 | `capabilities`: прибрати гілку `paper` (`continue`) | `test_integrations_space_no_legacy_for_untrusted_publish_or_comments`, `test_provider_raises_for_untrusted_own_without_falling_back` |
@@ -2417,6 +2477,7 @@ import serve  # noqa: E402
 import deai_modules as dm  # noqa: E402
 import module_trust as mt  # noqa: E402
 from test_modules_api import World, _write  # noqa: E402
+from test_modules_own import _unlock  # noqa: E402
 
 _REAL = None
 
@@ -2454,6 +2515,10 @@ def resolve(ctx, channel, pin_id, resolved):
 class TrustApi(World):
     def setUp(self):
         super().setUp()
+        # Власне присвоєння (`World` уже поставив те саме через `patch.dict` і сам його поверне): охоронець `test_serve`
+        # (`SPACE_WRITERS` → `_assigns_deai_home`) розбирає джерело САМЕ цього файла
+        os.environ['DEAI_HOME'] = self.deai
+        self.addCleanup(_unlock, self.tmp)           # LIFO: раніше за `rmtree` світу — інакше знімки 0500 лишились би
         self.modules()
         mt.clear_declined()
         os.environ[mt.SEAM_ENV] = 'yes'
@@ -2951,7 +3016,7 @@ test("cardHTML: пігулка «свій» з текою в title, бейдж �
 
 test("cardHTML: рядок довіри під описом; «Чому не можна…» для refused", () => {
   const h = cardHTML(own({ trust: "changed", runs: true, status: "unchecked" }), new Map());
-  assert.match(h, /<p class="cn-trust">.*Є зміни в теці/s);
+  assert.match(h, /<p class="cn-trust">.*У теці є зміни/s);
   const r = cardHTML(own({ trust: "refused", status: "error", trust_error: "symlink", error: "symlink: a" }), new Map());
   assert.match(r, /data-cn="trustinfo"/);
   assert.match(r, /class="cn-why".*У теці є символьне посилання/s);
@@ -3018,6 +3083,10 @@ test("3c: примітки своїх модулів — зі списку мо�
   assert.match(src, /const connView = \(\) => \(\{ space: connSpace\(\), list: connState\.list, notes: connState\.notes,/);
 });
 ```
+
+У тому ж файлі ОНОВИ наявний пін тесту «loadConn: `spaces` вирішує, чи перечитувати простори…» (≈рядок 301): у регексі
+гілки зміни простору `connState\.list = null; connState\.failed = null;` → `connState\.list = null; connState\.notes = \[\]; connState\.failed = null;`.
+Інакше Step 5 його зламає: старий пін вимагає `failed = null` одразу після `list = null`, новий — `notes = []`.
 
 - [ ] **Step 2: Прогін — червоні**
 
@@ -4606,12 +4675,12 @@ Create the folder in a test space, open «Connections», trust it, connect it an
 `check` is shown on the card. After every edit, trust again — that is the point.
 ````
 
-- [ ] **Step 2: `docs/modules/comments.md`** — у «Коротко (uk)» речення «У 0.4.0 працюють **лише вбудовані модулі** … етап 3, після діалогу довіри.» заміни на «З 0.7.0 модуль коментарів може бути й своїм — у `<простір>/modules/<id>/`, після довіри людини (див. [authoring.md](authoring.md)); JS адаптера виконується в origin канваса, тож входить у те, чому людина довіряє.». У «## 4. Security» пункт «That is why 0.4.0 loads **built-in modules only** …» заміни на: «That is why a space's own `comments` module runs only after a person trusts it ([authoring.md](authoring.md)); the adapter of a trusted own module is served from its snapshot at `GET /api/module-client/<space>/<id>/<file>`.» Опис адреси в «### Manifest» доповни: «own modules: `GET /api/module-client/<space>/<id>/<file>`».
+- [ ] **Step 2: `docs/modules/comments.md`** — у «Коротко (uk)» речення «У 0.4.0 працюють **лише вбудовані модулі** … етап 3, після діалогу довіри.» заміни на «З 0.7.0 модуль коментарів може бути й своїм — у `<простір>/modules/<id>/`, після довіри людини (див. [authoring.md](authoring.md)); JS адаптера виконується в origin канваса, тож входить у те, чому людина довіряє.». У «## 4. Security» пункт «That is why 0.4.0 loads **built-in modules only** …» заміни на: «That is why a space's own `comments` module runs only after a person trusts it ([authoring.md](authoring.md)); the adapter of a trusted own module is served from its snapshot at `GET /api/module-client/<space>/<id>/<file>`.» Опис адреси в «### Manifest» доповни: «own modules: `GET /api/module-client/<space>/<id>/<file>`». Перше речення файла «For Deai Canvas **0.4.0**.» → «For Deai Canvas **0.7.0**.».
 
 - [ ] **Step 3: `README.md`**
 
 - статус: `v0.6.0` → `v0.7.0`; речення «…being turned into optional per-space modules, and a space's own modules are next.» → «…being turned into optional per-space modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only after you trust it.»
-- «## Modules», перший абзац: «Only built-in modules exist so far; a space's own modules come with stage 3c.» → «Built-in modules live in `app/modules/`; a space's own modules — in `<space>/modules/<id>/`.» Після абзацу про Connections — новий підрозділ:
+- «## Modules», перший абзац: перше речення «A **module** is a folder `app/modules/<id>/` with `module.json`…» → «A **module** is a folder — built in at `app/modules/<id>/` or a space's own at `<space>/modules/<id>/` — with `module.json`…»; останнє речення «Only built-in modules exist so far; a space's own modules come with stage 3c.» прибери (перше вже каже, де живуть свої). Після абзацу про Connections — новий підрозділ:
 
 ```markdown
 **Own modules.** Put a module folder into `<space>/modules/<id>/` (by hand, from git, or ask the agent to write one —
@@ -4623,6 +4692,7 @@ in `space.json` stays «on, but not trusted» on your computer until you trust i
 module but cannot trust it — ask the person.
 ```
 
+- «**Your own service.**» (розділ про коментарі): останнє речення «A space's own modules load only after the trust dialog of stage 3c, so for now the module has to be built in (`app/modules/`).» → «The module can live in the space itself (`<space>/modules/<id>/`) and runs after you trust it — see [`docs/modules/authoring.md`](docs/modules/authoring.md).»
 - «## Roadmap», пункт 3c: `- **3c** (0.7, next) — …` → `- ✅ **3c** (0.7) — a space's own modules from `<space>/modules/`, run from a snapshot only after a person trusts them (dialog + system window).`; решту пунктів не чіпати.
 
 - [ ] **Step 4: `CHANGELOG.md`** — новий розділ над `## [0.6.0]` (дата — день релізу у форматі `DD.MM.YYYY`):
@@ -4667,7 +4737,8 @@ their code runs only after a person trusts exactly the bytes they saw. Design:
 - `DEAI_TRUST_CONFIRM` is a test seam that answers the system window; it works only with a non-default
   `DEAI_HOME`, and the server prints a warning when it is on.
 - Known limits: no sandbox (a trusted module runs with your permissions); the Windows and Linux system windows are
-  covered by command-building unit tests only; Safari older than 16.4 does not send `Sec-Fetch-Site`.
+  covered by command-building unit tests only; Safari older than 16.4 does not send `Sec-Fetch-Site`; snapshots
+  replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in `<DEAI_HOME>/trusted/`).
 ```
 
 Перелік у розділі звір із тим, що реально влилось (git log від `v0.6.0`): нічого, чого нема в коді, не писати.
