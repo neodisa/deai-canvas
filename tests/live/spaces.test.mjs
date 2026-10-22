@@ -22,15 +22,18 @@
  *        «публікація не за `hasPublish`» — теж 1.
  *   2 (нова задача)  — `space: sp.id` у `newTaskDialog` і `task_new(root=sp['path'])`.
  *   3 (новий простір) — `check_new_path` (типова тека не мусить перетинатись зі старим
- *        простором) і `afterSpaceChange`.
- *   4 (привітання)   — `needsWelcome` (`spaces-model.js`). Мутація «завжди false» червонить 4.
+ *        простором) і `afterSpaceChange`; вхід — майстер (етап 3b): «Новий простір…» дропдауна (`spacenew`, `app.js`) —
+ *        мутація «пункт нічого не робить» червонить 3 і 6; «Закрити майстер» (`[data-wz="close"]`, `wizard.js`) — 3 і 4.
+ *   4 (привітання)   — `needsWelcome` (`spaces-model.js`). Мутація «завжди false» червонить 4; кнопка привітання
+ *        «Створити простір» (`wireHome`, `app.js`) — теж 4.
  *   4б (зіпсований старий файл) — `legacy_error` у `spaces.listing()` і `needsWelcome`
  *        (`spaces-model.js`). Мутація «`needsWelcome` ігнорує `legacy_error`» червонить 4б
  *        (привітання замість смуги помилки); «`listing` без `legacy_error`» — теж.
  *   5 (мережа)       — пониження `ch=project` у `_commented` (сервер), затиск
  *        `effectiveCommentMode` (клієнт) і вимикач у `comment-config`. Кожна мутація
  *        червонить 5 (сервер — кроком «прямий `ch=project`», клієнт — кроком «рамка»).
- *   6 (діалог)       — відмова сервера лишається в діалозі (`askForm.onSubmit`).
+ *   6 (майстер)      — відмова сервера лишається на кроці 1 майстра (`showError` у `wizard.js`: текст у `#wz-err`;
+ *        мутація «без тексту» червонить 6).
  *   7 (~/.deai)      — ізоляція: `HOME`/`DEAI_HOME` у `fixture.mjs` (`isolatedMachine`).
  */
 import assert from "node:assert/strict";
@@ -73,6 +76,12 @@ async function boot(t, { first = "liga", portBase = PORT_BASE, requests = null }
   await page.goto(`${server.url}/app/`);
   await page.waitForSelector("#bar .space-chip");
   return { page, context, ...server, byId: Object.fromEntries(server.spaces.map((s) => [s.id, s])) };
+}
+
+/** Крок 1 майстра відправлено — дочекатись кроку 2 й закрити майстер (тестам потрібен лише простір). */
+async function closeWizard(page) {
+  await page.waitForSelector('#tasks-home .wz[data-step="2"]', { timeout: 15000 });
+  await page.click('#tasks-home .wz [data-wz="close"]');
 }
 
 const homeOpen = (page) => page.evaluate(() => document.body.classList.contains("home-open"));
@@ -195,7 +204,7 @@ test("2: у «P» — «Нова задача» → «Landing» → id landing �
   assert.equal((await (await fetch(`${url}/api/tasks?all=1`)).json()).tasks.filter((x) => x.id === "landing")[0].space, "p");
 });
 
-test("3: «Новий простір…» → «Client», тека типова → «Створити» → «Задачі · Client», порожній стан", async (t) => {
+test("3: «Новий простір…» → «Client», тека типова → «Далі» → «Закрити майстер» → «Задачі · Client», порожній стан", async (t) => {
   const { page, url, home } = await boot(t);
   await openSpaces(page);
   await page.click('.dd--spaces [data-act="spacenew"]');
@@ -206,6 +215,7 @@ test("3: «Новий простір…» → «Client», тека типова 
   assert.equal(await page.locator(".cv-colors .cv-color").count(), 6);
   assert.equal(await page.locator('.cv-colors .cv-color[aria-checked="true"]').count(), 1);
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
 
   await waitText(page, "#tasks-home h1.th-h", "Задачі · Client");
   assert.equal(await homeOpen(page), true, "порожній простір — екран «Задачі»");
@@ -213,7 +223,7 @@ test("3: «Новий простір…» → «Client», тека типова 
   assert.equal(await page.locator('#tasks-home [data-th="newtask"]').count(), 2, "«Нова задача» в голові й у порожньому стані");
   assert.equal(await page.locator('#tasks-home .th-tab[data-v="team"]').count(), 0, "новий простір без інтеграцій");
   await waitText(page, "#bar .space-name", "Client");
-  assert.equal(await page.locator('form[data-form="space"]').count(), 0, "діалог лишився");
+  assert.equal(await page.locator('form[data-form="space"]').count(), 0, "форма простору лишилась (крок 2 її не має)");
 
   const reg = await spacesApi(url);
   assert.equal(reg.current, "client");
@@ -224,7 +234,7 @@ test("3: «Новий простір…» → «Client», тека типова 
   assert.ok(existsSync(path.join(made.path, "space.json")) && existsSync(path.join(made.path, "tasks.json")), "файли простору");
 });
 
-test("4: привітання на порожній машині → «Створити простір» → «Особисте» → «Створити» → «Задачі · Особисте»", async (t) => {
+test("4: привітання на порожній машині → «Створити простір» → «Особисте» → «Далі» → «Закрити майстер» → «Задачі · Особисте»", async (t) => {
   const server = await startServer(null, { portBase: WELCOME_PORT_BASE, spaces: [] });
   t.after(() => stop(server.child));
   assert.equal(existsSync(path.join(server.deaiHome, "spaces.json")), false, "свідок: реєстру ще нема (порожня машина)");
@@ -244,6 +254,7 @@ test("4: привітання на порожній машині → «Ство�
   assert.equal(await page.inputValue("#sp-name"), "Особисте", "перший простір на машині — «Особисте»");
   assert.equal(await page.inputValue("#sp-path"), "~/deai-work/personal");
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
 
   await waitText(page, "#tasks-home h1.th-h", "Задачі · Особисте");
   assert.equal(await page.locator("#tasks-home .th-welcome").count(), 0, "привітання лишилось");
@@ -338,7 +349,7 @@ test("5: у «P» жодного запиту за межі машини — р�
   assert.deepEqual(outside, [], `запити за межі машини з простору без інтеграцій:\n${outside.join("\n")}`);
 });
 
-test("6: відмова сервера лишається в діалозі — тека, що перетинається зі старим простором, не закриває форму", async (t) => {
+test("6: відмова сервера лишається в майстрі — тека, що перетинається зі старим простором, не закриває крок 1", async (t) => {
   const { page, byId, url } = await boot(t);
   await openSpaces(page);
   await page.click('.dd--spaces [data-act="spacenew"]');
@@ -348,12 +359,12 @@ test("6: відмова сервера лишається в діалозі — 
   await page.click('form[data-form="space"] [data-a="ok"]');
 
   await page.waitForFunction(() => {
-    const e = document.querySelector("[data-form-error]");
+    const e = document.getElementById("wz-err");
     return Boolean(e && !e.hidden && e.textContent.trim());
   });
-  assert.equal(await page.locator('form[data-form="space"]').count(), 1, "діалог закрився на відмові");
-  assert.match(await text(page, "[data-form-error]"), /перетинається/, "причина відмови не названа");
-  assert.equal(await page.getAttribute("[data-form-error]", "role"), "alert");
+  assert.equal(await page.locator('form[data-form="space"]').count(), 1, "крок 1 закрився на відмові");
+  assert.match(await text(page, "#wz-err"), /перетинається/, "причина відмови не названа");
+  assert.equal(await page.getAttribute("#wz-err", "role"), "alert");
   assert.equal((await spacesApi(url)).spaces.length, 2, "відмовлений простір усе одно зʼявився в реєстрі");
   await page.click('form[data-form="space"] [data-a="cancel"]');
   await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));

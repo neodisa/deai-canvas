@@ -16,11 +16,13 @@
  *   T3 повтор після збою  — `if (tuneRev === undefined) await loadTune()` у `render()` (T10 — теж).
  *   T4 space-2/space-3    — `defaultSpacePath(…, taken)`: вільна тека для кириличної назви.
  *   T5 зареєстрована тека — `peekRegistered` (слово сервера `registered` + запасне порівняння).
- *   T6 зайнята форма      — `busy` у `ask.js`, `.cv-ask-scrim` у `openPalette`; T6b — `aria-invalid` + стиль.
+ *   T6 зайнята форма      — `setBusy` у `wizard.js` (крок 1 майстра: `aria-busy`, вимкнені «Скасувати» і «Далі»); T6b — `aria-invalid` + стиль.
  *   T6c стеля часу        — `formApi`/`FORM_POST_TIMEOUT_MS`: завислий запит не тримає канвас під підкладкою.
  *   T7 фокус              — `focusBackTarget` у `done` (`ask.js`; прибрати виклик — червоніє, «завжди вертати» —
- *        теж, через рамку макета). `focusChip` перед дією дублює `spaceDialogFocusBack`: окремо його не прибрати
- *        без вимірювання — сторожить юніт (`tests/spaces-wiring.test.mjs`).
+ *        теж, через рамку макета) для діалогу «Назва й колір…»; для майстра — `wizBack` (`app.js`: «Скасувати» → фішка).
+ *        `focusChip` перед дією дублює `spaceDialogFocusBack`: окремо його не прибрати без вимірювання — сторожить
+ *        юніт (`tests/spaces-wiring.test.mjs`).
+ *   T7b сторінка майстра  — `refreshHomeOnReturn`: на `wiz` повернення до вікна її не перемальовує й нічого не питає.
  *   T8 повернення         — `refreshHomeOnReturn` + `shouldRefreshHome`: один запит на пару focus+visibilitychange.
  *   T8b «Спробувати ще»   — `homeForced`: фокус не перебиває примусовий повтор.
  *   T9 червона смуга      — успішний `loadHome` знімає смугу, виставлену ним самим.
@@ -177,7 +179,13 @@ const props = (p) => p.elements.flatMap((e) => e.edits.map((x) => x.prop));
 
 /* ── діалоги: прилади ──────────────────────────────────────────────────── */
 
-/** Відкрити «Новий простір…» з дропдауна фішки (рядки дропдауна дочекатись: див. `spaces.test.mjs`). */
+/** Крок 1 майстра відправлено — дочекатись кроку 2 й закрити майстер (тестам потрібен лише простір). */
+async function closeWizard(page) {
+  await page.waitForSelector('#tasks-home .wz[data-step="2"]', { timeout: 15000 });
+  await page.click('#tasks-home .wz [data-wz="close"]');
+}
+
+/** Відкрити «Новий простір…» з дропдауна фішки — крок 1 майстра (рядки дропдауна дочекатись: див. `spaces.test.mjs`). */
 async function openNewSpace(page, rows = 1) {
   await page.click("#bar .space-chip");
   await page.waitForFunction((n) => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length >= n,
@@ -186,7 +194,7 @@ async function openNewSpace(page, rows = 1) {
   await page.waitForSelector('form[data-form="space"][data-mode="new"]');
 }
 
-/** Що показує діалог простору про вказану теку. */
+/** Що показує крок 1 майстра про вказану теку. */
 const hints = (page) => page.evaluate(() => ({
   found: document.getElementById("sp-found").hidden ? null : document.getElementById("sp-found").textContent,
   reg: document.getElementById("sp-registered").hidden ? null : document.getElementById("sp-registered").textContent,
@@ -306,17 +314,18 @@ test("T3 повтор після збою читання (смуга помил�
 
 /* ═══════════════════════════ діалог простору: тека, зайнятість, помилки ═══════════════════════════ */
 
-test("T4 друга й третя кирилична назва: тека вільна (space-2, space-3), діалог не заблоковано, простори створюються", async (t) => {
+test("T4 друга й третя кирилична назва: тека вільна (space-2, space-3), крок 1 не заблоковано, простори створюються", async (t) => {
   const { page, url, home } = await welcome(t);
   await page.click('#tasks-home .th-welcome [data-th="spacenew"]');
   await page.waitForSelector('form[data-form="space"][data-mode="new"]');
   assert.equal(await page.inputValue("#sp-path"), "~/deai-work/personal");
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
   await waitText(page, "#tasks-home h1.th-h", "Задачі · Особисте");
   await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
 
-  /* Друге «кириличне» ім'я: слаг порожній, `personal` уже зайнято першим простором. Раніше діалог
-     відкривався з тією ж текою й одразу заблокованим («у цій теці вже є простір»). */
+  /* Друге «кириличне» ім'я: слаг порожній, `personal` уже зайнято першим простором. Раніше крок відкривався з тією
+     ж текою й одразу заблокованим («у цій теці вже є простір»). */
   await openNewSpace(page);
   await page.fill("#sp-name", "Клієнт");
   await page.waitForTimeout(800);
@@ -327,6 +336,7 @@ test("T4 друга й третя кирилична назва: тека віл
   assert.equal(h.nameRO, false, "поле назви заблоковане");
   assert.equal(h.colorsDisabled, null, "кружки кольору заблоковані");
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
   await waitText(page, "#bar .space-name", "Клієнт");
   await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
   const reg = await spacesApi(url);
@@ -338,6 +348,7 @@ test("T4 друга й третя кирилична назва: тека віл
   await page.fill("#sp-name", "Інший");
   assert.equal(await page.inputValue("#sp-path"), "~/deai-work/space-3");
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
   await waitText(page, "#bar .space-name", "Інший");
   assert.deepEqual((await spacesApi(url)).spaces.map((x) => path.basename(x.path)), ["personal", "space-2", "space-3"]);
 });
@@ -349,6 +360,7 @@ test("T5 зареєстрована тека: «~», абсолютний, хв�
   await page.fill("#sp-name", "Київ");
   await page.fill("#sp-path", "~/deai-work/Київ");
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
   await waitText(page, "#tasks-home h1.th-h", "Задачі · Київ");
   await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
 
@@ -390,43 +402,29 @@ test("T5 зареєстрована тека: «~», абсолютний, хв�
   }
 });
 
-test("T6 зайнята форма: ⌘K поверх діалогу не відкривається, Esc і «Скасувати» під час запиту не закривають, перехід один", async (t) => {
+test("T6 зайнята форма майстра: «Скасувати» і «Далі» вимкнені, Esc і клік під час запиту нічого не роблять, перехід один — на крок 2", async (t) => {
   const { page, url } = await twoSpaces(t);
   await page.route("**/api/space-new", async (route) => { await sleep(1500); await route.continue(); });
   const seen = watchApi(page);
 
-  /* Свідок: без діалогу ⌘K палітру відкриває (інакше «не відкрилась» нічого б не доводило). */
-  await page.keyboard.press("Control+k");
-  await page.locator(".pal").waitFor({ timeout: 5000 });
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(() => document.querySelectorAll(".pal").length === 0);
-
   await openNewSpace(page, 2);
   await page.fill("#sp-name", "Client");
-  await page.keyboard.press("Control+k");
-  await page.waitForTimeout(300);
-  assert.equal(await page.locator(".pal").count(), 0, "⌘K відкрив палітру поверх відкритої форми");
-  assert.equal(await page.locator('form[data-form="space"]').count(), 1, "форму закрито ⌘K");
-
   seen.length = 0;
   await page.click('form[data-form="space"] [data-a="ok"]');
   await page.waitForFunction(() => document.querySelector('form[data-form="space"]')?.getAttribute("aria-busy") === "true");
+  assert.equal(await page.locator('#tasks-home .wz [data-a="cancel"]').isDisabled(), true, "«Скасувати» не вимкнене під запитом");
+  assert.equal(await page.locator('#tasks-home .wz [data-a="ok"]').isDisabled(), true, "«Далі» не вимкнена під запитом");
   await page.keyboard.press("Escape");
   await page.click('form[data-form="space"] [data-a="cancel"]', { force: true });
-  await page.keyboard.press("Control+k");
-  await page.waitForTimeout(200);
   assert.equal(await page.locator('form[data-form="space"]').count(), 1, "форму закрито під час запиту");
-  assert.equal(await page.locator(".pal").count(), 0, "палітра відкрилась поверх зайнятої форми");
-
-  await waitText(page, "#bar .space-name", "Client");
-  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  await page.waitForSelector('#tasks-home .wz[data-step="2"]', { timeout: 15000 });
   await page.waitForTimeout(600);
   assert.equal(count(seen, "POST /api/space-new"), 1, `запитів на створення: ${count(seen, "POST /api/space-new")}`);
   assert.equal((await spacesApi(url)).current, "client", "перехід на створений простір не стався або стався не туди");
   assert.deepEqual((await spacesApi(url)).spaces.map((x) => x.id), ["p", "q", "client"]);
 });
 
-test("T6b помилка сервера лишається в діалозі: рамка й aria-invalid — на ТОМУ полі, фокус там, знімається правкою; текстова помилка — про інше поле", async (t) => {
+test("T6b помилка сервера лишається на кроці 1: рамка й aria-invalid — на ТОМУ полі, фокус там, знімається правкою; текстова помилка — про інше поле", async (t) => {
   const { page } = await twoSpaces(t);
   await openNewSpace(page, 2);
   await page.fill("#sp-name", "Dup");
@@ -434,7 +432,7 @@ test("T6b помилка сервера лишається в діалозі: р
   const before = await page.evaluate(() => getComputedStyle(document.getElementById("sp-path")).borderTopColor);
   await page.click('form[data-form="space"] [data-a="ok"]');
   await page.waitForFunction(() => {
-    const e = document.querySelector("[data-form-error]");
+    const e = document.getElementById("wz-err");
     return Boolean(e && !e.hidden && e.textContent.trim());
   });
   const st = await page.evaluate(() => ({
@@ -448,7 +446,8 @@ test("T6b помилка сервера лишається в діалозі: р
   assert.equal(st.name, null, "чуже поле позначено aria-invalid");
   assert.equal(st.focus, "sp-path", "фокус не на полі з помилкою");
   assert.notEqual(st.border, before, "поле з помилкою не змінило рамку: aria-invalid без видимого вигляду");
-  assert.equal(st.border, "rgb(194, 54, 46)", `рамка поля з помилкою — не --bad-ink: ${st.border}`);
+  /* Точний колір не фіксуємо: майстер — темна сторінка, рамка помилки там — `--bad`, а не `--bad-ink` світлого діалогу.
+     Важить інше: вона відрізняється і від звичайної рамки цього поля, і від рамки сусіднього. */
   assert.notEqual(st.other, st.border, "чуже поле теж червоне");
 
   /* Правка поля знімає відмову разом з рамкою. */
@@ -459,7 +458,7 @@ test("T6b помилка сервера лишається в діалозі: р
   /* Помилка про назву — на назві, а не на тецi (стара відмова поля теки не повертається). */
   await page.fill("#sp-name", "");
   await page.click('form[data-form="space"] [data-a="ok"]');
-  await page.waitForFunction(() => { const e = document.querySelector("[data-form-error]"); return e && !e.hidden; });
+  await page.waitForFunction(() => { const e = document.getElementById("wz-err"); return e && !e.hidden; });
   assert.equal(await page.getAttribute("#sp-name", "aria-invalid"), "true");
   assert.equal(await page.getAttribute("#sp-path", "aria-invalid"), null);
   assert.equal(await page.evaluate(() => document.activeElement.id), "sp-name");
@@ -484,28 +483,29 @@ test("T6c завислий сервер не тримає канвас під п
     null, { timeout: 40000 });
   const waited = Date.now() - started;
   assert.ok(waited >= 15000 && waited <= 35000, `стеля спрацювала за ${waited} мс (очікувалось близько 20 с)`);
-  const msg = await page.textContent("[data-form-error]");
+  const msg = await page.textContent("#wz-err");
   assert.match(msg, /не відповів вчасно/, `текст про завислий запит: ${msg}`);
   assert.equal(await page.evaluate(() => document.querySelector('form[data-form="space"] [data-a="ok"]').disabled), false, "«Створити» лишилась вимкненою");
   assert.equal(await page.locator("[data-form-invalid], [aria-invalid]").count(), 0, "таймаут — не вина поля: aria-invalid не ставиться");
   assert.equal((await spacesApi(url)).spaces.length, 2, "запит, якого сервер не отримав, щось створив");
 
-  /* Повтор у ТІЙ САМІЙ формі: сервер тепер відповідає — простір створюється, діалог закривається. */
+  /* Повтор у ТІЙ САМІЙ формі: сервер тепер відповідає — простір створюється, майстер іде на крок 2. */
   await page.unroute("**/api/space-new");
   seen.length = 0;
   await page.click('form[data-form="space"] [data-a="ok"]');
-  await waitText(page, "#bar .space-name", "Slow");
-  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  await page.waitForSelector('#tasks-home .wz[data-step="2"]', { timeout: 15000 });
   assert.equal(count(seen, "POST /api/space-new"), 1, "повтор після таймауту пішов не одним запитом");
   assert.deepEqual((await spacesApi(url)).spaces.map((x) => x.id), ["p", "q", "slow"]);
 });
 
 /* ═══════════════════════════ фокус після діалогів ═══════════════════════════ */
 
-test("T7 фокус після діалогу: фішка (Esc, «Скасувати», «Зберегти»), кнопка «Нова задача» на екрані, рамка макета свого фокуса не віддає", async (t) => {
+test("T7 фокус після діалогу: фішка («Скасувати» майстра, «Скасувати» й «Зберегти» діалогу «Назва й колір…»), кнопка «Нова задача» на екрані, рамка макета свого фокуса не віддає", async (t) => {
   const { page } = await twoSpaces(t);
   await page.waitForSelector("#frame");
+  /* Фокус ставлять ПІСЛЯ повернення на полотно (`wizBack` чекає `leaveHome`), тож чекаємо на нього, а не читаємо зразу. */
   const chipFocused = async (what) => {
+    await page.waitForFunction(() => document.activeElement?.classList.contains("space-chip"), null, { timeout: 5000 }).catch(() => {});
     const a = await active(page);
     assert.ok(a && a.cls.split(" ").includes("space-chip"), `${what}: фокус не на фішці простору, а на ${JSON.stringify(a)}`);
   };
@@ -514,14 +514,15 @@ test("T7 фокус після діалогу: фішка (Esc, «Скасува
     await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   };
 
-  /* (i) дропдаун → «Новий простір…» клавіатурою → Esc. */
+  /* (i) дропдаун → «Новий простір…» клавіатурою → крок 1 майстра → «Скасувати» → полотно задачі, фокус на фішці
+     (Esc майстер не закриває — це сторінка, а не діалог). */
   await openDd();
   await page.focus('.dd--spaces [data-act="spacenew"]');
   await page.keyboard.press("Enter");
   await page.waitForSelector('form[data-form="space"]');
-  await page.keyboard.press("Escape");
+  await page.click('#tasks-home .wz [data-a="cancel"]');
   await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
-  await chipFocused("Esc з діалогу нового простору");
+  await chipFocused("«Скасувати» на кроці 1 майстра");
 
   /* (i-b) «Назва й колір…» → «Скасувати». */
   await openDd();
@@ -552,12 +553,13 @@ test("T7 фокус після діалогу: фішка (Esc, «Скасува
   await page.waitForFunction(() => !document.querySelector('form[data-form="task"]'));
   assert.equal((await active(page))?.th, "newtask", `після «Скасувати» у формі задачі фокус не на кнопці «Нова задача»: ${JSON.stringify(await active(page))}`);
 
-  /* (iii) фокус У РАМЦІ макета: діалог закривається, фокус лишається там, куди людина його віддала. */
+  /* (iii) фокус У РАМЦІ макета: діалог (що лишився, — «Назва й колір…») закривається, фокус лишається там, куди людина
+     його віддала. «Новий простір» тут уже не діалог, а сторінка майстра: рамки під нею нема, охоронець — про діалог. */
   await page.click('#bar [data-act="back"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"));
   await openDd();
-  await page.click('.dd--spaces [data-act="spacenew"]');
-  await page.waitForSelector('form[data-form="space"]');
+  await page.click('.dd--spaces [data-act="spaceedit"]');
+  await page.waitForSelector('form[data-mode="edit"]');
   await page.evaluate(() => document.getElementById("frame").focus());
   assert.equal((await active(page))?.id, "frame", "свідок: фокус не перейшов у рамку");
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
@@ -565,16 +567,22 @@ test("T7 фокус після діалогу: фішка (Esc, «Скасува
   assert.equal((await active(page))?.id, "frame", "діалог украв фокус у рамки макета");
 });
 
-test("T7b відчеплений відкривач: привітання → діалог → оновлення на фокусі перемальовує екран → Esc → фокус на кнопці привітання", async (t) => {
+test("T7b майстер не перемальовується на focus вікна: привітання → майстер → focus → той самий вузол, нуль перечитувань → «Скасувати» → фокус на кнопці привітання", async (t) => {
   const { page } = await welcome(t);
   await page.click('#tasks-home .th-welcome [data-th="spacenew"]');
   await page.waitForSelector('form[data-form="space"]');
-  await page.evaluate(() => { window.__old = document.querySelector('#tasks-home [data-th="spacenew"]'); });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await page.waitForFunction(() => !window.__old.isConnected, null, { timeout: 5000 })
-    .catch(() => { throw new Error("свідок: оновлення екрана не перемалювало привітання — сценарій не відтворює відчеплений відкривач"); });
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
+  await page.fill("#sp-name", "Чернетка");
+  await page.evaluate(() => { window.__wz = document.querySelector("#tasks-home .wz"); });
+  await page.waitForTimeout(900);                            // gap повернення до вікна (800 мс) від відкриття
+  const seen = watchApi(page);
+  await page.evaluate(() => { window.dispatchEvent(new Event("focus")); document.dispatchEvent(new Event("visibilitychange")); });
+  await page.waitForTimeout(700);
+  assert.equal(await page.evaluate(() => window.__wz.isConnected), true, "майстер перемальовано поверненням до вікна (вузол відчеплено)");
+  assert.equal(await page.inputValue("#sp-name"), "Чернетка", "набране зникло");
+  const refetched = seen.filter((x) => /^GET \/api\/(spaces|tasks-overview|modules)$/.test(x));
+  assert.deepEqual(refetched, [], `повернення до вікна на майстрі перечитало: ${refetched.join(", ")}`);
+  await page.click('#tasks-home .wz [data-a="cancel"]');
+  await page.waitForSelector("#tasks-home .th-welcome");
   const a = await active(page);
   assert.equal(a?.th, "spacenew", `фокус не на кнопці привітання: ${JSON.stringify(a)}`);
   assert.equal(await page.evaluate(() => document.activeElement.isConnected), true);
@@ -733,7 +741,7 @@ test("T11 лічильники запитів: дропдаун, перемик�
   assert.equal(count(seen, "GET /api/tasks-overview"), 1, `перемикання на екрані: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
 });
 
-test("T11b привітання не опитує нічого назовні, а створення з привітання — один простір і один перехід", async (t) => {
+test("T11b привітання не опитує нічого назовні, а створення з привітання через майстер — один простір і один перехід", async (t) => {
   const { page } = await welcome(t);
   const seen = watchApi(page);
   await page.waitForTimeout(3000);
@@ -745,14 +753,19 @@ test("T11b привітання не опитує нічого назовні, �
   await page.waitForTimeout(600);
   seen.length = 0;
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await closeWizard(page);
   await page.waitForFunction(() => document.querySelector("#tasks-home h1.th-h")?.textContent.includes("Особисте"));
   await page.waitForTimeout(1200);
   assert.equal(count(seen, "POST /api/space-new"), 1);
-  assert.ok(count(seen, "GET /api/spaces") <= 2, `створення з привітання: GET /api/spaces ×${count(seen, "GET /api/spaces")}`);
-  /* Два, не один: `afterSpaceChange` повертає екран «Задачі» (`enterHome`), а порожній новий простір
-     ще й `showNoTask` (теж `enterHome`); перший запит відкидає `homeSeq`. Стеля, а не вимога: зростання
-     вище двох — це вже зайве перечитування. */
-  assert.ok(count(seen, "GET /api/tasks-overview") <= 2, `створення з привітання: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+  /* Стелі перевиміряно під майстер (стабільно 3 прогони поспіль: spaces ×3, tasks-overview ×1, modules ×1, task ×1).
+     `GET /api/spaces` — тричі: двічі від самого створення (`resetSpaceState` у `afterSpaceChange` і `loadSpaces({heal})` у
+     `showNoTask` — нова порожня задача → `no-task`; так було й під діалогом) і раз від «Закрити майстер»
+     (`enterHome` → `loadHome`). `GET /api/tasks-overview` — ОДИН, лише від «Закрити майстер»: сторінка майстра списку
+     задач не просить, тож створення його вже не тягне (під діалогом їх було до двох). `GET /api/modules` — один, крок 2.
+     Стеля, а не вимога: зростання вище — це вже зайве перечитування. */
+  assert.ok(count(seen, "GET /api/spaces") <= 3, `створення з привітання: GET /api/spaces ×${count(seen, "GET /api/spaces")}`);
+  assert.ok(count(seen, "GET /api/tasks-overview") <= 1, `створення з привітання: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
+  assert.equal(count(seen, "GET /api/modules"), 1, `крок 2: GET /api/modules ×${count(seen, "GET /api/modules")}`);
 });
 
 guardRealDeai();
