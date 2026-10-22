@@ -10,9 +10,11 @@
  *
  * ⛔ Секрет «ніде не світиться» стережуть ТРИ незалежні сторожі (сценарії 3, 5, 6): знімок DOM наприкінці
  * (`page.content()`), СТЕЖЕННЯ за кожною мутацією (`watchLeaks`: тимчасова розмітка, що зникла за мить, теж
- * ловиться — знімок наприкінці її не бачив би) і лічильник адрес запитів та тіл відповідей API. «Свідок» стеження
- * (`plantLeak`) — навмисний витік на старті кожної сторінки: без нього «жодного витоку» зеленіло б і зі зламаним
- * стеженням.
+ * ловиться — знімок наприкінці її не бачив би) і лічильник адрес запитів та тіл відповідей API. «Свідки» — навмисні
+ * витоки на старті кожної сторінки: розмітки (`plantLeak`: кожна гілка спостерігача — нова гілка, атрибут, транзитний
+ * атрибут, текст, транзитний текст), адреси запиту й сторінки (`plantUrlLeak`) і запиту назовні (`plantOutside`); без них
+ * «жодного витоку» зеленіло б і зі зламаним стеженням. Адреси порівнюються в трьох виглядах (сирий, `encodeURIComponent`,
+ * розкодований): Chromium віддає кирилицю секрету як `%D0…`, і порівняння лише з сирим рядком не спрацювало б ніколи.
  *
  * Мапа «сценарій → запобіжник», знята мутаційно (прибери охорону — подивись, чи червоніє):
  *   1 (вхід і картки)   — пункт `conn` у `ddSpaces` (`shell-bar.js`), `BAR_ACTIONS.conn` і гілка `conn` у `paintHome`
@@ -82,44 +84,120 @@ test.after(async () => { await browser?.close(); });
 
 /* ── прилади ───────────────────────────────────────────────────────────────────────────────────────── */
 
-const isLocal = (u) => {
-  const x = new URL(u);
-  if (["data:", "blob:", "about:"].includes(x.protocol)) return true;
-  return ["http:", "https:", "ws:", "wss:"].includes(x.protocol) && ["127.0.0.1", "localhost"].includes(x.hostname);
+/**
+ * «Своє» — лише походження сервера, який підняв `boot` (а не будь-який порт 127.0.0.1: чужий локальний сервіс — теж
+ * «назовні»). `data:`/`blob:`/`about:` — не мережа.
+ */
+const localTo = (origin) => {
+  const host = new URL(origin).host;
+  return (u) => {
+    const x = new URL(u);
+    if (["data:", "blob:", "about:"].includes(x.protocol)) return true;
+    return ["http:", "https:", "ws:", "wss:"].includes(x.protocol) && x.host === host;
+  };
 };
+
+/**
+ * Секрет в адресі: сирий, у відсотковому кодуванні чи розкодований. Chromium віддає `request.url()` і `page.url()` ЗАКОДОВАНИМИ
+ * (кирилиця секрету → `%D0%9B…`), тож порівняння лише з сирим рядком не спрацювало б ніколи.
+ */
+const decoded = (u) => { try { return decodeURIComponent(u); } catch { return u; } };
+const urlLeak = (u) => u.includes(SECRET) || u.includes(encodeURIComponent(SECRET)) || decoded(u).includes(SECRET);
 
 /**
  * Стеження за витоком секрету в розмітку: кожна мутація DOM, що ПОКЛАЛА `SECRET` у атрибут, текст чи нову гілку,
  * лишає запис у `window.__leaks`. Перевіряється САМ вузол запису (а не поточна розмітка): панель, що на мить
- * мала `value="…"` і одразу очистилась (`innerHTML = ''`), наприкінці вже чиста, а вузол — ще ні.
+ * мала `value="…"` і одразу очистилась (`innerHTML = ''`), наприкінці вже чиста, а вузол — ще ні. Транзитні атрибут чи текст
+ * (поставлено й одразу знято в тому самому завданні: до доставки запису вузол уже чистий) видає `oldValue` наступного
+ * запису — тому `attributeOldValue` і `characterDataOldValue` увімкнено.
  */
 const watchLeaks = (page) => page.evaluate((secret) => {
   window.__leaks = [];
   const hit = (s) => typeof s === "string" && s.includes(secret);
   new MutationObserver((recs) => {
     for (const r of recs) {
-      if (r.type === "attributes" && hit(r.target.getAttribute(r.attributeName))) window.__leaks.push(`attr:${r.attributeName}`);
-      else if (r.type === "characterData" && hit(r.target.data)) window.__leaks.push("text");
-      else if (r.type === "childList") {
+      if (r.type === "attributes") {
+        if (hit(r.target.getAttribute(r.attributeName))) window.__leaks.push(`attr:${r.attributeName}`);
+        if (hit(r.oldValue)) window.__leaks.push(`attr-old:${r.attributeName}`);
+      } else if (r.type === "characterData") {
+        if (hit(r.target.data)) window.__leaks.push("text");
+        if (hit(r.oldValue)) window.__leaks.push("text-old");
+      } else if (r.type === "childList") {
         for (const n of r.addedNodes) if (hit(n.outerHTML ?? n.textContent)) window.__leaks.push(`node:${n.nodeName}`);
       }
     }
-  }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  }).observe(document, {
+    subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true,
+  });
 }, SECRET);
 
-/** Свідок стеження: навмисний витік, який воно мусить побачити (і який потім знімається, щоб не отруїти сценарій). */
+/**
+ * Свідок стеження: навмисні витоки КОЖНОЮ з гілок спостерігача (нова гілка, атрибут на живому вузлі, транзитний атрибут,
+ * текст на живому вузлі, транзитний текст), які воно мусить побачити; потім знімаються, щоб не отруїти сценарій. Без
+ * `attributes`/`characterData` (чи їхніх `…OldValue`) у спостерігача свідок падає саме на своїй гілці.
+ */
 async function plantLeak(page) {
   const seen = await page.evaluate(async (secret) => {
-    const n = document.createElement("i");
+    const tick = () => new Promise((done) => setTimeout(done, 0));
+    const n = document.createElement("i");                   // нова гілка з секретом в атрибуті
     n.setAttribute("data-witness", secret);
     document.body.appendChild(n);
-    await new Promise((done) => setTimeout(done, 0));
+    await tick();
     n.remove();
-    const got = window.__leaks.length;
+    const a = document.createElement("i");                   // живий вузол: секрет прийшов ПІЗНІШЕ
+    document.body.appendChild(a);
+    await tick();
+    a.setAttribute("data-live", secret);
+    await tick();
+    a.setAttribute("data-flash", secret);                    // транзитний атрибут: поставлено й знято в одному завданні
+    a.removeAttribute("data-flash");
+    await tick();
+    const t1 = document.createTextNode("x");                 // живий текст
+    a.appendChild(t1);
+    await tick();
+    t1.data = secret;
+    await tick();
+    const t2 = document.createTextNode("y");                 // транзитний текст
+    a.appendChild(t2);
+    await tick();
+    t2.data = `${secret}-flash`;
+    t2.data = "gone";
+    await tick();
+    a.remove();
+    await tick();
+    const got = window.__leaks.slice();
     window.__leaks = [];
     return got;
   }, SECRET);
-  assert.ok(seen >= 1, "свідок: стеження за витоком не побачило навмисного витоку — воно мертве");
+  for (const want of ["node:I", "attr:data-live", "attr-old:data-flash", "text", "text-old"]) {
+    assert.ok(seen.includes(want), `свідок: стеження за витоком не побачило «${want}» — ця гілка спостерігача мертва (бачило: ${seen.join(", ") || "нічого"})`);
+  }
+}
+
+/**
+ * Свідок перевірки адрес: запит і адреса сторінки з секретом (`fetch` на сервер тесту + `#…` в історії) мусять бути видні
+ * `urlLeak`; потім слід знімається (з журналу запитів і з адреси сторінки).
+ */
+async function plantUrlLeak(page, requests) {
+  const was = page.url();
+  await page.evaluate(async (secret) => {
+    await fetch(`/api/spaces?witness=${secret}`);
+    history.replaceState(null, "", `#witness=${secret}`);
+  }, SECRET);
+  assert.ok(requests.some(urlLeak), "свідок: секрет в адресі запиту не видно (кодування URL?) — перевірка адрес мертва");
+  assert.ok(urlLeak(page.url()), "свідок: секрет в адресі сторінки не видно — перевірка `page.url()` мертва");
+  await page.evaluate((href) => history.replaceState(null, "", href), was);
+  requests.splice(0, requests.length, ...requests.filter((u) => !urlLeak(u)));
+}
+
+/** Свідок `outside`: запит на ЧУЖИЙ порт 127.0.0.1 і на чужий хост мусить потрапити в журнал; потім журнал чиститься. */
+async function plantOutside(page, outside) {
+  await page.evaluate(() => Promise.allSettled([
+    fetch("http://127.0.0.1:9/witness"), fetch("http://wiz-witness.invalid/witness"),
+  ]));
+  assert.ok(outside.some((u) => u.startsWith("http://127.0.0.1:9/")), "свідок: чужий порт 127.0.0.1 не записано в `outside`");
+  assert.ok(outside.some((u) => u.includes("wiz-witness.invalid")), "свідок: чужий хост не записано в `outside`");
+  outside.length = 0;
 }
 
 const leaks = (page) => page.evaluate(() => window.__leaks);
@@ -143,6 +221,7 @@ async function boot(t, { two = false, marked = false } = {}) {
   }
   const server = await startServer(null, { portBase: PORT_BASE, env: { DEAI_EXTRA_MODULES: MODULES_DIR }, spaces });
   t.after(() => stop(server.child));
+  const isLocal = localTo(server.url);
   const context = await browser.newContext({ viewport: VIEW });
   t.after(() => context.close());
   const outside = [];
@@ -165,6 +244,8 @@ async function boot(t, { two = false, marked = false } = {}) {
   await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
   await watchLeaks(page);
   await plantLeak(page);
+  await plantUrlLeak(page, requests);
+  await plantOutside(page, outside);
   return { ...server, page, outside, requests, posts, bodies, errors, spacePath: server.spaces[0].path };
 }
 
@@ -200,11 +281,15 @@ async function enableMemo(page, { note, token }) {
   await page.click('.cv-ask-scrim button[data-a="ok"]');
 }
 
-/** Секрет ніде не світиться: ні в розмітці зараз, ні в жодній мутації, ні в адресі, ні у відповіді API. */
+/**
+ * Секрет ніде не світиться: ні в розмітці зараз, ні в жодній мутації, ні в адресі запиту чи сторінки (сирий, закодований і
+ * розкодований вигляд: Chromium віддає кирилицю у `%D0…`), ні у відповіді API.
+ */
 async function assertSecretNowhere({ page, requests, posts, bodies }) {
   assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM");
   assert.deepEqual(await leaks(page), [], "секрет побував у розмітці (мутація DOM)");
-  assert.ok(!requests.some((u) => u.includes(SECRET)), "секрет в адресі запиту");
+  assert.deepEqual(requests.filter(urlLeak), [], "секрет в адресі запиту");
+  assert.ok(!urlLeak(page.url()), "секрет в адресі сторінки");
   assert.ok(posts.some((b) => b.includes(SECRET)), "свідок: секрет мусив піти в тілі POST (інакше «нема в адресі» нічого не варте)");
   assert.ok(bodies.some((b) => b.includes("memo-publish")), "свідок: тіла відповідей API зібрано");
   assert.ok(!bodies.some((b) => b.includes(SECRET)), "секрет у відповіді API");

@@ -18,6 +18,7 @@
  *        повернення секретів у `paint` (цикл `keep.secrets`, w) — W1 (секрет зник після відмови) і W8;
  *        `initialPick` (m, порожній) — W1 (початково вибраний постачальник), а з ним W2, W7, W9;
  *        підпис «замість …» (`instead` у `optionHTML`, v) — W1; фокус на заголовку кроку (`focusStep`, w) — W1;
+ *        сторінка майстра без фішки простору (гілка `wiz` у `barModel`, `bar-model.js`) — W1 (кроки 2–4) і W15;
  *        легкий шлях після запису (`afterModulesChange`, w) — ЖИВОГО свідка нема, див. «Вижили» нижче.
  *   W2  (меню → «Client» → задача з теки)
  *        `from` не йде в `task-new` (w) і тост про пропущені посилання (`wzSkippedLinks`, w) — W2; сервер: пропуск
@@ -46,7 +47,19 @@
  *        DOM, тож поле й так порожнє, а секрет переживає перемальовку тільки в картки, чий запис відмовлено.
  *   W13 (перемальовка кроку 1 мовою) — `pathTouched` у `wire` (w) — W13.
  *   W14 («Без модуля») — рядки «вимкнеться» (`offRows` у `writePlan`, m; `mine.offs`, w) — W14 (disable не йде / рядка нема);
- *        вхід із привітання (`spacenew` у `wireHome`, a) — W1, W4–W6, W8–W14 (W2 і W3 входять із меню, W7 — `spaceopen`).
+ *        вхід із привітання (`spacenew` у `wireHome`, a) — W1, W4–W6, W8–W15 (W2 і W3 входять із меню, W7 — `spaceopen`).
+ *        Контроль смуги: простір з публікацією (Studio) кнопки публікації МАЄ — інакше «нема» нової задачі збігалось би й зі
+ *        зламаним способом їх шукати.
+ *   W15 (⌘K під запитом створення) — `spaceActions` на `wiz` (`homePage === "wiz"` → `[]`, `shell-palette.js`) — W15: без нього
+ *        палітра на сторінці майстра веде в інші простори (перемкнути простір посеред кроків = лишити майстер над чужим).
+ *        «Майстер зникає, поки space-new летить» ⌘K недосяжне: на `wiz` палітра не має жодного переходу (див. вище).
+ *   секрет ніде не світиться (W1, W5, W6, W8, W10, W12 — `assertSecretNowhere`, там `sent`: «once» — секрет пішов у тілі рівно ОДНОГО
+ *        POST, «never» — не пішов зовсім): секрет в адресі запиту (мутація `submit3`: `deps.api("/api/spaces?leak=" + секрет)`,
+ *        w) — W1, W6, W8, W10, W12 (адреси порівнюються сирими, `encodeURIComponent` і розкодованими: Chromium віддає кирилицю
+ *        як `%D0…`, сире порівняння не спрацювало б ніколи). Свідки приладів (`boot`): `plantLeak` — кожна гілка спостерігача
+ *        (нова гілка, атрибут, транзитний атрибут, текст, транзитний текст: без `attributes`/`characterData`/їхніх `…OldValue`
+ *        падає саме на своїй гілці), `plantUrlLeak` (запит і `page.url()`), `plantOutside` (чужий порт 127.0.0.1 і чужий хост
+ *        потрапляють в `outside`).
  *
  * Вижили (чесно): (1) прибирання `.wz` у `enterHome` при виході з `wiz` (a) — поведінково зайве: наступним рядком той самий
  * `enterHome` синхронно перемальовує сторінку (`paintHome`), тож жодного кадру з секретом не буває (кадри від «Відкинути»
@@ -101,46 +114,122 @@ function wizardModules() {
   return modulesDir;
 }
 
-/* ── прилади (стеження за витоком — дослівно з connections.test.mjs) ───────────────────────────────── */
+/* ── прилади (стеження за витоком — з connections.test.mjs, посилене) ──────────────────────────────── */
 
-const isLocal = (u) => {
-  const x = new URL(u);
-  if (["data:", "blob:", "about:"].includes(x.protocol)) return true;
-  return ["http:", "https:", "ws:", "wss:"].includes(x.protocol) && ["127.0.0.1", "localhost"].includes(x.hostname);
+/**
+ * «Своє» — лише походження сервера, який підняв `boot` (а не будь-який порт 127.0.0.1: чужий локальний сервіс — теж
+ * «назовні»). `data:`/`blob:`/`about:` — не мережа.
+ */
+const localTo = (origin) => {
+  const host = new URL(origin).host;
+  return (u) => {
+    const x = new URL(u);
+    if (["data:", "blob:", "about:"].includes(x.protocol)) return true;
+    return ["http:", "https:", "ws:", "wss:"].includes(x.protocol) && x.host === host;
+  };
 };
+
+/**
+ * Секрет в адресі: сирий, у відсотковому кодуванні чи розкодований. Chromium віддає `request.url()` і `page.url()` ЗАКОДОВАНИМИ
+ * (кирилиця секрету → `%D0%9B…`), тож порівняння лише з сирим рядком не спрацювало б ніколи.
+ */
+const decoded = (u) => { try { return decodeURIComponent(u); } catch { return u; } };
+const urlLeak = (u) => u.includes(SECRET) || u.includes(encodeURIComponent(SECRET)) || decoded(u).includes(SECRET);
 
 /**
  * Стеження за витоком секрету в розмітку: кожна мутація DOM, що ПОКЛАЛА `SECRET` у атрибут, текст чи нову гілку,
  * лишає запис у `window.__leaks`. Перевіряється САМ вузол запису (а не поточна розмітка): панель, що на мить
- * мала `value="…"` і одразу очистилась (`innerHTML = ''`), наприкінці вже чиста, а вузол — ще ні.
+ * мала `value="…"` і одразу очистилась (`innerHTML = ''`), наприкінці вже чиста, а вузол — ще ні. Транзитні атрибут чи текст
+ * (поставлено й одразу знято в тому самому завданні: до доставки запису вузол уже чистий) видає `oldValue` наступного
+ * запису — тому `attributeOldValue` і `characterDataOldValue` увімкнено.
  */
 const watchLeaks = (page) => page.evaluate((secret) => {
   window.__leaks = [];
   const hit = (s) => typeof s === "string" && s.includes(secret);
   new MutationObserver((recs) => {
     for (const r of recs) {
-      if (r.type === "attributes" && hit(r.target.getAttribute(r.attributeName))) window.__leaks.push(`attr:${r.attributeName}`);
-      else if (r.type === "characterData" && hit(r.target.data)) window.__leaks.push("text");
-      else if (r.type === "childList") {
+      if (r.type === "attributes") {
+        if (hit(r.target.getAttribute(r.attributeName))) window.__leaks.push(`attr:${r.attributeName}`);
+        if (hit(r.oldValue)) window.__leaks.push(`attr-old:${r.attributeName}`);
+      } else if (r.type === "characterData") {
+        if (hit(r.target.data)) window.__leaks.push("text");
+        if (hit(r.oldValue)) window.__leaks.push("text-old");
+      } else if (r.type === "childList") {
         for (const n of r.addedNodes) if (hit(n.outerHTML ?? n.textContent)) window.__leaks.push(`node:${n.nodeName}`);
       }
     }
-  }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  }).observe(document, {
+    subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true,
+  });
 }, SECRET);
 
-/** Свідок стеження: навмисний витік, який воно мусить побачити (і який потім знімається, щоб не отруїти сценарій). */
+/**
+ * Свідок стеження: навмисні витоки КОЖНОЮ з гілок спостерігача (нова гілка, атрибут на живому вузлі, транзитний атрибут,
+ * текст на живому вузлі, транзитний текст), які воно мусить побачити; потім знімаються, щоб не отруїти сценарій. Без
+ * `attributes`/`characterData` (чи їхніх `…OldValue`) у спостерігача свідок падає саме на своїй гілці.
+ */
 async function plantLeak(page) {
   const seen = await page.evaluate(async (secret) => {
-    const n = document.createElement("i");
+    const tick = () => new Promise((done) => setTimeout(done, 0));
+    const n = document.createElement("i");                   // нова гілка з секретом в атрибуті
     n.setAttribute("data-witness", secret);
     document.body.appendChild(n);
-    await new Promise((done) => setTimeout(done, 0));
+    await tick();
     n.remove();
-    const got = window.__leaks.length;
+    const a = document.createElement("i");                   // живий вузол: секрет прийшов ПІЗНІШЕ
+    document.body.appendChild(a);
+    await tick();
+    a.setAttribute("data-live", secret);
+    await tick();
+    a.setAttribute("data-flash", secret);                    // транзитний атрибут: поставлено й знято в одному завданні
+    a.removeAttribute("data-flash");
+    await tick();
+    const t1 = document.createTextNode("x");                 // живий текст
+    a.appendChild(t1);
+    await tick();
+    t1.data = secret;
+    await tick();
+    const t2 = document.createTextNode("y");                 // транзитний текст
+    a.appendChild(t2);
+    await tick();
+    t2.data = `${secret}-flash`;
+    t2.data = "gone";
+    await tick();
+    a.remove();
+    await tick();
+    const got = window.__leaks.slice();
     window.__leaks = [];
     return got;
   }, SECRET);
-  assert.ok(seen >= 1, "свідок: стеження за витоком не побачило навмисного витоку — воно мертве");
+  for (const want of ["node:I", "attr:data-live", "attr-old:data-flash", "text", "text-old"]) {
+    assert.ok(seen.includes(want), `свідок: стеження за витоком не побачило «${want}» — ця гілка спостерігача мертва (бачило: ${seen.join(", ") || "нічого"})`);
+  }
+}
+
+/**
+ * Свідок перевірки адрес: запит і адреса сторінки з секретом (`fetch` на сервер тесту + `#…` в історії) мусять бути видні
+ * `urlLeak`; потім слід знімається (з журналу запитів і з адреси сторінки).
+ */
+async function plantUrlLeak(page, requests) {
+  const was = page.url();
+  await page.evaluate(async (secret) => {
+    await fetch(`/api/spaces?witness=${secret}`);
+    history.replaceState(null, "", `#witness=${secret}`);
+  }, SECRET);
+  assert.ok(requests.some(urlLeak), "свідок: секрет в адресі запиту не видно (кодування URL?) — перевірка адрес мертва");
+  assert.ok(urlLeak(page.url()), "свідок: секрет в адресі сторінки не видно — перевірка `page.url()` мертва");
+  await page.evaluate((href) => history.replaceState(null, "", href), was);
+  requests.splice(0, requests.length, ...requests.filter((u) => !urlLeak(u)));
+}
+
+/** Свідок `outside`: запит на ЧУЖИЙ порт 127.0.0.1 і на чужий хост мусить потрапити в журнал; потім журнал чиститься. */
+async function plantOutside(page, outside) {
+  await page.evaluate(() => Promise.allSettled([
+    fetch("http://127.0.0.1:9/witness"), fetch("http://wiz-witness.invalid/witness"),
+  ]));
+  assert.ok(outside.some((u) => u.startsWith("http://127.0.0.1:9/")), "свідок: чужий порт 127.0.0.1 не записано в `outside`");
+  assert.ok(outside.some((u) => u.includes("wiz-witness.invalid")), "свідок: чужий хост не записано в `outside`");
+  outside.length = 0;
 }
 
 const leaks = (page) => page.evaluate(() => window.__leaks);
@@ -152,6 +241,7 @@ const leaks = (page) => page.evaluate(() => window.__leaks);
 async function boot(t, { spaces = [], viewport = VIEW } = {}) {
   const server = await startServer(null, { portBase: PORT_BASE, env: { DEAI_EXTRA_MODULES: wizardModules() }, spaces });
   t.after(() => stop(server.child));
+  const isLocal = localTo(server.url);
   const context = await browser.newContext({ viewport });
   t.after(() => context.close());
   const outside = [];
@@ -174,6 +264,8 @@ async function boot(t, { spaces = [], viewport = VIEW } = {}) {
   await page.waitForSelector(spaces.length ? "#bar .space-chip" : "#tasks-home .th-welcome", { timeout: 15000 });
   await watchLeaks(page);
   await plantLeak(page);
+  await plantUrlLeak(page, requests);
+  await plantOutside(page, outside);
   return { ...server, page, outside, requests, posts, bodies, errors };
 }
 
@@ -191,10 +283,16 @@ const card = (id) => `#tasks-home .wz-card[data-id="${id}"]`;
 const field = (id, key) => `${card(id)} [data-cn-field="${key}"]`;
 const pick = (id) => `#tasks-home input[data-wz-pick][value="${id}"]`;
 const askText = (page) => page.locator(".cv-ask-scrim").textContent();
-const waitToast = (page, re) => page.waitForFunction(
-  (src) => new RegExp(src).test(document.getElementById("cv-toast")?.textContent ?? ""), re.source, { timeout: 15000 });
+/** Тост ПОКАЗАНО (`.show`) і говорить те саме: застарілий текст схованого тоста не рахується. */
+const waitToast = (page, re) => page.waitForFunction((src) => {
+  const el = document.getElementById("cv-toast");
+  return Boolean(el) && el.classList.contains("show") && new RegExp(src).test(el.textContent ?? "");
+}, re.source, { timeout: 15000 });
 /** Поля пароля з непорожнім значенням (секрет у DOM — лише властивістю `.value`). */
 const pwWithValue = (page) => page.evaluate(() => [...document.querySelectorAll('input[type="password"]')].filter((n) => n.value !== "").length);
+
+/** На сторінці майстра фішки простору нема (спека: майстер привʼязаний до свого простору) — на КОЖНОМУ кроці. */
+const noChip = async (page, what) => assert.equal(await page.locator("#bar .space-chip").count(), 0, `фішка простору на сторінці майстра (${what})`);
 
 /** «Новий простір…» з дропдауна фішки (дочекатись рядків — перший показ малюється зі старою відповіддю). */
 async function openFromMenu(page, rows = 1) {
@@ -221,12 +319,19 @@ async function pickAndNext(page, ids) {
   for (const id of ids) await page.waitForSelector(card(id));
 }
 
-/** Секрет ніде не світиться: ні в розмітці зараз, ні в жодній мутації, ні в адресі, ні у відповіді API. */
-async function assertSecretNowhere({ page, requests, posts, bodies }) {
+/**
+ * Секрет ніде не світиться: ні в розмітці зараз, ні в жодній мутації, ні в адресі запиту чи сторінки (сирий, закодований і
+ * розкодований вигляд), ні у відповіді API. `sent`: `"once"` — секрет пішов у тілі рівно ОДНОГО POST (свідок: «нема в адресі»
+ * інакше нічого не варте), `"never"` — не пішов зовсім (скасовано, відхилено до запису).
+ */
+async function assertSecretNowhere({ page, requests, posts, bodies }, { sent }) {
   assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM");
   assert.deepEqual(await leaks(page), [], "секрет побував у розмітці (мутація DOM)");
-  assert.ok(!requests.some((u) => u.includes(SECRET)), "секрет в адресі запиту");
-  assert.ok(posts.some((x) => x.body.includes(SECRET)), "свідок: секрет мусив піти в тілі POST (інакше «нема в адресі» нічого не варте)");
+  assert.deepEqual(requests.filter(urlLeak), [], "секрет в адресі запиту");
+  assert.ok(!urlLeak(page.url()), "секрет в адресі сторінки");
+  assert.deepEqual(posts.filter((x) => urlLeak(x.url)), [], "секрет в адресі POST");
+  const carried = posts.filter((x) => x.body.includes(SECRET));
+  assert.equal(carried.length, sent === "once" ? 1 : 0, `секрет мусив піти в тілі POST ${sent === "once" ? "рівно один раз" : "жодного разу"}: ${carried.length}`);
   assert.ok(bodies.some((b) => b.includes("memo-publish")), "свідок: тіла відповідей API зібрано");
   assert.ok(!bodies.some((b) => b.includes(SECRET)), "секрет у відповіді API");
 }
@@ -242,12 +347,13 @@ test("W1: перший запуск — «Особисте», заміна по�
   assert.equal(await page.inputValue("#sp-path"), "~/deai-work/personal");
   assert.equal(await activeId(page), "sp-name", "фокус на назві простору");
   assert.match(await page.locator("#bar .crumb--flat").textContent(), /Новий простір/);
-  assert.equal(await page.locator("#bar .space-chip").count(), 0, "фішки простору на сторінці майстра нема");
+  await noChip(page, "крок 1");
 
   await next(page);
   await step(page, 2);
   await page.waitForSelector(pick("memo-publish"));
   assert.equal(await activeId(page), "wz-h", "новий крок — фокус на заголовку");
+  await noChip(page, "крок 2");
   const reg = await spacesApi(url);
   assert.equal(reg.spaces.length, 1, "простір створено на кроці 1");
   const spaceId = reg.spaces[0].id;
@@ -260,6 +366,7 @@ test("W1: перший запуск — «Особисте», заміна по�
   await step(page, 3);
   await page.waitForSelector(card("memo-publish"));
   assert.match(await page.locator(`${card("memo-publish")} .cn-badge`).textContent(), /Буде підключено/);
+  await noChip(page, "крок 3");
 
   /* Секрет введено, обовʼязкове `note` порожнє: помилка під полем, жодного запиту, секрет ЛИШИВСЯ у властивості поля. */
   await page.fill(field("memo-publish", "token"), SECRET);
@@ -273,6 +380,7 @@ test("W1: перший запуск — «Особисте», заміна по�
   await page.fill(field("memo-publish", "note"), "ok");
   await next(page);
   await step(page, 4);
+  await noChip(page, "крок 4");
 
   const mods = spaceJson(spPath).modules;
   assert.equal(mods["memo-publish"].enabled, true);
@@ -293,13 +401,14 @@ test("W1: перший запуск — «Особисте», заміна по�
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
   assert.equal((await (await fetch(`${url}/api/tasks`)).json()).current, "onboarding");
   await waitText(page, "#bar .space-name", "Особисте");
-  /* Легкий шлях після запису (`afterModulesChange`): оболонка знає нового постачальника, а не лише той, що був при створенні. */
+  /* Підсумок: «Підключення» нового простору називає нового постачальника. Це свідчить про запис і читання з сервера, а НЕ про
+     легкий шлях `afterModulesChange`: вхід на екран і так перечитує простори, тож у того живого свідка нема (див. «Вижили»). */
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces [data-act="conn"]');
   await page.click('.dd--spaces [data-act="conn"]');
   await page.waitForSelector(`.cn-card[data-id="memo-publish"]`);
   assert.match(await page.locator(".cn-sec").first().textContent(), /Зараз: Memo publish \(test\)/);
-  await assertSecretNowhere(m);
+  await assertSecretNowhere(m, { sent: "once" });
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -374,7 +483,7 @@ test("W3: крок 1 — відмова (перетин) лишає форму, 
   await waitText(page, "#bar .crumb--task .txt", "t1");
 
   /* Зайнята форма: запит створення летить повільно. */
-  await page.route("**/api/space-new", async (route) => { await sleep(1200); await route.continue(); });
+  await page.route("**/api/space-new", async (route) => { await sleep(1500); await route.continue(); });
   const before = postsTo(posts, "/api/space-new").length;
   await openFromMenu(page);
   await page.fill("#sp-name", "Slow");
@@ -470,19 +579,20 @@ test("W5: незбережене на кроці 3 — Esc не закриває
   assert.equal((spaceJson(sp.path).modules ?? {})["memo-publish"], undefined, "відкинуте не записалось");
   assert.equal(await page.locator(".wz").count(), 0, "розмітка майстра зникла з DOM");
   assert.equal(await pwWithValue(page), 0, "після виходу нема полів пароля зі значенням");
-  assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM після виходу");
-  assert.deepEqual(await leaks(page), [], "секрет побував у розмітці");
+  await assertSecretNowhere(m, { sent: "never" });          // скасовано: секрет не побував ні в розмітці, ні в адресі, ні в тілі запиту
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
 
 test("W6: свіжість — агент зайняв роль, поки людина вибирала: картка каже «роль змінилась» і називає тримача, незалежний запис іде", async (t) => {
-  const { page, url, posts, outside, errors } = await boot(t);
+  const m = await boot(t);
+  const { page, url, posts, outside, errors } = m;
   await firstSpace(page);
   const { id: spaceId, path: spPath } = (await spacesApi(url)).spaces[0];
   writeFileSync(path.join(spPath, "ds.css"), ":root{--c-a:#123456}");
   await pickAndNext(page, ["memo-publish", "css-tokens"]);
   await page.fill(field("memo-publish", "note"), "ok");
+  await page.fill(field("memo-publish", "token"), SECRET);   // секрет у картці, чий запис буде відмовлено ДО відправки
   await page.fill(field("css-tokens", "file"), "{space}/ds.css");
   /* «Агент» напряму займає роль іншим модулем (а не тим, що вибрала людина). */
   const taken = await postJson(url, "/api/module-enable", { space: spaceId, id: "memo-publish2", settings: { note: "agent" }, replace: true });
@@ -500,6 +610,8 @@ test("W6: свіжість — агент зайняв роль, поки люд
   assert.equal(mods["memo-publish2"].enabled, true, "вибір агента не затерто");
   const ids = postsTo(posts, "/api/module-enable").map((x) => JSON.parse(x.body).id);
   assert.deepEqual(ids, ["css-tokens"], "жодного module-enable memo-publish зі сторінки");
+  assert.equal(await page.inputValue(field("memo-publish", "token")), SECRET, "відмовлена картка не губить введений секрет");
+  await assertSecretNowhere(m, { sent: "never" });          // відмову видано до запиту: секрет нікуди не пішов
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -555,9 +667,9 @@ test("W8: збій читання списку на старті «Зберег�
 
   /* Рівно ОДИН запит списку після натиску обривається. */
   let cut = 0;
-  await page.route((u) => u.pathname === "/api/modules", async (route) => {
-    if (cut++ === 0) await route.abort("failed"); else await route.continue();
-  });
+  const modulesRoute = (u) => u.pathname === "/api/modules";
+  const cutOnce = async (route) => { if (cut++ === 0) await route.abort("failed"); else await route.continue(); };
+  await page.route(modulesRoute, cutOnce);
   await next(page);
   await waitToast(page, /Не вдалося прочитати модулі простору/);
   assert.equal(await page.locator(card("memo-publish")).count(), 1, "картка на місці");
@@ -565,13 +677,12 @@ test("W8: збій читання списку на старті «Зберег�
   assert.equal(await page.inputValue(field("memo-publish", "token")), SECRET, "секрет на місці");
   assert.equal(postsTo(posts, "/api/module-enable").length, 0, "жодного запису");
   assert.equal(cut, 1, "свідок: запит списку справді обривався");
-  await page.unroute((u) => u.pathname === "/api/modules").catch(() => {});
+  await page.unroute(modulesRoute, cutOnce);               // той самий предикат і обробник: інакше `unroute` — порожній виклик
 
   await next(page);
   await step(page, 4);
   assert.equal(secretsJson(deaiHome)[spaceId]["memo-publish"].token, SECRET, "повтор записав секрет");
-  assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM");
-  assert.deepEqual(await leaks(page), [], "секрет побував у розмітці");
+  await assertSecretNowhere(m, { sent: "once" });           // перший натиск не дійшов до запису, повтор — рівно один POST
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -621,8 +732,7 @@ test("W10: збережена картка не лишається «зміне�
   await back(page);
   await step(page, 2);
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "записане — не «незбережене»: «Назад» не питає");
-  assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM");
-  assert.deepEqual(await leaks(page), [], "секрет побував у розмітці");
+  await assertSecretNowhere(m, { sent: "once" });
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -670,8 +780,7 @@ test("W12: відмова сервера на записі картки теж �
   assert.equal((spaceJson(spPath).modules ?? {})["memo-publish"], undefined);
   const secretsFile = path.join(deaiHome, "secrets.json");
   assert.equal(existsSync(secretsFile) ? secretsJson(deaiHome)[spaceId]?.["memo-publish"] : undefined, undefined, "секрет у secrets.json");
-  assert.ok(!(await page.content()).includes(SECRET), "секрет у DOM");
-  assert.deepEqual(await leaks(page), [], "секрет побував у розмітці");
+  await assertSecretNowhere(m, { sent: "once" });           // запит ПІШОВ (сервер відмовив у відповіді) — один раз, і лише в тілі
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -683,9 +792,9 @@ test("W13: перемальовка кроку 1 (зміна мови з ⌘K) �
   await page.fill("#sp-path", "~/deai-work/custom");         // тека правлена руками: далі назва її не веде
   await page.fill("#sp-name", "Студія");
   await page.keyboard.press("Control+k");
-  await page.waitForSelector("#palq");
-  await page.fill("#palq", "English");
-  await page.waitForTimeout(200);
+  await page.locator("#palq").waitFor({ state: "visible" });
+  await page.fill("#palq", "english");
+  await page.waitForFunction(() => document.querySelectorAll(".pal-it").length === 1, null, { timeout: 5000 });   // фільтр досяг одного рядка
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => /New space/.test(document.querySelector("#tasks-home .wz h1")?.textContent ?? ""), null, { timeout: 5000 })
     .catch(() => { throw new Error("свідок: мова не перемкнулась — сторінка не перемальована"); });
@@ -698,9 +807,20 @@ test("W13: перемальовка кроку 1 (зміна мови з ⌘K) �
 });
 
 test("W14: «Без модуля» у ролі публікації — рядок «вимкнеться», один module-disable, смуга нової задачі без кнопок публікації", async (t) => {
-  const { page, url, posts, outside, errors } = await boot(t);
-  await firstSpace(page);
-  const { id: spaceId, path: spPath } = (await spacesApi(url)).spaces[0];
+  const { page, url, posts, outside, errors } = await boot(t, { spaces: studio() });
+  const barActs = () => page.$$eval("#bar [data-act], #bar [data-dd]", (els) => els.map((e) => e.dataset.act || `dd:${e.dataset.dd}`));
+  /* Позитивний контроль смуги: у просторі з публікацією (Studio, типовий постачальник) кнопки публікації Є — інакше
+     перевірка «нема» нижче збігалась би й зі зламаним способом їх шукати. */
+  await page.waitForSelector("#bar .crumb--task");
+  const control = await barActs();
+  assert.ok(control.includes("publish") && control.includes("dd:pub"), `свідок: смуга простору з публікацією мусить мати кнопки публікації: ${control}`);
+
+  await openFromMenu(page);
+  await page.fill("#sp-name", "Без публікації");
+  await next(page);
+  await step(page, 2);
+  await page.waitForSelector(pick("static-publish"));
+  const { id: spaceId, path: spPath } = (await spacesApi(url)).spaces.find((x) => x.name === "Без публікації");
   await page.locator('#tasks-home input[data-wz-pick][data-role="publish"][value=""]').check();
   assert.equal(await page.locator(pick("static-publish")).isChecked(), false, "«Без модуля» знімає поточного постачальника");
   await next(page);
@@ -718,9 +838,39 @@ test("W14: «Без модуля» у ролі публікації — рядо
   await page.fill("#tf-title", "Без публікації");
   await next(page);
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await waitText(page, "#bar .space-name", "Без публікації");
   await page.waitForSelector("#bar .crumb--task");
-  const acts = await page.$$eval("#bar [data-act], #bar [data-dd]", (els) => els.map((e) => e.dataset.act || `dd:${e.dataset.dd}`));
+  const acts = await barActs();
   assert.ok(!acts.includes("publish") && !acts.includes("dd:pub"), `смуга новоствореної задачі лишила кнопки публікації: ${acts}`);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(errors, []);
+});
+
+test("W15: ⌘K під запитом створення (space-new летить): палітра не пропонує жодного переходу, майстер не перевідкривається й не ламається, відповідь веде на крок 2", async (t) => {
+  const { page, url, posts, outside, errors } = await boot(t, { spaces: studio() });
+  await openFromMenu(page);
+  await page.fill("#sp-name", "Palette");
+  await page.route("**/api/space-new", async (route) => { await sleep(1500); await route.continue(); });
+  await next(page);
+  await page.waitForFunction(() => document.querySelector('.wz form[data-wz-step="1"]')?.getAttribute("aria-busy") === "true");
+
+  await page.keyboard.press("Control+k");
+  await page.locator("#palq").waitFor({ state: "visible" });
+  const items = await page.locator(".pal-it").allInnerTexts();
+  assert.ok(items.length > 0, "свідок: палітра відкрилась і щось пропонує (мова)");
+  assert.ok(!items.some((x) => /Studio|Новий простір|Підключення/.test(x)), `на сторінці майстра палітра не веде в інші простори: ${items.join(" | ")}`);
+  await page.fill("#palq", "Studio");
+  await page.waitForSelector(".pal-none");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".pal", { state: "detached" });
+  assert.equal(await page.locator('.wz form[data-wz-step="1"]').count(), 1, "палітра не зачепила майстер: форма кроку 1 на місці");
+
+  await step(page, 2);
+  assert.equal(postsTo(posts, "/api/space-new").length, 1, "рівно один запит створення");
+  const reg = await spacesApi(url);
+  assert.equal(reg.spaces.find((x) => x.id === reg.current)?.name, "Palette", "поточний — новостворений простір, а не той, до якого «веде» палітра");
+  assert.equal(await page.locator(".wz").count(), 1, "майстер один");
+  assert.equal(await page.locator("#bar .space-chip").count(), 0, "фішки простору на сторінці майстра нема");
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });

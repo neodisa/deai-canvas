@@ -18,8 +18,16 @@
  *   T5 зареєстрована тека — `peekRegistered` (слово сервера `registered` + запасне порівняння).
  *   T6 зайнята форма      — `setBusy` у `wizard.js` (крок 1 майстра: `aria-busy`, вимкнені «Скасувати» і «Далі»); T6b — `aria-invalid` + стиль.
  *   T6c стеля часу        — `formApi`/`FORM_POST_TIMEOUT_MS`: завислий запит не тримає канвас під підкладкою.
+ *   T6d зайнятий діалог   — ДВА запобіжники «під запитом»: `if (e.key === 'Escape' && busy)` у `onKey` (`ask.js`) — Esc не
+ *        закриває діалог «Назва й колір…», що чекає відповіді (без нього форма зникає, а простір «перейменовується» за
+ *        закритим вікном); раннє повернення за `.cv-ask-scrim` в `openPalette` (`app.js`) — ⌘K поверх зайнятої форми не
+ *        відкриває палітру (дія палітри йшла б просто під запитом, що летить). Живі свідки лишились тут після того, як
+ *        діалог «Новий простір» став сторінкою майстра (там `aria-busy` перевіряє T6 і `wizard.test.mjs`, W3/W15, але вже
+ *        без підкладки діалогу). Обидві мутації червонять лише T6d.
  *   T7 фокус              — `focusBackTarget` у `done` (`ask.js`; прибрати виклик — червоніє, «завжди вертати» —
- *        теж, через рамку макета) для діалогу «Назва й колір…»; для майстра — `wizBack` (`app.js`: «Скасувати» → фішка).
+ *        теж, через рамку макета) для діалогу «Назва й колір…» (Esc і «Скасувати» — окремі кроки (i-b1)/(i-b2), фокус
+ *        на фішці ОДРАЗУ, без очікування); для майстра — `wizBack` (`app.js`: «Скасувати» → фішка; лише тут фокус
+ *        ставиться після виходу зі сторінки, тож лише тут `chipFocused` чекає до 5 с).
  *        `focusChip` перед дією дублює `spaceDialogFocusBack`: окремо його не прибрати без вимірювання — сторожить
  *        юніт (`tests/spaces-wiring.test.mjs`).
  *   T7b сторінка майстра  — `refreshHomeOnReturn`: на `wiz` повернення до вікна її не перемальовує й нічого не питає.
@@ -498,14 +506,55 @@ test("T6c завислий сервер не тримає канвас під п
   assert.deepEqual((await spacesApi(url)).spaces.map((x) => x.id), ["p", "q", "slow"]);
 });
 
+test("T6d зайнятий діалог «Назва й колір…»: Esc, клік «Скасувати» і ⌘K під запитом нічого не роблять — форма на місці, палітри нема, запит один", async (t) => {
+  const { page } = await twoSpaces(t);
+  await page.route("**/api/space-update", async (route) => { await sleep(1500); await route.continue(); });
+  const seen = watchApi(page);
+  await page.click("#bar .space-chip");
+  await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
+  await page.click('.dd--spaces [data-act="spaceedit"]');
+  await page.waitForSelector('form[data-mode="edit"]');
+  await page.fill("#sp-name", "P2");
+  seen.length = 0;
+  await page.click('form[data-mode="edit"] [data-a="ok"]');
+  await page.waitForFunction(() => document.querySelector('form[data-mode="edit"]')?.getAttribute("aria-busy") === "true");
+
+  const frames = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await page.keyboard.press("Escape");                       // запобіжник `ask.js`: Esc не закриває зайняту форму
+  await frames();
+  assert.equal(await page.locator('form[data-mode="edit"]').count(), 1, "Esc закрив зайняту форму");
+  await page.click('form[data-mode="edit"] [data-a="cancel"]', { force: true });
+  await frames();
+  assert.equal(await page.locator('form[data-mode="edit"]').count(), 1, "клік «Скасувати» закрив зайняту форму");
+  await page.keyboard.press("Control+k");                    // запобіжник `openPalette`: палітра не лізе поверх діалогу
+  await frames();
+  assert.equal(await page.locator(".pal, #palq").count(), 0, "⌘K відкрив палітру поверх зайнятого діалогу");
+  assert.equal(await page.locator('form[data-mode="edit"]').count(), 1, "форму закрито під час запиту");
+
+  /* Відповідь прийшла: форма закрилась, простір перейменовано, запит один. */
+  await page.waitForFunction(() => !document.querySelector('form[data-mode="edit"]'), null, { timeout: 15000 });
+  await waitText(page, "#bar .space-name", "P2");
+  assert.equal(count(seen, "POST /api/space-update"), 1, `запитів на правку: ${count(seen, "POST /api/space-update")}`);
+  assert.equal(await page.locator(".pal, #palq").count(), 0, "палітра зʼявилась уже після закриття діалогу");
+
+  /* Контроль: без діалогу той самий ⌘K палітру відкриває (інакше «палітри нема» вище збігалось би й зі зламаною клавішею). */
+  await page.keyboard.press("Control+k");
+  await page.locator("#palq").waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".pal", { state: "detached" });
+});
+
 /* ═══════════════════════════ фокус після діалогів ═══════════════════════════ */
 
-test("T7 фокус після діалогу: фішка («Скасувати» майстра, «Скасувати» й «Зберегти» діалогу «Назва й колір…»), кнопка «Нова задача» на екрані, рамка макета свого фокуса не віддає", async (t) => {
+test("T7 фокус після діалогу: фішка («Скасувати» майстра; Esc, «Скасувати» й «Зберегти» діалогу «Назва й колір…»), кнопка «Нова задача» на екрані, рамка макета свого фокуса не віддає", async (t) => {
   const { page } = await twoSpaces(t);
   await page.waitForSelector("#frame");
-  /* Фокус ставлять ПІСЛЯ повернення на полотно (`wizBack` чекає `leaveHome`), тож чекаємо на нього, а не читаємо зразу. */
-  const chipFocused = async (what) => {
-    await page.waitForFunction(() => document.activeElement?.classList.contains("space-chip"), null, { timeout: 5000 }).catch(() => {});
+  /* Діалоги вертають фокус на фішку ОДРАЗУ (`done` → `focusBackTarget`): читаємо без очікування. Лише майстер — сторінка:
+     його фокус ставить `wizBack` ПІСЛЯ повернення на полотно (`leaveHome`), тож там (`settle`) чекаємо до 5 с, а не читаємо зразу. */
+  const chipFocused = async (what, { settle = false } = {}) => {
+    if (settle) {
+      await page.waitForFunction(() => document.activeElement?.classList.contains("space-chip"), null, { timeout: 5000 }).catch(() => {});
+    }
     const a = await active(page);
     assert.ok(a && a.cls.split(" ").includes("space-chip"), `${what}: фокус не на фішці простору, а на ${JSON.stringify(a)}`);
   };
@@ -522,9 +571,18 @@ test("T7 фокус після діалогу: фішка («Скасувати�
   await page.waitForSelector('form[data-form="space"]');
   await page.click('#tasks-home .wz [data-a="cancel"]');
   await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
-  await chipFocused("«Скасувати» на кроці 1 майстра");
+  await chipFocused("«Скасувати» на кроці 1 майстра", { settle: true });
 
-  /* (i-b) «Назва й колір…» → «Скасувати». */
+  /* (i-b1) «Назва й колір…» → Esc (свідок Esc-шляху діалогу: майстер Esc не закривав, а діалог — так). */
+  await openDd();
+  await page.focus('.dd--spaces [data-act="spaceedit"]');
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('form[data-mode="edit"]');
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector('form[data-mode="edit"]'));
+  await chipFocused("Esc з діалогу правки");
+
+  /* (i-b2) «Назва й колір…» → «Скасувати». */
   await openDd();
   await page.focus('.dd--spaces [data-act="spaceedit"]');
   await page.keyboard.press("Enter");
@@ -753,19 +811,31 @@ test("T11b привітання не опитує нічого назовні, �
   await page.waitForTimeout(600);
   seen.length = 0;
   await page.click('form[data-form="space"] [data-a="ok"]');
+  await page.waitForSelector('#tasks-home .wz[data-step="2"]', { timeout: 15000 });
+  await page.waitForTimeout(1200);
+  /* Стелі перевиміряно під майстер (стабільно 3 прогони поспіль). Знімок — ДО «Закрити майстер»: створення міряється саме
+     по собі, а читання, що їх робить сам вихід, — окремо нижче. Створення: `GET /api/spaces` — не більше двох
+     (`resetSpaceState` у `afterSpaceChange` і `loadSpaces({heal})` у `showNoTask` — нова порожня задача → `no-task`; так було
+     й під діалогом); `GET /api/tasks-overview` — НУЛЬ: сторінка майстра списку задач не просить (під діалогом їх було до
+     двох); `GET /api/modules` — один, крок 2. Стеля, а не вимога: зростання вище — це вже зайве перечитування. */
+  const SPACES = "GET /api/spaces";
+  const OVERVIEW = "GET /api/tasks-overview";
+  const MODULES = "GET /api/modules";
+  const made = { [SPACES]: count(seen, SPACES), [OVERVIEW]: count(seen, OVERVIEW), [MODULES]: count(seen, MODULES) };
+  assert.equal(count(seen, "POST /api/space-new"), 1);
+  assert.ok(made[SPACES] <= 2, `створення з привітання: ${SPACES} ×${made[SPACES]}`);
+  assert.equal(made[OVERVIEW], 0, `створення з привітання: ${OVERVIEW} ×${made[OVERVIEW]}`);
+  assert.equal(made[MODULES], 1, `крок 2: ${MODULES} ×${made[MODULES]}`);
+
+  /* «Закрити майстер» читає свої: простори (`enterHome` → `loadHome`) і огляд задач — по одному, модулі не чіпає. */
   await closeWizard(page);
   await page.waitForFunction(() => document.querySelector("#tasks-home h1.th-h")?.textContent.includes("Особисте"));
   await page.waitForTimeout(1200);
-  assert.equal(count(seen, "POST /api/space-new"), 1);
-  /* Стелі перевиміряно під майстер (стабільно 3 прогони поспіль: spaces ×3, tasks-overview ×1, modules ×1, task ×1).
-     `GET /api/spaces` — тричі: двічі від самого створення (`resetSpaceState` у `afterSpaceChange` і `loadSpaces({heal})` у
-     `showNoTask` — нова порожня задача → `no-task`; так було й під діалогом) і раз від «Закрити майстер»
-     (`enterHome` → `loadHome`). `GET /api/tasks-overview` — ОДИН, лише від «Закрити майстер»: сторінка майстра списку
-     задач не просить, тож створення його вже не тягне (під діалогом їх було до двох). `GET /api/modules` — один, крок 2.
-     Стеля, а не вимога: зростання вище — це вже зайве перечитування. */
-  assert.ok(count(seen, "GET /api/spaces") <= 3, `створення з привітання: GET /api/spaces ×${count(seen, "GET /api/spaces")}`);
-  assert.ok(count(seen, "GET /api/tasks-overview") <= 1, `створення з привітання: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
-  assert.equal(count(seen, "GET /api/modules"), 1, `крок 2: GET /api/modules ×${count(seen, "GET /api/modules")}`);
+  assert.equal(count(seen, "POST /api/space-new"), 1, "вихід із майстра не створює простору вдруге");
+  const closing = (what) => count(seen, what) - made[what];
+  assert.ok(closing(SPACES) <= 1, `«Закрити майстер»: ${SPACES} ×${closing(SPACES)}`);
+  assert.ok(closing(OVERVIEW) <= 1, `«Закрити майстер»: ${OVERVIEW} ×${closing(OVERVIEW)}`);
+  assert.equal(closing(MODULES), 0, `«Закрити майстер»: ${MODULES} ×${closing(MODULES)}`);
 });
 
 guardRealDeai();
