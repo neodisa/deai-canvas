@@ -79,7 +79,8 @@ def twin_key(name):
 
 def _shown(rel):
     """Шлях для тексту відмови: керівні, двонапрямні й одинокі сурогати (імʼя з не-UTF-8 байтами, `surrogateescape`) —
-    `\\uXXXX`, решта як є: інакше `detail` не кодується в UTF-8 і відповідь API впала б."""
+    `\\uXXXX`, решта як є. Сурогат не кодується в UTF-8: `_send_json` має запасний `ensure_ascii`, але інші приймачі
+    (запис JSON з `ensure_ascii=False` у файли, `argv` підпроцесу, лог) на ньому падають."""
     return ''.join(c if unicodedata.category(c) not in ('Cc', 'Cf', 'Zl', 'Zp', 'Cs') else f'\\u{ord(c):04x}'
                    for c in rel)
 
@@ -206,10 +207,12 @@ def _scan(root, with_data):
 
 
 def fingerprint(root):
-    """Дешевий відбиток дерева `root` — лише `lstat` (тип, розмір, `mtime_ns`, `ino`, `nlink`), без читання; `None`,
-    коли самого `root` нема. Не більше `FP_MAX` записів, тека не глибше `MAX_DEPTH`, за посиланнями не ходить.
-    Кеш `scan` і ключі кешів ядра порівнюють саме його."""
+    """Дешевий відбиток дерева `root` — лише `lstat` (тип, розмір, `mtime_ns`, `ctime_ns`, `ino`, `nlink`), без читання;
+    `None`, коли самого `root` нема. Не більше `FP_MAX` записів, тека не глибше `MAX_DEPTH`, за посиланнями не ходить;
+    обірваний на `FP_MAX` відбиток несе одноразовий токен і ніколи не збігається з попереднім (зміна за межею не
+    ховається за кешем). Кеш `scan` і ключі кешів ядра порівнюють саме його."""
     out = []
+    cut = []                                          # обрив стався (токен у відбиток — лише раз)
 
     def rec(d, rel, depth):
         try:
@@ -219,6 +222,9 @@ def fingerprint(root):
             return
         for n in names:
             if len(out) > FP_MAX:
+                if not cut:
+                    cut.append(1)
+                    out.append(('truncated', os.urandom(8)))
                 return
             p = os.path.join(d, n)
             r = f'{rel}/{n}' if rel else n
@@ -227,7 +233,7 @@ def fingerprint(root):
             except OSError:
                 out.append((r, 'gone'))
                 continue
-            out.append((r, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ino, s.st_nlink))
+            out.append((r, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_ino, s.st_nlink))
             if stat.S_ISDIR(s.st_mode) and not _is_link(s) and n not in SKIP_DIRS and depth < MAX_DEPTH:
                 rec(p, r, depth + 1)
 
@@ -302,7 +308,7 @@ def diff(files, record_files):
                     'change': 'new' if old is None else ('same' if old.get('sha256') == sha else 'changed')})
     have = {f[0] for f in files}
     removed = [{'path': p, 'size': f['size'] if isinstance(f.get('size'), int) else 0}
-               for p, f in sorted(was.items(), key=lambda kv: kv[0].encode('utf-8')) if p not in have]
+               for p, f in sorted(was.items(), key=lambda kv: kv[0].encode('utf-8', 'surrogatepass')) if p not in have]
     return out, removed
 
 

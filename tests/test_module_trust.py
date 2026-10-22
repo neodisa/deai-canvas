@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -170,7 +171,8 @@ class ScanTest(Base):
         self.assertRefused('too-deep')
 
     def test_name_rules(self):
-        for bad in ('a\x01b', 'a‮b.js', 'CON', 'nul.txt', 'Com1.js', 'tail.', 'tail ', ' '):
+        for bad in ('a\x01b', 'a‮b.js', 'CON', 'nul.txt', 'Com1.js', 'tail.', 'tail ', ' ',
+                    'prn', 'AUX.txt', 'lpt1', 'LPT9.log', 'com0'):
             self.assertFalse(mt.name_ok(bad), repr(bad))
         for good in ('server.py', '.env', 'README', 'ж.txt', 'con-rules.md', 'a b.txt'):
             self.assertTrue(mt.name_ok(good), repr(good))
@@ -209,6 +211,100 @@ class ScanTest(Base):
             e = self.assertRefused('bad-name')
         e.detail.encode('utf-8')                        # не падає: сурогата в тексті відмови нема
         self.assertIn('a\\udcffb', e.detail)
+
+    def test_shown_keeps_readable_names_and_escapes_the_rest(self):
+        self.assertEqual(mt._shown('ж/é.txt'), 'ж/é.txt')          # не-ASCII лишається читабельним
+        self.assertEqual(mt._shown('a\x01b\u202e'), 'a\\u0001b\\u202e')
+
+    def test_files_are_ordered_by_utf8_bytes_across_directories(self):
+        # Обхід у глибину віддав би 'a/x' раніше за 'a-b' й 'a.b', а за байтами шляху ('-' < '.' < '/') порядок інший.
+        for rel in ('a/x', 'a.b', 'a-b', 'Z', 'é', 'ж/y'):
+            _put(self.mod, rel, rel)
+        sc = mt.scan(self.mod, with_data=True)
+        paths = [f[0] for f in sc.files]
+        self.assertEqual(paths, sorted(paths, key=lambda q: q.encode('utf-8')))
+        self.assertLess(paths.index('a-b'), paths.index('a/x'))
+        self.assertEqual(mt.tree_hash(list(reversed(sc.files))), sc.hash)    # хеш не залежить від порядку на вході
+
+    def test_pycache_dir_is_skipped_whatever_is_inside(self):
+        h0 = mt.scan(self.mod).hash
+        _put(self.mod, '__pycache__/note.txt', 'x')                 # не `.pyc`: пропущена саме тека
+        self.assertEqual(mt.scan(self.mod, with_data=True).hash, h0)
+
+    def test_file_count_limit_is_inclusive(self):
+        for i in range(mt.MAX_FILES - 2):                           # module.json і server.py вже є
+            _put(self.mod, f'f/{i:03}.txt', 'x')
+        self.assertEqual(len(mt.scan(self.mod, with_data=True).files), mt.MAX_FILES)
+        _put(self.mod, 'f/over.txt', 'x')
+        self.assertRefused('too-many-files')
+
+    def test_size_limit_is_inclusive(self):
+        os.remove(os.path.join(self.mod, 'server.py'))
+        os.remove(os.path.join(self.mod, 'module.json'))
+        os.truncate(_put(self.mod, 'big.bin', b''), mt.MAX_BYTES)   # розріджений файл рівно на межі
+        self.assertEqual(mt.scan(self.mod).total, mt.MAX_BYTES)
+
+    def test_refusal_is_cached_not_rewalked(self):
+        _put(self.mod, 'CON', 'x')
+        with mock.patch.object(mt, '_walk', wraps=mt._walk) as walk:
+            for _ in range(3):
+                with self.assertRaises(mt.Refused):
+                    mt.scan(self.mod)
+        self.assertEqual(walk.call_count, 1)
+
+    def _no_access(self, path):
+        if os.geteuid() == 0:
+            self.skipTest('root обходить права')
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o700)                      # інакше `rmtree` не прибере тимчасову теку
+
+    @unittest.skipIf(os.name == 'nt', 'права POSIX')
+    def test_unreadable_dir_is_refused(self):
+        _put(self.mod, 'sub/a.py', 'x')
+        self._no_access(os.path.join(self.mod, 'sub'))
+        e = self.assertRefused('unreadable')
+        self.assertEqual(e.detail, 'sub')
+
+    @unittest.skipIf(os.name == 'nt', 'права POSIX')
+    def test_unreadable_file_is_refused(self):
+        self._no_access(os.path.join(self.mod, 'server.py'))
+        e = self.assertRefused('unreadable')
+        self.assertEqual(e.detail, 'server.py')
+
+    def test_missing_root_is_unreadable(self):
+        self.assertRefused('unreadable', os.path.join(self.tmp, 'nope'))
+
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_read_refuses_a_symlink_swapped_in_after_lstat(self):
+        p = os.path.join(self.mod, 'server.py')
+        st = os.lstat(p)
+        os.remove(p)
+        os.symlink(os.path.join(self.mod, 'module.json'), p)         # `O_NOFOLLOW`: не йдемо за підміною
+        with self.assertRaises(mt.Refused) as cm:
+            mt._read('server.py', p, st)
+        self.assertEqual(cm.exception.code, 'symlink')
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO')
+    def test_read_does_not_hang_on_a_fifo_swapped_in_after_lstat(self):
+        p = os.path.join(self.mod, 'server.py')
+        st = os.lstat(p)
+        os.remove(p)
+        os.mkfifo(p)
+        got = []
+
+        def run():
+            try:
+                mt._read('server.py', p, st)
+            except mt.Refused as e:
+                got.append(e.code)
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(3)
+        if t.is_alive():                                            # без `O_NONBLOCK` `open` висить: розблокувати й упасти
+            os.close(os.open(p, os.O_WRONLY))
+            t.join(3)
+            self.fail('open() FIFO завис')
+        self.assertEqual(got, ['unstable'])
 
     def test_unstable_file(self):
         p = os.path.join(self.mod, 'server.py')
@@ -278,6 +374,87 @@ class ScanTest(Base):
             self.assertEqual(sc.data['server.py'], f.read())
 
 
+class CacheTest(Base):
+    def test_fingerprint_of_a_missing_root_is_none(self):
+        self.assertIsNone(mt.fingerprint(os.path.join(self.tmp, 'nope')))
+
+    def test_cache_sees_a_nested_edit(self):
+        _put(self.mod, 'lib/h.py', 'one')
+        h0 = mt.scan(self.mod).hash
+        _put(self.mod, 'lib/h.py', 'two')                           # той самий розмір: видно лише в записі `lib/h.py`
+        self.assertNotEqual(mt.scan(self.mod).hash, h0)
+
+    def test_fingerprint_reacts_to_each_lstat_field(self):
+        target = os.path.join(self.mod, 'server.py')
+        real = os.lstat
+        st = real(target)
+
+        def fp_with(**over):
+            def fake(p):
+                s = real(p)
+                if p != target:
+                    return s
+                d = {k: getattr(s, k) for k in ('st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_ino', 'st_nlink')}
+                d.update(over)
+                return types.SimpleNamespace(**d)
+            with mock.patch.object(os, 'lstat', fake):
+                return mt.fingerprint(self.mod)
+        base = fp_with()
+        self.assertEqual(fp_with(), base)
+        for field, val in (('st_mode', st.st_mode ^ 0o100), ('st_size', st.st_size + 1), ('st_mtime_ns', st.st_mtime_ns + 1),
+                           ('st_ctime_ns', st.st_ctime_ns + 1), ('st_ino', st.st_ino + 1), ('st_nlink', st.st_nlink + 1)):
+            with self.subTest(field=field):
+                self.assertNotEqual(fp_with(**{field: val}), base)
+
+    def test_same_size_edit_with_restored_mtime_is_still_seen(self):
+        p = os.path.join(self.mod, 'server.py')
+        st = os.stat(p)
+        h0, fp0 = mt.scan(self.mod).hash, mt.fingerprint(self.mod)
+        with open(p, 'r+b') as f:
+            f.write(b'Z')                                           # перший байт; розмір той самий
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))            # `mtime` повернуто, `ctime` userland не підробить
+        self.assertNotEqual(mt.fingerprint(self.mod), fp0)
+        self.assertNotEqual(mt.scan(self.mod).hash, h0)
+
+    def test_fingerprint_cut_off_never_hides_a_change(self):
+        for i in range(mt.FP_MAX + 100):                            # `.pyc` у скан не йдуть, а відбиток вичерпують
+            _put(self.mod, f'a/{i:04}.pyc', b'')
+        _put(self.mod, 'z/real.py', 'one')
+        h0 = mt.scan(self.mod).hash
+        _put(self.mod, 'z/real.py', 'two')
+        self.assertNotEqual(mt.scan(self.mod).hash, h0)             # кеш промахнувся, а не віддав застарілий хеш
+        fp = mt.fingerprint(self.mod)
+        self.assertEqual(sum(1 for e in fp if e[0] == 'truncated'), 1)           # токен один, не на кожному рівні
+        self.assertNotEqual(fp, mt.fingerprint(self.mod))
+
+    def test_cache_is_bounded_and_evicts_the_oldest(self):
+        roots = []
+        for i in range(5):
+            r = os.path.join(self.tmp, 'many', f'm{i}')
+            _put(r, 'module.json', '{}')
+            roots.append(r)
+        with mock.patch.object(mt, 'CACHE_MAX', 3):
+            for r in roots:
+                mt.scan(r)
+        self.assertEqual(list(mt._CACHE), roots[2:])                # найстарі витіснено, найновіші лишились
+
+    def test_forget_drops_one_root_and_reset_drops_all(self):
+        other = os.path.join(self.tmp, 'other-mod')
+        _put(other, 'module.json', '{}')
+        mt.scan(self.mod)
+        mt.scan(other)
+        mt.forget(self.mod)
+        with mock.patch.object(mt, '_walk', wraps=mt._walk) as walk:
+            mt.scan(other)
+            self.assertEqual(walk.call_count, 0)                    # інша тека лишилась у кеші
+            mt.scan(self.mod)
+            self.assertEqual(walk.call_count, 1)
+        mt.reset_cache()
+        with mock.patch.object(mt, '_walk', wraps=mt._walk) as walk:
+            mt.scan(other)
+            self.assertEqual(walk.call_count, 1)
+
+
 class DiffTest(Base):
     def test_diff_against_record(self):
         sc = mt.scan(self.mod)
@@ -292,6 +469,11 @@ class DiffTest(Base):
         files, removed = mt.diff(mt.scan(self.mod).files, None)
         self.assertEqual({f['change'] for f in files}, {'new'})
         self.assertEqual(removed, [])
+
+    def test_diff_survives_a_lone_surrogate_in_a_record_path(self):
+        # Запис із зіпсованого `trust.json` може нести самотній сурогат: сортування `removed` не повинно падати.
+        files, removed = mt.diff(mt.scan(self.mod).files, [{'path': 'a\ud800', 'size': 1, 'sha256': 'x'}])
+        self.assertEqual(removed, [{'path': 'a\ud800', 'size': 1}])
 
     def test_tilde_only_on_a_path_boundary(self):
         self.assertEqual(mt.tilde(os.path.join(self.home, 'w', 'm')), os.path.join('~', 'w', 'm'))
