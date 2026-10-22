@@ -696,6 +696,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `tests/test_module_trust.py`
 - Modify: `tests/test_serve.py` (`SPACE_WRITERS` ≈1945)
 
+У `tests/test_module_trust.py` (`Base.setUp`) заміни `if hasattr(mt, 'clear_declined'): mt.clear_declined()` на
+безумовний `mt.clear_declined()` (коментар «зʼявляється в Task 2» прибери): після цієї задачі перейменування мусить
+падати голосно.
+
 - [ ] **Step 1: Тести (червоні)** — допиши в `tests/test_module_trust.py` перед `if __name__`:
 
 ```python
@@ -843,8 +847,10 @@ class ConfirmTest(Base):
         self.assertEqual(mt._interpret('zenity', P(255)), 'unavailable')
 
     def test_texts_are_cleaned_and_clipped(self):
-        title, msg, yes, no = mt.confirm_texts('uk', 'N‮ame' + 'x' * 200, 'netlify', 'f' * 64, '/p\x07ath')
+        title, msg, yes, no = mt.confirm_texts('uk', 'N‮a\ud800me' + 'x' * 200, 'netlify', 'f' * 64, '/p\x07ath')
         self.assertNotIn('‮', msg)
+        self.assertNotIn('\ud800', msg)
+        msg.encode('utf-8')                                     # пройде в argv
         self.assertNotIn('\x07', msg)
         self.assertIn('ffffffffffff', msg)
         self.assertNotIn('f' * 13, msg)
@@ -1205,8 +1211,9 @@ _PS = ("Add-Type -AssemblyName System.Windows.Forms; "
 
 
 def _clean(s, n=80):
-    """Рядок для системного вікна: без `Cc`/`Cf`/`Zl`/`Zp`, не довший за `n` (з «…»)."""
-    s = ''.join(c for c in str(s) if unicodedata.category(c) not in ('Cc', 'Cf', 'Zl', 'Zp'))
+    """Рядок для системного вікна: без `Cc`/`Cf`/`Cs`/`Zl`/`Zp`, не довший за `n` (з «…»). `Cs` — самотній сурогат
+    (`"\\ud800"` з `module.json`): у `argv` підпроцесу він дав би `UnicodeEncodeError` замість вікна."""
+    s = ''.join(c for c in str(s) if unicodedata.category(c) not in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp'))
     return s if len(s) <= n else s[:n - 1] + '…'
 
 
