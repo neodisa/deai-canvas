@@ -1454,6 +1454,11 @@ class OwnEnv(Env):
         self.addCleanup(os.environ.pop, 'DEAI_OWN_CANARY', None)
         os.environ.pop(mt.SEAM_ENV, None)
         self.addCleanup(os.environ.pop, mt.SEAM_ENV, None)
+        # Сітка: справжнє системне вікно в тесті недосяжне. Шов `DEAI_TRUST_CONFIRM` відповідає в `confirm` РАНІШЕ за
+        # `confirm_command`, тож тестам зі швом чи підміненим `ask` вона не заважає, а `subprocess` решти коду не чіпає
+        net = mock.patch.object(mt, 'confirm_command', side_effect=AssertionError('системне вікно в тесті'))
+        net.start()
+        self.addCleanup(net.stop)
         mt.clear_declined()
         self.sp = self.new_space()
 
@@ -2526,6 +2531,11 @@ class TrustApi(World):
         # (`SPACE_WRITERS` → `_assigns_deai_home`) розбирає джерело САМЕ цього файла
         os.environ['DEAI_HOME'] = self.deai
         self.addCleanup(_unlock, self.tmp)           # LIFO: раніше за `rmtree` світу — інакше знімки 0500 лишились би
+        # Сітка: справжнє системне вікно в тесті недосяжне. Шов `DEAI_TRUST_CONFIRM` відповідає в `confirm` РАНІШЕ за
+        # `confirm_command`, тож тестам зі швом чи підміненим `ask` вона не заважає, а `subprocess` решти коду не чіпає
+        net = mock.patch.object(mt, 'confirm_command', side_effect=AssertionError('системне вікно в тесті'))
+        net.start()
+        self.addCleanup(net.stop)
         self.modules()
         mt.clear_declined()
         os.environ[mt.SEAM_ENV] = 'yes'
@@ -2597,6 +2607,16 @@ class TrustApi(World):
         _write(os.path.join(d, 'NUL'), 'x')
         st, body = self.post('/api/module-trust', {'space': 'off', 'id': 'acme', 'hash': h}, headers=self.browser)
         self.refused(st, body, 409, 'module-refused')
+
+    def test_odd_lang_falls_back_to_uk_and_never_breaks_the_request(self):
+        self.own()
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='no') as ask:
+            for lang in ([], {}, 7, 'zz'):
+                st, body = self.post('/api/module-trust', {'space': 'off', 'id': 'acme', 'hash': h, 'lang': lang},
+                                     headers=self.browser)
+                self.refused(st, body, 409, 'trust-declined')
+                self.assertEqual(ask.call_args[0][2][2], mt.CONFIRM_TEXT['uk']['yes'], lang)
 
     def test_system_window_answers(self):
         self.own()
@@ -2815,7 +2835,8 @@ def module_client_urls(prov, space=None):
         if sp is None:
             return
         mid = payload.get('id')
-        lang = payload.get('lang') if payload.get('lang') in module_trust.CONFIRM_TEXT else 'uk'
+        lang = payload.get('lang')
+        lang = lang if isinstance(lang, str) and lang in module_trust.CONFIRM_TEXT else 'uk'   # `[]` у `in` — TypeError
         deai_modules.grant_trust(sp, mid, payload.get('hash'), lang)
         self._send_json({'ok': True, 'module': module_entry(sp, mid)})
 
