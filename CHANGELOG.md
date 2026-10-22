@@ -113,15 +113,16 @@ task, which can now come from a mockup folder that already exists on disk. Desig
 
 ### Tests
 
-`npm test` at 0.6.0 is green: 1629 node tests (plus `inspector-core`), 2381 Python tests in
-`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.5.0: 1458, 2349 with 1 skipped, 168, 170), on
-Python 3.13. The new server tests, `tests/test_task_from.py`, also pass on Python 3.9.6, the oldest
-supported version; the full Python suites were not repeated there for this release.
+`npm test` at 0.6.0 is green: 1630 node tests (plus `inspector-core`), 2381 Python tests in
+`tests/` (1 skipped), 168 in `bin/`, 170 in `app/` (0.5.0: 1458, 2349 with 1 skipped, 168, 170).
+The three Python suites were also run on Python 3.9.6, the oldest supported version, with the same
+result (2381 with 1 skipped, 168, 170); `npm test` itself uses Python 3.13.
 
 New: unit tests `tests/wizard-model.test.mjs` (the choice per role, the plan of writes and its
 order, freshness, the dependent switch-off, names from the folder; roles are data, so a role named
 `__proto__` is an ordinary key), `tests/wizard-view.test.mjs` (every step, the hooks, `aria-current`,
-`fieldset` and `legend`, everything from data is escaped, secret fields are empty),
+`fieldset` and `legend`, everything from data is escaped, secret fields are empty, a failed save shows
+one message in the card, not the reason twice),
 `tests/wizard-css.test.mjs` (every class of the markup has a rule, narrow widths, the clean view hides
 the page, only tokens, contrast of the selected card) and `tests/wizard-wiring.test.mjs` (the entry
 points, the explicit `space` in every request of steps 2–4, the light path after a write); the bar,

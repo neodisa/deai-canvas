@@ -230,15 +230,12 @@ body.home-open .cv-hud{display:none!important}
 .cv-ask--form label,.cv-ask--form p,.cv-ask--form .cv-lbl{white-space:normal;max-height:none;overflow:visible}
 .cv-form{display:flex;flex-direction:column;gap:14px;margin:0}
 .cv-form-h{margin:0;font-size:16px;font-weight:600;color:var(--g900)}
-/* Підводка під заголовком — тихіша за підписи полів; `--muted` на білому ≥ 4.5:1 (css-guards). */
-.cv-form-lead{color:var(--muted)}
 .cv-field{display:flex;flex-direction:column;gap:6px;min-width:0}
 .cv-field label,.cv-lbl{font-size:12px;font-weight:500;color:var(--g700)}
 .cv-field input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* Поле лише для читання — назва ЗНАЙДЕНОГО простору: сервер її не перезапише, тож
    воно не має виглядати редагованим. */
 .cv-field input[readonly]{background:var(--g50);color:var(--g700)}
-.cv-hint{font-size:12px;line-height:1.4;color:var(--muted)}
 .cv-form-err{padding:8px 10px;border-radius:6px;font-size:13px;line-height:1.4;color:#a32a23;
   background:color-mix(in srgb,var(--bad-ink) 8%,#fff);border:1px solid color-mix(in srgb,var(--bad-ink) 35%,#fff)}
 /* Поле, про яке помилка (`ctl.focus(імʼя)` ставить `aria-invalid`): рамка видна й тому, хто не

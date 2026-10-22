@@ -493,6 +493,29 @@ test("крок 3: ввімкнений модуль із помилкою пок
   assert.doesNotMatch(page({ enabled: false, status: "error", error: "no-token" }), /cn-why/, "ще не ввімкнений — «Буде підключено», без причини");
 });
 
+test("крок 3: збій перевірки після запису — одне повідомлення в картці (результат `failed`), а не причина над полями ще й під ними", () => {
+  const bad = M("vercel-publish", ["publish"], { enabled: true, status: "error", error: "no-token",
+    last_check: { ok: false, error: "no-token", detail: "d" } });
+  const page = (result) => wizardHTML(V({ step: 3, s3: S3({ cards: [{ entry: bad, fields: [], values: {}, erase: [], errors: {}, result }] }) }));
+  const count = (h, re) => (h.match(re) || []).length;
+  const TEXT = /Токен Vercel не задано\./g;
+  /* Результат запису `failed` (відповідь `module-enable` вже поклала в запис статус error): лише він, без `cn-why` над полями. */
+  const failed = page({ kind: "failed", key: "cnErrNoToken", detail: "d" });
+  assert.doesNotMatch(failed, /cn-why"/, "причина над полями не малюється, коли є результат failed");
+  assert.equal(count(failed, TEXT), 1, "текст відмови — рівно один раз");
+  assert.equal(count(failed, /Збережено, але перевірка не пройшла\./g), 1);
+  assert.match(failed, /cn-badge cn-badge--error/, "бейдж стану лишається");
+  /* Без результату (картка щойно відкрита, модуль уже зламаний) — причина, як у картці 3a. */
+  const none = page(null);
+  assert.equal(count(none, /<div class="cn-why">/g), 1);
+  assert.equal(count(none, TEXT), 1);
+  assert.doesNotMatch(none, /Збережено, але перевірка не пройшла/);
+  /* Не `failed` — не повтор: відмова HTTP («не збережено») каже про запис, а причина — про поточний стан модуля. */
+  const refused = page({ kind: "refused", key: "cnRefBadSettings", detail: "" });
+  assert.equal(count(refused, /<div class="cn-why">/g), 1, "відмова не прибирає причину");
+  assert.match(refused, /cn-res cn-res--err/);
+});
+
 test("data-step — число: рядок із пробілами нормалізується; крок вибирається за числом", () => {
   const h = wizardHTML(V({ step: " 3 " }));
   assert.match(h, /<div class="th-in wz" data-step="3">/);

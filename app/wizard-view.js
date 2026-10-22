@@ -165,13 +165,15 @@ function cardHTML(c, i, busy) {
   const roles = rolesLine(e);
   const d = { errors: c.errors ?? {}, form: { values: c.values ?? {}, erase: c.erase ?? [] }, busy };
   const fields = (c.fields ?? []).map((f, j) => fieldHTML(e, f, j, d, `wz-f-${i}`)).join("");
+  /* Причина над полями й результат запису «Збережено, але перевірка не пройшла…» під ними — одна й та сама відмова: коли в картки
+     є результат `failed`, показуємо лише його (відповідь запису вже поклала в `entry` статус `error`, тож `why` сказала б те саме двічі). */
   /* `tabindex="-1"` — контролер ставить фокус на контейнер, коли в збійної картки нема контролів. */
   return `<section class="cn-card wz-card" data-id="${esc(e.id)}" tabindex="-1" aria-labelledby="wz-c-${i}">
     <div class="cn-card-top"><span class="cn-ic">${ico(roleIcon(e.roles?.[0]))}</span>
       <div class="cn-card-name"><b id="wz-c-${i}">${esc(modName(e))}</b>${roles ? `<span class="cn-card-role">${esc(roles)}</span>` : ""}</div>
       ${badge}</div>
     ${desc ? `<p class="cn-card-desc">${esc(t(desc))}</p>` : ""}
-    ${cardView(e).why ? whyHTML(e) : ""}
+    ${cardView(e).why && c.result?.kind !== "failed" ? whyHTML(e) : ""}
     ${fields}<div class="wz-res" data-wz-res="${esc(e.id)}">${resultHTML(c.result)}</div></section>`;
 }
 
