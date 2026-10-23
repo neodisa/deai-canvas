@@ -196,4 +196,5 @@ test("3c: «Довіритись…» під варіантом — стовпч
   assert.match(rules(".wz-opt-trust"), /color:var\(--mid\)/);
   assert.match(rules(".wz-wait"), /color:var\(--mid\)/);
   assert.match(rules(".wz-opt-trust .ico"), /color:var\(--open\)/);
+  assert.match(rules(".wz-wait .ico"), /color:var\(--open\)/, "замок рядка «чекає довіри» — той самий токен, що в рядку варіанта");
 });

@@ -58,7 +58,7 @@ test("крок 2: недовірений — радіо вимкнене, піг
   const h = wizardHTML(V2([OWN("acme", ["publish"], { enabled: true })], new Set(["acme"])));
   assert.match(h, /<div class="wz-opt-row"><label class="wz-opt" for="wz-o-0-0"><input type="radio" id="wz-o-0-0" name="wz-r-0" value="acme" data-wz-pick data-role="publish" checked disabled>/);
   assert.match(h, /<span class="cn-tag cn-tag--own" title="~\/w\/modules\/acme">свій<\/span>/);
-  assert.match(h, /<\/label><button type="button" class="ctl ctl--out" data-wz="trust" data-id="acme">.*Довіритись…<\/button><\/div>/s);
+  assert.match(h, /<\/label><button type="button" class="ctl ctl--out" data-wz="trust" data-id="acme" aria-describedby="wz-on-0-0">.*Довіритись…<\/button><\/div>/s);
   assert.match(h, /class="wz-opt-why".*йому не довірено/s);
   const off = wizardHTML(V2([OWN("acme", ["publish"])], new Set()));
   assert.match(off, /value="acme" data-wz-pick data-role="publish" disabled>/);
@@ -103,7 +103,7 @@ test("крок 2: вбудований модуль — як було (без п
 test("крок 2: назва свого модуля з диска екранується, у пігулці — шлях теки", () => {
   const h = wizardHTML(V2([OWN("acme", ["publish"], { name: "<img src=x onerror=1>", source: "~/a\"><b>" })], new Set()));
   assert.doesNotMatch(h, /<img/);
-  assert.match(h, /<b>&lt;img src=x onerror=1&gt;<\/b>/);
+  assert.match(h, /<b id="wz-on-0-0">&lt;img src=x onerror=1&gt;<\/b>/);
   assert.match(h, /title="~\/a&quot;&gt;&lt;b&gt;"/, "шлях у підказці пігулки не виходить з атрибута");
 });
 
@@ -117,8 +117,37 @@ test("крок 2: «Замість» — лише модулю, який мож�
   assert.match(trusted, /value="acme"[^>]*>[\s\S]*?wz-opt-instead/, "довірений, що замінить тримача, — «Замість»");
 });
 
+test("крок 2: id модуля в `data-id` кнопки «Довіритись…» екранується — не виходить з атрибута", () => {
+  const h = wizardHTML(V2([OWN('a"><b', ["publish"])], new Set()));
+  assert.ok(h.includes('data-wz="trust" data-id="a&quot;&gt;&lt;b"'), "id екрановано");
+  assert.ok(!h.includes('data-id="a"><b'), "розмітку не прорвано");
+});
+
+test("крок 2: «Довіритись…» привʼязана до НАЗВИ свого модуля (`aria-describedby`) — дві кнопки читач екрана озвучує по-різному", () => {
+  const list = [OWN("acme", ["publish"], { name: "Acme Deploy" }), OWN("beta", ["comments"], { name: "Beta Notes" })];
+  const h = wizardHTML(V2(list, new Set()));
+  const buttons = [...h.matchAll(/<button [^>]*data-wz="trust" data-id="([^"]+)"[^>]*>/g)];
+  assert.equal(buttons.length, 2);
+  const seen = new Set();
+  for (const [tag, id] of buttons) {
+    const ref = /aria-describedby="([^"]+)"/.exec(tag)?.[1];
+    assert.ok(ref, `у кнопки ${id} нема aria-describedby`);
+    assert.ok(!seen.has(ref), "id описів різні");
+    seen.add(ref);
+    const named = new RegExp(`<[a-z]+ id="${ref}">([^<]*)</[a-z]+>`).exec(h)?.[1];
+    assert.equal(named, id === "acme" ? "Acme Deploy" : "Beta Notes", `опис кнопки ${id} — назва її модуля`);
+    assert.equal(h.split(`id="${ref}"`).length - 1, 1, "id у розмітці один");
+  }
+});
+
+test("крок 2: id назви є лише там, де є кнопка — вбудований і refused без знімка (кнопки нема) без висячого id", () => {
+  const h = wizardHTML(V2([M("vercel-publish", ["publish"]),
+    OWN("acme", ["comments"], { trust: "refused", status: "error", trust_error: "too-big", error: "too-big: 6 MiB" })], new Set()));
+  assert.doesNotMatch(h, /wz-on-/);
+});
+
 test("крок 2 зайнятий: «Довіритись…» теж вимкнена", () => {
-  assert.match(wizardHTML(V2([OWN("acme", ["publish"])], new Set(), { busy: "save" })), /data-wz="trust" data-id="acme" disabled>/);
+  assert.match(wizardHTML(V2([OWN("acme", ["publish"])], new Set(), { busy: "save" })), /data-wz="trust" data-id="acme" aria-describedby="wz-on-0-0" disabled>/);
 });
 
 test("крок 3: рядок «чекає довіри» замість картки; без карток — не «нічого не підключаємо»", () => {
@@ -161,23 +190,26 @@ function fnSrc(name) {
   throw new Error(`немає закриття для ${name}`);
 }
 
-/** `trustFrom` з підставним станом майстра; `log` пише виклики в порядку. */
-function trustEnv({ wz, lost = true, radio = null, open = async () => true, onLoad = null } = {}) {
+/** `trustFrom` з підставним станом майстра; `log` пише виклики в порядку. `box` — єдиний вузол, що скролиться (як `#tasks-home`):
+    підставний `loadStep2` обнуляє його `scrollTop` — так робить браузер, коли «Завантажую…» коротша за список. */
+function trustEnv({ wz, lost = true, radio = null, open = async () => true, onLoad = null, scroll = 0, noNode = false } = {}) {
   const log = [];
   const focusOf = (what) => ({ focus: (o) => log.push(["focus", what, o]) });
   const state = { wz };
   const found = { radio: radio ? focusOf("radio") : null, button: focusOf("button") };
+  const box = { scrollTop: scroll, querySelector: (sel) => { log.push(["query", sel]); return sel.startsWith("input[") ? found.radio : (sel.startsWith("[data-wz=") ? found.button : null); } };
   const deps = {
     openTrust: async (e, spaceId) => { log.push(["openTrust", e.id, spaceId]); return open(); },
-    node: () => ({ querySelector: (sel) => { log.push(["query", sel]); return sel.startsWith("input[") ? found.radio : (sel.startsWith("[data-wz=") ? found.button : null); } }),
+    node: () => (noNode ? null : box),
+    toast: (m) => log.push(["toast", m]),
   };
   let api;
-  const loadStep2 = async () => { log.push(["loadStep2"]); await onLoad?.(api); };
+  const loadStep2 = async () => { log.push(["loadStep2"]); box.scrollTop = 0; await onLoad?.(api); };
   const focusLost = () => lost;
   const CSS = { escape: (s) => `<${s}>` };
   const code = `let wz = state.wz;\n${fnSrc("trustFrom")}\nreturn { trustFrom, drop: () => { wz = null; }, swap: (v) => { wz = v; } };`;
-  api = new Function("state", "deps", "loadStep2", "focusLost", "CSS", code)(state, deps, loadStep2, focusLost, CSS);
-  return { ...api, log, deps };
+  api = new Function("state", "deps", "loadStep2", "focusLost", "CSS", "t", code)(state, deps, loadStep2, focusLost, CSS, t);
+  return { ...api, log, deps, box };
 }
 const WZ = (over = {}) => ({ step: 2, busy: false, spaceId: "alpha", list: [OWN("acme", ["publish"]), M("vercel-publish", ["publish"])], ...over });
 
@@ -238,6 +270,90 @@ test("trustFrom: зайнятий майстер, не крок 2, нема ма
     await env.trustFrom("acme");
     assert.deepEqual(env.log, [], what);
   }
+});
+
+test("trustFrom: скрол сторінки повертається після перечитування — «Завантажую…» коротша за список, браузер притиснув його до нуля", async () => {
+  const env = trustEnv({ wz: WZ(), scroll: 600 });
+  await env.trustFrom("acme");
+  assert.equal(env.box.scrollTop, 600);
+  const declined = trustEnv({ wz: WZ(), open: async () => false, scroll: 420 });
+  await declined.trustFrom("acme");
+  assert.equal(declined.box.scrollTop, 420, "довіри не дали — список усе одно перемальовано, скрол усе одно повертаємо");
+});
+
+test("trustFrom: майстер закрито, поки йшло перечитування, — скрол не чіпаємо (вузол уже не наш)", async () => {
+  const env = trustEnv({ wz: WZ(), scroll: 600, onLoad: (api) => api.drop() });
+  await env.trustFrom("acme");
+  assert.equal(env.box.scrollTop, 0);
+});
+
+test("trustFrom: крок змінився, поки йшло перечитування, — скрол кроку 2 на новому кроці не відновлюємо", async () => {
+  const wz = WZ();
+  const env = trustEnv({ wz, scroll: 600, onLoad: () => { wz.step = 3; } });
+  await env.trustFrom("acme");
+  assert.equal(env.box.scrollTop, 0);
+});
+
+test("trustFrom: вузла сторінки нема — без падіння, список усе одно перечитано", async () => {
+  const env = trustEnv({ wz: WZ(), scroll: 600, noNode: true });
+  await env.trustFrom("acme");
+  assert.deepEqual(env.log.map((x) => x[0]), ["openTrust", "loadStep2"]);
+});
+
+test("trustFrom: подвійний клік — діалог відкривається один раз; після завершення наступний клік знову працює", async () => {
+  const env = trustEnv({ wz: WZ() });
+  const first = env.trustFrom("acme");
+  const second = env.trustFrom("acme");
+  await Promise.all([first, second]);
+  assert.equal(env.log.filter((x) => x[0] === "openTrust").length, 1, "другий клік, поки діалог уже відкривався, ігнорується");
+  assert.equal(env.log.filter((x) => x[0] === "loadStep2").length, 1, "і зайвого перечитування списку нема");
+  await env.trustFrom("acme");
+  assert.equal(env.log.filter((x) => x[0] === "openTrust").length, 2, "прапорець знято: людина може відкрити діалог знову");
+});
+
+test("trustFrom: прапорець «зайнято» знімається на КОЖНОМУ виході, ранньому теж — «Довіритись…» не мертвіє", async () => {
+  const again = async (what, env, wz) => {
+    await env.trustFrom("acme");
+    wz.step = 2;
+    await env.trustFrom("acme");
+    assert.equal(env.log.filter((x) => x[0] === "openTrust").length, 2, `${what}: другий клік не спрацював — прапорець завис`);
+  };
+  const a = WZ();
+  await again("фокус не втрачено", trustEnv({ wz: a, lost: false }), a);
+  const b = WZ();
+  await again("крок змінився, поки висів діалог", trustEnv({ wz: b, open: async () => { b.step = 3; return true; } }), b);
+  const c = WZ();
+  await again("крок змінився, поки йшло перечитування", trustEnv({ wz: c, onLoad: () => { c.step = 3; } }), c);
+});
+
+test("trustFrom: прапорець «зайнято» висить на обʼєкті майстра — майстер, відкритий наново поки діалог висить, не успадковує його", async () => {
+  const release = [];
+  const env = trustEnv({ wz: WZ(), open: () => new Promise((r) => { release.push(r); }) });
+  const first = env.trustFrom("acme");
+  env.swap(WZ());
+  const second = env.trustFrom("acme");
+  assert.equal(env.log.filter((x) => x[0] === "openTrust").length, 2, "новий майстер — свій прапорець");
+  release.forEach((r) => r(true));
+  await Promise.all([first, second]);
+});
+
+test("trustFrom: openTrust відмовив — тост із причиною, список усе одно перечитується, без необроблених відмов", async () => {
+  const env = trustEnv({ wz: WZ(), open: async () => { throw new Error("boom"); }, scroll: 300 });
+  await env.trustFrom("acme");
+  assert.deepEqual(env.log.filter((x) => x[0] === "toast"), [["toast", t("errFailed", "boom")]]);
+  assert.match(t("errFailed", "boom"), /boom/);
+  assert.deepEqual(env.log.map((x) => x[0]).filter((k) => k === "loadStep2"), ["loadStep2"]);
+  assert.equal(env.box.scrollTop, 300);
+  const again = trustEnv({ wz: WZ(), open: async () => { throw new Error("boom"); } });
+  await again.trustFrom("acme");
+  await again.trustFrom("acme");
+  assert.equal(again.log.filter((x) => x[0] === "openTrust").length, 2, "після збою прапорець знято");
+});
+
+test("trustFrom: openTrust відмовив, а майстер тим часом закрито, — тост є, список не чіпаємо", async () => {
+  const env = trustEnv({ wz: WZ(), open: async () => { env.drop(); throw new Error("boom"); } });
+  await env.trustFrom("acme");
+  assert.deepEqual(env.log.map((x) => x[0]), ["openTrust", "toast"]);
 });
 
 /* ── `loadStep3` і `runOp` контролера (зібрано з джерела): що з вибраними, яких тут не виконати ───────────────────────── */

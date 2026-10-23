@@ -105,7 +105,7 @@ export function createWizard(deps) {
       list: null, failed: null, pick: null, atPick: new Map(),
       cards: [], offs: [], waits: [], s3failed: null, s3loading: false,
       s4: { title: "", id: "", idTouched: false, source: "empty", from: "", autoTitle: "" },
-      taskIds: null,
+      taskIds: null, trusting: false,
     };
   }
 
@@ -646,19 +646,34 @@ export function createWizard(deps) {
 
   /** «Довіритись…» у рядку свого модуля (крок 2): діалог довіри `app.js` (`deps.openTrust`) для простору майстра, далі
       список перечитується — вибір інших ролей зберігається (`loadStep2` чистить лише зниклі модулі). Фокус — на радіо
-      модуля, а нема (довіри не дали) — на ту саму кнопку; лише коли фокус справді втрачено. */
+      модуля, а нема (довіри не дали) — на ту саму кнопку; лише коли фокус справді втрачено.
+      Один виклик за раз (`mine.trusting` на обʼєкті майстра): другий клік, поки діалог відкривався чи список перечитувався,
+      інакше дав би другий запит діалогу й зайве перечитування. Відмова `openTrust` — тост, як у решти кроків; список
+      перечитується й тоді (колега міг змінити теку). Скрол сторінки повертається після перечитування: «Завантажую…» коротша
+      за список, браузер притискає `scrollTop` до нуля, а фокус із `preventScroll` його не поверне — кнопка й радіо
+      опинились би за кадром. */
   async function trustFrom(id) {
-    if (!wz || wz.busy || wz.step !== 2) return;
+    if (!wz || wz.busy || wz.step !== 2 || wz.trusting) return;
     const mine = wz;
     const e = (mine.list || []).find((x) => x?.id === id);
     if (!e) return;
-    await deps.openTrust(e, mine.spaceId);
-    if (wz !== mine || mine.step !== 2) return;
-    await loadStep2();
-    if (wz !== mine || !focusLost()) return;
-    const sel = CSS.escape(id);
-    (deps.node()?.querySelector(`input[data-wz-pick][value="${sel}"]:not([disabled])`)
-      ?? deps.node()?.querySelector(`[data-wz="trust"][data-id="${sel}"]`))?.focus({ preventScroll: true });
+    mine.trusting = true;
+    try {
+      const box = deps.node();
+      const top = box?.scrollTop ?? 0;
+      try { await deps.openTrust(e, mine.spaceId); } catch (err) { deps.toast(t("errFailed", err?.message ?? "")); }
+      if (wz !== mine || mine.step !== 2) return;
+      await loadStep2();
+      if (wz !== mine) return;
+      /* «Завантажую…» коротша за список — браузер притискає скрол до нуля, а фокус із `preventScroll` його не поверне. */
+      if (mine.step === 2 && box) box.scrollTop = top;
+      if (!focusLost()) return;
+      const sel = CSS.escape(id);
+      (deps.node()?.querySelector(`input[data-wz-pick][value="${sel}"]:not([disabled])`)
+        ?? deps.node()?.querySelector(`[data-wz="trust"][data-id="${sel}"]`))?.focus({ preventScroll: true });
+    } finally {
+      mine.trusting = false;
+    }
   }
 
   function click(ev) {

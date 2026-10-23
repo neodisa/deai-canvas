@@ -115,19 +115,22 @@ function optionHTML(e, i, j, role, s, dis) {
   const instead = e.enabled === true || wait ? [] : roleHolders(e, s.list);
   const why = e.status === "error" || (wait && e.enabled === true) ? whyOf(e) : null;
   const line = trustLineText(e);
+  /* «Довіритись…» є лише недовіреному, якого можна довірити (`refused` без знімка — причина в рядку, кнопки нема). Назва модуля
+     має `id`, на який кнопка посилається (`aria-describedby`): дві такі кнопки читач екрана озвучив би однаково. */
+  const named = wait && e.trust !== "refused";
+  const nameId = `wz-on-${i}-${j}`;
   const label = `<label class="wz-opt" for="${id}"><input type="radio" id="${id}" name="wz-r-${i}" value="${esc(e.id)}"`
     + ` data-wz-pick data-role="${esc(role)}"${on ? " checked" : ""}${wait ? " disabled" : dis}>`
-    + `<span class="wz-opt-body"><span class="wz-opt-top"><b>${esc(modName(e))}</b>`
+    + `<span class="wz-opt-body"><span class="wz-opt-top"><b${named ? ` id="${nameId}"` : ""}>${esc(modName(e))}</b>`
     + `${e.implicit === true ? `<span class="cn-tag">${esc(t("cnImplicit"))}</span>` : ""}${ownTagHTML(e)}</span>`
     + `${desc ? `<span class="wz-opt-desc">${esc(t(desc))}</span>` : ""}`
     + `${line ? `<span class="wz-opt-trust">${ico("lock", 13)}<span>${esc(line)}</span></span>` : ""}`
     + `${instead.length ? `<span class="wz-opt-instead">${esc(t("wzInstead", instead.map(modName).join(", ")))}</span>` : ""}`
     + `${why ? `<span class="wz-opt-why">${ico("warn", 13)}<span>${esc(t(why.key))}${detail(why.detail)}</span></span>` : ""}`
     + `</span></label>`;
-  /* «Довіритись…» — ПОРУЧ із label, а не всередині: клік по кнопці в label клікнув би й радіо. Лише недовіреному:
-     `refused` без знімка довірити не можна (причина вже в рядку). */
-  if (!wait || e.trust === "refused") return label;
-  return `<div class="wz-opt-row">${label}${btn(`data-wz="trust" data-id="${esc(e.id)}"`, t("cnTrust"), { icon: "lock", dis: !!dis })}</div>`;
+  /* «Довіритись…» — ПОРУЧ із label, а не всередині: клік по кнопці в label клікнув би й радіо. */
+  if (!named) return label;
+  return `<div class="wz-opt-row">${label}${btn(`data-wz="trust" data-id="${esc(e.id)}" aria-describedby="${nameId}"`, t("cnTrust"), { icon: "lock", dis: !!dis })}</div>`;
 }
 
 function noneHTML(i, role, s, dis) {
