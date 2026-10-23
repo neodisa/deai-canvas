@@ -2839,9 +2839,15 @@ async function openTrust(entry, spaceId) {
       return false;
     }
     if (!d) return false;
+    /* Картка застаріла: тека вже довірена (довіру видали, поки йшло перечитування модулів). Системне вікно вдруге
+       питати нема сенсу — лише оновлюємо список. */
+    if (d.state === 'trusted') { await afterModulesChange(); return true; }
     let again = false;
     let untrust = false;
     let granted = false;
+    /* Запит довіри в польоті. `overlay()` може скасувати діалог посеред запиту (`askForm` тоді віддає `null`), а сервер
+       довіру вже видав — тож результат запиту дочікуємо окремо, а не покладаємося на те, що `askForm` дочекався його. */
+    let flight = null;
     await askForm(() => trustDialogHTML({ ...d, reopened }), {
       onMount: (form) => {
         /* «Забрати довіру» сама діалогу не відповідає: позначка + «Скасувати». Під час запиту (`aria-busy`) — нічого:
@@ -2853,22 +2859,31 @@ async function openTrust(entry, spaceId) {
         });
       },
       onSubmit: async (_vals, ctl) => {
-        const wait = ctl.form.querySelector('[data-tr-wait]');
-        if (wait) wait.hidden = false;
-        try {
-          await trustPost({ space: spaceId, id: d.id, hash: d.hash, lang: getLang() });
-          granted = true;
-          return undefined;
-        } catch (err) {
-          if (err?.code === 'module-changed') { again = true; return undefined; }
-          const r = refusalView(err);
-          return [t(r.key), r.detail].filter(Boolean).join(' — ');
-        } finally {
-          if (wait) wait.hidden = true;
-        }
+        flight = (async () => {
+          const wait = ctl.form.querySelector('[data-tr-wait]');
+          if (wait) wait.hidden = false;
+          try {
+            await trustPost({ space: spaceId, id: d.id, hash: d.hash, lang: getLang() });
+            granted = true;
+            return undefined;
+          } catch (err) {
+            if (err?.code === 'module-changed') { again = true; return undefined; }
+            const r = refusalView(err);
+            /* Власні тексти відмов системного вікна вичерпні: технічна деталь сервера (англійською) в українському
+               діалозі зайва. */
+            if (['trust-declined', 'trust-no-confirm', 'trust-busy', 'trust-needs-ui'].includes(err?.code)) return t(r.key);
+            /* Мережевий збій чи відповідь без впізнаваного коду: «Не вдалося зберегти» тут недоречне — нічого не зберігається. */
+            if (r.key === 'cnRefGeneric') return t('errFailed', r.detail);
+            return [t(r.key), r.detail].filter(Boolean).join(' — ');
+          } finally {
+            if (wait) wait.hidden = true;
+          }
+        })();
+        return flight;
       },
       focusBack: () => homeNode()?.querySelector(`[data-cn][data-id="${CSS.escape(entry.id)}"]:not([disabled])`) ?? null,
     });
+    if (flight) await flight;
     if (untrust) { await untrustFlow(entry, spaceId); return false; }
     if (again) { reopened = true; continue; }
     if (!granted) return false;

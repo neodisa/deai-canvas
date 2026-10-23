@@ -158,12 +158,13 @@ test("openTrust, module-changed знову й знову: цикл не зупи
   assert.match(env.dialogs[2].html, /tr-reopened/);
 });
 
-test("openTrust, інша відмова: текст у діалозі (діалог лишається), рядок очікування сховано, тосту й перечитування нема", async () => {
+test("openTrust, відмова системного вікна: текст у діалозі (діалог лишається), рядок очікування сховано, тосту й перечитування нема", async () => {
   const env = trustEnv({
-    post: async () => { throw refusal("trust-declined", "declined by user"); },
+    post: async () => { throw refusal("trust-declined", "system confirmation: no"); },
     scripts: [async (dlg) => {
       const err = await dlg.submit();
-      assert.equal(err, `${t("cnRefDeclined")} — declined by user`);
+      assert.equal(err, t("cnRefDeclined"), "лише власний текст: технічна англійська деталь в українському діалозі зайва");
+      assert.doesNotMatch(err, /system confirmation/);
       assert.equal(dlg.result, undefined, "діалог не закрито");
       dlg.form.querySelector('[data-a="cancel"]').click();
     }],
@@ -172,6 +173,49 @@ test("openTrust, інша відмова: текст у діалозі (діал
   assert.deepEqual(env.log, [], "ні тосту, ні afterModulesChange");
   assert.deepEqual(env.dialogs[0].waitLog, [false, true], "рядок про системне вікно сховано й після відмови");
   assert.equal(env.dialogs.length, 1, "діалог не відкрито знову");
+});
+
+test("openTrust (ревʼю Task 7): trust-declined / trust-no-confirm / trust-busy / trust-needs-ui — рівно власний текст cnRef*, без деталі сервера", async () => {
+  const cases = [["trust-declined", "cnRefDeclined"], ["trust-no-confirm", "cnRefNoConfirm"], ["trust-busy", "cnRefBusy"], ["trust-needs-ui", "cnRefNeedsUi"]];
+  for (const [code, key] of cases) {
+    const env = trustEnv({
+      post: async () => { throw refusal(code, `technical detail for ${code}`); },
+      scripts: [async (dlg) => { assert.equal(await dlg.submit(), t(key), code); dlg.result = null; }],
+    });
+    assert.equal(await env.openTrust(ENTRY, "alpha"), false);
+  }
+});
+
+test("openTrust (ревʼю Task 7): інші відмови сервера — як було: текст і деталь через « — »", async () => {
+  for (const [code, key] of [["module-refused", "cnRefRefused"], ["role-taken", "cnRefRoleTaken"], ["trust-unreadable", "cnRefTrustUnreadable"]]) {
+    const env = trustEnv({
+      post: async () => { throw refusal(code, "alias.py: symbolic link"); },
+      scripts: [async (dlg) => { assert.equal(await dlg.submit(), `${t(key)} — alias.py: symbolic link`, code); dlg.result = null; }],
+    });
+    assert.equal(await env.openTrust(ENTRY, "alpha"), false);
+  }
+});
+
+test("openTrust (ревʼю Task 7): мережевий збій і відповідь без впізнаваного code — «Не вдалося: …», а не «Не вдалося зберегти» (тут нічого не зберігається)", async () => {
+  const cases = [
+    ["мережа", () => new TypeError("Failed to fetch"), "Failed to fetch"],
+    ["без code", () => Object.assign(new Error("boom"), { status: 500 }), "boom"],
+    ["невідомий code", () => refusal("weird-code", "щось нове"), "щось нове"],
+  ];
+  for (const [what, make, msg] of cases) {
+    const env = trustEnv({
+      post: async () => { throw make(); },
+      scripts: [async (dlg) => {
+        const err = await dlg.submit();
+        assert.equal(err, t("errFailed", msg), what);
+        assert.doesNotMatch(err, new RegExp(t("cnRefGeneric")), `${what}: «зберегти» недоречне`);
+        assert.equal(dlg.result, undefined, `${what}: діалог лишається`);
+        dlg.result = null;
+      }],
+    });
+    assert.equal(await env.openTrust(ENTRY, "alpha"), false);
+    assert.deepEqual(env.dialogs[0].waitLog, [false, true]);
+  }
 });
 
 test("openTrust: тайм-аут запиту — текст про тайм-аут у діалозі, а не мовчання", async () => {
@@ -184,7 +228,7 @@ test("openTrust: тайм-аут запиту — текст про тайм-а�
 
 test("openTrust, «Забрати довіру»: позначка + «Скасувати» → діалог закрито, далі untrustFlow(entry, space), без тосту «Довірено»; false", async () => {
   const env = trustEnv({
-    get: async () => ({ trust: trustData({ record: true, state: "trusted" }) }),
+    get: async () => ({ trust: trustData({ record: true, state: "changed" }) }),
     scripts: [async (dlg) => { dlg.untrustBtn.click(); }],
   });
   assert.equal(await env.openTrust(ENTRY, "alpha"), false);
@@ -210,6 +254,53 @@ test("openTrust, «Забрати довіру» під час запиту (ari
   });
   assert.equal(await env.openTrust(ENTRY, "alpha"), true);
   assert.deepEqual(env.log, [["toast", t("cnToastTrusted", "Acme")], ["afterModulesChange"]], "untrustFlow не кликано");
+});
+
+test("openTrust (ревʼю Task 7): оверлей скасував діалог посеред запиту довіри — результат запиту дочекано: тост, перечитування, true", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const env = trustEnv({
+    post: async () => { await gate; return { ok: true }; },
+    scripts: [async (dlg) => {
+      dlg.opts.onSubmit({}, { form: dlg.form });   // запит пішов…
+      dlg.result = null;                           // …а `overlay()` скасував діалог: askForm віддає null, поки POST у польоті
+    }],
+  });
+  const done = env.openTrust(ENTRY, "alpha");
+  let settled = false;
+  done.then(() => { settled = true; });
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  assert.equal(env.postCalls.length, 1, "запит довіри пішов");
+  assert.equal(settled, false, "openTrust чекає запит, а не виходить, поки сервер ще може видати довіру");
+  assert.deepEqual(env.log, []);
+  release();
+  assert.equal(await done, true);
+  assert.deepEqual(env.log, [["toast", t("cnToastTrusted", "Acme")], ["afterModulesChange"]], "сервер довіру видав — тост і перечитування є");
+  assert.equal(env.dialogs.length, 1);
+  assert.deepEqual(env.dialogs[0].waitLog, [false, true], "рядок очікування сховано й тут");
+});
+
+test("openTrust (ревʼю Task 7): оверлей скасував діалог, а запит закінчився відмовою — тихо false, без тосту й перечитування", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const env = trustEnv({
+    post: async () => { await gate; throw refusal("trust-declined", "no"); },
+    scripts: [async (dlg) => { dlg.opts.onSubmit({}, { form: dlg.form }); dlg.result = null; }],
+  });
+  const done = env.openTrust(ENTRY, "alpha");
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  release();
+  assert.equal(await done, false);
+  assert.deepEqual(env.log, []);
+});
+
+test("openTrust (ревʼю Task 7): картка застаріла — тека вже довірена (state trusted) → діалог не показано, лише перечитування модулів, true", async () => {
+  const env = trustEnv({ get: async () => ({ trust: trustData({ record: true, state: "trusted" }) }), scripts: [] });
+  assert.equal(await env.openTrust(ENTRY, "alpha"), true);
+  assert.equal(env.dialogs.length, 0, "системне вікно вдруге питати нема сенсу");
+  assert.deepEqual(env.postCalls, []);
+  assert.deepEqual(env.log, [["afterModulesChange"]], "без тосту: довіру видали не ми");
+  assert.equal(env.formCalls.length, 1);
 });
 
 test("openTrust: збій читання свіжих даних — повідомлення, діалог не показано; порожня відповідь — тихо false", async () => {
@@ -270,6 +361,7 @@ test("trustPost: POST JSON на /api/module-trust зі СТЕЛЕЮ 150 с (не
   assert.deepEqual(calls[0][1].headers, { "Content-Type": "application/json" });
   assert.equal(calls[0][1].body, JSON.stringify({ space: "a", id: "b" }));
   assert.ok(calls[0][1].signal, "запит можна обірвати");
+  assert.deepEqual(Object.keys(calls[0][1]).sort(), ["body", "headers", "method", "signal"], "жодних `mode: 'no-cors'` (відповідь стала б непрозорою) чи `credentials`");
   assert.deepEqual(ok.timers.map((x) => x.ms), [TRUST_POST_TIMEOUT_MS]);
   assert.deepEqual(ok.cleared, [1], "таймер знято після успіху");
   const bad = postEnv(async () => { throw refusal("trust-declined", "no"); });

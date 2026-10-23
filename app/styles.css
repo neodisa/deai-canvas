@@ -266,6 +266,10 @@ body.home-open .cv-hud{display:none!important}
 .tr .tr-removed{font-size:12px;color:var(--g600);overflow-wrap:anywhere}
 .tr .tr-refused{display:flex;gap:8px;color:var(--g900)}
 .tr-refused .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
+/* Деталь відмови: `.cn-why-detail` бере --dim (2,25:1 на білому діалозі), тут потрібен темний текст. */
+.tr-refused .cn-why-detail{color:var(--g600)}
+/* Довге слово без пробілів (назва модуля в заголовку, мітка налаштування, текст помилки) не розпирає діалог. */
+.tr .cv-form-h,.tr-asks,.tr .cv-form-err{overflow-wrap:anywhere}
 .tr .tr-wait{color:var(--g700)}
 .cv-ask button.tr-untrust{margin-right:auto;border-color:var(--bad-ink);background:var(--g50);color:var(--bad-ink)}
 /* Кружки: `.cv-ask button` вище дає кожній кнопці падінг і рамку — перебиваємо

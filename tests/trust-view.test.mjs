@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { DICT } from "../app/i18n.js";
-import { TR_MAX, TRUST_POST_TIMEOUT_MS, sizeText, trustDialogHTML } from "../app/trust-view.js";
+import { TR_MAX, TR_REMOVED_MAX, TRUST_POST_TIMEOUT_MS, cutMid, sizeText, trustDialogHTML } from "../app/trust-view.js";
 
 const read = (f) => readFileSync(new URL(`../app/${f}`, import.meta.url), "utf8");
 const base = (over = {}) => ({
@@ -70,7 +70,12 @@ test("refused: без «Довіряю» й попередження, причи
   const h = trustDialogHTML({ id: "acme", name: "Acme", version: "1", roles: ["publish"], path: "~/m/acme", state: "refused",
     record: true, refused: { code: "symlink", detail: "alias.py: symbolic link" } });
   assert.doesNotMatch(h, /data-a="ok"|tr-warn|Відбиток|tr-files/);
-  assert.match(h, /<p class="tr-refused" role="alert">.*Цій теці не можна довіритись\. У теці є символьне посилання\.<span class="cn-why-detail">alias\.py: symbolic link<\/span>/s);
+  assert.match(h, /<p class="tr-refused" role="alert">.*У теці є символьне посилання\.<span class="cn-why-detail">alias\.py: symbolic link<\/span>/s);
+  assert.doesNotMatch(h, /Цій теці не можна довіритись/, "тіло не повторює заголовок");
+  assert.match(h, /id="tr-h">Модулю «Acme» не можна довіритись</, "заголовок відмови, а не питання «Довіритись модулю…?»");
+  assert.doesNotMatch(h, /Довіритись модулю/);
+  assert.equal(DICT.en.trTitleRefused("Acme"), "“Acme” cannot be trusted", "англійський заголовок відмови");
+  assert.equal(DICT.en.trRefused("because"), "because", "англійське тіло — лише причина, без повтору заголовка");
   assert.match(h, /<button type="button" data-a="cancel" data-autofocus>Закрити<\/button>/);
   assert.match(h, /data-tr="untrust"/);
   assert.match(trustDialogHTML({ id: "x", state: "refused", refused: { code: "zzz" } }), /Тека не годиться для модуля\./);
@@ -105,6 +110,42 @@ test("кожне поле з диска обрізається до TR_MAX: ве
   const r = trustDialogHTML({ id: "x", name: long, state: "refused", refused: { code: "symlink", detail: long } });
   assert.doesNotMatch(r, /n{81,}/);
   assert.ok(r.includes(`<span class="cn-why-detail">${cutText}</span>`), "деталь відмови обрізана");
+});
+
+test("«Прибрано» має стелю: перші TR_REMOVED_MAX імен і «і ще N»; рівно стеля — без «і ще»", () => {
+  assert.equal(TR_REMOVED_MAX, 10);
+  const gone = (n) => Array.from({ length: n }, (_, i) => ({ path: `old${i + 1}.js`, size: 1 }));
+  const row = (n) => /<p class="tr-removed">([^<]*)<\/p>/.exec(trustDialogHTML(base({ state: "changed", record: true, removed: gone(n) })))?.[1];
+  assert.equal(row(12), `Прибрано: ${Array.from({ length: 10 }, (_, i) => `old${i + 1}.js`).join(", ")}, і ще 2`);
+  assert.doesNotMatch(row(12), /old11\.js/, "11-го імені нема");
+  assert.equal(row(10), `Прибрано: ${Array.from({ length: 10 }, (_, i) => `old${i + 1}.js`).join(", ")}`, "рівно 10 — без «і ще»");
+  assert.doesNotMatch(row(10), /і ще/);
+  assert.equal(row(11), `Прибрано: ${Array.from({ length: 10 }, (_, i) => `old${i + 1}.js`).join(", ")}, і ще 1`);
+  assert.equal(row(1), "Прибрано: old1.js");
+  /* лічильник у шапці файлів лишається повним (усі прибрані), стеля — лише в переліку імен */
+  assert.match(trustDialogHTML(base({ state: "changed", record: true, files: [], removed: gone(12) })), /змінено від минулої довіри: 12</);
+  assert.equal(DICT.en.trRemovedMore(2), "and 2 more");
+  assert.equal(DICT.uk.trRemovedMore(2), "і ще 2");
+});
+
+test("cutMid: як `_clean(…, middle=True)` системного вікна — голова (n-1)//3, «…», хвіст; шлях у діалозі однаковий із вікном", () => {
+  const hundred = `${"a".repeat(100 - "/modules/memo-own".length)}/modules/memo-own`;
+  assert.equal(hundred.length, 100);
+  const c = cutMid(hundred);
+  assert.equal(c.length, TR_MAX, "рівно TR_MAX");
+  assert.ok(c.startsWith(hundred.slice(0, 26)), "голова — перші 26");
+  assert.equal(c[26], "…");
+  assert.ok(c.endsWith("/modules/memo-own"), "хвіст із текою модуля збережено");
+  assert.equal(c, `${hundred.slice(0, 26)}…${hundred.slice(100 - 53)}`);
+  const exact = "x".repeat(TR_MAX);
+  assert.equal(cutMid(exact), exact, "рівно TR_MAX — без змін");
+  assert.equal(cutMid("~/short/modules/acme"), "~/short/modules/acme", "короткий — без змін");
+  assert.equal(cutMid(undefined), "");
+  assert.equal(cutMid("y".repeat(TR_MAX + 1)).length, TR_MAX);
+  /* лише шлях йде з середини; решта полів — як було, із кінця */
+  const h = trustDialogHTML(base({ path: hundred, name: "n".repeat(100) }));
+  assert.ok(h.includes(`<code>${c}</code>`), "шлях у діалозі — cutMid");
+  assert.ok(h.includes(`«${"n".repeat(TR_MAX - 1)}…»`), "назва — зрізана з кінця");
 });
 
 test("повторне відкриття: рядок угорі «Тека змінилась…»", () => {
@@ -149,6 +190,16 @@ test("css: діалог ширший за типову форму, а прави
     assert.ok(sels.length, `для .${cls} нема правила`);
     for (const sel of sels) assert.match(sel, /^(\.tr|\.cv-ask--form) /, `«${sel}»: правило абзацу без префікса програє \`.cv-ask p\``);
   }
+});
+
+test("css (ревʼю Task 7): причина відмови темна (--g600, не --dim 2,25:1), довгі слова без пробілів переносяться, абзац попередження — --g900", () => {
+  const css = read("styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /\.tr-refused \.cn-why-detail\s*\{[^{}]*color:\s*var\(--g600\)/, "деталь відмови: `.cn-why-detail` бере --dim, на білому діалозі нечитабельно");
+  const wrap = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => /overflow-wrap:\s*anywhere/.test(m[2])).map((m) => m[1].split(",").map((x) => x.trim()));
+  for (const sel of [".tr .cv-form-h", ".tr-asks", ".tr .cv-form-err"]) {
+    assert.ok(wrap.some((list) => list.includes(sel)), `«${sel}»: довге слово без пробілів розпирає діалог — потрібен overflow-wrap:anywhere`);
+  }
+  assert.match(css, /\.cv-ask--form \.tr-warn p\s*\{[^{}]*color:\s*var\(--g900\)/, "без кольору абзац бере --g700 від `.cv-ask p`");
 });
 
 test("словник: кожен ключ, який кличе trust-view.js, є в обох мовах", () => {

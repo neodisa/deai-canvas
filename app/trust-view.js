@@ -23,12 +23,22 @@ import { roleTitle } from "./connections-view.js";
 
 /** Найдовший рядок із диска в діалозі. */
 export const TR_MAX = 80;
+/** Скільки імен прибраних файлів перелічує рядок «Прибрано»; решта — «і ще N» (їх може бути до 200). */
+export const TR_REMOVED_MAX = 10;
 /** Стеля запиту довіри: сервер чекає людину в системному вікні до 120 с (`module_trust.CONFIRM_TIMEOUT`). */
 export const TRUST_POST_TIMEOUT_MS = 150000;
 
 const cut = (s) => {
   const v = String(s ?? "");
   return v.length > TR_MAX ? `${v.slice(0, TR_MAX - 1)}…` : v;
+};
+/** Шлях — із СЕРЕДИНИ (голова, «…», хвіст): у шляху важливий кінець, тека модуля. Та сама формула, що в системного вікна
+ *  (`module_trust._clean(s, n=80, middle=True)`: `head = (n-1)//3`) — діалог і вікно мають показувати однаковий шлях. */
+export const cutMid = (s) => {
+  const v = String(s ?? "");
+  if (v.length <= TR_MAX) return v;
+  const head = Math.floor((TR_MAX - 1) / 3);
+  return `${v.slice(0, head)}…${v.slice(v.length - (TR_MAX - 1 - head))}`;
 };
 const list0 = (x) => (Array.isArray(x) ? x : []);
 
@@ -63,8 +73,11 @@ function filesHTML(d) {
       ? `<span class="tr-mark">${esc(t(f.change === "new" ? "trNew" : "trChanged"))}</span>` : "";
     return `<li><code>${esc(cut(f.path))}</code><span class="tr-size">${esc(sizeText(f.size))}</span>${m}</li>`;
   }).join("");
+  /* Імен — не більше TR_REMOVED_MAX: сервер віддає до 200 прибраних, а кожне до TR_MAX знаків. Повний лічильник — у шапці. */
+  const goneNames = removed.slice(0, TR_REMOVED_MAX).map((f) => cut(f.path));
+  if (removed.length > TR_REMOVED_MAX) goneNames.push(t("trRemovedMore", removed.length - TR_REMOVED_MAX));
   const gone = removed.length
-    ? `<p class="tr-removed">${esc(t("trRemoved", removed.map((f) => cut(f.path)).join(", ")))}</p>` : "";
+    ? `<p class="tr-removed">${esc(t("trRemoved", goneNames.join(", ")))}</p>` : "";
   return `<p class="tr-h3">${esc(head)}</p>`
     + `<ul class="tr-files" tabindex="0" aria-label="${esc(t("trFilesList"))}">${rows}</ul>${gone}`;
 }
@@ -73,7 +86,7 @@ function filesHTML(d) {
 export function trustDialogHTML(d) {
   const name = cut(d?.name || d?.id || "");
   const refused = d?.state === "refused";
-  const title = d?.state === "changed" ? t("trTitleNew", name) : t("trTitle", name);
+  const title = refused ? t("trTitleRefused", name) : (d?.state === "changed" ? t("trTitleNew", name) : t("trTitle", name));
   const roles = list0(d?.roles).map((r) => cut(roleTitle(r))).join(" · ");
   const meta = [d?.version ? `v${cut(d.version)}` : "", roles].filter(Boolean).join(" · ");
   const print = !refused && d?.hash ? ` · ${esc(t("trFingerprint", String(d.hash).slice(0, 12)))}` : "";
@@ -89,7 +102,7 @@ export function trustDialogHTML(d) {
     ${d?.reopened ? `<p class="tr-reopened" role="status">${esc(t("trReopened"))}</p>` : ""}
     <h2 class="cv-form-h" id="tr-h">${esc(title)}</h2>
     <p class="tr-meta">${esc(meta)}</p>
-    <p class="tr-path"><code>${esc(cut(d?.path))}</code>${print}</p>
+    <p class="tr-path"><code>${esc(cutMid(d?.path))}</code>${print}</p>
     ${body}
     <p class="tr-wait" data-tr-wait role="status" hidden>${esc(t("trWaiting"))}</p>
     <p class="cv-form-err" id="cv-form-err" role="alert" data-form-error hidden></p>
