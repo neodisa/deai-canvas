@@ -2139,6 +2139,37 @@ class TrustCoreTest(OwnEnv):
             dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
         self.assertEqual(cm.exception.code, 'role-taken')
 
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_a_link_alias_has_no_trust_of_its_own_and_revoke_leaves_the_target(self):
+        d = self.own()
+        self.trust()
+        os.symlink(d, os.path.join(self.sp['path'], 'modules', 'aaa'))
+        v = dm.trust_view(self.sp, 'aaa')
+        self.assertEqual((v['state'], v['record'], v['refused']['code']), ('refused', False, 'symlink'))
+        self.assertFalse(dm.revoke_trust(self.sp, 'aaa'))
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.trust, m.record), ('trusted', True), 'довіру acme не знято через аліас')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'aaa', 'a' * 64, 'uk')
+        self.assertEqual(cm.exception.code, 'module-refused')
+
+    def test_forget_own_during_a_load_keeps_that_load_out_of_the_cache(self):
+        """Повторна довіра, поки перше (збійне) завантаження ще в польоті: його результат не мусить пережити довіру."""
+        self.own(server=SLEEPY)                               # `SLEEPY` і ворота — з Task 3 (звір імена в цьому файлі)
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')
+        with mock.patch.object(dm, 'LOAD_TIMEOUT', 0.5):
+            t = threading.Thread(target=dm.catalog, args=(self.sp,))
+            t.start()
+            for _ in range(100):                              # дочекатись потоку завантаження
+                if any(x.name == 'deai-own-load-acme' for x in threading.enumerate()):
+                    break
+                time.sleep(0.01)
+            dm.forget_own(h)
+            t.join(5)
+        self.assertNotIn((mt.snapshot_dir(h), 'acme'), dm._OWN_CACHE)
+
     def test_retrust_forgets_a_cached_load_failure(self):
         h = self.view()['hash']
         with mock.patch.object(mt, 'ask', return_value='yes'):
@@ -2244,6 +2275,12 @@ def _holders(m, cat, space, explicit):
         return f'{sorted(set(m.roles) & _roles_of(oid, cat, explicit))[0]} is already provided by {oid}'
 ```
 
+3b′. Покоління кешу знімків (ревʼю Task 3): `forget_own` посеред завантаження інакше програє — збійне завантаження,
+що ще в польоті, допише себе в кеш ПІСЛЯ повторної довіри. Біля `_OWN_CACHE`: `_OWN_GEN = 0  # піднімає `forget_own``;
+у `forget_own` (під `_LOAD_LOCK`, перед чисткою) — `global _OWN_GEN; _OWN_GEN += 1`; у `_load_own` — у ПЕРШОМУ блоці
+`with _LOAD_LOCK:` запам'ятай `gen = _OWN_GEN`, а при записі в кеш (теж під `_LOAD_LOCK`) пиши лише `if _OWN_GEN == gen:`
+(результат усе одно повертається викликачу). Онови докстрінг `_load_own` одним реченням.
+
 3c. Перед `_provider_for`:
 
 ```python
@@ -2337,6 +2374,14 @@ def _own_or_404(space, mid):
     return cands[mid]
 
 
+def _is_alias(space, mid):
+    """Тека модуля — посилання (аліас): `key_for` бере `realpath`, тож її ключ — ключ ЦІЛІ, тобто чужий запис довіри."""
+    try:
+        return module_trust.is_link(os.lstat(os.path.join(_space_path(space), 'modules', mid)))
+    except OSError:                     # теки нема — запис за шляхом, «Забрати довіру» зниклої теки працює
+        return False
+
+
 def _trust_setting(s):
     v = {'key': s['key'], 'type': s['type'], 'label': s['label']}
     if s['type'] == 'secret':
@@ -2350,10 +2395,12 @@ def trust_view(space, mid):
     довіреного модуля `own_modules` вантажить хіба його ЗНІМОК — той, що й так працює)."""
     src = _own_or_404(space, mid)
     m = own_modules(space).get(mid)
-    try:
-        rec = module_trust.load_records().get(module_trust.key_for(_space_path(space), mid))
-    except module_trust.TrustUnreadable:
-        rec = None
+    rec = None
+    if m is not None and m.record:      # `m.record` уже знає про аліас (Task 3); нечитабельний trust.json дає False
+        try:
+            rec = module_trust.load_records().get(module_trust.key_for(_space_path(space), mid))
+        except module_trust.TrustUnreadable:
+            rec = None
     out = {'id': mid, 'name': m.name if m else mid, 'version': m.version if m else '',
            'roles': list(m.roles) if m else [], 'settings': [], 'path': module_trust.tilde(src),
            'state': m.trust if m else 'untrusted', 'record': rec is not None}
@@ -2430,6 +2477,8 @@ def revoke_trust(space, mid):
     _require_writable(space)
     if not isinstance(mid, str) or not ID_RE.fullmatch(mid):
         raise ModuleError('unknown-module', message=str(mid)[:60])
+    if _is_alias(space, mid):
+        return False                    # у аліаса свого запису нема; ключ збігся б із ключем цілі — чужу довіру не чіпаємо
     try:
         removed = module_trust.drop_record(module_trust.key_for(_space_path(space), mid))
     except module_trust.TrustUnreadable:
@@ -2461,6 +2510,9 @@ Expected: PASS.
 | `grant_trust`: `if answer != 'yes':` → `if False:` | `test_grant_maps_the_system_window` |
 | `grant_trust`: прибрати `forget_check(...)` | `test_grant_runs_the_snapshot_and_clears_the_last_check` |
 | `grant_trust`: прибрати `forget_own(sc.hash)` | `test_retrust_forgets_a_cached_load_failure` |
+| `revoke_trust`: прибрати `if _is_alias(...)` | `test_a_link_alias_has_no_trust_of_its_own_and_revoke_leaves_the_target` |
+| `trust_view`: запис без умови `m.record` | `test_a_link_alias_has_no_trust_of_its_own_and_revoke_leaves_the_target` |
+| `_load_own`: зберігати в кеш без звірки `_OWN_GEN` | `test_forget_own_during_a_load_keeps_that_load_out_of_the_cache` |
 
 - [ ] **Step 6: Коміт**
 
