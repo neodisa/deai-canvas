@@ -1593,6 +1593,19 @@ body.home-open .cv-notice{display:none!important}
 .cn-agent{display:flex;gap:10px;margin-top:30px;padding:14px 16px;border:1px dashed var(--line2);border-radius:var(--r-lg);
   background:var(--s1);color:var(--mid);font-size:12.5px;line-height:1.5}
 .cn-agent .ico{flex:none;margin-top:2px}
+/* Свої модулі простору (3c): пігулка «свій», бейдж «Потрібна довіра» (замок бурштиновий, як «чекає дії»), рядок довіри,
+   примітки під головою, речення для агента, «Забрати довіру» в панелі (текст світлий — `--bad` на `--s2` дає лише 4.1:1). */
+.cn-tag--own{border-color:var(--mid);color:var(--mid)}
+.cn-badge--untrusted{color:var(--hi)}
+.cn-badge--untrusted .ico{color:var(--open)}
+.cn-trust{display:flex;align-items:flex-start;gap:6px;margin:0;font-size:12px;line-height:1.4;color:var(--mid)}
+.cn-trust .ico{flex:none;margin-top:1px;color:var(--open)}
+.cn-notes{display:flex;flex-direction:column;gap:6px;margin:12px 0 0;padding:0;list-style:none}
+.cn-note{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;line-height:1.4;color:var(--mid);overflow-wrap:anywhere}
+.cn-note .ico{flex:none;margin-top:1px;color:var(--open)}
+.cn-agent-own{display:block;margin-top:8px;color:var(--mid)}
+.cn-dr-untrust{border-color:var(--bad);color:var(--hi)}
+.cn-dr-untrust .ico{color:var(--bad)}
 .cn-code{display:inline-block;margin:6px 6px 0 0;padding:2px 6px;border-radius:var(--r-sm);background:var(--s3);color:var(--hi);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
 /* Бічна панель: окремий вузол `#cn-drawer`, не частина `#tasks-home`. Під смугою (`--h-bar`), над оверлеєм

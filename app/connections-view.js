@@ -2,11 +2,12 @@
  * Розмітка екрана «Підключення» (Deai 0.5.0, етап 3a). Чисті будівельники рядків — як `tasks-home.js`: ні DOM, ні
  * fetch. Логіка (що показати) — у `connections-model.js`; тут лише «стан → HTML» і слова (`t()`).
  *
- *   connPageHTML(v)  v = {space, list, failed, busy}
+ *   connPageHTML(v)  v = {space, list, notes, failed, busy}
  *                     space  — запис `/api/spaces` поточного простору ({id, name, path, integrations, capabilities});
  *                     list   — записи `GET /api/modules` або `null` (вантажиться);
+ *                     notes  — примітки своїх модулів (`GET /api/modules`, `[{folder, code}]`), може не бути;
  *                     failed — `{code, message}`, коли список не прочитався;
- *                     busy   — Map id → 'check'|'disable'|'save': дія в польоті (`'save'` — запис із панелі).
+ *                     busy   — Map id → 'check'|'disable'|'save'|'trust': дія в польоті (`'save'` — запис із панелі).
  *   cardHTML(e, busy)  одна картка модуля; nowHTML(role, v)  рядок «Зараз» секції.
  *   drawerHTML(d)    d = {entry, mode: 'enable'|'edit', fields, form, busy: 'save'|'check'|false, result, errors, spaceName};
  *                     busy   — `'save'` (запис: «Зберігаю й перевіряю…»), `'check'` («Перевірити» каже «Перевіряю…»)
@@ -31,7 +32,7 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import {
-  DETAIL_MAX, builtinText, canErase, cardView, groupModules, providerLine, roleIcon, roleKeys, whyOf,
+  DETAIL_MAX, builtinText, canErase, cardView, groupModules, isOwn, noteView, providerLine, roleIcon, roleKeys, trustLine, whyOf,
 } from "./connections-model.js";
 
 /** Назва модуля: вбудований — мовою інтерфейсу, інший — `name` маніфесту як є. */
@@ -60,7 +61,7 @@ export const rolesLine = (e) => (Array.isArray(e?.roles) ? e.roles : []).map(rol
 
 const BADGES = {
   ok: ["cnBadgeOk", "check"], error: ["cnBadgeError", "warn"], unchecked: ["cnBadgeUnchecked", null],
-  off: ["cnBadgeOff", null], missing: ["cnBadgeMissing", "warn"],
+  off: ["cnBadgeOff", null], missing: ["cnBadgeMissing", "warn"], untrusted: ["cnBadgeUntrusted", "lock"],
 };
 export const badgeHTML = (kind) => {
   const [key, icon] = BADGES[kind];
@@ -73,6 +74,8 @@ const ACTIONS = {
   configure: ["cnConfigure", "pencil", "ctl ctl--out"],
   check: ["cnCheck", "refresh", "ctl"],
   disable: ["cnDisable", null, "ctl"],
+  trust: ["cnTrust", "lock", "ctl ctl--out"],
+  trustinfo: ["cnTrustInfo", "help", "ctl"],
 };
 
 const detailHTML = (d) => (d ? `<span class="cn-why-detail">${esc(d)}</span>` : "");
@@ -81,6 +84,22 @@ export function whyHTML(e) {
   const w = whyOf(e);
   if (!w) return "";
   return `<div class="cn-why">${ico("warn", 13)}<span>${esc(t(w.key))}${detailHTML(w.detail)}</span></div>`;
+}
+
+/** Пігулка «свій» (свій модуль простору; підказка — його тека в просторі). */
+export const ownTagHTML = (e) => (isOwn(e)
+  ? `<span class="cn-tag cn-tag--own" title="${esc(String(e.source || ""))}">${esc(t("cnCustom"))}</span>` : "");
+
+/** Текст рядка довіри (`trustLine` моделі) мовою інтерфейсу або `""`. Спільний з кроком 2 майстра. */
+export function trustLineText(e) {
+  const l = trustLine(e);
+  return l ? (l.why ? t(l.key, t(l.why)) : t(l.key)) : "";
+}
+
+/** Рядок довіри під описом картки або `""`. */
+export function trustLineHTML(e) {
+  const s = trustLineText(e);
+  return s ? `<p class="cn-trust">${ico("lock", 13)}<span>${esc(s)}</span></p>` : "";
 }
 
 /** Картка модуля. `busy` — Map id → дія в польоті: її кнопки вимкнені, «Перевірити» каже «Перевіряю…». */
@@ -98,8 +117,8 @@ export function cardHTML(e, busy) {
   return `<div class="cn-card" data-id="${esc(e.id)}">
     <div class="cn-card-top"><span class="cn-ic">${ico(roleIcon(e.roles?.[0]))}</span>
       <div class="cn-card-name"><b>${esc(modName(e))}</b>${roles ? `<span class="cn-card-role">${esc(roles)}</span>` : ""}</div>
-      ${v.implicit ? `<span class="cn-tag">${esc(t("cnImplicit"))}</span>` : ""}${badgeHTML(v.badge)}</div>
-    ${desc ? `<p class="cn-card-desc">${esc(t(desc))}</p>` : ""}
+      ${v.implicit ? `<span class="cn-tag">${esc(t("cnImplicit"))}</span>` : ""}${ownTagHTML(e)}${badgeHTML(v.badge)}</div>
+    ${desc ? `<p class="cn-card-desc">${esc(t(desc))}</p>` : ""}${trustLineHTML(e)}
     ${v.why ? whyHTML(e) : ""}
     <div class="cn-card-acts">${acts}</div></div>`;
 }
@@ -114,8 +133,9 @@ export function nowHTML(role, v) {
   if (!p) return "";
   const txt = p.kind === "legacy" ? t("cnNowLegacy")
     : p.kind === "error" ? t("cnNowError")
-      : p.kind === "none" ? (p.noneKey ? t("cnNowNone", t(p.noneKey)) : t("cnNowNobody"))
-        : t("cnNow", p.entry ? modName(p.entry) : p.id);
+      : p.kind === "waiting" ? t("cnNowWaiting", modName(p.entry))
+        : p.kind === "none" ? (p.noneKey ? t("cnNowNone", t(p.noneKey)) : t("cnNowNobody"))
+          : t("cnNow", p.entry ? modName(p.entry) : p.id);
   return `<span class="cn-now">${esc(txt)}</span>`;
 }
 
@@ -130,7 +150,16 @@ function sectionHTML(s, i, v) {
 const agentHTML = (sp) => `<div class="cn-agent">${ico("task")}<div><b>${esc(t("cnAgentTitle"))}</b> ${esc(t("cnAgentText"))}
     <code class="cn-code">GET /api/modules?space=${esc(encodeURIComponent(sp.id))}</code>
     <code class="cn-code">POST /api/module-enable {space: "${esc(sp.id)}", id, settings, secrets, replace}</code>
-    <code class="cn-code">POST /api/module-settings · /api/module-check · /api/module-disable</code></div></div>`;
+    <code class="cn-code">POST /api/module-settings · /api/module-check · /api/module-disable</code>
+    <span class="cn-agent-own">${esc(t("cnAgentOwn"))}</span></div></div>`;
+
+/** Примітки своїх модулів (`notes` відповіді) рядками під головою; нема — `""`. */
+function notesHTML(notes) {
+  const list = noteView(notes);
+  if (!list.length) return "";
+  return `<ul class="cn-notes">${list.map((n) => `<li class="cn-note">${ico("warn", 13)}`
+    + `<span>${esc(t(n.key, n.folder))}</span></li>`).join("")}</ul>`;
+}
 
 /** Сторінка «Підключення». Простору нема — порожньо (входів тоді нема, `app.js` сюди не пускає). */
 export function connPageHTML(v) {
@@ -154,7 +183,7 @@ export function connPageHTML(v) {
     ? `<section class="cn-sec" aria-labelledby="cn-sec-miss"><div class="cn-sec-head"><h2 class="cn-sec-h" id="cn-sec-miss">`
       + `${esc(t("cnMissingSec"))}</h2></div><div class="cn-grid">${missing.map((e) => cardHTML(e, v.busy)).join("")}</div></section>`
     : "";
-  return wrap(`${sections.map((s, i) => sectionHTML(s, i, v)).join("")}${miss}${agentHTML(sp)}`);
+  return wrap(`${notesHTML(v.notes)}${sections.map((s, i) => sectionHTML(s, i, v)).join("")}${miss}${agentHTML(sp)}`);
 }
 
 /* Стан секрету за `set` (`true|false|null`) → ключ словника. Не таблицею з ключами «true»/«null»: `set` — поле даних. */
@@ -261,7 +290,8 @@ export function drawerHTML(d) {
     + `<span class="cn-card-role">${esc([rolesLine(e), d.spaceName].filter(Boolean).join(" · "))}</span></div>
       <button type="button" class="ctl ctl--icon" data-cn-dr="close" aria-label="${esc(t("cnClose"))}" title="${esc(t("cnClose"))}">${ico("x")}</button></div>
     <div class="cn-dr-body">${desc ? `<p class="cn-card-desc">${esc(t(desc))}</p>` : ""}${body}${resultHTML(d.result)}</div>
-    <div class="cn-dr-foot">${d.mode === "edit"
+    <div class="cn-dr-foot">${isOwn(e) && e.record === true
+      ? `<button type="button" class="ctl ctl--out cn-dr-untrust" data-cn-dr="untrust"${d.busy ? " disabled" : ""}>${ico("trash")}${esc(t("cnUntrust"))}</button>` : ""}${d.mode === "edit"
       ? `<button type="button" class="ctl ctl--out" data-cn-dr="check"${d.busy ? " disabled" : ""}>${ico("refresh")}${esc(checkLabel)}</button>` : ""}
       <span class="cn-grow"></span>
       <button type="submit" class="ctl ctl--pri" data-cn-dr="submit"${d.busy ? " disabled" : ""}>${esc(primary)}</button></div></form>`;

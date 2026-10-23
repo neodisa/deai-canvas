@@ -183,9 +183,10 @@ let homeOpen = false;
    палітра в стані `homeOpen` — спільні. */
 let homePage = 'tasks';
 /* Стан сторінки «Підключення»: простір, чий список показано (знімок на момент запиту — кожен запис іде САМЕ туди),
-   записи `GET /api/modules` (`null` — вантажиться), збій читання і дії в польоті (id → 'check'|'disable'|'save'). `seq`
-   відкидає відповіді, що прийшли після виходу зі сторінки чи після новішого запиту. */
-const connState = { spaceId: null, list: null, failed: null, busy: new Map(), seq: 0 };
+   записи `GET /api/modules` (`null` — вантажиться), `notes` — примітки своїх модулів простору (3c, `[{folder, code}]`),
+   збій читання і дії в польоті (id → 'check'|'disable'|'save'|'trust'). `seq` відкидає відповіді, що прийшли після виходу
+   зі сторінки чи після новішого запиту. */
+const connState = { spaceId: null, list: null, notes: [], failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
 /* Бічна панель «Підключення» (Task 7): `null` — закрита. Оголошено ТУТ, серед стану модуля, а не біля функцій панелі:
@@ -2636,7 +2637,7 @@ const connOpen = () => homeOpen && homePage === 'conn';
 const connSpace = () => (connState.spaceId == null
   ? currentSpace(spacesResp)
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
-const connView = () => ({ space: connSpace(), list: connState.list, failed: connState.failed, busy: connState.busy });
+const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy });
 
 /** Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). */
 function enterConnections() {
@@ -2662,13 +2663,14 @@ async function loadConn({ spaces = true } = {}) {
     /* Панель, відкрита для іншого простору, не лишається: людина свідомо перейшла (питання не треба), а запис із неї
        пішов би в простір, якого вона вже не бачить. */
     closeCnDrawer({ focus: false });
-    connState.spaceId = sp.id; connState.list = null; connState.failed = null; connState.busy.clear();
+    connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.failed = null; connState.busy.clear();
     paintHome();
   }
   try {
     const r = await api(`/api/modules?space=${encodeURIComponent(sp.id)}`);
     if (seq !== connState.seq || !connOpen()) return;
     connState.list = Array.isArray(r?.modules) ? r.modules : [];
+    connState.notes = Array.isArray(r?.notes) ? r.notes : [];
     connState.failed = null;
   } catch (e) {
     if (seq !== connState.seq || !connOpen()) return;

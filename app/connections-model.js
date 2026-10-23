@@ -5,6 +5,8 @@
  *
  * Вхід — записи `GET /api/modules` (`{id, name, roles, enabled, implicit, status, settings[], last_check?, error?}`)
  * і `capabilities` простору з `/api/spaces` (`{publish, comments, tokens[, error]}`).
+ * Свої модулі простору (3c) мають у записі ще `custom: true`, `trust` (`untrusted|trusted|changed|refused`), `record`,
+ * `runs` (чи виконується тут їхній код), `source`, `trust_error?`; `GET /api/modules` може нести `notes` (`[{folder, code}]`).
  *
  * ⛔ Ключі з даних (роль, id модуля, ключ налаштування) НІКОЛИ не індексують звичайний обʼєкт без перевірки власної
  * властивості: роль `__proto__` чи `constructor` інакше дістала б щось із прототипу. Тому `has()` скрізь, а мапи
@@ -43,6 +45,48 @@ const BUILTIN_TEXT = {
 /** Ключі словника вбудованого модуля (`name`, `desc`, `fields{ключ: ключ словника}`) або `null`. */
 export const builtinText = (id) => get(BUILTIN_TEXT, id) ?? null;
 
+/* ── свої модулі простору (етап 3c) ───────────────────────────────────────────────────────────────── */
+
+/** Свій модуль простору: запис `GET /api/modules` з `custom: true` (вбудовані цього поля не мають). */
+export const isOwn = (e) => e?.custom === true;
+/** Код свого модуля виконується тут (робочий довірений знімок): `runs: true`. Недовірений і `refused` без знімка — ні. */
+export const ownRuns = (e) => isOwn(e) && e.runs === true;
+
+const TRUST_WHY = new Map([
+  ["symlink", "trWhySymlink"], ["hardlink", "trWhyHardlink"], ["special-file", "trWhySpecial"],
+  ["too-many-files", "trWhyTooMany"], ["too-big", "trWhyTooBig"], ["too-deep", "trWhyTooDeep"],
+  ["bad-name", "trWhyBadName"], ["unreadable", "trWhyUnreadable"], ["unstable", "trWhyUnstable"],
+  ["bad-manifest", "trWhyBadManifest"], ["snapshot-damaged", "trWhyDamaged"], ["trust-unreadable", "trWhyTrustFile"],
+]);
+/** Ключ словника причини `refused`/`untrusted` (код сервера `trust_error`, `refused.code`); невідомий — `trWhyOther`. */
+export const trustWhyKey = (code) => TRUST_WHY.get(code) ?? "trWhyOther";
+
+/**
+ * Рядок довіри під описом картки свого модуля: `{key, why}` (`why` — ключ причини для шаблону або `null`) чи `null`.
+ * `changed` — у теці є нова версія; `refused` зі знімком — нова версія не годиться, працює попередня; недовірений з
+ * пошкодженим знімком — довіритись знову; файл довіри не читається — сказати це. `refused` без знімка — не тут: його
+ * причина — у `whyOf` (картка без робочого коду).
+ */
+export function trustLine(e) {
+  if (!isOwn(e)) return null;
+  if (e.trust === "changed") return { key: "cnTrustChanged", why: null };
+  if (e.trust === "refused" && ownRuns(e)) return { key: "cnTrustRefusedNew", why: trustWhyKey(e.trust_error) };
+  if (e.trust_error === "snapshot-damaged") return { key: "cnTrustDamaged", why: null };
+  if (e.trust_error === "trust-unreadable") return { key: "cnRefTrustUnreadable", why: null };
+  return null;
+}
+
+const NOTE_KEYS = new Map([
+  ["id-taken", "cnNoteIdTaken"], ["too-many-modules", "cnNoteTooMany"], ["modules-link", "cnNoteLink"],
+  ["modules-unreadable", "cnNoteUnreadable"],
+]);
+/** Примітки `GET /api/modules` (`[{folder, code}]`) → `[{key, folder}]`; невідомий код — `cnNoteOther`, сміття — геть. */
+export function noteView(notes) {
+  return (Array.isArray(notes) ? notes : [])
+    .filter((n) => n && typeof n.folder === "string" && typeof n.code === "string")
+    .map((n) => ({ key: NOTE_KEYS.get(n.code) ?? "cnNoteOther", folder: n.folder }));
+}
+
 /**
  * Секції сторінки: `{sections: [{role, modules}], missing}`. Модуль стоїть у секції ПЕРШОЇ ролі (кілька ролей
  * перелічує картка); `status: missing` — окремо. Порядок усередині секції — як у списку сервера (за абеткою id).
@@ -64,7 +108,8 @@ export function groupModules(list) {
 
 /**
  * Рядок «Зараз» ролі з `capabilities` простору: `{kind: 'module', id, entry|null}`, `{kind: 'legacy'}`,
- * `{kind: 'none', noneKey}`, `{kind: 'error'}`; `null` — роль, якої `capabilities` не знає (нема що казати).
+ * `{kind: 'waiting', id, entry}`, `{kind: 'none', noneKey}`, `{kind: 'error'}`; `null` — роль, якої `capabilities` не
+ * знає (нема що казати).
  *
  * ⛔ `capabilities.error` (space.json не читається) — окремий стан і перевіряється РАНІШЕ за читання ролі: тоді решта
  * `capabilities` нічого не варта (стара чи порожня), і показувати з неї «Зараз працює …» було б неправдою.
@@ -75,17 +120,40 @@ export function providerLine(role, caps, list) {
   if (role === "error" || !has(caps, role)) return null;
   const v = caps[role];
   if (v === "legacy") return { kind: "legacy" };
-  if (typeof v !== "string" || !v) return { kind: "none", noneKey: roleKeys(role)?.none ?? null };
+  if (typeof v !== "string" || !v) {
+    /* Роль «на папері» за увімкненим своїм модулем, що тут не працює (3c): сервер віддає `null` без `error`
+       (поправка 11), але це не «нікого» — роль чекає довіри. */
+    const waiting = (Array.isArray(list) ? list : []).find((x) => x && x.enabled === true && isOwn(x) && !ownRuns(x)
+      && Array.isArray(x.roles) && x.roles.includes(role));
+    if (waiting) return { kind: "waiting", id: waiting.id, entry: waiting };
+    return { kind: "none", noneKey: roleKeys(role)?.none ?? null };
+  }
   const entry = (Array.isArray(list) ? list : []).find((x) => x && x.id === v) ?? null;
   return { kind: "module", id: v, entry };
 }
 
-/** Картка: бейдж (`missing|off|ok|unchecked|error`), дії (`enable|configure|check|disable`), чи показувати причину. */
+/**
+ * Картка: бейдж (`missing|off|ok|unchecked|error|untrusted`), дії (`enable|configure|check|disable|trust|trustinfo`), чи
+ * показувати причину. Вбудований — рівно як до 3c. Свій модуль без робочого коду: недовірений — «Потрібна довіра» і
+ * «Довіритись…», `refused` без знімка — «Помилка» і «Чому не можна…» (+ «Вимкнути», коли ввімкнений). Свій зі знімком —
+ * як вбудований, плюс «Довіритись…» для `changed` і «Чому не можна…» для `refused` (нова версія не годиться).
+ */
 export function cardView(e) {
   if (e?.status === "missing") return { badge: "missing", actions: ["disable"], why: true, implicit: false };
-  if (!e?.enabled) return { badge: "off", actions: ["enable"], why: false, implicit: false };
-  const badge = e.status === "ok" ? "ok" : e.status === "error" ? "error" : "unchecked";
-  return { badge, actions: ["configure", "check", "disable"], why: badge === "error", implicit: e.implicit === true };
+  if (isOwn(e) && !ownRuns(e)) {
+    const off = e.enabled === true ? ["disable"] : [];
+    if (e.trust === "refused") return { badge: "error", actions: ["trustinfo", ...off], why: true, implicit: false };
+    return { badge: "untrusted", actions: ["trust", ...off], why: e.enabled === true, implicit: false };
+  }
+  let v;
+  if (!e?.enabled) v = { badge: "off", actions: ["enable"], why: false, implicit: false };
+  else {
+    const badge = e.status === "ok" ? "ok" : e.status === "error" ? "error" : "unchecked";
+    v = { badge, actions: ["configure", "check", "disable"], why: badge === "error", implicit: e.implicit === true };
+  }
+  if (isOwn(e) && e.trust === "changed") v.actions.push("trust");
+  else if (isOwn(e) && e.trust === "refused") v.actions.push("trustinfo");
+  return v;
 }
 
 /** Найдовша деталь у розмітці: текст модуля чи сервера може бути будь-якої довжини. */
@@ -123,6 +191,11 @@ export function verdictText(v) {
 export function whyOf(e) {
   if (!e) return null;
   if (e.status === "missing") return { key: "cnWhyMissing", detail: "" };
+  if (isOwn(e) && !ownRuns(e)) {
+    /* Свій без робочого коду: `refused` — причина й деталь сервера; недовірений — лише коли ввімкнений (роль не працює). */
+    if (e.trust === "refused") return { key: trustWhyKey(e.trust_error), detail: clip(e.error) };
+    return e.enabled === true ? { key: "cnTrustNeededWhy", detail: "" } : null;
+  }
   if (e.status !== "error") return null;
   const lc = e.last_check;
   /* Перевірка, що повернула `ok:false` БЕЗ `error`, лишає на сервері `error: 'check failed'` — її деталь теж ТА САМА. */
@@ -134,6 +207,9 @@ const REFUSAL_KEYS = new Map([
   ["role-taken", "cnRefRoleTaken"], ["bad-settings", "cnRefBadSettings"], ["unknown-module", "cnRefUnknownModule"],
   ["unknown-space", "cnRefUnknownSpace"], ["space-json-unreadable", "cnRefSpaceJson"], ["spaces-off", "cnRefSpacesOff"],
   ["unwritable", "cnRefUnwritable"],
+  ["module-untrusted", "cnRefUntrusted"], ["module-changed", "cnRefChanged"], ["module-refused", "cnRefRefused"],
+  ["trust-needs-ui", "cnRefNeedsUi"], ["trust-declined", "cnRefDeclined"], ["trust-no-confirm", "cnRefNoConfirm"],
+  ["trust-busy", "cnRefBusy"], ["trust-unreadable", "cnRefTrustUnreadable"],
 ]);
 
 /**

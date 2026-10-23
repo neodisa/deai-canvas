@@ -699,6 +699,7 @@ const PUBLISH_ERR_KEYS = new Map([
   ["publish-busy", "publishErrBusy"],
   ["bad-task-id", "publishErrBadTaskId"],
   ["module-error", "publishErrModule"],
+  ["module-untrusted", "publishErrUntrusted"],
   /* Код `vercel-auth` — контракт саме Vercel-модуля (ядро знає лише його статус), тож слово «Vercel» у тексті відмови доречне
      без звірки з постачальником простору; плашка ж і тост, які буває показує ЛЮБИЙ url-модуль, називають Vercel лише тоді,
      коли постачальник — `vercel-publish` (`publishReaction`, `isVercelPublish`). */

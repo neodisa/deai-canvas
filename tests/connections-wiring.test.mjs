@@ -298,7 +298,15 @@ test("loadConn: `spaces` вирішує, чи перечитувати прос�
   const b = fnc("loadConn");
   assert.match(b, /if \(spaces\) \{\s*await loadSpaces\(\);/);
   assert.match(b, /const sp = currentSpace\(spacesResp\);\s*if \(!sp\) \{ enterHome\(\{ page: 'tasks' \}\); return; \}/);
-  assert.match(b, /if \(sp\.id !== connState\.spaceId\) \{[\s\S]*?closeCnDrawer\(\{ focus: false \}\);\s*connState\.spaceId = sp\.id; connState\.list = null; connState\.failed = null; connState\.busy\.clear\(\);\s*paintHome\(\);\s*\}/);
+  assert.match(b, /if \(sp\.id !== connState\.spaceId\) \{[\s\S]*?closeCnDrawer\(\{ focus: false \}\);\s*connState\.spaceId = sp\.id; connState\.list = null; connState\.notes = \[\]; connState\.failed = null; connState\.busy\.clear\(\);\s*paintHome\(\);\s*\}/);
+});
+
+test("3c: примітки своїх модулів — зі списку модулів у стан сторінки; зміна простору їх чистить", () => {
+  assert.match(src, /const connState = \{ spaceId: null, list: null, notes: \[\], failed: null, busy: new Map\(\), seq: 0 \};/);
+  const b = fnc("loadConn");
+  assert.match(b, /connState\.notes = Array\.isArray\(r\?\.notes\) \? r\.notes : \[\];/);
+  assert.match(b, /connState\.list = null; connState\.notes = \[\];/, "інший простір — без чужих приміток");
+  assert.match(src, /const connView = \(\) => \(\{ space: connSpace\(\), list: connState\.list, notes: connState\.notes,/);
 });
 
 test("connAction: дія над модулем, що вже в польоті, ігнорується; кожна дія веде у свою функцію", () => {
