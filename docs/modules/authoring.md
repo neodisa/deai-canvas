@@ -8,7 +8,8 @@ trust it.
 **Коротко (uk).** Свій модуль — тека `<простір>/modules/<id>/` з `module.json` і `server.py`. Канвас його бачить одразу,
 але код не виконує, доки людина не довіриться: «Підключення» → «Довіритись…» → діалог із файлами → «Довіряю» → системне
 вікно ОС. Довіра — до точних байтів: канвас копіює їх у знімок `~/.deai/trusted/<відбиток>/` і виконує лише знімок. Зміна
-теки не діє до повторної довіри. Агент може написати модуль, але довіритись — ні.
+теки не діє до повторної довіри. Агент може написати модуль, але довіритись — ні; межа — код, що приходить крізь теку
+простору, git і сторінки макетів, а не локальний процес із вашими правами (він може сам правити `~/.deai/trust.json`).
 
 ## 1. The folder
 
@@ -85,7 +86,9 @@ classes cannot be pickled; functions and plain dicts are enough.
    a person at the computer can answer it: a script on a page and an agent without control of the screen cannot.
    After «No», asking again for the same version within 30 s is refused without a window.
 3. The canvas copies exactly the bytes you saw into `~/.deai/trusted/<fingerprint>/` (read-only) and runs only that
-   snapshot. Write the module's state into the space folder or your own cache, never next to `__file__`.
+   snapshot. Write the module's state into the space folder or your own cache, never next to `__file__`. The record is
+   keyed by `realpath(<space>/modules/<id>)` on this computer: moving or renaming the space folder (or the module's
+   folder) is a new trust, and the old record and its snapshot stay behind.
 4. Editing the folder does not change what runs: the card says «The folder has changes» and the previous version keeps
    working until you trust the new one. A new version that breaks a folder rule cannot be trusted; the old one keeps
    running.
@@ -99,7 +102,7 @@ classes cannot be pickled; functions and plain dicts are enough.
    the new one on the Connections screen.
 
 The module's top level gets **5 s** to load; a module that hangs is shown as broken (its thread lives until the server
-restarts). Browser code of a trusted `comments` module runs in canvas pages and published previews with the canvas's
+restarts, and if it loops it may slow the canvas down). Browser code of a trusted `comments` module runs in canvas pages and published previews with the canvas's
 own access — that is part of what you trust.
 
 ## 5. The agent
@@ -109,6 +112,10 @@ An agent can write the folder, read `GET /api/modules?space=<id>` and `GET /api/
 trust: `POST /api/module-trust` needs the canvas page in a browser (`Origin` and `Sec-Fetch-Site: same-origin`; a script
 or `curl` gets `403 trust-needs-ui`) and then the system window. It may revoke trust (`POST /api/module-untrust {space, id}`).
 Ask the person to trust the module.
+
+An agent that runs as you can still edit `~/.deai/trust.json` and `~/.deai/trusted/` or drive the system window itself —
+that is outside the boundary. Trust protects against code that arrives through the space folder, git and mockup pages,
+not against a local process with your rights.
 
 ## 6. Trying it locally
 

@@ -17,9 +17,10 @@ their code runs only after a person trusts exactly the bytes they saw. Design:
   untrusted module is listed from its manifest and never executed; a trusted one runs from a read-only snapshot
   (`<DEAI_HOME>/trusted/<fingerprint>/`) with a 5 s load timeout. Folder rules (200 files, 5 MiB, depth 8, no links
   or special files, safe names) and notes for skipped folders (`id-taken`, `too-many-modules`, `modules-link`,
-  `modules-unreadable`). In `GET /api/modules` an own module carries `trust` (`untrusted`, `trusted`, `changed`,
-  `refused`), `record`, `runs` and `source`, and `notes` lists the skipped folders; the entry of a built-in module and
-  the answer for a space without own modules are byte-for-byte as before. New core error codes: `module-untrusted`,
+  `modules-unreadable`). In `GET /api/modules` an own module carries `custom: true`, `builtin: false`, `trust` (`untrusted`,
+  `trusted`, `changed`, `refused`), `record`, `runs`, `source` and, when there is a reason, `trust_error`, and `notes`
+  lists the skipped folders; the entry of a built-in module and the answer for a space without own modules are
+  byte-for-byte as before. New core error codes: `module-untrusted`,
   `module-changed`, `module-refused`, `trust-needs-ui`, `trust-declined`, `trust-no-confirm`, `trust-busy`,
   `trust-unreadable`.
 - **Trust** (`app/module_trust.py`): scanner and fingerprint, `trust.json` records, snapshots, and the operating
@@ -58,11 +59,26 @@ their code runs only after a person trusts exactly the bytes they saw. Design:
 - `DEAI_TRUST_CONFIRM` (`yes` / `no` / `unavailable`) is a test seam that answers the system window; it works only
   with a non-default `DEAI_HOME` (any other value, or the default home, means the real window), and the server prints
   a warning when it is on.
-- Known limits: no sandbox (a trusted module runs with your permissions); the Windows and Linux system windows are
-  covered by command-building unit tests only (the macOS window was checked by hand); Safari older than 16.4 does not
-  send `Sec-Fetch-Site`; snapshots replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in
-  `<DEAI_HOME>/trusted/`); a module that hangs at load leaves a thread until the server restarts; on Windows the
-  read-only modes of snapshots are not set (as for `secrets.json`).
+
+### Known limits
+
+- No sandbox: a trusted module runs with your permissions.
+- An agent that runs as you can still edit `~/.deai/trust.json` and `~/.deai/trusted/` or drive the system window itself
+  — that is outside the boundary. Trust protects against code that arrives through the space folder, git and mockup
+  pages, not against a local process with your rights.
+- The Windows and Linux system windows are covered by command-building unit tests only; the macOS window was checked by
+  hand (it was shown once and closed by itself with the answer «no», and quotes and a backslash in the module name
+  arrived as they are).
+- If an own module was turned on by hand in `space.json` (for example a colleague committed it) while another module
+  still holds its role — for `publish`, typically the implicit «Publish to a folder» (`static-publish`) of a space
+  without integrations — «Trust…» answers `role-taken` (for example `publish is already provided by static-publish`)
+  before the system window opens. Turn the other card off first. Turning a module on through «Connections» never
+  creates this state.
+- A trusted module that hangs or loops at the top level is shown as broken after 5 s, but its thread lives until the
+  server restarts and may slow the canvas down.
+- Safari older than 16.4 does not send `Sec-Fetch-Site`.
+- Snapshots replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in `<DEAI_HOME>/trusted/`).
+- On Windows the read-only modes of snapshots are not set (as for `secrets.json`).
 
 ### Tests
 

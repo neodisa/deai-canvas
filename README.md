@@ -116,7 +116,9 @@ lists its files and settings, and «Trust» asks the operating system to confirm
 a read-only snapshot of exactly those bytes (`~/.deai/trusted/`); a later edit of the folder waits for a new trust
 («The folder has changes»), and «Revoke trust» stops it without touching `space.json`. A module a colleague turned on
 in `space.json` stays «on, but not trusted» on your computer until you trust it. An agent can write and connect an own
-module but cannot trust it — ask the person.
+module but cannot trust it — ask the person. Trust guards against code that arrives through the space
+folder, git and mockup pages, not against a local process with your rights: an agent that runs as you could still edit
+`~/.deai/trust.json` or drive the system window itself (see `docs/modules/authoring.md`, *The agent*).
 
 **Through the agent or a script.** Everything the screen does is the HTTP API (see *Module
 API* below), so an agent can connect modules for you, and the screen shows the routes of
@@ -213,8 +215,8 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 
 | Call | |
 |---|---|
-| `GET /api/modules?space=<id>` | catalog with status and settings; secrets only as `set: true\|false`; the space's own modules are listed too (with `trust`, `runs`, `source`), and `notes` names the folders of `modules/` that were skipped |
-| `GET /api/module-trust?space=<id>&id=<module>` | what the trust dialog shows for an own module: files with sizes, the fingerprint, changes since the last trust, or the reason it cannot be trusted; runs nothing |
+| `GET /api/modules?space=<id>` | catalog with status and settings; secrets only as `set: true\|false`; the space's own modules are listed too (with `custom: true`, `builtin: false`, `trust`, `record`, `runs`, `source` and, when there is a reason, `trust_error`), and `notes` names the folders of `modules/` that were skipped |
+| `GET /api/module-trust?space=<id>&id=<module>` | what the trust dialog shows for an own module: files with sizes, the fingerprint, changes since the last trust, or the reason it cannot be trusted; never runs the folder's code (for a module that is already trusted, only its own snapshot is loaded) |
 | `POST /api/module-trust` `{space, id, hash, lang?}` | trust an own module — exactly the version with this `hash`. Only from the canvas page in a browser (`Origin` and `Sec-Fetch-Site: same-origin`; otherwise `403 trust-needs-ui`), and only after the operating system's window confirms |
 | `POST /api/module-untrust` `{space, id}` | revoke trust; `space.json` is not touched |
 | `POST /api/module-enable` `{space?, id, settings?, secrets?, replace?}` | enable and configure; answers `{ok, module, check[, replaced]}` — `ok` means «processed», `check.ok` is the verdict; `replace: true` takes the module's roles from their current holders in the same write (their settings stay) and lists them in `replaced`; refused with `module-error` / `bad-manifest` if the module did not load, `400 bad-settings` if `replace` is not a boolean |
