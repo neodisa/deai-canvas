@@ -7,20 +7,27 @@
  *
  * Сценарії: 1 — повний шлях (недовірений → діалог → довіра → підключення → правка на диску → стара версія працює →
  * повторна довіра → «Забрати довіру»); 2 — системне вікно відмовило; 3 — «колега закомітив» (увімкнений, але не довірений);
- * 4 — майстер: «Довіритись…» на кроці 2; 5 — запит без заголовків браузера (і з підробленим `Origin`) → 403; 6 — тека змінилась, поки діалог
+ * 4 — майстер: «Довіритись…» на кроці 2; 5 — запит без заголовків браузера (і з підробленим `Origin`, і `Sec-Fetch-Site` без `Origin`) → 403; 6 — тека змінилась, поки діалог
  * відкритий; 7 — «Забрати довіру» з діалогу; 8 — тека, якій не можна довіритись (символьне посилання); 9 — майстер:
  * колега вже ввімкнув недовірений модуль у `space.json` теки.
  *
  * Мапа «сценарій → запобіжник», знята мутаційно (одна мутація — один рядок застосунку, файл відновлено побайтно):
  *   1 — гілка `paper` у `capabilities` (`deai_modules.py`); `afterModulesChange` після довіри в `openTrust` (`app.js`); `forget_check`
- *       у `grant_trust` (забуте `own v1` — перевірка `status: unchecked` після повторної довіри); 2 — мутацією не охоплений (відмову шва стережуть юніти `tests/test_modules_trust_api.py`);
+ *       у `grant_trust` (забуте `own v1` — перевірка `status: unchecked` після повторної довіри); ядро вантажить теку, а не знімок
+ *       (валять 1 і 6); діалог без рядків файлів; `data-autofocus` зі «Скасувати» (фокус діалогу нової версії);
+ *   2 — `grant_trust`, що ігнорує відповідь системного вікна (шва): довіра зʼявилась би попри «ні»; відмову шва стережуть і юніти
+ *       `tests/test_modules_trust_api.py`;
  *   3 — `paper` у `capabilities` (без нього сторінка бачить «space.json не читається» й ховає картки);
- *   4 — кнопка «Довіритись…» в `optionHTML` (`wizard-view.js`); повернення фокуса в `trustFrom` (`wizard.js`);
- *   5 — перевірка `Sec-Fetch-Site` у `_module_trust_post` (`serve.py`: без `Origin` відсікає інша умова, тож потрібні запити з
- *       підробленим локальним `Origin`);
- *   6 — повторне відкриття діалогу на `module-changed` (`openTrust`); 7 — `danger: true` у `untrustFlow` (`app.js`), а також
- *       `afterModulesChange` після довіри; 8 — `trTitleRefused` у `trustDialogHTML` (`trust-view.js`);
+ *   4 — кнопка «Довіритись…» в `optionHTML` (`wizard-view.js`); повернення фокуса в `trustFrom` (`wizard.js`); `loadStep2`, що скидає
+ *       вибір іншої ролі після діалогу;
+ *   5 — `not origin or` у `_module_trust_post` (`serve.py`: запит БЕЗ `Origin`, але з `Sec-Fetch-Site: same-origin`) і перевірка
+ *       `Sec-Fetch-Site` там само (без `Origin` її не видно — потрібні запити з підробленим локальним `Origin`);
+ *   6 — повторне відкриття діалогу на `module-changed` (`openTrust`); `grant_trust`, що ігнорує зміну хешу;
+ *   7 — `danger: true` у `untrustFlow` (`app.js`), а також `afterModulesChange` після довіри; 8 — `trTitleRefused` у `trustDialogHTML`
+ *       (`trust-view.js`);
  *   9 — картки лише для вибраних без `needsTrust` у `loadStep3` (`wizard.js`); `paper` у `capabilities`; кнопка «Довіритись…».
+ *   Охоронець шва в `boot` (невідоме значення `seam` → падіння ДО `startServer`) мутацією з живим сервером НЕ доводиться: без нього
+ *   одруківка показала б справжнє системне вікно ОС; його стережуть позиція асерта (перший рядок `boot`) і окремий прогін без сервера.
  *   Не мутується живцем (стережуть юніти): системне вікно ОС — лише шов `DEAI_TRUST_CONFIRM`; ручний показ — окремий крок плану.
  */
 import assert from "node:assert/strict";
@@ -41,8 +48,10 @@ let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
+/* Рядок-коментар різної довжини для різних версій: розмір файла різний, тож відбиток не залежить від роздільності `mtime_ns`. */
 const SERVER_PY = (version) => `import os
 VERSION = "${version}"
+# ${"=".repeat(Number(version.slice(1)) * 8)}
 _p = os.environ.get("DEAI_OWN_CANARY")
 if _p:
     with open(_p, "a") as _f:
@@ -69,6 +78,9 @@ function writeOwn(spacePath, version = "v1") {
 
 /** Сервер + сторінка. `seam` — відповідь «системного вікна»; `committed` — `space.json` уже вмикає `memo-own` (колега). */
 async function boot(t, { seam = "yes", committed = false, extraFolder = null } = {}) {
+  /* ПЕРШИМ рядком, до `startServer`: `module_trust.seam_value` для будь-якого іншого значення дає `None` — сервер показав би
+     СПРАВЖНЄ системне вікно. Одруківка в `seam` має впасти тут, а не на екрані. */
+  assert.ok(["yes", "no", "unavailable"].includes(seam), `невідомий шов «${seam}»: сервер показав би справжнє системне вікно`);
   const canary = path.join(mkdtempSync(path.join(tmpdir(), "dc-live-canary-")), "canary.log");
   const X = taskFixture({ html: MOCKUP });
   const server = await startServer(null, { portBase: PORT_BASE, env: { DEAI_TRUST_CONFIRM: seam, DEAI_OWN_CANARY: canary },
@@ -147,6 +159,7 @@ test("1: недовірений не виконується → діалог →
 
   await page.click(`${CARD} [data-cn="trust"]`);
   await page.waitForSelector("form.tr");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус — на «Скасувати», не на «Забрати довіру»");
   assert.match(await dialogText(page), /Довіритись новій версії/);
   assert.match(await page.locator("form.tr .tr-files").textContent(), /server\.py.*змінено/s);
   await page.click('form.tr [data-a="ok"]');
@@ -167,7 +180,7 @@ test("1: недовірений не виконується → діалог →
   const caps = await capsOf(s.url);
   assert.equal(caps.publish, null, "роль «на папері» за недовіреним — без постачальника, не «Публікація в теку»");
   assert.equal(caps.error, undefined, "і це не «space.json не читається»");
-  assert.match(await page.locator(".cn-sec .cn-now").first().textContent(), /чекає довіри/);
+  assert.match(await page.locator(`.cn-sec:has(${CARD}) .cn-now`).textContent(), /чекає довіри/);
   assert.deepEqual(s.errors, []);
 });
 
@@ -195,7 +208,7 @@ test("3: колега закомітив — «Увімкнено, але не �
   assert.match(await page.locator(`${CARD} .cn-why`).textContent(), /увімкнено в просторі, але на цьому компʼютері йому не довірено/);
   assert.equal(await page.locator(`${CARD} [data-cn="disable"]`).count(), 1);
   assert.equal(await page.locator(".cn-err").count(), 0, "сторінка не вважає це нечитабельним space.json");
-  assert.match(await page.locator(".cn-sec .cn-now").first().textContent(), /Memo own \(test\).*чекає довіри/);
+  assert.match(await page.locator(`.cn-sec:has(${CARD}) .cn-now`).textContent(), /Memo own \(test\).*чекає довіри/);
   assert.deepEqual(s.ran(), []);
   assert.deepEqual(s.errors, []);
 });
@@ -244,8 +257,10 @@ test("5: запит довіри без заголовків браузера (�
   assert.equal((await res.json()).code, "trust-needs-ui");
   /* Агент може підробити й `Origin` (локальний) — не «позначку браузера» `Sec-Fetch-Site: same-origin` (її ставить лише браузер зі
      сторінки канваса): без неї чи з чужою — теж 403. Без цих запитів прибрана перевірка `Sec-Fetch-Site` лишалась би непоміченою:
-     запити без `Origin` відсікає раніше інша умова. */
-  for (const headers of [{ Origin: s.url }, { Origin: s.url, "Sec-Fetch-Site": "cross-site" }, { Origin: s.url, "Sec-Fetch-Site": "same-site" }]) {
+     запити без `Origin` відсікає раніше інша умова. І навпаки: `Sec-Fetch-Site: same-origin` БЕЗ `Origin` — перший елемент
+     переліку — стереже саму умову `not origin or` (без неї запит без `Origin` пройшов би за самою позначкою). */
+  for (const headers of [{ "Sec-Fetch-Site": "same-origin" }, { Origin: s.url }, { Origin: s.url, "Sec-Fetch-Site": "cross-site" },
+    { Origin: s.url, "Sec-Fetch-Site": "same-site" }]) {
     const forged = await fetch(`${s.url}/api/module-trust`, { method: "POST", headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({ space: "studio", id: "memo-own", hash: st.trust.hash }) });
     assert.equal(forged.status, 403, `підроблений Origin (${JSON.stringify(headers)}) не дає довіри`);
@@ -310,6 +325,8 @@ test("8: тека з символьним посиланням — діалог 
   symlinkSync("server.py", path.join(s.ownDir, "alias.py"));
   const { page } = s;
   await openConnections(page);
+  /* Назва на картці — теж id (маніфест не прочитано), тож картка й діалог узгоджені; перевірка ТОЧНА за елементом назви. */
+  assert.equal((await page.locator(`${CARD} .cn-card-name b`).textContent()).trim(), "memo-own", "на картці — id, а не назва з маніфесту");
   await page.click(`${CARD} [data-cn="trustinfo"]`);
   await page.waitForSelector("form.tr");
   const d = await dialogText(page);

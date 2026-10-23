@@ -5,15 +5,15 @@
  * під таким іменем поїхав би в прогін окремим файлом без жодного тесту (так само `fixture.mjs`).
  *
  * Що тут: зупинка сервера, кілька чекань, JSON-POST, і ОХОРОНЕЦЬ справжнього `~/.deai`.
- * Охоронець — знімок справжнього реєстру і сховища секретів (`secrets.json`) ДО будь-якого сервера (модуль імпортується першим
- * рядком тестового файла), а порівняння — окремим останнім тестом кожного модуля
+ * Охоронець — знімок справжнього реєстру, сховища секретів (`secrets.json`) і довіри своїм модулям (`trust.json`, `trusted/`)
+ * ДО будь-якого сервера (модуль імпортується першим рядком тестового файла), а порівняння — окремим останнім тестом кожного модуля
  * (`guardRealDeai`). Домівка — з ОС (`os.userInfo().homedir`), а не з `process.env.HOME`: її
  * може підмінити хто завгодно, і тоді охоронець дивився б не туди. Статичний охоронець
  * `.mjs` не сканує (ревʼю Task 5), тож цей — єдиний, що бачить живий прогін.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -52,6 +52,10 @@ export const REAL_DEAI = path.join(userInfo().homedir, ".deai");
 const sha = (p) => {
   try { return createHash("sha256").update(readFileSync(p)).digest("hex"); } catch { return null; }
 };
+/** Імена підтек `trusted/` (відсортовані, через `\n`) або `null`, коли теки нема чи її не прочитати. */
+const trustedNames = (p) => {
+  try { return existsSync(p) ? readdirSync(p).sort().join("\n") : null; } catch { return null; }
+};
 export const realDeai = () => ({
   exists: existsSync(REAL_DEAI),
   registry: sha(path.join(REAL_DEAI, "spaces.json")),
@@ -59,9 +63,10 @@ export const realDeai = () => ({
   /* Секрети модулів (етап 3b: майстер пише їх у `secrets.json`): живий тест, що доповз до справжнього сховища, не сміє
      лишити там слід — а до реєстру він міг би й не дотягнутись. */
   secrets: sha(path.join(REAL_DEAI, "secrets.json")),
-  /* Довіра своїм модулям (3c): живий тест пише `trust.json` і знімки `trusted/` — лише в тимчасовий `DEAI_HOME`. */
+  /* Довіра своїм модулям (3c): живий тест пише `trust.json` і знімки `trusted/` — лише в тимчасовий `DEAI_HOME`. Для `trusted/`
+     мало «існує чи ні»: запис у УЖЕ наявну справжню теку лишив би `existsSync` рівним `true` до й після — тому вміст (імена підтек). */
   trust: sha(path.join(REAL_DEAI, "trust.json")),
-  trusted: existsSync(path.join(REAL_DEAI, "trusted")),
+  trusted: trustedNames(path.join(REAL_DEAI, "trusted")),
 });
 /** Знімок ДО будь-якого сервера: модуль імпортується до першого `startServer`. */
 export const REAL_BEFORE = realDeai();
