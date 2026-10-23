@@ -2139,6 +2139,19 @@ class TrustCoreTest(OwnEnv):
             dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
         self.assertEqual(cm.exception.code, 'role-taken')
 
+    def test_retrust_forgets_a_cached_load_failure(self):
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')
+        d = mt.snapshot_dir(h)
+        bad = dm._failed('acme', d, 'module-error', 'load timed out after 5 s')
+        with dm._LOAD_LOCK:
+            dm._OWN_CACHE[(d, 'acme')] = (mt.fingerprint(d), bad)      # ніби перше завантаження не встигло
+        self.assertEqual(dm.catalog(self.sp)['acme'].status, 'error')
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')                   # ті самі байти — знімок той самий
+        self.assertEqual(dm.catalog(self.sp)['acme'].status, 'ok')
+
     def test_snapshot_removed_meanwhile_is_module_changed(self):
         with mock.patch.object(mt, 'put_record', side_effect=mt.SnapshotGone('x')):
             with self.assertRaises(dm.ModuleError) as cm:
@@ -2408,6 +2421,7 @@ def grant_trust(space, mid, want_hash, lang='uk'):
     except OSError as e:
         raise ModuleError('unwritable', message=f'trust: {type(e).__name__}') from None
     forget_check(_space_id(space), mid)
+    forget_own(sc.hash)                     # завантаження знімка (і закешований збій, як-от тайм-аут) — наново
 
 
 def revoke_trust(space, mid):
@@ -2446,6 +2460,7 @@ Expected: PASS.
 | `grant_trust`: `if sc.hash != want_hash:` → `if False:` | `test_grant_refusals` |
 | `grant_trust`: `if answer != 'yes':` → `if False:` | `test_grant_maps_the_system_window` |
 | `grant_trust`: прибрати `forget_check(...)` | `test_grant_runs_the_snapshot_and_clears_the_last_check` |
+| `grant_trust`: прибрати `forget_own(sc.hash)` | `test_retrust_forgets_a_cached_load_failure` |
 
 - [ ] **Step 6: Коміт**
 
