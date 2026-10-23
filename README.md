@@ -53,7 +53,7 @@ npm install && npx playwright install chromium
 ```
 
 Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium). The Python
-suites (`tests/`, `bin/`, `app/`) were run for 0.6.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
+suites (`tests/`, `bin/`, `app/`) were run for 0.7.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
 
 ## Spaces
 
