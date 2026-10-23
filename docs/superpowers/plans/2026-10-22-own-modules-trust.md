@@ -54,9 +54,9 @@
 | `app/module_trust.py` (новий) | сканер (`scan`, `fingerprint`, `name_ok`), хеш, `diff`, `tilde`; записи `trust.json` (`load_records`, `put_record`, `drop_record`); знімки (`ensure_snapshot`, `verify_snapshot`, `sweep`); системне вікно (`confirm_command`, `confirm`, `ask`, шов) |
 | `app/deai_modules.py` (зміна) | `catalog(space)`, свої модулі (`own_modules`, `own_notes`, `own_sig`), `Module` з полями довіри, завантаження знімка з тайм-аутом, `CORE_STATUS`, простір у API з id; ролі «на папері», помилка ролі без запасного шляху, `roles` у `space.json`; `trust_view`, `grant_trust`, `revoke_trust` |
 | `app/serve.py` (зміна) | поля свого модуля й `notes` у `GET /api/modules`, `module_write` без `check` для недовіреного, `task_publish_share`, маршрути `module-trust`/`module-untrust`, адреса адаптера з простором, попередження про шов на старті |
-| `app/connections-model.js` (зміна) | `cardView` для своїх модулів, `trustLine`, `noteView`, причини в `whyOf` |
+| `app/connections-model.js` (зміна) | `cardView` для своїх модулів, `isOwn`, `ownRuns`, `trustWhyKey`, `trustLine`, `noteView`, причини в `whyOf` |
 | `app/connections-view.js` (зміна) | пігулка «свій», бейдж `untrusted`, дії `trust`/`trustinfo`, рядок довіри, примітки, «Забрати довіру» в панелі, речення для агента |
-| `app/trust-view.js` (новий) | розмітка діалогу довіри, `sizeText`, `trustWhyKey` |
+| `app/trust-view.js` (новий) | розмітка діалогу довіри, `sizeText` (`trustWhyKey` — з `connections-model.js`: його потребують `whyOf` і `trustLine`) |
 | `app/wizard-model.js`, `app/wizard-view.js`, `app/wizard.js` (зміни) | `needsTrust`, рядок свого модуля на кроці 2, «чекає довіри» на кроці 3, `deps.openTrust` |
 | `app/app.js` (зміна) | `openTrust`, `untrustFlow`, `connTrust`, дії `trust`/`trustinfo`/`untrust`, `notes` у стані «Підключень», стеля часу запиту довіри |
 | `app/i18n.js`, `app/styles.css` (зміни) | ключі `cn*`/`tr*`/`wz*`, правила `.cn-tag--own`, `.cn-badge--untrusted`, `.cn-trust`, `.cn-notes`, `.tr-*`, `.wz-opt-row`, `.wz-wait` |
@@ -3543,7 +3543,24 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Create: `app/trust-view.js`, `tests/trust-view.test.mjs`
 - Modify: `app/app.js` (імпорти ≈54; `connAction` ≈2697; нова секція «довіра своєму модулю» після `afterModulesChange` ≈2800; `wireCnDrawer` ≈3134; новий `cnDrawerUntrust` після `cnDrawerCheck`)
 - Modify: `app/i18n.js` (`UK`/`EN` — після блоку 3c з Task 6), `app/styles.css` (після правил `.cv-form-err`/`.cv-field input[aria-invalid]`)
-- Modify: `tests/connections-wiring.test.mjs`
+- Modify: `tests/connections-wiring.test.mjs`, `tests/connections-own.test.mjs`
+
+**Попутно з ревʼю Task 6** (ті самі файли; кожну правку довести мутацією):
+- `paintCnDrawer` (`app/app.js`): запасний фокус `.cn-dr-body [data-cn-field], .cn-dr-foot button` →
+  `.cn-dr-body [data-cn-field], .cn-dr-foot button:not([data-cn-dr="untrust"])` — інакше після невдалої перевірки фокус
+  падає на руйнівну «Забрати довіру» (вона тепер перша у футері). Пін у `connections-wiring.test.mjs`:
+  `assert.match(fnc("paintCnDrawer"), /\.cn-dr-foot button:not\(\[data-cn-dr="untrust"\]\)/)`.
+- `app/styles.css`: `.cn-dr-untrust{border-color:var(--bad);color:var(--hi)}` →
+  `.cn-dr-untrust,.cn-dr-untrust:hover{border-color:var(--bad);color:var(--hi)}` (`.ctl--out:hover` специфічніший і робив
+  рамку сірою на наведенні).
+- Піни в `tests/connections-own.test.mjs`: у тест `drawerHTML` — `assert.match(html, /<button type="button" class="ctl ctl--out cn-dr-untrust"/)`
+  і `assert.ok(html.indexOf("cn-dr-untrust") < html.indexOf('data-cn-dr="check"'))`; у тест `connPageHTML` —
+  `assert.ok(h.indexOf("cn-notes") < h.indexOf("cn-sec"))`; новий тест: `connPageHTML` із `capabilities: { publish: null }`
+  (без `error`) і ввімкненим недовіреним своїм модулем містить `data-cn="trust"` і «чекає довіри», без `cn-err`
+  (поправка 11 на рівні сторінки).
+- Коментарі про `busy` зі значенням `'trust'` (`app/app.js` біля `connState`, `app/connections-view.js`): або `connTrust`/
+  `untrustFlow` справді ставлять `connState.busy.set(id, 'trust')` на час запиту (і картка це показує), або згадку прибрати —
+  мертвих обіцянок у коментарях не лишати.
 
 - [ ] **Step 1: Тести (червоні)** — створи `tests/trust-view.test.mjs`:
 
