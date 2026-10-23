@@ -9,6 +9,13 @@
 Тестовий шов: змінна оточення `DEAI_EXTRA_MODULES` — друга тека вбудованих модулів (`extra_dir`), якої каталог
 додає до `app/modules`; `id`, що вже є серед вбудованих, програє (`shadowed`). Лише для тестів і живих перевірок:
 оточення контролює людина, що запускає сервер, тож модулі звідти вважаються вбудованими.
+Свої модулі простору (етап 3c): `catalog(space)` додає до вбудованих модулі з `<простір>/modules/<id>/`
+(`own_modules`, `own_notes`). Довірений модуль (запис у `<DEAI_HOME>/trust.json`, знімок у `<DEAI_HOME>/trusted/<хеш>/`,
+див. `module_trust`) вантажиться ЗІ ЗНІМКА, а верхній рівень його `server.py` — у потоці-демоні з тайм-аутом
+`LOAD_TIMEOUT`; недовірений — лише з маніфесту (`status='untrusted'`, а з `refused` без знімка — `'error'`;
+`error_code='module-untrusted'`), його код не виконується НІКОЛИ. Коди ядра для них — `CORE_STATUS` (поза `STATUS`:
+модуль не може кинути їх від свого імені). Функції з id модуля (`check`, `validate_settings`, `write_secrets`…) беруть
+`space`, щоб знайти свій модуль; без нього — лише вбудовані.
 Файл названо `deai_modules.py`, а не `modules.py`: `bin/` стоїть у `sys.path` попереду, і імпорт
 був би неоднозначним.
 
@@ -75,8 +82,10 @@ import stat
 import threading
 import time
 import types
+from collections import OrderedDict
 from urllib.parse import quote, unquote, unquote_plus
 
+import module_trust
 import spaces
 from atomic_io import atomic_write_json
 
@@ -125,6 +134,18 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
           # модулі «публікація за адресою»: віддалений хост не прийняв токен / вперся в ліміт (текст — від модуля)
           'vercel-auth': 409, 'vercel-busy': 409}
 
+#: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
+#: модуль не кине «module-untrusted» від свого імені.
+CORE_STATUS = {'module-untrusted': 409, 'module-changed': 409, 'module-refused': 409, 'trust-needs-ui': 403,
+               'trust-declined': 409, 'trust-no-confirm': 409, 'trust-busy': 409, 'trust-unreadable': 409}
+#: Своїх модулів у просторі — не більше (за абеткою); решта — примітки `too-many-modules`.
+MAX_OWN_MODULES = 32
+#: Скільки секунд чекати верхнього рівня `server.py` знімка свого модуля.
+LOAD_TIMEOUT = 5
+#: Скільки знімків тримає кеш завантаження своїх модулів.
+OWN_CACHE_MAX = 64
+UNTRUSTED_TEXT = 'module is not trusted on this computer'
+
 
 class ModuleError(Exception):
     """`code` — з таблиці `STATUS`, `status` — HTTP, `message` — текст (≤300, без секретів).
@@ -136,7 +157,7 @@ class ModuleError(Exception):
         if isinstance(status, str):
             status, message = (message if isinstance(message, int) else None), status
         self.code = code
-        self.status = status if isinstance(status, int) else STATUS.get(code, 500)
+        self.status = status if isinstance(status, int) else STATUS.get(code, CORE_STATUS.get(code, 500))
         self._full = str(message or '')[:MAX_FULL_MESSAGE]
         self.message = self._full[:MAX_MESSAGE]
         super().__init__(f'{code}: {self.message}' if self.message else code)
@@ -148,12 +169,16 @@ class Module:
     помилкою лишається в каталозі, але нічого не віддає (`fn()` → `None`) і постачальником не є.
     `publish_target` — `'folder'` (типово) чи `'url'` (див. `PUBLISH_TARGETS`): що повертає й куди пише модуль
     ролі `publish`. `client` — кортеж імен файлів браузерного адаптера (лише роль `comments`, див. `_check_client`),
-    у порядку вантаження. `fn(імʼя)` — функція `server.py` (`'check'`, `'publish'`, `'client_config'`…) або `None`."""
+    у порядку вантаження. `fn(імʼя)` — функція `server.py` (`'check'`, `'publish'`, `'client_config'`…) або `None`.
+
+    Свій модуль простору (`origin='space'`) без робочого знімка — `status='untrusted'` чи `'error'` (`refused`) з
+    `error_code='module-untrusted'`: функцій нема, ролі й налаштування — з маніфесту теки."""
     __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'client', 'status', 'error',
-                 'error_code', 'dir', '_fns')
+                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error')
 
     def __init__(self, mid, *, name=None, version='', api=None, roles=(), settings=(), status='ok',
-                 error=None, error_code=None, dir='', fns=None, publish_target='folder', client=()):
+                 error=None, error_code=None, dir='', fns=None, publish_target='folder', client=(),
+                 origin='builtin', trust=None, record=False, source='', trust_error=None):
         self.id = mid
         self.name = name if isinstance(name, str) and name.strip() else mid
         self.version = version if isinstance(version, str) else ''
@@ -167,6 +192,11 @@ class Module:
         self.error_code = error_code
         self.dir = dir
         self._fns = dict(fns or {}) if status == 'ok' else {}
+        self.origin = origin            # 'builtin' | 'space' (свій модуль простору, етап 3c)
+        self.trust = trust              # свій: 'untrusted' | 'trusted' | 'changed' | 'refused'; вбудований — None
+        self.record = bool(record)      # свій: чи є запис довіри (у `untrusted` з пошкодженим знімком — є)
+        self.source = source            # свій: тека в просторі, з `~`
+        self.trust_error = trust_error  # свій: причина `untrusted`/`refused` (код)
 
     def fn(self, name):
         return self._fns.get(name)
@@ -207,10 +237,13 @@ def reset_caches():
     """Скинути всі кеші процесу (тести; відновлення після підміни `builtin_dir`)."""
     with _LOAD_LOCK:
         _CACHE.clear()
+        _OWN_CACHE.clear()
+        _OWN_LOCKS.clear()
     with _STATE_LOCK:
         _LAST_CHECK.clear()
         _CAPS.clear()
         _FOLDER_INPUTS.clear()
+    module_trust.reset_cache()
 
 
 def _sig(path):
@@ -520,16 +553,197 @@ def _load_dir(d, folder):
         return mod
 
 
-def catalog():
-    """`{id: Module}` вбудованих модулів (за абеткою): `app/modules` і, якщо задана, тека `DEAI_EXTRA_MODULES`
-    (`id` вбудованого виграє — програш у `shadowed()`). Модулі з помилкою — тут, зі `status='error'`.
+# ------------------------------------------------------------------------------- свої модулі простору (3c)
+
+#: Кеш знімків своїх модулів: `{тека знімка: (відбиток, Module)}` у порядку використання; лок — на теку.
+_OWN_CACHE = OrderedDict()
+_OWN_LOCKS = {}
+
+
+def _clone(m, **kw):
+    """Новий `Module` з полями `m` і змінами `kw`: обʼєкт свого модуля — свій на кожен виклик (два простори з однаковими
+    байтами ділять теку знімка, але не обʼєкт), а рішення про довіру не живе в кеші."""
+    c = Module.__new__(Module)
+    for s in Module.__slots__:
+        setattr(c, s, getattr(m, s))
+    c.roles = list(m.roles)
+    c.settings = [dict(s) for s in m.settings]
+    for k, v in kw.items():
+        setattr(c, k, v)
+    return c
+
+
+def untrusted_own(m):
+    """Свій модуль без робочого знімка (недовірений чи `refused` без довіри): код не виконується, вмикати не можна."""
+    return getattr(m, 'origin', 'builtin') == 'space' and m.error_code == 'module-untrusted'
+
+
+def _builtin_ids():
+    """Id модулів із тек вбудованих (`app/modules`, `DEAI_EXTRA_MODULES`, і ті, що програли як `shadowed`)."""
+    _, items, lost = _scan()
+    return {n for n, _ in items} | {n for n, _ in lost}
+
+
+def _manifest_from_bytes(raw, folder, d):
+    """`(метадані, None)` чи `(None, причина)` — маніфест свого модуля з УЖЕ прочитаних сканером байтів (не повторним
+    читанням з диска), з тим самим захистом, що `spaces._read_json` (розмір, глибина), і `_check_manifest`."""
+    if raw is None:
+        return None, 'module.json: not found'
+    if len(raw) > spaces.MAX_JSON_BYTES:
+        return None, f'module.json: bigger than {spaces.MAX_JSON_BYTES} bytes'
+    try:
+        man = json.loads(raw.decode('utf-8'))
+    except RecursionError:
+        return None, 'module.json: nested too deep'
+    except ValueError as e:                                   # UnicodeDecodeError — теж ValueError
+        return None, f'module.json: {_short(e)}'
+    return _check_manifest(man, folder, d)
+
+
+def _meta_kw(meta):
+    if not meta:
+        return {}
+    return dict(name=meta['name'], version=meta['version'], api=API_VERSION, roles=meta['roles'],
+                settings=meta['settings'], publish_target=meta['publish_target'])
+
+
+def _own_base(space):
+    p = _space_path(space)
+    return os.path.join(p, 'modules') if p and spaces.layer_on() else None
+
+
+def _own_listing(space):
+    """`([(id, тека)], примітки)` своїх модулів простору: лише `lstat`/`listdir`, без читання файлів модулів. Модуль —
+    підтека з імʼям за `ID_RE`, у якій є `module.json`; решта ігнорується. Примітки — `id-taken`, `too-many-modules`,
+    `modules-link`, `modules-unreadable`."""
+    base = _own_base(space)
+    if base is None:
+        return [], []
+    try:
+        st = os.lstat(base)
+    except FileNotFoundError:
+        return [], []
+    except OSError:
+        return [], [{'folder': 'modules', 'code': 'modules-unreadable'}]
+    if module_trust.is_link(st) or not stat.S_ISDIR(st.st_mode):
+        return [], [{'folder': 'modules', 'code': 'modules-link'}]
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return [], [{'folder': 'modules', 'code': 'modules-unreadable'}]
+    taken = _builtin_ids()
+    out, notes = [], []
+    for n in names:
+        d = os.path.join(base, n)
+        if not ID_RE.fullmatch(n) or not os.path.lexists(os.path.join(d, 'module.json')):
+            continue
+        if n in taken:
+            notes.append({'folder': f'modules/{n}', 'code': 'id-taken'})
+        elif len(out) >= MAX_OWN_MODULES:
+            notes.append({'folder': f'modules/{n}', 'code': 'too-many-modules'})
+        else:
+            out.append((n, d))
+    return out, notes
+
+
+def own_notes(space):
+    """Примітки своїх модулів простору (`[{folder, code}]`) для `GET /api/modules`; нічого не виконує й не хешує."""
+    return _own_listing(space)[1]
+
+
+def own_modules(space):
+    """`{id: Module}` своїх модулів простору — новий обʼєкт на кожен виклик. Довірений — зі знімка (`_load_own`); без
+    робочого знімка — без виконання, з маніфестом теки (якщо він розбирається). ⚠️ Може виконати код знімка — НЕ під
+    `WRITE_LOCK`."""
+    cands, _ = _own_listing(space)
+    if not cands:
+        return {}
+    try:
+        records, rec_err = module_trust.load_records(), None
+    except module_trust.TrustUnreadable:
+        records, rec_err = {}, 'trust-unreadable'
+    return {mid: _own_module(space, mid, d, records, rec_err) for mid, d in cands}
+
+
+def _own_module(space, mid, d, records, rec_err):
+    try:
+        sc, refused = module_trust.scan(d), None
+    except module_trust.Refused as e:
+        sc, refused = None, e
+    meta = None
+    if sc is not None:
+        meta, why = _manifest_from_bytes(sc.manifest, mid, d)
+        if why:
+            refused = module_trust.Refused('bad-manifest', why)
+    rec = None if rec_err else records.get(module_trust.key_for(_space_path(space), mid))
+    base = dict(origin='space', source=module_trust.tilde(d), record=rec is not None)
+    if rec is not None and module_trust.verify_snapshot(rec['hash']):
+        m = _load_own(module_trust.snapshot_dir(rec['hash']), mid)
+        trust = 'refused' if refused else ('trusted' if sc.hash == rec['hash'] else 'changed')
+        return _clone(m, trust=trust, trust_error=refused.code if refused else None, **base)
+    if refused:
+        text = f'{refused.code}: {refused.detail}' if refused.detail else refused.code
+        return Module(mid, status='error', error=text[:MAX_MESSAGE], error_code='module-untrusted', dir=d,
+                      trust='refused', trust_error=refused.code, **_meta_kw(meta), **base)
+    why = rec_err or ('snapshot-damaged' if rec is not None else None)
+    return Module(mid, status='untrusted', error=UNTRUSTED_TEXT, error_code='module-untrusted', dir=d,
+                  trust='untrusted', trust_error=why, **_meta_kw(meta), **base)
+
+
+def _load_own(d, mid):
+    """`Module` знімка `d` (id — `mid`). Верхній рівень `server.py` виконується в потоці-демоні з тайм-аутом
+    `LOAD_TIMEOUT` і ПОЗА `_LOAD_LOCK` (лок — на теку знімка, щоб не будувати двічі): зависання свого модуля не блокує
+    ні каталог інших просторів, ні вбудовані модулі. Не встиг — `module-error` «load timed out»; результат кешується за
+    відбитком теки (потік-сирота доживає свій час)."""
+    fp = module_trust.fingerprint(d)
+    with _LOAD_LOCK:
+        hit = _OWN_CACHE.get(d)
+        if hit is not None and hit[0] == fp:
+            _OWN_CACHE.move_to_end(d)                       # за порядком використання: останнім витісняється те, чим користуються
+            return hit[1]
+        lock = _OWN_LOCKS.setdefault(d, threading.Lock())
+    with lock:
+        with _LOAD_LOCK:
+            hit = _OWN_CACHE.get(d)
+            if hit is not None and hit[0] == fp:
+                _OWN_CACHE.move_to_end(d)
+                return hit[1]
+        box = []
+        sid = spaces.request_space_id()
+
+        def work():
+            try:
+                with spaces.request_space(sid):
+                    box.append(_build(d, mid))
+            except BaseException as e:  # noqa: BLE001 — і `KeyboardInterrupt` модуля не валить сервер
+                box.append(_failed(mid, d, 'module-error', _exc_text(e)))
+        t = threading.Thread(target=work, name=f'deai-own-load-{mid}', daemon=True)
+        t.start()
+        t.join(LOAD_TIMEOUT)
+        mod = box[0] if box else _failed(mid, d, 'module-error', f'load timed out after {LOAD_TIMEOUT} s')
+        with _LOAD_LOCK:
+            _OWN_CACHE[d] = (fp, mod)
+            _OWN_CACHE.move_to_end(d)
+            while len(_OWN_CACHE) > OWN_CACHE_MAX:
+                old, _ = _OWN_CACHE.popitem(last=False)
+                _OWN_LOCKS.pop(old, None)
+        return mod
+
+
+def catalog(space=None):
+    """`{id: Module}` за абеткою: вбудовані (`app/modules` і, якщо задана, тека `DEAI_EXTRA_MODULES`; `id` вбудованого
+    виграє — програш у `shadowed()`) і — коли передано простір — його свої модулі (`own_modules`: свіжі обʼєкти, довіра
+    рахується щоразу). Модулі з помилкою — тут, зі `status='error'`; недовірені свої — зі `status='untrusted'`.
     ⚠️ Виконує код модулів (першого разу чи після зміни файлів) — НЕ кликати під `WRITE_LOCK`."""
     _, items, _ = _scan()
     out = {name: _load_dir(d, name) for name, d in items}
     live = {d for _, d in items}
     with _LOAD_LOCK:
-        for k in [k for k in _CACHE if k not in live]:      # теки, яких уже нема (чи оточення більше не називає)
+        for k in [k for k in _CACHE if k not in live]:      # теки, яких уже нема (чи оточення більше не називає); знімки — у `_OWN_CACHE`
             del _CACHE[k]
+    if space:
+        out.update(own_modules(space))
+        out = dict(sorted(out.items()))
     return out
 
 
@@ -633,7 +847,7 @@ def effective_state(space):
     if not space:
         return {}
     explicit = space_modules(space)
-    return {mid: _entry_state(m, space, explicit) for mid, m in catalog().items()}
+    return {mid: _entry_state(m, space, explicit) for mid, m in catalog(space).items()}
 
 
 # ----------------------------------------------------------------------------------- налаштування
@@ -703,19 +917,19 @@ def _validate_patch(m, settings):
     return dict(settings)
 
 
-def _need_module(module_id):
-    m = catalog().get(module_id) if isinstance(module_id, str) else None
+def _need_module(module_id, space=None):
+    m = catalog(space).get(module_id) if isinstance(module_id, str) else None
     if m is None:
         raise ModuleError('unknown-module', message=str(module_id)[:60])
     return m
 
 
-def validate_settings(module_id, settings):
+def validate_settings(module_id, settings, space=None):
     """Перевірка патча налаштувань БЕЗ запису: `unknown-module` / `bad-settings` (ті самі, що кине
     `write_module_state`). Для API, що пише секрети РАНІШЕ за `space.json`: відмова налаштувань мусить
     настати до запису секрету, інакше клієнт із 400 у руках мав би вже змінений пароль. Нічого не пише, лок
-    не бере (каталог виконує код модулів)."""
-    return _validate_patch(_need_module(module_id), settings)
+    не бере (каталог виконує код модулів). `space` — запис простору, щоб знайти СВІЙ модуль; без нього — лише вбудовані."""
+    return _validate_patch(_need_module(module_id, space), settings)
 
 
 def _require_writable(space):
@@ -766,10 +980,12 @@ def preflight(space, module_id, enabling=False, replace=False):
     локом, а те, що вони побачать іншим (гонка з паралельною правкою між пре-перевіркою й локом) чи не зможуть
     записати (`unwritable`), відмовить уже ПІСЛЯ секрету — спека це приймає (сирітський секрет нешкідливий).
     ⚠️ Виконує код модулів (каталог) — НЕ кликати під `WRITE_LOCK`."""
-    cat = catalog()
+    cat = catalog(space)
     m = cat.get(module_id) if isinstance(module_id, str) else None
     if m is None:
         raise ModuleError('unknown-module', message=str(module_id)[:60])
+    if enabling and untrusted_own(m):
+        raise ModuleError('module-untrusted', message=f'{m.id}: {UNTRUSTED_TEXT}')
     explicit = space_modules(space)
     if enabling and replace:
         _check_replace_target(m)
@@ -826,13 +1042,15 @@ def write_module_state(space, module_id, enabled=None, settings=None, replace=Fa
     _require_writable(space)
     if enabled is not None and not isinstance(enabled, bool):
         raise _bad('enabled: expected a boolean')
-    cat = catalog()                                     # ДО локу: виконує код модулів
+    cat = catalog(space)                                # ДО локу: виконує код модулів
     m = cat.get(module_id) if isinstance(module_id, str) else None
     if m is None:
         if enabled is False and (settings is None or settings == {}) and isinstance(module_id, str):
             return _disable_missing(space, module_id)
         raise ModuleError('unknown-module', message=str(module_id)[:60])
     patch = _validate_patch(m, settings)
+    if enabled is True and untrusted_own(m):
+        raise ModuleError('module-untrusted', message=f'{m.id}: {UNTRUSTED_TEXT}')
     path = _space_json_path(space)
     with spaces.WRITE_LOCK:
         data = _load_space_json(path)
@@ -853,6 +1071,9 @@ def write_module_state(space, module_id, enabled=None, settings=None, replace=Fa
         old = mods.get(module_id)
         entry = dict(old) if isinstance(old, dict) else {}
         entry['enabled'] = enabled if enabled is not None else cur
+        if enabled is True and m.origin == 'space':
+            entry['roles'] = list(m.roles)      # ролі свого модуля — у `space.json`: без теки (не приїхала з git) роль
+                                                # однаково знає, що її веде він (`_paper_failure`)
         if patch:
             st = entry.get('settings')
             st = dict(st) if isinstance(st, dict) else {}
@@ -887,7 +1108,7 @@ def published_root(space, module):
     шлях після підстановок (`{home}`, `{space}`, `{space_id}`, `~`) або `None`, коли в модуля нема
     налаштування `folder`. Може кинути `bad-settings` / `space-json-unreadable` / `unknown-module`.
     Саму теку це НЕ перевіряє — для того `folder_ok`."""
-    m = module if isinstance(module, Module) else _need_module(module)
+    m = module if isinstance(module, Module) else _need_module(module, space)
     explicit = space_modules(space)
     return resolve_settings(space, m, _entry_state(m, space, explicit)['settings']).get('folder')
 
@@ -1065,16 +1286,17 @@ def read_secrets(space_id, module_id):
     return _bucket(_load_secrets(), space_id, module_id)
 
 
-def write_secrets(space_id, module_id, patch):
+def write_secrets(space_id, module_id, patch, space=None):
     """Патч секретів модуля: ключ відсутній — лишити, `None` — видалити, рядок — записати. Ключі
     мусять бути оголошені в маніфесті як `secret`. Під `WRITE_LOCK`, атомарно, потім `chmod 0600` на
     файл і `0700` на теку. Шар вимкнено — `spaces-off` (справжній `~/.deai` не чіпаємо).
+    `space` — запис простору, щоб знайти СВІЙ модуль; без нього — лише вбудовані.
     Повертає імена ключів, що тепер задані (значень не віддає)."""
     if not spaces.layer_on():
         raise ModuleError('spaces-off', message='spaces layer is off')
     if not isinstance(space_id, str) or not space_id or not _encodable(space_id):
         raise _bad('space: expected an id')
-    m = _need_module(module_id)                         # ДО локу
+    m = _need_module(module_id, space)                  # ДО локу
     if not isinstance(patch, dict):
         raise _bad('secrets: expected an object')
     allowed = set(m.secret_keys())
@@ -1241,7 +1463,7 @@ def module_ctx(space, module):
     Саме це отримує `check`; для `serve.py` (`/api/ds-tokens`, диспетчер публікації). Може кинути
     `unknown-module`, `bad-settings`, `space-json-unreadable`, `secrets-unreadable`. Статус модуля не
     перевіряє (це робить `call`)."""
-    m = module if isinstance(module, Module) else _need_module(module)
+    m = module if isinstance(module, Module) else _need_module(module, space)
     return _ctx(space, m)
 
 
@@ -1257,6 +1479,13 @@ def last_check(space_id, module_id):
     return dict(res) if res is not None else None
 
 
+def forget_check(space_id, module_id):
+    """Забути останній `check` модуля в просторі й кеш `capabilities` простору (довіра змінила код, що виконуватиметься)."""
+    with _STATE_LOCK:
+        _LAST_CHECK.pop((space_id, module_id), None)
+        _CAPS.pop(space_id, None)
+
+
 def check(space, module_id):
     """Результат `check` модуля — `{"ok": bool, "error"?: str, "detail"?: str}` (рядки без секретів,
     ≤300), з `ctx` (налаштування підставлені, секрети ЦЬОГО модуля), тайм-аут `CHECK_TIMEOUT`.
@@ -1265,7 +1494,7 @@ def check(space, module_id):
     налаштування не задане / не те значення) — винятки, і перед викидом вони теж запамʼятовуються як
     `{"ok": false, "error": <код>, "detail": <текст>}`. Для модуля, якого нема чи який не завантажився, і
     для `space-json-unreadable`/`secrets-unreadable` — винятки без запису."""
-    m = _need_module(module_id)
+    m = _need_module(module_id, space)
     if m.status != 'ok':
         raise ModuleError(m.error_code or 'module-error', message=m.error or '')
     try:

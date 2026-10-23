@@ -1309,9 +1309,9 @@ class StateTest(Env):
         real = dm.catalog
         held = []
 
-        def spy():
+        def spy(space=None):
             held.append(spaces.WRITE_LOCK.locked())
-            return real()
+            return real(space)
         with mock.patch.object(dm, 'catalog', spy):
             dm.write_module_state(sp, 'pub', enabled=True)
             dm.write_secrets(sp['id'], 'pub', {'password': 'x'})
