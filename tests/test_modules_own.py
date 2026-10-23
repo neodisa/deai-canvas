@@ -528,6 +528,7 @@ class CatalogExtraTest(OwnEnv):
         m = dm.catalog(self.sp)['acme']
         self.assertEqual((m.status, m.error_code, m.trust, m.record), ('error', 'module-error', 'trusted', True))
         self.assertIn('boom', m.error)
+        self.assertEqual((m.roles, m.version, [x['key'] for x in m.settings]), (['publish'], '1.0.0', ['token']))
         self.assertFalse(dm.untrusted_own(m), 'це збій модуля, а не відсутність довіри')
         with self.assertRaises(dm.ModuleError) as cm:
             dm.check(self.sp, 'acme')
@@ -549,6 +550,172 @@ class CatalogExtraTest(OwnEnv):
         self.assertEqual((m.status, m.trust), ('ok', 'trusted'))
         self.assertEqual(len(self.ran()), 2, 'новий знімок у тій самій теці — нове завантаження, а не застарілий кеш')
         self.assertEqual(dm.check(self.sp, 'acme')['detail'], 'own v1')
+
+    # ---- аліас-посилання не успадковує довіру
+
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_a_link_to_a_trusted_module_does_not_inherit_its_trust_in_either_name_order(self):
+        # `key_for` бере `realpath`: `modules/aaa -> acme` ділив би запис довіри з `acme` і вантажив його знімок під чужим id
+        d = self.own()
+        base = os.path.dirname(d)
+        for alias in ('aaa', 'zzz'):                           # до `acme` за абеткою і після нього
+            os.symlink(d, os.path.join(base, alias))
+        self.trust()
+        cat = dm.catalog(self.sp)
+        acme = cat['acme']
+        self.assertEqual((acme.status, acme.trust, acme.record, acme.id), ('ok', 'trusted', True, 'acme'))
+        for alias in ('aaa', 'zzz'):
+            m = cat[alias]
+            self.assertEqual((m.id, m.status, m.trust, m.trust_error, m.record, m.error_code),
+                             (alias, 'error', 'refused', 'symlink', False, 'module-untrusted'), alias)
+            self.assertTrue(dm.untrusted_own(m))
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.write_module_state(self.sp, alias, enabled=True)
+            self.assertEqual(cm.exception.code, 'module-untrusted')
+        self.assertEqual(dm.check(self.sp, 'acme')['detail'], 'own v1')
+        self.assertEqual(len(self.ran()), 1, 'виконано лише знімок `acme`, і один раз')
+        self.assertTrue(self.ran()[0].startswith(mt.trusted_root()))
+
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_a_link_to_a_module_trusted_in_another_space_does_not_inherit_its_trust(self):
+        sp2 = self.rec(spaces.create_space('Beta', 'space-2', self.hp('work', 'beta')))
+        d = self.own()
+        self.trust()
+        os.makedirs(os.path.join(sp2['path'], 'modules'))
+        os.symlink(d, os.path.join(sp2['path'], 'modules', 'acme'))
+        m = dm.catalog(sp2)['acme']
+        self.assertEqual((m.status, m.trust, m.trust_error, m.record), ('error', 'refused', 'symlink', False))
+        self.assertTrue(dm.untrusted_own(m))
+        self.assertEqual(dm.catalog(self.sp)['acme'].status, 'ok', 'у власному просторі довіра на місці')
+        self.assertEqual(len(self.ran()), 1)
+
+    @unittest.skipIf(os.name == 'nt', 'права доступу')
+    def test_an_unreadable_module_folder_is_not_a_link_and_keeps_its_trust(self):
+        # `Refused('unreadable', '.')` має ту саму `detail`, що й посилання-корінь, але це не аліас: знімок із записом працює
+        d = self.own()
+        self.trust()
+        os.chmod(d, 0o300)                                     # заходити можна (маніфест видно), читати перелік — ні
+        try:
+            if os.access(d, os.R_OK):
+                self.skipTest('root читає все')
+            m = dm.catalog(self.sp)['acme']
+            self.assertEqual((m.status, m.trust, m.trust_error, m.record), ('ok', 'refused', 'unreadable', True))
+        finally:
+            os.chmod(d, 0o700)
+
+    def test_the_load_cache_is_per_snapshot_and_id(self):
+        # Той самий знімок під іншим id (запис довіри, що вказує на чужий хеш) — НЕ той самий закешований модуль
+        self.own()
+        snap = mt.snapshot_dir(self.trust())
+        first = dm._load_own(snap, 'acme')
+        other = dm._load_own(snap, 'other')
+        self.assertEqual((first.id, first.status), ('acme', 'ok'))
+        self.assertEqual((other.id, other.status, other.error_code), ('other', 'error', 'bad-manifest'))
+        self.assertEqual(sorted(dm._OWN_CACHE), [(snap, 'acme'), (snap, 'other')])
+        self.assertIs(dm._load_own(snap, 'acme'), first, 'власний запис — з кешу')
+
+    # ---- збій завантаження не губить маніфест
+
+    def _failed_load_keeps_the_manifest(self, m):
+        self.assertEqual((m.status, m.error_code, m.trust, m.record), ('error', 'module-error', 'trusted', True))
+        self.assertEqual((m.name, m.version, m.roles, [x['key'] for x in m.settings]),
+                         ('Acme', '1.0.0', ['publish'], ['token']))
+        self.assertFalse(dm.untrusted_own(m))
+        # роль тримає й той, що не завантажився: інший постачальник без `replace` не проходить
+        self.mk('pub')
+        dm.write_module_state(self.sp, 'pub', enabled=True)
+        for call in (lambda: dm.preflight(self.sp, 'acme', enabling=True),
+                     lambda: dm.write_module_state(self.sp, 'acme', enabled=True)):
+            with self.assertRaises(dm.ModuleError) as cm:
+                call()
+            self.assertEqual((cm.exception.code, cm.exception.message), ('role-taken', 'publish is already provided by pub'))
+        self.assertNotIn('acme', dm.space_modules(self.sp))
+        dm.write_module_state(self.sp, 'pub', enabled=False)
+        dm.write_module_state(self.sp, 'acme', enabled=True)       # роль вільна: вмикається, і в `space.json` її ролі
+        self.assertEqual(_read(self.space_json(self.sp))['modules']['acme']['roles'], ['publish'])
+
+    def test_a_load_timeout_keeps_the_manifest(self):
+        self.own(server=SLEEPY)
+        self.trust()
+        with mock.patch.object(dm, 'LOAD_TIMEOUT', 0.3):
+            m = dm.catalog(self.sp)['acme']
+        self.assertIn('timed out', m.error)
+        self._failed_load_keeps_the_manifest(m)
+
+    def test_an_exception_in_the_top_level_keeps_the_manifest(self):
+        self.own(server='raise RuntimeError("boom")\n')
+        self.trust()
+        m = dm.catalog(self.sp)['acme']
+        self.assertIn('boom', m.error)
+        self._failed_load_keeps_the_manifest(m)
+
+    def test_a_keyboard_interrupt_in_the_top_level_is_a_module_error_that_keeps_the_manifest(self):
+        # `_build` пропускає `KeyboardInterrupt` далі — її ловить гілка винятку в потоці завантаження
+        self.own(server=OWN_SERVER + 'raise KeyboardInterrupt()\n')
+        self.trust()
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual(m.error, 'KeyboardInterrupt', 'не «timed out» і сервер не впав')
+        self._failed_load_keeps_the_manifest(m)
+
+    def test_a_snapshot_that_cannot_be_scanned_fails_without_a_manifest_and_without_raising(self):
+        m = dm._load_own(os.path.join(self.tmp, 'nope'), 'ghost')
+        self.assertEqual((m.status, m.error_code, m.roles), ('error', 'bad-manifest', []))
+
+    def test_the_load_thread_is_a_named_daemon(self):
+        self.own()
+        self.trust()
+        made = []
+
+        class Spy(threading.Thread):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                made.append(self)
+        with mock.patch.object(threading, 'Thread', Spy):
+            self.assertEqual(dm.catalog(self.sp)['acme'].status, 'ok')
+        loaders = [t for t in made if t.name.startswith('deai-own-load-')]
+        self.assertEqual([(t.name, t.daemon) for t in loaders], [('deai-own-load-acme', True)])
+
+    # ---- forget_own
+
+    def test_forget_own_drops_only_that_snapshot(self):
+        d1, d2 = mt.snapshot_dir('a' * 64), mt.snapshot_dir('b' * 64)
+        for key in ((d1, 'a'), (d1, 'b'), (d2, 'a')):
+            dm._OWN_CACHE[key] = (None, None)
+            dm._OWN_LOCKS[key] = threading.Lock()
+        dm.forget_own('a' * 64)
+        self.assertEqual(list(dm._OWN_CACHE), [(d2, 'a')])
+        self.assertEqual(list(dm._OWN_LOCKS), [(d2, 'a')])
+        dm.forget_own('c' * 64)                                    # нічого не кешовано — не помилка
+        self.assertEqual(list(dm._OWN_CACHE), [(d2, 'a')])
+
+    def test_forget_own_waits_for_the_load_lock(self):
+        # Детерміновано: лок тримаємо ми (RLock — з іншого потоку він не реентерабельний), писар мусить чекати
+        key = (mt.snapshot_dir('a' * 64), 'a')
+        dm._OWN_CACHE[key] = (None, None)
+        th = threading.Thread(target=dm.forget_own, args=('a' * 64,), daemon=True)
+        dm._LOAD_LOCK.acquire()
+        try:
+            th.start()
+            th.join(0.3)
+            waiting = th.is_alive()
+            still_there = key in dm._OWN_CACHE
+        finally:
+            dm._LOAD_LOCK.release()
+        th.join(5)
+        self.assertTrue(waiting, 'forget_own не чекав `_LOAD_LOCK`')
+        self.assertTrue(still_there)
+        self.assertFalse(th.is_alive())
+        self.assertNotIn(key, dm._OWN_CACHE)
+
+    def test_forget_own_makes_the_next_catalog_load_the_snapshot_again(self):
+        self.own()
+        h = self.trust()
+        dm.catalog(self.sp)
+        dm.catalog(self.sp)
+        self.assertEqual(len(self.ran()), 1)
+        dm.forget_own(h)
+        self.assertEqual(dm.catalog(self.sp)['acme'].status, 'ok')
+        self.assertEqual(len(self.ran()), 2)
 
     def test_a_sleeping_module_does_not_block_other_catalogs(self):
         sp2 = self.rec(spaces.create_space('Beta', 'space-2', self.hp('work', 'beta')))
@@ -600,11 +767,11 @@ class CatalogExtraTest(OwnEnv):
             dm._load_own(b, 'b1')
             dm._load_own(a, 'a1')                              # хіт: `a` стає найновішим
             dm._load_own(c, 'c1')                              # місця нема: витісняється `b`, а не `a`
-            self.assertEqual(list(dm._OWN_CACHE), [a, c])
-            self.assertEqual(sorted(dm._OWN_LOCKS), sorted([a, c]), 'лок витісненого знімка не лишається')
+            self.assertEqual(list(dm._OWN_CACHE), [(a, 'a1'), (c, 'c1')])
+            self.assertEqual(sorted(dm._OWN_LOCKS), sorted([(a, 'a1'), (c, 'c1')]), 'лок витісненого знімка не лишається')
             with mock.patch.object(mt, 'fingerprint', return_value=('змінився',)):
                 dm._load_own(a, 'a1')                          # відбиток інший — перебудова; запис стає найновішим
-            self.assertEqual(list(dm._OWN_CACHE), [c, a])
+            self.assertEqual(list(dm._OWN_CACHE), [(c, 'c1'), (a, 'a1')])
 
     def test_reset_caches_drops_the_own_caches_and_the_scan_cache(self):
         self.own()

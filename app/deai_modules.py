@@ -555,7 +555,8 @@ def _load_dir(d, folder):
 
 # ------------------------------------------------------------------------------- свої модулі простору (3c)
 
-#: Кеш знімків своїх модулів: `{тека знімка: (відбиток, Module)}` у порядку використання; лок — на теку.
+#: Кеш знімків своїх модулів: `{(тека знімка, id): (відбиток, Module)}` у порядку використання; лок — на ту саму пару.
+#: Ключ несе й `id`: той самий знімок під двома іменами (запис довіри, що вказує на чужий хеш) не віддає одного модуля обом.
 _OWN_CACHE = OrderedDict()
 _OWN_LOCKS = {}
 
@@ -675,7 +676,10 @@ def _own_module(space, mid, d, records, rec_err):
         meta, why = _manifest_from_bytes(sc.manifest, mid, d)
         if why:
             refused = module_trust.Refused('bad-manifest', why)
-    rec = None if rec_err else records.get(module_trust.key_for(_space_path(space), mid))
+    # Тека модуля — посилання (`Refused('symlink', '.')`): `key_for` бере `realpath`, і аліас `modules/aaa -> acme` (чи посилання
+    # на довірений модуль іншого простору) ділив би запис довіри з теку-ціллю. Такий аліас — `refused` без запису.
+    alias = refused is not None and refused.code == 'symlink' and refused.detail == '.'
+    rec = None if (rec_err or alias) else records.get(module_trust.key_for(_space_path(space), mid))
     base = dict(origin='space', source=module_trust.tilde(d), record=rec is not None)
     if rec is not None and module_trust.verify_snapshot(rec['hash']):
         m = _load_own(module_trust.snapshot_dir(rec['hash']), mid)
@@ -690,24 +694,38 @@ def _own_module(space, mid, d, records, rec_err):
                   trust='untrusted', trust_error=why, **_meta_kw(meta), **base)
 
 
+def _snapshot_meta(d, mid):
+    """Метадані маніфесту знімка `d` (як віддає `_check_manifest`) чи `None`, коли знімок не сканується чи маніфест не проходить. Лише
+    читання (скан з кешем відбитка), не виконання: потрібні `_failed(meta=…)`, щоб модуль, який не завантажився, ніс свої
+    ролі, налаштування й версію (інакше він «не тримав би» роль, а в `space.json` лягло б `roles: []`)."""
+    try:
+        sc = module_trust.scan(d)
+    except module_trust.Refused:
+        return None
+    return _manifest_from_bytes(sc.manifest, mid, d)[0]
+
+
 def _load_own(d, mid):
     """`Module` знімка `d` (id — `mid`). Верхній рівень `server.py` виконується в потоці-демоні з тайм-аутом
-    `LOAD_TIMEOUT` і ПОЗА `_LOAD_LOCK` (лок — на теку знімка, щоб не будувати двічі): зависання свого модуля не блокує
-    ні каталог інших просторів, ні вбудовані модулі. Не встиг — `module-error` «load timed out»; результат кешується за
-    відбитком теки (потік-сирота доживає свій час)."""
+    `LOAD_TIMEOUT` і ПОЗА `_LOAD_LOCK` (лок — на пару (тека знімка, id), щоб не будувати двічі): зависання свого модуля не
+    блокує ні каталог інших просторів, ні вбудовані модулі. Не встиг чи кинув виняток — `module-error` («load timed out» чи
+    текст винятку), але з маніфестом знімка (`_snapshot_meta`, прочитаний ДО старту потоку); результат кешується за відбитком
+    теки (потік-сирота доживає свій час)."""
+    key = (d, mid)
     fp = module_trust.fingerprint(d)
     with _LOAD_LOCK:
-        hit = _OWN_CACHE.get(d)
+        hit = _OWN_CACHE.get(key)
         if hit is not None and hit[0] == fp:
-            _OWN_CACHE.move_to_end(d)                       # за порядком використання: останнім витісняється те, чим користуються
+            _OWN_CACHE.move_to_end(key)                     # за порядком використання: останнім витісняється те, чим користуються
             return hit[1]
-        lock = _OWN_LOCKS.setdefault(d, threading.Lock())
+        lock = _OWN_LOCKS.setdefault(key, threading.Lock())
     with lock:
         with _LOAD_LOCK:
-            hit = _OWN_CACHE.get(d)
+            hit = _OWN_CACHE.get(key)
             if hit is not None and hit[0] == fp:
-                _OWN_CACHE.move_to_end(d)
+                _OWN_CACHE.move_to_end(key)
                 return hit[1]
+        meta = _snapshot_meta(d, mid)
         box = []
         sid = spaces.request_space_id()
 
@@ -716,18 +734,29 @@ def _load_own(d, mid):
                 with spaces.request_space(sid):
                     box.append(_build(d, mid))
             except BaseException as e:  # noqa: BLE001 — і `KeyboardInterrupt` модуля не валить сервер
-                box.append(_failed(mid, d, 'module-error', _exc_text(e)))
+                box.append(_failed(mid, d, 'module-error', _exc_text(e), meta=meta))
         t = threading.Thread(target=work, name=f'deai-own-load-{mid}', daemon=True)
         t.start()
         t.join(LOAD_TIMEOUT)
-        mod = box[0] if box else _failed(mid, d, 'module-error', f'load timed out after {LOAD_TIMEOUT} s')
+        mod = box[0] if box else _failed(mid, d, 'module-error', f'load timed out after {LOAD_TIMEOUT} s', meta=meta)
         with _LOAD_LOCK:
-            _OWN_CACHE[d] = (fp, mod)
-            _OWN_CACHE.move_to_end(d)
+            _OWN_CACHE[key] = (fp, mod)
+            _OWN_CACHE.move_to_end(key)
             while len(_OWN_CACHE) > OWN_CACHE_MAX:
                 old, _ = _OWN_CACHE.popitem(last=False)
                 _OWN_LOCKS.pop(old, None)
         return mod
+
+
+def forget_own(h):
+    """Забути закешоване завантаження знімка `h` (хеш) під БУДЬ-ЯКИМ id: повторна довіра ті самі байти — та сама тека знімка,
+    а закешований збій (тайм-аут, виняток) інакше пережив би її аж до перезапуску. Решту знімків не чіпає. Під `_LOAD_LOCK`."""
+    d = module_trust.snapshot_dir(h)
+    with _LOAD_LOCK:
+        for k in [k for k in _OWN_CACHE if k[0] == d]:
+            del _OWN_CACHE[k]
+        for k in [k for k in _OWN_LOCKS if k[0] == d]:
+            del _OWN_LOCKS[k]
 
 
 def catalog(space=None):
