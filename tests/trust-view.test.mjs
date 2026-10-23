@@ -148,6 +148,39 @@ test("cutMid: як `_clean(…, middle=True)` системного вікна �
   assert.ok(h.includes(`«${"n".repeat(TR_MAX - 1)}…»`), "назва — зрізана з кінця");
 });
 
+test("cut і cutMid (ревʼю Task 7): спершу прибирають Cc/Cf/Cs/Zl/Zp, далі міряють у code points — як `module_trust._clean` (емодзі, без самотнього сурогата)", () => {
+  const lone = /[\ud800-\udfff]/u;   // у режимі `u` збігається лише з самотнім сурогатом
+  /* шлях із 72 code points (довжина UTF-16 = 144 > 80) вміщається — не ріжеться */
+  const e72 = "😀".repeat(72);
+  assert.ok(e72.length > TR_MAX && Array.from(e72).length <= TR_MAX);
+  assert.equal(cutMid(e72), e72, "cutMid: 72 code points не ріжеться");
+  assert.equal(cutMid("😀".repeat(TR_MAX)), "😀".repeat(TR_MAX), "рівно TR_MAX code points — без змін");
+  const inDlg = trustDialogHTML(base({ path: e72, name: e72, version: e72 }));
+  assert.ok(inDlg.includes(`<code>${e72}</code>`), "шлях у діалозі цілий");
+  assert.ok(inDlg.includes(`«${e72}»`), "назва в заголовку ціла (cut)");
+  /* 100 емодзі — ріжеться до рівно 80 code points, без � і без самотнього сурогата */
+  const e100 = "😀".repeat(100);
+  for (const [what, out] of [["cutMid", cutMid(e100)], ["cut (назва)", /модулю «([^»]*)»\?/.exec(trustDialogHTML(base({ name: e100 })))?.[1] ?? ""]]) {
+    assert.equal(Array.from(out).length, TR_MAX, `${what}: рівно ${TR_MAX} code points`);
+    assert.doesNotMatch(out, /\ufffd/u, `${what}: без �`);
+    assert.doesNotMatch(out, lone, `${what}: без самотнього сурогата`);
+    assert.ok(out.includes("…"), `${what}: є «…»`);
+  }
+  const mid = cutMid(e100);
+  assert.equal(mid, `${"😀".repeat(26)}…${"😀".repeat(53)}`, "голова (n-1)//3 = 26, хвіст 53 — у code points");
+  /* самотній сурогат із module.json не доходить до розмітки */
+  assert.doesNotMatch(cutMid(`a\ud800b${"x".repeat(100)}`), lone);
+  assert.equal(cutMid("a\ud800b"), "ab");
+  /* bidi-перевизначення й керування прибрано (і з назви — cut, і зі шляху — cutMid), далі міряється вже очищене */
+  assert.equal(cutMid("a\u202eb"), "ab");
+  assert.equal(cutMid("a\u0007b\u2028c\u2029d\u200be"), "abcde", "Cc, Zl, Zp, Cf");
+  assert.ok(trustDialogHTML(base({ name: "a\u202eb" })).includes("«ab»"), "cut: «a\\u202eb» → «ab»");
+  assert.ok(trustDialogHTML(base({ version: "1\u202e2" })).includes("v12"), "cut: версія");
+  const padded = `${"n".repeat(TR_MAX)}\u202e`;   // рівно TR_MAX значущих + керівний знак — після очищення не ріжеться
+  assert.ok(trustDialogHTML(base({ name: padded })).includes(`«${"n".repeat(TR_MAX)}»`), "очищення — ДО виміру");
+  assert.equal(cutMid(padded), "n".repeat(TR_MAX));
+});
+
 test("повторне відкриття: рядок угорі «Тека змінилась…»", () => {
   assert.match(trustDialogHTML(base({ reopened: true })), /<p class="tr-reopened" role="status">Тека змінилась, поки діалог був відкритий/);
   assert.doesNotMatch(trustDialogHTML(base()), /tr-reopened/);

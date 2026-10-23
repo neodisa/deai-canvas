@@ -28,17 +28,21 @@ export const TR_REMOVED_MAX = 10;
 /** Стеля запиту довіри: сервер чекає людину в системному вікні до 120 с (`module_trust.CONFIRM_TIMEOUT`). */
 export const TRUST_POST_TIMEOUT_MS = 150000;
 
+/* Як `module_trust._clean`: СПЕРШУ прибрати `Cc`/`Cf`/`Cs`/`Zl`/`Zp` (керування, bidi-перевизначення, самотні сурогати),
+   далі міряти й різати в code points, а не в одиницях UTF-16 — тоді назва й шлях у діалозі збігаються із системним вікном і
+   для не-BMP (емодзі), а зріз не лишає самотнього сурогата. */
+const clean = (s) => String(s ?? "").replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, "");
 const cut = (s) => {
-  const v = String(s ?? "");
-  return v.length > TR_MAX ? `${v.slice(0, TR_MAX - 1)}…` : v;
+  const v = Array.from(clean(s));
+  return v.length > TR_MAX ? `${v.slice(0, TR_MAX - 1).join("")}…` : v.join("");
 };
 /** Шлях — із СЕРЕДИНИ (голова, «…», хвіст): у шляху важливий кінець, тека модуля. Та сама формула, що в системного вікна
  *  (`module_trust._clean(s, n=80, middle=True)`: `head = (n-1)//3`) — діалог і вікно мають показувати однаковий шлях. */
 export const cutMid = (s) => {
-  const v = String(s ?? "");
-  if (v.length <= TR_MAX) return v;
+  const v = Array.from(clean(s));
+  if (v.length <= TR_MAX) return v.join("");
   const head = Math.floor((TR_MAX - 1) / 3);
-  return `${v.slice(0, head)}…${v.slice(v.length - (TR_MAX - 1 - head))}`;
+  return `${v.slice(0, head).join("")}…${v.slice(v.length - (TR_MAX - 1 - head)).join("")}`;
 };
 const list0 = (x) => (Array.isArray(x) ? x : []);
 

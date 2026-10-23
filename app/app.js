@@ -2824,9 +2824,16 @@ function trustPost(body) {
  * простір, діалог не збиває). `true` — довіру видано (модулі вже перечитано, `afterModulesChange`).
  *   — «Довіряю» → рядок «Підтвердіть у системному вікні…» → `POST /api/module-trust {space, id, hash, lang}`;
  *   — `module-changed` (тека змінилась, поки діалог був відкритий) → діалог закривається й відкривається знову зі
- *     свіжими даними та рядком угорі;
+ *     свіжими даними та рядком угорі; але лише коли діалог ще був НАШ: перебитий чужим `overlay()` посеред запиту
+ *     (`interrupted`) знову не відкривається — він скасував би чужий оверлей (`tell`, який людина читала), тож лише
+ *     перечитування модулів і `false`;
  *   — інша відмова (`trust-declined`, `trust-no-confirm`, `trust-busy`, `role-taken`…) → текст у діалозі, він лишається;
- *   — «Забрати довіру» → діалог закривається (питання поверх нього перебило б його), далі `untrustFlow`.
+ *   — «Забрати довіру» → діалог закривається (питання поверх нього перебило б його), далі `untrustFlow`;
+ *   — `state: trusted` (картка застаріла: довіру видали, поки йшло перечитування) → діалогу нема: лише `afterModulesChange`
+ *     і `true`, системне вікно вдруге не питаємо;
+ *   — `flight` — запит довіри в польоті: його результат дочікується й тоді, коли `askForm` вже віддав `null` (діалог
+ *     перебито), бо сервер довіру міг видати; відмова перебитого діалогу тиха (`false`).
+ * Усі `true` — модулі вже перечитано; усі `false` — довіри не видано (скасовано, відмова, відкликання виконано всередині).
  */
 async function openTrust(entry, spaceId) {
   let reopened = false;
@@ -2848,6 +2855,10 @@ async function openTrust(entry, spaceId) {
     /* Запит довіри в польоті. `overlay()` може скасувати діалог посеред запиту (`askForm` тоді віддає `null`), а сервер
        довіру вже видав — тож результат запиту дочікуємо окремо, а не покладаємося на те, що `askForm` дочекався його. */
     let flight = null;
+    /* `landed` — запит у польоті завершився (діалог дочекався `onSubmit`). Якщо `askForm` повернувся, а запит ще летить —
+       діалог перебито ззовні (`interrupted` нижче): «Скасувати» під час запиту заблоковано `aria-busy`, а інакше `askForm`
+       дочекається `onSubmit`. */
+    let landed = false;
     await askForm(() => trustDialogHTML({ ...d, reopened }), {
       onMount: (form) => {
         /* «Забрати довіру» сама діалогу не відповідає: позначка + «Скасувати». Під час запиту (`aria-busy`) — нічого:
@@ -2859,6 +2870,8 @@ async function openTrust(entry, spaceId) {
         });
       },
       onSubmit: async (_vals, ctl) => {
+        /* Нова відправка в тому самому діалозі (після відмови системного вікна) — новий політ: `landed` скидаємо. */
+        landed = false;
         flight = (async () => {
           const wait = ctl.form.querySelector('[data-tr-wait]');
           if (wait) wait.hidden = false;
@@ -2871,20 +2884,24 @@ async function openTrust(entry, spaceId) {
             const r = refusalView(err);
             /* Власні тексти відмов системного вікна вичерпні: технічна деталь сервера (англійською) в українському
                діалозі зайва. */
-            if (['trust-declined', 'trust-no-confirm', 'trust-busy', 'trust-needs-ui'].includes(err?.code)) return t(r.key);
+            if (['trust-declined', 'trust-no-confirm', 'trust-busy', 'trust-needs-ui', 'trust-unreadable'].includes(err?.code)) return t(r.key);
             /* Мережевий збій чи відповідь без впізнаваного коду: «Не вдалося зберегти» тут недоречне — нічого не зберігається. */
             if (r.key === 'cnRefGeneric') return t('errFailed', r.detail);
             return [t(r.key), r.detail].filter(Boolean).join(' — ');
           } finally {
             if (wait) wait.hidden = true;
+            landed = true;
           }
         })();
         return flight;
       },
       focusBack: () => homeNode()?.querySelector(`[data-cn][data-id="${CSS.escape(entry.id)}"]:not([disabled])`) ?? null,
     });
+    const interrupted = flight !== null && !landed;
     if (flight) await flight;
     if (untrust) { await untrustFlow(entry, spaceId); return false; }
+    /* Діалог перебито чужим оверлеєм: відкривати знову не можна (скасує чужий оверлей) — лише свіжий список модулів. */
+    if (again && interrupted) { await afterModulesChange(); return false; }
     if (again) { reopened = true; continue; }
     if (!granted) return false;
     toast(t('cnToastTrusted', modName(entry)));

@@ -175,8 +175,10 @@ test("openTrust, відмова системного вікна: текст у �
   assert.equal(env.dialogs.length, 1, "діалог не відкрито знову");
 });
 
-test("openTrust (ревʼю Task 7): trust-declined / trust-no-confirm / trust-busy / trust-needs-ui — рівно власний текст cnRef*, без деталі сервера", async () => {
-  const cases = [["trust-declined", "cnRefDeclined"], ["trust-no-confirm", "cnRefNoConfirm"], ["trust-busy", "cnRefBusy"], ["trust-needs-ui", "cnRefNeedsUi"]];
+test("openTrust (ревʼю Task 7): trust-declined / trust-no-confirm / trust-busy / trust-needs-ui / trust-unreadable — рівно власний текст cnRef*, без деталі сервера", async () => {
+  /* `cnRefTrustUnreadable` вичерпний («Файл довіри не читається — перевірте …/trust.json»): деталь сервера зайва. */
+  const cases = [["trust-declined", "cnRefDeclined"], ["trust-no-confirm", "cnRefNoConfirm"], ["trust-busy", "cnRefBusy"], ["trust-needs-ui", "cnRefNeedsUi"],
+    ["trust-unreadable", "cnRefTrustUnreadable"]];
   for (const [code, key] of cases) {
     const env = trustEnv({
       post: async () => { throw refusal(code, `technical detail for ${code}`); },
@@ -187,7 +189,7 @@ test("openTrust (ревʼю Task 7): trust-declined / trust-no-confirm / trust-b
 });
 
 test("openTrust (ревʼю Task 7): інші відмови сервера — як було: текст і деталь через « — »", async () => {
-  for (const [code, key] of [["module-refused", "cnRefRefused"], ["role-taken", "cnRefRoleTaken"], ["trust-unreadable", "cnRefTrustUnreadable"]]) {
+  for (const [code, key] of [["module-refused", "cnRefRefused"], ["role-taken", "cnRefRoleTaken"]]) {
     const env = trustEnv({
       post: async () => { throw refusal(code, "alias.py: symbolic link"); },
       scripts: [async (dlg) => { assert.equal(await dlg.submit(), `${t(key)} — alias.py: symbolic link`, code); dlg.result = null; }],
@@ -292,6 +294,65 @@ test("openTrust (ревʼю Task 7): оверлей скасував діало�
   release();
   assert.equal(await done, false);
   assert.deepEqual(env.log, []);
+});
+
+test("openTrust (ревʼю Task 7): повторне «Довіряю» в тому самому діалозі після відмови — новий POST із тим самим відбитком, і знову рівно cnRefDeclined", async () => {
+  /* Мутація `flight ||= (async …)()` лишала старий політ: другий клік не слав запиту й показував застарілий результат. */
+  const env = trustEnv({
+    post: async () => { throw refusal("trust-declined", "system confirmation: no"); },
+    scripts: [async (dlg) => {
+      assert.equal(await dlg.submit(), t("cnRefDeclined"), "перша відмова");
+      assert.equal(env.postCalls.length, 1);
+      assert.equal(await dlg.submit(), t("cnRefDeclined"), "друга відмова — знову рівно власний текст");
+      assert.equal(env.postCalls.length, 2, "другий клік справді шле запит, а не віддає застарілий результат");
+      assert.deepEqual(env.postCalls[1], env.postCalls[0], "той самий відбиток");
+      assert.deepEqual(dlg.waitLog, [false, true, false, true], "рядок очікування — на кожен запит");
+      dlg.form.querySelector('[data-a="cancel"]').click();
+    }],
+  });
+  assert.equal(await env.openTrust(ENTRY, "alpha"), false);
+  assert.equal(env.postCalls.length, 2);
+  assert.equal(env.dialogs.length, 1, "діалог не відкривали знову");
+  assert.deepEqual(env.log, []);
+});
+
+test("openTrust (ревʼю Task 7): діалог перебито чужим оверлеєм, а запит завершився module-changed — діалог НЕ відкривається знову (askForm рівно раз), модулі перечитано, false", async () => {
+  /* Повторне відкриття скасувало б чужий оверлей (`tell`, який людина читала): лише `afterModulesChange`. */
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const env = trustEnv({
+    post: async () => { await gate; throw refusal("module-changed"); },
+    scripts: [async (dlg) => { dlg.opts.onSubmit({}, { form: dlg.form }); dlg.result = null; }],   // askForm віддає null, поки POST у польоті
+  });
+  const done = env.openTrust(ENTRY, "alpha");
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  assert.equal(env.postCalls.length, 1, "запит пішов");
+  release();
+  assert.equal(await done, false);
+  assert.equal(env.dialogs.length, 1, "askForm викликано рівно один раз: перебитий діалог не відкрито вдруге");
+  assert.equal(env.formCalls.length, 1, "дані вдруге не читали");
+  assert.deepEqual(env.log, [["afterModulesChange"]], "лише перечитування модулів: без тосту, без діалогу");
+});
+
+test("openTrust (ревʼю Task 7): перебито під час ДРУГОГО запиту в тому самому діалозі (після відмови) — теж не відкривається знову", async () => {
+  /* Другий політ скидає `landed`: інакше стара «приземлилась» зробила б перебитий діалог «звичайним» і він відкрився б удруге. */
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const env = trustEnv({
+    post: async (i) => { if (i === 0) throw refusal("trust-declined", "no"); await gate; throw refusal("module-changed"); },
+    scripts: [async (dlg) => {
+      assert.equal(await dlg.submit(), t("cnRefDeclined"));
+      dlg.opts.onSubmit({}, { form: dlg.form });   // другий запит у польоті…
+      dlg.result = null;                           // …а діалог перебито
+    }],
+  });
+  const done = env.openTrust(ENTRY, "alpha");
+  for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  assert.equal(env.postCalls.length, 2);
+  release();
+  assert.equal(await done, false);
+  assert.equal(env.dialogs.length, 1);
+  assert.deepEqual(env.log, [["afterModulesChange"]]);
 });
 
 test("openTrust (ревʼю Task 7): картка застаріла — тека вже довірена (state trusted) → діалог не показано, лише перечитування модулів, true", async () => {
