@@ -59,6 +59,9 @@ export const realDeai = () => ({
   /* Секрети модулів (етап 3b: майстер пише їх у `secrets.json`): живий тест, що доповз до справжнього сховища, не сміє
      лишити там слід — а до реєстру він міг би й не дотягнутись. */
   secrets: sha(path.join(REAL_DEAI, "secrets.json")),
+  /* Довіра своїм модулям (3c): живий тест пише `trust.json` і знімки `trusted/` — лише в тимчасовий `DEAI_HOME`. */
+  trust: sha(path.join(REAL_DEAI, "trust.json")),
+  trusted: existsSync(path.join(REAL_DEAI, "trusted")),
 });
 /** Знімок ДО будь-якого сервера: модуль імпортується до першого `startServer`. */
 export const REAL_BEFORE = realDeai();
