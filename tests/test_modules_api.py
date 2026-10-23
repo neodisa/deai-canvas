@@ -1391,10 +1391,10 @@ class Capabilities(World):
         відповідають. Без цього один простір гасив би `/api/spaces` — а за ним увесь інтерфейс."""
         real = dm._provider_for
 
-        def boom(role, space):
+        def boom(role, space, *rest):
             if space.get('id') == 'off':
                 raise RuntimeError('boom')
-            return real(role, space)
+            return real(role, space, *rest)
         with mock.patch.object(dm, '_provider_for', boom):
             st, body = self.get('/api/spaces')
             self.assertEqual(st, 200, body)

@@ -2236,9 +2236,9 @@ class CapabilitiesTest(Env):
         calls = []
         real = dm._provider_for
 
-        def spy(role, space):
+        def spy(role, space, *rest):               # `capabilities` передає ще й ледачий каталог (`get_cat`)
             calls.append(role)
-            return real(role, space)
+            return real(role, space, *rest)
         return calls, mock.patch.object(dm, '_provider_for', spy)
 
     def test_cached_until_space_json_changes(self):
@@ -2332,8 +2332,8 @@ class CapabilitiesTest(Env):
         real = dm._provider_for
         flipped = []
 
-        def spy(role, space):
-            res = real(role, space)
+        def spy(role, space, *rest):
+            res = real(role, space, *rest)
             if not flipped:
                 flipped.append(1)
                 dm.write_module_state(sp, 'static-publish', enabled=False)

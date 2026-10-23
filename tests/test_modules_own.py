@@ -9,6 +9,7 @@
 import builtins
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -794,3 +795,610 @@ class CatalogExtraTest(OwnEnv):
         self.assertIsNone(dm.last_check(sid, 'acme'))
         self.assertNotIn(sid, dm._CAPS)
         self.assertEqual(dm.last_check(sid, 'other'), {'ok': True}, 'чужий модуль не чіпаємо')
+
+
+# ================================================================================ Task 4: ролі «на папері» і довіра в ядрі
+
+class RolesTest(OwnEnv):
+    def test_space_json_roles_survive_normalize(self):
+        self.enable_raw()
+        self.assertEqual(dm.space_modules(self.sp)['acme']['roles'], ['publish'])
+
+    def test_normalize_keeps_only_well_formed_roles(self):
+        p = self.space_json(self.sp)
+        data = _read(p)
+        data['modules'] = {
+            'dup': {'enabled': True, 'roles': ['publish', 'publish', 'tokens']},
+            'reserved': {'enabled': True, 'roles': ['vcs']},
+            'empty': {'enabled': True, 'roles': []},
+            'unknown': {'enabled': True, 'roles': ['publish', 'nope']},
+            'notlist': {'enabled': True, 'roles': 'publish'},
+            'notstr': {'enabled': True, 'roles': ['publish', 5]},
+            'plain': {'enabled': True}}
+        _write(p, data)
+        got = dm.space_modules(self.sp)
+        self.assertEqual(got['dup']['roles'], ['publish', 'tokens'])
+        self.assertEqual(got['reserved']['roles'], ['vcs'])
+        for mid in ('empty', 'unknown', 'notlist', 'notstr', 'plain'):
+            self.assertNotIn('roles', got[mid], mid)
+            self.assertTrue(got[mid]['enabled'], mid)
+
+    def test_untrusted_enabled_own_module_holds_its_role_on_paper(self):
+        self.mk('pub')
+        self.own()
+        self.enable_raw()
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.write_module_state(self.sp, 'pub', enabled=True)
+        self.assertEqual(cm.exception.code, 'role-taken')
+        st = dm.write_module_state(self.sp, 'pub', enabled=True, replace=True)
+        self.assertEqual(st['replaced'], ['acme'])
+        self.assertFalse(dm.space_modules(self.sp)['acme']['enabled'])
+
+    def test_a_disabled_own_module_holds_nothing(self):
+        self.mk('pub')
+        self.own()
+        self.enable_raw()
+        dm.write_module_state(self.sp, 'acme', enabled=False)
+        dm.write_module_state(self.sp, 'pub', enabled=True)           # роль вільна: без `role-taken`
+        self.assertEqual(dm.provider('publish', self.sp).id, 'pub')
+
+    def test_missing_or_broken_own_module_still_holds_its_role(self):
+        self.mk('pub')
+        self.enable_raw('ghost', ('publish',))                 # тека не приїхала з git — ролі лише в записі
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.write_module_state(self.sp, 'pub', enabled=True)
+        self.assertEqual((cm.exception.code, cm.exception.message), ('role-taken', 'publish is already provided by ghost'))
+        _write(os.path.join(self.sp['path'], 'modules', 'acme', 'module.json'), '{oops')   # маніфест не розбирається
+        self.enable_raw('acme', ('publish',))
+        st = dm.write_module_state(self.sp, 'pub', enabled=True, replace=True)
+        self.assertEqual(st['replaced'], ['acme', 'ghost'])
+        mods = dm.space_modules(self.sp)
+        self.assertEqual((mods['acme']['enabled'], mods['ghost']['enabled'], mods['pub']['enabled']), (False, False, True))
+
+    def test_a_disabled_record_of_a_missing_folder_holds_nothing(self):
+        self.mk('pub')
+        p = self.space_json(self.sp)
+        data = _read(p)
+        data['modules'] = {'ghost': {'enabled': False, 'settings': {}, 'roles': ['publish']}}
+        _write(p, data)
+        st = dm.write_module_state(self.sp, 'pub', enabled=True, replace=True)
+        self.assertEqual(st['replaced'], [])
+        dm.write_module_state(self.sp, 'pub', enabled=False)
+        dm.write_module_state(self.sp, 'pub', enabled=True)           # без `replace`: вимкнений запис ролі не тримає
+
+    def test_a_stale_builtin_entry_without_roles_holds_nothing(self):
+        self.mk('pub')
+        p = self.space_json(self.sp)
+        data = _read(p)
+        data['modules'] = {'old-builtin': {'enabled': True, 'settings': {}}}
+        _write(p, data)
+        dm.write_module_state(self.sp, 'pub', enabled=True)           # без `replace`: чужий пил роль не тримає
+
+    def test_the_roles_of_a_builtin_come_only_from_its_manifest(self):
+        self.mk('pub')
+        self.mk('ds', roles=('tokens',))
+        p = self.space_json(self.sp)
+        data = _read(p)
+        data['modules'] = {'pub': {'enabled': True, 'settings': {}, 'roles': ['tokens']}}      # дописано вручну
+        _write(p, data)
+        dm.write_module_state(self.sp, 'ds', enabled=True)           # `pub` роль `tokens` не веде: запис не в рахунок
+
+    def test_a_builtin_that_did_not_load_still_holds_nothing(self):
+        self.mk('broken', server='def check(:\n')
+        self.mk('pub')
+        dm.write_module_state(self.sp, 'broken', enabled=True)
+        self.assertEqual(dm.catalog(self.sp)['broken'].status, 'error')
+        dm.write_module_state(self.sp, 'pub', enabled=True)           # зламаний ВБУДОВАНИЙ ролі не тримає, як і було
+
+    def test_provider_raises_for_untrusted_own_without_falling_back(self):
+        self.mk('static-publish')                              # неявний типовий у просторі без інтеграцій
+        self.own()
+        self.enable_raw()
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('publish', self.sp)
+        self.assertEqual(cm.exception.code, 'module-untrusted')
+        self.assertEqual(cm.exception.message, 'acme: module is not trusted on this computer')
+        caps = dm.capabilities(self.sp)
+        self.assertEqual((caps['publish'], caps.get('error')), (None, None), 'стан ролі, а не «space.json не читається»')
+
+    def test_integrations_space_no_legacy_for_untrusted_publish_or_comments(self):
+        sp = self.new_space('Liga', integrations=True)
+        self.own('acme', roles=('publish',), sp=sp)
+        self.own('talk', roles=('comments',), sp=sp, extra={'client': ['a.js']})
+        _write(os.path.join(sp['path'], 'modules', 'talk', 'a.js'), '//')
+        self.enable_raw('acme', ('publish',), sp=sp)
+        self.enable_raw('talk', ('comments',), sp=sp)
+        for role in ('publish', 'comments'):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.provider(role, sp)
+            self.assertEqual(cm.exception.code, 'module-untrusted', role)
+        caps = dm.capabilities(sp)
+        self.assertEqual((caps['publish'], caps['comments']), (None, None))
+        self.assertNotIn('error', caps)
+
+    def test_missing_own_comments_module_is_an_error_not_legacy(self):
+        sp = self.new_space('Liga', integrations=True)
+        self.enable_raw('talk', ('comments',), sp=sp)          # тека не приїхала з git
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('comments', sp)
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertEqual(dm.capabilities(sp)['comments'], None)
+        self.assertNotIn('error', dm.capabilities(sp))
+
+    def test_a_missing_own_module_of_another_role_does_not_touch_the_comments_path(self):
+        sp = self.new_space('Liga', integrations=True)
+        self.enable_raw('acme', ('publish',), sp=sp)           # тека не приїхала; роль `publish`, не `comments`
+        self.assertEqual(dm.provider('comments', sp), 'legacy')
+
+    def test_integrations_space_without_explicit_modules_never_reads_the_catalog(self):
+        sp = self.new_space('Liga', integrations=True)
+        self.own('acme', sp=sp)
+        with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог на шляху ЛІГА')):
+            self.assertEqual(dm.provider('publish', sp), 'legacy')
+            self.assertEqual(dm.provider('comments', sp), 'legacy')
+
+    def test_capabilities_builds_the_catalog_once_and_only_when_needed(self):
+        self.mk('static-publish')
+        calls = []
+        real = dm.catalog
+
+        def spy(space=None):
+            calls.append(space)
+            return real(space)
+        with mock.patch.object(dm, 'catalog', spy):
+            dm.capabilities(self.sp)
+            self.assertEqual(len(calls), 1, 'три ролі — один каталог')
+            self.assertIs(calls[0], self.sp, 'каталог простору, а не лише вбудовані')
+            calls.clear()
+            ig = self.new_space('Liga', integrations=True)
+            dm.capabilities(ig)
+            self.assertEqual(calls, [], 'простір ЛІГА без явних модулів — без каталогу')
+
+    def test_tokens_role_errors_too(self):
+        self.own('ds', roles=('tokens',))
+        self.enable_raw('ds', ('tokens',))
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('tokens', self.sp)
+        self.assertEqual(cm.exception.code, 'module-untrusted')
+
+    def test_paper_error_is_per_role_of_the_own_module(self):
+        self.mk('static-publish')
+        self.own('ds', roles=('tokens',))
+        self.enable_raw('ds', ('tokens',))
+        self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish', 'роль `publish` модуль `ds` не веде')
+        with self.assertRaises(dm.ModuleError):
+            dm.provider('tokens', self.sp)
+        caps = dm.capabilities(self.sp)
+        self.assertEqual((caps['publish'], caps['tokens'], caps.get('error')), ('static-publish', None, None))
+
+    def test_a_disabled_untrusted_own_module_is_no_paper_provider(self):
+        self.mk('static-publish')
+        self.own()
+        self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish')
+        p = self.space_json(self.sp)
+        data = _read(p)
+        data['modules'] = {'acme': {'enabled': False, 'settings': {}, 'roles': ['publish']}}
+        _write(p, data)
+        self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish')
+
+    def test_a_broken_builtin_is_no_paper_provider(self):
+        self.mk('static-publish')
+        self.mk('broken', server='def check(:\n')
+        sj = self.space_json(self.sp)
+        data = _read(sj)
+        data['modules'] = {'broken': {'enabled': True, 'settings': {}}}            # напряму: `role-taken` з неявним типовим
+        _write(sj, data)
+        self.assertEqual(dm.catalog(self.sp)['broken'].status, 'error')
+        self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish')     # як і було: зламаний вбудований не веде роль
+
+    def test_a_trusted_own_module_that_fails_to_load_is_a_module_error_on_paper(self):
+        self.mk('static-publish')
+        self.own(server='raise RuntimeError("boom")\n')
+        self.trust()
+        self.enable_raw()
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('publish', self.sp)
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertIn('boom', cm.exception.message)
+        self.assertTrue(cm.exception.message.startswith('acme: '))
+        caps = dm.capabilities(self.sp)
+        self.assertEqual((caps['publish'], caps.get('error')), (None, None))
+
+    def test_a_working_trusted_own_module_provides_the_role(self):
+        self.mk('static-publish')
+        self.own()
+        self.trust()
+        self.enable_raw()
+        self.assertEqual(dm.provider('publish', self.sp).id, 'acme')
+        self.assertEqual(dm.capabilities(self.sp)['publish'], 'acme')
+
+    def test_a_broken_manifest_enabled_with_roles_is_a_paper_error_and_leaves_comments_alone(self):
+        self.mk('static-publish')
+        _write(os.path.join(self.sp['path'], 'modules', 'acme', 'module.json'), '{oops')
+        self.enable_raw('acme', ('publish',))
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('publish', self.sp)
+        self.assertEqual(cm.exception.code, 'module-untrusted')
+        self.assertIn('bad-manifest', cm.exception.message)
+        caps = dm.capabilities(self.sp)
+        self.assertEqual((caps['publish'], caps['comments'], caps.get('error')), (None, None, None),
+                         'модуль веде лише `publish`: коментарі й простір не страждають')
+
+    def test_roles_recorded_for_a_broken_builtin_do_not_clear_it_of_leading_comments(self):
+        sp = self.new_space('Liga', integrations=True)
+        self.mk('weird', patch={'api': 99})                      # маніфест не проходить: ролі невідомі
+        p = self.space_json(sp)
+        data = _read(p)
+        data['modules'] = {'weird': {'enabled': True, 'settings': {}, 'roles': ['publish']}}   # ролі із запису — лише для СВОЇХ
+        _write(p, data)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('comments', sp)
+        self.assertEqual((cm.exception.code, cm.exception.message), ('module-error', dm.COMMENTS_MODULE_BROKEN))
+
+    def test_a_broken_own_manifest_without_recorded_roles_may_have_led_comments(self):
+        # Ролей не знаємо ні з маніфесту, ні із запису (запис без `roles` — вручну): консервативно, як і для вбудованих
+        sp = self.new_space('Liga', integrations=True)
+        _write(os.path.join(sp['path'], 'modules', 'acme', 'module.json'), '{oops')
+        p = self.space_json(sp)
+        data = _read(p)
+        data['modules'] = {'acme': {'enabled': True, 'settings': {}}}
+        _write(p, data)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('comments', sp)
+        self.assertEqual((cm.exception.code, cm.exception.message), ('module-error', dm.COMMENTS_MODULE_BROKEN))
+        self.assertFalse(getattr(cm.exception, 'paper', False), 'це не роль «на папері»: ролей нема')
+
+    def test_caps_key_sees_trust_and_folder_changes(self):
+        self.own()
+        self.enable_raw()
+        self.assertIsNone(dm.capabilities(self.sp)['publish'])
+        self.trust()
+        self.assertEqual(dm.capabilities(self.sp)['publish'], 'acme')
+
+    def test_caps_key_sees_a_changed_module_folder(self):
+        self.mk('static-publish')
+        d = self.own()
+        self.enable_raw()
+        self.assertIsNone(dm.capabilities(self.sp)['publish'])
+        man = _read(os.path.join(d, 'module.json'))
+        man['roles'] = ['tokens']                               # тека більше не веде `publish`
+        _write(os.path.join(d, 'module.json'), man)
+        self.assertEqual(dm.capabilities(self.sp)['publish'], 'static-publish', 'ключ кешу не побачив зміну теки')
+
+    def test_own_sig_is_none_without_a_space_folder_and_tracks_the_folders(self):
+        self.assertIsNone(dm.own_sig({'id': 'x', 'path': ''}))
+        self.assertIsNone(dm.own_sig(None))
+        base = dm.own_sig(self.sp)
+        d = self.own()
+        a = dm.own_sig(self.sp)
+        self.assertNotEqual(base, a)
+        self.assertEqual(dm.own_sig(self.sp), a, 'нічого не змінилось — відбиток той самий')
+        self.trust()
+        self.assertNotEqual(dm.own_sig(self.sp), a, 'довіра — теж зміна')
+        self.assertTrue(dm.own_sig(self.sp)[0][0][0] == 'acme' and d)
+
+
+class TrustCoreTest(OwnEnv):
+    def setUp(self):
+        super().setUp()
+        os.environ[mt.SEAM_ENV] = 'yes'
+        self.d = self.own()
+
+    def view(self, mid='acme'):
+        return dm.trust_view(self.sp, mid)
+
+    def test_view_shape_and_no_execution(self):
+        v = self.view()
+        self.assertEqual((v['id'], v['state'], v['record'], v['roles']), ('acme', 'untrusted', False, ['publish']))
+        self.assertRegex(v['hash'], r'^[0-9a-f]{64}$')
+        self.assertEqual({f['change'] for f in v['files']}, {'new'})
+        self.assertEqual(v['settings'], [{'key': 'token', 'type': 'secret', 'label': 'Token', 'public': False}])
+        self.assertEqual(v['path'], os.path.join('~', 'work', 'alpha', 'modules', 'acme'))
+        self.assertEqual(self.ran(), [])
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.trust_view(self.sp, 'nope')
+        self.assertEqual(cm.exception.code, 'unknown-module')
+
+    def test_view_of_a_non_own_or_malformed_id_is_unknown_module(self):
+        self.mk('pub')
+        for bad in ('pub', '../acme', 'ACME', '', None, 5, ['acme'], {}):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.trust_view(self.sp, bad)
+            self.assertEqual(cm.exception.code, 'unknown-module', repr(bad))
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.grant_trust(self.sp, bad, 'a' * 64, 'uk')
+            self.assertEqual(cm.exception.code, 'unknown-module', repr(bad))
+            if bad == 'pub':
+                continue                                        # «Забрати довіру» не вимагає теки: коректний id без запису — `False`
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.revoke_trust(self.sp, bad)
+            self.assertEqual(cm.exception.code, 'unknown-module', repr(bad))
+        self.assertFalse(dm.revoke_trust(self.sp, 'pub'))
+        self.assertFalse(dm.revoke_trust(self.sp, 'ghost'))
+
+    def test_view_numbers_and_total(self):
+        v = self.view()
+        self.assertEqual(v['total'], {'files': 2, 'bytes': sum(os.path.getsize(os.path.join(self.d, f))
+                                                                for f in ('module.json', 'server.py'))})
+        self.assertEqual((v['removed'], v['name'], v['version']), ([], 'Acme', '1.0.0'))
+
+    def test_view_of_a_refused_folder_and_a_bad_manifest(self):
+        _write(os.path.join(self.d, 'CON'), 'x')
+        v = self.view()
+        self.assertEqual((v['state'], v['refused']['code']), ('refused', 'bad-name'))
+        self.assertNotIn('hash', v)
+        os.remove(os.path.join(self.d, 'CON'))
+        _write(os.path.join(self.d, 'module.json'), '{oops')
+        v = self.view()
+        self.assertEqual((v['state'], v['refused']['code']), ('refused', 'bad-manifest'))
+        self.assertIn('module.json', v['refused']['detail'])
+        self.assertEqual(self.ran(), [])
+
+    def test_grant_runs_the_snapshot_and_clears_the_last_check(self):
+        dm.write_secrets(self.sp['id'], 'acme', {'token': 's'}, space=self.sp)
+        dm._remember(self.sp, 'acme', {'ok': False, 'error': 'old'})
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        self.assertIsNone(dm.last_check(self.sp['id'], 'acme'))
+        self.assertEqual(dm.catalog(self.sp)['acme'].trust, 'trusted')
+        self.assertEqual(self.view()['state'], 'trusted')
+        self.assertEqual({f['change'] for f in self.view()['files']}, {'same'})
+
+    def test_grant_writes_the_record_of_the_shown_version(self):
+        v = self.view()
+        dm.grant_trust(self.sp, 'acme', v['hash'], 'uk')
+        rec = mt.load_records()[mt.key_for(self.sp['path'], 'acme')]
+        self.assertEqual((rec['id'], rec['name'], rec['version'], rec['roles'], rec['hash']),
+                         ('acme', 'Acme', '1.0.0', ['publish'], v['hash']))
+        self.assertEqual([(f['path'], f['size']) for f in rec['files']], [(f['path'], f['size']) for f in v['files']])
+        self.assertRegex(rec['trusted_at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertTrue(mt.verify_snapshot(v['hash']))
+        self.assertEqual(self.ran(), [], 'довіра сама код не виконує — лише `catalog` після неї')
+
+    def test_changed_view_and_regrant(self):
+        h0 = self.view()['hash']
+        dm.grant_trust(self.sp, 'acme', h0, 'uk')
+        _write(os.path.join(self.d, 'server.py'), OWN_SERVER.replace('"v1"', '"v2"'))
+        _write(os.path.join(self.d, 'new.js'), '//')
+        v = self.view()
+        self.assertEqual(v['state'], 'changed')
+        self.assertEqual({f['path']: f['change'] for f in v['files']},
+                         {'module.json': 'same', 'server.py': 'changed', 'new.js': 'new'})
+        dm.grant_trust(self.sp, 'acme', v['hash'], 'uk')
+        self.assertEqual(dm.check(self.sp, 'acme')['detail'], 'own v2')
+
+    def test_view_survives_the_trust_file_turning_unreadable_between_two_reads(self):
+        # `own_modules` читає записи першим, сам `trust_view` — другим: між ними файл довіри могли зіпсувати
+        self.trust()
+        real = mt.load_records
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) > 1:
+                raise mt.TrustUnreadable('x')
+            return real()
+        with mock.patch.object(mt, 'load_records', flaky):
+            v = self.view()
+        self.assertGreater(len(calls), 1)
+        self.assertEqual((v['record'], v['state']), (False, 'trusted'))
+
+    def test_view_shows_the_manifest_of_the_folder_not_of_the_snapshot(self):
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        man = _read(os.path.join(self.d, 'module.json'))
+        man.update(name='Acme Two', version='2.0.0', roles=['publish', 'tokens'],
+                   settings=[{'key': 'site', 'type': 'text', 'label': 'Site'}])
+        _write(os.path.join(self.d, 'module.json'), man)
+        v = self.view()
+        self.assertEqual((v['state'], v['name'], v['version'], v['roles']),
+                         ('changed', 'Acme Two', '2.0.0', ['publish', 'tokens']))
+        self.assertEqual([s['key'] for s in v['settings']], ['site'])
+        self.assertEqual(dm.catalog(self.sp)['acme'].roles, ['publish'], 'а працює й далі знімок')
+
+    def test_view_lists_files_removed_since_the_trust(self):
+        _write(os.path.join(self.d, 'extra.txt'), 'abc')
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        os.remove(os.path.join(self.d, 'extra.txt'))
+        v = self.view()
+        self.assertEqual((v['state'], v['removed']), ('changed', [{'path': 'extra.txt', 'size': 3}]))
+
+    def test_grant_refusals(self):
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'acme', '0' * 64, 'uk')
+        self.assertEqual(cm.exception.code, 'module-changed')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'acme', 'short', 'uk')
+        self.assertEqual(cm.exception.code, 'bad-settings')
+        _write(os.path.join(self.d, 'CON'), 'x')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'acme', '0' * 64, 'uk')
+        self.assertEqual(cm.exception.code, 'module-refused')
+        self.assertEqual(self.ran(), [])
+
+    def test_grant_refuses_a_bad_manifest_and_a_non_string_hash(self):
+        h = self.view()['hash']
+        for bad in (None, 5, ['a' * 64], 'A' * 64):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.grant_trust(self.sp, 'acme', bad, 'uk')
+            self.assertEqual(cm.exception.code, 'bad-settings', repr(bad))
+        _write(os.path.join(self.d, 'module.json'), '{oops')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'acme', h, 'uk')
+        self.assertEqual(cm.exception.code, 'module-refused')
+        self.assertIn('bad-manifest', cm.exception.message)
+        self.assertEqual(mt.load_records(), {})
+
+    def test_grant_maps_the_system_window(self):
+        h = self.view()['hash']
+        for answer, code in (('no', 'trust-declined'), ('declined', 'trust-declined'),
+                             ('unavailable', 'trust-no-confirm'), ('busy', 'trust-busy')):
+            with mock.patch.object(mt, 'ask', return_value=answer):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.grant_trust(self.sp, 'acme', h, 'uk')
+            self.assertEqual(cm.exception.code, code, answer)
+        self.assertEqual(mt.load_records(), {})
+
+    def test_grant_passes_language_and_cleaned_texts(self):
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='yes') as ask:
+            dm.grant_trust(self.sp, 'acme', h, 'en')
+        key, got_hash, texts = ask.call_args[0]
+        self.assertEqual((key, got_hash), (mt.key_for(self.sp['path'], 'acme'), h))
+        title, msg, yes, no = texts
+        self.assertEqual((yes, no), ('Trust', 'Cancel'))
+        self.assertIn('acme', msg)
+        self.assertIn(h[:12], msg)
+
+    def test_grant_refuses_a_second_provider(self):
+        self.mk('pub')
+        dm.write_module_state(self.sp, 'pub', enabled=True)
+        self.enable_raw()                                       # колега закомітив і свій модуль
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        self.assertEqual(cm.exception.code, 'role-taken')
+        self.assertEqual(cm.exception.message, 'publish is already provided by pub')
+        self.assertEqual(mt.load_records(), {})
+
+    def test_grant_does_not_check_roles_of_a_module_that_is_not_enabled(self):
+        self.mk('pub')
+        dm.write_module_state(self.sp, 'pub', enabled=True)
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')                 # `acme` не ввімкнений: роль не його
+        self.assertEqual(dm.catalog(self.sp)['acme'].trust, 'trusted')
+
+    def test_grant_checks_the_roles_of_the_new_version_of_the_folder(self):
+        self.mk('ds', roles=('tokens',))
+        dm.write_module_state(self.sp, 'ds', enabled=True)
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        dm.write_module_state(self.sp, 'acme', enabled=True)
+        man = _read(os.path.join(self.d, 'module.json'))
+        man['roles'] = ['publish', 'tokens']                    # нова версія теки бере ще й роль, яку тримає `ds`
+        _write(os.path.join(self.d, 'module.json'), man)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        self.assertEqual((cm.exception.code, cm.exception.message), ('role-taken', 'tokens is already provided by ds'))
+
+    def test_grant_needs_the_spaces_layer(self):
+        h = self.view()['hash']
+        with mock.patch.dict(os.environ):
+            os.environ.pop('DEAI_HOME')
+            for call in (lambda: dm.grant_trust(self.sp, 'acme', h, 'uk'), lambda: dm.revoke_trust(self.sp, 'acme')):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    call()
+                self.assertEqual(cm.exception.code, 'spaces-off')
+
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_a_link_alias_has_no_trust_of_its_own_and_revoke_leaves_the_target(self):
+        d = self.own()
+        self.trust()
+        os.symlink(d, os.path.join(self.sp['path'], 'modules', 'aaa'))
+        v = dm.trust_view(self.sp, 'aaa')
+        self.assertEqual((v['state'], v['record'], v['refused']['code']), ('refused', False, 'symlink'))
+        self.assertFalse(dm.revoke_trust(self.sp, 'aaa'))
+        m = dm.catalog(self.sp)['acme']
+        self.assertEqual((m.trust, m.record), ('trusted', True), 'довіру acme не знято через аліас')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.grant_trust(self.sp, 'aaa', 'a' * 64, 'uk')
+        self.assertEqual(cm.exception.code, 'module-refused')
+
+    def test_forget_own_raises_the_generation(self):
+        g = dm._OWN_GEN
+        dm.forget_own('a' * 64)
+        self.assertEqual(dm._OWN_GEN, g + 1)
+
+    def test_forget_own_during_a_load_keeps_that_load_out_of_the_cache(self):
+        """Повторна довіра, поки перше (збійне) завантаження ще в польоті: його результат не мусить пережити довіру."""
+        self.own(server=SLEEPY)                               # `SLEEPY` і ворота — з Task 3
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')
+        with mock.patch.object(dm, 'LOAD_TIMEOUT', 0.5):
+            t = threading.Thread(target=dm.catalog, args=(self.sp,))
+            t.start()
+            for _ in range(100):                              # дочекатись потоку завантаження
+                if any(x.name == 'deai-own-load-acme' for x in threading.enumerate()):
+                    break
+                time.sleep(0.01)
+            dm.forget_own(h)
+            t.join(5)
+        self.assertNotIn((mt.snapshot_dir(h), 'acme'), dm._OWN_CACHE)
+
+    def test_a_load_without_a_forget_is_cached(self):
+        self.own(server=SLEEPY)
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')
+        with mock.patch.object(dm, 'LOAD_TIMEOUT', 0.3):
+            dm.catalog(self.sp)
+        self.assertIn((mt.snapshot_dir(h), 'acme'), dm._OWN_CACHE)
+
+    def test_retrust_forgets_a_cached_load_failure(self):
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')
+        d = mt.snapshot_dir(h)
+        bad = dm._failed('acme', d, 'module-error', 'load timed out after 5 s')
+        with dm._LOAD_LOCK:
+            dm._OWN_CACHE[(d, 'acme')] = (mt.fingerprint(d), bad)      # ніби перше завантаження не встигло
+        self.assertEqual(dm.catalog(self.sp)['acme'].status, 'error')
+        with mock.patch.object(mt, 'ask', return_value='yes'):
+            dm.grant_trust(self.sp, 'acme', h, 'uk')                   # ті самі байти — знімок той самий
+        self.assertEqual(dm.catalog(self.sp)['acme'].status, 'ok')
+
+    def test_snapshot_removed_meanwhile_is_module_changed(self):
+        with mock.patch.object(mt, 'put_record', side_effect=mt.SnapshotGone('x')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        self.assertEqual(cm.exception.code, 'module-changed')
+
+    def test_an_unwritable_trust_record_is_unwritable(self):
+        with mock.patch.object(mt, 'put_record', side_effect=OSError('disk')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        self.assertEqual(cm.exception.code, 'unwritable')
+        self.assertEqual(cm.exception.message, 'trust: OSError')
+
+    def test_unreadable_trust_file(self):
+        _write(mt.trust_file(), '{oops')
+        h = self.view()['hash']
+        with mock.patch.object(mt, 'ask', side_effect=AssertionError('вікно показано, хоч довіру не буде куди записати')):
+            for call in (lambda: dm.grant_trust(self.sp, 'acme', h, 'uk'), lambda: dm.revoke_trust(self.sp, 'acme')):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    call()
+                self.assertEqual(cm.exception.code, 'trust-unreadable')
+        self.assertEqual(open(mt.trust_file()).read(), '{oops', 'нечитабельний файл довіри не переписано')
+
+    def test_the_trust_file_turning_unreadable_during_the_grant(self):
+        with mock.patch.object(mt, 'put_record', side_effect=mt.TrustUnreadable('x')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        self.assertEqual(cm.exception.code, 'trust-unreadable')
+
+    def test_a_failing_revoke_write_is_unwritable_and_keeps_the_last_check(self):
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        dm.check(self.sp, 'acme')
+        with mock.patch.object(mt, 'drop_record', side_effect=OSError('disk')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.revoke_trust(self.sp, 'acme')
+        self.assertEqual((cm.exception.code, cm.exception.message), ('unwritable', 'trust: OSError'))
+        self.assertIsNotNone(dm.last_check(self.sp['id'], 'acme'), 'довіру не знято — результат перевірки лишається')
+
+    def test_revoke_keeps_space_json_and_works_without_the_folder(self):
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        dm.write_module_state(self.sp, 'acme', enabled=True, replace=True)
+        before = open(self.space_json(self.sp), 'rb').read()
+        self.assertTrue(dm.revoke_trust(self.sp, 'acme'))
+        self.assertEqual(open(self.space_json(self.sp), 'rb').read(), before)
+        self.assertEqual(dm.catalog(self.sp)['acme'].trust, 'untrusted')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('publish', self.sp)
+        self.assertEqual(cm.exception.code, 'module-untrusted')
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        shutil.rmtree(self.d)
+        self.assertTrue(dm.revoke_trust(self.sp, 'acme'))
+        self.assertFalse(dm.revoke_trust(self.sp, 'acme'))
+
+    def test_revoke_clears_the_last_check(self):
+        dm.grant_trust(self.sp, 'acme', self.view()['hash'], 'uk')
+        dm.check(self.sp, 'acme')
+        self.assertIsNotNone(dm.last_check(self.sp['id'], 'acme'))
+        self.assertTrue(dm.revoke_trust(self.sp, 'acme'))
+        self.assertIsNone(dm.last_check(self.sp['id'], 'acme'))

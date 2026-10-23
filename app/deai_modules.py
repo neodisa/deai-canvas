@@ -16,6 +16,11 @@
 `error_code='module-untrusted'`), його код не виконується НІКОЛИ. Коди ядра для них — `CORE_STATUS` (поза `STATUS`:
 модуль не може кинути їх від свого імені). Функції з id модуля (`check`, `validate_settings`, `write_secrets`…) беруть
 `space`, щоб знайти свій модуль; без нього — лише вбудовані.
+Роль «на папері»: свій модуль, ЯВНО ввімкнений у `space.json`, тримає свої ролі й тоді, коли тут не працює (недовірений,
+збій завантаження, тека не приїхала з git): `_holders`/`_role_conflict` рахують його власником (ролі — з маніфесту й із
+запису `roles` у `space.json`, їх пише вмикання свого модуля), `_provider_for` кидає `module-untrusted`/`module-error` без
+запасного шляху (`_paper_failure`), а `capabilities` дає такій ролі `None` БЕЗ ключа `error`. Довіра: `trust_view`,
+`grant_trust` (системне вікно ОС — останнє слово людини), `revoke_trust`; кеш знімків скидає `forget_own` (покоління `_OWN_GEN`).
 Файл названо `deai_modules.py`, а не `modules.py`: `bin/` стоїть у `sys.path` попереду, і імпорт
 був би неоднозначним.
 
@@ -559,6 +564,9 @@ def _load_dir(d, folder):
 #: Ключ несе й `id`: той самий знімок під двома іменами (запис довіри, що вказує на чужий хеш) не віддає одного модуля обом.
 _OWN_CACHE = OrderedDict()
 _OWN_LOCKS = {}
+#: Покоління кешу знімків: `forget_own` піднімає його, а `_load_own` кладе результат у кеш, лише якщо за час завантаження
+#: покоління не змінилось (інакше збійне завантаження, що ще в польоті, дописало б себе ПІСЛЯ повторної довіри).
+_OWN_GEN = 0
 
 
 def _clone(m, **kw):
@@ -710,7 +718,8 @@ def _load_own(d, mid):
     `LOAD_TIMEOUT` і ПОЗА `_LOAD_LOCK` (лок — на пару (тека знімка, id), щоб не будувати двічі): зависання свого модуля не
     блокує ні каталог інших просторів, ні вбудовані модулі. Не встиг чи кинув виняток — `module-error` («load timed out» чи
     текст винятку), але з маніфестом знімка (`_snapshot_meta`, прочитаний ДО старту потоку); результат кешується за відбитком
-    теки (потік-сирота доживає свій час)."""
+    теки (потік-сирота доживає свій час), але лише коли `forget_own` не спрацював за час завантаження (`_OWN_GEN`) — інакше
+    результат повертається викликачу, а в кеш не потрапляє."""
     key = (d, mid)
     fp = module_trust.fingerprint(d)
     with _LOAD_LOCK:
@@ -719,6 +728,7 @@ def _load_own(d, mid):
             _OWN_CACHE.move_to_end(key)                     # за порядком використання: останнім витісняється те, чим користуються
             return hit[1]
         lock = _OWN_LOCKS.setdefault(key, threading.Lock())
+        gen = _OWN_GEN
     with lock:
         with _LOAD_LOCK:
             hit = _OWN_CACHE.get(key)
@@ -740,19 +750,23 @@ def _load_own(d, mid):
         t.join(LOAD_TIMEOUT)
         mod = box[0] if box else _failed(mid, d, 'module-error', f'load timed out after {LOAD_TIMEOUT} s', meta=meta)
         with _LOAD_LOCK:
-            _OWN_CACHE[key] = (fp, mod)
-            _OWN_CACHE.move_to_end(key)
-            while len(_OWN_CACHE) > OWN_CACHE_MAX:
-                old, _ = _OWN_CACHE.popitem(last=False)
-                _OWN_LOCKS.pop(old, None)
+            if _OWN_GEN == gen:                             # `forget_own` посеред завантаження: цей результат — не в кеш
+                _OWN_CACHE[key] = (fp, mod)
+                _OWN_CACHE.move_to_end(key)
+                while len(_OWN_CACHE) > OWN_CACHE_MAX:
+                    old, _ = _OWN_CACHE.popitem(last=False)
+                    _OWN_LOCKS.pop(old, None)
         return mod
 
 
 def forget_own(h):
     """Забути закешоване завантаження знімка `h` (хеш) під БУДЬ-ЯКИМ id: повторна довіра ті самі байти — та сама тека знімка,
-    а закешований збій (тайм-аут, виняток) інакше пережив би її аж до перезапуску. Решту знімків не чіпає. Під `_LOAD_LOCK`."""
+    а закешований збій (тайм-аут, виняток) інакше пережив би її аж до перезапуску. Решту знімків не чіпає. Під `_LOAD_LOCK`.
+    Піднімає `_OWN_GEN`: завантаження, що вже в польоті, не допише свій результат у кеш після цього виклику."""
+    global _OWN_GEN
     d = module_trust.snapshot_dir(h)
     with _LOAD_LOCK:
+        _OWN_GEN += 1
         for k in [k for k in _OWN_CACHE if k[0] == d]:
             del _OWN_CACHE[k]
         for k in [k for k in _OWN_LOCKS if k[0] == d]:
@@ -827,6 +841,10 @@ def _normalize(mods):
             continue
         st = e.get('settings')
         out[mid] = {'enabled': e.get('enabled') is True, 'settings': dict(st) if isinstance(st, dict) else {}}
+        roles = e.get('roles')                     # пише вмикання СВОГО модуля (`write_module_state`); вбудовані — без
+        if (isinstance(roles, list) and roles
+                and all(isinstance(r, str) and r in ROLES_CALLED + ROLES_RESERVED for r in roles)):
+            out[mid]['roles'] = list(dict.fromkeys(roles))
     return out
 
 
@@ -966,25 +984,46 @@ def _require_writable(space):
         raise ModuleError('spaces-off', message='spaces layer is off or the space has no folder')
 
 
+def _holds(o, space, explicit):
+    """Чи тримає модуль `o` свої ролі: завантажений і ввімкнений (зокрема неявно) — так; СВІЙ модуль, ЯВНО ввімкнений
+    у `space.json`, — так навіть коли тут не працює («на папері»: роль за ним, доки людина її не віддасть — інакше пізніша
+    довіра дала б двох постачальників). Вбудований, що не завантажився, — ні, як і було."""
+    if o.status == 'ok':
+        return _enabled_in(o, space, explicit)[0]
+    return o.origin == 'space' and explicit.get(o.id, {}).get('enabled') is True
+
+
+def _roles_of(oid, cat, explicit):
+    """Ролі модуля `oid`: з маніфесту (каталог) і — для СВОГО модуля чи теки, якої в каталозі нема, — ще й із запису
+    `space.json` (їх пише вмикання свого модуля). Маніфест зламаний (ролей у каталозі нема) чи тека не приїхала з git —
+    роль усе одно за ним «на папері», а не вільна для другого постачальника."""
+    o = cat.get(oid)
+    out = set(o.roles) if o is not None else set()
+    if o is None or o.origin == 'space':
+        out |= set(explicit.get(oid, {}).get('roles', ()))
+    return out
+
+
 def _holders(m, cat, space, explicit):
-    """Id ІНШИХ модулів `cat`, що зараз тримають хоч одну роль `m` у `explicit` (неявно ввімкнений `static-publish`
-    теж), за абеткою. Не завантажені модулі ролей не тримають."""
+    """Id ІНШИХ модулів, що зараз тримають хоч одну роль `m`, за абеткою: з каталогу — за `_holds` (неявно ввімкнений
+    `static-publish` теж; СВІЙ явно ввімкнений — і «на папері»); явно ввімкнений запис `space.json`, чиєї теки в каталозі
+    нема, — теж (ролі з запису, `_roles_of`). Вбудовані модулі, що не завантажились, ролей не тримають."""
     mine = set(m.roles)
     out = []
-    for oid in sorted(cat):
-        other = cat[oid]
-        if oid == m.id or other.status != 'ok' or not (mine & set(other.roles)):
+    for oid in sorted(set(cat) | set(explicit)):
+        if oid == m.id or not (mine & _roles_of(oid, cat, explicit)):
             continue
-        if _enabled_in(other, space, explicit)[0]:
+        o = cat.get(oid)
+        if _holds(o, space, explicit) if o is not None else explicit[oid]['enabled'] is True:
             out.append(oid)
     return out
 
 
 def _role_conflict(m, cat, space, explicit):
-    """Текст `role-taken` для модуля `m`, якщо хтось інший із `cat` уже тримає його роль у `explicit` (неявно
-    ввімкнений `static-publish` теж); інакше `None`. Не завантажені модулі ролей не тримають."""
+    """Текст `role-taken` для модуля `m`, якщо хтось інший уже тримає його роль (`_holders`); інакше `None`. Роль у
+    тексті — з тих самих ролей власника (`_roles_of`): тека, якої в каталозі нема, чи зламаний маніфест не дають `KeyError`."""
     for oid in _holders(m, cat, space, explicit):
-        return f'{sorted(set(m.roles) & set(cat[oid].roles))[0]} is already provided by {oid}'
+        return f'{sorted(set(m.roles) & _roles_of(oid, cat, explicit))[0]} is already provided by {oid}'
     return None
 
 
@@ -1563,7 +1602,8 @@ def _enabled_module_is_lost(cat, explicit):
 
       * `m` є, не завантажився й його маніфест ОГОЛОШУЄ `comments` (`'comments' in m.roles`) — так;
       * `m` є, не завантажився, а ролі невідомі (`roles` порожні: маніфест не розібрано чи не пройшов перевірку), — так,
-        КРІМ id вбудованого модуля іншої ролі (`KNOWN_OTHER_MODULES`: зламаний `css-tokens` коментарів не вів);
+        КРІМ id вбудованого модуля іншої ролі (`KNOWN_OTHER_MODULES`: зламаний `css-tokens` коментарів не вів); для СВОГО
+        модуля ролі тоді беруться із запису `space.json` (їх пише вмикання): запис без `comments` коментарів не веде;
       * `m` немає в каталозі, — так лише для id вбудованого модуля коментарів (`KNOWN_COMMENTS_MODULES`); решта —
         застарілий запис (модуль прибрали, теку джерел більше не названо), і він шлях ЛІГА не вимикає;
       * модуль завантажився без ролі `comments` (і зламаний модуль чужої ролі з розібраним маніфестом) — ні.
@@ -1580,15 +1620,45 @@ def _enabled_module_is_lost(cat, explicit):
             continue
         if m.status == 'ok':
             continue
-        if 'comments' in m.roles or (not m.roles and mid not in KNOWN_OTHER_MODULES):
+        roles = m.roles or (e.get('roles', []) if m.origin == 'space' else [])   # свій модуль із зламаним маніфестом — ролі із запису
+        if 'comments' in roles or (not roles and mid not in KNOWN_OTHER_MODULES):
             return True
     return False
 
 
-def _provider_for(role, space):
+def _paper_failure(role, cat, explicit):
+    """`ModuleError` для ролі `role`, яку «на папері» веде явно ввімкнений СВІЙ модуль, що тут не працює, — або `None`.
+    Модуль у каталозі, свій і не `ok` → `module-untrusted` (недовірений) чи `module-error`; модуля в каталозі нема, а
+    запис `space.json` несе `roles` із цією роллю (їх пише вмикання свого модуля) → `module-error` (тека не приїхала чи
+    зникла). Позначка `paper` каже `capabilities`, що роль — `None`, а не запасний `'legacy'`."""
+    for mid in sorted(explicit):
+        e = explicit[mid]
+        if not e['enabled']:
+            continue
+        m = cat.get(mid)
+        if m is not None:
+            if m.origin != 'space' or m.status == 'ok' or role not in (m.roles or e.get('roles', [])):
+                continue
+            code = 'module-untrusted' if m.error_code == 'module-untrusted' else 'module-error'
+            err = ModuleError(code, message=f'{mid}: {m.error or UNTRUSTED_TEXT}')
+        elif role in e.get('roles', ()):
+            err = ModuleError('module-error', message=f'{mid}: the module folder is missing')
+        else:
+            continue
+        err.paper = True
+        return err
+    return None
+
+
+def _provider_for(role, space, get_cat=None):
     """Модуль, `'legacy'` (лише ролі `LEGACY_ROLES`) чи `None` — для вже відомого простору `space`.
     Простір з `integrations` і без жодного явно ввімкненого модуля — `'legacy'`/`None` ДО каталогу.
     Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
+
+    СВІЙ модуль, ЯВНО ввімкнений у `space.json` і не робочий тут (недовірений, `refused`, збій завантаження, теки нема), веде
+    свої ролі «на папері» (`_paper_failure`): `module-untrusted`/`module-error` для БУДЬ-ЯКОЇ такої ролі й у будь-якому
+    просторі, ДО пошуку переможця — ні неявного `static-publish`, ні `'legacy'`. Помилка несе позначку `paper`.
+    `get_cat` — ледача вибірка каталогу (`capabilities` ділить її між ролями); без неї — `catalog(space)`.
 
     ВИНЯТОК для `comments` (див. docstring модуля, «приватність» і «видимість»): явно ввімкнений модуль коментарів, що не
     завантажився (`_enabled_module_is_lost`), — `module-error` у БУДЬ-ЯКОМУ просторі, а не тиша: у просторі з інтеграціями
@@ -1608,7 +1678,10 @@ def _provider_for(role, space):
             return 'legacy' if role in LEGACY_ROLES else None
     else:
         explicit = space_modules(space)
-    cat = catalog()
+    cat = get_cat() if get_cat is not None else catalog(space)
+    paper = _paper_failure(role, cat, explicit)
+    if paper is not None:
+        raise paper                                     # свій модуль веде роль на папері: ні неявного, ні `'legacy'`
     winners = []
     for mid in sorted(cat):
         m = cat[mid]
@@ -1636,7 +1709,9 @@ def provider(role, space=None):
     ізоляції) → `'legacy'` для `publish` і `comments`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
     каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА). Явно переданий `space` вирішується сам по собі, незалежно
     від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
-    `integrations` і роль із `LEGACY_ROLES` → `'legacy'`; інакше `None`.
+    `integrations` і роль із `LEGACY_ROLES` → `'legacy'`; інакше `None`. Каталог — з СВОЇМИ модулями простору
+    (`catalog(space)`): явно ввімкнений свій модуль, що тут не працює, веде роль «на папері» — `ModuleError`
+    (`module-untrusted`/`module-error`), без запасного шляху (`_paper_failure`).
     ⚠️ НІКОЛИ не кликати під `spaces.WRITE_LOCK`: для простору запиту це `spaces.active_space()`, а той може
     мігрувати реєстр (бере лок), а `catalog()` виконує код модулів. Може кинути `spaces.SpacesError` (реєстр
     не прочитати) і `ModuleError('space-json-unreadable')` (простір без інтеграцій, `space.json` є, але не
@@ -1650,10 +1725,23 @@ def provider(role, space=None):
     return _provider_for(role, space)
 
 
+def own_sig(space):
+    """Відбиток своїх модулів простору для ключів кешів: `fingerprint` кожної підтеки `modules/` і відбиток
+    `trust.json`. Лише `lstat`/`listdir`: нічого не виконує й не хешує (шлях ЛІГА лишається «до каталогу»)."""
+    base = _own_base(space)
+    if base is None:
+        return None
+    try:
+        names = sorted(os.listdir(base))[:MAX_OWN_MODULES * 4]
+    except OSError:
+        names = []
+    return (tuple((n, module_trust.fingerprint(os.path.join(base, n))) for n in names), module_trust.records_sig())
+
+
 def _caps_key(space):
     jp = _space_json_path(space)
     return (_space_id(space), spaces.integrations_for(space), _space_path(space),
-            _sig(jp) if jp else None, _catalog_sig())
+            _sig(jp) if jp else None, _catalog_sig(), own_sig(space))
 
 
 def capabilities(space):
@@ -1662,9 +1750,11 @@ def capabilities(space):
     `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "error": <код>}`: кожна роль вирішується
     окремо, і та, що не вирішилась, — `None`; лише `publish` у просторі з інтеграціями лишається `'legacy'`. Тобто
     `comments` ніколи не стає `'legacy'` через помилку (спільний Supabase ЛІГА — не запасний варіант, див. `_provider_for`);
-    без помилки ключа `error` нема. Кеш за (простір, прапорець
+    без помилки ключа `error` нема. Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
+    без ключа `error`: це стан ролі, а не простору (екран «Підключення» показує `error` як нечитабельний `space.json` і
+    ховає картки — разом із «Довіритись…»). Кеш за (простір, прапорець
     `integrations`, відбиток `space.json`, теки джерел модулів (`DEAI_EXTRA_MODULES` теж), відбитки `module.json`,
-    `server.py` і файлів `*.js` адаптера кожного модуля); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
+    `server.py` і файлів `*.js` адаптера кожного модуля, відбиток своїх модулів і `trust.json`, `own_sig`); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
     if not isinstance(space, dict) or not space:
         return {role: None for role in ROLES_CALLED}
     try:
@@ -1674,12 +1764,21 @@ def capabilities(space):
             hit = _CAPS.get(sid)
         if hit is not None and hit[0] == key:
             return dict(hit[1])
+        box = {}
+
+        def get_cat():
+            if 'c' not in box:
+                box['c'] = catalog(space)
+            return box['c']
         caps, error = {}, None
         for role in ROLES_CALLED:
             try:
-                p = _provider_for(role, space)
+                p = _provider_for(role, space, get_cat)
                 caps[role] = p.id if isinstance(p, Module) else p
             except ModuleError as e:
+                if getattr(e, 'paper', False):
+                    caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
+                    continue                # `error` — клієнт читає `error` як «space.json не читається» й сховав би картки
                 error = error or e.code
                 caps[role] = 'legacy' if role == 'publish' and spaces.integrations_for(space) else None
         if error:
@@ -1782,3 +1881,130 @@ def channel_for(space, tid, internal=False):
             or any(c == '/' or ord(c) < 32 or ord(c) == 127 for c in tid)):
         raise ModuleError('module-error', message='channel: a valid space id and a task id (no "/" or control characters) are required')
     return f'deai/{sid}/{tid}' + ('/internal' if internal else '')
+
+
+# ------------------------------------------------------------------------------ довіра своїм модулям (3c)
+
+def _own_or_404(space, mid):
+    """Тека свого модуля `mid` простору або `unknown-module` (нема серед своїх; вбудований id — теж)."""
+    if not isinstance(mid, str) or not ID_RE.fullmatch(mid):
+        raise ModuleError('unknown-module', message=str(mid)[:60])
+    cands = dict(_own_listing(space)[0])
+    if mid not in cands:
+        raise ModuleError('unknown-module', message=f'{mid}: not an own module of this space')
+    return cands[mid]
+
+
+def _is_alias(space, mid):
+    """Тека модуля — посилання (аліас): `key_for` бере `realpath`, тож її ключ — ключ ЦІЛІ, тобто чужий запис довіри."""
+    try:
+        return module_trust.is_link(os.lstat(os.path.join(_space_path(space), 'modules', mid)))
+    except OSError:                     # теки нема — запис за шляхом, «Забрати довіру» зниклої теки працює
+        return False
+
+
+def _trust_setting(s):
+    v = {'key': s['key'], 'type': s['type'], 'label': s['label']}
+    if s['type'] == 'secret':
+        v['public'] = bool(s.get('public'))
+    return v
+
+
+def trust_view(space, mid):
+    """Дані діалогу довіри (`GET /api/module-trust`): тека сканується (з кешем відбитка) і порівнюється із записом
+    довіри; назва, версія, ролі й налаштування — з маніфесту ТЕКИ (нової версії). Код теки не виконує (для вже
+    довіреного модуля `own_modules` вантажить хіба його ЗНІМОК — той, що й так працює)."""
+    src = _own_or_404(space, mid)
+    m = own_modules(space).get(mid)
+    rec = None
+    if m is not None and m.record:      # `m.record` уже знає про аліас (Task 3); нечитабельний trust.json дає False
+        try:
+            rec = module_trust.load_records().get(module_trust.key_for(_space_path(space), mid))
+        except module_trust.TrustUnreadable:
+            rec = None
+    out = {'id': mid, 'name': m.name if m else mid, 'version': m.version if m else '',
+           'roles': list(m.roles) if m else [], 'settings': [], 'path': module_trust.tilde(src),
+           'state': m.trust if m else 'untrusted', 'record': rec is not None}
+    try:
+        sc = module_trust.scan(src)
+    except module_trust.Refused as e:
+        out.update(state='refused', refused={'code': e.code, 'detail': e.detail})
+        return out
+    meta, why = _manifest_from_bytes(sc.manifest, mid, src)
+    if why:
+        out.update(state='refused', refused={'code': 'bad-manifest', 'detail': why[:MAX_MESSAGE]})
+        return out
+    files, removed = module_trust.diff(sc.files, rec['files'] if rec else None)
+    out.update(name=meta['name'], version=meta['version'], roles=list(meta['roles']),
+               settings=[_trust_setting(s) for s in meta['settings']], hash=sc.hash, files=files, removed=removed,
+               total={'files': len(sc.files), 'bytes': sc.total})
+    return out
+
+
+def grant_trust(space, mid, want_hash, lang='uk'):
+    """Довіра своєму модулю `mid` — рівно версії з хешем `want_hash`, яку бачила людина. Порядок (спека, «API»):
+    сканування з байтами → `module-refused` / `module-changed` → «другий постачальник» (`role-taken`) → СИСТЕМНЕ ВІКНО
+    поза локами (`trust-declined` / `trust-no-confirm` / `trust-busy`) → знімок із просканованих байтів → запис під
+    `WRITE_LOCK` (`module-changed`, коли знімок встигли відсунути) → скидання `_LAST_CHECK` і `capabilities`.
+    ⚠️ Блокує потік до відповіді людини (до `module_trust.CONFIRM_TIMEOUT` с); НЕ кликати під `WRITE_LOCK`."""
+    _require_writable(space)
+    src = _own_or_404(space, mid)
+    if not isinstance(want_hash, str) or not module_trust.HASH_RE.fullmatch(want_hash):
+        raise _bad('hash: expected the 64-character fingerprint shown in the dialog')
+    key = module_trust.key_for(_space_path(space), mid)
+    try:
+        module_trust.load_records()
+    except module_trust.TrustUnreadable:
+        raise ModuleError('trust-unreadable', message='trust.json is unreadable') from None
+    try:
+        sc = module_trust.scan(src, with_data=True)
+    except module_trust.Refused as e:
+        raise ModuleError('module-refused', message=f'{e.code}: {e.detail}'[:MAX_MESSAGE]) from None
+    meta, why = _manifest_from_bytes(sc.manifest, mid, src)
+    if why:
+        raise ModuleError('module-refused', message=f'bad-manifest: {why}'[:MAX_MESSAGE])
+    if sc.hash != want_hash:
+        raise ModuleError('module-changed', message='the module folder changed after the dialog was opened')
+    explicit = space_modules(space)
+    if explicit.get(mid, {}).get('enabled') is True:
+        probe = types.SimpleNamespace(id=mid, roles=list(meta['roles']))      # ролі НОВОЇ версії теки
+        why = _role_conflict(probe, catalog(space), space, explicit)
+        if why:
+            raise ModuleError('role-taken', message=why)
+    texts = module_trust.confirm_texts(lang, meta['name'], mid, sc.hash, module_trust.tilde(src))
+    answer = module_trust.ask(key, sc.hash, texts)
+    if answer != 'yes':
+        code = {'busy': 'trust-busy', 'unavailable': 'trust-no-confirm'}.get(answer, 'trust-declined')
+        raise ModuleError(code, message=f'system confirmation: {answer}')
+    try:
+        module_trust.ensure_snapshot(sc)
+        module_trust.put_record(key, {
+            'id': mid, 'name': meta['name'], 'version': meta['version'], 'roles': list(meta['roles']),
+            'hash': sc.hash, 'files': [{'path': p, 'size': n, 'sha256': h} for p, n, h in sc.files],
+            'trusted_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+    except module_trust.SnapshotGone:
+        raise ModuleError('module-changed', message='the snapshot was removed meanwhile — try again') from None
+    except module_trust.TrustUnreadable:
+        raise ModuleError('trust-unreadable', message='trust.json is unreadable') from None
+    except OSError as e:
+        raise ModuleError('unwritable', message=f'trust: {type(e).__name__}') from None
+    forget_check(_space_id(space), mid)
+    forget_own(sc.hash)                     # завантаження знімка (і закешований збій, як-от тайм-аут) — наново
+
+
+def revoke_trust(space, mid):
+    """Забрати довіру свого модуля `mid` (ключ — за шляхом, тож і для теки, якої вже нема). `space.json` не чіпає;
+    `True`, якщо запис був. `trust-unreadable` — файл довіри не читається (не переписуємо)."""
+    _require_writable(space)
+    if not isinstance(mid, str) or not ID_RE.fullmatch(mid):
+        raise ModuleError('unknown-module', message=str(mid)[:60])
+    if _is_alias(space, mid):
+        return False                    # у аліаса свого запису нема; ключ збігся б із ключем цілі — чужу довіру не чіпаємо
+    try:
+        removed = module_trust.drop_record(module_trust.key_for(_space_path(space), mid))
+    except module_trust.TrustUnreadable:
+        raise ModuleError('trust-unreadable', message='trust.json is unreadable') from None
+    except OSError as e:
+        raise ModuleError('unwritable', message=f'trust: {type(e).__name__}') from None
+    forget_check(_space_id(space), mid)
+    return removed
