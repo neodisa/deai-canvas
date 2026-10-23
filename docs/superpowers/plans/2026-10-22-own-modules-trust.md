@@ -4114,6 +4114,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   Тест: фальшивий `askForm` викликає `onSubmit` і повертає `null` до відповіді, `post` відмовляє з
   `code: "module-changed"` → `askForm` викликано рівно один раз, `afterModulesChange` викликано, результат `false`.
   Наявний тест «`module-changed` відкриває діалог удруге» (без перебивання) має лишитися зеленим.
+  _Як зроблено (540661c, прийнято ревʼю):_ ще `landed = false;` на початку кожного `onSubmit` (інакше другий запит у тому
+  самому діалозі успадкував би `landed = true` і перебитий діалог знову відкрився б); гілка — окремим рядком
+  `if (again && interrupted) {…}` перед наявним `if (again) { reopened = true; continue; }` (його пришпилено в
+  `connections-wiring.test.mjs`).
 - Тест-прогалина (мутація `flight ||= (async …)()` вижила): у тому самому діалозі «Довіряю» → відмова `trust-declined`
   → «Довіряю» ще раз → другий `post` із тим самим `hash` (`calls.length === 2`), у помилці форми — знову рівно
   `cnRefDeclined`. Мутація `flight ||=` має впасти.
@@ -4453,7 +4457,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
  * Сценарії: 1 — повний шлях (недовірений → діалог → довіра → підключення → правка на диску → стара версія працює →
  * повторна довіра → «Забрати довіру»); 2 — системне вікно відмовило; 3 — «колега закомітив» (увімкнений, але не довірений);
  * 4 — майстер: «Довіритись…» на кроці 2; 5 — запит без заголовків браузера → 403; 6 — тека змінилась, поки діалог
- * відкритий; 7 — «Забрати довіру» з діалогу; 8 — тека, якій не можна довіритись (символьне посилання).
+ * відкритий; 7 — «Забрати довіру» з діалогу; 8 — тека, якій не можна довіритись (символьне посилання); 9 — майстер:
+ * колега вже ввімкнув недовірений модуль у `space.json` теки.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
@@ -4642,11 +4647,27 @@ test("4: майстер — «Довіритись…» у рядку кроку
   await page.click('#tasks-home .wz [data-a="ok"]');
   await page.waitForSelector('#tasks-home .wz[data-step="2"] [data-wz="trust"][data-id="memo-own"]', { timeout: 15000 });
   assert.equal(await page.locator('input[data-wz-pick][value="memo-own"]').isDisabled(), true);
+  const other = await page.evaluate(() => {                     // вибір в іншій ролі — має пережити діалог і перечитування
+    const r = [...document.querySelectorAll("#tasks-home input[data-wz-pick]")]
+      .find((x) => x.dataset.role !== "publish" && x.value && !x.disabled && !x.checked);
+    if (!r) return null;
+    r.click();
+    return { role: r.dataset.role, value: r.value };
+  });
+  assert.ok(other, "є що вибрати в іншій ролі");
+  const otherSel = `input[data-wz-pick][data-role="${other.role}"][value="${other.value}"]`;
+  await page.click('[data-wz="trust"][data-id="memo-own"]');
+  await page.waitForSelector("form.tr");
+  await page.click('form.tr [data-a="cancel"]');
+  await page.waitForSelector("form.tr", { state: "detached" });
+  await page.waitForFunction(() => document.activeElement?.dataset?.wz === "trust", null, { timeout: 15000 });
   await page.click('[data-wz="trust"][data-id="memo-own"]');
   await page.waitForSelector("form.tr");
   await page.click('form.tr [data-a="ok"]');
   await page.waitForSelector('input[data-wz-pick][value="memo-own"]:not([disabled])', { timeout: 15000 });
   assert.equal(await page.locator('[data-wz="trust"][data-id="memo-own"]').count(), 0);
+  await page.waitForFunction(() => document.activeElement?.value === "memo-own", null, { timeout: 15000 });
+  assert.equal(await page.locator(otherSel).isChecked(), true, "вибір іншої ролі збережено");
   assert.deepEqual(s.errors, []);
 });
 
@@ -4729,18 +4750,57 @@ test("8: тека з символьним посиланням — діалог 
   assert.deepEqual(s.errors, []);
 });
 
+test("9: майстер — колега ввімкнув недовірений модуль у space.json теки: вибраний і вимкнений, крок 3 — «чекає довіри» замість картки, жодного запису модулів", async (t) => {
+  const s = await boot(t);
+  const { page } = s;
+  const shared = path.join(s.home, "work", "shared");
+  writeOwn(shared);
+  writeFileSync(path.join(shared, "space.json"), JSON.stringify({ name: "Shared", color: "space-4",
+    modules: { "memo-own": { enabled: true, settings: {}, roles: ["publish"] } } }));
+  const posts = [];
+  page.on("request", (r) => {
+    const p = new URL(r.url()).pathname;
+    if (r.method() === "POST" && p.startsWith("/api/module-")) posts.push(p);
+  });
+  await page.click('#bar [data-dd="space"]');
+  await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 1);
+  await page.click('.dd--spaces [data-act="spacenew"]');
+  await page.waitForSelector('#tasks-home .wz[data-step="1"]');
+  await page.fill("#sp-path", "~/work/shared");
+  await page.waitForFunction(() => { const e = document.getElementById("sp-found"); return Boolean(e && !e.hidden && e.textContent.trim()); });
+  await page.click('#tasks-home .wz [data-a="ok"]');
+  const radio = 'input[data-wz-pick][value="memo-own"]';
+  await page.waitForSelector(`#tasks-home .wz[data-step="2"] ${radio}`, { timeout: 15000 });
+  assert.equal(await page.locator(radio).isChecked(), true, "увімкнене колегою — вибране (initialPick не змінено)");
+  assert.equal(await page.locator(radio).isDisabled(), true, "але не перевибирається, доки не довірено");
+  assert.equal(await page.locator('[data-wz="trust"][data-id="memo-own"]').count(), 1);
+  await page.click('#tasks-home .wz [data-a="ok"]');
+  await page.waitForSelector('#tasks-home .wz[data-step="3"] .wz-wait', { timeout: 15000 });
+  assert.match(await page.locator("#tasks-home .wz-wait").textContent(), /«Memo own \(test\)» чекає довіри/);
+  assert.equal(await page.locator('#tasks-home .wz-card[data-id="memo-own"]').count(), 0, "картки нема");
+  await page.click('#tasks-home .wz [data-a="ok"]');
+  await page.waitForSelector('#tasks-home .wz[data-step="4"]', { timeout: 15000 });
+  assert.deepEqual(posts, [], "жодного запису модулів");
+  assert.equal(JSON.parse(readFileSync(path.join(shared, "space.json"), "utf8")).modules["memo-own"].enabled, true);
+  assert.deepEqual(s.ran(), []);
+  assert.deepEqual(s.errors, []);
+});
+
 guardRealDeai();
 ```
 
 ⚠️ Перед прогоном звір із наявними живими тестами (`connections.test.mjs`, `wizard.test.mjs`) селектори входів (`#bar [data-act="conn"]`, `.dd--spaces [data-act="spacenew"]`, `#sp-path`) і форму `postJson` (`_spaces-kit.mjs`) — якщо щось інакше, правиться ТЕСТ під наявний інтерфейс, а не інтерфейс. Сценарій 4: простір створюється в теці `~/work/fresh`, де вже лежить `modules/memo-own/` (тека без `space.json` — створення простору її приймає). Сценарії 6–8 додано з ревʼю Task 7 (ревʼюер пройшов їх живцем);
 селектори `.tr-reopened`, `[data-tr="untrust"]`, `.cv-ask-danger`, `[data-cn="trustinfo"]` звір із `app/trust-view.js` і
 `app/app.js`. Після правок ревʼю Task 7 діалог для стану `trusted` не відкривається (одразу перечитування), тому
-сценарій 7 спершу міняє теку й заново відкриває «Підключення».
+сценарій 7 спершу міняє теку й заново відкриває «Підключення». Сценарій 9 (з ревʼю Task 8): `space.json` колеги лежить у
+теці ДО кроку 1 — повторний вхід «Назад → Далі» `initialPick` не перераховує; назва знайденого простору лише для читання,
+тож `#sp-name` не заповнюється (як `W7` у `wizard.test.mjs`). `errors` — лише `pageerror` (консольні 404 `/api/task`,
+`/api/tuner` у порожньому просторі — не наші).
 
 - [ ] **Step 3: Прогін живого тесту** (лише цей файл, послідовно)
 
 Run: `python3 "$G" 600 4000 node --test --test-concurrency=1 tests/live/own-modules.test.mjs 2>&1 | tail -20`
-Expected: PASS 9/9 (8 сценаріїв + сторож `~/.deai`). Далі `tests/live/connections.test.mjs` і `tests/live/wizard.test.mjs` (по одному) — без регресій.
+Expected: PASS 10/10 (9 сценаріїв + сторож `~/.deai`). Далі `tests/live/connections.test.mjs` і `tests/live/wizard.test.mjs` (по одному) — без регресій.
 
 - [ ] **Step 4: Мутації живого** (по одній, з охоронцем; після кожної — `git diff --stat` порожній)
 
@@ -4754,6 +4814,8 @@ Expected: PASS 9/9 (8 сценаріїв + сторож `~/.deai`). Далі `te
 | `openTrust`: на `module-changed` не відкривати діалог заново (без `continue`) | 6 |
 | `untrustFlow`: без `danger: true` | 7 |
 | `trustDialogHTML`: у `refused` заголовок `trTitle` замість `trTitleRefused` | 8 |
+| `loadStep3`: картки для всіх вибраних (і `needsTrust`) | 9 |
+| `trustFrom`: без повернення фокуса (`focusLost` → завжди `false`) | 4 |
 
 - [ ] **Step 5: Ручна перевірка системного вікна (macOS, ЛИШЕ контролер, один раз)**
 
@@ -4883,6 +4945,10 @@ Raise `ctx["ModuleError"](code, "message")` for a failure; texts are cut to 300 
 5. «Revoke trust» (card panel or dialog) stops the code; `space.json` and the settings stay. A module that is on in the
    space but not trusted on this computer keeps its role «on paper»: the role reports an error instead of falling back
    to another provider.
+6. In the new-space wizard your module is marked «own». Until you trust it, its option is disabled and has a «Trust…»
+   button (the same dialog, the same system window). If a teammate already turned it on in `space.json`, it stays
+   selected; the settings step writes nothing for it and says it is waiting for trust. A module whose folder has
+   changes can be selected — the previous version runs; trust the new one on the Connections screen.
 
 The module's top level gets **5 s** to load; a module that hangs is shown as broken (its thread lives until the server
 restarts). Browser code of a trusted `comments` module runs in canvas pages and published previews with the canvas's
