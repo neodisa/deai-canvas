@@ -9,7 +9,7 @@
  *
  * ⛔ Ролі — ДАНІ (з маніфестів): мапи ролей — лише `Map` (роль `__proto__` — звичайний ключ, а не прототип).
  */
-import { ROLE_ORDER, formPatch, isDirty } from "./connections-model.js";
+import { ROLE_ORDER, formPatch, isDirty, isOwn, ownRuns } from "./connections-model.js";
 
 /** Кроки майстра — у порядку спеки; номер кроку = індекс + 1. */
 export const WZ_STEPS = ["space", "modules", "settings", "task"];
@@ -21,6 +21,11 @@ const valid = (e) => !!e && typeof e === "object" && typeof e.id === "string" &&
 /* Тримає роль: увімкнений (зокрема неявно). Зламаний (`status: error`) теж тримає — як `roleHolders` у 3a. */
 const holds = (e) => valid(e) && e.enabled === true;
 const entryOf = (list, id) => list0(list).find((e) => valid(e) && e.id === id) ?? null;
+
+/** Свій модуль простору, чий код тут не виконується (недовірений чи `refused` без знімка, 3c): на кроці 2 його не вибрати,
+ *  крок 3 не малює йому картки — вмикати й налаштовувати нічого до довіри. `initialPick` його НЕ виключає (поправка 2):
+ *  увімкнений колегою лишається вибраним, інакше `writePlan` вимкнув би його лише тому, що людина пройшла майстер. */
+export const needsTrust = (e) => isOwn(e) && !ownRuns(e);
 
 /** Секції кроку 2: `[{role, modules}]` — ролі `ROLE_ORDER`, далі інші за абеткою; модуль кількох ролей — у КОЖНІЙ. */
 export function wizardSections(list) {
@@ -158,6 +163,7 @@ export const staleRoles = (roles, atPick, fresh) =>
  *   enable / settings — далі У ПОРЯДКУ СЕКЦІЙ, по одному («по черзі», як хоче спека), а не «усі enable, потім усі settings»:
  *              enable — вибраний, ще не ввімкнений (контролер шле `replace: true` — згода дана вибором на кроці 2);
  *              settings — вибраний, увімкнений, форма змінена (`formPatch` → `isDirty`); без форми чи без змін — нічого;
+ *   untrusted — вибраний невключений, що тепер потребує довіри (її забрали між кроками): відмова без запиту, не `enable`;
  *   disable  — ОСТАННІМИ: не вибраний тримач, якого не вимикає жоден `enable` (`offRows`: «Без модуля» й «вибраний уже
  *              ввімкнений»; заміна вимикає тримачів УСІХ ролей нового модуля, тож тримач кількох ролей міг піти разом із
  *              заміною в іншій ролі), і errored-тримач звільненої ролі (`errOffRows`).
@@ -198,6 +204,12 @@ export function writePlan({ list, pick, forms, atPick, prevList }) {
   const enables = [];                         // незастарілі enable: звільняють свої ролі (replace) і ставлять умову в `after`
   for (const e of pickedInOrder(list, pick)) {
     const roles = rolesOf(e);
+    if (e.enabled !== true && needsTrust(e)) {
+      /* Вибраний на кроці 2, а тепер потребує довіри (її забрали між кроками): вмикати не можна — відмова без запиту
+         (`runOp`), а не `enable`, бо картки (й форми) для нього може не бути. */
+      ops.push({ op: "untrusted", id: e.id, roles, stale: [] });
+      continue;
+    }
     if (e.enabled !== true) {
       const stale = staleRoles(roles, atPick, fresh);
       if (!stale.length) enables.push({ id: e.id, roles });

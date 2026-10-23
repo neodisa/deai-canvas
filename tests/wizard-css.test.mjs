@@ -176,3 +176,24 @@ test("правила майстра (`.wz…`) не містять колірн�
   const bad = mine.flatMap((r) => colourLiterals(r.body).map((x) => `${r.sels.join(",")}{${x}}`));
   assert.deepEqual(bad, [], `колірні літерали замість токенів:\n${bad.join("\n")}`);
 });
+
+test("3c: рядок «чекає довіри» — текст бере решту рядка поруч із замком (`flex:1 1 0`), інакше довгий рядок лишав замок самотнім; результат — окремим рядком", () => {
+  const b = rules(".wz-wait > span");
+  assert.match(b, /flex:1 1 0(?![\d%])/);
+  assert.match(b, /overflow-wrap:anywhere/);
+  assert.match(b, /min-width:0/);
+  assert.match(rules(".wz-wait .cn-res"), /flex-basis:100%/);
+  assert.match(rules(".wz-wait"), /flex-wrap:wrap/);
+});
+
+test("3c: «Довіритись…» під варіантом — стовпчик, кнопка зліва; рядок довіри й замок тримають контраст на картці варіанта і на сторінці", () => {
+  assert.match(rules(".wz-opt-row"), /flex-direction:column/);
+  assert.match(rules(".wz-opt-row > .ctl"), /align-self:flex-start/);
+  for (const bg of ["s2", "s3", "s1"]) {
+    assert.ok(contrast(tok("mid"), tok(bg)) >= 4.5, `текст рядка довіри (--mid) на --${bg}: ${contrast(tok("mid"), tok(bg)).toFixed(2)}:1`);
+    assert.ok(contrast(tok("open"), tok(bg)) >= 3, `замок (--open) на --${bg}: ${contrast(tok("open"), tok(bg)).toFixed(2)}:1`);
+  }
+  assert.match(rules(".wz-opt-trust"), /color:var\(--mid\)/);
+  assert.match(rules(".wz-wait"), /color:var\(--mid\)/);
+  assert.match(rules(".wz-opt-trust .ico"), /color:var\(--open\)/);
+});

@@ -7,8 +7,10 @@
  *   wizardHTML(v)   v = {step: 1..4, created, busy: false|'save', s1, s2, s3, s4}
  *     s1 = {name, color, path, folderFirst}   (`folderFirst` — для контролера: фокус у поле теки; розмітка його не читає)
  *     s2 = {list|null, failed|null, capsError, pick: Set, path}
- *     s3 = {cards: [{entry, fields, values, erase, errors, result}], offs: [{role, holder, result}], failed|null, loading}
+ *     s3 = {cards: [{entry, fields, values, erase, errors, result}], offs: [{role, holder, result}], waits: [{entry, result}],
+ *           failed|null, loading}
  *          offs — рядки «буде вимкнено»: `offRows` ∪ `errOffRows` моделі, `result` — відповідь вимкнення (`resultHTML`) або `null`
+ *          waits — вибрані свої модулі без довіри (3c): рядок «чекає довіри» замість картки, `result` — відмова `untrusted`
  *     s4 = {title, id, source: 'empty'|'folder', from, spaceName, tasks}
  *
  * Гачки (контракт для `wizard.js` і живих тестів): корінь `.wz[data-step]`; заголовок `#wz-h` (tabindex=-1); форма кроку
@@ -16,7 +18,9 @@
  * кнопка `[data-a="ok"]` (type=submit); «Скасувати» `[data-a="cancel"]`; інші кнопки `[data-wz="back|close|skip|copy|retry"]`;
  * радіо кроку 2 `input[data-wz-pick][data-role]` (value — id модуля, порожнє — «Без модуля»), id `wz-o-<секція>-<варіант|none>`;
  * картка кроку 3 `.wz-card[data-id]` з полями 3a (`data-cn-field`, id `wz-f-<картка>-<поле>`); рядок «Без модуля»
- * `.wz-off[data-id]` (обидва — `tabindex="-1"`: контролер ставить фокус на контейнер збійної картки/рядка без контролів);
+ * `.wz-off[data-id]` і `.wz-wait[data-id]` (усі — `tabindex="-1"`: контролер ставить фокус на контейнер збійної картки/рядка без
+ * контролів); «Довіритись…» свого модуля на кроці 2 — `[data-wz="trust"][data-id]` ПОЗА `label` радіо (клік по кнопці в `label`
+ * клікнув би й радіо), в обгортці `.wz-opt-row`;
  * «Спробувати ще» `[data-wz="retry"]` — на кроках 2 і 3, коли список модулів не прочитався (на кроці 3 «Зберегти й далі» тоді
  * вимкнена); крок 4 — `#tf-title`, `#tf-id`, `input[name="wz-src"]`, `#wz-from`; слот помилки `#wz-err` (кроки 1 і 4:
  * лише їхні форми правляться на місці; кроки 2–3 перемальовуються, їхні відмови живуть у картках і рядках).
@@ -30,9 +34,11 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import { DETAIL_MAX, builtinText, cardView, roleHolders, roleIcon, roleKeys, whyOf } from "./connections-model.js";
-import { badgeHTML, fieldHTML, modName, resultHTML, roleTitle, rolesLine, whyHTML } from "./connections-view.js";
+import {
+  badgeHTML, fieldHTML, modName, ownTagHTML, resultHTML, roleTitle, rolesLine, trustLineText, whyHTML,
+} from "./connections-view.js";
 import { SPACE_COLORS, spaceColorToken } from "./spaces-model.js";
-import { pickedFor, wizardSections } from "./wizard-model.js";
+import { needsTrust, pickedFor, wizardSections } from "./wizard-model.js";
 
 const STEP_KEYS = ["wzStep1", "wzStep2", "wzStep3", "wzStep4"];
 
@@ -103,17 +109,25 @@ function optionHTML(e, i, j, role, s, dis) {
   const id = `wz-o-${i}-${j}`;
   const on = pickedFor(s.pick, s.list, role) === e.id;
   const desc = builtinText(e.id)?.desc;
+  /* Свій модуль без робочого коду (3c) не вибирається: радіо вимкнене завжди (і вибране, якщо його ввімкнув колега). */
+  const wait = needsTrust(e);
   /* «Замість кого»: поточні тримачі ролей цього модуля (зі списку сервера), коли сам він ще не ввімкнений. */
-  const instead = e.enabled === true ? [] : roleHolders(e, s.list);
-  const why = e.status === "error" ? whyOf(e) : null;
-  return `<label class="wz-opt" for="${id}"><input type="radio" id="${id}" name="wz-r-${i}" value="${esc(e.id)}"`
-    + ` data-wz-pick data-role="${esc(role)}"${on ? " checked" : ""}${dis}>`
+  const instead = e.enabled === true || wait ? [] : roleHolders(e, s.list);
+  const why = e.status === "error" || (wait && e.enabled === true) ? whyOf(e) : null;
+  const line = trustLineText(e);
+  const label = `<label class="wz-opt" for="${id}"><input type="radio" id="${id}" name="wz-r-${i}" value="${esc(e.id)}"`
+    + ` data-wz-pick data-role="${esc(role)}"${on ? " checked" : ""}${wait ? " disabled" : dis}>`
     + `<span class="wz-opt-body"><span class="wz-opt-top"><b>${esc(modName(e))}</b>`
-    + `${e.implicit === true ? `<span class="cn-tag">${esc(t("cnImplicit"))}</span>` : ""}</span>`
+    + `${e.implicit === true ? `<span class="cn-tag">${esc(t("cnImplicit"))}</span>` : ""}${ownTagHTML(e)}</span>`
     + `${desc ? `<span class="wz-opt-desc">${esc(t(desc))}</span>` : ""}`
+    + `${line ? `<span class="wz-opt-trust">${ico("lock", 13)}<span>${esc(line)}</span></span>` : ""}`
     + `${instead.length ? `<span class="wz-opt-instead">${esc(t("wzInstead", instead.map(modName).join(", ")))}</span>` : ""}`
     + `${why ? `<span class="wz-opt-why">${ico("warn", 13)}<span>${esc(t(why.key))}${detail(why.detail)}</span></span>` : ""}`
     + `</span></label>`;
+  /* «Довіритись…» — ПОРУЧ із label, а не всередині: клік по кнопці в label клікнув би й радіо. Лише недовіреному:
+     `refused` без знімка довірити не можна (причина вже в рядку). */
+  if (!wait || e.trust === "refused") return label;
+  return `<div class="wz-opt-row">${label}${btn(`data-wz="trust" data-id="${esc(e.id)}"`, t("cnTrust"), { icon: "lock", dis: !!dis })}</div>`;
 }
 
 function noneHTML(i, role, s, dis) {
@@ -177,6 +191,12 @@ function cardHTML(c, i, busy) {
     ${fields}<div class="wz-res" data-wz-res="${esc(e.id)}">${resultHTML(c.result)}</div></section>`;
 }
 
+/** Рядок «чекає довіри» кроку 3: вибраний (увімкнений колегою) свій модуль без довіри — налаштувати його можна після неї. */
+function waitHTML(w) {
+  return `<li class="wz-wait" data-id="${esc(w.entry.id)}" tabindex="-1">${ico("lock", 13)}`
+    + `<span>${esc(t("wzWaitTrust", rolesLine(w.entry), modName(w.entry)))}</span>${resultHTML(w.result)}</li>`;
+}
+
 function offHTML(o) {
   const k = roleKeys(o.role)?.none;
   const text = k ? t("wzOffRow", roleTitle(o.role), modName(o.holder), t(k))
@@ -194,11 +214,12 @@ function step3HTML(v) {
     body = `<div class="cn-err" role="alert">${ico("warn")}<span>${esc(t("cnErrLoad"))}${detail(s.failed.message)}</span>`
       + `${btn('data-wz="retry"', t("retry"), { icon: "refresh" })}</div>`;
   } else {
+    const waits = (s.waits ?? []).length ? `<ul class="wz-waits">${s.waits.map(waitHTML).join("")}</ul>` : "";
     const offs = s.offs.length ? `<ul class="wz-offs">${s.offs.map(offHTML).join("")}</ul>` : "";
     const cards = s.cards.length
       ? `<fieldset class="wz-cards"${busy ? " disabled" : ""}>${s.cards.map((c, i) => cardHTML(c, i, busy)).join("")}</fieldset>`
-      : (offs ? "" : `<p class="cn-dr-none">${esc(t("wzS3Nothing"))}</p>`);
-    body = offs + cards;
+      : (offs || waits ? "" : `<p class="cn-dr-none">${esc(t("wzS3Nothing"))}</p>`);
+    body = waits + offs + cards;
   }
   return `${head("wzS3Title", t("wzS3Lead"))}
     <form class="wz-form" data-wz-step="3" novalidate>${body}

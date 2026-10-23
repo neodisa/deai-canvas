@@ -11,6 +11,8 @@
  *   afterSpaceCreated()  простір створено й зроблено поточним (оболонка: `afterSpaceChange`);
  *   afterSpaceEdited(id, saved)   назва/колір змінились (`applySpaceMeta`);
  *   afterModulesChange() легкий шлях 3a після запису модулів;
+ *   openTrust(entry, spaceId)   діалог довіри свого модуля простору `spaceId` (3c) → Promise<boolean>: `true` — довіру видано
+ *                        (модулі вже перечитано), `false` — скасовано, відмова чи відкликання виконано всередині;
  *   openTask(made)       задачу створено — відкрити її (вихід з оверлею);
  *   exit({back})         `back: false` — на «Задачі» (там і привітання, коли просторів нема); `back: true` («Скасувати» до
  *                        створення) — туди, звідки майстер відкрили (полотно задачі чи сторінка оверлею);
@@ -44,7 +46,7 @@ import {
   taskFormError,
 } from "./spaces-model.js";
 import {
-  allOk, errOffRows, holdersByRole, initialPick, offRows, pickModule, pickNone, pickedInOrder, prevStep, prunePick,
+  allOk, errOffRows, holdersByRole, initialPick, needsTrust, offRows, pickModule, pickNone, pickedInOrder, prevStep, prunePick,
   titleFromFolder, writePlan,
 } from "./wizard-model.js";
 import { wizardHTML } from "./wizard-view.js";
@@ -101,7 +103,7 @@ export function createWizard(deps) {
       s1: { name, color: freeColor(info?.spaces), path: folderFirst ? "" : defaultSpacePath(name, "~", deps.takenPaths()),
         pathTouched: folderFirst, folderFirst },
       list: null, failed: null, pick: null, atPick: new Map(),
-      cards: [], offs: [], s3failed: null, s3loading: false,
+      cards: [], offs: [], waits: [], s3failed: null, s3loading: false,
       s4: { title: "", id: "", idTouched: false, source: "empty", from: "", autoTitle: "" },
       taskIds: null,
     };
@@ -113,7 +115,7 @@ export function createWizard(deps) {
       step: wz.step, created: wz.created, busy: wz.busy,
       s1: wz.s1,
       s2: { list: wz.list, failed: wz.failed, pick: wz.pick ?? new Set(), capsError: !!sp?.capabilities?.error, path: sp?.path ?? "" },
-      s3: { cards: wz.cards, offs: wz.offs, failed: wz.s3failed, loading: wz.s3loading },
+      s3: { cards: wz.cards, offs: wz.offs, waits: wz.waits, failed: wz.s3failed, loading: wz.s3loading },
       s4: { ...wz.s4, spaceName: sp?.name ?? wz.s1.name, tasks: Number(sp?.tasks) || 0 },
     };
   }
@@ -376,7 +378,7 @@ export function createWizard(deps) {
   async function loadStep3() {
     const mine = wz;
     const seq = ++mine.seq;
-    mine.cards = []; mine.offs = []; mine.s3failed = null; mine.s3loading = true;
+    mine.cards = []; mine.offs = []; mine.waits = []; mine.s3failed = null; mine.s3loading = true;
     paint();
     let list;
     try { list = (await deps.api(`/api/modules?space=${encodeURIComponent(mine.spaceId)}`))?.modules; }
@@ -398,7 +400,17 @@ export function createWizard(deps) {
       go(2);
       return;
     }
-    mine.cards = pickedInOrder(mine.list, mine.pick).map(cardFrom);
+    const picked = pickedInOrder(mine.list, mine.pick);
+    /* Вибраний невключений модуль тепер потребує довіри (її забрали між кроками): вмикати нічого — назад на крок 2. */
+    if (picked.some((e) => needsTrust(e) && e.enabled !== true)) {
+      mine.s3loading = false;
+      deps.toast(t(refusalView({ code: "module-untrusted" }).key));
+      go(2);
+      return;
+    }
+    /* Увімкнений колегою, але не довірений тут — без картки (налаштовувати й перевіряти нічого), рядком «чекає довіри». */
+    mine.cards = picked.filter((e) => !needsTrust(e)).map(cardFrom);
+    mine.waits = picked.filter(needsTrust).map((entry) => ({ entry, result: null }));
     /* «Без модуля» + тримачі з помилкою, яких `replace` не вимикає (сервер їх не рахує тримачами) — майстер вимкне їх сам. */
     mine.offs = [...offRows(mine.list, mine.pick), ...errOffRows(mine.list, mine.pick)].map((o) => ({ ...o, result: null }));
     mine.s3loading = false;
@@ -438,6 +450,8 @@ export function createWizard(deps) {
       result = { kind: "refused", key: "wzOffBlocked", detail: "" };
     } else if (op.op === "gone") {
       result = { kind: "refused", ...refusalView({ code: "unknown-module" }) };
+    } else if (op.op === "untrusted") {
+      result = { kind: "refused", ...refusalView({ code: "module-untrusted" }) };
     } else if (op.stale.length) {
       const now = holdersByRole(fresh);
       const names = op.stale.flatMap((r) => now.get(r) ?? [])
@@ -477,6 +491,7 @@ export function createWizard(deps) {
       clearSecrets(op.id);
     }
     if (card) card.result = result;
+    for (const w of mine.waits) if (w.entry.id === op.id) w.result = result;
     for (const o of mine.offs) if (o.holder.id === op.id) o.result = result;
     paint();
     return result;
@@ -550,7 +565,7 @@ export function createWizard(deps) {
     if (allOk(results)) { go(4); return; }
     paint();
     /* Перше поле картки/рядка з відмовою; рядок «вимкнеться» чи картка без полів — сам контейнер (`tabindex="-1"`). */
-    const box = deps.node()?.querySelector(".wz-card .cn-res--err, .wz-off .cn-res--err")?.closest(".wz-card, .wz-off");
+    const box = deps.node()?.querySelector(".wz-card .cn-res--err, .wz-off .cn-res--err, .wz-wait .cn-res--err")?.closest(".wz-card, .wz-off, .wz-wait");
     (box?.querySelector("input, select, button") ?? box)?.focus();
   }
 
@@ -629,6 +644,23 @@ export function createWizard(deps) {
 
   /* ── події сторінки (делегує `wireHome` у `app.js`) ──────────────────────────────────────────────── */
 
+  /** «Довіритись…» у рядку свого модуля (крок 2): діалог довіри `app.js` (`deps.openTrust`) для простору майстра, далі
+      список перечитується — вибір інших ролей зберігається (`loadStep2` чистить лише зниклі модулі). Фокус — на радіо
+      модуля, а нема (довіри не дали) — на ту саму кнопку; лише коли фокус справді втрачено. */
+  async function trustFrom(id) {
+    if (!wz || wz.busy || wz.step !== 2) return;
+    const mine = wz;
+    const e = (mine.list || []).find((x) => x?.id === id);
+    if (!e) return;
+    await deps.openTrust(e, mine.spaceId);
+    if (wz !== mine || mine.step !== 2) return;
+    await loadStep2();
+    if (wz !== mine || !focusLost()) return;
+    const sel = CSS.escape(id);
+    (deps.node()?.querySelector(`input[data-wz-pick][value="${sel}"]:not([disabled])`)
+      ?? deps.node()?.querySelector(`[data-wz="trust"][data-id="${sel}"]`))?.focus({ preventScroll: true });
+  }
+
   function click(ev) {
     if (!wz) return;
     const b = ev.target.closest('[data-wz], [data-a="cancel"], [data-cn-dr="erase"]');
@@ -640,6 +672,7 @@ export function createWizard(deps) {
     else if (a === "close" || a === "skip") requestExit();
     else if (a === "retry") { wz.refocus = true; if (wz.step === 3) loadStep3(); else loadStep2(); }
     else if (a === "copy") copyPhrase();
+    else if (a === "trust") trustFrom(b.dataset.id);
   }
 
   function submit(ev) {

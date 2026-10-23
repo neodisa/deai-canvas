@@ -1350,6 +1350,7 @@ const wiz = createWizard({
   afterSpaceCreated: () => afterSpaceChange(),
   afterSpaceEdited: (id, saved) => applySpaceMeta(id, saved),
   afterModulesChange: () => afterModulesChange(),
+  openTrust: (entry, spaceId) => openTrust(entry, spaceId),
   openTask: (made) => wizOpenTask(made),
   exit: ({ back = false } = {}) => (back ? wizBack() : enterHome({ page: 'tasks' })),
   copy: (s) => navigator.clipboard.writeText(s),

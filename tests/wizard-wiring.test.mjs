@@ -325,3 +325,32 @@ test("R6: крок 1 — запит `space-new` з назвою, кольоро�
   assert.doesNotMatch(b, /e\??\.key\b/);
   assert.match(b, /showError\(form, "spaceErrName", "name"\)/, "порожня назва — до запиту");
 });
+
+test("3c: «Довіритись…» на кроці 2 — deps.openTrust з простором майстра, потім loadStep2; app.js передає openTrust", () => {
+  assert.match(fn(W, "click"), /else if \(a === "trust"\) trustFrom\(b\.dataset\.id\);/);
+  const b = fn(W, "trustFrom");
+  assert.match(b, /await deps\.openTrust\(e, mine\.spaceId\);/);
+  assert.match(b, /if \(wz !== mine \|\| mine\.step !== 2\) return;/);
+  assert.ok(b.indexOf("deps.openTrust(") < b.indexOf("loadStep2()"));
+  assert.match(read("app.js"), /openTrust: \(entry, spaceId\) => openTrust\(entry, spaceId\),/);
+});
+
+test("3c: крок 3 — картки лише тим, хто не чекає довіри; невключений, що тепер потребує довіри, — назад на крок 2; untrusted — відмова без запиту", () => {
+  const b = fn(W, "loadStep3");
+  assert.match(b, /picked\.some\(\(e\) => needsTrust\(e\) && e\.enabled !== true\)/);
+  assert.match(b, /mine\.cards = picked\.filter\(\(e\) => !needsTrust\(e\)\)\.map\(cardFrom\);/);
+  assert.match(b, /mine\.waits = picked\.filter\(needsTrust\)\.map\(\(entry\) => \(\{ entry, result: null \}\)\);/);
+  const r = fn(W, "runOp");
+  assert.match(r, /else if \(op\.op === "untrusted"\)/);
+  assert.ok(r.indexOf('op.op === "untrusted"') < r.indexOf("deps.post("), "відмова без запиту");
+  assert.match(r, /for \(const w of mine\.waits\) if \(w\.entry\.id === op\.id\) w\.result = result;/);
+});
+
+test("3c: стан майстра й вʼю несуть `waits`; відмова в рядку «чекає довіри» стає ціллю фокуса після збійного проходу", () => {
+  assert.match(fn(W, "open"), /waits: \[\]/);
+  assert.match(fn(W, "view"), /waits: wz\.waits/);
+  assert.match(fn(W, "loadStep3"), /mine\.waits = \[\];/, "скидається на початку loadStep3 разом із cards і offs");
+  const b = fn(W, "submit3");
+  assert.match(b, /\.wz-wait \.cn-res--err/);
+  assert.match(b, /closest\("\.wz-card, \.wz-off, \.wz-wait"\)/);
+});
