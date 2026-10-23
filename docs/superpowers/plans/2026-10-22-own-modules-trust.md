@@ -2969,7 +2969,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `app/connections-model.js` (`cardView` ≈84, `whyOf` ≈123, `REFUSAL_KEYS` ≈134; нові `isOwn`, `ownRuns`, `trustWhyKey`, `trustLine`, `noteView`)
 - Modify: `app/connections-view.js` (`BADGES`, `ACTIONS`, `cardHTML`, `agentHTML`, `connPageHTML`, `drawerHTML`; нові `ownTagHTML`, `trustLineHTML`)
 - Modify: `app/app.js` (`connState` ≈188, `connView` ≈2639, `loadConn` ≈2652)
-- Modify: `app/i18n.js` (`UK` і `EN` — після `cnTimeout`), `app/styles.css` (після правил `.cn-agent`)
+- Modify: `app/i18n.js` (`UK` і `EN` — після `cnTimeout`; `publishErrUntrusted` — поруч із `publishErrModule`), `app/styles.css` (після правил `.cn-agent`)
+- Modify: `app/spaces-model.js` (`PUBLISH_ERR_KEYS` ≈696)
 - Create: `tests/connections-own.test.mjs`
 - Modify: `tests/css-guards.test.mjs`, `tests/connections-wiring.test.mjs`
 
@@ -3379,6 +3380,15 @@ ${isOwn(e) && e.record === true
 - `connView`: `const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy });`
 - `loadConn`, гілка зміни простору: `connState.spaceId = sp.id; connState.list = null; connState.notes = []; connState.failed = null; connState.busy.clear();`
 - `loadConn`, успіх: після `connState.list = …` — `connState.notes = Array.isArray(r?.notes) ? r.notes : [];`
+
+- [ ] **Step 5′: Відмова публікації `module-untrusted`** (ревʼю Task 4: з Task 4 `POST /api/publish` для ввімкненого
+недовіреного свого модуля дає 409 `module-untrusted`, а клієнт показав би загальне «Не вдалося: …») — `app/spaces-model.js`,
+`PUBLISH_ERR_KEYS`: після `["module-error", "publishErrModule"]` додай `["module-untrusted", "publishErrUntrusted"]`
+(без тексту сервера: `publishErr` дасть `{key, args: []}`). У `app/i18n.js` поруч із `publishErrModule`:
+UK `publishErrUntrusted: 'Модуль публікації цього простору чекає довіри на цьому компʼютері — відкрийте «Підключення».',`
+(апостроф — U+02BC, як у решті словника), EN `publishErrUntrusted: "This space's publish module is waiting for your trust on this computer — open Connections.",`.
+Тест — у `tests/connections-own.test.mjs`: `publishErr({ code: 'module-untrusted', status: 409 })` →
+`{ key: 'publishErrUntrusted', args: [] }` (імпорт із `../app/spaces-model.js`), і ключ є в обох словниках.
 
 - [ ] **Step 6: Словник** — `app/i18n.js`, після `cnTimeout` в `UK`:
 
