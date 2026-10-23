@@ -150,6 +150,20 @@ class ScanTest(Base):
         os.symlink(self.mod, link)
         self.assertRefused('symlink', link)
 
+    @unittest.skipIf(os.name == 'nt', 'посилання')
+    def test_a_symlinked_root_is_refused_with_the_root_detail(self):
+        # Контракт для ядра: `deai_modules._own_module` відрізняє аліас (сама тека модуля — посилання) від посилання ВСЕРЕДИНІ
+        # теки лише за `detail == '.'`; зміна літерала мовчки дала б аліасу запис довіри його цілі
+        link = os.path.join(self.tmp, 'link-mod')
+        os.symlink(self.mod, link)
+        for with_data in (True, False, False):                # свіже читання, перше сканування, відповідь із кешу
+            with self.assertRaises(mt.Refused) as cm:
+                mt.scan(link, with_data=with_data)
+            self.assertEqual((cm.exception.code, cm.exception.detail), ('symlink', '.'), with_data)
+        os.remove(link)
+        os.symlink(self.tmp, os.path.join(self.mod, 'up'))
+        self.assertNotEqual(self.assertRefused('symlink').detail, '.', 'посилання всередині — не аліас кореня')
+
     @unittest.skipIf(os.name == 'nt', 'жорсткі посилання')
     def test_refuses_hardlink(self):
         os.link(os.path.join(self.mod, 'server.py'), os.path.join(self.tmp, 'outside.py'))
