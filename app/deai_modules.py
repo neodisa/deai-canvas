@@ -994,12 +994,13 @@ def _holds(o, space, explicit):
 
 
 def _roles_of(oid, cat, explicit):
-    """Ролі модуля `oid`: з маніфесту (каталог) і — для СВОГО модуля чи теки, якої в каталозі нема, — ще й із запису
-    `space.json` (їх пише вмикання свого модуля). Маніфест зламаний (ролей у каталозі нема) чи тека не приїхала з git —
-    роль усе одно за ним «на папері», а не вільна для другого постачальника."""
+    """Ролі модуля `oid`: з маніфесту (каталог); лише коли маніфест ролей не дав — для СВОГО модуля чи теки, якої в каталозі
+    нема, — із запису `space.json` (їх пише вмикання свого модуля). Маніфест зламаний (ролей у каталозі нема) чи тека не
+    приїхала з git — роль усе одно за ним «на папері», а не вільна для другого постачальника. Живий маніфест запис
+    перекриває: нова довірена версія, що роль прибрала, не лишає її застарілому запису (так само `_paper_failure`)."""
     o = cat.get(oid)
     out = set(o.roles) if o is not None else set()
-    if o is None or o.origin == 'space':
+    if o is None or (o.origin == 'space' and not out):
         out |= set(explicit.get(oid, {}).get('roles', ()))
     return out
 
@@ -1726,8 +1727,10 @@ def provider(role, space=None):
 
 
 def own_sig(space):
-    """Відбиток своїх модулів простору для ключів кешів: `fingerprint` кожної підтеки `modules/` і відбиток
-    `trust.json`. Лише `lstat`/`listdir`: нічого не виконує й не хешує (шлях ЛІГА лишається «до каталогу»)."""
+    """Відбиток своїх модулів простору для ключів кешів: `fingerprint` кожної підтеки `modules/`, відбиток `trust.json` і
+    `fingerprint` знімків, на які вказують записи довіри ЦЬОГО простору (за `key_for`): пошкоджений знімок змінює стан
+    модуля (`snapshot-damaged`), і `capabilities` мусить це побачити. Лише `lstat`/`listdir`: нічого не виконує й не хешує
+    (шлях ЛІГА лишається «до каталогу»); нечитабельний `trust.json` — знімків нема."""
     base = _own_base(space)
     if base is None:
         return None
@@ -1735,7 +1738,17 @@ def own_sig(space):
         names = sorted(os.listdir(base))[:MAX_OWN_MODULES * 4]
     except OSError:
         names = []
-    return (tuple((n, module_trust.fingerprint(os.path.join(base, n))) for n in names), module_trust.records_sig())
+    try:
+        records = module_trust.load_records()
+    except module_trust.TrustUnreadable:
+        records = {}
+    snaps = []
+    for n in names:
+        rec = records.get(module_trust.key_for(_space_path(space), n))
+        if rec is not None:
+            snaps.append((n, rec['hash'], module_trust.fingerprint(module_trust.snapshot_dir(rec['hash']))))
+    return (tuple((n, module_trust.fingerprint(os.path.join(base, n))) for n in names), module_trust.records_sig(),
+            tuple(snaps))
 
 
 def _caps_key(space):
@@ -1896,9 +1909,16 @@ def _own_or_404(space, mid):
 
 
 def _is_alias(space, mid):
-    """Тека модуля — посилання (аліас): `key_for` бере `realpath`, тож її ключ — ключ ЦІЛІ, тобто чужий запис довіри."""
+    """Тека модуля — посилання (аліас): `key_for` бере `realpath`, тож її ключ — ключ ЦІЛІ, тобто чужий запис довіри. Те саме,
+    коли посилання — сама `modules` (`B/modules -> A/modules`): `lstat(modules/<id>)` проміжного посилання не бачить, а ключ
+    уже вказує в теку чужого простору. Сам простір за посиланням (`~/work -> /Volumes/…`) аліасом не є: його `realpath`
+    однаковий для всіх ключів."""
+    sp = _space_path(space)
+    if os.path.normcase(os.path.realpath(os.path.join(sp, 'modules'))) != os.path.normcase(
+            os.path.join(os.path.realpath(sp), 'modules')):
+        return True                     # сама `modules` — посилання: ключ вказав би в теку чужого простору
     try:
-        return module_trust.is_link(os.lstat(os.path.join(_space_path(space), 'modules', mid)))
+        return module_trust.is_link(os.lstat(os.path.join(sp, 'modules', mid)))
     except OSError:                     # теки нема — запис за шляхом, «Забрати довіру» зниклої теки працює
         return False
 
@@ -1912,19 +1932,20 @@ def _trust_setting(s):
 
 def trust_view(space, mid):
     """Дані діалогу довіри (`GET /api/module-trust`): тека сканується (з кешем відбитка) і порівнюється із записом
-    довіри; назва, версія, ролі й налаштування — з маніфесту ТЕКИ (нової версії). Код теки не виконує (для вже
-    довіреного модуля `own_modules` вантажить хіба його ЗНІМОК — той, що й так працює)."""
+    довіри; назва, версія, ролі й налаштування — з маніфесту ТЕКИ (нової версії). Код теки не виконує: для вже довіреного
+    модуля вантажиться хіба ЙОГО знімок (`_own_module` лише для `mid` — знімки решти модулів простору не чіпаємо).
+    `state` і `refused` — ЛИШЕ зі скану самого діалогу (каталог міг скануватись раніше, і тека встигла змінитись):
+    `refused` — з `refused` і без `hash`/`files`; чисте сканування — `trusted`/`changed` за записом і хешем, `untrusted` без
+    запису чи коли знімок із записом не працює (пошкоджений)."""
     src = _own_or_404(space, mid)
-    m = own_modules(space).get(mid)
-    rec = None
-    if m is not None and m.record:      # `m.record` уже знає про аліас (Task 3); нечитабельний trust.json дає False
-        try:
-            rec = module_trust.load_records().get(module_trust.key_for(_space_path(space), mid))
-        except module_trust.TrustUnreadable:
-            rec = None
-    out = {'id': mid, 'name': m.name if m else mid, 'version': m.version if m else '',
-           'roles': list(m.roles) if m else [], 'settings': [], 'path': module_trust.tilde(src),
-           'state': m.trust if m else 'untrusted', 'record': rec is not None}
+    try:
+        records, rec_err = module_trust.load_records(), None
+    except module_trust.TrustUnreadable:
+        records, rec_err = {}, 'trust-unreadable'
+    m = _own_module(space, mid, src, records, rec_err)
+    rec = records.get(module_trust.key_for(_space_path(space), mid)) if m.record else None   # аліас і так без `record`
+    out = {'id': mid, 'name': m.name, 'version': m.version, 'roles': list(m.roles), 'settings': [],
+           'path': module_trust.tilde(src), 'record': rec is not None}
     try:
         sc = module_trust.scan(src)
     except module_trust.Refused as e:
@@ -1934,8 +1955,12 @@ def trust_view(space, mid):
     if why:
         out.update(state='refused', refused={'code': 'bad-manifest', 'detail': why[:MAX_MESSAGE]})
         return out
+    if rec is None or m.trust == 'untrusted':
+        state = 'untrusted'
+    else:
+        state = 'trusted' if sc.hash == rec['hash'] else 'changed'
     files, removed = module_trust.diff(sc.files, rec['files'] if rec else None)
-    out.update(name=meta['name'], version=meta['version'], roles=list(meta['roles']),
+    out.update(state=state, name=meta['name'], version=meta['version'], roles=list(meta['roles']),
                settings=[_trust_setting(s) for s in meta['settings']], hash=sc.hash, files=files, removed=removed,
                total={'files': len(sc.files), 'bytes': sc.total})
     return out
