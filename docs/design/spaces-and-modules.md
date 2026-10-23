@@ -2,10 +2,11 @@
 
 Status: agreed direction, 2026-10-09. Clickable prototype reviewed by the owner.
 Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to a
-folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0) and
+folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0),
 stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3a (the
-Connections screen, 0.5.0) and stage 3b (the new-space wizard, 0.6.0) — see *Status* at the end.
-Next: 3c (a space's own modules with a trust dialog, 0.7.0).
+Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0) and stage 3c (a space's own
+modules with a trust dialog, 0.7.0) — see *Status* at the end.
+Next: stage 4 — the in-house integrations of the legacy space (team dashboard, git sync) as optional per-space modules.
 
 ## Goal
 
@@ -46,7 +47,7 @@ canvas for their workflow without touching the core.
 
 - Built-in modules ship in `app/modules/`; a space's own modules live in
   `<space>/modules/` and are loaded the same way — but only after the person trusts them
-  (stage 3c: a trust dialog in Connections; until then only built-in modules load). A
+  (stage 3c, 0.7.0: a trust dialog in Connections). A
   module may implement an existing role
   (e.g. publish to Netlify) or add its own integration (e.g. notifications to a chat).
 - **Nothing is required.** Without modules the canvas works fully: local comments for
@@ -65,8 +66,8 @@ canvas for their workflow without touching the core.
   secrets shown only as set / not set / unknown; replacing the provider of a role in one
   step; turning a module off with its consequences. See *Status → Stage 3a*.
 - **A space's own modules** from `<space>/modules/`, loaded only after the person trusts
-  them in a dialog (shown on the Connections screen, with a «custom» mark on the card).
-  *Stage 3c, 0.7.0 — not built yet.*
+  them in a dialog (shown on the Connections screen, with an «own» mark on the card).
+  *Built in stage 3c (0.7.0)* — see *Status → Stage 3c*.
 - **Agent**: the same operations over the HTTP API, so you can ask the agent
   «connect my GitHub repo and the tokens from this CSS file to space X».
 
@@ -84,7 +85,7 @@ canvas for their workflow without touching the core.
 3. Onboarding, split into three parts:
    - ✅ **3a** (0.5.0) — the Connections screen;
    - ✅ **3b** (0.6.0) — the new-space wizard (space → modules → settings → first task);
-   - **3c** (0.7.0) — a space's own modules from `<space>/modules/` with the trust dialog.
+   - ✅ **3c** (0.7.0) — a space's own modules from `<space>/modules/` with the trust dialog.
 4. Company-specific integrations move out of the core into that company's space modules.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
@@ -213,13 +214,29 @@ Spec: `docs/superpowers/specs/2026-10-21-first-run-wizard-design.md`; plan:
 - **Not verified against a real Vercel or Supabase**: as in 3a, the live tests use a local fixture
   module, because the `check` of those two goes to the network.
 
+### Stage 3c — own modules and trust (0.7.0, 23.10.2026)
+
+Spec: `docs/superpowers/specs/2026-10-22-own-modules-trust-design.md` (revision 2 + the planning amendments listed in
+`docs/superpowers/plans/2026-10-22-own-modules-trust.md`). What is built:
+
+- **Own modules** in `<space>/modules/<id>/`: listed from the manifest, executed only from a trusted snapshot.
+- **Trust**: the dialog shows files, sizes and the fingerprint; the operating system's own window is the boundary
+  (`POST /api/module-trust` also accepts only the canvas page — `Origin` + `Sec-Fetch-Site: same-origin` — as a filter
+  against an agent's `curl`, not as the boundary). Records in `<DEAI_HOME>/trust.json`, snapshots in
+  `<DEAI_HOME>/trusted/`, untrust keeps `space.json`.
+- **Roles on paper**: an own module that is on in the space but does not run here keeps its role and reports an
+  error; no implicit or legacy fallback.
+- **UI**: Connections (cards, notes, panel), the trust dialog, wizard step 2/3.
+
 ### What stays for later
 
 - The roles `vcs`, `tracker`, `dashboard`, `notify` are reserved names that the core does not
   call yet.
-- **Stage 3c**: a space's own modules from `<space>/modules/` with the trust dialog (hash of
-  the whole folder, no symlinks, trust keyed on the real path), and a «custom» mark on the
-  card (0.7.0).
+- Left out of 3c (listed in its spec): a sandbox for module code (a trusted module runs with the person's
+  permissions); cleaning of snapshots that a re-trust replaced or whose folder vanished; viewing or comparing code in
+  the dialog; signatures and a catalog of modules; installing a module from a URL; machine-wide modules; a banner
+  «N modules wait for trust» on «Tasks»; the local `/published/…` copy for an own publish-to-folder module. The
+  Windows and Linux system windows are covered by unit tests of the command only.
 - Left out of 3a: picking a folder with a system dialog; a banner «N connections with an
   error» on «Tasks»; icons and descriptions from manifests (today only the built-in modules
   have them).

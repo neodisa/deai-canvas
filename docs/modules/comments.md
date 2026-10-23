@@ -1,14 +1,15 @@
 # Writing a `comments` module
 
-For Deai Canvas **0.4.0**. A `comments` module connects *any* comment service (Supabase, PocketBase, Firebase, your own
+For Deai Canvas **0.7.0**. A `comments` module connects *any* comment service (Supabase, PocketBase, Firebase, your own
 API…) to the team comments of the canvas: pins on the canvas pages, on the Overview, in published previews, and for the
 agent (`inbox`). The core knows nothing about your service except what the module tells it.
 
 **Коротко (uk).** Роль `comments` має дві половини: браузерний адаптер (`window.DeaiComments.create(cfg)` → сховище для
 шару коментатора) і серверні функції `client_config` / `list` / `resolve` / `check` у `server.py`. Канал задачі
 (`deai/<простір>/<задача>`) дає ядро, модуль його не будує. До сторінок потрапляє лише публічна конфігурація: значення
-секретів — тільки з `"public": true`. У 0.4.0 працюють **лише вбудовані модулі** (JS адаптера виконується в origin
-канваса); власні модулі з теки простору — етап 3, після діалогу довіри. Сервіс коментарів мусить дозволяти CORS і для
+секретів — тільки з `"public": true`. З 0.7.0 модуль коментарів може бути й своїм — у `<простір>/modules/<id>/`, після
+довіри людини (див. [authoring.md](authoring.md)); JS адаптера виконується в origin канваса, тож входить у те, чому
+людина довіряє. Сервіс коментарів мусить дозволяти CORS і для
 `Origin: null` (локальний перегляд опублікованого). Реальний приклад — [`supabase-comments`](../../app/modules/supabase-comments/README.md).
 
 ## 1. The two halves
@@ -38,7 +39,8 @@ A module is a folder `<modules-dir>/<id>/` with `module.json`, `server.py` and t
   of the module folder (no symlink, no hard link), at most 512 KiB, spelled exactly as on disk, listed once. Anything else
   is `bad-manifest`: the module shows as broken and nothing of it runs. Do not name a file like a core bundle
   (`comment-layer.min.js`, `supabase-adapter.min.js`, in any letter case): building a preview refuses it. The core serves only
-  the listed files, at `GET /api/module-client/<id>/<file>` (`text/javascript`, `nosniff`).
+  the listed files, at `GET /api/module-client/<id>/<file>` (`text/javascript`, `nosniff`); own modules:
+  `GET /api/module-client/<space>/<id>/<file>`.
 * Settings are `text`, `path`, `bool`, `select` or `secret`. Secrets live in `~/.deai/secrets.json`, never in `space.json`.
   `"public": true` is allowed on a **secret only** and means: the value stays out of `space.json` but may be shown to pages.
   Every other secret is private and must never appear in what you give to pages (see `client_config`).
@@ -124,8 +126,8 @@ earlier. A timed-out call is abandoned, its thread finishes in the background.
 ## 4. Security
 
 * The adapter runs **on the canvas origin** — the same origin as the canvas API. It has the full power of the canvas page.
-  That is why 0.4.0 loads **built-in modules only** (`app/modules/`); a space's own modules arrive in stage 3 with a trust
-  dialog, and their browser code is part of what the person trusts.
+  That is why a space's own `comments` module runs only after a person trusts it ([authoring.md](authoring.md)); the adapter
+  of a trusted own module is served from its snapshot at `GET /api/module-client/<space>/<id>/<file>`.
 * `DEAI_EXTRA_MODULES=<dir>` is a **test seam**: a second folder of modules that act as built-ins (the server prints one line
   about it on stderr). Use it for development, never as an installation method.
 * Pages and previews carry your `client_config`, so keep the service's rules as strict as the service allows: with a public key

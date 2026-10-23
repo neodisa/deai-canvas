@@ -3,6 +3,91 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.7.0] — 23.10.2026
+
+Stage 3c: a space's own modules and the trust dialog. A space can carry modules in `<space>/modules/<id>/`;
+their code runs only after a person trusts exactly the bytes they saw. Design:
+`docs/superpowers/specs/2026-10-22-own-modules-trust-design.md`; plan:
+`docs/superpowers/plans/2026-10-22-own-modules-trust.md`. The legacy space is unchanged
+(`tests/legacy-golden.test.mjs` is green without a re-shoot).
+
+### Added
+
+- **Own modules** (`app/deai_modules.py`): `catalog(space)` adds the space's modules to the built-in ones. An
+  untrusted module is listed from its manifest and never executed; a trusted one runs from a read-only snapshot
+  (`<DEAI_HOME>/trusted/<fingerprint>/`) with a 5 s load timeout. Folder rules (200 files, 5 MiB, depth 8, no links
+  or special files, safe names) and notes for skipped folders (`id-taken`, `too-many-modules`, `modules-link`,
+  `modules-unreadable`). In `GET /api/modules` an own module carries `trust` (`untrusted`, `trusted`, `changed`,
+  `refused`), `record`, `runs` and `source`, and `notes` lists the skipped folders; the entry of a built-in module and
+  the answer for a space without own modules are byte-for-byte as before. New core error codes: `module-untrusted`,
+  `module-changed`, `module-refused`, `trust-needs-ui`, `trust-declined`, `trust-no-confirm`, `trust-busy`,
+  `trust-unreadable`.
+- **Trust** (`app/module_trust.py`): scanner and fingerprint, `trust.json` records, snapshots, and the operating
+  system's own confirmation window (macOS `osascript`, Windows message box, Linux `zenity`/`kdialog`) as the final
+  word. API: `GET /api/module-trust`, `POST /api/module-trust` (only from the canvas page: `Origin` +
+  `Sec-Fetch-Site: same-origin`), `POST /api/module-untrust`.
+- **The trust dialog** (`app/trust-view.js`): the name, version, roles, the folder path (cut from the middle, the same
+  way as in the system window), the fingerprint, what the module asks for (a secret is marked, and a secret that goes
+  into pages is marked as public), every file with its size and, for a changed folder, marks of what changed since the last trust, and a
+  «Removed» line (up to 10 names, then «and N more»). The focus is on «Cancel». For a folder that cannot be trusted the
+  title is «“X” cannot be trusted» and there is no «Trust» button, only the reason.
+- **Connections**: «own» tag, «Needs trust» badge, «Trust…» / «Why not…», trust lines («The folder has changes»…),
+  notes under the head, «Revoke trust» in the panel and in the dialog.
+- **Wizard**: on step 2 an own module has the «own» tag and «Trust…» in its row (the option stays disabled until
+  trusted); step 3 shows a «waiting for trust» line, and writes nothing, for a module that a colleague turned on in
+  `space.json`.
+- `docs/modules/authoring.md` — writing your own module.
+
+### Changed
+
+- A role held «on paper» by an own module that is on in `space.json` but does not run here reports
+  `module-untrusted`/`module-error` instead of falling back to the implicit `static-publish` or to the legacy path;
+  `capabilities` gives `null` for it without `error`. Enabling an own module writes its `roles` into `space.json`.
+- The comments adapter of an own module is served at `/api/module-client/<space>/<id>/<file>`, from its snapshot
+  (the preview build takes the adapter files from the snapshot too).
+- `README.md` and `docs/modules/comments.md` no longer say that only built-in modules load.
+
+### Security
+
+- Trust is bound to the bytes shown: changed folder → «changed», the old snapshot keeps running until re-trust.
+- `POST /api/module-trust` is accepted only from the canvas page (`Origin` present and local, and
+  `Sec-Fetch-Site: same-origin`); an agent or `curl` gets `403 trust-needs-ui`. This is a filter, not the boundary —
+  a script in a mockup page sends the same headers — the boundary is the system window.
+- After «No» in the system window, a repeat request for the same version within 30 s is refused without a window
+  (`trust-declined`); only one window is open at a time (`trust-busy`).
+- `DEAI_TRUST_CONFIRM` (`yes` / `no` / `unavailable`) is a test seam that answers the system window; it works only
+  with a non-default `DEAI_HOME` (any other value, or the default home, means the real window), and the server prints
+  a warning when it is on.
+- Known limits: no sandbox (a trusted module runs with your permissions); the Windows and Linux system windows are
+  covered by command-building unit tests only (the macOS window was checked by hand); Safari older than 16.4 does not
+  send `Sec-Fetch-Site`; snapshots replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in
+  `<DEAI_HOME>/trusted/`); a module that hangs at load leaves a thread until the server restarts; on Windows the
+  read-only modes of snapshots are not set (as for `secrets.json`).
+
+### Tests
+
+`npm test` at 0.7.0 is green: 1749 node tests (plus `inspector-core`), 2656 Python tests in `tests/` (2 skipped), 168 in
+`bin/`, 170 in `app/` (0.6.0: 1630, 2381 with 1 skipped, 168, 170). The three Python suites were also run on Python
+3.9.6, the oldest supported version, with the same result (2656 with 2 skipped, 168, 170); `npm test` itself uses
+Python 3.13.
+
+New: `tests/test_module_trust.py` (the scanner and its folder rules, the fingerprint, `trust.json` records, snapshots,
+the command of the system window for each platform — the window itself is never shown), `tests/test_modules_own.py`
+(own modules in the catalog: an untrusted one never runs, a trusted one runs from its snapshot, notes, the load timeout,
+roles «on paper», `trust_view`, `grant_trust`, `revoke_trust`), `tests/test_modules_trust_api.py` (the HTTP routes, the
+fields of an own module, `trust-needs-ui`, the adapter address with the space), `tests/trust-view.test.mjs`,
+`tests/connections-own.test.mjs`, `tests/wizard-own.test.mjs` and `tests/trust-flow.test.mjs` (the dialog, the cards, the
+wizard rows, and the behaviour of the wiring in `app.js` run with stand-in dependencies); the CSS, wiring and
+dictionary tests were extended.
+
+The live test `tests/live/own-modules.test.mjs` (a real server in an isolated machine, a real Chromium, 9 scenarios, one
+file at a time; the system window is answered by `DEAI_TRUST_CONFIRM`) covers the whole way from an untrusted folder to
+«Revoke trust», a refusal in the system window, a module that a colleague committed, «Trust…» in the wizard, a request
+without the headers of a browser (and one with a forged `Origin`), a folder changed while the dialog is open, «Revoke
+trust» from the dialog, a folder with a symbolic link, and a module that a colleague turned on in the folder of a space
+being added. The guard of the real `~/.deai` in `tests/live/_spaces-kit.mjs` now also watches `trust.json` and the
+contents of `trusted/`.
+
 ## [0.6.0] — 22.10.2026
 
 Stage 3b: the new-space wizard. A new space is no longer a dialog with three fields and an empty

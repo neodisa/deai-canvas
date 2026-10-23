@@ -6,15 +6,15 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.6.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.7.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, and team
 > comments on your own Supabase (or any service, through a small module) work in any space.
 > A **wizard** creates a space and takes you through its modules and a first task, and a
 > **Connections** screen manages the modules afterwards — no command line. A few integrations
 > (team dashboard, git sync) are still wired for the original setup and only run in a migrated
-> legacy space; they are being turned into optional per-space modules, and a space's own
-> modules are next. See *Roadmap*.
+> legacy space; they are being turned into optional per-space modules. A space can carry
+> **its own modules** in `<space>/modules/`; their code runs only after you trust it. See *Roadmap*.
 
 ## What it does
 
@@ -91,11 +91,11 @@ after a restart (what was created stays, and the rest is on «Connections»).
 
 ## Modules
 
-A **module** is a folder `app/modules/<id>/` with `module.json` (manifest and the settings
+A **module** is a folder — built in at `app/modules/<id>/` or a space's own at
+`<space>/modules/<id>/` — with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
 calls: `publish`, `tokens` and `comments` today; `vcs`, `tracker`, `dashboard`, `notify`
-are reserved. One provider per role per space. Only built-in modules exist so far; a
-space's own modules come with stage 3c.
+are reserved. One provider per role per space.
 
 **Connecting a module — the Connections screen.** Open the space menu (the space chip in the
 top bar) → «Connections…», or press ⌘K and pick «Connections of the space …»; in a space
@@ -109,6 +109,14 @@ are written there but never shown again — the panel only says «set» or «not
 «… is currently handled by “…”. Connect “…” instead?» and swaps the two in one step;
 «Turn off» keeps the settings and secrets, so the module can be connected again. No
 command line is needed.
+
+**Own modules.** Put a module folder into `<space>/modules/<id>/` (by hand, from git, or ask the agent to write one —
+see `docs/modules/authoring.md`). Connections shows it with «own» and «Needs trust»; nothing of it runs yet. «Trust…»
+lists its files and settings, and «Trust» asks the operating system to confirm in its own window. The canvas then runs
+a read-only snapshot of exactly those bytes (`~/.deai/trusted/`); a later edit of the folder waits for a new trust
+(«The folder has changes»), and «Revoke trust» stops it without touching `space.json`. A module a colleague turned on
+in `space.json` stays «on, but not trusted» on your computer until you trust it. An agent can write and connect an own
+module but cannot trust it — ask the person.
 
 **Through the agent or a script.** Everything the screen does is the HTTP API (see *Module
 API* below), so an agent can connect modules for you, and the screen shows the routes of
@@ -205,13 +213,16 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 
 | Call | |
 |---|---|
-| `GET /api/modules?space=<id>` | catalog with status and settings; secrets only as `set: true\|false` |
+| `GET /api/modules?space=<id>` | catalog with status and settings; secrets only as `set: true\|false`; the space's own modules are listed too (with `trust`, `runs`, `source`), and `notes` names the folders of `modules/` that were skipped |
+| `GET /api/module-trust?space=<id>&id=<module>` | what the trust dialog shows for an own module: files with sizes, the fingerprint, changes since the last trust, or the reason it cannot be trusted; runs nothing |
+| `POST /api/module-trust` `{space, id, hash, lang?}` | trust an own module — exactly the version with this `hash`. Only from the canvas page in a browser (`Origin` and `Sec-Fetch-Site: same-origin`; otherwise `403 trust-needs-ui`), and only after the operating system's window confirms |
+| `POST /api/module-untrust` `{space, id}` | revoke trust; `space.json` is not touched |
 | `POST /api/module-enable` `{space?, id, settings?, secrets?, replace?}` | enable and configure; answers `{ok, module, check[, replaced]}` — `ok` means «processed», `check.ok` is the verdict; `replace: true` takes the module's roles from their current holders in the same write (their settings stay) and lists them in `replaced`; refused with `module-error` / `bad-manifest` if the module did not load, `400 bad-settings` if `replace` is not a boolean |
 | `POST /api/module-settings` `{space?, id, settings?, secrets?}` | change settings or secrets (omit a key to keep it, `null` deletes) |
 | `POST /api/module-disable` `{space?, id}` | turn off; settings and secrets are kept |
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
-| `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists, built-in modules only) |
+| `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists); for a space's own module `GET /api/module-client/<space>/<id>/<file>`, served from its trusted snapshot |
 | `POST /api/task-new` `{id, title?, space?, from?, …}` | create a task. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
@@ -276,14 +287,14 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 a small module: a browser adapter (`window.DeaiComments.create(cfg)`) and four server
 functions (`client_config`, `list`, `resolve`, `check`). The channel of a task
 (`deai/<space>/<task>`) is given by the core. The guide, with a complete example, is
-[`docs/modules/comments.md`](docs/modules/comments.md). A space's own modules load only after
-the trust dialog of stage 3c, so for now the module has to be built in (`app/modules/`).
+[`docs/modules/comments.md`](docs/modules/comments.md). The module can live in the space itself
+(`<space>/modules/<id>/`) and runs after you trust it — see [`docs/modules/authoring.md`](docs/modules/authoring.md).
 
 **Limits.** The rules in `schema.sql` are open: whoever has the public key — and it is inside
 every page you publish — reads and writes the comments of that project, so use a dedicated
 project; the agent reads those comments as work items, so treat their text as untrusted input.
-The adapter's JavaScript runs on the canvas origin, which is why only built-in modules
-load for now. The service has to allow CORS for the opaque origin `null` too (the local
+The adapter's JavaScript runs on the canvas origin, which is why a space's own module
+runs only after you trust it. The service has to allow CORS for the opaque origin `null` too (the local
 `/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
 not a real project. Screenshots of pins are not part of the role (the role has no file storage).
 
@@ -292,7 +303,7 @@ not a real project. Screenshots of pins are not part of the role (the role has n
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
 app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments); the core is app/deai_modules.py
-docs/         design notes and the guide for module authors (docs/modules/comments.md)
+docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
 flows/demo    example flow
@@ -313,8 +324,7 @@ tests/        unit, Python and live (Playwright) tests
      modules from the UI; `replace` in `module-enable`.
    - ✅ **3b** (0.6) — the new-space wizard: space → modules → settings → first task, and a task
      from an existing mockup folder (`from` in `task-new`).
-   - **3c** (0.7, next) — a space's own modules from `<space>/modules/` (comments modules for your own
-     service included), loaded only after you trust them in a dialog.
+   - ✅ **3c** (0.7) — a space's own modules from `<space>/modules/`, run from a snapshot only after a person trusts them (dialog + system window).
 4. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 5. **Cross-platform start** — one command on macOS, Windows and Linux.
 
