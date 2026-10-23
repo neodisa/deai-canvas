@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
+import module_trust  # довіра своїм модулям простору (етап 3c): мова вікна довіри, шов `DEAI_TRUST_CONFIRM`
 from task_state import task_state  # легкий стан задачі: спільний із пушером реєстру
 # Розбір подій прогресу зʼємки. Формат рядка — контракт МІЖ процесами:
 # пише bin/shots-progress.mjs, читає цей модуль (звірку маркера тримає
@@ -2592,9 +2593,13 @@ window.__deaiCommentsCfg = {cfg_js};
 COMMENT_NOTICE_SNIPPET = '\n' + _COMMENT_DOWN_BANNER + '\n<script>window.__clDown({why_js});</script>'
 
 
-def module_client_urls(prov):
-    """Кореневі адреси файлів браузерного адаптера модуля `prov` — у порядку маніфесту (`/api/module-client/<id>/<файл>`).
-    Без `/t/<задача>/`: це маршрут простору, а не задачі."""
+def module_client_urls(prov, space=None):
+    """Кореневі адреси файлів браузерного адаптера модуля `prov` у порядку маніфесту: вбудований —
+    `/api/module-client/<id>/<файл>`, свій модуль простору (3c) — `/api/module-client/<простір>/<id>/<файл>` (свій модуль
+    є лише у своєму просторі; роздається зі знімка). Без `/t/<задача>/`: це маршрут простору, а не задачі."""
+    if getattr(prov, 'origin', 'builtin') == 'space':
+        sid = quote(str((space or {}).get('id', '')), safe='')
+        return [f'{MODULE_CLIENT_PREFIX}{sid}/{prov.id}/{name}' for name in prov.client]
     return [f'{MODULE_CLIENT_PREFIX}{prov.id}/{name}' for name in prov.client]
 
 
@@ -4405,7 +4410,7 @@ def task_publish_share(space, meta):
         pub = deai_modules.capabilities(space).get('publish')
         if pub in (None, 'legacy'):
             return {}
-        mod = deai_modules.catalog().get(pub)
+        mod = deai_modules.catalog(space).get(pub)
         if mod is None or mod.status != 'ok' or mod.publish_target != 'url':
             return {}
         # як `deai_modules._ctx`: секрети читаються лише в модуля, що їх оголосив
@@ -4660,8 +4665,9 @@ def _consume_stderr_line(line, progress, tail):
 #: `check: {ok: false, error: <код>, detail}` (HTTP 200), так само, як `ok: false` від самого модуля, а `GET
 #: /api/modules` показує їх тим самим `status: error`. Для `module-enable|settings` це ще й чесність: до `check` стан
 #: УЖЕ записано, і 400/409/502/504 збрехали б, що нічого не змінилось (а новий код модуля чи ядра не лишився б
-#: HTTP-збоєм через те, що його забули дописати в білий список).
-CHECK_NOT_A_VERDICT = ('unknown-module', 'space-json-unreadable')
+#: HTTP-збоєм через те, що його забули дописати в білий список). `module-untrusted` — свій модуль без довіри (3c): його код
+#: не виконувався, вердикту нема (HTTP 409).
+CHECK_NOT_A_VERDICT = ('unknown-module', 'space-json-unreadable', 'module-untrusted')
 
 
 def space_view(sp):
@@ -4702,6 +4708,8 @@ def _secret_flags(space_id, m):
 
 def _module_status(m, last, secrets_error):
     """`(status, error)` модуля каталогу:
+      * `untrusted` — свій модуль простору без довіри на цьому компʼютері (3c; `m.status == 'untrusted'`, текст — `m.error`):
+                      його код не виконувався, потрібна довіра людини — це не помилка;
       * `error`     — не завантажився (`m.status != 'ok'`; текст — `m.error`), чи файл секретів не читається
                       (`secrets-unreadable`), чи ОСТАННІЙ `check` не ok (`error` — його `error`: код ядра
                       `bad-settings|module-error|check-timeout` або власний текст модуля; `detail` — у `last_check`);
@@ -4710,6 +4718,8 @@ def _module_status(m, last, secrets_error):
       * `ok`        — останній `check` ok.
     `missing` (увімкнений, а в каталозі нема) — окремо, у `module_list`. Вмикання на статус не впливає: це про
     ЗДОРОВ'Я модуля, а не про його роль. Запамʼятований `check` не інвалідується правкою `space.json` руками."""
+    if m.status == 'untrusted':
+        return 'untrusted', m.error                     # свій модуль без довіри (3c): не «помилка», а «потрібна довіра»
     if m.status != 'ok':
         return 'error', m.error
     if secrets_error:
@@ -4726,9 +4736,12 @@ def module_list(space):
     ЯВНО увімкнені в `space.json`, яких на цій машині нема (вимкнений відсутній — не показуємо: це лише
     залишок налаштувань). Секрет — ЛИШЕ `set: true|false|null`, значення сюди не доходить (читаємо лише
     прапорці). Налаштування — СИМВОЛЬНІ (`{home}`, `{space}`…), з типовими значеннями маніфесту.
+    Свої модулі простору (3c) — серед модулів каталогу (`catalog(space)`): запис несе ще `builtin: false`, `custom: true`,
+    `trust` (`untrusted|trusted|changed|refused`), `record` (чи є запис довіри), `source` (тека в просторі, з `~`), `runs`
+    (чи виконується тут його код — є робочий знімок) і, коли є, `trust_error`. Запис вбудованого модуля цих полів не має.
     Може кинути `ModuleError('space-json-unreadable')` (центральна 409)."""
     sid = space['id']
-    cat = deai_modules.catalog()
+    cat = deai_modules.catalog(space)
     state = deai_modules.effective_state(space)
     explicit = deai_modules.space_modules(space)
     out = []
@@ -4752,6 +4765,11 @@ def module_list(space):
         e = {'id': mid, 'name': m.name, 'version': m.version, 'api': m.api, 'roles': list(m.roles),
              'builtin': True, 'enabled': st['enabled'], 'implicit': st['implicit'], 'status': status,
              'settings': settings}
+        if m.origin == 'space':                         # свій модуль простору (3c); запис вбудованого не змінюється
+            e.update(builtin=False, custom=True, trust=m.trust, record=m.record, source=m.source,
+                     runs=not deai_modules.untrusted_own(m))      # код виконується тут (робочий знімок)
+            if m.trust_error:
+                e['trust_error'] = m.trust_error
         if last is not None:
             e['last_check'] = last
         if error is not None:
@@ -4762,6 +4780,16 @@ def module_list(space):
             out.append({'id': mid, 'name': mid, 'version': '', 'api': None, 'roles': [], 'builtin': False,
                         'enabled': True, 'implicit': False, 'status': 'missing', 'settings': [],
                         'error': 'module is not installed on this machine'})
+    return out
+
+
+def modules_payload(space):
+    """Тіло `GET /api/modules`: `{modules}` і — ЛИШЕ коли є — `notes` своїх модулів простору (`[{folder, code}]`: теку
+    пропущено чи не прочитано; відповідь простору без своїх модулів побайтно та сама, що до 3c)."""
+    out = {'modules': module_list(space)}
+    notes = deai_modules.own_notes(space)
+    if notes:
+        out['notes'] = notes
     return out
 
 
@@ -4800,21 +4828,25 @@ def module_write(space, mid, action, settings, secrets, replace=_NO_REPLACE):
     самим записом `space.json` (`write_module_state`); ціль заміни мусить бути модулем, що завантажився (інакше відмова
     його `error_code` — `module-error`/`bad-manifest` — ДО секрету: заміна лишила б роль без виконавця); для `settings`
     і `disable` ключ ігнорується.
-    Повертає `(вердикт | None, replaced | None)`: вердикт `check` або `None` (`disable`); `replaced` — список id,
-    звільнених заміною, лише коли `replace is True` (інакше `None`)."""
+    Повертає `(вердикт | None, replaced | None)`: вердикт `check` або `None` (`disable`; налаштування свого модуля без
+    довіри); `replaced` — список id, звільнених заміною, лише коли `replace is True` (інакше `None`)."""
     if action == 'disable':
         deai_modules.write_module_state(space, mid, enabled=False)
         return None, None
-    deai_modules.validate_settings(mid, settings)
+    deai_modules.validate_settings(mid, settings, space)
     if action == 'enable' and replace is not _NO_REPLACE and not isinstance(replace, bool):
         raise deai_modules.ModuleError('bad-settings', message='replace: expected a boolean')
     swap = action == 'enable' and replace is True
     deai_modules.preflight(space, mid, enabling=(action == 'enable'), replace=swap)
     if secrets is not None:
-        deai_modules.write_secrets(space['id'], mid, secrets)
+        deai_modules.write_secrets(space['id'], mid, secrets, space=space)
     state = deai_modules.write_module_state(space, mid, enabled=True if action == 'enable' else None,
                                             settings=settings, replace=swap)
-    return module_check_verdict(space, mid), (state.get('replaced') if swap else None)
+    m = deai_modules.catalog(space).get(mid)
+    replaced = state.get('replaced') if swap else None
+    if m is not None and deai_modules.untrusted_own(m):
+        return None, replaced                           # свій модуль без довіри: перевіряти нічого (код не виконується)
+    return module_check_verdict(space, mid), replaced
 
 
 def _token_map(raw):
@@ -5081,14 +5113,15 @@ class Handler(SimpleHTTPRequestHandler):
     #: береться й не перевіряється: `task-new` із заголовком на ЩЕ НЕ зареєстрований id давав
     #: «невідома задача», хоча саме вона й створюється; префіксна форма
     #: (`/t/x/api/task-new`) безглузда й відхиляється. Те саме стосується `/api/space*`.
-    #: Модулі (етап 2а): `/api/modules`, `/api/module-*`, `/api/ds-tokens` — теж реєстрові: простір — параметр
+    #: Модулі (етап 2а): `/api/modules`, `/api/module-*` (з 3c і `module-trust`/`module-untrust`), `/api/ds-tokens` — теж реєстрові: простір — параметр
     #: `space`, не задача. Точна відповідність (шлях без query), КОЖЕН маршрут окремо: широкий префікс
     #: `/api/module` зловив би будь-який майбутній маршрут.
     _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/spaces',
                         '/api/space-peek', '/api/space-new', '/api/space-update',
                         '/api/space-switch',
                         '/api/modules', '/api/module-enable', '/api/module-disable',
-                        '/api/module-settings', '/api/module-check', '/api/ds-tokens')
+                        '/api/module-settings', '/api/module-check', '/api/ds-tokens',
+                        '/api/module-trust', '/api/module-untrust')
 
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
@@ -5220,6 +5253,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path.split('?')[0] == '/api/modules':
             self._modules_get()
+            return
+        if self.path.split('?')[0] == '/api/module-trust':
+            self._module_trust_get()
             return
         if self.path.split('?')[0] == '/api/ds-tokens':
             self._ds_tokens_get()
@@ -5494,7 +5530,7 @@ class Handler(SimpleHTTPRequestHandler):
                     ch, notice, team = 'local', e.code, False
             if module_cfg is not None:
                 html = inject_module_comment_layer(
-                    html, f'{origin}/app/vendor', module_client_urls(prov), module_cfg, version=ver,
+                    html, f'{origin}/app/vendor', module_client_urls(prov, page_space), module_cfg, version=ver,
                     inspector=True, audiences=team, profile=task.get('profile') or '', space=page_space)
             elif ch == 'project':
                 # режим «Проєкт»: канал Supabase (колеги + історія, як в опублікованому).
@@ -5655,7 +5691,7 @@ class Handler(SimpleHTTPRequestHandler):
             # Командний канал модуля: де його адаптер (кореневі адреси, по порядку), публічна конфігурація, канал.
             # «Огляд» (`overview-comments.js`) складає з цього `DeaiComments.create({...config, channel, onChange})`.
             channel = deai_modules.channel_for(space, tid)
-            self._send_json({'ch': ch, 'module': prov.id, 'client': module_client_urls(prov),
+            self._send_json({'ch': ch, 'module': prov.id, 'client': module_client_urls(prov, space),
                              'config': deai_modules.comments_client(space, prov), 'channel': channel,
                              'version': ver, **user})
         elif ch == 'project':
@@ -6291,6 +6327,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._module_settings(payload)
         elif self.path == '/api/module-check':
             self._module_check(payload)
+        elif self.path == '/api/module-trust':
+            self._module_trust_post(payload)
+        elif self.path == '/api/module-untrust':
+            self._module_untrust(payload)
         else:
             self.send_error(404)
 
@@ -7107,12 +7147,12 @@ class Handler(SimpleHTTPRequestHandler):
         return sp
 
     def _modules_get(self):
-        """`GET /api/modules?space=` → `{modules: [...]}` (`module_list`). Модулі НЕ виконуються (лише
+        """`GET /api/modules?space=` → `{modules: [...][, notes: [...]]}` (`modules_payload`). Модулі НЕ виконуються (лише
         завантажуються й читається запамʼятований `check`): запит дешевий і безпечний для опитування."""
         sp = self._module_space(parse_qs(urlparse(self.path).query).get('space', [None])[0])
         if sp is None:
             return
-        self._send_json({'modules': module_list(sp)})
+        self._send_json(modules_payload(sp))
 
     def _ds_tokens_get(self):
         """`GET /api/ds-tokens?space=` → `ds_tokens_view`: завжди 200 для відомого простору (інспектор мусить
@@ -7121,6 +7161,41 @@ class Handler(SimpleHTTPRequestHandler):
         if sp is None:
             return
         self._send_json(ds_tokens_view(sp))
+
+    def _module_trust_get(self):
+        """`GET /api/module-trust?space=&id=` → `{ok: true, trust: <дані діалогу>}` (`deai_modules.trust_view`)."""
+        q = parse_qs(urlparse(self.path).query)
+        sp = self._module_space(q.get('space', [None])[0])
+        if sp is None:
+            return
+        self._send_json({'ok': True, 'trust': deai_modules.trust_view(sp, q.get('id', [None])[0])})
+
+    def _module_trust_post(self, payload):
+        """`POST /api/module-trust {space, id, hash, lang?}` → `{ok: true, module}`. Лише з браузера канваса: `Origin`
+        Є й локальний І `Sec-Fetch-Site: same-origin` — інакше 403 `trust-needs-ui`. Це фільтр від curl агента, а не
+        межа: межа — системне вікно ОС у `grant_trust` (скрипт сторінки макета шле ті самі заголовки)."""
+        origin = self.headers.get('Origin')
+        if not origin or not _local_origin(origin) or self.headers.get('Sec-Fetch-Site') != 'same-origin':
+            self._space_error(403, 'trust-needs-ui', 'trust is granted only from the canvas page in a browser')
+            return
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        mid = payload.get('id')
+        lang = payload.get('lang')
+        lang = lang if isinstance(lang, str) and lang in module_trust.CONFIRM_TEXT else 'uk'   # `[]` у `in` — TypeError
+        deai_modules.grant_trust(sp, mid, payload.get('hash'), lang)
+        self._send_json({'ok': True, 'module': module_entry(sp, mid)})
+
+    def _module_untrust(self, payload):
+        """`POST /api/module-untrust {space, id}` → `{ok: true, module: <запис> | null}`: зняти довіру — безпечний
+        напрям, тож ні `Sec-Fetch-Site`, ні системного вікна (`deai_modules.revoke_trust`)."""
+        sp = self._module_space(payload.get('space'))
+        if sp is None:
+            return
+        mid = payload.get('id')
+        deai_modules.revoke_trust(sp, mid)
+        self._send_json({'ok': True, 'module': module_entry(sp, mid)})
 
     # По обробнику на маршрут (як скрізь у `do_POST`: тест «тіло не обʼєкт» розбирає `self._xxx(payload)`).
     def _module_enable(self, payload):
@@ -7157,7 +7232,7 @@ class Handler(SimpleHTTPRequestHandler):
             verdict, replaced = module_write(sp, mid, action, payload.get('settings'), payload.get('secrets'),
                                              payload.get('replace', _NO_REPLACE))
         out = {'ok': True, 'module': module_entry(sp, mid)}
-        if action != 'disable':
+        if action != 'disable' and verdict is not None:
             out['check'] = verdict
         if replaced is not None:
             out['replaced'] = replaced
@@ -7694,12 +7769,14 @@ def published_target(path):
 
 
 # ---------------------------------------------------------------------------------------------------
-# Роздача файлів браузерного адаптера модуля ролі `comments` (етап 2b-2, Task 1):
-# `GET /api/module-client/<модуль>/<файл>`. Адаптер виконується в сторінках канваса (той самий origin, що API), тож віддаємо
-# РІВНО те, що модуль оголосив у `client` свого маніфесту, і лише для справного вбудованого модуля ролі `comments`: жодного
-# файла за межами списку, жодного прихованого, жодного шляху вглиб. Відкриття — з тим самим захистом, що й `/published`
-# (`_published_open_file`: звичайний файл, ні посилання, ні жорсткого посилання, `O_NOFOLLOW`, дескриптор). Файли — не
-# від простору й не від задачі (вбудований ресурс), тому маршрут обробляється ДО `_take_task`, як `/published/`: заголовок
+# Роздача файлів браузерного адаптера модуля ролі `comments` (етап 2b-2, Task 1; свої модулі — етап 3c):
+# `GET /api/module-client/<модуль>/<файл>` (вбудований) і `GET /api/module-client/<простір>/<модуль>/<файл>` (СВІЙ модуль простору).
+# Адаптер виконується в сторінках канваса (той самий origin, що API), тож віддаємо РІВНО те, що модуль оголосив у `client` свого
+# маніфесту, і лише для справного модуля ролі `comments`: жодного файла за межами списку, жодного прихованого, жодного шляху
+# вглиб. Свій модуль роздається зі ЗНІМКА довіри (`mod.dir` свого модуля — тека знімка, а не тека простору), тож адаптер
+# недовіреного модуля не віддається ніколи, а правка теки після довіри не доходить до сторінок. Відкриття — з тим самим захистом,
+# що й `/published` (`_published_open_file`: звичайний файл, ні посилання, ні жорсткого посилання, `O_NOFOLLOW`, дескриптор).
+# Файли — не від задачі (вбудований ресурс чи знімок), тому маршрут обробляється ДО `_take_task`, як `/published/`: заголовок
 # `X-Canvas-Task` на ньому не діє, а зіпсований реєстр його не вкладає. Усі відмови — один і той самий 404 зі сталим тілом.
 MODULE_CLIENT_PREFIX = '/api/module-client/'
 MODULE_CLIENT_HEADERS = (('X-Content-Type-Options', 'nosniff'),)
@@ -7707,21 +7784,33 @@ MODULE_CLIENT_NOT_FOUND = b'not found\n'
 
 
 def module_client_target(path):
-    """`(Module, імʼя файла)` для `path` (БЕЗ `?query`) виду `/api/module-client/<модуль>/<файл>` або `None`. НІКОЛИ не
-    кидає. Кожна складова — рівно одна, розкодована суворо (`%ff`, `%00`, `%2f` усередині складової не дають
-    ні виходу за теку, ні другої складової) і придатна за шаблонами маніфесту (`ID_RE`, `CLIENT_RE`: ні `.`, ні `..`, ні
-    прихованих, ні регістру-двійника); модуль — з каталогу, `status == 'ok'`, роль `comments`, файл — зі списку `client`."""
+    """`(Module, імʼя файла)` для `path` (БЕЗ `?query`) виду `/api/module-client/<модуль>/<файл>` (вбудований) чи
+    `/api/module-client/<простір>/<модуль>/<файл>` (свій модуль простору, 3c — зі знімка) або `None`. НІКОЛИ не кидає. Кожна
+    складова — рівно одна, розкодована суворо (`%ff`, `%00`, `%2f` усередині складової не дають ні виходу за теку, ні другої
+    складової) і придатна за шаблонами (`SPACE_ID_RE`, `ID_RE`, `CLIENT_RE`: ні `.`, ні `..`, ні прихованих, ні регістру-двійника);
+    модуль — з каталогу (для адреси з простором — каталогу ЦЬОГО простору, і лише СВІЙ модуль; без простору — лише вбудований),
+    `status == 'ok'`, роль `comments`, файл — зі списку `client`."""
     try:
         if not path.startswith(MODULE_CLIENT_PREFIX):
             return None
         parts = [unquote(p, errors='strict') for p in path[len(MODULE_CLIENT_PREFIX):].split('/')]
-        if len(parts) != 2:
+        sp = None
+        if len(parts) == 3:                             # свій модуль: /<простір>/<модуль>/<файл>
+            sid, mid, name = parts
+            if not spaces.SPACE_ID_RE.fullmatch(sid):
+                return None
+            sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == sid), None)
+            if sp is None:
+                return None
+        elif len(parts) == 2:
+            mid, name = parts
+        else:
             return None
-        mid, name = parts
         if not deai_modules.ID_RE.fullmatch(mid) or not deai_modules.CLIENT_RE.fullmatch(name):
             return None
-        mod = deai_modules.catalog().get(mid)
-        if mod is None or mod.status != 'ok' or 'comments' not in mod.roles or name not in mod.client:
+        mod = deai_modules.catalog(sp).get(mid)
+        if (mod is None or mod.status != 'ok' or 'comments' not in mod.roles or name not in mod.client
+                or mod.origin != ('space' if sp else 'builtin')):
             return None
         return mod, name
     except Exception:  # noqa: BLE001 — статичний файл не розповідає, що саме зламалось
@@ -7742,6 +7831,14 @@ def open_module_client(mod, name):
         return open_published_file(os.path.join(mod.dir, name), _published_real_dir(mod.dir))
     except OSError:
         return None
+
+
+def trust_seam_warning():
+    """Рядок для журналу старту, коли діє тестовий шов `DEAI_TRUST_CONFIRM` (довіра без системного вікна), інакше `None`."""
+    v = module_trust.seam_value()
+    if v is None:
+        return None
+    return f'⚠ DEAI_TRUST_CONFIRM={v}: own-module trust is answered WITHOUT the system window (test seam)'
 
 
 def make_server(port=0):
@@ -7859,8 +7956,9 @@ def make_server(port=0):
             self.wfile.write(MODULE_CLIENT_NOT_FOUND)
 
         def _serve_module_client(self):
-            """`GET /api/module-client/<модуль>/<файл>` (`module_client_target` → `open_module_client`; відповідь —
-            `_send_iter_file`: ETag/304 з відкритого дескриптора, `text/javascript; charset=utf-8`, `nosniff`)."""
+            """`GET /api/module-client/<модуль>/<файл>` чи `…/<простір>/<модуль>/<файл>` для свого модуля
+            (`module_client_target` → `open_module_client`; відповідь — `_send_iter_file`: ETag/304 з відкритого
+            дескриптора, `text/javascript; charset=utf-8`, `nosniff`)."""
             found = module_client_target(self.path.partition('?')[0])
             opened = open_module_client(*found) if found else None
             if opened is None:
@@ -8044,6 +8142,9 @@ def make_server(port=0):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8765))
     print(f'Design Canvas v2: http://localhost:{port}/app/')
+    seam_line = trust_seam_warning()
+    if seam_line:
+        print(seam_line, file=sys.stderr)
     print(published_mode_line())
     extra_line = extra_modules_line()
     if extra_line:
