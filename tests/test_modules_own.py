@@ -1464,6 +1464,23 @@ class TrustCoreTest(OwnEnv):
         self.assertEqual({f['change'] for f in v['files']}, {'same'})
         self.assertEqual(self.ran(), [])
 
+    def test_view_of_a_damaged_snapshot_is_untrusted_even_when_the_catalog_scan_saw_a_refusal(self):
+        """Гонка: знімок пошкоджено, скан каталогу ще бачив теку `refused`, а власний скан діалогу вже чистий — стан не
+        мусить братись за хешем (`trusted`/`changed`), коли знімок не цілий і код із нього не виконується."""
+        h = self.trust()
+        snap = mt.snapshot_dir(h)
+        os.chmod(snap, 0o700)
+        os.chmod(os.path.join(snap, 'server.py'), 0o600)
+        _write(os.path.join(snap, 'server.py'), 'raise SystemExit')
+        mt.forget(snap)
+        stale = dm._clone(dm.catalog(self.sp)['acme'], trust='refused', trust_error='symlink', record=True)
+        with mock.patch.object(dm, '_own_module', return_value=stale):
+            v = self.view()
+        self.assertEqual((v['state'], v['record']), ('untrusted', True))
+        self.assertNotIn('refused', v)
+        self.assertRegex(v['hash'], r'^[0-9a-f]{64}$')
+        self.assertEqual(self.ran(), [])
+
     def test_view_loads_only_the_asked_module(self):
         self.own('beta')
         h = self.trust()

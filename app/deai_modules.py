@@ -1955,8 +1955,8 @@ def trust_view(space, mid):
     if why:
         out.update(state='refused', refused={'code': 'bad-manifest', 'detail': why[:MAX_MESSAGE]})
         return out
-    if rec is None or m.trust == 'untrusted':
-        state = 'untrusted'
+    if rec is None or m.trust == 'untrusted' or not module_trust.verify_snapshot(rec['hash']):
+        state = 'untrusted'                 # знімок не цілий — код із нього не виконується, хоч би що бачив скан каталогу
     else:
         state = 'trusted' if sc.hash == rec['hash'] else 'changed'
     files, removed = module_trust.diff(sc.files, rec['files'] if rec else None)
