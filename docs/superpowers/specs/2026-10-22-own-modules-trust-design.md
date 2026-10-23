@@ -399,8 +399,10 @@
 6. Кнопки: ліворуч «Забрати довіру» (лише `record: true`; `data-tr="untrust"`, небезпечна), праворуч «Скасувати»
    (фокус типово) і «Довіряю».
 
-`refused` — той самий `<form>` без кнопки «Довіряю» і без попередження: «Цій теці не можна довіритись: <причина>.» +
-«Закрити» (і «Забрати довіру», якщо `record: true`).
+`refused` — той самий `<form>` без кнопки «Довіряю» і без попередження; заголовок не питає — «Модулю «<назва>» не можна
+довіритись» (`trTitleRefused`), під ним сама причина, + «Закрити» (і «Забрати довіру», якщо `record: true`). Шлях у
+діалозі обрізається з середини так само, як у системному вікні (`_clean(..., middle=True)`), список «Прибрано» — до 10
+імен і «і ще N». Діалог для стану `trusted` не відкривається: картка застаріла — лише перечитування.
 
 **Потік** (`openTrust(entry)` у `app.js`, ним же користується майстер): `GET /api/module-trust` → діалог → «Довіряю» →
 `ctl.busy(true)` і рядок «Підтвердіть у системному вікні…» → `POST /api/module-trust {space, id, hash, lang}` (окремою
@@ -437,7 +439,7 @@
 `cnNote*` (`id-taken`, `too-many-modules`, `modules-link`, `modules-unreadable`), `trTitle(name)`, `trTitleNew(name)`,
 `trFingerprint(h)`, `trWarn`, `trWarnComments`, `trWarnSystem`, `trAsks`, `trAsksNone`, `trSecret`, `trSecretPublic`,
 `trFiles(n, size)`, `trChangedCount(k)`, `trNew`, `trChanged`, `trRemoved(list)`, `trTrust` «Довіряю», `trClose`,
-`trRefused(why)`, `trReopened`, `trWaiting`, причини `trWhy*` (усі причини `refused`/`untrusted` вище), тексти помилок
+`trTitleRefused(name)`, `trRefused(why)` (лише причина), `trRemovedMore(n)`, `trReopened`, `trWaiting`, причини `trWhy*` (усі причини `refused`/`untrusted` вище), тексти помилок
 нових кодів. Текст системного вікна живе ЛИШЕ в Python — `module_trust.CONFIRM_TEXT` для `uk`/`en` (сервер бере мову з
 `lang` запиту; тест звіряє набір мов), ключа `trSystemAsk` у словнику нема. Причини `trWhy*` — повні речення (плюс
 `trWhyOther`), шаблони `cnTrustRefusedNew(why)` і `trRefused(why)` їх вставляють. Ключі, які повертає модель (`trustLine`,

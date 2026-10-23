@@ -4425,10 +4425,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
  *
  * Сценарії: 1 — повний шлях (недовірений → діалог → довіра → підключення → правка на диску → стара версія працює →
  * повторна довіра → «Забрати довіру»); 2 — системне вікно відмовило; 3 — «колега закомітив» (увімкнений, але не довірений);
- * 4 — майстер: «Довіритись…» на кроці 2; 5 — запит без заголовків браузера → 403.
+ * 4 — майстер: «Довіритись…» на кроці 2; 5 — запит без заголовків браузера → 403; 6 — тека змінилась, поки діалог
+ * відкритий; 7 — «Забрати довіру» з діалогу; 8 — тека, якій не можна довіритись (символьне посилання).
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -4632,15 +4633,87 @@ test("5: запит довіри без заголовків браузера (�
   assert.deepEqual(s.ran(), []);
 });
 
+test("6: тека змінилась, поки діалог відкритий — «Тека змінилась…», новий відбиток, фокус на «Скасувати», друга спроба довіряє новій версії", async (t) => {
+  const s = await boot(t);
+  const { page } = s;
+  await openConnections(page);
+  await page.click(`${CARD} [data-cn="trust"]`);
+  await page.waitForSelector("form.tr");
+  const print1 = (await dialogText(page)).match(/Відбиток ([0-9a-f]{12})/)[1];
+  writeFileSync(path.join(s.ownDir, "server.py"), SERVER_PY("v3"));
+  await page.click('form.tr [data-a="ok"]');
+  await page.waitForSelector("form.tr .tr-reopened", { timeout: 15000 });
+  assert.match(await page.locator("form.tr .tr-reopened").textContent(), /Тека змінилась, поки діалог був відкритий/);
+  const print2 = (await dialogText(page)).match(/Відбиток ([0-9a-f]{12})/)[1];
+  assert.notEqual(print2, print1, "показано свіжий відбиток");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус — на «Скасувати»");
+  assert.deepEqual(s.ran(), [], "застарілій версії не довірено, код не виконано");
+  await page.click('form.tr [data-a="ok"]');
+  await page.waitForSelector("form.tr", { state: "detached" });
+  await page.waitForSelector(`${CARD} [data-cn="enable"]`);
+  const trusted = path.join(s.deaiHome, "trusted") + path.sep;
+  assert.ok(s.ran().length > 0 && s.ran().every((p) => p.startsWith(trusted)), `виконується лише знімок: ${s.ran()}`);
+  assert.deepEqual(s.errors, []);
+});
+
+test("7: «Забрати довіру» з діалогу нової версії — небезпечне питання, фокус на «Скасувати», модуль знову недовірений, space.json без змін", async (t) => {
+  const s = await boot(t);
+  const { page } = s;
+  await openConnections(page);
+  await page.click(`${CARD} [data-cn="trust"]`);
+  await page.waitForSelector("form.tr");
+  await page.click('form.tr [data-a="ok"]');
+  await page.waitForSelector("form.tr", { state: "detached" });
+  await page.waitForSelector(`${CARD} [data-cn="enable"]`);
+  writeFileSync(path.join(s.ownDir, "server.py"), SERVER_PY("v2"));
+  await page.goto(`${s.url}/app/`);                              // свіже «Підключення»: картка бачить зміну теки
+  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await openConnections(page);
+  await page.click(`${CARD} [data-cn="trust"]`);
+  await page.waitForSelector('form.tr [data-tr="untrust"]');
+  const before = sjText(s);
+  await page.click('form.tr [data-tr="untrust"]');
+  await page.waitForSelector("form.tr", { state: "detached" });
+  await page.waitForSelector('.cv-ask-scrim [data-a="ok"].cv-ask-danger');
+  assert.match(await page.locator(".cv-ask-scrim").textContent(), /Забрати довіру до «Memo own \(test\)»/);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус — на «Скасувати»");
+  await page.click('.cv-ask-scrim [data-a="ok"]');
+  await page.waitForSelector(`${CARD} .cn-badge--untrusted`, { timeout: 15000 });
+  assert.equal(sjText(s), before, "space.json не змінено");
+  assert.deepEqual(s.errors, []);
+});
+
+test("8: тека з символьним посиланням — діалог без «Довіряю», заголовок не питає, Esc закриває, фокус повертається на картку", async (t) => {
+  const s = await boot(t);
+  symlinkSync("server.py", path.join(s.ownDir, "alias.py"));
+  const { page } = s;
+  await openConnections(page);
+  await page.click(`${CARD} [data-cn="trustinfo"]`);
+  await page.waitForSelector("form.tr");
+  const d = await dialogText(page);
+  assert.match(d, /Модулю «Memo own \(test\)» не можна довіритись/);
+  assert.match(d, /символьне посилання/);
+  assert.doesNotMatch(d, /Довіритись модулю/);
+  assert.equal(await page.locator('form.tr [data-a="ok"]').count(), 0, "«Довіряю» нема");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("form.tr", { state: "detached" });
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.cn), "trustinfo", "фокус — на кнопці картки");
+  assert.deepEqual(s.ran(), []);
+  assert.deepEqual(s.errors, []);
+});
+
 guardRealDeai();
 ```
 
-⚠️ Перед прогоном звір із наявними живими тестами (`connections.test.mjs`, `wizard.test.mjs`) селектори входів (`#bar [data-act="conn"]`, `.dd--spaces [data-act="spacenew"]`, `#sp-path`) і форму `postJson` (`_spaces-kit.mjs`) — якщо щось інакше, правиться ТЕСТ під наявний інтерфейс, а не інтерфейс. Сценарій 4: простір створюється в теці `~/work/fresh`, де вже лежить `modules/memo-own/` (тека без `space.json` — створення простору її приймає).
+⚠️ Перед прогоном звір із наявними живими тестами (`connections.test.mjs`, `wizard.test.mjs`) селектори входів (`#bar [data-act="conn"]`, `.dd--spaces [data-act="spacenew"]`, `#sp-path`) і форму `postJson` (`_spaces-kit.mjs`) — якщо щось інакше, правиться ТЕСТ під наявний інтерфейс, а не інтерфейс. Сценарій 4: простір створюється в теці `~/work/fresh`, де вже лежить `modules/memo-own/` (тека без `space.json` — створення простору її приймає). Сценарії 6–8 додано з ревʼю Task 7 (ревʼюер пройшов їх живцем);
+селектори `.tr-reopened`, `[data-tr="untrust"]`, `.cv-ask-danger`, `[data-cn="trustinfo"]` звір із `app/trust-view.js` і
+`app/app.js`. Після правок ревʼю Task 7 діалог для стану `trusted` не відкривається (одразу перечитування), тому
+сценарій 7 спершу міняє теку й заново відкриває «Підключення».
 
 - [ ] **Step 3: Прогін живого тесту** (лише цей файл, послідовно)
 
 Run: `python3 "$G" 600 4000 node --test --test-concurrency=1 tests/live/own-modules.test.mjs 2>&1 | tail -20`
-Expected: PASS 6/6 (5 сценаріїв + сторож `~/.deai`). Далі `tests/live/connections.test.mjs` і `tests/live/wizard.test.mjs` (по одному) — без регресій.
+Expected: PASS 9/9 (8 сценаріїв + сторож `~/.deai`). Далі `tests/live/connections.test.mjs` і `tests/live/wizard.test.mjs` (по одному) — без регресій.
 
 - [ ] **Step 4: Мутації живого** (по одній, з охоронцем; після кожної — `git diff --stat` порожній)
 
@@ -4651,6 +4724,9 @@ Expected: PASS 6/6 (5 сценаріїв + сторож `~/.deai`). Далі `te
 | `grant_trust`: прибрати `forget_check` | 1 (`check` після повторної довіри — `own v1`) — якщо не впаде, записати в звіт задачі: юніт `test_grant_runs_the_snapshot_and_clears_the_last_check` стереже це окремо |
 | `_module_trust_post`: прибрати перевірку `Sec-Fetch-Site` | 5 |
 | `optionHTML`: без кнопки «Довіритись…» | 4 |
+| `openTrust`: на `module-changed` не відкривати діалог заново (без `continue`) | 6 |
+| `untrustFlow`: без `danger: true` | 7 |
+| `trustDialogHTML`: у `refused` заголовок `trTitle` замість `trTitleRefused` | 8 |
 
 - [ ] **Step 5: Ручна перевірка системного вікна (macOS, ЛИШЕ контролер, один раз)**
 
@@ -4771,6 +4847,7 @@ Raise `ctx["ModuleError"](code, "message")` for a failure; texts are cut to 300 
 2. «Trust…» opens a dialog: what the module asks for, every file with its size, the fingerprint. «Trust» then asks the
    **operating system** to confirm in its own window (macOS dialog, Windows message box, Linux `zenity`/`kdialog`). Only
    a person at the computer can answer it: a script on a page and an agent without control of the screen cannot.
+   After «No», asking again for the same version within 30 s is refused without a window.
 3. The canvas copies exactly the bytes you saw into `~/.deai/trusted/<fingerprint>/` (read-only) and runs only that
    snapshot. Write the module's state into the space folder or your own cache, never next to `__file__`.
 4. Editing the folder does not change what runs: the card says «The folder has changes» and the previous version keeps
@@ -4860,7 +4937,8 @@ their code runs only after a person trusts exactly the bytes they saw. Design:
   `DEAI_HOME`, and the server prints a warning when it is on.
 - Known limits: no sandbox (a trusted module runs with your permissions); the Windows and Linux system windows are
   covered by command-building unit tests only; Safari older than 16.4 does not send `Sec-Fetch-Site`; snapshots
-  replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in `<DEAI_HOME>/trusted/`).
+  replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in `<DEAI_HOME>/trusted/`); after «No» in
+  the system window, a repeat request for the same version within 30 s is refused without a window.
 ```
 
 Перелік у розділі звір із тим, що реально влилось (git log від `v0.6.0`): нічого, чого нема в коді, не писати.
