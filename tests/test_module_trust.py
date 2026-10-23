@@ -811,6 +811,29 @@ class RecordsTest(Base):
         self.assertTrue(mt.verify_snapshot(sc.hash))                # …і знімок на місці, цілий
         self.assertEqual([n for n in os.listdir(mt.trusted_root()) if n.startswith('.old-')], [])
 
+    def test_a_failed_write_and_a_failed_rollback_keep_the_new_snapshot_and_raise_the_write_error(self):
+        # Між відсуванням знімка й збоєм запису на його місці зʼявився НОВИЙ знімок того ж хешу (паралельна довіра, що
+        # побачила порожнє місце): повернути старий нікуди — `rename` на непорожню теку не вдається. Новий знімок цілий,
+        # виняток — саме збій запису (а не збій відкату), `.old-*` лишається для `sweep`, довіра на місці.
+        sc = mt.scan(self.mod, with_data=True)
+        mt.ensure_snapshot(sc)
+        mt.put_record('/k', self.rec(sc.hash))
+
+        def fail_and_meanwhile_trust_again(*a, **kw):
+            mt.ensure_snapshot(sc)                                  # місце знімка порожнє (старий відсунуто): пишеться новий
+            raise OSError(errno.EIO, 'disk')
+        with mock.patch.object(mt, 'atomic_write_json', side_effect=fail_and_meanwhile_trust_again):
+            with self.assertRaises(OSError) as cm:
+                mt.drop_record('/k')
+        self.assertEqual(cm.exception.errno, errno.EIO, 'вийшла помилка відкату, а не запису')
+        self.assertIn('/k', mt.load_records())
+        self.assertTrue(mt.verify_snapshot(sc.hash), 'новий знімок цілий')
+        left = [n for n in os.listdir(mt.trusted_root()) if n.startswith('.old-')]
+        self.assertEqual(len(left), 1, 'старий знімок лишився відсунутим')
+        mt.sweep(now=time.time() + mt.STALE_S + 100)
+        self.assertEqual([n for n in os.listdir(mt.trusted_root()) if n.startswith('.old-')], [], 'sweep прибрав залишок')
+        self.assertTrue(mt.verify_snapshot(sc.hash), 'sweep не чіпає цілий знімок')
+
     def test_concurrent_puts_do_not_lose_records(self):
         self.snap()
         real, errs = mt._read_file, []
@@ -1148,6 +1171,20 @@ class ConfirmTest(Base):
         self.assertEqual(mt._clean(s, n=10), 'abcdefghi…')                    # без `middle` — з кінця
         self.assertEqual(mt._clean('short', n=10, middle=True), 'short')
 
+    def test_clean_clips_only_what_is_longer_than_n(self):
+        # межа `len(s) == n`: рядок рівно `n` знаків — цілий; `n + 1` — з «…»; `n - 1` — цілий (і з `middle`, і без)
+        n = 10
+        for middle in (False, True):
+            with self.subTest(middle=middle):
+                self.assertEqual(mt._clean('a' * (n - 1), n=n, middle=middle), 'a' * (n - 1))
+                self.assertEqual(mt._clean('a' * n, n=n, middle=middle), 'a' * n)
+                self.assertEqual(len(mt._clean('a' * (n + 1), n=n, middle=middle)), n)
+                self.assertIn('…', mt._clean('a' * (n + 1), n=n, middle=middle))
+        self.assertEqual(mt._clean('abcdefghijk', n=n), 'abcdefghi…')
+        self.assertEqual(mt._clean('abcdefghijk', n=n, middle=True), 'abc…fghijk')
+        # керівні символи не рахуються в довжину: після очищення рядок рівно `n` — його не обрізають
+        self.assertEqual(mt._clean('abcde\x07fghij', n=n), 'abcdefghij')
+
     def test_seam_needs_a_non_default_deai_home(self):
         with mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes'}):
             self.assertEqual(mt.seam_value(), 'yes')
@@ -1183,6 +1220,30 @@ class ConfirmTest(Base):
                 mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': other}):
             self.assertNotEqual(os.path.realpath(other), os.path.realpath(default))   # рядки різні, тека — та сама
             self.assertIsNone(mt.seam_value())
+
+    def test_seam_is_off_for_the_default_home_in_another_case_or_unicode_form_even_if_it_does_not_exist_yet(self):
+        # Перший запуск: типової теки ще нема, `_same_dir` (samefile) мовчить, `realpath` лишає написання як є — рішає
+        # порівняння рядків після `NFC` + `casefold` (на APFS `~/.DEAI` потім стане тією самою текою).
+        default = os.path.join(self.tmp, 'Nosuch-Dé')
+        for other in (os.path.join(self.tmp, 'nosuch-dé'), os.path.join(self.tmp, 'NOSUCH-DE\u0301')):
+            with self.subTest(other=ascii(other)):
+                self.assertFalse(os.path.exists(default))
+                with mock.patch.object(mt, '_real_default_home', lambda: os.path.realpath(default)), \
+                        mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': other}):
+                    self.assertNotEqual(os.path.realpath(other), os.path.realpath(default))
+                    self.assertIsNone(mt.seam_value())
+        with mock.patch.object(mt, '_real_default_home', lambda: os.path.realpath(default)), \
+                mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes', 'DEAI_HOME': os.path.join(self.tmp, 'other-home')}):
+            self.assertEqual(mt.seam_value(), 'yes', 'інша тека — шов діє')
+
+    def test_seam_is_off_when_the_file_system_says_it_is_the_default_home(self):
+        # Платформонезалежний свідок `_same_dir`: на чутливій до регістру ФС «та сама тека іншим написанням» не
+        # відтворити, тож відповідь файлової системи підміняється — шов мусить її слухати.
+        with mock.patch.dict(os.environ, {mt.SEAM_ENV: 'yes'}):
+            self.assertEqual(mt.seam_value(), 'yes')
+            with mock.patch.object(spaces, '_same_dir', return_value=True) as same:
+                self.assertIsNone(mt.seam_value())
+            same.assert_called()
 
     @unittest.skipIf(os.name == 'nt', 'pwd і посилання')
     def test_the_default_home_is_resolved_through_a_linked_user_home(self):

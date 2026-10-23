@@ -693,16 +693,25 @@ def _real_default_home():
     return os.path.realpath(os.path.join(base, '.deai'))
 
 
+def _fold(p):
+    """Шлях для порівняння «той самий, хай і писаний інакше»: `NFC` + `casefold`. Типової теки на першому запуску ще
+    нема, тож `samefile` мовчить, а `realpath` лишає написання як є (`~/.DEAI`, `~/.deai` у NFD)."""
+    return unicodedata.normalize('NFC', p).casefold()
+
+
 def seam_value(env=None):
     """Тестовий шов `DEAI_TRUST_CONFIRM` (`yes`/`no`/`unavailable`) або `None`. Діє ЛИШЕ коли `DEAI_HOME` задано й це не
-    справжній типовий `~/.deai`: на робочій машині змінна, що випадково лишилась, нічого не робить."""
+    справжній типовий `~/.deai` (ні за `realpath`, ні за `NFC`+`casefold` обох рядків, ні за файловою системою): на
+    робочій машині змінна, що випадково лишилась, нічого не робить."""
     env = os.environ if env is None else env
     v = env.get(SEAM_ENV)
     home = env.get('DEAI_HOME')
     if v not in ('yes', 'no', 'unavailable') or not home:
         return None
     here, default = os.path.realpath(os.path.expanduser(home)), _real_default_home()
-    if here == default or spaces._same_dir(here, default):      # тека на диску та сама (APFS: інший регістр, NFD)
+    if here == default or _fold(here) == _fold(default):
+        return None                                             # той самий шлях, хай і інший регістр чи форма Unicode
+    if spaces._same_dir(here, default):                         # тека на диску та сама (APFS: інший регістр, NFD)
         return None
     return v
 
