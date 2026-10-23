@@ -4853,6 +4853,35 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Files:**
 - Create: `docs/modules/authoring.md`
 - Modify: `docs/modules/comments.md`, `README.md`, `CHANGELOG.md`, `docs/design/spaces-and-modules.md`, `package.json`
+- Modify (попутно з ревʼю Task 9): `tests/live/own-modules.test.mjs`, `tests/live/_spaces-kit.mjs`
+
+**Попутно з ревʼю Task 9** (лише тести; окремим комітом ДО документів; живі тести — послідовно, по одному файлу):
+- `boot` (`own-modules.test.mjs`): ПЕРШИМ рядком, до `startServer` —
+  `assert.ok(["yes", "no", "unavailable"].includes(seam), `невідомий шов «${seam}»: сервер показав би справжнє системне вікно`);`
+  (`module_trust.seam_value` для будь-якого іншого значення дає `None`, тобто справжнє вікно). ⛔ Мутацією з живим
+  сервером НЕ доводити (без асерта одруківка показала б вікно): досить того, що асерт стоїть до `startServer`, і
+  окремого прогону, де `boot(t, { seam: "nope" })` падає з цим текстом, а `startServer` не викликано (шпигун або
+  перевірка, що жодного процесу `serve.py` не зʼявилось).
+- Сценарій 1, діалог нової версії (там «Забрати довіру» стоїть перед «Скасувати»): одразу після `waitForSelector("form.tr")` —
+  `assert.equal(await page.evaluate(() => document.activeElement?.dataset?.a), "cancel", "фокус — на «Скасувати», не на «Забрати довіру»");`
+  Мутація «прибрати `data-autofocus` зі «Скасувати»» має валити 1.
+- Сценарій 5: до підроблених запитів додати `{ "Sec-Fetch-Site": "same-origin" }` БЕЗ `Origin` → 403 `trust-needs-ui`.
+  Мутація «прибрати `not origin or` у `_module_trust_post`» має валити 5.
+- Сценарій 8: назва на картці теж id — `assert.match(await page.locator(`${CARD}`).textContent(), /memo-own/)` (звір
+  елемент назви на картці й зроби перевірку точною); діалог і картка узгоджені.
+- Сценарії 1 і 3: `page.locator(".cn-sec .cn-now").first()` → `page.locator(`.cn-sec:has(${CARD}) .cn-now`)` — не
+  залежати від того, що секція `publish` перша.
+- `SERVER_PY(version)`: різний розмір для різних версій — додай рядок-коментар `# ${"=".repeat(Number(version.slice(1)) * 8)}`
+  (відбиток не повинен залежати від роздільності `mtime_ns`, коли розмір той самий).
+- Шапка тесту, мапа «сценарій → запобіжник»: «2 — мутацією не охоплений» неточно — `grant_trust`, що ігнорує відповідь
+  вікна, валить 2; додай: ядро вантажить теку, а не знімок → 1, 6; діалог без рядків файлів → 1; `grant_trust` ігнорує
+  зміну хешу → 6; `loadStep2` скидає вибір → 4.
+- `_spaces-kit.mjs` → `realDeai()`: `trusted: existsSync(...)` не бачить запису в уже наявну справжню `trusted/` —
+  `trusted: existsSync(p) ? readdirSync(p).sort().join("\n") : null` (імпорт `readdirSync` — звір). Довести на копії
+  кіта з `REAL_DEAI`, підміненим тимчасовою текою: нова підтека в наявній `trusted/` → розбіжність. Шапку файла
+  (опис охоронця) доповни: «…і довіри своїм модулям (`trust.json`, `trusted/`)».
+- Прогін: `own-modules` (10/10), далі `connections`, `wizard` — по одному; повний JS. Коміт:
+  `test(3c): живий тест довіри — сторож шва, фокус у діалозі нової версії, same-origin без Origin, сторож trusted/`.
 
 - [ ] **Step 1: `docs/modules/authoring.md`** (англійською, як решта `docs/modules/`):
 
@@ -5026,10 +5055,11 @@ their code runs only after a person trusts exactly the bytes they saw. Design:
 ### Security
 
 - Trust is bound to the bytes shown: changed folder → «changed», the old snapshot keeps running until re-trust.
-- `DEAI_TRUST_CONFIRM` is a test seam that answers the system window; it works only with a non-default
-  `DEAI_HOME`, and the server prints a warning when it is on.
+- `DEAI_TRUST_CONFIRM` (`yes` / `no` / `unavailable`) is a test seam that answers the system window; it works only
+  with a non-default `DEAI_HOME` (any other value, or the default home, means the real window), and the server prints
+  a warning when it is on.
 - Known limits: no sandbox (a trusted module runs with your permissions); the Windows and Linux system windows are
-  covered by command-building unit tests only; Safari older than 16.4 does not send `Sec-Fetch-Site`; snapshots
+  covered by command-building unit tests only (the macOS window was checked by hand); Safari older than 16.4 does not send `Sec-Fetch-Site`; snapshots
   replaced by a re-trust are not cleaned up (each up to 5 MiB, read-only, in `<DEAI_HOME>/trusted/`); after «No» in
   the system window, a repeat request for the same version within 30 s is refused without a window.
 ```
@@ -5063,6 +5093,7 @@ Expected: PASS (тести на версію/README, якщо є, — зелен
 
 ```bash
 git add docs/modules/authoring.md docs/modules/comments.md README.md CHANGELOG.md docs/design/spaces-and-modules.md package.json
+# (попутні правки тестів — окремим комітом раніше, див. блок «Попутно з ревʼю Task 9»)
 git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -m "docs(3c): свої модулі — authoring.md, README, CHANGELOG 0.7.0; версія 0.7.0
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
