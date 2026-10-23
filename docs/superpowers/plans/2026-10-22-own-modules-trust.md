@@ -4100,6 +4100,33 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `app/i18n.js`, `app/styles.css` (після правил `.wz-off`)
 - Create: `tests/wizard-own.test.mjs`
 - Modify: `tests/wizard-wiring.test.mjs`
+- Modify (попутно з ревʼю Task 7): `app/app.js` (`openTrust`), `app/trust-view.js` (`cut`, `cutMid`),
+  `tests/trust-flow.test.mjs`, `tests/trust-view.test.mjs`
+
+**Попутно з ревʼю Task 7** (кожну правку довести мутацією; тести — у наявні `tests/trust-flow.test.mjs` і
+`tests/trust-view.test.mjs`):
+- `openTrust` (`app/app.js`): діалог, який чужий `overlay()` перебив посеред запиту, на `module-changed` НЕ відкривати
+  знову — інакше він скасує чужий оверлей (`tell`, який людина читала). Поряд із `flight` — `let landed = false;`; у тілі
+  `flight` у `finally` — `landed = true;` (поряд із приховуванням рядка очікування); одразу після `await askForm(…)`,
+  ДО `if (flight) await flight;` — `const interrupted = flight !== null && !landed;` (у звичайному потоці `askForm`
+  дочікується `onSubmit`, тож `landed` уже `true`; «Скасувати» під час запиту заблоковано `aria-busy`); далі
+  `if (again) { if (interrupted) { await afterModulesChange(); return false; } reopened = true; continue; }`.
+  Тест: фальшивий `askForm` викликає `onSubmit` і повертає `null` до відповіді, `post` відмовляє з
+  `code: "module-changed"` → `askForm` викликано рівно один раз, `afterModulesChange` викликано, результат `false`.
+  Наявний тест «`module-changed` відкриває діалог удруге» (без перебивання) має лишитися зеленим.
+- Тест-прогалина (мутація `flight ||= (async …)()` вижила): у тому самому діалозі «Довіряю» → відмова `trust-declined`
+  → «Довіряю» ще раз → другий `post` із тим самим `hash` (`calls.length === 2`), у помилці форми — знову рівно
+  `cnRefDeclined`. Мутація `flight ||=` має впасти.
+- `trust-unreadable` — у перелік кодів без технічної деталі (`cnRefTrustUnreadable` вичерпний). Тест.
+- `cut` і `cutMid` (`app/trust-view.js`): спершу прибирати `\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}` і рахувати в code points —
+  як `module_trust._clean` (там те саме ДО виміру), тож назва й шлях у діалозі збігаються із системним вікном і для
+  не-BMP (емодзі), без самотнього сурогата на зрізі:
+  `const clean = (s) => String(s ?? "").replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, "");`, далі `Array.from(clean(s))`
+  і зріз масиву. Тести: шлях із 72 code points з емодзі (довжина UTF-16 > 80) не ріжеться; шлях зі 100 емодзі ріжеться
+  до 80 code points, без `\ufffd` і без самотнього сурогата (`/[\ud800-\udfff]/u` не збігається); `"a\u202eb"` → `"ab"`
+  (і в `cut`, і в `cutMid`). Наявні тести `cutMid` (BMP: 100 символів, рівно 80, короткий) лишаються зеленими.
+- JSDoc над `openTrust`: згадати гілку `trusted` (діалогу нема — лише перечитування, `true`) і `flight` (результат
+  запиту дочікується й тоді, коли діалог перебито; перебитий діалог не відкривається вдруге).
 
 - [ ] **Step 1: Тести (червоні)** — створи `tests/wizard-own.test.mjs`:
 
