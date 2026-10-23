@@ -4,7 +4,8 @@
 Роль = інтерфейс, який кличе ядро: `publish`, `tokens`, `comments` (2b-2); `vcs`, `tracker`,
 `dashboard`, `notify` — зарезервовані (ядро їх не кличе). Один постачальник на роль у просторі.
 Роль `comments` — дві половини: браузерний адаптер сховища CommentLayer (`client` у маніфесті — файли теки
-модуля, їх роздає `GET /api/module-client/<id>/<файл>`) і серверні `client_config`/`list`/`resolve`
+модуля, їх роздає `GET /api/module-client/<id>/<файл>`; адаптер СВОГО модуля простору — зі знімка довіри,
+`GET /api/module-client/<простір>/<id>/<файл>`) і серверні `client_config`/`list`/`resolve`
 (`comments_client`, `channel_for`; налаштування `secret` з `"public": true` дозволено показувати сторінкам).
 Тестовий шов: змінна оточення `DEAI_EXTRA_MODULES` — друга тека вбудованих модулів (`extra_dir`), якої каталог
 додає до `app/modules`; `id`, що вже є серед вбудованих, програє (`shadowed`). Лише для тестів і живих перевірок:

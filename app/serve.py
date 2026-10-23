@@ -4738,7 +4738,8 @@ def module_list(space):
     прапорці). Налаштування — СИМВОЛЬНІ (`{home}`, `{space}`…), з типовими значеннями маніфесту.
     Свої модулі простору (3c) — серед модулів каталогу (`catalog(space)`): запис несе ще `builtin: false`, `custom: true`,
     `trust` (`untrusted|trusted|changed|refused`), `record` (чи є запис довіри), `source` (тека в просторі, з `~`), `runs`
-    (чи виконується тут його код — є робочий знімок) і, коли є, `trust_error`. Запис вбудованого модуля цих полів не має.
+    (є цілий знімок, і його код тут виконується; збій завантаження цього коду — не `runs: false`, а `status: error`) і,
+    коли є, `trust_error`. Запис вбудованого модуля цих полів не має.
     Може кинути `ModuleError('space-json-unreadable')` (центральна 409)."""
     sid = space['id']
     cat = deai_modules.catalog(space)
@@ -4767,7 +4768,7 @@ def module_list(space):
              'settings': settings}
         if m.origin == 'space':                         # свій модуль простору (3c); запис вбудованого не змінюється
             e.update(builtin=False, custom=True, trust=m.trust, record=m.record, source=m.source,
-                     runs=not deai_modules.untrusted_own(m))      # код виконується тут (робочий знімок)
+                     runs=not deai_modules.untrusted_own(m))      # є цілий знімок і його код виконується (збій — у `status`)
             if m.trust_error:
                 e['trust_error'] = m.trust_error
         if last is not None:
@@ -7808,7 +7809,11 @@ def module_client_target(path):
             return None
         if not deai_modules.ID_RE.fullmatch(mid) or not deai_modules.CLIENT_RE.fullmatch(name):
             return None
-        mod = deai_modules.catalog(sp).get(mid)
+        # Маршрут стоїть ДО `_take_task`: простір запиту не зафіксовано, а перше (холодне) завантаження довіреного знімка
+        # виконує верхній рівень його `server.py` — тож завантажуємо його в просторі, якому модуль належить
+        # (`_load_own` успадковує простір запиту; без цього модуль бачив би «не зафіксовано» = інтеграції ввімкнені)
+        with spaces.request_space(sp['id'] if sp else None):
+            mod = deai_modules.catalog(sp).get(mid)
         if (mod is None or mod.status != 'ok' or 'comments' not in mod.roles or name not in mod.client
                 or mod.origin != ('space' if sp else 'builtin')):
             return None

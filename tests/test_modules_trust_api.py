@@ -72,7 +72,7 @@ class TrustApi(World):
         self.addCleanup(os.environ.pop, mt.SEAM_ENV, None)
         self.browser = {'Origin': self.base, 'Sec-Fetch-Site': 'same-origin'}
 
-    def own(self, mid='acme', roles=('publish',), client=None, space=None):
+    def own(self, mid='acme', roles=('publish',), client=None, space=None, server=SERVER):
         d = os.path.join((space or self.off)['path'], 'modules', mid)
         man = {'api': 1, 'id': mid, 'name': mid.title(), 'version': '1.0.0', 'roles': list(roles),
                'settings': [{'key': 'token', 'type': 'secret', 'label': 'Token'}]}
@@ -81,7 +81,7 @@ class TrustApi(World):
             for n in client:
                 _write(os.path.join(d, n), f'/* {n} v1 */')
         _write(os.path.join(d, 'module.json'), json.dumps(man))
-        _write(os.path.join(d, 'server.py'), SERVER)
+        _write(os.path.join(d, 'server.py'), server)
         return d
 
     def view(self, mid='acme', space='off'):
@@ -127,6 +127,15 @@ class TrustApi(World):
         self.assertEqual(got('acme'), dict(trust='untrusted', record=False, runs=False, status='untrusted',
                                            trust_error='trust-unreadable'))
 
+    def test_a_trusted_module_that_fails_to_load_still_runs_here_with_an_error_status(self):
+        """`runs` — є цілий знімок і його код тут виконується; збій завантаження цього коду — у `status`, а не `runs: false`."""
+        self.own(server='raise RuntimeError("boom at load")\n')
+        self.grant()
+        e = self.entry('acme')
+        self.assertEqual((e['trust'], e['record'], e['runs'], e['status']), ('trusted', True, True, 'error'))
+        self.assertIn('boom at load', e['error'])
+        self.assertNotIn('trust_error', e)
+
     def test_notes_only_when_present(self):
         st, body = self.get('/api/modules')
         self.assertEqual(sorted(body), ['modules'])
@@ -141,6 +150,32 @@ class TrustApi(World):
             self.refused(st, body, 403, 'trust-needs-ui')
         st, body = self.grant(headers={'Origin': 'https://evil.example', 'Sec-Fetch-Site': 'same-origin'})
         self.assertEqual((st, body.get('error')), (403, 'foreign origin'))
+        self.assertEqual(mt.load_records(), {})
+
+    def test_only_same_origin_fetch_metadata_passes(self):
+        """`Sec-Fetch-Site` — рівно `same-origin`: `same-site`, `cross-site`, `none` (навігація користувача) і порожнє — ні."""
+        self.own()
+        for site in ('same-site', 'cross-site', 'none', ''):
+            st, body = self.grant(headers={'Origin': self.base, 'Sec-Fetch-Site': site})
+            self.refused(st, body, 403, 'trust-needs-ui')
+        self.assertEqual(mt.load_records(), {})
+
+    def test_a_null_origin_and_a_referer_do_not_replace_the_origin(self):
+        self.own()
+        st, body = self.grant(headers={'Origin': 'null', 'Sec-Fetch-Site': 'same-origin'})
+        self.assertEqual((st, body), (403, {'ok': False, 'error': 'foreign origin'}))
+        st, body = self.grant(headers={'Referer': self.base + '/', 'Sec-Fetch-Site': 'same-origin'})
+        self.refused(st, body, 403, 'trust-needs-ui')
+        self.assertEqual(mt.load_records(), {})
+
+    def test_forged_browser_headers_still_meet_the_system_window(self):
+        """Заголовки — фільтр, не межа: підроблені (як у скрипта сторінки макета) доходять до вікна, і «ні» людини
+        лишає все як було."""
+        self.own()
+        with mock.patch.object(mt, 'ask', return_value='no') as ask:
+            st, body = self.grant(headers={'Origin': self.base, 'Sec-Fetch-Site': 'same-origin'})
+        self.refused(st, body, 409, 'trust-declined')
+        self.assertIs(ask.called, True)
         self.assertEqual(mt.load_records(), {})
 
     def test_trust_flow(self):
@@ -375,8 +410,28 @@ class TrustApi(World):
         self.assertNotIn('/api/module-client//', html)
         self.assertEqual(self.get(url)[0], 200, 'адреса, яку називає сервер, відчиняється')
 
+    def test_a_cold_adapter_request_loads_the_module_in_its_own_space(self):
+        """`module-client` стоїть ДО `_take_task`: простору запиту нема, але холодне завантаження довіреного знімка
+        виконує верхній рівень `server.py` саме в просторі модуля (мітка — що той побачив)."""
+        mark = os.path.join(self.tmp, 'seen-space.log')
+        server = SERVER + ('\nimport spaces\nwith open(%r, "a") as _f:\n'
+                           '    _f.write(str(spaces.request_space_id()) + "\\n")\n' % mark)
+        self.own('talk', roles=('comments',), client=['adapter.js'], server=server)
+        self.grant('talk')
+        dm.reset_caches()
+        if os.path.exists(mark):
+            os.remove(mark)
+        self.assertEqual(self.get('/api/module-client/off/talk/adapter.js'), (200, '/* adapter.js v1 */'))
+        with open(mark, encoding='utf-8') as fh:
+            self.assertEqual(fh.read().split(), ['off'], 'завантажено рівно раз і в просторі модуля')
+
     def test_seam_warning(self):
-        self.assertIn('DEAI_TRUST_CONFIRM', serve.trust_seam_warning() or '')
+        line = serve.trust_seam_warning()
+        self.assertIn('DEAI_TRUST_CONFIRM=yes', line or '')
+        os.environ[mt.SEAM_ENV] = 'no'
+        self.assertIn('DEAI_TRUST_CONFIRM=no', serve.trust_seam_warning() or '')
+        os.environ[mt.SEAM_ENV] = 'maybe'                   # не значення шва: нічого не діє — і попередження нема
+        self.assertIsNone(serve.trust_seam_warning())
         os.environ.pop(mt.SEAM_ENV)
         self.assertIsNone(serve.trust_seam_warning())
 
