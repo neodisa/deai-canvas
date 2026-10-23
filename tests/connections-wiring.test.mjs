@@ -422,3 +422,49 @@ test("рамка: render({ keepFrame }) не переприсвоює frame.src 
      `capabilities`, і наступного не буде — рамку мусить оновити сам `afterModulesChange`. */
   assert.match(fnc("afterModulesChange"), /await render\(\{ keepFrame: homeOpen \}\);/);
 });
+
+test("3c: «Довіритись…» і «Чому не можна…» картки ведуть у connTrust; простір фіксується ДО діалогу", () => {
+  assert.match(fnc("connAction"), /else if \(act === 'trust' \|\| act === 'trustinfo'\) connTrust\(e\);/);
+  const b = fnc("connTrust");
+  assert.ok(b.indexOf("const spaceId = connState.spaceId;") < b.indexOf("openTrust(e, spaceId)"));
+});
+
+test("3c: openTrust — свіжі дані, діалог, довіра через trustPost (своя стеля); module-changed — знову з позначкою; «Забрати довіру» — після закриття", () => {
+  const b = fnc("openTrust");
+  assert.match(b, /formApi\(`\/api\/module-trust\?space=\$\{encodeURIComponent\(spaceId\)\}&id=\$\{encodeURIComponent\(entry\.id\)\}`\)/);
+  assert.match(b, /askForm\(\(\) => trustDialogHTML\(\{ \.\.\.d, reopened \}\)/);
+  assert.match(b, /trustPost\(\{ space: spaceId, id: d\.id, hash: d\.hash, lang: getLang\(\) \}\)/);
+  assert.match(b, /if \(err\?\.code === 'module-changed'\) \{ again = true; return undefined; \}/);
+  assert.match(b, /if \(again\) \{ reopened = true; continue; \}/);
+  assert.match(b, /if \(form\.getAttribute\('aria-busy'\) === 'true'\) return;/, "під час запиту «Забрати довіру» нічого не позначає");
+  assert.ok(b.indexOf("await askForm(") < b.indexOf("untrustFlow(entry, spaceId)"), "питання — лише після закриття діалогу");
+  assert.match(b, /await afterModulesChange\(\);/);
+  const p = fnc("trustPost");
+  assert.match(p, /setTimeout\(\(\) => ctl\.abort\(\), TRUST_POST_TIMEOUT_MS\)/);
+  assert.match(p, /\.finally\(\(\) => clearTimeout\(timer\)\)/);
+  assert.match(src, /import \{ TRUST_POST_TIMEOUT_MS, trustDialogHTML \} from '\.\/trust-view\.js';/);
+});
+
+test("3c: «Забрати довіру» — небезпечне питання, запит у зафіксований простір, далі afterModulesChange; у панелі — модуль і простір ДО її закриття", () => {
+  const u = fnc("untrustFlow");
+  assert.match(u, /askYesNo\(lines\.join\('\\n\\n'\), \{ yes: t\('cnUntrust'\), danger: true \}\)/);
+  assert.match(u, /postForm\('\/api\/module-untrust', \{ space: spaceId, id: entry\.id \}\)/);
+  assert.ok(u.indexOf("askYesNo(") < u.indexOf("postForm("));
+  assert.match(u, /await afterModulesChange\(\);/);
+  const d = fnc("cnDrawerUntrust");
+  assert.ok(d.indexOf("const { entry, spaceId } = cnDrawer;") < d.indexOf("dismissCnDrawer()"));
+  assert.match(fnc("wireCnDrawer"), /else if \(a === 'untrust'\) cnDrawerUntrust\(\);/);
+});
+
+test("3c (ревʼю Task 6): запасний фокус панелі не падає на руйнівну «Забрати довіру» — вона перша у футері", () => {
+  assert.match(fnc("paintCnDrawer"), /\.cn-dr-foot button:not\(\[data-cn-dr="untrust"\]\)/);
+});
+
+test("3c (ревʼю Task 6): коментарі про види зайнятості картки (`busy`) не обіцяють того, чого код не ставить", () => {
+  const viewSrc = readFileSync(new URL("../app/connections-view.js", import.meta.url), "utf8");
+  const kinds = (text, re) => (re.exec(text)?.[1] ?? "").split("|").map((x) => x.replace(/'/g, "")).filter(Boolean);
+  const declared = kinds(src, /id → ((?:'\w+'\|?)+)\)\. `seq`/);
+  assert.deepEqual(declared.sort(), ["check", "disable", "save"], "коментар біля connState");
+  assert.deepEqual(kinds(viewSrc, /busy {3}— Map id → ((?:'\w+'\|?)+):/).sort(), declared.sort(), "коментар у connections-view.js — той самий перелік");
+  for (const k of declared) assert.match(src, new RegExp(`connState\\.busy\\.set\\([^)]*'${k}'\\)`), `код ніде не ставить busy '${k}'`);
+});

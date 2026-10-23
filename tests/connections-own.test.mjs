@@ -179,12 +179,24 @@ test("connPageHTML: примітки під головою — лише коли
   assert.match(h, /<ul class="cn-notes"><li class="cn-note">/);
   assert.match(h, /modules\/&lt;b&gt;/);
   assert.match(h, /Агент може написати свій модуль/, "речення для агента");
+  assert.ok(h.indexOf("cn-notes") < h.indexOf("cn-sec"), "примітки — над секціями, а не під ними");
+});
+
+test("connPageHTML: роль «на папері» (capabilities.publish = null БЕЗ error) і ввімкнений недовірений свій модуль — картка з «Довіритись…», не помилка сторінки", () => {
+  const sp = { id: "alpha", name: "Alpha", path: "~/work/alpha", capabilities: { publish: null } };
+  const h = connPageHTML({ space: sp, list: [own({ enabled: true })], notes: [], failed: null, busy: new Map() });
+  assert.match(h, /data-cn="trust" data-id="acme"/);
+  assert.match(h, /чекає довіри/);
+  assert.doesNotMatch(h, /cn-err/, "поправка 11: без error сторінка не ховає картки");
 });
 
 test("drawerHTML: «Забрати довіру» лише у свого модуля з записом довіри", () => {
   const d = (entry) => drawerHTML({ entry, mode: "edit", fields: [], form: { values: {}, erase: [] }, busy: false,
     result: null, errors: {}, spaceName: "S" });
-  assert.match(d(own({ record: true, runs: true, trust: "trusted", status: "ok", enabled: true })), /data-cn-dr="untrust"/);
+  const trusted = d(own({ record: true, runs: true, trust: "trusted", status: "ok", enabled: true }));
+  assert.match(trusted, /data-cn-dr="untrust"/);
+  assert.match(trusted, /<button type="button" class="ctl ctl--out cn-dr-untrust"/, "клас руйнівної кнопки — гачок її рамки в CSS");
+  assert.ok(trusted.indexOf("cn-dr-untrust") < trusted.indexOf('data-cn-dr="check"'), "«Забрати довіру» — перша у футері");
   assert.doesNotMatch(d(own({ record: false })), /data-cn-dr="untrust"/);
   assert.doesNotMatch(d(builtin({ record: true })), /data-cn-dr="untrust"/);
   /* Запис у польоті — кнопка вимкнена, як і решта; лише хрестик живий. */

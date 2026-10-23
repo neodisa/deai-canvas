@@ -7,7 +7,7 @@
  *                     list   — записи `GET /api/modules` або `null` (вантажиться);
  *                     notes  — примітки своїх модулів (`GET /api/modules`, `[{folder, code}]`), може не бути;
  *                     failed — `{code, message}`, коли список не прочитався;
- *                     busy   — Map id → 'check'|'disable'|'save'|'trust': дія в польоті (`'save'` — запис із панелі).
+ *                     busy   — Map id → 'check'|'disable'|'save': дія в польоті (`'save'` — запис із панелі).
  *   cardHTML(e, busy)  одна картка модуля; nowHTML(role, v)  рядок «Зараз» секції.
  *   drawerHTML(d)    d = {entry, mode: 'enable'|'edit', fields, form, busy: 'save'|'check'|false, result, errors, spaceName};
  *                     busy   — `'save'` (запис: «Зберігаю й перевіряю…»), `'check'` («Перевірити» каже «Перевіряю…»)

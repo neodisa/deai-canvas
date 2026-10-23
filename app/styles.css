@@ -241,6 +241,33 @@ body.home-open .cv-hud{display:none!important}
 /* Поле, про яке помилка (`ctl.focus(імʼя)` ставить `aria-invalid`): рамка видна й тому, хто не
    читає текст помилки, а не лише скрінрідеру. `:focus-visible` лишає своє кільце — рамка під ним червона. */
 .cv-field input[aria-invalid="true"]{border-color:var(--bad-ink)}
+/* Діалог довіри своєму модулю (3c, `trust-view.js`): та сама біла картка `askForm`, що в діалогу простору, ширша — під
+   список файлів. «Забрати довіру» — ліворуч у рядку кнопок, небезпечна (`--bad-ink` на `--g50` ≥ 4.5:1).
+   Правила для `<p>` стоять під `.tr` (форма діалогу): `.cv-ask p` вище має специфічність (0,1,1) і забрав би в простого
+   `.tr-meta` розмір, колір і відступ. */
+.cv-ask--form:has(.tr){width:560px}
+.tr .tr-meta,.tr .tr-path{margin:-8px 0 0;font-size:12px;line-height:1.4;color:var(--g600);overflow-wrap:anywhere}
+.tr .tr-reopened{padding:8px 10px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);font-size:13px;color:var(--g900)}
+.tr-warn{display:flex;gap:8px;padding:10px 12px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
+  font-size:13px;line-height:1.45;color:var(--g900)}
+.tr-warn .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
+.cv-ask--form .tr-warn p{margin:0 0 6px;color:var(--g900)}
+.cv-ask--form .tr-warn p:last-child{margin:0}
+.tr .tr-h3{font-weight:600;color:var(--g700)}
+.tr .tr-none{color:var(--g600)}
+.tr-asks{margin:-8px 0 0;padding-left:18px;font-size:13px;color:var(--g900)}
+.tr-mark{margin-left:6px;padding:0 6px;border:1px solid var(--g450);border-radius:999px;font-size:11px;color:var(--g700);white-space:nowrap}
+.tr-files{max-height:180px;overflow:auto;margin:-8px 0 0;padding:6px 8px;list-style:none;border:1px solid var(--g450);
+  border-radius:6px;font-size:12px}
+.tr-files:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tr-files li{display:flex;align-items:center;gap:8px;padding:2px 0;color:var(--g900)}
+.tr-files code{flex:1;min-width:0;overflow-wrap:anywhere}
+.tr-size{flex:none;color:var(--g600)}
+.tr .tr-removed{font-size:12px;color:var(--g600);overflow-wrap:anywhere}
+.tr .tr-refused{display:flex;gap:8px;color:var(--g900)}
+.tr-refused .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
+.tr .tr-wait{color:var(--g700)}
+.cv-ask button.tr-untrust{margin-right:auto;border-color:var(--bad-ink);background:var(--g50);color:var(--bad-ink)}
 /* Кружки: `.cv-ask button` вище дає кожній кнопці падінг і рамку — перебиваємо
    специфічністю (клас + клас). Вибраний — кільце ЗОВНІ й галочка ВСЕРЕДИНІ: колір
    сам стан не оголошує. Рамка 1px `--g450` — на КОЖНОМУ кружку: світлі кольори токенів
@@ -1604,7 +1631,7 @@ body.home-open .cv-notice{display:none!important}
 .cn-note{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;line-height:1.4;color:var(--mid);overflow-wrap:anywhere}
 .cn-note .ico{flex:none;margin-top:1px;color:var(--open)}
 .cn-agent-own{display:block;margin-top:8px;color:var(--mid)}
-.cn-dr-untrust{border-color:var(--bad);color:var(--hi)}
+.cn-dr-untrust,.cn-dr-untrust:hover{border-color:var(--bad);color:var(--hi)}
 .cn-dr-untrust .ico{color:var(--bad)}
 .cn-code{display:inline-block;margin:6px 6px 0 0;padding:2px 6px;border-radius:var(--r-sm);background:var(--s3);color:var(--hi);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}

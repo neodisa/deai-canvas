@@ -52,6 +52,7 @@ import {
 } from './shell-palette.js';
 import { initPwa } from './pwa.js';
 import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
+import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
   disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleHolders,
   verdictText, writePayload,
@@ -184,7 +185,7 @@ let homeOpen = false;
 let homePage = 'tasks';
 /* Стан сторінки «Підключення»: простір, чий список показано (знімок на момент запиту — кожен запис іде САМЕ туди),
    записи `GET /api/modules` (`null` — вантажиться), `notes` — примітки своїх модулів простору (3c, `[{folder, code}]`),
-   збій читання і дії в польоті (id → 'check'|'disable'|'save'|'trust'). `seq` відкидає відповіді, що прийшли після виходу
+   збій читання і дії в польоті (id → 'check'|'disable'|'save'). `seq` відкидає відповіді, що прийшли після виходу
    зі сторінки чи після новішого запиту. */
 const connState = { spaceId: null, list: null, notes: [], failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
@@ -2711,6 +2712,7 @@ async function connAction(act, id) {
   if (act === 'enable') openCnDrawer(e, 'enable');
   else if (act === 'configure') openCnDrawer(e, 'edit');
   else if (act === 'disable') connDisable(e);
+  else if (act === 'trust' || act === 'trustinfo') connTrust(e);
 }
 
 /** «Перевірити» на картці: вердикт міняє лише `status` модуля — перечитуємо сторінку. */
@@ -2801,6 +2803,104 @@ async function afterModulesChange() {
   if (connOpen() && connState.seq === seq) await loadConn({ spaces: false });
 }
 
+/* ── довіра своєму модулю (етап 3c) ──────────────────────────────────────────────────────────────────────
+   Діалог — `askForm` з розміткою `trust-view.js`; ним користуються картки «Підключень» (`connTrust`) і крок 2 майстра
+   (`deps.openTrust`). Межа «довіряє лише людина» — системне вікно ОС, яке сервер показує ПІСЛЯ «Довіряю» і чекає до
+   120 с, тож запит іде через `trustPost` зі своєю стелею, а не через `formApi` (20 с). */
+
+/** `POST /api/module-trust` зі стелею `TRUST_POST_TIMEOUT_MS`: обрив — `code: 'timeout'`, як у `formApi`. */
+function trustPost(body) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TRUST_POST_TIMEOUT_MS);
+  return api('/api/module-trust', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal,
+  })
+    .catch((e) => { throw e?.name === 'AbortError' ? Object.assign(new Error('timeout'), { code: 'timeout' }) : e; })
+    .finally(() => clearTimeout(timer));
+}
+
+/**
+ * Діалог довіри модулю `entry` простору `spaceId` (зафіксованого ВИКЛИКАЧЕМ до відкриття: агент, що перемкнув активний
+ * простір, діалог не збиває). `true` — довіру видано (модулі вже перечитано, `afterModulesChange`).
+ *   — «Довіряю» → рядок «Підтвердіть у системному вікні…» → `POST /api/module-trust {space, id, hash, lang}`;
+ *   — `module-changed` (тека змінилась, поки діалог був відкритий) → діалог закривається й відкривається знову зі
+ *     свіжими даними та рядком угорі;
+ *   — інша відмова (`trust-declined`, `trust-no-confirm`, `trust-busy`, `role-taken`…) → текст у діалозі, він лишається;
+ *   — «Забрати довіру» → діалог закривається (питання поверх нього перебило б його), далі `untrustFlow`.
+ */
+async function openTrust(entry, spaceId) {
+  let reopened = false;
+  for (;;) {
+    let d;
+    try {
+      d = (await formApi(`/api/module-trust?space=${encodeURIComponent(spaceId)}&id=${encodeURIComponent(entry.id)}`))?.trust;
+    } catch (err) {
+      const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n'));
+      return false;
+    }
+    if (!d) return false;
+    let again = false;
+    let untrust = false;
+    let granted = false;
+    await askForm(() => trustDialogHTML({ ...d, reopened }), {
+      onMount: (form) => {
+        /* «Забрати довіру» сама діалогу не відповідає: позначка + «Скасувати». Під час запиту (`aria-busy`) — нічого:
+           «Скасувати» тоді не закриває, а позначка лишилась би й спрацювала б після успішної довіри. */
+        form.querySelector('[data-tr="untrust"]')?.addEventListener('click', () => {
+          if (form.getAttribute('aria-busy') === 'true') return;
+          untrust = true;
+          form.querySelector('[data-a="cancel"]')?.click();
+        });
+      },
+      onSubmit: async (_vals, ctl) => {
+        const wait = ctl.form.querySelector('[data-tr-wait]');
+        if (wait) wait.hidden = false;
+        try {
+          await trustPost({ space: spaceId, id: d.id, hash: d.hash, lang: getLang() });
+          granted = true;
+          return undefined;
+        } catch (err) {
+          if (err?.code === 'module-changed') { again = true; return undefined; }
+          const r = refusalView(err);
+          return [t(r.key), r.detail].filter(Boolean).join(' — ');
+        } finally {
+          if (wait) wait.hidden = true;
+        }
+      },
+      focusBack: () => homeNode()?.querySelector(`[data-cn][data-id="${CSS.escape(entry.id)}"]:not([disabled])`) ?? null,
+    });
+    if (untrust) { await untrustFlow(entry, spaceId); return false; }
+    if (again) { reopened = true; continue; }
+    if (!granted) return false;
+    toast(t('cnToastTrusted', modName(entry)));
+    await afterModulesChange();
+    return true;
+  }
+}
+
+/**
+ * «Забрати довіру»: питання (небезпечна дія; для ввімкненого — які ролі перестануть працювати), далі
+ * `POST /api/module-untrust` у простір `spaceId`, зафіксований ДО питання (як `connDisable`). `space.json` не змінюється.
+ */
+async function untrustFlow(entry, spaceId) {
+  const name = modName(entry);
+  const roles = (entry.roles || []).map(roleTitle).join(', ');
+  const lines = [t('cnUntrustAsk', name), ...(entry.enabled === true && roles ? [t('cnUntrustRole', roles)] : []), t('cnUntrustKeeps')];
+  if (!(await askYesNo(lines.join('\n\n'), { yes: t('cnUntrust'), danger: true }))) return false;
+  try { await postForm('/api/module-untrust', { space: spaceId, id: entry.id }); }
+  catch (err) { const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n')); return false; }
+  toast(t('cnToastUntrusted', name));
+  await afterModulesChange();
+  return true;
+}
+
+/** «Довіритись…» / «Чому не можна…» на картці: діалог для простору сторінки (знімок до відкриття), потім фокус на картку. */
+async function connTrust(e) {
+  const spaceId = connState.spaceId;
+  await openTrust(e, spaceId);
+  if (connOpen() && connState.spaceId === spaceId) refocusCard(e.id, 'trust');
+}
+
 /* ── бічна панель «Підключення» (`#cn-drawer`) ───────────────────────────────────────────────────────────
    Окремий вузол поза `#tasks-home`: перемальовка сторінки (перечитування списку, «Перевіряю…» на картці) не
    сміє стирати введене в полях. Поки панель відкрита, значення полів живуть у DOM; `cnDrawer.form` — знімок для
@@ -2869,7 +2969,7 @@ function paintCnDrawer() {
   const usable = (n) => n && !n.disabled;
   const back = el.querySelector(want);
   if (usable(back)) { cnDrawer.focusWant = null; back.focus({ preventScroll: true }); return; }
-  const first = [...el.querySelectorAll('.cn-dr-body [data-cn-field], .cn-dr-foot button')].find(usable);
+  const first = [...el.querySelectorAll('.cn-dr-body [data-cn-field], .cn-dr-foot button:not([data-cn-dr="untrust"])')].find(usable);
   if (first) { cnDrawer.focusWant = null; first.focus({ preventScroll: true }); return; }
   cnDrawer.focusWant = want;
   el.querySelector('[data-cn-dr="close"]')?.focus({ preventScroll: true });
@@ -3133,6 +3233,15 @@ async function cnDrawerCheck() {
   loadConn();
 }
 
+/** «Забрати довіру» в панелі свого модуля: модуль і простір — з панелі ДО її закриття (питання «Відкинути?» могло
+ *  висіти, а сторінка — перейти в інший простір), далі — те саме питання й запит, що з діалогу довіри. */
+async function cnDrawerUntrust() {
+  if (!cnDrawer || cnDrawer.busy) return;
+  const { entry, spaceId } = cnDrawer;
+  if (!(await dismissCnDrawer())) return;
+  await untrustFlow(entry, spaceId);
+}
+
 function wireCnDrawer(el) {
   el.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-cn-dr]');
@@ -3141,6 +3250,7 @@ function wireCnDrawer(el) {
     if (a === 'close') requestCloseCnDrawer();
     else if (a === 'check') cnDrawerCheck();
     else if (a === 'erase') toggleCnErase(b);
+    else if (a === 'untrust') cnDrawerUntrust();
   });
   el.addEventListener('submit', (ev) => { ev.preventDefault(); cnSubmit(); });
   el.addEventListener('input', () => syncCnDrawer());

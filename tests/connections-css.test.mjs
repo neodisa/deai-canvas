@@ -105,3 +105,10 @@ test("кольори правил .cn-* — лише токени (тінь мо
   }
   assert.deepEqual(bad, [], `літерали кольорів у: ${bad.join(", ")}`);
 });
+
+test("3c (ревʼю Task 6): рамка «Забрати довіру» в панелі лишається червоною й на наведенні (`.ctl--out:hover` рівної специфічності, але раніший)", () => {
+  assert.match(rule(".cn-dr-untrust") ?? "", /border-color:var\(--bad\)/);
+  const hover = rule(".cn-dr-untrust:hover") ?? "";
+  assert.match(hover, /border-color:var\(--bad\)/, "без власного :hover рамку забирав `.ctl--out:hover`");
+  assert.match(hover, /color:var\(--hi\)/);
+});
