@@ -1659,6 +1659,12 @@ def _commit_identity():
 2. **`bin/state.py`.** Гілка `elif vcs_err is not None`: коли в задачі нема ні `gitlab`, ні `vcs`, друкувати «`{label}`: не налаштований для задачі», а не «не дістати статус».
 
 3. **`validate` свого модуля — з тайм-аутом** (ревʼю Task 3): `call(m, 'validate', ctx, target, timeout=…)` з наявною короткою межею каркаса (як для `check`), інакше завислий свій модуль блокує `task-new`. Тест: `validate`, що спить довше межі → відповідь з кодом тайм-ауту каркаса, а не зависання.
+4. **`validate` — ДО будь-якого запису** (ревʼю Task 4): ядро `task_new` кладе `entry['vcs']` як є, навіть якщо модуль ціль відхилив. Маршрут `task-new` мусить відмовити до виклику ядра. Тест: `vcs.repo = 'ext::sh -c id'` → 400 `vcs-bad-target`, у `tasks.json` нічого нового, теки задачі нема.
+5. **Статус при збої постачальника** (ревʼю Task 4): `gitlab_status(vcs=None)` при збої віддає `configured: True, error, code`, а спека для маршруту — `configured: false, code`. Маршрут `vcs-status` сам резолвить постачальника (`vcs_task`) і на `VcsError` віддає форму спеки.
+6. **Старі маршрути — через `vcs_task`, не `gitlab_cfg`** (ревʼю Task 4): зараз ціль будується без `task`, а `repo` не обрізаний (адреса з пробілом дає `vcs-bad-target`). Після переводу на `vcs_task` — тест на `repo` з пробілами через HTTP.
+7. **`bin/state.py` і `vcs-busy`** (ревʼю Task 4): опит під час відправки дає `code: vcs-busy` — друкувати «зайнято, спробуй ще раз», а не помилку.
+8. **Маска адреси в усьому, що друкується з винятків** (ревʼю Task 4): ядро має `serve._mask_repo` (те саме правило, що `_mask` модуля). Нові маршрути `/api/vcs-*` і `bin/state.py:≈411` (`print(f'GitLab: не дістати статус ({e})')`) пускають текст винятку через неї. Тест: виняток із токеном у адресі → токена нема у виводі.
+9. **`validate` — через `serve._vcs_call(v, 'validate', target, timeout=…)`**: там же перевірка форми результату (не dict → `VcsError('module-error')`).
 
 ---
 
@@ -1822,7 +1828,7 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
    else if (r.ok === false) { const k = vcsErrKey(r.code); tell(k ? t(k, glCache?.label || 'GitLab') : t('glSyncFailedMsg', r.error || '—')); }
    ```
    `catch (e)` лишається `tell(t('errFailed', e.message))`. Тест на цю гілку.
-2. **`refreshGitlab` — `vcs-busy` лишає попередній стан** (спека):
+2. **`refreshGitlab` — `vcs-busy` лишає попередній стан** (спека; ревʼю Task 4: ядро вже віддає `vcs-busy` у статусі, до цієї правки крапка смуги фарбується в помилку):
    ```js
    try { const r = await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`); glCache = (r.code === 'vcs-busy' && glCache) ? glCache : r; }
    ```
@@ -2070,7 +2076,7 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
    - межа ядро/модуль;
    - безпека перевірок цілі;
    - ЛІГА побайтно;
-   - нічого з транспорту не лишилось у `serve.py` (`grep -n "_git(\|ensure_mirror\|_mirror_dir" app/serve.py` порожній).
+   - нічого з транспорту не лишилось у `serve.py` (`grep -nw "_git\|ensure_mirror\|_mirror_dir\|_git_once" app/serve.py` порожній; без `-w` збігається з `vcs_mirror_dir`).
 2. **Повні прогони:**
    - `npm test`;
    - Python-набори на 3.13 і 3.9.6;
