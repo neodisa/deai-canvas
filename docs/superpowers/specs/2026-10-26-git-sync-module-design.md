@@ -14,6 +14,20 @@
 5. **Каркас.** `git-sync` додано в `KNOWN_OTHER_MODULES`. Причина `no-gitlab` в автосинку лишається. Лок між процесами — `flock`. `check` вкладається в 5 с.
 6. **Ядро.** Старі імена функцій ядра (`gitlab_cfg`/`gitlab_status`/`gitlab_sync`/`gitlab_pull`) лишаються обгортками над роллю до 4d.
 
+**Поправки планування (26.10.2026)** — план `docs/superpowers/plans/2026-10-26-git-sync-module.md`, розділ «Поправки». Нижче вони
+вже внесені в текст; коротко:
+
+- **Команда ssh.** Модуль складає її лише з `ssh_key` чи повтором через `host_ip`. `core.sshCommand` людини не читає й не перекриває.
+- **Перевірки до git.** Гілка перевіряється в Python, без git.
+- **Тип `ssh_key`.** `ssh_key` — тип `text`.
+- **Форми результатів.** `push`/`pull` віддають форми 0.7.0 без `remote`. Старі імена ядра кидають `VcsError(OSError)` з `code`.
+- **Функції поза роллю.** Модуль має необовʼязкову `validate` (ядро кличе на `task-new`) і `mirror_dir`. Додано код відмови `vcs-needs-role`.
+- **Ключ і IP.** Їх несе ціль (`gitlab_cfg`, як у 0.7.0), а не `ctx`.
+- **Порожній віддалений репо.** Перший push створює гілку.
+- **Клієнт.** Окремий `taskPost` із довшою стелею; `labelKey`/`brand` для нетипового підпису.
+- **Автосинк.** Відмова постачальника → тихе `no-gitlab` з `code`.
+- **Тексти даних.** У ЛІГА — як були; у звичайному просторі — нейтральні.
+
 ## Рішення власника (26.10.2026)
 
 - **Мета етапу 4 — чисте ядро + паритет.** Усе, що вміє простір ЛІГА, стає модулями; у ядрі не лишається коду компанії,
@@ -94,19 +108,19 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 - Старе поле `gitlab{}` без `repo` чи без `path` — не налаштована задача, як у 0.7.0 (`gitlab_cfg`). Типовий
   `mockup/{task}` діє лише для `vcs{}` і налаштувань модуля.
 - `path` — після `strip('/')`, як у 0.7.0.
-- `ssh_key`/`host_ip` у `target` беруться лише зі старого поля задачі ЛІГИ. Значення в `target` перемагає налаштування
-  модуля.
-- `ssh_key` — після `expanduser`. Його розгортають і ядро, і модуль, до перевірки.
-- Спільні `gitlab_ssh_key`/`gitlab_host_ip` з кореня `tasks.json` діють лише в `ctx` неявного `'legacy'`. Явний
-  `git-sync` бере ключ і IP зі своїх налаштувань.
+- `ssh_key`/`host_ip` у `target` — лише зі старого поля задачі ЛІГИ, як їх будує `gitlab_cfg` 0.7.0: ключ і IP задачі,
+  інакше спільні `gitlab_ssh_key`/`gitlab_host_ip` з кореня `tasks.json`. Значення в `target` перемагає налаштування
+  модуля; `ctx` неявного `'legacy'` ключа й IP не має.
+- `ssh_key` — після `expanduser` (модуль, до перевірки); відносний шлях — відмова.
 
 **Функції `server.py`** (усі — `f(ctx, …)`, помилки — `ctx['ModuleError'](code, message=…)`):
 
 | Функція | Вхід | Вихід |
 |---|---|---|
-| `check(ctx)` | — | як у всіх модулів; `git-sync`: є типовий `repo` → спершу перевірки цілі, далі `git ls-remote --heads -- <repo> <branch>` з межею ≈4 с (ssh `ConnectTimeout=3`, тайм-аут процесу 4 с); тайм-аут → `{ok: false, error: "vcs-offline"}` (не `check-timeout` каркаса, `CHECK_TIMEOUT` = 5 с). Нема типового `repo` → `ok` з поясненням «репозиторій задається в задачі» |
+| `check(ctx)` | — | як у всіх модулів; `git-sync`: є типовий `repo` → спершу перевірки цілі, далі `git ls-remote --heads -- <repo> <branch>` з тайм-аутом процесу 4 с (`ConnectTimeout=3` — лише коли модуль складає команду ssh); тайм-аут → `{ok: false, error: "vcs-offline"}` (не `check-timeout` каркаса, `CHECK_TIMEOUT` = 5 с). Нема типового `repo` → `ok` з поясненням «репозиторій задається в задачі» |
+| `validate(ctx, target)` | ціль | необовʼязкова: нормалізована ціль або `vcs-bad-target`, без жодного git; ядро кличе її на `task-new`, якщо вона є |
 | `status(ctx, target)` | ціль | `{behind, behind_path, unpushed, on_remote, web, label}` |
-| `push(ctx, target, src, meta)` | ціль; `src` — тека, яку ядро підготувало (вміст стане `<path>`, з dot-файлами); `meta = {message, author: {name, email}}` | `{changed, pushed, sha, catchup, error?, code?}` або `{blocked: "behind", behind, behind_path, behind_top}` / `{blocked: "diverged", behind, ahead, behind_top, error}` |
+| `push(ctx, target, src, meta)` | ціль; `src` — тека, яку ядро підготувало (вміст стане `<path>`, з dot-файлами); `meta = {message, author: {name, email}}` | форми `gitlab_sync` 0.7.0 без `remote`: `{ok, synced, changed, pushed, sha?, catchup?, error, code?}` або `{ok: false, synced: false, blocked: "behind", behind, behind_path, behind_top}` / `{…, blocked: "diverged", behind, ahead, behind_top, error}` |
 | `pull(ctx, target, dst, opts)` | ціль; `dst` — порожня тека від ядра; `opts = {"ignore": ["shots"]}` — підтеки `<path>`, зміни в яких не рахуються роботою | `{found: bool, last_commit: {author, time} \| null}`; при `found` вміст `<path>` скопійовано в `dst` |
 
 - `behind` — комітів у `branch..origin/branch` по всьому репо; `behind_path` — те саме з `-- <path>`; `unpushed` —
@@ -147,7 +161,7 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 | `repo` | text | — | типовий репозиторій простору; необовʼязковий (тоді — лише з задачі) |
 | `branch` | text | `main` | |
 | `path` | text | `mockup/{task}` | тека в репо |
-| `ssh_key` | path | — | необовʼязковий; без нього — системний ssh-агент і `~/.ssh/config` |
+| `ssh_key` | text | — | необовʼязковий; без нього — системний ssh-агент і `~/.ssh/config`. Тип `text`, не `path`: каркас перетворює порожній `path` на теку простору |
 | `host_ip` | text | — | необовʼязковий; IP сервера, коли DNS у VPN не відповідає |
 | `autosync` | bool | `false` | «Відправляти після кожної відповіді агента» (`POST /api/autosync`) |
 
@@ -171,9 +185,10 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - `GIT_ALLOW_PROTOCOL=ssh:https:file` — жодного `ext::`/`fd::`; `ssh` покриває й scp-форму.
   - `GIT_LITERAL_PATHSPECS=1`.
 - **Розділювач `--`.** Перед кожним шляхом (`add`, `status`, `log`, `diff`) і перед адресою в `clone`/`ls-remote`.
-- **Команда ssh.** Основа — наявна в людини `GIT_SSH_COMMAND` або `git config core.sshCommand`, інакше `ssh`. До неї додаються:
-  - завжди `-o BatchMode=yes`;
-  - з `ssh_key` — `-i <shlex.quote(шлях)> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`.
+- **Команда ssh.** Модуль складає `GIT_SSH_COMMAND` лише тоді, коли щось додає: `ssh_key` або повтор через `host_ip`.
+  - Основа — `GIT_SSH_COMMAND` оточення, інакше `ssh`. До неї додаються `-o BatchMode=yes` і, з `ssh_key`, `-i <shlex.quote(шлях)> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`.
+  - Без ключа й IP git бере ssh людини (`core.sshCommand`, `~/.ssh/config`) сам. Модуль його не читає (зайвий підпроцес перед клоном) і не перекриває.
+- **Порожній віддалений репо.** `clone --branch` впав на «not found in upstream», а репо порожній → клон без `--branch` і `symbolic-ref HEAD refs/heads/<branch>`: перший push створить гілку. `fetch` із «couldn't find remote ref» — не помилка.
 - **Повтор через `host_ip`.** Як зараз: один раз, коли stderr каже `could not resolve hostname`, лише для форми `git@host:` (`url.insteadOf` + `HostKeyAlias`). IPv6 у `insteadOf` — у дужках.
 - **Помилки:**
   - тайм-аут git → `vcs-offline` (зараз — неопрацьований `TimeoutExpired`);
@@ -190,7 +205,7 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - `https://` з паролем в адресі (`user:pass@`) — відмова: дані доступу живуть у git, не в Deai.
 - **`branch`:**
   - без початкового `-`;
-  - `git check-ref-format refs/heads/<branch>`, а не `--branch`: той розгортає `@{-N}`.
+  - правила `git check-ref-format` для `refs/heads/<branch>`, реалізовані в Python, без виклику git. Не `--branch`: той розгортає `@{-N}`.
 - **`path`** (після `strip('/')`):
   - непорожній;
   - сегменти не `''`, `.`, `..`;
@@ -228,13 +243,13 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - відбиток `dst` дорівнює відбитку наявної ітерації → `{unchanged: true, same_as}`;
   - інакше нова `itN`, усе як зараз: авторство з `.canvas-state.json` (запас — `last_commit.author`), відгалуження від чужої чи застарілої своєї (за `last_commit.time`), перенесення стану публікації, `git_autocommit`.
 - **Автосинк** — `POST /api/autosync`. Адреса та сама: її кличе Stop-хук.
-  - Нема ролі чи цілі → `reason: "no-gitlab"`, як у 0.7.0. Це контракт хука, його ловить `test_integrations_off.py`.
+  - Нема ролі чи цілі → `reason: "no-gitlab"`, як у 0.7.0. Це контракт хука, його ловить `test_integrations_off.py`. Відмова постачальника (нечитабельний `space.json`, свій модуль «на папері») — те саме тихе `no-gitlab`, з `code`.
   - `autosync` вимкнено в модулі → `reason: "autosync-off"`. Хук мовчить на причинах, яких не знає: він реагує лише на `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Як і задача без синку сьогодні, вимкнений автосинк не робить і локального автокоміту Stop-хука.
   - Далі як зараз: `no-iterations`, `foreign-only`, `clean`.
   - Будь-який `ModuleError` модуля (`vcs-offline`/`vcs-auth`/`vcs-busy`/`vcs-error`) → `reason: "offline"` з `code`, як нинішній `OSError`. Хукові ніколи не віддається 5xx.
 - **Нова задача** — `POST /api/task-new` приймає `vcs: {repo, path?, branch?}`.
-  - Поля проходять перевірки модуля; у задачу пишуться лише непорожні.
-  - `vcs` у тілі, коли в просторі ролі нема, → 400.
+  - Поля проходять `validate` модуля (якщо вона є) до будь-якого запису: відмова → 400 `vcs-bad-target`. У задачу пишуться лише непорожні.
+  - `vcs` у тілі, коли в просторі ролі нема, → 400 `vcs-needs-role`.
   - Є ціль і в `<path>` віддаленого репо лежить `index.html` → перша ітерація з нього (як зараз `gitlab`).
   - Збій отримання — тихо стартовий макет. `_task_new_write` ловить `(OSError, ModuleError)`, а не лише `OSError`.
   - З `from` (тека з макетом, 3b) отримання не робиться.
@@ -256,10 +271,10 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   `deai_modules.catalog()['git-sync']`, лише з вбудованих, і збирає `ctx` без `space.json`.
   - `ctx = {space, settings, secrets: {}, folder_ok, ModuleError, cache_dir, mirror_flat: True}`.
   - `settings`:
-    - `ssh_key` ← `gitlab_ssh_key`, `host_ip` ← `gitlab_host_ip` (корінь `tasks.json`);
     - `branch` — `main`, `path` — `mockup/{task}`;
     - `repo` — порожній;
     - `autosync` — **увімкнено**, як сьогодні.
+  - Ключ і IP сервера несе ціль (`gitlab_cfg`: задачі чи спільні з кореня `tasks.json`), а не `settings`.
   - Відмова каталогу чи завантаження модуля → `vcs-error`, не 500. Шлях ЛІГА тепер залежить від каталогу, і це
     свідома ціна.
 - **Дзеркала — старі теки.**
@@ -268,7 +283,7 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - Дизайнери ЛІГИ не перегортають великі репо заново, а незапушені коміти старих дзеркал не осиротіють.
   - `mirror_flat` — сумісність до 4d, коли ЛІГА стане звичайним простором.
 - **Ціль задачі** — з її `gitlab{…}`. Для нової задачі без нього — з `PROFILE_REPOS[profile]`, який лишається до 4b. `space.json` не пишеться.
-- **Явно підключений `git-sync`.** У просторі ЛІГА перемагає неявний (як інші ролі). Спільні `gitlab_ssh_key`/`gitlab_host_ip` тоді не діють, а поле задачі `gitlab{ssh_key, host_ip}` — діє.
+- **Явно підключений `git-sync`.** У просторі ЛІГА перемагає неявний (як інші ролі). Ціль задачі з `gitlab{…}` будується тим самим `gitlab_cfg`, тож ключ і IP — ті самі. Дзеркало й тексти — як у звичайного модуля: це вже не `'legacy'`.
 - **Вигляд і репо ЛІГИ не змінюються.** Ядро перекриває `web` і `label` статусу старим правилом:
   - `web` — `gitlab_web`: будь-яка форма `git@host:`, включно з IP;
   - `label` — «GitLab»;
