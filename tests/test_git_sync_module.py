@@ -129,7 +129,8 @@ class Validate(Base):
         for repo in ('', ' x', 'a b', 'x\n', '-oProxyCommand=x', 'ext::sh', 'fd::3', 'http://h/r.git', 'ftp://h/r',
                      'ssh://-oProxy/r', 'file://host/x', 'relative/dir', 'git@-oProxy:x', 'ssh://h:99999/r',
                      'h;id>x:o/r.git', 'u$(x)@h:o/r.git', 'h&x:o/r.git', 'h|x:o/r.git', 'h`x`:o/r.git', 'u;x@h:o/r.git',
-                     'h<x:o/r.git', 'h:-x', '/tmp/a b', 'h:o/a b', '/tmp/a\x00b', '/tmp/a\x7fb', '/tmp/a\x1bb', None, 123):
+                     'h<x:o/r.git', 'h:-x', '-u@h:o/r.git', '-o@h:p', 'ssh://-u@h/r', 'ssh://-oProxyCommand=x@h/r',
+                     'https://-u@h/r', '/tmp/a b', 'h:o/a b', '/tmp/a\x00b', '/tmp/a\x7fb', '/tmp/a\x1bb', None, 123):
             with self.subTest(repo=repr(repo)):
                 self.bad(self.target(repo))
 
@@ -148,6 +149,9 @@ class Validate(Base):
         for t in (self.target(branch=None), self.target(branch=''), self.target(branch='  '), {'repo': '/o', 'path': 'p'}):
             with self.subTest(t=t):
                 self.assertEqual(self.m.validate(self.ctx(), t)['branch'], 'main')
+        for raw, want in ((' main ', 'main'), ('\tfeature/x\n', 'feature/x')):
+            with self.subTest(trimmed=repr(raw)):
+                self.assertEqual(self.m.validate(self.ctx(), self.target(branch=raw))['branch'], want)
         for b in ('main', 'feature/x', 'rel-1.2', 'a.b'):
             with self.subTest(good=b):
                 self.assertEqual(self.m.validate(self.ctx(), self.target(branch=b))['branch'], b)
@@ -160,6 +164,7 @@ class Validate(Base):
         self.assertEqual(self.m.validate(self.ctx(), self.target(path='mockup/t1'))['path'], 'mockup/t1')
         self.assertEqual(self.m.validate(self.ctx(), self.target(path='/mockup/t1/'))['path'], 'mockup/t1')
         for p in ('.', 'a/./b', 'a/../b', '', '/', '-x', ':/x', 'a*', 'a?', 'a[', 'a\\b', '.git', 'a/.GIT/b', 'a\x00b',
+                  '.git.', 'a/.git./b', 'a/.GIT../b', 'a/.git /b', 'a/.git. ./b',
                   'a//b', '..', 'a/..', None, 5):
             with self.subTest(path=repr(p)):
                 self.bad(self.target(path=p))
@@ -177,7 +182,7 @@ class Validate(Base):
         for ip in ('10.0.0.7', '::1', '2001:db8::1'):
             with self.subTest(ip=ip):
                 self.assertEqual(self.m.validate(self.ctx(), self.target(host_ip=ip))['host_ip'], ip)
-        for ip in ('host', '10.0.0', 'git@10.0.0.7', '-1', '10.0.0.7:22'):
+        for ip in ('host', '10.0.0', 'git@10.0.0.7', '-1', '10.0.0.7:22', 'fe80::1%eth0', '::1%$(id)', '::1%'):
             with self.subTest(ip=ip):
                 self.bad(self.target(host_ip=ip))
         self.assertEqual(self.m.validate(self.ctx(), self.target(host_ip=' 10.0.0.7 '))['host_ip'], '10.0.0.7')
@@ -216,9 +221,27 @@ class Validate(Base):
     def test_error_text_never_carries_a_password(self):
         e = self.m._err(self.ctx(), 'vcs-error', 'fatal: unable to access https://user:secret@h/r.git/: boom')
         self.assertNotIn('secret', e.message)
-        self.assertIn('://user:***@h/r.git', e.message)
+        self.assertIn('://***@h/r.git', e.message)
         r = self.m._err({}, 'vcs-error', 'https://user:secret@h/x')
         self.assertNotIn('secret', str(r))
+
+    def test_the_whole_userinfo_is_masked_not_only_user_and_password(self):
+        """Токен у позиції користувача (`https://TOKEN@host`) — той самий секрет, що й пароль."""
+        for text, keep in (("fatal: unable to access 'https://TOKEN123@h/r.git/'", '://***@h/r.git/'),
+                           ("fatal: unable to access 'https://user:p@ss@h/r.git/'", '://***@h/r.git/'),
+                           ('fatal: unable to access https://user:secret@h/r.git/: boom', '://***@h/r.git/: boom'),
+                           ('fatal: could not push ssh://TOKEN123@h:2222/o/r.git', '://***@h:2222/o/r.git')):
+            with self.subTest(text=text):
+                m = self.m._err(self.ctx(), 'vcs-error', text).message
+                self.assertIn(keep, m)
+                for leaked in ('TOKEN123', 'secret', 'p@ss', 'ss@'):
+                    self.assertNotIn(leaked, m)
+
+    def test_text_without_userinfo_is_left_alone(self):
+        for text in ("fatal: repository 'https://h/o/r.git/' not found", 'git@h: Permission denied (publickey).',
+                     "fatal: path 'https://h/a@b' unknown", 'ssh: connect to host h port 22: refused'):
+            with self.subTest(text=text):
+                self.assertEqual(self.m._err(self.ctx(), 'vcs-error', text).message, text)
 
 
     def test_error_text_is_capped(self):
@@ -487,12 +510,73 @@ class Transport(Base):
             ('ssh: connect to host h port 22: Operation timed out', 'vcs-offline'),
             ('ssh: connect to host h port 22: Network is unreachable', 'vcs-offline'),
             ("fatal: Unable to create '/m/.git/index.lock': File exists.", 'vcs-busy'),
+            ('Permission denied, please try again.', 'vcs-auth'),
             ('error: failed to push some refs to h', 'vcs-error'),
             ('', 'vcs-error'),
         ]
         for err, code in cases:
             with self.subTest(err=err[:40]):
                 self.assertEqual(self.refuse(Recorder((128, err)), self.target()).code, code)
+
+    def test_local_permission_errors_are_neither_auth_nor_busy(self):
+        """Права на теку дзеркала — не відмова віддаленого сервера: людині не треба міняти ключ чи чекати."""
+        for err in ("fatal: Unable to create '/m/.git/index.lock': Permission denied",
+                    "error: cannot open '.git/FETCH_HEAD': Permission denied",
+                    "fatal: Unable to create '/m/.git/index.lock': No space left on device"):
+            with self.subTest(err=err[:50]):
+                self.assertEqual(self.refuse(Recorder((128, err)), self.target()).code, 'vcs-error')
+
+    def test_the_two_ssh_wordings_of_a_refused_login_are_auth(self):
+        for err in ('git@h: Permission denied (publickey).', 'git@h: Permission denied (publickey,password).',
+                    'Permission denied, please try again.'):
+            with self.subTest(err=err):
+                self.assertEqual(self.refuse(Recorder((128, err)), self.target()).code, 'vcs-auth')
+
+    def test_a_missing_git_or_cwd_is_a_vcs_error_not_a_raw_oserror(self):
+        for exc in (FileNotFoundError(2, 'No such file or directory', 'git'), NotADirectoryError(20, 'Not a directory'),
+                    PermissionError(13, 'Permission denied')):
+            with self.subTest(exc=type(exc).__name__):
+                e = self.refuse(Recorder(exc), self.target())
+                self.assertEqual(e.code, 'vcs-error')
+                self.assertIn('git fetch', e.message)
+
+    def test_output_is_decoded_with_replacement(self):
+        rec = Recorder((0, ''))
+        self.go(rec, self.target())
+        self.assertEqual(rec.calls[0][1].get('errors'), 'replace')
+
+    def test_a_deadline_gives_the_retry_only_the_time_that_is_left(self):
+        """Бюджет на ВСІ спроби: перша вклалась у `used`, повтор отримує решту, а не повний тайм-аут."""
+        clock = [1000.0]
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(kw['timeout'])
+            if len(seen) == 1:
+                clock[0] += used
+                return FakeProc(128, 'ssh: Could not resolve hostname h')
+            return FakeProc(0, '')
+        t = self.target(host_ip='10.0.0.7')
+        for used, retried in ((0.5, True), (2.5, True), (2.9, True), (3.1, False), (3.99, False)):
+            seen.clear()
+            clock[0] = 1000.0
+            with self.subTest(used=used):
+                with mock.patch.object(self.m.subprocess, 'run', run), mock.patch.object(self.m.time, 'monotonic',
+                                                                                           lambda: clock[0]):
+                    r = self.m._Git(self.ctx(), t, deadline=1000.0 + 4).run(['ls-remote'], '/tmp', 4)
+                self.assertEqual(len(seen), 2 if retried else 1)
+                self.assertEqual(seen[0], 4, 'перша спроба — повний тайм-аут')
+                if retried:
+                    self.assertAlmostEqual(seen[1], 4 - used, places=6)
+                    self.assertLessEqual(used + seen[1], 4 + 1e-9)
+                    self.assertEqual(r.returncode, 0)
+                else:
+                    self.assertEqual(r.returncode, 128, 'без повтору віддаємо першу відмову')
+
+    def test_without_a_deadline_the_retry_gets_the_full_timeout(self):
+        rec = Recorder((128, 'ssh: Could not resolve hostname h'), (0, ''))
+        self.go(rec, self.target(host_ip='10.0.0.7'), timeout=120)
+        self.assertEqual([c[1]['timeout'] for c in rec.calls], [120, 120])
 
     def test_stdout_is_read_when_stderr_is_empty(self):
         self.assertEqual(self.refuse(Recorder((128, '', 'Permission denied (publickey)')), self.target()).code,
@@ -549,6 +633,25 @@ class RealGit(Base):
         out = self.git().must(['ls-remote', '--', self.bare()], self.tmp, 'ls-remote').stdout
         self.assertIn('refs/heads/main', out)
 
+    def test_non_utf8_stderr_does_not_raise(self):
+        """git повторює в stderr байти з імені шляху: не-UTF-8 не мусить давати `UnicodeDecodeError`."""
+        bad = os.path.join(self.tmp, 'no-such-\udcff.git')
+        with self.assertRaises(FakeModuleError) as cm:
+            self.git().must(['clone', '--', bad, os.path.join(self.tmp, 'd')], self.tmp, 'clone')
+        self.assertEqual(cm.exception.code, 'vcs-error')
+
+    def test_no_git_in_path_is_a_vcs_error(self):
+        with mock.patch.dict(os.environ, {'PATH': os.path.join(self.tmp, 'empty')}):
+            with self.assertRaises(FakeModuleError) as cm:
+                self.git().run(['--version'], self.tmp)
+        self.assertEqual(cm.exception.code, 'vcs-error')
+        self.assertIn('git --version', cm.exception.message)
+
+    def test_a_vanished_cwd_is_a_vcs_error(self):
+        with self.assertRaises(FakeModuleError) as cm:
+            self.git().run(['status'], os.path.join(self.tmp, 'gone'))
+        self.assertEqual(cm.exception.code, 'vcs-error')
+
     def test_a_missing_repo_is_a_vcs_error_with_the_what_prefix(self):
         with self.assertRaises(FakeModuleError) as cm:
             self.git().must(['clone', '--', os.path.join(self.tmp, 'nope.git'), os.path.join(self.tmp, 'd')],
@@ -575,6 +678,13 @@ class Check(Base):
 
     def test_a_local_repo_with_the_branch_is_found(self):
         self.assertEqual(self.go(repo=self.bare()), {'ok': True, 'detail': 'branch main found'})
+
+    def test_a_branch_that_only_ends_with_the_name_is_not_found(self):
+        """`ls-remote` зіставляє шаблон із хвостом імені: без `refs/heads/` `feature/other` дав би «other found»."""
+        origin = self.bare()
+        sh(['git', 'push', '-q', 'origin', 'HEAD:refs/heads/feature/other'], self.peer)
+        self.assertIn('not on the remote yet', self.go(repo=origin, branch='other')['detail'])
+        self.assertEqual(self.go(repo=origin, branch='feature/other')['detail'], 'branch feature/other found')
 
     def test_the_branch_comes_from_the_settings(self):
         origin = self.bare()
@@ -611,7 +721,7 @@ class Check(Base):
             r = self.go(repo='/abs/o.git')
         self.assertTrue(r['ok'])
         self.assertEqual(rec.calls[0][1]['timeout'], 4)
-        self.assertEqual(rec.argv(0), ['git', 'ls-remote', '--heads', '--', '/abs/o.git', 'main'])
+        self.assertEqual(rec.argv(0), ['git', 'ls-remote', '--heads', '--', '/abs/o.git', 'refs/heads/main'])
 
     def test_the_ssh_connect_timeout_is_set_when_the_module_composes_the_command(self):
         rec = Recorder((0, '', 'abc\trefs/heads/main\n'))
@@ -620,6 +730,37 @@ class Check(Base):
             self.go(repo='git@h:o/r.git')
         self.assertIn('-o ConnectTimeout=3', rec.env(0)['GIT_SSH_COMMAND'])
         self.assertNotIn('GIT_SSH_COMMAND', rec.env(1), 'без ключа ssh людини не чіпаємо')
+
+    def test_a_missing_git_is_a_vcs_error_not_offline(self):
+        origin = self.bare()
+        with mock.patch.dict(os.environ, {'PATH': os.path.join(self.tmp, 'empty')}):
+            r = self.go(repo=origin)
+        self.assertEqual((r['ok'], r['error']), (False, 'vcs-error'))
+        with mock.patch.object(self.m.subprocess, 'run', Recorder(FileNotFoundError(2, 'No such file', 'git'))):
+            self.assertEqual(self.go(repo='/abs/o.git')['error'], 'vcs-error')
+
+    def test_all_attempts_share_one_four_second_budget(self):
+        """Каркас чекає `check` 5 с: першу спробу з'їло `used`, повтор через IP не може дістати більше решти."""
+        clock = [500.0]
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(kw['timeout'])
+            if len(seen) == 1:
+                clock[0] += used
+                return FakeProc(128, 'ssh: Could not resolve hostname h')
+            clock[0] += kw['timeout']
+            return FakeProc(128, 'ssh: Could not resolve hostname h')
+        for used in (0.4, 1.5, 3.2, 3.9):
+            seen.clear()
+            clock[0] = 500.0
+            with self.subTest(used=used):
+                with mock.patch.object(self.m.subprocess, 'run', run), mock.patch.object(self.m.time, 'monotonic',
+                                                                                           lambda: clock[0]):
+                    r = self.go(repo='git@h:o/r.git', host_ip='10.0.0.7')
+                self.assertLessEqual(clock[0] - 500.0, 4 + 1e-9, f'check не вклався в 4 с: {seen}')
+                self.assertEqual((r['ok'], r['error']), (False, 'vcs-offline'))
+                self.assertEqual(len(seen), 2 if 4 - used >= 1 else 1)
 
     def test_failures_come_back_as_a_dict_with_the_code(self):
         cases = [((128, 'git@h: Permission denied (publickey).'), 'vcs-auth'),
@@ -710,6 +851,38 @@ class Lock(Base):
             pass
         self.assertLess(time.monotonic() - t0, 5)
 
+    def test_a_wait_sleeps_between_the_attempts(self):
+        self.hold()
+        calls = []
+        real = self.m._try_lock
+
+        def counting(fh):
+            calls.append(1)
+            return real(fh)
+        with mock.patch.object(self.m, '_try_lock', counting):
+            with self.assertRaises(FakeModuleError):
+                with self.m._Lock(self.ctx(), self.md(), wait=1):
+                    pass
+        self.assertGreaterEqual(len(calls), 2, 'за секунду очікування мусить бути не одна спроба')
+        self.assertLessEqual(len(calls), 8, 'очікування крутиться без сну')
+
+    def test_the_lock_file_of_one_repo_is_never_the_mirror_folder_of_another(self):
+        """`o/foo` і `o/foo.lock`: файл лока `foo` не може лежати там, де дзеркало `foo.lock`."""
+        a = self.m.mirror_dir(self.ctx(), {'repo': 'git@h:o/foo', 'path': 'p'})
+        b = self.m.mirror_dir(self.ctx(), {'repo': 'git@h:o/foo.lock', 'path': 'p'})
+        os.makedirs(b)
+        with self.m._Lock(self.ctx(), a, wait=0):
+            pass
+        with self.m._Lock(self.ctx(), b, wait=0):
+            pass
+        flat = self.ctx()
+        flat['mirror_flat'] = True
+        fa = self.m.mirror_dir(flat, {'repo': 'git@h:o/foo', 'path': 'p'})
+        fb = self.m.mirror_dir(flat, {'repo': 'git@h:o/foo.lock', 'path': 'p'})
+        os.makedirs(fb)
+        with self.m._Lock(flat, fa, wait=0):
+            pass
+
     def test_a_failed_attempt_leaves_no_open_file(self):
         self.hold()
         lk = self.m._Lock(self.ctx(), self.md(), wait=0)
@@ -719,8 +892,8 @@ class Lock(Base):
 
     def test_the_lock_file_sits_next_to_the_mirror_folder_and_the_folder_is_created(self):
         with self.m._Lock(self.ctx(), self.md(), wait=0) as lk:
-            self.assertEqual(lk.path, self.md() + '.lock')
-            self.assertTrue(os.path.isfile(self.md() + '.lock'))
+            self.assertEqual(lk.path, self.md() + '@lock')
+            self.assertTrue(os.path.isfile(self.md() + '@lock'))
         self.assertTrue(lk.fh.closed)
         self.assertFalse(os.path.exists(self.md()), 'сам лок дзеркала не створює')
 
@@ -739,7 +912,7 @@ class Lock(Base):
                 'fcntl.flock(f.fileno(), fcntl.LOCK_EX)\n'
                 "print('ready', flush=True)\n"
                 'time.sleep(60)\n')
-        proc = subprocess.Popen([sys.executable, '-c', code, self.md() + '.lock'], stdout=subprocess.PIPE, text=True)
+        proc = subprocess.Popen([sys.executable, '-c', code, self.md() + '@lock'], stdout=subprocess.PIPE, text=True)
         watchdog = threading.Timer(15, proc.kill)      # дочірній не відповів — не вішати прогін
         watchdog.start()
 

@@ -13,7 +13,8 @@
 
 Дзеркало: `<cache_dir>/mirrors/<host>/<шлях>`; `ctx['mirror_flat']` (лише неявний постачальник простору ЛІГА) —
 `<cache_dir>/<slug>` за правилом 0.7.0, щоб старі клони не перегортались. Одна операція на дзеркало: `flock` на
-`<дзеркало>.lock` (між процесами — `bin/state.py` питає статус окремим процесом; модуль ще й перевантажується `exec`-ом).
+`<дзеркало>@lock` (між процесами — `bin/state.py` питає статус окремим процесом; модуль ще й перевантажується `exec`-ом).
+Не `.lock`: репо `o/foo.lock` має дзеркало з таким самим імʼям, як лок-файл репо `o/foo`; `@` slug дати не може.
 
 Команду ssh модуль складає лише тоді, коли сам щось додає (`ssh_key`, повтор через `host_ip`): основа — `GIT_SSH_COMMAND`
 оточення, інакше `ssh`. Інакше git бере ssh людини (`core.sshCommand`, `~/.ssh/config`) сам — модуль його не перекриває.
@@ -42,17 +43,21 @@ CHECK_GIT_TIMEOUT = 4
 #: Скільки `push`/`pull` чекають на зайняте дзеркало; `status` не чекає (`vcs-busy`).
 LOCK_WAIT = 60
 LOCK_POLL = 0.2
+#: Найменший залишок бюджету (с), з яким ще варто повторювати спробу через IP: менше — повтор не встигне нічого.
+MIN_RETRY = 1
 MAX_MSG = 300
 ALLOWED_SCHEMES = ('ssh://', 'https://', 'file://')
 _RESOLVER_FAIL = 'could not resolve hostname'
-_AUTH_MARKS = ('permission denied', 'authentication failed', 'could not read username',
-               'could not read password', 'host key verification failed')
+#: Відмова ВХОДУ: ssh пише `Permission denied (publickey…)` чи `Permission denied, please try again`. Голе «permission
+#: denied» — це права на файли дзеркала (`index.lock`, `FETCH_HEAD`), не доступ до сервера.
+_AUTH_MARKS = ('permission denied (', 'permission denied, please try again', 'authentication failed',
+               'could not read username', 'could not read password', 'host key verification failed')
 _OFFLINE_MARKS = ('could not resolve hostname', 'could not resolve host', 'connection timed out',
                   'operation timed out', 'network is unreachable', 'no route to host', 'connection refused')
 _NO_BRANCH_MARKS = ('not found in upstream', "couldn't find remote ref", 'could not find remote ref')
 _SCP = re.compile(r'(?:([^@/:\s]+)@)?([^/:\s]+):(.+)')
 _NAME = re.compile(r'[A-Za-z0-9._-]+')          # хост і користувач scp-адреси: жодних `; $ ( ) & | < >` (див. `_Git._ssh`)
-_PASSWORD = re.compile(r'(://[^/@:\s]*):[^/@\s]*@')
+_USERINFO = re.compile(r'(://)[^/\s]*@')              # до ОСТАННЬОГО `@` перед першим `/`: `p@ss` у паролі теж
 _BAD_BRANCH_CHARS = set(' ~^:?*[\\')
 _BAD_PATH_CHARS = set('*?[\\')
 
@@ -64,8 +69,9 @@ def _err(ctx, code, message=''):
 
 
 def _mask(text):
-    """Пароль з адреси (`://user:pass@`) ніколи не йде в текст: такі адреси відхиляє `validate`, але stderr git — чужий текст."""
-    return _PASSWORD.sub(r'\1:***@', text)
+    """Userinfo адреси (`://user:pass@`, `://TOKEN@`) ніколи не йде в текст: пароль у адресі відхиляє `validate`, але токен
+    у позиції користувача він не відрізнить, а stderr git — чужий текст."""
+    return _USERINFO.sub(r'\1***@', text)
 
 
 def _empty(v):
@@ -109,7 +115,7 @@ def _repo_why(repo):
         if u.scheme == 'file':
             return None if u.netloc in ('', 'localhost') and u.path.startswith('/') else \
                 'repo: file:// needs an absolute local path'
-        if not u.hostname or u.hostname.startswith('-'):
+        if not u.hostname or u.hostname.startswith('-') or (u.username or '').startswith('-'):
             return 'repo: bad host'
         if u.password is not None:
             return 'repo: a password in the address is not accepted — keep credentials in git (credential helper)'
@@ -140,7 +146,7 @@ def _path_why(p, what='path'):
     """`p` — уже без `/` по краях. Сегменти `.`/`..`/порожні, магія pathspec, глоби й `.git` (будь-який регістр) — ні."""
     if not p or p.startswith(('-', ':')) or _ctl(p) or any(c in _BAD_PATH_CHARS for c in p):
         return f'{what}: not a valid folder in the repository'
-    if any(seg in ('', '.', '..') or seg.lower() == '.git' for seg in p.split('/')):
+    if any(seg in ('', '.', '..') or seg.rstrip(' .').lower() == '.git' for seg in p.split('/')):    # NTFS: `.git.`
         return f'{what}: not a valid folder in the repository'
     return None
 
@@ -158,7 +164,7 @@ def validate(ctx, target):
         raise _err(ctx, 'vcs-bad-target', 'target must be an object')
     settings = (ctx.get('settings') if isinstance(ctx, dict) else None) or {}
     repo = target.get('repo')
-    branch = target.get('branch') if not _empty(target.get('branch')) else 'main'
+    branch = target.get('branch').strip() if not _empty(target.get('branch')) else 'main'
     path = target.get('path').strip().strip('/') if isinstance(target.get('path'), str) else ''
     why = _repo_why(repo) or _branch_why(branch) or _path_why(path)
     key, ip = _pick(target, settings, 'ssh_key'), _pick(target, settings, 'host_ip')
@@ -168,12 +174,14 @@ def validate(ctx, target):
             why = 'ssh_key: not an existing file (use an absolute path or ~)'
     if not why and ip is not None:
         try:
+            if '%' in ip:                         # zone-id (`fe80::1%eth0`): ipaddress його приймає, `insteadOf` — ні
+                raise ValueError(ip)
             ipaddress.ip_address(ip)
         except ValueError:
             why = 'host_ip: not an IP address'
     if why:
         raise _err(ctx, 'vcs-bad-target', why)
-    return {'repo': repo, 'path': path, 'branch': branch.strip(), 'ssh_key': key, 'host_ip': ip}
+    return {'repo': repo, 'path': path, 'branch': branch, 'ssh_key': key, 'host_ip': ip}
 
 
 def _mirror(ctx, t):
@@ -198,8 +206,10 @@ def mirror_dir(ctx, target):
 class _Git:
     """git для однієї цілі: оточення, ssh, ОДИН повтор через `host_ip` на збої резолвера, тайм-аут → `vcs-offline`."""
 
-    def __init__(self, ctx, t, connect_timeout=None):
-        self.ctx, self.t, self.connect_timeout = ctx, t, connect_timeout
+    def __init__(self, ctx, t, connect_timeout=None, deadline=None):
+        """`deadline` — абсолютний `time.monotonic()`, до якого мають вкластись ВСІ спроби (`check`): повтор через IP
+        отримає лише залишок. Без нього кожна спроба — з повним тайм-аутом."""
+        self.ctx, self.t, self.connect_timeout, self.deadline = ctx, t, connect_timeout, deadline
 
     def _ssh(self, alias):
         key = self.t.get('ssh_key')
@@ -238,10 +248,13 @@ class _Git:
             pre = ['-c', f'url.{user}{addr}:.insteadOf={user}{m.group(2)}:']
             alias = m.group(2)
         try:
+            # `errors='replace'`: git повторює в stderr байти з імен шляхів — не-UTF-8 не мусить кидати UnicodeDecodeError.
             return subprocess.run(['git', *pre, *args], cwd=cwd, env=self._env(alias, literal),
-                                  capture_output=True, text=True, timeout=timeout)
+                                  capture_output=True, text=True, errors='replace', timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise _err(self.ctx, 'vcs-offline', f'git {args[0]}: no answer in {timeout} s') from None
+            raise _err(self.ctx, 'vcs-offline', f'git {args[0]}: no answer in {timeout:g} s') from None
+        except OSError as e:                      # немає git у PATH, зникла тека cwd, нема прав на запуск
+            raise _err(self.ctx, 'vcs-error', f'git {args[0]}: {e}') from None
 
     def run(self, args, cwd, timeout=GIT_TIMEOUT, literal=True):
         r = self._once(args, cwd, timeout, None, literal)
@@ -249,6 +262,10 @@ class _Git:
         if (r.returncode != 0 and ip and _RESOLVER_FAIL in (r.stderr or '').lower()
                 and _SCP.fullmatch(self.t['repo']) and not self.t['repo'].startswith(ALLOWED_SCHEMES)
                 and not os.path.isabs(self.t['repo'])):
+            if self.deadline is not None:
+                timeout = min(timeout, self.deadline - time.monotonic())
+                if timeout < MIN_RETRY:
+                    return r                      # бюджет майже вичерпано: повтору нема, віддаємо першу відмову
             return self._once(args, cwd, timeout, ip, literal)
         return r
 
@@ -258,7 +275,7 @@ class _Git:
             return 'vcs-auth'
         if any(m in low for m in _OFFLINE_MARKS):
             return 'vcs-offline'
-        if 'index.lock' in low:
+        if 'index.lock' in low and 'file exists' in low:      # інший git тримає лок; `Permission denied` — права
             return 'vcs-busy'
         return 'vcs-error'
 
@@ -294,11 +311,13 @@ def _unlock(fh):
 
 
 class _Lock:
-    """Одна операція на дзеркало, між процесами й потоками: `flock` на `<дзеркало>.lock` (окремий `open` — окремий опис
-    файла, тож потоки одного процесу теж виключають один одного). `wait=0` — одна спроба."""
+    """Одна операція на дзеркало, між процесами й потоками: `flock` на `<дзеркало>@lock` (окремий `open` — окремий опис
+    файла, тож потоки одного процесу теж виключають один одного). `wait=0` — одна спроба. Не реентерабельний: другий
+    вхід у той самий лок з того ж потоку чекає на себе. Файл — `@lock`, не `.lock`: дзеркало репо `o/foo.lock` — це тека
+    з таким самим імʼям, як лок-файл репо `o/foo`; slug (`[^\\w.-]` → `-`) `@` дати не може, тож збігу нема."""
 
     def __init__(self, ctx, md, wait):
-        self.ctx, self.path, self.wait, self.fh = ctx, md + '.lock', wait, None
+        self.ctx, self.path, self.wait, self.fh = ctx, md + '@lock', wait, None
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
@@ -333,9 +352,11 @@ def check(ctx):
                            'path': str(s.get('path') or 'mockup/{task}').replace('{task}', 'task')})
     except Exception as e:  # noqa: BLE001 — клас помилки приходить з ctx
         return {'ok': False, 'error': 'vcs-bad-target', 'detail': getattr(e, 'message', None) or str(e)}
-    g = _Git(ctx, t, connect_timeout=3)
+    g = _Git(ctx, t, connect_timeout=3, deadline=time.monotonic() + CHECK_GIT_TIMEOUT)
     try:
-        r = g.run(['ls-remote', '--heads', '--', t['repo'], t['branch']], tempfile.gettempdir(), CHECK_GIT_TIMEOUT)
+        # Повне імʼя гілки: шаблон `ls-remote` зіставляється з ХВОСТОМ імені, тож `main` знайшов би й `feature/main`.
+        r = g.run(['ls-remote', '--heads', '--', t['repo'], 'refs/heads/' + t['branch']], tempfile.gettempdir(),
+                  CHECK_GIT_TIMEOUT)
     except Exception as e:  # noqa: BLE001 — `vcs-offline` від тайм-ауту
         return {'ok': False, 'error': getattr(e, 'code', 'vcs-offline'), 'detail': getattr(e, 'message', None) or str(e)}
     if r.returncode != 0:
