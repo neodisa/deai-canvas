@@ -662,6 +662,26 @@ class Legacy(Core):
         self.assertEqual((r['reason'], r['code'], r['synced']), ('offline', 'vcs-busy', False))
         self.assertEqual(json.dumps(self.meta().get('gitlab'), sort_keys=True), before)
 
+    # ---------------------------------------------------------------- 4-кортеж `vcs_task`
+    def test_the_full_vcs_task_tuple_goes_through_all_four_functions(self):
+        """Контракт: `vcs_task` дає `(module, ctx, legacy, target)`, і маршрут передає ЦЕЙ кортеж як `vcs=` у всі старі імена.
+        Розпаковка з трьох (`m, ctx, legacy = v`) падала б тут, а не на живому маршруті."""
+        task = {**self.task, 'gitlab': dict(self.gl)}
+        v = serve.vcs_task({}, 't1', task)
+        self.assertEqual((len(v), v[2]), (4, True))
+        gl = v[3]
+        r = serve.gitlab_sync('t1', task, gl, 'it1', vcs=v)
+        self.assertTrue(r['synced'], r)
+        serve._record_sync(task, 'it1', r['sha'])
+        st = serve.gitlab_status(task, gl, self.meta(), 'it1', vcs=v)
+        self.assertEqual((st['configured'], st['label'], st['dirty'], st['on_remote']), (True, 'GitLab', False, True))
+        self.write_it1('<h1>v10</h1>')
+        auto = serve.autosync('t1', task, gl, vcs=v)
+        self.assertEqual((auto['ok'], auto['synced'], auto['changed']), (True, True, True), auto)
+        self.peer_push({'mockup/t1/index.html': '<h1>колега</h1>'})
+        pulled = serve.gitlab_pull(task, gl, vcs=v)
+        self.assertEqual(pulled['iteration']['note'], 'оновлення з GitLab')
+
     # ---------------------------------------------------------------- ЛІГА: нова задача
     def cfg(self):
         return {'tasks': {}, 'design_work_root': os.path.join(self.tmp, 'dw'), 'gitlab': {}}
@@ -871,6 +891,22 @@ class Plain(Core):
         r = serve.gitlab_sync('t1', self.task, target, 'it1')
         self.assertTrue(r['synced'], r)
 
+    def test_the_full_vcs_task_tuple_goes_through_all_four_functions(self):
+        """Той самий контракт у звичайному просторі: цілий 4-кортеж `vcs_task` як `vcs=` для всіх старих імен."""
+        v = self.vt()
+        self.assertEqual((len(v), v[2]), (4, False))
+        r = serve.gitlab_sync('t1', self.task, v[3], 'it1', vcs=v)
+        self.assertTrue(r['synced'], r)
+        serve._record_sync(self.task, 'it1', r['sha'])
+        st = serve.gitlab_status(self.task, v[3], self.meta(), 'it1', vcs=v)
+        self.assertEqual((st['configured'], st['label'], st['dirty'], st['on_remote']), (True, 'Git', False, True))
+        self.write_it1('<h1>v10</h1>')
+        auto = serve.autosync('t1', self.task, v[3], vcs=v)
+        self.assertEqual((auto['ok'], auto['synced'], auto['changed']), (True, True, True), auto)
+        self.peer_push({'mockup/t1/index.html': '<h1>колега</h1>'})
+        pulled = serve.gitlab_pull(self.task, v[3], vcs=v)
+        self.assertEqual(pulled['iteration']['note'], 'оновлення з репозиторію')
+
     # ---------------------------------------------------------------- нова задача
     def new(self, tid='t2', **kw):
         kw.setdefault('vcs', {'repo': self.origin})
@@ -934,6 +970,294 @@ class Plain(Core):
             serve.task_new(self.cfg, 't4', gitlab={'repo': self.origin, 'path': 'mockup/t4'}, profile=None,
                            root=self.sp['path'])
         self.assertFalse(os.path.exists(os.path.join(self.sp['path'], 't4')))
+
+
+
+# ======================================================================== адреса без userinfo
+TOKEN = 'ghp_SECRETTOKEN123'
+#: Адреси з секретом у userinfo: токен у позиції користувача, `user:pass`, пароль із `@`. Другу й третю `validate` справжнього
+#: модуля відхиляє, а чужий модуль (довіра 3c) міг би прийняти, тож ядро маскує незалежно від нього.
+SECRET_REPOS = {
+    'token': (f'https://{TOKEN}@github.com/o/r.git', (TOKEN,)),
+    'user:pass': ('https://anna:hunter2@github.com/o/r.git', ('hunter2', 'anna')),
+    'password with @': ('https://anna:p@ss@github.com/o/r.git', ('p@ss', 'anna')),
+}
+
+
+class AddressMask(Core):
+    """`remote`, `web`, тексти помилок і рядок автосинку НІКОЛИ не несуть userinfo адреси (спека: «тексти помилок і `remote`
+    ніколи не несуть пароля з адреси»). Модуль — заглушка: справжній ходив би в мережу по `https://github.com`."""
+
+    def mod(self, ctx, repo, **fns):
+        return (self.stub(**fns), ctx, False)
+
+    def refuse(self, repo, code='vcs-error'):
+        """Функція модуля, що відмовляє текстом із повною адресою (чужий модуль не маскує сам)."""
+        def f(ctx, *a, **kw):
+            raise ctx['ModuleError'](code, message=f'fetch failed: {repo}')
+        return f
+
+    def leak_free(self, obj, secrets):
+        text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
+        for secret in secrets:
+            self.assertNotIn(secret, text)
+
+    def test_the_mask_rule_is_the_one_of_the_module(self):
+        for text, want in (('https://TOKEN@h/o/r', 'https://***@h/o/r'),
+                           ('https://u:p@ss@h/o/r:mockup/t1', 'https://***@h/o/r:mockup/t1'),
+                           ('ssh://git@h:2222/o/r', 'ssh://***@h:2222/o/r'),
+                           ('a https://T@x/y b https://U:P@z/w', 'a https://***@x/y b https://***@z/w'),
+                           ('git@github.com:o/r.git', 'git@github.com:o/r.git'),
+                           ('/srv/репо.git:mockup/t1', '/srv/репо.git:mockup/t1'),
+                           ('https://host/path@file', 'https://host/path@file')):
+            with self.subTest(text=text):
+                self.assertEqual(serve._mask_repo(text), want)
+        self.assertIsNone(serve._mask_repo(None))
+        self.assertEqual(serve._mask_repo(5), 5)
+
+    def test_a_vcs_error_masks_the_address_in_its_text_and_keeps_the_code(self):
+        e = serve.VcsError('vcs-offline', f'fetch failed: https://{TOKEN}@github.com/o/r.git: no route')
+        self.assertEqual((e.code, str(e)), ('vcs-offline', 'fetch failed: https://***@github.com/o/r.git: no route'))
+        self.assertEqual(str(serve.VcsError('vcs-busy')), 'vcs-busy')
+
+    def test_the_sync_result_carries_a_masked_remote_when_it_is_ok_and_when_it_is_blocked(self):
+        ok = {'ok': True, 'synced': True, 'changed': True, 'pushed': True, 'sha': 'abc1234'}
+        for name, (repo, secrets) in SECRET_REPOS.items():
+            gl = {**self.gl, 'repo': repo}
+            for what, result in (('ok', ok), ('behind', {'ok': False, 'synced': False, 'blocked': 'behind', 'behind': 1}),
+                                 ('diverged', {'ok': False, 'synced': False, 'blocked': 'diverged'})):
+                with self.subTest(repo=name, result=what):
+                    v = self.mod(serve._vcs_legacy_ctx(), repo, push=lambda ctx, t, d, m, r=result: dict(r))
+                    r = serve.gitlab_sync('t1', self.task, gl, 'it1', vcs=v)
+                    self.assertEqual(r['remote'], 'https://***@github.com/o/r.git:mockup/t1')
+                    self.leak_free(r, secrets)
+
+    def test_the_status_masks_what_a_foreign_module_returns_and_what_it_says_in_an_error(self):
+        for name, (repo, secrets) in SECRET_REPOS.items():
+            gl = {**self.gl, 'repo': repo}
+            with self.subTest(repo=name):
+                leaky = {'behind': 0, 'behind_path': 0, 'unpushed': 0, 'on_remote': True,
+                         'web': f'{repo}/commits/main', 'label': f'Git ({repo})'}
+                st = serve.gitlab_status(self.task, gl, self.meta(), 'it1',
+                                         vcs=self.mod(serve._vcs_legacy_ctx(), repo, status=lambda ctx, t, r=leaky: dict(r)))
+                self.assertEqual((st['configured'], st['web']), (True, 'https://***@github.com/o/r.git/commits/main'))
+                self.leak_free(st, secrets)
+                st = serve.gitlab_status(self.task, gl, self.meta(), 'it1',
+                                         vcs=self.mod(serve._vcs_legacy_ctx(), repo, status=self.refuse(repo)))
+                self.assertEqual((st['configured'], st['code']), (True, 'vcs-error'))
+                self.assertIn('https://***@github.com/o/r.git', st['error'])
+                self.leak_free(st, secrets)
+
+    def test_a_refusal_of_a_foreign_module_is_masked_in_sync_pull_and_autosync(self):
+        for name, (repo, secrets) in SECRET_REPOS.items():
+            gl = {**self.gl, 'repo': repo}
+            v = self.mod(serve._vcs_legacy_ctx(), repo, push=self.refuse(repo), pull=self.refuse(repo))
+            with self.subTest(repo=name):
+                for what, call in (('sync', lambda: serve.gitlab_sync('t1', self.task, gl, 'it1', vcs=v)),
+                                   ('pull', lambda: serve.gitlab_pull(self.task, gl, vcs=v))):
+                    with self.assertRaises(serve.VcsError, msg=what) as cm:
+                        call()
+                    self.leak_free(str(cm.exception), secrets)
+                    self.leak_free(repr(cm.exception), secrets)
+                self.write_it1(f'<h1>{name}</h1>')
+                r = serve.autosync('t1', self.task, gl, vcs=v)
+                self.assertEqual((r['reason'], r['code']), ('offline', 'vcs-error'))
+                self.assertIn('https://***@github.com/o/r.git', r['error'])
+                self.leak_free(r, secrets)
+
+    def test_a_successful_autosync_and_pull_carry_no_secret_either(self):
+        repo, secrets = SECRET_REPOS['token']
+        gl = {**self.gl, 'repo': repo}
+
+        def pull(ctx, t, d, o=None):
+            write(os.path.join(d, 'index.html'), '<h1>колега</h1>')
+            return {'found': True, 'last_commit': {'author': 'Peer', 'time': 1}}
+        v = self.mod(serve._vcs_legacy_ctx(), repo, push=lambda ctx, t, d, m: {'ok': True, 'synced': True, 'changed': True,
+                                                                                'pushed': True, 'sha': 'abc1234'}, pull=pull)
+        self.write_it1('<h1>v11</h1>')
+        auto = serve.autosync('t1', self.task, gl, vcs=v)
+        self.assertEqual((auto['synced'], auto['remote']), (True, 'https://***@github.com/o/r.git:mockup/t1'))
+        self.leak_free(auto, secrets)
+        self.leak_free(serve.gitlab_pull(self.task, gl, vcs=v), secrets)
+
+    def test_the_autosync_masks_the_address_in_a_plain_oserror_too(self):
+        """Не `VcsError` (той маскує сам при створенні), а будь-який `OSError` нижче по стеку з адресою в тексті."""
+        self.write_it1('<h1>v12</h1>')
+        with mock.patch.object(serve, 'gitlab_sync', side_effect=OSError(f'push to https://{TOKEN}@github.com/o/r.git failed')):
+            r = serve.autosync('t1', self.task, self.gl)
+        self.assertEqual((r['reason'], r['error']), ('offline', 'push to https://***@github.com/o/r.git failed'))
+        self.assertNotIn('code', r)
+        self.leak_free(r, (TOKEN,))
+
+    def test_the_real_module_refuses_a_password_in_the_address_without_echoing_it(self):
+        """Справжній модуль, без мережі: `validate` відхиляє `user:pass` до будь-якого git, і текст не несе адреси."""
+        for name in ('user:pass', 'password with @'):
+            repo, secrets = SECRET_REPOS[name]
+            gl = {**self.gl, 'repo': repo}
+            with self.subTest(repo=name):
+                st = serve.gitlab_status(self.task, gl, self.meta(), 'it1')
+                self.assertEqual((st['configured'], st['code']), (True, 'vcs-bad-target'))
+                self.leak_free(st, secrets)
+                with self.assertRaises(serve.VcsError) as cm:
+                    serve.gitlab_sync('t1', self.task, gl, 'it1')
+                self.assertEqual(cm.exception.code, 'vcs-bad-target')
+                self.leak_free(str(cm.exception), secrets)
+                self.write_it1(f'<h1>{name}</h1>')
+                auto = serve.autosync('t1', self.task, gl)
+                self.assertEqual((auto['reason'], auto['code']), ('offline', 'vcs-bad-target'))
+                self.leak_free(auto, secrets)
+
+    def handler(self, **attrs):
+        """Обробник маршруту без сервера: лише те, що читають `_gitlab_*`/`_autosync`."""
+        from types import SimpleNamespace
+        sent = []
+        task = {**self.task, 'gitlab': dict(self.gl)}
+        h = SimpleNamespace(path='/api/gitlab-status?it=it1', _current_task=lambda: ('t1', task), _send_json=sent.append,
+                            send_error=lambda *a: sent.append(a), _overview_sync=lambda: None, **attrs)
+        return h, sent
+
+    def test_the_old_routes_mask_the_address_of_a_plain_exception_too(self):
+        """Маршрути друкують `str(e)` будь-якого `OSError`, не лише `VcsError`: адреса з токеном у чужому тексті (git у стек-
+        трейсі, чужий модуль) теж маскується."""
+        msg = f'clone of https://{TOKEN}@github.com/o/r.git failed'
+        boom = mock.patch.object(serve, 'load_tasks', return_value={})
+        boom.start()
+        self.addCleanup(boom.stop)
+        for route, fn, args in (('_gitlab_status', 'gitlab_status', ()), ('_gitlab_sync', 'gitlab_sync', ({'it': 'it1'},)),
+                                ('_autosync', 'autosync', ({},)), ('_gitlab_pull', 'gitlab_pull', ({},))):
+            with self.subTest(route=route):
+                h, sent = self.handler()
+                with mock.patch.object(serve, fn, side_effect=OSError(msg)):
+                    getattr(serve.Handler, route)(h, *args)
+                self.assertEqual(len(sent), 1, sent)
+                self.assertEqual(sent[0]['error'], 'clone of https://***@github.com/o/r.git failed')
+                self.assertNotIn(TOKEN, json.dumps(sent))
+
+
+# ======================================================================== кривий результат модуля
+class ModuleShape(Core):
+    """Свій модуль ролі `vcs` (довіра 3c) може віддати не обʼєкт чи обʼєкт без ключів: це `VcsError('module-error')` або
+    безпечне значення, але не `AttributeError`/`TypeError`/`KeyError` (маршрути ловлять лише `OSError`)."""
+    BAD = (None, 'x', [], 5, True)
+
+    def v(self, **fns):
+        return (self.stub(**fns), serve._vcs_legacy_ctx(), False)
+
+    def cfg(self):
+        return {'tasks': {}, 'design_work_root': os.path.join(self.tmp, 'dw'), 'gitlab': {}}
+
+    def test_a_status_that_is_not_an_object_is_an_error_status_with_the_frame_code(self):
+        for bad in self.BAD:
+            with self.subTest(result=bad):
+                st = serve.gitlab_status(self.task, self.gl, self.meta(), 'it1', vcs=self.v(status=lambda ctx, t, b=bad: b))
+                self.assertEqual((st['configured'], st['code']), (True, 'module-error'))
+                self.assertIn('status returned', st['error'])
+
+    def test_a_push_that_is_not_an_object_is_a_vcs_error_and_autosync_stays_quiet(self):
+        before = json.dumps(self.meta().get('gitlab'), sort_keys=True)
+        for bad in self.BAD:
+            v = self.v(push=lambda ctx, t, d, m, b=bad: b)
+            with self.subTest(result=bad):
+                with self.assertRaises(serve.VcsError) as cm:
+                    serve.gitlab_sync('t1', self.task, self.gl, 'it1', vcs=v)
+                self.assertEqual(cm.exception.code, 'module-error')
+                self.write_it1(f'<h1>{bad!r}</h1>')
+                r = serve.autosync('t1', self.task, self.gl, vcs=v)
+                self.assertEqual((r['reason'], r['code'], r['synced']), ('offline', 'module-error', False))
+                self.assertEqual(json.dumps(self.meta().get('gitlab'), sort_keys=True), before)
+        self.assertEqual(os.listdir(self.systmp), [], 'тека src лишилась після відмови')
+
+    def test_a_pull_that_is_not_an_object_is_a_vcs_error(self):
+        for bad in self.BAD:
+            with self.subTest(result=bad):
+                with self.assertRaises(serve.VcsError) as cm:
+                    serve.gitlab_pull(self.task, self.gl, vcs=self.v(pull=lambda ctx, t, d, o=None, b=bad: b))
+                self.assertEqual(cm.exception.code, 'module-error')
+        self.assertEqual(os.listdir(self.systmp), [])
+
+    def test_a_mirror_dir_that_is_not_a_string_is_a_vcs_error(self):
+        v = self.v(mirror_dir=lambda ctx, t: 5)
+        with self.assertRaises(serve.VcsError) as cm:
+            serve.vcs_mirror_dir(self.gl, vcs=v)
+        self.assertEqual(cm.exception.code, 'module-error')
+
+    def test_a_validate_that_is_not_an_object_is_a_vcs_error(self):
+        """`validate` кличе маршрут через `_vcs_call` (з короткою межею): тут форма результату стереже так само."""
+        for bad in self.BAD:
+            with self.subTest(result=bad):
+                with self.assertRaises(serve.VcsError) as cm:
+                    serve._vcs_call(self.v(validate=lambda ctx, t, b=bad: b), 'validate', self.gl, timeout=5)
+                self.assertEqual(cm.exception.code, 'module-error')
+
+    def test_a_function_without_a_declared_shape_is_passed_through_as_it_is(self):
+        """`web_url` законно віддає `None`: форму ядро вимагає лише там, де знає її (status/push/pull/validate/mirror_dir)."""
+        self.assertIsNone(serve._vcs_call(self.v(web_url=lambda ctx, t: None), 'web_url', self.gl))
+
+    def test_objects_without_the_expected_keys_do_not_crash_the_core(self):
+        st = serve.gitlab_status(self.task, self.gl, self.meta(), 'it1', vcs=self.v(status=lambda ctx, t: {}))
+        self.assertEqual((st['configured'], st['behind'], st['behind_path'], st['unpushed'], st['on_remote'], st['label']),
+                         (True, 0, 0, 0, None, 'Git'))
+        self.assertIsNone(st['web'])
+        st = serve.gitlab_status(self.task, self.gl, self.meta(), 'it1',
+                                 vcs=self.v(status=lambda ctx, t: {'web': 5, 'label': ['x']}))
+        self.assertEqual((st['web'], st['label']), (None, 'Git'))
+        r = serve.gitlab_sync('t1', self.task, self.gl, 'it1', vcs=self.v(push=lambda ctx, t, d, m: {}))
+        self.assertEqual(r, {'remote': f'{self.origin}:mockup/t1'})
+        r = serve.autosync('t1', self.task, self.gl, vcs=self.v(push=lambda ctx, t, d, m: {}))
+        self.assertEqual((r['it'], r.get('synced')), ('it1', None))
+        with self.assertRaises(OSError) as cm:
+            serve.gitlab_pull(self.task, self.gl, vcs=self.v(pull=lambda ctx, t, d, o=None: {}))
+        self.assertIn('not found in repo', str(cm.exception))
+
+    # ---- last_commit
+    def pulling(self, last_commit):
+        def pull(ctx, t, d, o=None):
+            write(os.path.join(d, 'index.html'), '<h1>з репо</h1>')
+            return {'found': True, 'last_commit': last_commit}
+        return self.v(pull=pull)
+
+    def test_last_commit_helper_keeps_only_a_well_formed_value(self):
+        for lc, want in ((None, {}), ('x', {}), (5, {}), (['a'], {}), ({}, {'author': '', 'time': None}),
+                         ({'author': 5, 'time': 'x'}, {'author': '', 'time': None}),
+                         ({'author': 'Peer', 'time': True}, {'author': 'Peer', 'time': None}),
+                         ({'author': 'Peer', 'time': 1700000000}, {'author': 'Peer', 'time': 1700000000}),
+                         ({'author': 'Peer', 'time': 1.5}, {'author': 'Peer', 'time': 1.5})):
+            with self.subTest(last_commit=lc):
+                self.assertEqual(serve._last_commit({'last_commit': lc}), want)
+        self.assertEqual(serve._last_commit({}), {})
+
+    def test_a_malformed_last_commit_is_the_same_as_a_missing_one(self):
+        for lc in ('x', 5, ['a'], {'author': 5, 'time': 'x'}, {'author': 'Peer', 'time': True}):
+            with self.subTest(last_commit=lc):
+                self.save_meta({'iterations': [{'id': 'it1'}], 'current': 'it1'})
+                r = serve.gitlab_pull(self.task, self.gl, vcs=self.pulling(lc))
+                self.assertTrue(r['ok'], r)
+                self.assertIsNone(r['fork'], 'без числового `time` застарілість не перевіряється')
+                self.assertIsInstance(r['iteration'].get('author', ''), str)
+
+    def test_a_well_formed_old_time_still_forks_the_own_newer_work(self):
+        """Контроль до попереднього: коректний `time` старіший за мою роботу — форк, тобто перевірка застарілості жива."""
+        r = serve.gitlab_pull(self.task, self.gl, vcs=self.pulling({'author': 'Peer', 'time': 1}))
+        self.assertEqual((r['ok'], r['continue_from']), (True, 'it1'))
+        self.assertIsNotNone(r['fork'])
+
+    # ---- task_new
+    def test_task_new_takes_a_pull_that_is_not_an_object_as_an_unavailable_mirror(self):
+        for i, bad in enumerate(self.BAD):
+            with self.subTest(result=bad):
+                v = self.v(pull=lambda ctx, t, d, o=None, b=bad: b)
+                with mock.patch.object(serve, 'vcs_provider', return_value=v):
+                    r = serve.task_new(self.cfg(), f'n{i}', title='Нова', vcs={'repo': self.origin})
+                self.assertFalse(r['cloned'])
+                self.assertTrue(os.path.isfile(os.path.join(r['dir'], 'iterations', 'it1', 'index.html')))
+        self.assertEqual(os.listdir(self.systmp), [])
+
+    def test_task_new_ignores_a_malformed_last_commit(self):
+        with mock.patch.object(serve, 'vcs_provider', return_value=self.pulling('x')):
+            r = serve.task_new(self.cfg(), 'nova', title='Нова', vcs={'repo': self.origin})
+        self.assertTrue(r['cloned'])
+        with open(os.path.join(r['dir'], 'iterations', 'it1', 'index.html'), encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), '<h1>з репо</h1>')
 
 
 if __name__ == '__main__':

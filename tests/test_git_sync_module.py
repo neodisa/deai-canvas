@@ -1868,6 +1868,13 @@ class WebLabel(Base):
         self.assertEqual(self.both('https://user@github.com/o/r'),
                          ('GitHub', 'https://github.com/o/r/commits/main/mockup/t1'))
 
+    def test_the_userinfo_of_the_address_never_reaches_the_web_url(self):
+        """Токен у позиції користувача `validate` пропускає, а вебові посилання йде в UI й у відповіді ядра: тільки хост."""
+        for repo in ('https://ghp_SECRETTOKEN123@github.com/o/r.git', 'https://anna:hunter2@github.com/o/r.git',
+                     'ssh://ghp_SECRETTOKEN123@github.com/o/r.git'):
+            with self.subTest(repo=repo):
+                self.assertEqual(self.both(repo), ('GitHub', 'https://github.com/o/r/commits/main/mockup/t1'))
+
     def test_the_host_is_compared_in_lower_case(self):
         self.assertEqual(self.both('git@GitHub.com:o/r.git')[0], 'GitHub')
 

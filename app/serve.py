@@ -618,14 +618,26 @@ def gitlab_web(gl):
 
 VCS_MODULE = 'git-sync'
 
+#: Userinfo адреси (`://TOKEN@`, `://user:pass@`) — те саме правило, що `_USERINFO`/`_mask` модуля `git-sync` (нутрощі модуля
+#: не імпортуємо): до ОСТАННЬОГО `@` перед першим `/`, тож `p@ss` у паролі теж.
+_USERINFO = re.compile(r'(://)[^/\s]*@')
+
+
+def _mask_repo(text):
+    """Текст без userinfo адреси: `https://TOKEN@host/o/r` → `https://***@host/o/r`. Усе, що ядро віддає назовні й що
+    несе адресу репо (`remote`, `web`, тексти помилок, рядок Stop-хука), — лише через цю функцію: токен у позиції
+    користувача `validate` модуля від імені не відрізнить, а пароль в адресі лише відхиляє. Не-рядок — як є."""
+    return _USERINFO.sub(r'\1***@', text) if isinstance(text, str) else text
+
 
 class VcsError(OSError):
     """Відмова ролі `vcs` для ядра. `OSError` свідомо: на ньому стоять маршрути синку, автосинк («офлайн» — тихо) і
     бутстрап задачі («не вийшло — стартовий макет»). `code` — `vcs-*` модуля або код каркаса (`space-json-unreadable`,
-    `module-error`…)."""
+    `module-error`…). Повідомлення очищене від userinfo адреси ТУТ, при створенні: текст помилки, що побудувало ядро чи
+    свій модуль, не донесе токена до відповіді маршруту, автосинку й рядка Stop-хука."""
 
     def __init__(self, code, message=''):
-        super().__init__(message or code)
+        super().__init__(_mask_repo(message) or code)
         self.code = code
 
 
@@ -708,16 +720,38 @@ def vcs_task(cfg, tid, task):
     return None if p is None else (*p, vcs_target(cfg, tid, task, p[1].get('settings') or {}))
 
 
+#: Форма результату функцій ролі, які кличе ядро. Свій модуль (довіра 3c) може повернути що завгодно: `None` чи рядок
+#: замість обʼєкта — це `module-error` тут, а не `AttributeError`/`TypeError` далі (маршрути ловлять лише `OSError`).
+_VCS_SHAPE = {'status': dict, 'push': dict, 'pull': dict, 'validate': dict, 'mirror_dir': str}
+
+
 def _vcs_call(vcs, fn, *args, timeout=None):
     """Виклик функції ролі: `vcs` — `(module, ctx, legacy[, target])` від маршруту чи `None` (знайти самому). Відмова модуля
-    — `VcsError` із його кодом. `timeout` — лише для коротких викликів (`validate`); операції git тримає сам модуль."""
+    — `VcsError` із його кодом; результат не тієї форми — `VcsError('module-error')`, як і в каркаса для кривого `check`.
+    `timeout` — межа для КОРОТКИХ викликів: так кличуть `validate`, щоб завислий модуль не тримав маршрут; операції git
+    (`status`/`push`/`pull`) тримає сам модуль, їм межі не ставимо."""
     v = vcs if vcs is not None else vcs_provider()
     if v is None:
         raise VcsError('vcs-error', 'no git sync in this space')
     try:
-        return deai_modules.call(v[0], fn, v[1], *args, timeout=timeout)
+        r = deai_modules.call(v[0], fn, v[1], *args, timeout=timeout)
     except deai_modules.ModuleError as e:
         raise VcsError(e.code, e.message) from None
+    want = _VCS_SHAPE.get(fn)
+    if want is not None and not isinstance(r, want):
+        raise VcsError('module-error', f'{fn} returned {type(r).__name__}, expected {want.__name__}')
+    return r
+
+
+def _last_commit(r):
+    """`last_commit` результату `pull` у безпечній формі `{author: str, time: число | None}`. Не обʼєкт чи кривий тип
+    поля — як «немає»: застарілість своєї роботи тоді не перевіряється (як для порожнього `time`), але й не падає."""
+    lc = r.get('last_commit')
+    if not isinstance(lc, dict):
+        return {}
+    author, at = lc.get('author'), lc.get('time')
+    return {'author': author if isinstance(author, str) else '',
+            'time': at if isinstance(at, (int, float)) and not isinstance(at, bool) else None}
 
 
 def vcs_mirror_dir(gl, vcs=None):
@@ -987,7 +1021,7 @@ def gitlab_sync(tid, task, gl, it, vcs=None):
         r = _vcs_call(v, 'push', gl, out_dir, _vcs_meta(subject + '\n\n' + body))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    return {**r, 'remote': f'{gl["repo"]}:{gl["path"]}'}
+    return {**r, 'remote': _mask_repo(f'{gl["repo"]}:{gl["path"]}')}
 
 
 def gitlab_status(task, gl, meta, it, vcs=None):
@@ -1033,7 +1067,8 @@ def gitlab_status(task, gl, meta, it, vcs=None):
            'on_remote': st.get('on_remote'),
            'dirty': bool(dirty), 'synced_at': g.get('synced_at'),
            'synced_it': g.get('synced_it'), 'gitlab_it': gitlab_it,
-           'remote_path': gl['path'], 'web': st.get('web'), 'label': st.get('label') or 'Git'}
+           'remote_path': gl['path'], 'web': _mask_repo(st['web']) if isinstance(st.get('web'), str) else None,
+           'label': _mask_repo(st['label']) if isinstance(st.get('label'), str) and st['label'] else 'Git'}
     if v[2]:
         # Простір ЛІГА (`'legacy'`): «Історія» й підпис — як у 0.7.0 (будь-який `git@host:`, і з IP, «GitLab»), до 4d.
         out['web'], out['label'] = gitlab_web(gl), 'GitLab'
@@ -1263,7 +1298,7 @@ def autosync(tid, task, gl, vcs=None):
         # `vcs-auth`/`vcs-busy`/`vcs-error`) — той самий «offline», з `code`: Stop-хук
         # ніколи не отримує 5xx.
         return {'ok': False, 'synced': False, 'changed': False, 'reason': 'offline',
-                'it': it, 'error': str(e)[:300], 'local_sha': local.get('sha'),
+                'it': it, 'error': _mask_repo(str(e))[:300], 'local_sha': local.get('sha'),
                 **({'code': e.code} if isinstance(e, VcsError) else {})}
     # ⛔ Гейт саме по `synced`, а не по `ok`: `ok` буває True і тоді, коли макет не
     # змінився, а попередній коміт так і не доїхав до origin. Саме через це
@@ -1331,12 +1366,12 @@ def gitlab_pull(task, gl, vcs=None):
         r = _vcs_call(v, 'pull', gl, src, {'ignore': ['shots']})
         if not r.get('found'):
             raise OSError(f'path {gl["path"]} not found in repo')
-        return _pull_into_task(task, gl, src, r.get('last_commit') or {}, src_name)
+        return _pull_into_task(task, src, _last_commit(r), src_name)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _pull_into_task(task, gl, src, last_commit, src_name):
+def _pull_into_task(task, src, last_commit, src_name):
     """Приймання `src` (копія `<path>` з репо) у задачу: нова ітерація, авторство, форк чужої чи застарілої своєї,
     стан публікації. `last_commit` — `{author, time}` від модуля (`time` — без кадрів, `None` — не перевіряти застарілість)."""
     # автор останнього коміту по нашому шляху — в підпис ітерації (запасний шлях, див. нижче)
@@ -6741,7 +6776,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             self._send_json(gitlab_status(task, gl, load_meta(task), it))
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'configured': True, 'error': str(e)[:200]})
+            self._send_json({'configured': True, 'error': _mask_repo(str(e))[:200]})
 
     def _gitlab_sync(self, payload):
         cfg = load_tasks()
@@ -6757,7 +6792,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             r = gitlab_sync(tid, task, gl, it)
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': str(e)[:300]})
+            self._send_json({'ok': False, 'error': _mask_repo(str(e))[:300]})
             return
         if r.get('synced'):  # відбиток — лише коли origin реально має наш макет
             _record_sync(task, it, r.get('sha'))
@@ -6776,7 +6811,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             r = autosync(tid, task, gl)
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': str(e)[:300]})
+            self._send_json({'ok': False, 'error': _mask_repo(str(e))[:300]})
             return
         if r.get('changed'):
             self._overview_sync()
@@ -6792,7 +6827,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             self._send_json(gitlab_pull(task, gl))
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': str(e)[:300]})
+            self._send_json({'ok': False, 'error': _mask_repo(str(e))[:300]})
 
     def _overview_sync(self):
         """Best-effort: оновити реєстр овервью (bin/overview_push.py sync) після
