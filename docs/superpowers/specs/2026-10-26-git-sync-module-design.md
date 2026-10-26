@@ -124,7 +124,8 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 | `pull(ctx, target, dst, opts)` | ціль; `dst` — порожня тека від ядра; `opts = {"ignore": ["shots"]}` — підтеки `<path>`, зміни в яких не рахуються роботою | `{found: bool, last_commit: {author, time} \| null}`; при `found` вміст `<path>` скопійовано в `dst` |
 
 - `behind` — комітів у `branch..origin/branch` по всьому репо; `behind_path` — те саме з `-- <path>`; `unpushed` —
-  `origin/branch..branch`; `on_remote` — чи є `<path>` в `origin/branch` (`None`, якщо гілки на віддаленому нема);
+  `origin/branch..branch`, а поки гілки на віддаленому нема — усі коміти локальної гілки (інакше після відмови першого
+  push у порожній репо статус брехав би нулем); `on_remote` — чи є `<path>` в `origin/branch` (`None`, якщо гілки на віддаленому нема);
   `behind_top` — `{author, date, subject}` найсвіжішого коміту, якого бракує. Поведінка ≡ нинішнім `gitlab_status` /
   `gitlab_sync` / `gitlab_pull` (`serve.py` 0.7.0), включно з `merge --ff-only`, коли попереду лише чужі шляхи,
   і `catchup` (порожній diff, але є невідправлені коміти).
@@ -176,6 +177,8 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - Хост у шляху потрібен, щоб дзеркала GitHub і GitLab з однаковим шляхом не змішувались.
 - **Клон.** Повний, спільний для задач з тим самим репо. Клонується в тимчасову теку поруч і переноситься `rename`, тож перерваний клон не лишає напівдзеркала з `.git`.
 - **Адреса `origin`.** Звіряється з адресою цілі, як у 0.7.0 (`_align_mirror_remote`).
+- **Кеш інструмента.** Перед кожним `push`/`pull` (і перед перемиканням гілки) робоче дерево дзеркала скидається: `reset --hard HEAD` + `clean -fd`, на ненародженому HEAD — `read-tree --empty`. Збій посеред `push` (копіювання, `add`, `commit`) теж скидає дерево. Незапушені коміти лишаються. Інакше брудне дерево після збою віддалось би в `pull` як робота колеги (ревʼю Task 2).
+- **Гілки нема на origin.** Нова гілка з нуля — лише коли віддалений репо порожній (`ls-remote --heads` нічого не дає). У непорожньому репо — `vcs-error` «branch … not found on the remote»; тег замість гілки при клоні — `vcs-error` «… is not a branch on the remote». Інакше друкарська помилка в `branch` створила б у спільному репо сирітську гілку з усім індексом іншої.
 - **Сумісність.** У просторах тека `.mirrors` з 0.7.0 не читається (перший статус клонує заново). Виняток — `ctx['mirror_flat']`, див. «Простір ЛІГА».
 
 **Транспорт:** системний `git`.
@@ -184,6 +187,10 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - `GIT_TERMINAL_PROMPT=0` — без запиту пароля в терміналі; credential helper працює.
   - `GIT_ALLOW_PROTOCOL=ssh:https:file` — жодного `ext::`/`fd::`; `ssh` покриває й scp-форму.
   - `GIT_LITERAL_PATHSPECS=1`.
+  - `LC_ALL=C`, без `LANGUAGE`: класифікація помилок читає англійський текст git, а локалізований git (Git for Windows, Homebrew з перекладом) інакше ламав би «порожній репо», `vcs-auth` і `vcs-busy`. На кодування імен файлів, автора й повідомлення коміту це не впливає.
+  - Зі сторони батька знімаються `GIT_AUTHOR_*`/`GIT_COMMITTER_*` (інакше перекривають підпис автора) і змінні, що відводять git від дзеркала: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`, `GIT_CEILING_DIRECTORIES`, `GIT_*_PATHSPECS` (крім свого literal).
+  - Глобальний конфіг людини НЕ ізолюється: там credential helper, `url.insteadOf`, ssh.
+  - Вивід git декодується як UTF-8 з заміною, незалежно від локалі процесу.
 - **Розділювач `--`.** Перед кожним шляхом (`add`, `status`, `log`, `diff`) і перед адресою в `clone`/`ls-remote`.
 - **Команда ssh.** Модуль складає `GIT_SSH_COMMAND` лише тоді, коли щось додає: `ssh_key` або повтор через `host_ip`.
   - Основа — `GIT_SSH_COMMAND` оточення, інакше `ssh`. До неї додаються `-o BatchMode=yes` і, з `ssh_key`, `-i <shlex.quote(шлях)> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`.
@@ -192,7 +199,8 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 - **Повтор через `host_ip`.** Як зараз: один раз, коли stderr каже `could not resolve hostname`, лише для форми `git@host:` (`url.insteadOf` + `HostKeyAlias`). IPv6 у `insteadOf` — у дужках.
 - **Помилки:**
   - тайм-аут git → `vcs-offline` (зараз — неопрацьований `TimeoutExpired`);
-  - відмова ssh/HTTPS у доступі (`Permission denied`, `Authentication failed`, `could not read Username`, `Host key verification failed`) → `vcs-auth`;
+  - відмова ssh/HTTPS у доступі (`Permission denied (`, `Authentication failed`, `could not read Username`, `Host key verification failed`, `returned error: 403`, `Permission to … denied`) → `vcs-auth`;
+  - будь-який інший виняток процесу чи файлової системи (`OSError`, `ValueError`) → `vcs-error`, не сирий виняток;
   - відмова git через `index.lock` → `vcs-busy`.
 - **Тексти помилок і `remote`.** Ніколи не несуть пароля з адреси (`://user:pass@` → `://user:***@`).
 
@@ -211,7 +219,7 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
   - сегменти не `''`, `.`, `..`;
   - не починається з `-` чи `:` (магія pathspec);
   - без `*?[\`, NUL і керівних символів;
-  - жоден сегмент не `.git` (без урахування регістру).
+  - жоден сегмент не `.git` і не коротке імʼя NTFS `git~N` (без урахування регістру й кінцевих пробілів/крапок, які Windows відкидає).
 - **`host_ip`** — `ipaddress.ip_address`.
 - **`ssh_key`** — після `expanduser` існуючий файл.
 
@@ -333,15 +341,21 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 - `GIT_ALLOW_PROTOCOL` закриває транспорти, що виконують команди (`ext::`, `fd::`).
 - Пароль в адресі HTTPS не приймається, а в текстах помилок маскується.
 - Хост і користувач scp-адреси — лише `[A-Za-z0-9._-]`, а `HostKeyAlias` — у `shlex.quote`: при повторі через `host_ip` команда ssh іде через shell.
-- Симлінки з чужого репо:
-  - `<path>`, що після розгортання симлінків виходить за дзеркало, → `vcs-error` і в `push`, і в `pull`;
-  - симлінки всередині `<path>` у `pull` не копіюються.
+- Симлінки:
+  - будь-який симлінк на шляху до `<path>` у дзеркалі → `vcs-error` і в `push`, і в `pull`. Не лише вихід за дзеркало: `mockup -> .git` лишається всередині, а `rmtree` знищив би `.git/refs` (ревʼю Task 2);
+  - симлінки всередині `<path>` не копіюються в жоден бік: у `pull` — щоб не везти чуже, у `push` — щоб у спільний репо не потрапили локальні шляхи (імʼя користувача) чи вміст поза текою.
+- Керівні символи в `meta` (`author.name`, `author.email` — будь-які; `message` — крім `\n`, `\t`, `\r`) → `vcs-error` до виклику git.
 - Без `force`; `pull` лише `--ff-only`; чужу ітерацію не відправляємо; при `behind_path` — стоп.
 - Модуль працює з правами людини й системним git — як і раніше. Свій модуль ролі `vcs` — лише за довірою 3c.
 - Межі:
   - HTTPS без збережених даних у системі → `vcs-auth` з порадою налаштувати git;
   - `host_ip` — лише форма `git@host:`;
   - Windows — без перевірки на справжній машині (як інші модулі).
+- Відомі обмеження (беклог після 0.8.0, ревʼю Task 2):
+  - `.gitignore` репо може мовчки не пустити файли макета (напр. `*.html`) — як у 0.7.0; потрібна чесна помилка або `add -f`;
+  - тимчасові `.clone-*` після SIGKILL лишаються — підмітати за віком;
+  - git `*.lock` у дзеркалі після вбитого за тайм-аутом процесу дає `vcs-busy` до ручного прибирання;
+  - глобальні `commit.gpgsign` і `core.hooksPath` людини діють і на коміти дзеркала (збій — `vcs-error`, не тиша).
 
 ## Тести
 
