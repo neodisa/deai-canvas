@@ -329,6 +329,9 @@ class ModuleErrorTest(unittest.TestCase):
         self.assertEqual(dm.ROLES_RESERVED, ('tracker', 'dashboard', 'notify'))
         self.assertEqual(dm.ROLE_FUNCTIONS['vcs'], ('status', 'push', 'pull'))
         self.assertEqual(dm.LEGACY_ROLES, ('publish', 'comments', 'vcs'))               # у ЛІГА `vcs` — зашитий шлях, як `publish`
+        # що з ролей ЛІГА лишається `'legacy'` у `capabilities()`, коли роль не вирішилась: без `comments` (спільний Supabase ЛІГА)
+        self.assertEqual(dm.LEGACY_ON_ERROR_ROLES, ('publish', 'vcs'))
+        self.assertTrue(set(dm.LEGACY_ON_ERROR_ROLES) <= set(dm.LEGACY_ROLES))
         self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS, {'vcs': ('validate', 'mirror_dir')})
 
 
@@ -961,11 +964,25 @@ class RealGitSyncTest(Env):
         dm.reset_caches()
         self.sp = self.new_space()
 
-    def bare(self):
+    GIT_ENV = {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 'T', 'GIT_AUTHOR_EMAIL': 't@t',
+               'GIT_COMMITTER_NAME': 'T', 'GIT_COMMITTER_EMAIL': 't@t'}
+
+    def git(self, args, cwd):
+        subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True,
+                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, **self.GIT_ENV))
+
+    def bare(self, seed=False):
+        """Локальний bare-репо (абсолютний шлях, без мережі); `seed` — з одним комітом у `main` (через «колегу»)."""
         origin = os.path.join(self.tmp, 'origin.git')
         os.makedirs(origin)
-        subprocess.run(['git', 'init', '--bare', '-q', '-b', 'main', '.'], cwd=origin, check=True,
-                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1'))
+        self.git(['init', '--bare', '-q', '-b', 'main', '.'], origin)
+        if seed:
+            peer = os.path.join(self.tmp, 'peer')
+            self.git(['clone', '-q', origin, peer], self.tmp)
+            _write(os.path.join(peer, 'README.md'), 'seed\n')
+            self.git(['add', '-A'], peer)
+            self.git(['commit', '-qm', 'seed'], peer)
+            self.git(['push', '-q', 'origin', 'HEAD:main'], peer)
         return origin
 
     def test_the_catalog_loads_it_as_a_vcs_module_with_the_optional_functions(self):
@@ -980,9 +997,34 @@ class RealGitSyncTest(Env):
         self.assertIs(res['ok'], True)
         self.assertEqual(dm.last_check(self.sp['id'], 'git-sync'), res)
 
-    def test_check_with_a_local_bare_repo_is_ok_through_the_frame(self):
+    def test_check_reads_the_settings_of_the_space_through_the_frame(self):
+        """Без `repo` модуль теж каже `ok`, тож лише ДЕТАЛЬ доводить, що `ctx['settings']` дійшов до модуля: порожній
+        віддалений репо → «гілки ще нема», з гілкою → «знайдено»."""
         dm.write_module_state(self.sp, 'git-sync', enabled=True, settings={'repo': self.bare()})
-        self.assertIs(dm.check(self.sp, 'git-sync')['ok'], True)
+        res = dm.check(self.sp, 'git-sync')
+        self.assertIs(res['ok'], True)
+        self.assertIn('not on the remote yet', res['detail'])
+        self.assertEqual(dm.last_check(self.sp['id'], 'git-sync'), res)
+        shutil.rmtree(os.path.join(self.tmp, 'origin.git'))
+        shutil.rmtree(os.path.join(self.tmp, 'peer'), ignore_errors=True)
+        dm.write_module_state(self.sp, 'git-sync', enabled=True, settings={'repo': self.bare(seed=True), 'branch': 'main'})
+        res = dm.check(self.sp, 'git-sync')
+        self.assertIs(res['ok'], True)
+        self.assertIn('branch main found', res['detail'])
+        dm.write_module_state(self.sp, 'git-sync', enabled=True, settings={'branch': 'feature/x'})   # `repo` лишився з попереднього запису
+        self.assertIn('branch feature/x is not on the remote yet', dm.check(self.sp, 'git-sync')['detail'])
+
+    def test_check_refuses_a_missing_local_repo_and_a_bad_address_through_the_frame(self):
+        """Відмови модуля — не винятки каркаса, а `ok: false` з кодом `vcs-*` (ядро кладе їх у `check`-результат як є)."""
+        gone = os.path.join(self.tmp, 'nope.git')
+        dm.write_module_state(self.sp, 'git-sync', enabled=True, settings={'repo': gone})
+        res = dm.check(self.sp, 'git-sync')
+        self.assertEqual((res['ok'], res['error']), (False, 'vcs-error'))
+        self.assertIn('ls-remote failed', res['detail'])
+        self.assertEqual(dm.last_check(self.sp['id'], 'git-sync'), res)
+        dm.write_module_state(self.sp, 'git-sync', enabled=True, settings={'repo': 'ftp://example.invalid/x'})
+        res = dm.check(self.sp, 'git-sync')
+        self.assertEqual((res['ok'], res['error']), (False, 'vcs-bad-target'))
 
     def test_a_vcs_code_of_the_module_passes_through_call_with_its_status(self):
         """`validate` кидає `ctx['ModuleError']('vcs-bad-target')`: код у `STATUS` — `call()` не сплющує його в `module-error`."""
@@ -991,6 +1033,27 @@ class RealGitSyncTest(Env):
         with self.assertRaises(dm.ModuleError) as cm:
             dm.call(m, 'validate', ctx, {'repo': '', 'task': 't1'})
         self.assertEqual((cm.exception.code, cm.exception.status), ('vcs-bad-target', 400))
+
+    def test_the_cache_dir_never_leaves_the_cache_whatever_the_ids(self):
+        """Id простору лишається в `cache_dir` лише коли він — `spaces.SPACE_ID_RE`; решта (чужа форма запису, `..`, абсолютний шлях,
+        слеш, регістр, довжина) → `_`: шлях не виходить з `<DEAI_HOME>/cache`. Id модуля з каталогу вже перевірено маніфестом."""
+        cache = os.path.join(spaces.home(), 'cache')
+        for bad in ('../../x', '/abs', '..', '.', 'a/b', 'a\\b', '', 'A', '-x', 'x' * 41, 'a\x00b', None, 5, 5.5, ['a']):
+            with self.subTest(bad=bad):
+                got = dm.module_ctx({'id': bad, 'path': ''}, 'git-sync')['cache_dir']
+                self.assertEqual(got, os.path.join(cache, '_', 'git-sync'))
+        self.assertEqual(dm.module_ctx({'id': 'ok-1', 'path': ''}, 'git-sync')['cache_dir'],
+                         os.path.join(cache, 'ok-1', 'git-sync'))
+        self.assertEqual(dm.module_ctx(dict(spaces.IMPLICIT), 'git-sync')['cache_dir'],
+                         os.path.join(cache, 'legacy', 'git-sync'))
+
+    def test_an_invalid_module_id_is_refused_instead_of_becoming_a_path(self):
+        """Модуль із каталогу має `id` за `ID_RE`; обʼєкт з іншим — помилка ядра, а не спільне відро `_` для різних модулів."""
+        for bad in ('../evil', '/abs', '..', 'a/b', '', 'A', 'x' * 41):
+            with self.subTest(bad=bad):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.module_ctx(self.sp, dm.Module(bad, roles=['vcs']))
+                self.assertEqual(cm.exception.code, 'module-error')
 
     def test_the_mirror_folder_lies_under_the_cache_dir_of_the_context_and_is_not_created(self):
         m = dm.catalog()['git-sync']

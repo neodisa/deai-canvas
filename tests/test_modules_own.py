@@ -22,7 +22,7 @@ import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 import module_trust as mt  # noqa: E402
-from test_modules import Env, _write, _read, _bytes, ALL_FNS, race  # noqa: E402
+from test_modules import Env, _write, _read, _bytes, ALL_FNS, race, VCS_SERVER, VCS_OPTIONAL  # noqa: E402
 
 _REAL = None
 
@@ -798,6 +798,37 @@ class CatalogExtraTest(OwnEnv):
 
 
 # ================================================================================ Task 4: ролі «на папері» і довіра в ядрі
+
+class OwnVcsRoleTest(OwnEnv):
+    """Свій ДОВІРЕНИЙ модуль ролі `vcs` (4a) вантажиться зі знімка тим самим `_build` і віддається `_clone`-ом: необовʼязкові
+    `validate`/`mirror_dir` досяжні через `fn()`/`call()`, а без них модуль валідний і `fn()` дає `None`."""
+    SETTINGS = [{'key': 'repo', 'type': 'text', 'label': 'Repo'}]
+
+    def test_a_trusted_own_vcs_module_gets_its_optional_functions(self):
+        self.own('gitx', roles=('vcs',), server=VCS_SERVER + VCS_OPTIONAL, settings=self.SETTINGS)
+        h = self.trust('gitx')
+        m = dm.catalog(self.sp)['gitx']
+        self.assertEqual((m.origin, m.trust, m.status, m.roles), ('space', 'trusted', 'ok', ['vcs']))
+        self.assertEqual(m.dir, mt.snapshot_dir(h))
+        for name in ('check', 'status', 'push', 'pull', 'validate', 'mirror_dir'):
+            self.assertTrue(callable(m.fn(name)), name)
+        ctx = dm.module_ctx(self.sp, m)
+        self.assertEqual(dm.call(m, 'validate', ctx, {'repo': 'r'}), {'repo': 'r', 'checked': True})
+        self.assertEqual(dm.call(m, 'mirror_dir', ctx, {'repo': 'r'}), '/m/r')
+        dm.write_module_state(self.sp, 'gitx', enabled=True)
+        self.assertEqual(dm.capabilities(self.sp)['vcs'], 'gitx')
+        self.assertIs(dm.provider('vcs', self.sp).fn('validate'), dm.catalog(self.sp)['gitx'].fn('validate'))
+
+    def test_a_trusted_own_vcs_module_without_the_optional_functions_is_valid(self):
+        self.own('gitz', roles=('vcs',), server=VCS_SERVER, settings=self.SETTINGS)
+        self.trust('gitz')
+        m = dm.catalog(self.sp)['gitz']
+        self.assertEqual((m.trust, m.status, m.error), ('trusted', 'ok', None))
+        for name in ('check', 'status', 'push', 'pull'):
+            self.assertTrue(callable(m.fn(name)), name)
+        self.assertIsNone(m.fn('validate'))
+        self.assertIsNone(m.fn('mirror_dir'))
+
 
 class RolesTest(OwnEnv):
     def test_space_json_roles_survive_normalize(self):
