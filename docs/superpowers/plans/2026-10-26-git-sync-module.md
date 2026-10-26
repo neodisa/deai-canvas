@@ -1477,6 +1477,15 @@ def _commit_identity():
    а не `if (gitlab or vcs) and adopt_src is None:`.
 2. **Ціль клону:** `{'vcs': vcs} if vcs else {'gitlab': gitlab}` (явний `vcs.repo` перемагає профільний `gitlab`, як у `vcs_target`).
 
+**Поправки за підсумками Task 1–2 (26.10.2026, обовʼязкові):**
+
+3. **`repo` обрізати до `validate`:** `validate` відкидає `repo != repo.strip()`, тож ядро (`vcs_target`, тіло `task-new`) кладе в ціль `str(repo).strip()`.
+4. **`meta` чистити в ядрі.** Модуль відхиляє керівні символи (`author.name`/`email` — будь-які; `message` — крім `\n\t\r`) кодом `vcs-error` до git. Заголовок задачі з NUL/ESC інакше блокує відправку: ядро, складаючи `meta`, вирізає керівні символи (крім `\n\t\r` у повідомленні). Тест: задача з `\x1b` у заголовку відправляється.
+5. **Нові відмови модуля — помилка цілі, не офлайн:** `vcs-error` «branch … not found on the remote» (push/pull, коли гілки нема на НЕпорожньому origin) і «clone failed: … is not a branch on the remote» (тег). `pull` нової задачі з такою гілкою тепер `vcs-error`, а не `found: false` — перевірити шляхи ядра, що покладались на старе `path … not found in repo` / `found: false`.
+6. **`status` не чекає лока** (`vcs-busy` одразу), `push`/`pull` чекають `LOCK_WAIT`. Автосинк і Stop-хук лишають `vcs-busy` тихим.
+7. **Симлінки зі `src`** модуль мовчки не везе — ядро про це не попереджає (рішення Task 2).
+8. **Тестові помічники** `fake_run(sub, answer, before)` і базовий клас `Repo` з `tests/test_git_sync_module.py` можна імпортувати. `Base.setUp` ставить `GIT_CONFIG_GLOBAL=os.devnull` — тестам ядра на справжньому git те саме, щоб не читати `~/.gitconfig`.
+
 ---
 
 ### Task 5: маршрути `/api/vcs-*`, псевдоніми, автосинк, `task-new` з `vcs`, `bin/state.py`
