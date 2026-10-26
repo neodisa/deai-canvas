@@ -5,6 +5,15 @@
 (`2026-10-22-own-modules-trust-design.md`, 0.7.0). Дизайн-документ напряму — `docs/design/spaces-and-modules.md`
 (етап 4: «компанійні інтеграції виходять з ядра в модулі простору»).
 
+**Ревізія 2 (26.10.2026):** ревʼю проти коду дало 5 блокерів, 14 суттєвих і 7 дрібних зауважень. Головне:
+
+1. **Перевірки цілі.** Тепер пускають абсолютний локальний шлях (на ньому стоять усі наявні тести синку). Закрито `path="."`, магію pathspec і початковий `-`. Усі виклики git ідуть із `--` і `GIT_LITERAL_PATHSPECS=1`. Імʼя теки дзеркала — slug без виходу за `cache_dir`.
+2. **Простір ЛІГА.** Лишається на старих теках дзеркал, старому посиланні «Історія», підписі «GitLab» і темі коміту. Модуль і `ctx` для `'legacy'` береться з каталогу вбудованих без `space.json`.
+3. **Гейт клієнта.** Іде через `hasVcs(space)` із запасним `integrations`, за зразком `hasTeamComments`, щоб не зламати `legacy-golden`.
+4. **Контракт `pull`.** Відтворює дві різні дати нинішнього коду: авторство береться з усіх комітів, а «свіжість» — без кадрів.
+5. **Каркас.** `git-sync` додано в `KNOWN_OTHER_MODULES`. Причина `no-gitlab` в автосинку лишається. Лок між процесами — `flock`. `check` вкладається в 5 с.
+6. **Ядро.** Старі імена функцій ядра (`gitlab_cfg`/`gitlab_status`/`gitlab_sync`/`gitlab_pull`) лишаються обгортками над роллю до 4d.
+
 ## Рішення власника (26.10.2026)
 
 - **Мета етапу 4 — чисте ядро + паритет.** Усе, що вміє простір ЛІГА, стає модулями; у ядрі не лишається коду компанії,
@@ -37,28 +46,39 @@
 - Документ для автора модуля описує контракт ролі `vcs` (свій модуль теж може її вести — за довірою 3c).
 
 Поза 0.8.0: токени HTTPS у Deai; вибір репозиторію зі списку чи створення репо; кілька віддалених репо в одній задачі;
-інші транспорти (не git); прибирання старої теки `.mirrors`; профілі (4b); реєстр і дашборд після відправки (4c);
-прапорець `integrations` (4d).
+інші транспорти (не git); перенесення старих дзеркал ЛІГИ в `<DEAI_HOME>/cache` (4d, разом із прапорцем); профілі (4b);
+реєстр і дашборд після відправки (4c); прапорець `integrations` (4d); `git push` локальної історії теки задачі
+(`git_autocommit`, гейт `_outbound_ok` за `integrations`) — без змін.
 
 ## Межа: ядро ↔ модуль
 
 **Модуль (`git-sync`) — транспорт.** Дзеркало (локальний клон віддаленого репо), `fetch`, перевірка «відстає/попереду»,
 заміна теки `<path>` у дзеркалі на підготовлений вміст, коміт, `push` без force, `pull --ff-only`, копіювання `<path>`
 назовні, адреса історії комітів у вебі. Модуль нічого не знає про ітерації, авторство й `iterations.json`.
+Переїжджають у модуль: `_git_once`, `_git`, `_mirror_dir`, `ensure_mirror`, `_align_mirror_remote` і git-частина
+`gitlab_status`/`gitlab_sync`/`gitlab_pull`.
 
 **Ядро — що відправити і як прийняти.** «Чистий макет» (`copy_mockup` і правила пропуску), `README.md` для
 багатосторінкових, `.canvas-state.json`, відбиток (`mockup_hash`), «чужа ітерація» (`iteration_is_mine`), вибір ітерації
 для автосинку, створення нової ітерації з отриманого, відгалуження від чужої чи застарілої своєї, перенесення стану
 публікації, запис стану синку (`_record_sync`), локальна історія теки задачі (`git_autocommit` — лишається в ядрі, до
-ролі не належить), повідомлення коміту й особа (`machine_identity`).
+ролі не належить), повідомлення коміту й особа (`machine_identity`, `_commit_identity` з її запасною константою).
+
+Старі імена ядра — `gitlab_cfg(cfg, task)`, `gitlab_status(task, gl, meta, it)`, `gitlab_sync(tid, task, gl, it)`,
+`gitlab_pull(task, gl)`, `autosync(tid, task, gl)` — лишаються з тими самими сигнатурами й формами результату до 4d. `gl`
+тепер — ціль (див. нижче), постачальника ролі функції знаходять самі. На них спираються `bin/state.py` і поведінкові тести.
 
 Так інший постачальник `vcs` (свій модуль, не git) отримує ту саму поведінку ітерацій, а `git-sync` лишається простим.
 
 ## Роль `vcs`
 
-`ROLES_CALLED` += `vcs`; `ROLE_FUNCTIONS['vcs'] = ('status', 'push', 'pull')`. `LEGACY_ROLES` += `vcs` (простір з
+`vcs` переїжджає з `ROLES_RESERVED` у `ROLES_CALLED` (докстрінг `deai_modules.py`, `tests/test_modules.py` — про
+зарезервовані ролі); `ROLE_FUNCTIONS['vcs'] = ('status', 'push', 'pull')`. `LEGACY_ROLES` += `vcs` (простір з
 `integrations` без явного модуля ролі → `'legacy'`, див. «Простір ЛІГА»). `capabilities()` отримує ключ `vcs`.
 Неявного модуля в ролі нема: у звичайному просторі `vcs` — `None`, доки людина не підключила модуль.
+`git-sync` додається в `KNOWN_OTHER_MODULES` (інакше зламаний явно ввімкнений `git-sync` у ЛІГА дав би
+`COMMENTS_MODULE_BROKEN`), а також у `BUILTIN_IDS` тестів `test_comments_role.py`/`test_modules_api.py` (інваріант «кожен
+вбудований — у котромусь зі списків»).
 
 **Ціль (`target`)** — що синкати для задачі; її обчислює ядро й передає модулю:
 
@@ -68,35 +88,55 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 
 Порядок: поле задачі `vcs{repo, path, branch}` → старе поле задачі `gitlab{repo, path, branch, ssh_key, host_ip}`
 (лише в просторі з `integrations`) → налаштування модуля (`repo`, `path`, `branch`). `{task}` у `path` → id задачі.
-Немає `repo` ні в задачі, ні в модулі → роль є, але задача **не налаштована** (`configured: false`). `ssh_key`/`host_ip`
-у `target` — лише зі старого поля задачі ЛІГИ; значення в `target` перемагає налаштування модуля.
+
+- Порожній рядок у будь-якому полі (задачі чи налаштувань) — «не задано».
+- Немає `repo` ні в задачі, ні в модулі → роль є, але задача **не налаштована** (`configured: false`).
+- Старе поле `gitlab{}` без `repo` чи без `path` — не налаштована задача, як у 0.7.0 (`gitlab_cfg`). Типовий
+  `mockup/{task}` діє лише для `vcs{}` і налаштувань модуля.
+- `path` — після `strip('/')`, як у 0.7.0.
+- `ssh_key`/`host_ip` у `target` беруться лише зі старого поля задачі ЛІГИ. Значення в `target` перемагає налаштування
+  модуля.
+- `ssh_key` — після `expanduser`. Його розгортають і ядро, і модуль, до перевірки.
+- Спільні `gitlab_ssh_key`/`gitlab_host_ip` з кореня `tasks.json` діють лише в `ctx` неявного `'legacy'`. Явний
+  `git-sync` бере ключ і IP зі своїх налаштувань.
 
 **Функції `server.py`** (усі — `f(ctx, …)`, помилки — `ctx['ModuleError'](code, message=…)`):
 
 | Функція | Вхід | Вихід |
 |---|---|---|
-| `check(ctx)` | — | як у всіх модулів; `git-sync`: є типовий `repo` → `git ls-remote --heads <repo> <branch>`, інакше `ok` з поясненням «репозиторій задається в задачі» |
+| `check(ctx)` | — | як у всіх модулів; `git-sync`: є типовий `repo` → спершу перевірки цілі, далі `git ls-remote --heads -- <repo> <branch>` з межею ≈4 с (ssh `ConnectTimeout=3`, тайм-аут процесу 4 с); тайм-аут → `{ok: false, error: "vcs-offline"}` (не `check-timeout` каркаса, `CHECK_TIMEOUT` = 5 с). Нема типового `repo` → `ok` з поясненням «репозиторій задається в задачі» |
 | `status(ctx, target)` | ціль | `{behind, behind_path, unpushed, on_remote, web, label}` |
-| `push(ctx, target, src, meta)` | ціль; `src` — тека, яку ядро підготувало (вміст стане `<path>`, з dot-файлами); `meta = {message, author: {name, email}}` | `{changed, pushed, sha, catchup, error}` або `{blocked: "behind", behind, behind_path, behind_top}` / `{blocked: "diverged", behind, ahead, behind_top, error}` |
-| `pull(ctx, target, dst)` | ціль; `dst` — порожня тека від ядра | `{found: bool, last_commit: {author, time} \| null}`; при `found` вміст `<path>` скопійовано в `dst` |
+| `push(ctx, target, src, meta)` | ціль; `src` — тека, яку ядро підготувало (вміст стане `<path>`, з dot-файлами); `meta = {message, author: {name, email}}` | `{changed, pushed, sha, catchup, error?, code?}` або `{blocked: "behind", behind, behind_path, behind_top}` / `{blocked: "diverged", behind, ahead, behind_top, error}` |
+| `pull(ctx, target, dst, opts)` | ціль; `dst` — порожня тека від ядра; `opts = {"ignore": ["shots"]}` — підтеки `<path>`, зміни в яких не рахуються роботою | `{found: bool, last_commit: {author, time} \| null}`; при `found` вміст `<path>` скопійовано в `dst` |
 
 - `behind` — комітів у `branch..origin/branch` по всьому репо; `behind_path` — те саме з `-- <path>`; `unpushed` —
   `origin/branch..branch`; `on_remote` — чи є `<path>` в `origin/branch` (`None`, якщо гілки на віддаленому нема);
   `behind_top` — `{author, date, subject}` найсвіжішого коміту, якого бракує. Поведінка ≡ нинішнім `gitlab_status` /
   `gitlab_sync` / `gitlab_pull` (`serve.py` 0.7.0), включно з `merge --ff-only`, коли попереду лише чужі шляхи,
   і `catchup` (порожній diff, але є невідправлені коміти).
+- `last_commit` у `pull` — дві різні множини комітів, як у 0.7.0 (`serve.py:1237-1245`, `:1402`). `null` — жоден коміт
+  не чіпав `<path>`. `author` — `%an` останнього коміту в `<path>`. `time` — `%ct` останнього коміту в `<path>` без
+  підтек з `opts.ignore` (`:(exclude)<path>/<ignore>`); `null`, якщо такого нема, і тоді ядро не перевіряє застарілість.
+  Слово `shots` — поняття ядра. Модуль отримує його лише через `opts`.
 - `web` — адреса історії `<path>`: GitLab (`https://<host>/<proj>/-/commits/<branch>/<path>`), GitHub
   (`https://github.com/<owner>/<repo>/commits/<branch>/<path>`), інше → `null`. `label` — підпис кнопки: «GitHub» для
-  `github.com`, «GitLab», якщо хост містить `gitlab`, інакше «Git».
+  `github.com`, «GitLab», якщо хост містить `gitlab`, інакше «Git». (Простір ЛІГА — див. нижче: ядро перекриває обидва.)
+- `meta.author` дає ядро: `_commit_identity()` з її запасною константою, бо git без `user.email` не комітить.
+  Модуль особу не вигадує.
 - Тайм-аутів ядро не ставить (операції йдуть хвилинами); їх тримає модуль (як зараз: 120 с, клон — 180 с).
-- Нові коди помилок (у `STATUS` ядра, інакше `call()` перетворить їх на `module-error`): `vcs-offline` (502; немає
-  мережі, DNS, тайм-аут git), `vcs-auth` (502; відмова в доступі — ключ, дані HTTPS), `vcs-bad-target` (400; адреса,
-  гілка чи шлях не пройшли перевірку), `vcs-busy` (409; це дзеркало зараз зайняте іншою операцією), `vcs-error`
-  (502; решта відмов git із текстом stderr ≤300 знаків).
+- Нові коди помилок. Вони мусять бути в `STATUS` ядра, інакше `call()` перетворить їх на `module-error`:
 
-`ctx` усіх модулів отримує **`cache_dir`** — тека модуля для кешу, `<DEAI_HOME>/cache/<id простору>/<id модуля>/`
-(створює ядро, `0700`). Шар просторів вимкнено (лише `DC_TASKS_FILE`) → `cache_dir` = `DC_MIRRORS_DIR`, а без нього —
-`<ROOT>/.mirrors`, як у 0.7.0 (інструменти й тести без просторів).
+  | Код | HTTP | Коли |
+  |---|---|---|
+  | `vcs-offline` | 502 | немає мережі, DNS, тайм-аут git |
+  | `vcs-auth` | 502 | відмова в доступі: ключ, дані HTTPS, `Host key verification failed` |
+  | `vcs-bad-target` | 400 | адреса, гілка чи шлях не пройшли перевірку |
+  | `vcs-busy` | 409 | це дзеркало зараз зайняте іншою операцією |
+  | `vcs-error` | 502 | решта відмов git, з текстом stderr ≤300 знаків, без даних доступу |
+
+`ctx` усіх модулів отримує **`cache_dir`** — **шлях** до теки модуля для кешу, `<DEAI_HOME>/cache/<id простору>/<id
+модуля>/`. Ядро теку не створює: `_ctx` будується для кожного `check`, і `makedirs` там падав би на незаписуваному
+`DEAI_HOME`. Створює модуль, коли вона йому треба (`makedirs`, `0700`). Для `'legacy'` — див. «Простір ЛІГА».
 
 ## Модуль `git-sync`
 
@@ -111,103 +151,237 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 | `host_ip` | text | — | необовʼязковий; IP сервера, коли DNS у VPN не відповідає |
 | `autosync` | bool | `false` | «Відправляти після кожної відповіді агента» (`POST /api/autosync`) |
 
-**Дзеркало:** `<cache_dir>/mirrors/<host>/<шлях репо>` — хост у шляху (дзеркала GitHub і GitLab з однаковим шляхом не
-змішуються); повний клон, спільний для задач з тим самим репо. У просторах стара тека `.mirrors` (0.7.0) не читається
-(перший статус клонує заново).
+Порожній рядок у `repo`/`host_ip`/`ssh_key` (каркас його пропускає для `text`) модуль вважає «не задано».
 
-**Транспорт:** системний `git`; оточення — `GIT_TERMINAL_PROMPT=0` (без запиту пароля в терміналі; credential helper
-працює), `GIT_ALLOW_PROTOCOL=ssh:https:file` (жодного `ext::`/`fd::`), ssh — `-o BatchMode=yes`; з `ssh_key` —
-`-i <шлях у shlex.quote> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`. Повтор через `host_ip` — як зараз:
-один раз, коли stderr каже `could not resolve hostname`, лише для форми `git@host:` (`url.insteadOf` + `HostKeyAlias`).
-Тайм-аут git → `vcs-offline` (зараз — неопрацьований `TimeoutExpired`). Відмова ssh/HTTPS у доступі → `vcs-auth`.
+**Дзеркало:**
 
-**Перевірки цілі** (до будь-якого виклику git, інакше `vcs-bad-target`): `repo` — `ssh://`, `https://`, `file://` або
-scp-форма `user@host:path`; без пробілів, керівних символів і початкового `-`. `branch` — `git check-ref-format --branch`.
-`path` — відносний, без `..`, без порожніх сегментів, без `.git`. `host_ip` — літерал IPv4/IPv6. `ssh_key` — існуючий файл.
+- **Тека.** `<cache_dir>/mirrors/<host>/<name>`.
+  - `host` — хост адреси (з портом, якщо є); для локального шляху й `file://` — `local`.
+  - `name` — шлях репо.
+  - Обидва перетворюються правилом 0.7.0: `[^\w.-]+` → `-`, обрізати `-`. Slug `''`, `.` чи `..` → `vcs-bad-target`. Тож тека ніколи не виходить за `cache_dir`.
+  - Хост у шляху потрібен, щоб дзеркала GitHub і GitLab з однаковим шляхом не змішувались.
+- **Клон.** Повний, спільний для задач з тим самим репо. Клонується в тимчасову теку поруч і переноситься `rename`, тож перерваний клон не лишає напівдзеркала з `.git`.
+- **Адреса `origin`.** Звіряється з адресою цілі, як у 0.7.0 (`_align_mirror_remote`).
+- **Сумісність.** У просторах тека `.mirrors` з 0.7.0 не читається (перший статус клонує заново). Виняток — `ctx['mirror_flat']`, див. «Простір ЛІГА».
 
-**Лок на дзеркало:** одна операція на дзеркало. `push`/`pull` чекають до 60 с; `status` не чекає → `vcs-busy`
-(клієнт лишає попередній стан).
+**Транспорт:** системний `git`.
+
+- **Оточення:**
+  - `GIT_TERMINAL_PROMPT=0` — без запиту пароля в терміналі; credential helper працює.
+  - `GIT_ALLOW_PROTOCOL=ssh:https:file` — жодного `ext::`/`fd::`; `ssh` покриває й scp-форму.
+  - `GIT_LITERAL_PATHSPECS=1`.
+- **Розділювач `--`.** Перед кожним шляхом (`add`, `status`, `log`, `diff`) і перед адресою в `clone`/`ls-remote`.
+- **Команда ssh.** Основа — наявна в людини `GIT_SSH_COMMAND` або `git config core.sshCommand`, інакше `ssh`. До неї додаються:
+  - завжди `-o BatchMode=yes`;
+  - з `ssh_key` — `-i <shlex.quote(шлях)> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`.
+- **Повтор через `host_ip`.** Як зараз: один раз, коли stderr каже `could not resolve hostname`, лише для форми `git@host:` (`url.insteadOf` + `HostKeyAlias`). IPv6 у `insteadOf` — у дужках.
+- **Помилки:**
+  - тайм-аут git → `vcs-offline` (зараз — неопрацьований `TimeoutExpired`);
+  - відмова ssh/HTTPS у доступі (`Permission denied`, `Authentication failed`, `could not read Username`, `Host key verification failed`) → `vcs-auth`;
+  - відмова git через `index.lock` → `vcs-busy`.
+- **Тексти помилок і `remote`.** Ніколи не несуть пароля з адреси (`://user:pass@` → `://user:***@`).
+
+**Перевірки цілі** — до будь-якого виклику git; провал → `vcs-bad-target`.
+
+- **`repo`:**
+  - дозволено `ssh://`, `https://`, `file://`, scp-форму `user@host:path` або абсолютний локальний шлях;
+  - без пробілів, NUL, керівних символів і початкового `-`;
+  - хост не починається з `-`;
+  - `https://` з паролем в адресі (`user:pass@`) — відмова: дані доступу живуть у git, не в Deai.
+- **`branch`:**
+  - без початкового `-`;
+  - `git check-ref-format refs/heads/<branch>`, а не `--branch`: той розгортає `@{-N}`.
+- **`path`** (після `strip('/')`):
+  - непорожній;
+  - сегменти не `''`, `.`, `..`;
+  - не починається з `-` чи `:` (магія pathspec);
+  - без `*?[\`, NUL і керівних символів;
+  - жоден сегмент не `.git` (без урахування регістру).
+- **`host_ip`** — `ipaddress.ip_address`.
+- **`ssh_key`** — після `expanduser` існуючий файл.
+
+**Лок на дзеркало — між процесами.** `bin/state.py` кличе статус з іншого процесу, а модуль `exec`-ом перевантажується з
+новим простором імен, тож потокового лока мало.
+
+- `fcntl.flock` на файлі `<дзеркало>.lock` поруч із текою дзеркала (на Windows — `msvcrt.locking`).
+- `push`/`pull` чекають до 60 с.
+- `status` не чекає → `vcs-busy`; клієнт лишає попередній стан.
 
 ## Операції ядра (маршрути)
 
 Поведінка ≡ 0.7.0; змінюється лише джерело налаштувань і гейт (`provider('vcs')` замість `integrations_on()`).
 
-- **Статус** — `GET /api/vcs-status?it=`: ціль задачі → `status(ctx, target)` + те, що знає ядро: `dirty`, `synced_at`,
-  `synced_it`, `gitlab_it` (ітерація, що збігається з відправленою), `remote_path`. Без ролі чи цілі →
-  `{configured: false}`. Помилка модуля → 200 `{configured: true, error, code}` (як зараз, щоб крапка не брехала).
-- **Відправити** — `POST /api/vcs-push {it}`: «чужа» → `{blocked: "foreign", author}` (до мережі); ядро готує тимчасову
-  `src` (чистий макет + `README.md` + `.canvas-state.json`) → `push` → `_record_sync` при `changed`/`pushed`.
-  Повідомлення коміту: `deai: sync <path> (<назва>) · <it>` + тіло «Ітерація · Хеш · дата» (+ «Що змінено»).
-- **Отримати** — `POST /api/vcs-pull`: `pull(ctx, target, dst)` → ядро: `found: false` → `path … not found in repo`;
-  відбиток `dst` дорівнює відбитку наявної ітерації → `{unchanged: true, same_as}`; інакше нова `itN` з авторством із
-  `.canvas-state.json` (запас — `last_commit.author`), відгалуження від чужої чи застарілої своєї, перенесення стану
-  публікації, `git_autocommit` — усе як зараз.
-- **Автосинк** — `POST /api/autosync` (адреса та сама; її кличе Stop-хук): нема ролі чи цілі → `reason: "no-vcs"`;
-  `autosync` вимкнено в модулі → `reason: "autosync-off"`; далі як зараз (`no-iterations`, `foreign-only`, `clean`,
-  `offline` — тепер і для тайм-ауту git).
-- **Нова задача** — `POST /api/task-new` приймає `vcs: {repo, path?, branch?}` (перевірки як у модулі; запис у задачу
-  лише непорожніх полів). Є ціль і в `<path>` віддаленого репо лежить `index.html` → перша ітерація з нього (як зараз
-  `gitlab`); збій отримання — тихо стартовий макет. З `from` (тека з макетом, 3b) отримання не робиться.
-  Старе поле `gitlab` у тілі — лише в просторі з `integrations` (як зараз).
+- **Статус** — `GET /api/vcs-status?it=` (новий префікс у диспетчері GET, поруч із `/api/gitlab-status`): ціль задачі →
+  `status(ctx, target)` + те, що знає ядро: `dirty`, `synced_at`, `synced_it`, `gitlab_it` (ітерація, що збігається з
+  відправленою), `remote_path`.
+  - Без ролі чи цілі → `{configured: false}`.
+  - `provider('vcs')` кинув `ModuleError` (нечитабельний `space.json`, свій модуль «на папері») → `{configured: false, code}`. Опит статусу йде на кожному старті, тож не 409. Зламаний модуль видно на «Підключенні».
+  - Помилка модуля → 200 `{configured: true, error, code}`, як зараз, щоб крапка не брехала.
+- **Відправити** — `POST /api/vcs-push {it}`.
+  - Без ролі чи цілі → 400 `no gitlab configured for this task`. Текст той самий, на ньому стоять тести й клієнт.
+  - «Чужа» ітерація → `{blocked: "foreign", author}`, до мережі.
+  - Ядро готує тимчасову `src` у системній теці тимчасових файлів, **поза текою задачі**, щоб `git_autocommit` її не підхопив, і прибирає в `finally`: чистий макет + `README.md` + `.canvas-state.json`. Далі `push`, і `_record_sync` при `synced`.
+  - Помилка модуля → `{ok: false, error, code}`.
+  - Повідомлення коміту: `deai: sync <path> (<назва>) · <it>` + тіло «Ітерація · Хеш · дата» (+ «Що змінено»). Простір ЛІГА — без змін, див. нижче.
+- **Отримати** — `POST /api/vcs-pull` (без ролі чи цілі — 400, як вище): `pull(ctx, target, dst, {"ignore": ["shots"]})` → ядро:
+  - `found: false` → `path … not found in repo`;
+  - відбиток `dst` дорівнює відбитку наявної ітерації → `{unchanged: true, same_as}`;
+  - інакше нова `itN`, усе як зараз: авторство з `.canvas-state.json` (запас — `last_commit.author`), відгалуження від чужої чи застарілої своєї (за `last_commit.time`), перенесення стану публікації, `git_autocommit`.
+- **Автосинк** — `POST /api/autosync`. Адреса та сама: її кличе Stop-хук.
+  - Нема ролі чи цілі → `reason: "no-gitlab"`, як у 0.7.0. Це контракт хука, його ловить `test_integrations_off.py`.
+  - `autosync` вимкнено в модулі → `reason: "autosync-off"`. Хук мовчить на причинах, яких не знає: він реагує лише на `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Як і задача без синку сьогодні, вимкнений автосинк не робить і локального автокоміту Stop-хука.
+  - Далі як зараз: `no-iterations`, `foreign-only`, `clean`.
+  - Будь-який `ModuleError` модуля (`vcs-offline`/`vcs-auth`/`vcs-busy`/`vcs-error`) → `reason: "offline"` з `code`, як нинішній `OSError`. Хукові ніколи не віддається 5xx.
+- **Нова задача** — `POST /api/task-new` приймає `vcs: {repo, path?, branch?}`.
+  - Поля проходять перевірки модуля; у задачу пишуться лише непорожні.
+  - `vcs` у тілі, коли в просторі ролі нема, → 400.
+  - Є ціль і в `<path>` віддаленого репо лежить `index.html` → перша ітерація з нього (як зараз `gitlab`).
+  - Збій отримання — тихо стартовий макет. `_task_new_write` ловить `(OSError, ModuleError)`, а не лише `OSError`.
+  - З `from` (тека з макетом, 3b) отримання не робиться.
+  - Старе поле `gitlab` у тілі — лише в просторі з `integrations`, як зараз.
 - **Старі адреси** — `GET /api/gitlab-status`, `POST /api/gitlab-sync`, `POST /api/gitlab-pull` лишаються псевдонімами
-  нових з тими самими формами відповідей (Stop-хук dev-pipeline і `bin/state.py` на них спираються). Нові відповіді
-  додатково несуть `code` там, де є помилка.
-- `bin/state.py` (`gitlab_line`) — через ту саму функцію ядра, що й `vcs-status`.
+  нових з тими самими формами відповідей. На них спираються Stop-хук dev-pipeline і зовнішні скрипти. Клієнт переходить
+  на нові адреси. Нові відповіді додатково несуть `code` там, де є помилка.
+- **`bin/state.py`** (`gitlab_line`):
+  - гейт — `provider('vcs')` замість `integrations_on()`;
+  - підпис — з `label` статусу;
+  - рядки простору ЛІГА («GitLab (…)», `POST …/api/gitlab-sync`, «↑ Надіслати Іт.N») лишаються дослівно: їх перевіряє `test_state.py`;
+  - функції ядра — ті самі (`gitlab_cfg`/`gitlab_status`).
 
 ## Простір ЛІГА
 
-- `provider('vcs')` у просторі з `integrations` без явного модуля ролі → `'legacy'`. Ядро виконує його кодом **того самого**
-  `git-sync` з `ctx`, зібраним зі старого `tasks.json`: `ssh_key` ← `gitlab_ssh_key`, `host_ip` ← `gitlab_host_ip`,
-  `branch` `main`, `path` `mockup/{task}`, `repo` порожній, `autosync` — **увімкнено** (як сьогодні), `cache_dir` —
-  як у звичайного модуля цього простору. Ціль задачі — з її `gitlab{…}`, а для нової задачі без нього — з
-  `PROFILE_REPOS[profile]` (лишається до 4b). `space.json` не пишеться.
-- Явно підключений `git-sync` у просторі ЛІГА перемагає неявний (як інші ролі).
-- Після успішної відправки в просторі з `integrations` ядро, як і зараз, кличе `_overview_sync` (і реєстр — там, де
+- **Постачальник.** `provider('vcs')` у просторі з `integrations` без явного модуля ролі → `'legacy'`. Так само без
+  простору взагалі, коли шар вимкнено й лишився лише `DC_TASKS_FILE`.
+- **Чим виконується.** Ядро виконує `'legacy'` кодом **того самого** `git-sync`. Допоміжна функція бере його з
+  `deai_modules.catalog()['git-sync']`, лише з вбудованих, і збирає `ctx` без `space.json`.
+  - `ctx = {space, settings, secrets: {}, folder_ok, ModuleError, cache_dir, mirror_flat: True}`.
+  - `settings`:
+    - `ssh_key` ← `gitlab_ssh_key`, `host_ip` ← `gitlab_host_ip` (корінь `tasks.json`);
+    - `branch` — `main`, `path` — `mockup/{task}`;
+    - `repo` — порожній;
+    - `autosync` — **увімкнено**, як сьогодні.
+  - Відмова каталогу чи завантаження модуля → `vcs-error`, не 500. Шлях ЛІГА тепер залежить від каталогу, і це
+    свідома ціна.
+- **Дзеркала — старі теки.**
+  - `cache_dir` = `DC_MIRRORS_DIR`, без нього — `<ROOT>/.mirrors`.
+  - `mirror_flat` → тека дзеркала `<cache_dir>/<slug>` за правилом 0.7.0 (`_mirror_dir`: частина адреси після останньої `:`).
+  - Дизайнери ЛІГИ не перегортають великі репо заново, а незапушені коміти старих дзеркал не осиротіють.
+  - `mirror_flat` — сумісність до 4d, коли ЛІГА стане звичайним простором.
+- **Ціль задачі** — з її `gitlab{…}`. Для нової задачі без нього — з `PROFILE_REPOS[profile]`, який лишається до 4b. `space.json` не пишеться.
+- **Явно підключений `git-sync`.** У просторі ЛІГА перемагає неявний (як інші ролі). Спільні `gitlab_ssh_key`/`gitlab_host_ip` тоді не діють, а поле задачі `gitlab{ssh_key, host_ip}` — діє.
+- **Вигляд і репо ЛІГИ не змінюються.** Ядро перекриває `web` і `label` статусу старим правилом:
+  - `web` — `gitlab_web`: будь-яка форма `git@host:`, включно з IP;
+  - `label` — «GitLab»;
+  - тема коміту лишається `design-canvas: sync …`;
+  - пункт «Налаштувати…» (`glsetup`) у ЛІГА — як зараз, повідомлення `glSetupMsg` про `tasks.json`. Відкриття «Підключення» підбивало б людину ввімкнути явний `git-sync`, що перекрив би неявний без `gitlab_ssh_key`.
+- **Після успішної відправки** в просторі з `integrations` ядро, як і зараз, кличе `_overview_sync` (і реєстр — там, де
   кличе зараз). Це компанійна логіка, яку 4c перенесе в роль `dashboard`; у звичайному просторі цих викликів нема.
-- Стан синку в `iterations.json` лишається під ключем `gitlab` (сумісність із теками задач, які читає інструмент ЛІГИ);
-  це внутрішня назва, в інтерфейсі й API її нема.
-- Вигляд ЛІГИ не змінюється: кнопка «GitLab» (хост містить `gitlab`), ті самі пункти й тексти.
+- **Стан синку** в `iterations.json` лишається під ключем `gitlab` — сумісність із теками задач, які читає інструмент ЛІГИ
+  (`task_state.py`). Це внутрішня назва, в інтерфейсі й API її нема.
 
 ## Інтерфейс
 
-- **Смуга задачі.** Зона синку показується, коли `capabilities.vcs` не `None`; підпис — `label` зі статусу (GitLab /
-  GitHub / Git). Крапка й меню — як зараз (`sync`/`ahead`/`behind`/`error`/`off`; «Отримати» лише при `behind`,
-  «Відправити», «Історія» — при `web`). Не налаштована задача → крапка `off` і єдиний пункт «Налаштувати…», що відкриває
-  «Підключення» на картці модуля ролі (замість повідомлення про `tasks.json`).
-- **Палітра** — ті самі команди (`glsetup`/`glpull`/`glpush`).
-- **«Підключення» й майстер** — нова секція ролі «Синхронізація з git» (`ROLE_ORDER`: після `comments`), картка
-  `git-sync` з налаштуваннями й «Перевірити». На кроці 2 майстра модуль типово не вибраний.
-- **Форма нової задачі** (`app.js`, «Нова задача») — необовʼязкове поле «Репозиторій» (підказка — типовий з модуля), лише
-  коли в просторі є роль `vcs`; значення йде в `vcs.repo`. Майстер (крок 4) поля не має — бере типовий.
+- **Гейт клієнта** — `hasVcs(space)` у `spaces-model.js`, за зразком `hasTeamComments`:
+  - є ключ `capabilities.vcs` → `caps.vcs != null`;
+  - ключа нема (стара форма, фікстури `legacy-golden`) → `integrations !== false`.
+  - `noOutward` (`app.js`) розщеплюється: зона синку й `refreshGitlab` — на `noVcs`, тиша в Teams лишається на `integrations`.
+- **Смуга задачі.**
+  - Зона синку показується за `hasVcs`. Підпис — `glCache.label`, а без нього типово «GitLab» (`labelKey: "gitlab"`, як зараз).
+  - Крапка й меню — як зараз: `sync`/`ahead`/`behind`/`error`/`off`; «Отримати» лише при `behind`, «Відправити», «Історія» — при `web`.
+  - Не налаштована задача у звичайному просторі → крапка `off` і єдиний пункт «Налаштувати…». Він відкриває «Підключення» на картці модуля ролі.
+- **Після зміни модулів.** `afterModulesChange` викликає `refreshGitlab()` після `loadSpaces`. Роль зникла → `glCache` скидається.
+- **Палітра** — ті самі команди (`glsetup`/`glpull`/`glpush`). Нові поля в діях палітри додаються лише тоді, коли підпис
+  не типовий: `legacy-golden` порівнює палітру `deepEqual` по JSON.
+- **«Підключення» й майстер:**
+  - нова секція ролі «Синхронізація з git» — `ROLE_ORDER` (після `comments`), `ROLE_KEYS`, `ROLE_ICONS`, `CHECK_KEYS` і ключі `cnRoleVcs`/`cnRoleVcsLead`/`cnRoleVcsNone`;
+  - картка `git-sync` з налаштуваннями й «Перевірити»;
+  - `disableConsequences` знає роль `vcs`, інакше в ЛІГА хибне «нікого»;
+  - на кроці 2 майстра модуль типово не вибраний.
+- **Форма нової задачі** (`app.js`, «Нова задача»):
+  - необовʼязкове поле «Репозиторій», лише коли `hasVcs`; значення йде в `vcs.repo`;
+  - підказка — типовий `repo` з `GET /api/modules` (`settings[].value`);
+  - коди `vcs-*` — у `TASK_ERR_KEYS`/`taskErrField`;
+  - запит створення задачі в просторі з роллю `vcs` має стелю 200 с замість 20 с (`FORM_POST_TIMEOUT_MS`), бо перший клон триває хвилини; так само в майстрі;
+  - майстер (крок 4) поля не має — бере типовий.
+- **Помилки дій** «Відправити»/«Отримати»: новий мапер код → текст для `vcs-*`.
 - **Тексти.** Ключі `gl*` лишаються, тексти — без слова «GitLab» там, де йдеться не про ЛІГУ (`{label}` у підписах і
-  повідомленнях). Мертві ключі `gl*` (15, перелік у плані) прибираються. Нові — назва ролі, поле форми, тексти нових кодів
-  помилок. Паритет uk/en.
+  повідомленнях). Мертві ключі `gl*` прибираються, їх рівно 15:
+  `glCatchUpLabel`, `glDirtyTitle`, `glErrorLabel`, `glHistoryLabel`, `glHistoryTitle`, `glIterationFallback`,
+  `glPullBadge`, `glPullTitle`, `glSendLabel`, `glSyncedLabel`, `glSyncedLabelBare`, `glSyncedTitle`, `glSyncingLabel`,
+  `glThisIterationFallback`, `glUnpushedTitle`.
+  Нові ключі — назва ролі, поле форми, тексти нових кодів помилок. Паритет uk/en.
 
 ## Безпека й межі
 
-- Адреса, гілка, шлях і ключ з тіла запиту чи налаштувань проходять перевірки цілі до виклику git; ключ — у `shlex.quote`.
-- `GIT_ALLOW_PROTOCOL` закриває транспорти, що виконують команди (`ext::`).
+- Адреса, гілка, шлях і ключ з тіла запиту чи налаштувань проходять перевірки цілі до виклику git (див. «Модуль
+  `git-sync`»). Ключ — у `shlex.quote`. Усі шляхи — після `--` і з `GIT_LITERAL_PATHSPECS=1`.
+- `GIT_ALLOW_PROTOCOL` закриває транспорти, що виконують команди (`ext::`, `fd::`).
+- Пароль в адресі HTTPS не приймається, а в текстах помилок маскується.
 - Без `force`; `pull` лише `--ff-only`; чужу ітерацію не відправляємо; при `behind_path` — стоп.
 - Модуль працює з правами людини й системним git — як і раніше. Свій модуль ролі `vcs` — лише за довірою 3c.
-- Межі: HTTPS без збережених даних у системі → `vcs-auth` з порадою налаштувати git; `host_ip` — лише форма `git@host:`;
-  Windows — без перевірки на справжній машині (як інші модулі).
+- Межі:
+  - HTTPS без збережених даних у системі → `vcs-auth` з порадою налаштувати git;
+  - `host_ip` — лише форма `git@host:`;
+  - Windows — без перевірки на справжній машині (як інші модулі).
 
 ## Тести
 
-- Python, модуль: реальний git на локальних bare-репо (`file://`), без мережі — status/push/pull/catchup/diverged/behind,
-  перевірки цілі (вкл. `ext::`, `-oProxyCommand`, пробіли в ключі), лок, `host_ip`-повтор (через підставний git),
-  тайм-аут → `vcs-offline`, відмова доступу → `vcs-auth`, адреса історії й підпис для GitHub/GitLab/іншого.
-- Python, ядро: перенести поведінкові тести `tests/test_gitlab_sync.py`, `tests/test_serve.py` (`test_8`, `test_9`,
-  `test_a1`, `test_c*`), `tests/test_integrations_off.py`, `tests/test_state.py` на роль (через модуль), плюс нові: звичайний
-  простір із `git-sync` — увесь цикл; псевдоніми старих адрес — ті самі форми; `task-new` з `vcs`; `autosync-off`.
-- JS: смуга (`bar-model`, `shell-bar`) з `label`, «Налаштувати…» → «Підключення», палітра, секція ролі, поле форми,
-  паритет словника; `legacy-golden` — побайтно.
-- Живий: `tests/live/git-sync.test.mjs` — звичайний простір, bare-репо `file://`: підключити модуль на «Підключенні»,
-  «Перевірити», відправити ітерацію, коміт «колеги» в репо → «Отримати» дає відгалуження, `autosync` вимкнено/увімкнено;
-  наявні `gitlab-pull-older`, `connections`, `wizard` — без регресій.
+- **Python, модуль.** Реальний git на локальних bare-репо (і абсолютний шлях, і `file://`), без мережі:
+  - status/push/pull/catchup/diverged/behind;
+  - дві дати `last_commit` (коміт лише кадрів — не робота);
+  - перевірки цілі: `ext::`, `-oProxyCommand`, пробіли в ключі, `path="."`, `:/`, `*`, `.GIT`, `@{-1}`, пароль у `https://`, хост із `-`;
+  - slug теки дзеркала й `mirror_flat`;
+  - лок між процесами;
+  - повтор через `host_ip` (через підставний git);
+  - тайм-аут → `vcs-offline`, відмова доступу → `vcs-auth`;
+  - `check` у межах 4 с;
+  - наявна `core.sshCommand` людини;
+  - адреса історії й підпис для GitHub/GitLab/іншого.
+
+  Тести транспорту з `tests/test_gitlab_sync.py` (`_mirror_dir`, `ensure_mirror`, `_git`, `_align_mirror_remote`)
+  переїжджають сюди.
+- **Python, ядро.** Поведінкові тести `tests/test_gitlab_sync.py` (через старі імена ядра),
+  `tests/test_serve.py` (`test_8`, `test_9`, `test_a1`, `test_c*`, `_commit_identity`), `tests/test_integrations_off.py`
+  (тексти відмов і `no-gitlab`), `tests/test_state.py` (патчі `gitlab_cfg`/`gitlab_status`), `tests/test_spaces_serve.py`
+  (шпигун `_gitlab_sync`) — зелені після переїзду.
+  - ≈50 точних словників `capabilities` у `test_comments_role`, `test_modules_api`, `test_modules`, `test_spaces_serve`,
+    `test_static_publish` отримують ключ `vcs`.
+  - Нові тести:
+    - звичайний простір із `git-sync` — увесь цикл;
+    - псевдоніми старих адрес — ті самі форми;
+    - `task-new` з `vcs` (і 400 без ролі);
+    - `autosync-off`;
+    - `ModuleError` → `offline` в автосинку;
+    - `ModuleError` від `provider()` у статусі;
+    - `'legacy'` — старі теки дзеркал, `web`, підпис, тема коміту.
+- **JS:**
+  - `hasVcs` (обидві форми);
+  - смуга (`bar-model`, `shell-bar`) з `label`;
+  - «Налаштувати…» → «Підключення» (і `glSetupMsg` у ЛІГА);
+  - `afterModulesChange` → `refreshGitlab`;
+  - палітра;
+  - секція ролі, `disableConsequences`;
+  - поле форми й коди помилок;
+  - паритет словника;
+  - `legacy-golden` — побайтно.
+
+  Фікстури `capabilities` у ≈10 файлах (`_legacy-golden-kit`, `connections-*`, `bar-model`, `shell-*`, `spaces-*`,
+  `inspector-space-ds`) — там, де вони є, отримують ключ `vcs`; у `legacy-golden` він не додається.
+- **Живі:**
+  - новий `tests/live/git-sync.test.mjs` — звичайний простір, bare-репо `file://`:
+    1. підключити модуль на «Підключенні», «Перевірити»;
+    2. відправити ітерацію;
+    3. коміт «колеги» в репо → «Отримати» дає відгалуження;
+    4. `autosync` вимкнено/увімкнено.
+  - наявний `gitlab-pull-older` — моки на нових адресах `/api/vcs-*`;
+  - `connections`, `wizard` — без регресій.
 - Кожен новий охоронець — доведений мутацією.
 
 ## Документи
 
-`docs/modules/authoring.md` (контракт ролі `vcs`), README (модуль, роль, дорожня карта: етап 4 = 4a–4d, виправлення
-розбіжності з дизайн-документом), `CHANGELOG.md [0.8.0]`, `docs/design/spaces-and-modules.md` (статус 4a), `package.json`.
+- `docs/modules/authoring.md` — контракт ролі `vcs`: ціль, `opts`, `cache_dir`, коди.
+- README — модуль, роль; дорожня карта: етап 4 = 4a–4d, і виправлення розбіжності з дизайн-документом, де етап 4
+  описано як плагін Claude Code.
+- `CHANGELOG.md [0.8.0]`.
+- `docs/design/spaces-and-modules.md` — статус 4a.
+- `package.json`.
