@@ -1874,6 +1874,9 @@ class Catalog(Base):
                          [('repo', 'text', None), ('branch', 'text', 'main'), ('path', 'text', 'mockup/{task}'),
                           ('ssh_key', 'text', None), ('host_ip', 'text', None), ('autosync', 'bool', False)])
         self.assertTrue(callable(m.fn('check')))
+        for name in ('status', 'push', 'pull'):                  # обовʼязкові функції ролі `vcs` (каркас 4a)
+            self.assertTrue(callable(m.fn(name)), name)
+        self.assertTrue(callable(m.fn('validate')) and callable(m.fn('mirror_dir')))   # необовʼязкові, але в цього модуля є
         self.assertIn('git-sync', dm.KNOWN_OTHER_MODULES)
 
 

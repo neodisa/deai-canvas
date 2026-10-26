@@ -1,8 +1,8 @@
 """Вбудовані модулі Deai Canvas — каркас етапу 2а (спека 2026-10-14-modules-2a-design.md, ревізія 2).
 
 Модуль = тека `app/modules/<id>/` з `module.json` (маніфест) і `server.py` (функції ролей).
-Роль = інтерфейс, який кличе ядро: `publish`, `tokens`, `comments` (2b-2); `vcs`, `tracker`,
-`dashboard`, `notify` — зарезервовані (ядро їх не кличе). Один постачальник на роль у просторі.
+Роль = інтерфейс, який кличе ядро: `publish`, `tokens`, `comments` (2b-2), `vcs` (4a: синк макетів із git);
+`tracker`, `dashboard`, `notify` — зарезервовані (ядро їх не кличе). Один постачальник на роль у просторі.
 Роль `comments` — дві половини: браузерний адаптер сховища CommentLayer (`client` у маніфесті — файли теки
 модуля, їх роздає `GET /api/module-client/<id>/<файл>`; адаптер СВОГО модуля простору — зі знімка довіри,
 `GET /api/module-client/<простір>/<id>/<файл>`) і серверні `client_config`/`list`/`resolve`
@@ -68,7 +68,7 @@
     `capabilities()` у всіх цих випадках — `comments: None` + `error`; простір без жодного запису про коментарі — просто
     `None` без помилки.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
-    ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`) без модуля дають `'legacy'`.
+    ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`, `vcs`) без модуля дають `'legacy'`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
     `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
     явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
@@ -98,12 +98,15 @@ from atomic_io import atomic_write_json
 APP = os.path.dirname(os.path.abspath(__file__))
 
 API_VERSION = 1
-ROLES_CALLED = ('publish', 'tokens', 'comments')
-ROLES_RESERVED = ('vcs', 'tracker', 'dashboard', 'notify')
+ROLES_CALLED = ('publish', 'tokens', 'comments', 'vcs')
+ROLES_RESERVED = ('tracker', 'dashboard', 'notify')
 #: Функції `server.py`, які мусить мати модуль ролі (понад обовʼязковий `check`).
-ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('client_config', 'list', 'resolve')}
+ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('client_config', 'list', 'resolve'),
+                  'vcs': ('status', 'push', 'pull')}
+#: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
+ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir')}
 #: Ролі, що мають зашитий шлях ЛІГА: простір з `integrations` без явного модуля дає `'legacy'` (а не `None`).
-LEGACY_ROLES = ('publish', 'comments')
+LEGACY_ROLES = ('publish', 'comments', 'vcs')
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
@@ -138,7 +141,9 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
           'bad-settings': 400, 'space-json-unreadable': 409, 'spaces-off': 409,
           'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409,
           # модулі «публікація за адресою»: віддалений хост не прийняв токен / вперся в ліміт (текст — від модуля)
-          'vercel-auth': 409, 'vercel-busy': 409}
+          'vercel-auth': 409, 'vercel-busy': 409,
+          # роль `vcs` (4a): мережа/DNS/тайм-аут git, відмова в доступі, погана ціль, зайняте дзеркало, решта відмов git
+          'vcs-offline': 502, 'vcs-auth': 502, 'vcs-bad-target': 400, 'vcs-busy': 409, 'vcs-error': 502}
 
 #: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
 #: модуль не кине «module-untrusted» від свого імені.
@@ -525,6 +530,10 @@ def _build(d, folder):
         if not callable(f):
             return _failed(folder, d, 'bad-manifest', f'server.py: no callable {need}()', meta=meta)
         fns[need] = f
+    for opt in dict.fromkeys(fn for r in meta['roles'] for fn in ROLE_OPTIONAL_FUNCTIONS.get(r, ())):
+        f = ns.__dict__.get(opt)
+        if callable(f):                                 # необовʼязкова: немає чи не функція — не помилка, `fn()` дасть `None`
+            fns[opt] = f
     return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
                   roles=meta['roles'], settings=meta['settings'], publish_target=meta['publish_target'],
                   client=meta['client'], status='ok', dir=d, fns=fns)
@@ -1521,15 +1530,19 @@ def _ctx(space, m):
     # `folder_ok` і `ModuleError` — не дані, а засоби: модуль їх не імпортує (див. docstring модуля), а `call()`
     # пропускає як є лише `ModuleError` ядра, тож свою помилку з кодом (`bad-folder`) модуль кидає цим класом.
     # `ctx` нікуди не серіалізується: у `call`/`check` з нього береться лише `secrets`.
+    # `cache_dir` — лише ШЛЯХ `<DEAI_HOME>/cache/<простір>/<модуль>` (4a: дзеркала `git-sync`). Теку створює модуль (`makedirs`
+    # 0700): `_ctx` будується для кожного `check`, і створення тут падало б на незаписуваному `DEAI_HOME`.
     return {'space': {'id': _space_id(space), 'path': _space_path(space)},
             'settings': settings, 'secrets': secrets,
-            'folder_ok': _folder_rule(space), 'ModuleError': ModuleError}
+            'folder_ok': _folder_rule(space), 'ModuleError': ModuleError,
+            'cache_dir': os.path.join(spaces.home(), 'cache', _space_id(space) or '_', m.id)}
 
 
 def module_ctx(space, module):
     """`ctx` для функцій модуля — `{"space": {id, path}, "settings": {…підставлені…}, "secrets": {…лише
-    його оголошені…}, "folder_ok": f(folder) -> (ok, код), "ModuleError": клас}`; `module` — `Module` чи id.
-    Перші три — дані, останні два — засоби ядра для модуля, що не імпортує ядро (`static-publish`).
+    його оголошені…}, "folder_ok": f(folder) -> (ok, код), "ModuleError": клас, "cache_dir": шлях}`; `module` — `Module`
+    чи id. Перші три — дані, `folder_ok` і `ModuleError` — засоби ядра для модуля, що не імпортує ядро (`static-publish`),
+    `cache_dir` — шлях теки кешу модуля в просторі (теки ядро НЕ створює: це робить модуль).
     Саме це отримує `check`; для `serve.py` (`/api/ds-tokens`, диспетчер публікації). Може кинути
     `unknown-module`, `bad-settings`, `space-json-unreadable`, `secrets-unreadable`. Статус модуля не
     перевіряє (це робить `call`)."""
@@ -1703,12 +1716,12 @@ def _provider_for(role, space, get_cat=None):
 
 
 def provider(role, space=None):
-    """Хто виконує роль у просторі: `Module`, `'legacy'` (зашитий шлях ЛІГА; ролі `LEGACY_ROLES` — `publish` і
-    `comments`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); у `comments` його нема.
+    """Хто виконує роль у просторі: `Module`, `'legacy'` (зашитий шлях ЛІГА; ролі `LEGACY_ROLES` — `publish`,
+    `comments` і `vcs`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); у `comments` і `vcs` його нема.
 
     `space` — запис реєстру; не заданий → простір запиту (`spaces.active_space()`). Шар вимкнено чи
     простір запиту НЕ зафіксовано (`request_space_id() is None`: інструменти ЛІГА, воркери, тести без
-    ізоляції) → `'legacy'` для `publish` і `comments`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
+    ізоляції) → `'legacy'` для `publish`, `comments` і `vcs`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
     каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА). Явно переданий `space` вирішується сам по собі, незалежно
     від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
     `integrations` і роль із `LEGACY_ROLES` → `'legacy'`; інакше `None`. Каталог — з СВОЇМИ модулями простору
@@ -1759,10 +1772,11 @@ def _caps_key(space):
 
 
 def capabilities(space):
-    """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None}` для простору `space`
-    (запис реєстру). ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово нечитабельний
-    `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "error": <код>}`: кожна роль вирішується
-    окремо, і та, що не вирішилась, — `None`; лише `publish` у просторі з інтеграціями лишається `'legacy'`. Тобто
+    """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None, "vcs": id | 'legacy' | None}`
+    для простору `space` (запис реєстру). ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово
+    нечитабельний `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "vcs": None, "error": <код>}`:
+    кожна роль вирішується окремо, і та, що не вирішилась, — `None`; лише `publish` і `vcs` у просторі з інтеграціями
+    лишаються `'legacy'` (зашитий шлях ЛІГА: неявного модуля в `vcs` нема, а нечитабельний `space.json` його не зачіпає). Тобто
     `comments` ніколи не стає `'legacy'` через помилку (спільний Supabase ЛІГА — не запасний варіант, див. `_provider_for`);
     без помилки ключа `error` нема. Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
     без ключа `error`: це стан ролі, а не простору (екран «Підключення» показує `error` як нечитабельний `space.json` і
@@ -1794,7 +1808,7 @@ def capabilities(space):
                     caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
                     continue                # `error` — клієнт читає `error` як «space.json не читається» й сховав би картки
                 error = error or e.code
-                caps[role] = 'legacy' if role == 'publish' and spaces.integrations_for(space) else None
+                caps[role] = 'legacy' if role in ('publish', 'vcs') and spaces.integrations_for(space) else None
         if error:
             caps['error'] = error
         with _STATE_LOCK:
@@ -1802,7 +1816,7 @@ def capabilities(space):
         return dict(caps)
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
         legacy = 'legacy' if space.get('integrations') is True else None
-        return {'publish': legacy, 'tokens': None, 'comments': None, 'error': 'module-error'}
+        return {'publish': legacy, 'tokens': None, 'comments': None, 'vcs': legacy, 'error': 'module-error'}
 
 
 # ------------------------------------------------------------------------------ роль `comments` (2b-2)
