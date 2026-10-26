@@ -1486,6 +1486,9 @@ def _commit_identity():
 7. **Симлінки зі `src`** модуль мовчки не везе — ядро про це не попереджає (рішення Task 2).
 8. **Тестові помічники** `fake_run(sub, answer, before)` і базовий клас `Repo` з `tests/test_git_sync_module.py` можна імпортувати. `Base.setUp` ставить `GIT_CONFIG_GLOBAL=os.devnull` — тестам ядра на справжньому git те саме, щоб не читати `~/.gitconfig`.
 
+9. **`ctx` для `'legacy'` — лише через `_vcs_legacy_ctx`, не `deai_modules.module_ctx()`** (ревʼю Task 3): `_ctx` каркаса кладе `cache_dir = <spaces.home()>/cache/…`, а при вимкненому шарі `home()` — справжній `~/.deai`. У `'legacy'` `cache_dir` = `DC_MIRRORS_DIR` або `<ROOT>/.mirrors`, `mirror_flat: True`. Тест: шар вимкнено → дзеркало під `DC_MIRRORS_DIR`, у `<home>/cache` нічого не зʼявилось.
+10. **`Module.fn('validate')`/`fn('mirror_dir')` можуть бути `None`** (свій модуль ролі `vcs` без них) — ядро перевіряє наявність: без `validate` ціль іде в `push`/`status` як є (модуль сам відмовить), без `mirror_dir` — шлях дзеркала невідомий і не показується.
+
 ---
 
 ### Task 5: маршрути `/api/vcs-*`, псевдоніми, автосинк, `task-new` з `vcs`, `bin/state.py`
@@ -1654,6 +1657,8 @@ def _commit_identity():
    - У `tests/test_spaces_serve.py:≈747` додати `('POST', '/api/vcs-push', '_gitlab_sync')`.
    - Речення про «перелік маршрутів з перевіркою Origin» — не застосовне: перевірка Origin глобальна.
 2. **`bin/state.py`.** Гілка `elif vcs_err is not None`: коли в задачі нема ні `gitlab`, ні `vcs`, друкувати «`{label}`: не налаштований для задачі», а не «не дістати статус».
+
+3. **`validate` свого модуля — з тайм-аутом** (ревʼю Task 3): `call(m, 'validate', ctx, target, timeout=…)` з наявною короткою межею каркаса (як для `check`), інакше завислий свій модуль блокує `task-new`. Тест: `validate`, що спить довше межі → відповідь з кодом тайм-ауту каркаса, а не зависання.
 
 ---
 
@@ -1966,6 +1971,8 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
 
    `:13` → `["publish","comments","vcs","tokens"]`.
 
+2. **`disableConsequences` (`app/connections-model.js` ≈251):** для простору з `integrations === true` роль `vcs` теж дає `{ role, kind: "legacy" }` (зараз лише `publish` і `comments`). Тест у `tests/connections-model.test.mjs`.
+
 ---
 
 ### Task 8: живі тести
@@ -2049,6 +2056,11 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
     - глобальний `git_autocommit`-push — як був.
 - [ ] **Step 4: `docs/design/spaces-and-modules.md`** — статус 4a. **`package.json`** — `"version": "0.8.0"`.
 - [ ] **Step 5: Коміт** — `docs(4a): контракт ролі vcs, README, CHANGELOG [0.8.0], версія 0.8.0`.
+
+**Поправки за підсумками Task 3 (26.10.2026, обовʼязкові):**
+
+1. `docs/modules/authoring.md` ≈46–47 досі називає `vcs` зарезервованою роллю — переписати: `vcs` викликається ядром, обовʼязкові `status`/`push`/`pull`, необовʼязкові `validate`/`mirror_dir`; зарезервовані — `tracker`, `dashboard`, `notify`.
+2. `CHANGELOG [0.8.0]`, розділ змін для авторів модулів: свій модуль 0.7.0 з `roles: ["vcs"]` і лише `check` тепер `bad-manifest` («no callable status()»).
 
 ---
 
