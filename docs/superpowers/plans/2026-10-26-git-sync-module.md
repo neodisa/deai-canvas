@@ -128,7 +128,7 @@
 
 ### Task 1: модуль `git-sync` — перевірки цілі, дзеркало, транспорт, лок
 
-Модуль ще без `module.json`: каталог його не бачить, тести вантажать `server.py` напряму (`exec`, як ядро). Тут — усе, крім функцій ролі.
+Тести вантажать `server.py` напряму (`exec`, як ядро). Тут — перевірки, транспорт, лок, а також `check`, `module.json` і списки вбудованих модулів (див. «Поправки ревʼю» в кінці задачі: тека без маніфесту — це зламаний вбудований модуль для каталогу).
 
 **Files:**
 - Create: `app/modules/git-sync/server.py`
@@ -628,6 +628,21 @@ git -c user.name=neodisa -c user.email=neodisa@users.noreply.github.com commit -
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **Безпека: хост і користувач scp-адреси.** При повторі через `host_ip` git виконує `GIT_SSH_COMMAND` через shell.
+   - `_Git._ssh`: `-o HostKeyAlias={shlex.quote(alias)}`.
+   - У scp-гілці `_repo_why`: хост — `re.fullmatch(r'[A-Za-z0-9._-]+', m.group(2))`, користувач — `m.group(1) is None or re.fullmatch(r'[A-Za-z0-9._-]+', m.group(1))`.
+   - У «відхиляються» — `h;id>x:o/r.git` і `u$(x)@h:o/r.git`. Мутація: прибрати перевірку хоста → тест червоніє.
+2. **`check`, `module.json` і списки вбудованих — тут, а не в Task 2/3.** Підтека `app/modules/git-sync` без маніфесту — для каталогу зламаний вбудований модуль (`bad-manifest`), і повний набір червоніє.
+   - `check(ctx)` — код дослівно з Task 2 Step 3, і тести `Check` з Task 2 Step 1.
+   - `module.json` — дослівно з Task 3 Step 1. Поки `vcs` у `ROLES_RESERVED`, каркас вимагає лише `check`.
+   - `BUILTIN_IDS` (`tests/test_comments_role.py:52`, `tests/test_modules_api.py:68`) з `git-sync`.
+   - `KNOWN_OTHER_MODULES` з `git-sync`.
+   - Тест: `deai_modules.catalog()['git-sync'].status == 'ok'`.
+   - Після задачі ПОВНИЙ набір зелений.
+3. **`SourceShape`** у Task 1: `{'check', 'validate', 'mirror_dir'} <= funcs`.
+
 ---
 
 ### Task 2: модуль `git-sync` — `status`/`push`/`pull`/`check` на справжньому git
@@ -972,6 +987,31 @@ def check(ctx):
 
 - [ ] **Step 6: Коміт** — `feat(4a): git-sync — status, push, pull і check на справжньому git`.
 
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **`check` уже зроблено в Task 1** — тут лише `status`/`push`/`pull`/`web_url`/`label_of` та їхні тести. `SourceShape` — повний набір `{'check', 'status', 'push', 'pull', 'validate', 'mirror_dir'}`.
+2. **Безпека: симлінки в чужому репо.** `<path>` чи проміжна тека може бути симлінком (`mockup -> /`): `isdir`/`copytree`/`rmtree` пішли б за ним поза дзеркало. Додати:
+   ```python
+   def _inside(ctx, md, p):
+       """`<md>/<p>`, якщо після розгортання симлінків він лишається в дзеркалі; інакше `vcs-error`."""
+       root = os.path.realpath(md)
+       full = os.path.realpath(os.path.join(md, p))
+       if full != root and not full.startswith(root + os.sep):
+           raise _err(ctx, 'vcs-error', 'path leaves the mirror (symlink in the repository)')
+       return os.path.join(md, p)
+   ```
+   - `push`: `dst = _inside(ctx, md, p)` перед `isdir`/`rmtree`.
+   - `pull`: `src = _inside(ctx, md, p)` перед `isdir`; копіювати з `ignore=lambda d, names: [n for n in names if os.path.islink(os.path.join(d, n))]` (симлінки з чужого репо не везуться).
+   - Тести:
+     - bare, де `mockup` — симлінк на теку поза дзеркалом → і `push`, і `pull` дають `vcs-error`, поза дзеркалом нічого не змінено й не скопійовано;
+     - симлінк-файл усередині `<path>` у `pull` не потрапляє в `dst`.
+3. **`pull` на порожньому віддаленому репо.** Одразу після `_checkout(g, md)`:
+   ```python
+   if g.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{b}'], md).returncode != 0:
+       return {'found': False, 'last_commit': None}
+   ```
+   Тест: порожній bare → `pull` → `found False`.
+
 ---
 
 ### Task 3: каркас — роль `vcs`, `module.json`, коди, `cache_dir`
@@ -1056,6 +1096,35 @@ LEGACY_ROLES = ('publish', 'comments', 'vcs')
   2. прибрати `'git-sync'` з `KNOWN_OTHER_MODULES` → інваріант;
   3. прибрати `'vcs-bad-target'` зі `STATUS` → тест кодів.
 - [ ] **Step 8: Коміт** — `feat(4a): роль vcs у каркасі, маніфест git-sync, cache_dir у ctx`.
+
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **`module.json`, `BUILTIN_IDS` і `KNOWN_OTHER_MODULES` уже зроблено в Task 1.** Step 1 і відповідні пункти Step 2/4 — лише перевірити.
+2. **Необовʼязкові функції ролі.** `_build` кладе в `fns` лише `check` і `ROLE_FUNCTIONS`, тож `Module.fn('validate')`/`call(m, 'mirror_dir', …)` інакше недосяжні. Додати біля `ROLE_FUNCTIONS`:
+   ```python
+   #: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
+   ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir')}
+   ```
+   У `_build` після циклу обовʼязкових функцій, перед `return Module(...)`:
+   ```python
+       for opt in dict.fromkeys(fn for r in meta['roles'] for fn in ROLE_OPTIONAL_FUNCTIONS.get(r, ())):
+           f = ns.__dict__.get(opt)
+           if callable(f):
+               fns[opt] = f
+   ```
+   Назви змінних (`meta`, `ns`, `fns`) звірити з реальним `_build`.
+
+   Тести:
+   - модуль `roles: ["vcs"]` з `check/status/push/pull` без `validate` → `status == 'ok'`, `fn('validate') is None`;
+   - з `validate` → `callable(m.fn('validate'))` і `dm.call(m, 'validate', ctx, t)` працює;
+   - `git-sync` з каталогу → `callable(m.fn('mirror_dir'))`.
+
+   Не робити їх обовʼязковими.
+3. **`tests/test_modules.py:84`:** `CORE_CTX_KEYS = ('folder_ok', 'ModuleError', 'cache_dir')` (інакше червоніють усі тести, що порівнюють дані `ctx`).
+4. **`tests/test_modules.py:411-415`** (`test_reserved_roles_need_no_function`):
+   - зарезервовані тепер `('tracker', 'dashboard', 'notify')` / `['tracker', 'dashboard', 'notify']`;
+   - новий тест: `roles=('vcs',)` із сервером `CHECK_ONLY` → `status == 'error'`, у тексті `status`.
+5. **Пошук точних словників `capabilities` (Step 5).** Шаблон `grep -rn "'tokens': \(None\|'\)" tests/*.py`; попередній пропускав `'comments': 'cm'` і `LEGACY_SHAPE` (`tests/test_modules_api.py:≈1318`).
 
 ---
 
@@ -1397,6 +1466,17 @@ def _commit_identity():
 
 - [ ] **Step 6: Коміт** — `refactor(4a): ядро синкає через роль vcs — транспорт переїхав у git-sync`.
 
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **Клон лише для `vcs` без `from`; ЛІГА — як була.** Умова в `_task_new_write`:
+   ```python
+       if gitlab or (vcs and adopt_src is None):
+           if gitlab:
+               spaces.require_integrations()   # ⛔ ПЕРЕД try (коментар 0.7.0 лишити)
+   ```
+   а не `if (gitlab or vcs) and adopt_src is None:`.
+2. **Ціль клону:** `{'vcs': vcs} if vcs else {'gitlab': gitlab}` (явний `vcs.repo` перемагає профільний `gitlab`, як у `vcs_target`).
+
 ---
 
 ### Task 5: маршрути `/api/vcs-*`, псевдоніми, автосинк, `task-new` з `vcs`, `bin/state.py`
@@ -1559,6 +1639,13 @@ def _commit_identity():
   4. прибрати `/api/vcs-status` з диспетчера → тест псевдоніма.
 - [ ] **Step 7: Коміт** — `feat(4a): маршрути /api/vcs-*, автосинк за модулем, task-new з vcs, state.py за роллю`.
 
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **Диспетчер POST — чотири окремі гілки** `elif self.path == '/api/gitlab-sync':` / `elif self.path == '/api/vcs-push':` (обидві → `self._gitlab_sync(payload)`), так само `gitlab-pull`/`vcs-pull` → `_gitlab_pull`. Охоронець `bad-body` (`tests/test_serve.py:≈1393`) збирає маршрути регексом `self\.path == '(/api/[a-z-]+)'` і кортеж `in (…)` пропустив би.
+   - У `tests/test_spaces_serve.py:≈747` додати `('POST', '/api/vcs-push', '_gitlab_sync')`.
+   - Речення про «перелік маршрутів з перевіркою Origin» — не застосовне: перевірка Origin глобальна.
+2. **`bin/state.py`.** Гілка `elif vcs_err is not None`: коли в задачі нема ні `gitlab`, ні `vcs`, друкувати «`{label}`: не налаштований для задачі», а не «не дістати статус».
+
 ---
 
 ### Task 6: клієнт — смуга, палітра, дії, тексти
@@ -1576,7 +1663,7 @@ def _commit_identity():
     - `{integrations: true, capabilities: {vcs: null}}` → false;
     - `{integrations: true, capabilities: {publish: 'legacy'}}` (без ключа) → true;
     - `{integrations: false}` → false;
-    - `null` → false.
+    - `null` → true (як `hasTeamComments`), `isLegacyVcs(null)` → true.
   - **`isLegacyVcs`:**
     - `capabilities.vcs === 'legacy'` → true;
     - без ключа і `integrations !== false` → true;
@@ -1594,7 +1681,7 @@ def _commit_identity():
   - **Мапер помилок дій** `vcsErrKey(code)`: `vcs-offline` → `vcsErrOffline`, `vcs-auth` → `vcsErrAuth`, `vcs-busy` → `vcsErrBusy`, `vcs-bad-target` → `vcsErrTarget`, інше → `null`.
   - **Підключення в `app.js`.** Статичні перевірки джерела, як у `tests/spaces-wiring.test.mjs`:
     - `refreshGitlab` питає `/api/vcs-status`, `glpush` — `/api/vcs-push`, `glpull` — `/api/vcs-pull`;
-    - `afterModulesChange` кличе `refreshGitlab()` ПІСЛЯ `loadSpaces()`;
+    - у тілі `afterModulesChange` порядок підрядків `render(` < `refreshGitlab(` < `paintBar(`;
     - `refreshGitlab` гейтиться `noVcs()`, а `loadTeamsMute` — як і було (`noOutward()`);
     - `glsetup` кличе `enterConnections()`, коли НЕ `isLegacyVcs(spaceNow())`.
 
@@ -1612,24 +1699,24 @@ def _commit_identity():
  */
 export const hasVcs = (space) => {
   const caps = space?.capabilities;
-  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs != null : !!space && space.integrations !== false;
+  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs != null : space?.integrations !== false;
 };
 
 /** Синк простору — зашитий шлях ЛІГА (налаштовується в `tasks.json`, не на «Підключенні»). */
 export const isLegacyVcs = (space) => {
   const caps = space?.capabilities;
-  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs === "legacy" : !!space && space.integrations !== false;
+  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs === "legacy" : space?.integrations !== false;
 };
 
 /** Стеля запиту створення задачі в просторі з синком: перший клон репозиторію триває хвилини (модуль чекає до 180 с). */
 export const TASK_VCS_POST_TIMEOUT_MS = 200000;
 ```
 
-Увага: `hasVcs(null)` — `false`. Наявна логіка смуги для «простору нема» (`s.space` порожній) показувала GitLab (`noInteg` хибний). Перевірити `legacy-golden`: якщо його стан не має `space`, гейт смуги — `!s.space || hasVcs(s.space)`, щоб golden лишився побайтно. Те саме для палітри.
+`hasVcs(null)` — `true`, як `hasTeamComments(null)`: невідомий простір (шар вимкнено) не краде в людини синк.
 
 **`app/bar-model.js`.**
 
-- `noInteg` для зони `gl` → `!(s.space == null || hasVcs(s.space))` (імпорт з `spaces-model.js`).
+- `noInteg` лишається для Teams (`teamsItem`). Для зони `gl` — нова `const noVcs = !hasVcs(s.space);` (імпорт з `spaces-model.js`).
 - Підпис:
 
 ```js
@@ -1650,7 +1737,7 @@ const brand = VCS_LABEL_KEYS[s.glLabel] ? s.glLabel : "";
 
 **`app/shell-palette.js`.**
 
-- `noOutward` для GitLab → `!(s.space == null || hasVcs(s.space))`.
+- `noOutward` (≈207, ≈381 — він обслуговує лише GitLab) перейменувати на `noVcs = !hasVcs(s.space)`.
 - `glpull`/`glpush`: `...(s.glBrand ? { labelArgs: [s.iterLabel, s.glBrand] } : {})`.
 - `whyKey` для `glpush` — як у смузі.
 
@@ -1674,7 +1761,7 @@ const brand = VCS_LABEL_KEYS[s.glLabel] ? s.glLabel : "";
   ```
 
   Коментар — чому в ЛІГА лишається повідомлення (спека, «Простір ЛІГА»).
-- **`afterModulesChange`:** після `await loadSpaces();` — `await refreshGitlab();`.
+- **`afterModulesChange`:** `await refreshGitlab();` між `await render({ keepFrame: homeOpen });` і `paintBar();`. Не відразу після `loadSpaces()`: `spaceNow()` бере `curTask?.space`, який оновлює `render()`, тож раніше він читав би старі `capabilities`.
 
 **`vcsErrKey`** — у `app/spaces-model.js` (чиста функція, тестується):
 
@@ -1713,6 +1800,27 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
   2. `afterModulesChange` без `refreshGitlab` → тест підключення;
   3. завжди `brand` у зоні → тест «поля `brand` нема».
 - [ ] **Step 6: Коміт** — `feat(4a): смуга й палітра синку за роллю vcs, підпис репозиторію, нові адреси`.
+
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **`glpull` — відмова git приходить як 200 `{ok: false, error, code}`.** `catch` її не бачить. Після гілок `r.unchanged` / `r.continue_from && r.fork`:
+   ```js
+   else if (r.ok === false) { const k = vcsErrKey(r.code); tell(k ? t(k, glCache?.label || 'GitLab') : t('glSyncFailedMsg', r.error || '—')); }
+   ```
+   `catch (e)` лишається `tell(t('errFailed', e.message))`. Тест на цю гілку.
+2. **`refreshGitlab` — `vcs-busy` лишає попередній стан** (спека):
+   ```js
+   try { const r = await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`); glCache = (r.code === 'vcs-busy' && glCache) ? glCache : r; }
+   ```
+   Статичний пін на це.
+3. **Стан палітри копіюється поіменно** (`paletteState()` ≈6871: `gl: st.gl, iterLabel: st.iterLabel`).
+   - `barState()` (біля `iterOnGl`): `glLabel: glCache?.label || ''`.
+   - `paletteState()`: `gl: st.gl, glBrand: ({ GitHub: 'GitHub', Git: 'Git' })[st.glLabel] || '', iterLabel: st.iterLabel`.
+4. **Піни, що зміняться разом із кодом:**
+   - `tests/spaces-wiring.test.mjs:≈59` — `if \(noOutward\(\)\) \{ glCache = null; return; \}` → `noVcs`;
+   - `:≈452` — `if \(!noOutward\) \{…` у палітрі → `!noVcs`; заголовок тесту «GitLab — на integrations» → «на hasVcs».
+
+   Решта пінів `noOutward` (Teams, `:61`, `:469`) лишаються.
 
 ---
 
@@ -1840,6 +1948,14 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
   2. `disableConsequences` без `vcs` у гілці `legacy` → тест;
   3. `newTaskDialog` шле `vcs` і з порожнім полем → тест тіла.
 - [ ] **Step 6: Коміт** — `feat(4a): «Підключення» й майстер — секція синхронізації з git; поле «Репозиторій» у новій задачі`.
+
+**Поправки ревʼю плану (26.10.2026, обовʼязкові; перекривають текст задачі вище):**
+
+1. **Тести «Підключень», що використовували `vcs` як «чужу» роль, — на ще зарезервовану `tracker`:**
+   - `tests/connections-model.test.mjs`: `:17` (`roleKeys`), `:23` (`roleIcon`), `:40`, `:46` (групування; рядок `:46` → `["publish","comments","tokens","alpha","tracker",""]`), `:60`, `:292` (`providerLine`);
+   - `tests/connections-view.test.mjs`: `:90`, `:92`, `:138`.
+
+   `:13` → `["publish","comments","vcs","tokens"]`.
 
 ---
 
