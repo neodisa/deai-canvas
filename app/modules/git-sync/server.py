@@ -16,6 +16,10 @@
 `<дзеркало>@lock` (між процесами — `bin/state.py` питає статус окремим процесом; модуль ще й перевантажується `exec`-ом).
 Не `.lock`: репо `o/foo.lock` має дзеркало з таким самим імʼям, як лок-файл репо `o/foo`; `@` slug дати не може.
 
+Оточення git: `LC_ALL=C` (класифікація помилок читає англійський текст), без `GIT_AUTHOR_*`/`GIT_COMMITTER_*` (особистість
+коміту — з `meta.author`) і без змінних, що відводять git від дзеркала (`GIT_DIR`, `GIT_WORK_TREE`, …). Глобальний конфіг
+людини (credential helper, `insteadOf`, ssh) не ізолюється. Дзеркало — кеш: перед кожним push/pull його дерево чиститься.
+
 Команду ssh модуль складає лише тоді, коли сам щось додає (`ssh_key`, повтор через `host_ip`): основа — `GIT_SSH_COMMAND`
 оточення, інакше `ssh`. Інакше git бере ssh людини (`core.sshCommand`, `~/.ssh/config`) сам — модуль його не перекриває.
 """
@@ -51,7 +55,9 @@ _RESOLVER_FAIL = 'could not resolve hostname'
 #: Відмова ВХОДУ: ssh пише `Permission denied (publickey…)` чи `Permission denied, please try again`. Голе «permission
 #: denied» — це права на файли дзеркала (`index.lock`, `FETCH_HEAD`), не доступ до сервера.
 _AUTH_MARKS = ('permission denied (', 'permission denied, please try again', 'authentication failed',
-               'could not read username', 'could not read password', 'host key verification failed')
+               'could not read username', 'could not read password', 'host key verification failed',
+               'returned error: 403')
+_AUTH_RE = re.compile(r'permission to \S+ denied')             # GitHub: «remote: Permission to o/r.git denied to user.»
 _OFFLINE_MARKS = ('could not resolve hostname', 'could not resolve host', 'connection timed out',
                   'operation timed out', 'network is unreachable', 'no route to host', 'connection refused')
 _NO_BRANCH_MARKS = ('not found in upstream', "couldn't find remote ref", 'could not find remote ref')
@@ -60,6 +66,12 @@ _NAME = re.compile(r'[A-Za-z0-9._-]+')          # хост і користува
 _USERINFO = re.compile(r'(://)[^/\s]*@')              # до ОСТАННЬОГО `@` перед першим `/`: `p@ss` у паролі теж
 _BAD_BRANCH_CHARS = set(' ~^:?*[\\')
 _BAD_PATH_CHARS = set('*?[\\')
+#: Змінні оточення батька, що перекрили б модуль: особистість коміту (`meta.author`) і розташування репозиторію
+#: (дзеркало). Глобальний конфіг людини (`GIT_CONFIG_GLOBAL`, `~/.gitconfig`: credential helper, `insteadOf`, ssh) НЕ чіпаємо.
+_GIT_ENV_DROP = ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_AUTHOR_DATE', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
+                 'GIT_COMMITTER_DATE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+                 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES', 'GIT_COMMON_DIR',
+                 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS')
 _NTFS_GIT = re.compile(r'git~\d+')                  # NTFS: коротке імʼя `.git`
 
 
@@ -231,6 +243,10 @@ class _Git:
 
     def _env(self, alias=None, literal=True):
         env = dict(os.environ)
+        for name in _GIT_ENV_DROP:
+            env.pop(name, None)
+        env['LC_ALL'] = 'C'                       # класифікація помилок читає англійський текст git
+        env.pop('LANGUAGE', None)                 # пріоритетніший за LC_ALL для перекладів gettext
         env['GIT_TERMINAL_PROMPT'] = '0'
         env['GIT_ALLOW_PROTOCOL'] = 'ssh:https:file'
         if literal:
@@ -252,12 +268,13 @@ class _Git:
             pre = ['-c', f'url.{user}{addr}:.insteadOf={user}{m.group(2)}:']
             alias = m.group(2)
         try:
-            # `errors='replace'`: git повторює в stderr байти з імен шляхів — не-UTF-8 не мусить кидати UnicodeDecodeError.
+            # `utf-8`, а не локаль батька (Windows — cp1251/cp1252: кирилиця авторів ламалась би); `errors='replace'`:
+            # git повторює в stderr байти з імен шляхів — не-UTF-8 не мусить кидати UnicodeDecodeError.
             return subprocess.run(['git', *pre, *args], cwd=cwd, env=self._env(alias, literal),
-                                  capture_output=True, text=True, errors='replace', timeout=timeout)
+                                  capture_output=True, encoding='utf-8', errors='replace', timeout=timeout)
         except subprocess.TimeoutExpired:
             raise _err(self.ctx, 'vcs-offline', f'git {args[0]}: no answer in {timeout:g} s') from None
-        except OSError as e:                      # немає git у PATH, зникла тека cwd, нема прав на запуск
+        except (OSError, ValueError) as e:        # немає git у PATH, зникла тека cwd, нема прав; NUL в аргументі — ValueError
             raise _err(self.ctx, 'vcs-error', f'git {args[0]}: {e}') from None
 
     def run(self, args, cwd, timeout=GIT_TIMEOUT, literal=True):
@@ -275,7 +292,7 @@ class _Git:
 
     def code_of(self, r):
         low = (r.stderr or r.stdout or '').lower()
-        if any(m in low for m in _AUTH_MARKS):
+        if any(m in low for m in _AUTH_MARKS) or _AUTH_RE.search(low):
             return 'vcs-auth'
         if any(m in low for m in _OFFLINE_MARKS):
             return 'vcs-offline'
@@ -324,8 +341,11 @@ class _Lock:
         self.ctx, self.path, self.wait, self.fh = ctx, md + '@lock', wait, None
 
     def __enter__(self):
-        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
-        self.fh = open(self.path, 'a+')
+        try:
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+            self.fh = open(self.path, 'a+')
+        except OSError as e:                                  # файл на місці теки кешу, нема прав
+            raise _err(self.ctx, 'vcs-error', f'mirror lock: {e}') from None
         deadline = time.monotonic() + self.wait
         while True:
             try:
@@ -351,36 +371,51 @@ def _no_branch(r):
     return any(m in low for m in _NO_BRANCH_MARKS)
 
 
+def _has_ref(g, cwd, ref):
+    return g.run(['rev-parse', '--verify', '--quiet', ref], cwd).returncode == 0
+
+
 def _ensure(g, md):
     """Дзеркало цілі: клон за потреби (у тимчасову теку поруч + `rename`: перерваний клон не лишає напівдзеркала),
     `origin` = адреса цілі, свіжий fetch. ⛔ Відмову fetch не ковтаємо: без свіжого origin «відстає» бреше нулем.
-    Гілки на origin ще нема — не відмова: перший push її створить."""
+    Гілки на origin ще нема — не відмова: перший push її створить (лише на порожньому репо, див. `_checkout`)."""
+    b = g.t['branch']
     if not os.path.isdir(os.path.join(md, '.git')):
         if os.path.lexists(md):
             raise _err(g.ctx, 'vcs-error', f'mirror folder exists but is not a git clone: {os.path.basename(md)}')
         parent = os.path.dirname(md)
-        os.makedirs(parent, mode=0o700, exist_ok=True)
-        tmp = tempfile.mkdtemp(prefix='.clone-', dir=parent)
         try:
-            r = g.run(['clone', '--quiet', '--branch', g.t['branch'], '--', g.t['repo'], tmp], parent, CLONE_TIMEOUT)
-            if r.returncode != 0 and _no_branch(r):
+            os.makedirs(parent, mode=0o700, exist_ok=True)
+            tmp = tempfile.mkdtemp(prefix='.clone-', dir=parent)
+        except OSError as e:
+            raise _err(g.ctx, 'vcs-error', f'mirror: cannot make a folder for the clone: {e}') from None
+        try:
+            r = g.run(['clone', '--quiet', '--branch', b, '--', g.t['repo'], tmp], parent, CLONE_TIMEOUT)
+            if r.returncode == 0:
+                # `--branch <тег>` теж вдається (detached HEAD), але гілки `<b>` у клоні нема: працювати так тихо не можна.
+                if not _has_ref(g, tmp, f'refs/heads/{b}'):
+                    raise _err(g.ctx, 'vcs-error', f'clone failed: {b} is not a branch on the remote (a tag?)')
+            elif _no_branch(r):
                 # Порожній репо клон `--branch` не бере. Клонуємо без гілки; порожній (HEAD не народжений) — лишаємо
                 # й ставимо HEAD на цільову гілку; непорожній із іншою типовою — відмова `clone failed`, як у 0.7.0.
                 shutil.rmtree(tmp, ignore_errors=True)
                 os.makedirs(tmp, mode=0o700)
                 r2 = g.run(['clone', '--quiet', '--', g.t['repo'], tmp], parent, CLONE_TIMEOUT)
-                if r2.returncode == 0 and g.run(['rev-parse', '--verify', '--quiet', 'HEAD'], tmp).returncode != 0:
-                    g.must(['symbolic-ref', 'HEAD', f'refs/heads/{g.t["branch"]}'], tmp, 'symbolic-ref')
+                if r2.returncode == 0 and not _has_ref(g, tmp, 'HEAD'):
+                    g.must(['symbolic-ref', 'HEAD', f'refs/heads/{b}'], tmp, 'symbolic-ref')
                     r = r2
             if r.returncode != 0:
                 raise g.fail('clone', r)
-            os.rename(tmp, md)
+            try:
+                os.rename(tmp, md)
+            except OSError as e:
+                raise _err(g.ctx, 'vcs-error', f'mirror: cannot put the clone in place: {e}') from None
         finally:
             if os.path.isdir(tmp):
                 shutil.rmtree(tmp, ignore_errors=True)
         return
     _align_remote(g, md)
-    r = g.run(['fetch', '--quiet', 'origin', g.t['branch']], md)
+    r = g.run(['fetch', '--quiet', 'origin', b], md)
     if r.returncode != 0 and not _no_branch(r):
         raise g.fail('fetch', r)
 
@@ -397,13 +432,34 @@ def _align_remote(g, md):
           file=sys.stderr)
 
 
+def _reset(g, md):
+    """Робоче дерево й індекс дзеркала = HEAD, чужого непідтвердженого немає (незапушені КОМІТИ не страждають).
+    Нема жодного коміту (порожній репо, перший push) — HEAD не народжений: чиститься лише індекс."""
+    if _has_ref(g, md, 'HEAD'):
+        g.must(['reset', '--hard', '-q', 'HEAD'], md, 'reset')
+    else:
+        g.must(['read-tree', '--empty'], md, 'reset')
+    g.must(['clean', '-fdq'], md, 'clean')
+
+
 def _checkout(g, md):
+    """Чисте дерево на цільовій гілці. Чистка йде ДО `checkout`: той відмовився б перезаписати чужі зміни. Дзеркало —
+    кеш інструмента: брудне дерево після збою (коміт відмовлено, копіювання урвалось) віддавалось би `pull` як «робота
+    колеги», а `push` комітив би сторонній індекс."""
     b = g.t['branch']
-    if g.run(['rev-parse', '--verify', '--quiet', f'refs/heads/{b}'], md).returncode == 0:
+    _reset(g, md)
+    if _has_ref(g, md, f'refs/heads/{b}'):
         g.must(['checkout', '-q', b, '--'], md, f'checkout {b}', keep=200)
-    elif g.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{b}'], md).returncode == 0:
+    elif _has_ref(g, md, f'refs/remotes/origin/{b}'):
         g.must(['checkout', '-q', '-b', b, '--track', f'origin/{b}'], md, f'checkout {b}', keep=200)
     else:
+        # Гілки нема ні тут, ні на origin. Нову з нуля заводимо лише в справді ПОРОЖНЬОМУ репо; інакше друкарська
+        # помилка (чи тег) дала б на origin кореневий коміт із усім індексом `main`.
+        r = g.run(['ls-remote', '--heads', 'origin'], md)
+        if r.returncode != 0:
+            raise g.fail('ls-remote', r)
+        if (r.stdout or '').strip():
+            raise _err(g.ctx, 'vcs-error', f'branch {b} not found on the remote')
         g.must(['symbolic-ref', 'HEAD', f'refs/heads/{b}'], md, 'symbolic-ref')
 
 
@@ -419,9 +475,18 @@ def _on_remote(g, md):
     b, p = g.t['branch'], g.t['path']
     if g.run(['cat-file', '-e', f'origin/{b}:{p}'], md).returncode == 0:
         return True
-    if g.run(['rev-parse', '--verify', '--quiet', f'origin/{b}'], md).returncode != 0:
+    if not _has_ref(g, md, f'refs/remotes/origin/{b}'):
         return None
     return False
+
+
+def _unpushed(g, md):
+    """Локальні коміти, яких нема на origin. Гілки на origin ще нема (порожній репо, перший push відмовлено) — усі
+    коміти локальної гілки: інакше «немає що відправляти» ховало б коміт, що так і не доїхав."""
+    b = g.t['branch']
+    if _has_ref(g, md, f'refs/remotes/origin/{b}'):
+        return _count(g, md, f'origin/{b}..{b}')
+    return _count(g, md, f'refs/heads/{b}') if _has_ref(g, md, f'refs/heads/{b}') else 0
 
 
 def _behind_top(g, md):
@@ -429,7 +494,7 @@ def _behind_top(g, md):
     r = g.run(['log', '-1', '--format=%an%x1f%ad%x1f%s', '--date=format:%d.%m.%Y %H:%M', f'origin/{g.t["branch"]}'], md)
     if r.returncode != 0 or '\x1f' not in r.stdout:
         return {}
-    author, date, subject = (r.stdout.strip().split('\x1f') + ['', '', ''])[:3]
+    author, date, subject = (r.stdout.rstrip('\n').split('\x1f') + ['', '', ''])[:3]       # не strip: `\x1f` — пробіл
     return {'author': author, 'date': date, 'subject': subject[:120]}
 
 
@@ -482,19 +547,54 @@ def status(ctx, target):
         b = t['branch']
         return {'behind': _count(g, md, f'{b}..origin/{b}'),
                 'behind_path': _count(g, md, f'{b}..origin/{b}', t['path']),
-                'unpushed': _count(g, md, f'origin/{b}..{b}'),
+                'unpushed': _unpushed(g, md),
                 'on_remote': _on_remote(g, md), 'web': web_url(t), 'label': label_of(t)}
 
 
 def _pushed(g, r, changed, catchup=False):
     ok = r.returncode == 0
     out = {'ok': ok, 'synced': ok, 'changed': changed, 'pushed': ok,
-           'error': None if ok else _mask((r.stderr or r.stdout or '')[-300:])}
+           'error': None if ok else _mask(r.stderr or r.stdout or '')[-300:]}      # маска ДО обрізання: різ ховає `://`
     if catchup:
         out['catchup'] = True
     if not ok:
         out['code'] = g.code_of(r)
     return out
+
+
+def _skip_links(d, names):
+    """Симлінки (файли й теки) не їдуть ні в репо, ні з репо: у спільному репо лінк виніс би локальні шляхи, а
+    розіменування — вміст поза текою макета; з чужого репо він вів би куди завгодно на цій машині."""
+    return [n for n in names if os.path.islink(os.path.join(d, n))]
+
+
+def _commit_tree(g, ctx, md, src, dst, p, ident, message):
+    """Копія `src` у `<path>` → add → коміт. True — коміт зроблено, False — змін нема. Збій на БУДЬ-ЯКОМУ кроці лишає
+    дерево чистим (`_reset`) і кидає виняток далі: напівскопійована тека чи індекс без коміту потрапили б у наступний pull
+    як «робота колеги»."""
+    try:
+        try:
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)                       # щоб видалені в `src` файли пішли й з репо
+            shutil.copytree(src, dst, symlinks=True, ignore=_skip_links)
+        except OSError as e:                             # файл замість теки, нема прав, зникло посеред копіювання
+            raise _err(ctx, 'vcs-error', f'push: cannot replace {p}: {e}') from None
+        g.run(['add', '-A', '--', p], md)                # збій add видно далі: зміни лишаться неіндексованими
+        st = g.run(['status', '--porcelain', '--', p], md)
+        if st.returncode != 0:                           # порожній вивід при відмові читався б як «змін нема»
+            raise g.fail('status', st)
+        if not st.stdout.strip():
+            return False
+        c = g.run(['-c', f'user.name={ident[0]}', '-c', f'user.email={ident[1]}', 'commit', '-q', '-m', message], md)
+        if c.returncode != 0:
+            raise g.fail('commit', c)
+        return True
+    except BaseException:
+        try:
+            _reset(g, md)
+        except Exception:  # noqa: BLE001 — перший збій важливіший; наступна операція почистить сама (`_checkout`)
+            pass
+        raise
 
 
 def push(ctx, target, src, meta):
@@ -505,6 +605,13 @@ def push(ctx, target, src, meta):
     if not isinstance(src, str) or not os.path.isdir(src):
         raise _err(ctx, 'vcs-error', 'push: src is not a folder')
     meta = meta if isinstance(meta, dict) else {}
+    author = meta.get('author') if isinstance(meta.get('author'), dict) else {}
+    raw = [str(author.get('name') or ''), str(author.get('email') or '')]
+    message = str(meta.get('message') or 'deai: sync')
+    # NUL в аргументі git — `ValueError` ще до запуску, інші керівні символи псують коміт: відмовляємо ДО будь-якого git.
+    if _ctl(raw[0]) or _ctl(raw[1]) or _ctl(message.replace('\n', '').replace('\t', '').replace('\r', '')):
+        raise _err(ctx, 'vcs-error', 'push: meta (message, author) contains control characters')
+    ident = (raw[0].strip() or 'Deai Canvas', raw[1].strip() or 'deai@localhost')
     g, md = _Git(ctx, t), _mirror(ctx, t)
     b, p = t['branch'], t['path']
     with _Lock(ctx, md, wait=LOCK_WAIT):
@@ -520,32 +627,14 @@ def push(ctx, target, src, meta):
             if ff.returncode != 0:
                 return {'ok': False, 'synced': False, 'blocked': 'diverged', 'behind': behind,
                         'ahead': _count(g, md, f'origin/{b}..{b}'), 'behind_top': _behind_top(g, md),
-                        'error': _mask((ff.stderr or ff.stdout or '')[-200:])}
+                        'error': _mask(ff.stderr or ff.stdout or '')[-200:]}
         dst = _inside(ctx, md, p)                        # ПІСЛЯ merge: він міг привезти симлінк
-        try:
-            if os.path.isdir(dst):
-                shutil.rmtree(dst)                       # щоб видалені в `src` файли пішли й з репо
-            shutil.copytree(src, dst, symlinks=True)
-        except OSError as e:                             # файл замість теки, нема прав, зникло посеред копіювання
-            raise _err(ctx, 'vcs-error', f'push: cannot replace {p}: {e}') from None
-        g.run(['add', '-A', '--', p], md)                # збій add видно далі: зміни лишаться неіндексованими
-        st = g.run(['status', '--porcelain', '--', p], md)
-        if st.returncode != 0:                           # порожній вивід при відмові читався б як «змін нема»
-            raise g.fail('status', st)
-        if not st.stdout.strip():
+        if not _commit_tree(g, ctx, md, src, dst, p, ident, message):
             # Не змінилось — ще НЕ «лежить на origin»: попередній коміт міг не доїхати (bgSanctions, 12 днів «✓»).
             # Гілки на origin нема зовсім (порожній репо) — теж не «synced»: пробуємо push і чесно звітуємо про результат.
-            if _count(g, md, f'origin/{b}..{b}') == 0 and g.run(
-                    ['rev-parse', '--verify', '--quiet', f'origin/{b}'], md).returncode == 0:
+            if _count(g, md, f'origin/{b}..{b}') == 0 and _has_ref(g, md, f'refs/remotes/origin/{b}'):
                 return {'ok': True, 'synced': True, 'changed': False, 'pushed': False}
             return _pushed(g, g.run(['push', '--quiet', 'origin', b], md), changed=False, catchup=True)
-        author = meta.get('author') if isinstance(meta.get('author'), dict) else {}
-        name = str(author.get('name') or '').strip() or 'Deai Canvas'
-        mail = str(author.get('email') or '').strip() or 'deai@localhost'
-        c = g.run(['-c', f'user.name={name}', '-c', f'user.email={mail}',
-                   'commit', '-q', '-m', str(meta.get('message') or 'deai: sync')], md)
-        if c.returncode != 0:
-            raise g.fail('commit', c)
         out = _pushed(g, g.run(['push', '--quiet', 'origin', b], md), changed=True)
         out['sha'] = (g.run(['rev-parse', '--short', 'HEAD'], md).stdout or '').strip()
         return out
@@ -581,7 +670,7 @@ def pull(ctx, target, dst, opts=None):
     with _Lock(ctx, md, wait=LOCK_WAIT):
         _ensure(g, md)
         _checkout(g, md)
-        if g.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{b}'], md).returncode != 0:
+        if not _has_ref(g, md, f'refs/remotes/origin/{b}'):
             return {'found': False, 'last_commit': None}          # порожній origin: гілки ще нема
         # ⛔ Не ковтати: при розходженні --ff-only падає, і в ітерацію поїхало б ЗАСТАРІЛЕ дзеркало з чужим підписом.
         pl = g.run(['pull', '--ff-only', '--quiet', 'origin', b], md)
@@ -593,9 +682,10 @@ def pull(ctx, target, dst, opts=None):
         src = _inside(ctx, md, p)
         if not os.path.isdir(src):
             return {'found': False, 'last_commit': None}
-        # Симлінки з чужого репо не їдуть: вони вели б з макета куди завгодно на цій машині.
-        shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True,
-                        ignore=lambda d, names: [n for n in names if os.path.islink(os.path.join(d, n))])
+        try:
+            shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True, ignore=_skip_links)
+        except OSError as e:
+            raise _err(ctx, 'vcs-error', f'pull: cannot copy {p}: {e}') from None
         a = g.run(['log', '-1', '--format=%an', '--', p], md)
         excl = [f':(exclude){p}/{x}' for x in ignore]
         # Магія `:(exclude)` — лише тут і лише з нашим префіксом: `p` і `ignore` перевірені (`_path_why`).
