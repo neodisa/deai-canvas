@@ -1049,6 +1049,38 @@ class Status(Repo):
         r = self.go(origin)
         self.assertEqual((r['unpushed'], r['behind']), (1, 0))
 
+    def test_on_remote_has_three_states_and_none_is_not_false(self):
+        """Переїхало з `tests/test_gitlab_sync.py` (`_on_remote` ядра 0.7.0): True / False / None («гілки origin нема —
+        питання без відповіді»). Зливати None у False означало б сказати «на GitLab немає» там, де просто не змогли
+        спитати — те саме вигадування впевненості, через яке баг bgSanctions виглядав правдою."""
+        origin = self.bare()
+        t = self.target(origin)
+        self.go(origin)
+        md = self.mirror(origin)
+        g = self.m._Git(self.ctx(), self.m.validate(self.ctx(), t))
+        self.assertIs(self.m._on_remote(g, md), False, 'теки задачі на origin нема')
+        self.m.push(self.ctx(), t, self.src(), self.META)
+        self.assertIs(self.m._on_remote(g, md), True)
+        self.git(md, 'update-ref', '-d', 'refs/remotes/origin/main')
+        self.assertIsNone(self.m._on_remote(g, md))
+
+    def test_an_insteadof_rule_of_the_human_does_not_rewrite_origin_each_time(self):
+        """Переїхало з `tests/test_gitlab_sync.py`: `git remote get-url` розгортає `url.*.insteadOf`, тож на машині з таким
+        правилом звірка з ним переписувала б origin на КОЖЕН статус (і шуміла). Звіряємо записане значення."""
+        origin = self.bare()
+        repo = 'alias:origin.git'
+        md = self.mirror(repo)
+        os.makedirs(os.path.dirname(md))
+        self.git(self.tmp, 'clone', '-q', origin, md)
+        self.git(md, 'config', f'url.{self.tmp}/.insteadOf', 'alias:')
+        self.git(md, 'remote', 'set-url', 'origin', repo)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            r = self.go(repo)
+        self.assertEqual((r['behind'], r['on_remote']), (0, False))
+        self.assertNotIn('origin', err.getvalue(), 'origin переписано, хоча він збігався')
+        self.assertEqual(self.git(md, 'config', '--get', 'remote.origin.url').strip(), repo)
+
     def test_an_interrupted_clone_leaves_neither_a_mirror_nor_a_temp_folder(self):
         origin = self.bare()
         md = self.mirror(origin)

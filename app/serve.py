@@ -20,6 +20,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
@@ -581,10 +582,15 @@ def copy_mockup(src_dir, dst_dir):
             shutil.copy2(s, d)
 
 
-# ---------- GitLab-синхронизация (T-18) ----------
-# Модель: локальная папка задачи = рабочая копия (tool-состояние + свой git).
-# Синхронизация = экспорт ЧИСТОГО макета (copy_mockup) в tool-managed клон общего
-# репо и push. Клон-зеркало живёт в .mirrors/<repo>, не коммитится в инструмент.
+# ---------- Синхронізація з git: роль `vcs` (T-18; етап 4a) ----------
+# Модель: локальна папка задачі = робоча копія (tool-стан + свій git). Синхронізація = експорт ЧИСТОГО макета
+# (`copy_mockup`) у тимчасову теку й `push` модуля ролі `vcs`; дзеркало (клон спільного репо) веде модуль, не ядро.
+#
+# Транспорт — модуль `git-sync` (`app/modules/git-sync/server.py`): дзеркало, fetch, push, pull, «відстає/попереду».
+# Ядро вирішує, ЩО відправити й ЯК прийняти: чистий макет, `.canvas-state.json`, авторство, форки, ітерації. Старі імена
+# (`gitlab_status`/`gitlab_sync`/`gitlab_pull`/`autosync`) лишаються з тими самими формами відповідей до 4d: `gl` у них —
+# ЦІЛЬ ролі (`vcs_target`), постачальника вони знаходять самі (`vcs=None`) або беруть готового від маршруту. Ключ `gitlab`
+# в `iterations.json` — внутрішня назва стану синку (сумісність тек задач, які читає `task_state.py`).
 
 
 def gitlab_cfg(cfg, task):
@@ -596,8 +602,8 @@ def gitlab_cfg(cfg, task):
     return {'repo': gl['repo'], 'path': gl['path'].strip('/'),
             'ssh_key': os.path.expanduser(key) if key else None,
             'branch': gl.get('branch', 'main'),
-            # Адреса хоста для повтору при збої резолвера (`_git`). Береться з
-            # конфіга задачі або зі спільного кореня tasks.json; немає — повтору
+            # Адреса хоста для повтору при збої резолвера (модуль `git-sync`). Береться
+            # з конфіга задачі або зі спільного кореня tasks.json; немає — повтору
             # не буде, і це правильніше за вигадану адресу.
             'host_ip': gl.get('host_ip') or cfg.get('gitlab_host_ip')}
 
@@ -610,103 +616,133 @@ def gitlab_web(gl):
     return f'https://{m.group(1)}/{m.group(2)}/-/commits/{gl["branch"]}/{gl["path"]}'
 
 
-_RESOLVER_FAIL = 'could not resolve hostname'
+VCS_MODULE = 'git-sync'
 
 
-def _git_once(args, cwd, gl, timeout=120, ip=None):
-    """Один виклик git. `ip` — підміна хоста адресою (див. `_git`)."""
-    env = dict(os.environ)
-    ssh = []
-    if gl.get('ssh_key'):
-        ssh = [f'ssh -i {gl["ssh_key"]}', '-o IdentitiesOnly=yes',
-               '-o StrictHostKeyChecking=accept-new']
-    pre = []
-    if ip:
-        host = re.match(r'git@([^:]+):', gl.get('repo', ''))
-        if host:
-            # `url.…insteadOf` замість правки самого аргументу: у fetch/push
-            # адреса взагалі не в аргументах (там `origin`), тож підміняти треба
-            # на рівні git, а не рядка команди.
-            pre = ['-c', f'url.git@{ip}:.insteadOf=git@{host.group(1)}:']
-            # HostKeyAlias — щоб ключ хоста збігся з тим, що вже в known_hosts:
-            # інакше повтор упреться в перевірку ключа й виглядатиме як інша
-            # помилка, ніж резолвер.
-            ssh = ssh or ['ssh']
-            ssh.append(f'-o HostKeyAlias={host.group(1)}')
-    if ssh:
-        env['GIT_SSH_COMMAND'] = ' '.join(ssh)
-    return subprocess.run(['git', *pre, *args], cwd=cwd, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+class VcsError(OSError):
+    """Відмова ролі `vcs` для ядра. `OSError` свідомо: на ньому стоять маршрути синку, автосинк («офлайн» — тихо) і
+    бутстрап задачі («не вийшло — стартовий макет»). `code` — `vcs-*` модуля або код каркаса (`space-json-unreadable`,
+    `module-error`…)."""
+
+    def __init__(self, code, message=''):
+        super().__init__(message or code)
+        self.code = code
 
 
-def _git(args, cwd, gl, timeout=120):
-    """git з потрібним SSH-ключем; на збої резолвера — ОДИН повтор по IP.
-
-    Рассинхрон резолвера macOS (split-DNS) роняє push із `Could not resolve
-    hostname`, хоча DNS-сервер відповідає. Обхід відомий і робився руками щоразу:
-    `git@<ip>:…` плюс `-o HostKeyAlias=<host>`. Кожен дизайнер спотикається на
-    цьому й думає, що зламався синк.
-
-    ⛔ Адресу НЕ хардкодимо — вона приходить із `tasks.json` (`gitlab.host_ip`).
-    Немає її в конфізі — повтору немає: вигадати IP означало б піти стукати
-    невідомо куди. Повтор лише на резолвері: інакше кожна відмова (права,
-    конфлікт) коштувала б подвійного часу й ховала справжню причину.
-    """
-    r = _git_once(args, cwd, gl, timeout)
-    ip = gl.get('host_ip')
-    if r.returncode != 0 and ip and _RESOLVER_FAIL in (r.stderr or '').lower():
-        return _git_once(args, cwd, gl, timeout, ip=ip)
-    return r
+def _mirrors_base():
+    """Тека дзеркал простору ЛІГА: `DC_MIRRORS_DIR` (тести, живі прогони) або `<ROOT>/.mirrors`, як у 0.7.0."""
+    return os.environ.get('DC_MIRRORS_DIR') or os.path.join(ROOT, '.mirrors')
 
 
-def _mirror_dir(gl):
-    base = os.environ.get('DC_MIRRORS_DIR') or os.path.join(ROOT, '.mirrors')
-    slug = re.sub(r'[^\w.-]+', '-', gl['repo'].split(':')[-1]).strip('-')
-    return os.path.join(base, slug)
+def _vcs_legacy_ctx():
+    """`ctx` неявного постачальника простору ЛІГА (`'legacy'`): той самий `git-sync`, без `space.json`. Дзеркала — старі
+    теки 0.7.0 (`mirror_flat`: дизайнери не перегортають великі репо, а незапушені коміти старих дзеркал не осиротіють),
+    автосинк увімкнено, як і було. Ключ і IP сервера несе ціль (`gitlab_cfg`), не налаштування.
+
+    ⛔ НЕ `deai_modules.module_ctx()`: `cache_dir` каркаса лежить під `spaces.home()`, а при вимкненому шарі це справжній
+    `~/.deai` машини — дзеркала ЛІГИ опинились би там (ревʼю Task 3)."""
+    return {'space': {'id': spaces.request_space_id() or '', 'path': ''},
+            'settings': {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True},
+            'secrets': {}, 'folder_ok': lambda folder: (False, 'bad-folder'),
+            'ModuleError': deai_modules.ModuleError,
+            'cache_dir': _mirrors_base(), 'mirror_flat': True}
 
 
-def ensure_mirror(gl, fetch=True):
-    """Гарантирует локальный клон репо-зеркала; возвращает путь (или бросает OSError)."""
-    md = _mirror_dir(gl)
-    if not os.path.isdir(os.path.join(md, '.git')):
-        os.makedirs(os.path.dirname(md), exist_ok=True)
-        r = _git(['clone', '--branch', gl['branch'], gl['repo'], md], ROOT, gl, 180)
-        if r.returncode != 0:
-            raise OSError(f'clone failed: {(r.stderr or r.stdout)[-300:]}')
-    else:
-        _align_mirror_remote(md, gl)
-        if fetch:
-            # ⛔ Не ковтати відмову fetch: без свіжого origin ми не знаємо, чи
-            # відстали, і будь-який push іде вслід наосліп. Раніше тут гинув VPN —
-            # дзеркало лишалось старим, behind=0, guard не спрацьовував, «✓» брехало.
-            r = _git(['fetch', '--quiet', 'origin', gl['branch']], md, gl)
-            if r.returncode != 0:
-                raise OSError(f'fetch failed: {(r.stderr or r.stdout)[-300:]}')
-    return md
+def vcs_provider():
+    """Хто синкає в просторі запиту: `None` (ролі нема) або `(module, ctx, legacy)`. Відмова — `VcsError` (нечитабельний
+    `space.json`, свій модуль «на папері», `git-sync` не завантажився), ніколи не 500."""
+    try:
+        prov = deai_modules.provider('vcs')
+    except (deai_modules.ModuleError, spaces.SpacesError) as e:
+        raise VcsError(getattr(e, 'code', 'vcs-error'), str(getattr(e, 'message', None) or e)[:300]) from None
+    if prov is None:
+        return None
+    if prov == 'legacy':
+        try:
+            m = deai_modules.catalog().get(VCS_MODULE)                 # лише вбудовані: без простору
+        except Exception as e:  # noqa: BLE001 — шлях ЛІГИ тепер залежить від каталогу: збій = vcs-error, не 500
+            raise VcsError('vcs-error', f'module catalog: {type(e).__name__}') from None
+        if m is None or m.status != 'ok':
+            raise VcsError('vcs-error', f'{VCS_MODULE} module is not loaded')
+        return m, _vcs_legacy_ctx(), True
+    try:
+        return prov, deai_modules.module_ctx(spaces.active_space(), prov), False
+    except (deai_modules.ModuleError, spaces.SpacesError) as e:
+        raise VcsError(getattr(e, 'code', 'vcs-error'), str(getattr(e, 'message', None) or e)[:300]) from None
 
 
-def _align_mirror_remote(md, gl):
-    """origin дзеркала = адреса з конфіга задачі. Розійшлись — переписати й сказати.
+def _vcs_str(v):
+    return isinstance(v, str) and v.strip() != ''
 
-    ⛔ fb-29092026-d64d35 (boss-interface). Тека дзеркала називається за шляхом
-    репо ПІСЛЯ двокрапки (`_mirror_dir`), тож `git@10.0.0.7:X` і
-    `git@gitlab.internal.example:X` — одна й та сама тека. Дзеркало, склоноване
-    25.08.2026 з обхідною IP-адресою, так і тримало її в origin: `tasks.json`
-    полагодили, а fetch/push ішли туди, куди SSH-ключ не пускає, — і ітерації
-    8–14 жили лише на Vercel. Лікувалось руками, `git remote set-url`.
-    Джерело правди про адресу — конфіг задачі, а не історія клону.
-    """
-    # ЗАПИСАНЕ значення, а не `remote get-url`: той розгортає `url.*.insteadOf`,
-    # і на машині з таким правилом звірка «не збіглась» би щоразу (ревʼю 29.09).
-    r = _git(['config', '--get', 'remote.origin.url'], md, gl)
-    have = (r.stdout or '').strip() if r.returncode == 0 else ''
-    if have == gl['repo']:
-        return
-    s = _git(['remote', 'set-url', 'origin', gl['repo']], md, gl)
-    if s.returncode != 0:
-        raise OSError(f'remote set-url failed: {(s.stderr or s.stdout)[-300:]}')
-    print(f'дзеркало {os.path.basename(md)}: origin {have or "—"} → {gl["repo"]} '
-          f'(за tasks.json)', file=sys.stderr)
+
+def vcs_target(cfg, tid, task, settings):
+    """Ціль задачі для модуля або `None` (задачу не налаштовано). Порядок (спека 4a, «Роль `vcs`»): поле задачі
+    `vcs{repo, path?, branch?}` (лише з непорожнім `repo`) → старе `gitlab{…}` (лише простір з інтеграціями; як
+    `gitlab_cfg` 0.7.0: без `repo` чи `path` — не налаштована, ключ і IP — задачі чи спільні з `tasks.json`) →
+    налаштування модуля. `{task}` у `path` — id задачі; `path` без `/` по краях.
+
+    ⛔ `repo` кладемо ОБРІЗАНИМ: `validate` модуля відкидає `repo != repo.strip()`, тож пробіл із форми чи ручної правки
+    `tasks.json` інакше давав би `vcs-bad-target` замість синку."""
+    def tpath(p):
+        return str(p).replace('{task}', tid).strip('/')
+    v = task.get('vcs')
+    if isinstance(v, dict) and _vcs_str(v.get('repo')):
+        return {'repo': v['repo'].strip(), 'task': tid,
+                'path': tpath(v['path'] if _vcs_str(v.get('path')) else settings.get('path') or 'mockup/{task}'),
+                'branch': (v['branch'] if _vcs_str(v.get('branch')) else settings.get('branch') or 'main').strip()}
+    if task.get('gitlab') and spaces.integrations_on():
+        gl = gitlab_cfg(cfg, task)
+        if gl is None:
+            return None
+        return {**{k: x for k, x in gl.items() if x}, 'task': tid, 'repo': str(gl['repo']).strip()}
+    if _vcs_str(settings.get('repo')):
+        return {'repo': settings['repo'].strip(), 'task': tid,
+                'path': tpath(settings.get('path') or 'mockup/{task}'),
+                'branch': (settings.get('branch') or 'main').strip()}
+    return None
+
+
+def vcs_task(cfg, tid, task):
+    """`None` — у просторі запиту нема ролі `vcs`; інакше `(module, ctx, legacy, target | None)`. Відмова — `VcsError`."""
+    p = vcs_provider()
+    return None if p is None else (*p, vcs_target(cfg, tid, task, p[1].get('settings') or {}))
+
+
+def _vcs_call(vcs, fn, *args, timeout=None):
+    """Виклик функції ролі: `vcs` — `(module, ctx, legacy[, target])` від маршруту чи `None` (знайти самому). Відмова модуля
+    — `VcsError` із його кодом. `timeout` — лише для коротких викликів (`validate`); операції git тримає сам модуль."""
+    v = vcs if vcs is not None else vcs_provider()
+    if v is None:
+        raise VcsError('vcs-error', 'no git sync in this space')
+    try:
+        return deai_modules.call(v[0], fn, v[1], *args, timeout=timeout)
+    except deai_modules.ModuleError as e:
+        raise VcsError(e.code, e.message) from None
+
+
+def vcs_mirror_dir(gl, vcs=None):
+    """Тека дзеркала цілі — розкладку знає модуль; ядру й тестам — для діагностики. `None` — ролі нема чи модуль не вміє
+    казати (`mirror_dir` необовʼязкова для свого модуля): шлях тоді невідомий і не показується."""
+    v = vcs if vcs is not None else vcs_provider()
+    if v is None or v[0].fn('mirror_dir') is None:
+        return None
+    return _vcs_call(v, 'mirror_dir', gl)
+
+
+#: Керівні символи, які модуль відхиляє в `meta` (`vcs-error` до git): у імені й пошті автора — будь-які, у повідомленні —
+#: усі, крім `\n`, `\t`, `\r`. Чистить ядро: заголовок задачі з ESC чи NUL інакше блокував би кожну відправку.
+_CTL_LINE = re.compile(r'[\x00-\x1f\x7f]')
+_CTL_TEXT = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+#: Підпис коміту, коли в машини нема особи: git без `user.email` не комітить. Лише для коміту — див. `_commit_identity`.
+_FALLBACK_NAME, _FALLBACK_EMAIL = 'Designer One', 'designer.one@example.com'
+
+
+def _vcs_meta(message):
+    """`meta` для `push` модуля: повідомлення коміту й підпис автора — очищені від керівних символів."""
+    a = _commit_author()
+    return {'message': _CTL_TEXT.sub('', message),
+            'author': {'name': _CTL_LINE.sub('', a['name']).strip() or _FALLBACK_NAME,
+                       'email': _CTL_LINE.sub('', a['email']).strip() or _FALLBACK_EMAIL}}
 
 
 def _mockup_files(src_dir):
@@ -818,6 +854,13 @@ def _stamp_author(entry):
     return entry
 
 
+def _commit_author():
+    """Підпис коміту в дзеркало: особа машини, а без неї — константа (git без `user.email` не комітить). Див.
+    `_commit_identity` — чому константа лише тут і ніколи не в даних ітерації."""
+    name, key = machine_identity()
+    return {'name': name or _FALLBACK_NAME, 'email': key or _FALLBACK_EMAIL}
+
+
 def _commit_identity():
     """Аргументи -c для коміту в дзеркало: підпис ВЛАСНИКА машини.
 
@@ -835,87 +878,8 @@ def _commit_identity():
     шляхом: порожній `author` у `.canvas-state.json` → колега падає на
     запасний `git log -1 --format=%an` → а комітив дзеркало саме цей фолбек.
     """
-    name, key = machine_identity()
-    return ['-c', f'user.name={name or "Designer One"}',
-            '-c', f'user.email={key or "designer.one@example.com"}']
-
-
-def _rev_count(md, gl, rng, path=None):
-    """Кількість комітів у діапазоні; `path` звужує до однієї теки (`-- <path>`)."""
-    args = ['rev-list', '--count', rng] + (['--', path] if path else [])
-    rc = _git(args, md, gl)
-    return int(rc.stdout.strip()) if rc.returncode == 0 and rc.stdout.strip().isdigit() else 0
-
-
-def _on_remote(md, gl):
-    """Чи існує тека задачі на origin. Не змогли спитати — None, а не False.
-
-    Без цього «синхронізовано» друкувалось і для задачі, якої в репо НЕМА
-    взагалі: `behind=0` (нам нічого не наздоганяти), `dirty=False` — і статус
-    читався як «усе доїхало». 29.07.2026 так виглядали dobFilter і riskFactors,
-    а bgSanctions мав ще й записаний synced_at при sha=None — тобто мета
-    вважала синхронізованим пуш, якого не було.
-
-    Три стани, а не два: True / False / None («не питали, дзеркало без origin»).
-    Зливати None у False не можна — це рівно те вигадування впевненості, через
-    яке баг і виглядав правдою.
-    """
-    r = _git(['cat-file', '-e', f'origin/{gl["branch"]}:{gl["path"]}'], md, gl)
-    if r.returncode == 0:
-        return True
-    # Гілки origin нема (порожнє/нове дзеркало) — питання не має відповіді.
-    if _git(['rev-parse', '--verify', f'origin/{gl["branch"]}'], md, gl).returncode != 0:
-        return None
-    return False
-
-
-def _behind_count(md, gl):
-    """Скільки комітів origin попереду локального дзеркала.
-
-    ⛔ Свідомо БЕЗ `-- <path>`. Раніше рахувалось лише по теці задачі — і будь-який
-    коміт мимо `mockup/<tid>` (CI-конфіг, макет іншої задачі) давав behind=0:
-    pull-first guard не спрацьовував, дзеркало тихо йшло в non-fast-forward, push
-    відбивався НАЗАВЖДИ і блокував усі задачі цього репо. Ціна ширшого guard —
-    підтягувати доводиться частіше; вона того варта.
-    """
-    return _rev_count(md, gl, f'{gl["branch"]}..origin/{gl["branch"]}')
-
-
-def _behind_path_count(md, gl):
-    """Скільки комітів origin попереду ТЕКИ ЗАДАЧІ — на відміну від усього репо.
-
-    Дві величини, два різні висновки, і їх злиття коштувало дорого:
-    · «репо попереду» (CI-конфіг, макет сусідньої задачі) — наздогнати дзеркало
-      і пушити далі. Блокувати тут нема чого: нашої роботи ніхто не чіпав;
-    · «ТЕКА ЗАДАЧІ попереду» — ось це блокує, бо пуш поверх мовчки затер би
-      чужий макет.
-
-    Поки величина була одна, 90% блокувань казали «тебе обігнали» там, де теку
-    ніхто не чіпав, а перший пуш НОВОЇ задачі не проходив узагалі: guard
-    блокував, а `gitlab_pull` падав із `path … not found in repo`. Вийти можна
-    було лише `git merge --ff-only` руками в теці дзеркала (фідбек 04.09.2026).
-    """
-    return _rev_count(md, gl, f'{gl["branch"]}..origin/{gl["branch"]}', gl['path'])
-
-
-def _ahead_count(md, gl):
-    """Скільки локальних комітів дзеркала ще не на origin (незапушені)."""
-    return _rev_count(md, gl, f'origin/{gl["branch"]}..{gl["branch"]}')
-
-
-def _behind_top(md, gl):
-    """Хто і коли зробив верхній коміт origin — щоб не ГАДАТИ, хто нас обігнав.
-
-    03.08.2026 хук сказав «там працював інший дизайнер», а насправді це була та
-    сама людина з іншої копії інструменту — і повідомлення відправило діагностику
-    хибним слідом. Автор і дата беруться з дзеркала, без мережі.
-    """
-    r = _git(['log', '-1', '--format=%an%x1f%ad%x1f%s', '--date=format:%d.%m.%Y %H:%M',
-              f'origin/{gl["branch"]}'], md, gl)
-    if r.returncode != 0 or '\x1f' not in r.stdout:
-        return {}
-    author, date, subject = (r.stdout.strip().split('\x1f') + ['', '', ''])[:3]
-    return {'author': author, 'date': date, 'subject': subject[:120]}
+    a = _commit_author()
+    return ['-c', f'user.name={a["name"]}', '-c', f'user.email={a["email"]}']
 
 
 def _iter_dir(task, it):
@@ -946,125 +910,97 @@ def _pick_page(task, it, page_id):
     return op[0] if op else None
 
 
-def gitlab_sync(tid, task, gl, it):
-    """Экспорт ВЫБРАННОЙ итерации в mockup/<путь> зеркала → commit → push.
-    Pull-first guard: если на GitLab новее по нашему пути — не пушим поверх
-    (иначе молча затрём чужой макет), просим сперва Підтягнути."""
+def gitlab_sync(tid, task, gl, it, vcs=None):
+    """Експорт ВИБРАНОЇ ітерації в `<path>` дзеркала → коміт → push (усе це робить модуль ролі `vcs`).
+    Pull-first guard (модуль): якщо в репо новіше по нашому шляху — не пушимо поверх (інакше мовчки затремо чужий
+    макет), просимо спершу «Підтягнути». `gl` — ціль (`vcs_target`); `vcs` — `(module, ctx, legacy)` від маршруту чи
+    `None` (знайти самому). Відмова модуля — `VcsError` (це `OSError`: маршрути й автосинк ловлять її як і раніше)."""
     src = _iter_dir(task, it)
     if not os.path.isdir(src):
         raise OSError('iteration not found')
     # ⛔ Чуже не пушимо. Відправити ітерацію колеги під своїм підписом означає
     # стерти авторство рівно так, як воно стиралось до цієї задачі — тільки
-    # тепер уже маючи підпис на руках. Перевірка стоїть ПЕРЕД дзеркалом: ні
-    # мережі, ні fetch заради відмови.
+    # тепер уже маючи підпис на руках. Перевірка стоїть ПЕРЕД постачальником і
+    # мережею: ні дзеркала, ні fetch заради відмови.
     _entry = next((x for x in load_meta(task).get('iterations', [])
                    if x['id'] == it), {})
     _, _my_key = machine_identity()
     if not iteration_is_mine(_entry, _my_key):
         return {'ok': False, 'synced': False, 'blocked': 'foreign', 'it': it,
                 'author': _entry.get('author') or _entry.get('author_key') or ''}
-    md = ensure_mirror(gl, fetch=True)
-    co = _git(['checkout', gl['branch']], md, gl)
-    if co.returncode != 0:
-        raise OSError(f'checkout {gl["branch"]} failed: {(co.stderr or co.stdout)[-200:]}')
-    behind = _behind_count(md, gl)
-    if behind > 0:
-        behind_path = _behind_path_count(md, gl)
-        if behind_path > 0:
-            # Теку задачі СПРАВДІ оновили — пуш поверх затер би чужий макет.
-            return {'ok': False, 'synced': False, 'blocked': 'behind', 'behind': behind,
-                    'behind_path': behind_path,
-                    'remote': f'{gl["repo"]}:{gl["path"]}',
-                    'behind_top': _behind_top(md, gl)}
-        # Попереду лише РЕПО (CI-конфіг, макет сусідньої задачі) — наздоганяємо
-        # дзеркало самі. Інваріант, заради якого guard і писався, від цього не
-        # страждає, а виконується сильнішим способом: push іде з дзеркала, яке
-        # вже не відстає, тобто non-fast-forward неможливий за побудовою.
-        ff = _git(['merge', '--ff-only', f'origin/{gl["branch"]}'], md, gl)
-        if ff.returncode != 0:
-            # Дзеркало розійшлось (є свої коміти поверх origin) — це вже не
-            # «наздогнати», а розводити руками. Кажемо вголос і НЕ пушимо.
-            return {'ok': False, 'synced': False, 'blocked': 'diverged',
-                    'behind': behind, 'ahead': _ahead_count(md, gl),
-                    'remote': f'{gl["repo"]}:{gl["path"]}',
-                    'behind_top': _behind_top(md, gl),
-                    'error': (ff.stderr or ff.stdout)[-200:]}
-    dst = os.path.join(md, gl['path'])
-    if os.path.isdir(dst):
-        shutil.rmtree(dst)  # чтобы удалённые в макете файлы ушли и из репо
-    copy_mockup(src, dst)
-    pages = pm.read_pages(src)
-    if len(pm.openable_pages(pages)) > 1:
-        # Глибина — відступом, тека — рядком БЕЗ теки (`—`): на диску її нема, і
-        # `<id>/` у колонці «Тека» вів би в нікуди. Вкладеність тепер довільна,
-        # а `↳ ` на будь-якій глибині виглядав однаково.
-        # `&emsp;`, а не пробіли: GFM обрізає пробіли на початку комірки, і глибина
-        # зникла б (а колись була видима — `↳ `). Назва в один рядок: перенос
-        # усередині розірвав би рядок таблиці.
-        def _row(f):
-            name = ' '.join(f['page']['name'].split()).replace('|', '/')
-            indent = '&emsp;' * f['depth']
-            if f['kind'] == 'folder':
-                return f"| — | {indent}📁 {name} |"
-            return f"| `{pm.page_rel(f['page']) or '.'}/` | {indent}{name} |"
-        rows = '\n'.join(_row(f) for f in pm.flatten(pages))
-        with open(os.path.join(dst, 'README.md'), 'w', encoding='utf-8') as fh:
-            fh.write(f"# {task.get('title', tid).replace(chr(10), ' ')}\n\n"
-                     f"Мультисторінковий макет (design-canvas, задача `{tid}`). "
-                     f"Не редагувати тут напряму.\n\n"
-                     f"| Тека | Сторінка |\n|---|---|\n{rows}\n")
+    v = vcs or vcs_provider()
+    if v is None:
+        raise VcsError('vcs-error', 'no git sync in this space')
+    legacy = v[2]
     meta_now = load_meta(task)
     it_entry = next((x for x in meta_now.get('iterations', []) if x['id'] == it), {})
-    # Стан публікації — колегам. Без нього в чужому канвасі ітерації завжди
-    # виглядають неопублікованими: iterations.json лежить у SKIP і нікуди не їде.
-    # ⛔ Жодних міток часу «коли синкнули» — інакше файл мінявся б щоразу і
-    # автосинк робив би порожній коміт на кожну відповідь Claude.
-    # Підпис автора — ЗАЯВА тієї машини, що синкає. Колега читає саме її
-    # (`gitlab_pull`), а не `git log`: лог це властивість коміту й розходиться
-    # з автором макета на першому ж ребейсі чи пуші з CI.
-    _author, _author_key = machine_identity()
-    with open(os.path.join(dst, STATE_FILE), 'w', encoding='utf-8') as fh:
-        json.dump({'task': tid, 'source_it': it,
-                   'author': _author, 'author_key': _author_key,
-                   'published': bool(it_entry.get('published')),
-                   'publish_url': meta_now.get('publish_url'),
-                   'published_at': meta_now.get('published_at')},
-                  fh, ensure_ascii=False, indent=2)
-    _git(['add', '-A', gl['path']], md, gl)
-    st = _git(['status', '--porcelain', gl['path']], md, gl)
-    remote = f'{gl["repo"]}:{gl["path"]}'
-    if not st.stdout.strip():
-        # Макет не змінився — але це ще НЕ означає «лежить на GitLab»: попередній
-        # коміт міг не доїхати (див. bgSanctions, 12 днів «✓» при незапушеному
-        # коміті). Якщо локальні коміти є — доганяємо, і лише тоді synced.
-        if _ahead_count(md, gl) == 0:
-            return {'ok': True, 'synced': True, 'changed': False, 'pushed': False,
-                    'remote': remote}
-        p = _git(['push', '--quiet', 'origin', gl['branch']], md, gl)
-        return {'ok': p.returncode == 0, 'synced': p.returncode == 0, 'changed': False,
-                'pushed': p.returncode == 0, 'catchup': True, 'remote': remote,
-                'error': None if p.returncode == 0 else (p.stderr or p.stdout)[-300:]}
-    title = task.get('title', tid)
-    # rich-повідомлення: щоб pull/історія були самопояснювальні й легше вирішувати конфлікти
-    note = (it_entry.get('note') or '').strip()
-    subject = f'design-canvas: sync {gl["path"]} ({title}) · {it}'
-    body = f'Ітерація: {it} · Хеш: {mockup_hash(src)[:12]} · {time.strftime("%d.%m.%Y %H:%M")}'
-    if note:
-        body += f'\nЩо змінено: {note}'
-    _git(_commit_identity() + ['commit', '-q', '-m', subject + '\n\n' + body], md, gl)
-    p = _git(['push', '--quiet', 'origin', gl['branch']], md, gl)
-    sha = _git(['rev-parse', '--short', 'HEAD'], md, gl).stdout.strip()
-    return {'ok': p.returncode == 0, 'synced': p.returncode == 0, 'changed': True,
-            'pushed': p.returncode == 0, 'sha': sha, 'remote': remote,
-            'error': None if p.returncode == 0 else (p.stderr or p.stdout)[-300:]}
-
-
-def gitlab_status(task, gl, meta, it):
-    """Есть ли локальные изменения ВЫБРАННОЙ итерации к отправке / новее на GitLab."""
+    # ⛔ Тека для модуля — у системній теці тимчасових файлів, ПОЗА текою задачі: інакше `git_autocommit` підхопив би її
+    # у локальну історію задачі. Прибирається в `finally`, і після відмови теж.
+    tmp = tempfile.mkdtemp(prefix='deai-vcs-')
     try:
-        md = ensure_mirror(gl, fetch=True)
-    except OSError as e:
-        return {'configured': True, 'error': str(e)[:200]}
+        out_dir = os.path.join(tmp, 'm')
+        copy_mockup(src, out_dir)
+        pages = pm.read_pages(src)
+        if len(pm.openable_pages(pages)) > 1:
+            # Глибина — відступом, тека — рядком БЕЗ теки (`—`): на диску її нема, і
+            # `<id>/` у колонці «Тека» вів би в нікуди. Вкладеність тепер довільна,
+            # а `↳ ` на будь-якій глибині виглядав однаково.
+            # `&emsp;`, а не пробіли: GFM обрізає пробіли на початку комірки, і глибина
+            # зникла б (а колись була видима — `↳ `). Назва в один рядок: перенос
+            # усередині розірвав би рядок таблиці.
+            def _row(f):
+                name = ' '.join(f['page']['name'].split()).replace('|', '/')
+                indent = '&emsp;' * f['depth']
+                if f['kind'] == 'folder':
+                    return f"| — | {indent}📁 {name} |"
+                return f"| `{pm.page_rel(f['page']) or '.'}/` | {indent}{name} |"
+            rows = '\n'.join(_row(f) for f in pm.flatten(pages))
+            # Назва інструмента — текст ДАНИХ: у просторі ЛІГА лишається «design-canvas», як у 0.7.0.
+            tool = 'design-canvas' if legacy else 'Deai Canvas'
+            with open(os.path.join(out_dir, 'README.md'), 'w', encoding='utf-8') as fh:
+                fh.write(f"# {task.get('title', tid).replace(chr(10), ' ')}\n\n"
+                         f"Мультисторінковий макет ({tool}, задача `{tid}`). "
+                         f"Не редагувати тут напряму.\n\n"
+                         f"| Тека | Сторінка |\n|---|---|\n{rows}\n")
+        # Стан публікації — колегам. Без нього в чужому канвасі ітерації завжди
+        # виглядають неопублікованими: iterations.json лежить у SKIP і нікуди не їде.
+        # ⛔ Жодних міток часу «коли синкнули» — інакше файл мінявся б щоразу і
+        # автосинк робив би порожній коміт на кожну відповідь Claude.
+        # Підпис автора — ЗАЯВА тієї машини, що синкає. Колега читає саме її
+        # (`gitlab_pull`), а не `git log`: лог це властивість коміту й розходиться
+        # з автором макета на першому ж ребейсі чи пуші з CI.
+        _author, _author_key = machine_identity()
+        with open(os.path.join(out_dir, STATE_FILE), 'w', encoding='utf-8') as fh:
+            json.dump({'task': tid, 'source_it': it,
+                       'author': _author, 'author_key': _author_key,
+                       'published': bool(it_entry.get('published')),
+                       'publish_url': meta_now.get('publish_url'),
+                       'published_at': meta_now.get('published_at')},
+                      fh, ensure_ascii=False, indent=2)
+        title = task.get('title', tid)
+        # rich-повідомлення: щоб pull/історія були самопояснювальні й легше вирішувати конфлікти
+        note = (it_entry.get('note') or '').strip()
+        subject = f'{"design-canvas" if legacy else "deai"}: sync {gl["path"]} ({title}) · {it}'
+        body = f'Ітерація: {it} · Хеш: {mockup_hash(src)[:12]} · {time.strftime("%d.%m.%Y %H:%M")}'
+        if note:
+            body += f'\nЩо змінено: {note}'
+        r = _vcs_call(v, 'push', gl, out_dir, _vcs_meta(subject + '\n\n' + body))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {**r, 'remote': f'{gl["repo"]}:{gl["path"]}'}
+
+
+def gitlab_status(task, gl, meta, it, vcs=None):
+    """Є локальні зміни ВИБРАНОЇ ітерації до відправки / новіше в репо. `gl` — ціль; `vcs` — `(module, ctx, legacy)` від
+    маршруту чи `None` (знайти самому: ролі нема — `{'configured': False}`). Помилка постачальника чи модуля — стан із
+    `error` і `code`, не виняток: опит статусу йде на кожному старті."""
+    try:
+        v = vcs or vcs_provider()
+        if v is None:
+            return {'configured': False}
+        st = _vcs_call(v, 'status', gl)
+    except VcsError as e:
+        return {'configured': True, 'error': str(e)[:200], 'code': e.code}
     g = meta.get('gitlab') or {}
     src = _iter_dir(task, it)
     # dirty относительно последней синхронизации ИМЕННО этой итерации
@@ -1085,18 +1021,23 @@ def gitlab_status(task, gl, meta, it):
             if os.path.isdir(d) and mockup_hash(d) == sh:
                 gitlab_it = itd['id']
                 break
-    return {'configured': True, 'behind': _behind_count(md, gl),
-            # Окремо від `behind`: «репо попереду» і «теку задачі попереду» —
-            # різні новини, і перше не заважає працювати (див. `_behind_path_count`).
-            'behind_path': _behind_path_count(md, gl),
-            # незапушені локальні коміти дзеркала — щоб «✓» більше не могло
-            # означати «лежить у мене, а не на GitLab» (див. bgSanctions/22.07)
-            'unpushed': _ahead_count(md, gl),
-            # чи є тека задачі на origin: «ніколи не пушилось» ≠ «синхронізовано»
-            'on_remote': _on_remote(md, gl),
-            'dirty': bool(dirty), 'synced_at': g.get('synced_at'),
-            'synced_it': g.get('synced_it'), 'gitlab_it': gitlab_it,
-            'remote_path': gl['path'], 'web': gitlab_web(gl)}
+    out = {'configured': True, 'behind': st.get('behind', 0),
+           # Окремо від `behind`: «репо попереду» і «теку задачі попереду» —
+           # різні новини, і перше не заважає працювати (модуль: `behind_path`
+           # блокує відправку, `behind` наздоганяється сам).
+           'behind_path': st.get('behind_path', 0),
+           # незапушені локальні коміти дзеркала — щоб «✓» більше не могло
+           # означати «лежить у мене, а не на GitLab» (див. bgSanctions/22.07)
+           'unpushed': st.get('unpushed', 0),
+           # чи є тека задачі на origin: «ніколи не пушилось» ≠ «синхронізовано»
+           'on_remote': st.get('on_remote'),
+           'dirty': bool(dirty), 'synced_at': g.get('synced_at'),
+           'synced_it': g.get('synced_it'), 'gitlab_it': gitlab_it,
+           'remote_path': gl['path'], 'web': st.get('web'), 'label': st.get('label') or 'Git'}
+    if v[2]:
+        # Простір ЛІГА (`'legacy'`): «Історія» й підпис — як у 0.7.0 (будь-який `git@host:`, і з IP, «GitLab»), до 4d.
+        out['web'], out['label'] = gitlab_web(gl), 'GitLab'
+    return out
 
 
 def _read_state(src_dir):
@@ -1136,7 +1077,7 @@ def _authored_mtime(d, skip=None):
 
     Кадри перезнімаються самі (автозʼємка при вході в «Огляд», T-34), тож
     свіжий `shots/` означає «інструмент перезняв», а не «дизайнер правив».
-    Порівнюється з `_authored_at_origin` — там кадри виключені так само.
+    Порівнюється з `last_commit.time` модуля `vcs` — там кадри виключені так само (`opts.ignore`).
     Dot-файли (`.DS_Store` від Finder) — теж не робота: їх не везе й експорт
     (`_is_tool_junk`), тобто на origin їх немає, і рахувати їх лише з одного
     боку означало б «молодшати» тижневу ітерацію від відкриття теки.
@@ -1234,17 +1175,6 @@ def recent_pages(idir, now=None):
     return out
 
 
-def _authored_at_origin(md, path, gl):
-    """Unix-час останнього коміту в теку задачі на origin (без комітів лише
-    кадрів) або None. Це час, коли версію ЗРОБИЛИ, а не коли її завантажили:
-    файли дзеркала мають mtime чекауту, тобто «щойно»."""
-    r = _git(['log', '-1', '--format=%ct', '--', path, f':(exclude){path}/shots'], md, gl)
-    try:
-        return int((r.stdout or '').strip())
-    except ValueError:
-        return None
-
-
 def _touch_tree(d):
     """Проставити файлам теки поточний час.
 
@@ -1288,7 +1218,7 @@ def _record_sync(task, it, sha):
     return meta
 
 
-def autosync(tid, task, gl):
+def autosync(tid, task, gl, vcs=None):
     """Один крок автосинку: брудна ітерація → локальний коміт → пуш на GitLab.
 
     Кличе Stop-хук після кожної відповіді Claude — правило «макет пушимо після
@@ -1325,13 +1255,16 @@ def autosync(tid, task, gl):
         return {'ok': True, 'changed': False, 'reason': 'clean', 'it': it}
     local = git_autocommit(task['dir'], f'{it}: автосинк (design-canvas)')
     try:
-        r = gitlab_sync(tid, task, gl, it)
+        r = gitlab_sync(tid, task, gl, it, vcs=vcs)
     except OSError as e:
         # Немає мережі/VPN — це не привід сварити дизайнера після кожної відповіді.
         # Але й «синхронізовано» не пишемо: відбиток лишається старим, і синк
-        # повторить спробу наступного разу.
+        # повторить спробу наступного разу. Будь-яка відмова модуля (`vcs-offline`/
+        # `vcs-auth`/`vcs-busy`/`vcs-error`) — той самий «offline», з `code`: Stop-хук
+        # ніколи не отримує 5xx.
         return {'ok': False, 'synced': False, 'changed': False, 'reason': 'offline',
-                'it': it, 'error': str(e)[:300], 'local_sha': local.get('sha')}
+                'it': it, 'error': str(e)[:300], 'local_sha': local.get('sha'),
+                **({'code': e.code} if isinstance(e, VcsError) else {})}
     # ⛔ Гейт саме по `synced`, а не по `ok`: `ok` буває True і тоді, коли макет не
     # змінився, а попередній коміт так і не доїхав до origin. Саме через це
     # bgSanctions 12 днів показував «✓» при незапушеному коміті.
@@ -1380,33 +1313,40 @@ def _adopt_publish_state(meta, state, task):
         meta['published_at'] = state.get('published_at')
 
 
-def gitlab_pull(task, gl):
-    """Чужие правки с GitLab → новая итерация локально (рабочий макет не трогаем)."""
-    md = ensure_mirror(gl, fetch=True)
-    co = _git(['checkout', gl['branch']], md, gl)
-    if co.returncode != 0:
-        raise OSError(f'checkout {gl["branch"]} failed: {(co.stderr or co.stdout)[-200:]}')
-    # ⛔ Не ковтати відмову pull: при розходженні дзеркала --ff-only падає, і раніше
-    # ми копіювали в нову ітерацію ЗАСТАРІЛЕ дзеркало, підписавши його
-    # «оновлення з GitLab · <колега>». Дизайнер отримував фальшиве чуже оновлення.
-    pl = _git(['pull', '--ff-only', '--quiet', 'origin', gl['branch']], md, gl)
-    if pl.returncode != 0:
-        ahead = _ahead_count(md, gl)
-        hint = (f' Дзеркало має {ahead} локальний(х) коміт(ів) поверх origin — '
-                f'розходження треба розвести вручну.' if ahead else '')
-        raise OSError(f'pull --ff-only failed: {(pl.stderr or pl.stdout)[-200:]}.{hint}')
-    src = os.path.join(md, gl['path'])
-    if not os.path.isdir(src):
-        raise OSError(f'path {gl["path"]} not found in repo')
-    # автор последнего коммита по нашему пути — в подпись итерации
-    a = _git(['log', '-1', '--format=%an', '--', gl['path']], md, gl)
-    author = a.stdout.strip() if a.returncode == 0 else ''
+def gitlab_pull(task, gl, vcs=None):
+    """Чужі правки з репо → нова ітерація локально (робочий макет не чіпаємо). Модуль ролі `vcs` кладе `<path>` у тимчасову
+    теку; ядро вирішує, що з цим робити (`_pull_into_task`). `gl` — ціль, `vcs` — як у `gitlab_sync`."""
+    v = vcs or vcs_provider()
+    if v is None:
+        raise VcsError('vcs-error', 'no git sync in this space')
+    # Назва джерела — текст ДАНИХ (примітка ітерації): у просторі ЛІГА лишається «GitLab», як у 0.7.0.
+    src_name = 'GitLab' if v[2] else 'репозиторію'
+    tmp = tempfile.mkdtemp(prefix='deai-vcs-')
+    try:
+        src = os.path.join(tmp, 'm')
+        os.makedirs(src)
+        # ⛔ Не ковтати відмову pull: при розходженні дзеркала `--ff-only` падає (`pull --ff-only failed`), і раніше ми
+        # копіювали в нову ітерацію ЗАСТАРІЛЕ дзеркало, підписавши його «оновлення з GitLab · <колега>». Тепер це `VcsError`.
+        # `shots` — підтека кадрів: їхні комміти не вважаються роботою (див. `_authored_mtime`).
+        r = _vcs_call(v, 'pull', gl, src, {'ignore': ['shots']})
+        if not r.get('found'):
+            raise OSError(f'path {gl["path"]} not found in repo')
+        return _pull_into_task(task, gl, src, r.get('last_commit') or {}, src_name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _pull_into_task(task, gl, src, last_commit, src_name):
+    """Приймання `src` (копія `<path>` з репо) у задачу: нова ітерація, авторство, форк чужої чи застарілої своєї,
+    стан публікації. `last_commit` — `{author, time}` від модуля (`time` — без кадрів, `None` — не перевіряти застарілість)."""
+    # автор останнього коміту по нашому шляху — в підпис ітерації (запасний шлях, див. нижче)
+    author = last_commit.get('author') or ''
     # ⛔ Імені автора в ПРИМІТЦІ більше немає (15.09.2026). Воно тут стояло,
     # поки в ітерації не було власного поля `author` — і тихо витікало в
     # ПУБЛІЧНЕ превʼю: `publish_manifest` везе `note` як є, а `manifest.json`
     # віддається без пароля (заміряно 11.09.2026). Рішення власника —
     # підпис лише всередині інструмента, тож автор їде полем, а не текстом.
-    note = 'оновлення з GitLab'
+    note = f'оновлення з {src_name}'
     state = _read_state(src)
     meta = load_meta(task)
     its = meta.setdefault('iterations', [])
@@ -1491,15 +1431,15 @@ def gitlab_pull(task, gl):
         # Порівняння — на секундах: `%ct` цілий, mtime дробовий, і в одній
         # секунді «щойно запушене з другої машини» не мусить ставати старшим.
         work_id, work_dir = max(mine_before, key=lambda p: _authored_mtime(p[1]))
-        pulled_at = _authored_at_origin(md, gl['path'], gl)
+        pulled_at = last_commit.get('time')
         if pulled_at is not None and int(_authored_mtime(work_dir)) > pulled_at:
             fork_id = f'it{int(new_id[2:]) + 1}'
             fork_dir = os.path.join(task['dir'], 'iterations', fork_id)
             copy_mockup(work_dir, fork_dir)
             _touch_tree(fork_dir)
             fork = _stamp_author({'id': fork_id, 'date': time.strftime('%d.%m.%Y %H:%M'),
-                                  'note': 'продовження моєї роботи — з GitLab '
-                                          'приїхала старша версія',
+                                  'note': 'продовження моєї роботи — з '
+                                          f'{src_name} приїхала старша версія',
                                   'published': False, 'from': work_id})
             its.append(fork)
             continue_from = work_id
@@ -1916,8 +1856,9 @@ class TaskRefused(ValueError):
         self.code = code
 
 
-def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=None, adopt_src=None, adopt_files=()):
-    """Бутстрап задачи: папка в design-work (или clone из GitLab) + запись в tasks.json.
+def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=None, root=None, adopt_src=None,
+             adopt_files=()):
+    """Бутстрап задачи: папка в design-work (или клон макета з репо) + запись в tasks.json.
     Идемпотентность обеспечивает вызывающий (проверка на существование).
 
     `root` — теку, у якій лягає тека задачі, задає ВИКЛИКАЧ (простір без інтеграцій: `path`
@@ -1930,11 +1871,15 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=No
 
     `title` — ввід людини (форма «Нова задача»): у стартовий `index.html` він лягає ЕКРАНОВАНИМ.
 
+    `vcs` — `{repo, path?, branch?}` (етап 4a, роль `vcs`; перевірки й відмову без ролі робить маршрут): ціль синку задачі;
+    пишеться в запис задачі й, коли в `<path>` репо є `index.html`, дає першу ітерацію. З `adopt_src` (`from`) отримання
+    не робиться: людина вже назвала джерело макета. `gitlab` (ЛІГА) бутстрапить із репо й тоді, як було.
+
     `adopt_src` — тека-джерело (`from` маршруту, вже перевірена `_adopt_source`), `adopt_files` — її перелік з
     `adopt_scan`: тоді перша ітерація — копія теки, а не стартовий `index.html`, а результат несе `adopted`
-    (`{files, bytes, skipped}` — що `adopt_copy` справді скопіював). ⛔ Імена саме `adopt_*`, не `src`: гілка GitLab
-    у `_task_new_write` має власний локальний `src` і затінила б параметр (регресія 0.6.0: нова задача при доступному
-    дзеркалі без макета діставала ПОРОЖНЮ `it1`); та гілка цих імен не торкається.
+    (`{files, bytes, skipped}` — що `adopt_copy` справді скопіював). ⛔ Імена саме `adopt_*`, не `src`: гілка отримання
+    з репо в `_task_new_write` мала б власний локальний `src` і затінила б параметр (регресія 0.6.0: нова задача при
+    доступному дзеркалі без макета діставала ПОРОЖНЮ `it1`); та гілка цих імен не торкається (її локальні — `got`).
     Теку задачі `adopt_src` ЗАЙМАЄ атомарно (`makedirs` без `exist_ok`: вона вже є — `TaskRefused('task-dir-exists')`,
     чужу теку не чіпаємо). Будь-який збій до запису в `tasks.json` включно прибирає саме її й летить далі (`OSError` →
     маршрут: 500 `task-create-failed`, повтор не впирається в `task-dir-exists`).
@@ -1950,7 +1895,7 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=No
         except FileExistsError:
             raise TaskRefused('task-dir-exists', 'the task folder already exists in the space') from None
     try:
-        cloned, adopted = _task_new_write(cfg, tid, title, jira, profile, gitlab, tdir, adopt_src, adopt_files)
+        cloned, adopted = _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src, adopt_files)
         cfg['current'] = tid
         mark_opened(cfg, tid)
         save_tasks(cfg)
@@ -1968,47 +1913,52 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, root=No
     return out
 
 
-def _task_new_write(cfg, tid, title, jira, profile, gitlab, tdir, adopt_src, adopt_files):
+def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src, adopt_files):
     """Тіло `task_new` до запису задачі в `cfg` включно (макет першої ітерації, `iterations.json`, `cfg['tasks'][tid]`):
     `(cloned, adopted)`, де `adopted` — `(файлів, байтів, пропущено)` від `adopt_copy` або `None`. Окремою функцією,
     щоб `task_new` могла прибрати зайняту теку при БУДЬ-ЯКОМУ збої тут і в `save_tasks`, але не після запису реєстру.
     `current` і збереження `tasks.json` лишаються в `task_new` (їх читання `current` стереже `CurrentTaskReadGuard`).
-    ⛔ `adopt_src`/`adopt_files` — лише з параметрів: гілка GitLab нижче має власні локальні (`md`, `src`) і цих імен
-    не торкається."""
+    ⛔ `adopt_src`/`adopt_files` — лише з параметрів: гілка отримання нижче має власні локальні (`tmp`, `got`, `target`, `r`) і
+    цих імен не торкається."""
     it1 = os.path.join(tdir, 'iterations', 'it1')   # первая итерация = стартовый макет
     # gitlab-маппинг по умолчанию — репо направления (см. PROFILE_REPOS)
     if gitlab is None and profile in PROFILE_REPOS:
         gitlab = {'repo': PROFILE_REPOS[profile], 'path': f'mockup/{tid}'}
     cloned = False
     cloned_state = {}
-    if gitlab:
-        # ⛔ ПЕРЕД `try` нижче: `IntegrationsOff` — підклас `OSError`, а `except OSError: pass`
-        # там читає це як «дзеркало недоступне → порожній стартовий макет» і мовчки записав би
-        # в простір без інтеграцій GitLab-маппінг. Маршрут `task-new` такий `gitlab` відхиляє
-        # раніше (400); тут — другий замок для будь-якого іншого викликача.
-        spaces.require_integrations()
-        gl = gitlab_cfg(cfg, {'gitlab': gitlab})
+    legacy = True        # чий текст даних у примітці форку: типово ЛІГА (`v[2]`), поки постачальника не знайдено
+    # Клон — для `vcs` БЕЗ `from` (`adopt_src`); профільний `gitlab` ЛІГИ бутстрапить, як і було.
+    if gitlab or (vcs and adopt_src is None):
+        if gitlab:
+            # ⛔ ПЕРЕД `try` нижче: `IntegrationsOff` — підклас `OSError`, а `except OSError: pass`
+            # там читає це як «дзеркало недоступне → порожній стартовий макет» і мовчки записав би
+            # в простір без інтеграцій GitLab-маппінг. Маршрут `task-new` такий `gitlab` відхиляє
+            # раніше (400); тут — другий замок для будь-якого іншого викликача.
+            spaces.require_integrations()
+        tmp = tempfile.mkdtemp(prefix='deai-vcs-')
         try:  # если макет уже есть в репо — берём его в it1, не начинаем с нуля
-            md = ensure_mirror(gl, fetch=True)
-            # ⛔ `ensure_mirror` лише ФЕТЧИТЬ — робоче дерево дзеркала лишається
-            # там, де його лишив попередній синк. Для НОВОЇ задачі дзеркало
-            # клонується свіжим, але якщо дизайнер уже працював із цим репо, на
-            # диску лежить старий чекаут — і задача заводилась із тижневого
-            # зрізу чужого макета, ще й із протухлим підписом у
-            # `.canvas-state.json`. Наздоганяємо тим самим ff-only, що й
-            # «Підтягнути»; не вийшло — падаємо в ту саму гілку, що й
-            # недоступне дзеркало (порожній стартовий макет), а не мовчки
-            # беремо застаріле.
-            pl = _git(['pull', '--ff-only', '--quiet', 'origin', gl['branch']], md, gl)
-            if pl.returncode != 0:
-                raise OSError(f'mirror ff-only failed: {(pl.stderr or pl.stdout)[-200:]}')
-            src = os.path.join(md, gl['path'])
-            if os.path.isfile(os.path.join(src, 'index.html')):
-                copy_mockup(src, it1)
-                cloned = True
-                cloned_state = _read_state(src)
+            v = vcs_provider()
+            if v is not None:
+                legacy = v[2]
+                # Явний `vcs.repo` перемагає профільний `gitlab` (той, що ставиться за `profile`) — як у `vcs_target`.
+                target = vcs_target(cfg, tid, {'vcs': vcs} if vcs else {'gitlab': gitlab}, v[1].get('settings') or {})
+                if target:
+                    got = os.path.join(tmp, 'm')
+                    os.makedirs(got)
+                    # ⛔ `pull` модуля = дзеркало + `--ff-only` до свіжого origin. Для НОВОЇ задачі це важливо: якщо
+                    # дизайнер уже працював із цим репо, на диску лежить старий чекаут — задача заводилась би з
+                    # тижневого зрізу чужого макета, ще й із протухлим підписом у `.canvas-state.json`. Не вийшло
+                    # наздогнати — `VcsError` (`OSError`) падає в ту саму гілку, що й недоступне дзеркало (порожній
+                    # стартовий макет), а не мовчки бере застаріле.
+                    r = _vcs_call(v, 'pull', target, got, {'ignore': ['shots']})
+                    if r.get('found') and os.path.isfile(os.path.join(got, 'index.html')):
+                        copy_mockup(got, it1)
+                        cloned = True
+                        cloned_state = _read_state(got)
         except OSError:
             pass
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     adopted = None
     if not cloned:
         if adopt_src is not None:
@@ -2054,7 +2004,7 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, tdir, adopt_src, ado
             _touch_tree(fork_dir)
             its.append(_stamp_author(
                 {'id': 'it2', 'date': time.strftime('%d.%m.%Y %H:%M'),
-                 'note': 'продовження макета з GitLab', 'published': False,
+                 'note': f'продовження макета з {"GitLab" if legacy else "репозиторію"}', 'published': False,
                  'from': 'it1'}))
     else:
         _stamp_author(it1_entry)
@@ -2064,6 +2014,8 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, tdir, adopt_src, ado
     entry = {'dir': tdir, 'title': title or tid, 'jira': jira, 'profile': profile}
     if gitlab:
         entry['gitlab'] = gitlab
+    if vcs:
+        entry['vcs'] = vcs
     cfg.setdefault('tasks', {})[tid] = entry
     return cloned, adopted
 

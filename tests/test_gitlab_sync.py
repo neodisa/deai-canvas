@@ -11,6 +11,11 @@
 
 Тести навмисно ганяють РЕАЛЬНИЙ git по локальних теках (без мережі): саме на
 стику з git баг і жив, а мок-обʼєкти його б не зловили.
+
+Етап 4a: git тепер виконує модуль `git-sync` (роль `vcs`), а ядро кличе його через старі імена (`gitlab_sync`/
+`gitlab_pull`/`gitlab_status`/`autosync`) з ціллю `gl`. Тут — поведінка ЛІГИ (неявний постачальник `'legacy'`) на тих
+самих сценаріях; внутрішні лічильники й транспорт (`_behind_count`, `ensure_mirror`, `_git`…) переїхали в модуль і
+`tests/test_git_sync_module.py`, а лічильники в тестах нижче читає прямий git у теці дзеркала.
 """
 import json
 import os
@@ -31,8 +36,13 @@ def sh(args, cwd):
 class GitlabSyncHonesty(unittest.TestCase):
     """Кожен тест — свій ізольований origin+дзеркало+задача."""
 
+    #: Оточення git: глобальний конфіг людини (`~/.gitconfig`: підпис комітів, `insteadOf`) тест не читає, мережі нема.
+    _GIT_ENV = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_SSH_COMMAND': 'false'}
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='dc-syncverify-')
+        self._saved_git_env = {k: os.environ.get(k) for k in self._GIT_ENV}
+        os.environ.update(self._GIT_ENV)
         os.environ['DC_MIRRORS_DIR'] = os.path.join(self.tmp, 'mirrors')
         # ⛔ КОНФІГ ЗАДАЧ — теж у тимчасову теку, і це не перестраховка.
         # 15.09.2026 тест, який кличе `task_new`, записав фікстуру ПОВЕРХ
@@ -48,7 +58,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         # наявного, і на порожньому місці падає копіюванням.
         with open(os.environ['DC_TASKS_FILE'], 'w', encoding='utf-8') as fh:
             json.dump({'tasks': {}, 'current': None}, fh)
-        # serve читає DC_MIRRORS_DIR на кожен виклик _mirror_dir, тому імпорт тут безпечний
+        # serve читає DC_MIRRORS_DIR на кожен виклик (`_mirrors_base`), тому імпорт тут безпечний
         import serve
         self.serve = serve
 
@@ -80,6 +90,11 @@ class GitlabSyncHonesty(unittest.TestCase):
     def tearDown(self):
         os.environ.pop('DC_MIRRORS_DIR', None)
         os.environ.pop('DC_TASKS_FILE', None)
+        for k, v in self._saved_git_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # ---- хелпери ----
@@ -105,6 +120,13 @@ class GitlabSyncHonesty(unittest.TestCase):
             self.serve._record_sync(self.task, it, r.get('sha'))
         return r
 
+    @staticmethod
+    def rev_count(md, rng):
+        """Скільки комітів у діапазоні — прямий git у теці дзеркала (лічильники ядра переїхали в модуль)."""
+        r = sh(['git', 'rev-list', '--count', rng], md)
+        assert r.returncode == 0, r.stderr
+        return int(r.stdout.strip())
+
     def _peer_commit(self, rel, text, msg):
         """Коміт колеги/CI в origin. Обовʼязково з pull, інакше push відбʼється."""
         sh(['git', 'pull', '-q', '--ff-only', 'origin', 'main'], self.peer)
@@ -123,7 +145,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         self.assertTrue(r['pushed'])
 
     def _mirror_readme(self):
-        md = self.serve._mirror_dir(self.gl)
+        md = self.serve.vcs_mirror_dir(self.gl)
         with open(os.path.join(md, 'mockup/t1', 'README.md'), encoding='utf-8') as fh:
             return fh.read()
 
@@ -159,7 +181,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         os.makedirs(os.path.join(self.it1, 'a'))
         self._write(os.path.join(self.it1, 'a', 'index.html'), '<h1>x</h1>')
         self.assertTrue(self._sync()['synced'])
-        md = self.serve._mirror_dir(self.gl)
+        md = self.serve.vcs_mirror_dir(self.gl)
         self.assertFalse(os.path.exists(os.path.join(md, 'mockup/t1', 'README.md')))
 
     def test_sync_puts_author_into_state_file(self):
@@ -176,7 +198,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         finally:
             os.environ.pop('DC_IDENTITY_NAME', None)
             os.environ.pop('DC_IDENTITY_EMAIL', None)
-        md = self.serve._mirror_dir(self.gl)
+        md = self.serve.vcs_mirror_dir(self.gl)
         with open(os.path.join(md, 'mockup/t1', '.canvas-state.json'),
                   encoding='utf-8') as fh:
             state = json.load(fh)
@@ -206,8 +228,8 @@ class GitlabSyncHonesty(unittest.TestCase):
         r = self._sync()
         self.assertIsNone(r.get('blocked'), f'чужий коміт мимо теки заблокував пуш: {r}')
         self.assertTrue(r['synced'])
-        md = self.serve._mirror_dir(self.gl)
-        self.assertEqual(self.serve._behind_count(md, self.gl), 0,
+        md = self.serve.vcs_mirror_dir(self.gl)
+        self.assertEqual(self.rev_count(md, 'main..origin/main'), 0,
                          'дзеркало лишилось позаду — саме це й ламало push назавжди')
 
     def test_first_push_of_a_new_task_is_not_deadlocked(self):
@@ -220,7 +242,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         неможливий у принципі.
         """
         # Дзеркало вже існує й відстало — але нашої теки на origin немає ніколи.
-        self.serve.ensure_mirror(self.gl, fetch=True)
+        self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')      # клон + fetch
         self._peer_commit('.gitlab-ci.yml', 'ci: x\n', 'ci: not our path')
 
         r = self._sync()
@@ -368,19 +390,21 @@ class GitlabSyncHonesty(unittest.TestCase):
         найсвіжішу за mtime, тобто Stop-хук відправив би НЕ ту ітерацію.
         Мутація: прибери виклик `_touch_tree` — тест червоніє.
         """
-        self._sync()
-        self._peer_push_with_state('<h1>чуже</h1>', 'Ольга', 'designer2@example.com')
-        # Моя it1 — свіжа (працював щойно).
-        self._write(os.path.join(self.it1, 'index.html'), '<h1>моє сьогодні</h1>')
-        # А макет колеги зроблений тиждень тому: зістарюємо дзеркало руками.
-        old = time.time() - 7 * 24 * 3600
-        md = self.serve._mirror_dir(self.gl)
-        self.serve._git(['pull', '-q', '--ff-only', 'origin', 'main'], md, self.gl)
-        for root, _, names in os.walk(os.path.join(md, 'mockup/t1')):
-            for n in names:
-                os.utime(os.path.join(root, n), (old, old))
-
-        r = self.serve.gitlab_pull(self.task, self.gl)
+        # Особа машини задана явно: без неї (`GIT_CONFIG_GLOBAL` тут порожній) усе «своє», і чужого форку не буде.
+        def run():
+            self._sync()
+            self._peer_push_with_state('<h1>чуже</h1>', 'Ольга', 'designer2@example.com')
+            # Моя it1 — свіжа (працював щойно).
+            self._write(os.path.join(self.it1, 'index.html'), '<h1>моє сьогодні</h1>')
+            # А макет колеги зроблений тиждень тому: зістарюємо дзеркало руками.
+            old = time.time() - 7 * 24 * 3600
+            md = self.serve.vcs_mirror_dir(self.gl)
+            sh(['git', 'pull', '-q', '--ff-only', 'origin', 'main'], md)
+            for root, _, names in os.walk(os.path.join(md, 'mockup/t1')):
+                for n in names:
+                    os.utime(os.path.join(root, n), (old, old))
+            return self.serve.gitlab_pull(self.task, self.gl)
+        r = self._as_serg(run)
 
         fork_dir = os.path.join(self.task_dir, 'iterations', r['fork']['id'])
         self.assertGreater(self.serve._dir_mtime(fork_dir),
@@ -521,10 +545,10 @@ class GitlabSyncHonesty(unittest.TestCase):
 
     def test_insteadof_rule_does_not_rewrite_origin_each_time(self):
         """`git remote get-url` розгортає `url.*.insteadOf`, тож на машині з таким
-        правилом звірка з ним переписувала б origin на КОЖЕН ensure_mirror (і
+        правилом звірка з ним переписувала б origin на КОЖЕН статус (і
         шуміла). Звіряємо записане значення, а не розгорнуте."""
         gl = dict(self.gl, repo='alias:origin.git')
-        md = self.serve._mirror_dir(gl)
+        md = self.serve.vcs_mirror_dir(gl)
         os.makedirs(os.path.dirname(md), exist_ok=True)
         sh(['git', 'clone', '-q', self.origin, md], self.tmp)
         sh(['git', 'config', f'url.{self.tmp}/.insteadOf', 'alias:'], md)
@@ -533,7 +557,8 @@ class GitlabSyncHonesty(unittest.TestCase):
         from contextlib import redirect_stderr
         err = io.StringIO()
         with redirect_stderr(err):
-            self.serve.ensure_mirror(gl, fetch=True)
+            st = self.serve.gitlab_status(self.task, gl, self._meta(), 'it1')     # звірка origin + fetch
+        self.assertNotIn('error', st, st)
         self.assertNotIn('origin', err.getvalue(), 'origin переписано, хоча він збігався')
 
     def test_mirror_follows_repo_url_from_tasks_json(self):
@@ -541,10 +566,11 @@ class GitlabSyncHonesty(unittest.TestCase):
         тримало її і після того, як `tasks.json` полагодили: `git fetch` ішов
         на origin дзеркала, а не на адресу задачі. Лікувалось руками —
         `git remote set-url`. Дзеркало мусить іти за конфігом."""
-        md = self.serve.ensure_mirror(self.gl, fetch=True)
+        self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')         # клон дзеркала
+        md = self.serve.vcs_mirror_dir(self.gl)
         sh(['git', 'remote', 'set-url', 'origin', os.path.join(self.tmp, 'gone.git')], md)
 
-        self.serve.ensure_mirror(self.gl, fetch=True)
+        self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')         # звірка origin з ціллю
 
         self.assertEqual(sh(['git', 'remote', 'get-url', 'origin'], md).stdout.strip(),
                          self.origin)
@@ -607,7 +633,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         ставився → UI малював «✓», хоча коміт лежав на машині.
         """
         self._sync()
-        md = self.serve._mirror_dir(self.gl)
+        md = self.serve.vcs_mirror_dir(self.gl)
         orphan = os.path.join(md, 'mockup', 't1', 'index.html')
         self._write(orphan, '<h1>v3-orphan</h1>')
         sh(['git', 'add', '-A'], md)
@@ -622,7 +648,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         r = self._sync()
         self.assertTrue(r.get('catchup'))
         self.assertTrue(r['synced'])
-        self.assertEqual(self.serve._ahead_count(md, self.gl), 0)
+        self.assertEqual(self.rev_count(md, 'origin/main..main'), 0)
 
     def test_task_absent_on_origin_is_not_reported_as_synced(self):
         """Фідбек 29.07.2026: `behind=0` + чистий локальний стан читались як
@@ -644,19 +670,6 @@ class GitlabSyncHonesty(unittest.TestCase):
                                     'synced_it': 'it1', 'sha': None}})
         st = self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')
         self.assertIs(st['on_remote'], False)
-
-    def test_unknown_when_mirror_has_no_origin_ref(self):
-        """«Не питали» ≠ «немає»: без origin-гілки відповіді не існує, і це None.
-
-        Зливати цей стан у False означало б сказати «на GitLab немає» там, де ми
-        просто не змогли спитати, — те саме вигадування впевненості, через яке
-        баг і виглядав правдою.
-        """
-        self._sync()
-        md = self.serve._mirror_dir(self.gl)
-        self.assertIs(self.serve._on_remote(md, self.gl), True)
-        sh(['git', 'update-ref', '-d', 'refs/remotes/origin/main'], md)
-        self.assertIsNone(self.serve._on_remote(md, self.gl))
 
     def test_record_sync_without_sha_writes_nothing(self):
         """`sha=None` — це «пуша не було». Відбиток при ньому = готова брехня."""
@@ -868,7 +881,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         """`pull --ff-only` падає при розходженні — раніше відмова ковталась,
         і в нову ітерацію копіювалось ЗАСТАРІЛЕ дзеркало під підписом колеги."""
         self._sync()
-        md = self.serve._mirror_dir(self.gl)
+        md = self.serve.vcs_mirror_dir(self.gl)
         self._write(os.path.join(md, 'mockup', 't1', 'index.html'), '<h1>local</h1>')
         sh(['git', 'add', '-A'], md)
         sh(['git', '-c', 'user.email=t@t', '-c', 'user.name=T',
@@ -885,72 +898,3 @@ class GitlabSyncHonesty(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
-
-class ResolverRetryByIp(unittest.TestCase):
-    """Рассинхрон резолвера macOS не має вимагати ручного пуша по IP.
-
-    Двічі за сесію push падав із `Could not resolve hostname
-    gitlab.internal.example`, хоча DNS-сервер відповідає — це відома грабля
-    split-DNS, описана в ONBOARDING. Обхід щоразу робився руками:
-    `git@<ip>:…` + `-o HostKeyAlias=<host>`. Кожен дизайнер спотикається на
-    цьому й думає, що зламався синк (фідбек 30.07.2026).
-
-    ⛔ IP НЕ хардкодимо: він приходить із `tasks.json` (`gitlab.host_ip`).
-    Зашити адресу в код означало б, що вона застаріє мовчки.
-    """
-
-    def setUp(self):
-        import serve
-        self.serve = serve
-        self.calls = []
-
-    def _fake_run(self, result_by_attempt):
-        """Підміна subprocess.run: перша спроба падає резолвером, друга — успіх."""
-        class R:
-            def __init__(self, rc, err):
-                self.returncode, self.stderr, self.stdout = rc, err, ''
-
-        def run(argv, **kw):
-            self.calls.append(argv)
-            rc, err = result_by_attempt[min(len(self.calls) - 1,
-                                            len(result_by_attempt) - 1)]
-            return R(rc, err)
-        return run
-
-    def test_resolver_failure_retries_over_ip_from_config(self):
-        from unittest import mock
-        gl = {'repo': 'git@gitlab.internal.example:A/b.git', 'path': 'mockup/t1',
-              'branch': 'main', 'ssh_key': None, 'host_ip': '10.0.0.7'}
-        run = self._fake_run([(128, 'ssh: Could not resolve hostname gitlab.internal.example'),
-                              (0, '')])
-        with mock.patch.object(self.serve.subprocess, 'run', run):
-            r = self.serve._git(['push', 'origin', 'main'], '/tmp', gl)
-        self.assertEqual(r.returncode, 0, 'повтор по IP не відбувся')
-        self.assertEqual(len(self.calls), 2, f'спроб мало бути дві: {self.calls}')
-        retry = ' '.join(self.calls[1])
-        self.assertIn('10.0.0.7', retry, 'повтор пішов не по IP')
-        self.assertIn('insteadOf', retry, 'адресу підмінили не через url.insteadOf')
-
-    def test_no_ip_in_config_means_no_retry(self):
-        """Без адреси в конфізі вигадувати її нема звідки — віддаємо чесну помилку."""
-        from unittest import mock
-        gl = {'repo': 'git@gitlab.internal.example:A/b.git', 'path': 'mockup/t1',
-              'branch': 'main', 'ssh_key': None}
-        run = self._fake_run([(128, 'ssh: Could not resolve hostname gitlab.internal.example')])
-        with mock.patch.object(self.serve.subprocess, 'run', run):
-            r = self.serve._git(['push', 'origin', 'main'], '/tmp', gl)
-        self.assertEqual(r.returncode, 128)
-        self.assertEqual(len(self.calls), 1, 'повтор без адреси — це вигадування')
-
-    def test_other_failures_are_not_retried(self):
-        """Повтор лише на резолвері. Інакше кожна відмова (права, конфлікт)
-        коштувала б подвійного часу й ховала справжню причину."""
-        from unittest import mock
-        gl = {'repo': 'git@gitlab.internal.example:A/b.git', 'path': 'mockup/t1',
-              'branch': 'main', 'ssh_key': None, 'host_ip': '10.0.0.7'}
-        run = self._fake_run([(1, 'error: failed to push some refs')])
-        with mock.patch.object(self.serve.subprocess, 'run', run):
-            r = self.serve._git(['push', 'origin', 'main'], '/tmp', gl)
-        self.assertEqual(r.returncode, 1)
-        self.assertEqual(len(self.calls), 1)

@@ -670,8 +670,8 @@ class Points(unittest.TestCase):
 
     def test_task_new_does_not_touch_the_gitlab_mirror(self):
         """Спека: «дзеркала в `task_new`». Маршрут `task-new` уже відхиляє `gitlab` для простору без
-        інтеграцій, але сама функція не мусить полагатись на це: `ensure_mirror` ловиться
-        `except OSError: pass` і мовчки повернув би порожній макет із ЗАПИСАНИМ маппінгом GitLab."""
+        інтеграцій, але сама функція не мусить полагатись на це: відмова отримання (`VcsError`, це `OSError`) ловиться
+        `except OSError: pass` і мовчки повернула б порожній макет із ЗАПИСАНИМ маппінгом GitLab."""
         gl = {'repo': 'git@gitlab.example.test:g/r.git', 'path': 'mockup/g1'}
         with spaces.request_space('off'):
             cfg = serve.load_tasks()
