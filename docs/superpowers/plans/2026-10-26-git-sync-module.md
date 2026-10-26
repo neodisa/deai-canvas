@@ -272,7 +272,7 @@ class Base(unittest.TestCase):
 
 - Поки один потік тримає `_Lock(ctx, md, wait=60)`, другий `_Lock(ctx, md, wait=0)` → `vcs-busy` одразу. Після виходу першого — бере.
 - `wait=1` чекає й кидає `vcs-busy` не раніше ніж за ~1 с.
-- **Між процесами:** дочірній `python3 -c` бере `fcntl.flock` на `<md>.lock` і спить. Наш `wait=0` → `vcs-busy`. Дочірній процес зупинити за PID (`proc.kill()`, `proc.wait()`).
+- **Між процесами:** дочірній `python3 -c` бере `fcntl.flock` на `<md>@lock` і спить. Наш `wait=0` → `vcs-busy`. Дочірній процес зупинити за PID (`proc.kill()`, `proc.wait()`).
 
 `SourceShape(unittest.TestCase)` — за зразком `tests/test_static_publish.py` (`SourceShape`):
 
@@ -302,7 +302,7 @@ class Base(unittest.TestCase):
 
 Дзеркало: `<cache_dir>/mirrors/<host>/<шлях>`; `ctx['mirror_flat']` (лише неявний постачальник простору ЛІГА) —
 `<cache_dir>/<slug>` за правилом 0.7.0, щоб старі клони не перегортались. Одна операція на дзеркало: `flock` на
-`<дзеркало>.lock` (між процесами — `bin/state.py` питає статус окремим процесом; модуль ще й перевантажується `exec`-ом).
+`<дзеркало>@lock` (між процесами — `bin/state.py` питає статус окремим процесом; модуль ще й перевантажується `exec`-ом).
 
 Команду ssh модуль складає лише тоді, коли сам щось додає (`ssh_key`, повтор через `host_ip`): основа — `GIT_SSH_COMMAND`
 оточення, інакше `ssh`. Інакше git бере ssh людини (`core.sshCommand`, `~/.ssh/config`) сам — модуль його не перекриває.
@@ -577,11 +577,11 @@ def _unlock(fh):
 
 
 class _Lock:
-    """Одна операція на дзеркало, між процесами й потоками: `flock` на `<дзеркало>.lock` (окремий `open` — окремий опис
+    """Одна операція на дзеркало, між процесами й потоками: `flock` на `<дзеркало>@lock` (окремий `open` — окремий опис
     файла, тож потоки одного процесу теж виключають один одного). `wait=0` — одна спроба."""
 
     def __init__(self, ctx, md, wait):
-        self.ctx, self.path, self.wait, self.fh = ctx, md + '.lock', wait, None
+        self.ctx, self.path, self.wait, self.fh = ctx, md + '@lock', wait, None
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
