@@ -18,7 +18,8 @@ import unittest
 from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-SERVER = os.path.join(os.path.dirname(_HERE), 'app', 'modules', 'git-sync', 'server.py')
+APP = os.path.join(os.path.dirname(_HERE), 'app')
+SERVER = os.path.join(APP, 'modules', 'git-sync', 'server.py')
 
 
 class FakeModuleError(Exception):
@@ -119,7 +120,7 @@ class Validate(Base):
 
     def test_good_repos_are_accepted_and_normalized(self):
         for repo in ('/abs/origin.git', 'file:///abs/origin.git', 'ssh://git@h:2222/o/r.git', 'https://user@h/o/r.git',
-                     'git@gitlab.internal.example:ORG/r.git', 'h:o/r.git'):
+                     'git@gitlab.internal.example:ORG/r.git', 'h:o/r.git', 'user.name-1@h-1.example_x.com:o/r.git'):
             with self.subTest(repo=repo):
                 self.assertEqual(self.m.validate(self.ctx(), self.target(repo)),
                                  {'repo': repo, 'path': 'mockup/t1', 'branch': 'main', 'ssh_key': None, 'host_ip': None})
@@ -127,7 +128,8 @@ class Validate(Base):
     def test_bad_repos_are_refused(self):
         for repo in ('', ' x', 'a b', 'x\n', '-oProxyCommand=x', 'ext::sh', 'fd::3', 'http://h/r.git', 'ftp://h/r',
                      'ssh://-oProxy/r', 'file://host/x', 'relative/dir', 'git@-oProxy:x', 'ssh://h:99999/r',
-                     '/tmp/a b', 'h:o/a b', '/tmp/a\x00b', '/tmp/a\x7fb', '/tmp/a\x1bb', None, 123):
+                     'h;id>x:o/r.git', 'u$(x)@h:o/r.git', 'h&x:o/r.git', 'h|x:o/r.git', 'h`x`:o/r.git', 'u;x@h:o/r.git',
+                     'h<x:o/r.git', 'h:-x', '/tmp/a b', 'h:o/a b', '/tmp/a\x00b', '/tmp/a\x7fb', '/tmp/a\x1bb', None, 123):
             with self.subTest(repo=repr(repo)):
                 self.bad(self.target(repo))
 
@@ -307,6 +309,13 @@ class Transport(Base):
                 self.m._Git(self.ctx(), t, connect_timeout=conn).must(['fetch', 'origin'], '/tmp', what)
         return cm.exception
 
+    def shell_args(self, cmd):
+        """Як `sh -c` (так git виконує `GIT_SSH_COMMAND`) розбирає команду. База — `printf '%s\\n'`, тож кожен аргумент
+        друкується рядком; інʼєкція в команду проявилась би зайвими файлами в `self.tmp`."""
+        r = subprocess.run(cmd, shell=True, cwd=self.tmp, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.splitlines()
+
     # --- повтор через IP ---
 
     def test_resolver_failure_retries_once_over_the_ip(self):
@@ -371,6 +380,17 @@ class Transport(Base):
         self.assertIn(f'-i {k}', second)
         self.assertTrue(second.endswith('-o HostKeyAlias=h'), second)
 
+    @unittest.skipIf(os.name == 'nt', 'sh -c — лише POSIX')
+    def test_the_host_key_alias_is_one_shell_word_even_for_a_hostile_host(self):
+        """Другий рубіж: `validate` такий хост не пустить, але `_Git` не мусить на нього покладатись — git виконує
+        `GIT_SSH_COMMAND` через shell."""
+        os.environ['GIT_SSH_COMMAND'] = "printf '%s\\n'"
+        rec = Recorder((128, 'ssh: Could not resolve hostname h'), (0, ''))
+        self.go(rec, self.target('git@h;>pwned:o/r.git', host_ip='10.0.0.7'))
+        self.assertEqual(len(rec.calls), 2)
+        self.assertEqual(self.shell_args(rec.env(1)['GIT_SSH_COMMAND'])[-2:], ['-o', 'HostKeyAlias=h;>pwned'])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'pwned')), 'команда з хоста виконалась')
+
     # --- оточення ---
 
     def test_every_call_carries_the_safe_environment(self):
@@ -417,13 +437,17 @@ class Transport(Base):
         self.assertEqual(rec.env(0)['GIT_SSH_COMMAND'],
                          f"ssh -o BatchMode=yes -i '{k}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new")
 
+    @unittest.skipIf(os.name == 'nt', 'sh -c — лише POSIX')
     def test_the_key_is_one_shell_word_whatever_its_name(self):
-        k = self.key_file("a b'; touch pwned; $(x) `y`")
+        os.environ['GIT_SSH_COMMAND'] = "printf '%s\\n'"
+        k = self.key_file("a b'; touch pwned; $(touch pwned2) `touch pwned3`")
         rec = Recorder((0, ''))
         self.go(rec, self.target(ssh_key=k))
-        words = shlex.split(rec.env(0)['GIT_SSH_COMMAND'])
-        self.assertEqual(words[words.index('-i') + 1], k)
-        self.assertEqual(words.count('-i'), 1)
+        args = self.shell_args(rec.env(0)['GIT_SSH_COMMAND'])
+        self.assertEqual(args[args.index('-i') + 1], k)
+        self.assertEqual(args.count('-i'), 1)
+        for stray in ('pwned', 'pwned2', 'pwned3'):
+            self.assertFalse(os.path.exists(os.path.join(self.tmp, stray)), f'команда з імені ключа виконалась: {stray}')
 
     def test_the_base_command_is_the_one_from_the_environment(self):
         os.environ['GIT_SSH_COMMAND'] = 'false'
@@ -531,6 +555,108 @@ class RealGit(Base):
                             self.tmp, 'clone')
         self.assertEqual(cm.exception.code, 'vcs-error')
         self.assertTrue(cm.exception.message.startswith('clone failed: '), cm.exception.message)
+
+
+class Check(Base):
+    """`check` для «Підключення»: каркас чекає 5 с, тож git має межу 4 с; відмови — словник, не виняток."""
+
+    def go(self, **settings):
+        return self.m.check(self.ctx(**settings))
+
+    def test_without_a_repo_it_is_ok_and_git_is_not_called(self):
+        boom = Recorder(AssertionError('check без repo не кличе git'))
+        with mock.patch.object(self.m.subprocess, 'run', boom):
+            for settings in ({}, {'repo': ''}, {'repo': '   '}, {'repo': None}):
+                with self.subTest(settings=settings):
+                    r = self.go(**settings)
+                    self.assertEqual(r['ok'], True)
+                    self.assertIn('per task', r['detail'])
+        self.assertEqual(boom.calls, [])
+
+    def test_a_local_repo_with_the_branch_is_found(self):
+        self.assertEqual(self.go(repo=self.bare()), {'ok': True, 'detail': 'branch main found'})
+
+    def test_the_branch_comes_from_the_settings(self):
+        origin = self.bare()
+        sh(['git', 'push', '-q', 'origin', 'HEAD:other'], self.peer)
+        self.assertEqual(self.go(repo=origin, branch='other')['detail'], 'branch other found')
+        self.assertIn('not on the remote yet', self.go(repo=origin, branch='nope')['detail'])
+
+    def test_an_empty_repo_is_ok_and_says_the_first_send_creates_the_branch(self):
+        r = self.go(repo=self.bare(seed=False))
+        self.assertTrue(r['ok'])
+        self.assertIn('not on the remote yet', r['detail'])
+
+    def test_a_bad_target_is_refused_without_git(self):
+        boom = Recorder(AssertionError('погана ціль — до git не доходить'))
+        bad = [{'repo': 'ext::sh'}, {'repo': '/abs/o.git', 'branch': '-x'}, {'repo': '/abs/o.git', 'path': '../x'},
+               {'repo': '/abs/o.git', 'ssh_key': os.path.join(self.tmp, 'nope')}, {'repo': '/abs/o.git', 'host_ip': 'h'}]
+        with mock.patch.object(self.m.subprocess, 'run', boom):
+            for settings in bad:
+                with self.subTest(settings=settings):
+                    r = self.go(**settings)
+                    self.assertEqual((r['ok'], r['error']), (False, 'vcs-bad-target'))
+                    self.assertTrue(r['detail'])
+        self.assertEqual(boom.calls, [])
+
+    def test_a_timeout_is_offline(self):
+        with mock.patch.object(self.m.subprocess, 'run', Recorder(subprocess.TimeoutExpired('git', 4))):
+            r = self.go(repo='/abs/o.git')
+        self.assertEqual((r['ok'], r['error']), (False, 'vcs-offline'))
+        self.assertIn('no answer', r['detail'])
+
+    def test_git_gets_a_four_second_limit_and_a_literal_address(self):
+        rec = Recorder((0, '', 'abc\trefs/heads/main\n'))
+        with mock.patch.object(self.m.subprocess, 'run', rec):
+            r = self.go(repo='/abs/o.git')
+        self.assertTrue(r['ok'])
+        self.assertEqual(rec.calls[0][1]['timeout'], 4)
+        self.assertEqual(rec.argv(0), ['git', 'ls-remote', '--heads', '--', '/abs/o.git', 'main'])
+
+    def test_the_ssh_connect_timeout_is_set_when_the_module_composes_the_command(self):
+        rec = Recorder((0, '', 'abc\trefs/heads/main\n'))
+        with mock.patch.object(self.m.subprocess, 'run', rec):
+            self.go(repo='git@h:o/r.git', ssh_key=self.key_file())
+            self.go(repo='git@h:o/r.git')
+        self.assertIn('-o ConnectTimeout=3', rec.env(0)['GIT_SSH_COMMAND'])
+        self.assertNotIn('GIT_SSH_COMMAND', rec.env(1), 'без ключа ssh людини не чіпаємо')
+
+    def test_failures_come_back_as_a_dict_with_the_code(self):
+        cases = [((128, 'git@h: Permission denied (publickey).'), 'vcs-auth'),
+                 ((128, 'ssh: Could not resolve hostname h'), 'vcs-offline'),
+                 ((128, 'fatal: something else'), 'vcs-error')]
+        for answer, code in cases:
+            with self.subTest(code=code):
+                with mock.patch.object(self.m.subprocess, 'run', Recorder(answer)):
+                    r = self.go(repo='git@h:o/r.git')
+                self.assertEqual((r['ok'], r['error']), (False, code))
+                self.assertTrue(r['detail'].startswith('ls-remote failed: '), r['detail'])
+
+    def test_a_missing_local_repo_is_a_vcs_error(self):
+        r = self.go(repo=os.path.join(self.tmp, 'nope.git'))
+        self.assertEqual((r['ok'], r['error']), (False, 'vcs-error'))
+
+    def test_the_default_path_does_not_break_the_check(self):
+        self.assertTrue(self.go(repo=self.bare(), path='')['ok'])
+        self.assertTrue(self.go(repo=self.bare('o2.git'), path='mockup/{task}')['ok'])
+
+
+class Catalog(Base):
+    """Каталог вбудованих модулів бачить КОЖНУ підтеку `app/modules`: без маніфесту це був би зламаний модуль."""
+
+    def test_the_manifest_is_read_and_the_module_is_ok(self):
+        sys.path.insert(0, APP)
+        self.addCleanup(sys.path.remove, APP)
+        import deai_modules as dm
+        os.environ.pop('DEAI_EXTRA_MODULES', None)
+        m = dm.catalog()['git-sync']
+        self.assertEqual((m.status, m.error), ('ok', None))
+        self.assertEqual((m.id, m.roles), ('git-sync', ['vcs']))
+        self.assertEqual([(s['key'], s['type'], s.get('default')) for s in m.settings],
+                         [('repo', 'text', None), ('branch', 'text', 'main'), ('path', 'text', 'mockup/{task}'),
+                          ('ssh_key', 'text', None), ('host_ip', 'text', None), ('autosync', 'bool', False)])
+        self.assertTrue(callable(m.fn('check')))
+        self.assertIn('git-sync', dm.KNOWN_OTHER_MODULES)
 
 
 class Lock(Base):
@@ -668,6 +794,10 @@ class SourceShape(unittest.TestCase):
         attrs = {n.attr for n in ast.walk(self.tree) if isinstance(n, ast.Attribute)}
         self.assertNotIn('__file__', names | attrs)
         self.assertNotIn('sys.path', self.src)
+
+    def test_the_functions_of_this_stage_exist(self):
+        funcs = {n.name for n in self.tree.body if isinstance(n, ast.FunctionDef)}
+        self.assertTrue({'check', 'validate', 'mirror_dir'} <= funcs)
 
     def test_no_shell_true_anywhere(self):
         kws = [k for n in ast.walk(self.tree) if isinstance(n, ast.Call) for k in n.keywords if k.arg == 'shell']

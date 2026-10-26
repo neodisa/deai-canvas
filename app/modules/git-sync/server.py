@@ -51,6 +51,7 @@ _OFFLINE_MARKS = ('could not resolve hostname', 'could not resolve host', 'conne
                   'operation timed out', 'network is unreachable', 'no route to host', 'connection refused')
 _NO_BRANCH_MARKS = ('not found in upstream', "couldn't find remote ref", 'could not find remote ref')
 _SCP = re.compile(r'(?:([^@/:\s]+)@)?([^/:\s]+):(.+)')
+_NAME = re.compile(r'[A-Za-z0-9._-]+')          # хост і користувач scp-адреси: жодних `; $ ( ) & | < >` (див. `_Git._ssh`)
 _PASSWORD = re.compile(r'(://[^/@:\s]*):[^/@\s]*@')
 _BAD_BRANCH_CHARS = set(' ~^:?*[\\')
 _BAD_PATH_CHARS = set('*?[\\')
@@ -118,7 +119,8 @@ def _repo_why(repo):
     if os.path.isabs(repo):
         return None
     m = _SCP.fullmatch(repo)
-    if m and not m.group(2).startswith('-') and not m.group(3).startswith('-'):
+    if (m and _NAME.fullmatch(m.group(2)) and not m.group(2).startswith('-')
+            and (m.group(1) is None or _NAME.fullmatch(m.group(1))) and not m.group(3).startswith('-')):
         return None
     return 'repo: use ssh://, https://, file://, user@host:path or an absolute local path'
 
@@ -210,7 +212,7 @@ class _Git:
             parts += [f'-i {shlex.quote(key)}', '-o IdentitiesOnly=yes', '-o StrictHostKeyChecking=accept-new']
         if alias:
             # Ключ хоста має збігтися з тим, що вже в known_hosts — інакше повтор упреться в перевірку ключа.
-            parts.append(f'-o HostKeyAlias={alias}')
+            parts.append(f'-o HostKeyAlias={shlex.quote(alias)}')     # git виконує GIT_SSH_COMMAND через shell
         return ' '.join(parts)
 
     def _env(self, alias=None, literal=True):
@@ -318,3 +320,27 @@ class _Lock:
         finally:
             self.fh.close()
         return False
+
+
+def check(ctx):
+    """Для «Підключення»: є типовий `repo` → `ls-remote` з межею `CHECK_GIT_TIMEOUT` (каркас чекає 5 с). Звичайні відмови —
+    `{"ok": false, "error": <код>, "detail": …}`, не виняток."""
+    s = (ctx.get('settings') if isinstance(ctx, dict) else None) or {}
+    if _empty(s.get('repo')):
+        return {'ok': True, 'detail': 'the repository is set per task'}
+    try:
+        t = validate(ctx, {'repo': s['repo'].strip(), 'branch': s.get('branch'),
+                           'path': str(s.get('path') or 'mockup/{task}').replace('{task}', 'task')})
+    except Exception as e:  # noqa: BLE001 — клас помилки приходить з ctx
+        return {'ok': False, 'error': 'vcs-bad-target', 'detail': getattr(e, 'message', None) or str(e)}
+    g = _Git(ctx, t, connect_timeout=3)
+    try:
+        r = g.run(['ls-remote', '--heads', '--', t['repo'], t['branch']], tempfile.gettempdir(), CHECK_GIT_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 — `vcs-offline` від тайм-ауту
+        return {'ok': False, 'error': getattr(e, 'code', 'vcs-offline'), 'detail': getattr(e, 'message', None) or str(e)}
+    if r.returncode != 0:
+        e = g.fail('ls-remote', r)
+        return {'ok': False, 'error': getattr(e, 'code', 'vcs-error'), 'detail': getattr(e, 'message', None) or str(e)}
+    if (r.stdout or '').strip():
+        return {'ok': True, 'detail': f'branch {t["branch"]} found'}
+    return {'ok': True, 'detail': f'branch {t["branch"]} is not on the remote yet — the first send creates it'}

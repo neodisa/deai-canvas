@@ -49,7 +49,7 @@ MEMO = os.path.join(FIXTURES, 'memo-comments')
 ADAPTER = os.path.join(MEMO, 'adapter.js')
 NOT_FOUND = b'not found\n'                                  # тіло КОЖНОЇ відмови маршруту адаптера: ні причини, ні шляху
 #: Вбудовані модулі справжнього `app/modules` за абеткою (каталог без `DEAI_EXTRA_MODULES`): новий вбудований модуль — тут і лише тут.
-BUILTIN_IDS = ['css-tokens', 'static-publish', 'supabase-comments', 'vercel-publish']
+BUILTIN_IDS = ['css-tokens', 'git-sync', 'static-publish', 'supabase-comments', 'vercel-publish']
 _REAL = None
 
 

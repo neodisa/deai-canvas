@@ -1,0 +1,10 @@
+{"api": 1, "id": "git-sync", "name": "Синхронізація з git", "version": "1.0.0",
+ "roles": ["vcs"],
+ "settings": [
+   {"key": "repo", "type": "text", "label": "Репозиторій (типовий для задач простору)"},
+   {"key": "branch", "type": "text", "label": "Гілка", "default": "main"},
+   {"key": "path", "type": "text", "label": "Тека в репозиторії", "default": "mockup/{task}"},
+   {"key": "ssh_key", "type": "text", "label": "SSH-ключ (необовʼязково)"},
+   {"key": "host_ip", "type": "text", "label": "IP сервера (необовʼязково)"},
+   {"key": "autosync", "type": "bool", "label": "Відправляти після кожної відповіді агента", "default": false}
+ ]}

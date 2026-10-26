@@ -1595,7 +1595,7 @@ def check(space, module_id):
 #: «загубився модуль коментарів» від «лежить застарілий запис якогось іншого модуля» потрібно (див.
 #: `_enabled_module_is_lost`). Новий вбудований модуль — у котрийсь із двох списків (інваріант у `test_comments_role.py`).
 KNOWN_COMMENTS_MODULES = frozenset({'supabase-comments'})
-KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'static-publish', 'vercel-publish'})
+KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'git-sync', 'static-publish', 'vercel-publish'})
 
 
 def _enabled_module_is_lost(cat, explicit):
