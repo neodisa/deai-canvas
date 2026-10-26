@@ -258,6 +258,14 @@ class _Git:
             env['GIT_SSH_COMMAND'] = ssh
         return env
 
+    @staticmethod
+    def _sub(args):
+        """Підкоманда git для тексту помилок: `commit` іде як `-c user.name=… -c user.email=… commit`, а не `-c`."""
+        i = 0
+        while i + 1 < len(args) and args[i] == '-c':
+            i += 2
+        return args[i] if i < len(args) else ''
+
     def _once(self, args, cwd, timeout, ip, literal):
         pre, alias = [], None
         if ip:
@@ -273,9 +281,9 @@ class _Git:
             return subprocess.run(['git', *pre, *args], cwd=cwd, env=self._env(alias, literal),
                                   capture_output=True, encoding='utf-8', errors='replace', timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise _err(self.ctx, 'vcs-offline', f'git {args[0]}: no answer in {timeout:g} s') from None
+            raise _err(self.ctx, 'vcs-offline', f'git {self._sub(args)}: no answer in {timeout:g} s') from None
         except (OSError, ValueError) as e:        # немає git у PATH, зникла тека cwd, нема прав; NUL в аргументі — ValueError
-            raise _err(self.ctx, 'vcs-error', f'git {args[0]}: {e}') from None
+            raise _err(self.ctx, 'vcs-error', f'git {self._sub(args)}: {e}') from None
 
     def run(self, args, cwd, timeout=GIT_TIMEOUT, literal=True):
         r = self._once(args, cwd, timeout, None, literal)
@@ -461,6 +469,9 @@ def _checkout(g, md):
         if (r.stdout or '').strip():
             raise _err(g.ctx, 'vcs-error', f'branch {b} not found on the remote')
         g.must(['symbolic-ref', 'HEAD', f'refs/heads/{b}'], md, 'symbolic-ref')
+        # Нова гілка з нуля мусить початись з порожнього індексу: `symbolic-ref` його не чіпає, і дерево попередньої гілки
+        # (дзеркало ще пам'ятає origin до того, як той спорожнів) потрапило б у перший коміт.
+        _reset(g, md)
 
 
 def _count(g, md, rng, path=None):

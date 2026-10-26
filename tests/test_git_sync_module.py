@@ -608,6 +608,22 @@ class Transport(Base):
         self.assertEqual(rec.env(0)['GIT_CONFIG_GLOBAL'], '/my/gitconfig')
         self.assertEqual(rec.env(0)['GIT_CONFIG_NOSYSTEM'], '0')
 
+    def test_the_messages_name_the_git_subcommand_not_the_leading_dash_c(self):
+        """`commit` викликається як `git -c user.name=… -c user.email=… commit`: у тексті має бути `commit`, не `-c`."""
+        args = ['-c', 'user.name=A', '-c', 'user.email=a@x', 'commit', '-q', '-m', 'x']
+        for exc, text in ((subprocess.TimeoutExpired('git', 120), 'git commit: no answer in 120 s'),
+                          (ValueError('embedded null byte'), 'git commit: embedded null byte'),
+                          (FileNotFoundError(2, 'No such file or directory'), 'git commit: ')):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(self.m.subprocess, 'run', Recorder(exc)):
+                    with self.assertRaises(FakeModuleError) as cm:
+                        self.m._Git(self.ctx(), self.target()).run(args, '/tmp')
+                self.assertTrue(cm.exception.message.startswith(text), cm.exception.message)
+        with mock.patch.object(self.m.subprocess, 'run', Recorder(subprocess.TimeoutExpired('git', 5))):
+            with self.assertRaises(FakeModuleError) as cm:
+                self.m._Git(self.ctx(), self.target()).run(['fetch', 'origin'], '/tmp')
+        self.assertTrue(cm.exception.message.startswith('git fetch: '), cm.exception.message)
+
     def test_a_value_error_from_the_process_call_is_a_vcs_error(self):
         """NUL в аргументі: `subprocess.run` кидає `ValueError`, а не `OSError`."""
         e = self.refuse(Recorder(ValueError('embedded null byte')), self.target())
@@ -1423,6 +1439,46 @@ class Push(Repo):
                 e = self.refused(lambda: self.go(origin, self.src(), branch=branch), 'vcs-error')
                 self.assertIn('not found on the remote', e.message)
         self.assertEqual(self.refs(origin), before)
+
+    def test_a_failed_ls_remote_never_turns_into_a_new_branch(self):
+        """Мережевий збій дає порожній stdout `ls-remote`: без перевірки rc це читалось би як «репо порожнє» і
+        гілка-друкарська помилка створилась би на origin."""
+        cases = (('timeout', subprocess.TimeoutExpired('git', 120), 'vcs-offline'),
+                 ('resolve', (128, "fatal: unable to access 'https://TOKEN123@h.example/o/r.git/': Could not resolve host: "
+                                   "h.example"), 'vcs-offline'),
+                 ('auth', (128, self.PERMISSION), 'vcs-auth'),
+                 ('silent', (128, ''), 'vcs-error'))
+        for i, (label, answer, code) in enumerate(cases):
+            for op in ('push', 'pull'):
+                with self.subTest(case=label, op=op):
+                    origin = self.bare(f'ls-{i}-{op}.git')
+                    t = self.target(origin, branch='typo')
+                    self.m.status(self.ctx(), self.target(origin))             # дзеркало на main, `typo` у ньому нема
+                    md = self.mirror(origin)
+                    head, refs = self.git(md, 'symbolic-ref', 'HEAD'), self.refs(origin)
+                    call = ((lambda: self.m.push(self.ctx(), t, self.src(), self.META)) if op == 'push'
+                            else (lambda: self.m.pull(self.ctx(), t, self.dst())))
+                    with mock.patch.object(self.m.subprocess, 'run', fake_run('ls-remote', answer)):
+                        e = self.refused(call, code)
+                    self.assertNotIn('TOKEN123', e.message)
+                    if label == 'resolve':
+                        self.assertIn('***@h.example', e.message)
+                    self.assertEqual(self.git(md, 'symbolic-ref', 'HEAD'), head)
+                    self.assertEqual(self.refs(origin), refs)
+                    self.assertEqual(self.git(md, 'for-each-ref', 'refs/heads/typo'), '')
+
+    def test_the_first_commit_after_the_remote_was_emptied_holds_only_the_path(self):
+        """Усі гілки origin видалено, а дзеркало ще має дерево старої гілки: індекс лишився б повним, і перший коміт
+        нової гілки ніс би README та решту чужого дерева."""
+        origin = self.bare()
+        self.m.status(self.ctx(), self.target(origin))              # дзеркало з деревом main (README.md)
+        self.git(origin, 'update-ref', '-d', 'refs/heads/main')
+        self.assertEqual(self.refs(origin), '')
+        r = self.go(origin, self.src(), branch='dev')
+        self.assertEqual((r['ok'], r['changed'], r['pushed']), (True, True, True))
+        self.assertEqual(self.files_at(origin, 'dev'), ['mockup/t1/.canvas-state.json', 'mockup/t1/index.html'])
+        self.assertEqual(self.git(origin, 'rev-list', '--count', 'dev').strip(), '1')
+        self.assertFalse(os.path.exists(os.path.join(self.mirror(origin), 'README.md')))
 
     def test_the_author_of_the_meta_wins_over_the_identity_variables_of_the_parent(self):
         origin = self.bare()
