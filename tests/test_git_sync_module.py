@@ -5,6 +5,8 @@
 Кожен тест — свій `HOME` у тимчасовій теці: глобальний git-конфіг людини не читається й не пишеться.
 """
 import ast
+import contextlib
+import io
 import os
 import shlex
 import shutil
@@ -168,6 +170,21 @@ class Validate(Base):
                   'a//b', '..', 'a/..', None, 5):
             with self.subTest(path=repr(p)):
                 self.bad(self.target(path=p))
+
+    def test_the_ntfs_short_name_of_dot_git_is_refused_like_dot_git(self):
+        """На NTFS `.git` має коротке імʼя `GIT~1`: шлях через нього веде в `.git` так само, як `.git`."""
+        for p in ('GIT~1', 'git~1/hooks', 'a/GIT~2', 'a/git~12/b', 'git~1.', 'a/GIT~1 /b', 'a/git~1. ./b'):
+            with self.subTest(bad=p):
+                self.bad(self.target(path=p))
+        for p in ('git~x', 'agit~1', 'git~', 'git~1x', 'a/git~1a', 'git-1', 'a/b~1'):
+            with self.subTest(good=p):
+                self.assertEqual(self.m.validate(self.ctx(), self.target(path=p))['path'], p)
+
+    def test_the_ntfs_short_name_is_refused_in_the_ignore_list_of_a_pull_too(self):
+        with self.assertRaises(FakeModuleError) as cm:
+            self.m.pull(self.ctx(), {'repo': '/abs/origin.git', 'path': 'mockup/t1'}, self.tmp + '/d',
+                        {'ignore': ['GIT~1']})
+        self.assertEqual(cm.exception.code, 'vcs-bad-target')
 
     def test_ssh_key_must_be_an_existing_file_and_tilde_is_expanded(self):
         k = self.key_file()
@@ -782,6 +799,609 @@ class Check(Base):
         self.assertTrue(self.go(repo=self.bare('o2.git'), path='mockup/{task}')['ok'])
 
 
+def fake_run(sub, answer, before=None):
+    """Підставний `subprocess.run`: підкоманда git `sub` (після можливих `-c …`) отримує `answer` — виняток кидається,
+    кортеж `(rc, stderr[, stdout])` повертається; `before(argv)` — побічна дія перед відповіддю. Решта — справжній git."""
+    real = subprocess.run
+
+    def run(argv, **kw):
+        i = 1
+        while argv[i] == '-c':
+            i += 2
+        if argv[i] != sub:
+            return real(argv, **kw)
+        if before:
+            before(argv)
+        if isinstance(answer, BaseException):
+            raise answer
+        return FakeProc(*answer)
+    return run
+
+
+class Repo(Base):
+    """Спільне для status/push/pull: справжній git на локальних bare-репо. Особистість комітів МОДУЛЯ береться лише з
+    `meta` (`-c user.*`): змінні `GIT_AUTHOR_*` оточення її перекрили б, тож у тестах їх нема. Помічники «колеги» й
+    дзеркала ставлять свою особистість самі."""
+    IDENT = {'GIT_AUTHOR_NAME': 'T', 'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 'T', 'GIT_COMMITTER_EMAIL': 't@t'}
+    META = {'message': 'deai: sync mockup/t1 (Т) · it1\n\nтіло', 'author': {'name': 'Анна', 'email': 'a@x'}}
+    PERMISSION = 'git@h: Permission denied (publickey).\nfatal: Could not read from remote repository.'
+
+    def setUp(self):
+        super().setUp()
+        for k in self.IDENT:
+            os.environ.pop(k, None)
+
+    def bare(self, name='origin.git', seed=True):
+        with mock.patch.dict(os.environ, self.IDENT):             # засів репо — від імені «T», як у `Base`
+            return super().bare(name, seed)
+
+    def target(self, origin, **kw):
+        t = {'repo': origin, 'path': 'mockup/t1', 'branch': 'main'}
+        t.update(kw)
+        return t
+
+    def mirror(self, origin, **kw):
+        return self.m.mirror_dir(self.ctx(), self.target(origin, **kw))
+
+    def git(self, cwd, *args, who='Колега', when=None):
+        env = dict(os.environ, GIT_AUTHOR_NAME=who, GIT_AUTHOR_EMAIL='c@x', GIT_COMMITTER_NAME=who,
+                   GIT_COMMITTER_EMAIL='c@x')
+        if when is not None:
+            env['GIT_AUTHOR_DATE'] = env['GIT_COMMITTER_DATE'] = f'{when} +0000'
+        r = subprocess.run(['git', *args], cwd=cwd, capture_output=True, encoding='utf-8', env=env)
+        self.assertEqual(r.returncode, 0, f'git {" ".join(args)}: {r.stderr}')
+        return r.stdout
+
+    def peer_commit(self, files=None, msg='peer', who='Колега', when=None, links=None, branch='main'):
+        """Коміт «колеги» поверх актуального origin: `files` — {шлях: текст}, `links` — {шлях: ціль симлінка}."""
+        self.git(self.peer, 'fetch', '-q', 'origin')
+        self.git(self.peer, 'reset', '-q', '--hard', f'origin/{branch}')
+        for rel, text in (files or {}).items():
+            p = os.path.join(self.peer, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(text)
+        for rel, to in (links or {}).items():
+            p = os.path.join(self.peer, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            os.symlink(to, p)
+        self.git(self.peer, 'add', '-A')
+        self.git(self.peer, 'commit', '-qm', msg, who=who, when=when)
+        self.git(self.peer, 'push', '-q', 'origin', f'HEAD:{branch}')
+
+    def peer_branch(self, branch, files, msg='branch work', when=None):
+        """Нова гілка `branch` на origin від `main` з одним комітом «колеги»."""
+        self.git(self.peer, 'fetch', '-q', 'origin')
+        self.git(self.peer, 'checkout', '-q', '-B', branch, 'origin/main')
+        for rel, text in files.items():
+            p = os.path.join(self.peer, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(text)
+        self.git(self.peer, 'add', '-A')
+        self.git(self.peer, 'commit', '-qm', msg, when=when)
+        self.git(self.peer, 'push', '-q', 'origin', branch)
+
+    def src(self, files=None, name='src'):
+        d = os.path.join(self.tmp, name)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        for rel, text in (files if files is not None else {'index.html': '<p>1</p>\n', '.canvas-state.json': '{}\n'}).items():
+            p = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(text)
+        return d
+
+    def dst(self, name='dst'):
+        d = os.path.join(self.tmp, name)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        return d
+
+    def files_at(self, origin, ref='main'):
+        r = subprocess.run(['git', 'ls-tree', '-r', '--name-only', ref], cwd=origin, capture_output=True,
+                           encoding='utf-8')
+        return r.stdout.split() if r.returncode == 0 else []
+
+    def show(self, origin, spec):
+        return self.git(origin, 'show', spec)
+
+    def head(self, origin, ref='main'):
+        r = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', ref], cwd=origin, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    def refused(self, call, code=None):
+        with self.assertRaises(FakeModuleError) as cm:
+            call()
+        if code:
+            self.assertEqual(cm.exception.code, code, cm.exception.message)
+        return cm.exception
+
+
+class Status(Repo):
+    def go(self, origin, **kw):
+        return self.m.status(self.ctx(), self.target(origin, **kw))
+
+    def test_the_first_status_clones_the_mirror(self):
+        origin = self.bare()
+        r = self.go(origin)
+        self.assertTrue(os.path.isdir(os.path.join(self.mirror(origin), '.git')))
+        self.assertEqual(set(r), {'behind', 'behind_path', 'unpushed', 'on_remote', 'web', 'label'})
+        self.assertEqual((r['behind'], r['behind_path'], r['unpushed']), (0, 0, 0))
+        self.assertIs(r['on_remote'], False)
+        self.assertIsNone(r['web'])
+        self.assertEqual(r['label'], 'Git')
+
+    def test_a_colleague_commit_is_behind_and_only_a_commit_in_the_path_is_behind_path(self):
+        origin = self.bare()
+        self.go(origin)
+        self.peer_commit({'ci/build.yml': 'x\n'})
+        r = self.go(origin)
+        self.assertEqual((r['behind'], r['behind_path'], r['on_remote']), (1, 0, False))
+        self.peer_commit({'mockup/t1/index.html': '<p>c</p>\n'})
+        r = self.go(origin)
+        self.assertEqual((r['behind'], r['behind_path'], r['on_remote']), (2, 1, True))
+
+    def test_a_local_commit_in_the_mirror_is_unpushed(self):
+        origin = self.bare()
+        self.go(origin)
+        self.git(self.mirror(origin), 'commit', '--allow-empty', '-qm', 'local')
+        r = self.go(origin)
+        self.assertEqual((r['unpushed'], r['behind']), (1, 0))
+
+    def test_an_interrupted_clone_leaves_neither_a_mirror_nor_a_temp_folder(self):
+        origin = self.bare()
+        md = self.mirror(origin)
+
+        def half_clone(argv):
+            os.makedirs(os.path.join(argv[-1], '.git'), exist_ok=True)      # напівклон уже на диску
+        with mock.patch.object(self.m.subprocess, 'run',
+                               fake_run('clone', subprocess.TimeoutExpired('git', 1), before=half_clone)):
+            self.refused(lambda: self.go(origin), 'vcs-offline')
+        self.assertFalse(os.path.exists(md))
+        self.assertEqual([n for n in os.listdir(os.path.dirname(md)) if not n.endswith('@lock')], [])
+        self.assertEqual(self.go(origin)['behind'], 0, 'наступна спроба клонує заново')
+
+    def test_origin_of_the_mirror_follows_the_target(self):
+        a, b = self.bare('p-q/o.git'), self.bare('p/q/o.git')
+        self.assertEqual(self.mirror(a), self.mirror(b), 'передумова: обидві адреси дають одну теку дзеркала')
+        self.go(a)
+        url = lambda: self.git(self.mirror(a), 'config', '--get', 'remote.origin.url').strip()
+        self.assertEqual(url(), a)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.go(b)
+        self.assertEqual(url(), b)
+        self.assertIn('origin', err.getvalue())
+
+    def test_offline_is_never_a_silent_zero(self):
+        origin = self.bare()
+        self.go(origin)
+        os.rename(origin, origin + '.gone')
+        e = self.refused(lambda: self.go(origin))
+        self.assertIn(e.code, ('vcs-error', 'vcs-offline'))
+        self.assertIn('fetch failed', e.message)
+
+    def test_an_empty_remote_is_not_an_error_and_has_no_answer_for_on_remote(self):
+        origin = self.bare(seed=False)
+        for _ in range(2):          # другий статус робить fetch гілки, якої на origin ще нема: теж не помилка
+            r = self.go(origin)
+            self.assertEqual((r['behind'], r['behind_path'], r['unpushed'], r['on_remote']), (0, 0, 0, None))
+        self.assertEqual(self.git(self.mirror(origin), 'symbolic-ref', 'HEAD').strip(), 'refs/heads/main')
+
+    def test_an_empty_remote_gets_its_head_on_the_target_branch(self):
+        origin = self.bare(seed=False)          # HEAD самого bare-репо — main
+        self.go(origin, branch='dev')
+        self.assertEqual(self.git(self.mirror(origin), 'symbolic-ref', 'HEAD').strip(), 'refs/heads/dev')
+
+    def test_a_missing_branch_of_a_non_empty_remote_is_a_clone_failure(self):
+        origin = self.bare()
+        md = self.mirror(origin)
+        e = self.refused(lambda: self.go(origin, branch='nope'))
+        self.assertTrue(e.message.startswith('clone failed: '), e.message)
+        self.assertFalse(os.path.exists(md))
+        self.assertEqual([n for n in os.listdir(os.path.dirname(md)) if not n.endswith('@lock')], [])
+
+    def test_a_folder_in_the_mirror_place_that_is_not_a_clone_is_refused(self):
+        origin = self.bare()
+        md = self.mirror(origin)
+        os.makedirs(md)
+        keep = os.path.join(md, 'keep.txt')
+        with open(keep, 'w') as f:
+            f.write('x')
+        e = self.refused(lambda: self.go(origin), 'vcs-error')
+        self.assertIn('not a git clone', e.message)
+        self.assertTrue(os.path.isfile(keep))
+
+    def test_a_busy_mirror_is_refused_by_all_three_operations(self):
+        origin = self.bare()
+        t = self.target(origin)
+        src, dst = self.src(), self.dst()
+        with self.m._Lock(self.ctx(), self.mirror(origin), wait=0):
+            with mock.patch.object(self.m, 'LOCK_WAIT', 2):
+                t0 = time.monotonic()
+                self.refused(lambda: self.m.status(self.ctx(), t), 'vcs-busy')
+                self.assertLess(time.monotonic() - t0, 1, 'status не чекає на зайняте дзеркало')
+            with mock.patch.object(self.m, 'LOCK_WAIT', 0):
+                self.refused(lambda: self.m.push(self.ctx(), t, src, self.META), 'vcs-busy')
+                self.refused(lambda: self.m.pull(self.ctx(), t, dst), 'vcs-busy')
+
+    def test_a_bad_target_is_refused_before_any_git(self):
+        boom = Recorder(AssertionError('погана ціль — до git не доходить'))
+        src, dst = self.src(), self.dst()
+        t = {'repo': 'ext::sh', 'path': 'mockup/t1'}
+        with mock.patch.object(self.m.subprocess, 'run', boom):
+            self.refused(lambda: self.m.status(self.ctx(), t), 'vcs-bad-target')
+            self.refused(lambda: self.m.push(self.ctx(), t, src, self.META), 'vcs-bad-target')
+            self.refused(lambda: self.m.pull(self.ctx(), t, dst), 'vcs-bad-target')
+        self.assertEqual(boom.calls, [])
+
+
+class Push(Repo):
+    def go(self, origin, src, meta='default', **kw):
+        return self.m.push(self.ctx(), self.target(origin, **kw), src, self.META if meta == 'default' else meta)
+
+    def test_the_first_push_commits_under_the_authors_name(self):
+        origin = self.bare()
+        r = self.go(origin, self.src())
+        self.assertTrue(r.pop('sha'))
+        self.assertEqual(r, {'ok': True, 'synced': True, 'changed': True, 'pushed': True, 'error': None})
+        who, subj = self.git(origin, 'log', '-1', '--format=%an%n%s', 'main').splitlines()
+        self.assertEqual((who, subj), ('Анна', 'deai: sync mockup/t1 (Т) · it1'))
+        self.assertEqual(self.git(origin, 'log', '-1', '--format=%ae %cn', 'main').strip(), 'a@x Анна')
+        self.assertIn('тіло', self.git(origin, 'log', '-1', '--format=%B', 'main'))
+        files = self.files_at(origin)
+        self.assertIn('mockup/t1/.canvas-state.json', files)
+        self.assertIn('mockup/t1/index.html', files)
+        self.assertIn('README.md', files)
+
+    def test_a_repeat_without_changes_does_not_push(self):
+        origin = self.bare()
+        src = self.src()
+        self.go(origin, src)
+        head = self.head(origin)
+        self.assertEqual(self.go(origin, src), {'ok': True, 'synced': True, 'changed': False, 'pushed': False})
+        self.assertEqual(self.head(origin), head)
+
+    def test_a_file_removed_from_src_leaves_the_repo(self):
+        origin = self.bare()
+        self.go(origin, self.src({'index.html': 'a\n', 'old.html': 'b\n'}))
+        self.assertIn('mockup/t1/old.html', self.files_at(origin))
+        r = self.go(origin, self.src({'index.html': 'a\n'}))
+        self.assertTrue(r['changed'] and r['pushed'])
+        self.assertEqual([f for f in self.files_at(origin) if f.startswith('mockup/')], ['mockup/t1/index.html'])
+
+    def test_a_commit_of_a_colleague_in_the_path_blocks_and_changes_nothing(self):
+        origin = self.bare()
+        self.go(origin, self.src())
+        self.peer_commit({'mockup/t1/index.html': '<p>c</p>\n'}, msg='peer edit')
+        head = self.head(origin)
+        r = self.go(origin, self.src({'index.html': '<p>2</p>\n'}))
+        top = r.pop('behind_top')
+        self.assertEqual(r, {'ok': False, 'synced': False, 'blocked': 'behind', 'behind': 1, 'behind_path': 1})
+        self.assertEqual((top['author'], top['subject']), ('Колега', 'peer edit'))
+        self.assertRegex(top['date'], r'^\d\d\.\d\d\.\d{4} \d\d:\d\d$')
+        self.assertEqual(self.head(origin), head)
+        self.assertEqual(self.show(origin, 'main:mockup/t1/index.html'), '<p>c</p>\n')
+
+    def test_a_commit_of_a_colleague_outside_the_path_is_fast_forwarded_and_the_push_goes_on(self):
+        origin = self.bare()
+        self.go(origin, self.src())
+        self.peer_commit({'ci/build.yml': 'x\n'})
+        r = self.go(origin, self.src({'index.html': '<p>2</p>\n'}))
+        self.assertEqual((r['ok'], r['changed'], r['pushed']), (True, True, True))
+        self.assertEqual(self.show(origin, 'main:mockup/t1/index.html'), '<p>2</p>\n')
+        self.assertIn('ci/build.yml', self.files_at(origin))
+
+    def test_a_diverged_mirror_is_not_pushed(self):
+        origin = self.bare()
+        self.m.status(self.ctx(), self.target(origin))              # клон
+        self.git(self.mirror(origin), 'commit', '--allow-empty', '-qm', 'local')
+        self.peer_commit({'ci/build.yml': 'x\n'}, msg='peer')
+        head = self.head(origin)
+        r = self.go(origin, self.src())
+        top, err = r.pop('behind_top'), r.pop('error')
+        self.assertEqual(r, {'ok': False, 'synced': False, 'blocked': 'diverged', 'behind': 1, 'ahead': 1})
+        self.assertEqual(top['subject'], 'peer')
+        self.assertTrue(err)
+        self.assertEqual(self.head(origin), head)
+        self.assertNotIn('mockup/t1/index.html', self.files_at(origin))
+
+    def test_another_branch_of_a_known_repo_continues_its_own_history(self):
+        """Дзеркало вже є (на main); `dev` на origin має свій коміт: локальна `dev` мусить стати поверх `origin/dev`,
+        а не новим коренем — інакше push відбився б як non-fast-forward."""
+        origin = self.bare()
+        self.go(origin, self.src())                                 # дзеркало створено для main
+        self.peer_branch('dev', {'mockup/t1/index.html': 'dev\n', 'dev-only.txt': 'x\n'})
+        dev_head = self.head(origin, 'refs/heads/dev')
+        r = self.go(origin, self.src({'index.html': 'mine\n'}), branch='dev')
+        self.assertEqual((r['ok'], r['changed'], r['pushed']), (True, True, True))
+        self.assertEqual(self.head(origin, 'refs/heads/dev~1'), dev_head)
+        self.assertEqual(self.show(origin, 'dev:mockup/t1/index.html'), 'mine\n')
+        self.assertIn('dev-only.txt', self.files_at(origin, 'dev'))
+
+    def test_a_rejected_push_reports_its_code_and_the_next_push_catches_up(self):
+        origin = self.bare()
+        src = self.src()
+        with mock.patch.object(self.m.subprocess, 'run', fake_run('push', (1, self.PERMISSION))):
+            r = self.go(origin, src)
+        self.assertEqual((r['ok'], r['synced'], r['pushed'], r['changed'], r['code']),
+                         (False, False, False, True, 'vcs-auth'))
+        self.assertIn('Permission denied', r['error'])
+        self.assertNotIn('mockup/t1/index.html', self.files_at(origin))
+        self.assertEqual(self.m.status(self.ctx(), self.target(origin))['unpushed'], 1)
+        r = self.go(origin, src)                                    # той самий src: нічого нового, але коміт не доїхав
+        self.assertEqual(r, {'ok': True, 'synced': True, 'changed': False, 'pushed': True, 'catchup': True,
+                             'error': None})
+        self.assertIn('mockup/t1/index.html', self.files_at(origin))
+        self.assertEqual(self.m.status(self.ctx(), self.target(origin))['unpushed'], 0)
+
+    def test_the_first_push_into_an_empty_remote_creates_the_branch(self):
+        origin = self.bare(seed=False)
+        r = self.go(origin, self.src())
+        self.assertEqual((r['ok'], r['changed'], r['pushed']), (True, True, True))
+        self.assertTrue(self.head(origin, 'refs/heads/main'))
+        self.assertIn('mockup/t1/index.html', self.files_at(origin))
+        self.assertEqual(self.go(origin, self.src()), {'ok': True, 'synced': True, 'changed': False, 'pushed': False})
+
+    def test_the_first_push_into_an_empty_remote_creates_a_branch_other_than_its_head(self):
+        origin = self.bare(seed=False)
+        self.go(origin, self.src(), branch='dev')
+        self.assertTrue(self.head(origin, 'refs/heads/dev'))
+        self.assertIsNone(self.head(origin, 'refs/heads/main'))
+
+    def test_an_empty_src_into_an_empty_remote_is_not_reported_as_sent(self):
+        """Гілки на origin ще нема, нових змін теж: «synced» тут було б брехнею (bgSanctions, 12 днів «✓»)."""
+        origin = self.bare(seed=False)
+        r = self.go(origin, self.src({}))
+        self.assertEqual((r['ok'], r['synced'], r['pushed']), (False, False, False))
+        self.assertTrue(r['error'])
+        self.assertIsNone(self.head(origin, 'refs/heads/main'))
+
+    def test_a_src_that_is_not_a_folder_is_a_vcs_error_and_touches_no_git(self):
+        origin = self.bare()
+        f = os.path.join(self.tmp, 'file.txt')
+        with open(f, 'w') as fh:
+            fh.write('x')
+        boom = Recorder(AssertionError('зламаний src — до git не доходить'))
+        with mock.patch.object(self.m.subprocess, 'run', boom):
+            for bad in (os.path.join(self.tmp, 'nope'), f, None, 5):
+                with self.subTest(src=repr(bad)):
+                    self.refused(lambda: self.go(origin, bad), 'vcs-error')
+        self.assertEqual(boom.calls, [])
+
+    def test_without_meta_the_commit_gets_a_neutral_identity(self):
+        origin = self.bare()
+        for i, meta in enumerate((None, 'x', {}, {'author': 'x'}, {'author': {'name': '  ', 'email': ''}})):
+            with self.subTest(meta=repr(meta)):
+                self.assertTrue(self.go(origin, self.src({'index.html': f'{i}\n'}), meta=meta)['pushed'])
+                self.assertEqual(self.git(origin, 'log', '-1', '--format=%an|%ae|%s', 'main').strip(),
+                                 'Deai Canvas|deai@localhost|deai: sync')
+
+    def test_a_failed_status_is_an_error_not_a_quiet_success(self):
+        """Порожній вивід `status` при відмові git читався б як «змін нема» — і push звітував би «synced»."""
+        origin = self.bare()
+        with mock.patch.object(self.m.subprocess, 'run', fake_run('status', (128, 'fatal: boom'))):
+            e = self.refused(lambda: self.go(origin, self.src()), 'vcs-error')
+        self.assertTrue(e.message.startswith('status failed: '), e.message)
+
+    def test_a_failed_commit_is_an_error(self):
+        origin = self.bare()
+        with mock.patch.object(self.m.subprocess, 'run', fake_run('commit', (1, 'error: gpg failed to sign the data'))):
+            e = self.refused(lambda: self.go(origin, self.src()), 'vcs-error')
+        self.assertTrue(e.message.startswith('commit failed: '), e.message)
+
+    def test_a_file_in_the_place_of_the_folder_is_a_vcs_error(self):
+        origin = self.bare()
+        self.peer_commit({'mockup': 'не тека\n'})
+        e = self.refused(lambda: self.go(origin, self.src()), 'vcs-error')
+        self.assertIn('cannot replace', e.message)
+
+    # --- симлінки в чужому репо ---
+
+    def test_a_symlinked_folder_in_the_repo_is_not_followed_out_of_the_mirror(self):
+        origin = self.bare()
+        outside = os.path.join(self.tmp, 'outside')
+        os.makedirs(os.path.join(outside, 't1'))
+        for rel in ('keep.txt', 't1/keep.txt'):
+            with open(os.path.join(outside, rel), 'w') as f:
+                f.write('мій файл\n')
+        self.peer_commit(links={'mockup': outside})
+        e = self.refused(lambda: self.go(origin, self.src()), 'vcs-error')
+        self.assertIn('symlink', e.message)
+        self.assertEqual(sorted(os.listdir(outside)), ['keep.txt', 't1'])
+        self.assertEqual(os.listdir(os.path.join(outside, 't1')), ['keep.txt'], 'тека поза дзеркалом не заміщена')
+
+    def test_a_symlink_into_the_mirror_itself_is_refused_too(self):
+        """`mockup -> .git`: шлях `mockup/refs` лишається ВСЕРЕДИНІ дзеркала, але це `.git/refs`; `rmtree` знищив би репо."""
+        origin = self.bare()
+        self.peer_commit(links={'mockup': '.git'})
+        md = self.mirror(origin)
+        self.refused(lambda: self.go(origin, self.src(), path='mockup/refs'), 'vcs-error')
+        self.assertTrue(os.path.isdir(os.path.join(md, '.git', 'refs', 'heads')))
+        self.assertEqual(self.git(md, 'rev-parse', '--verify', 'HEAD').strip(), self.head(origin))
+
+
+class Pull(Repo):
+    def go(self, origin, dst=None, opts=None, **kw):
+        return self.m.pull(self.ctx(), self.target(origin, **kw), self.dst() if dst is None else dst, opts)
+
+    def test_a_folder_of_a_colleague_is_copied_with_its_author_and_time(self):
+        origin = self.bare()
+        self.peer_commit({'mockup/t1/index.html': '<p>c</p>\n', 'mockup/t1/.canvas-state.json': '{}\n'},
+                         when=1700000000)
+        dst = self.dst()
+        r = self.go(origin, dst)
+        self.assertEqual(r, {'found': True, 'last_commit': {'author': 'Колега', 'time': 1700000000}})
+        self.assertIsInstance(r['last_commit']['time'], int)
+        with open(os.path.join(dst, 'index.html'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), '<p>c</p>\n')
+        self.assertTrue(os.path.isfile(os.path.join(dst, '.canvas-state.json')))
+
+    def test_a_second_pull_brings_the_newer_version(self):
+        origin = self.bare()
+        self.peer_commit({'mockup/t1/index.html': '1\n'}, when=1700000000)
+        self.go(origin)
+        self.peer_commit({'mockup/t1/index.html': '2\n'}, who='Інша', when=1700000100)
+        dst = self.dst()
+        r = self.go(origin, dst)
+        self.assertEqual(r['last_commit'], {'author': 'Інша', 'time': 1700000100})
+        with open(os.path.join(dst, 'index.html')) as f:
+            self.assertEqual(f.read(), '2\n')
+
+    def test_a_missing_folder_is_found_false_and_dst_stays_empty(self):
+        origin = self.bare()
+        dst = self.dst()
+        self.assertEqual(self.go(origin, dst), {'found': False, 'last_commit': None})
+        self.assertEqual(os.listdir(dst), [])
+
+    def test_an_empty_remote_is_found_false_not_an_error(self):
+        origin = self.bare(seed=False)
+        dst = self.dst()
+        self.assertEqual(self.go(origin, dst), {'found': False, 'last_commit': None})
+        self.assertEqual(os.listdir(dst), [])
+
+    def test_frames_do_not_count_as_work_when_ignored(self):
+        origin = self.bare()
+        self.peer_commit({'mockup/t1/index.html': '<p>c</p>\n'}, who='Колега', when=1700000000)
+        self.peer_commit({'mockup/t1/shots/a.png': 'png\n'}, who='Кадри', when=1700000500)
+        r = self.go(origin, opts={'ignore': ['shots']})
+        self.assertEqual(r['last_commit'], {'author': 'Кадри', 'time': 1700000000})
+        r = self.go(origin)
+        self.assertEqual(r['last_commit'], {'author': 'Кадри', 'time': 1700000500})
+        r = self.go(origin, opts={'ignore': ['shots/']})
+        self.assertEqual(r['last_commit']['time'], 1700000000, 'слеш по краях не заважає')
+
+    def test_when_only_ignored_folders_changed_the_time_is_none(self):
+        origin = self.bare()
+        self.peer_commit({'mockup/t1/shots/a.png': 'png\n'}, when=1700000500)
+        r = self.go(origin, opts={'ignore': ['shots']})
+        self.assertEqual(r, {'found': True, 'last_commit': {'author': 'Колега', 'time': None}})
+
+    def test_a_diverged_mirror_is_an_error_with_a_hint_and_nothing_is_copied(self):
+        origin = self.bare()
+        self.peer_commit({'mockup/t1/index.html': '1\n'})
+        self.go(origin)
+        self.git(self.mirror(origin), 'commit', '--allow-empty', '-qm', 'local')
+        self.peer_commit({'mockup/t1/index.html': '2\n'})
+        dst = self.dst()
+        e = self.refused(lambda: self.go(origin, dst), 'vcs-error')
+        self.assertTrue(e.message.startswith('pull --ff-only failed: '), e.message)
+        self.assertIn('локальний(х) коміт(ів)', e.message)
+        self.assertLessEqual(len(e.message), 300)
+        self.assertEqual(os.listdir(dst), [])
+
+    def test_broken_arguments_are_refused_before_any_git(self):
+        origin = self.bare()
+        boom = Recorder(AssertionError('зламані аргументи — до git не доходить'))
+        full = self.dst('full')
+        with open(os.path.join(full, 'x'), 'w') as f:
+            f.write('x')
+        with mock.patch.object(self.m.subprocess, 'run', boom):
+            for opts in ({'ignore': ['../x']}, {'ignore': ['a/../b']}, {'ignore': ['']}, {'ignore': [5]},
+                         {'ignore': 'shots'}, {'ignore': ['.git']}, {'ignore': ['a*']}, {'ignore': [':(top)x']}):
+                with self.subTest(opts=opts):
+                    self.refused(lambda: self.go(origin, opts=opts), 'vcs-bad-target')
+            for bad in (full, os.path.join(self.tmp, 'nope'), None, 5):
+                with self.subTest(dst=repr(bad)):
+                    self.refused(lambda: self.m.pull(self.ctx(), self.target(origin), bad), 'vcs-error')
+        self.assertEqual(boom.calls, [])
+
+    def test_ignore_is_optional(self):
+        origin = self.bare()
+        self.peer_commit({'mockup/t1/index.html': '1\n'}, when=1700000000)
+        for opts in (None, {}, {'ignore': None}, {'ignore': []}, 'x', 5):
+            with self.subTest(opts=repr(opts)):
+                self.assertEqual(self.go(origin, opts=opts)['last_commit']['time'], 1700000000)
+
+    def test_another_branch_of_a_known_repo_gets_its_own_local_branch(self):
+        origin = self.bare()
+        self.go(origin)                                             # дзеркало вже є, і воно на main
+        self.peer_branch('dev', {'mockup/t1/index.html': 'dev\n'}, when=1700000000)
+        dst = self.dst()
+        r = self.go(origin, dst, branch='dev')
+        self.assertEqual(r['found'], True)
+        with open(os.path.join(dst, 'index.html')) as f:
+            self.assertEqual(f.read(), 'dev\n')
+        self.assertEqual(self.git(self.mirror(origin), 'rev-parse', '--abbrev-ref', 'HEAD').strip(), 'dev')
+
+    # --- симлінки в чужому репо ---
+
+    def test_a_symlinked_folder_in_the_repo_is_not_followed_out_of_the_mirror(self):
+        origin = self.bare()
+        outside = os.path.join(self.tmp, 'outside')
+        os.makedirs(os.path.join(outside, 't1'))
+        with open(os.path.join(outside, 't1', 'secret.txt'), 'w') as f:
+            f.write('не для чужих очей\n')
+        self.peer_commit(links={'mockup': outside})
+        dst = self.dst()
+        e = self.refused(lambda: self.go(origin, dst), 'vcs-error')
+        self.assertIn('symlink', e.message)
+        self.assertEqual(os.listdir(dst), [], 'нічого з-поза дзеркала не скопійовано')
+
+    def test_a_symlink_inside_the_folder_is_not_carried(self):
+        origin = self.bare()
+        outside = os.path.join(self.tmp, 'outside')
+        os.makedirs(outside)
+        with open(os.path.join(outside, 'secret.txt'), 'w') as f:
+            f.write('secret\n')
+        self.peer_commit({'mockup/t1/index.html': '<p>c</p>\n'},
+                         links={'mockup/t1/leak.txt': os.path.join(outside, 'secret.txt'),
+                                'mockup/t1/leakdir': outside, 'mockup/t1/rel': 'index.html'})
+        dst = self.dst()
+        self.assertTrue(self.go(origin, dst)['found'])
+        self.assertEqual(os.listdir(dst), ['index.html'])
+        for n in ('leak.txt', 'leakdir', 'rel'):
+            self.assertFalse(os.path.lexists(os.path.join(dst, n)), n)
+
+
+class WebLabel(Base):
+    def both(self, repo, path='mockup/t1', branch='main'):
+        t = {'repo': repo, 'path': path, 'branch': branch}
+        return self.m.label_of(t), self.m.web_url(t)
+
+    def test_github_ssh(self):
+        self.assertEqual(self.both('git@github.com:o/r.git'),
+                         ('GitHub', 'https://github.com/o/r/commits/main/mockup/t1'))
+
+    def test_gitlab_ssh_with_a_port_drops_the_ssh_port(self):
+        self.assertEqual(self.both('ssh://git@gitlab.example.test:2222/g/r.git'),
+                         ('GitLab', 'https://gitlab.example.test/g/r/-/commits/main/mockup/t1'))
+
+    def test_gitlab_scp_form_and_subgroups(self):
+        self.assertEqual(self.both('git@gitlab.internal.example:ORG/sub/r.git', branch='dev'),
+                         ('GitLab', 'https://gitlab.internal.example/ORG/sub/r/-/commits/dev/mockup/t1'))
+
+    def test_https_keeps_the_web_port_and_trims_the_dot_git_and_the_slash(self):
+        self.assertEqual(self.both('https://gitlab.example.test:8443/g/r.git/'),
+                         ('GitLab', 'https://gitlab.example.test:8443/g/r/-/commits/main/mockup/t1'))
+        self.assertEqual(self.both('https://user@github.com/o/r'),
+                         ('GitHub', 'https://github.com/o/r/commits/main/mockup/t1'))
+
+    def test_the_host_is_compared_in_lower_case(self):
+        self.assertEqual(self.both('git@GitHub.com:o/r.git')[0], 'GitHub')
+
+    def test_an_unknown_host_has_no_web_page(self):
+        self.assertEqual(self.both('https://git.example.test/o/r'), ('Git', None))
+        self.assertEqual(self.both('git@h:o/r.git'), ('Git', None))
+        self.assertEqual(self.both('ssh://git@git.example.test/o/r.git'), ('Git', None))
+
+    def test_a_github_look_alike_is_not_github(self):
+        self.assertEqual(self.both('git@github.com.evil.test:o/r.git'), ('Git', None))
+
+    def test_local_repos_have_no_web_page(self):
+        for repo in ('file:///x/r.git', '/x/r.git', 'file://localhost/x/r.git'):
+            with self.subTest(repo=repo):
+                self.assertEqual(self.both(repo), ('Git', None))
+
+    def test_a_space_in_the_path_is_encoded(self):
+        self.assertEqual(self.both('git@github.com:o/r.git', path='mockup/a b')[1],
+                         'https://github.com/o/r/commits/main/mockup/a%20b')
+        self.assertEqual(self.both('git@github.com:o/r.git', branch='feature/x')[1],
+                         'https://github.com/o/r/commits/feature/x/mockup/t1')
+
+
 class Catalog(Base):
     """Каталог вбудованих модулів бачить КОЖНУ підтеку `app/modules`: без маніфесту це був би зламаний модуль."""
 
@@ -970,7 +1590,7 @@ class SourceShape(unittest.TestCase):
 
     def test_the_functions_of_this_stage_exist(self):
         funcs = {n.name for n in self.tree.body if isinstance(n, ast.FunctionDef)}
-        self.assertTrue({'check', 'validate', 'mirror_dir'} <= funcs)
+        self.assertTrue({'check', 'status', 'push', 'pull', 'validate', 'mirror_dir'} <= funcs)
 
     def test_no_shell_true_anywhere(self):
         kws = [k for n in ast.walk(self.tree) if isinstance(n, ast.Call) for k in n.keywords if k.arg == 'shell']

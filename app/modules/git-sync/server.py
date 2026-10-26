@@ -60,6 +60,7 @@ _NAME = re.compile(r'[A-Za-z0-9._-]+')          # хост і користува
 _USERINFO = re.compile(r'(://)[^/\s]*@')              # до ОСТАННЬОГО `@` перед першим `/`: `p@ss` у паролі теж
 _BAD_BRANCH_CHARS = set(' ~^:?*[\\')
 _BAD_PATH_CHARS = set('*?[\\')
+_NTFS_GIT = re.compile(r'git~\d+')                  # NTFS: коротке імʼя `.git`
 
 
 def _err(ctx, code, message=''):
@@ -143,11 +144,14 @@ def _branch_why(b):
 
 
 def _path_why(p, what='path'):
-    """`p` — уже без `/` по краях. Сегменти `.`/`..`/порожні, магія pathspec, глоби й `.git` (будь-який регістр) — ні."""
+    """`p` — уже без `/` по краях. Сегменти `.`/`..`/порожні, магія pathspec, глоби, `.git` (будь-який регістр) і його
+    короткі імена NTFS (`GIT~1`) — ні."""
     if not p or p.startswith(('-', ':')) or _ctl(p) or any(c in _BAD_PATH_CHARS for c in p):
         return f'{what}: not a valid folder in the repository'
-    if any(seg in ('', '.', '..') or seg.rstrip(' .').lower() == '.git' for seg in p.split('/')):    # NTFS: `.git.`
-        return f'{what}: not a valid folder in the repository'
+    for seg in p.split('/'):
+        low = seg.rstrip(' .').lower()                  # NTFS відкидає хвостові крапки й пробіли: `.git.` — це `.git`
+        if seg in ('', '.', '..') or low == '.git' or _NTFS_GIT.fullmatch(low):
+            return f'{what}: not a valid folder in the repository'
     return None
 
 
@@ -339,6 +343,269 @@ class _Lock:
         finally:
             self.fh.close()
         return False
+
+
+def _no_branch(r):
+    """Відмова «такої гілки на origin нема» (а не «origin недоступний»)."""
+    low = (r.stderr or r.stdout or '').lower()
+    return any(m in low for m in _NO_BRANCH_MARKS)
+
+
+def _ensure(g, md):
+    """Дзеркало цілі: клон за потреби (у тимчасову теку поруч + `rename`: перерваний клон не лишає напівдзеркала),
+    `origin` = адреса цілі, свіжий fetch. ⛔ Відмову fetch не ковтаємо: без свіжого origin «відстає» бреше нулем.
+    Гілки на origin ще нема — не відмова: перший push її створить."""
+    if not os.path.isdir(os.path.join(md, '.git')):
+        if os.path.lexists(md):
+            raise _err(g.ctx, 'vcs-error', f'mirror folder exists but is not a git clone: {os.path.basename(md)}')
+        parent = os.path.dirname(md)
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix='.clone-', dir=parent)
+        try:
+            r = g.run(['clone', '--quiet', '--branch', g.t['branch'], '--', g.t['repo'], tmp], parent, CLONE_TIMEOUT)
+            if r.returncode != 0 and _no_branch(r):
+                # Порожній репо клон `--branch` не бере. Клонуємо без гілки; порожній (HEAD не народжений) — лишаємо
+                # й ставимо HEAD на цільову гілку; непорожній із іншою типовою — відмова `clone failed`, як у 0.7.0.
+                shutil.rmtree(tmp, ignore_errors=True)
+                os.makedirs(tmp, mode=0o700)
+                r2 = g.run(['clone', '--quiet', '--', g.t['repo'], tmp], parent, CLONE_TIMEOUT)
+                if r2.returncode == 0 and g.run(['rev-parse', '--verify', '--quiet', 'HEAD'], tmp).returncode != 0:
+                    g.must(['symbolic-ref', 'HEAD', f'refs/heads/{g.t["branch"]}'], tmp, 'symbolic-ref')
+                    r = r2
+            if r.returncode != 0:
+                raise g.fail('clone', r)
+            os.rename(tmp, md)
+        finally:
+            if os.path.isdir(tmp):
+                shutil.rmtree(tmp, ignore_errors=True)
+        return
+    _align_remote(g, md)
+    r = g.run(['fetch', '--quiet', 'origin', g.t['branch']], md)
+    if r.returncode != 0 and not _no_branch(r):
+        raise g.fail('fetch', r)
+
+
+def _align_remote(g, md):
+    """`origin` дзеркала = адреса цілі (fb-29092026-d64d35: дзеркало, склоноване з обхідною IP-адресою, тримало її в
+    origin тижнями). ЗАПИСАНЕ значення, а не `remote get-url`: той розгортає `url.*.insteadOf`."""
+    r = g.run(['config', '--get', 'remote.origin.url'], md)
+    have = (r.stdout or '').strip() if r.returncode == 0 else ''
+    if have == g.t['repo']:
+        return
+    g.must(['remote', 'set-url', 'origin', g.t['repo']], md, 'remote set-url')
+    print(_mask(f'дзеркало {os.path.basename(md)}: origin {have or "—"} → {g.t["repo"]} (за ціллю синку)'),
+          file=sys.stderr)
+
+
+def _checkout(g, md):
+    b = g.t['branch']
+    if g.run(['rev-parse', '--verify', '--quiet', f'refs/heads/{b}'], md).returncode == 0:
+        g.must(['checkout', '-q', b, '--'], md, f'checkout {b}', keep=200)
+    elif g.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{b}'], md).returncode == 0:
+        g.must(['checkout', '-q', '-b', b, '--track', f'origin/{b}'], md, f'checkout {b}', keep=200)
+    else:
+        g.must(['symbolic-ref', 'HEAD', f'refs/heads/{b}'], md, 'symbolic-ref')
+
+
+def _count(g, md, rng, path=None):
+    """Кількість комітів у діапазоні (`path` звужує до однієї теки). Нема гілки, щоб рахувати, — 0."""
+    r = g.run(['rev-list', '--count', rng] + (['--', path] if path else []), md)
+    out = (r.stdout or '').strip()
+    return int(out) if r.returncode == 0 and out.isdigit() else 0
+
+
+def _on_remote(g, md):
+    """Три стани: True / False / None («гілки на origin нема — питання без відповіді»). Не зливати None у False."""
+    b, p = g.t['branch'], g.t['path']
+    if g.run(['cat-file', '-e', f'origin/{b}:{p}'], md).returncode == 0:
+        return True
+    if g.run(['rev-parse', '--verify', '--quiet', f'origin/{b}'], md).returncode != 0:
+        return None
+    return False
+
+
+def _behind_top(g, md):
+    """Хто й коли зробив верхній коміт origin — щоб не гадати, хто нас обігнав. Без мережі."""
+    r = g.run(['log', '-1', '--format=%an%x1f%ad%x1f%s', '--date=format:%d.%m.%Y %H:%M', f'origin/{g.t["branch"]}'], md)
+    if r.returncode != 0 or '\x1f' not in r.stdout:
+        return {}
+    author, date, subject = (r.stdout.strip().split('\x1f') + ['', '', ''])[:3]
+    return {'author': author, 'date': date, 'subject': subject[:120]}
+
+
+def _web_parts(t):
+    """(хост без порту, хост для вебу, шлях проєкту без `.git`). Порт `ssh://` — не порт вебу; порт `https://` — той самий."""
+    host, rpath = _split_repo(t['repo'])
+    proj = rpath.strip('/')
+    if proj.endswith('.git'):
+        proj = proj[:-4]
+    bare = host.split(':')[0].lower()
+    return bare, (host.lower() if t['repo'].startswith('https://') else bare), proj
+
+
+def label_of(t):
+    host = _web_parts(t)[0]
+    return 'GitHub' if host == 'github.com' else 'GitLab' if 'gitlab' in host else 'Git'
+
+
+def web_url(t):
+    """Історія комітів `<path>` у вебі: GitHub і GitLab (хост містить `gitlab`); інше — `None`."""
+    host, netloc, proj = _web_parts(t)
+    if host in ('', 'local') or not proj:
+        return None
+    tail = quote(f'{t["branch"]}/{t["path"]}', safe='/')
+    proj = quote(proj, safe='/')
+    if host == 'github.com':
+        return f'https://{netloc}/{proj}/commits/{tail}'
+    if 'gitlab' in host:
+        return f'https://{netloc}/{proj}/-/commits/{tail}'
+    return None
+
+
+def _inside(ctx, md, p):
+    """`<md>/<p>`, якщо шлях веде туди, куди написано: жоден відрізок не симлінк. У чужому репо `mockup` може бути
+    симлінком на `/` чи на `.git` дзеркала, а `isdir`/`copytree`/`rmtree` пішли б за ним — повз дзеркало або в його `.git`."""
+    root = os.path.realpath(md)
+    want = os.path.normcase(os.path.join(root, *p.split('/')))
+    if os.path.normcase(os.path.realpath(os.path.join(md, p))) != want:
+        raise _err(ctx, 'vcs-error', 'path leaves the mirror or goes through a symlink in the repository')
+    return os.path.join(md, p)
+
+
+def status(ctx, target):
+    """Стан дзеркала цілі після свіжого fetch. «Відстає» по ВСЬОМУ репо (`behind`) і по теці задачі (`behind_path`) —
+    різні новини: перше наздоганяється само, друге блокує push. Не чекає на зайняте дзеркало (`vcs-busy`)."""
+    t = validate(ctx, target)
+    g, md = _Git(ctx, t), _mirror(ctx, t)
+    with _Lock(ctx, md, wait=0):
+        _ensure(g, md)
+        b = t['branch']
+        return {'behind': _count(g, md, f'{b}..origin/{b}'),
+                'behind_path': _count(g, md, f'{b}..origin/{b}', t['path']),
+                'unpushed': _count(g, md, f'origin/{b}..{b}'),
+                'on_remote': _on_remote(g, md), 'web': web_url(t), 'label': label_of(t)}
+
+
+def _pushed(g, r, changed, catchup=False):
+    ok = r.returncode == 0
+    out = {'ok': ok, 'synced': ok, 'changed': changed, 'pushed': ok,
+           'error': None if ok else _mask((r.stderr or r.stdout or '')[-300:])}
+    if catchup:
+        out['catchup'] = True
+    if not ok:
+        out['code'] = g.code_of(r)
+    return out
+
+
+def push(ctx, target, src, meta):
+    """Вміст `src` стає `<path>` (заміна теки, з dot-файлами) → коміт → push без force. Форми результату — як
+    `gitlab_sync` 0.7.0 без `remote` (його додає ядро). Блокує лише тека задачі (`behind_path`): решту, що пішла
+    вперед, наздоганяє `merge --ff-only` (інакше push відбивався б як non-fast-forward назавжди)."""
+    t = validate(ctx, target)
+    if not isinstance(src, str) or not os.path.isdir(src):
+        raise _err(ctx, 'vcs-error', 'push: src is not a folder')
+    meta = meta if isinstance(meta, dict) else {}
+    g, md = _Git(ctx, t), _mirror(ctx, t)
+    b, p = t['branch'], t['path']
+    with _Lock(ctx, md, wait=LOCK_WAIT):
+        _ensure(g, md)
+        _checkout(g, md)
+        behind = _count(g, md, f'{b}..origin/{b}')
+        if behind > 0:
+            behind_path = _count(g, md, f'{b}..origin/{b}', p)
+            if behind_path > 0:
+                return {'ok': False, 'synced': False, 'blocked': 'behind', 'behind': behind,
+                        'behind_path': behind_path, 'behind_top': _behind_top(g, md)}
+            ff = g.run(['merge', '--ff-only', '--quiet', f'origin/{b}'], md)
+            if ff.returncode != 0:
+                return {'ok': False, 'synced': False, 'blocked': 'diverged', 'behind': behind,
+                        'ahead': _count(g, md, f'origin/{b}..{b}'), 'behind_top': _behind_top(g, md),
+                        'error': _mask((ff.stderr or ff.stdout or '')[-200:])}
+        dst = _inside(ctx, md, p)                        # ПІСЛЯ merge: він міг привезти симлінк
+        try:
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)                       # щоб видалені в `src` файли пішли й з репо
+            shutil.copytree(src, dst, symlinks=True)
+        except OSError as e:                             # файл замість теки, нема прав, зникло посеред копіювання
+            raise _err(ctx, 'vcs-error', f'push: cannot replace {p}: {e}') from None
+        g.run(['add', '-A', '--', p], md)                # збій add видно далі: зміни лишаться неіндексованими
+        st = g.run(['status', '--porcelain', '--', p], md)
+        if st.returncode != 0:                           # порожній вивід при відмові читався б як «змін нема»
+            raise g.fail('status', st)
+        if not st.stdout.strip():
+            # Не змінилось — ще НЕ «лежить на origin»: попередній коміт міг не доїхати (bgSanctions, 12 днів «✓»).
+            # Гілки на origin нема зовсім (порожній репо) — теж не «synced»: пробуємо push і чесно звітуємо про результат.
+            if _count(g, md, f'origin/{b}..{b}') == 0 and g.run(
+                    ['rev-parse', '--verify', '--quiet', f'origin/{b}'], md).returncode == 0:
+                return {'ok': True, 'synced': True, 'changed': False, 'pushed': False}
+            return _pushed(g, g.run(['push', '--quiet', 'origin', b], md), changed=False, catchup=True)
+        author = meta.get('author') if isinstance(meta.get('author'), dict) else {}
+        name = str(author.get('name') or '').strip() or 'Deai Canvas'
+        mail = str(author.get('email') or '').strip() or 'deai@localhost'
+        c = g.run(['-c', f'user.name={name}', '-c', f'user.email={mail}',
+                   'commit', '-q', '-m', str(meta.get('message') or 'deai: sync')], md)
+        if c.returncode != 0:
+            raise g.fail('commit', c)
+        out = _pushed(g, g.run(['push', '--quiet', 'origin', b], md), changed=True)
+        out['sha'] = (g.run(['rev-parse', '--short', 'HEAD'], md).stdout or '').strip()
+        return out
+
+
+def _ignore_list(ctx, opts):
+    """`opts.ignore` — список підтек `<path>`, що не вважаються роботою. Перевіряється тими ж правилами, що й шлях."""
+    ign = opts.get('ignore') if isinstance(opts, dict) else None
+    if ign is None:
+        return []
+    if not isinstance(ign, (list, tuple)):
+        raise _err(ctx, 'vcs-bad-target', 'ignore: must be a list of folders')
+    out = []
+    for x in ign:
+        x = x.strip('/') if isinstance(x, str) else ''
+        why = _path_why(x, 'ignore')
+        if why:
+            raise _err(ctx, 'vcs-bad-target', why)
+        out.append(x)
+    return out
+
+
+def pull(ctx, target, dst, opts=None):
+    """Свіжий `<path>` з origin → порожня `dst`. `last_commit`: `author` — останній коміт `<path>`; `time` — останній
+    коміт `<path>` ПОЗА підтеками `opts.ignore` (кадри перезнімаються самі — це не робота), `None`, якщо такого нема.
+    Нема `<path>` (чи самої гілки на порожньому origin) — `{found: False}`, не помилка."""
+    t = validate(ctx, target)
+    ignore = _ignore_list(ctx, opts)
+    if not isinstance(dst, str) or not os.path.isdir(dst) or os.listdir(dst):
+        raise _err(ctx, 'vcs-error', 'pull: dst must be an empty folder')
+    g, md = _Git(ctx, t), _mirror(ctx, t)
+    b, p = t['branch'], t['path']
+    with _Lock(ctx, md, wait=LOCK_WAIT):
+        _ensure(g, md)
+        _checkout(g, md)
+        if g.run(['rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{b}'], md).returncode != 0:
+            return {'found': False, 'last_commit': None}          # порожній origin: гілки ще нема
+        # ⛔ Не ковтати: при розходженні --ff-only падає, і в ітерацію поїхало б ЗАСТАРІЛЕ дзеркало з чужим підписом.
+        pl = g.run(['pull', '--ff-only', '--quiet', 'origin', b], md)
+        if pl.returncode != 0:
+            ahead = _count(g, md, f'origin/{b}..{b}')
+            hint = (f' Дзеркало має {ahead} локальний(х) коміт(ів) поверх origin — розходження треба розвести вручну.'
+                    if ahead else '')
+            raise g.fail('pull --ff-only', pl, tail='.' + hint, keep=200)
+        src = _inside(ctx, md, p)
+        if not os.path.isdir(src):
+            return {'found': False, 'last_commit': None}
+        # Симлінки з чужого репо не їдуть: вони вели б з макета куди завгодно на цій машині.
+        shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True,
+                        ignore=lambda d, names: [n for n in names if os.path.islink(os.path.join(d, n))])
+        a = g.run(['log', '-1', '--format=%an', '--', p], md)
+        excl = [f':(exclude){p}/{x}' for x in ignore]
+        # Магія `:(exclude)` — лише тут і лише з нашим префіксом: `p` і `ignore` перевірені (`_path_why`).
+        tm = g.run(['log', '-1', '--format=%ct', '--', p, *excl], md, literal=False)
+        try:
+            when = int((tm.stdout or '').strip())
+        except ValueError:
+            when = None
+        return {'found': True,
+                'last_commit': {'author': (a.stdout or '').strip() if a.returncode == 0 else '', 'time': when}}
 
 
 def check(ctx):
