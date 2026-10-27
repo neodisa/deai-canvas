@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import unicodedata
 import urllib.request
 from html import escape as html_escape, unescape as html_unescape
@@ -660,13 +661,20 @@ def _vcs_legacy_ctx():
             'cache_dir': _mirrors_base(), 'mirror_flat': True}
 
 
+def _frame_reason(e):
+    """Текст відмови каркаса (`ModuleError`/`SpacesError`) для `VcsError`: СПЕРШУ маска адреси, ПОТІМ обрізання до 300. Навпаки
+    адреса з токеном, що стартує за кілька символів до межі, лишала б `https://ghp_SEC` без `@` — маска такого вже не впізнає,
+    а конструктор `VcsError` бачить лише обрізане. (`ModuleError` ріже текст сам, ще в конструкторі, — тут це вже не виправити.)"""
+    return _mask_repo(str(getattr(e, 'message', None) or e))[:300]
+
+
 def vcs_provider():
     """Хто синкає в просторі запиту: `None` (ролі нема) або `(module, ctx, legacy)`. Відмова — `VcsError` (нечитабельний
     `space.json`, свій модуль «на папері», `git-sync` не завантажився), ніколи не 500."""
     try:
         prov = deai_modules.provider('vcs')
     except (deai_modules.ModuleError, spaces.SpacesError) as e:
-        raise VcsError(getattr(e, 'code', 'vcs-error'), str(getattr(e, 'message', None) or e)[:300]) from None
+        raise VcsError(getattr(e, 'code', 'vcs-error'), _frame_reason(e)) from None
     if prov is None:
         return None
     if prov == 'legacy':
@@ -680,55 +688,62 @@ def vcs_provider():
     try:
         return prov, deai_modules.module_ctx(spaces.active_space(), prov), False
     except (deai_modules.ModuleError, spaces.SpacesError) as e:
-        raise VcsError(getattr(e, 'code', 'vcs-error'), str(getattr(e, 'message', None) or e)[:300]) from None
+        raise VcsError(getattr(e, 'code', 'vcs-error'), _frame_reason(e)) from None
 
 
 def _vcs_str(v):
     return isinstance(v, str) and v.strip() != ''
 
 
+def _vcs_ssh(cfg, settings, *own):
+    """`{ssh_key, host_ip}` цілі — лише у просторі з інтеграціями (ЛІГА). Правило ОДНЕ для кожного шляху цілі й окремо для
+    кожного з двох полів: перше непорожнє серед `own` (словники самої задачі: `vcs{}`, далі `gitlab{}`) > налаштування модуля
+    (поле тоді НЕ кладемо в ціль — модуль бере своє) > спільний `gitlab_ssh_key`/`gitlab_host_ip` з кореня `tasks.json`."""
+    if not spaces.integrations_on():
+        return {}
+    out = {}
+    for name, shared in (('ssh_key', 'gitlab_ssh_key'), ('host_ip', 'gitlab_host_ip')):
+        val = next((d[name] for d in own if isinstance(d, dict) and d.get(name)), None)
+        if val is None:
+            if (settings or {}).get(name):
+                continue
+            val = cfg.get(shared)
+        if isinstance(val, str) and val:
+            out[name] = os.path.expanduser(val) if name == 'ssh_key' else val
+    return out
+
+
 def vcs_target(cfg, tid, task, settings):
     """Ціль задачі для модуля або `None` (задачу не налаштовано). Порядок (спека 4a, «Роль `vcs`»): поле задачі
     `vcs{repo, path?, branch?}` (лише з непорожнім `repo`) → старе `gitlab{…}` (лише простір з інтеграціями; як
-    `gitlab_cfg` 0.7.0: без `repo` чи `path` — не налаштована, ключ і IP — задачі чи спільні з `tasks.json`) →
-    налаштування модуля. `{task}` у `path` — id задачі; `path` без `/` по краях.
+    `gitlab_cfg` 0.7.0: без `repo` чи `path` — не налаштована) → налаштування модуля. `{task}` у `path` — id задачі;
+    `path` без `/` по краях.
 
     ⛔ `repo` кладемо ОБРІЗАНИМ: `validate` модуля відкидає `repo != repo.strip()`, тож пробіл із форми чи ручної правки
     `tasks.json` інакше давав би `vcs-bad-target` замість синку.
 
-    Ключ і IP ЛІГИ (поправка 7 до спеки): у просторі з інтеграціями ціль несе `ssh_key`/`host_ip` — задачі (`vcs{}` чи `gitlab{}`),
-    інакше спільні з кореня `tasks.json`, як у 0.7.0 — НЕЗАЛЕЖНО від того, звідки ціль (`task.vcs`, `gitlab{}`, налаштування явного
-    `git-sync`). У звичайному просторі кореневих ключів ЛІГИ нема. Явний ключ/IP у налаштуваннях модуля конкретніший за спільний:
-    тоді ціль його не несе, і модуль бере своє."""
+    Ключ і IP (`_vcs_ssh`), для КОЖНОГО шляху цілі однаково: у просторі з інтеграціями — своє поле задачі (`vcs{}`, далі `gitlab{}`)
+    > налаштування модуля > спільний корінь `tasks.json`; у звичайному просторі ціль ключа й IP не несе."""
     def tpath(p):
         return str(p).replace('{task}', tid).strip('/')
-
-    def liga_ssh(*own, settings_own=None):
-        """`{ssh_key, host_ip}` для цілі: перше непорожнє серед `own` (словники задачі), інакше корінь `tasks.json`; лише ЛІГА."""
-        if not spaces.integrations_on():
-            return {}
-        out = {}
-        for name, shared in (('ssh_key', 'gitlab_ssh_key'), ('host_ip', 'gitlab_host_ip')):
-            val = next((d[name] for d in own if isinstance(d, dict) and d.get(name)), None) or cfg.get(shared)
-            if isinstance(val, str) and val and not (settings_own or {}).get(name):
-                out[name] = os.path.expanduser(val) if name == 'ssh_key' else val
-        return out
     v = task.get('vcs')
     if isinstance(v, dict) and _vcs_str(v.get('repo')):
         return {'repo': v['repo'].strip(), 'task': tid,
                 'path': tpath(v['path'] if _vcs_str(v.get('path')) else settings.get('path') or 'mockup/{task}'),
                 'branch': (v['branch'] if _vcs_str(v.get('branch')) else settings.get('branch') or 'main').strip(),
-                **liga_ssh(v, task.get('gitlab'), settings_own=settings)}
+                **_vcs_ssh(cfg, settings, v, task.get('gitlab'))}
     if task.get('gitlab') and spaces.integrations_on():
         gl = gitlab_cfg(cfg, task)
         if gl is None:
             return None
+        # Ключі `gl` перезаписуємо НА МІСЦІ (порядок ключів цілі — як у 0.7.0): `gitlab_cfg` бере корінь, не знаючи про налаштування.
+        gl = {**gl, 'ssh_key': None, 'host_ip': None, **_vcs_ssh(cfg, settings, task['gitlab'])}
         return {**{k: x for k, x in gl.items() if x}, 'task': tid, 'repo': str(gl['repo']).strip()}
     if _vcs_str(settings.get('repo')):
         return {'repo': settings['repo'].strip(), 'task': tid,
                 'path': tpath(settings.get('path') or 'mockup/{task}'),
                 'branch': (settings.get('branch') or 'main').strip(),
-                **liga_ssh(task.get('gitlab'), settings_own=settings)}
+                **_vcs_ssh(cfg, settings)}
     return None
 
 
@@ -6881,8 +6896,14 @@ class Handler(SimpleHTTPRequestHandler):
         `reason: "no-gitlab"` (контракт хука; відмова постачальника — те саме, з `code`). `autosync` вимкнений у модулі —
         `reason: "autosync-off"` і ні відправки, ні локального автокоміту. Хук мовчить на причинах, яких не знає: реагує лише на
         `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Далі — `autosync()`: `no-iterations`, `foreign-only`, `clean`,
-        а будь-яка відмова модуля — `reason: "offline"` з `code`. Хукові НІКОЛИ не віддається 5xx: збій поза git (`ValueError` із
-        читання мети задачі, `KeyError`…) — теж 200 `{ok: false, reason: "error", error}`; текст скрізь крізь `_mask_repo`."""
+        а будь-яка відмова модуля — `reason: "offline"` з `code` (єдина ТИХА причина: нема мережі чи VPN).
+
+        Хукові НІКОЛИ не віддається 5xx від збою ПОЗА git: усе, що вилетіло з `autosync()` на рівні маршруту, — 200
+        `{ok: false, reason: "error", error}` (текст крізь `_mask_repo`, traceback — у stderr сервера), і хук КРИЧИТЬ: це збій
+        ЛОКАЛЬНИЙ (нечитабельні `iterations.json`, права на теку — `ValueError`, `OSError`, `PermissionError`…), а не мережа, і
+        незапушений макет лежав би тихо, якби його сховали під `offline`. Винятки: `VcsError` (відмова ролі — `offline` з `code`) і
+        центральні стани простору (`NoTask`, `SpaceUnavailable`, `SpacesError`, `AmbiguousTask`, `ModuleError`) — вони йдуть далі в
+        `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут."""
         tid, task, vcs, err = self._vcs_ctx()
         if err is not None or vcs is None or vcs[3] is None:
             out = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
@@ -6893,9 +6914,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             r = autosync(tid, task, vcs[3], vcs=vcs[:3])
+        except (SpaceUnavailable, spaces.NoTask, spaces.SpacesError, spaces.AmbiguousTask, deai_modules.ModuleError):
+            raise
         except Exception as e:  # noqa: BLE001 — Stop-хук не мусить отримати 5xx: див. докстрінг
-            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False,
-                             'reason': 'offline' if isinstance(e, (OSError, subprocess.SubprocessError)) else 'error'})
+            offline = isinstance(e, VcsError)
+            if not offline:
+                # Причину бачить той, хто дивиться в лог сервера: у відповіді хука лише короткий `error`.
+                sys.stderr.write(_mask_repo(traceback.format_exc()))
+            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False, 'reason': 'offline' if offline else 'error'})
             return
         if r.get('changed'):
             self._overview_sync()

@@ -12,6 +12,7 @@ Git — СПРАВЖНІЙ, на локальних bare-репо (без мер
 звичайний простір без інтеграцій із підключеним `git-sync`.
 """
 import contextlib
+import io
 import json
 import os
 import re
@@ -319,6 +320,30 @@ class Legacy(Core):
         self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/own', '10.0.0.8'))
         self.assertNotIn('ssh_key', serve.vcs_provider()[1]['settings'])
         self.assertNotIn('host_ip', serve.vcs_provider()[1]['settings'])
+
+    def test_the_gitlab_target_of_the_legacy_provider_is_the_070_result_byte_for_byte(self):
+        """Ревʼю c191cfb (Minor 3): ОДНА функція пріоритету ключа/IP не змінює ЛІГУ — ціль зі старого `gitlab{}` це те, що давали
+        `gitlab_cfg` + відсів порожніх у 0.7.0: і значення, і набір, і ПОРЯДОК ключів (`json.dumps` без `sort_keys`)."""
+        def old(cfg, tid, task):
+            gl = serve.gitlab_cfg(cfg, task)
+            return None if gl is None else {**{k: x for k, x in gl.items() if x}, 'task': tid, 'repo': str(gl['repo']).strip()}
+        settings = serve._vcs_legacy_ctx()['settings']
+        r, p = 'git@h:o/r.git', 'mockup/t1'
+        gitlabs = ({'repo': r, 'path': '/mockup/t1/'}, {'repo': r, 'path': p, 'branch': 'dev'}, {'repo': r, 'path': p, 'ssh_key': '/k/own'},
+                   {'repo': r, 'path': p, 'ssh_key': '~/k', 'host_ip': '10.0.0.8'}, {'repo': r, 'path': p, 'host_ip': '10.0.0.8'},
+                   {'repo': ' ' + r + ' ', 'path': p}, {'repo': r}, {'path': p}, {'repo': '', 'path': p}, {}, {'repo': r, 'path': p, 'ssh_key': '', 'host_ip': ''})
+        cfgs = ({}, {'gitlab_ssh_key': '/k/shared'}, {'gitlab_host_ip': '10.0.0.7'},
+                {'gitlab_ssh_key': '~/s', 'gitlab_host_ip': '10.0.0.7'}, {'gitlab_ssh_key': '', 'gitlab_host_ip': None})
+        seen = 0
+        for gl in gitlabs:
+            for cfg in cfgs:
+                with self.subTest(gitlab=gl, cfg=cfg):
+                    task = {'gitlab': gl}
+                    got, want = serve.vcs_target(cfg, 't1', task, settings), old(cfg, 't1', task)
+                    self.assertEqual(got, want)
+                    self.assertEqual(json.dumps(got), json.dumps(want), 'порядок ключів цілі змінився')
+                    seen += want is not None
+        self.assertGreater(seen, 30, 'передумова: більшість рядків таблиці дає справжню ціль')
 
     def test_the_vcs_field_of_a_liga_task_carries_the_shared_key_and_ip_too(self):
         """Ревʼю Task 5 (M7), поправка 7 до спеки: у просторі ЛІГА ключ/IP задачі, інакше спільні з кореня `tasks.json` — і коли ціль
@@ -838,6 +863,46 @@ class Plain(Core):
         self.assertNotIn('ssh_key', t)
         self.assertEqual(t['host_ip'], '10.0.0.7')
 
+    def test_the_key_and_ip_priority_is_one_for_every_path_of_the_target(self):
+        """Ревʼю c191cfb (Minor 3). Правило ОДНЕ для всіх шляхів цілі й окремо для `ssh_key` та `host_ip`: своє поле задачі
+        (`vcs{}`, далі `gitlab{}`) > налаштування модуля (цілі поля не несуть — модуль бере своє) > спільний корінь `tasks.json`."""
+        sp = self.make_space('Liga', integrations=True)
+        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        r = 'git@h:o/r.git'
+        gl = {'repo': r, 'path': 'mockup/t1'}
+        both, only_key, only_ip, none = ({'ssh_key': '/k/mine', 'host_ip': '10.1.1.1'}, {'ssh_key': '/k/mine'},
+                                         {'host_ip': '10.1.1.1'}, {})
+        shared = {'ssh_key': '/k/shared', 'host_ip': '10.0.0.7'}
+        rows = (
+            # (що в налаштуваннях модуля, поля задачі, що несе ціль)
+            ('gitlab{} + ключ у налаштуваннях → налаштування', both, {'gitlab': gl}, {}),
+            ('vcs{} + ключ у налаштуваннях → налаштування', both, {'vcs': {'repo': r}}, {}),
+            ('налаштування repo + ключ у налаштуваннях → налаштування', both, {}, {}),
+            ('свій у vcs{} + налаштування → свій', both, {'vcs': {'repo': r, 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}},
+             {'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}),
+            ('свій у gitlab{} + налаштування → свій (ціль із gitlab{})', both, {'gitlab': {**gl, 'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}},
+             {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}),
+            ('свій у gitlab{} + налаштування → свій (ціль із vcs{})', both, {'vcs': {'repo': r}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}},
+             {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}),
+            ('vcs{} свій раніше за gitlab{} свій, по полях', both, {'vcs': {'repo': r, 'ssh_key': '/k/v'}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}},
+             {'ssh_key': '/k/v', 'host_ip': '10.0.0.9'}),
+            ('налаштування тримають лише своє поле: ключ', only_key, {'gitlab': gl}, {'host_ip': '10.0.0.7'}),
+            ('налаштування тримають лише своє поле: IP', only_ip, {'vcs': {'repo': r}}, {'ssh_key': '/k/shared'}),
+            ('своє поле однієї назви + налаштування іншої', only_key, {'vcs': {'repo': r, 'host_ip': '10.0.0.8'}}, {'host_ip': '10.0.0.8'}),
+            ('без налаштувань: корінь для gitlab{}', none, {'gitlab': gl}, shared),
+            ('без налаштувань: корінь для vcs{}', none, {'vcs': {'repo': r}}, shared),
+            ('без налаштувань: корінь для налаштувань repo', none, {}, shared),
+            ('без налаштувань: свій у vcs{} > корінь', none, {'vcs': {'repo': r, 'ssh_key': '/k/own'}}, {'ssh_key': '/k/own', 'host_ip': '10.0.0.7'}),
+            ('без налаштувань: свій у gitlab{} > корінь', none, {'gitlab': {**gl, 'host_ip': '10.0.0.9'}}, {'ssh_key': '/k/shared', 'host_ip': '10.0.0.9'}),
+        )
+        for what, settings, fields, want in rows:
+            with self.subTest(what):
+                dm.write_module_state(sp, 'git-sync', settings={'ssh_key': None, 'host_ip': None, **settings})
+                self.assertEqual({k: (serve.vcs_provider()[1]['settings'].get(k) or None) for k in settings},
+                                 {k: v for k, v in settings.items()}, 'передумова: налаштування модуля записались')
+                t = serve.vcs_task(cfg, 't1', {**self.task, **fields})[3]
+                self.assertEqual({k: t[k] for k in ('ssh_key', 'host_ip') if k in t}, want)
+
     def test_the_local_autocommit_of_the_autosync_is_signed_deai_in_an_ordinary_space(self):
         """Ревʼю Task 5 (M10), поправка 12: «автосинк (deai)» у звичайному просторі — і з готовим постачальником, і без."""
         v = self.vt()
@@ -862,6 +927,33 @@ class Plain(Core):
         self.assertIsInstance(cm.exception, OSError)
         with self.assertRaises(serve.VcsError):
             serve.vcs_task(self.cfg, 't1', self.task)
+
+    def test_a_long_refusal_of_the_frame_is_masked_before_it_is_cut_in_the_provider(self):
+        """Ревʼю c191cfb (Minor 2): обидва місця `vcs_provider`, що пакують відмову каркаса у `VcsError`, ріжуть текст до 300
+        ПІСЛЯ маски: адреса з токеном, що стартує за 15 символів до межі, інакше лишала б `https://ghp_SEC` (маска без `@`
+        нічого не впізнає, а конструктор `VcsError` бачить уже обрізане)."""
+        head = 'space-json-unreadable: /p '
+        why = 'a' * (285 - len(head)) + f'https://{TOKEN}@github.com/o/r.git'
+        exc = spaces.SpacesError('space-json-unreadable', '/p', why)
+        self.assertEqual(str(exc).index('https://'), 285, 'передумова: адреса стартує на 285-му символі')
+        want = (head + 'a' * (285 - len(head)) + 'https://***@github.com/o/r.git')[:300]
+        for site, patch in (('provider()', mock.patch.object(dm, 'provider', side_effect=exc)),
+                            ('module_ctx()', mock.patch.object(dm, 'module_ctx', side_effect=exc))):
+            with self.subTest(site=site), patch:
+                with self.assertRaises(serve.VcsError) as cm:
+                    serve.vcs_provider()
+                self.assertEqual((cm.exception.code, str(cm.exception)), ('space-json-unreadable', want))
+                self.assertNotIn('ghp_SE', str(cm.exception))
+
+    def test_a_module_error_of_the_frame_is_masked_in_the_provider_too(self):
+        """`ModuleError` ріже текст до 300 сам, ще в конструкторі: тут повна адреса вміщається, і маска її бере."""
+        exc = dm.ModuleError('bad-settings', message=f'ctx failed for https://{TOKEN}@github.com/o/r.git')
+        for site, patch in (('provider()', mock.patch.object(dm, 'provider', side_effect=exc)),
+                            ('module_ctx()', mock.patch.object(dm, 'module_ctx', side_effect=exc))):
+            with self.subTest(site=site), patch:
+                with self.assertRaises(serve.VcsError) as cm:
+                    serve.vcs_provider()
+                self.assertEqual((cm.exception.code, str(cm.exception)), ('bad-settings', 'ctx failed for https://***@github.com/o/r.git'))
 
     def test_a_module_that_cannot_build_its_ctx_is_a_vcs_error(self):
         with mock.patch.object(dm, 'module_ctx', side_effect=dm.ModuleError('bad-settings', message='x')):
@@ -1162,6 +1254,17 @@ class AddressMask(Core):
         self.assertEqual((r['reason'], r['error']), ('offline', 'push to https://***@github.com/o/r.git failed'))
         self.assertNotIn('code', r)
         self.leak_free(r, (TOKEN,))
+
+    def test_the_autosync_masks_the_address_before_it_cuts_the_text(self):
+        """Ревʼю c191cfb (Minor 2): `[:300]` ПІСЛЯ маски. Адреса, що стартує за 15 символів до межі, інакше лишила б у відповіді
+        Stop-хука `https://ghp_SEC` без `@`."""
+        self.write_it1('<h1>v13</h1>')
+        text = 'a' * 285 + f'https://{TOKEN}@github.com/o/r.git'
+        with mock.patch.object(serve, 'gitlab_sync', side_effect=OSError(text)):
+            r = serve.autosync('t1', self.task, self.gl)
+        self.assertEqual(r['reason'], 'offline')
+        self.assertEqual(r['error'], ('a' * 285 + 'https://***@github.com/o/r.git')[:300])
+        self.assertNotIn('ghp_SE', json.dumps(r))
 
     def test_a_returned_error_of_a_foreign_module_is_masked_in_status_push_and_pull(self):
         """Поправка 10: чужий модуль не кидає, а ПОВЕРТАЄ `{ok: false, error: <текст із адресою>}`: рядковий `error` результату
@@ -1483,6 +1586,14 @@ class Http(Core):
     def post(self, path, payload=None, task=None):
         return self.call('POST', path, {} if payload is None else payload, task)
 
+    @contextlib.contextmanager
+    def server_log(self):
+        """Stderr сервера: він у цьому ж процесі, а `_autosync` пише traceback збою в лог. Тест його або читає, або глушить, щоб не
+        засмічувати вивід прогону (для тихих причин лог лишається порожнім)."""
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            yield buf
+
     def heads(self):
         return self.out(self.origin, 'rev-parse', 'main')
 
@@ -1783,16 +1894,21 @@ class Http(Core):
 
     # ---------------------------------------------------------------- автосинк ніколи не віддає 5xx (ревʼю Task 5, M8)
     def test_the_autosync_answers_200_with_a_reason_and_a_mask_for_any_failure(self):
-        """Stop-хук не мусить отримувати 500: і не-`OSError` (`ValueError` з читання мети) теж 200 з `reason` і маскою."""
+        """Stop-хук не мусить отримувати 500: і не-`OSError` (`ValueError` з читання мети) теж 200 з `reason` і маскою.
+
+        Ревʼю c191cfb (F1): «offline» хук мовчить, а `OSError`/`PermissionError`/`FileNotFoundError` НА РІВНІ МАРШРУТУ — це збій
+        ЛОКАЛЬНИЙ (нечитабельні `iterations.json`, права на теку), а не відсутня мережа: незапушений макет тоді лежав би тихо.
+        Тож `offline` — лише те, що ставить сам `autosync()` (його тут нема) і `VcsError`; решта — `error`, і хук кричить."""
         msg = f'broken iterations of https://{TOKEN}@github.com/o/r.git'
         dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
         cases = ((ValueError(msg), 'error', None), (KeyError(msg), 'error', None), (TypeError(msg), 'error', None),
-                 (OSError(msg), 'offline', None), (subprocess.SubprocessError(msg), 'offline', None),
+                 (OSError(msg), 'error', None), (subprocess.SubprocessError(msg), 'error', None),
+                 (PermissionError(msg), 'error', None), (FileNotFoundError(msg), 'error', None),
                  (serve.VcsError('vcs-offline', msg), 'offline', 'vcs-offline'))
         for tid in ('a', 'p'):
             for exc, reason, code in cases:
                 with self.subTest(task=tid, exc=type(exc).__name__):
-                    with mock.patch.object(serve, 'autosync', side_effect=exc):
+                    with self.server_log(), mock.patch.object(serve, 'autosync', side_effect=exc):
                         st, body = self.post('/api/autosync', {}, tid)
                     self.assertEqual(st, 200, body)
                     self.assertEqual((body['ok'], body['synced'], body['changed'], body['reason']), (False, False, False, reason))
@@ -1800,10 +1916,48 @@ class Http(Core):
                     self.assertIn('https://***@github.com/o/r.git', body['error'])
                     self.assertNotIn(TOKEN, json.dumps(body))
 
+    def test_a_local_failure_of_the_autosync_writes_a_masked_traceback_to_stderr(self):
+        """Ревʼю c191cfb (Minor 1a): `reason: "error"` у відповіді — коротко, а ЩО зламалось, видно лише з traceback у stderr
+        сервера (інакше `except Exception` ховає причину так само, як ховав би `pass`). Адреса з токеном — теж замаскована."""
+        msg = f'broken iterations of https://{TOKEN}@github.com/o/r.git'
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        for tid in ('a', 'p'):
+            with self.subTest(task=tid, kind='error'):
+                with self.server_log() as err, mock.patch.object(serve, 'autosync', side_effect=ValueError(msg)):
+                    st, body = self.post('/api/autosync', {}, tid)
+                self.assertEqual((st, body['reason']), (200, 'error'), body)
+                log = err.getvalue()
+                self.assertIn('Traceback', log)
+                self.assertIn('ValueError', log)
+                self.assertIn('https://***@github.com/o/r.git', log)
+                self.assertNotIn(TOKEN, log)
+            with self.subTest(task=tid, kind='offline'):
+                with self.server_log() as err, mock.patch.object(serve, 'autosync', side_effect=serve.VcsError('vcs-offline', msg)):
+                    st, body = self.post('/api/autosync', {}, tid)
+                self.assertEqual((st, body['reason']), (200, 'offline'), body)
+                self.assertNotIn('Traceback', err.getvalue(), 'тиха причина лишається тихою')
+
+    def test_the_central_states_of_the_space_are_not_swallowed_by_the_autosync(self):
+        """Ревʼю c191cfb (Minor 1b): `NoTask`/`SpaceUnavailable`/`SpacesError`/`AmbiguousTask`/`ModuleError` — відповіді `_guarded`
+        (404/503/409/статус модуля), як у кожного маршруту, а не 200 із `reason: "error"`: `SpaceUnavailable` — ще й `OSError`
+        із `ValueError`, тож без явного `raise` перед `except Exception` його проковтнув би той самий рядок."""
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        cases = ((spaces.NoTask('x'), 404, 'no-task'), (serve.SpaceUnavailable('/p/tasks.json'), 503, 'space-unavailable'),
+                 (spaces.SpacesError('spaces-unreadable', '/p', 'bad'), 503, 'spaces-unreadable'),
+                 (spaces.AmbiguousTask('a'), 409, 'ambiguous-task'), (dm.ModuleError('module-error', 502, 'boom'), 502, 'module-error'))
+        for tid in ('a', 'p'):
+            for exc, status, code in cases:
+                with self.subTest(task=tid, exc=type(exc).__name__):
+                    with mock.patch.object(serve, 'autosync', side_effect=exc):
+                        st, body = self.post('/api/autosync', {}, tid)
+                    self.assertEqual((st, body['ok'], body['code']), (status, False, code), body)
+                    self.assertNotIn('reason', body, 'це не відповідь автосинку')
+
     def test_a_real_value_error_of_the_task_state_is_still_a_200_for_the_stop_hook(self):
         dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
         write(os.path.join(self.p_dir, 'iterations.json'), '{')
-        st, body = self.post('/api/autosync', {}, 'p')
+        with self.server_log():
+            st, body = self.post('/api/autosync', {}, 'p')
         self.assertEqual((st, body['ok'], body['reason']), (200, False, 'error'), body)
         self.assertTrue(body['error'])
 
@@ -1843,11 +1997,39 @@ class Http(Core):
                                               ('POST', '/api/gitlab-pull', 'gitlab_pull', {}),
                                               ('POST', '/api/autosync', 'autosync', {})):
                 with self.subTest(task=tid, path=path):
-                    with mock.patch.object(serve, fn, side_effect=OSError(msg)):
+                    with self.server_log(), mock.patch.object(serve, fn, side_effect=OSError(msg)):
                         st, body = self.call(method, path, payload, tid)
                     self.assertEqual(st, 200)
                     self.assertEqual(body['error'], 'clone of https://***@github.com/o/r.git failed')
                     self.assertNotIn(TOKEN, json.dumps(body))
+
+    # ---------------------------------------------------------------- маска ДО обрізання (ревʼю c191cfb, Minor 2)
+    @staticmethod
+    def straddle(limit):
+        """Текст, у якому адреса з токеном починається за 15 символів до `limit`: `https://` займає 8, тож у зріз `[:limit]` без
+        маски потрапляє `https://ghp_SEC` — без `@`, маска його вже не впізнає, і початок токена йде назовні."""
+        return 'a' * (limit - 15) + f'https://{TOKEN}@github.com/o/r.git'
+
+    def test_the_address_is_masked_before_the_text_is_cut_in_every_failure_body_of_the_routes(self):
+        """Порядок «спершу маска, потім обрізання» тримає кожне місце, що друкує текст винятку: `_vcs_failure` (відправка, прийом,
+        автосинк) на 300 і маршрут статусу на 200."""
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        cases = (('GET', '/api/vcs-status?it=it1', 'gitlab_status', None, OSError, 200),
+                 ('GET', '/api/gitlab-status?it=it1', 'gitlab_status', None, OSError, 200),
+                 ('POST', '/api/vcs-push', 'gitlab_sync', {'it': 'it1'}, OSError, 300),
+                 ('POST', '/api/gitlab-sync', 'gitlab_sync', {'it': 'it1'}, OSError, 300),
+                 ('POST', '/api/vcs-pull', 'gitlab_pull', {}, OSError, 300),
+                 ('POST', '/api/gitlab-pull', 'gitlab_pull', {}, OSError, 300),
+                 ('POST', '/api/autosync', 'autosync', {}, OSError, 300),
+                 ('POST', '/api/autosync', 'autosync', {}, ValueError, 300))
+        for tid in ('a', 'p'):
+            for method, path, fn, payload, kind, limit in cases:
+                with self.subTest(task=tid, path=path, exc=kind.__name__):
+                    with self.server_log(), mock.patch.object(serve, fn, side_effect=kind(self.straddle(limit))):
+                        st, body = self.call(method, path, payload, tid)
+                    self.assertEqual(st, 200, body)
+                    self.assertEqual(body['error'], ('a' * (limit - 15) + 'https://***@github.com/o/r.git')[:limit])
+                    self.assertNotIn('ghp_SE', json.dumps(body), 'початок токена пройшов крізь обрізання')
 
     def test_a_returned_error_of_a_foreign_module_never_reaches_the_push_response_or_the_autosync(self):
         """Поправка 10 крізь HTTP: модуль не кидає, а повертає `{ok: false, error: <адреса з токеном>}`."""
