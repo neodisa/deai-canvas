@@ -33,9 +33,9 @@ import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
-  commentsUnavailableCode, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
+  commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
-  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError,
+  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError, vcsBrand, vcsErrKey,
 } from './spaces-model.js';
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -247,13 +247,17 @@ let spaceDdWasOpen = false;
 /** Поточний простір (`{id, name, color, integrations, …}`) або `null`: шар вимкнено,
  *  просторів нема. Джерело — задача, що відкрита (`curTask.space`), інакше реєстр. */
 const spaceNow = () => curTask?.space ?? currentSpace(spacesResp);
-/** Простір без інтеграцій: усе, що ходить НАЗОВНІ (GitLab, Teams-тиша), там не опитується
- *  взагалі (публікація йде на `hasPublish`, командний канал коментарів — на `noTeamComments`,
- *  нижче: їх дають ролі модулів, а не інтеграції). Простору, про який ми знаємо, — рівно
- *  `=== false` (невідомість красти в людини GitLab не має, так само, як `bar-model.js`).
- *  Просторів на машині немає зовсім (привітання) — теж «назовні нічого»: задач нема, і
- *  опитувати нікого (`refreshGitlab`, `loadTeamsMute` без цього питали б порожнечу). */
+/** Простір без інтеграцій: Teams-тиша там не опитується взагалі (публікація йде на `hasPublish`,
+ *  командний канал коментарів — на `noTeamComments`, синк із git — на `noVcs`, нижче: їх дають
+ *  ролі модулів, а не інтеграції). Простору, про який ми знаємо, — рівно `=== false` (невідомість
+ *  красти в людини Teams не має, так само, як `bar-model.js`). Просторів на машині немає зовсім
+ *  (привітання) — теж «назовні нічого»: задач нема, і опитувати нікого (`loadTeamsMute` без цього
+ *  питав би порожнечу). */
 const noOutward = () => spaceNow()?.integrations === false || needsWelcome(spacesResp);
+/** Синку з git нема: роль `vcs` (`hasVcs`: ключ `capabilities.vcs`, без нього — `integrations`). Це НЕ `noOutward`:
+ *  Teams лишається на інтеграціях, а простір із модулем `git-sync` має синк і без них. Просторів нема зовсім
+ *  (привітання) — теж без синку: `refreshGitlab` питав би порожнечу. */
+const noVcs = () => needsWelcome(spacesResp) || !hasVcs(spaceNow());
 /** Командного каналу коментарів нема: вкладки «Команда» й аудиторії `project` — теж. Це НЕ `noOutward`: канал дає
  *  роль `comments` (зашитий ЛІГА або модуль, `capabilities.comments`), і простір без інтеграцій, але з модулем
  *  коментарів його має. Просторів нема зовсім (привітання) — теж без каналу: задач і сторінок нема. */
@@ -872,6 +876,9 @@ function barState() {
     iterMine: iterMine(pickedIt),
     iterOrigin: pickedIt?.origin || null,
     iterOnGl: !!(glCache && glCache.gitlab_it === picked),
+    /* Підпис репозиторію з відповіді статусу ('GitLab' у ЛІГА, 'GitHub'/'Git' від модуля): смуга й палітра беруть із нього
+       підпис зони й текстів (`bar-model.js`, `vcsBrand`). Статус без `label` (простір без синку, помилка) — типовий «GitLab». */
+    glLabel: glCache?.label || '',
     /* Перелік ітерацій — щоб дропдаун крошки МІГ перемкнути, а не лише
        створити й видалити. Доти єдиним місцем вибору був `<select>` панелі;
        коли панель переписали, вибір зник із інструмента зовсім, бо `picked`
@@ -1268,7 +1275,7 @@ async function afterSpaceChange() {
   /* Статус GitLab нового простору — ПІСЛЯ рендера: його питають по обраній ітерації
      (`picked`), а вона нормалізується саме в `render()`. Без цього крапка GitLab у
      просторі з інтеграціями лишалась би «нема», доки щось інше не освіжить кеш
-     (`resetSpaceState` його обнулив). Простір без інтеграцій `refreshGitlab` не питає. */
+     (`resetSpaceState` його обнулив). Простір без ролі `vcs` `refreshGitlab` не питає. */
   await refreshGitlab();
   paintBar();
 }
@@ -1914,50 +1921,59 @@ const BAR_ACTIONS = {
     } catch (e) { tell(t('errFailed', e.message)); }
   },
 
-  // ── дропдаун GitLab: та сама мережа, що жила в `paintGitlab` ────────────
+  // ── дропдаун синку з git: адреси `vcs-*` (старі, з префіксом gitlab, лишились псевдонімами для хука) ──────
   glpush: async () => {
     if (!glCache) return;
     /* Кеш уже каже, що останній запит статусу впав, — другий запит до git
        приречений на ту саму помилку. Кажемо ЇЇ, а не повторюємо виклик. */
     if (glCache.error) { tell(t('errFailed', glCache.error)); return; }
+    /* Підпис репозиторію в текстах: 'GitHub'/'Git' від модуля, у ЛІГА — «GitLab» (тексти 0.7.0 дослівно). */
+    const lbl = glCache.label || 'GitLab';
     try {
-      const r = await post('/api/gitlab-sync', { it: picked });
-      if (r.blocked === 'behind') tell(t('glBehindMsg', r.behind));
+      const r = await post('/api/vcs-push', { it: picked });
+      if (r.blocked === 'behind') tell(t('glBehindMsg', r.behind, lbl));
       /* Відмова «це чужа ітерація» мусить сказати ЧИЯ і що робити. Без цієї
          гілки вона падала в загальну «Синк не вдався: —»: у відповіді
          `foreign` немає поля `error`, тобто людина бачила прочерк замість
          причини. */
       else if (r.blocked === 'foreign') tell(t('glForeignMsg', r.author || '—'));
-      else if (!r.ok) tell(t('glSyncFailedMsg', r.error || '—'));
-      else if (r.catchup) toast(t('glCatchupToast'));
-      else if (r.changed === false) toast(t('glNothingToSendToast'));
-      else if (r.pushed) toast(t('glPushedToast', r.sha || '—'));
+      /* Відмова git чи модуля — 200 `{ok: false, error, code}`: код із власним текстом (немає мережі, ключ, «іде
+         синхронізація», погана ціль) каже людині, ЩО робити; решта кодів — загальне повідомлення з причиною сервера. */
+      else if (!r.ok) { const k = vcsErrKey(r.code); tell(k ? t(k, lbl) : t('glSyncFailedMsg', r.error || '—', lbl)); }
+      else if (r.catchup) toast(t('glCatchupToast', lbl));
+      else if (r.changed === false) toast(t('glNothingToSendToast', lbl));
+      else if (r.pushed) toast(t('glPushedToast', r.sha || '—', lbl));
     } catch (e) { tell(t('errFailed', e.message)); }
     await refreshGitlab(); render();
   },
 
   glpull: async () => {
-    const go = await askYesNo(t('glPullConfirmMsg'), { yes: t('glPullConfirmYes') });
+    const lbl = glCache?.label || 'GitLab';
+    const go = await askYesNo(t('glPullConfirmMsg', lbl), { yes: t('glPullConfirmYes') });
     if (!go) return;
     try {
-      const r = await post('/api/gitlab-pull', {});
+      const r = await post('/api/vcs-pull', {});
       /* Pull, який упізнав власний вміст, ітерації не заводить — і мусить
          сказати це вголос. Без тоста кнопка виглядає зламаною: дизайнер
          натиснув, і НІЧОГО не сталось. */
-      if (r.unchanged) toast(t('glPullUnchangedToast', r.same_as || '—'));
+      if (r.unchanged) toast(t('glPullUnchangedToast', r.same_as || '—', lbl));
       /* Своє, але старше за мою роботу: привезене — історія, робота йде з форка
          моєї найсвіжішої (рішення власника 29.09.2026, fb-29092026-d64d35). */
       else if (r.continue_from && r.fork) toast(t('glPullOlderToast',
         t('iterTag', itNum(r.iteration.id)), t('iterTag', itNum(r.continue_from)),
-        t('iterTag', itNum(r.fork.id))));
+        t('iterTag', itNum(r.fork.id)), lbl));
+      /* Відмова git приходить 200-ю `{ok: false, error, code}` (а «шлях не знайдено в репо» — без `code`), тож `catch`
+         її не бачить: без цієї гілки pull, що не вдався, мовчав би — а мовчазна кнопка виглядає зламаною. */
+      else if (r.ok === false) { const k = vcsErrKey(r.code); tell(k ? t(k, lbl) : t('glSyncFailedMsg', r.error || '—', lbl)); }
       await refreshGitlab(); render();
     } catch (e) { tell(t('errFailed', e.message)); }
   },
 
-  /* Інструмент не має власного майстра підключення репозиторію — GitLab
-     заводиться правкою `tasks.json` (`gitlab_cfg()` у `serve.py`). Кажемо
-     РЕАЛЬНЕ місце правки, а не вигадуємо кнопку, якої нема. */
-  glsetup: () => { tell(t('glSetupMsg')); },
+  /* Синк із git у ЛІГА налаштовується правкою `tasks.json` (`gitlab_cfg()` у `serve.py`), а не на «Підключенні»: відкриття
+     екрана підбивало б людину ввімкнути явний `git-sync`, що перекрив би зашитий шлях ЛІГА без `gitlab_ssh_key` (спека 4a,
+     «Простір ЛІГА»). Кажемо РЕАЛЬНЕ місце правки, а не вигадуємо кнопку, якої нема. Деінде — звичайний простір: репозиторій
+     задається на «Підключенні», на картці модуля ролі `vcs`. */
+  glsetup: () => { if (isLegacyVcs(spaceNow())) tell(t('glSetupMsg')); else enterConnections(); },
 
   glhistory: () => { if (glCache?.web) window.open(glCache.web, '_blank'); },
 
@@ -2800,6 +2816,10 @@ async function afterModulesChange() {
      `connOpen()`: з оверлея, відкритого на «Задачах», вихід теж іде через `leaveHome`, тож зайве друге перезавантаження
      було б марним. */
   await render({ keepFrame: homeOpen });
+  /* Синк із git — ПІСЛЯ `render()`, не відразу за `loadSpaces()`: `spaceNow()` бере `curTask?.space`, який оновлює саме
+     `render()`, тож раніше він читав би старі `capabilities` (щойно підключений модуль `git-sync` лишався б «без синку»,
+     вимкнений — із застарілою зоною). Роль зникла — `refreshGitlab` скидає `glCache`. */
+  await refreshGitlab();
   paintBar();
   if (connOpen() && connState.seq === seq) await loadConn({ spaces: false });
 }
@@ -3468,10 +3488,12 @@ let glCache = null;
    й так робить перемальовка. Дії (`glpush`/`glpull`/`glsetup`/`glhistory`)
    тепер у `BAR_ACTIONS`. */
 async function refreshGitlab() {
-  /* Простір без інтеграцій GitLab не має: статус там — «нема», а не запит, що
+  /* Простір без ролі `vcs` синку не має: статус там — «нема», а не запит, що
      повертає `configured:false` (і не мережа, і не рядок у журналі сервера). */
-  if (noOutward()) { glCache = null; return; }
-  try { glCache = await api(`/api/gitlab-status?it=${encodeURIComponent(picked || '')}`); }
+  if (noVcs()) { glCache = null; return; }
+  /* `vcs-busy` — не помилка, а «лок дзеркала тримає інша синхронізація (клон, відправка, отримання)»: попередній стан
+     лишається, інакше крапка смуги фарбувалась би в помилку на кожен збіг у часі. */
+  try { const r = await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`); glCache = (r.code === 'vcs-busy' && glCache) ? glCache : r; }
   catch { glCache = null; }
 }
 
@@ -6868,7 +6890,7 @@ function paletteState() {
     figmaBusy: st.figmaBusy,
     pickedPage,
     ...paletteTreeTarget(),
-    gl: st.gl, iterLabel: st.iterLabel,
+    gl: st.gl, glBrand: vcsBrand(st.glLabel), iterLabel: st.iterLabel,
     shots: curIter() ? shotsState() : null,
     lang: getLang(),
     canInstall: pwa.canInstall(),
@@ -6880,8 +6902,8 @@ function paletteState() {
     commentMode: st.commentMode,
     /* Простори для ⌘K: МАСИВ лише коли шар увімкнено (`off` / не питали — `undefined`,
        і пунктів просторів нема зовсім, а не «Новий простір…» без реєстру). `space` —
-       вимикач: без інтеграцій палітра ховає GitLab; публікацію й командний канал — їхні
-       постачальники (`capabilities.publish`/`capabilities.comments`). */
+       вимикач: синк із git палітра показує за роллю `vcs` (`capabilities.vcs`), публікацію й командний канал — за їхніми
+       постачальниками (`capabilities.publish`/`capabilities.comments`). */
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
     space: st.space ? { id: st.space.id, integrations: st.space.integrations, capabilities: st.space.capabilities } : null,

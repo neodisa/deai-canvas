@@ -33,7 +33,7 @@
  * смузі: на вузькому вікні фішка з'їдала крихти задачі й ітерації.
  */
 
-import { hasPublish, isLegacyPublish } from "./spaces-model.js";
+import { hasPublish, hasVcs, isLegacyPublish, vcsBrand } from "./spaces-model.js";
 
 /**
  * Яруси зникнення в зоні 2, ширина вікна в пікселях. Значення підтверджені
@@ -281,6 +281,12 @@ export function barModel(s) {
     });
   }
 
+  /* Підпис репозиторію (етап 4a). Типовий — «GitLab» (`labelKey: "gitlab"`, ЛІГА й усе, що не GitHub/Git): тоді поля `brand`
+     у зоні НЕМА взагалі, а палітра не отримує `labelArgs` — `legacy-golden` порівнює їх побайтно. Нетиповий — `GitHub`/`Git`:
+     свій ключ підпису, а поле `brand` DOM-шар передає останнім аргументом текстам «Надіслати … на {label}». Правило —
+     `vcsBrand` (`spaces-model.js`), те саме, що в палітри. */
+  const VCS_LABEL_KEYS = { GitHub: "vcsGitHub", Git: "vcsGit" };
+  const brand = vcsBrand(s.glLabel);
   // Дропдаун GitLab (ревʼю Task 8, п.4): чотири розгалуження, не два.
   // «off» — репозиторій не підключений, нема з чим працювати, крім
   // «Налаштувати» (ні «Надіслати», ні історії). Інакше — «Підтягнути»
@@ -293,7 +299,7 @@ export function barModel(s) {
       ...(s.gl === "behind" ? [{ id: "glpull", labelKey: "glPull", subKey: "glPullSub" }] : []),
       {
         id: "glpush", labelKey: "glPush",
-        disabled: s.gl === "sync", whyKey: s.gl === "sync" ? "glSync" : "",
+        disabled: s.gl === "sync", whyKey: s.gl === "sync" ? (brand ? "vcsSyncWhy" : "glSync") : "",
       },
       { id: "glhistory", labelKey: "glHistory" },
     ];
@@ -302,12 +308,13 @@ export function barModel(s) {
   const figmaWhy = figmaWhyKey(s);
   /* Вимикач інтеграцій (спека просторів, розділ «Вимикач») і публікація модулем (спека 2а).
      Два РІЗНІ питання, і розщепив їх Task 8 модулів:
-       · `noInteg` — простір, де `integrations === false`: він не має GitLab і Teams-каналу
-         задачі — вони ходять назовні (git push, дашборд команди), а там цього нема. Рівно
-         `=== false`, а не «нема значення»: простір без відомостей (стара форма відповіді, шар
-         вимкнено) не має красти в людини GitLab. Командний канал КОМЕНТАРІВ сюди більше не
-         належить (2b-2): його дає роль `comments` (`hasTeamComments`, `capabilities.comments`),
-         і простір без інтеграцій із модулем коментарів його має.
+       · `noInteg` — простір, де `integrations === false`: він не має Teams-каналу задачі —
+         той ходить назовні (дашборд команди), а там цього нема. Рівно `=== false`, а не «нема
+         значення»: простір без відомостей (стара форма відповіді, шар вимкнено) не має красти
+         в людини Teams. Командний канал КОМЕНТАРІВ сюди більше не належить (2b-2): його дає роль
+         `comments` (`hasTeamComments`, `capabilities.comments`), і простір без інтеграцій із
+         модулем коментарів його має. Зона синку з git — теж не тут (4a): її дає роль `vcs`
+         (`hasVcs`, `capabilities.vcs`), тож простір без інтеграцій із модулем `git-sync` синк має.
        · `hasPublish` — чи є в просторі ХТОСЬ, хто публікує: зашитий код ЛІГА (`'legacy'`) або
          модуль (`static-publish`, локальна тека, нічого назовні). Без інтеграцій публікує модуль, тож
          кнопка «Опублікувати» там ЖИВА. `capabilities.publish === null` (модуль вимкнено) — публікації
@@ -373,10 +380,11 @@ export function barModel(s) {
       iconOnly: s.mode === "overview",
       busy: !!s.figmaBusy, disabled: !!figmaWhy, whyKey: figmaWhy,
     },
-    ...(noInteg ? [] : [{
+    ...(hasVcs(s.space) ? [{
       id: "gl", tier: 0, labelTier: TIERS.gl,
-      labelKey: "gitlab", status: s.gl, items: glItems,
-    }]),
+      labelKey: brand ? VCS_LABEL_KEYS[brand] : "gitlab", status: s.gl, items: glItems,
+      ...(brand ? { brand } : {}),
+    }] : []),
     ...(hasPublish(s.space) ? [{
       id: "publish", tier: 0,
       // Іконка є ЗАВЖДИ, у кожному стані — саме тут живий інструмент ставав

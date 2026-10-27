@@ -56,7 +56,8 @@ test("`space`: не перемикає на той самий простір, п
 /* ── вимикач інтеграцій: опитування НЕ запускаються ────────────────────── */
 
 test("refreshGitlab і loadTeamsMute: першим рядком — вихід без запиту, коли інтеграцій нема", () => {
-  assert.match(fn("refreshGitlab"), /^\{[^]*?\n  if \(noOutward\(\)\) \{ glCache = null; return; \}\n  try \{ glCache = await api\(/);
+  // GitLab (синк із git) — на `noVcs` (роль `vcs`, 4a); коментар між гейтом і запитом дозволений.
+  assert.match(fn("refreshGitlab"), /^\{[^]*?\n  if \(noVcs\(\)\) \{ glCache = null; return; \}\n(?:  \/\*[^]*?\*\/\n)?  try \{ const r = await api\(`\/api\/vcs-status/);
   assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noOutward\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
   assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/,
     "простір, про який знаємо, — рівно `=== false`; просторів нема зовсім — теж без опитувань");
@@ -446,10 +447,11 @@ test("«Відкрити превью» і «Скопіювати посилан
   assert.doesNotMatch(copy, /#k=/, "фрагмент із паролем збирається лише в моделі (`copyUrl`)");
 });
 
-test("палітра й смуга: публікація — на hasPublish, командний канал — на hasTeamComments, GitLab — на integrations", () => {
-  assert.match(pal, /import \{ hasPublish, hasTeamComments \} from "\.\/spaces-model\.js";/);
+test("палітра й смуга: публікація — на hasPublish, командний канал — на hasTeamComments, GitLab — на hasVcs", () => {
+  assert.match(pal, /import \{ hasPublish, hasTeamComments, hasVcs \} from "\.\/spaces-model\.js";/);
+  assert.match(pal, /const noVcs = !hasVcs\(s\.space\);/, "синк із git — на ролі `vcs`, не на integrations");
   assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
-  assert.match(pal, /if \(!noOutward\) \{\n    \/\/ Той самий трьохгілковий розгляд/);
+  assert.match(pal, /if \(!noVcs\) \{\n    \/\/ Той самий трьохгілковий розгляд/);
   assert.match(pal, /if \(ch === "project" && !hasTeamComments\(s\.space\)\) continue;/, "командний канал — на `capabilities.comments`, не на інтеграціях");
   assert.doesNotMatch(pal, /noOutward && ch === "project"/);
   const model = readFileSync(new URL("../app/bar-model.js", import.meta.url), "utf8");

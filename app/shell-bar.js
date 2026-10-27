@@ -413,13 +413,16 @@ const GL_DOT = { sync: "ok", ahead: "warn", behind: "bad", off: "off" };
 
 function ddGitlab(model, iterLabel) {
   const c = model.zone3.find((x) => x.id === "gl");
+  /* Підпис репозиторію (`c.brand`, лише `GitHub`/`Git`) — ОСТАННІМ аргументом текстів, що називають репозиторій: без нього
+     (ЛІГА, «GitLab») аргумент не передається, а текст бере типове «GitLab» — розмітка ЛІГИ побайтно та сама. */
+  const brandArg = c.brand ? [c.brand] : [];
   const parts = c.items.map((sub) => {
     if (sub.id === "glsetup") return ddItem({ act: sub.id, icon: "cloud", title: t(sub.labelKey) });
-    if (sub.id === "glhistory") return ddItem({ act: sub.id, icon: "ext", title: t(sub.labelKey) });
+    if (sub.id === "glhistory") return ddItem({ act: sub.id, icon: "ext", title: t(sub.labelKey, ...brandArg) });
     const icon = sub.id === "glpull" ? "down" : "up";
     const why = sub.disabled ? t(sub.whyKey) : "";
     return ddItem({
-      act: sub.id, icon, title: t(sub.labelKey, iterLabel),
+      act: sub.id, icon, title: t(sub.labelKey, iterLabel, ...brandArg),
       sub: sub.subKey ? t(sub.subKey) : "", why,
     });
   }).join("");
@@ -428,7 +431,7 @@ function ddGitlab(model, iterLabel) {
 
 function zoneGl(model, state, openDd) {
   const c = model.zone3.find((x) => x.id === "gl");
-  /* Простір без інтеграцій: модель не віддає GitLab (`bar-model.js`, «Вимикач»).
+  /* Простір без ролі `vcs`: модель не віддає зону синку (`bar-model.js`, «Вимикач»).
      Без цієї охорони `c.labelTier` на `undefined` кидав би на першому ж рендері
      такого простору — і вся смуга лишалась би порожньою. */
   if (!c) return "";

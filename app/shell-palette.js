@@ -76,7 +76,7 @@
  */
 
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
-import { hasPublish, hasTeamComments } from "./spaces-model.js";
+import { hasPublish, hasTeamComments, hasVcs } from "./spaces-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -102,7 +102,10 @@ import { ico } from "./icons.js";
  *     скільки рядків виділено в панелі.
  *   gl: 'off'|'sync'|'ahead'|'behind'|'error', iterLabel: string — той самий
  *     `state.iterLabel`, яким `shell-bar.js` (`ddGitlab`) підставляє номер
- *     ітерації в `t('glPush'|'glPull', iterLabel)`.
+ *     ітерації в `t('glPush'|'glPull', iterLabel)`. glBrand: ''|'GitHub'|'Git' —
+ *     підпис репозиторію, коли він не типовий (`vcsBrand`, `spaces-model.js`):
+ *     тоді він іде другим аргументом тих самих текстів (`labelArgs`), а без нього
+ *     пункти лишаються у формі 0.7.0 («GitLab», без `labelArgs`).
  *   shots: {have, stale, total, running, bad} | null — те, що `panelState()`
  *     кладе в `state.shots`; `null`, коли немає ітерації (той самий гейт).
  *   lang: 'uk'|'en' — поточна мова (`getLang()`).
@@ -114,9 +117,10 @@ import { ico } from "./icons.js";
  *     без МАСИВУ пунктів просторів нема зовсім (шар вимкнено). spaceId: string|null —
  *     поточний простір (за його відсутності — `space.id`); поточний у переліку
  *     не пропонується. space: {id, integrations, capabilities}|null — поточний простір;
- *     `integrations === false` прибирає GitLab, а публікацію й командний канал — їхні
- *     постачальники: `capabilities.publish` і `capabilities.comments` (`hasPublish`,
- *     `hasTeamComments`; стара форма без `capabilities` — за `integrations`).
+ *     синк із git, публікацію й командний канал дають їхні постачальники:
+ *     `capabilities.vcs`, `capabilities.publish` і `capabilities.comments`
+ *     (`hasVcs`, `hasPublish`, `hasTeamComments`; стара форма без `capabilities` —
+ *     за `integrations`).
  */
 /* Мова інтерфейсу — єдина група, що не залежить від задачі: її читає і звичайний
    реєстр, і екран «Задачі». Одна функція на обох, щоб два місця не розійшлись. */
@@ -194,17 +198,18 @@ export function paletteActions(state) {
   const s = state || {};
   const hasIteration = !!s.hasIteration;
   const out = [];
-  /* Простір без інтеграцій (`space.integrations === false`): палітра не пропонує
-     того, чого немає в смузі, — GitLab (`bar-model.js`, «Вимикач»). ОМІТ, не «вимкнено
-     з причиною» (той самий вибір, що для груп, безглуздих у режимі). Рівно `=== false`.
-     Командний канал коментарів (`aud-project`) тут уже НЕ на інтеграціях (2b-2): його
+  /* Простір без ролі `vcs`: палітра не пропонує того, чого немає в смузі, — синку з git
+     (`bar-model.js`, «Вимикач»). ОМІТ, не «вимкнено з причиною» (той самий вибір, що для груп,
+     безглуздих у режимі). Рішення — `hasVcs(space)`: ключ `capabilities.vcs`, а без нього
+     `integrations !== false` (4a; до того було `integrations === false`).
+     Командний канал коментарів (`aud-project`) НЕ на інтеграціях (2b-2): його
      дає роль `comments` — `hasTeamComments(space)`, див. групу `gSet` нижче.
      ПУБЛІКАЦІЯ (`publish`, `togglepub`, `copylink`, `openpreview`) від інтеграцій більше
      не залежить (модулі 2а, Task 8): вона йде на `hasPublish` (`capabilities.publish`) —
      простір без інтеграцій публікує вбудованим модулем у теку, і з палітри її забирає
      лише відсутність постачальника (`publish: null`). Тому колишній спільний
      `if (!noOutward)` розщеплено нижче на два. */
-  const noOutward = s.space?.integrations === false;
+  const noVcs = !hasVcs(s.space);
 
   /* Екран «Задачі» (`homeOpen`, батч 1.52): смуга в цьому стані не має ні
      публікації, ні «Макет/Огляд», ні ітерацій — і палітра не сміє пропонувати
@@ -378,23 +383,26 @@ export function paletteActions(state) {
       disabled: !s.published, whyKey: s.published ? "" : "whyNoPublish",
     });
   }
-  if (!noOutward) {
+  if (!noVcs) {
     // Той самий трьохгілковий розгляд, що `glItems` у `bar-model.js`
     // (`barModel`): «off» — лише «Налаштувати», інакше «Підтягнути» з'являється
     // ЛИШЕ при «behind», «Надіслати» є завжди, вимкнене з причиною при «sync».
+    // Нетиповий підпис (`glBrand`) — другим аргументом тексту (`labelArgs`) і причиною `vcsSyncWhy`;
+    // типовий — без нових полів: `legacy-golden` порівнює дії палітри `deepEqual` по JSON.
+    const brandArgs = s.glBrand ? { labelArgs: [s.iterLabel, s.glBrand] } : {};
     if (s.gl === "off") {
       out.push({ id: "glsetup", group: "gPub", labelKey: "glSetup", icon: "cloud", act: "glsetup" });
     } else {
       if (s.gl === "behind") {
         out.push({
           id: "glpull", group: "gPub", labelKey: "glPull", icon: "down",
-          act: "glpull", val: s.iterLabel,
+          act: "glpull", val: s.iterLabel, ...brandArgs,
         });
       }
       out.push({
         id: "glpush", group: "gPub", labelKey: "glPush", icon: "cloud",
-        act: "glpush", val: s.iterLabel,
-        disabled: s.gl === "sync", whyKey: s.gl === "sync" ? "glSync" : "",
+        act: "glpush", val: s.iterLabel, ...brandArgs,
+        disabled: s.gl === "sync", whyKey: s.gl === "sync" ? (s.glBrand ? "vcsSyncWhy" : "glSync") : "",
       });
     }
   }

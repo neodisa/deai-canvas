@@ -67,7 +67,7 @@ test("після вимкнення — afterModulesChange; він ЛЕГКИЙ:
   assert.match(fn("connDisable"), /await afterModulesChange\(\);/);
   const b = fnc("afterModulesChange");
   assert.doesNotMatch(b, /afterSpaceChange|resetSpaceState|resetPerTaskState|enterHome/, "простір не змінився — скидати нічого");
-  assert.match(b, /^\{\s*ovc\.invalidate\(\);\s*await loadSpaces\(\);\s*const seq = connState\.seq;\s*await render\(\{ keepFrame: homeOpen \}\);\s*paintBar\(\);\s*if \(connOpen\(\) && connState\.seq === seq\) await loadConn\(\{ spaces: false \}\);\s*\}$/);
+  assert.match(b, /^\{\s*ovc\.invalidate\(\);\s*await loadSpaces\(\);\s*const seq = connState\.seq;\s*await render\(\{ keepFrame: homeOpen \}\);\s*await refreshGitlab\(\);\s*paintBar\(\);\s*if \(connOpen\(\) && connState\.seq === seq\) await loadConn\(\{ spaces: false \}\);\s*\}$/);
 });
 
 test("afterModulesChange ПЕРШИМ інвалідує коментатор «Огляду» (інакше нові піни йдуть у сервіс, з якого людина щойно пішла)", () => {

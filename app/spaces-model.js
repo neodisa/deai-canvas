@@ -184,6 +184,9 @@ const ERR_KEYS = new Map([
  */
 export const FORM_POST_TIMEOUT_MS = 20000;
 
+/** Стеля запиту створення задачі в просторі з синком: перший клон репозиторію триває хвилини (модуль чекає до 180 с). */
+export const TASK_VCS_POST_TIMEOUT_MS = 200000;
+
 /** Ключ словника для коду помилки сервера; невідомий (і `spaces-*`) — загальний. */
 export const spaceErrKey = (code) => ERR_KEYS.get(code) ?? "spaceErrGeneric";
 
@@ -234,6 +237,42 @@ export const hasTeamComments = (space) => {
  */
 export const effectiveCommentMode = (space, mode) =>
   (!hasTeamComments(space) && mode === "project" ? "local" : mode);
+
+/**
+ * Чи є в просторі синхронізація з git (роль `vcs`, етап 4a). Є ключ `capabilities.vcs` — він і вирішує (`'legacy'` —
+ * зашитий шлях ЛІГА, id модуля — модуль, `null` — нема). Ключа нема (стара форма відповіді, шар вимкнено, фікстури
+ * `legacy-golden`) — за `integrations`, як було до 4a: простір без відомостей не краде в людини синк.
+ * `hasVcs(null)` — `true`, як `hasTeamComments(null)`: невідомий простір (шар вимкнено) синк не відбирає.
+ *
+ * ⚠️ Це НЕ `noOutward` (`app.js`): Teams-тиша лишається на `integrations`, а синк із git тепер дає роль `vcs` — простір із
+ * модулем `git-sync` має синк і без інтеграцій.
+ */
+export const hasVcs = (space) => {
+  const caps = space?.capabilities;
+  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs != null : space?.integrations !== false;
+};
+
+/** Синк простору — зашитий шлях ЛІГА (налаштовується в `tasks.json`, не на «Підключенні»). Правило ключа те саме, що в `hasVcs`. */
+export const isLegacyVcs = (space) => {
+  const caps = space?.capabilities;
+  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs === "legacy" : space?.integrations !== false;
+};
+
+/**
+ * Підпис репозиторію для нетипового випадку: `'GitHub'`/`'Git'` — як віддав сервер (`label` статусу), усе інше (`'GitLab'`,
+ * порожнє, чуже) — `''`, тобто типовий підпис «GitLab», тексти ЛІГИ без змін. Єдине місце правила: смуга й палітра беруть
+ * підпис звідси. `Map`, а не обʼєкт: `label` може віддати свій модуль, і `{}['constructor']` дав би функцію замість «нема».
+ */
+const VCS_BRANDS = new Map([["GitHub", "GitHub"], ["Git", "Git"]]);
+export const vcsBrand = (label) => VCS_BRANDS.get(label) ?? "";
+
+/* Коди відмов дій «Відправити»/«Отримати» → ключі словника. Решта кодів (`vcs-error`, `module-error`…) тексту не мають: їхня
+   причина вже в `error` відповіді, і вона йде в `glSyncFailedMsg`. */
+const VCS_ERR_KEYS = new Map([
+  ["vcs-offline", "vcsErrOffline"], ["vcs-auth", "vcsErrAuth"], ["vcs-busy", "vcsErrBusy"], ["vcs-bad-target", "vcsErrTarget"],
+]);
+/** Ключ словника для коду відмови синку або `null`, коли свого тексту код не має. */
+export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
 
 /**
  * Чи змінився простір між «що ми знали» і «що відповів сервер» (`task-switch`,

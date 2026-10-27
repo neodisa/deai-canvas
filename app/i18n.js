@@ -121,20 +121,6 @@ const UK = {
   errPagesLoadFailed: (msg) => `сторінки не завантажились: ${msg}`,
   toastFreshnessCheckFailed: 'перевірка свіжості кадрів не вийшла',
 
-  // GitLab-синхронізація (`paintGitlab`/`refreshGitlab`)
-  glErrorLabel: 'GitLab: помилка',
-  glPullBadge: (n) => `⚠ На GitLab новіша (${n}) · Підтягнути`,
-  glPullTitle: 'колега оновив цей макет на GitLab — на GitLab версія новіша '
-    + 'за твою синхронізовану; підтягни, вона прийде окремою ітерацією для звірки',
-  glCatchUpLabel: (n) => `↑ Довезти на GitLab (${n})`,
-  glSendLabel: (curN) => `↑ Надіслати ${curN}`,
-  glSyncedLabel: (synN) => `GitLab · ${synN} ✓`,
-  glSyncedLabelBare: 'GitLab ✓',
-  glUnpushedTitle: (n) => `${n} комміт(и) макета зроблено локально, але вони НЕ на GitLab — `
-    + 'колеги їх не бачать. Натисни, щоб довезти.',
-  glDirtyTitle: (remote, syn, curN) => `На GitLab (${remote}) зараз ${syn}. Надіслати обрану ${curN} замість неї.`,
-  glSyncedTitle: (remote, syn, syncedAt) => `На GitLab (${remote}) — ${syn}`
-    + `${syncedAt ? ', синхр. ' + syncedAt : ''}. Обрана ітерація збігається.`,
   /* Ярлик ітерації — ОДИН на весь інструмент: крошка, перелік у дропдауні,
      підпис «Надіслати Іт.3 на GitLab». Ключ звався `glIterationTag`, поки
      жив лише в меню GitLab; крошка й перелік тим часом малювали `Іт.N`
@@ -151,22 +137,29 @@ const UK = {
   glForeignMsg: (who) => `Це ітерація колеги (${who}) — відправити її під своїм `
     + 'підписом не можна.\nПрацюй у власній: «Підтягнути» вже зробило форк, '
     + 'або зроби нову ітерацію копією цієї.',
-  glIterationFallback: 'ітерацію',
-  glThisIterationFallback: 'ця ітерація',
-  glHistoryTitle: (remote) => `історія цього макета на GitLab (комміти гілки main за шляхом ${remote})`,
-  glHistoryLabel: 'історія ↗',
-  glSyncingLabel: 'Синхр…',
-  glBehindMsg: (n) => `На GitLab зʼявилися новіші зміни (${n}) по цьому макету.\n`
+  /* Синхронізація з репозиторієм (`refreshGitlab`, дії `glpush`/`glpull`). Тексти, що називають репозиторій, мають
+     ОСТАННІМ параметром підпис `label = 'GitLab'` (етап 4a): без нього — а так у ЛІГА — дослівно тексти 0.7.0, з ним
+     («GitHub», «Git») — той самий текст про інший репозиторій. Відмінювання «на Git» нейтральне. */
+  glBehindMsg: (n, label = 'GitLab') => `На ${label} зʼявилися новіші зміни (${n}) по цьому макету.\n`
     + 'Спершу натисни «⤓ Підтягнути» — чужа версія прийде окремою ітерацією,\n'
     + 'звір її з твоєю, і тоді синхронізуй.',
-  glSyncFailedMsg: (err) => 'GitLab-синхронізація не вдалася — макет ЗАЛИШИВСЯ на цій машині,\n'
+  glSyncFailedMsg: (err, label = 'GitLab') => `${label}-синхронізація не вдалася — макет ЗАЛИШИВСЯ на цій машині,\n`
     + `колеги його не бачать:\n\n${err}`,
-  glCatchupToast: 'Довезли незапушений комміт — тепер макет на GitLab.',
-  glNothingToSendToast: 'Нічого надсилати — обрана ітерація вже на GitLab (нічого не змінилось).',
-  glPushedToast: (sha) => `Надіслано на GitLab · комміт ${sha}`,
-  glPullConfirmMsg: 'Підтягнути зміни з GitLab як нову ітерацію?\n'
+  glCatchupToast: (label = 'GitLab') => `Довезли незапушений комміт — тепер макет на ${label}.`,
+  glNothingToSendToast: (label = 'GitLab') => `Нічого надсилати — обрана ітерація вже на ${label} (нічого не змінилось).`,
+  glPushedToast: (sha, label = 'GitLab') => `Надіслано на ${label} · комміт ${sha}`,
+  glPullConfirmMsg: (label = 'GitLab') => `Підтягнути зміни з ${label} як нову ітерацію?\n`
     + 'Поточний макет не зміниться — зʼявиться нова ітерація для порівняння.',
   glPullConfirmYes: 'Підтягнути',
+  /* Підпис репозиторію (`label` статусу): `GitHub`/`Git` — лише коли він не типовий, «GitLab» — `gitlab`. */
+  vcsGitHub: 'GitHub',
+  vcsGit: 'Git',
+  vcsSyncWhy: 'Збігається з репозиторієм',
+  /* Відмови дій «Відправити»/«Отримати» (`vcsErrKey`, `spaces-model.js`): ці коди текст мають, решта — `glSyncFailedMsg`. */
+  vcsErrOffline: (label) => `${label} не відповідає — немає мережі чи VPN. Макет лишився на цьому компʼютері.`,
+  vcsErrAuth: (label) => `${label} не пускає — перевір SSH-ключ чи вхід у git на цьому компʼютері.`,
+  vcsErrBusy: 'Синхронізація вже йде — спробуй за хвилину.',
+  vcsErrTarget: 'Адреса репозиторію, гілка чи тека не підходять — виправ їх на «Підключенні».',
 
   // Контекст-меню ітерації й сторінки (`pillMenu`/`pageMenu`) — самі меню
   // лишаються, План B їх не чіпає
@@ -294,18 +287,18 @@ const UK = {
   whyItOff: 'ця ітерація не позначена «показувати в превью»',
   whyPageOff: 'ця сторінка прибрана з превью',
   glSetup: 'Налаштувати репозиторій…',
-  glPull: (it) => `Підтягнути ${it} з GitLab`,
+  glPull: (it, label = 'GitLab') => `Підтягнути ${it} з ${label}`,
   glPullSub: 'прийде окремою ітерацією — звірити, не перезаписати',
-  glPush: (it) => `Надіслати ${it} на GitLab`,
-  glHistory: 'Історія на GitLab',
+  glPush: (it, label = 'GitLab') => `Надіслати ${it} на ${label}`,
+  glHistory: (label = 'GitLab') => `Історія на ${label}`,
   glSync: 'Збігається з GitLab',
   /* Pull, який нічого не привіз, мусить СКАЗАТИ це. Мовчання читається як
      зламана кнопка — а саме мовчазні контроли цей інструмент і виводить. */
-  glPullUnchangedToast: (it) => `На GitLab те саме, що в ${it} — нової ітерації не заводив`,
+  glPullUnchangedToast: (it, label = 'GitLab') => `На ${label} те саме, що в ${it} — нової ітерації не заводив`,
   /* fb-29092026-d64d35: з GitLab приїхала МОЯ, але старша версія — вона лягла
      історією, а робота продовжується з форка моєї найсвіжішої. Мовчки це
      виглядало б як «ітерацій стало дві, а я нічого не просив». */
-  glPullOlderToast: (pulled, from, fork) => `З GitLab приїхала старша версія (${pulled} — лягла історією). Продовжуємо з твоєї ${from}: копія в ${fork}`,
+  glPullOlderToast: (pulled, from, fork, label = 'GitLab') => `З ${label} приїхала старша версія (${pulled} — лягла історією). Продовжуємо з твоєї ${from}: копія в ${fork}`,
   tasksErr: 'tasks.json не читається: unexpected token at line 41',
   /* Причина НЕ в наших файлах: на порту канваса відповів сторонній процес.
      Без цього рядка той самий збій розбору обвинувачував валідний
@@ -409,7 +402,7 @@ const UK = {
   figmaErrFailed: (d) => `Не вдалося скопіювати макет у Figma: ${d}`,
   toastWidthNotNumber: 'Ширина — це число пікселів',
   toastWidthClamped: (w, min, max) => `Ширина поза межами — взяв ${w}px (можна ${min}–${max})`,
-  // GitLab тут не «не підключився» (є `glErrorLabel` для цього) — репозиторій
+  // GitLab тут не «не підключився» — репозиторій
   // просто ніколи не заводили для цієї задачі. Інструмент не має свого майстра
   // налаштування, тому чесний текст називає РЕАЛЬНЕ місце правки (`serve.py`,
   // `gitlab_cfg()`), а не вигадує кнопку, якої нема.
@@ -1206,19 +1199,6 @@ const EN = {
   errPagesLoadFailed: (msg) => `pages failed to load: ${msg}`,
   toastFreshnessCheckFailed: 'freshness check for frames failed',
 
-  glErrorLabel: 'GitLab: error',
-  glPullBadge: (n) => `⚠ GitLab is ahead (${n}) · Pull`,
-  glPullTitle: 'a colleague updated this layout on GitLab — GitLab has a version newer '
-    + 'than your synced one; pull it in, it will arrive as a separate iteration to compare',
-  glCatchUpLabel: (n) => `↑ Catch up on GitLab (${n})`,
-  glSendLabel: (curN) => `↑ Send ${curN}`,
-  glSyncedLabel: (synN) => `GitLab · ${synN} ✓`,
-  glSyncedLabelBare: 'GitLab ✓',
-  glUnpushedTitle: (n) => `${n} layout commit(s) were made locally but are NOT on GitLab — `
-    + 'colleagues don’t see them. Click to catch up.',
-  glDirtyTitle: (remote, syn, curN) => `On GitLab (${remote}) it’s currently ${syn}. Send the selected ${curN} instead.`,
-  glSyncedTitle: (remote, syn, syncedAt) => `On GitLab (${remote}) — ${syn}`
-    + `${syncedAt ? ', synced ' + syncedAt : ''}. The selected iteration matches.`,
   iterTag: (n) => `It.${n}`,
   iterBy: (who) => `· ${who}`,
   iterForeign: 'a colleague’s iteration — you can view it, work in your own',
@@ -1226,22 +1206,25 @@ const EN = {
   glForeignMsg: (who) => `This is a colleague’s iteration (${who}) — it can’t be `
     + 'pushed under your name.\nWork in your own: “Pull” already made a fork, '
     + 'or create a new iteration as a copy of this one.',
-  glIterationFallback: 'the iteration',
-  glThisIterationFallback: 'this iteration',
-  glHistoryTitle: (remote) => `history of this layout on GitLab (commits on branch main at path ${remote})`,
-  glHistoryLabel: 'history ↗',
-  glSyncingLabel: 'Syncing…',
-  glBehindMsg: (n) => `GitLab has newer changes (${n}) for this layout.\n`
+  /* Repository sync texts that name the repository take the label as the LAST parameter, `label = 'GitLab'` (stage 4a). */
+  glBehindMsg: (n, label = 'GitLab') => `${label} has newer changes (${n}) for this layout.\n`
     + 'First click «⤓ Pull» — the other version will arrive as a separate iteration,\n'
     + 'compare it with yours, then sync.',
-  glSyncFailedMsg: (err) => 'GitLab sync failed — the layout STAYED on this machine,\n'
+  glSyncFailedMsg: (err, label = 'GitLab') => `${label} sync failed — the layout STAYED on this machine,\n`
     + `colleagues don’t see it:\n\n${err}`,
-  glCatchupToast: 'Caught up the unpushed commit — the layout is now on GitLab.',
-  glNothingToSendToast: 'Nothing to send — the selected iteration is already on GitLab (no changes).',
-  glPushedToast: (sha) => `Sent to GitLab · commit ${sha}`,
-  glPullConfirmMsg: 'Pull changes from GitLab as a new iteration?\n'
+  glCatchupToast: (label = 'GitLab') => `Caught up the unpushed commit — the layout is now on ${label}.`,
+  glNothingToSendToast: (label = 'GitLab') => `Nothing to send — the selected iteration is already on ${label} (no changes).`,
+  glPushedToast: (sha, label = 'GitLab') => `Sent to ${label} · commit ${sha}`,
+  glPullConfirmMsg: (label = 'GitLab') => `Pull changes from ${label} as a new iteration?\n`
     + 'The current layout won’t change — a new iteration will appear to compare.',
   glPullConfirmYes: 'Pull',
+  vcsGitHub: 'GitHub',
+  vcsGit: 'Git',
+  vcsSyncWhy: 'Matches the repository',
+  vcsErrOffline: (label) => `${label} is not answering — no network or VPN. The layout stayed on this computer.`,
+  vcsErrAuth: (label) => `${label} refused access — check the SSH key or the git sign-in on this computer.`,
+  vcsErrBusy: 'A sync is already running — try again in a minute.',
+  vcsErrTarget: 'The repository address, branch or folder is not valid — fix them on Connections.',
 
   menuRename: 'Rename…',
   menuDuplicateIteration: 'Duplicate (new copy)',
@@ -1352,13 +1335,13 @@ const EN = {
   whyItOff: 'this iteration is not marked “show in preview”',
   whyPageOff: 'this page is hidden from the preview',
   glSetup: 'Configure repository…',
-  glPull: (it) => `Pull ${it} from GitLab`,
+  glPull: (it, label = 'GitLab') => `Pull ${it} from ${label}`,
   glPullSub: 'arrives as a separate iteration — to compare, not to overwrite',
-  glPush: (it) => `Push ${it} to GitLab`,
-  glHistory: 'History on GitLab',
+  glPush: (it, label = 'GitLab') => `Push ${it} to ${label}`,
+  glHistory: (label = 'GitLab') => `History on ${label}`,
   glSync: 'Matches GitLab',
-  glPullUnchangedToast: (it) => `GitLab has the same as ${it} — no new iteration created`,
-  glPullOlderToast: (pulled, from, fork) => `GitLab had an older version (${pulled} — kept as history). Continuing from your ${from}: copy in ${fork}`,
+  glPullUnchangedToast: (it, label = 'GitLab') => `${label} has the same as ${it} — no new iteration created`,
+  glPullOlderToast: (pulled, from, fork, label = 'GitLab') => `${label} had an older version (${pulled} — kept as history). Continuing from your ${from}: copy in ${fork}`,
   tasksErr: 'tasks.json cannot be read: unexpected token at line 41',
   tasksErrPort: 'something other than the canvas is answering on its port — '
     + 'it looks taken by another process. Check: lsof -nP -iTCP:<port>',
