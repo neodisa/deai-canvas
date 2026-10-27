@@ -62,7 +62,7 @@ test("isLegacyVcs: 'legacy' і «ключа нема за інтеграцій»
   assert.equal(isLegacyVcs({ integrations: false, capabilities: { publish: "static-publish" } }), false);
 });
 
-test("стеля запиту створення задачі з синком — 400 с: не менша за найгірший шлях сервера (validate 5 + клон 180 + другий клон 180), довша за стелю форми", () => {
+test("стеля запиту створення задачі, що клонує, — 400 с: не менша за найгірший шлях сервера (validate 5 + клон 180 + другий клон 180), довша за стелю форми", () => {
   assert.equal(TASK_VCS_POST_TIMEOUT_MS, 400000);
   assert.ok(TASK_VCS_POST_TIMEOUT_MS > FORM_POST_TIMEOUT_MS);
   /* Числа сервера: `deai_modules.CHECK_TIMEOUT` (межа `validate`) і `git-sync/server.py: CLONE_TIMEOUT` (клон; за «no branch» — ще раз без `--branch`).
@@ -1317,17 +1317,17 @@ test("підказка, що приїхала, коли форму вже зак
   assert.deepEqual(attrs, {});
 });
 
-test("запит: зі значенням поля — vcs: {repo} (обрізане) через taskPost; з порожнім чи пробілами — ключа vcs у тілі НЕМАЄ", async () => {
+test("запит: зі значенням поля — vcs: {repo} (обрізане) через taskPost (клон — довга стеля); з порожнім чи пробілами — ключа vcs у тілі НЕМАЄ, а запит іде звичайним postForm", async () => {
   let r = await taskDialog();
   await r.submit({ repo: "  git@h:o/r.git \n" });
   assert.deepEqual(r.env.log.taskPost, [{ id: "lend", title: "Лендинг", space: "plain", vcs: { repo: "git@h:o/r.git" } }]);
-  assert.deepEqual(r.env.log.post, [], "із синком — довга стеля, а не postForm");
+  assert.deepEqual(r.env.log.post, [], "заповнене поле — сервер клонує, потрібна довга стеля, а не postForm");
   for (const repo of ["", "   ", "\n\t", undefined]) {
     r = await taskDialog();
     await r.submit({ repo });
-    assert.equal(r.env.log.taskPost.length, 1);
-    assert.equal("vcs" in r.env.log.taskPost[0], false, `repo=${JSON.stringify(repo)}: порожнє поле не стає vcs: {repo: ''}`);
-    assert.deepEqual(r.env.log.taskPost[0], { id: "lend", title: "Лендинг", space: "plain" });
+    assert.deepEqual(r.env.log.post, [["/api/task-new", { id: "lend", title: "Лендинг", space: "plain" }]],
+      `repo=${JSON.stringify(repo)}: порожнє поле не стає vcs: {repo: ''}, а без vcs сервер не клонує — звичайна стеля 20 с`);
+    assert.deepEqual(r.env.log.taskPost, [], `repo=${JSON.stringify(repo)}: довгого запиту нема`);
   }
 });
 
@@ -1395,13 +1395,17 @@ test("check-timeout / module-error (504/502 завислого чи зламан
   }
   setLang("en");
   const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("module check timed out"), { code: "check-timeout" }); } });
-  assert.equal(await r.submit({}), "Failed: module check timed out");
+  assert.equal(await r.submit({ repo: "git@h:o/r.git" }), "Failed: module check timed out");
 });
 
 test("відмова без коду й невідомий код — загальний текст taskErrGeneric (як було), без причини сервера", async () => {
   for (const code of [undefined, "something-new"]) {
-    const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("<html>500"), { code }); } });
+    const fail = async () => { throw Object.assign(new Error("<html>500"), { code }); };
+    /* Порожнє поле — звичайний шлях (`postForm`); ЛІГА — довгий (`taskPost`): текст той самий. */
+    let r = await taskDialog({ postForm: fail });
     assert.equal(await r.submit({}), t("taskErrGeneric"), String(code));
+    r = await taskDialog({ space: LIGA, taskPost: fail });
+    assert.equal(await r.submit({}), t("taskErrGeneric"), `ЛІГА, ${String(code)}`);
   }
 });
 
@@ -1470,65 +1474,57 @@ test("імпорти app.js: стеля, ключі й помічники Task 7
   assert.match(cm, /\broleCardId\b/, "roleCardId не імпортовано з connections-model.js");
 });
 
-/* ── майстер: postTask ───────────────────────────────────────────────────── */
+/* ── майстер: запит кроку 4 не клонує ────────────────────────────────────── */
 
-test("майстер: залежність postTask — довга стеля лише для простору з синком; без нього — postForm (20 с)", () => {
-  const expr = depExpr("postTask");
+/** Тіло виклику `createWizard({...})` в `app.js` — проводка майстра. */
+const wizWiring = () => {
+  const m = /\nconst wiz = createWizard\(\{[\s\S]*?\n\}\);/.exec(src);
+  assert.ok(m, "у app.js нема const wiz = createWizard({...})");
+  return m[0];
+};
+
+/** Крок 4 майстра виконуємо як є: `submit4` із заглушками; `post` — вираз залежності з `app.js` над підставними `postForm`/`taskPost`. */
+async function runSubmit4(post, extra = {}) {
   const calls = [];
+  const wz = { step: 4, spaceId: "sp1", checking: false, taskIds: [], s4: { title: " Лендинг ", id: "lend", source: "empty", from: "" }, ...extra };
   const env = {
-    spacesResp: { spaces: [PLAIN, LIGA, NOVCS] }, hasVcs,
-    taskPost: (b) => { calls.push(["taskPost", b]); return "TP"; },
-    postForm: (p, b) => { calls.push(["postForm", p, b]); return "PF"; },
+    wz, calls, t, taskFormError, taskErrField, taskErrKey,
+    capture: () => {}, clearError: () => {}, setBusy: () => {}, showError: (f, k, fld) => calls.push(["showError", k, fld]),
+    spaceGone: () => calls.push(["spaceGone"]),
+    deps: { node: () => ({ querySelector: () => ({}) }), toast: (m) => calls.push(["toast", m]), openTask: async (m) => calls.push(["openTask", m]), exit: () => {}, post },
   };
-  const f = evalIn(env, expr);
-  assert.equal(f("/api/task-new", { id: "a", space: "plain" }), "TP", "простір із роллю vcs — taskPost");
-  assert.equal(f("/api/task-new", { id: "a", space: "liga" }), "TP", "ЛІГА — теж: клон її задачі довгий");
-  assert.equal(f("/api/task-new", { id: "a", space: "ghost" }), "TP", "невідомий простір — як hasVcs(undefined): синк не відбираємо");
-  assert.deepEqual(calls[0], ["taskPost", { id: "a", space: "plain" }]);
-  calls.length = 0;
-  env.spacesResp = { spaces: [{ id: "bare", integrations: false, capabilities: { vcs: null } }] };
-  assert.equal(f("/api/task-new", { id: "a", space: "bare" }), "PF", "простір без синку — звичайна стеля, завислий сервер не тримає майстер 400 с");
-  assert.deepEqual(calls, [["postForm", "/api/task-new", { id: "a", space: "bare" }]]);
-  env.spacesResp = null;
-  assert.equal(f("/api/task-new", { id: "a", space: "bare" }), "TP", "реєстру не знаємо — hasVcs(undefined)");
+  await new Function("env", `with (env) { ${nested(wsrc, "submit4")}\nreturn submit4(); }`)(env);
+  return calls;
+}
+
+test("майстер: запит кроку 4 не несе vcs, сервер його не клонує — ЗАВЖДИ звичайний postForm (20 с), навіть у просторі з синком; довгого запиту в проводці нема", async () => {
+  const log = [];
+  const post = evalIn({
+    postForm: async (p, b) => { log.push(["postForm", p, b]); return { id: "lend" }; },
+    taskPost: async (b) => { log.push(["taskPost", b]); return { id: "lend" }; },
+  }, depExpr("post"));
+  const calls = await runSubmit4(post);
+  assert.deepEqual(log, [["postForm", "/api/task-new", { id: "lend", title: "Лендинг", space: "sp1" }]],
+    "завислий сервер не тримає майстер 400 с: клону в цього запиту нема, тіло без vcs");
+  assert.deepEqual(calls.at(-1), ["openTask", { id: "lend" }]);
+  /* З теки (`from`): так само коротко — `adopt_src` клон прибирає (`vcs and adopt_src is None`). */
+  log.length = 0;
+  await runSubmit4(post, { s4: { title: "Лендинг", id: "lend", source: "folder", from: "/tmp/m" } });
+  assert.deepEqual(log.map((c) => c[0]), ["postForm"], "створення з теки теж не клонує");
+  /* Статично: ні залежності `postTask`, ні `taskPost` у проводці майстра — довгий шлях лишився лише формі нової задачі. */
+  assert.doesNotMatch(wizWiring(), /postTask|taskPost/);
+  assert.doesNotMatch(wsrc, /postTask|taskPost/, "майстер не знає про довгу стелю");
 });
 
-test("майстер: submit4 створює задачу через deps.postTask ?? deps.post (виконання з підставними залежностями)", async () => {
-  const make = (deps) => {
-    const calls = [];
-    const wz = { step: 4, spaceId: "sp1", checking: false, taskIds: [], s4: { title: " Лендинг ", id: "lend", source: "empty", from: "" } };
-    const env = {
-      wz, calls, t, taskFormError, taskErrField, taskErrKey,
-      capture: () => {}, clearError: () => {}, setBusy: () => {}, showError: (f, k, fld) => calls.push(["showError", k, fld]),
-      spaceGone: () => calls.push(["spaceGone"]),
-      deps: {
-        node: () => ({ querySelector: () => ({}) }),
-        toast: (m) => calls.push(["toast", m]), openTask: async (m) => calls.push(["openTask", m]), exit: () => {},
-        ...deps(calls),
-      },
-    };
-    return env;
-  };
-  const run = async (env) => new Function("env", `with (env) { ${nested(wsrc, "submit4")}\nreturn submit4(); }`)(env);
-
-  let env = make((calls) => ({
-    postTask: async (p, b) => { calls.push(["postTask", p, b]); return { id: "lend" }; },
-    post: async () => { throw new Error("з postTask — звичайний post не кличемо"); },
-  }));
-  await run(env);
-  assert.deepEqual(env.calls.filter((c) => c[0] === "postTask"), [["postTask", "/api/task-new", { id: "lend", title: "Лендинг", space: "sp1" }]]);
-  assert.deepEqual(env.calls.at(-1), ["openTask", { id: "lend" }]);
-
-  env = make((calls) => ({ post: async (p, b) => { calls.push(["post", p, b]); return { id: "lend" }; } }));
-  await run(env);
-  assert.deepEqual(env.calls.filter((c) => c[0] === "post"), [["post", "/api/task-new", { id: "lend", title: "Лендинг", space: "sp1" }]],
-    "залежності postTask нема — як було до 4a");
+test("майстер: submit4 створює задачу через deps.post (виконання з підставними залежностями); тіло — як до 4a", async () => {
+  const calls = await runSubmit4(async (p, b) => ({ id: "lend", seen: [p, b] }));
+  assert.deepEqual(calls.at(-1), ["openTask", { id: "lend", seen: ["/api/task-new", { id: "lend", title: "Лендинг", space: "sp1" }] }]);
 });
 
-test("майстер: статичний пін — (deps.postTask ?? deps.post)(\"/api/task-new\", …), перелік залежностей у шапці згадує postTask", () => {
-  assert.match(nested(wsrc, "submit4"), /made = await \(deps\.postTask \?\? deps\.post\)\("\/api\/task-new", \{ id: vals\.id, title: vals\.title\.trim\(\), space: mine\.spaceId, \.\.\.\(folder \? \{ from \} : \{\}\) \}\);/);
-  assert.match(wsrc, /postTask\(path, body\)[^\n]*(довш|стел)/, "шапка файла описує postTask");
-  assert.doesNotMatch(wsrc.replace(/\/\*[\s\S]*?\*\//g, ""), /deps\.post\("\/api\/task-new"/, "голого deps.post для task-new не лишилось");
+test("майстер: статичний пін — deps.post(\"/api/task-new\", …); у шапці залежностей майстра довгого запиту нема", () => {
+  assert.match(nested(wsrc, "submit4"), /made = await deps\.post\("\/api\/task-new", \{ id: vals\.id, title: vals\.title\.trim\(\), space: mine\.spaceId, \.\.\.\(folder \? \{ from \} : \{\}\) \}\);/);
+  assert.match(wsrc, /post\(path, body\)[^\n]*postForm/, "шапка файла описує post як postForm");
+  assert.doesNotMatch(nested(wsrc, "submit4"), /vcs/, "крок 4 майстра не шле vcs");
 });
 
 test("форма не ламається на полі, якого в ній нема: ctl.focus('repo') у майстрі й showError — тихий вихід", () => {
@@ -1629,13 +1625,13 @@ test("loadConn: перший фокус бере роль із connFocusRole і 
   assert.match(src, /\nlet connFocusRole = '';/, "стан оголошено поруч із connFocusPending (TDZ)");
 });
 
-test("newTaskDialog (статично, як просить план): поле — за hasVcs && !isLegacyVcs, vcs у тілі — лише зі значенням, запит — через taskPost, коли hasVcs", () => {
+test("newTaskDialog (статично, як просить план): поле — за hasVcs && !isLegacyVcs, vcs у тілі — лише зі значенням, довгий запит (taskPost) — лише коли він клонує", () => {
   const b = fn("newTaskDialog");
   assert.match(b, /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
   assert.match(b, /taskFormHTML\(withRepo \? \{ repo: \{\} \} : \{\}\)/, "поле «Репозиторій» передається формі лише тоді");
   assert.match(b, /const repo = withRepo \? String\(vals\.repo \?\? ''\)\.trim\(\) : '';/);
   assert.match(b, /\.\.\.\(repo \? \{ vcs: \{ repo \} \} : \{\}\)/, "порожнє значення — ключа vcs у тілі нема");
-  assert.match(b, /made = await \(hasVcs\(sp\) \? taskPost\(body\) : postForm\('\/api\/task-new', body\)\);/);
+  assert.match(b, /made = await \(clones \? taskPost\(body\) : postForm\('\/api\/task-new', body\)\);/);
   assert.match(b, /return taskErrShowsReason\(e\.code, 'vcs' in body\) \? t\('errFailed', why\) : t\(key2\);/);
   assert.match(src, /\nfunction taskPost\(body\) \{\n {2}const ctl = new AbortController\(\);\n {2}const timer = setTimeout\(\(\) => ctl\.abort\(\), TASK_VCS_POST_TIMEOUT_MS\);/);
 });
@@ -1679,7 +1675,7 @@ test("I1: поки йде taskPost — кнопка «Створюю…», ря�
 test("I1: після успіху рядок-статус знято, а підпис «Створюю…» лишається до закриття діалогу (форма ще вимкнена)", async () => {
   const d = deferred();
   const r = await taskDialog({ taskPost: () => d.p });
-  const sub = r.submit({});
+  const sub = r.submit({ repo: "git@h:o/r.git" });
   await tick();
   r.timers[0].fn();
   d.res({ id: "t-1", space: "plain" });
@@ -1691,25 +1687,50 @@ test("I1: після успіху рядок-статус знято, а під�
 
 test("I1: затримка тексту знімається й на відмові (таймер не стріляє на вже знятому рядку)", async () => {
   const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("x"), { code: "task-exists" }); } });
-  await r.submit({});
+  await r.submit({ repo: "git@h:o/r.git" });
   assert.equal(r.timers.length, 1);
   assert.equal(r.timers[0].on, false);
 });
 
-test("I1: у ЛІГА теж (hasVcs); у просторі без синку — нічого не міняється (postForm, 20 с)", async () => {
-  let r = await taskDialog({ space: LIGA, taskPost: async () => ({ id: "t-1", space: "liga" }) });
-  await r.submit({});
-  assert.equal(r.form.notes.length, 1, "ЛІГА: клон її задачі теж довгий");
-  r = await taskDialog({ space: NOVCS });
-  await r.submit({});
-  assert.deepEqual([r.form.notes.length, r.form.ok.textContent, r.timers.length], [0, "Створити задачу", 0]);
+test("довга стеля й рядок про клон — лише коли запит справді клонує: поле заповнене чи простір ЛІГА; порожнє поле, простір без синку — звичайний шлях без жодної ознаки", async () => {
+  /* Сервер клонує, лише коли є `vcs` у тілі (без `from`) або профільний `gitlab` ЛІГИ (`_task_new_write`). Решта запитів — миттєві. */
+  const cases = [
+    ["заповнене поле", PLAIN, { repo: "git@h:o/r.git" }, true],
+    ["ЛІГА без поля", LIGA, {}, true],
+    ["ЛІГА, значення repo якось прийшло", LIGA, { repo: "git@h:o/r.git" }, true],
+    ["порожнє поле", PLAIN, { repo: "" }, false],
+    ["самі пробіли", PLAIN, { repo: "   " }, false],
+    ["поле не прийшло", PLAIN, {}, false],
+    ["простір без синку", NOVCS, {}, false],
+    ["простір без синку, значення repo якось прийшло", NOVCS, { repo: "git@h:o/r.git" }, false],
+  ];
+  for (const [name, space, vals, clones] of cases) {
+    const r = await taskDialog({ space, reply: { id: "t-1", space: space.id } });
+    await r.submit(vals);
+    assert.deepEqual([r.env.log.taskPost.length, r.env.log.post.length], clones ? [1, 0] : [0, 1], `${name}: ${clones ? "довгий" : "звичайний"} запит`);
+    assert.deepEqual([r.form.notes.length, r.timers.length], clones ? [1, 1] : [0, 0], `${name}: рядок-статус і його таймер`);
+    assert.equal(r.form.ok.textContent, clones ? t("wzCreating") : "Створити задачу", `${name}: підпис кнопки`);
+  }
+});
+
+test("звичайний запит (порожнє поле, простір без синку): поки він летить — жодних ознак довгого створення, а відмова нічого не мусить знімати", async () => {
+  for (const [space, vals] of [[PLAIN, { repo: "" }], [PLAIN, {}], [NOVCS, {}]]) {
+    const d = deferred();
+    const r = await taskDialog({ space, postForm: () => d.p });
+    const sub = r.submit(vals);
+    await tick();
+    assert.deepEqual([r.form.ok.textContent, r.form.notes.length, r.timers.length], ["Створити задачу", 0, 0], `${space.id}: форма як була`);
+    d.rej(Object.assign(new Error("offline"), { code: "task-exists" }));
+    await sub;
+    assert.deepEqual([r.form.ok.textContent, r.form.notes.length, r.timers.length], ["Створити задачу", 0, 0]);
+  }
 });
 
 test("I1: англійською — той самий рядок мовою інтерфейсу", async () => {
   setLang("en");
   const d = deferred();
   const r = await taskDialog({ taskPost: () => d.p });
-  const sub = r.submit({});
+  const sub = r.submit({ repo: "git@h:o/r.git" });
   await tick();
   r.timers[0].fn();
   assert.equal(r.form.ok.textContent, "Creating…");
@@ -1720,7 +1741,8 @@ test("I1: англійською — той самий рядок мовою і�
 
 test("I1: showCreateWait — статично: рядок вставляється ПЕРЕД слотом помилки, не в ЛІГА-розмітку; майстер уже має «Створюю…» і не клонує", () => {
   const b = fn("newTaskDialog");
-  assert.match(b, /const stopWait = hasVcs\(sp\) \? showCreateWait\(ctl\.form\) : null;/);
+  assert.match(b, /const clones = 'vcs' in body \|\| isLegacyVcs\(sp\);/, "клонує лише запит із vcs у тілі або ЛІГА");
+  assert.match(b, /const stopWait = clones \? showCreateWait\(ctl\.form\) : null;/);
   assert.match(declSource("showCreateWait"), /slot\.before\(note\)/);
   /* Майстер: запит кроку 4 не несе `vcs` (клон у сервера — лише для `gitlab`/`vcs`), форма вже підписується «Створюю…» (`setBusy`). */
   const s4 = nested(wsrc, "submit4");
@@ -1740,12 +1762,12 @@ test("M1: vcs-bad-target — перший рядок про адресу + др�
   assert.match(asrc, /error\(msg\) \{\s*const el = errEl\(\);\s*if \(!el\) return;\s*el\.textContent = msg \|\| '';/);
   /* HTML-тіло відмови (без JSON) — причина зі статусного рядка, не розмітка: `requestErrText`. */
   const html = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("<!DOCTYPE HTML>"), { code: "vcs-bad-target", body: "<!DOCTYPE HTML>", statusText: "bad target" }); } });
-  assert.equal(await html.submit({}), `${t("taskErrVcsTarget")}\n${t("taskErrWhy", "bad target")}`);
+  assert.equal(await html.submit({ repo: "git@h:o/r.git" }), `${t("taskErrVcsTarget")}\n${t("taskErrWhy", "bad target")}`);
 });
 
 test("M1: порожня причина — лише перший рядок (без «Причина: »)", async () => {
   const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error(""), { code: "vcs-bad-target" }); } });
-  assert.equal(await r.submit({}), t("taskErrVcsTarget"));
+  assert.equal(await r.submit({ repo: "git@h:o/r.git" }), t("taskErrVcsTarget"));
 });
 
 test("M2: з vcs у тілі БУДЬ-ЯКИЙ незмаплений код (bad-settings, secrets-unreadable, bad-manifest, без коду) — «Не вдалося: <причина>», без підсвітки", async () => {
@@ -1758,12 +1780,12 @@ test("M2: з vcs у тілі БУДЬ-ЯКИЙ незмаплений код (ba
 });
 
 test("M2: без vcs у тілі (порожнє поле, ЛІГА, простір без синку) незмаплений код лишається загальним «Спробуй ще раз» — як було", async () => {
-  for (const [space, vals] of [[PLAIN, { repo: "" }], [PLAIN, {}], [LIGA, { repo: "x" }]]) {
-    const r = await taskDialog({ space, taskPost: async () => { throw Object.assign(new Error("boom"), { code: "bad-settings" }); } });
+  const boom = async () => { throw Object.assign(new Error("boom"), { code: "bad-settings" }); };
+  /* Порожнє поле й простір без синку — звичайний шлях (`postForm`), ЛІГА — довгий (`taskPost`): загальний текст той самий. */
+  for (const [space, vals] of [[PLAIN, { repo: "" }], [PLAIN, {}], [NOVCS, {}], [LIGA, { repo: "x" }], [LIGA, {}]]) {
+    const r = await taskDialog({ space, postForm: boom, taskPost: boom });
     assert.equal(await r.submit(vals), t("taskErrGeneric"), JSON.stringify([space.id, vals]));
   }
-  const r = await taskDialog({ space: NOVCS, postForm: async () => { throw Object.assign(new Error("boom"), { code: "bad-settings" }); } });
-  assert.equal(await r.submit({}), t("taskErrGeneric"));
 });
 
 test("M2: змаплені коди з vcs у тілі лишають свій текст (task-exists, timeout, space.json), причина сервера їх не підміняє", async () => {
