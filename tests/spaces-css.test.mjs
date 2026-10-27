@@ -177,3 +177,13 @@ test("плашка з додатковими рядками: `.cv-notice-body` �
   assert.match(btn, /white-space:nowrap/);
   assert.match(btn, /flex:none/);
 });
+
+test("ревʼю Task 7: рядок-статус довгого створення (.cv-form-note) і друга лінія помилки форми (pre-line) мають правила, лише токени", () => {
+  const note = rule(".cv-form-note");
+  assert.ok(note, ".cv-form-note без правила: `showCreateWait` (app.js) додає цей клас — без стилю він виглядав би голим абзацом");
+  assert.match(note, /color:var\(--g700\)/, "колір — токеном палітри");
+  assert.doesNotMatch(note, /#[0-9a-fA-F]{3,8}\b/, "літерал кольору замість токена");
+  const err = rule(".cv-ask--form .cv-form-err");
+  assert.ok(err, "правила для другого рядка помилки нема");
+  assert.match(err, /white-space:pre-line/, "`.cv-ask--form p` скидає white-space у normal: без цього `\\n` у тексті помилки злипається");
+});

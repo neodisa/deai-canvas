@@ -935,6 +935,9 @@ const UK = {
   cnCheckSavedFirst: 'Спершу збережіть зміни — перевіряється збережене.',
   cnSavedButFailed: 'Збережено, але перевірка не пройшла.',
   cnCheckOk: 'Працює.',
+  // Вбудований `git-sync` без типового `repo`: `check` каже англійським `detail`, що репозиторій задається в задачі, — людині це текст
+  // свого, а не чужого. Задача без `repo` лишиться без синхронізації, і крок 4 майстра поля репозиторію не має.
+  cnCheckOkGitNoRepo: 'Працює. Репозиторій задається в кожній задачі — задача без нього лишиться без синхронізації.',
   cnToastEnabled: (name) => `Підключено: ${name}`,
   cnToastSaved: (name) => `Збережено: ${name}`,
   cnToastReplaced: (name, off) => `Підключено: ${name}. Вимкнено: ${off}`,
@@ -1159,6 +1162,8 @@ const UK = {
   taskErrSpaceGone: 'Цього простору вже нема — обери інший у смузі зверху.',
   taskErrVcsTarget: 'Адреса репозиторію не підходить: ssh://, https://, git@сервер:шлях або тека на диску.',
   taskErrVcsRole: 'У просторі немає синхронізації з git — підключи її на «Підключенні».',
+  taskErrWhy: (why) => `Причина: ${why}`,
+  taskCreateWait: 'Перший клон репозиторію може тривати кілька хвилин',
   formTimeout: 'Сервер не відповів вчасно. Запит міг устигнути виконатись — перевір, чи простір чи задача вже є, і спробуй ще раз.',
   welcomeAgent: 'Або скажи агенту: «створи простір Клієнт X у ~/deai-work/client-x».',
 };
@@ -1843,6 +1848,7 @@ const EN = {
   cnCheckSavedFirst: 'Save first — the check runs on what is saved.',
   cnSavedButFailed: 'Saved, but the check failed.',
   cnCheckOk: 'Works.',
+  cnCheckOkGitNoRepo: 'Works. The repository is set per task — a task without one stays unsynced.',
   cnToastEnabled: (name) => `Connected: ${name}`,
   cnToastSaved: (name) => `Saved: ${name}`,
   cnToastReplaced: (name, off) => `Connected: ${name}. Turned off: ${off}`,
@@ -2067,6 +2073,8 @@ const EN = {
   taskErrSpaceGone: 'That space no longer exists — pick another one in the bar above.',
   taskErrVcsTarget: 'The repository address is not valid: ssh://, https://, git@host:path or a local folder.',
   taskErrVcsRole: 'This space has no git sync — connect it on Connections.',
+  taskErrWhy: (why) => `Reason: ${why}`,
+  taskCreateWait: 'The first clone of the repository may take a few minutes',
   formTimeout: 'The server did not answer in time. The request may have gone through — check whether the space or task already exists, then try again.',
   welcomeAgent: 'Or tell the agent: “create a space Client X in ~/deai-work/client-x”.',
 };

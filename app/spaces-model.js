@@ -184,8 +184,13 @@ const ERR_KEYS = new Map([
  */
 export const FORM_POST_TIMEOUT_MS = 20000;
 
-/** Стеля запиту створення задачі в просторі з синком: перший клон репозиторію триває хвилини (модуль чекає до 180 с). */
-export const TASK_VCS_POST_TIMEOUT_MS = 200000;
+/**
+ * Стеля запиту створення задачі в просторі з синком, мс. Найгірший шлях сервера (`/api/task-new` із `vcs`): `validate` модуля
+ * ≤ 5 с (`deai_modules.CHECK_TIMEOUT`) + клон ≤ 180 с (`git-sync/server.py: CLONE_TIMEOUT`) + для порожнього репо ще один клон
+ * без `--branch` ≤ 180 с ≈ 365 с — 400 с лишає запас. Клієнт, що обірвав би раніше за відповідь, показав би «помилку» при
+ * вже створеній задачі.
+ */
+export const TASK_VCS_POST_TIMEOUT_MS = 400000;
 
 /** Ключ словника для коду помилки сервера; невідомий (і `spaces-*`) — загальний. */
 export const spaceErrKey = (code) => ERR_KEYS.get(code) ?? "spaceErrGeneric";
@@ -394,8 +399,14 @@ const TASK_ERR_KEYS = new Map([
    час перевірки цілі, модуль, що не завантажився (`vcs-error`, 409). Власного ключа вони не мають: форма показує загальне «Не вдалося:
    <причина>» (`errFailed`), поле не підсвічує. Тут — код, а не ключ: `taskErrKey` для них лишається загальним. */
 const TASK_ERR_REASON = new Set(["check-timeout", "module-error", "vcs-error"]);
-/** Чи показувати людині текст сервера як причину відмови створення задачі (див. `TASK_ERR_REASON`). */
-export const taskErrShowsReason = (code) => TASK_ERR_REASON.has(code);
+/**
+ * Чи показувати людині текст сервера як причину відмови створення задачі. Завжди — для `TASK_ERR_REASON`; а коли тіло запиту
+ * несло `vcs` (`hadTarget`) — ще й для БУДЬ-ЯКОГО коду без власного ключа (`bad-settings`, `secrets-unreadable`, `bad-manifest`,
+ * відмови каркаса й постачальника): загальне «Спробуй ще раз» там марне, повтор тієї ж відмови не зніме, а причина сервера —
+ * єдине, що людина може виправити. Без `vcs` (звичайна задача, ЛІГА) поведінка стара: загальний текст.
+ */
+export const taskErrShowsReason = (code, hadTarget = false) =>
+  TASK_ERR_REASON.has(code) || (hadTarget === true && !TASK_ERR_KEYS.has(code));
 
 /** Ключ словника для відмови створення задачі; невідомий код (і мережа) — загальний. */
 export const taskErrKey = (code) => TASK_ERR_KEYS.get(code) ?? "taskErrGeneric";

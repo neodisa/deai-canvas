@@ -482,7 +482,7 @@ export function createWizard(deps) {
               for (const o of mine.offs) if (o.holder.id === id) o.result = { kind: "ok", key: "wzOffDone", detail: "" };
             }
           }
-          result = { kind: r?.check?.ok === true ? "ok" : "failed", ...verdictText(r?.check) };
+          result = { kind: r?.check?.ok === true ? "ok" : "failed", ...verdictText(r?.check, r?.module ?? card?.entry) };
           /* Новий базис картки: збережене вже не «зміна», і стан секрету («задано») — з відповіді. */
           if (card && r?.module) Object.assign(card, cardFrom(r.module), { fresh: true });
         }

@@ -193,12 +193,32 @@ const CHECK_KEYS = new Map([
 ]);
 
 /**
+ * Чи задано в записі `git-sync` типовий `repo`: `true`/`false`, а коли запис не несе налаштувань (стара форма, фікстура) —
+ * `null`: невідомо, і «без репозиторію» ми не стверджуємо. Читаємо відповідь СЕРВЕРА (`settings[].value`), а не розбираємо
+ * англійський рядок `check`.
+ */
+function gitRepoSet(e) {
+  if (!Array.isArray(e?.settings)) return null;
+  const s = e.settings.find((x) => x && x.key === "repo");
+  return !!s && typeof s.value === "string" && s.value.trim() !== "";
+}
+
+/**
  * Вердикт перевірки (`{ok, error?, detail?}`) → `{key, detail}`. Невідомий код і вільний текст модуля
  * (`css-tokens`: «file: not found») — загальний текст, а сам текст іде деталлю: інакше людина не дізналась би причини.
+ *
+ * `e` — запис модуля (не обовʼязковий). Вбудований `git-sync` свої УСПІШНІ відповіді дає англійським `detail` («the repository is
+ * set per task», «branch main found»…) — сирий текст чужою мовою в зеленому «Працює.». Для нього `detail` успіху не показуємо:
+ * без типового `repo` — окремий локалізований текст (задача без репозиторію лишиться без синку), з ним — просто «Працює.».
+ * Каркас віддає клієнтові лише `ok|error|detail` (`deai_modules.check`), тож машинного коду від модуля нема — рішення за
+ * налаштуваннями запису. Свій модуль з таким id — не вбудований: його `detail` лишається. Відмови (діагностика git) — як були.
  */
-export function verdictText(v) {
+export function verdictText(v, e) {
   if (!v || typeof v !== "object") return { key: "cnErrGeneric", detail: "" };
-  if (v.ok === true) return { key: "cnCheckOk", detail: clip(v.detail) };
+  if (v.ok === true) {
+    if (e?.id === "git-sync" && !isOwn(e)) return { key: gitRepoSet(e) === false ? "cnCheckOkGitNoRepo" : "cnCheckOk", detail: "" };
+    return { key: "cnCheckOk", detail: clip(v.detail) };
+  }
   const code = typeof v.error === "string" ? v.error : "";
   const key = CHECK_KEYS.get(code);
   if (key) return { key, detail: clip(v.detail) };

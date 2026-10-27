@@ -737,6 +737,31 @@ function taskPost(body) {
     .finally(() => clearTimeout(timer));
 }
 
+/**
+ * Довгий запит створення задачі (простір із синком: перший клон триває хвилини, а Esc і «Скасувати» на час запиту не діють):
+ * підпис головної кнопки «Створюю…» і рядок-статус під полями — інакше форма стоїть нерухомо, без жодної ознаки життя. Рядок —
+ * `role="status"`, додається в форму лише тут (розмітка форми без синку, зокрема ЛІГА, не змінюється); текст ставиться з
+ * затримкою, бо щойно вставлену живу область читач не озвучує, а зміну тексту в ній — так. Запит НЕ обривається: сервер
+ * однаково докловне й створить задачу, обрив дав би «помилку» при наявній задачі. Повертає `stop(restoreLabel)`: після відмови
+ * підпис кнопки вертається (форма знову вільна), після успіху лишається — діалог закриється, а до того форма ще вимкнена.
+ */
+function showCreateWait(form) {
+  const ok = form?.querySelector('button[data-a="ok"]');
+  const label = ok?.textContent;
+  if (ok) ok.textContent = t('wzCreating');
+  const note = document.createElement('p');
+  note.className = 'cv-form-note';
+  note.setAttribute('role', 'status');
+  const slot = form?.querySelector('[data-form-error]');
+  if (slot) slot.before(note); else form?.append(note);
+  const timer = setTimeout(() => { note.textContent = t('taskCreateWait'); }, 150);
+  return (restoreLabel) => {
+    clearTimeout(timer);
+    note.remove();
+    if (restoreLabel && ok && label != null) ok.textContent = label;
+  };
+}
+
 // ненав'язливе повідомлення (нема змін / надіслано тощо)
 function toast(msg) {
   let t = document.getElementById('cv-toast');
@@ -1511,15 +1536,23 @@ async function newTaskDialog() {
       const repo = withRepo ? String(vals.repo ?? '').trim() : '';
       const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}) };
       let made;
-      /* Простір із синком — довга стеля (`taskPost`): перший клон триває хвилини; решта — як було (`postForm`, 20 с). */
+      /* Простір із синком — довга стеля (`taskPost`): перший клон триває хвилини; решта — як було (`postForm`, 20 с). На цей час
+         Esc і «Скасувати» не діють (запит однаково долетить і задача зʼявиться), тож форма мусить сказати, що вона жива. */
+      const stopWait = hasVcs(sp) ? showCreateWait(ctl.form) : null;
       try { made = await (hasVcs(sp) ? taskPost(body) : postForm('/api/task-new', body)); }
       catch (e) {
+        stopWait?.(true);
         const key2 = taskErrKey(e.code);
         const field = taskErrField(key2);
         if (field) ctl.focus(field);
-        /* `check-timeout`/`module-error`/`vcs-error`: власного тексту нема — причина сервера в загальному «Не вдалося: …». */
-        return taskErrShowsReason(e.code) ? t('errFailed', requestErrText(e)) : t(key2);
+        const why = requestErrText(e);
+        /* Адресу, гілку й теку відхиляє `validate` модуля: загальний текст про адресу + причина сервера другим рядком (дані — як
+           текст у слоті помилки, не розмітка). Решта відмов без свого ключа (коди каркаса й постачальника, коли тіло несло `vcs`;
+           завжди — `check-timeout`/`module-error`/`vcs-error`): «Не вдалося: <причина>» без підсвітки. */
+        if (key2 === 'taskErrVcsTarget') return why ? `${t(key2)}\n${t('taskErrWhy', why)}` : t(key2);
+        return taskErrShowsReason(e.code, 'vcs' in body) ? t('errFailed', why) : t(key2);
       }
+      stopWait?.(false);
       /* Нова задача — поточна: усе пер-задачне попереднього чуже. Простір відповіді
          порівнюємо з відомим, як у `switchTask`. `homeData` — застарілий (задачі в
          ньому ще нема), тож не показуємо його при наступному вході. */
@@ -3341,7 +3374,7 @@ async function cnSubmit() {
       const fields = formFields(entry);
       const init = initialForm(fields);
       cnDrawer = { ...mine, entry, mode: 'edit', fields, init, form: init, busy: false,
-        result: { kind: 'failed', ...verdictText(r?.check) }, opener: { act: 'configure', id: mine.id } };
+        result: { kind: 'failed', ...verdictText(r?.check, entry) }, opener: { act: 'configure', id: mine.id } };
       paintCnDrawer();
     }
     await afterModulesChange();
@@ -3360,7 +3393,7 @@ async function cnDrawerCheck() {
   try {
     const r = await postForm('/api/module-check', { space: mine.spaceId, id: mine.id });
     if (cnDrawer !== mine) return;
-    mine.result = { kind: r?.check?.ok === true ? 'ok' : 'check-failed', ...verdictText(r?.check) };
+    mine.result = { kind: r?.check?.ok === true ? 'ok' : 'check-failed', ...verdictText(r?.check, mine.entry) };
   } catch (err) {
     if (cnDrawer !== mine) return;
     mine.result = { kind: 'refused', ...refusalView(err) };

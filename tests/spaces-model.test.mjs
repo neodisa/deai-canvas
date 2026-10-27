@@ -313,13 +313,23 @@ test("коди постачальника ролі vcs (409): space.json і не
   for (const c of ["space-json-unreadable", "module-untrusted"]) assert.equal(taskErrField(taskErrKey(c)), null, c);
 });
 
-test("taskErrShowsReason: check-timeout / module-error / vcs-error — загальний текст із причиною сервера; решта — ні", () => {
+test("taskErrShowsReason: check-timeout / module-error / vcs-error — завжди причина сервера; будь-який НЕЗМАПЛЕНИЙ код — коли тіло несло vcs", () => {
   for (const c of ["check-timeout", "module-error", "vcs-error"]) {
     assert.equal(taskErrShowsReason(c), true, c);
+    assert.equal(taskErrShowsReason(c, true), true, c);
     assert.equal(taskErrKey(c), "taskErrGeneric", `${c}: власного ключа нема — причина йде в errFailed`);
     assert.equal(taskErrField(taskErrKey(c)), null, `${c}: поле не підсвічується`);
   }
-  for (const c of ["vcs-bad-target", "vcs-needs-role", "task-exists", "timeout", "constructor", "__proto__", "", undefined, null, 5]) {
+  /* M2 ревʼю Task 7: коди каркаса й постачальника без ключа (`bad-settings`, `secrets-unreadable`, `bad-manifest`…) падали у
+     «Спробуй ще раз», а повтор марний. З `vcs` у тілі їхня причина — єдине корисне, що є. */
+  for (const c of ["bad-settings", "secrets-unreadable", "bad-manifest", "module-changed", "module-refused", "task-create-failed", "constructor", "__proto__", "", undefined, null, 5]) {
+    assert.equal(taskErrShowsReason(c, true), true, `vcs у тілі: ${String(c)}`);
+    assert.equal(taskErrShowsReason(c), false, `без vcs у тілі поведінка стара: ${String(c)}`);
+    assert.equal(taskErrShowsReason(c, false), false);
+  }
+  /* Змаплені коди мають свій текст — причину сервера не підміняють, навіть із vcs у тілі. */
+  for (const c of ["vcs-bad-target", "vcs-needs-role", "task-exists", "bad-task-id", "timeout", "space-json-unreadable", "module-untrusted", "unknown-space"]) {
+    assert.equal(taskErrShowsReason(c, true), false, String(c));
     assert.equal(taskErrShowsReason(c), false, String(c));
   }
 });

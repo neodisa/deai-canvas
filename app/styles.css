@@ -236,8 +236,13 @@ body.home-open .cv-hud{display:none!important}
 /* Поле лише для читання — назва ЗНАЙДЕНОГО простору: сервер її не перезапише, тож
    воно не має виглядати редагованим. */
 .cv-field input[readonly]{background:var(--g50);color:var(--g700)}
+/* Рядок-статус довгого створення задачі (`showCreateWait`, app.js): тихий, під полями, над слотом помилки. */
+.cv-form-note{margin:0;font-size:12px;line-height:1.4;color:var(--g700)}
 .cv-form-err{padding:8px 10px;border-radius:6px;font-size:13px;line-height:1.4;color:#a32a23;
   background:color-mix(in srgb,var(--bad-ink) 8%,#fff);border:1px solid color-mix(in srgb,var(--bad-ink) 35%,#fff)}
+/* Помилка форми може мати другий рядок (`\n`: причина сервера під текстом про адресу): `.cv-ask--form p` скидає `white-space`
+   у `normal`, тож без цього перенос зникав би. */
+.cv-ask--form .cv-form-err{white-space:pre-line}
 /* Поле, про яке помилка (`ctl.focus(імʼя)` ставить `aria-invalid`): рамка видна й тому, хто не
    читає текст помилки, а не лише скрінрідеру. `:focus-visible` лишає своє кільце — рамка під ним червона. */
 .cv-field input[aria-invalid="true"]{border-color:var(--bad-ink)}
