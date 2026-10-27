@@ -881,8 +881,9 @@ function barState() {
        `vcsBrand(label, space)` у смузі й палітрі (білий список; статус без `label` — «GitLab» у ЛІГІ, «Git» деінде). */
     glLabel: glCache?.label || '',
     /* Статус без помилки й без придатного `web` (file://, Gitea, Bitbucket → `web: null`; не `http(s)`): пункт «Історія» не
-       показується. У помилці й поки статусу нема — лишається, як було (`glCache` без `configured` — «Налаштувати»). */
-    glNoWeb: !!(glCache?.configured && !glCache.error && !vcsWebUrl(glCache.web)),
+       показується. У помилці й поки статус «зайнято» (web ще невідомий) — лишається, як було: клік у «зайнято» каже про
+       зайнятість (`glhistory`). `glCache` без `configured` — «Налаштувати», історії там нема. */
+    glNoWeb: !!(glCache?.configured && !glCache.error && !glCache.busy && !vcsWebUrl(glCache.web)),
     /* Перелік ітерацій — щоб дропдаун крошки МІГ перемкнути, а не лише
        створити й видалити. Доти єдиним місцем вибору був `<select>` панелі;
        коли панель переписали, вибір зник із інструмента зовсім, бо `picked`
@@ -1223,6 +1224,7 @@ async function resetSpaceState({ reload = true } = {}) {
   curTask = null; curTaskList = null; homeData = null; currentTaskId = null;
   taskSwitchGen += 1; homeSeq += 1;
   glCache = null; teamsMute = null;
+  dropGlState();
   tasksErr = false; tasksErrKey = null;
   homeUi.q = ''; homeUi.profiles.clear(); homeUi.designers.clear(); saveHomeUi();
   taskQ = ''; taskCursor = 0;
@@ -1411,7 +1413,7 @@ async function wizOpenTask(made) {
   else await resetPerTaskState();
   homeData = null;
   currentTaskId = made.id; taskSwitchGen += 1;
-  await refreshGitlab();
+  await refreshGitlab(made.id);
   await leaveHome();
 }
 
@@ -1486,7 +1488,7 @@ async function newTaskDialog() {
         else await resetPerTaskState();
         homeData = null;
         currentTaskId = made.id; taskSwitchGen += 1;
-        await refreshGitlab();
+        await refreshGitlab(made.id);
         await leaveHome();
       } catch (e) { toast(t('errFailed', e.message)); }
       return undefined;
@@ -1592,7 +1594,9 @@ async function switchTask(val) {
        перемикання в межах простору не має чистити кеш GitLab і мигати смугою. */
     if (spaceChanged(spaceNow()?.id, sw?.space)) await resetSpaceState();
     else await resetPerTaskState();
-    await refreshGitlab();
+    /* Сервер уже перемкнено на `val`, а `curTask` ще старий і `picked` скинуто: статус питаємо про ЦІЛЬОВУ задачу, а не
+       про ту, що відкрита (`glKeyNow`, його докстрінг). */
+    await refreshGitlab(val);
     currentTaskId = val; taskSwitchGen += 1;
     if (homeReady()) homeData = { ...homeData, current: val };
     return true;
@@ -1986,7 +1990,12 @@ const BAR_ACTIONS = {
   glsetup: () => { if (isLegacyVcs(spaceNow())) tell(t('glSetupMsg')); else enterConnections(); },
 
   /* `web` віддає свій модуль: відкриваємо лише `http(s)` (`vcsWebUrl`) — `javascript:`/`file:` не історія, а смуга такого пункту не малює. */
-  glhistory: () => { const web = vcsWebUrl(glCache?.web); if (web) window.open(web, '_blank', 'noopener'); },
+  glhistory: () => {
+    const web = vcsWebUrl(glCache?.web);
+    if (web) { window.open(web, '_blank', 'noopener'); return; }
+    /* Статус ще «зайнято»: куди вести — невідомо, і мовчати не можна (пункт показано саме тому, що web ще не знаємо). */
+    if (glCache?.busy) tell(t('vcsErrBusy'));
+  },
 
   // ── дропдаун публікації: `togglepub` — заміна старого `[data-toggle]`,
   // `openpreview`/`copylink` — нові контроли моделі (те, що робив `#pp-copy`
@@ -2449,6 +2458,9 @@ async function loadHome(refresh = false, { spaces = true } = {}) {
 /** `spaces: false` — не перепитувати перелік просторів (див. `loadHome`). `page` — `tasks` («Задачі») чи `conn`
  *  («Підключення»); без нього відкрита сторінка лишається, закрита відкривається на «Задачах». */
 function enterHome({ spaces = true, page } = {}) {
+  /* Пішли із задачі на екран «Задачі»: відкладений повтор статусу синку не мусить опитувати й малювати смугу під оверлеєм
+     (`leaveHome` поверне його, якщо стан лишився «зайнято»). */
+  cancelGlRetry();
   const was = homeOpen;
   /* Сторінка: явна (`home` — «Задачі», `conn` — «Підключення»), інакше відкрита лишається відкритою (перемикання
      простору й запис модулів кличуть `enterHome` через `afterSpaceChange`, і людина лишається там, де була). */
@@ -2522,6 +2534,8 @@ async function leaveHome() {
      `render()` перезавантажував СТАРИЙ документ поверх щойно відкритої іншої задачі (404 у рамці), а при простому
      «назад» ще й робив другий запит `/commented`. */
   await render();
+  /* Вернулись до задачі, а статус синку лишився «зайнято» без відкладеного повтору (його скасував `enterHome`) — повертаємо. */
+  if (glCache?.busy && !glBusyTimer) scheduleGlRetry(glKeyNow());
   /* Фокус вертається на логотип — те, чим екран відкривали: вузол, на якому він
      був (картка, поле), тепер схований, і клавіатура лишилась би «в нікуди». */
   bar.querySelector('[data-act="home"]')?.focus({ preventScroll: true });
@@ -3494,6 +3508,8 @@ let glCache = null;
 /* Ключ («простір|задача|ітерація»), для якого зібрано `glCache`. `resetPerTaskState` кеш навмисно не обнуляє (перемикання
    в межах простору не мигає смугою), тож без ключа чужий стан міг би пережити перемикання задачі. */
 let glKey = null;
+/* Номер останнього запиту статусу: відповідь старішого (повільний VPN, перемкнули задачу, вийшли з простору) відкидається. */
+let glSeq = 0;
 /* Відкладений повтор опиту після `vcs-busy`; ключ і лічильник спроб, до яких він прив'язаний. */
 let glBusyTimer = null;
 let glBusyFor = null;
@@ -3508,20 +3524,33 @@ function glFailText(r, lbl, plain) {
   return k ? t(k, lbl) : plain;
 }
 
-/** Ключ стану синку: простір, задача й ітерація, для яких питаємо статус. */
-function glKeyNow() { return `${spaceNow()?.id ?? ''}|${curTask?.id ?? ''}|${picked || ''}`; }
+/**
+ * Ключ стану синку: простір, задача й ітерація, про які питає сервер. `task` — задача, до якої сервер ВЖЕ перемкнено, коли
+ * `curTask` ще старий (`switchTask`, `wizOpenTask`, створення задачі питають статус ДО `render()`, `picked` тоді `null`);
+ * без неї — відкрита зараз.
+ */
+function glKeyNow(task) { return `${spaceNow()?.id ?? ''}|${task ?? curTask?.id ?? ''}|${picked || ''}`; }
 
-/** Один відкладений повтор опиту після `vcs-busy`: лише поки ключ той самий, і не більше `VCS_BUSY_MAX_TRIES` разів на ключ. */
+/** Скасувати відкладений повтор опиту (вийшли на екран «Задачі», простір змінився, відповідь прийшла). */
+function cancelGlRetry() { clearTimeout(glBusyTimer); glBusyTimer = null; }
+
+/** Забути стан синку без кешу: ключ, повтор, і запізнілі відповіді (`glSeq`) — вони були про простір, якого більше нема. */
+function dropGlState() { glKey = null; glSeq += 1; cancelGlRetry(); }
+
+/**
+ * Відкладений повтор опиту після `vcs-busy`, не більше `VCS_BUSY_MAX_TRIES` разів на ключ. Повтор питає про те, що відкрито
+ * ЗАРАЗ (`refreshGitlab` сам бере поточну задачу): у реальному потоці ключ запиту (`switchTask` питає ДО `render()`) інший, ніж
+ * після нього, і звіряти ключі в таймері значило б, що повтор не спрацює ніколи. Не стріляє без ролі `vcs` і під екраном
+ * «Задачі» (`leaveHome` поверне його, якщо стан лишився «зайнято»).
+ */
 function scheduleGlRetry(key) {
-  clearTimeout(glBusyTimer);
-  glBusyTimer = null;
+  cancelGlRetry();
   if (glBusyFor !== key) { glBusyFor = key; glBusyTries = 0; }
   if (glBusyTries >= VCS_BUSY_MAX_TRIES) return;
   glBusyTries += 1;
   glBusyTimer = setTimeout(async () => {
     glBusyTimer = null;
-    /* Перемкнули задачу, ітерацію чи простір (або роль зникла) — повтор уже не про той стан і не стріляє. */
-    if (noVcs() || glKeyNow() !== key) return;
+    if (noVcs() || homeOpen) return;
     await refreshGitlab();
     paintBar();
   }, VCS_BUSY_RETRY_MS);
@@ -3533,13 +3562,17 @@ function scheduleGlRetry(key) {
    `render()`/`paintBar()`, тобто фарбувати його ОКРЕМО — дублювати роботу, яку
    й так робить перемальовка. Дії (`glpush`/`glpull`/`glsetup`/`glhistory`)
    тепер у `BAR_ACTIONS`. */
-async function refreshGitlab() {
+async function refreshGitlab(task) {
   /* Простір без ролі `vcs` синку не має: статус там — «нема», а не запит, що
      повертає `configured:false` (і не мережа, і не рядок у журналі сервера). */
-  if (noVcs()) { glCache = null; glKey = null; clearTimeout(glBusyTimer); glBusyTimer = null; return; }
-  const key = glKeyNow();
+  if (noVcs()) { glCache = null; dropGlState(); return; }
+  const seq = ++glSeq;
+  const key = glKeyNow(task);
   try {
     const r = await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`);
+    /* Запізніла відповідь: за час запиту (`git fetch` через VPN — секунди) питали вдруге, перемкнули задачу чи вийшли з
+       простору. Застосовується лише найновіший запит — інакше стан A малювався б для B, а «зайнято» старого ключа затирало б добрий стан. */
+    if (seq !== glSeq) return;
     if (r.code === 'vcs-busy') {
       /* `vcs-busy` — не помилка, а «лок дзеркала тримає інша синхронізація (клон, відправка, отримання)». Власний стан
          ТОГО САМОГО ключа лишається (крапка не фарбується в помилку на кожен збіг у часі). Чужого стану — іншої задачі, ітерації
@@ -3550,9 +3583,9 @@ async function refreshGitlab() {
       scheduleGlRetry(key);
     } else {
       glCache = r; glKey = key;
-      clearTimeout(glBusyTimer); glBusyTimer = null; glBusyFor = null; glBusyTries = 0;
+      cancelGlRetry(); glBusyFor = null; glBusyTries = 0;
     }
-  } catch { glCache = null; glKey = null; }
+  } catch { if (seq === glSeq) { glCache = null; glKey = null; } }
 }
 
 // --- контекст-меню итерации: дублювати / видалити ---

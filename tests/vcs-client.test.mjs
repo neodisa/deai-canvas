@@ -16,7 +16,7 @@ import { filterActions, paletteActions } from "../app/shell-palette.js";
 import { barHTML } from "../app/shell-bar.js";
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, hasVcs, isLegacyVcs,
-  requestErrText, vcsBrand, vcsErrKey, vcsFailKey, vcsLabel, vcsWebUrl,
+  requestErrText, spaceChanged, vcsBrand, vcsErrKey, vcsFailKey, vcsLabel, vcsWebUrl,
 } from "../app/spaces-model.js";
 
 test.beforeEach(() => setLang("uk"));
@@ -475,7 +475,8 @@ test("glsetup: у ЛІГА — повідомлення про tasks.json, де�
 
 test("стан смуги й палітри несе підпис, «нема web» і «зайнято» поіменно", () => {
   assert.match(src, /\n    glLabel: glCache\?\.label \|\| '',/);
-  assert.match(src, /\n    glNoWeb: !!\(glCache\?\.configured && !glCache\.error && !vcsWebUrl\(glCache\.web\)\),/);
+  assert.match(src, /\n    glNoWeb: !!\(glCache\?\.configured && !glCache\.error && !glCache\.busy && !vcsWebUrl\(glCache\.web\)\),/,
+    "у «зайнято» web ще невідомий — пункт «Історія» не ховаємо (інакше він блимав би); клік у ньому каже про зайнятість");
   assert.match(src, /\? 'off'\s*: glCache\.busy \? 'busy'\s*: glCache\.error \? 'error'/, "«зайнято» — окремий стан, раніше за «помилку»");
   assert.match(src, /gl: st\.gl, glBrand: vcsBrand\(st\.glLabel, st\.space\), iterLabel: st\.iterLabel,/);
   const names = /import \{([^}]*)\} from '\.\/spaces-model\.js'/.exec(src)?.[1] ?? "";
@@ -507,14 +508,15 @@ const actFn = (name, env) => load(env, { funcs: HELPERS, acts: [name] }).acts[na
 
 /** Середовище: усе, чого торкаються дії й `refreshGitlab`, — заглушки, що пишуть у `log`. */
 function mkEnv(over = {}) {
-  const log = { tell: [], toast: [], post: [], ask: [], refresh: 0, render: 0, open: [], api: [], timers: [], cleared: 0, paint: 0 };
+  const log = { tell: [], toast: [], post: [], ask: [], refresh: 0, render: 0, open: [], api: [], timers: [], cleared: 0, clearedIds: [], paint: 0 };
   const env = {
     log,
     space: PLAIN,
     spaceNow: () => env.space,
     curTask: { id: "A" },
     glCache: { configured: true, label: "GitHub", behind: 0, unpushed: 0 },
-    glKey: null, glBusyTimer: null, glBusyFor: null, glBusyTries: 0,
+    glKey: null, glSeq: 0, glBusyTimer: null, glBusyFor: null, glBusyTries: 0,
+    homeOpen: false,
     picked: "it3",
     noVcs: () => false,
     status: {},
@@ -531,7 +533,7 @@ function mkEnv(over = {}) {
     itNum: (id) => String(id).replace(/\D/g, ""),
     window: { open: (...a) => log.open.push(a) },
     setTimeout: (fn, ms) => { log.timers.push({ fn, ms }); return log.timers.length; },
-    clearTimeout: () => { log.cleared += 1; },
+    clearTimeout: (id) => { log.clearedIds.push(id); log.cleared += 1; },
     t, vcsErrKey, vcsFailKey, vcsLabel, vcsWebUrl, requestErrText, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS,
     ...over,
   };
@@ -736,9 +738,15 @@ test("glhistory: відкриває лише http(s) із відповіді; і
 
 const refresh = (over) => {
   const env = mkEnv(over);
-  const f = load(env, { funcs: ["glKeyNow", "scheduleGlRetry", "refreshGitlab"] });
+  const f = load(env, { funcs: ["glKeyNow", "cancelGlRetry", "dropGlState", "scheduleGlRetry", "refreshGitlab"] });
   return { env, ...f };
 };
+/** `api()`, що відповідає, коли скаже тест: `q[i].res(відповідь)` / `q[i].rej(помилка)` — для запізнілих відповідей. */
+function deferredApi(env) {
+  const q = [];
+  env.api = (path) => { env.log.api.push(path); return new Promise((res, rej) => q.push({ res, rej })); };
+  return q;
+}
 const BUSY = { configured: true, error: "dзеркало зайняте", code: "vcs-busy" };
 const REAL_A = { configured: true, label: "GitHub", behind: 0, unpushed: 0, dirty: false, gitlab_it: "it1" };
 
@@ -756,8 +764,10 @@ test("refreshGitlab: простір без ролі vcs — кеш скинут�
   await refreshGitlab();
   assert.equal(env.glCache, null);
   assert.deepEqual(env.log.api, []);
-  assert.equal(env.log.cleared >= 1, true, "відкладений повтор скасовано");
+  assert.ok(env.log.clearedIds.includes(7), "відкладений повтор справді скасовано (clearTimeout(7)), а не лише забуто");
   assert.equal(env.glBusyTimer, null);
+  assert.equal(env.glSeq, 1, "запізнілі відповіді, що летять, відкидаються");
+  assert.equal(env.glKey, null);
 });
 
 test("(i) vcs-busy без попереднього стану: «зайнято», не помилка й не «збігається», повтор заплановано", async () => {
@@ -821,13 +831,27 @@ test("повтор після «зайнято»: той самий ключ —
   assert.equal(env.log.timers.length, 1, "після відповіді без busy нових повторів нема");
 });
 
-test("повтор не стріляє після перемикання задачі, ітерації чи простору, і коли ролі вже нема", async () => {
+const REAL_B = { configured: true, label: "GitHub", behind: 0, unpushed: 2, dirty: true, gitlab_it: null };
+
+test("повтор після перемикання задачі, ітерації чи простору опитує ПОТОЧНИЙ стан і знімає «зайнято»", async () => {
   for (const change of [
     (e) => { e.curTask = { id: "B" }; },
     (e) => { e.picked = "it9"; },
     (e) => { e.space = { ...PLAIN, id: "other" }; },
-    (e) => { e.noVcs = () => true; },
   ]) {
+    const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+    await refreshGitlab();
+    change(env);
+    env.status = REAL_B;
+    await env.log.timers[0].fn();
+    assert.equal(env.log.api.length, 2, "запит статусу пішов — про те, що відкрито зараз");
+    assert.equal(env.glCache, REAL_B, "«зайнято» знято");
+    assert.equal(env.log.paint, 1);
+  }
+});
+
+test("повтор не стріляє, коли ролі вже нема або відкрито екран «Задачі» (смуга під оверлеєм)", async () => {
+  for (const change of [(e) => { e.noVcs = () => true; }, (e) => { e.homeOpen = true; }]) {
     const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
     await refreshGitlab();
     change(env);
@@ -844,14 +868,16 @@ test("повтори «зайнято» скінченні: після VCS_BUSY_
   assert.equal(env.glCache.busy, true, "стан лишається «зайнято»; клік у ньому перепитає статус");
 });
 
-test("відповідь «зайнято» на запит, що летів під час перемикання задачі, — повтор привʼязаний до ключа ЗАПИТУ, а не відповіді", async () => {
+test("«зайнято» на запит, що летів під час перемикання (новішого запиту нема): кеш — під ключем запиту, повтор опитує поточне", async () => {
   const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
   env.api = async (path) => { env.log.api.push(path); env.curTask = { id: "B" }; return BUSY; };  // людина перемкнула задачу, поки запит летів
   await refreshGitlab();
   assert.equal(env.glKey, "plain|A|it3", "кеш підписано ключем запиту (A), а не поточним (B)");
   assert.equal(env.log.timers.length, 1);
+  env.api = async (path) => { env.log.api.push(path); return REAL_B; };
   await env.log.timers[0].fn();
-  assert.equal(env.log.api.length, 1, "повтор для A не стріляє, коли відкрито B");
+  assert.equal(env.log.api.length, 2, "повтор не губиться через зміну ключа — він опитує те, що відкрито");
+  assert.equal(env.glCache, REAL_B);
 });
 
 /** Вичерпує всі відкладені опити поточного ключа: кожен таймер спрацьовує, поки нові не перестануть зʼявлятись. */
@@ -891,4 +917,183 @@ test("помилка запиту статусу: кеш і ключ скину�
   await refreshGitlab();
   assert.equal(env.glCache, null);
   assert.equal(env.glKey, null);
+});
+
+/* ── запізнілі відповіді: застосовується лише найновіший запит ─────────────── */
+
+test("запізніла відповідь старої задачі не перезаписує кеш нової (R1 повільна, R2 швидка)", async () => {
+  const { env, refreshGitlab } = refresh({ glCache: null, picked: "it1" });
+  const q = deferredApi(env);
+  const r1 = refreshGitlab();                           // питаємо про A — VPN, секунди
+  env.curTask = { id: "B" }; env.picked = "it2";
+  const r2 = refreshGitlab();                           // перемкнули на B — швидка відповідь
+  q[1].res(REAL_B); await r2;
+  assert.equal(env.glCache, REAL_B);
+  assert.equal(env.glKey, "plain|B|it2");
+  q[0].res(REAL_A); await r1;                           // а це дотяглась A
+  assert.equal(env.glCache, REAL_B, "смуга не малює стан A для B");
+  assert.equal(env.glKey, "plain|B|it2");
+});
+
+test("запізніла «зайнято» старого ключа не затирає добрий стан нового і не скидає повтор", async () => {
+  const { env, refreshGitlab } = refresh({ glCache: null, picked: "it1" });
+  const q = deferredApi(env);
+  const r1 = refreshGitlab();
+  env.curTask = { id: "B" }; env.picked = "it2";
+  const r2 = refreshGitlab();
+  q[1].res(REAL_B); await r2;
+  q[0].res(BUSY); await r1;
+  assert.equal(env.glCache, REAL_B, "добрий стан B лишився");
+  assert.ok(!env.glCache.busy);
+  assert.deepEqual(env.log.timers, [], "запізніла busy не заплановує повтор");
+});
+
+test("запізніла помилка запиту старої задачі не скидає кеш нової", async () => {
+  const { env, refreshGitlab } = refresh({ glCache: null, picked: "it1" });
+  const q = deferredApi(env);
+  const r1 = refreshGitlab();
+  env.curTask = { id: "B" }; env.picked = "it2";
+  const r2 = refreshGitlab();
+  q[1].res(REAL_B); await r2;
+  q[0].rej(new Error("net")); await r1;
+  assert.equal(env.glCache, REAL_B);
+  assert.equal(env.glKey, "plain|B|it2");
+});
+
+test("порядок відповідей зворотний (A швидка, B повільна): застосовується B, стан A не лишається", async () => {
+  const { env, refreshGitlab } = refresh({ glCache: null, picked: "it1" });
+  const q = deferredApi(env);
+  const r1 = refreshGitlab();
+  env.curTask = { id: "B" }; env.picked = "it2";
+  const r2 = refreshGitlab();
+  q[0].res(REAL_A); await r1;                           // A — найстаріший запит: відкинуто
+  assert.equal(env.glCache, null, "поки B не відповіла, чужого стану нема");
+  q[1].res(REAL_B); await r2;
+  assert.equal(env.glCache, REAL_B);
+});
+
+test("роль vcs зникла, поки запит летів: відповідь не воскрешає кеш", async () => {
+  const { env, refreshGitlab } = refresh({ glCache: null });
+  const q = deferredApi(env);
+  const r1 = refreshGitlab();
+  env.noVcs = () => true;
+  await refreshGitlab();                                // перемкнули в простір без синку
+  q[0].res(REAL_A); await r1;
+  assert.equal(env.glCache, null);
+});
+
+test("resetSpaceState: кеш і ключ скинуто, відкладений повтор скасовано, відповідь старого простору відкинуто", async () => {
+  const env = mkEnv({
+    glCache: REAL_A, glKey: "plain|A|it1", glBusyTimer: 5, glSeq: 3,
+    curTaskList: null, homeData: null, currentTaskId: "A", taskSwitchGen: 0, homeSeq: 0, teamsMute: {},
+    tasksErr: true, tasksErrKey: "k", homeUi: { q: "x", profiles: { clear() {} }, designers: { clear() {} } },
+    saveHomeUi: () => {}, taskQ: "q", taskCursor: 4, resetPerTaskState: async () => {}, loadSpaces: async () => {},
+  });
+  const q = deferredApi(env);
+  const f = load(env, { funcs: ["glKeyNow", "cancelGlRetry", "dropGlState", "scheduleGlRetry", "refreshGitlab", "resetSpaceState"] });
+  const r = f.refreshGitlab();                          // запит старого простору в польоті
+  await f.resetSpaceState({ reload: false });
+  assert.ok(env.log.clearedIds.includes(5), "відкладений повтор скасовано");
+  assert.equal(env.glBusyTimer, null);
+  assert.equal(env.glCache, null);
+  assert.equal(env.glKey, null);
+  q[0].res(REAL_A); await r;
+  assert.equal(env.glCache, null, "стан старого простору не повернувся");
+});
+
+test("звичайна відповідь справді скасовує відкладений повтор (clearTimeout, а не лише забуте посилання)", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  await refreshGitlab();
+  const pending = env.glBusyTimer;
+  assert.ok(pending, "таймер заплановано");
+  env.status = REAL_A;
+  await refreshGitlab();
+  assert.ok(env.log.clearedIds.includes(pending), "після OK відкладений таймер скасовано — зайвого опиту не буде");
+  assert.equal(env.glBusyTimer, null);
+});
+
+test("enterHome скасовує відкладений повтор, leaveHome повертає його лише для «зайнято» без таймера", () => {
+  assert.match(fn("enterHome"), /\n {2}cancelGlRetry\(\);/, "екран «Задачі» не опитує статус і не малює смугу під оверлеєм");
+  assert.match(fn("leaveHome"), /await render\(\);[^]*?if \(glCache\?\.busy && !glBusyTimer\) scheduleGlRetry\(glKeyNow\(\)\);/,
+    "вернулись до задачі зі станом «зайнято» — повтор знову заплановано");
+  assert.match(fn("resetSpaceState"), /glCache = null; teamsMute = null;\n {2}dropGlState\(\);/);
+});
+
+/* ── реальний потік: refresh викликається ДО render ───────────────────────── */
+
+/**
+ * `switchTask`, `wizOpenTask` і створення задачі питають статус, коли сервер уже перемкнено, а `curTask` ще старий і
+ * `picked = null` (його скинув `resetPerTaskState`); `render()` перемикає `curTask` і нормалізує `picked` лише ПІСЛЯ.
+ * Тест відтворює саме цей порядок.
+ */
+const flow = (over) => {
+  const env = mkEnv({
+    glCache: REAL_A, glKey: "plain|A|it1", curTask: { id: "A" }, picked: "it1", status: BUSY,
+    currentTaskId: "A", taskSwitchGen: 0, homeData: null, homeReady: () => false, spaceChanged,
+    resetPerTaskState: async () => { env.picked = null; },
+    resetSpaceState: async () => { throw new Error("простір не змінювався"); },
+    leaveHome: async () => { env.curTask = { id: "B" }; env.picked = "it1"; },
+    post: async () => ({ space: "plain" }),
+    ...over,
+  });
+  const f = load(env, { funcs: ["glKeyNow", "cancelGlRetry", "dropGlState", "scheduleGlRetry", "refreshGitlab", "switchTask", "wizOpenTask"] });
+  return { env, ...f };
+};
+const render = (env) => { env.curTask = { id: "B" }; env.picked = "it1"; };
+
+test("потік switchTask (refresh до render): ключ — цільова задача, повтор після render стріляє й знімає «зайнято»", async () => {
+  const { env, switchTask } = flow();
+  assert.equal(await switchTask("B"), true);
+  assert.equal(env.glKey, "plain|B|", "ключ запиту — задача B, до якої сервер уже перемкнено, а не curTask A");
+  assert.equal(env.glCache.busy, true, "стан A не тримається для B");
+  assert.equal(env.log.timers.length, 1);
+  render(env);                                          // BAR_ACTIONS.task / leaveHome
+  env.status = REAL_B;
+  await env.log.timers[0].fn();
+  assert.equal(env.log.api.length, 2, "повтор опитав B");
+  assert.equal(env.glCache, REAL_B, "«зайнято» зникло саме");
+  assert.equal(env.glKey, "plain|B|it1");
+  assert.equal(env.log.paint, 1);
+});
+
+test("потік switchTask: два переходи до render першого — стан першої цілі не тримається для другої", async () => {
+  const { env, switchTask } = flow({ status: REAL_B });
+  await switchTask("B");
+  assert.equal(env.glCache, REAL_B);
+  env.status = BUSY;
+  await switchTask("C");                                // curTask досі A
+  assert.equal(env.glKey, "plain|C|");
+  assert.equal(env.glCache.busy, true, "REAL_B належить B, а питали про C");
+});
+
+test("потік wizOpenTask (refresh до leaveHome): ключ — нова задача, повтор після render знімає «зайнято»", async () => {
+  const { env, wizOpenTask } = flow();
+  await wizOpenTask({ id: "B", space: "plain" });
+  assert.equal(env.glKey, "plain|B|", "ключ — made.id, а не curTask");
+  assert.equal(env.glCache.busy, true);
+  env.status = REAL_B;
+  await env.log.timers[0].fn();
+  assert.equal(env.glCache, REAL_B);
+});
+
+test("створення задачі: refreshGitlab питає про made.id (всі три потоки передають цільову задачу)", () => {
+  assert.match(fn("newTaskDialog"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
+  assert.match(fn("wizOpenTask"), /currentTaskId = made\.id; taskSwitchGen \+= 1;\s*await refreshGitlab\(made\.id\);\s*await leaveHome\(\);/);
+  assert.match(fn("switchTask"), /await refreshGitlab\(val\);\s*currentTaskId = val;/);
+});
+
+test("glhistory у стані «зайнято»: web ще невідомий — кажемо про зайнятість, а не мовчимо", () => {
+  const env = mkEnv({ glCache: { configured: true, busy: true } });
+  load(env, { acts: ["glhistory"] }).acts.glhistory();
+  assert.deepEqual(env.log.tell, [t("vcsErrBusy")]);
+  assert.deepEqual(env.log.open, []);
+});
+
+test("друга «зайнято» поспіль замінює відкладений повтор, а не множить таймери", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  await refreshGitlab();
+  const first = env.glBusyTimer;
+  await refreshGitlab();
+  assert.ok(env.log.clearedIds.includes(first), "попередній таймер скасовано перед новим");
+  assert.notEqual(env.glBusyTimer, first);
 });

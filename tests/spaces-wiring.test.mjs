@@ -57,7 +57,7 @@ test("`space`: не перемикає на той самий простір, п
 
 test("refreshGitlab і loadTeamsMute: першим рядком — вихід без запиту, коли інтеграцій нема", () => {
   // GitLab (синк із git) — на `noVcs` (роль `vcs`, 4a); коментар між гейтом і запитом дозволений.
-  assert.match(fn("refreshGitlab"), /^\{[^]*?\n  if \(noVcs\(\)\) \{ glCache = null; glKey = null;[^\n]*return; \}\n  const key = glKeyNow\(\);\n  try \{\n    const r = await api\(`\/api\/vcs-status/);
+  assert.match(fn("refreshGitlab"), /^\{[^]*?\n  if \(noVcs\(\)\) \{ glCache = null; dropGlState\(\); return; \}\n  const seq = \+\+glSeq;\n  const key = glKeyNow\(task\);\n  try \{\n    const r = await api\(`\/api\/vcs-status/);
   assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noOutward\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
   assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/,
     "простір, про який знаємо, — рівно `=== false`; просторів нема зовсім — теж без опитувань");
