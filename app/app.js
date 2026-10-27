@@ -35,7 +35,7 @@ import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
   commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
-  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
+  spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -723,7 +723,8 @@ const postForm = (path, body) => formApi(path, {
 });
 
 /**
- * `POST /api/task-new` зі стелею `TASK_VCS_POST_TIMEOUT_MS` (400 с) — для запиту, що справді клонує (`vcs` у тілі чи простір ЛІГА):
+ * `POST /api/task-new` зі стелею `TASK_VCS_POST_TIMEOUT_MS` (400 с) — для запиту, що справді клонує (`taskCreateClones`: `vcs` у тілі
+ * чи простір з інтеграціями й роллю `vcs`):
  * перший клон репозиторію триває хвилини (модуль чекає до 180 с), а `formApi` (20 с) обірвав би запит посеред клону. Решті запитів
  * (порожнє поле, простір без синку, майстер) така стеля не потрібна: завислий сервер тримав би форму 400 с. Окрема функція, як
  * `trustPost`: тіло `formApi` дослівно стережуть тести. Обрив — `code: 'timeout'`, як у `formApi` (`taskErrKey` → `formTimeout`: сервер міг устигнути).
@@ -1535,12 +1536,13 @@ async function newTaskDialog() {
       /* `vcs` — лише зі значенням: порожнє поле (чи самі пробіли) ключа в тілі не лишає, і задача бере типовий `repo` модуля. */
       const repo = withRepo ? String(vals.repo ?? '').trim() : '';
       const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}) };
-      /* Сервер клонує, лише коли в тілі є `vcs` (форма шле його тільки зі значенням поля; без `from`) або коли простір — ЛІГА
-         (профільний `gitlab`; `_task_new_write`: `if gitlab or (vcs and adopt_src is None)`). Лише такий запит триває хвилини —
-         довга стеля (`taskPost`) і рядок про клон мають сенс тільки йому. Порожнє поле, простір без синку — миттєвий запит
-         (`postForm`, 20 с) без жодних ознак. Довгому Esc і «Скасувати» не діють (запит однаково долетить і задача зʼявиться),
-         тож форма мусить сказати, що вона жива. `isLegacyVcs` включає `hasVcs`, тож ЛІГА тут — синк є. */
-      const clones = 'vcs' in body || isLegacyVcs(sp);
+      /* Сервер клонує, лише коли в тілі є `vcs` (форма шле його тільки зі значенням поля; без `from`) або коли простір з
+         інтеграціями має роль `vcs` — профільний `gitlab` (`_task_new_write`: `if gitlab or (vcs and adopt_src is None)`), і то
+         ТАКОЖ у ЛІГА з явним `git-sync` та порожнім полем; без ролі клону нема (`taskCreateClones`, spaces-model.js). Лише такий
+         запит триває хвилини — довга стеля (`taskPost`) і рядок про клон мають сенс тільки йому. Порожнє поле у звичайному
+         просторі, простір без синку — миттєвий запит (`postForm`, 20 с) без жодних ознак. Довгому Esc і «Скасувати» не діють
+         (запит однаково долетить і задача зʼявиться), тож форма мусить сказати, що вона жива. */
+      const clones = taskCreateClones(sp, body);
       let made;
       const stopWait = clones ? showCreateWait(ctl.form) : null;
       try { made = await (clones ? taskPost(body) : postForm('/api/task-new', body)); }

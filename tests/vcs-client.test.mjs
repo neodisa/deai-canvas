@@ -21,7 +21,7 @@ import { barHTML } from "../app/shell-bar.js";
 import { taskFormHTML, wireTaskForm } from "../app/space-dialogs.js";
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, hasVcs, isLegacyVcs,
-  requestErrText, spaceChanged, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsErrKey, vcsFailKey,
+  requestErrText, spaceChanged, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsErrKey, vcsFailKey,
   vcsLabel, vcsWebUrl,
 } from "../app/spaces-model.js";
 
@@ -78,6 +78,31 @@ test("стеля запиту створення задачі, що клонує
 
 const LIGA = { id: "liga", integrations: true, capabilities: { vcs: "legacy" } };
 const PLAIN = { id: "plain", integrations: false, capabilities: { vcs: "git-sync" } };
+/** ЛІГА (простір з інтеграціями), де синк веде явно ввімкнений `git-sync`: поле «Репозиторій» є, але сервер усе одно бере профільний gitlab. */
+const LIGA_GIT = { id: "liga-git", integrations: true, capabilities: { vcs: "git-sync" } };
+/** ЛІГА без ролі `vcs` (`capabilities.vcs == null`: роль «на папері» за своїм модулем, що не працює): `vcs_provider()` відмовляє одразу — клону нема. */
+const LIGA_NOVCS = { id: "liga-novcs", integrations: true, capabilities: { vcs: null } };
+
+test("taskCreateClones: сервер клонує, коли в тілі є vcs або простір з інтеграціями має роль vcs (профільний gitlab); невідомий простір — довга стеля як безпечніша", () => {
+  /* `_task_new_write`: `if gitlab or (vcs and adopt_src is None)`. `gitlab` бере профіль простору з інтеграціями (`task-new`: `integrations_for(sp)` →
+     `profile 'united'`), а `vcs_provider()` без ролі дає `None` — клону нема. Форма не шле `from`. */
+  const body = { id: "a", title: "A", space: "x" };
+  const withVcs = { ...body, vcs: { repo: "git@h:o/r.git" } };
+  for (const sp of [PLAIN, NOVCS, LIGA, LIGA_GIT, LIGA_NOVCS, null, undefined, { id: "old" }]) {
+    assert.equal(taskCreateClones(sp, withVcs), true, `${sp?.id}: vcs у тілі — клон завжди`);
+  }
+  assert.equal(taskCreateClones(LIGA, body), true, "ЛІГА, зашитий шлях");
+  assert.equal(taskCreateClones(LIGA_GIT, body), true, "ЛІГА з явним git-sync: сервер бере профільний gitlab і клонує, хоч поле порожнє");
+  assert.equal(taskCreateClones(PLAIN, body), false, "звичайний простір: без vcs профілю нема");
+  assert.equal(taskCreateClones(NOVCS, body), false, "без ролі клонувати нічого");
+  assert.equal(taskCreateClones(LIGA_NOVCS, body), false, "ЛІГА без ролі vcs: vcs_provider() = None");
+  assert.equal(taskCreateClones(null, body), true, "простір невідомий: довга стеля безпечніша за обрив посеред клону");
+  assert.equal(taskCreateClones(undefined, body), true);
+  assert.equal(taskCreateClones({ id: "old" }, body), true, "стара форма відповіді (без integrations і capabilities) — як hasVcs/isLegacyVcs: синк не відбираємо");
+  assert.equal(taskCreateClones({ id: "old", integrations: false }, body), false);
+  assert.equal(taskCreateClones(PLAIN, undefined), false, "тіла нема — vcs у ньому не лежить");
+  assert.equal("vcs" in body, false, "тіло не мутується");
+});
 
 test("vcsLabel: білий список; інше й порожнє — «GitLab» у ЛІГА, нейтральний «Git» деінде", () => {
   for (const space of [LIGA, PLAIN, undefined, null]) {
@@ -1218,7 +1243,7 @@ function mkTaskEnv(over = {}) {
     askForm: async (build, opts) => { env.html = build(); env.opts = opts; },
     taskFormHTML, wireTaskForm: (form, o) => log.wire.push([form, o]),
     homeNode: () => null,
-    taskFormError, taskErrField, taskErrKey, taskErrShowsReason, hasVcs, isLegacyVcs, requestErrText, spaceChanged, t,
+    taskFormError, taskErrField, taskErrKey, taskErrShowsReason, taskCreateClones, hasVcs, isLegacyVcs, requestErrText, spaceChanged, t,
     postForm: async (p, b) => { log.post.push([p, b]); return env.reply; },
     taskPost: async (b) => { log.taskPost.push(b); return env.reply; },
     reply: { id: "t-1", space: "plain" },
@@ -1469,7 +1494,7 @@ test("taskPost: порожнє тіло — {} (як postForm); стеля до�
 
 test("імпорти app.js: стеля, ключі й помічники Task 7 імпортовано", () => {
   const sm = /import \{([^}]*)\} from '\.\/spaces-model\.js'/.exec(src)?.[1] ?? "";
-  for (const n of ["TASK_VCS_POST_TIMEOUT_MS", "taskErrShowsReason"]) assert.match(sm, new RegExp(`\\b${n}\\b`), `${n} не імпортовано з spaces-model.js`);
+  for (const n of ["TASK_VCS_POST_TIMEOUT_MS", "taskErrShowsReason", "taskCreateClones"]) assert.match(sm, new RegExp(`\\b${n}\\b`), `${n} не імпортовано з spaces-model.js`);
   const cm = /import \{([^}]*)\} from '\.\/connections-model\.js'/.exec(src)?.[1] ?? "";
   assert.match(cm, /\broleCardId\b/, "roleCardId не імпортовано з connections-model.js");
 });
@@ -1642,8 +1667,8 @@ test("ревʼю Task 7: нові ключі — обома мовами, тек
   setLang("uk");
   assert.equal(DICT.uk.taskCreateWait, "Перший клон репозиторію може тривати кілька хвилин");
   assert.equal(DICT.en.taskCreateWait, "The first clone of the repository may take a few minutes");
-  assert.equal(DICT.uk.cnCheckOkGitNoRepo, "Працює. Репозиторій задається в кожній задачі — задача без нього лишиться без синхронізації.");
-  assert.equal(DICT.en.cnCheckOkGitNoRepo, "Works. The repository is set per task — a task without one stays unsynced.");
+  assert.equal(DICT.uk.cnCheckOkGitNoRepo, "Працює. Типовий репозиторій не задано — задайте його вище або в задачі; задача без нього лишиться без синхронізації.");
+  assert.equal(DICT.en.cnCheckOkGitNoRepo, "Works. No default repository — set it above or in a task; a task without one stays unsynced.");
   assert.equal(DICT.uk.taskErrWhy("x"), "Причина: x");
   assert.equal(DICT.en.taskErrWhy("x"), "Reason: x");
 });
@@ -1664,6 +1689,7 @@ test("I1: поки йде taskPost — кнопка «Створюю…», ря�
   assert.equal(note.className, "cv-form-note");
   assert.equal(note.textContent, "", "щойно вставлена жива область порожня: текст ставиться пізніше, інакше читач її не озвучить");
   assert.equal(r.timers.length, 1);
+  assert.equal(r.timers[0].ms, 150, "затримка потрібна: щойно вставлену живу область читач не озвучує, а зміну тексту в ній — так");
   r.timers[0].fn();
   assert.equal(note.textContent, "Перший клон репозиторію може тривати кілька хвилин");
   d.rej(Object.assign(new Error("offline"), { code: "vcs-bad-target" }));
@@ -1698,6 +1724,12 @@ test("довга стеля й рядок про клон — лише коли 
     ["заповнене поле", PLAIN, { repo: "git@h:o/r.git" }, true],
     ["ЛІГА без поля", LIGA, {}, true],
     ["ЛІГА, значення repo якось прийшло", LIGA, { repo: "git@h:o/r.git" }, true],
+    ["ЛІГА з явним git-sync, порожнє поле (сервер бере профільний gitlab)", LIGA_GIT, { repo: "" }, true],
+    ["ЛІГА з явним git-sync, самі пробіли", LIGA_GIT, { repo: "  " }, true],
+    ["ЛІГА з явним git-sync, поле не прийшло", LIGA_GIT, {}, true],
+    ["ЛІГА з явним git-sync, заповнене поле", LIGA_GIT, { repo: "git@h:o/r.git" }, true],
+    ["ЛІГА без ролі vcs", LIGA_NOVCS, {}, false],
+    ["простір зі старої форми відповіді (без integrations і capabilities)", { id: "old" }, {}, true],
     ["порожнє поле", PLAIN, { repo: "" }, false],
     ["самі пробіли", PLAIN, { repo: "   " }, false],
     ["поле не прийшло", PLAIN, {}, false],
@@ -1711,6 +1743,12 @@ test("довга стеля й рядок про клон — лише коли 
     assert.deepEqual([r.form.notes.length, r.timers.length], clones ? [1, 1] : [0, 0], `${name}: рядок-статус і його таймер`);
     assert.equal(r.form.ok.textContent, clones ? t("wzCreating") : "Створити задачу", `${name}: підпис кнопки`);
   }
+});
+
+test("невідомий простір (spaceNow() порожній): форму не відкриваємо й нічого не питаємо — як і було", async () => {
+  const r = await taskDialog({ space: null });
+  assert.equal(r.env.opts, undefined, "askForm не кликано");
+  assert.deepEqual([r.env.log.post, r.env.log.taskPost, r.env.log.api, r.timers], [[], [], [], []]);
 });
 
 test("звичайний запит (порожнє поле, простір без синку): поки він летить — жодних ознак довгого створення, а відмова нічого не мусить знімати", async () => {
@@ -1741,7 +1779,7 @@ test("I1: англійською — той самий рядок мовою і�
 
 test("I1: showCreateWait — статично: рядок вставляється ПЕРЕД слотом помилки, не в ЛІГА-розмітку; майстер уже має «Створюю…» і не клонує", () => {
   const b = fn("newTaskDialog");
-  assert.match(b, /const clones = 'vcs' in body \|\| isLegacyVcs\(sp\);/, "клонує лише запит із vcs у тілі або ЛІГА");
+  assert.match(b, /const clones = taskCreateClones\(sp, body\);/, "клонує лише запит із vcs у тілі або простір з інтеграціями й роллю vcs");
   assert.match(b, /const stopWait = clones \? showCreateWait\(ctl\.form\) : null;/);
   assert.match(declSource("showCreateWait"), /slot\.before\(note\)/);
   /* Майстер: запит кроку 4 не несе `vcs` (клон у сервера — лише для `gitlab`/`vcs`), форма вже підписується «Створюю…» (`setBusy`). */
@@ -1833,10 +1871,10 @@ test("I2: «Перевірити» в панелі — виконання cnDraw
   await new Function("env", `with (env) { ${declSource("cnDrawerCheck")}\nreturn cnDrawerCheck(); }`)(env);
   assert.deepEqual(env.cnDrawer.result, { kind: "ok", key: "cnCheckOkGitNoRepo", detail: "" });
   const html = resultHTML(env.cnDrawer.result);
-  assert.match(html, /Працює\. Репозиторій задається в кожній задачі — задача без нього лишиться без синхронізації\./);
+  assert.match(html, /Працює\. Типовий репозиторій не задано — задайте його вище або в задачі; задача без нього лишиться без синхронізації\./);
   assert.doesNotMatch(html, /the repository|per task/i);
   setLang("en");
-  assert.match(resultHTML(env.cnDrawer.result), /Works\. The repository is set per task — a task without one stays unsynced\./);
+  assert.match(resultHTML(env.cnDrawer.result), /Works\. No default repository — set it above or in a task; a task without one stays unsynced\./);
   setLang("uk");
   const ok = mk(GIT_E("git@h:o/r.git"), { ok: true, detail: "branch main found" });
   await new Function("env", `with (env) { ${declSource("cnDrawerCheck")}\nreturn cnDrawerCheck(); }`)(ok);

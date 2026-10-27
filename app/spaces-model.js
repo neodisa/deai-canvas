@@ -185,7 +185,7 @@ const ERR_KEYS = new Map([
 export const FORM_POST_TIMEOUT_MS = 20000;
 
 /**
- * Стеля запиту створення задачі, що справді клонує (`vcs` у тілі чи простір ЛІГА), мс; решта запитів — `FORM_POST_TIMEOUT_MS`.
+ * Стеля запиту створення задачі, що справді клонує (`taskCreateClones`), мс; решта запитів — `FORM_POST_TIMEOUT_MS`.
  * Найгірший шлях сервера (`/api/task-new` із `vcs`): `validate` модуля
  * ≤ 5 с (`deai_modules.CHECK_TIMEOUT`) + клон ≤ 180 с (`git-sync/server.py: CLONE_TIMEOUT`) + для порожнього репо ще один клон
  * без `--branch` ≤ 180 с ≈ 365 с — 400 с лишає запас. Клієнт, що обірвав би раніше за відповідь, показав би «помилку» при
@@ -263,6 +263,22 @@ export const isLegacyVcs = (space) => {
   const caps = space?.capabilities;
   return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs === "legacy" : space?.integrations !== false;
 };
+
+/**
+ * Чи справді запит `POST /api/task-new` клонує репозиторій — лише такому потрібна довга стеля (`TASK_VCS_POST_TIMEOUT_MS`) і
+ * рядок «Перший клон може тривати кілька хвилин». Сервер (`_task_new_write`: `if gitlab or (vcs and adopt_src is None)`) клонує, коли:
+ *  - у тілі є `vcs` (форма шле його лише з непорожнім полем «Репозиторій» і ніколи не шле `from`);
+ *  - або `gitlab` задає профіль: простір з `integrations` (`integrations_for`) завжди ставить `profile` «united» → профільний
+ *    `gitlab`, і коли роль `vcs` є (`vcs_provider()` не `None`), сервер тягне макет за ним — чи роль веде зашитий шлях ЛІГА, чи
+ *    явно ввімкнений `git-sync` (ЛІГА з модулем, поле «Репозиторій» порожнє). Без ролі (`capabilities.vcs == null`: у просторі з
+ *    інтеграціями це лише роль «на папері» за своїм модулем, що не працює) `vcs_provider()` відмовляє одразу (`VcsError`, 409) — клону нема.
+ * Звичайний простір (`integrations: false`) профілю не має: без `vcs` у тілі клону нема.
+ *
+ * Невідомий простір (`null`, стара форма відповіді без `integrations`/`capabilities`) — «клонує»: правило ключа те саме, що в
+ * `hasVcs`/`isLegacyVcs` (синк не відбираємо), а довга стеля безпечніша за обрив посеред клону при вже створеній задачі.
+ */
+export const taskCreateClones = (space, body) =>
+  (body != null && "vcs" in body) || (hasVcs(space) && space?.integrations !== false);
 
 /**
  * Підпис репозиторію для інтерфейсу — ЄДИНИЙ нормалізатор: смуга, палітра й усі дії синку беруть підпис звідси. Білий

@@ -937,7 +937,7 @@ const UK = {
   cnCheckOk: 'Працює.',
   // Вбудований `git-sync` без типового `repo`: `check` каже англійським `detail`, що репозиторій задається в задачі, — людині це текст
   // свого, а не чужого. Задача без `repo` лишиться без синхронізації, і крок 4 майстра поля репозиторію не має.
-  cnCheckOkGitNoRepo: 'Працює. Репозиторій задається в кожній задачі — задача без нього лишиться без синхронізації.',
+  cnCheckOkGitNoRepo: 'Працює. Типовий репозиторій не задано — задайте його вище або в задачі; задача без нього лишиться без синхронізації.',
   cnToastEnabled: (name) => `Підключено: ${name}`,
   cnToastSaved: (name) => `Збережено: ${name}`,
   cnToastReplaced: (name, off) => `Підключено: ${name}. Вимкнено: ${off}`,
@@ -1848,7 +1848,7 @@ const EN = {
   cnCheckSavedFirst: 'Save first — the check runs on what is saved.',
   cnSavedButFailed: 'Saved, but the check failed.',
   cnCheckOk: 'Works.',
-  cnCheckOkGitNoRepo: 'Works. The repository is set per task — a task without one stays unsynced.',
+  cnCheckOkGitNoRepo: 'Works. No default repository — set it above or in a task; a task without one stays unsynced.',
   cnToastEnabled: (name) => `Connected: ${name}`,
   cnToastSaved: (name) => `Saved: ${name}`,
   cnToastReplaced: (name, off) => `Connected: ${name}. Turned off: ${off}`,
