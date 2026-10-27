@@ -17,7 +17,8 @@
  *                    `.cv-color[role=radio][data-val]`. Поле теки `#sp-path` і підказки `#sp-found` («тека вже
  *                    простір»), `#sp-registered` («цю теку вже додано») тепер лише в кроці 1 майстра (`wizard-view.js`);
  *   форма задачі     `form[data-form="task"]`; поля `#tf-title` (`name="title"`),
- *                    `#tf-id` (`name="id"`);
+ *                    `#tf-id` (`name="id"`), необовʼязкове `#tf-repo` (`name="repo"`, 4a: лише коли в просторі є синк із git
+ *                    і це не ЛІГА — `taskFormHTML({repo})`);
  *   спільне          слот помилки `[data-form-error]`, кнопки `button[data-a="ok"]`
  *                    (type=submit) і `button[data-a="cancel"]`;
  *   привітання       кнопки `[data-th="spacenew"]` і `[data-th="spaceopen"]` у `.th-welcome`.
@@ -82,8 +83,12 @@ export function spaceDialogHTML({ name = "", color = SPACE_COLORS[0], errorKey =
   </form>`;
 }
 
-/** Форма «Нова задача»: назва й ідентифікатор (id підставляє `wireTaskForm`, поки його не правили руками). */
-export function taskFormHTML({ title = "", id = "", errorKey = "" } = {}) {
+/**
+ * Форма «Нова задача»: назва й ідентифікатор (id підставляє `wireTaskForm`, поки його не правили руками). `repo` (4a) —
+ * `{placeholder?}` додає необовʼязкове поле «Репозиторій» після id (адреса цієї задачі замість типової з «Підключення»);
+ * `null`/нема — розмітка дослівно як до 4a. `placeholder` — дані (типовий `repo` із налаштувань модуля): лише через `esc()`.
+ */
+export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null } = {}) {
   return `<form class="cv-form" data-form="task" novalidate role="dialog" aria-modal="true" aria-labelledby="tf-h">
     <h2 class="cv-form-h" id="tf-h">${esc(t("newTask"))}</h2>
     <div class="cv-field">
@@ -95,7 +100,12 @@ export function taskFormHTML({ title = "", id = "", errorKey = "" } = {}) {
       <label for="tf-id">${esc(t("newTaskId"))}</label>
       <input id="tf-id" name="id" type="text" value="${esc(id)}" autocomplete="off" spellcheck="false"
         aria-describedby="${ERR_ID}">
-    </div>
+    </div>${repo ? `
+    <div class="cv-field">
+      <label for="tf-repo">${esc(t("newTaskRepo"))}</label>
+      <input id="tf-repo" name="repo" type="text" value="" autocomplete="off" spellcheck="false"
+        placeholder="${esc(repo.placeholder || t("newTaskRepoPh"))}" aria-describedby="${ERR_ID}">
+    </div>` : ""}
     ${errorSlot(errorKey)}
     ${buttons("taskCreate")}
   </form>`;

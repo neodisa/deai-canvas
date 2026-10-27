@@ -4,7 +4,7 @@
  * лише ІМЕНА ключів словника (як `bar-model.js`), тож модуль тестується в node без браузера й без мови.
  *
  * Вхід — записи `GET /api/modules` (`{id, name, roles, enabled, implicit, status, settings[], last_check?, error?}`)
- * і `capabilities` простору з `/api/spaces` (`{publish, comments, tokens[, error]}`).
+ * і `capabilities` простору з `/api/spaces` (`{publish, comments, vcs, tokens[, error]}`).
  * Свої модулі простору (3c) мають у записі ще `custom: true`, `trust` (`untrusted|trusted|changed|refused`), `record`,
  * `runs` (чи виконується тут їхній код), `source`, `trust_error?`; `GET /api/modules` може нести `notes` (`[{folder, code}]`).
  *
@@ -17,17 +17,18 @@ const has = (o, k) => o != null && typeof k === "string" && Object.prototype.has
 const get = (o, k) => (has(o, k) ? o[k] : undefined);
 
 /** Ролі зі своїми текстами — у порядку секцій. Інші ролі йдуть далі за абеткою, модулі без ролі — останніми. */
-export const ROLE_ORDER = ["publish", "comments", "tokens"];
+export const ROLE_ORDER = ["publish", "comments", "vcs", "tokens"];
 
 const ROLE_KEYS = {
   publish: { title: "cnRolePublish", lead: "cnRolePublishLead", none: "cnNonePublish" },
   comments: { title: "cnRoleComments", lead: "cnRoleCommentsLead", none: "cnNoneComments" },
+  vcs: { title: "cnRoleVcs", lead: "cnRoleVcsLead", none: "cnNoneVcs" },
   tokens: { title: "cnRoleTokens", lead: "cnRoleTokensLead", none: "cnNoneTokens" },
 };
 /** Ключі словника ролі (`title`, `lead`, `none`) або `null` для ролі без своїх текстів. */
 export const roleKeys = (role) => get(ROLE_KEYS, role) ?? null;
 
-const ROLE_ICONS = { publish: "up", comments: "comment", tokens: "sliders" };
+const ROLE_ICONS = { publish: "up", comments: "comment", vcs: "cloud", tokens: "sliders" };
 /** Іконка ролі (імʼя з `icons.js`); невідома роль — `dots`. */
 export const roleIcon = (role) => get(ROLE_ICONS, role) ?? "dots";
 
@@ -41,6 +42,10 @@ const BUILTIN_TEXT = {
   "supabase-comments": { name: "cnModSupabaseName", desc: "cnModSupabaseDesc",
     fields: { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey" } },
   "css-tokens": { name: "cnModCssName", desc: "cnModCssDesc", fields: { file: "cnFieldCssFile" } },
+  /* Синхронізація з git (4a): підписи шести налаштувань маніфесту `modules/git-sync/module.json`. */
+  "git-sync": { name: "cnModGitName", desc: "cnModGitDesc",
+    fields: { repo: "cnFieldGitRepo", branch: "cnFieldGitBranch", path: "cnFieldGitPath", ssh_key: "cnFieldGitSshKey",
+      host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync" } },
 };
 /** Ключі словника вбудованого модуля (`name`, `desc`, `fields{ключ: ключ словника}`) або `null`. */
 export const builtinText = (id) => get(BUILTIN_TEXT, id) ?? null;
@@ -133,6 +138,20 @@ export function providerLine(role, caps, list) {
 }
 
 /**
+ * Картка, на яку сідає фокус, коли на «Підключення» йдуть «до ролі» (`role`; з «Налаштувати…» синку — `vcs`): постачальник
+ * ролі з `capabilities` (модуль зі списку; `'legacy'` і невідомий id — не картка), інакше ПЕРША картка секції ролі —
+ * модуль, чия перша роль і є `role` (так його групує `groupModules`), не `missing`. Нема нікого — `null`: викликач бере
+ * першу кнопку сторінки.
+ */
+export function roleCardId(role, caps, list) {
+  if (typeof role !== "string" || !role) return null;
+  const mods = (Array.isArray(list) ? list : []).filter((e) => e && typeof e === "object" && typeof e.id === "string");
+  const prov = caps && typeof caps === "object" && has(caps, role) ? caps[role] : null;
+  if (typeof prov === "string" && prov !== "legacy" && mods.some((e) => e.id === prov && e.status !== "missing")) return prov;
+  return mods.find((e) => e.status !== "missing" && Array.isArray(e.roles) && e.roles[0] === role)?.id ?? null;
+}
+
+/**
  * Картка: бейдж (`missing|off|ok|unchecked|error|untrusted`), дії (`enable|configure|check|disable|trust|trustinfo`), чи
  * показувати причину. Вбудований — рівно як до 3c. Свій модуль без робочого коду: недовірений — «Потрібна довіра» і
  * «Довіритись…», `refused` без знімка — «Помилка» і «Чому не можна…» (+ «Вимкнути», коли ввімкнений). Свій зі знімком —
@@ -168,6 +187,9 @@ const CHECK_KEYS = new Map([
   ["vercel-busy", "cnErrVercelBusy"],
   ["bad-key", "cnErrBadKey"], ["no-schema", "cnErrNoSchema"], ["supabase-error", "cnErrSupabaseError"],
   ["network", "cnErrNetwork"],
+  /* Роль `vcs` (4a): коди перевірки `git-sync` і відмов синку. */
+  ["vcs-offline", "cnErrVcsOffline"], ["vcs-auth", "cnErrVcsAuth"], ["vcs-bad-target", "cnErrVcsTarget"],
+  ["vcs-busy", "cnErrVcsBusy"], ["vcs-error", "cnErrVcsError"],
 ]);
 
 /**
@@ -239,7 +261,7 @@ export function roleHolders(e, list) {
 
 /**
  * Що станеться з ролями, які `e` зараз ВИКОНУЄ (`capabilities[role] === e.id`), якщо його вимкнути:
- * `[{role, kind: 'legacy'}]` — простір з інтеграціями (ЛІГА) повернеться до вбудованої публікації чи коментарів;
+ * `[{role, kind: 'legacy'}]` — простір з інтеграціями (ЛІГА) повернеться до вбудованої публікації, коментарів чи синку з git;
  * `[{role, kind: 'none', noneKey}]` — роль лишиться без модуля.
  */
 export function disableConsequences(e, space) {
@@ -248,7 +270,7 @@ export function disableConsequences(e, space) {
   const out = [];
   for (const role of Array.isArray(e.roles) ? e.roles : []) {
     if (role === "error" || !has(caps, role) || caps[role] !== e.id) continue;
-    if (space.integrations === true && (role === "publish" || role === "comments")) out.push({ role, kind: "legacy" });
+    if (space.integrations === true && (role === "publish" || role === "comments" || role === "vcs")) out.push({ role, kind: "legacy" });
     else out.push({ role, kind: "none", noneKey: roleKeys(role)?.none ?? null });
   }
   return out;

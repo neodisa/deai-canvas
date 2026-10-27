@@ -101,6 +101,42 @@ test("форма задачі: гачки Task 8, значення екрану�
   assert.match(taskFormHTML({ errorKey: "idTaken" }), /data-form-error>Такий ідентифікатор уже є/);
 });
 
+test("форма задачі: поле «Репозиторій» — лише коли передано repo; без нього розмітка дослівно як була", () => {
+  const plain = taskFormHTML({});
+  assert.equal(taskFormHTML(), plain, "виклик без аргументів — те саме");
+  assert.equal(taskFormHTML({ repo: null }), plain, "repo: null — поля нема");
+  assert.doesNotMatch(plain, /tf-repo|name="repo"|Репозиторій/);
+  assert.ok(plain.includes('aria-describedby="cv-form-err">\n    </div>\n    <p class="cv-form-err" id="cv-form-err"'),
+    "стик «поле id → слот помилки» без жодного зайвого рядка: розмітка без repo побайтно та, що була в 0.7.0");
+  const h = taskFormHTML({ repo: { placeholder: "git@x:y.git" } });
+  assert.match(h, /<input id="tf-repo" name="repo" type="text" value=""[^>]*placeholder="git@x:y\.git"/);
+  assert.match(h, /for="tf-repo"[^>]*>Репозиторій \(необовʼязково\)/);
+  assert.match(/<input id="tf-repo"[^>]*>/.exec(h)[0], /aria-describedby="cv-form-err"/, "помилка адреси читається зчитувачем");
+  assert.ok(h.indexOf('id="tf-id"') < h.indexOf('id="tf-repo"') && h.indexOf('id="tf-repo"') < h.indexOf("data-form-error"),
+    "поле — після id, до слота помилки");
+  assert.equal([...h.matchAll(/id="cv-form-err"/g)].length, 1, "слот помилки один");
+  assert.match(taskFormHTML({ repo: {} }), /placeholder="типовий з «Підключення»"/, "без підказки — загальний текст зі словника");
+  assert.match(taskFormHTML({ repo: { placeholder: "" } }), /placeholder="типовий з «Підключення»"/);
+});
+
+test("форма задачі: підказка репозиторію екранується (дані з налаштувань модуля — не розмітка)", () => {
+  const evil = `"><img src=x onerror=alert(1)>`;
+  const h = taskFormHTML({ repo: { placeholder: evil } });
+  assert.doesNotMatch(h, /<img/);
+  assert.ok(h.includes("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"));
+});
+
+test("форма задачі: поле «Репозиторій» англійською — без кирилиці", () => {
+  const before = getLang();
+  setLang("en");
+  try {
+    const h = taskFormHTML({ repo: {} });
+    assert.ok(!CYR.test(h), `кирилиця в англійській розмітці: ${h.match(/.{0,30}[а-яіїєґ].{0,30}/i)?.[0]}`);
+    assert.match(h, /Repository \(optional\)/);
+    assert.match(h, /placeholder="the default from Connections"/);
+  } finally { setLang(before); }
+});
+
 test("привітання: кнопка data-th=spacenew, заголовок, підводка про агента, логотип", () => {
   const h = welcomeHTML();
   assert.match(h, /<button class="ctl ctl--pri" data-th="spacenew">/);

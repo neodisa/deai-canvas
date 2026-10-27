@@ -6,6 +6,8 @@
  *
  *   node()               вузол `#tasks-home`;
  *   api(path)            GET → JSON (кидає `Error` з `code`);   post(path, body) — POST зі стелею часу (`postForm`);
+ *   postTask(path, body) створення задачі (`task-new`) з довшою стелею часу, коли в просторі є синк із git (перший клон триває
+ *                        хвилини; `taskPost` оболонки); не задано — `post`;
  *   askYesNo(q, opts)    питання;   toast(msg)   тост;   spaces()   остання відповідь `/api/spaces`;
  *   peek(path)           `/api/space-peek`;   takenPaths()   шляхи просторів;   takenTaskIds()   Promise<id[]> усіх задач;
  *   afterSpaceCreated()  простір створено й зроблено поточним (оболонка: `afterSpaceChange`);
@@ -594,7 +596,7 @@ export function createWizard(deps) {
     setBusy(form, true, "wzCreating");
     let made;
     try {
-      made = await deps.post("/api/task-new", { id: vals.id, title: vals.title.trim(), space: mine.spaceId, ...(folder ? { from } : {}) });
+      made = await (deps.postTask ?? deps.post)("/api/task-new", { id: vals.id, title: vals.title.trim(), space: mine.spaceId, ...(folder ? { from } : {}) });
     } catch (e) {
       if (wz !== mine) return;
       setBusy(form, false);

@@ -382,7 +382,20 @@ const TASK_ERR_KEYS = new Map([
   ["from-too-big", "wzErrFromTooBig"],
   ["from-needs-plain-space", "wzErrFromPlain"],
   ["task-dir-exists", "wzErrTaskDirExists"],
+  /* Ціль синку нової задачі (`vcs`, 4a). Адресу людина виправляє в полі «Репозиторій»; без ролі — підключити її на «Підключенні». */
+  ["vcs-bad-target", "taskErrVcsTarget"],
+  ["vcs-needs-role", "taskErrVcsRole"],
+  /* Постачальник ролі відмовив (409 з кодом каркаса): готові тексти «Підключень», нових ключів не треба. */
+  ["space-json-unreadable", "cnRefSpaceJson"],
+  ["module-untrusted", "cnRefUntrusted"],
 ]);
+
+/* Відмови, чия причина лише в тексті сервера: завислий (`check-timeout`, 504) чи зламаний (`module-error`, 502) модуль синку під
+   час перевірки цілі, модуль, що не завантажився (`vcs-error`, 409). Власного ключа вони не мають: форма показує загальне «Не вдалося:
+   <причина>» (`errFailed`), поле не підсвічує. Тут — код, а не ключ: `taskErrKey` для них лишається загальним. */
+const TASK_ERR_REASON = new Set(["check-timeout", "module-error", "vcs-error"]);
+/** Чи показувати людині текст сервера як причину відмови створення задачі (див. `TASK_ERR_REASON`). */
+export const taskErrShowsReason = (code) => TASK_ERR_REASON.has(code);
 
 /** Ключ словника для відмови створення задачі; невідомий код (і мережа) — загальний. */
 export const taskErrKey = (code) => TASK_ERR_KEYS.get(code) ?? "taskErrGeneric";
@@ -391,10 +404,11 @@ export const taskErrKey = (code) => TASK_ERR_KEYS.get(code) ?? "taskErrGeneric";
    людина в майстрі не вибирає, тож це не помилка поля. */
 const FROM_KEYS = new Set(["wzFromRequired", "wzErrFromNotFound", "wzErrFromNoIndex", "wzErrFromContains", "wzErrFromTooBig"]);
 
-/** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `from` (тека майстра) або `null`. */
+/** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `repo` (адреса синку), `from` (тека майстра) або `null`. */
 export const taskErrField = (key) => (key === "titleRequired" ? "title"
   : (key === "idBad" || key === "idTaken" || key === "wzErrTaskDirExists") ? "id"
-    : FROM_KEYS.has(key) ? "from" : null);
+    : key === "taskErrVcsTarget" ? "repo"
+      : FROM_KEYS.has(key) ? "from" : null);
 
 /**
  * Колір для нового простору: перший з шести, якого ще не використано, — щоб фішки в смузі

@@ -87,9 +87,13 @@ test("рядок «Зараз»: модуль, модуль без запису,
   assert.match(nowHTML("publish", v({ publish: "ghost-id" })), /Зараз: ghost-id/, "нема в списку — показуємо id, а не падаємо");
   assert.match(nowHTML("publish", v({ publish: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("comments", v({ comments: null })), /Зараз: нікого — коментарі лише локальні/);
-  assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого»");
+  assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого»");
+  assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого — макети лише на цьому компʼютері/, "роль vcs має власний текст «нікого»");
+  assert.match(nowHTML("vcs", v({ vcs: "legacy" })), /вбудована інтеграція ЛІГА/);
+  assert.match(nowHTML("vcs", { space: { ...SP, capabilities: { vcs: "git-sync" } }, list: [{ id: "git-sync", name: "Синхронізація з git", roles: ["vcs"] }] }),
+    /Зараз: Git</, "постачальник — назва вбудованого модуля зі словника, а не сирий id чи назва з маніфесту");
   assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
-  assert.equal(nowHTML("vcs", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка");
+  assert.equal(nowHTML("tracker", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка");
   setLang("en");
   assert.match(nowHTML("publish", v({ error: "x" })), /Now: unknown — space\.json cannot be read/);
 });
@@ -135,7 +139,8 @@ test("назви й підписи вбудованих — мовою інте�
   setLang("en");
   assert.equal(modName(LIST[1]), "Publish to a folder");
   assert.equal(roleTitle("publish"), "Publishing");
-  assert.equal(roleTitle("vcs"), "vcs");
+  assert.equal(roleTitle("vcs"), "Git sync");
+  assert.equal(roleTitle("tracker"), "tracker");
   assert.equal(roleTitle(""), "Other");
   assert.equal(modName({ id: "memo-publish", name: "Memo (тест)" }), "Memo (тест)");
   assert.equal(modName({ id: "bare" }), "bare", "без назви — id");
@@ -267,15 +272,16 @@ test("панель: без налаштувань — «Налаштувань �
 
 test("словник: кожен ключ, який віддає модель, є в обох мовах (модель ключів сама не кличе t())", () => {
   const keys = new Set();
-  for (const role of ["publish", "comments", "tokens"]) for (const k of Object.values(roleKeys(role))) keys.add(k);
-  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens"]) {
+  for (const role of ["publish", "comments", "vcs", "tokens"]) for (const k of Object.values(roleKeys(role))) keys.add(k);
+  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync"]) {
     const b = builtinText(id);
     keys.add(b.name); keys.add(b.desc);
     for (const k of Object.values(b.fields)) keys.add(k);
   }
   for (const code of ["bad-settings", "module-error", "check-timeout", "secrets-unreadable", "bad-manifest", "bad-folder",
     "no-folder", "not-writable", "no-token", "vercel-auth", "vercel-error", "vercel-busy", "bad-key", "no-schema",
-    "supabase-error", "network", "totally-unknown"]) keys.add(verdictText({ ok: false, error: code }).key);
+    "supabase-error", "network", "vcs-offline", "vcs-auth", "vcs-bad-target", "vcs-busy", "vcs-error",
+    "totally-unknown"]) keys.add(verdictText({ ok: false, error: code }).key);
   keys.add(verdictText({ ok: true }).key);
   for (const code of ["role-taken", "bad-settings", "unknown-module", "unknown-space", "space-json-unreadable", "spaces-off",
     "unwritable", "timeout", "totally-unknown"]) keys.add(refusalView({ code }).key);
@@ -580,4 +586,41 @@ test("поле з префіксом майстра: id і похідні id (-s
   assert.match(h, /id="wz-f-1-2-err"/);
   assert.doesNotMatch(h, /cn-f-/);
   assert.match(fieldHTML(e, f, 0, { errors: {}, form: { values: {}, erase: [] }, busy: false }), /id="cn-f-0"/);
+});
+
+/* ── картка git-sync (етап 4a, Task 7) ───────────────────────────────────────────────────────────── */
+
+const GIT = { id: "git-sync", name: "Синхронізація з git", roles: ["vcs"], enabled: true, implicit: false, status: "unchecked",
+  settings: [
+    { key: "repo", type: "text", label: "Репозиторій (типовий для задач простору)", required: false, value: "git@github.com:o/r.git" },
+    { key: "branch", type: "text", label: "Гілка", required: false, value: "main" },
+    { key: "path", type: "text", label: "Тека в репозиторії", required: false, value: "mockup/{task}" },
+    { key: "ssh_key", type: "text", label: "SSH-ключ (необовʼязково)", required: false },
+    { key: "host_ip", type: "text", label: "IP сервера (необовʼязково)", required: false },
+    { key: "autosync", type: "bool", label: "Відправляти після кожної відповіді агента", required: false, value: false },
+  ] };
+
+test("сторінка: секція «Синхронізація з git» стоїть після коментарів, з карткою git-sync і рядком «Зараз»", () => {
+  const sp = { ...SP, capabilities: { publish: "static-publish", comments: null, vcs: "git-sync", tokens: null } };
+  const h = connPageHTML(view({ space: sp, list: [...LIST, GIT] }));
+  assert.match(h, /<h2 class="cn-sec-h"[^>]*>Синхронізація з git<\/h2>/);
+  assert.match(h, /Відправляти ітерації в git-репозиторій і отримувати правки колег\./);
+  assert.ok(h.indexOf("Командні коментарі") < h.indexOf("Синхронізація з git") && h.indexOf("Синхронізація з git") < h.indexOf("Токени дизайн-системи"),
+    "порядок секцій: публікація, коментарі, git, токени");
+  assert.match(h, /<div class="cn-card" data-id="git-sync">/);
+  assert.match(h, /Будь-який git-репозиторій — GitHub, GitLab чи свій сервер\./);
+  assert.match(h, /Зараз: Git/);
+});
+
+test("панель git-sync: підписи шести полів — зі словника (обома мовами), а не сирий label маніфесту", () => {
+  const h = drawer(GIT);
+  for (const k of ["repo", "branch", "path", "ssh_key", "host_ip", "autosync"]) assert.ok(fieldTag(h, k), `поле ${k}`);
+  assert.match(h, /Репозиторій \(типовий для задач\)/);
+  assert.match(h, /Тека в репозиторії \(\{task\} — id задачі\)/);
+  assert.match(h, /IP сервера, коли DNS у VPN не відповідає \(необовʼязково\)/);
+  setLang("en");
+  const en = drawer(GIT);
+  assert.match(en, /Repository \(default for tasks\)/);
+  assert.match(en, /Send after every agent reply/);
+  assert.doesNotMatch(en, /[а-яіїєґ]/i, "англійська панель git-sync без кирилиці (мова автора модуля сюди не просочується)");
 });

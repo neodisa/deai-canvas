@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   ROLE_ORDER, builtinText, canErase, cardView, disableConsequences, formFields, formPatch, groupModules, initialForm,
-  isDirty, missingRequired, providerLine, refusalView, roleHolders, roleIcon, roleKeys, verdictText, whyOf,
+  isDirty, missingRequired, providerLine, refusalView, roleCardId, roleHolders, roleIcon, roleKeys, verdictText, whyOf,
   writePayload,
 } from "../app/connections-model.js";
 
@@ -11,22 +12,24 @@ const M = (id, o = {}) => ({ id, name: id, roles: ["publish"], enabled: false, i
   settings: [], ...o });
 
 test("ролі: порядок секцій, ключі й іконки; чужа роль і __proto__ не мають ключів", () => {
-  assert.deepEqual(ROLE_ORDER, ["publish", "comments", "tokens"]);
+  assert.deepEqual(ROLE_ORDER, ["publish", "comments", "vcs", "tokens"]);
   assert.equal(roleKeys("publish").title, "cnRolePublish");
   assert.equal(roleKeys("comments").none, "cnNoneComments");
-  assert.equal(roleKeys("vcs"), null);
+  assert.deepEqual(roleKeys("vcs"), { title: "cnRoleVcs", lead: "cnRoleVcsLead", none: "cnNoneVcs" });
+  assert.equal(roleKeys("tracker"), null, "роль, що ще зарезервована й без текстів");
   assert.equal(roleKeys("__proto__"), null);
   assert.equal(roleKeys("toString"), null);
   assert.equal(roleIcon("publish"), "up");
   assert.equal(roleIcon("comments"), "comment");
   assert.equal(roleIcon("tokens"), "sliders");
-  assert.equal(roleIcon("vcs"), "dots");
+  assert.equal(roleIcon("vcs"), "cloud");
+  assert.equal(roleIcon("tracker"), "dots");
   assert.equal(roleIcon(undefined), "dots");
   assert.equal(roleIcon("constructor"), "dots");
 });
 
-test("вбудовані тексти: чотири модулі, решта — null", () => {
-  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens"]) {
+test("вбудовані тексти: п'ять модулів (з git-sync, 4a), решта — null", () => {
+  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync"]) {
     const b = builtinText(id);
     assert.ok(b && b.name && b.desc && b.fields, id);
   }
@@ -37,13 +40,13 @@ test("вбудовані тексти: чотири модулі, решта —
 
 test("групування: відомі ролі за порядком, далі інші за абеткою, без ролі — останні; missing окремо", () => {
   const list = [
-    M("t", { roles: ["tokens"] }), M("z", { roles: ["vcs"] }), M("a", { roles: ["alpha"] }),
+    M("t", { roles: ["tokens"] }), M("z", { roles: ["tracker"] }), M("a", { roles: ["alpha"] }),
     M("p2"), M("p1"), M("n", { roles: [] }), M("c", { roles: ["comments", "publish"] }),
     { id: "gone", name: "gone", roles: [], enabled: true, status: "missing", settings: [] },
     null, { name: "без id" },
   ];
   const { sections, missing } = groupModules(list);
-  assert.deepEqual(sections.map((s) => s.role), ["publish", "comments", "tokens", "alpha", "vcs", ""]);
+  assert.deepEqual(sections.map((s) => s.role), ["publish", "comments", "tokens", "alpha", "tracker", ""]);
   assert.deepEqual(sections[0].modules.map((e) => e.id), ["p2", "p1"], "порядок усередині — як у списку сервера");
   assert.deepEqual(sections[1].modules.map((e) => e.id), ["c"], "кілька ролей — у секції першої");
   assert.deepEqual(missing.map((e) => e.id), ["gone"]);
@@ -57,7 +60,7 @@ test("рядок «Зараз»: модуль, legacy, нікого з насл�
   assert.deepEqual(providerLine("publish", { publish: "ghost" }, list), { kind: "module", id: "ghost", entry: null });
   assert.deepEqual(providerLine("comments", { comments: "legacy" }, list), { kind: "legacy" });
   assert.deepEqual(providerLine("tokens", { tokens: null }, list), { kind: "none", noneKey: "cnNoneTokens" });
-  assert.equal(providerLine("vcs", { publish: null }, list), null, "роль, якої capabilities не знає");
+  assert.equal(providerLine("tracker", { publish: null }, list), null, "роль, якої capabilities не знає");
   assert.equal(providerLine("error", { error: "" }, list), null, "роль «error» — не постачальник; непорожній capabilities.error — окремий стан нижче");
   assert.equal(providerLine("publish", null, list), null);
   assert.equal(providerLine("__proto__", {}, list), null);
@@ -289,7 +292,7 @@ test("списки: форма стартує з того, що людина Б�
 test("рядок «Зараз»: непорожній capabilities.error — окремий стан, раніше за читання ролі", () => {
   const list = [M("vercel-publish")];
   assert.deepEqual(providerLine("publish", { error: "space-json-unreadable" }, list), { kind: "error" });
-  assert.deepEqual(providerLine("vcs", { error: "x" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає");
+  assert.deepEqual(providerLine("tracker", { error: "x" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає");
   assert.deepEqual(providerLine("error", { error: "x" }, list), { kind: "error" });
   assert.deepEqual(providerLine("publish", { publish: "vercel-publish", error: "x" }, list), { kind: "error" },
     "помилка перемагає застарілого постачальника");
@@ -408,4 +411,58 @@ test("ключі constructor, toString та інші члени прототип
   assert.deepEqual({ ...bare.settings }, {}, "чужий init без ключів: рядки не вигадуються з прототипа");
   assert.deepEqual(missingRequired(formFields({ settings: [{ key: "constructor", type: "text", label: "c", required: true }] }),
     { values: {}, secrets: {}, erase: [] }), ["constructor"]);
+});
+
+/* ── роль vcs (етап 4a, Task 7) ───────────────────────────────────────────────────────────────────── */
+
+test("git-sync: назва, опис і шість полів — ключами словника, що збігаються з ключами маніфесту", () => {
+  const b = builtinText("git-sync");
+  assert.equal(b.name, "cnModGitName");
+  assert.equal(b.desc, "cnModGitDesc");
+  assert.deepEqual(b.fields, {
+    repo: "cnFieldGitRepo", branch: "cnFieldGitBranch", path: "cnFieldGitPath",
+    ssh_key: "cnFieldGitSshKey", host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync",
+  });
+  const manifest = JSON.parse(readFileSync(new URL("../app/modules/git-sync/module.json", import.meta.url), "utf8"));
+  assert.deepEqual(Object.keys(b.fields).sort(), manifest.settings.map((x) => x.key).sort(),
+    "підписи полів мають покривати рівно налаштування маніфесту: нове поле без підпису показало б сирий label");
+});
+
+test("вердикт перевірки vcs-*: кожен код має свій текст, деталь (повідомлення git) іде окремо", () => {
+  const map = { "vcs-offline": "cnErrVcsOffline", "vcs-auth": "cnErrVcsAuth", "vcs-bad-target": "cnErrVcsTarget",
+    "vcs-busy": "cnErrVcsBusy", "vcs-error": "cnErrVcsError" };
+  for (const [code, key] of Object.entries(map)) {
+    assert.deepEqual(verdictText({ ok: false, error: code }), { key, detail: "" }, code);
+    assert.deepEqual(verdictText({ ok: false, error: code, detail: "fatal: x" }), { key, detail: "fatal: x" }, code);
+    assert.equal(refusalView({ code }).key, key, `${code}: і як відмова HTTP (коди перевірки на запасі)`);
+  }
+});
+
+test("наслідки вимкнення git-sync: у ЛІГА — «знову вбудований синк», без інтеграцій — «нікого» з текстом cnNoneVcs", () => {
+  const gs = M("git-sync", { roles: ["vcs"], enabled: true });
+  assert.deepEqual(disableConsequences(gs, { integrations: true, capabilities: { vcs: "git-sync" } }),
+    [{ role: "vcs", kind: "legacy" }], "у ЛІГА при вимкненні роль повертає зашитий шлях, а не лишається «нікого»");
+  assert.deepEqual(disableConsequences(gs, { integrations: false, capabilities: { vcs: "git-sync" } }),
+    [{ role: "vcs", kind: "none", noneKey: "cnNoneVcs" }]);
+  assert.deepEqual(disableConsequences(gs, { integrations: true, capabilities: { vcs: "legacy" } }), [],
+    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
+});
+
+test("roleCardId: де сісти фокусу для ролі — постачальник, інакше перша картка секції; нема — null", () => {
+  const gs = M("git-sync", { roles: ["vcs"], enabled: true });
+  const other = M("other-vcs", { roles: ["vcs"] });
+  const pub = M("static-publish", { roles: ["publish"], enabled: true });
+  const list = [pub, other, gs];
+  assert.equal(roleCardId("vcs", { vcs: "git-sync" }, list), "git-sync", "постачальник — його картка, хоч не перша");
+  assert.equal(roleCardId("vcs", { vcs: null }, list), "other-vcs", "ніхто не тримає — перша картка секції ролі");
+  assert.equal(roleCardId("vcs", { vcs: "legacy" }, list), "other-vcs", "'legacy' — не картка");
+  assert.equal(roleCardId("vcs", { vcs: "ghost" }, list), "other-vcs", "постачальника нема в списку — як без нього");
+  assert.equal(roleCardId("vcs", undefined, list), "other-vcs", "без capabilities — теж перша картка секції");
+  assert.equal(roleCardId("vcs", { vcs: null }, [pub]), null, "модулів ролі нема — нема й картки");
+  assert.equal(roleCardId("vcs", { vcs: null }, null), null);
+  assert.equal(roleCardId("vcs", { vcs: null }, [{ id: "gone", roles: ["vcs"], enabled: true, status: "missing" }]), null,
+    "«відсутній» стоїть у своїй секції, не в секції ролі");
+  assert.equal(roleCardId("__proto__", { vcs: null }, list), null);
+  assert.equal(roleCardId("", { vcs: null }, list), null);
+  assert.equal(roleCardId("vcs", { vcs: "__proto__" }, list), "other-vcs");
 });

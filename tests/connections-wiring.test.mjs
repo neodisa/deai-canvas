@@ -393,9 +393,12 @@ test("wireHome: клік по [data-cn] (картка, помилка сторі
   assert.ok(iC < b.indexOf("const b = ev.target.closest('[data-th]');"), "делегація data-cn — раніше за data-th");
 });
 
-test("перший фокус після списку не краде фокус у палітри чи діалогу", () => {
+test("перший фокус після списку не краде фокус у палітри чи діалогу (Task 7: місце фокуса — focusConnLanding, роль — connFocusRole)", () => {
   assert.match(fnc("loadConn"),
-    /if \(connFocusPending\) \{\s*connFocusPending = false;\s*if \(!paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) \{\s*homeNode\(\)\?\.querySelector\('\.cn-card \[data-cn\], \[data-cn="retry"\]'\)\?\.focus\(\{ preventScroll: true \}\);\s*\}\s*\}/);
+    /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) focusConnLanding\(role\);\s*\}/);
+  /* Те, що раніше стояло в loadConn рядком, тепер — у focusConnLanding: без ролі й без картки ролі поведінка та сама (перша кнопка першої
+     картки або «Спробувати ще», без прокрутки). */
+  assert.match(fnc("focusConnLanding"), /home\?\.querySelector\('\.cn-card \[data-cn\], \[data-cn="retry"\]'\)/);
 });
 
 test("cnSubmit: при невдалій перевірці обовʼязкових введені секрети повертаються в поля ВЛАСТИВІСТЮ `.value` (не розміткою, не станом)", () => {

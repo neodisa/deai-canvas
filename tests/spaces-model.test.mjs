@@ -4,7 +4,7 @@ import test from "node:test";
 import { DICT } from "../app/i18n.js";
 import {
   FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskFormError, taskIdFrom, validTaskId,
+  spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -292,5 +292,34 @@ test("FORM_POST_TIMEOUT_MS: скінченна стеля 5–60 с — довш
 test("spaceErrKey: код, що збігається з іменем з прототипу, — загальна помилка, не «функція»", () => {
   for (const code of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
     assert.equal(spaceErrKey(code), "spaceErrGeneric", code);
+  }
+});
+
+/* ── створення задачі з ціллю синку (етап 4a, Task 7) ─────────────────────────────────────────────── */
+
+test("vcs-bad-target / vcs-needs-role: свої ключі; поле «Репозиторій» підсвічується лише адресою", () => {
+  assert.equal(taskErrKey("vcs-bad-target"), "taskErrVcsTarget");
+  assert.equal(taskErrKey("vcs-needs-role"), "taskErrVcsRole");
+  assert.equal(taskErrField("taskErrVcsTarget"), "repo", "помилка про адресу — на полі repo");
+  assert.equal(taskErrField("taskErrVcsRole"), null, "про відсутню роль — не про поле");
+  for (const k of ["taskErrVcsTarget", "taskErrVcsRole"]) {
+    assert.ok(DICT.uk[k] !== undefined && DICT.en[k] !== undefined, `«${k}» бракує в словнику`);
+  }
+});
+
+test("коди постачальника ролі vcs (409): space.json і недовірений модуль — готові тексти, поле не підсвічується", () => {
+  assert.equal(taskErrKey("space-json-unreadable"), "cnRefSpaceJson");
+  assert.equal(taskErrKey("module-untrusted"), "cnRefUntrusted");
+  for (const c of ["space-json-unreadable", "module-untrusted"]) assert.equal(taskErrField(taskErrKey(c)), null, c);
+});
+
+test("taskErrShowsReason: check-timeout / module-error / vcs-error — загальний текст із причиною сервера; решта — ні", () => {
+  for (const c of ["check-timeout", "module-error", "vcs-error"]) {
+    assert.equal(taskErrShowsReason(c), true, c);
+    assert.equal(taskErrKey(c), "taskErrGeneric", `${c}: власного ключа нема — причина йде в errFailed`);
+    assert.equal(taskErrField(taskErrKey(c)), null, `${c}: поле не підсвічується`);
+  }
+  for (const c of ["vcs-bad-target", "vcs-needs-role", "task-exists", "timeout", "constructor", "__proto__", "", undefined, null, 5]) {
+    assert.equal(taskErrShowsReason(c), false, String(c));
   }
 });

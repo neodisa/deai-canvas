@@ -32,10 +32,10 @@ import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
+  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
   commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
-  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
+  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -54,7 +54,7 @@ import { initPwa } from './pwa.js';
 import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
-  disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleHolders,
+  disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
 } from './connections-model.js';
 
@@ -190,6 +190,9 @@ let homePage = 'tasks';
 const connState = { spaceId: null, list: null, notes: [], failed: null, busy: new Map(), seq: 0 };
 /* Свіжий вхід на сторінку: після першого списку фокус — на першу кнопку першої картки. */
 let connFocusPending = false;
+/* Роль, до картки якої веде вхід («Налаштувати…» синку → `vcs`): після першого списку фокус іде на картку її модуля, а не першу.
+   Порожньо — як завжди. Знімається разом із `connFocusPending` (`loadConn`) і чиститься кожним входом без ролі (`enterConnections`). */
+let connFocusRole = '';
 /* Бічна панель «Підключення» (Task 7): `null` — закрита. Оголошено ТУТ, серед стану модуля, а не біля функцій панелі:
    `enterHome` (його кличе вже перший `render()`) читає її через `closeCnDrawer`, і `let` нижче за місцем виклику дав би
    TDZ-помилку на старті. */
@@ -718,6 +721,21 @@ const postForm = (path, body) => formApi(path, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body || {}),
 });
+
+/**
+ * `POST /api/task-new` зі стелею `TASK_VCS_POST_TIMEOUT_MS` (200 с) — для простору з синком: перший клон репозиторію триває
+ * хвилини (модуль чекає до 180 с), а `formApi` (20 с) обірвав би запит посеред клону. Окрема функція, як `trustPost`: тіло `formApi`
+ * дослівно стережуть тести. Обрив — `code: 'timeout'`, як у `formApi` (`taskErrKey` → `formTimeout`: сервер міг устигнути).
+ */
+function taskPost(body) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TASK_VCS_POST_TIMEOUT_MS);
+  return api('/api/task-new', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), signal: ctl.signal,
+  })
+    .catch((e) => { throw e?.name === 'AbortError' ? Object.assign(new Error('timeout'), { code: 'timeout' }) : e; })
+    .finally(() => clearTimeout(timer));
+}
 
 // ненав'язливе повідомлення (нема змін / надіслано тощо)
 function toast(msg) {
@@ -1354,6 +1372,7 @@ const wiz = createWizard({
   node: () => ensureHome(),
   api: (p) => api(p),
   post: (p, body) => postForm(p, body),
+  postTask: (p, body) => (hasVcs((spacesResp?.spaces ?? []).find((x) => x.id === body?.space)) ? taskPost(body) : postForm(p, body)),
   askYesNo,
   toast,
   spaces: () => spacesResp,
@@ -1466,19 +1485,40 @@ async function newTaskDialog() {
   const sp = spaceNow();
   if (!sp) return;
   const taken = formApi('/api/tasks?all=1').then((r) => (r.tasks || []).map((x) => x.id)).catch(() => []);
-  await askForm(() => taskFormHTML(), {
-    onMount: (form) => wireTaskForm(form, { taken }),
+  /* Необовʼязкове поле «Репозиторій» (4a): лише у звичайному просторі з роллю `vcs`. У ЛІГА ціль синку живе в `tasks.json`
+     (профіль задачі), тож форма там побайтно та, що була. Підказка — типовий `repo` з налаштувань увімкненого модуля ролі
+     (`GET /api/modules`); вона приїздить ПІСЛЯ відкриття (форма не чекає мережі), збій запиту — без підказки. */
+  const withRepo = hasVcs(sp) && !isLegacyVcs(sp);
+  const repoHint = withRepo
+    ? api(`/api/modules?space=${encodeURIComponent(sp.id)}`).then((r) => {
+      const m = (r?.modules || []).find((e) => e.enabled === true && (e.roles || []).includes('vcs'));
+      return m?.settings?.find((x) => x.key === 'repo')?.value || '';
+    }).catch(() => '')
+    : Promise.resolve('');
+  await askForm(() => taskFormHTML(withRepo ? { repo: {} } : {}), {
+    onMount: (form) => {
+      wireTaskForm(form, { taken });
+      repoHint.then((hint) => {
+        const field = form.querySelector('#tf-repo');
+        if (hint && field && form.isConnected) field.setAttribute('placeholder', hint);
+      });
+    },
     focusBack: () => homeNode()?.querySelector('[data-th="newtask"]'),
     onSubmit: async (vals, ctl) => {
       const key = taskFormError(vals, await taken);
       if (key) { ctl.focus(taskErrField(key)); return t(key); }
+      /* `vcs` — лише зі значенням: порожнє поле (чи самі пробіли) ключа в тілі не лишає, і задача бере типовий `repo` модуля. */
+      const repo = withRepo ? String(vals.repo ?? '').trim() : '';
+      const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}) };
       let made;
-      try { made = await postForm('/api/task-new', { id: vals.id, title: vals.title.trim(), space: sp.id }); }
+      /* Простір із синком — довга стеля (`taskPost`): перший клон триває хвилини; решта — як було (`postForm`, 20 с). */
+      try { made = await (hasVcs(sp) ? taskPost(body) : postForm('/api/task-new', body)); }
       catch (e) {
         const key2 = taskErrKey(e.code);
         const field = taskErrField(key2);
         if (field) ctl.focus(field);
-        return t(key2);
+        /* `check-timeout`/`module-error`/`vcs-error`: власного тексту нема — причина сервера в загальному «Не вдалося: …». */
+        return taskErrShowsReason(e.code) ? t('errFailed', requestErrText(e)) : t(key2);
       }
       /* Нова задача — поточна: усе пер-задачне попереднього чуже. Простір відповіді
          порівнюємо з відомим, як у `switchTask`. `homeData` — застарілий (задачі в
@@ -1986,8 +2026,8 @@ const BAR_ACTIONS = {
   /* Синк із git у ЛІГА налаштовується правкою `tasks.json` (`gitlab_cfg()` у `serve.py`), а не на «Підключенні»: відкриття
      екрана підбивало б людину ввімкнути явний `git-sync`, що перекрив би зашитий шлях ЛІГА без `gitlab_ssh_key` (спека 4a,
      «Простір ЛІГА»). Кажемо РЕАЛЬНЕ місце правки, а не вигадуємо кнопку, якої нема. Деінде — звичайний простір: репозиторій
-     задається на «Підключенні», на картці модуля ролі `vcs`. */
-  glsetup: () => { if (isLegacyVcs(spaceNow())) tell(t('glSetupMsg')); else enterConnections(); },
+     задається на «Підключенні», на картці модуля ролі `vcs` (`enterConnections('vcs')` — фокус і прокрутка до неї). */
+  glsetup: () => { if (isLegacyVcs(spaceNow())) tell(t('glSetupMsg')); else enterConnections('vcs'); },
 
   /* `web` віддає свій модуль: відкриваємо лише `http(s)` (`vcsWebUrl`) — `javascript:`/`file:` не історія, а смуга такого пункту не малює. */
   glhistory: () => {
@@ -2682,10 +2722,30 @@ const connSpace = () => (connState.spaceId == null
   : (Array.isArray(spacesResp?.spaces) ? spacesResp.spaces : []).find((x) => x.id === connState.spaceId) ?? null);
 const connView = () => ({ space: connSpace(), list: connState.list, notes: connState.notes, failed: connState.failed, busy: connState.busy });
 
-/** Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). */
-function enterConnections() {
+/**
+ * Вхід на «Підключення» поточного простору. Без простору входів нема (шар вимкнено, привітання). `role` — вести до картки модуля
+ * цієї ролі («Налаштувати…» синку → `vcs`): після першого списку на неї сяде фокус (`focusConnLanding`), а сторінка прокрутиться;
+ * без ролі — як завжди (перша кнопка першої картки). Прапорець ставимо й тоді, коли сторінка вже відкрита: `enterHome` ставить
+ * його лише на свіжий вхід.
+ */
+function enterConnections(role = '') {
   if (!currentSpace(spacesResp)) return;
+  connFocusRole = role;
+  if (role) connFocusPending = true;
   enterHome({ page: 'conn' });
+}
+
+/**
+ * Куди сідає перший фокус сторінки «Підключення»: кнопка картки модуля ролі `role` (постачальник, інакше перша картка секції —
+ * `roleCardId`; фокус із прокруткою до неї), а без ролі чи без такої картки — перша кнопка першої картки або «Спробувати ще»
+ * (без прокрутки, як було до 4a).
+ */
+function focusConnLanding(role) {
+  const home = homeNode();
+  const id = role ? roleCardId(role, connSpace()?.capabilities, connState.list) : null;
+  const card = id ? home?.querySelector(`.cn-card[data-id="${CSS.escape(id)}"]`) : null;
+  const inCard = card?.querySelector('[data-cn]:not([disabled])') ?? null;
+  (inCard ?? home?.querySelector('.cn-card [data-cn], [data-cn="retry"]'))?.focus({ preventScroll: !inCard });
 }
 
 /**
@@ -2722,10 +2782,10 @@ async function loadConn({ spaces = true } = {}) {
   paintHome();
   if (connFocusPending) {
     connFocusPending = false;
+    const role = connFocusRole;
+    connFocusRole = '';
     /* Не з-під палітри чи діалогу: їм фокус належить. */
-    if (!paletteOverlay && !document.querySelector('.cv-ask-scrim')) {
-      homeNode()?.querySelector('.cn-card [data-cn], [data-cn="retry"]')?.focus({ preventScroll: true });
-    }
+    if (!paletteOverlay && !document.querySelector('.cv-ask-scrim')) focusConnLanding(role);
   }
 }
 

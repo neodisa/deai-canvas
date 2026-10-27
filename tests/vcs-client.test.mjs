@@ -11,12 +11,15 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { barModel } from "../app/bar-model.js";
+import { roleCardId, verdictText } from "../app/connections-model.js";
 import { DICT, setLang, t } from "../app/i18n.js";
 import { filterActions, paletteActions } from "../app/shell-palette.js";
 import { barHTML } from "../app/shell-bar.js";
+import { taskFormHTML, wireTaskForm } from "../app/space-dialogs.js";
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, hasVcs, isLegacyVcs,
-  requestErrText, spaceChanged, vcsBrand, vcsErrKey, vcsFailKey, vcsLabel, vcsWebUrl,
+  requestErrText, spaceChanged, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsErrKey, vcsFailKey,
+  vcsLabel, vcsWebUrl,
 } from "../app/spaces-model.js";
 
 test.beforeEach(() => setLang("uk"));
@@ -470,7 +473,9 @@ test("afterModulesChange: render() → refreshGitlab() → paintBar() (spaceNow 
 });
 
 test("glsetup: у ЛІГА — повідомлення про tasks.json, деінде — «Підключення»", () => {
-  assert.match(src, /\n  glsetup: \(\) => \{ if \(isLegacyVcs\(spaceNow\(\)\)\) tell\(t\('glSetupMsg'\)\); else enterConnections\(\); \},/);
+  assert.match(src, /\n  glsetup: \(\) => \{ if \(isLegacyVcs\(spaceNow\(\)\)\) tell\(t\('glSetupMsg'\)\); else enterConnections\('vcs'\); \},/);
+  /* Task 7 (поправка 4): «Налаштувати…» веде не просто на «Підключення», а на картку модуля ролі vcs — поведінку стережуть
+     тести «Task 7» нижче. */
 });
 
 test("стан смуги й палітри несе підпис, «нема web» і «зайнято» поіменно", () => {
@@ -1096,4 +1101,513 @@ test("друга «зайнято» поспіль замінює відклад
   await refreshGitlab();
   assert.ok(env.log.clearedIds.includes(first), "попередній таймер скасовано перед новим");
   assert.notEqual(env.glBusyTimer, first);
+});
+
+/* ══ Task 7: «Підключення», майстер і форма нової задачі з роллю vcs ═══════════════════════════════════════════ */
+
+const wsrc = readFileSync(new URL("../app/wizard.js", import.meta.url), "utf8");
+const asrc = readFileSync(new URL("../app/ask.js", import.meta.url), "utf8");
+
+/** Текст функції-декларації `name` будь-де в `text` (вкладеної теж): від `function` до парної `}`. */
+function nested(text, name) {
+  const m = new RegExp(`(?:async )?function ${name}\\(`).exec(text);
+  assert.ok(m, `нема функції ${name}`);
+  const open = text.indexOf("{", text.indexOf(")", m.index));
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === "{") depth += 1;
+    else if (text[i] === "}") { depth -= 1; if (depth === 0) return text.slice(m.index, i + 1); }
+  }
+  throw new Error("немає закриття дужки");
+}
+/** Вираз однорядкового поля обʼєкта-залежностей `  name: <вираз>,` у `src`. */
+function depExpr(name) {
+  const m = new RegExp(`\\n  ${name}: (.*),\\n`).exec(src);
+  assert.ok(m, `у createWizard({...}) нема залежності ${name}`);
+  return m[1];
+}
+const evalIn = (env, code) => new Function("env", `with (env) { return (${code}); }`)(env);
+
+/* ── ключі словника ──────────────────────────────────────────────────────── */
+
+test("Task 7: нові ключі «Підключень» і форми — обома мовами, тексти дослівно (з поправкою на місце вживання «нікого»)", () => {
+  const UK = {
+    cnRoleVcs: "Синхронізація з git",
+    cnRoleVcsLead: "Відправляти ітерації в git-репозиторій і отримувати правки колег.",
+    cnNoneVcs: "макети лише на цьому компʼютері",
+    cnModGitName: "Git",
+    cnModGitDesc: "Будь-який git-репозиторій — GitHub, GitLab чи свій сервер. Доступ — через git цього компʼютера (SSH-ключ чи збережений вхід), Deai паролів не зберігає.",
+    cnFieldGitRepo: "Репозиторій (типовий для задач)",
+    cnFieldGitBranch: "Гілка",
+    cnFieldGitPath: "Тека в репозиторії ({task} — id задачі)",
+    cnFieldGitSshKey: "SSH-ключ (необовʼязково)",
+    cnFieldGitHostIp: "IP сервера, коли DNS у VPN не відповідає (необовʼязково)",
+    cnFieldGitAutosync: "Відправляти після кожної відповіді агента",
+    cnErrVcsOffline: "Репозиторій не відповідає — немає мережі чи VPN.",
+    cnErrVcsAuth: "Немає доступу — перевір SSH-ключ чи вхід у git.",
+    cnErrVcsTarget: "Адреса, гілка чи тека не підходять.",
+    cnErrVcsBusy: "Синхронізація вже йде — перевір за хвилину.",
+    cnErrVcsError: "Git відмовив.",
+    newTaskRepo: "Репозиторій (необовʼязково)",
+    newTaskRepoPh: "типовий з «Підключення»",
+    taskErrVcsTarget: "Адреса репозиторію не підходить: ssh://, https://, git@сервер:шлях або тека на диску.",
+    taskErrVcsRole: "У просторі немає синхронізації з git — підключи її на «Підключенні».",
+  };
+  const EN = {
+    cnRoleVcs: "Git sync",
+    cnRoleVcsLead: "Send iterations to a git repository and pull colleagues’ changes.",
+    cnNoneVcs: "layouts stay on this computer only",
+    cnModGitName: "Git",
+    cnModGitDesc: "Any git repository — GitHub, GitLab or your own server. Access goes through this computer’s git (SSH key or saved sign-in); Deai stores no passwords.",
+    cnFieldGitRepo: "Repository (default for tasks)",
+    cnFieldGitBranch: "Branch",
+    cnFieldGitPath: "Folder in the repository ({task} is the task id)",
+    cnFieldGitSshKey: "SSH key (optional)",
+    cnFieldGitHostIp: "Server IP when DNS over VPN fails (optional)",
+    cnFieldGitAutosync: "Send after every agent reply",
+    cnErrVcsOffline: "The repository is not answering — no network or VPN.",
+    cnErrVcsAuth: "No access — check the SSH key or the git sign-in.",
+    cnErrVcsTarget: "The address, branch or folder is not valid.",
+    cnErrVcsBusy: "A sync is running — check again in a minute.",
+    cnErrVcsError: "Git refused.",
+    newTaskRepo: "Repository (optional)",
+    newTaskRepoPh: "the default from Connections",
+    taskErrVcsTarget: "The repository address is not valid: ssh://, https://, git@host:path or a local folder.",
+    taskErrVcsRole: "This space has no git sync — connect it on Connections.",
+  };
+  for (const [lang, want] of [["uk", UK], ["en", EN]]) {
+    setLang(lang);
+    for (const [k, v] of Object.entries(want)) assert.equal(DICT[lang][k], v, `${lang}.${k}`);
+  }
+});
+
+test("Task 7: «Підключення» не лишає мертвих vcs-ключів: кожен cnErrVcs* і cnField/cnMod git — досяжний через модель", () => {
+  setLang("uk");
+  const reach = new Set();
+  for (const code of ["vcs-offline", "vcs-auth", "vcs-bad-target", "vcs-busy", "vcs-error"]) reach.add(verdictText({ ok: false, error: code }).key);
+  for (const k of Object.keys(DICT.uk).filter((x) => /^cnErrVcs/.test(x))) assert.ok(reach.has(k), `${k} ніхто не показує`);
+});
+
+/* ── поле «Репозиторій» і запит створення: виконання newTaskDialog із заглушками ─────────────────────────── */
+
+const TASK_HELPERS = ["newTaskDialog"];
+const GIT_ENTRY = { id: "git-sync", enabled: true, roles: ["vcs"], settings: [{ key: "repo", value: "git@gh.example:o/r.git" }, { key: "branch", value: "main" }] };
+const PUB_ENTRY = { id: "static-publish", enabled: true, roles: ["publish"], settings: [{ key: "repo", value: "ЧУЖЕ" }] };
+const NOVCS = { id: "plain", integrations: false, capabilities: { vcs: null } };
+
+/** Середовище `newTaskDialog`: усе, чого він торкається, — заглушки з журналом; `askForm` лише запамʼятовує параметри діалогу. */
+function mkTaskEnv(over = {}) {
+  const log = { api: [], form: [], post: [], taskPost: [], focus: [], toast: [], leave: 0, refresh: [], reset: [], wire: [] };
+  const env = {
+    log,
+    space: PLAIN,
+    spaceNow: () => env.space,
+    modules: { modules: [PUB_ENTRY, GIT_ENTRY] },
+    formApi: async (p) => { log.form.push(p); return { tasks: [{ id: "taken-1" }] }; },
+    api: async (p) => { log.api.push(p); if (env.apiFails) throw new Error("net"); return env.modules; },
+    askForm: async (build, opts) => { env.html = build(); env.opts = opts; },
+    taskFormHTML, wireTaskForm: (form, o) => log.wire.push([form, o]),
+    homeNode: () => null,
+    taskFormError, taskErrField, taskErrKey, taskErrShowsReason, hasVcs, isLegacyVcs, requestErrText, spaceChanged, t,
+    postForm: async (p, b) => { log.post.push([p, b]); return env.reply; },
+    taskPost: async (b) => { log.taskPost.push(b); return env.reply; },
+    reply: { id: "t-1", space: "plain" },
+    resetSpaceState: async () => { log.reset.push("space"); },
+    resetPerTaskState: async () => { log.reset.push("task"); },
+    homeData: { old: 1 }, currentTaskId: "A", taskSwitchGen: 0,
+    refreshGitlab: async (id) => { log.refresh.push(id); },
+    leaveHome: async () => { log.leave += 1; },
+    toast: (m) => log.toast.push(m),
+    ...over,
+  };
+  return env;
+}
+const taskDialog = async (over) => {
+  const env = mkTaskEnv(over);
+  await load(env, { funcs: TASK_HELPERS }).newTaskDialog();
+  const ctl = { focus: (n) => env.log.focus.push(n) };
+  return { env, ctl, submit: (vals) => env.opts.onSubmit({ title: "Лендинг", id: "lend", ...vals }, ctl) };
+};
+const tick = () => new Promise((r) => setImmediate(r));
+
+test("форма: у звичайному просторі з роллю vcs є поле «Репозиторій»; у ЛІГА й без ролі — розмітка дослівно як була", async () => {
+  for (const [space, withRepo] of [[PLAIN, true], [LIGA, false], [NOVCS, false]]) {
+    const { env } = await taskDialog({ space });
+    assert.equal(/id="tf-repo"/.test(env.html), withRepo, JSON.stringify(space));
+    if (!withRepo) assert.equal(env.html, taskFormHTML(), "розмітка без поля — рівно та, що була до 4a");
+  }
+});
+
+test("підказка: типовий repo з GET /api/modules?space=… (лише вмикнений модуль з роллю vcs) стає placeholder після монтування", async () => {
+  const { env } = await taskDialog();
+  const attrs = {};
+  const input = { setAttribute: (k, v) => { attrs[k] = v; } };
+  const form = { isConnected: true, querySelector: (s) => (s === "#tf-repo" ? input : null) };
+  env.opts.onMount(form);
+  await tick();
+  assert.deepEqual(env.log.api, ["/api/modules?space=plain"], "запит із простором форми");
+  assert.equal(attrs.placeholder, "git@gh.example:o/r.git");
+  assert.equal(env.log.wire.length, 1, "проводка id/назви лишилась");
+  assert.equal(env.log.wire[0][0], form);
+});
+
+test("підказка: вимкнений модуль, модуль без ролі vcs, збій запиту й порожній repo — placeholder не чіпаємо, помилки нема", async () => {
+  for (const modules of [
+    { modules: [{ ...GIT_ENTRY, enabled: false }] },
+    { modules: [PUB_ENTRY] },
+    { modules: [{ ...GIT_ENTRY, settings: [{ key: "repo" }] }] },
+    { modules: [{ ...GIT_ENTRY, settings: [{ key: "repo", value: "" }] }] },
+    {}, null,
+  ]) {
+    const { env } = await taskDialog({ modules });
+    const attrs = {};
+    env.opts.onMount({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
+    await tick();
+    assert.deepEqual(attrs, {}, JSON.stringify(modules));
+  }
+  const { env } = await taskDialog({ apiFails: true });
+  const attrs = {};
+  env.opts.onMount({ isConnected: true, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
+  await tick();
+  assert.deepEqual(attrs, {}, "збій запиту підказки не ламає форму");
+});
+
+test("підказка не питається там, де поля нема (ЛІГА, без ролі): жодного зайвого запиту", async () => {
+  for (const space of [LIGA, NOVCS]) {
+    const { env } = await taskDialog({ space });
+    env.opts.onMount({ isConnected: true, querySelector: () => null });
+    await tick();
+    assert.deepEqual(env.log.api, [], JSON.stringify(space));
+  }
+});
+
+test("підказка, що приїхала, коли форму вже закрито (відчеплена), нічого не пише", async () => {
+  const { env } = await taskDialog();
+  const attrs = {};
+  env.opts.onMount({ isConnected: false, querySelector: () => ({ setAttribute: (k, v) => { attrs[k] = v; } }) });
+  await tick();
+  assert.deepEqual(attrs, {});
+});
+
+test("запит: зі значенням поля — vcs: {repo} (обрізане) через taskPost; з порожнім чи пробілами — ключа vcs у тілі НЕМАЄ", async () => {
+  let r = await taskDialog();
+  await r.submit({ repo: "  git@h:o/r.git \n" });
+  assert.deepEqual(r.env.log.taskPost, [{ id: "lend", title: "Лендинг", space: "plain", vcs: { repo: "git@h:o/r.git" } }]);
+  assert.deepEqual(r.env.log.post, [], "із синком — довга стеля, а не postForm");
+  for (const repo of ["", "   ", "\n\t", undefined]) {
+    r = await taskDialog();
+    await r.submit({ repo });
+    assert.equal(r.env.log.taskPost.length, 1);
+    assert.equal("vcs" in r.env.log.taskPost[0], false, `repo=${JSON.stringify(repo)}: порожнє поле не стає vcs: {repo: ''}`);
+    assert.deepEqual(r.env.log.taskPost[0], { id: "lend", title: "Лендинг", space: "plain" });
+  }
+});
+
+test("запит у ЛІГА: vcs не йде НІКОЛИ (навіть якщо значення repo якось прийшло), але стеля довга — перший клон триває хвилини", async () => {
+  const r = await taskDialog({ space: LIGA });
+  await r.submit({ repo: "git@h:o/r.git" });
+  assert.deepEqual(r.env.log.taskPost, [{ id: "lend", title: "Лендинг", space: "liga" }]);
+  assert.deepEqual(r.env.log.post, []);
+});
+
+test("запит у просторі без синку: звичайний postForm зі стелею 20 с, не taskPost і без vcs", async () => {
+  const r = await taskDialog({ space: NOVCS });
+  await r.submit({ repo: "git@h:o/r.git" });
+  assert.deepEqual(r.env.log.post, [["/api/task-new", { id: "lend", title: "Лендинг", space: "plain" }]]);
+  assert.deepEqual(r.env.log.taskPost, []);
+});
+
+test("перевірка id/назви йде ДО запиту; успіх — задача поточна, refreshGitlab(made.id), вихід з екрана", async () => {
+  let r = await taskDialog();
+  const msg = await r.submit({ title: "   " });
+  assert.equal(msg, t("titleRequired"));
+  assert.deepEqual(r.env.log.focus, ["title"]);
+  assert.deepEqual(r.env.log.taskPost, [], "запиту не було");
+  r = await taskDialog();
+  const ok = await r.submit({ repo: "git@h:o/r.git" });
+  assert.equal(ok, undefined);
+  assert.deepEqual(r.env.log.reset, ["task"], "простір той самий — скидається лише пер-задачне");
+  assert.deepEqual(r.env.log.refresh, ["t-1"]);
+  assert.equal(r.env.log.leave, 1);
+  assert.equal(r.env.currentTaskId, "t-1");
+  assert.equal(r.env.homeData, null);
+});
+
+test("відмови створення: адреса — на поле repo; нема ролі — текст без поля; 409 space.json — готовий текст", async () => {
+  const fail = async (code, message = "server text", status) => {
+    const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error(message), { code, status }); } });
+    const text = await r.submit({ repo: "ext::sh -c x" });
+    return { text, focus: r.env.log.focus, refresh: r.env.log.refresh, leave: r.env.log.leave };
+  };
+  let f = await fail("vcs-bad-target", "repo address not allowed");
+  assert.equal(f.text, t("taskErrVcsTarget"));
+  assert.deepEqual(f.focus, ["repo"], "aria-invalid і фокус — на полі «Репозиторій»");
+  assert.equal(f.leave, 0, "після відмови з екрана не виходимо");
+  f = await fail("vcs-needs-role");
+  assert.equal(f.text, t("taskErrVcsRole"));
+  assert.deepEqual(f.focus, []);
+  f = await fail("space-json-unreadable", "unreadable", 409);
+  assert.equal(f.text, t("cnRefSpaceJson"));
+  assert.deepEqual(f.focus, []);
+  f = await fail("task-exists");
+  assert.equal(f.text, t("idTaken"));
+  assert.deepEqual(f.focus, ["id"], "наявні відмови не змінились");
+  f = await fail("timeout", "timeout");
+  assert.equal(f.text, t("formTimeout"), "обрив стелі — той самий текст «міг устигнути»");
+});
+
+test("check-timeout / module-error (504/502 завислого чи зламаного модуля): загальний текст відмови з причиною сервера, поле не підсвічується", async () => {
+  for (const [code, message] of [["check-timeout", "module check timed out"], ["module-error", "git-sync: boom"], ["vcs-error", "git-sync module is not loaded"]]) {
+    const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error(message), { code }); } });
+    const text = await r.submit({ repo: "git@h:o/r.git" });
+    assert.equal(text, t("errFailed", message), code);
+    assert.ok(text.includes(message), "причину сервера видно людині");
+    assert.deepEqual(r.env.log.focus, [], `${code}: чужого поля не підсвічуємо`);
+    assert.equal(r.env.log.leave, 0);
+  }
+  setLang("en");
+  const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("module check timed out"), { code: "check-timeout" }); } });
+  assert.equal(await r.submit({}), "Failed: module check timed out");
+});
+
+test("відмова без коду й невідомий код — загальний текст taskErrGeneric (як було), без причини сервера", async () => {
+  for (const code of [undefined, "something-new"]) {
+    const r = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("<html>500"), { code }); } });
+    assert.equal(await r.submit({}), t("taskErrGeneric"), String(code));
+  }
+});
+
+/* ── taskPost: стеля 200 с, обрив → timeout ──────────────────────────────── */
+
+function taskPostEnv(over = {}) {
+  const log = { api: [], timers: [], cleared: [] };
+  const env = {
+    log, TASK_VCS_POST_TIMEOUT_MS,
+    api: (path, opts) => { log.api.push([path, opts]); return env.apiImpl(path, opts); },
+    apiImpl: async () => ({ ok: true, id: "t-1" }),
+    setTimeout: (fn, ms) => { log.timers.push({ fn, ms }); return log.timers.length; },
+    clearTimeout: (id) => log.cleared.push(id),
+    ...over,
+  };
+  return env;
+}
+
+test("taskPost: POST /api/task-new з JSON-тілом і сигналом; стеля — TASK_VCS_POST_TIMEOUT_MS (200 с), таймер знімається", async () => {
+  const env = taskPostEnv();
+  const { taskPost } = load(env, { funcs: ["taskPost"] });
+  const res = await taskPost({ id: "x", space: "s" });
+  assert.deepEqual(res, { ok: true, id: "t-1" });
+  assert.equal(env.log.api.length, 1);
+  const [path, opts] = env.log.api[0];
+  assert.equal(path, "/api/task-new");
+  assert.equal(opts.method, "POST");
+  assert.deepEqual(opts.headers, { "Content-Type": "application/json" });
+  assert.equal(opts.body, JSON.stringify({ id: "x", space: "s" }));
+  assert.ok(opts.signal instanceof AbortSignal, "сигнал доходить до fetch");
+  assert.equal(env.log.timers.length, 1);
+  assert.equal(env.log.timers[0].ms, 200000);
+  assert.deepEqual(env.log.cleared, [1], "завершений запит не обрізається таймером");
+});
+
+test("taskPost: коли стеля минула — запит обривається, відмова має code: 'timeout' (формa каже formTimeout); інші відмови — як були", async () => {
+  const env = taskPostEnv({
+    apiImpl: (path, opts) => new Promise((_, rej) => {
+      opts.signal.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    }),
+  });
+  const { taskPost } = load(env, { funcs: ["taskPost"] });
+  const p = taskPost({ id: "x" });
+  env.log.timers[0].fn();
+  await assert.rejects(p, (e) => e.code === "timeout" && e.message === "timeout");
+  assert.deepEqual(env.log.cleared, [1]);
+  assert.equal(taskErrKey("timeout"), "formTimeout");
+
+  const env2 = taskPostEnv({ apiImpl: async () => { throw Object.assign(new Error("exists"), { code: "task-exists", status: 400 }); } });
+  const f2 = load(env2, { funcs: ["taskPost"] });
+  await assert.rejects(f2.taskPost({ id: "x" }), (e) => e.code === "task-exists" && e.status === 400, "чужа відмова не стає timeout");
+  assert.deepEqual(env2.log.cleared, [1], "і на відмові таймер знято");
+});
+
+test("taskPost: порожнє тіло — {} (як postForm); стеля довша за стелю форми", async () => {
+  const env = taskPostEnv();
+  await load(env, { funcs: ["taskPost"] }).taskPost(undefined);
+  assert.equal(env.log.api[0][1].body, "{}");
+  assert.ok(env.log.timers[0].ms > FORM_POST_TIMEOUT_MS);
+});
+
+test("імпорти app.js: стеля, ключі й помічники Task 7 імпортовано", () => {
+  const sm = /import \{([^}]*)\} from '\.\/spaces-model\.js'/.exec(src)?.[1] ?? "";
+  for (const n of ["TASK_VCS_POST_TIMEOUT_MS", "taskErrShowsReason"]) assert.match(sm, new RegExp(`\\b${n}\\b`), `${n} не імпортовано з spaces-model.js`);
+  const cm = /import \{([^}]*)\} from '\.\/connections-model\.js'/.exec(src)?.[1] ?? "";
+  assert.match(cm, /\broleCardId\b/, "roleCardId не імпортовано з connections-model.js");
+});
+
+/* ── майстер: postTask ───────────────────────────────────────────────────── */
+
+test("майстер: залежність postTask — довга стеля лише для простору з синком; без нього — postForm (20 с)", () => {
+  const expr = depExpr("postTask");
+  const calls = [];
+  const env = {
+    spacesResp: { spaces: [PLAIN, LIGA, NOVCS] }, hasVcs,
+    taskPost: (b) => { calls.push(["taskPost", b]); return "TP"; },
+    postForm: (p, b) => { calls.push(["postForm", p, b]); return "PF"; },
+  };
+  const f = evalIn(env, expr);
+  assert.equal(f("/api/task-new", { id: "a", space: "plain" }), "TP", "простір із роллю vcs — taskPost");
+  assert.equal(f("/api/task-new", { id: "a", space: "liga" }), "TP", "ЛІГА — теж: клон її задачі довгий");
+  assert.equal(f("/api/task-new", { id: "a", space: "ghost" }), "TP", "невідомий простір — як hasVcs(undefined): синк не відбираємо");
+  assert.deepEqual(calls[0], ["taskPost", { id: "a", space: "plain" }]);
+  calls.length = 0;
+  env.spacesResp = { spaces: [{ id: "bare", integrations: false, capabilities: { vcs: null } }] };
+  assert.equal(f("/api/task-new", { id: "a", space: "bare" }), "PF", "простір без синку — звичайна стеля, завислий сервер не тримає майстер 200 с");
+  assert.deepEqual(calls, [["postForm", "/api/task-new", { id: "a", space: "bare" }]]);
+  env.spacesResp = null;
+  assert.equal(f("/api/task-new", { id: "a", space: "bare" }), "TP", "реєстру не знаємо — hasVcs(undefined)");
+});
+
+test("майстер: submit4 створює задачу через deps.postTask ?? deps.post (виконання з підставними залежностями)", async () => {
+  const make = (deps) => {
+    const calls = [];
+    const wz = { step: 4, spaceId: "sp1", checking: false, taskIds: [], s4: { title: " Лендинг ", id: "lend", source: "empty", from: "" } };
+    const env = {
+      wz, calls, t, taskFormError, taskErrField, taskErrKey,
+      capture: () => {}, clearError: () => {}, setBusy: () => {}, showError: (f, k, fld) => calls.push(["showError", k, fld]),
+      spaceGone: () => calls.push(["spaceGone"]),
+      deps: {
+        node: () => ({ querySelector: () => ({}) }),
+        toast: (m) => calls.push(["toast", m]), openTask: async (m) => calls.push(["openTask", m]), exit: () => {},
+        ...deps(calls),
+      },
+    };
+    return env;
+  };
+  const run = async (env) => new Function("env", `with (env) { ${nested(wsrc, "submit4")}\nreturn submit4(); }`)(env);
+
+  let env = make((calls) => ({
+    postTask: async (p, b) => { calls.push(["postTask", p, b]); return { id: "lend" }; },
+    post: async () => { throw new Error("з postTask — звичайний post не кличемо"); },
+  }));
+  await run(env);
+  assert.deepEqual(env.calls.filter((c) => c[0] === "postTask"), [["postTask", "/api/task-new", { id: "lend", title: "Лендинг", space: "sp1" }]]);
+  assert.deepEqual(env.calls.at(-1), ["openTask", { id: "lend" }]);
+
+  env = make((calls) => ({ post: async (p, b) => { calls.push(["post", p, b]); return { id: "lend" }; } }));
+  await run(env);
+  assert.deepEqual(env.calls.filter((c) => c[0] === "post"), [["post", "/api/task-new", { id: "lend", title: "Лендинг", space: "sp1" }]],
+    "залежності postTask нема — як було до 4a");
+});
+
+test("майстер: статичний пін — (deps.postTask ?? deps.post)(\"/api/task-new\", …), перелік залежностей у шапці згадує postTask", () => {
+  assert.match(nested(wsrc, "submit4"), /made = await \(deps\.postTask \?\? deps\.post\)\("\/api\/task-new", \{ id: vals\.id, title: vals\.title\.trim\(\), space: mine\.spaceId, \.\.\.\(folder \? \{ from \} : \{\}\) \}\);/);
+  assert.match(wsrc, /postTask\(path, body\)[^\n]*(довш|стел)/, "шапка файла описує postTask");
+  assert.doesNotMatch(wsrc.replace(/\/\*[\s\S]*?\*\//g, ""), /deps\.post\("\/api\/task-new"/, "голого deps.post для task-new не лишилось");
+});
+
+test("форма не ламається на полі, якого в ній нема: ctl.focus('repo') у майстрі й showError — тихий вихід", () => {
+  /* `ask.js`: `ctl.focus(name)` → `namedItem(name)` → `if (!f) return;`. Виконуємо САМ метод. */
+  const m = /focus\(name\) \{[\s\S]*?\n {8}\},/.exec(asrc);
+  assert.ok(m, "метод focus у askForm");
+  const focus = new Function("formEl", `return { ${m[0].replace(/,\s*$/, "")} }.focus;`)({ elements: { namedItem: () => null } });
+  assert.doesNotThrow(() => focus("repo"));
+  /* Майстер: `showError(form, key, "repo")` — `querySelector('[name="repo"]')` порожнє, текст помилки все одно показано. */
+  const slot = { textContent: "", hidden: true };
+  const form = { isConnected: true, querySelector: (s) => (s === "#wz-err" ? slot : null), querySelectorAll: () => [] };
+  const env = { wz: { step: 4 }, deps: { node: () => null }, t };
+  const showError = new Function("env", `with (env) { ${nested(wsrc, "showError")}\nreturn showError; }`)(env);
+  assert.doesNotThrow(() => showError(form, "taskErrVcsTarget", taskErrField("taskErrVcsTarget")));
+  assert.equal(slot.textContent, t("taskErrVcsTarget"));
+  assert.equal(slot.hidden, false);
+});
+
+/* ── «Налаштувати…» → «Підключення» на картку ролі vcs (поправка 4) ───────────────────────────────────── */
+
+test("glsetup: у ЛІГА — повідомлення про tasks.json й БЕЗ переходу; деінде — enterConnections('vcs')", () => {
+  const go = (space) => {
+    const entered = [];
+    const env = mkEnv({ space, isLegacyVcs, enterConnections: (...a) => entered.push(a) });
+    load(env, { acts: ["glsetup"] }).acts.glsetup();
+    return { entered, tell: env.log.tell };
+  };
+  assert.deepEqual(go(LIGA), { entered: [], tell: [t("glSetupMsg")] });
+  assert.deepEqual(go(PLAIN), { entered: [["vcs"]], tell: [] }, "роль vcs — фокус піде на картку її модуля");
+});
+
+test("enterConnections(role): запамʼятовує роль і вимагає фокус; без ролі — чистить стару (фокус на першу картку, як було)", () => {
+  const run = (role, pre = {}) => {
+    const env = {
+      currentSpace: () => ({ id: "plain" }), spacesResp: {}, connFocusPending: false, connFocusRole: "stale", ...pre,
+      enterHome: (o) => { env.entered = o; },
+    };
+    new Function("env", `with (env) { ${declSource("enterConnections")}\nreturn enterConnections; }`)(env)(...(role === undefined ? [] : [role]));
+    return env;
+  };
+  let env = run("vcs");
+  assert.equal(env.connFocusRole, "vcs");
+  assert.equal(env.connFocusPending, true, "навіть коли сторінка вже відкрита (enterHome не «свіжий») — фокус потрібен");
+  assert.deepEqual(env.entered, { page: "conn" });
+  env = run(undefined);
+  assert.equal(env.connFocusRole, "", "звичайний вхід не успадковує стару роль");
+  assert.equal(env.connFocusPending, false, "а фокус на першу картку ставить enterHome (fresh) сам");
+  assert.deepEqual(env.entered, { page: "conn" });
+  env = run("vcs", { currentSpace: () => null });
+  assert.equal(env.entered, undefined, "простору нема — входу нема");
+  assert.equal(env.connFocusRole, "stale", "і стан не чіпаємо");
+  assert.equal(env.connFocusPending, false);
+});
+
+/** Вузол-картка для `focusConnLanding`: кнопки `[data-cn]` (перша не вимкнена), `focus` пише в журнал. */
+function mkHome(cards, log) {
+  const btn = (id, name, disabled = false) => ({ id, name, disabled, focus: (o) => log.push([`${id}/${name}`, o]) });
+  const q = new Map(cards.map(([id, ...names]) => [id, names.map((n, i) => btn(id, n, i === 0 && id.startsWith("off:")))]));
+  return {
+    querySelector: (sel) => {
+      const card = /^\.cn-card\[data-id="(.+)"\]$/.exec(sel);
+      if (card) {
+        const list = q.get(card[1]);
+        if (!list) return null;
+        return { querySelector: (s) => (s.includes(":not([disabled])") ? list.find((b) => !b.disabled) ?? null : list[0]) };
+      }
+      if (sel === '.cn-card [data-cn], [data-cn="retry"]') return [...q.values()][0]?.[0] ?? null;
+      return null;
+    },
+  };
+}
+test("focusConnLanding: роль vcs → кнопка картки її модуля (і прокрутка — preventScroll не ставимо); без ролі чи картки — перша кнопка, як було", () => {
+  const log = [];
+  const state = { list: [{ id: "static-publish", roles: ["publish"], enabled: true }, { id: "git-sync", roles: ["vcs"], enabled: true }],
+    spaceId: "plain" };
+  const env = (home, over = {}) => ({
+    homeNode: () => home, CSS: { escape: (s) => s }, roleCardId, connState: state,
+    connSpace: () => ({ id: "plain", capabilities: { vcs: "git-sync" } }), ...over,
+  });
+  const land = (e, role) => new Function("env", `with (env) { ${declSource("focusConnLanding")}\nreturn focusConnLanding; }`)(e)(role);
+  const home = mkHome([["static-publish", "configure"], ["git-sync", "configure", "check"]], log);
+  land(env(home), "vcs");
+  assert.deepEqual(log.splice(0), [["git-sync/configure", { preventScroll: false }]], "картка ролі, з прокруткою");
+  land(env(home), "");
+  assert.deepEqual(log.splice(0), [["static-publish/configure", { preventScroll: true }]], "без ролі — перша кнопка першої картки, без прокрутки (як було)");
+  land(env(home, { connSpace: () => ({ id: "plain", capabilities: { vcs: null } }), connState: { ...state, list: [] } }), "vcs");
+  assert.deepEqual(log.splice(0), [["static-publish/configure", { preventScroll: true }]], "картки ролі нема — запасний шлях");
+  const off = mkHome([["off:git-sync", "enable", "x"]], log);
+  land(env(off, { connSpace: () => ({ id: "plain", capabilities: { vcs: null } }),
+    connState: { ...state, list: [{ id: "off:git-sync", roles: ["vcs"], enabled: false }] } }), "vcs");
+  assert.deepEqual(log.splice(0), [["off:git-sync/x", { preventScroll: false }]], "перша НЕвимкнена кнопка картки");
+  assert.doesNotThrow(() => land(env(null), "vcs"), "вузла нема — тихо");
+});
+
+test("loadConn: перший фокус бере роль із connFocusRole і не краде фокус у палітри чи діалогу", () => {
+  const b = fn("loadConn").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(b, /if \(connFocusPending\) \{\s*connFocusPending = false;\s*const role = connFocusRole;\s*connFocusRole = '';\s*if \(!paletteOverlay && !document\.querySelector\('\.cv-ask-scrim'\)\) focusConnLanding\(role\);\s*\}/);
+  assert.match(src, /\nlet connFocusRole = '';/, "стан оголошено поруч із connFocusPending (TDZ)");
+});
+
+test("newTaskDialog (статично, як просить план): поле — за hasVcs && !isLegacyVcs, vcs у тілі — лише зі значенням, запит — через taskPost, коли hasVcs", () => {
+  const b = fn("newTaskDialog");
+  assert.match(b, /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
+  assert.match(b, /taskFormHTML\(withRepo \? \{ repo: \{\} \} : \{\}\)/, "поле «Репозиторій» передається формі лише тоді");
+  assert.match(b, /const repo = withRepo \? String\(vals\.repo \?\? ''\)\.trim\(\) : '';/);
+  assert.match(b, /\.\.\.\(repo \? \{ vcs: \{ repo \} \} : \{\}\)/, "порожнє значення — ключа vcs у тілі нема");
+  assert.match(b, /made = await \(hasVcs\(sp\) \? taskPost\(body\) : postForm\('\/api\/task-new', body\)\);/);
+  assert.match(b, /taskErrShowsReason\(e\.code\) \? t\('errFailed', requestErrText\(e\)\) : t\(key2\)/);
+  assert.match(src, /\nfunction taskPost\(body\) \{\n {2}const ctl = new AbortController\(\);\n {2}const timer = setTimeout\(\(\) => ctl\.abort\(\), TASK_VCS_POST_TIMEOUT_MS\);/);
 });
