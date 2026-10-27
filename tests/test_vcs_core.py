@@ -1938,13 +1938,13 @@ class Http(Core):
                 self.assertNotIn('Traceback', err.getvalue(), 'тиха причина лишається тихою')
 
     def test_the_central_states_of_the_space_are_not_swallowed_by_the_autosync(self):
-        """Ревʼю c191cfb (Minor 1b): `NoTask`/`SpaceUnavailable`/`SpacesError`/`AmbiguousTask`/`ModuleError` — відповіді `_guarded`
-        (404/503/409/статус модуля), як у кожного маршруту, а не 200 із `reason: "error"`: `SpaceUnavailable` — ще й `OSError`
-        із `ValueError`, тож без явного `raise` перед `except Exception` його проковтнув би той самий рядок."""
+        """Ревʼю c191cfb (Minor 1b): `NoTask`/`SpaceUnavailable`/`SpacesError`/`AmbiguousTask` — відповіді `_guarded` (404/503/409), як у
+        кожного маршруту, а не 200 із `reason: "error"`: `SpaceUnavailable` — ще й `OSError` із `ValueError`, тож без явного `raise`
+        перед `except Exception` його проковтнув би той самий рядок. `ModuleError` тут НЕ центральний: див. наступний тест."""
         dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
         cases = ((spaces.NoTask('x'), 404, 'no-task'), (serve.SpaceUnavailable('/p/tasks.json'), 503, 'space-unavailable'),
                  (spaces.SpacesError('spaces-unreadable', '/p', 'bad'), 503, 'spaces-unreadable'),
-                 (spaces.AmbiguousTask('a'), 409, 'ambiguous-task'), (dm.ModuleError('module-error', 502, 'boom'), 502, 'module-error'))
+                 (spaces.AmbiguousTask('a'), 409, 'ambiguous-task'))
         for tid in ('a', 'p'):
             for exc, status, code in cases:
                 with self.subTest(task=tid, exc=type(exc).__name__):
@@ -1952,6 +1952,25 @@ class Http(Core):
                         st, body = self.post('/api/autosync', {}, tid)
                     self.assertEqual((st, body['ok'], body['code']), (status, False, code), body)
                     self.assertNotIn('reason', body, 'це не відповідь автосинку')
+
+    def test_a_module_error_at_the_route_is_a_quiet_200_offline_with_the_code_and_a_mask(self):
+        """Ревʼю 7db6370 (1): `ModuleError` через `_guarded` дав би 502/504/500 без маски (`HTTPError` — і хук мовчить): порушення «хукові
+        ніколи 5xx». Тож тут він — як `VcsError`: 200 `reason: "offline"` + `code`, адреса замаскована, traceback не пишемо (тиха причина)."""
+        msg = f'module broke on https://{TOKEN}@github.com/o/r.git'
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        cases = (('module-error', 502), ('check-timeout', 504), ('vcs-error', 500), ('vcs-busy', None))
+        for tid in ('a', 'p'):
+            for code, status in cases:
+                with self.subTest(task=tid, code=code):
+                    exc = dm.ModuleError(code, status, msg) if status else dm.ModuleError(code, message=msg)
+                    with self.server_log() as err, mock.patch.object(serve, 'autosync', side_effect=exc):
+                        st, body = self.post('/api/autosync', {}, tid)
+                    self.assertEqual(st, 200, body)
+                    self.assertEqual((body['ok'], body['synced'], body['changed'], body['reason'], body['code']),
+                                     (False, False, False, 'offline', code))
+                    self.assertIn('https://***@github.com/o/r.git', body['error'])
+                    self.assertNotIn(TOKEN, json.dumps(body))
+                    self.assertNotIn('Traceback', err.getvalue(), 'тиха причина лишається тихою')
 
     def test_a_real_value_error_of_the_task_state_is_still_a_200_for_the_stop_hook(self):
         dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})

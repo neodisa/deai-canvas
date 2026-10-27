@@ -6896,14 +6896,21 @@ class Handler(SimpleHTTPRequestHandler):
         `reason: "no-gitlab"` (контракт хука; відмова постачальника — те саме, з `code`). `autosync` вимкнений у модулі —
         `reason: "autosync-off"` і ні відправки, ні локального автокоміту. Хук мовчить на причинах, яких не знає: реагує лише на
         `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Далі — `autosync()`: `no-iterations`, `foreign-only`, `clean`,
-        а будь-яка відмова модуля — `reason: "offline"` з `code` (єдина ТИХА причина: нема мережі чи VPN).
+        а будь-який `OSError` навколо `gitlab_sync` — `reason: "offline"` (з `code` для `VcsError`).
 
-        Хукові НІКОЛИ не віддається 5xx від збою ПОЗА git: усе, що вилетіло з `autosync()` на рівні маршруту, — 200
-        `{ok: false, reason: "error", error}` (текст крізь `_mask_repo`, traceback — у stderr сервера), і хук КРИЧИТЬ: це збій
-        ЛОКАЛЬНИЙ (нечитабельні `iterations.json`, права на теку — `ValueError`, `OSError`, `PermissionError`…), а не мережа, і
-        незапушений макет лежав би тихо, якби його сховали під `offline`. Винятки: `VcsError` (відмова ролі — `offline` з `code`) і
-        центральні стани простору (`NoTask`, `SpaceUnavailable`, `SpacesError`, `AmbiguousTask`, `ModuleError`) — вони йдуть далі в
-        `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут."""
+        ⚠️ `offline` — ТИХА причина, і вона ширша за «нема мережі чи VPN»: як у 0.7.0, `autosync()` ловить будь-який `OSError`
+        навколо `gitlab_sync`, тож і локальні збої всередині нього (`copy_mockup` → `PermissionError`, `mkdtemp` → `ENOSPC`)
+        дають той самий тихий `offline`. Паритет із 0.7.0 свідомо не змінено.
+
+        Хукові НІКОЛИ не віддається 5xx від збою ПОЗА git: усе, що вилетіло з `autosync()` на рівні маршруту, — 200 (текст крізь
+        `_mask_repo`):
+          * `VcsError` і `ModuleError` (відмова ролі чи каркаса; `ModuleError` через `_guarded` дав би 502/504/500 без маски, а
+            `HTTPError` хук мовчить) — `reason: "offline"` + `code`, без traceback;
+          * решта (`ValueError` із читання мети задачі, `OSError`, `PermissionError`, `KeyError`…) — `reason: "error"`, traceback — у
+            stderr сервера, і хук КРИЧИТЬ: це збій ЛОКАЛЬНИЙ (нечитабельні `iterations.json`, права на теку), а не мережа, і
+            незапушений макет лежав би тихо, якби його сховали під `offline`.
+        Єдиний виняток — центральні стани простору (`NoTask`, `SpaceUnavailable`, `SpacesError`, `AmbiguousTask`): вони йдуть далі
+        в `_guarded` і дають ті самі 404/409/503, що й будь-який маршрут."""
         tid, task, vcs, err = self._vcs_ctx()
         if err is not None or vcs is None or vcs[3] is None:
             out = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
@@ -6914,9 +6921,11 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             r = autosync(tid, task, vcs[3], vcs=vcs[:3])
-        except (SpaceUnavailable, spaces.NoTask, spaces.SpacesError, spaces.AmbiguousTask, deai_modules.ModuleError):
+        except (SpaceUnavailable, spaces.NoTask, spaces.SpacesError, spaces.AmbiguousTask):
             raise
         except Exception as e:  # noqa: BLE001 — Stop-хук не мусить отримати 5xx: див. докстрінг
+            if isinstance(e, deai_modules.ModuleError):
+                e = VcsError(e.code, _frame_reason(e))                # відмова каркаса — як відмова ролі: тиха, з кодом
             offline = isinstance(e, VcsError)
             if not offline:
                 # Причину бачить той, хто дивиться в лог сервера: у відповіді хука лише короткий `error`.
