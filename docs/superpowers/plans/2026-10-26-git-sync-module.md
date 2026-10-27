@@ -1981,6 +1981,8 @@ export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
 
 2. **`disableConsequences` (`app/connections-model.js` ≈251):** для простору з `integrations === true` роль `vcs` теж дає `{ role, kind: "legacy" }` (зараз лише `publish` і `comments`). Тест у `tests/connections-model.test.mjs`.
 
+3. **Інші відмови `task-new` з `vcs`** (ревʼю Task 5): маршрут віддає також 409 з кодом постачальника (`space-json-unreadable`, …), 504 `check-timeout` (завислий `validate` свого модуля) і 502 `module-error`. Форма нової задачі: `check-timeout`/`module-error` → наявний загальний текст відмови з `error` (окремих ключів не треба), поле не підсвічувати; код постачальника → як наявні коди простору. Тест на `check-timeout`.
+
 ---
 
 ### Task 8: живі тести
