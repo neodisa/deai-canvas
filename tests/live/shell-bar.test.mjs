@@ -147,6 +147,11 @@ test("кожен контрол смуги щось робить на клік",
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: VIEW });
+  /* Відповідь статусу синку чекаємо ДО `goto` (після нього вона вже могла прийти): смуга перемальовується двічі — після `render()`
+     й після цієї відповіді (`refreshGitlab` → `paintBar`), тож порівняння `before`/`after` у циклі нижче могло б зарахувати контролу
+     пізню перемальовку від відповіді — і не помітити контрол, що не зробив нічого. Чекаємо її (і два кадри після) до циклу. Умовно: зона синку (`data-dd="gl"`) є лише в просторі з роллю `vcs`, а без неї статус не питається — чекання зависло б. */
+  const status = page.waitForResponse((r) => /\/api\/(vcs|gitlab)-status/.test(r.url()));
+  status.catch(() => {});                                    // ранній вихід не лишає відхиленого обіцяного без обробника
   await page.goto(`${url}/app/`);
 
   /* Готовність макета для `inspector`: інспектор живе в
@@ -158,6 +163,10 @@ test("кожен контрол смуги щось робить на клік",
     const f = document.getElementById("frame");
     return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
   }, null, { timeout: 15000 });
+
+  /* Повний цикл малювання ПІСЛЯ відповіді статусу (два кадри): далі смуга стоїть, і `before`/`after` міряють лише клік. */
+  if (await page.evaluate(() => !!document.querySelector('#bar [data-dd="gl"]'))) await status;
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
   /* Тільки ВИДИМІ контроли. «⋯» на широкій смузі схований контейнерним
      запитом (`.view-more{display:none}` понад 1060px) — це правильна

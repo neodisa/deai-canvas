@@ -290,7 +290,9 @@ async function openApp(browser, url) {
   status.catch(() => {});                                    // ранній вихід нижче не лишає відхиленого обіцяного без обробника
   await page.goto(`${url}/app/`);
   await page.locator('#bar [data-act="mode"]').first().waitFor();
-  await status;
+  /* Умовно: зона синку (`data-dd="gl"`) є лише в просторі з роллю `vcs`, а без неї статус не питається — безумовне чекання
+     зависло б на 30 с. Зона малюється з простору задачі (`hasVcs`), а не з відповіді статусу, тож її наявність уже відома. */
+  if (await page.evaluate(() => !!document.querySelector('#bar [data-dd="gl"]'))) await status;
   await settle(page);
   return page;
 }
@@ -516,7 +518,9 @@ test("2. жодна зона (#bar .zone) не переповнює свою к�
 
   const bad = [];
   await forEachCombo(browser, url, async ({ page, lang, mode, width }) => {
-    const zones = await page.$$eval("#bar .zone", (els) => els.map((e) => ({
+    /* ОДИН `evaluate`, а не `$$eval`: вузли, відчеплені перемальовкою смуги між вибіркою і викликом, дають `0/0` — «не переповнює»,
+       тобто хибно ЗЕЛЕНЕ. */
+    const zones = await page.evaluate(() => [...document.querySelectorAll("#bar .zone")].map((e) => ({
       cls: e.className, scrollWidth: e.scrollWidth, clientWidth: e.clientWidth,
     })));
     // Незалежний свідок: без нього перевірка була б зеленою й на розмітці

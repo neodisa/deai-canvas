@@ -14,7 +14,7 @@
  * зона з підписом «Git»; 3 — перший push (тост, коміт у origin, «Історії» нема для `file://`); 4 — pull після правки колеги
  * (крапка «відстає», «Підтягнути…», ітерація й форк); 5 — автосинк (`autosync-off`, увімкнення на «Підключенні», `changed`);
  * 6 — нова задача з полем «Репозиторій» (рядок про клон, макет колеги в Іт.1, форк) і без нього (звичайний запит); 6b — підказка
- * поля з типового `repo` модуля й відсутність поля без ролі; 7 — ЛІГА без змін (підпис «GitLab», `design-canvas: sync …`,
+ * поля з типового `repo` модуля; 6c — без ролі поля нема; 7 — ЛІГА без змін (підпис «GitLab», `design-canvas: sync …`,
  * «Налаштувати…» → повідомлення про `tasks.json`); 8 — «Налаштувати…» поза ЛІГОЮ веде на «Підключення» з фокусом на картці
  * `git-sync` (перелік просторів уже завантажено); 8b — те саме на свіжозавантаженій сторінці, коли `/api/spaces` ще не питали (вхід сам
  * читає перелік); 9 — майстер: секція
@@ -32,7 +32,8 @@
  *   4   — `iteration_is_mine` у `_pull_into_task` (форк чужої ітерації); `src_name` (текст даних «з репозиторію»); `brandArg`.
  *   5   — `autosync` у `_autosync` (`serve.py`): без нього вимкнений автосинк усе одно відправляє.
  *   6   — `taskCreateClones` (`app.js`): `false` — нема рядка про клон, `true` — рядок і для порожнього поля; `entry['vcs'] = vcs` у `_task_new_write`.
- *   6b  — `setAttribute('placeholder', hint)` у `newTaskDialog`; `withRepo = hasVcs && !isLegacyVcs` (поле без ролі).
+ *   6b  — `setAttribute('placeholder', hint)` у `newTaskDialog`.
+ *   6c  — `withRepo = hasVcs && !isLegacyVcs` (поле без ролі).
  *   7   — `'GitLab'` для ЛІГИ у `gitlab_status` (`serve.py`); гілка `isLegacyVcs` у `BAR_ACTIONS.glsetup`.
  *   8   — аргумент ролі в `enterConnections('vcs')` (фокус на картці git-sync, а не на першій).
  *   8b  — читання переліку в `enterConnections` (`if (cold) await loadSpaces()`): без нього перший клік на свіжій сторінці мертвий.
@@ -43,7 +44,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -65,6 +66,18 @@ test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
 /* ── git: лише локально ────────────────────────────────────────────────────────────────────────────── */
+
+/** Тимчасова тека, яку створив ЦЕЙ файл: прибираємо за ТОЧНИМ шляхом, а не за шаблоном. Видаляємо лише теку, що лежить прямо в
+ *  `tmpdir()` і має префікс `dc-live-` (інакше мовчки пропускаємо: помилка в шляху не має знести чужого). Без цього кожен прогін
+ *  лишав би на диску по теці на кожну з `git`-домівок, `tasks.json`-теку й фікстуру задачі (≈13 тестів × 4). */
+const TMP_ROOT = realpathSync(tmpdir());
+function rmOwn(dir) {
+  if (!dir) return;
+  let real;
+  try { real = realpathSync(dir); } catch { return; }                              // вже нема — нічого прибирати
+  if (path.dirname(real) !== TMP_ROOT || !path.basename(real).startsWith("dc-live-")) return;
+  rmSync(real, { recursive: true, force: true });
+}
 
 /** Оточення git тесту: жодного `GIT_*` від батька, без глобального конфігу людини, без підказок і без мережі. */
 const gitEnv = (home) => ({
@@ -106,16 +119,23 @@ async function boot(t, { enable = "repo", legacy = false, open = true } = {}) {
   const originUrl = `file://${origin}`;
   const A = taskFixture({ html: MOCKUP });
   const B = legacy ? taskFixture({ html: MOCKUP }) : null;
+  /* Прибирання СВОЇХ тек: теки тесту, фікстури задач і (коли сервер піднявся) домівка й тека `tasks.json` сервера — їх дає
+     `startServer` (`home`, `dirname(legacyFile)`), `fixture.mjs` лишається як є. Спершу зупиняємо сервер (зупинка ідемпотентна): під
+     ним тека не зникає. Один хук, зареєстрований ДО підняття сервера, щоб і збій `startServer` не лишив теки. */
+  let server = null;
+  t.after(async () => {
+    if (server) await stop(server.child);
+    for (const dir of [tmp, A.dir, B?.dir, server?.home, server?.legacyFile && path.dirname(server.legacyFile)]) rmOwn(dir);
+  });
   const spaces = legacy
     ? [{ name: "Liga", id: "liga", color: "space-2", legacy: true,
       tasks: { plain: { dir: A.dir, title: "Без маппінгу" }, mapped: { dir: B.dir, title: "З маппінгом" } } }]
     : [{ name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: A.dir, title: "Задача" } } }];
-  const server = await startServer(null, {
+  server = await startServer(null, {
     portBase: PORT_BASE, spaces,
     env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_SSH_COMMAND: "false",
       DC_IDENTITY_NAME: ME.name, DC_IDENTITY_EMAIL: ME.email },
   });
-  t.after(() => stop(server.child));
   const sp = server.spaces[0];
   if (legacy) {
     const cfg = readJson(server.legacyFile);
@@ -433,16 +453,23 @@ test("6: нова задача — з «Репозиторієм»: рядок �
   assert.deepEqual(s.errors, []);
 });
 
-test("6b: поле «Репозиторій» — підказка з типового repo модуля; без модуля поля нема", async (t) => {
+test("6b: поле «Репозиторій» — підказка з типового repo модуля", async (t) => {
   const s = await boot(t);
   await openTaskForm(s.page);
   await s.page.waitForFunction((u) => document.querySelector("#tf-repo")?.placeholder === u, s.originUrl, { timeout: 15000 });
   await s.page.click('form[data-form="task"] [data-a="cancel"]');
-  const bare = await boot(t, { enable: null });
-  await openTaskForm(bare.page);
-  assert.equal(await bare.page.locator("#tf-repo").count(), 0, "без ролі vcs форма — як до 4a");
-  assert.deepEqual(s.outside.concat(bare.outside), []);
-  assert.deepEqual(s.errors.concat(bare.errors), []);
+  assert.deepEqual(s.outside, []);
+  assert.deepEqual(s.errors, []);
+});
+
+/* Окремий тест, а не другий `boot` у 6b: два сервери разом ризикують сісти на один порт (`startServer` бере `база + hrtime % 100`) —
+   тоді дочірній не біндиться, а готовність підтверджує ПЕРШИЙ (де поле є) і `count === 0` червоніє хибно. */
+test("6c: без ролі vcs поля «Репозиторій» у формі нової задачі нема", async (t) => {
+  const s = await boot(t, { enable: null });
+  await openTaskForm(s.page);
+  assert.equal(await s.page.locator("#tf-repo").count(), 0, "без ролі vcs форма — як до 4a");
+  assert.deepEqual(s.outside, []);
+  assert.deepEqual(s.errors, []);
 });
 
 test("7: ЛІГА без змін — підпис «GitLab», «Налаштувати…» для задачі без маппінгу каже про tasks.json (не «Підключення»), push іде зашитим шляхом і дає design-canvas: sync", async (t) => {

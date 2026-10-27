@@ -1584,7 +1584,7 @@ test("glsetup: у ЛІГА — повідомлення про tasks.json й Б�
 test("enterConnections(role): запамʼятовує роль і вимагає фокус; без ролі — чистить стару (фокус на першу картку, як було)", () => {
   const run = (role, pre = {}) => {
     const env = {
-      currentSpace: () => ({ id: "plain" }), spacesResp: {}, connFocusPending: false, connFocusRole: "stale", ...pre,
+      currentSpace: () => ({ id: "plain" }), spacesResp: {}, connEntrySeq: 0, connFocusPending: false, connFocusRole: "stale", ...pre,
       enterHome: (o) => { env.entered = o; },
     };
     new Function("env", `with (env) { ${declSource("enterConnections")}\nreturn enterConnections; }`)(env)(...(role === undefined ? [] : [role]));
@@ -1605,39 +1605,49 @@ test("enterConnections(role): запамʼятовує роль і вимага�
 });
 
 /* Холодний старт: сторінка `/api/spaces` не питала (`spacesResp === null`), а простір смуга знає з `curTask.space`. «Налаштувати
-   репозиторій…» (`glsetup`) і клік по «Підключення…», що випередив відповідь дропдауна, мовчали — тепер вхід САМ читає перелік. */
-function mkConn(initial, loaded, over = {}) {
+   репозиторій…» (`glsetup`), кнопка «Підключення» на «Задачах», що ще вантажаться, і клік по «Підключення…», що випередив відповідь
+   дропдауна, мовчали — тепер вхід САМ читає перелік. Виконуємо СПРАВЖНІ `enterConnections` і `loadSpaces` (лічильник `spacesSeq`
+   відкидає застарілі відповіді — на ньому тримаються тести порядку); мережа — `api`, що віддає відкладені відповіді. */
+function defer() {
+  let resolve; let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+function mkConn(initial, over = {}) {
   const env = {
-    currentSpace, spacesResp: initial, connFocusPending: false, connFocusRole: "stale", entered: [], loads: 0, order: [],
-    loadSpaces: async () => { env.loads += 1; env.order.push("load"); if (env.gate) await env.gate; env.spacesResp = loaded; },
+    currentSpace, t, spacesResp: initial, spacesSeq: 0, taskSwitchGen: 0, connEntrySeq: 0, connFocusPending: false, connFocusRole: "stale",
+    entered: [], told: [], order: [], calls: [], waits: [], registry: { current: "plain", spaces: [PLAIN] },
+    /* Кожен запит — своя відкладена відповідь (`waits[i]`): тест сам вирішує, коли й у якому порядку їх розв'язати. */
+    api: (path) => { env.calls.push(path); env.order.push("api"); const d = defer(); env.waits.push(d); return d.promise; },
+    tell: (m) => env.told.push(m),
     enterHome: (o) => { env.order.push("enter"); env.entered.push(o); },
     ...over,
   };
   return env;
 }
-const enterIn = (env) => new Function("env", `with (env) { ${declSource("enterConnections")}\nreturn enterConnections; }`)(env);
+const enterIn = (env, extra = {}) => load(env, { funcs: ["enterConnections", "loadSpaces"], ...extra });
 
 test("enterConnections: холодний старт (перелік просторів ще не питали) — читає його РІВНО раз і лише тоді входить, з фокусом на ролі", async () => {
-  let release;
-  const env = mkConn(null, { current: "plain", spaces: [PLAIN] }, { gate: new Promise((r) => { release = r; }) });
-  const done = enterIn(env)("vcs");
-  assert.equal(env.loads, 1, "перелік замовлено одразу");
+  const env = mkConn(null);
+  const done = enterIn(env).enterConnections("vcs");
+  assert.deepEqual(env.calls, ["/api/spaces"], "перелік замовлено одразу, один запит");
   assert.deepEqual(env.entered, [], "поки перелік у дорозі — входу нема (інакше сторінка відкрилась би без простору)");
   assert.equal(env.connFocusPending, false);
-  release();
+  env.waits[0].resolve(env.registry);
   await done;
-  assert.equal(env.loads, 1, "один запит на вхід");
-  assert.deepEqual(env.order, ["load", "enter"], "вхід — ПІСЛЯ читання переліку");
+  assert.equal(env.calls.length, 1, "один запит на вхід");
+  assert.deepEqual(env.order, ["api", "enter"], "вхід — ПІСЛЯ читання переліку");
   assert.deepEqual(env.entered, [{ page: "conn", spaces: false }], "щойно прочитаний перелік loadConn вдруге не питає");
   assert.equal(env.connFocusRole, "vcs");
   assert.equal(env.connFocusPending, true, "фокус сяде на картку модуля ролі");
+  assert.deepEqual(env.told, []);
 });
 
 test("enterConnections: теплий (перелік уже є) — без зайвого запиту й синхронно, як було; `loadConn` перечитає перелік сам", () => {
   for (const warm of [{ current: "plain", spaces: [PLAIN] }, { current: "gone", spaces: [PLAIN] }]) {
-    const env = mkConn(warm, null);
-    const p = enterIn(env)("vcs");
-    assert.equal(env.loads, 0, "перелік є — запиту нема");
+    const env = mkConn(warm);
+    const p = enterIn(env).enterConnections("vcs");
+    assert.deepEqual(env.calls, [], "перелік є — запиту нема");
     if (currentSpace(warm)) {
       assert.deepEqual(env.entered, [{ page: "conn" }], "вхід у тому ж такті, без `spaces: false`");
       assert.equal(env.connFocusRole, "vcs");
@@ -1647,34 +1657,126 @@ test("enterConnections: теплий (перелік уже є) — без за�
       assert.equal(env.connFocusRole, "stale", "і стан не чіпаємо");
       assert.equal(env.connFocusPending, false);
     }
+    assert.deepEqual(env.told, [], "теплий шлях ніколи не кличе помилку читання");
     assert.ok(p instanceof Promise);
   }
-  const off = mkConn({ off: true, spaces: [] }, null);
-  enterIn(off)("vcs");
-  assert.equal(off.loads, 0, "шар просторів вимкнено — це готова відповідь, а не «ще не питали»");
+  const off = mkConn({ off: true, spaces: [] });
+  enterIn(off).enterConnections("vcs");
+  assert.deepEqual(off.calls, [], "шар просторів вимкнено — це готова відповідь, а не «ще не питали»");
   assert.deepEqual(off.entered, []);
+  assert.deepEqual(off.told, []);
 });
 
-test("enterConnections: холодний, але простору справді нема (порожній реєстр, шар вимкнено, реєстр не читається) — один запит і мовчання, стан не чіпаємо", async () => {
-  for (const loaded of [{ current: null, spaces: [] }, { off: true, spaces: [] }, null]) {
-    const env = mkConn(null, loaded);
-    await enterIn(env)("vcs");
-    assert.equal(env.loads, 1);
+test("enterConnections: холодний, але простору справді нема (порожній реєстр, шар вимкнено) — один запит і мовчання, стан не чіпаємо", async () => {
+  for (const registry of [{ current: null, spaces: [] }, { off: true, spaces: [] }]) {
+    const env = mkConn(null);
+    const done = enterIn(env).enterConnections("vcs");
+    env.waits[0].resolve(registry);
+    await done;
+    assert.equal(env.calls.length, 1);
     assert.deepEqual(env.entered, []);
+    assert.deepEqual(env.told, [], "відповідь прийшла — це не збій читання");
     assert.equal(env.connFocusRole, "stale");
     assert.equal(env.connFocusPending, false);
   }
 });
 
-test("glsetup на холодному старті: клік веде на «Підключення» з фокусом на ролі vcs (справжній enterConnections, заглушка читання переліку)", async () => {
-  const env = mkConn(null, { current: "plain", spaces: [PLAIN] }, { ...mkEnv({ space: PLAIN, isLegacyVcs }), spaceNow: () => PLAIN });
-  const { acts } = load(env, { funcs: ["enterConnections"], acts: ["glsetup"] });
-  await acts.glsetup();
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(env.loads, 1);
+test("enterConnections: перелік не прочитався (реєстр/сервер мовчить) — не мовчимо: tell із причиною про spaces.json, входу нема", async () => {
+  const env = mkConn(null);
+  const done = enterIn(env).enterConnections("vcs");
+  env.waits[0].reject(Object.assign(new Error("boom"), { code: "spaces-unreadable" }));
+  await done;
+  assert.deepEqual(env.told, [t("tasksErrSpaces")], "рівно одне повідомлення наявним ключем словника");
+  assert.match(env.told[0], /spaces\.json/);
+  assert.deepEqual(env.entered, []);
+  assert.equal(env.connFocusRole, "stale");
+  assert.equal(env.connFocusPending, false);
+  assert.equal(env.spacesResp, null, "loadSpaces збій лише проковтнув");
+});
+
+test("enterConnections: поки перелік летить, людина пішла (логотип/майстер/відкрила задачу — connEntrySeq; інша задача чи простір — taskSwitchGen) — виходимо мовчки, без tell", async () => {
+  for (const depart of [(e) => { e.connEntrySeq += 1; }, (e) => { e.taskSwitchGen += 1; }]) {
+    for (const reply of ["ok", "fail"]) {
+      const env = mkConn(null);
+      const done = enterIn(env).enterConnections("vcs");
+      depart(env);
+      if (reply === "ok") env.waits[0].resolve(env.registry); else env.waits[0].reject(new Error("x"));
+      await done;
+      assert.deepEqual(env.entered, [], `пішла — вхід не відбувся (${reply})`);
+      assert.deepEqual(env.told, [], `і про збій читання мовчимо: вона вже вирішила інакше (${reply})`);
+      assert.equal(env.connFocusRole, "stale");
+      assert.equal(env.connFocusPending, false);
+    }
+  }
+});
+
+test("enterConnections: два паралельні холодні входи, відповіді не по черзі — навігація РІВНО одна (у будь-якому порядку відповідей), без tell", async () => {
+  for (const order of [[1, 0], [0, 1]]) {
+    const env = mkConn(null);
+    const lib = enterIn(env);
+    const a = lib.enterConnections("vcs");
+    const b = lib.enterConnections("vcs");
+    assert.equal(env.calls.length, 2, "обидва кліки замовили перелік");
+    for (const i of order) { env.waits[i].resolve(env.registry); await tick(); }
+    await Promise.all([a, b]);
+    assert.deepEqual(env.entered, [{ page: "conn", spaces: false }], `навігація одна (порядок відповідей ${order})`);
+    assert.deepEqual(env.told, [], "відкинута застарілою відповіддю — не збій");
+    assert.equal(env.connFocusRole, "vcs");
+    assert.deepEqual(env.spacesResp, env.registry);
+  }
+});
+
+test("enterConnections: відповідь відкинув новіший запит переліку (дропдаун/палітра) — це не збій читання, tell не показуємо", async () => {
+  const env = mkConn(null);
+  const lib = enterIn(env);
+  const entry = lib.enterConnections("vcs");
+  const other = lib.loadSpaces();                      // палітра відкрилась, поки наш запит у польоті
+  env.waits[0].resolve(env.registry);                  // наша відповідь — застаріла: `spacesSeq` пішов далі, `spacesResp` лишився `null`
+  await entry;
+  assert.equal(env.spacesResp, null);
+  assert.deepEqual(env.told, [], "чужий запит у польоті — не «реєстр не читається»");
+  assert.deepEqual(env.entered, []);
+  env.waits[1].resolve(env.registry);
+  await other;
+  assert.deepEqual(env.spacesResp, env.registry, "перелік усе ж зʼявився — від чужого запиту");
+});
+
+test("кнопка «Підключення» на «Задачах», що ще вантажаться (homeData = {loading:true}) — холодний вхід: wireHome → enterConnections читає перелік один раз і веде на сторінку", async () => {
+  const handlers = {};
+  const env = mkConn(null, {
+    homeOpen: true, homePage: "tasks", homeData: { loading: true, space: PLAIN },
+    wiz: { click: () => { throw new Error("майстер не мав би бути"); } },
+  });
+  load(env, { funcs: ["enterConnections", "loadSpaces", "wireHome"] }).wireHome({ addEventListener: (type, fn) => { handlers[type] = fn; } });
+  const btn = { dataset: { th: "conn" } };
+  handlers.click({ target: { closest: (sel) => (sel === "[data-th]" ? btn : null) } });
+  assert.deepEqual(env.calls, ["/api/spaces"], "кнопка не чекає, поки екран дочитає перелік сам");
+  assert.deepEqual(env.entered, []);
+  env.waits[0].resolve(env.registry);
+  await tick();
+  assert.deepEqual(env.entered, [{ page: "conn", spaces: false }]);
+  assert.equal(env.connFocusRole, "", "кнопка веде без ролі: фокус на першу картку ставить enterHome (fresh)");
+  assert.deepEqual(env.told, []);
+});
+
+test("лічильник входу: enterHome із явною сторінкою й leaveHome його збільшують (це «людина пішла»), оновлення без сторінки — ні", () => {
+  assert.match(fn("enterHome"), /\n  if \(page !== undefined\) connEntrySeq \+= 1;\n/);
+  assert.match(fn("leaveHome"), /\n  connEntrySeq \+= 1;/);
+  assert.match(src, /\nlet connEntrySeq = 0;\n/, "оголошено серед стану модуля (TDZ: enterHome кличе вже перший render)");
+  assert.ok(src.indexOf("let connEntrySeq = 0;") < src.indexOf("function enterHome("), "`let` ВИЩЕ за enterHome");
+});
+
+test("glsetup на холодному старті: клік веде на «Підключення» з фокусом на ролі vcs (справжні glsetup, enterConnections і loadSpaces)", async () => {
+  const env = mkConn(null, { ...mkEnv({ space: PLAIN, isLegacyVcs }), spaceNow: () => PLAIN, entered: [], told: [], order: [], calls: [], waits: [] });
+  Object.assign(env, { api: (path) => { env.calls.push(path); const d = defer(); env.waits.push(d); return d.promise; }, tell: (m) => env.told.push(m) });
+  const lib = enterIn(env, { acts: ["glsetup"] });
+  lib.acts.glsetup();
+  assert.deepEqual(env.calls, ["/api/spaces"]);
+  env.waits[0].resolve(env.registry);
+  await tick();
   assert.deepEqual(env.entered, [{ page: "conn", spaces: false }]);
   assert.equal(env.connFocusRole, "vcs");
-  assert.deepEqual(env.log.tell, [], "повідомлення про tasks.json — лише в ЛІГА");
+  assert.deepEqual(env.told, [], "повідомлення про tasks.json — лише в ЛІГА");
 });
 
 /** Вузол-картка для `focusConnLanding`: кнопки `[data-cn]` (перша не вимкнена), `focus` пише в журнал. */
