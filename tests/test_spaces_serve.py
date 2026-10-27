@@ -746,6 +746,8 @@ class CentralResponses(Fixture):
                   ('POST', '/api/publish', '_publish'),
                   ('POST', '/api/gitlab-sync', '_gitlab_sync'),
                   ('POST', '/api/vcs-push', '_gitlab_sync'),
+                  ('POST', '/api/vcs-pull', '_gitlab_pull'),
+                  ('POST', '/api/autosync', '_autosync'),
                   ('GET', '/api/vcs-status?it=it1', '_gitlab_status'))
         with contextlib.ExitStack() as stack:
             for _, _, name in routes:

@@ -11,6 +11,7 @@ Git — СПРАВЖНІЙ, на локальних bare-репо (без мер
 Два світи, як у ядрі: `Legacy` — шар просторів вимкнено (лише `DC_TASKS_FILE`), `'legacy'`-постачальник ЛІГИ; `Plain` —
 звичайний простір без інтеграцій із підключеним `git-sync`.
 """
+import contextlib
 import json
 import os
 import re
@@ -319,6 +320,30 @@ class Legacy(Core):
         self.assertNotIn('ssh_key', serve.vcs_provider()[1]['settings'])
         self.assertNotIn('host_ip', serve.vcs_provider()[1]['settings'])
 
+    def test_the_vcs_field_of_a_liga_task_carries_the_shared_key_and_ip_too(self):
+        """Ревʼю Task 5 (M7), поправка 7 до спеки: у просторі ЛІГА ключ/IP задачі, інакше спільні з кореня `tasks.json` — і коли ціль
+        із `task.vcs`, а не з `gitlab{}`."""
+        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}}, cfg=cfg)
+        self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/shared', '10.0.0.7'))
+        self.assertEqual((t['repo'], t['path'], t['branch'], t['task']), ('git@h:o/r.git', 'mockup/t1', 'main', 't1'))
+        # `~` розгортається, як у `gitlab_cfg`
+        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}}, cfg={'gitlab_ssh_key': '~/k'})
+        self.assertEqual(t['ssh_key'], os.path.expanduser('~/k'))
+
+    def test_the_own_key_and_ip_of_a_liga_task_beat_the_shared_ones_for_a_vcs_target(self):
+        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        own_in_vcs = self.target({'vcs': {'repo': 'git@h:o/r.git', 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}}, cfg=cfg)
+        self.assertEqual((own_in_vcs['ssh_key'], own_in_vcs['host_ip']), ('/k/own', '10.0.0.8'))
+        own_in_gitlab = self.target({'vcs': {'repo': 'git@h:o/r.git'}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}}, cfg=cfg)
+        self.assertEqual((own_in_gitlab['ssh_key'], own_in_gitlab['host_ip']), ('/k/g', '10.0.0.9'))
+
+    def test_a_vcs_target_of_a_liga_task_has_no_key_fields_when_nobody_sets_them(self):
+        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}}, cfg={'gitlab_ssh_key': '', 'gitlab_host_ip': None})
+        self.assertEqual(t, {'repo': 'git@h:o/r.git', 'task': 't1', 'path': 'mockup/t1', 'branch': 'main'})
+        self.assertEqual(self.target({'vcs': {'repo': 'git@h:o/r.git'}}),
+                         {'repo': 'git@h:o/r.git', 'task': 't1', 'path': 'mockup/t1', 'branch': 'main'})
+
     def test_the_vcs_field_of_the_task_beats_gitlab(self):
         t = self.target({'vcs': {'repo': '/x/new.git', 'path': 'docs/{task}', 'branch': 'dev'},
                          'gitlab': {'repo': 'git@h:o/r.git', 'path': 'mockup/t1'}})
@@ -606,6 +631,15 @@ class Legacy(Core):
         self.assertEqual((r['reason'], r['error']), ('offline', 'нема мережі'))
         self.assertNotIn('code', r)
 
+    def test_the_local_autocommit_of_the_autosync_keeps_the_design_canvas_signature_in_liga(self):
+        """Ревʼю Task 5 (M10), поправка 12: текст даних ЛІГИ лишається — і коли постачальник даний, і коли ядро знаходить його саме."""
+        self.write_it1('<h1>v-local-1</h1>')
+        serve.autosync('t1', self.task, self.gl)
+        self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%s'), 'it1: автосинк (design-canvas)')
+        self.write_it1('<h1>v-local-2</h1>')
+        serve.autosync('t1', self.task, self.gl, vcs=serve.vcs_provider())
+        self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%s'), 'it1: автосинк (design-canvas)')
+
     def test_the_autosync_passes_the_given_provider_to_the_sync(self):
         self.write_it1('<h1>v6</h1>')
         v = (self.stub(), serve._vcs_legacy_ctx(), False)
@@ -776,6 +810,43 @@ class Plain(Core):
         task = {**self.task, 'vcs': {'repo': other, 'path': 'x/{task}'}}
         self.assertEqual(serve.vcs_task(self.cfg, 't1', task)[3],
                          {'repo': other, 'task': 't1', 'path': 'x/t1', 'branch': 'main'})
+
+    def test_the_shared_key_of_the_root_is_not_for_a_space_without_integrations(self):
+        """Ключ і IP кореня `tasks.json` — речі ЛІГИ: у звичайному просторі `task.vcs` і налаштування модуля їх не беруть."""
+        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        t = serve.vcs_task(cfg, 't1', {**self.task, 'vcs': {'repo': self.origin}})[3]
+        self.assertEqual(t, {'repo': self.origin, 'task': 't1', 'path': 'mockup/t1', 'branch': 'main'})
+        t = serve.vcs_task(cfg, 't1', self.task)[3]
+        self.assertNotIn('ssh_key', t)
+        self.assertNotIn('host_ip', t)
+
+    def test_an_explicit_git_sync_in_a_liga_space_takes_the_shared_key_for_any_origin_of_the_target(self):
+        """Поправка 7 до спеки: і для явного `git-sync` у просторі ЛІГА, звідки б не була ціль (`task.vcs` чи налаштування модуля)."""
+        self.make_space('Liga', integrations=True)
+        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        for what, task in (('task.vcs', {**self.task, 'vcs': {'repo': 'git@h:o/r.git'}}), ('налаштування модуля', self.task)):
+            with self.subTest(target=what):
+                t = serve.vcs_task(cfg, 't1', task)[3]
+                self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/shared', '10.0.0.7'))
+
+    def test_a_key_in_the_settings_of_the_module_beats_the_shared_one_of_the_root(self):
+        """Явне налаштування модуля конкретніше за спільне з кореня: модуль сам бере його, коли в цілі ключа нема."""
+        sp = self.make_space('Liga', integrations=True)
+        dm.write_module_state(sp, 'git-sync', settings={'ssh_key': '/k/mine'})
+        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        t = serve.vcs_task(cfg, 't1', self.task)[3]
+        self.assertNotIn('ssh_key', t)
+        self.assertEqual(t['host_ip'], '10.0.0.7')
+
+    def test_the_local_autocommit_of_the_autosync_is_signed_deai_in_an_ordinary_space(self):
+        """Ревʼю Task 5 (M10), поправка 12: «автосинк (deai)» у звичайному просторі — і з готовим постачальником, і без."""
+        v = self.vt()
+        self.write_it1('<h1>v-deai-1</h1>')
+        serve.autosync('t1', self.task, v[3], vcs=v)
+        self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%s'), 'it1: автосинк (deai)')
+        self.write_it1('<h1>v-deai-2</h1>')
+        serve.autosync('t1', self.task, v[3])
+        self.assertEqual(self.out(self.task_dir, 'log', '-1', '--format=%s'), 'it1: автосинк (deai)')
 
     def test_a_space_without_the_module_has_no_provider(self):
         self.make_space('Beta', enable=False)
@@ -1109,6 +1180,21 @@ class AddressMask(Core):
         w = self.mod(serve._vcs_legacy_ctx(), repo, status=lambda ctx, t: {'error': 5}, push=lambda ctx, t, d, m: {'ok': True})
         self.assertEqual(serve._vcs_call(w, 'status', self.gl), {'error': 5})
         self.assertEqual(serve._vcs_call(w, 'push', self.gl, self.tmp, {}), {'ok': True})
+
+    def test_every_top_level_string_of_a_foreign_result_is_masked_not_only_the_error(self):
+        """Ревʼю Task 5 (M9): `gitlab_sync` віддає `{**r, 'remote'}`, тож `hint`/`message` свого модуля йшли назовні як є."""
+        repo, secrets = SECRET_REPOS['token']
+        text = f'try {repo} again'
+        want = 'try https://***@github.com/o/r.git again'
+        leaky = {'hint': text, 'message': text, 'sha': 'abc1234', 'n': 5, 'ok': True, 'none': None}
+        v = self.mod(serve._vcs_legacy_ctx(), repo, status=lambda ctx, t: dict(leaky),
+                     push=lambda ctx, t, d, m: dict(leaky), pull=lambda ctx, t, d, o=None: dict(leaky))
+        for fn, args in (('status', (self.gl,)), ('push', (self.gl, self.tmp, {})), ('pull', (self.gl, self.tmp))):
+            with self.subTest(fn=fn):
+                r = serve._vcs_call(v, fn, *args)
+                self.assertEqual((r['hint'], r['message']), (want, want))
+                self.assertEqual((r['sha'], r['n'], r['ok'], r['none']), ('abc1234', 5, True, None), 'чужі значення зачеплено')
+                self.leak_free(r, secrets)
 
     def test_a_returned_error_of_a_foreign_module_does_not_reach_the_sync_result_nor_the_autosync(self):
         repo, secrets = SECRET_REPOS['token']
@@ -1618,6 +1704,131 @@ class Http(Core):
         with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
             self.assertEqual(self.post('/api/autosync', {}, 'a'), (200, {**self.NO_GITLAB, 'code': 'vcs-error'}))
 
+    # ---------------------------------------------------------------- тип `it` (ревʼю Task 5, I1)
+    BAD_IT = (5, None, [], {}, True, 1.5, 'it1\n', '../x', 'a b', '')
+
+    def test_an_iteration_that_is_not_a_clean_name_is_400_on_both_push_addresses(self):
+        """`NAME_RE.match(5)` кидав TypeError, і зʼєднання рвалось без відповіді; `match` пропускав `it1\\n`. Тепер 400 `bad iteration`."""
+        before = self.heads()
+        for path in ('/api/gitlab-sync', '/api/vcs-push'):
+            for tid in ('a', 'p'):
+                for bad in self.BAD_IT:
+                    with self.subTest(path=path, task=tid, it=bad):
+                        st, body = self.post(path, {'it': bad}, tid)
+                        self.assertEqual(st, 400)
+                        self.assertIn('bad iteration', body)
+                st, body = self.post(path, {}, tid)
+                self.assertEqual((st, 'bad iteration' in body), (400, True), 'без it')
+        self.assertEqual(self.heads(), before, 'щось відправилось')
+
+    def test_a_status_with_a_path_instead_of_an_iteration_is_400_and_an_empty_one_still_answers(self):
+        """`it` у query — завжди рядок, але йде в шлях (`_iter_dir`): `../..` хешував би чужу теку. Порожній — штатний (смуга без вибору)."""
+        for path in ('/api/gitlab-status', '/api/vcs-status'):
+            for tid in ('a', 'p'):
+                for bad in ('..%2F..', 'it1%0A', 'a%20b', '..'):
+                    with self.subTest(path=path, task=tid, it=bad):
+                        st, body = self.get(f'{path}?it={bad}', tid)
+                        self.assertEqual(st, 400)
+                        self.assertIn('bad iteration', body)
+                for good in ('it1', '', 'it-9'):
+                    with self.subTest(path=path, task=tid, it=good):
+                        st, body = self.get(f'{path}?it={good}', tid)
+                        self.assertEqual((st, body['configured']), (200, True))
+                st, body = self.get(path, tid)
+                self.assertEqual((st, body['configured']), (200, True), 'без it')
+
+    # ---------------------------------------------------------------- постачальник один раз (ревʼю Task 5, M5)
+    def test_the_routes_resolve_the_provider_once_and_hand_the_triple_to_the_core(self):
+        """Без `vcs=vcs[:3]` ядро резолвило б постачальника вдруге, а тести лишались би зеленими: той самий результат, лише вдвічі
+        більше читань `space.json`. Шпигуни: `vcs_provider` — рівно один виклик на запит, ядро отримує готовий кортеж."""
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        real = {n: getattr(serve, n) for n in ('vcs_provider', 'gitlab_status', 'gitlab_sync', 'gitlab_pull', 'autosync')}
+        seen = {'provider': 0, 'core': []}
+
+        def provider():
+            seen['provider'] += 1
+            return real['vcs_provider']()
+
+        def spy(name):
+            def call(*a, **kw):
+                seen['core'].append((name, kw.get('vcs')))
+                return real[name](*a, **kw)
+            return call
+        n = 0
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(serve, 'vcs_provider', side_effect=provider))
+            for name in ('gitlab_status', 'gitlab_sync', 'gitlab_pull', 'autosync'):
+                stack.enter_context(mock.patch.object(serve, name, side_effect=spy(name)))
+            for tid, legacy, mp, d in (('a', True, 'mockup/a', self.a_dir), ('p', False, 'mockup/p', self.p_dir)):
+                for method, path, payload, names in (
+                        ('GET', '/api/vcs-status?it=it1', None, ['gitlab_status']),
+                        ('GET', '/api/gitlab-status?it=it1', None, ['gitlab_status']),
+                        ('POST', '/api/vcs-push', {'it': 'it1'}, ['gitlab_sync']),
+                        ('POST', '/api/gitlab-sync', {'it': 'it1'}, ['gitlab_sync']),
+                        ('POST', '/api/vcs-pull', {}, ['gitlab_pull']),
+                        ('POST', '/api/gitlab-pull', {}, ['gitlab_pull']),
+                        ('POST', '/api/autosync', {}, ['autosync', 'gitlab_sync'])):
+                    with self.subTest(task=tid, path=path):
+                        n += 1
+                        write(os.path.join(d, 'iterations', 'it1', 'index.html'), f'<h1>шпигун {n}</h1>')
+                        self.peer_push({f'{mp}/index.html': f'<h1>колега {n}</h1>'})
+                        seen['provider'], seen['core'] = 0, []
+                        st, body = self.call(method, path, payload, tid)
+                        self.assertEqual(st, 200, body)
+                        self.assertEqual(seen['provider'], 1, 'постачальника резолвили вдруге')
+                        self.assertEqual([c[0] for c in seen['core']], names)
+                        for name, v in seen['core']:
+                            self.assertIsInstance(v, tuple, f'{name} без готового постачальника')
+                            self.assertEqual((len(v), v[2]), (3, legacy))
+
+    # ---------------------------------------------------------------- автосинк ніколи не віддає 5xx (ревʼю Task 5, M8)
+    def test_the_autosync_answers_200_with_a_reason_and_a_mask_for_any_failure(self):
+        """Stop-хук не мусить отримувати 500: і не-`OSError` (`ValueError` з читання мети) теж 200 з `reason` і маскою."""
+        msg = f'broken iterations of https://{TOKEN}@github.com/o/r.git'
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        cases = ((ValueError(msg), 'error', None), (KeyError(msg), 'error', None), (TypeError(msg), 'error', None),
+                 (OSError(msg), 'offline', None), (subprocess.SubprocessError(msg), 'offline', None),
+                 (serve.VcsError('vcs-offline', msg), 'offline', 'vcs-offline'))
+        for tid in ('a', 'p'):
+            for exc, reason, code in cases:
+                with self.subTest(task=tid, exc=type(exc).__name__):
+                    with mock.patch.object(serve, 'autosync', side_effect=exc):
+                        st, body = self.post('/api/autosync', {}, tid)
+                    self.assertEqual(st, 200, body)
+                    self.assertEqual((body['ok'], body['synced'], body['changed'], body['reason']), (False, False, False, reason))
+                    self.assertEqual(body.get('code'), code)
+                    self.assertIn('https://***@github.com/o/r.git', body['error'])
+                    self.assertNotIn(TOKEN, json.dumps(body))
+
+    def test_a_real_value_error_of_the_task_state_is_still_a_200_for_the_stop_hook(self):
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        write(os.path.join(self.p_dir, 'iterations.json'), '{')
+        st, body = self.post('/api/autosync', {}, 'p')
+        self.assertEqual((st, body['ok'], body['reason']), (200, False, 'error'), body)
+        self.assertTrue(body['error'])
+
+    # ---------------------------------------------------------------- рядки свого модуля (ревʼю Task 5, M9)
+    def test_a_hint_of_a_foreign_module_with_a_token_never_reaches_the_push_response_or_the_autosync(self):
+        leak = {'ok': False, 'synced': False, 'error': 'denied', 'hint': f'use https://{TOKEN}@host/o/r.git', 'code': 'x'}
+        mod = self.stub(push=lambda ctx, t, d, m: dict(leak))
+        with mock.patch.object(serve, 'vcs_provider', side_effect=lambda: (mod, serve._vcs_legacy_ctx(), True)):
+            for path in ('/api/vcs-push', '/api/gitlab-sync'):
+                st, body = self.post(path, {'it': 'it1'}, 'a')
+                self.assertEqual((st, body['hint']), (200, 'use https://***@host/o/r.git'))
+                self.assertNotIn(TOKEN, json.dumps(body))
+            st, body = self.post('/api/autosync', {}, 'a')
+            self.assertEqual((st, body['hint']), (200, 'use https://***@host/o/r.git'))
+            self.assertNotIn(TOKEN, json.dumps(body))
+
+    # ---------------------------------------------------------------- підпис локального автокоміту (ревʼю Task 5, M10)
+    def test_the_local_autocommit_of_the_autosync_is_signed_by_the_space(self):
+        dm.write_module_state(self.plain, 'git-sync', settings={'autosync': True})
+        for tid, d, tool in (('a', self.a_dir, 'design-canvas'), ('p', self.p_dir, 'deai')):
+            with self.subTest(task=tid):
+                st, body = self.post('/api/autosync', {}, tid)
+                self.assertEqual((st, body['ok'], body['synced']), (200, True, True), body)
+                self.assertEqual(self.out(d, 'log', '-1', '--format=%s'), f'it1: автосинк ({tool})')
+
     # ---------------------------------------------------------------- маска адреси
     def test_a_token_in_an_exception_never_reaches_a_response_of_the_routes(self):
         """Поправка 8: усе, що маршрути друкують із винятку, — через `_mask_repo`: чужий текст із адресою теж."""
@@ -1737,6 +1948,20 @@ class Http(Core):
             self.assertEqual((st, body['ok']), (200, True), body)
             st, body = self.new({'id': 'n5', 'vcs': None})
             self.assertEqual((st, body['ok']), (200, True), body)
+
+    def test_task_new_with_a_valid_folder_to_adopt_and_a_vcs_takes_the_folder_and_records_the_target(self):
+        """Ревʼю Task 5 (M6): `from` + `vcs` — 200, отримання з репо нема (людина вже назвала джерело макета), ціль записано."""
+        folder = os.path.join(self.tmp, 'adopt-ok')
+        write(os.path.join(folder, 'index.html'), '<h1>моя тека</h1>')
+        self.peer_push({'mockup/n13/index.html': '<h1>з origin</h1>'})
+        st, body = self.new({'id': 'n13', 'from': folder, 'vcs': {'repo': self.origin, 'path': 'docs/{task}'}})
+        self.assertEqual((st, body['ok'], body['cloned']), (200, True, False), body)
+        self.assertEqual(body['copied']['files'], 1)
+        with open(self.plain_tasks, encoding='utf-8') as fh:
+            self.assertEqual(json.load(fh)['tasks']['n13']['vcs'], {'repo': self.origin, 'path': 'docs/{task}'})
+        with open(os.path.join(body['dir'], 'iterations', 'it1', 'index.html'), encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), '<h1>моя тека</h1>')
+        self.assertEqual(os.listdir(self.systmp), [])
 
     def test_task_new_with_a_refusing_provider_is_409_with_the_frame_code_and_writes_nothing(self):
         self.break_space_json()

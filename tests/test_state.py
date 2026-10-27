@@ -221,7 +221,7 @@ class IterationLine(unittest.TestCase):
         for label in ('GitLab', 'Git', 'GitHub'):
             with self.subTest(label=label):
                 line = state.gitlab_line({'configured': True, 'error': 'mirror is busy', 'code': 'vcs-busy'}, 'p', label=label)
-                self.assertTrue(line.startswith(f'{label} (p): зайнято'), line)
+                self.assertEqual(line, f'{label} (p): зайнято (іде синхронізація), спробуй ще раз')
                 self.assertIn('спробуй ще раз', line)
                 self.assertNotIn('помилка', line)
                 self.assertNotIn('mirror is busy', line)
@@ -563,8 +563,7 @@ class TaskFlag(unittest.TestCase):
         """Поправка 7: і коли статус каже `vcs-busy` словником, і коли це летить винятком."""
         busy = {'configured': True, 'error': 'mirror is busy', 'code': 'vcs-busy'}
         out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), busy)
-        self.assertIn('Git (p): зайнято', out)
-        self.assertIn('спробуй ще раз', out)
+        self.assertIn('Git (p): зайнято (іде синхронізація), спробуй ще раз', out)
         self.assertNotIn('помилка', out)
 
         def raises(*a, **k):

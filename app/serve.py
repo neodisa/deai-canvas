@@ -694,14 +694,31 @@ def vcs_target(cfg, tid, task, settings):
     налаштування модуля. `{task}` у `path` — id задачі; `path` без `/` по краях.
 
     ⛔ `repo` кладемо ОБРІЗАНИМ: `validate` модуля відкидає `repo != repo.strip()`, тож пробіл із форми чи ручної правки
-    `tasks.json` інакше давав би `vcs-bad-target` замість синку."""
+    `tasks.json` інакше давав би `vcs-bad-target` замість синку.
+
+    Ключ і IP ЛІГИ (поправка 7 до спеки): у просторі з інтеграціями ціль несе `ssh_key`/`host_ip` — задачі (`vcs{}` чи `gitlab{}`),
+    інакше спільні з кореня `tasks.json`, як у 0.7.0 — НЕЗАЛЕЖНО від того, звідки ціль (`task.vcs`, `gitlab{}`, налаштування явного
+    `git-sync`). У звичайному просторі кореневих ключів ЛІГИ нема. Явний ключ/IP у налаштуваннях модуля конкретніший за спільний:
+    тоді ціль його не несе, і модуль бере своє."""
     def tpath(p):
         return str(p).replace('{task}', tid).strip('/')
+
+    def liga_ssh(*own, settings_own=None):
+        """`{ssh_key, host_ip}` для цілі: перше непорожнє серед `own` (словники задачі), інакше корінь `tasks.json`; лише ЛІГА."""
+        if not spaces.integrations_on():
+            return {}
+        out = {}
+        for name, shared in (('ssh_key', 'gitlab_ssh_key'), ('host_ip', 'gitlab_host_ip')):
+            val = next((d[name] for d in own if isinstance(d, dict) and d.get(name)), None) or cfg.get(shared)
+            if isinstance(val, str) and val and not (settings_own or {}).get(name):
+                out[name] = os.path.expanduser(val) if name == 'ssh_key' else val
+        return out
     v = task.get('vcs')
     if isinstance(v, dict) and _vcs_str(v.get('repo')):
         return {'repo': v['repo'].strip(), 'task': tid,
                 'path': tpath(v['path'] if _vcs_str(v.get('path')) else settings.get('path') or 'mockup/{task}'),
-                'branch': (v['branch'] if _vcs_str(v.get('branch')) else settings.get('branch') or 'main').strip()}
+                'branch': (v['branch'] if _vcs_str(v.get('branch')) else settings.get('branch') or 'main').strip(),
+                **liga_ssh(v, task.get('gitlab'), settings_own=settings)}
     if task.get('gitlab') and spaces.integrations_on():
         gl = gitlab_cfg(cfg, task)
         if gl is None:
@@ -710,7 +727,8 @@ def vcs_target(cfg, tid, task, settings):
     if _vcs_str(settings.get('repo')):
         return {'repo': settings['repo'].strip(), 'task': tid,
                 'path': tpath(settings.get('path') or 'mockup/{task}'),
-                'branch': (settings.get('branch') or 'main').strip()}
+                'branch': (settings.get('branch') or 'main').strip(),
+                **liga_ssh(task.get('gitlab'), settings_own=settings)}
     return None
 
 
@@ -723,8 +741,9 @@ def vcs_task(cfg, tid, task):
 #: Форма результату функцій ролі, які кличе ядро. Свій модуль (довіра 3c) може повернути що завгодно: `None` чи рядок
 #: замість обʼєкта — це `module-error` тут, а не `AttributeError`/`TypeError` далі (маршрути ловлять лише `OSError`).
 _VCS_SHAPE = {'status': dict, 'push': dict, 'pull': dict, 'validate': dict, 'mirror_dir': str}
-#: Функції, чий результат може нести `error` ТЕКСТОМ: чужий модуль не кидає, а повертає `{ok: false, error: <текст із адресою>}`.
-_VCS_ERR_TEXT = ('status', 'push', 'pull')
+#: Функції, чий результат може нести ТЕКСТ із адресою репо (`error`, `hint`, `message`…): чужий модуль не кидає, а повертає
+#: `{ok: false, error: <текст із адресою>, hint: …}`.
+_VCS_TEXTY = ('status', 'push', 'pull')
 
 
 def _vcs_call(vcs, fn, *args, timeout=None):
@@ -733,8 +752,9 @@ def _vcs_call(vcs, fn, *args, timeout=None):
     `timeout` — межа для КОРОТКИХ викликів: так кличуть `validate`, щоб завислий модуль не тримав маршрут; операції git
     (`status`/`push`/`pull`) тримає сам модуль, їм межі не ставимо.
 
-    ⛔ Рядковий `error` результату `status`/`push`/`pull` іде крізь `_mask_repo` ТУТ: `gitlab_sync` віддає `{**r, 'remote': …}`,
-    автосинк кладе той самий `r` у відповідь Stop-хука, і текст свого модуля з адресою `https://TOKEN@host/…` дійшов би назовні."""
+    ⛔ УСІ верхньорівневі рядкові значення результату `status`/`push`/`pull` (не лише `error`) іде крізь `_mask_repo` ТУТ:
+    `gitlab_sync` віддає `{**r, 'remote': …}`, автосинк кладе той самий `r` у відповідь Stop-хука, і `hint`/`message` свого модуля з
+    адресою `https://TOKEN@host/…` дійшли б назовні. Маска ідемпотентна й чіпає лише userinfo після `://`; не рядки — як є."""
     v = vcs if vcs is not None else vcs_provider()
     if v is None:
         raise VcsError('vcs-error', 'no git sync in this space')
@@ -745,8 +765,8 @@ def _vcs_call(vcs, fn, *args, timeout=None):
     want = _VCS_SHAPE.get(fn)
     if want is not None and not isinstance(r, want):
         raise VcsError('module-error', f'{fn} returned {type(r).__name__}, expected {want.__name__}')
-    if fn in _VCS_ERR_TEXT and isinstance(r.get('error'), str):
-        r = {**r, 'error': _mask_repo(r['error'])}
+    if fn in _VCS_TEXTY:
+        r = {k: _mask_repo(x) if isinstance(x, str) else x for k, x in r.items()}
     return r
 
 
@@ -1295,9 +1315,17 @@ def autosync(tid, task, gl, vcs=None):
         known = g.get('synced_hash')  # синк до появи per-iteration відбитків
     if known is not None and mockup_hash(_iter_dir(task, it)) == known:
         return {'ok': True, 'changed': False, 'reason': 'clean', 'it': it}
-    local = git_autocommit(task['dir'], f'{it}: автосинк (design-canvas)')
+    # Текст ДАНИХ (історія теки задачі): у просторі ЛІГА лишається «design-canvas», у звичайному — «deai» (поправка 12 до спеки).
+    # Постачальника беремо тут, щоб знати, чий це простір; не знайшли — відмову скаже `gitlab_sync` нижче («offline»).
+    v = vcs
+    if v is None:
+        try:
+            v = vcs_provider()
+        except OSError:
+            v = None
+    local = git_autocommit(task['dir'], f'{it}: автосинк ({"deai" if v is not None and not v[2] else "design-canvas"})')
     try:
-        r = gitlab_sync(tid, task, gl, it, vcs=vcs)
+        r = gitlab_sync(tid, task, gl, it, vcs=v)
     except OSError as e:
         # Немає мережі/VPN — це не привід сварити дизайнера після кожної відповіді.
         # Але й «синхронізовано» не пишемо: відбиток лишається старим, і синк
@@ -2099,8 +2127,7 @@ def _registry_push(tid):
 
 def _vcs_failure(e):
     """Тіло відмови маршрутів `vcs-*` і автосинку: `{ok: false, error, code?}`. Текст — крізь `_mask_repo` (виняток нижче по
-    стеку чи чужий модуль міг понести адресу з токеном), `code` — лише у `VcsError`. Модульна функція, а не метод `Handler`:
-    зовнішні заглушки обробника мають лише `_current_task/send_error/_send_json/_overview_sync`."""
+    стеку чи чужий модуль міг понести адресу з токеном), `code` — лише у `VcsError`."""
     return {'ok': False, 'error': _mask_repo(str(e))[:300], **({'code': e.code} if isinstance(e, VcsError) else {})}
 
 
@@ -6814,11 +6841,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'configured': False})
             return
         it = parse_qs(urlparse(self.path).query).get('it', [''])[0]
+        # `it` іде в шлях (`_iter_dir`): `../..` хешував би чужу теку. Порожній — штатний (смуга без вибраної ітерації).
+        if it and not NAME_RE.fullmatch(it):
+            self.send_error(400, 'bad iteration')
+            return
         try:
             self._send_json(gitlab_status(task, vcs[3], load_meta(task), it, vcs=vcs[:3]))
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'configured': True, 'error': _mask_repo(str(e))[:200],
-                             **({'code': e.code} if isinstance(e, VcsError) else {})})
+            # `gitlab_status` сам перетворює відмову модуля (`VcsError`) на словник із `code`; сюди долітає решта `OSError`.
+            self._send_json({'configured': True, 'error': _mask_repo(str(e))[:200]})
 
     def _gitlab_sync(self, payload):
         """`POST /api/vcs-push {it}` (і `/api/gitlab-sync`). Без ролі чи цілі — 400 `no gitlab configured for this task` (текст
@@ -6831,7 +6862,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(400, 'no gitlab configured for this task')
             return
         it = payload.get('it', '')
-        if not NAME_RE.match(it):
+        # ⛔ Не рядок (`5`, `null`, список) у `NAME_RE.match` кидав TypeError, і зʼєднання рвалось; `match` пропускав `it1\n`.
+        if not isinstance(it, str) or not NAME_RE.fullmatch(it):
             self.send_error(400, 'bad iteration')
             return
         try:
@@ -6849,7 +6881,8 @@ class Handler(SimpleHTTPRequestHandler):
         `reason: "no-gitlab"` (контракт хука; відмова постачальника — те саме, з `code`). `autosync` вимкнений у модулі —
         `reason: "autosync-off"` і ні відправки, ні локального автокоміту. Хук мовчить на причинах, яких не знає: реагує лише на
         `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Далі — `autosync()`: `no-iterations`, `foreign-only`, `clean`,
-        а будь-яка відмова модуля — `reason: "offline"` з `code` (хукові ніколи не віддається 5xx)."""
+        а будь-яка відмова модуля — `reason: "offline"` з `code`. Хукові НІКОЛИ не віддається 5xx: збій поза git (`ValueError` із
+        читання мети задачі, `KeyError`…) — теж 200 `{ok: false, reason: "error", error}`; текст скрізь крізь `_mask_repo`."""
         tid, task, vcs, err = self._vcs_ctx()
         if err is not None or vcs is None or vcs[3] is None:
             out = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
@@ -6860,8 +6893,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             r = autosync(tid, task, vcs[3], vcs=vcs[:3])
-        except (OSError, subprocess.SubprocessError) as e:
-            self._send_json(_vcs_failure(e))
+        except Exception as e:  # noqa: BLE001 — Stop-хук не мусить отримати 5xx: див. докстрінг
+            self._send_json({**_vcs_failure(e), 'synced': False, 'changed': False,
+                             'reason': 'offline' if isinstance(e, (OSError, subprocess.SubprocessError)) else 'error'})
             return
         if r.get('changed'):
             self._overview_sync()
