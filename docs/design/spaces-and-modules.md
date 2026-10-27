@@ -4,9 +4,11 @@ Status: agreed direction, 2026-10-09. Clickable prototype reviewed by the owner.
 Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to a
 folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0),
 stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3a (the
-Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0) and stage 3c (a space's own
-modules with a trust dialog, 0.7.0) — see *Status* at the end.
-Next: stage 4 — the in-house integrations of the legacy space (team dashboard, git sync) as optional per-space modules.
+Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a space's own
+modules with a trust dialog, 0.7.0) and stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0)
+— see *Status* at the end.
+Next: stages 4b–4d — the rest of the in-house integrations of the legacy space (publishing and comments, then the team
+dashboard, tracker statuses and notifications) as optional per-space modules, and the end of the `integrations` flag.
 
 ## Goal
 
@@ -80,13 +82,20 @@ canvas for their workflow without touching the core.
    - ✅ **2a** (0.2.0) — the framework, `static-publish`, `css-tokens`;
    - ✅ **2b-1** (0.3.0) — your own Vercel (publish);
    - ✅ **2b-2** (0.4.0) — the `comments` role and your own Supabase (team comments);
-   - the in-house integrations (git sync, team dashboard, tracker, team chat notifications)
-     follow later as that company's modules.
+   - the in-house integrations follow as stage 4: git sync first (4a), then the team dashboard, tracker
+     and team chat notifications as that company's modules.
 3. Onboarding, split into three parts:
    - ✅ **3a** (0.5.0) — the Connections screen;
    - ✅ **3b** (0.6.0) — the new-space wizard (space → modules → settings → first task);
    - ✅ **3c** (0.7.0) — a space's own modules from `<space>/modules/` with the trust dialog.
-4. Company-specific integrations move out of the core into that company's space modules.
+4. Company-specific integrations move out of the core into modules. The goal is a clean core plus parity: everything
+   the legacy space does becomes a module, so that space can later be an ordinary one. Four releases:
+   - ✅ **4a** (0.8.0) — git sync: the `vcs` role and the `git-sync` module;
+   - **4b** — the legacy publishing and comments move onto the existing modules (`vercel-publish`,
+     `supabase-comments`); the hard-wired constants and the profiles go;
+   - **4c** — the roles `dashboard`, `tracker` and `notify` in the core, and the team dashboard, tracker statuses and
+     team chat notifications as modules of that company;
+   - **4d** — the `integrations` flag goes.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
 Each stage gets its own spec, plan and tests.
@@ -228,10 +237,33 @@ Spec: `docs/superpowers/specs/2026-10-22-own-modules-trust-design.md` (revision 
   error; no implicit or legacy fallback.
 - **UI**: Connections (cards, notes, panel), the trust dialog, wizard step 2/3.
 
+### Stage 4a — git sync as a module (0.8.0, 27.10.2026)
+
+Spec: `docs/superpowers/specs/2026-10-26-git-sync-module-design.md` (revision 2 + the planning amendments);
+plan: `docs/superpowers/plans/2026-10-26-git-sync-module.md`. What is built:
+
+- **The `vcs` role** is called by the core: `status`, `push`, `pull` (and the optional `validate`, `mirror_dir`) on a
+  *target* the core computes for the task — the task's own `vcs{repo, path?, branch?}`, in a space with integrations the
+  older `gitlab{}`, then the module's settings. Five codes, `vcs-offline`, `vcs-auth`, `vcs-bad-target`, `vcs-busy` and
+  `vcs-error`; `ctx["cache_dir"]` for every module. The module is a **transport**: the iterations, authorship, the
+  «never send a colleague's work» rule and the new iteration made of a pull stay in the core.
+- **`git-sync`**: any git remote through the system `git` (SSH key or saved HTTPS sign-in; Deai keeps no git secrets). One
+  mirror clone per address in `<DEAI_HOME>/cache/<space>/git-sync/mirrors/`, one operation per mirror (a lock that works
+  between processes), push without force, `pull --ff-only`, the address of the history for GitHub and GitLab.
+- **The git transport left `serve.py`**; the old names of the core (`gitlab_cfg`, `gitlab_status`, `gitlab_sync`,
+  `gitlab_pull`) and of the routes (`/api/gitlab-*`) stay as wrappers and aliases until 4d. New routes:
+  `/api/vcs-status`, `/api/vcs-push`, `/api/vcs-pull`; `task-new` accepts `vcs`.
+- **The legacy space runs on the same module** through an implicit provider (`'legacy'`), with its old mirror folders, the
+  label «GitLab» and its commit text; `tests/legacy-golden.test.mjs` is green without a re-shoot.
+- **UI**: a «Git sync» section and a Git card on Connections and in the wizard, a «Repository» field in «New task», the
+  sync zone of the task bar and the palette for any space that has the role, with the service's label.
+- **Tested** on local bare repositories (a path and `file://`); a real GitHub, GitLab or HTTPS server is not part of the
+  tests, and Windows was not run on a real machine.
+
 ### What stays for later
 
-- The roles `vcs`, `tracker`, `dashboard`, `notify` are reserved names that the core does not
-  call yet.
+- The roles `tracker`, `dashboard`, `notify` are reserved names that the core does not
+  call yet (stage 4c).
 - Left out of 3c (listed in its spec): a sandbox for module code (a trusted module runs with the person's
   permissions); cleaning of snapshots that a re-trust replaced or whose folder vanished; viewing or comparing code in
   the dialog; signatures and a catalog of modules; installing a module from a URL; machine-wide modules; a banner

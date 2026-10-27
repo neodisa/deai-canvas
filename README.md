@@ -6,15 +6,17 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.7.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.8.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
-> a folder or to your own Vercel account, design-system tokens from a CSS file, and team
-> comments on your own Supabase (or any service, through a small module) work in any space.
-> A **wizard** creates a space and takes you through its modules and a first task, and a
+> a folder or to your own Vercel account, design-system tokens from a CSS file, team
+> comments on your own Supabase (or any service, through a small module), and **git sync** —
+> iterations to and from any git repository, GitHub or GitLab or your own server — work in any
+> space. A **wizard** creates a space and takes you through its modules and a first task, and a
 > **Connections** screen manages the modules afterwards — no command line. A few integrations
-> (team dashboard, git sync) are still wired for the original setup and only run in a migrated
-> legacy space; they are being turned into optional per-space modules. A space can carry
-> **its own modules** in `<space>/modules/`; their code runs only after you trust it. See *Roadmap*.
+> (team dashboard, tracker statuses, team chat notifications) are still wired for the original
+> setup and only run in a migrated legacy space; they are being turned into optional per-space
+> modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> after you trust it. See *Roadmap*.
 
 ## What it does
 
@@ -28,6 +30,7 @@ links for your team.
 | **Comments** | Pin comments on any element (via [CommentLayer](https://github.com/neodisa/CommentLayer)); a local channel for the agent, an optional team channel on your own service — Supabase or anything else — through a `comments` module (canvas, Overview, published previews, the agent's `inbox`). See *Comments*. |
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
+| **Git sync** | Send an iteration to a git repository (GitHub, GitLab, your own server) and pull a colleague's changes back as a new iteration; the state is a dot in the task bar. Any space, through the `git-sync` module. See *Git sync*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
 | **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, design-system tokens) from the UI. See *Modules*. |
@@ -53,7 +56,7 @@ npm install && npx playwright install chromium
 ```
 
 Tests: `npm test` (unit, Python) and `npm run test:live` (real Chromium). The Python
-suites (`tests/`, `bin/`, `app/`) were run for 0.7.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
+suites (`tests/`, `bin/`, `app/`) were run for 0.8.0 on Python 3.9.6, the oldest supported version, and on Python 3.13.
 
 ## Spaces
 
@@ -70,9 +73,9 @@ space folder», which starts with the cursor in the folder field.
    its tasks and modules. The space is created here, for real, so closing the wizard at any later
    step leaves a working space; «Back» to this step edits its name and colour (the folder cannot
    change), and «Cancel» before the creation returns to where you were.
-2. **Modules** — one choice per role (publishing, team comments, design-system tokens): a module,
-   or «No module» with what that means. A choice that replaces the current provider says «instead of
-   …». Nothing is required, and nothing is written yet.
+2. **Modules** — one choice per role (publishing, team comments, git sync, design-system tokens): a
+   module, or «No module» with what that means. A choice that replaces the current provider says
+   «instead of …». Nothing is required, and nothing is written yet; no git module is pre-selected.
 3. **Settings** — the fields of each chosen module, the same as in the Connections side panel
    (secrets are written, never shown). One pass writes the choices and checks each module; if
    something fails, the wizard stays on the step with the reason in the card. If an agent changed a
@@ -94,13 +97,13 @@ after a restart (what was created stays, and the rest is on «Connections»).
 A **module** is a folder — built in at `app/modules/<id>/` or a space's own at
 `<space>/modules/<id>/` — with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
-calls: `publish`, `tokens` and `comments` today; `vcs`, `tracker`, `dashboard`, `notify`
+calls: `publish`, `tokens`, `comments` and `vcs` today; `tracker`, `dashboard`, `notify`
 are reserved. One provider per role per space.
 
 **Connecting a module — the Connections screen.** Open the space menu (the space chip in the
 top bar) → «Connections…», or press ⌘K and pick «Connections of the space …»; in a space
 without integrations the head of the Tasks page also has a «Connections» button. The page lists
-the modules of the space by role (Publishing, Team comments, Design-system tokens), says who
+the modules of the space by role (Publishing, Team comments, Git sync, Design-system tokens), says who
 provides each role now, shows the state of each module and, for one that fails, the reason in
 plain words. «Connect» and «Configure» open a side panel with the module's settings; secrets
 are written there but never shown again — the panel only says «set» or «not set», and
@@ -138,6 +141,7 @@ those folders out of public commits.
 | `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account** through the REST API (no Node, no CLI): one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Settings: `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
 | `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages). Off by default. See *Comments*. |
+| `git-sync` | `vcs` | Syncs a task's iterations with **any git repository** — GitHub, GitLab, your own server — through the git on your computer: nothing is stored by Deai, access is your SSH key or saved HTTPS sign-in. Settings: `repo` (the default for tasks; optional), `branch` (`main`), `path` (`mockup/{task}`), `ssh_key`, `host_ip`, `autosync`. Off by default. See *Git sync*. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
 result is a plain static site in the folder (host it anywhere; the task id must be
@@ -225,7 +229,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists); for a space's own module `GET /api/module-client/<space>/<id>/<file>`, served from its trusted snapshot |
-| `POST /api/task-new` `{id, title?, space?, from?, …}` | create a task. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
+| `POST /api/task-new` `{id, title?, space?, from?, vcs?, …}` | create a task. `vcs` — `{repo, path?, branch?}`, the task's own repository (needs a `vcs` module in the space: `400 vcs-needs-role`; the module checks the address, branch and folder: `400 vcs-bad-target`); if `path` of that repository already holds an `index.html`, the first iteration is taken from it, and if it cannot be fetched the task starts with a blank page. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
@@ -300,11 +304,72 @@ runs only after you trust it. The service has to allow CORS for the opaque origi
 `/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
 not a real project. Screenshots of pins are not part of the role (the role has no file storage).
 
+## Git sync
+
+The `git-sync` module (role `vcs`) keeps a task's iterations in a git repository — GitHub, GitLab or your own server —
+so a colleague gets your mockup and you get theirs. It works in any space. It is a transport only: what to send and how
+to take what arrives (a new iteration, a fork from a colleague's one) is the core's job, the same for every provider of
+the role.
+
+**Connect it.** Connections → «Git sync» → «Git» → «Connect»: the repository (the default for the tasks of the space; it
+may stay empty and be given per task), the branch (`main`), the folder in the repository (`mockup/{task}` — `{task}` is the
+task id), and, optionally, an SSH key and a server IP (for a VPN where the server's name does not resolve; only for
+`user@host:path` addresses). «Check» asks the repository for the branch (`git ls-remote`, 4 seconds). The same section is
+in the new-space wizard, step 2.
+
+**A repository per task.** «New task» has an optional «Repository» field (not in the in-house legacy space): empty means
+the default of the module. If `<path>` of the new task already holds an `index.html` in that repository, the first
+iteration is taken from it. A task without any repository has no sync, and the task bar offers «Configure repository…»,
+which opens Connections on the Git card. Addresses: `ssh://`, `https://`, `file://`, `user@host:path` or an absolute local path.
+
+**Access is git's, not Deai's.** The module runs the git that is on your computer and never asks for a password
+(`GIT_TERMINAL_PROMPT=0`): use an SSH key (in the agent, in `~/.ssh/config`, or the module's `ssh_key`) or a saved HTTPS
+sign-in (a git credential helper, for example the GitHub CLI's). A password inside an address (`https://user:pass@host/…`) is refused. Without
+access the answer is `vcs-auth`.
+
+**In the task bar.** A dot and a menu: «Send» an iteration, «Pull» (offered when the repository is ahead), «History» (for
+GitHub and GitLab addresses), and the state — in sync, ahead, behind, error. The label is the service's name: GitHub,
+GitLab or Git.
+
+* **Send** puts the iteration into `<path>` of the repository — the clean mockup, a `README.md` for a multi-page one and
+  `.canvas-state.json` — as one commit signed with this machine's identity (subject `deai: sync <path> (<title>) · <it>`)
+  and pushes it without force. A colleague's iteration is never sent. If somebody changed `<path>` in the meantime, nothing
+  is sent over it: pull first.
+* **Pull** is `pull --ff-only`: the repository's `<path>` arrives as a new iteration signed by its author, with a copy to
+  continue in when it is a colleague's (or older than your own newest work); if it equals an iteration you already have,
+  nothing is created.
+* In a regular space the repository is cloned once per address into
+  `~/.deai/cache/<space id>/git-sync/mirrors/<host>/<repository path>` and shared by the tasks that use it; the first
+  clone can take minutes (the legacy space keeps its old mirror folders). The mirror is a cache of the tool: before every
+  send or pull its tree is reset and cleaned, so edit nothing there by hand (local commits that were not pushed stay).
+* A branch that is missing on a non-empty repository is an error: Deai does not create branches in a shared repository.
+  On an empty repository the first send creates it.
+* **Autosync.** With the module's «Send after every agent reply» on, the agent's Stop hook calls `POST /api/autosync` after
+  each reply; it sends your newest own iteration when it changed. Off by default.
+
+**For an agent or a script.**
+
+| Call | |
+|---|---|
+| `GET /api/vcs-status?it=<iteration>` | `{configured, behind, behind_path, unpushed, on_remote, dirty, web, label, …}`; `{configured: false}` when the space has no `vcs` module or the task has no repository; a refusal is `{configured: true, error, code}` |
+| `POST /api/vcs-push` `{it}` | send an iteration; `{ok, synced, changed, pushed, sha?, remote, …}` or `blocked: "behind" \| "diverged" \| "foreign"`; a refusal is `{ok: false, error, code}` |
+| `POST /api/vcs-pull` | pull the repository's version as a new iteration |
+| `POST /api/autosync` | the quiet step for a Stop hook; `reason` says why nothing was sent (`no-gitlab`, `autosync-off`, `no-iterations`, `foreign-only`, `clean`, `offline`, `error`) |
+
+`GET /api/gitlab-status`, `POST /api/gitlab-sync` and `POST /api/gitlab-pull` are the old names of the first three and stay
+as aliases with the same answers. Codes: `vcs-offline`, `vcs-auth`, `vcs-bad-target`, `vcs-busy`, `vcs-error`. To write a
+provider of this role yourself, see [`docs/modules/authoring.md`](docs/modules/authoring.md), *The `vcs` role*.
+
+**Limits.** HTTPS works only when git already has the sign-in saved; the retry through `host_ip` covers only
+`user@host:path` addresses; Windows is not checked on a real machine; a token placed in the user position of an address
+(`https://TOKEN@host/…`) is accepted and sits in the task file in plain text, though it is hidden from every answer and
+text. The full list is in `CHANGELOG.md`, 0.8.0.
+
 ## Layout
 
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
-app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments); the core is app/deai_modules.py
+app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, git-sync); the core is app/deai_modules.py
 docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
@@ -320,15 +385,24 @@ tests/        unit, Python and live (Playwright) tests
    - ✅ **2b-1** (0.3) — your own Vercel (publish) as a module.
    - ✅ **2b-2** (0.4) — the universal `comments` role (browser adapter + server functions) and
      your own Supabase (team comments) as the first module; a guide for writing your own.
-   - Later — git sync, team dashboard, issue tracker, notifications: modules you connect per project.
+   - Later — team dashboard, issue tracker, notifications: modules you connect per project (stage 4).
 3. **Onboarding**
    - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
      modules from the UI; `replace` in `module-enable`.
    - ✅ **3b** (0.6) — the new-space wizard: space → modules → settings → first task, and a task
      from an existing mockup folder (`from` in `task-new`).
    - ✅ **3c** (0.7) — a space's own modules from `<space>/modules/`, run from a snapshot only after a person trusts them (dialog + system window).
-4. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
-5. **Cross-platform start** — one command on macOS, Windows and Linux.
+4. **Company integrations leave the core** — the goal is a clean core and parity: everything the original in-house
+   setup does becomes modules, so that setup can move to an ordinary space without losing anything. Four releases
+   (the same numbering as in `docs/design/spaces-and-modules.md`):
+   - ✅ **4a** (0.8) — git sync: the `vcs` role and the `git-sync` module (any git remote).
+   - **4b** — the in-house publishing and comments move onto the existing modules (`vercel-publish`,
+     `supabase-comments`); their hard-wired constants go.
+   - **4c** — team dashboard, tracker statuses and team chat notifications: the roles `dashboard`, `tracker`, `notify`
+     in the core, and the modules for them.
+   - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.
+5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
+6. **Cross-platform start** — one command on macOS, Windows and Linux.
 
 ## License
 

@@ -3,6 +3,165 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.8.0] — 27.10.2026
+
+Stage 4a: git sync becomes a module. The new role `vcs` and the built-in module `git-sync` sync a task's iterations with
+any git repository — GitHub, GitLab, your own server — in any space, not only in the in-house legacy one. The git
+transport left `app/serve.py`; the legacy space runs on the same module and looks the same
+(`tests/legacy-golden.test.mjs` is green without a re-shoot). Design:
+`docs/superpowers/specs/2026-10-26-git-sync-module-design.md`; plan:
+`docs/superpowers/plans/2026-10-26-git-sync-module.md`.
+
+### Added
+
+- **The `vcs` role and the `git-sync` module** (`app/modules/git-sync/`, `app/deai_modules.py`). `vcs` moved from the
+  reserved roles to the roles the core calls. The module is a transport: a mirror clone per repository address, `fetch`,
+  a push without force, `pull --ff-only`, the address of the history for GitHub and GitLab; it knows nothing about
+  iterations. Six settings: `repo` (the default for tasks, optional), `branch` (`main`), `path` (`mockup/{task}`),
+  `ssh_key`, `host_ip`, `autosync` (off by default). Addresses: `ssh://`, `https://`, `file://`, `user@host:path` or an
+  absolute local path. Access is the git of the computer — an SSH key or a saved HTTPS sign-in; Deai stores no git
+  secrets. `check` asks the remote for the branch (`git ls-remote`, 4 s). One operation per mirror, with a lock that works
+  between processes. New error codes in the core's table: `vcs-offline`, `vcs-auth`, `vcs-bad-target`, `vcs-busy`,
+  `vcs-error`; `ctx["cache_dir"]` for every module.
+- **Routes**: `GET /api/vcs-status?it=`, `POST /api/vcs-push`, `POST /api/vcs-pull`. `GET /api/gitlab-status`,
+  `POST /api/gitlab-sync` and `POST /api/gitlab-pull` stay as aliases with the same handlers and answers (an agent's Stop
+  hook and scripts rely on them). A refusal now carries `code`. `POST /api/task-new` accepts
+  `vcs: {repo, path?, branch?}`.
+- **Connections**: the section «Git sync» and the Git card — the six fields, «Check» and the verdicts for `vcs-offline`,
+  `vcs-auth`, `vcs-bad-target`, `vcs-busy` and `vcs-error`. In the legacy space, turning an explicit `git-sync` off
+  returns the built-in sync.
+- **New task**: an optional «Repository» field (not in the legacy space; its hint is the default repository of the
+  module). A request that really clones — the field is filled, or a space with integrations and a `vcs` role — has a
+  ceiling of 400 s instead of 20 s, the button says «Creating…» and a line says «The first clone of the repository may
+  take a few minutes»; every other request is as before.
+- **Wizard**: the section «Git sync» on step 2; no module is selected by default.
+- **Task bar and palette**: the sync zone follows the `vcs` role, not the legacy space only. The label comes from the
+  module and is one of GitLab, GitHub, Git («Git» in a regular space when the label is not known); «History» only for an
+  `http(s)` address; a busy state, when another operation holds the mirror, asks again after a few seconds;
+  «Configure repository…» outside the legacy space opens Connections on the Git card, on a cold start too.
+- The credentials part of an address (`https://***@host/…`) is masked in every answer, error text, `remote`, the Stop hook
+  line and `bin/state.py`.
+
+### Changed
+
+- **The legacy space syncs through the same module** (an implicit provider, `'legacy'`): the old mirror folders
+  (`DC_MIRRORS_DIR`, or `.mirrors` in the tool folder), the label «GitLab», the commit subject `design-canvas: sync …` and
+  all the texts are as before. An explicit `git-sync` in the legacy space wins over the implicit one, like any other role.
+- A regular space: the commit subject is `deai: sync …`, the local autocommit says `автосинк (deai)`, a pulled iteration is
+  noted «оновлення з репозиторію» and a task started from a repository continues as «продовження макета з репозиторію»,
+  the README of a multi-page push says «Deai Canvas». These are texts of data, Ukrainian whatever the UI language; the
+  legacy space keeps `design-canvas: sync …`, «оновлення з GitLab», «продовження макета з GitLab» and «design-canvas».
+- The texts of the bar that name the repository take its label as the last parameter, «GitLab» by default.
+- The mirror is a cache of the tool: before every send or pull its tree is reset (`reset --hard`) and cleaned
+  (`clean -fd`). Hand edits in a mirror do not survive; commits that were not pushed do.
+- `status` does not wait for a busy mirror (`vcs-busy` at once); `push` and `pull` wait up to 60 s.
+- A branch that is missing on a non-empty remote is an error: Deai does not create branches in a shared repository. On an
+  empty remote the first send creates it.
+- A git command that does not answer in time is `offline` (`vcs-offline`), not an unhandled exception. A refused pull is no
+  longer swallowed (0.7.0 copied the stale mirror into a new iteration, signed with the colleague's name): it stops with
+  the error.
+- Control characters in a task title or in the author's name are removed by the core before a commit; the module refuses
+  them, so a single stray character would otherwise block every send.
+- Autosync (`POST /api/autosync`): `autosync` off in the module → `reason: "autosync-off"`, with neither a send nor the
+  local autocommit; a refusal of the network or of the module → the quiet `offline` with the `code`; a refusal of the
+  provider (an unreadable `space.json`, an own module «on paper») → the quiet `no-gitlab` with the `code`; a local failure
+  (no permission, no `git`, a broken `iterations.json`) → `reason: "error"`, which the Stop hook reports; the central
+  states of the space → 404, 503 or 409 as for any route.
+- An iteration that is invalid or not a string in `vcs-push` and `vcs-status` is `400 bad iteration`, instead of a dropped
+  connection or a read of another folder.
+- `bin/state.py`: the label comes from the module; a busy mirror reads as «try again», not as an error.
+- The SSH key and the server IP: the task's own, then the setting of the module, then the shared ones in the root of
+  `tasks.json` (the root only in a space with integrations).
+- `POST /api/task-new` with `vcs` refuses with `400 bad-request`, `400 vcs-needs-role` (no `vcs` role in the space),
+  `400 vcs-bad-target`, `409` with the provider's code (an unreadable `space.json`, an own module on paper),
+  `504 check-timeout` or `502 module-error`; for a code it has no text for, the form says «Failed: <reason>».
+
+### Removed
+
+- The git transport in `app/serve.py` — the mirror, `fetch`, push, pull, the retry through `host_ip` — it moved into the
+  module.
+- 15 dead keys of the UI dictionary, in both languages: `glCatchUpLabel`, `glDirtyTitle`, `glErrorLabel`,
+  `glHistoryLabel`, `glHistoryTitle`, `glIterationFallback`, `glPullBadge`, `glPullTitle`, `glSendLabel`,
+  `glSyncedLabel`, `glSyncedLabelBare`, `glSyncedTitle`, `glSyncingLabel`, `glThisIterationFallback`,
+  `glUnpushedTitle`.
+
+### For module authors
+
+- `vcs` is a called role: `status`, `push` and `pull` are required, `validate` and `mirror_dir` optional; `tracker`,
+  `dashboard` and `notify` are the reserved ones now. The contract — the target, the functions and their results, the
+  codes — is in `docs/modules/authoring.md`, *The `vcs` role*.
+- **An own module of 0.7.0 with `roles: ["vcs"]` and only `check` is now `bad-manifest`** (`server.py: no callable
+  status()`); it passed before, because the role was only reserved.
+- The core checks the shape of a result (`status`, `push`, `pull` and `validate` a dict, `mirror_dir` a string; otherwise
+  `module-error`) and masks the credentials part of an address in every top-level string of the result of `status`,
+  `push` and `pull`.
+- `validate` is called with a short limit of the frame (5 s, then `check-timeout`).
+- `ctx["cache_dir"]` is a path, `~/.deai/cache/<space id>/<module id>`; the core does not create the folder, the module
+  does.
+- A transport, not a model of iterations: the iterations, the authorship and `iterations.json` stay in the core. The
+  core reads the settings `repo`, `branch`, `path` and `autosync` of the module by name.
+
+### Security
+
+- The address, the branch, the folder, the key and the IP are checked before any `git` runs; every path goes after `--`
+  with `GIT_LITERAL_PATHSPECS=1`, `GIT_ALLOW_PROTOCOL` is `ssh:https:file` (no `ext::` or `fd::`), the host and the user of
+  a `user@host:path` address are plain names, the key is quoted.
+- A password inside an `https://` address is refused: access lives in git, not in Deai.
+- No force-push, `pull --ff-only` only, a colleague's iteration is never sent, and a change under `<path>` on the remote
+  stops a send.
+- Symbolic links are not copied in either direction; a link on the way to `<path>` in a mirror is `vcs-error`.
+
+### Known limits
+
+- HTTPS without a sign-in saved in git: `vcs-auth` with a hint to set git up.
+- The retry through `host_ip` covers only scp-style addresses (`user@host:path`).
+- Windows was not checked on a real machine, as for the other modules.
+- A regular space does not read the old `.mirrors` folder: its first status clones again into the cache.
+- The `git push` of a task folder's local history (`git_autocommit`) is as it was: only in a space with integrations, and
+  it is not part of the role.
+- The `.gitignore` of the repository may silently keep mockup files out (for example `*.html`), as in 0.7.0; ignored
+  leftovers of such a send come back with a pull.
+- `status` for a branch that is missing on a non-empty remote, when the mirror is already cloned, gives zeros and
+  `on_remote: null`; the error shows on the first send or pull.
+- `.clone-*` folders stay after a killed process; a git `*.lock` in a mirror, after a process killed on a timeout, gives
+  `vcs-busy` until it is removed by hand.
+- The global `commit.gpgsign` and `core.hooksPath` of the person apply to the commits in a mirror; a failure is `vcs-error`.
+- A token in the user position of an address (`https://TOKEN@host/…`) cannot be told from a name: it is accepted and sits
+  in the task file in plain text, though it is hidden from every answer and text (and, in the legacy space, it appears in
+  the name of the local mirror folder).
+- Right after switching a task the status is asked before the page draws with an empty iteration, so the dot may say
+  «ahead» until something refreshes it — as in 0.7.0.
+- The worst path of «New task» with a retry through `host_ip` (a clone with `--branch`, a clone without it, `ls-remote`)
+  can take longer than the 400 s ceiling: the form shows a timeout, and the task appears anyway.
+- A hanging own module (`validate`, `check`) leaves a daemon thread until it returns; every new call adds one.
+- The frame cuts the text of a `ModuleError` to 300 characters before the core masks an address, so an own module that
+  puts an address with credentials exactly on that edge may leave the start of a token (`git-sync` masks its own texts).
+- POST handlers outside `vcs` (`/api/it-*`, `/api/task-*`) do not check the type of string fields: a value that is not a
+  string drops the connection instead of `400`. The routes of `vcs`, `gitlab` and `autosync` do check.
+
+### Tests
+
+`npm test` at 0.8.0 is green: 1890 node tests (plus `inspector-core`), 3038 Python tests in `tests/` (2 skipped), 168 in
+`bin/`, 170 in `app/` (0.7.0: 1749, 2656 with 2 skipped, 168, 170). The three Python suites were also run on Python
+3.9.6, the oldest supported version, with the same result (3038 with 2 skipped, 168, 170); `npm test` itself uses
+Python 3.13. Nothing in the tests touches the network: git runs only on local bare repositories (an absolute path or
+`file://`), and a transition over `ssh` or `https` goes through a stand-in for `subprocess.run`.
+
+New: `tests/test_git_sync_module.py` (181 tests: the module on a real git — the checks of the target, the mirror folder,
+the transport, the lock between processes, `status`, `push`, `pull`, `check`), `tests/test_vcs_core.py` (171: the core —
+the target, the provider, the legacy space, a regular space, the routes and their aliases, `task-new` with `vcs`,
+autosync) and `tests/vcs-client.test.mjs` (128: the bar, the palette, the section and the card of Connections, the field
+of «New task», the error texts, the dictionary). The transport tests of `tests/test_gitlab_sync.py` moved into the file of
+the module, the exact `capabilities` dicts of the other suites got the key `vcs`, and `tests/legacy-golden.test.mjs` is
+untouched and green.
+
+The live test `tests/live/git-sync.test.mjs` (a real server in an isolated machine, a real Chromium, a real git on a
+local bare repository, 13 scenarios, ports 13700–13799, one file at a time) covers the ways that exist only in the whole:
+a space without the role, the section and the card on Connections, a first send, a pull after a colleague's change,
+autosync, «New task» with a repository, the legacy space unchanged, «Configure repository…» (also on a cold start), the
+wizard step and a busy mirror; the map of every scenario to the line of the application it guards is in the header of the
+file. `tests/live/gitlab-pull-older.test.mjs` runs on the new addresses.
+
 ## [0.7.0] — 23.10.2026
 
 Stage 3c: a space's own modules and the trust dialog. A space can carry modules in `<space>/modules/<id>/`;
