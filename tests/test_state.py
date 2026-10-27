@@ -10,6 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin'))
 import state  # noqa: E402
+from serve import VcsError  # noqa: E402  (`state` уже додав `app` у sys.path)
 
 
 class GitlabLine(unittest.TestCase):
@@ -178,6 +179,61 @@ class IterationLine(unittest.TestCase):
         line = state.gitlab_line({'error': 'fetch failed', 'on_remote': False}, 'p')
         self.assertIn('помилка — fetch failed', line)
 
+    def test_without_a_label_the_line_is_the_070_one_word_for_word(self):
+        """Без `label` — дослівно 0.7.0 (простір ЛІГА: рядки перевіряють тести й клієнт)."""
+        self.assertEqual(state.gitlab_line({'behind': 0, 'dirty': False, 'on_remote': True}, 'p'),
+                         'GitLab (p): синхронізовано')
+        self.assertEqual(state.gitlab_line({'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}, 'p'),
+                         'GitLab (p): ⚠ на GitLab НОВІШЕ (2) — хтось (інший дизайнер/машина) оновив макет. '
+                         'Спершу Підтягнути!')
+        self.assertEqual(state.gitlab_line({'error': 'fetch failed', 'on_remote': False}, 'p'),
+                         'GitLab (p): помилка — fetch failed')
+
+    def test_the_label_names_the_remote_in_every_line(self):
+        """Підпис — з `label` статусу: «GitHub (p)» і «на GitHub НОВІШЕ»; жодного «GitLab» у тексті рядка."""
+        cases = {
+            'помилка': {'error': 'fetch failed', 'on_remote': False},
+            'ще не в репо': {'behind': 0, 'dirty': False, 'on_remote': False},
+            'новіше': {'behind': 2, 'behind_path': 1, 'dirty': True, 'on_remote': True},
+            'новіше без розбивки': {'behind': 2, 'dirty': False, 'on_remote': True},
+            'репо попереду': {'behind': 3, 'behind_path': 0, 'dirty': False, 'on_remote': True},
+            'невідомо': {'behind': 0, 'dirty': False, 'on_remote': None},
+            'синхронізовано': {'behind': 0, 'dirty': True, 'on_remote': True},
+        }
+        for what, st in cases.items():
+            for tid in (None, 'beta'):
+                with self.subTest(what=what, tid=tid):
+                    line = state.gitlab_line(st, 'p', tid, label='GitHub')
+                    self.assertTrue(line.startswith('GitHub (p): '), line)
+                    self.assertNotIn('GitLab', line)
+        line = state.gitlab_line(cases['новіше'], 'p', label='GitHub')
+        self.assertIn('на GitHub НОВІШЕ (2)', line)
+
+    def test_the_hints_with_an_endpoint_keep_the_old_addresses_under_any_label(self):
+        """Підказки з `/api/gitlab-sync` і `/api/gitlab-pull` не міняються: це псевдоніми, і вони діють у будь-якому просторі."""
+        never = state.gitlab_line({'behind': 0, 'dirty': False, 'on_remote': False}, 'p', 'beta', label='GitHub')
+        self.assertIn('POST /t/beta/api/gitlab-sync', never)
+        behind = state.gitlab_line({'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}, 'p', 'beta', label='GitHub')
+        self.assertIn('POST /t/beta/api/gitlab-pull', behind)
+
+    def test_a_busy_mirror_is_asked_again_not_called_an_error(self):
+        """Поправка 7: опит під час відправки дає `code: vcs-busy` — це «зайнято, спробуй ще раз», а не «помилка»."""
+        for label in ('GitLab', 'Git', 'GitHub'):
+            with self.subTest(label=label):
+                line = state.gitlab_line({'configured': True, 'error': 'mirror is busy', 'code': 'vcs-busy'}, 'p', label=label)
+                self.assertTrue(line.startswith(f'{label} (p): зайнято'), line)
+                self.assertIn('спробуй ще раз', line)
+                self.assertNotIn('помилка', line)
+                self.assertNotIn('mirror is busy', line)
+        other = state.gitlab_line({'configured': True, 'error': 'fetch failed', 'code': 'vcs-offline'}, 'p')
+        self.assertIn('помилка — fetch failed', other)
+
+    def test_a_token_in_a_status_error_never_reaches_the_line(self):
+        token = 'ghp_SECRETTOKEN123'
+        line = state.gitlab_line({'error': f'fetch of https://{token}@github.com/o/r.git failed'}, 'p')
+        self.assertNotIn(token, line)
+        self.assertIn('помилка — fetch of https://***@github.com/o/r.git failed', line)
+
     def test_status_without_the_field_is_unknown_not_synced(self):
         """Немає факту — немає й «синхронізовано».
 
@@ -325,6 +381,7 @@ class TaskFlag(unittest.TestCase):
                 'theirs': {'title': 'Чужа', 'dir': dirs['theirs'], 'profile': 'tool'},
                 'nodir': {'title': 'Без теки', 'profile': 'tool'},
                 'gone': {'title': 'Зникла', 'dir': self.gone_dir, 'profile': 'tool'}}}, fh)
+        self.tasks_file = tasks_file
         saved = {k: os.environ.get(k) for k in
                  ('DC_TASKS_FILE', 'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL')}
         os.environ['DC_TASKS_FILE'] = tasks_file
@@ -410,7 +467,7 @@ class TaskFlag(unittest.TestCase):
         дійти до обох підказок із ендпоїнтом."""
         from unittest import mock
         behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
-        with mock.patch.object(state, 'gitlab_cfg', lambda cfg, task: {'path': 'p'}), \
+        with mock.patch.object(state, 'vcs_task', lambda cfg, tid, task: (None, {}, True, {'path': 'p'})), \
                 mock.patch.object(state, 'gitlab_status', lambda *a, **k: behind):
             _, named, _ = self.run_main(['--task', 'theirs'])
             _, plain, _ = self.run_main([])
@@ -419,6 +476,112 @@ class TaskFlag(unittest.TestCase):
         self.assertNotIn('POST /api/', named, 'підказка без префікса б\'є в поточну')
         self.assertNotIn('/t/', plain)
         self.assertNotIn('gitlab-pull', plain)
+
+    # ---- роль `vcs` (етап 4a): гейт за постачальником, підпис із `label`
+    def give(self, tid, **keys):
+        """Дописати в запис задачі `tid` файла задач ключі (`gitlab`, `vcs`)."""
+        with open(self.tasks_file, encoding='utf-8') as fh:
+            cfg = json.load(fh)
+        cfg['tasks'][tid].update(keys)
+        with open(self.tasks_file, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh)
+
+    def state_with(self, vcs_task, status=None, argv=('--task', 'alpha')):
+        """Вивід `state.main` із підміненим постачальником (`vcs_task`) і статусом (`gitlab_status`)."""
+        from unittest import mock
+        stub = status if callable(status) else (lambda *a, **k: status)
+        with mock.patch.object(state, 'vcs_task', vcs_task), mock.patch.object(state, 'gitlab_status', stub):
+            rc, out, err = self.run_main(list(argv))
+        self.assertEqual(rc, 0, err)
+        return out
+
+    def line_of(self, out, prefix):
+        return next((ln for ln in out.splitlines() if ln.startswith(prefix)), None)
+
+    def test_the_label_is_gitlab_in_the_liga_space_and_git_in_another_one(self):
+        ok = {'behind': 0, 'dirty': False, 'on_remote': True}
+        legacy = self.state_with(lambda cfg, tid, task: (None, {}, True, {'path': 'p'}), ok)
+        self.assertIn('GitLab (p): синхронізовано', legacy)
+        other = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), ok)
+        self.assertIn('Git (p): синхронізовано', other)
+        self.assertNotIn('GitLab', other)
+
+    def test_the_label_of_the_status_wins_over_the_default(self):
+        """Підпис — з `label` статусу (модуль каже «GitHub»); ЛІГА його перекриває сама, у `serve.gitlab_status`."""
+        st = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True, 'label': 'GitHub'}
+        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), st)
+        self.assertIn('GitHub (p): ⚠ на GitHub НОВІШЕ (2)', out)
+        self.assertNotIn('GitLab', out)
+
+    def test_a_space_without_the_role_or_a_task_without_a_target_is_not_set_up(self):
+        out = self.state_with(lambda cfg, tid, task: None)
+        self.assertEqual(self.line_of(out, 'GitLab:'), 'GitLab: не налаштований для задачі')
+        out = self.state_with(lambda cfg, tid, task: (None, {}, False, None))
+        self.assertEqual(self.line_of(out, 'Git:'), 'Git: не налаштований для задачі')
+
+    def test_a_refusing_provider_for_a_task_with_no_target_of_its_own_is_not_set_up(self):
+        """Поправка 2: задача без `gitlab` і без `vcs` ніколи нічого не мала — «не дістати статус» їй брехало б (і кричало б
+        на кожній задачі при зламаному каталозі)."""
+        from unittest import mock
+
+        def refuse(cfg, tid, task):
+            raise VcsError('vcs-error', 'git-sync module is not loaded')
+        out = self.state_with(refuse)
+        self.assertEqual(self.line_of(out, 'GitLab:'), 'GitLab: не налаштований для задачі')
+        self.assertNotIn('не дістати', out)
+
+    def test_a_refusing_provider_for_a_task_with_a_target_says_it_cannot_get_the_status(self):
+        def refuse(cfg, tid, task):
+            raise VcsError('space-json-unreadable', 'space.json is not readable')
+        for key, val in (('gitlab', {'repo': 'git@h:o/r.git', 'path': 'mockup/alpha'}), ('vcs', {'repo': '/x/r.git'})):
+            with self.subTest(key=key):
+                self.give('alpha', **{key: val})
+                out = self.state_with(refuse)
+                self.assertEqual(self.line_of(out, 'GitLab:'), 'GitLab: не дістати статус (space.json is not readable)')
+                self.give('alpha', **{key: None})
+
+    def test_a_token_in_what_the_status_raises_never_reaches_the_output(self):
+        token = 'ghp_SECRETTOKEN123'
+
+        def boom(*a, **k):
+            raise OSError(f'clone of https://{token}@github.com/o/r.git failed')
+        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), boom)
+        self.assertNotIn(token, out)
+        self.assertIn('Git: не дістати статус (clone of https://***@github.com/o/r.git failed)', out)
+
+    def test_a_token_in_what_the_provider_raises_never_reaches_the_output(self):
+        token = 'ghp_SECRETTOKEN123'
+
+        def boom(cfg, tid, task):
+            raise OSError(f'provider of https://{token}@github.com/o/r.git failed')
+        self.give('alpha', vcs={'repo': '/x/r.git'})
+        out = self.state_with(boom)
+        self.assertNotIn(token, out)
+        self.assertIn('GitLab: не дістати статус (provider of https://***@github.com/o/r.git failed)', out)
+
+    def test_a_busy_mirror_in_the_status_says_to_try_again(self):
+        """Поправка 7: і коли статус каже `vcs-busy` словником, і коли це летить винятком."""
+        busy = {'configured': True, 'error': 'mirror is busy', 'code': 'vcs-busy'}
+        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), busy)
+        self.assertIn('Git (p): зайнято', out)
+        self.assertIn('спробуй ще раз', out)
+        self.assertNotIn('помилка', out)
+
+        def raises(*a, **k):
+            raise VcsError('vcs-busy', 'mirror is busy')
+        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), raises)
+        self.assertIn('Git (p): зайнято', out)
+        self.assertNotIn('не дістати', out)
+
+    def test_the_status_is_asked_with_the_provider_triple_and_the_target(self):
+        seen = []
+
+        def status(task, gl, meta, it, vcs=None):
+            seen.append((gl, it, vcs))
+            return {'behind': 0, 'dirty': False, 'on_remote': True}
+        triple = (object(), {'k': 1}, False)
+        self.state_with(lambda cfg, tid, task: (*triple, {'path': 'p'}), status)
+        self.assertEqual(seen, [({'path': 'p'}, 'it1', triple)])
 
     def test_empty_id_is_not_the_current_task(self):
         """`--task ''` — це ЯВНА (порожня) назва, а не «не задано»."""

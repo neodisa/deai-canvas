@@ -744,7 +744,9 @@ class CentralResponses(Fixture):
                   ('GET', '/commented?it=it1', '_commented'),
                   ('GET', '/shot?it=it1&page=main', '_shot'),
                   ('POST', '/api/publish', '_publish'),
-                  ('POST', '/api/gitlab-sync', '_gitlab_sync'))
+                  ('POST', '/api/gitlab-sync', '_gitlab_sync'),
+                  ('POST', '/api/vcs-push', '_gitlab_sync'),
+                  ('GET', '/api/vcs-status?it=it1', '_gitlab_status'))
         with contextlib.ExitStack() as stack:
             for _, _, name in routes:
                 stack.enter_context(mock.patch.object(serve.Handler, name, spy(name)))

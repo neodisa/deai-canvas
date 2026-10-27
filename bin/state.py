@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E402
-                   gitlab_cfg, gitlab_status, supabase_pins, comment_channel,
+                   vcs_task, _mask_repo, gitlab_status, supabase_pins, comment_channel,
                    machine_identity, iteration_is_mine, iteration_pages,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
                    SpaceUnavailable, ProjectComments)
@@ -43,8 +43,17 @@ def _api_prefix(tid):
     return f'/t/{quote(tid, safe="")}' if tid is not None else ''
 
 
-def gitlab_line(st, path, tid=None):
-    """Рядок стану GitLab. Чиста функція — тому й перевіряється тестами.
+def _busy_line(label, path):
+    """Дзеркало зайняте відправкою (`vcs-busy`): це «спробуй ще раз», а не помилка — опит під час відправки штатний."""
+    return f'{label} ({path}): зайнято (іде відправка), спробуй ще раз'
+
+
+def gitlab_line(st, path, tid=None, label='GitLab'):
+    """Рядок стану синку з git. Чиста функція — тому й перевіряється тестами.
+
+    `label` — підпис віддаленого репо (`GitLab` у просторі ЛІГА й для старих викликів, `Git`/`GitHub`… — те, що каже `label`
+    статусу модуля): у кожному рядку замість слова «GitLab». Підказки з ендпоїнтом (`/api/gitlab-sync`, `/api/gitlab-pull`)
+    не міняються: це псевдоніми, і вони діють у будь-якому просторі.
 
     `tid` — задачу НАЗВАНО (`--task`): підказки з ендпоїнтом несуть префікс
     `/t/<id>/`, а кнопки канваса названі як діючі на ПОТОЧНУ задачу канваса.
@@ -54,8 +63,10 @@ def gitlab_line(st, path, tid=None):
     місці (`dirty=False`) — і до 29.07.2026 він друкувався як «синхронізовано»
     для задач, яких на GitLab не існувало (dobFilter, riskFactors, bgSanctions).
     """
+    if st.get('code') == 'vcs-busy':
+        return _busy_line(label, path)
     if st.get('error'):
-        return f'GitLab ({path}): помилка — {st["error"]}'
+        return f'{label} ({path}): помилка — {_mask_repo(st["error"])}'
     if st.get('on_remote') is False:
         if tid is not None:
             # Кнопка в канвасі діє на ПОТОЧНУ задачу канваса, а не на названу.
@@ -64,7 +75,7 @@ def gitlab_line(st, path, tid=None):
                     'канваса, не на названу)')
         else:
             send = 'У канвасі: «↑ Надіслати Іт.N»'
-        return (f'GitLab ({path}): ⚠ ЩЕ НЕ В РЕПО — макет ніколи не пушився, '
+        return (f'{label} ({path}): ⚠ ЩЕ НЕ В РЕПО — макет ніколи не пушився, '
                 f'робота існує в одному екземплярі. {send}')
     if st.get('behind'):
         # ⛔ ДВІ РІЗНІ НОВИНИ. `behind` рахується по ВСЬОМУ репо свідомо (інакше
@@ -76,19 +87,19 @@ def gitlab_line(st, path, tid=None):
         if st.get('behind_path') or 'behind_path' not in st:
             pull = (f' (POST {_api_prefix(tid)}/api/gitlab-pull)' if tid is not None
                     else '')
-            return (f'GitLab ({path}): ⚠ на GitLab НОВІШЕ ({st["behind"]}) — '
+            return (f'{label} ({path}): ⚠ на {label} НОВІШЕ ({st["behind"]}) — '
                     f'хтось (інший дизайнер/машина) оновив макет. '
                     f'Спершу Підтягнути!{pull}')
-        return (f'GitLab ({path}): репо попереду на {st["behind"]} коміт(ів), але '
+        return (f'{label} ({path}): репо попереду на {st["behind"]} коміт(ів), але '
                 f'теку задачі ніхто не чіпав — пуш не заблокований, дзеркало '
                 f'наздожене себе саме')
     if st.get('on_remote') is None:
         # «Не питали» — теж вголос: мовчазне «синхронізовано» тут було б тим самим
         # вигаданим спокоєм, лише з іншої причини.
-        return (f'GitLab ({path}): стан невідомий — дзеркало без origin, '
+        return (f'{label} ({path}): стан невідомий — дзеркало без origin, '
                 f'перевір підключення (VPN)')
     tail = ' · є незбережені зміни обраної ітерації' if st.get('dirty') else ''
-    return f'GitLab ({path}): синхронізовано{tail}'
+    return f'{label} ({path}): синхронізовано{tail}'
 
 
 def iterations_line(its):
@@ -398,19 +409,34 @@ def _main(argv):
     else:
         print('Опубліковано: ще ні')
 
-    # Інтеграції простору (не лише «команда»): без них немає ні GitLab, ні командних коментарів.
+    # Інтеграції простору (не лише «команда»): без них немає командних коментарів (нижче).
     integrations = spaces.integrations_on()
-    # Без інтеграцій GitLab-маппінг у файлі простору ігнорується — як для задачі без нього.
-    gl = gitlab_cfg(cfg, task) if integrations else None
-    if gl:
+    # Синк із git — за РОЛЛЮ `vcs` простору, а не за інтеграціями: звичайний простір із `git-sync` синкає так само. Ролі нема
+    # (простір без модуля) — «не налаштований», як для задачі без цілі; GitLab-маппінг у файлі такого простору ігнорується.
+    try:
+        vcs = vcs_task(cfg, tid, task)
+    except OSError as e:            # `VcsError` — відмова постачальника; решта `OSError` — теж не traceback у точці входу в задачу
+        vcs, vcs_err = None, e
+    else:
+        vcs_err = None
+    label = 'Git' if vcs and not vcs[2] else 'GitLab'
+    if vcs and vcs[3]:
+        path = vcs[3]['path']
         try:
             work = working_iteration(its, machine_identity()[1])
-            st = gitlab_status(task, gl, meta, work['id'] if work else None)
-            print(gitlab_line(st, gl['path'], tid if named else None))
+            st = gitlab_status(task, vcs[3], meta, work['id'] if work else None, vcs=vcs[:3])
+            print(gitlab_line(st, path, tid if named else None, label=st.get('label') or label))
         except Exception as e:  # noqa: BLE001
-            print(f'GitLab: не дістати статус ({e})')
+            if getattr(e, 'code', None) == 'vcs-busy':
+                print(_busy_line(label, path))
+            else:
+                print(f'{label}: не дістати статус ({_mask_repo(str(e))})')
+    elif vcs_err is not None and (task.get('gitlab') or task.get('vcs')):
+        print(f'{label}: не дістати статус ({_mask_repo(str(vcs_err))})')
     else:
-        print('GitLab: не налаштований для задачі')
+        # Постачальник відмовив, а в задачі нема ні `gitlab`, ні `vcs`: цій задачі нічого не належало, «не дістати статус» —
+        # брехня (і крик на кожній задачі при зламаному каталозі). Ціль лише в налаштуваннях модуля тут не видно: постачальника нема.
+        print(f'{label}: не налаштований для задачі')
 
     lf = os.path.join(task['dir'], '.dc-local-comments.json')
     try:

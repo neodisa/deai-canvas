@@ -723,13 +723,18 @@ def vcs_task(cfg, tid, task):
 #: Форма результату функцій ролі, які кличе ядро. Свій модуль (довіра 3c) може повернути що завгодно: `None` чи рядок
 #: замість обʼєкта — це `module-error` тут, а не `AttributeError`/`TypeError` далі (маршрути ловлять лише `OSError`).
 _VCS_SHAPE = {'status': dict, 'push': dict, 'pull': dict, 'validate': dict, 'mirror_dir': str}
+#: Функції, чий результат може нести `error` ТЕКСТОМ: чужий модуль не кидає, а повертає `{ok: false, error: <текст із адресою>}`.
+_VCS_ERR_TEXT = ('status', 'push', 'pull')
 
 
 def _vcs_call(vcs, fn, *args, timeout=None):
     """Виклик функції ролі: `vcs` — `(module, ctx, legacy[, target])` від маршруту чи `None` (знайти самому). Відмова модуля
     — `VcsError` із його кодом; результат не тієї форми — `VcsError('module-error')`, як і в каркаса для кривого `check`.
     `timeout` — межа для КОРОТКИХ викликів: так кличуть `validate`, щоб завислий модуль не тримав маршрут; операції git
-    (`status`/`push`/`pull`) тримає сам модуль, їм межі не ставимо."""
+    (`status`/`push`/`pull`) тримає сам модуль, їм межі не ставимо.
+
+    ⛔ Рядковий `error` результату `status`/`push`/`pull` іде крізь `_mask_repo` ТУТ: `gitlab_sync` віддає `{**r, 'remote': …}`,
+    автосинк кладе той самий `r` у відповідь Stop-хука, і текст свого модуля з адресою `https://TOKEN@host/…` дійшов би назовні."""
     v = vcs if vcs is not None else vcs_provider()
     if v is None:
         raise VcsError('vcs-error', 'no git sync in this space')
@@ -740,6 +745,8 @@ def _vcs_call(vcs, fn, *args, timeout=None):
     want = _VCS_SHAPE.get(fn)
     if want is not None and not isinstance(r, want):
         raise VcsError('module-error', f'{fn} returned {type(r).__name__}, expected {want.__name__}')
+    if fn in _VCS_ERR_TEXT and isinstance(r.get('error'), str):
+        r = {**r, 'error': _mask_repo(r['error'])}
     return r
 
 
@@ -1364,7 +1371,9 @@ def gitlab_pull(task, gl, vcs=None):
         # копіювали в нову ітерацію ЗАСТАРІЛЕ дзеркало, підписавши його «оновлення з GitLab · <колега>». Тепер це `VcsError`.
         # `shots` — підтека кадрів: їхні комміти не вважаються роботою (див. `_authored_mtime`).
         r = _vcs_call(v, 'pull', gl, src, {'ignore': ['shots']})
-        if not r.get('found'):
+        # ⛔ Знайдено — це РІВНО `found is True` і непорожня `dst`. Свій модуль міг віддати `found: 'no'` (правдиве) чи `True` над
+        # порожньою текою — і задача діставала порожню нову ітерацію, що ставала «останньою» і вела автосинк на порожнечу.
+        if r.get('found') is not True or not (os.path.isdir(src) and os.listdir(src)):
             raise OSError(f'path {gl["path"]} not found in repo')
         return _pull_into_task(task, src, _last_commit(r), src_name)
     finally:
@@ -1986,7 +1995,7 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src
                     # наздогнати — `VcsError` (`OSError`) падає в ту саму гілку, що й недоступне дзеркало (порожній
                     # стартовий макет), а не мовчки бере застаріле.
                     r = _vcs_call(v, 'pull', target, got, {'ignore': ['shots']})
-                    if r.get('found') and os.path.isfile(os.path.join(got, 'index.html')):
+                    if r.get('found') is True and os.path.isfile(os.path.join(got, 'index.html')):
                         copy_mockup(got, it1)
                         cloned = True
                         cloned_state = _read_state(got)
@@ -2086,6 +2095,13 @@ def _registry_push(tid):
         return tid not in getattr(res, 'refused', {})
     except Exception:  # noqa: BLE001 — нет сети/доступа: задача уже создана локально
         return False
+
+
+def _vcs_failure(e):
+    """Тіло відмови маршрутів `vcs-*` і автосинку: `{ok: false, error, code?}`. Текст — крізь `_mask_repo` (виняток нижче по
+    стеку чи чужий модуль міг понести адресу з токеном), `code` — лише у `VcsError`. Модульна функція, а не метод `Handler`:
+    зовнішні заглушки обробника мають лише `_current_task/send_error/_send_json/_overview_sync`."""
+    return {'ok': False, 'error': _mask_repo(str(e))[:300], **({'code': e.code} if isinstance(e, VcsError) else {})}
 
 
 def integrations_off_body(what):
@@ -5430,7 +5446,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith('/comments'):
             self._comments()
             return
-        if self.path.startswith('/api/gitlab-status'):
+        # `/api/vcs-status` — нова адреса того самого обробника; `/api/gitlab-status` лишається псевдонімом (Stop-хук dev-pipeline,
+        # зовнішні скрипти).
+        if self.path.startswith('/api/gitlab-status') or self.path.startswith('/api/vcs-status'):
             self._gitlab_status()
             return
         super().do_GET()
@@ -6291,11 +6309,17 @@ class Handler(SimpleHTTPRequestHandler):
             self._shoot_stop(payload)
         elif self.path == '/api/flow-save':
             self._flow_save(payload)
+        # ⛔ Нові адреси `/api/vcs-push|pull` — ОКРЕМІ гілки, а не кортеж `in (…)`: охоронець `bad-body` (`test_serve`) збирає маршрути
+        # регексом `self.path == '/api/…'`, і кортеж пропустив би нову адресу повз перевірку «тіло — не обʼєкт».
         elif self.path == '/api/gitlab-sync':
+            self._gitlab_sync(payload)
+        elif self.path == '/api/vcs-push':
             self._gitlab_sync(payload)
         elif self.path == '/api/autosync':
             self._autosync(payload)
         elif self.path == '/api/gitlab-pull':
+            self._gitlab_pull(payload)
+        elif self.path == '/api/vcs-pull':
             self._gitlab_pull(payload)
         elif self.path == '/api/task-switch':
             self._task_switch(payload)
@@ -6758,31 +6782,52 @@ class Handler(SimpleHTTPRequestHandler):
         git_autocommit(task['dir'], f'iteration {new_id}: pages from {",".join(it_ids)}')
         self._send_json({'ok': True, 'iteration': new_id, 'pages': len(pages)})
 
-    # ---------- GitLab-синхронизация ----------
+    # ---------- Синхронізація з git: маршрути ролі `vcs` ----------
     #
-    # Простір без інтеграцій: `gl` = None, і далі йде наявна гілка «у задачі нема GitLab» —
-    # відповіді дослівно ті, що сьогодні для задачі без маппінгу (UI опитує `gitlab-status` на
-    # кожному старті, тож не 409). Перевірка тут, у маршрутах, а НЕ в `gitlab_cfg`: його кличе
-    # доктор, і він мусить бачити GitLab-конфіг будь-якої задачі.
+    # `/api/vcs-status|push|pull` — нові адреси, `/api/gitlab-status|sync|pull` — псевдоніми з тими самими обробниками й формами
+    # відповідей (на них спираються Stop-хук dev-pipeline і зовнішні скрипти). Гейт — роль `vcs` простору запиту
+    # (`provider('vcs')`), а не `integrations_on()`: звичайний простір із `git-sync` синкає так само, як ЛІГА.
+    #
+    # Простір без ролі — це «синку нема», а НЕ 409: UI опитує `vcs-status` на кожному старті, а Stop-хук — `autosync` після кожної
+    # відповіді. Перевірка тут, у маршрутах, а НЕ в `gitlab_cfg`: його кличе доктор, і він мусить бачити GitLab-конфіг будь-якої задачі.
 
-    def _gitlab_status(self):
+    def _vcs_ctx(self):
+        """`(tid, task, vcs, err)`: `vcs` — `(module, ctx, legacy, target | None)` або `None` (ролі нема), `err` — `VcsError`
+        постачальника (нечитабельний `space.json`, свій модуль «на папері», `git-sync` не завантажився). Ціль будує `vcs_target`
+        (обрізана адреса, ключ і IP ЛІГИ, `{task}`), а не `gitlab_cfg`."""
         cfg = load_tasks()
         tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
-        if not gl:
+        try:
+            return tid, task, vcs_task(cfg, tid, task), None
+        except VcsError as e:
+            return tid, task, None, e
+
+    def _gitlab_status(self):
+        """`GET /api/vcs-status?it=` (і `/api/gitlab-status?it=`). Без ролі чи цілі — `{configured: false}`; відмова
+        постачальника — `{configured: false, code}` (форма спеки: `gitlab_status(vcs=None)` дав би `configured: true`);
+        відмова модуля — 200 `{configured: true, error, code}`, щоб крапка в смузі не брехала."""
+        tid, task, vcs, err = self._vcs_ctx()
+        if err is not None:
+            self._send_json({'configured': False, 'code': err.code})
+            return
+        if vcs is None or vcs[3] is None:
             self._send_json({'configured': False})
             return
         it = parse_qs(urlparse(self.path).query).get('it', [''])[0]
         try:
-            self._send_json(gitlab_status(task, gl, load_meta(task), it))
+            self._send_json(gitlab_status(task, vcs[3], load_meta(task), it, vcs=vcs[:3]))
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'configured': True, 'error': _mask_repo(str(e))[:200]})
+            self._send_json({'configured': True, 'error': _mask_repo(str(e))[:200],
+                             **({'code': e.code} if isinstance(e, VcsError) else {})})
 
     def _gitlab_sync(self, payload):
-        cfg = load_tasks()
-        tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
-        if not gl:
+        """`POST /api/vcs-push {it}` (і `/api/gitlab-sync`). Без ролі чи цілі — 400 `no gitlab configured for this task` (текст
+        той самий, на ньому стоять тести й клієнт); відмова постачальника чи модуля — 200 `{ok: false, error, code}`."""
+        tid, task, vcs, err = self._vcs_ctx()
+        if err is not None:
+            self._send_json(_vcs_failure(err))
+            return
+        if vcs is None or vcs[3] is None:
             self.send_error(400, 'no gitlab configured for this task')
             return
         it = payload.get('it', '')
@@ -6790,9 +6835,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(400, 'bad iteration')
             return
         try:
-            r = gitlab_sync(tid, task, gl, it)
+            r = gitlab_sync(tid, task, vcs[3], it, vcs=vcs[:3])
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': _mask_repo(str(e))[:300]})
+            self._send_json(_vcs_failure(e))
             return
         if r.get('synced'):  # відбиток — лише коли origin реально має наш макет
             _record_sync(task, it, r.get('sha'))
@@ -6800,34 +6845,41 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json(r)
 
     def _autosync(self, payload):
-        """Тихий крок автосинку для Stop-хука. Задача без GitLab-мапінгу —
-        не помилка, а нормальний стан: просто нічого не робимо."""
-        cfg = load_tasks()
-        tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
-        if not gl:
-            self._send_json({'ok': True, 'changed': False, 'reason': 'no-gitlab'})
+        """Тихий крок автосинку для Stop-хука. Задача без цілі чи простір без ролі — не помилка, а нормальний стан:
+        `reason: "no-gitlab"` (контракт хука; відмова постачальника — те саме, з `code`). `autosync` вимкнений у модулі —
+        `reason: "autosync-off"` і ні відправки, ні локального автокоміту. Хук мовчить на причинах, яких не знає: реагує лише на
+        `blocked`, `foreign-only`, `offline`, `changed`/`catchup`. Далі — `autosync()`: `no-iterations`, `foreign-only`, `clean`,
+        а будь-яка відмова модуля — `reason: "offline"` з `code` (хукові ніколи не віддається 5xx)."""
+        tid, task, vcs, err = self._vcs_ctx()
+        if err is not None or vcs is None or vcs[3] is None:
+            out = {'ok': True, 'changed': False, 'reason': 'no-gitlab'}
+            self._send_json({**out, 'code': err.code} if err is not None else out)
+            return
+        if not (vcs[1].get('settings') or {}).get('autosync'):
+            self._send_json({'ok': True, 'changed': False, 'reason': 'autosync-off'})
             return
         try:
-            r = autosync(tid, task, gl)
+            r = autosync(tid, task, vcs[3], vcs=vcs[:3])
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': _mask_repo(str(e))[:300]})
+            self._send_json(_vcs_failure(e))
             return
         if r.get('changed'):
             self._overview_sync()
         self._send_json(r)
 
     def _gitlab_pull(self, payload):
-        cfg = load_tasks()
-        tid, task = self._current_task()
-        gl = gitlab_cfg(cfg, task) if spaces.integrations_on() else None
-        if not gl:
+        """`POST /api/vcs-pull` (і `/api/gitlab-pull`): ті самі відмови, що в `_gitlab_sync`."""
+        tid, task, vcs, err = self._vcs_ctx()
+        if err is not None:
+            self._send_json(_vcs_failure(err))
+            return
+        if vcs is None or vcs[3] is None:
             self.send_error(400, 'no gitlab configured for this task')
             return
         try:
-            self._send_json(gitlab_pull(task, gl))
+            self._send_json(gitlab_pull(task, vcs[3], vcs=vcs[:3]))
         except (OSError, subprocess.SubprocessError) as e:
-            self._send_json({'ok': False, 'error': _mask_repo(str(e))[:300]})
+            self._send_json(_vcs_failure(e))
 
     def _overview_sync(self):
         """Best-effort: оновити реєстр овервью (bin/overview_push.py sync) після
@@ -6970,6 +7022,14 @@ class Handler(SimpleHTTPRequestHandler):
         несе `copied: {files, bytes, skipped_links}` — що скопійовано НАСПРАВДІ; тека задачі займається атомарно, збій
         прибирає її: `task_new`). `from: null` — поля нема.
 
+        Етап 4a, «Нова задача»: необовʼязкове `vcs: {repo, path?, branch?}` (рядки) — ціль синку задачі за роллю `vcs` простору.
+        Усе перевіряється ДО будь-якого запису (задача, тека, `tasks.json`; ядро `task_new` кладе `vcs` як є, навіть коли
+        модуль ціль відхилив): не той вигляд — 400 `bad-request`; ролі в просторі нема — 400 `vcs-needs-role`; постачальник
+        відмовив (`space.json` не читається, модуль «на папері») — 409 із кодом каркаса; `validate` модуля (якщо вона є) —
+        400 `vcs-bad-target` (`ext::sh`, пароль в адресі, погана гілка чи шлях), під короткою межею каркаса: завислий свій
+        модуль дає `check-timeout`, а не зависання. У задачу пишуться лише непорожні, обрізані значення. Є ціль і в `<path>`
+        репо лежить `index.html` — перша ітерація з нього (збій отримання — тихо стартовий макет); з `from` отримання нема.
+
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
         поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
         profile = payload.get('profile')
@@ -7009,6 +7069,33 @@ class Handler(SimpleHTTPRequestHandler):
         if taken:
             self._space_error(400, 'task-exists', 'task already exists')
             return
+        # Ціль синку (етап 4a). ПЕРЕД `adopt` і будь-яким записом: див. докстрінг.
+        vcs = payload.get('vcs')
+        if vcs is not None:
+            if (not isinstance(vcs, dict) or not _vcs_str(vcs.get('repo'))
+                    or any(k not in ('repo', 'path', 'branch') for k in vcs)
+                    or any(x is not None and not isinstance(x, str) for x in vcs.values())):
+                self._space_error(400, 'bad-request', 'vcs must be {repo, path?, branch?} of strings')
+                return
+            vcs = {k: x.strip() for k, x in vcs.items() if _vcs_str(x)}
+            try:
+                prov = vcs_provider()
+            except VcsError as e:
+                self._space_error(409, e.code, str(e)[:300])
+                return
+            if prov is None:
+                self._space_error(400, 'vcs-needs-role', 'this space has no git sync — connect a module on Connections')
+                return
+            # `validate` — необовʼязкова функція ролі: свій модуль міг її не мати. Через `_vcs_call`: форма результату й межа часу
+            # (`CHECK_TIMEOUT` каркаса). Поганий id (не рядок, не `NAME_RE`) відхилить `task_new` — `bad-task-id`, до будь-якого
+            # запису, — а ціль із ним (`{task}` у `path`) відмовила б раніше й іншим кодом: тут його не чіпаємо.
+            if prov[0].fn('validate') is not None and isinstance(tid, str) and NAME_RE.fullmatch(tid):
+                try:
+                    _vcs_call(prov, 'validate', vcs_target({}, tid, {'vcs': vcs}, prov[1].get('settings') or {}),
+                              timeout=deai_modules.CHECK_TIMEOUT)
+                except VcsError as e:
+                    self._space_error(deai_modules.STATUS.get(e.code, 400), e.code, str(e)[:300])
+                    return
         # Задача з наявної теки (етап 3b). `from: null` — поля нема (як і без нього).
         adopt = None
         if payload.get('from') is not None:
@@ -7028,7 +7115,7 @@ class Handler(SimpleHTTPRequestHandler):
             r = task_new(cfg, tid,
                          title=str(payload.get('title', ''))[:200],
                          jira=str(payload.get('jira', ''))[:40],
-                         profile=profile, gitlab=payload.get('gitlab'), root=root,
+                         profile=profile, gitlab=payload.get('gitlab'), vcs=vcs, root=root,
                          adopt_src=adopt.real if adopt else None, adopt_files=adopt.files if adopt else ())
         except TaskRefused as e:
             # `task-dir-exists` — гонка з `from`: теку встигли зайняти між перевіркою й записом (див. `task_new`)
