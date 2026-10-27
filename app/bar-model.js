@@ -44,9 +44,12 @@ import { hasPublish, hasVcs, isLegacyPublish, vcsBrand } from "./spaces-model.js
 export const TIERS = { gl: 1300, mode: 1180, view: 1060 };
 
 /* Раніше тут був спільний набір «контролів назовні» (`gl` + `publish`), які разом зникали з простору
-   без інтеграцій (`integrations === false`). З модулями 2а їх розщеплено: GitLab лишився на
-   `integrations`, а публікація пішла на `hasPublish` (`capabilities.publish`) — простір без інтеграцій
-   публікує вбудованим модулем у теку (див. `barModel`, «Вимикач»). */
+   без інтеграцій (`integrations === false`). З модулями 2а їх розщеплено: публікація пішла на `hasPublish`
+   (`capabilities.publish`) — простір без інтеграцій публікує вбудованим модулем у теку; а зона синку з git
+   від 4a — на `hasVcs` (`capabilities.vcs`), теж не на інтеграціях (див. `barModel`, «Вимикач»). */
+
+/** Ключі підписів зони синку для нетипових репозиторіїв (типовий — `gitlab`). Ключі `GitHub`/`Git` дає лише `vcsBrand`. */
+const VCS_LABEL_KEYS = { GitHub: "vcsGitHub", Git: "vcsGit" };
 
 /**
  * Причина, з якої «Флоу» недоступний у сегменті «Сітка/Флоу». Три РІЗНІ
@@ -281,12 +284,12 @@ export function barModel(s) {
     });
   }
 
-  /* Підпис репозиторію (етап 4a). Типовий — «GitLab» (`labelKey: "gitlab"`, ЛІГА й усе, що не GitHub/Git): тоді поля `brand`
-     у зоні НЕМА взагалі, а палітра не отримує `labelArgs` — `legacy-golden` порівнює їх побайтно. Нетиповий — `GitHub`/`Git`:
-     свій ключ підпису, а поле `brand` DOM-шар передає останнім аргументом текстам «Надіслати … на {label}». Правило —
-     `vcsBrand` (`spaces-model.js`), те саме, що в палітри. */
-  const VCS_LABEL_KEYS = { GitHub: "vcsGitHub", Git: "vcsGit" };
-  const brand = vcsBrand(s.glLabel);
+  /* Підпис репозиторію (етап 4a). Типовий — «GitLab» (`labelKey: "gitlab"`: ЛІГА й репо на GitLab): тоді поля `brand`
+     у зоні НЕМА взагалі, а палітра не отримує `labelArgs` — `legacy-golden` порівнює їх побайтно. Нетиповий — `GitHub`/`Git`
+     (і нейтральний «Git» у звичайному просторі, де репо ще невідоме): свій ключ підпису, а поле `brand` DOM-шар передає
+     останнім аргументом текстам «Надіслати … на {label}». Правило — `vcsBrand(label, space)` (`spaces-model.js`), те саме,
+     що в палітри й дій. */
+  const brand = vcsBrand(s.glLabel, s.space);
   // Дропдаун GitLab (ревʼю Task 8, п.4): чотири розгалуження, не два.
   // «off» — репозиторій не підключений, нема з чим працювати, крім
   // «Налаштувати» (ні «Надіслати», ні історії). Інакше — «Підтягнути»
@@ -301,7 +304,10 @@ export function barModel(s) {
         id: "glpush", labelKey: "glPush",
         disabled: s.gl === "sync", whyKey: s.gl === "sync" ? (brand ? "vcsSyncWhy" : "glSync") : "",
       },
-      { id: "glhistory", labelKey: "glHistory" },
+      /* «Історія» — лише коли є куди вести (`web`): для file://, Gitea, Bitbucket модуль віддає `web: null`, і пункт, що
+         мовчки нічого не робить, — рівно та хвороба, яку цей інструмент виводить. `glNoWeb` ставить `app.js` лише для
+         СТАНУ без помилки: у помилці пункт лишається, як був. */
+      ...(s.glNoWeb ? [] : [{ id: "glhistory", labelKey: "glHistory" }]),
     ];
 
   const linkWhy = linkWhyKey(s);

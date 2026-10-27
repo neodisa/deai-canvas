@@ -103,7 +103,8 @@ import { ico } from "./icons.js";
  *   gl: 'off'|'sync'|'ahead'|'behind'|'error', iterLabel: string — той самий
  *     `state.iterLabel`, яким `shell-bar.js` (`ddGitlab`) підставляє номер
  *     ітерації в `t('glPush'|'glPull', iterLabel)`. glBrand: ''|'GitHub'|'Git' —
- *     підпис репозиторію, коли він не типовий (`vcsBrand`, `spaces-model.js`):
+ *     підпис репозиторію, коли він не типовий (`vcsBrand(label, space)`, `spaces-model.js`; у звичайному просторі, де репо ще
+ *     невідоме, — нейтральний «Git»):
  *     тоді він іде другим аргументом тих самих текстів (`labelArgs`), а без нього
  *     пункти лишаються у формі 0.7.0 («GitLab», без `labelArgs`).
  *   shots: {have, stale, total, running, bad} | null — те, що `panelState()`
@@ -208,7 +209,7 @@ export function paletteActions(state) {
      не залежить (модулі 2а, Task 8): вона йде на `hasPublish` (`capabilities.publish`) —
      простір без інтеграцій публікує вбудованим модулем у теку, і з палітри її забирає
      лише відсутність постачальника (`publish: null`). Тому колишній спільний
-     `if (!noOutward)` розщеплено нижче на два. */
+     `if (!noOutward)` розщеплено нижче на два: синк із git (`!noVcs`) і публікація (`hasPublish`). */
   const noVcs = !hasVcs(s.space);
 
   /* Екран «Задачі» (`homeOpen`, батч 1.52): смуга в цьому стані не має ні
@@ -451,7 +452,7 @@ export function paletteActions(state) {
          `?ch=project` → 409): локальний — єдиний, і аварійний вихід «до локального» лишається.
          Постачальник — зашитий ЛІГА (інтеграції) АБО модуль, тож це `hasTeamComments`
          (`capabilities.comments`), а не `integrations`: простір без інтеграцій із модулем
-         коментарів має канал `project`, хоч GitLab у нього й нема. */
+         коментарів має канал `project`, хоч Teams у нього й нема. */
       if (ch === "project" && !hasTeamComments(s.space)) continue;
       out.push({
         id, group: "gSet", labelKey, icon, act: "aud", val: ch,

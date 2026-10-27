@@ -15,7 +15,8 @@ import { DICT, setLang, t } from "../app/i18n.js";
 import { filterActions, paletteActions } from "../app/shell-palette.js";
 import { barHTML } from "../app/shell-bar.js";
 import {
-  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, hasVcs, isLegacyVcs, vcsBrand, vcsErrKey,
+  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, hasVcs, isLegacyVcs,
+  requestErrText, vcsBrand, vcsErrKey, vcsFailKey, vcsLabel, vcsWebUrl,
 } from "../app/spaces-model.js";
 
 test.beforeEach(() => setLang("uk"));
@@ -60,14 +61,77 @@ test("стеля запиту створення задачі з синком �
   assert.ok(TASK_VCS_POST_TIMEOUT_MS > FORM_POST_TIMEOUT_MS);
 });
 
-/* ── підпис репозиторію: лише два відомі, решта — «GitLab» ────────────────── */
+/* ── підпис репозиторію: білий список GitLab/GitHub/Git, решта — за простором ─ */
 
-test("vcsBrand: GitHub і Git — підпис, решта (і службові імена обʼєкта) — порожньо", () => {
+const LIGA = { id: "liga", integrations: true, capabilities: { vcs: "legacy" } };
+const PLAIN = { id: "plain", integrations: false, capabilities: { vcs: "git-sync" } };
+
+test("vcsLabel: білий список; інше й порожнє — «GitLab» у ЛІГА, нейтральний «Git» деінде", () => {
+  for (const space of [LIGA, PLAIN, undefined, null]) {
+    assert.equal(vcsLabel("GitLab", space), "GitLab");
+    assert.equal(vcsLabel("GitHub", space), "GitHub");
+    assert.equal(vcsLabel("Git", space), "Git");
+  }
+  for (const x of ["", null, undefined, 5, "github", "Bitbucket", "Git\nEvil", "G".repeat(500), "constructor", "__proto__", "toString"]) {
+    assert.equal(vcsLabel(x, LIGA), "GitLab", `ЛІГА: ${String(x).slice(0, 12)}`);
+    assert.equal(vcsLabel(x, PLAIN), "Git", `звичайний: ${String(x).slice(0, 12)}`);
+    assert.equal(vcsLabel(x, undefined), "GitLab", "невідомий простір (шар вимкнено) — як ЛІГА");
+  }
+  assert.equal(vcsLabel("", { integrations: true }), "GitLab", "стара форма з інтеграціями — ЛІГА");
+  assert.equal(vcsLabel("", { integrations: false, capabilities: { vcs: "git-sync" } }), "Git");
+});
+
+test("vcsBrand: підпис, коли він не «GitLab» (GitHub, Git); для ЛІГИ й «GitLab» — порожньо", () => {
   assert.equal(vcsBrand("GitHub"), "GitHub");
   assert.equal(vcsBrand("Git"), "Git");
+  assert.equal(vcsBrand("GitHub", PLAIN), "GitHub");
+  assert.equal(vcsBrand("GitLab", PLAIN), "", "репо на GitLab у звичайному просторі — типовий підпис");
   for (const x of ["GitLab", "", null, undefined, 5, "github", "constructor", "__proto__", "toString", "hasOwnProperty"]) {
     assert.equal(vcsBrand(x), "", String(x));
+    assert.equal(vcsBrand(x, LIGA), "", `ЛІГА ${String(x)}`);
   }
+  for (const x of ["", null, undefined, "Bitbucket", "constructor"]) {
+    assert.equal(vcsBrand(x, PLAIN), "Git", `звичайний простір без відомого підпису: ${String(x)}`);
+  }
+});
+
+test("vcsWebUrl: лише http(s); решта — null (пункт «Історія» як без web)", () => {
+  assert.equal(vcsWebUrl("https://github.com/o/r/commits/main/mockup"), "https://github.com/o/r/commits/main/mockup");
+  assert.equal(vcsWebUrl("http://gitea.local/o/r"), "http://gitea.local/o/r");
+  for (const x of [null, undefined, "", "file:///tmp/x", "javascript:alert(1)", "data:text/html,x", "ftp://h/x", "//h/x", "git@h:o/r", 5, {}]) {
+    assert.equal(vcsWebUrl(x), null, String(x));
+  }
+});
+
+test("vcsFailKey: як vcsErrKey, але в ЛІГА vcs-bad-target — без «Підключення» (ціль у tasks.json)", () => {
+  for (const space of [PLAIN, LIGA]) {
+    assert.equal(vcsFailKey("vcs-offline", space), "vcsErrOffline");
+    assert.equal(vcsFailKey("vcs-auth", space), "vcsErrAuth");
+    assert.equal(vcsFailKey("vcs-busy", space), "vcsErrBusy");
+    assert.equal(vcsFailKey("vcs-error", space), null);
+  }
+  assert.equal(vcsFailKey("vcs-bad-target", PLAIN), "vcsErrTarget");
+  assert.equal(vcsFailKey("vcs-bad-target", LIGA), null);
+  assert.equal(vcsFailKey("vcs-bad-target", undefined), null, "невідомий простір — як ЛІГА");
+});
+
+test("requestErrText: HTML від send_error → рядок статусу, JSON-помилка й мережа → власний текст", () => {
+  const html = Object.assign(new Error("<!DOCTYPE HTML><html><head><title>Error response</title>"), {
+    status: 400, statusText: "no gitlab configured for this task", body: "<!DOCTYPE HTML>\n<html>…",
+  });
+  assert.equal(requestErrText(html), "no gitlab configured for this task");
+  const json = Object.assign(new Error("path not found"), { status: 400, statusText: "Bad Request", body: '{"ok":false,"error":"path not found"}' });
+  assert.equal(requestErrText(json), "path not found", "JSON-помилка без code — свій текст, не «Bad Request»");
+  const coded = Object.assign(new Error("boom"), { status: 400, code: "vcs-error", statusText: "Bad Request", body: '{"error":"boom","code":"vcs-error"}' });
+  assert.equal(requestErrText(coded), "boom");
+  assert.equal(requestErrText(new TypeError("Failed to fetch")), "Failed to fetch");
+  const noStatus = Object.assign(new Error("<html>x"), { status: 500, statusText: "", body: "<html>x" });
+  assert.equal(requestErrText(noStatus), "<html>x", "рядка статусу нема — лишається що є");
+});
+
+test("стеля повторів «зайнято»: ≈5 с і кілька спроб, не нескінченно", () => {
+  assert.equal(VCS_BUSY_RETRY_MS, 5000);
+  assert.ok(VCS_BUSY_MAX_TRIES >= 2 && VCS_BUSY_MAX_TRIES <= 10);
 });
 
 /* ── смуга ───────────────────────────────────────────────────────────────── */
@@ -118,6 +182,48 @@ test("причина «збігається»: з підписом — vcsSyncWh
   assert.equal(why({ glLabel: "GitLab" }), "glSync");
   const ahead = glZone({ gl: "ahead", glLabel: "GitHub" }).items.find((x) => x.id === "glpush");
   assert.equal(ahead.whyKey, "", "поза sync причини нема");
+});
+
+test("підпис без відомого репо: звичайний простір — нейтральний «Git», ЛІГА — «GitLab» (дані bar без label)", () => {
+  for (const glLabel of ["", undefined, "Bitbucket", "constructor"]) {
+    const z = glZone({ glLabel, space: PLAIN });
+    assert.equal(z.labelKey, "vcsGit", `звичайний: ${String(glLabel)}`);
+    assert.equal(z.brand, "Git");
+    const l = glZone({ glLabel, space: LIGA });
+    assert.equal(l.labelKey, "gitlab", `ЛІГА: ${String(glLabel)}`);
+    assert.ok(!("brand" in l));
+  }
+  const gitlabRepo = glZone({ glLabel: "GitLab", space: PLAIN });
+  assert.equal(gitlabRepo.labelKey, "gitlab", "репо на GitLab у звичайному просторі — типовий підпис");
+  assert.ok(!("brand" in gitlabRepo));
+  const why = (space) => glZone({ gl: "sync", glLabel: "", space }).items.find((x) => x.id === "glpush").whyKey;
+  assert.equal(why(PLAIN), "vcsSyncWhy");
+  assert.equal(why(LIGA), "glSync");
+});
+
+test("«Історія»: без web (file://, Gitea, Bitbucket) пункту нема; у помилці й для ЛІГИ — як було", () => {
+  const ids = (o) => glZone(o).items.map((x) => x.id);
+  for (const gl of ["sync", "ahead"]) {
+    assert.deepEqual(ids({ gl, glNoWeb: true }), ["glpush"], gl);
+    assert.deepEqual(ids({ gl, glNoWeb: false }), ["glpush", "glhistory"], gl);
+    assert.deepEqual(ids({ gl }), ["glpush", "glhistory"], `${gl}: прапорця нема — як було`);
+  }
+  assert.deepEqual(ids({ gl: "behind", glNoWeb: true }), ["glpull", "glpush"]);
+  assert.deepEqual(ids({ gl: "off", glNoWeb: true }), ["glsetup"]);
+  assert.deepEqual(ids({ gl: "error", glNoWeb: false }), ["glpush", "glhistory"], "стан помилки — пункт лишається");
+  const html0 = html({ openDd: "gl", gl: "sync", glNoWeb: true, glLabel: "Git", space: PLAIN });
+  assert.ok(!html0.includes('data-act="glhistory"'), "у розмітці історії нема");
+  assert.ok(html({ openDd: "gl", gl: "sync", glLabel: "GitHub", space: PLAIN }).includes('data-act="glhistory"'));
+});
+
+test("«Зайнято» (vcs-busy без придатного стану): ні «збігається», ні помилка — сіра крапка й «Надіслати» без причини", () => {
+  const z = glZone({ gl: "busy", glNoWeb: true });
+  assert.equal(z.status, "busy");
+  const push = z.items.find((x) => x.id === "glpush");
+  assert.equal(push.disabled, false, "клік дозволений: він покаже vcsErrBusy");
+  assert.equal(push.whyKey, "");
+  assert.ok(!z.items.some((x) => x.id === "glpull"));
+  assert.match(html({ gl: "busy" }), /dot dot--off/, "крапка сіра, не червона й не зелена");
 });
 
 const html = (o) => { const s = { ...base, ...o }; return barHTML(barModel(s), s); };
@@ -319,18 +425,25 @@ function balanced(open) {
   }
   throw new Error("немає закриття дужки");
 }
-/** Дія `BAR_ACTIONS.<name>: async () => {…}` — текст виразу. */
+/** Дія `BAR_ACTIONS.<name>: [async] () => {…}` — текст виразу. */
 function actSource(name) {
-  const head = `\n  ${name}: async () => {`;
-  const i = src.indexOf(head);
-  assert.ok(i > 0, `BAR_ACTIONS.${name} (async () => {…}) немає`);
-  const open = i + head.length - 1;
-  return `async () => ${balanced(open)}`;
+  const m = new RegExp(`\\n  ${name}: (async )?\\(\\) => \\{`).exec(src);
+  assert.ok(m, `BAR_ACTIONS.${name} (() => {…}) немає`);
+  const open = m.index + m[0].length - 1;
+  return `${m[1] ?? ""}() => ${balanced(open)}`;
+}
+/** Повний текст функції-декларації верхнього рівня (`[async ]function name(…) {…}`). */
+function declSource(name) {
+  const m = new RegExp(`\\n((?:async )?function ${name}\\()`).exec(src);
+  assert.ok(m, `у app.js нема функції ${name}`);
+  const start = m.index + 1;
+  const open = src.indexOf("{", src.indexOf(")", start));
+  return src.slice(start, open) + balanced(open);
 }
 
 test("refreshGitlab питає /api/vcs-status за noVcs(), а loadTeamsMute лишається на noOutward()", () => {
   const body = fn("refreshGitlab");
-  const guard = body.indexOf("\n  if (noVcs()) { glCache = null; return; }\n");
+  const guard = body.indexOf("\n  if (noVcs()) {");
   const call = body.indexOf("await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`)");
   assert.ok(guard > 0, "вихід без запиту за noVcs()");
   assert.ok(call > guard, "запит статусу — ПІСЛЯ гейта: без ролі мережі нема");
@@ -338,10 +451,6 @@ test("refreshGitlab питає /api/vcs-status за noVcs(), а loadTeamsMute л
   assert.match(src, /const noVcs = \(\) => needsWelcome\(spacesResp\) \|\| !hasVcs\(spaceNow\(\)\);/);
   assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/,
     "Teams лишається на integrations");
-});
-
-test("refreshGitlab: vcs-busy лишає попередній стан, інакше крапка смуги фарбувалась би в помилку", () => {
-  assert.match(fn("refreshGitlab"), /glCache = \(r\.code === 'vcs-busy' && glCache\) \? glCache : r; \}\n  catch \{ glCache = null; \}/);
 });
 
 test("дії синку ходять на /api/vcs-*, старих адрес у клієнті нема", () => {
@@ -364,33 +473,52 @@ test("glsetup: у ЛІГА — повідомлення про tasks.json, де�
   assert.match(src, /\n  glsetup: \(\) => \{ if \(isLegacyVcs\(spaceNow\(\)\)\) tell\(t\('glSetupMsg'\)\); else enterConnections\(\); \},/);
 });
 
-test("стан смуги й палітри несе підпис репозиторію поіменно", () => {
+test("стан смуги й палітри несе підпис, «нема web» і «зайнято» поіменно", () => {
   assert.match(src, /\n    glLabel: glCache\?\.label \|\| '',/);
-  assert.match(src, /gl: st\.gl, glBrand: vcsBrand\(st\.glLabel\), iterLabel: st\.iterLabel,/);
+  assert.match(src, /\n    glNoWeb: !!\(glCache\?\.configured && !glCache\.error && !vcsWebUrl\(glCache\.web\)\),/);
+  assert.match(src, /\? 'off'\s*: glCache\.busy \? 'busy'\s*: glCache\.error \? 'error'/, "«зайнято» — окремий стан, раніше за «помилку»");
+  assert.match(src, /gl: st\.gl, glBrand: vcsBrand\(st\.glLabel, st\.space\), iterLabel: st\.iterLabel,/);
   const names = /import \{([^}]*)\} from '\.\/spaces-model\.js'/.exec(src)?.[1] ?? "";
-  for (const n of ["hasVcs", "isLegacyVcs", "vcsBrand", "vcsErrKey"]) {
+  for (const n of ["hasVcs", "isLegacyVcs", "vcsBrand", "vcsFailKey", "vcsLabel", "vcsWebUrl", "requestErrText",
+    "VCS_BUSY_MAX_TRIES", "VCS_BUSY_RETRY_MS"]) {
     assert.match(names, new RegExp(`\\b${n}\\b`), `${n} не імпортовано з spaces-model.js`);
   }
 });
 
+
 /* ── виконання дій із заглушками: що побачить людина ─────────────────────── */
 
-/**
- * Збирає дію з тексту `app.js`. Імена, яких дія торкається, беруться з `env` (`with`): забутий — ReferenceError,
- * тобто тест червоніє, а не мовчки бере глобальне. `glCache` — поле `env`, тож тест міняє його між викликами.
- */
-function actFn(name, env) {
-  // eslint-disable-next-line no-new-func
-  return new Function("env", `with (env) { return (${actSource(name)}); }`)(env);
-}
+/** Допоміжні функції `app.js`, які дії кличуть (беруться з тексту джерела, не переписуються в тесті). */
+const HELPERS = ["glLabelNow", "glFailText"];
 
-/** Середовище дії: усе, що вона кличе, — заглушки, що пишуть у `log`. */
+/**
+ * Збирає з тексту `app.js` функції-декларації й дії в одному `with (env)`. Імена, яких вони торкаються, беруться з `env`:
+ * забутий — ReferenceError (тест червоніє, а не мовчки бере глобальне). Змінні модуля (`glCache`, `glKey`…) — поля `env`,
+ * тож присвоєння в коді змінюють `env`, а тест їх читає.
+ */
+function load(env, { funcs = [], acts = [] } = {}) {
+  const decls = funcs.map(declSource).join("\n");
+  const body = acts.map((n) => `${JSON.stringify(n)}: ${actSource(n)}`).join(",\n");
+  const ret = `{ ${funcs.map((f) => `${f}: ${f}, `).join("")}acts: { ${body} } }`;
+  // eslint-disable-next-line no-new-func
+  return new Function("env", `with (env) { ${decls}\nreturn ${ret}; }`)(env);
+}
+const actFn = (name, env) => load(env, { funcs: HELPERS, acts: [name] }).acts[name];
+
+/** Середовище: усе, чого торкаються дії й `refreshGitlab`, — заглушки, що пишуть у `log`. */
 function mkEnv(over = {}) {
-  const log = { tell: [], toast: [], post: [], ask: [], refresh: 0, render: 0 };
+  const log = { tell: [], toast: [], post: [], ask: [], refresh: 0, render: 0, open: [], api: [], timers: [], cleared: 0, paint: 0 };
   const env = {
     log,
+    space: PLAIN,
+    spaceNow: () => env.space,
+    curTask: { id: "A" },
     glCache: { configured: true, label: "GitHub", behind: 0, unpushed: 0 },
+    glKey: null, glBusyTimer: null, glBusyFor: null, glBusyTries: 0,
     picked: "it3",
+    noVcs: () => false,
+    status: {},
+    api: async (path) => { log.api.push(path); return env.status; },
     post: async (path, body) => { log.post.push([path, body]); return env.reply; },
     reply: {},
     tell: (m) => log.tell.push(m),
@@ -399,8 +527,12 @@ function mkEnv(over = {}) {
     yes: true,
     refreshGitlab: async () => { log.refresh += 1; },
     render: () => { log.render += 1; },
+    paintBar: () => { log.paint += 1; },
     itNum: (id) => String(id).replace(/\D/g, ""),
-    t, vcsErrKey,
+    window: { open: (...a) => log.open.push(a) },
+    setTimeout: (fn, ms) => { log.timers.push({ fn, ms }); return log.timers.length; },
+    clearTimeout: () => { log.cleared += 1; },
+    t, vcsErrKey, vcsFailKey, vcsLabel, vcsWebUrl, requestErrText, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS,
     ...over,
   };
   return env;
@@ -446,27 +578,77 @@ test("glpush: «позаду», «чужа», успіхи — тексти з �
   assert.equal(log.refresh, 1);
   assert.equal(log.render, 1);
 
-  const liga = { glCache: { configured: true, label: "GitLab" } };
+  const liga = { space: LIGA, glCache: { configured: true, label: "GitLab" } };
   log = await run("glpush", { ok: true, synced: true, changed: true, pushed: true, sha: "abc123" }, liga);
   assert.deepEqual(log.toast, ["Надіслано на GitLab · комміт abc123"]);
   log = await run("glpush", { ok: false, error: "boom" }, liga);
   assert.ok(log.tell[0].startsWith("GitLab-синхронізація не вдалася"));
   log = await run("glpush", { ok: false, code: "vcs-offline" }, liga);
   assert.ok(log.tell[0].startsWith("GitLab не відповідає"));
-  log = await run("glpush", { ok: true, synced: true, catchup: true }, { glCache: { configured: true } });
-  assert.deepEqual(log.toast, ["Довезли незапушений комміт — тепер макет на GitLab."], "статус без підпису — GitLab");
+  log = await run("glpush", { ok: true, synced: true, catchup: true }, { space: LIGA, glCache: { configured: true } });
+  assert.deepEqual(log.toast, ["Довезли незапушений комміт — тепер макет на GitLab."], "статус без підпису в ЛІГА — GitLab");
 });
 
-test("glpush: помилка статусу в кеші — повідомлення, без запиту; запит упав — errFailed", async () => {
-  let log = await run("glpush", {}, { glCache: { configured: true, error: "offline", code: "vcs-offline" } });
-  assert.deepEqual(log.tell, [t("errFailed", "offline")]);
+test("підпис дій — один нормалізатор: без label у ЛІГА «GitLab», у звичайному просторі «Git»; чужий текст не лізе в тости", async () => {
+  // M3 (мутації, що виживали): статус без label + код → підпис мусить прийти з простору, а не з `||` у дії.
+  const noLabel = { configured: true, error: "ssh: no route", code: "vcs-offline" };
+  let log = await run("glpush", {}, { space: LIGA, glCache: noLabel });
+  assert.ok(log.tell[0].startsWith("GitLab не відповідає"), log.tell[0]);
+  log = await run("glpush", {}, { space: PLAIN, glCache: noLabel });
+  assert.ok(log.tell[0].startsWith("Git не відповідає"), log.tell[0]);
+  log = await run("glpush", { ok: false, code: "vcs-offline" }, { space: LIGA, glCache: { configured: true } });
+  assert.ok(log.tell[0].startsWith("GitLab не відповідає"));
+  log = await run("glpush", { ok: false, code: "vcs-offline" }, { space: PLAIN, glCache: { configured: true } });
+  assert.ok(log.tell[0].startsWith("Git не відповідає"));
+  log = await run("glpull", { ok: false, code: "vcs-auth" }, { space: LIGA, glCache: null });
+  assert.ok(log.tell[0].startsWith("GitLab не пускає"));
+  log = await run("glpull", { ok: false, code: "vcs-auth" }, { space: PLAIN, glCache: null });
+  assert.ok(log.tell[0].startsWith("Git не пускає"));
+  // свій модуль із довільним label: у діях — те саме, що в смузі (білий список), без довжини й переносів рядка
+  log = await run("glpush", { ok: true, synced: true, changed: true, pushed: true, sha: "s1" },
+    { space: PLAIN, glCache: { configured: true, label: "Bitbucket\nEvil" + "x".repeat(300) } });
+  assert.deepEqual(log.toast, ["Надіслано на Git · комміт s1"]);
+});
+
+test("glpush: помилка статусу в кеші — спершу мапер коду, інакше errFailed; запиту нема", async () => {
+  // M2: кешована помилка раніше оминала мапер і показувала сирий stderr git
+  let log = await run("glpush", {}, { glCache: { configured: true, label: "GitHub", error: "ssh: connect to host failed", code: "vcs-offline" } });
+  assert.deepEqual(log.tell, [t("vcsErrOffline", "GitHub")]);
   assert.deepEqual(log.post, []);
-  const env = mkEnv();
-  env.post = async () => { throw new Error("net"); };
-  await actFn("glpush", env)();
-  assert.deepEqual(env.log.tell, [t("errFailed", "net")]);
-  log = await run("glpush", {}, { glCache: null });
-  assert.deepEqual(log.post, [], "без кешу — нічого");
+  log = await run("glpush", {}, { glCache: { configured: true, label: "GitHub", error: "Permission denied", code: "vcs-auth" } });
+  assert.deepEqual(log.tell, [t("vcsErrAuth", "GitHub")]);
+  log = await run("glpush", {}, { glCache: { configured: true, label: "GitHub", error: "weird", code: "vcs-error" } });
+  assert.deepEqual(log.tell, [t("errFailed", "weird")], "код без свого тексту — причина як була");
+  log = await run("glpush", {}, { glCache: { configured: true, error: "offline" } });
+  assert.deepEqual(log.tell, [t("errFailed", "offline")], "без коду — як було");
+  assert.deepEqual(log.post, []);
+});
+
+test("glpush: запит упав — людський текст (HTML від send_error → рядок статусу), не сирий HTML", async () => {
+  // M1: 400 від send_error (нема ролі/цілі, bad iteration) приходив як перші 200 символів HTML
+  const htmlErr = Object.assign(new Error("<!DOCTYPE HTML><html><head><title>Error response</title></head>"), {
+    status: 400, statusText: "no gitlab configured for this task", body: "<!DOCTYPE HTML><html>…",
+  });
+  for (const act of ["glpush", "glpull"]) {
+    const env = mkEnv();
+    env.post = async () => { throw htmlErr; };
+    await actFn(act, env)();
+    assert.deepEqual(env.log.tell, [t("errFailed", "no gitlab configured for this task")], act);
+    assert.ok(!env.log.tell[0].includes("<"), `${act}: у тексті розмітки нема`);
+  }
+  const net = mkEnv();
+  net.post = async () => { throw new TypeError("Failed to fetch"); };
+  await actFn("glpush", net)();
+  assert.deepEqual(net.log.tell, [t("errFailed", "Failed to fetch")]);
+  assert.deepEqual((await run("glpush", {}, { glCache: null })).post, [], "без кешу — нічого");
+});
+
+test("glpush у стані «зайнято»: vcsErrBusy без запиту до git, і одразу перепитує статус", async () => {
+  const log = await run("glpush", {}, { glCache: { configured: true, busy: true } });
+  assert.deepEqual(log.tell, [t("vcsErrBusy")]);
+  assert.deepEqual(log.post, [], "до git — нічого: статусу ще нема");
+  assert.equal(log.refresh, 1, "клік — привід перепитати, а не лишити людину з вічним «зайнято»");
+  assert.equal(log.render, 1);
 });
 
 test("glpull: відмова приходить 200 {ok:false, error, code} — її мусить показати сама дія, а не catch", async () => {
@@ -488,6 +670,24 @@ test("glpull: відмова приходить 200 {ok:false, error, code} — 
   assert.deepEqual(log.toast, []);
 });
 
+test("ЛІГА: vcs-bad-target — старе glSyncFailedMsg (ціль у tasks.json), три інші коди — свої тексти", async () => {
+  // M6: «виправ на «Підключенні»» у ЛІГА брехня — там ціль живе в tasks.json
+  const liga = { space: LIGA, glCache: { configured: true, label: "GitLab" } };
+  for (const act of ["glpush", "glpull"]) {
+    let log = await run(act, { ok: false, error: "bad repo", code: "vcs-bad-target" }, liga);
+    assert.deepEqual(log.tell, [t("glSyncFailedMsg", "bad repo", "GitLab")], `${act}: ЛІГА`);
+    assert.ok(!log.tell[0].includes("Підключенні"));
+    log = await run(act, { ok: false, error: "bad repo", code: "vcs-bad-target" }, { space: PLAIN, glCache: { configured: true, label: "GitHub" } });
+    assert.deepEqual(log.tell, [t("vcsErrTarget")], `${act}: звичайний простір`);
+    log = await run(act, { ok: false, error: "e", code: "vcs-offline" }, liga);
+    assert.deepEqual(log.tell, [t("vcsErrOffline", "GitLab")], `${act}: offline`);
+    log = await run(act, { ok: false, error: "e", code: "vcs-auth" }, liga);
+    assert.deepEqual(log.tell, [t("vcsErrAuth", "GitLab")]);
+    log = await run(act, { ok: false, error: "e", code: "vcs-busy" }, liga);
+    assert.deepEqual(log.tell, [t("vcsErrBusy")]);
+  }
+});
+
 test("glpull: питання й тости несуть підпис; unchanged і «старша» — як були; нова ітерація — без тосту", async () => {
   let log = await run("glpull", { ok: true, unchanged: true, iteration: null, same_as: "it2" });
   assert.deepEqual(log.ask[0], [t("glPullConfirmMsg", "GitHub"), { yes: t("glPullConfirmYes") }]);
@@ -502,16 +702,193 @@ test("glpull: питання й тости несуть підпис; unchanged 
   assert.deepEqual(log.tell, []);
   assert.equal(log.refresh, 1);
 
-  log = await run("glpull", { ok: true, unchanged: true, same_as: "it2" }, { glCache: { configured: true, label: "GitLab" } });
+  log = await run("glpull", { ok: true, unchanged: true, same_as: "it2" }, { space: LIGA, glCache: { configured: true, label: "GitLab" } });
   assert.deepEqual(log.ask[0][0], "Підтягнути зміни з GitLab як нову ітерацію?\nПоточний макет не зміниться — зʼявиться нова ітерація для порівняння.");
   assert.deepEqual(log.toast, ["На GitLab те саме, що в it2 — нової ітерації не заводив"]);
 });
 
 test("glpull: «Ні» у питанні — запиту нема; запит упав — errFailed (catch лишився для транспорту)", async () => {
-  let log = await run("glpull", {}, { yes: false });
+  const log = await run("glpull", {}, { yes: false });
   assert.deepEqual(log.post, []);
   const env = mkEnv();
   env.post = async () => { throw new Error("net down"); };
   await actFn("glpull", env)();
   assert.deepEqual(env.log.tell, [t("errFailed", "net down")]);
+});
+
+test("glhistory: відкриває лише http(s) із відповіді; інше — як без web (нічого)", () => {
+  const open = (web) => {
+    const env = mkEnv({ glCache: { configured: true, web } });
+    load(env, { acts: ["glhistory"] }).acts.glhistory();
+    return env.log.open;
+  };
+  assert.deepEqual(open("https://github.com/o/r/commits/main/mockup"), [["https://github.com/o/r/commits/main/mockup", "_blank", "noopener"]]);
+  assert.equal(open("http://gitea.local/o/r").length, 1);
+  for (const web of [null, undefined, "", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,x", "git@h:o/r"]) {
+    assert.deepEqual(open(web), [], String(web));
+  }
+  const none = mkEnv({ glCache: null });
+  load(none, { acts: ["glhistory"] }).acts.glhistory();
+  assert.deepEqual(none.log.open, []);
+});
+
+/* ── refreshGitlab: «зайнято» тримається ключем «простір|задача|ітерація» ─── */
+
+const refresh = (over) => {
+  const env = mkEnv(over);
+  const f = load(env, { funcs: ["glKeyNow", "scheduleGlRetry", "refreshGitlab"] });
+  return { env, ...f };
+};
+const BUSY = { configured: true, error: "dзеркало зайняте", code: "vcs-busy" };
+const REAL_A = { configured: true, label: "GitHub", behind: 0, unpushed: 0, dirty: false, gitlab_it: "it1" };
+
+test("refreshGitlab: звичайна відповідь — у кеш під ключем «простір|задача|ітерація», повторів нема", async () => {
+  const { env, refreshGitlab } = refresh({ status: REAL_A, glCache: null });
+  await refreshGitlab();
+  assert.equal(env.glCache, REAL_A);
+  assert.equal(env.glKey, "plain|A|it3");
+  assert.deepEqual(env.log.api, ["/api/vcs-status?it=it3"]);
+  assert.deepEqual(env.log.timers, []);
+});
+
+test("refreshGitlab: простір без ролі vcs — кеш скинуто, мережі й таймера нема", async () => {
+  const { env, refreshGitlab } = refresh({ status: REAL_A, glCache: REAL_A, glBusyTimer: 7, noVcs: () => true });
+  await refreshGitlab();
+  assert.equal(env.glCache, null);
+  assert.deepEqual(env.log.api, []);
+  assert.equal(env.log.cleared >= 1, true, "відкладений повтор скасовано");
+  assert.equal(env.glBusyTimer, null);
+});
+
+test("(i) vcs-busy без попереднього стану: «зайнято», не помилка й не «збігається», повтор заплановано", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  await refreshGitlab();
+  assert.equal(env.glCache.busy, true);
+  assert.equal(env.glCache.configured, true);
+  assert.ok(!env.glCache.error, "це не помилка: крапка не червона, дія не показує сирий текст сервера");
+  assert.ok(!("behind" in env.glCache) && !("gitlab_it" in env.glCache), "ніякого вигаданого стану");
+  assert.equal(env.glKey, "plain|A|it3");
+  assert.equal(env.log.timers.length, 1);
+  assert.equal(env.log.timers[0].ms, VCS_BUSY_RETRY_MS);
+});
+
+test("(ii) vcs-busy після перемикання задачі: стан задачі A не показується для B", async () => {
+  const { env, refreshGitlab } = refresh({ status: REAL_A, glCache: null });
+  await refreshGitlab();                      // кеш зібрано для A
+  assert.equal(env.glCache, REAL_A);
+  env.curTask = { id: "B" };                  // перемкнули задачу: resetPerTaskState glCache не чіпає
+  env.status = BUSY;
+  await refreshGitlab();
+  assert.notEqual(env.glCache, REAL_A, "стан A — чужий для B");
+  assert.equal(env.glCache.busy, true);
+  assert.ok(!("gitlab_it" in env.glCache), "хмарки «збігається» на it1 нема");
+  assert.equal(env.glKey, "plain|B|it3");
+  // та сама історія з іншою ітерацією тієї самої задачі
+  const second = refresh({ status: REAL_A, glCache: null });
+  await second.refreshGitlab();
+  second.env.picked = "it4";
+  second.env.status = BUSY;
+  await second.refreshGitlab();
+  assert.equal(second.env.glCache.busy, true, "ітерація — частина ключа");
+  // і простір теж
+  const third = refresh({ status: REAL_A, glCache: null });
+  await third.refreshGitlab();
+  third.env.space = { ...PLAIN, id: "other" };
+  third.env.status = BUSY;
+  await third.refreshGitlab();
+  assert.equal(third.env.glCache.busy, true, "простір — частина ключа");
+});
+
+test("vcs-busy того самого ключа: власний стан лишається (крапка не фарбується в помилку), повтор заплановано", async () => {
+  const { env, refreshGitlab } = refresh({ status: REAL_A, glCache: null });
+  await refreshGitlab();
+  env.status = BUSY;
+  await refreshGitlab();
+  assert.equal(env.glCache, REAL_A, "той самий обʼєкт");
+  assert.equal(env.glKey, "plain|A|it3");
+  assert.equal(env.log.timers.length, 1);
+});
+
+test("повтор після «зайнято»: той самий ключ — перепитує й малює смугу; новий стан замінює «зайнято»", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  await refreshGitlab();
+  assert.equal(env.glCache.busy, true);
+  env.status = REAL_A;                        // синхронізація скінчилась
+  await env.log.timers[0].fn();
+  assert.equal(env.log.api.length, 2, "повторний запит статусу");
+  assert.equal(env.glCache, REAL_A);
+  assert.equal(env.log.paint, 1, "смуга перемальована");
+  assert.equal(env.log.timers.length, 1, "після відповіді без busy нових повторів нема");
+});
+
+test("повтор не стріляє після перемикання задачі, ітерації чи простору, і коли ролі вже нема", async () => {
+  for (const change of [
+    (e) => { e.curTask = { id: "B" }; },
+    (e) => { e.picked = "it9"; },
+    (e) => { e.space = { ...PLAIN, id: "other" }; },
+    (e) => { e.noVcs = () => true; },
+  ]) {
+    const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+    await refreshGitlab();
+    change(env);
+    await env.log.timers[0].fn();
+    assert.equal(env.log.api.length, 1, "запит статусу не пішов");
+    assert.equal(env.log.paint, 0);
+  }
+});
+
+test("повтори «зайнято» скінченні: після VCS_BUSY_MAX_TRIES спроб нових таймерів нема", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  const n = await exhaust(env, refreshGitlab);
+  assert.equal(n, VCS_BUSY_MAX_TRIES, `рівно ${VCS_BUSY_MAX_TRIES} відкладених опитів і край`);
+  assert.equal(env.glCache.busy, true, "стан лишається «зайнято»; клік у ньому перепитає статус");
+});
+
+test("відповідь «зайнято» на запит, що летів під час перемикання задачі, — повтор привʼязаний до ключа ЗАПИТУ, а не відповіді", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  env.api = async (path) => { env.log.api.push(path); env.curTask = { id: "B" }; return BUSY; };  // людина перемкнула задачу, поки запит летів
+  await refreshGitlab();
+  assert.equal(env.glKey, "plain|A|it3", "кеш підписано ключем запиту (A), а не поточним (B)");
+  assert.equal(env.log.timers.length, 1);
+  await env.log.timers[0].fn();
+  assert.equal(env.log.api.length, 1, "повтор для A не стріляє, коли відкрито B");
+});
+
+/** Вичерпує всі відкладені опити поточного ключа: кожен таймер спрацьовує, поки нові не перестануть зʼявлятись. */
+async function exhaust(env, refreshGitlab) {
+  await refreshGitlab();
+  let fired = 0;
+  // стеля 30 — лише щоб відсутня межа повторів дала червоний тест, а не нескінченний цикл
+  while (env.log.timers.length > fired && fired < 30) { fired += 1; await env.log.timers[fired - 1].fn(); }
+  return env.log.timers.length;
+}
+
+test("лічильник спроб скидається звичайною відповіддю: після неї «зайнято» знову дає повтори", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  assert.equal(await exhaust(env, refreshGitlab), VCS_BUSY_MAX_TRIES);
+  const n = env.log.timers.length;
+  env.status = REAL_A;
+  await refreshGitlab();                      // синхронізація скінчилась
+  env.status = BUSY;
+  env.glCache = null;
+  await refreshGitlab();                      // і знову почалась
+  assert.equal(env.log.timers.length, n + 1, "лічильник почався спочатку");
+});
+
+test("лічильник спроб свій на кожен ключ: нова задача не успадковує вичерпані повтори попередньої", async () => {
+  const { env, refreshGitlab } = refresh({ status: BUSY, glCache: null });
+  assert.equal(await exhaust(env, refreshGitlab), VCS_BUSY_MAX_TRIES);
+  const n = env.log.timers.length;
+  env.curTask = { id: "B" };
+  env.glCache = null;
+  await refreshGitlab();
+  assert.equal(env.log.timers.length, n + 1, "B має власні спроби");
+});
+
+test("помилка запиту статусу: кеш і ключ скинуто (без застарілого стану)", async () => {
+  const { env, refreshGitlab } = refresh({ glCache: REAL_A, glKey: "plain|A|it3" });
+  env.api = async () => { throw new Error("net"); };
+  await refreshGitlab();
+  assert.equal(env.glCache, null);
+  assert.equal(env.glKey, null);
 });

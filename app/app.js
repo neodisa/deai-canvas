@@ -32,10 +32,10 @@ import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
+  FORM_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
   commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
-  remoteNoticeLines, remoteOpenUrl, remoteShareUrl, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
-  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError, vcsBrand, vcsErrKey,
+  remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
+  spaceErrField, spaceErrKey, taskErrField, taskErrKey, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
   spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
@@ -838,10 +838,11 @@ function barState() {
      дивиться в кеш і каже РЕАЛЬНУ причину замість повторювати мережевий
      виклик, приречений на ту саму помилку. */
   const gl = !glCache || !glCache.configured ? 'off'
-    : glCache.error ? 'error'
-      : glCache.behind > 0 ? 'behind'
-        : (glCache.unpushed > 0 || glCache.dirty) ? 'ahead'
-          : 'sync';
+    : glCache.busy ? 'busy'
+      : glCache.error ? 'error'
+        : glCache.behind > 0 ? 'behind'
+          : (glCache.unpushed > 0 || glCache.dirty) ? 'ahead'
+            : 'sync';
   return {
     mode: canvas ? 'overview' : 'layout',
     view: canvasView,
@@ -876,9 +877,12 @@ function barState() {
     iterMine: iterMine(pickedIt),
     iterOrigin: pickedIt?.origin || null,
     iterOnGl: !!(glCache && glCache.gitlab_it === picked),
-    /* Підпис репозиторію з відповіді статусу ('GitLab' у ЛІГА, 'GitHub'/'Git' від модуля): смуга й палітра беруть із нього
-       підпис зони й текстів (`bar-model.js`, `vcsBrand`). Статус без `label` (простір без синку, помилка) — типовий «GitLab». */
+    /* Підпис репозиторію з відповіді статусу ('GitLab' у ЛІГА, 'GitHub'/'Git'/'GitLab' від модуля) — СИРИЙ: нормалізує його
+       `vcsBrand(label, space)` у смузі й палітрі (білий список; статус без `label` — «GitLab» у ЛІГІ, «Git» деінде). */
     glLabel: glCache?.label || '',
+    /* Статус без помилки й без придатного `web` (file://, Gitea, Bitbucket → `web: null`; не `http(s)`): пункт «Історія» не
+       показується. У помилці й поки статусу нема — лишається, як було (`glCache` без `configured` — «Налаштувати»). */
+    glNoWeb: !!(glCache?.configured && !glCache.error && !vcsWebUrl(glCache.web)),
     /* Перелік ітерацій — щоб дропдаун крошки МІГ перемкнути, а не лише
        створити й видалити. Доти єдиним місцем вибору був `<select>` панелі;
        коли панель переписали, вибір зник із інструмента зовсім, бо `picked`
@@ -1924,11 +1928,16 @@ const BAR_ACTIONS = {
   // ── дропдаун синку з git: адреси `vcs-*` (старі, з префіксом gitlab, лишились псевдонімами для хука) ──────
   glpush: async () => {
     if (!glCache) return;
+    /* Підпис репозиторію в текстах — той самий нормалізований, що в смузі й палітрі: у ЛІГА «GitLab» (тексти 0.7.0
+       дослівно), у звичайному просторі — з відповіді статусу, а без нього нейтральний «Git». */
+    const lbl = glLabelNow();
+    /* Статус ще не відомий: перший опит натрапив на лок дзеркала (іде клон, відправка чи отримання). Далі нема чого
+       питати в git — кажемо це й перепитуємо статус, щоб стан не лишився «зайнято» назавжди. */
+    if (glCache.busy) { tell(t('vcsErrBusy')); await refreshGitlab(); render(); return; }
     /* Кеш уже каже, що останній запит статусу впав, — другий запит до git
-       приречений на ту саму помилку. Кажемо ЇЇ, а не повторюємо виклик. */
-    if (glCache.error) { tell(t('errFailed', glCache.error)); return; }
-    /* Підпис репозиторію в текстах: 'GitHub'/'Git' від модуля, у ЛІГА — «GitLab» (тексти 0.7.0 дослівно). */
-    const lbl = glCache.label || 'GitLab';
+       приречений на ту саму помилку. Кажемо ЇЇ, а не повторюємо виклик: код із власним текстом (немає мережі, ключ)
+       — ним, решта — причиною як є. */
+    if (glCache.error) { tell(glFailText(glCache, lbl, t('errFailed', glCache.error))); return; }
     try {
       const r = await post('/api/vcs-push', { it: picked });
       if (r.blocked === 'behind') tell(t('glBehindMsg', r.behind, lbl));
@@ -1939,16 +1948,17 @@ const BAR_ACTIONS = {
       else if (r.blocked === 'foreign') tell(t('glForeignMsg', r.author || '—'));
       /* Відмова git чи модуля — 200 `{ok: false, error, code}`: код із власним текстом (немає мережі, ключ, «іде
          синхронізація», погана ціль) каже людині, ЩО робити; решта кодів — загальне повідомлення з причиною сервера. */
-      else if (!r.ok) { const k = vcsErrKey(r.code); tell(k ? t(k, lbl) : t('glSyncFailedMsg', r.error || '—', lbl)); }
+      else if (!r.ok) tell(glFailText(r, lbl, t('glSyncFailedMsg', r.error || '—', lbl)));
       else if (r.catchup) toast(t('glCatchupToast', lbl));
       else if (r.changed === false) toast(t('glNothingToSendToast', lbl));
       else if (r.pushed) toast(t('glPushedToast', r.sha || '—', lbl));
-    } catch (e) { tell(t('errFailed', e.message)); }
+    /* `requestErrText`: 400 від `send_error` (немає ролі чи цілі, погана ітерація) приходить HTML-ом, причина — в рядку статусу. */
+    } catch (e) { tell(t('errFailed', requestErrText(e))); }
     await refreshGitlab(); render();
   },
 
   glpull: async () => {
-    const lbl = glCache?.label || 'GitLab';
+    const lbl = glLabelNow();
     const go = await askYesNo(t('glPullConfirmMsg', lbl), { yes: t('glPullConfirmYes') });
     if (!go) return;
     try {
@@ -1964,9 +1974,9 @@ const BAR_ACTIONS = {
         t('iterTag', itNum(r.fork.id)), lbl));
       /* Відмова git приходить 200-ю `{ok: false, error, code}` (а «шлях не знайдено в репо» — без `code`), тож `catch`
          її не бачить: без цієї гілки pull, що не вдався, мовчав би — а мовчазна кнопка виглядає зламаною. */
-      else if (r.ok === false) { const k = vcsErrKey(r.code); tell(k ? t(k, lbl) : t('glSyncFailedMsg', r.error || '—', lbl)); }
+      else if (r.ok === false) tell(glFailText(r, lbl, t('glSyncFailedMsg', r.error || '—', lbl)));
       await refreshGitlab(); render();
-    } catch (e) { tell(t('errFailed', e.message)); }
+    } catch (e) { tell(t('errFailed', requestErrText(e))); }
   },
 
   /* Синк із git у ЛІГА налаштовується правкою `tasks.json` (`gitlab_cfg()` у `serve.py`), а не на «Підключенні»: відкриття
@@ -1975,7 +1985,8 @@ const BAR_ACTIONS = {
      задається на «Підключенні», на картці модуля ролі `vcs`. */
   glsetup: () => { if (isLegacyVcs(spaceNow())) tell(t('glSetupMsg')); else enterConnections(); },
 
-  glhistory: () => { if (glCache?.web) window.open(glCache.web, '_blank'); },
+  /* `web` віддає свій модуль: відкриваємо лише `http(s)` (`vcsWebUrl`) — `javascript:`/`file:` не історія, а смуга такого пункту не малює. */
+  glhistory: () => { const web = vcsWebUrl(glCache?.web); if (web) window.open(web, '_blank', 'noopener'); },
 
   // ── дропдаун публікації: `togglepub` — заміна старого `[data-toggle]`,
   // `openpreview`/`copylink` — нові контроли моделі (те, що робив `#pp-copy`
@@ -3480,6 +3491,41 @@ bar.addEventListener('keydown', (ev) => {
 // Статус кэшируем: смуга (Task 3) малює з кешу через `barState()`, мережу
 // дьоргаємо лише на старті й після дій.
 let glCache = null;
+/* Ключ («простір|задача|ітерація»), для якого зібрано `glCache`. `resetPerTaskState` кеш навмисно не обнуляє (перемикання
+   в межах простору не мигає смугою), тож без ключа чужий стан міг би пережити перемикання задачі. */
+let glKey = null;
+/* Відкладений повтор опиту після `vcs-busy`; ключ і лічильник спроб, до яких він прив'язаний. */
+let glBusyTimer = null;
+let glBusyFor = null;
+let glBusyTries = 0;
+
+/** Підпис репозиторію для текстів дій: той самий нормалізатор, що в смузі й палітрі (`vcsLabel`). */
+function glLabelNow() { return vcsLabel(glCache?.label, spaceNow()); }
+
+/** Текст відмови синку: код із власним текстом (`vcsFailKey`: у ЛІГІ `vcs-bad-target` його не має) — ним, інакше `plain`. */
+function glFailText(r, lbl, plain) {
+  const k = vcsFailKey(r.code, spaceNow());
+  return k ? t(k, lbl) : plain;
+}
+
+/** Ключ стану синку: простір, задача й ітерація, для яких питаємо статус. */
+function glKeyNow() { return `${spaceNow()?.id ?? ''}|${curTask?.id ?? ''}|${picked || ''}`; }
+
+/** Один відкладений повтор опиту після `vcs-busy`: лише поки ключ той самий, і не більше `VCS_BUSY_MAX_TRIES` разів на ключ. */
+function scheduleGlRetry(key) {
+  clearTimeout(glBusyTimer);
+  glBusyTimer = null;
+  if (glBusyFor !== key) { glBusyFor = key; glBusyTries = 0; }
+  if (glBusyTries >= VCS_BUSY_MAX_TRIES) return;
+  glBusyTries += 1;
+  glBusyTimer = setTimeout(async () => {
+    glBusyTimer = null;
+    /* Перемкнули задачу, ітерацію чи простір (або роль зникла) — повтор уже не про той стан і не стріляє. */
+    if (noVcs() || glKeyNow() !== key) return;
+    await refreshGitlab();
+    paintBar();
+  }, VCS_BUSY_RETRY_MS);
+}
 
 /* `paintGitlab()` більше не існує: старий бар мав ПОРОЖНІЙ `<span id="gl-slot">`
    і патчив його руками (DOM без даних — без чого не показати статус). Нова
@@ -3490,11 +3536,23 @@ let glCache = null;
 async function refreshGitlab() {
   /* Простір без ролі `vcs` синку не має: статус там — «нема», а не запит, що
      повертає `configured:false` (і не мережа, і не рядок у журналі сервера). */
-  if (noVcs()) { glCache = null; return; }
-  /* `vcs-busy` — не помилка, а «лок дзеркала тримає інша синхронізація (клон, відправка, отримання)»: попередній стан
-     лишається, інакше крапка смуги фарбувалась би в помилку на кожен збіг у часі. */
-  try { const r = await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`); glCache = (r.code === 'vcs-busy' && glCache) ? glCache : r; }
-  catch { glCache = null; }
+  if (noVcs()) { glCache = null; glKey = null; clearTimeout(glBusyTimer); glBusyTimer = null; return; }
+  const key = glKeyNow();
+  try {
+    const r = await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`);
+    if (r.code === 'vcs-busy') {
+      /* `vcs-busy` — не помилка, а «лок дзеркала тримає інша синхронізація (клон, відправка, отримання)». Власний стан
+         ТОГО САМОГО ключа лишається (крапка не фарбується в помилку на кожен збіг у часі). Чужого стану — іншої задачі, ітерації
+         чи простору — не лишаємо: він брехав би («збігається» там, де є незапушена робота). Тоді стан «зайнято»: ні
+         помилка, ні «збігається», а дія в ньому каже `vcsErrBusy`. І один відкладений повтор, щоб стан не завис. */
+      if (!(glCache && !glCache.busy && glKey === key)) glCache = { configured: true, busy: true };
+      glKey = key;
+      scheduleGlRetry(key);
+    } else {
+      glCache = r; glKey = key;
+      clearTimeout(glBusyTimer); glBusyTimer = null; glBusyFor = null; glBusyTries = 0;
+    }
+  } catch { glCache = null; glKey = null; }
 }
 
 // --- контекст-меню итерации: дублювати / видалити ---
@@ -6890,7 +6948,7 @@ function paletteState() {
     figmaBusy: st.figmaBusy,
     pickedPage,
     ...paletteTreeTarget(),
-    gl: st.gl, glBrand: vcsBrand(st.glLabel), iterLabel: st.iterLabel,
+    gl: st.gl, glBrand: vcsBrand(st.glLabel, st.space), iterLabel: st.iterLabel,
     shots: curIter() ? shotsState() : null,
     lang: getLang(),
     canInstall: pwa.canInstall(),

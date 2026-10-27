@@ -409,6 +409,8 @@ function zone2HTML(model, state, openDd) {
 }
 
 /* ── зона 3: GitLab і публікація ──────────────────────────────────────────── */
+/* Стани без запису тут (`busy` — синк іде, а опит натрапив на лок дзеркала; `error`) малюються сірою крапкою через `|| "off"` у
+   `zoneGl`: це не помилка (червоного нема) і не «збігається» (зеленого нема). */
 const GL_DOT = { sync: "ok", ahead: "warn", behind: "bad", off: "off" };
 
 function ddGitlab(model, iterLabel) {

@@ -217,8 +217,8 @@ export const spaceErrField = (code) => {
  * `serve.py` не перезапустили). Тоді, як і для відповідей без `capabilities`, рішення за `integrations`, рівно `=== false`:
  * простір без відомостей командного каналу в людини не краде (інакше ЛІГА мовчки втратила б «Команду»).
  *
- * ⚠️ Це НЕ `noOutward` (`app.js`): GitLab, Teams-тиша й дашборд команди ходять назовні й лишаються на
- * `integrations`. Простір із модулем коментарів без інтеграцій має команду коментарів, але не має GitLab.
+ * ⚠️ Це НЕ `noOutward` (`app.js`): Teams-тиша й дашборд команди ходять назовні й лишаються на
+ * `integrations`. Простір із модулем коментарів без інтеграцій має команду коментарів, але не має Teams.
  */
 export const hasTeamComments = (space) => {
   const caps = space?.capabilities;
@@ -259,12 +259,31 @@ export const isLegacyVcs = (space) => {
 };
 
 /**
- * Підпис репозиторію для нетипового випадку: `'GitHub'`/`'Git'` — як віддав сервер (`label` статусу), усе інше (`'GitLab'`,
- * порожнє, чуже) — `''`, тобто типовий підпис «GitLab», тексти ЛІГИ без змін. Єдине місце правила: смуга й палітра беруть
- * підпис звідси. `Map`, а не обʼєкт: `label` може віддати свій модуль, і `{}['constructor']` дав би функцію замість «нема».
+ * Підпис репозиторію для інтерфейсу — ЄДИНИЙ нормалізатор: смуга, палітра й усі дії синку беруть підпис звідси. Білий
+ * список `GitLab`/`GitHub`/`Git` (те, що віддає статус: `label`); усе інше — порожнє (опит упав, простір без цілі, статус
+ * без `label`), довге, з переносом рядка, чужий текст свого модуля, службові імена обʼєкта — не показується, а замінюється:
+ * у ЛІГІ (`isLegacyVcs`, невідомий простір теж) — «GitLab», як було, у звичайному просторі — нейтральним «Git»: сервер
+ * підпису в стані помилки не знає, а вигадувати «GitLab» для GitHub-репо — брехня.
+ * `Set`, а не обʼєкт: `{}['constructor']` дав би функцію замість «нема».
  */
-const VCS_BRANDS = new Map([["GitHub", "GitHub"], ["Git", "Git"]]);
-export const vcsBrand = (label) => VCS_BRANDS.get(label) ?? "";
+const VCS_LABELS = new Set(["GitLab", "GitHub", "Git"]);
+export const vcsLabel = (label, space) => (VCS_LABELS.has(label) ? label : (isLegacyVcs(space) ? "GitLab" : "Git"));
+
+/** Підпис, коли він НЕ типовий («GitLab»): `'GitHub'`/`'Git'`, інакше `''` — тоді поля `brand` у смузі й `labelArgs` у палітрі нема. */
+export const vcsBrand = (label, space) => { const l = vcsLabel(label, space); return l === "GitLab" ? "" : l; };
+
+/** Посилання «Історія» — лише `http(s)`: `web` віддає свій модуль, а `javascript:`/`file:` у `window.open` — не історія. Інакше `null`. */
+export const vcsWebUrl = (web) => (typeof web === "string" && /^https?:\/\//i.test(web) ? web : null);
+
+/** Через скільки мс і скільки разів перепитати статус, коли він натрапив на `vcs-busy` (лок дзеркала): ≈5 с, кілька спроб. */
+export const VCS_BUSY_RETRY_MS = 5000;
+export const VCS_BUSY_MAX_TRIES = 4;
+
+/**
+ * Людський текст відмови ЗАПИТУ (`api()` кидає `Error` із `statusText`/`body`): HTML від `send_error` (нема ролі чи цілі,
+ * `bad iteration`) несе причину в рядку статусу, а `message` — перші 200 знаків розмітки; JSON-помилка й мережа — своє `message`.
+ */
+export const requestErrText = (e) => (/^\s*</.test(String(e?.body ?? "")) && e?.statusText ? e.statusText : String(e?.message ?? ""));
 
 /* Коди відмов дій «Відправити»/«Отримати» → ключі словника. Решта кодів (`vcs-error`, `module-error`…) тексту не мають: їхня
    причина вже в `error` відповіді, і вона йде в `glSyncFailedMsg`. */
@@ -273,6 +292,12 @@ const VCS_ERR_KEYS = new Map([
 ]);
 /** Ключ словника для коду відмови синку або `null`, коли свого тексту код не має. */
 export const vcsErrKey = (code) => VCS_ERR_KEYS.get(code) ?? null;
+
+/**
+ * Те саме для дій у конкретному просторі: у ЛІГІ ціль синку живе в `tasks.json`, а не на «Підключенні», тож `vcs-bad-target`
+ * радити «виправ на Підключенні» там не можна — текст береться загальний (`glSyncFailedMsg`) із причиною сервера.
+ */
+export const vcsFailKey = (code, space) => { const k = vcsErrKey(code); return k === "vcsErrTarget" && isLegacyVcs(space) ? null : k; };
 
 /**
  * Чи змінився простір між «що ми знали» і «що відповів сервер» (`task-switch`,
@@ -449,7 +474,7 @@ export function peekRegistered(res, taken = []) {
    інтеграцій не мав ні GitLab, ні кнопки «Опублікувати». Тепер у такому просторі публікує
    вбудований `static-publish` (локальна тека, `/published/<простір>/<задача>/`), тож питань
    стало два: чи є ХТОСЬ, хто публікує (`hasPublish`), і чи це саме ЛІГА (`isLegacyPublish`).
-   GitLab і Teams лишились на `integrations`; командний канал і вкладка «Команда» від 2b-2 — на
+   Teams лишився на `integrations`; синк із git від 4a — на `capabilities.vcs` (`hasVcs`, вище); командний канал і вкладка «Команда» від 2b-2 — на
    `capabilities.comments` (`hasTeamComments`, нижче: рішення за роллю `comments`, не за `integrations`).
 
    Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | 'legacy' | null, tokens,
