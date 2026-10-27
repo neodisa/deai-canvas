@@ -117,7 +117,7 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 
 | Функція | Вхід | Вихід |
 |---|---|---|
-| `check(ctx)` | — | як у всіх модулів; `git-sync`: є типовий `repo` → спершу перевірки цілі, далі `git ls-remote --heads -- <repo> <branch>` з тайм-аутом процесу 4 с (`ConnectTimeout=3` — лише коли модуль складає команду ssh); тайм-аут → `{ok: false, error: "vcs-offline"}` (не `check-timeout` каркаса, `CHECK_TIMEOUT` = 5 с). Нема типового `repo` → `ok` з поясненням «репозиторій задається в задачі» |
+| `check(ctx)` | — | як у всіх модулів; `git-sync`: є типовий `repo` → спершу перевірки цілі, далі `git ls-remote --heads -- <repo> <branch>` з тайм-аутом процесу 4 с (`ConnectTimeout=3` — лише коли модуль складає команду ssh); тайм-аут → `{ok: false, error: "vcs-offline"}` (не `check-timeout` каркаса, `CHECK_TIMEOUT` = 5 с). Нема типового `repo` → `ok` з поясненням «репозиторій задається в задачі» (клієнт показує його локалізовано, без сирого англійського `detail`: задача без репозиторію лишиться без синхронізації — ревʼю Task 7) |
 | `validate(ctx, target)` | ціль | необовʼязкова: нормалізована ціль або `vcs-bad-target`, без жодного git; ядро кличе її на `task-new`, якщо вона є |
 | `status(ctx, target)` | ціль | `{behind, behind_path, unpushed, on_remote, web, label}` |
 | `push(ctx, target, src, meta)` | ціль; `src` — тека, яку ядро підготувало (вміст стане `<path>`, з dot-файлами); `meta = {message, author: {name, email}}` | форми `gitlab_sync` 0.7.0 без `remote`: `{ok, synced, changed, pushed, sha?, catchup?, error, code?}` або `{ok: false, synced: false, blocked: "behind", behind, behind_path, behind_top}` / `{…, blocked: "diverged", behind, ahead, behind_top, error}` |
@@ -318,15 +318,15 @@ target = {"repo": str, "path": str, "branch": str, "task": <id задачі>, "s
 - **Палітра** — ті самі команди (`glsetup`/`glpull`/`glpush`). Нові поля в діях палітри додаються лише тоді, коли підпис
   не типовий: `legacy-golden` порівнює палітру `deepEqual` по JSON.
 - **«Підключення» й майстер:**
-  - нова секція ролі «Синхронізація з git» — `ROLE_ORDER` (після `comments`), `ROLE_KEYS`, `ROLE_ICONS`, `CHECK_KEYS` і ключі `cnRoleVcs`/`cnRoleVcsLead`/`cnRoleVcsNone`;
+  - нова секція ролі «Синхронізація з git» — `ROLE_ORDER` (після `comments`), `ROLE_KEYS`, `ROLE_ICONS`, `CHECK_KEYS` і ключі `cnRoleVcs`/`cnRoleVcsLead`/`cnNoneVcs` (`cnNoneVcs` — з малої літери без крапки: його вставляють шаблони `cnNowNone`/`cnDisableNone`/`wzOffRow`);
   - картка `git-sync` з налаштуваннями й «Перевірити»;
   - `disableConsequences` знає роль `vcs`, інакше в ЛІГА хибне «нікого»;
   - на кроці 2 майстра модуль типово не вибраний.
 - **Форма нової задачі** (`app.js`, «Нова задача»):
-  - необовʼязкове поле «Репозиторій», лише коли `hasVcs`; значення йде в `vcs.repo`;
+  - необовʼязкове поле «Репозиторій», лише коли `hasVcs` і простір не ЛІГА (`!isLegacyVcs`); значення йде в `vcs.repo`;
   - підказка — типовий `repo` з `GET /api/modules` (`settings[].value`);
   - коди `vcs-*` — у `TASK_ERR_KEYS`/`taskErrField`;
-  - запит створення задачі в просторі з роллю `vcs` має стелю 200 с замість 20 с (`FORM_POST_TIMEOUT_MS`), бо перший клон триває хвилини; так само в майстрі;
+  - запит створення задачі, що справді може клонувати (тіло несе `vcs`, або простір ЛІГА з профільним `gitlab`), має стелю 400 с замість 20 с (`FORM_POST_TIMEOUT_MS`): найгірший шлях сервера — `validate` 5 с + клон 180 с + другий клон без `--branch` 180 с. Порожнє поле «Репозиторій» і майстер (крок 4 `vcs` не несе — сервер не клонує) — звичайна стеля 20 с. Поки довгий запит іде, кнопка каже «Створюю…», а форма — що перший клон може тривати кілька хвилин; «Скасувати» запит не обриває (сервер однаково створить задачу) (ревʼю Task 7);
   - майстер (крок 4) поля не має — бере типовий.
 - **Помилки дій** «Відправити»/«Отримати»: новий мапер код → текст для `vcs-*`.
 - **Тексти.** Ключі `gl*` лишаються, тексти — без слова «GitLab» там, де йдеться не про ЛІГУ (`{label}` у підписах і
