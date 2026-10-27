@@ -2766,12 +2766,20 @@ const connView = () => ({ space: connSpace(), list: connState.list, notes: connS
  * цієї ролі («Налаштувати…» синку → `vcs`): після першого списку на неї сяде фокус (`focusConnLanding`), а сторінка прокрутиться;
  * без ролі — як завжди (перша кнопка першої картки). Прапорець ставимо й тоді, коли сторінка вже відкрита: `enterHome` ставить
  * його лише на свіжий вхід.
+ *
+ * Перелік просторів на свіжозавантаженій сторінці ніхто не читає (старт питає задачу й синк, а `/api/spaces` вантажать дропдаун,
+ * палітра й екран «Задачі»): `spacesResp` порожній, а простір смуга знає з `curTask.space`. Вхід, що прийшов із такого стану
+ * (`glsetup` зі смуги; клік по «Підключення…» в дропдауні, що випередив власну відповідь), мовчав — тож порожній перелік
+ * ЧИТАЄМО тут. Готовий (навіть `{off:true}` чи без поточного простору) вирішує сам: зайвого запиту нема, мовчання — як було.
+ * Щойно прочитаний перелік `loadConn` вдруге не питає (`spaces: false`, як після `afterSpaceChange`).
  */
-function enterConnections(role = '') {
+async function enterConnections(role = '') {
+  const cold = spacesResp === null;
+  if (cold) await loadSpaces();
   if (!currentSpace(spacesResp)) return;
   connFocusRole = role;
   if (role) connFocusPending = true;
-  enterHome({ page: 'conn' });
+  enterHome(cold ? { page: 'conn', spaces: false } : { page: 'conn' });
 }
 
 /**

@@ -16,7 +16,8 @@
  * 6 — нова задача з полем «Репозиторій» (рядок про клон, макет колеги в Іт.1, форк) і без нього (звичайний запит); 6b — підказка
  * поля з типового `repo` модуля й відсутність поля без ролі; 7 — ЛІГА без змін (підпис «GitLab», `design-canvas: sync …`,
  * «Налаштувати…» → повідомлення про `tasks.json`); 8 — «Налаштувати…» поза ЛІГОЮ веде на «Підключення» з фокусом на картці
- * `git-sync`; 8b — те саме на свіжозавантаженій сторінці (`todo`: вада продукту, див. коментар над тестом); 9 — майстер: секція
+ * `git-sync` (перелік просторів уже завантажено); 8b — те саме на свіжозавантаженій сторінці, коли `/api/spaces` ще не питали (вхід сам
+ * читає перелік); 9 — майстер: секція
  * «Синхронізація з git» на кроці 2, модуль не вибраний типово, вибраний — запис у `space.json` і зона в новому просторі; 10 — `vcs-busy`:
  * лок дзеркала тримає чужа операція → стан «зайнято», дія каже причину, відкладений повтор знімає стан.
  *
@@ -34,6 +35,7 @@
  *   6b  — `setAttribute('placeholder', hint)` у `newTaskDialog`; `withRepo = hasVcs && !isLegacyVcs` (поле без ролі).
  *   7   — `'GitLab'` для ЛІГИ у `gitlab_status` (`serve.py`); гілка `isLegacyVcs` у `BAR_ACTIONS.glsetup`.
  *   8   — аргумент ролі в `enterConnections('vcs')` (фокус на картці git-sync, а не на першій).
+ *   8b  — читання переліку в `enterConnections` (`if (cold) await loadSpaces()`): без нього перший клік на свіжій сторінці мертвий.
  *   9   — `holds(e)` в `initialPick` (`wizard-model.js`): без нього git-sync вибраний типово.
  *   10  — `scheduleGlRetry(key)` у гілці `vcs-busy` (`refreshGitlab`): без нього «зайнято» не знімається.
  *   Не доведено мутацією: рядки секції «Синхронізація з git» на кроці 2 майстра (лише текст заголовка), запис `space.json` майстром, сама
@@ -486,8 +488,8 @@ test("8: «Налаштувати…» поза ЛІГОЮ (модуль без 
   await page.waitForSelector(GL, { timeout: 15000 });
   assert.equal((await glLabel(page)).trim(), "Git", "підпис без відомого `label` у звичайному просторі — «Git»");
   assert.equal(await glDot(page), "off");
-  /* Список просторів завантажено (дропдаун простору відкрито й закрито): `enterConnections` бере простір зі `spacesResp`, а на старті
-     сторінка його не питає — див. 8b. */
+  /* Теплий шлях: список просторів уже завантажено (дропдаун простору відкрито й закрито) — `enterConnections` бере простір зі
+     `spacesResp` без власного читання. Холодний шлях (сторінка списку ще не питала) — 8b. */
   await warmSpaces(page);
   const menu = await glMenu(page);
   assert.deepEqual(menu.map((m) => m.act), ["glsetup"]);
@@ -500,13 +502,11 @@ test("8: «Налаштувати…» поза ЛІГОЮ (модуль без 
   assert.deepEqual(s.errors, []);
 });
 
-/* ВАДА ПРОДУКТУ, знайдена цим файлом (Task 8): `BAR_ACTIONS.glsetup` поза ЛІГОЮ кличе `enterConnections('vcs')`, а той бере простір зі
-   `spacesResp` — на старті сторінка `/api/spaces` НЕ питає (його вантажать дропдаун простору, палітра, вхід у «Підключення»), тож
-   `if (!currentSpace(spacesResp)) return` мовчки нічого не робить: перший клік по «Налаштувати…» на свіжозавантаженій сторінці — мертвий.
-   Позначено `todo`, щоб набір лишався зеленим і відтворення не загубилось; коли вадою займуться — прибрати `todo` (тест тоді має позеленіти). */
-test("8b: «Налаштувати…» на свіжозавантаженій сторінці (список просторів ще не питали) веде на «Підключення»", {
-  todo: "вада продукту: glsetup → enterConnections мовчки виходить, поки spacesResp порожній (див. коментар над тестом)",
-}, async (t) => {
+/* Холодний шлях: на старті сторінка `/api/spaces` НЕ питає (його вантажать дропдаун простору, палітра, вхід у «Підключення»), а зона
+   синку вже є — простір смуга знає з задачі. Колись `enterConnections` брав простір зі `spacesResp` і мовчки виходив, тож перший клік
+   по «Налаштувати…» на свіжозавантаженій сторінці був мертвий (знайдено цим файлом, Task 8; виправлено окремим комітом). Тепер вхід
+   сам читає перелік, коли його ще нема. */
+test("8b: «Налаштувати…» на свіжозавантаженій сторінці (список просторів ще не питали) веде на «Підключення» з фокусом на картці git-sync", async (t) => {
   const s = await boot(t, { enable: "norepo" });
   const { page } = s;
   await page.waitForSelector(GL, { timeout: 15000 });
@@ -514,7 +514,13 @@ test("8b: «Налаштувати…» на свіжозавантаженій 
   const menu = await glMenu(page);
   assert.deepEqual(menu.map((m) => m.act), ["glsetup"]);
   await page.click('#bar [data-act="glsetup"]');
-  await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 5000 });
+  await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 15000 });
+  assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "повідомлення про tasks.json не показано");
+  await page.waitForFunction(() => document.activeElement?.closest?.(".cn-card")?.dataset?.id === "git-sync", null, { timeout: 15000 });
+  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Підключення/);
+  assert.ok(s.requests.some((u) => new URL(u).pathname === "/api/spaces"), "вхід сам прочитав перелік просторів");
+  assert.deepEqual(s.outside, []);
+  assert.deepEqual(s.errors, []);
 });
 
 test("9: майстер нового простору — на кроці 2 секція «Синхронізація з git», модуль типово не вибраний; вибраний — картка з repo, запис у space.json, зона в новому просторі", async (t) => {

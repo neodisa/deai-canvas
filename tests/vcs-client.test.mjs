@@ -20,7 +20,7 @@ import { filterActions, paletteActions } from "../app/shell-palette.js";
 import { barHTML } from "../app/shell-bar.js";
 import { taskFormHTML, wireTaskForm } from "../app/space-dialogs.js";
 import {
-  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, hasVcs, isLegacyVcs,
+  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, currentSpace, hasVcs, isLegacyVcs,
   requestErrText, spaceChanged, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsErrKey, vcsFailKey,
   vcsLabel, vcsWebUrl,
 } from "../app/spaces-model.js";
@@ -1602,6 +1602,79 @@ test("enterConnections(role): запамʼятовує роль і вимага�
   assert.equal(env.entered, undefined, "простору нема — входу нема");
   assert.equal(env.connFocusRole, "stale", "і стан не чіпаємо");
   assert.equal(env.connFocusPending, false);
+});
+
+/* Холодний старт: сторінка `/api/spaces` не питала (`spacesResp === null`), а простір смуга знає з `curTask.space`. «Налаштувати
+   репозиторій…» (`glsetup`) і клік по «Підключення…», що випередив відповідь дропдауна, мовчали — тепер вхід САМ читає перелік. */
+function mkConn(initial, loaded, over = {}) {
+  const env = {
+    currentSpace, spacesResp: initial, connFocusPending: false, connFocusRole: "stale", entered: [], loads: 0, order: [],
+    loadSpaces: async () => { env.loads += 1; env.order.push("load"); if (env.gate) await env.gate; env.spacesResp = loaded; },
+    enterHome: (o) => { env.order.push("enter"); env.entered.push(o); },
+    ...over,
+  };
+  return env;
+}
+const enterIn = (env) => new Function("env", `with (env) { ${declSource("enterConnections")}\nreturn enterConnections; }`)(env);
+
+test("enterConnections: холодний старт (перелік просторів ще не питали) — читає його РІВНО раз і лише тоді входить, з фокусом на ролі", async () => {
+  let release;
+  const env = mkConn(null, { current: "plain", spaces: [PLAIN] }, { gate: new Promise((r) => { release = r; }) });
+  const done = enterIn(env)("vcs");
+  assert.equal(env.loads, 1, "перелік замовлено одразу");
+  assert.deepEqual(env.entered, [], "поки перелік у дорозі — входу нема (інакше сторінка відкрилась би без простору)");
+  assert.equal(env.connFocusPending, false);
+  release();
+  await done;
+  assert.equal(env.loads, 1, "один запит на вхід");
+  assert.deepEqual(env.order, ["load", "enter"], "вхід — ПІСЛЯ читання переліку");
+  assert.deepEqual(env.entered, [{ page: "conn", spaces: false }], "щойно прочитаний перелік loadConn вдруге не питає");
+  assert.equal(env.connFocusRole, "vcs");
+  assert.equal(env.connFocusPending, true, "фокус сяде на картку модуля ролі");
+});
+
+test("enterConnections: теплий (перелік уже є) — без зайвого запиту й синхронно, як було; `loadConn` перечитає перелік сам", () => {
+  for (const warm of [{ current: "plain", spaces: [PLAIN] }, { current: "gone", spaces: [PLAIN] }]) {
+    const env = mkConn(warm, null);
+    const p = enterIn(env)("vcs");
+    assert.equal(env.loads, 0, "перелік є — запиту нема");
+    if (currentSpace(warm)) {
+      assert.deepEqual(env.entered, [{ page: "conn" }], "вхід у тому ж такті, без `spaces: false`");
+      assert.equal(env.connFocusRole, "vcs");
+      assert.equal(env.connFocusPending, true);
+    } else {
+      assert.deepEqual(env.entered, [], "поточного простору в переліку нема — мовчання, як було");
+      assert.equal(env.connFocusRole, "stale", "і стан не чіпаємо");
+      assert.equal(env.connFocusPending, false);
+    }
+    assert.ok(p instanceof Promise);
+  }
+  const off = mkConn({ off: true, spaces: [] }, null);
+  enterIn(off)("vcs");
+  assert.equal(off.loads, 0, "шар просторів вимкнено — це готова відповідь, а не «ще не питали»");
+  assert.deepEqual(off.entered, []);
+});
+
+test("enterConnections: холодний, але простору справді нема (порожній реєстр, шар вимкнено, реєстр не читається) — один запит і мовчання, стан не чіпаємо", async () => {
+  for (const loaded of [{ current: null, spaces: [] }, { off: true, spaces: [] }, null]) {
+    const env = mkConn(null, loaded);
+    await enterIn(env)("vcs");
+    assert.equal(env.loads, 1);
+    assert.deepEqual(env.entered, []);
+    assert.equal(env.connFocusRole, "stale");
+    assert.equal(env.connFocusPending, false);
+  }
+});
+
+test("glsetup на холодному старті: клік веде на «Підключення» з фокусом на ролі vcs (справжній enterConnections, заглушка читання переліку)", async () => {
+  const env = mkConn(null, { current: "plain", spaces: [PLAIN] }, { ...mkEnv({ space: PLAIN, isLegacyVcs }), spaceNow: () => PLAIN });
+  const { acts } = load(env, { funcs: ["enterConnections"], acts: ["glsetup"] });
+  await acts.glsetup();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(env.loads, 1);
+  assert.deepEqual(env.entered, [{ page: "conn", spaces: false }]);
+  assert.equal(env.connFocusRole, "vcs");
+  assert.deepEqual(env.log.tell, [], "повідомлення про tasks.json — лише в ЛІГА");
 });
 
 /** Вузол-картка для `focusConnLanding`: кнопки `[data-cn]` (перша не вимкнена), `focus` пише в журнал. */
