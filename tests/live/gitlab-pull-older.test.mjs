@@ -8,6 +8,8 @@
  *
  * Відповіді сервера підмінені (`page.route`): тут перевіряється шлях КЛІКУ —
  * дропдаун GitLab → «Підтягнути» → «так» → тост, а не git (його стережуть юніти).
+ * Адреси — нові, `/api/vcs-status` і `/api/vcs-pull` (етап 4a); старі `/api/gitlab-*` лишились псевдонімами для Stop-хука,
+ * клієнт їх більше не кличе.
  *
  * МУТАЦІЯ: прибрати гілку `r.continue_from` у `glpull` (`app/app.js`) — тоста
  * немає, `waitFor` не дочекається, тест червоніє.
@@ -34,10 +36,10 @@ test("pull старшої своєї версії каже, з якої ітер
   const page = await browser.newPage({ viewport: VIEW });
 
   let pulled = 0;
-  await page.route("**/api/gitlab-status*", (r) => r.fulfill({
+  await page.route("**/api/vcs-status*", (r) => r.fulfill({
     json: { configured: true, behind: 1, unpushed: 0, dirty: false },
   }));
-  await page.route("**/api/gitlab-pull", (r) => {
+  await page.route("**/api/vcs-pull", (r) => {
     pulled += 1;
     return r.fulfill({ json: { ok: true, iteration: { id: "it2" }, fork: { id: "it3" },
                                continue_from: "it1" } });
@@ -51,7 +53,7 @@ test("pull старшої своєї версії каже, з якої ітер
   await toast.waitFor({ timeout: 5000 });
   const text = await toast.textContent();
   /* Свідок: запит справді пішов — інакше тост міг би взятись звідкись іще. */
-  assert.equal(pulled, 1, "клік не дійшов до /api/gitlab-pull");
+  assert.equal(pulled, 1, "клік не дійшов до /api/vcs-pull");
   assert.match(text, /старша версія/);
   assert.match(text, /Іт\.2/, "не сказано, яка ітерація лягла історією");
   assert.match(text, /Іт\.1/, "не сказано, з чиєї роботи продовжуємо");

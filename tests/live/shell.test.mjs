@@ -277,11 +277,21 @@ function longNoteFixture() {
   return { dir, it1 };
 }
 
-/** Нова сторінка, застосунок завантажений, смуга вже намальована. */
+/** Нова сторінка, застосунок завантажений, смуга вже намальована ДОКІНЦЯ.
+ *
+ *  Смуга перемальовується двічі: після `render()` і ще раз після відповіді статусу синку (`refreshGitlab` → `paintBar`). Вимір,
+ *  що вклинився між ними, бере вузли, які друга перемальовка тут-таки відчепить (`offsetParent === null`, `0×0`) — і матриця
+ *  червоніла на рівному місці. Від 4a перша відповідь статусу свіжого сервера — ≈24 мс замість ≈2 (виміряно), тому гонка
+ *  стала частою (6 із 8 прогонів тестів 3–4 червоні проти 0 із 8 до 4a). Чекаємо саму відповідь і повний цикл малювання після неї. Відповідь чекаємо ДО
+ *  `goto`: після нього вона вже могла прийти. */
 async function openApp(browser, url) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const status = page.waitForResponse((r) => /\/api\/(vcs|gitlab)-status/.test(r.url()));
+  status.catch(() => {});                                    // ранній вихід нижче не лишає відхиленого обіцяного без обробника
   await page.goto(`${url}/app/`);
   await page.locator('#bar [data-act="mode"]').first().waitFor();
+  await status;
+  await settle(page);
   return page;
 }
 

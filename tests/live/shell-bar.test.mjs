@@ -165,8 +165,12 @@ test("кожен контрол смуги щось робить на клік",
      схованому вузлу дав би таймаут і виглядав би як бага смуги. Окремий тест
      нижче перевіряє протилежний бік: на 1024 «⋯» ЗʼЯВЛЯЄТЬСЯ, а `view-extra`
      зникає — тобто керування виглядом досяжне на обох ширинах. */
-  const controls = await page.$$eval("#bar [data-act],#bar [data-dd]", (els) =>
-    els.filter((e) => e.offsetParent !== null).map((e) => ({
+  /* ОДИН `evaluate`, а не `$$eval`: `$$eval` спершу бере вузли, а вже потім кличе функцію над ними, і смуга, перемальована між
+     цими двома кроками (`paintBar` після відповіді `/api/vcs-status`; від 4a перша відповідь свіжого сервера — ≈24 мс замість ≈2,
+     виміряно, — тож вона вклинюється частіше), лишала б функції ВІДЧЕПЛЕНІ вузли: `offsetParent === null` у всіх, «0 контролів». `evaluate` вибирає й
+     фільтрує в одному завданні сторінки — перемальовка вклинитись не може. */
+  const controls = await page.evaluate(() =>
+    [...document.querySelectorAll("#bar [data-act],#bar [data-dd]")].filter((e) => e.offsetParent !== null).map((e) => ({
       act: e.dataset.act || null,
       dd: e.dataset.dd || null,
       val: e.dataset.val || null,
@@ -249,7 +253,8 @@ test("керування виглядом переїжджає у «⋯», а н
   await page.goto(`${url}/app/`);
   await page.locator("#bar [data-act=\"mode\"]").first().waitFor();
 
-  const vis = (sel) => page.$$eval(sel, (els) => els.filter((e) => e.offsetParent !== null).length);
+  /* `evaluate`, а не `$$eval`: див. перший тест — перемальовка смуги між вибіркою вузлів і підрахунком давала б 0 відчеплених. */
+  const vis = (sel) => page.evaluate((q) => [...document.querySelectorAll(q)].filter((e) => e.offsetParent !== null).length, sel);
 
   assert.ok(await vis("#bar .view-extra") > 0, "1440: керування виглядом не в смузі");
   assert.equal(await vis("#bar .view-more"), 0, "1440: «⋯» показаний, хоч усе вміщається");
