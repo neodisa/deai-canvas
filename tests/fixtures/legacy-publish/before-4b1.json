@@ -1,0 +1,903 @@
+{
+ "about": "Знімок публікації простору ЛІГА (POST /api/publish) на коді 0.8.0 — до переходу на модуль vercel-publish (4b-1, Task 4). Транспортний код `Handler._publish` у `app/serve.py` на момент зйомки (HEAD 477e50b) байт у байт той, що в 0.8.0 (ae3953a): від того часу в serve.py додано лише реєстрацію шукача інструментів. Зняв скрипт record_before.py (скретчпад сесії, не в репо): фальшивий npx замість vercel; перевірка превʼю — справжня `_check_published` з підміненим `urllib.request.build_opener`. `response` — список пар (порядок ключів спостережуваний), шлях теки задачі замінено на <TASK>.",
+ "scenarios": {
+  "success": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "deploy_url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "verified",
+     true
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678",
+    "vercel_scope": "team_x"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ],
+    "publish_url": "https://pv-12345678.vercel.app",
+    "published_at": "<set>",
+    "publish_verified": true
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "inspect",
+      "https://pv-12345678.vercel.app"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [
+     "fixture"
+    ],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": [
+    "https://pv-12345678.vercel.app"
+   ]
+  },
+  "deploy_login": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "deploy_error",
+     "Vercel не авторизований на цій машині — виконай у терміналі `npx vercel login`, тоді натисни «Опублікувати» ще раз.\n\n— вивід vercel —\nError: Please run vercel login"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ]
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": []
+  },
+  "deploy_scope": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "deploy_error",
+     "Проєкт цієї задачі живе в ІНШОМУ Vercel-скоупі, і цей акаунт до нього не має доступу. Публікація звідси створила б ДРУГЕ посилання, а те, що вже в менеджера, тихо застаріло б — тому vercel відмовив. Попроси власника задачі опублікувати; щоб публікувати могли всі, потрібна спільна Vercel-команда, і її треба вписати в tasks.json → vercel_scope.\n\n— вивід vercel —\nError: You don't have access to the team 'x'"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ]
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": []
+  },
+  "deploy_forbidden": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "deploy_error",
+     "Немає доступу до Vercel-проєкту під цим акаунтом — або увійди тим, що має доступ, або попроси Андрія опублікувати.\n\n— вивід vercel —\nError: Forbidden"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ]
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": []
+  },
+  "deploy_generic": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "deploy_error",
+     "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEХВІСТ"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ]
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": []
+  },
+  "deploy_no_url": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "deploy_error",
+     "деплой пройшов, але URL у виводі vercel не знайдено — посилання не зберігаю, щоб не вигадати неправильне"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ]
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": []
+  },
+  "no_npx": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "deploy_error",
+     "Node/npx не знайдено — опублікувати на Vercel з цієї машини не вийде.\n1) Встанови Node LTS: https://nodejs.org (або `brew install node`).\n2) Один раз авторизуйся: `npx vercel login`.\n3) Перезапусти інструмент: ./stop.command і ./start.command.\nЯкщо Node стоїть через nvm — запускай ./start.command з ТЕРМІНАЛА, а не подвійним кліком з Finder (див. _node_bin).\nМакет уже зібрано локально — можна попросити Андрія опублікувати."
+    ],
+    [
+     "deploy_blocked",
+     "no-node"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ]
+   },
+   "npx_calls": [],
+   "spies": {
+    "registry_push": [],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": []
+  },
+  "known_scope": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "deploy_url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "verified",
+     true
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678",
+    "vercel_scope": "team_x"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ],
+    "publish_url": "https://pv-12345678.vercel.app",
+    "published_at": "<set>",
+    "publish_verified": true
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--scope",
+      "team_x",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes",
+      "--scope",
+      "team_x"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "inspect",
+      "https://pv-12345678.vercel.app"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [
+     "fixture"
+    ],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": [
+    "https://pv-12345678.vercel.app"
+   ]
+  },
+  "protected": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "deploy_url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "verified",
+     false
+    ],
+    [
+     "verify_error",
+     "vercel_protection"
+    ],
+    [
+     "verify_hint",
+     "Vercel Deployment Protection увімкнена: Project → Settings → Deployment Protection → Vercel Authentication → Disabled. Інакше замість макета редірект на SSO, і наш пароль 1100 не показується."
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678",
+    "vercel_scope": "team_x"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ],
+    "publish_url": "https://pv-12345678.vercel.app",
+    "published_at": "<set>",
+    "publish_verified": false
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "inspect",
+      "https://pv-12345678.vercel.app"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [
+     "fixture"
+    ],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": [
+    "https://pv-12345678.vercel.app"
+   ]
+  },
+  "no_gate": {
+   "response": [
+    [
+     "ok",
+     true
+    ],
+    [
+     "dir",
+     "<TASK>/publish"
+    ],
+    [
+     "iterations",
+     2
+    ],
+    [
+     "frames",
+     0
+    ],
+    [
+     "url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "deploy_url",
+     "https://pv-12345678.vercel.app"
+    ],
+    [
+     "verified",
+     false
+    ],
+    [
+     "verify_error",
+     "на URL відповідає не наш макет (немає гейта)"
+    ]
+   ],
+   "task": {
+    "dir": "<TASK>",
+    "title": "Фікстура",
+    "jira": "TEST-1",
+    "vercel_project": "pv-12345678",
+    "vercel_scope": "team_x"
+   },
+   "iterations_json": {
+    "iterations": [
+     {
+      "id": "it1",
+      "date": "01.01.2026 10:00",
+      "note": "перша",
+      "published": true
+     },
+     {
+      "id": "it2",
+      "date": "02.01.2026 10:00",
+      "note": "друга",
+      "published": true
+     }
+    ],
+    "publish_url": "https://pv-12345678.vercel.app",
+    "published_at": "<set>",
+    "publish_verified": false
+   },
+   "npx_calls": [
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "link",
+      "--yes",
+      "--project",
+      "pv-12345678"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "deploy",
+      "--prod",
+      "--yes"
+     ],
+     "cwd": "<TASK>/publish"
+    },
+    {
+     "argv": [
+      "--yes",
+      "vercel",
+      "inspect",
+      "https://pv-12345678.vercel.app"
+     ],
+     "cwd": "<TASK>/publish"
+    }
+   ],
+   "spies": {
+    "registry_push": [
+     "fixture"
+    ],
+    "git_autocommit": [
+     [
+      "<TASK>",
+      "publish: 2 iteration(s)"
+     ]
+    ],
+    "overview_sync": 1
+   },
+   "checked_urls": [
+    "https://pv-12345678.vercel.app"
+   ]
+  }
+ }
+}
