@@ -87,15 +87,13 @@
   зникає); `app/index.html` більше не вантажить старий адаптер.
 - Сторінка `/commented` і опубліковане превʼю ЛІГИ — `MODULE_COMMENT_SNIPPET` з каналом ЛІГИ, аудиторіями й
   внутрішнім каналом, як зараз у ЛІГИ (аудиторії/інспектор — ті самі прапорці, що в гілці ЛІГИ сьогодні).
-  `inject_module_comment_layer` отримує `internal=False`; для внутрішнього каналу ЛІГИ додає `INTERNAL_TINT`
-  (сині піни) — як `inject_comment_layer` сьогодні.
   Збірка ЛІГИ копіює файли модуля (`supabase.min.js`, `adapter.js`) замість `BUNDLES`; мітка збірки лишається
   `legacy` (`reseal_gate` працює за міткою).
 - Піни для агента й розвʼязання: `ProjectComments` вид `legacy` зникає — модуль із каналом ЛІГИ; `supabase_pins`,
   `bin/inbox.py patch_project_pin`, `bin/state.py _open_pins` → через `ProjectComments`/модуль; `inbox resolve` передає
   номер ітерації (`resolved_v` пишеться, як було).
 - Гейт `spaces.require_integrations()` на шляху ЛІГИ лишається.
-- **Видаляються:** `COMMENT_SNIPPET`, `inject_comment_layer`, `supabase_pins`,
+- **Видаляються:** `COMMENT_SNIPPET`, `inject_comment_layer`, `INTERNAL_TINT` (мертвий: жоден виклик не передає `internal=True`), `supabase_pins`,
   `patch_project_pin`, гілки `'legacy'` коментарів, `SUPABASE_URL`/`SUPABASE_KEY`, `app/vendor/supabase-adapter.min.js`.
   `BUNDLES`/`BUILD_KINDS` лишаються (їх читає `reseal_gate` для старих збірок без мітки).
 - `bin/import_preview.py`: маркери старого сніпета (`_SNIPPET_HEAD`/`_SNIPPET_START`) — заморожені літерали (як
@@ -114,7 +112,7 @@
   Після змін — ті самі значення з нового шляху; відмінності — лише перелічені нижче.
 - Золоті знімки `tests/fixtures/comments-role/page-legacy-project.html` і `config-legacy-project.json` міняються СВІДОМО
   (структура сторінки модуля); решта чотирьох — без змін; `legacy-golden` смуги/палітри — без `UPDATE_GOLDEN`.
-- Мутації: канал ЛІГИ → `channel_for`; без `INTERNAL_TINT` на внутрішньому каналі; без `shots_bucket` у `ctx` ЛІГИ; без `iteration` у розвʼязанні; конфіг із
+- Мутації: канал ЛІГИ → `channel_for`; без `shots_bucket` у `ctx` ЛІГИ; без `iteration` у розвʼязанні; конфіг із
   секретним ключем; `require_integrations` прибрано.
 - Живі: `tests/live/comments.test.mjs` (сторінка ЛІГИ — тепер модуль), «Огляд» з пінами ЛІГИ, без мережі (заглушки
   клієнта модуля, як у живих тестах звичайних просторів).
@@ -127,6 +125,8 @@
 - `list` — з порядком за `id` і стелею 5000 (як у будь-якому просторі); рядки проходять санітарну обробку пінів агента.
 - Повтор realtime-оновлення — з дебаунсом 120 мс; `close()` закриває сокет.
 - Без конфігу установки коментарі ЛІГИ недоступні (раніше працювали з константами коду).
+- `inbox resolve --dry-run` друкує `[dry-run] Supabase: resolve <канал> <id> Іт.N «причина»` замість сирого PATCH.
+- `state`: Supabase ЛІГИ не відповів → «проєктні: не дістати (<код>)» замість тихого `0`.
 
 ## Відомі обмеження
 
@@ -144,3 +144,9 @@
 
 Фінальне ревʼю гілки → повні прогони (npm test; Python 3.13 і 3.9.6; живі по одному) → дата в CHANGELOG → тег `v0.10.0`
 (анотований, від neodisa) → явний push sha і тегу → памʼять.
+
+## Поправки (план, 30.10.2026)
+
+Уточнення реалізації — у розділі «Поправки до спеки» плану `docs/superpowers/plans/2026-10-30-legacy-comments-module.md`:
+`comments_provider` не змінює форми (нова `comments_route`), `comments_client(…, ctx=None)`, номер ітерації — лише
+вбудованому модулю, `build_preview(comments=True)` зникає, старий адаптер переїжджає в тестові фікстури.
