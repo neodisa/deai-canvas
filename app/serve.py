@@ -7445,45 +7445,51 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(result)
                 return
             # ⛔ URL НЕ вгадуємо, `--scope` підставляє модуль зі `state` (див. `_publish_legacy_call`): тут лише відповідь.
+            # ⛔ Як у 0.8.0: УЖЕ ВДАЛИЙ деплой, після якого `OSError` (реєстр, `tasks.json`, `iterations.json`) — це `deploy_error`
+            # відповіді, а не 500: `git_autocommit`, `_overview_sync` і 200 усе одно відбуваються. `url` пишеться в `result` лише
+            # після `save_meta`, тож при такій відмові його в відповіді нема. `_vercel_project` — ПОЗА цим `try` (як і було).
             try:
-                res = _publish_legacy_call(task, tid, pub, proj, npx)
-            except deai_modules.ModuleError as e:
-                result['deploy_error'] = _legacy_deploy_error(e)
-            else:
-                url = res['url']
-                # Прив'язка задача→превʼю мусить поїхати В РЕЄСТР, а не
-                # лишитись у tasks.json (per-machine). Раніше `vercel_project`
-                # мінтився тут, а в реєстр їхав ЛИШЕ при створенні задачі —
-                # тобто ніколи для вже опублікованих: 03.08.2026 у 5 задач із 6
-                # прив'язка була тільки на диску мейнтейнера, і публікація з
-                # іншої машини видала б менеджеру друге посилання.
-                _remember_vercel_scope(tid, task, (res.get('state') or {}).get('scope'))
-                _registry_push(tid)
-                # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: деплой тривав хвилини, і дизайнер
-                # міг перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на
-                # вході (з якого взято `its`), відкотив би її. Пишемо лише власні поля публікації.
-                fresh = load_meta(task)
-                fresh['publish_url'] = url
-                fresh['published_at'] = time.strftime('%d.%m.%Y %H:%M')
-                fresh['publish_verified'] = res['verified']
-                save_meta(task, fresh)
-                result['url'] = url
-                result['deploy_url'] = res['deploy_url']
-                warn = _preview_domain_warning(url, proj)
-                if warn:
-                    result['domain_warning'] = warn
-                owner = _not_task_link(task)
-                if owner:
-                    result['not_task_link'] = owner
-                result['verified'] = res['verified']
-                if not res['verified']:
-                    v = res.get('verify') or {}
-                    result['verify_error'] = v.get('reason')
-                    if v.get('reason') == 'vercel_protection':
-                        result['verify_hint'] = _LEGACY_PROTECTION_HINT
-                # прибирання старих публікацій модуля не вдалось — публікація вдала, але людина про це знає (ОСТАННІЙ ключ)
-                if isinstance(res.get('cleanup_warning'), str) and res['cleanup_warning']:
-                    result['cleanup_warning'] = res['cleanup_warning']
+                try:
+                    res = _publish_legacy_call(task, tid, pub, proj, npx)
+                except deai_modules.ModuleError as e:
+                    result['deploy_error'] = _legacy_deploy_error(e)
+                else:
+                    url = res['url']
+                    # Прив'язка задача→превʼю мусить поїхати В РЕЄСТР, а не
+                    # лишитись у tasks.json (per-machine). Раніше `vercel_project`
+                    # мінтився тут, а в реєстр їхав ЛИШЕ при створенні задачі —
+                    # тобто ніколи для вже опублікованих: 03.08.2026 у 5 задач із 6
+                    # прив'язка була тільки на диску мейнтейнера, і публікація з
+                    # іншої машини видала б менеджеру друге посилання.
+                    _remember_vercel_scope(tid, task, (res.get('state') or {}).get('scope'))
+                    _registry_push(tid)
+                    # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: деплой тривав хвилини, і дизайнер
+                    # міг перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на
+                    # вході (з якого взято `its`), відкотив би її. Пишемо лише власні поля публікації.
+                    fresh = load_meta(task)
+                    fresh['publish_url'] = url
+                    fresh['published_at'] = time.strftime('%d.%m.%Y %H:%M')
+                    fresh['publish_verified'] = res['verified']
+                    save_meta(task, fresh)
+                    result['url'] = url
+                    result['deploy_url'] = res['deploy_url']
+                    warn = _preview_domain_warning(url, proj)
+                    if warn:
+                        result['domain_warning'] = warn
+                    owner = _not_task_link(task)
+                    if owner:
+                        result['not_task_link'] = owner
+                    result['verified'] = res['verified']
+                    if not res['verified']:
+                        v = res.get('verify') or {}
+                        result['verify_error'] = v.get('reason')
+                        if v.get('reason') == 'vercel_protection':
+                            result['verify_hint'] = _LEGACY_PROTECTION_HINT
+                    # прибирання старих публікацій модуля не вдалось — публікація вдала, але людина про це знає (ОСТАННІЙ ключ)
+                    if isinstance(res.get('cleanup_warning'), str) and res['cleanup_warning']:
+                        result['cleanup_warning'] = res['cleanup_warning']
+            except OSError as e:
+                result['deploy_error'] = str(e)
             git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
         self._overview_sync()
         self._send_json(result)

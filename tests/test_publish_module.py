@@ -675,6 +675,68 @@ LP_SCENARIOS = [
 ]
 
 
+class NetTripwire:
+    """Розтяжка мережі для тестів гілки ЛІГИ (як `Tripwire` у `test_vercel_publish.py`): `socket.getaddrinfo` (імена),
+    `socket.socket.connect` і `connect_ex` (сама спроба зʼєднання, навіть за готовою адресою) пускають лише loopback; усе
+    інше — запис у `violations` і `OSError`. Підпроцеси НЕ блокуються (тут працює фальшивий `npx`). Падіння `tearDown`, коли
+    `violations` непорожній, ловить і випадок, коли код проковтнув `OSError` (`_fetch_page` модуля так і робить)."""
+
+    def __init__(self):
+        self.violations = []
+        self._stack = contextlib.ExitStack()
+
+    def start(self):
+        real_gai, real_connect, real_connect_ex = socket.getaddrinfo, socket.socket.connect, socket.socket.connect_ex
+        outer = self
+
+        def gai(host, *a, **kw):
+            if host not in LOOPBACK:
+                outer.violations.append(('getaddrinfo', str(host)))
+                raise OSError(f'tripwire: {host}')
+            return real_gai(host, *a, **kw)
+
+        def connect(sock, address):
+            host = address[0] if isinstance(address, tuple) else address
+            if host not in LOOPBACK:
+                outer.violations.append(('connect', str(host)))
+                raise OSError(f'tripwire: {host}')
+            return real_connect(sock, address)
+
+        def connect_ex(sock, address):
+            host = address[0] if isinstance(address, tuple) else address
+            if host not in LOOPBACK:
+                outer.violations.append(('connect_ex', str(host)))
+                return 1
+            return real_connect_ex(sock, address)
+        for owner, name, repl in ((socket, 'getaddrinfo', gai), (socket.socket, 'connect', connect),
+                                  (socket.socket, 'connect_ex', connect_ex)):
+            self._stack.enter_context(mock.patch.object(owner, name, repl))
+
+    def stop(self):
+        self._stack.close()
+
+
+class NetTripwireItself(unittest.TestCase):
+    """Охоронець, який не може впасти, нічого не вартий: розтяжка сама доводиться."""
+
+    def test_records_and_blocks_everything_but_loopback(self):
+        trip = NetTripwire()
+        trip.start()
+        self.addCleanup(trip.stop)
+        with self.assertRaises(OSError):
+            socket.getaddrinfo('pv-12345678.vercel.app', 443)
+        s = socket.socket()
+        self.addCleanup(s.close)
+        with self.assertRaises(OSError):
+            s.connect(('93.184.216.34', 443))
+        self.assertNotEqual(s.connect_ex(('93.184.216.34', 443)), 0)
+        self.assertEqual([k for k, _ in trip.violations], ['getaddrinfo', 'connect', 'connect_ex'])
+        socket.getaddrinfo('127.0.0.1', 80)                                   # loopback — не порушення
+        self.assertEqual(len(trip.violations), 3)
+        trip.stop()
+        self.assertEqual(socket.getaddrinfo.__module__, 'socket')
+
+
 class LegacyPublishViaModule(TaskFixture):
     """4b-1, Task 4: гілка `'legacy'` у `Handler._publish` кличе модуль `vercel-publish` (режим `cli`) через ОДИН шов —
     `serve._publish_legacy_call`. Світ: справжній модуль із каталогу, ФАЛЬШИВИЙ `npx` (`tests/fake_npx.py`) через
@@ -683,11 +745,21 @@ class LegacyPublishViaModule(TaskFixture):
 
     def setUp(self):
         super().setUp()
+        # розтяжка мережі: перевірка превʼю (`_fetch_page`) підмінена, але підміна — не гарантія; будь-яка спроба вийти за
+        # loopback валить тест у `tearDown`, навіть якщо код проковтнув `OSError`
+        self.net = NetTripwire()
+        self.net.start()
+        self.addCleanup(self.net.stop)
         self.npxdir = tempfile.mkdtemp(prefix='dc-lp-npx-')
         self.addCleanup(shutil.rmtree, self.npxdir, True)
         self.module = dm.catalog().get('vercel-publish')
         self.assertEqual(self.module.status, 'ok', self.module)
         self._iterations0 = _read(os.path.join(self.tmp, 'iterations.json'))      # чистий `iterations.json` для кожного прогону
+
+    def tearDown(self):
+        violations = list(self.net.violations)
+        self.net.stop()
+        self.assertEqual(violations, [], 'тест вийшов у мережу')
 
     # ---- світ ----
 
@@ -878,6 +950,31 @@ class LegacyPublishViaModule(TaskFixture):
         _body, _seen = self._legacy_via_seam({}, self._seam_result(state={'project': 'pv-12345678', 'task': 'fixture'}))
         rec = json.loads(_read(os.environ['DC_TASKS_FILE']))['tasks']['fixture']
         self.assertNotIn('vercel_scope', rec)
+
+    # ---- OSError після вдалого деплою (як у 0.8.0) ----
+
+    def test_an_oserror_after_a_successful_deploy_is_a_deploy_error_not_a_500(self):
+        """У 0.8.0 весь блок після деплою стояв у `try … except (OSError, …) as e: deploy_error = str(e)`: збій реєстру чи запису
+        `iterations.json` давав `deploy_error` у відповіді 200, а `git_autocommit` і `_overview_sync` усе одно відбувались.
+        `url` пишеться у відповідь лише після `save_meta` — тож при збої раніше його там нема."""
+        def boom(msg):
+            def raiser(*a, **kw):
+                raise OSError(msg)
+            return raiser
+        cases = {'registry': ([mock.patch.object(serve, '_registry_push', boom('реєстр недоступний'))],
+                              'реєстр недоступний', ['ok', 'dir', 'iterations', 'frames', 'deploy_error'], False),
+                 'save_meta': ([mock.patch.object(serve, 'save_meta', boom('диск повний'))],
+                               'диск повний', ['ok', 'dir', 'iterations', 'frames', 'deploy_error'], False),
+                 'after_url': ([mock.patch.object(serve, '_not_task_link', boom('пізній збій'))],
+                               'пізній збій', ['ok', 'dir', 'iterations', 'frames', 'url', 'deploy_url', 'deploy_error'], True)}
+        for name, (patches, text, keys, wrote) in cases.items():
+            with self.subTest(failing=name):
+                obs = self._legacy(LP_OK, extra_patches=patches)          # `_post` кидає на не-200: статус 200 доведено
+                self.assertEqual([k for k, _ in obs['response']], keys)
+                self.assertEqual(self._resp(obs)['deploy_error'], text)
+                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
+                self.assertEqual(obs['spies']['overview_sync'], 1)
+                self.assertEqual('publish_url' in obs['iterations_json'], wrote)
 
     # ---- 7: publish_remote ----
 
