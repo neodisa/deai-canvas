@@ -30,6 +30,7 @@ import random
 import re
 import socket
 import socketserver
+import ssl
 import stat
 import sys
 import threading
@@ -411,7 +412,7 @@ class CatalogTest(Base):
     def test_the_real_catalog_loads_the_module_as_a_comments_provider(self):
         m = dm.catalog()[MID]
         self.assertEqual((m.status, m.error), ('ok', None))
-        self.assertEqual((m.roles, m.name, m.version, m.api, m.dir), (['comments'], 'Supabase', '1.0.0', 1, MODULE_DIR))
+        self.assertEqual((m.roles, m.name, m.version, m.api, m.dir), (['comments'], 'Supabase', '1.1.0', 1, MODULE_DIR))
         self.assertEqual(m.client, ('supabase.min.js', 'adapter.js'))
         self.assertEqual(m.secret_keys(), ['key'])
         self.assertEqual(m.private_secret_keys(), [], 'публічний ключ — єдиний секрет модуля, і він public')
@@ -424,12 +425,14 @@ class CatalogTest(Base):
         with open(os.path.join(MODULE_DIR, 'module.json'), encoding='utf-8') as f:
             man = json.load(f)
         self.assertEqual(man, {
-            'api': 1, 'id': 'supabase-comments', 'name': 'Supabase', 'version': '1.0.0', 'roles': ['comments'],
+            'api': 1, 'id': 'supabase-comments', 'name': 'Supabase', 'version': '1.1.0', 'roles': ['comments'],
             'client': ['supabase.min.js', 'adapter.js'],
             'settings': [
                 {'key': 'url', 'type': 'text', 'label': 'Адреса проєкту (https://<ref>.supabase.co)', 'required': True},
                 {'key': 'key', 'type': 'secret', 'public': True, 'label': 'Публічний ключ (anon / publishable)',
-                 'required': True}]})
+                 'required': True},
+                {'key': 'shots_bucket', 'type': 'text', 'label': 'Кошик Storage для скріншотів пінів (необовʼязково)',
+                 'required': False}]})
 
     def test_the_declared_client_files_are_regular_unlinked_and_small(self):
         for name in dm.catalog()[MID].client:
@@ -597,6 +600,28 @@ class ClientConfigTest(Base):
                     self.assertNotIn(v.strip(), ' '.join(self.exc_texts(cm.exception)) + res['detail'])
         self.assertEqual(len(messages), 2, 'два фіксовані тексти (не задано / недопустимі символи): значення ключа в них не потрапляє')
         self.assertEqual(self.seen, [], 'зіпсований ключ не доходить до заголовка (і не ламає його переносом рядка)')
+
+    def test_shots_bucket_in_config(self):
+        cfg = self.fn('client_config')(self.hand_ctx({'url': URL, 'shots_bucket': 'overview-thumbs'}))
+        self.assertEqual(cfg, {'url': URL, 'key': KEY, 'shotsBucket': 'overview-thumbs'})
+        for raw in (None, '', '  ', ' \t\n'):
+            st = {'url': URL} if raw is None else {'url': URL, 'shots_bucket': raw}
+            self.assertEqual(self.fn('client_config')(self.hand_ctx(st)), {'url': URL, 'key': KEY}, repr(raw))
+        self.assertEqual(self.seen, [])
+
+    def test_bad_shots_bucket(self):
+        for bad in ('Overview', 'a/b', '../x', '-x', 'x' * 64, 5, ['a'], True, 'ключ', 'a b', 'a\nb', '_x'):
+            ctx = self.hand_ctx({'url': URL, 'shots_bucket': bad})
+            with self.assertRaises(dm.ModuleError, msg=repr(bad)) as cm:
+                self.fn('client_config')(ctx)
+            self.assertEqual(cm.exception.code, 'bad-settings')
+            if isinstance(bad, str) and len(bad.strip()) > 2:
+                self.assertNotIn(bad.strip(), cm.exception.message, 'текст без значення')
+        self.assertEqual(self.seen, [])
+
+    def test_a_trimmed_bucket_is_accepted_and_trimmed(self):
+        cfg = self.fn('client_config')(self.hand_ctx({'url': URL, 'shots_bucket': '  thumbs_2 \n'}))
+        self.assertEqual(cfg['shotsBucket'], 'thumbs_2')
 
     def test_both_values_are_plain_text_in_the_page_config(self):
         cfg = self.fn('client_config')(self.ctx())
@@ -795,6 +820,18 @@ class ResolveTest(Base):
             self.assertEqual((by[k]['status'], by[k]['resolve_reason']), ('open', None), k)
         self.assertNotIn('project_id', json.loads(self.api.requests[0]['body']), 'project_id незмінний: тригер його не пустить')
 
+    def test_iteration_sets_resolved_v(self):
+        self.assertIsNone(self.fn('resolve')(self.ctx(), self.chan1, 'c1', 'r', 3))
+        (rec,) = self.api.requests
+        self.assertEqual(json.loads(rec['body']), {'status': 'resolved', 'resolve_reason': 'r', 'resolved_v': 3})
+        by = {(r['id'], r['project_id']): r for r in self.api.rows}
+        self.assertEqual(by[('c1', self.chan1)]['resolved_v'], 3)
+        for bad in (None, 0, -1, True, False, '3', 2.0, 3.5, [3], {}):
+            self.api.requests.clear()
+            self.fn('resolve')(self.ctx(), self.chan1, 'c2', 'r', bad)
+            (rec,) = self.api.requests
+            self.assertEqual(json.loads(rec['body']), {'status': 'resolved', 'resolve_reason': 'r'}, repr(bad))
+
     def test_it_is_effective_the_list_shows_the_comment_resolved(self):
         ctx = self.ctx()
         self.fn('resolve')(ctx, self.chan1, 'c1', 'готово')
@@ -895,6 +932,15 @@ class CheckTest(Base):
             (rec,) = self.api.requests
             self.assertEqual((rec['method'], rec['raw_path'], rec['body']), ('GET', f'{TABLE}?select=id&limit=1', b''))
             self.assertEqual((rec['headers']['apikey'], rec['headers']['authorization']), (KEY, 'Bearer ' + KEY))
+
+    def test_bad_shots_bucket_verdict(self):
+        for bad in ('Overview', 'a/b', '../x', '-x', 'x' * 64, 5):
+            res = self.fn('check')(self.hand_ctx({'url': URL, 'shots_bucket': bad}))
+            self.assertEqual((res['ok'], res['error']), (False, 'bad-settings'), repr(bad))
+            if isinstance(bad, str) and len(bad) > 2:
+                self.assertNotIn(bad, res['detail'])
+        self.assertEqual(self.seen, [], 'вердикт — без мережі')
+        self.assertEqual(self.api.requests, [])
 
     def test_bad_key_on_401_and_403(self):
         for status in (401, 403):
@@ -1284,6 +1330,49 @@ class ParityTest(Base):
         self.assertGreater(accepted, 20, 'корпус мусить містити й прийнятні адреси: інакше порівняння порожнє')
 
 
+class TlsTest(Base):
+    """Перевірений TLS із сховищем certifi і версія агента 1.1 (модуль 1.1.0)."""
+
+    def fresh_load(self):
+        """Модуль завантажений ЗАНОВО зі шпигуном на `ssl.create_default_context`: `(модуль, виклики, повернуті контексти)`."""
+        calls, made = [], []
+        real = ssl.create_default_context
+
+        def spy(*a, **kw):
+            calls.append((a, kw))
+            made.append(real(*a, **kw))
+            return made[-1]
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+        with mock.patch.object(ssl, 'create_default_context', spy):
+            mod = dm.catalog()[MID]
+        return mod, calls, made
+
+    def test_the_opener_verifies_tls_with_the_certifi_store(self):
+        try:
+            import certifi
+        except ImportError:                                  # без certifi — типовий контекст (нижче)
+            self.skipTest('certifi не встановлено')
+        mod, calls, made = self.fresh_load()
+        self.assertEqual(calls, [((), {'cafile': certifi.where()})], 'контекст зі сховищем certifi')
+        handlers = [h for h in mod.fn('check').__globals__['_opener'].handlers if isinstance(h, urllib.request.HTTPSHandler)]
+        self.assertEqual(len(handlers), 1, 'один HTTPSHandler')
+        self.assertIs(handlers[0]._context, made[0], 'саме наш контекст, а не типовий із build_opener')
+        self.assertTrue(made[0].check_hostname)
+        self.assertEqual(made[0].verify_mode, ssl.CERT_REQUIRED)
+
+    def test_without_certifi_the_default_verified_context_is_used(self):
+        with mock.patch.dict(sys.modules, {'certifi': None}):                 # `import certifi` → ImportError
+            mod, calls, made = self.fresh_load()
+        self.assertEqual(calls, [((), {})])
+        handlers = [h for h in mod.fn('check').__globals__['_opener'].handlers if isinstance(h, urllib.request.HTTPSHandler)]
+        self.assertIs(handlers[0]._context, made[0])
+        self.assertEqual(made[0].verify_mode, ssl.CERT_REQUIRED)
+
+    def test_the_user_agent_is_1_1(self):
+        self.assertEqual(self.g['UA'], 'deai-canvas-supabase-comments/1.1')
+
+
 # ------------------------------------------------------------------------------------ статичні перевірки
 
 class StaticTest(unittest.TestCase):
@@ -1297,7 +1386,7 @@ class StaticTest(unittest.TestCase):
                 mods |= {a.name.split('.')[0] for a in n.names}
             elif isinstance(n, ast.ImportFrom):
                 mods.add((n.module or '').split('.')[0])
-        self.assertEqual(mods, {'base64', 'json', 're', 'urllib'})
+        self.assertEqual(mods, {'base64', 'json', 're', 'ssl', 'certifi', 'urllib'})
         for core in ('serve', 'deai_modules', 'spaces'):
             self.assertNotIn(core, mods)
 
@@ -1320,7 +1409,7 @@ class StaticTest(unittest.TestCase):
         sigs = {d.name: [a.arg for a in d.args.args] for d in self.tree().body if isinstance(d, ast.FunctionDef)}
         self.assertEqual(sigs['client_config'], ['ctx'])
         self.assertEqual(sigs['list'], ['ctx', 'channel'])
-        self.assertEqual(sigs['resolve'], ['ctx', 'channel', 'id', 'reason'])
+        self.assertEqual(sigs['resolve'], ['ctx', 'channel', 'id', 'reason', 'iteration'])
         self.assertEqual(sigs['check'], ['ctx'])
         self.assertEqual(sigs['_open'], ['req', 'timeout'])
 

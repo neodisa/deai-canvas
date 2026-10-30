@@ -55,7 +55,19 @@ socket operation — shorter than the core's own 5 s and 10 s, so a slow project
 * the **Team** tab and project comments in the canvas, on the overview and in published previews (`static-publish`,
   `vercel-publish`) — one channel per task: `deai/<space-id>/<task-id>` (`…/internal` for the internal one);
 * live updates between reviewers (realtime `postgres_changes` → re-read of the channel, once per burst of events);
-* `inbox` and `inbox resolve` for the agent: `list` / `resolve` through the REST API of the same project.
+* `inbox` and `inbox resolve` for the agent: `list` / `resolve` through the REST API of the same project. When the core passes
+  the iteration number, `resolve` also writes it to `resolved_v` (only a real integer ≥ 1; otherwise the column is left alone);
+* pin screenshots in Storage, when you set the optional `shots_bucket` (next section).
+
+## Pin screenshots (optional)
+
+Set the optional setting `shots_bucket` to the name of a **public** Storage bucket of the same project (lowercase letters,
+digits, `-` and `_`, up to 63 characters). The page config then carries `shotsBucket` and the browser adapter gains
+`uploadShot(id, dataUrl)`: it uploads the screenshot of a pin to `<bucket>/comment-shots/<id>.jpg` (upsert) with the public key
+and returns the public URL, or `null` when the upload fails (a pin never fails because of its screenshot). The bucket must be
+public so that the URL opens without a key, and its insert policy for the `anon` role is yours to set — configure it in
+**Storage → Policies** of the project; the module neither creates the bucket nor changes policies. Without `shots_bucket`
+the adapter has no `uploadShot` and nothing is uploaded. A bad bucket name is a `bad-settings` verdict of `check`.
 
 **Row cap.** `list` asks for up to 5001 rows of one channel, but Supabase's API cuts every answer at its own `max-rows`
 setting (default **1000**, *Project Settings → API*) **without telling the module** — a channel with more comments than that
@@ -90,8 +102,8 @@ page's own origin and need nothing extra.
 
 | file | purpose |
 |---|---|
-| `module.json` | manifest: role `comments`, the two client files, settings `url` and `key` (public secret) |
-| `server.py` | `client_config`, `list`, `resolve`, `check` — stdlib REST client for the agent and the core |
-| `adapter.js` | `window.DeaiComments.create(cfg)` over supabase-js (port of `CommentLayerSupabase`) |
+| `module.json` | manifest: role `comments`, the two client files, settings `url`, `key` (public secret) and the optional `shots_bucket` |
+| `server.py` | `client_config`, `list`, `resolve`, `check` — stdlib REST client for the agent and the core (TLS through the `certifi` store when present) |
+| `adapter.js` | `window.DeaiComments.create(cfg)` over supabase-js (port of `CommentLayerSupabase`; `uploadShot` when `shotsBucket` is set) |
 | `supabase.min.js`, `LICENSE-supabase-js` | the vendored SDK and its license |
 | `schema.sql` | the table, RLS, guard triggers, realtime — run once by you |

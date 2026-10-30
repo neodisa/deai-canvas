@@ -1,6 +1,7 @@
-{"api": 1, "id": "supabase-comments", "name": "Supabase", "version": "1.0.0",
+{"api": 1, "id": "supabase-comments", "name": "Supabase", "version": "1.1.0",
  "roles": ["comments"], "client": ["supabase.min.js", "adapter.js"],
  "settings": [
    {"key": "url", "type": "text", "label": "Адреса проєкту (https://<ref>.supabase.co)", "required": true},
-   {"key": "key", "type": "secret", "public": true, "label": "Публічний ключ (anon / publishable)", "required": true}
+   {"key": "key", "type": "secret", "public": true, "label": "Публічний ключ (anon / publishable)", "required": true},
+   {"key": "shots_bucket", "type": "text", "label": "Кошик Storage для скріншотів пінів (необовʼязково)", "required": false}
  ]}

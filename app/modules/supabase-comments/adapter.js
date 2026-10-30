@@ -2,8 +2,8 @@
  *
  * Це порт `CommentLayerSupabase` і водночас еталон для авторів модулів: усе, що потрібно ядру, — одна фабрика,
  *   window.DeaiComments = { create(cfg) { return store; } };
- *   cfg   = { …client_config модуля (тут: url, key), channel, onChange }
- *   store = { ready, load(), refresh(), save(comments), remove(ids), subscribe(fn), close() }
+ *   cfg   = { …client_config модуля (тут: url, key[, shotsBucket]), channel, onChange }
+ *   store = { ready, load(), refresh(), save(comments), remove(ids), subscribe(fn), close()[, uploadShot(id, dataUrl)] }
  * Файл вантажиться ПІСЛЯ `supabase.min.js` (глобальний `supabase`, supabase-js 2.110.0) — див. `client` у module.json.
  *
  * Таблиця `comments` (див. schema.sql). Усе звужене каналом задачі (`cfg.channel` → стовпець `project_id`):
@@ -17,7 +17,9 @@
  * вимкнені): за замовчуванням кожен `create()` запускав би інтервал оновлення токена, `BroadcastChannel`, записи в
  * сховище браузера й слухачі вікна, які `close()` не знімав би (а «Огляд» створює сховище на кожен запуск).
  * `close()` знімає канал і закриває сокет realtime, скасовує свої таймери: після нього адаптер нічого не тримає.
- * Ключ (публічний, anon / publishable) іде лише в `createClient`; адаптер його не друкує й нікуди не пише.
+ * `uploadShot` зʼявляється лише коли в `cfg` є коректний `shotsBucket` (налаштування модуля `shots_bucket`): скріншот піна йде
+ * в Storage цього ж проєкту. Ключ (публічний, anon / publishable) іде лише в `createClient` і заголовки `uploadShot`; адаптер
+ * його не друкує й нікуди не пише.
  * Інших глобальних імен, крім `window.DeaiComments`, не створює. */
 (function () {
   var TABLE = 'comments';
@@ -59,6 +61,34 @@
     var closed = false;
     var seq = 0;                             // «покоління» кешу: стара відповідь не затирає свіжішу, ні свій запис
     var refetchTimer = null;
+    var SHOT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/;      // той самий білий список, що `_AGENT_ID` ядра
+    var bucket = typeof cfg.shotsBucket === 'string' && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(cfg.shotsBucket) ? cfg.shotsBucket : '';
+    var base = String(cfg.url).replace(/\/+$/, '');
+
+    /* Скріншот піна → Storage (`<bucket>/comment-shots/<id>.jpg`, upsert); результат — публічна адреса або null. Форма
+       адрес і заголовків — як у старого адаптера ЛІГИ: її бере картка Teams із `meta.shotUrl`. Ніколи не кидає. */
+    function uploadShot(id, dataUrl) {
+      if (closed || typeof id !== 'string' || !SHOT_ID.test(id) || typeof dataUrl !== 'string' || !/^data:image\//.test(dataUrl)) {
+        return Promise.resolve(null);
+      }
+      var path = 'comment-shots/' + id + '.jpg';
+      var type = (dataUrl.match(/^data:([^;,]+)/) || [0, 'image/jpeg'])[1];
+      return Promise.resolve().then(function () { return fetch(dataUrl); })
+        .then(function (r) { return r.blob(); })
+        .then(function (blob) {
+          return fetch(base + '/storage/v1/object/' + bucket + '/' + path, {
+            method: 'POST',
+            headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key, 'Content-Type': type, 'x-upsert': 'true', 'Cache-Control': '3600' },
+            body: blob
+          });
+        })
+        .then(function (res) {
+          if (res && res.ok) return base + '/storage/v1/object/public/' + bucket + '/' + path;
+          warn('shot upload failed', 'HTTP ' + (res && res.status));
+          return null;
+        })
+        .catch(function (e) { warn('shot upload failed', e); return null; });
+    }
 
     function emit() {
       for (var i = 0; i < listeners.length; i++) { try { listeners[i](cache); } catch (e) { /* підписник не валить решту */ } }
@@ -96,7 +126,7 @@
       });
     }
 
-    return {
+    var store = {
       ready: ready,
       load: function () { return cache; },
       /* Примусове перечитування (його кличе «Огляд» при поверненні на нього). */
@@ -135,6 +165,8 @@
           .catch(function () { /* вже закрито */ });
       }
     };
+    if (bucket) store.uploadShot = uploadShot;
+    return store;
   }
 
   window.DeaiComments = { create: create };

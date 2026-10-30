@@ -2,7 +2,7 @@
 
 Дві половини (контракт ролі — спека 2b-2): браузерна — `adapter.js` + `supabase.min.js` (сторінки канваса, «Огляд», опубліковані
 превʼю); ця — серверна: `client_config` (публічна конфігурація для сторінок), `list`/`resolve` (агент: `inbox`) і `check`.
-Лише stdlib (`urllib`, `json`, `re`, `base64`): без SDK, без Node, без підпроцесів. Схему таблиці `comments` (RLS, тригери, realtime) людина
+Лише stdlib (`urllib`, `json`, `re`, `base64`, `ssl`) і за наявності `certifi` (сховище сертифікатів для TLS; без нього — типове): без SDK, без Node, без підпроцесів. Схему таблиці `comments` (RLS, тригери, realtime) людина
 один раз виконує сама з `schema.sql`: модуль її НЕ змінює (це потребувало б сервісного ключа, якого йому не дають).
 
 `server.py` виконується ядром через `exec` у свіжий модуль: без імпорту `serve`, `deai_modules` чи сусідніх файлів. Із `ctx`
@@ -30,14 +30,15 @@
 послаблює: у виробничому коді іншого входу нема.
 
 Що робить кожна функція (REST — `<url>/rest/v1/comments`, тайм-аути — вище)
-  * `client_config(ctx)` → `{'url': <канонічна адреса>, 'key': <публічний ключ>}`; у мережу не ходить;
+  * `client_config(ctx)` → `{'url': <канонічна адреса>, 'key': <публічний ключ>[, 'shotsBucket': <кошик скріншотів>]}`; у мережу не
+    ходить. `shotsBucket` — лише коли задано налаштування `shots_bucket` (необовʼязкове; погане імʼя — `bad-settings`, у `check` теж);
   * `list(ctx, channel)` → коментарі каналу у формі CommentLayer (`rowToComment`: `html_snapshot` → `htmlSnapshot`, `born_v` →
     `bornV`…): `GET ?project_id=eq.<канал>&order=id&select=*&limit=<MAX_ROWS+1>`. Зайвий рядок понад `MAX_ROWS` лишається — ядро
     саме відкине його й ЗАЯВИТЬ про це (`truncated`), а не віддасть «повний» список мовчки;
-  * `resolve(ctx, channel, id, reason)` → `PATCH ?id=eq.<id>&project_id=eq.<канал>&select=id` `{status: 'resolved',
+  * `resolve(ctx, channel, id, reason, iteration=None)` → `PATCH ?id=eq.<id>&project_id=eq.<канал>&select=id` `{status: 'resolved',
     resolve_reason}` (без `resolve_reason`, коли причини нема) з `Prefer: return=representation` — за відповіддю (лише `id`)
     знаємо, скільки рядків змінено: 0 — `module-error` «коментар не знайдено», а відповідь без підтвердження — теж помилка (агент вірить відповіді й не перечитує сервіс). Повторне закриття — не помилка;
-    `resolved_v` не чіпається (номера ітерації в контракті ролі нема); обидва фільтри — завжди (без `id` чи каналу PATCH зачепив би
+    `resolved_v` пишеться лише коли ядро передало номер ітерації (справжнє `int` ≥ 1, не `bool`), інакше не чіпається; обидва фільтри — завжди (без `id` чи каналу PATCH зачепив би
     чужі рядки, тож порожні значення відхиляються ДО запиту);
   * `check(ctx)` → `GET ?select=id&limit=1`: 200 → `ok`; 401/403 → `bad-key`; 404 чи код PostgREST `42P01`/`PGRST205` →
     `no-schema` (виконайте `schema.sql`); мережа → `network`; решта → `supabase-error`. Нічого не створює й не кидає на звичайних
@@ -61,7 +62,7 @@ MAX_BODY = 64 << 20
 MAX_SMALL = 8 << 20
 #: Довжина тексту Supabase у помилці (ядро ріже до 300 само; ми — раніше й обачніше).
 MSG_MAX = 200
-UA = 'deai-canvas-supabase-comments/1.0'
+UA = 'deai-canvas-supabase-comments/1.1'
 TABLE_PATH = '/rest/v1/comments'
 #: Коди PostgREST «таблиці нема»: `42P01` (relation does not exist), `PGRST205` (нема в кеші схеми).
 NO_SCHEMA_CODES = ('42P01', 'PGRST205')
@@ -73,6 +74,9 @@ _LABEL = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', re.ASCII)
 _TLD_START = re.compile(r'[a-z]', re.ASCII)
 #: Публічний ключ — друковний ASCII без пробілів: усе інше зіпсувало б заголовок (і потрапило б у текст помилки).
 _KEY_RE = re.compile(r'[\x21-\x7e]+')
+#: Кошик Storage для скріншотів пінів (налаштування `shots_bucket`): правило імені кошика Supabase, лише нижній регістр.
+_BUCKET_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,62}', re.ASCII)
+_BAD_BUCKET = 'shots_bucket: імʼя кошика Storage — малі латинські літери, цифри, «-» і «_», до 63 знаків'
 #: Кожен знак керуючого діапазону (C0, DEL, C1) з тексту сервісу прибирається.
 _CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 #: Перше, що чує людина, коли вставила не той ключ: сервісний ключ у сторінках — це повний доступ до бази.
@@ -105,7 +109,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+def _tls():
+    """Перевірений TLS: сховище certifi, коли пакет є (Python з python.org на macOS не бачить системного), інакше типове."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001 — нема certifi чи зіпсований: типовий контекст
+        return ssl.create_default_context()
+
+
+_opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_tls()))
 
 
 def _open(req, timeout):
@@ -174,6 +188,17 @@ def _need_key(ctx):
     if _is_service_key(key):
         raise _error(ctx, 'bad-settings', 'key: ' + _SERVICE_KEY)
     return key
+
+
+def _bucket(ctx):
+    """Кошик скріншотів пінів або `''` (налаштування нема чи порожнє — скріншоти не вантажимо). Інше — `bad-settings`."""
+    st = ctx.get('settings') if isinstance(ctx, dict) else None
+    raw = st.get('shots_bucket') if isinstance(st, dict) else None
+    if raw is None or (isinstance(raw, str) and not raw.strip(' \t\r\n')):
+        return ''
+    if not isinstance(raw, str) or not _BUCKET_RE.fullmatch(raw.strip(' \t\r\n')):
+        raise _error(ctx, 'bad-settings', _BAD_BUCKET)
+    return raw.strip(' \t\r\n')
 
 
 def _quote(text):
@@ -288,8 +313,13 @@ def _need_text(ctx, value, what):
 
 
 def client_config(ctx):
-    """ПУБЛІЧНА конфігурація для сторінок: канонічна адреса проєкту й публічний ключ. У мережу не ходить."""
-    return {'url': _base(ctx), 'key': _need_key(ctx)}
+    """ПУБЛІЧНА конфігурація для сторінок: канонічна адреса проєкту, публічний ключ і (коли задано) кошик скріншотів
+    `shotsBucket` — адаптер тоді вміє `uploadShot`. У мережу не ходить."""
+    cfg = {'url': _base(ctx), 'key': _need_key(ctx)}
+    bucket = _bucket(ctx)
+    if bucket:
+        cfg['shotsBucket'] = bucket
+    return cfg
 
 
 def list(ctx, channel):  # noqa: A001 — імʼя функції ролі
@@ -307,12 +337,14 @@ def list(ctx, channel):  # noqa: A001 — імʼя функції ролі
     return [_row_to_comment(r) for r in rows]
 
 
-def resolve(ctx, channel, id, reason):  # noqa: A002 — імена аргументів ролі
+def resolve(ctx, channel, id, reason, iteration=None):  # noqa: A002 — імена аргументів ролі
     channel = _need_text(ctx, channel, 'канал коментарів')
     id = _need_text(ctx, id, 'id коментаря')
     body = {'status': 'resolved'}
     if isinstance(reason, str) and reason:
         body['resolve_reason'] = _utf8(reason)          # текст, а не ідентифікатор: непрочитний знак стає `?`, закриття не губиться
+    if type(iteration) is int and iteration >= 1:     # `bool` — підклас `int`: `True` не номер ітерації
+        body['resolved_v'] = iteration
     query = f'id=eq.{_quote(id)}&project_id=eq.{_quote(channel)}&select=id'      # у відповіді лише `id`: рахуємо змінені рядки
     try:
         status, payload = _request(ctx, 'PATCH', query, timeout=CALL_TIMEOUT_S, body=body, prefer='return=representation')
@@ -332,6 +364,10 @@ def check(ctx):
     try:
         _base(ctx)
     except Exception as e:  # noqa: BLE001 — `bad-settings` (чи `RuntimeError` без класу ядра): вердикт, а не виняток
+        return {'ok': False, 'error': 'bad-settings', 'detail': _clean(getattr(e, 'message', None) or e, '')}
+    try:
+        _bucket(ctx)
+    except Exception as e:  # noqa: BLE001 — `bad-settings`: вердикт, а не виняток
         return {'ok': False, 'error': 'bad-settings', 'detail': _clean(getattr(e, 'message', None) or e, '')}
     if not _key(ctx):
         return {'ok': False, 'error': 'bad-key', 'detail': 'Публічний ключ (anon / publishable) не задано'}

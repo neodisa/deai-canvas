@@ -44,17 +44,18 @@ const AUTH_OFF = { auth: { persistSession: false, autoRefreshToken: false, detec
 /**
  * Світ. Параметри: `rows` — що віддає SELECT (масив або функція від номера запиту); `failSelect` (відповідь із помилкою),
  * `rejectSelect` (запит ВІДХИЛЯЄТЬСЯ), `manualSelect` (SELECT-и чекають: `w.pendingSelects[i]({data, error})`), `failUpserts`
- * (перші N upsert-ів падають), `failDelete`, `removeChannel` (`"ok"` | `"reject"` | `"throw"`), `disconnect` (`"ok"` | `"throw"`).
+ * (перші N upsert-ів падають), `failDelete`, `removeChannel` (`"ok"` | `"reject"` | `"throw"`), `disconnect` (`"ok"` | `"throw"`),
+ * `upload` (відповідь підставного `fetch` на завантаження скріншота: `"ok"` | `"fail"` | `"reject"`).
  * Результат: `sandbox`, `calls`, `channels`, `removedChannels`, `disconnects`, `created`, `delays` (затримки всіх таймерів),
  * `timers`, `warnings`, `logs`.
  */
 function world(opts = {}) {
   const w = {
-    calls: [], channels: [], removedChannels: [], disconnects: 0, created: [], delays: [], warnings: [], logs: [], selects: 0,
+    calls: [], fetches: [], channels: [], removedChannels: [], disconnects: 0, created: [], delays: [], warnings: [], logs: [], selects: 0,
     timers: [], nextTimer: 1, pendingSelects: [],
   };
   w.opts = { rows: [], failSelect: false, rejectSelect: false, manualSelect: false, failUpserts: 0, failDelete: false,
-    removeChannel: "ok", disconnect: "ok", ...opts };
+    removeChannel: "ok", disconnect: "ok", upload: "ok", ...opts };
   const reply = (v) => ({ then: (res, rej) => Promise.resolve(v).then(res, rej) });   // thenable, як у PostgREST-білдера
 
   const client = {
@@ -122,6 +123,13 @@ function world(opts = {}) {
   };
 
   const sandbox = {
+    /* Підставний `fetch`: `data:`-адреса → відповідь із `blob()`, решта (завантаження в Storage) — за `opts.upload`. */
+    fetch: (url, init) => {
+      w.fetches.push({ url, init });
+      if (typeof url === "string" && url.startsWith("data:")) return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({ blob: url }) });
+      if (w.opts.upload === "reject") return Promise.reject(new Error("upload rejected"));
+      return Promise.resolve({ ok: w.opts.upload === "ok", status: w.opts.upload === "ok" ? 200 : 403 });
+    },
     supabase: { createClient: (url, key, o) => { w.created.push([url, key, o]); return client; } },
     setTimeout: (fn, ms) => { const t = { id: w.nextTimer++, fn, ms, live: true }; w.timers.push(t); w.delays.push(ms); return t.id; },
     clearTimeout: (id) => { const t = w.timers.find((x) => x.id === id); if (t) t.live = false; },
@@ -485,5 +493,86 @@ test("ключ іде лише в createClient: адаптер його ніде
   s.close();
   for (const m of [...w.warnings, ...w.logs]) assert.ok(!m.includes(KEY), m);
   assert.ok(!SRC.includes("localStorage") && !SRC.includes("document.cookie"), "адаптер не пише ключ у сховище браузера");
-  assert.ok(!/\bfetch\s*\(/.test(SRC) && !/XMLHttpRequest/.test(SRC), "мережею ходить лише supabase-js");
+  assert.ok(!/XMLHttpRequest/.test(SRC), "XMLHttpRequest адаптер не чіпає");
+  const withoutShot = SRC.replace(/function uploadShot[\s\S]*?\n    }\n/, "");
+  assert.ok(!/\bfetch\s*\(/.test(withoutShot), "`fetch` — лише в uploadShot (скріншоти); решта мережі — supabase-js");
+});
+
+/* ------------------------------------------------------------------------------------------ скріншоти пінів */
+
+const BUCKET = "overview-thumbs";
+const DATA = "data:image/jpeg;base64,AAAA";
+
+test("без shotsBucket у cfg uploadShot у сховища нема (і з порожнім, і з поганим іменем кошика)", async () => {
+  for (const cfg of [{}, { shotsBucket: "" }, { shotsBucket: "A/B" }, { shotsBucket: "../x" }, { shotsBucket: "-x" }, { shotsBucket: 5 }, { shotsBucket: "x".repeat(64) }]) {
+    const w = world();
+    const s = w.create(cfg);
+    await s.ready;
+    assert.equal(typeof s.uploadShot, "undefined", JSON.stringify(cfg));
+    assert.deepEqual(Object.keys(s).sort(), ["close", "load", "ready", "refresh", "remove", "save", "subscribe"]);
+  }
+});
+
+test("з shotsBucket: uploadShot — один fetch(data:) і один POST у Storage з тією самою формою, що в старого адаптера ЛІГИ", async () => {
+  const w = world();
+  const s = w.create({ shotsBucket: BUCKET });
+  await s.ready;
+  assert.equal(typeof s.uploadShot, "function");
+  const url = await s.uploadShot("c1", DATA);
+  assert.equal(url, `${URL}/storage/v1/object/public/${BUCKET}/comment-shots/c1.jpg`);
+  assert.equal(w.fetches.length, 2);
+  assert.equal(w.fetches[0].url, DATA);
+  const post = w.fetches[1];
+  assert.equal(post.url, `${URL}/storage/v1/object/${BUCKET}/comment-shots/c1.jpg`);
+  assert.equal(post.init.method, "POST");
+  assert.deepEqual(plain(post.init.headers), {
+    apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true", "Cache-Control": "3600",
+  });
+  assert.deepEqual(plain(post.init.body), { blob: DATA }, "тіло — blob, отриманий з data:-адреси");
+});
+
+test("uploadShot: тип зображення береться з data:-адреси, а слеш у кінці адреси проєкту не дає подвійного", async () => {
+  const w = world();
+  const s = w.create({ shotsBucket: BUCKET, url: URL + "/" });
+  await s.ready;
+  const url = await s.uploadShot("c1", "data:image/png;base64,AAAA");
+  assert.equal(url, `${URL}/storage/v1/object/public/${BUCKET}/comment-shots/c1.jpg`);
+  assert.equal(w.fetches[1].url, `${URL}/storage/v1/object/${BUCKET}/comment-shots/c1.jpg`);
+  assert.equal(w.fetches[1].init.headers["Content-Type"], "image/png");
+});
+
+test("uploadShot: не data:image, порожнє, null, чужий id → null без жодного fetch", async () => {
+  const w = world();
+  const s = w.create({ shotsBucket: BUCKET });
+  await s.ready;
+  for (const bad of ["https://x/y.png", "", null, undefined, 5, "data:text/html,<b>", "http://x"]) {
+    assert.equal(await s.uploadShot("c1", bad), null, String(bad));
+  }
+  for (const id of ["../x", "a b", "", null, undefined, 5, "a/b", "-x", "x".repeat(201)]) {
+    assert.equal(await s.uploadShot(id, DATA), null, String(id));
+  }
+  assert.deepEqual(w.fetches, [], "жодного запиту");
+});
+
+test("uploadShot: відповідь не ok → null + англійське попередження без ключа; відхилений fetch → null, не кидає", async () => {
+  for (const upload of ["fail", "reject"]) {
+    const w = world({ upload });
+    const s = w.create({ shotsBucket: BUCKET });
+    await s.ready;
+    assert.equal(await s.uploadShot("c1", DATA), null, upload);
+    assert.ok(w.warnings.length >= 1, upload);
+    for (const m of w.warnings) {
+      assert.ok(!m.includes(KEY), m);
+      assert.ok(!/[Ѐ-ӿ]/.test(m), "англійською: " + m);
+    }
+  }
+});
+
+test("uploadShot після close() → null без fetch", async () => {
+  const w = world();
+  const s = w.create({ shotsBucket: BUCKET });
+  await s.ready;
+  s.close();
+  assert.equal(await s.uploadShot("c1", DATA), null);
+  assert.deepEqual(w.fetches, []);
 });
