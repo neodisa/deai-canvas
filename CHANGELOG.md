@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.10.0] — unreleased
+## [0.10.0] — 30.10.2026
 
 Stage 4b-2: the comments of the legacy space become a module too. The shared Supabase of the in-house setup is now reached
 through the built-in `supabase-comments` module as an implicit provider (as `vercel-publish` and `git-sync` were in 0.9.0 and
@@ -88,7 +88,7 @@ plan: `docs/superpowers/plans/2026-10-30-legacy-comments-module.md` (its «По�
 ```
 
 Without them, after the update the team comments of the LIGA space switch off (the local page and a notice, no network),
-and so do the dashboard and the Teams silence. See `tasks.example.json`.
+and the dashboard and the Teams silence report «not configured».
 
 ### For module authors
 

@@ -323,7 +323,7 @@ Supabase are read from the installation — the root of its `tasks.json`:
 { "supabase_url": "https://<ref>.supabase.co", "supabase_key": "sb_publishable_…" }
 ```
 
-(or the environment variables `SUPABASE_URL` and `SUPABASE_KEY`; see `tasks.example.json`). The same pair feeds the
+(or the environment variables `SUPABASE_URL` and `SUPABASE_KEY`). The same pair feeds the
 team dashboard and the Teams silence. Without it the team comments of that space are off — the page shows the local pins
 and a notice, and `inbox` reports `comments-unconfigured`. The screenshot bucket there is `overview-thumbs`.
 

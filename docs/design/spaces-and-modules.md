@@ -303,7 +303,7 @@ Spec: `docs/superpowers/specs/2026-10-30-legacy-publish-module-design.md` (and i
 - **Tested** with a fake `npx` (no network, no real `vercel`); a real Vercel account and a real `vercel login` are not part
   of the tests.
 
-### Stage 4b-2 — legacy comments through `supabase-comments` (0.10.0, unreleased)
+### Stage 4b-2 — legacy comments through `supabase-comments` (0.10.0)
 
 Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-10-30-legacy-comments-module-design.md`
 (and the «Поправки до спеки» of its plan); plan: `docs/superpowers/plans/2026-10-30-legacy-comments-module.md`. What is built:
