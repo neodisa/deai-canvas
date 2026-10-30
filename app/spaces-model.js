@@ -747,6 +747,19 @@ export function commentsUnavailableCode(r) {
   return typeof c === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(c) ? c : null;
 }
 
+/**
+ * Попередження прибирання старих публікацій (`cleanup_warning` у відповіді публікації ЛІГИ, 4b-1) або `null`. Текст — від модуля
+ * («Старі публікації не прибрано: <причина>»), тож префікс до першої двокрапки відкидаємо: словник сам каже «старі публікації
+ * Vercel прибрано не всі: <причина>», і двічі те саме було б шумом. Відповідь — дані: керівні символи → пробіл, не довше 300; тільки рядок.
+ */
+export function cleanupWarning(r) {
+  const raw = r?.cleanup_warning;
+  if (typeof raw !== "string") return null;
+  const text = raw.replace(/[\x00-\x1f\x7f]+/g, " ").trim();
+  const m = /^[^:]{1,60}:\s*(\S.*)$/.exec(text);
+  return (m ? m[1] : text).slice(0, DETAIL_MAX) || null;
+}
+
 /** Id вбудованого модуля публікації на Vercel — єдиний, чиє імʼя можна називати в текстах UI. */
 const VERCEL_MODULE = "vercel-publish";
 
@@ -811,6 +824,13 @@ const PUBLISH_ERR_KEYS = new Map([
      коли постачальник — `vercel-publish` (`publishReaction`, `isVercelPublish`). */
   ["vercel-auth", "publishErrVercelAuth"],
   ["vercel-busy", "publishErrVercelBusy"],
+  /* Вхід через системний Vercel CLI (`auth: cli`, 4b-1): немає Node/npx, CLI не увійшов, немає доступу до команди (scope),
+     деплой відхилено (текст сервера), деплой не надрукував адресу. */
+  ["no-node", "publishErrNoNode"],
+  ["vercel-login", "publishErrVercelLogin"],
+  ["vercel-scope", "publishErrVercelScope"],
+  ["vercel-deploy", "publishErrVercelDeploy"],
+  ["vercel-no-url", "publishErrVercelNoUrl"],
 ]);
 
 /* Текст відмови з відповіді сервера для другого абзацу: `error` із тіла JSON (`api()` ріже `message` по 200 знаків, а тіло
@@ -840,7 +860,7 @@ const NO_ITERATIONS_RE = /no iterations marked/i;
  * текст; `bad-folder` несе причину: для `path-*`, які
  * знає діалог просторів, — його ж людський текст (`spaceErrKey`, `reasonKey`), для решти (`path-deai-home`,
  * `path-invalid`, `spaces-unreadable`) — сам код як запасний варіант, і більш нічого з відповіді.
- * `vercel-auth` і `module-error` несуть ТЕКСТ СЕРВЕРА (`args: [текст]`, ≤ 300): ядро й модуль уже вирізали з нього секрети, а причина
+ * `vercel-auth`, `vercel-deploy` і `module-error` несуть ТЕКСТ СЕРВЕРА (`args: [текст]`, ≤ 300): ядро й модуль уже вирізали з нього секрети, а причина
  * («Vercel відмовив у доступі (HTTP 403): …», «збірка ERROR; проєкт видалено») — те, що людина може виправити чи перевірити.
  * 400 БЕЗ коду — це `send_error`: «жодної ітерації не позначено» лише коли ТЕКСТ це каже (рядок статусу чи
  * тіло), а інший 400 (`bad payload`) — загальна відмова. Решта — «Не вдалося: …» з текстом сервера.
@@ -850,7 +870,7 @@ export function publishErr(e) {
   const key = typeof code === "string" ? PUBLISH_ERR_KEYS.get(code) : undefined;
   /* `vercel-auth` — єдина модульна відмова з другим абзацом: «Vercel відмовив у доступі (HTTP 403): …» — причина, яку
      людина може виправити (права токена, тариф, команда), а сервер уже вирізав із неї секрети й обмежив довжину. */
-  if (key === "publishErrVercelAuth" || key === "publishErrModule") return { key, args: [serverText(e)] };
+  if (key === "publishErrVercelAuth" || key === "publishErrModule" || key === "publishErrVercelDeploy") return { key, args: [serverText(e)] };
   if (key === "publishErrBadFolder") {
     const why = FOLDER_CODE_RE.test(e?.message ?? "") ? e.message : "";
     const reasonKey = why ? spaceErrKey(why) : "spaceErrGeneric";

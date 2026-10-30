@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  commentsUnavailableCode, copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
+  cleanupWarning, commentsUnavailableCode, copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
   publishErr, publishReaction, pwView, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
 } from "../app/spaces-model.js";
 
@@ -769,4 +769,54 @@ test("словник: publishCommentsUnavailable — обидві мови, на
   assert.match(DICT.uk.publishCommentsUnavailable("x"), /опубліковано/);
   assert.match(DICT.en.publishCommentsUnavailable("x"), /Comments were not added/);
   assert.match(DICT.en.publishCommentsUnavailable("x"), /published/);
+});
+
+/* ── вхід через системний Vercel CLI (4b-1): нові коди відмов і попередження прибирання ── */
+
+test("publishErr: коди CLI-режиму Vercel → свої ключі; текст сервера несе лише vercel-deploy", () => {
+  const raw = "Vercel відхилив публікацію: Error: boom";
+  assert.deepEqual(publishErr(E("no-node", { status: 409, message: "x" })), { key: "publishErrNoNode", args: [] });
+  assert.deepEqual(publishErr(E("vercel-login", { status: 409, message: "x" })), { key: "publishErrVercelLogin", args: [] });
+  assert.deepEqual(publishErr(E("vercel-scope", { status: 409, message: "x" })), { key: "publishErrVercelScope", args: [] });
+  assert.deepEqual(publishErr(E("vercel-no-url", { status: 502, message: "x" })), { key: "publishErrVercelNoUrl", args: [] });
+  assert.deepEqual(publishErr(E("vercel-deploy", { status: 502, message: raw })), { key: "publishErrVercelDeploy", args: [raw] });
+  assert.deepEqual(publishErr(E("vercel-deploy", { status: 502, message: "a\u0000b\nc" })).args, ["a b c"]);
+  const long = JSON.stringify({ ok: false, code: "vercel-deploy", error: "я".repeat(500) });
+  assert.equal(publishErr(E("vercel-deploy", { status: 502, message: "я", body: long })).args[0].length, 300);
+});
+
+test("publishErr: тексти CLI-режиму є в обох мовах; vercel-deploy кладе текст сервера, решта — ні; без tasks.json", () => {
+  for (const lang of ["uk", "en"]) {
+    for (const k of ["publishErrNoNode", "publishErrVercelLogin", "publishErrVercelScope", "publishErrVercelNoUrl"]) {
+      assert.equal(typeof DICT[lang][k], "string", `${lang}: ${k}`);
+      assert.ok(!/tasks\.json/.test(DICT[lang][k]), `${lang}: ${k}`);
+    }
+    assert.equal(typeof DICT[lang].publishErrVercelDeploy, "function", `${lang}: publishErrVercelDeploy`);
+    assert.ok(DICT[lang].publishErrVercelDeploy("WHY").endsWith("\n\nWHY"), `${lang}: текст сервера другим абзацом`);
+    assert.ok(!DICT[lang].publishErrVercelDeploy("").includes("\n"), `${lang}: без тексту — без другого абзацу`);
+    assert.match(DICT[lang].publishErrVercelLogin, /npx vercel login/);
+  }
+});
+
+test("cleanupWarning: причина після префікса сервера, керівні символи → пробіл, ≤ 300; не рядок і порожнє → null", () => {
+  assert.equal(cleanupWarning({ cleanup_warning: "Старі публікації не прибрано: вичерпано ліміт часу." }), "вичерпано ліміт часу.");
+  assert.equal(cleanupWarning({ cleanup_warning: "Старі публікації прибрано не всі: не вдалося 2 з 5" }), "не вдалося 2 з 5");
+  assert.equal(cleanupWarning({ cleanup_warning: "без двокрапки" }), "без двокрапки");
+  assert.equal(cleanupWarning({ cleanup_warning: "x: a\u0000b\nc" }), "a b c");
+  assert.equal(cleanupWarning({ cleanup_warning: `x: ${"я".repeat(500)}` }).length, 300);
+  for (const bad of [undefined, null, "", "   ", 7, {}, []]) assert.equal(cleanupWarning({ cleanup_warning: bad }), null, String(bad));
+  assert.equal(cleanupWarning({}), null);
+  assert.equal(cleanupWarning(null), null);
+  for (const lang of ["uk", "en"]) {
+    assert.equal(typeof DICT[lang].publishCleanupWarn, "function", lang);
+    assert.ok(DICT[lang].publishCleanupWarn("WHY").includes("WHY"), lang);
+  }
+});
+
+/* Проводку `app.js` (у Node його не імпортують) стереже текстова перевірка, за взірцем `spaces-wiring`: попередження прибирання
+   стоїть у списку `warn` поруч із `domain_warning`, а без ключа `cleanup_warning` елемент списку — `null` (відсіюється `filter(Boolean)`). */
+test("app.js: попередження прибирання — у списку warn поруч із domain_warning; відсутній ключ дає null", () => {
+  const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
+  assert.match(src, /cleanupWarning/, "app.js імпортує cleanupWarning");
+  assert.match(src, /r\.domain_warning,\s*cleanupWarning\(r\)\s*\?\s*t\('publishCleanupWarn',\s*cleanupWarning\(r\)\)\s*:\s*null,/);
 });

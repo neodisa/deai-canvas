@@ -33,7 +33,7 @@ import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
-  commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
+  cleanupWarning, commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
@@ -1897,6 +1897,7 @@ const BAR_ACTIONS = {
       const warn = [r.code_stale,
         r.not_task_link && r.url ? t('publishNotTaskLink', r.not_task_link, r.url) : null,
         r.domain_warning,
+        cleanupWarning(r) ? t('publishCleanupWarn', cleanupWarning(r)) : null,
         cmtCode ? t('publishCommentsUnavailable', cmtCode) : null].filter(Boolean);
       if (warn.length) tell(warn.join('\n\n'));
       const view = publishReaction(r, sp0, sameTask());

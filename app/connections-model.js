@@ -185,6 +185,8 @@ const CHECK_KEYS = new Map([
   ["bad-folder", "cnErrBadFolder"], ["no-folder", "cnErrBadFolder"], ["not-writable", "cnErrNotWritable"],
   ["no-token", "cnErrNoToken"], ["vercel-auth", "cnErrVercelAuth"], ["vercel-error", "cnErrVercelError"],
   ["vercel-busy", "cnErrVercelBusy"],
+  /* Вхід через системний Vercel CLI (`auth: cli`, 4b-1): немає Node/npx; CLI на цій машині не увійшов. `check-timeout` — вище. */
+  ["no-node", "cnErrNoNode"], ["vercel-login", "cnErrVercelLogin"],
   ["bad-key", "cnErrBadKey"], ["no-schema", "cnErrNoSchema"], ["supabase-error", "cnErrSupabaseError"],
   ["network", "cnErrNetwork"],
   /* Роль `vcs` (4a): коди перевірки `git-sync` і відмов синку. */

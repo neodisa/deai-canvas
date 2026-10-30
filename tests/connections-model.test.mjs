@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { DICT } from "../app/i18n.js";
+
 import {
   ROLE_ORDER, builtinText, canErase, cardView, disableConsequences, formFields, formPatch, groupModules, initialForm,
   isDirty, missingRequired, providerLine, refusalView, roleCardId, roleHolders, roleIcon, roleKeys, verdictText, whyOf,
@@ -465,4 +467,32 @@ test("roleCardId: де сісти фокусу для ролі — постач�
   assert.equal(roleCardId("__proto__", { vcs: null }, list), null);
   assert.equal(roleCardId("", { vcs: null }, list), null);
   assert.equal(roleCardId("vcs", { vcs: "__proto__" }, list), "other-vcs");
+});
+
+/* ── вхід через системний Vercel CLI (4b-1): коди перевірки `vercel-publish` у режимі `auth: cli` ── */
+test("коди входу через CLI: no-node, vercel-login → свої ключі, check-timeout вже має текст; ключі є в обох мовах", () => {
+  assert.deepEqual(verdictText({ ok: false, error: "no-node", detail: "npx" }), { key: "cnErrNoNode", detail: "npx" });
+  assert.deepEqual(verdictText({ ok: false, error: "vercel-login" }), { key: "cnErrVercelLogin", detail: "" });
+  assert.equal(verdictText({ ok: false, error: "check-timeout" }).key, "cnErrTimeout");
+  for (const lang of ["uk", "en"]) {
+    for (const k of ["cnErrNoNode", "cnErrVercelLogin", "cnErrTimeout"]) {
+      assert.equal(typeof DICT[lang][k], "string", `${lang}: ${k}`);
+      assert.ok(DICT[lang][k].length > 10, `${lang}: ${k} не порожній`);
+    }
+    assert.ok(!/tasks\.json/.test(DICT[lang].cnErrNoNode + DICT[lang].cnErrVercelLogin), "без tasks.json");
+  }
+  assert.match(DICT.uk.cnErrVercelLogin, /npx vercel login/);
+  assert.match(DICT.en.cnErrVercelLogin, /npx vercel login/);
+});
+
+/* Форма налаштувань вбудованого `vercel-publish` — загальна (`formFields`): новий вибір «Вхід у Vercel» (`auth`, 4b-1) не потребує
+   жодного коду в UI, але МАЄ лишитись `select` з обома варіантами, інакше режим CLI зник би з форми мовчки. Беремо справжній опис. */
+test("vercel-publish: поле auth — select з варіантами token/cli; токен — секрет; стартове значення з default", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../app/modules/vercel-publish/module.json", import.meta.url), "utf8"));
+  const f = formFields({ settings: manifest.settings.map((s) => (s.default !== undefined ? { ...s, value: s.default } : { ...s, set: false })) });
+  const auth = f.find((x) => x.key === "auth");
+  assert.equal(auth.type, "select");
+  assert.deepEqual(auth.options.map((o) => o.value), ["token", "cli"]);
+  assert.equal(initialForm(f).values.auth, "token");
+  assert.equal(f.find((x) => x.key === "token").type, "secret");
 });
