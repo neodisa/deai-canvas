@@ -319,32 +319,6 @@ def _node_bin(name='npx'):
 deai_modules.set_tool_finder(_node_bin)
 
 
-def _deploy_hint(err):
-    """Технічний stderr vercel → людська підказка дизайнеру (або None).
-    ⛔ Не вигадуємо причину: якщо не впізнали патерн — віддаємо сирий текст."""
-    e = (err or '').lower()
-    if any(k in e for k in ('not authenticated', 'credentials', 'please log in',
-                            'vercel login', 'no existing credentials')):
-        return ('Vercel не авторизований на цій машині — виконай у терміналі '
-                '`npx vercel login`, тоді натисни «Опублікувати» ще раз.')
-    # Скоуп перевіряємо ПЕРЕД загальним «немає доступу»: тексти перетинаються, а
-    # причина тут конкретніша й підказка інша.
-    if any(k in e for k in ('--scope', 'scope not found', 'no such team',
-                            'not a member of', "don't have access to the team",
-                            'team not found')):
-        return ('Проєкт цієї задачі живе в ІНШОМУ Vercel-скоупі, і цей акаунт до '
-                'нього не має доступу. Публікація звідси створила б ДРУГЕ '
-                'посилання, а те, що вже в менеджера, тихо застаріло б — тому '
-                'vercel відмовив. Попроси власника задачі опублікувати; щоб '
-                'публікувати могли всі, потрібна спільна Vercel-команда, і її '
-                'треба вписати в tasks.json → vercel_scope.')
-    if any(k in e for k in ('forbidden', 'not authorized', 'access denied',
-                            'do not have permission')):
-        return ('Немає доступу до Vercel-проєкту під цим акаунтом — або увійди '
-                'тим, що має доступ, або попроси Андрія опублікувати.')
-    return None
-
-
 def _file_hash(path):
     import hashlib
     try:
@@ -3625,24 +3599,6 @@ def server_code_staleness(started_at=None):
     return '\n\n'.join(parts) or None
 
 
-def _deploy_urls(stdout, stderr):
-    """Реальні URL з виводу `vercel deploy --prod`.
-
-    ⚠️ URL НЕ вгадуємо. Раніше тут стояло f'https://{proj}.vercel.app' — і це
-    вистрелило: ім'я `dc-<задача>` у зоні vercel.app зайняте ЧУЖИМ проєктом, тому
-    канвас видавав дизайнеру посилання на сторонній сайт (30.07.2026).
-    Ім'я проєкту в акаунті і хост у vercel.app — різні простори імен.
-    """
-    urls = re.findall(r'https://[a-z0-9.-]+\.vercel\.app', (stdout or '') + '\n' + (stderr or ''))
-    # прибрати дублі, зберігши порядок
-    seen, out = set(), []
-    for u in urls:
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
-
-
 def _preview_domain_warning(url, proj):
     """Попередження, якщо Vercel видав НЕ `<проєкт>.vercel.app`, або None.
 
@@ -4385,7 +4341,7 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     (2) замок ЛИШЕ теки збірки задачі (`_try_task_dir_lock`, без очікування: зайнято — 409 `publish-busy`); (3) коментарі
     превʼю (`publish_comments`, як у `publish_with_module`) і збірка; (4) `build_only` — відповідь про збірку, як у
     `folder`; (5) `publish` модуля БЕЗ `timeout=` (у нього свої тайм-аути на запит; `timeout=` пустив би його в
-    робочий потік, що не вклався б і працював далі БЕЗ замка) із `task = {id, title, dir, state}`, де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
+    робочий потік, що не вклався б і працював далі БЕЗ замка) із `task = {id, title, dir, state, gated}` (`gated` — чи збірку закрито паролем: модуль пароля не знає, а режиму `cli` це потрібно для перевірки превʼю), де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
     читання `iterations.json`; чужий чи зіпсований запис — `{}`); (6) перевірка відповіді (`_checked_url_result`:
     форма; `_guarded_url_result_secrets`: жодного секрету модуля в `url`/`state`, `warnings` очищено);
     (7) `iterations.json` перечитується ПЕРЕД записом (збірка й публікація тривали, дизайнер міг перемкнути зелену
@@ -4408,7 +4364,7 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
             result = {'ok': True, **built}
         else:
             task_arg = {'id': tid, 'title': task.get('title', tid), 'dir': task['dir'],
-                        'state': _stored_publish_state(task, prov)}
+                        'state': _stored_publish_state(task, prov), 'gated': gate_pw is not None}
             res = deai_modules.call(prov, 'publish', ctx, built['dir'], task_arg)
             url, state, verified, warnings = _checked_url_result(res)
             warnings = _guarded_url_result_secrets(url, state, warnings, ctx['secrets'])
@@ -4544,8 +4500,9 @@ def _vercel_project(tid, task):
     return name
 
 
-def _remember_vercel_scope(tid, task, pub):
-    """Запамʼятати Vercel-скоуп задачі (`orgId` із `publish/.vercel/project.json`).
+def _remember_vercel_scope(tid, task, org):
+    """Запамʼятати Vercel-скоуп задачі (`org` — `state.scope` з відповіді модуля `vercel-publish`, раніше `orgId` із
+    `publish/.vercel/project.json`; `None`, коли модуль скоупу не знає).
 
     Навіщо окремо від імені: імʼя саме по собі посилання не тримає. У ЧУЖОМУ
     акаунті `vercel link --project <те саме імʼя>` створює ІНШИЙ проєкт — і в
@@ -4553,18 +4510,13 @@ def _remember_vercel_scope(tid, task, pub):
     пара імʼя+скоуп, тому обидва їдуть у реєстр і обидва підставляються в
     наступну публікацію (`--scope`).
 
-    Best-effort: немає файлу або поля — просто не записуємо. Це не аварія:
+    Наявний скоуп НЕ перезаписується. Best-effort: немає значення — просто не записуємо. Це не аварія:
     `--scope` тоді не підставиться, а інваріант `vercel-binding-unshared` скаже
     про неповну прив'язку вголос.
     """
     if task.get('vercel_scope'):
         return
-    try:
-        with open(os.path.join(pub, '.vercel', 'project.json'), encoding='utf-8') as f:
-            org = (json.load(f) or {}).get('orgId')
-    except (OSError, ValueError):
-        return
-    if not org:
+    if not org or not isinstance(org, str):
         return
     cfg = load_tasks()
     cfg.setdefault('tasks', {}).setdefault(tid, {})['vercel_scope'] = org
@@ -4572,57 +4524,84 @@ def _remember_vercel_scope(tid, task, pub):
     task['vercel_scope'] = org
 
 
-def _stable_alias(dep_url, cwd, extra=()):
-    """Стабільний публічний prod-URL деплою (щоб посилання не мінялось щопублікації).
+#: Модуль, яким публікує простір ЛІГА (4b-1): той самий `vercel-publish`, вхід — системний Vercel CLI (режим `cli`).
+PUBLISH_LEGACY_MODULE = 'vercel-publish'
 
-    Беремо НАЙКОРОТШИЙ з усіх кандидатів (вивід deploy + аліаси `vercel inspect`).
-    Перевірено на живому деплої: короткий `<проєкт>.vercel.app` віддає макет
-    (200), а довгий, з-іменем-акаунта `<проєкт>-<акаунт>.vercel.app` — 302 на
-    SSO команди. Тому саме найкоротший, і виключати dep_url НЕ можна: часто він
-    і є цим коротким.
-    """
-    cands = list(extra) + [dep_url]
-    npx = _node_bin('npx')
-    if npx:
-        try:
-            r = subprocess.run([npx, '--yes', 'vercel', 'inspect', dep_url],
-                               cwd=cwd, capture_output=True, text=True, timeout=120)
-            cands += _deploy_urls(r.stdout, r.stderr)
-        except (OSError, subprocess.SubprocessError):
-            pass
-    return min(cands, key=len) if cands else dep_url
+#: Тексти ЛІГИ — байт у байт із `_deploy_hint` 0.8.0: модуль віддає КОД відмови, а людський текст — тут, бо він про людей і
+#: правила цієї компанії (згадує `tasks.json`). Зникнуть разом із простором ЛІГА (4d). Порядок розпізнавання (вхід → скоуп →
+#: доступ; скоуп ПЕРЕД загальним «немає доступу»: тексти перетинаються, а причина конкретніша) — у модулі, `_cli_code`. ⛔ Причину не вигадуємо: код, якого тут
+#: нема (`vercel-deploy`, `module-error`…), — не підказка, а сирий хвіст виводу (`_legacy_deploy_error`).
+_LEGACY_DEPLOY_HINTS = {
+    'vercel-login': ('Vercel не авторизований на цій машині — виконай у терміналі '
+                     '`npx vercel login`, тоді натисни «Опублікувати» ще раз.'),
+    'vercel-scope': ('Проєкт цієї задачі живе в ІНШОМУ Vercel-скоупі, і цей акаунт до '
+                     'нього не має доступу. Публікація звідси створила б ДРУГЕ '
+                     'посилання, а те, що вже в менеджера, тихо застаріло б — тому '
+                     'vercel відмовив. Попроси власника задачі опублікувати; щоб '
+                     'публікувати могли всі, потрібна спільна Vercel-команда, і її '
+                     'треба вписати в tasks.json → vercel_scope.'),
+    'vercel-auth': ('Немає доступу до Vercel-проєкту під цим акаунтом — або увійди '
+                    'тим, що має доступ, або попроси Андрія опублікувати.'),
+}
+#: Підказка до `verify_error == 'vercel_protection'` — байт у байт із `_check_published` 0.8.0. Захист Vercel (302 на
+#: vercel.com/sso-api) ламає гейт превʼю: замість макета редірект, і пароль не показується.
+_LEGACY_PROTECTION_HINT = ('Vercel Deployment Protection увімкнена: Project → '
+                           'Settings → Deployment Protection → Vercel '
+                           'Authentication → Disabled. Інакше замість макета '
+                           'редірект на SSO, і наш пароль 1100 не показується.')
+#: ⛔ URL НЕ вгадуємо: раніше стояло f'https://{proj}.vercel.app' — і `dc-<задача>` у зоні vercel.app виявилось зайнятим ЧУЖИМ
+#: проєктом, тож канвас видавав дизайнеру посилання на сторонній сайт (30.07.2026). Імʼя проєкту в акаунті і хост у
+#: vercel.app — різні простори імен. Модуль бере адресу лише з виводу `vercel deploy`/`inspect`; не знайшов — код
+#: `vercel-no-url`, і ядро не зберігає нічого.
+_LEGACY_NO_URL = ('деплой пройшов, але URL у виводі vercel не знайдено — '
+                  'посилання не зберігаю, щоб не вигадати неправильне')
 
 
-def _check_published(url):
-    """Чи віддає URL наш макет. Ловимо дві реальні поломки:
-    Vercel Deployment Protection (302 на vercel.com/sso-api — тоді наш гейт 1100
-    навіть не рендериться) і взагалі не наш вміст."""
-    class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *a, **kw):
-            return None
-    try:
-        # certifi-контекст: на macOS python.org системні сертифікати не підхоплюються
-        # і перевірка падала на CERTIFICATE_VERIFY_FAILED (див. _ssl_context)
-        op = urllib.request.build_opener(
-            NoRedirect, urllib.request.HTTPSHandler(context=_ssl_context()))
-        with op.open(url, timeout=20) as r:
-            body = r.read(60000).decode('utf-8', 'replace')
-            if 'authgate' in body:
-                return {'verified': True}
-            return {'verified': False,
-                    'reason': 'на URL відповідає не наш макет (немає гейта)'}
-    except urllib.error.HTTPError as e:
-        loc = (e.headers.get('location') or '') if e.headers else ''
-        if e.code in (301, 302, 303, 307, 308) and 'vercel.com/sso' in loc:
-            return {'verified': False, 'reason': 'vercel_protection',
-                    'hint': 'Vercel Deployment Protection увімкнена: Project → '
-                            'Settings → Deployment Protection → Vercel '
-                            'Authentication → Disabled. Інакше замість макета '
-                            'редірект на SSO, і наш пароль 1100 не показується.'}
-        return {'verified': False, 'reason': f'HTTP {e.code}'}
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        return {'verified': False, 'reason': str(e)[:200]}
+def _publish_legacy_ctx(npx):
+    """`ctx` неявного постачальника публікації ЛІГИ. ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`, а секретів
+    модуль у режимі `cli` не читає (див. `_vcs_legacy_ctx`). `find_tool` віддає ЛИШЕ `npx` — той самий, що ядро вже знайшло
+    (`_node_bin` може запускати login-shell, повторно його не кличемо)."""
+    return {'space': {'id': spaces.request_space_id() or '', 'path': ''},
+            'settings': {'auth': 'cli', 'team': ''}, 'secrets': {},
+            'folder_ok': lambda folder: (False, 'bad-folder'),
+            'ModuleError': deai_modules.ModuleError, 'find_tool': lambda name: npx if name == 'npx' else None}
 
+
+def _publish_legacy_call(task, tid, build_dir, proj, npx):
+    """Шов адаптера ЛІГИ: модуль `vercel-publish` у режимі `cli` → його перевірений результат або `ModuleError`. Це ЄДИНЕ
+    місце, де ядро публікує ЛІГУ (тести гілки ЛІГИ підміняють саме його).
+
+    `proj` — опакове імʼя проєкту (`_vercel_project`), `build_dir` — зібране `publish/`. Привʼязка задача→проєкт іде модулю
+    в `state` (`project`, `task` і — якщо відомий — `scope`): ⛔ `--scope` важливий — без нього `vercel link` у ЧУЖОМУ акаунті
+    СТВОРИВ БИ проєкт із тим самим імʼям, і задача отримала б друге посилання; зі скоупом vercel відмовляє вголос
+    (`vercel-scope`). `gated: True` — гейт ЛІГИ (пароль, типово 1100) вкладає збірка ядра завжди, і превʼю «підтверджене»
+    лише з маркером `authgate` на адресі.
+
+    Результат проходить ту саму перевірку форми, що й у модулів «за адресою» (`_checked_url_result`: https-адреса без облікових
+    даних, пласкі `state`/`verified`), і мусить нести `deploy_url` (адресу самої публікації — ядро віддає її у відповіді)."""
+    m = deai_modules.catalog().get(PUBLISH_LEGACY_MODULE)
+    if m is None or m.status != 'ok':
+        raise deai_modules.ModuleError('module-error', message=f'{PUBLISH_LEGACY_MODULE} module is not loaded')
+    state = {'project': proj, 'task': tid}
+    if task.get('vercel_scope'):
+        state['scope'] = task['vercel_scope']
+    arg = {'id': tid, 'title': task.get('title', tid), 'dir': task['dir'], 'gated': True, 'state': state}
+    res = deai_modules.call(m, 'publish', _publish_legacy_ctx(npx), build_dir, arg)
+    _checked_url_result(res)
+    if not isinstance(res.get('deploy_url'), str):
+        raise deai_modules.ModuleError('module-error', message='publish returned no deploy_url')
+    return res
+
+
+def _legacy_deploy_error(e):
+    """`deploy_error` ЛІГИ з відмови модуля — той самий рядок, що в 0.8.0: підказка + «— вивід vercel —» + хвіст (300 знаків)
+    для впізнаних причин (`vercel-login`/`-scope`/`-auth`), інакше лише хвіст (400). Хвіст беремо з ПОВНОГО тексту
+    (`ModuleError.full`): `message` обрізано до 300 знаків з початку, а 0.8.0 різало з кінця виводу."""
+    if e.code == 'vercel-no-url':
+        return _LEGACY_NO_URL
+    raw = e.full or e.message or e.code
+    hint = _LEGACY_DEPLOY_HINTS.get(e.code)
+    return f'{hint}\n\n— вивід vercel —\n{raw[-300:]}' if hint else raw[-400:]
 
 
 def _killpg(child, sig):
@@ -7398,7 +7377,8 @@ class Handler(SimpleHTTPRequestHandler):
     def _publish(self, payload):
         """Собрать publish/ из ОПУБЛИКОВАННЫХ итераций: свитчер+гейт+comment-layer
         (сама сборка — `build_preview`, общая с модулями публикации).
-        Затем vercel deploy (скриптом, без AI); URL сохраняется в iterations.json.
+        Затем деплой модулем `vercel-publish` в режиме `cli` (`_publish_legacy_call`: тот же `npx vercel`, без AI); URL
+        сохраняется в iterations.json.
 
         Хто публікує, вирішує `deai_modules.provider('publish')` — ПЕРШИМ рядком, до збірки `publish/` (вона
         `rmtree`-ить теку): `'legacy'` — цей шлях (простір з інтеграціями, шар вимкнено, простір запиту не
@@ -7436,7 +7416,7 @@ class Handler(SimpleHTTPRequestHandler):
         space = spaces.active_space() if spaces.layer_on() and spaces.request_space_id() is not None else None
         comments, comments_warn = publish_comments(space, tid)
         built = build_preview(task, tid, its, comments=comments, gate_pw=pw, build='legacy')
-        # ⛔ `pub` потрібен ДАЛІ — деплою (`cwd=pub`, `_stable_alias`, `_remember_vercel_scope`); його
+        # ⛔ `pub` потрібен ДАЛІ — деплою (`_publish_legacy_call(…, pub, …)` — модуль запускає `vercel` у цій теці); його
         # читає лише гілка без `build_only`, тож вилучення збірки без цього рядка ламає тільки справжній
         # деплой (`NameError` посеред відповіді), а `build_only`-тести лишаються зеленими.
         pub = built['dir']
@@ -7464,66 +7444,46 @@ class Handler(SimpleHTTPRequestHandler):
                 self._overview_sync()
                 self._send_json(result)
                 return
-            # `--scope` — якщо прив'язка вже відома. Без нього `link` у чужому
-            # акаунті СТВОРИВ БИ проєкт із тим самим імʼям, і задача отримала б
-            # друге посилання; зі скоупом vercel відмовляє вголос (_deploy_hint).
-            scope = task.get('vercel_scope')
-            scope_args = ['--scope', scope] if scope else []
+            # ⛔ URL НЕ вгадуємо, `--scope` підставляє модуль зі `state` (див. `_publish_legacy_call`): тут лише відповідь.
             try:
-                subprocess.run(
-                    [npx, '--yes', 'vercel', 'link', '--yes', *scope_args,
-                     '--project', proj],
-                    cwd=pub, capture_output=True, text=True, timeout=120)
-                out = subprocess.run(
-                    [npx, '--yes', 'vercel', 'deploy', '--prod', '--yes', *scope_args],
-                    cwd=pub, capture_output=True, text=True, timeout=300)
-                if out.returncode == 0:
-                    # ⛔ URL НЕ вгадуємо (див. _deploy_urls): раніше тут було
-                    # f'https://{proj}.vercel.app' — і посилання вело на чужий сайт.
-                    urls = _deploy_urls(out.stdout, out.stderr)
-                    if not urls:
-                        result['deploy_error'] = (
-                            'деплой пройшов, але URL у виводі vercel не знайдено — '
-                            'посилання не зберігаю, щоб не вигадати неправильне')
-                    else:
-                        url = _stable_alias(urls[-1], pub, extra=urls)
-                        check = _check_published(url)
-                        # Прив'язка задача→превʼю мусить поїхати В РЕЄСТР, а не
-                        # лишитись у tasks.json (per-machine). Раніше `vercel_project`
-                        # мінтився тут, а в реєстр їхав ЛИШЕ при створенні задачі —
-                        # тобто ніколи для вже опублікованих: 03.08.2026 у 5 задач із 6
-                        # прив'язка була тільки на диску мейнтейнера, і публікація з
-                        # іншої машини видала б менеджеру друге посилання.
-                        _remember_vercel_scope(tid, task, pub)
-                        _registry_push(tid)
-                        # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: деплой тривав хвилини, і дизайнер
-                        # міг перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на
-                        # вході (з якого взято `its`), відкотив би її. Пишемо лише власні поля публікації.
-                        fresh = load_meta(task)
-                        fresh['publish_url'] = url
-                        fresh['published_at'] = time.strftime('%d.%m.%Y %H:%M')
-                        fresh['publish_verified'] = check.get('verified', False)
-                        save_meta(task, fresh)
-                        result['url'] = url
-                        result['deploy_url'] = urls[-1]
-                        warn = _preview_domain_warning(url, proj)
-                        if warn:
-                            result['domain_warning'] = warn
-                        owner = _not_task_link(task)
-                        if owner:
-                            result['not_task_link'] = owner
-                        result['verified'] = check.get('verified', False)
-                        if not check.get('verified'):
-                            result['verify_error'] = check.get('reason')
-                            if check.get('hint'):
-                                result['verify_hint'] = check['hint']
-                else:
-                    raw = (out.stderr or out.stdout)
-                    hint = _deploy_hint(raw)
-                    result['deploy_error'] = f'{hint}\n\n— вивід vercel —\n{raw[-300:]}' \
-                        if hint else raw[-400:]
-            except (OSError, subprocess.TimeoutExpired) as e:
-                result['deploy_error'] = str(e)
+                res = _publish_legacy_call(task, tid, pub, proj, npx)
+            except deai_modules.ModuleError as e:
+                result['deploy_error'] = _legacy_deploy_error(e)
+            else:
+                url = res['url']
+                # Прив'язка задача→превʼю мусить поїхати В РЕЄСТР, а не
+                # лишитись у tasks.json (per-machine). Раніше `vercel_project`
+                # мінтився тут, а в реєстр їхав ЛИШЕ при створенні задачі —
+                # тобто ніколи для вже опублікованих: 03.08.2026 у 5 задач із 6
+                # прив'язка була тільки на диску мейнтейнера, і публікація з
+                # іншої машини видала б менеджеру друге посилання.
+                _remember_vercel_scope(tid, task, (res.get('state') or {}).get('scope'))
+                _registry_push(tid)
+                # ⛔ `iterations.json` перечитуємо ПЕРЕД записом: деплой тривав хвилини, і дизайнер
+                # міг перемкнути зелену крапку (`publish-toggle`) — запис `meta`, прочитаного на
+                # вході (з якого взято `its`), відкотив би її. Пишемо лише власні поля публікації.
+                fresh = load_meta(task)
+                fresh['publish_url'] = url
+                fresh['published_at'] = time.strftime('%d.%m.%Y %H:%M')
+                fresh['publish_verified'] = res['verified']
+                save_meta(task, fresh)
+                result['url'] = url
+                result['deploy_url'] = res['deploy_url']
+                warn = _preview_domain_warning(url, proj)
+                if warn:
+                    result['domain_warning'] = warn
+                owner = _not_task_link(task)
+                if owner:
+                    result['not_task_link'] = owner
+                result['verified'] = res['verified']
+                if not res['verified']:
+                    v = res.get('verify') or {}
+                    result['verify_error'] = v.get('reason')
+                    if v.get('reason') == 'vercel_protection':
+                        result['verify_hint'] = _LEGACY_PROTECTION_HINT
+                # прибирання старих публікацій модуля не вдалось — публікація вдала, але людина про це знає (ОСТАННІЙ ключ)
+                if isinstance(res.get('cleanup_warning'), str) and res['cleanup_warning']:
+                    result['cleanup_warning'] = res['cleanup_warning']
             git_autocommit(task['dir'], f'publish: {len(its)} iteration(s)')
         self._overview_sync()
         self._send_json(result)

@@ -29,7 +29,7 @@ Task 4b (`Dispatch`, `ResealModuleBuilds`, один тест у `BuildPreview`) 
 свої `HOME`/`DEAI_HOME`/`DC_TASKS_FILE`, два простори (`off` без інтеграцій, `on` з ними), сервер у процесі й
 РОЗТЯЖКА (`Tripwire`: будь-яка мережа й будь-який підпроцес — запис і відмова; loopback лише на порт цього
 сервера). Розтяжка доводить «нуль записів» разом із шпигунами за точками виходу ЛІГА (`_overview_sync`,
-`_registry_push`, `git_autocommit`, `_check_published`…): вони б спрацювали навіть при `DC_NO_OVERVIEW`.
+`_registry_push`, `git_autocommit`, шов ЛІГИ `_publish_legacy_call`…): вони б спрацювали навіть при `DC_NO_OVERVIEW`.
 """
 import builtins
 import contextlib
@@ -47,6 +47,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unicodedata
 import unittest
 import urllib.error
@@ -58,6 +59,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
 import deai_modules as dm  # noqa: E402
+import fake_npx  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -576,71 +578,54 @@ class BuildPreview(TaskFixture):
         self.assertEqual(body['code_stale'], 'код новіший за процес')
 
     def test_league_deploy_still_works_from_the_built_dir(self):
-        """Деплой (гілка БЕЗ `build_only`) читає `pub` після збірки: `vercel link/deploy` біжать з `cwd=pub`,
-        а `_stable_alias` і `_remember_vercel_scope` отримують його ж. Усі `build_only`-тести цього не
-        бачать: вилучення збірки без `pub = built['dir']` ламало б лише справжню публікацію."""
+        """Деплой (гілка БЕЗ `build_only`) читає `pub` після збірки: шов ЛІГИ (`_publish_legacy_call`) отримує ту саму теку, де
+        модуль запускає `vercel link/deploy/inspect`, а скоуп із відповіді модуля йде в `_remember_vercel_scope`. Усі
+        `build_only`-тести цього не бачать: вилучення збірки без `pub = built['dir']` ламало б лише справжню публікацію."""
         self._tasks({'dir': self.tmp, 'title': 'Фікстура', 'vercel_project': 'pv-22222222'})
         base = self._server()
         want = os.path.join(self.tmp, 'publish')
         url = 'https://pv-22222222-abc.vercel.app'
-        cwds, seen = [], {}
+        seen = {}
 
-        class Done:
-            returncode = 0
-            stdout = f'Production: {url}'
-            stderr = ''
-
-        def run(cmd, **kw):
-            cwds.append(kw.get('cwd'))
-            return Done()
-
-        def alias(u, cwd, extra=()):
-            seen['alias'] = cwd
-            return url
+        def seam(task, tid, build_dir, proj, npx):
+            seen['call'] = (tid, build_dir, proj, npx)
+            return {'url': url, 'deploy_url': url, 'verified': True, 'verify': None, 'warnings': [], 'cleanup_warning': None,
+                    'state': {'project': proj, 'task': tid, 'scope': 'team_x'}}
 
         with mock.patch.object(serve, '_node_bin', lambda name='npx': '/usr/bin/node'), \
-             mock.patch.object(serve.subprocess, 'run', run), \
-             mock.patch.object(serve, '_stable_alias', alias), \
-             mock.patch.object(serve, '_check_published', lambda u: {'verified': True}), \
+             mock.patch.object(serve, '_publish_legacy_call', seam), \
              mock.patch.object(serve, '_registry_push', lambda tid: False), \
              mock.patch.object(serve, '_remember_vercel_scope',
-                               lambda tid, task, pub: seen.__setitem__('scope', pub)), \
+                               lambda tid, task, org: seen.__setitem__('scope', (tid, org))), \
              mock.patch.object(serve, 'git_autocommit', lambda *a, **kw: None):
             body = json.load(_post(base + '/api/publish', {}))
         self.assertEqual(body.get('url'), url, body)
         self.assertEqual(body['dir'], want)
-        self.assertEqual(cwds, [want, want])                # `vercel link` і `vercel deploy`
-        self.assertEqual(seen, {'alias': want, 'scope': want})
+        self.assertEqual(seen['call'], ('fixture', want, 'pv-22222222', '/usr/bin/node'))   # теку збірки отримує шов
+        self.assertEqual(seen['scope'], ('fixture', 'team_x'))
 
     def test_league_deploy_keeps_a_toggle_made_while_it_was_running(self):
         """Деплой тривав хвилини, а `_publish` тримав `meta`, прочитаний НА ВХОДІ: запис `publish_url` зі старим
         `meta` відкочував би зелену крапку, яку дизайнер перемкнув за цей час (`publish-toggle`). Тому
         `iterations.json` перечитується ПЕРЕД `save_meta`, а записуються лише власні поля публікації.
-        Перемикання робить `_check_published` — він кличеться між читанням і записом."""
+        Перемикання робить шов ЛІГИ (`_publish_legacy_call`) — під час «деплою», між читанням і записом."""
         self._tasks({'dir': self.tmp, 'title': 'Фікстура', 'vercel_project': 'pv-33333333'})
         base = self._server()
         url = 'https://pv-33333333-abc.vercel.app'
 
-        class Done:
-            returncode = 0
-            stdout = f'Production: {url}'
-            stderr = ''
-
-        def toggled_meanwhile(_url):
-            task = self._args()[0]
+        def toggled_meanwhile(task, tid, build_dir, proj, npx):
             meta = serve.load_meta(task)
             for it in meta['iterations']:
                 if it['id'] == 'it2':
                     it['published'] = False
             serve.save_meta(task, meta)
-            return {'verified': True}
+            return {'url': url, 'deploy_url': url, 'verified': True, 'verify': None, 'warnings': [],
+                    'cleanup_warning': None, 'state': {'project': proj, 'task': tid}}
 
         with mock.patch.object(serve, '_node_bin', lambda name='npx': '/usr/bin/node'), \
-             mock.patch.object(serve.subprocess, 'run', lambda cmd, **kw: Done()), \
-             mock.patch.object(serve, '_stable_alias', lambda u, cwd, extra=(): url), \
-             mock.patch.object(serve, '_check_published', toggled_meanwhile), \
+             mock.patch.object(serve, '_publish_legacy_call', toggled_meanwhile), \
              mock.patch.object(serve, '_registry_push', lambda tid: False), \
-             mock.patch.object(serve, '_remember_vercel_scope', lambda tid, task, pub: None), \
+             mock.patch.object(serve, '_remember_vercel_scope', lambda tid, task, org: None), \
              mock.patch.object(serve, 'git_autocommit', lambda *a, **kw: None):
             body = json.load(_post(base + '/api/publish', {}))
         self.assertEqual(body.get('url'), url, body)
@@ -660,6 +645,335 @@ class BuildPreview(TaskFixture):
                 _post(base + '/api/publish', {'build_only': True})
         self.assertEqual(ctx.exception.code, 400)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, 'publish')))
+
+
+
+# ======================================================================= 4b-1: ЛІГА публікує через `vercel-publish`
+
+BEFORE_4B1 = os.path.join(ROOT, 'tests', 'fixtures', 'legacy-publish', 'before-4b1.json')
+LP_D = 'https://pv-12345678-abc.vercel.app'
+LP_A = 'https://pv-12345678.vercel.app'
+#: Успішний сценарій фальшивого `npx` (ті самі відповіді, що в знімку 0.8.0), плюс порожній `list` — прибирання модуля.
+LP_OK = {'link': {'code': 0, 'org': 'team_x'}, 'deploy': {'code': 0, 'stdout': f'Production: {LP_D}\nAliased: {LP_A}\n'},
+         'inspect': {'code': 0, 'stdout': LP_A + '\n'}, 'list': {'code': 0, 'stdout': '{"deployments": []}'}}
+#: Що модуль бачить на адресі превʼю (шов `_fetch_page`) у трьох способах перевірки знімка.
+LP_PAGES = {'authgate': (200, '', '<html><div id="authgate"></div></html>'),
+            'nogate': (200, '', '<html>чужий сайт</html>'),
+            'sso': (302, 'https://vercel.com/sso-api?next=x', '')}
+#: (імʼя, сценарій npx | None — «npx нема», додаткові поля задачі, спосіб перевірки): ті самі, що зняв `record_before.py`.
+LP_SCENARIOS = [
+    ('success', LP_OK, {}, 'authgate'),
+    ('deploy_login', {**LP_OK, 'deploy': {'code': 1, 'stderr': 'Error: Please run vercel login'}}, {}, 'authgate'),
+    ('deploy_scope', {**LP_OK, 'deploy': {'code': 1, 'stderr': "Error: You don't have access to the team 'x'"}}, {}, 'authgate'),
+    ('deploy_forbidden', {**LP_OK, 'deploy': {'code': 1, 'stderr': 'Error: Forbidden'}}, {}, 'authgate'),
+    ('deploy_generic', {**LP_OK, 'deploy': {'code': 1, 'stderr': 'E' * 700 + 'ХВІСТ'}}, {}, 'authgate'),
+    ('deploy_no_url', {**LP_OK, 'deploy': {'code': 0, 'stdout': 'Deployed, but nothing to see\n'}}, {}, 'authgate'),
+    ('no_npx', None, {}, 'authgate'),
+    ('known_scope', LP_OK, {'vercel_scope': 'team_x'}, 'authgate'),
+    ('protected', LP_OK, {}, 'sso'),
+    ('no_gate', LP_OK, {}, 'nogate'),
+]
+
+
+class LegacyPublishViaModule(TaskFixture):
+    """4b-1, Task 4: гілка `'legacy'` у `Handler._publish` кличе модуль `vercel-publish` (режим `cli`) через ОДИН шов —
+    `serve._publish_legacy_call`. Світ: справжній модуль із каталогу, ФАЛЬШИВИЙ `npx` (`tests/fake_npx.py`) через
+    `serve._node_bin`, перевірка превʼю — шов `_fetch_page` у глобалах модуля (мережі нема), шпигуни за `_registry_push`,
+    `git_autocommit`, `Handler._overview_sync`. Еталон — `before-4b1.json`: поведінка 0.8.0, знята до зміни коду."""
+
+    def setUp(self):
+        super().setUp()
+        self.npxdir = tempfile.mkdtemp(prefix='dc-lp-npx-')
+        self.addCleanup(shutil.rmtree, self.npxdir, True)
+        self.module = dm.catalog().get('vercel-publish')
+        self.assertEqual(self.module.status, 'ok', self.module)
+        self._iterations0 = _read(os.path.join(self.tmp, 'iterations.json'))      # чистий `iterations.json` для кожного прогону
+
+    # ---- світ ----
+
+    def _norm(self, text):
+        """Теки задачі → `<TASK>` (спершу `realpath`: cwd фальшивого `npx` реальний, а `dir` відповіді — як записано)."""
+        return text.replace(os.path.realpath(self.tmp), '<TASK>').replace(self.tmp, '<TASK>')
+
+    def _legacy(self, sc, extra=None, mode='authgate', page=None, npx=True, extra_patches=()):
+        """Одна публікація ЛІГИ через `/api/publish`; повертає знімок у формі `before-4b1.json`."""
+        with open(os.path.join(self.tmp, 'iterations.json'), 'w', encoding='utf-8') as fh:
+            fh.write(self._iterations0)           # сценарії одного тесту не бачать записів один одного (як у знімку: світ на сценарій)
+        task = {'dir': self.tmp, 'title': 'Фікстура', 'jira': 'TEST-1', 'vercel_project': 'pv-12345678', **(extra or {})}
+        self._tasks(task)
+        npx_path = fake_npx.make(self.npxdir, sc) if sc is not None else None
+        spies = {'registry_push': [], 'git_autocommit': [], 'overview_sync': 0}
+        checked = []
+        want_page = page if page is not None else LP_PAGES[mode]
+
+        def fetch(url):
+            checked.append(url)
+            return want_page(url) if callable(want_page) else want_page
+
+        def overview_sync(handler):
+            spies['overview_sync'] += 1
+        g = self.module.fn('publish').__globals__
+        base = self._server()
+        with contextlib.ExitStack() as st:
+            st.enter_context(mock.patch.dict(g, {'_fetch_page': fetch}))
+            st.enter_context(mock.patch.object(serve, '_node_bin', lambda name='npx': npx_path))
+            st.enter_context(mock.patch.object(serve, '_registry_push', lambda tid: spies['registry_push'].append(tid) or False))
+            st.enter_context(mock.patch.object(serve, 'git_autocommit', lambda *a, **kw: spies['git_autocommit'].append(list(a))))
+            st.enter_context(mock.patch.object(serve.Handler, '_overview_sync', overview_sync))
+            st.enter_context(mock.patch.object(serve, 'server_code_staleness', lambda *a, **kw: None))
+            for p in extra_patches:
+                st.enter_context(p)
+            raw = _post(base + '/api/publish', {}).read().decode('utf-8')
+        rec = json.loads(_read(os.environ['DC_TASKS_FILE']))['tasks']['fixture']
+        meta = json.loads(_read(os.path.join(self.tmp, 'iterations.json')))
+        if 'published_at' in meta:
+            meta['published_at'] = '<set>'
+        return {'response': json.loads(self._norm(raw), object_pairs_hook=lambda pairs: [list(p) for p in pairs]),
+                'task': json.loads(self._norm(json.dumps(rec, ensure_ascii=False))),
+                'iterations_json': meta,
+                'npx_calls': [{'argv': c['argv'], 'cwd': self._norm(c['cwd'])} for c in fake_npx.calls(self.npxdir)]
+                if npx_path else [],
+                'spies': json.loads(self._norm(json.dumps(spies, ensure_ascii=False))), 'checked_urls': checked}
+
+    @staticmethod
+    def _resp(obs):
+        return dict(obs['response'])
+
+    # ---- 1: диференційний ----
+
+    def test_1_differential_against_the_0_8_0_snapshot(self):
+        with open(BEFORE_4B1, encoding='utf-8') as fh:
+            before = json.load(fh)['scenarios']
+        self.assertEqual([n for n, *_ in LP_SCENARIOS], list(before), 'сценарії тесту й знімка розійшлись')
+        for name, sc, extra, mode in LP_SCENARIOS:
+            with self.subTest(scenario=name):
+                old = before[name]
+                new = self._legacy(sc, extra, mode)
+                # порядок ключів відповіді спостережуваний: порівнюємо СПИСКИ ПАР
+                self.assertEqual(new['response'], old['response'])
+                for key in ('task', 'iterations_json', 'spies', 'checked_urls'):
+                    self.assertEqual(new[key], old[key], key)
+                n = len(old['npx_calls'])
+                self.assertEqual(new['npx_calls'][:n], old['npx_calls'], 'знімок — ПРЕФІКС нового argv-журналу')
+                self.assertTrue(all(c['argv'][2] in ('list', 'remove') for c in new['npx_calls'][n:]),
+                                [c['argv'] for c in new['npx_calls'][n:]])
+
+    # ---- 2: прибирання ----
+
+    def test_2_cleanup_removes_the_old_ones_and_warns_only_when_it_failed(self):
+        def entry(host, created):
+            return {'url': host, 'name': 'pv-12345678', 'state': 'READY', 'target': 'production', 'createdAt': created}
+        listing = {'deployments': [entry('pv-12345678.vercel.app', 50)] + [entry(f'pv-12345678-o{i}.vercel.app', i) for i in range(1, 5)]}
+        obs = self._legacy({**LP_OK, 'list': {'code': 0, 'stdout': json.dumps(listing)},
+                            'remove': {'code': 0, 'stdout': 'Removed'}})
+        removes = [c['argv'] for c in obs['npx_calls'] if c['argv'][2] == 'remove']
+        self.assertEqual(sorted(a[3] for a in removes), ['pv-12345678-o1.vercel.app', 'pv-12345678-o2.vercel.app'])
+        self.assertNotIn('cleanup_warning', self._resp(obs))
+        self.assertEqual(self._resp(obs)['verified'], True)
+        # `list` падає → попередження, і воно — ОСТАННІЙ ключ відповіді; сама публікація вдала
+        obs = self._legacy({**LP_OK, 'list': {'code': 1, 'stderr': 'boom'}})
+        keys = [k for k, _ in obs['response']]
+        self.assertEqual(keys[-1], 'cleanup_warning', keys)
+        self.assertEqual(keys[:-1], ['ok', 'dir', 'iterations', 'frames', 'url', 'deploy_url', 'verified'])
+        self.assertIn('Старі публікації не прибрано', self._resp(obs)['cleanup_warning'])
+        self.assertEqual(self._resp(obs)['url'], LP_A)
+
+    def test_2b_cleanup_warning_comes_after_the_verify_keys(self):
+        obs = self._legacy({**LP_OK, 'list': {'code': 1, 'stderr': 'boom'}}, mode='sso')
+        keys = [k for k, _ in obs['response']]
+        self.assertEqual(keys[-3:], ['verify_error', 'verify_hint', 'cleanup_warning'], keys)
+
+    # ---- 3: deploy_error ----
+
+    def test_3_deploy_error_is_the_0_8_0_text_built_from_the_full_raw_output(self):
+        pad = ''.join(chr(0x41 + i % 26) for i in range(1000))
+        for code, marker in (('vercel-login', ' please run vercel login'), ('vercel-scope', ' scope not found'),
+                             ('vercel-auth', ' forbidden')):
+            with self.subTest(code=code):
+                raw = pad[:-len(marker)] + marker
+                self.assertEqual(len(raw), 1000)
+                obs = self._legacy({**LP_OK, 'deploy': {'code': 1, 'stderr': raw}})
+                hint = serve._LEGACY_DEPLOY_HINTS[code]
+                want = f'{hint}\n\n— вивід vercel —\n{raw[-300:]}'
+                self.assertEqual(self._resp(obs)['deploy_error'], want)
+                self.assertEqual(len(self._resp(obs)['deploy_error']), len(hint) + len('\n\n— вивід vercel —\n') + 300)
+        with self.subTest(code='vercel-deploy'):
+            raw = pad[:1000]
+            obs = self._legacy({**LP_OK, 'deploy': {'code': 1, 'stderr': raw}})
+            self.assertEqual(self._resp(obs)['deploy_error'], raw[-400:])
+            self.assertEqual(len(self._resp(obs)['deploy_error']), 400)
+        with self.subTest(code='vercel-no-url'):
+            obs = self._legacy({**LP_OK, 'deploy': {'code': 0, 'stdout': 'нічого'}})
+            self.assertEqual(self._resp(obs)['deploy_error'], serve._LEGACY_NO_URL)
+
+    def test_3b_the_hint_texts_are_the_0_8_0_texts(self):
+        self.assertEqual(set(serve._LEGACY_DEPLOY_HINTS), {'vercel-login', 'vercel-scope', 'vercel-auth'})
+        self.assertTrue(serve._LEGACY_DEPLOY_HINTS['vercel-login'].startswith('Vercel не авторизований на цій машині'))
+        self.assertIn('tasks.json → vercel_scope', serve._LEGACY_DEPLOY_HINTS['vercel-scope'])
+        self.assertTrue(serve._LEGACY_DEPLOY_HINTS['vercel-auth'].startswith('Немає доступу до Vercel-проєкту'))
+        self.assertIn('пароль 1100', serve._LEGACY_PROTECTION_HINT)
+
+    # ---- 4: захист Vercel ----
+
+    def test_4_vercel_protection_gives_the_reason_and_the_hint(self):
+        obs = self._legacy(LP_OK, mode='sso')
+        resp = self._resp(obs)
+        self.assertIs(resp['verified'], False)
+        self.assertEqual(resp['verify_error'], 'vercel_protection')
+        self.assertEqual(resp['verify_hint'], serve._LEGACY_PROTECTION_HINT)
+        self.assertEqual(obs['iterations_json']['publish_verified'], False)
+        # чужий сайт без гейта: причина є, підказки про захист нема
+        resp = self._resp(self._legacy(LP_OK, mode='nogate'))
+        self.assertEqual(resp['verify_error'], 'на URL відповідає не наш макет (немає гейта)')
+        self.assertNotIn('verify_hint', resp)
+
+    # ---- 5: імʼя мінтиться ДО деплою ----
+
+    def test_5_the_project_name_is_minted_before_the_deploy(self):
+        self._tasks({'dir': self.tmp, 'title': 'Фікстура', 'jira': 'TEST-1'})          # без `vercel_project`
+        npx = fake_npx.make(self.npxdir, {**LP_OK, 'deploy': {'code': 1, 'stderr': 'boom'}})
+        base = self._server()
+        with mock.patch.object(serve, '_node_bin', lambda name='npx': npx), \
+             mock.patch.object(serve, '_registry_push', lambda tid: False), \
+             mock.patch.object(serve, 'git_autocommit', lambda *a, **kw: None):
+            body = json.load(_post(base + '/api/publish', {}))
+        self.assertEqual(body['deploy_error'], 'boom')
+        rec = json.loads(_read(os.environ['DC_TASKS_FILE']))['tasks']['fixture']
+        self.assertRegex(rec['vercel_project'], r'^pv-\d{8}$')
+        link = next(c['argv'] for c in fake_npx.calls(self.npxdir) if c['argv'][2] == 'link')
+        self.assertEqual(link[-2:], ['--project', rec['vercel_project']])
+
+    # ---- 6: скоуп ----
+
+    def _legacy_via_seam(self, task_extra, result):
+        self._tasks({'dir': self.tmp, 'title': 'Фікстура', 'jira': 'TEST-1', 'vercel_project': 'pv-12345678', **task_extra})
+        base = self._server()
+        seen = []
+
+        def seam(task, tid, build_dir, proj, npx):
+            seen.append((dict(task), tid, build_dir, proj, npx))
+            return result
+        with mock.patch.object(serve, '_node_bin', lambda name='npx': '/usr/bin/npx'), \
+             mock.patch.object(serve, '_publish_legacy_call', seam), \
+             mock.patch.object(serve, '_registry_push', lambda tid: False), \
+             mock.patch.object(serve, 'git_autocommit', lambda *a, **kw: None):
+            body = json.load(_post(base + '/api/publish', {}))
+        return body, seen
+
+    @staticmethod
+    def _seam_result(**over):
+        res = {'url': LP_A, 'deploy_url': LP_D, 'verified': True, 'verify': None, 'warnings': [], 'cleanup_warning': None,
+               'state': {'project': 'pv-12345678', 'task': 'fixture', 'scope': 'team_x'}}
+        res.update(over)
+        return res
+
+    def test_6_the_scope_from_the_module_state_is_remembered_but_never_overwritten(self):
+        _body, seen = self._legacy_via_seam({}, self._seam_result())
+        rec = json.loads(_read(os.environ['DC_TASKS_FILE']))['tasks']['fixture']
+        self.assertEqual(rec['vercel_scope'], 'team_x')
+        self.assertEqual(seen[0][1:4], ('fixture', os.path.join(self.tmp, 'publish'), 'pv-12345678'))
+        _body, _seen = self._legacy_via_seam({'vercel_scope': 'team_old'}, self._seam_result())
+        rec = json.loads(_read(os.environ['DC_TASKS_FILE']))['tasks']['fixture']
+        self.assertEqual(rec['vercel_scope'], 'team_old')
+        _body, _seen = self._legacy_via_seam({}, self._seam_result(state={'project': 'pv-12345678', 'task': 'fixture'}))
+        rec = json.loads(_read(os.environ['DC_TASKS_FILE']))['tasks']['fixture']
+        self.assertNotIn('vercel_scope', rec)
+
+    # ---- 7: publish_remote ----
+
+    def test_7_publish_remote_never_appears_for_the_league(self):
+        obs = self._legacy(LP_OK)
+        self.assertNotIn('publish_remote', obs['iterations_json'])
+        self.assertEqual(obs['iterations_json']['publish_url'], LP_A)
+        self.assertEqual(sorted(obs['iterations_json']), ['iterations', 'publish_url', 'publish_verified', 'published_at'])
+
+    # ---- 8: модуль не завантажився ----
+
+    def test_8_a_module_that_is_not_loaded_is_a_deploy_error_not_a_500(self):
+        real = serve.deai_modules.catalog
+        broken = types.SimpleNamespace(id='vercel-publish', status='error')
+        variants = {'missing': lambda *a, **kw: {k: v for k, v in real(*a, **kw).items() if k != 'vercel-publish'},
+                    'broken': lambda *a, **kw: {**real(*a, **kw), 'vercel-publish': broken}}
+        for name, fake in variants.items():
+            with self.subTest(catalog=name):
+                obs = self._legacy(LP_OK, extra_patches=[mock.patch.object(serve.deai_modules, 'catalog', fake)])
+                self.assertIn('vercel-publish module is not loaded', self._resp(obs)['deploy_error'])
+                self.assertEqual([c for c in obs['npx_calls']], [], 'без модуля жоден vercel не запускався')
+                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
+                self.assertEqual(obs['spies']['overview_sync'], 1)
+                self.assertNotIn('url', self._resp(obs))
+
+    # ---- 9: звичайний простір ----
+
+    def test_9_an_ordinary_space_passes_gated_to_the_module(self):
+        task, tid, its = self._args()
+        prov = types.SimpleNamespace(id='vercel-publish')
+        for secrets, want in (({'password': 'pw1'}, True), ({'password': ''}, False), ({}, False)):
+            with self.subTest(secrets=secrets):
+                seen = []
+
+                def call(module, fn, ctx, build_dir, task_arg, **kw):
+                    seen.append(task_arg)
+                    return {'url': LP_A, 'state': {}, 'verified': True}
+                sent = _Stub()
+                with mock.patch.object(serve.deai_modules, 'module_ctx', lambda sp, p: {'secrets': dict(secrets)}), \
+                     mock.patch.object(serve.deai_modules, 'call', call), \
+                     mock.patch.object(serve, 'publish_comments', lambda *a, **kw: (False, None)), \
+                     mock.patch.object(serve, 'build_preview', lambda *a, **kw: {'dir': self.tmp, 'iterations': 2, 'frames': 0}):
+                    serve._publish_by_url(sent, prov, {}, {'id': 'x'}, tid, task, its)
+                self.assertEqual(sent.sent[0][1]['ok'], True, sent.sent)
+                self.assertIs(seen[0]['gated'], want)
+                self.assertEqual(set(seen[0]), {'id', 'title', 'dir', 'state', 'gated'})
+
+    # ---- 10: транспорту в ядрі нема ----
+
+    def test_10_the_vercel_transport_is_gone_from_the_core(self):
+        src = _read(os.path.join(ROOT, 'app', 'serve.py'))
+        for needle in ("'vercel', 'deploy'", "'vercel', 'link'", "'vercel', 'inspect'", 'def _deploy_urls', 'def _stable_alias',
+                       'def _check_published', 'def _deploy_hint'):
+            self.assertNotIn(needle, src, needle)
+        for name in ('_deploy_urls', '_stable_alias', '_check_published', '_deploy_hint'):
+            self.assertFalse(hasattr(serve, name), name)
+
+    # ---- шов ----
+
+    def test_the_seam_hands_the_module_a_cli_ctx_and_the_gated_task(self):
+        seen = {}
+
+        def call(module, fn, ctx, build_dir, task_arg, **kw):
+            seen.update(module=module.id, fn=fn, ctx=ctx, build_dir=build_dir, task=task_arg)
+            return {'url': LP_A, 'deploy_url': LP_D, 'state': {'project': 'p', 'task': 't'}, 'verified': True}
+        with mock.patch.object(serve.deai_modules, 'call', call):
+            res = serve._publish_legacy_call({'title': 'T', 'dir': '/d', 'vercel_scope': 'team_x'}, 'tid', '/b', 'pv-1', '/bin/npx')
+        self.assertEqual(res['url'], LP_A)
+        self.assertEqual((seen['module'], seen['fn'], seen['build_dir']), ('vercel-publish', 'publish', '/b'))
+        self.assertEqual(seen['task'], {'id': 'tid', 'title': 'T', 'dir': '/d', 'gated': True,
+                                        'state': {'project': 'pv-1', 'task': 'tid', 'scope': 'team_x'}})
+        self.assertEqual(seen['ctx']['settings'], {'auth': 'cli', 'team': ''})
+        self.assertEqual(seen['ctx']['secrets'], {})
+        self.assertEqual(seen['ctx']['find_tool']('npx'), '/bin/npx')
+        self.assertIsNone(seen['ctx']['find_tool']('node'))
+        self.assertIs(seen['ctx']['ModuleError'], serve.deai_modules.ModuleError)
+        for bad in ({'url': LP_A, 'state': {}, 'verified': True},                        # без `deploy_url`
+                    {'url': 'http://x.vercel.app', 'deploy_url': LP_D, 'state': {}, 'verified': True},
+                    {'url': LP_A, 'deploy_url': LP_D, 'state': {}, 'verified': 'yes'}):
+            with self.subTest(bad=bad), mock.patch.object(serve.deai_modules, 'call', lambda *a, **kw: bad):
+                with self.assertRaises(serve.deai_modules.ModuleError):
+                    serve._publish_legacy_call({'title': 'T', 'dir': '/d'}, 'tid', '/b', 'pv-1', '/bin/npx')
+
+    def test_the_scope_is_not_put_in_the_state_when_the_task_has_none(self):
+        seen = {}
+        with mock.patch.object(serve.deai_modules, 'call', lambda m, f, c, b, t, **kw: seen.update(t=t) or
+                               {'url': LP_A, 'deploy_url': LP_D, 'state': {}, 'verified': True}):
+            serve._publish_legacy_call({'title': 'T', 'dir': '/d'}, 'tid', '/b', 'pv-1', '/bin/npx')
+        self.assertEqual(seen['t']['state'], {'project': 'pv-1', 'task': 'tid'})
+
+    def test_a_failure_of_the_module_never_leaves_a_half_written_publication(self):
+        """Відмова модуля: у `iterations.json` нема ні адреси, ні часу публікації, реєстр не чіпано."""
+        obs = self._legacy({**LP_OK, 'deploy': {'code': 1, 'stderr': 'boom'}})
+        self.assertNotIn('publish_url', obs['iterations_json'])
+        self.assertEqual(obs['spies']['registry_push'], [])
+        self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
 
 
 # ============================================================================== Task 4b: диспетчер ролі `publish`
@@ -822,8 +1136,8 @@ class DispatchWorld(unittest.TestCase):
         self.addCleanup(self.trip.stop)
         self.spies = {}
         for owner, name in ((serve.Handler, '_overview_sync'), (serve, '_registry_push'),
-                            (serve, 'git_autocommit'), (serve, '_check_published'), (serve, '_node_bin'),
-                            (serve, '_stable_alias'), (serve, '_remember_vercel_scope')):
+                            (serve, 'git_autocommit'), (serve, '_publish_legacy_call'), (serve, '_node_bin'),
+                            (serve, '_remember_vercel_scope')):
             patch = mock.patch.object(owner, name)
             self.spies[name] = patch.start()
             self.addCleanup(patch.stop)
@@ -3046,7 +3360,8 @@ class UrlTarget(DispatchWorld):
         call, = self.cfg['calls']
         self.assertEqual(call['build_dir'], os.path.join(self.tx_dir, 'publish'))
         self.assertTrue(call['built'], 'модуль викликано до того, як збірка лягла')
-        self.assertEqual(call['task'], {'id': 'tx', 'title': 'Задача tx', 'dir': self.tx_dir, 'state': {}})
+        # `gated` (4b-1): без пароля превʼю — `False` (з паролем `True`: `LegacyPublishViaModule.test_9`)
+        self.assertEqual(call['task'], {'id': 'tx', 'title': 'Задача tx', 'dir': self.tx_dir, 'state': {}, 'gated': False})
         self.assertEqual(call['settings'], {})                 # жодного `folder`: теку модуль «за адресою» не знає
         self.assertEqual(call['secret_keys'], [])
 
@@ -4602,6 +4917,7 @@ class CommentsPublish(DispatchWorld):
             st, body = self.publish({}, task='ty')                 # справжня публікація: без `build_only`
         self.assertEqual((st, body.get('code')), (502, 'module-error'), body)
         self.assertEqual(self.spies['_node_bin'].call_count, 0, 'дійшло до деплою')
+        self.assertEqual(self.spies['_publish_legacy_call'].call_count, 0, 'модуль Vercel не кликано')
         self.assertFalse(os.path.exists(os.path.join(self.ty_dir, 'publish')), 'збірку почато, хоч файл адаптера небезпечний')
 
 

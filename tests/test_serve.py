@@ -2600,13 +2600,12 @@ class PreviewBelongsToOwner(unittest.TestCase):
 class VercelScopeBinding(unittest.TestCase):
     """Імʼя проєкту саме по собі посилання не тримає: у ЧУЖОМУ акаунті
     `vercel link --project <те саме імʼя>` створює ІНШИЙ проєкт, і задача
-    отримує друге посилання. Прив'язка = пара імʼя+скоуп."""
+    отримує друге посилання. Прив'язка = пара імʼя+скоуп.
+
+    4b-1: скоуп приходить значенням (`state.scope` з відповіді модуля `vercel-publish`), а не читається з
+    `publish/.vercel/project.json`; текст відмови будується з КОДУ відмови модуля (`_legacy_deploy_error`)."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix='vs-')
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.pub = os.path.join(self.tmp, 'publish')
-        os.makedirs(os.path.join(self.pub, '.vercel'))
         self._saved = []
         real_save, real_load = serve.save_tasks, serve.load_tasks
         serve.save_tasks = self._saved.append
@@ -2614,42 +2613,50 @@ class VercelScopeBinding(unittest.TestCase):
         self.addCleanup(setattr, serve, 'save_tasks', real_save)
         self.addCleanup(setattr, serve, 'load_tasks', real_load)
 
-    def _project_json(self, **kw):
-        with open(os.path.join(self.pub, '.vercel', 'project.json'), 'w',
-                  encoding='utf-8') as fh:
-            json.dump(kw, fh)
-
-    def test_scope_is_remembered_from_project_json(self):
-        self._project_json(orgId='team_abc', projectName='pv-1')
+    def test_scope_is_remembered_from_the_module_state(self):
         task = {}
-        serve._remember_vercel_scope('x', task, self.pub)
+        serve._remember_vercel_scope('x', task, 'team_abc')
         self.assertEqual(task['vercel_scope'], 'team_abc')
         self.assertEqual(self._saved[0]['tasks']['x']['vercel_scope'], 'team_abc')
 
     def test_existing_scope_is_not_overwritten(self):
-        self._project_json(orgId='team_other')
         task = {'vercel_scope': 'team_ours'}
-        serve._remember_vercel_scope('x', task, self.pub)
+        serve._remember_vercel_scope('x', task, 'team_other')
         self.assertEqual(task['vercel_scope'], 'team_ours')
         self.assertEqual(self._saved, [], 'нічого писати не мали')
 
-    def test_missing_file_is_not_a_crash(self):
-        """Best-effort: без файлу просто не записуємо — про неповну прив'язку
+    def test_missing_scope_is_not_a_crash(self):
+        """Best-effort: без значення просто не записуємо — про неповну прив'язку
         скаже інваріант vercel-binding-unshared, а публікацію валити нема за що."""
-        task = {}
-        serve._remember_vercel_scope('x', task, self.pub)
-        self.assertNotIn('vercel_scope', task)
+        for org in (None, '', 5, ['team_x']):
+            with self.subTest(org=org):
+                task = {}
+                serve._remember_vercel_scope('x', task, org)
+                self.assertNotIn('vercel_scope', task)
+                self.assertEqual(self._saved, [])
 
     def test_foreign_scope_error_gets_its_own_hint(self):
         """Помилка про скоуп мусить давати СВОЮ підказку, а не загальну про
         доступ: причина конкретніша, і дія інша."""
-        hint = serve._deploy_hint("Error: You don't have access to the team 'x'")
+        raw = "Error: You don't have access to the team 'x'"
+        hint = serve._legacy_deploy_error(serve.deai_modules.ModuleError('vercel-scope', message=raw))
         self.assertIn('ДРУГЕ', hint)
         self.assertIn('vercel_scope', hint)
+        self.assertTrue(hint.endswith('\n\n— вивід vercel —\n' + raw))
 
     def test_plain_permission_error_keeps_generic_hint(self):
-        hint = serve._deploy_hint('Error: Forbidden')
+        hint = serve._legacy_deploy_error(serve.deai_modules.ModuleError('vercel-auth', message='Error: Forbidden'))
         self.assertIn('Немає доступу до Vercel-проєкту', hint)
+
+    def test_unrecognised_failures_are_the_raw_tail_without_a_hint(self):
+        """⛔ Причину не вигадуємо: код без підказки (`vercel-deploy`, `module-error`…) — лише хвіст виводу; `vercel-no-url` — свій текст."""
+        err = serve.deai_modules.ModuleError
+        raw = 'x' * 600 + 'ХВІСТ'
+        self.assertEqual(serve._legacy_deploy_error(err('vercel-deploy', message=raw)), raw[-400:])
+        self.assertEqual(serve._legacy_deploy_error(err('module-error', message='vercel-publish module is not loaded')),
+                         'vercel-publish module is not loaded')
+        self.assertEqual(serve._legacy_deploy_error(err('vercel-no-url', message='будь-що')), serve._LEGACY_NO_URL)
+        self.assertEqual(serve._legacy_deploy_error(err('vercel-deploy')), 'vercel-deploy')
 
 
 class RegistryPushGuard(unittest.TestCase):
@@ -3654,15 +3661,11 @@ class PublishFlagsForeignPreview(unittest.TestCase):
     def test_foreign_publish_carries_both_warnings(self):
         url = 'https://pv-11111111-abc123.vercel.app'
 
-        class Done:
-            returncode = 0
-            stdout = f'Production: {url}'
-            stderr = ''
+        done = {'url': url, 'deploy_url': url, 'verified': True, 'verify': None, 'warnings': [], 'cleanup_warning': None,
+                'state': {'project': 'pv-11111111', 'task': 'fixture'}}
 
         with mock.patch.object(serve, '_node_bin', lambda name='npx': '/usr/bin/node'), \
-             mock.patch.object(serve.subprocess, 'run', lambda *a, **kw: Done()), \
-             mock.patch.object(serve, '_stable_alias', lambda u, cwd, extra=(): url), \
-             mock.patch.object(serve, '_check_published', lambda u: {'verified': True}), \
+             mock.patch.object(serve, '_publish_legacy_call', lambda *a: done), \
              mock.patch.object(serve, '_registry_push', lambda tid: False), \
              mock.patch.object(serve, '_remember_vercel_scope', lambda *a: None):
             body = json.load(post(self.base + '/api/publish', {}))
