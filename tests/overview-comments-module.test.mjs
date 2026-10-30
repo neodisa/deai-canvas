@@ -10,7 +10,9 @@
  *                           модулем» (глобал `DeaiComments` чужого модуля) червонить D.
  *   канал — ядра          — `{...config, channel, onChange}` (порядок ключів). Мутація «config після channel» червонить E.
  *   відмови — з текстом   — нема фабрики / падіння `load` / падіння `create`. Мутація «мовчати» червонить F.
- *   ЛІГА не зачеплено     — відповідь БЕЗ `module` у `start()` ходить у CDN Supabase. Охоронець G (по тексту).
+ *   єдиний шлях (4b-2)    — ЛІГА теж веде командний канал модулем (`supabase-comments`): у `start()` нема гілки CDN
+ *                           Supabase / `CommentLayerSupabase`, відповідь без `module` — лише локальний канал. Охоронець G
+ *                           (по тексту), H3 (наскрізь: ЛІГА-подібна відповідь вантажить обидва файли модуля по порядку).
  *   invalidate()          — (фінальне ревʼю 0.5.0) `cl.destroy(); cl = null` у `invalidate()`: без знищення старий шар
  *                           лишається живим і опитує старий сервіс (червонить N). `epoch` + `stale()` у `start()`: без
  *                           епохи запуск, що летів під час `invalidate()`, піднімає шар поверх нового (червонить N3);
@@ -129,13 +131,13 @@ test("F3: ключ errCommentsAdapter є в обох словниках", () => 
   assert.notEqual(DICT.uk.errCommentsAdapter, DICT.en.errCommentsAdapter);
 });
 
-test("G: відповідь без `module` лишається зашитим ЛІГА — CDN Supabase й CommentLayerSupabase, як було", () => {
+test("G: старого шляху ЛІГИ (CDN Supabase, CommentLayerSupabase) нема: відповідь без `module` — лише локальний канал", () => {
   const start = SRC.slice(SRC.indexOf("async function start(key)"), SRC.indexOf("const fail = (e)"));
-  assert.match(start, /if \(cfg\.module\) \{\n(?:\s*\/\/[^\n]*\n)?\s*store = await moduleStore\(cfg\);\n\s*\} else if \(cfg\.ch === "project"\) \{/);
-  assert.match(start, /if \(!window\.supabase\) await loadScript\(SB_JS\);\n\s+store = window\.CommentLayerSupabase\(\{ url: cfg\.sbUrl, anonKey: cfg\.sbKey, projectId: cfg\.project \}\);/);
-  assert.match(start, /window\.CommentLayerLocal\(\{ endpoint: cfg\.endpoint \}\)/);
+  assert.match(start, /if \(cfg\.module\) \{\n(?:\s*\/\/[^\n]*\n)?\s*store = await moduleStore\(cfg\);\n\s*\} else \{\n\s*store = window\.CommentLayerLocal\(\{ endpoint: cfg\.endpoint \}\);/);
   assert.match(start, /projectId: cfg\.module \? cfg\.channel : cfg\.project,/, "канал модуля — ключ коментатора");
-  assert.match(SRC, /const SB_JS = "https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2";/);
+  for (const gone of ["SB_JS", "CommentLayerSupabase", "supabase-js", "sbUrl", "sbKey", "cdn.jsdelivr.net"]) {
+    assert.equal(SRC.includes(gone), false, `${gone} у overview-comments.js`);
+  }
 });
 
 test("F4: адаптер, що не зареєстрував фабрику, не підхоплює залишок попереднього модуля", async () => {
@@ -228,21 +230,27 @@ test("H2: адаптер не завантажився — без винятку
   } finally { b.restore(); }
 });
 
-test("H3: ЛІГА — відповідь без `module` не торкається адаптерів модуля (CDN Supabase, як було)", async () => {
-  const R = { ch: "project", project: "dc/t", version: "1", sbUrl: "https://x.supabase.co", sbKey: "k" };
-  const b = browser({ resp: R, scripts: { "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2": (el) => {
-    globalThis.supabase = {};
-    globalThis.CommentLayerSupabase = (o) => { b.created.push(o); return { ready: Promise.resolve() }; };
-    el.onload();
-  } } });
+test("H3: ЛІГА (4b-2) — відповідь `supabase-comments` вантажить обидва файли модуля по порядку, без CDN Supabase", async () => {
+  const urls = ["/api/module-client/supabase-comments/supabase.min.js", "/api/module-client/supabase-comments/adapter.js"];
+  const R = resp({ module: "supabase-comments", client: urls, config: { url: "https://x.supabase.co", key: "k", shotsBucket: "overview-thumbs" }, channel: "dc/t" });
+  const b = browser({ resp: R, scripts: {
+    [urls[0]]: (el) => { globalThis.supabase = {}; el.onload(); },
+    [urls[1]]: (el) => {
+      globalThis.DeaiComments = { create: (cfg) => { b.created.push(cfg); return { ready: Promise.resolve(), load: () => [], save() {} }; } };
+      el.onload();
+    },
+  } });
   try {
     overviewComments(envFor(b)).enter();
     await settle();
     assert.deepEqual(b.errors, []);
-    assert.deepEqual(b.appended, ["https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"]);
-    assert.deepEqual(b.created, [{ url: "https://x.supabase.co", anonKey: "k", projectId: "dc/t" }]);
-    assert.equal(b.inits[0].projectId, "dc/t");
-  } finally { delete globalThis.supabase; delete globalThis.CommentLayerSupabase; b.restore(); }
+    assert.deepEqual(b.appended, urls, "бібліотека — ДО адаптера, жодного CDN");
+    assert.equal(b.created.length, 1);
+    assert.equal(b.created[0].url, "https://x.supabase.co");
+    assert.equal(b.created[0].shotsBucket, "overview-thumbs");
+    assert.equal(b.created[0].channel, "dc/t");
+    assert.equal(b.inits[0].projectId, "dc/t", "ключ коментатора — канал ЛІГИ");
+  } finally { delete globalThis.supabase; b.restore(); }
 });
 
 test("I: нескидаємий глобал (`var` у скрипті адаптера) не кидає TypeError: скидання — присвоєнням, фабрики немає → помилка словом", async () => {

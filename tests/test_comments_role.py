@@ -1279,6 +1279,8 @@ class PagesEnv(CommentsEnv):
 
     def setUp(self):
         super().setUp()
+        # ЛІГА (4b-2) веде коментарі ВБУДОВАНИМ `supabase-comments`; `tm.Env` підміняє `builtin_dir()` порожньою текою.
+        sbconf._ensure_builtin()
         for key, val in (('DC_NO_OVERVIEW', '1'), ('DC_IDENTITY_NAME', ''), ('DC_IDENTITY_EMAIL', '')):
             prior = os.environ.get(key)
             os.environ[key] = val
@@ -1397,7 +1399,9 @@ class PagesEnv(CommentsEnv):
 class LegacyPagesTest(PagesEnv):
     """ЛІГА й «нічого» — БАЙТ У БАЙТ як до 2b-2: еталони зняті з коду bc2d786 (до Task 2)."""
 
-    def test_the_league_project_page_is_byte_identical(self):
+    def test_the_league_project_page_is_the_builtin_module_page_golden(self):
+        """4b-2: ЄДИНИЙ еталон, що свідомо змінився (разом з `config-legacy-project.json`): сторінка ЛІГИ — сніпет модуля
+        `supabase-comments` (конфіг установки, канал `dc/x`). Решта еталонів теки — ті самі байти, що до 4b-2."""
         self.use(self.liga)
         self.assertEqual(dm.provider('comments', self.liga), 'legacy')
         self.golden('page-legacy-project.html', self.page('project'))
@@ -1418,21 +1422,24 @@ class LegacyPagesTest(PagesEnv):
         dm.write_module_state(self.plain, 'memo-comments', enabled=False)
         self.golden('page-none-project.html', self.page('project'))
 
-    def test_the_league_space_never_gets_the_module_snippet(self):
+    def test_the_league_space_gets_the_builtin_module_snippet_only_on_the_project_channel(self):
+        """4b-2: проєктний канал ЛІГИ — модуль `supabase-comments` (було: «ЛІГА ніколи не отримує сніпета модуля»); локальний
+        канал, як і був, без модуля й без Supabase."""
         self.use(self.liga)
-        for ch in ('project', 'local'):
-            html = self.page(ch)
-            self.assertNotIn('__deaiCommentsCfg', html, ch)
-            self.assertNotIn('/api/module-client/', html, ch)
-            self.assertNotIn('DeaiComments', html, ch)
-        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
+        local = self.page('local')
+        for gone in ('__deaiCommentsCfg', '/api/module-client/', 'DeaiComments', 'cdn.jsdelivr.net', 'supabase'):
+            self.assertNotIn(gone, local, gone)
+        project = self.page('project')
+        self.assertIn('/api/module-client/supabase-comments/adapter.js', project)
+        self.assertEqual(self.cfg_of(project)['url'], sbconf.SB_URL)
+        self.assertNotIn('cdn.jsdelivr.net', project)
 
     def test_comment_config_legacy_none_and_local_keep_their_bodies(self):
         self.use(self.liga)
         st, body = self.fetch('/api/comment-config?ch=project&it=it1')
         self.assertEqual(st, 200)
         self.golden('config-legacy-project.json', body)
-        self.assertEqual(set(json.loads(body)), {'ch', 'project', 'version', 'sbUrl', 'sbKey'})
+        self.assertEqual(set(json.loads(body)), {'ch', 'module', 'client', 'config', 'channel', 'version'})
         self.use(self.plain)
         st, body = self.fetch('/api/comment-config?ch=project&it=it1')
         self.assertEqual(st, 409)
@@ -1492,13 +1499,15 @@ class LeaguePrivacyTest(PagesEnv):
             self.assertNotIn(shared, html, shared)
 
     def test_controls_a_disabled_or_absent_entry_keeps_the_league_snippet(self):
+        # Шлях ЛІГИ з 4b-2 — вбудований `supabase-comments` з конфігом установки (було: зашитий сніпет з CDN Supabase).
         self.break_module()
-        dm.write_module_state(self.liga, 'memo-comments', enabled=False)             # людина вимкнула — шлях ЛІГА
+        dm.write_module_state(self.liga, 'memo-comments', enabled=False)             # людина вимкнула — шлях ЛІГИ
         html = self.page('project')
-        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', html)
+        self.assertIn('/api/module-client/supabase-comments/adapter.js', html)
+        self.assertEqual(self.cfg_of(html)['url'], sbconf.SB_URL)
         self.assertEqual(self.fetch('/api/comment-config?ch=project&it=it1')[0], 200)
         _write(self.space_json(self.liga), json.dumps({'name': 'x'}))                # запису нема взагалі
-        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
+        self.assertIn('/api/module-client/supabase-comments/adapter.js', self.page('project'))
 
 
 class PlainSpaceLostModuleTest(PagesEnv):
@@ -1552,7 +1561,7 @@ class PlainSpaceLostModuleTest(PagesEnv):
     def test_a_stale_unrelated_entry_keeps_the_league_snippet_in_a_league_space(self):
         self.use(self.liga)
         _write(self.space_json(self.liga), json.dumps({'modules': {'ghost': {'enabled': True}}}))
-        self.assertIn('cdn.jsdelivr.net/npm/@supabase/supabase-js@2', self.page('project'))
+        self.assertIn('/api/module-client/supabase-comments/adapter.js', self.page('project'))
         self.assertEqual(self.fetch('/api/comment-config?ch=project&it=it1')[0], 200)
         self.assertNotIn('error', self.capabilities())
 
@@ -1780,14 +1789,17 @@ class ModulePagesTest(PagesEnv):
 class GoldenPinTest(unittest.TestCase):
     """Еталони ЛІГА/«нічого» — зняті з коду bc2d786 ДО Task 2 і є доказом «байт у байт, як було». `UPDATE_COMMENTS_GOLDEN=1`
     перезнімає їх з коду, що на диску, — тож без цього піна можна було б непомітно «оновити» еталон під зламану розмітку.
-    Хеші нижче — єдиний спосіб змінити еталон свідомо: правка ЛІГА навмисна → перезняти, подивитись diff очима, тут оновити."""
+    Хеші нижче — єдиний спосіб змінити еталон свідомо: правка ЛІГА навмисна → перезняти, подивитись diff очима, тут оновити.
+
+    4b-2 свідомо переписала РІВНО два еталони: `page-legacy-project.html` і `config-legacy-project.json` (проєктний канал ЛІГИ
+    тепер іде вбудованим модулем `supabase-comments`); решта — ті самі байти, що були."""
 
     PINNED = {
-        'config-legacy-project.json': '0dab770156c984497b9c24b8c7f3f860e08754f80e3023a02b82aa5a9bde190a',
+        'config-legacy-project.json': '1902c6bb59f0e32bd20068d5979940a97ad392a2752b161bbc841509c4ef5892',
         'config-none-local.json': '02da2eb3d4f6b11c77b32765877cbdd7cd498c2b4bb02af86cb340c5d49024a3',
         'config-none-project.json': 'c995db0e753b0270167a9e610c1aac33bee715677792cf86cfb430cd50e7bb32',
         'page-legacy-local.html': '2dc27d049848297412db855195a4a469a9d8e92bd585d74b82aeea34e07aff08',
-        'page-legacy-project.html': '94c5899b220782ece33862b568457f0f37d2c008798481ff2d192fcf923feb12',
+        'page-legacy-project.html': '28ebf5739a8580881964c44194fe9a45d0b68223c184d97f0715575317c560fb',
         'page-none-project.html': '56b9b4779251d9157e4ccd490f0ceb2643bde1504aeebdba591259f70acc5dfb',
     }
 
@@ -1846,12 +1858,16 @@ class SnippetUnitTest(unittest.TestCase):
         self.assertEqual(json.loads(m.group(1)), self.HOSTILE)
 
     def test_the_banner_function_is_the_same_as_the_league_one(self):
-        """Копія банера для модульної сторінки не розходиться з ЛІГА-шною (шаблон ЛІГА чіпати не можна, тож копія ЖИВЕ)."""
-        pat = re.compile(r'window\.__clDown = function \(why\) \{\{.*?\n\}\};', re.S)
-        legacy, mine = pat.search(serve.COMMENT_SNIPPET), pat.search(serve._COMMENT_DOWN_BANNER)
+        """Банер модульної сторінки не розходиться зі СТАРИМ ЛІГА-шним (4b-2: шаблону `COMMENT_SNIPPET` уже нема — еталон
+        старого банера лежить у знімку сторінки `tests/fixtures/legacy-comments/old-snippet-page.html`)."""
+        old = _read(os.path.join(ROOT, 'tests', 'fixtures', 'legacy-comments', 'old-snippet-page.html')).decode('utf-8')
+        pat = re.compile(r'window\.__clDown = function \(why\) \{.*?\n\};', re.S)
+        legacy = pat.search(old)
+        mine = pat.search(serve._COMMENT_DOWN_BANNER.replace('{{', '{').replace('}}', '}'))
         self.assertIsNotNone(legacy)
         self.assertIsNotNone(mine)
         self.assertEqual(mine.group(0), legacy.group(0))
+        mine = re.search(r'window\.__clDown = function \(why\) \{\{.*?\n\}\};', serve._COMMENT_DOWN_BANNER, re.S)
         self.assertEqual(serve.MODULE_COMMENT_SNIPPET.count(mine.group(0)), 1, 'модульний сніпет несе той самий банер')
 
 
@@ -1940,9 +1956,9 @@ class SingleSpaceResolutionTest(PagesEnv):
             seen['provider'] = space
             return real_p(role, space)
 
-        def c(space, prov):
+        def c(space, prov, ctx=None):          # 4b-2: необовʼязковий готовий `ctx` (ЛІГА — з конфігу установки)
             seen['client'] = space
-            return real_c(space, prov)
+            return real_c(space, prov, ctx)
         for name, fn in (('provider', p), ('comments_client', c)):
             patch = mock.patch.object(dm, name, fn)
             patch.start()

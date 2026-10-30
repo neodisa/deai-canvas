@@ -18,7 +18,6 @@ import { t } from "./i18n.js";
 import { stateQuery } from "./flow-model.js";
 import { cardAt, cardsOfPin, hitElement, layoutPins, pinWorld, revealCam, targetFor } from "./overview-pins.js";
 
-const SB_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
 const ENRICH_MS = 8000;       // стеля збагачення — та сама, що в comment-layer на скриншот
 const MAX_OUTER_HTML = 6000;  // як `context-bundle.js`: рядок у Supabase не росте
 const SHOT_MAX_W = 360;       // як скриншот DOM-режиму
@@ -348,11 +347,8 @@ export function overviewComments(env) {
     if (stale()) return;   // поки чекали — перемкнули канал чи ітерацію, або `invalidate()` змінив модулі
     let store;
     if (cfg.module) {
-      // Командний канал веде модуль ролі `comments`: його адаптер, а не зашитий Supabase ЛІГА.
+      // Командний канал веде модуль ролі `comments` (у ЛІГИ — вбудований `supabase-comments`): його адаптер.
       store = await moduleStore(cfg);
-    } else if (cfg.ch === "project") {
-      if (!window.supabase) await loadScript(SB_JS);
-      store = window.CommentLayerSupabase({ url: cfg.sbUrl, anonKey: cfg.sbKey, projectId: cfg.project });
     } else {
       store = window.CommentLayerLocal({ endpoint: cfg.endpoint });
     }

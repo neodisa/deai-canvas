@@ -28,22 +28,28 @@ import import_preview as ip  # noqa: E402
 import serve  # noqa: E402
 
 
-def setUpModule():
-    # Конфіг Supabase ЛІГА — підставний (4b-2: констант у `serve.py` нема): без нього `inject_comment_layer` не дає
-    # сніпета, а тут стереться саме сніпет. Вигадані значення; справжній `tasks.json` установки не читається.
-    cfg = mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.co', 'sb_publishable_test'))
-    cfg.start()
-    unittest.addModuleCleanup(cfg.stop)
-
 PAGE = ('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
         '<title>Картка «Ромашка»</title><link rel="stylesheet" href="../assets/app.css">'
         '</head><body><h1>Картка</h1><img src="../icons/a.svg" srcset="../icons/a.svg 1x, ../icons/a@2x.svg 2x">'
         '<script type="module" src="../main.js"></script></body></html>')
 
 
+# Сніпет ЛІГИ 0.9.0 (4b-2: шаблону `COMMENT_SNIPPET` у `serve.py` більше нема) — з ЗНІМКА `old-snippet-page.html`
+# (Task 1): сторінка `PAGE` із канальним сніпетом `chan`/`1/kartka`/`../comment-layer`. Опубліковані превʼю в обігу ще
+# його несуть, тож імпорт мусить його вирізати й надалі.
+_OLD_SNIPPET_PAGE = os.path.join(os.path.dirname(HERE), 'tests', 'fixtures', 'legacy-comments', 'old-snippet-page.html')
+
+
+def _old_league_snippet():
+    with open(_OLD_SNIPPET_PAGE, encoding='utf-8') as fh:
+        page = fh.read()
+    return page[page.index('\n<script>\n/* Банер'):-len('</body></html>')]
+
+
 def published(html, depth_up='../'):
-    """Рівно те, що робить `serve.build_preview` зі сторінкою."""
-    out = serve.inject_comment_layer(html, 'chan', f'{depth_up}comment-layer', version='1/kartka')
+    """Рівно те, що робила збірка ЛІГИ 0.9.0 зі сторінкою: сніпет зі знімка `old-snippet-page.html` перед `</body>` і гейт.
+    Зашитого шаблону вже нема, тож це перевірка на ЗАМОРОЖЕНИХ маркерах (`import_preview._SNIPPET_START`)."""
+    out = serve._insert_before_body(html, _old_league_snippet().replace('../comment-layer', f'{depth_up}comment-layer'))
     return serve._inject_gate(out, serve.gate_html('t', '1100'))
 
 

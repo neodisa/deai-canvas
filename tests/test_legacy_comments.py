@@ -51,6 +51,11 @@ def tearDownModule():
     spaces_guard.assert_untouched(_REAL)
 
 
+def _text(path):
+    with open(path, encoding='utf-8') as fh:
+        return fh.read()
+
+
 def _boom(*a, **k):
     raise AssertionError('urlopen не мав бути викликаний')
 
@@ -244,31 +249,12 @@ class TeamsRpcTest(_Env):
             serve.teams_rpc('teams_mute_state', {})
 
 
-class InjectWithoutConfigTest(_Env):
-    """⛔ `inject_comment_layer` без конфігу НЕ повертає `''`: викликачі пишуть `html = inject_comment_layer(html, …)`, і
-    порожній рядок стер би ВСЮ сторінку. Сніпет вставляється з порожніми адресою й ключем (банер скаже «недоступні»)."""
-
-    HTML = '<html><head><title>t</title></head><body><h1>Мокап</h1></body></html>'
-
-    def test_page_survives_and_snippet_has_empty_url_and_key(self):
-        self.write({'tasks': {}})
-        out = serve.inject_comment_layer(self.HTML, 'dc/t1', '/app/vendor', version='1')
-        self.assertNotEqual(out, '')
-        self.assertIn('<h1>Мокап</h1>', out)
-        self.assertIn("url: '', anonKey: ''", out)
-        self.assertIn('window.__clDown', out)
-        self.assertLess(out.index('<h1>Мокап</h1>'), out.index("url: '', anonKey: ''"))
-
-    def test_with_config_the_snippet_carries_the_pair(self):
-        # контроль до тесту вище: ті самі виклик і розмітка, але з конфігом
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
-        out = serve.inject_comment_layer(self.HTML, 'dc/t1', '/app/vendor', version='1')
-        self.assertIn(f"url: '{URL}', anonKey: '{KEY}'", out)
-        self.assertIn('<h1>Мокап</h1>', out)
-
-
 class LigaRoutesWithoutConfigTest(tcr.PagesEnv):
-    """Справжній сервер, простір ЛІГА (інтеграції, без модуля коментарів), конфігу Supabase НЕМА ні в файлі, ні в оточенні."""
+    """Справжній сервер, простір ЛІГА (інтеграції, без модуля коментарів), конфігу Supabase НЕМА ні в файлі, ні в оточенні.
+
+    ⛔ Сторінка без конфігу НЕ стирається і НЕ несе порожніх адреси й ключа (так було до 4b-2: `inject_comment_layer` без
+    конфігу вставляв сніпет з `url: ''` і банер «недоступні»): вона лишається РОБОЧОЮ — локальний шар коментарів — і каже
+    причину приміткою з кодом `comments-unconfigured`; вкладки «Команда» нема (вона вела б у ту саму відмову)."""
 
     def setUp(self):
         super().setUp()
@@ -287,9 +273,155 @@ class LigaRoutesWithoutConfigTest(tcr.PagesEnv):
             self.assertNotIn(leaked, raw)
 
     def test_project_page_keeps_its_content_and_says_comments_are_down(self):
+        """Заміна двох старих перевірок `InjectWithoutConfigTest` (сторінка живе без конфігу; порожня адреса в сніпеті):
+        тепер сторінка локальна + примітка, а порожніх `url: ''` у розмітці нема взагалі."""
         html = self.page('project')
         self.assertIn('<h1>x</h1>', html)
-        self.assertIn("url: '', anonKey: ''", html)
+        self.assert_local_with_notice(html, 'comments-unconfigured')
+        self.assertNotIn("url: ''", html)
+
+
+class LegacyPagesTest(tcr.PagesEnv):
+    """Сторінки ЛІГИ після 4b-2: `/commented?ch=project`, `/api/comment-config`, превʼю — через вбудований
+    `supabase-comments` (`comments_route`). Диференційно проти знімка 0.9.0 (`before-4b2.json`): канал, версія, прапорці
+    аудиторій/інспектора ті самі; змінюється лише ШЛЯХ (модуль замість зашитого Supabase). Задачі: `t1`
+    (`comment_project: proj/alpha`, поточна) і `t2` (без нього, ітерація `it1` опублікована)."""
+
+    def setUp(self):
+        super().setUp()
+        # Простори пишуться в тимчасовий `DEAI_HOME`, а не у справжній `~/.deai`: `Env.setUp` уже виставив його, тут він
+        # підтверджений явно (так вимагає охоронець `test_serve.TestsCannotWriteLiveConfig`); оточення відновлює `Env.tearDown`.
+        os.environ['DEAI_HOME'] = self.deai
+        self.before = json.load(open(BEFORE, encoding='utf-8'))
+        self.use(self.liga)
+        sp = self.liga
+        tasks = {}
+        for tid, extra in (('t1', {'comment_project': 'proj/alpha'}), ('t2', {})):
+            self.write_task(sp, tid)                    # теки й `iterations.json`; `tasks.json` перепишемо нижче
+            tasks[tid] = {'title': tid, 'dir': os.path.join(sp['path'], tid), 'profile': 'tool', **extra}
+        tcr._write(os.path.join(sp['path'], 'tasks.json'),
+                   json.dumps({'design_work_root': sp['path'], 'current': 't1', 'tasks': tasks}))
+        tcr._write(os.path.join(tasks['t2']['dir'], 'iterations.json'), json.dumps(
+            {'iterations': [{'id': 'it1', 'date': '01.01.2026 10:00', 'note': 'start', 'published': True}],
+             'publish_url': None}))
+        self.t2 = tasks['t2']
+
+    @staticmethod
+    def facts(html):
+        """Ті самі «факти сторінки», що знімок `before-4b2.json` брав зі старого сніпета."""
+        m = re.search(r'version: ("(?:[^"\\]|\\.)*")', html)
+        return {'version': json.loads(m.group(1)),
+                'audiences': 'audiences:' in html, 'inspector': '/inspector.js' in html}
+
+    def build(self, comments):
+        task, its = self.t2, [{'id': 'it1', 'published': True}]
+        return serve.build_preview(task, 't2', its, comments=comments, gate_pw='1100', build='legacy')
+
+    # ---- /commented?ch=project ---------------------------------------------------------------------------------------
+
+    def test_the_work_page_is_the_module_page_with_the_recorded_channel_and_flags(self):
+        html = self.page('project')
+        cfg = self.cfg_of(html)
+        want = self.before['page_work']
+        self.assertEqual(cfg['channel'], want['channel'])
+        self.assertEqual((cfg['url'], cfg['key'], cfg['shotsBucket']), (sbconf.SB_URL, sbconf.SB_KEY, 'overview-thumbs'))
+        f = self.facts(html)
+        self.assertEqual((f['audiences'], f['inspector']), (want['audiences'], want['inspector']))
+        self.assertEqual(f['version'], serve.pm.page_version_tag('it1', {'id': serve.pm.IMPLICIT_ID}))
+        for src in ('/api/module-client/supabase-comments/supabase.min.js', '/api/module-client/supabase-comments/adapter.js'):
+            self.assertEqual(html.count(f'src="{src}"'), 1, src)
+        self.assertLess(html.index('supabase.min.js'), html.index('adapter.js'), 'бібліотека — ДО адаптера')
+        for gone in ('cdn.jsdelivr.net/npm/@supabase', 'supabase-adapter.min.js', 'CommentLayerSupabase', 'sbUrl'):
+            self.assertNotIn(gone, html, gone)
+
+    def test_the_work_page_of_a_task_without_comment_project_uses_the_dc_channel(self):
+        tcr._write(os.path.join(self.liga['path'], 'tasks.json'), json.dumps(
+            {'design_work_root': self.liga['path'], 'current': 't2',
+             'tasks': {'t2': {'title': 't2', 'dir': self.t2['dir'], 'profile': 'tool'}}}))
+        self.assertEqual(self.cfg_of(self.page('project'))['channel'], self.before['channels']['t2'])
+
+    def test_the_snippet_facts_are_the_recorded_ones_for_both_kinds_of_page(self):
+        """Функція-проти-знімка: ті самі аргументи, що знімав `record_before.py` (`version`, `inspector`, `audiences`)."""
+        def snippet(**kw):
+            return serve.inject_module_comment_layer('<html><body></body></html>', '/app/vendor', [], {'channel': 'c'}, **kw)
+        work = self.facts(snippet(version='1/main', inspector=True, audiences=True))
+        pub = self.facts(snippet(version='2/kartka'))
+        for got, key in ((work, 'page_work'), (pub, 'page_publish')):
+            want = self.before[key]
+            self.assertEqual(got, {'version': want['version'], 'audiences': want['audiences'],
+                                   'inspector': want['inspector']}, key)
+
+    # ---- превʼю -----------------------------------------------------------------------------------------------------
+
+    def test_the_preview_carries_exactly_the_layer_and_the_module_adapter_files(self):
+        comments, warn = serve.publish_comments(self.liga, self.t2, 't2')
+        self.assertIsNone(warn)
+        pub = self.build(comments)['dir']
+        self.assertEqual(sorted(os.listdir(os.path.join(pub, 'comment-layer'))),
+                         ['adapter.js', 'comment-layer.min.js', 'supabase.min.js'])
+        html = _text(os.path.join(pub, 'it1', 'index.html'))
+        cfg = self.cfg_of(html)
+        self.assertEqual(cfg['channel'], self.before['page_publish']['channel'])
+        self.assertEqual(cfg['shotsBucket'], 'overview-thumbs')
+        f = self.facts(html)
+        self.assertEqual((f['audiences'], f['inspector']),
+                         (self.before['page_publish']['audiences'], self.before['page_publish']['inspector']))
+        self.assertEqual(f['version'], serve.pm.page_version_tag('it1', {'id': serve.pm.IMPLICIT_ID}))
+        for name in ('supabase.min.js', 'adapter.js', 'comment-layer.min.js'):
+            self.assertEqual(html.count(f'src="../comment-layer/{name}"'), 1, name)
+        for gone in ('cdn.jsdelivr.net/npm/@supabase', 'supabase-adapter.min.js', 'CommentLayerSupabase', '/api/module-client/'):
+            self.assertNotIn(gone, html, gone)
+        man = json.loads(_text(os.path.join(pub, 'manifest.json')))
+        self.assertEqual(man['build'], 'legacy')
+
+    def test_publish_comments_for_the_league(self):
+        comments, warn = serve.publish_comments(self.liga, self.t2, 't2')
+        self.assertIsNone(warn)
+        self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'dc/t2'))
+        self.assertEqual(set(comments['config']), {'url', 'key', 'shotsBucket'})
+        self.assertEqual(serve.publish_comments(self.liga, self.t2, 't2', module_publish=True), (False, None))
+
+    def test_publish_comments_without_config_is_comments_unconfigured_and_the_build_carries_nothing(self):
+        for name in ('SUPABASE_URL', 'SUPABASE_KEY'):
+            os.environ.pop(name, None)
+        self.assertEqual(serve.publish_comments(self.liga, self.t2, 't2'), (False, 'comments-unconfigured'))
+        pub = self.build(False)['dir']
+        self.assertFalse(os.path.exists(os.path.join(pub, 'comment-layer')))
+        self.assertNotIn('CommentLayer', _text(os.path.join(pub, 'it1', 'index.html')))
+
+    def test_build_preview_true_is_a_value_error_before_the_disk_is_touched(self):
+        pub = os.path.join(self.t2['dir'], 'publish')
+        os.makedirs(pub)
+        keep = os.path.join(pub, 'keep.txt')
+        tcr._write(keep, 'попередня збірка')
+        with self.assertRaises(ValueError):
+            self.build(True)
+        self.assertEqual(os.listdir(pub), ['keep.txt'])
+        self.assertEqual(_text(keep), 'попередня збірка')
+
+    # ---- /api/comment-config ----------------------------------------------------------------------------------------
+
+    def test_comment_config_is_the_module_shape(self):
+        st, body = self.config('project')
+        self.assertEqual(st, 200)
+        self.assertEqual(set(body), {'ch', 'module', 'client', 'config', 'channel', 'version'})
+        self.assertEqual((body['ch'], body['module']), ('project', 'supabase-comments'))
+        self.assertEqual(body['client'], ['/api/module-client/supabase-comments/supabase.min.js',
+                                          '/api/module-client/supabase-comments/adapter.js'])
+        self.assertEqual(body['config'], {'url': sbconf.SB_URL, 'key': sbconf.SB_KEY, 'shotsBucket': 'overview-thumbs'})
+        self.assertEqual(body['channel'], self.before['channels']['t1'])
+        for gone in ('sbUrl', 'sbKey', 'project'):
+            self.assertNotIn(gone, body)
+
+    # ---- старий шлях зник -------------------------------------------------------------------------------------------
+
+    def test_the_old_comment_path_is_gone(self):
+        for name in ('COMMENT_SNIPPET', 'inject_comment_layer', 'INTERNAL_TINT'):
+            self.assertFalse(hasattr(serve, name), name)
+        self.assertFalse(os.path.exists(os.path.join(ROOT, 'app', 'vendor', 'supabase-adapter.min.js')))
+        self.assertTrue(os.path.isfile(os.path.join(_HERE, 'fixtures', 'legacy-comments', 'supabase-adapter.min.js')))
+        with open(os.path.join(ROOT, 'app', 'index.html'), encoding='utf-8') as fh:
+            self.assertNotIn('supabase-adapter', fh.read())
 
 
 class OverviewSyncTest(_Env):

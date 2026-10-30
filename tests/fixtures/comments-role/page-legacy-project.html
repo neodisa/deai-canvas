@@ -1,12 +1,5 @@
 <!DOCTYPE html><html><head><base href="{ORIGIN}/it-assets/it1/"><title>t</title></head><body><h1>x</h1>
 <script>
-/* Банер — ПЕРШИМ тегом, ДО трьох `<script src>` нижче: без async/defer вони
-   виконуються ПОСЛІДОВНО, і `onerror` кожного з них спрацьовує РАНІШЕ, ніж
-   встиг би виконатись цей код, якби він (як було до ревʼю) жив у скрипті
-   ініціалізації внизу. У тій версії заблокований CDN не показував банер
-   ЗОВСІМ: `window.__clDown` на момент `onerror` ще не існував, і охоронець
-   `window.__clDown&&…` мовчки гасив виклик — перевірено живцем. Порядок тут
-   несучий, а не косметика. */
 window.__clDown = function (why) {
   if (document.getElementById('cl-down')) return;
   var d = document.createElement('div');
@@ -18,38 +11,31 @@ window.__clDown = function (why) {
   (document.body || document.documentElement).appendChild(d);
 };
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="window.__clDown('бібліотека Supabase не завантажилась')"></script>
-<script src="{ORIGIN}/app/vendor/supabase-adapter.min.js" onerror="window.__clDown('адаптер коментарів не завантажився')"></script>
 <script src="{ORIGIN}/app/vendor/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>
+<script src="/api/module-client/supabase-comments/supabase.min.js" onerror="window.__clDown('адаптер коментарів не завантажився')"></script>
+<script src="/api/module-client/supabase-comments/adapter.js" onerror="window.__clDown('адаптер коментарів не завантажився')"></script>
 <script type="module" src="{ORIGIN}/app/vendor/inspector.js?ds=tool&sp={SP}"></script>
 <script>
+window.__deaiCommentsCfg = {"url": "{SB_URL}", "key": "{SB_KEY}", "shotsBucket": "overview-thumbs", "channel": "dc/x"};
 (function () {
   var init = function () {
-    if (!window.CommentLayerSupabase || !window.CommentLayer) {
+    var cfg = window.__deaiCommentsCfg, store;
+    if (!window.CommentLayer || !window.DeaiComments) {
       window.__clDown('шар коментарів не піднявся');
       return;
     }
-    /* Синхронний try/catch, а НЕ лише `.catch()` на `store.ready` нижче:
-       `CommentLayerSupabase(...)` сам, ПОЗА промісом, кличе
-       `window.supabase.createClient(...)` — коли CDN не піднявся (мережевий
-       збій АБО 200 із порожнім/битим тілом, який `onerror` вище не ловить
-       узагалі), `window.supabase` не існує, і виклик кидає ДО того, як
-       `store`/`store.ready` встигли зʼявитись. Без цієї гілки виняток летів
-       необробленим у консоль (перевірено живцем:
-       `TypeError: Cannot read properties of undefined (reading 'createClient')`),
-       а банер так і не малювався. */
-    var store;
     try {
-      store = window.CommentLayerSupabase({
-        url: '{SB_URL}', anonKey: '{SB_KEY}', projectId: 'dc/x',
-      });
+      store = window.DeaiComments.create(Object.assign({}, cfg, { onChange: function () {} }));
+      if (!store || typeof store.load !== 'function' || typeof store.save !== 'function') {
+        throw new Error('адаптер повернув сховище без load/save');
+      }
     } catch (e) {
       window.__clDown((e && e.message) || 'адаптер не зміг піднятись');
       return;
     }
-    store.ready.then(function () {
-      window.CommentLayer.init({ projectId: 'dc/x', storage: store,
-        version: '1',
+    Promise.resolve(store.ready).then(function () {
+      window.CommentLayer.init({ projectId: cfg.channel, storage: store,
+        version: "1",
         audiences: (function () {
           var uk = { local: 'Клод', team: 'Команда' };
           var en = { local: 'Claude', team: 'Team' };
@@ -67,7 +53,7 @@ window.__clDown = function (why) {
           window.parent.postMessage({ type: 'dc-audience', ch: id }, '*');
         } });
     }).catch(function (e) {
-      window.__clDown((e && e.message) || 'база не відповіла');
+      window.__clDown((e && e.message) || 'сервіс коментарів не відповів');
     });
   };
   if (document.readyState !== 'loading') init();

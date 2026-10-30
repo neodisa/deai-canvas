@@ -88,7 +88,6 @@ export const DICT_FILE = "i18n.js";
  *  лишається в кожного своє. */
 export const VENDOR_MIN = new Set([
   "vendor/comment-layer.min.js",
-  "vendor/supabase-adapter.min.js",
 ]);
 
 /** Прочитати файл під `app/` за відносним шляхом. */

@@ -831,7 +831,8 @@ class Routes(World):
         self.assertEqual(self.trip.hits, [])
         st, body = self.jget('/api/comment-config?ch=project&it=it1', self.A)
         self.assertEqual((st, body['ch']), (200, 'project'))
-        self.assertIn('sbUrl', body)
+        self.assertEqual(body['module'], 'supabase-comments')        # 4b-2: ЛІГА — вбудований модуль (було: `sbUrl` у тілі)
+        self.assertEqual(body['config']['url'], sbconf.SB_URL)
 
     def test_commented_project_is_downgraded_to_local_without_audience_tabs(self):
         st, html = self.get('/commented?it=it1&ch=project')

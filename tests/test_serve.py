@@ -207,7 +207,7 @@ class ServeTest(unittest.TestCase):
         self.assertIn('authgate', it_page)
         self.assertNotIn('inspector', it_page)        # і у ВНУТРІШНІЙ сторінці теж
         # ⛔ Вкладки аудиторій — теж лише робоче місце. Сторож стоїть на самому
-        # АРТЕФАКТІ, а не на сигнатурі `inject_comment_layer`: `audiences` там
+        # АРТЕФАКТІ, а не на сигнатурі `inject_module_comment_layer`: `audiences` там
         # прапорець із дефолтом `False`, тож тест функції зеленів би і після
         # `audiences=True`, дописаного у виклик `_publish`. Ціна помилки —
         # робочий фідбек Клоду, запропонований сторонньому глядачеві на
@@ -3131,6 +3131,13 @@ class PreviewWrapper(unittest.TestCase):
 
 
 
+def _project_layer(html, project, assets, **kw):
+    """Командний канал робочого місця (4b-2: єдиний сніпет — модульний, ЛІГА теж): те, що до 0.10.0 робила
+    `inject_comment_layer(html, project, assets, …)` (її вже нема); адаптер — як у ЛІГИ (`supabase.min.js` → `adapter.js`)."""
+    urls = ['/api/module-client/supabase-comments/supabase.min.js', '/api/module-client/supabase-comments/adapter.js']
+    return serve.inject_module_comment_layer(html, assets, urls, {'channel': project}, **kw)
+
+
 class InspectorDsProfile(unittest.TestCase):
     """Напрямок задачі доїжджає в документ макета — інакше звіряти нема з чим.
 
@@ -3141,7 +3148,7 @@ class InspectorDsProfile(unittest.TestCase):
     """
 
     def test_profile_rides_in_the_module_url(self):
-        html = serve.inject_comment_layer(
+        html = _project_layer(
             "<html><body></body></html>", "p", "/vendor",
             inspector=True, profile="united")
         self.assertIn("inspector.js?ds=united", html)
@@ -3154,7 +3161,7 @@ class InspectorDsProfile(unittest.TestCase):
     def test_no_profile_means_no_parameter(self):
         """Порожньо — і це ЧЕСНА відповідь: невідомий напрямок вимикає звірку
         (`setDsProfile`), а вигаданий звіряв би макет із чужою ДС."""
-        html = serve.inject_comment_layer(
+        html = _project_layer(
             "<html><body></body></html>", "p", "/vendor", inspector=True)
         self.assertIn('src="/vendor/inspector.js"', html)
 
@@ -3162,7 +3169,7 @@ class InspectorDsProfile(unittest.TestCase):
         """У параметр URL, що їде в розмітку, не сміє потрапити нічого, крім
         простого імені напрямку."""
         for junk in ('u"><script>x</script>', "../../etc", "a b", "x" * 40):
-            html = serve.inject_comment_layer(
+            html = _project_layer(
                 "<html><body></body></html>", "p", "/vendor",
                 inspector=True, profile=junk)
             self.assertIn('src="/vendor/inspector.js"', html)
@@ -3218,7 +3225,7 @@ class InspectorSpaceParam(unittest.TestCase):
             self.assertEqual(serve.inspector_ds_arg('', sp), '', repr(junk))
 
     def test_project_channel_carries_it(self):
-        html = serve.inject_comment_layer(
+        html = _project_layer(
             "<html><body></body></html>", "p", "/vendor",
             inspector=True, profile="united", space=self.real)
         self.assertIn('inspector.js?ds=united&sp=design-1"', html)
@@ -3230,9 +3237,9 @@ class InspectorSpaceParam(unittest.TestCase):
 
     def test_no_space_means_the_old_markup_byte_for_byte(self):
         """Без простору розмітка така сама, як до Task 7: гарантія для публікації й для старих задач."""
-        a = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+        a = _project_layer("<html><body></body></html>", "p", "/vendor",
                                        inspector=True, profile="united")
-        b = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+        b = _project_layer("<html><body></body></html>", "p", "/vendor",
                                        inspector=True, profile="united", space=None)
         self.assertEqual(a, b)
         self.assertNotIn('sp=', a)
@@ -3248,7 +3255,7 @@ class InspectorSpaceParam(unittest.TestCase):
             self.assertEqual(serve.inspector_ds_arg('united'), '?ds=united')
             self.assertEqual(serve.inspector_ds_arg(''), '')
             for html in (
-                serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+                _project_layer("<html><body></body></html>", "p", "/vendor",
                                            inspector=True, profile="united"),
                 serve.inject_local_comment_layer("<html><body></body></html>", "/e", "p", "/vendor",
                                                  profile="united"),
@@ -3258,8 +3265,8 @@ class InspectorSpaceParam(unittest.TestCase):
     def test_space_without_inspector_adds_nothing(self):
         """`inspector=False` (публікація, `build_preview`) — тега інспектора нема, а отже й `sp`:
         параметр простору сам по собі розмітку не змінює."""
-        base = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor")
-        withsp = serve.inject_comment_layer("<html><body></body></html>", "p", "/vendor",
+        base = _project_layer("<html><body></body></html>", "p", "/vendor")
+        withsp = _project_layer("<html><body></body></html>", "p", "/vendor",
                                             space=self.real)
         self.assertEqual(base, withsp)
         self.assertNotIn('inspector', base)
@@ -3268,105 +3275,52 @@ class InspectorSpaceParam(unittest.TestCase):
 class CommentSnippetSelfReports(unittest.TestCase):
     """Шар коментарів, який не піднявся, мусить сказати це на сторінці.
 
-    Сніпет тягне supabase-js з CDN. Без обробки помилки колега на превʼю бачить
-    сторінку без пінів і робить висновок, що коментарів немає, — замість
-    «коментарі зараз недоступні».
+    Сніпет тягне шар коментатора, бібліотеку Supabase й адаптер модуля з нашого сервера. Без обробки помилки колега
+    на превʼю бачить сторінку без пінів і робить висновок, що коментарів немає, — замість «коментарі зараз недоступні».
 
-    ⛔ Тести тут чіпляються за КОД, а не за слова. Перша версія перевіряла
-    `assertIn('onerror', …)` і `assertIn('catch', …)` по всьому тексту шаблону —
-    а половина того тексту це українські коментарі, у яких обидва слова
-    трапляються самі по собі. Ревʼю 28.08.2026 зняло ВСІ чотири запобіжники
-    одразу (три `onerror=`, гейт `!window.CommentLayerSupabase`, синхронний
-    try/catch і `.catch()` на `store.ready`) — весь `tests.test_serve` лишився
-    зеленим. Тест, зелений на повністю знятій обробці помилок, обіцяє більше,
-    ніж дає, — той самий клас, що весь цей батч.
-
-    Справжній сторож поведінки — два ЖИВІ тести в `tests/live/canvas.test.mjs`
-    («мережевий збій CDN Supabase — банер зʼявляється одразу через onerror» і
-    «CDN віддав 200 з порожнім тілом — try/catch ловить крах фабрики»): вони
-    піднімають браузер на справжньому сніпеті й ріжуть CDN. Ці лишаються як
-    дешева регресія, що біжить у кожному `npm test`.
+    4b-2: сніпет один — модульний (`MODULE_COMMENT_SNIPPET`; зашитий сніпет Supabase зник). Ці перевірки — старі
+    запобіжники того сніпета, перенесені на модульний: тест, зелений на повністю знятій обробці помилок, обіцяє більше,
+    ніж дає (ревʼю 28.08.2026 зняло ВСІ чотири запобіжники — весь `tests.test_serve` лишився зеленим), тож вони
+    чіпляються за КОД, а не за слова. Поведінку виконує `test_comments_role.LoaderRuntimeTest` (node, `vm`), а живі
+    тести в `tests/live/canvas.test.mjs` ріжуть мережу в справжньому браузері.
     """
 
     def _code(self):
-        """Готовий до віддачі сніпет, з якого прибрані `/* … */`.
-
-        Шаблон формуємо, а не читаємо сирим: у браузер їде саме результат
-        `.format()`, та й подвоєні дужки `{{`/`}}` шаблону інакше довелось би
-        тягнути в кожне твердження. Коментарі прибираємо, щоб жодне твердження
-        не могло випадково справдитись прозою.
-        """
-        body = serve.COMMENT_SNIPPET.format(
-            project='dc/t1', assets='/vendor', version='it1',
-            sb_url='https://x.supabase.co', sb_key='sb_publishable_X',
-            # Тег інспектора підставляємо СПРАВЖНІЙ, а не порожній рядок: у
-            # робочому каналі в браузер їде саме такий сніпет, і перевірки нижче
-            # мусять бачити рівно його. Лічильник «три <script src>» він не
-            # зачіпає — регулярка навмисно бере голий `<script src=`, а
-            # інспектор іде як `<script type="module" src=`.
-            inspector=serve.INSPECTOR_TAG.format(assets='/vendor', ds=''),
-            # Аудиторії — теж СПРАВЖНІ, з тієї ж причини, що інспектор: у
-            # робочому каналі в браузер їде саме такий `init`, і перевірки
-            # нижче мусять бачити рівно його. Порожній рядок тут зробив би
-            # цей клас сліпим до найдорожчої з можливих помилок — зайвого
-            # `<script>` між банером і трьома тегами коментарів.
-            audiences=serve.audiences_arg('project'))
+        """Готовий до віддачі сніпет (з справжнім інспектором і аудиторіями), з якого прибрані `/* … */`: жодне
+        твердження не може справдитись прозою коментаря."""
+        body = _project_layer('<html><body></body></html>', 'dc/t1', '/vendor', version='it1',
+                              inspector=True, audiences=True)
         return re.sub(r'/\*.*?\*/', '', body, flags=re.S)
 
     def test_every_script_tag_reports_its_own_failure(self):
-        """Кожен `<script src>` мусить мати ВЛАСНИЙ `onerror` у банер.
-
-        Саме тег, а не сніпет «десь»: три теги — три різні причини (CDN
-        Supabase, наш адаптер, сам шар), і мовчазний серед них дає рівно ту
-        сторінку без пінів, від якої написаний банер.
-        """
+        """Кожен `<script src>` мусить мати ВЛАСНИЙ `onerror` у банер: шар, бібліотека й адаптер — три різні причини, і
+        мовчазний серед них дає рівно ту сторінку без пінів, від якої написаний банер. Інспектор — НЕ тут (його падіння
+        збрехало б про коментарі), тож він іде як `type="module"` і регулярка його не бере."""
         tags = re.findall(r'<script src=[^>]*>', self._code())
-        self.assertEqual(len(tags), 3,
-                         f'очікуємо три теги <script src>, знайдено: {tags}')
+        self.assertEqual(len(tags), 3, f'очікуємо шар + два файли адаптера: {tags}')
         for tag in tags:
-            self.assertRegex(tag, r'onerror="window\.__clDown\(',
-                             f'тег без onerror мовчить при збої: {tag}')
+            self.assertRegex(tag, r'onerror="window\.__clDown\(', f'тег без onerror мовчить при збої: {tag}')
 
     def test_init_reports_the_failures_the_tags_cannot_see(self):
-        """Три запобіжники, повз які `onerror` тегів не бачить нічого.
-
-        `onerror` спрацьовує лише на МЕРЕЖЕВОМУ збої. 200 з порожнім тілом,
-        бібліотека, що завантажилась і не оголосила глобалів, база, яка не
-        відповіла на вже піднятому адаптері — усе це успішні запити. Кожна з
-        трьох гілок мусить закінчуватись банером, інакше сторінка знову мовчить.
-        """
+        """Три запобіжники, повз які `onerror` тегів не бачить нічого (він ловить лише МЕРЕЖЕВИЙ збій): глобалів нема, хоч
+        файли приїхали; синхронний крах створення сховища (ДО `store.ready` — промісом не ловиться в принципі); сервіс не
+        відповів на вже піднятому сховищі. Кожна гілка мусить закінчуватись банером."""
         code = self._code()
-        # Глобалів немає, хоч усі три файли приїхали (200 з битим тілом).
-        self.assertRegex(
-            code, r'!window\.CommentLayerSupabase[\s\S]{0,120}?window\.__clDown\(',
-            'гейт на глобали мусить вести в банер')
-        # СИНХРОННИЙ крах фабрики: `window.supabase` немає, і виклик кидає ДО
-        # того, як зʼявився `store.ready`, — промісом це не ловиться в принципі.
-        self.assertRegex(
-            code, r'try\s*\{\s*store = window\.CommentLayerSupabase\(',
-            'виклик фабрики мусить стояти під синхронним try')
-        self.assertRegex(
-            code, r'\}\s*catch\s*\([^)]*\)\s*\{\s*window\.__clDown\(',
-            'catch фабрики мусить вести в банер')
-        # База не відповіла вже після вдалого підйому адаптера.
-        self.assertRegex(
-            code, r'\.catch\(function\s*\([^)]*\)\s*\{\s*window\.__clDown\(',
-            '.catch() на store.ready мусить вести в банер')
+        self.assertRegex(code, r'!window\.CommentLayer \|\| !window\.DeaiComments[\s\S]{0,120}?window\.__clDown\(',
+                         'гейт на глобали мусить вести в банер')
+        self.assertRegex(code, r'try\s*\{\s*store = window\.DeaiComments\.create\(',
+                         'створення сховища мусить стояти під синхронним try')
+        self.assertRegex(code, r'\}\s*catch\s*\([^)]*\)\s*\{\s*window\.__clDown\(', 'catch мусить вести в банер')
+        self.assertRegex(code, r'\.catch\(function\s*\([^)]*\)\s*\{\s*window\.__clDown\(',
+                         '.catch() на store.ready мусить вести в банер')
 
-    def test_down_banner_declared_before_the_cdn_script_tags(self):
-        """Підрядковий тест ловить лише ТЕКСТ, а не поведінку — сторожем є живий
-        тест у `tests/live/canvas.test.mjs` («CDN Supabase — банер...»). Цей
-        лишається як дешева регресія на конкретний баг: банер `window.__clDown`
-        мусить визначатись у ПЕРШОМУ тегу, ДО трьох `<script src>` — інакше
-        `onerror` цих тегів спрацьовує РАНІШЕ, ніж `__clDown` взагалі існує
-        (класичні скрипти виконуються послідовно), і охоронець `&&` мовчки
-        гасить виклик на реальному збої CDN. Знайдено ревʼю 27.08.2026.
-        """
-        import serve
-        banner_at = serve.COMMENT_SNIPPET.index('window.__clDown = function')
-        first_src_at = serve.COMMENT_SNIPPET.index('<script src=')
-        self.assertLess(banner_at, first_src_at,
-                        'window.__clDown мусить визначатись ДО перших <script src>')
+    def test_down_banner_declared_before_the_script_tags(self):
+        """Банер `window.__clDown` мусить визначатись у ПЕРШОМУ тегу, ДО `<script src>`: інакше `onerror` цих тегів
+        спрацьовує РАНІШЕ, ніж `__clDown` існує (класичні скрипти виконуються послідовно), і охоронець `&&` мовчки гасить
+        виклик на реальному збої. Знайдено ревʼю 27.08.2026."""
+        banner_at = serve.MODULE_COMMENT_SNIPPET.index('window.__clDown = function')
+        first_src_at = serve.MODULE_COMMENT_SNIPPET.index('<script src=')
+        self.assertLess(banner_at, first_src_at, 'window.__clDown мусить визначатись ДО перших <script src>')
 
 
 class InspectorPerAudience(unittest.TestCase):
@@ -3377,7 +3331,7 @@ class InspectorPerAudience(unittest.TestCase):
     обʼєкт. Тег `inspector.js` жив лише в `LOCAL_COMMENT_SNIPPET`, а кнопка
     інспектора в смузі не зникала — `inspectorApi()` тихо віддавав `null`.
 
-    ⛔ Прапорець, а не тег просто в шаблоні: `COMMENT_SNIPPET` має ДВОХ
+    ⛔ Прапорець, а не тег просто в шаблоні: сніпет коментарів має ДВОХ
     адресатів — `/commented?ch=project` (робоче місце дизайнера) і `_publish`
     (статика для колег). Тег «у шаблоні назавжди» поїхав би в publish, де
     (а) спека інспектора не хоче — це інструмент дизайнера, і кожен зайвий
@@ -3393,7 +3347,7 @@ class InspectorPerAudience(unittest.TestCase):
     TAG = '<script type="module" src="/app/vendor/inspector.js">'
 
     def _project(self, inspector):
-        return serve.inject_comment_layer(
+        return _project_layer(
             self.HTML, 'dc/t1', '/app/vendor', version='1', inspector=inspector)
 
     def test_project_channel_carries_inspector(self):
@@ -3545,7 +3499,7 @@ class AudienceTabsPerChannel(unittest.TestCase):
     зовсім (сторож — `comment-layer/test/audiences.test.mjs`).
 
     ⛔ Прапорець на ВИКЛИКУ, як і в інспектора, з тієї ж причини:
-    `COMMENT_SNIPPET` має двох адресатів — `/commented?ch=project` і
+    сніпет коментарів має двох адресатів — `/commented?ch=project` і
     `_publish`. Вкладки в publish дали б сторонньому глядачеві кнопку
     «Клод», за якою стоїть локальний файл на машині дизайнера: 404 у нього і
     запрошення слати робочий фідбек у нікуди. Це вимога конфіденційності
@@ -3565,7 +3519,7 @@ class AudienceTabsPerChannel(unittest.TestCase):
     HTML = '<html><body><h1>Мокап</h1></body></html>'
 
     def _project(self, audiences):
-        return serve.inject_comment_layer(
+        return _project_layer(
             self.HTML, 'dc/t1', '/app/vendor', version='1', audiences=audiences)
 
     def _local(self, audiences=True):
@@ -3863,11 +3817,13 @@ class ShotsEndpoints(unittest.TestCase):
     def test_comment_config_project(self):
         body = json.load(urllib.request.urlopen(f'{self.base}/api/comment-config?ch=project&it=it1'))
         self.assertEqual(body['ch'], 'project')
-        # той самий канал, що `_commented` дає рамці (`comment_channel`)
-        self.assertEqual(body['project'], 'dc/fixture')
+        # той самий канал, що `_commented` дає рамці (`comment_channel`); 4b-2: форма модуля `supabase-comments`
+        self.assertEqual(body['channel'], 'dc/fixture')
+        self.assertEqual(body['module'], 'supabase-comments')
         self.assertEqual(body['version'], '1')
-        self.assertEqual(body['sbUrl'], sbconf.SB_URL)
-        self.assertEqual(body['sbKey'], sbconf.SB_KEY)
+        self.assertEqual(body['config'], {'url': sbconf.SB_URL, 'key': sbconf.SB_KEY, 'shotsBucket': 'overview-thumbs'})
+        for gone in ('project', 'sbUrl', 'sbKey'):
+            self.assertNotIn(gone, body)
 
     def test_comment_config_refuses_unknown_channel(self):
         for q in ('ch=evil&it=it1', 'ch=local&it=../x'):

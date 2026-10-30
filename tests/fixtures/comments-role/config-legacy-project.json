@@ -1,1 +1,1 @@
-{"ch": "project", "project": "dc/x", "version": "1", "sbUrl": "{SB_URL}", "sbKey": "{SB_KEY}"}
+{"ch": "project", "module": "supabase-comments", "client": ["/api/module-client/supabase-comments/supabase.min.js", "/api/module-client/supabase-comments/adapter.js"], "config": {"url": "{SB_URL}", "key": "{SB_KEY}", "shotsBucket": "overview-thumbs"}, "channel": "dc/x", "version": "1"}

@@ -8,12 +8,12 @@
 
 Що доводиться:
   * `comments=False` — у дереві нема ні `comment-layer/`, ні жодного рядка `supabase`, ні
-    ін'єкції в сторінках; контроль (`comments=True`) ту саму ін'єкцію МАЄ — без контролю «нема»
-    нічого б не доводило;
+    ін'єкції в сторінках; контроль (рішення ЛІГИ — словник `supabase-comments`, 4b-2) ту саму ін'єкцію МАЄ —
+    без контролю «нема» нічого б не доводило;
   * `gate_pw=None` — обгортка відкривається сама (`__gateOpen`), `authgate` нема ніде, `<title>`
     сторінок не чіпаний, а в обгортку не їде `'None'` замість пароля;
   * `gate_pw='x'` — гейт і в обгортці, і в КОЖНІЙ внутрішній сторінці (інцидент 03.08.2026);
-  * шлях ЛІГА — `/api/publish` кличе `build_preview(comments=True, gate_pw=<preview_password>)`, його
+  * шлях ЛІГА — `/api/publish` кличе `build_preview(comments=<`publish_comments`>, gate_pw=<preview_password>)`, його
     дерево збігається з прямим викликом, а відповідь має ті самі ключі в тому ж порядку (порядок
     ключів JSON спостережуваний).
 
@@ -258,6 +258,15 @@ class TaskFixture(unittest.TestCase):
         its = [i for i in serve.load_meta(task).get('iterations', []) if i.get('published')]
         return task, tid, its
 
+    def _league(self):
+        """Рішення про коментарі для збірки ЛІГА (4b-2): вбудований `supabase-comments` з підставним конфігом установки
+        (`setUpModule`) і каналом `dc/<задача>` — те саме, що `Handler._publish` отримує з `publish_comments`."""
+        task, tid, _its = self._args()
+        comments, warn = serve.publish_comments(None, task, tid)
+        self.assertIsNone(warn)
+        self.assertIsInstance(comments, dict)
+        return comments
+
     def _build(self, **kw):
         task, tid, its = self._args()
         kw.setdefault('build', 'legacy')          # хто збирає — обовʼязковий аргумент; за замовчуванням тут «ЛІГА»
@@ -305,7 +314,7 @@ class BuildPreview(TaskFixture):
     # ---- форма результату --------------------------------------------------------------------
 
     def test_result_has_the_publish_shape_without_ok_and_code_stale(self):
-        res = self._build(comments=True, gate_pw='x')
+        res = self._build(comments=self._league(), gate_pw='x')
         self.assertEqual(list(res), ['dir', 'iterations', 'frames'])
         self.assertEqual(res['dir'], os.path.join(self.tmp, 'publish'))
         self.assertEqual((res['iterations'], res['frames']), (2, 0))
@@ -316,7 +325,7 @@ class BuildPreview(TaskFixture):
         os.makedirs(shots)
         with open(os.path.join(shots, 'manifest.json'), 'w', encoding='utf-8') as fh:
             fh.write('{битий')
-        res = self._build(comments=True, gate_pw='x')
+        res = self._build(comments=self._league(), gate_pw='x')
         self.assertEqual(list(res), ['dir', 'iterations', 'frames', 'frames_warnings'])
         self.assertTrue(any('it1' in w for w in res['frames_warnings']), res['frames_warnings'])
         self.assertTrue(os.path.isfile(os.path.join(res['dir'], 'it1', 'alpha', 'index.html')))
@@ -342,7 +351,7 @@ class BuildPreview(TaskFixture):
 
     def test_the_mark_is_the_only_difference_in_the_manifest(self):
         """ЛІГА-збірка змінилась рівно на одне поле маніфесту: прибери його — решта байт у байт та сама."""
-        pub = self._build(comments=True, gate_pw='x')['dir']
+        pub = self._build(comments=self._league(), gate_pw='x')['dir']
         with_mark = json.loads(_read(os.path.join(pub, 'manifest.json')))
         self.assertEqual(with_mark.pop('build'), 'legacy')
         legacy_tree = _tree(pub)
@@ -382,9 +391,10 @@ class BuildPreview(TaskFixture):
 
     def test_comments_on_is_the_control_for_the_comments_off_checks(self):
         """Без цього контролю «у дереві нема supabase» могло б бути простою відсутністю фічі."""
-        pub = self._build(comments=True, gate_pw='x')['dir']
-        for b in serve.BUNDLES:
+        pub = self._build(comments=self._league(), gate_pw='x')['dir']
+        for b in ('comment-layer.min.js', 'supabase.min.js', 'adapter.js'):          # шар + файли адаптера модуля
             self.assertTrue(os.path.isfile(os.path.join(pub, 'comment-layer', b)), b)
+        self.assertFalse(os.path.exists(os.path.join(pub, 'comment-layer', 'supabase-adapter.min.js')))
         for rel in self._inner_pages(pub):
             html = _read(os.path.join(pub, rel))
             self.assertIn('CommentLayer.init', html, rel)
@@ -398,22 +408,23 @@ class BuildPreview(TaskFixture):
         """Етап 2а, Task 7: `sp=<id простору>` іде в URL інспектора ЛИШЕ на робочому місці дизайнера
         (`/commented`). Опублікована сторінка (Vercel чи тека) до `/api/ds-tokens` дістатись не може, а
         збірка ЛІГА мусить лишитись байт-у-байт такою, як була: `build_preview` кличе
-        `inject_comment_layer` без `inspector`, `profile` і `space`. Простір ТУТ підставлено справжній
+        `inject_module_comment_layer` без `inspector`, `profile` і `space`. Простір ТУТ підставлено справжній
         (інакше шар вимкнено, `describe` дає `None`, і тест не бачив би витоку, навіть якби він був)."""
         real = {'id': 'design-1', 'path': self.tmp, 'legacy': False, 'integrations': False}
         self.assertIsNotNone(serve.spaces.describe(real), 'контроль: цей простір для describe реальний')
         calls = []
-        orig = serve.inject_comment_layer
+        orig = serve.inject_module_comment_layer
 
         def spy(*a, **kw):
             calls.append(kw)
             return orig(*a, **kw)
         with mock.patch.object(serve.spaces, 'active_space', return_value=real), \
-                mock.patch.object(serve, 'inject_comment_layer', spy):
-            pub = self._build(comments=True, gate_pw='x')['dir']
+                mock.patch.object(serve, 'inject_module_comment_layer', spy):
+            pub = self._build(comments=self._league(), gate_pw='x')['dir']
         self.assertEqual(len(calls), len(SOURCE_PAGES), 'кожна сторінка пройшла через інʼєкцію')
         for kw in calls:
-            self.assertEqual(set(kw) - {'version'}, set(), f'публікація передала зайве: {sorted(kw)}')
+            self.assertEqual(set(kw) - {'version', 'inspector', 'audiences'}, set(), f'публікація передала зайве: {sorted(kw)}')
+            self.assertEqual((kw.get('inspector'), kw.get('audiences')), (False, False))
         for rel in self._inner_pages(pub) + ['index.html']:
             html = _read(os.path.join(pub, rel))
             self.assertNotIn('sp=', html, rel)
@@ -445,8 +456,8 @@ class BuildPreview(TaskFixture):
     # ---- gate --------------------------------------------------------------------------------
 
     def test_no_gate_wrapper_opens_itself_and_pages_are_untouched(self):
-        for comments in (True, False):
-            with self.subTest(comments=comments):
+        for label, comments in (('league', self._league()), ('off', False)):
+            with self.subTest(comments=label):
                 pub = self._build(comments=comments, gate_pw=None)['dir']
                 wrapper = _read(os.path.join(pub, 'index.html'))
                 # ТОЧНИЙ маркер, а не підрядок: у справжнього гейта `window.__gateOpen=true;` теж є
@@ -472,7 +483,7 @@ class BuildPreview(TaskFixture):
             self._build(comments=False, gate_pw=None)
 
     def test_gate_is_in_the_wrapper_and_in_every_inner_page(self):
-        pub = self._build(comments=True, gate_pw='x')['dir']
+        pub = self._build(comments=self._league(), gate_pw='x')['dir']
         wrapper = _read(os.path.join(pub, 'index.html'))
         self.assertIn('authgate', wrapper)
         self.assertNotIn('<script>window.__gateOpen=true;</script>', wrapper)   # самовідкриття — лише без гейта
@@ -528,7 +539,7 @@ class BuildPreview(TaskFixture):
         for gate_pw in ('x', None):
             with self.subTest(gate_pw=gate_pw):
                 with self.assertRaises(ValueError):
-                    serve.build_preview(task, tid, [], comments=True, gate_pw=gate_pw, build='legacy')
+                    serve.build_preview(task, tid, [], comments=self._league(), gate_pw=gate_pw, build='legacy')
                 self.assertEqual(os.listdir(pub), ['keep.txt'])
                 self.assertEqual(_read(keep), 'попередня збірка')
 
@@ -549,7 +560,9 @@ class BuildPreview(TaskFixture):
                 self.assertTrue(body['ok'], body)
                 self.assertEqual(bp.call_count, 1)
                 args, kwargs = bp.call_args
-                self.assertEqual(kwargs, {'comments': True, 'gate_pw': want, 'build': 'legacy'})
+                comments = kwargs.pop('comments')
+                self.assertEqual(kwargs, {'gate_pw': want, 'build': 'legacy'})
+                self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'dc/fixture'))
                 self.assertEqual((args[1], [i['id'] for i in args[2]]), ('fixture', ['it1', 'it2']))
                 # гейт справді несе саме цей пароль — на КОЖНІЙ сторінці
                 self.assertEqual(serve.preview_gate_state(args[0], want)['state'], 'current')
@@ -559,9 +572,10 @@ class BuildPreview(TaskFixture):
         body = json.load(_post(base + '/api/publish', {'build_only': True}))
         via_http = _tree(body['dir'])
         pw = serve.preview_password(serve.load_tasks(), self._args()[0])
-        direct = _tree(self._build(comments=True, gate_pw=pw)['dir'])
+        direct = _tree(self._build(comments=self._league(), gate_pw=pw)['dir'])
         self.assertEqual(via_http, direct)
         self.assertIn('comment-layer/comment-layer.min.js', direct)
+        self.assertIn('comment-layer/adapter.js', direct)
 
     def test_league_publish_response_keeps_keys_and_their_order(self):
         """`ok` першим, далі `dir`/`iterations`/`frames`, потім `frames_warnings`, потім `code_stale`:
@@ -3136,7 +3150,7 @@ class ResealModuleBuilds(TaskFixture):
     def test_a_league_build_is_resealed_and_deployed(self):
         """Контроль: без нього «модуль пропущено» могло б означати, що reseal не робить нічого."""
         task, tid, its = self._args()
-        serve.build_preview(task, tid, its, comments=True, build='legacy',
+        serve.build_preview(task, tid, its, comments=self._league(), build='legacy',
                             gate_pw=serve.preview_password(serve.load_tasks(), task))
         out, deployed = self._reseal('fixture')
         self.assertIn('передеплоєно', out)
@@ -3158,6 +3172,12 @@ class ResealModuleBuilds(TaskFixture):
 
     def _manifest_path(self):
         return os.path.join(self.tmp, 'publish', 'manifest.json')
+
+    def _with_the_old_league_bundle(self):
+        """Збірка ЛІГИ ДО 0.10.0 везла в `comment-layer/` ще й бандл `supabase-adapter.min.js`; збірки 4b-2 — ні (адаптер дає
+        модуль). Запасне правило `reseal_gate` для збірок БЕЗ мітки розпізнає ЛІГУ саме за ним, тож старий склад
+        відтворюємо копією ЗНІМКА старого бандла (`tests/fixtures/legacy-comments/`)."""
+        shutil.copy2(OLD_LEAGUE_ADAPTER, os.path.join(self.tmp, 'publish', 'comment-layer', 'supabase-adapter.min.js'))
 
     def _drop_build_mark(self):
         """Збірка, зроблена ДО мітки: той самий маніфест без ключа `build`."""
@@ -3193,8 +3213,9 @@ class ResealModuleBuilds(TaskFixture):
 
     def test_the_mark_wins_over_the_content_of_comment_layer_in_both_directions(self):
         task, tid, its = self._args()
-        # `module` + повний набір бандлів ЛІГА → усе одно модуль (не деплоїмо)
-        serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='module')
+        # `module` + повний набір СТАРИХ бандлів ЛІГА → усе одно модуль (не деплоїмо)
+        serve.build_preview(task, tid, its, comments=self._league(), gate_pw='1100', build='module')
+        self._with_the_old_league_bundle()
         out, deployed = self._reseal('fixture')
         self.assertIn('мітка збірки build: module', out)
         self.assertEqual(deployed, [])
@@ -3206,7 +3227,8 @@ class ResealModuleBuilds(TaskFixture):
 
     def test_an_old_league_build_without_the_mark_is_resealed_by_its_bundles(self):
         task, tid, its = self._args()
-        serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='legacy')
+        serve.build_preview(task, tid, its, comments=self._league(), gate_pw='1100', build='legacy')
+        self._with_the_old_league_bundle()
         self._drop_build_mark()
         out, deployed = self._reseal('fixture')
         self.assertIn('передеплоєно', out)
@@ -3241,7 +3263,8 @@ class ResealModuleBuilds(TaskFixture):
         task, tid, its = self._args()
         for garbage in ('{broken', '[]', '{"build": "other"}', '{"build": null}', '{"build": 7}'):
             with self.subTest(manifest=garbage):
-                serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='legacy')
+                serve.build_preview(task, tid, its, comments=self._league(), gate_pw='1100', build='legacy')
+                self._with_the_old_league_bundle()
                 with open(self._manifest_path(), 'w', encoding='utf-8') as fh:
                     fh.write(garbage)
                 out, deployed = self._reseal('fixture')
@@ -3278,7 +3301,7 @@ class ResealModuleBuilds(TaskFixture):
         meta = serve.load_meta(task)
         meta['publish_local'] = {'module': 'static-publish', 'path': '/x', 'published_at': '2026-10-15T10:00:00Z'}
         serve.save_meta(task, meta)
-        serve.build_preview(task, tid, its, comments=True, gate_pw='1100', build='legacy')
+        serve.build_preview(task, tid, its, comments=self._league(), gate_pw='1100', build='legacy')
         out, deployed = self._reseal('fixture')
         self.assertEqual(len(deployed), 1, out)
         meta.pop('publish_local')
@@ -4200,6 +4223,8 @@ class UrlTarget(DispatchWorld):
 
 # ============================================================================ 2b-2, Task 3: превʼю з коментарями модуля
 
+#: Знімок старого бандла адаптера ЛІГИ (до 0.10.0): у `app/vendor/` його більше нема.
+OLD_LEAGUE_ADAPTER = os.path.join(ROOT, 'tests', 'fixtures', 'legacy-comments', 'supabase-adapter.min.js')
 MEMO_ID = 'memo-comments'
 MEMO_SRC = os.path.join(ROOT, 'tests', 'fixtures', 'modules', MEMO_ID)
 LAYER_SRC = os.path.join(ROOT, 'app', 'vendor', 'comment-layer.min.js')
@@ -4220,6 +4245,8 @@ def _memo_provider(case):
     mods = tempfile.mkdtemp(prefix='dc-bp-mods-')
     case.addCleanup(shutil.rmtree, mods, True)
     _copy_module(MEMO_SRC, mods)
+    # ЛІГА (4b-2) веде коментарі вбудованим `supabase-comments`: у світі з підміненим каталогом він мусить бути поруч.
+    _copy_module(os.path.join(ROOT, 'app', 'modules', 'supabase-comments'), mods)
     patch = mock.patch.object(dm, 'builtin_dir', lambda: mods)
     patch.start()
     case.addCleanup(patch.stop)
@@ -4345,16 +4372,26 @@ class CommentsBuild(TaskFixture):
             self.assertIn('window.__deaiCommentsCfg', html, rel)
         self.assertEqual(serve.preview_gate_state(self._args()[0], 'x')['state'], 'current')
 
-    def test_the_two_kinds_of_snippet_never_borrow_from_each_other(self):
-        """Збірка модуля не кличе шаблон ЛІГА, збірка ЛІГА — шаблон модуля."""
-        with mock.patch.object(serve, 'inject_comment_layer', side_effect=AssertionError('шаблон ЛІГА')):
+    def test_the_league_build_and_a_module_build_share_one_template_and_differ_only_in_the_adapter_files(self):
+        """4b-2: окремого шаблону ЛІГИ нема (було: «два види сніпета не позичають один в одного»). Обидві збірки йдуть через
+        `inject_module_comment_layer`; ЛІГА везе файли вбудованого `supabase-comments`, модуль — свої."""
+        calls = []
+        orig = serve.inject_module_comment_layer
+
+        def spy(html, assets_base, client_urls, config, **kw):
+            calls.append((client_urls, config))
+            return orig(html, assets_base, client_urls, config, **kw)
+        with mock.patch.object(serve, 'inject_module_comment_layer', spy):
             self._build(comments=self.comments(), gate_pw=None)
-        with mock.patch.object(serve, 'inject_module_comment_layer', side_effect=AssertionError('шаблон модуля')):
-            pub = self._build(comments=True, gate_pw=None)['dir']
-        self.assertEqual(sorted(os.listdir(os.path.join(pub, 'comment-layer'))), sorted(serve.BUNDLES))
+            module_calls, calls[:] = list(calls), []
+            pub = self._build(comments=self._league(), gate_pw=None)['dir']
+        self.assertEqual(len(module_calls), len(calls), 'одна ін\'єкція на сторінку в обох збірках')
+        self.assertTrue(all(urls[-1].endswith('/adapter.js') for urls, _cfg in calls + module_calls))
+        self.assertEqual(sorted(os.listdir(os.path.join(pub, 'comment-layer'))),
+                         ['adapter.js', 'comment-layer.min.js', 'supabase.min.js'])
         self.assertIn('CommentLayer.init', _read(os.path.join(pub, 'it2', 'index.html')))
 
-    def test_anything_but_true_false_or_a_complete_module_dict_raises_before_touching_the_disk(self):
+    def test_anything_but_false_or_a_complete_module_dict_raises_before_touching_the_disk(self):
         pub = os.path.join(self.tmp, 'publish')
         os.makedirs(pub)
         keep = os.path.join(pub, 'keep.txt')
@@ -4370,6 +4407,7 @@ class CommentsBuild(TaskFixture):
         self.assertEqual(broken.status, 'error')
         cases = {
             "'legacy' (значення постачальника, а не рішення збірки)": 'legacy', 'None': None, '1': 1, '0': 0,
+            'True (4b-2: шляху «зашитий Supabase» нема)': True,
             'порожній словник': {},
             'без channel': {'module': self.prov, 'config': {}},
             'без config': {'module': self.prov, 'channel': self.channel},
@@ -4457,7 +4495,7 @@ class CommentsBuild(TaskFixture):
         sys.path.insert(0, os.path.join(ROOT, 'bin'))
         self.addCleanup(sys.path.remove, os.path.join(ROOT, 'bin'))
         import import_preview as ip
-        for label, comments in (('legacy', True), ('module', self.comments())):
+        for label, comments in (('legacy', self._league()), ('module', self.comments())):
             for gate_pw in ('x', None):
                 with self.subTest(comments=label, gate=gate_pw is not None):
                     pub = self._build(comments=comments, gate_pw=gate_pw)['dir']
@@ -4481,19 +4519,29 @@ class PublishCommentsDecision(TaskFixture):
         super().setUp()
         self.prov, _mods = _memo_provider(self)
 
-    def decide(self, prov, *, module_publish, tid='t1', err=None, config=None, config_error=None):
+    CTX = {'ctx': 'sentinel'}         # `module_ctx` підставний: простір `/nowhere` справжнього `space.json` не має
+
+    def decide(self, prov, *, module_publish, tid='t1', err=None, config=None, config_error=None, task=None):
         asked = []
         provider = mock.patch.object(serve, 'comments_provider',
                                      lambda space: (asked.append(space), (prov, err))[1])
         client = mock.patch.object(dm, 'comments_client', mock.Mock(
             side_effect=config_error, return_value=config if config is not None else {'endpoint': ENDPOINT}))
-        with provider, client as cc:
-            out = serve.publish_comments(self.SPACE, tid, module_publish=module_publish)
+        with provider, client as cc, mock.patch.object(dm, 'module_ctx', return_value=self.CTX):
+            out = serve.publish_comments(self.SPACE, task or {}, tid, module_publish=module_publish)
         self.assertEqual(asked, [self.SPACE], 'простір передається провайдеру як є, один раз')
         return out, cc
 
-    def test_the_league_comments_are_the_league_snippet_only_on_the_league_path(self):
-        self.assertEqual(self.decide('legacy', module_publish=False)[0], (True, None))
+    def test_the_league_comments_are_the_builtin_module_only_on_the_league_path(self):
+        """4b-2: ЛІГА на своєму шляху — словник вбудованого `supabase-comments` з каналом ЛІГИ (`comment_project` задачі чи
+        `dc/<задача>`) і готовим `ctx` з конфігу установки; у збірці МОДУЛЯ публікації — як і було, `False`."""
+        (comments, warn), cc = self.decide('legacy', module_publish=False, task={'comment_project': 'proj/alpha'})
+        self.assertIsNone(warn)
+        self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'proj/alpha'))
+        self.assertEqual(self.decide('legacy', module_publish=False)[0][0]['channel'], 'dc/t1')
+        ((space, prov, ctx), _kw), = cc.call_args_list[:1]
+        self.assertEqual((space, prov.id), (self.SPACE, 'supabase-comments'))
+        self.assertEqual(ctx['settings'], {'url': sbconf.SB_URL, 'shots_bucket': serve.LEGACY_SHOTS_BUCKET})
         self.assertEqual(self.decide('legacy', module_publish=True)[0], (False, None))
 
     def test_no_provider_means_no_comments_on_both_paths(self):
@@ -4516,7 +4564,7 @@ class PublishCommentsDecision(TaskFixture):
                 self.assertIs(comments['module'], self.prov)
                 self.assertEqual(comments['config'], {'endpoint': ENDPOINT, 'pubkey': 'p'})
                 self.assertEqual(comments['channel'], 'deai/s1/t1')
-                cc.assert_called_once_with(self.SPACE, self.prov)        # перевірений `comments_client`, а не сирий виклик
+                cc.assert_called_once_with(self.SPACE, self.prov, self.CTX)      # перевірений `comments_client`, а не сирий виклик
 
     def test_a_failed_decision_is_false_plus_the_code_never_the_league_snippet(self):
         for module_publish in (False, True):
@@ -4550,6 +4598,7 @@ class CommentsPublish(DispatchWorld):
         self.mods = os.path.join(self.tmp, 'modules')
         _copy_module(os.path.join(ROOT, 'app', 'modules', MID), self.mods)
         _copy_module(MEMO_SRC, self.mods)
+        _copy_module(os.path.join(ROOT, 'app', 'modules', 'supabase-comments'), self.mods)   # ЛІГА (4b-2) — вбудований модуль
         _write_json(os.path.join(self.mods, self.URL, 'module.json'),
                     {'api': 1, 'id': self.URL, 'name': self.URL, 'version': '1.0.0', 'roles': ['publish'],
                      'publish_target': 'url',
@@ -4729,18 +4778,22 @@ class CommentsPublish(DispatchWorld):
         for rel in SOURCE_PAGES:                                   # гейт ЛІГА — як був: пароль на кожній сторінці
             self.assertIn('id="authgate"', _read(os.path.join(body['dir'], rel)), rel)
 
-    def test_the_league_path_with_the_league_comments_is_the_old_build(self):
+    def test_the_league_path_with_the_league_comments_ships_the_builtin_module_build(self):
+        """4b-2: у просторі ЛІГА без власного модуля коментарів збірка несе вбудований `supabase-comments` (було: «стара збірка»
+        з бандлами ЛІГИ): його файли, конфіг установки й канал ЛІГИ."""
         self.assertEqual(dm.provider('comments', self.on), 'legacy')
         with mock.patch.object(serve, 'build_preview', wraps=serve.build_preview) as bp:
             st, body = self.publish({'build_only': True}, task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
-        self.assertEqual(bp.call_args.kwargs['comments'], True)
+        comments = bp.call_args.kwargs['comments']
+        self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'dc/ty'))
         vend = os.path.join(body['dir'], 'comment-layer')
-        self.assertEqual(sorted(os.listdir(vend)), sorted(serve.BUNDLES))
+        self.assertEqual(sorted(os.listdir(vend)), ['adapter.js', 'comment-layer.min.js', 'supabase.min.js'])
         html = _read(os.path.join(body['dir'], 'it2', 'index.html'))
         self.assertIn('CommentLayer.init', html)
-        self.assertIn('dc/ty', html)
-        self.assertNotIn('__deaiCommentsCfg', html)
+        cfg = _page_cfg(html)
+        self.assertEqual((cfg['channel'], cfg['url'], cfg['key']), ('dc/ty', sbconf.SB_URL, sbconf.SB_KEY))
+        self.assertNotIn('cdn.jsdelivr.net', html)
 
     def test_the_league_path_with_a_broken_enabled_comments_module_ships_no_comments_at_all_and_warns(self):
         """Явно ввімкнений модуль коментарів, що зламався, у просторі ЛІГА: НЕ спільний Supabase (піни несли б знімки

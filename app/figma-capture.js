@@ -51,7 +51,7 @@ export const LOAD_TIMEOUT_MS = 8000;
  *   - `[data-canvas-inspector]` — хост оверлея інспектора (`vendor/inspector.js`);
  *   - `[data-comment-layer]` — хост коментатора (бандл comment-layer; сам бандл
  *     ми не правимо — окремий проєкт, тому помітка ставиться тут, ззовні);
- *   - `#cl-down` — банер «коментарі недоступні» (`COMMENT_SNIPPET`, `serve.py`);
+ *   - `#cl-down` — банер «коментарі недоступні» (`_COMMENT_DOWN_BANNER`, `serve.py`);
  *   - `#__figma_capture_toolbar_host__` — тулбар самого скрипта: після першого
  *     захоплення він лишається в документі й на другому потрапив би в payload
  *     порожнім кадром.

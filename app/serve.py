@@ -2295,77 +2295,16 @@ def comment_channel(task, tid, internal=False):
     return base + ('/internal' if internal else '')
 
 
-COMMENT_SNIPPET = """
-<script>
-/* Банер — ПЕРШИМ тегом, ДО трьох `<script src>` нижче: без async/defer вони
-   виконуються ПОСЛІДОВНО, і `onerror` кожного з них спрацьовує РАНІШЕ, ніж
-   встиг би виконатись цей код, якби він (як було до ревʼю) жив у скрипті
-   ініціалізації внизу. У тій версії заблокований CDN не показував банер
-   ЗОВСІМ: `window.__clDown` на момент `onerror` ще не існував, і охоронець
-   `window.__clDown&&…` мовчки гасив виклик — перевірено живцем. Порядок тут
-   несучий, а не косметика. */
-window.__clDown = function (why) {{
-  if (document.getElementById('cl-down')) return;
-  var d = document.createElement('div');
-  d.id = 'cl-down';
-  d.textContent = 'Коментарі недоступні: ' + why;
-  d.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;'
-    + 'background:#d14343;color:#fff;font:13px/1.4 system-ui,sans-serif;'
-    + 'padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.3)';
-  (document.body || document.documentElement).appendChild(d);
-}};
-</script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="window.__clDown('бібліотека Supabase не завантажилась')"></script>
-<script src="{assets}/supabase-adapter.min.js" onerror="window.__clDown('адаптер коментарів не завантажився')"></script>
-<script src="{assets}/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>{inspector}
-<script>
-(function () {{
-  var init = function () {{
-    if (!window.CommentLayerSupabase || !window.CommentLayer) {{
-      window.__clDown('шар коментарів не піднявся');
-      return;
-    }}
-    /* Синхронний try/catch, а НЕ лише `.catch()` на `store.ready` нижче:
-       `CommentLayerSupabase(...)` сам, ПОЗА промісом, кличе
-       `window.supabase.createClient(...)` — коли CDN не піднявся (мережевий
-       збій АБО 200 із порожнім/битим тілом, який `onerror` вище не ловить
-       узагалі), `window.supabase` не існує, і виклик кидає ДО того, як
-       `store`/`store.ready` встигли зʼявитись. Без цієї гілки виняток летів
-       необробленим у консоль (перевірено живцем:
-       `TypeError: Cannot read properties of undefined (reading 'createClient')`),
-       а банер так і не малювався. */
-    var store;
-    try {{
-      store = window.CommentLayerSupabase({{
-        url: '{sb_url}', anonKey: '{sb_key}', projectId: '{project}',
-      }});
-    }} catch (e) {{
-      window.__clDown((e && e.message) || 'адаптер не зміг піднятись');
-      return;
-    }}
-    store.ready.then(function () {{
-      window.CommentLayer.init({{ projectId: '{project}', storage: store,
-        version: '{version}'{audiences} }});
-    }}).catch(function (e) {{
-      window.__clDown((e && e.message) || 'база не відповіла');
-    }});
-  }};
-  if (document.readyState !== 'loading') init();
-  else document.addEventListener('DOMContentLoaded', init);
-}})();
-</script>"""
-
-
 # Інспектор ДС — окремим тегом і за ПРАПОРЦЕМ, не назавжди в шаблоні.
 #
-# Чому прапорець: `COMMENT_SNIPPET` має двох адресатів — `/commented?ch=project`
+# Чому прапорець: сніпет коментарів (`MODULE_COMMENT_SNIPPET`) має двох адресатів — `/commented?ch=project`
 # (робоче місце дизайнера) і `_publish` (статика для колег). Спека тримає межу:
 # інспектор це інструмент дизайнера, зовнішньому глядачеві його не давали, а в
-# `publish/comment-layer/` їдуть рівно два бандли — `inspector*.js` там немає,
+# `publish/comment-layer/` їдуть лише шар коментатора й файли адаптера — `inspector*.js` там немає,
 # тобто тег «у шаблоні завжди» був би ще й 404 у справжньому превʼю.
 #
-# Чому ПІСЛЯ трьох скриптів коментарів: порядок у цьому сніпеті несучий (див.
-# докстрінг банера вище — банер мусить бути першим тегом, це ловили живцем).
+# Чому ПІСЛЯ скриптів коментарів: порядок у сніпеті несучий (див. коментар над
+# `_COMMENT_DOWN_BANNER` нижче — банер мусить бути першим тегом, це ловили живцем).
 # `type="module"` відкладений за визначенням, тож стоячи в хвості він нічого не
 # затримує й послідовності класичних скриптів не рушить.
 #
@@ -2398,7 +2337,7 @@ def inspector_ds_arg(profile, sp=None):
     Id перевіряється так само, як напрямок (`SPACE_ID_RE`): реєстр і так не пропустить іншого, але
     розмітка не повинна триматись на тому, що хтось колись не забув перевірити.
 
-    ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `build_preview` кличе `inject_comment_layer` без
+    ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `build_preview` кличе `inject_module_comment_layer` без
     `inspector`, `profile` і `space` — опублікована сторінка (Vercel, тека) до `/api/ds-tokens` не
     дістанеться. Збірка ЛІГА від цього не міняється: опубліковані сторінки, обгортка й `comment-layer/`
     байт-у-байт такі, як були; `shell/i18n.js` міняється лише новими ключами словника."""
@@ -2417,14 +2356,14 @@ def inspector_ds_arg(profile, sp=None):
 # інструмента, проти принципу 6 PRODUCT.md. Новий дім — панель самого
 # коментатора; спека: «коментарі я розрішаю».
 #
-# Чому прапорець, а не завжди: `COMMENT_SNIPPET` має двох адресатів, і другий —
+# Чому прапорець, а не завжди: сніпет коментарів має двох адресатів, і другий —
 # `_publish`. Вкладка «Клод» у статиці для колег вела б у локальний файл на
 # машині дизайнера (404 у глядача) і запрошувала б слати робочий фідбек у
 # нікуди. Це вимога конфіденційності зі спеки, не косметика.
 #
 # Чому АРГУМЕНТОМ `init`, а не окремим `<script>` із конфігом: порядок тегів у
-# сніпеті Supabase несучий (див. докстрінг банера `__clDown` вище — баг ловили
-# живцем), і зайвий тег між банером і трьома `<script src>` знову зламав би
+# сніпеті коментарів несучий (див. коментар над `_COMMENT_DOWN_BANNER` нижче — баг ловили
+# живцем), і зайвий тег між банером і `<script src>` знову зламав би
 # показ банера при мертвому CDN.
 #
 # Чому `active` рахує СЕРВЕР, а не клієнт: канал вибрав роут, тобто сніпет знає
@@ -2486,28 +2425,6 @@ def audiences_arg(active):
                                  project=js(active == 'project'))
 
 
-# Внутрішні пін-коментарі — сині (щоб відрізняти від зовнішніх, у колег звичайні).
-INTERNAL_TINT = """
-<script>
-(function () {
-  var tries = 0;
-  var t = setInterval(function () {
-    tries++;
-    var hosts = Array.prototype.filter.call(
-      document.querySelectorAll('*'), function (e) { return e.shadowRoot; });
-    hosts.forEach(function (h) {
-      if (h.shadowRoot.getElementById('cv-internal-tint')) return;
-      var s = document.createElement('style');
-      s.id = 'cv-internal-tint';
-      s.textContent = '.pin{background:#2d6ae3 !important;box-shadow:0 4px 14px rgba(0,0,0,.4),0 0 0 2px #b7d1ff !important}';
-      h.shadowRoot.appendChild(s);
-    });
-    if (hosts.length || tries > 40) clearInterval(t);
-  }, 500);
-})();
-</script>"""
-
-
 LOCAL_COMMENT_SNIPPET = """
 <script src="{assets}/local-adapter.js"></script>
 <script src="{assets}/comment-layer.min.js"></script>
@@ -2543,40 +2460,26 @@ def inject_local_comment_layer(html, endpoint, project, assets_base, version='',
     return out if n else html + snippet
 
 
-def inject_comment_layer(html, project, assets_base, internal=False, version='',
-                         inspector=False, audiences=False, profile='', space=None):
-    """Канал коментарів Supabase. `inspector=True` і `audiences=True` — лише для
-    робочого місця дизайнера (`/commented?ch=project`); у publish обидві межі
-    лишаються (див. `INSPECTOR_TAG` і `audiences_arg`). `space` — простір
-    сторінки для `sp=` у URL інспектора (`inspector_ds_arg`); без `inspector`
-    він розмітку не міняє зовсім. Адреса й ключ — з конфігу установки (`supabase_config`). ⛔ Без нього сніпет усе одно
-    вставляється, але з ПОРОЖНІМИ адресою й ключем: `createClient('')` кидає всередині `try` сніпета, і сторінка каже
-    банером «Коментарі недоступні», а її вміст живий. Повернути тут `''` не можна: викликачі пишуть
-    `html = inject_comment_layer(html, …)`, і порожній рядок стер би ВСЮ сторінку."""
-    sb_url, sb_key = supabase_config()
-    if sb_url is None:
-        sb_url = sb_key = ''
-    snippet = COMMENT_SNIPPET.format(
-        project=project, assets=assets_base, version=version,
-        sb_url=sb_url, sb_key=sb_key,
-        inspector=INSPECTOR_TAG.format(
-            assets=assets_base, ds=inspector_ds_arg(profile, space)) if inspector else '',
-        audiences=audiences_arg('project' if audiences else None))
-    if internal:
-        snippet += INTERNAL_TINT
-    return _insert_before_body(html, snippet)
-
-
-# ---------- Роль `comments`: коментарі модуля (2b-2, Task 2) ----------
+# ---------- Роль `comments`: коментарі модуля (2b-2, Task 2; з 4b-2 — єдиний шлях, ЛІГА теж) ----------
 #
-# Сторінка робочого місця з командним каналом МОДУЛЯ (простір, де роль `comments` виконує модуль, а не зашитий Supabase
-# ЛІГА). Шар коментатора той самий (`comment-layer.min.js`), сховище — з адаптера модуля: `window.DeaiComments.create(cfg)`
-# (контракт — спека 2b-2). Зашитий шлях (`COMMENT_SNIPPET`) і локальний (`LOCAL_COMMENT_SNIPPET`) НЕ змінено ні на байт:
-# їх приколюють еталони `tests/fixtures/comments-role/`, зняті з коду до цієї правки.
+# Сторінка робочого місця з командним каналом МОДУЛЯ ролі `comments`: власний модуль простору або — для ЛІГИ — вбудований
+# `supabase-comments` з конфігом установки (`comments_route`). Шар коментатора той самий (`comment-layer.min.js`), сховище —
+# з адаптера модуля: `window.DeaiComments.create(cfg)` (контракт — спека 2b-2). Зашитого сніпета Supabase (`COMMENT_SNIPPET`,
+# до 0.10.0) більше нема; локальний (`LOCAL_COMMENT_SNIPPET`) не змінено ні на байт: його приколюють еталони
+# `tests/fixtures/comments-role/`. Маркери СТАРОГО сніпета `bin/import_preview.py` тримає замороженими: опубліковані превʼю в
+# обігу ще його несуть.
 #
-# Банер `window.__clDown` — ПЕРШИМ тегом із тієї ж причини, що в `COMMENT_SNIPPET` (там вона розписана): `onerror` тегів
-# `<script src>` нижче спрацьовує РАНІШЕ, ніж виконався б скрипт ініціалізації. Текст і вигляд банера — ті самі; це окрема
-# копія, бо шаблон ЛІГА чіпати не можна (його розбирає `bin/import_preview.py`).
+# ⛔ Банер `window.__clDown` — ПЕРШИМ тегом, ДО `<script src>` нижче: без async/defer вони виконуються ПОСЛІДОВНО, і
+# `onerror` кожного з них спрацьовує РАНІШЕ, ніж встиг би виконатись цей код, якби він (як було до ревʼю старого сніпета)
+# жив у скрипті ініціалізації внизу. У тій версії заблокований CDN не показував банер ЗОВСІМ: `window.__clDown` на момент
+# `onerror` ще не існував, і охоронець `window.__clDown&&…` мовчки гасив виклик — перевірено живцем. Порядок тут несучий, а не
+# косметика. Текст і вигляд банера — ті самі, що були у старому сніпеті.
+#
+# ⛔ Створення сховища — під СИНХРОННИМ `try/catch`, а НЕ лише `.catch()` на `store.ready`: адаптер сам, ПОЗА промісом, може
+# кинути (у старого адаптера — `window.supabase.createClient(...)`, коли CDN не піднявся: мережевий збій АБО 200 із
+# порожнім/битим тілом, який `onerror` не ловить узагалі; перевірено живцем: `TypeError: Cannot read properties of
+# undefined (reading 'createClient')`). Без цієї гілки виняток летів би необробленим у консоль, а банер так і не
+# малювався б.
 _COMMENT_DOWN_BANNER = """<script>
 window.__clDown = function (why) {{
   if (document.getElementById('cl-down')) return;
@@ -2651,8 +2554,9 @@ def inject_module_comment_layer(html, assets_base, client_urls, config, version=
     порядку), `window.__deaiCommentsCfg = config` і завантажувач із `storage: DeaiComments.create(…)`.
 
     `config` — вже ПЕРЕВІРЕНА публічна конфігурація з `channel` (див. `deai_modules.comments_client`/`channel_for`): тут вона
-    лише екранується як JS-літерал для `<script>` (`js_literal`: `<`, `>`, `&`, U+2028/9). Решта аргументів — як у
-    `inject_comment_layer`: `inspector`/`audiences` лише для робочого місця дизайнера, `space` — для `sp=` в інспектора."""
+    лише екранується як JS-літерал для `<script>` (`js_literal`: `<`, `>`, `&`, U+2028/9). Решта аргументів:
+    `inspector`/`audiences` лише для робочого місця дизайнера (у publish обидві межі лишаються), `space` — для `sp=` в
+    інспектора (`inspector_ds_arg`); без `inspector` він розмітку не міняє зовсім."""
     assets = html_escape(assets_base, quote=True)         # `origin` береться із заголовка `Host`: в атрибут — лише екранованим
     snippet = MODULE_COMMENT_SNIPPET.format(
         assets=assets,
@@ -3185,7 +3089,8 @@ PAGES_PREVIEW_PAGE = """<!DOCTYPE html><html lang="uk"><head><meta charset="utf-
 # а побачить розбіжність не тест і не дизайнер, а ГЛЯДАЧ — бо `publish/` в
 # щоденній роботі не відкривається.
 
-#: Бандли коментатора в publish/comment-layer/.
+#: Імена бандлів СТАРИХ збірок ЛІГИ (до 0.10.0); нові їх не везуть: шар коментатора + файли адаптера модуля.
+#: Перелік лишається — його читають `ops/reseal_gate.py` і перевірка імен файлів адаптера (`_read_module_comments`).
 BUNDLES = ('comment-layer.min.js', 'supabase-adapter.min.js')
 #: Хто збирає превʼю (`build_preview(build=…)`, `manifest.json` → `"build"`): ЛІГА (далі Vercel) чи модуль публікації.
 BUILD_KINDS = ('legacy', 'module')
@@ -3866,43 +3771,46 @@ def _read_module_comments(comments):
     return ModuleCommentsBuild(mod, config, channel, files)
 
 
-def publish_comments(space, tid, *, module_publish=False):
+def publish_comments(space, task, tid, *, module_publish=False):
     """`(comments, warning)` — рішення про коментарі превʼю для `build_preview(comments=…)`, ОДИН раз на публікацію.
 
     Рішення — з ПОСТАЧАЛЬНИКА ролі `comments` ПРОСТОРУ публікації (`deai_modules.provider('comments', space)` через
     `comments_provider`, простір — явним аргументом), а НЕ з `spaces.integrations_on()`: «ЛІГА ввімкнено» ≠ «коментарі
     — спільний Supabase» (простір ЛІГА може вести коментарі власним модулем, а простір без інтеграцій — теж). `space`
     — запис простору, який викликач ВЖЕ вирішив (одне читання реєстру на публікацію); `None` — шар вимкнено чи простір
-    запиту не зафіксовано (інструменти ЛІГА): `comments_provider` тоді віддає `'legacy'` БЕЗ читання реєстру.
+    запиту не зафіксовано (інструменти ЛІГА): `comments_provider` тоді віддає `'legacy'` БЕЗ читання реєстру. `task` —
+    задача публікації: від неї канал ЛІГИ (`comment_project` чи `dc/<задача>`, `comments_route`).
 
-        постачальник        шлях ЛІГА (`_publish`)       модуль публікації (`module_publish=True`)
-        Module              словник модуля               словник модуля
-        'legacy'            True (зашитий Supabase)      False — як у 0.3.0
-        None                False                        False
-        ModuleError         False + код відмови          False + код відмови
+        постачальник        шлях ЛІГИ (`_publish`)                 модуль публікації (`module_publish=True`)
+        Module              словник модуля                         словник модуля
+        'legacy'            словник `supabase-comments`            False — як у 0.3.0
+                            (конфіг установки, канал ЛІГИ)
+        None                False                                  False
+        ModuleError         False + код відмови                    False + код відмови
 
-    ⛔ `'legacy'` у збірці МОДУЛЯ публікації — `False`, не `True`: зашитий Supabase ЛІГА (адреса й ключ спільного проєкту,
-    куди піни несуть знімки макетів) не їде в превʼю, яке зібрав модуль, — це був би новий вихід даних, якого людина
-    не вмикала. ⛔ Відмова (`ModuleError`: явно ввімкнений модуль коментарів загубився, `space.json` не прочитати,
-    `client_config` чи канал не вдались) — ЗАВЖДИ `False` + `warning` (код, без тексту й значень), НІКОЛИ `True`: тихий
-    перехід на спільний сервіс ЛІГА вивіз би приватні макети; сама публікація йде далі, а відповідь несе
-    `comments_unavailable`. Модуль коментарів виконує свій код (`client_config`): НЕ кликати під `spaces.WRITE_LOCK`."""
+    ⛔ `'legacy'` у збірці МОДУЛЯ публікації — `False`: Supabase ЛІГА (адреса й ключ спільного проєкту, куди піни несуть
+    знімки макетів) не їде в превʼю, яке зібрав модуль, — це був би новий вихід даних, якого людина не вмикала.
+    ⛔ Відмова (`ModuleError`: явно ввімкнений модуль коментарів загубився, `space.json` не прочитати, `client_config`,
+    канал чи конфіг установки ЛІГИ — `comments-unconfigured` — не вдались) — ЗАВЖДИ `False` + `warning` (код, без тексту й
+    значень): сама публікація йде далі, а відповідь несе `comments_unavailable`. Модуль коментарів виконує свій код
+    (`client_config`): НЕ кликати під `spaces.WRITE_LOCK`."""
     prov, err = comments_provider(space)
     if err is not None:
         return False, err.code
-    if isinstance(prov, deai_modules.Module):
-        try:
-            channel = deai_modules.channel_for(space, tid)
-            config = deai_modules.comments_client(space, prov)
-        except deai_modules.ModuleError as e:
-            return False, e.code
-        return {'module': prov, 'config': config, 'channel': channel}, None
-    if prov == 'legacy':
-        return (not module_publish), None
-    return False, None
+    if prov is None or (prov == 'legacy' and module_publish):
+        return False, None
+    if prov != 'legacy' and not isinstance(prov, deai_modules.Module):
+        return False, None                 # значення, що не є ні постачальником, ні `'legacy'`, — «нікого», як і було
+    try:
+        mod, ctx, route_channel = comments_route(space, prov)
+        channel = route_channel(task, tid)                 # ⛔ канал — ДО коду модуля: непридатний id задачі не доходить до `client_config`
+        config = deai_modules.comments_client(space, mod, ctx)
+        return {'module': mod, 'config': config, 'channel': channel}, None
+    except deai_modules.ModuleError as e:
+        return False, e.code
 
 
-def build_preview(task, tid, its, *, comments=True, gate_pw, build):
+def build_preview(task, tid, its, *, comments, gate_pw, build):
     """Зібрати `publish/` з ОПУБЛІКОВАНИХ ітерацій `its`: сторінки, спільні файли ітерацій, оболонка,
     кадри, маніфест, обгортка. ЄДИНА збірка превʼю: нею користуються і ЛІГА (`Handler._publish`, далі
     vercel deploy), і модулі публікації (статика в локальну теку) — друга копія збірки розійшлась би з
@@ -3910,19 +3818,18 @@ def build_preview(task, tid, its, *, comments=True, gate_pw, build):
 
     `comments` — рішення про коментарі превʼю, яке приймає ВИКЛИКАЧ (`publish_comments`: з постачальника ролі
     `comments`, один раз на публікацію), а збірка лише виконує його:
-      * `True` — канал ЛІГА (зашитий Supabase): бандли `BUNDLES` у `publish/comment-layer/` і сніпет `inject_comment_layer`
-        у кожній сторінці — байт у байт як до 2b-2;
       * `False` — без коментатора: ні `publish/comment-layer/`, ні ін'єкції в сторінки. Потрібно там, де Supabase
         недосяжний або недоречний;
-      * `{'module': <Module ролі comments>, 'config': {…}, 'channel': '…'}` — канал МОДУЛЯ: у `publish/comment-layer/`
-        лягають `comment-layer.min.js` (ядро) і ЛИШЕ оголошені в `client` файли адаптера (ні `supabase-adapter`, ні CDN),
+      * `{'module': <Module ролі comments>, 'config': {…}, 'channel': '…'}` — канал МОДУЛЯ (з 4b-2 — і ЛІГИ: вбудований
+        `supabase-comments`): у `publish/comment-layer/`
+        лягають `comment-layer.min.js` (ядро) і ЛИШЕ оголошені в `client` файли адаптера (ні старий `supabase-adapter`, ні CDN),
         а в сторінки — сніпет модуля з ВІДНОСНИМИ шляхами (`../` за глибиною сторінки) і `{**config, channel}`. `config` —
         уже перевірена публічна конфігурація (`deai_modules.comments_client`: непублічних секретів у ній нема),
         `channel` — канал ядра (`deai_modules.channel_for`). Без інспектора й вкладок аудиторій: це публікація.
         Файли адаптера читаються ДО `rmtree` через `open_module_client` (без симлінків і жорстких посилань,
         ≤ `MAX_CLIENT_BYTES`): небезпечний файл — `ModuleError('module-error')`, а попередню збірку не стирають.
-    Будь-що інше — `ValueError` ДО змін на диску: `'legacy'` (значення постачальника, а не рішення) чи `1` не мають
-    мовчки стати шляхом ЛІГА.
+    Будь-що інше — `ValueError` ДО змін на диску: `True` (з 4b-2 шляху «зашитий Supabase» нема), `'legacy'` (значення
+    постачальника, а не рішення) чи `1` не мають мовчки стати шляхом ЛІГА.
 
     `build` — ХТО збирає, ОБОВʼЯЗКОВИЙ іменований аргумент (як `gate_pw`): `'legacy'` — `Handler._publish` (ЛІГА: далі
     деплой на Vercel), `'module'` — модулі публікації (`publish_with_module`, `_publish_by_url`). Пишеться в
@@ -3937,7 +3844,7 @@ def build_preview(task, tid, its, *, comments=True, gate_pw, build):
     «без гейта», а гейт, що відчиняється порожнім полем; «без гейта» лише `None`. Гейт-хелпери кличемо
     лише коли він є: без пароля `gate_html` не має що вшивати, а `str(None)` дав би пароль «None».
 
-    ⛔ Хелпери (`gate_html`, `_inject_gate`, `preview_index_html`, `inject_comment_layer`, `BUNDLES`…)
+    ⛔ Хелпери (`gate_html`, `_inject_gate`, `preview_index_html`, `inject_module_comment_layer`, `BUNDLES`…)
     беремо з модуля ПРИ ВИКЛИКУ, а не захоплюємо аргументами за замовчуванням: так `serve.<хелпер>`
     лишається підмінюваним для майбутніх тестів і модулів (захоплене значення тихо обійшло б підміну).
 
@@ -3953,24 +3860,20 @@ def build_preview(task, tid, its, *, comments=True, gate_pw, build):
     adapter = None
     if isinstance(comments, dict):
         adapter = _read_module_comments(comments)        # перевірка й читання файлів адаптера — ДО будь-якої зміни диска
-    elif comments is not True and comments is not False:
-        raise ValueError(f'build_preview: comments — True, False чи словник модуля, а не {comments!r}')
+    elif comments is not False:
+        raise ValueError(f'build_preview: comments — False чи словник модуля, а не {comments!r}')
     pub = os.path.join(task['dir'], 'publish')
     if os.path.isdir(pub):
         shutil.rmtree(pub)
     os.makedirs(pub)
-    if comments:
-        # бандлы комментатора один раз
+    if adapter is not None:
+        # шар коментатора й файли адаптера модуля — один раз
         vend = os.path.join(pub, 'comment-layer')
         os.makedirs(vend)
-        if adapter is None:
-            for b in BUNDLES:
-                shutil.copy2(os.path.join(ROOT, 'app', 'vendor', b), os.path.join(vend, b))
-        else:
-            shutil.copy2(os.path.join(ROOT, 'app', 'vendor', LAYER_BUNDLE), os.path.join(vend, LAYER_BUNDLE))
-            for name, data in adapter.files:
-                with open(os.path.join(vend, name), 'wb') as fh:
-                    fh.write(data)
+        shutil.copy2(os.path.join(ROOT, 'app', 'vendor', LAYER_BUNDLE), os.path.join(vend, LAYER_BUNDLE))
+        for name, data in adapter.files:
+            with open(os.path.join(vend, name), 'wb') as fh:
+                fh.write(data)
     # Спільні модулі зовнішньої оболонки — статика, від сторінок не залежать,
     # тому їдуть тут же, одразу після `rmtree` (порядок важливий: усе нове
     # везеться ПІСЛЯ затирання publish/).
@@ -3998,18 +3901,13 @@ def build_preview(task, tid, its, *, comments=True, gate_pw, build):
         page_file = os.path.join(dst, 'index.html')
         with open(page_file, encoding='utf-8') as fh:
             html = fh.read()
-        if comments:
+        if adapter is not None:
             depth_up = '../' * (p['out_rel'].count('/') + 1)
-            if adapter is None:
-                html = inject_comment_layer(html, comment_channel(task, tid),
-                                            f'{depth_up}comment-layer',
-                                            version=pm.page_version_tag(p['it'], p['page']))
-            else:
-                html = inject_module_comment_layer(
-                    html, f'{depth_up}comment-layer',
-                    [f'{depth_up}comment-layer/{name}' for name, _data in adapter.files],
-                    {**adapter.config, 'channel': adapter.channel},
-                    version=pm.page_version_tag(p['it'], p['page']), inspector=False, audiences=False)
+            html = inject_module_comment_layer(
+                html, f'{depth_up}comment-layer',
+                [f'{depth_up}comment-layer/{name}' for name, _data in adapter.files],
+                {**adapter.config, 'channel': adapter.channel},
+                version=pm.page_version_tag(p['it'], p['page']), inspector=False, audiences=False)
         if gated:
             # ⛔ Гейт і на ВНУТРІШНІЙ сторінці, не лише в обгортці. До 03.08.2026
             # пряме посилання на неї минало пароль: перевірено живцем —
@@ -4171,8 +4069,8 @@ def publish_with_module(h, prov, payload):
     інакше 409 `bad-folder` ДО збірки (модуль перевіряє її ще раз сам, але `publish/` до того вже було б
     зібрано: `rmtree` + повна збірка задарма); (5) пароль — секрет модуля `password` (порожній рядок = «пароля
     нема» → `None`: `''` у `build_preview` — гейт, що відчиняється порожнім полем); (6) коментарі превʼю —
-    `publish_comments` (постачальник ролі `comments` цього простору: модуль → його канал у збірці; зашитий Supabase ЛІГА
-    сюди НЕ їде; відмова → без коментарів + `comments_unavailable` у відповіді), потім збірка; (7) `build_only` —
+    `publish_comments` (постачальник ролі `comments` цього простору: модуль → його канал у збірці; Supabase ЛІГИ
+    (`supabase-comments` з конфігом установки) сюди НЕ їде; відмова → без коментарів + `comments_unavailable` у відповіді), потім збірка; (7) `build_only` —
     відповідь про збірку; інакше `publish` модуля й `publish_local` в `iterations.json`, коли модуль повернув саме
     `<тека>/<задача>`.
 
@@ -4219,7 +4117,7 @@ def publish_with_module(h, prov, payload):
     # Supabase ЛІГА (`'legacy'`) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
     # модуля (до `CHECK_TIMEOUT` = 5 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
     # для другого кліку (його `publish-busy` приходить тепер лише коли справді йде збірка чи копіювання).
-    comments, comments_warn = publish_comments(space, tid, module_publish=True)
+    comments, comments_warn = publish_comments(space, task, tid, module_publish=True)
     with _try_publish_locks(task['dir'], folder, tid) as got:
         if not got:
             h._send_json({'ok': False, 'code': 'publish-busy',
@@ -4432,7 +4330,7 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     мережі — ходить лише сам модуль."""
     ctx = deai_modules.module_ctx(space, prov)
     gate_pw = ctx['secrets'].get('password') or None
-    comments, comments_warn = publish_comments(space, tid, module_publish=True)   # поза замком: див. `publish_with_module`
+    comments, comments_warn = publish_comments(space, task, tid, module_publish=True)   # поза замком: див. `publish_with_module`
     with _try_task_dir_lock(task['dir']) as got:
         if not got:
             h._send_json({'ok': False, 'code': 'publish-busy',
@@ -5640,8 +5538,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not bare:
             origin = f'http://{self.headers.get("Host", "localhost:8765")}'
             ch = q.get('ch', ['local'])[0]
-            # Хто дає командні коментарі простору: `Module` (роль `comments`), `'legacy'` (зашитий Supabase ЛІГА, простір
-            # з інтеграціями) чи `None` (нікого — лише локальні). `team` — чи є вкладка «Команда» й канал `project`
+            # Хто дає командні коментарі простору: `Module` (роль `comments`), `'legacy'` (ЛІГА: вбудований
+            # `supabase-comments`, `comments_route`) чи `None` (нікого — лише локальні). `team` — чи є вкладка «Команда» й канал `project`
             # узагалі. Без постачальника (простір без інтеграцій і без модуля) канал Supabase (і CDN із supabase-js)
             # недоступний, тож `ch=project` ПОНИЖУЄТЬСЯ до локального; вкладок аудиторій нема зовсім — контракт
             # коментатора «нема `audiences` → нема рядка» (з одним «Клод» перемикач був би порожнім жестом, а «Команда»
@@ -5664,32 +5562,26 @@ class Handler(SimpleHTTPRequestHandler):
             # інакше піни, народжені у опублікованому/проєктному перегляді (bornV=1),
             # не лягають на ітерацію в канвасі (appVersion "it1" ≠ bornV 1).
             ver = pm.page_version_tag(it, page)
-            module_cfg = None
-            if ch == 'project' and isinstance(prov, deai_modules.Module):
-                # Командний канал веде МОДУЛЬ: його публічна конфігурація (перевірена ядром) і канал простору. Відмова
-                # модуля — не 5xx: сторінка лишається РОБОЧОЮ (локальні коментарі) і каже, чому нема командних.
+            module_cfg = mod = None
+            if ch == 'project' and prov is not None:
+                # Командний канал веде модуль ролі `comments`: власний модуль простору або (ЛІГА) вбудований
+                # `supabase-comments` з конфігом установки й каналом `comment_channel` (`comments_route`). Відмова — не
+                # 5xx: сторінка лишається РОБОЧОЮ (локальні коментарі) і каже, чому нема командних.
                 try:
-                    channel = deai_modules.channel_for(page_space, tid)
-                    module_cfg = {**deai_modules.comments_client(page_space, prov), 'channel': channel}
+                    mod, cctx, route_channel = comments_route(page_space, prov)
+                    channel = route_channel(task, tid)        # ⛔ канал — ДО коду модуля (як у `publish_comments`)
+                    module_cfg = {**deai_modules.comments_client(page_space, mod, cctx), 'channel': channel}
                 except deai_modules.ModuleError as e:
                     # Постачальник є, а його конфіг не піднявся: сторінка локальна, і вкладки «Команда» на ній нема —
                     # вона вела б у ту саму відмову (контракт коментатора: «нема `audiences` → нема рядка»).
                     ch, notice, team = 'local', e.code, False
             if module_cfg is not None:
+                # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек, а не те, чиїми очима дивляться на
+                # макет — це та сама локальна машина дизайнера. До 02.09.2026 інспектор тут був мертвий, і кнопка в смузі
+                # тихо нічого не робила (виміряно в браузері).
                 html = inject_module_comment_layer(
-                    html, f'{origin}/app/vendor', module_client_urls(prov, page_space), module_cfg, version=ver,
+                    html, f'{origin}/app/vendor', module_client_urls(mod, page_space), module_cfg, version=ver,
                     inspector=True, audiences=team, profile=task.get('profile') or '', space=page_space)
-            elif ch == 'project':
-                # режим «Проєкт»: канал Supabase (колеги + історія, як в опублікованому).
-                # `inspector=True`: аудиторія коментарів змінює, КОМУ їде фідбек,
-                # а не те, чиїми очима дивляться на макет — це та сама локальна
-                # машина дизайнера. До 02.09.2026 інспектор тут був мертвий, і
-                # кнопка в смузі тихо нічого не робила (виміряно в браузері).
-                html = inject_comment_layer(html, comment_channel(task, tid),
-                                            f'{origin}/app/vendor', version=ver,
-                                            inspector=True, audiences=team,
-                                            profile=task.get('profile') or '',
-                                            space=page_space)
             else:
                 # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
                 local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
@@ -5814,7 +5706,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         prov = space = None
         if ch == 'project':
-            # Командний канал — лише коли його комусь віддано: зашитий ЛІГА (`'legacy'`, інтеграції) чи модуль ролі
+            # Командний канал — лише коли його комусь віддано: ЛІГА (`'legacy'`, інтеграції) чи модуль ролі
             # `comments`; `local` працює скрізь. Не вдалось вирішити (`ModuleError`) — центральна відповідь модулів.
             # Простір — ОДИН раз: з нього постачальник, конфіг і канал.
             space = spaces.active_space()
@@ -5834,21 +5726,16 @@ class Handler(SimpleHTTPRequestHandler):
         # публікацію імʼя не йде — ПІБ у відкритому превʼю на Vercel неприпустиме.
         name, _ = machine_identity()
         user = {'user': {'name': name}} if name else {}
-        if ch == 'project' and isinstance(prov, deai_modules.Module):
-            # Командний канал модуля: де його адаптер (кореневі адреси, по порядку), публічна конфігурація, канал.
-            # «Огляд» (`overview-comments.js`) складає з цього `DeaiComments.create({...config, channel, onChange})`.
-            channel = deai_modules.channel_for(space, tid)
-            self._send_json({'ch': ch, 'module': prov.id, 'client': module_client_urls(prov, space),
-                             'config': deai_modules.comments_client(space, prov), 'channel': channel,
+        if ch == 'project':
+            # Командний канал — модуль ролі `comments` (у ЛІГИ — вбудований `supabase-comments` з конфігом установки,
+            # `comments_route`): де його адаптер (кореневі адреси, по порядку), публічна конфігурація, канал. «Огляд»
+            # (`overview-comments.js`) складає з цього `DeaiComments.create({...config, channel, onChange})`. `ModuleError`
+            # (в т.ч. `comments-unconfigured`) летить у центральний обробник → 409.
+            mod, cctx, route_channel = comments_route(space, prov)
+            channel = route_channel(task, tid)                # ⛔ канал — ДО коду модуля (як у `publish_comments`)
+            self._send_json({'ch': ch, 'module': mod.id, 'client': module_client_urls(mod, space),
+                             'config': deai_modules.comments_client(space, mod, cctx), 'channel': channel,
                              'version': ver, **user})
-        elif ch == 'project':
-            sb_url, sb_key = supabase_config()
-            if sb_url is None:
-                raise deai_modules.ModuleError(
-                    'comments-unconfigured',
-                    message='Supabase простору ЛІГА не налаштовано (supabase_url і supabase_key у tasks.json)')
-            self._send_json({'ch': ch, 'project': comment_channel(task, tid), 'version': ver,
-                             'sbUrl': sb_url, 'sbKey': sb_key, **user})
         else:
             # Той самий файл, що в рамки (`_local_comments_*`); `project` — лише
             # ключ бекапу й нумерації в localStorage, як `local_key` у `_commented`.
@@ -6595,7 +6482,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
         # Origin — першим (як у `_teams_mute`): чужа сторінка не дізнається навіть про вимикач.
-        # Цей пароль — гейт ЛІГА-превʼю (`build_preview(comments=True)`); модуль публікації має власний
+        # Цей пароль — гейт ЛІГА-превʼю (`build_preview(build='legacy')`); модуль публікації має власний
         # (секрет `password`), тож для простору, де публікує модуль чи не публікує ніхто, — та сама 409, що й була
         # без інтеграцій. Нечитабельний `space.json` (`ModuleError`) — теж «не ЛІГА», а не окрема помилка.
         try:
@@ -7504,10 +7391,11 @@ class Handler(SimpleHTTPRequestHandler):
         `send_error`, `_current_task`, `_overview_sync`: зовнішні заглушки обробника мають лише їх, тож
         нові помічники — модульні функції.
 
-        Коментарі збірки ЛІГА (2b-2) — з `publish_comments`: простір, де публікує ЛІГА, звичайно веде командні коментарі
-        зашитим Supabase (`'legacy'` → `comments=True`, збірка й відповідь байт у байт як до 2b-2), але людина могла
-        ввімкнути там власний модуль коментарів — тоді збірка несе ЙОГО канал; а явно ввімкнений модуль, що зламався, дає
-        збірку без коментарів узагалі (не спільний Supabase) і `comments_unavailable` у відповіді."""
+        Коментарі збірки ЛІГА (2b-2, з 4b-2) — з `publish_comments`: простір, де публікує ЛІГА, звичайно веде командні
+        коментарі вбудованим `supabase-comments` (`'legacy'` → словник модуля з конфігом установки й каналом ЛІГИ; без
+        конфігу — без коментарів + `comments_unavailable: comments-unconfigured`), але людина могла ввімкнути там власний
+        модуль коментарів — тоді збірка несе ЙОГО канал; а явно ввімкнений модуль, що зламався, дає збірку без коментарів
+        узагалі (не спільний Supabase) і `comments_unavailable` у відповіді."""
         prov = deai_modules.provider('publish')
         if prov is None:
             self._send_json(no_publish_module_body(), status=409)
@@ -7527,11 +7415,12 @@ class Handler(SimpleHTTPRequestHandler):
         # — після `rmtree`): збій читання tasks.json більше не лишає напівзібраний `publish/`.
         pw = preview_password(load_tasks(), task)
         # Коментарі превʼю — з постачальника ролі `comments` простору публікації (а не з `integrations_on()`), раз, ДО
-        # збірки: `'legacy'` → `True` (зашитий Supabase ЛІГА, байт у байт як було), модуль → його канал, відмова →
-        # без коментарів узагалі + `comments_unavailable` у відповіді (див. `publish_comments`). Простір береться лише
+        # збірки: `'legacy'` → вбудований `supabase-comments` з конфігом установки й каналом ЛІГИ, модуль → його канал,
+        # відмова (в т.ч. `comments-unconfigured`) → без коментарів узагалі + `comments_unavailable` у відповіді (див.
+        # `publish_comments`). Простір береться лише
         # коли він зафіксований за запитом: інструменти ЛІГА й заглушки обробника його не мають, і реєстру тоді не читаємо.
         space = spaces.active_space() if spaces.layer_on() and spaces.request_space_id() is not None else None
-        comments, comments_warn = publish_comments(space, tid)
+        comments, comments_warn = publish_comments(space, task, tid)
         built = build_preview(task, tid, its, comments=comments, gate_pw=pw, build='legacy')
         # ⛔ `pub` потрібен ДАЛІ — деплою (`_publish_legacy_call(…, pub, …)` — модуль запускає `vercel` у цій теці); його
         # читає лише гілка без `build_only`, тож вилучення збірки без цього рядка ламає тільки справжній

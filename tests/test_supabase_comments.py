@@ -1657,12 +1657,19 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         self.assertNotIn(KEY, ' '.join(self.exc_texts(cm.exception)))
         self.assert_no_legacy()
 
-    def test_the_league_space_is_untouched_by_the_module(self):
+    def test_the_league_space_takes_the_install_config_not_the_settings_of_the_module_in_another_space(self):
+        """4b-2: ЛІГА теж веде коментарі цим модулем (було: «простір ЛІГА модуля не отримує»), але з конфігу УСТАНОВКИ й
+        каналом ЛІГИ — а не з налаштувань чи секретів модуля, увімкненого в іншому просторі."""
+        self.enable_via_api()                                   # модуль увімкнено в `plain` зі СВОЇМИ адресою й ключем
+        self.seen.clear()
         self.use(self.liga)
         self.net.rows = []
         html = self.page('project')
-        self.assertNotIn('supabase-comments', html)
-        self.assertEqual(self.seen, [])
+        cfg = self.cfg_of(html)
+        self.assertEqual((cfg['url'], cfg['key'], cfg['channel']), (sbconf.SB_URL, sbconf.SB_KEY, 'dc/lx'))
+        self.assertNotEqual((URL, KEY), (sbconf.SB_URL, sbconf.SB_KEY), 'контроль: адреси різні')
+        self.assertNotIn(KEY, html)
+        self.assertEqual(self.seen, [], 'сторінка не ходить у мережу')
 
 
 if __name__ == '__main__':
