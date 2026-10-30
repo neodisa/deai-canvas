@@ -548,10 +548,10 @@ class Catalog(Base):
         self.assertEqual((m.status, m.error), ('ok', None))
         self.assertEqual(m.roles, ['publish'])
         self.assertEqual(m.publish_target, 'url')
-        self.assertEqual((m.api, m.name, m.version, m.dir), (1, 'Vercel', '1.0.0', MODULE_DIR))
+        self.assertEqual((m.api, m.name, m.version, m.dir), (1, 'Vercel', '1.1.0', MODULE_DIR))
         by = {s['key']: s for s in m.settings}
-        self.assertEqual(list(by), ['token', 'team', 'password'])
-        self.assertEqual((by['token']['type'], by['token']['required']), ('secret', True))
+        self.assertEqual(list(by), ['auth', 'token', 'team', 'password'])          # 4b-1: `auth` (token | cli) — перший
+        self.assertEqual((by['token']['type'], by['token']['required']), ('secret', False))   # обовʼязковість у режимі `token` — у модулі
         self.assertEqual((by['team']['type'], by['team']['required']), ('text', False))
         self.assertEqual((by['password']['type'], by['password']['required']), ('secret', False))
         self.assertEqual(m.secret_keys(), ['token', 'password'])
@@ -2430,7 +2430,9 @@ class Limits(Base):
 
 class SourceShape(unittest.TestCase):
     #: Усе, що `server.py` може імпортувати (exec-иться ядром: без `serve`, ядра, сусідів, `importlib`).
-    ALLOWED_IMPORTS = {'hashlib', 'json', 'os', 're', 'secrets', 'socket', 'stat', 'time', 'urllib'}
+    #: 4b-1: `subprocess` — режим `cli` (`npx vercel`); `ssl` і необовʼязковий `certifi` — перевірка превʼю (`_fetch_page`).
+    ALLOWED_IMPORTS = {'certifi', 'hashlib', 'json', 'os', 're', 'secrets', 'socket', 'ssl', 'stat', 'subprocess', 'time',
+                       'urllib'}
 
     @classmethod
     def setUpClass(cls):
@@ -2450,9 +2452,9 @@ class SourceShape(unittest.TestCase):
                 full.add(node.module or '')
         self.assertTrue(mods, 'очікували хоч один імпорт')
         self.assertEqual(mods - self.ALLOWED_IMPORTS, set(), 'імпорт поза списком дозволених')
-        self.assertFalse(mods & {'serve', 'deai_modules', 'spaces', 'importlib', 'subprocess', 'ssl', 'http'})
-        self.assertLessEqual(full, {'hashlib', 'json', 'os', 're', 'secrets', 'socket', 'stat', 'time',
-                                    'urllib.error', 'urllib.parse', 'urllib.request'})
+        self.assertFalse(mods & {'serve', 'deai_modules', 'spaces', 'importlib', 'http'})
+        self.assertLessEqual(full, {'certifi', 'hashlib', 'json', 'os', 're', 'secrets', 'socket', 'ssl', 'stat', 'subprocess',
+                                    'time', 'urllib.error', 'urllib.parse', 'urllib.request'})
 
     def test_no_dynamic_code_or_imports(self):
         names = {n.id for n in ast.walk(self.tree) if isinstance(n, ast.Name)}

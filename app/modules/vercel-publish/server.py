@@ -1,6 +1,7 @@
 """Вбудований модуль `vercel-publish` (роль `publish`, `publish_target: url`): зібране превʼю задачі → ВЛАСНИЙ Vercel людини.
 
-Лише stdlib (`urllib`, `hashlib`, `json`, …): без Node, без CLI, без підпроцесів. Диспетчер ядра будує превʼю
+Лише stdlib (`urllib`, `hashlib`, `json`, …). Режим `token` (типовий): без Node, без CLI, без підпроцесів — лише REST. Режим
+`cli` (4b-1, див. нижче) запускає системний `npx vercel`. Диспетчер ядра будує превʼю
 (`build_preview`, за потреби з паролем-гейтом у сторінках) і кличе `publish(ctx, build_dir, task)`; модуль відправляє
 теку на `api.vercel.com` і повертає адресу. Роздачі, лока й запису в `iterations.json` модуль не торкається — це ядро.
 
@@ -65,9 +66,24 @@
 Очікування alias після `READY` НЕОБОВʼЯЗКОВЕ: будь-який збій у ньому (мережа, 5xx, 4xx, авторизація, ліміт) лишає
 останню відповідь `READY` і веде до адреси публікації з попередженням — готова публікація не стає помилкою.
 
+Режим `cli` (`ctx['settings']['auth'] == 'cli'`, 4b-1): людина вже зайшла в Vercel на цій машині (`vercel login`), токен
+не потрібен і НЕ читається. Модуль робить те саме, що ядро в гілці ЛІГИ до 0.8.0: `npx --yes vercel link --yes [--scope S]
+--project P` → `deploy --prod --yes [--scope S]` (cwd = тека збірки; 120 і 300 с) → `inspect <адреса>` (120 с) і береться
+НАЙКОРОТША з адрес `*.vercel.app` (вивід `deploy` + `inspect`); адресу НЕ вгадуємо. `npx` дає `ctx['find_tool']('npx')` (ядро
+знає про nvm/volta/brew, яких нема в PATH застосунку); нема — `no-node`. Підпроцес запускається БЕЗ `env=`: токенів модуль у
+нього не кладе (оточення процесу — як у сервера). Імʼя проєкту й скоуп перевіряються регулярками ДО запуску (аргумент не
+може стати прапорцем). Перевірка превʼю — `_fetch_page` (GET без облікових даних, без переходів): `task['gated']` (ядро
+вклало пароль-гейт у сторінки) — `verified` лише з маркером `authgate` у тілі; без гейта — будь-яка 200.
+Коди відмов (ядро складає з них людські тексти; тут їх НЕМА — лише сирий вивід CLI в `ModuleError.full`, хвіст ≤ 4000 знаків
+`stderr or stdout`): `vercel-login` (не ввійшли), `vercel-scope` (скоуп/команда недоступні), `vercel-auth` (немає доступу),
+`vercel-deploy` (інше, і тайм-аут/ОС-збій запуску), `vercel-no-url` (деплой пройшов, адреси нема), `no-node`. Порядок
+класифікації — той самий, що в `_deploy_hint` 0.8.0: вхід → скоуп → доступ → решта. Прибирання старих публікацій у цьому
+режимі — окрема задача (`cleanup_warning` поки `None`).
+
 Ядро кличе `publish` БЕЗ тайм-ауту, тож кожен запит має свій: 30 с на запит API, 60 с на файл, 20 с на перевірку.
 
-`check(ctx)` — `GET /v2/user` (+ `GET /v2/teams/<team_…>` для `teamId`; для `slug` — читальна проба доступу
+`check(ctx)` у режимі `cli` — `npx vercel whoami` (`{"ok": true, "detail": <імʼя>}`, або `no-node` / `vercel-login`).
+`check(ctx)` у режимі `token` — `GET /v2/user` (+ `GET /v2/teams/<team_…>` для `teamId`; для `slug` — читальна проба доступу
 `GET /v6/deployments?limit=1` у цій команді); нічого не створює й не кидає на звичайних збоях (немає токена, не
 прийнято, мережі нема) — вертає `{"ok": false, "error": <код>, "detail": <причина>}`.
 """
@@ -76,7 +92,9 @@ import json
 import os
 import re
 import secrets
+import ssl
 import stat
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -564,6 +582,11 @@ def _not_there_yet(status):
     return status is None or status == 404 or status >= 500
 
 
+#: Попередження про Deployment Protection — спільне для обох режимів (`_verify` і `_publish_cli`); `{project}` — імʼя проєкту.
+_PROTECTION_TEXT = ('Превʼю закрите захистом Vercel (Deployment Protection): без входу в акаунт Vercel воно не відкриється. '
+                    'Вимкнути: Vercel → проєкт {project} → Settings → Deployment Protection → Vercel Authentication → Disabled.')
+
+
 def _verify(url, project):
     """`(verified, попередження | None)` за відповіддю сторінки превʼю; «ще не там» — до `VERIFY_RETRIES` повторів."""
     status, location = _fetch_preview(url)
@@ -575,8 +598,7 @@ def _verify(url, project):
     if status == 200:
         return True, None
     if status in (401, 403) or (status in REDIRECTS and _is_vercel_login(location)):
-        return False, ('Превʼю закрите захистом Vercel (Deployment Protection): без входу в акаунт Vercel воно не відкриється. '
-                       f'Вимкнути: Vercel → проєкт {project} → Settings → Deployment Protection → Vercel Authentication → Disabled.')
+        return False, _PROTECTION_TEXT.format(project=project)
     if status is None:
         return False, 'Не вдалося перевірити, що превʼю відкривається без входу (адреса не відповіла). Відкрийте її в браузері.'
     return False, f'Не вдалося підтвердити, що превʼю відкривається без входу (відповідь HTTP {status}). Відкрийте адресу в браузері.'
@@ -698,6 +720,205 @@ def _module_error(ctx, e):
     return cls('module-error', message=_clean(msg if isinstance(msg, str) else str(e), _token(ctx), ERR_MAX))
 
 
+# ------------------------------------------------------------------------------------- режим cli (системний Vercel CLI)
+
+CLI_LINK_S, CLI_DEPLOY_S, CLI_INSPECT_S, CLI_WHOAMI_S = 120, 300, 120, 30
+#: Скільки знаків хвоста виводу CLI лишається в `ModuleError.full` (ядро/адаптер розпізнає причину за хвостом).
+CLI_RAW_MAX = 4000
+#: Імʼя проєкту й скоуп ідуть у argv: перший знак — літера/цифра, щоб значення не стало прапорцем (`--yes`).
+CLI_PROJECT_RE = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}', re.ASCII)
+CLI_SCOPE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,99}', re.ASCII)
+_CLI_URL_RE = re.compile(r'https://[a-z0-9.-]+\.vercel\.app')
+#: Причина «на адресі не наш макет»: рядок `_check_published` ядра 0.8.0.
+NO_GATE_REASON = 'на URL відповідає не наш макет (немає гейта)'
+
+
+def _auth(ctx):
+    """Режим входу: `'cli'` лише коли налаштування `auth` так і каже; усе інше (нема, сміття) — `'token'`."""
+    st = ctx.get('settings') if isinstance(ctx, dict) else None
+    return 'cli' if isinstance(st, dict) and st.get('auth') == 'cli' else 'token'
+
+
+def _cli_npx(ctx):
+    find = ctx.get('find_tool') if isinstance(ctx, dict) else None
+    p = find('npx') if callable(find) else None
+    if not (isinstance(p, str) and p):
+        raise _error(ctx, 'no-node', 'Не знайдено npx (Node.js): режим «Системний Vercel CLI» запускає `npx vercel`.')
+    return p
+
+
+def _vc(npx, args, cwd, timeout):
+    """`npx --yes vercel <args>` у `cwd`. Оточення — те, що в процесу: БЕЗ `env=` (токенів модуль у підпроцес не кладе)."""
+    return subprocess.run([npx, '--yes', 'vercel', *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+
+
+def _cli_urls(stdout, stderr):
+    """Справжні адреси `*.vercel.app` з виводу CLI (без дублів, порядок збережено).
+    ⚠️ Адресу НЕ вгадуємо: раніше стояло `https://<проєкт>.vercel.app` — і `dc-<задача>` у зоні vercel.app виявилось
+    зайнятим ЧУЖИМ проєктом, тож дизайнеру видавалось посилання на сторонній сайт (30.07.2026). Імʼя проєкту в акаунті і
+    хост у vercel.app — різні простори імен."""
+    seen, out = set(), []
+    for u in _CLI_URL_RE.findall((stdout or '') + '\n' + (stderr or '')):
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _cli_code(raw):
+    """Код відмови `deploy` за виводом CLI. Порядок і шаблони — `_deploy_hint` ядра 0.8.0: вхід → скоуп → доступ → решта.
+    ⛔ Скоуп перевіряється ПЕРЕД загальним «немає доступу»: тексти перетинаються, а причина тут конкретніша.
+    Не впізнали патерн — `vercel-deploy` (причину не вигадуємо: сирий текст іде в `ModuleError.full`)."""
+    e = (raw or '').lower()
+    if any(k in e for k in ('not authenticated', 'credentials', 'please log in', 'vercel login', 'no existing credentials')):
+        return 'vercel-login'
+    if any(k in e for k in ('--scope', 'scope not found', 'no such team', 'not a member of',
+                            "don't have access to the team", 'team not found')):
+        return 'vercel-scope'
+    if any(k in e for k in ('forbidden', 'not authorized', 'access denied', 'do not have permission')):
+        return 'vercel-auth'
+    return 'vercel-deploy'
+
+
+def _cli_alias(npx, dep_url, cwd, extra=()):
+    """Стабільна публічна адреса: НАЙКОРОТША з адрес виводу `deploy` і `vercel inspect` (див. `_stable_alias` 0.8.0).
+    Перевірено на живому деплої: короткий `<проєкт>.vercel.app` віддає макет (200), а довгий, з іменем акаунта, — 302 на SSO
+    команди; `dep_url` виключати НЕ можна: часто він і є цим коротким. Збій `inspect` — не помилка (лишаються адреси `deploy`)."""
+    cands = list(extra) + [dep_url]
+    try:
+        r = _vc(npx, ['inspect', dep_url], cwd, CLI_INSPECT_S)
+        cands += _cli_urls(r.stdout, r.stderr)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return min(cands, key=len)
+
+
+def _ssl_ctx():
+    """certifi, якщо він є (python.org на macOS не бачить системних сертифікатів), інакше типовий контекст."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def _fetch_page(url):
+    """`(статус | None, Location, тіло ≤ 60000 знаків)`: GET без жодних облікових даних і без переходів за редиректами, 20 с.
+    Будь-який збій — `(None, '', '')`. Шов тестів, як `_fetch_preview` (той тіла не читає)."""
+    try:
+        if urllib.parse.urlsplit(url).scheme not in ('http', 'https'):
+            return None, '', ''
+        op = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_ssl_ctx()))
+        req = urllib.request.Request(url, method='GET', headers={'User-Agent': UA, 'Accept': 'text/html,*/*'})
+        with op.open(req, timeout=PREVIEW_TIMEOUT_S) as resp:
+            return resp.status, '', resp.read(60000).decode('utf-8', 'replace')
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, e.headers.get('Location') or '', ''
+        finally:
+            e.close()
+    except Exception:  # noqa: BLE001 — перевірка лише інформує: що б не сталось, публікацію вона не зупиняє
+        return None, '', ''
+
+
+def _cli_verify(url, gated):
+    """`None` — підтверджено; інакше `{'reason': …}`. З гейтом (`task['gated']`) — лише маркер `authgate` у тілі (як ЛІГА
+    0.8.0: чужий сайт на тій самій адресі не пройде); без гейта — будь-яка 200. Захист Vercel — `vercel_protection`."""
+    status, location, body = _fetch_page(url)
+    if status == 200:
+        return None if (not gated or 'authgate' in body) else {'reason': NO_GATE_REASON}
+    if status in REDIRECTS and 'vercel.com/sso' in location:
+        return {'reason': 'vercel_protection'}
+    return {'reason': f'HTTP {status}' if status is not None else 'адреса не відповіла'}
+
+
+def _cli_link_scope(build_dir):
+    """`orgId` із `<збірка>/.vercel/project.json`, який записав `vercel link` (див. `_remember_vercel_scope` 0.8.0): без
+    нього наступна публікація з ЧУЖОГО акаунта створила б ДРУГИЙ проєкт з тим самим імʼям. Нема файла чи поля — `None`."""
+    try:
+        with open(os.path.join(build_dir, '.vercel', 'project.json'), encoding='utf-8') as f:
+            org = (json.load(f) or {}).get('orgId')
+    except (OSError, ValueError, AttributeError):
+        return None
+    return org if isinstance(org, str) and CLI_SCOPE_RE.fullmatch(org) else None
+
+
+def _cli_pick(ctx, state, task_id):
+    """`(проєкт, скоуп | None)`. Стан береться лише для ЦІЄЇ задачі (`state.task`): склонований стан — «стану нема».
+    Імʼя зі стану приймається будь-яке безпечне (не лише `pv-…`: у ЛІГИ бувають `dc-…`), нове — `pv-<8 цифр>`. Скоуп:
+    зі стану, інакше з налаштування `team`. Небезпечне значення — відмова ДО будь-якого запуску."""
+    st = state if isinstance(state, dict) else {}
+    mine = st.get('task') == task_id
+    project = st.get('project') if mine and st.get('project') is not None else None
+    if project is None:
+        project = 'pv-' + ''.join(secrets.choice('0123456789') for _ in range(8))
+    settings = ctx.get('settings') if isinstance(ctx, dict) else None
+    team = settings.get('team') if isinstance(settings, dict) else None
+    scope = (st.get('scope') if mine else None) or (team.strip() if isinstance(team, str) else '') or None
+    if not isinstance(project, str) or not CLI_PROJECT_RE.fullmatch(project):
+        raise RuntimeError('Імʼя проєкту в стані задачі недійсне — публікацію не запущено')
+    if scope is not None and (not isinstance(scope, str) or not CLI_SCOPE_RE.fullmatch(scope)):
+        raise RuntimeError('Команда Vercel (scope) недійсна — публікацію не запущено')
+    return project, scope
+
+
+def _publish_cli(ctx, build_dir, task):
+    """Публікація через системний Vercel CLI; див. докстрінг модуля. Прибирання старих публікацій — окремий крок (`None`)."""
+    if not isinstance(build_dir, str) or not os.path.isdir(build_dir):
+        raise RuntimeError('Збірка превʼю не є текою')
+    task = task if isinstance(task, dict) else {}
+    task_id = task.get('id') if isinstance(task.get('id'), str) else ''
+    project, scope = _cli_pick(ctx, task.get('state'), task_id)     # ДО будь-якого запуску
+    npx = _cli_npx(ctx)
+    # `--scope` — якщо привʼязка відома. Без нього `link` у чужому акаунті СТВОРИВ БИ проєкт із тим самим імʼям, і задача
+    # отримала б друге посилання; зі скоупом vercel відмовляє вголос (`vercel-scope`).
+    sc = ['--scope', scope] if scope else []
+    try:
+        _vc(npx, ['link', '--yes', *sc, '--project', project], build_dir, CLI_LINK_S)
+        out = _vc(npx, ['deploy', '--prod', '--yes', *sc], build_dir, CLI_DEPLOY_S)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise _error(ctx, 'vercel-deploy', str(e)) from None
+    if out.returncode != 0:
+        raw = out.stderr or out.stdout or ''
+        raise _error(ctx, _cli_code(raw), raw[-CLI_RAW_MAX:])
+    urls = _cli_urls(out.stdout, out.stderr)
+    if not urls:
+        raise _error(ctx, 'vercel-no-url', 'Vercel не надрукував адреси публікації')
+    url = _cli_alias(npx, urls[-1], build_dir, extra=urls)
+    verify = _cli_verify(url, bool(task.get('gated')))
+    warnings = []
+    if verify is not None:
+        warnings.append(_PROTECTION_TEXT.format(project=project) if verify['reason'] == 'vercel_protection'
+                        else f'Не вдалося підтвердити превʼю: {verify["reason"]}')
+    cleanup_warning = None                                          # прибирання старих публікацій — Task 3
+    state = {'project': project, 'task': task_id}
+    got = scope or _cli_link_scope(build_dir)
+    if got:                                                         # `scope` без значення в стан не кладемо: лише рядки й числа
+        state['scope'] = got
+    return {'url': url, 'deploy_url': urls[-1], 'verified': verify is None, 'verify': verify,
+            'warnings': [_utf8(w)[:WARN_MAX] for w in warnings[:MAX_WARNINGS]],
+            'cleanup_warning': cleanup_warning, 'state': state}
+
+
+def _check_cli(ctx):
+    """`check` режиму `cli`: `npx vercel whoami` (зайшли в Vercel на цій машині?). Нічого не створює й не кидає."""
+    find = ctx.get('find_tool') if isinstance(ctx, dict) else None
+    npx = find('npx') if callable(find) else None
+    if not (isinstance(npx, str) and npx):
+        return {'ok': False, 'error': 'no-node', 'detail': 'npx (Node.js) не знайдено'}
+    settings = ctx.get('settings') if isinstance(ctx.get('settings'), dict) else {}
+    team = settings.get('team')
+    team = team.strip() if isinstance(team, str) else ''
+    try:
+        r = _vc(npx, ['whoami', *(['--scope', team] if CLI_SCOPE_RE.fullmatch(team) else [])], None, CLI_WHOAMI_S)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {'ok': False, 'error': 'vercel-login', 'detail': _utf8(str(e))[:200]}
+    if r.returncode != 0:
+        return {'ok': False, 'error': 'vercel-login', 'detail': _utf8(' '.join((r.stderr or r.stdout or '').split())[-200:])}
+    lines = (r.stdout or '').strip().splitlines()
+    return {'ok': True, 'detail': _utf8(lines[-1].strip() if lines else '')[:100]}
+
+
 # -------------------------------------------------------------------------------------------------- роль
 
 def _finish(ctx, project, state_pid, created_here, dep, warnings):
@@ -738,6 +959,8 @@ def _finish(ctx, project, state_pid, created_here, dep, warnings):
 
 
 def _publish(ctx, build_dir, task):
+    if _auth(ctx) == 'cli':
+        return _publish_cli(ctx, build_dir, task)                   # ДО `_need_token`: у режимі `cli` токена нема
     _need_token(ctx)
     state = task.get('state') if isinstance(task, dict) else None
     if not isinstance(build_dir, str) or not os.path.isdir(build_dir):
@@ -787,6 +1010,8 @@ def publish(ctx, build_dir, task):
 
 
 def check(ctx):
+    if _auth(ctx) == 'cli':
+        return _check_cli(ctx)
     tok = _token(ctx)
     if not tok:
         return {'ok': False, 'error': 'no-token', 'detail': 'Токен Vercel не задано'}
