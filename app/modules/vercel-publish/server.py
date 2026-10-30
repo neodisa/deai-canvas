@@ -722,7 +722,8 @@ def _module_error(ctx, e):
 
 # ------------------------------------------------------------------------------------- режим cli (системний Vercel CLI)
 
-CLI_LINK_S, CLI_DEPLOY_S, CLI_INSPECT_S, CLI_WHOAMI_S = 120, 300, 120, 30
+#: `whoami` — 120 с: холодний `npx --yes vercel` спершу завантажує сам CLI.
+CLI_LINK_S, CLI_DEPLOY_S, CLI_INSPECT_S, CLI_WHOAMI_S = 120, 300, 120, 120
 #: Скільки знаків хвоста виводу CLI лишається в `ModuleError.full` (ядро/адаптер розпізнає причину за хвостом).
 CLI_RAW_MAX = 4000
 #: Імʼя проєкту й скоуп ідуть у argv: перший знак — літера/цифра, щоб значення не стало прапорцем (`--yes`).
@@ -748,8 +749,11 @@ def _cli_npx(ctx):
 
 
 def _vc(npx, args, cwd, timeout):
-    """`npx --yes vercel <args>` у `cwd`. Оточення — те, що в процесу: БЕЗ `env=` (токенів модуль у підпроцес не кладе)."""
-    return subprocess.run([npx, '--yes', 'vercel', *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    """`npx --yes vercel <args>` у `cwd`. Оточення — те, що в процесу: БЕЗ `env=` (токенів модуль у підпроцес не кладе).
+    Вивід читається як UTF-8 із заміною (`text=True` сам бере кодування локалі — на Windows це не UTF-8, і `UnicodeDecodeError`
+    вилетів би з модуля поза `ModuleError`)."""
+    return subprocess.run([npx, '--yes', 'vercel', *args], cwd=cwd, capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', timeout=timeout)
 
 
 def _cli_urls(stdout, stderr):
@@ -788,7 +792,7 @@ def _cli_alias(npx, dep_url, cwd, extra=()):
     try:
         r = _vc(npx, ['inspect', dep_url], cwd, CLI_INSPECT_S)
         cands += _cli_urls(r.stdout, r.stderr)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return min(cands, key=len)
 
@@ -804,7 +808,9 @@ def _ssl_ctx():
 
 def _fetch_page(url):
     """`(статус | None, Location, тіло ≤ 60000 знаків)`: GET без жодних облікових даних і без переходів за редиректами, 20 с.
-    Будь-який збій — `(None, '', '')`. Шов тестів, як `_fetch_preview` (той тіла не читає)."""
+    Збій звʼязку — `(None, '', <текст винятку ≤ 200>)`: третій елемент тоді — ПРИЧИНА, а не тіло (як `str(e)[:200]` у
+    `_check_published` 0.8.0: `CERTIFICATE_VERIFY_FAILED`, DNS…); непідтримана схема — `(None, '', '')`.
+    Шов тестів, як `_fetch_preview` (той тіла не читає)."""
     try:
         if urllib.parse.urlsplit(url).scheme not in ('http', 'https'):
             return None, '', ''
@@ -817,19 +823,21 @@ def _fetch_page(url):
             return e.code, e.headers.get('Location') or '', ''
         finally:
             e.close()
-    except Exception:  # noqa: BLE001 — перевірка лише інформує: що б не сталось, публікацію вона не зупиняє
-        return None, '', ''
+    except Exception as e:  # noqa: BLE001 — перевірка лише інформує: що б не сталось, публікацію вона не зупиняє
+        return None, '', _utf8(' '.join(str(e).split()))[:200]
 
 
 def _cli_verify(url, gated):
     """`None` — підтверджено; інакше `{'reason': …}`. З гейтом (`task['gated']`) — лише маркер `authgate` у тілі (як ЛІГА
     0.8.0: чужий сайт на тій самій адресі не пройде); без гейта — будь-яка 200. Захист Vercel — `vercel_protection`."""
     status, location, body = _fetch_page(url)
-    if status == 200:
+    if isinstance(status, int) and 200 <= status < 300:                 # 0.8.0 читало тіло за будь-якого успішного відкриття
         return None if (not gated or 'authgate' in body) else {'reason': NO_GATE_REASON}
     if status in REDIRECTS and 'vercel.com/sso' in location:
         return {'reason': 'vercel_protection'}
-    return {'reason': f'HTTP {status}' if status is not None else 'адреса не відповіла'}
+    if status is None:                                                  # третій елемент — текст винятку (причина недосяжності)
+        return {'reason': body.strip() if isinstance(body, str) and body.strip() else 'адреса не відповіла'}
+    return {'reason': f'HTTP {status}'}
 
 
 def _cli_link_scope(build_dir):
@@ -876,7 +884,7 @@ def _publish_cli(ctx, build_dir, task):
     try:
         _vc(npx, ['link', '--yes', *sc, '--project', project], build_dir, CLI_LINK_S)
         out = _vc(npx, ['deploy', '--prod', '--yes', *sc], build_dir, CLI_DEPLOY_S)
-    except (OSError, subprocess.SubprocessError) as e:
+    except (OSError, ValueError, subprocess.SubprocessError) as e:      # ValueError — напр. NUL у шляху теки
         raise _error(ctx, 'vercel-deploy', str(e)) from None
     if out.returncode != 0:
         raw = out.stderr or out.stdout or ''
@@ -906,13 +914,15 @@ def _check_cli(ctx):
     npx = find('npx') if callable(find) else None
     if not (isinstance(npx, str) and npx):
         return {'ok': False, 'error': 'no-node', 'detail': 'npx (Node.js) не знайдено'}
-    settings = ctx.get('settings') if isinstance(ctx.get('settings'), dict) else {}
+    settings = ctx.get('settings') if isinstance(ctx, dict) and isinstance(ctx.get('settings'), dict) else {}
     team = settings.get('team')
     team = team.strip() if isinstance(team, str) else ''
     try:
         r = _vc(npx, ['whoami', *(['--scope', team] if CLI_SCOPE_RE.fullmatch(team) else [])], None, CLI_WHOAMI_S)
-    except (OSError, subprocess.SubprocessError) as e:
-        return {'ok': False, 'error': 'vercel-login', 'detail': _utf8(str(e))[:200]}
+    except subprocess.TimeoutExpired as e:                               # ПЕРЕД SubprocessError: це його підклас
+        return {'ok': False, 'error': 'check-timeout', 'detail': _utf8(str(e))[:200]}
+    except (OSError, ValueError, subprocess.SubprocessError) as e:      # npx не запускається — це «нема Node», а не «не ввійшли»
+        return {'ok': False, 'error': 'no-node', 'detail': _utf8(str(e))[:200]}
     if r.returncode != 0:
         return {'ok': False, 'error': 'vercel-login', 'detail': _utf8(' '.join((r.stderr or r.stdout or '').split())[-200:])}
     lines = (r.stdout or '').strip().splitlines()

@@ -186,6 +186,26 @@ class Success(CliBase):
             self.assertEqual(kw.get('cwd'), self.build)
             self.assertIs(kw.get('capture_output'), True)
             self.assertIs(kw.get('text'), True)
+            self.assertEqual((kw.get('encoding'), kw.get('errors')), ('utf-8', 'replace'))   # не кодування локалі (Windows)
+
+    def test_non_utf8_cli_output_does_not_break_the_publish(self):
+        """Сміття не в UTF-8 у виводі CLI заміняється, а не кидає `UnicodeDecodeError` повз `ModuleError`."""
+        self.ok_sc(deploy={'code': 0, 'stdout': D + '\n', 'stdout_hex': 'fffe80'}, inspect={'code': 0, 'stdout': A + '\n'})
+        self.assertEqual(self.run_cli()['url'], A)
+        self.ok_sc(deploy={'code': 1, 'stdout_hex': 'fffe80', 'stderr': 'Error: Forbidden'})
+        e = self.fails()
+        self.assertEqual((type(e), e.code), (dm.ModuleError, 'vercel-auth'))
+
+    def test_a_null_byte_in_the_build_path_is_a_deploy_failure_not_a_stray_error(self):
+        self.ok_sc()
+        g = self.fn('publish').__globals__
+        ctx = self.cli_ctx()
+        task = {'id': 't1', 'gated': True, 'state': {'project': 'pv-12345678', 'task': 't1'}}
+        spy = _SubSpy(lambda argv, kw: (_ for _ in ()).throw(ValueError('embedded null byte')))
+        with mock.patch.dict(g, {'subprocess': spy, '_fetch_page': lambda u: PAGE_OK}):
+            with self.assertRaises(dm.ModuleError) as cm:
+                self.fn('publish')(ctx, self.build, task)
+        self.assertEqual(cm.exception.code, 'vercel-deploy')
 
     def test_default_mode_is_token(self):
         ctx = dm.module_ctx(self.sp, MID)
@@ -475,6 +495,30 @@ class Verification(CliBase):
                 self.assertIn(reason, res['warnings'][0])
                 self.assertEqual(res['url'], A)                          # публікація не зупиняється
 
+    def test_12d_an_unreachable_page_reports_the_exception_text(self):
+        """Як `_check_published` 0.8.0 (`str(e)[:200]`): причина недосяжності (сертифікат, DNS…), а не фіксований рядок."""
+        self.ok_sc()
+        why = '<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed>'
+        res = self.run_cli(page=(None, '', why))
+        self.assertEqual((res['verified'], res['verify']), (False, {'reason': why}))
+        self.assertIn(why, res['warnings'][0])
+        res = self.run_cli(page=(None, '', '   '))                   # порожній текст — запасний рядок
+        self.assertEqual(res['verify'], {'reason': 'адреса не відповіла'})
+
+    def test_12e_any_2xx_goes_through_the_body_check(self):
+        """0.8.0 читало тіло за будь-якого успішного відкриття: 204/206 з маркером гейта — теж `verified`."""
+        self.ok_sc()
+        for code in (200, 201, 204, 206, 299):
+            with self.subTest(code=code):
+                res = self.run_cli(gated=True, page=(code, '', '<div id="authgate">'))
+                self.assertEqual((res['verified'], res['verify']), (True, None))
+                res = self.run_cli(gated=True, page=(code, '', '<html>'))
+                self.assertEqual(res['verify'], {'reason': 'на URL відповідає не наш макет (немає гейта)'})
+        for code in (199, 300, 304):
+            with self.subTest(code=code):
+                res = self.run_cli(gated=False, page=(code, '', '<div id="authgate">'))
+                self.assertEqual(res['verify'], {'reason': f'HTTP {code}'})
+
     def test_12c_no_retries_of_the_page_check(self):
         """Як у 0.8.0 (`_check_published`): одна спроба, без повторів і без сну."""
         self.ok_sc()
@@ -605,21 +649,43 @@ class CheckCli(CliBase):
         self.check(team='--yes')                                     # небезпечне — просто без скоупа
         self.assertEqual(self.argvs()[-1], ['--yes', 'vercel', 'whoami'])
 
-    def test_15f_a_timeout_is_not_logged_in_and_never_raises(self):
+    def test_15f_a_timeout_is_check_timeout_and_never_raises(self):
         self.scenario({'whoami': {'code': 0, 'stdout': 'x'}})
 
         def handler(argv, kw):
-            raise subprocess.TimeoutExpired(argv, 30)
+            raise subprocess.TimeoutExpired(argv, 120)
         res = self.check(spy=_SubSpy(handler))
+        self.assertEqual((res['ok'], res['error']), (False, 'check-timeout'))
+        self.assertIn('120', res['detail'])
+
+    def test_15h_a_failure_to_start_is_no_node_and_a_nonzero_exit_stays_login(self):
+        self.scenario({'whoami': {'code': 1, 'stderr': 'Error: not logged in'}})
+
+        def handler(argv, kw):
+            raise FileNotFoundError(2, 'No such file or directory', 'npx')
+        res = self.check(spy=_SubSpy(handler))
+        self.assertEqual((res['ok'], res['error']), (False, 'no-node'))
+        self.assertIn('No such file', res['detail'])
+
+        def odd(argv, kw):
+            raise ValueError('embedded null byte')
+        res = self.check(spy=_SubSpy(odd))                           # check не кидає й на дивному збої запуску
+        self.assertEqual((res['ok'], res['error']), (False, 'no-node'))
+        res = self.check()                                           # справжній фальшивий npx: код 1 → вхід
         self.assertEqual((res['ok'], res['error']), (False, 'vercel-login'))
 
-    def test_15g_whoami_timeout_is_30_seconds_and_cwd_is_not_set(self):
+    def test_15g_whoami_timeout_is_120_seconds_and_cwd_is_not_set(self):
         self.scenario({'whoami': {'code': 0, 'stdout': 'x\n'}})
         spy = _SubSpy()
         self.check(spy=spy)
         (argv, kw), = spy.calls
-        self.assertEqual(kw.get('timeout'), 30)
+        self.assertEqual(kw.get('timeout'), 120)                     # холодний `npx --yes vercel` спершу завантажує CLI
         self.assertIsNone(kw.get('cwd'))
+
+    def test_15i_check_survives_a_non_utf8_answer(self):
+        self.scenario({'whoami': {'code': 0, 'stdout': 'someone\n', 'stdout_hex': 'fffe'}})
+        res = self.check()
+        self.assertEqual(res['ok'], True)                            # байти замінено, `UnicodeDecodeError` нема
 
     def test_16_token_mode_check_is_unchanged(self):
         self.scenario({})
@@ -666,7 +732,9 @@ class FetchPage(CliBase):
         srv = self.serve(lambda rec: (200, 'x', {}))
         port = srv.port
         srv.stop()
-        self.assertEqual(self.fetch(f'http://127.0.0.1:{port}/'), (None, '', ''))
+        status, loc, why = self.fetch(f'http://127.0.0.1:{port}/')      # третій елемент — текст винятку (причина)
+        self.assertEqual((status, loc), (None, ''))
+        self.assertTrue(why.strip() and len(why) <= 200, why)
         self.assertEqual(self.fetch('file:///etc/passwd'), (None, '', ''))
         self.assertEqual(self.fetch('ftp://127.0.0.1/x'), (None, '', ''))
         self.assertEqual(self.fetch('not a url'), (None, '', ''))
@@ -685,9 +753,14 @@ class SourceShape(unittest.TestCase):
         runs = [n for n in ast.walk(self.tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                 and isinstance(n.func.value, ast.Name) and n.func.value.id == 'subprocess']
         self.assertEqual([n.func.attr for n in runs], ['run'])                    # єдиний запуск — у `_vc`
-        self.assertEqual([k.arg for k in runs[0].keywords], ['cwd', 'capture_output', 'text', 'timeout'])
+        self.assertEqual([k.arg for k in runs[0].keywords], ['cwd', 'capture_output', 'text', 'encoding', 'errors', 'timeout'])
         (fn,) = [n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == '_vc']
         self.assertIn(runs[0], list(ast.walk(fn)))
+
+    def test_nothing_is_imported_from_subprocess(self):
+        """`from subprocess import Popen` обійшов би перевірку єдиного місця запуску вище."""
+        self.assertEqual([n.module for n in ast.walk(self.tree) if isinstance(n, ast.ImportFrom) and n.module
+                          and n.module.split('.')[0] == 'subprocess'], [])
 
     def test_the_page_check_does_not_touch_the_token(self):
         (fn,) = [n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == '_fetch_page']
