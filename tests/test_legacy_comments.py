@@ -25,6 +25,7 @@ import inbox  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
+import test_comments_role as tcr  # noqa: E402  — `PagesEnv`: справжній сервер у процесі й два простори
 
 _REAL = None
 BEFORE = os.path.join(_HERE, 'fixtures', 'legacy-comments', 'before-4b2.json')
@@ -120,7 +121,9 @@ class SupabaseConfigTest(_Env):
 
     def test_only_https_and_non_blank_strings(self):
         for url, key in (('http://demo.supabase.co', KEY), ('', KEY), (5, KEY), (None, KEY),
-                         (URL, '   '), (URL, ''), (URL, 5), (URL, None), ('demo.supabase.co', KEY)):
+                         (URL, '   '), (URL, ''), (URL, 5), (URL, None), ('demo.supabase.co', KEY),
+                         ('https://', KEY), ('https://   ', KEY), ('https:///', KEY),
+                         ('https://  /', KEY)):
             with self.subTest(url=url, key=key):
                 self.write({'supabase_url': url, 'supabase_key': key})
                 self.assertEqual(serve.supabase_config(), (None, None))
@@ -144,6 +147,16 @@ class SupabaseConfigTest(_Env):
         del os.environ['SUPABASE_KEY']
         self.write(None, raw='{oops')
         self.assertEqual(serve.supabase_config(), (None, None))
+
+    def test_deeply_nested_file_is_no_config_not_a_crash(self):
+        # `json.load` на надто глибокій вкладеності кидає `RecursionError` (не `ValueError`): це «конфігу нема», а не обвал.
+        for raw in ('[' * 100000, '{"a":' * 100000):
+            with self.subTest(raw=raw[:6]):
+                self.write(None, raw=raw)
+                self.assertEqual(serve.supabase_config(), (None, None))
+                os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
+                self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+                del os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY']
 
     def test_no_constants_left_in_serve(self):
         self.assertFalse(hasattr(serve, 'SUPABASE_URL'))
@@ -226,6 +239,63 @@ class TeamsRpcTest(_Env):
         os.environ['DC_NO_OVERVIEW'] = '1'
         with self.assertRaises(OSError):
             serve.teams_rpc('teams_mute_state', {})
+
+
+class InjectWithoutConfigTest(_Env):
+    """⛔ `inject_comment_layer` без конфігу НЕ повертає `''`: викликачі пишуть `html = inject_comment_layer(html, …)`, і
+    порожній рядок стер би ВСЮ сторінку. Сніпет вставляється з порожніми адресою й ключем (банер скаже «недоступні»)."""
+
+    HTML = '<html><head><title>t</title></head><body><h1>Мокап</h1></body></html>'
+
+    def test_page_survives_and_snippet_has_empty_url_and_key(self):
+        self.write({'tasks': {}})
+        out = serve.inject_comment_layer(self.HTML, 'dc/t1', '/app/vendor', version='1')
+        self.assertNotEqual(out, '')
+        self.assertIn('<h1>Мокап</h1>', out)
+        self.assertIn("url: '', anonKey: ''", out)
+        self.assertIn('window.__clDown', out)
+        self.assertLess(out.index('<h1>Мокап</h1>'), out.index("url: '', anonKey: ''"))
+
+    def test_with_config_the_snippet_carries_the_pair(self):
+        # контроль до тесту вище: ті самі виклик і розмітка, але з конфігом
+        self.write({'supabase_url': URL, 'supabase_key': KEY})
+        out = serve.inject_comment_layer(self.HTML, 'dc/t1', '/app/vendor', version='1')
+        self.assertIn(f"url: '{URL}', anonKey: '{KEY}'", out)
+        self.assertIn('<h1>Мокап</h1>', out)
+
+
+class SupabasePinsWithoutConfigTest(_Env):
+    def test_raises_oserror_without_network(self):
+        self.write({'tasks': {}})
+        with mock.patch.object(spaces, 'require_integrations', lambda *a, **k: None):
+            with self.assertRaises(OSError) as ctx:
+                serve.supabase_pins('dc/t1')
+        self.assertIn('не налаштовано', str(ctx.exception))
+
+
+class LigaRoutesWithoutConfigTest(tcr.PagesEnv):
+    """Справжній сервер, простір ЛІГА (інтеграції, без модуля коментарів), конфігу Supabase НЕМА ні в файлі, ні в оточенні."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ('SUPABASE_URL', 'SUPABASE_KEY'):
+            os.environ.pop(name, None)             # відновить `tm.Env.tearDown` (вони в його `_ENV`)
+        net = mock.patch.object(serve.urllib.request, 'urlopen', _boom)
+        net.start()
+        self.addCleanup(net.stop)
+        self.use(self.liga)
+
+    def test_comment_config_is_409_comments_unconfigured_without_values(self):
+        st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
+        body = json.loads(raw)
+        self.assertEqual((st, body['ok'], body['code']), (409, False, 'comments-unconfigured'))
+        for leaked in ('sbUrl', 'sbKey', 'https://'):
+            self.assertNotIn(leaked, raw)
+
+    def test_project_page_keeps_its_content_and_says_comments_are_down(self):
+        html = self.page('project')
+        self.assertIn('<h1>x</h1>', html)
+        self.assertIn("url: '', anonKey: ''", html)
 
 
 class OverviewSyncTest(_Env):

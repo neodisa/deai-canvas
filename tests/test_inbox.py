@@ -512,6 +512,17 @@ class ResolveProject(InboxCase):
 
 
 class DryRun(InboxCase):
+    def test_dry_run_without_config_says_so_and_prints_no_value(self):
+        # Пін прочитано (конфіг був), але до друку `PATCH` конфіг зник: рядок чесний, без значень, без запису.
+        self.net.project = [_proj('b7e1c0d2-0000', 'проєктний')]
+        with mock.patch.object(inbox, 'supabase_config', return_value=(None, None)):
+            rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
+        self.assertEqual(rc, 0, out)
+        self.assertIn('[dry-run] Supabase не налаштовано', out)
+        self.assertNotIn('PATCH', out)
+        self.assertNotIn(sbconf.SB_URL, out)
+        self.assertEqual(self.net.patches(), [])
+
     def test_dry_run_writes_nothing_and_says_what_it_would(self):
         self.set_local([_pin('11111111-aaaa', 'локальний')])
         self.net.project = [_proj('b7e1c0d2-0000', 'проєктний')]

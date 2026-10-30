@@ -133,13 +133,17 @@ def supabase_config():
     ключ) робить модуль `supabase-comments`. Кешу нема: файл маленький. Значень — ні в текстах, ні в журналах."""
     try:
         cfg = load_legacy_tasks()
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):      # надто глибока вкладеність JSON — не обвал, а «нема конфігу»
         cfg = None
     cfg = cfg if isinstance(cfg, dict) else {}
     for url, key in ((cfg.get('supabase_url'), cfg.get('supabase_key')),
                      (os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_KEY'))):
-        if isinstance(url, str) and isinstance(key, str) and url.strip().startswith('https://') and key.strip():
-            return url.strip().rstrip('/'), key.strip()
+        if not (isinstance(url, str) and isinstance(key, str)):
+            continue
+        url = url.strip().rstrip('/')
+        # після `https://` має бути хоч один непробільний знак: голий `https://` — не адреса
+        if url.startswith('https://') and len(url[len('https://'):].strip()) > 0 and key.strip():
+            return url, key.strip()
     return None, None
 
 # Служебное, что НЕ копируется в итерации/публикацию из папки задачи
@@ -2563,11 +2567,13 @@ def inject_comment_layer(html, project, assets_base, internal=False, version='',
     робочого місця дизайнера (`/commented?ch=project`); у publish обидві межі
     лишаються (див. `INSPECTOR_TAG` і `audiences_arg`). `space` — простір
     сторінки для `sp=` у URL інспектора (`inspector_ds_arg`); без `inspector`
-    він розмітку не міняє зовсім. Адреса й ключ — з конфігу установки (`supabase_config`); без нього сніпета нема
-    (`''`): сторінка однаково скаже банером, що база не відповіла."""
+    він розмітку не міняє зовсім. Адреса й ключ — з конфігу установки (`supabase_config`). ⛔ Без нього сніпет усе одно
+    вставляється, але з ПОРОЖНІМИ адресою й ключем: `createClient('')` кидає всередині `try` сніпета, і сторінка каже
+    банером «Коментарі недоступні», а її вміст живий. Повернути тут `''` не можна: викликачі пишуть
+    `html = inject_comment_layer(html, …)`, і порожній рядок стер би ВСЮ сторінку."""
     sb_url, sb_key = supabase_config()
     if sb_url is None:
-        return ''
+        sb_url = sb_key = ''
     snippet = COMMENT_SNIPPET.format(
         project=project, assets=assets_base, version=version,
         sb_url=sb_url, sb_key=sb_key,
