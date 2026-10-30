@@ -389,7 +389,6 @@ const UK = {
   publishErrVercelScope: 'Цей обліковий запис Vercel не має доступу до команди (team), заданої в підключенні. Перевірте команду в налаштуваннях модуля Vercel.',
   publishErrVercelDeploy: (why) => `Vercel відхилив публікацію.${why ? `\n\n${why}` : ''}`,
   publishErrVercelNoUrl: 'Vercel завершив роботу, але не вивів адресу — посилання не збережено. Повторіть публікацію.',
-  publishCleanupWarn: (why) => `Старі публікації Vercel прибрано не всі: ${why}`,
   /* «В Figma» (T-41). Причини вимкнення — рядком у title кнопки й у ⌘K. Тексти
      помилок радять РЕАЛЬНЕ: у вбудованому браузері Claude буфер заборонений
      самим браузером (виміряно пілотом), а в Chrome друга спроба швидша, бо
@@ -1435,7 +1434,6 @@ const EN = {
   publishErrVercelScope: 'This Vercel account has no access to the team set in the connection. Check the team in the Vercel module settings.',
   publishErrVercelDeploy: (why) => `Vercel rejected the publish.${why ? `\n\n${why}` : ''}`,
   publishErrVercelNoUrl: 'Vercel finished without printing the address, so no link was saved. Publish again.',
-  publishCleanupWarn: (why) => `Old Vercel publications were not all removed: ${why}`,
   toFigma: 'To Figma',
   toFigmaTitle: 'Copy the current mockup to the clipboard — then ⌘V in a Figma file',
   whyFigmaOverview: 'Overview frames are snapshots; copying works on the live mockup in Layout',

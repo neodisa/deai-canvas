@@ -798,25 +798,22 @@ test("publishErr: тексти CLI-режиму є в обох мовах; verce
   }
 });
 
-test("cleanupWarning: причина після префікса сервера, керівні символи → пробіл, ≤ 300; не рядок і порожнє → null", () => {
-  assert.equal(cleanupWarning({ cleanup_warning: "Старі публікації не прибрано: вичерпано ліміт часу." }), "вичерпано ліміт часу.");
-  assert.equal(cleanupWarning({ cleanup_warning: "Старі публікації прибрано не всі: не вдалося 2 з 5" }), "не вдалося 2 з 5");
-  assert.equal(cleanupWarning({ cleanup_warning: "без двокрапки" }), "без двокрапки");
-  assert.equal(cleanupWarning({ cleanup_warning: "x: a\u0000b\nc" }), "a b c");
-  assert.equal(cleanupWarning({ cleanup_warning: `x: ${"я".repeat(500)}` }).length, 300);
-  for (const bad of [undefined, null, "", "   ", 7, {}, []]) assert.equal(cleanupWarning({ cleanup_warning: bad }), null, String(bad));
+test("cleanupWarning: сторож — непорожній рядок як є (без розбору й обрізання), решта → null; ключа словника нема", () => {
+  const raw = "Старі публікації не прибрано: вичерпано ліміт часу.";
+  assert.equal(cleanupWarning({ cleanup_warning: raw }), raw, "текст сервера — як є, з префіксом");
+  const long = `x: a\nb ${"я".repeat(500)}`;
+  assert.equal(cleanupWarning({ cleanup_warning: long }), long, "без обрізання й заміни символів");
+  for (const bad of [undefined, null, "", 7, {}, [], true]) assert.equal(cleanupWarning({ cleanup_warning: bad }), null, String(bad));
   assert.equal(cleanupWarning({}), null);
   assert.equal(cleanupWarning(null), null);
-  for (const lang of ["uk", "en"]) {
-    assert.equal(typeof DICT[lang].publishCleanupWarn, "function", lang);
-    assert.ok(DICT[lang].publishCleanupWarn("WHY").includes("WHY"), lang);
-  }
+  for (const lang of ["uk", "en"]) assert.equal(DICT[lang].publishCleanupWarn, undefined, `${lang}: ключ не потрібен`);
 });
 
 /* Проводку `app.js` (у Node його не імпортують) стереже текстова перевірка, за взірцем `spaces-wiring`: попередження прибирання
-   стоїть у списку `warn` поруч із `domain_warning`, а без ключа `cleanup_warning` елемент списку — `null` (відсіюється `filter(Boolean)`). */
+   стоїть у списку `warn` поруч із `domain_warning` СИРИМ (без `t()`), а без ключа `cleanup_warning` елемент списку — `null` (відсіюється `filter(Boolean)`). */
 test("app.js: попередження прибирання — у списку warn поруч із domain_warning; відсутній ключ дає null", () => {
   const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
   assert.match(src, /cleanupWarning/, "app.js імпортує cleanupWarning");
-  assert.match(src, /r\.domain_warning,\s*cleanupWarning\(r\)\s*\?\s*t\('publishCleanupWarn',\s*cleanupWarning\(r\)\)\s*:\s*null,/);
+  assert.match(src, /r\.domain_warning,\s*cleanupWarning\(r\),/);
+  assert.doesNotMatch(src, /publishCleanupWarn/, "без t()-обгортки");
 });

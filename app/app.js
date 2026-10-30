@@ -1897,7 +1897,7 @@ const BAR_ACTIONS = {
       const warn = [r.code_stale,
         r.not_task_link && r.url ? t('publishNotTaskLink', r.not_task_link, r.url) : null,
         r.domain_warning,
-        cleanupWarning(r) ? t('publishCleanupWarn', cleanupWarning(r)) : null,
+        cleanupWarning(r),
         cmtCode ? t('publishCommentsUnavailable', cmtCode) : null].filter(Boolean);
       if (warn.length) tell(warn.join('\n\n'));
       const view = publishReaction(r, sp0, sameTask());
