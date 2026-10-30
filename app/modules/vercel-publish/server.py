@@ -792,14 +792,16 @@ def _cli_code(raw):
 def _cli_alias(npx, dep_url, cwd, extra=()):
     """Стабільна публічна адреса: НАЙКОРОТША з адрес виводу `deploy` і `vercel inspect` (див. `_stable_alias` 0.8.0).
     Перевірено на живому деплої: короткий `<проєкт>.vercel.app` віддає макет (200), а довгий, з іменем акаунта, — 302 на SSO
-    команди; `dep_url` виключати НЕ можна: часто він і є цим коротким. Збій `inspect` — не помилка (лишаються адреси `deploy`)."""
+    команди; `dep_url` виключати НЕ можна: часто він і є цим коротким. Збій `inspect` — не помилка (лишаються адреси `deploy`).
+    Вертає `(адреса, усі відомі адреси цієї публікації)`: другий елемент — для прибирання (поточну публікацію виключають за
+    УСІМА її адресами: `deploy` міг надрукувати короткий alias, а в `vercel list` вона стоїть під довгим хостом)."""
     cands = list(extra) + [dep_url]
     try:
         r = _vc(npx, ['inspect', dep_url], cwd, CLI_INSPECT_S)
         cands += _cli_urls(r.stdout, r.stderr)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    return min(cands, key=len)
+    return min(cands, key=len), cands
 
 
 def _ssl_ctx():
@@ -875,26 +877,32 @@ def _cli_pick(ctx, state, task_id):
     return project, scope
 
 
-def _cli_cleanup(npx, project, scope, current_url, cwd):
-    """Прибрати старі публікації проєкту `project`, лишивши `KEEP` разом із поточною (`current_url` — `deploy_url`).
+def _cli_cleanup(npx, project, scope, current_urls, cwd):
+    """Прибрати старі публікації проєкту `project`, лишивши `KEEP` разом із поточною (`current_urls` — УСІ адреси поточної
+    публікації: вивід `deploy`, вивід `inspect`, обрана адреса).
     Вертає `None` або текст попередження; НІКОЛИ не кидає (збій прибирання не робить вдалу публікацію помилкою).
     ⛔ `vercel remove` отримує ЛИШЕ адреси публікацій (хост `….vercel.app`): з імʼям проєкту CLI видаляє ВЕСЬ проєкт.
     `--safe` — CLI сам пропускає публікації з активним alias. Чіпаємо лише записи з `name == project` (спільний акаунт:
     чужі проєкти в списку не наші). Не вдалось розібрати список (код ≠ 0, не JSON, незнайома форма, запис без адреси чи
     `createdAt`) — НЕ видаляємо нічого: без повного розуміння списку не знаємо, що є «старе». Поточна публікація лишається
     завжди (список міг відстати чи хтось опублікував паралельно). Порівнюємо ХОСТИ: список дає голий хост, `deploy_url` —
-    `https://хост`. Межа часу — `CLEANUP_MAX_S` на все."""
+    `https://хост`; поточна виключається за ВСІМА своїми адресами. Видаляється лише хост, що закінчується на `.vercel.app`:
+    однозначна назва без домену чи чужий домен у `remove` могли б означати ПРОЄКТ — такий запис = «незнайома форма», нічого
+    не видаляємо. У `KEEP` рахуються ВСІ публікації проєкту незалежно від стану й цілі (ERROR, CANCELED, превʼю): так простіше
+    й обережніше (свідомо). Межа часу — `CLEANUP_MAX_S` на все, жорстка: таймаут кожного виклику стискається до залишку."""
     deadline = time.monotonic() + CLEANUP_MAX_S
     sc = ['--scope', scope] if scope else []
-    cur = _host(current_url)
-    if cur is None:
+    curs = {h for h in (_host(u) for u in current_urls) if h is not None}
+    if not curs:
         return 'Старі публікації не прибрано: не вдалося розібрати адресу поточної публікації.'
     items, nxt = {}, None                                           # хост → `createdAt` (повтор на сусідній сторінці — той самий запис)
     for _ in range(CLI_LIST_PAGES):
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             return 'Старі публікації не прибрано: вичерпано ліміт часу на читання списку.'
         try:
-            r = _vc(npx, ['list', project, '--json', *sc, *(['--next', str(nxt)] if nxt else [])], cwd, CLI_LIST_S)
+            r = _vc(npx, ['list', project, '--json', *sc, *(['--next', str(nxt)] if nxt else [])], cwd,
+                    min(CLI_LIST_S, max(1, deadline - now)))
             data = json.loads(r.stdout) if r.returncode == 0 else None
         except (OSError, ValueError, subprocess.SubprocessError):
             data = None
@@ -905,22 +913,24 @@ def _cli_cleanup(npx, project, scope, current_url, cwd):
             if not isinstance(d, dict) or d.get('name') != project:
                 continue
             host, created = _host(d.get('url')), d.get('createdAt')
-            if host is None or host == project or isinstance(created, bool) or not isinstance(created, (int, float)):
+            if (host is None or host == project or not host.endswith('.vercel.app')
+                    or isinstance(created, bool) or not isinstance(created, (int, float))):
                 return 'Старі публікації не прибрано: список публікацій має незнайому форму.'
             items[host] = created
         pg = data.get('pagination') if isinstance(data.get('pagination'), dict) else {}
         nxt = pg.get('next')
         if isinstance(nxt, bool) or not isinstance(nxt, int) or nxt <= 0:
             break
-    old = [h for _t, h in sorted(((t, h) for h, t in items.items()), reverse=True) if h != cur]
+    old = [h for _t, h in sorted(((t, h) for h, t in items.items()), reverse=True) if h not in curs]
     doomed = old[KEEP - 1:]                                         # поточна + `KEEP - 1` найновіших решти
     failed, timed_out = 0, False
     for h in doomed:
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             failed, timed_out = failed + 1, True
             continue
         try:
-            r = _vc(npx, ['remove', h, '--safe', '--yes', *sc], cwd, CLI_REMOVE_S)
+            r = _vc(npx, ['remove', h, '--safe', '--yes', *sc], cwd, min(CLI_REMOVE_S, max(1, deadline - now)))
             failed += r.returncode != 0
         except (OSError, ValueError, subprocess.SubprocessError):
             failed += 1
@@ -952,14 +962,14 @@ def _publish_cli(ctx, build_dir, task):
     urls = _cli_urls(out.stdout, out.stderr)
     if not urls:
         raise _error(ctx, 'vercel-no-url', 'Vercel не надрукував адреси публікації')
-    url = _cli_alias(npx, urls[-1], build_dir, extra=urls)
+    url, known = _cli_alias(npx, urls[-1], build_dir, extra=urls)
     verify = _cli_verify(url, bool(task.get('gated')))
     warnings = []
     if verify is not None:
         warnings.append(_PROTECTION_TEXT.format(project=project) if verify['reason'] == 'vercel_protection'
                         else f'Не вдалося підтвердити превʼю: {verify["reason"]}')
     try:
-        cleanup_warning = _cli_cleanup(npx, project, scope, urls[-1], build_dir)   # ПІСЛЯ перевірки
+        cleanup_warning = _cli_cleanup(npx, project, scope, [*known, url], build_dir)   # ПІСЛЯ перевірки
     except Exception:  # noqa: BLE001 — прибирання НЕОБОВʼЯЗКОВЕ: публікація вже вдалась, що б не трапилось
         cleanup_warning = 'Старі публікації не прибрано: неочікуваний збій прибирання.'
     if cleanup_warning:

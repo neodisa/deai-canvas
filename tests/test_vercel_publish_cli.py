@@ -182,7 +182,7 @@ class Success(CliBase):
         self.ok_sc()
         spy = _SubSpy()
         self.run_cli(spy=spy)
-        kinds = [(a[3], kw.get('timeout')) for a, kw in spy.calls]
+        kinds = [(a[3], round(kw.get('timeout'))) for a, kw in spy.calls]   # `list` — min(60, залишок): ≈ 60
         self.assertEqual(kinds, [('link', 120), ('deploy', 300), ('inspect', 120), ('list', 60)])
         for argv, kw in spy.calls:
             self.assertEqual(argv[0], self.npx_path)
@@ -605,7 +605,7 @@ class Cleanup(CliBase):
         res = self.run_cli(spy=spy)
         self.assertEqual(len([c for c in spy.calls if c[0][3] == 'remove']), 2)
         self.assertIn('не вдалося 2 з 2', res['cleanup_warning'])
-        self.assertEqual([kw.get('timeout') for argv, kw in spy.calls if argv[3] in ('list', 'remove')], [60, 60, 60])
+        self.assertEqual([round(kw.get('timeout')) for argv, kw in spy.calls if argv[3] in ('list', 'remove')], [60, 60, 60])
 
     def test_7_pagination(self):
         p1 = page([entry(CUR, 9), entry(host(8), 8), entry(host(7), 7)], nxt=123)
@@ -699,6 +699,44 @@ class Cleanup(CliBase):
         ents = [entry('https://' + CUR.upper(), 9), entry(host(8), 8), entry(host(7), 7), entry('https://' + host(6), 6)]
         self.go(ents)
         self.assertEqual([a[3] for a in self.removes()], [host(6)])            # поточна не видалена навіть за іншого запису хоста
+
+    def test_13_a_host_that_is_not_vercel_app_is_never_a_remove_target(self):
+        """⛔ `remove other-project` — однозначна назва без домену: CLI взяв би її за ПРОЄКТ."""
+        good = [entry(CUR, 9)] + [entry(host(i), i) for i in range(1, 7)]
+        for bad in ('other-project', 'pv-x.example.com', 'vercel.app', 'pv-x.vercel.app.evil.com', 'localhost'):
+            with self.subTest(url=bad):
+                self.ok_sc(list=page(good + [entry(bad, 0)]))
+                res = self.run_cli()
+                self.assertEqual(self.removes(), [])
+                self.assertTrue(res['cleanup_warning'].startswith('Старі публікації не прибрано'))
+                self.assertEqual(res['url'], A)
+
+    def test_14_the_current_one_is_excluded_by_every_known_address(self):
+        """`deploy` надрукував короткий alias, а в `vercel list` поточна стоїть під довгим хостом (він є лише у виводі `inspect`)."""
+        self.ok_sc(deploy={'code': 0, 'stdout': A + '\n'}, inspect={'code': 0, 'stdout': D + '\n'},
+                   list=page([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]))
+        res = self.run_cli()
+        self.assertEqual((res['url'], res['deploy_url']), (A, A))
+        self.assertEqual(sorted(a[3] for a in self.removes()), sorted([host(2), host(1)]))   # лишились CUR + 4 + 3
+        self.assertNotIn(CUR, [a[3] for a in self.removes()])
+        # без `inspect`: довгий хост поточної є у виводі `deploy` (разом із коротким)
+        self.ok_sc(deploy={'code': 0, 'stdout': D + '\n' + A + '\n'}, inspect={'code': 1},
+                   list=page([entry(host(5), 5), entry(host(4), 4), entry(CUR, 3), entry(host(2), 2), entry(host(1), 1)]))
+        self.run_cli()
+        self.assertEqual(sorted(a[3] for a in self.removes()), sorted([host(2), host(1)]))   # CUR + 5 + 4 лишились
+
+    def test_15_each_call_timeout_is_clamped_to_the_time_left(self):
+        ents = [entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]
+        self.ok_sc(list=page(ents))
+        seq = iter([0, 30, 58, 59.5])                              # deadline = 60; `now` перед list, remove, remove
+        clock = types.SimpleNamespace(monotonic=lambda: next(seq), sleep=lambda s: None)
+        g = self.fn('publish').__globals__
+        spy = _SubSpy()
+        with mock.patch.dict(g, {'time': clock}):
+            res = self.run_cli(spy=spy)
+        self.assertEqual([(argv[3], kw.get('timeout')) for argv, kw in spy.calls if argv[3] in ('list', 'remove')],
+                         [('list', 30), ('remove', 2), ('remove', 1)])    # min(60, залишок), не менше 1 с
+        self.assertIsNone(res['cleanup_warning'])
 
     def test_12_cleanup_does_not_run_when_the_publish_failed(self):
         self.ok_sc(deploy={'code': 1, 'stderr': 'Error: Forbidden'})
