@@ -423,7 +423,7 @@ test("нові ключі: підписи, причина, чотири поми
   assert.equal(t("vcsErrOffline", "GitHub"), "GitHub не відповідає — немає мережі чи VPN. Макет лишився на цьому компʼютері.");
   assert.equal(t("vcsErrAuth", "GitHub"), "GitHub не пускає — перевір SSH-ключ чи вхід у git на цьому компʼютері.");
   assert.equal(t("vcsErrBusy"), "Синхронізація вже йде — спробуй за хвилину.");
-  assert.equal(t("vcsErrTarget"), "Адреса репозиторію, гілка чи тека не підходять — виправ їх на «Підключенні».");
+  assert.equal(t("vcsErrTarget"), "Адреса репозиторію, гілка чи тека цієї задачі (або типові на «Підключенні») не підходять.");
   setLang("en");
   assert.equal(t("vcsGitHub"), "GitHub");
   assert.equal(t("vcsGit"), "Git");
@@ -431,7 +431,7 @@ test("нові ключі: підписи, причина, чотири поми
   assert.equal(t("vcsErrOffline", "GitHub"), "GitHub is not answering — no network or VPN. The layout stayed on this computer.");
   assert.equal(t("vcsErrAuth", "GitHub"), "GitHub refused access — check the SSH key or the git sign-in on this computer.");
   assert.equal(t("vcsErrBusy"), "A sync is already running — try again in a minute.");
-  assert.equal(t("vcsErrTarget"), "The repository address, branch or folder is not valid — fix them on Connections.");
+  assert.equal(t("vcsErrTarget"), "The repository address, branch or folder of this task (or the defaults on Connections) is not valid.");
 });
 
 /* ── мапер помилок дій ───────────────────────────────────────────────────── */
@@ -608,8 +608,8 @@ test("glpush: «позаду», «чужа», успіхи — тексти з �
   let log = await run("glpush", { ok: false, blocked: "behind", behind: 2 });
   assert.deepEqual(log.tell, [t("glBehindMsg", 2, "GitHub")]);
   assert.ok(log.tell[0].includes("На GitHub"));
-  log = await run("glpush", { ok: false, blocked: "foreign", author: "Олена" });
-  assert.deepEqual(log.tell, [t("glForeignMsg", "Олена")]);
+  log = await run("glpush", { ok: false, blocked: "foreign", author: "Анна" });
+  assert.deepEqual(log.tell, [t("glForeignMsg", "Анна")]);
   log = await run("glpush", { ok: true, synced: true, catchup: true });
   assert.deepEqual(log.toast, [t("glCatchupToast", "GitHub")]);
   log = await run("glpush", { ok: true, synced: true, changed: false });

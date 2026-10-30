@@ -8,6 +8,7 @@ import ast
 import contextlib
 import io
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -151,6 +152,42 @@ class Validate(Base):
             with self.subTest(repo=repr(repo)):
                 self.bad(self.target(repo))
 
+    def test_a_password_in_the_scp_form_is_refused_and_never_echoed(self):
+        """`user:pass@host:path` читається як хост `user` і шлях `pass@host:path`: без відмови пароль потрапив би в теку
+        дзеркала, `.git/config`, `tasks.json` і stderr git."""
+        for repo in ('user:pass@h:o/r.git', 'u:p@h:o', 'git:s3cret@gitlab.example:org/r.git', 'u:p@h:r', 'u:@h:o'):
+            with self.subTest(repo=repo):
+                e = self.bad(self.target(repo))
+                self.assertIn('password', e.message)
+                self.assertNotIn('s3cret', str(e))
+                self.assertNotIn(':p@', str(e))
+        for repo in ('h:o/r.git', 'git@h:o/r.git', 'h:o/a@b.git', 'h:o/r@x'):          # `@` після першого `/` — звичайний шлях
+            with self.subTest(good=repo):
+                self.assertEqual(self.m.validate(self.ctx(), self.target(repo))['repo'], repo)
+
+    def test_the_scp_path_may_not_start_with_a_colon(self):
+        self.bad(self.target('user@h::x'))
+
+    def test_transport_helpers_are_refused_but_ipv6_is_not_mistaken_for_one(self):
+        """`'::' in repo` відхиляло й `https://[::1]/x` хибним текстом про `ext::`: звужено до `<схема>::` на початку."""
+        for repo in ('ext::sh', 'fd::3', 'a+b::x', 'EXT::x', 'h::x'):
+            with self.subTest(bad=repo):
+                self.assertIn('transport helpers', self.bad(self.target(repo)).message)
+        for repo in ('https://[::1]/x', 'https://[2001:db8::1]:8443/o/r.git', 'ssh://git@[::1]:2222/o/r.git'):
+            with self.subTest(good=repo):
+                self.assertEqual(self.m.validate(self.ctx(), self.target(repo))['repo'], repo)
+                self.m.mirror_dir(self.ctx(), self.target(repo))        # решта модуля з IPv6-хостом теж працює
+
+    def test_percent_encoding_in_the_host_or_user_of_a_url_is_refused(self):
+        """`%0a` у хості — керівний символ, якого `_ctl` не бачить (він ще не розкодований); `%20` — пробіл у `host`."""
+        for repo in ('ssh://host%0a/x', 'ssh://us%20er@host/x', 'https://h%20x/o', 'https://u%0a@h/o', 'https://h%2fx/o',
+                     'ssh://git@h%0d/o/r.git', 'https://[fe80::1%25eth0]/o'):
+            with self.subTest(repo=repo):
+                self.bad(self.target(repo))
+        for repo in ('https://h/o%20x', 'https://h/o/r%2Egit'):                   # у шляху `%` — звичайний символ
+            with self.subTest(good=repo):
+                self.assertEqual(self.m.validate(self.ctx(), self.target(repo))['repo'], repo)
+
     def test_a_password_in_the_address_is_refused_and_never_echoed(self):
         e = self.bad(self.target('https://u:p@h/r.git'))
         self.assertNotIn('p@', str(e))
@@ -269,6 +306,15 @@ class Validate(Base):
                 for leaked in ('TOKEN123', 'secret', 'p@ss', 'ss@'):
                     self.assertNotIn(leaked, m)
 
+    def test_a_password_in_the_scp_form_is_masked_in_text_too(self):
+        for text, keep in (("fatal: 'user:pass@h:o/r.git' does not appear to be a git repository", "'***@h:o/r.git'"),
+                           ('origin user:s3cret@gitlab.example:org/r.git → x', '***@gitlab.example:org/r.git')):
+            with self.subTest(text=text):
+                m = self.m._err(self.ctx(), 'vcs-error', text).message
+                self.assertIn(keep, m)
+                self.assertNotIn('pass@', m)
+                self.assertNotIn('s3cret', m)
+
     def test_text_without_userinfo_is_left_alone(self):
         for text in ("fatal: repository 'https://h/o/r.git/' not found", 'git@h: Permission denied (publickey).',
                      "fatal: path 'https://h/a@b' unknown", 'ssh: connect to host h port 22: refused'):
@@ -288,21 +334,43 @@ class MirrorDir(Base):
             ctx['mirror_flat'] = True
         return self.m.mirror_dir(ctx, dict({'repo': repo, 'path': 'p', 'branch': 'main'}, **kw))
 
+    def assertMirror(self, got, host, slug):
+        """`mirrors/<host>/<slug>-<8 hex>`: хеш повної адреси відрізняє репо, чиї slug-и збіглися (`o/r` і `o-r`)."""
+        self.assertEqual(os.path.dirname(got), os.path.join(self.cache, 'mirrors', host))
+        self.assertRegex(os.path.basename(got), '^' + re.escape(slug) + '-[0-9a-f]{8}$')
+
     def test_local_path_goes_under_local(self):
-        self.assertEqual(self.md('/x/origin.git'), os.path.join(self.cache, 'mirrors', 'local', 'x-origin.git'))
-        self.assertEqual(self.md('file:///x/origin.git'), os.path.join(self.cache, 'mirrors', 'local', 'x-origin.git'))
+        self.assertMirror(self.md('/x/origin.git'), 'local', 'x-origin.git')
+        self.assertMirror(self.md('file:///x/origin.git'), 'local', 'x-origin.git')
 
     def test_ssh_url_with_a_port_keeps_the_port_in_the_host(self):
-        self.assertEqual(self.md('ssh://git@h:2222/o/r.git'), os.path.join(self.cache, 'mirrors', 'h-2222', 'o-r.git'))
+        self.assertMirror(self.md('ssh://git@h:2222/o/r.git'), 'h-2222', 'o-r.git')
 
     def test_scp_form(self):
-        self.assertEqual(self.md('git@gitlab.internal.example:ORG/r.git'),
-                         os.path.join(self.cache, 'mirrors', 'gitlab.internal.example', 'ORG-r.git'))
-        self.assertEqual(self.md('h:o/r.git'), os.path.join(self.cache, 'mirrors', 'h', 'o-r.git'))
+        self.assertMirror(self.md('git@gitlab.internal.example:ORG/r.git'), 'gitlab.internal.example', 'ORG-r.git')
+        self.assertMirror(self.md('h:o/r.git'), 'h', 'o-r.git')
 
     def test_https_url(self):
-        self.assertEqual(self.md('https://user@github.com/o/r.git'),
-                         os.path.join(self.cache, 'mirrors', 'github.com', 'o-r.git'))
+        self.assertMirror(self.md('https://user@github.com/o/r.git'), 'github.com', 'o-r.git')
+
+    def test_repos_whose_slugs_collide_never_share_a_folder(self):
+        """Slug склеює `/` і `-`: без хеша `o/r` і `o-r` мали б одну теку, а push у другий віз би історію першого."""
+        pairs = (('git@h:o/r.git', 'git@h:o-r.git'), ('git@h:a/b-c.git', 'git@h:a-b/c.git'),
+                 ('/x/y', '/x-y'), ('/x/y.git', 'file:///x-y.git'), ('https://h/o/r', 'https://h/o-r'),
+                 ('ssh://git@h:2222/o/r.git', 'ssh://git@h:2222/o-r.git'))
+        for a, b in pairs:
+            with self.subTest(a=a, b=b):
+                self.assertNotEqual(self.md(a), self.md(b))
+
+    def test_the_same_address_in_the_forms_the_user_may_type_is_one_folder_per_spelling(self):
+        """Хеш — від НОРМАЛІЗОВАНОЇ адреси: користувач, схема й слеш на початку шляху його не міняють."""
+        self.assertEqual(self.md('git@h:o/r.git'), self.md('ssh://other@h/o/r.git'))
+        self.assertEqual(self.md('git@h:o/r.git'), self.md('h:o/r.git'))
+        self.assertEqual(self.md('/x/o.git'), self.md('file:///x/o.git'))
+        self.assertEqual(self.md('git@H:o/r.git'), self.md('git@h:o/r.git'))
+
+    def test_the_folder_does_not_depend_on_the_task_branch_or_path(self):
+        self.assertEqual(self.md('git@h:o/r.git', path='a', branch='x'), self.md('git@h:o/r.git', path='b', branch='y'))
 
     def test_github_and_gitlab_with_the_same_path_do_not_mix(self):
         a, b = self.md('git@github.com:ORG/r.git'), self.md('git@gitlab.internal.example:ORG/r.git')
@@ -317,6 +385,8 @@ class MirrorDir(Base):
     def test_flat_mode_is_the_0_7_0_rule(self):
         self.assertEqual(self.md('git@h:ORG/r.git', flat=True), os.path.join(self.cache, 'ORG-r.git'))
         self.assertEqual(self.md('/x/origin.git', flat=True), os.path.join(self.cache, 'x-origin.git'))
+        # Без хеша: старі клони ЛІГИ не мусять перегортатись. Колізію там стереже `_align_remote` (інший репо → відмова).
+        self.assertEqual(self.md('git@h:o/r.git', flat=True), self.md('git@h:o-r.git', flat=True))
 
     def test_a_slug_that_is_empty_or_dots_is_refused_and_never_leaves_the_cache(self):
         for repo in ('file:///..', 'file:///.', 'file:///', 'file:////', 'file:///-'):
@@ -1052,7 +1122,7 @@ class Status(Repo):
     def test_on_remote_has_three_states_and_none_is_not_false(self):
         """Переїхало з `tests/test_gitlab_sync.py` (`_on_remote` ядра 0.7.0): True / False / None («гілки origin нема —
         питання без відповіді»). Зливати None у False означало б сказати «на GitLab немає» там, де просто не змогли
-        спитати — те саме вигадування впевненості, через яке баг bgSanctions виглядав правдою."""
+        спитати — те саме вигадування впевненості, через яку хибне «✓» виглядало правдою."""
         origin = self.bare()
         t = self.target(origin)
         self.go(origin)
@@ -1094,8 +1164,11 @@ class Status(Repo):
         self.assertEqual([n for n in os.listdir(os.path.dirname(md)) if not n.endswith('@lock')], [])
         self.assertEqual(self.go(origin)['behind'], 0, 'наступна спроба клонує заново')
 
-    def test_origin_of_the_mirror_follows_the_target(self):
-        a, b = self.bare('p-q/o.git'), self.bare('p/q/o.git')
+    def test_origin_of_the_mirror_follows_the_target_when_it_is_the_same_repository(self):
+        """Адреса задачі змінила форму (`file://` ↔ шлях) — тека дзеркала та сама, `origin` іде за ціллю. Інший репо в тій
+        самій теці — відмова (`Collision`)."""
+        a = self.bare()
+        b = 'file://' + a
         self.assertEqual(self.mirror(a), self.mirror(b), 'передумова: обидві адреси дають одну теку дзеркала')
         self.go(a)
         url = lambda: self.git(self.mirror(a), 'config', '--get', 'remote.origin.url').strip()
@@ -1164,16 +1237,6 @@ class Status(Repo):
         self.assertIn('not a branch', e.message)
         self.assertFalse(os.path.exists(md))
         self.assertEqual([n for n in os.listdir(os.path.dirname(md)) if not n.endswith('@lock')], [])
-
-    def test_a_token_in_the_old_origin_is_masked_in_the_realignment_notice(self):
-        origin = self.bare()
-        self.go(origin)
-        self.git(self.mirror(origin), 'remote', 'set-url', 'origin', 'https://TOKEN123@h.example/o/r.git')
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.go(origin)
-        self.assertIn('***@h.example', err.getvalue())
-        self.assertNotIn('TOKEN123', err.getvalue())
 
     def test_a_git_dir_in_the_environment_does_not_hijack_the_mirror(self):
         origin = self.bare()
@@ -1356,7 +1419,7 @@ class Push(Repo):
         self.assertIsNone(self.head(origin, 'refs/heads/main'))
 
     def test_an_empty_src_into_an_empty_remote_is_not_reported_as_sent(self):
-        """Гілки на origin ще нема, нових змін теж: «synced» тут було б брехнею (bgSanctions, 12 днів «✓»)."""
+        """Гілки на origin ще нема, нових змін теж: «synced» тут було б брехнею (колись «✓» висіло днями при незапушеному коміті)."""
         origin = self.bare(seed=False)
         r = self.go(origin, self.src({}))
         self.assertEqual((r['ok'], r['synced'], r['pushed']), (False, False, False))
@@ -1807,6 +1870,128 @@ class Pull(Repo):
 
 
 @unittest.skipIf(os.name == 'nt', 'flock між процесами — лише POSIX')
+class Collision(Repo):
+    """Два РІЗНІ репо не діляться дзеркалом, а коли діляться (простір ЛІГА: slug 0.7.0 без хеша) — `origin` чужого репо не
+    переставляється мовчки: інакше push везе історію одного репо в remote іншого (`o/r` і `o-r` мали одну теку)."""
+
+    def two_repos(self):
+        a = self.bare('p/q.git')
+        self.peer_commit({'A-private.txt': 'тільки для A\n'}, msg='private of A')
+        head_a = self.head(a)
+        b = self.bare('p-q.git')
+        return a, b, head_a
+
+    def flat(self):
+        ctx = self.ctx()
+        ctx['mirror_flat'] = True
+        return ctx
+
+    def test_a_push_to_a_repo_with_a_colliding_slug_does_not_carry_the_history_of_the_other(self):
+        """Відтворено на `<d>/p/q.git` і `<d>/p-q.git`: push у A, потім у B віз у B увесь вміст A, звіт `ok`."""
+        a, b, head_a = self.two_repos()
+        self.assertNotEqual(self.mirror(a), self.mirror(b))
+        r = self.m.push(self.ctx(), self.target(a), self.src(), self.META)
+        self.assertTrue(r['ok'], r)
+        r = self.m.push(self.ctx(), self.target(b), self.src(), self.META)
+        self.assertTrue(r['ok'], r)
+        self.assertNotIn('A-private.txt', self.files_at(b))
+        self.assertNotIn(head_a, self.git(b, 'rev-list', '--all').split())
+        self.assertIn('A-private.txt', self.files_at(a), 'у A своє лишилось')
+
+    def test_in_a_flat_space_a_colliding_repo_is_refused_and_the_other_remote_stays_untouched(self):
+        a, b, head_a = self.two_repos()
+        head_b = self.head(b)
+        ctx = self.flat()
+        self.assertEqual(self.m.mirror_dir(ctx, self.target(a)), self.m.mirror_dir(ctx, self.target(b)))
+        self.assertTrue(self.m.push(ctx, self.target(a), self.src(), self.META)['ok'])
+        for call in (lambda: self.m.push(ctx, self.target(b), self.src(), self.META),
+                     lambda: self.m.status(ctx, self.target(b)),
+                     lambda: self.m.pull(ctx, self.target(b), self.dst())):
+            e = self.refused(call, 'vcs-error')
+            self.assertIn('another repository', e.message)
+        self.assertEqual(self.head(b), head_b, 'у чужий remote нічого не поїхало')
+        self.assertNotIn('A-private.txt', self.files_at(b))
+        md = self.m.mirror_dir(ctx, self.target(a))
+        self.assertEqual(self.git(md, 'config', '--get', 'remote.origin.url').strip(), a, 'origin лишився на A')
+
+    def align(self, have, want, **kw):
+        """Дзеркало з `origin = have`; `_align_remote` цілі `want` → записаний `origin` після виклику."""
+        md = os.path.join(self.tmp, 'md')
+        shutil.rmtree(md, ignore_errors=True)
+        os.makedirs(md)
+        self.git(md, 'init', '-q')
+        self.git(md, 'remote', 'add', 'origin', have)
+        ctx = self.ctx(**kw)
+        g = self.m._Git(ctx, self.m.validate(ctx, self.target(want)))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.m._align_remote(g, md)
+        return self.git(md, 'config', '--get', 'remote.origin.url').strip()
+
+    def test_the_same_repository_in_another_form_is_followed(self):
+        """Запис origin міг прийти з іншої форми адреси ТОГО Ж репо (схема, користувач, регістр хоста, `.git`): це не колізія."""
+        for have, want in (('/x/o.git', 'file:///x/o.git'), ('file:///x/o.git', '/x/o.git'),
+                           ('git@h:o/r.git', 'ssh://git@h/o/r.git'), ('git@h:o/r.git', 'https://h/o/r'),
+                           ('git@h:o/r.git', 'other@h:o/r.git'), ('git@H:o/r.git', 'git@h:o/r.git'),
+                           ('https://h/o/r', 'git@h:o/r.git'), ('ssh://git@h:2222/o/r.git', 'git@h:o/r.git'),
+                           ('ssh://git@[::1]:2222/o/r.git', 'https://[::1]/o/r')):
+            with self.subTest(have=have, want=want):
+                self.assertEqual(self.align(have, want), want)
+
+    def test_an_address_by_ip_of_the_same_path_is_followed(self):
+        """Дзеркало, склоноване з обхідною IP-адресою (історія 0.7.0), мусить іти за адресою-іменем, і навпаки."""
+        for have, want in (('git@10.0.0.9:o/r.git', 'git@gitlab.example:o/r.git'),
+                           ('git@gitlab.example:o/r.git', 'git@10.0.0.9:o/r.git'),
+                           ('ssh://git@[::1]/o/r.git', 'git@gitlab.example:o/r.git')):
+            with self.subTest(have=have, want=want):
+                self.assertEqual(self.align(have, want), want)
+
+    def test_another_repository_is_refused_not_rewritten(self):
+        for have, want in (('git@h:o-r.git', 'git@h:o/r.git'), ('git@h:a-b/c.git', 'git@h:a/b-c.git'),
+                           ('/x-y', '/x/y'), ('git@h1:o/r.git', 'git@h2:o/r.git'),
+                           ('git@10.0.0.1:o/r.git', 'git@10.0.0.2:o/r.git'), ('https://h/o/r', 'https://h/O/r'),
+                           ('git@h:o/r.git', 'git@h:o/r2.git'), ('/x/o.git', '/y/o.git'),
+                           ('git@10.0.0.9:x/y', '/x/y'), ('/x/y', 'git@10.0.0.9:x/y'),
+                           ('https://[::1]/o/r', 'https://[::2]/o/r'), ('https://[::1]:8443/o/r', 'https://[::2]/o/r')):
+            with self.subTest(have=have, want=want):
+                md = os.path.join(self.tmp, 'md')
+                with self.assertRaises(FakeModuleError) as cm:
+                    self.align(have, want)
+                self.assertEqual(cm.exception.code, 'vcs-error')
+                self.assertIn('another repository', cm.exception.message)
+                self.assertEqual(self.git(md, 'config', '--get', 'remote.origin.url').strip(), have)
+
+    def test_the_refusal_masks_the_address_it_shows(self):
+        with self.assertRaises(FakeModuleError) as cm:
+            self.align('https://TOKEN123@h/o/r.git', 'https://h/o/other.git')
+        self.assertNotIn('TOKEN123', cm.exception.message)
+        self.assertIn('***@h/o/r.git', cm.exception.message)
+
+    def test_a_mirror_without_a_recorded_origin_is_refused_too(self):
+        """Нема що порівнювати — значить не доведено, що це той самий репо."""
+        md = os.path.join(self.tmp, 'md')
+        os.makedirs(md)
+        self.git(md, 'init', '-q')
+        ctx = self.ctx()
+        g = self.m._Git(ctx, self.m.validate(ctx, self.target('git@h:o/r.git')))
+        with self.assertRaises(FakeModuleError) as cm:
+            self.m._align_remote(g, md)
+        self.assertEqual(cm.exception.code, 'vcs-error')
+
+    def test_the_message_of_a_followed_rewrite_goes_through_the_mask(self):
+        md = os.path.join(self.tmp, 'md')
+        os.makedirs(md)
+        self.git(md, 'init', '-q')
+        self.git(md, 'remote', 'add', 'origin', 'https://TOKEN123@h/o/r.git')
+        ctx = self.ctx()
+        g = self.m._Git(ctx, self.m.validate(ctx, self.target('git@h:o/r.git')))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.m._align_remote(g, md)
+        self.assertNotIn('TOKEN123', err.getvalue())
+        self.assertIn('https://***@h/o/r.git', err.getvalue())
+        self.assertIn('→', err.getvalue())
+
+
 class Waiting(Repo):
     """`push` і `pull` ЧЕКАЮТЬ на зайняте дзеркало (на відміну від `status`): лок тримає інший процес."""
 
@@ -2054,7 +2239,7 @@ class Lock(Base):
 
 class SourceShape(unittest.TestCase):
     #: Усе, що `server.py` може імпортувати (exec-иться ядром: без `serve`, ядра, сусідів, `importlib`).
-    ALLOWED_IMPORTS = {'fcntl', 'ipaddress', 'msvcrt', 'os', 're', 'shlex', 'shutil', 'subprocess', 'sys', 'tempfile',
+    ALLOWED_IMPORTS = {'fcntl', 'hashlib', 'ipaddress', 'msvcrt', 'os', 're', 'shlex', 'shutil', 'subprocess', 'sys', 'tempfile',
                        'time', 'urllib'}
 
     @classmethod

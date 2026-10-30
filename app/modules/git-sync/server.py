@@ -23,6 +23,7 @@
 Команду ssh модуль складає лише тоді, коли сам щось додає (`ssh_key`, повтор через `host_ip`): основа — `GIT_SSH_COMMAND`
 оточення, інакше `ssh`. Інакше git бере ssh людини (`core.sshCommand`, `~/.ssh/config`) сам — модуль його не перекриває.
 """
+import hashlib
 import ipaddress
 import os
 import re
@@ -64,6 +65,9 @@ _NO_BRANCH_MARKS = ('not found in upstream', "couldn't find remote ref", 'could 
 _SCP = re.compile(r'(?:([^@/:\s]+)@)?([^/:\s]+):(.+)')
 _NAME = re.compile(r'[A-Za-z0-9._-]+')          # хост і користувач scp-адреси: жодних `; $ ( ) & | < >` (див. `_Git._ssh`)
 _USERINFO = re.compile(r'(://)[^/\s]*@')              # до ОСТАННЬОГО `@` перед першим `/`: `p@ss` у паролі теж
+#: Пароль у scp-формі (`user:pass@host:path`): `validate` такого не пропускає, але текст git чи чужий `origin` — міг бути.
+_SCP_PASS = re.compile(r'(?<![\w.@/:-])[\w.-]+:[^\s@/:]*@(?=[\w.-]+:)')
+_TRANSPORT = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*::')       # `ext::cmd`, `fd::3`; `https://[::1]/x` — це IPv6, не він
 _BAD_BRANCH_CHARS = set(' ~^:?*[\\')
 _BAD_PATH_CHARS = set('*?[\\')
 #: Змінні оточення батька, що перекрили б модуль: особистість коміту (`meta.author`) і розташування репозиторію
@@ -82,9 +86,9 @@ def _err(ctx, code, message=''):
 
 
 def _mask(text):
-    """Userinfo адреси (`://user:pass@`, `://TOKEN@`) ніколи не йде в текст: пароль у адресі відхиляє `validate`, але токен
-    у позиції користувача він не відрізнить, а stderr git — чужий текст."""
-    return _USERINFO.sub(r'\1***@', text)
+    """Userinfo адреси (`://user:pass@`, `://TOKEN@`, scp `user:pass@host:`) ніколи не йде в текст: пароль у адресі відхиляє
+    `validate`, але токен у позиції користувача він не відрізнить, а stderr git — чужий текст."""
+    return _SCP_PASS.sub('***@', _USERINFO.sub(r'\1***@', text))
 
 
 def _empty(v):
@@ -105,11 +109,50 @@ def _split_repo(repo):
         u = urlsplit(repo)
         if u.scheme == 'file':
             return 'local', u.path
-        return (u.hostname or '') + (f':{u.port}' if u.port else ''), u.path
+        h = u.hostname or ''
+        return (f'[{h}]' if ':' in h else h) + (f':{u.port}' if u.port else ''), u.path      # IPv6 — у дужках
     m = _SCP.fullmatch(repo)
     if m and not os.path.isabs(repo):
         return m.group(2), m.group(3)
     return 'local', repo
+
+
+def _bare_host(host):
+    """Хост без порту (`h:2222` → `h`, `[::1]:22` → `[::1]`)."""
+    return re.sub(r':\d+$', '', host)
+
+
+def _ident(repo):
+    """Особа репозиторію за адресою: (хост у нижньому регістрі, шлях без крайніх `/` і `.git`). Схема, користувач і порт
+    сюди не входять: `git@h:o/r.git`, `ssh://x@h:2222/o/r` і `https://h/o/r` — той самий репо."""
+    host, rpath = _split_repo(repo)
+    path = rpath.strip('/')
+    if path.endswith('.git'):
+        path = path[:-4]
+    return _bare_host(host).lower(), path
+
+
+def _is_ip(host):
+    try:
+        ipaddress.ip_address(host.strip('[]'))
+        return True
+    except ValueError:
+        return False
+
+
+def _same_repo(have, want):
+    """Чи `have` (записаний `origin`) — той самий репозиторій, що й `want` (адреса цілі), лише в іншій формі. Той самий шлях
+    і той самий хост; або шлях збігається, а РІВНО ОДИН із хостів — IP-адреса (обхід: дзеркало склоноване з IP, ціль — імʼям, і
+    навпаки). Локальні шляхи з віддаленими не змішуються. Не розібрана адреса — «не той самий»."""
+    try:
+        (hh, hp), (wh, wp) = _ident(have), _ident(want)
+    except ValueError:
+        return False
+    if hp != wp:
+        return False
+    if hh == wh:
+        return True
+    return 'local' not in (hh, wh) and _is_ip(hh) != _is_ip(wh)          # два РІЗНІ IP чи два різні імені — різні сервери
 
 
 def _repo_why(repo):
@@ -117,7 +160,7 @@ def _repo_why(repo):
         return 'repo: empty or contains spaces or control characters'
     if repo.startswith('-'):
         return 'repo: must not start with "-"'
-    if '::' in repo:
+    if _TRANSPORT.match(repo):
         return 'repo: transport helpers (ext::, fd::) are not allowed'
     if repo.startswith(ALLOWED_SCHEMES):
         try:
@@ -130,6 +173,8 @@ def _repo_why(repo):
                 'repo: file:// needs an absolute local path'
         if not u.hostname or u.hostname.startswith('-') or (u.username or '').startswith('-'):
             return 'repo: bad host'
+        if '%' in u.hostname or '%' in (u.username or ''):       # `host%0a`, `us%20er`: розкодується в керівний символ чи пробіл
+            return 'repo: bad host'
         if u.password is not None:
             return 'repo: a password in the address is not accepted — keep credentials in git (credential helper)'
         return None
@@ -138,8 +183,11 @@ def _repo_why(repo):
     if os.path.isabs(repo):
         return None
     m = _SCP.fullmatch(repo)
+    if m and '@' in m.group(3).split('/', 1)[0]:
+        # `user:pass@host:path` читається як хост `user` і шлях `pass@host:path`: `@` у першому відрізку шляху — userinfo.
+        return 'repo: a password in the address is not accepted — keep credentials in git (credential helper)'
     if (m and _NAME.fullmatch(m.group(2)) and not m.group(2).startswith('-')
-            and (m.group(1) is None or _NAME.fullmatch(m.group(1))) and not m.group(3).startswith('-')):
+            and (m.group(1) is None or _NAME.fullmatch(m.group(1))) and not m.group(3).startswith(('-', ':'))):
         return None
     return 'repo: use ssh://, https://, file://, user@host:path or an absolute local path'
 
@@ -205,12 +253,21 @@ def _mirror(ctx, t):
     if _empty(base):
         raise _err(ctx, 'vcs-error', 'no cache_dir in ctx')
     if ctx.get('mirror_flat'):
-        parts = [_slug(t['repo'].split(':')[-1])]             # правило `_mirror_dir` 0.7.0: старі клони ЛІГИ
+        # Правило `_mirror_dir` 0.7.0 БЕЗ хеша: старі клони ЛІГИ не перегортаються. Колізію slug-ів там стереже
+        # `_align_remote`: чужий `origin` у теці — відмова, а не `set-url`.
+        parts = [_slug(t['repo'].split(':')[-1])]
+        last = None
     else:
         host, rpath = _split_repo(t['repo'])
-        parts = ['mirrors', _slug(host), _slug(rpath)]
+        parts = ['mirrors', _slug(host.lower()), _slug(rpath)]
+        last = len(parts) - 1
     if any(p in ('', '.', '..') for p in parts):
         raise _err(ctx, 'vcs-bad-target', 'repo: cannot name a mirror folder for this address')
+    if last is not None:
+        # Slug склеює `/` і `-` (`o/r` = `o-r`): без хеша ПОВНОЇ нормалізованої адреси два репо ділили б теку, а push у
+        # другий віз би в його remote історію першого. Хеш — не секрет, лише розрізнення (`usedforsecurity=False`).
+        h, pth = _ident(t['repo'])
+        parts[last] += '-' + hashlib.sha1(f'{h}\0{pth}'.encode('utf-8', 'surrogatepass'), usedforsecurity=False).hexdigest()[:8]
     return os.path.join(base, *parts)
 
 
@@ -429,15 +486,19 @@ def _ensure(g, md):
 
 
 def _align_remote(g, md):
-    """`origin` дзеркала = адреса цілі (fb-29092026-d64d35: дзеркало, склоноване з обхідною IP-адресою, тримало її в
-    origin тижнями). ЗАПИСАНЕ значення, а не `remote get-url`: той розгортає `url.*.insteadOf`."""
+    """`origin` дзеркала мусить бути адресою цілі. Те саме репо в іншій формі (інша схема чи користувач, адреса-IP обходу від
+    0.7.0) — переставляємо на адресу цілі. ІНШИЙ репозиторій (збіг теки: простір ЛІГА ділить slug без хеша) — відмова
+    `vcs-error`: `set-url` мовчки повіз би історію одного репо в remote іншого. ЗАПИСАНЕ значення, а не `remote get-url`:
+    той розгортає `url.*.insteadOf`."""
     r = g.run(['config', '--get', 'remote.origin.url'], md)
     have = (r.stdout or '').strip() if r.returncode == 0 else ''
     if have == g.t['repo']:
         return
+    if not have or not _same_repo(have, g.t['repo']):
+        raise _err(g.ctx, 'vcs-error', f'the mirror folder {os.path.basename(md)} holds another repository '
+                                       f'(origin {have or "—"}), not {g.t["repo"]}: origin is not rewritten; delete the folder to re-clone')
     g.must(['remote', 'set-url', 'origin', g.t['repo']], md, 'remote set-url')
-    print(_mask(f'дзеркало {os.path.basename(md)}: origin {have or "—"} → {g.t["repo"]} (за ціллю синку)'),
-          file=sys.stderr)
+    print(_mask(f'дзеркало {os.path.basename(md)}: origin {have} → {g.t["repo"]} (за ціллю синку)'), file=sys.stderr)
 
 
 def _reset(g, md):
@@ -641,7 +702,7 @@ def push(ctx, target, src, meta):
                         'error': _mask(ff.stderr or ff.stdout or '')[-200:]}
         dst = _inside(ctx, md, p)                        # ПІСЛЯ merge: він міг привезти симлінк
         if not _commit_tree(g, ctx, md, src, dst, p, ident, message):
-            # Не змінилось — ще НЕ «лежить на origin»: попередній коміт міг не доїхати (bgSanctions, 12 днів «✓»).
+            # Не змінилось — ще НЕ «лежить на origin»: попередній коміт міг не доїхати (колись «✓» висіло днями при незапушеному коміті).
             # Гілки на origin нема зовсім (порожній репо) — теж не «synced»: пробуємо push і чесно звітуємо про результат.
             if _count(g, md, f'origin/{b}..{b}') == 0 and _has_ref(g, md, f'refs/remotes/origin/{b}'):
                 return {'ok': True, 'synced': True, 'changed': False, 'pushed': False}

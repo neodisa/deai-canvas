@@ -159,7 +159,7 @@ const UK = {
   vcsErrOffline: (label) => `${label} не відповідає — немає мережі чи VPN. Макет лишився на цьому компʼютері.`,
   vcsErrAuth: (label) => `${label} не пускає — перевір SSH-ключ чи вхід у git на цьому компʼютері.`,
   vcsErrBusy: 'Синхронізація вже йде — спробуй за хвилину.',
-  vcsErrTarget: 'Адреса репозиторію, гілка чи тека не підходять — виправ їх на «Підключенні».',
+  vcsErrTarget: 'Адреса репозиторію, гілка чи тека цієї задачі (або типові на «Підключенні») не підходять.',
 
   // Контекст-меню ітерації й сторінки (`pillMenu`/`pageMenu`) — самі меню
   // лишаються, План B їх не чіпає
@@ -1250,7 +1250,7 @@ const EN = {
   vcsErrOffline: (label) => `${label} is not answering — no network or VPN. The layout stayed on this computer.`,
   vcsErrAuth: (label) => `${label} refused access — check the SSH key or the git sign-in on this computer.`,
   vcsErrBusy: 'A sync is already running — try again in a minute.',
-  vcsErrTarget: 'The repository address, branch or folder is not valid — fix them on Connections.',
+  vcsErrTarget: 'The repository address, branch or folder of this task (or the defaults on Connections) is not valid.',
 
   menuRename: 'Rename…',
   menuDuplicateIteration: 'Duplicate (new copy)',

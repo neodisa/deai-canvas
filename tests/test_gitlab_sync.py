@@ -562,19 +562,34 @@ class GitlabSyncHonesty(unittest.TestCase):
         self.assertNotIn('origin', err.getvalue(), 'origin переписано, хоча він збігався')
 
     def test_mirror_follows_repo_url_from_tasks_json(self):
-        """Дзеркало, склоноване зі старою адресою (обхід по IP 25.08.2026),
-        тримало її і після того, як `tasks.json` полагодили: `git fetch` ішов
-        на origin дзеркала, а не на адресу задачі. Лікувалось руками —
-        `git remote set-url`. Дзеркало мусить іти за конфігом."""
+        """Дзеркало, склоноване зі старою формою адреси (обхід по IP 25.08.2026), тримало її і після того, як `tasks.json`
+        полагодили: `git fetch` ішов на origin дзеркала, а не на адресу задачі. Дзеркало мусить іти за конфігом — коли це
+        ТОЙ САМИЙ репо в іншій формі (`file://` ↔ шлях)."""
         self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')         # клон дзеркала
         md = self.serve.vcs_mirror_dir(self.gl)
-        sh(['git', 'remote', 'set-url', 'origin', os.path.join(self.tmp, 'gone.git')], md)
+        sh(['git', 'remote', 'set-url', 'origin', 'file://' + self.origin], md)
 
         self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')         # звірка origin з ціллю
 
         self.assertEqual(sh(['git', 'remote', 'get-url', 'origin'], md).stdout.strip(),
                          self.origin)
         self.assertTrue(self._sync()['synced'], 'після вирівнювання пуш не пройшов')
+
+    def test_mirror_of_another_repo_is_refused_not_rewritten(self):
+        """Інший репозиторій у теці дзеркала: `set-url` мовчки повіз би історію одного репо в remote іншого. Статус
+        віддає помилку, відправка — `OSError` (як і інша відмова git); `origin` лишається."""
+        self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')
+        md = self.serve.vcs_mirror_dir(self.gl)
+        gone = os.path.join(self.tmp, 'gone.git')
+        sh(['git', 'remote', 'set-url', 'origin', gone], md)
+
+        st = self.serve.gitlab_status(self.task, self.gl, self._meta(), 'it1')
+        self.assertEqual(st['code'], 'vcs-error')
+        self.assertIn('another repository', st['error'])
+        with self.assertRaises(OSError) as cm:
+            self._sync()
+        self.assertIn('another repository', str(cm.exception))
+        self.assertEqual(sh(['git', 'remote', 'get-url', 'origin'], md).stdout.strip(), gone)
 
     def test_second_pull_without_changes_creates_nothing(self):
         """Пара не дублюється: чужа ітерація байт-у-байт дорівнює дзеркалу,

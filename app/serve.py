@@ -782,6 +782,13 @@ def _vcs_call(vcs, fn, *args, timeout=None):
         raise VcsError('module-error', f'{fn} returned {type(r).__name__}, expected {want.__name__}')
     if fn in _VCS_TEXTY:
         r = {k: _mask_repo(x) if isinstance(x, str) else x for k, x in r.items()}
+    if isinstance(r, dict):
+        # Результат іде в `_send_json` ПОЗА `try` маршруту: `set`/`bytes` у відповіді свого модуля обірвали б зʼєднання (а для
+        # автосинку — 5xx Stop-хуку). Перевіряємо тут, де `module-error` ще має куди піти.
+        try:
+            json.dumps(r)
+        except (TypeError, ValueError):
+            raise VcsError('module-error', f'{fn} returned a result that is not JSON-serializable') from None
     return r
 
 
@@ -1103,7 +1110,7 @@ def gitlab_status(task, gl, meta, it, vcs=None):
            # блокує відправку, `behind` наздоганяється сам).
            'behind_path': st.get('behind_path', 0),
            # незапушені локальні коміти дзеркала — щоб «✓» більше не могло
-           # означати «лежить у мене, а не на GitLab» (див. bgSanctions/22.07)
+           # означати «лежить у мене, а не на GitLab» (давній випадок: коміт лежав лише в дзеркалі)
            'unpushed': st.get('unpushed', 0),
            # чи є тека задачі на origin: «ніколи не пушилось» ≠ «синхронізовано»
            'on_remote': st.get('on_remote'),

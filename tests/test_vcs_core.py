@@ -1413,6 +1413,24 @@ class ModuleShape(Core):
                     serve._vcs_call(self.v(validate=lambda ctx, t, b=bad: b), 'validate', self.gl, timeout=5)
                 self.assertEqual(cm.exception.code, 'module-error')
 
+    def test_a_result_that_json_cannot_carry_is_a_module_error_not_a_dropped_connection(self):
+        """Свій модуль може віддати dict із `set`/`bytes`: `_send_json` кинув би `TypeError` ПОЗА `try` маршруту — обірване
+        зʼєднання, а для автосинку це 5xx Stop-хуку. Тут вона стає `module-error`, як і криву форму результату."""
+        calls = {'status': (), 'push': ('/tmp/src', {}), 'pull': ('/tmp/dst', {}), 'validate': ()}
+        for bad in ({'ok': True, 'x': {1, 2}}, {'ok': True, 'x': b'bytes'}, {'ok': True, 'x': object()},
+                    {'ok': True, 'nested': {'k': [1, {2}]}}, {'ok': True, (1, 2): 'tuple key'}):
+            for fn, extra in calls.items():
+                with self.subTest(fn=fn, bad=repr(bad)[:40]):
+                    v = self.v(**{fn: (lambda *a, b=bad: b)})
+                    with self.assertRaises(serve.VcsError) as cm:
+                        serve._vcs_call(v, fn, self.gl, *extra)
+                    self.assertEqual(cm.exception.code, 'module-error')
+                    self.assertIn(fn, str(cm.exception))
+
+    def test_a_serializable_result_passes_through_unchanged(self):
+        r = {'ok': True, 'n': 1, 'nested': {'k': [1, None, 'x']}, 'f': 1.5}
+        self.assertEqual(serve._vcs_call(self.v(status=lambda ctx, t: dict(r)), 'status', self.gl), r)
+
     def test_a_function_without_a_declared_shape_is_passed_through_as_it_is(self):
         """`web_url` законно віддає `None`: форму ядро вимагає лише там, де знає її (status/push/pull/validate/mirror_dir)."""
         self.assertIsNone(serve._vcs_call(self.v(web_url=lambda ctx, t: None), 'web_url', self.gl))
