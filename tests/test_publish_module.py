@@ -874,6 +874,9 @@ class LegacyPublishViaModule(TaskFixture):
             obs = self._legacy({**LP_OK, 'deploy': {'code': 1, 'stderr': raw}})
             self.assertEqual(self._resp(obs)['deploy_error'], raw[-400:])
             self.assertEqual(len(self._resp(obs)['deploy_error']), 400)
+        with self.subTest(code='empty output'):                 # 0.8.0 віддавало '' — тепер людський рядок ядра
+            obs = self._legacy({**LP_OK, 'deploy': {'code': 1}})
+            self.assertEqual(self._resp(obs)['deploy_error'], serve._LEGACY_EMPTY_OUTPUT)
         with self.subTest(code='vercel-no-url'):
             obs = self._legacy({**LP_OK, 'deploy': {'code': 0, 'stdout': 'нічого'}})
             self.assertEqual(self._resp(obs)['deploy_error'], serve._LEGACY_NO_URL)

@@ -94,15 +94,15 @@ test("публікація ЛІГИ: клік → модуль → фальши�
 
   /* ⛔ Справжній `POST /api/publish` — свідок, що його не підмінено: без нього «текст у вікні» міг би прийти з чого завгодно. */
   const posts = [];
-  const answers = [];
   page.on("request", (r) => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/publish") posts.push(r.url()); });
-  page.on("response", async (r) => {
-    if (r.request().method() === "POST" && new URL(r.url()).pathname === "/api/publish") answers.push(await r.json());
-  });
 
   await page.goto(`${server.url}/app/`);
   await page.waitForSelector('#bar [data-act="publish"]', { timeout: 15000 });
+  /* Відповідь чекаємо через `waitForResponse`, запущений ДО кліку: обробник `page.on("response")` заповнював масив асинхронно, і
+     перевірка довжини гналася б із ним. */
+  const respP = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/publish" && r.request().method() === "POST");
   await page.click('[data-act="publish"]');
+  const answer = await (await respP).json();
 
   const box = page.locator(".cv-ask");
   await box.waitFor({ timeout: 30000 });
@@ -110,9 +110,8 @@ test("публікація ЛІГИ: клік → модуль → фальши�
   const want = legacyNoUrl();
   assert.equal(posts.length, 1, "клік не дійшов до справжнього /api/publish");
   assert.ok(shown.includes(want), `у вікні нема тексту ЛІГИ «${want}»; є: ${shown}`);
-  assert.equal(answers.length, 1);
-  assert.equal(answers[0].deploy_error, want, "deploy_error сервера не дорівнює тексту ЛІГИ");
-  assert.equal(answers[0].url, undefined, "адреси нема — і в відповіді її бути не може");
+  assert.equal(answer.deploy_error, want, "deploy_error сервера не дорівнює тексту ЛІГИ");
+  assert.equal(answer.url, undefined, "адреси нема — і в відповіді її бути не може");
 
   /* Журнал фальшивого npx: що модуль запускав, де і з чим. */
   const calls = npxCalls(fakeDir);

@@ -810,11 +810,16 @@ test("cleanupWarning: сторож — непорожній рядок як є (
   for (const lang of ["uk", "en"]) assert.equal(DICT[lang].publishCleanupWarn, undefined, `${lang}: ключ не потрібен`);
 });
 
-/* Проводку `app.js` (у Node його не імпортують) стереже текстова перевірка, за взірцем `spaces-wiring`: попередження прибирання
-   стоїть у списку `warn` поруч із `domain_warning` СИРИМ (без `t()`), а без ключа `cleanup_warning` елемент списку — `null` (відсіюється `filter(Boolean)`). */
+// Проводку `app.js` (у Node його не імпортують) стереже текстова перевірка, за взірцем `spaces-wiring`: попередження прибирання
+// стоїть у списку `warn` поруч із `domain_warning` СИРИМ (без `t()`), а без ключа `cleanup_warning` елемент списку — `null`
+// (відсіюється `filter(Boolean)`). Коментарі блочні й рядкові з джерела вирізаються ДО перевірки (інакше рядок у коментарі
+// виглядав би як проводка), а збіг якориться на самому масиві `const warn = [ … ].filter(Boolean)`. Вирізання навмисно грубе
+// (подвійний слеш усередині рядкових літералів теж «коментар»): помилитись воно може лише в бік «не знайшов» — тест упаде.
 test("app.js: попередження прибирання — у списку warn поруч із domain_warning; відсутній ключ дає null", () => {
-  const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
-  assert.match(src, /cleanupWarning/, "app.js імпортує cleanupWarning");
-  assert.match(src, /r\.domain_warning,\s*cleanupWarning\(r\),/);
+  const raw = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const m = /const warn = \[([\s\S]*?)\]\.filter\(Boolean\)/.exec(src);
+  assert.ok(m, "список `const warn = [ … ].filter(Boolean)` є в app.js");
+  assert.match(m[1], /r\.domain_warning,\s*cleanupWarning\(r\),/, "cleanupWarning(r) стоїть у warn одразу за domain_warning");
   assert.doesNotMatch(src, /publishCleanupWarn/, "без t()-обгортки");
 });

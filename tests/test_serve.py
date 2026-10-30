@@ -2656,7 +2656,24 @@ class VercelScopeBinding(unittest.TestCase):
         self.assertEqual(serve._legacy_deploy_error(err('module-error', message='vercel-publish module is not loaded')),
                          'vercel-publish module is not loaded')
         self.assertEqual(serve._legacy_deploy_error(err('vercel-no-url', message='будь-що')), serve._LEGACY_NO_URL)
-        self.assertEqual(serve._legacy_deploy_error(err('vercel-deploy')), 'vercel-deploy')
+
+    def test_an_empty_deploy_output_is_a_human_line_never_empty_and_never_a_bare_code(self):
+        """0.8.0 віддавало '' (інтерфейс міг прочитати як успіх), перший порт — непрозорий код `vercel-deploy`. Тепер: без
+        підказки — `_LEGACY_EMPTY_OUTPUT`; з підказкою — підказка, порожній рядок і той самий текст (без заголовка «— вивід
+        vercel —»: виводу нема). Лише пробіли — теж порожній вивід."""
+        err = serve.deai_modules.ModuleError
+        line = serve._LEGACY_EMPTY_OUTPUT
+        self.assertTrue(line.strip() and 'vercel-deploy' not in line)
+        self.assertNotIn('Андр', line)                                                  # без імен людей
+        for kw in ({}, {'message': ''}, {'message': '  \n\t '}):
+            with self.subTest(code='vercel-deploy', kw=kw):
+                self.assertEqual(serve._legacy_deploy_error(err('vercel-deploy', **kw)), line)
+            with self.subTest(code='module-error', kw=kw):
+                self.assertEqual(serve._legacy_deploy_error(err('module-error', **kw)), line)
+            for code, hint in serve._LEGACY_DEPLOY_HINTS.items():
+                with self.subTest(code=code, kw=kw):
+                    self.assertEqual(serve._legacy_deploy_error(err(code, **kw)), f'{hint}\n\n{line}')
+        self.assertEqual(serve._legacy_deploy_error(err('vercel-no-url')), serve._LEGACY_NO_URL)   # свій текст, порожній вивід — норма
 
 
 class RegistryPushGuard(unittest.TestCase):

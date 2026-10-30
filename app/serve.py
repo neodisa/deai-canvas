@@ -4341,8 +4341,10 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
     (2) замок ЛИШЕ теки збірки задачі (`_try_task_dir_lock`, без очікування: зайнято — 409 `publish-busy`); (3) коментарі
     превʼю (`publish_comments`, як у `publish_with_module`) і збірка; (4) `build_only` — відповідь про збірку, як у
     `folder`; (5) `publish` модуля БЕЗ `timeout=` (у нього свої тайм-аути на запит; `timeout=` пустив би його в
-    робочий потік, що не вклався б і працював далі БЕЗ замка) із `task = {id, title, dir, state, gated}` (`gated` — чи збірку закрито паролем: модуль пароля не знає, а режиму `cli` це потрібно для перевірки превʼю), де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ
-    читання `iterations.json`; чужий чи зіпсований запис — `{}`); (6) перевірка відповіді (`_checked_url_result`:
+    робочий потік, що не вклався б і працював далі БЕЗ замка) із `task = {id, title, dir, state, gated}`
+    (`gated` — чи збірку закрито паролем: модуль пароля не знає, а режиму `cli` це потрібно для перевірки превʼю),
+    де `state` — те, що цей модуль повернув минулого разу (СВІЖЕ читання `iterations.json`; чужий чи зіпсований
+    запис — `{}`); (6) перевірка відповіді (`_checked_url_result`:
     форма; `_guarded_url_result_secrets`: жодного секрету модуля в `url`/`state`, `warnings` очищено);
     (7) `iterations.json` перечитується ПЕРЕД записом (збірка й публікація тривали, дизайнер міг перемкнути зелену
     крапку) і дістає `publish_url`, `published_at` (`ДД.ММ.РРРР ГГ:ХХ`, як у ЛІГА), `publish_verified` і
@@ -4593,14 +4595,26 @@ def _publish_legacy_call(task, tid, build_dir, proj, npx):
     return res
 
 
+#: `vercel deploy` завершився з помилкою, але нічого не надрукував (порожній вивід). 0.8.0 віддавало порожній рядок, який
+#: інтерфейс міг прочитати як успіх; тепер — людський рядок (а не непрозорий код `vercel-deploy`).
+_LEGACY_EMPTY_OUTPUT = ('vercel завершився з помилкою, але нічого не надрукував — спробуйте ще раз або виконайте '
+                        '`npx vercel deploy` у терміналі, щоб побачити причину')
+
+
 def _legacy_deploy_error(e):
     """`deploy_error` ЛІГИ з відмови модуля — той самий рядок, що в 0.8.0: підказка + «— вивід vercel —» + хвіст (300 знаків)
     для впізнаних причин (`vercel-login`/`-scope`/`-auth`), інакше лише хвіст (400). Хвіст беремо з ПОВНОГО тексту
-    (`ModuleError.full`): `message` обрізано до 300 знаків з початку, а 0.8.0 різало з кінця виводу."""
+    (`ModuleError.full`): `message` обрізано до 300 знаків з початку, а 0.8.0 різало з кінця виводу.
+
+    Порожній (чи з самих пробілів) вивід — `_LEGACY_EMPTY_OUTPUT` замість порожнього хвоста (0.8.0 віддавало '', який
+    інтерфейс міг прочитати як успіх) і замість непрозорого коду: для впізнаної причини — підказка, порожній рядок і цей
+    текст (без заголовка «— вивід vercel —»: виводу нема), інакше лише він."""
     if e.code == 'vercel-no-url':
         return _LEGACY_NO_URL
-    raw = e.full or e.message or e.code
+    raw = e.full or e.message or ''
     hint = _LEGACY_DEPLOY_HINTS.get(e.code)
+    if not raw.strip():
+        return f'{hint}\n\n{_LEGACY_EMPTY_OUTPUT}' if hint else _LEGACY_EMPTY_OUTPUT
     return f'{hint}\n\n— вивід vercel —\n{raw[-300:]}' if hint else raw[-400:]
 
 
