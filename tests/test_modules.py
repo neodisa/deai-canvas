@@ -413,6 +413,28 @@ class ManifestTest(Env):
         self.assertEqual(dm.Module('m').publish_target, 'folder')
         self.assertEqual(dm.Module('m', publish_target='url').publish_target, 'url')
 
+    def test_check_timeout_s_is_optional_and_an_integer_in_1_150(self):
+        """Необовʼязковий ключ маніфесту `check_timeout_s` (4b-1, фінальне ревʼю): довший тайм-аут `check` для модуля, що запускає
+        процес. Ціле 1..150; все інше (0, 151, дріб, рядок, bool, null, список) — `bad-manifest` ДО виконання `server.py`."""
+        marker = os.path.join(self.tmp, 'marker-cts')
+        self.mk('cts-none')
+        self.mk('cts-1', patch={'check_timeout_s': 1})
+        self.mk('cts-130', patch={'check_timeout_s': 130})
+        self.mk('cts-150', patch={'check_timeout_s': 150})
+        bad = (('cts-zero', 0), ('cts-151', 151), ('cts-neg', -1), ('cts-float', 5.0), ('cts-str', '5'),
+               ('cts-true', True), ('cts-null', None), ('cts-list', [5]))
+        for mid, v in bad:
+            self.mk(mid, patch={'check_timeout_s': v}, server=f'open({marker!r}, "w").close()\n' + ALL_FNS)
+        cat = dm.catalog()
+        self.assertEqual([(cat[m].status, cat[m].check_timeout_s) for m in ('cts-none', 'cts-1', 'cts-130', 'cts-150')],
+                         [('ok', None), ('ok', 1), ('ok', 130), ('ok', 150)])
+        for mid, _v in bad:
+            self.assertEqual(cat[mid].error_code, 'bad-manifest', mid)
+            self.assertIn('check_timeout_s', self.error_of(mid), mid)
+        self.assertFalse(os.path.exists(marker), 'server.py модуля з поганим check_timeout_s не мусить виконуватись')
+        self.assertIsNone(dm.Module('m').check_timeout_s)
+        self.assertEqual(dm.Module('m', check_timeout_s=7).check_timeout_s, 7)
+
     def test_called_role_needs_a_function(self):
         self.mk('no-publish', roles=('publish',), server=CHECK_ONLY)
         self.mk('no-tokens', roles=('tokens',), server=CHECK_ONLY)
@@ -2824,6 +2846,18 @@ class CheckTest(Env):
         self.assertLess(time.monotonic() - t0, 3)
         self.assertEqual((cm.exception.code, cm.exception.status), ('check-timeout', 504))
         self.assertEqual(dm._LAST_CHECK[(self.sp['id'], 'slow')]['error'], 'check-timeout')
+
+    def test_a_module_with_check_timeout_s_gets_that_long_for_its_check(self):
+        """Ключ реально діє: `check` модуля, що відповідає за 1 с, при `CHECK_TIMEOUT` 0.2 — `check-timeout` без ключа
+        і вердикт із `check_timeout_s: 3`."""
+        body = 'import time\ndef check(ctx):\n    time.sleep(1)\n    return {"ok": True}\ndef publish(ctx, b, t):\n    return {}\n'
+        self.mk('cts-slow', server=body)
+        self.mk('cts-patient', server=body, patch={'check_timeout_s': 3})
+        with mock.patch.object(dm, 'CHECK_TIMEOUT', 0.2):
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.check(self.sp, 'cts-slow')
+            self.assertEqual(cm.exception.code, 'check-timeout')
+            self.assertEqual(dm.check(self.sp, 'cts-patient'), {'ok': True})
 
     def test_default_timeout_is_five_seconds(self):
         self.assertEqual(dm.CHECK_TIMEOUT, 5)

@@ -1,7 +1,7 @@
 """Фальшивий `npx` для тестів режиму `cli` (4b-1): справжній виконуваний файл у тимчасовій теці. Читає
 `scenario.json` поруч із собою, дописує свій argv і cwd у `log.jsonl`, відповідає за підкомандою `vercel`.
-Сценарій: {"<підкоманда>": {"code": 0, "stdout": "...", "stderr": "...", "org": "team_x"} | [ {...}, {...} ]}
-(список — відповіді по черзі; останню повторює), `"org"` пише `.vercel/project.json` у cwd (як справжній `vercel link`).
+Сценарій: {"<підкоманда>": {"code": 0, "stdout": "...", "stderr": "...", "org": "team_x", "sleep": 6} | [ {...}, {...} ]}
+(список — відповіді по черзі; останню повторює), `"org"` пише `.vercel/project.json` у cwd (як справжній `vercel link`), `"sleep"` — секунд мовчання до відповіді.
 Мережі нема й бути не може: це лише Python, що друкує текст.
 
 `npx` — це `#!/bin/sh`-обгортка, що викликає `sys.executable` на сусідньому `npx_body.py`: шебанг із шляхом інтерпретатора
@@ -14,7 +14,7 @@ import shlex
 import stat
 import sys
 
-SCRIPT = r'''import json, os, sys
+SCRIPT = r'''import json, os, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
 with open(os.path.join(here, 'log.jsonl'), 'a', encoding='utf-8') as f:
@@ -28,6 +28,8 @@ if isinstance(ans, list):
     n = int(open(cnt_path).read()) if os.path.exists(cnt_path) else 0
     open(cnt_path, 'w').write(str(n + 1))
     ans = ans[min(n, len(ans) - 1)]
+if ans.get('sleep'):
+    time.sleep(ans['sleep'])                                   # повільний CLI (холодне завантаження): тест тайм-аутів
 if ans.get('org'):
     os.makedirs('.vercel', exist_ok=True)
     with open(os.path.join('.vercel', 'project.json'), 'w') as f:

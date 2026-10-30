@@ -29,6 +29,11 @@ looks the same (`tests/legacy-golden.test.mjs` is green without a re-shoot) apar
 - **`ctx["find_tool"]`** for every module: a function `find_tool("npx" | "node") -> path | None` (any other name gives
   `None`). The core registers its own finder, which knows nvm, volta and Homebrew locations that a GUI app does not have
   in its `PATH`, and calls it only when a module asks.
+- **The manifest key `check_timeout_s`** (optional, an integer 1..150; anything else makes the manifest invalid): how long the
+  core waits for the module's `check` (default 5 s). `vercel-publish` asks for 130 s: in `cli` mode `check` runs
+  `npx --yes vercel whoami`, and a cold `npx` downloads the CLI first. `GET /api/modules` shows the key when a module has it,
+  and the canvas lets the request of «Check», «Enable» and the settings panel (and the wizard) wait for it plus a margin of
+  15 s (the other modules keep 20 s).
 - **`ModuleError.full`** — the whole error text (up to 64 KiB, secrets already removed by the core); `message` stays at
   300 characters.
 - **Error codes** in the core's table: `no-node` (409), `vercel-login` (409), `vercel-scope` (409), `vercel-deploy` (502),
@@ -54,7 +59,23 @@ looks the same (`tests/legacy-golden.test.mjs` is green without a re-shoot) apar
 - The setting `token` of `vercel-publish` is no longer marked `required` and has a new label, «Токен Vercel (для входу
   «Токен»)»: the generic form has no conditional fields. The module itself demands the token in `token` mode, as before
   (`vercel-auth`).
-- `check` in `cli` mode runs `npx vercel whoami` and answers `no-node`, `vercel-login` or `check-timeout`.
+- `check` in `cli` mode runs `npx vercel whoami` (120 s of its own, inside the 130 s of the manifest) and answers `no-node`,
+  `vercel-login` or `check-timeout`.
+- **In `cli` mode the stored state of an ordinary space is not trusted** (it comes from `iterations.json`, which travels
+  through git). The project name is taken from it only when it is `pv-<8 digits>`; any other name (a `dc-…` name, the name of
+  another project of yours) gives a new `pv-…` project and a warning, as in `token` mode — a cloned state can no longer make
+  `vercel link --yes` bind, and the cleanup prune, a project it names. The scope comes only from the setting `team`, never
+  from the state. The legacy space is the exception: the core marks its call with `task["legacy_state"] = true`, because that
+  state is built from the local `tasks.json` and registry, and then any safe name (`dc-…`) and the state's scope are accepted
+  as before. An ordinary space never sets that key.
+- **A failed `vercel link` now stops a `cli` publish** (a conscious difference from 0.8.0, which ignored its exit code): the
+  publish ends with the code of the output (`vercel-login`, `vercel-scope`, `vercel-auth`, `vercel-deploy`) and runs neither
+  `deploy` nor the cleanup. Before, a failed `link` could deploy into a project named after the folder and then clean up the
+  intended project without its current deployment.
+- In an ordinary space a `vercel-deploy` failure shows the **end** of the CLI output (the last 300 characters of it, where the
+  reason is), not the first 300 characters of the last 4000 that the error message holds. The legacy space is unchanged.
+- The text «Vercel denied access» no longer says only «check the token»: it names the sign-in (token or `vercel login`) and the
+  team. The project and scope errors no longer mention «the state».
 - **Small conscious differences for the legacy space** (everything else is checked against a snapshot of 0.8.0,
   `tests/fixtures/legacy-publish/before-4b1.json`):
   - a `vercel deploy` that fails with no output at all now gets a human line («vercel завершився з помилкою, але нічого
@@ -64,6 +85,7 @@ looks the same (`tests/legacy-golden.test.mjs` is green without a re-shoot) apar
   - the project name and the scope are checked before anything runs: the project `[a-z0-9][a-z0-9._-]{0,99}`, the scope
     `[A-Za-z0-9][A-Za-z0-9_-]{0,99}`; an odd value (for example, one that starts with `-`) is refused instead of being
     passed to the CLI;
+  - a `vercel link` that exits with an error ends the publish (see above) — 0.8.0 went on to `deploy`;
   - `check` has the codes `no-node` and `check-timeout` (a new path).
 
 ### Removed
@@ -76,15 +98,18 @@ looks the same (`tests/legacy-golden.test.mjs` is green without a re-shoot) apar
 ### For module authors
 
 - `ctx["find_tool"]`, `task["gated"]` and `ModuleError.full` are available to every module (see
-  `docs/modules/authoring.md`).
+  `docs/modules/authoring.md`). The manifest may carry `check_timeout_s` (1..150) to lengthen the `check` of a module that
+  starts a process. (`task["legacy_state"]` is private to the core and the built-in `vercel-publish`; do not rely on it.)
 - A `publish` result may carry three optional keys: `deploy_url` (the address of the publish itself, as opposed to the
-  permanent `url`), `verify` (`{"reason", "hint"}` — why `verified` is false) and `cleanup_warning` (a string). The core
+  permanent `url`), `verify` (`{"reason"}` — why `verified` is false) and `cleanup_warning` (a string). The core
   reads them only for the in-house legacy space; in other spaces they are ignored (the cleanup text is also in
   `warnings`).
 - The five new codes above are in the core's table, so they pass as they are.
 
 ### Known limits
 
+- In `cli` mode of an ordinary space a project that an older state names with a non-`pv-` name is not reused: a new `pv-…`
+  project is made, with a warning (the state of an ordinary space is not trusted; see *Changed*).
 - In `cli` mode of an ordinary space the project name is a random `pv-<8 digits>` with no probe whether the name is
   taken (`token` mode probes it).
 - In `cli` mode of an ordinary space, if `deploy` fails after `link`, an empty `pv-…` project stays in Vercel and the next

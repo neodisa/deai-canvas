@@ -3,8 +3,8 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
+  CHECK_POST_MARGIN_S, FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
+  checkPostTimeoutMs, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -287,6 +287,17 @@ test("spaceErrKey: `timeout` (запит діалогу обірвано за с
 test("FORM_POST_TIMEOUT_MS: скінченна стеля 5–60 с — довша лишала б людину під підкладкою, коротша обривала б живий запит", () => {
   assert.ok(Number.isFinite(FORM_POST_TIMEOUT_MS), "стелі нема");
   assert.ok(FORM_POST_TIMEOUT_MS >= 5000 && FORM_POST_TIMEOUT_MS <= 60000, String(FORM_POST_TIMEOUT_MS));
+});
+
+test("checkPostTimeoutMs: стеля запиту `check` — `check_timeout_s` модуля + запас; без ключа (чи сміття) — стеля форми, як було", () => {
+  assert.equal(checkPostTimeoutMs({ id: "vercel-publish", check_timeout_s: 130 }), (130 + CHECK_POST_MARGIN_S) * 1000);
+  assert.ok(checkPostTimeoutMs({ check_timeout_s: 130 }) > 130000, "стеля клієнта мусить бути довшою за тайм-аут ядра");
+  assert.equal(checkPostTimeoutMs({ check_timeout_s: 150 }), 165000);
+  for (const e of [{ id: "git-sync" }, {}, null, undefined, { check_timeout_s: 0 }, { check_timeout_s: -5 }, { check_timeout_s: "130" },
+    { check_timeout_s: 1.5 }, { check_timeout_s: null }]) {
+    assert.equal(checkPostTimeoutMs(e), FORM_POST_TIMEOUT_MS, JSON.stringify(e));
+  }
+  assert.equal(checkPostTimeoutMs({ check_timeout_s: 1 }), FORM_POST_TIMEOUT_MS, "короткий `check` не МЕНШИЙ за стелю форми");
 });
 
 test("spaceErrKey: код, що збігається з іменем з прототипу, — загальна помилка, не «функція»", () => {

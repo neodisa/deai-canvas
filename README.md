@@ -219,8 +219,12 @@ the token field is then ignored, and `team` is the `--scope` of the CLI (empty: 
 `npx vercel login` once in a terminal; «Check» asks `vercel whoami` and says `no Node.js` or `not logged in` in plain
 words. A publish runs `link` and `deploy --prod` in the built folder, takes the shortest `*.vercel.app` address and
 verifies the preview. Names: the project is the one recorded for the task, otherwise a random `pv-<8 digits>`; a project
-name or a team that is not a plain slug (letters, digits, `.`, `_`, `-`, starting with a letter or digit) is refused
-before anything runs. **Cleanup:** after a publish the 3 newest deployments of the project are kept (the current one
+name or a team that does not fit is refused before anything runs: a project name is lowercase letters, digits, `.`, `_` and
+`-` (the first character a letter or a digit), a team (scope) is letters, digits, `_` and `-` (no `.`; the first character a
+letter or a digit). In an ordinary space the project must be a `pv-<8 digits>` name — the state that comes from the task's
+`iterations.json` travels through git, so a project with another name there is not reused (a new `pv-` project is created and
+a warning says so) and the team always comes from the setting, never from that state. A failed `vercel link` stops the publish
+with its output. «Check» may take a while on the first run (a cold `npx` downloads the CLI): it is given up to 130 seconds. **Cleanup:** after a publish the 3 newest deployments of the project are kept (the current one
 among them) and the older ones are removed by address — only `*.vercel.app` deployments of that project, with `--safe`,
 never the project itself; if the cleanup cannot finish, the publish still succeeds and shows a warning. Limits: a
 publish that fails after `link` can leave an empty `pv-` project in your account (delete it in the Vercel dashboard); the

@@ -83,9 +83,18 @@
 --safe --yes` (⛔ ІМЕНІ проєкту в `remove` нема: CLI видалив би весь проєкт). Список не розібрано — не видаляємо нічого. Будь-який
 збій — `cleanup_warning` (і в `warnings`), не помилка. `--scope` — лише коли скоуп відомий.
 
+Довіра до стану в режимі `cli` залежить від ДЖЕРЕЛА (`_cli_pick`). Звичайний простір: стан із `iterations.json` (їздить через git)
+недовірений — імʼя проєкту береться з нього лише коли воно `pv-<8 цифр>` (інакше новий `pv-…` і попередження), скоуп — ЛИШЕ з
+налаштування `team`, ніколи зі стану. ЛІГА: ядро (`serve._publish_legacy_call`) ставить `task['legacy_state'] = True`, бо стан
+складено з локальних `tasks.json`/реєстру (`vercel_project`, `vercel_scope`) — тоді приймається будь-яке безпечне імʼя (`dc-…`)
+і скоуп зі стану. Звичайний диспетчер цього ключа не ставить ніколи. Збій `vercel link` (код ≠ 0) — відмова з кодом за `_cli_code` ДО
+`deploy` (відхилення від 0.8.0: без привʼязки `deploy` пішов би в проєкт з імʼям теки, а прибирання чистило б задуманий проєкт).
+
 Ядро кличе `publish` БЕЗ тайм-ауту, тож кожен запит має свій: 30 с на запит API, 60 с на файл, 20 с на перевірку.
 
-`check(ctx)` у режимі `cli` — `npx vercel whoami` (`{"ok": true, "detail": <імʼя>}`, або `no-node` / `vercel-login`).
+`check(ctx)` у режимі `cli` — `npx vercel whoami` (`{"ok": true, "detail": <імʼя>}`, або `no-node` / `vercel-login`). Холодний
+`npx --yes vercel` спершу завантажує CLI, тож маніфест просить для `check` 130 с (`check_timeout_s`; типові 5 с ядра обірвали б його
+до вердикту), а `CLI_WHOAMI_S` = 120 с — власна межа `whoami`, щоб чесний `check-timeout` модуля передував тайм-ауту ядра.
 `check(ctx)` у режимі `token` — `GET /v2/user` (+ `GET /v2/teams/<team_…>` для `teamId`; для `slug` — читальна проба доступу
 `GET /v6/deployments?limit=1` у цій команді); нічого не створює й не кидає на звичайних збоях (немає токена, не
 прийнято, мережі нема) — вертає `{"ok": false, "error": <код>, "detail": <причина>}`.
@@ -858,23 +867,35 @@ def _cli_link_scope(build_dir):
     return org if isinstance(org, str) and CLI_SCOPE_RE.fullmatch(org) else None
 
 
-def _cli_pick(ctx, state, task_id):
-    """`(проєкт, скоуп | None)`. Стан береться лише для ЦІЄЇ задачі (`state.task`): склонований стан — «стану нема».
-    Імʼя зі стану приймається будь-яке безпечне (не лише `pv-…`: у ЛІГИ бувають `dc-…`), нове — `pv-<8 цифр>`. Скоуп:
-    зі стану, інакше з налаштування `team`. Небезпечне значення — відмова ДО будь-якого запуску."""
+def _cli_pick(ctx, state, task_id, legacy=False):
+    """`(проєкт, скоуп | None, попередження | None)`. Стан береться лише для ЦІЄЇ задачі (`state.task`): склонований стан —
+    «стану нема». Нове імʼя — `pv-<8 цифр>`.
+    ⛔ Довіра до стану залежить від ДЖЕРЕЛА (`legacy` = `task['legacy_state'] is True`; ставить лише адаптер ЛІГИ ядра):
+      * звичайний простір (`legacy=False`) — стан із `iterations.json` (`publish_remote.state`), а той їздить через git, тож
+        недовірений. Імʼя береться зі стану лише коли воно `pv-<8 цифр>` (те, що створює сам модуль); інше (`dc-…`, імʼя
+        чужого проєкту людини) — новий `pv-…` і ПОПЕРЕДЖЕННЯ (як у режимі `token`): інакше склонований стан змусив би
+        `vercel link --yes` привʼязати чужий проєкт, а `_cli_cleanup` — видалити його старі публікації. Скоуп — ЛИШЕ з
+        налаштування `team` (чужий скоуп зі стану на машині людини не мусить стати `--scope`);
+      * ЛІГА (`legacy=True`) — стан складає ядро з локальних `tasks.json`/реєстру (`vercel_project`, `vercel_scope`): імʼя
+        приймається будь-яке безпечне (`dc-…`), скоуп — зі стану, інакше з `team`.
+    Небезпечне значення, що лишилось, — відмова ДО будь-якого запуску."""
     st = state if isinstance(state, dict) else {}
     mine = st.get('task') == task_id
     project = st.get('project') if mine and st.get('project') is not None else None
+    note = None
+    if project is not None and not legacy and not (isinstance(project, str) and OWN_NAME_RE.fullmatch(project)):
+        project = None
+        note = ('Імʼя проєкту в стані задачі недійсне — створено новий проєкт; адреса може відрізнятись від попередньої.')
     if project is None:
         project = 'pv-' + ''.join(secrets.choice('0123456789') for _ in range(8))
     settings = ctx.get('settings') if isinstance(ctx, dict) else None
     team = settings.get('team') if isinstance(settings, dict) else None
-    scope = (st.get('scope') if mine else None) or (team.strip() if isinstance(team, str) else '') or None
+    scope = (st.get('scope') if mine and legacy else None) or (team.strip() if isinstance(team, str) else '') or None
     if not isinstance(project, str) or not CLI_PROJECT_RE.fullmatch(project):
-        raise RuntimeError('Імʼя проєкту в стані задачі недійсне — публікацію не запущено')
+        raise RuntimeError('Імʼя проєкту Vercel для цієї задачі недійсне — публікацію не запущено')
     if scope is not None and (not isinstance(scope, str) or not CLI_SCOPE_RE.fullmatch(scope)):
         raise RuntimeError('Команда Vercel (scope) недійсна — публікацію не запущено')
-    return project, scope
+    return project, scope, note
 
 
 def _cli_cleanup(npx, project, scope, current_urls, cwd):
@@ -946,16 +967,23 @@ def _publish_cli(ctx, build_dir, task):
         raise RuntimeError('Збірка превʼю не є текою')
     task = task if isinstance(task, dict) else {}
     task_id = task.get('id') if isinstance(task.get('id'), str) else ''
-    project, scope = _cli_pick(ctx, task.get('state'), task_id)     # ДО будь-якого запуску
+    # `legacy_state` ставить лише адаптер ЛІГИ ядра (`serve._publish_legacy_call`): її стан — з локального tasks.json
+    project, scope, note = _cli_pick(ctx, task.get('state'), task_id, legacy=task.get('legacy_state') is True)   # ДО будь-якого запуску
     npx = _cli_npx(ctx)
     # `--scope` — якщо привʼязка відома. Без нього `link` у чужому акаунті СТВОРИВ БИ проєкт із тим самим імʼям, і задача
     # отримала б друге посилання; зі скоупом vercel відмовляє вголос (`vercel-scope`).
     sc = ['--scope', scope] if scope else []
     try:
-        _vc(npx, ['link', '--yes', *sc, '--project', project], build_dir, CLI_LINK_S)
-        out = _vc(npx, ['deploy', '--prod', '--yes', *sc], build_dir, CLI_DEPLOY_S)
+        link = _vc(npx, ['link', '--yes', *sc, '--project', project], build_dir, CLI_LINK_S)
+        if link.returncode == 0:                                        # збій `link` — нижче, ДО `deploy`
+            out = _vc(npx, ['deploy', '--prod', '--yes', *sc], build_dir, CLI_DEPLOY_S)
     except (OSError, ValueError, subprocess.SubprocessError) as e:      # ValueError — напр. NUL у шляху теки
         raise _error(ctx, 'vercel-deploy', str(e)) from None
+    # ⛔ Збій `link` зупиняє ВСЕ (відхилення від 0.8.0, де його код не читали): без привʼязки `deploy` пішов би в проєкт з
+    # імʼям ТЕКИ, а прибирання потім чистило б задуманий проєкт без його поточної публікації. Код — той самий `_cli_code`.
+    if link.returncode != 0:
+        raw = link.stderr or link.stdout or ''
+        raise _error(ctx, _cli_code(raw), raw[-CLI_RAW_MAX:])
     if out.returncode != 0:
         raw = out.stderr or out.stdout or ''
         raise _error(ctx, _cli_code(raw), raw[-CLI_RAW_MAX:])
@@ -964,7 +992,7 @@ def _publish_cli(ctx, build_dir, task):
         raise _error(ctx, 'vercel-no-url', 'Vercel не надрукував адреси публікації')
     url, known = _cli_alias(npx, urls[-1], build_dir, extra=urls)
     verify = _cli_verify(url, bool(task.get('gated')))
-    warnings = []
+    warnings = [note] if note else []
     if verify is not None:
         warnings.append(_PROTECTION_TEXT.format(project=project) if verify['reason'] == 'vercel_protection'
                         else f'Не вдалося підтвердити превʼю: {verify["reason"]}')

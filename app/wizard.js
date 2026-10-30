@@ -6,7 +6,9 @@
  *
  *   node()               вузол `#tasks-home`;
  *   api(path)            GET → JSON (кидає `Error` з `code`);   post(path, body) — POST зі стелею часу (`postForm`; його ж
- *                        запит кроку 4 — `task-new` БЕЗ `vcs`: сервер тут не клонує, довга стеля форми нової задачі не потрібна);
+ *                        запит кроку 4 — `task-new` БЕЗ `vcs`: сервер тут не клонує, довга стеля форми нової задачі не потрібна;
+ *                        третій аргумент `post(path, body, entry)` — запис модуля для `module-enable|settings`: стеля запиту
+ *                        не нижча за його `check_timeout_s`, див. `checkPost` в `app.js`);
  *   askYesNo(q, opts)    питання;   toast(msg)   тост;   spaces()   остання відповідь `/api/spaces`;
  *   peek(path)           `/api/space-peek`;   takenPaths()   шляхи просторів;   takenTaskIds()   Promise<id[]> усіх задач;
  *   afterSpaceCreated()  простір створено й зроблено поточним (оболонка: `afterSpaceChange`);
@@ -464,7 +466,8 @@ export function createWizard(deps) {
       const body = op.op === "disable" ? { space: mine.spaceId, id: op.id }
         : writePayload(mine.spaceId, op.id, formPatch(f.fields, f.init, f.cur), op.op === "enable");
       try {
-        const r = await deps.post(path, body);
+        /* `enable|settings` перевіряють модуль після запису — стеля запиту залежить від його `check_timeout_s` (`checkPost`). */
+        const r = await (op.op === "disable" ? deps.post(path, body) : deps.post(path, body, card?.entry ?? fresh.find((e) => e?.id === op.id)));
         /* Ролі, які змінив САМ цей прохід (модуль і кого вимкнула заміна): повтор звіряє свіжість по них від нового стану. */
         if (op.op !== "settings") {
           for (const id of [op.id, ...(op.op === "enable" && Array.isArray(r?.replaced) ? r.replaced : [])]) {

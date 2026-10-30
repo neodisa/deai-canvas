@@ -32,7 +32,7 @@ import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
+  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
   cleanupWarning, commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
@@ -727,6 +727,22 @@ const postForm = (path, body) => formApi(path, {
 });
 
 /**
+ * `POST` запиту, що ВИКОНУЄ `check` модуля `entry` (`module-check`, `module-enable|settings`), зі стелею `checkPostTimeoutMs(entry)`:
+ * модуль із довгою перевіркою (`check_timeout_s` у записі `/api/modules`; `vercel-publish` у режимі `cli` — 130 с) інакше
+ * отримав би обрив за `FORM_POST_TIMEOUT_MS` (20 с) раніше за вердикт. Модуль без `check_timeout_s` — та сама стеля, що в
+ * `postForm`. Окрема функція, як `trustPost`/`taskPost`: тіло `formApi` дослівно стережуть тести. Обрив — `code: 'timeout'`.
+ */
+function checkPost(path, body, entry) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), checkPostTimeoutMs(entry));
+  return api(path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), signal: ctl.signal,
+  })
+    .catch((e) => { throw e?.name === 'AbortError' ? Object.assign(new Error('timeout'), { code: 'timeout' }) : e; })
+    .finally(() => clearTimeout(timer));
+}
+
+/**
  * `POST /api/task-new` зі стелею `TASK_VCS_POST_TIMEOUT_MS` (400 с) — для запиту, що справді клонує (`taskCreateClones`: `vcs` у тілі
  * чи простір з інтеграціями й роллю `vcs`):
  * перший клон репозиторію триває хвилини (модуль чекає до 180 с), а `formApi` (20 с) обірвав би запит посеред клону. Решті запитів
@@ -1402,7 +1418,7 @@ const spaceDialogFocusBack = () => chipEl() ?? homeNode()?.querySelector('[data-
 const wiz = createWizard({
   node: () => ensureHome(),
   api: (p) => api(p),
-  post: (p, body) => postForm(p, body),
+  post: (p, body, entry) => (entry ? checkPost(p, body, entry) : postForm(p, body)),
   askYesNo,
   toast,
   spaces: () => spacesResp,
@@ -2891,7 +2907,7 @@ async function connAction(act, id) {
 async function connCheck(e) {
   const spaceId = connState.spaceId;
   connState.busy.set(e.id, 'check'); paintHome();
-  try { await postForm('/api/module-check', { space: connState.spaceId, id: e.id }); }
+  try { await checkPost('/api/module-check', { space: connState.spaceId, id: e.id }, e); }
   catch (err) { const r = refusalView(err); tell([t(r.key), r.detail].filter(Boolean).join('\n\n')); }
   finally { connState.busy.delete(e.id); }
   await loadConn();
@@ -3389,7 +3405,7 @@ async function cnSubmit() {
   paintCnDrawer();
   let r;
   try {
-    r = await postForm(mine.mode === 'enable' ? '/api/module-enable' : '/api/module-settings', body);
+    r = await checkPost(mine.mode === 'enable' ? '/api/module-enable' : '/api/module-settings', body, mine.entry);
   } catch (err) {
     cnRefreshAfterRefusal(mine.spaceId);
     if (cnDrawer !== mine) return;
@@ -3428,7 +3444,7 @@ async function cnDrawerCheck() {
   mine.busy = 'check'; mine.result = null;
   paintCnDrawer();
   try {
-    const r = await postForm('/api/module-check', { space: mine.spaceId, id: mine.id });
+    const r = await checkPost('/api/module-check', { space: mine.spaceId, id: mine.id }, mine.entry);
     if (cnDrawer !== mine) return;
     mine.result = { kind: r?.check?.ok === true ? 'ok' : 'check-failed', ...verdictText(r?.check, mine.entry) };
   } catch (err) {

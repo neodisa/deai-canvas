@@ -58,7 +58,7 @@ test("перечитування при поверненні у вікно: на
 
 test("запити сторінки несуть явний space (агент міг перемкнути активний простір)", () => {
   assert.match(fn("loadConn"), /api\(`\/api\/modules\?space=\$\{encodeURIComponent\(sp\.id\)\}`\)/);
-  assert.match(fn("connCheck"), /postForm\('\/api\/module-check', \{ space: connState\.spaceId, id: e\.id \}\)/);
+  assert.match(fn("connCheck"), /checkPost\('\/api\/module-check', \{ space: connState\.spaceId, id: e\.id \}, e\)/);
   /* Запис «Вимкнути» іде у ЗНІМОК простору, взятий до питання (`const spaceId`), а не в `connState.spaceId` на момент відповіді. */
   assert.match(fn("connDisable"), /postForm\('\/api\/module-disable', \{ space: spaceId, id: e\.id \}\)/);
 });
@@ -119,11 +119,11 @@ test("панель: запис іде в простір, відкритий у �
   assert.match(b, /missingRequired\(cnDrawer\.fields, cur\)/);
   /* Не лише виклик: умова `if (miss.length)`, помилки полів, перемальовка й ВИХІД — ДО запиту (`if (false)` лишив би виклик). */
   assert.match(b, /const miss = missingRequired\(cnDrawer\.fields, cur\);\s*if \(miss\.length\) \{[\s\S]*?cnDrawer\.errors = Object\.fromEntries\(miss\.map\(\(k\) => \[k, 'cnFieldRequired'\]\)\);[\s\S]*?paintCnDrawer\(\);[\s\S]*?return;\s*\}/);
-  assert.ok(b.indexOf("missingRequired(") < b.indexOf("postForm("), "обовʼязкові перевіряються ДО запиту");
+  assert.ok(b.indexOf("missingRequired(") < b.indexOf("checkPost("), "обовʼязкові перевіряються ДО запиту");
   /* Питання «Замінити?» і свіжа згода — у `cnConfirmReplace` (окремий пін нижче); тут лише передача рішення в запис. */
   assert.match(b, /const verdict = await cnConfirmReplace\(mine\);\s*if \(verdict === null\) return;\s*replace = verdict;/);
   assert.match(b, /writePayload\(mine\.spaceId, mine\.id, patch, replace\)/);
-  assert.match(b, /postForm\(mine\.mode === 'enable' \? '\/api\/module-enable' : '\/api\/module-settings', body\)/);
+  assert.match(b, /checkPost\(mine\.mode === 'enable' \? '\/api\/module-enable' : '\/api\/module-settings', body, mine\.entry\)/);
   assert.match(b, /await afterModulesChange\(\);/);
 });
 
@@ -189,7 +189,7 @@ test("панель: секрети НЕ лишаються у формі піс�
 });
 
 test("панель: перевірка в панелі — module-check простору панелі", () => {
-  assert.match(fnc("cnDrawerCheck"), /postForm\('\/api\/module-check', \{ space: mine\.spaceId, id: mine\.id \}\)/);
+  assert.match(fnc("cnDrawerCheck"), /checkPost\('\/api\/module-check', \{ space: mine\.spaceId, id: mine\.id \}, mine\.entry\)/);
   assert.match(fnc("cnDrawerCheck"), /if \(!cnDrawer \|\| cnDrawer\.busy\) return;/);
 });
 
@@ -368,7 +368,7 @@ test("Esc, що закрив дропдаун смуги, не закриває 
 
 test("зайнятість картки: ставиться ДО запиту й знімається в finally/catch; «Вимкнути» знімає її лише коли свіжий список уже прийшов", () => {
   const c = fnc("connCheck");
-  assert.match(c, /connState\.busy\.set\(e\.id, 'check'\); paintHome\(\);\s*try \{ await postForm\(/);
+  assert.match(c, /connState\.busy\.set\(e\.id, 'check'\); paintHome\(\);\s*try \{ await checkPost\(/);
   assert.match(c, /finally \{ connState\.busy\.delete\(e\.id\); \}\s*await loadConn\(\);/);
   const d = fnc("connDisable");
   assert.match(d, /connState\.busy\.set\(e\.id, 'disable'\); paintHome\(\);\s*try \{ await postForm\(/);

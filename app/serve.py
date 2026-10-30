@@ -4367,7 +4367,15 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
         else:
             task_arg = {'id': tid, 'title': task.get('title', tid), 'dir': task['dir'],
                         'state': _stored_publish_state(task, prov), 'gated': gate_pw is not None}
-            res = deai_modules.call(prov, 'publish', ctx, built['dir'], task_arg)
+            try:
+                res = deai_modules.call(prov, 'publish', ctx, built['dir'], task_arg)
+            except deai_modules.ModuleError as e:
+                # `message` — ГОЛОВА (300 знаків) останніх 4000 знаків виводу CLI, а причина `vercel deploy` — у КІНЦІ: людині
+                # звичайного простору (діалог показує лише `error`) віддаємо хвіст `full`. Інші коди — як є; ЛІГА має свій
+                # шлях (`_legacy_deploy_error`).
+                if e.code == 'vercel-deploy' and e.full:
+                    raise deai_modules.ModuleError(e.code, e.status, e.full[-deai_modules.MAX_MESSAGE:]) from None
+                raise
             url, state, verified, warnings = _checked_url_result(res)
             warnings = _guarded_url_result_secrets(url, state, warnings, ctx['secrets'])
             meta = load_meta(task)
@@ -4574,7 +4582,8 @@ def _publish_legacy_call(task, tid, build_dir, proj, npx):
     місце, де ядро публікує ЛІГУ (тести гілки ЛІГИ підміняють саме його).
 
     `proj` — опакове імʼя проєкту (`_vercel_project`), `build_dir` — зібране `publish/`. Привʼязка задача→проєкт іде модулю
-    в `state` (`project`, `task` і — якщо відомий — `scope`): ⛔ `--scope` важливий — без нього `vercel link` у ЧУЖОМУ акаунті
+    в `state` (`project`, `task` і — якщо відомий — `scope`; `legacy_state: True` у `task` каже модулю, що стан довірений
+    (локальний tasks.json, не git)): ⛔ `--scope` важливий — без нього `vercel link` у ЧУЖОМУ акаунті
     СТВОРИВ БИ проєкт із тим самим імʼям, і задача отримала б друге посилання; зі скоупом vercel відмовляє вголос
     (`vercel-scope`). `gated: True` — гейт ЛІГИ (пароль, типово 1100) вкладає збірка ядра завжди, і превʼю «підтверджене»
     лише з маркером `authgate` на адресі.
@@ -4587,7 +4596,10 @@ def _publish_legacy_call(task, tid, build_dir, proj, npx):
     state = {'project': proj, 'task': tid}
     if task.get('vercel_scope'):
         state['scope'] = task['vercel_scope']
-    arg = {'id': tid, 'title': task.get('title', tid), 'dir': task['dir'], 'gated': True, 'state': state}
+    # `legacy_state: True` — ЄДИНЕ місце, що його ставить: стан ЛІГИ береться з локального tasks.json/реєстру (не з git), тож
+    # модуль приймає з нього будь-яке безпечне імʼя й скоуп. Звичайний простір (`_publish_by_url`) цього ключа не ставить
+    # ніколи: його стан із `iterations.json` (їздить через git) недовірений — див. `_cli_pick` модуля `vercel-publish`.
+    arg = {'id': tid, 'title': task.get('title', tid), 'dir': task['dir'], 'gated': True, 'state': state, 'legacy_state': True}
     res = deai_modules.call(m, 'publish', _publish_legacy_ctx(npx), build_dir, arg)
     _checked_url_result(res)
     if not isinstance(res.get('deploy_url'), str):
@@ -4790,7 +4802,8 @@ def module_list(space):
     Свої модулі простору (3c) — серед модулів каталогу (`catalog(space)`): запис несе ще `builtin: false`, `custom: true`,
     `trust` (`untrusted|trusted|changed|refused`), `record` (чи є запис довіри), `source` (тека в просторі, з `~`), `runs`
     (є цілий знімок, і його код тут виконується; збій завантаження цього коду — не `runs: false`, а `status: error`) і,
-    коли є, `trust_error`. Запис вбудованого модуля цих полів не має.
+    коли є, `trust_error`. Запис вбудованого модуля цих полів не має. `check_timeout_s` — лише коли маніфест його задає
+    (4b-1: `vercel-publish`): клієнт ставить стелю запиту `check` не нижчою за нього (`checkPostTimeoutMs`).
     Може кинути `ModuleError('space-json-unreadable')` (центральна 409)."""
     sid = space['id']
     cat = deai_modules.catalog(space)
@@ -4817,6 +4830,8 @@ def module_list(space):
         e = {'id': mid, 'name': m.name, 'version': m.version, 'api': m.api, 'roles': list(m.roles),
              'builtin': True, 'enabled': st['enabled'], 'implicit': st['implicit'], 'status': status,
              'settings': settings}
+        if m.check_timeout_s is not None:               # довший `check` (маніфест): клієнт чекає на запит не менше за нього
+            e['check_timeout_s'] = m.check_timeout_s
         if m.origin == 'space':                         # свій модуль простору (3c); запис вбудованого не змінюється
             e.update(builtin=False, custom=True, trust=m.trust, record=m.record, source=m.source,
                      runs=not deai_modules.untrusted_own(m))      # є цілий знімок і його код виконується (збій — у `status`)

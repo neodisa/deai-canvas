@@ -359,7 +359,7 @@ test("c: vercel-auth, module-error («видаліть вручну») і vercel
   const AUTH = "Vercel відмовив у доступі (HTTP 403): токен без прав на цю команду";
   const MANUAL = "збірка ERROR; проєкт pv-12345678 не видалено — видаліть вручну в панелі Vercel";
   const cases = [
-    { status: 409, code: "vercel-auth", error: AUTH, human: /Vercel відмовив у доступі — перевірте токен і команду/, detail: AUTH },
+    { status: 409, code: "vercel-auth", error: AUTH, human: /Vercel відмовив у доступі — перевірте вхід у Vercel \(токен або vercel login\) і команду/, detail: AUTH },
     { status: 502, code: "module-error", error: MANUAL, human: /Модуль публікації відмовив — перевірте його налаштування/, detail: MANUAL },
     { status: 409, code: "vercel-busy", error: "rate limit", human: /Vercel тимчасово відмовляє/, detail: null },
   ];

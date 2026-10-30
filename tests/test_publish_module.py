@@ -1024,6 +1024,30 @@ class LegacyPublishViaModule(TaskFixture):
                 self.assertEqual(sent.sent[0][1]['ok'], True, sent.sent)
                 self.assertIs(seen[0]['gated'], want)
                 self.assertEqual(set(seen[0]), {'id', 'title', 'dir', 'state', 'gated'})
+                self.assertNotIn('legacy_state', seen[0])        # ключ довіри до стану ставить ЛИШЕ адаптер ЛІГИ (4b-1)
+
+    def test_9b_an_ordinary_space_gets_the_tail_of_a_vercel_deploy_failure_not_the_head(self):
+        """`ModuleError.message` — ГОЛОВА (300 знаків) останніх 4000 знаків виводу CLI, а корисне — у кінці: звичайний простір
+        (`publish_target: url`) отримує ХВІСТ `full`. Інші коди й ЛІГА (`_legacy_deploy_error`) — без змін."""
+        task, tid, its = self._args()
+        prov = types.SimpleNamespace(id='vercel-publish')
+        full = 'HEAD-' + 'x' * 1000 + 'THE-REASON-AT-THE-END'
+        for code, want in (('vercel-deploy', full[-300:]), ('vercel-login', full[:300]), ('module-error', full[:300])):
+            with self.subTest(code=code):
+                def call(module, fn, ctx, build_dir, task_arg, **kw):
+                    raise serve.deai_modules.ModuleError(code, message=full)
+                sent = _Stub()
+                with mock.patch.object(serve.deai_modules, 'module_ctx', lambda sp, p: {'secrets': {}}), \
+                     mock.patch.object(serve.deai_modules, 'call', call), \
+                     mock.patch.object(serve, 'publish_comments', lambda *a, **kw: (False, None)), \
+                     mock.patch.object(serve, 'build_preview', lambda *a, **kw: {'dir': self.tmp, 'iterations': 2, 'frames': 0}):
+                    with self.assertRaises(serve.deai_modules.ModuleError) as cm:
+                        serve._publish_by_url(sent, prov, {}, {'id': 'x'}, tid, task, its)
+                self.assertEqual((cm.exception.code, cm.exception.message), (code, want))
+                self.assertEqual(cm.exception.status, serve.deai_modules.ModuleError(code).status)
+        tail = serve.deai_modules.ModuleError('vercel-deploy', message=full)
+        self.assertIn('THE-REASON-AT-THE-END', tail.full[-300:])
+        self.assertNotIn('THE-REASON-AT-THE-END', tail.message)               # доказ, що без правки людина бачила б голову
 
     # ---- 10: транспорту в ядрі нема ----
 
@@ -1047,7 +1071,7 @@ class LegacyPublishViaModule(TaskFixture):
             res = serve._publish_legacy_call({'title': 'T', 'dir': '/d', 'vercel_scope': 'team_x'}, 'tid', '/b', 'pv-1', '/bin/npx')
         self.assertEqual(res['url'], LP_A)
         self.assertEqual((seen['module'], seen['fn'], seen['build_dir']), ('vercel-publish', 'publish', '/b'))
-        self.assertEqual(seen['task'], {'id': 'tid', 'title': 'T', 'dir': '/d', 'gated': True,
+        self.assertEqual(seen['task'], {'id': 'tid', 'title': 'T', 'dir': '/d', 'gated': True, 'legacy_state': True,
                                         'state': {'project': 'pv-1', 'task': 'tid', 'scope': 'team_x'}})
         self.assertEqual(seen['ctx']['settings'], {'auth': 'cli', 'team': ''})
         self.assertEqual(seen['ctx']['secrets'], {})

@@ -31,6 +31,11 @@ test("кожен запит кроків 2–4 несе простір майс�
   assert.match(fn(W, "submit4"), /space: mine\.spaceId/);
 });
 
+test("runOp: запис модуля (`entry`) іде третім аргументом post для enable|settings — стеля запиту за його check_timeout_s; disable — без нього", () => {
+  const b = fn(W, "runOp");
+  assert.match(b, /op\.op === "disable" \? deps\.post\(path, body\) : deps\.post\(path, body, card\?\.entry \?\? fresh\.find\(\(e\) => e\?\.id === op\.id\)\)/);
+});
+
 test("заміна в ролі — `replace` лише для enable; stale-запис не шлеться", () => {
   const b = fn(W, "runOp");
   assert.match(b, /op\.op === "enable"\)/);
@@ -253,7 +258,7 @@ test("8а: секрети живуть у `.value` полів кроку 3 — �
 });
 
 test("запити майстра (space-new, task-new, space-update) — через postForm зі стелею часу, а не голий post", () => {
-  assert.match(A, /post: \(p, body\) => postForm\(p, body\),/);
+  assert.match(A, /post: \(p, body, entry\) => \(entry \? checkPost\(p, body, entry\) : postForm\(p, body\)\),/);
   assert.match(A, /takenTaskIds: \(\) => formApi\('\/api\/tasks\?all=1'\)/);
 });
 

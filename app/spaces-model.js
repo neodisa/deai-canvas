@@ -185,6 +185,20 @@ const ERR_KEYS = new Map([
 export const FORM_POST_TIMEOUT_MS = 20000;
 
 /**
+ * Стеля запиту, що ВИКОНУЄ `check` модуля (`module-check`, а також `module-enable|settings`: вони перевіряють після запису), мс.
+ * Ядро дає `check` модуля `check_timeout_s` секунд (маніфест; типово 5 — `deai_modules.CHECK_TIMEOUT`), а `vercel-publish` у
+ * режимі `cli` просить 130 (холодний `npx --yes vercel whoami`). Клієнт із 20 с (`FORM_POST_TIMEOUT_MS`) обірвав би запит
+ * раніше за вердикт і показав «сервер не відповів», хоч сервер ще перевіряє. Стеля = `check_timeout_s` + запас
+ * `CHECK_POST_MARGIN_S` (читання налаштувань, запис, відповідь); модуль без `check_timeout_s` у записі `GET /api/modules` —
+ * як було, `FORM_POST_TIMEOUT_MS`. Інші запити діалогів стелі не міняють.
+ */
+export const CHECK_POST_MARGIN_S = 15;
+export function checkPostTimeoutMs(entry) {
+  const s = entry?.check_timeout_s;
+  return Number.isInteger(s) && s > 0 ? Math.max(FORM_POST_TIMEOUT_MS, (s + CHECK_POST_MARGIN_S) * 1000) : FORM_POST_TIMEOUT_MS;
+}
+
+/**
  * Стеля запиту створення задачі, що справді клонує (`taskCreateClones`), мс; решта запитів — `FORM_POST_TIMEOUT_MS`.
  * Найгірший шлях сервера (`/api/task-new` із `vcs`): `validate` модуля
  * ≤ 5 с (`deai_modules.CHECK_TIMEOUT`) + клон ≤ 180 с (`git-sync/server.py: CLONE_TIMEOUT`) + для порожнього репо ще один клон

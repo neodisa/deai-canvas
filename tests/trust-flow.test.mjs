@@ -13,6 +13,7 @@ import { t } from "../app/i18n.js";
 import { refusalView } from "../app/connections-model.js";
 import { modName, roleTitle } from "../app/connections-view.js";
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from "../app/trust-view.js";
+import { FORM_POST_TIMEOUT_MS, checkPostTimeoutMs } from "../app/spaces-model.js";
 
 const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
 
@@ -439,6 +440,48 @@ test("trustPost: стеля спрацювала — запит обірвано
   await assert.rejects(p, (e) => e.code === "timeout");
   assert.equal(refusalView(await p.catch((e) => e)).key, "cnTimeout");
   assert.deepEqual(env.cleared, [1]);
+});
+
+/* ── checkPost (стеля запиту, що виконує `check` модуля) ── */
+
+test("checkPost: стеля — з `check_timeout_s` запису модуля (130 с → 145 с, а не 20 с форми); без нього — 20 с; тіло й заголовки як у postForm", async () => {
+  const calls = [];
+  const mk = () => {
+    const timers = [];
+    const cleared = [];
+    const deps = {
+      api: async (path, opts) => { calls.push([path, opts]); return { ok: true }; }, checkPostTimeoutMs, AbortController,
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: (id) => cleared.push(id),
+    };
+    return { ...build(["checkPost"], deps), timers, cleared };
+  };
+  const slow = mk();
+  assert.deepEqual(await slow.checkPost("/api/module-check", { space: "a", id: "vercel-publish" }, { id: "vercel-publish", check_timeout_s: 130 }), { ok: true });
+  assert.deepEqual(slow.timers.map((x) => x.ms), [145000]);
+  assert.deepEqual(slow.cleared, [1], "таймер знято після успіху");
+  assert.equal(calls[0][0], "/api/module-check");
+  assert.deepEqual(Object.keys(calls[0][1]).sort(), ["body", "headers", "method", "signal"]);
+  assert.equal(calls[0][1].body, JSON.stringify({ space: "a", id: "vercel-publish" }));
+  const plain = mk();
+  await plain.checkPost("/api/module-check", {}, { id: "git-sync" });
+  await plain.checkPost("/api/module-settings", {}, undefined);
+  assert.deepEqual(plain.timers.map((x) => x.ms), [FORM_POST_TIMEOUT_MS, FORM_POST_TIMEOUT_MS], "решта модулів — як було");
+});
+
+test("checkPost: стеля спрацювала — запит обірвано, відмова з code 'timeout', таймер знято", async () => {
+  const timers = [];
+  const cleared = [];
+  const deps = {
+    api: (path, opts) => new Promise((_, reject) => {
+      opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    }),
+    checkPostTimeoutMs, AbortController,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: (id) => cleared.push(id),
+  };
+  const p = build(["checkPost"], deps).checkPost("/api/module-check", {}, { check_timeout_s: 130 });
+  timers[0].fn();
+  await assert.rejects(p, (e) => e.code === "timeout");
+  assert.deepEqual(cleared, [1]);
 });
 
 /* ── «Забрати довіру» ── */

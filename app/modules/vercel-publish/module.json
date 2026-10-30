@@ -1,5 +1,5 @@
 {"api": 1, "id": "vercel-publish", "name": "Vercel", "version": "1.1.0",
- "roles": ["publish"], "publish_target": "url",
+ "roles": ["publish"], "publish_target": "url", "check_timeout_s": 130,
  "settings": [
    {"key": "auth", "type": "select", "label": "Вхід у Vercel", "default": "token",
     "options": [{"value": "token", "label": "Токен"},

@@ -47,6 +47,11 @@ trust it.
   `tracker`, `dashboard`, `notify` are reserved names the core does not call yet. One provider per role per space.
 * `publish_target` (publish only) — `folder` (default) or `url`. The canvas serves the local copy of a published preview
   (`/published/…`) only for the built-in `static-publish`.
+* `check_timeout_s` (optional) — an integer from 1 to 150: how many seconds the core waits for your `check` (default 5).
+  Ask for more only when `check` starts a process that may be slow to start (`vercel-publish` in `cli` mode runs
+  `npx --yes vercel whoami`, and a cold `npx` downloads the CLI first: 130). Any other value (0, 151, a float, a string,
+  `null`) makes the manifest invalid. The canvas lets the request of «Check» / «Enable» wait for this long plus a margin, so
+  keep your own limit below it. The same time is not given to `client_config` or to `validate`.
 * `client` (comments only) — the browser files; see [comments.md](comments.md).
 * `settings` — what the module asks for: `text`, `path`, `bool`, `select` (with `options`) or `secret`; `required`,
   `default` and (secret only) `public` as in the built-in modules. Settings are stored in the space's `space.json`;
@@ -56,7 +61,7 @@ A manifest that breaks these rules cannot be trusted: the card says why, and not
 
 ## 3. `server.py`
 
-Every module has `check(ctx) -> {"ok": bool, "error"?: str, "detail"?: str}` — a read-only health check (5 s). A role
+Every module has `check(ctx) -> {"ok": bool, "error"?: str, "detail"?: str}` — a read-only health check (5 s, or the `check_timeout_s` of the manifest). A role
 adds its own functions:
 
 | role | functions |

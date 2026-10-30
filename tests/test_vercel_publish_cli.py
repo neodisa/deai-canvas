@@ -102,11 +102,15 @@ class CliBase(tvp.Base):
     def argvs(self):
         return [c['argv'] for c in self.calls()]
 
-    def run_cli(self, ctx=None, state=None, tid='t1', gated=True, page=PAGE_OK, core=False, spy=None, **ctx_kw):
-        """Публікація. `core=True` — через `dm.call` (як диспетчер); інакше — функція модуля напряму."""
+    def run_cli(self, ctx=None, state=None, tid='t1', gated=True, page=PAGE_OK, core=False, spy=None, legacy=False, **ctx_kw):
+        """Публікація. `core=True` — через `dm.call` (як диспетчер); інакше — функція модуля напряму. `legacy=True` — так,
+        як кличе адаптер ЛІГИ (`task['legacy_state'] = True`: стан із локального tasks.json — йому довіряємо); звичайний
+        простір цього ключа НЕ ставить, і стан для нього — недовірений (iterations.json їздить через git)."""
         ctx = ctx if ctx is not None else self.cli_ctx(**ctx_kw)
         task = {'id': tid, 'title': 'T', 'dir': self.hp('t', tid), 'gated': gated,
                 'state': {'project': 'pv-12345678', 'task': tid} if state is None else state}
+        if legacy:
+            task['legacy_state'] = True
         g = self.fn('publish').__globals__
 
         def fetch(url):
@@ -171,8 +175,11 @@ class Success(CliBase):
 
     def test_state_scope_is_not_replaced_by_the_link_file(self):
         self.ok_sc(link={'code': 0, 'org': 'team_other'})
-        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'})
+        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'}, legacy=True)
         self.assertEqual(res['state']['scope'], 'team_a')
+        self.ok_sc(link={'code': 0, 'org': 'team_other'})
+        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'}, team='acme')   # звичайний простір: скоуп — з `team`
+        self.assertEqual(res['state']['scope'], 'acme')
 
     def test_the_link_file_without_a_safe_org_gives_no_scope(self):
         self.ok_sc(link={'code': 0, 'org': '--yes'})
@@ -230,15 +237,40 @@ class Success(CliBase):
 # ------------------------------------------------------------------------------------------ 2–7: імʼя, скоуп, npx
 
 class NameAndScope(CliBase):
-    def test_2_scope_from_state_goes_to_link_and_deploy_but_not_to_inspect(self):
+    def test_2_legacy_scope_from_state_goes_to_link_and_deploy_but_not_to_inspect(self):
         self.ok_sc()
-        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'}, team='acme')
+        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'}, team='acme', legacy=True)
         self.assertEqual(self.argvs(), [
             ['--yes', 'vercel', 'link', '--yes', '--scope', 'team_a', '--project', 'pv-12345678'],
             ['--yes', 'vercel', 'deploy', '--prod', '--yes', '--scope', 'team_a'],
             ['--yes', 'vercel', 'inspect', D],
             ['--yes', 'vercel', 'list', 'pv-12345678', '--json', '--scope', 'team_a']])
-        self.assertEqual(res['state']['scope'], 'team_a')            # налаштування `team` ігнорується, коли є стан
+        self.assertEqual(res['state']['scope'], 'team_a')            # ЛІГА: налаштування `team` ігнорується, коли є стан
+
+    def test_2o_an_ordinary_space_never_takes_the_scope_from_the_state(self):
+        """`iterations.json` їздить через git: чужий скоуп у стані не мусить стати `--scope` на машині людини. Скоуп —
+        лише з налаштування `team`; нема його — без `--scope`."""
+        self.ok_sc()
+        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'}, team='acme')
+        for argv in self.argvs():
+            self.assertNotIn('team_a', argv)
+        self.assertEqual(self.argvs()[0], ['--yes', 'vercel', 'link', '--yes', '--scope', 'acme', '--project', 'pv-12345678'])
+        self.assertEqual(res['state']['scope'], 'acme')
+        self.ok_sc()
+        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': 'team_a'}, team='')
+        self.assertEqual(self.argvs()[:2], [['--yes', 'vercel', 'link', '--yes', '--project', 'pv-12345678'],
+                                            ['--yes', 'vercel', 'deploy', '--prod', '--yes']])
+        self.assertNotIn('team_a', json.dumps(self.argvs()))
+        self.assertEqual(res['state']['scope'], 'team_x')            # лише те, що записав `vercel link` (orgId)
+
+    def test_2p_an_unsafe_scope_in_an_ordinary_state_is_ignored_not_refused(self):
+        self.ok_sc()
+        for value in ['--yes', 'a b', 'A' * 101, 'pv;rm', '-x', 7]:
+            with self.subTest(scope_in_state=value):
+                self.ok_sc()
+                res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1', 'scope': value})
+                self.assertEqual(res['url'], A)
+                self.assertNotIn('--scope', self.argvs()[0])
 
     def test_3_scope_from_settings(self):
         self.ok_sc()
@@ -264,37 +296,64 @@ class NameAndScope(CliBase):
         res = self.run_cli(state={})
         self.assertRegex(res['state']['project'], r'^pv-\d{8}$')
 
-    def test_5_a_name_that_is_not_pv_is_accepted(self):
+    def test_5_legacy_accepts_a_name_that_is_not_pv(self):
+        """ЛІГА: імена `dc-…` — з локального tasks.json, а не з git."""
         self.ok_sc()
-        res = self.run_cli(state={'project': 'dc-x', 'task': 't1'})
+        res = self.run_cli(state={'project': 'dc-x', 'task': 't1'}, legacy=True)
         self.assertEqual(res['state']['project'], 'dc-x')
         self.assertEqual(self.argvs()[0], ['--yes', 'vercel', 'link', '--yes', '--project', 'dc-x'])
 
-    def test_6_unsafe_name_or_scope_is_refused_before_any_run(self):
+    def test_5o_an_ordinary_space_accepts_only_a_pv_name_else_mints_a_new_one_with_a_warning(self):
+        """Стан зі звичайного простору недовірений: чужий `iterations.json` не вибирає, у ЯКИЙ проєкт Vercel людини ми
+        деплоїмо (і з якого `vercel remove` прибирає старі публікації). Не `pv-<8 цифр>` — новий `pv-…` і попередження."""
+        for value in ['dc-x', 'my-prod-site', 'pv-1234567', 'pv-123456789', 'PV-12345678', 'pv-12345678.', '--yes', 'a b',
+                      'pv;rm', '-x', '', 5, ['pv-12345678']]:
+            with self.subTest(project=value):
+                self.ok_sc()
+                res = self.run_cli(state={'project': value, 'task': 't1'})
+                proj = res['state']['project']
+                self.assertRegex(proj, r'^pv-\d{8}$')
+                self.assertNotEqual(proj, value)
+                self.assertEqual(self.argvs()[0], ['--yes', 'vercel', 'link', '--yes', '--project', proj])
+                self.assertTrue(any('недійсн' in w and 'створено новий проєкт' in w for w in res['warnings']), res['warnings'])
+        self.ok_sc()
+        res = self.run_cli(state={'project': 'pv-12345678', 'task': 't1'})        # свій pv-… — без попередження
+        self.assertEqual(res['state']['project'], 'pv-12345678')
+        self.assertFalse(any('недійсн' in w for w in res['warnings']), res['warnings'])
+        for state in ({}, {'project': 'dc-x', 'task': 't2'}):                    # «стану нема» (немає/чужа задача) — мовчки новий
+            self.ok_sc()
+            res = self.run_cli(state=state)
+            self.assertRegex(res['state']['project'], r'^pv-\d{8}$')
+            self.assertFalse(any('недійсн' in w for w in res['warnings']), (state, res['warnings']))
+
+    def test_6_legacy_unsafe_name_or_scope_is_refused_before_any_run(self):
         self.ok_sc()
         bad = ['--yes', 'a b', 'A' * 101, 'a' * 101, 'pv;rm', '-x', '', 'PV-1']
         for value in bad:
             with self.subTest(project=value):
-                e = self.fails(state={'project': value, 'task': 't1'})
+                e = self.fails(state={'project': value, 'task': 't1'}, legacy=True)
                 self.assertIsInstance(e, dm.ModuleError)
                 self.assertEqual(e.code, 'module-error')
+                self.assertIn('Імʼя проєкту Vercel для цієї задачі недійсне', e.message)
+                self.assertNotIn('стані', e.message)
                 self.assertEqual(self.calls(), [])
         for value in ['--yes', 'a b', 'A' * 101, 'pv;rm', '-x']:
             with self.subTest(scope_in_state=value):
-                e = self.fails(state={'project': 'pv-12345678', 'task': 't1', 'scope': value})
+                e = self.fails(state={'project': 'pv-12345678', 'task': 't1', 'scope': value}, legacy=True)
                 self.assertEqual((type(e), e.code), (dm.ModuleError, 'module-error'))
+                self.assertIn('Команда Vercel (scope) недійсна', e.message)
                 self.assertEqual(self.calls(), [])
             with self.subTest(team=value):
                 e = self.fails(state={}, team=value)
                 self.assertEqual((type(e), e.code), (dm.ModuleError, 'module-error'))
                 self.assertEqual(self.calls(), [])
 
-    def test_6b_a_non_string_state_value_is_refused_too(self):
+    def test_6b_a_non_string_state_value_is_refused_too_in_legacy(self):
         self.ok_sc()
         for st in ({'project': 5, 'task': 't1'}, {'project': ['pv-12345678'], 'task': 't1'},
                    {'project': 'pv-12345678', 'task': 't1', 'scope': 7}):
             with self.subTest(state=st):
-                e = self.fails(state=st)
+                e = self.fails(state=st, legacy=True)
                 self.assertEqual((type(e), e.code), (dm.ModuleError, 'module-error'))
                 self.assertEqual(self.calls(), [])
 
@@ -320,7 +379,7 @@ class NameAndScope(CliBase):
     def test_7c_the_unsafe_name_wins_over_no_npx(self):
         """Порядок: імʼя/скоуп перевіряються ДО пошуку `npx` (відмова про небезпечне значення не залежить від Node)."""
         self.ok_sc()
-        e = self.fails(state={'project': '--yes', 'task': 't1'}, npx=False)
+        e = self.fails(state={'project': '--yes', 'task': 't1'}, npx=False, legacy=True)
         self.assertEqual(e.code, 'module-error')
 
     def test_without_the_core_class_a_plain_error_still_surfaces(self):
@@ -440,9 +499,25 @@ class DeployFailures(CliBase):
         e = self.fails(spy=_SubSpy(handler))
         self.assertEqual((e.code, e.full), ('vercel-deploy', str(FileNotFoundError(2, 'No such file or directory', 'npx'))))
 
-    def test_a_failed_link_alone_does_not_stop_the_deploy(self):
-        """Як у 0.8.0: код `link` не перевіряється (відмову скоупу скаже `deploy`)."""
-        self.ok_sc(link={'code': 1, 'stderr': 'link complained'})
+    def test_a_failed_link_stops_everything_with_the_deploy_classification(self):
+        """СВІДОМЕ ВІДХИЛЕННЯ від 0.8.0 (там код `link` не перевірявся): збій `link` без прив'язки — `deploy` пішов би в проєкт
+        з імʼям ТЕКИ, а прибирання потім чистило б задуманий проєкт без його поточної публікації. Код — за тим самим
+        `_cli_code`, що й для `deploy`, текст — хвіст виводу `link`; `deploy`/`inspect`/`list`/`remove` не запускаються."""
+        for text, code in ((self.LOGIN, 'vercel-login'), (self.SCOPE, 'vercel-scope'), (self.AUTH, 'vercel-auth'),
+                           ('Error: link complained', 'vercel-deploy'), ('', 'vercel-deploy')):
+            with self.subTest(code=code, text=text[:30]):
+                self.ok_sc(link={'code': 1, 'stderr': text})
+                e = self.fails(core=True)
+                self.assertEqual((type(e), e.code), (dm.ModuleError, code))
+                self.assertEqual(e.full, text)
+                self.assertEqual(self.argvs(), [['--yes', 'vercel', 'link', '--yes', '--project', 'pv-12345678']])
+        self.ok_sc(link={'code': 1, 'stdout': 'x' * 5000 + 'TAIL-OF-LINK', 'stderr': ''})
+        self.assertTrue(self.fails().full.endswith('TAIL-OF-LINK'))   # `stderr or stdout`, хвіст ≤ 4000, як для deploy
+        self.assertEqual(len(self.fails().full), 4000)
+        self.assertEqual(self.pages, [])                             # превʼю не перевірялось: публікації не було
+
+    def test_a_link_that_succeeds_changes_nothing(self):
+        self.ok_sc(link={'code': 0, 'stderr': 'some warning', 'org': 'team_x'})
         self.assertEqual(self.run_cli()['url'], A)
         self.assertEqual(len(self.calls()), 4)                       # link, deploy, inspect, list
 
@@ -521,7 +596,7 @@ class Cleanup(CliBase):
             with self.subTest(project=proj):
                 ents_p = [dict(e, name=proj) for e in ents]
                 self.ok_sc(list=page(ents_p))
-                self.run_cli(state={'project': proj, 'task': 't1'})
+                self.run_cli(state={'project': proj, 'task': 't1'}, legacy=True)       # `dc-x` — імʼя ЛІГИ (довірений стан)
                 rm = self.removes()
                 self.assertTrue(rm)
                 for a in rm:
@@ -637,7 +712,7 @@ class Cleanup(CliBase):
     def test_8_scope_goes_to_list_and_remove_only_when_known(self):
         ents = [entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]
         self.ok_sc(list=page(ents))
-        self.run_cli(state={'project': P, 'task': 't1', 'scope': 'team_a'})
+        self.run_cli(state={'project': P, 'task': 't1', 'scope': 'team_a'}, legacy=True)     # скоуп зі стану — лише в ЛІГИ
         self.assertEqual(self.lists(), [['--yes', 'vercel', 'list', P, '--json', '--scope', 'team_a']])
         self.assertEqual(len(self.removes()), 2)
         for a in self.removes():
@@ -1002,6 +1077,32 @@ class CheckCli(CliBase):
         res = self.check(auth='token')
         self.assertEqual((res['ok'], res['error']), (False, 'no-token'))
         self.assertEqual(self.calls(), [])
+
+
+class CheckThroughTheCore(CliBase):
+    """`check` через ЯДРО (`dm.check`): тайм-аут `check` береться з маніфесту (`check_timeout_s`), а не 5 с для всіх."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(dm.set_tool_finder, None)
+
+    def core_check(self, sc):
+        self.scenario(sc)
+        dm.set_tool_finder(lambda name: self.npx_path if name == 'npx' else None)
+        dm.write_module_state(self.sp, MID, settings={'auth': 'cli'})
+        return dm.check(self.sp, MID)
+
+    def test_17_a_cold_whoami_of_six_seconds_is_a_verdict_not_check_timeout(self):
+        """Холодний `npx --yes vercel` спершу завантажує CLI: `whoami` мовчить понад 5 с (`CHECK_TIMEOUT`)."""
+        self.assertEqual(self.core_check({'whoami': {'code': 0, 'stdout': 'someone\n', 'sleep': 6}}),
+                         {'ok': True, 'detail': 'someone'})
+
+    def test_17b_the_manifest_gives_check_more_than_the_module_whoami_alone_needs(self):
+        """Ядро чекає довше, ніж сам `whoami` (120 с): інакше тайм-аут ядра перебивав би чесний `check-timeout` модуля."""
+        g = self.fn('check').__globals__
+        self.assertEqual(self.m.check_timeout_s, 130)
+        self.assertGreater(self.m.check_timeout_s, g['CLI_WHOAMI_S'])
+        self.assertLessEqual(self.m.check_timeout_s, dm.MAX_CHECK_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------------- справжній `_fetch_page` проти сервера

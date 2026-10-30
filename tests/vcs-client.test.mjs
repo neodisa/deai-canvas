@@ -2038,7 +2038,7 @@ test("I2: «Перевірити» в панелі — виконання cnDraw
     const env = {
       cnDrawer: { busy: false, entry, spaceId: "plain", id: "git-sync", form: null },
       readCnForm: () => ({ values: {}, erase: [] }), cnDrawerNode: () => ({}), paintCnDrawer: () => {}, loadConn: () => {},
-      postForm: async () => ({ check }), verdictText, refusalView,
+      checkPost: async () => ({ check }), verdictText, refusalView,
     };
     return env;
   };

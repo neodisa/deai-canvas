@@ -123,6 +123,10 @@ KEY_RE = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,63}')
 IMPLICIT_MODULE = 'static-publish'
 #: Скільки секунд чекаємо на `check` модуля (виклик у робочому потоці).
 CHECK_TIMEOUT = 5
+#: Необовʼязковий ключ маніфесту `check_timeout_s` (ціле 1..`MAX_CHECK_TIMEOUT`): модулю, чия перевірка запускає процес
+#: (`vercel-publish` у режимі `cli`: `npx --yes vercel whoami`, холодне завантаження ≫ 5 с), потрібен довший тайм-аут `check`.
+#: Без ключа — `CHECK_TIMEOUT`. Клієнт (`MODULE_CHECK_POST_TIMEOUT_MS`) чекає на запит не менше за цей строк.
+MAX_CHECK_TIMEOUT = 150
 #: Тайм-аут `list`/`resolve` модуля ролі `comments` (ходять у мережу сервісу; кличе агент, не сторінка:
 #: `serve.ProjectComments._module`). Модуль мусить вкластись РАНІШЕ й відповісти своїм текстом помилки (`supabase-comments` —
 #: 8 с на запит), інакше людина бачить `check-timeout` ядра замість причини.
@@ -202,11 +206,11 @@ class Module:
     Свій модуль простору (`origin='space'`) без робочого знімка — `status='untrusted'` чи `'error'` (`refused`) з
     `error_code='module-untrusted'`: функцій нема, ролі й налаштування — з маніфесту теки."""
     __slots__ = ('id', 'name', 'version', 'api', 'roles', 'settings', 'publish_target', 'client', 'status', 'error',
-                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error')
+                 'error_code', 'dir', '_fns', 'origin', 'trust', 'record', 'source', 'trust_error', 'check_timeout_s')
 
     def __init__(self, mid, *, name=None, version='', api=None, roles=(), settings=(), status='ok',
                  error=None, error_code=None, dir='', fns=None, publish_target='folder', client=(),
-                 origin='builtin', trust=None, record=False, source='', trust_error=None):
+                 origin='builtin', trust=None, record=False, source='', trust_error=None, check_timeout_s=None):
         self.id = mid
         self.name = name if isinstance(name, str) and name.strip() else mid
         self.version = version if isinstance(version, str) else ''
@@ -214,6 +218,8 @@ class Module:
         self.roles = list(roles)
         self.settings = [dict(s) for s in settings]
         self.publish_target = publish_target if publish_target in PUBLISH_TARGETS else 'folder'
+        # `None` — ключа в маніфесті нема: `check` бере `CHECK_TIMEOUT` у момент виклику (тести його підміняють)
+        self.check_timeout_s = check_timeout_s if type(check_timeout_s) is int else None
         self.client = tuple(client)
         self.status = status
         self.error = error
@@ -484,6 +490,9 @@ def _check_manifest(man, folder, d):
     target = man.get('publish_target', 'folder')
     if not isinstance(target, str) or target not in PUBLISH_TARGETS:
         return None, f'publish_target: must be one of {", ".join(PUBLISH_TARGETS)}'
+    cts = man.get('check_timeout_s')
+    if 'check_timeout_s' in man and (type(cts) is not int or not 1 <= cts <= MAX_CHECK_TIMEOUT):
+        return None, f'check_timeout_s: must be an integer 1..{MAX_CHECK_TIMEOUT}'
     raw = man.get('settings', [])
     if not isinstance(raw, list):
         return None, 'settings: must be a list'
@@ -498,7 +507,8 @@ def _check_manifest(man, folder, d):
     if why:
         return None, why
     return {'name': name, 'version': version, 'roles': roles,
-            'settings': settings, 'publish_target': target, 'client': client}, None
+            'settings': settings, 'publish_target': target, 'client': client,
+            'check_timeout_s': cts if 'check_timeout_s' in man else None}, None
 
 
 def _failed(folder, d, code, text, man=None, meta=None):
@@ -506,7 +516,8 @@ def _failed(folder, d, code, text, man=None, meta=None):
     if meta:
         return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
                       roles=meta['roles'], settings=meta['settings'],
-                      publish_target=meta['publish_target'], **base)           # `client` не передаємо: помилковий модуль нічого не віддає
+                      publish_target=meta['publish_target'], check_timeout_s=meta['check_timeout_s'],
+                      **base)           # `client` не передаємо: помилковий модуль нічого не віддає
     man = man if isinstance(man, dict) else {}
     api = man.get('api')
     return Module(folder, name=man.get('name'), version=man.get('version', ''),
@@ -553,7 +564,7 @@ def _build(d, folder):
             fns[opt] = f
     return Module(folder, name=meta['name'], version=meta['version'], api=API_VERSION,
                   roles=meta['roles'], settings=meta['settings'], publish_target=meta['publish_target'],
-                  client=meta['client'], status='ok', dir=d, fns=fns)
+                  check_timeout_s=meta['check_timeout_s'], client=meta['client'], status='ok', dir=d, fns=fns)
 
 
 def _client_sig(d):
@@ -640,7 +651,8 @@ def _meta_kw(meta):
     if not meta:
         return {}
     return dict(name=meta['name'], version=meta['version'], api=API_VERSION, roles=meta['roles'],
-                settings=meta['settings'], publish_target=meta['publish_target'])
+                settings=meta['settings'], publish_target=meta['publish_target'],
+                check_timeout_s=meta['check_timeout_s'])
 
 
 def _own_base(space):
@@ -1642,7 +1654,8 @@ def forget_check(space_id, module_id):
 
 def check(space, module_id):
     """Результат `check` модуля — `{"ok": bool, "error"?: str, "detail"?: str}` (рядки без секретів,
-    ≤300), з `ctx` (налаштування підставлені, секрети ЦЬОГО модуля), тайм-аут `CHECK_TIMEOUT`.
+    ≤300), з `ctx` (налаштування підставлені, секрети ЦЬОГО модуля), тайм-аут — `check_timeout_s` маніфесту, інакше
+    `CHECK_TIMEOUT`.
     Останній результат запамʼятовується в `_LAST_CHECK` (для `GET /api/modules`). `ok: false` від
     модуля — звичайний результат; а `module-error`, `check-timeout`, `bad-settings` (обовʼязкове
     налаштування не задане / не те значення) — винятки, і перед викидом вони теж запамʼятовуються як
@@ -1658,7 +1671,7 @@ def check(space, module_id):
             _remember(space, module_id, {'ok': False, 'error': e.code, 'detail': e.message})
         raise
     try:
-        res = call(m, 'check', ctx, timeout=CHECK_TIMEOUT)
+        res = call(m, 'check', ctx, timeout=m.check_timeout_s or CHECK_TIMEOUT)
         if not isinstance(res, dict) or not isinstance(res.get('ok'), bool):
             raise ModuleError('module-error', message='check returned a result without a boolean "ok"')
         out = {'ok': res['ok']}
