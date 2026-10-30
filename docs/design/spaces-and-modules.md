@@ -115,7 +115,7 @@ Spec (with the list of deviations from its second revision):
 - **Framework** (`app/deai_modules.py`): manifest, `exec`-loading of `server.py`, per-space
   settings in `space.json`, secrets in `<DEAI_HOME>/secrets.json`, one provider per role,
   `capabilities` (`{publish, tokens}`) in the task and space responses. Roles called by the
-  core: `publish`, `tokens`; the others are reserved.
+  core at 2a: `publish`, `tokens`; the others are reserved.
 - **`static-publish`**: publishes the preview to a folder **outside** the space (default
   `~/deai-published/<space-id>/<task>/`), implicit in a space without integrations. The
   folder is re-checked on every publish and serve; replacement is marker-guarded and done as

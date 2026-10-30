@@ -125,11 +125,11 @@ target = {"repo": str, "path": str, "branch": str, "task": <task id>, "ssh_key"?
     `label` — a short name of the service: only `GitLab`, `GitHub` and `Git` are shown, anything else is replaced.
   * The core adds what it knows about iterations (`dirty`, `synced_at`…). The bar asks on every start and after every
     action: answer fast, and when the local copy is busy with another operation raise `vcs-busy` instead of waiting
-    (`git-sync` does; the bar asks again in a few seconds).
+    (`git-sync` does; the bar asks again every 5 s, up to 4 times).
 * `push(ctx, target, src, meta)` — `src` is a folder the core prepared outside the task folder (it removes it afterwards:
   do not keep it or change it). Its content must become `path` in the remote — the folder is replaced, dot-files
   included — and be committed and pushed, never forced. `meta` is `{"message": str, "author": {"name": str, "email": str}}`:
-  the commit text and identity. The core has already removed control characters and made both author fields non-empty;
+  the commit text and identity. The core has already removed control characters (only `\n`, `\t` and `\r` stay in `message`, which is multi-line) and made both author fields non-empty;
   use them and do not invent an identity. Results, in the shapes of `git-sync`:
   * `{"ok": true, "synced": true, "changed": true, "pushed": true, "sha": "<short>", "error": null}` — sent. Without `sha`
     the core does not record the sync (it prints a warning).

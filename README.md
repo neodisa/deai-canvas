@@ -13,7 +13,7 @@ links for your team.
 > iterations to and from any git repository, GitHub or GitLab or your own server — work in any
 > space. A **wizard** creates a space and takes you through its modules and a first task, and a
 > **Connections** screen manages the modules afterwards — no command line. A few integrations
-> (team dashboard, tracker statuses, team chat notifications) are still wired for the original
+> (publishing and comments of the legacy space, team dashboard, tracker statuses, team chat notifications) are still wired for the original
 > setup and only run in a migrated legacy space; they are being turned into optional per-space
 > modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
@@ -33,7 +33,7 @@ links for your team.
 | **Git sync** | Send an iteration to a git repository (GitHub, GitLab, your own server) and pull a colleague's changes back as a new iteration; the state is a dot in the task bar. Any space, through the `git-sync` module. See *Git sync*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
-| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, design-system tokens) from the UI. See *Modules*. |
+| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -314,12 +314,13 @@ the role.
 **Connect it.** Connections → «Git sync» → «Git» → «Connect»: the repository (the default for the tasks of the space; it
 may stay empty and be given per task), the branch (`main`), the folder in the repository (`mockup/{task}` — `{task}` is the
 task id), and, optionally, an SSH key and a server IP (for a VPN where the server's name does not resolve; only for
-`user@host:path` addresses). «Check» asks the repository for the branch (`git ls-remote`, 4 seconds). The same section is
+scp-style addresses, `[user@]host:path` — not for `ssh://`, `https://`, `file://` or a local path). «Check» asks the repository for the branch (`git ls-remote`, 4 seconds). The same section is
 in the new-space wizard, step 2.
 
 **A repository per task.** «New task» has an optional «Repository» field (not in the in-house legacy space): empty means
-the default of the module. If `<path>` of the new task already holds an `index.html` in that repository, the first
-iteration is taken from it. A task without any repository has no sync, and the task bar offers «Configure repository…»,
+the default of the module for the later sync, but the task starts from a blank page. Only a filled field (or a space
+with integrations) makes the first iteration come from the repository: if `<path>` of the
+new task already holds an `index.html` there, it is taken. A task without any repository has no sync, and the task bar offers «Configure repository…»,
 which opens Connections on the Git card. Addresses: `ssh://`, `https://`, `file://`, `user@host:path` or an absolute local path.
 
 **Access is git's, not Deai's.** The module runs the git that is on your computer and never asks for a password
@@ -339,7 +340,7 @@ GitLab or Git.
   continue in when it is a colleague's (or older than your own newest work); if it equals an iteration you already have,
   nothing is created.
 * In a regular space the repository is cloned once per address into
-  `~/.deai/cache/<space id>/git-sync/mirrors/<host>/<repository path>` and shared by the tasks that use it; the first
+  `~/.deai/cache/<space id>/git-sync/mirrors/<host>/<slug of the repository path>` (one folder: `o/r.git` becomes `o-r.git`) and shared by the tasks that use it; the first
   clone can take minutes (the legacy space keeps its old mirror folders). The mirror is a cache of the tool: before every
   send or pull its tree is reset and cleaned, so edit nothing there by hand (local commits that were not pushed stay).
 * A branch that is missing on a non-empty repository is an error: Deai does not create branches in a shared repository.
@@ -361,7 +362,7 @@ as aliases with the same answers. Codes: `vcs-offline`, `vcs-auth`, `vcs-bad-tar
 provider of this role yourself, see [`docs/modules/authoring.md`](docs/modules/authoring.md), *The `vcs` role*.
 
 **Limits.** HTTPS works only when git already has the sign-in saved; the retry through `host_ip` covers only
-`user@host:path` addresses; Windows is not checked on a real machine; a token placed in the user position of an address
+scp-style addresses (`[user@]host:path`); Windows is not checked on a real machine; a token placed in the user position of an address
 (`https://TOKEN@host/…`) is accepted and sits in the task file in plain text, though it is hidden from every answer and
 text. The full list is in `CHANGELOG.md`, 0.8.0.
 
@@ -385,7 +386,8 @@ tests/        unit, Python and live (Playwright) tests
    - ✅ **2b-1** (0.3) — your own Vercel (publish) as a module.
    - ✅ **2b-2** (0.4) — the universal `comments` role (browser adapter + server functions) and
      your own Supabase (team comments) as the first module; a guide for writing your own.
-   - Later — team dashboard, issue tracker, notifications: modules you connect per project (stage 4).
+   - Later — the legacy publishing and comments, team dashboard, issue tracker, notifications: modules you connect per
+     project (stage 4).
 3. **Onboarding**
    - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
      modules from the UI; `replace` in `module-enable`.

@@ -37,7 +37,7 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
 - **Wizard**: the section «Git sync» on step 2; no module is selected by default.
 - **Task bar and palette**: the sync zone follows the `vcs` role, not the legacy space only. The label comes from the
   module and is one of GitLab, GitHub, Git («Git» in a regular space when the label is not known); «History» only for an
-  `http(s)` address; a busy state, when another operation holds the mirror, asks again after a few seconds;
+  `http(s)` address; a busy state, when another operation holds the mirror, asks again every 5 s, up to 4 times;
   «Configure repository…» outside the legacy space opens Connections on the Git card, on a cold start too.
 - The credentials part of an address (`https://***@host/…`) is masked in every answer, error text, `remote`, the Stop hook
   line and `bin/state.py`.
@@ -64,9 +64,11 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
   them, so a single stray character would otherwise block every send.
 - Autosync (`POST /api/autosync`): `autosync` off in the module → `reason: "autosync-off"`, with neither a send nor the
   local autocommit; a refusal of the network or of the module → the quiet `offline` with the `code`; a refusal of the
-  provider (an unreadable `space.json`, an own module «on paper») → the quiet `no-gitlab` with the `code`; a local failure
-  (no permission, no `git`, a broken `iterations.json`) → `reason: "error"`, which the Stop hook reports; the central
-  states of the space → 404, 503 or 409 as for any route.
+  provider (an unreadable `space.json`, an own module «on paper») → the quiet `no-gitlab` with the `code`; a failure
+  outside the send itself (reading or parsing `iterations.json`, reading the task) → `reason: "error"`, which the Stop hook
+  reports; a failure inside the send (network, the module, no `git` in the path, permissions while the folder is
+  prepared) → the quiet `offline`, with the `code` when the module gave one — as in 0.7.0; the central states of the
+  space → 404, 503 or 409 as for any route.
 - An iteration that is invalid or not a string in `vcs-push` and `vcs-status` is `400 bad iteration`, instead of a dropped
   connection or a read of another folder.
 - `bin/state.py`: the label comes from the module; a busy mirror reads as «try again», not as an error.
@@ -114,7 +116,8 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
 ### Known limits
 
 - HTTPS without a sign-in saved in git: `vcs-auth` with a hint to set git up.
-- The retry through `host_ip` covers only scp-style addresses (`user@host:path`).
+- The retry through `host_ip` covers only scp-style addresses (`[user@]host:path`), not `ssh://`, `https://`, `file://` or
+  a local path.
 - Windows was not checked on a real machine, as for the other modules.
 - A regular space does not read the old `.mirrors` folder: its first status clones again into the cache.
 - The `git push` of a task folder's local history (`git_autocommit`) is as it was: only in a space with integrations, and

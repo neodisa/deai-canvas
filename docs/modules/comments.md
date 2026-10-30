@@ -1,6 +1,6 @@
 # Writing a `comments` module
 
-For Deai Canvas **0.7.0**. A `comments` module connects *any* comment service (Supabase, PocketBase, Firebase, your own
+For Deai Canvas **0.7.0 and later** (the contract is unchanged in 0.8.0). A `comments` module connects *any* comment service (Supabase, PocketBase, Firebase, your own
 API…) to the team comments of the canvas: pins on the canvas pages, on the Overview, in published previews, and for the
 agent (`inbox`). The core knows nothing about your service except what the module tells it.
 
