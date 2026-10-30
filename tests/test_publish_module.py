@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
 import deai_modules as dm  # noqa: E402
 import fake_npx  # noqa: E402
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -111,6 +112,11 @@ _REAL_TASKS_ENV_BEFORE = os.environ.get('DC_TASKS_FILE')
 def setUpModule():
     global _REAL
     _REAL = spaces_guard.snapshot()
+    # Конфіг Supabase ЛІГА — підставний на весь модуль (4b-2: констант нема, а справжній `tasks.json` установки не читаємо):
+    # тут перевіряється розмітка/збірка, а не пошук конфігу (його стережуть `test_legacy_comments`).
+    cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
+    cfg.start()
+    unittest.addModuleCleanup(cfg.stop)
 
 
 def tearDownModule():
@@ -1233,7 +1239,7 @@ class DispatchWorld(unittest.TestCase):
         env = mock.patch.dict(os.environ, {
             'HOME': self.home, 'DEAI_HOME': self.deai,
             'DC_TASKS_FILE': os.path.join(self.tmp, 'legacy', 'tasks.json'),     # старого файла нема
-            'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x'})
+            'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x', **sbconf.ENV})
         env.start()
         self.addCleanup(env.stop)
         # справжня тека інструмента (репозиторій) не може стати ціллю публікації, навіть якщо правило колись
@@ -4608,7 +4614,7 @@ class CommentsPublish(DispatchWorld):
         (`comment-layer.min.js`, ядрова вендорна копія) у заголовку згадує слово «Supabase» і має власний CDN: для нього
         перевіряються лише значення (секрет, адреса, ключ), а не слова."""
         for rel, data in _files(root).items():
-            for needle in (TOKEN, serve.SUPABASE_URL, serve.SUPABASE_KEY, 'sbUrl', 'sbKey'):
+            for needle in (TOKEN, sbconf.SB_URL, sbconf.SB_KEY, 'sbUrl', 'sbKey'):
                 self.assertNotIn(needle.encode(), data, f'{rel}: {needle}')
             if os.path.basename(rel) != 'comment-layer.min.js':
                 for word in (b'supabase', b'cdn.jsdelivr.net'):

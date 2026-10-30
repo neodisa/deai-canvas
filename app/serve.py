@@ -124,15 +124,23 @@ def work_root(cfg, profile):
                               or cfg.get('design_work_root')
                               or FALLBACK_WORK_ROOT)
 
-# Shared pilot backend comment-layer (публичный ключ, см. comment-layer/INTEGRATION.md).
-SUPABASE_URL = 'https://REDACTED-PROJECT-REF.supabase.co'
-SUPABASE_KEY = 'sb_publishable_REDACTED'
-
-
 def supabase_config():
-    """Тонкий геттер спільного Supabase-конфіга comment-layer для інших скриптів
-    (напр. bin/overview_push.py) — щоб не дублювати URL/ключ."""
-    return SUPABASE_URL, SUPABASE_KEY
+    """`(url, key)` проєкту Supabase простору ЛІГА з конфігу УСТАНОВКИ або `(None, None)` (4b-2: констант у коді нема).
+
+    Джерела по черзі: корінь старого `tasks.json` (`supabase_url`, `supabase_key` — той самий файл, що несе
+    `gitlab_ssh_key`), далі змінні оточення `SUPABASE_URL`/`SUPABASE_KEY`. Пара береться ЦІЛОЮ з одного джерела: адреса з
+    файла й ключ з оточення не змішуються. Адреса — лише `https://` (без `/` в кінці); повну перевірку (DNS-імʼя, сервісний
+    ключ) робить модуль `supabase-comments`. Кешу нема: файл маленький. Значень — ні в текстах, ні в журналах."""
+    try:
+        cfg = load_legacy_tasks()
+    except (OSError, ValueError):
+        cfg = None
+    cfg = cfg if isinstance(cfg, dict) else {}
+    for url, key in ((cfg.get('supabase_url'), cfg.get('supabase_key')),
+                     (os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_KEY'))):
+        if isinstance(url, str) and isinstance(key, str) and url.strip().startswith('https://') and key.strip():
+            return url.strip().rstrip('/'), key.strip()
+    return None, None
 
 # Служебное, что НЕ копируется в итерации/публикацию из папки задачи
 SKIP = {'iterations', 'iterations.json', 'publish', 'node_modules', '.git',
@@ -1649,9 +1657,13 @@ def _team_fetch():
         elif os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
             return [], 'вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)'
         else:
-            url = f'{SUPABASE_URL}/rest/v1/overview_projects?select={TEAM_COLS}&limit=500'
+            sb_url, sb_key = supabase_config()
+            if sb_url is None:
+                # Конфігу установки нема: дашборд команди недосяжний, «Мої» живуть без нього (і без мережі).
+                return [], 'Supabase не налаштовано'
+            url = f'{sb_url}/rest/v1/overview_projects?select={TEAM_COLS}&limit=500'
             req = urllib.request.Request(url, headers={
-                'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}'})
+                'apikey': sb_key, 'Authorization': f'Bearer {sb_key}'})
             with urllib.request.urlopen(req, timeout=3, context=_ssl_context()) as res:
                 data = json.loads(res.read().decode('utf-8'))
         if not isinstance(data, list):
@@ -2146,11 +2158,14 @@ def supabase_pins(project):
     Простір без інтеграцій — `spaces.IntegrationsOff` (це `OSError`: наявні `except OSError`
     навколо цього виклику деградують чесно; маршрут, якому треба 409, ловить його раніше)."""
     spaces.require_integrations()
-    url = (f'{SUPABASE_URL}/rest/v1/comments'
+    sb_url, sb_key = supabase_config()
+    if sb_url is None:
+        raise OSError('Supabase не налаштовано')
+    url = (f'{sb_url}/rest/v1/comments'
            f'?select=id,text,status,author,ts,meta,born_v,fp,html_snapshot,resolved_v,resolve_reason'
            f'&project_id=eq.{quote(project, safe="")}')
     req = urllib.request.Request(url, headers={
-        'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}'})
+        'apikey': sb_key, 'Authorization': f'Bearer {sb_key}'})
     with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as res:
         return json.loads(res.read().decode('utf-8'))
 
@@ -2186,10 +2201,13 @@ def teams_rpc(name, body):
     spaces.require_integrations()
     if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
         raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
+    sb_url, sb_key = supabase_config()
+    if sb_url is None:
+        raise OSError('Supabase не налаштовано')
     req = urllib.request.Request(
-        f'{SUPABASE_URL}/rest/v1/rpc/{name}', method='POST',
+        f'{sb_url}/rest/v1/rpc/{name}', method='POST',
         data=json.dumps(body).encode('utf-8'),
-        headers={'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}',
+        headers={'apikey': sb_key, 'Authorization': f'Bearer {sb_key}',
                  'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as res:
         return json.loads(res.read().decode('utf-8'))
@@ -2545,10 +2563,14 @@ def inject_comment_layer(html, project, assets_base, internal=False, version='',
     робочого місця дизайнера (`/commented?ch=project`); у publish обидві межі
     лишаються (див. `INSPECTOR_TAG` і `audiences_arg`). `space` — простір
     сторінки для `sp=` у URL інспектора (`inspector_ds_arg`); без `inspector`
-    він розмітку не міняє зовсім."""
+    він розмітку не міняє зовсім. Адреса й ключ — з конфігу установки (`supabase_config`); без нього сніпета нема
+    (`''`): сторінка однаково скаже банером, що база не відповіла."""
+    sb_url, sb_key = supabase_config()
+    if sb_url is None:
+        return ''
     snippet = COMMENT_SNIPPET.format(
         project=project, assets=assets_base, version=version,
-        sb_url=SUPABASE_URL, sb_key=SUPABASE_KEY,
+        sb_url=sb_url, sb_key=sb_key,
         inspector=INSPECTOR_TAG.format(
             assets=assets_base, ds=inspector_ds_arg(profile, space)) if inspector else '',
         audiences=audiences_arg('project' if audiences else None))
@@ -5764,8 +5786,13 @@ class Handler(SimpleHTTPRequestHandler):
                              'config': deai_modules.comments_client(space, prov), 'channel': channel,
                              'version': ver, **user})
         elif ch == 'project':
+            sb_url, sb_key = supabase_config()
+            if sb_url is None:
+                raise deai_modules.ModuleError(
+                    'comments-unconfigured',
+                    message='Supabase простору ЛІГА не налаштовано (supabase_url і supabase_key у tasks.json)')
             self._send_json({'ch': ch, 'project': comment_channel(task, tid), 'version': ver,
-                             'sbUrl': SUPABASE_URL, 'sbKey': SUPABASE_KEY, **user})
+                             'sbUrl': sb_url, 'sbKey': sb_key, **user})
         else:
             # Той самий файл, що в рамки (`_local_comments_*`); `project` — лише
             # ключ бекапу й нумерації в localStorage, як `local_key` у `_commented`.
@@ -6985,9 +7012,12 @@ class Handler(SimpleHTTPRequestHandler):
             # звідси. Прогін tests/test_serve.py тримав підмінений конфіг задач,
             # а цей Popen успадковував оточення і пушив фікстуру в реальну базу.
             return
+        sb_url, sb_key = supabase_config()
+        if sb_url is None:
+            return                      # конфігу установки нема — пушити нікуди (і лога не відкриваємо)
         log = None
         try:
-            env = {**os.environ, 'SUPABASE_URL': SUPABASE_URL, 'SUPABASE_KEY': SUPABASE_KEY}
+            env = {**os.environ, 'SUPABASE_URL': sb_url, 'SUPABASE_KEY': sb_key}
             # Вивід — у той самий лог, що й у планового синку, а НЕ в /dev/null.
             # Досі цей пуш був подвійно німим: виняток ковтав except, а те, що
             # написав сам скрипт, ішло в нікуди. Саме так ховається клас збоїв

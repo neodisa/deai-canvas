@@ -29,11 +29,12 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
+import sbconf  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 
-_ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE', 'DEAI_EXTRA_MODULES')
+_ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE', 'DEAI_EXTRA_MODULES', 'SUPABASE_URL', 'SUPABASE_KEY')
 _REAL = None
 _DEL = object()          # «прибрати ключ» у `manifest_patch`
 _REAL_BUILTIN_DIR = dm.builtin_dir     # до того, як `Env.setUp` її підмінить
@@ -207,6 +208,7 @@ class Env(unittest.TestCase):
         os.environ['HOME'] = self.home
         os.environ['DEAI_HOME'] = self.deai
         os.environ['DC_TASKS_FILE'] = self.legacy
+        os.environ.update(sbconf.ENV)      # конфіг Supabase ЛІГА — вигаданий, з оточення (4b-2)
         # Каталог тесту — рівно `self.mods`: друга тека вбудованих модулів із оточення (`DEAI_EXTRA_MODULES`, шов тестів 2b-2) сюди
         # не належить, і її модулі не можна ні перелічувати, ні — головне — переписувати (`tearDown` повертає змінну).
         os.environ.pop('DEAI_EXTRA_MODULES', None)

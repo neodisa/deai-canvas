@@ -39,6 +39,7 @@ ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, _HERE)                                   # пакета `tests` нема — охоронець і `test_modules` поруч
 import deai_modules as dm  # noqa: E402
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -1339,7 +1340,7 @@ class PagesEnv(CommentsEnv):
         """Те, що різниться між прогонами (порт, id простору, публічні сталі ЛІГА), — на плейсхолдери: еталон лишається
         сталим, а решта розмітки порівнюється побайтно."""
         return (text.replace(self.origin, '{ORIGIN}').replace(f'sp={self.cur["id"]}', 'sp={SP}')
-                .replace(serve.SUPABASE_URL, '{SB_URL}').replace(serve.SUPABASE_KEY, '{SB_KEY}'))
+                .replace(sbconf.SB_URL, '{SB_URL}').replace(sbconf.SB_KEY, '{SB_KEY}'))
 
     def golden(self, name, actual):
         """Порівняти з еталоном `tests/fixtures/comments-role/<name>`; `UPDATE_COMMENTS_GOLDEN=1` — перезнімає."""
@@ -1375,7 +1376,7 @@ class PagesEnv(CommentsEnv):
         self.assertNotIn('__deaiCommentsCfg', html)
         self.assertNotIn('/api/module-client/', html)
         self.assertNotIn('audiences:', html)                           # командного каналу нема — вкладки «Команда» теж
-        for shared in self.SHARED + (serve.SUPABASE_URL, serve.SUPABASE_KEY):
+        for shared in self.SHARED + (sbconf.SB_URL, sbconf.SB_KEY):
             self.assertNotIn(shared, html, shared)
         self.assertNotIn('supabase', html.lower())
         notice = re.search(r"window\.__clDown\(([^\n]*)\);\s*</script>\s*</body>", html)
@@ -1383,7 +1384,7 @@ class PagesEnv(CommentsEnv):
         self.assertIn(code, notice.group(1))
 
     def assert_no_shared_service_in(self, body):
-        for shared in (serve.SUPABASE_URL, serve.SUPABASE_KEY, 'sbUrl', 'sbKey'):
+        for shared in (sbconf.SB_URL, sbconf.SB_KEY, 'sbUrl', 'sbKey'):
             self.assertNotIn(shared, body, shared)
 
     def cfg_of(self, html):
@@ -1487,7 +1488,7 @@ class LeaguePrivacyTest(PagesEnv):
         self.break_module()
         html = self.page('local')
         self.assertIn('local-adapter.js', html)
-        for shared in self.SHARED + (serve.SUPABASE_URL, serve.SUPABASE_KEY):
+        for shared in self.SHARED + (sbconf.SB_URL, sbconf.SB_KEY):
             self.assertNotIn(shared, html, shared)
 
     def test_controls_a_disabled_or_absent_entry_keeps_the_league_snippet(self):

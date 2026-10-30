@@ -27,6 +27,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'app'))
 import import_preview as ip  # noqa: E402
 import serve  # noqa: E402
 
+
+def setUpModule():
+    # Конфіг Supabase ЛІГА — підставний (4b-2: констант у `serve.py` нема): без нього `inject_comment_layer` не дає
+    # сніпета, а тут стереться саме сніпет. Вигадані значення; справжній `tasks.json` установки не читається.
+    cfg = mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.co', 'sb_publishable_test'))
+    cfg.start()
+    unittest.addModuleCleanup(cfg.stop)
+
 PAGE = ('<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8">'
         '<title>Картка «Ромашка»</title><link rel="stylesheet" href="../assets/app.css">'
         '</head><body><h1>Картка</h1><img src="../icons/a.svg" srcset="../icons/a.svg 1x, ../icons/a@2x.svg 2x">'

@@ -173,15 +173,18 @@ def row_has_pii(row):
     return any(p.search(blob) for p in _PII)
 
 # ---------- Supabase write client (Task 2) ----------
-# Реюзаємо конфіг comment-layer (serve.py): спершу env, інакше геттер serve.supabase_config().
+# Конфіг Supabase: спершу env, інакше геттер конфігу установки (`serve.supabase_config`).
 
 def _supabase():
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
     if not (url and key):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
-        from serve import supabase_config  # тонкий геттер поруч із SUPABASE_URL/KEY у serve.py
+        from serve import supabase_config  # геттер конфігу установки (`serve.supabase_config`)
         url, key = supabase_config()
+    if not (url and key):
+        raise RuntimeError("Supabase не налаштовано: supabase_url і supabase_key у tasks.json "
+                           "або SUPABASE_URL/SUPABASE_KEY")
     return url.rstrip("/"), key
 
 def _ssl_context():

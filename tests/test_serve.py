@@ -18,7 +18,17 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sbconf  # noqa: E402
 import serve  # noqa: E402
+
+
+def setUpModule():
+    # Конфіг Supabase ЛІГА — підставний на весь модуль (4b-2: констант нема, а справжній `tasks.json` установки не читаємо):
+    # тут перевіряється розмітка/збірка, а не пошук конфігу (його стережуть `test_legacy_comments`).
+    cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
+    cfg.start()
+    unittest.addModuleCleanup(cfg.stop)
 
 
 def _git(args, cwd):
@@ -3856,8 +3866,8 @@ class ShotsEndpoints(unittest.TestCase):
         # той самий канал, що `_commented` дає рамці (`comment_channel`)
         self.assertEqual(body['project'], 'dc/fixture')
         self.assertEqual(body['version'], '1')
-        self.assertEqual(body['sbUrl'], serve.SUPABASE_URL)
-        self.assertEqual(body['sbKey'], serve.SUPABASE_KEY)
+        self.assertEqual(body['sbUrl'], sbconf.SB_URL)
+        self.assertEqual(body['sbKey'], sbconf.SB_KEY)
 
     def test_comment_config_refuses_unknown_channel(self):
         for q in ('ch=evil&it=it1', 'ch=local&it=../x'):

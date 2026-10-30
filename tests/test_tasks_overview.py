@@ -22,6 +22,8 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 
 # Справжній urlopen — клієнт тестів, коли тест підміняє `urllib.request.urlopen`
@@ -223,6 +225,13 @@ class TasksOverviewTest(_TmpCase):
 
 
 class TeamRowsTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        # конфіг Supabase — підставний (4b-2): без нього `_team_fetch` не ходить у мережу, а тут мережу підмінено навмисно
+        cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
+        cfg.start()
+        self.addCleanup(cfg.stop)
+
     def _fake(self, rows):
         p = os.path.join(self.root, 'team.json')
         _write_json(p, rows)

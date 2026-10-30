@@ -155,7 +155,9 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
           # у виводі `deploy` нема адреси (текст — від модуля; адаптер ЛІГИ в `serve.py` підміняє його своїми підказками)
           'no-node': 409, 'vercel-login': 409, 'vercel-scope': 409, 'vercel-deploy': 502, 'vercel-no-url': 502,
           # роль `vcs` (4a): мережа/DNS/тайм-аут git, відмова в доступі, погана ціль, зайняте дзеркало, решта відмов git
-          'vcs-offline': 502, 'vcs-auth': 502, 'vcs-bad-target': 400, 'vcs-busy': 409, 'vcs-error': 502}
+          'vcs-offline': 502, 'vcs-auth': 502, 'vcs-bad-target': 400, 'vcs-busy': 409, 'vcs-error': 502,
+          # простір ЛІГА без адреси/ключа Supabase у конфігу установки (4b-2; `supabase_url`/`supabase_key` у tasks.json)
+          'comments-unconfigured': 409}
 
 #: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
 #: модуль не кине «module-untrusted» від свого імені.

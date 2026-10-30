@@ -157,6 +157,53 @@ class TestJiraStatuses(unittest.TestCase):
         self.assertEqual(got["LIGA-7008"], {"name": "To Do", "cat": "new"})
 
 
+class TestSupabaseGetter(unittest.TestCase):
+    """`_supabase()` без оточення й без конфігу установки — зрозуміла помилка, а не `None.rstrip` (4b-2).
+    Старий файл задач — тимчасовий порожній (справжній `tasks.json` не читається), `SUPABASE_*` прибрані."""
+
+    def test_no_env_and_no_config_is_a_clear_error_without_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = os.path.join(tmp, "tasks.json")
+            with open(empty, "w", encoding="utf-8") as f:
+                f.write("{}")
+            saved = {k: os.environ.get(k) for k in
+                     ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")}
+            for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
+                os.environ.pop(k, None)
+            os.environ["DC_TASKS_FILE"] = empty
+            try:
+                with self.assertRaises(RuntimeError) as ctx:
+                    ov._supabase()
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+        self.assertIn("не налаштовано", str(ctx.exception))
+        self.assertNotIn("https://", str(ctx.exception))
+
+    def test_config_of_the_installation_is_used_when_env_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "tasks.json")
+            with open(cfg, "w", encoding="utf-8") as f:
+                json.dump({"supabase_url": "https://demo.supabase.co/", "supabase_key": "sb_publishable_test"}, f)
+            saved = {k: os.environ.get(k) for k in
+                     ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")}
+            for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
+                os.environ.pop(k, None)
+            os.environ["DC_TASKS_FILE"] = cfg
+            try:
+                got = ov._supabase()
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+        self.assertEqual(got, ("https://demo.supabase.co", "sb_publishable_test"))
+
+
 class TestUpsertProject(unittest.TestCase):
     def setUp(self):
         self._old_url = os.environ.get("SUPABASE_URL")

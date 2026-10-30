@@ -24,7 +24,9 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import inbox  # noqa: E402
+import sbconf  # noqa: E402
 
 SHOT = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ' + 'A' * 40000
 INLINE_IMG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
@@ -96,9 +98,11 @@ class InboxCase(unittest.TestCase):
         os.makedirs(self.task_dir)
         self.tasks_file = os.path.join(self.tmp, 'tasks.json')
         with open(self.tasks_file, 'w', encoding='utf-8') as f:
-            json.dump({'current': 'fx', 'tasks': {'fx': {
-                'title': 'Фікстура', 'dir': self.task_dir,
-                'comment_project': 'dc/fixture-inbox-test'}}}, f)
+            # `supabase_url`/`supabase_key` — конфіг УСТАНОВКИ в корені файла (4b-2: констант у коді нема)
+            json.dump({'supabase_url': sbconf.SB_URL, 'supabase_key': sbconf.SB_KEY,
+                       'current': 'fx', 'tasks': {'fx': {
+                           'title': 'Фікстура', 'dir': self.task_dir,
+                           'comment_project': 'dc/fixture-inbox-test'}}}, f)
         self._env = {k: os.environ.get(k) for k in
                      ('DC_TASKS_FILE', 'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL')}
         os.environ['DC_TASKS_FILE'] = self.tasks_file

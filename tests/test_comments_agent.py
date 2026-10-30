@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import deai_modules as dm  # noqa: E402
 import inbox  # noqa: E402
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -252,7 +253,7 @@ class InboxModuleTest(AgentEnv):
         method, path, auth, _ = self.svc.log[-1]
         self.assertEqual((method, path, auth), ('GET', f'/c/deai%2F{self.plain["id"]}%2Fpx', 'Bearer ' + tcr.TOKEN))
         self.assert_no_legacy()
-        self.assertNotIn(serve.SUPABASE_URL, out)
+        self.assertNotIn(sbconf.SB_URL, out)
         self.assertNotIn(tcr.TOKEN, out)
 
     def test_the_pin_lines_are_identical_to_those_of_the_same_pin_from_supabase(self):
@@ -444,7 +445,7 @@ class InboxOtherProvidersTest(AgentEnv):
         self.assertEqual(rc, 0, out)
         self.assertIn('-- ПРОЄКТ (колеги + історія, Supabase) --', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
-        self.assertEqual(self.net.calls, [('GET', f'{serve.SUPABASE_URL}/rest/v1/comments?select=id,text,status,author,'
+        self.assertEqual(self.net.calls, [('GET', f'{sbconf.SB_URL}/rest/v1/comments?select=id,text,status,author,'
                                                   'ts,meta,born_v,fp,html_snapshot,resolved_v,resolve_reason'
                                                   '&project_id=eq.dc%2Flx')])
         self.assertEqual(self.svc.log, [])
@@ -479,7 +480,7 @@ class InboxOtherProvidersTest(AgentEnv):
             self.assertIn(message, out)
         self.assertIn('Локальне', out)
         self.assertIn('Разом до відпрацювання: 1 локальних + 0 проєктних', out)
-        self.assertNotIn(serve.SUPABASE_URL, out)
+        self.assertNotIn(sbconf.SB_URL, out)
         self.assert_no_legacy()
         self.assertEqual(self.svc.log, [], 'зламаний модуль не питають')
         # закриття: локальний пін — без жодного проєкту; проєктний префікс — «проєкт недоступний», не Supabase
@@ -1137,7 +1138,7 @@ class CommentsRouteTest(ServerEnv):
         self.assertEqual((st, body['ok'], body['code']), (502, False, 'module-error'))
         self.assertEqual(body['error'], dm.COMMENTS_MODULE_BROKEN)
         self.assertNotIn('comments', body)
-        self.assertNotIn(serve.SUPABASE_URL, raw)
+        self.assertNotIn(sbconf.SB_URL, raw)
         self.assert_no_legacy()
         self.assertEqual(self.svc.log, [])
 

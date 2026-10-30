@@ -48,6 +48,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -380,7 +381,7 @@ class TripwireItself(unittest.TestCase):
 # ---------- спільне ----------
 
 _ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TEAMS_FAKE',
-        'DC_MIRRORS_DIR', 'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL', 'GIT_AUTHOR_NAME',
+        'SUPABASE_URL', 'SUPABASE_KEY', 'DC_MIRRORS_DIR', 'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL', 'GIT_AUTHOR_NAME',
         'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL')
 
 
@@ -422,6 +423,7 @@ def _isolate_env(case, tmp, legacy_file, class_level=False):
     for k in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TEAMS_FAKE'):
         os.environ.pop(k, None)
     os.environ['DC_TASKS_FILE'] = legacy_file
+    os.environ.update(sbconf.ENV)      # конфіг Supabase ЛІГА — вигаданий, з оточення (4b-2): точки виходу ЛІГИ живі й під розтяжкою
     os.environ.update({
         'HOME': home, 'DEAI_HOME': deai, 'DC_MIRRORS_DIR': os.path.join(tmp, 'mirrors'),
         'DC_IDENTITY_NAME': 'Lead', 'DC_IDENTITY_EMAIL': 'lead@example.com',

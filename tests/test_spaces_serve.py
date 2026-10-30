@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, os.path.join(ROOT, 'ops'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -68,6 +69,11 @@ _REAL = None
 def setUpModule():
     global _REAL
     _REAL = spaces_guard.snapshot()
+    # Конфіг Supabase ЛІГА — підставний на весь модуль (4b-2: констант нема, а справжній `tasks.json` установки не читаємо):
+    # тут перевіряється розмітка/збірка, а не пошук конфігу (його стережуть `test_legacy_comments`).
+    cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
+    cfg.start()
+    unittest.addModuleCleanup(cfg.stop)
 
 
 def tearDownModule():

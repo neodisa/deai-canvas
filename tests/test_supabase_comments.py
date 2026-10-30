@@ -52,6 +52,7 @@ import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import test_comments_agent as tca  # noqa: E402  — `ServerEnv` (два простори, сервер, `inbox`), `cl`
+import sbconf  # noqa: E402
 import test_comments_role as tcr  # noqa: E402
 import test_modules as tm  # noqa: E402  — `Env`
 
@@ -1542,7 +1543,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
             'window.__deaiCommentsCfg = ', 'window.DeaiComments.create(')]
         self.assertEqual(at, sorted(at), 'банер → шар → supabase-js → адаптер → конфіг → завантажувач')
         self.assertEqual(self.cfg_of(html), {'url': URL, 'key': KEY, 'channel': self.channel()})
-        for gone in (serve.SUPABASE_URL, serve.SUPABASE_KEY, 'cdn.jsdelivr.net', 'CommentLayerSupabase'):
+        for gone in (sbconf.SB_URL, sbconf.SB_KEY, 'cdn.jsdelivr.net', 'CommentLayerSupabase'):
             self.assertNotIn(gone, html, gone)
 
     def test_the_two_client_files_are_served_byte_for_byte(self):

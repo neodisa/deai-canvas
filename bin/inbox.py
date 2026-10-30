@@ -557,6 +557,8 @@ def patch_project_pin(pin_id, n, reason):
     """
     spaces.require_integrations()
     url, key = supabase_config()
+    if url is None:
+        raise OSError('Supabase не налаштовано')
     req = urllib.request.Request(
         f'{url}/rest/v1/comments?id=eq.{quote(pin_id, safe="")}',
         data=json.dumps(project_body(n, reason)).encode('utf-8'),
@@ -687,6 +689,9 @@ def cmd_resolve(a, rp=None):
                       f'{json.dumps(reason, ensure_ascii=False)}')
                 continue
             url, _ = supabase_config()
+            if url is None:
+                print('[dry-run] Supabase не налаштовано')
+                continue
             print(f'[dry-run] PATCH {url}/rest/v1/comments?id=eq.'
                   f'{quote(p["id"], safe="")} '
                   f'{json.dumps(project_body(n, reason), ensure_ascii=False)}')
