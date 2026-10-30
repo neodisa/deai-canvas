@@ -77,8 +77,8 @@ const isLocal = (u) => {
  *   · збирає, що пише консоль і що падає, окремо для канваса (`canvas`) і для сторінок, відкритих із нього
  *     (`popups`): CORS-відмови видно саме там.
  */
-async function boot(t, { spaces, beforeOpen = null } = {}) {
-  const server = await startServer(null, { portBase: PORT_BASE, spaces });
+async function boot(t, { spaces, beforeOpen = null, supabase = false } = {}) {
+  const server = await startServer(null, { portBase: PORT_BASE, spaces, supabase });
   t.after(() => stop(server.child));
   beforeOpen?.(server);
   const context = await browser.newContext({ viewport: VIEW });
@@ -459,8 +459,11 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
 
 test("3: ЛІГА-простір — capabilities.publish 'legacy', смуга з GitLab/паролем/Teams, публікація не чіпає static-publish і не виходить назовні", async (t) => {
   const A = taskFixture({ html: MOCKUP });
+  /* `supabase: true`: ЛІГА-превʼю несе шар коментатора лише з конфігом Supabase у `tasks.json` (4b-2; без нього публікація
+     ЛІГИ — без командних коментарів). Хост вигаданий, а збірка (`build_only`) мережі не торкається. */
   const { page, url, home, requests, outside } = await boot(t, {
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { a: { dir: A.dir, title: "Задача A" } } }],
+    supabase: true,
   });
 
   const reg = await spacesApi(url);

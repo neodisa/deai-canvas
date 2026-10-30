@@ -15,14 +15,15 @@
  *        шорткат. Без C «нічого не вмикається» зеленіло б і на `return` у
  *        першому рядку обробника.
  *
- * ⛔ Адаптер Supabase підмінений заглушкою (як у `comment-audience.test.mjs`) —
- * шар мусить піднятись у рамці без мережі.
+ * ⛔ Supabase ЛІГИ — вигаданий хост із `tasks.json` фікстури (`supabase: true`), перехоплений у браузері (`hermeticLiga`, як у
+ * `comment-audience.test.mjs`): шар мусить піднятись у рамці без мережі.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { hermeticLiga } from "./_liga-supabase.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя база порту: `node --test` крутить файли ПАРАЛЕЛЬНО. */
@@ -34,23 +35,9 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
   + `#18a 10px 20px,#2c3 20px 30px,#fd0 30px 40px)">`
   + `<h1 style="margin:40px">${id}</h1></body></html>`;
 
-const STUB_ADAPTER = `window.CommentLayerSupabase = function () {
-  return {
-    ready: Promise.resolve(),
-    load: function () { return []; },
-    subscribe: function () {},
-    save: function () { return Promise.resolve(); },
-    remove: function () { return Promise.resolve(); },
-  };
-};`;
-
-async function hermetic(page) {
-  await page.route("**/cdn.jsdelivr.net/**", (route) => route.fulfill({
-    status: 200, contentType: "application/javascript", body: "",
-  }));
-  await page.route("**/app/vendor/supabase-adapter.min.js", (route) => route.fulfill({
-    status: 200, contentType: "application/javascript", body: STUB_ADAPTER,
-  }));
+async function hermetic(page, t) {
+  const seen = await hermeticLiga(page);
+  t.after(() => assert.deepEqual(seen.outside, [], `запити за межі машини:\n${seen.outside.join("\n")}`));
 }
 
 function waitLayer(page) {
@@ -76,12 +63,12 @@ function armed(page) {
 
 async function boot(t) {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: VIEW });
-  await hermetic(page);
+  await hermetic(page, t);
   await page.goto(`${url}/app/`);
   await waitLayer(page);
   return page;

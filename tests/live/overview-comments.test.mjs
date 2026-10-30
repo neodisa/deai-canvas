@@ -50,6 +50,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 
 import { CLUSTER_W } from "../../app/overview-pins.js";
+import { MODULE_ADAPTER_GLOB, hermeticLiga } from "./_liga-supabase.mjs";
 import { startServer } from "./fixture.mjs";
 import { ANCHOR, TARGETS, seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 
@@ -61,7 +62,7 @@ let server, browser, comments;
 
 test.before(async () => {
   const { dir } = t45Task();
-  server = await startServer(dir, { portBase: PORT_BASE, title: "T-45" });
+  server = await startServer(dir, { portBase: PORT_BASE, title: "T-45", supabase: true });
   browser = await chromium.launch();
   comments = await seedPins(browser, server.url);
   const shot = await shootAll(server.url);
@@ -437,9 +438,15 @@ test("L: у режимі коментування перетягування п�
 
 /* ── Ревʼю T-45: D1–D4 і D7. Після K/L — деякі пишуть у спільну фікстуру. ── */
 
-/** Заглушка supabase-js ДО завантаження сторінки: канал «Команда» піднімається
- *  без мережі й без справжньої бази; записи збираються у `window.__sbWrites`. */
+/** Заглушка supabase-js ДО завантаження сторінки: канал «Команда» піднімається без мережі й без справжньої бази; записи
+ *  збираються у `window.__sbWrites`. Від 4b-2 канал «Команда» ЛІГИ — це адаптер модуля `supabase-comments` (його
+ *  `adapter.js` справжній, він кличе `window.supabase.createClient`), тож заглушка лишилась тією самою, а справжній
+ *  `supabase.min.js` модуля підмінено порожнім файлом, щоб він її не затер. Конфіг Supabase ЛІГИ — у `tasks.json` фікстури
+ *  (`supabase: true`); усе за межі машини `abort`-иться й складається в `.outside` (тест мусить лишити його порожнім). */
 async function withSupabaseStub(page) {
+  const seen = await hermeticLiga(page);
+  await page.route(MODULE_ADAPTER_GLOB.replace("adapter.js", "supabase.min.js"), (route) => route.fulfill({
+    status: 200, contentType: "application/javascript", body: "" }));
   await page.addInitScript(() => {
     window.__sbWrites = []; window.__sbClosed = 0;
     window.supabase = { createClient: () => {
@@ -450,6 +457,7 @@ async function withSupabaseStub(page) {
                removeChannel: () => { window.__sbClosed += 1; } };
     } };
   });
+  return seen;
 }
 const hosts = (page) => page.evaluate(() => document.querySelectorAll("#canvas [data-comment-layer]").length);
 async function switchAudience(page, id) {
@@ -482,7 +490,7 @@ test("M: пін без місця на кадрі — лічильник «по�
 
 test("N (D1): перемикання каналу на «Огляді» лишає ОДИН інстанс, і коментар «Клоду» йде у файл, а не в «Команду»", async () => {
   const page = await browser.newPage({ viewport: VIEW });
-  await withSupabaseStub(page);
+  const net = await withSupabaseStub(page);
   /* Скільки разів піднімали інстанс — по запитах конфігу каналу. Самого числа
      хостів мало: друга лінія (`if (cl) destroy()` перед `init`) прибирає дубль
      у кінці, і перевірка «один хост» зеленіла навіть без `inflight`. Лишні
@@ -522,6 +530,7 @@ test("N (D1): перемикання каналу на «Огляді» лиша
   }
   assert.ok(mine, "коментар «Клоду» не доїхав у локальний файл");
   assert.deepEqual(await page.evaluate(() => window.__sbWrites.map((r) => r.text)), [], "коментар «Клоду» поїхав у «Команду»");
+  assert.deepEqual(net.outside, [], `запити за межі машини:\n${net.outside.join("\n")}`);
   await page.close();
 });
 

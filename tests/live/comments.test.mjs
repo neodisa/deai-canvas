@@ -21,14 +21,19 @@
  *        всім, сторінка каналу показує банер замість шару коментатора, і червоніють a, b, d (c лишається зеленим: превʼю
  *        бере файли адаптера з диска, а не з цього маршруту). `hasTeamComments` (`spaces-model.js`): без `capabilities` у
  *        ньому простір БЕЗ інтеграцій не має вкладки «Команда» — червоніють a і b.
- *   b («Огляд»)             — гілка `cfg.module` у `start` (`overview-comments.js`): без неї «Огляд» іде зашитим CDN Supabase
- *        (розтяжка його не пускає) — червоніють b і f.
+ *   b («Огляд»)             — гілка `cfg.module` у `start` (`overview-comments.js`): без неї «Огляд» не бере адаптера модуля
+ *        (розтяжка не пускає нічого за межі машини) — червоніють b і f.
  *   c (превʼю в `/published`) — `publish_comments` → `build_preview(comments=<модуль>)` (`serve.py`): без модульного
  *        словника в `comment-layer/` нема адаптера, а сторінки без сніпета. Негативний контроль у тому ж сценарії: сервіс
  *        без `Access-Control-Allow-Origin` для `null` — пінів у пісочниці нема (доведено, що пін прийшов саме мережею).
  *   d (створення в UI)      — `save` і `subscribe` адаптера фікстури; друге вікно бачить пін без перезавантаження.
- *   e (форма ЛІГА)          — `'legacy'` у `_provider_for` (`deai_modules.py`): без нього ЛІГА-сторінка не має зашитого
- *        сніпета; `memo`, увімкнений в ІНШОМУ просторі, не бачить від ЛІГА жодного запиту.
+ *   e (ЛІГА = той самий модуль) — (4b-2) `'legacy'` у `_provider_for` (`deai_modules.py`) і `MODULE_COMMENT_SNIPPET` у `_commented`
+ *        (`serve.py`): ЛІГА-сторінка несе МОДУЛЬНИЙ сніпет (`__deaiCommentsCfg` із каналом задачі й кошиком скріншотів,
+ *        файли `supabase-comments`), без CDN Supabase і без `supabase-adapter`; Supabase — вигаданий хост із
+ *        `tasks.json`, перехоплений у браузері; `memo`, увімкнений в ІНШОМУ просторі, не бачить від ЛІГА жодного запиту.
+ *   e3 (ЛІГА без конфігу)   — `COMMENTS_UNCONFIGURED` / `inject_comment_notice` (`serve.py`): без `supabase_url` у `tasks.json`
+ *        сторінка каналу — ЛОКАЛЬНА з банером `comments-unconfigured`, а `/api/comment-config` → 409; рамка робоча (піни
+ *        ставляться локально) і до мережі не йде.
  *   e2 (зміна модуля)       — (фінальне ревʼю 0.5.0) `ovc.invalidate()` на початку `afterModulesChange` (`app.js`) і сам
  *        `invalidate()` у `overview-comments.js`: без нього коментатор «Огляду» тримає інстанс за ключем «ітерація|канал» і
  *        після зміни адреси на екрані «Підключення» його пін-шар лишається на СТАРОМУ сервісі (червоніє e2: піни A замість B,
@@ -48,6 +53,7 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
 
+import { LIGA_SB_HOST, hermeticLiga } from "./_liga-supabase.mjs";
 import { ANCHOR, shootAll, t45Task } from "./_t45-fixture.mjs";
 import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop } from "./_spaces-kit.mjs";
 import { startServer } from "./fixture.mjs";
@@ -67,6 +73,7 @@ const CHANNEL = `deai/${SPACE}/${TASK}`;
 const TOKEN = "TOKEN-PRIVATE-do-not-leak";
 const PUBKEY = "PUBKEY-public-ok";
 const CDN = "cdn.jsdelivr.net";
+const MODULE_PATH = "/api/module-client/supabase-comments/";
 const PUBLISHED_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals";
 
 /** Папка браузерів Playwright. Сервер канваса сидить в ізольованій домівці й без цього не знайшов би Chromium для
@@ -182,12 +189,14 @@ async function until(fn, what, ms = 15000) {
 /**
  * Сервер + `memo` + контекст браузера. Простір `mod` без інтеграцій із задачею `fixture` (`t45Task`: дві сторінки, на
  * `holovna` є кнопка `[data-testid=subscribe]`); `withLiga` додає ПЕРШИМ простір ЛІГА (поточний) — тоді `mod` лишається
- * другим і модуль вмикається лише в ньому. Контекст:
+ * другим і модуль вмикається лише в ньому. `ligaSupabase` (типово разом із `withLiga`) пише в корінь `tasks.json` ЛІГИ
+ * вигаданий конфіг Supabase й перехоплює його хост у браузері (`hermeticLiga`: REST порожній, websocket закрито); `false` —
+ * ЛІГА без конфігу (сценарій e3). Контекст:
  *   · рахує КОЖЕН свій запит (`requests`) і відповіді (`responses`);
  *   · не пускає нічого за межі машини (`abort`); запис у `outside` видасть кожну спробу. Єдиний виняток — `stub`
  *     (хости, чий запит ПІДМІНЯЄТЬСЯ порожнім скриптом і на мережу не виходить: CDN зашитого шляху ЛІГА у сценарії e).
  */
-async function boot(t, { withLiga = false, stub = [], enable = true } = {}) {
+async function boot(t, { withLiga = false, stub = [], enable = true, ligaSupabase = withLiga } = {}) {
   const memo = await startMemo();
   t.after(() => memo.close());
   const mod = t45Task();
@@ -198,7 +207,7 @@ async function boot(t, { withLiga = false, stub = [], enable = true } = {}) {
   }
   spaces.push({ name: "Mod", id: SPACE, color: "space-3", tasks: { [TASK]: { dir: mod.dir, title: "Задача" } } });
   const server = await startServer(null, {
-    portBase: PORT_BASE, spaces,
+    portBase: PORT_BASE, spaces, supabase: ligaSupabase,
     env: { DEAI_EXTRA_MODULES: MODULES_DIR, PLAYWRIGHT_BROWSERS_PATH: browsersPath() },
   });
   t.after(() => stop(server.child));
@@ -230,6 +239,8 @@ async function boot(t, { withLiga = false, stub = [], enable = true } = {}) {
   await context.route((u) => !isLocal(u.href), (route) => (stub.includes(new URL(route.request().url()).hostname)
     ? route.fulfill({ status: 200, contentType: "application/javascript", body: "" })
     : route.abort("blockedbyclient")));
+  /* ЛІГА з конфігом: вигаданий хост Supabase відповідає порожньо (хост — у `stub`, тож його запити йдуть у `stubbed`). */
+  const liga = ligaSupabase ? await hermeticLiga(context) : null;
 
   const logs = { errors: [], console: [], failed: [] };
   const watch = (page) => {
@@ -239,7 +250,7 @@ async function boot(t, { withLiga = false, stub = [], enable = true } = {}) {
   };
   context.on("page", watch);
   const page = await context.newPage();
-  return { ...server, memo, context, page, requests, responses, outside, stubbed, logs, taskDir: mod.dir };
+  return { ...server, memo, context, page, requests, responses, outside, stubbed, liga, logs, taskDir: mod.dir };
 }
 
 /**
@@ -567,41 +578,95 @@ test("d: пін, створений у сторінці каналу project, п
   assert.deepEqual(outside, [], `запити за межі машини:\n${outside.join("\n")}`);
 });
 
-/* ── e: форма ЛІГА без змін ────────────────────────────────────────────────────────────────────────── */
+/* ── e: ЛІГА — той самий модуль ────────────────────────────────────────────────────────────────────── */
 
-test("e: ЛІГА-простір — зашитий шлях (спільний CDN), жодного модульного сніпета; memo в іншому просторі не бачить запитів", async (t) => {
-  const env = await boot(t, { withLiga: true, stub: [CDN] });
-  const { page, url, memo, requests, outside, stubbed } = env;
+test("e: ЛІГА-простір — модульний сніпет supabase-comments (конфіг із tasks.json), без CDN і зашитого адаптера; memo в іншому просторі не бачить запитів", async (t) => {
+  const env = await boot(t, { withLiga: true, stub: [CDN, LIGA_SB_HOST] });
+  const { page, url, memo, requests, outside, liga } = env;
 
   const spaces = (await spacesApi(url)).spaces;
-  const liga = spaces.find((s) => s.id === "liga");
-  assert.equal(liga.integrations, true, "свідок: простір ЛІГА має інтеграції");
-  assert.equal(liga.capabilities.comments, "legacy", `capabilities ЛІГА: ${JSON.stringify(liga.capabilities)}`);
+  const ligaSpace = spaces.find((s) => s.id === "liga");
+  assert.equal(ligaSpace.integrations, true, "свідок: простір ЛІГА має інтеграції");
+  assert.equal(ligaSpace.capabilities.comments, "legacy", `capabilities ЛІГА: ${JSON.stringify(ligaSpace.capabilities)}`);
   assert.equal(spaces.find((s) => s.id === SPACE).capabilities.comments, MODULE, "свідок: у `mod` модуль ввімкнено");
   assert.equal(memo.log.length, 0, "свідок: memo ще нічого не бачив");
 
-  /* Сторінка каналу project у ЛІГА: зашитий шлях. */
+  /* Сторінка каналу project у ЛІГА: модульний сніпет вбудованого `supabase-comments`; канал — задачі (`dc/<задача>`). */
   const target = `${url}/commented?it=it1&page=holovna&ch=project`;
   const html = await (await fetch(target)).text();
-  assert.ok(html.includes(CDN) && html.includes("supabase-adapter.min.js"), "ЛІГА-сторінка втратила зашитий сніпет Supabase");
-  assert.equal(html.includes("__deaiCommentsCfg") || html.includes("/api/module-client/"), false, "ЛІГА-сторінка отримала модульний сніпет");
+  assert.ok(html.includes("__deaiCommentsCfg") && html.includes(`${MODULE_PATH}adapter.js`) && html.includes(`${MODULE_PATH}supabase.min.js`),
+    "ЛІГА-сторінка без модульного сніпета supabase-comments");
+  for (const old of [CDN, "supabase-adapter", "CommentLayerSupabase", "cdn.jsdelivr"]) {
+    assert.equal(html.includes(old), false, `ЛІГА-сторінка ще несе зашите «${old}»`);
+  }
   const cfg = await (await fetch(`${url}/api/comment-config?ch=project&it=it1`)).json();
-  assert.equal("module" in cfg, false, "/api/comment-config ЛІГА відповів формою модуля");
+  assert.equal(cfg.channel, `dc/${TASK}`, `канал ЛІГА-задачі: ${JSON.stringify(cfg)}`);
+  assert.equal(cfg.config.url, "https://abcdefghijkl.supabase.co");
+  assert.equal(cfg.config.shotsBucket, "overview-thumbs", "кошик скріншотів ЛІГИ (картка Teams бере shotUrl звідти)");
 
   await page.goto(target);
-  await until(() => requests.some((u) => new URL(u).hostname === CDN), "запит до зашитого CDN (ЛІГА)");
-  await sleep(1500);                                  // шар встигає піднятись (з порожнім CDN — з банером), `memo` встигає озватись, якби мав
+  await until(async () => (await docState(page)).pins !== undefined && (await docState(page)).inited, "піднятий коментатор ЛІГИ");
+  await until(() => liga.supabase.some((r) => r.startsWith("GET /rest/v1/")), "читання каналу з Supabase ЛІГИ (перехопленого)");
   const st = await docState(page);
-  assert.equal(st.factory, "undefined", "ЛІГА-сторінка має window.DeaiComments");
-  assert.equal(st.cfg, null, "ЛІГА-сторінка має window.__deaiCommentsCfg");
-  assert.equal(requests.some((u) => u.includes("/api/module-client/")), false, "ЛІГА-сторінка запитала адаптер модуля");
+  assert.equal(st.factory, "object", "ЛІГА-сторінка без window.DeaiComments (адаптер модуля не завантажився)");
+  assert.equal(st.cfg.channel, `dc/${TASK}`, "канал у __deaiCommentsCfg");
+  assert.equal(st.banner, false, "банер «Коментарі недоступні» на робочій ЛІГА-сторінці");
+  assert.ok(requests.some((u) => u.endsWith(`${MODULE_PATH}adapter.js`)), "ЛІГА-сторінка не запитала адаптер модуля");
+  assert.ok(requests.some((u) => u.endsWith(`${MODULE_PATH}supabase.min.js`)), "ЛІГА-сторінка не запитала supabase.min.js модуля");
+  assert.equal(requests.some((u) => new URL(u).hostname === CDN), false, "ЛІГА-сторінка потягнула CDN");
+  assert.equal(requests.some((u) => u.includes("supabase-adapter")), false, "ЛІГА-сторінка запитала зашитий supabase-adapter");
   assert.equal(requests.some((u) => u.startsWith(memo.url)), false, "ЛІГА-сторінка звернулась до сервісу memo");
   assert.equal(memo.log.length, 0, `memo бачив запити від ЛІГА: ${JSON.stringify(memo.log)}`);
 
-  /* Усе, що пішло за межі localhost, — лише підміна CDN (порожній скрипт; на мережу не виходило). */
-  assert.ok(stubbed.length >= 1, "свідок: зашитий шлях ЛІГА не звертався до CDN — сценарій не про те");
-  assert.deepEqual([...new Set(stubbed.map((u) => new URL(u).hostname))], [CDN]);
-  assert.deepEqual(outside, [], `запити за межі машини, крім підміненого CDN:\n${outside.join("\n")}`);
+  /* Усе поза localhost — лише вигаданий хост Supabase (перехоплений браузером, на мережу не виходило). */
+  assert.deepEqual(liga.outside, [], `запити за межі машини, крім перехопленого Supabase:\n${liga.outside.join("\n")}`);
+  assert.deepEqual(outside, [], `запити за межі машини:\n${outside.join("\n")}`);
+});
+
+/* ── e3: ЛІГА без конфігу Supabase ─────────────────────────────────────────────────────────────────── */
+
+test("e3: ЛІГА без supabase_url у tasks.json — сторінка каналу локальна з банером comments-unconfigured, рамка працює (локальний пін ставиться)", async (t) => {
+  const env = await boot(t, { withLiga: true, ligaSupabase: false, enable: false, stub: [CDN] });
+  const { page, url, memo, requests, outside } = env;
+
+  const target = `${url}/commented?it=it1&page=holovna&ch=project`;
+  const html = await (await fetch(target)).text();
+  assert.ok(html.includes("comments-unconfigured"), "примітки про незаданий конфіг нема в сторінці");
+  assert.equal(html.includes("__deaiCommentsCfg") || html.includes("/api/module-client/"), false, "без конфігу сторінка отримала модульний сніпет");
+  const res = await fetch(`${url}/api/comment-config?ch=project&it=it1`);
+  assert.equal(res.status, 409, "/api/comment-config ЛІГИ без конфігу мусить відмовити (409)");
+
+  await page.goto(target);
+  const banner = page.locator("#cl-down");
+  await banner.waitFor({ timeout: 5000 });
+  assert.match(await banner.textContent(), /comments-unconfigured/, "текст банера");
+
+  /* Рамка робоча: локальний шар піднято, пін ставиться (локально) — як у каналі «Клод». */
+  await until(async () => (await docState(page)).inited, "піднятий локальний шар коментатора");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.mouse.move(600, 300);
+  await page.keyboard.press("c");
+  const box = await page.locator("h1").boundingBox();
+  await page.mouse.move(box.x + 20, box.y + 10);
+  await sleep(100);
+  await page.mouse.down();
+  await page.mouse.up();
+  await until(() => page.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea")),
+    "композер локального піна");
+  await page.keyboard.type("Локальний пін без Supabase");
+  const save = await page.evaluate(() => {
+    const r = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose .save").getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await page.mouse.move(save.x, save.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  const st = await until(async () => { const s = await docState(page); return s.pins === 1 ? s : null; }, "локальний пін на сторінці");
+  assert.equal(st.ids.length, 1);
+
+  assert.equal(requests.some((u) => u.includes("/api/module-client/")), false, "локальна сторінка запитала адаптер модуля");
+  assert.equal(requests.some((u) => u.startsWith(memo.url)), false);
+  assert.deepEqual(outside, [], `запити за межі машини:\n${outside.join("\n")}`);
 });
 
 /* ── e2: зміна адреси сервісу на екрані «Підключення» ──────────────────────────────────────────────── */
@@ -685,8 +750,8 @@ test("e2: адресу сервісу коментарів змінили на �
 test("f: жоден сценарій не вивів запит за межі машини, а справжній ~/deai-published не торкнуто", () => {
   assert.ok(REQUESTS_TOTAL > 100, `свідок: замало запитів (${REQUESTS_TOTAL}) — розтяжка могла нічого не бачити`);
   assert.deepEqual(OUTSIDE_ALL, [], `запити за межі машини з усіх сценаріїв:\n${OUTSIDE_ALL.join("\n")}`);
-  assert.deepEqual([...new Set(STUBBED_ALL.map((u) => new URL(u).hostname))], [CDN],
-    "підмінялись запити не лише до CDN ЛІГА (або не підмінялись зовсім)");
+  assert.deepEqual([...new Set(STUBBED_ALL.map((u) => new URL(u).hostname))].sort(), [CDN, LIGA_SB_HOST].sort(),
+    "підмінялись запити не лише до CDN (html2canvas) і вигаданого Supabase ЛІГИ (або не підмінялись зовсім)");
   assert.deepEqual(realPublished(), REAL_PUBLISHED_BEFORE, `живий тест торкнувся справжнього ${REAL_PUBLISHED}`);
 });
 

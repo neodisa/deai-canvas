@@ -20,12 +20,12 @@
  * сховища (`ready/load/subscribe/save/remove` — див. `app/vendor/local-adapter.js`),
  * тож перевіряється саме те, про що задача: рядок вкладок і проводка каналу.
  * Справжній шлях Supabase стережуть два живі тести в `canvas.test.mjs` (банер
- * при мертвому CDN) і `tests/test_serve.py` (текст сніпета).
+ * при мертвому адаптері) і `tests/test_serve.py` (текст сніпета).
  *
  * ТРЕТЯ перевірка (нижче) — про ⌘K, і вона НЕ про дубль вкладок. Зі смуги
  * перемикач прибрано (принцип 6 PRODUCT.md), тож коли коментатор не піднявся,
  * вкладки зникають РАЗОМ з ним, і повернутись у локальний канал стало б нічим.
- * Тому в палітрі лишився аварійний вихід — і саме в цьому стані (CDN мертвий,
+ * Тому в палітрі лишився аварійний вихід — і саме в цьому стані (адаптер мертвий,
  * банер `__clDown` висить, вкладок у рамці НЕМА) він тут і перевіряється. Друга
  * половина тієї ж перевірки: вихід не просто існує, а СПРАЦЬОВУЄ — локальний
  * канал нічого не тягне з мережі, тож після переходу коментатор (а з ним і
@@ -36,6 +36,7 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { MODULE_ADAPTER_GLOB, hermeticLiga } from "./_liga-supabase.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя база порту: `node --test` крутить файли ПАРАЛЕЛЬНО (сусідні бази:
@@ -51,32 +52,17 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
   + `#18a 10px 20px,#2c3 20px 30px,#fd0 30px 40px)">`
   + `<h1 style="margin:40px">${id}</h1></body></html>`;
 
-/** Заглушка сховища Supabase — той самий контракт, нуль мережі. */
-const STUB_ADAPTER = `window.CommentLayerSupabase = function () {
-  return {
-    ready: Promise.resolve(),
-    load: function () { return []; },
-    subscribe: function () {},
-    save: function () { return Promise.resolve(); },
-    remove: function () { return Promise.resolve(); },
-  };
-};`;
-
 /**
- * Герметична сторінка інструмента: жодного запиту в інтернет.
- *
- * `cdn.jsdelivr.net` віддаємо ПОРОЖНІМ 200, а не `abort()`: abort підняв би
- * банер «Коментарі недоступні» через `onerror` тега (саме це робить
- * `inspector-project.test.mjs`, і там це половина перевірки). Тут банер лише
- * заважав би — справжній `window.supabase` заглушці не потрібен зовсім.
+ * Герметична сторінка інструмента: жодного запиту в інтернет (4b-2: ЛІГА веде командний канал модулем
+ * `supabase-comments`, `startServer(…, { supabase: true })`). Сторінка бере СПРАВЖНІ `supabase.min.js` і `adapter.js` модуля
+ * з `/api/module-client/…`; `abcdefghijkl.supabase.co` відповідає порожньо, realtime-websocket закрито (`hermeticLiga`).
+ * `cdn.jsdelivr.net` — порожнім 200, а не `abort()`: abort підняв би банер «Коментарі недоступні», а тут він лише заважав би.
+ * Повертає дзеркало перехоплених запитів: `outside` мусить лишитись порожнім.
  */
-async function hermetic(page) {
-  await page.route("**/cdn.jsdelivr.net/**", (route) => route.fulfill({
-    status: 200, contentType: "application/javascript", body: "",
-  }));
-  await page.route("**/app/vendor/supabase-adapter.min.js", (route) => route.fulfill({
-    status: 200, contentType: "application/javascript", body: STUB_ADAPTER,
-  }));
+async function hermetic(page, t) {
+  const seen = await hermeticLiga(page);
+  t.after(() => assert.deepEqual(seen.outside, [], `запити за межі машини:\n${seen.outside.join("\n")}`));
+  return seen;
 }
 
 /**
@@ -126,13 +112,13 @@ function activeAud(page) {
 
 test("вкладки аудиторій у панелі коментатора перемикають канал", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: VIEW });
-  await hermetic(page);
+  await hermetic(page, t);
   await page.goto(`${url}/app/`);
 
   /* Стартовий канал — `local` (`commentMode` в `app.js`, дефолт для фідбеку
@@ -183,13 +169,13 @@ test("вкладки аудиторій у панелі коментатора �
    ціль — різні речі. */
 test("перемикач аудиторій не менший за 28px — правило підлоги діє й у чужій панелі", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 40 });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 40, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: VIEW });
-  await hermetic(page);
+  await hermetic(page, t);
   await page.goto(`${url}/app/`);
   await waitChannel(page, "local");
   await openPanel(page);
@@ -210,13 +196,13 @@ test("перемикач аудиторій не менший за 28px — пр
 
 test("чужий postMessage канал НЕ перемикає", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 40 });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 40, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: VIEW });
-  await hermetic(page);
+  await hermetic(page, t);
   await page.goto(`${url}/app/`);
   await waitChannel(page, "local");
 
@@ -290,23 +276,21 @@ test("чужий postMessage канал НЕ перемикає", async (t) => {
 /**
  * Аварійний вихід ⌘K: коментатор не піднявся — вкладок немає — палітра є.
  *
- * ⛔ Тут CDN справді ЗАРІЗАНИЙ (`abort()`), а не підмінений порожнім 200, як у
- * `hermetic()` вище, і адаптер Supabase НЕ заглушений — рівно навпаки до двох
- * перевірок вище. Це не недогляд: сценарій вимагає, щоб коментатор саме НЕ
- * піднявся. `CommentLayerSupabase(...)` кличе `window.supabase.createClient`
- * синхронно, поза промісом (див. докстрінг у `COMMENT_SNIPPET`), тож без CDN
- * він кидає ДО `CommentLayer.init` — панелі, а з нею й рядка вкладок, у рамці
- * не буде ЗОВСІМ.
+ * ⛔ Тут файл адаптера модуля справді ЗАРІЗАНИЙ (`abort()` на `/api/module-client/supabase-comments/adapter.js`), а не
+ * підмінений, як у `hermetic()` вище, — рівно навпаки до двох перевірок вище. Це не недогляд: сценарій вимагає, щоб
+ * коментатор саме НЕ піднявся. Без `window.DeaiComments` сніпет модуля не доходить до `CommentLayer.init` (банер
+ * «шар коментарів не піднявся») — панелі, а з нею й рядка вкладок, у рамці не буде ЗОВСІМ. (До 0.10.0 тут різали CDN
+ * Supabase; тепер сторінка ЛІГИ CDN Supabase не бере, тож «мертвий коментатор» — це мертвий файл адаптера.)
  */
 test("аварійний вихід: коментатор не піднявся — ⌘K вертає в локальний канал", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 80 });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE + 80, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: VIEW });
-  /* Дизайнер УЖЕ був у командному каналі, коли CDN відвалився — саме та
+  /* Дизайнер УЖЕ був у командному каналі, коли адаптер відвалився — саме та
      пастка, заради якої вихід існує. Кладемо вибір у сховище до першого
      скрипта сторінки: `commentMode` в `app.js` читає його на завантаженні
      модуля, тобто пізніше було б запізно.
@@ -322,7 +306,8 @@ test("аварійний вихід: коментатор не піднявся 
     if (window !== window.top) return;
     try { localStorage.setItem("dc-comment-mode", "project"); } catch (e) { /* приватний режим */ }
   });
-  await page.route("**/cdn.jsdelivr.net/**", (route) => route.abort());
+  await hermetic(page, t);
+  await page.route(MODULE_ADAPTER_GLOB, (route) => route.abort());
   await page.goto(`${url}/app/`);
 
   /* Стан-пастка цілком: рамка в командному каналі, документ догруз, банер
@@ -340,11 +325,11 @@ test("аварійний вихід: коментатор не піднявся 
      вкладками живе всередині нього, і його відсутність доводить, що зникла
      ВСЯ поверхня, а не лише один рядок розмітки. */
   assert.equal(await aud(page, "local").count(), 0,
-    "вкладка «Клод» знайшлась при мертвому CDN — сценарій аварії не відтворено");
+    "вкладка «Клод» знайшлась при мертвому адаптері — сценарій аварії не відтворено");
   assert.equal(
     await page.evaluate(() => !!document.getElementById("frame")
       .contentWindow.document.querySelector("[data-comment-layer]")),
-    false, "панель коментатора піднялась при мертвому CDN — перевірка не про те");
+    false, "панель коментатора піднялась при мертвому адаптері — перевірка не про те");
 
   await page.keyboard.press("Control+k");
   await page.locator("#palq").waitFor({ state: "visible", timeout: 5000 });

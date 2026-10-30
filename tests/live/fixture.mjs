@@ -13,6 +13,10 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+/** Вигадані адреса й ключ Supabase простору ЛІГА (4b-2): сервер бере їх з КОРЕНЯ старого `tasks.json`. Хост не існує, а
+ *  сторінкові запити до нього перехоплює `_liga-supabase.mjs` — справжньої мережі й справжнього проєкту тут нема. */
+export const LIGA_SUPABASE = Object.freeze({ supabase_url: "https://abcdefghijkl.supabase.co", supabase_key: "sb_publishable_test" });
+
 /**
  * Тека задачі з однією ітерацією (`it1`) і двома сторінками (`holovna`, `poshuk`).
  *
@@ -71,6 +75,11 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   довга потрібна там, де перевіряється сама ГЕОМЕТРІЯ крошки — назва, що не
  *   влазить, малювалась поверх сусідів, і на короткій фікстурі це не
  *   відтворюється взагалі.
+ * @param {boolean} [opts.supabase] дописати в КОРІНЬ старого `tasks.json` (тобто в конфіг простору ЛІГА)
+ *   `LIGA_SUPABASE` — без нього `/commented?ch=project` — локальна сторінка з приміткою `comments-unconfigured`.
+ *   Типово вимкнено: увімкнений конфіг змушує сторінку каналу «Команда» йти до `abcdefghijkl.supabase.co`, а це
+ *   мусить бути перехоплено в самому тесті (`hermeticLiga`). Змінні `SUPABASE_URL`/`SUPABASE_KEY` оточення розробника
+ *   сервер у живих тестах НЕ бачить ніколи (їх гасить фікстура): справжній проєкт сюди не потрапить.
  * @param {Array<{name: string, color?: string, id?: string, legacy?: boolean,
  *   integrations?: boolean, tasks?: Record<string, {dir: string, title?: string}>}>} [opts.spaces]
  *   ПРОСТОРИ (Deai 1.0, етап 1). Опція змінює фікстуру цілком: `taskDir`,
@@ -96,14 +105,15 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   (`legacyFile` — куди сервер дивиться як на старий `tasks.json`; на порожній машині його ще
  *   нема, тест може покласти туди будь-що, зокрема зіпсований файл).
  */
-export async function startServer(taskDir, { portBase, extraTasks = {}, title = "Фікстура", profile = "", env = {}, root = ROOT, spaces }) {
+export async function startServer(taskDir, { portBase, extraTasks = {}, title = "Фікстура", profile = "", env = {}, root = ROOT, spaces, supabase = false }) {
   const cfgDir = mkdtempSync(path.join(tmpdir(), "dc-live-cfg-"));
   const tasksFile = path.join(cfgDir, "tasks.json");
-  const iso = spaces ? isolatedMachine(spaces, tasksFile) : null;
+  const iso = spaces ? isolatedMachine(spaces, tasksFile, supabase ? LIGA_SUPABASE : {}) : null;
   if (!iso) {
     writeFileSync(tasksFile, JSON.stringify({
       current: "fixture", design_work_root: cfgDir,
       tasks: { fixture: { dir: taskDir, title, ...(profile ? { profile } : {}) }, ...extraTasks },
+      ...(supabase ? LIGA_SUPABASE : {}),
     }));
   }
   // Number(), а не Math.floor(): Math.floor на BigInt кидає TypeError і тест упав
@@ -114,6 +124,8 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
     cwd: root,
     env: {
       ...process.env, PORT: String(port), DC_TASKS_FILE: tasksFile, DC_NO_OVERVIEW: "1",
+      /* ⛔ Справжній Supabase розробника (оточення) не доходить до живого тесту: конфіг ЛІГИ — лише з файла фікстури. */
+      SUPABASE_URL: "", SUPABASE_KEY: "",
       /* Лише з `spaces`: домівка й реєстр — тимчасові, а git не питає про особу
          (інакше `git commit` у теці нової задачі мовчки не відбувся б). */
       /* Окремо від того, що простір без інтеграцій «не ходить назовні» (це й перевіряють
@@ -150,7 +162,7 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
  * Домівка — реальний шлях (`realpath`): macOS кладе `/var/folders/…` за симлінком
  * `/private/var`, а перевірки теки на сервері порівнюють обидва вигляди.
  */
-function isolatedMachine(spaces, legacyFile) {
+function isolatedMachine(spaces, legacyFile, legacyExtra = {}) {
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), "dc-live-home-")));
   const deaiHome = path.join(home, ".deai");
   const used = new Set();
@@ -165,7 +177,7 @@ function isolatedMachine(spaces, legacyFile) {
     writeFileSync(path.join(spPath, "space.json"), JSON.stringify({ name: sp.name, color: sp.color || "space-1" }));
     const tasks = Object.fromEntries(Object.entries(sp.tasks || {})
       .map(([tid, tk]) => [tid, { dir: tk.dir, title: tk.title || tid }]));
-    const cfg = { current: Object.keys(tasks)[0], design_work_root: spPath, tasks };
+    const cfg = { current: Object.keys(tasks)[0], design_work_root: spPath, tasks, ...(legacy ? legacyExtra : {}) };
     if (legacy) writeFileSync(legacyFile, JSON.stringify(cfg));
     else writeFileSync(path.join(spPath, "tasks.json"), JSON.stringify(cfg));
     return { id, name: sp.name, path: spPath, legacy, integrations: sp.integrations ?? legacy };

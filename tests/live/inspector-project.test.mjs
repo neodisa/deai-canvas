@@ -15,7 +15,9 @@
  * стоїть `<base href>`, і будь-яка помилка розвʼязання шляху дала б рівно
  * той самий мертвий контрол при цілком правильному тексті сніпета.
  *
- * ⛔ CDN коментарів тут ЗАБЛОКОВАНИЙ навмисно, і це друга половина перевірки.
+ * ⛔ Адаптер коментарів тут ЗАБЛОКОВАНИЙ навмисно (4b-2: файл `supabase-comments/adapter.js` модуля; до 0.10.0 — CDN
+ * Supabase), і це друга половина перевірки. ЛІГА має конфіг Supabase (`supabase: true`) — без нього сторінка каналу
+ * лишалась би локальною з приміткою, і «мертвий Supabase» був би порожнім сценарієм.
  * Спека забороняє чіпляти на тег інспектора `onerror="window.__clDown(…)"`:
  * той банер каже «Коментарі недоступні», а інспектор до коментарів не має
  * стосунку. Зворотна залежність теж мусить не існувати — мертвий Supabase не
@@ -27,6 +29,7 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { MODULE_ADAPTER_GLOB, hermeticLiga } from "./_liga-supabase.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя база порту: `node --test` крутить файли ПАРАЛЕЛЬНО (сусідні бази:
@@ -48,7 +51,7 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
  * Перемкнути аудиторію коментарів через ⌘K.
  *
  * ⛔ Не вкладками в панелі коментатора, хоч це і головний шлях: у ЦЬОМУ тесті
- * CDN Supabase зарізаний (див. шапку), тобто коментатор не піднімається — і
+ * адаптер коментарів зарізаний (див. шапку), тобто коментатор не піднімається — і
  * вкладок немає разом із ним. Тут це не незручність хелпера, а рівно той
  * сценарій, заради якого аварійний вихід у палітрі й існує (коментар над
  * `gSet` у `app/shell-palette.js`).
@@ -66,13 +69,14 @@ async function setAudience(page, mode) {
 
 test("аудиторія «Проєкт»: інспектор живий, кнопка смуги його відкриває", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage({ viewport: VIEW });
-  await page.route("**/cdn.jsdelivr.net/**", (route) => route.abort());
+  const net = await hermeticLiga(page);
+  await page.route(MODULE_ADAPTER_GLOB, (route) => route.abort());
   await page.goto(`${url}/app/`);
 
   /* Стартовий стан — `local` (`commentMode` в `app.js`), і саме там інспектор
@@ -110,7 +114,7 @@ test("аудиторія «Проєкт»: інспектор живий, кно
     await page.evaluate(() => typeof document.getElementById("frame")
       .contentWindow.CanvasInspector),
     "object",
-    "інспектора немає в аудиторії «Проєкт» — сніпет Supabase не везе inspector.js",
+    "інспектора немає в аудиторії «Проєкт» — сніпет коментарів не везе inspector.js",
   );
 
   await page.click('#bar [data-act="inspector"]');
@@ -131,13 +135,14 @@ test("аудиторія «Проєкт»: інспектор живий, кно
   assert.equal(await page.locator("#insp-panel").isVisible(), true,
     "права панель інспектора мусить зʼявитись і в аудиторії «Проєкт»");
 
-  /* Банер «Коментарі недоступні» МУСИТЬ висіти (CDN ми зарізали) — саме він
+  /* Банер «Коментарі недоступні» МУСИТЬ висіти (адаптер ми зарізали) — саме він
      доводить, що інспектор піднявся НЕЗАЛЕЖНО від коментарів, а не тому, що
      блокування випадково не спрацювало і сторінка жила звичайним життям. */
   assert.equal(
     await page.evaluate(() => !!document.getElementById("frame")
       .contentWindow.document.getElementById("cl-down")),
     true,
-    "CDN зарізаний, а банера немає — блокування не спрацювало, перевірка порожня",
+    "адаптер зарізаний, а банера немає — блокування не спрацювало, перевірка порожня",
   );
+  assert.deepEqual(net.outside, [], `запити за межі машини:\n${net.outside.join("\n")}`);
 });

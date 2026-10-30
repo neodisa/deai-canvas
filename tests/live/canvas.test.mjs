@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import { CARD_W, FLOW_LEFT, GAP, ROW_TITLE_TOP } from "../../app/canvas-geom.js";
 import { readManifest } from "../../bin/shots-manifest.mjs";
 import { runShoot } from "../../bin/shoot.mjs";
+import { hermeticLiga, MODULE_ADAPTER_GLOB } from "./_liga-supabase.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /** Обрати ітерацію через дропдаун крошки в смузі.
@@ -111,7 +112,15 @@ async function overview(browser, url) {
  * `locator.click()` — див. шапку файлу.
  */
 async function press(page, locator) {
-  const box = await locator.boundingBox();
+  /* `boundingBox()` віддає `null` для елемента, що ще/вже невидимий, — пункт палітри чи дропдауна в мить появи або
+     перемальовування (`render()` замінює вузол між `waitFor` і виміром). 4b-2 спіймало це як плаваюче падіння K2/AE
+     (`reading 'x'` на `null`; K2 червоніла так і на базі до 4b-2): міряємо з повтором, доки вузол не стане видимим. */
+  let box = null;
+  for (let i = 0; i < 50 && !box; i += 1) {
+    box = await locator.boundingBox().catch(() => null);
+    if (!box) await page.waitForTimeout(100);
+  }
+  if (!box) throw new Error(`press: елемент не набув розмірів за 5 с: ${locator}`);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.up();
@@ -134,7 +143,17 @@ async function selectTask(page, id) {
   await page.locator(`[data-act="task"][data-val="${id}"]`).click();
 }
 
+/** Запити сторінок, що перейшли в канал «Команда» (`setCommentMode`): `outside` мусить лишитись порожнім. */
+const TEAM_NET = { outside: [], supabase: [], sockets: [], cdn: [] };
+const HERMETIC = new WeakSet();
+
 async function setCommentMode(page, mode) {
+  /* Канал «Команда» ЛІГИ — адаптер модуля з вигаданим Supabase із `tasks.json` (4b-2): перехоплюємо його хост ДО переходу,
+     щоб справжньої мережі не було (див. `hermeticLiga`). Один раз на сторінку. */
+  if (mode !== "local" && !HERMETIC.has(page)) {
+    HERMETIC.add(page);
+    await hermeticLiga(page, { seen: TEAM_NET });
+  }
   /* Через ⌘K, і це не смак. Дім аудиторії — вкладки в панелі САМОГО
      коментатора (принцип 6 PRODUCT.md), але обидва місця, звідки цей хелпер
      кличуть, — режим «Огляд», а там рамки макета на екрані НЕМА ЗОВСІМ
@@ -162,13 +181,20 @@ const transform = (page) => page.evaluate(() =>
 
 test("холст «Огляд»: кадри, кнопка і камера", async (t) => {
   const { dir, it1 } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  /* `supabase: true` — канал «Команда» ЛІГИ (4b-2) існує лише з конфігом Supabase у `tasks.json`; без нього в палітрі нема
+     вкладки «Команда», і `setCommentMode(…, "project")` нічого б не знайшов. Сторінка, що переходить у канал «Команда»,
+     стає герметичною лише в цю мить (`setCommentMode`): вигаданий хост Supabase відповідає порожньо, усе інше за межі
+     машини `abort`-иться.
+     ⛔ Не на кожній сторінці файла: будь-який `page.route` вимикає HTTP-кеш Chromium, а K1 саме його й міряє
+     («незмінний кадр бере з кешу»). */
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
   await runShoot({ dir: it1, it: "it1", url, all: true, now: "24.08.2026 12:00",
                    launch: () => chromium.launch() });
 
   const browser = await chromium.launch();
   t.after(() => browser.close());
+  t.after(() => assert.deepEqual(TEAM_NET.outside, [], `запити за межі машини:\n${TEAM_NET.outside.join("\n")}`));
 
   await t.test("A. «Відкрити» справжнім натисканням мишею", async () => {
     const page = await overview(browser, url);
@@ -2357,71 +2383,69 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
  * у спільній фікстурі вона лишала б після себе іншу поточну задачу.
  */
 
-test("«Проєкт»: мережевий збій CDN Supabase — банер зʼявляється одразу через onerror", async (t) => {
-  /* Ревʼю задачі 3 підняло headless-браузер на РЕАЛЬНОМУ `serve.COMMENT_SNIPPET`
-     і РЕАЛЬНИХ `app/vendor/*.js`, заблокувало `cdn.jsdelivr.net` — і банер
-     `#cl-down` НЕ зʼявився: `window.__clDown` жив у ЧЕТВЕРТОМУ `<script>`, а
-     `onerror` перших трьох спрацьовує РАНІШЕ (класичні скрипти виконуються
-     послідовно, без async/defer) — на той момент функції ще не існувало, і
-     охоронець `window.__clDown&&…` мовчки гасив виклик. У консолі лишався
-     необроблений `TypeError: Cannot read properties of undefined (reading
-     'createClient')`. Перевіряємо РІВНО той сценарій: справжній інжект
-     сніпета через `/commented?ch=project`, справжні файли з `app/vendor`. */
+test("«Проєкт»: файл адаптера модуля не завантажився — банер зʼявляється одразу через onerror", async (t) => {
+  /* 4b-2: ЛІГА веде командний канал модулем `supabase-comments`; CDN Supabase сторінка більше не бере, тож «мережевий
+     збій» — це збій файла адаптера `/api/module-client/supabase-comments/adapter.js`. Урок старого сніпета лишився тим
+     самим: ревʼю задачі 3 заблокувало CDN — і банер `#cl-down` НЕ зʼявився: `window.__clDown` жив у ЧЕТВЕРТОМУ `<script>`,
+     а `onerror` перших трьох спрацьовує РАНІШЕ (класичні скрипти виконуються послідовно, без async/defer) — на той момент
+     функції ще не існувало, і охоронець `window.__clDown&&…` мовчки гасив виклик. Тепер банер — ПЕРШИМ тегом
+     `MODULE_COMMENT_SNIPPET`. Перевіряємо РІВНО той сценарій: справжній інжект сніпета через `/commented?ch=project`,
+     справжні файли модуля, заблокований адаптер. */
   const html = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
     + `<body><h1>${id}</h1></body></html>`;
   const { dir } = taskFixture({ html });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage();
+  const net = await hermeticLiga(page);
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
-  await page.route("**/cdn.jsdelivr.net/**", (route) => route.abort());
+  await page.route(MODULE_ADAPTER_GLOB, (route) => route.abort());
   await page.goto(`${url}/commented?it=it1&ch=project`);
 
   const banner = page.locator("#cl-down");
   await banner.waitFor({ timeout: 5000 });
-  /* Текст мусить бути ТОЧНИМ повідомленням з `onerror`, а не тим, що каже
-     запасний try/catch у `init()` (друга причина Critical 1): якби `__clDown`
-     знову «зʼїхав» у останній скрипт, банер УСЕ ОДНО зʼявився б через catch —
-     але з ІНШИМ текстом. Саме на цій розбіжності текстів і ловить мутація
-     нижче: `route.abort()` тут не лишає слідів, які б відрізнялись самі —
-     тільки точний рядок каже, ЯКИЙ саме запобіжник спрацював. */
+  /* Текст мусить бути ТОЧНИМ повідомленням з `onerror` тега адаптера, а не тим, що каже запасна гілка в `init()` («шар
+     коментарів не піднявся»): якби `__clDown` знову «зʼїхав» у останній скрипт, банер УСЕ ОДНО зʼявився б через неї —
+     але з ІНШИМ текстом. Саме на цій розбіжності текстів і ловить мутація: `route.abort()` не лишає слідів, які б
+     відрізнялись самі — тільки точний рядок каже, ЯКИЙ саме запобіжник спрацював. */
   assert.equal(await banner.textContent(),
-    "Коментарі недоступні: бібліотека Supabase не завантажилась");
+    "Коментарі недоступні: адаптер коментарів не завантажився");
   assert.deepEqual(pageErrors, [],
     `необроблений виняток у консолі: ${pageErrors.join("; ")}`);
+  assert.deepEqual(net.outside, [], `запити за межі машини:\n${net.outside.join("\n")}`);
 });
 
-test("«Проєкт»: CDN віддав 200 з порожнім тілом — try/catch ловить крах фабрики", async (t) => {
-  /* Друга причина Critical 1, окрема від першої: CDN, який відповів 200 з
-     порожнім чи битим тілом, `onerror` НЕ ЛОВИТЬ ВЗАГАЛІ (мережевий запит
-     успішний), а перевірка `!window.CommentLayerSupabase` теж мовчить — НАШ
-     власний адаптер піднявся штатно, не піднявся лише `window.supabase`,
-     якого чекає ЙОГО фабрика. Банер тут рятує тільки try/catch навколо
-     виклику `window.CommentLayerSupabase(...)` в `init()`. */
+test("«Проєкт»: supabase.min.js модуля віддав 200 з порожнім тілом — try/catch ловить крах фабрики", async (t) => {
+  /* Друга причина Critical 1, окрема від першої: файл, що відповів 200 з порожнім чи битим тілом, `onerror` НЕ ЛОВИТЬ
+     ВЗАГАЛІ (мережевий запит успішний), а перевірка «є `DeaiComments`» теж мовчить — адаптер модуля піднявся штатно, не
+     піднялась лише `window.supabase`, якого чекає його фабрика (`create` кидає СИНХРОННО, поза промісом). Банер тут
+     рятує тільки try/catch навколо `DeaiComments.create(…)` у сніпеті. */
   const html = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head>`
     + `<body><h1>${id}</h1></body></html>`;
   const { dir } = taskFixture({ html });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, supabase: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
 
   const page = await browser.newPage();
+  const net = await hermeticLiga(page);
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
-  await page.route("**/cdn.jsdelivr.net/**", (route) =>
+  await page.route(MODULE_ADAPTER_GLOB.replace("adapter.js", "supabase.min.js"), (route) =>
     route.fulfill({ status: 200, contentType: "application/javascript", body: "" }));
   await page.goto(`${url}/commented?it=it1&ch=project`);
 
   const banner = page.locator("#cl-down");
   await banner.waitFor({ timeout: 5000 });
-  assert.match(await banner.textContent(), /Коментарі недоступні:/);
+  assert.match(await banner.textContent(), /Коментарі недоступні: .*supabase-js is not loaded/);
   assert.deepEqual(pageErrors, [],
     `необроблений виняток у консолі: ${pageErrors.join("; ")}`);
+  assert.deepEqual(net.outside, [], `запити за межі машини:\n${net.outside.join("\n")}`);
 });
 
 test("полотно не малює фейкові «немає сторінки», коли впав перелік сторінок", async (t) => {
