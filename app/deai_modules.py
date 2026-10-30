@@ -169,8 +169,9 @@ UNTRUSTED_TEXT = 'module is not trusted on this computer'
 class ModuleError(Exception):
     """`code` — з таблиці `STATUS`, `status` — HTTP, `message` — текст (≤300, без секретів).
     `ModuleError('x', 409)`, `ModuleError('x', message='…')` і `ModuleError('x', '…')` — усе дозволено.
-    Повний текст (до 64 КіБ) лишається в `_full`: `_run` вирізає секрети з НЬОГО й лише потім ріже до 300 —
-    секрет, що перетинає межу, інакше пролізав би обрізаним початком."""
+    Конструктор ріже `message` до 300 знаків; повний текст (до 64 КіБ) лишається в `_full` і віддається публічною властивістю
+    `full`. Секрети з нього вирізає `call()` (`_run`: СПЕРШУ вирізати, ПОТІМ різати — секрет, що перетинає межу 300, інакше пролізав
+    би обрізаним початком); без `call` (помилка ядра) `full` — сирий текст."""
 
     def __init__(self, code, status=None, message=''):
         if isinstance(status, str):
@@ -1468,10 +1469,22 @@ def _scrub(text, secrets):
     return text
 
 
+def _scrub_full(text, secrets):
+    """`_scrub` для повного тексту помилки. ⛔ Конструктор `ModuleError` уже обрізав його до `MAX_FULL_MESSAGE`: секрет, що
+    перетинає цю межу, лишився б хвостом-префіксом (його ціле значення `_scrub` не знайде). Тож якщо текст обрізано — відкидаємо
+    з кінця стільки знаків, скільки найдовша форма секрету (сира, repr, JSON, URL): префікс довший за це бути не може."""
+    out = _scrub(text, secrets)
+    if len(text) >= MAX_FULL_MESSAGE:
+        forms = _secret_forms(secrets)
+        if forms:
+            out = out[:max(0, len(out) - max(len(f) for f in forms))]
+    return out
+
+
 def _run(f, ctx, args, secrets):
     """(True, результат) або (False, (код, текст)). `ModuleError` модуля з кодом, відомим ядру (`STATUS`),
-    проходить як є — з вирізаними секретами; текст НЕ обрізається тут (повний — у `ModuleError.full`, ≤300 — у `message`
-    після `call`) (його код читає API: `bad-folder`…);
+    проходить як є (його код читає API: `bad-folder`…) — з вирізаними секретами; текст тут НЕ обрізається до 300:
+    повний — у `ModuleError.full`, а перші 300 знаків — у `message` (їх ріже конструктор у `call`);
     усе інше (невідомий код, `SystemExit`, `ValueError`…) — `module-error`."""
     try:
         return True, f(ctx, *args)
@@ -1480,7 +1493,7 @@ def _run(f, ctx, args, secrets):
     except ModuleError as e:
         if e.code in STATUS:
             # ⛔ БЕЗ `[:MAX_MESSAGE]`: повний (вичищений) текст іде в `call()`, а `message` обріже вже конструктор `ModuleError`
-            return False, (e.code, _scrub(e._full, secrets))
+            return False, (e.code, _scrub_full(e._full, secrets))
         text = f'ModuleError: {e.code}: {e._full}' if e._full else f'ModuleError: {e.code}'
         return False, ('module-error', _scrub(text, secrets)[:MAX_MESSAGE])
     except BaseException as e:  # noqa: BLE001 — SystemExit, GeneratorExit… теж `module-error`

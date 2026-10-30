@@ -663,6 +663,7 @@ def _vcs_legacy_ctx():
             'settings': {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True},
             'secrets': {}, 'folder_ok': lambda folder: (False, 'bad-folder'),
             'ModuleError': deai_modules.ModuleError,
+            # `find_tool` тут не потрібен: `git-sync` кличе лише `git`, а `ctx['find_tool']` (npx/node) — для модуля Vercel (4b-1)
             'cache_dir': _mirrors_base(), 'mirror_flat': True}
 
 

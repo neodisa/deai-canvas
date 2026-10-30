@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import traceback
+import types
 import unicodedata
 import unittest
 from unittest import mock
@@ -1089,6 +1090,41 @@ class FindToolAndFullText(unittest.TestCase):
         dm.set_tool_finder(None)
         with mock.patch('shutil.which', lambda n: '/w/' + n):
             self.assertEqual(dm._find_tool('npx'), '/w/npx')
+
+    def test_find_tool_finder_non_path_answers_are_none(self):
+        for bad in ('', 5):
+            dm.set_tool_finder(lambda name, bad=bad: bad)
+            self.assertIsNone(dm._find_tool('npx'), repr(bad))
+
+    def test_module_error_full_text_survives_call_in_the_timeout_thread(self):
+        secret = 'S3CR3T-value-long-enough'
+        long = ('x' * 900) + secret + ('y' * 100)
+
+        def fn(ctx):
+            raise dm.ModuleError('vercel-deploy', message=long)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.call(types.SimpleNamespace(id='t'), fn, {'secrets': {'token': secret}}, timeout=2)   # потік іменується за module.id
+        e = cm.exception
+        self.assertEqual((e.code, len(e.message)), ('vercel-deploy', 300))
+        self.assertNotIn(secret, e.full)
+        self.assertIn('***', e.full)
+        self.assertTrue(e.full.endswith('y' * 100))
+
+    def test_secret_across_the_full_text_limit_leaves_no_prefix(self):
+        """Секрет, що перетинає межу `MAX_FULL_MESSAGE`: конструктор обрізав його посередині, тож ціле значення `_scrub`
+        не знайде — `full` не має закінчуватись префіксом секрету (≥4 знаки)."""
+        secret = 'S3CR3T-value-long-enough'
+        for cut in (1, 4, 10, len(secret) - 1):
+            long = ('x' * (dm.MAX_FULL_MESSAGE - cut)) + secret + 'tail'
+
+            def fn(ctx, long=long):
+                raise dm.ModuleError('vercel-deploy', message=long)
+            with self.assertRaises(dm.ModuleError) as cm:
+                dm.call(fn, fn, {'secrets': {'token': secret}})
+            full = cm.exception.full
+            self.assertLessEqual(len(full), dm.MAX_FULL_MESSAGE)
+            for n in range(4, len(secret) + 1):
+                self.assertFalse(full.endswith(secret[:n]), (cut, n))
 
     def test_find_tool_finder_failure_is_none(self):
         def boom(name):
