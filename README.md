@@ -6,15 +6,16 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.9.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.10.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, team
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
 > iterations to and from any git repository, GitHub or GitLab or your own server — work in any
 > space. A **wizard** creates a space and takes you through its modules and a first task, and a
 > **Connections** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
-> or with the `vercel login` of the computer. A few integrations
-> (comments of the legacy space, team dashboard, tracker statuses, team chat notifications) are still wired for the original
+> or with the `vercel login` of the computer. The in-house publishing and comments of the legacy space now run on these same
+> modules. A few integrations
+> (team dashboard, tracker statuses, team chat notifications) are still wired for the original
 > setup and only run in a migrated legacy space; they are being turned into optional per-space
 > modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
@@ -142,7 +143,7 @@ those folders out of public commits.
 | `static-publish` | `publish` | Builds the preview and publishes it to a folder, by default `~/deai-published/<space-id>/<task>/` — outside the space. On by default in a space without integrations. Optional `password` secret adds a client-side gate. |
 | `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account**: one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Two ways to sign in (`auth`): a **token** through the REST API (no Node, no CLI; the default) or the **System Vercel CLI** (`npx vercel` under the `vercel login` of the computer; needs Node.js, stores no token). Settings: `auth`, `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
-| `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages). Off by default. See *Comments*. |
+| `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages), optional `shots_bucket` (screenshots of pins). Off by default. See *Comments*. |
 | `git-sync` | `vcs` | Syncs a task's iterations with **any git repository** — GitHub, GitLab, your own server — through the git on your computer: nothing is stored by Deai, access is your SSH key or saved HTTPS sign-in. Settings: `repo` (the default for tasks; optional), `branch` (`main`), `path` (`mockup/{task}`), `ssh_key`, `host_ip`, `autosync`. Off by default. See *Git sync*. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
@@ -283,7 +284,8 @@ Comments have two channels. The **local** one is for the agent: pins you leave f
 canvas pages (the «Team» tab), on the Overview, in published previews (folder and Vercel) and
 for the agent (`inbox`, `inbox resolve`). A space without a `comments` module has no team
 channel; enabling one adds it. A migrated legacy (in-house) space keeps its original shared
-service until you enable a module there, and **a disabled module in such a space returns it to
+Supabase until you enable a module there — through the same `supabase-comments` module, as an
+implicit provider — and **a disabled module in such a space returns it to
 the shared service** (so does removing its entry from `space.json`). If an enabled module is
 broken — in any space — a canvas page shows local comments with a notice and the Overview and
 `inbox` report the error; nothing falls back silently to the shared service. (A stale entry of
@@ -309,6 +311,22 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 
    The answer carries the verdict of `check`: `bad-key`, `no-schema` (run step 2), `network`.
 
+**Pin screenshots.** Set the optional `shots_bucket` (the name of a **public** Storage bucket of the
+same project) and the browser adapter uploads the screenshot of a pin to
+`<bucket>/comment-shots/<id>.jpg` and keeps the public address in the pin; without it pins have no
+uploaded screenshot. The bucket and its policies are yours to create (details in the module README).
+
+**The legacy (LIGA) space** has no module to enable: the address and the **public** key of its shared
+Supabase are read from the installation — the root of its `tasks.json`:
+
+```json
+{ "supabase_url": "https://<ref>.supabase.co", "supabase_key": "sb_publishable_…" }
+```
+
+(or the environment variables `SUPABASE_URL` and `SUPABASE_KEY`; see `tasks.example.json`). The same pair feeds the
+team dashboard and the Teams silence. Without it the team comments of that space are off — the page shows the local pins
+and a notice, and `inbox` reports `comments-unconfigured`. The screenshot bucket there is `overview-thumbs`.
+
 **Your own service.** Any comment service — PocketBase, Firebase, your own API — connects with
 a small module: a browser adapter (`window.DeaiComments.create(cfg)`) and four server
 functions (`client_config`, `list`, `resolve`, `check`). The channel of a task
@@ -322,7 +340,7 @@ project; the agent reads those comments as work items, so treat their text as un
 The adapter's JavaScript runs on the canvas origin, which is why a space's own module
 runs only after you trust it. The service has to allow CORS for the opaque origin `null` too (the local
 `/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
-not a real project. Screenshots of pins are not part of the role (the role has no file storage).
+not a real project. Screenshots are not part of the role contract: the role has no file storage, so a module may offer an optional `uploadShot` (as `supabase-comments` does with `shots_bucket`), and without it the layer keeps no uploaded screenshot.
 
 ## Git sync
 
@@ -406,7 +424,7 @@ tests/        unit, Python and live (Playwright) tests
    - ✅ **2b-1** (0.3) — your own Vercel (publish) as a module.
    - ✅ **2b-2** (0.4) — the universal `comments` role (browser adapter + server functions) and
      your own Supabase (team comments) as the first module; a guide for writing your own.
-   - Later — the legacy comments, team dashboard, issue tracker, notifications: modules you connect per
+   - Later — team dashboard, issue tracker, notifications: modules you connect per
      project (stage 4).
 3. **Onboarding**
    - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
@@ -422,7 +440,8 @@ tests/        unit, Python and live (Playwright) tests
      profiles go. Three releases:
      - ✅ **4b-1** (0.9) — publishing: the in-house space publishes through `vercel-publish` (new sign-in «System Vercel
        CLI»), with cleanup of old deployments; the Vercel transport leaves the core.
-     - **4b-2** — comments and the Supabase constants move onto `supabase-comments`.
+     - ✅ **4b-2** (0.10) — comments: the in-house space keeps its comments through `supabase-comments` (module 1.1.0:
+       pin screenshots, the iteration number on resolve); the Supabase address and key move from the code to `tasks.json`.
      - **4b-3** — the profiles.
    - **4c** — team dashboard, tracker statuses and team chat notifications: the roles `dashboard`, `tracker`, `notify`
      in the core, and the modules for them.

@@ -1,6 +1,6 @@
 # Writing a `comments` module
 
-For Deai Canvas **0.7.0 and later** (the contract is unchanged in 0.8.0). A `comments` module connects *any* comment service (Supabase, PocketBase, Firebase, your own
+For Deai Canvas **0.7.0 and later** (the contract is unchanged in 0.8.0; 0.10.0 adds the optional `uploadShot` and the iteration number of `resolve`, both below). A `comments` module connects *any* comment service (Supabase, PocketBase, Firebase, your own
 API…) to the team comments of the canvas: pins on the canvas pages, on the Overview, in published previews, and for the
 agent (`inbox`). The core knows nothing about your service except what the module tells it.
 
@@ -65,13 +65,14 @@ is overridden. `onChange` is an empty hook — the comment layer listens through
 | `subscribe(fn)` | optional. Call `fn(comments)` on external changes (polling, websocket, realtime). |
 | `refresh()` | optional. `Promise`. Re-read the service now: the Overview calls it when the person returns to it, so changes made meanwhile show up even if your push channel missed them. |
 | `close()` | optional. Release timers and sockets. The layer calls it on `destroy` and the Overview calls it when a run is stale; make it idempotent. |
+| `uploadShot(id, dataUrl)` | optional (0.10.0). `Promise<string \| null>`. Store the screenshot of a pin (`dataUrl` is a `data:image/…` URL) in your file storage and resolve with its **public** address, or `null`; never reject. The layer calls it (8 s limit) right after it takes the screenshot of a new pin and stores the answer as `meta.shotUrl` next to `meta.shot`. Without it only `meta.shot` exists: the screenshot travels inside the comment and the agent side drops it. `supabase-comments` offers it when the setting `shots_bucket` is set (`<bucket>/comment-shots/<id>.jpg` in Supabase Storage; the config then carries `shotsBucket`). |
 
 If `create` throws, or the store has no `load`/`save`, the page shows the banner instead of the layer.
 
 **A comment** is the comment layer's shape; keep unknown fields as they are:
 `{ id, author, text, status: 'open'|'resolved', fp, htmlSnapshot, meta, bornV, resolvedV, resolveReason, ts }`. `meta` may
 carry a screenshot, `meta.shot` — a JPEG data URL (the layer fetches `html2canvas` from jsDelivr when a pin is created; the
-role has no file storage, so the screenshot travels inside the comment and the agent side drops it).
+role has no required file storage, so unless the store offers the optional `uploadShot` the screenshot travels inside the comment and the agent side drops it).
 
 **Where the same files run:** the canvas page (`/commented?…&ch=project`, in the frame), the Overview (in the shell
 document; the core captures `window.DeaiComments` right after the last file loads), and the published preview (copied to
@@ -96,7 +97,7 @@ key, `folder_ok`, the output-folder rule of **publish** modules; a `comments` mo
 |---|---|
 | `client_config(ctx) -> dict` | the **public** configuration for pages. |
 | `list(ctx, channel) -> [comment]` | the channel's comments, for the agent. |
-| `resolve(ctx, channel, id, reason) -> None` | close a comment (the agent). |
+| `resolve(ctx, channel, id, reason) -> None` | close a comment (the agent). The **built-in** `supabase-comments` module is called with a fifth argument, `iteration` (a whole number ≥ 1, or `None`), and writes it as `resolved_v`; **a space's own module keeps the four arguments** — the core never passes it a fifth, so do not declare one. |
 | `check(ctx) -> {ok, error?, detail?}` | read-only health check; never create anything. |
 
 Timeouts: `client_config` and `check` get 5 s (then `check-timeout`), `list` and `resolve` 10 s. Time out your own requests

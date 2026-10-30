@@ -96,7 +96,8 @@ canvas for their workflow without touching the core.
      `supabase-comments`); the hard-wired constants and the profiles go. Three releases:
      - ✅ **4b-1** (0.9.0) — publishing: `vercel-publish` gets the sign-in «System Vercel CLI» and the legacy space
        publishes through it;
-     - **4b-2** — comments and the Supabase constants;
+     - ✅ **4b-2** (0.10.0) — comments: the legacy space keeps its comments through `supabase-comments`; the Supabase
+       constants leave the code;
      - **4b-3** — the profiles;
    - **4c** — the roles `dashboard`, `tracker` and `notify` in the core, and the team dashboard, tracker statuses and
      team chat notifications as modules of that company;
@@ -301,6 +302,34 @@ Spec: `docs/superpowers/specs/2026-10-30-legacy-publish-module-design.md` (and i
   and `token` verifies HTTP 200; the preview check of `token` mode has no `certifi` context (backlog).
 - **Tested** with a fake `npx` (no network, no real `vercel`); a real Vercel account and a real `vercel login` are not part
   of the tests.
+
+### Stage 4b-2 — legacy comments through `supabase-comments` (0.10.0, unreleased)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-10-30-legacy-comments-module-design.md`
+(and the «Поправки до спеки» of its plan); plan: `docs/superpowers/plans/2026-10-30-legacy-comments-module.md`. What is built:
+
+- **`supabase-comments` 1.1.0:** the optional setting `shots_bucket` (the config gets `shotsBucket`, the adapter gets
+  `uploadShot`), `resolve(…, iteration=None)` writing `resolved_v` (the core gives the number to the built-in module only,
+  `ProjectComments.takes_iteration`; a space's own module keeps four arguments), TLS with `certifi` when it is installed.
+- **The legacy space runs on the same module** (an implicit provider, `'legacy'`): `comments_route(space, prov)` gives
+  `(module, ctx, channel)`; the channel is still `comment_project` / `dc/<task>` (+ `/internal`), the table is the same;
+  `comments_client(…, ctx=None)` takes a ready `ctx` built from the installation, without `space.json` and `~/.deai`.
+  The canvas page `/commented`, the published preview, `/api/comment-config`, the Overview, `inbox` and `state` go through the module.
+- **The Supabase of the legacy space left the code:** `supabase_config()` reads `supabase_url`/`supabase_key` from the root of
+  the legacy `tasks.json` (fallback: `SUPABASE_URL`/`SUPABASE_KEY`); the dashboard, the Teams silence and
+  `bin/overview_push.py` take the same pair. Without it the comments are «unavailable» (code `comments-unconfigured`, 409)
+  and the 4c parts are quiet.
+- **Gone from the core:** the constants, the old snippet and injector, `INTERNAL_TINT`, `supabase_pins`, `patch_project_pin`,
+  `project_body`, `state._open_pins`, `build_preview(comments=True)`; the old adapter lives on only as a test fixture.
+  `BUNDLES`/`BUILD_KINDS` stay for `ops/reseal_gate.py` (builds before 0.10.0).
+- **Conscious differences** (full list in the changelog): the markup of the module on the pages, supabase-js from its own copy,
+  resolving filtered by channel and reporting a missing pin, the order and the ceiling of `list`, the anchor of a pin
+  (`fp` text up to 2000, the last 50 of `path`), `--dry-run` and `state` lines. Previews published earlier are not touched.
+- **Tested** against the snapshot of 0.9.0 (`tests/fixtures/legacy-comments/before-4b2.json`) and the old adapter kept as a
+  fixture; no network and no real Supabase (the module's `_open` seam, intercepted requests in the browser tests).
+- **Left for 4b-3 / 4c / 4d:** 4b-3 — the profiles; 4c — the dashboard, tracker statuses and Teams silence as roles and
+  modules (today they only read the pair from `supabase_config()`); 4d — the `integrations` flag and the literal `'legacy'` in `capabilities` go. Known limits: PostgREST
+  `max-rows` can still cut `list`; `html2canvas` loads from jsdelivr; the key is in `tasks.json` in plain text.
 
 ### What stays for later
 

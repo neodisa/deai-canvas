@@ -3,6 +3,106 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.10.0] — unreleased
+
+Stage 4b-2: the comments of the legacy space become a module too. The shared Supabase of the in-house setup is now reached
+through the built-in `supabase-comments` module as an implicit provider (as `vercel-publish` and `git-sync` were in 0.9.0 and
+0.8.0), and the address and the public key of that Supabase left the code: they are read from the installation (see
+*Upgrading*). The legacy space looks the same apart from the changes listed below
+(`tests/legacy-golden.test.mjs` is green without a re-shoot; the behaviour of 0.9.0 is pinned by the snapshot
+`tests/fixtures/legacy-comments/before-4b2.json`). Design: `docs/superpowers/specs/2026-10-30-legacy-comments-module-design.md`;
+plan: `docs/superpowers/plans/2026-10-30-legacy-comments-module.md` (its «Поправки до спеки» override the spec).
+
+### Added
+
+- **`supabase-comments` 1.1.0: the setting `shots_bucket`** (optional; the name of a public Storage bucket of the same
+  project: lowercase letters, digits, `-` and `_`, up to 63 characters). When it is set, the page config carries `shotsBucket`
+  and the browser adapter gains `uploadShot(id, dataUrl)`: it uploads the screenshot of a pin to
+  `<bucket>/comment-shots/<id>.jpg` (upsert, with the public key) and returns the public address, or `null` when the upload
+  fails or the arguments are not safe. Without the setting nothing changes. A bad name is `bad-settings` (also in `check`).
+- **`resolve(ctx, channel, id, reason, iteration=None)`:** a whole `iteration` ≥ 1 is written to `resolved_v` too (a `bool` is
+  not an iteration number); without it the call is as before. **Only the built-in `supabase-comments` module receives the
+  number** — a space's own module keeps the four arguments of the contract (see *For module authors*).
+- **TLS with `certifi`:** the HTTP client of `supabase-comments` uses the `certifi` store when the package is installed (the
+  Python of python.org on macOS does not see the system one), otherwise the default context.
+- **The core's error code `comments-unconfigured`** (409): the installation has no `supabase_url`/`supabase_key`. It shows in
+  the client as the raw code, like the other codes of the comment config.
+
+### Changed
+
+- **The legacy space keeps its comments through `supabase-comments`** (an implicit provider, `comments_route(space, prov)` in
+  `serve.py`; `comments_provider` keeps its shape). The channel is still `comment_project` (or `dc/<task>`, with `/internal`
+  for the internal one), the table is the same, and the `ctx` is built from the installation (`shots_bucket` is
+  `overview-thumbs`), without `~/.deai`. The canvas page `/commented`, the published preview, `/api/comment-config`, the
+  Overview, `inbox`, `inbox resolve` and `state` all go through the module; `inbox resolve` still passes the number of the
+  iteration. `spaces.require_integrations()` still guards this path.
+- **Where the Supabase of the legacy space is configured:** the root of the legacy `tasks.json` (`supabase_url`,
+  `supabase_key`; the same file that carries `gitlab_ssh_key`), or the environment variables `SUPABASE_URL` and
+  `SUPABASE_KEY` as a fallback. The pair comes whole from one source, `https` only, and the key must be a public one
+  (`sb_publishable_…` or an anon JWT; a secret key is refused by the rules of the module). The same pair now feeds the
+  team dashboard, the Teams silence and the dashboard push (`bin/overview_push.py`); without it they stay quiet, as with
+  `DC_NO_OVERVIEW`. Error texts never contain the key.
+- **Without the pair the comments of the legacy space are «unavailable»:** the page shows the local pins and a notice, a
+  publish goes on without team comments and with `comments_unavailable`, the comment config answers `comments-unconfigured`.
+- **Small conscious differences for the legacy space** (everything else is checked against the snapshot of 0.9.0):
+  - the published preview and the page `/commented` use the markup of the module and supabase-js from its own copy (no
+    jsdelivr, no floating `@2`); the adapter signs in without keeping a session (the legacy space had none);
+  - resolving also filters by the channel and says so when the pin is not found (0.9.0: silently zero rows); the
+    `inbox resolve --dry-run` line is now `[dry-run] Supabase: resolve <channel> <id> Іт.N «reason»`, the same for every
+    space, instead of the raw PATCH;
+  - `list` comes in the order of `id` with the ceiling of 5000, as in any space, and its rows pass the sanitizing of the
+    agent's pins; the anchor of a pin for the agent (`fp`) keeps the whole `text` up to 2000 characters and the **last** 50
+    entries of `path` (the first 50 would drop the tail that `inbox --where` compares), where 0.9.0 handed over the raw `fp`;
+  - the realtime refetch is debounced (120 ms) and `close()` closes the socket;
+  - `state`: when the Supabase of the legacy space does not answer, the line says «проєктні: не дістати (<code>)» instead of a
+    quiet `0`, and «проєктні: Supabase не налаштовано» when the installation has no pair;
+  - `build_preview(comments=…)` accepts only `False` or the dictionary of a module; `True` is a `ValueError`, like `'legacy'`.
+- `bin/import_preview.py` recognises the old preview snippet by frozen markers (the snippet itself is gone from the core), so
+  previews already in circulation are still imported.
+- `app/overview-comments.js` and `app/index.html` have only the module path: no `SB_JS` branch, no
+  `CommentLayerSupabase`, no old adapter.
+- The two golden files of the legacy preview page and comment config
+  (`tests/fixtures/comments-role/page-legacy-project.html`, `config-legacy-project.json`) were rewritten on purpose (the page
+  is now the markup of the module); the other four are byte-identical.
+
+### Removed
+
+- The constants `SUPABASE_URL` and `SUPABASE_KEY` of `app/serve.py` (replaced by `supabase_config()`).
+- The old comment snippet and its injector (`COMMENT_SNIPPET`, `inject_comment_layer`), the dead `INTERNAL_TINT` (no call
+  ever passed `internal=True`), and the old adapter `app/vendor/supabase-adapter.min.js`: it moved to
+  `tests/fixtures/legacy-comments/supabase-adapter.min.js` as the reference of the parity tests, and is not shipped.
+- `supabase_pins`, `patch_project_pin` (`bin/inbox.py`), `project_body`, `state._open_pins`, the `'legacy'` kind of
+  `ProjectComments`, and the value `True` of `build_preview(comments=…)`. `BUNDLES` and `BUILD_KINDS` stay: `ops/reseal_gate.py`
+  reads them for builds made before 0.10.0.
+
+### Upgrading
+
+**Before updating**, add the address and the public key of the shared Supabase to the root of the legacy `tasks.json`
+(the file of the LIGA space; or put `SUPABASE_URL` and `SUPABASE_KEY` into the environment):
+
+```json
+{ "supabase_url": "https://<ref>.supabase.co", "supabase_key": "sb_publishable_…" }
+```
+
+Without them, after the update the team comments of the LIGA space switch off (the local page and a notice, no network),
+and so do the dashboard and the Teams silence. See `tasks.example.json`.
+
+### For module authors
+
+- `resolve` of a space's own module is still called with four arguments; the iteration number goes only to the built-in
+  `supabase-comments` (a module that declared `resolve(ctx, channel, id, reason)` would break on a fifth).
+- A store may have an optional `uploadShot(id, dataUrl)` (see `docs/modules/comments.md`); the layer uses it when it is there.
+
+### Known limits
+
+- PostgREST `max-rows` (1000 by default) may still cut `list` silently, as before.
+- Previews of the legacy space published earlier carry the old key and the old adapter inside: changing the key in the config
+  does not update them. They are not touched.
+- The `html2canvas` layer still loads from jsdelivr (out of this stage).
+- The key sits in `tasks.json` in plain text (it is a public key; it used to be in the code).
+- `schema.sql` of the module is **not** to be run on the shared project of the legacy space (it rewrites the policies); the
+  table there already has the same shape.
+
 ## [0.9.0] — 30.10.2026
 
 Stage 4b-1: publishing becomes a module for the legacy space too. The built-in `vercel-publish` module learns a second way

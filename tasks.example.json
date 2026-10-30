@@ -1,6 +1,8 @@
 {
   "current": "demo",
   "design_work_root": "~/deai-work/main",
+  "supabase_url": "https://<ref>.supabase.co",
+  "supabase_key": "sb_publishable_…",
   "tasks": {
     "demo": {
       "title": "Demo task",
