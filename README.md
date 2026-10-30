@@ -6,14 +6,15 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.8.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.9.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, team
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
 > iterations to and from any git repository, GitHub or GitLab or your own server — work in any
 > space. A **wizard** creates a space and takes you through its modules and a first task, and a
-> **Connections** screen manages the modules afterwards — no command line. A few integrations
-> (publishing and comments of the legacy space, team dashboard, tracker statuses, team chat notifications) are still wired for the original
+> **Connections** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
+> or with the `vercel login` of the computer. A few integrations
+> (comments of the legacy space, team dashboard, tracker statuses, team chat notifications) are still wired for the original
 > setup and only run in a migrated legacy space; they are being turned into optional per-space
 > modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
@@ -41,7 +42,8 @@ UI in English and Ukrainian.
 ## Quick start
 
 Requirements: Python 3.9+, Chrome or Edge. Optional: Node.js 20+ (snapshots via Playwright;
-the in-house Vercel CLI publishing of a legacy space — the Vercel module needs no Node).
+the System Vercel CLI sign-in of `vercel-publish` and the in-house publishing of a legacy space — the Vercel module with a
+token needs no Node).
 
 ```bash
 cp tasks.example.json tasks.json      # edit paths: where your mockups live
@@ -138,7 +140,7 @@ those folders out of public commits.
 | Module | Role | What it does |
 |---|---|---|
 | `static-publish` | `publish` | Builds the preview and publishes it to a folder, by default `~/deai-published/<space-id>/<task>/` — outside the space. On by default in a space without integrations. Optional `password` secret adds a client-side gate. |
-| `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account** through the REST API (no Node, no CLI): one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Settings: `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
+| `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account**: one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Two ways to sign in (`auth`): a **token** through the REST API (no Node, no CLI; the default) or the **System Vercel CLI** (`npx vercel` under the `vercel login` of the computer; needs Node.js, stores no token). Settings: `auth`, `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
 | `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages). Off by default. See *Comments*. |
 | `git-sync` | `vcs` | Syncs a task's iterations with **any git repository** — GitHub, GitLab, your own server — through the git on your computer: nothing is stored by Deai, access is your SSH key or saved HTTPS sign-in. Settings: `repo` (the default for tasks; optional), `branch` (`main`), `path` (`mockup/{task}`), `ssh_key`, `host_ip`, `autosync`. Off by default. See *Git sync*. |
@@ -151,8 +153,10 @@ is re-checked on every publish and serve; it must not be your home folder, the t
 space folders, or a system folder, and a folder without the `.deai-published` marker is
 never overwritten.
 
-**Publishing to your own Vercel.** `vercel-publish` needs only a token — no `vercel login`,
-no CLI, no Node on the machine.
+**Publishing to your own Vercel.** `vercel-publish` signs in in one of two ways, the setting `auth`. **Token** (the
+default) needs only a token — no `vercel login`, no CLI, no Node on the machine. **System Vercel CLI** (`cli`) uses the
+`vercel login` of this computer through `npx vercel`: no token is stored, Node.js (`npx`) is required, and the section
+*System Vercel CLI* below applies. The rest of this section is about the token.
 
 - *Token.* In Vercel: Account Settings → Tokens → create a token. If you publish into a team,
   scope the token to that team and set the `team` setting (a slug such as `<slug>`, or an id
@@ -209,6 +213,18 @@ no CLI, no Node on the machine.
   projects (or the team) if colleagues should open the link.
 - With a `comments` module enabled in the space, the preview carries the comment layer and
   talks to that module's service (see *Comments*); without one it has no comments.
+
+**System Vercel CLI.** Choose «System Vercel CLI» in the setting `auth` (labelled «Вхід у Vercel»; Connections → Vercel, or the wizard);
+the token field is then ignored, and `team` is the `--scope` of the CLI (empty: your personal account). Run
+`npx vercel login` once in a terminal; «Check» asks `vercel whoami` and says `no Node.js` or `not logged in` in plain
+words. A publish runs `link` and `deploy --prod` in the built folder, takes the shortest `*.vercel.app` address and
+verifies the preview. Names: the project is the one recorded for the task, otherwise a random `pv-<8 digits>`; a project
+name or a team that is not a plain slug (letters, digits, `.`, `_`, `-`, starting with a letter or digit) is refused
+before anything runs. **Cleanup:** after a publish the 3 newest deployments of the project are kept (the current one
+among them) and the older ones are removed by address — only `*.vercel.app` deployments of that project, with `--safe`,
+never the project itself; if the cleanup cannot finish, the publish still succeeds and shows a warning. Limits: a
+publish that fails after `link` can leave an empty `pv-` project in your account (delete it in the Vercel dashboard); the
+cleanup reads up to 5 pages of the list and needs a CLI that has `list --json` and `remove --safe` (checked with 65.x).
 
 **Tokens from CSS.** A token is a `--name: value` declaration in a `:root`, `html` or
 `[data-*theme*]` rule (Bootstrap `[data-bs-theme=dark]` too) or directly in Tailwind v4
@@ -386,7 +402,7 @@ tests/        unit, Python and live (Playwright) tests
    - ✅ **2b-1** (0.3) — your own Vercel (publish) as a module.
    - ✅ **2b-2** (0.4) — the universal `comments` role (browser adapter + server functions) and
      your own Supabase (team comments) as the first module; a guide for writing your own.
-   - Later — the legacy publishing and comments, team dashboard, issue tracker, notifications: modules you connect per
+   - Later — the legacy comments, team dashboard, issue tracker, notifications: modules you connect per
      project (stage 4).
 3. **Onboarding**
    - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
@@ -398,8 +414,12 @@ tests/        unit, Python and live (Playwright) tests
    setup does becomes modules, so that setup can move to an ordinary space without losing anything. Four releases
    (the same numbering as in `docs/design/spaces-and-modules.md`):
    - ✅ **4a** (0.8) — git sync: the `vcs` role and the `git-sync` module (any git remote).
-   - **4b** — the in-house publishing and comments move onto the existing modules (`vercel-publish`,
-     `supabase-comments`); their hard-wired constants go.
+   - **4b** — the in-house publishing and comments move onto the existing modules; the hard-wired constants and the
+     profiles go. Three releases:
+     - ✅ **4b-1** (0.9) — publishing: the in-house space publishes through `vercel-publish` (new sign-in «System Vercel
+       CLI»), with cleanup of old deployments; the Vercel transport leaves the core.
+     - **4b-2** — comments and the Supabase constants move onto `supabase-comments`.
+     - **4b-3** — the profiles.
    - **4c** — team dashboard, tracker statuses and team chat notifications: the roles `dashboard`, `tracker`, `notify`
      in the core, and the modules for them.
    - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.

@@ -3,6 +3,107 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.9.0] — 30.10.2026
+
+Stage 4b-1: publishing becomes a module for the legacy space too. The built-in `vercel-publish` module learns a second way
+to sign in — the **system Vercel CLI** (`auth: cli`): no token, the `vercel login` of the computer — and the in-house
+legacy space publishes through it as an implicit provider. The Vercel transport left `app/serve.py`; the legacy space
+looks the same (`tests/legacy-golden.test.mjs` is green without a re-shoot) apart from the changes listed below. Design:
+`docs/superpowers/specs/2026-10-30-legacy-publish-module-design.md`; plan:
+`docs/superpowers/plans/2026-10-30-legacy-publish-module.md`.
+
+### Added
+
+- **`vercel-publish` 1.1.0: the setting `auth`** — «Token» (`token`, the default; the code of 1.0.0, REST API, no Node) or
+  «System Vercel CLI» (`cli`). `cli` runs `npx --yes vercel` under the sign-in of the computer (`vercel login`): `link`,
+  `deploy --prod`, `inspect` for the shortest `*.vercel.app` address, a check of the preview, then the cleanup below. No
+  token is read, stored or put into a subprocess; `team` is the `--scope` (empty: the personal account). The project name
+  and the scope go into the command line, so they are checked first (see *Changed*). Any space can choose it on the
+  Connections screen and in the wizard.
+- **Cleanup of old deployments in `cli` mode.** After a publish the module lists the project's deployments
+  (`vercel list <project> --json`, up to 5 pages) and removes the old ones: the 3 newest are kept, the current one among
+  them. Only records whose `name` is the project and whose address ends in `.vercel.app` are touched, with
+  `vercel remove <address> --safe --yes`; **a project name is never passed to `remove`** (the CLI would delete the whole
+  project). Any failure — a list that cannot be read, a timeout, a refused removal — is a warning, never an error, and
+  nothing is removed when the list was not understood. The whole cleanup has a hard limit of 60 s.
+- **`ctx["find_tool"]`** for every module: a function `find_tool("npx" | "node") -> path | None` (any other name gives
+  `None`). The core registers its own finder, which knows nvm, volta and Homebrew locations that a GUI app does not have
+  in its `PATH`, and calls it only when a module asks.
+- **`ModuleError.full`** — the whole error text (up to 64 KiB, secrets already removed by the core); `message` stays at
+  300 characters.
+- **Error codes** in the core's table: `no-node` (409), `vercel-login` (409), `vercel-scope` (409), `vercel-deploy` (502),
+  `vercel-no-url` (502).
+- **Client texts** for those codes, in English and Ukrainian: in the publish dialog, and on the Connections screen
+  (`no-node` and `vercel-login` for «Check»).
+
+### Changed
+
+- **The in-house legacy space publishes through `vercel-publish` in `cli` mode** (an implicit provider, as `git-sync` did in
+  0.8.0). The core still builds the preview, mints the project name in `tasks.json`, pushes to the registry and the
+  dashboard, and composes the same answer of `/api/publish` with the same keys in the same order; `iterations.json`,
+  `tasks.json`, the commands and their time limits are those of 0.8.0. The error texts of that space (the sign-in hint,
+  the scope hint, the Deployment Protection hint, «URL not found») stay in the core and are built from the new codes. It
+  does not write `publish_remote`: its state is in `tasks.json`, as before.
+- **The legacy space now cleans up old deployments too** (decision of 30.10.2026; 0.8.0 never did, and on 09.10.2026 that
+  hit the storage limit of Vercel). The permanent `pv-….vercel.app` addresses live on; only the direct addresses of old
+  publishes stop opening. The answer of `/api/publish` has a new optional last key, `cleanup_warning`, when the cleanup
+  did not finish; the publish dialog shows it next to the other warnings.
+- The module is called with `task["gated"]`: `true` when the core put the password gate into the pages. In `cli` mode a
+  preview is `verified` only when the page carries the gate marker (with a gate) or answers 200 (without one); `token`
+  mode ignores the field.
+- The setting `token` of `vercel-publish` is no longer marked `required` and has a new label, «Токен Vercel (для входу
+  «Токен»)»: the generic form has no conditional fields. The module itself demands the token in `token` mode, as before
+  (`vercel-auth`).
+- `check` in `cli` mode runs `npx vercel whoami` and answers `no-node`, `vercel-login` or `check-timeout`.
+- **Small conscious differences for the legacy space** (everything else is checked against a snapshot of 0.8.0,
+  `tests/fixtures/legacy-publish/before-4b1.json`):
+  - a `vercel deploy` that fails with no output at all now gets a human line («vercel завершився з помилкою, але нічого
+    не надрукував…»); 0.8.0 answered an empty `deploy_error`, which the interface could take for a success;
+  - the check of the preview sends a `User-Agent` and an `Accept` header (0.8.0 used the defaults of `urllib`), and the
+    reason «address unreachable» has its whitespace collapsed;
+  - the project name and the scope are checked before anything runs: the project `[a-z0-9][a-z0-9._-]{0,99}`, the scope
+    `[A-Za-z0-9][A-Za-z0-9_-]{0,99}`; an odd value (for example, one that starts with `-`) is refused instead of being
+    passed to the CLI;
+  - `check` has the codes `no-node` and `check-timeout` (a new path).
+
+### Removed
+
+- The Vercel transport of the core, `app/serve.py`: `_deploy_urls`, `_stable_alias`, `_check_published`, `_deploy_hint`
+  and the `npx vercel` subprocess block of `Handler._publish`. They moved into the module, or, for the in-house texts
+  (`_deploy_hint`, the hint of Deployment Protection), into one adapter of the legacy space (`_publish_legacy_call`,
+  `_legacy_deploy_error`).
+
+### For module authors
+
+- `ctx["find_tool"]`, `task["gated"]` and `ModuleError.full` are available to every module (see
+  `docs/modules/authoring.md`).
+- A `publish` result may carry three optional keys: `deploy_url` (the address of the publish itself, as opposed to the
+  permanent `url`), `verify` (`{"reason", "hint"}` — why `verified` is false) and `cleanup_warning` (a string). The core
+  reads them only for the in-house legacy space; in other spaces they are ignored (the cleanup text is also in
+  `warnings`).
+- The five new codes above are in the core's table, so they pass as they are.
+
+### Known limits
+
+- In `cli` mode of an ordinary space the project name is a random `pv-<8 digits>` with no probe whether the name is
+  taken (`token` mode probes it).
+- In `cli` mode of an ordinary space, if `deploy` fails after `link`, an empty `pv-…` project stays in Vercel and the next
+  try creates another one (the legacy space mints its name in `tasks.json` before the deploy, so it does not).
+- The cleanup reads at most 5 pages of `vercel list`; older deployments go in later runs.
+- The flags `vercel list --json` and `remove --safe` are those of CLI 65.x (checked on 30.10.2026). With an older CLI the
+  cleanup ends in a warning and the publish is not affected.
+- `cli` mode verifies the preview by the gate marker (when there is a gate), `token` mode by HTTP 200.
+- The preview check of `token` mode has no `certifi` context (a backlog item); `cli` mode has one.
+
+### Tests
+
+- A fake `npx` (`tests/fake_npx.py`) drives the new tests without any network and without a real `vercel`:
+  `tests/test_vercel_publish_cli.py` (the `cli` mode, the cleanup, `check`) and the legacy branch of
+  `tests/test_serve.py` and `tests/test_publish_module.py`, which also compares a publish of the legacy space with a
+  snapshot of the 0.8.0 answer, the files and the commands (`tests/fixtures/legacy-publish/before-4b1.json`).
+  `tests/legacy-golden.test.mjs` is unchanged and green. A live test, `tests/live/legacy-publish-cli.test.mjs`, presses
+  «Publish» of the legacy bar with the fake `npx` (the path that needs no network: `deploy` without an address).
+
 ## [0.8.0] — 30.10.2026
 
 Stage 4a: git sync becomes a module. The new role `vcs` and the built-in module `git-sync` sync a task's iterations with

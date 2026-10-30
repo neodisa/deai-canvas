@@ -5,10 +5,11 @@ Built so far: stage 1 (spaces, 0.1.0), stage 2a (module framework, publishing to
 folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.0),
 stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3a (the
 Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a space's own
-modules with a trust dialog, 0.7.0) and stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0)
-— see *Status* at the end.
-Next: stages 4b–4d — the rest of the in-house integrations of the legacy space (publishing and comments, then the team
-dashboard, tracker statuses and notifications) as optional per-space modules, and the end of the `integrations` flag.
+modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0) and stage
+4b-1 (the in-house publishing through `vercel-publish`, 0.9.0) — see *Status* at the end.
+Next: stages 4b-2 to 4d — the rest of the in-house integrations of the legacy space (comments and constants, profiles,
+then the team dashboard, tracker statuses and notifications) as optional per-space modules, and the end of the
+`integrations` flag.
 
 ## Goal
 
@@ -92,7 +93,11 @@ canvas for their workflow without touching the core.
    the legacy space does becomes a module, so that space can later be an ordinary one. Four releases:
    - ✅ **4a** (0.8.0) — git sync: the `vcs` role and the `git-sync` module;
    - **4b** — the legacy publishing and comments move onto the existing modules (`vercel-publish`,
-     `supabase-comments`); the hard-wired constants and the profiles go;
+     `supabase-comments`); the hard-wired constants and the profiles go. Three releases:
+     - ✅ **4b-1** (0.9.0) — publishing: `vercel-publish` gets the sign-in «System Vercel CLI» and the legacy space
+       publishes through it;
+     - **4b-2** — comments and the Supabase constants;
+     - **4b-3** — the profiles;
    - **4c** — the roles `dashboard`, `tracker` and `notify` in the core, and the team dashboard, tracker statuses and
      team chat notifications as modules of that company;
    - **4d** — the `integrations` flag goes.
@@ -259,6 +264,43 @@ plan: `docs/superpowers/plans/2026-10-26-git-sync-module.md`. What is built:
   sync zone of the task bar and the palette for any space that has the role, with the service's label.
 - **Tested** on local bare repositories (a path and `file://`); a real GitHub, GitLab or HTTPS server is not part of the
   tests, and Windows was not run on a real machine.
+
+### Stage 4b-1 — legacy publishing through `vercel-publish` (0.9.0, 30.10.2026)
+
+Spec: `docs/superpowers/specs/2026-10-30-legacy-publish-module-design.md` (and its «Поправки»); plan:
+`docs/superpowers/plans/2026-10-30-legacy-publish-module.md`. What is built:
+
+- **`vercel-publish` 1.1.0 has a second sign-in, the setting `auth`:** `token` (the REST code of 1.0.0, unchanged) or `cli`
+  — the system Vercel CLI, `npx --yes vercel` under the `vercel login` of the computer, with no secret. `cli` does
+  `link`, `deploy --prod`, `inspect` (the shortest `*.vercel.app` address), a check of the preview and then the cleanup
+  of old deployments (3 kept, the current one among them; only `*.vercel.app` addresses of that project, with `--safe`,
+  never a project name). Any space can use it; the state is kept in the same place as in `token` mode, `publish_remote.state`
+  (`project`, `scope` and `task`; there is no `project_id`, the CLI works by name).
+- **Framework additions for every module:** `ctx["find_tool"]("npx" | "node")` (the core registers its finder once,
+  `deai_modules.set_tool_finder(_node_bin)`, and it runs only when a module asks), `ModuleError.full` (the whole text
+  next to the 300-character `message`), `task["gated"]` and the optional publish-result keys `deploy_url`, `verify`,
+  `cleanup_warning`. New codes: `no-node`, `vercel-login`, `vercel-scope`, `vercel-deploy`, `vercel-no-url`. The module
+  returns **codes and raw output**; the human texts are built by the caller.
+- **The legacy space publishes through the same module** (an implicit provider, `'legacy'`): `_publish_legacy_call` in
+  `serve.py` is the only seam. It keeps what belongs to the company — the project name minted in `tasks.json`, the
+  scope in `tasks.json`, the registry and the dashboard, `git_autocommit`, and the error texts (`_LEGACY_DEPLOY_HINTS`,
+  `_LEGACY_PROTECTION_HINT`, `_LEGACY_NO_URL`) — so the answer of `/api/publish` has the same keys in the same order.
+  `publish_remote` is still not written there.
+- **The legacy space now cleans up old deployments too** (owner's decision of 30.10.2026); the answer may carry a last
+  key `cleanup_warning`, shown by the publish dialog.
+- **The Vercel transport left `serve.py`:** `_deploy_urls`, `_stable_alias`, `_check_published`, `_deploy_hint` and the
+  `npx vercel` block. `tests/legacy-golden.test.mjs` is green without a re-shoot, and a snapshot of the 0.8.0 answer
+  (`tests/fixtures/legacy-publish/before-4b1.json`) is compared with the new code.
+- **UI:** the Vercel card and the wizard get the choice of the sign-in (the token field stays, labelled «for the token
+  sign-in»); `check` in `cli` mode runs `vercel whoami` (`no-node`, `vercel-login`); publish texts for the new codes and a
+  line for `cleanup_warning`.
+- **Small conscious differences** from 0.8.0 for the legacy space are listed in the changelog (a human line for a deploy
+  that fails with no output, headers of the preview check, a stricter check of the project name and the scope).
+- **Known limits:** a random `pv-` name without a probe whether it is taken, and an empty project left after a failed
+  deploy (ordinary space, `cli`); at most 5 pages of the deployment list; CLI 65.x flags; `cli` verifies the gate marker
+  and `token` verifies HTTP 200; the preview check of `token` mode has no `certifi` context (backlog).
+- **Tested** with a fake `npx` (no network, no real `vercel`); a real Vercel account and a real `vercel login` are not part
+  of the tests.
 
 ### What stays for later
 

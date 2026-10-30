@@ -1,6 +1,6 @@
 # Writing your own module
 
-For Deai Canvas **0.8.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
+For Deai Canvas **0.9.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
 tokens, team comments, syncing mockups with git. Built-in modules live in `app/modules/`; **your own modules live in the space**, in
 `<space>/modules/<id>/`, so they travel with the space through git. Their code runs on your computer only after **you**
 trust it.
@@ -72,11 +72,47 @@ exact return values are those of the built-in modules — read `app/modules/stat
 [comments.md](comments.md).
 
 `ctx` is `{"space": {id, path}, "settings": {…}, "secrets": {…only this module's…}, "folder_ok": f, "ModuleError": class,
-"cache_dir": path}`. Raise `ctx["ModuleError"](code, "message")` for a failure; texts are cut to 300 characters and scrubbed
-of your secrets. A code the core knows (`bad-folder`, `vcs-offline`, for example) is passed on as it is; any other code is
+"cache_dir": path, "find_tool": f}`. Raise `ctx["ModuleError"](code, "message")` for a failure; texts are cut to 300
+characters and scrubbed of your secrets; the whole text, up to 64 KiB, is kept in the property `full` of the error (the
+caller in the core may read it; the secrets are scrubbed from it too). A code the core knows (`bad-folder`, `vcs-offline`, for example) is passed on as it is; any other code is
 reported as `module-error`. `cache_dir` is the path `~/.deai/cache/<space id>/<module id>` (under `DEAI_HOME`, when that is
 set), a place for what the module can rebuild — mirrors, downloads. The core only computes the path and never creates
 the folder: create it yourself when you need it (`os.makedirs(path, mode=0o700, exist_ok=True)`).
+
+`ctx["find_tool"]("npx")` (or `"node"`) returns the path of that program on this computer, or `None`; any other name
+gives `None`. Use it instead of `PATH`: a desktop app has a shorter `PATH` than a terminal, and the core's finder also
+looks where nvm, volta and Homebrew put Node. The search can be slow, so call it only when you really need the tool
+(`vercel-publish` does it in `cli` mode only). A module that starts the program should pass no secrets to it.
+
+### The `publish` role
+
+`publish(ctx, build_dir, task)` gets the folder of the built preview and
+`task = {"id", "title", "dir", "state", "gated"}`:
+
+* `state` — what this module returned in `state` the last time for this task, or `{}`; do not trust it blindly (a task
+  can be copied to another one).
+* `gated` — a boolean: `true` when the core put the password gate into the pages (the module never sees the password).
+  A module that checks its own preview can use it to know whether a gate marker is expected in the page.
+
+A module with `publish_target: "folder"` returns `{"path": <the folder it wrote to>}`; a module with `"url"` returns
+`{"url": "https://…", "verified": bool, "warnings": [str, …], "state": {…}}` — `url` an `https` address without
+credentials or a fragment, `state` a flat object (strings, numbers, booleans or `null` as values; at most 4096
+characters as JSON), `warnings` at most 5 strings of at most 300 characters. Three more keys are **optional**; the core
+reads them only for the in-house legacy space and ignores them everywhere else, so a module may always return them:
+
+| key | meaning |
+|---|---|
+| `deploy_url` | the address of this publish itself, as opposed to the permanent `url` (a string) |
+| `verify` | `{"reason": str}` — why `verified` is false; `vercel-publish` uses the reason `vercel_protection` when the sign-in of Vercel is in the way, and the legacy space turns that into its own hint |
+| `cleanup_warning` | a string: the cleanup of old publishes did not finish (the publish itself succeeded) |
+
+A module that runs a command-line tool should report **codes**, not finished sentences: keep the raw output in
+`ModuleError.full` and let the caller decide what to tell the person. Besides `vercel-auth` and `vercel-busy`, the core's
+table has these codes for that: `no-node` (409, no `npx`), `vercel-login` (409, the CLI is not signed in),
+`vercel-scope` (409, no access to the team), `vercel-deploy` (502, the deploy failed), `vercel-no-url` (502, the deploy
+printed no address). Any other code of your own is reported as `module-error`.
+
+The built-in `vercel-publish` is the reference for the `url` kind (`token` mode: REST; `cli` mode: `npx vercel`).
 
 `server.py` (at most 1 MiB) is executed by the core (not imported): write it against the **standard library only**. The
 module is not put into `sys.modules`, so `@dataclass` together with `from __future__ import annotations` fails and its
