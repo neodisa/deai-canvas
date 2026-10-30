@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.8.0] — 27.10.2026
+## [0.8.0] — 30.10.2026
 
 Stage 4a: git sync becomes a module. The new role `vcs` and the built-in module `git-sync` sync a task's iterations with
 any git repository — GitHub, GitLab, your own server — in any space, not only in the in-house legacy one. The git
@@ -67,7 +67,8 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
     IP of 0.7.0) is still followed.
 - **The mirror folder of a regular space has a hash suffix**: `mirrors/<host>/<slug>-<8 hex of the normalized address>`.
   The slug turns `/` and `-` into the same character, so `o/r` and `o-r` used to share one folder, and a send to the second
-  repository carried the whole history of the first one to its remote. Different repositories never share a folder now.- A regular space: the commit subject is `deai: sync …`, the local autocommit says `автосинк (deai)`, a pulled iteration is
+  repository carried the whole history of the first one to its remote. In a regular space, different repositories never share a folder now (the legacy space keeps its 0.7.0 folder names and refuses a foreign origin instead).
+- A regular space: the commit subject is `deai: sync …`, the local autocommit says `автосинк (deai)`, a pulled iteration is
   noted «оновлення з репозиторію» and a task started from a repository continues as «продовження макета з репозиторію»,
   the README of a multi-page push says «Deai Canvas». These are texts of data, Ukrainian whatever the UI language; the
   legacy space keeps `design-canvas: sync …`, «оновлення з GitLab», «продовження макета з GitLab» and «design-canvas».

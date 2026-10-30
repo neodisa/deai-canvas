@@ -237,7 +237,7 @@ Spec: `docs/superpowers/specs/2026-10-22-own-modules-trust-design.md` (revision 
   error; no implicit or legacy fallback.
 - **UI**: Connections (cards, notes, panel), the trust dialog, wizard step 2/3.
 
-### Stage 4a — git sync as a module (0.8.0, 27.10.2026)
+### Stage 4a — git sync as a module (0.8.0, 30.10.2026)
 
 Spec: `docs/superpowers/specs/2026-10-26-git-sync-module-design.md` (revision 2 + the planning amendments);
 plan: `docs/superpowers/plans/2026-10-26-git-sync-module.md`. What is built:

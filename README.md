@@ -340,7 +340,7 @@ GitLab or Git.
   continue in when it is a colleague's (or older than your own newest work); if it equals an iteration you already have,
   nothing is created.
 * In a regular space the repository is cloned once per address into
-  `~/.deai/cache/<space id>/git-sync/mirrors/<host>/<slug of the repository path>` (one folder: `o/r.git` becomes `o-r.git`) and shared by the tasks that use it; the first
+  `~/.deai/cache/<space id>/git-sync/mirrors/<host>/<slug>-<8 hex>` (the slug of the repository path plus a short hash of the normalized address: `o/r.git` becomes `o-r.git-1a2b3c4d`, so `o/r` and `o-r` never share a folder) and shared by the tasks that use it; the first
   clone can take minutes (the legacy space keeps its old mirror folders). The mirror is a cache of the tool: before every
   send or pull its tree is reset and cleaned, so edit nothing there by hand (local commits that were not pushed stay).
 * A branch that is missing on a non-empty repository is an error: Deai does not create branches in a shared repository.
