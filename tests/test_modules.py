@@ -82,8 +82,8 @@ def _bump(path, seconds=5):
 
 #: Що ядро кладе в `ctx` для модуля, але що НЕ дані: правило теки публікації (модуль не імпортує
 #: `deai_modules`, тож отримує його в `ctx`), клас помилки (його `call()` пропускає як є) і `cache_dir` — шлях теки
-#: кешу модуля (4a: дзеркала `git-sync`; ядро теку не створює).
-CORE_CTX_KEYS = ('folder_ok', 'ModuleError', 'cache_dir')
+#: кешу модуля (4a: дзеркала `git-sync`; ядро теку не створює), `find_tool` — шукач npx/node (4b-1).
+CORE_CTX_KEYS = ('folder_ok', 'ModuleError', 'cache_dir', 'find_tool')
 
 
 def _plain(ctx):
@@ -1068,6 +1068,54 @@ class RealGitSyncTest(Env):
 
 
 # ---------------------------------------------------------------------------------------------- виклик
+
+class FindToolAndFullText(unittest.TestCase):
+    """4b-1: `ctx['find_tool']` (лише npx/node) і повний текст помилки модуля (`ModuleError.full`)."""
+
+    def tearDown(self):
+        dm.set_tool_finder(None)
+
+    def test_find_tool_only_known_names(self):
+        seen = []
+        dm.set_tool_finder(lambda name: seen.append(name) or f'/x/{name}')
+        f = dm._find_tool
+        self.assertEqual(f('npx'), '/x/npx')
+        self.assertEqual(f('node'), '/x/node')
+        self.assertIsNone(f('sh'))
+        self.assertIsNone(f('../npx'))
+        self.assertEqual(seen, ['npx', 'node'])           # невідоме імʼя шукач навіть не бачить
+
+    def test_find_tool_default_is_which(self):
+        dm.set_tool_finder(None)
+        with mock.patch('shutil.which', lambda n: '/w/' + n):
+            self.assertEqual(dm._find_tool('npx'), '/w/npx')
+
+    def test_find_tool_finder_failure_is_none(self):
+        def boom(name):
+            raise OSError('no')
+        dm.set_tool_finder(boom)
+        self.assertIsNone(dm._find_tool('npx'))
+
+    def test_module_error_full_text_survives_call(self):
+        secret = 'S3CR3T-value-long-enough'
+        long = ('x' * 900) + secret + ('y' * 100)
+
+        def fn(ctx):
+            raise dm.ModuleError('vercel-deploy', message=long)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.call(fn, fn, {'secrets': {'token': secret}})
+        e = cm.exception
+        self.assertEqual(e.code, 'vercel-deploy')
+        self.assertEqual(len(e.message), 300)
+        self.assertNotIn(secret, e.full)
+        self.assertIn('***', e.full)
+        self.assertTrue(e.full.endswith('y' * 100))
+
+    def test_new_codes_have_status(self):
+        for code, st in (('no-node', 409), ('vercel-login', 409), ('vercel-scope', 409),
+                         ('vercel-deploy', 502), ('vercel-no-url', 502)):
+            self.assertEqual(dm.STATUS[code], st, code)
+
 
 class CallTest(Env):
     SECRET = 's3cr3t-Pa55'
@@ -2645,6 +2693,7 @@ class CheckTest(Env):
         ctx = dm.module_ctx(self.sp, 'chk')
         self.assertEqual(set(ctx) - set(CORE_CTX_KEYS), {'space', 'settings', 'secrets'})
         self.assertIs(ctx['ModuleError'], dm.ModuleError)
+        self.assertTrue(callable(ctx['find_tool']))
         rule = ctx['folder_ok']
         self.assertTrue(callable(rule))
         self.assertEqual(rule(self.hp('pub', 'x')), (True, None))

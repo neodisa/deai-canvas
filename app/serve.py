@@ -314,6 +314,11 @@ def _node_bin(name='npx'):
     return None
 
 
+# 4b-1: модулі (режим `cli` у `vercel-publish`) шукають `npx` так само, як ядро (див. докстрінг вище). Лише реєстрація:
+# `_node_bin` не кличеться при імпорті (login-shell повільний) — тільки коли модуль сам попросить `ctx['find_tool']`.
+deai_modules.set_tool_finder(_node_bin)
+
+
 def _deploy_hint(err):
     """Технічний stderr vercel → людська підказка дизайнеру (або None).
     ⛔ Не вигадуємо причину: якщо не впізнали патерн — віддаємо сирий текст."""

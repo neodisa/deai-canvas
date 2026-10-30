@@ -84,6 +84,7 @@ import json
 import math
 import os
 import re
+import shutil
 import stat
 import threading
 import time
@@ -146,6 +147,9 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
           'check-timeout': 504, 'secrets-unreadable': 409, 'unwritable': 500, 'bad-folder': 409,
           # модулі «публікація за адресою»: віддалений хост не прийняв токен / вперся в ліміт (текст — від модуля)
           'vercel-auth': 409, 'vercel-busy': 409,
+          # модуль Vercel у режимі `cli` (4b-1): нема node/npx, не виконано вхід, не вибрано команду (scope), збій `deploy`,
+          # у виводі `deploy` нема адреси (текст — від модуля; адаптер ЛІГИ в `serve.py` підміняє його своїми підказками)
+          'no-node': 409, 'vercel-login': 409, 'vercel-scope': 409, 'vercel-deploy': 502, 'vercel-no-url': 502,
           # роль `vcs` (4a): мережа/DNS/тайм-аут git, відмова в доступі, погана ціль, зайняте дзеркало, решта відмов git
           'vcs-offline': 502, 'vcs-auth': 502, 'vcs-bad-target': 400, 'vcs-busy': 409, 'vcs-error': 502}
 
@@ -176,6 +180,12 @@ class ModuleError(Exception):
         self._full = str(message or '')[:MAX_FULL_MESSAGE]
         self.message = self._full[:MAX_MESSAGE]
         super().__init__(f'{code}: {self.message}' if self.message else code)
+
+    @property
+    def full(self):
+        """Повний текст (≤ `MAX_FULL_MESSAGE`); `message` — його перші 300 знаків. Для виклику з `call()` секрети з нього вже
+        вирізані (`_run`): повний вивід `vercel deploy` потрібен адаптерові ЛІГИ, щоб розпізнати причину за хвостом тексту."""
+        return self._full
 
 
 class Module:
@@ -1460,7 +1470,8 @@ def _scrub(text, secrets):
 
 def _run(f, ctx, args, secrets):
     """(True, результат) або (False, (код, текст)). `ModuleError` модуля з кодом, відомим ядру (`STATUS`),
-    проходить як є — лише з вирізаними секретами й ≤300 символів (його код читає API: `bad-folder`…);
+    проходить як є — з вирізаними секретами; текст НЕ обрізається тут (повний — у `ModuleError.full`, ≤300 — у `message`
+    після `call`) (його код читає API: `bad-folder`…);
     усе інше (невідомий код, `SystemExit`, `ValueError`…) — `module-error`."""
     try:
         return True, f(ctx, *args)
@@ -1468,11 +1479,35 @@ def _run(f, ctx, args, secrets):
         raise
     except ModuleError as e:
         if e.code in STATUS:
-            return False, (e.code, _scrub(e._full, secrets)[:MAX_MESSAGE])
+            # ⛔ БЕЗ `[:MAX_MESSAGE]`: повний (вичищений) текст іде в `call()`, а `message` обріже вже конструктор `ModuleError`
+            return False, (e.code, _scrub(e._full, secrets))
         text = f'ModuleError: {e.code}: {e._full}' if e._full else f'ModuleError: {e.code}'
         return False, ('module-error', _scrub(text, secrets)[:MAX_MESSAGE])
     except BaseException as e:  # noqa: BLE001 — SystemExit, GeneratorExit… теж `module-error`
         return False, ('module-error', _scrub(_exc_text(e), secrets)[:MAX_MESSAGE])   # СПЕРШУ вирізати, ПОТІМ різати
+
+
+#: Шукач інструментів машини для модулів (`ctx['find_tool']`): ядро реєструє свій (`serve._node_bin` знає про nvm/volta/brew,
+#: яких нема в PATH GUI-застосунку); без реєстрації — `shutil.which`. Лише ці імена: модуль не отримує загального
+#: «знайди мені будь-яку програму». Шукач кличеться ліниво, лише коли модуль просить інструмент (login-shell повільний).
+TOOL_NAMES = ('npx', 'node')
+_TOOL_FINDER = [None]
+
+
+def set_tool_finder(fn):
+    """Зареєструвати шукач `fn(name) -> шлях | None` (`None` — назад до `shutil.which`)."""
+    _TOOL_FINDER[0] = fn
+
+
+def _find_tool(name):
+    if name not in TOOL_NAMES:
+        return None
+    fn = _TOOL_FINDER[0] or shutil.which
+    try:
+        p = fn(name)
+    except Exception:  # noqa: BLE001 — шукач не валить виклик модуля: «не знайдено»
+        return None
+    return p if isinstance(p, str) and p else None
 
 
 def _resolve_fn(module, fn):
@@ -1551,16 +1586,18 @@ def _ctx(space, m):
     # `ctx` нікуди не серіалізується: у `call`/`check` з нього береться лише `secrets`.
     # `cache_dir` — лише ШЛЯХ (`_cache_dir`; 4a: дзеркала `git-sync`). Теку створює модуль (`makedirs` 0700): `_ctx` будується для
     # кожного `check`, і створення тут падало б на незаписуваному `DEAI_HOME`.
+    # `find_tool` — функція, а не готовий шлях: `_node_bin` ядра може запускати login-shell, тож шукаємо лише коли модуль попросить.
     return {'space': {'id': _space_id(space), 'path': _space_path(space)},
             'settings': settings, 'secrets': secrets,
             'folder_ok': _folder_rule(space), 'ModuleError': ModuleError,
-            'cache_dir': cache_dir}
+            'cache_dir': cache_dir, 'find_tool': _find_tool}
 
 
 def module_ctx(space, module):
     """`ctx` для функцій модуля — `{"space": {id, path}, "settings": {…підставлені…}, "secrets": {…лише
-    його оголошені…}, "folder_ok": f(folder) -> (ok, код), "ModuleError": клас, "cache_dir": шлях}`; `module` — `Module`
+    його оголошені…}, "folder_ok": f(folder) -> (ok, код), "ModuleError": клас, "cache_dir": шлях, "find_tool": f}`; `module` — `Module`
     чи id. Перші три — дані, `folder_ok` і `ModuleError` — засоби ядра для модуля, що не імпортує ядро (`static-publish`),
+    `find_tool` — функція `f('npx'|'node') -> шлях | None` (4b-1; будь-яке інше імʼя → `None`),
     `cache_dir` — шлях теки кешу модуля в просторі (теки ядро НЕ створює: це робить модуль; `_` замість id простору, коли той не
     за `spaces.SPACE_ID_RE`; `module-error`, коли id модуля не за `ID_RE`).
     Саме це отримує `check`; для `serve.py` (`/api/ds-tokens`, диспетчер публікації). Може кинути
