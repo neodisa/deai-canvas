@@ -642,6 +642,16 @@ class AgentPinUnitTest(unittest.TestCase):
             with self.subTest(given=given):
                 self.assertEqual(serve.agent_pin(cl('c0ffee01-aaaa', 't', bornV=given))['born_v'], want)
 
+    def test_the_fingerprint_keeps_what_pin_where_scores(self):
+        """`inbox --where` (`anchor.findMatch`) зіставляє ПОВНИЙ текст (поріг 0.35) і ХВІСТ шляху: `fp.text` — до 2000 знаків,
+        `fp.path` — ОСТАННІ 50 записів (а не перші: 0.9.0 віддавав сирий `fp`, обрізання не мало бути вужчим за нього)."""
+        path = [f'div[{i}]' for i in range(70)]
+        row = serve.agent_pin(cl('c0ffee01-aaaa', 't', fp={'tag': 'section', 'text': 'слово ' * 600, 'path': path}))
+        self.assertEqual(len(row['fp']['text']), 2000)
+        self.assertTrue(row['fp']['text'].startswith('слово слово'))
+        self.assertEqual(row['fp']['path'], path[-50:])
+        self.assertEqual(row['fp']['path'][-1], 'div[69]')
+
     def test_a_missing_optional_part_is_none_not_a_crash(self):
         row = serve.agent_pin({'id': 'c0ffee01-aaaa'})
         self.assertEqual((row['text'], row['status'], row['author'], row['ts'], row['meta'], row['fp'],
@@ -1266,7 +1276,7 @@ class StateTest(AgentEnv):
 
     def test_an_unreadable_registry_is_not_get_at_all_neither_zero_nor_the_shared_service(self):
         with mock.patch.object(state, 'ProjectComments', side_effect=spaces.SpacesError('spaces-unreadable', '/p', 'broken')):
-            self.assertEqual(state._team_comments({}, 'px', True), (0, ', проєктні: не дістати (spaces-unreadable)'))
+            self.assertEqual(state._team_comments({}, 'px'), (0, ', проєктні: не дістати (spaces-unreadable)'))
         self.assert_no_legacy()
 
     def test_the_league_and_the_empty_cases_are_as_before(self):

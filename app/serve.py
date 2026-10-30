@@ -2892,16 +2892,21 @@ def _agent_meta(meta):
 
 def _agent_fp(fp):
     """Відбиток елемента для агента: `tag`/`text`/`path[]` — одним рядком і обмежені (друкується `якір: <tag> «text» · path`),
-    решта ключів — безпечна копія JSON (їх читає лише `pin-where`)."""
+    решта ключів — безпечна копія JSON (їх читає лише `pin-where`).
+
+    ⛔ Межі НЕ вужчі за те, що читає `inbox --where` (`bin/pin-where.mjs` → `anchor.findMatch`): він рахує 0.75·схожість
+    ТЕКСТУ + 0.25·схожість ШЛЯХУ при порозі 0.35, а шлях зіставляє з ХВОСТА. Тому `text` — до 2000 знаків (як рядки в
+    `_agent_json`; обрізаний до 200 текст контейнера на ~250 слів падав під поріг → «на сторінці не знайдено», чого в 0.9.0,
+    що віддавав сирий `fp`, не було), а `path` — ОСТАННІ 50 записів (перші 50 відкидали саме той хвіст, що порівнюється)."""
     fp = _agent_json(fp, [200]) if isinstance(fp, dict) else None
     if not fp:
         return None
     if 'tag' in fp:
         fp['tag'] = agent_line(fp['tag'], 50)
     if 'text' in fp:
-        fp['text'] = agent_line(fp['text'], 200)
+        fp['text'] = agent_line(fp['text'], 2000)
     if 'path' in fp:
-        fp['path'] = ([agent_line(x, 100) for x in fp['path'][:50] if isinstance(x, str)]
+        fp['path'] = ([agent_line(x, 100) for x in fp['path'][-50:] if isinstance(x, str)]
                       if isinstance(fp['path'], list) else [])
     return fp
 

@@ -538,20 +538,29 @@ class LegacyAgentTest(_Env):
 
     def test_state_counts_open_league_pins_through_the_module(self):
         self.setUpState()
-        self.assertEqual(state._team_comments(self.TASK, 't1', True), (1, ' + 1 проєктних'))
+        self.assertEqual(state._team_comments(self.TASK, 't1'), (1, ' + 1 проєктних'))
 
     def test_state_says_cannot_reach_instead_of_a_silent_zero(self):
         self.setUpState()
         self.rows = {'not': 'a list'}
-        n, tail = state._team_comments(self.TASK, 't1', True)
+        n, tail = state._team_comments(self.TASK, 't1')
         self.assertEqual((n, tail), (0, ', проєктні: не дістати (module-error)'))
         self.write({'tasks': {}})
-        self.assertEqual(state._team_comments(self.TASK, 't1', True), (0, ', проєктні: не дістати (comments-unconfigured)'))
+        self.assertEqual(state._team_comments(self.TASK, 't1'), (0, ', проєктні: Supabase не налаштовано'))
+
+    def test_the_league_resolve_refuses_an_unsafe_pin_id_before_any_request(self):
+        """Білий список `id` піна діє й для ЛІГИ (як для модуля простору): чужий `id` іде в адресу PATCH."""
+        pc = serve.ProjectComments(None)
+        for bad in ('a/b?x', 'x&project_id=neq.y', '', None, 5, 'a b'):
+            with self.subTest(bad=bad), self.assertRaises(deai_modules.ModuleError) as cm:
+                pc.resolve(self.TASK, 't1', bad, 'r', iteration=1)
+            self.assertEqual(cm.exception.code, 'module-error')
+        self.assertEqual(self.seen, [])
 
     def test_state_without_integrations_says_none_and_asks_nobody(self):
         self.setUpState()
         with mock.patch.object(spaces, 'require_integrations', side_effect=spaces.IntegrationsOff('integrations-off')):
-            self.assertEqual(state._team_comments(self.TASK, 't1', False), (0, ', проєктних нема'))
+            self.assertEqual(state._team_comments(self.TASK, 't1'), (0, ', проєктних нема'))
         self.assertEqual(self.seen, [])
 
 

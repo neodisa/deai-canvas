@@ -285,11 +285,11 @@ def _registry_line(cfg):
     return f'Реєстр: {icon} синк {age_s}' + (f' — {st["hint"]}' if st['hint'] else '')
 
 
-def _team_comments(task, tid, integrations):
+def _team_comments(task, tid):
     """`(відкритих проєктних, хвіст рядка «Відкриті коментарі»)`.
 
     Хто веде командні коментарі, вирішує постачальник ролі `comments` ПРОСТОРУ задачі (`ProjectComments`; простір —
-    явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не `integrations`: у просторі з модулем
+    явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не `spaces.integrations_on()`: у просторі з модулем
     коментарів вони є й без інтеграцій, а ЛІГА з модулем, що не завантажився, не має права йти в спільний Supabase.
     ЛІГА (`'legacy'`) — тим самим модулем `supabase-comments` (4b-2): Supabase, що не відповів, — «не дістати (<код>)», а не
     тихий «0» (свідома відмінність від 0.9.0); простір без інтеграцій — «проєктних нема», без мережі."""
@@ -304,7 +304,10 @@ def _team_comments(task, tid, integrations):
         except spaces.IntegrationsOff:      # ЛІГА без інтеграцій: командних коментарів нема, мережі не було
             return 0, ', проєктних нема'
         except Exception as e:  # noqa: BLE001 — модуль не відповів: «0» читалось би як «тихо», а це «не дістати»
-            return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
+            code = getattr(e, 'code', type(e).__name__)
+            if code == 'comments-unconfigured':      # установка без конфігу Supabase — не збій, а «не налаштовано»
+                return 0, ', проєктні: Supabase не налаштовано'
+            return 0, f', проєктні: не дістати ({code})'
         # Те, що не ввійшло (зіпсовані елементи, понад межу), — у тому ж рядку: «N відкритих» без цього збрехало б.
         note = pins.note() if hasattr(pins, 'note') else ''
         return n, f' + {n} проєктних' + (f' (⚠ {note})' if note else '')
@@ -404,8 +407,6 @@ def _main(argv):
     else:
         print('Опубліковано: ще ні')
 
-    # Інтеграції простору (не лише «команда»): без них немає командних коментарів (нижче).
-    integrations = spaces.integrations_on()
     # Синк із git — за РОЛЛЮ `vcs` простору, а не за інтеграціями: звичайний простір із `git-sync` синкає так само. Ролі нема
     # (простір без модуля) — «не налаштований», як для задачі без цілі; GitLab-маппінг у файлі такого простору ігнорується.
     try:
@@ -440,7 +441,7 @@ def _main(argv):
     except (OSError, ValueError):
         local = 0
     # Без інтеграцій командних коментарів нема: «нема», а не «+ 0» (нуль читався б як «питали — тихо»).
-    external, team_part = _team_comments(task, tid, integrations)
+    external, team_part = _team_comments(task, tid)
     # Підказку копіюють дослівно: без `--task` вона відкрила б інбокс ПОТОЧНОЇ задачі.
     inbox_cmd = 'python3 bin/inbox.py' + (f' --task {shlex.quote(tid)}' if named else '')
     print(f'Відкриті коментарі: {local} локальних (мені){team_part}'

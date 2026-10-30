@@ -58,6 +58,8 @@ import inbox  # noqa: E402
 from atomic_io import atomic_write_json  # noqa: E402
 
 _REAL = None
+#: Хост і порт Supabase ЛІГИ з вигаданого конфігу тестів (`sbconf.ENV`): першим записом розтяжки має бути саме він.
+LIGA_HOST = urllib.parse.urlsplit(sbconf.SB_URL).hostname + ':443'
 
 
 def setUpModule():
@@ -534,7 +536,7 @@ class Points(unittest.TestCase):
             with self.assertRaises(serve.deai_modules.ModuleError) as cm:        # не `IntegrationsOff` і не «пусто»
                 self.project_comments().pins({}, 'x')
         self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
-        self.assertEqual(len(self.trip.of('socket')), 1, self.trip.hits)
+        self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
         self.assertEqual(self.trip.of('urlopen'), [])
 
     def test_teams_rpc(self):
@@ -676,7 +678,7 @@ class Points(unittest.TestCase):
             with self.assertRaises(serve.deai_modules.ModuleError) as cm:
                 self.project_comments().resolve({}, 'x', 'c0ffee01', 'r', iteration=1)
         self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
-        self.assertEqual(len(self.trip.of('socket')), 1, self.trip.hits)
+        self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
         self.assertEqual(self.trip.of('urlopen'), [])
 
     def test_task_new_does_not_touch_the_gitlab_mirror(self):
@@ -819,7 +821,7 @@ class Routes(World):
         st, body = self.jget('/comments?it=it1', self.A)
         self.assertEqual((st, body['comments']), (200, []))
         self.assertTrue(body['error'], 'контроль: запит мусив дійти до розтяжки')
-        self.assertEqual(len(self.trip.of('socket')), 1, 'модуль ходить крізь `socket.create_connection`')
+        self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'модуль ходить крізь `socket.create_connection` у Supabase ЛІГИ')
 
     def test_comment_config_project_is_refused_local_is_not(self):
         self.assert_off(*self.jget('/api/comment-config?ch=project&it=it1'))
@@ -1049,16 +1051,16 @@ class Cli(World):
         self.assertNotIn('GitLab: не налаштований', out)
         self.assertTrue([c for c in self.trip.of('run') if c.startswith('git clone')],
                         'контроль: статус GitLab мусив дійти до розтяжки')
-        self.assertTrue(self.trip.of('socket'), 'контроль: проєктні піни мусили дійти до розтяжки')
+        self.assertEqual(self.trip.of('socket')[:1], [LIGA_HOST], 'контроль: проєктні піни мусили дійти до розтяжки')
 
     def test_state_team_comments_in_a_space_without_integrations_is_none_without_a_request(self):
         """Колишній `_open_pins`: у просторі БЕЗ інтеграцій лічильник проєктних — «нема» і без жодного запиту."""
         with spaces.request_space(self.legacy_id):           # контроль: простір з інтеграціями питає (і не дістає)
-            self.assertEqual(state._team_comments({}, 'a', True), (0, ', проєктні: не дістати (module-error)'))
+            self.assertEqual(state._team_comments({}, 'a'), (0, ', проєктні: не дістати (module-error)'))
         self.assertTrue(self.trip.of('socket'))
         self.trip.hits.clear()
         with spaces.request_space(self.p_id):
-            self.assertEqual(state._team_comments({}, 'x', False), (0, ', проєктних нема'))
+            self.assertEqual(state._team_comments({}, 'x'), (0, ', проєктних нема'))
             self.assertEqual(state._registry_line({'tasks': {}}), '')
         self.assertEqual(self.trip.hits, [])
         self.staleness.assert_not_called()
