@@ -1,0 +1,71 @@
+{
+ "channels": {
+  "t1": "proj/alpha",
+  "t1_internal": "proj/alpha/internal",
+  "t2": "dc/t2",
+  "t2_internal": "dc/t2/internal"
+ },
+ "page_publish": {
+  "audiences": false,
+  "channel": "dc/t2",
+  "inspector": false,
+  "version": "2/kartka"
+ },
+ "page_work": {
+  "audiences": true,
+  "channel": "proj/alpha",
+  "inspector": true,
+  "version": "1/main"
+ },
+ "pins": [
+  {
+   "author": "A",
+   "born_v": 1,
+   "fp": {
+    "tag": "div"
+   },
+   "html_snapshot": {
+    "text": "x"
+   },
+   "id": "c1",
+   "meta": {
+    "shotUrl": "https://demo.supabase.co/x.jpg",
+    "version": "1/main"
+   },
+   "resolve_reason": null,
+   "resolved_v": null,
+   "status": "open",
+   "text": "Збільшити відступ",
+   "ts": "30.10.2026 10:00"
+  },
+  {
+   "author": "B",
+   "born_v": 1,
+   "fp": null,
+   "html_snapshot": null,
+   "id": "c2",
+   "meta": null,
+   "resolve_reason": "зроблено",
+   "resolved_v": 2,
+   "status": "resolved",
+   "text": "Готово",
+   "ts": "30.10.2026 11:00"
+  }
+ ],
+ "pins_query_channel": "proj%2Falpha",
+ "resolve": {
+  "body": {
+   "resolve_reason": "виправлено",
+   "resolved_v": 3,
+   "status": "resolved"
+  },
+  "id_filter": "c1"
+ },
+ "teams_rpc": {
+  "apikey_is_config": true,
+  "bearer_is_config": true,
+  "body": {},
+  "method": "POST",
+  "path": "/rest/v1/rpc/teams_mute_state"
+ }
+}

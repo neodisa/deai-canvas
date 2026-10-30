@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="uk"><head><meta charset="utf-8"><title>Картка «Ромашка»</title><link rel="stylesheet" href="../assets/app.css"></head><body><h1>Картка</h1><img src="../icons/a.svg" srcset="../icons/a.svg 1x, ../icons/a@2x.svg 2x"><script type="module" src="../main.js"></script>
+<script>
+/* Банер — ПЕРШИМ тегом, ДО трьох `<script src>` нижче: без async/defer вони
+   виконуються ПОСЛІДОВНО, і `onerror` кожного з них спрацьовує РАНІШЕ, ніж
+   встиг би виконатись цей код, якби він (як було до ревʼю) жив у скрипті
+   ініціалізації внизу. У тій версії заблокований CDN не показував банер
+   ЗОВСІМ: `window.__clDown` на момент `onerror` ще не існував, і охоронець
+   `window.__clDown&&…` мовчки гасив виклик — перевірено живцем. Порядок тут
+   несучий, а не косметика. */
+window.__clDown = function (why) {
+  if (document.getElementById('cl-down')) return;
+  var d = document.createElement('div');
+  d.id = 'cl-down';
+  d.textContent = 'Коментарі недоступні: ' + why;
+  d.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;'
+    + 'background:#d14343;color:#fff;font:13px/1.4 system-ui,sans-serif;'
+    + 'padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.3)';
+  (document.body || document.documentElement).appendChild(d);
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onerror="window.__clDown('бібліотека Supabase не завантажилась')"></script>
+<script src="../comment-layer/supabase-adapter.min.js" onerror="window.__clDown('адаптер коментарів не завантажився')"></script>
+<script src="../comment-layer/comment-layer.min.js" onerror="window.__clDown('шар коментарів не завантажився')"></script>
+<script>
+(function () {
+  var init = function () {
+    if (!window.CommentLayerSupabase || !window.CommentLayer) {
+      window.__clDown('шар коментарів не піднявся');
+      return;
+    }
+    /* Синхронний try/catch, а НЕ лише `.catch()` на `store.ready` нижче:
+       `CommentLayerSupabase(...)` сам, ПОЗА промісом, кличе
+       `window.supabase.createClient(...)` — коли CDN не піднявся (мережевий
+       збій АБО 200 із порожнім/битим тілом, який `onerror` вище не ловить
+       узагалі), `window.supabase` не існує, і виклик кидає ДО того, як
+       `store`/`store.ready` встигли зʼявитись. Без цієї гілки виняток летів
+       необробленим у консоль (перевірено живцем:
+       `TypeError: Cannot read properties of undefined (reading 'createClient')`),
+       а банер так і не малювався. */
+    var store;
+    try {
+      store = window.CommentLayerSupabase({
+        url: 'https://REDACTED-PROJECT-REF.supabase.co', anonKey: 'sb_publishable_REDACTED', projectId: 'chan',
+      });
+    } catch (e) {
+      window.__clDown((e && e.message) || 'адаптер не зміг піднятись');
+      return;
+    }
+    store.ready.then(function () {
+      window.CommentLayer.init({ projectId: 'chan', storage: store,
+        version: '1/kartka' });
+    }).catch(function (e) {
+      window.__clDown((e && e.message) || 'база не відповіла');
+    });
+  };
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+})();
+</script></body></html>
