@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -129,7 +130,8 @@ class CliBase(tvp.Base):
     def ok_sc(self, **over):
         """Типовий успішний сценарій: `deploy` друкує D, `inspect` — A, `link` пише org."""
         sc = {'link': {'code': 0, 'org': 'team_x'}, 'deploy': {'code': 0, 'stdout': D + '\n'},
-              'inspect': {'code': 0, 'stdout': A + '\n'}}
+              'inspect': {'code': 0, 'stdout': A + '\n'},
+              'list': {'code': 0, 'stdout': json.dumps({'deployments': []})}}      # порожній список: нічого прибирати
         sc.update(over)
         return self.scenario(sc)
 
@@ -146,7 +148,8 @@ class Success(CliBase):
         self.assertEqual(self.argvs(), [
             ['--yes', 'vercel', 'link', '--yes', '--project', 'pv-12345678'],
             ['--yes', 'vercel', 'deploy', '--prod', '--yes'],
-            ['--yes', 'vercel', 'inspect', D]])                      # рівно в такому порядку; `vercel list` тут НЕ кличеться
+            ['--yes', 'vercel', 'inspect', D],
+            ['--yes', 'vercel', 'list', 'pv-12345678', '--json']])   # рівно в такому порядку; `list` — прибирання (Task 3), порожній список
         real = os.path.realpath(self.build)
         self.assertEqual({c['cwd'] for c in self.calls()}, {real})   # cwd — тека збірки
         self.assertEqual(self.pages, [A])                            # перевірялась найкоротша адреса
@@ -180,7 +183,7 @@ class Success(CliBase):
         spy = _SubSpy()
         self.run_cli(spy=spy)
         kinds = [(a[3], kw.get('timeout')) for a, kw in spy.calls]
-        self.assertEqual(kinds, [('link', 120), ('deploy', 300), ('inspect', 120)])
+        self.assertEqual(kinds, [('link', 120), ('deploy', 300), ('inspect', 120), ('list', 60)])
         for argv, kw in spy.calls:
             self.assertEqual(argv[0], self.npx_path)
             self.assertEqual(kw.get('cwd'), self.build)
@@ -233,13 +236,14 @@ class NameAndScope(CliBase):
         self.assertEqual(self.argvs(), [
             ['--yes', 'vercel', 'link', '--yes', '--scope', 'team_a', '--project', 'pv-12345678'],
             ['--yes', 'vercel', 'deploy', '--prod', '--yes', '--scope', 'team_a'],
-            ['--yes', 'vercel', 'inspect', D]])
+            ['--yes', 'vercel', 'inspect', D],
+            ['--yes', 'vercel', 'list', 'pv-12345678', '--json', '--scope', 'team_a']])
         self.assertEqual(res['state']['scope'], 'team_a')            # налаштування `team` ігнорується, коли є стан
 
     def test_3_scope_from_settings(self):
         self.ok_sc()
         res = self.run_cli(state={}, team='acme')
-        link, deploy, _inspect = self.argvs()
+        link, deploy, _inspect, _list = self.argvs()
         self.assertEqual(link[:6], ['--yes', 'vercel', 'link', '--yes', '--scope', 'acme'])
         self.assertEqual(deploy, ['--yes', 'vercel', 'deploy', '--prod', '--yes', '--scope', 'acme'])
         self.assertEqual(res['state']['scope'], 'acme')
@@ -250,7 +254,7 @@ class NameAndScope(CliBase):
         proj = res['state']['project']
         self.assertRegex(proj, r'^pv-\d{8}$')
         self.assertNotEqual(proj, 'pv-99999999')
-        link, deploy, _inspect = self.argvs()
+        link, deploy, _inspect, _list = self.argvs()
         self.assertEqual(link, ['--yes', 'vercel', 'link', '--yes', '--project', proj])   # і скоуп чужої задачі — теж не наш
         self.assertEqual(deploy, ['--yes', 'vercel', 'deploy', '--prod', '--yes'])
         self.assertEqual(res['state']['task'], 't1')
@@ -440,7 +444,269 @@ class DeployFailures(CliBase):
         """Як у 0.8.0: код `link` не перевіряється (відмову скоупу скаже `deploy`)."""
         self.ok_sc(link={'code': 1, 'stderr': 'link complained'})
         self.assertEqual(self.run_cli()['url'], A)
-        self.assertEqual(len(self.calls()), 3)
+        self.assertEqual(len(self.calls()), 4)                       # link, deploy, inspect, list
+
+
+# ------------------------------------------------------------------------------------------------ 3: прибирання
+
+P = 'pv-12345678'
+CUR = 'pv-12345678-abc.vercel.app'                                  # хост `deploy_url` (D) — у списку `vercel list` без схеми
+
+
+def host(i):
+    return f'pv-12345678-h{i}.vercel.app'
+
+
+def entry(h, created, name=P):
+    return {'url': h, 'name': name, 'state': 'READY', 'target': 'production', 'createdAt': created}
+
+
+def page(entries, nxt=None):
+    return {'code': 0, 'stdout': json.dumps({'contextName': 'team', 'deployments': entries,
+                                              'pagination': {'count': len(entries), 'next': nxt, 'prev': 0}})}
+
+
+class Cleanup(CliBase):
+    def removes(self):
+        return [a for a in self.argvs() if a[2] == 'remove']
+
+    def lists(self):
+        return [a for a in self.argvs() if a[2] == 'list']
+
+    def go(self, entries=None, **over):
+        sc = dict(over)
+        if entries is not None and 'list' not in sc:
+            sc['list'] = page(entries)
+        self.ok_sc(**sc)
+        return self.run_cli()
+
+    def test_1_the_two_oldest_of_five_are_removed(self):
+        res = self.go([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)])
+        self.assertIsNone(res['cleanup_warning'])
+        self.assertEqual(res['warnings'], [])
+        rm = self.removes()
+        self.assertEqual(sorted(rm), sorted([['--yes', 'vercel', 'remove', host(1), '--safe', '--yes'],
+                                             ['--yes', 'vercel', 'remove', host(2), '--safe', '--yes']]))
+        self.assertEqual(self.lists(), [['--yes', 'vercel', 'list', P, '--json']])
+        self.assertEqual({c['cwd'] for c in self.calls()}, {os.path.realpath(self.build)})
+
+    def test_2_a_current_deployment_that_is_not_the_newest_is_always_kept(self):
+        self.go([entry(host(5), 5), entry(host(4), 4), entry(host(3), 3), entry(CUR, 2), entry(host(1), 1)])
+        self.assertEqual(sorted(a[3] for a in self.removes()), sorted([host(3), host(1)]))   # лишились CUR + 5 + 4
+        self.assertNotIn(CUR, [a[3] for a in self.removes()])
+
+    def test_2b_the_current_one_is_kept_even_when_it_is_the_oldest(self):
+        self.go([entry(host(5), 5), entry(host(4), 4), entry(host(3), 3), entry(CUR, 0)])
+        self.assertEqual([a[3] for a in self.removes()], [host(3)])
+
+    def test_2c_few_deployments_nothing_is_removed(self):
+        self.go([entry(CUR, 3), entry(host(2), 2), entry(host(1), 1)])
+        self.assertEqual(self.removes(), [])
+        self.go([entry(host(2), 2), entry(host(1), 1)])             # поточної в списку ще нема (відстав) — теж нічого
+        self.assertEqual(self.removes(), [])
+
+    def test_3_other_projects_are_never_removed(self):
+        ents = [entry(CUR, 9)] + [entry(host(i), i) for i in (8, 7, 6)]
+        ents += [entry('other-0.vercel.app', 0, name='other'), entry('foreign-1.vercel.app', 1, name='foreign'),
+                 {'name': 'other', 'state': 'READY'}]               # чужий запис без `url`/`createdAt` — ігнорується, а не «незнайома форма»
+        res = self.go(ents)
+        self.assertIsNone(res['cleanup_warning'])
+        self.assertEqual([a[3] for a in self.removes()], [host(6)])
+        self.assertFalse([a for a in self.removes() if 'other' in a[3] or 'foreign' in a[3]])
+
+    def test_4_the_project_name_is_never_an_argument_of_remove(self):
+        """⛔ `vercel remove <імʼя проєкту>` видаляє ВЕСЬ проєкт."""
+        ents = [entry(CUR, 9)] + [entry(host(i), i) for i in range(1, 7)]
+        for proj in (P, 'dc-x'):
+            with self.subTest(project=proj):
+                ents_p = [dict(e, name=proj) for e in ents]
+                self.ok_sc(list=page(ents_p))
+                self.run_cli(state={'project': proj, 'task': 't1'})
+                rm = self.removes()
+                self.assertTrue(rm)
+                for a in rm:
+                    self.assertNotIn(proj, a[3:])
+                    self.assertRegex(a[3], r'^[a-z0-9.-]+\.vercel\.app$')
+        # навіть запис, чий «хост» збігається з імʼям проєкту, — незнайома форма, а не `remove <проєкт>`
+        self.ok_sc(list=page([entry(CUR, 9), entry(P, 1)] + [entry(host(i), i) for i in range(2, 6)]))
+        res = self.run_cli()
+        self.assertEqual(self.removes(), [])
+        self.assertIn('Старі публікації не прибрано', res['cleanup_warning'])
+
+    def test_5_an_unparsable_list_removes_nothing(self):
+        good = [entry(CUR, 9)] + [entry(host(i), i) for i in range(1, 7)]
+        bad = {
+            'exit 1': {'code': 1, 'stderr': 'Error: boom'},
+            'not json': {'code': 0, 'stdout': 'not json at all'},
+            'empty': {'code': 0, 'stdout': ''},
+            'list instead of object': {'code': 0, 'stdout': '[]'},
+            'deployments not a list': {'code': 0, 'stdout': json.dumps({'deployments': 'x'})},
+            'deployments object': {'code': 0, 'stdout': json.dumps({'deployments': {}})},
+            'no url': page(good + [{'name': P, 'createdAt': 5}]),
+            'no createdAt': page(good + [{'name': P, 'url': host(9)}]),
+            'createdAt string': page(good + [dict(entry(host(9), 1), createdAt='5')]),
+            'createdAt bool': page(good + [dict(entry(host(9), 1), createdAt=True)]),
+            'weird host': page(good + [entry('bad host/x', 1)]),
+            'url not a string': page(good + [dict(entry(host(9), 1), url=5)]),
+        }
+        for why, sc in bad.items():
+            with self.subTest(why=why):
+                self.ok_sc(list=sc)
+                res = self.run_cli()
+                self.assertEqual(self.removes(), [])
+                self.assertIsInstance(res['cleanup_warning'], str)
+                self.assertTrue(res['cleanup_warning'].startswith('Старі публікації не прибрано'))
+                self.assertEqual((res['url'], res['verified']), (A, True))     # публікація вдалась
+
+    def test_5b_a_list_that_cannot_start_or_times_out_removes_nothing(self):
+        self.ok_sc(list=page([entry(CUR, 9)] + [entry(host(i), i) for i in range(1, 7)]))
+        for exc in (subprocess.TimeoutExpired(['x'], 60), FileNotFoundError('npx'), ValueError('embedded null byte')):
+            with self.subTest(exc=type(exc).__name__):
+                def handler(argv, kw, exc=exc):
+                    if argv[3] == 'list':
+                        raise exc
+                    return None
+                spy = _SubSpy(handler)
+                res = self.run_cli(spy=spy)
+                self.assertEqual([c for c in spy.calls if c[0][3] == 'remove'], [])
+                self.assertTrue(res['cleanup_warning'].startswith('Старі публікації не прибрано'))
+
+    def test_5c_an_unexpected_failure_in_cleanup_never_fails_the_publish(self):
+        self.ok_sc()
+        g = self.fn('publish').__globals__
+
+        def boom(*a, **k):
+            raise KeyError('x')
+        with mock.patch.dict(g, {'_cli_cleanup': boom}):
+            res = self.run_cli()
+        self.assertEqual(res['url'], A)
+        self.assertTrue(res['cleanup_warning'].startswith('Старі публікації не прибрано'))
+        self.assertIn(res['cleanup_warning'], res['warnings'])
+
+    def test_6_a_failed_remove_does_not_stop_the_next_one(self):
+        res = self.go([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)],
+                      remove=[{'code': 1, 'stderr': 'Error: nope'}, {'code': 0}])
+        self.assertEqual(len(self.removes()), 2)                   # другий все одно пробується
+        self.assertIn('не вдалося 1 з 2', res['cleanup_warning'])
+        self.assertEqual(res['url'], A)
+        self.go([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)],
+                remove={'code': 1})
+        res = self.run_cli()
+        self.assertIn('не вдалося 2 з 2', res['cleanup_warning'])
+
+    def test_6b_a_remove_that_cannot_run_counts_as_failed(self):
+        self.ok_sc(list=page([entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]))
+
+        def handler(argv, kw):
+            if argv[3] == 'remove':
+                raise subprocess.TimeoutExpired(argv, 60)
+            return None
+        spy = _SubSpy(handler)
+        res = self.run_cli(spy=spy)
+        self.assertEqual(len([c for c in spy.calls if c[0][3] == 'remove']), 2)
+        self.assertIn('не вдалося 2 з 2', res['cleanup_warning'])
+        self.assertEqual([kw.get('timeout') for argv, kw in spy.calls if argv[3] in ('list', 'remove')], [60, 60, 60])
+
+    def test_7_pagination(self):
+        p1 = page([entry(CUR, 9), entry(host(8), 8), entry(host(7), 7)], nxt=123)
+        p2 = page([entry(host(2), 2), entry(host(1), 1)], nxt=None)
+        self.ok_sc(list=[p1, p2])
+        res = self.run_cli()
+        ls = self.lists()
+        self.assertEqual(ls, [['--yes', 'vercel', 'list', P, '--json'], ['--yes', 'vercel', 'list', P, '--json', '--next', '123']])
+        self.assertEqual(sorted(a[3] for a in self.removes()), sorted([host(1), host(2)]))
+        self.assertIsNone(res['cleanup_warning'])
+
+    def test_7b_at_most_five_pages_and_repeats_are_not_removed_twice(self):
+        self.ok_sc(list=page([entry(CUR, 9), entry(host(8), 8), entry(host(7), 7), entry(host(6), 6), entry(host(5), 5)],
+                             nxt=7))                                # остання відповідь повторюється: нескінченна пагінація
+        res = self.run_cli()
+        self.assertEqual(len(self.lists()), 5)                      # `CLI_LIST_PAGES`
+        rm = [a[3] for a in self.removes()]
+        self.assertEqual(sorted(rm), sorted(set(rm)))               # дублі сторінок — той самий запис
+        self.assertEqual(sorted(rm), sorted([host(6), host(5)]))
+        self.assertIsNone(res['cleanup_warning'])
+
+    def test_7c_a_bad_next_stops_paging(self):
+        for nxt in (0, -1, 'x', None, True, 1.5):
+            with self.subTest(nxt=nxt):
+                self.ok_sc(list=page([entry(CUR, 9)], nxt=nxt))
+                self.run_cli()
+                self.assertEqual(len(self.lists()), 1)
+
+    def test_8_scope_goes_to_list_and_remove_only_when_known(self):
+        ents = [entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]
+        self.ok_sc(list=page(ents))
+        self.run_cli(state={'project': P, 'task': 't1', 'scope': 'team_a'})
+        self.assertEqual(self.lists(), [['--yes', 'vercel', 'list', P, '--json', '--scope', 'team_a']])
+        self.assertEqual(len(self.removes()), 2)
+        for a in self.removes():
+            self.assertEqual(a[4:], ['--safe', '--yes', '--scope', 'team_a'])
+        self.ok_sc(list=page(ents))
+        self.run_cli(state={'project': P, 'task': 't1'})            # скоупа нема (а `link` дописав `orgId` у стан — це не скоуп запуску)
+        self.assertEqual(self.lists(), [['--yes', 'vercel', 'list', P, '--json']])
+        for a in self.removes():
+            self.assertNotIn('--scope', a)
+        self.ok_sc(list=page(ents))
+        self.run_cli(state={}, team='acme')                         # скоуп із налаштування
+        self.assertIn('--scope', self.lists()[0])
+
+    def test_9_the_time_limit_stops_the_removals(self):
+        ents = [entry(CUR, 5), entry(host(4), 4), entry(host(3), 3), entry(host(2), 2), entry(host(1), 1)]
+
+        def clock(ticks_before_expiry):
+            n = [0]
+
+            def monotonic():
+                n[0] += 1
+                return 0 if n[0] <= ticks_before_expiry else 10 ** 6
+            return types.SimpleNamespace(monotonic=monotonic, sleep=lambda s: None)
+        g = self.fn('publish').__globals__
+        # 1-й виклик — `deadline`, 2-й — перед сторінкою списку, 3-й і далі — перед кожним `remove`
+        for ticks, removed, failed in ((2, 0, 2), (3, 1, 1)):
+            with self.subTest(removed=removed):
+                self.ok_sc(list=page(ents))
+                with mock.patch.dict(g, {'time': clock(ticks)}):
+                    res = self.run_cli()
+                self.assertEqual(len(self.removes()), removed)
+                self.assertIn(f'не вдалося {failed} з 2', res['cleanup_warning'])
+                self.assertIn('ліміт часу', res['cleanup_warning'])
+        self.ok_sc(list=page(ents))
+        with mock.patch.dict(g, {'time': clock(1)}):                # вичерпано ще до читання списку
+            res = self.run_cli()
+        self.assertEqual(self.removes(), [])
+        self.assertTrue(res['cleanup_warning'].startswith('Старі публікації не прибрано'))
+
+    def test_10_the_warning_is_also_in_warnings(self):
+        res = self.go(None, list={'code': 1})
+        self.assertIn(res['cleanup_warning'], res['warnings'])
+        self.assertLessEqual(len(res['cleanup_warning']), 300)
+        res = self.go([entry(CUR, 1)])
+        self.assertIsNone(res['cleanup_warning'])
+        self.assertEqual(res['warnings'], [])
+        core = self.run_cli(core=True)
+        serve._checked_url_result(core)                             # форма, яку приймає ядро, і з попередженням
+
+    def test_10b_the_cleanup_warning_comes_after_the_verify_warning(self):
+        self.ok_sc(list={'code': 1})
+        res = self.run_cli(page=(404, '', ''))
+        self.assertEqual(len(res['warnings']), 2)
+        self.assertIn('HTTP 404', res['warnings'][0])
+        self.assertEqual(res['warnings'][1], res['cleanup_warning'])
+
+    def test_11_scheme_prefixed_and_mixed_case_hosts_are_normalised(self):
+        """Список дає голий хост, `deploy_url` — `https://хост`; порівнюємо хости (регістр не важливий)."""
+        ents = [entry('https://' + CUR.upper(), 9), entry(host(8), 8), entry(host(7), 7), entry('https://' + host(6), 6)]
+        self.go(ents)
+        self.assertEqual([a[3] for a in self.removes()], [host(6)])            # поточна не видалена навіть за іншого запису хоста
+
+    def test_12_cleanup_does_not_run_when_the_publish_failed(self):
+        self.ok_sc(deploy={'code': 1, 'stderr': 'Error: Forbidden'})
+        self.fails()
+        self.assertEqual(self.lists(), [])
+        self.ok_sc(deploy={'code': 0, 'stdout': 'nothing'})
+        self.fails()
+        self.assertEqual(self.lists(), [])
 
 
 # ------------------------------------------------------------------------------------ 11–12: перевірка превʼю, гейт
@@ -504,6 +770,12 @@ class Verification(CliBase):
         self.assertIn(why, res['warnings'][0])
         res = self.run_cli(page=(None, '', '   '))                   # порожній текст — запасний рядок
         self.assertEqual(res['verify'], {'reason': 'адреса не відповіла'})
+
+    def test_12d2_an_error_text_with_the_gate_marker_is_not_a_verification(self):
+        self.ok_sc()
+        for gated in (True, False):
+            res = self.run_cli(gated=gated, page=(None, '', '<urlopen error authgate unreachable>'))
+            self.assertEqual((res['verified'], res['verify']), (False, {'reason': '<urlopen error authgate unreachable>'}))
 
     def test_12e_any_2xx_goes_through_the_body_check(self):
         """0.8.0 читало тіло за будь-якого успішного відкриття: 204/206 з маркером гейта — теж `verified`."""
@@ -590,7 +862,7 @@ class NoTokenLeaks(CliBase):
             res = self.run_cli(ctx=ctx, spy=spy)
         self.assertEqual(res['url'], A)
         boom.assert_not_called()
-        self.assertEqual(len(spy.calls), 3)
+        self.assertEqual(len(spy.calls), 4)
         for argv, kw in spy.calls:
             self.assertNotIn('env', kw)
             self.assertFalse([a for a in argv if TOKEN in a])

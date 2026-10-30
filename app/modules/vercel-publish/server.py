@@ -77,8 +77,11 @@
 Коди відмов (ядро складає з них людські тексти; тут їх НЕМА — лише сирий вивід CLI в `ModuleError.full`, хвіст ≤ 4000 знаків
 `stderr or stdout`): `vercel-login` (не ввійшли), `vercel-scope` (скоуп/команда недоступні), `vercel-auth` (немає доступу),
 `vercel-deploy` (інше, і тайм-аут/ОС-збій запуску), `vercel-no-url` (деплой пройшов, адреси нема), `no-node`. Порядок
-класифікації — той самий, що в `_deploy_hint` 0.8.0: вхід → скоуп → доступ → решта. Прибирання старих публікацій у цьому
-режимі — окрема задача (`cleanup_warning` поки `None`).
+класифікації — той самий, що в `_deploy_hint` 0.8.0: вхід → скоуп → доступ → решта.
+Прибирання старих публікацій (`_cli_cleanup`): `vercel list <проєкт> --json` (≤ `CLI_LIST_PAGES` сторінок, `--next`),
+кандидати — лише `name == проєкт`; поточна (`deploy_url`) лишається завжди, разом із нею `KEEP`; решта — `vercel remove <хост>
+--safe --yes` (⛔ ІМЕНІ проєкту в `remove` нема: CLI видалив би весь проєкт). Список не розібрано — не видаляємо нічого. Будь-який
+збій — `cleanup_warning` (і в `warnings`), не помилка. `--scope` — лише коли скоуп відомий.
 
 Ядро кличе `publish` БЕЗ тайм-ауту, тож кожен запит має свій: 30 с на запит API, 60 с на файл, 20 с на перевірку.
 
@@ -724,6 +727,8 @@ def _module_error(ctx, e):
 
 #: `whoami` — 120 с: холодний `npx --yes vercel` спершу завантажує сам CLI.
 CLI_LINK_S, CLI_DEPLOY_S, CLI_INSPECT_S, CLI_WHOAMI_S = 120, 300, 120, 120
+#: Прибирання: `vercel list` (до `CLI_LIST_PAGES` сторінок) і `vercel remove` — по 60 с на виклик, усе разом у `CLEANUP_MAX_S`.
+CLI_LIST_S, CLI_REMOVE_S, CLI_LIST_PAGES = 60, 60, 5
 #: Скільки знаків хвоста виводу CLI лишається в `ModuleError.full` (ядро/адаптер розпізнає причину за хвостом).
 CLI_RAW_MAX = 4000
 #: Імʼя проєкту й скоуп ідуть у argv: перший знак — літера/цифра, щоб значення не стало прапорцем (`--yes`).
@@ -870,8 +875,63 @@ def _cli_pick(ctx, state, task_id):
     return project, scope
 
 
+def _cli_cleanup(npx, project, scope, current_url, cwd):
+    """Прибрати старі публікації проєкту `project`, лишивши `KEEP` разом із поточною (`current_url` — `deploy_url`).
+    Вертає `None` або текст попередження; НІКОЛИ не кидає (збій прибирання не робить вдалу публікацію помилкою).
+    ⛔ `vercel remove` отримує ЛИШЕ адреси публікацій (хост `….vercel.app`): з імʼям проєкту CLI видаляє ВЕСЬ проєкт.
+    `--safe` — CLI сам пропускає публікації з активним alias. Чіпаємо лише записи з `name == project` (спільний акаунт:
+    чужі проєкти в списку не наші). Не вдалось розібрати список (код ≠ 0, не JSON, незнайома форма, запис без адреси чи
+    `createdAt`) — НЕ видаляємо нічого: без повного розуміння списку не знаємо, що є «старе». Поточна публікація лишається
+    завжди (список міг відстати чи хтось опублікував паралельно). Порівнюємо ХОСТИ: список дає голий хост, `deploy_url` —
+    `https://хост`. Межа часу — `CLEANUP_MAX_S` на все."""
+    deadline = time.monotonic() + CLEANUP_MAX_S
+    sc = ['--scope', scope] if scope else []
+    cur = _host(current_url)
+    if cur is None:
+        return 'Старі публікації не прибрано: не вдалося розібрати адресу поточної публікації.'
+    items, nxt = {}, None                                           # хост → `createdAt` (повтор на сусідній сторінці — той самий запис)
+    for _ in range(CLI_LIST_PAGES):
+        if time.monotonic() >= deadline:
+            return 'Старі публікації не прибрано: вичерпано ліміт часу на читання списку.'
+        try:
+            r = _vc(npx, ['list', project, '--json', *sc, *(['--next', str(nxt)] if nxt else [])], cwd, CLI_LIST_S)
+            data = json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            data = None
+        deps = data.get('deployments') if isinstance(data, dict) else None
+        if not isinstance(deps, list):
+            return 'Старі публікації не прибрано: Vercel CLI не віддав список публікацій.'
+        for d in deps:
+            if not isinstance(d, dict) or d.get('name') != project:
+                continue
+            host, created = _host(d.get('url')), d.get('createdAt')
+            if host is None or host == project or isinstance(created, bool) or not isinstance(created, (int, float)):
+                return 'Старі публікації не прибрано: список публікацій має незнайому форму.'
+            items[host] = created
+        pg = data.get('pagination') if isinstance(data.get('pagination'), dict) else {}
+        nxt = pg.get('next')
+        if isinstance(nxt, bool) or not isinstance(nxt, int) or nxt <= 0:
+            break
+    old = [h for _t, h in sorted(((t, h) for h, t in items.items()), reverse=True) if h != cur]
+    doomed = old[KEEP - 1:]                                         # поточна + `KEEP - 1` найновіших решти
+    failed, timed_out = 0, False
+    for h in doomed:
+        if time.monotonic() >= deadline:
+            failed, timed_out = failed + 1, True
+            continue
+        try:
+            r = _vc(npx, ['remove', h, '--safe', '--yes', *sc], cwd, CLI_REMOVE_S)
+            failed += r.returncode != 0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            failed += 1
+    if not failed:
+        return None
+    return (f'Старі публікації прибрано не всі: не вдалося {failed} з {len(doomed)}'
+            + (' (вичерпано ліміт часу).' if timed_out else '.'))
+
+
 def _publish_cli(ctx, build_dir, task):
-    """Публікація через системний Vercel CLI; див. докстрінг модуля. Прибирання старих публікацій — окремий крок (`None`)."""
+    """Публікація через системний Vercel CLI; див. докстрінг модуля. Прибирання старих публікацій — `_cli_cleanup`."""
     if not isinstance(build_dir, str) or not os.path.isdir(build_dir):
         raise RuntimeError('Збірка превʼю не є текою')
     task = task if isinstance(task, dict) else {}
@@ -898,14 +958,19 @@ def _publish_cli(ctx, build_dir, task):
     if verify is not None:
         warnings.append(_PROTECTION_TEXT.format(project=project) if verify['reason'] == 'vercel_protection'
                         else f'Не вдалося підтвердити превʼю: {verify["reason"]}')
-    cleanup_warning = None                                          # прибирання старих публікацій — Task 3
+    try:
+        cleanup_warning = _cli_cleanup(npx, project, scope, urls[-1], build_dir)   # ПІСЛЯ перевірки
+    except Exception:  # noqa: BLE001 — прибирання НЕОБОВʼЯЗКОВЕ: публікація вже вдалась, що б не трапилось
+        cleanup_warning = 'Старі публікації не прибрано: неочікуваний збій прибирання.'
+    if cleanup_warning:
+        warnings.append(cleanup_warning)
     state = {'project': project, 'task': task_id}
     got = scope or _cli_link_scope(build_dir)
     if got:                                                         # `scope` без значення в стан не кладемо: лише рядки й числа
         state['scope'] = got
     return {'url': url, 'deploy_url': urls[-1], 'verified': verify is None, 'verify': verify,
             'warnings': [_utf8(w)[:WARN_MAX] for w in warnings[:MAX_WARNINGS]],
-            'cleanup_warning': cleanup_warning, 'state': state}
+            'cleanup_warning': _utf8(cleanup_warning)[:WARN_MAX] if cleanup_warning else None, 'state': state}
 
 
 def _check_cli(ctx):
