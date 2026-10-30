@@ -803,6 +803,7 @@ test("cleanupWarning: сторож — непорожній рядок як є (
   assert.equal(cleanupWarning({ cleanup_warning: raw }), raw, "текст сервера — як є, з префіксом");
   const long = `x: a\nb ${"я".repeat(500)}`;
   assert.equal(cleanupWarning({ cleanup_warning: long }), long, "без обрізання й заміни символів");
+  assert.equal(cleanupWarning({ cleanup_warning: "  a  " }), "  a  ", "без обрізання пробілів");
   for (const bad of [undefined, null, "", 7, {}, [], true]) assert.equal(cleanupWarning({ cleanup_warning: bad }), null, String(bad));
   assert.equal(cleanupWarning({}), null);
   assert.equal(cleanupWarning(null), null);
