@@ -518,7 +518,7 @@ class ResolveProject(InboxCase):
 class DryRun(InboxCase):
     def test_dry_run_prints_the_same_line_for_every_space_without_values(self):
         """4b-2: `--dry-run` не друкує сирий PATCH (адреса, тіло), а той самий для всіх просторів рядок
-        `[dry-run] <джерело>: resolve <канал> <id> Іт.N «причина»`; ні адреси, ні ключа в ньому нема."""
+        `[dry-run] <джерело>: resolve <канал> <id> Іт.N "причина"` (причина — через `json.dumps`); ні адреси, ні ключа в ньому нема."""
         self.net.project = [_proj('b7e1c0d2-0000', 'проєктний')]
         rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
         self.assertEqual(rc, 0, out)

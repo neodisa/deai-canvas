@@ -6,10 +6,10 @@ folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.
 stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3a (the
 Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a space's own
 modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0) and stage
-4b-1 (the in-house publishing through `vercel-publish`, 0.9.0) — see *Status* at the end.
-Next: stages 4b-2 to 4d — the rest of the in-house integrations of the legacy space (comments and constants, profiles,
-then the team dashboard, tracker statuses and notifications) as optional per-space modules, and the end of the
-`integrations` flag.
+4b-1 (the in-house publishing through `vercel-publish`, 0.9.0) and stage 4b-2 (the in-house comments through
+`supabase-comments`, 0.10.0) — see *Status* at the end.
+Next: stages 4b-3 to 4d — the rest of the in-house integrations of the legacy space (profiles, then the team dashboard,
+tracker statuses and notifications) as optional per-space modules, and the end of the `integrations` flag.
 
 ## Goal
 

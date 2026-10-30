@@ -136,6 +136,28 @@ class SupabaseConfigTest(_Env):
                 self.write({'supabase_url': url, 'supabase_key': key})
                 self.assertEqual(serve.supabase_config(), (None, None))
 
+    def test_documentation_placeholders_are_not_a_config(self):
+        # `cp tasks.example.json tasks.json`-подібна заготовка з документації: `<ref>` — не хост, `…` — не ключ
+        for url, key in (('https://<ref>.supabase.co', KEY), (URL, 'sb_publishable_…'),
+                         ('https://demo.supabase.co/path', KEY), ('https://demo.supabase.co:abc', KEY),
+                         ('https://demo supabase.co', KEY), ('https://user@demo.supabase.co', KEY)):
+            with self.subTest(url=url, key=key):
+                self.write({'supabase_url': url, 'supabase_key': key})
+                self.assertEqual(serve.supabase_config(), (None, None))
+
+    def test_key_with_a_space_is_not_a_config(self):
+        self.write({'supabase_url': URL, 'supabase_key': 'sb_publishable_ab cd'})
+        self.assertEqual(serve.supabase_config(), (None, None))
+
+    def test_port_is_allowed(self):
+        self.write({'supabase_url': 'https://demo.supabase.co:8443/', 'supabase_key': KEY})
+        self.assertEqual(serve.supabase_config(), ('https://demo.supabase.co:8443', KEY))
+
+    def test_bad_file_pair_falls_to_a_good_environment_pair(self):
+        self.write({'supabase_url': 'https://<ref>.supabase.co', 'supabase_key': KEY})
+        os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
+        self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+
     def test_http_in_file_does_not_fall_through_to_mixed_pair(self):
         # Негодна пара з файла відкидається ЦІЛКОМ; оточення береться теж лише цілим.
         self.write({'supabase_url': 'http://demo.supabase.co', 'supabase_key': KEY})

@@ -40,15 +40,18 @@ plan: `docs/superpowers/plans/2026-10-30-legacy-comments-module.md` (its «По�
   `supabase_key`; the same file that carries `gitlab_ssh_key`), or the environment variables `SUPABASE_URL` and
   `SUPABASE_KEY` as a fallback. The pair comes whole from one source, `https` only, and the key must be a public one
   (`sb_publishable_…` or an anon JWT; a secret key is refused by the rules of the module). The same pair now feeds the
-  team dashboard, the Teams silence and the dashboard push (`bin/overview_push.py`); without it they stay quiet, as with
-  `DC_NO_OVERVIEW`. Error texts never contain the key.
+  team dashboard, the Teams silence and the dashboard push (`bin/overview_push.py`); without it they report «not configured»
+  (the Teams mute answers `Supabase не налаштовано`, the team rows show that text, a standalone `overview_push.py` stops with
+  an error; the background sync after a publish stays silent). Anything that is not a plain `https://<host>[:port]` address
+  or a printable key without spaces (for example the placeholders `https://<ref>.supabase.co` and `sb_publishable_…`) counts as
+  «no config», and that source is skipped whole. Error texts never contain the key.
 - **Without the pair the comments of the legacy space are «unavailable»:** the page shows the local pins and a notice, a
   publish goes on without team comments and with `comments_unavailable`, the comment config answers `comments-unconfigured`.
 - **Small conscious differences for the legacy space** (everything else is checked against the snapshot of 0.9.0):
   - the published preview and the page `/commented` use the markup of the module and supabase-js from its own copy (no
     jsdelivr, no floating `@2`); the adapter signs in without keeping a session (the legacy space had none);
   - resolving also filters by the channel and says so when the pin is not found (0.9.0: silently zero rows); the
-    `inbox resolve --dry-run` line is now `[dry-run] Supabase: resolve <channel> <id> Іт.N «reason»`, the same for every
+    `inbox resolve --dry-run` line is now `[dry-run] Supabase: resolve <channel> <id> Іт.N "reason"` (the reason as a JSON string), the same for every
     space, instead of the raw PATCH;
   - `list` comes in the order of `id` with the ceiling of 5000, as in any space, and its rows pass the sanitizing of the
     agent's pins; the anchor of a pin for the agent (`fp`) keeps the whole `text` up to 2000 characters and the **last** 50
@@ -71,8 +74,8 @@ plan: `docs/superpowers/plans/2026-10-30-legacy-comments-module.md` (its «По�
 - The old comment snippet and its injector (`COMMENT_SNIPPET`, `inject_comment_layer`), the dead `INTERNAL_TINT` (no call
   ever passed `internal=True`), and the old adapter `app/vendor/supabase-adapter.min.js`: it moved to
   `tests/fixtures/legacy-comments/supabase-adapter.min.js` as the reference of the parity tests, and is not shipped.
-- `supabase_pins`, `patch_project_pin` (`bin/inbox.py`), `project_body`, `state._open_pins`, the `'legacy'` kind of
-  `ProjectComments`, and the value `True` of `build_preview(comments=…)`. `BUNDLES` and `BUILD_KINDS` stay: `ops/reseal_gate.py`
+- `supabase_pins`, `patch_project_pin` (`bin/inbox.py`), `project_body`, `state._open_pins`, the `legacy=` callbacks of
+  `ProjectComments.pins/resolve` (the kind `'legacy'` of `ProjectComments` itself stays: it now runs on the module), and the value `True` of `build_preview(comments=…)`. `BUNDLES` and `BUILD_KINDS` stay: `ops/reseal_gate.py`
   reads them for builds made before 0.10.0.
 
 ### Upgrading
@@ -100,6 +103,11 @@ and so do the dashboard and the Teams silence. See `tasks.example.json`.
   does not update them. They are not touched.
 - The `html2canvas` layer still loads from jsdelivr (out of this stage).
 - The key sits in `tasks.json` in plain text (it is a public key; it used to be in the code).
+- The order of the sources differs between two readers: `serve.supabase_config()` prefers `tasks.json` over the environment,
+  while `bin/overview_push.py` prefers the environment (including `SUPABASE_SERVICE_KEY`) and falls back to that config. The
+  server hands its config to the sync it starts through the environment, so there they agree; a standalone or scheduled
+  `overview_push.py sync` with a stray `SUPABASE_URL`/`SUPABASE_KEY` writes to that project. The dashboard is stage 4c, so
+  this is left as is.
 - `schema.sql` of the module is **not** to be run on the shared project of the legacy space (it rewrites the policies); the
   table there already has the same shape.
 

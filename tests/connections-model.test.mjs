@@ -36,6 +36,8 @@ test("вбудовані тексти: п'ять модулів (з git-sync, 4a
     assert.ok(b && b.name && b.desc && b.fields, id);
   }
   assert.equal(builtinText("static-publish").fields.folder, "cnFieldStaticFolder");
+  assert.deepEqual(builtinText("supabase-comments").fields,
+    { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket" });
   assert.equal(builtinText("memo-publish"), null);
   assert.equal(builtinText("__proto__"), null);
 });

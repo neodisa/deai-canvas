@@ -174,6 +174,10 @@ def row_has_pii(row):
 
 # ---------- Supabase write client (Task 2) ----------
 # Конфіг Supabase: спершу env, інакше геттер конфігу установки (`serve.supabase_config`).
+# ⚠️ Порядок джерел ПРОТИЛЕЖНИЙ `serve.supabase_config()` (там файл `tasks.json` важить більше за оточення) і тут оточення
+# знає ще й `SUPABASE_SERVICE_KEY`. Сервер передає дитині `_overview_sync` конфіг через оточення — тож там усе збігається;
+# окремий чи запланований `overview_push.py sync` із чужим `SUPABASE_URL`/`SUPABASE_KEY` в оточенні пише ТУДИ. Дашборд — етап 4c,
+# поведінку тут не змінюємо (CHANGELOG 0.10.0, «Known limits»).
 
 def _supabase():
     url = os.environ.get("SUPABASE_URL")

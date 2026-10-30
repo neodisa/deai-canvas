@@ -40,7 +40,7 @@ const BUILTIN_TEXT = {
   "vercel-publish": { name: "cnModVercelName", desc: "cnModVercelDesc",
     fields: { token: "cnFieldVercelToken", team: "cnFieldVercelTeam", password: "cnFieldPreviewPassword" } },
   "supabase-comments": { name: "cnModSupabaseName", desc: "cnModSupabaseDesc",
-    fields: { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey" } },
+    fields: { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket" } },
   "css-tokens": { name: "cnModCssName", desc: "cnModCssDesc", fields: { file: "cnFieldCssFile" } },
   /* Синхронізація з git (4a): підписи шести налаштувань маніфесту `modules/git-sync/module.json`. */
   "git-sync": { name: "cnModGitName", desc: "cnModGitDesc",
