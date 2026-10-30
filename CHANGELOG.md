@@ -47,7 +47,27 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
 - **The legacy space syncs through the same module** (an implicit provider, `'legacy'`): the old mirror folders
   (`DC_MIRRORS_DIR`, or `.mirrors` in the tool folder), the label «GitLab», the commit subject `design-canvas: sync …` and
   all the texts are as before. An explicit `git-sync` in the legacy space wins over the implicit one, like any other role.
-- A regular space: the commit subject is `deai: sync …`, the local autocommit says `автосинк (deai)`, a pulled iteration is
+- **What the legacy space can see differently in git** (the module checks and runs git more strictly than 0.7.0 did):
+  - `validate` refuses what 0.7.0 let through — an `http://` or `git://` address, a relative local path, an `ssh_key` that
+    is not an existing file, a branch that `git check-ref-format` would refuse, a path with `*`, `?`, `[` or `\` or with a
+    `.git` segment, and the other refusals listed under *Security* — as `vcs-bad-target` in status, send and pull.
+  - When a task has an `ssh_key`, and on the retry through `host_ip`, the ssh command gets `-o BatchMode=yes`: a key with a
+    passphrase that is not in `ssh-agent` ends in `vcs-auth` instead of a prompt. Without a key and without a retry the
+    ssh of the person (`core.sshCommand`, `~/.ssh/config`) is left alone.
+  - The environment of git: `GIT_ALLOW_PROTOCOL=ssh:https:file`, `GIT_TERMINAL_PROMPT=0`, `LC_ALL=C` (the errors are read
+    in English), `GIT_LITERAL_PATHSPECS=1` for paths, and the `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_DIR`… of the parent
+    process are dropped. The base of an ssh command the module builds is the `GIT_SSH_COMMAND` of the environment, else
+    `ssh`.
+  - `ssh://git@host/…` in `remote`, `web` and in the texts is now `ssh://***@host/…` (the whole userinfo is masked; the
+    scp form `git@host:path` is as it was).
+  - The folder of the mirror keeps its 0.7.0 name, but a folder whose recorded `origin` is **another repository** (another
+    path or another host, for example after a project was renamed or moved) is no longer rewritten with `set-url`: status,
+    send and pull stop with `vcs-error` («the mirror folder … holds another repository») and the folder has to be deleted
+    by hand. The same repository in another form (`file://` ↔ a path, `ssh://` ↔ `user@host:path`, a name ↔ the bypass
+    IP of 0.7.0) is still followed.
+- **The mirror folder of a regular space has a hash suffix**: `mirrors/<host>/<slug>-<8 hex of the normalized address>`.
+  The slug turns `/` and `-` into the same character, so `o/r` and `o-r` used to share one folder, and a send to the second
+  repository carried the whole history of the first one to its remote. Different repositories never share a folder now.- A regular space: the commit subject is `deai: sync …`, the local autocommit says `автосинк (deai)`, a pulled iteration is
   noted «оновлення з репозиторію» and a task started from a repository continues as «продовження макета з репозиторію»,
   the README of a multi-page push says «Deai Canvas». These are texts of data, Ukrainian whatever the UI language; the
   legacy space keeps `design-canvas: sync …`, «оновлення з GitLab», «продовження макета з GitLab» and «design-canvas».
@@ -95,7 +115,8 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
 - **An own module of 0.7.0 with `roles: ["vcs"]` and only `check` is now `bad-manifest`** (`server.py: no callable
   status()`); it passed before, because the role was only reserved.
 - The core checks the shape of a result (`status`, `push`, `pull` and `validate` a dict, `mirror_dir` a string; otherwise
-  `module-error`) and masks the credentials part of an address in every top-level string of the result of `status`,
+  `module-error`), refuses a dict that JSON cannot carry (a `set`, `bytes`: `module-error` too, instead of a dropped
+  connection) and masks the credentials part of an address in every top-level string of the result of `status`,
   `push` and `pull`.
 - `validate` is called with a short limit of the frame (5 s, then `check-timeout`).
 - `ctx["cache_dir"]` is a path, `~/.deai/cache/<space id>/<module id>`; the core does not create the folder, the module
@@ -108,7 +129,12 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
 - The address, the branch, the folder, the key and the IP are checked before any `git` runs; every path goes after `--`
   with `GIT_LITERAL_PATHSPECS=1`, `GIT_ALLOW_PROTOCOL` is `ssh:https:file` (no `ext::` or `fd::`), the host and the user of
   a `user@host:path` address are plain names, the key is quoted.
-- A password inside an `https://` address is refused: access lives in git, not in Deai.
+- A password inside an address is refused — `https://user:pass@host/…` and the scp form `user:pass@host:path` (which
+  reads as the host `user`): access lives in git, not in Deai. A `%` in the host or the user of an `ssh://` or `https://`
+  address (`host%0a`, `us%20er`) is refused as well. An IPv6 host (`https://[::1]/x`) is accepted; only `<scheme>::…`
+  (`ext::`, `fd::`) is a transport helper.
+- A repository that is not the one the mirror was cloned from is never given the mirror's history: separate folders by
+  the hash of the address, and a refusal where a folder is shared (the legacy space).
 - No force-push, `pull --ff-only` only, a colleague's iteration is never sent, and a change under `<path>` on the remote
   stops a send.
 - Symbolic links are not copied in either direction; a link on the way to `<path>` in a mirror is `vcs-error`.
@@ -144,14 +170,14 @@ transport left `app/serve.py`; the legacy space runs on the same module and look
 
 ### Tests
 
-`npm test` at 0.8.0 is green: 1890 node tests (plus `inspector-core`), 3038 Python tests in `tests/` (2 skipped), 168 in
+`npm test` at 0.8.0 is green: 1890 node tests (plus `inspector-core`), 3056 Python tests in `tests/` (2 skipped), 168 in
 `bin/`, 170 in `app/` (0.7.0: 1749, 2656 with 2 skipped, 168, 170). The three Python suites were also run on Python
-3.9.6, the oldest supported version, with the same result (3038 with 2 skipped, 168, 170); `npm test` itself uses
+3.9.6, the oldest supported version, with the same result (3056 with 2 skipped, 168, 170); `npm test` itself uses
 Python 3.13. Nothing in the tests touches the network: git runs only on local bare repositories (an absolute path or
 `file://`), and a transition over `ssh` or `https` goes through a stand-in for `subprocess.run`.
 
-New: `tests/test_git_sync_module.py` (181 tests: the module on a real git — the checks of the target, the mirror folder,
-the transport, the lock between processes, `status`, `push`, `pull`, `check`), `tests/test_vcs_core.py` (171: the core —
+New: `tests/test_git_sync_module.py` (196 tests: the module on a real git — the checks of the target, the mirror folder,
+the transport, the lock between processes, `status`, `push`, `pull`, `check`), `tests/test_vcs_core.py` (173: the core —
 the target, the provider, the legacy space, a regular space, the routes and their aliases, `task-new` with `vcs`,
 autosync) and `tests/vcs-client.test.mjs` (128: the bar, the palette, the section and the card of Connections, the field
 of «New task», the error texts, the dictionary). The transport tests of `tests/test_gitlab_sync.py` moved into the file of
