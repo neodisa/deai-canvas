@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E402
-                   vcs_task, _mask_repo, gitlab_status, supabase_pins, comment_channel,
+                   vcs_task, _mask_repo, gitlab_status,
                    machine_identity, iteration_is_mine, iteration_pages,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
                    SpaceUnavailable, ProjectComments)
@@ -285,28 +285,24 @@ def _registry_line(cfg):
     return f'Реєстр: {icon} синк {age_s}' + (f' — {st["hint"]}' if st['hint'] else '')
 
 
-def _open_pins(project):
-    try:
-        return len([p for p in supabase_pins(project) if p.get('status') != 'resolved'])
-    except Exception:  # noqa: BLE001
-        return 0
-
-
 def _team_comments(task, tid, integrations):
     """`(відкритих проєктних, хвіст рядка «Відкриті коментарі»)`.
 
     Хто веде командні коментарі, вирішує постачальник ролі `comments` ПРОСТОРУ задачі (`ProjectComments`; простір —
     явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не `integrations`: у просторі з модулем
     коментарів вони є й без інтеграцій, а ЛІГА з модулем, що не завантажився, не має права йти в спільний Supabase.
-    ЛІГА (`'legacy'`) і «нікого» — як було (`_open_pins`, `integrations`)."""
+    ЛІГА (`'legacy'`) — тим самим модулем `supabase-comments` (4b-2): Supabase, що не відповів, — «не дістати (<код>)», а не
+    тихий «0» (свідома відмінність від 0.9.0); простір без інтеграцій — «проєктних нема», без мережі."""
     try:
         pc = ProjectComments(spaces.active_space())
     except Exception as e:  # noqa: BLE001 — реєстр не прочитати: рішення «звідки» невідоме, а не «0» і не Supabase
         return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
-    if pc.kind == 'module':
+    if pc.kind in ('module', 'legacy'):
         try:
             pins = pc.pins(task, tid)
             n = len([p for p in pins if p.get('status') != 'resolved'])
+        except spaces.IntegrationsOff:      # ЛІГА без інтеграцій: командних коментарів нема, мережі не було
+            return 0, ', проєктних нема'
         except Exception as e:  # noqa: BLE001 — модуль не відповів: «0» читалось би як «тихо», а це «не дістати»
             return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
         # Те, що не ввійшло (зіпсовані елементи, понад межу), — у тому ж рядку: «N відкритих» без цього збрехало б.
@@ -314,8 +310,7 @@ def _team_comments(task, tid, integrations):
         return n, f' + {n} проєктних' + (f' (⚠ {note})' if note else '')
     if pc.kind == 'broken':
         return 0, f', проєктні: не дістати ({pc.err.code})'
-    external = _open_pins(comment_channel(task, tid)) if integrations else 0
-    return external, (f' + {external} проєктних' if integrations else ', проєктних нема')
+    return 0, ', проєктних нема'
 
 
 def _pipeline_version():

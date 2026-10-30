@@ -1604,7 +1604,7 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         self.assertEqual([p['id'] for p in pins], ['c0ffee01-aaaa', 'c0ffee02-bbbb'])
         self.assertEqual(pins[0]['text'], 'Кнопку вирівняти')
         self.assertEqual(pins[0]['meta']['seq'], 7)
-        pc.resolve({}, 'px', 'c0ffee01-aaaa', 'кнопку вирівняно', legacy=lambda: self.fail('legacy'))
+        pc.resolve({}, 'px', 'c0ffee01-aaaa', 'кнопку вирівняно')
         patch = self.api.reqs('PATCH')[-1]
         self.assertEqual(patch['raw_path'], f'{TABLE}?id=eq.c0ffee01-aaaa&project_id=eq.{q(chan)}&select=id')
         self.assertEqual(json.loads(patch['body']), {'status': 'resolved', 'resolve_reason': 'кнопку вирівняно'})
@@ -1627,7 +1627,11 @@ class EndToEndTest(SeamMixin, tca.ServerEnv):
         self.assertNotIn(KEY, out)
         rc, out, _ = self.inbox(['resolve', 'c0ffee01', '--reason', 'кнопку вирівняно'])
         self.assertEqual(rc, 0, out)
-        self.assertIn('✓ c0ffee01 закрито (проєкт): «кнопку вирівняно»', out)
+        # 4b-2 (поправка 4): вбудований `supabase-comments` отримує номер ітерації й у звичайному просторі — як у ЛІГИ
+        # (колись «(проєкт)» без номера, бо контракт ролі його не мав); власний модуль простору його й далі не отримує
+        self.assertIn('✓ c0ffee01 закрито (проєкт, Іт.1): «кнопку вирівняно»', out)
+        self.assertEqual(json.loads(self.api.reqs('PATCH')[-1]['body']),
+                         {'status': 'resolved', 'resolve_reason': 'кнопку вирівняно', 'resolved_v': 1})
         self.assertEqual(self.api.rows[0]['status'], 'resolved')
         rc, out, _ = self.inbox([])
         self.assertIn('проєкт: (+ 2 вирішених в історії)', out)

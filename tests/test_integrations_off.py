@@ -10,8 +10,9 @@ clone|ls-remote|pull`, `npx`, `vercel`, `overview_push.py`, `registry.py`), пі
 записів» нічого не доводить (розтяжка могла б бути просто зламана).
 
 Три шари:
-  * `Points`  — кожна точка виходу окремою функцією (`supabase_pins`, `teams_rpc`, `team_snapshot`,
-                `_registry_push`, `_overview_sync`, `git_autocommit`, `patch_project_pin`,
+  * `Points`  — кожна точка виходу окремою функцією (`ProjectComments.pins`/`resolve` — командні піни ЛІГИ модулем
+                `supabase-comments`, `teams_rpc`, `team_snapshot`,
+                `_registry_push`, `_overview_sync`, `git_autocommit`,
                 `task_new` із дзеркалом GitLab): `with spaces.request_space('off'|'on')`;
   * `Routes`  — сервер у процесі: маршрути простору без інтеграцій (409 `integrations-off`, чи
                 «нема GitLab», чи `team: null`), контроль — той самий маршрут із `X-Canvas-Task: a`;
@@ -518,17 +519,23 @@ class Points(unittest.TestCase):
         cm.__enter__()
         self.addCleanup(cm.__exit__, None, None, None)
 
-    def test_supabase_pins(self):
+    def project_comments(self):
+        """`ProjectComments` простору запиту — так його будують CLI й маршрут `/comments`."""
+        return serve.ProjectComments(spaces.active_space())
+
+    def test_project_pins_through_the_league_module(self):
+        """Колишній `test_supabase_pins`: з 4b-2 піни ЛІГИ читає модуль `supabase-comments` (його запит іде не крізь
+        `urlopen`, а крізь `socket.create_connection` власного opener-а — тож розтяжка бачить `socket`)."""
         with spaces.request_space('off'):
             with self.assertRaises(spaces.IntegrationsOff):
-                serve.supabase_pins('dc/x')
+                self.project_comments().pins({}, 'x')
         self.assertEqual(self.trip.hits, [])
         with spaces.request_space('on'):
-            with self.assertRaises(OSError) as cm:
-                serve.supabase_pins('dc/x')
+            with self.assertRaises(serve.deai_modules.ModuleError) as cm:        # не `IntegrationsOff` і не «пусто»
+                self.project_comments().pins({}, 'x')
         self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
-        self.assertEqual(len(self.trip.of('urlopen')), 1)
-        self.assertIn('/rest/v1/comments', self.trip.of('urlopen')[0])
+        self.assertEqual(len(self.trip.of('socket')), 1, self.trip.hits)
+        self.assertEqual(self.trip.of('urlopen'), [])
 
     def test_teams_rpc(self):
         self.enter_unisolated()
@@ -658,17 +665,19 @@ class Points(unittest.TestCase):
                 self.assertEqual([st for st, _ in stub.sent], [403], stub.sent)
         self.assertEqual(self.trip.hits, [])
 
-    def test_patch_project_pin(self):
+    def test_project_pin_resolve_through_the_league_module(self):
+        """Колишній `test_patch_project_pin`: закриття піна ЛІГИ — `resolve` модуля, і простір без інтеграцій його не
+        кличе (`spaces.require_integrations()` у `ProjectComments._module`)."""
         with spaces.request_space('off'):
             with self.assertRaises(spaces.IntegrationsOff):
-                inbox.patch_project_pin('id', 1, 'r')
+                self.project_comments().resolve({}, 'x', 'c0ffee01', 'r', iteration=1)
         self.assertEqual(self.trip.hits, [])
         with spaces.request_space('on'):
-            with self.assertRaises(OSError) as cm:
-                inbox.patch_project_pin('id', 1, 'r')
+            with self.assertRaises(serve.deai_modules.ModuleError) as cm:
+                self.project_comments().resolve({}, 'x', 'c0ffee01', 'r', iteration=1)
         self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
-        self.assertEqual(len(self.trip.of('urlopen')), 1)
-        self.assertTrue(self.trip.of('urlopen')[0].startswith('PATCH '))
+        self.assertEqual(len(self.trip.of('socket')), 1, self.trip.hits)
+        self.assertEqual(self.trip.of('urlopen'), [])
 
     def test_task_new_does_not_touch_the_gitlab_mirror(self):
         """Спека: «дзеркала в `task_new`». Маршрут `task-new` уже відхиляє `gitlab` для простору без
@@ -810,7 +819,7 @@ class Routes(World):
         st, body = self.jget('/comments?it=it1', self.A)
         self.assertEqual((st, body['comments']), (200, []))
         self.assertTrue(body['error'], 'контроль: запит мусив дійти до розтяжки')
-        self.assertIn('/rest/v1/comments', self.trip.of('urlopen')[0])
+        self.assertEqual(len(self.trip.of('socket')), 1, 'модуль ходить крізь `socket.create_connection`')
 
     def test_comment_config_project_is_refused_local_is_not(self):
         self.assert_off(*self.jget('/api/comment-config?ch=project&it=it1'))
@@ -1033,20 +1042,23 @@ class Cli(World):
         rc, out, err = _run(state.main, ['--task', 'a'])
         self.assertEqual(rc, 0, err)
         self.assertIn('Реєстр: ✅', out)
-        self.assertRegex(out, r'\+ \d+ проєктних')
+        # 4b-2: Supabase ЛІГИ, що не відповів (тут — розтяжка), — «не дістати (<код>)», а не тихий «+ 0 проєктних»
+        self.assertIn('проєктні: не дістати (module-error)', out)
         self.assertNotIn('проєктних нема', out)
         self.staleness.assert_called_once()
         self.assertNotIn('GitLab: не налаштований', out)
         self.assertTrue([c for c in self.trip.of('run') if c.startswith('git clone')],
                         'контроль: статус GitLab мусив дійти до розтяжки')
-        self.assertTrue(self.trip.of('urlopen'), 'контроль: проєктні піни мусили дійти до розтяжки')
+        self.assertTrue(self.trip.of('socket'), 'контроль: проєктні піни мусили дійти до розтяжки')
 
-    def test_state_open_pins_in_a_space_without_integrations_is_zero_without_a_request(self):
-        self.assertEqual(state._open_pins('dc/x'), 0)        # простір не зафіксовано: контроль
-        self.assertTrue(self.trip.of('urlopen'))
+    def test_state_team_comments_in_a_space_without_integrations_is_none_without_a_request(self):
+        """Колишній `_open_pins`: у просторі БЕЗ інтеграцій лічильник проєктних — «нема» і без жодного запиту."""
+        with spaces.request_space(self.legacy_id):           # контроль: простір з інтеграціями питає (і не дістає)
+            self.assertEqual(state._team_comments({}, 'a', True), (0, ', проєктні: не дістати (module-error)'))
+        self.assertTrue(self.trip.of('socket'))
         self.trip.hits.clear()
         with spaces.request_space(self.p_id):
-            self.assertEqual(state._open_pins('dc/x'), 0)
+            self.assertEqual(state._team_comments({}, 'x', False), (0, ', проєктних нема'))
             self.assertEqual(state._registry_line({'tasks': {}}), '')
         self.assertEqual(self.trip.hits, [])
         self.staleness.assert_not_called()
@@ -1062,12 +1074,12 @@ class Cli(World):
         self.assertEqual(rc, 0, err)
         self.assertNotIn('командних коментарів у цьому просторі нема', out)
         self.assertIn('не дістати', out)
-        self.assertTrue(self.trip.of('urlopen'))
+        self.assertTrue(self.trip.of('socket'))
 
     def test_inbox_resolve_searches_only_local_pins_without_integrations(self):
         """Проєктних пінів у просторі без інтеграцій нема: пошук лишається локальним, і відповідь —
         чесне «не знайдено», а не «проєкт недоступний (integrations-off)». Закрити проєктний пін
-        звідси неможливо ще й тому, що `patch_project_pin` закритий сам (див. `Points`)."""
+        звідси неможливо ще й тому, що `ProjectComments.resolve` закритий сам (див. `Points`)."""
         rc, out, err = _run(inbox.main, ['--task', 'x', 'resolve', 'abcdef12', '--reason', 'r'])
         self.assertEqual(rc, 1)
         self.assertIn('не знайдено серед пінів поточної задачі', out)
@@ -1077,7 +1089,7 @@ class Cli(World):
         rc, out, err = _run(inbox.main, ['--task', 'a', 'resolve', 'abcdef12', '--reason', 'r'])
         self.assertEqual(rc, 1)
         self.assertIn('проєкт недоступний', out)
-        self.assertTrue(self.trip.of('urlopen'))
+        self.assertTrue(self.trip.of('socket'))
 
 
 if __name__ == '__main__':

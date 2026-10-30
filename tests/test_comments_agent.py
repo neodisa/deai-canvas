@@ -6,14 +6,16 @@
 
     постачальник     читання                                 закриття
     Module           `list` модуля → форма рядків REST       `resolve` модуля
-    'legacy'         як було (зашитий Supabase ЛІГА)         як було (`PATCH`)
+    'legacy'         `list` вбудованого `supabase-comments`  `resolve` того ж модуля (з номером ітерації);
+                     з конфігом установки (4b-2)             шов мережі — `_open` модуля (`sbconf.patch_open`)
     None             «командних коментарів нема» (409)       —
     ModuleError      лише локальні піни + повідомлення       —       (НІКОЛИ не зашитий Supabase)
 
 Що доводиться:
   * `inbox` у просторі з модулем показує його піни (в тій самій формі, що з Supabase) і закриває їх через `resolve`;
   * ЛІГА без модуля, «нікого», зламаний модуль, нечитабельний `space.json` — кожен окремо, і жодного запиту до спільного
-    Supabase там, де його бути не може (розтяжка `urllib.request.urlopen` + сокетів 127.0.0.1);
+    Supabase там, де його бути не може (розтяжка: `Net` на `urllib.request.urlopen` І на шові `_open` модуля
+    `supabase-comments`, через який ходить ЛІГА, + сокетів 127.0.0.1);
   * зіпсована відповідь модуля (не список, не обʼєкти, дублікати, величезний список, керівні символи й сурогати, чужі типи
     в `fp`/`meta`) не валить `inbox` і не пише в термінал агента керівних послідовностей;
   * маршрут `/comments` — та сама матриця через справжній HTTP;
@@ -75,7 +77,7 @@ def cl(cid, text, status='open', seq=1, **kw):
 
 
 def rest(cid, text, status='open', seq=1):
-    """Той самий пін у формі рядка REST ЛІГА (`serve.supabase_pins`): snake_case."""
+    """Той самий пін у формі рядка REST ЛІГА (так його віддає Supabase): snake_case."""
     return {'id': cid, 'text': text, 'status': status, 'author': 'Олена', 'ts': '19.10.2026 10:00',
             'meta': {'version': '2/me--welcome', 'seq': seq, 'viewport': {'w': 375, 'h': 800},
                      'ctx': {'heading': 'Оплата'}},
@@ -88,7 +90,7 @@ class _Resp:
     def __init__(self, body=b'', status=200):
         self._body, self.status = body, status
 
-    def read(self):
+    def read(self, *limit):                  # модуль читає `read(limit + 1)`
         return self._body
 
     def __enter__(self):
@@ -99,17 +101,23 @@ class _Resp:
 
 
 class Net:
-    """Замість `urllib.request.urlopen` (шлях ЛІГА `supabase_pins`/`patch_project_pin`): пише кожен виклик і віддає рядки.
-    Модуль `memo-comments` ходить своїм `build_opener().open`, тож на цю підміну не потрапляє."""
+    """Замість мережі ЛІГИ: пише кожен виклик і віддає рядки. Ставиться і на `urllib.request.urlopen`, і на шов `_open`
+    вбудованого `supabase-comments` (4b-2: ЛІГА ходить ним). Модуль `memo-comments` ходить своїм `build_opener().open`, тож
+    на цю підміну не потрапляє. PATCH підтверджується списком змінених рядків (модуль просить `return=representation`)."""
 
     def __init__(self):
-        self.calls, self.rows = [], []
+        self.calls, self.rows, self.bodies, self.error = [], [], [], None
 
     def __call__(self, req, timeout=None, context=None):
         self.calls.append((req.get_method(), req.full_url))
+        if req.data:
+            self.bodies.append(json.loads(req.data.decode('utf-8')))
+        if self.error is not None:
+            raise self.error
         if req.get_method() == 'GET':
             return _Resp(json.dumps(self.rows).encode('utf-8'))
-        return _Resp(b'', 204)
+        pin_id = re.search(r'[?&]id=eq\.([^&]+)', req.full_url).group(1)
+        return _Resp(json.dumps([{'id': pin_id}]).encode('utf-8'))
 
 
 #: Модуль-фікстура, чия відповідь `list` — довільний JSON із файла `answer.json` у теці простору (а `resolve` пише в
@@ -157,6 +165,7 @@ class AgentEnv(tcr.CommentsEnv):
         patch = mock.patch('urllib.request.urlopen', self.net)
         patch.start()
         self.addCleanup(patch.stop)
+        sbconf.patch_open(self, self.net)
         self.svc = tcr.MemoService()
         self.addCleanup(self.svc.stop)
         self.use(self.plain)
@@ -438,21 +447,23 @@ class InboxModuleTest(AgentEnv):
 # ------------------------------------------------------------------------- inbox: ЛІГА, «нікого», зламане
 
 class InboxOtherProvidersTest(AgentEnv):
-    def test_the_league_path_is_unchanged_and_never_asks_a_module(self):
+    def test_the_league_path_goes_through_the_builtin_module_and_never_asks_a_memo_module(self):
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
         rc, out, _ = self.inbox([])
         self.assertEqual(rc, 0, out)
         self.assertIn('-- ПРОЄКТ (колеги + історія, Supabase) --', out)
         self.assertIn('• P#7 [2/me--welcome] Кнопку вирівняти  [c0ffee01 · Олена]', out)
-        self.assertEqual(self.net.calls, [('GET', f'{sbconf.SB_URL}/rest/v1/comments?select=id,text,status,author,'
-                                                  'ts,meta,born_v,fp,html_snapshot,resolved_v,resolve_reason'
-                                                  '&project_id=eq.dc%2Flx')])
+        # запит модуля: канал у `project_id`, `select=*` (свідома відмінність від 0.9.0: перелік колонок)
+        self.assertEqual(self.net.calls, [('GET', f'{sbconf.SB_URL}/rest/v1/comments?project_id=eq.dc%2Flx'
+                                                  '&order=id&select=*&limit=5001')])
         self.assertEqual(self.svc.log, [])
         rc, out, _ = self.inbox(['resolve', 'c0ffee01', '--reason', 'готово'])
         self.assertEqual(rc, 0, out)
         self.assertIn('✓ c0ffee01 закрито (проєкт, Іт.1): «готово»', out)
         self.assertEqual([m for m, _ in self.net.calls], ['GET', 'GET', 'PATCH'])
+        self.assertEqual(self.net.calls[-1][1], f'{sbconf.SB_URL}/rest/v1/comments?id=eq.c0ffee01-aaaa'
+                                                '&project_id=eq.dc%2Flx&select=id')
         self.assertEqual(self.svc.log, [])
 
     def test_a_space_without_a_provider_has_no_team_comments_and_asks_nobody(self):
@@ -707,9 +718,10 @@ class DecisionTest(AgentEnv):
             pc = serve.ProjectComments(sp)
             self.assertEqual((pc.kind, pc.err.code), ('broken', 'module-error'), sp['id'])
             with self.assertRaises(dm.ModuleError):
-                pc.pins({}, 'x', legacy=lambda ch: self.fail('legacy'))
+                pc.pins({}, 'x')
             with self.assertRaises(dm.ModuleError):
-                pc.resolve({}, 'x', 'abc', 'r', legacy=lambda: self.fail('legacy'))
+                pc.resolve({}, 'x', 'abc', 'r')
+            self.assert_no_legacy()
 
     def test_without_any_space_the_league_tools_keep_the_league_path(self):
         """Інструменти ЛІГА без простору взагалі (`space=None`, запит не зафіксовано) — як для сторінок: `'legacy'`."""
@@ -730,7 +742,7 @@ class DecisionTest(AgentEnv):
         self.forbid_integrations_on()
         pc = self.pc(self.plain)
         self.assertEqual([p['id'] for p in pc.pins({}, 'px')], ['c0ffee01-aaaa'])
-        pc.resolve({}, 'px', 'c0ffee01-aaaa', 'ok', legacy=lambda: self.fail('legacy'))
+        pc.resolve({}, 'px', 'c0ffee01-aaaa', 'ok')
         tcr._write(self.space_json(self.liga), '{broken')
         with self.assertRaises(dm.ModuleError):
             self.pc(self.liga).pins({}, 'lx')
@@ -739,28 +751,47 @@ class DecisionTest(AgentEnv):
                 serve.ProjectComments(None).pins({}, 'zz')
 
     def test_each_kind_takes_exactly_its_own_branch(self):
+        """Модуль простору читає й закриває СВОЇМ модулем (канал простору), ЛІГА — вбудованим `supabase-comments` (канал
+        `comment_project`); жоден не чіпає мережу іншого."""
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'x')])
-        hits = []
         pc = self.pc(self.plain)
-        self.assertEqual(len(pc.pins({}, 'px', legacy=lambda ch: hits.append(ch))), 1)
-        pc.resolve({}, 'px', 'c0ffee01-aaaa', 'r', legacy=lambda: hits.append('resolve'))
-        self.assertEqual(hits, [])
+        self.assertEqual(len(pc.pins({}, 'px')), 1)
+        pc.resolve({}, 'px', 'c0ffee01-aaaa', 'r')
+        self.assertEqual(self.net.calls, [], 'модуль простору не ходить у Supabase ЛІГИ')
+        self.assertEqual([m for m, *_ in self.svc.log], ['GET', 'POST'])
+        self.svc.log.clear()
         pc = self.pc(self.liga)
-        self.assertEqual(pc.pins({'comment_project': 'dc/custom'}, 'lx', legacy=lambda ch: [ch]), ['dc/custom'])
-        pc.resolve({}, 'lx', 'p', 'r', legacy=lambda: hits.append('resolve'))
-        self.assertEqual(hits, ['resolve'])
-        self.assertEqual(self.net.calls, [])
+        self.net.rows = [rest('c0ffee01-aaaa', 'x')]
+        self.assertEqual([p['id'] for p in pc.pins({'comment_project': 'dc/custom'}, 'lx')], ['c0ffee01-aaaa'])
+        self.assertIn('project_id=eq.dc%2Fcustom&', self.net.calls[-1][1])
+        pc.resolve({'comment_project': 'dc/custom'}, 'lx', 'c0ffee01-aaaa', 'r')
+        self.assertEqual([m for m, _ in self.net.calls], ['GET', 'PATCH'])
+        self.assertEqual(self.svc.log, [], 'ЛІГА не ходить у модуль простору')
+
+    def test_the_league_passes_the_iteration_and_a_space_module_gets_none(self):
+        """`takes_iteration`: ЛІГА — так (у PATCH іде `resolved_v`); власний модуль простору — ні (його `resolve` має 4
+        аргументи — зайвий його зламав би); вбудований `supabase-comments` у звичайному просторі — так."""
+        self.enable_memo_in(self.plain)
+        self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'x')])
+        self.assertIs(self.pc(self.plain).takes_iteration, False)
+        self.pc(self.plain).resolve({}, 'px', 'c0ffee01-aaaa', 'r', iteration=3)           # 4 аргументи: не падає
+        self.assertEqual(self.svc.log[-1][3], {'id': 'c0ffee01-aaaa', 'reason': 'r'})
+        pc = self.pc(self.liga)
+        self.assertIs(pc.takes_iteration, True)
+        pc.resolve({}, 'lx', 'c0ffee01-aaaa', 'r', iteration=3)
+        self.assertEqual(self.net.bodies[-1], {'status': 'resolved', 'resolve_reason': 'r', 'resolved_v': 3})
+        pc.resolve({}, 'lx', 'c0ffee01-aaaa', 'r')                                      # без номера — без `resolved_v`
+        self.assertEqual(self.net.bodies[-1], {'status': 'resolved', 'resolve_reason': 'r'})
 
     def test_resolve_of_a_broken_or_absent_provider_never_runs_the_league_patch(self):
-        """`resolve` має власну перевірку: зламане рішення чи «нікого» не падають на `legacy()` (PATCH у спільний Supabase)."""
-        hits = []
+        """`resolve` має власну перевірку: зламане рішення чи «нікого» не падають у PATCH спільного Supabase."""
         tcr._write(self.space_json(self.liga), '{broken')
         with self.assertRaises(dm.ModuleError):
-            self.pc(self.liga).resolve({}, 'lx', 'p', 'r', legacy=lambda: hits.append('PATCH'))
+            self.pc(self.liga).resolve({}, 'lx', 'p', 'r')
         with self.assertRaises(spaces.IntegrationsOff):
-            self.pc(self.plain).resolve({}, 'px', 'p', 'r', legacy=lambda: hits.append('PATCH'))
-        self.assertEqual(hits, [])
+            self.pc(self.plain).resolve({}, 'px', 'p', 'r')
+        self.assert_no_legacy()
 
     def test_the_internal_channel_has_its_own_module_channel(self):
         self.enable_memo_in(self.plain)
@@ -876,7 +907,7 @@ class PinIdWhitelistTest(AgentEnv):
         pc = self.pc(self.plain)
         for pid in self.BAD + [None, 5]:
             with self.subTest(bad=pid), self.assertRaises(dm.ModuleError):
-                pc.resolve({}, 'px', pid, 'r', legacy=lambda: self.fail('legacy'))
+                pc.resolve({}, 'px', pid, 'r')
         self.assertEqual(self.svc.log, [])
 
     def test_a_hostile_id_never_reaches_the_module_through_the_cli(self):
@@ -1020,7 +1051,7 @@ class ErrorTextsTest(AgentEnv):
         self.set_errors(self.DIRTY, self.DIRTY)
         pc = self.pc(self.plain)
         for call in (lambda: pc.pins({}, 'px'),
-                     lambda: pc.resolve({}, 'px', 'c0ffee01-aaaa', 'r', legacy=None)):
+                     lambda: pc.resolve({}, 'px', 'c0ffee01-aaaa', 'r')):
             with self.assertRaises(dm.ModuleError) as cm:
                 call()
             e = cm.exception
@@ -1108,7 +1139,7 @@ class CommentsRouteTest(ServerEnv):
         self.assert_no_legacy()
         self.assertNotIn(tcr.TOKEN, raw)
 
-    def test_the_league_answer_is_the_supabase_rows_untouched(self):
+    def test_the_league_answer_is_the_supabase_rows_in_the_rest_shape(self):
         self.use(self.liga)
         rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти', seq=7)]
         self.net.rows = rows
@@ -1120,10 +1151,14 @@ class CommentsRouteTest(ServerEnv):
         self.assertEqual(body['project'], 'dc/lx/internal')
 
     def test_a_league_service_that_is_down_degrades_like_before(self):
+        """Недоступний Supabase ЛІГИ — `{project, comments: [], error}`, 200, як і було; текст помилки — модуля
+        («module-error: …», без адреси й ключа), а не сирого `OSError`."""
         self.use(self.liga)
-        with mock.patch.object(serve, 'supabase_pins', side_effect=OSError('network down')):
-            st, body, _ = self.get('project')
-        self.assertEqual((st, body), (200, {'project': 'dc/lx', 'comments': [], 'error': 'network down'}))
+        self.net.error = OSError('network down')
+        st, body, raw = self.get('project')
+        self.assertEqual((st, body), (200, {'project': 'dc/lx', 'comments': [],
+                                            'error': 'module-error: Supabase недоступний (OSError)'}))
+        self.assertNotIn(sbconf.SB_KEY, raw)
 
     def test_a_space_without_a_provider_is_409_as_before(self):
         st, body, _ = self.get('project')

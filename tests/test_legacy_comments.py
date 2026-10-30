@@ -10,6 +10,7 @@ Task 3: адреса й ключ Supabase більше не зашиті в `ser
 import contextlib
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -24,7 +25,9 @@ import deai_modules  # noqa: E402
 import inbox  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
+import sbconf  # noqa: E402
 import spaces_guard  # noqa: E402
+import state  # noqa: E402
 import test_comments_role as tcr  # noqa: E402  — `PagesEnv`: справжній сервер у процесі й два простори
 
 _REAL = None
@@ -264,15 +267,6 @@ class InjectWithoutConfigTest(_Env):
         self.assertIn('<h1>Мокап</h1>', out)
 
 
-class SupabasePinsWithoutConfigTest(_Env):
-    def test_raises_oserror_without_network(self):
-        self.write({'tasks': {}})
-        with mock.patch.object(spaces, 'require_integrations', lambda *a, **k: None):
-            with self.assertRaises(OSError) as ctx:
-                serve.supabase_pins('dc/t1')
-        self.assertIn('не налаштовано', str(ctx.exception))
-
-
 class LigaRoutesWithoutConfigTest(tcr.PagesEnv):
     """Справжній сервер, простір ЛІГА (інтеграції, без модуля коментарів), конфігу Supabase НЕМА ні в файлі, ні в оточенні."""
 
@@ -330,34 +324,235 @@ class OverviewSyncTest(_Env):
         self.assertEqual((env['SUPABASE_URL'], env['SUPABASE_KEY']), (URL, KEY))
 
 
-class InboxWithoutConfigTest(_Env):
-    """`bin/inbox.py`: закриття піна старим шляхом і його dry-run без конфігу установки — чесно, без мережі й без значень."""
+# Рядки Supabase, які віддає «сервер» у тестах агента (ті самі, що записані в `before-4b2.json` на 0.9.0).
+ROWS = [
+    {'id': 'c1', 'text': 'Збільшити відступ', 'status': 'open', 'author': 'A', 'ts': '30.10.2026 10:00',
+     'meta': {'version': '1/main', 'shotUrl': 'https://demo.supabase.co/x.jpg'}, 'born_v': 1, 'fp': {'tag': 'div'},
+     'html_snapshot': {'text': 'x'}, 'resolved_v': None, 'resolve_reason': None},
+    {'id': 'c2', 'text': 'Готово', 'status': 'resolved', 'author': 'B', 'ts': '30.10.2026 11:00',
+     'meta': None, 'born_v': 1, 'fp': None, 'html_snapshot': None, 'resolved_v': 2, 'resolve_reason': 'зроблено'},
+]
+#: Поля піна, які 0.9.0 віддавав агентові (`supabase_pins`): новий шлях (модуль + `agent_pins`) мусить мати всі.
+PIN_FIELDS = ('id', 'text', 'status', 'author', 'ts', 'meta', 'born_v', 'fp', 'html_snapshot', 'resolved_v',
+              'resolve_reason')
+
+
+class LegacyAgentTest(_Env):
+    """Task 4: агент (`ProjectComments`, `inbox`, `state`) веде командні коментарі ЛІГИ вбудованим `supabase-comments`.
+
+    Конфіг — фікстура старого `tasks.json` (`supabase_url`/`supabase_key`); мережа — лише шов `_open` модуля
+    (`sbconf.patch_open`), `urlopen` — розтяжка (`_boom`). Усе порівнюється зі знімком 0.9.0 (`before-4b2.json`)."""
+
+    TASK = {'comment_project': 'proj/alpha'}
 
     def setUp(self):
         super().setUp()
-        patcher = mock.patch.object(spaces, 'require_integrations', lambda *a, **k: None)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def test_patch_project_pin_without_config_raises_without_network(self):
-        self.write({'tasks': {}})
-        with self.assertRaises(OSError) as ctx:
-            inbox.patch_project_pin('c0ffee01-aaaa', 2, 'причина')
-        self.assertIn('не налаштовано', str(ctx.exception))
-
-    def test_patch_project_pin_with_config_patches_config_url(self):
+        with open(BEFORE, encoding='utf-8') as f:
+            self.base = json.load(f)
         self.write({'supabase_url': URL, 'supabase_key': KEY})
-        seen = []
+        self.seen = []
+        self.rows = ROWS
+        sbconf.patch_open(self, self.fake_open)
+        # шар просторів тут не потрібен: перевірка інтеграцій — окремий тест (`test_integrations_gate…`)
+        gate = mock.patch.object(spaces, 'require_integrations', lambda *a, **k: None)
+        gate.start()
+        self.addCleanup(gate.stop)
 
-        def fake(req, timeout=None, context=None):
-            seen.append(req)
-            return _Resp(b'')
-        _Resp.status = 204
-        with mock.patch.object(inbox.urllib.request, 'urlopen', fake):
-            inbox.patch_project_pin('c0ffee01-aaaa', 2, 'причина')
-        self.assertEqual(seen[0].full_url, f'{URL}/rest/v1/comments?id=eq.c0ffee01-aaaa')
-        self.assertEqual(seen[0].get_method(), 'PATCH')
-        self.assertEqual(seen[0].get_header('Apikey'), KEY)
+    def fake_open(self, req, timeout=None):
+        self.seen.append({'method': req.get_method(), 'url': req.full_url, 'timeout': timeout,
+                          'body': json.loads(req.data) if req.data else None,
+                          'headers': {k.lower(): v for k, v in req.header_items()}})
+        if req.get_method() == 'GET':
+            return sbconf.Resp(json.dumps(self.rows).encode('utf-8'))
+        return sbconf.Resp(json.dumps([{'id': re.search(r'[?&]id=eq\.([^&]+)', req.full_url).group(1)}]).encode('utf-8'))
+
+    # --- ctx і маршрут ---
+    def test_ctx_comes_from_the_install_config_not_from_the_frame(self):
+        with mock.patch.object(deai_modules, 'module_ctx', side_effect=AssertionError('module_ctx у ctx ЛІГИ')):
+            ctx = serve._comments_legacy_ctx()
+        self.assertEqual(ctx['settings'], {'url': URL, 'shots_bucket': 'overview-thumbs'})
+        self.assertEqual(ctx['secrets'], {'key': KEY})
+        self.assertIs(ctx['ModuleError'], deai_modules.ModuleError)
+        self.assertEqual((serve.COMMENTS_MODULE, serve.LEGACY_SHOTS_BUCKET), ('supabase-comments', 'overview-thumbs'))
+
+    def test_ctx_without_config_is_comments_unconfigured_409(self):
+        self.write({'tasks': {}})
+        with mock.patch.object(deai_modules, 'module_ctx', side_effect=AssertionError('module_ctx у ctx ЛІГИ')):
+            with self.assertRaises(deai_modules.ModuleError) as cm:
+                serve._comments_legacy_ctx()
+        self.assertEqual((cm.exception.code, cm.exception.status), ('comments-unconfigured', 409))
+        self.assertNotIn(URL, str(cm.exception))
+
+    def test_route_for_the_league_is_the_builtin_module_with_the_league_channel(self):
+        m, ctx, channel = serve.comments_route(None, 'legacy')
+        self.assertEqual((m.id, m.status, m.origin), ('supabase-comments', 'ok', 'builtin'))
+        self.assertEqual(ctx['settings']['url'], URL)
+        ch = self.base['channels']
+        self.assertEqual(channel({'comment_project': 'proj/alpha'}, 't1'), ch['t1'])
+        self.assertEqual(channel({'comment_project': 'proj/alpha'}, 't1', internal=True), ch['t1_internal'])
+        self.assertEqual(channel({}, 't2'), ch['t2'])
+        self.assertEqual(channel({}, 't2', internal=True), ch['t2_internal'])
+
+    def test_route_refuses_without_a_loaded_builtin_module_or_a_provider(self):
+        with mock.patch.object(deai_modules, 'catalog', return_value={}):
+            with self.assertRaises(deai_modules.ModuleError) as cm:
+                serve.comments_route(None, 'legacy')
+        self.assertEqual(cm.exception.code, 'module-error')
+        with mock.patch.object(deai_modules, 'catalog', side_effect=RuntimeError(KEY)):
+            with self.assertRaises(deai_modules.ModuleError) as cm:
+                serve.comments_route(None, 'legacy')
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertNotIn(KEY, str(cm.exception))
+        for prov in (None, 'nope', 5):
+            with self.subTest(prov=prov), self.assertRaises(deai_modules.ModuleError):
+                serve.comments_route(None, prov)
+
+    def test_route_for_a_space_module_uses_the_frame_ctx_and_the_space_channel(self):
+        mod = deai_modules.catalog()['supabase-comments']
+        space = {'id': 'sp1', 'path': self.tmp.name}
+        with mock.patch.object(deai_modules, 'module_ctx', return_value={'frame': True}) as mctx:
+            m, ctx, channel = serve.comments_route(space, mod)
+        mctx.assert_called_once_with(space, mod)
+        self.assertEqual((m, ctx), (mod, {'frame': True}))
+        self.assertEqual(channel({'comment_project': 'proj/alpha'}, 't1'), 'deai/sp1/t1')     # канал простору, не ЛІГИ
+        self.assertEqual(channel({}, 't1', internal=True), 'deai/sp1/t1/internal')
+
+    # --- диференційні: 0.9.0 ↔ модуль ---
+    def test_pins_match_the_recorded_0_9_0_pins_field_by_field(self):
+        pins = serve.ProjectComments(None).pins(self.TASK, 't1')
+        self.assertEqual([p['id'] for p in pins], [p['id'] for p in self.base['pins']])
+        for got, want in zip(pins, self.base['pins']):
+            for field in PIN_FIELDS:
+                with self.subTest(pin=want['id'], field=field):
+                    if want[field] is None and field == 'meta':
+                        # Свідома відмінність «санітарна обробка»: `null` у jsonb-колонці `meta` стає `{}` (читач `inbox`
+                        # бере `meta or {}`), а в обʼєктних полях бувають ЗАЙВІ ключі (`outerHTML: ''`). Відсутнього — ні.
+                        self.assertIn(got[field], (None, {}))
+                    elif isinstance(want[field], dict):
+                        self.assertEqual({k: got[field].get(k) for k in want[field]}, want[field])
+                    else:
+                        self.assertEqual(got[field], want[field])
+        [req] = self.seen
+        self.assertEqual(req['method'], 'GET')
+        self.assertEqual(re.search(r'project_id=eq\.([^&]+)', req['url']).group(1), self.base['pins_query_channel'])
+        self.assertTrue(req['url'].startswith(URL + '/rest/v1/comments?'))
+        self.assertEqual(req['headers']['apikey'], KEY)
+        self.assertEqual(req['headers']['authorization'], 'Bearer ' + KEY)
+
+    def test_resolve_body_contains_the_recorded_0_9_0_body_and_filters_by_id_and_channel(self):
+        serve.ProjectComments(None).resolve(self.TASK, 't1', 'c1', 'виправлено', iteration=3)
+        [req] = self.seen
+        want = self.base['resolve']
+        self.assertEqual(req['method'], 'PATCH')
+        for key, value in want['body'].items():
+            with self.subTest(key=key):
+                self.assertEqual(req['body'].get(key), value)
+        self.assertEqual(re.search(r'[?&]id=eq\.([^&]+)', req['url']).group(1), want['id_filter'])
+        # свідома відмінність: пін чужого каналу не закриється
+        self.assertEqual(re.search(r'project_id=eq\.([^&]+)', req['url']).group(1), self.base['pins_query_channel'])
+        self.assertIs(type(req['body']['resolved_v']), int)
+
+    def test_the_agent_object_for_the_league(self):
+        pc = serve.ProjectComments(None)
+        self.assertEqual((pc.kind, pc.label, pc.takes_iteration), ('legacy', 'Supabase', True))
+        self.assertEqual(pc.channel(self.TASK, 't1'), 'proj/alpha')
+        self.assertEqual(pc.channel({}, 't2', internal=True), 'dc/t2/internal')
+
+    def test_a_space_module_takes_the_iteration_only_when_it_is_the_builtin_supabase_one(self):
+        builtin = deai_modules.catalog()['supabase-comments']
+        pc = serve.ProjectComments(None)
+        pc.prov = builtin
+        self.assertIs(pc.kind, 'module')
+        self.assertIs(pc.takes_iteration, True)
+        own = mock.Mock(spec=deai_modules.Module)
+        own.id, own.origin = 'supabase-comments', 'space'               # свій модуль з тим самим id — не вбудований
+        pc.prov = own
+        self.assertIs(pc.takes_iteration, False)
+        other = mock.Mock(spec=deai_modules.Module)
+        other.id, other.origin = 'memo-comments', 'builtin'
+        pc.prov = other
+        self.assertIs(pc.takes_iteration, False)
+
+    def test_a_space_module_gets_four_arguments_only(self):
+        """Власний модуль простору міг оголосити `resolve(ctx, channel, id, reason)`: номер ітерації йому не передається."""
+        got = []
+        own = mock.Mock(spec=deai_modules.Module)
+        own.id, own.origin = 'own-comments', 'space'
+        pc = serve.ProjectComments(None)
+        pc.prov = own
+        with mock.patch.object(serve, 'comments_route', return_value=(own, {}, lambda t, i, internal=False: 'ch')), \
+                mock.patch.object(deai_modules, 'call', lambda mod, fn, ctx, ch, *args, timeout=None: got.append((fn, args))):
+            pc.resolve({}, 't1', 'c1', 'готово', iteration=4)
+        self.assertEqual(got, [('resolve', ('c1', 'готово'))])
+
+    # --- відмови ---
+    def test_without_config_pins_and_resolve_are_comments_unconfigured_without_network(self):
+        self.write({'tasks': {}})
+        pc = serve.ProjectComments(None)
+        with self.assertRaises(deai_modules.ModuleError) as cm:
+            pc.pins(self.TASK, 't1')
+        self.assertEqual(cm.exception.code, 'comments-unconfigured')
+        self.assertNotIsInstance(cm.exception, OSError)
+        with self.assertRaises(deai_modules.ModuleError) as cm:
+            pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
+        self.assertEqual(cm.exception.code, 'comments-unconfigured')
+        self.assertEqual(self.seen, [])
+
+    def test_integrations_gate_comes_before_any_module_call(self):
+        """Простір ЛІГИ без інтеграцій не ходить у мережу: `spaces.require_integrations()` у `ProjectComments._module`
+        ПЕРЕД кожним викликом (модуль про простори не знає)."""
+        off = mock.patch.object(spaces, 'require_integrations', side_effect=spaces.IntegrationsOff('integrations-off'))
+        pc = serve.ProjectComments(None)
+        with off:
+            with self.assertRaises(spaces.IntegrationsOff):
+                pc.pins(self.TASK, 't1')
+            with self.assertRaises(spaces.IntegrationsOff):
+                pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
+        self.assertEqual(self.seen, [])
+        self.assertEqual(len(pc.pins(self.TASK, 't1')), 2, 'контроль: без заборони той самий виклик іде в модуль')
+
+    def test_old_league_path_is_gone(self):
+        self.assertFalse(hasattr(serve, 'supabase_pins'))
+        self.assertFalse(hasattr(inbox, 'patch_project_pin'))
+        self.assertFalse(hasattr(inbox, 'project_body'))
+        self.assertFalse(hasattr(state, '_open_pins'))
+        self.assertFalse(hasattr(inbox, 'supabase_pins'))
+        self.assertFalse(hasattr(state, 'supabase_pins'))
+
+    def test_comments_client_takes_a_ready_ctx_and_does_not_build_its_own(self):
+        """`comments_client(…, ctx=…)`: публічна конфігурація браузерного адаптера — з ГОТОВОГО `ctx` ЛІГИ (без `space.json` і
+        `secrets.json`: `_ctx` не кличеться); публічний ключ і кошик скріншотів у ній є."""
+        mod = deai_modules.catalog()['supabase-comments']
+        ctx = serve._comments_legacy_ctx()
+        with mock.patch.object(deai_modules, '_ctx', side_effect=AssertionError('_ctx при готовому ctx')):
+            cfg = deai_modules.comments_client(None, mod, ctx=ctx)
+        self.assertEqual(cfg, {'url': URL, 'key': KEY, 'shotsBucket': 'overview-thumbs'})
+
+    # --- state ---
+    def setUpState(self):
+        """`state._team_comments` будує `ProjectComments(spaces.active_space())`: простір ЛІГИ без простору запиту — це
+        `broken` (див. `ProjectComments.__init__`), тож тут активного простору нема, як у інструментів ЛІГИ без просторів."""
+        active = mock.patch.object(spaces, 'active_space', return_value=None)
+        active.start()
+        self.addCleanup(active.stop)
+
+    def test_state_counts_open_league_pins_through_the_module(self):
+        self.setUpState()
+        self.assertEqual(state._team_comments(self.TASK, 't1', True), (1, ' + 1 проєктних'))
+
+    def test_state_says_cannot_reach_instead_of_a_silent_zero(self):
+        self.setUpState()
+        self.rows = {'not': 'a list'}
+        n, tail = state._team_comments(self.TASK, 't1', True)
+        self.assertEqual((n, tail), (0, ', проєктні: не дістати (module-error)'))
+        self.write({'tasks': {}})
+        self.assertEqual(state._team_comments(self.TASK, 't1', True), (0, ', проєктні: не дістати (comments-unconfigured)'))
+
+    def test_state_without_integrations_says_none_and_asks_nobody(self):
+        self.setUpState()
+        with mock.patch.object(spaces, 'require_integrations', side_effect=spaces.IntegrationsOff('integrations-off')):
+            self.assertEqual(state._team_comments(self.TASK, 't1', False), (0, ', проєктних нема'))
+        self.assertEqual(self.seen, [])
 
 
 if __name__ == '__main__':

@@ -1964,7 +1964,7 @@ def _check_client_config_shape(cfg, guarded):
         raise ModuleError('module-error', message=CLIENT_CONFIG_LEAK)
 
 
-def comments_client(space, prov):
+def comments_client(space, prov, ctx=None):
     """Публічна конфігурація браузерного адаптера модуля `prov` (ролі `comments`) для сторінок простору `space`:
     `client_config(ctx)` модуля (тайм-аут `CHECK_TIMEOUT`), перевірена `_check_client_config` — це те, що ядро вставляє в
     сторінки як `{...конфіг, channel}`. Секрет з `"public": true` показувати можна, решта — ні (`module-error` із
@@ -1972,10 +1972,13 @@ def comments_client(space, prov):
     маніфесті. Модульний обʼєкт СПЕРШУ копіюється, перевіряється й віддається саме копія: те, що перевірено, і є тим,
     що піде в сторінки (модуль міг тримати посилання на свій словник чи підсунути підклас `dict`). Може кинути
     `bad-settings`, `space-json-unreadable`, `secrets-unreadable`, `check-timeout`, `module-error`.
+    `ctx` — необовʼязковий ГОТОВИЙ `ctx` постачальника (4b-2: простір ЛІГА будує його з конфігу установки —
+    `serve._comments_legacy_ctx`, — бо `space.json` і `secrets.json` у ньому нема); `None` — `_ctx(space, prov)`, як раніше.
+    Перевірка на витік секретів лишається тією самою: вона бере секрети з ЦЬОГО `ctx`.
     ⚠️ Виконує код модуля: НЕ кликати під `spaces.WRITE_LOCK`."""
     if not isinstance(prov, Module) or prov.status != 'ok' or 'comments' not in prov.roles:
         raise ModuleError('module-error', message='comments_client: the provider is not a loaded comments module')
-    ctx = _ctx(space, prov)
+    ctx = _ctx(space, prov) if ctx is None else ctx
     cfg = call(prov, 'client_config', ctx, timeout=CHECK_TIMEOUT)
     if isinstance(cfg, dict):
         try:

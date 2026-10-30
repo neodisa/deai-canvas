@@ -29,16 +29,15 @@ import shlex
 import subprocess
 import sys
 import time
-import urllib.request
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
-from serve import (load_tasks, supabase_pins,  # noqa: E402
+from serve import (load_tasks,  # noqa: E402
                    task_iterations, iter_num, machine_identity,
-                   iteration_is_mine, supabase_config, _ssl_context,
+                   iteration_is_mine,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
                    SpaceUnavailable, ProjectComments, ModulePins, agent_line)
 import spaces  # noqa: E402
@@ -374,7 +373,7 @@ def cmd_list(where=False, task_id=None):
     try:
         pc = project_comments()
         source = pc.label
-        proj, proj_err = pc.pins(task, tid, legacy=lambda channel: supabase_pins(channel)), None
+        proj, proj_err = pc.pins(task, tid), None
     except spaces.IntegrationsOff:
         # Простір без інтеграцій і без модуля коментарів: командних коментарів у ньому нема, а не «не дістати».
         proj, proj_err, team_off = [], None, True
@@ -539,40 +538,6 @@ def write_local_resolved(path, ids, n, reason, now_ms):
     return done, already
 
 
-def patch_project_pin(pin_id, n, reason):
-    """PATCH піна в Supabase — ті самі поля й типи, що вручну 15.09.2026.
-
-    Тут, а не в `serve.py`: сервер правлять паралельно, а закриття пінів —
-    справа CLI, не HTTP-обробника.
-
-    ⚠️ `meta.resolvedAt` сюди НЕ їде: PostgREST міняє jsonb цілком, а в `meta`
-    лежать `shot` (base64) і `shotUrl`. Переписати весь meta заради однієї мітки
-    — ризикнути затерти те, що дописав браузер. Наслідок: на вкладці «Closed»
-    comment-layer такий пін сортується як закритий без часу.
-
-    ⚠️ `Prefer: return=minimal` дає 204 і тоді, коли жоден рядок не збігся.
-    id щойно прочитано з тієї самої таблиці, а `cl_update` — `using (true)`,
-    тож тихий нуль можливий лише тоді, коли пін видалили між читанням і
-    записом. HTTP-помилка ж підіймається з `urlopen` гучно.
-    """
-    spaces.require_integrations()
-    url, key = supabase_config()
-    if url is None:
-        raise OSError('Supabase не налаштовано')
-    req = urllib.request.Request(
-        f'{url}/rest/v1/comments?id=eq.{quote(pin_id, safe="")}',
-        data=json.dumps(project_body(n, reason)).encode('utf-8'),
-        method='PATCH',
-        headers={'apikey': key, 'Authorization': f'Bearer {key}',
-                 'Content-Type': 'application/json', 'Prefer': 'return=minimal'})
-    with urllib.request.urlopen(req, timeout=10, context=_ssl_context()) as res:
-        return res.status
-
-
-def project_body(n, reason):
-    return {'status': 'resolved', 'resolved_v': n, 'resolve_reason': reason}
-
-
 def cmd_resolve(a, rp=None):
     """`resolve`: закрити пін(и) з причиною.
 
@@ -584,9 +549,9 @@ def cmd_resolve(a, rp=None):
     а не впасти на пінах, які вже в потрібному стані. Ненульовий код — рівно
     коли хоч один пін лишився відкритим: не знайдено, неоднозначно, мережа.
 
-    Номер ітерації (`--it`, типово — робоча) потрібен лише ЛІГА: локальним пінам (`resolvedV`) і проєктним у Supabase
-    (`resolved_v`). Контракт `resolve` модуля коментарів його не має, тож для пінів модуля він не потрібен і не
-    передається. Префікс коротший за `MIN_PREFIX` — лише у просторі з модулем і лише як ПОВНИЙ id.
+    Номер ітерації (`--it`, типово — робоча) потрібен локальним пінам (`resolvedV`) і проєктним пінам ЛІГИ (`resolved_v`
+    через вбудований `supabase-comments`, `ProjectComments.takes_iteration`). Власний модуль простору його не отримує
+    (контракт `resolve` ролі його не має). Префікс коротший за `MIN_PREFIX` — лише у просторі з модулем і лише як ПОВНИЙ id.
     """
     got = resolve_task(a.task)
     if got is None:
@@ -621,7 +586,7 @@ def cmd_resolve(a, rp=None):
         if 'pins' not in cache:
             try:
                 cache['pc'] = project_comments()
-                cache['pins'] = cache['pc'].pins(task, tid, legacy=lambda channel: supabase_pins(channel))
+                cache['pins'] = cache['pc'].pins(task, tid)
             except Exception as e:  # noqa: BLE001
                 cache['pins'] = e
         if isinstance(cache['pins'], Exception):
@@ -681,29 +646,19 @@ def cmd_resolve(a, rp=None):
                     print(f'✗ {p["id"][:8]}: не закрито в локальному файлі')
                     failed += 1
     pc = cache.get('pc')            # є, коли хоч один проєктний пін знайдено: його знайшов `project_loader`
-    from_module = pc is not None and pc.kind == 'module'
     for p in project_pins:
+        # Номер ітерації — лише коли його приймає модуль (`takes_iteration`: ЛІГА й вбудований `supabase-comments`):
+        # контракт `resolve` власного модуля його не має, і «Іт.N» про такий пін було б неправдою.
+        it_tag = f' Іт.{n}' if pc.takes_iteration and n is not None else ''
         if a.dry_run:
-            if from_module:
-                print(f'[dry-run] {pc.label}: resolve {pc.channel(task, tid)} {p["id"]} '
-                      f'{json.dumps(reason, ensure_ascii=False)}')
-                continue
-            url, _ = supabase_config()
-            if url is None:
-                print('[dry-run] Supabase не налаштовано')
-                continue
-            print(f'[dry-run] PATCH {url}/rest/v1/comments?id=eq.'
-                  f'{quote(p["id"], safe="")} '
-                  f'{json.dumps(project_body(n, reason), ensure_ascii=False)}')
+            print(f'[dry-run] {pc.label}: resolve {pc.channel(task, tid)} {p["id"]}{it_tag} '
+                  f'{json.dumps(reason, ensure_ascii=False)}')
             continue
         try:
-            pc.resolve(task, tid, p['id'], reason, legacy=lambda p=p: patch_project_pin(p['id'], n, reason))
-            # Номер ітерації — лише в ЛІГА: контракт `resolve` модуля його не має, і «Іт.N» про такий пін було б неправдою.
-            it_tag = '' if from_module else f', Іт.{n}'
-            print(f'✓ {p["id"][:8]} закрито (проєкт{it_tag}): «{reason}»')
+            pc.resolve(task, tid, p['id'], reason, iteration=n)
+            print(f'✓ {p["id"][:8]} закрито (проєкт{"," + it_tag if it_tag else ""}): «{reason}»')
         except Exception as e:  # noqa: BLE001 — кожен пін звітує сам за себе
-            who = pc.label if from_module else 'Supabase'
-            print(f'✗ {p["id"][:8]}: {who} не прийняв ({_say(e)})')
+            print(f'✗ {p["id"][:8]}: {pc.label} не прийняв ({_say(e)})')
             failed += 1
     if a.dry_run:
         print('[dry-run] нічого не записано')

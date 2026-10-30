@@ -2156,24 +2156,6 @@ def integrations_off_body(what):
     return {'ok': False, 'code': 'integrations-off', 'error': what}
 
 
-def supabase_pins(project):
-    """Пины comment-layer для projectId. Бросает OSError при недоступности.
-
-    Простір без інтеграцій — `spaces.IntegrationsOff` (це `OSError`: наявні `except OSError`
-    навколо цього виклику деградують чесно; маршрут, якому треба 409, ловить його раніше)."""
-    spaces.require_integrations()
-    sb_url, sb_key = supabase_config()
-    if sb_url is None:
-        raise OSError('Supabase не налаштовано')
-    url = (f'{sb_url}/rest/v1/comments'
-           f'?select=id,text,status,author,ts,meta,born_v,fp,html_snapshot,resolved_v,resolve_reason'
-           f'&project_id=eq.{quote(project, safe="")}')
-    req = urllib.request.Request(url, headers={
-        'apikey': sb_key, 'Authorization': f'Bearer {sb_key}'})
-    with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as res:
-        return json.loads(res.read().decode('utf-8'))
-
-
 def teams_rpc(name, body):
     """RPC тиші Teams (`teams_mute_state` / `teams_mute_set`, батч 1.52).
 
@@ -2711,6 +2693,48 @@ def comments_provider(space=None):
         return None, e
 
 
+#: Модуль, яким простір ЛІГА веде командні коментарі (4b-2) — той самий вбудований, що й у звичайних просторів.
+COMMENTS_MODULE = 'supabase-comments'
+#: Кошик Storage ЛІГИ для скріншотів пінів: картка Teams бере `meta.shotUrl` звідти (як старий адаптер 0.9.0).
+LEGACY_SHOTS_BUCKET = 'overview-thumbs'
+COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано (supabase_url і supabase_key у tasks.json)'
+
+
+def _comments_legacy_ctx():
+    """`ctx` неявного постачальника коментарів простору ЛІГА: `supabase-comments` з адресою й ключем конфігу установки
+    (`supabase_config`) і кошиком скріншотів ЛІГИ. Нема конфігу — `ModuleError('comments-unconfigured')`.
+
+    ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
+    справжній `~/.deai` машини (той самий урок, що `_vcs_legacy_ctx`)."""
+    url, key = supabase_config()
+    if url is None:
+        raise deai_modules.ModuleError('comments-unconfigured', message=COMMENTS_UNCONFIGURED)
+    return {'space': {'id': spaces.request_space_id() or '', 'path': ''},
+            'settings': {'url': url, 'shots_bucket': LEGACY_SHOTS_BUCKET},
+            'secrets': {'key': key}, 'ModuleError': deai_modules.ModuleError}
+
+
+def comments_route(space, prov):
+    """Як вести командні коментарі для ВЖЕ вирішеного постачальника `prov` (`Module` чи `'legacy'` з `comments_provider`):
+    `(module, ctx, channel)`, де `channel(task, tid, internal=False)` — канал задачі.
+
+    `'legacy'` (ЛІГА) — вбудований `COMMENTS_MODULE`, `_comments_legacy_ctx()` і канал `comment_channel` (`comment_project`
+    чи `dc/<задача>`: на ньому історія, тиша Teams і лічильники дашборда); модуль — `module_ctx` і `channel_for`.
+    Кидає `ModuleError` (`comments-unconfigured`, `module-error`, коди `module_ctx`). Не кличе код модуля."""
+    if prov == 'legacy':
+        try:
+            m = deai_modules.catalog().get(COMMENTS_MODULE)            # лише вбудовані: без простору
+        except Exception as e:  # noqa: BLE001 — збій каталогу = відмова модуля, не 500
+            raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
+        if m is None or m.status != 'ok':
+            raise deai_modules.ModuleError('module-error', message=f'{COMMENTS_MODULE} module is not loaded')
+        return m, _comments_legacy_ctx(), (lambda task, tid, internal=False: comment_channel(task, tid, internal=internal))
+    if not isinstance(prov, deai_modules.Module):
+        raise deai_modules.ModuleError('module-error', message='comments: no provider')
+    return (prov, deai_modules.module_ctx(space, prov),
+            lambda task, tid, internal=False: deai_modules.channel_for(space, tid, internal=internal))
+
+
 # ---------- Агент і командні коментарі (етап 2b-2, Task 4) ----------
 #
 # `bin/inbox.py`, `bin/state.py` і маршрут `/comments` читають (а `inbox` і закриває) проєктні піни. Звідки — вирішує
@@ -2718,7 +2742,9 @@ def comments_provider(space=None):
 #
 #     постачальник        читання                                   закриття
 #     Module              `list` модуля → піни у формі REST         `resolve` модуля
-#     'legacy'            як було (`supabase_pins`)                 як було (`PATCH` у Supabase ЛІГА)
+#     'legacy'            `list` модуля `supabase-comments` з       `resolve` того ж модуля (з номером
+#                         конфігом установки, канал                 ітерації), `spaces.require_integrations()`
+#                         `comment_channel` (`comments_route`)      перед кожним викликом
 #     None                `IntegrationsOff` (як у просторі без      `IntegrationsOff`
 #                         інтеграцій: командних коментарів нема)
 #     ModuleError         `ModuleError` — лише локальні піни        `ModuleError`
@@ -2944,9 +2970,8 @@ class ProjectComments:
     конструкторі, з явного `space`; решта методів лише виконують його для задачі `(task, tid)`.
 
     `kind`: `'module'` | `'legacy'` | `'off'` (нікого: простір без інтеграцій і без модуля) | `'broken'` (рішення не
-    вдалось, `err` — `ModuleError`). `legacy` у `pins`/`resolve` — те, що викликач виконує для зашитого шляху ЛІГА (в `inbox`
-    це ЙОГО `supabase_pins`/`patch_project_pin`, тож їхні підміни в тестах лишаються чинними); для `pins` типово —
-    `supabase_pins`.
+    вдалось, `err` — `ModuleError`). І `'module'`, і `'legacy'` ідуть ОДНИМ шляхом — функціями модуля (`comments_route`);
+    ЛІГА (4b-2) — вбудований `supabase-comments` з конфігом установки й каналом `comment_channel`.
 
     Простір запиту мусить бути ЗАФІКСОВАНИМ (`task_anywhere`, `_take_task`): `comments_provider` без нього ігнорує `space` і
     віддав би `'legacy'` (так працюють інструменти ЛІГА без простору). Тут це НЕ годиться: викликач передав запис простору,
@@ -2998,33 +3023,53 @@ class ProjectComments:
         if self.kind == 'off':
             raise spaces.IntegrationsOff('integrations-off')
 
+    @property
+    def takes_iteration(self):
+        """Чи передаємо номер ітерації в `resolve`: лише вбудованому `supabase-comments` (свій модуль простору міг оголосити
+        `resolve(ctx, channel, id, reason)` — зайвий аргумент його зламав би). У ЛІГИ — завжди."""
+        if self.kind == 'legacy':
+            return True
+        return (self.kind == 'module' and self.prov.id == COMMENTS_MODULE
+                and getattr(self.prov, 'origin', 'builtin') == 'builtin')
+
     def _module(self, fn, task, tid, internal, *args):
-        """Виклик функції модуля (`list`/`resolve`) для каналу задачі; будь-який `ModuleError` — з очищеним текстом."""
+        """Виклик функції модуля (`list`/`resolve`) для каналу задачі — і для модуля простору, і для ЛІГИ (`comments_route`);
+        будь-який `ModuleError` — з очищеним текстом.
+
+        ⛔ ЛІГА: `spaces.require_integrations()` ПЕРЕД кожним викликом — простір без інтеграцій не має права йти в мережу
+        (колись це робив старий шлях ЛІГА; модуль про простори не знає). `IntegrationsOff` — `OSError`, а не `ModuleError`:
+        наявні `except OSError` деградують чесно."""
+        if self.kind == 'legacy':
+            spaces.require_integrations()
         try:
-            channel = self.channel(task, tid, internal)
-            ctx = deai_modules.module_ctx(self.space, self.prov)
-            return deai_modules.call(self.prov, fn, ctx, channel, *args, timeout=deai_modules.COMMENTS_TIMEOUT)
+            mod, ctx, channel = comments_route(self.space, self.prov)
+            return deai_modules.call(mod, fn, ctx, channel(task, tid, internal), *args,
+                                     timeout=deai_modules.COMMENTS_TIMEOUT)
         except deai_modules.ModuleError as e:
             raise agent_error(e) from None
 
-    def pins(self, task, tid, internal=False, legacy=None):
-        """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`), `ModuleError` — рішення чи
-        виклик модуля не вдались (або відповідь не список), `OSError` — мережа ЛІГА."""
+    def pins(self, task, tid, internal=False):
+        """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`, чи ЛІГА без інтеграцій),
+        `ModuleError` — рішення чи виклик модуля не вдались (або відповідь не список; ЛІГА без конфігу —
+        `comments-unconfigured`)."""
         self._check()
-        if self.kind == 'module':
-            return agent_pins(self._module('list', task, tid, internal))
-        return (legacy or supabase_pins)(self.channel(task, tid, internal))
+        return agent_pins(self._module('list', task, tid, internal))
 
-    def resolve(self, task, tid, pin_id, reason, legacy, internal=False):
-        """Закрити пін: модуль — його `resolve(ctx, channel, id, reason)`; ЛІГА — `legacy()`. Номер ітерації модулю не
-        передається (контракт ролі його не має). `id` — лише за білим списком `_AGENT_ID` (як і в `list`)."""
+    def resolve(self, task, tid, pin_id, reason, iteration=None, internal=False):
+        """Закрити пін модулем (`resolve(ctx, channel, id, reason[, iteration])`); номер ітерації — лише коли
+        `takes_iteration`. `id` — лише за білим списком `_AGENT_ID` (як і в `list`).
+
+        ⚠️ `meta.resolvedAt` НЕ їде (урок `patch_project_pin`, 15.09.2026): PostgREST міняє jsonb цілком, а в `meta` лежать
+        `shot` (base64) і `shotUrl`; переписати весь `meta` заради однієї мітки — ризикнути затерти те, що дописав браузер.
+        Модуль пише лише `status`/`resolved_v`/`resolve_reason`. Наслідок: на вкладці «Closed» comment-layer такий пін
+        сортується як закритий без часу. (Тиха відсутність рядка тепер не проходить: модуль просить `return=representation`
+        і на порожню відповідь каже «коментар не знайдено».)"""
         self._check()
-        if self.kind == 'module':
-            if not isinstance(pin_id, str) or not _AGENT_ID.fullmatch(pin_id):
-                raise deai_modules.ModuleError('module-error', message='comments: the pin id is not a safe identifier')
-            self._module('resolve', task, tid, internal, pin_id, reason)
-            return None
-        return legacy()
+        if not isinstance(pin_id, str) or not _AGENT_ID.fullmatch(pin_id):
+            raise deai_modules.ModuleError('module-error', message='comments: the pin id is not a safe identifier')
+        args = (pin_id, reason, iteration) if self.takes_iteration and iteration is not None else (pin_id, reason)
+        self._module('resolve', task, tid, internal, *args)
+        return None
 
 
 def _insert_before_body(html, snippet):
@@ -6153,11 +6198,13 @@ class Handler(SimpleHTTPRequestHandler):
         (`ProjectComments`, простір — явним аргументом), а не `integrations_on()`:
 
             нікого (`None`)        409 — «командних коментарів нема», як у просторі без інтеграцій
-            ЛІГА (`'legacy'`)      як було: зашитий Supabase, відповідь `{project, comments}` побайтно та сама
+            ЛІГА (`'legacy'`)      модуль `supabase-comments` з конфігом установки (4b-2): `{project, comments}` у формі
+                                   рядків REST, але вже ОЧИЩЕНІ (`agent_pins`) — свідома відмінність від 0.9.0 (сирі рядки)
             модуль                 `{project, comments}` у тій самій формі рядків REST (+ `warning`, коли щось не ввійшло)
             рішення не вдалось     центральна відповідь модулів (`{ok: false, code, error}`, 502/409) — НІКОЛИ не
                                    зашитий Supabase і не порожній список
-            виклик модуля не вдався  `{project, comments: [], error}` — як недоступна мережа ЛІГА"""
+            виклик модуля не вдався  `{project, comments: [], error}` — як недоступна мережа колись у ЛІГИ (у ЛІГИ без конфігу
+                                   `comments-unconfigured`)"""
         space = spaces.active_space()
         pc = ProjectComments(space)
         if pc.kind == 'off':

@@ -6,8 +6,8 @@
   • fb-15092026-8221e6 — «показує не всі піни»: насправді вивід не казав,
     станом на коли він, а піни ставили наживо ПІСЛЯ запуску.
 
-⛔ Ізоляція: `DC_TASKS_FILE` — на тимчасову фікстуру, `urlopen` підмінено на
-КОЖЕН тест (справжня мережа = падіння тесту), особа машини — з оточення.
+⛔ Ізоляція: `DC_TASKS_FILE` — на тимчасову фікстуру, шов мережі модуля `supabase-comments` (`_open`; з 4b-2 проєктні піни
+ЛІГИ ходять ним) підмінено на КОЖЕН тест (справжня мережа = падіння тесту), особа машини — з оточення.
 Живий `tasks.json` і `.dc-local-comments.json` дизайнера не чіпаються.
 """
 import contextlib
@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import inbox  # noqa: E402
 import sbconf  # noqa: E402
+import serve  # noqa: E402
 
 SHOT = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ' + 'A' * 40000
 INLINE_IMG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
@@ -44,7 +45,7 @@ def _pin(pid, text, status='open', ts='20.09.2026 10:00', **kw):
 
 
 def _proj(pid, text, status='open', ts='20.09.2026 10:00', **kw):
-    """Пін у формі рядка Supabase (`supabase_pins`): snake_case."""
+    """Пін у формі рядка Supabase (REST `comments`): snake_case."""
     p = {'id': pid, 'text': text, 'status': status, 'author': 'Олег', 'ts': ts,
          'meta': {'version': '3', 'shot': SHOT}, 'born_v': 1,
          'fp': {'tag': 'button', 'text': text, 'path': ['div[1]']},
@@ -57,7 +58,7 @@ class _Resp:
     def __init__(self, body=b'', status=200):
         self._body, self.status = body, status
 
-    def read(self):
+    def read(self, *limit):                  # модуль читає `read(limit + 1)`
         return self._body
 
     def __enter__(self):
@@ -68,7 +69,8 @@ class _Resp:
 
 
 class FakeNet:
-    """Замість мережі: GET віддає фікстуру проєктних пінів, PATCH записується."""
+    """Замість мережі (шов `_open` модуля `supabase-comments`): GET віддає фікстуру проєктних пінів, PATCH записується і
+    підтверджується списком змінених рядків (модуль просить `return=representation`)."""
 
     def __init__(self, project=None, get_error=None):
         self.project = project or []
@@ -80,12 +82,13 @@ class FakeNet:
             'method': req.get_method(), 'url': req.full_url,
             'body': json.loads(req.data.decode('utf-8')) if req.data else None,
             'headers': {k.lower(): v for k, v in req.header_items()},
-            'timeout': timeout, 'context': context})
+            'timeout': timeout})
         if req.get_method() == 'GET':
             if self.get_error:
                 raise self.get_error
             return _Resp(json.dumps(self.project).encode('utf-8'))
-        return _Resp(b'', 204)
+        pin_id = re.search(r'[?&]id=eq\.([^&]+)', req.full_url).group(1)
+        return _Resp(json.dumps([{'id': pin_id}]).encode('utf-8'))
 
     def patches(self):
         return [c for c in self.calls if c['method'] == 'PATCH']
@@ -109,9 +112,7 @@ class InboxCase(unittest.TestCase):
         os.environ['DC_IDENTITY_NAME'] = 'Я'
         os.environ['DC_IDENTITY_EMAIL'] = 'me@example.test'
         self.net = FakeNet()
-        p = mock.patch('urllib.request.urlopen', self.net)
-        p.start()
-        self.addCleanup(p.stop)
+        sbconf.patch_open(self, self.net)
         self.set_iterations([{'id': 'it1'}])
 
     def tearDown(self):
@@ -478,9 +479,12 @@ class ResolveProject(InboxCase):
         rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'текст оновлено',
                                     '--it', '2'])
         self.assertEqual(rc, 0, out)
-        url, key = inbox.supabase_config()
+        url, key = serve.supabase_config()
         [call] = self.net.patches()
-        self.assertEqual(call['url'], f'{url}/rest/v1/comments?id=eq.{self.PID}')
+        # Модуль додає до фільтра `id` ще й канал (`project_id`): пін чужого каналу не закриється — свідома відмінність
+        # від PATCH 0.9.0 (`?id=eq.<id>`), див. 4b-2 поправка 8.
+        self.assertEqual(call['url'], f'{url}/rest/v1/comments?id=eq.{self.PID}'
+                                      '&project_id=eq.dc%2Ffixture-inbox-test&select=id')
         self.assertEqual(call['body'], {'status': 'resolved', 'resolved_v': 2,
                                         'resolve_reason': 'текст оновлено'})
         self.assertIs(type(call['body']['resolved_v']), int)
@@ -488,9 +492,9 @@ class ResolveProject(InboxCase):
         self.assertEqual(h['apikey'], key)
         self.assertEqual(h['authorization'], f'Bearer {key}')
         self.assertEqual(h['content-type'], 'application/json')
-        self.assertEqual(h['prefer'], 'return=minimal')
-        self.assertEqual(call['timeout'], 10)
-        self.assertIsNotNone(call['context'])
+        self.assertEqual(h['prefer'], 'return=representation')
+        self.assertEqual(call['timeout'], 8)
+        self.assertIn('✓ b7e1c0d2 закрито (проєкт, Іт.2): «текст оновлено»', out, 'рядок успіху ЛІГИ — байт у байт, як у 0.9.0')
         self.assertEqual(self.local_bytes(), raw, 'проєктний пін не мусить чіпати локальний файл')
 
     def test_ambiguous_project_prefix_refuses_without_patch(self):
@@ -505,22 +509,23 @@ class ResolveProject(InboxCase):
             if req.get_method() == 'PATCH':
                 raise OSError('503')
             return FakeNet.__call__(self.net, req, timeout, context)
-        with mock.patch('urllib.request.urlopen', boom):
-            rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'x', '--it', '2'])
+        sbconf.patch_open(self, boom)
+        rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'x', '--it', '2'])
         self.assertEqual(rc, 1)
         self.assertIn('Supabase не прийняв', out)
 
 
 class DryRun(InboxCase):
-    def test_dry_run_without_config_says_so_and_prints_no_value(self):
-        # Пін прочитано (конфіг був), але до друку `PATCH` конфіг зник: рядок чесний, без значень, без запису.
+    def test_dry_run_prints_the_same_line_for_every_space_without_values(self):
+        """4b-2: `--dry-run` не друкує сирий PATCH (адреса, тіло), а той самий для всіх просторів рядок
+        `[dry-run] <джерело>: resolve <канал> <id> Іт.N «причина»`; ні адреси, ні ключа в ньому нема."""
         self.net.project = [_proj('b7e1c0d2-0000', 'проєктний')]
-        with mock.patch.object(inbox, 'supabase_config', return_value=(None, None)):
-            rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
+        rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
         self.assertEqual(rc, 0, out)
-        self.assertIn('[dry-run] Supabase не налаштовано', out)
+        self.assertIn('[dry-run] Supabase: resolve dc/fixture-inbox-test b7e1c0d2-0000 Іт.4 "готово"', out)
         self.assertNotIn('PATCH', out)
         self.assertNotIn(sbconf.SB_URL, out)
+        self.assertNotIn(sbconf.SB_KEY, out)
         self.assertEqual(self.net.patches(), [])
 
     def test_dry_run_writes_nothing_and_says_what_it_would(self):
@@ -533,10 +538,20 @@ class DryRun(InboxCase):
         self.assertEqual(self.local_bytes(), raw)
         self.assertEqual(self.net.patches(), [])
         self.assertIn('resolvedV=4', out)
-        self.assertIn('"resolved_v": 4', out)
-        self.assertIn('PATCH', out)
-        self.assertNotIn(inbox.supabase_config()[1], out, 'ключ у вивід не друкуємо')
+        self.assertIn('[dry-run] Supabase: resolve dc/fixture-inbox-test b7e1c0d2-0000 Іт.4 "готово"', out)
+        self.assertNotIn(sbconf.SB_KEY, out, 'ключ у вивід не друкуємо')
         self.assertNotRegex(out, re.compile(r'^✓', re.M))
+
+    def test_without_config_the_project_is_unreachable_and_nothing_is_written(self):
+        """Колишній «dry-run без конфігу» (рядок «Supabase не налаштовано»): тепер конфіг потрібен уже для ЧИТАННЯ піна
+        (він іде модулем), тож без нього пін не знайдено, а рядок — «проєкт недоступний (comments-unconfigured)»;
+        значень у виводі нема, запису нема."""
+        with mock.patch.object(serve, 'supabase_config', return_value=(None, None)):
+            rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
+        self.assertEqual(rc, 1, out)
+        self.assertIn('проєкт недоступний (comments-unconfigured', out)
+        self.assertNotIn(sbconf.SB_URL, out)
+        self.assertEqual(self.net.calls, [])
 
 
 class TaskFlag(InboxCase):

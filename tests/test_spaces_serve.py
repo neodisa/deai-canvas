@@ -827,10 +827,10 @@ class Cli(Fixture):
         stack = contextlib.ExitStack()
         for name, repl in (('_registry_line',
                             lambda cfg: self.registry_cfgs.append(sorted(cfg['tasks'])) or 'Реєстр: тест'),
-                           ('supabase_pins', lambda project: []),
                            ('find_canvas_port', lambda *a, **k: 8766)):
             stack.enter_context(mock.patch.object(state, name, repl))
         self.addCleanup(stack.close)
+        sbconf.patch_open(self, sbconf.empty_open)           # командні піни ЛІГИ — модулем; мережі нема
 
     def test_state_finds_a_task_in_another_space(self):
         self.patched_state()
@@ -895,8 +895,8 @@ class Cli(Fixture):
         self.assertEqual(rc, 2)
         self.assertIn('задач немає — створи простір і задачу в канвасі', err)
         self.assertNotIn('є в інших', err)
-        with mock.patch.object(inbox, 'supabase_pins', lambda project: []):
-            rc, out, err = _run(inbox.main, [])
+        sbconf.patch_open(self, sbconf.empty_open)           # командні піни ЛІГИ — модулем; мережі нема
+        rc, out, err = _run(inbox.main, [])
         self.assertEqual(rc, 2)
         self.assertIn('задач немає — створи простір і задачу в канвасі', err)
         self.assertNotIn('є в інших', err)
@@ -935,50 +935,50 @@ class Cli(Fixture):
         self.restore_bytes(self.p_file)
         self.addCleanup(lambda: _write(self.e_file, {'design_work_root': self.e_path, 'tasks': {}}))
         self.restore_bytes(os.path.join(self.deai, 'spaces.json'))
-        with mock.patch.object(inbox, 'supabase_pins', lambda project: []):
-            # id у двох просторах
-            cfg = _read(self.p_file)
-            cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir}
-            _write(self.p_file, cfg)
-            for argv in (['--task', 'a'], ['--task', 'a', 'resolve', 'abcdef', '--reason', 'x']):
-                with self.subTest(argv=argv):
-                    rc, _, err = _run(inbox.main, argv)
-                    self.assertEqual(rc, 2)
-                    self.assertIn('кількох просторах', err)
-                    self.assertNotIn('Traceback', err)
-            # битий файл поточного простору
-            spaces.switch_space(self.e_id)
-            _write(self.e_file, '{')
-            rc, _, err = _run(inbox.main, [])
-            self.assertEqual(rc, 2)
-            self.assertIn('простір недоступний', err)
-            self.assertIn(self.e_file, err)
-            self.assertNotIn('Traceback', err)
-            # реєстр не прочитати
-            _write(os.path.join(self.deai, 'spaces.json'), '{')
-            for argv in ([], ['--task', 'x']):
-                with self.subTest(argv=argv):
-                    rc, _, err = _run(inbox.main, argv)
-                    self.assertEqual(rc, 2)
-                    self.assertIn('spaces-unreadable', err)
-                    self.assertNotIn('Traceback', err)
+        sbconf.patch_open(self, sbconf.empty_open)           # командні піни ЛІГИ — модулем; мережі нема
+        # id у двох просторах
+        cfg = _read(self.p_file)
+        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir}
+        _write(self.p_file, cfg)
+        for argv in (['--task', 'a'], ['--task', 'a', 'resolve', 'abcdef', '--reason', 'x']):
+            with self.subTest(argv=argv):
+                rc, _, err = _run(inbox.main, argv)
+                self.assertEqual(rc, 2)
+                self.assertIn('кількох просторах', err)
+                self.assertNotIn('Traceback', err)
+        # битий файл поточного простору
+        spaces.switch_space(self.e_id)
+        _write(self.e_file, '{')
+        rc, _, err = _run(inbox.main, [])
+        self.assertEqual(rc, 2)
+        self.assertIn('простір недоступний', err)
+        self.assertIn(self.e_file, err)
+        self.assertNotIn('Traceback', err)
+        # реєстр не прочитати
+        _write(os.path.join(self.deai, 'spaces.json'), '{')
+        for argv in ([], ['--task', 'x']):
+            with self.subTest(argv=argv):
+                rc, _, err = _run(inbox.main, argv)
+                self.assertEqual(rc, 2)
+                self.assertIn('spaces-unreadable', err)
+                self.assertNotIn('Traceback', err)
 
     def test_inbox_finds_a_task_in_another_space(self):
-        with mock.patch.object(inbox, 'supabase_pins', lambda project: []):
-            rc, out, err = _run(inbox.main, ['--task', 'x'])
-            self.assertEqual(rc, 0, err)
-            self.assertIn('Inbox задачи «Ікс»', out)
-            self.assertIsNone(spaces.request_space_id(), 'main() лишив простір запиту в потоці')
-            rc, out, err = _run(inbox.main, ['--task', 'nope'])
-            self.assertEqual(rc, 2)
-            self.assertIn("'nope'", err)
-            spaces.switch_space(self.e_id)
-            rc, out, err = _run(inbox.main, [])
-            self.assertEqual(rc, 2)
-            self.assertIn('у поточному просторі задач нема; є в інших', err)
-            self.assertIn('--task <id>', err)
-            self.assertNotIn('створи простір', err)
-            self.assertNotIn('Traceback', err)
+        sbconf.patch_open(self, sbconf.empty_open)           # командні піни ЛІГИ — модулем; мережі нема
+        rc, out, err = _run(inbox.main, ['--task', 'x'])
+        self.assertEqual(rc, 0, err)
+        self.assertIn('Inbox задачи «Ікс»', out)
+        self.assertIsNone(spaces.request_space_id(), 'main() лишив простір запиту в потоці')
+        rc, out, err = _run(inbox.main, ['--task', 'nope'])
+        self.assertEqual(rc, 2)
+        self.assertIn("'nope'", err)
+        spaces.switch_space(self.e_id)
+        rc, out, err = _run(inbox.main, [])
+        self.assertEqual(rc, 2)
+        self.assertIn('у поточному просторі задач нема; є в інших', err)
+        self.assertIn('--task <id>', err)
+        self.assertNotIn('створи простір', err)
+        self.assertNotIn('Traceback', err)
 
     def run_subprocess(self, script, *args, **overrides):
         e = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', **overrides}

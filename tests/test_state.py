@@ -8,7 +8,9 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sbconf  # noqa: E402
 import state  # noqa: E402
 from serve import VcsError  # noqa: E402  (`state` уже додав `app` у sys.path)
 
@@ -375,7 +377,8 @@ class TaskFlag(unittest.TestCase):
         self.gone_dir = os.path.join(self.tmp, 'gone-here')
         tasks_file = os.path.join(self.tmp, 'tasks.json')
         with open(tasks_file, 'w', encoding='utf-8') as fh:
-            json.dump({'current': 'alpha', 'tasks': {
+            # `supabase_url`/`supabase_key` — конфіг УСТАНОВКИ в корені файла (4b-2: проєктні піни ЛІГИ — модулем з цим конфігом)
+            json.dump({'supabase_url': sbconf.SB_URL, 'supabase_key': sbconf.SB_KEY, 'current': 'alpha', 'tasks': {
                 'alpha': {'title': 'Альфа', 'dir': dirs['alpha'], 'profile': 'tool'},
                 'beta': {'title': 'Бета', 'dir': dirs['beta'], 'profile': 'tool'},
                 'theirs': {'title': 'Чужа', 'dir': dirs['theirs'], 'profile': 'tool'},
@@ -401,11 +404,11 @@ class TaskFlag(unittest.TestCase):
             self.port_calls.append({'tid': tid, 'explicit': explicit})
             return 8766
         for name, repl in (('_registry_line', lambda cfg: 'Реєстр: тест'),
-                           ('supabase_pins', lambda project: []),
                            ('find_canvas_port', fake_port)):
             patcher = mock.patch.object(state, name, repl)
             patcher.start()
             self.addCleanup(patcher.stop)
+        sbconf.patch_open(self, sbconf.empty_open)           # командні піни ЛІГИ — модулем; мережі нема
 
     def run_main(self, argv):
         import contextlib
