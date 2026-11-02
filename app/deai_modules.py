@@ -2,7 +2,7 @@
 
 Модуль = тека `app/modules/<id>/` з `module.json` (маніфест) і `server.py` (функції ролей).
 Роль = інтерфейс, який кличе ядро: `publish`, `tokens`, `comments` (2b-2), `vcs` (4a: синк макетів із git);
-`tracker`, `dashboard`, `notify` — зарезервовані (ядро їх не кличе). Один постачальник на роль у просторі.
+`dashboard` (4c-1: командний дашборд — читання рядків команди й пуш карток проєктів); `tracker`, `notify` — зарезервовані (ядро їх не кличе). Один постачальник на роль у просторі.
 Роль `comments` — дві половини: браузерний адаптер сховища CommentLayer (`client` у маніфесті — файли теки
 модуля, їх роздає `GET /api/module-client/<id>/<файл>`; адаптер СВОГО модуля простору — зі знімка довіри,
 `GET /api/module-client/<простір>/<id>/<файл>`) і серверні `client_config`/`list`/`resolve`
@@ -68,7 +68,7 @@
     `capabilities()` у всіх цих випадках — `comments: None` + `error`; простір без жодного запису про коментарі — просто
     `None` без помилки.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
-    ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`, `vcs`) без модуля дають `'legacy'`.
+    ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`, `vcs`, `dashboard`) без модуля дають `'legacy'`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
     `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
     явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
@@ -99,18 +99,19 @@ from atomic_io import atomic_write_json
 APP = os.path.dirname(os.path.abspath(__file__))
 
 API_VERSION = 1
-ROLES_CALLED = ('publish', 'tokens', 'comments', 'vcs')
-ROLES_RESERVED = ('tracker', 'dashboard', 'notify')
+ROLES_CALLED = ('publish', 'tokens', 'comments', 'vcs', 'dashboard')
+ROLES_RESERVED = ('tracker', 'notify')
 #: Функції `server.py`, які мусить мати модуль ролі (понад обовʼязковий `check`).
 ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('client_config', 'list', 'resolve'),
-                  'vcs': ('status', 'push', 'pull')}
+                  'vcs': ('status', 'push', 'pull'), 'dashboard': ('rows', 'push')}
 #: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
-ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir')}
+ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',)}
 #: Ролі, що мають зашитий шлях ЛІГА: простір з `integrations` без явного модуля дає `'legacy'` (а не `None`).
-LEGACY_ROLES = ('publish', 'comments', 'vcs')
+LEGACY_ROLES = ('publish', 'comments', 'vcs', 'dashboard')
 #: Які з `LEGACY_ROLES` `capabilities()` лишає `'legacy'`, коли роль не вдалось вирішити (`ModuleError`, збій відбитків): зашитий
 #: шлях `publish` і `vcs` — локальний. Без `comments`: його зашитий шлях — СПІЛЬНИЙ Supabase ЛІГА, куди піни несуть знімки
-#: приватних макетів, тож «через помилку» на нього не переходимо (див. `_provider_for`).
+#: приватних макетів, тож «через помилку» на нього не переходимо (див. `_provider_for`). Без `dashboard` з тієї ж причини:
+#: його зашитий шлях — теж спільний Supabase ЛІГА (рядки команди й картки проєктів), не локальний.
 LEGACY_ON_ERROR_ROLES = ('publish', 'vcs')
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
@@ -157,7 +158,9 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
           # роль `vcs` (4a): мережа/DNS/тайм-аут git, відмова в доступі, погана ціль, зайняте дзеркало, решта відмов git
           'vcs-offline': 502, 'vcs-auth': 502, 'vcs-bad-target': 400, 'vcs-busy': 409, 'vcs-error': 502,
           # простір ЛІГА без адреси/ключа Supabase у конфігу установки (4b-2; `supabase_url`/`supabase_key` у tasks.json)
-          'comments-unconfigured': 409}
+          'comments-unconfigured': 409,
+          # роль `dashboard` (4c-1): простір ЛІГА без адреси/ключа Supabase; збій запиту модуля до сховища дашборда
+          'dashboard-unconfigured': 409, 'dashboard-error': 502}
 
 #: Коди ЯДРА для своїх модулів і довіри (етап 3c). Окремо від `STATUS`: `_run` пропускає як є лише коди `STATUS`, тож
 #: модуль не кине «module-untrusted» від свого імені.
@@ -1694,7 +1697,8 @@ def check(space, module_id):
 #: «загубився модуль коментарів» від «лежить застарілий запис якогось іншого модуля» потрібно (див.
 #: `_enabled_module_is_lost`). Новий вбудований модуль — у котрийсь із двох списків (інваріант у `test_comments_role.py`).
 KNOWN_COMMENTS_MODULES = frozenset({'supabase-comments'})
-KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'git-sync', 'static-publish', 'vercel-publish'})
+KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'git-sync', 'static-publish', 'vercel-publish',
+                                'supabase-dashboard'})
 
 
 def _enabled_module_is_lost(cat, explicit):
@@ -1804,11 +1808,11 @@ def _provider_for(role, space, get_cat=None):
 
 def provider(role, space=None):
     """Хто виконує роль у просторі: `Module`, `'legacy'` (зашитий шлях ЛІГА; ролі `LEGACY_ROLES` — `publish`,
-    `comments` і `vcs`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); у `comments` і `vcs` його нема.
+    `comments`, `vcs` і `dashboard`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); у `comments`, `vcs` і `dashboard` його нема.
 
     `space` — запис реєстру; не заданий → простір запиту (`spaces.active_space()`). Шар вимкнено чи
     простір запиту НЕ зафіксовано (`request_space_id() is None`: інструменти ЛІГА, воркери, тести без
-    ізоляції) → `'legacy'` для `publish`, `comments` і `vcs`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
+    ізоляції) → `'legacy'` для `publish`, `comments`, `vcs` і `dashboard`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
     каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА). Явно переданий `space` вирішується сам по собі, незалежно
     від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
     `integrations` і роль із `LEGACY_ROLES` → `'legacy'`; інакше `None`. Каталог — з СВОЇМИ модулями простору
@@ -1859,12 +1863,13 @@ def _caps_key(space):
 
 
 def capabilities(space):
-    """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None, "vcs": id | 'legacy' | None}`
+    """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None, "vcs": id | 'legacy' | None,
+    "dashboard": id | 'legacy' | None}`
     для простору `space` (запис реєстру). ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово
-    нечитабельний `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "vcs": None, "error": <код>}`:
+    нечитабельний `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "vcs": None, "dashboard": None, "error": <код>}`:
     кожна роль вирішується окремо, і та, що не вирішилась, — `None`; лише `publish` і `vcs` у просторі з інтеграціями
     лишаються `'legacy'` (зашитий шлях ЛІГА: неявного модуля в `vcs` нема, а нечитабельний `space.json` його не зачіпає). Тобто
-    `comments` ніколи не стає `'legacy'` через помилку (спільний Supabase ЛІГА — не запасний варіант, див. `_provider_for`);
+    `comments` і `dashboard` ніколи не стають `'legacy'` через помилку (спільний Supabase ЛІГА — не запасний варіант, див. `_provider_for`);
     без помилки ключа `error` нема. Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
     без ключа `error`: це стан ролі, а не простору (екран «Підключення» показує `error` як нечитабельний `space.json` і
     ховає картки — разом із «Довіритись…»). Кеш за (простір, прапорець

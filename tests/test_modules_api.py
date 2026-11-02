@@ -503,7 +503,7 @@ class Listing(World):
             'error': 'module is not installed on this machine'})
         # постачальником він не є: на каталозі це не відбилось
         st, body = self.get('/api/task')
-        self.assertEqual(body['space']['capabilities'], {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None})
+        self.assertEqual(body['space']['capabilities'], {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
 
     def test_a_module_that_did_not_load_is_error_with_its_text(self):
         self.modules(extra=('broken',))
@@ -1028,7 +1028,7 @@ class DisableAndSettings(World):
         self.assertEqual((st, body['module']['enabled'], body['module']['implicit']), (200, False, False))
         self.assertEqual(self.sj()['modules'], {'static-publish': {'enabled': False}})
         st, body = self.get('/api/task')
-        self.assertEqual(body['space']['capabilities'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None})
+        self.assertEqual(body['space']['capabilities'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
 
     def test_disable_unknown_module_is_404_and_a_disabled_one_is_still_fine(self):
         st, body = self.post('/api/module-disable', {'id': 'ghost'})
@@ -1315,8 +1315,8 @@ class LayerOff(Http, unittest.TestCase):
 
 class Capabilities(World):
 
-    LEGACY_SHAPE = {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy'}
-    NO_INTEGRATIONS = {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None}
+    LEGACY_SHAPE = {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'}
+    NO_INTEGRATIONS = {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None}
 
     def caps_everywhere(self):
         """`space.capabilities` у `/api/task|tasks|tasks-overview` (простір `off`, він поточний) і в записі `/api/spaces`."""
@@ -1355,13 +1355,13 @@ class Capabilities(World):
     def test_enabling_and_disabling_shows_up_everywhere_without_a_restart(self):
         self.enable_tokens()
         got = self.caps_everywhere()
-        want = {'publish': 'static-publish', 'tokens': 'css-tokens', 'comments': None, 'vcs': None}
+        want = {'publish': 'static-publish', 'tokens': 'css-tokens', 'comments': None, 'vcs': None, 'dashboard': None}
         self.assertEqual((got['task'], got['tasks'], got['overview'], got['spaces']['off']), (want,) * 4)
         self.post('/api/module-disable', {'id': 'css-tokens'})
         self.post('/api/module-disable', {'id': 'static-publish'})
         got = self.caps_everywhere()
-        self.assertEqual(got['spaces']['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None})
-        self.assertEqual(got['task'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None})
+        self.assertEqual(got['spaces']['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
+        self.assertEqual(got['task'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
 
     def test_describe_and_the_registry_listing_stay_as_they_were(self):
         d = spaces.describe(self.off)
@@ -1375,13 +1375,13 @@ class Capabilities(World):
         st, body = self.get('/api/spaces')
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
-        self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'error': 'space-json-unreadable'})
+        self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'space-json-unreadable'})
         self.assertEqual(caps['on'], self.LEGACY_SHAPE)             # решта просторів — як були
         self.assertEqual([s['id'] for s in body['spaces']], ['off', 'on'])
         st, body = self.get('/api/task')                            # і єдина задача теж відповідає
         self.assertEqual(st, 200, body)
         self.assertEqual(body['space']['capabilities'],
-                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'error': 'space-json-unreadable'})
+                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'space-json-unreadable'})
         st, body = self.get('/api/tasks')
         self.assertEqual(body['space']['capabilities']['error'], 'space-json-unreadable')
 
@@ -1400,7 +1400,7 @@ class Capabilities(World):
             self.assertEqual(st, 200, body)
             caps = {s['id']: s['capabilities'] for s in body['spaces']}
             st2, task = self.get('/api/task')
-        self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'error': 'module-error'})
+        self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'module-error'})
         self.assertEqual(caps['on'], self.LEGACY_SHAPE)
         self.assertEqual((st2, task['space']['capabilities']['error']), (200, 'module-error'))
 
@@ -1410,7 +1410,7 @@ class Capabilities(World):
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
         # публікація — шлях ЛІГА недоторканий; коментарі — НЕ 'legacy' (спільний Supabase не запасний варіант) + помилка
-        self.assertEqual(caps['on'], {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy',
+        self.assertEqual(caps['on'], {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
                                       'error': 'space-json-unreadable'})
 
     def test_a_broken_catalog_does_not_break_the_listing(self):
@@ -1421,11 +1421,11 @@ class Capabilities(World):
         st, body = self.get('/api/spaces')
         self.assertEqual(st, 200, body)
         self.assertEqual({s['id']: s['capabilities'] for s in body['spaces']},
-                         {'off': {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None},
-                          'on': {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy'}})
+                         {'off': {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None},
+                          'on': {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'}})
         st, body = self.get('/api/task')
         self.assertEqual((st, body['space']['capabilities']),
-                         (200, {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None}))
+                         (200, {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None}))
 
 
 # ================================================================================================== /api/ds-tokens

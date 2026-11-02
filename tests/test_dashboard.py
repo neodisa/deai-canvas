@@ -5,6 +5,7 @@ Task 1: лише знімок `tests/fixtures/dashboard/before-4c1.json` (йог
 генератор.
 """
 import contextlib
+import io
 import json
 import os
 import re
@@ -20,11 +21,26 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
+import deai_modules as dm  # noqa: E402
 import install_config  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
+import spaces_guard  # noqa: E402
 import task_state  # noqa: E402
+import test_modules as tm  # noqa: E402  (каркас `Env`: тимчасові HOME/DEAI_HOME, теку модулів-фікстур)
 BEFORE = os.path.join(_HERE, 'fixtures', 'dashboard', 'before-4c1.json')
+_REAL = None
+
+
+def setUpModule():
+    """Клас `DashboardRole` створює простори: справжній `~/.deai` стереже знімок на вході й звірка на виході
+    (інваріант `test_serve.TestsCannotWriteLiveConfig`)."""
+    global _REAL
+    _REAL = spaces_guard.snapshot()
+
+
+def tearDownModule():
+    spaces_guard.assert_untouched(_REAL)
 
 #: Поля, що змінюються між прогонами: у знімку їх не має бути ніде (ні в тілах відповідей, ні в рядках синку).
 VOLATILE = ('fetchedAt', 'rowsAt', 'changed', 'synced_at', 'updated_at', 'jira_synced_at')
@@ -311,6 +327,114 @@ class CardsParity(unittest.TestCase):
                          ('preview_source', 'preview_source'), ('comment_project_key', 'comment_project_key'),
                          ('_identity', '_identity'), ('_humanize', '_humanize'), ('_fixture_reason', '_fixture_reason')):
             self.assertIs(getattr(ov, old), getattr(dashboard, new), old)
+
+
+#: Модуль ролі `dashboard`: `check` і обовʼязкові `rows`/`push`; `open_comments` — окремо (необовʼязкова).
+DASH_FNS = ('def rows(ctx):\n    return []\n'
+            'def push(ctx, cards, mode):\n    return {"ok": len(cards), "failed": {}}\n')
+DASH_SERVER = tm.CHECK_ONLY + DASH_FNS
+DASH_OPTIONAL = 'def open_comments(ctx):\n    return {"dc/t1": 2}\n'
+
+
+class DashboardRole(tm.Env):
+    """Роль `dashboard` у каркасі модулів (4c-1, Task 3): маніфест, постачальник, `capabilities`, коди помилок."""
+
+    def setUp(self):
+        super().setUp()
+        # `Env.setUp` уже ізолює `DEAI_HOME`; присвоєння повторено тут явно, бо статичний охоронець
+        # (`test_serve.TestsCannotWriteLiveConfig`) шукає його в тексті САМОГО файла, що пише простори.
+        os.environ['DEAI_HOME'] = self.deai
+
+    def error_of(self, mid):
+        m = dm.catalog()[mid]
+        self.assertEqual((m.status, m.error_code), ('error', 'bad-manifest'), f'{mid}: {m.error!r}')
+        return m.error
+
+    def test_the_role_is_called_and_no_longer_reserved(self):
+        self.assertIn('dashboard', dm.ROLES_CALLED)
+        self.assertNotIn('dashboard', dm.ROLES_RESERVED)
+        self.assertEqual(dm.ROLE_FUNCTIONS['dashboard'], ('rows', 'push'))
+        self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS['dashboard'], ('open_comments',))
+        self.assertIn('dashboard', dm.LEGACY_ROLES)
+
+    def test_the_league_path_of_the_dashboard_is_not_a_fallback_after_an_error(self):
+        """⛔ Зашитий шлях дашборда — спільний Supabase ЛІГИ (рядки команди, картки проєктів), тож, як `comments`, «через
+        помилку» на нього не переходимо: `dashboard` НЕ в `LEGACY_ON_ERROR_ROLES`."""
+        self.assertNotIn('dashboard', dm.LEGACY_ON_ERROR_ROLES)
+
+    def test_a_dashboard_module_needs_rows_and_push(self):
+        self.mk('dash-bare', roles=('dashboard',), server=tm.CHECK_ONLY)
+        self.assertIn('rows', self.error_of('dash-bare'))
+        for gap in ('rows', 'push'):
+            self.mk(f'dash-no-{gap}', roles=('dashboard',), server=DASH_SERVER.replace(f'def {gap}(', f'def _not_{gap}('))
+            self.assertIn(gap, self.error_of(f'dash-no-{gap}'), gap)
+        self.mk('dash-ok', roles=('dashboard',), server=DASH_SERVER)
+        self.assertEqual(dm.catalog()['dash-ok'].status, 'ok')
+
+    def test_open_comments_is_optional_and_taken_when_present(self):
+        self.mk('dash-plain', roles=('dashboard',), server=DASH_SERVER)
+        self.mk('dash-full', roles=('dashboard',), server=DASH_SERVER + DASH_OPTIONAL)
+        cat = dm.catalog()
+        self.assertEqual((cat['dash-plain'].status, cat['dash-full'].status), ('ok', 'ok'))
+        self.assertIsNone(cat['dash-plain'].fn('open_comments'))
+        self.assertEqual(cat['dash-full'].fn('open_comments')({}), {'dc/t1': 2})
+
+    def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
+        ig = self.new_space('Integ', integrations=True)
+        plain = self.new_space('Plain')
+        self.assertEqual(dm.provider('dashboard', ig), 'legacy')
+        self.assertEqual(dm.capabilities(ig)['dashboard'], 'legacy')
+        self.assertIsNone(dm.provider('dashboard', plain))               # без інтеграцій і без модуля — нікого
+        self.assertIsNone(dm.capabilities(plain)['dashboard'])
+
+    def test_an_enabled_module_is_the_provider_in_both_kinds_of_space(self):
+        self.mk('dash-ok', roles=('dashboard',), server=DASH_SERVER)
+        ig = self.new_space('Integ', integrations=True)
+        plain = self.new_space('Plain')
+        for sp in (ig, plain):
+            dm.write_module_state(sp, 'dash-ok', enabled=True)
+            self.assertEqual(dm.provider('dashboard', sp).id, 'dash-ok')
+            self.assertEqual(dm.capabilities(sp)['dashboard'], 'dash-ok')
+        dm.write_module_state(ig, 'dash-ok', enabled=False)
+        self.assertEqual(dm.capabilities(ig)['dashboard'], 'legacy')     # вимкнули: ЛІГА повертається до зашитого шляху
+        dm.write_module_state(plain, 'dash-ok', enabled=False)
+        self.assertIsNone(dm.capabilities(plain)['dashboard'])
+
+    def test_a_module_error_is_none_never_legacy_and_sets_the_error(self):
+        ig = self.new_space('Integ', integrations=True)
+        with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
+            caps = dm.capabilities(ig)
+        self.assertIsNone(caps['dashboard'])
+        self.assertEqual(caps['error'], 'bad-manifest')
+        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # а локальні ролі лишились зашитими
+        dm.reset_caches()
+        with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):      # запасний словник: теж не 'legacy'
+            self.assertIsNone(dm.capabilities(ig)['dashboard'])
+
+    def test_the_error_codes_have_http_statuses(self):
+        self.assertEqual(dm.STATUS['dashboard-unconfigured'], 409)
+        self.assertEqual(dm.STATUS['dashboard-error'], 502)
+        self.assertEqual(dm.ModuleError('dashboard-unconfigured').status, 409)
+        self.assertEqual(dm.ModuleError('dashboard-error').status, 502)
+
+    def test_the_builtin_dashboard_module_is_a_known_other_module(self):
+        self.assertIn('supabase-dashboard', dm.KNOWN_OTHER_MODULES)
+        self.assertEqual(set(dm.KNOWN_COMMENTS_MODULES) & set(dm.KNOWN_OTHER_MODULES), set())
+
+
+class DropFixturesDefaultReason(unittest.TestCase):
+    """`_drop_fixtures(entries, where)` без шва `reason` бере `_fixture_reason` цього модуля (Task 2 ревʼю)."""
+
+    def test_the_default_reason_drops_a_fixture_entry_aloud(self):
+        tmpdir = os.path.join(tempfile.gettempdir(), 'dc-fixture-x')
+        entries = {'nova': {'title': 'Nova', 'gitlab': {'repo': os.path.join(tmpdir, 'nova.git')}},
+                   'real': {'title': 'Real', 'gitlab': {'repo': 'git@git.example:org/demo-design.git'}}}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kept = dashboard._drop_fixtures(entries, ' (тест)')
+        self.assertEqual(list(kept), ['real'])
+        self.assertIn('nova', buf.getvalue())
+        self.assertIn('тимчасов', buf.getvalue())                      # причина названа вголос, а не мовчки
 
 
 if __name__ == '__main__':

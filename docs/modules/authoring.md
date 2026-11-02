@@ -43,8 +43,8 @@ trust it.
 ```
 
 * `api` — `1`. `name` and `version` — strings shown to people.
-* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs` (called by the core today);
-  `tracker`, `dashboard`, `notify` are reserved names the core does not call yet. One provider per role per space.
+* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard` (called by the core today);
+  `tracker`, `notify` are reserved names the core does not call yet. One provider per role per space.
 * `publish_target` (publish only) — `folder` (default) or `url`. The canvas serves the local copy of a published preview
   (`/published/…`) only for the built-in `static-publish`.
 * `check_timeout_s` (optional) — an integer from 1 to 150: how many seconds the core waits for your `check` (default 5).
@@ -227,6 +227,39 @@ turn a timeout into `vcs-offline` (`git-sync`: 120 s for a git command, 180 s fo
 then talks to the network and runs programs with your permissions: read the code before you trust it. A module that is
 on in the space but not trusted on this computer keeps the role «on paper»: sync reports its error (for example
 `module-untrusted`) and does not fall back to the built-in `git-sync`.
+
+### The `dashboard` role
+
+`dashboard` is the team board of a space: it **stores the cards of the tasks** the core builds and **gives back the rows
+of the team** for the «Team» tab of the Tasks screen. The built-in module is `app/modules/supabase-dashboard/`.
+
+**A store, not a model of tasks.** The core (`app/dashboard.py`) decides what a card is: it collects it from the task, the
+iterations, the Jira status and the open comments, drops registry fixtures and cards with personal data, and tells when to
+send. The module only keeps what it is given and returns what it has. The same cards go to every provider of the role.
+
+**The functions.** Each takes `ctx` first and reports a failure with `ctx["ModuleError"]` (the codes are below).
+
+* `rows(ctx)` → a list of dicts, the rows of the team. The core keeps only the keys of `TEAM_KEYS`
+  (`id`, `name`, `jira`, `jira_status`, `jira_status_cat`, `open_comments`, `thumb_url`, `code_url`, `updated_at`,
+  `designer`, `iterations`, `pages`), drops a row without a string `id` and keeps at most 500 rows. Anything that is not a
+  list is a `module-error`. Answer fast: the core gives it 4 seconds.
+* `push(ctx, cards, mode)` — `cards` is a list of dicts the core built; `mode` is `"merge"` (update the row of an
+  existing card, the new fields on top) or `"insert"` (add only the cards that are not there yet, never touch an existing
+  row: the base cards of the registry). Returns `{"ok": n, "failed": {"<card id>": "<text>"}}`: how many cards were stored
+  and the reason for each that was not. Raise a `ModuleError` only when the service cannot be reached at all. The core
+  does not send `None` values, but a module should not rely on that.
+* `open_comments(ctx)` — optional. Returns `{"<comment channel>": <number of open comments>}`: the core uses the number to
+  tell the status `review` from `pub` of a card. A module without it, or one that fails, gives `{}`.
+
+**The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`.
+
+| code | HTTP | raise it when |
+|---|---|---|
+| `dashboard-unconfigured` | 409 | the service has no address or key to talk to |
+| `dashboard-error` | 502 | the service refused or did not answer; the text carries no key and no body of a request |
+
+**Your own module of this role** lives in `<space>/modules/<id>/` and runs after trust, like any other (section 4). Keep
+the key of a service that can write in a `secret` setting and do not mark it `public`.
 
 ## 4. Trust
 

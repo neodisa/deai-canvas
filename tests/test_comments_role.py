@@ -130,7 +130,7 @@ class ProviderTest(CommentsEnv):
         ig = self.new_space(integrations=True)
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
             self.assertEqual(dm.provider('comments', ig), 'legacy')
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy'})
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
         dm.write_module_state(ig, 'cm', enabled=False)               # явне «вимкнено» — теж не модуль
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
             self.assertEqual(dm.provider('comments', ig), 'legacy')
@@ -145,7 +145,7 @@ class ProviderTest(CommentsEnv):
             self.assertIsInstance(prov, dm.Module)
             self.assertEqual(prov.id, 'cm')
             self.assertEqual(dm.capabilities(sp)['comments'], 'cm')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'cm', 'vcs': 'legacy'})   # publish — як було
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'cm', 'vcs': 'legacy', 'dashboard': 'legacy'})   # publish — як було
         dm.write_module_state(ig, 'cm', enabled=False)               # вимкнули — назад до зашитого шляху
         dm.write_module_state(plain, 'cm', enabled=False)
         self.assertEqual(dm.provider('comments', ig), 'legacy')
@@ -157,7 +157,7 @@ class ProviderTest(CommentsEnv):
         plain = self.new_space()
         self.assertEqual(dm.provider('publish', plain).id, 'static-publish')
         self.assertIsNone(dm.provider('comments', plain))
-        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None})
+        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
 
     def test_a_broken_space_json_is_total_for_capabilities_and_409_for_provider(self):
         self.mkcm()
@@ -170,16 +170,16 @@ class ProviderTest(CommentsEnv):
                 dm.provider('comments', sp)
             self.assertEqual((cm.exception.code, cm.exception.status), ('space-json-unreadable', 409))
         self.assertEqual(dm.capabilities(plain),
-                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'error': 'space-json-unreadable'})
+                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'space-json-unreadable'})
         self.assertEqual(dm.provider('publish', ig), 'legacy')       # шлях ЛІГА для публікації пошкодженим файлом не ламається
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy',
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
                                                'error': 'space-json-unreadable'})
 
-    def test_capabilities_names_exactly_the_four_roles(self):
+    def test_capabilities_names_exactly_the_called_roles(self):
         sp = self.new_space()
-        self.assertEqual(set(dm.capabilities(sp)), {'publish', 'tokens', 'comments', 'vcs'})
-        self.assertEqual(set(dm.capabilities(None)), {'publish', 'tokens', 'comments', 'vcs'})
-        self.assertEqual(set(dm.capabilities({})), {'publish', 'tokens', 'comments', 'vcs'})
+        self.assertEqual(set(dm.capabilities(sp)), {'publish', 'tokens', 'comments', 'vcs', 'dashboard'})
+        self.assertEqual(set(dm.capabilities(None)), {'publish', 'tokens', 'comments', 'vcs', 'dashboard'})
+        self.assertEqual(set(dm.capabilities({})), {'publish', 'tokens', 'comments', 'vcs', 'dashboard'})
 
     def test_one_provider_per_space(self):
         self.mkcm('cm-a')
@@ -206,7 +206,7 @@ class ProviderTest(CommentsEnv):
             dm.provider('comments', plain)
         self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message),
                          ('module-error', 502, dm.COMMENTS_MODULE_BROKEN))
-        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None,
+        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None,
                                                   'error': 'module-error'})
 
     def test_a_plain_space_without_any_comments_entry_stays_none_without_an_error(self):
@@ -242,7 +242,7 @@ class ProviderTest(CommentsEnv):
                     dm.provider('comments', ig)
                 self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message),
                                  ('module-error', 502, dm.COMMENTS_MODULE_BROKEN))
-                self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy',
+                self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
                                                        'error': 'module-error'})
         self.assertEqual(dm.catalog()['cm-files'].status, 'error')
         self.assertEqual(dm.catalog()['cm-syntax'].status, 'error')
@@ -254,7 +254,7 @@ class ProviderTest(CommentsEnv):
         ig = self.new_space('Integ', integrations=True)
         self.enabled_entry(ig, 'ghost', 'memo-comments')            # обидва — відсутні в каталозі цього тесту
         self.assertEqual(dm.provider('comments', ig), 'legacy')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy'})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
 
     def test_a_broken_manifest_of_an_unknown_id_is_lost_but_of_a_known_other_builtin_is_not(self):
         """Маніфест не розібрано — ролі невідомі: невідомий id вважаємо тим, що міг вести коментарі; а вбудований модуль
@@ -323,7 +323,7 @@ class ProviderTest(CommentsEnv):
             dm.provider('comments', ig)
         _write(self.space_json(ig), json.dumps({'modules': {'cm-files': {'enabled': False}}}))     # вимкнув
         self.assertEqual(dm.provider('comments', ig), 'legacy')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy'})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
         self.enabled_entry(ig, 'cm-files')
         _write(self.space_json(ig), json.dumps({'name': 'x'}))                                     # прибрав запис
         self.assertEqual(dm.provider('comments', ig), 'legacy')
@@ -354,10 +354,10 @@ class ProviderTest(CommentsEnv):
         self.enabled_entry(ig, 'cm')
         self.assertEqual(dm.capabilities(ig)['comments'], 'cm')
         os.remove(os.path.join(d, 'adapter.js'))                     # модуль зламався → не 'legacy', а помилка
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy',
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
                                                'error': 'module-error'})
         _write(os.path.join(d, 'adapter.js'), tm.CLIENT_JS)
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'cm', 'vcs': 'legacy'})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'cm', 'vcs': 'legacy', 'dashboard': 'legacy'})
 
     def test_the_capabilities_cache_follows_enabling_and_the_adapter_files(self):
         d = self.mkcm()
@@ -891,7 +891,10 @@ class ExtraModulesTest(CommentsEnv):
         cat = self.real_catalog(extra=None)
         comments = {k for k, m in cat.items() if 'comments' in m.roles}
         self.assertEqual(comments, set(dm.KNOWN_COMMENTS_MODULES))
-        self.assertEqual(set(cat) - comments, set(dm.KNOWN_OTHER_MODULES))
+        # 4c-1 Task 3: `supabase-dashboard` уже в списку, а теки модуля ще нема (Task 4) — Task 4 прибирає `PENDING`
+        PENDING = {'supabase-dashboard'}
+        self.assertEqual(set(cat) - comments, set(dm.KNOWN_OTHER_MODULES) - PENDING)
+        self.assertTrue(PENDING <= set(dm.KNOWN_OTHER_MODULES))
         self.assertTrue(comments)
         self.assertEqual(set(dm.KNOWN_COMMENTS_MODULES) & set(dm.KNOWN_OTHER_MODULES), set())
 
@@ -1489,7 +1492,7 @@ class LeaguePrivacyTest(PagesEnv):
         st, raw = self.fetch('/api/task')
         self.assertEqual(st, 200, raw)
         self.assertEqual(json.loads(raw)['space']['capabilities'],
-                         {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'error': 'space-json-unreadable'})
+                         {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy', 'error': 'space-json-unreadable'})
 
     def test_the_local_page_of_that_space_has_no_shared_snippet_either(self):
         self.break_module()
@@ -1540,7 +1543,7 @@ class PlainSpaceLostModuleTest(PagesEnv):
     def test_the_task_endpoint_carries_the_error(self):
         self.break_module(self.plain)
         self.assertEqual(self.capabilities(),
-                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'error': 'module-error'})
+                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'module-error'})
 
     def test_the_local_page_has_no_notice_and_the_local_comments_work(self):
         self.break_module(self.plain)
