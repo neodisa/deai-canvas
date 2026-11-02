@@ -238,7 +238,7 @@ test("мітки ЛІГИ з профілю (без tags): чипи United/LIGA3
   assert.ok(chips.some((c) => c.startsWith("United")) && chips.some((c) => c.startsWith("LIGA360")), `чипи: ${JSON.stringify(chips)}`);
   await page.click('#tasks-home [data-th="tag"][data-v="united"]');
   const only = await cardIds(page);
-  assert.ok(only.length >= 1 && only.every((id) => /^t[13579]$/.test(id)), `фільтр United пропустив чуже: ${only}`);
+  assert.deepEqual([...only].sort(), ["t1", "t3", "t5", "t7", "t9"], `фільтр United видав не рівно United-задачі: ${only}`);
   await page.keyboard.press("/");
   await page.keyboard.type("Задача");
   await page.click('#bar [data-act="back"]');
@@ -429,6 +429,20 @@ test("збережений фільтр, якого вже нема в дани�
   assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui"))).tags, [], "зниклий фільтр лишився в сховищі");
 });
 
+test("старий стан із зниклим `profiles: ['gone']`: мігрує, а потім чиститься — жодного чипа вибраного, у сховищі tags без «gone»", async (t) => {
+  const { page } = await boot(t, PORT_BASE + 2300);
+  await page.evaluate(() => localStorage.setItem("dc-tasks-ui", JSON.stringify({ tab: "mine", status: "all", sort: "recent", profiles: ["gone"], designers: [] })));
+  await page.reload();
+  await page.waitForSelector('#bar [data-act="home"]');
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][aria-pressed="true"]').count(), 0, "мігрований зниклий фільтр лишився вибраним");
+  assert.ok((await cardIds(page)).length > 1, "мігрований невидимий фільтр сховав картки");
+  const saved = JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui")));
+  assert.deepEqual(saved.tags, [], "у сховищі лишилась «gone» під tags");
+  assert.equal("profiles" in saved, false, "старий ключ profiles пережив запис");
+});
+
 /* ═══════════════════════ мітки задач (4b-3, Task 5) ═══════════════════════ */
 
 const readTasks = (file) => JSON.parse(readFileSync(file, "utf8")).tasks;
@@ -442,7 +456,7 @@ test("мітки 2: старий стан 0.10.0 (`profiles: ['united']`) міг
   await page.waitForSelector("#tasks-home .th-card");
   assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="united"]').getAttribute("aria-pressed"), "true", "старий вибір не мігрував");
   assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="liga360"]').getAttribute("aria-pressed"), "false");
-  assert.ok((await cardIds(page)).every((id) => /^t[13579]$/.test(id)), "міграція не відфільтрувала картки");
+  assert.deepEqual([...(await cardIds(page))].sort(), ["t1", "t3", "t5", "t7", "t9"], "міграція не відфільтрувала картки до рівно United-задач");
   // будь-яка зміна стану пише вже новий ключ
   await page.click('#tasks-home [data-th="tag"][data-v="liga360"]');
   const saved = JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui")));
