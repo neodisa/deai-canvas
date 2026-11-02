@@ -1645,21 +1645,35 @@ def normalize_tags(raw):
     return out
 
 
+def _read_tag(raw):
+    """Одна мітка з файла чи профілю для ЧИТАННЯ: очищена або `None` (не рядок, порожня, задовга, з комою чи керівним знаком —
+    ті самі правила, що в `normalize_tags`, але без винятків: читання не кидає)."""
+    if not isinstance(raw, str) or _TAG_BAD.search(raw.strip()):
+        return None
+    tag = _clean_tag(raw)
+    return tag if tag and len(tag) <= TAG_MAX_LEN else None
+
+
 def task_tags(task):
     """Мітки задачі для екрана й API. Є ключ `tags` — лише вони (навіть `[]`: людина свідомо прибрала всі); зіпсовані елементи
-    (руками вписаний файл) тихо відкидаються — читання не кидає. Ключа нема — похідна мітка ЛІГИ з профілю
-    (`_LEGACY_PROFILE_TAGS`, невідомий профіль — як є) або `[]`."""
+    (руками вписаний файл) тихо відкидаються — читання не кидає, і на `TAGS_MAX` скан зупиняється. Ключа нема — похідна мітка
+    ЛІГИ з профілю (`_LEGACY_PROFILE_TAGS`, невідомий профіль — як є) або `[]`. ⛔ Похідна проходить ТІ САМІ правила, що збережені
+    мітки (`_read_tag`): діалог правки заповнюється поточними мітками, і профіль із комою чи на 300 знаків після збереження
+    розпався б або не пройшов `bad-tags`; такий профіль — без похідної мітки."""
     if isinstance(task, dict) and 'tags' in task:
         raw = task['tags']
         out, seen = [], set()
         for x in raw if isinstance(raw, list) else []:
-            tag = _clean_tag(x) if isinstance(x, str) and not _TAG_BAD.search(x.strip()) else ''
-            if tag and len(tag) <= TAG_MAX_LEN and tag.casefold() not in seen:
+            tag = _read_tag(x)
+            if tag and tag.casefold() not in seen:
                 seen.add(tag.casefold())
                 out.append(tag)
-        return out[:TAGS_MAX]
+                if len(out) >= TAGS_MAX:
+                    break
+        return out
     p = task.get('profile') if isinstance(task, dict) else None
-    return [_LEGACY_PROFILE_TAGS.get(p, p)] if isinstance(p, str) and p.strip() else []
+    tag = _read_tag(_LEGACY_PROFILE_TAGS.get(p, p) if isinstance(p, str) else None)
+    return [tag] if tag else []
 
 
 def _task_rows(cfg):
@@ -7100,6 +7114,12 @@ class Handler(SimpleHTTPRequestHandler):
 
         Порядок: СПЕРШУ перевірка міток, ПОТІМ простір і читання — відмова не торкається диска. Після запису — синхронізація
         реєстру тим самим кроком, що й після публікації (`_registry_push`, best-effort: без VPN правку не валимо)."""
+        # Мітки — ПЕРШИМИ (дешево, без диска): погані мітки невідомої задачі — 400 `bad-tags`, як і в наявної.
+        try:
+            tags = normalize_tags(payload.get('tags'))
+        except TagsError as e:
+            self._space_error(400, 'bad-tags', str(e))
+            return
         tid = payload.get('id', '')
         sp = spaces.find_task(tid)
         if sp is None:
@@ -7110,11 +7130,6 @@ class Handler(SimpleHTTPRequestHandler):
             if broken:
                 raise SpaceUnavailable(broken[0])
             self._space_error(404, 'unknown-task', 'task not found')
-            return
-        try:
-            tags = normalize_tags(payload.get('tags'))
-        except TagsError as e:
-            self._space_error(400, 'bad-tags', str(e))
             return
         spaces.set_request_space(sp['id'])
         cfg = load_tasks()

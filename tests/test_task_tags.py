@@ -87,6 +87,19 @@ class TaskTags(unittest.TestCase):
             with self.subTest(profile=profile):
                 self.assertEqual(serve.task_tags({'profile': profile}), [tag])
 
+    def test_the_derived_tag_obeys_the_stored_tag_rules(self):
+        """Діалог правки заповнюється поточними мітками: похідна, що після збереження розпалась би (кома) чи не пройшла б
+        (довга, керівний знак), — не показується; пробіли обрізаються й стискаються."""
+        for profile in ('a,b', 'x' * 33, 'a\nb', 'a\x00b', '\x85'):
+            with self.subTest(profile=profile):
+                self.assertEqual(serve.task_tags({'profile': profile}), [])
+        self.assertEqual(serve.task_tags({'profile': '  my   tool '}), ['my tool'])
+        self.assertEqual(serve.task_tags({'profile': 'x' * 32}), ['x' * 32])
+        # і те, що показано, проходить `normalize_tags` без змін (замкнений цикл «показали → зберегли»)
+        for profile in ('united', 'tool', '  my   tool '):
+            tags = serve.task_tags({'profile': profile})
+            self.assertEqual(serve.normalize_tags(tags), tags)
+
     def test_no_profile_means_no_tags(self):
         for task in ({'profile': None}, {'profile': ''}, {'profile': '  '}, {}, {'profile': 5}):
             with self.subTest(task=task):
@@ -98,6 +111,13 @@ class TaskTags(unittest.TestCase):
 
     def test_reading_never_raises_and_drops_bad_items(self):
         self.assertEqual(serve.task_tags({'tags': ['ok', 5, 'a,b', 'OK', '  ', 'x' * 33]}), ['ok'])
+
+    def test_reading_stops_scanning_at_the_limit(self):
+        """Після `TAGS_MAX` мітки не розбираються далі (файл руками набитий тисячами): лічильник викликів `_read_tag`."""
+        with mock.patch.object(serve, '_read_tag', wraps=serve._read_tag) as rt:
+            out = serve.task_tags({'tags': [f't{i}' for i in range(500)]})
+        self.assertEqual(len(out), serve.TAGS_MAX)
+        self.assertEqual(rt.call_count, serve.TAGS_MAX)
 
     def test_reading_caps_at_the_limit(self):
         self.assertEqual(len(serve.task_tags({'tags': [f't{i}' for i in range(15)]})), serve.TAGS_MAX)
@@ -236,6 +256,14 @@ class TagsApi(Fixture):
                     self.assertEqual((st, body['code'], body['ok']), (404, 'unknown-task', False))
             push.assert_not_called()
         self.assertEqual((_md5(self.p_file), _md5(self.legacy_file), _md5(self.reg_path)), before)
+
+    def test_task_tags_bad_tags_of_an_unknown_task_are_400_before_any_lookup(self):
+        """Мітки перевіряються ПЕРШИМИ (дешево, без диска): невідома задача з поганими мітками — 400, а не 404."""
+        with mock.patch.object(spaces, 'find_task') as find, mock.patch.object(serve, '_registry_push') as push:
+            st, body = self.post('/api/task-tags', {'id': 'nope', 'tags': ['a,b']})
+        self.assertEqual((st, body['code']), (400, 'bad-tags'))
+        find.assert_not_called()
+        push.assert_not_called()
 
     def test_task_tags_vanished_between_lookup_and_read_is_404(self):
         """`find_task` сказав «є в P», а до читання файла задачу вилучили: 404 JSON, файл не змінено."""

@@ -374,6 +374,10 @@ def entry_from_task(tid, task, keep_owner=None):
         if task.get(k):
             e[k] = shared_gitlab(task[k]) if k == 'gitlab' and isinstance(task[k], dict) \
                 else task[k]
+    # ⛔ Порожній СПИСОК міток — теж значення («людина прибрала всі»): без ключа інша машина лишила б свої старі мітки (pull
+    # зливає лише `if k in e`), а свіжа показала б похідну мітку профілю. Старі клієнти ключ ігнорують.
+    if isinstance(task.get('tags'), list):
+        e['tags'] = task['tags']
     if keep_owner:
         e['owner'], e['owner_key'] = keep_owner
     elif not e.get('owner'):

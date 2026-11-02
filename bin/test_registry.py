@@ -35,8 +35,12 @@ class TestEntryFromTask(unittest.TestCase):
         self.assertIn('tags', rg.SHARED)
         e = rg.entry_from_task('x', {'title': 'X', 'tags': ['alpha', 'beta']})
         self.assertEqual(e['tags'], ['alpha', 'beta'])
-        self.assertNotIn('tags', rg.entry_from_task('x', {'title': 'X', 'tags': []}))
-        self.assertNotIn('tags', rg.entry_from_task('x', {'title': 'X'}))
+        self.assertNotIn('tags', rg.entry_from_task('x', {'title': 'X'}), 'ключа нема — і в записі нема')
+        self.assertNotIn('tags', rg.entry_from_task('x', {'title': 'X', 'tags': None}))
+
+    def test_an_empty_tag_list_travels_too(self):
+        """«Людина прибрала всі мітки» — значення, а не відсутність: без ключа інша машина лишила б свої старі мітки."""
+        self.assertEqual(rg.entry_from_task('x', {'title': 'X', 'tags': []})['tags'], [])
 
     def test_owner_filled_from_identity(self):
         real = rg._identity
@@ -581,6 +585,36 @@ class TestPullKeepsLocalTransport(_RegistrySandbox):
         gl, _ = self._pull({'repo': SSH_REPO, 'path': 'mockup/boss'},
                            {'repo': IP_REPO, 'path': 'mockup/boss-interface'})
         self.assertEqual((gl['repo'], gl['path']), (SSH_REPO, 'mockup/boss-interface'))
+
+
+class TestPullTags(_RegistrySandbox):
+    """Мітки (4b-3) при pull: очищені мітки доїжджають, запис БЕЗ ключа місцевих міток не чіпає."""
+
+    def _pull_tags(self, local, reg_extra):
+        import json
+        from unittest import mock
+        with open(self.file, 'w', encoding='utf-8') as f:
+            json.dump({'tasks': {'boss': {'title': 'Б', 'profile': 'liga360', 'dir': os.path.join(self.tmp, 'boss'),
+                                          **({'tags': local} if local is not None else {})}}}, f)
+        reg = {'boss': {'schema': 1, 'id': 'boss', 'title': 'Б', 'profile': 'liga360', **reg_extra}}
+        with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)), \
+             mock.patch.object(rg, '_work_root', lambda cfg, profile: self.tmp):
+            self._quiet(rg.cmd_pull, None)
+        with open(self.file, encoding='utf-8') as f:
+            return json.load(f)['tasks']['boss']
+
+    def test_cleared_tags_reach_a_machine_that_still_has_the_old_ones(self):
+        self.assertEqual(self._pull_tags(['a'], {'tags': []})['tags'], [])
+
+    def test_changed_tags_replace_the_local_ones(self):
+        self.assertEqual(self._pull_tags(['a'], {'tags': ['b', 'c']})['tags'], ['b', 'c'])
+
+    def test_an_entry_without_the_key_leaves_local_tags_untouched(self):
+        self.assertEqual(self._pull_tags(['a'], {})['tags'], ['a'])
+        self.assertNotIn('tags', self._pull_tags(None, {}))
+
+    def test_a_fresh_machine_gets_the_cleared_list_not_the_derived_tag(self):
+        self.assertEqual(self._pull_tags(None, {'tags': []})['tags'], [])
 
 
 class TestStatusIgnoresTransport(_RegistrySandbox):
