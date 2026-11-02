@@ -13,7 +13,9 @@ import re
 import socket
 import subprocess
 import sys
+import shutil
 import tempfile
+import threading
 import time
 import unittest
 import urllib.request
@@ -27,6 +29,8 @@ sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 import install_config  # noqa: E402
+import overview_push as ov  # noqa: E402  (тонкий CLI синку: Task 6)
+import registry  # noqa: E402
 import make_before_4c1 as mb  # noqa: E402  (шаблон світу знімка 0.11.0: простори, сервер у процесі, `scrub`/`strip`)
 import sbconf  # noqa: E402
 import serve  # noqa: E402
@@ -331,8 +335,12 @@ class CardsParity(unittest.TestCase):
         for old, new in (('build_row', 'build_card'), ('row_has_pii', 'card_has_pii'), ('discover_row', 'discover_card'),
                          ('gitlab_web', 'gitlab_web'), ('to_iso', 'to_iso'), ('map_status', 'map_status'),
                          ('preview_source', 'preview_source'), ('comment_project_key', 'comment_project_key'),
-                         ('_identity', '_identity'), ('_humanize', '_humanize'), ('_fixture_reason', '_fixture_reason')):
+                         ('_identity', '_identity'), ('_humanize', '_humanize')):
             self.assertIs(getattr(ov, old), getattr(dashboard, new), old)
+        # Task 6: бар'єр фікстур живе в `dashboard` (кроки синку переїхали); на пушері НЕ лишено імені, яке підміна в тестах
+        # мовчки не слухалась би (колись `ov._fixture_reason` був швом бар'єра)
+        for gone in ('_fixture_reason', '_drop_fixtures', '_supabase', 'upsert_project', 'open_comment_counts'):
+            self.assertFalse(hasattr(ov, gone), gone)
 
 
 #: Модуль ролі `dashboard`: `check` і обовʼязкові `rows`/`push`; `open_comments` — окремо (необовʼязкова).
@@ -513,7 +521,9 @@ class ReadParity(unittest.TestCase):
     Свідомі відмінності (кожна названа в тесті, а не прихована):
       * `space.capabilities` має НОВИЙ ключ `dashboard` (знімок його не знає) — перевіряється окремо й вилучається з порівняння;
       * тайм-аут запиту 4 с (власний тайм-аут модуля), у знімку було 3 с;
-      * тексти двох помилок (мережа впала, відповідь не масив) — тепер ТЕКСТ МОДУЛЯ, а не сирий виняток `urlopen`/`ValueError`."""
+      * тексти двох помилок (мережа впала, відповідь не масив) — тепер ТЕКСТ МОДУЛЯ, а не сирий виняток `urlopen`/`ValueError`;
+      * на шляху модуля/справжньої мережі обʼєкти-рядки БЕЗ рядкового `id` тепер відкидаються (`normalize_rows`; 0.11.0 їх
+        лишав), а шов `DC_TEAM_FAKE` (файл замість бази) їх, як і раніше, пропускає як є."""
 
     @classmethod
     def setUpClass(cls):
@@ -862,6 +872,573 @@ class DashboardHelpers(unittest.TestCase):
         for bad in ({'id': 'a'}, 'x', None, 5):
             with self.assertRaises(ValueError):
                 n(bad)
+
+
+
+# ------------------------------------------------------------------------------------------ Task 6: запис — синк
+
+class _FakeDash:
+    """Модуль ролі `dashboard` для тестів ядра: `deai_modules.call` бачить `status`, `id` і `fn(імʼя)`. `push` пише всі виклики
+    в `sent` як `(mode, картка)`; `fns` додають чи підміняють функції (`open_comments`, `push` з відмовами)."""
+    id = 'fake-dashboard'
+    status = 'ok'
+
+    def __init__(self, **fns):
+        self.sent, self.calls = [], []
+        self._fns = {'push': self._push, **fns}
+
+    def _push(self, ctx, cards, mode):
+        self.calls.append((mode, [c['id'] for c in cards]))
+        self.sent.extend((mode, c) for c in cards)
+        return {'ok': len(cards), 'failed': {}}
+
+    def fn(self, name):
+        return self._fns.get(name)
+
+
+class SyncParity(unittest.TestCase):
+    """Диференційний `sync_push`: `dashboard.sync` для ЛІГИ на ТИХ САМИХ заглушках, що знімок 0.11.0 (реєстр, коментарі, Jira —
+    колбеки; сам запис — модуль, що пише `push`), віддає ті самі картки (з тими ж `mode`: `insert` для реєстру, `merge` для
+    задач) і ті самі підсумкові рядки лога. Свідомих відмінностей запису тут дві: картки йдуть ПАКЕТАМИ (по одному виклику
+    `push` на режим, а не по одному upsert на картку) і збій `push` називається вголос (раніше крок реєстру мовчав)."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.push = json.load(f)['sync_push']
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='sync-parity-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        p = mock.patch.object(registry, '_temp_roots', return_value=[mb.FAKE_TMP])   # як у генераторі знімка: фікстури — лише FAKE_TMP
+        p.start()
+        self.addCleanup(p.stop)
+
+    def world(self):
+        """`(cfg, registry)` знімка: теки задач у тимчасовій теці, `iterations.json` — з входу знімка."""
+        inp = self.push['input']
+        for tid, it in inp['iterations_json'].items():
+            mb._write(os.path.join(self.tmp, tid, 'iterations.json'), it)
+        tasks = {}
+        for tid, task in inp['tasks'].items():
+            task = dict(task)
+            if 'dir' in task:
+                task['dir'] = os.path.join(self.tmp, task['dir'].replace('<dir>/', ''))
+            tasks[tid] = task
+        return {'tasks': tasks}, inp['registry']
+
+    def run_sync(self, module, plain=False, **kw):
+        """Один прохід на світі знімка → `(лог-рядки, ключі Jira, підсумок)`. `plain` — без колбеків реєстру й Jira."""
+        cfg, reg = self.world()
+        asked, lines = [], []
+
+        def jira(keys):
+            asked.append(list(keys))
+            return self.push['input']['jira_statuses']
+        summary = dashboard.sync(cfg, module, {'secrets': {}}, discover=None if plain else (lambda: dict(reg)),
+                                 statuses=None if plain else jira, identity=tuple(self.push['input']['identity']),
+                                 log=lines.append, **kw)
+        return lines, asked, summary
+
+    @staticmethod
+    def strip(card):
+        return {k: v for k, v in card.items() if k not in VOLATILE}
+
+    def test_the_same_cards_in_the_same_modes_as_the_0_11_0_upserts(self):
+        mod = _FakeDash(open_comments=lambda ctx: self.push['input']['open_comment_counts'])
+        self.run_sync(mod)
+        recorded = [('insert' if c['ignore'] else 'merge', c['row']) for c in self.push['upserts']]
+        self.assertEqual([(m, self.strip(c)) for m, c in mod.sent], recorded)
+        for (_, card), rec in zip(mod.sent, self.push['upserts']):
+            self.assertEqual(sorted(k for k in VOLATILE if k in card), rec['volatile_present'], card['id'])
+        # пакетами: один виклик на режим (реєстр — `insert`, задачі — `merge`), а не по картці
+        self.assertEqual(mod.calls, [('insert', ['reg1']), ('merge', ['t1', 't2', 't3'])])
+
+    def test_the_log_has_the_same_summary_lines(self):
+        mod = _FakeDash(open_comments=lambda ctx: self.push['input']['open_comment_counts'])
+        lines, asked, summary = self.run_sync(mod)
+        self.assertEqual(lines, self.push['stdout'])
+        self.assertEqual(sorted(k for k in asked[0] if k), sorted(k for k in self.push['jira_keys_asked'][0] if k),
+                         'Jira питають про ключі ВСІХ задач файла (навіть без теки)')
+        self.assertEqual((summary['discovered'], summary['synced'], summary['skipped'], summary['failed']), (1, 3, ['t4'], {}))
+
+    def test_open_comments_move_the_status_to_review_only_when_the_module_has_them(self):
+        with_fn = _FakeDash(open_comments=lambda ctx: {'dc/t1': 2})
+        self.run_sync(with_fn, plain=True)
+        self.assertEqual({c['id']: c['status'] for _, c in with_fn.sent}['t1'], 'review')
+        without = _FakeDash()                                           # необовʼязкової функції нема → `{}`, `call` її не кличе
+        self.run_sync(without, plain=True)
+        self.assertEqual({c['id']: c['status'] for _, c in without.sent}['t1'], 'work')
+        broken = _FakeDash(open_comments=lambda ctx: 1 / 0)             # збій → `{}`, а не падіння синку
+        self.run_sync(broken, plain=True)
+        self.assertEqual({c['id']: c['status'] for _, c in broken.sent}['t1'], 'work')
+        junk = _FakeDash(open_comments=lambda ctx: ['dc/t1'])           # не словник → `{}`
+        self.run_sync(junk, plain=True)
+        self.assertEqual({c['id']: c['status'] for _, c in junk.sent}['t1'], 'work')
+
+    def test_an_ordinary_space_has_no_registry_and_no_jira(self):
+        """Колбеків нема (`discover`/`statuses` = `None`): ні `insert`, ні Jira-статусів на картках; лише `merge` задач."""
+        mod = _FakeDash(open_comments=lambda ctx: {'dc/t1': 1})
+        lines, asked, _ = self.run_sync(mod, plain=True)
+        self.assertEqual(asked, [])
+        self.assertEqual({m for m, _ in mod.sent}, {'merge'})
+        self.assertEqual(mod.calls, [('merge', ['t1', 't2', 't3'])])
+        self.assertTrue(all('jira_status' not in c for _, c in mod.sent))
+        self.assertFalse(any('з реєстру оброблено' in ln for ln in lines))
+
+    def test_failed_cards_are_named_aloud(self):
+        def push(ctx, cards, mode):
+            return {'ok': len(cards) - 1, 'failed': {'t2': 'Supabase недоступний (URLError)'}} if mode == 'merge' else \
+                {'ok': 0, 'failed': {'reg1': 'відмова вставки'}}
+        lines, _, summary = self.run_sync(_FakeDash(push=push))
+        self.assertIn('⚠ overview: не вдалося синхронізувати «t2»: Supabase недоступний (URLError)', lines)
+        self.assertIn('⚠ overview: не вдалося додати з реєстру «reg1»: відмова вставки', lines)
+        self.assertIn('✅ overview: синхронізовано 2 проєктів', lines)
+        self.assertEqual(summary['failed'], {'t2': 'Supabase недоступний (URLError)'})
+
+    def test_a_dead_service_names_every_card_and_does_not_raise(self):
+        def push(ctx, cards, mode):
+            raise dm.ModuleError('dashboard-error', message='Supabase недоступний (timeout)')
+        lines, _, summary = self.run_sync(_FakeDash(push=push))
+        self.assertEqual(sorted(summary['failed']), ['t1', 't2', 't3'])
+        self.assertIn('⚠ overview: не вдалося синхронізувати «t1»: Supabase недоступний (timeout)', lines)
+        self.assertIn('✅ overview: синхронізовано 0 проєктів', lines)
+
+    def test_an_answer_off_the_contract_is_a_failure_not_a_crash(self):
+        _, _, summary = self.run_sync(_FakeDash(push=lambda ctx, cards, mode: 'ok'))
+        self.assertEqual(sorted(summary['failed']), ['t1', 't2', 't3'])
+
+    def test_nothing_is_pushed_when_there_are_no_cards(self):
+        """Порожній список — без виклику `push` (модуль не будує порожній запит)."""
+        mod = _FakeDash()
+        dashboard.sync({'tasks': {}}, mod, {'secrets': {}}, identity=('Alpha', 'alpha@example.com'), log=lambda m: None)
+        self.assertEqual(mod.calls, [])
+
+    def test_the_real_module_gets_the_same_cards_over_http(self):
+        """Наскрізно ЛІГА: справжній вбудований `supabase-dashboard` із `legacy_ctx` (шов `_open` — записувач): URL таблиці
+        `overview_projects`, `Prefer` на режим, і ті самі картки, що у знімку, а лічильники коментарів — з `comments`."""
+        bodies = []
+
+        def net(req, timeout=None):
+            body = json.loads(req.data.decode('utf-8')) if req.data else None
+            bodies.append((req.get_method(), req.full_url, req.headers.get('Prefer'), body))
+            return sbconf.Resp(json.dumps([{'project_id': 'dc/t1'}]).encode('utf-8') if '/comments?' in req.full_url else b'')
+        hits = block_network(self)
+        sbconf.patch_dashboard_open(self, net)
+        cfg, reg = self.world()
+        ctx = dashboard.legacy_ctx(mb.URL, mb.KEY, 'liga')
+        dashboard.sync(cfg, dashboard.legacy_module(), ctx, discover=lambda: dict(reg),
+                       statuses=lambda keys: self.push['input']['jira_statuses'],
+                       identity=tuple(self.push['input']['identity']), log=lambda m: None)
+        self.assertEqual(hits, [], 'мережа тільки через шов модуля')
+        urls = {u for _, u, _, _ in bodies}
+        self.assertEqual(urls, {f'{mb.URL}/rest/v1/overview_projects?on_conflict=id',
+                                f'{mb.URL}/rest/v1/comments?status=eq.open&select=project_id'})
+        writes = [(pref, b) for m, _, pref, b in bodies if m == 'POST']
+        insert = [c for pref, b in writes if pref == 'resolution=ignore-duplicates,return=minimal' for c in b]
+        merge = [c for pref, b in writes if pref == 'resolution=merge-duplicates,return=minimal' for c in b]
+        recorded = {c['row']['id']: (c['ignore'], c['row']) for c in self.push['upserts']}
+        self.assertEqual(sorted(c['id'] for c in insert), ['reg1'])
+        self.assertEqual(sorted(c['id'] for c in merge), ['t1', 't2', 't3'])
+        for card in insert + merge:
+            self.assertEqual(self.strip(card), self.strip(recorded[card['id']][1]), card['id'])
+        # ⛔ «None не шлемо» дійшло до дроту: жодного `null` у тілах
+        self.assertNotIn(None, [v for c in insert + merge for v in c.values()])
+
+
+class CliShape(unittest.TestCase):
+    """`bin/overview_push.py`: тонкий CLI. Без сервера, без реєстру машини (`spaces.load_registry` підмінено), без мережі."""
+
+    REG = {'current': 'liga', 'spaces': [{'id': 'liga', 'path': '', 'legacy': True, 'integrations': True},
+                                         {'id': 'p', 'path': '/nowhere/p', 'legacy': False, 'integrations': False}]}
+
+    def setUp(self):
+        self.picked, self.synced = [], []
+
+        def target(sp):
+            self.picked.append(sp['id'])
+            return _FakeDash(), {'secrets': {}}, sp.get('legacy', False)
+        for patcher in (mock.patch.object(spaces, 'load_registry', return_value=self.REG),
+                        mock.patch.object(ov, '_target', target),
+                        mock.patch.object(ov, '_tasks_of', lambda sp: {'tasks': {}}),
+                        mock.patch.object(dashboard, 'sync', lambda *a, **kw: self.synced.append(kw)),
+                        mock.patch.object(ov, 'discover_projects', lambda cfg: {})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def main(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = ov.main(list(argv))
+        return code, out.getvalue()
+
+    def test_sync_without_space_is_the_league_space(self):
+        self.assertEqual(self.main('sync')[0], 0)
+        self.assertEqual(self.main()[0], 0, 'без підкоманди — теж синк ЛІГИ: так кликав зовнішній планувальник')
+        self.assertEqual(self.picked, ['liga', 'liga'])
+
+    def test_sync_with_space_is_that_space(self):
+        self.assertEqual(self.main('sync', '--space', 'p')[0], 0)
+        self.assertEqual(self.picked, ['p'])
+        # звичайний простір: колбеків реєстру й Jira нема
+        self.assertEqual((self.synced[0]['discover'], self.synced[0]['statuses']), (None, None))
+
+    def test_the_league_space_gets_the_registry_and_jira_callbacks(self):
+        self.main('sync')
+        self.assertIsNotNone(self.synced[0]['discover'])
+        self.assertIs(self.synced[0]['statuses'], ov.jira_statuses)
+
+    def test_the_legacy_alias_is_the_league_space(self):
+        """Сервер без фіксованого простору запиту шле псевдонім `legacy`; у реєстрі простір ЛІГА має інший id."""
+        self.assertEqual(self.main('sync', '--space', 'legacy')[0], 0)
+        self.assertEqual(self.picked, ['liga'])
+
+    def test_an_unknown_space_is_exit_code_2_and_a_text(self):
+        code, out = self.main('sync', '--space', 'nope')
+        self.assertEqual(code, 2)
+        self.assertIn('невідомий простір «nope»', out)
+        self.assertEqual(self.picked, [], 'до постачальника не доходить')
+
+    def test_discover_is_only_for_the_league(self):
+        self.assertEqual(self.main('discover')[0], 0)                  # простір ЛІГА (`legacy: True`)
+        with mock.patch.object(ov, '_space', return_value=self.REG['spaces'][1]):
+            code, out = self.main('discover')
+        self.assertEqual(code, 2)
+        self.assertIn('лише для простору ЛІГА', out)
+
+    def test_a_bad_command_is_exit_code_2(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            ov.main(['bogus'])
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_the_pusher_does_not_import_the_server(self):
+        """⛔ `from serve import …` зникло: його тягнув `_supabase()`, а сервер — це мережа й увесь стан."""
+        with open(os.path.join(ROOT, 'bin', 'overview_push.py'), encoding='utf-8') as f:
+            text = f.read()
+        self.assertIsNone(re.search(r'^\s*(?:from\s+serve\b|import\s+serve\b)', text, re.M))
+        self.assertNotIn('_serve()', text)
+
+
+class CliTarget(unittest.TestCase):
+    """Конфіг ЛІГИ для CLI: файл установки раніше за оточення; `SUPABASE_SERVICE_KEY` — лише запасний ключ ЛІГИ, і лише з
+    `SUPABASE_URL` (спека §5). `provider` і модуль — заглушки: перевіряється саме побудова `ctx`."""
+
+    SP = {'id': 'liga', 'path': '', 'legacy': True, 'integrations': True}
+
+    def setUp(self):
+        for patcher in (mock.patch.object(dm, 'provider', return_value='legacy'),
+                        mock.patch.object(dashboard, 'legacy_module', return_value=_FakeDash()),
+                        mock.patch.dict(os.environ, {}), mock.patch.object(spaces, 'legacy_tasks_file', return_value='/nowhere/tasks.json')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for k in ('SUPABASE_URL', 'SUPABASE_KEY', 'SUPABASE_SERVICE_KEY', 'DC_TASKS_FILE'):
+            os.environ.pop(k, None)
+
+    def ctx(self):
+        module, ctx, legacy = ov._target(self.SP)
+        self.assertTrue(legacy)
+        return ctx
+
+    def test_the_installation_file_wins_over_the_service_key(self):
+        os.environ.update(SUPABASE_URL='https://env.supabase.example', SUPABASE_SERVICE_KEY='sk-test-service')
+        with mock.patch.object(install_config, 'load_legacy_tasks',
+                               return_value={'supabase_url': 'https://demo.supabase.example', 'supabase_key': 'sk-test-file'}):
+            ctx = self.ctx()
+        self.assertEqual((ctx['settings']['url'], ctx['secrets']['key']), ('https://demo.supabase.example', 'sk-test-file'))
+
+    def test_no_file_the_service_key_pair_from_the_environment(self):
+        os.environ.update(SUPABASE_URL='https://env.supabase.example', SUPABASE_SERVICE_KEY='sk-test-service')
+        with mock.patch.object(install_config, 'load_legacy_tasks', side_effect=FileNotFoundError):
+            ctx = self.ctx()
+        self.assertEqual((ctx['settings']['url'], ctx['secrets']['key']), ('https://env.supabase.example', 'sk-test-service'))
+        self.assertEqual(ctx['space']['id'], 'liga')
+
+    def test_the_service_key_alone_is_not_a_config(self):
+        os.environ.update(SUPABASE_SERVICE_KEY='sk-test-service')
+        with mock.patch.object(install_config, 'load_legacy_tasks', side_effect=FileNotFoundError), \
+                self.assertRaises(ov.CliError) as cm:
+            ov._target(self.SP)
+        self.assertIn('не налаштовано', cm.exception.args[0])
+        self.assertNotIn('sk-test-service', cm.exception.args[0])
+
+    def test_a_malformed_service_pair_is_not_a_config_either(self):
+        os.environ.update(SUPABASE_URL='http://insecure.example', SUPABASE_SERVICE_KEY='sk-test-service')
+        with mock.patch.object(install_config, 'load_legacy_tasks', side_effect=FileNotFoundError), \
+                self.assertRaises(ov.CliError):
+            ov._target(self.SP)
+
+    def test_an_ordinary_provider_gets_the_module_ctx_and_no_callbacks(self):
+        mod = _FakeDash()
+        with mock.patch.object(dm, 'provider', return_value=mod), \
+                mock.patch.object(dm, 'module_ctx', return_value={'settings': {}, 'secrets': {}}) as mctx:
+            module, ctx, legacy = ov._target({'id': 'p', 'path': '/x', 'legacy': False, 'integrations': False})
+        self.assertEqual((module, legacy), (mod, False))
+        mctx.assert_called_once()
+
+    def test_no_provider_is_no_module(self):
+        with mock.patch.object(dm, 'provider', return_value=None):
+            self.assertEqual(ov._target(self.SP), (None, None, False))
+
+
+#: Серверний модуль-фікстура ролі `dashboard` без жодного ефекту (нам потрібен лише факт постачальника).
+GATE_SERVER = tm.CHECK_ONLY + DASH_FNS
+
+
+class _Popen:
+    """Заглушка `subprocess.Popen` для гейтів і одиночного запуску: пише `(argv, kwargs, шлях лога, режим)`; `poll()` — `None`,
+    поки `finish()` не викликано (дитина «жива»), `wait()` чекає на це. Жодного справжнього процесу."""
+
+    def __init__(self):
+        self.started, self.children = [], []
+        self.lock = threading.Lock()
+
+    def __call__(self, argv, **kw):
+        out = kw.get('stdout')
+        with self.lock:
+            self.started.append({'argv': list(argv), 'kwargs': sorted(kw), 'log': getattr(out, 'name', None),
+                                 'mode': getattr(out, 'mode', None), 'stderr': kw.get('stderr'), 'stdout_closed_at_start': out.closed})
+            child = _Child()
+            self.children.append(child)
+        return child
+
+    def finish_all(self):
+        with self.lock:
+            kids = list(self.children)
+        for k in kids:
+            k.finish()
+
+
+class _Child:
+    def __init__(self):
+        self.done = threading.Event()
+
+    def finish(self):
+        self.done.set()
+
+    def poll(self):
+        return 0 if self.done.is_set() else None
+
+    def wait(self, timeout=None):
+        self.done.wait(15)
+        return 0
+
+
+def wait_until(test, cond, what, seconds=5.0):
+    """Опитування умови з тайм-аутом (потік-спостерігач — фоновий): без `sleep` навмання."""
+    end = time.time() + seconds
+    while time.time() < end:
+        if cond():
+            return
+        time.sleep(0.005)
+    test.fail(f'не діждались: {what}')
+
+
+class _SyncEnv(tm.Env):
+    """Світ запуску синку: тимчасові `HOME`/`DEAI_HOME`, простір ЛІГА (інтеграції, постачальник `'legacy'`), звичайний простір,
+    що має модуль дашборда, і звичайний без нього. `Popen` — заглушка; лог ЛІГИ — шов `serve.OVERVIEW_LOG` у тимчасовій теці
+    (ТА `HOME` тимчасова: навіть якщо шов зламати, справжній `~/.claude/pipeline-feedback/` не торкнеться)."""
+
+    def setUp(self):
+        super().setUp()
+        # `DC_TASKS_FILE`/`SUPABASE_*` повертає сам `tm.Env.tearDown`; а `DC_NO_OVERVIEW`/`DC_TEAM_FAKE` (їх ставлять сусідні набори)
+        # — тут, інакше зняті навічно
+        for name in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE'):
+            if name in os.environ:
+                self.addCleanup(os.environ.__setitem__, name, os.environ[name])
+        for name in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TASKS_FILE', 'SUPABASE_URL', 'SUPABASE_KEY'):
+            os.environ.pop(name, None)
+        self.pf = os.path.join(self.home, '.claude', 'pipeline-feedback')
+        os.makedirs(self.pf)
+        # шов ≠ шлях від `HOME` (`~/.claude/pipeline-feedback/…`): інакше зашитий літерал дав би ТОЙ САМИЙ файл і підміна шва лишилась би недоведеною
+        os.makedirs(os.path.join(self.tmp, 'seam'))
+        self.log = os.path.join(self.tmp, 'seam', 'overview-sync.log')
+        self.popen = _Popen()
+        self.addCleanup(self.stop_runner)
+        for patcher in (mock.patch.object(serve.subprocess, 'Popen', self.popen), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
+                        mock.patch.object(serve, 'supabase_config', return_value=(mb.URL, mb.KEY)),
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.mk('dash', roles=('dashboard',), server=GATE_SERVER)
+        self.liga = self.new_space('Liga', integrations=True)
+        self.plain = self.new_space('Plain')
+        self.modp = self.new_space('Modp')
+        dm.write_module_state(self.modp, 'dash', enabled=True)
+
+    def stop_runner(self):
+        """Дітей заглушки відпускаємо й чекаємо спостерігачів ДО того, як `Popen` повернеться справжнім (cleanup йде в зворотному
+        порядку: цей — перший, патчі знімаються після)."""
+        self.popen.finish_all()
+        for t in [t for t in threading.enumerate() if t.name.startswith('overview-sync-')]:
+            t.join(5)
+
+    def trigger(self, sp):
+        with spaces.request_space(sp['id']):
+            serve.Handler._overview_sync(None)
+
+
+class GateParity(_SyncEnv):
+    """Диференційний `sync_gate`: ті самі рішення «стартувати чи ні», що записав знімок 0.11.0, — і названі свідомі відмінності
+    (`argv` дитини: `sys.executable` і `--space`; конфіг не їде в оточенні; `DC_TASKS_FILE` глушить ЛІГУ)."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.gate = json.load(f)['sync_gate']
+
+    def decide(self, sp, env=None, cfg=(mb.URL, mb.KEY)):
+        """Чи стартувала дитина (і чи відкрито лог) для простору `sp` за оточення `env` і конфігу ЛІГИ `cfg`."""
+        with mock.patch.dict(os.environ, env or {}), mock.patch.object(serve, 'supabase_config', return_value=cfg):
+            self.trigger(sp)
+        return {'popen_started': bool(self.popen.started), 'log_created': os.path.exists(self.log)}
+
+    def test_the_decisions_match_the_snapshot(self):
+        cases = {'integrations_on_with_config': (self.liga, None, (mb.URL, mb.KEY)),
+                 'integrations_off': (self.plain, None, (mb.URL, mb.KEY)),
+                 'no_config': (self.liga, None, (None, None)),
+                 'dc_no_overview': (self.liga, {'DC_NO_OVERVIEW': '1'}, (mb.URL, mb.KEY))}
+        for name, (sp, env, cfg) in cases.items():
+            with self.subTest(case=name):
+                self.setUp_again()
+                got = self.decide(sp, env, cfg)
+                want = {k: self.gate[name][k] for k in ('popen_started', 'log_created')}
+                self.assertEqual(got, want)
+
+    def setUp_again(self):
+        """Чистий стан між випадками однієї перевірки: заглушка `Popen`, лог, DC_NO_OVERVIEW, стан «один на простір»."""
+        self.popen.started.clear()
+        self.popen.children.clear()
+        serve._SYNC_RUNS.clear()
+        os.environ.pop('DC_NO_OVERVIEW', None)
+        if os.path.exists(self.log):
+            os.remove(self.log)
+
+    def test_dc_tasks_file_now_silences_the_league_a_deliberate_difference(self):
+        """ЄДИНА зміна рішення проти знімка: 0.11.0 стартував дитину й за `DC_TASKS_FILE` (дірка: закон ізоляції стояв лише на
+        читанні). Тепер ізольований прогін не пише у спільний Supabase ЛІГИ й з процесу."""
+        self.assertTrue(self.gate['dc_tasks_file_with_integrations_on']['popen_started'], 'знімок: 0.11.0 стартував')
+        got = self.decide(self.liga, {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')})
+        self.assertEqual(got, {'popen_started': False, 'log_created': False})
+
+    def test_the_child_command_matches_the_snapshot_apart_from_the_named_differences(self):
+        self.assertTrue(self.decide(self.liga)['popen_started'])
+        (st,) = self.popen.started
+        snap = self.gate['integrations_on_with_config']
+        # argv: 4c-1 змінює навмисно — `sys.executable` (було літеральне python3) і явний `--space <id>`
+        self.assertEqual(snap['argv'], ['python3', 'bin/overview_push.py', 'sync'])
+        self.assertEqual(st['argv'], [sys.executable, os.path.join(ROOT, 'bin', 'overview_push.py'), 'sync', '--space',
+                                      self.liga['id']])
+        # оточення: 0.11.0 передавало `env` із парою SUPABASE_*; тепер — НІЧОГО (дитина читає `install_config` сама)
+        self.assertEqual(snap['kwargs'], ['env', 'stderr', 'stdout'])
+        self.assertEqual(st['kwargs'], ['stderr', 'stdout'])
+        # решта — як було: лог ЛІГИ, режим `a`, stderr → stdout, і файл лога відкритий до `Popen`
+        self.assertEqual((snap['log_mode'], snap['stderr_is_stdout']), ('a', True))
+        self.assertEqual((st['mode'], st['stderr'], st['log']), ('a', subprocess.STDOUT, self.log))
+        self.assertFalse(st['stdout_closed_at_start'])
+
+    def test_an_ordinary_space_with_a_dashboard_module_starts_without_integrations(self):
+        self.assertFalse(spaces.integrations_for(self.modp))
+        self.assertTrue(self.decide(self.modp)['popen_started'])
+        self.assertEqual(self.popen.started[0]['argv'][-2:], ['--space', self.modp['id']])
+
+    def test_a_space_without_a_provider_is_silent(self):
+        self.assertEqual(self.decide(self.plain), {'popen_started': False, 'log_created': False})
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'logs')), 'тиша — без лога навіть для звичайного простору')
+
+    def test_dc_no_overview_is_silent_for_any_provider(self):
+        for sp in (self.liga, self.modp):
+            with self.subTest(space=sp['id']):
+                self.setUp_again()
+                self.assertFalse(self.decide(sp, {'DC_NO_OVERVIEW': '1'})['popen_started'])
+
+    def test_dc_tasks_file_does_not_silence_an_ordinary_provider(self):
+        """Закон ізоляції для `DC_TASKS_FILE` — про ШЛЯХ ЛІГИ (спільний Supabase); звичайний простір пише у свій модуль."""
+        self.assertTrue(self.decide(self.modp, {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')})['popen_started'])
+
+    def test_a_failing_decision_is_silence_not_a_crash(self):
+        for exc in (spaces.SpacesError('spaces-unreadable', '<registry>', 'тест'),
+                    dm.ModuleError('space-json-unreadable', message='тест')):
+            with self.subTest(exc=type(exc).__name__), mock.patch.object(dm, 'provider', side_effect=exc):
+                self.assertEqual(self.decide(self.liga), {'popen_started': False, 'log_created': False})
+
+
+class SyncRunner(_SyncEnv):
+    """Один синк на простір: поки дитина жива, повторний тригер лише ставить позначку «ще раз», і після її завершення стартує
+    РІВНО ОДИН повтор (а не по одному на тригер); тригер іншого простору — паралельно. Логи: ЛІГА — шов `OVERVIEW_LOG`, інші —
+    `<DEAI_HOME>/logs/dashboard-sync.log` (тека 0o700)."""
+
+    def test_a_second_trigger_while_the_child_lives_does_not_start_another(self):
+        self.trigger(self.liga)
+        self.assertEqual(len(self.popen.started), 1)
+        self.trigger(self.liga)
+        self.assertEqual(len(self.popen.started), 1, 'друга дитина тієї ж пари простір+час не стартує')
+        self.assertTrue(serve._SYNC_RUNS[self.liga['id']]['pending'], 'але позначка «ще раз» стоїть')
+
+    def test_after_the_child_ends_exactly_one_rerun_not_one_per_trigger(self):
+        self.trigger(self.liga)
+        for _ in range(5):
+            self.trigger(self.liga)                                    # п'ять запитів за час одного синку
+        self.assertEqual(len(self.popen.started), 1)
+        self.popen.children[0].finish()
+        wait_until(self, lambda: len(self.popen.started) == 2, 'повтор після завершення')
+        time.sleep(0.1)
+        self.assertEqual(len(self.popen.started), 2, 'рівно ОДИН повтор, а не п\'ять')
+        self.assertFalse(serve._SYNC_RUNS[self.liga['id']]['pending'], 'позначка зірвана: повтор уже йде')
+        # повтор завершився, нових запитів не було → тиша й чистий стан
+        self.popen.children[1].finish()
+        wait_until(self, lambda: self.liga['id'] not in serve._SYNC_RUNS, 'стан простору прибрано')
+        self.assertEqual(len(self.popen.started), 2)
+
+    def test_a_trigger_after_the_child_ended_starts_a_fresh_one(self):
+        self.trigger(self.liga)
+        self.popen.children[0].finish()
+        wait_until(self, lambda: self.liga['id'] not in serve._SYNC_RUNS, 'стан простору прибрано')
+        self.trigger(self.liga)
+        self.assertEqual(len(self.popen.started), 2)
+
+    def test_another_space_starts_in_parallel(self):
+        self.trigger(self.liga)
+        self.trigger(self.modp)
+        self.assertEqual(len(self.popen.started), 2, 'тригер іншого простору не чекає чужого синку')
+        self.assertEqual({st['argv'][-1] for st in self.popen.started}, {self.liga['id'], self.modp['id']})
+        self.assertFalse(serve._SYNC_RUNS[self.liga['id']]['pending'])
+
+    def test_a_failed_start_leaves_no_state_behind(self):
+        with mock.patch.object(serve.subprocess, 'Popen', side_effect=OSError('no python')):
+            self.trigger(self.liga)
+        self.assertEqual(serve._SYNC_RUNS, {})
+        self.trigger(self.liga)                                        # наступний тригер стартує як звичайно
+        self.assertEqual(len(self.popen.started), 1)
+
+    def test_the_league_log_is_the_seam(self):
+        self.trigger(self.liga)
+        self.assertEqual(self.popen.started[0]['log'], self.log)
+        self.assertNotEqual(os.path.dirname(self.log), self.pf)        # шов ≠ шлях від HOME: літерал у коді був би видний
+        self.assertTrue(self.popen.started[0]['log'].startswith(self.tmp + os.sep), 'лог — під тимчасовою текою тесту')
+
+    def test_another_space_logs_under_deai_home_in_a_private_dir(self):
+        old = os.umask(0)                                              # щедра маска: `makedirs(mode=)` без `chmod` дала б 0o777
+        self.addCleanup(os.umask, old)
+        self.trigger(self.modp)
+        d = os.path.join(self.deai, 'logs')
+        self.assertEqual(self.popen.started[0]['log'], os.path.join(d, 'dashboard-sync.log'))
+        self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+        self.assertFalse(os.path.exists(self.log), 'лог ЛІГИ чужий простір не пише')
+
+    def test_an_existing_loose_log_dir_is_tightened(self):
+        d = os.path.join(self.deai, 'logs')
+        os.makedirs(d, mode=0o755)
+        os.chmod(d, 0o755)
+        self.trigger(self.modp)
+        self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+        self.assertEqual(len(self.popen.started), 1)
+
+    def test_the_log_dir_that_cannot_be_made_is_swallowed(self):
+        with mock.patch.object(serve.os, 'makedirs', side_effect=OSError('read-only')):
+            self.trigger(self.modp)                                    # не кидає
+        self.assertEqual(self.popen.started, [])
+        self.assertEqual(serve._SYNC_RUNS, {})
+
 
 
 if __name__ == '__main__':

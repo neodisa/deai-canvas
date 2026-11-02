@@ -453,35 +453,40 @@ class LegacyPagesTest(tcr.PagesEnv):
 
 
 class OverviewSyncTest(_Env):
-    """`Handler._overview_sync`: без конфігу установки фонового пуша нема (ні лога, ні `Popen`); з конфігом — дитина
-    отримує пару в оточенні."""
+    """`Handler._overview_sync`: без конфігу установки фонового пуша нема (ні лога, ні `Popen`); з конфігом — дитина стартує з
+    `--space <id>` і БЕЗ конфігу в оточенні (4c-1, Task 6: вона читає `install_config` сама; раніше пара їхала в `env`)."""
 
     def setUp(self):
         super().setUp()
         home = os.path.join(self.tmp.name, 'home')
         os.makedirs(os.path.join(home, '.claude', 'pipeline-feedback'))
+        self.log = os.path.join(home, '.claude', 'pipeline-feedback', 'overview-sync.log')
         env = mock.patch.dict(os.environ, {'HOME': home})
         env.start()
         self.addCleanup(env.stop)
         out = mock.patch.object(serve, '_outbound_ok', return_value=True)
         out.start()
         self.addCleanup(out.stop)
+        # шов лога (справжній `~/.claude/pipeline-feedback/` не пишемо) і чистий стан «один синк на простір»
+        for patcher in (mock.patch.object(serve, 'OVERVIEW_LOG', self.log), mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_without_config_no_popen_and_no_log(self):
         self.write({'tasks': {}})
         with mock.patch.object(serve.subprocess, 'Popen') as popen:
             serve.Handler._overview_sync(None)
         popen.assert_not_called()
-        self.assertFalse(os.path.exists(os.path.join(
-            self.tmp.name, 'home', '.claude', 'pipeline-feedback', 'overview-sync.log')))
+        self.assertFalse(os.path.exists(self.log))
 
-    def test_with_config_child_gets_the_pair(self):
+    def test_with_config_child_starts_for_the_space_and_gets_no_config(self):
         self.write({'supabase_url': URL, 'supabase_key': KEY})
         with mock.patch.object(serve.subprocess, 'Popen') as popen:
             serve.Handler._overview_sync(None)
         popen.assert_called_once()
-        env = popen.call_args.kwargs['env']
-        self.assertEqual((env['SUPABASE_URL'], env['SUPABASE_KEY']), (URL, KEY))
+        self.assertEqual(popen.call_args.args[0], [sys.executable, os.path.join(ROOT, 'bin', 'overview_push.py'),
+                                                   'sync', '--space', 'legacy'])
+        self.assertNotIn('env', popen.call_args.kwargs, 'конфіг дитині не передається: вона читає install_config')
 
 
 # Рядки Supabase, які віддає «сервер» у тестах агента (ті самі, що записані в `before-4b2.json` на 0.9.0).

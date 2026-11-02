@@ -2182,6 +2182,19 @@ class OverviewSyncGuard(unittest.TestCase):
 
     def setUp(self):
         self._saved = os.environ.get('DC_NO_OVERVIEW')
+        # ⛔ 4c-1 (Task 6): ізоляцію цього класу тепер задає САМ тест, а не оточення, що лишив сусід: гейт `_overview_sync`
+        # для ЛІГИ дивиться й на `DC_TASKS_FILE` (його ставить `setUpClass` великих класів цього файла), а конфіг ЛІГИ
+        # читався з ЖИВОГО `tasks.json` установки. Тепер: `DC_TASKS_FILE` знято, конфіг — вигадана пара, лог — шов
+        # `OVERVIEW_LOG` у тимчасовій теці (справжній `~/.claude/pipeline-feedback/` не пишемо), `Popen` — заглушка.
+        tmp = tempfile.mkdtemp(prefix='ovsync-guard-')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        self.log = os.path.join(tmp, 'overview-sync.log')
+        for patcher in (mock.patch.dict(os.environ, {}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
+                        mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.example', 'sk-test-1')),
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        os.environ.pop('DC_TASKS_FILE', None)
 
     def tearDown(self):
         if self._saved is None:
@@ -2195,6 +2208,7 @@ class OverviewSyncGuard(unittest.TestCase):
             serve.Handler._overview_sync(None)   # self не використовується
         self.assertFalse(popen.called,
                          'з DC_NO_OVERVIEW пуш реєстру не має навіть стартувати')
+        self.assertFalse(os.path.exists(self.log), 'тиша гейта — без відкритого лога')
 
     def test_without_guard_registry_push_runs(self):
         """Контроль: без змінної пуш працює, інакше тест вище зелений задарма."""
@@ -2203,26 +2217,38 @@ class OverviewSyncGuard(unittest.TestCase):
             serve.Handler._overview_sync(None)
         self.assertEqual(popen.call_count, 1)
 
+    def test_dc_tasks_file_silences_the_league_push(self):
+        """4c-1: ізольований прогін (`DC_TASKS_FILE`) не пише в спільний Supabase ЛІГИ і з ПРОЦЕСУ. У 0.11.0 цей закон стояв лише
+        на читанні (`_team_fetch`), а `Popen` стартував і за `DC_TASKS_FILE` (знімок: `dc_tasks_file_with_integrations_on`)."""
+        os.environ.pop('DC_NO_OVERVIEW', None)
+        os.environ['DC_TASKS_FILE'] = os.path.join(os.path.dirname(self.log), 'tasks.json')
+        with mock.patch.object(serve.subprocess, 'Popen') as popen:
+            serve.Handler._overview_sync(None)
+        self.assertFalse(popen.called)
+        self.assertFalse(os.path.exists(self.log))
+
 
 class OverviewSyncLog(unittest.TestCase):
     """`_overview_sync` відкриває лог синку ДО `Popen` і мусить його закрити сам: дитина вже має
     власну копію дескриптора, а батьківський файловий обʼєкт лишався відкритим — на збої `Popen`
-    назавжди (ResourceWarning), на успіху до збирача сміття. ⛔ Лог — у ТИМЧАСОВІЙ домівці: справжній
-    `~/.claude/pipeline-feedback/overview-sync.log` тут не відкривається."""
+    назавжди (ResourceWarning), на успіху до збирача сміття. ⛔ Лог — у ТИМЧАСОВІЙ теці: справжній
+    `~/.claude/pipeline-feedback/overview-sync.log` тут не відкривається (шов `serve.OVERVIEW_LOG`, 4c-1: раніше підмінявся
+    `HOME`, але шлях був зашитий у метод — тепер підміна явна й не залежить від домівки)."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='ovsync-')
         self.addCleanup(shutil.rmtree, self.tmp, True)
         os.makedirs(os.path.join(self.tmp, '.claude', 'pipeline-feedback'))
-        saved = os.environ.get('DC_NO_OVERVIEW')
+        self.log = os.path.join(self.tmp, '.claude', 'pipeline-feedback', 'overview-sync.log')
+        # 4c-1 (Task 6): гейти `_overview_sync` — `DC_TASKS_FILE` (його лишають сусідні класи), конфіг ЛІГИ (раніше — живий
+        # `tasks.json`) і стан «один синк на простір» (спільний на процес) — задає сам тест.
+        for patcher in (mock.patch.dict(os.environ, {'HOME': self.tmp}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
+                        mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.example', 'sk-test-1')),
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        os.environ.pop('DC_TASKS_FILE', None)
         os.environ.pop('DC_NO_OVERVIEW', None)
-
-        def restore():
-            if saved is None:
-                os.environ.pop('DC_NO_OVERVIEW', None)
-            else:
-                os.environ['DC_NO_OVERVIEW'] = saved
-        self.addCleanup(restore)
 
     def sync(self, popen_error=None):
         """Один `_overview_sync` з підміненим `Popen`; повертає файлові обʼєкти, що дістали `stdout`."""
@@ -2234,8 +2260,7 @@ class OverviewSyncLog(unittest.TestCase):
             if popen_error:
                 raise popen_error
             return mock.MagicMock()
-        with mock.patch.dict(os.environ, {'HOME': self.tmp}), \
-                mock.patch.object(serve.subprocess, 'Popen', side_effect=popen):
+        with mock.patch.object(serve.subprocess, 'Popen', side_effect=popen):
             serve.Handler._overview_sync(None)      # self не використовується
         return seen
 
@@ -2265,8 +2290,7 @@ class OverviewSyncLog(unittest.TestCase):
             fake = mock.MagicMock()
             fake.close.side_effect = OSError('ENOSPC')
             with self.subTest(popen_error=popen_error):
-                with mock.patch.dict(os.environ, {'HOME': self.tmp}), \
-                        mock.patch.object(serve, 'open', create=True, return_value=fake), \
+                with mock.patch.object(serve, 'open', create=True, return_value=fake), \
                         mock.patch.object(serve.subprocess, 'Popen', side_effect=popen_error or mock.DEFAULT):
                     serve.Handler._overview_sync(None)        # не кидає
                 fake.close.assert_called_once_with()

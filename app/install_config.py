@@ -51,3 +51,19 @@ def supabase_config():
         if _SUPABASE_URL_RE.fullmatch(url) and _SUPABASE_KEY_RE.fullmatch(key):
             return url.rstrip('/'), key
     return None, None
+
+
+def service_key_config():
+    """`(url, key)` із оточення — `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` — або `(None, None)`: ЗАПАСНИЙ ключ ЛІГИ для CLI-пушера
+    (`bin/overview_push.py`), коли `supabase_config()` конфігу не дав (спека 4c-1 §5; так було до 4c-1: сервісний ключ пушер
+    брав з оточення). Та сама перевірка форми, що в `supabase_config`.
+
+    ⛔ Це ОКРЕМА функція, а не четверте джерело `supabase_config()`: його читають і командні коментарі, і Teams, а сервісний
+    ключ (повний доступ до проєкту) туди потрапляти не мусить. Лише пара — адреса з `SUPABASE_URL`, ключ з
+    `SUPABASE_SERVICE_KEY`: так адреса з одного джерела й ключ з іншого не змішуються."""
+    url, key = os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_SERVICE_KEY')
+    if isinstance(url, str) and isinstance(key, str):
+        url, key = url.strip(), key.strip()
+        if _SUPABASE_URL_RE.fullmatch(url) and _SUPABASE_KEY_RE.fullmatch(key):
+            return url.rstrip('/'), key
+    return None, None

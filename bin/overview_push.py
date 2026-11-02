@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""design-canvas · пуш статусу проєктів у реєстр овервью (Supabase). Task 1: чиста логіка."""
-import base64, json, os, re, subprocess, sys, time
+"""design-canvas · пуш статусу проєктів у командний дашборд: тонкий CLI над `app/dashboard.py` (етап 4c-1).
+
+    overview_push.py sync [--space ID]   один прохід синку карток простору (без --space — простір ЛІГА, як кличе планувальник)
+    overview_push.py discover            лише базові картки з реєстру задач (ЛІГА)
+
+Збирання карток і сам прохід — у `app/dashboard.py`; запис у сховище робить МОДУЛЬ ролі `dashboard` простору
+(`deai_modules.provider('dashboard', простір)`: вбудований `supabase-dashboard`, свій модуль чи `'legacy'` для ЛІГИ з конфігом
+установки). Тут лишились кроки, що ще не стали ролями й передаються в синк колбеками: реєстр GitLab і статуси Jira (до 4c-2/4d).
+⛔ Скрипт НЕ імпортує сервер: його кличуть і фоном із сервера, і зовнішній планувальник, і серверу тут нічого не належить.
+"""
+import argparse, base64, json, os, sys
 import urllib.request
 
 # app/ (сусідня тека) на шляху імпорту — для чистих моделей (pages_model тощо)
@@ -14,9 +23,12 @@ from task_state import iter_count, task_state  # noqa: F401
 # Збирання карток переїхало в `app/dashboard.py` (етап 4c-1) без зміни поведінки; старі імена лишаються тут реекспортом —
 # на них спираються `bin/test_overview_push.py` і знімок `tests/make_before_4c1.py` (підміняють їх на самому пушері).
 from dashboard import (_PII, _GL_SSH, _GL_BRANCH, gitlab_web, to_iso, map_status, preview_source,  # noqa: F401
-                       comment_project_key, _identity, _humanize, _fixture_reason)
+                       comment_project_key, _identity, _humanize)
 from dashboard import build_card as build_row, card_has_pii as row_has_pii, discover_card as discover_row  # noqa: F401
-import dashboard as _dashboard
+import dashboard
+import deai_modules
+import install_config
+import spaces
 
 # ---------- Jira статуси (реальний workflow-статус, сайт команди) ----------
 _JIRA_BASE = "https://jira.example.com"
@@ -63,27 +75,8 @@ def jira_statuses(keys):
         return {}
     return out
 
-# ---------- Supabase write client (Task 2) ----------
-# Конфіг Supabase: спершу env, інакше геттер конфігу установки (`serve.supabase_config`).
-# ⚠️ Порядок джерел ПРОТИЛЕЖНИЙ `serve.supabase_config()` (там файл `tasks.json` важить більше за оточення) і тут оточення
-# знає ще й `SUPABASE_SERVICE_KEY`. Сервер передає дитині `_overview_sync` конфіг через оточення — тож там усе збігається;
-# окремий чи запланований `overview_push.py sync` із чужим `SUPABASE_URL`/`SUPABASE_KEY` в оточенні пише ТУДИ. Дашборд — етап 4c,
-# поведінку тут не змінюємо (CHANGELOG 0.10.0, «Known limits»).
-
-def _supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
-    if not (url and key):
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
-        from serve import supabase_config  # геттер конфігу установки (`serve.supabase_config`)
-        url, key = supabase_config()
-    if not (url and key):
-        raise RuntimeError("Supabase не налаштовано: supabase_url і supabase_key у tasks.json "
-                           "або SUPABASE_URL/SUPABASE_KEY")
-    return url.rstrip("/"), key
-
 def _ssl_context():
-    """Проверенный TLS: certifi, если есть (фикс macOS python.org — как в serve.py)."""
+    """Проверенный TLS: certifi, если есть (фикс macOS python.org — как в serve.py). Лишився лише для запиту до Jira."""
     import ssl
     try:
         import certifi
@@ -91,76 +84,28 @@ def _ssl_context():
     except Exception:  # noqa: BLE001
         return ssl.create_default_context()
 
-def upsert_project(row, ignore=False):
-    """ignore=False → merge-duplicates (оновити наявний рядок, для канваса).
-    ignore=True → ignore-duplicates (лише вставити новий, НЕ чіпати наявний — для discover,
-    щоб не затерти багаті дані канваса базовою карткою)."""
-    url, key = _supabase()
-    body = json.dumps([row]).encode("utf-8")
-    resolution = "ignore-duplicates" if ignore else "merge-duplicates"
-    req = urllib.request.Request(
-        f"{url}/rest/v1/overview_projects?on_conflict=id",
-        data=body, method="POST",
-        headers={"apikey": key, "Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json",
-                 "Prefer": f"resolution={resolution},return=minimal"})
-    with urllib.request.urlopen(req, timeout=10, context=_ssl_context()) as r:
-        return r.status
-
-# ---------- sync CLI (Task 3): tasks.json → per-task state → rows → upsert ----------
-# OFFLINE-testable: жодного імпорту serve.py і жодних мережевих викликів у логіці
-# синхронізації самій по собі (лише upsert_project() у кінці ходить у мережу).
-
-def _tasks_path():
-    """Той самий DC_TASKS_FILE, що й у serve.tasks_path() — інакше пушер і сервер
-    читали б РІЗНІ файли (сервер — підмінений тестовий, пушер — живий, або
-    навпаки), і синк реєстру знову розʼїхався б із тим, що бачить дизайнер.
-    Оточення читається на кожен виклик, не кешується."""
-    return os.environ.get("DC_TASKS_FILE") or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tasks.json")
+# ---------- sync CLI: файл задач простору → картки → `push` модуля ролі `dashboard` ----------
+# ⛔ Клієнта Supabase (`_supabase`, `upsert_project`, `open_comment_counts`) тут більше нема: запис і читання лічильників
+# робить модуль (`supabase-dashboard`), конфіг — з УСТАНОВКИ (`install_config.supabase_config()`: файл раніше за оточення — як
+# у сервера; відоме обмеження 0.10.0, коли пушер читав оточення першим, закрито). Урок, що зник разом із `_supabase`: окремий
+# `overview_push.py sync` із чужим `SUPABASE_URL`/`SUPABASE_KEY` в оточенні писав ТУДИ; тепер оточення — лише запасний шлях.
 
 def load_tasks_file(path=None):
-    with open(path or _tasks_path(), encoding="utf-8") as f:
+    """Файл задач (`{'tasks': {…}}`). Без `path` — старий файл ЛІГИ (`install_config.legacy_tasks_path`: той самий `DC_TASKS_FILE`,
+    що в сервера; пушер і сервер читали б РІЗНІ файли — сервер підмінений тестовий, пушер живий — і синк знову розʼїхався б із тим,
+    що бачить дизайнер). Оточення читається на кожен виклик, не кешується."""
+    with open(path or install_config.legacy_tasks_path(), encoding="utf-8") as f:
         return json.load(f)
-
-def open_comment_counts():
-    """Реальні лічильники ВІДКРИТИХ коментарів по project_id з таблиці comments
-    (той самий Supabase, що й комментатор). Best-effort → {} при будь-якій помилці."""
-    try:
-        url, key = _supabase()
-        req = urllib.request.Request(
-            f"{url}/rest/v1/comments?status=eq.open&select=project_id",
-            headers={"apikey": key, "Authorization": f"Bearer {key}"})
-        with urllib.request.urlopen(req, timeout=10, context=_ssl_context()) as r:
-            rows = json.load(r)
-    except Exception:  # noqa: BLE001
-        return {}
-    counts = {}
-    for row in rows:
-        pid = row.get("project_id")
-        if pid:
-            counts[pid] = counts.get(pid, 0) + 1
-    return counts
 
 # ---------- Discovery: реєстр задач (design-office, гілка registry) ----------
 # Реєстр — ЄДИНЕ джерело істини по задачах усіх напрямків (united / liga360 / seo).
 # Раніше тут сканувалась тека mockup/* ОДНОГО репо, тому напрямки в оверв'ю не
 # розрізнялися і бачився тільки перший репозиторій.
 
-def _serve():
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
-    import serve  # noqa
-    return serve
-
 def _registry():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import registry  # noqa
     return registry
-
-def _drop_fixtures(entries, where):
-    """{id: запис} без фікстур (`dashboard._drop_fixtures`); причину бере з ЦЬОГО модуля (`_fixture_reason`) — шов, яким
-    тести пушера вимикають бар'єр підміною імені тут."""
-    return _dashboard._drop_fixtures(entries, where, reason=_fixture_reason)
 
 def discover_projects(cfg):
     """{id: запис} із реєстру. {} при будь-якій помилці (нема VPN/доступу) — не падаємо."""
@@ -170,81 +115,118 @@ def discover_projects(cfg):
     except Exception:  # noqa: BLE001
         return {}
 
-def cmd_discover():
-    cfg = load_tasks_file()
-    reg = _drop_fixtures(discover_projects(cfg), "/discover")
-    count = 0
-    for pid, entry in reg.items():
-        row = discover_row(pid, entry)
-        if row_has_pii(row):
-            continue
-        try:
-            upsert_project(row, ignore=True)  # лише нові
-            count += 1
-        except Exception as e:  # noqa: BLE001
-            print(f"⚠ overview/discover: «{pid}»: {e}")
-    print(f"✅ overview/discover: у реєстрі {len(reg)}, оброблено {count} (нові додано)")
+
+#: Коди виходу: 0 — проход відбувся (збій окремих карток — у лозі, не в коді: як було); 1 — не вдалось почати (нема файла
+#: задач, постачальник відмовив, не налаштовано Supabase); 2 — невірне використання (невідомий простір, `discover` не для ЛІГИ).
+EXIT_FAIL, EXIT_USAGE = 1, 2
+
+
+class CliError(Exception):
+    """Причина, з якою CLI не може почати: `code` — код виходу, `args[0]` — текст у лог."""
+    def __init__(self, text, code=EXIT_FAIL):
+        super().__init__(text)
+        self.code = code
+
+
+def _space(space_id):
+    """Запис простору з реєстру: за `--space ID`; без нього — простір ЛІГА (запис із `legacy`: так кличе зовнішній планувальник).
+    `legacy` — псевдонім простору ЛІГА, коли в реєстрі його id інший (сервер без фіксованого простору запиту шле саме його).
+    Невідомий — `CliError` (код 2)."""
+    try:
+        reg = spaces.load_registry()
+    except spaces.SpacesError as e:
+        raise CliError("⛔ overview: реєстр просторів не читається (%s)" % e.code)
+    found = None
+    for sp in reg["spaces"]:
+        if space_id is None and sp.get("legacy"):
+            found = sp
+            break
+        if space_id is not None and sp["id"] == space_id:
+            found = sp
+            break
+    if found is None and space_id == spaces.IMPLICIT["id"]:
+        found = next((sp for sp in reg["spaces"] if sp.get("legacy")), None)
+    if found is None:
+        raise CliError("⛔ overview: невідомий простір «%s»" % space_id if space_id is not None
+                       else "⛔ overview: простору ЛІГА (legacy) у реєстрі нема", EXIT_USAGE)
+    return found
+
+
+def _legacy_config():
+    """`(url, key)` ЛІГИ: конфіг установки (файл раніше за оточення); нема — запасна пара `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`
+    з оточення (спека §5), і лише так: `supabase_config()` сервісного ключа НЕ бачить (його читають і коментарі)."""
+    url, key = install_config.supabase_config()
+    if url is None:
+        url, key = install_config.service_key_config()
+    return url, key
+
+
+def _target(sp):
+    """`(module, ctx, legacy)` постачальника ролі `dashboard` простору `sp`; `(None, None, False)` — постачальника нема.
+    `'legacy'` (ЛІГА) — вбудований модуль із `ctx` з конфігу установки (`dashboard.legacy_ctx`, НЕ `module_ctx`: у ЛІГИ нема
+    `space.json`/`secrets.json`); інакше `module_ctx` простору."""
+    try:
+        prov = deai_modules.provider("dashboard", sp)
+        if prov is None:
+            return None, None, False
+        if prov == "legacy":
+            return dashboard.legacy_module(), dashboard.legacy_ctx(*_legacy_config(), space_id=sp["id"]), True
+        return prov, deai_modules.module_ctx(sp, prov), False
+    except deai_modules.ModuleError as e:
+        raise CliError("⛔ overview: %s" % (e.message or e.code))
+    except spaces.SpacesError as e:
+        raise CliError("⛔ overview: реєстр просторів не читається (%s)" % e.code)
+
+
+def _tasks_of(sp):
+    try:
+        return load_tasks_file(spaces.tasks_file(sp))
+    except (OSError, ValueError) as e:
+        raise CliError("⛔ overview: файл задач простору «%s» не читається (%s)" % (sp["id"], type(e).__name__))
+
+
+def cmd_sync(space_id=None, *, call=None, log=print):
+    sp = _space(space_id)
+    module, ctx, legacy = _target(sp)
+    if module is None:
+        log("·  overview: у просторі «%s» нема постачальника командного дашборда — нічого синхронізувати" % sp["id"])
+        return
+    cfg = _tasks_of(sp)
+    # Реєстр і Jira — кроки ЛІГИ (колбеки): звичайний простір їх не має, і ні в реєстр, ні в Jira не ходить.
+    dashboard.sync(cfg, module, ctx, discover=(lambda: discover_projects(cfg)) if legacy else None,
+                   statuses=jira_statuses if legacy else None, log=log, call=call)
+
+
+def cmd_discover(space_id=None, *, call=None, log=print):
+    """Лише базові картки з реєстру (ігнорує наявні рядки). Лише для ЛІГИ: реєстр GitLab — її крок."""
+    sp = _space(space_id)
+    module, ctx, legacy = _target(sp)
+    if not legacy:
+        raise CliError("⛔ overview: discover — лише для простору ЛІГА (реєстр задач GitLab)", EXIT_USAGE)
+    cfg = _tasks_of(sp)
+    reg, ok, failed = dashboard.push_registry(module, ctx, discover_projects(cfg), "/discover", log=log, call=call)
+    for pid, why in failed.items():
+        log("⚠ overview/discover: «%s»: %s" % (pid, why))
+    log("✅ overview/discover: у реєстрі %d, оброблено %d (нові додано)" % (len(reg), ok))
     return list(reg)
 
-def cmd_sync():
-    cfg = load_tasks_file()
-    designer, designer_key = _identity()
-    # 0) Реєстр: усі заведені задачі всіх напрямків (базові картки); локальні задачі нижче їх збагатять
-    disc = 0
-    for pid, entry in _drop_fixtures(discover_projects(cfg), "").items():
-        row = discover_row(pid, entry)
-        if row_has_pii(row):
-            continue
-        try:
-            upsert_project(row, ignore=True); disc += 1  # лише нові, не чіпати багаті рядки канваса
-        except Exception:  # noqa: BLE001
-            pass
-    if disc:
-        print(f"✅ overview: з реєстру оброблено {disc} задач (нові додано)")
-    counts = open_comment_counts()  # реальні відкриті коменти → також рухають статус у «review»
-    jstatus = jira_statuses([t.get("jira") for t in cfg.get("tasks", {}).values()])  # реальні Jira-статуси
-    count = 0
-    skipped = []
-    # Фікстура в ЛОКАЛЬНОМУ кеші (живий tasks.json, затертий тестом, як
-    # 15.09.2026) — теж не на дашборд, навіть поки її тимчасова тека ще існує.
-    for tid, task in _drop_fixtures(cfg.get("tasks", {}), "").items():
-        # ⛔ Немає теки задачі на цій машині — ми про неї НІЧОГО не знаємо, тому й
-        # не пишемо: інакше task_state() віддає нулі, і синк вихолощує спільний
-        # рядок (реальний випадок: `erb` обнулявся кожні 30 хв). Базова картка
-        # такої задачі вже прийшла з реєстру кроком 0.
-        d = task.get("dir") or ""
-        if not os.path.isdir(d):
-            skipped.append(tid)
-            continue
-        st = task_state(task)
-        st["open_comments"] = counts.get(comment_project_key(task, tid), 0)
-        js = jstatus.get(task.get("jira") or "")
-        if js and js.get("name"):
-            st["jira_status"] = js["name"]
-            st["jira_status_cat"] = js.get("cat")
-        row = build_row(tid, task, st, designer, designer_key)
-        if row_has_pii(row):
-            print(f"⚠ overview: пропущено «{tid}» — виявлено PII в даних")
-            continue
-        try:
-            upsert_project(row)
-            count += 1
-        except Exception as e:  # noqa: BLE001
-            print(f"⚠ overview: не вдалося синхронізувати «{tid}»: {e}")
-    print(f"✅ overview: синхронізовано {count} проєктів")
-    # Пропуски називаємо вголос: тиха «часткова» синхронізація виглядає як повна.
-    if skipped:
-        print(f"·  overview: пропущено {len(skipped)} — теки немає на цій машині "
-              f"({', '.join(skipped)}); їхні картки лишились як були")
 
-def main():
-    args = sys.argv[1:]
-    if not args or args[0] == "sync":
-        cmd_sync()
-    elif args[0] == "discover":
-        cmd_discover()
-    else:
-        print("Використання: overview_push.py [sync|discover]")
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="overview_push.py", description="пуш карток задач у командний дашборд")
+    sub = ap.add_subparsers(dest="cmd")
+    p_sync = sub.add_parser("sync", help="один прохід синку карток простору")
+    p_sync.add_argument("--space", metavar="ID", help="id простору; без нього — простір ЛІГА")
+    sub.add_parser("discover", help="лише базові картки з реєстру задач (ЛІГА)")
+    args = ap.parse_args(sys.argv[1:] if argv is None else argv)   # argparse сам виходить із кодом 2 на хибному використанні
+    try:
+        if args.cmd == "discover":
+            cmd_discover()
+        else:                       # без підкоманди — sync простору ЛІГА (як кликав зовнішній планувальник)
+            cmd_sync(getattr(args, "space", None))
+    except CliError as e:
+        print(e.args[0])
+        return e.code
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

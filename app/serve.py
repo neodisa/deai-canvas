@@ -5043,6 +5043,89 @@ def _guarded_request(method):
     return wrapper
 
 
+# ---------- Синк дашборда: фоновий процес, один на простір (4c-1) ----------
+#: Лог синку ЛІГИ: той самий файл, що й у планового (зовнішнього) синку. ШОВ для тестів — вони МУСЯТЬ його підміняти (справжній
+#: `~/.claude/pipeline-feedback/` тести не пишуть). `~` розгортається на КОЖЕН запуск (HOME тесту), а не при імпорті.
+OVERVIEW_LOG = '~/.claude/pipeline-feedback/overview-sync.log'
+_SYNC_LOCK = threading.Lock()
+#: `{id простору: {'popen': дитина, 'pending': чи просили ще раз}}` — стан «один синк на простір» (під `_SYNC_LOCK`).
+_SYNC_RUNS = {}
+
+
+def _overview_log_path(legacy):
+    """Куди дитина пише: ЛІГА — `OVERVIEW_LOG`; інші простори — `<DEAI_HOME>/logs/dashboard-sync.log` (тека лише для власника,
+    0o700: у лозі назви задач; `chmod` окремо — `makedirs(mode=)` б'ється об umask)."""
+    if legacy:
+        return os.path.expanduser(OVERVIEW_LOG)
+    d = os.path.join(spaces.home(), 'logs')
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
+    return os.path.join(d, 'dashboard-sync.log')
+
+
+def _overview_spawn(sid, legacy):
+    """Стартувати дитину синку простору `sid`; `None`, коли не вийшло (тека лога, `Popen`) — best-effort, не кидає.
+    ⛔ argv рівно `[sys.executable, bin/overview_push.py, 'sync', '--space', id]`: той самий інтерпретатор, що веде сервер (було
+    літеральне `python3`), і простір ЯВНО (синк веде простір запиту, а не «поточний машини»); конфіг не передається."""
+    log = None
+    try:
+        # Вивід — у лог, а НЕ в /dev/null. Досі цей пуш був подвійно німим: виняток ковтав except, а те, що
+        # написав сам скрипт, ішло в нікуди. Саме так ховається клас збоїв «на дашборді старі дані, і ніхто не знає чому».
+        log = open(_overview_log_path(legacy), 'a', encoding='utf-8')
+        return subprocess.Popen(
+            [sys.executable, os.path.join(ROOT, 'bin', 'overview_push.py'), 'sync', '--space', sid],
+            stdout=log, stderr=subprocess.STDOUT)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        # Дитина вже має власну копію дескриптора; наш файловий обʼєкт закриваємо сами — і
+        # коли `Popen` упав (інакше ResourceWarning і дескриптор до збирача сміття).
+        if log is not None:
+            with contextlib.suppress(OSError):      # best-effort: збій закриття не кидає з `finally`
+                log.close()
+
+
+def _overview_launch(sid, legacy):
+    """Один синк на простір: поки попередня дитина жива (`poll() is None`), новий тригер лише ставить позначку «ще раз» (рівно
+    ОДИН повтор після її завершення, а не по одному на тригер); тригер ІНШОГО простору стартує паралельно. До 4c-1 кожен тригер
+    був окремим процесом, і два синки одного простору бігли разом (гонка за один рядок). Спостерігач — потік, що чекає `wait()`."""
+    with _SYNC_LOCK:
+        run = _SYNC_RUNS.get(sid)
+        if run is not None and run['popen'].poll() is None:
+            run['pending'] = True
+            return
+        p = _overview_spawn(sid, legacy)
+        if p is None:
+            _SYNC_RUNS.pop(sid, None)
+            return
+        _SYNC_RUNS[sid] = {'popen': p, 'pending': False}
+    # `_in_space`: кожен потік у цьому файлі несе простір запиту (інваріант `tests/test_spaces_serve.py`); спостерігач його не питає,
+    # але правило одне на всіх
+    threading.Thread(target=_in_space(lambda: _overview_watch(sid, legacy, p)), name=f'overview-sync-{sid}', daemon=True).start()
+
+
+def _overview_watch(sid, legacy, p):
+    """Чекає дитину `p`; була позначка «ще раз» — стартує рівно одну нову й чекає вже її. Запис простору зник чи належить іншій
+    дитині (новий тригер встиг стартувати, коли `p` вже скінчилась) — виходить: ту дитину веде свій спостерігач."""
+    while True:
+        try:
+            p.wait()
+        except Exception:  # noqa: BLE001 — спостерігач не падає: найгірше — повтор пропаде до наступного тригера
+            pass
+        with _SYNC_LOCK:
+            run = _SYNC_RUNS.get(sid)
+            if run is None or run['popen'] is not p:
+                return
+            if not run['pending']:
+                del _SYNC_RUNS[sid]
+                return
+            p = _overview_spawn(sid, legacy)
+            if p is None:
+                del _SYNC_RUNS[sid]
+                return
+            _SYNC_RUNS[sid] = {'popen': p, 'pending': False}
+
+
 class Handler(SimpleHTTPRequestHandler):
     # Маніфест застосунку (PWA) — `application/manifest+json`. ЯВНИЙ запис, а не
     # везіння версії Python: у таблиці `mimetypes` старих збірок (системний
@@ -7061,12 +7144,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(_vcs_failure(e))
 
     def _overview_sync(self):
-        """Best-effort: оновити реєстр овервью (bin/overview_push.py sync) після
-        publish/gitlab-sync. Фоново, не блокує основну дію; помилки ковтаємо.
+        """Best-effort: оновити командний дашборд (`bin/overview_push.py sync --space <id>`) після publish/gitlab-sync/autosync.
+        Фоново, не блокує основну дію; помилки ковтаємо. Рішення — за ПОСТАЧАЛЬНИКОМ ролі `dashboard` простору запиту, а не за
+        прапорцем `integrations` (4c-1): звичайний простір із модулем дашборда синкає так само, як ЛІГА.
 
-        Простір без інтеграцій у дашборд команди не пише: його задач там нема й бути не може."""
-        if not _outbound_ok():
-            return
+        Гейти (кожен — тиша, без лога й без `Popen`): `DC_NO_OVERVIEW` — для БУДЬ-ЯКОГО постачальника; нікого немає (`None`,
+        збій реєстру чи рішення ролі); `'legacy'` (ЛІГА) разом із `DC_TASKS_FILE` — ізольований прогін не має писати в
+        спільний Supabase (закон 03.08.2026; у 0.11.0 цей гейт був лише на читанні, а `Popen` стартував і за `DC_TASKS_FILE` —
+        дірка закрита свідомо); ЛІГА без конфігу установки — пушити нікуди. Конфіг дитині НЕ передається (оточенням чи ще
+        чимось): вона читає `install_config` сама. Не більше одного синку на простір одночасно (`_overview_launch`)."""
         if os.environ.get('DC_NO_OVERVIEW'):
             # ⛔ Тести й будь-який офлайн-прогін не мають писати в ПРОД-Supabase.
             # Інцидент 03.08.2026: на командному дашборді (overview_projects)
@@ -7074,29 +7160,23 @@ class Handler(SimpleHTTPRequestHandler):
             # звідси. Прогін tests/test_serve.py тримав підмінений конфіг задач,
             # а цей Popen успадковував оточення і пушив фікстуру в реальну базу.
             return
-        sb_url, sb_key = supabase_config()
-        if sb_url is None:
-            return                      # конфігу установки нема — пушити нікуди (і лога не відкриваємо)
-        log = None
         try:
-            env = {**os.environ, 'SUPABASE_URL': sb_url, 'SUPABASE_KEY': sb_key}
-            # Вивід — у той самий лог, що й у планового синку, а НЕ в /dev/null.
-            # Досі цей пуш був подвійно німим: виняток ковтав except, а те, що
-            # написав сам скрипт, ішло в нікуди. Саме так ховається клас збоїв
-            # «на дашборді старі дані, і ніхто не знає чому».
-            log = open(os.path.expanduser(
-                '~/.claude/pipeline-feedback/overview-sync.log'), 'a', encoding='utf-8')
-            subprocess.Popen(
-                ['python3', os.path.join(ROOT, 'bin', 'overview_push.py'), 'sync'],
-                env=env, stdout=log, stderr=subprocess.STDOUT)
-        except Exception:  # noqa: BLE001
-            pass
-        finally:
-            # Дитина вже має власну копію дескриптора; наш файловий обʼєкт закриваємо сами — і
-            # коли `Popen` упав (інакше ResourceWarning і дескриптор до збирача сміття).
-            if log is not None:
-                with contextlib.suppress(OSError):      # best-effort: збій закриття не кидає з `finally`
-                    log.close()
+            prov = deai_modules.provider('dashboard')
+        except Exception:  # noqa: BLE001 — реєстр/`space.json` не читаються: пушити нікуди, ніхто не мусить про це знати
+            return
+        if prov is None:
+            return
+        legacy = prov == 'legacy'
+        if legacy:
+            if os.environ.get('DC_TASKS_FILE'):
+                return
+            sb_url, _ = supabase_config()
+            if sb_url is None:
+                return                  # конфігу установки нема — пушити нікуди (і лога не відкриваємо)
+        # Простір запиту; без фіксованого (інструменти ЛІГА, тести) — псевдонім простору ЛІГА: `provider` у такому стані теж
+        # вирішує як для ЛІГИ без читання реєстру, а CLI розуміє `legacy` (`overview_push._space`).
+        sid = spaces.request_space_id() or spaces.IMPLICIT['id']
+        _overview_launch(sid, legacy)
 
     # ---------- Реестр задач (интеграция dev-pipeline) ----------
 

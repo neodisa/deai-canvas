@@ -1,6 +1,49 @@
-import json, os, shutil, sys, tempfile, unittest
+import contextlib, io, json, os, shutil, sys, tempfile, unittest
+from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import overview_push as ov
+import dashboard
+
+
+class FakeModule:
+    """Модуль ролі `dashboard` для тестів CLI: `deai_modules.call` бачить `status`, `id` і `fn(імʼя)`."""
+    id = "fake-dashboard"
+    status = "ok"
+
+    def __init__(self, fns):
+        self._fns = fns
+
+    def fn(self, name):
+        return self._fns.get(name)
+
+
+def run_cli(fn, cfg, registry=None, counts=None, jira=None, fixture_reason=None, *args):
+    """Один прохід CLI-функції `fn` (`ov.cmd_sync`/`ov.cmd_discover`) на заглушках: файл задач, реєстр GitLab, Jira й сам модуль
+    (`push`/`open_comments` пишуть у список). Після 4c-1 (Task 6) точка підміни запису — МОДУЛЬ (`push`), а не `upsert_project`;
+    фікстурний бар'єр — `dashboard._fixture_reason` (кроки синку живуть там). Повертає `([(mode, картка)], вивід)`."""
+    sent, buf = [], io.StringIO()
+
+    def push(ctx, cards, mode):
+        sent.extend((mode, c) for c in cards)
+        return {"ok": len(cards), "failed": {}}
+    fns = {"push": push}
+    if counts is not None:
+        fns["open_comments"] = lambda ctx: counts
+    module = FakeModule(fns)
+    patches = [mock.patch.object(ov, "_space", lambda sid: {"id": "legacy", "legacy": True}),
+               mock.patch.object(ov, "_target", lambda sp: (module, {"secrets": {}}, True)),
+               mock.patch.object(ov, "load_tasks_file", lambda path=None: cfg),
+               mock.patch.object(ov, "discover_projects", lambda c: dict(registry or {})),
+               mock.patch.object(ov, "jira_statuses", lambda keys: jira or {}),
+               mock.patch.object(dashboard, "_identity", lambda: ("Alpha", "alpha@example.com"))]
+    if fixture_reason is not None:
+        patches.append(mock.patch.object(dashboard, "_fixture_reason", fixture_reason))
+    with contextlib.ExitStack() as st:
+        for pt in patches:
+            st.enter_context(pt)
+        with contextlib.redirect_stdout(buf):
+            fn(*args)
+    return sent, buf.getvalue()
 
 class TestRow(unittest.TestCase):
     def _st(self, **kw):
@@ -157,103 +200,52 @@ class TestJiraStatuses(unittest.TestCase):
         self.assertEqual(got["LIGA-7008"], {"name": "To Do", "cat": "new"})
 
 
-class TestSupabaseGetter(unittest.TestCase):
-    """`_supabase()` без оточення й без конфігу установки — зрозуміла помилка, а не `None.rstrip` (4b-2).
-    Старий файл задач — тимчасовий порожній (справжній `tasks.json` не читається), `SUPABASE_*` прибрані."""
+class TestLegacyConfig(unittest.TestCase):
+    """Конфіг ЛІГИ для CLI (`_legacy_config`; замінив `TestSupabaseGetter`/`TestUpsertProject` — клієнт Supabase пішов у модуль
+    `supabase-dashboard`, його HTTP-форму стереже `tests/test_dashboard_module.py`): файл установки раніше за оточення;
+    запасна пара `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` лише коли файла/пари нема. Старий файл — тимчасовий."""
 
-    def test_no_env_and_no_config_is_a_clear_error_without_values(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            empty = os.path.join(tmp, "tasks.json")
-            with open(empty, "w", encoding="utf-8") as f:
-                f.write("{}")
-            saved = {k: os.environ.get(k) for k in
-                     ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")}
-            for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
+    NAMES = ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")
+
+    def _cfg(self, body, **env):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "tasks.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(body, f)
+        patcher = mock.patch.dict(os.environ, {"DC_TASKS_FILE": path, **env})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
+            if k not in env:
                 os.environ.pop(k, None)
-            os.environ["DC_TASKS_FILE"] = empty
-            try:
-                with self.assertRaises(RuntimeError) as ctx:
-                    ov._supabase()
-            finally:
-                for k, v in saved.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
-        self.assertIn("не налаштовано", str(ctx.exception))
-        self.assertNotIn("https://", str(ctx.exception))
 
-    def test_config_of_the_installation_is_used_when_env_is_empty(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = os.path.join(tmp, "tasks.json")
-            with open(cfg, "w", encoding="utf-8") as f:
-                json.dump({"supabase_url": "https://demo.supabase.co/", "supabase_key": "sb_publishable_test"}, f)
-            saved = {k: os.environ.get(k) for k in
-                     ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")}
-            for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
-                os.environ.pop(k, None)
-            os.environ["DC_TASKS_FILE"] = cfg
-            try:
-                got = ov._supabase()
-            finally:
-                for k, v in saved.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
-        self.assertEqual(got, ("https://demo.supabase.co", "sb_publishable_test"))
+    def test_the_file_of_the_installation_wins(self):
+        self._cfg({"supabase_url": "https://demo.supabase.example/", "supabase_key": "sk-test-file"},
+                  SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
+        self.assertEqual(ov._legacy_config(), ("https://demo.supabase.example", "sk-test-file"))
 
+    def test_no_file_pair_the_service_key_pair_from_the_environment(self):
+        self._cfg({}, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
+        self.assertEqual(ov._legacy_config(), ("https://env.supabase.example", "sk-test-service"))
 
-class TestUpsertProject(unittest.TestCase):
-    def setUp(self):
-        self._old_url = os.environ.get("SUPABASE_URL")
-        self._old_key = os.environ.get("SUPABASE_KEY")
-        os.environ["SUPABASE_URL"] = "https://demo.supabase.co"
-        os.environ["SUPABASE_KEY"] = "testkey"
+    def test_the_service_key_without_a_url_is_nothing(self):
+        """Ключ без `SUPABASE_URL` не парується ні з чим: адреса й ключ — з одного джерела."""
+        self._cfg({"supabase_url": "https://demo.supabase.example"}, SUPABASE_SERVICE_KEY="sk-test-service")
+        self.assertEqual(ov._legacy_config(), (None, None))
 
-    def tearDown(self):
-        if self._old_url is None:
-            os.environ.pop("SUPABASE_URL", None)
-        else:
-            os.environ["SUPABASE_URL"] = self._old_url
-        if self._old_key is None:
-            os.environ.pop("SUPABASE_KEY", None)
-        else:
-            os.environ["SUPABASE_KEY"] = self._old_key
+    def test_the_service_key_never_reaches_supabase_config(self):
+        """Сервісний ключ — лише запасний ключ ЛІГИ для CLI: `supabase_config()` (його бачать коментарі) його НЕ бачить."""
+        import install_config
+        self._cfg({}, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
+        self.assertEqual(install_config.supabase_config(), (None, None))
 
-    def test_upsert_project_posts_expected_request(self):
-        captured = {}
-
-        class FakeResponse:
-            status = 204
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        def fake_urlopen(req, timeout=None, context=None):
-            captured["request"] = req
-            return FakeResponse()
-
-        real_urlopen = ov.urllib.request.urlopen
-        ov.urllib.request.urlopen = fake_urlopen
-        try:
-            status = ov.upsert_project({"id": "x", "name": "n"})
-        finally:
-            ov.urllib.request.urlopen = real_urlopen
-
-        self.assertEqual(status, 204)
-        req = captured["request"]
-        self.assertTrue(req.full_url.endswith("/rest/v1/overview_projects?on_conflict=id"))
-        self.assertEqual(req.get_method(), "POST")
-        self.assertEqual(req.headers.get("Apikey"), "testkey")
-        self.assertEqual(req.headers.get("Authorization"), "Bearer testkey")
-        self.assertIn("resolution=merge-duplicates", req.headers.get("Prefer", ""))
-        body = json.loads(req.data.decode("utf-8"))
-        self.assertIsInstance(body, list)
-        self.assertIn({"id": "x", "name": "n"}, body)
+    def test_neither_is_unconfigured_and_cli_names_it_without_values(self):
+        self._cfg({})
+        with self.assertRaises(Exception) as ctx:
+            dashboard.legacy_ctx(*ov._legacy_config())
+        self.assertEqual(ctx.exception.code, "dashboard-unconfigured")
+        self.assertIn("не налаштовано", str(ctx.exception.message))
 
 
 class TestSync(unittest.TestCase):
@@ -313,41 +305,19 @@ class TestSync(unittest.TestCase):
         self.assertEqual(st3["code_url"], "https://dc-task3.vercel.app")
 
     def test_cmd_sync_upserts_each_task(self):
-        captured = []
-
-        def fake_upsert(row):
-            captured.append(row)
-            return 204
-
-        real_upsert = ov.upsert_project
-        real_loader = ov.load_tasks_file
-        real_counts = ov.open_comment_counts
-        real_jstatus = ov.jira_statuses
-        real_discover = ov.discover_projects
-        real_fixture = ov._fixture_reason
-        ov.upsert_project = fake_upsert
-        ov.load_tasks_file = lambda path=None: self.fixture
         # ⛔ До 27.09.2026 цей тест НЕ підміняв discover_projects — і крок 0
         # синку ходив у справжній клон реєстру (ensure_clone → git fetch/clone
-        # по SSH). Тест про локальні задачі, реєстр йому не потрібен.
-        ov.discover_projects = lambda cfg: {}
+        # по SSH). Тест про локальні задачі, реєстр йому не потрібен (`run_cli` його підміняє).
         # Теки задач фікстури лежать у tempfile — тобто самі по собі «фікстура»
         # для бар'єра `_fixture_reason` (див. TestFixturesNeverReachDashboard).
         # Тут перевіряється інше — підрахунок і статуси, — тому бар'єр вимкнено.
-        ov._fixture_reason = lambda task: None
         # task1 без comment_project → ключ «dc/task1»; 5 відкритих коментарів → статус review
-        ov.open_comment_counts = lambda: {"dc/task1": 5}
         # task3 (LIGA-3) має свіжий Jira-статус
-        ov.jira_statuses = lambda keys: {"LIGA-3": {"name": "UI Work", "cat": "indeterminate"}}
-        try:
-            ov.cmd_sync()
-        finally:
-            ov.upsert_project = real_upsert
-            ov.load_tasks_file = real_loader
-            ov.open_comment_counts = real_counts
-            ov.jira_statuses = real_jstatus
-            ov.discover_projects = real_discover
-            ov._fixture_reason = real_fixture
+        sent, _ = run_cli(ov.cmd_sync, self.fixture, counts={"dc/task1": 5},
+                          jira={"LIGA-3": {"name": "UI Work", "cat": "indeterminate"}},
+                          fixture_reason=lambda task: None)
+        captured = [card for mode, card in sent]
+        self.assertEqual({m for m, _ in sent}, {"merge"}, "задачі їдуть merge-ом, не insert")
 
         # task2 (теки немає) свідомо ПРОПУСКАЄТЬСЯ: раніше він їхав із нулями і
         # вихолощував спільний рядок — див. TestNoHollowingOtherPeoplesCards.
@@ -458,22 +428,10 @@ class TestNoHollowingOtherPeoplesCards(unittest.TestCase):
             "foreign": {"title": "Чужа", "dir": os.path.join(tmp, "nope"),
                         "owner": "Olha", "owner_key": "m@x"},
         }}
-        sent = []
-        orig = (ov.load_tasks_file, ov.upsert_project, ov.discover_projects,
-                ov.open_comment_counts, ov.jira_statuses, ov._fixture_reason)
-        ov.load_tasks_file = lambda path=None: cfg
-        ov.upsert_project = lambda row, ignore=False: sent.append(row) or 201
-        ov.discover_projects = lambda c: {}
-        ov.open_comment_counts = lambda: {}
-        ov.jira_statuses = lambda keys: {}
         # Тека «mine» — у tempfile, тобто для бар'єра фікстур вона фікстура;
         # тут перевіряється пропуск задач БЕЗ теки, тому бар'єр вимкнено.
-        ov._fixture_reason = lambda task: None
-        try:
-            ov.cmd_sync()
-        finally:
-            (ov.load_tasks_file, ov.upsert_project, ov.discover_projects,
-             ov.open_comment_counts, ov.jira_statuses, ov._fixture_reason) = orig
+        sent, _ = run_cli(ov.cmd_sync, cfg, counts={}, fixture_reason=lambda task: None)
+        sent = [card for mode, card in sent]
 
         ids = [r["id"] for r in sent]
         self.assertIn("mine", ids)
@@ -500,23 +458,8 @@ class TestFixturesNeverReachDashboard(unittest.TestCase):
                       "path": "mockup/erb"}}
 
     def _run(self, fn, cfg, registry):
-        import io
-        from contextlib import redirect_stdout
-        sent, buf = [], io.StringIO()
-        orig = (ov.load_tasks_file, ov.upsert_project, ov.discover_projects,
-                ov.open_comment_counts, ov.jira_statuses)
-        ov.load_tasks_file = lambda path=None: cfg
-        ov.upsert_project = lambda row, ignore=False: sent.append(row) or 201
-        ov.discover_projects = lambda c: dict(registry)
-        ov.open_comment_counts = lambda: {}
-        ov.jira_statuses = lambda keys: {}
-        try:
-            with redirect_stdout(buf):
-                fn()
-        finally:
-            (ov.load_tasks_file, ov.upsert_project, ov.discover_projects,
-             ov.open_comment_counts, ov.jira_statuses) = orig
-        return [r["id"] for r in sent], buf.getvalue()
+        sent, out = run_cli(fn, cfg, registry=registry, counts={})
+        return [r["id"] for _, r in sent], out
 
     def test_sync_does_not_send_registry_fixture(self):
         ids, out = self._run(ov.cmd_sync, {"tasks": {}},

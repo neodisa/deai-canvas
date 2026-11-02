@@ -11,6 +11,7 @@ import sys
 import time
 
 import deai_modules
+from task_state import task_state
 
 _PII = [re.compile(r"№?\s*\d{2,4}/\d{3,5}/\d{2,4}"), re.compile(r"\b\d{10}\b"), re.compile(r"\b\d{8}\b")]
 
@@ -164,18 +165,19 @@ def _fixture_reason(task):
     реєстрі сміття вже може лежати, і прибирає його людина, а не синк."""
     return _registry().fixture_path_reason(task)
 
-def _drop_fixtures(entries, where, reason=None):
+def _drop_fixtures(entries, where, reason=None, log=print):
     """{id: запис} без фікстур; кожну відкинуту — вголос, з причиною.
 
     `reason` — шов: функція «запис → причина чи None»; без неї — `_fixture_reason` цього модуля (шукається на момент
-    виклику, тож підміна в тестах працює). `bin/overview_push.py` передає СВІЙ `_fixture_reason`: його тести підміняють
-    саме це ім'я на пушері, і без шва бар'єр після переїзду їх би вже не слухався."""
+    виклику, тож підміна в тестах працює). `log` — куди називати відкинуте (типово `print`; `sync` передає свій). Колись
+    `bin/overview_push.py` передавав сюди СВІЙ `_fixture_reason` (його тести підміняли це ім'я на пушері); після 4c-1 (Task 6)
+    кроки синку живуть тут, тож шов — `dashboard._fixture_reason`."""
     out = {}
     for tid, e in entries.items():
         why = (reason or _fixture_reason)(e)
         if why:
-            print(f"⛔ overview{where}: не віддаю на дашборд «{tid}» — {why}; "
-                  f"прибери її з реєстру (гілка registry) і рядок з overview_projects")
+            log(f"⛔ overview{where}: не віддаю на дашборд «{tid}» — {why}; "
+                f"прибери її з реєстру (гілка registry) і рядок з overview_projects")
             continue
         out[tid] = e
     return out
@@ -265,3 +267,130 @@ def rows(module, ctx):
     """Рядки команди від постачальника: `module.rows(ctx)` у робочому потоці за `READ_TIMEOUT`, далі `normalize_rows`.
     Кидає `ModuleError` (збій модуля, `check-timeout`) чи `ValueError` (відповідь не список)."""
     return normalize_rows(deai_modules.call(module, 'rows', ctx, timeout=READ_TIMEOUT))
+
+
+# ------------------------------------------------------------------------------------------ запис: синк карток (Task 6)
+
+#: Скільки ядро чекає на ОДИН виклик `push`/`open_comments` модуля. Це фоновий процес синку (не сервер і не екран): модуль сам
+#: обмежує кожен пакет (15 с), а це стеля на весь виклик, щоб завислий модуль не тримав дитину вічно.
+PUSH_TIMEOUT = 60
+
+
+def _has_fn(module, name):
+    """Чи має модуль функцію `name` (необовʼязкові функції ролі: `open_comments`)."""
+    fn = getattr(module, 'fn', None)
+    try:
+        return callable(fn) and fn(name) is not None
+    except Exception:  # noqa: BLE001 — незавантажений модуль/збій каталогу: «функції нема»
+        return False
+
+
+def _push(call, module, ctx, cards, mode):
+    """`(ok, failed)` за один виклик `push(cards, mode)`. `failed` — `{id: текст}`. Не кидає: збій цілого сервісу
+    (`ModuleError`, тайм-аут) чи відповідь не за контрактом — це ВСІ картки в `failed` з одним текстом (синк веде далі й
+    називає їх вголос, а не падає посеред проходу)."""
+    if not cards:
+        return 0, {}
+    try:
+        res = call(module, 'push', ctx, cards, mode, timeout=PUSH_TIMEOUT)
+    except deai_modules.ModuleError as e:
+        text = (e.message or e.code or 'збій модуля')[:200]
+        return 0, {c['id']: text for c in cards}
+    except Exception as e:  # noqa: BLE001 — шов `call` у тестах / чужа реалізація: той самий висновок
+        return 0, {c['id']: (str(e) or type(e).__name__)[:200] for c in cards}
+    if not isinstance(res, dict):
+        return 0, {c['id']: 'відповідь модуля не за контрактом push' for c in cards}
+    ok = res.get('ok')
+    failed = res.get('failed')
+    failed = {str(k): str(v)[:200] for k, v in failed.items()} if isinstance(failed, dict) else {}
+    return (ok if isinstance(ok, int) and not isinstance(ok, bool) else 0), failed
+
+
+def push_registry(module, ctx, entries, where, *, log=print, call=None):
+    """Базові картки з реєстру задач (крок 0 синку й команда `discover`; лише ЛІГА): фікстури відкидаються вголос
+    (`_drop_fixtures`), PII-картки пропускаються, решта — `push(…, 'insert')` (наявні рядки НЕ чіпати: базова картка не має
+    затерти багаті дані канваса). Повертає `(entries без фікстур, ok, failed)`."""
+    reg = _drop_fixtures(entries, where, log=log)
+    cards = []
+    for pid, entry in reg.items():
+        card = discover_card(pid, entry)
+        if card_has_pii(card):
+            continue
+        cards.append(card)
+    ok, failed = _push(call or deai_modules.call, module, ctx, cards, 'insert')
+    return reg, ok, failed
+
+
+def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=print, call=None):
+    """Один прохід синку карток простору (спека §4). `cfg` — файл задач простору (`{'tasks': {…}}`); `module`/`ctx` —
+    постачальник ролі `dashboard` (модуль + його `ctx`: для ЛІГИ його будує `legacy_ctx`); `call` — `deai_modules.call` (шов для
+    тестів); `identity` — `(імʼя, ключ)` дизайнера, без нього — `_identity()` (git-конфіг).
+    `discover()` → `{id: запис}` (лише ЛІГА: реєстр GitLab); `statuses(keys)` → `{jira: {name, cat}}` (лише ЛІГА до 4c-2) —
+    кроки, що ще не стали ролями: звичайний простір їх не має, і ні реєстру, ні Jira тут не кличеться.
+
+    Кроки: 0) базові картки з реєстру → `push(…, 'insert')`; 1) відкриті коментарі (`open_comments`, якщо модуль її має) →
+    лічильники для статусу `review`; 2) статуси Jira; 3) задачі простору з текою НА ЦІЙ МАШИНІ → `build_card` → PII-фільтр →
+    `push(…, 'merge')`; 4) підсумок у `log`. Повертає `{'discovered', 'synced', 'skipped', 'failed'}` (для тестів; CLI ігнорує).
+    ⛔ Збій кроку НЕ валить проход і НЕ мовчить: назви карток із `failed` — у `log` вголос (мовчазна «часткова» синхронізація
+    виглядає як повна)."""
+    call = call or deai_modules.call
+    designer, designer_key = identity if identity is not None else _identity()
+    summary = {'discovered': 0, 'synced': 0, 'skipped': [], 'failed': {}}
+    # 0) Реєстр: усі заведені задачі всіх напрямків (базові картки); локальні задачі нижче їх збагатять
+    if discover is not None:
+        _, ok, failed = push_registry(module, ctx, discover(), '', log=log, call=call)
+        summary['discovered'] = ok
+        for pid, why in failed.items():
+            log(f'⚠ overview: не вдалося додати з реєстру «{pid}»: {why}')
+        if ok:
+            log(f'✅ overview: з реєстру оброблено {ok} задач (нові додано)')
+    # 1) Реальні відкриті коменти → також рухають статус у «review». Best-effort → {} при будь-якій помилці.
+    counts = {}
+    if _has_fn(module, 'open_comments'):
+        try:
+            got = call(module, 'open_comments', ctx, timeout=PUSH_TIMEOUT)
+            counts = got if isinstance(got, dict) else {}
+        except Exception:  # noqa: BLE001
+            counts = {}
+    # 2) Реальні Jira-статуси (лише ЛІГА до 4c-2)
+    jstatus = {}
+    if statuses is not None:
+        try:
+            jstatus = statuses([t.get('jira') for t in cfg.get('tasks', {}).values()]) or {}
+        except Exception:  # noqa: BLE001 — best-effort: нема статусів ≠ затирати наявні
+            jstatus = {}
+    skipped = []
+    cards = []
+    # Фікстура в ЛОКАЛЬНОМУ кеші (живий tasks.json, затертий тестом, як
+    # 15.09.2026) — теж не на дашборд, навіть поки її тимчасова тека ще існує.
+    for tid, task in _drop_fixtures(cfg.get('tasks', {}), '', log=log).items():
+        # ⛔ Немає теки задачі на цій машині — ми про неї НІЧОГО не знаємо, тому й
+        # не пишемо: інакше task_state() віддає нулі, і синк вихолощує спільний
+        # рядок (реальний випадок: `erb` обнулявся кожні 30 хв). Базова картка
+        # такої задачі вже прийшла з реєстру кроком 0.
+        d = task.get('dir') or ''
+        if not os.path.isdir(d):
+            skipped.append(tid)
+            continue
+        st = task_state(task)
+        st['open_comments'] = counts.get(comment_project_key(task, tid), 0)
+        js = jstatus.get(task.get('jira') or '')
+        if js and js.get('name'):
+            st['jira_status'] = js['name']
+            st['jira_status_cat'] = js.get('cat')
+        card = build_card(tid, task, st, designer, designer_key)
+        if card_has_pii(card):
+            log(f'⚠ overview: пропущено «{tid}» — виявлено PII в даних')
+            continue
+        cards.append(card)
+    # 3) Картки задач: `merge` — оновити наявний рядок, нові поля зверху
+    count, failed = _push(call, module, ctx, cards, 'merge')
+    for tid, why in failed.items():
+        log(f'⚠ overview: не вдалося синхронізувати «{tid}»: {why}')
+    log(f'✅ overview: синхронізовано {count} проєктів')
+    # Пропуски називаємо вголос: тиха «часткова» синхронізація виглядає як повна.
+    if skipped:
+        log(f"·  overview: пропущено {len(skipped)} — теки немає на цій машині "
+            f"({', '.join(skipped)}); їхні картки лишились як були")
+    summary.update(synced=count, skipped=skipped, failed=failed)
+    return summary
