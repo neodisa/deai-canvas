@@ -3,24 +3,24 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  HOME_STATUSES, SORTS, cleanTitle, filterTasks, isDone, matches, relTime, sortTasks, statusCounts, taskKey,
+  HOME_STATUSES, SORTS, cleanTitle, filterTasks, isDone, matches, readHomeUi, relTime, sortTasks, statusCounts, tagKey, taskKey,
 } from "../app/tasks-model.js";
 
 /* Дані — зліпок форми з /api/tasks-overview: `mine[i]` має `opened`/`changed`
-   (секунди) і `profile`, `team.rows[i]` — `updated` (ISO) і `designer`. Назви
+   (секунди), `profile` і `tags`, `team.rows[i]` — `updated` (ISO) і `designer`. Назви
    справжні за формою: частина дублює ключ Jira, частина (boss-interface) — без. */
 const T = (o) => ({
-  id: "x", jira: null, title: "x", profile: null, opened: null, changed: null,
+  id: "x", jira: null, title: "x", profile: null, tags: [], opened: null, changed: null,
   jiraStatus: null, jiraCat: null, ...o,
 });
 
 const A = T({ id: "edr", jira: "LIGA-7019", title: "LIGA-7019 · Очікування оновлення даних із ЄДР",
-  profile: "liga360", opened: "2026-09-10T10:00:00Z", changed: 1790000000, jiraStatus: "В роботі", jiraCat: "indeterminate" });
+  profile: "liga360", tags: ["LIGA360"], opened: "2026-09-10T10:00:00Z", changed: 1790000000, jiraStatus: "В роботі", jiraCat: "indeterminate" });
 const B = T({ id: "sanc", jira: "LIGA-7015", title: "LIGA-7015: Санкції Бізнес-груп",
-  profile: "united", opened: "2026-09-20T10:00:00Z", changed: 1790500000, jiraStatus: "Готово", jiraCat: "done" });
+  profile: "united", tags: ["United"], opened: "2026-09-20T10:00:00Z", changed: 1790500000, jiraStatus: "Готово", jiraCat: "done" });
 const C = T({ id: "boss-interface", jira: null, title: "boss-interface",
-  profile: "united", opened: "2026-08-01T10:00:00Z", changed: null, jiraStatus: null, jiraCat: null });
-const D = T({ id: "seo-blog", jira: "LIGA-9", title: "Блог для SEO", profile: "seo",
+  profile: "united", tags: ["United"], opened: "2026-08-01T10:00:00Z", changed: null, jiraStatus: null, jiraCat: null });
+const D = T({ id: "seo-blog", jira: "LIGA-9", title: "Блог для SEO", profile: "seo", tags: ["SEO"],
   opened: null, changed: 1780000000, jiraStatus: "To Do", jiraCat: "new" });
 
 /* ── cleanTitle / taskKey ─────────────────────────────────────────────── */
@@ -110,7 +110,7 @@ test("statusCounts: рахує лише те, що пройшло запит", (
 /* ── filterTasks ──────────────────────────────────────────────────────── */
 
 const ids = (l) => l.map((x) => x.id);
-const NONE = { q: "", status: "all", profiles: new Set(), designers: new Set() };
+const NONE = { q: "", status: "all", tags: new Set(), designers: new Set() };
 
 test("filterTasks: порожні фільтри — усе, порядок збережено", () => {
   assert.deepEqual(ids(filterTasks([A, B, C, D], NONE)), ["edr", "sanc", "boss-interface", "seo-blog"]);
@@ -121,10 +121,60 @@ test("filterTasks: статус active / done", () => {
   assert.deepEqual(ids(filterTasks([A, B, C, D], { ...NONE, status: "done" })), ["sanc"]);
 });
 
-test("filterTasks: профілі — лише для елементів, що мають profile", () => {
-  assert.deepEqual(ids(filterTasks([A, B, C, D], { ...NONE, profiles: new Set(["united"]) })), ["sanc", "boss-interface"]);
-  const noProfile = { id: "n", title: "n" };
-  assert.deepEqual(ids(filterTasks([A, noProfile], { ...NONE, profiles: new Set(["united"]) })), ["n"]);
+test("filterTasks: мітки — АБО між вибраними, регістр і крайні пробіли не важать, задача без міток ховається", () => {
+  assert.deepEqual(ids(filterTasks([A, B, C, D], { ...NONE, tags: new Set(["united"]) })), ["sanc", "boss-interface"]);
+  assert.deepEqual(ids(filterTasks([A, B, C, D], { ...NONE, tags: new Set(["united", "seo"]) })), ["sanc", "boss-interface", "seo-blog"],
+    "АБО: задача з будь-якою вибраною міткою");
+  const noTags = { id: "n", title: "n" };
+  assert.deepEqual(ids(filterTasks([A, noTags, { ...A, id: "e", tags: [] }], { ...NONE, tags: new Set(["liga360"]) })), ["edr"],
+    "свідома відмінність від профільного фільтра: задача без міток при вибраній мітці ховається");
+  assert.deepEqual(ids(filterTasks([{ ...A, tags: ["  Alpha "] }], { ...NONE, tags: new Set(["alpha"]) })), ["edr"]);
+});
+
+test("filterTasks: порожній Set міток — не фільтр (задачі без міток лишаються)", () => {
+  assert.deepEqual(ids(filterTasks([A, { id: "n", title: "n" }], NONE)), ["edr", "n"]);
+  assert.deepEqual(ids(filterTasks([A, { id: "n", title: "n" }], { q: "", status: "all", designers: new Set() })), ["edr", "n"], "ключа tags нема");
+});
+
+test("tagKey: без регістру й крайніх пробілів; не рядок і порожнє — порожній ключ", () => {
+  assert.equal(tagKey("  Alpha "), "alpha");
+  assert.equal(tagKey("United"), tagKey("united"));
+  assert.equal(tagKey("a b"), "a b", "внутрішні пробіли — справа сервера, ключ їх не чіпає");
+  for (const x of [null, undefined, "", "   "]) assert.equal(tagKey(x), "");
+  assert.equal(tagKey(5), "5");
+});
+
+test("matches: пошук знаходить і за міткою (без регістру, частина слова)", () => {
+  assert.equal(matches({ ...C, tags: ["Beta"] }, "bet"), true);
+  assert.equal(matches({ ...C, tags: ["Beta"] }, "BETA"), true);
+  assert.equal(matches({ ...C, tags: ["Beta"] }, "alpha"), false);
+  assert.equal(matches({ ...C, tags: ["Beta", "Дизайн"] }, "дизайн beta"), true, "слова з різних місць, як у решти полів");
+  assert.equal(matches({ id: "n", title: "n" }, "bet"), false, "ключа tags нема — не кидає");
+});
+
+/* ── readHomeUi: збережений стан екрана ───────────────────────────────── */
+
+test("readHomeUi: новий стан — мітки як ключі; старий `profiles` читається як мітки (нижній регістр)", () => {
+  assert.deepEqual([...readHomeUi({ tags: ["alpha"] }).tags], ["alpha"]);
+  assert.deepEqual([...readHomeUi({ tags: [" Alpha ", "BETA", "alpha"] }).tags], ["alpha", "beta"], "ключі через tagKey, без дублів");
+  assert.deepEqual([...readHomeUi({ profiles: ["united", "SEO"] }).tags], ["united", "seo"], "стан 0.10.0: чип «United» лишається вибраним");
+  assert.deepEqual([...readHomeUi({ tags: ["alpha"], profiles: ["united"] }).tags], ["alpha"], "новий ключ сильніший за старий");
+  assert.deepEqual([...readHomeUi({ tags: [], profiles: ["united"] }).tags], [], "порожній новий ключ — свідомо знятий фільтр");
+});
+
+test("readHomeUi: сміття — порожньо й типове, не кидає; решта полів — як було в app.js", () => {
+  const base = { tab: "mine", q: "", sort: "recent", status: "active" };
+  for (const raw of [null, undefined, "x", 5, [], true, {}, { tags: "alpha" }, { tags: [1, null, {}, "", "  "] }, { profiles: { a: 1 } }]) {
+    const ui = readHomeUi(raw);
+    assert.deepEqual([ui.tags.size, ui.designers.size], [0, 0], JSON.stringify(raw));
+    assert.deepEqual({ tab: ui.tab, q: ui.q, sort: ui.sort, status: ui.status }, base, JSON.stringify(raw));
+  }
+  const ui = readHomeUi({ tab: "team", sort: "title", status: "done", designers: ["Ольга", 5], profiles: [3, "x"] });
+  assert.deepEqual([ui.tab, ui.sort, ui.status], ["team", "title", "done"]);
+  assert.deepEqual([...ui.designers], ["Ольга"]);
+  assert.deepEqual([...ui.tags], ["x"]);
+  assert.deepEqual([readHomeUi({ tab: "x", sort: "nope", status: "nope" }).tab, readHomeUi({ sort: "nope" }).sort,
+    readHomeUi({ status: "nope" }).status], ["mine", "recent", "active"], "невідоме значення — типове");
 });
 
 test("filterTasks: дизайнери — лише для елементів, що мають designer", () => {
@@ -134,7 +184,7 @@ test("filterTasks: дизайнери — лише для елементів, щ
 });
 
 test("filterTasks: усі умови діють разом", () => {
-  const f = { q: "liga", status: "active", profiles: new Set(["liga360", "seo"]), designers: new Set() };
+  const f = { q: "liga", status: "active", tags: new Set(["liga360", "seo"]), designers: new Set() };
   assert.deepEqual(ids(filterTasks([A, B, C, D], f)), ["edr", "seo-blog"]);
   assert.deepEqual(ids(filterTasks([A, B, C, D], { ...f, q: "блог" })), ["seo-blog"]);
 });

@@ -1,22 +1,30 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { DICT, setLang } from "../app/i18n.js";
+import { DICT, setLang, t } from "../app/i18n.js";
+import { filterTasks } from "../app/tasks-model.js";
 import {
-  cardHTML, defaultSort, effectiveSort, effectiveTab, homeGridHTML, homeHTML, profileLabel, pruneFilters, safeThumb,
+  cardHTML, defaultSort, effectiveSort, effectiveTab, homeGridHTML, homeHTML, pruneFilters, safeThumb,
   safeUrl, sortsFor, thumbBrokenHTML,
 } from "../app/tasks-home.js";
 
 /* Дані — форма `/api/tasks-overview`: `mine[i]` має `changed` (секунди),
-   `profile`, `missing`, `published`; `team.rows[i]` — `updated` (ISO),
+   `profile`, `tags`, `missing`, `published`; `team.rows[i]` — `updated` (ISO),
    `designer`, `mine`, `preview`. `now` фіксований — відносний час детермінований. */
 const NOW = Date.parse("2026-10-09T12:00:00Z");
 const HOUR = 3600;
-const M = (o) => ({
-  id: "x", jira: null, title: "x", profile: "united", opened: null, iterations: 0, pages: 0,
-  iter: null, changed: null, published: null, missing: false, thumb: null,
-  jiraStatus: null, jiraCat: null, comments: null, ...o,
-});
+/* Похідна мітка ЛІГИ — як її віддає сервер, коли в задачі нема власних `tags` (`task_tags`, `_LEGACY_PROFILE_TAGS`). */
+const DERIVED = { united: "United", liga360: "LIGA360", seo: "SEO" };
+const tagsOf = (profile) => (profile == null ? [] : [DERIVED[profile] ?? profile]);
+const M = (o) => {
+  const x = {
+    id: "x", jira: null, title: "x", profile: "united", opened: null, iterations: 0, pages: 0,
+    iter: null, changed: null, published: null, missing: false, thumb: null,
+    jiraStatus: null, jiraCat: null, comments: null, ...o,
+  };
+  return "tags" in o ? x : { ...x, tags: tagsOf(x.profile) };
+};
 const R = (o) => ({
   id: "r", title: "r", jira: null, jiraStatus: null, jiraCat: null, comments: 0, thumb: null,
   preview: null, updated: null, designer: null, iterations: null, pages: null, mine: false, ...o,
@@ -40,7 +48,7 @@ const DATA = {
   ] },
 };
 const UI = (o = {}) => ({
-  tab: "mine", q: "", sort: "recent", status: "all", profiles: new Set(), designers: new Set(),
+  tab: "mine", q: "", sort: "recent", status: "all", tags: new Set(), designers: new Set(),
   now: NOW, ...o,
 });
 const cards = (html) => (html.match(/class="th-card[ "]/g) || []).length;
@@ -149,22 +157,100 @@ test("порядок карток слідує за сортуванням", () 
   assert.deepEqual(ids(homeGridHTML(UI({ sort: "title" }), DATA)), ["edr", "ghost", "sanc"]);
 });
 
-test("чіпи напрямків на «Моїх» (мітки зі словника) і дизайнерів на «Команді»", () => {
+test("чіпи міток на «Моїх» (з x.tags) і дизайнерів на «Команді»", () => {
   const mine = homeGridHTML(UI(), DATA);
-  assert.match(mine, /data-th="profile" data-v="united"[^>]*>United</);
-  assert.match(mine, /data-th="profile" data-v="liga360"[^>]*>LIGA360</);
-  assert.match(mine, /data-th="profile" data-v="seo"[^>]*>SEO</);
-  assert.doesNotMatch(mine, /data-th="designer"/);
+  assert.match(mine, /data-th="tag" data-v="united"[^>]*>United</);
+  assert.match(mine, /data-th="tag" data-v="liga360"[^>]*>LIGA360</);
+  assert.match(mine, /data-th="tag" data-v="seo"[^>]*>SEO</);
+  assert.doesNotMatch(mine, /data-th="designer"|data-th="profile"/);
   const team = homeGridHTML(UI({ tab: "team", sort: "changed" }), DATA);
   assert.match(team, /data-th="designer" data-v="Ольга"/);
   assert.match(team, /data-th="designer" data-v="Олег"/);
-  assert.doesNotMatch(team, /data-th="profile"/);
-  assert.equal(profileLabel("mystery"), "mystery", "невідомий напрямок лишається як є");
+  assert.doesNotMatch(team, /data-th="tag"|data-th="profile"/);
 });
 
-test("фільтр за напрямком і за дизайнером", () => {
-  assert.equal(cards(homeGridHTML(UI({ profiles: new Set(["seo"]) }), DATA)), 1);
+/** Чипи міток у порядку розмітки: `[ключ, aria-pressed, підпис]`. */
+const tagChips = (h) => [...h.matchAll(/data-th="tag" data-v="([^"]*)" aria-pressed="(\w+)">([^<]*)</g)].map((m) => [m[1], m[2], m[3]]);
+
+test("чіпи міток: ключ — без регістру, підпис — перший побачений запис, порядок — кількість задач ↓, далі абетка", () => {
+  const data = { ...DATA, mine: [
+    M({ id: "a", tags: ["Zeta", "alpha"] }), M({ id: "b", tags: ["zeta"] }), M({ id: "c", tags: ["ZETA", "Beta"] }),
+    M({ id: "d", tags: ["gamma"] }), M({ id: "e", tags: [] }), M({ id: "f", tags: ["beta"] }),
+  ] };
+  assert.deepEqual(tagChips(homeGridHTML(UI(), data)), [
+    ["zeta", "false", "Zeta"],      // 3 задачі; підпис — перший запис, а не «zeta»/«ZETA»
+    ["beta", "false", "Beta"],      // 2
+    ["alpha", "false", "alpha"],    // по 1: абетка (alpha < gamma)
+    ["gamma", "false", "gamma"],
+  ]);
+  /* Одна задача з двома записами однієї мітки лічиться раз, а не двічі: інакше «x» (2 записи в 1 задачі) обійшла б «y» (у 2 задачах). */
+  const dup = { ...DATA, mine: [M({ id: "a", tags: ["x", "X"] }), M({ id: "b", tags: ["y"] }), M({ id: "c", tags: ["y"] })] };
+  assert.deepEqual(tagChips(homeGridHTML(UI(), dup)).map((c) => c[0]), ["y", "x"]);
+});
+
+test("чіпи міток: aria-pressed за ui.tags; порожні й пробільні мітки чипа не дають; мітка екранується", () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const data = { ...DATA, mine: [M({ id: "a", tags: ["alpha", "", "   ", evil]}), M({ id: "b", tags: ["alpha"] })] };
+  const h = homeGridHTML(UI({ tags: new Set(["alpha"]) }), data);
+  assert.deepEqual(tagChips(h).map((c) => c.slice(0, 2)).filter((c) => c[0] === "alpha"), [["alpha", "true"]]);
+  assert.match(h, /th-chip th-chip--on" data-th="tag" data-v="alpha"/, "вибраний чип підсвічений");
+  assert.equal(tagChips(h).length, 2, "alpha й мітка зі шкідливим текстом; порожні — ні");
+  assert.doesNotMatch(h, /<img src=x/);
+  assert.match(h, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+
+test("рядок картки «Моїх»: мітки через «, »; без міток — частини нема; «Команда» без змін", () => {
+  const meta = (h) => /<div class="th-meta">([^]*?)<\/div>/.exec(h)[1];
+  assert.equal(meta(cardHTML(M({ id: "a", tags: ["alpha", "Beta"], iterations: 2 }), UI(), "z")).split(" · ")[0], "alpha, Beta");
+  assert.equal(meta(cardHTML(M({ id: "a", tags: [], iterations: 2 }), UI(), "z")).split(" · ")[0], t("thIter", 2),
+    "без міток першою частиною стає наступна, а не порожній відступ");
+  assert.doesNotMatch(meta(cardHTML(M({ id: "a", tags: [], iterations: 0 }), UI(), "z")), /^,|, ,|undefined|null/);
+  assert.match(meta(cardHTML(M({ id: "a", tags: ["<b>x</b>"], iterations: 0 }), UI(), "z")), /^&lt;b&gt;x&lt;\/b&gt; · /, "мітка екранується");
+  assert.match(meta(cardHTML(R({ designer: "Ольга", iterations: 1 }), UI({ tab: "team" }), "z")), /^Ольга · /);
+});
+
+test("кнопка «Мітки»: на «Моїх» є (data-th=tags, data-id, підпис зі словника), на «Команді» нема", () => {
+  const mine = cardHTML(M({ id: "a<b", jira: "LIGA-1", tags: ["x"] }), UI(), "z");
+  assert.match(mine, /<button class="th-lnk" data-th="tags" data-id="a&lt;b"[^>]*>[^]*?Мітки<\/button>/);
+  assert.match(mine, /aria-label="Мітки задачі LIGA-1"/, "кнопку на кожній картці відрізняє підпис із ключем задачі");
+  const team = cardHTML(R({ id: "r", mine: true }), UI({ tab: "team" }), "z");
+  assert.doesNotMatch(team, /data-th="tags"/);
+  assert.doesNotMatch(cardHTML(R({ id: "r" }), UI({ tab: "team" }), "z"), /data-th="tags"/);
+  const gone = cardHTML(M({ id: "g", missing: true }), UI(), "z");
+  assert.match(gone, /data-th="tags"/, "задача без теки теж має мітки (вони в реєстрі, не в теці)");
+});
+
+/* ── диференційний: мітки, похідні від профілів, дають те саме, що давав профільний вигляд 0.10.0 ───── */
+
+const SNAP = JSON.parse(readFileSync(new URL("./fixtures/task-tags/before-4b3.json", import.meta.url), "utf8"));
+
+test("диференційний: підписи чипів і перша частина картки збігаються зі знімком 0.10.0 (порядок — свідома відмінність)", () => {
+  const profiles = SNAP.chips.fixture_profiles;
+  const mine = profiles.map((p, i) => M({ id: `t${i + 1}`, profile: p }));
+  const ui = UI({ tags: new Set(SNAP.chips.selected) });
+  const now = tagChips(homeGridHTML(ui, { ...DATA, mine }));
+  assert.deepEqual(new Set(now.map((c) => c[2])), new Set(SNAP.chips.chips.map((c) => c.label)), "ті самі підписи");
+  for (const old of SNAP.chips.chips) {
+    assert.deepEqual(now.find((c) => c[0] === old.v)?.slice(1), [old.pressed, old.label], `чип ${old.v}`);
+  }
+  for (const [key, first] of Object.entries(SNAP.card_meta)) {
+    const p = key === "null" ? null : key;
+    const h = cardHTML(M({ id: "c", profile: p, iterations: 0 }), UI(), "z");
+    assert.equal(/<div class="th-meta">([^]*?)<\/div>/.exec(h)[1].split(" · ")[0], first, `перша частина картки, профіль ${key}`);
+  }
+  /* Фільтр за «united»: ті самі задачі, ОКРІМ задачі без профілю (свідома відмінність: без міток тепер ховається). */
+  const sel = [...SNAP.chips.selected];
+  const noProfile = mine.filter((x) => x.profile === null).map((x) => x.id);
+  assert.deepEqual(noProfile, ["t6"]);
+  assert.deepEqual(filterTasks(mine, { tags: new Set(sel) }).map((x) => x.id), SNAP.chips.kept_ids.filter((id) => !noProfile.includes(id)));
+});
+
+test("фільтр за міткою і за дизайнером", () => {
+  assert.equal(cards(homeGridHTML(UI({ tags: new Set(["seo"]) }), DATA)), 1);
+  assert.equal(cards(homeGridHTML(UI({ tags: new Set(["seo", "united"]) }), DATA)), 2, "АБО");
   assert.equal(cards(homeGridHTML(UI({ tab: "team", sort: "changed", designers: new Set(["Олег"]) }), DATA)), 1);
+  assert.equal(cards(homeGridHTML(UI({ tab: "team", sort: "changed", tags: new Set(["seo"]) }), DATA)), 2,
+    "вибрана мітка не чіпає «Команду»: у її рядків міток нема");
 });
 
 test("збій команди без рядків: банер із причиною й «Спробувати ще», сітки нема, вкладка «—»", () => {
@@ -262,21 +348,29 @@ test("кадр: лише свій /api/task-thumb або http(s); решта —
   assert.doesNotMatch(cardHTML(M({ id: "q", thumb: "//evil.example/x" }), UI(), "z"), /<img/);
 });
 
-test("pruneFilters: знайомі значення лишаються, зниклі напрямки/дизайнери йдуть (невидимий фільтр)", () => {
-  const ui = UI({ profiles: new Set(["united", "gone"]), designers: new Set(["Ольга", "Звільнений"]) });
+test("pruneFilters: знайомі значення лишаються, зниклі мітки/дизайнери йдуть (невидимий фільтр)", () => {
+  const ui = UI({ tags: new Set(["united", "gone"]), designers: new Set(["Ольга", "Звільнений"]) });
   assert.equal(pruneFilters(ui, DATA), true);
-  assert.deepEqual([...ui.profiles], ["united"]);
+  assert.deepEqual([...ui.tags], ["united"]);
   assert.deepEqual([...ui.designers], ["Ольга"]);
   assert.equal(pruneFilters(ui, DATA), false, "нічого міняти — не пише");
 });
 
-test("pruneFilters: збій команди без рядків не стирає фільтр дизайнера, порожні «мої» — фільтр напрямку", () => {
-  const ui = UI({ profiles: new Set(["united"]), designers: new Set(["Ольга"]) });
+test("pruneFilters: ключі міток — за tagKey (регістр), а мітка, прибрана з усіх задач, знімає й фільтр", () => {
+  const ui = UI({ tags: new Set(["alpha", "beta"]) });
+  assert.equal(pruneFilters(ui, { ...DATA, mine: [M({ id: "a", tags: ["Alpha"] })] }), true);
+  assert.deepEqual([...ui.tags], ["alpha"], "«Alpha» у даних = ключ alpha; beta зникла");
+  assert.equal(pruneFilters(ui, { ...DATA, mine: [M({ id: "a", tags: [] })] }), true, "останню мітку прибрано — фільтр не лишається невидимим");
+  assert.deepEqual([...ui.tags], []);
+});
+
+test("pruneFilters: збій команди без рядків не стирає фільтр дизайнера, порожні «мої» — фільтр міток", () => {
+  const ui = UI({ tags: new Set(["united"]), designers: new Set(["Ольга"]) });
   const down = { ...DATA, team: { rows: [], error: "VPN", rowsAt: null } };
   pruneFilters(ui, down);
   assert.deepEqual([...ui.designers], ["Ольга"]);
   assert.equal(pruneFilters(ui, { mine: [], team: { rows: [], error: null } }), false);
-  assert.deepEqual([...ui.profiles], ["united"]);
+  assert.deepEqual([...ui.tags], ["united"]);
   assert.equal(pruneFilters(ui, null), false);
 });
 
@@ -455,7 +549,7 @@ test("назва простору екранується в заголовку �
 });
 
 test("pruneFilters при `team: null` не кидає і не чіпає дизайнерів", () => {
-  const ui = UI({ designers: new Set(["Хтось"]), profiles: new Set() });
+  const ui = UI({ designers: new Set(["Хтось"]), tags: new Set() });
   assert.doesNotThrow(() => pruneFilters(ui, D_OFF({ mine: [A] })));
   assert.ok(ui.designers.has("Хтось"), "дизайнерів без команди не чистимо: «не знаю» ≠ «нема»");
 });

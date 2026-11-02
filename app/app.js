@@ -29,8 +29,8 @@ import { barModel } from './bar-model.js';
 import { ISLAND_SHELL, applyBadge, badgeFor, islandParts } from './claude-status.js';
 import { CAPTURE_DELAY_MS, captureToFigma, loadCapture } from './figma-capture.js';
 import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
-import { HOME_STATUSES, matches, relTime, taskKey } from './tasks-model.js';
-import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, sortsFor, thumbBrokenHTML } from './tasks-home.js';
+import { matches, readHomeUi, relTime, taskKey } from './tasks-model.js';
+import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
   cleanupWarning, commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
@@ -38,7 +38,7 @@ import {
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
 import {
-  spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
+  parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
 } from './space-dialogs.js';
 import { createWizard } from './wizard.js';
 import { panelHTML } from './shell-panel.js';
@@ -1291,7 +1291,7 @@ async function resetSpaceState({ reload = true } = {}) {
   glCache = null; teamsMute = null;
   dropGlState();
   tasksErr = false; tasksErrKey = null;
-  homeUi.q = ''; homeUi.profiles.clear(); homeUi.designers.clear(); saveHomeUi();
+  homeUi.q = ''; homeUi.tags.clear(); homeUi.designers.clear(); saveHomeUi();
   taskQ = ''; taskCursor = 0;
   if (reload) await loadSpaces();
 }
@@ -1541,7 +1541,7 @@ async function newTaskDialog() {
       return m?.settings?.find((x) => x.key === 'repo')?.value || '';
     }).catch(() => '')
     : Promise.resolve('');
-  await askForm(() => taskFormHTML(withRepo ? { repo: {} } : {}), {
+  await askForm(() => taskFormHTML(withRepo ? { repo: {}, tags: true } : { tags: true }), {
     onMount: (form) => {
       wireTaskForm(form, { taken });
       repoHint.then((hint) => {
@@ -1555,7 +1555,9 @@ async function newTaskDialog() {
       if (key) { ctl.focus(taskErrField(key)); return t(key); }
       /* `vcs` — лише зі значенням: порожнє поле (чи самі пробіли) ключа в тілі не лишає, і задача бере типовий `repo` модуля. */
       const repo = withRepo ? String(vals.repo ?? '').trim() : '';
-      const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}) };
+      /* `tags` — лише коли поле непорожнє (клієнт ріже по комах, решту правил перевіряє сервер: `bad-tags`). */
+      const tags = parseTags(vals.tags);
+      const body = { id: vals.id, title: vals.title.trim(), space: sp.id, ...(repo ? { vcs: { repo } } : {}), ...(tags.length ? { tags } : {}) };
       /* Сервер клонує, лише коли в тілі є `vcs` (форма шле його тільки зі значенням поля; без `from`) або коли простір з
          інтеграціями має роль `vcs` — профільний `gitlab` (`_task_new_write`: `if gitlab or (vcs and adopt_src is None)`), і то
          ТАКОЖ у ЛІГА з явним `git-sync` та порожнім полем; без ролі клону нема (`taskCreateClones`, spaces-model.js). Лише такий
@@ -1590,6 +1592,39 @@ async function newTaskDialog() {
         await refreshGitlab(made.id);
         await leaveHome();
       } catch (e) { toast(t('errFailed', e.message)); }
+      return undefined;
+    },
+  });
+}
+
+/**
+ * «Мітки» на картці «Моїх» (`data-th="tags"`, 4b-3): діалог з одним полем, заповненим поточними мітками задачі →
+ * `POST /api/task-tags {id, tags}` (сервер сам знаходить простір, де лежить задача) → мітки в рядку екрана оновлюються на місці.
+ * Мітки беремо з рядка `homeData.mine` (це те, що людина бачить на картці, включно з похідною міткою ЛІГИ): збереження
+ * замінює їх власними. Помилка `bad-tags` — текст під полем, діалог лишається; будь-яка інша (задачу вилучено — 404, id у двох
+ * просторах — 409, мережа) — тост, діалог закривається.
+ * ⛔ Після збереження чистимо `pruneFilters`: прибрали останню задачу з вибраною міткою — фільтр без чипа лишив би екран
+ * порожнім і невидимо для людини.
+ */
+async function editTaskTags(id) {
+  const row = (homeData?.mine || []).find((y) => y.id === id);
+  if (!row) return;
+  await askForm(() => tagsFormHTML({ value: (row.tags || []).join(', ') }), {
+    focusBack: () => homeNode()?.querySelector(`[data-th="tags"][data-id="${CSS.escape(id)}"]`),
+    onSubmit: async (vals, ctl) => {
+      let saved;
+      try { saved = await postForm('/api/task-tags', { id, tags: parseTags(vals.tags) }); }
+      catch (e) {
+        if (e.code === 'bad-tags') { ctl.focus('tags'); return t(taskErrKey(e.code)); }
+        toast(t('errFailed', requestErrText(e)));
+        return undefined;
+      }
+      /* Екран міг змінитись, поки запит летів (інший простір, перечитані дані): правимо ті дані, що є зараз, і лише рядок цієї задачі. */
+      if (homeReady() && Array.isArray(saved?.tags)) {
+        homeData = { ...homeData, mine: homeData.mine.map((y) => (y.id === id ? { ...y, tags: saved.tags } : y)) };
+        if (pruneFilters(homeUi, homeData)) saveHomeUi();
+        if (homeOpen) paintHome();
+      }
       return undefined;
     },
   });
@@ -2396,25 +2431,14 @@ const HOME_KEY = 'dc-tasks-ui';
  *  ні: людина, що повернулась на екран, чекає побачити всі задачі, а не вчорашній
  *  пошук. */
 const homeUi = (() => {
-  const ui = { tab: 'mine', q: '', sort: 'recent', status: 'active', profiles: new Set(), designers: new Set() };
-  try {
-    const r = JSON.parse(localStorage.getItem(HOME_KEY) || 'null');
-    if (r && typeof r === 'object') {
-      if (r.tab === 'team') ui.tab = 'team';
-      if (typeof r.sort === 'string' && sortsFor('mine').includes(r.sort)) ui.sort = r.sort;
-      if (HOME_STATUSES.includes(r.status)) ui.status = r.status;
-      for (const k of ['profiles', 'designers']) {
-        if (Array.isArray(r[k])) for (const v of r[k]) if (typeof v === 'string') ui[k].add(v);
-      }
-    }
-  } catch (e) {}
-  return ui;
+  /* Розбір — чиста `readHomeUi` (tasks-model.js): стан 0.10.0 зберігав `profiles`, нинішній — `tags`. */
+  try { return readHomeUi(JSON.parse(localStorage.getItem(HOME_KEY) || 'null')); } catch (e) { return readHomeUi(null); }
 })();
 function saveHomeUi() {
   try {
     localStorage.setItem(HOME_KEY, JSON.stringify({
       tab: homeUi.tab, sort: homeUi.sort, status: homeUi.status,
-      profiles: [...homeUi.profiles], designers: [...homeUi.designers],
+      tags: [...homeUi.tags], designers: [...homeUi.designers],
     }));
   } catch (e) {}
 }
@@ -2719,18 +2743,20 @@ function wireHome(el) {
         paintHome();
         break;
       case 'newtask': newTaskDialog(); break;
+      /* ⛔ «Мітки» — кнопка ВСЕРЕДИНІ картки `data-th="open"`: `closest('[data-th]')` вище бере найближчий — саме її, тож задача не відкривається. */
+      case 'tags': editTaskTags(b.dataset.id); break;
       case 'conn': enterConnections(); break;
       case 'spacenew': openWizard(); break;
       case 'spaceopen': openWizard({ folderFirst: true }); break;
       case 'status': homeUi.status = v; saveHomeUi(); paintHomeLower(); break;
-      case 'profile': case 'designer': {
-        const set = b.dataset.th === 'profile' ? homeUi.profiles : homeUi.designers;
+      case 'tag': case 'designer': {
+        const set = b.dataset.th === 'tag' ? homeUi.tags : homeUi.designers;
         if (!set.delete(v)) set.add(v);
         saveHomeUi(); paintHomeLower();
         break;
       }
       case 'reset':
-        homeUi.q = ''; homeUi.status = 'all'; homeUi.profiles.clear(); homeUi.designers.clear();
+        homeUi.q = ''; homeUi.status = 'all'; homeUi.tags.clear(); homeUi.designers.clear();
         saveHomeUi(); paintHome();
         el.querySelector('#th-q')?.focus({ preventScroll: true });
         break;

@@ -421,6 +421,8 @@ const TASK_ERR_KEYS = new Map([
   /* Ціль синку нової задачі (`vcs`, 4a). Адресу людина виправляє в полі «Репозиторій»; без ролі — підключити її на «Підключенні». */
   ["vcs-bad-target", "taskErrVcsTarget"],
   ["vcs-needs-role", "taskErrVcsRole"],
+  /* Мітки задачі (4b-3): сервер відхилив їх за правилами (`bad-tags`) — людина виправляє в полі «Мітки». */
+  ["bad-tags", "tagsBad"],
   /* Постачальник ролі відмовив (409 з кодом каркаса): готові тексти «Підключень», нових ключів не треба. */
   ["space-json-unreadable", "cnRefSpaceJson"],
   ["module-untrusted", "cnRefUntrusted"],
@@ -446,11 +448,12 @@ export const taskErrKey = (code) => TASK_ERR_KEYS.get(code) ?? "taskErrGeneric";
    людина в майстрі не вибирає, тож це не помилка поля. */
 const FROM_KEYS = new Set(["wzFromRequired", "wzErrFromNotFound", "wzErrFromNoIndex", "wzErrFromContains", "wzErrFromTooBig"]);
 
-/** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `repo` (адреса синку), `from` (тека майстра) або `null`. */
+/** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `repo` (адреса синку), `tags` (мітки), `from` (тека майстра) або `null`. */
 export const taskErrField = (key) => (key === "titleRequired" ? "title"
   : (key === "idBad" || key === "idTaken" || key === "wzErrTaskDirExists") ? "id"
     : key === "taskErrVcsTarget" ? "repo"
-      : FROM_KEYS.has(key) ? "from" : null);
+      : key === "tagsBad" ? "tags"
+        : FROM_KEYS.has(key) ? "from" : null);
 
 /**
  * Колір для нового простору: перший з шести, якого ще не використано, — щоб фішки в смузі

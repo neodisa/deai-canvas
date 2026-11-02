@@ -18,7 +18,7 @@ import { wizardHTML } from "../app/wizard-view.js";
 import { DICT, setLang, t } from "../app/i18n.js";
 import { filterActions, paletteActions } from "../app/shell-palette.js";
 import { barHTML } from "../app/shell-bar.js";
-import { taskFormHTML, wireTaskForm } from "../app/space-dialogs.js";
+import { parseTags, taskFormHTML, wireTaskForm } from "../app/space-dialogs.js";
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, currentSpace, hasVcs, isLegacyVcs,
   requestErrText, spaceChanged, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsErrKey, vcsFailKey,
@@ -1026,7 +1026,7 @@ test("resetSpaceState: кеш і ключ скинуто, відкладений
   const env = mkEnv({
     glCache: REAL_A, glKey: "plain|A|it1", glBusyTimer: 5, glSeq: 3,
     curTaskList: null, homeData: null, currentTaskId: "A", taskSwitchGen: 0, homeSeq: 0, teamsMute: {},
-    tasksErr: true, tasksErrKey: "k", homeUi: { q: "x", profiles: { clear() {} }, designers: { clear() {} } },
+    tasksErr: true, tasksErrKey: "k", homeUi: { q: "x", tags: { clear() {} }, designers: { clear() {} } },
     saveHomeUi: () => {}, taskQ: "q", taskCursor: 4, resetPerTaskState: async () => {}, loadSpaces: async () => {},
   });
   const q = deferredApi(env);
@@ -1241,7 +1241,7 @@ function mkTaskEnv(over = {}) {
     formApi: async (p) => { log.form.push(p); return { tasks: [{ id: "taken-1" }] }; },
     api: async (p) => { log.api.push(p); if (env.apiFails) throw new Error("net"); return env.modules; },
     askForm: async (build, opts) => { env.html = build(); env.opts = opts; },
-    taskFormHTML, wireTaskForm: (form, o) => log.wire.push([form, o]),
+    taskFormHTML, parseTags, wireTaskForm: (form, o) => log.wire.push([form, o]),
     homeNode: () => null,
     taskFormError, taskErrField, taskErrKey, taskErrShowsReason, taskCreateClones, hasVcs, isLegacyVcs, requestErrText, spaceChanged, t,
     postForm: async (p, b) => { log.post.push([p, b]); return env.reply; },
@@ -1287,7 +1287,7 @@ test("форма: у звичайному просторі з роллю vcs є 
   for (const [space, withRepo] of [[PLAIN, true], [LIGA, false], [NOVCS, false]]) {
     const { env } = await taskDialog({ space });
     assert.equal(/id="tf-repo"/.test(env.html), withRepo, JSON.stringify(space));
-    if (!withRepo) assert.equal(env.html, taskFormHTML(), "розмітка без поля — рівно та, що була до 4a");
+    if (!withRepo) assert.equal(env.html, taskFormHTML({ tags: true }), "розмітка без поля «Репозиторій» — рівно та, що була до 4a, плюс поле «Мітки» (4b-3)");
   }
 });
 
@@ -1407,6 +1407,38 @@ test("відмови створення: адреса — на поле repo; н
   assert.deepEqual(f.focus, ["id"], "наявні відмови не змінились");
   f = await fail("timeout", "timeout");
   assert.equal(f.text, t("formTimeout"), "обрив стелі — той самий текст «міг устигнути»");
+});
+
+test("мітки (4b-3): непорожнє поле — tags у тілі запиту (обрізані, без порожніх); порожнє чи самі коми — ключа tags у тілі НЕМАЄ", async () => {
+  const sent = async (tags, extra) => {
+    const r = await taskDialog(extra);
+    await r.submit({ tags });
+    return r.env.log.post[0][1];
+  };
+  assert.deepEqual(await sent(" alpha, beta ,, Alpha "), { id: "lend", title: "Лендинг", space: "plain", tags: ["alpha", "beta", "Alpha"] },
+    "дублікати й регістр — справа сервера: клієнт лише ріже");
+  for (const empty of ["", "   ", ",", " , ,", undefined]) {
+    assert.equal("tags" in (await sent(empty)), false, JSON.stringify(empty));
+  }
+  /* Мітки не залежать від поля «Репозиторій»: з vcs у тілі йдуть обоє. */
+  const both = await taskDialog({ taskPost: async (b) => { both.sent = b; return { id: "t-1", space: "plain" }; } });
+  await both.submit({ repo: "git@h:o/r.git", tags: "alpha" });
+  assert.deepEqual([both.sent.vcs, both.sent.tags], [{ repo: "git@h:o/r.git" }, ["alpha"]]);
+});
+
+test("мітки (4b-3): bad-tags від сервера — текст «Мітка — до 32 знаків…» і фокус на полі tags, діалог лишається; поле є в усіх просторах", async () => {
+  for (const space of [PLAIN, LIGA, NOVCS]) {
+    const r = await taskDialog({ space, postForm: async () => { throw Object.assign(new Error("bad"), { code: "bad-tags", status: 400 }); },
+      taskPost: async () => { throw Object.assign(new Error("bad"), { code: "bad-tags", status: 400 }); } });
+    assert.match(r.env.html, /id="tf-tags"/, `${space.id}: поле «Мітки»`);
+    const text = await r.submit({ tags: "a,b" });
+    assert.equal(text, t("tagsBad"), space.id);
+    assert.deepEqual(r.env.log.focus, ["tags"], space.id);
+    assert.equal(r.env.log.leave, 0, "з екрана не виходимо");
+  }
+  /* З vcs у тілі незмаплений код показав би причину сервера, а bad-tags змаплений — свій текст. */
+  const v = await taskDialog({ taskPost: async () => { throw Object.assign(new Error("server words"), { code: "bad-tags" }); } });
+  assert.equal(await v.submit({ repo: "git@h:o/r.git", tags: "a" }), t("tagsBad"));
 });
 
 test("check-timeout / module-error (504/502 завислого чи зламаного модуля): загальний текст відмови з причиною сервера, поле не підсвічується", async () => {
@@ -1828,7 +1860,7 @@ test("loadConn: перший фокус бере роль із connFocusRole і 
 test("newTaskDialog (статично, як просить план): поле — за hasVcs && !isLegacyVcs, vcs у тілі — лише зі значенням, довгий запит (taskPost) — лише коли він клонує", () => {
   const b = fn("newTaskDialog");
   assert.match(b, /const withRepo = hasVcs\(sp\) && !isLegacyVcs\(sp\);/);
-  assert.match(b, /taskFormHTML\(withRepo \? \{ repo: \{\} \} : \{\}\)/, "поле «Репозиторій» передається формі лише тоді");
+  assert.match(b, /taskFormHTML\(withRepo \? \{ repo: \{\}, tags: true \} : \{ tags: true \}\)/, "поле «Репозиторій» передається формі лише тоді (4b-3: «Мітки» — завжди)");
   assert.match(b, /const repo = withRepo \? String\(vals\.repo \?\? ''\)\.trim\(\) : '';/);
   assert.match(b, /\.\.\.\(repo \? \{ vcs: \{ repo \} \} : \{\}\)/, "порожнє значення — ключа vcs у тілі нема");
   assert.match(b, /made = await \(clones \? taskPost\(body\) : postForm\('\/api\/task-new', body\)\);/);

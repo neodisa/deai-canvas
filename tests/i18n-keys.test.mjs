@@ -97,3 +97,19 @@ test("кожен ключ, який кличе код, є у словнику", 
     "у app/vendor/ не знайдено жодного виклику t('…') — обхід туди не дійшов, "
     + "а саме крізь цю діру текст інспектора й лишався поза словником");
 });
+
+/* Мітки задач (4b-3): нові ключі — в обох мовах рядками (крім підпису кнопки з ключем задачі), а колишні підписи профілів
+   зникли зі словника й з коду: чипи напрямків тепер — самі мітки, їхній текст не перекладається. */
+test("мітки задач: нові ключі є в обох мовах; profUnited/profLiga360/profSeo зникли зі словника й коду", () => {
+  for (const k of ["tagsField", "tagsPh", "thTagsEdit", "tagsEditTitle", "tagsSave", "tagsBad"]) {
+    for (const lang of ["uk", "en"]) assert.equal(typeof DICT[lang][k], "string", `${lang}.${k}`);
+  }
+  for (const lang of ["uk", "en"]) assert.equal(typeof DICT[lang].thTagsEditAria, "function", `${lang}.thTagsEditAria`);
+  assert.equal(DICT.uk.thTagsEditAria("LIGA-1"), "Мітки задачі LIGA-1");
+  assert.equal(DICT.en.thTagsEditAria("LIGA-1"), "Tags of task LIGA-1");
+  for (const k of ["profUnited", "profLiga360", "profSeo"]) {
+    assert.equal(DICT.uk[k], undefined, `uk.${k}`);
+    assert.equal(DICT.en[k], undefined, `en.${k}`);
+    for (const f of jsFiles()) assert.ok(!readSource(f).includes(k), `${k} лишився в ${f}`);
+  }
+});

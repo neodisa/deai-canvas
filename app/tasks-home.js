@@ -16,7 +16,7 @@
  *
  * Вхідні форми:
  *   ui   = { tab: 'mine'|'team', q, sort, status: 'active'|'done'|'all',
- *            profiles: Set, designers: Set, now?: мс }
+ *            tags: Set (ключі міток, `tagKey`), designers: Set, now?: мс }
  *          (`cursorId` екрана тут НЕ читається: фокус повертає `app.js`.)
  *   data = відповідь `/api/tasks-overview` (`{current, mine, team:{rows, error,
  *          fetchedAt, rowsAt}|null, space:{name, integrations}|null}`), АБО
@@ -43,7 +43,7 @@ import { ico } from "./icons.js";
 import { getLang, t } from "./i18n.js";
 import { mark } from "./shell-bar.js";
 import {
-  SORTS, cleanTitle, filterTasks, relTime, sortTasks, statusCounts, taskKey,
+  SORTS, cleanTitle, filterTasks, relTime, sortTasks, statusCounts, tagKey, taskKey,
 } from "./tasks-model.js";
 
 /** Сортування вкладок: «Мої» мають `recent` (час відкриття), команда — ні. */
@@ -55,15 +55,6 @@ export const defaultSort = (tab) => (tab === "team" ? "changed" : "recent");
 /** Сортування, яке справді діє: збережене `recent` на вкладці команди (де його
  *  нема) читається як типове, а не як «невідомий ключ». */
 export const effectiveSort = (ui) => (sortsFor(ui.tab).includes(ui.sort) ? ui.sort : defaultSort(ui.tab));
-
-/* Відомі напрямки — у фіксованому порядку (як у реєстрі), решта за абеткою. */
-const PROFILE_KEYS = { united: "profUnited", liga360: "profLiga360", seo: "profSeo" };
-const PROFILE_ORDER = Object.keys(PROFILE_KEYS);
-
-/** Підпис напрямку; невідомий лишається як є (екранує викликач). */
-export function profileLabel(p) {
-  return PROFILE_KEYS[p] ? t(PROFILE_KEYS[p]) : String(p);
-}
 
 /** `href` лише з http(s); решта (`javascript:`, `data:`, порожнє) → `null`. */
 export function safeUrl(u) {
@@ -81,9 +72,9 @@ export function safeThumb(u) {
 }
 
 /** Прибрати з фільтрів значення, яких у даних більше нема (звільнений дизайнер,
- *  вилучений напрямок): інакше фільтр лишається в `localStorage`, чіпа для нього
+ *  прибрана з усіх задач мітка): інакше фільтр лишається в `localStorage`, чіпа для нього
  *  нема, а список мовчки порожній. Не чіпає дизайнерів, коли команда недоступна
- *  без рядків, і напрямки, коли «моїх» нема, — «не знаю» не те саме, що «нема».
+ *  без рядків, і мітки, коли «моїх» нема, — «не знаю» не те саме, що «нема».
  *  Віддає `true`, якщо щось змінила (тоді викликач зберігає). */
 export function pruneFilters(ui, data) {
   if (!ready(data)) return false;
@@ -91,7 +82,7 @@ export function pruneFilters(ui, data) {
   const keep = (set, known) => {
     for (const v of [...set]) if (!known.has(v)) { set.delete(v); changed = true; }
   };
-  if (data.mine.length) keep(ui.profiles, new Set(data.mine.map((x) => x.profile).filter(Boolean)));
+  if (data.mine.length) keep(ui.tags, new Set(data.mine.flatMap((x) => (x.tags || []).map(tagKey)).filter(Boolean)));
   const rows = data.team?.rows || [];
   if (rows.length) keep(ui.designers, new Set(rows.map((x) => x.designer).filter(Boolean)));
   return changed;
@@ -153,15 +144,20 @@ function relText(x, tab, now) {
 
 const CAT = { done: "done", indeterminate: "ind" };
 
-/** Дія в кінці рядка бейджів: «мої» — посилання на опубліковане превʼю; команда —
- *  «Відкрити в канвасі» для своїх, інакше превʼю. */
+/** Дія в кінці рядка бейджів: «мої» — «Мітки» (правка міток задачі) і посилання на опубліковане превʼю; команда —
+ *  «Відкрити в канвасі» для своїх, інакше превʼю. ⛔ «Мітки» — кнопка ВСЕРЕДИНІ картки `data-th="open"`: клік по ній не мусить
+ *  відкривати задачу, і це тримає лише порядок обробника (`app.js wireHome`: `closest('[data-th]')` бере найближчий — кнопку). */
 function actionHTML(x, team) {
   const link = (href, title) => {
     const u = safeUrl(href);
     return u ? `<a class="th-lnk" href="${esc(u)}" target="_blank" rel="noopener"`
       + `${title ? ` title="${esc(title)}"` : ""}>${ico("ext")}${esc(t("thPreview"))}</a>` : "";
   };
-  if (!team) return link(x.published, t("thPreviewTitle"));
+  if (!team) {
+    const aria = esc(t("thTagsEditAria", taskKey(x)));
+    return `<button class="th-lnk" data-th="tags" data-id="${esc(x.id)}" title="${aria}" aria-label="${aria}">`
+      + `${ico("pencil")}${esc(t("thTagsEdit"))}</button>${link(x.published, t("thPreviewTitle"))}`;
+  }
   if (x.mine) {
     return `<button class="th-lnk" data-th="open" data-id="${esc(x.id)}">`
       + `${ico("task")}${esc(t("thOpenCanvas"))}</button>`;
@@ -184,7 +180,7 @@ export function cardHTML(x, ui, cur) {
       x.iterations ? esc(t("thIter", x.iterations)) : "",
       x.pages ? esc(t("thPages", x.pages)) : "",
       esc(relText(x, "team", ui.now))]
-    : [esc(profileLabel(x.profile ?? "")),
+    : [esc((x.tags || []).join(", ")),
       x.iterations ? esc(t("thIter", x.iterations)) : esc(t("thNoIter")),
       x.pages ? esc(t("thPages", x.pages)) : "",
       esc(relText(x, "mine", ui.now))];
@@ -221,7 +217,7 @@ function bannerHTML(text, note) {
     + `<button class="th-lnk" data-th="retry">${ico("refresh")}${esc(t("retry"))}</button></div>`;
 }
 
-/** Чіпи: статус (з лічильниками після запиту), потім профілі чи дизайнери. */
+/** Чіпи: статус (з лічильниками після запиту), потім мітки чи дизайнери. */
 function chipsHTML(ui, data, src, shown) {
   const c = statusCounts(src, ui.q);
   const st = (k, label) => `<button class="th-chip${ui.status === k ? " th-chip--on" : ""}"`
@@ -233,13 +229,23 @@ function chipsHTML(ui, data, src, shown) {
     extra = names.map((d) => `<button class="th-chip${ui.designers.has(d) ? " th-chip--on" : ""}"`
       + ` data-th="designer" data-v="${esc(d)}" aria-pressed="${ui.designers.has(d)}">${esc(d)}</button>`).join("");
   } else {
-    const ps = [...new Set(src.map((x) => x.profile).filter(Boolean))]
-      .sort((a, b) => {
-        const ia = PROFILE_ORDER.indexOf(a), ib = PROFILE_ORDER.indexOf(b);
-        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || String(a).localeCompare(String(b));
-      });
-    extra = ps.map((p) => `<button class="th-chip${ui.profiles.has(p) ? " th-chip--on" : ""}"`
-      + ` data-th="profile" data-v="${esc(p)}" aria-pressed="${ui.profiles.has(p)}">${esc(profileLabel(p))}</button>`).join("");
+    /* Ключ чипа — `tagKey` (без регістру), підпис — ПЕРШИЙ побачений запис; лічильник — задач, а не записів: мітка двічі в одній
+       задачі (`x`, `X`) рахується раз. Порядок: більше задач — раніше, далі абетка. */
+    const seen = new Map();                 // ключ → {label, n}
+    for (const x of src) {
+      const own = new Set();
+      for (const tag of x.tags || []) {
+        const k = tagKey(tag);
+        if (!k) continue;
+        const e = seen.get(k);
+        if (!e) seen.set(k, { label: String(tag), n: 1 });
+        else if (!own.has(k)) e.n += 1;
+        own.add(k);
+      }
+    }
+    extra = [...seen].sort((a, b) => b[1].n - a[1].n || a[1].label.localeCompare(b[1].label, "uk"))
+      .map(([k, e]) => `<button class="th-chip${ui.tags.has(k) ? " th-chip--on" : ""}"`
+        + ` data-th="tag" data-v="${esc(k)}" aria-pressed="${ui.tags.has(k)}">${esc(e.label)}</button>`).join("");
   }
   return `<div class="th-chips" role="group" aria-label="${esc(t("thFiltersLabel"))}">`
     + st("active", t("thStActive", c.active)) + st("done", t("thStDone", c.done)) + st("all", t("thStAll", c.all))
@@ -260,7 +266,7 @@ export function homeGridHTML(ui, data) {
   const sort = effectiveSort(ui);
   const list = sortTasks(filterTasks(src, {
     q: ui.q, status: ui.status,
-    profiles: team ? null : ui.profiles, designers: team ? ui.designers : null,
+    tags: team ? null : ui.tags, designers: team ? ui.designers : null,
   }), sort);
   const err = team ? data.team?.error : null;
   /* Помилка + рядки = ЗАСТАРІЛІ рядки (сервер не стирає останні відомі): їх

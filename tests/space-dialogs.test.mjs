@@ -13,7 +13,7 @@ import test from "node:test";
 import { getLang, setLang } from "../app/i18n.js";
 import { SPACE_COLORS } from "../app/spaces-model.js";
 import {
-  spaceDialogHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
+  parseTags, spaceDialogHTML, tagsFormHTML, taskFormHTML, welcomeHTML, wireSpaceDialog, wireTaskForm,
 } from "../app/space-dialogs.js";
 
 const CYR = /[а-яіїєґА-ЯІЇЄҐ]/;
@@ -135,6 +135,60 @@ test("форма задачі: поле «Репозиторій» англій�
     assert.match(h, /Repository \(optional\)/);
     assert.match(h, /placeholder="the default from Connections"/);
   } finally { setLang(before); }
+});
+
+test("форма задачі: поле «Мітки» — лише коли tags: true; без нього розмітка побайтно та, що була; поле — після id і репо, до слота помилки", () => {
+  const plain = taskFormHTML({});
+  assert.equal(taskFormHTML({ tags: false }), plain);
+  assert.doesNotMatch(plain, /tf-tags|name="tags"|Мітки/);
+  const h = taskFormHTML({ tags: true });
+  assert.match(h, /<label for="tf-tags">Мітки, через кому<\/label>/);
+  assert.match(/<input id="tf-tags"[^>]*>/.exec(h)[0], /name="tags" type="text" value="" autocomplete="off" placeholder="напр\. alpha, beta" aria-describedby="cv-form-err"/);
+  assert.ok(h.indexOf('id="tf-id"') < h.indexOf('id="tf-tags"') && h.indexOf('id="tf-tags"') < h.indexOf("data-form-error"));
+  const both = taskFormHTML({ repo: {}, tags: true });
+  assert.ok(both.indexOf('id="tf-repo"') < both.indexOf('id="tf-tags"') && both.indexOf('id="tf-tags"') < both.indexOf("data-form-error"),
+    "після поля репозиторію");
+  assert.equal([...both.matchAll(/id="cv-form-err"/g)].length, 1, "слот помилки один");
+  assert.equal(taskFormHTML({ repo: {} }).replace(/\s+/g, " "), both.replace(/<div class="cv-field">\s*<label for="tf-tags">[^]*?<\/div>/, "").replace(/\s+/g, " "),
+    "«Мітки» нічого більше не чіпають у формі");
+});
+
+test("діалог міток: форма data-form=tags, поле #tg-tags із поточним значенням (екранується), слот помилки, кнопки", () => {
+  const h = tagsFormHTML({ value: `alpha, <b>"x"</b>` });
+  assert.match(h, /<form class="cv-form" data-form="tags"/);
+  assert.match(h, /<h2 class="cv-form-h" id="tg-h">Мітки задачі<\/h2>/);
+  assert.match(h, /<label for="tg-tags">Мітки, через кому<\/label>/);
+  assert.match(h, /<input id="tg-tags" name="tags" type="text" value="alpha, &lt;b&gt;&quot;x&quot;&lt;\/b&gt;"/);
+  assert.doesNotMatch(h, /<b>/);
+  assert.match(h, /aria-labelledby="tg-h"/);
+  assert.match(h, /data-autofocus/);
+  assert.match(h, /data-form-error hidden/);
+  assert.match(h, /data-a="cancel"/);
+  assert.match(h, /<button type="submit" data-a="ok">Зберегти<\/button>/);
+  assert.match(tagsFormHTML(), /id="tg-tags" name="tags" type="text" value=""/, "без аргументів — порожнє поле");
+  assert.match(tagsFormHTML({ errorKey: "tagsBad" }), /data-form-error>Мітка — до 32 знаків, без коми; не більше 10/);
+});
+
+test("діалог міток і поле «Мітки» англійською — без кирилиці", () => {
+  const before = getLang();
+  setLang("en");
+  try {
+    for (const h of [tagsFormHTML({ value: "alpha" }), taskFormHTML({ tags: true }), tagsFormHTML({ errorKey: "tagsBad" })]) {
+      assert.ok(!CYR.test(h), `кирилиця: ${h.match(/.{0,30}[а-яіїєґ].{0,30}/i)?.[0]}`);
+    }
+    assert.match(tagsFormHTML(), /Task tags/);
+    assert.match(taskFormHTML({ tags: true }), /Tags, comma-separated/);
+  } finally { setLang(before); }
+});
+
+test("parseTags: по комах, обрізає, порожні відкидає; дублікати, регістр і межі — справа сервера", () => {
+  assert.deepEqual(parseTags("a, b,, A ,"), ["a", "b", "A"]);
+  assert.deepEqual(parseTags("  alpha  "), ["alpha"]);
+  assert.deepEqual(parseTags("a b, c"), ["a b", "c"], "пробіл усередині мітки лишається");
+  assert.deepEqual(parseTags("a, a, A"), ["a", "a", "A"], "дублікати не прибираємо: це робить сервер");
+  assert.deepEqual(parseTags(`${"x".repeat(40)}`), ["x".repeat(40)], "довжину не міряємо: bad-tags приходить із сервера");
+  for (const x of ["", "   ", ",", " , ,", null, undefined]) assert.deepEqual(parseTags(x), [], JSON.stringify(x));
+  assert.deepEqual(parseTags(5), ["5"]);
 });
 
 test("привітання: кнопка data-th=spacenew, заголовок, підводка про агента, логотип", () => {

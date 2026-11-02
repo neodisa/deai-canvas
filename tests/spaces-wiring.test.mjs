@@ -101,7 +101,7 @@ test("resetSpaceState: усе, що належить простору, скид�
     "taskSwitchGen += 1; homeSeq += 1;",
     "glCache = null; teamsMute = null;",
     "tasksErr = false; tasksErrKey = null;",
-    "homeUi.q = ''; homeUi.profiles.clear(); homeUi.designers.clear(); saveHomeUi();",
+    "homeUi.q = ''; homeUi.tags.clear(); homeUi.designers.clear(); saveHomeUi();",
     "taskQ = ''; taskCursor = 0;",
     "if (reload) await loadSpaces();",
   ]) assert.ok(body.includes(piece), `resetSpaceState не робить: ${piece}`);

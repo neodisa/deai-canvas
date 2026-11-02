@@ -5,11 +5,11 @@
  * того, що тут повернулось.
  *
  * Модель приймає ДВІ форми рядка з `/api/tasks-overview` і не вимагає
- * однакової: «мої» (`mine[i]`) мають `profile`/`opened`/`changed` (секунди),
+ * однакової: «мої» (`mine[i]`) мають `tags`/`opened`/`changed` (секунди),
  * командні (`team.rows[i]`) — `designer`/`updated` (ISO). Тому кожна функція
  * дивиться лише на поля, які вона справді використовує, а відсутнє поле — це
- * «нема даних», а не помилка: фільтр за профілем не чіпає рядки без
- * `profile`, сортування «змінено» вміє обидва формати часу.
+ * «нема даних», а не помилка: фільтр за дизайнером не чіпає рядки без
+ * `designer`, сортування «змінено» вміє обидва формати часу.
  *
  * Жодна функція не мутує вхід. Сортування й фільтри віддають НОВИЙ масив:
  * екран тримає початкове сховище й перебудовує вид із нього при кожній зміні
@@ -50,14 +50,14 @@ export function taskKey(t) {
 
 /**
  * Пошук: КОЖНЕ слово запиту (через пробіл, без регістру) мусить зустрітись
- * десь у ключі/id/назві/статусі Jira/дизайнері. Слова, а не фраза цілком:
+ * десь у ключі/id/назві/статусі Jira/дизайнері/мітках. Слова, а не фраза цілком:
  * «санк біз» знаходить «Санкції Бізнес-груп», і писати назву підряд не треба.
  * Назву беремо СИРУ (з ключем), щоб `7019` і `LIGA-7019` шукались однаково.
  */
 export function matches(t, q) {
   const words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
-  const hay = [t.jira, t.id, t.title, t.jiraStatus, t.designer]
+  const hay = [t.jira, t.id, t.title, t.jiraStatus, t.designer, ...(t.tags || [])]
     .filter(Boolean).join(" ").toLowerCase();
   return words.every((w) => hay.includes(w));
 }
@@ -87,21 +87,46 @@ export function statusCounts(list, q) {
 }
 
 /**
- * Фільтр екрана. Порожній `Set` = «не фільтрувати за цим». Профіль/дизайнера
- * перевіряємо лише в рядків, які це поле мають: «мої» не мають `designer`, а
- * командні — `profile`, і фільтр за одним не повинен мовчки ховати все з
- * іншого джерела.
+ * Ключ мітки для чипів і фільтра: без регістру й крайніх пробілів (`United` і `united` — одна мітка). Не рядок і порожнє
+ * дають порожній ключ — викликач такі мітки пропускає.
+ */
+export const tagKey = (s) => String(s ?? "").trim().toLowerCase();
+
+/**
+ * Фільтр екрана. Порожній `Set` = «не фільтрувати за цим». Дизайнера перевіряємо лише в рядків, які це поле мають:
+ * «мої» не мають `designer`, і фільтр за ним не повинен мовчки ховати все з іншого джерела. Мітки — навпаки: вибрана
+ * мітка ховає задачу БЕЗ міток (профільний фільтр 0.10.0 такі пропускав; свідома відмінність 4b-3). АБО між вибраними —
+ * задача з будь-якою з них. Командні рядки міток не мають: екран віддає `tags: null` на «Команді».
  */
 export function filterTasks(list, f) {
-  const { q = "", status = "all", profiles, designers } = f || {};
+  const { q = "", status = "all", tags, designers } = f || {};
   return list.filter((t) => {
     if (!matches(t, q)) return false;
     if (status === "active" && isDone(t)) return false;
     if (status === "done" && !isDone(t)) return false;
-    if (profiles && profiles.size && t.profile && !profiles.has(t.profile)) return false;
+    if (tags && tags.size && !(t.tags || []).some((x) => tags.has(tagKey(x)))) return false;
     if (designers && designers.size && t.designer && !designers.has(t.designer)) return false;
     return true;
   });
+}
+
+/**
+ * Розбір збереженого стану екрана (`localStorage["dc-tasks-ui"]`, уже розібраний із JSON) у початковий `homeUi`. Чиста
+ * функція, щоб міграцію старого ключа можна було перевірити без браузера. Мітки — з `raw.tags`; коли його нема (стан 0.10.0
+ * писав `profiles`), — з `raw.profiles`: профіль `united` збігається з ключем похідної мітки «United», тож вибраний чип
+ * лишається вибраним. Обидва — через `tagKey`. Сміття (не обʼєкт, не масив, не рядки) — порожньо й типове, без винятку.
+ * `q` не зберігається: людина, що повернулась на екран, чекає побачити всі задачі.
+ */
+export function readHomeUi(raw) {
+  const ui = { tab: "mine", q: "", sort: "recent", status: "active", tags: new Set(), designers: new Set() };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return ui;
+  if (raw.tab === "team") ui.tab = "team";
+  if (typeof raw.sort === "string" && SORTS.includes(raw.sort)) ui.sort = raw.sort;
+  if (HOME_STATUSES.includes(raw.status)) ui.status = raw.status;
+  const keys = Array.isArray(raw.tags) ? raw.tags : raw.profiles;
+  if (Array.isArray(keys)) for (const v of keys) if (typeof v === "string" && tagKey(v)) ui.tags.add(tagKey(v));
+  if (Array.isArray(raw.designers)) for (const v of raw.designers) if (typeof v === "string") ui.designers.add(v);
+  return ui;
 }
 
 /* Усі порівняльники — «менше = раніше». «Нема даних» (null) завжди в кінці,

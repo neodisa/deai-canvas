@@ -18,7 +18,8 @@
  *                    простір»), `#sp-registered` («цю теку вже додано») тепер лише в кроці 1 майстра (`wizard-view.js`);
  *   форма задачі     `form[data-form="task"]`; поля `#tf-title` (`name="title"`),
  *                    `#tf-id` (`name="id"`), необовʼязкове `#tf-repo` (`name="repo"`, 4a: лише коли в просторі є синк із git
- *                    і це не ЛІГА — `taskFormHTML({repo})`);
+ *                    і це не ЛІГА — `taskFormHTML({repo})`), необовʼязкове `#tf-tags` (`name="tags"`, 4b-3: `taskFormHTML({tags: true})`);
+ *   діалог міток     `form[data-form="tags"]`; поле `#tg-tags` (`name="tags"`) — правка міток однієї задачі (`tagsFormHTML`);
  *   спільне          слот помилки `[data-form-error]`, кнопки `button[data-a="ok"]`
  *                    (type=submit) і `button[data-a="cancel"]`;
  *   привітання       кнопки `[data-th="spacenew"]` і `[data-th="spaceopen"]` у `.th-welcome`.
@@ -87,8 +88,9 @@ export function spaceDialogHTML({ name = "", color = SPACE_COLORS[0], errorKey =
  * Форма «Нова задача»: назва й ідентифікатор (id підставляє `wireTaskForm`, поки його не правили руками). `repo` (4a) —
  * `{placeholder?}` додає необовʼязкове поле «Репозиторій» після id (адреса цієї задачі замість типової з «Підключення»);
  * `null`/нема — розмітка дослівно як до 4a. `placeholder` — дані (типовий `repo` із налаштувань модуля): лише через `esc()`.
+ * `tags` (4b-3) — `true` додає після id (і репо) необовʼязкове поле «Мітки, через кому»; без нього розмітка дослівно як була.
  */
-export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null } = {}) {
+export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null, tags = false } = {}) {
   return `<form class="cv-form" data-form="task" novalidate role="dialog" aria-modal="true" aria-labelledby="tf-h">
     <h2 class="cv-form-h" id="tf-h">${esc(t("newTask"))}</h2>
     <div class="cv-field">
@@ -105,11 +107,39 @@ export function taskFormHTML({ title = "", id = "", errorKey = "", repo = null }
       <label for="tf-repo">${esc(t("newTaskRepo"))}</label>
       <input id="tf-repo" name="repo" type="text" value="" autocomplete="off" spellcheck="false"
         placeholder="${esc(repo.placeholder || t("newTaskRepoPh"))}" aria-describedby="${ERR_ID}">
+    </div>` : ""}${tags ? `
+    <div class="cv-field">
+      <label for="tf-tags">${esc(t("tagsField"))}</label>
+      <input id="tf-tags" name="tags" type="text" value="" autocomplete="off" placeholder="${esc(t("tagsPh"))}" aria-describedby="${ERR_ID}">
     </div>` : ""}
     ${errorSlot(errorKey)}
     ${buttons("taskCreate")}
   </form>`;
 }
+
+/**
+ * Діалог «Мітки задачі» (4b-3, кнопка «Мітки» на картці «Моїх»): одне поле «Мітки, через кому», заповнене поточними мітками.
+ * `value` — дані (мітки задачі, склеєні «, »): лише через `esc()`. Правила міток (довжина, кома, межа числа, дублікати) —
+ * справа сервера (`bad-tags`); клієнт лише ріже по комах (`parseTags`).
+ */
+export function tagsFormHTML({ value = "", errorKey = "" } = {}) {
+  return `<form class="cv-form" data-form="tags" novalidate role="dialog" aria-modal="true" aria-labelledby="tg-h">
+    <h2 class="cv-form-h" id="tg-h">${esc(t("tagsEditTitle"))}</h2>
+    <div class="cv-field">
+      <label for="tg-tags">${esc(t("tagsField"))}</label>
+      <input id="tg-tags" name="tags" type="text" value="${esc(value)}" autocomplete="off" placeholder="${esc(t("tagsPh"))}"
+        aria-describedby="${ERR_ID}" data-autofocus>
+    </div>
+    ${errorSlot(errorKey)}
+    ${buttons("tagsSave")}
+  </form>`;
+}
+
+/**
+ * Поле «Мітки» → список для тіла запиту: по комах, кожна обрізана, порожні (`a,,b`, хвостова кома) відкинуто. Дублікати,
+ * регістр, довжину й межу числа перевіряє сервер — тут їх НЕ дублюємо (друга копія правил розійшлася б із першою).
+ */
+export const parseTags = (s) => String(s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 
 /**
  * Привітання — машина, на якій просторів ще нема. Малюється у вузлі екрана «Задачі»
