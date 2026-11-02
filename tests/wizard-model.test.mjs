@@ -20,9 +20,10 @@ test("кроки: чотири, у порядку спеки", () => {
 
 test("секції: ROLE_ORDER, далі інші за абеткою; модуль кількох ролей — у кожній; missing і биті записи — ні", () => {
   const list = [...LIST, M("multi", ["zeta", "publish"]), M("gone", ["publish"], { status: "missing" }),
-    null, { id: 5 }, M("alpha", ["alpha"])];
+    null, { id: 5 }, M("alpha", ["alpha"]), M("supabase-dashboard", ["dashboard"])];
   const s = wizardSections(list);
-  assert.deepEqual(s.map((x) => x.role), ["publish", "comments", "tokens", "alpha", "zeta"]);
+  assert.deepEqual(s.map((x) => x.role), ["publish", "comments", "dashboard", "tokens", "alpha", "zeta"],
+    "4c-1: роль dashboard — серед відомих, перед токенами, а не серед «інших за абеткою»");
   assert.deepEqual(s[0].modules.map((e) => e.id), ["static-publish", "vercel-publish", "multi"]);
   assert.deepEqual(s.find((x) => x.role === "zeta").modules.map((e) => e.id), ["multi"]);
   assert.ok(!s.flatMap((x) => x.modules).some((e) => e.id === "gone"));

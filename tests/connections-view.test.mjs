@@ -90,6 +90,8 @@ test("рядок «Зараз»: модуль, модуль без запису,
   assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого»");
   assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого — макети лише на цьому компʼютері/, "роль vcs має власний текст «нікого»");
   assert.match(nowHTML("vcs", v({ vcs: "legacy" })), /вбудована інтеграція ЛІГА/);
+  assert.match(nowHTML("dashboard", v({ dashboard: null })), /Зараз: нікого — без дашборда — вкладки «Команда» нема/, "4c-1: роль dashboard має власний текст «нікого»");
+  assert.match(nowHTML("dashboard", v({ dashboard: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("vcs", { space: { ...SP, capabilities: { vcs: "git-sync" } }, list: [{ id: "git-sync", name: "Синхронізація з git", roles: ["vcs"] }] }),
     /Зараз: Git</, "постачальник — назва вбудованого модуля зі словника, а не сирий id чи назва з маніфесту");
   assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
@@ -140,6 +142,7 @@ test("назви й підписи вбудованих — мовою інте�
   assert.equal(modName(LIST[1]), "Publish to a folder");
   assert.equal(roleTitle("publish"), "Publishing");
   assert.equal(roleTitle("vcs"), "Git sync");
+  assert.equal(roleTitle("dashboard"), "Team dashboard", "4c-1: а не сире слово «dashboard»");
   assert.equal(roleTitle("tracker"), "tracker");
   assert.equal(roleTitle(""), "Other");
   assert.equal(modName({ id: "memo-publish", name: "Memo (тест)" }), "Memo (тест)");
@@ -272,8 +275,8 @@ test("панель: без налаштувань — «Налаштувань �
 
 test("словник: кожен ключ, який віддає модель, є в обох мовах (модель ключів сама не кличе t())", () => {
   const keys = new Set();
-  for (const role of ["publish", "comments", "vcs", "tokens"]) for (const k of Object.values(roleKeys(role))) keys.add(k);
-  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync"]) {
+  for (const role of ["publish", "comments", "vcs", "dashboard", "tokens"]) for (const k of Object.values(roleKeys(role))) keys.add(k);
+  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync", "supabase-dashboard"]) {
     const b = builtinText(id);
     keys.add(b.name); keys.add(b.desc);
     for (const k of Object.values(b.fields)) keys.add(k);

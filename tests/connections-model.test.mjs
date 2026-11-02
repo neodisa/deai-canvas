@@ -14,10 +14,11 @@ const M = (id, o = {}) => ({ id, name: id, roles: ["publish"], enabled: false, i
   settings: [], ...o });
 
 test("ролі: порядок секцій, ключі й іконки; чужа роль і __proto__ не мають ключів", () => {
-  assert.deepEqual(ROLE_ORDER, ["publish", "comments", "vcs", "tokens"]);
+  assert.deepEqual(ROLE_ORDER, ["publish", "comments", "vcs", "dashboard", "tokens"]);
   assert.equal(roleKeys("publish").title, "cnRolePublish");
   assert.equal(roleKeys("comments").none, "cnNoneComments");
   assert.deepEqual(roleKeys("vcs"), { title: "cnRoleVcs", lead: "cnRoleVcsLead", none: "cnNoneVcs" });
+  assert.deepEqual(roleKeys("dashboard"), { title: "cnRoleDashboard", lead: "cnRoleDashboardLead", none: "cnNoneDashboard" });
   assert.equal(roleKeys("tracker"), null, "роль, що ще зарезервована й без текстів");
   assert.equal(roleKeys("__proto__"), null);
   assert.equal(roleKeys("toString"), null);
@@ -25,32 +26,35 @@ test("ролі: порядок секцій, ключі й іконки; чуж�
   assert.equal(roleIcon("comments"), "comment");
   assert.equal(roleIcon("tokens"), "sliders");
   assert.equal(roleIcon("vcs"), "cloud");
+  assert.equal(roleIcon("dashboard"), "grid", "4c-1: іконка з наявного набору icons.js, не «dots»");
   assert.equal(roleIcon("tracker"), "dots");
   assert.equal(roleIcon(undefined), "dots");
   assert.equal(roleIcon("constructor"), "dots");
 });
 
-test("вбудовані тексти: п'ять модулів (з git-sync, 4a), решта — null", () => {
-  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync"]) {
+test("вбудовані тексти: шість модулів (git-sync 4a, supabase-dashboard 4c-1), решта — null", () => {
+  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync", "supabase-dashboard"]) {
     const b = builtinText(id);
     assert.ok(b && b.name && b.desc && b.fields, id);
   }
   assert.equal(builtinText("static-publish").fields.folder, "cnFieldStaticFolder");
   assert.deepEqual(builtinText("supabase-comments").fields,
     { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket" });
+  assert.deepEqual(builtinText("supabase-dashboard"), { name: "cnModSbDashName", desc: "cnModSbDashDesc",
+    fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable" } }, "4c-1: модуль ролі dashboard");
   assert.equal(builtinText("memo-publish"), null);
   assert.equal(builtinText("__proto__"), null);
 });
 
 test("групування: відомі ролі за порядком, далі інші за абеткою, без ролі — останні; missing окремо", () => {
   const list = [
-    M("t", { roles: ["tokens"] }), M("z", { roles: ["tracker"] }), M("a", { roles: ["alpha"] }),
+    M("t", { roles: ["tokens"] }), M("d", { roles: ["dashboard"] }), M("z", { roles: ["tracker"] }), M("a", { roles: ["alpha"] }),
     M("p2"), M("p1"), M("n", { roles: [] }), M("c", { roles: ["comments", "publish"] }),
     { id: "gone", name: "gone", roles: [], enabled: true, status: "missing", settings: [] },
     null, { name: "без id" },
   ];
   const { sections, missing } = groupModules(list);
-  assert.deepEqual(sections.map((s) => s.role), ["publish", "comments", "tokens", "alpha", "tracker", ""]);
+  assert.deepEqual(sections.map((s) => s.role), ["publish", "comments", "dashboard", "tokens", "alpha", "tracker", ""]);
   assert.deepEqual(sections[0].modules.map((e) => e.id), ["p2", "p1"], "порядок усередині — як у списку сервера");
   assert.deepEqual(sections[1].modules.map((e) => e.id), ["c"], "кілька ролей — у секції першої");
   assert.deepEqual(missing.map((e) => e.id), ["gone"]);
@@ -146,6 +150,13 @@ test("наслідки вимкнення: legacy для ЛІГА publish/commen
   assert.deepEqual(disableConsequences(tok, { integrations: true, capabilities: { tokens: "css-tokens" } }),
     [{ role: "tokens", kind: "none", noneKey: "cnNoneTokens" }], "токенів ЛІГА не має — legacy тут нема");
   assert.deepEqual(disableConsequences(e, null), []);
+  const sd = M("supabase-dashboard", { roles: ["dashboard"] });
+  assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "supabase-dashboard" } }),
+    [{ role: "dashboard", kind: "legacy" }], "4c-1: у ЛІГА вимкнення повертає вбудований дашборд, а не «нікого»");
+  assert.deepEqual(disableConsequences(sd, { integrations: false, capabilities: { dashboard: "supabase-dashboard" } }),
+    [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }]);
+  assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "legacy" } }), [],
+    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
 });
 
 const SETTINGS = [

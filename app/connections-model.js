@@ -17,18 +17,19 @@ const has = (o, k) => o != null && typeof k === "string" && Object.prototype.has
 const get = (o, k) => (has(o, k) ? o[k] : undefined);
 
 /** Ролі зі своїми текстами — у порядку секцій. Інші ролі йдуть далі за абеткою, модулі без ролі — останніми. */
-export const ROLE_ORDER = ["publish", "comments", "vcs", "tokens"];
+export const ROLE_ORDER = ["publish", "comments", "vcs", "dashboard", "tokens"];
 
 const ROLE_KEYS = {
   publish: { title: "cnRolePublish", lead: "cnRolePublishLead", none: "cnNonePublish" },
   comments: { title: "cnRoleComments", lead: "cnRoleCommentsLead", none: "cnNoneComments" },
   vcs: { title: "cnRoleVcs", lead: "cnRoleVcsLead", none: "cnNoneVcs" },
+  dashboard: { title: "cnRoleDashboard", lead: "cnRoleDashboardLead", none: "cnNoneDashboard" },
   tokens: { title: "cnRoleTokens", lead: "cnRoleTokensLead", none: "cnNoneTokens" },
 };
 /** Ключі словника ролі (`title`, `lead`, `none`) або `null` для ролі без своїх текстів. */
 export const roleKeys = (role) => get(ROLE_KEYS, role) ?? null;
 
-const ROLE_ICONS = { publish: "up", comments: "comment", vcs: "cloud", tokens: "sliders" };
+const ROLE_ICONS = { publish: "up", comments: "comment", vcs: "cloud", dashboard: "grid", tokens: "sliders" };
 /** Іконка ролі (імʼя з `icons.js`); невідома роль — `dots`. */
 export const roleIcon = (role) => get(ROLE_ICONS, role) ?? "dots";
 
@@ -46,6 +47,9 @@ const BUILTIN_TEXT = {
   "git-sync": { name: "cnModGitName", desc: "cnModGitDesc",
     fields: { repo: "cnFieldGitRepo", branch: "cnFieldGitBranch", path: "cnFieldGitPath", ssh_key: "cnFieldGitSshKey",
       host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync" } },
+  /* Командний дашборд (4c-1): підписи трьох налаштувань маніфесту `modules/supabase-dashboard/module.json`. */
+  "supabase-dashboard": { name: "cnModSbDashName", desc: "cnModSbDashDesc",
+    fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable" } },
 };
 /** Ключі словника вбудованого модуля (`name`, `desc`, `fields{ключ: ключ словника}`) або `null`. */
 export const builtinText = (id) => get(BUILTIN_TEXT, id) ?? null;
@@ -281,9 +285,12 @@ export function roleHolders(e, list) {
     && o.status !== "missing" && Array.isArray(o.roles) && o.roles.some((r) => mine.has(r)));
 }
 
+/** Ролі з вбудованим шляхом у ЛІГИ (`'legacy'` у `capabilities`) — вимкнення модуля повертає його, а не «нікого». Токенів ЛІГА не має. */
+const LEGACY_ROLES = new Set(["publish", "comments", "vcs", "dashboard"]);
+
 /**
  * Що станеться з ролями, які `e` зараз ВИКОНУЄ (`capabilities[role] === e.id`), якщо його вимкнути:
- * `[{role, kind: 'legacy'}]` — простір з інтеграціями (ЛІГА) повернеться до вбудованої публікації, коментарів чи синку з git;
+ * `[{role, kind: 'legacy'}]` — простір з інтеграціями (ЛІГА) повернеться до вбудованої публікації, коментарів, синку з git чи дашборда;
  * `[{role, kind: 'none', noneKey}]` — роль лишиться без модуля.
  */
 export function disableConsequences(e, space) {
@@ -292,7 +299,7 @@ export function disableConsequences(e, space) {
   const out = [];
   for (const role of Array.isArray(e.roles) ? e.roles : []) {
     if (role === "error" || !has(caps, role) || caps[role] !== e.id) continue;
-    if (space.integrations === true && (role === "publish" || role === "comments" || role === "vcs")) out.push({ role, kind: "legacy" });
+    if (space.integrations === true && LEGACY_ROLES.has(role)) out.push({ role, kind: "legacy" });
     else out.push({ role, kind: "none", noneKey: roleKeys(role)?.none ?? null });
   }
   return out;
