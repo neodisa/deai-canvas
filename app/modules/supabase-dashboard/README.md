@@ -11,14 +11,14 @@ a card is — the core does; it only keeps and gives back.
 
 1. Use **a dedicated Supabase project** (see "Security" below).
 2. Open **SQL Editor → New query**, paste the whole of [`schema.sql`](schema.sql) and **Run**. It creates `public.deai_dashboard`,
-   turns row-level security on and creates **no policy for `anon`**. It is safe to run twice.
+   turns row-level security on, revokes the table from `anon` and `authenticated` and creates **no policy**. It is safe to run twice.
 3. Take from **Project Settings → API**: the project URL (`https://<ref>.supabase.co`) and a **non-public** key.
 
 ## 2. Settings
 
 | setting | meaning |
 |---|---|
-| `url` | project address, `https://<name>.<tld>` only (no IP, no `localhost`, no path or query); requests never follow redirects |
+| `url` | project address, `https://<name>.<tld>` only (a DNS name of two or more labels: no IP literal and no bare `localhost`; no path or query); requests never follow redirects |
 | `key` | **non-public** key: `service_role` / `sb_secret_…` or the key of a role of your own. Stored as a secret, never put into a page |
 | `table` | table name, default `deai_dashboard` (`[a-z_][a-z0-9_]{0,62}`) |
 
@@ -45,7 +45,7 @@ Error texts carry no key and no body of a request or an answer: only the HTTP st
 * the key lives in `~/.deai/secrets.json` (owner only) and goes only to `apikey` / `Authorization: Bearer` of requests to `url`;
 * use **a dedicated project**: `schema.sql` adopts an existing `public.deai_dashboard` of the same name;
 * **a key of a role of your own** (not `service_role` / `sb_secret_…`) is subject to the same rules as any Postgres role:
-  `schema.sql` revokes everything from `anon` and creates no policy, so for your role you must add **explicit grants and
+  `schema.sql` revokes everything from `anon` and `authenticated` and creates no policy, so for your role you must add **explicit grants and
   row-level-security policies** on the table yourself — `grant select, insert, update on public.deai_dashboard to <role>;`
   plus a policy for `select`, `insert` and `update` (`create policy … on public.deai_dashboard for all to <role> using (true)
   with check (true);`). `service_role` bypasses RLS and needs none of this. Without them `check` reports

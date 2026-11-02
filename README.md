@@ -377,7 +377,7 @@ returns: what a card is, and when to send it, is decided by the core (`app/dashb
 
 1. Create **a dedicated Supabase project** (the cards hold the name and the e-mail of a designer).
 2. Run [`app/modules/supabase-dashboard/schema.sql`](app/modules/supabase-dashboard/schema.sql) in its SQL editor. It creates
-   `public.deai_dashboard`, turns row-level security on and gives **no access to `anon`**.
+   `public.deai_dashboard`, turns row-level security on and gives **no access to `anon` or `authenticated`**.
 3. Take the project URL and a **non-public** key from Project Settings → API (`service_role`, or the key of a role of your own
    with explicit grants and policies on the table). The module refuses a public (anon / publishable) key: that one is inside
    every published preview.

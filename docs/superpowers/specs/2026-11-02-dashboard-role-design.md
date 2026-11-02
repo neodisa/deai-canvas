@@ -82,7 +82,7 @@
 
 ### 3. Адаптер ЛІГИ (неявний постачальник)
 
-- `_dashboard_legacy_ctx()` (у новому `app/dashboard.py`, БЕЗ імпорту `serve`): `url`/`key` — з `supabase_config()`
+- `legacy_ctx(url, key, space_id='')` (у новому `app/dashboard.py`, БЕЗ імпорту `serve`): `url`/`key` — з `supabase_config()`
   (переїжджає з `serve.py` у `app/install_config.py`, `serve` реекспортує імʼя), `table` = `_LEGACY_DASHBOARD_TABLE =
   'overview_projects'`; модуль — вбудований `supabase-dashboard`. Ключ ЛІГИ — той самий, що зараз (без перевірки
   «непублічний»: паритет; `check` у ЛІГИ кличеться лише з екрана «Підключення»).
@@ -101,7 +101,8 @@
   `build_row` → `build_card`, `discover_row` → `discover_card`, `row_has_pii` → `card_has_pii`, `_drop_fixtures`,
   `comment_project_key`, `_identity`. Ті самі ⛔-коментарі (None не шлемо; `open_comments` не шлемо; авторство чужої
   картки не присвоюємо; задачу без теки не пишемо) — разом з кодом.
-- `sync(space, provider, ctx, cfg, *, discover=None, statuses=None, log=print)` — один прохід:
+- `sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=print, call=None)` — один прохід (`cfg` — файл
+  задач простору, `module`/`ctx` — постачальник ролі):
   1. `discover` (лише ЛІГА): базові картки → PII-фільтр → `push(…, 'insert')`;
   2. `open_comments(ctx)` (якщо є) → лічильники;
   3. `statuses` (лише ЛІГА до 4c-2) → статуси Jira;

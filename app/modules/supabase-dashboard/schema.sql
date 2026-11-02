@@ -43,5 +43,6 @@ create table if not exists public.deai_dashboard (
 -- Row-level security on and NO policies: only a role that bypasses RLS (service_role) reads and writes the table.
 alter table public.deai_dashboard enable row level security;
 
--- Belt and braces: a fresh project may grant table privileges to `anon` by default; take them back.
+-- Belt and braces: a fresh project may grant table privileges to `anon` and `authenticated` by default; take them back.
 revoke all on public.deai_dashboard from anon;
+revoke all on public.deai_dashboard from authenticated;

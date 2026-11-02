@@ -138,6 +138,7 @@ class ManifestTest(ModuleCase):
         self.assertNotRegex(body.lower(), r'create\s+policy', 'жодної політики: ні для anon, ні для кого')
         self.assertNotRegex(body.lower(), r'grant\s+[^;]*\bto\b[^;]*\banon\b', 'жодного права для anon')
         self.assertRegex(body.lower(), r'revoke\s+all\s+on\s+public\.deai_dashboard\s+from\s+anon')
+        self.assertRegex(body.lower(), r'revoke\s+all\s+on\s+public\.deai_dashboard\s+from\s+authenticated')
         for col in TEAM_KEYS + ('status', 'figma_url', 'synced_at', 'designer_key'):
             self.assertRegex(body, rf'\b{col}\b', col)
         self.assertIn('NON-PUBLIC', sql)

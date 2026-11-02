@@ -77,7 +77,11 @@ cards and returns the rows. Design: `docs/superpowers/specs/2026-11-02-dashboard
   - a failure to add a base card from the registry is now written to the log by `sync` (0.11.0 swallowed it there; `discover`
     reported it);
   - a broken module of its own for the role, or an unreadable `space.json`, in a space with `integrations` does not turn the role
-    into `'legacy'` (as for `comments`): the shared Supabase of LIGA is not a fallback.
+    into `'legacy'` (as for `comments`): the shared Supabase of LIGA is not a fallback;
+  - the LIGA path now goes through the `supabase-dashboard` module, whose address check (`_base`) wants a DNS host name with at
+    least two labels (`x.localhost` and the like pass; bare `localhost` and IP literals do not). A LIGA config with an IP or a
+    single-label host, which the regex of `install_config` still accepts, now gets `module-error` instead of working (the same
+    as the comments in 0.10.0).
 
 ### Removed
 
@@ -90,7 +94,11 @@ cards and returns the rows. Design: `docs/superpowers/specs/2026-11-02-dashboard
   `overview_push.py sync` with `SUPABASE_URL`/`SUPABASE_KEY` or `SUPABASE_SERVICE_KEY` in its environment: it now writes to the
   pair of the legacy `tasks.json` when that file has one (the same pair the comments use), and the environment is read only when
   the file has none. Make sure that pair may write the table `overview_projects`, or take it out of the file so the pair of the
-  environment is used. After updating, look at the log of the LIGA sync (`OVERVIEW_LOG`) after the next run.
+  environment is used. After updating, look at the log of the LIGA sync (`OVERVIEW_LOG`) after the next run. Also, a scheduled
+  `sync` now resolves the provider of the role through the spaces registry (`spaces.load_registry()`): a legacy entry with
+  `integrations` off and no `supabase-dashboard` enabled in its `space.json` is silent (no provider, nothing is synced), a
+  registry with no legacy entry ends with exit code 2, and loading the registry may run its migration, which writes the legacy
+  entry to the registry file.
 - **An ordinary space:** create a dedicated Supabase project, run `app/modules/supabase-dashboard/schema.sql` in its SQL editor,
   then enable the module (Connections → «Team dashboard», or the wizard) with the project URL and a **non-public** key
   (`service_role` or the key of a role of your own — such a role needs explicit grants and policies, see the module README).
