@@ -3,6 +3,121 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.12.0] — невипущено
+
+Stage 4c-1: the team dashboard becomes a role. The «Team» tab of the «Tasks» screen and the writing of the task cards no longer
+depend on the flag `integrations`: they belong to whoever provides the role **`dashboard`** in the space. The built-in module
+`supabase-dashboard` provides it for anyone with their own Supabase project, and the LIGA space reaches its shared Supabase
+through the same module as an implicit provider (as `git-sync`, `vercel-publish` and `supabase-comments` did in 0.8.0–0.10.0),
+so it needs no new step (see *Upgrading*). The core decides what a card is (`app/dashboard.py`); the module only stores the
+cards and returns the rows. Design: `docs/superpowers/specs/2026-11-02-dashboard-role-design.md`; plan:
+`docs/superpowers/plans/2026-11-02-dashboard-role.md`. The behaviour of 0.11.0 is pinned by the snapshot
+`tests/fixtures/dashboard/before-4c1.json`.
+
+### Added
+
+- **The role `dashboard`** in the core: it is called now (it was only reserved), and `capabilities.dashboard` carries the module
+  id, `'legacy'` or `null`. The functions of a module: `rows(ctx)`, `push(ctx, cards, mode)` (`'merge'` | `'insert'`) and the
+  optional `open_comments(ctx)`; the error codes `dashboard-unconfigured` (409) and `dashboard-error` (502). The contract is in
+  `docs/modules/authoring.md`, «The `dashboard` role».
+- **The module `supabase-dashboard` 1.0.0** (built-in) with its own `schema.sql`. Settings: `url`, `key` (a secret that is
+  **not** public) and `table` (default `deai_dashboard`). The cards hold the name and the e-mail of a designer, and the public
+  key of a project goes into every published preview, so the table has no policy for `anon` and `check` refuses a public key
+  (`sb_publishable_…`, a JWT with `"role": "anon"`). `check` answers `no-schema` when the table is missing and `bad-key` on HTTP
+  401/403. See `app/modules/supabase-dashboard/README.md`.
+- **The «Team» tab in any space that has the role**, not only in LIGA. A space without a provider has no tab (`team: null`); a
+  broken module of its own (or an unreadable `space.json`) keeps the tab and shows an error banner with the reason.
+- **The role on the Connections screen** (the card «Team dashboard», between «Git sync» and the tokens) and in the new-space
+  wizard; the texts are in `app/i18n.js` (UK and EN).
+- **`bin/overview_push.py` is a thin CLI** over `app/dashboard.py`: `sync [--space ID | --legacy]` and `discover` (LIGA only).
+  `sync` without a flag is the LIGA space, as before, so the external scheduler keeps working unchanged. Exit codes: 0 — the
+  pass ran (a failure of single cards is in the log, not in the code), 1 — it could not start, 2 — wrong use.
+- **The log of the sync of an ordinary space:** `<DEAI_HOME>/logs/dashboard-sync.log` (the folder is created for the owner
+  only, the file is `0600`). LIGA keeps its old log file (`OVERVIEW_LOG` in `app/serve.py`).
+
+### Changed
+
+- **LIGA goes through the module.** The cards are stored and the team rows are read by `supabase-dashboard` with the address and
+  the key of the installation (`supabase_config()`, now in `app/install_config.py`; `serve` still exports the name) and the
+  table `overview_projects`. The rows of the «Team» tab and the cards in the database are the same; `schema.sql` is **not** run
+  on the shared project. The steps that are not roles yet stay LIGA's: the base cards from the task registry (until 4d) and the
+  Jira statuses (until 4c-2); they are handed to the sync as callbacks, so an ordinary space never reaches the registry or Jira.
+- **The sync is one per space.** While the sync child of a space lives, a new trigger only marks «once more», and exactly one
+  repeat starts after it ends (0.11.0 started a process per trigger, and two could run at once). The triggers are the same:
+  after a publish, after a git sync that pushed and after an autosync that changed something. A child that lives longer than
+  `SYNC_DEADLINE_S` = 600 s is terminated by the next trigger of that space, one line goes into the log, and a fresh child starts.
+- **The gate of the sync** is the provider of the role in the space of the request, not `integrations`. No provider — silence.
+- **The cache of the team rows is per space** (`team_snapshot`: 60 s, an error for 10 s, a failure keeps the last rows read). It
+  remembers who gave the rows (`who`): a different provider never shows the rows of the previous one as «last known».
+- **`app/dashboard.py`** now holds the building of the cards that was in `bin/overview_push.py` (`build_card`, `discover_card`,
+  `card_has_pii`, `map_status`, …) with no change of behaviour; the CLI still exports the old names for its tests.
+- **`overview_push.py` reads the config of the installation the way the server does:** the file `tasks.json` first, then
+  `SUPABASE_URL`/`SUPABASE_KEY` (the limit of 0.10.0, «the environment is read first», is closed). `SUPABASE_URL` with
+  `SUPABASE_SERVICE_KEY` is now only a **fallback** of the CLI, used when the installation has no pair at all.
+- **Deliberate differences from 0.11.0** (everything else is checked against the snapshot):
+  - the tab and the sync depend on a provider of `dashboard`, not on `integrations` (the same for LIGA, which has `'legacy'`);
+  - the cards go in batches of up to 50 (0.11.0 sent them one by one), and cards with a different set of keys go in separate
+    requests (PostgREST would fill a missing key with `null`, and `merge-duplicates` would wipe the stored value); one failed
+    request puts all its card ids into `failed`, and LIGA sees that in the log;
+  - one call carries each card id once — the **last** card wins (Postgres refuses a request with the same key twice as a
+    whole); a card without a string `id` is reported in `failed`;
+  - the core waits **6 s** for `rows`, and the own socket timeout of the module is **4 s** (0.11.0: 3 s per HTTP request), so the
+    worst case of the «Team» tab is 6 s instead of 3 s; the core waits longer than the module so that the person sees the text of
+    the module and not a bare `check-timeout`;
+  - the error texts of the tab come from the module («Supabase недоступний (…)», or the HTTP status and the PostgREST code,
+    never the key or a body of a request); the rows of the real path without a string `id` are dropped (a row that is not an
+    object was dropped before);
+  - **LIGA with `DC_TASKS_FILE` no longer starts the sync child** (0.11.0 started it: the gate was on reading only), because an
+    isolated run must not write into the shared Supabase. `DC_NO_OVERVIEW` silences the writing for every provider. The
+    isolation of reading (`DC_TASKS_FILE`, `DC_NO_OVERVIEW` and the test seam `DC_TEAM_FAKE`) applies to the `'legacy'` path
+    only; a space with its own module is not affected by it;
+  - the sync child is started as `sys.executable bin/overview_push.py sync --space <id>` (0.11.0: the literal `python3`, no
+    space, the Supabase pair in the environment of the child); LIGA with no space of the request is `sync --legacy`, and the
+    child reads the config of the installation itself;
+  - a failure to add a base card from the registry is now written to the log by `sync` (0.11.0 swallowed it there; `discover`
+    reported it);
+  - a broken module of its own for the role, or an unreadable `space.json`, in a space with `integrations` does not turn the role
+    into `'legacy'` (as for `comments`): the shared Supabase of LIGA is not a fallback.
+
+### Removed
+
+- `_supabase`, `upsert_project` and `open_comment_counts` of `bin/overview_push.py` (its Supabase client) and `from serve import …`
+  in it: the script no longer imports the server. `TEAM_COLS` and the hard-wired `urlopen` of the team read left `app/serve.py`.
+
+### Upgrading
+
+- **LIGA: nothing to do** — no new step, no schema. **Check one thing before updating** if your scheduler runs
+  `overview_push.py sync` with `SUPABASE_URL`/`SUPABASE_KEY` or `SUPABASE_SERVICE_KEY` in its environment: it now writes to the
+  pair of the legacy `tasks.json` when that file has one (the same pair the comments use), and the environment is read only when
+  the file has none. Make sure that pair may write the table `overview_projects`, or take it out of the file so the pair of the
+  environment is used. After updating, look at the log of the LIGA sync (`OVERVIEW_LOG`) after the next run.
+- **An ordinary space:** create a dedicated Supabase project, run `app/modules/supabase-dashboard/schema.sql` in its SQL editor,
+  then enable the module (Connections → «Team dashboard», or the wizard) with the project URL and a **non-public** key
+  (`service_role` or the key of a role of your own — such a role needs explicit grants and policies, see the module README).
+  Without the module the space has no «Team» tab and sends no cards.
+- Scripts that imported `_supabase`, `upsert_project` or `open_comment_counts` from `bin/overview_push.py` must move to the
+  module (`app/modules/supabase-dashboard/`) or to `app/dashboard.py`.
+
+### Known limits
+
+- LIGA keeps using the key of the installation: the check «non-public key» is not applied to it, and its table is guarded by the
+  policies of its database, not by `schema.sql`.
+- The task registry and the base cards from it are LIGA's own step until 4d; the Jira statuses are LIGA's until 4c-2. An ordinary
+  space has no tracker statuses on its cards until 4c-2.
+- The schedule of the sync is an external scheduler, not the canvas; the canvas starts a sync only after a publish, a git sync
+  or an autosync.
+- One lock (`_TEAM_LOCK`) serves the team rows of **all** spaces: an unreachable service of one space can hold the «Tasks» screen
+  of another for up to 6 s (the error is then cached for 10 s).
+- The deadline of a hung sync child has no timer: the next trigger of the space checks it, so a child that hangs with no trigger
+  after it stays alive. Two narrow races are left as they are: the registry is read before `_SYNC_LOCK`, so two runs are possible
+  only if the registry changes (or fails to read) at that very instant; `_overview_stop` may hold `_SYNC_LOCK` for up to 5 s (only
+  when a child is hung). `--legacy` is parsed and not read (no `--space` means LIGA).
+- If the folder of `OVERVIEW_LOG` does not exist, the sync child of LIGA silently does not start (the log cannot be opened; as in
+  0.11.0). An ordinary space creates its own log folder.
+- `open_comments` reads one answer of Supabase, which cuts it at its `max-rows` (1000 by default): with more open comments than
+  that the numbers, and so the status `review`, are lower than the truth. `rows` returns at most 500 rows.
+- The key of an ordinary space lives in `~/.deai/secrets.json` (owner only, plain text), as the other keys do.
+
 ## [0.11.0] — 02.11.2026
 
 Stage 4b-3: the profile stops being the label of the «Tasks» screen. A task gets general **tags** (any space), the chips, the

@@ -1,6 +1,6 @@
 # Writing your own module
 
-For Deai Canvas **0.10.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
+For Deai Canvas **0.12.0**. A module adds one capability — a *role* — to a space: publishing previews, design-system
 tokens, team comments, syncing mockups with git. Built-in modules live in `app/modules/`; **your own modules live in the space**, in
 `<space>/modules/<id>/`, so they travel with the space through git. Their code runs on your computer only after **you**
 trust it.
@@ -242,14 +242,32 @@ send. The module only keeps what it is given and returns what it has. The same c
 * `rows(ctx)` → a list of dicts, the rows of the team. The core keeps only the keys of `TEAM_KEYS`
   (`id`, `name`, `jira`, `jira_status`, `jira_status_cat`, `open_comments`, `thumb_url`, `code_url`, `updated_at`,
   `designer`, `iterations`, `pages`), drops a row without a string `id` and keeps at most 500 rows. Anything that is not a
-  list is a `module-error`. Answer fast: the core gives it 4 seconds.
+  list is a `module-error`. Answer fast: the core waits **6 seconds** for `rows` (the Tasks screen is the first page); keep
+  your own socket timeout below that (the built-in module uses 4 s), so you can answer with your own text instead of a bare
+  `check-timeout`.
 * `push(ctx, cards, mode)` — `cards` is a list of dicts the core built; `mode` is `"merge"` (update the row of an
   existing card, the new fields on top) or `"insert"` (add only the cards that are not there yet, never touch an existing
   row: the base cards of the registry). Returns `{"ok": n, "failed": {"<card id>": "<text>"}}`: how many cards were stored
   and the reason for each that was not. Raise a `ModuleError` only when the service cannot be reached at all. The core
-  does not send `None` values, but a module should not rely on that.
+  does not send `None` values, but a module should not rely on that. The core gives the whole call 60 seconds. When one
+  call carries the same card `id` twice, the **last** card wins (a store that refuses one request with a repeated key would
+  lose the whole batch); a card without a string `id` is reported in `failed`. If the service takes several cards in one
+  request, group them by their set of keys: a key missing from one card must not become `null` and wipe the stored value
+  (the built-in module sends at most 50 cards per request and keeps cards with different key sets in separate requests).
 * `open_comments(ctx)` — optional. Returns `{"<comment channel>": <number of open comments>}`: the core uses the number to
-  tell the status `review` from `pub` of a card. A module without it, or one that fails, gives `{}`.
+  tell the status `review` from `pub` of a card. A module without it, or one that fails, gives `{}`. The built-in module
+  reads the table `comments` of `supabase-comments` in the same project (no such table — `{}`); Supabase cuts any answer at
+  its `max-rows` (1000 by default), so with more open comments than that the numbers are lower than the truth.
+* `check(ctx)` — as for every module (section 3): a verdict dict `{"ok": bool, "error"?: str, "detail"?: str}`, never an
+  exception. The built-in module refuses a **public** key here (`module-error`) and answers `no-schema`, `bad-key` or
+  `network` for the rest; `check` is the only place that judges the key, `rows`, `push` and `open_comments` never do.
+
+**Who is asked, and when.** A space has the «Team» tab when it has a provider of the role; without one `team` is `null` and
+the tab is hidden. A broken module of its own does not hide the tab: it shows an error banner that names the reason. The rows
+are cached **per space** (60 s; an error for 10 s, and a failure keeps the last rows that were read), and a different provider
+never shows the rows of the previous one. The cards are sent by a background process (`bin/overview_push.py sync`) after a
+publish, after a git sync that pushed and after an autosync that changed something — one process per space at a time (a
+trigger that comes while it runs only asks for one more run). `DC_NO_OVERVIEW` silences the writing for every provider.
 
 **The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`.
 

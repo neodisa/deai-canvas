@@ -14,8 +14,9 @@ links for your team.
 > space. A **wizard** creates a space and takes you through its modules and a first task, and a
 > **Connections** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
 > or with the `vercel login` of the computer. The in-house publishing and comments of the legacy space now run on these same
-> modules. A few integrations
-> (team dashboard, tracker statuses, team chat notifications) are still wired for the original
+> modules, and so does the **team dashboard** (the «Team» tab of «Tasks»): any space can get it through the
+> `supabase-dashboard` module and its own Supabase project. A few integrations
+> (tracker statuses, team chat notifications) are still wired for the original
 > setup and only run in a migrated legacy space; they are being turned into optional per-space
 > modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
@@ -33,9 +34,10 @@ links for your team.
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Git sync** | Send an iteration to a git repository (GitHub, GitLab, your own server) and pull a colleague's changes back as a new iteration; the state is a dot in the task bar. Any space, through the `git-sync` module. See *Git sync*. |
+| **Team dashboard** | The «Team» tab of «Tasks»: the cards of the whole team's tasks (Jira status, open comments, preview, designer) from **your own Supabase project**, in any space, through the `supabase-dashboard` module. See *Team dashboard*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
-| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, design-system tokens) from the UI. See *Modules*. |
+| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -100,7 +102,7 @@ after a restart (what was created stays, and the rest is on «Connections»).
 A **module** is a folder — built in at `app/modules/<id>/` or a space's own at
 `<space>/modules/<id>/` — with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
-calls: `publish`, `tokens`, `comments` and `vcs` today; `tracker`, `dashboard`, `notify`
+calls: `publish`, `tokens`, `comments`, `vcs` and `dashboard` today; `tracker` and `notify`
 are reserved. One provider per role per space.
 
 **Connecting a module — the Connections screen.** Open the space menu (the space chip in the
@@ -144,6 +146,7 @@ those folders out of public commits.
 | `vercel-publish` | `publish` | Publishes the preview to **your own Vercel account**: one project per task, a public `https://pv-<8 digits>.vercel.app` address, old deployments cleaned. Two ways to sign in (`auth`): a **token** through the REST API (no Node, no CLI; the default) or the **System Vercel CLI** (`npx vercel` under the `vercel login` of the computer; needs Node.js, stores no token). Settings: `auth`, `token` (secret), `team`, optional `password` (secret). Off by default. See *Publishing to your own Vercel*. |
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
 | `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages), optional `shots_bucket` (screenshots of pins). Off by default. See *Comments*. |
+| `supabase-dashboard` | `dashboard` | The team dashboard in **your own Supabase project**: the canvas stores the cards of your tasks there and the «Team» tab reads the rows of the whole team back. Settings: `url`, `key` (a **non-public** secret: `service_role` or the key of a role of your own), optional `table` (`deai_dashboard`). Off by default. See *Team dashboard*. |
 | `git-sync` | `vcs` | Syncs a task's iterations with **any git repository** — GitHub, GitLab, your own server — through the git on your computer: nothing is stored by Deai, access is your SSH key or saved HTTPS sign-in. Settings: `repo` (the default for tasks; optional), `branch` (`main`), `path` (`mockup/{task}`), `ssh_key`, `host_ip`, `autosync`. Off by default. See *Git sync*. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
@@ -348,7 +351,7 @@ Every task can carry **tags** — short labels in any space. Set them in the fie
 or later with the button «Мітки» on a card of the «Mine» tab; the chips under the search are built from them (the more tasks
 a tag has, the earlier its chip; several chips mean «any of them»), and the search looks into them too. A tag is 1–32
 characters without a comma, a task has at most 10, and `Alpha` and `alpha` are one tag. Over the API: the key `tags` of the
-task rows, the optional `tags` of `POST /api/task-new` and `POST /api/task-tags` `{id, tags}`. The «Team» tab has no tags yet.
+task rows, the optional `tags` of `POST /api/task-new` and `POST /api/task-tags` `{id, tags}`. The «Team» tab has no tags yet (its rows come from the dashboard).
 
 **The LIGA space.** A task there without tags shows its profile (`United`, `LIGA360`, `SEO`) as a tag, so the screen looks as
 before. The profile still decides the folder and the default repository of a task; the table «profile → repository» is read
@@ -360,6 +363,33 @@ from the root of the legacy `tasks.json` (the same file as the Supabase pair):
 
 A profile is `[a-z0-9-]` up to 32 characters; a repository is printable ASCII without spaces and does not start with `-`.
 Without the table new LIGA tasks get no default repository.
+
+## Team dashboard
+
+The `supabase-dashboard` module (role `dashboard`) turns a Supabase project of yours into a shared board of the team's tasks.
+The canvas builds a **card** of every task that has a folder on this computer — name, Jira status, open comments, links to
+the preview and the code, designer, iterations and pages — and the module stores it; the tab «Team» of the «Tasks» screen
+reads the rows of all designers back. A space without a provider of the role has no «Team» tab. The module only stores and
+returns: what a card is, and when to send it, is decided by the core (`app/dashboard.py`).
+
+**Connect it**, in four steps — the check codes and the security notes are in
+[the module README](app/modules/supabase-dashboard/README.md):
+
+1. Create **a dedicated Supabase project** (the cards hold the name and the e-mail of a designer).
+2. Run [`app/modules/supabase-dashboard/schema.sql`](app/modules/supabase-dashboard/schema.sql) in its SQL editor. It creates
+   `public.deai_dashboard`, turns row-level security on and gives **no access to `anon`**.
+3. Take the project URL and a **non-public** key from Project Settings → API (`service_role`, or the key of a role of your own
+   with explicit grants and policies on the table). The module refuses a public (anon / publishable) key: that one is inside
+   every published preview.
+4. Connections → «Team dashboard» → «Supabase dashboard» → «Connect» (or the same step of the new-space wizard). The key is
+   kept in `~/.deai/secrets.json` (owner only) and never goes into a page.
+
+**When the cards are sent.** After a publish, after a git sync that pushed and after an autosync that changed something —
+by a background process (`bin/overview_push.py sync --space <id>`), one at a time per space, with its log in
+`<DEAI_HOME>/logs/dashboard-sync.log`. Running it from a scheduler is the same: `bin/overview_push.py sync` without a flag syncs
+the LIGA space, `sync --space <id>` an ordinary one. The «Team» tab waits for the rows up to 6 s and keeps the last rows it
+read when the service goes quiet. A migrated legacy space keeps its shared Supabase through the same module and needs no step.
+The Jira statuses of the cards and the base cards from the task registry are still a part of that legacy space only.
 
 ## Git sync
 
@@ -427,7 +457,7 @@ text. The full list is in `CHANGELOG.md`, 0.8.0.
 
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
-app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, git-sync); the core is app/deai_modules.py
+app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, git-sync); the core is app/deai_modules.py
 docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
@@ -465,7 +495,11 @@ tests/        unit, Python and live (Playwright) tests
        without tags shows its profile as a tag; the table «profile → repository» moves from the code to `tasks.json`
        (`profile_repos`).
    - **4c** — team dashboard, tracker statuses and team chat notifications: the roles `dashboard`, `tracker`, `notify`
-     in the core, and the modules for them.
+     in the core, and the modules for them. Three releases:
+     - ✅ **4c-1** (0.12) — the team dashboard: the role `dashboard` and the built-in module `supabase-dashboard` (any space
+       with its own Supabase gets the «Team» tab); the legacy space goes through the same module as an implicit provider;
+     - **4c-2** — tracker statuses (`tracker`, Jira);
+     - **4c-3** — the Teams silence through the role `notify`.
    - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.

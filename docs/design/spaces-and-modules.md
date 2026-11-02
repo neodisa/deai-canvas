@@ -7,10 +7,10 @@ stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3
 Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a space's own
 modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0) and stage
 4b-1 (the in-house publishing through `vercel-publish`, 0.9.0), stage 4b-2 (the in-house comments through
-`supabase-comments`, 0.10.0) and stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0) — see *Status* at
-the end.
-Next: stages 4c to 4d — the rest of the in-house integrations of the legacy space (the team dashboard, tracker statuses and
-notifications) as optional per-space modules, and the end of the `integrations` flag.
+`supabase-comments`, 0.10.0), stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0) and stage 4c-1 (the
+team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0) — see *Status* at the end.
+Next: stages 4c-2 to 4d — the rest of the in-house integrations of the legacy space (tracker statuses and notifications) as
+optional per-space modules, and the end of the `integrations` flag.
 
 ## Goal
 
@@ -46,7 +46,7 @@ canvas for their workflow without touching the core.
   | Publish previews (`publish`) | Static folder (always available), Vercel |
   | Design-system tokens (`tokens`) | CSS custom properties file or npm package |
   | Issue tracker (`tracker`) | Jira, Linear |
-  | Team dashboard (`dashboard`) | — |
+  | Team dashboard (`dashboard`) | Supabase (your own project), through `supabase-dashboard` |
   | Notifications (`notify`) | — |
 
 - Built-in modules ship in `app/modules/`; a space's own modules live in
@@ -101,7 +101,11 @@ canvas for their workflow without touching the core.
        constants leave the code;
      - ✅ **4b-3** (0.11.0) — the profiles: general task tags; the profile table moves to `tasks.json`;
    - **4c** — the roles `dashboard`, `tracker` and `notify` in the core, and the team dashboard, tracker statuses and
-     team chat notifications as modules of that company;
+     team chat notifications as modules of that company. Three releases:
+     - ✅ **4c-1** (0.12.0) — the team dashboard: the role `dashboard`, the module `supabase-dashboard`; the legacy space
+       goes through it as an implicit provider;
+     - **4c-2** — tracker statuses (`tracker`, Jira);
+     - **4c-3** — the Teams silence through the role `notify`;
    - **4d** — the `integrations` flag goes.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
@@ -356,13 +360,42 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
   task it writes (a newer one puts them back on its next write); `task-tags` does not hold `WRITE_LOCK` across read-modify-write (`save_tasks` locks only the write, so a concurrent change of the same file by another route can be lost: last write wins);
   the search does not highlight inside tags; a chip shows the first-seen spelling; the button «Мітки» is one more Tab stop.
 - **Tested** against the snapshot of 0.10.0 (`tests/fixtures/task-tags/before-4b3.json`); no network.
-- **Left for 4c / 4d:** the dashboard, tracker statuses and notifications as modules; the `integrations` flag and the profile
+- **Left for 4c / 4d:** the dashboard (done in 4c-1, see below), tracker statuses and notifications as modules; the `integrations` flag and the profile
   adapter go in 4d.
+
+### Stage 4c-1 — the team dashboard as a role (0.12.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-02-dashboard-role-design.md`;
+plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
+
+- **The role `dashboard`** is called by the core (`ROLES_CALLED`; `tracker` and `notify` stay reserved): `rows(ctx)`,
+  `push(ctx, cards, mode)` with `'merge'` / `'insert'`, and the optional `open_comments(ctx)`; the codes `dashboard-unconfigured`
+  (409) and `dashboard-error` (502); `capabilities.dashboard`. The contract is in `docs/modules/authoring.md`. Like `comments`, it
+  has the hard-wired path of the legacy space (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable `space.json` is not `'legacy'` either, `STRICT_LEGACY_ROLES`).
+- **The module `supabase-dashboard` 1.0.0** (built-in; `schema.sql`; a **non-public** key: no `anon` policy, `check` refuses a
+  public key). The core builds the cards (`app/dashboard.py`: `build_card`, the PII filter, the registry fixtures), the module
+  only stores them and returns the rows. The legacy space reaches its shared Supabase (table `overview_projects`) through the
+  same module as an implicit provider, with the `ctx` built from the installation (`dashboard.legacy_ctx`); the base cards from
+  the task registry and the Jira statuses stay its own steps, handed to the sync as callbacks.
+- **The tab «Team» and the sync depend on the provider** of the role, not on `integrations`. The sync is a background child
+  (`bin/overview_push.py sync [--space ID | --legacy]`), one per space at a time, with a deadline of 600 s checked by the next
+  trigger; the rows are cached per space. The Connections screen and the wizard carry the role.
+- **Conscious differences from 0.11.0:** batches of up to 50 cards grouped by their key set (the last card of a repeated id
+  wins); the core waits 6 s for `rows` and the module's own timeout is 4 s (was 3 s); the sync child is not started for LIGA
+  under `DC_TASKS_FILE`; the config of the CLI is read from `tasks.json` before the environment.
+- **Known limits:** LIGA's key is not checked for being non-public; the registry and Jira steps are LIGA's until 4d / 4c-2; one
+  lock for the team rows of all spaces (a dead service holds another space for up to 6 s); no timer for a hung child; the sync
+  of LIGA does not start when the folder of its log is missing; `open_comments` is cut at Supabase's `max-rows`. The full
+  list is in the CHANGELOG, `[0.12.0]`.
+- **Tested** against the snapshot of 0.11.0 (`tests/fixtures/dashboard/before-4c1.json`), a fake module and a fake vcs in the live
+  tests (`tests/live/dashboard-role.test.mjs`); no network and no real Supabase.
+- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses and the Teams silence as roles and modules; the `integrations` flag and the
+  literal `'legacy'` go in 4d.
 
 ### What stays for later
 
-- The roles `tracker`, `dashboard`, `notify` are reserved names that the core does not
-  call yet (stage 4c).
+- The roles `tracker` and `notify` are reserved names that the core does not
+  call yet (stages 4c-2 and 4c-3).
 - Left out of 3c (listed in its spec): a sandbox for module code (a trusted module runs with the person's
   permissions); cleaning of snapshots that a re-trust replaced or whose folder vanished; viewing or comparing code in
   the dialog; signatures and a catalog of modules; installing a module from a URL; machine-wide modules; a banner
