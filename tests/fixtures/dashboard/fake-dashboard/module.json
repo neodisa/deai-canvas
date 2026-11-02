@@ -1,0 +1,7 @@
+{"api": 1, "id": "fake-dashboard", "name": "Fake dashboard (test)", "version": "1.0.0",
+ "roles": ["dashboard"],
+ "settings": [
+   {"key": "rows_file", "type": "text", "label": "Rows file (test)", "required": true},
+   {"key": "log_file", "type": "text", "label": "Call log file (test)"},
+   {"key": "fail", "type": "text", "label": "Fail rows with this text (test)"}
+ ]}

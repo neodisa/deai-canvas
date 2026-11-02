@@ -301,8 +301,10 @@ test("1: вхід із дропдауна, секції за ролями, не�
   const { page, outside, errors } = await boot(t);
   await openConnections(page);
   const titles = await page.locator(".cn-sec-h").allTextContents();
-  /* Від 4a між коментарями й токенами стоїть роль `vcs` («Синхронізація з git», вбудований `git-sync`). */
-  assert.deepEqual(titles.slice(0, 4), ["Публікація", "Командні коментарі", "Синхронізація з git", "Токени дизайн-системи"]);
+  /* Від 4a між коментарями й токенами стоїть роль `vcs` («Синхронізація з git», вбудований `git-sync`), від 4c-1 — ще й `dashboard`
+     («Командний дашборд», вбудований `supabase-dashboard`) між синхронізацією й токенами. */
+  assert.deepEqual(titles.slice(0, 5), ["Публікація", "Командні коментарі", "Синхронізація з git", "Командний дашборд", "Токени дизайн-системи"]);
+  assert.match(await badge(page, "supabase-dashboard"), /cn-badge--off/, "вбудований supabase-dashboard: не підключений за замовчуванням");
   assert.match(await page.locator('.cn-card[data-id="static-publish"]').textContent(), /типово/);
   assert.match(await badge(page, "css-tokens"), /cn-badge--off/);
   assert.match(await page.locator("#bar .crumb--flat").textContent(), /Підключення/);

@@ -1,0 +1,5 @@
+{"api": 1, "id": "fake-vcs", "name": "Fake git sync (test)", "version": "1.0.0",
+ "roles": ["vcs"],
+ "settings": [
+   {"key": "repo", "type": "text", "label": "Repo (test)"}
+ ]}
