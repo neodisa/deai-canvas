@@ -1,0 +1,765 @@
+{
+ "meta": {
+  "generator": "tests/make_before_4c1.py",
+  "version": "0.11.0",
+  "volatile_stripped": [
+   "fetchedAt",
+   "rowsAt",
+   "changed",
+   "synced_at",
+   "updated_at",
+   "jira_synced_at"
+  ]
+ },
+ "sync_gate": {
+  "dc_no_overview": {
+   "log_created": false,
+   "popen_started": false
+  },
+  "integrations_off": {
+   "log_created": false,
+   "popen_started": false
+  },
+  "integrations_on_with_config": {
+   "argv": [
+    "python3",
+    "bin/overview_push.py",
+    "sync"
+   ],
+   "env_key_is_config_key": true,
+   "env_url": "https://demo.supabase.example",
+   "kwargs": [
+    "env",
+    "stderr",
+    "stdout"
+   ],
+   "log_created": true,
+   "popen_started": true,
+   "stderr_is_stdout": true,
+   "stdout_is_log": true
+  },
+  "no_config": {
+   "log_created": false,
+   "popen_started": false
+  }
+ },
+ "sync_push": {
+  "input": {
+   "fake_temp_root": "/deai-fixture-tmp",
+   "identity": [
+    "Alpha",
+    "alpha@example.com"
+   ],
+   "iterations_json": {
+    "t1": {
+     "gitlab": {
+      "synced_at": "31.10.2026 18:00"
+     },
+     "iterations": [
+      {
+       "date": "30.10.2026 10:00",
+       "id": "it1",
+       "published": false
+      },
+      {
+       "date": "01.11.2026 12:30",
+       "id": "it2",
+       "published": false
+      }
+     ]
+    },
+    "t2": {
+     "iterations": [
+      {
+       "date": "02.11.2026 09:00",
+       "id": "it1",
+       "published": true
+      }
+     ],
+     "publish_url": "https://dc-t2.vercel.example",
+     "published_at": "02.11.2026 09:30"
+    },
+    "t3": {
+     "iterations": [
+      {
+       "date": "28.10.2026 08:00",
+       "id": "it1",
+       "published": true
+      }
+     ],
+     "publish_url": "https://dc-t3.vercel.example"
+    },
+    "t5": {
+     "iterations": [
+      {
+       "date": "29.10.2026 08:00",
+       "id": "it1",
+       "published": false
+      }
+     ]
+    }
+   },
+   "jira_statuses": {
+    "LIGA-1": {
+     "cat": "done",
+     "name": "Done"
+    }
+   },
+   "open_comment_counts": {
+    "dc/t1": 1
+   },
+   "registry": {
+    "reg1": {
+     "comment_project": "proj/reg1",
+     "figma": "https://figma.example/file/11",
+     "gitlab": {
+      "repo": "git@git.example:org/demo-design.git"
+     },
+     "jira": "LIGA-11",
+     "owner": "Alpha",
+     "owner_key": "alpha@example.com",
+     "title": "Registry one",
+     "updated_at": "2026-11-01T10:00:00Z"
+    },
+    "regfix": {
+     "gitlab": {
+      "repo": "/deai-fixture-tmp/regfix.git"
+     },
+     "title": "Fixture"
+    }
+   },
+   "tasks": {
+    "nova": {
+     "gitlab": {
+      "path": "mockup/nova",
+      "repo": "/deai-fixture-tmp/nova.git"
+     },
+     "profile": "tool",
+     "title": "Нова"
+    },
+    "t1": {
+     "dir": "<dir>/t1",
+     "figma": "https://figma.example/file/1",
+     "gitlab": {
+      "path": "mockup/t1",
+      "repo": "git@git.example:org/demo-design.git"
+     },
+     "jira": "LIGA-1",
+     "owner_key": "alpha@example.com",
+     "profile": "united",
+     "title": "Demo one"
+    },
+    "t2": {
+     "comment_project": "proj/alpha",
+     "dir": "<dir>/t2",
+     "jira": "LIGA-2",
+     "profile": "liga360",
+     "title": "Demo two"
+    },
+    "t3": {
+     "dir": "<dir>/t3",
+     "owner_key": "bob@example.com",
+     "profile": "seo",
+     "title": "Demo three"
+    },
+    "t4": {
+     "dir": "<dir>/t4-missing",
+     "jira": "LIGA-4",
+     "profile": "tool",
+     "title": "Demo four"
+    },
+    "t5": {
+     "dir": "<dir>/t5",
+     "profile": "tool",
+     "title": "Справа 1234567890"
+    }
+   }
+  },
+  "jira_keys_asked": [
+   [
+    "LIGA-1",
+    "LIGA-2",
+    null,
+    "LIGA-4",
+    null,
+    null
+   ]
+  ],
+  "stdout": [
+   "⛔ overview: не віддаю на дашборд «regfix» — gitlab.repo = /deai-fixture-tmp/regfix.git лежить у тимчасовій теці /deai-fixture-tmp — це фікстура тесту, а не робота дизайнера; прибери її з реєстру (гілка registry) і рядок з overview_projects",
+   "✅ overview: з реєстру оброблено 1 задач (нові додано)",
+   "⛔ overview: не віддаю на дашборд «nova» — gitlab.repo = /deai-fixture-tmp/nova.git лежить у тимчасовій теці /deai-fixture-tmp — це фікстура тесту, а не робота дизайнера; прибери її з реєстру (гілка registry) і рядок з overview_projects",
+   "⚠ overview: пропущено «t5» — виявлено PII в даних",
+   "✅ overview: синхронізовано 3 проєктів",
+   "·  overview: пропущено 1 — теки немає на цій машині (t4); їхні картки лишились як були"
+  ],
+  "upserts": [
+   {
+    "ignore": true,
+    "row": {
+     "comment_project": "proj/reg1",
+     "designer": "Alpha",
+     "designer_key": "alpha@example.com",
+     "figma_url": "https://figma.example/file/11",
+     "gitlab_path": "mockup/reg1",
+     "gitlab_repo": "git@git.example:org/demo-design.git",
+     "gitlab_url": "https://git.example/org/demo-design/-/tree/main/mockup/reg1",
+     "id": "reg1",
+     "jira": "LIGA-11",
+     "name": "Registry one",
+     "source": "registry",
+     "status": "pub"
+    },
+    "volatile_present": [
+     "updated_at"
+    ]
+   },
+   {
+    "ignore": false,
+    "row": {
+     "backup_at": "2026-10-31T18:00:00+03:00",
+     "designer": "Alpha",
+     "designer_key": "alpha@example.com",
+     "figma_url": "https://figma.example/file/1",
+     "gitlab_path": "mockup/t1",
+     "gitlab_repo": "git@git.example:org/demo-design.git",
+     "gitlab_url": "https://git.example/org/demo-design/-/tree/main/mockup/t1",
+     "id": "t1",
+     "iterations": 2,
+     "jira": "LIGA-1",
+     "jira_status": "Done",
+     "jira_status_cat": "done",
+     "name": "Demo one",
+     "source": "canvas",
+     "status": "review",
+     "thumb_source": "figma"
+    },
+    "volatile_present": [
+     "jira_synced_at",
+     "synced_at",
+     "updated_at"
+    ]
+   },
+   {
+    "ignore": false,
+    "row": {
+     "code_url": "https://dc-t2.vercel.example",
+     "comment_project": "proj/alpha",
+     "designer": "Alpha",
+     "designer_key": "alpha@example.com",
+     "id": "t2",
+     "iterations": 1,
+     "jira": "LIGA-2",
+     "name": "Demo two",
+     "source": "canvas",
+     "status": "pub",
+     "thumb_source": "code"
+    },
+    "volatile_present": [
+     "synced_at",
+     "updated_at"
+    ]
+   },
+   {
+    "ignore": false,
+    "row": {
+     "id": "t3",
+     "iterations": 1,
+     "name": "Demo three",
+     "source": "canvas",
+     "status": "pub"
+    },
+    "volatile_present": [
+     "synced_at",
+     "updated_at"
+    ]
+   }
+  ]
+ },
+ "team_read": {
+  "fake_three_rows": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": 2,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": "indeterminate",
+      "jiraStatus": "In Review",
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": null,
+     "rows": [
+      {
+       "comments": 2,
+       "designer": "Alpha",
+       "id": "t1",
+       "iterations": 1,
+       "jira": "LIGA-1",
+       "jiraCat": "indeterminate",
+       "jiraStatus": "In Review",
+       "mine": true,
+       "pages": 2,
+       "preview": "https://dc-t1.vercel.example",
+       "thumb": null,
+       "title": "Demo one",
+       "updated": "2026-11-01T10:00:00Z"
+      },
+      {
+       "comments": 0,
+       "designer": "Bob",
+       "id": "x9",
+       "iterations": 3,
+       "jira": "LIGA-9",
+       "jiraCat": "done",
+       "jiraStatus": "Done",
+       "mine": false,
+       "pages": null,
+       "preview": null,
+       "thumb": "https://demo.supabase.example/storage/x9.jpg",
+       "title": "Другий дизайнер",
+       "updated": "2026-10-30T09:00:00Z"
+      },
+      {
+       "comments": 1,
+       "designer": null,
+       "id": null,
+       "iterations": null,
+       "jira": null,
+       "jiraCat": null,
+       "jiraStatus": null,
+       "mine": false,
+       "pages": null,
+       "preview": null,
+       "thumb": null,
+       "title": "Рядок без id",
+       "updated": null
+      }
+     ]
+    }
+   },
+   "input_rows": [
+    {
+     "code_url": "https://dc-t1.vercel.example",
+     "designer": "Alpha",
+     "id": "t1",
+     "iterations": 1,
+     "jira": "LIGA-1",
+     "jira_status": "In Review",
+     "jira_status_cat": "indeterminate",
+     "name": "Demo one",
+     "open_comments": 2,
+     "pages": 2,
+     "thumb_url": null,
+     "updated_at": "2026-11-01T10:00:00Z"
+    },
+    {
+     "code_url": null,
+     "designer": "Bob",
+     "id": "x9",
+     "iterations": 3,
+     "jira": "LIGA-9",
+     "jira_status": "Done",
+     "jira_status_cat": "done",
+     "name": "Другий дизайнер",
+     "open_comments": 0,
+     "pages": null,
+     "thumb_url": "https://demo.supabase.example/storage/x9.jpg",
+     "updated_at": "2026-10-30T09:00:00Z"
+    },
+    {
+     "name": "Рядок без id",
+     "open_comments": 1
+    }
+   ],
+   "status": 200,
+   "urlopen_calls": 0,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "float"
+   }
+  },
+  "integrations_off": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": null,
+      "publish": "static-publish",
+      "tokens": null,
+      "vcs": null
+     },
+     "color": "space-1",
+     "integrations": false,
+     "legacy": false,
+     "name": "Plain"
+    },
+    "team": null
+   },
+   "status": 200,
+   "urlopen_calls": 0,
+   "volatile": {
+    "fetchedAt": null,
+    "rowsAt": null
+   }
+  },
+  "no_config": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": "Supabase не налаштовано",
+     "rows": []
+    }
+   },
+   "status": 200,
+   "urlopen_calls": 0,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "NoneType"
+   }
+  },
+  "supabase_error": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": "мережі нема",
+     "rows": []
+    }
+   },
+   "status": 200,
+   "urlopen_calls": 1,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "NoneType"
+   }
+  },
+  "supabase_request": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": 2,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": "indeterminate",
+      "jiraStatus": "In Review",
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": null,
+     "rows": [
+      {
+       "comments": 2,
+       "designer": "Alpha",
+       "id": "t1",
+       "iterations": 1,
+       "jira": "LIGA-1",
+       "jiraCat": "indeterminate",
+       "jiraStatus": "In Review",
+       "mine": true,
+       "pages": 2,
+       "preview": "https://dc-t1.vercel.example",
+       "thumb": null,
+       "title": "Demo one",
+       "updated": "2026-11-01T10:00:00Z"
+      },
+      {
+       "comments": 0,
+       "designer": "Bob",
+       "id": "x9",
+       "iterations": 3,
+       "jira": "LIGA-9",
+       "jiraCat": "done",
+       "jiraStatus": "Done",
+       "mine": false,
+       "pages": null,
+       "preview": null,
+       "thumb": "https://demo.supabase.example/storage/x9.jpg",
+       "title": "Другий дизайнер",
+       "updated": "2026-10-30T09:00:00Z"
+      }
+     ]
+    }
+   },
+   "input_rows": [
+    {
+     "code_url": "https://dc-t1.vercel.example",
+     "designer": "Alpha",
+     "id": "t1",
+     "iterations": 1,
+     "jira": "LIGA-1",
+     "jira_status": "In Review",
+     "jira_status_cat": "indeterminate",
+     "name": "Demo one",
+     "open_comments": 2,
+     "pages": 2,
+     "thumb_url": null,
+     "updated_at": "2026-11-01T10:00:00Z"
+    },
+    {
+     "code_url": null,
+     "designer": "Bob",
+     "id": "x9",
+     "iterations": 3,
+     "jira": "LIGA-9",
+     "jira_status": "Done",
+     "jira_status_cat": "done",
+     "name": "Другий дизайнер",
+     "open_comments": 0,
+     "pages": null,
+     "thumb_url": "https://demo.supabase.example/storage/x9.jpg",
+     "updated_at": "2026-10-30T09:00:00Z"
+    }
+   ],
+   "status": 200,
+   "urlopen_calls": [
+    {
+     "headers": {
+      "apikey": "<key>",
+      "authorization": "Bearer <key>"
+     },
+     "method": "GET",
+     "ssl_context": true,
+     "timeout": 3,
+     "url": "https://demo.supabase.example/rest/v1/overview_projects?select=id,name,jira,jira_status,jira_status_cat,open_comments,thumb_url,code_url,updated_at,designer,iterations,pages&limit=500"
+    }
+   ],
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "float"
+   }
+  }
+ }
+}
