@@ -479,14 +479,20 @@ class OverviewSyncTest(_Env):
         popen.assert_not_called()
         self.assertFalse(os.path.exists(self.log))
 
-    def test_with_config_child_starts_for_the_space_and_gets_no_config(self):
+    def test_with_config_child_starts_for_the_league_and_gets_no_config(self):
+        """Запит без фіксованого простору: ЛІГА — запис реєстру з `legacy` (його id, ключ той самий, що в фіксованого тригера);
+        запису нема — `--legacy` (не псевдонім-id: `legacy` може бути id справжнього простору)."""
         self.write({'supabase_url': URL, 'supabase_key': KEY})
-        with mock.patch.object(serve.subprocess, 'Popen') as popen:
-            serve.Handler._overview_sync(None)
-        popen.assert_called_once()
-        self.assertEqual(popen.call_args.args[0], [sys.executable, os.path.join(ROOT, 'bin', 'overview_push.py'),
-                                                   'sync', '--space', 'legacy'])
-        self.assertNotIn('env', popen.call_args.kwargs, 'конфіг дитині не передається: вона читає install_config')
+        script = os.path.join(ROOT, 'bin', 'overview_push.py')
+        for reg, tail in (({'spaces': [{'id': 'liga', 'legacy': True}, {'id': 'legacy', 'legacy': False}]}, ['--space', 'liga']),
+                          ({'spaces': []}, ['--legacy'])):
+            with self.subTest(tail=tail), mock.patch.object(serve.spaces, 'read_registry', return_value=reg), \
+                    mock.patch.object(serve.subprocess, 'Popen') as popen:
+                serve._SYNC_RUNS.clear()
+                serve.Handler._overview_sync(None)
+            popen.assert_called_once()
+            self.assertEqual(popen.call_args.args[0], [sys.executable, script, 'sync', *tail])
+            self.assertNotIn('env', popen.call_args.kwargs, 'конфіг дитині не передається: вона читає install_config')
 
 
 # Рядки Supabase, які віддає «сервер» у тестах агента (ті самі, що записані в `before-4b2.json` на 0.9.0).

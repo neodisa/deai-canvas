@@ -1050,7 +1050,9 @@ class CliShape(unittest.TestCase):
     """`bin/overview_push.py`: тонкий CLI. Без сервера, без реєстру машини (`spaces.load_registry` підмінено), без мережі."""
 
     REG = {'current': 'liga', 'spaces': [{'id': 'liga', 'path': '', 'legacy': True, 'integrations': True},
-                                         {'id': 'p', 'path': '/nowhere/p', 'legacy': False, 'integrations': False}]}
+                                         {'id': 'p', 'path': '/nowhere/p', 'legacy': False, 'integrations': False},
+                                         # справжній простір «Legacy»: `SPACE_ID_RE` пропускає id `legacy`, зарезервованих нема
+                                         {'id': 'legacy', 'path': '/nowhere/legacy', 'legacy': False, 'integrations': False}]}
 
     def setUp(self):
         self.picked, self.synced = [], []
@@ -1088,10 +1090,17 @@ class CliShape(unittest.TestCase):
         self.assertIsNotNone(self.synced[0]['discover'])
         self.assertIs(self.synced[0]['statuses'], ov.jira_statuses)
 
-    def test_the_legacy_alias_is_the_league_space(self):
-        """Сервер без фіксованого простору запиту шле псевдонім `legacy`; у реєстрі простір ЛІГА має інший id."""
+    def test_the_legacy_flag_is_the_league_space_and_the_id_legacy_is_a_real_space(self):
+        """⛔ Псевдоніма-id нема: `--space legacy` — це справжній простір з id `legacy`, а ЛІГА — окремий прапорець `--legacy`
+        (його не може мати жоден id). Інакше простір «Legacy» збігся б із ЛІГОЮ."""
+        self.assertEqual(self.main('sync', '--legacy')[0], 0)
         self.assertEqual(self.main('sync', '--space', 'legacy')[0], 0)
-        self.assertEqual(self.picked, ['liga'])
+        self.assertEqual(self.picked, ['liga', 'legacy'])
+
+    def test_space_and_legacy_flags_exclude_each_other(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            ov.main(['sync', '--space', 'p', '--legacy'])
+        self.assertEqual(cm.exception.code, 2)
 
     def test_an_unknown_space_is_exit_code_2_and_a_text(self):
         code, out = self.main('sync', '--space', 'nope')
@@ -1186,18 +1195,21 @@ GATE_SERVER = tm.CHECK_ONLY + DASH_FNS
 
 class _Popen:
     """Заглушка `subprocess.Popen` для гейтів і одиночного запуску: пише `(argv, kwargs, шлях лога, режим)`; `poll()` — `None`,
-    поки `finish()` не викликано (дитина «жива»), `wait()` чекає на це. Жодного справжнього процесу."""
+    поки `finish()` не викликано (дитина «жива»), `wait()` чекає на це. Жодного справжнього процесу. `hold_next` — наступна
+    дитина тримає `wait()` ще й після `finish()`, поки не відкрито `wait_gate` (щоб відтворити гонку спостерігача)."""
 
     def __init__(self):
         self.started, self.children = [], []
         self.lock = threading.Lock()
+        self.hold_next = False
 
     def __call__(self, argv, **kw):
         out = kw.get('stdout')
         with self.lock:
             self.started.append({'argv': list(argv), 'kwargs': sorted(kw), 'log': getattr(out, 'name', None),
                                  'mode': getattr(out, 'mode', None), 'stderr': kw.get('stderr'), 'stdout_closed_at_start': out.closed})
-            child = _Child()
+            child = _Child(hold=self.hold_next)
+            self.hold_next = False
             self.children.append(child)
         return child
 
@@ -1205,21 +1217,34 @@ class _Popen:
         with self.lock:
             kids = list(self.children)
         for k in kids:
+            k.wait_gate.set()
             k.finish()
 
 
 class _Child:
-    def __init__(self):
+    def __init__(self, hold=False):
         self.done = threading.Event()
+        self.wait_gate = threading.Event()
+        self.terminated = False
+        if not hold:
+            self.wait_gate.set()
 
     def finish(self):
         self.done.set()
+
+    def terminate(self):
+        self.terminated = True
+        self.finish()
+
+    def kill(self):
+        self.terminate()
 
     def poll(self):
         return 0 if self.done.is_set() else None
 
     def wait(self, timeout=None):
         self.done.wait(15)
+        self.wait_gate.wait(15)
         return 0
 
 
@@ -1439,6 +1464,118 @@ class SyncRunner(_SyncEnv):
         self.assertEqual(self.popen.started, [])
         self.assertEqual(serve._SYNC_RUNS, {})
 
+    # ---- ЛІГА й простір з id `legacy`: окремі ключі; один ключ на простір ЛІГИ ----------------------------------------
+
+    def mark_league(self, sp):
+        """Запис `sp` у реєстрі стає простором ЛІГА (`legacy: True`)."""
+        with open(self.reg_file, encoding='utf-8') as f:
+            reg = json.load(f)
+        for x in reg['spaces']:
+            if x['id'] == sp['id']:
+                x['legacy'] = True
+        mb._write(self.reg_file, reg)
+
+    def test_a_real_space_with_the_id_legacy_is_not_the_league(self):
+        """⛔ `SPACE_ID_RE` пропускає `legacy`: простір «Legacy» не мусить збігатись із ЛІГОЮ ні в argv, ні в ключі `_SYNC_RUNS`."""
+        self.mark_league(self.liga)
+        real = self.new_space('Legacy', integrations=True)
+        self.assertEqual(real['id'], 'legacy')
+        self.trigger(real)
+        self.trigger(self.liga)
+        self.assertEqual([st['argv'][-2:] for st in self.popen.started],
+                         [['--space', 'legacy'], ['--space', self.liga['id']]], 'кожен синк веде СВІЙ простір')
+        self.assertEqual(sorted(serve._SYNC_RUNS), sorted(['legacy', self.liga['id']]))
+
+    def test_unfixed_and_fixed_league_triggers_are_one_run(self):
+        """Синк ЛІГИ без фіксованого простору запиту має ТОЙ САМИЙ ключ, що тригер, фіксований на її записі: дві синки однієї
+        ЛІГИ не біжать разом."""
+        self.mark_league(self.liga)
+        self.trigger(self.liga)
+        with spaces.request_space(None):
+            serve.Handler._overview_sync(None)
+            serve.Handler._overview_sync(None)
+        self.assertEqual(len(self.popen.started), 1)
+        self.assertEqual(list(serve._SYNC_RUNS), [self.liga['id']])
+        self.assertTrue(serve._SYNC_RUNS[self.liga['id']]['pending'])
+
+    def test_unfixed_league_without_a_registry_entry_uses_the_flag_and_a_key_no_space_can_have(self):
+        with spaces.request_space(None):
+            serve.Handler._overview_sync(None)
+        self.assertEqual(self.popen.started[0]['argv'][-1:], ['--legacy'])
+        self.assertEqual(list(serve._SYNC_RUNS), [serve.LEAGUE_KEY])
+        self.assertIsNone(spaces.SPACE_ID_RE.fullmatch(serve.LEAGUE_KEY))
+
+    # ---- спостерігач і чужий запис -------------------------------------------------------------------------------------
+
+    def test_a_stale_watcher_leaves_the_live_runs_entry_alone(self):
+        """Дитина 1 скінчилась, але її спостерігач ще не взяв лок; новий тригер стартує дитину 2. Спостерігач 1 прокидається:
+        запис уже чужий (`popen is not p`) — він виходить, НЕ видаляючи запис живої дитини 2. Інакше третій тригер стартував би
+        другий синк поруч із живим."""
+        self.popen.hold_next = True                                    # `wait()` дитини 1 не повертається, поки не відкриємо шлюз
+        self.trigger(self.liga)
+        c1 = self.popen.children[0]
+        c1.finish()                                                    # `poll()` уже не `None`, а спостерігач ще чекає
+        self.trigger(self.liga)
+        self.assertEqual(len(self.popen.started), 2)
+        c1.wait_gate.set()                                             # спостерігач 1 прокидається й бачить чужий запис
+        name = f'overview-sync-{self.liga["id"]}'
+        alive = lambda: len([t for t in threading.enumerate() if t.name == name and t.is_alive()])  # noqa: E731
+        wait_until(self, lambda: alive() == 1, 'спостерігач 1 вийшов, спостерігач 2 чекає свою дитину')
+        self.assertIn(self.liga['id'], serve._SYNC_RUNS, 'запис живої дитини 2 стертий застарілим спостерігачем')
+        self.trigger(self.liga)
+        self.assertEqual(len(self.popen.started), 2, 'третій тригер не стартує другий синк поруч із живим')
+        self.assertTrue(serve._SYNC_RUNS[self.liga['id']]['pending'])
+
+    # ---- дедлайн дитини ------------------------------------------------------------------------------------------------
+
+    def test_a_hung_child_is_terminated_by_its_handle_after_the_deadline(self):
+        now = [1000.0]
+        with mock.patch.object(serve, '_SYNC_CLOCK', lambda: now[0]):
+            self.trigger(self.liga)
+            now[0] += serve.SYNC_DEADLINE_S - 1
+            self.trigger(self.liga)                                    # ще в межах дедлайну: лише позначка
+            self.assertFalse(self.popen.children[0].terminated)
+            self.assertEqual(len(self.popen.started), 1)
+            now[0] += 2                                                # дедлайн минув, дитина жива
+            self.trigger(self.liga)
+        self.assertTrue(self.popen.children[0].terminated, 'завислу дитину перервано за її дескриптором')
+        self.assertEqual(len(self.popen.started), 2, 'і стартовано свіжу')
+        self.assertFalse(serve._SYNC_RUNS[self.liga['id']]['pending'])
+        with open(self.log, encoding='utf-8') as f:
+            notes = [ln for ln in f.read().splitlines() if 'завис' in ln]
+        self.assertEqual(len(notes), 1, 'рівно один рядок у лозі')
+        self.assertIn(str(serve.SYNC_DEADLINE_S), notes[0])
+
+    def test_a_child_that_ended_before_the_deadline_is_not_terminated(self):
+        now = [1000.0]
+        with mock.patch.object(serve, '_SYNC_CLOCK', lambda: now[0]):
+            self.trigger(self.liga)
+            self.popen.children[0].wait_gate.set()
+            self.popen.children[0].done.set()
+            now[0] += serve.SYNC_DEADLINE_S * 3
+            self.trigger(self.liga)                                    # дитина вже мертва: звичайний новий старт, без `terminate`
+        self.assertFalse(self.popen.children[0].terminated)
+        self.assertEqual(len(self.popen.started), 2)
+
+    # ---- права файла лога ---------------------------------------------------------------------------------------------
+
+    def test_the_non_league_log_file_is_private(self):
+        old = os.umask(0)                                              # щедра маска: новий файл мав би 0o666
+        self.addCleanup(os.umask, old)
+        self.trigger(self.modp)
+        path = os.path.join(self.deai, 'logs', 'dashboard-sync.log')
+        self.assertEqual(self.popen.started[0]['log'], path)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_an_existing_loose_log_file_is_tightened(self):
+        d = os.path.join(self.deai, 'logs')
+        os.makedirs(d, mode=0o700)
+        path = os.path.join(d, 'dashboard-sync.log')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('старий рядок\n')
+        os.chmod(path, 0o644)
+        self.trigger(self.modp)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
 
 if __name__ == '__main__':

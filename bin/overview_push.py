@@ -129,9 +129,9 @@ class CliError(Exception):
 
 
 def _space(space_id):
-    """Запис простору з реєстру: за `--space ID`; без нього — простір ЛІГА (запис із `legacy`: так кличе зовнішній планувальник).
-    `legacy` — псевдонім простору ЛІГА, коли в реєстрі його id інший (сервер без фіксованого простору запиту шле саме його).
-    Невідомий — `CliError` (код 2)."""
+    """Запис простору з реєстру: за `--space ID`; без нього (чи з `--legacy`) — простір ЛІГА (запис із `legacy`: так кличе
+    зовнішній планувальник). ⛔ Жодного псевдоніма-id: `legacy` — припустимий id справжнього простору («Legacy»), тож `--space
+    legacy` означає саме той простір, а ЛІГА — окремий прапорець `--legacy`. Невідомий — `CliError` (код 2)."""
     try:
         reg = spaces.load_registry()
     except spaces.SpacesError as e:
@@ -144,8 +144,6 @@ def _space(space_id):
         if space_id is not None and sp["id"] == space_id:
             found = sp
             break
-    if found is None and space_id == spaces.IMPLICIT["id"]:
-        found = next((sp for sp in reg["spaces"] if sp.get("legacy")), None)
     if found is None:
         raise CliError("⛔ overview: невідомий простір «%s»" % space_id if space_id is not None
                        else "⛔ overview: простору ЛІГА (legacy) у реєстрі нема", EXIT_USAGE)
@@ -215,7 +213,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="overview_push.py", description="пуш карток задач у командний дашборд")
     sub = ap.add_subparsers(dest="cmd")
     p_sync = sub.add_parser("sync", help="один прохід синку карток простору")
-    p_sync.add_argument("--space", metavar="ID", help="id простору; без нього — простір ЛІГА")
+    grp = p_sync.add_mutually_exclusive_group()
+    grp.add_argument("--space", metavar="ID", help="id простору; без нього — простір ЛІГА")
+    grp.add_argument("--legacy", action="store_true", help="простір ЛІГА (запис реєстру з legacy; те саме, що без --space)")
     sub.add_parser("discover", help="лише базові картки з реєстру задач (ЛІГА)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)   # argparse сам виходить із кодом 2 на хибному використанні
     try:

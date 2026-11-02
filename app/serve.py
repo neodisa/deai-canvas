@@ -5047,9 +5047,34 @@ def _guarded_request(method):
 #: Лог синку ЛІГИ: той самий файл, що й у планового (зовнішнього) синку. ШОВ для тестів — вони МУСЯТЬ його підміняти (справжній
 #: `~/.claude/pipeline-feedback/` тести не пишуть). `~` розгортається на КОЖЕН запуск (HOME тесту), а не при імпорті.
 OVERVIEW_LOG = '~/.claude/pipeline-feedback/overview-sync.log'
+#: Ключ синку ЛІГИ, коли її запису в реєстрі нема (поза `SPACE_ID_RE`: з id справжнього простору збігтись не може).
+LEAGUE_KEY = '@league'
+#: Скільки живе дитина синку, перш ніж новий тригер її перерве. ≥ найгіршого проходу: реєстр GitLab (fetch) і Jira — до ~1,5 хв,
+#: `open_comments` до 60 с, `push` пакетами по 50 карток × 15 с (500 карток — 150 с): разом до ~5 хв, тож 10 хв — із запасом.
+SYNC_DEADLINE_S = 600
+#: Годинник дедлайну (шов для тестів).
+_SYNC_CLOCK = time.monotonic
 _SYNC_LOCK = threading.Lock()
-#: `{id простору: {'popen': дитина, 'pending': чи просили ще раз}}` — стан «один синк на простір» (під `_SYNC_LOCK`).
+#: `{ключ синку: {'popen', 'pending', 'started', 'legacy', 'target'}}` — стан «один синк на простір» (під `_SYNC_LOCK`).
 _SYNC_RUNS = {}
+
+
+def _overview_target():
+    """`(ключ синку, аргументи простору для CLI)`. Простір запиту фіксований — це його id: `--space <id>` (ключ = id). Не
+    фіксований (інструменти ЛІГИ, тести): `provider` вирішує як для ЛІГИ без реєстру, тож і тут беремо ЇЇ — реальний id запису
+    реєстру з `legacy` (той самий ключ, що в тригера, фіксованого на ній: ОДИН синк на простір ЛІГИ), а коли запису нема —
+    `--legacy` і `LEAGUE_KEY`. ⛔ Не псевдонім-id `legacy`: `SPACE_ID_RE` його пропускає, і справжній простір «Legacy» збігся б із
+    ЛІГОЮ (і в CLI, і в `_SYNC_RUNS`). Реєстр лише ЧИТАЄТЬСЯ (`read_registry`: без міграції й запису)."""
+    sid = spaces.request_space_id()
+    if sid:
+        return sid, ['--space', sid]
+    try:
+        entry = next((sp for sp in spaces.read_registry()['spaces'] if sp.get('legacy')), None)
+    except Exception:  # noqa: BLE001 — реєстр не читається: ЛІГА без запису
+        entry = None
+    if entry is not None:
+        return entry['id'], ['--space', entry['id']]
+    return LEAGUE_KEY, ['--legacy']
 
 
 def _overview_log_path(legacy):
@@ -5063,17 +5088,24 @@ def _overview_log_path(legacy):
     return os.path.join(d, 'dashboard-sync.log')
 
 
-def _overview_spawn(sid, legacy):
-    """Стартувати дитину синку простору `sid`; `None`, коли не вийшло (тека лога, `Popen`) — best-effort, не кидає.
-    ⛔ argv рівно `[sys.executable, bin/overview_push.py, 'sync', '--space', id]`: той самий інтерпретатор, що веде сервер (було
+def _overview_spawn(legacy, target, note=None):
+    """Стартувати дитину синку (`target` — аргументи простору для CLI); `None`, коли не вийшло (тека лога, `Popen`) —
+    best-effort, не кидає. `note` — один рядок у лог ПЕРЕД стартом (перервали завислу дитину).
+    ⛔ argv рівно `[sys.executable, bin/overview_push.py, 'sync', *target]`: той самий інтерпретатор, що веде сервер (було
     літеральне `python3`), і простір ЯВНО (синк веде простір запиту, а не «поточний машини»); конфіг не передається."""
     log = None
     try:
         # Вивід — у лог, а НЕ в /dev/null. Досі цей пуш був подвійно німим: виняток ковтав except, а те, що
         # написав сам скрипт, ішло в нікуди. Саме так ховається клас збоїв «на дашборді старі дані, і ніхто не знає чому».
-        log = open(_overview_log_path(legacy), 'a', encoding='utf-8')
+        path = _overview_log_path(legacy)
+        log = open(path, 'a', encoding='utf-8')
+        if not legacy:
+            os.chmod(path, 0o600)       # у лозі назви задач: файл лише для власника (тека вже 0o700)
+        if note:
+            log.write(note + '\n')
+            log.flush()
         return subprocess.Popen(
-            [sys.executable, os.path.join(ROOT, 'bin', 'overview_push.py'), 'sync', '--space', sid],
+            [sys.executable, os.path.join(ROOT, 'bin', 'overview_push.py'), 'sync', *target],
             stdout=log, stderr=subprocess.STDOUT)
     except Exception:  # noqa: BLE001
         return None
@@ -5085,45 +5117,63 @@ def _overview_spawn(sid, legacy):
                 log.close()
 
 
-def _overview_launch(sid, legacy):
+def _overview_stop(p):
+    """Перервати завислу дитину ЗА ЇЇ ДЕСКРИПТОРОМ (ніколи за шаблоном): `terminate`, за 5 с — `kill`. Best-effort."""
+    with contextlib.suppress(Exception):
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
+
+def _overview_launch(key, legacy, target):
     """Один синк на простір: поки попередня дитина жива (`poll() is None`), новий тригер лише ставить позначку «ще раз» (рівно
     ОДИН повтор після її завершення, а не по одному на тригер); тригер ІНШОГО простору стартує паралельно. До 4c-1 кожен тригер
-    був окремим процесом, і два синки одного простору бігли разом (гонка за один рядок). Спостерігач — потік, що чекає `wait()`."""
+    був окремим процесом, і два синки одного простору бігли разом (гонка за один рядок). Спостерігач — потік, що чекає `wait()`.
+    Дитина, що живе довше `SYNC_DEADLINE_S` (зависла: мережа, git), не блокує простір до перезапуску сервера: новий тригер її
+    перериває (`_overview_stop`), пише про це один рядок у лог і стартує свіжу."""
+    note = None
     with _SYNC_LOCK:
-        run = _SYNC_RUNS.get(sid)
+        run = _SYNC_RUNS.get(key)
         if run is not None and run['popen'].poll() is None:
-            run['pending'] = True
-            return
-        p = _overview_spawn(sid, legacy)
+            if _SYNC_CLOCK() - run['started'] <= SYNC_DEADLINE_S:
+                run['pending'] = True
+                return
+            _overview_stop(run['popen'])
+            note = f'⛔ overview: попередній синк завис довше {SYNC_DEADLINE_S} с — перервано, стартую новий'
+        p = _overview_spawn(legacy, target, note)
         if p is None:
-            _SYNC_RUNS.pop(sid, None)
+            _SYNC_RUNS.pop(key, None)
             return
-        _SYNC_RUNS[sid] = {'popen': p, 'pending': False}
+        _SYNC_RUNS[key] = {'popen': p, 'pending': False, 'started': _SYNC_CLOCK(), 'legacy': legacy, 'target': target}
     # `_in_space`: кожен потік у цьому файлі несе простір запиту (інваріант `tests/test_spaces_serve.py`); спостерігач його не питає,
     # але правило одне на всіх
-    threading.Thread(target=_in_space(lambda: _overview_watch(sid, legacy, p)), name=f'overview-sync-{sid}', daemon=True).start()
+    threading.Thread(target=_in_space(lambda: _overview_watch(key, p)), name=f'overview-sync-{key}', daemon=True).start()
 
 
-def _overview_watch(sid, legacy, p):
+def _overview_watch(key, p):
     """Чекає дитину `p`; була позначка «ще раз» — стартує рівно одну нову й чекає вже її. Запис простору зник чи належить іншій
-    дитині (новий тригер встиг стартувати, коли `p` вже скінчилась) — виходить: ту дитину веде свій спостерігач."""
+    дитині (новий тригер встиг стартувати, коли `p` вже скінчилась, чи перервав її за дедлайном) — виходить: ту дитину веде свій
+    спостерігач, а чужий запис не чіпаємо (інакше наступний тригер стартував би другий синк поруч із живим)."""
     while True:
         try:
             p.wait()
         except Exception:  # noqa: BLE001 — спостерігач не падає: найгірше — повтор пропаде до наступного тригера
             pass
         with _SYNC_LOCK:
-            run = _SYNC_RUNS.get(sid)
+            run = _SYNC_RUNS.get(key)
             if run is None or run['popen'] is not p:
                 return
             if not run['pending']:
-                del _SYNC_RUNS[sid]
+                del _SYNC_RUNS[key]
                 return
-            p = _overview_spawn(sid, legacy)
+            p = _overview_spawn(run['legacy'], run['target'])
             if p is None:
-                del _SYNC_RUNS[sid]
+                del _SYNC_RUNS[key]
                 return
-            _SYNC_RUNS[sid] = {'popen': p, 'pending': False}
+            _SYNC_RUNS[key] = {'popen': p, 'pending': False, 'started': _SYNC_CLOCK(), 'legacy': run['legacy'],
+                               'target': run['target']}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -7173,10 +7223,8 @@ class Handler(SimpleHTTPRequestHandler):
             sb_url, _ = supabase_config()
             if sb_url is None:
                 return                  # конфігу установки нема — пушити нікуди (і лога не відкриваємо)
-        # Простір запиту; без фіксованого (інструменти ЛІГА, тести) — псевдонім простору ЛІГА: `provider` у такому стані теж
-        # вирішує як для ЛІГИ без читання реєстру, а CLI розуміє `legacy` (`overview_push._space`).
-        sid = spaces.request_space_id() or spaces.IMPLICIT['id']
-        _overview_launch(sid, legacy)
+        key, target = _overview_target()
+        _overview_launch(key, legacy, target)
 
     # ---------- Реестр задач (интеграция dev-pipeline) ----------
 

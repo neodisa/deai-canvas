@@ -2191,7 +2191,9 @@ class OverviewSyncGuard(unittest.TestCase):
         self.log = os.path.join(tmp, 'overview-sync.log')
         for patcher in (mock.patch.dict(os.environ, {}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
                         mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.example', 'sk-test-1')),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True),
+                        # запит без фіксованого простору читає реєстр (`_overview_target`): справжній `~/.deai` тест не читає
+                        mock.patch.object(serve.spaces, 'read_registry', return_value={'spaces': []})):
             patcher.start()
             self.addCleanup(patcher.stop)
         os.environ.pop('DC_TASKS_FILE', None)
@@ -2244,7 +2246,8 @@ class OverviewSyncLog(unittest.TestCase):
         # `tasks.json`) і стан «один синк на простір» (спільний на процес) — задає сам тест.
         for patcher in (mock.patch.dict(os.environ, {'HOME': self.tmp}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
                         mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.example', 'sk-test-1')),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True),
+                        mock.patch.object(serve.spaces, 'read_registry', return_value={'spaces': []})):
             patcher.start()
             self.addCleanup(patcher.stop)
         os.environ.pop('DC_TASKS_FILE', None)
