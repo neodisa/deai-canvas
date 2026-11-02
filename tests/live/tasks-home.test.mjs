@@ -8,7 +8,7 @@
  * відповідь, а на 1024 смуга не вилазить за вікно.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -38,14 +38,14 @@ async function boot(t, portBase, { team } = {}) {
     writeFileSync(f, JSON.stringify(team));
     env.DC_TEAM_FAKE = f;
   }
-  const { child, url } = await startServer(dir, { portBase, extraTasks, env });
+  const { child, url, tasksFile } = await startServer(dir, { portBase, extraTasks, env });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(`${url}/app/`);
   await page.waitForSelector('#bar [data-act="home"]');
-  return { page, url, dir };
+  return { page, url, dir, tasksFile };
 }
 
 const TEAM = [
@@ -229,11 +229,16 @@ test("збій команди: банер із причиною, «Спробу�
   assert.equal(await page.locator("#tasks-home .th-banner").count(), 0, "банер збою команди на «Моїх»");
 });
 
-test("вкладка й фільтри переживають закриття екрана, запит — ні; «Скинути фільтри» на порожній видачі", async (t) => {
+test("мітки ЛІГИ з профілю (без tags): чипи United/LIGA360, клік фільтрує, вибір переживає закриття екрана, перезавантаження сторінки; запит — ні; «Скинути фільтри» на порожній видачі", async (t) => {
   const { page } = await boot(t, PORT_BASE + 600, { team: TEAM });
   await page.click('#bar [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
-  await page.click('#tasks-home [data-th="profile"][data-v="united"]');
+  const chips = await page.$$eval('#tasks-home [data-th="tag"]', (els) => els.map((e) => e.textContent.trim()));
+  assert.equal(chips.length, 2, `чипи міток: ${JSON.stringify(chips)}`);
+  assert.ok(chips.some((c) => c.startsWith("United")) && chips.some((c) => c.startsWith("LIGA360")), `чипи: ${JSON.stringify(chips)}`);
+  await page.click('#tasks-home [data-th="tag"][data-v="united"]');
+  const only = await cardIds(page);
+  assert.ok(only.length >= 1 && only.every((id) => /^t[13579]$/.test(id)), `фільтр United пропустив чуже: ${only}`);
   await page.keyboard.press("/");
   await page.keyboard.type("Задача");
   await page.click('#bar [data-act="back"]');
@@ -241,7 +246,14 @@ test("вкладка й фільтри переживають закриття �
   await page.click('#bar [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   assert.equal(await page.inputValue("#th-q"), "", "запит пережив закриття");
-  assert.equal(await page.locator('#tasks-home [data-v="united"]').getAttribute("aria-pressed"), "true", "чіп напрямку забутий");
+  assert.equal(await page.locator('#tasks-home [data-v="united"]').getAttribute("aria-pressed"), "true", "чіп мітки забутий");
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui"))).tags, ["united"], "стан збережено не під ключем tags");
+
+  await page.reload();
+  await page.waitForSelector('#bar [data-act="home"]');
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  assert.equal(await page.locator('#tasks-home [data-v="united"]').getAttribute("aria-pressed"), "true", "чіп мітки не пережив перезавантаження");
 
   await page.keyboard.type("zzzнемає");
   await page.waitForSelector("#tasks-home .th-empty");
@@ -407,14 +419,112 @@ test("повторний запит не вдався, дані вже є: «М�
 
 test("збережений фільтр, якого вже нема в даних, не лишається невидимим", async (t) => {
   const { page } = await boot(t, PORT_BASE + 1500);
-  await page.evaluate(() => localStorage.setItem("dc-tasks-ui", JSON.stringify({ tab: "mine", status: "all", sort: "recent", profiles: ["gone"], designers: [] })));
+  await page.evaluate(() => localStorage.setItem("dc-tasks-ui", JSON.stringify({ tab: "mine", status: "all", sort: "recent", tags: ["gone"], designers: [] })));
   await page.reload();
   await page.waitForSelector('#bar [data-act="home"]');
   await page.click('#bar [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
-  assert.equal(await page.locator('#tasks-home [data-th="profile"][aria-pressed="true"]').count(), 0);
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][aria-pressed="true"]').count(), 0);
   assert.ok((await cardIds(page)).length > 1, "невидимий фільтр сховав усі картки");
-  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui"))).profiles, [], "зниклий фільтр лишився в сховищі");
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui"))).tags, [], "зниклий фільтр лишився в сховищі");
+});
+
+/* ═══════════════════════ мітки задач (4b-3, Task 5) ═══════════════════════ */
+
+const readTasks = (file) => JSON.parse(readFileSync(file, "utf8")).tasks;
+
+test("мітки 2: старий стан 0.10.0 (`profiles: ['united']`) мігрує — чип United уже вибраний, а новий запис іде під `tags`", async (t) => {
+  const { page } = await boot(t, PORT_BASE + 1900);
+  await page.evaluate(() => localStorage.setItem("dc-tasks-ui", JSON.stringify({ tab: "mine", status: "all", sort: "recent", profiles: ["united"], designers: [] })));
+  await page.reload();
+  await page.waitForSelector('#bar [data-act="home"]');
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card");
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="united"]').getAttribute("aria-pressed"), "true", "старий вибір не мігрував");
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="liga360"]').getAttribute("aria-pressed"), "false");
+  assert.ok((await cardIds(page)).every((id) => /^t[13579]$/.test(id)), "міграція не відфільтрувала картки");
+  // будь-яка зміна стану пише вже новий ключ
+  await page.click('#tasks-home [data-th="tag"][data-v="liga360"]');
+  const saved = JSON.parse(await page.evaluate(() => localStorage.getItem("dc-tasks-ui")));
+  assert.deepEqual([...saved.tags].sort(), ["liga360", "united"]);
+});
+
+test("мітки 3: кнопка «Мітки» відкриває діалог (задача НЕ відкривається), збереження → картка й чипи, tasks.json; помилка — під полем, файл без змін", async (t) => {
+  const { page, url, tasksFile } = await boot(t, PORT_BASE + 2000);
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector('#tasks-home .th-card[data-id="t2"]');
+  assert.equal(await cur(url), "fixture");
+
+  await page.click('#tasks-home [data-th="tags"][data-id="t2"]');
+  await page.waitForSelector('form[data-form="tags"]');
+  assert.equal(await homeShown(page), true, "екран зник: клік по «Мітки» відкрив задачу");
+  assert.equal(await cur(url), "fixture", "клік по «Мітки» переключив задачу");
+  assert.equal(await page.inputValue("#tg-tags"), "LIGA360", "діалог не заповнений похідною міткою");
+
+  // помилка: 33 знаки — текст під полем, діалог лишається, файл без змін
+  const before = readFileSync(tasksFile, "utf8");
+  await page.fill("#tg-tags", "x".repeat(33));
+  await page.click('form[data-form="tags"] [data-a="ok"]');
+  await page.waitForFunction(() => /до 32 знаків/.test(document.querySelector('form[data-form="tags"] [data-form-error]')?.textContent || ""));
+  assert.equal(await page.locator('form[data-form="tags"]').count(), 1, "діалог закрився на помилці");
+  assert.equal(readFileSync(tasksFile, "utf8"), before, "помилка змінила tasks.json");
+
+  await page.fill("#tg-tags", "alpha, beta");
+  await page.click('form[data-form="tags"] [data-a="ok"]');
+  await page.waitForSelector('form[data-form="tags"]', { state: "detached" });
+  assert.deepEqual(readTasks(tasksFile).t2.tags, ["alpha", "beta"], "tasks.json без міток");
+  assert.equal(await cur(url), "fixture", "збереження міток переключило задачу");
+  // збереження перемальовує картку (кнопка-відкривач зникає з DOM): фокус мусить дістатися нової кнопки тієї ж картки (`focusBack`)
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "t2/tags", "після збереження фокус загублено");
+  const cardTags = await page.textContent('#tasks-home .th-card[data-id="t2"]');
+  assert.match(cardTags, /alpha/, "картка не показує нову мітку");
+  assert.match(cardTags, /beta/);
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="alpha"]').count(), 1, "чипа alpha нема");
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="beta"]').count(), 1, "чипа beta нема");
+  // t2 втратила LIGA360, але її мають t0, t4…: чип лишається
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="liga360"]').count(), 1, "чип LIGA360 зник, хоч задачі t0/t4… його мають");
+});
+
+test("мітки 4: «Нова задача» з полем «Мітки» у звичайному просторі → задача має tags, чип зʼявляється на екрані", async (t) => {
+  const server = await startServer(null, { portBase: PORT_BASE + 2100, spaces: [{ name: "P", id: "p", color: "space-3", tasks: {} }] });
+  t.after(() => server.child.kill());
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(`${server.url}/app/`);
+  await page.waitForSelector("#tasks-home .th-empty--space");
+  await page.click('#tasks-home .th-head [data-th="newtask"]');
+  await page.waitForSelector('form[data-form="task"]');
+  assert.equal(await page.locator("#tf-tags").count(), 1, "поля «Мітки» нема у формі");
+  await page.fill("#tf-title", "Задача з мітками");
+  await page.fill("#tf-id", "tg1");
+  await page.fill("#tf-tags", "alpha, beta");
+  await page.click('form[data-form="task"] [data-a="ok"]');
+  await page.waitForSelector('form[data-form="task"]', { state: "detached" });
+  const file = path.join(server.spaces[0].path, "tasks.json");
+  assert.deepEqual(readTasks(file).tg1.tags, ["alpha", "beta"], "задача створена без міток");
+  await page.waitForFunction(() => document.getElementById("tasks-home").hidden);
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector('#tasks-home .th-card[data-id="tg1"]');
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="alpha"]').count(), 1, "чипа alpha нема");
+  assert.equal(await page.locator('#tasks-home [data-th="tag"][data-v="beta"]').count(), 1, "чипа beta нема");
+});
+
+test("мітки 5: клавіатура — Enter на кнопці «Мітки» відкриває діалог (задача НЕ відкривається), Esc закриває й вертає фокус на ту саму кнопку", async (t) => {
+  const { page, url } = await boot(t, PORT_BASE + 2200);
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector('#tasks-home .th-card[data-id="t4"]');
+  const btn = '#tasks-home [data-th="tags"][data-id="t4"]';
+  await page.focus(btn);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "t4/tags");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector('form[data-form="tags"]');
+  assert.equal(await homeShown(page), true, "Enter на «Мітки» відкрив задачу");
+  assert.equal(await cur(url), "fixture", "Enter на «Мітки» переключив задачу");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector('form[data-form="tags"]', { state: "detached" });
+  assert.equal(await homeShown(page), true, "Esc закрив ще й екран");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.id + "/" + document.activeElement?.dataset?.th), "t4/tags", "фокус не повернувся на кнопку «Мітки»");
 });
 
 test("мова: перемикання з ⌘K на екрані «Задачі» перемальовує сам екран", async (t) => {

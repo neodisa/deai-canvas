@@ -148,7 +148,7 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
   for (let i = 0; i < 60; i += 1) {
     try {
       const res = await fetch(`${url}${probe}`);
-      if (res.ok) return { child, url, ...(iso ? { home: iso.home, deaiHome: iso.deaiHome, spaces: iso.spaces, legacyFile: tasksFile } : {}) };
+      if (res.ok) return { child, url, tasksFile, ...(iso ? { home: iso.home, deaiHome: iso.deaiHome, spaces: iso.spaces, legacyFile: tasksFile } : {}) };
     } catch {}
     await new Promise((done) => setTimeout(done, 250));
   }
