@@ -9,9 +9,12 @@
  * в ізольованому прогоні, і що екран «Підключення» показує секцію «Командний дашборд».
  *
  * Мапа «сценарій → запобіжник», знята мутаційно (прибери охорону — подивись, чи червоніє):
- *   1 (нема модуля → нема вкладки; модуль увімкнено → вкладка, рядки з файла, чужий рядок без «Відкрити в канвасі»,
- *     зайва колонка не доходить) — `team_snapshot`/`team_resolve` у `serve.py` і `dashboard.normalize_rows`;
- *     «серверу все одно, хто постачальник» (рядки ігнорують модуль) червонить 1 і 2.
+ *   1 (нема модуля → нема вкладки; модуль увімкнено → вкладка, рядки з файла, чужий рядок без «Відкрити в канвасі») —
+ *     `team_snapshot`/`team_resolve` у `serve.py`; «серверу все одно, хто постачальник» (рядки ігнорують модуль) червонить 1 і 2.
+ *     Відбір рядків із `id` рядком — `dashboard.normalize_rows` (мутація «без перевірки id» червонить 1). Зайва колонка
+ *     чужої таблиці: КЛЮЧІ рядка відбирають двічі — `normalize_rows` і проєкція `tasks_overview` (`team_out`), тож кожен шар окремо
+ *     живим тестом не відокремити (їх доводять юніти); тут лише наскрізне «колонка не доходить до відповіді й розмітки» — воно
+ *     червоніє, коли зламано ОБИДВА шари разом (глибока оборона, а не доказ одного).
  *   2 (модуль відмовив) — `except ModuleError` у `_team_fetch`: текст модуля у банері, «Мої» живі.
  *   3 («Підключення») — `ROLE_ORDER`/`ROLE_KEYS` у `connections-model.js`: секція «Командний дашборд» і картки.
  *   4 (ЛІГА: `DC_TEAM_FAKE`) і 5 (ЛІГА без шва — ізольований прогін) — гілка `'legacy'` у `_team_fetch`.
@@ -20,8 +23,8 @@
  *     9 — ЛІГА під `DC_TASKS_FILE` мовчить.
  */
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -36,7 +39,11 @@ const MODULES_DIR = path.join(ROOT, "tests", "fixtures", "dashboard");
 const MOCKUP = () => "<!doctype html><html><body><h1>Макет</h1></body></html>";
 
 let browser;
-test.before(async () => { browser = await chromium.launch(); });
+test.before(async () => {
+  /* Залишки попередніх прогонів, убитих охоронцем (124/125): `t.after` тоді не спрацював, а тека лежить у корені чекаута. */
+  for (const n of readdirSync(ROOT)) if (n.startsWith(".live-dash-")) rmSync(path.join(ROOT, n), { recursive: true, force: true });
+  browser = await chromium.launch();
+});
 test.after(async () => { await browser?.close(); });
 
 /* ── прилади ───────────────────────────────────────────────────────────────────────────────────────── */
@@ -61,6 +68,16 @@ function workDir() {
 /** Виклики фейкового модуля з журналу (`[{fn, mode?, ids?}]`); файла ще нема — порожньо. */
 const calls = (logFile) => (existsSync(logFile)
   ? readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+/**
+ * Конфіг Supabase ЛІГИ з хостом `.example` — він не резолвиться ніколи (RFC 2606), тож гейт ізоляції можна прибрати мутацією,
+ * не боячись справжньої мережі. Конфіг установки читається на кожен виклик (кешу нема), тож пишемо ПІСЛЯ старту сервера.
+ * Спільний хост `abcdefghijkl.supabase.co` із `fixture.mjs` не чіпаємо: інші тести спираються на нього.
+ */
+function useExampleSupabase(legacyFile) {
+  const cfg = JSON.parse(readFileSync(legacyFile, "utf8"));
+  writeFileSync(legacyFile, JSON.stringify({ ...cfg, supabase_url: "https://demo.supabase.example", supabase_key: "sb_publishable_test" }));
+}
 
 /** Дочекатись умови (опитування, а не фіксована пауза); `null` — не дочекались. */
 async function until(fn, ms = 15000) {
@@ -157,7 +174,8 @@ test("1: звичайний простір — без модуля вкладк�
   const caps = (await (await fetch(`${url}/api/spaces`)).json()).spaces.find((s) => s.id === "alpha").capabilities;
   assert.equal(caps.dashboard, "fake-dashboard", `capabilities.dashboard: ${JSON.stringify(caps)}`);
 
-  /* Серверна відповідь: лише рядки з рядковим `id`, лише ключі `TEAM_KEYS` (зайва колонка таблиці не їде нікуди). */
+  /* Серверна відповідь: лише рядки з рядковим `id` (`normalize_rows`) і наскрізно — зайва колонка таблиці не їде нікуди
+     (відбір ключів роблять `normalize_rows` і проєкція `tasks_overview` разом; кожну окремо доводять юніти). */
   const ov = await overview(url, "?refresh=1");
   assert.deepEqual(ov.team.rows.map((r) => r.id).sort(), ["colleague", "mine1"], JSON.stringify(ov.team));
   assert.ok(!JSON.stringify(ov).includes("SECRET-COLUMN"), "зайва колонка чужої таблиці дійшла до відповіді");
@@ -264,9 +282,11 @@ test("5: ЛІГА без шва — ізольований прогін: вкл�
   const server = await startServer(null, {
     portBase: PORT_BASE + 400, env: { DEAI_EXTRA_MODULES: MODULES_DIR },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A.dir, title: "Моя задача" } } }],
-    supabase: true,
   });
   t.after(() => stop(server.child));
+  /* Конфіг із хостом `.example`: без гейта ізоляції модуль пішов би до нього й відповів би «Supabase недоступний» замість
+     пояснення — тест червоніє, а справжньої мережі нема (`.example` не резолвиться). */
+  useExampleSupabase(server.legacyFile);
   const ov = await overview(server.url, "?refresh=1");
   assert.ok(ov.team, "ЛІГА мусить мати вкладку «Команда» (постачальник 'legacy')");
   assert.deepEqual(ov.team.rows, []);
@@ -323,14 +343,18 @@ test("8: DC_NO_OVERVIEW (типове оточення живих тестів) 
 
 test("9: ЛІГА під DC_TASKS_FILE мовчить: збірка превʼю (build_only) не стартує синк, лога нема ні в ЛІГИ, ні в домівці простору", async (t) => {
   const A = taskFixture({ html: MOCKUP });
-  /* `DC_NO_OVERVIEW: ""` вимикає ЛИШЕ загальний гейт: тримати має гейт `DC_TASKS_FILE` саме для постачальника 'legacy'. `supabase: true`
-     — конфіг установки є, тож «нема куди пушити» мовчання не пояснює (інакше тест зеленів би й без гейта). */
+  /* `DC_NO_OVERVIEW: ""` вимикає ЛИШЕ загальний гейт: тримати має гейт `DC_TASKS_FILE` саме для постачальника 'legacy'. Конфіг
+     установки є (хост `.example`), тож «нема куди пушити» мовчання не пояснює (інакше тест зеленів би й без гейта), а мутація
+     «прибери гейт» безпечна: дитина синку дійшла б лише до хоста, що не резолвиться, і лишила б лог — на ньому тест і червоніє. */
   const server = await startServer(null, {
     portBase: PORT_BASE + 700, env: { DEAI_EXTRA_MODULES: MODULES_DIR, DC_NO_OVERVIEW: "" },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A.dir, title: "Моя задача" } } }],
-    supabase: true,
   });
   t.after(() => stop(server.child));
+  useExampleSupabase(server.legacyFile);
+  /* ⛔ Теки лога ЛІГИ в тимчасовій домівці нема, а `_overview_spawn` її не створює: без неї `open(лог)` падав би мовчки, дитина не
+     стартувала б ЗА БУДЬ-ЯКОГО гейта, і тест зеленів би й без нього (мутація «прибери гейт» це виявила). */
+  mkdirSync(path.join(server.home, ".claude", "pipeline-feedback"), { recursive: true });
   const built = await (await postJson(server.url, "/api/publish", { build_only: true })).json();
   assert.equal(built.ok, true, JSON.stringify(built));
   await sleep(2500);
@@ -339,4 +363,13 @@ test("9: ЛІГА під DC_TASKS_FILE мовчить: збірка превʼю
   assert.equal(existsSync(path.join(server.deaiHome, "logs")), false, "синк ЛІГИ пішов лозі звичайного простору");
 });
 
-guardRealDeai("10: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");
+/* Справжній лог синку ЛІГИ (`~/.claude/pipeline-feedback/overview-sync.log`): лише `stat` (нічого не пишемо). Свій, а не в спільному
+   `_spaces-kit.mjs`: його читають усі файли просторів, а справжній канвас на машині міг би дописати в лог сам по собі. */
+const REAL_SYNC_LOG = path.join(userInfo().homedir, ".claude", "pipeline-feedback", "overview-sync.log");
+const syncLogStat = () => { try { const s = statSync(REAL_SYNC_LOG); return `${s.mtimeMs}:${s.size}`; } catch { return null; } };
+const SYNC_LOG_BEFORE = syncLogStat();
+test("10: справжній лог синку ЛІГИ не зʼявився і не змінився", () => {
+  assert.equal(syncLogStat(), SYNC_LOG_BEFORE, `живий тест торкнувся справжнього ${REAL_SYNC_LOG}`);
+});
+
+guardRealDeai("11: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");
