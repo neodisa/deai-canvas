@@ -11,38 +11,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 # (тести беруть ov.iter_count), звідси F401
 from task_state import iter_count, task_state  # noqa: F401
 
-_PII = [re.compile(r"№?\s*\d{2,4}/\d{3,5}/\d{2,4}"), re.compile(r"\b\d{10}\b"), re.compile(r"\b\d{8}\b")]
-
-_GL_SSH = re.compile(r"^git@([^:]+):(.+?)(?:\.git)?$")
-_GL_BRANCH = "main"  # дефолтна гілка репо макетів усіх напрямків (united/liga360/seo)
-
-def gitlab_web(gl):
-    """git@host:group/repo.git (+ path) → https-URL. З path — дип-лінк на теку проєкту
-    в гілці main, без path — корінь проєкту. None, якщо нема repo."""
-    if not isinstance(gl, dict):
-        return None
-    repo = gl.get("repo")
-    if not repo:
-        return None
-    m = _GL_SSH.match(repo.strip())
-    if m:
-        base = f"https://{m.group(1)}/{m.group(2)}"
-    elif repo.startswith("http"):
-        base = repo[:-4] if repo.endswith(".git") else repo
-    else:
-        return None
-    path = (gl.get("path") or "").strip("/")
-    return f"{base}/-/tree/{_GL_BRANCH}/{path}" if path else base
-
-def to_iso(dt):
-    """«DD.MM.YYYY[ HH:MM]» (локальний час Києва) → ISO з офсетом +03:00. None, якщо не парситься."""
-    if not dt:
-        return None
-    m = re.match(r"\s*(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?", str(dt))
-    if not m:
-        return None
-    d, mo, y, hh, mm = m.groups()
-    return f"{y}-{mo}-{d}T{int(hh or 0):02d}:{mm or '00'}:00+03:00"
+# Збирання карток переїхало в `app/dashboard.py` (етап 4c-1) без зміни поведінки; старі імена лишаються тут реекспортом —
+# на них спираються `bin/test_overview_push.py` і знімок `tests/make_before_4c1.py` (підміняють їх на самому пушері).
+from dashboard import (_PII, _GL_SSH, _GL_BRANCH, gitlab_web, to_iso, map_status, preview_source,  # noqa: F401
+                       comment_project_key, _identity, _humanize, _fixture_reason)
+from dashboard import build_card as build_row, card_has_pii as row_has_pii, discover_card as discover_row  # noqa: F401
+import dashboard as _dashboard
 
 # ---------- Jira статуси (реальний workflow-статус, сайт команди) ----------
 _JIRA_BASE = "https://jira.example.com"
@@ -88,89 +62,6 @@ def jira_statuses(keys):
     except Exception:  # noqa: BLE001
         return {}
     return out
-
-def map_status(st):
-    if st.get("published") and st.get("finalized"):
-        return "done"
-    if st.get("open_comments", 0) > 0:
-        return "review"
-    if st.get("published"):
-        return "pub"
-    return "work"
-
-def preview_source(code_url, figma):
-    if code_url:
-        return "code"
-    if figma:
-        return "figma"
-    return None
-
-def build_row(task_id, task, st, designer, designer_key):
-    code_url = st.get("code_url")
-    figma = task.get("figma") or st.get("figma")
-    gl = task.get("gitlab") or {}
-    # реальна дата апдейту прев'ю (published_at / остання ітерація), НЕ момент пушу
-    updated_at = to_iso(st.get("last_update")) or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # Heartbeat: момент, коли ЦЕЙ пушер відпрацював. Єдине поле, яким видно, що
-    # машинно-залежне збагачення живе. Свідомо НЕ updated_at (той показує вік
-    # макета: 495 год у watchlists-bg — норма) і НЕ jira_synced_at (його пише й
-    # хмарний CI, тому зупинку пушера він маскує). Дашборд бере max(synced_at):
-    # пушер один, а окремі задачі законно пропускаються, коли теки нема локально.
-    synced_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    row = {
-        "id": task_id,
-        "name": task.get("title", task_id),
-        "status": map_status(st),
-        "jira": task.get("jira"),
-        "figma_url": figma,
-        "code_url": code_url,
-        "thumb_source": preview_source(code_url, figma),
-        # ⛔ open_comments БІЛЬШЕ НЕ ШЛЕМО. З 07.08.2026 його рахує сама БД
-        # (тригер ov_comments_recount на comments): обидві таблиці лежать в одному
-        # Supabase, тож для підрахунку машина не потрібна взагалі — лічильник
-        # оновлюється в мить, коли рецензент ставить пін, а не через 30 хв і не
-        # «коли ноутбук увімкнуть». Якщо повернути ключ сюди, пушер перезатиратиме
-        # свіже значення бази своїм локальним зрізом. Не повертай.
-        "iterations": int(st.get("iterations", 0)),
-        "pages": st.get("pages") or None,  # к-сть сторінок макета (None, якщо 0/невідомо)
-        "gitlab_url": gitlab_web(gl),
-        # сирі дані GitLab + comment-проєкт — для самодостатнього промпта «відкрити в канвасі»
-        "gitlab_repo": gl.get("repo"),
-        "gitlab_path": gl.get("path"),
-        "comment_project": task.get("comment_project"),
-        "backup_at": to_iso(st.get("backup_at")),
-        "source": "canvas",
-        "updated_at": updated_at,
-        "synced_at": synced_at,
-    }
-    # Jira-статус додаємо ЛИШЕ коли реально отримали свіже значення — інакше пропускаємо
-    # ключі (merge-duplicates збереже наявні, не затре null'ом).
-    if st.get("jira_status"):
-        row["jira_status"] = st["jira_status"]
-        row["jira_status_cat"] = st.get("jira_status_cat")
-        row["jira_synced_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # Авторство картки НЕ присвоюємо. `registry.py pull` вписує в локальний
-    # tasks.json ВСІ задачі реєстру, включно з чужими — і раніше будь-який синк
-    # переписував `designer` чужого рядка на себе. Свій ключ знаємо з git-конфіга,
-    # власника задачі — з реєстру (owner_key їде в SHARED).
-    owner_key = task.get("owner_key")
-    # «designer» — заглушка `_identity()` без git-email, тобто «особи немає», а не «чужий».
-    if not owner_key or not designer_key or designer_key == "designer" or owner_key == designer_key:
-        row["designer"] = designer
-        row["designer_key"] = designer_key
-    else:
-        # Посилання картки — превʼю ВЛАСНИКА (рішення 29.09.2026, fb-29092026-69e9c7):
-        # не-власник публікує у своє, і його синк лінк на картці не підміняє.
-        row.pop("code_url", None)
-        row.pop("thumb_source", None)
-    # ⛔ None-и не відправляємо: у merge-duplicates вони ЗАТИРАЮТЬ наявні значення.
-    # Саме так картка з відсутньою локально текою втрачала code_url/pages/jira.
-    # Той самий фільтр, що й у discover_row() — щоб обидва шляхи поводились однаково.
-    return {k: v for k, v in row.items() if v is not None}
-
-def row_has_pii(row):
-    blob = " ".join(str(row.get(k) or "") for k in ("name",))
-    return any(p.search(blob) for p in _PII)
 
 # ---------- Supabase write client (Task 2) ----------
 # Конфіг Supabase: спершу env, інакше геттер конфігу установки (`serve.supabase_config`).
@@ -232,19 +123,6 @@ def load_tasks_file(path=None):
     with open(path or _tasks_path(), encoding="utf-8") as f:
         return json.load(f)
 
-def _identity():
-    def _git(key):
-        try:
-            out = subprocess.run(["git", "config", key], capture_output=True,
-                                  text=True, timeout=5)
-            val = out.stdout.strip()
-            return val or None
-        except Exception:  # noqa: BLE001
-            return None
-    name = _git("user.name") or os.environ.get("USER", "designer")
-    email = _git("user.email") or "designer"
-    return name, email
-
 def open_comment_counts():
     """Реальні лічильники ВІДКРИТИХ коментарів по project_id з таблиці comments
     (той самий Supabase, що й комментатор). Best-effort → {} при будь-якій помилці."""
@@ -264,10 +142,6 @@ def open_comment_counts():
             counts[pid] = counts.get(pid, 0) + 1
     return counts
 
-def comment_project_key(task, task_id):
-    """Ключ проєкту в таблиці comments: явний comment_project, інакше «dc/<id>» (канвас)."""
-    return task.get("comment_project") or f"dc/{task_id}"
-
 # ---------- Discovery: реєстр задач (design-office, гілка registry) ----------
 # Реєстр — ЄДИНЕ джерело істини по задачах усіх напрямків (united / liga360 / seo).
 # Раніше тут сканувалась тека mockup/* ОДНОГО репо, тому напрямки в оверв'ю не
@@ -283,31 +157,10 @@ def _registry():
     import registry  # noqa
     return registry
 
-def _humanize(pid):
-    return (pid.replace("-", " ").replace("_", " ").strip().capitalize()) or pid
-
-def _fixture_reason(task):
-    """Причина, якщо задача вказує в тимчасову теку (фікстура тесту), інакше None.
-
-    ⛔ Правило одне на всіх — `registry.fixture_path_reason`, тут лише делегуємо.
-    Інцидент 15.09.2026: фікстура `nova` (gitlab.repo у /var/folders/…) протекла
-    в реєстр, і крок 0 синку (`discover_row`) виставив її на КОМАНДНИЙ дашборд
-    карткою «Нова» зі статусом `pub`. Дашборд — теж спільний стан, тож бар'єр
-    стоїть і тут, на самому відвантаженні, а не лише на пуші в реєстр: у
-    реєстрі сміття вже може лежати, і прибирає його людина, а не синк."""
-    return _registry().fixture_path_reason(task)
-
 def _drop_fixtures(entries, where):
-    """{id: запис} без фікстур; кожну відкинуту — вголос, з причиною."""
-    out = {}
-    for tid, e in entries.items():
-        why = _fixture_reason(e)
-        if why:
-            print(f"⛔ overview{where}: не віддаю на дашборд «{tid}» — {why}; "
-                  f"прибери її з реєстру (гілка registry) і рядок з overview_projects")
-            continue
-        out[tid] = e
-    return out
+    """{id: запис} без фікстур (`dashboard._drop_fixtures`); причину бере з ЦЬОГО модуля (`_fixture_reason`) — шов, яким
+    тести пушера вимикають бар'єр підміною імені тут."""
+    return _dashboard._drop_fixtures(entries, where, reason=_fixture_reason)
 
 def discover_projects(cfg):
     """{id: запис} із реєстру. {} при будь-якій помилці (нема VPN/доступу) — не падаємо."""
@@ -316,31 +169,6 @@ def discover_projects(cfg):
         return reg.read_registry(reg.ensure_clone(cfg))
     except Exception:  # noqa: BLE001
         return {}
-
-def discover_row(pid, entry):
-    """Картка проєкту з реєстру. Локальні задачі нижче збагатять її кодом/ітераціями."""
-    gl = dict(entry.get("gitlab") or {})
-    if gl.get("repo") and not gl.get("path"):
-        gl["path"] = f"mockup/{pid}"          # конвенція: тека макета = id задачі
-    row = {
-        "id": pid,
-        "name": entry.get("title") or _humanize(pid),
-        "status": "pub",              # присутній у реєстрі = задача заведена
-        "jira": entry.get("jira"),
-        "comment_project": entry.get("comment_project"),
-        "gitlab_repo": gl.get("repo"),
-        "gitlab_path": gl.get("path"),
-        "gitlab_url": gitlab_web(gl) if gl.get("repo") and gl.get("path") else None,
-        "source": "registry",
-        "updated_at": entry.get("updated_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    if entry.get("figma"):
-        row["figma_url"] = entry["figma"]
-    if entry.get("owner"):                # хто завів задачу — видно в дашборді
-        row["designer"] = entry["owner"]
-        row["designer_key"] = entry.get("owner_key")
-    # напрямок дашборд виводить із gitlab_repo (окремої колонки в overview_projects немає)
-    return {k: v for k, v in row.items() if v is not None}
 
 def cmd_discover():
     cfg = load_tasks_file()
