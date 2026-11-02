@@ -43,7 +43,7 @@ import urllib.request
 #: Колонки рядка команди (як `TEAM_KEYS` ядра): тільки їх читає `rows`.
 TEAM_KEYS = ('id', 'name', 'jira', 'jira_status', 'jira_status_cat', 'open_comments', 'thumb_url', 'code_url',
              'updated_at', 'designer', 'iterations', 'pages')
-#: Ядро чекає на `rows` 4 с: власний тайм-аут (на операцію сокета) не довший, щоб відповісти своїм текстом, а не `check-timeout`.
+#: Ядро чекає на `rows` трохи довше (`dashboard.READ_TIMEOUT` = 6 с): власний тайм-аут (на операцію сокета) коротший, щоб відповісти своїм текстом, а не `check-timeout`.
 READ_TIMEOUT_S = 4
 #: Пакет `push`; ядро дає на весь виклик 60 с.
 PUSH_TIMEOUT_S = 15
@@ -295,15 +295,19 @@ def rows(ctx):
 
 def _prepare(cards):
     """`(готові, збійні)`: готові — `[(id, картка без None-ключів)]`, збійні — `{ключ: текст}` для того, що не картка.
-    ⛔ `None` не шлемо: у `merge-duplicates` він ЗАТИРАЄ наявне значення (ядро теж не шле, але модуль не покладається на це)."""
-    ready, bad = [], {}
+    ⛔ `None` не шлемо: у `merge-duplicates` він ЗАТИРАЄ наявне значення (ядро теж не шле, але модуль не покладається на це).
+    ⛔ `id` у виклику УНІКАЛЬНІ: дві картки з одним `id` в одному `POST` PostgreSQL відхиляє цілим запитом (`ON CONFLICT DO UPDATE
+    command cannot affect row a second time`, 21000) — і всі до 50 карток пакета потрапили б у `failed` через чужий дубль. Тому
+    лишається ОСТАННЯ картка з цим `id` (пізніша — свіжіший стан), на місці ПЕРШОЇ появи `id`; раніші дублі — не збій: їх
+    витіснено, у `ok` вони не рахуються (`ok` — кількість унікальних карток)."""
+    ready, bad = {}, {}
     for i, c in enumerate(cards):
         cid = c.get('id') if isinstance(c, dict) else None
         if not isinstance(cid, str) or not cid:
             bad[f'#{i}'] = 'картка без id'
             continue
-        ready.append((cid, {k: v for k, v in c.items() if v is not None}))
-    return ready, bad
+        ready[cid] = {k: v for k, v in c.items() if v is not None}      # `dict` лишає порядок першої появи, значення — останнє
+    return list(ready.items()), bad
 
 
 def _batches(ready):

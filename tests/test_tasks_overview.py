@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dashboard  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
 
@@ -75,8 +76,24 @@ def add_shot(task, it, key, sha='s1', in_manifest=True, write_file=True):
 
 
 def reset_team_cache():
+    """4c-1: кеш рядків команди — словник НА ПРОСТІР (`{id: запис}`), тож скидається повністю (колишнє `update(at=0.0, rows=None…)`
+    лишило б у словнику чужі ключі `at`/`rows`)."""
     with serve._TEAM_LOCK:
-        serve._TEAM_CACHE.update(at=0.0, rows=None, error=None, rowsAt=None)
+        serve._TEAM_CACHE.clear()
+
+
+class _NetLog:
+    """Записувач шва `_open` вбудованого `supabase-dashboard` (4c-1: читання вкладки «Команда» ЛІГИ ходить крізь нього, а не крізь
+    `urllib.request.urlopen`). `calls` — запити (`Request`, тайм-аут); `resp` — що віддати (`Resp`) чи виняток."""
+
+    def __init__(self, resp=None):
+        self.calls, self.resp = [], resp
+
+    def __call__(self, req, timeout=None):
+        self.calls.append((req, timeout))
+        if isinstance(self.resp, BaseException):
+            raise self.resp
+        return self.resp if self.resp is not None else sbconf.Resp(b'[]')
 
 
 class _TmpCase(unittest.TestCase):
@@ -242,12 +259,15 @@ class TeamRowsTest(_TmpCase):
         for var in ('DC_NO_OVERVIEW', 'DC_TASKS_FILE'):
             reset_team_cache()
             env = {var: '1'}
+            net = _NetLog()
+            sbconf.patch_dashboard_open(self, net)      # 4c-1: мережа ЛІГИ — шов `_open` модуля, а не `urlopen`
             with mock.patch.dict(os.environ, env):
                 os.environ.pop('DC_TEAM_FAKE', None)
                 with mock.patch('urllib.request.urlopen',
                                 side_effect=AssertionError('мережа з ізольованого прогону')) as uo:
                     rows, err = serve.team_rows(now=1000.0)
             self.assertEqual(uo.call_count, 0, var)
+            self.assertEqual(net.calls, [], var)         # модуль не кликано взагалі: ізоляція стоїть ДО нього
             self.assertEqual(rows, [])
             self.assertTrue(err and isinstance(err, str), var)
 
@@ -332,12 +352,14 @@ class TeamRowsTest(_TmpCase):
         self.assertIsNone(serve.tasks_overview({'tasks': {}}, ([], None))['team']['rowsAt'])
 
     def test_non_io_error_is_logged_to_stderr_but_still_swallowed(self):
-        """Помилку програмування не можна тихо видати за «команда недоступна»."""
+        """Помилку програмування не можна тихо видати за «команда недоступна». 4c-1: «помилка програмування» — збій у САМОМУ
+        ядрі (`normalize_rows`); збій у модулі (`KeyError` у `_open`) модуль сам перетворює на `ModuleError` — це не код ядра."""
         with mock.patch.dict(os.environ):
             for var in ('DC_NO_OVERVIEW', 'DC_TASKS_FILE', 'DC_TEAM_FAKE'):
                 os.environ.pop(var, None)
+            sbconf.patch_dashboard_open(self, _NetLog())
             err = io.StringIO()
-            with mock.patch('urllib.request.urlopen', side_effect=KeyError('баг')), \
+            with mock.patch.object(dashboard, 'normalize_rows', side_effect=KeyError('баг')), \
                     contextlib.redirect_stderr(err):
                 rows, msg = serve.team_rows(now=1000.0)
             self.assertEqual(rows, [])
@@ -345,10 +367,11 @@ class TeamRowsTest(_TmpCase):
             self.assertIn('KeyError', err.getvalue())
             reset_team_cache()
             quiet = io.StringIO()
-            with mock.patch('urllib.request.urlopen', side_effect=OSError('нема VPN')), \
-                    contextlib.redirect_stderr(quiet):
-                serve.team_rows(now=1000.0)
+            sbconf.patch_dashboard_open(self, _NetLog(OSError('нема VPN')))
+            with contextlib.redirect_stderr(quiet):
+                rows, msg = serve.team_rows(now=1000.0)
             self.assertEqual(quiet.getvalue(), '')         # звичайна мережа — без шуму
+            self.assertTrue(msg)
 
     def test_never_raises_on_bad_payload(self):
         for payload in ('{"not": "a list"}', 'не json', '"рядок"'):
@@ -366,11 +389,16 @@ class TeamRowsTest(_TmpCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             for var in ('DC_NO_OVERVIEW', 'DC_TASKS_FILE', 'DC_TEAM_FAKE'):
                 os.environ.pop(var, None)
-            with mock.patch('urllib.request.urlopen', side_effect=OSError('нема VPN')) as uo:
+            net = _NetLog(OSError('нема VPN'))
+            sbconf.patch_dashboard_open(self, net)
+            with mock.patch('urllib.request.urlopen', side_effect=AssertionError('серверу більше не кликати urlopen')) as uo:
                 rows, err = serve.team_rows(now=1000.0)
-        self.assertEqual(uo.call_count, 1)
-        self.assertEqual(uo.call_args.kwargs.get('timeout'), 3)
-        self.assertEqual((rows, err), ([], 'нема VPN'))
+        self.assertEqual(uo.call_count, 0)
+        self.assertEqual(len(net.calls), 1)
+        # 4c-1 (свідома відмінність від 0.11.0): тайм-аут запиту — 4 с модуля (було 3 с), а текст помилки — модуля, а не `OSError`
+        self.assertEqual(net.calls[0][1], 4)
+        self.assertEqual(net.calls[0][0].full_url.split('?')[0], sbconf.SB_URL + '/rest/v1/overview_projects')
+        self.assertEqual((rows, err), ([], 'Supabase недоступний (OSError)'))
 
 
 class TaskThumbPathTest(_TmpCase):
@@ -529,13 +557,18 @@ class TasksOverviewHttpTest(unittest.TestCase):
         self.assertEqual(len(fresh['team']['rows']), 2)
 
     def test_overview_isolated_without_fake_reports_error_not_500(self):
-        with mock.patch.dict(os.environ):
+        # патч глобальний (сервер у своєму потоці) — і мутація «прибрали гвард»
+        # не піде в живий Supabase, а лише зачепить лічильник нижче. 4c-1: мережа ЛІГИ — шов `_open` модуля; конфіг підставний,
+        # інакше «Supabase не налаштовано» зупинило б запит і без ізоляції (тест був би порожнім).
+        net = _NetLog(OSError('мережі нема'))
+        sbconf.patch_dashboard_open(self, net)
+        with mock.patch.dict(os.environ), \
+                mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY)):
             os.environ.pop('DC_TEAM_FAKE')
-            # патч глобальний (сервер у своєму потоці) — і мутація «прибрали гвард»
-            # не піде в живий Supabase, а лише зачепить лічильник нижче
             with mock.patch('urllib.request.urlopen', side_effect=OSError('мережі нема')) as uo:
                 status, _, body = self.get('/api/tasks-overview')
         self.assertEqual(uo.call_count, 0)
+        self.assertEqual(net.calls, [])
         data = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(data['team']['rows'], [])

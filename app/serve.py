@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
+import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
 import install_config  # конфіг установки (4c-1: спільний із ядром дашборда й CLI, без імпорту `serve`)
 from install_config import legacy_tasks_path, load_legacy_tasks  # noqa: F401 — реекспорт: ними користуються `ops/`, `bin/` і тести
 import module_trust  # довіра своїм модулям простору (етап 3c): мова вікна довіри, шов `DEAI_TRUST_CONFIRM`
@@ -1707,49 +1708,51 @@ def _all_space_task_rows():
 
 # ---------- Екран «Задачі»: мої + команда (батч 1.52) ----------
 
-#: Колонки `overview_projects`, потрібні екрану. Без `select=*`: таблицю пише
-#: пушер реєстру, і зайві поля, що там зʼявляться, не мають їхати в кожну
-#: відповідь і в кеш.
-TEAM_COLS = ('id,name,jira,jira_status,jira_status_cat,open_comments,thumb_url,'
-             'code_url,updated_at,designer,iterations,pages')
 TEAM_TTL = 60          # кеш рядків дашборда, с
 TEAM_ERR_TTL = 10      # помилку кешуємо коротше — щоб «Спробувати ще» мало сенс
-_TEAM_CACHE = {'at': 0.0, 'rows': None, 'error': None, 'rowsAt': None}
+#: Кеш рядків команди НА ПРОСТІР (4c-1): `{id простору: {'at', 'rows', 'error', 'rowsAt', 'who'}}` (`''` — шлях ЛІГИ без простору
+#: запиту: інструменти, тести). До 4c-1 кеш був один на процес, і відмова одного простору ставала «останнім відомим» станом
+#: іншого. `who` — хто дав рядки (`'legacy'` чи id модуля): інший постачальник = порожній запис, бо рядки старого не можна
+#: показувати як «останні відомі» нового.
+_TEAM_CACHE = {}
 _TEAM_LOCK = threading.Lock()
+TEAM_ISOLATED = 'вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)'
+TEAM_NO_PROVIDER = 'вимкнено: у просторі нема постачальника командного дашборда'
 
 
-def _team_fetch():
-    """Один справжній прохід за рядками команди: `(rows, error)`, не кидає.
+def _team_fetch(space, prov):
+    """Один справжній прохід за рядками команди: `(rows, error)`, не кидає. `prov` — постачальник ролі `dashboard`
+    простору запиту: `'legacy'` (ЛІГА) чи `Module`; `space` — запис простору (для `module_ctx`; для `'legacy'` не потрібен).
 
-    Порядок джерел важливий, і ⛔ другий пункт — закон ізоляції (той самий, що в
-    `teams_rpc` і `_registry_push`): `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають
-    «стан не справжній цієї машини», тож ходити з нього в живий Supabase не можна.
-    1. `DC_TEAM_FAKE` — локальний JSON-масив замість бази (шов для тестів);
-    2. ізольований прогін без шва — мережі НЕМАЄ, чесне пояснення замість рядків;
-    3. інакше GET `overview_projects` з коротким таймаутом: екран «Задачі» — перша
-       сторінка, і висіти на ній через мертвий VPN довше за 3 с не можна.
-    `except Exception`, а не вузький перелік: контракт «ніколи не кидає» тримає екран
-    живим для «Моїх» навіть тоді, коли відповідь бази — не те, що очікували."""
+    Порядок джерел важливий, і ⛔ другий пункт — закон ізоляції (той самий, що в `teams_rpc` і `_registry_push`):
+    `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають «стан не справжній цієї машини», тож ходити з нього в живий Supabase не можна.
+    Усі три пункти — лише для `'legacy'`:
+    1. `DC_TEAM_FAKE` — локальний JSON-масив замість бази (шов для тестів; рядки як є, без відбору ключів);
+    2. ізольований прогін без шва — модуль НЕ кличеться, мережі НЕМАЄ, чесне пояснення замість рядків;
+    3. інакше вбудований `supabase-dashboard` з `legacy_ctx(*supabase_config())` — ту саму таблицю `overview_projects` і ті самі
+       заголовки, що колись зашитий `urlopen`. Звичайний простір: `module_ctx(space, prov)` свого модуля.
+    Виклик модуля — `dashboard.rows` (`READ_TIMEOUT`): екран «Задачі» — перша сторінка, і висіти на ній через мертвий VPN
+    довше за кілька секунд не можна.
+    `ModuleError` (нема конфігу, збій модуля, `check-timeout`) — це ТЕКСТ для плашки, не помилка коду; `except Exception`
+    для решти, а не вузький перелік: контракт «ніколи не кидає» тримає екран живим для «Моїх» навіть тоді, коли відповідь бази —
+    не те, що очікували."""
     try:
-        fake = os.environ.get('DC_TEAM_FAKE')
-        if fake:
-            with open(fake, encoding='utf-8') as fh:
-                data = json.load(fh)
-        elif os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
-            return [], 'вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)'
-        else:
-            sb_url, sb_key = supabase_config()
-            if sb_url is None:
-                # Конфігу установки нема: дашборд команди недосяжний, «Мої» живуть без нього (і без мережі).
-                return [], 'Supabase не налаштовано'
-            url = f'{sb_url}/rest/v1/overview_projects?select={TEAM_COLS}&limit=500'
-            req = urllib.request.Request(url, headers={
-                'apikey': sb_key, 'Authorization': f'Bearer {sb_key}'})
-            with urllib.request.urlopen(req, timeout=3, context=_ssl_context()) as res:
-                data = json.loads(res.read().decode('utf-8'))
-        if not isinstance(data, list):
-            raise ValueError('очікувався масив рядків overview_projects')
-        return [r for r in data if isinstance(r, dict)], None
+        if prov == 'legacy':
+            fake = os.environ.get('DC_TEAM_FAKE')
+            if fake:
+                with open(fake, encoding='utf-8') as fh:
+                    data = json.load(fh)
+                if not isinstance(data, list):
+                    raise ValueError('очікувався масив рядків overview_projects')
+                return [r for r in data if isinstance(r, dict)], None
+            if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
+                return [], TEAM_ISOLATED
+            # Конфігу установки нема: дашборд команди недосяжний, «Мої» живуть без нього (і без мережі) — `dashboard-unconfigured`.
+            ctx = dashboard.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
+            return dashboard.rows(dashboard.legacy_module(), ctx), None
+        return dashboard.rows(prov, deai_modules.module_ctx(space, prov)), None
+    except deai_modules.ModuleError as e:
+        return [], (e.message or e.code)[:200]
     except Exception as e:  # noqa: BLE001 — «Мої» мусять жити без команди
         if not isinstance(e, (OSError, ValueError)):
             # Не мережа й не формат даних — імовірно, ПОМИЛКА КОДУ: у stderr, щоб
@@ -1758,12 +1761,21 @@ def _team_fetch():
         return [], (str(e) or type(e).__name__)[:200]
 
 
-def team_snapshot(now=None, refresh=False):
+def team_resolve():
+    """`(space, prov)` ролі `dashboard` для простору ЗАПИТУ: `prov` — `Module`, `'legacy'` (ЛІГА) чи `None` (нікого: вкладки «Команда»
+    нема). `space` — запис простору (лише для модуля; `None` для решти). Кидає `spaces.SpacesError` (реєстр не прочитати) і
+    `deai_modules.ModuleError` (свій модуль «на папері», `space.json` не читається): це НЕ «нікого» — вкладка лишається, а плашка
+    називає причину (рішення 4c-1: зламаний власний модуль не ховає вкладку мовчки)."""
+    prov = deai_modules.provider('dashboard')
+    return (spaces.active_space() if isinstance(prov, deai_modules.Module) else None), prov
+
+
+def team_snapshot(now=None, refresh=False, resolved=None):
     """`(rows, error, rows_at)`: як `team_rows`, плюс епоха ОСТАННЬОГО УСПІШНОГО
     читання (`None` — успіху ще не було). Не кидає.
 
     Кеш на `TEAM_TTL`, помилка — на коротший `TEAM_ERR_TTL`; `refresh=True` його
-    оминає. Без кешу кожен вхід на екран був би запитом у Supabase, а сервер
+    оминає (лише запис СВОГО простору). Без кешу кожен вхід на екран був би запитом у Supabase, а сервер
     багатопотоковий — тому читання й запис кешу під `_TEAM_LOCK`, ВКЛЮЧНО з самим
     запитом: другий потік чекає перший і бере вже готове, а не б'є в базу ще раз.
     ⛔ Збій НЕ стирає останні відомі рядки: мертвий VPN на хвилину не має робити
@@ -1773,23 +1785,31 @@ def team_snapshot(now=None, refresh=False):
     `now` — шов для тестів (епоха, с); `0 <= now - at` стереже годинник, що
     стрибнув назад: інакше застарілий кеш жив би, поки час не наздожене.
 
-    Простір без інтеграцій: команди нема, запиту нема — рання відповідь тієї ж форми, що в гілки
-    ізоляції `_team_fetch` (`[]` + пояснення), БЕЗ кешу: кеш спільний на процес, і відмова
-    одного простору не мусить стати «останнім відомим» станом іншого."""
-    try:
-        on = spaces.integrations_on()
-    except spaces.SpacesError as e:
-        # Не «простір без інтеграцій», а збій реєстру: причина називається, запиту так само нема.
-        return [], f'реєстр просторів не читається ({e.code})', None
-    if not on:
-        return [], 'вимкнено в просторі без інтеграцій', None
+    Хто дає рядки — `team_resolve()` (маршрут, що вже вирішив, передає `resolved=(space, prov)`: без другого читання реєстру й
+    каталогу). Нікого, збій реєстру чи рішення ролі — рання відповідь тієї ж форми (`[]` + пояснення), БЕЗ кешу: відмова
+    одного простору не мусить стати «останнім відомим» станом іншого. ⛔ Кеш ключується ПРОСТОРОМ (`_TEAM_CACHE`)."""
+    if resolved is None:
+        try:
+            resolved = team_resolve()
+        except spaces.SpacesError as e:
+            # Не «простір без дашборда», а збій реєстру: причина називається, запиту так само нема.
+            return [], f'реєстр просторів не читається ({e.code})', None
+        except deai_modules.ModuleError as e:
+            return [], (e.message or e.code)[:200], None
+    space, prov = resolved
+    if prov is None:
+        return [], TEAM_NO_PROVIDER, None
+    who = 'legacy' if prov == 'legacy' else prov.id
+    key = spaces.request_space_id() or ''
     now = time.time() if now is None else now
     with _TEAM_LOCK:
-        c = _TEAM_CACHE
+        c = _TEAM_CACHE.get(key)
+        if c is None or c['who'] != who:
+            c = _TEAM_CACHE[key] = {'at': 0.0, 'rows': None, 'error': None, 'rowsAt': None, 'who': who}
         ttl = TEAM_ERR_TTL if c['error'] else TEAM_TTL
         if not refresh and c['rows'] is not None and 0 <= now - c['at'] < ttl:
             return list(c['rows']), c['error'], c['rowsAt']
-        rows, error = _team_fetch()
+        rows, error = _team_fetch(space, prov)
         if error:
             rows = c['rows'] or []
             c.update(at=now, rows=rows, error=error)
@@ -5482,13 +5502,22 @@ class Handler(SimpleHTTPRequestHandler):
             except spaces.NoTask:
                 self._send_json({'current': None, 'mine': [], 'team': None, 'space': None})
                 return
-            if spaces.integrations_on():
-                rows, err, rows_at = team_snapshot(refresh=q.get('refresh', [''])[0] == '1')
-                out = tasks_overview(cfg, (rows, err), rows_at=rows_at)
+            # Вкладка «Команда» є, коли простір має постачальника ролі `dashboard` (4c-1; було — прапорець `integrations`: для ЛІГИ
+            # те саме, бо вона має `'legacy'`). `SpacesError` тут — як і з `integrations_on()` раніше (обробник маршруту).
+            try:
+                resolved = team_resolve()
+            except deai_modules.ModuleError as e:
+                # ⛔ Збій рішення ролі (зламаний власний модуль «на папері», `space.json` не читається) — НЕ «нікого»: вкладка
+                # лишається, а плашка називає причину; `team: null` мовчки сховав би вкладку, і людина не знала б, чому її нема.
+                out = tasks_overview(cfg, ([], (e.message or e.code)[:200]))
             else:
-                # Без інтеграцій команди нема: запиту в Supabase немає, `team: null` (UI ховає
-                # вкладку «Команда»). `tasks_overview` чиста збірка — порожні рядки їй безпечні.
-                out = {**tasks_overview(cfg, ([], None)), 'team': None}
+                if resolved[1] is None:
+                    # Постачальника нема: запиту немає, `team: null` (UI ховає вкладку «Команда»). `tasks_overview` чиста
+                    # збірка — порожні рядки їй безпечні.
+                    out = {**tasks_overview(cfg, ([], None)), 'team': None}
+                else:
+                    rows, err, rows_at = team_snapshot(refresh=q.get('refresh', [''])[0] == '1', resolved=resolved)
+                    out = tasks_overview(cfg, (rows, err), rows_at=rows_at)
             self._send_json({'current': cfg.get('current'), **out,
                              'space': space_view(spaces.active_space())})
             return

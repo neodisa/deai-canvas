@@ -374,6 +374,22 @@ class PushTest(ModuleCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual([[r['id'] for r in c['body']] for c in self.calls], [['a', 'c'], ['b', 'd']])
 
+    def test_ids_are_unique_per_call_and_the_last_card_wins(self):
+        """⛔ Два `POST`-рядки з одним `id` Postgres відхиляє цілим запитом (21000) — тож картки з повторним `id` зводимо до
+        ОСТАННЬОЇ (свіжіший стан), на місці першої появи; витіснені дублі — не збій і не рахуються в `ok`. Дедуплікація йде ДО
+        розбиття на пакети: дублі з різними наборами ключів не опиняються в різних запитах."""
+        self.net(Resp(201, b''))
+        cards = [{'id': 'a', 'name': 'old', 'iterations': 1}, {'id': 'b', 'name': 'B'},
+                 {'id': 'a', 'name': 'new', 'jira_status': 'Done'}, {'id': 'b', 'name': 'B2'}]
+        res = self.run_fn('push', self.ctx(), cards, 'merge')
+        self.assertEqual(res, {'ok': 2, 'failed': {}})
+        sent = [r for c in self.calls for r in c['body']]
+        self.assertEqual(sorted(r['id'] for r in sent), ['a', 'b'], 'кожен id — у виклику один раз')
+        by_id = {r['id']: r for r in sent}
+        self.assertEqual(by_id['a'], {'id': 'a', 'name': 'new', 'jira_status': 'Done'}, 'остання картка, не злиття')
+        self.assertEqual(by_id['b']['name'], 'B2')
+        self.assertEqual(self.calls[0]['body'][0]['id'], 'a', 'порядок — за першою появою id')
+
     def test_bad_mode_and_bad_cards(self):
         self.net(Resp(201, b''))
         for mode in ('replace', '', None, 'MERGE'):

@@ -5,14 +5,18 @@ Task 1: лише знімок `tests/fixtures/dashboard/before-4c1.json` (йог
 генератор.
 """
 import contextlib
+import copy
 import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import urllib.request
 from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -23,6 +27,8 @@ sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 import install_config  # noqa: E402
+import make_before_4c1 as mb  # noqa: E402  (шаблон світу знімка 0.11.0: простори, сервер у процесі, `scrub`/`strip`)
+import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -449,6 +455,413 @@ class DropFixturesDefaultReason(unittest.TestCase):
         self.assertEqual(list(kept), ['real'])
         self.assertIn('nova', buf.getvalue())
         self.assertIn('тимчасов', buf.getvalue())                      # причина названа вголос, а не мовчки
+
+
+# ------------------------------------------------------------------------------------------ Task 5: читання «Команди»
+
+class _Net:
+    """Шов `_open` вбудованого `supabase-dashboard`: записує запити (URL, метод, заголовки з ключем → `<key>`, тайм-аут) і
+    віддає `body` (або кидає `exc`). Той самий вигляд, що в записувача знімка 0.11.0 (`make_before_4c1.Recorder`)."""
+
+    def __init__(self, body=b'[]', exc=None, key=mb.KEY):
+        self.calls, self.body, self.exc, self.key = [], body, exc, key
+
+    def __call__(self, req, timeout=None):
+        headers = {k.lower(): str(v).replace(self.key, '<key>') for k, v in req.header_items()}
+        self.calls.append({'url': req.full_url, 'method': req.get_method(), 'headers': headers, 'timeout': timeout})
+        if self.exc:
+            raise self.exc
+        return sbconf.Resp(self.body)
+
+
+class _Hits(list):
+    """Влучання розтяжки; `allow_ports` — loopback-порти, які вона пропускає (сервер у процесі, його порт відомий після старту)."""
+
+    def __init__(self):
+        super().__init__()
+        self.allow_ports = set()
+
+
+def block_network(case):
+    """Розтяжка (як `test_integrations_off.Tripwire`, але вужча): `urlopen` ядра й `socket.create_connection` — у запис і
+    `OSError`; лише loopback на `hits.allow_ports` (сервер у процесі) проходить. Модуль ходить крізь власний opener, тож його
+    справжній запит упав би саме на сокеті: тест, що забув підмінити `_open`, не вийде в мережу. Повертає список влучань."""
+    hits = _Hits()
+    real_cc = socket.create_connection
+
+    def cc(address, *a, **kw):
+        if address[0] in ('127.0.0.1', 'localhost') and address[1] in hits.allow_ports:
+            return real_cc(address, *a, **kw)
+        hits.append(('socket', '%s:%s' % address[:2]))
+        raise OSError('tripwire')
+
+    def uo(target, *a, **kw):
+        hits.append(('urlopen', getattr(target, 'full_url', str(target))))
+        raise OSError('tripwire')
+    for owner, name, fn in ((socket, 'create_connection', cc), (urllib.request, 'urlopen', uo)):
+        p = mock.patch.object(owner, name, fn)
+        p.start()
+        case.addCleanup(p.stop)
+    return hits
+
+
+class ReadParity(unittest.TestCase):
+    """Диференційний: шлях ЛІГИ вкладки «Команда» через вбудований `supabase-dashboard` дає ТЕ САМЕ, що записав знімок 0.11.0
+    (`before-4c1.json`, `team_read`): те саме тіло `/api/tasks-overview`, той самий URL і заголовки, той самий `team: null` без
+    мережі. Мережа — шов `_open` модуля (не `urlopen`); сервер справжній, у процесі, на ефемерному порту.
+
+    Свідомі відмінності (кожна названа в тесті, а не прихована):
+      * `space.capabilities` має НОВИЙ ключ `dashboard` (знімок його не знає) — перевіряється окремо й вилучається з порівняння;
+      * тайм-аут запиту 4 с (власний тайм-аут модуля), у знімку було 3 с;
+      * тексти двох помилок (мережа впала, відповідь не масив) — тепер ТЕКСТ МОДУЛЯ, а не сирий виняток `urlopen`/`ValueError`."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)['team_read']
+        cls.tmp = os.path.realpath(tempfile.mkdtemp(prefix='read-parity-'))
+        home = os.path.join(cls.tmp, 'home')
+        os.makedirs(home)
+        # `addClassCleanup`, а не `tearDownClass`: оточення й підміни мусять повернутись і тоді, коли `setUpClass` упав посередині
+        # (інакше тимчасові `DEAI_HOME`/`HOME` лишились би в процесі й зламали б усі наступні файли набору).
+        import shutil
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
+        cls.addClassCleanup(dm.reset_caches)
+        cls.addClassCleanup(spaces.clear_request_space)
+        env = mock.patch.dict(os.environ, {'HOME': home, 'DEAI_HOME': os.path.join(cls.tmp, 'deai')})
+        env.start()
+        cls.addClassCleanup(env.stop)
+        for name in mb.CLEAN:
+            os.environ.pop(name, None)
+        legacy = mock.patch.object(spaces, 'legacy_tasks_file', return_value=os.path.join(cls.tmp, 'legacy', 'tasks.json'))
+        legacy.start()
+        cls.addClassCleanup(legacy.stop)
+        dm.reset_caches()
+        cls.ids = mb.setup_spaces(cls.tmp)
+        cls.srv = mb.Server().__enter__()
+        cls.addClassCleanup(cls.srv.__exit__, None, None, None)
+
+    def setUp(self):
+        spaces.clear_request_space()
+        serve._TEAM_CACHE.clear()
+        self.addCleanup(serve._TEAM_CACHE.clear)
+        self.hits = block_network(self)
+        self.hits.allow_ports.add(self.srv.port)
+        self.net = _Net()
+        sbconf.patch_dashboard_open(self, self.net)
+
+    def overview(self, space='liga', env=None, cfg=(mb.URL, mb.KEY)):
+        """`GET /api/tasks-overview?refresh=1` у просторі `space` → `{body, volatile, dashboard}` (форма запису знімка)."""
+        spaces.switch_space(self.ids[space])
+        with mock.patch.dict(os.environ, env or {}), mock.patch.object(serve, 'supabase_config', return_value=cfg):
+            status, body = self.srv.get('/api/tasks-overview?refresh=1')
+        self.assertEqual(status, 200, body)
+        data = json.loads(mb.scrub(body, self.tmp))
+        team = data.get('team')
+        volatile = {k: (type(team.get(k)).__name__ if isinstance(team, dict) else None) for k in ('fetchedAt', 'rowsAt')}
+        sp = data.get('space')
+        sp.pop('id', None)
+        sp.pop('path', None)
+        cap = sp['capabilities'].pop('dashboard')          # новий ключ 4c-1: вилучаємо ДО копії, перевіряється окремо
+        return {'status': status, 'body': mb.strip(data), 'volatile': volatile, 'dashboard': cap}
+
+    def same_as_snapshot(self, got, name, dashboard_cap='legacy', error=None):
+        """Тіло збігається із записаним. `error` — свідомо ІНШИЙ текст помилки (модуль замість сирого винятку)."""
+        want = copy.deepcopy(self.snap[name])
+        self.assertEqual(got['dashboard'], dashboard_cap, 'новий ключ capabilities.dashboard — рівно такий')
+        if error is not None:
+            self.assertEqual(got['body']['team']['error'], error)
+            want['body']['team']['error'] = error
+        self.assertEqual(got['body'], want['body'])
+        self.assertEqual(got['volatile'], want['volatile'])
+
+    def test_fake_seam_gives_the_recorded_body_and_never_touches_the_network(self):
+        want = self.snap['fake_three_rows']
+        fake = os.path.join(self.tmp, 'team-fake.json')
+        with open(fake, 'w', encoding='utf-8') as f:
+            json.dump(want['input_rows'], f)
+        got = self.overview(env={'DC_TEAM_FAKE': fake})
+        self.same_as_snapshot(got, 'fake_three_rows')
+        self.assertEqual(self.net.calls, [])
+        self.assertEqual(len(got['body']['team']['rows']), 3, 'шов віддає рядки як є, навіть без id (як у 0.11.0)')
+
+    def test_real_request_has_the_recorded_url_and_headers(self):
+        want = self.snap['supabase_request']
+        self.net.body = json.dumps(want['input_rows']).encode('utf-8')
+        got = self.overview()
+        self.same_as_snapshot(got, 'supabase_request')
+        (call,), (rec,) = self.net.calls, want['urlopen_calls']
+        self.assertEqual((call['url'], call['method'], call['headers']), (rec['url'], rec['method'], rec['headers']))
+        # свідома відмінність: тайм-аут модуля 4 с, у знімку 3 с
+        self.assertEqual((rec['timeout'], call['timeout']), (3, 4))
+        self.assertEqual(self.hits, [], 'жодного виходу назовні повз шов')
+
+    def test_network_down_is_an_error_banner_with_the_modules_text(self):
+        self.net.exc = OSError('мережі нема')
+        got = self.overview()
+        want = self.snap['supabase_error']
+        self.assertEqual(want['body']['team']['error'], 'мережі нема')
+        self.same_as_snapshot(got, 'supabase_error', error='Supabase недоступний (OSError)')
+        self.assertEqual(len(self.net.calls), want['urlopen_calls'])
+
+    def test_no_config_says_so_and_asks_nothing(self):
+        got = self.overview(cfg=(None, None))
+        self.same_as_snapshot(got, 'no_config')
+        self.assertEqual(got['body']['team']['error'], 'Supabase не налаштовано')
+        self.assertEqual(self.net.calls, [])
+
+    def test_isolation_does_not_call_the_module(self):
+        """⛔ `DC_TASKS_FILE`/`DC_NO_OVERVIEW` без шва: у ЛІГИ жодного виклику модуля, те саме пояснення, що в 0.11.0 — навіть
+        коли конфіг валідний."""
+        for name, env in (('isolation_dc_tasks_file', {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')}),
+                          ('isolation_dc_no_overview', {'DC_NO_OVERVIEW': '1'})):
+            with self.subTest(case=name):
+                serve._TEAM_CACHE.clear()
+                self.net.calls.clear()
+                got = self.overview(env=env)
+                self.same_as_snapshot(got, name)
+                self.assertEqual(self.net.calls, [])
+
+    def test_a_non_array_answer_is_an_error_with_no_rows(self):
+        self.net.body = b'{"message": "not an array"}'
+        got = self.overview()
+        self.assertEqual(self.snap['non_array_response']['body']['team']['error'], 'очікувався масив рядків overview_projects')
+        self.same_as_snapshot(got, 'non_array_response',
+                              error='Supabase повернув відповідь, що не є списком рядків дашборда')
+        self.assertEqual(len(self.net.calls), 1)
+
+    def test_junk_in_the_array_is_dropped_like_before(self):
+        want = self.snap['array_with_junk']
+        self.net.body = json.dumps([self.snap['fake_three_rows']['input_rows'][1], 5, 'x', None, ['y']]).encode('utf-8')
+        self.same_as_snapshot(self.overview(), 'array_with_junk')
+        self.assertEqual([r['id'] for r in want['body']['team']['rows']], ['x9'])
+
+    def test_a_space_without_integrations_has_no_team_and_no_request(self):
+        fake = os.path.join(self.tmp, 'team-fake.json')
+        with open(fake, 'w', encoding='utf-8') as f:
+            json.dump([{'id': 'x'}], f)
+        got = self.overview(space='plain', env={'DC_TEAM_FAKE': fake})
+        self.same_as_snapshot(got, 'integrations_off', dashboard_cap=None)
+        self.assertIsNone(got['body']['team'])
+        self.assertEqual(self.net.calls, [])
+
+    def test_an_unreadable_registry_names_the_reason_and_leaves_the_cache_alone(self):
+        want = self.snap['team_snapshot_spaces_error']
+        boom = spaces.SpacesError('spaces-unreadable', '<registry>', 'тест')
+        with spaces.request_space(self.ids['liga']), mock.patch.object(spaces, 'active_space', side_effect=boom), \
+                mock.patch.object(serve, 'supabase_config', return_value=(mb.URL, mb.KEY)):
+            rows, error, rows_at = serve.team_snapshot(refresh=True)
+        self.assertEqual({'rows': rows, 'error': error, 'rows_at': rows_at, 'urlopen_calls': len(self.net.calls),
+                          'cache_untouched': serve._TEAM_CACHE == {}}, want)
+
+    def test_the_snapshot_itself_has_no_dashboard_capability(self):
+        """Свідок знімка: ключа `dashboard` у записаному `capabilities` справді нема (він новий у 4c-1) — тож явне врахування
+        в `same_as_snapshot` не маскує випадкового збігу."""
+        for name in ('fake_three_rows', 'integrations_off'):
+            self.assertNotIn('dashboard', self.snap[name]['body']['space']['capabilities'])
+
+
+NORMAL_ROWS_SERVER = tm.CHECK_ONLY + (
+    'import json, os\n'
+    'def rows(ctx):\n'
+    '    p = os.path.join(os.environ["DASH_TEST_DIR"], ctx["space"]["id"] + ".json")\n'
+    '    try:\n'
+    '        with open(p, encoding="utf-8") as f:\n'
+    '            return json.load(f)\n'
+    '    except OSError:\n'
+    '        raise ctx["ModuleError"]("dashboard-error", message="down " + ctx["space"]["id"])\n'
+    'def push(ctx, cards, mode):\n    return {"ok": 0, "failed": {}}\n')
+
+
+class ReadPath(tm.Env):
+    """Вкладка «Команда» звичайного простору й загальні закони читання: відбір рядків, кеш НА ПРОСТІР, збій модуля, тайм-аут,
+    рішення «вкладка є/нема». Модуль-фікстура `dash` читає рядки з `$DASH_TEST_DIR/<id простору>.json`."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ['DEAI_HOME'] = self.deai          # як у `DashboardRole`: охоронець просторів шукає присвоєння в тексті файла
+        # ⛔ НЕ `mock.patch.dict(os.environ)` на весь тест: його `stop` (після `Env.tearDown`) відновив би оточення ЗНІМКА, зробленого
+        # вже після `Env.setUp` (з тимчасовими `DEAI_HOME`/`DC_TASKS_FILE`), — і вони просочились би в усі наступні файли тестів.
+        os.environ['DASH_TEST_DIR'] = os.path.join(self.tmp, 'rows')
+        self.addCleanup(os.environ.pop, 'DASH_TEST_DIR', None)
+        os.makedirs(os.environ['DASH_TEST_DIR'])
+        serve._TEAM_CACHE.clear()
+        self.addCleanup(serve._TEAM_CACHE.clear)
+        self.hits = block_network(self)
+        self.mk('dash', roles=('dashboard',), server=NORMAL_ROWS_SERVER)
+
+    def set_rows(self, sp, rows):
+        with open(os.path.join(os.environ['DASH_TEST_DIR'], sp['id'] + '.json'), 'w', encoding='utf-8') as f:
+            json.dump(rows, f)
+
+    def drop_rows(self, sp):
+        os.remove(os.path.join(os.environ['DASH_TEST_DIR'], sp['id'] + '.json'))
+
+    def plain(self, name='Plain', module='dash'):
+        sp = self.new_space(name)
+        if module:
+            dm.write_module_state(sp, module, enabled=True)
+        return sp
+
+    def snapshot(self, sp, **kw):
+        with spaces.request_space(sp['id']):
+            return serve.team_snapshot(**kw)
+
+    def seed_tasks(self, sp):
+        """`tasks.json` простору з однією задачею (без неї маршрут віддає «просторів нема» і `team: null`)."""
+        d = os.path.join(sp['path'], 't1')
+        mb._write(os.path.join(d, 'iterations.json'), {'iterations': [{'id': 'it1', 'date': '01.11.2026 10:00', 'published': False}],
+                                                       'publish_url': None})
+        mb._write(os.path.join(sp['path'], 'tasks.json'), {'design_work_root': sp['path'], 'current': 't1', 'tasks': {
+            't1': {'title': 'Demo', 'dir': d, 'profile': 'tool', 'opened': '2026-11-01T10:00:00Z'}}})
+
+    def http_overview(self, sp):
+        self.seed_tasks(sp)
+        spaces.switch_space(sp['id'])
+        with mb.Server() as srv:
+            self.hits.allow_ports.add(srv.port)             # loopback сервера цього тесту — єдиний дозволений вихід
+            status, body = srv.get('/api/tasks-overview?refresh=1')
+        self.assertEqual(status, 200, body)
+        return json.loads(body)
+
+    # ---- відбір рядків ----
+
+    def test_rows_keep_only_team_keys_and_rows_with_an_id(self):
+        sp = self.plain()
+        self.set_rows(sp, [{'id': 'a', 'name': 'A', 'open_comments': 2, 'secret_col': 'S3CRET'},
+                           {'id': 'b', 'name': 'B', 'designer': 'Alpha'}, {'name': 'no id'}, {'id': 7}, 'x', None])
+        # ізоляція й шов ЛІГИ звичайного простору не стосуються: файл `DC_TEAM_FAKE` рядків не підмінює
+        fake = os.path.join(self.tmp, 'fake.json')
+        mb._write(fake, [{'id': 'from-fake'}])
+        with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1', 'DC_TEAM_FAKE': fake}):
+            rows, err, rows_at = self.snapshot(sp, refresh=True)
+        self.assertIsNone(err)
+        self.assertEqual([r['id'] for r in rows], ['a', 'b'])
+        for r in rows:
+            self.assertEqual(set(r), set(dashboard.TEAM_KEYS))
+        self.assertEqual((rows[0]['open_comments'], rows[0]['name']), (2, 'A'))
+        self.assertNotIn('S3CRET', json.dumps(rows))
+        self.assertIsNotNone(rows_at)
+        self.assertEqual(self.hits, [])
+
+    def test_the_route_shows_those_rows_and_the_tab_only_with_a_provider(self):
+        bare = self.plain('Bare', module=None)
+        self.assertIsNone(self.http_overview(bare)['team'], 'нема постачальника — вкладки нема')
+        sp = self.plain('Plain')
+        self.set_rows(sp, [{'id': 'a', 'name': 'A', 'secret_col': 'S3CRET'}, {'name': 'no id'}])
+        data = self.http_overview(sp)
+        self.assertEqual([r['id'] for r in data['team']['rows']], ['a'])
+        self.assertIsNone(data['team']['error'])
+        self.assertNotIn('S3CRET', json.dumps(data))
+        self.assertEqual(data['space']['capabilities']['dashboard'], 'dash')
+
+    def test_a_provider_that_cannot_be_decided_shows_an_error_not_a_hidden_tab(self):
+        """Зламаний власний модуль / нечитабельний `space.json` — `ModuleError` рішення ролі: вкладка ЛИШАЄТЬСЯ, плашка називає
+        причину (а не `team: null`, що мовчки сховав би вкладку)."""
+        ig = self.new_space('Integ', integrations=True)
+        with open(self.space_json(ig), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        data = self.http_overview(ig)
+        team = data['team']
+        self.assertIsNotNone(team, 'вкладка не зникає')
+        self.assertEqual(team['rows'], [])
+        self.assertTrue(team['error'] and len(team['error']) <= 200)
+        self.assertIsNone(team['rowsAt'])
+        self.assertEqual([m['id'] for m in data['mine']], ['t1'], '«Мої» живуть')
+        self.assertEqual(serve._TEAM_CACHE, {}, 'відмову рішення не кешуємо')
+
+    # ---- збій модуля ----
+
+    def test_a_module_failure_keeps_the_last_good_rows_and_says_why(self):
+        sp = self.plain()
+        self.set_rows(sp, [{'id': 'a', 'name': 'A'}])
+        rows, err, at = self.snapshot(sp, now=1000.0)
+        self.assertEqual(([r['id'] for r in rows], err, at), (['a'], None, 1000.0))
+        self.drop_rows(sp)
+        rows, err, at = self.snapshot(sp, now=1000.0 + serve.TEAM_TTL + 1)
+        self.assertEqual([r['id'] for r in rows], ['a'], 'останні вдалі рядки')
+        self.assertEqual(err, 'down ' + sp['id'])
+        self.assertEqual(at, 1000.0, '`rowsAt` — час останнього успіху')
+        self.assertLessEqual(len(err), 200)
+
+    def test_a_slow_module_gets_the_cores_timeout_text(self):
+        slow = self.mk('slow', roles=('dashboard',), server=tm.CHECK_ONLY + (
+            'import time\ndef rows(ctx):\n    time.sleep(3)\n    return []\ndef push(ctx, cards, mode):\n    return {"ok": 0, "failed": {}}\n'))
+        sp = self.plain('Slow', module='slow')
+        with mock.patch.object(dashboard, 'READ_TIMEOUT', 0.3):
+            t0 = time.monotonic()
+            rows, err, at = self.snapshot(sp, refresh=True)
+        self.assertLess(time.monotonic() - t0, 2.5, 'ядро не чекає на модуль довше за свій тайм-аут')
+        self.assertEqual((rows, at), ([], None))
+        self.assertIn('no answer', err)
+        self.assertLessEqual(len(err), 200)
+
+    def test_the_cores_timeout_is_longer_than_the_modules_own(self):
+        """Ядро чекає ТРОХИ довше за модуль: модуль встигає відповісти СВОЇМ текстом, а не голим `check-timeout`."""
+        import runpy
+        mod = runpy.run_path(os.path.join(ROOT, 'app', 'modules', 'supabase-dashboard', 'server.py'))
+        self.assertGreater(dashboard.READ_TIMEOUT, mod['READ_TIMEOUT_S'])
+        self.assertEqual(dashboard.TEAM_KEYS, mod['TEAM_KEYS'], 'ключі рядка команди — одні й ті самі в ядрі й модулі')
+
+    # ---- кеш на простір ----
+
+    def test_the_cache_is_per_space_and_refresh_only_touches_its_own(self):
+        a, b = self.plain('Alpha'), self.plain('Bravo')
+        self.set_rows(a, [{'id': 'a1', 'name': 'A1'}])
+        self.set_rows(b, [{'id': 'b1', 'name': 'B1'}])
+        self.assertEqual([r['id'] for r in self.snapshot(a, now=1000.0)[0]], ['a1'])
+        self.assertEqual([r['id'] for r in self.snapshot(b, now=1000.0)[0]], ['b1'])
+        self.drop_rows(a)                                            # простір A «упав»
+        self.set_rows(b, [{'id': 'b2', 'name': 'B2'}])
+        rows_a, err_a, _ = self.snapshot(a, now=1001.0, refresh=True)
+        self.assertEqual(([r['id'] for r in rows_a], bool(err_a)), (['a1'], True), 'A: останні вдалі рядки й помилка')
+        rows_b, err_b, _ = self.snapshot(b, now=1002.0)               # у вікні TTL, без refresh
+        self.assertEqual(([r['id'] for r in rows_b], err_b), (['b1'], None), 'збій A не став станом B; refresh A не зачепив B')
+        rows_b, _, _ = self.snapshot(b, now=1002.0, refresh=True)
+        self.assertEqual([r['id'] for r in rows_b], ['b2'])
+        self.assertEqual(sorted(serve._TEAM_CACHE), sorted([a['id'], b['id']]))
+
+    def test_a_new_provider_does_not_inherit_the_old_providers_rows(self):
+        sp = self.plain()
+        self.set_rows(sp, [{'id': 'old', 'name': 'Old'}])
+        self.assertEqual([r['id'] for r in self.snapshot(sp, now=1000.0)[0]], ['old'])
+        self.mk('dash2', roles=('dashboard',), server=tm.CHECK_ONLY + (
+            'def rows(ctx):\n    raise ctx["ModuleError"]("dashboard-error", message="new is down")\n'
+            'def push(ctx, cards, mode):\n    return {"ok": 0, "failed": {}}\n'))
+        dm.write_module_state(sp, 'dash', enabled=False)
+        dm.write_module_state(sp, 'dash2', enabled=True)
+        rows, err, at = self.snapshot(sp, now=1001.0)                 # у вікні TTL, але постачальник інший
+        self.assertEqual((rows, err, at), ([], 'new is down', None))
+
+
+class DashboardHelpers(unittest.TestCase):
+    """`dashboard.legacy_ctx` і `dashboard.normalize_rows` — чисті функції ядра."""
+
+    def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
+        ctx = dashboard.legacy_ctx('https://demo.supabase.example', 'sk-test-1', 'liga')
+        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'table': 'overview_projects'})
+        self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
+        self.assertEqual(ctx['space'], {'id': 'liga', 'path': ''})
+        self.assertIs(ctx['legacy'], True, 'модуль не відмовляє публічному ключу ЛІГИ')
+        self.assertIs(ctx['ModuleError'], dm.ModuleError)
+        self.assertEqual(dashboard.legacy_ctx('https://x.example', 'k')['space']['id'], '')
+
+    def test_legacy_ctx_without_a_config_is_dashboard_unconfigured(self):
+        with self.assertRaises(dm.ModuleError) as cm:
+            dashboard.legacy_ctx(None, None)
+        self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message), ('dashboard-unconfigured', 409,
+                                                                                         'Supabase не налаштовано'))
+
+    def test_normalize_rows(self):
+        n = dashboard.normalize_rows
+        out = n([{'id': 'a', 'name': 'A', 'secret_col': 1}, {'name': 'x'}, {'id': 3}, 'r', None, {'id': 'b'}])
+        self.assertEqual([r['id'] for r in out], ['a', 'b'])
+        self.assertTrue(all(set(r) == set(dashboard.TEAM_KEYS) for r in out))
+        self.assertEqual(out[1]['name'], None)
+        self.assertEqual(len(n([{'id': f'r{i}'} for i in range(dashboard.MAX_ROWS + 50)])), dashboard.MAX_ROWS)
+        for bad in ({'id': 'a'}, 'x', None, 5):
+            with self.assertRaises(ValueError):
+                n(bad)
 
 
 if __name__ == '__main__':

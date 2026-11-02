@@ -31,7 +31,7 @@ missing or **public** (`sb_publishable_…`, or a JWT whose payload says `"role"
 * `rows` — `GET <url>/rest/v1/<table>?select=<team columns>&limit=500`, 4 s;
 * `push(cards, mode)` — `POST <url>/rest/v1/<table>?on_conflict=id`, `Prefer: resolution=merge-duplicates|ignore-duplicates,return=minimal`,
   up to 50 cards per request (cards with a different set of keys go in separate requests, so a missing key never turns into
-  `null`); a failed request puts all its card ids into `failed`, the rest are stored. A value `None` is never sent;
+  `null`); a failed request puts all its card ids into `failed`, the rest are stored. A value `None` is never sent; ids are unique per call — when a card id repeats, the last card wins (one `POST` with the same id twice is refused by Postgres as a whole);
 * `open_comments` — `GET <url>/rest/v1/comments?status=eq.open&select=project_id`: the numbers of open comments per channel,
   read from the table of `supabase-comments` in the same project. No such table — `{}`. Supabase cuts any answer at its
   `max-rows` (default 1000), so with more open comments than that the numbers are lower than the truth.
@@ -43,4 +43,10 @@ Error texts carry no key and no body of a request or an answer: only the HTTP st
 * **The key is non-public.** The cards hold the name and e-mail of a designer. The public (anon / publishable) key of a
   project is inside every page you publish, so the table has no `anon` policy and the module refuses a public key;
 * the key lives in `~/.deai/secrets.json` (owner only) and goes only to `apikey` / `Authorization: Bearer` of requests to `url`;
-* use **a dedicated project**: `schema.sql` adopts an existing `public.deai_dashboard` of the same name.
+* use **a dedicated project**: `schema.sql` adopts an existing `public.deai_dashboard` of the same name;
+* **a key of a role of your own** (not `service_role` / `sb_secret_…`) is subject to the same rules as any Postgres role:
+  `schema.sql` revokes everything from `anon` and creates no policy, so for your role you must add **explicit grants and
+  row-level-security policies** on the table yourself — `grant select, insert, update on public.deai_dashboard to <role>;`
+  plus a policy for `select`, `insert` and `update` (`create policy … on public.deai_dashboard for all to <role> using (true)
+  with check (true);`). `service_role` bypasses RLS and needs none of this. Without them `check` reports
+  «Supabase відмовив у доступі (HTTP 403)» and the Team tab shows the same refusal.

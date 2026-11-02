@@ -10,23 +10,24 @@ SB_KEY = 'sb_publishable_test'
 ENV = {'SUPABASE_URL': SB_URL, 'SUPABASE_KEY': SB_KEY}
 
 
-def _ensure_builtin():
-    """Вбудований `supabase-comments` у каталозі тесту. Тести на `tests/test_modules.py::Env` підміняють `builtin_dir()` на
-    порожню тимчасову теку (щоб рахувати лише свої фікстури); шлях ЛІГИ ж іде ВБУДОВАНИМ модулем (`serve.comments_route`),
-    тож без нього в каталозі він мовчки відмовив би («module is not loaded»). Копіюємо справжній модуль у ту теку (раз);
-    коли `builtin_dir()` — справжня `app/modules`, нічого не робимо."""
+def _ensure_builtin(mid='supabase-comments'):
+    """Вбудований модуль `mid` у каталозі тесту (типово `supabase-comments`; для дашборда — `supabase-dashboard`). Тести на
+    `tests/test_modules.py::Env` підміняють `builtin_dir()` на порожню тимчасову теку (щоб рахувати лише свої фікстури); шлях
+    ЛІГИ ж іде ВБУДОВАНИМ модулем (`serve.comments_route`, `dashboard.legacy_module`), тож без нього в каталозі він мовчки
+    відмовив би («module is not loaded»). Копіюємо справжній модуль у ту теку (раз); коли `builtin_dir()` — справжня
+    `app/modules`, нічого не робимо."""
     import os
     import shutil
     import deai_modules
-    real = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app', 'modules', 'supabase-comments')
-    dest = os.path.join(deai_modules.builtin_dir(), 'supabase-comments')
+    real = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app', 'modules', mid)
+    dest = os.path.join(deai_modules.builtin_dir(), mid)
     if not os.path.isdir(dest):
         shutil.copytree(real, dest, ignore=shutil.ignore_patterns('__pycache__'))
         deai_modules.reset_caches()
 
 
-def patch_open(test, fn):
-    """Підставити `fn(req, timeout)` замість шва `_open` вбудованого модуля `supabase-comments` на час тесту `test`.
+def patch_open(test, fn, mid='supabase-comments'):
+    """Підставити `fn(req, timeout)` замість шва `_open` вбудованого модуля `mid` (типово `supabase-comments`) на час тесту `test`.
 
     З 4b-2 командні коментарі ЛІГИ ходять тим самим модулем, що й у звичайних просторів, а модуль не кличе
     `urllib.request.urlopen` — його запит іде лише крізь `_open` (див. `tests/test_supabase_comments.py`). Тож тести, що
@@ -35,12 +36,18 @@ def patch_open(test, fn):
     (`resp.status`, `resp.read(limit)`). Справжньої мережі нема: без підміни модуль пішов би в `https://demo.supabase.co`."""
     from unittest import mock
     import deai_modules
-    _ensure_builtin()
-    g = deai_modules.catalog()['supabase-comments'].fn('check').__globals__
+    _ensure_builtin(mid)
+    g = deai_modules.catalog()[mid].fn('check').__globals__
     patcher = mock.patch.dict(g, {'_open': fn})
     patcher.start()
     test.addCleanup(patcher.stop)
     return g
+
+
+def patch_dashboard_open(test, fn):
+    """`patch_open` для вбудованого `supabase-dashboard` (4c-1: читання вкладки «Команда» ЛІГИ йде крізь його шов `_open`, а не
+    `urllib.request.urlopen`, як у 0.11.0). Тести, що колись підміняли `urlopen` для `_team_fetch`, підміняють цей шов."""
+    return patch_open(test, fn, 'supabase-dashboard')
 
 
 class Resp:

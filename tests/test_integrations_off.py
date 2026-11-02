@@ -436,12 +436,16 @@ def _isolate_env(case, tmp, legacy_file, class_level=False):
 
 
 def isolate_team_cache(case):
-    """Модульний кеш дашборда (`serve._TEAM_CACHE`, спільний на ПРОЦЕС): скинути на час тесту й
-    повернути як було. Без цього тест, що кликав `team_snapshot`, лишав би `{rows: [], error:
+    """Модульний кеш дашборда (`serve._TEAM_CACHE`, 4c-1: словник `{id простору: запис}`, спільний на ПРОЦЕС): скинути на час
+    тесту й повернути як було. Без цього тест, що кликав `team_snapshot`, лишав би запис `{rows: [], error:
     'tripwire', at: now}` усім наступним тестам процесу (вони читали б чужу «помилку мережі»)."""
-    saved = dict(serve._TEAM_CACHE)
-    serve._TEAM_CACHE.update(at=0.0, rows=None, error=None, rowsAt=None)
-    case.addCleanup(lambda: serve._TEAM_CACHE.update(saved))
+    saved = {k: dict(v) for k, v in serve._TEAM_CACHE.items()}
+    serve._TEAM_CACHE.clear()
+
+    def back():
+        serve._TEAM_CACHE.clear()
+        serve._TEAM_CACHE.update(saved)
+    case.addCleanup(back)
 
 
 @contextlib.contextmanager
@@ -477,16 +481,21 @@ def _commits(path):
 
 class TeamCacheIsolation(unittest.TestCase):
     def test_helper_resets_for_the_test_and_restores_after(self):
-        before = {'at': 7.0, 'rows': [{'id': 'before'}], 'error': None, 'rowsAt': 7.0}
-        outer = dict(serve._TEAM_CACHE)
-        self.addCleanup(serve._TEAM_CACHE.update, outer)
+        before = {'sp-1': {'at': 7.0, 'rows': [{'id': 'before'}], 'error': None, 'rowsAt': 7.0, 'who': 'legacy'}}
+        outer = {k: dict(v) for k, v in serve._TEAM_CACHE.items()}
+
+        def restore():
+            serve._TEAM_CACHE.clear()
+            serve._TEAM_CACHE.update(outer)
+        self.addCleanup(restore)
+        serve._TEAM_CACHE.clear()
         serve._TEAM_CACHE.update(before)
         probe = unittest.TestCase()
         isolate_team_cache(probe)
-        self.assertEqual((serve._TEAM_CACHE['rows'], serve._TEAM_CACHE['at']), (None, 0.0))
-        serve._TEAM_CACHE.update(rows=[], error='tripwire', at=9.0)     # як лишив би `team_snapshot`
+        self.assertEqual(serve._TEAM_CACHE, {})
+        serve._TEAM_CACHE['sp-1'] = {'at': 9.0, 'rows': [], 'error': 'tripwire', 'rowsAt': None, 'who': 'legacy'}  # як лишив би `team_snapshot`
         probe.doCleanups()
-        self.assertEqual(dict(serve._TEAM_CACHE), before)
+        self.assertEqual(serve._TEAM_CACHE, before)
 
 
 # ---------- кожна точка виходу окремою функцією ----------
@@ -559,25 +568,26 @@ class Points(unittest.TestCase):
         self.assertEqual((rows, rows_at), ([], None))
         self.assertTrue(err and isinstance(err, str))      # форма та сама, що в гілки ізоляції
         self.assertEqual(self.trip.hits, [])
-        self.assertIsNone(serve._TEAM_CACHE['rows'], 'відмова потрапила в кеш дашборда')
-        self.assertEqual(serve._TEAM_CACHE['at'], 0.0)
+        self.assertEqual(serve._TEAM_CACHE, {}, 'відмова потрапила в кеш дашборда')
         with spaces.request_space('on'):
             serve.team_snapshot(refresh=True)
-        self.assertEqual(len(self.trip.of('urlopen')), 1)
-        self.assertIn('/rest/v1/overview_projects', self.trip.of('urlopen')[0])
+        # 4c-1: читання ЛІГИ йде модулем `supabase-dashboard` (його власний opener), тож розтяжка ловить його на сокеті, а не на `urlopen`
+        self.assertEqual(self.trip.of('urlopen'), [])
+        self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
 
     def test_team_snapshot_says_why_when_the_registry_is_unreadable(self):
         """Реєстр просторів, що не читається, — не «простір без інтеграцій»: причина названа окремо,
         а кеш не чіпається. Ні те, ні те не пускає запит назовні."""
         self.enter_unisolated()
+        # 4c-1: постачальника ролі вирішує `deai_modules.provider` (читає реєстр через `spaces.active_space`), не `integrations_on`
         with spaces.request_space('on'), mock.patch.object(
-                spaces, 'integrations_on', side_effect=spaces.SpacesError('spaces-unreadable', 'p')):
+                spaces, 'active_space', side_effect=spaces.SpacesError('spaces-unreadable', 'p')):
             rows, err, rows_at = serve.team_snapshot(refresh=True)
         self.assertEqual((rows, rows_at), ([], None))
         self.assertIn('не читається', err)
         self.assertNotIn('без інтеграцій', err)
         self.assertEqual(self.trip.hits, [])
-        self.assertIsNone(serve._TEAM_CACHE['rows'])
+        self.assertEqual(serve._TEAM_CACHE, {})
 
     def test_registry_push(self):
         self.enter_unisolated()
@@ -946,16 +956,17 @@ class Routes(World):
         self.assertEqual(st, 200)
         self.assertIsInstance(body['team'], dict)
         self.assertTrue(body['team']['error'])
-        self.assertIn('/rest/v1/overview_projects', self.trip.of('urlopen')[0])
+        # 4c-1: рядки ЛІГИ читає модуль `supabase-dashboard` — його запит видно на сокеті, а не на `urlopen`
+        self.assertEqual(self.trip.of('socket'), [LIGA_HOST])
+        self.assertEqual(self.trip.of('urlopen'), [])
 
     def test_the_world_isolates_the_dashboard_cache_between_tests(self):
         """`tasks-overview` кличе `team_snapshot`, а той кешує — і кеш спільний на процес. Повторний
         вхід у `World.setUp` посеред тесту = межа між двома тестами: кеш, залишений попереднім,
         скинутий (а після тесту повернеться як було)."""
-        serve._TEAM_CACHE.update(rows=[], error='tripwire', at=9.0)     # як лишив би попередній тест
+        serve._TEAM_CACHE['x'] = {'rows': [], 'error': 'tripwire', 'at': 9.0, 'rowsAt': None, 'who': 'legacy'}  # як лишив би попередній тест
         World.setUp(self)
-        self.assertEqual((serve._TEAM_CACHE['rows'], serve._TEAM_CACHE['error'],
-                          serve._TEAM_CACHE['at']), (None, None, 0.0))
+        self.assertEqual(serve._TEAM_CACHE, {})
 
     def test_unreadable_registry_is_503_and_nothing_leaves(self):
         """Вікно «відкрито при битому реєстрі» закрите в Task 2: API-запит без простору не

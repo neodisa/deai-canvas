@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+import deai_modules
+
 _PII = [re.compile(r"№?\s*\d{2,4}/\d{3,5}/\d{2,4}"), re.compile(r"\b\d{10}\b"), re.compile(r"\b\d{8}\b")]
 
 _GL_SSH = re.compile(r"^git@([^:]+):(.+?)(?:\.git)?$")
@@ -202,3 +204,64 @@ def discover_card(pid, entry):
         row["designer_key"] = entry.get("owner_key")
     # напрямок дашборд виводить із gitlab_repo (окремої колонки в overview_projects немає)
     return {k: v for k, v in row.items() if v is not None}
+
+
+# ------------------------------------------------------------------------------------ читання: рядки команди (Task 5)
+
+#: Колонки рядка команди: ядро бере з відповіді модуля ЛИШЕ їх (решта — напр. `secret_col` чужої таблиці — відкидається).
+#: Без `select=*` (урок колишнього `serve.TEAM_COLS`): таблицю пише пушер реєстру, і зайві поля, що там зʼявляться, не мають
+#: їхати в кожну відповідь і в кеш. Той самий кортеж і в модулі `supabase-dashboard` (`TEAM_KEYS`): модулі не імпортують ядро,
+#: тож тут його продубльовано.
+TEAM_KEYS = ('id', 'name', 'jira', 'jira_status', 'jira_status_cat', 'open_comments', 'thumb_url', 'code_url',
+             'updated_at', 'designer', 'iterations', 'pages')
+MAX_ROWS = 500
+#: Скільки ядро чекає на `rows` модуля. ⛔ НЕ 4 с: це власний тайм-аут модуля на ОПЕРАЦІЮ сокета (`READ_TIMEOUT_S`; у знімку 0.11.0
+#: було 3 с на запит), а ядро мусить чекати ТРОХИ довше — тоді модуль встигає відповісти СВОЇМ текстом («Supabase недоступний
+#: (…)»), а людина не бачить голого `check-timeout` ядра (урок `COMMENTS_TIMEOUT`). Тест `ReadPath` стереже нерівність.
+READ_TIMEOUT = 6
+LEGACY_TABLE = 'overview_projects'
+LEGACY_MODULE = 'supabase-dashboard'
+UNCONFIGURED = 'Supabase не налаштовано'
+
+
+def legacy_ctx(url, key, space_id=''):
+    """`ctx` неявного постачальника ЛІГИ (`'legacy'`): `supabase-dashboard` з адресою й ключем конфігу установки і таблицею
+    `overview_projects`. `url`/`key` — з `supabase_config()` викликача (`serve` кличе СВОЮ обгортку: її підміняють тести);
+    нема конфігу (`url is None`) — `ModuleError('dashboard-unconfigured')` з текстом, який на екрані «Команда» був і раніше.
+
+    ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
+    справжній `~/.deai` машини (той самий урок, що `serve._vcs_legacy_ctx`/`_comments_legacy_ctx`).
+    `legacy: True` — модуль не відмовляє публічному ключу ЛІГИ (паритет з 0.11.0; `check` ЛІГИ кличеться лише з «Підключення»)."""
+    if url is None:
+        raise deai_modules.ModuleError('dashboard-unconfigured', message=UNCONFIGURED)
+    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url, 'table': LEGACY_TABLE},
+            'secrets': {'key': key}, 'ModuleError': deai_modules.ModuleError, 'legacy': True}
+
+
+def legacy_module():
+    """Вбудований `supabase-dashboard` із каталогу БЕЗ простору (шлях ЛІГИ); не завантажився — `ModuleError('module-error')`."""
+    try:
+        m = deai_modules.catalog().get(LEGACY_MODULE)
+    except Exception as e:  # noqa: BLE001 — збій каталогу = відмова модуля, не 500
+        raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
+    if m is None or m.status != 'ok':
+        raise deai_modules.ModuleError('module-error', message=f'{LEGACY_MODULE} module is not loaded')
+    return m
+
+
+def normalize_rows(data):
+    """Рядки команди з відповіді `rows` модуля: лише обʼєкти з рядковим `id`, лише ключі `TEAM_KEYS`, не більше `MAX_ROWS`.
+    Не список — `ValueError`. Чужий модуль міг би повернути що завгодно (і зайві колонки таблиці): екран бачить лише це."""
+    if not isinstance(data, list):
+        raise ValueError('rows: очікувався масив')
+    out = []
+    for r in data[:MAX_ROWS]:
+        if isinstance(r, dict) and isinstance(r.get('id'), str):
+            out.append({k: r.get(k) for k in TEAM_KEYS})
+    return out
+
+
+def rows(module, ctx):
+    """Рядки команди від постачальника: `module.rows(ctx)` у робочому потоці за `READ_TIMEOUT`, далі `normalize_rows`.
+    Кидає `ModuleError` (збій модуля, `check-timeout`) чи `ValueError` (відповідь не список)."""
+    return normalize_rows(deai_modules.call(module, 'rows', ctx, timeout=READ_TIMEOUT))

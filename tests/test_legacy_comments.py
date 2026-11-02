@@ -197,23 +197,26 @@ class SupabaseConfigTest(_Env):
 
 
 class TeamFetchTest(_Env):
-    """`_team_fetch()`: без конфігу — чесне «не налаштовано» і жодної мережі; з конфігом — запит на адресу конфігу."""
+    """`_team_fetch('legacy')`: без конфігу — чесне «не налаштовано» і жодної мережі; з конфігом — запит на адресу конфігу.
+    4c-1: підпис `_team_fetch(space, prov)` і мережа ЛІГИ — шов `_open` вбудованого `supabase-dashboard` (не `urlopen`)."""
 
     def test_without_config_no_network(self):
         self.write({'tasks': {}})
-        self.assertEqual(serve._team_fetch(), ([], 'Supabase не налаштовано'))
+        self.assertEqual(serve._team_fetch(None, 'legacy'), ([], 'Supabase не налаштовано'))
 
     def test_with_config_requests_config_url(self):
         self.write({'supabase_url': URL, 'supabase_key': KEY})
         seen = []
 
-        def fake(req, timeout=None, context=None):
+        def fake(req, timeout=None):
             seen.append(req)
-            return _Resp(b'[{"project_id": "p1"}]')
-        with mock.patch.object(serve.urllib.request, 'urlopen', fake):
-            rows, err = serve._team_fetch()
+            return sbconf.Resp(b'[{"id": "p1", "name": "One", "secret_col": "x"}]')
+        sbconf.patch_dashboard_open(self, fake)
+        rows, err = serve._team_fetch(None, 'legacy')
         self.assertIsNone(err)
-        self.assertEqual(rows, [{'project_id': 'p1'}])
+        self.assertEqual([r['id'] for r in rows], ['p1'])
+        self.assertEqual(rows[0]['name'], 'One')
+        self.assertNotIn('secret_col', rows[0])
         self.assertEqual(len(seen), 1)
         self.assertTrue(seen[0].full_url.startswith(URL + '/rest/v1/overview_projects?'))
         self.assertEqual(seen[0].get_header('Apikey'), KEY)
@@ -223,9 +226,12 @@ class TeamFetchTest(_Env):
         # ⛔ Закон ізоляції не змінився: `DC_TASKS_FILE` глушить мережу, навіть коли конфіг є.
         self.write({'supabase_url': URL, 'supabase_key': KEY})
         os.environ['DC_TASKS_FILE'] = self.legacy
-        rows, err = serve._team_fetch()
+        seen = []
+        sbconf.patch_dashboard_open(self, lambda req, timeout=None: seen.append(req) or sbconf.Resp(b'[]'))
+        rows, err = serve._team_fetch(None, 'legacy')
         self.assertEqual(rows, [])
         self.assertIn('ізольованому', err)
+        self.assertEqual(seen, [])
 
 
 class TeamsRpcTest(_Env):
