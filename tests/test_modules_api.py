@@ -65,7 +65,7 @@ ROUTES_POST = ('/api/module-enable', '/api/module-disable', '/api/module-setting
 ROUTES_GET = ('/api/modules', '/api/ds-tokens')
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 #: Вбудовані модулі справжнього `app/modules` за абеткою: новий вбудований модуль — тут і лише тут.
-BUILTIN_IDS = ['css-tokens', 'git-sync', 'static-publish', 'supabase-comments', 'vercel-publish']
+BUILTIN_IDS = ['css-tokens', 'git-sync', 'static-publish', 'supabase-comments', 'supabase-dashboard', 'vercel-publish']
 
 
 def setUpModule():

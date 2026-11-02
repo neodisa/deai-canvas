@@ -1340,6 +1340,8 @@ class TlsTest(Base):
         real = ssl.create_default_context
 
         def spy(*a, **kw):
+            if 'supabase-comments' not in sys._getframe(1).f_code.co_filename:      # `_tls` інших модулів (supabase-dashboard) — не наші
+                return real(*a, **kw)
             calls.append((a, kw))
             made.append(real(*a, **kw))
             return made[-1]
