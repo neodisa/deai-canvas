@@ -2550,7 +2550,7 @@ class CapabilitiesTest(Env):
     def test_vcs_in_an_integrations_space_survives_an_unreadable_space_json_like_publish(self):
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,   # `dashboard` — як `comments`, попри назву тесту: зашитий шлях спільний
                                                'error': 'space-json-unreadable'})
         plain = self.new_space('Plain')
         _write(self.space_json(plain), '{broken')                        # без інтеграцій рішення невідомі
@@ -2654,7 +2654,7 @@ class CapabilitiesTest(Env):
         self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,
                                                'error': 'space-json-unreadable'})   # publish — ЛІГА-шлях; коментарі — не 'legacy'
 
     def test_capabilities_is_total(self):

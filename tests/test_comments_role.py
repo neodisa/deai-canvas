@@ -172,7 +172,7 @@ class ProviderTest(CommentsEnv):
         self.assertEqual(dm.capabilities(plain),
                          {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'space-json-unreadable'})
         self.assertEqual(dm.provider('publish', ig), 'legacy')       # шлях ЛІГА для публікації пошкодженим файлом не ламається
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,
                                                'error': 'space-json-unreadable'})
 
     def test_capabilities_names_exactly_the_called_roles(self):
@@ -1492,7 +1492,7 @@ class LeaguePrivacyTest(PagesEnv):
         st, raw = self.fetch('/api/task')
         self.assertEqual(st, 200, raw)
         self.assertEqual(json.loads(raw)['space']['capabilities'],
-                         {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy', 'error': 'space-json-unreadable'})
+                         {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'error': 'space-json-unreadable'})
 
     def test_the_local_page_of_that_space_has_no_shared_snippet_either(self):
         self.break_module()

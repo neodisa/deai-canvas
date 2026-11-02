@@ -113,6 +113,9 @@ LEGACY_ROLES = ('publish', 'comments', 'vcs', 'dashboard')
 #: приватних макетів, тож «через помилку» на нього не переходимо (див. `_provider_for`). Без `dashboard` з тієї ж причини:
 #: його зашитий шлях — теж спільний Supabase ЛІГА (рядки команди й картки проєктів), не локальний.
 LEGACY_ON_ERROR_ROLES = ('publish', 'vcs')
+#: Ролі, чий зашитий шлях ЛІГА — СПІЛЬНИЙ Supabase (піни, рядки команди й картки): нечитабельний `space.json` у просторі з
+#: інтеграціями для них — `space-json-unreadable`, а не `'legacy'` (див. `_provider_for`).
+STRICT_LEGACY_ROLES = ('comments', 'dashboard')
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
@@ -1697,6 +1700,8 @@ def check(space, module_id):
 #: «загубився модуль коментарів» від «лежить застарілий запис якогось іншого модуля» потрібно (див.
 #: `_enabled_module_is_lost`). Новий вбудований модуль — у котрийсь із двох списків (інваріант у `test_comments_role.py`).
 KNOWN_COMMENTS_MODULES = frozenset({'supabase-comments'})
+# ⚠️ Явно ввімкнений, але зламаний ВБУДОВАНИЙ `supabase-dashboard` у просторі з інтеграціями лишається `'legacy'` (той самий
+# продукт); рольова перевірка загубленого модуля для `dashboard` — відкладена.
 KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'git-sync', 'static-publish', 'vercel-publish',
                                 'supabase-dashboard'})
 
@@ -1770,9 +1775,13 @@ def _provider_for(role, space, get_cat=None):
     мовчазне `'legacy'` повело б піни в спільний Supabase ЛІГА (і нечитабельний `space.json` там — теж
     `space-json-unreadable`), а у просторі без них `None` лишив би людину без командних коментарів і без жодної
     причини. Простір без жодного запису про коментарі лишається `None`. Для `publish` і `vcs` усе лишається як було: простір з
-    інтеграціями без явного модуля — `'legacy'`, нечитабельний `space.json` у ньому шлях не ламає."""
+    інтеграціями без явного модуля — `'legacy'`, нечитабельний `space.json` у ньому шлях не ламає.
+
+    Нечитабельний `space.json` у просторі з інтеграціями — `space-json-unreadable` для КОЖНОЇ ролі з `STRICT_LEGACY_ROLES`
+    (`comments`, `dashboard`): їхній зашитий шлях — спільний Supabase ЛІГА, а не знаємо, чи людина не ввімкнула там свій
+    модуль. `_enabled_module_is_lost` (зламаний явно ввімкнений модуль) — лише для `comments`."""
     integrations = spaces.integrations_for(space)
-    strict = integrations and role == 'comments'
+    strict = integrations and role in STRICT_LEGACY_ROLES
     if integrations:
         try:
             explicit = space_modules(space)

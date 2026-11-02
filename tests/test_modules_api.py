@@ -1410,7 +1410,7 @@ class Capabilities(World):
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
         # публікація — шлях ЛІГА недоторканий; коментарі — НЕ 'legacy' (спільний Supabase не запасний варіант) + помилка
-        self.assertEqual(caps['on'], {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': 'legacy',
+        self.assertEqual(caps['on'], {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,
                                       'error': 'space-json-unreadable'})
 
     def test_a_broken_catalog_does_not_break_the_listing(self):

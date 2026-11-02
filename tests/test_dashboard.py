@@ -411,6 +411,20 @@ class DashboardRole(tm.Env):
         with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):      # запасний словник: теж не 'legacy'
             self.assertIsNone(dm.capabilities(ig)['dashboard'])
 
+    def test_an_unreadable_space_json_in_an_integrations_space_never_yields_legacy(self):
+        """⛔ Зашитий шлях `dashboard` — спільний Supabase ЛІГИ, тож, як `comments`, нечитабельний `space.json` у просторі з
+        інтеграціями дає `space-json-unreadable`, а не `'legacy'` (ми не знаємо, чи людина ввімкнула там свій модуль)."""
+        ig = self.new_space('Integ', integrations=True)
+        with open(os.path.join(ig['path'], 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('dashboard', ig)
+        self.assertEqual(cm.exception.code, 'space-json-unreadable')
+        caps = dm.capabilities(ig)
+        self.assertIsNone(caps['dashboard'])
+        self.assertEqual(caps['error'], 'space-json-unreadable')
+        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # локальні ролі шлях ЛІГИ не втрачають
+
     def test_the_error_codes_have_http_statuses(self):
         self.assertEqual(dm.STATUS['dashboard-unconfigured'], 409)
         self.assertEqual(dm.STATUS['dashboard-error'], 502)
