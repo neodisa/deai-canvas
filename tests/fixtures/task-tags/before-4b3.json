@@ -1,0 +1,76 @@
+{
+ "card_meta": {
+  "liga360": "LIGA360",
+  "null": "без ітерацій",
+  "seo": "SEO",
+  "tool": "tool",
+  "united": "United"
+ },
+ "chips": {
+  "chips": [
+   {
+    "label": "United",
+    "pressed": "true",
+    "v": "united"
+   },
+   {
+    "label": "LIGA360",
+    "pressed": "false",
+    "v": "liga360"
+   },
+   {
+    "label": "SEO",
+    "pressed": "false",
+    "v": "seo"
+   },
+   {
+    "label": "tool",
+    "pressed": "false",
+    "v": "tool"
+   }
+  ],
+  "fixture_profiles": [
+   "united",
+   "united",
+   "liga360",
+   "seo",
+   "tool",
+   null
+  ],
+  "kept_ids": [
+   "t1",
+   "t2",
+   "t6"
+  ],
+  "selected": [
+   "united"
+  ]
+ },
+ "gitlab": {
+  "liga360": {
+   "gitlab": {
+    "path": "mockup/t-demo",
+    "repo": "git@gitlab.internal.example:ORG/liga360-design.git"
+   },
+   "liga_flow": true
+  },
+  "seo": {
+   "gitlab": {
+    "path": "mockup/t-demo",
+    "repo": "git@gitlab.internal.example:ORG/ligaseo-design.git"
+   },
+   "liga_flow": true
+  },
+  "tool": {
+   "gitlab": null,
+   "liga_flow": false
+  },
+  "united": {
+   "gitlab": {
+    "path": "mockup/t-demo",
+    "repo": "git@gitlab.internal.example:ORG/united-design.git"
+   },
+   "liga_flow": true
+  }
+ }
+}
