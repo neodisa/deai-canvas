@@ -29,6 +29,15 @@ class TestEntryFromTask(unittest.TestCase):
         self.assertNotIn('live', e)
         self.assertIn('updated_at', e)
 
+    def test_tags_are_shared_and_travel_when_non_empty(self):
+        """4b-3: мітки задачі їдуть у реєстр — колега на іншій машині бачить ті самі. Порожній список — як і будь-яке
+        порожнє переносиме поле — у запис не йде."""
+        self.assertIn('tags', rg.SHARED)
+        e = rg.entry_from_task('x', {'title': 'X', 'tags': ['alpha', 'beta']})
+        self.assertEqual(e['tags'], ['alpha', 'beta'])
+        self.assertNotIn('tags', rg.entry_from_task('x', {'title': 'X', 'tags': []}))
+        self.assertNotIn('tags', rg.entry_from_task('x', {'title': 'X'}))
+
     def test_owner_filled_from_identity(self):
         real = rg._identity
         rg._identity = lambda: ('Тест Дизайнер', 'test@example.com')

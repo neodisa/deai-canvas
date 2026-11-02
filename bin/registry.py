@@ -36,7 +36,7 @@ TTL_H = float(os.environ.get('DC_REGISTRY_TTL_H') or 6)
 # тримає, бо в ЧУЖОМУ акаунті `vercel link` із тим самим імʼям створює ІНШИЙ
 # проєкт (і друге посилання). Пара імʼя+скоуп — це і є прив'язка задача→превʼю.
 SHARED = ('title', 'jira', 'profile', 'gitlab', 'comment_project', 'vercel_project',
-          'vercel_scope', 'figma', 'owner', 'owner_key')
+          'vercel_scope', 'figma', 'owner', 'owner_key', 'tags')
 # Машинное — живёт только локально, в реестр не уезжает.
 LOCAL_ONLY = ('dir', 'live')
 

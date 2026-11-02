@@ -1600,6 +1600,68 @@ def _space_id(sp):
     return sp['id'] if sp is not None and spaces.layer_on() else None
 
 
+#: Межі міток задачі (4b-3): не більше `TAGS_MAX` міток, кожна 1…`TAG_MAX_LEN` знаків, без коми (вона — роздільник у формі)
+#: і без керівних знаків.
+TAGS_MAX = 10
+TAG_MAX_LEN = 32
+_TAG_BAD = re.compile(r'[\x00-\x1f\x7f-\x9f,]')
+#: Похідні мітки ЛІГИ: профіль задачі без власних `tags` показується як мітка з цим підписом (адаптер ЛІГИ, як `_LEGACY_*`
+#: 4b-1; йде в 4d). Невідомий профіль — як є.
+_LEGACY_PROFILE_TAGS = {'united': 'United', 'liga360': 'LIGA360', 'seo': 'SEO'}
+
+
+class TagsError(ValueError):
+    """Мітки не за правилами (`bad-tags`): не список, елемент не рядок, задовгий, з комою чи керівним знаком, понад `TAGS_MAX`."""
+
+
+def _clean_tag(raw):
+    return ' '.join(raw.split())
+
+
+def normalize_tags(raw):
+    """Вхідні мітки (API) → список: обрізані, внутрішні пробіли стиснуті, порожні відкинуто, дублікати без урахування регістру
+    відкинуто (лишається перший запис). Порушення правил — `TagsError` (людина бачить, що не так, а не тихе обрізання)."""
+    if not isinstance(raw, list):
+        raise TagsError('tags must be a list of strings')
+    out, seen = [], set()
+    for x in raw:
+        if not isinstance(x, str):
+            raise TagsError('tags must be a list of strings')
+        # ⛔ Керівні знаки (і `\n`/`\t` усередині) перевіряються ДО стиснення пробілів: `split()` мовчки склеїв би `a\nb` в `a b`,
+        # а людина мусить побачити відмову, а не тихо змінену мітку.
+        stripped = x.strip()
+        if _TAG_BAD.search(stripped):
+            raise TagsError(f'a tag is 1..{TAG_MAX_LEN} characters without commas or control characters')
+        tag = _clean_tag(stripped)
+        if not tag:
+            continue
+        if len(tag) > TAG_MAX_LEN:
+            raise TagsError(f'a tag is 1..{TAG_MAX_LEN} characters without commas or control characters')
+        if tag.casefold() not in seen:
+            seen.add(tag.casefold())
+            out.append(tag)
+    if len(out) > TAGS_MAX:
+        raise TagsError(f'at most {TAGS_MAX} tags')
+    return out
+
+
+def task_tags(task):
+    """Мітки задачі для екрана й API. Є ключ `tags` — лише вони (навіть `[]`: людина свідомо прибрала всі); зіпсовані елементи
+    (руками вписаний файл) тихо відкидаються — читання не кидає. Ключа нема — похідна мітка ЛІГИ з профілю
+    (`_LEGACY_PROFILE_TAGS`, невідомий профіль — як є) або `[]`."""
+    if isinstance(task, dict) and 'tags' in task:
+        raw = task['tags']
+        out, seen = [], set()
+        for x in raw if isinstance(raw, list) else []:
+            tag = _clean_tag(x) if isinstance(x, str) and not _TAG_BAD.search(x.strip()) else ''
+            if tag and len(tag) <= TAG_MAX_LEN and tag.casefold() not in seen:
+                seen.add(tag.casefold())
+                out.append(tag)
+        return out[:TAGS_MAX]
+    p = task.get('profile') if isinstance(task, dict) else None
+    return [_LEGACY_PROFILE_TAGS.get(p, p)] if isinstance(p, str) and p.strip() else []
+
+
 def _task_rows(cfg):
     """Рядки `GET /api/tasks` одного файла задач (перемикач задач).
 
@@ -1608,7 +1670,8 @@ def _task_rows(cfg):
     відповідь лишається дешевою."""
     return [{'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
              'profile': v.get('profile'),
-             'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir']))}
+             'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir'])),
+             'tags': task_tags(v)}
             for k, v in tasks_by_recent(cfg)]
 
 
@@ -1830,6 +1893,7 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
             'jiraStatus': row.get('jira_status') if row else None,
             'jiraCat': row.get('jira_status_cat') if row else None,
             'comments': (row.get('open_comments') or 0) if row else None,
+            'tags': task_tags(task),
         })
     tasks = cfg.get('tasks', {})
     team_out = []
@@ -1954,7 +2018,7 @@ class TaskRefused(ValueError):
 
 
 def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=None, root=None, adopt_src=None,
-             adopt_files=()):
+             adopt_files=(), tags=None):
     """Бутстрап задачи: папка в design-work (или клон макета з репо) + запись в tasks.json.
     Идемпотентность обеспечивает вызывающий (проверка на существование).
 
@@ -1980,6 +2044,9 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=Non
     Теку задачі `adopt_src` ЗАЙМАЄ атомарно (`makedirs` без `exist_ok`: вона вже є — `TaskRefused('task-dir-exists')`,
     чужу теку не чіпаємо). Будь-який збій до запису в `tasks.json` включно прибирає саме її й летить далі (`OSError` →
     маршрут: 500 `task-create-failed`, повтор не впирається в `task-dir-exists`).
+
+    `tags` (4b-3) — уже нормалізований список міток (`normalize_tags` робить маршрут): у запис задачі лягає лише НЕпорожній
+    (без ключа — похідна мітка ЛІГИ з `profile`, див. `task_tags`).
     """
     if not isinstance(tid, str) or not NAME_RE.fullmatch(tid):
         raise TaskRefused('bad-task-id', 'bad task id')
@@ -1993,6 +2060,8 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=Non
             raise TaskRefused('task-dir-exists', 'the task folder already exists in the space') from None
     try:
         cloned, adopted = _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src, adopt_files)
+        if tags:
+            cfg['tasks'][tid]['tags'] = list(tags)
         cfg['current'] = tid
         mark_opened(cfg, tid)
         save_tasks(cfg)
@@ -5167,7 +5236,7 @@ class Handler(SimpleHTTPRequestHandler):
     #: Модулі (етап 2а): `/api/modules`, `/api/module-*` (з 3c і `module-trust`/`module-untrust`), `/api/ds-tokens` — теж реєстрові: простір — параметр
     #: `space`, не задача. Точна відповідність (шлях без query), КОЖЕН маршрут окремо: широкий префікс
     #: `/api/module` зловив би будь-який майбутній маршрут.
-    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/spaces',
+    _REGISTRY_ROUTES = ('/api/task-new', '/api/task-switch', '/api/task-tags', '/api/spaces',
                         '/api/space-peek', '/api/space-new', '/api/space-update',
                         '/api/space-switch',
                         '/api/modules', '/api/module-enable', '/api/module-disable',
@@ -5322,6 +5391,7 @@ class Handler(SimpleHTTPRequestHandler):
             out = {'id': tid, 'title': task.get('title', tid),
                    'jira': task.get('jira'),
                    'profile': task.get('profile'),
+                   'tags': task_tags(task),
                    # Простір задачі (`describe`: id, name, color, path, legacy,
                    # integrations + `capabilities`; `null` — шар вимкнено) і канал коментарів. Канал
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
@@ -6366,6 +6436,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._gitlab_pull(payload)
         elif self.path == '/api/task-switch':
             self._task_switch(payload)
+        elif self.path == '/api/task-tags':
+            self._task_tags(payload)
         elif self.path == '/api/task-new':
             self._task_new(payload)
         elif self.path == '/api/space-new':
@@ -7019,6 +7091,41 @@ class Handler(SimpleHTTPRequestHandler):
         spaces.switch_space(sp['id'])
         self._send_json({'ok': True, 'current': tid, 'space': _space_id(sp)})
 
+    def _task_tags(self, payload):
+        """Замінити мітки задачі `id` (4b-3): `{id, tags}` → `{ok, tags}`. Задача шукається в УСІХ просторах (`find_task`), простір
+        запиту фіксується на ЇЇ просторі — пишеться файл задач ТОГО простору; поточну задачу й простір машини не міняємо
+        (на відміну від `task-switch`: це правка полів, а не перехід). Порожній список валідний (`[]` зберігається: людина
+        свідомо прибрала всі, похідна мітка ЛІГИ не воскресає). Нема задачі — 404 `unknown-task`; не за правилами — 400
+        `bad-tags`, файл не змінено; дубль id у двох просторах — центральний 409.
+
+        Порядок: СПЕРШУ перевірка міток, ПОТІМ простір і читання — відмова не торкається диска. Після запису — синхронізація
+        реєстру тим самим кроком, що й після публікації (`_registry_push`, best-effort: без VPN правку не валимо)."""
+        tid = payload.get('id', '')
+        sp = spaces.find_task(tid)
+        if sp is None:
+            raise_if_legacy_unreadable()       # задача могла лежати в файлі, який не читається
+            # Те саме для файлів інших просторів: `find_task` вважає нечитабельний порожнім, і «нема такої задачі» збрехало б —
+            # центральний 503 `space-unavailable` із назвою файла (спека: «файл задач не читається»).
+            broken = spaces.unreadable_task_files(spaces.read_registry())
+            if broken:
+                raise SpaceUnavailable(broken[0])
+            self._space_error(404, 'unknown-task', 'task not found')
+            return
+        try:
+            tags = normalize_tags(payload.get('tags'))
+        except TagsError as e:
+            self._space_error(400, 'bad-tags', str(e))
+            return
+        spaces.set_request_space(sp['id'])
+        cfg = load_tasks()
+        if tid not in cfg.get('tasks', {}):         # вилучили між `find_task` і читанням
+            self._space_error(404, 'unknown-task', 'task not found')
+            return
+        cfg['tasks'][tid]['tags'] = tags
+        save_tasks(cfg)
+        _registry_push(tid)
+        self._send_json({'ok': True, 'tags': tags})
+
     def _adopt_source(self, sp, tid, src, payload):
         """Перевірки `from` ДО будь-якого запису (спека 3b, «Сервер: задача з наявної теки»): `AdoptPlan(real, files,
         bytes, links)` або `None` — відмову вже надіслано. Порядок несучий: простір і тип поля — раніше за id (поле не
@@ -7109,6 +7216,14 @@ class Handler(SimpleHTTPRequestHandler):
         if profile is not None and not isinstance(profile, str):
             self._space_error(400, 'bad-profile', 'profile must be a string')
             return
+        # Мітки (4b-3): `null` — поля нема; не за правилами — 400 ДО будь-якого запису (як `bad-profile`).
+        tags = payload.get('tags')
+        if tags is not None:
+            try:
+                tags = normalize_tags(tags)
+            except TagsError as e:
+                self._space_error(400, 'bad-tags', str(e))
+                return
         # Старий файл є, а простору з нього нема, бо він не читається: id в ньому невидимі, тож
         # створювати нічого (як і при інших нечитабельних файлах нижче). ПЕРЕД `no-space` /
         # `no-integrations-space`: «створіть простір» чи «потрібен простір з інтеграціями» тут
@@ -7189,7 +7304,8 @@ class Handler(SimpleHTTPRequestHandler):
                          title=str(payload.get('title', ''))[:200],
                          jira=str(payload.get('jira', ''))[:40],
                          profile=profile, gitlab=payload.get('gitlab'), vcs=vcs, root=root,
-                         adopt_src=adopt.real if adopt else None, adopt_files=adopt.files if adopt else ())
+                         adopt_src=adopt.real if adopt else None, adopt_files=adopt.files if adopt else (),
+                         tags=tags)
         except TaskRefused as e:
             # `task-dir-exists` — гонка з `from`: теку встигли зайняти між перевіркою й записом (див. `task_new`)
             self._space_error(409 if e.code == 'task-dir-exists' else 400, e.code, str(e))

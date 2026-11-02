@@ -1592,7 +1592,7 @@ class TaskResponses(Fixture):
         self.assertEqual((st, body['current'], [t['id'] for t in body['tasks']]), (200, 'a', ['a']))
         self.assertEqual(body['space']['id'], self.legacy_id)
         self.assertNotIn('space', body['tasks'][0], 'без all=1 рядки лишаються як були')
-        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'profile', 'missing'})
+        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'profile', 'missing', 'tags'})   # `tags` — 4b-3
         spaces.switch_space(self.p_id)
         body = self.jget('/api/tasks')[1]
         self.assertEqual((body['current'], body['space']['id']), ('x', self.p_id))
@@ -1605,7 +1605,7 @@ class TaskResponses(Fixture):
                          {'a': self.legacy_id, 'x': self.p_id, 'gone': self.p_id})
         self.assertEqual({t['id']: t['missing'] for t in body['tasks']},
                          {'a': False, 'x': False, 'gone': True})
-        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'profile', 'missing', 'space'})
+        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'profile', 'missing', 'tags', 'space'})   # `tags` — 4b-3
 
     def test_tasks_all_restores_the_request_space_for_the_rest_of_the_response(self):
         """Обхід просторів не лишає запит у ОСТАННЬОМУ з них: `space` і `current` у відповіді —
