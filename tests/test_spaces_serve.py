@@ -2159,10 +2159,13 @@ class TaskNew(Fixture):
         before = (_md5(self.legacy_file), _md5(self.p_file), _md5(self.reg_path), _md5(self.e_file))
         listed = (sorted(os.listdir(self.p_path)), sorted(os.listdir(self.e_path)),
                   sorted(os.listdir(os.path.dirname(self.a_dir))))
+        # 4b-3: профіль — ознака потоку ЛІГА лише коли він є в `profile_repos` конфігу установки (константи в коді нема);
+        # у фікстурі такого конфігу нема, тож таблицю підставляє тест (вигадані репо).
+        table = {p: f'git@git.example:org/{p}-design.git' for p in ('united', 'liga360', 'seo')}
         for sign in ({'jira': 'LIGA-1'}, {'profile': 'united'}, {'profile': 'liga360'}, {'profile': 'seo'},
                      {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n20'}},
                      {'jira': 'LIGA-1', 'profile': 'tool', 'title': 'Т'}):
-            with self.subTest(sign=sign):
+            with self.subTest(sign=sign), mock.patch.object(serve, 'profile_repos', return_value=table):
                 st, body = self.post('/api/task-new', {'id': 'n20', **sign})
                 self.assertEqual((st, body['ok'], body['code'], body['error']),
                                  (409, False, 'no-integrations-space', self.LIGA_ERROR), body)
@@ -2173,7 +2176,7 @@ class TaskNew(Fixture):
         self.assertEqual(spaces.read_registry()['current'], self.p_id)
 
     def test_without_liga_signs_the_task_still_goes_to_the_current_space(self):
-        """Не-ознаки: порожній/пробіловий `jira`, не-рядок, профіль не з `PROFILE_REPOS`, порожній
+        """Не-ознаки: порожній/пробіловий `jira`, не-рядок, профіль не з `profile_repos()`, порожній
         `gitlab` — як було (поточний простір, `profile: null`)."""
         self.no_liga()
         for i, extra in enumerate(({}, {'jira': ''}, {'jira': '   '}, {'jira': 5}, {'jira': None},
@@ -2319,7 +2322,9 @@ class NoSpaces(Bare):
         який простору ЛІГА не дає. Без ознак — `no-space`, як було (тест вище)."""
         for sign in ({'jira': 'LIGA-1'}, {'profile': 'united'},
                      {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n1'}}):
-            with self.subTest(sign=sign):
+            # 4b-3: профіль — ознака ЛІГИ лише з `profile_repos` конфігу установки; у цій фікстурі конфігу нема
+            with self.subTest(sign=sign), mock.patch.object(serve, 'profile_repos',
+                                                            return_value={'united': 'git@git.example:org/united-design.git'}):
                 st, body = self.post('/api/task-new', {'id': 'n1', **sign})
                 self.assertEqual((st, body['ok'], body['code'], body['error']),
                                  (409, False, 'no-integrations-space', TaskNew.LIGA_ERROR), body)
@@ -2455,7 +2460,10 @@ class FirstSpace(Bare):
         self.assertEqual(self.jget('/api/task')[1]['code'], 'no-task')
         # Ознаки потоку ЛІГА (`profile: united`) без `space` у просторі без інтеграцій — відмова
         # (раніше тут була тиха локальна задача з `profile: null`); нічого не створено.
-        st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша', 'profile': 'united'})
+        # 4b-3: профіль — ознака ЛІГИ лише з `profile_repos` конфігу установки (у фікстурі його нема — таблицю дає тест)
+        with mock.patch.object(serve, 'profile_repos',
+                               return_value={'united': 'git@git.example:org/united-design.git'}):
+            st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша', 'profile': 'united'})
         self.assertEqual((st, body['code']), (409, 'no-integrations-space'), body)
         self.assertFalse(os.path.exists(os.path.join(path, 'first')))
         st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша'})

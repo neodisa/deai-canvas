@@ -95,13 +95,13 @@ _TUNER_LOCK = threading.Lock()
 # між цим переліком і ланцюгом if у do_GET дала перехоплення /shot.
 HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published/')
 
-# Репо макетов по направлению (profile). Структура у всех одна — mockup/<task-id>,
-# поэтому направления разъезжаются только репозиторием, а не логикой.
-PROFILE_REPOS = {
-    'united': 'git@gitlab.internal.example:ORG/united-design.git',
-    'liga360': 'git@gitlab.internal.example:ORG/liga360-design.git',
-    'seo': 'git@gitlab.internal.example:ORG/ligaseo-design.git',
-}
+# Таблиця «профіль → репозиторій макетів» живе не в коді, а в конфігу УСТАНОВКИ (`profile_repos()`, 4b-3).
+# ⛔ Урок колишньої константи: структура в усіх напрямків одна — `mockup/<task-id>`, тому напрямки розходяться
+# лише репозиторієм, а не логікою. Профіль — `[a-z0-9-]{1,32}`, репо — друковний ASCII без пробілів.
+_PROFILE_KEY = re.compile(r'[a-z0-9-]{1,32}')
+_REPO_OK = re.compile(r'[\x21-\x7e]+')
+
+
 # Останній рубіж, якщо в tasks.json немає нічого. Історична тека United — саме
 # тому вона й муляє: у ній лежали задачі всіх трьох напрямків.
 FALLBACK_WORK_ROOT = '~/deai-work'
@@ -111,7 +111,7 @@ def work_root(cfg, profile):
     """Корінь робочих тек ДЛЯ ЦЬОГО НАПРЯМКУ.
 
     Вимога користувача 31.08.2026: три напрямки — три теки і три репозиторії.
-    Репозиторії вже три (`PROFILE_REPOS`), а корінь був один на всіх: SEO-задача
+    Репозиторії вже три (`profile_repos()`), а корінь був один на всіх: SEO-задача
     фізично лежала в теці з назвою United, і назва теки брехала про напрямок.
 
     Порядок: свій корінь профілю → спільний `design_work_root` → історичний
@@ -152,6 +152,23 @@ def supabase_config():
         if _SUPABASE_URL_RE.fullmatch(url) and _SUPABASE_KEY_RE.fullmatch(key):
             return url.rstrip('/'), key
     return None, None
+
+
+def profile_repos():
+    """Таблиця «профіль → репозиторій макетів» простору ЛІГА з конфігу УСТАНОВКИ (4b-3: константи в коді нема) — корінь
+    старого `tasks.json`, ключ `profile_repos` (той самий файл і той самий читач, що в `supabase_config`). Структура в усіх
+    напрямків одна — `mockup/<task-id>`, тому напрямки розходяться лише репозиторієм, а не логікою (урок колишньої
+    константи `PROFILE_REPOS`). Профіль — `[a-z0-9-]{1,32}`, репо — друковний ASCII без пробілів; погані пари відкидаються,
+    файл не читається / ключа нема / не словник — `{}`. Кешу нема: файл маленький. Значень — ні в текстах, ні в журналах."""
+    try:
+        cfg = load_legacy_tasks()
+    except (OSError, ValueError, RecursionError):      # надто глибока вкладеність JSON — не обвал, а «нема конфігу»
+        return {}
+    raw = cfg.get('profile_repos') if isinstance(cfg, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v.strip() for k, v in raw.items()
+            if isinstance(k, str) and _PROFILE_KEY.fullmatch(k) and isinstance(v, str) and _REPO_OK.fullmatch(v.strip())}
 
 # Служебное, что НЕ копируется в итерации/публикацию из папки задачи
 SKIP = {'iterations', 'iterations.json', 'publish', 'node_modules', '.git',
@@ -1586,11 +1603,11 @@ NO_INTEGRATIONS_SPACE_MSG = ('простір ЛІГА береться з design
 
 def _liga_flow(payload):
     """Тіло `task-new` несе ознаки потоку ЛІГА (Jira → профіль напрямку → GitLab-бутстрап):
-    `jira` — непорожній (не лише пробіли) рядок, `profile` — один із `PROFILE_REPOS`, `gitlab`
+    `jira` — непорожній (не лише пробіли) рядок, `profile` — один із `profile_repos()`, `gitlab`
     непорожній. Не-рядок у `jira`/`profile` ознакою не є (так само як порожнє й `null`)."""
     jira, profile = payload.get('jira'), payload.get('profile')
     return bool((isinstance(jira, str) and jira.strip())
-                or (isinstance(profile, str) and profile in PROFILE_REPOS)
+                or (isinstance(profile, str) and profile in profile_repos())
                 or payload.get('gitlab'))
 
 
@@ -2101,9 +2118,10 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src
     ⛔ `adopt_src`/`adopt_files` — лише з параметрів: гілка отримання нижче має власні локальні (`tmp`, `got`, `target`, `r`) і
     цих імен не торкається."""
     it1 = os.path.join(tdir, 'iterations', 'it1')   # первая итерация = стартовый макет
-    # gitlab-маппинг по умолчанию — репо направления (см. PROFILE_REPOS)
-    if gitlab is None and profile in PROFILE_REPOS:
-        gitlab = {'repo': PROFILE_REPOS[profile], 'path': f'mockup/{tid}'}
+    # gitlab-маппинг по умолчанию — репо направления (см. `profile_repos()`); профіль поза таблицею — без типового репо
+    repos = profile_repos()
+    if gitlab is None and profile in repos:
+        gitlab = {'repo': repos[profile], 'path': f'mockup/{tid}'}
     cloned = False
     cloned_state = {}
     legacy = True        # чий текст даних у примітці форку: типово ЛІГА (`v[2]`), поки постачальника не знайдено

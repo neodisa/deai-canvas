@@ -6,7 +6,9 @@
   * `tags` — ОСТАННІЙ ключ у рядках `/api/tasks`, `/api/task`, `/api/tasks-overview` («Мої»);
   * `POST /api/task-new` приймає `tags` (400 `bad-tags`), `POST /api/task-tags` замінює їх у ТОМУ просторі, де лежить
     задача, і не чіпає ні поточну задачу, ні поточний простір машини; після запису — `_registry_push`;
-  * `bin/registry.py`: `tags` у `SHARED`.
+  * `bin/registry.py`: `tags` у `SHARED`;
+  * `profile_repos()` — таблиця «профіль → репозиторій» з кореня старого `tasks.json` УСТАНОВКИ (Task 3), а не з коду;
+    `_task_new_write` і `_liga_flow` дають за нею те саме, що давала константа `PROFILE_REPOS` (знімок `before-4b3.json`).
 
 Сервер і простори — фікстура `test_spaces_serve.Fixture`: старий простір з інтеграціями (`legacy_id`, задача `a`,
 профіль `tool`), `P` без інтеграцій (`p_id`, задачі `x`, `gone`), порожній `E`. ⛔ Ізоляція та сама: тимчасові `HOME`,
@@ -17,6 +19,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -355,6 +358,97 @@ class TagsApi(Fixture):
         # а коли всі файли читаються — невідома задача лишається 404 (не 503)
         _write(self.p_file, self.p_before.decode('utf-8'))
         self.assertEqual(self.post('/api/task-tags', {'id': 'nope', 'tags': []})[0], 404)
+
+
+
+class ProfileReposTest(unittest.TestCase):
+    """`serve.profile_repos()` (Task 3, спека §4): таблиця «профіль → репо» з кореня старого `tasks.json` установки.
+
+    ⛔ Ізоляція: `spaces.legacy_tasks_file` підмінено на тимчасовий файл — справжній `tasks.json` не читається й не
+    пишеться; `_task_new_write` працює лише над словником `cfg` і тимчасовою текою, `vcs_provider` — без мережі."""
+
+    REPO = 'git@git.example:org/a.git'
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.legacy = os.path.join(self.tmp.name, 'tasks.json')
+        patcher = mock.patch.object(spaces, 'legacy_tasks_file', return_value=self.legacy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, obj=None, raw=None):
+        with open(self.legacy, 'w', encoding='utf-8') as f:
+            f.write(raw if raw is not None else json.dumps(obj))
+
+    def test_keeps_only_well_formed_pairs(self):
+        self.write({'profile_repos': {'alpha': self.REPO, 'Bad Key': 'x', 'beta': '', 'gamma': 'has space', 'delta': 5}})
+        self.assertEqual(serve.profile_repos(), {'alpha': self.REPO})
+
+    def test_profile_key_form(self):
+        ok, bad = 'a-1', ('A', 'a_b', 'a b', '', 'x' * 33, 'а')
+        self.write({'profile_repos': {ok: self.REPO, **{b: self.REPO for b in bad}}})
+        self.assertEqual(serve.profile_repos(), {ok: self.REPO})
+        self.write({'profile_repos': {'x' * 32: self.REPO}})
+        self.assertEqual(serve.profile_repos(), {'x' * 32: self.REPO})
+
+    def test_repo_is_printable_ascii_without_spaces_and_is_trimmed(self):
+        self.write({'profile_repos': {'a': '  ' + self.REPO + ' ', 'b': 'x\ny', 'c': 'x\x7fy', 'd': 'репо', 'e': '  '}})
+        self.assertEqual(serve.profile_repos(), {'a': self.REPO})
+
+    def test_empty_when_there_is_no_usable_config(self):
+        for label, kw in (('нема ключа', {'obj': {'tasks': {}}}), ('не словник', {'obj': {'profile_repos': ['a']}}),
+                          ('рядок', {'obj': {'profile_repos': 'a'}}), ('null', {'obj': {'profile_repos': None}}),
+                          ('корінь — не обʼєкт', {'obj': ['x']}), ('не JSON', {'raw': '{oops'}),
+                          ('глибока вкладеність', {'raw': '[' * 100000})):
+            with self.subTest(label):
+                self.write(**kw)
+                self.assertEqual(serve.profile_repos(), {})
+        os.remove(self.legacy)
+        self.assertEqual(serve.profile_repos(), {}, 'файла нема')
+
+    def test_the_constant_is_gone(self):
+        self.assertIs(hasattr(serve, 'PROFILE_REPOS'), False)
+
+    # ---------- диференційний: те саме, що давала константа ----------
+
+    def snapshot(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'task-tags', 'before-4b3.json'),
+                  encoding='utf-8') as f:
+            return json.load(f)['gitlab']
+
+    def new_gitlab(self, profile):
+        """`gitlab` запису, який `_task_new_write` кладе в задачу `t-demo` з цим профілем (мережі й GitLab-модуля нема)."""
+        cfg = {}
+        with mock.patch.object(serve, 'vcs_provider', return_value=None), \
+                mock.patch.object(spaces, 'require_integrations', lambda: None):
+            serve._task_new_write(cfg, 't-demo', 'T', '', profile, None, None,
+                                  os.path.join(self.tmp.name, 'task-' + profile), None, None)
+        return cfg['tasks']['t-demo'].get('gitlab')
+
+    def test_config_reproduces_the_snapshot_of_the_old_constant(self):
+        snap = self.snapshot()
+        self.assertGreaterEqual(len(snap), 4, 'знімок має профілі з репо й без')
+        table = {p: v['gitlab']['repo'] for p, v in snap.items() if v['gitlab']}
+        self.assertEqual(sorted(table), ['liga360', 'seo', 'united'])
+        self.write({'profile_repos': table})
+        for profile, want in snap.items():
+            with self.subTest(profile=profile):
+                self.assertEqual(self.new_gitlab(profile), want['gitlab'])
+                self.assertIs(serve._liga_flow({'profile': profile}), want['liga_flow'])
+
+    def test_without_profile_repos_a_liga_task_has_no_default_repo(self):
+        self.write({'tasks': {}})
+        self.assertIsNone(self.new_gitlab('united'))
+        self.assertIs(serve._liga_flow({'profile': 'united'}), False)
+        self.assertIs(serve._liga_flow({'jira': 'X-1'}), True, 'інші ознаки потоку ЛІГА — як були')
+        self.assertIs(serve._liga_flow({'gitlab': {'repo': self.REPO}}), True)
+
+    def test_liga_flow_does_not_trust_a_hand_made_profile_that_the_config_dropped(self):
+        """Зіпсований запис таблиці (пробіл у репо) не робить профіль ознакою потоку."""
+        self.write({'profile_repos': {'alpha': 'has space'}})
+        self.assertIs(serve._liga_flow({'profile': 'alpha'}), False)
+        self.assertIsNone(self.new_gitlab('alpha'))
 
 
 if __name__ == '__main__':
