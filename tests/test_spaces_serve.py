@@ -2189,6 +2189,17 @@ class TaskNew(Fixture):
                 self.assertEqual((st, body['space']), (200, self.p_id), body)
                 self.assertIsNone(_read(self.p_file)['tasks'][tid]['profile'])
 
+    def test_a_profile_without_profile_repos_in_the_config_is_not_a_liga_sign(self):
+        """4b-3: у конфігу установки нема `profile_repos` (так у фікстурі) — `profile: united` не ознака потоку ЛІГА: без
+        409 `no-integrations-space`, задача лягає в ПОТОЧНИЙ простір, як звичайна, без типового `gitlab`."""
+        self.no_liga()
+        self.assertNotIn('profile_repos', _read(self.legacy_file))
+        self.made(os.path.join(self.p_path, 'n25'))
+        st, body = self.post('/api/task-new', {'id': 'n25', 'profile': 'united'})
+        self.assertEqual((st, body['ok'], body['space']), (200, True, self.p_id), body)
+        entry = _read(self.p_file)['tasks']['n25']
+        self.assertNotIn('gitlab', entry)
+
     def test_liga_signs_with_a_liga_space_or_an_explicit_space_are_not_refused(self):
         """409 лише коли простору ЛІГА нема. Є він — задача йде в нього; явний `space` — у названий
         (для `gitlab` у просторі без інтеграцій лишається своя відмова 400)."""

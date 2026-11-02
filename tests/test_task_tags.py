@@ -396,6 +396,11 @@ class ProfileReposTest(unittest.TestCase):
         self.write({'profile_repos': {'a': '  ' + self.REPO + ' ', 'b': 'x\ny', 'c': 'x\x7fy', 'd': 'репо', 'e': '  '}})
         self.assertEqual(serve.profile_repos(), {'a': self.REPO})
 
+    def test_repo_cannot_start_with_a_dash(self):
+        """`-…` git прочитав би як опцію (`--upload-pack=…`): такі репо відкидаються, дефіс усередині — ні."""
+        self.write({'profile_repos': {'a': '--upload-pack=x', 'b': '-x', 'c': ' -x', 'd': 'git@git.example:org/a-b.git'}})
+        self.assertEqual(serve.profile_repos(), {'d': 'git@git.example:org/a-b.git'})
+
     def test_empty_when_there_is_no_usable_config(self):
         for label, kw in (('нема ключа', {'obj': {'tasks': {}}}), ('не словник', {'obj': {'profile_repos': ['a']}}),
                           ('рядок', {'obj': {'profile_repos': 'a'}}), ('null', {'obj': {'profile_repos': None}}),
