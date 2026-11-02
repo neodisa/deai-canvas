@@ -1,6 +1,7 @@
 {
  "meta": {
   "generator": "tests/make_before_4c1.py",
+  "source_commit": "6e0a0a5",
   "version": "0.11.0",
   "volatile_stripped": [
    "fetchedAt",
@@ -11,10 +12,65 @@
    "jira_synced_at"
   ]
  },
+ "supabase_choice": {
+  "env_both_keys_key_wins": {
+   "key": "env-key",
+   "url": "env-url"
+  },
+  "env_url_and_key": {
+   "key": "env-key",
+   "url": "env-url"
+  },
+  "env_url_and_service_key": {
+   "key": "env-service-key",
+   "url": "env-url"
+  },
+  "env_url_only_falls_back_to_config": {
+   "key": "config-key",
+   "url": "config-url"
+  },
+  "neither": {
+   "error": "Supabase не налаштовано: supabase_url і supabase_key у tasks.json або SUPABASE_URL/SUPABASE_KEY"
+  },
+  "no_env_uses_config": {
+   "key": "config-key",
+   "url": "config-url"
+  }
+ },
  "sync_gate": {
   "dc_no_overview": {
    "log_created": false,
    "popen_started": false
+  },
+  "dc_tasks_file_with_integrations_on": {
+   "argv": [
+    "python3",
+    "bin/overview_push.py",
+    "sync"
+   ],
+   "env_key_is_config_key": true,
+   "env_other_key_names": [
+    "DC_TASKS_FILE",
+    "DEAI_HOME",
+    "HOME",
+    "PATH"
+   ],
+   "env_supabase_key_names": [
+    "SUPABASE_KEY",
+    "SUPABASE_URL"
+   ],
+   "env_url": "https://demo.supabase.example",
+   "kwargs": [
+    "env",
+    "stderr",
+    "stdout"
+   ],
+   "log_created": true,
+   "log_mode": "a",
+   "log_relpath": ".claude/pipeline-feedback/overview-sync.log",
+   "popen_started": true,
+   "stderr_is_stdout": true,
+   "stdout_is_log": true
   },
   "integrations_off": {
    "log_created": false,
@@ -27,6 +83,15 @@
     "sync"
    ],
    "env_key_is_config_key": true,
+   "env_other_key_names": [
+    "DEAI_HOME",
+    "HOME",
+    "PATH"
+   ],
+   "env_supabase_key_names": [
+    "SUPABASE_KEY",
+    "SUPABASE_URL"
+   ],
    "env_url": "https://demo.supabase.example",
    "kwargs": [
     "env",
@@ -34,6 +99,8 @@
     "stdout"
    ],
    "log_created": true,
+   "log_mode": "a",
+   "log_relpath": ".claude/pipeline-feedback/overview-sync.log",
    "popen_started": true,
    "stderr_is_stdout": true,
    "stdout_is_log": true
@@ -41,7 +108,13 @@
   "no_config": {
    "log_created": false,
    "popen_started": false
-  }
+  },
+  "notes": [
+   "4c-1 змінить навмисно: argv дитини дістане `--space <id>` (синк веде простір, а не «поточний машини»);",
+   "4c-1 змінить навмисно: перший елемент argv — `sys.executable`, а не літерал `python3`;",
+   "решта (оточення дитини = os.environ + пара SUPABASE_*, лог у ~/.claude/pipeline-feedback/overview-sync.log, режим `a`,",
+   "stderr→stdout, гейти integrations/DC_NO_OVERVIEW/конфіг) лишається як у цьому знімку."
+  ]
  },
  "sync_push": {
   "input": {
@@ -277,6 +350,89 @@
   ]
  },
  "team_read": {
+  "array_with_junk": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": null,
+     "rows": [
+      {
+       "comments": 0,
+       "designer": "Bob",
+       "id": "x9",
+       "iterations": 3,
+       "jira": "LIGA-9",
+       "jiraCat": "done",
+       "jiraStatus": "Done",
+       "mine": false,
+       "pages": null,
+       "preview": null,
+       "thumb": "https://demo.supabase.example/storage/x9.jpg",
+       "title": "Другий дизайнер",
+       "updated": "2026-10-30T09:00:00Z"
+      }
+     ]
+    }
+   },
+   "status": 200,
+   "urlopen_calls": 1,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "float"
+   }
+  },
   "fake_three_rows": {
    "body": {
     "current": "t1",
@@ -488,6 +644,140 @@
     "rowsAt": null
    }
   },
+  "isolation_dc_no_overview": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)",
+     "rows": []
+    }
+   },
+   "status": 200,
+   "urlopen_calls": 0,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "NoneType"
+   }
+  },
+  "isolation_dc_tasks_file": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)",
+     "rows": []
+    }
+   },
+   "status": 200,
+   "urlopen_calls": 0,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "NoneType"
+   }
+  },
   "no_config": {
    "body": {
     "current": "t1",
@@ -550,6 +840,73 @@
    },
    "status": 200,
    "urlopen_calls": 0,
+   "volatile": {
+    "fetchedAt": "float",
+    "rowsAt": "NoneType"
+   }
+  },
+  "non_array_response": {
+   "body": {
+    "current": "t1",
+    "mine": [
+     {
+      "comments": null,
+      "id": "t1",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-1",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo one"
+     },
+     {
+      "comments": null,
+      "id": "t2",
+      "iter": "it1",
+      "iterations": 1,
+      "jira": "LIGA-2",
+      "jiraCat": null,
+      "jiraStatus": null,
+      "missing": false,
+      "opened": "2026-11-01T10:00:00Z",
+      "pages": 0,
+      "profile": "tool",
+      "published": null,
+      "tags": [
+       "tool"
+      ],
+      "thumb": null,
+      "title": "Demo two"
+     }
+    ],
+    "space": {
+     "capabilities": {
+      "comments": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "vcs": "legacy"
+     },
+     "color": "space-1",
+     "integrations": true,
+     "legacy": false,
+     "name": "Liga"
+    },
+    "team": {
+     "error": "очікувався масив рядків overview_projects",
+     "rows": []
+    }
+   },
+   "status": 200,
+   "urlopen_calls": 1,
    "volatile": {
     "fetchedAt": "float",
     "rowsAt": "NoneType"
@@ -760,6 +1117,83 @@
     "fetchedAt": "float",
     "rowsAt": "float"
    }
+  },
+  "team_snapshot_spaces_error": {
+   "cache_untouched": true,
+   "error": "реєстр просторів не читається (spaces-unreadable)",
+   "rows": [],
+   "rows_at": null,
+   "urlopen_calls": 0
+  }
+ },
+ "upsert_http": {
+  "ignore_duplicates": {
+   "calls": [
+    {
+     "body": [
+      {
+       "id": "t1",
+       "iterations": 2,
+       "name": "Demo one",
+       "source": "canvas",
+       "status": "pub"
+      }
+     ],
+     "headers": {
+      "apikey": "<key>",
+      "authorization": "Bearer <key>",
+      "content-type": "application/json",
+      "prefer": "resolution=ignore-duplicates,return=minimal"
+     },
+     "method": "POST",
+     "ssl_context": true,
+     "timeout": 10,
+     "url": "https://demo.supabase.example/rest/v1/overview_projects?on_conflict=id"
+    }
+   ],
+   "ignore": true,
+   "input_row": {
+    "id": "t1",
+    "iterations": 2,
+    "name": "Demo one",
+    "source": "canvas",
+    "status": "pub"
+   },
+   "returned_status": 201
+  },
+  "merge_duplicates": {
+   "calls": [
+    {
+     "body": [
+      {
+       "id": "t1",
+       "iterations": 2,
+       "name": "Demo one",
+       "source": "canvas",
+       "status": "pub"
+      }
+     ],
+     "headers": {
+      "apikey": "<key>",
+      "authorization": "Bearer <key>",
+      "content-type": "application/json",
+      "prefer": "resolution=merge-duplicates,return=minimal"
+     },
+     "method": "POST",
+     "ssl_context": true,
+     "timeout": 10,
+     "url": "https://demo.supabase.example/rest/v1/overview_projects?on_conflict=id"
+    }
+   ],
+   "ignore": false,
+   "input_row": {
+    "id": "t1",
+    "iterations": 2,
+    "name": "Demo one",
+    "source": "canvas",
+    "status": "pub"
+   },
+   "returned_status": 201
   }
  }
 }

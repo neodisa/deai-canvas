@@ -12,12 +12,20 @@
     `<key>`, тайм-аут); помилка мережі; конфігу нема; простір без інтеграцій (`team: null`, жодного виклику `urlopen`);
   * `sync_push` — шлях ЗАПИСУ: `bin/overview_push.py cmd_sync()` на фікстурі `tasks.json` (реєстр, лічильники коментарів,
     статуси Jira, `upsert_project` — заглушки): список `(рядок, ignore)` у порядку викликів + вивід;
+  * `upsert_http` / `supabase_choice` — справжня HTTP-форма `upsert_project` (URL, `Prefer`, тайм-аут, тіло) і вибір пари `_supabase()`;
   * `sync_gate` — гейт запуску синку `Handler._overview_sync`: чи стартував `Popen`, з яким `argv` і оточенням.
 
 Виключено з JSON усе мінливе: `fetchedAt`, `rowsAt`, `changed`, `synced_at`, `updated_at`, `jira_synced_at`, абсолютні
 шляхи (тека → `<tmp>`), значення ключа Supabase (→ `<key>`). Прогін двічі дає той самий байт-у-байт JSON.
 
 Запуск (з кореня репо):  python3 tests/make_before_4c1.py [--out ШЛЯХ]   (типово — `tests/fixtures/dashboard/before-4c1.json`)
+
+⚠️ ГЕНЕРАТОР РОБИТЬ ЗНІМОК v0.11.0 (коміт 6e0a0a5) і мусить запускатись проти ЗАМОРОЖЕНОЇ копії старого коду, а не проти
+робочої теки (з 4c-1 `app/`/`bin/` змінюються — і знімок перестав би бути «до»). Як:
+    git archive 6e0a0a5 | tar -x -C <тека>             # заморожена копія коду v0.11.0
+    cp tests/make_before_4c1.py <тека>/tests/          # лише сам генератор (він бере ROOT від свого розташування)
+    python3 -B <тека>/tests/make_before_4c1.py --out tests/fixtures/dashboard/before-4c1.json
+Прогін на новому коді — лише як документація (див. вище): еталон перезаписувати не можна.
 
 ⛔ Ізоляція: власні тимчасові `HOME`/`DEAI_HOME` (лог синку `~/.claude/pipeline-feedback/overview-sync.log` — у тимчасовому
 `HOME`), `DC_TASKS_FILE`/`SUPABASE_*` у чистому оточенні, справжній `~/.deai` стереже `spaces_guard`. Реєстр GitLab, Jira й
@@ -156,19 +164,29 @@ class Recorder:
     """Підміна `urllib.request.urlopen`: пише кожен виклик (URL, заголовки з ключем → `<key>`, тайм-аут) і віддає
     `body` (чи кидає `exc`). Без мережі за будь-яких умов."""
 
-    def __init__(self, body=b'[]', exc=None):
-        self.calls, self.body, self.exc = [], body, exc
+    def __init__(self, body=b'[]', exc=None, keys=(KEY,), with_body=False):
+        self.calls, self.body, self.exc, self.keys, self.with_body = [], body, exc, keys, with_body
 
     def __call__(self, req, timeout=None, context=None, **kw):
-        headers = {k.lower(): str(v).replace(KEY, '<key>') for k, v in req.header_items()}
-        self.calls.append({'url': req.full_url, 'method': req.get_method(), 'headers': headers,
-                           'timeout': timeout, 'ssl_context': context is not None})
+        headers = {}
+        for k, v in req.header_items():
+            v = str(v)
+            for key in self.keys:
+                v = v.replace(key, '<key>')
+            headers[k.lower()] = v
+        call = {'url': req.full_url, 'method': req.get_method(), 'headers': headers,
+                'timeout': timeout, 'ssl_context': context is not None}
+        if self.with_body:
+            call['body'] = json.loads(req.data.decode('utf-8')) if req.data else None
+        self.calls.append(call)
         if self.exc:
             raise self.exc
         return _Resp(self.body)
 
 
 class _Resp:
+    status = 201            # `upsert_project` повертає `r.status`
+
     def __init__(self, body):
         self._body = body
 
@@ -233,6 +251,33 @@ def team_read(ids, tmp):
         case['urlopen_calls'] = len(rec.calls)
         out['no_config'] = case
 
+        # (2d) закон ізоляції: `DC_TASKS_FILE`/`DC_NO_OVERVIEW` БЕЗ шва `DC_TEAM_FAKE` — мережі нема, чесне пояснення, і
+        # навіть валідний конфіг не рятує (`urlopen` — записувач: 0 викликів)
+        for name, var in (('isolation_dc_tasks_file', 'DC_TASKS_FILE'), ('isolation_dc_no_overview', 'DC_NO_OVERVIEW')):
+            rec = Recorder()
+            with mock.patch.dict(os.environ, {var: os.path.join(tmp, 'x-tasks.json') if var == 'DC_TASKS_FILE' else '1'}), \
+                    mock.patch.object(serve, 'supabase_config', return_value=(URL, KEY)), \
+                    mock.patch.object(serve.urllib.request, 'urlopen', rec):
+                case = overview(srv, tmp)
+            case['urlopen_calls'] = len(rec.calls)
+            out[name] = case
+
+        # (2e) відповідь бази — не масив: `ValueError` → текст у `team.error`, рядків нема (кеш порожній)
+        rec = Recorder(b'{"message": "not an array"}')
+        with mock.patch.object(serve, 'supabase_config', return_value=(URL, KEY)), \
+                mock.patch.object(serve.urllib.request, 'urlopen', rec):
+            case = overview(srv, tmp)
+        case['urlopen_calls'] = len(rec.calls)
+        out['non_array_response'] = case
+
+        # (2f) масив із сміттям: лишаються лише обʼєкти
+        rec = Recorder(json.dumps([rows3[1], 5, 'x', None, ['y']]).encode('utf-8'))
+        with mock.patch.object(serve, 'supabase_config', return_value=(URL, KEY)), \
+                mock.patch.object(serve.urllib.request, 'urlopen', rec):
+            case = overview(srv, tmp)
+        case['urlopen_calls'] = len(rec.calls)
+        out['array_with_junk'] = case
+
         # (3) простір без інтеграцій: `team: null`, жодного виклику `urlopen` (навіть коли шов і конфіг є)
         spaces.switch_space(ids['plain'])
         rec = Recorder()
@@ -243,6 +288,18 @@ def team_read(ids, tmp):
         case['urlopen_calls'] = len(rec.calls)
         out['integrations_off'] = case
         spaces.switch_space(ids['liga'])
+
+    # (4) реєстр просторів не читається (`SpacesError` з `integrations_on`): `team_snapshot` повертає `([], пояснення, None)`
+    # без запиту й без кешу. Викликаємо НАПРЯМУ: маршрут перед `team_snapshot` сам питає простір і при збої реєстру не дійшов би сюди.
+    reset_team_cache()
+    rec = Recorder()
+    boom = spaces.SpacesError('spaces-unreadable', '<registry>', 'тест')
+    with mock.patch.object(spaces, 'integrations_on', side_effect=boom), \
+            mock.patch.object(serve, 'supabase_config', return_value=(URL, KEY)), \
+            mock.patch.object(serve.urllib.request, 'urlopen', rec):
+        rows, error, rows_at = serve.team_snapshot(refresh=True)
+    out['team_snapshot_spaces_error'] = {'rows': rows, 'error': error, 'rows_at': rows_at, 'urlopen_calls': len(rec.calls),
+                                         'cache_untouched': serve._TEAM_CACHE['rows'] is None}
     reset_team_cache()
     return out
 
@@ -333,6 +390,53 @@ def sync_push(tmp):
     }
 
 
+# ---------------------------------------------------------------------------------- HTTP-форма запису й вибір конфігу
+
+def upsert_http():
+    """Справжній `overview_push.upsert_project` (не заглушка) з записувачем замість `urlopen`: URL, метод, заголовки, тайм-аут, тіло
+    — для `ignore=False` (merge-duplicates) і `ignore=True` (ignore-duplicates). Ключ у заголовках → `<key>`."""
+    import overview_push as ov
+    out = {}
+    row = {'id': 't1', 'name': 'Demo one', 'status': 'pub', 'iterations': 2, 'source': 'canvas'}
+    for name, ignore in (('merge_duplicates', False), ('ignore_duplicates', True)):
+        rec = Recorder(with_body=True)
+        env = {'SUPABASE_URL': URL, 'SUPABASE_KEY': KEY}
+        with mock.patch.dict(os.environ, env), mock.patch.object(ov.urllib.request, 'urlopen', rec):
+            status = ov.upsert_project(row, ignore=ignore)
+        out[name] = {'ignore': ignore, 'returned_status': status, 'calls': rec.calls, 'input_row': row}
+    return out
+
+
+def supabase_choice():
+    """`overview_push._supabase()`: з якого джерела береться пара. Значення замінено мітками джерел (жодних значень у знімку):
+    env `SUPABASE_URL`+`SUPABASE_KEY` → env; `SUPABASE_URL`+`SUPABASE_SERVICE_KEY` → сервісний ключ; обидва ключі → `SUPABASE_KEY`;
+    без env → `serve.supabase_config()`; нічого → `RuntimeError` зі сталим текстом."""
+    import overview_push as ov
+    import serve
+    urls = {'env': 'https://env.supabase.example', 'config': 'https://config.supabase.example'}
+    keys = {'env-key': 'sk-test-env', 'env-service-key': 'sk-test-service', 'config-key': 'sk-test-config'}
+    label = {v: k for k, v in keys.items()}
+    label.update({v: k + '-url' for k, v in urls.items()})
+
+    def run(env, config):
+        with mock.patch.dict(os.environ, env), mock.patch.object(serve, 'supabase_config', return_value=config):
+            try:
+                url, key = ov._supabase()
+            except RuntimeError as e:
+                return {'error': str(e)}
+        return {'url': label.get(url, '?'), 'key': label.get(key, '?')}
+    cfg = (urls['config'], keys['config-key'])
+    return {
+        'env_url_and_key': run({'SUPABASE_URL': urls['env'], 'SUPABASE_KEY': keys['env-key']}, cfg),
+        'env_url_and_service_key': run({'SUPABASE_URL': urls['env'], 'SUPABASE_SERVICE_KEY': keys['env-service-key']}, cfg),
+        'env_both_keys_key_wins': run({'SUPABASE_URL': urls['env'], 'SUPABASE_KEY': keys['env-key'],
+                                       'SUPABASE_SERVICE_KEY': keys['env-service-key']}, cfg),
+        'env_url_only_falls_back_to_config': run({'SUPABASE_URL': urls['env']}, cfg),
+        'no_env_uses_config': run({}, cfg),
+        'neither': run({}, (None, None)),
+    }
+
+
 # ---------------------------------------------------------------------------------- гейт запуску синку
 
 def sync_gate(ids, tmp):
@@ -345,7 +449,10 @@ def sync_gate(ids, tmp):
     def run(space, env=None, config=(URL, KEY)):
         if os.path.exists(log):
             os.remove(log)
-        with mock.patch.dict(os.environ, env or {}), \
+        # Оточення дитини = `os.environ` + пара `SUPABASE_*`. Щоб імена ключів не залежали від машини, на час прогону оточення
+        # КОНТРОЛЬОВАНЕ (`clear=True`): лише `HOME`, `DEAI_HOME`, `PATH` + змінні випадку.
+        base = {'HOME': home, 'DEAI_HOME': os.environ['DEAI_HOME'], 'PATH': '/usr/bin'}
+        with mock.patch.dict(os.environ, {**base, **(env or {})}, clear=True), \
                 mock.patch.object(serve, 'supabase_config', return_value=config), \
                 mock.patch.object(serve.subprocess, 'Popen') as popen, \
                 spaces.request_space(space):
@@ -354,7 +461,12 @@ def sync_gate(ids, tmp):
         if popen.called:
             args, kw = popen.call_args
             argv = [os.path.relpath(a, ROOT) if os.path.isabs(a) else a for a in args[0]]
+            child = kw['env']
             res.update(argv=argv, env_url=kw['env'].get('SUPABASE_URL'),
+                       # лише ІМЕНА ключів (без значень); `SUPABASE_*` — окремо (пара), решта успадкована з `os.environ`
+                       env_other_key_names=sorted(k for k in child if not k.startswith('SUPABASE_')),
+                       env_supabase_key_names=sorted(k for k in child if k.startswith('SUPABASE_')),
+                       log_relpath=os.path.relpath(kw['stdout'].name, home), log_mode=kw['stdout'].mode,
                        env_key_is_config_key=kw['env'].get('SUPABASE_KEY') == config[1],
                        stdout_is_log=kw['stdout'].name == log,
                        stderr_is_stdout=kw['stderr'] == serve.subprocess.STDOUT,
@@ -365,6 +477,14 @@ def sync_gate(ids, tmp):
         'integrations_off': run(ids['plain']),
         'dc_no_overview': run(ids['liga'], env={'DC_NO_OVERVIEW': '1'}),
         'no_config': run(ids['liga'], config=(None, None)),
+        # `DC_TASKS_FILE` гейт НЕ глушить (глушить лише `DC_NO_OVERVIEW`): запис — інший закон, ніж читання `_team_fetch`
+        'dc_tasks_file_with_integrations_on': run(ids['liga'], env={'DC_TASKS_FILE': os.path.join(tmp, 'x-tasks.json')}),
+        'notes': [
+            '4c-1 змінить навмисно: argv дитини дістане `--space <id>` (синк веде простір, а не «поточний машини»);',
+            '4c-1 змінить навмисно: перший елемент argv — `sys.executable`, а не літерал `python3`;',
+            'решта (оточення дитини = os.environ + пара SUPABASE_*, лог у ~/.claude/pipeline-feedback/overview-sync.log, режим `a`,',
+            'stderr→stdout, гейти integrations/DC_NO_OVERVIEW/конфіг) лишається як у цьому знімку.',
+        ],
     }
 
 
@@ -387,10 +507,12 @@ def build():
             with mock.patch.object(spaces, 'legacy_tasks_file', return_value=os.path.join(tmp, 'legacy', 'tasks.json')):
                 ids = setup_spaces(tmp)
                 snap = {
-                    'meta': {'version': '0.11.0', 'generator': 'tests/make_before_4c1.py',
+                    'meta': {'version': '0.11.0', 'source_commit': '6e0a0a5', 'generator': 'tests/make_before_4c1.py',
                              'volatile_stripped': list(VOLATILE)},
                     'team_read': team_read(ids, tmp),
                     'sync_push': sync_push(tmp),
+                    'upsert_http': upsert_http(),
+                    'supabase_choice': supabase_choice(),
                     'sync_gate': sync_gate(ids, tmp),
                 }
     spaces_guard.assert_untouched(real)
