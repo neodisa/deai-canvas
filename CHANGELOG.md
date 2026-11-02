@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.12.0] — невипущено
+## [0.12.0] — 02.11.2026
 
 Stage 4c-1: the team dashboard becomes a role. The «Team» tab of the «Tasks» screen and the writing of the task cards no longer
 depend on the flag `integrations`: they belong to whoever provides the role **`dashboard`** in the space. The built-in module
