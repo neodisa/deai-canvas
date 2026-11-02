@@ -6,10 +6,11 @@ folder, tokens from CSS, 0.2.0), stage 2b-1 (publishing to your own Vercel, 0.3.
 stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3a (the
 Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a space's own
 modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0) and stage
-4b-1 (the in-house publishing through `vercel-publish`, 0.9.0) and stage 4b-2 (the in-house comments through
-`supabase-comments`, 0.10.0) — see *Status* at the end.
-Next: stages 4b-3 to 4d — the rest of the in-house integrations of the legacy space (profiles, then the team dashboard,
-tracker statuses and notifications) as optional per-space modules, and the end of the `integrations` flag.
+4b-1 (the in-house publishing through `vercel-publish`, 0.9.0), stage 4b-2 (the in-house comments through
+`supabase-comments`, 0.10.0) and stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0) — see *Status* at
+the end.
+Next: stages 4c to 4d — the rest of the in-house integrations of the legacy space (the team dashboard, tracker statuses and
+notifications) as optional per-space modules, and the end of the `integrations` flag.
 
 ## Goal
 
@@ -98,7 +99,7 @@ canvas for their workflow without touching the core.
        publishes through it;
      - ✅ **4b-2** (0.10.0) — comments: the legacy space keeps its comments through `supabase-comments`; the Supabase
        constants leave the code;
-     - **4b-3** — the profiles;
+     - ✅ **4b-3** (0.11.0) — the profiles: general task tags; the profile table moves to `tasks.json`;
    - **4c** — the roles `dashboard`, `tracker` and `notify` in the core, and the team dashboard, tracker statuses and
      team chat notifications as modules of that company;
    - **4d** — the `integrations` flag goes.
@@ -327,9 +328,35 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
   (`fp` text up to 2000, the last 50 of `path`), `--dry-run` and `state` lines. Previews published earlier are not touched.
 - **Tested** against the snapshot of 0.9.0 (`tests/fixtures/legacy-comments/before-4b2.json`) and the old adapter kept as a
   fixture; no network and no real Supabase (the module's `_open` seam, intercepted requests in the browser tests).
-- **Left for 4b-3 / 4c / 4d:** 4b-3 — the profiles; 4c — the dashboard, tracker statuses and Teams silence as roles and
+- **Left for 4c / 4d:** (4b-3 — the profiles — is done, see below); 4c — the dashboard, tracker statuses and Teams silence as roles and
   modules (today they only read the pair from `supabase_config()`); 4d — the `integrations` flag and the literal `'legacy'` in `capabilities` go. Known limits: PostgREST
   `max-rows` can still cut `list`; `html2canvas` loads from jsdelivr; the key is in `tasks.json` in plain text.
+
+### Stage 4b-3 — task tags instead of profiles (0.11.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-02-task-tags-design.md`; plan:
+`docs/superpowers/plans/2026-11-02-task-tags.md`. What is built:
+
+- **The field `tags`** of a task, in any space: `normalize_tags` (trim, collapse spaces, 1–32 characters, no comma or control
+  characters, case-insensitive dedupe, at most 10; anything else is `400 bad-tags`). `tags` is the last key of the rows of
+  `/api/tasks`, of the «mine» rows of `/api/tasks-overview` and of `/api/task`; `POST /api/task-new` takes an optional `tags`;
+  the new `POST /api/task-tags {id, tags}` replaces them (`404 unknown-task`, `409 ambiguous-task`, `400 bad-tags`, `503`).
+  `tags` is in the registry `SHARED`, and an empty list travels too.
+- **Derived tags of LIGA:** `task_tags` gives the saved `tags` when the key exists (even `[]`), otherwise the profile as
+  `United` / `LIGA360` / `SEO` (`_LEGACY_PROFILE_TAGS`, an adapter of the core that goes in 4d). The task files are not rewritten.
+- **The screen:** chips, filter (any of the selected tags), search, the meta line of a card, the button and the dialog «Мітки»,
+  the field in «New task»; `dc-tasks-ui.profiles` of 0.10.0 is migrated to tag keys. The profile stays a field of LIGA for the
+  folders (`design_work_roots`), the repository and the inspector's design system.
+- **`PROFILE_REPOS` left the code:** `profile_repos()` reads the table from the root of the legacy `tasks.json`
+  (`[a-z0-9-]{1,32}` → a printable-ASCII repository without spaces, not starting with `-`; bad pairs dropped). Without it a new
+  LIGA task has no default GitLab repository, and a body with only a `profile` is no longer a sign of the LIGA flow.
+- **Conscious differences:** a task without tags is hidden under a tag filter; the chips are ordered by the number of tasks.
+- **Known limits:** the «Team» tab has no tags (4c); no bulk rename; an old client syncing the registry drops the `tags` of a
+  task it writes (a newer one puts them back on its next write); `task-tags` does not take `WRITE_LOCK` (last write wins);
+  the search does not highlight inside tags; a chip shows the first-seen spelling; the button «Мітки» is one more Tab stop.
+- **Tested** against the snapshot of 0.10.0 (`tests/fixtures/task-tags/before-4b3.json`); no network.
+- **Left for 4c / 4d:** the dashboard, tracker statuses and notifications as modules; the `integrations` flag and the profile
+  adapter go in 4d.
 
 ### What stays for later
 

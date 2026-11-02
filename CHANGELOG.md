@@ -3,6 +3,89 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.11.0] — невипущено
+
+Stage 4b-3: the profile stops being the label of the «Tasks» screen. A task gets general **tags** (any space), the chips, the
+filter and the search of the screen are built from them, and a LIGA task without its own tags shows its profile as a tag, so
+the LIGA screen looks as before. The table «profile → repository» of the LIGA space left the code and is read from the
+installation (see *Upgrading*). Design: `docs/superpowers/specs/2026-11-02-task-tags-design.md`; plan:
+`docs/superpowers/plans/2026-11-02-task-tags.md`. The behaviour of 0.10.0 is pinned by the snapshot
+`tests/fixtures/task-tags/before-4b3.json`.
+
+### Added
+
+- **The task field `tags`** (a list of strings, in any space). Normalising (`normalize_tags`): spaces trimmed and runs of
+  spaces collapsed, 1–32 characters, no control characters and no comma, empty ones dropped, case-insensitive duplicates
+  dropped (the first spelling stays), at most 10. Anything else (not a list, a non-string, too long, a comma, a control
+  character, more than 10) is `400 bad-tags` — no silent trimming.
+- **The API.** `tags` is the **last** key of every row of `/api/tasks`, of the «mine» rows of `/api/tasks-overview` and of
+  `/api/task`; the key `profile` stays. `/api/task-new` takes an optional `tags` (written only when the list is not empty).
+  **New `POST /api/task-tags` `{id, tags}`** replaces the tags of the task `id` (the space is found by the task, as
+  `task-switch` does; the current task and space are not changed) and answers `{ok: true, tags}`; an empty list is valid and
+  is kept as `[]`. Errors: `404 unknown-task`, `409 ambiguous-task` (the id is in two spaces), `400 bad-tags` (checked before
+  the task is looked up), `503 space-unavailable` (the task file cannot be read). After the write the registry is synced, as
+  after the other task changes.
+- **The registry carries `tags`** (`bin/registry.py`, `SHARED`), and an empty list `[]` travels too: without it another
+  machine would keep its old tags (a pull merges a key only when the entry has it) or show the derived one.
+- **The screen.** Chips of the tags (the «Mine» tab), the tag filter, the search over the tags, the button «Мітки» on a card
+  of «Mine» (a dialog with one field, «tags, comma-separated», filled with the current ones; `bad-tags` is shown under the
+  field, any other failure is a toast), and the optional field «Мітки» of «New task» (sent only when not empty). The state of
+  the screen saved by 0.10.0 (`dc-tasks-ui.profiles`) is migrated: the old profile keys become tag keys.
+
+### Changed
+
+- **The chips and the meta line of a card come from the tags** instead of the profile. A chip is keyed by the tag in lower
+  case and labelled with its first-seen spelling; the chips follow the status chips. The first part of the meta line of a
+  «Mine» card is the tags joined with «, ». The «Team» tab is as before.
+- **The derived tags of LIGA.** `task_tags`: the saved `tags` when the key exists (even an empty list: a person removed them
+  all on purpose); otherwise a non-empty `profile` gives the tag `United`, `LIGA360` or `SEO` (an unknown profile is shown as
+  it is); otherwise none. The task files are not rewritten. A derived tag goes through the same rules as a saved one, so a
+  profile with a comma or longer than 32 characters gives no derived tag.
+- **`profile_repos()` replaces the constant `PROFILE_REPOS`.** The table is read from the root of the legacy `tasks.json`
+  (the same file and reader as `supabase_config`): a key is a profile `[a-z0-9-]{1,32}`, a value is a repository — printable
+  ASCII without spaces, not starting with `-` (git would take it for an option); bad pairs are dropped, an unreadable file or
+  a missing key gives `{}`. A new LIGA task takes `{repo: profile_repos()[profile], path: mockup/<id>}` as its default
+  GitLab, and `_liga_flow` recognises the profile by the same table.
+- **Conscious differences from 0.10.0** (everything else is checked against the snapshot):
+  - a task without tags is hidden while a tag filter is on (the profile filter let a task without a profile through);
+  - the chips are ordered by the number of tasks, then alphabetically, not United → LIGA360 → SEO;
+  - a profile outside the three known ones is shown as it is (as before), now also in an ordinary space when it was written
+    by hand;
+  - **without `profile_repos`** a new LIGA task is created with no default GitLab repository, and a body that has only a
+    `profile` is no longer a sign of the LIGA flow.
+
+### Removed
+
+- `PROFILE_REPOS` of `app/serve.py`; `PROFILE_KEYS`, `PROFILE_ORDER` and `profileLabel` of `app/tasks-home.js`; the i18n keys
+  `profUnited`, `profLiga360`, `profSeo`.
+
+### Upgrading
+
+**Before updating**, add the table «profile → repository» to the root of the legacy `tasks.json` (the file of the LIGA
+space), with the repositories you used to get from the code:
+
+```json
+{ "profile_repos": { "united": "git@git.example:org/united-design.git", "liga360": "git@git.example:org/liga360-design.git", "seo": "git@git.example:org/seo-design.git" } }
+```
+
+Without it, after the update new LIGA tasks get no default GitLab repository (the tasks that exist keep theirs). Tags need
+nothing: a LIGA task without `tags` shows its profile as before. `tasks.example.json` does not carry `profile_repos` on
+purpose (a placeholder would pass as a real config).
+
+### Known limits
+
+- The «Team» tab has no tags (its rows come from the dashboard) — until stage 4c.
+- A tag cannot be renamed in all tasks at once, only task by task.
+- An **old client** that syncs the registry does not know `tags`: when it writes a task it drops the tags of that task from
+  the registry entry. A newer client puts them back on its next write of that task, so until every machine is updated the
+  entry may flip back and forth, one commit each time.
+- `POST /api/task-tags` does **not** take `spaces.WRITE_LOCK` (a deviation from the spec): it reads and writes `tasks.json`
+  the same way as the other task routes. Two concurrent edits of the same file: the last write wins.
+- The search does not highlight a match inside the tags.
+- A chip is labelled with the first-seen spelling of the tag, so its case may change when the order of the tasks changes
+  (`Alpha` and `alpha` are one chip).
+- The button «Мітки» sits inside the card (the card itself is a control), so it is one more Tab stop per card.
+
 ## [0.10.0] — 30.10.2026
 
 Stage 4b-2: the comments of the legacy space become a module too. The shared Supabase of the in-house setup is now reached

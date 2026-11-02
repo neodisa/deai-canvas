@@ -33,7 +33,7 @@ links for your team.
 | **Agent status** | Shows what the agent is doing right now and which pages it just changed. |
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Git sync** | Send an iteration to a git repository (GitHub, GitLab, your own server) and pull a colleague's changes back as a new iteration; the state is a dot in the task bar. Any space, through the `git-sync` module. See *Git sync*. |
-| **Tasks** | A home screen with all your tasks: search, sort, filters. |
+| **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
 | **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
@@ -342,6 +342,25 @@ runs only after you trust it. The service has to allow CORS for the opaque origi
 `/published` view; Supabase does). Supabase is tested against an in-process fake REST server,
 not a real project. Screenshots are not part of the role contract: the role has no file storage, so a module may offer an optional `uploadShot` (as `supabase-comments` does with `shots_bucket`), and without it the layer keeps no uploaded screenshot.
 
+## Tasks and tags
+
+Every task can carry **tags** — short labels in any space. Set them in the field «Мітки» of «New task» (comma-separated, optional)
+or later with the button «Мітки» on a card of the «Mine» tab; the chips under the search are built from them (the more tasks
+a tag has, the earlier its chip; several chips mean «any of them»), and the search looks into them too. A tag is 1–32
+characters without a comma, a task has at most 10, and `Alpha` and `alpha` are one tag. Over the API: the key `tags` of the
+task rows, the optional `tags` of `POST /api/task-new` and `POST /api/task-tags` `{id, tags}`. The «Team» tab has no tags yet.
+
+**The LIGA space.** A task there without tags shows its profile (`United`, `LIGA360`, `SEO`) as a tag, so the screen looks as
+before. The profile still decides the folder and the default repository of a task; the table «profile → repository» is read
+from the root of the legacy `tasks.json` (the same file as the Supabase pair):
+
+```json
+{ "profile_repos": { "united": "git@git.example:org/united-design.git", "seo": "git@git.example:org/seo-design.git" } }
+```
+
+A profile is `[a-z0-9-]` up to 32 characters; a repository is printable ASCII without spaces and does not start with `-`.
+Without the table new LIGA tasks get no default repository.
+
 ## Git sync
 
 The `git-sync` module (role `vcs`) keeps a task's iterations in a git repository — GitHub, GitLab or your own server —
@@ -442,7 +461,9 @@ tests/        unit, Python and live (Playwright) tests
        CLI»), with cleanup of old deployments; the Vercel transport leaves the core.
      - ✅ **4b-2** (0.10) — comments: the in-house space keeps its comments through `supabase-comments` (module 1.1.0:
        pin screenshots, the iteration number on resolve); the Supabase address and key move from the code to `tasks.json`.
-     - **4b-3** — the profiles.
+     - ✅ **4b-3** (0.11) — the profiles: tasks get general tags (chips, filter, search, a dialog to edit them); a LIGA task
+       without tags shows its profile as a tag; the table «profile → repository» moves from the code to `tasks.json`
+       (`profile_repos`).
    - **4c** — team dashboard, tracker statuses and team chat notifications: the roles `dashboard`, `tracker`, `notify`
      in the core, and the modules for them.
    - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.
