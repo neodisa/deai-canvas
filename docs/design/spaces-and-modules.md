@@ -338,8 +338,9 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
 `docs/superpowers/plans/2026-11-02-task-tags.md`. What is built:
 
 - **The field `tags`** of a task, in any space: `normalize_tags` (trim, collapse spaces, 1–32 characters, no comma or control
-  characters, case-insensitive dedupe, at most 10; anything else is `400 bad-tags`). `tags` is the last key of the rows of
-  `/api/tasks`, of the «mine» rows of `/api/tasks-overview` and of `/api/task`; `POST /api/task-new` takes an optional `tags`;
+  characters, no invisible or bidi-control characters, case-insensitive dedupe, at most 10; anything else is `400 bad-tags`).
+  `tags` is the last key of the rows of `/api/tasks` (before `space` with `?all=1`) and of the «mine» rows of `/api/tasks-overview`,
+  and follows `profile` in `/api/task`; `POST /api/task-new` takes an optional `tags`;
   the new `POST /api/task-tags {id, tags}` replaces them (`404 unknown-task`, `409 ambiguous-task`, `400 bad-tags`, `503`).
   `tags` is in the registry `SHARED`, and an empty list travels too.
 - **Derived tags of LIGA:** `task_tags` gives the saved `tags` when the key exists (even `[]`), otherwise the profile as
@@ -352,7 +353,7 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
   LIGA task has no default GitLab repository, and a body with only a `profile` is no longer a sign of the LIGA flow.
 - **Conscious differences:** a task without tags is hidden under a tag filter; the chips are ordered by the number of tasks.
 - **Known limits:** the «Team» tab has no tags (4c); no bulk rename; an old client syncing the registry drops the `tags` of a
-  task it writes (a newer one puts them back on its next write); `task-tags` does not take `WRITE_LOCK` (last write wins);
+  task it writes (a newer one puts them back on its next write); `task-tags` does not hold `WRITE_LOCK` across read-modify-write (`save_tasks` locks only the write, so a concurrent change of the same file by another route can be lost: last write wins);
   the search does not highlight inside tags; a chip shows the first-seen spelling; the button «Мітки» is one more Tab stop.
 - **Tested** against the snapshot of 0.10.0 (`tests/fixtures/task-tags/before-4b3.json`); no network.
 - **Left for 4c / 4d:** the dashboard, tracker statuses and notifications as modules; the `integrations` flag and the profile

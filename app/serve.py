@@ -1624,7 +1624,12 @@ def _space_id(sp):
 #: і без керівних знаків.
 TAGS_MAX = 10
 TAG_MAX_LEN = 32
-_TAG_BAD = re.compile(r'[\x00-\x1f\x7f-\x9f,]')
+#: Керівні знаки C0/C1, кома, а також невидимі: нульової ширини (U+200B–U+200F, U+2060–U+2064, U+FEFF) і двоспрямовані керування
+#: (U+202A–U+202E, U+2066–U+2069): мітка з U+202E виглядала б не тим, чим є, а дві «однакові» мітки різнилися б невидимим знаком.
+_TAG_BAD = re.compile('[\\x00-\\x1f\\x7f-\\x9f,\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]')
+#: Дешева відсічка ДО поелементної роботи: список довший за це — `bad-tags` (до `TAGS_MAX` після дедуплікації ще далеко, але
+#: мільйонний список не обходимо).
+TAGS_RAW_MAX = 100
 #: Похідні мітки ЛІГИ: профіль задачі без власних `tags` показується як мітка з цим підписом (адаптер ЛІГИ, як `_LEGACY_*`
 #: 4b-1; йде в 4d). Невідомий профіль — як є.
 _LEGACY_PROFILE_TAGS = {'united': 'United', 'liga360': 'LIGA360', 'seo': 'SEO'}
@@ -1643,6 +1648,8 @@ def normalize_tags(raw):
     відкинуто (лишається перший запис). Порушення правил — `TagsError` (людина бачить, що не так, а не тихе обрізання)."""
     if not isinstance(raw, list):
         raise TagsError('tags must be a list of strings')
+    if len(raw) > TAGS_RAW_MAX:
+        raise TagsError(f'at most {TAGS_MAX} tags')
     out, seen = [], set()
     for x in raw:
         if not isinstance(x, str):

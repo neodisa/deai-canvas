@@ -3,7 +3,7 @@
 Що доводиться:
   * `normalize_tags` — правила вводу (обрізання, дублікати без регістру, межі, `TagsError`);
   * `task_tags` — читання не кидає: явний ключ `tags` (навіть `[]`) перемагає похідну мітку ЛІГИ з `profile`;
-  * `tags` — ОСТАННІЙ ключ у рядках `/api/tasks`, `/api/task`, `/api/tasks-overview` («Мої»);
+  * `tags` — ОСТАННІЙ ключ у рядках `/api/tasks` (з `?all=1` — перед `space`) і «Моїх» `/api/tasks-overview`; у `/api/task` — після `profile`;
   * `POST /api/task-new` приймає `tags` (400 `bad-tags`), `POST /api/task-tags` замінює їх у ТОМУ просторі, де лежить
     задача, і не чіпає ні поточну задачу, ні поточний простір машини; після запису — `_registry_push`;
   * `bin/registry.py`: `tags` у `SHARED`;
@@ -59,6 +59,23 @@ class NormalizeTags(unittest.TestCase):
         with self.assertRaises(serve.TagsError):
             serve.normalize_tags(['x' * 33])
 
+    def test_invisible_and_bidi_characters_are_refused(self):
+        """Нульової ширини й двоспрямовані керування (U+202E «розвертає» текст) — відмова, як і керівні знаки: мітка не
+        мусить виглядати не тим, чим є, і дві «однакові» мітки не мусять різнитися невидимим знаком."""
+        for ch in ('\u200b', '\u200d', '\u200f', '\u202a', '\u202e', '\u2060', '\u2064', '\u2066', '\u2069', '\ufeff'):
+            for tag in (f'a{ch}b', f'{ch}a', f'a{ch}'):
+                with self.subTest(ch=hex(ord(ch)), tag=tag), self.assertRaises(serve.TagsError):
+                    serve.normalize_tags([tag])
+        self.assertEqual(serve.normalize_tags(['\u2065x', 'a\u2010b']), ['\u2065x', 'a\u2010b'],
+                         'сусідні кодові точки (U+2065 не призначено, U+2010 дефіс) не зачеплено')
+
+    def test_a_huge_list_is_refused_before_any_per_item_work(self):
+        with mock.patch.object(serve, '_clean_tag') as clean:
+            with self.assertRaises(serve.TagsError):
+                serve.normalize_tags([''] * (serve.TAGS_RAW_MAX + 1))
+        clean.assert_not_called()
+        self.assertEqual(serve.normalize_tags([''] * serve.TAGS_RAW_MAX), [])
+
     def test_comma_and_control_characters_are_refused(self):
         for bad in ('a,b', 'a\x00b', 'a\x7fb', 'a\x85b', 'a\nb', 'a\tb'):
             with self.subTest(bad=bad), self.assertRaises(serve.TagsError):
@@ -111,6 +128,12 @@ class TaskTags(unittest.TestCase):
     def test_a_corrupt_key_does_not_fall_back_to_the_profile(self):
         self.assertEqual(serve.task_tags({'tags': 'junk', 'profile': 'seo'}), [])
         self.assertEqual(serve.task_tags({'tags': None, 'profile': 'seo'}), [])
+
+    def test_reading_drops_invisible_and_bidi_items_and_derived_tags(self):
+        self.assertEqual(serve.task_tags({'tags': ['ok', 'a\u202eb', 'c\u200bd', '\ufeffe', 'f']}), ['ok', 'f'])
+        for profile in ('a\u202eb', 'a\u200bb', '\ufeffseo'):
+            with self.subTest(profile=profile):
+                self.assertEqual(serve.task_tags({'profile': profile}), [])
 
     def test_reading_never_raises_and_drops_bad_items(self):
         self.assertEqual(serve.task_tags({'tags': ['ok', 5, 'a,b', 'OK', '  ', 'x' * 33]}), ['ok'])
@@ -219,7 +242,7 @@ class TagsApi(Fixture):
 
     def test_task_new_bad_tags_is_400_and_creates_nothing(self):
         before = (_md5(self.p_file), _md5(self.legacy_file), _md5(self.reg_path))
-        for bad in ('A', 5, [1], ['a,b'], ['x' * 33], [f't{i}' for i in range(11)], {'a': 1}):
+        for bad in ('A', 5, [1], ['a,b'], ['a\u202eb'], [''] * 101, ['x' * 33], [f't{i}' for i in range(11)], {'a': 1}):
             with self.subTest(bad=bad):
                 st, body = self.post('/api/task-new', {'id': 'tgbad', 'space': self.p_id, 'tags': bad})
                 self.assertEqual((st, body['code'], body['ok']), (400, 'bad-tags', False))

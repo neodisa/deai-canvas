@@ -15,11 +15,12 @@ installation (see *Upgrading*). Design: `docs/superpowers/specs/2026-11-02-task-
 ### Added
 
 - **The task field `tags`** (a list of strings, in any space). Normalising (`normalize_tags`): spaces trimmed and runs of
-  spaces collapsed, 1–32 characters, no control characters and no comma, empty ones dropped, case-insensitive duplicates
-  dropped (the first spelling stays), at most 10. Anything else (not a list, a non-string, too long, a comma, a control
-  character, more than 10) is `400 bad-tags` — no silent trimming.
-- **The API.** `tags` is the **last** key of every row of `/api/tasks`, of the «mine» rows of `/api/tasks-overview` and of
-  `/api/task`; the key `profile` stays. `/api/task-new` takes an optional `tags` (written only when the list is not empty).
+  spaces collapsed, 1–32 characters, no control characters, no invisible or bidirectional-control characters (zero-width
+  U+200B–U+200F, U+2060–U+2064, U+FEFF; U+202A–U+202E, U+2066–U+2069) and no comma, empty ones dropped, case-insensitive
+  duplicates dropped (the first spelling stays), at most 10. Anything else (not a list, a list of more than 100 items, a
+  non-string, too long, a comma, a control or invisible character, more than 10) is `400 bad-tags` — no silent trimming.
+- **The API.** `tags` is the **last** key of every row of `/api/tasks` (before `space` with `?all=1`) and of the «mine» rows of
+  `/api/tasks-overview`; in `/api/task` it follows `profile`; the key `profile` stays. `/api/task-new` takes an optional `tags` (written only when the list is not empty).
   **New `POST /api/task-tags` `{id, tags}`** replaces the tags of the task `id` (the space is found by the task, as
   `task-switch` does; the current task and space are not changed) and answers `{ok: true, tags}`; an empty list is valid and
   is kept as `[]`. Errors: `404 unknown-task`, `409 ambiguous-task` (the id is in two spaces), `400 bad-tags` (checked before
@@ -79,8 +80,9 @@ purpose (a placeholder would pass as a real config).
 - An **old client** that syncs the registry does not know `tags`: when it writes a task it drops the tags of that task from
   the registry entry. A newer client puts them back on its next write of that task, so until every machine is updated the
   entry may flip back and forth, one commit each time.
-- `POST /api/task-tags` does **not** take `spaces.WRITE_LOCK` (a deviation from the spec): it reads and writes `tasks.json`
-  the same way as the other task routes. Two concurrent edits of the same file: the last write wins.
+- `POST /api/task-tags` does **not** hold `spaces.WRITE_LOCK` across its read-modify-write (a deviation from the spec):
+  `save_tasks` takes the lock for the write itself, but the read before it is unlocked (the same as `task-switch`). So a
+  concurrent change of the same `tasks.json` by another route — any field, not only tags — can be lost: the last write wins.
 - The search does not highlight a match inside the tags.
 - A chip is labelled with the first-seen spelling of the tag, so its case may change when the order of the tasks changes
   (`Alpha` and `alpha` are one chip).
