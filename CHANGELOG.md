@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.11.0] — невипущено
+## [0.11.0] — 02.11.2026
 
 Stage 4b-3: the profile stops being the label of the «Tasks» screen. A task gets general **tags** (any space), the chips, the
 filter and the search of the screen are built from them, and a LIGA task without its own tags shows its profile as a tag, so
