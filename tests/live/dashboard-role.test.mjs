@@ -23,12 +23,13 @@
  *     9 — ЛІГА під `DC_TASKS_FILE` мовчить.
  */
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { appendGuard } from "./_append-guard.mjs";
 import { guardRealDeai, postJson, sleep, stop } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
@@ -363,13 +364,18 @@ test("9: ЛІГА під DC_TASKS_FILE мовчить: збірка превʼю
   assert.equal(existsSync(path.join(server.deaiHome, "logs")), false, "синк ЛІГИ пішов лозі звичайного простору");
 });
 
-/* Справжній лог синку ЛІГИ (`~/.claude/pipeline-feedback/overview-sync.log`): лише `stat` (нічого не пишемо). Свій, а не в спільному
-   `_spaces-kit.mjs`: його читають усі файли просторів, а справжній канвас на машині міг би дописати в лог сам по собі. */
+/* Справжній лог синку ЛІГИ (`~/.claude/pipeline-feedback/overview-sync.log`): лише читання (нічого не пишемо). Свій, а не в спільному
+   `_spaces-kit.mjs`: його читають усі файли просторів, а справжній канвас на машині міг би дописати в лог сам по собі.
+   ⛔ Не `mtime:size` (так було до 03.11.2026): лог дописує ІНШИЙ процес (справжній канвас), і «файл змінився» червоніло без нашої
+   вини. Охоронець дивиться на ЗМІСТ дописаного після знімка (`_append-guard.mjs`): чи є там наші мітки — тимчасова домівка, наші
+   теки й вигадані хости. Повідомлення називає лише мітку, не вміст логу. */
 const REAL_SYNC_LOG = path.join(userInfo().homedir, ".claude", "pipeline-feedback", "overview-sync.log");
-const syncLogStat = () => { try { const s = statSync(REAL_SYNC_LOG); return `${s.mtimeMs}:${s.size}`; } catch { return null; } };
-const SYNC_LOG_BEFORE = syncLogStat();
-test("10: справжній лог синку ЛІГИ не зʼявився і не змінився", () => {
-  assert.equal(syncLogStat(), SYNC_LOG_BEFORE, `живий тест торкнувся справжнього ${REAL_SYNC_LOG}`);
+/* Голий `tmpdir()` не мітка: справжній канвас того ж користувача міг би писати й свої тимчасові шляхи. Наші — `<tmp>/dc-…`. */
+const OUR_MARKERS = [path.join(tmpdir(), "dc-"), path.join(realpathSync(tmpdir()), "dc-"), "dc-live-", "dc-dash-", ".live-dash-", "demo.supabase.example", "abcdefghijkl",
+  "sb_publishable_test", "DEMO-", "alpha@example.com"];
+const syncLogCheck = appendGuard(REAL_SYNC_LOG, OUR_MARKERS);
+test("10: у справжній лог синку ЛІГИ не дописано слідів цього тесту", () => {
+  syncLogCheck();
 });
 
 guardRealDeai("11: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");

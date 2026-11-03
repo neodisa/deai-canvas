@@ -127,11 +127,16 @@ const trackerBanner = (page) => page.locator("#tasks-home .th-banner", { hasText
 
 /* ── сценарії ──────────────────────────────────────────────────────────────────────────────────────── */
 
-test("1: звичайний простір без трекера — `tracker: null`, бейджів статусу й банера нема, модуль (є в каталозі, не ввімкнений) не кликано", async (t) => {
-  const w = workDir(t);
+test("1: звичайний простір без трекера — `tracker: null`, бейджів статусу й банера нема; модуль є в каталозі, але не ввімкнений", async (t) => {
   const { page, url } = await bootPlain(t);
   const caps = (await (await fetch(`${url}/api/spaces`)).json()).spaces.find((s) => s.id === "alpha").capabilities;
-  assert.ok(!caps.tracker, `постачальника ролі нема, а capabilities.tracker = ${JSON.stringify(caps.tracker)}`);
+  assert.equal(caps.tracker ?? null, null, `постачальника ролі нема, а capabilities.tracker = ${JSON.stringify(caps.tracker)}`);
+  /* Свідок «модуль є, але не ввімкнений» (без нього «модуль не кликали» вдавало б перевірку на порожній журналі: `log_file` задає
+     лише ввімкнення). Каталог (`DEAI_EXTRA_MODULES`) показує фейковий модуль, а простір його не вмикав. */
+  const mods = (await (await fetch(`${url}/api/modules?space=alpha`)).json()).modules;
+  const fake = mods.find((m) => m.id === "fake-tracker");
+  assert.ok(fake, `фейковий модуль мусить бути в каталозі: ${JSON.stringify(mods.map((m) => m.id))}`);
+  assert.notEqual(fake.enabled, true, "фейковий трекер уже ввімкнено — сценарій без трекера недійсний");
   const ov = await overview(url, "?refresh=1");
   assert.equal(ov.tracker, null, "без постачальника ролі відповідь мусить мати `tracker: null`");
   assert.ok(ov.mine.every((x) => x.jiraStatus == null), `статус зʼявився без трекера: ${JSON.stringify(ov.mine)}`);
@@ -139,7 +144,6 @@ test("1: звичайний простір без трекера — `tracker: n
   assert.equal(await page.locator("#tasks-home .th-card").count(), 4);
   assert.deepEqual(await badges(page), {}, "бейджі статусу без трекера");
   assert.equal(await page.locator("#tasks-home .th-banner").count(), 0, "банер без трекера");
-  assert.deepEqual(calls(w.logFile), [], "модуль, який не ввімкнено, не кликали");
   assert.deepEqual(page.errors, []);
 });
 
@@ -190,7 +194,9 @@ test("3: трекер у режимі «збій» після успіху — �
   await banner.waitFor({ timeout: 15000 });
   const text = await banner.textContent();
   assert.match(text, /fake-tracker-down-777/, "текст відмови модуля мусить дійти до банера");
-  assert.match(text, /дані на \d{1,2}:\d{2}/, `банер мусить казати, коли статуси були свіжі: ${text}`);
+  /* Очікуваний час — з `okAt` і форматером САМОЇ сторінки (мова, пояс, формат — Chromium цього прогону), а не лише «щось схоже на час». */
+  const want = await page.evaluate((sec) => new Date(sec * 1000).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }), okAt);
+  assert.ok(text.includes(`дані на ${want}`), `банер мусить казати «дані на ${want}» (час останнього успіху): ${text}`);
   assert.deepEqual(await badges(page), { d1: "Фейк у роботі", d2: "Фейк готово" }, "бейджі лишились із останнього успіху");
 
   /* «Спробувати ще»: перепитує з `refresh=1`; трекер уже здоровий → банер зникає, статуси оновились. */
@@ -255,7 +261,9 @@ test("5: ЛІГА з DC_TASKS_FILE + DC_TEAM_FAKE — як у 0.12.0: `tracker: 
       code_url: "https://example.com/p/d1" },
     { id: "colleague", name: "Задача колеги", designer: "Beta", code_url: "https://example.com/p/colleague" }]));
   const server = await startServer(null, {
-    portBase: PORT_BASE + 400, env: { DEAI_EXTRA_MODULES: MODULES_DIR, DC_TEAM_FAKE: seam },
+    portBase: PORT_BASE + 400,
+    /* Явно гасимо шви трекера й сповіщень, що могли б протекти з оболонки розробника (сервер успадковує `process.env`). */
+    env: { DEAI_EXTRA_MODULES: MODULES_DIR, DC_TEAM_FAKE: seam, DC_TRACKER_FAKE: "", DC_TEAMS_FAKE: "" },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { d1: { dir: A.dir, title: "Задача один", jira: "DEMO-1" } } }],
     supabase: true,
   });
@@ -269,6 +277,8 @@ test("5: ЛІГА з DC_TASKS_FILE + DC_TEAM_FAKE — як у 0.12.0: `tracker: 
   assert.equal(await trackerBanner(page).count(), 0, "банер трекера в ізольованій ЛІГІ");
   assert.equal(await page.locator("#tasks-home .th-banner").count(), 0, "жодного банера на «Моїх»");
   assert.deepEqual(await badges(page), { d1: "Дашборд-статус" }, "статус із рядка дашборда (шов `DC_TEAM_FAKE`), як у знімку 0.12.0");
+  /* Лог синку ЛІГИ лежить у `<HOME>/.claude/pipeline-feedback`: теки нема, бо ніхто (ні синк, ні трекер) туди не писав. */
+  assert.equal(existsSync(path.join(server.home, ".claude", "pipeline-feedback")), false, "ЛІГА в ізоляції створила теку pipeline-feedback");
   assert.deepEqual(page.errors, []);
 });
 
