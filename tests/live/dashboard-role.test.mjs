@@ -229,9 +229,9 @@ test("3: «Підключення» — секція «Командний даш
 
   const titles = await page.locator(".cn-sec-h").allTextContents();
   assert.ok(titles.includes("Командний дашборд"), `секції: ${JSON.stringify(titles)}`);
-  /* Порядок ролей (`ROLE_ORDER`): дашборд між синхронізацією з git і токенами. */
+  /* Порядок ролей (`ROLE_ORDER`): дашборд між синхронізацією з git і трекером (4c-2: «Трекер задач» стоїть перед токенами). */
   assert.deepEqual(titles.slice(titles.indexOf("Командний дашборд") - 1, titles.indexOf("Командний дашборд") + 2),
-    ["Синхронізація з git", "Командний дашборд", "Токени дизайн-системи"]);
+    ["Синхронізація з git", "Командний дашборд", "Трекер задач"]);
   const sec = page.locator(".cn-sec", { has: page.locator(".cn-sec-h", { hasText: "Командний дашборд" }) });
   assert.deepEqual((await sec.locator(".cn-card").evaluateAll((els) => els.map((e) => e.dataset.id))).sort(),
     ["fake-dashboard", "supabase-dashboard"], "у секції мусять стояти обидва модулі ролі");

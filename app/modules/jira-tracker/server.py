@@ -34,7 +34,9 @@ Jira могло б повторити ключі й назви задач) у т
     заголовки `Authorization: Basic base64(email:токен)`, `Accept`/`Content-Type: application/json`. Відповідь:
     `issues[].key` → `{'name': fields.status.name, 'cat': fields.status.statusCategory.key}`; запис без ключа чи статусу
     пропущено, `issues` не масив чи нема — `{}`;
-  * `check` — `GET <base>/rest/api/3/myself`: 200 — «підключено»; 401/403 — «невірний email чи токен».
+  * `check` — `GET <base>/rest/api/3/myself`: 200 — «підключено»; 401/403 — «невірний email чи токен» з кодом `tracker-auth`
+    (не `module-error`: екран «Підключення» підписує його «Модуль упав під час перевірки», а тут хибний токен, не збій модуля;
+    `statuses` лишає `module-error` — його текст бачить синк, а не людина).
 """
 import base64
 import json
@@ -308,4 +310,5 @@ def check(ctx):
     if 200 <= status < 300:
         return {'ok': True, 'detail': 'підключено до Jira'}
     code, text = _problem(status, secrets)
-    return _verdict(code, text, *secrets)
+    # ⛔ Хибні облікові дані — свій код: інакше «Підключення» напише «Модуль упав під час перевірки» (див. docstring).
+    return _verdict('tracker-auth' if status in (401, 403) else code, text, *secrets)

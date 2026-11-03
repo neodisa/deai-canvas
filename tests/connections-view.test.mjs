@@ -81,13 +81,26 @@ test("сторінка: простору нема — порожньо; неоц
   assert.doesNotMatch(bad, /cn-now|Зараз:/, "стара capabilities нічого не варта — «Зараз» не показуємо");
 });
 
+test("тексти ролі tracker (4c-2): усі ключі є в UK і EN, а підписи полів Jira — з BUILTIN_TEXT", () => {
+  const keys = ["cnRoleTracker", "cnRoleTrackerLead", "cnNoneTracker", "cnModJiraName", "cnModJiraDesc", "cnFieldJiraBase",
+    "cnFieldJiraEmail", "cnFieldJiraToken", "cnDisableTracker", "cnErrTrackerAuth"];
+  for (const k of keys) for (const lang of ["uk", "en"]) assert.ok(typeof DICT[lang][k] === "string" && DICT[lang][k], `${lang}: немає ключа «${k}»`);
+  assert.equal(DICT.en.cnRoleTracker, "Issue tracker");
+  assert.equal(DICT.en.cnErrTrackerAuth, "Jira rejected the email or token.");
+  assert.equal(DICT.uk.cnErrTrackerAuth, "Jira не прийняла email чи токен.");
+  const b = builtinText("jira-tracker");
+  for (const k of [b.name, b.desc, ...Object.values(b.fields)]) assert.ok(DICT.uk[k] && DICT.en[k], k);
+});
+
 test("рядок «Зараз»: модуль, модуль без запису, legacy, нікого, space.json не читається, невідома роль", () => {
   const v = (caps) => ({ space: { ...SP, capabilities: caps }, list: LIST });
   assert.match(nowHTML("publish", v({ publish: "static-publish" })), /Зараз: Публікація в теку/);
   assert.match(nowHTML("publish", v({ publish: "ghost-id" })), /Зараз: ghost-id/, "нема в списку — показуємо id, а не падаємо");
   assert.match(nowHTML("publish", v({ publish: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("comments", v({ comments: null })), /Зараз: нікого — коментарі лише локальні/);
-  assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого»");
+  assert.match(nowHTML("notify", v({ notify: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого» (4c-2: приклад notify — tracker тепер має текст)");
+  assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого — Без трекера — статусів задач нема\./, "4c-2: роль tracker має власний текст «нікого»");
+  assert.match(nowHTML("tracker", v({ tracker: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого — макети лише на цьому компʼютері/, "роль vcs має власний текст «нікого»");
   assert.match(nowHTML("vcs", v({ vcs: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("dashboard", v({ dashboard: null })), /Зараз: нікого — без дашборда — вкладки «Команда» нема/, "4c-1: роль dashboard має власний текст «нікого»");
@@ -95,7 +108,7 @@ test("рядок «Зараз»: модуль, модуль без запису,
   assert.match(nowHTML("vcs", { space: { ...SP, capabilities: { vcs: "git-sync" } }, list: [{ id: "git-sync", name: "Синхронізація з git", roles: ["vcs"] }] }),
     /Зараз: Git</, "постачальник — назва вбудованого модуля зі словника, а не сирий id чи назва з маніфесту");
   assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
-  assert.equal(nowHTML("tracker", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка");
+  assert.equal(nowHTML("notify", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка (4c-2: приклад notify)");
   setLang("en");
   assert.match(nowHTML("publish", v({ error: "x" })), /Now: unknown — space\.json cannot be read/);
 });
@@ -143,7 +156,8 @@ test("назви й підписи вбудованих — мовою інте�
   assert.equal(roleTitle("publish"), "Publishing");
   assert.equal(roleTitle("vcs"), "Git sync");
   assert.equal(roleTitle("dashboard"), "Team dashboard", "4c-1: а не сире слово «dashboard»");
-  assert.equal(roleTitle("tracker"), "tracker");
+  assert.equal(roleTitle("tracker"), "Issue tracker", "4c-2: а не сире слово «tracker»");
+  assert.equal(roleTitle("notify"), "notify", "зарезервована роль без тексту — просто імʼя (4c-2: приклад замість tracker)");
   assert.equal(roleTitle(""), "Other");
   assert.equal(modName({ id: "memo-publish", name: "Memo (тест)" }), "Memo (тест)");
   assert.equal(modName({ id: "bare" }), "bare", "без назви — id");

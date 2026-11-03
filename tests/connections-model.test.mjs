@@ -14,12 +14,13 @@ const M = (id, o = {}) => ({ id, name: id, roles: ["publish"], enabled: false, i
   settings: [], ...o });
 
 test("ролі: порядок секцій, ключі й іконки; чужа роль і __proto__ не мають ключів", () => {
-  assert.deepEqual(ROLE_ORDER, ["publish", "comments", "vcs", "dashboard", "tokens"]);
+  assert.deepEqual(ROLE_ORDER, ["publish", "comments", "vcs", "dashboard", "tracker", "tokens"]);
   assert.equal(roleKeys("publish").title, "cnRolePublish");
   assert.equal(roleKeys("comments").none, "cnNoneComments");
   assert.deepEqual(roleKeys("vcs"), { title: "cnRoleVcs", lead: "cnRoleVcsLead", none: "cnNoneVcs" });
   assert.deepEqual(roleKeys("dashboard"), { title: "cnRoleDashboard", lead: "cnRoleDashboardLead", none: "cnNoneDashboard" });
-  assert.equal(roleKeys("tracker"), null, "роль, що ще зарезервована й без текстів");
+  assert.deepEqual(roleKeys("tracker"), { title: "cnRoleTracker", lead: "cnRoleTrackerLead", none: "cnNoneTracker" }, "4c-2: роль tracker має власні тексти");
+  assert.equal(roleKeys("notify"), null, "роль, що ще зарезервована й без текстів (4c-2: tracker уже викликана, тож приклад — notify)");
   assert.equal(roleKeys("__proto__"), null);
   assert.equal(roleKeys("toString"), null);
   assert.equal(roleIcon("publish"), "up");
@@ -27,13 +28,14 @@ test("ролі: порядок секцій, ключі й іконки; чуж�
   assert.equal(roleIcon("tokens"), "sliders");
   assert.equal(roleIcon("vcs"), "cloud");
   assert.equal(roleIcon("dashboard"), "grid", "4c-1: іконка з наявного набору icons.js, не «dots»");
-  assert.equal(roleIcon("tracker"), "dots");
+  assert.equal(roleIcon("tracker"), "task", "4c-2: іконка з наявного набору icons.js, не «dots»");
+  assert.equal(roleIcon("notify"), "dots", "зарезервована роль без іконки (4c-2: приклад замість tracker)");
   assert.equal(roleIcon(undefined), "dots");
   assert.equal(roleIcon("constructor"), "dots");
 });
 
-test("вбудовані тексти: шість модулів (git-sync 4a, supabase-dashboard 4c-1), решта — null", () => {
-  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync", "supabase-dashboard"]) {
+test("вбудовані тексти: сім модулів (git-sync 4a, supabase-dashboard 4c-1, jira-tracker 4c-2), решта — null", () => {
+  for (const id of ["static-publish", "vercel-publish", "supabase-comments", "css-tokens", "git-sync", "supabase-dashboard", "jira-tracker"]) {
     const b = builtinText(id);
     assert.ok(b && b.name && b.desc && b.fields, id);
   }
@@ -42,19 +44,22 @@ test("вбудовані тексти: шість модулів (git-sync 4a, s
     { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket" });
   assert.deepEqual(builtinText("supabase-dashboard"), { name: "cnModSbDashName", desc: "cnModSbDashDesc",
     fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable" } }, "4c-1: модуль ролі dashboard");
+  assert.deepEqual(builtinText("jira-tracker"), { name: "cnModJiraName", desc: "cnModJiraDesc",
+    fields: { base: "cnFieldJiraBase", email: "cnFieldJiraEmail", token: "cnFieldJiraToken" } }, "4c-2: модуль ролі tracker");
   assert.equal(builtinText("memo-publish"), null);
   assert.equal(builtinText("__proto__"), null);
 });
 
 test("групування: відомі ролі за порядком, далі інші за абеткою, без ролі — останні; missing окремо", () => {
   const list = [
-    M("t", { roles: ["tokens"] }), M("d", { roles: ["dashboard"] }), M("z", { roles: ["tracker"] }), M("a", { roles: ["alpha"] }),
+    M("t", { roles: ["tokens"] }), M("d", { roles: ["dashboard"] }), M("z", { roles: ["notify"] }), M("j", { roles: ["tracker"] }), M("a", { roles: ["alpha"] }),
     M("p2"), M("p1"), M("n", { roles: [] }), M("c", { roles: ["comments", "publish"] }),
     { id: "gone", name: "gone", roles: [], enabled: true, status: "missing", settings: [] },
     null, { name: "без id" },
   ];
   const { sections, missing } = groupModules(list);
-  assert.deepEqual(sections.map((s) => s.role), ["publish", "comments", "dashboard", "tokens", "alpha", "tracker", ""]);
+  assert.deepEqual(sections.map((s) => s.role), ["publish", "comments", "dashboard", "tracker", "tokens", "alpha", "notify", ""],
+    "4c-2: tracker — серед відомих (між dashboard і tokens); «інші за абеткою» тепер alpha, notify — notify зарезервована, без текстів");
   assert.deepEqual(sections[0].modules.map((e) => e.id), ["p2", "p1"], "порядок усередині — як у списку сервера");
   assert.deepEqual(sections[1].modules.map((e) => e.id), ["c"], "кілька ролей — у секції першої");
   assert.deepEqual(missing.map((e) => e.id), ["gone"]);
@@ -68,7 +73,9 @@ test("рядок «Зараз»: модуль, legacy, нікого з насл�
   assert.deepEqual(providerLine("publish", { publish: "ghost" }, list), { kind: "module", id: "ghost", entry: null });
   assert.deepEqual(providerLine("comments", { comments: "legacy" }, list), { kind: "legacy" });
   assert.deepEqual(providerLine("tokens", { tokens: null }, list), { kind: "none", noneKey: "cnNoneTokens" });
-  assert.equal(providerLine("tracker", { publish: null }, list), null, "роль, якої capabilities не знає");
+  assert.equal(providerLine("notify", { publish: null }, list), null, "роль, якої capabilities не знає (4c-2: tracker уже в capabilities, тож приклад — notify)");
+  assert.deepEqual(providerLine("tracker", { tracker: null }, list), { kind: "none", noneKey: "cnNoneTracker" }, "4c-2: tracker без модуля — «нікого» з власним текстом");
+  assert.deepEqual(providerLine("tracker", { tracker: "legacy" }, list), { kind: "legacy" });
   assert.equal(providerLine("error", { error: "" }, list), null, "роль «error» — не постачальник; непорожній capabilities.error — окремий стан нижче");
   assert.equal(providerLine("publish", null, list), null);
   assert.equal(providerLine("__proto__", {}, list), null);
@@ -156,6 +163,15 @@ test("наслідки вимкнення: legacy для ЛІГА publish/commen
   assert.deepEqual(disableConsequences(sd, { integrations: false, capabilities: { dashboard: "supabase-dashboard" } }),
     [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }]);
   assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "legacy" } }), [],
+    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
+  /* 4c-2: tracker. У ЛІГА вимкнення повертає Jira з конфігу установки; деінде статуси зникають — свій текст наслідку. */
+  const jt = M("jira-tracker", { roles: ["tracker"] });
+  assert.deepEqual(disableConsequences(jt, { integrations: true, capabilities: { tracker: "jira-tracker" } }),
+    [{ role: "tracker", kind: "legacy" }], "4c-2: у ЛІГА вимкнення повертає вбудований шлях Jira, а не «нікого»");
+  assert.deepEqual(disableConsequences(jt, { integrations: false, capabilities: { tracker: "jira-tracker" } }),
+    [{ role: "tracker", kind: "none", noneKey: "cnNoneTracker", consKey: "cnDisableTracker" }],
+    "4c-2: поза ЛІГА статуси зникають — наслідок власним текстом");
+  assert.deepEqual(disableConsequences(jt, { integrations: true, capabilities: { tracker: "legacy" } }), [],
     "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
 });
 
@@ -307,7 +323,7 @@ test("списки: форма стартує з того, що людина Б�
 test("рядок «Зараз»: непорожній capabilities.error — окремий стан, раніше за читання ролі", () => {
   const list = [M("vercel-publish")];
   assert.deepEqual(providerLine("publish", { error: "space-json-unreadable" }, list), { kind: "error" });
-  assert.deepEqual(providerLine("tracker", { error: "x" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає");
+  assert.deepEqual(providerLine("notify", { error: "x" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає (4c-2: приклад notify — tracker тепер знана)");
   assert.deepEqual(providerLine("error", { error: "x" }, list), { kind: "error" });
   assert.deepEqual(providerLine("publish", { publish: "vercel-publish", error: "x" }, list), { kind: "error" },
     "помилка перемагає застарілого постачальника");
@@ -352,6 +368,17 @@ test("патч: пробіли по краях — лише для тексту,
   /* Секрети обрізаються свідомо: токен вставляють з буфера разом із переносом рядка. */
   const sec = formFields({ settings: [{ key: "k", type: "secret", label: "K", required: false, set: false }] });
   assert.deepEqual({ ...formPatch(sec, initialForm(sec), { values: {}, secrets: { k: "\n tk \n" }, erase: [] }).secrets }, { k: "tk" });
+});
+
+test("код tracker-auth (4c-2): невірний email чи токен Jira — власний текст, а не «Модуль упав»; деталь модуля зберігається", () => {
+  assert.deepEqual(verdictText({ ok: false, error: "tracker-auth", detail: "невірний email чи токен (HTTP 401)" }),
+    { key: "cnErrTrackerAuth", detail: "невірний email чи токен (HTTP 401)" });
+  assert.notEqual(verdictText({ ok: false, error: "tracker-auth" }).key, "cnErrModuleError");
+  /* Та сама причина на картці, коли `check` записав помилку в стан модуля. */
+  assert.deepEqual(whyOf(M("jira-tracker", { status: "error", error: "tracker-auth", last_check: { ok: false, error: "tracker-auth", detail: "HTTP 403" } })),
+    { key: "cnErrTrackerAuth", detail: "HTTP 403" });
+  /* Справжній збій модуля лишає старий текст. */
+  assert.equal(verdictText({ ok: false, error: "module-error" }).key, "cnErrModuleError");
 });
 
 test("коди: vercel-busy і no-folder; відмова secrets-unreadable бере текст коду перевірки, власні ключі відмов — вище", () => {

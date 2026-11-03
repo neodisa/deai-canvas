@@ -223,9 +223,23 @@ class CheckTest(ModuleCase):
         for status in (401, 403):
             self.net(http_error(status, {'message': 'Client must be authenticated'}))
             v = self.raw('check', self.ctx())
-            self.assertEqual((v['ok'], v['error']), (False, 'module-error'))
+            # ⛔ Свій код `tracker-auth`, а не `module-error`: екран «Підключення» підписує `module-error` як «Модуль упав під час
+            # перевірки» — для хибного токена це брехня. (`statuses` лишає `module-error`: його текст бачить синк, а не людина.)
+            self.assertEqual((v['ok'], v['error']), (False, 'tracker-auth'))
             self.assertIn('невірний email чи токен', v['detail'])
             self.assertIn(str(status), v['detail'])
+
+    def test_tracker_auth_survives_the_core(self):
+        # Каркас віддає клієнтові `error` як є: `tracker-auth` не мусить стати `module-error` дорогою.
+        self.net(http_error(401, {}))
+        v = self.run_fn('check', self.ctx())
+        self.assertEqual((v['ok'], v['error']), (False, 'tracker-auth'))
+
+    def test_only_401_and_403_are_tracker_auth(self):
+        for status, code in ((400, 'module-error'), (404, 'module-error'), (429, 'tracker-error'), (500, 'tracker-error')):
+            with self.subTest(status=status):
+                self.net(http_error(status, {}))
+                self.assertEqual(self.raw('check', self.ctx())['error'], code)
 
     def test_500_has_the_status(self):
         self.net(http_error(500, b'oops'))

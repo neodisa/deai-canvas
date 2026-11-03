@@ -2954,7 +2954,7 @@ async function connDisable(e) {
   const sp = connSpace();
   const lines = disableConsequences(e, sp).map((c) => (c.kind === 'legacy'
     ? t('cnDisableLegacy', roleTitle(c.role))
-    : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : '')));
+    : (c.consKey ? t(c.consKey) : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : ''))));
   if (!(await askYesNo([t('cnDisableAsk', modName(e)), ...lines].join('\n\n'), { yes: t('cnDisable'), danger: true }))) return;
   if (!connOpen() || connState.spaceId !== spaceId) return;
   connState.busy.set(e.id, 'disable'); paintHome();
