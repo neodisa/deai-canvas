@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.13.0] — unreleased
+## [0.13.0] — 03.11.2026
 
 Stage 4c-2: the task statuses of the issue tracker become a role. The badge with the status of a task («In progress», «Done»…)
 no longer depends on the team dashboard and no longer on the Jira of one company hard-wired in `bin/overview_push.py`: it
