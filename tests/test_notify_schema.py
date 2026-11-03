@@ -195,6 +195,16 @@ class Behaviour(unittest.TestCase):
         self.assertIn('c.project_id = m.project_id', body)
         self.assertIn('insert into public.teams_delivery_log', body)
 
+    def test_the_send_is_deduplicated_by_the_delivery_log(self):
+        """Повторний виклик з тим самим id (функція відкрита ключу сторінки) не шле картку вдруге: рядок у журналі доставок
+        для цього коментаря — вихід, і це ПІСЛЯ перевірки свіжості, але ДО тиші й будь-якої відправки."""
+        body = one_line(functions()['cl_send_teams'][1])
+        guard = ('if exists (select 1 from public.teams_delivery_log where comment_id = c.id) then return; end if;')
+        self.assertIn(guard, body)
+        self.assertLess(body.index("interval '2 minutes'"), body.index(guard))
+        self.assertLess(body.index(guard), body.index('net.http_post'))
+        self.assertLess(body.index(guard), body.index('public.teams_project_mute'))
+
     def test_the_mute_set_validates_its_arguments(self):
         body = functions()['teams_mute_set'][1]
         self.assertIn('length(p_project) not between 1 and 200', body)

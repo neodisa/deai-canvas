@@ -419,6 +419,21 @@ class PublicKeyTest(ModuleCase):
         self.assertEqual(len(self.calls), 1)
 
 
+class LegacyForbiddenTextTest(ModuleCase):
+    """403 на шляху ЛІГИ: ключ там — публічний ключ сторінки, тож підказка «лише непублічний» була б неправдою."""
+
+    def test_the_403_text_is_neutral_for_the_league_and_hints_for_others(self):
+        for legacy, hint in ((True, False), (False, True)):
+            with self.subTest(legacy=legacy):
+                self.net(lambda i, call: http_error(403, {}))          # свіжа помилка на кожен запит: `HTTPError` читається раз
+                ctx = self.ctx(legacy=True) if legacy else self.ctx()
+                texts = [self.raw('check', ctx)['detail'], self.raises('mute_state', ctx).message,
+                         self.raises('mute_set', ctx, 'dc/t1', True, ME).message]
+                for t in texts:
+                    self.assertIn('HTTP 403', t)
+                    self.assertEqual('непублічний' in t, hint, t)
+
+
 class LegacyCheckTest(ModuleCase):
     def test_the_league_check_does_not_call_the_health_function(self):
         """⛔ У базі ЛІГИ `teams_notify_health` нема: `check` лише читає стан тиші."""

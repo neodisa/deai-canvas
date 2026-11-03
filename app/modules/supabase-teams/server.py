@@ -230,15 +230,17 @@ def _no_function(status, payload):
     return status == 404 or _pg_code(payload) in NO_FUNCTION_CODES
 
 
-def _problem(status, payload, key):
-    """Текст невдалої відповіді (`status` не 2xx): лише фіксовані слова, HTTP-статус і код PostgREST."""
+def _problem(status, payload, key, legacy=False):
+    """Текст невдалої відповіді (`status` не 2xx): лише фіксовані слова, HTTP-статус і код PostgREST. Для `legacy` (ЛІГА, ключ —
+    публічний ключ сторінки) підказки «потрібен непублічний ключ» нема: там вона була б неправдою."""
     if _no_function(status, payload):
         return _NO_SCHEMA
     code = _pg_code(payload)
     if status == 401:
         text = 'Supabase не прийняв ключ (HTTP 401)'
     elif status == 403:
-        text = 'Supabase відмовив у доступі (HTTP 403) — перевірте ключ: тишу Teams перемикає лише непублічний'
+        text = ('Supabase відмовив у доступі (HTTP 403) — перевірте ключ і права' if legacy else
+                'Supabase відмовив у доступі (HTTP 403) — перевірте ключ: тишу Teams перемикає лише непублічний')
     elif 300 <= status < 400:
         text = f'Supabase відповів переадресацією (HTTP {status}): за нею не йдемо — перевірте адресу проєкту'
     else:
@@ -248,7 +250,7 @@ def _problem(status, payload, key):
 
 def _fail(ctx, status, payload):
     """`notify-error` за невдалою відповіддю сервісу."""
-    return _error(ctx, 'notify-error', _problem(status, payload, _key(ctx)))
+    return _error(ctx, 'notify-error', _problem(status, payload, _key(ctx), bool(ctx.get('legacy'))))
 
 
 def _unreachable(ctx, e):
@@ -314,7 +316,7 @@ def check(ctx):
         if 200 <= status < 300 and not isinstance(_json(payload), type([])):
             return _verdict('notify-error', f'Supabase відповів HTTP {status}, але не списком замовчаних каналів')
         if not 200 <= status < 300:
-            return _bad(status, payload, key)
+            return _bad(status, payload, key, legacy)
         if legacy:                                  # у базі ЛІГИ `teams_notify_health` нема: лише стан тиші
             return {'ok': True, 'detail': 'тиша Teams доступна'}
         status, payload = _rpc(ctx, 'teams_notify_health', {'window_hours': HEALTH_HOURS})
@@ -323,7 +325,7 @@ def check(ctx):
     except Exception as e:  # noqa: BLE001 — завелика відповідь: вердикт, а не виняток
         return _verdict('notify-error', getattr(e, 'message', None) or e, key)
     if not 200 <= status < 300:
-        return _bad(status, payload, key)
+        return _bad(status, payload, key, legacy)
     data = _json(payload)
     row = data[0] if isinstance(data, type([])) and len(data) == 1 else data
     if not isinstance(row, dict) or type(row.get('webhook_set')) is not bool:
@@ -336,8 +338,8 @@ def check(ctx):
     return {'ok': True, 'detail': f'доставок за {HEALTH_HOURS} год: {sent}, невдалих: {failed}'}
 
 
-def _bad(status, payload, key):
+def _bad(status, payload, key, legacy=False):
     """Вердикт за невдалою відповіддю: нема схеми → `no-schema`, ключ не прийнято → `bad-key`, решта — `notify-error`."""
     if _no_function(status, payload):
         return _verdict('no-schema', _NO_SCHEMA)
-    return _verdict('bad-key' if status in (401, 403) else 'notify-error', _problem(status, payload, key), key)
+    return _verdict('bad-key' if status in (401, 403) else 'notify-error', _problem(status, payload, key, legacy), key)

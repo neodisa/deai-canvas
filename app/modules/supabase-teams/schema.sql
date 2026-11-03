@@ -119,6 +119,13 @@ begin
    where id = p_comment_id and created_at > now() - interval '2 minutes';
   if not found then return; end if;
 
+  -- Dedupe (a deliberate difference from the LIGA original): a comment that already has a delivery-log row is never posted
+  -- again, so a replayed call with the same id inside the 2 minutes (the function is open to the page's key) cannot
+  -- re-post the card.
+  if exists (select 1 from public.teams_delivery_log where comment_id = c.id) then
+    return;
+  end if;
+
   -- Mute per channel. Here, not in the trigger: it holds for ANY caller. Sub-channels (`<channel>/…`) are muted together
   -- with the channel — "the whole project".
   if exists (select 1 from public.teams_project_mute m
