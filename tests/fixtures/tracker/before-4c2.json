@@ -1,0 +1,240 @@
+{
+  "jira_request": {
+    "network_error": {
+      "result": {},
+      "urlopen_calls": 1
+    },
+    "no_credentials": {
+      "result": {},
+      "urlopen_calls": 0
+    },
+    "request": {
+      "calls": [
+        {
+          "authorization_is_basic_of_credentials": true,
+          "body": {
+            "fields": [
+              "status"
+            ],
+            "jql": "key in (DEMO-1,DEMO-2)",
+            "maxResults": 100
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "<basic>",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "path": "/rest/api/3/search/jql",
+          "query": "",
+          "ssl_context": true,
+          "timeout": 15
+        }
+      ],
+      "input_keys": [
+        "DEMO-1",
+        "DEMO-2",
+        "DEMO-1",
+        "",
+        null
+      ],
+      "result": {
+        "DEMO-1": {
+          "cat": "indeterminate",
+          "name": "In Review"
+        },
+        "DEMO-2": {
+          "cat": "done",
+          "name": "Done"
+        }
+      },
+      "stub_response": {
+        "issues": [
+          {
+            "fields": {
+              "status": {
+                "name": "In Review",
+                "statusCategory": {
+                  "key": "indeterminate"
+                }
+              }
+            },
+            "key": "DEMO-1"
+          },
+          {
+            "fields": {
+              "status": {
+                "name": "Done",
+                "statusCategory": {
+                  "key": "done"
+                }
+              }
+            },
+            "key": "DEMO-2"
+          }
+        ]
+      }
+    }
+  },
+  "meta": {
+    "generator": "tests/make_before_4c2.py",
+    "source_commit": "3065dac",
+    "version": "0.12.0",
+    "volatile_stripped": [
+      "fetchedAt",
+      "rowsAt",
+      "changed",
+      "synced_at",
+      "updated_at",
+      "jira_synced_at"
+    ]
+  },
+  "sync_cards": {
+    "input": {
+      "identity": [
+        "Alpha",
+        "alpha@example.com"
+      ],
+      "jira": {
+        "DEMO-1": {
+          "cat": "indeterminate",
+          "name": "In Review"
+        },
+        "DEMO-2": {
+          "cat": "done",
+          "name": "Done"
+        }
+      },
+      "tasks": {
+        "t1": {
+          "dir": "<dir>/t1",
+          "jira": "DEMO-1",
+          "opened": "2026-11-01T10:00:00Z",
+          "profile": "tool",
+          "title": "Demo one"
+        },
+        "t2": {
+          "dir": "<dir>/t2",
+          "jira": "DEMO-2",
+          "opened": "2026-11-01T10:00:00Z",
+          "profile": "tool",
+          "title": "Demo two"
+        }
+      }
+    },
+    "log": [
+      "✅ overview: синхронізовано 2 проєктів"
+    ],
+    "pushes": [
+      {
+        "cards": [
+          {
+            "designer": "Alpha",
+            "designer_key": "alpha@example.com",
+            "id": "t1",
+            "iterations": 1,
+            "jira": "DEMO-1",
+            "jira_status": "In Review",
+            "jira_status_cat": "indeterminate",
+            "name": "Demo one",
+            "source": "canvas",
+            "status": "work"
+          },
+          {
+            "designer": "Alpha",
+            "designer_key": "alpha@example.com",
+            "id": "t2",
+            "iterations": 1,
+            "jira": "DEMO-2",
+            "jira_status": "Done",
+            "jira_status_cat": "done",
+            "name": "Demo two",
+            "source": "canvas",
+            "status": "work"
+          }
+        ],
+        "mode": "merge"
+      }
+    ],
+    "statuses_asked": [
+      [
+        "DEMO-1",
+        "DEMO-2"
+      ]
+    ],
+    "summary": {
+      "discovered": 0,
+      "failed": {},
+      "skipped": [],
+      "synced": 2
+    }
+  },
+  "tasks_overview": {
+    "body": {
+      "current": "t1",
+      "mine": [
+        {
+          "comments": 2,
+          "id": "t1",
+          "iter": "it1",
+          "iterations": 1,
+          "jira": "DEMO-1",
+          "jiraCat": "indeterminate",
+          "jiraStatus": "In Review",
+          "missing": false,
+          "opened": "2026-11-01T10:00:00Z",
+          "pages": 0,
+          "profile": "tool",
+          "published": null,
+          "tags": [
+            "tool"
+          ],
+          "thumb": null,
+          "title": "Demo one"
+        }
+      ],
+      "space": null,
+      "team": {
+        "error": null,
+        "rows": [
+          {
+            "comments": 2,
+            "designer": "Alpha",
+            "id": "t1",
+            "iterations": 1,
+            "jira": "DEMO-1",
+            "jiraCat": "indeterminate",
+            "jiraStatus": "In Review",
+            "mine": true,
+            "pages": 1,
+            "preview": "https://dc-t1.vercel.example",
+            "thumb": null,
+            "title": "Demo one",
+            "updated": "2026-11-01T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "input_rows": [
+      {
+        "code_url": "https://dc-t1.vercel.example",
+        "designer": "Alpha",
+        "id": "t1",
+        "iterations": 1,
+        "jira": "DEMO-1",
+        "jira_status": "In Review",
+        "jira_status_cat": "indeterminate",
+        "name": "Demo one",
+        "open_comments": 2,
+        "pages": 1,
+        "thumb_url": null,
+        "updated_at": "2026-11-01T10:00:00Z"
+      }
+    ],
+    "status": 200,
+    "volatile": {
+      "fetchedAt": "float",
+      "rowsAt": "float"
+    }
+  }
+}
