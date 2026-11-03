@@ -1,0 +1,846 @@
+{
+  "menu": {
+    "input": {
+      "liga_error": {
+        "space": {
+          "capabilities": {
+            "publish": "legacy",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": true,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "error": "x"
+        }
+      },
+      "liga_loading": {
+        "space": {
+          "capabilities": {
+            "publish": "legacy",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": true,
+          "name": "P"
+        },
+        "teams": null
+      },
+      "liga_muted_by_colleague": {
+        "space": {
+          "capabilities": {
+            "publish": "legacy",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": true,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_by": "k:ffffffffffff"
+        }
+      },
+      "liga_muted_by_me": {
+        "space": {
+          "capabilities": {
+            "publish": "legacy",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": true,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "mine": true,
+          "muted": true,
+          "muted_by": "k:0123456789ab"
+        }
+      },
+      "liga_on": {
+        "space": {
+          "capabilities": {
+            "publish": "legacy",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": true,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      },
+      "module_with_integrations": {
+        "space": {
+          "capabilities": {
+            "publish": "static-publish",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": true,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      },
+      "no_space": {
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      },
+      "old_shape_false": {
+        "space": {
+          "id": "p",
+          "integrations": false
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      },
+      "old_shape_true": {
+        "space": {
+          "id": "p",
+          "integrations": true
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      },
+      "plain_no_publish": {
+        "space": {
+          "capabilities": {
+            "publish": null,
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": false,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      },
+      "plain_no_teams_data": {
+        "space": {
+          "capabilities": {
+            "publish": "static-publish",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": false,
+          "name": "P"
+        },
+        "teams": null
+      },
+      "plain_with_teams_data": {
+        "space": {
+          "capabilities": {
+            "publish": "static-publish",
+            "tokens": null
+          },
+          "color": "space-2",
+          "id": "p",
+          "integrations": false,
+          "name": "P"
+        },
+        "teams": {
+          "channel": "dc/t1",
+          "muted": false
+        }
+      }
+    },
+    "result": {
+      "liga_error": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": true,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": false,
+          "whyKey": "whyTeamsUnknown"
+        }
+      },
+      "liga_loading": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": true,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": false,
+          "whyKey": "whyTeamsLoading"
+        }
+      },
+      "liga_muted_by_colleague": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": false,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": false,
+          "subArgs": [],
+          "subKey": "teamsMutedSub",
+          "whyKey": ""
+        }
+      },
+      "liga_muted_by_me": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": false,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": false,
+          "subArgs": [],
+          "subKey": "teamsMutedByMe",
+          "whyKey": ""
+        }
+      },
+      "liga_on": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": false,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": true,
+          "subArgs": [
+            "dc/t1"
+          ],
+          "subKey": "teamsOnSub",
+          "whyKey": ""
+        }
+      },
+      "module_with_integrations": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify"
+        ],
+        "teamsnotify": {
+          "disabled": false,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": true,
+          "subArgs": [
+            "dc/t1"
+          ],
+          "subKey": "teamsOnSub",
+          "whyKey": ""
+        }
+      },
+      "no_space": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": false,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": true,
+          "subArgs": [
+            "dc/t1"
+          ],
+          "subKey": "teamsOnSub",
+          "whyKey": ""
+        }
+      },
+      "old_shape_false": {
+        "items": null,
+        "teamsnotify": null
+      },
+      "old_shape_true": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "teamsnotify": {
+          "disabled": false,
+          "id": "teamsnotify",
+          "labelKey": "teamsNotify",
+          "on": true,
+          "subArgs": [
+            "dc/t1"
+          ],
+          "subKey": "teamsOnSub",
+          "whyKey": ""
+        }
+      },
+      "plain_no_publish": {
+        "items": null,
+        "teamsnotify": null
+      },
+      "plain_no_teams_data": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink"
+        ],
+        "teamsnotify": null
+      },
+      "plain_with_teams_data": {
+        "items": [
+          "togglepub",
+          "openpreview",
+          "copylink"
+        ],
+        "teamsnotify": null
+      }
+    }
+  },
+  "meta": {
+    "generator": "tests/make_before_4c3.py",
+    "source_commit": "0267024",
+    "version": "0.13.0",
+    "volatile_stripped": [
+      "muted_at"
+    ]
+  },
+  "route": {
+    "fake_get": {
+      "muted_by_colleague": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:ffffffffffff",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": "k:ffffffffffff"
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
+      "muted_by_me": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": true,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:0123456789ab",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": "k:0123456789ab"
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
+      "not_muted": {
+        "body": {
+          "channel": "dc/t1",
+          "muted": false
+        },
+        "db": {},
+        "status": 200,
+        "task": "t1"
+      },
+      "other_channel_muted": {
+        "body": {
+          "channel": "dc/t1",
+          "muted": false
+        },
+        "db": {
+          "dc/other": {
+            "muted_at": "str",
+            "muted_by": "k:ffffffffffff"
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
+      "parent_muted_subchannel": {
+        "body": {
+          "channel": "dc/t1/internal",
+          "mine": false,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:ffffffffffff",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": "k:ffffffffffff"
+          }
+        },
+        "status": 200,
+        "task": "t2"
+      }
+    },
+    "fake_post": {
+      "bad_muted": {
+        "body": {
+          "error": "muted must be boolean",
+          "ok": false
+        },
+        "db_after": {},
+        "status": 400
+      },
+      "foreign_origin": {
+        "body": {
+          "error": "foreign origin",
+          "ok": false
+        },
+        "db_after": {},
+        "status": 403
+      },
+      "mute": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": true,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:0123456789ab",
+          "ok": true,
+          "via": "dc/t1"
+        },
+        "db_after": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": "k:0123456789ab"
+          }
+        },
+        "status": 200
+      },
+      "mute_subchannel": {
+        "body": {
+          "channel": "dc/t1/internal",
+          "mine": true,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:0123456789ab",
+          "ok": true,
+          "via": "dc/t1/internal"
+        },
+        "db_after": {
+          "dc/t1/internal": {
+            "muted_at": "str",
+            "muted_by": "k:0123456789ab"
+          }
+        },
+        "status": 200
+      },
+      "no_origin_header": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": true,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:0123456789ab",
+          "ok": true,
+          "via": "dc/t1"
+        },
+        "db_after": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": "k:0123456789ab"
+          }
+        },
+        "status": 200
+      },
+      "unmute": {
+        "body": {
+          "channel": "dc/t1",
+          "muted": false,
+          "ok": true
+        },
+        "db_after": {},
+        "status": 200
+      }
+    },
+    "integrations_off": {
+      "db_after": {
+        "dc/p1": {
+          "muted_at": "str",
+          "muted_by": "k:ffffffffffff"
+        }
+      },
+      "get": {
+        "body": {
+          "code": "integrations-off",
+          "error": "сповіщень Teams у просторі без інтеграцій нема",
+          "ok": false
+        },
+        "status": 409
+      },
+      "post_bad_muted": {
+        "body": {
+          "code": "integrations-off",
+          "error": "сповіщень Teams у просторі без інтеграцій нема",
+          "ok": false
+        },
+        "status": 409
+      },
+      "post_foreign_origin": {
+        "body": {
+          "error": "foreign origin",
+          "ok": false
+        },
+        "status": 403
+      },
+      "post_mute": {
+        "body": {
+          "code": "integrations-off",
+          "error": "сповіщень Teams у просторі без інтеграцій нема",
+          "ok": false
+        },
+        "status": 409
+      },
+      "urlopen_calls": 0
+    },
+    "isolated": {
+      "no_overview": {
+        "get": {
+          "body": {
+            "channel": "dc/t1",
+            "error": "ізольований конфіг: спільний стан Teams не чіпаємо"
+          },
+          "status": 200
+        },
+        "post": {
+          "body": {
+            "channel": "dc/t1",
+            "error": "ізольований конфіг: спільний стан Teams не чіпаємо",
+            "ok": false
+          },
+          "status": 502
+        },
+        "urlopen_calls": 0
+      },
+      "tasks_file": {
+        "get": {
+          "body": {
+            "channel": "dc/t1",
+            "error": "ізольований конфіг: спільний стан Teams не чіпаємо"
+          },
+          "status": 200
+        },
+        "post": {
+          "body": {
+            "channel": "dc/t1",
+            "error": "ізольований конфіг: спільний стан Teams не чіпаємо",
+            "ok": false
+          },
+          "status": 502
+        },
+        "urlopen_calls": 0
+      }
+    },
+    "real_path": {
+      "get": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:ffffffffffff",
+          "via": "dc/t1"
+        },
+        "rpc_calls": [
+          {
+            "body": {},
+            "headers": {
+              "apikey": "<key>",
+              "authorization": "Bearer <key>",
+              "content-type": "application/json"
+            },
+            "host_is_demo": true,
+            "method": "POST",
+            "path": "/rest/v1/rpc/teams_mute_state",
+            "query": "",
+            "ssl_context": true,
+            "timeout": 8
+          }
+        ],
+        "status": 200,
+        "task": "t1"
+      },
+      "get_network_error": {
+        "body": {
+          "channel": "dc/t1",
+          "error": "мережі нема"
+        },
+        "rpc_calls": [
+          {
+            "body": {},
+            "headers": {
+              "apikey": "<key>",
+              "authorization": "Bearer <key>",
+              "content-type": "application/json"
+            },
+            "host_is_demo": true,
+            "method": "POST",
+            "path": "/rest/v1/rpc/teams_mute_state",
+            "query": "",
+            "ssl_context": true,
+            "timeout": 8
+          }
+        ],
+        "status": 200
+      },
+      "post_mute": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "k:ffffffffffff",
+          "ok": true,
+          "via": "dc/t1"
+        },
+        "rpc_calls": [
+          {
+            "body": {
+              "p_by": "k:0123456789ab",
+              "p_muted": true,
+              "p_project": "dc/t1"
+            },
+            "headers": {
+              "apikey": "<key>",
+              "authorization": "Bearer <key>",
+              "content-type": "application/json"
+            },
+            "host_is_demo": true,
+            "method": "POST",
+            "path": "/rest/v1/rpc/teams_mute_set",
+            "query": "",
+            "ssl_context": true,
+            "timeout": 8
+          },
+          {
+            "body": {},
+            "headers": {
+              "apikey": "<key>",
+              "authorization": "Bearer <key>",
+              "content-type": "application/json"
+            },
+            "host_is_demo": true,
+            "method": "POST",
+            "path": "/rest/v1/rpc/teams_mute_state",
+            "query": "",
+            "ssl_context": true,
+            "timeout": 8
+          }
+        ],
+        "status": 200
+      },
+      "post_network_error": {
+        "body": {
+          "channel": "dc/t1",
+          "error": "мережі нема",
+          "ok": false
+        },
+        "rpc_calls": [
+          {
+            "body": {
+              "p_by": "k:0123456789ab",
+              "p_muted": true,
+              "p_project": "dc/t1"
+            },
+            "headers": {
+              "apikey": "<key>",
+              "authorization": "Bearer <key>",
+              "content-type": "application/json"
+            },
+            "host_is_demo": true,
+            "method": "POST",
+            "path": "/rest/v1/rpc/teams_mute_set",
+            "query": "",
+            "ssl_context": true,
+            "timeout": 8
+          }
+        ],
+        "status": 502
+      }
+    },
+    "signature_real": "k:e0905a263469"
+  },
+  "rpc_requests": {
+    "integrations_off": {
+      "is_oserror": true,
+      "message": "integrations-off",
+      "raised": "IntegrationsOff",
+      "urlopen_calls": 0
+    },
+    "isolated_no_overview": {
+      "is_oserror": true,
+      "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+      "raised": "OSError",
+      "urlopen_calls": 0
+    },
+    "isolated_tasks_file": {
+      "is_oserror": true,
+      "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+      "raised": "OSError",
+      "urlopen_calls": 0
+    },
+    "network_error": {
+      "is_oserror": true,
+      "message": "мережі нема",
+      "raised": "OSError",
+      "urlopen_calls": 1
+    },
+    "no_supabase": {
+      "is_oserror": true,
+      "message": "Supabase не налаштовано",
+      "raised": "OSError",
+      "urlopen_calls": 0
+    },
+    "set": {
+      "args": [
+        "teams_mute_set",
+        {
+          "p_by": "k:0123456789ab",
+          "p_muted": true,
+          "p_project": "dc/t1"
+        }
+      ],
+      "calls": [
+        {
+          "body": {
+            "p_by": "k:0123456789ab",
+            "p_muted": true,
+            "p_project": "dc/t1"
+          },
+          "headers": {
+            "apikey": "<key>",
+            "authorization": "Bearer <key>",
+            "content-type": "application/json"
+          },
+          "host_is_demo": true,
+          "method": "POST",
+          "path": "/rest/v1/rpc/teams_mute_set",
+          "query": "",
+          "ssl_context": true,
+          "timeout": 8
+        }
+      ],
+      "result": true,
+      "stub_response": true
+    },
+    "state": {
+      "args": [
+        "teams_mute_state",
+        {}
+      ],
+      "calls": [
+        {
+          "body": {},
+          "headers": {
+            "apikey": "<key>",
+            "authorization": "Bearer <key>",
+            "content-type": "application/json"
+          },
+          "host_is_demo": true,
+          "method": "POST",
+          "path": "/rest/v1/rpc/teams_mute_state",
+          "query": "",
+          "ssl_context": true,
+          "timeout": 8
+        }
+      ],
+      "result": [
+        {
+          "muted_at": "2026-11-01T10:00:00",
+          "muted_by": "k:ffffffffffff",
+          "project_id": "dc/t1"
+        }
+      ],
+      "stub_response": [
+        {
+          "muted_at": "2026-11-01T10:00:00",
+          "muted_by": "k:ffffffffffff",
+          "project_id": "dc/t1"
+        }
+      ]
+    },
+    "unset": {
+      "calls": [
+        {
+          "body": {
+            "p_by": "k:0123456789ab",
+            "p_muted": false,
+            "p_project": "dc/t1"
+          },
+          "headers": {
+            "apikey": "<key>",
+            "authorization": "Bearer <key>",
+            "content-type": "application/json"
+          },
+          "host_is_demo": true,
+          "method": "POST",
+          "path": "/rest/v1/rpc/teams_mute_set",
+          "query": "",
+          "ssl_context": true,
+          "timeout": 8
+        }
+      ],
+      "result": false
+    }
+  }
+}
