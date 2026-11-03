@@ -1056,7 +1056,7 @@ class CliShape(unittest.TestCase):
                                          {'id': 'legacy', 'path': '/nowhere/legacy', 'legacy': False, 'integrations': False}]}
 
     def setUp(self):
-        self.picked, self.synced = [], []
+        self.picked, self.synced, self.status_calls, self.status_cb = [], [], [], lambda keys: {}
 
         def target(sp):
             self.picked.append(sp['id'])
@@ -1064,10 +1064,16 @@ class CliShape(unittest.TestCase):
         for patcher in (mock.patch.object(spaces, 'load_registry', return_value=self.REG),
                         mock.patch.object(ov, '_target', target),
                         mock.patch.object(ov, '_tasks_of', lambda sp: {'tasks': {}}),
+                        # 4c-2: статуси — від постачальника `tracker` (справжній читав би конфіг установки й модулі машини)
+                        mock.patch.object(ov, '_statuses', self.statuses_for),
                         mock.patch.object(dashboard, 'sync', lambda *a, **kw: self.synced.append(kw)),
                         mock.patch.object(ov, 'discover_projects', lambda cfg: {})):
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    def statuses_for(self, sp, legacy, log=print):
+        self.status_calls.append((sp['id'], legacy))
+        return self.status_cb
 
     def main(self, *argv):
         out = io.StringIO()
@@ -1083,13 +1089,16 @@ class CliShape(unittest.TestCase):
     def test_sync_with_space_is_that_space(self):
         self.assertEqual(self.main('sync', '--space', 'p')[0], 0)
         self.assertEqual(self.picked, ['p'])
-        # звичайний простір: колбеків реєстру й Jira нема
-        self.assertEqual((self.synced[0]['discover'], self.synced[0]['statuses']), (None, None))
+        # звичайний простір: колбека реєстру нема; статуси — від постачальника `tracker` (тут заглушка), а не прапорця ЛІГИ
+        self.assertIsNone(self.synced[0]['discover'])
+        self.assertIs(self.synced[0]['statuses'], self.status_cb)
+        self.assertEqual(self.status_calls, [('p', False)])
 
-    def test_the_league_space_gets_the_registry_and_jira_callbacks(self):
+    def test_the_league_space_gets_the_registry_and_status_callbacks(self):
         self.main('sync')
         self.assertIsNotNone(self.synced[0]['discover'])
-        self.assertIs(self.synced[0]['statuses'], ov.jira_statuses)
+        self.assertIs(self.synced[0]['statuses'], self.status_cb)
+        self.assertEqual(self.status_calls, [('liga', True)])
 
     def test_the_legacy_flag_is_the_league_space_and_the_id_legacy_is_a_real_space(self):
         """⛔ Псевдоніма-id нема: `--space legacy` — це справжній простір з id `legacy`, а ЛІГА — окремий прапорець `--legacy`

@@ -34,7 +34,8 @@ def run_cli(fn, cfg, registry=None, counts=None, jira=None, fixture_reason=None,
                mock.patch.object(ov, "_target", lambda sp: (module, {"secrets": {}}, True)),
                mock.patch.object(ov, "load_tasks_file", lambda path=None: cfg),
                mock.patch.object(ov, "discover_projects", lambda c: dict(registry or {})),
-               mock.patch.object(ov, "jira_statuses", lambda keys: jira or {}),
+               # статуси трекера (4c-2): колбек від `_statuses` (раніше — `jira_statuses`); справжній читав би конфіг установки
+               mock.patch.object(ov, "_statuses", lambda sp, legacy, log=print: (lambda keys: jira or {})),
                mock.patch.object(dashboard, "_identity", lambda: ("Alpha", "alpha@example.com"))]
     if fixture_reason is not None:
         patches.append(mock.patch.object(dashboard, "_fixture_reason", fixture_reason))
@@ -161,43 +162,6 @@ class TestDiscover(unittest.TestCase):
         self.assertNotIn("gitlab_repo", row)
         self.assertNotIn("gitlab_url", row)
         self.assertEqual(row["name"], "X")
-
-
-class TestJiraStatuses(unittest.TestCase):
-    def test_no_creds_returns_empty(self):
-        real = ov._jira_creds
-        ov._jira_creds = lambda: (None, None)
-        try:
-            self.assertEqual(ov.jira_statuses(["LIGA-1"]), {})
-        finally:
-            ov._jira_creds = real
-
-    def test_empty_keys_returns_empty(self):
-        self.assertEqual(ov.jira_statuses([]), {})
-
-    def test_parses_status_and_category(self):
-        class FakeResponse:
-            def __enter__(self): return self
-            def __exit__(self, *exc): return False
-            def read(self):
-                return json.dumps({"issues": [
-                    {"key": "LIGA-7003", "fields": {"status": {
-                        "name": "UI Work", "statusCategory": {"key": "indeterminate"}}}},
-                    {"key": "LIGA-7008", "fields": {"status": {
-                        "name": "To Do", "statusCategory": {"key": "new"}}}},
-                ]}).encode("utf-8")
-
-        real_creds = ov._jira_creds
-        real_open = ov.urllib.request.urlopen
-        ov._jira_creds = lambda: ("e@x", "tok")
-        ov.urllib.request.urlopen = lambda req, timeout=None, context=None: FakeResponse()
-        try:
-            got = ov.jira_statuses(["LIGA-7003", "LIGA-7008"])
-        finally:
-            ov._jira_creds = real_creds
-            ov.urllib.request.urlopen = real_open
-        self.assertEqual(got["LIGA-7003"], {"name": "UI Work", "cat": "indeterminate"})
-        self.assertEqual(got["LIGA-7008"], {"name": "To Do", "cat": "new"})
 
 
 class TestLegacyConfig(unittest.TestCase):

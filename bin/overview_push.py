@@ -6,11 +6,12 @@
 
 Збирання карток і сам прохід — у `app/dashboard.py`; запис у сховище робить МОДУЛЬ ролі `dashboard` простору
 (`deai_modules.provider('dashboard', простір)`: вбудований `supabase-dashboard`, свій модуль чи `'legacy'` для ЛІГИ з конфігом
-установки). Тут лишились кроки, що ще не стали ролями й передаються в синк колбеками: реєстр GitLab і статуси Jira (до 4c-2/4d).
+установки). Статуси задач дає постачальник ролі `tracker` того самого простору (`_statuses`: вбудований `jira-tracker`, свій модуль
+чи `'legacy'` для ЛІГИ з `jira_base` у конфігу установки; Jira-коду тут більше нема, етап 4c-2). Лишився один крок, що ще не став
+роллю й передається в синк колбеком: реєстр GitLab (до 4d).
 ⛔ Скрипт НЕ імпортує сервер: його кличуть і фоном із сервера, і зовнішній планувальник, і серверу тут нічого не належить.
 """
-import argparse, base64, json, os, sys
-import urllib.request
+import argparse, json, os, sys
 
 # app/ (сусідня тека) на шляху імпорту — для чистих моделей (pages_model тощо)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app"))
@@ -29,60 +30,7 @@ import dashboard
 import deai_modules
 import install_config
 import spaces
-
-# ---------- Jira статуси (реальний workflow-статус, сайт команди) ----------
-_JIRA_BASE = "https://jira.example.com"
-
-def _jira_creds():
-    """(email, token) з env JIRA_EMAIL/JIRA_TOKEN або файлів у ~/.claude/pipeline-feedback/.
-    Токен НІКОЛИ не в git/коді/чаті — лише локальний файл (chmod 600)."""
-    def _read(env, path):
-        v = os.environ.get(env)
-        if v:
-            return v.strip()
-        try:
-            with open(os.path.expanduser(path), encoding="utf-8") as f:
-                return f.read().strip()
-        except OSError:
-            return None
-    email = _read("JIRA_EMAIL", "~/.claude/pipeline-feedback/jira-email")
-    token = _read("JIRA_TOKEN", "~/.claude/pipeline-feedback/jira-token")
-    return (email, token) if (email and token) else (None, None)
-
-def jira_statuses(keys):
-    """{key: {'name','cat'}} з Jira для списку ключів LIGA-XXXX. Best-effort:
-    нема токена / помилка мережі → {} (щоб НЕ затерти наявні статуси)."""
-    keys = [k for k in dict.fromkeys(k for k in keys if k)]  # унікальні, порядок збережено
-    email, token = _jira_creds()
-    if not keys or not (email and token):
-        return {}
-    jql = "key in (" + ",".join(keys) + ")"
-    body = json.dumps({"jql": jql, "fields": ["status"], "maxResults": 100}).encode("utf-8")
-    auth = base64.b64encode(f"{email}:{token}".encode("utf-8")).decode("ascii")
-    req = urllib.request.Request(
-        f"{_JIRA_BASE}/rest/api/3/search/jql", data=body, method="POST",
-        headers={"Authorization": f"Basic {auth}", "Accept": "application/json",
-                 "Content-Type": "application/json"})
-    out = {}
-    try:
-        with urllib.request.urlopen(req, timeout=15, context=_ssl_context()) as r:
-            data = json.load(r)
-        for iss in data.get("issues", []):
-            st = (iss.get("fields") or {}).get("status") or {}
-            out[iss.get("key")] = {"name": st.get("name"),
-                                   "cat": (st.get("statusCategory") or {}).get("key")}
-    except Exception:  # noqa: BLE001
-        return {}
-    return out
-
-def _ssl_context():
-    """Проверенный TLS: certifi, если есть (фикс macOS python.org — как в serve.py). Лишився лише для запиту до Jira."""
-    import ssl
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except Exception:  # noqa: BLE001
-        return ssl.create_default_context()
+import tracker
 
 # ---------- sync CLI: файл задач простору → картки → `push` модуля ролі `dashboard` ----------
 # ⛔ Клієнта Supabase (`_supabase`, `upsert_project`, `open_comment_counts`) тут більше нема: запис і читання лічильників
@@ -183,6 +131,34 @@ def _tasks_of(sp):
         raise CliError("⛔ overview: файл задач простору «%s» не читається (%s)" % (sp["id"], type(e).__name__))
 
 
+def _statuses(sp, legacy, log=print):
+    """Колбек статусів для `dashboard.sync` від постачальника ролі `tracker` простору `sp` або `None` (кроку нема).
+    `'legacy'` (простір з інтеграціями без свого трекера, ЛІГА) — вбудований `jira-tracker` з `ctx` з конфігу установки
+    (`tracker.legacy_ctx(*install_config.jira_config())`, НЕ `module_ctx`: у ЛІГИ нема `space.json`/`secrets.json`; адреса —
+    `jira_base` у `tasks.json`); не налаштовано (`tracker-unconfigured`) — `None` БЕЗ мережі. Інакше — модуль простору з його
+    `module_ctx`. Нема постачальника — `None`. Збій вирішення ролі (нечитаний `space.json`, модуль не завантажився) — теж `None`,
+    але рядком у `log`: синк іде далі без статусів, а причина не мовчить. Колбек питає трекер пакетами з бюджетами синку
+    (`tracker.SYNC_TIMEOUT`/`SYNC_SOCKET_S`); його збій обробляє сам `dashboard.sync` (рядок у лог, наявні статуси не затираються).
+    `legacy` — прапорець постачальника дашборда з `_target`; сам постачальник трекера вирішує `provider`, тож тут він не читається."""
+    try:
+        prov = deai_modules.provider("tracker", sp)
+        if prov is None:
+            return None
+        if prov == "legacy":
+            module, ctx = tracker.legacy_module(), tracker.legacy_ctx(*install_config.jira_config(), space_id=sp["id"])
+        else:
+            module, ctx = prov, deai_modules.module_ctx(sp, prov)
+    except deai_modules.ModuleError as e:
+        if e.code == "tracker-unconfigured":        # ЛІГА без `jira_base`/облікових — не збій, а «трекера нема»
+            return None
+        log("⚠ overview: статуси трекера недоступні: %s" % (e.message or e.code)[:200])
+        return None
+    except spaces.SpacesError as e:
+        log("⚠ overview: статуси трекера недоступні: реєстр просторів не читається (%s)" % e.code)
+        return None
+    return lambda keys: tracker.statuses(module, ctx, keys, timeout=tracker.SYNC_TIMEOUT, socket_s=tracker.SYNC_SOCKET_S)
+
+
 def cmd_sync(space_id=None, *, call=None, log=print):
     sp = _space(space_id)
     module, ctx, legacy = _target(sp)
@@ -190,9 +166,10 @@ def cmd_sync(space_id=None, *, call=None, log=print):
         log("·  overview: у просторі «%s» нема постачальника командного дашборда — нічого синхронізувати" % sp["id"])
         return
     cfg = _tasks_of(sp)
-    # Реєстр і Jira — кроки ЛІГИ (колбеки): звичайний простір їх не має, і ні в реєстр, ні в Jira не ходить.
+    # Реєстр GitLab — крок ЛІГИ (колбек): звичайний простір його не має. Статуси трекера — від постачальника ролі `tracker`
+    # будь-якого простору (нема постачальника чи конфігу — `None`, крок пропущено).
     dashboard.sync(cfg, module, ctx, discover=(lambda: discover_projects(cfg)) if legacy else None,
-                   statuses=jira_statuses if legacy else None, log=log, call=call)
+                   statuses=_statuses(sp, legacy, log), log=log, call=call)
 
 
 def cmd_discover(space_id=None, *, call=None, log=print):

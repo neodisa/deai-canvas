@@ -3,8 +3,10 @@
 Task 1: лише знімок `tests/fixtures/tracker/before-4c2.json` (його знімає `tests/make_before_4c2.py` на коді БЕЗ змін, і більше
 він не переписується) та перевірка його форми. Тести паритету наступних задач читають цей JSON, а не переганяють генератор.
 """
+import contextlib
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -13,15 +15,21 @@ from unittest import mock
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(ROOT, 'app'))
+sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
+import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 import install_config  # noqa: E402
+import overview_push as ov  # noqa: E402
+import registry  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import test_modules as tm  # noqa: E402  (каркас `Env`: тимчасові HOME/DEAI_HOME, тека модулів-фікстур)
 import tracker  # noqa: E402
 
 _REAL = None
+#: Справжня тека вбудованих модулів: `tm.Env` підміняє `dm.builtin_dir` на тимчасову, а шлях ЛІГИ мусить бачити справжній `jira-tracker`.
+_REAL_BUILTIN = dm.builtin_dir
 
 
 def setUpModule():
@@ -542,3 +550,311 @@ class LegacyAdapter(unittest.TestCase):
             out = tracker.statuses(m, ctx, ['DEMO-1'], timeout=tracker.READ_TIMEOUT, socket_s=tracker.READ_SOCKET_S)
         self.assertEqual(out, {'DEMO-1': {'name': 'Done', 'cat': 'done'}})
         self.assertEqual([(u, t) for u, t, _ in seen], [('https://demo.atlassian.example/rest/api/3/search/jql', 4)])
+
+
+# ------------------------------------------------------------------------------- Task 4: синк дашборда через `tracker`
+
+#: Вигадані облікові Jira ЛІГИ (`install_config.jira_config` у тестах підмінено на них: справжніх файлів і оточення не читаємо).
+JIRA_CFG = (JIRA, 'alpha@example.com', 'tok-test-1')
+#: Запис реєстру ЛІГИ (як `spaces` віддає для простору з `legacy`).
+LEAGUE = {'id': 'liga', 'path': '', 'legacy': True, 'integrations': True}
+#: Вигадана «тека-фікстура» в `registry._temp_roots`: тимчасові теки тестів не мають вважатись фікстурами (як у генераторі знімка).
+FAKE_TMP = '/deai-fixture-tmp'
+
+
+class _StubResp:
+    """Відповідь-заглушка шва `_open` модуля `jira-tracker`: контекстний менеджер із `status` і `read`."""
+
+    def __init__(self, body):
+        self._body = json.dumps(body).encode('utf-8')
+        self.status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n=-1):
+        return self._body
+
+
+def _strip(card):
+    return {k: v for k, v in card.items() if k not in VOLATILE}
+
+
+#: Фейковий трекер: пише в `log_file` ключі й бюджет сокета кожного виклику, віддає `{ключ: {name, cat}}`; `fail` — текст помилки.
+FAKE_TRACKER = (tm.CHECK_ONLY + """
+import json
+def statuses(ctx, keys):
+    with open(ctx['settings']['log_file'], 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps({'keys': keys, 'timeout_s': ctx.get('timeout_s')}) + '\\n')
+    if ctx['settings'].get('fail'):
+        raise ctx['ModuleError']('tracker-error', message=ctx['settings']['fail'])
+    return {k: {'name': 'Fake ' + k, 'cat': 'done'} for k in keys}
+""")
+#: Фейковий дашборд: дописує кожен `push` рядком JSON у `log_file` (за ним тест бачить, ЩО поїхало).
+FAKE_DASH = (tm.CHECK_ONLY + """
+import json
+def rows(ctx):
+    return []
+def push(ctx, cards, mode):
+    with open(ctx['settings']['log_file'], 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps({'mode': mode, 'cards': cards}) + '\\n')
+    return {'ok': len(cards), 'failed': {}}
+""")
+_LOG_SETTING = [{'key': 'log_file', 'type': 'text', 'label': 'Log file (test)', 'required': True}]
+_FAIL_SETTING = [{'key': 'fail', 'type': 'text', 'label': 'Fail with this text (test)'}]
+
+
+class SyncStatuses(tm.Env):
+    """Синк дашборда бере статуси в постачальника ролі `tracker` ЦЬОГО простору (4c-2, Task 4): ЛІГА — вбудований `jira-tracker`
+    з адресою з `jira_base`, звичайний простір — свій модуль; нема постачальника чи конфігу — кроку нема. Збій трекера — рядок
+    у лозі (до 4c-2 Jira мовчала). Усе без мережі: шов `_open` модуля / `call`-запис / фейкові модулі."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)
+
+    def setUp(self):
+        super().setUp()
+        os.environ['DEAI_HOME'] = self.deai          # як у `TrackerRole`: статичний охоронець шукає присвоєння в самому файлі
+        patch = mock.patch.object(registry, '_temp_roots', return_value=[FAKE_TMP])
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def real_builtins(self):
+        """Шлях ЛІГИ: справжній `jira-tracker` з `app/modules` (а не тека фікстур `Env`)."""
+        self.addCleanup(dm.reset_caches)
+        patch = mock.patch.object(dm, 'builtin_dir', _REAL_BUILTIN)
+        patch.start()
+        self.addCleanup(patch.stop)
+        dm.reset_caches()
+
+    def world(self):
+        """`cfg` знімка: теки задач у тимчасовій теці, `iterations.json` — як у генераторі знімка."""
+        tasks = {}
+        for tid, task in self.snap['sync_cards']['input']['tasks'].items():
+            tdir = os.path.join(self.tmp, 'work', tid)
+            tm._write(os.path.join(tdir, 'iterations.json'),
+                      {'iterations': [{'id': 'it1', 'date': '01.11.2026 10:00', 'published': False}], 'publish_url': None})
+            tasks[tid] = dict(task, dir=tdir)
+        return {'current': 't1', 'tasks': tasks}
+
+    def run_league(self, open_fn=None, jira_config=JIRA_CFG):
+        """`cmd_sync` ЛІГИ: простір `LEAGUE`, дашборд — запис `call` (`push`), реєстр — порожній, Jira — шов `_open`. Повертає
+        `(лог, [{'mode', 'cards'}], [запити до Jira])`."""
+        self.real_builtins()
+        reqs, lines, pushes = [], [], []
+        stub = self.snap['jira_request']['request']['stub_response']
+
+        def fake_open(req, timeout):
+            reqs.append({'method': req.get_method(), 'url': req.full_url, 'body': json.loads(req.data.decode('utf-8')),
+                         'headers': {k.lower(): v for k, v in req.header_items()}, 'timeout': timeout})
+            return _StubResp(stub)
+
+        def call(module, name, ctx, *args, **kw):
+            assert name == 'push', name
+            cards, mode = args
+            pushes.append({'mode': mode, 'cards': [_strip(c) for c in cards]})
+            return {'ok': len(cards), 'failed': {}}
+        cfg = self.world()
+        mod = tracker.legacy_module()
+        with contextlib.ExitStack() as st:
+            st.enter_context(mock.patch.object(ov, '_space', lambda sid: LEAGUE))
+            st.enter_context(mock.patch.object(ov, '_target', lambda sp: (object(), {}, True)))
+            st.enter_context(mock.patch.object(ov, '_tasks_of', lambda sp: cfg))
+            st.enter_context(mock.patch.object(ov, 'discover_projects', lambda c: {}))
+            st.enter_context(mock.patch.object(dashboard, '_identity', lambda: ('Alpha', 'alpha@example.com')))
+            st.enter_context(mock.patch.object(install_config, 'jira_config', lambda: jira_config))
+            st.enter_context(mock.patch.dict(mod.fn('check').__globals__, {'_open': open_fn or fake_open}))
+            ov.cmd_sync(call=call, log=lines.append)
+        return lines, pushes, reqs
+
+    # ---- паритет ЛІГИ зі знімком 0.12.0
+    def test_the_league_cards_and_modes_are_the_0_12_0_snapshot(self):
+        lines, pushes, reqs = self.run_league()
+        want = self.snap['sync_cards']
+        self.assertEqual(pushes, want['pushes'])                 # ті самі картки (з `jira_status*` на t1/t2) і той самий `merge`
+        self.assertEqual(lines, want['log'])
+        self.assertEqual(len(reqs), 1)
+
+    def test_the_league_request_is_the_0_12_0_request_but_to_jira_base(self):
+        """Запит модуля = запит знімка (метод, шлях, тіло, заголовки, сокет 15 с); адреса — з `jira_base`, а не з коду."""
+        _, _, reqs = self.run_league()
+        want = self.snap['jira_request']['request']['calls'][0]
+        got = reqs[0]
+        self.assertEqual((got['method'], got['url']), (want['method'], JIRA + want['path']))
+        self.assertEqual(got['body']['fields'], want['body']['fields'])
+        self.assertEqual(got['body']['maxResults'], want['body']['maxResults'])
+        # ключі — валідні ключі задач файла (знімок питав лише DEMO-1/DEMO-2; тут sync питає про всі задачі, у т.ч. DEMO-9)
+        self.assertEqual(got['body']['jql'], 'key in (DEMO-1,DEMO-2,DEMO-9)')
+        self.assertEqual((got['headers']['accept'], got['headers']['content-type']),
+                         (want['headers']['accept'], want['headers']['content-type']))
+        self.assertTrue(got['headers']['authorization'].startswith('Basic '))
+        self.assertEqual(got['timeout'], want['timeout'])        # 15 с — `SYNC_SOCKET_S`
+
+    def test_a_failing_tracker_differs_from_0_12_0_only_by_the_log_line(self):
+        """Збій Jira: картки БЕЗ `jira_status` (наявні статуси не затираються, а не `None`) — як у знімку; єдина свідома
+        відмінність — рядок у лозі (раніше збій мовчав)."""
+        def down(req, timeout):
+            raise OSError('connection refused: tok-test-1')
+        lines, pushes, _ = self.run_league(open_fn=down)
+        want = self.snap['sync_cards']['statuses_raises']
+        self.assertEqual(pushes, want['pushes'])
+        self.assertTrue(all('jira_status' not in c for p in pushes for c in p['cards']))
+        self.assertEqual(lines, ['⚠ overview: статуси трекера недоступні: Jira недосяжна (OSError)'] + want['log'])
+        self.assertNotIn('tok-test-1', ' '.join(lines))
+
+    def test_the_league_without_jira_base_has_no_statuses_and_no_network(self):
+        """Конфігу Jira нема (`jira_base` у `tasks.json` не задано): крок пропущено, мережі й виклику модуля нема, синк іде далі."""
+        def boom(req, timeout):
+            raise AssertionError('мережа: Jira без конфігу не питається')
+        lines, pushes, reqs = self.run_league(open_fn=boom, jira_config=(None, None, None))
+        self.assertEqual(reqs, [])
+        self.assertEqual(lines, self.snap['sync_cards']['log'])      # жодного рядка про Jira: «не налаштовано» — не збій
+        cards = [c for p in pushes for c in p['cards']]
+        self.assertEqual(len(cards), 4)
+        self.assertTrue(all('jira_status' not in c for c in cards))
+
+    def test_the_real_install_config_without_jira_base_is_the_same(self):
+        """Те саме на справжньому `install_config.jira_config` (тимчасові HOME і `tasks.json` без `jira_base`)."""
+        self.real_builtins()
+        tm._write(self.legacy, {'tasks': {}})
+        with mock.patch.object(tracker, 'statuses', side_effect=AssertionError('виклик трекера')):
+            cb = ov._statuses(LEAGUE, True)
+        self.assertIsNone(cb)
+
+    # ---- звичайний простір
+    def regular_space(self, with_tracker=True, fail=None):
+        """Простір без інтеграцій із фейковим дашбордом і (за потреби) фейковим трекером; `(запис, лог дашборда, лог трекера)`."""
+        sp = self.new_space('Plain')
+        dash_log, trk_log = self.hp('dash.log'), self.hp('trk.log')
+        self.mk('fake-dash', roles=('dashboard',), server=FAKE_DASH, settings=_LOG_SETTING)
+        dm.write_module_state(sp, 'fake-dash', enabled=True, settings={'log_file': dash_log})
+        if with_tracker:
+            self.mk('fake-trk', roles=('tracker',), server=FAKE_TRACKER, settings=_LOG_SETTING + _FAIL_SETTING)
+            dm.write_module_state(sp, 'fake-trk', enabled=True,
+                                  settings=dict({'log_file': trk_log}, **({'fail': fail} if fail else {})))
+        return sp, dash_log, trk_log
+
+    def run_regular(self, sp):
+        lines = []
+        cfg = self.world()
+        with mock.patch.object(ov, '_tasks_of', lambda s: cfg), \
+                mock.patch.object(dashboard, '_identity', lambda: ('Alpha', 'alpha@example.com')):
+            ov.cmd_sync(sp['id'], log=lines.append)
+        return lines
+
+    @staticmethod
+    def jsonl(path):
+        try:
+            with open(path, encoding='utf-8') as f:
+                return [json.loads(ln) for ln in f if ln.strip()]
+        except OSError:
+            return []
+
+    def test_a_regular_space_gets_jira_status_from_its_tracker_module(self):
+        sp, dash_log, trk_log = self.regular_space()
+        lines = self.run_regular(sp)
+        cards = {c['id']: c for p in self.jsonl(dash_log) for c in p['cards']}
+        self.assertEqual(sorted(cards), ['t1', 't2', 't3', 't4'])
+        self.assertEqual((cards['t1']['jira_status'], cards['t1']['jira_status_cat']), ('Fake DEMO-1', 'done'))
+        self.assertEqual(cards['t4']['jira_status'], 'Fake DEMO-9')
+        self.assertNotIn('jira_status', cards['t3'])                    # задача без ключа
+        # ядро шле лише валідні ключі (без `None` задачі без `jira`) і дає модулю сокет синку (15 с)
+        self.assertEqual(self.jsonl(trk_log), [{'keys': ['DEMO-1', 'DEMO-2', 'DEMO-9'], 'timeout_s': tracker.SYNC_SOCKET_S}])
+        self.assertEqual(lines, ['✅ overview: синхронізовано 4 проєктів'])
+
+    def test_a_regular_space_tracker_failure_is_a_log_line_not_silence(self):
+        sp, dash_log, _ = self.regular_space(fail='Jira відповіла HTTP 503')
+        lines = self.run_regular(sp)
+        self.assertEqual(lines[0], '⚠ overview: статуси трекера недоступні: Jira відповіла HTTP 503')
+        cards = [c for p in self.jsonl(dash_log) for c in p['cards']]
+        self.assertEqual(len(cards), 4)
+        self.assertTrue(all('jira_status' not in c for c in cards))      # статуси не затираються: поля нема, а не `None`
+
+    def test_a_space_without_a_tracker_module_has_no_statuses_and_no_call(self):
+        sp, dash_log, trk_log = self.regular_space(with_tracker=False)
+        seen = []
+        real = dashboard.sync
+        with mock.patch.object(dashboard, 'sync', lambda *a, **kw: seen.append(kw['statuses']) or real(*a, **kw)), \
+                mock.patch.object(tracker, 'statuses', side_effect=AssertionError('виклик трекера')):
+            lines = self.run_regular(sp)
+        self.assertEqual(seen, [None])
+        self.assertEqual(self.jsonl(trk_log), [])
+        self.assertEqual(lines, ['✅ overview: синхронізовано 4 проєктів'])
+        self.assertTrue(all('jira_status' not in c for p in self.jsonl(dash_log) for c in p['cards']))
+
+    # ---- хелпер `_statuses`
+    def test_the_callback_uses_the_sync_budgets(self):
+        sp, _, _ = self.regular_space()
+        prov = dm.provider('tracker', sp)
+        with mock.patch.object(tracker, 'statuses', return_value={}) as st:
+            cb = ov._statuses(sp, False)
+            cb(['DEMO-1'])
+        (module, ctx, keys), kw = st.call_args
+        self.assertEqual((module.id, keys), (prov.id, ['DEMO-1']))
+        self.assertEqual((kw['timeout'], kw['socket_s']), (tracker.SYNC_TIMEOUT, tracker.SYNC_SOCKET_S))
+
+    def test_a_role_that_cannot_be_resolved_is_none_with_a_log_line(self):
+        """Простір з зламаним `space.json`/нечитаним реєстром: колбека нема, синк іде далі, а причина — у лозі (не мовчки)."""
+        lines = []
+        for exc in (dm.ModuleError('space-json-unreadable', message='space.json: broken'),
+                    dm.ModuleError('module-error', message='x' * 500),
+                    spaces.SpacesError('spaces-unreadable', '/nowhere/spaces.json')):
+            with mock.patch.object(dm, 'provider', side_effect=exc):
+                self.assertIsNone(ov._statuses({'id': 'p', 'path': '/nowhere'}, False, log=lines.append))
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(all(ln.startswith('⚠ overview: статуси трекера недоступні: ') for ln in lines), lines)
+        self.assertLessEqual(max(len(ln) for ln in lines), len('⚠ overview: статуси трекера недоступні: ') + 200)
+
+    def test_cmd_sync_passes_the_callback_for_any_space(self):
+        """`statuses=_statuses(sp, legacy)` — і для ЛІГИ, і для звичайного простору (раніше — лише `legacy`)."""
+        for legacy in (True, False):
+            seen = []
+            sentinel = object()
+            with mock.patch.object(ov, '_space', lambda sid: {'id': 's', 'legacy': legacy}), \
+                    mock.patch.object(ov, '_target', lambda sp: (object(), {}, legacy)), \
+                    mock.patch.object(ov, '_tasks_of', lambda sp: {'tasks': {}}), \
+                    mock.patch.object(ov, 'discover_projects', lambda c: {}), \
+                    mock.patch.object(ov, '_statuses', lambda sp, lg, log=print: sentinel), \
+                    mock.patch.object(dashboard, 'sync', lambda *a, **kw: seen.append(kw['statuses'])):
+                ov.cmd_sync()
+            self.assertEqual(seen, [sentinel], f'legacy={legacy}')
+
+    # ---- крок 2 `dashboard.sync` напряму
+    def sync_with(self, statuses):
+        lines = []
+        cfg = self.world()
+        dashboard.sync(cfg, object(), {}, statuses=statuses, identity=('Alpha', 'alpha@example.com'), log=lines.append,
+                       call=lambda module, name, ctx, *a, **kw: {'ok': len(a[0]), 'failed': {}})
+        return lines
+
+    def test_the_failure_line_text_is_the_message_then_str_then_the_class_name_up_to_200(self):
+        head = '⚠ overview: статуси трекера недоступні: '
+        cases = ((dm.ModuleError('tracker-error', message='Jira відповіла HTTP 502'), 'Jira відповіла HTTP 502'),
+                 (dm.ModuleError('tracker-error', message='m' * 300), 'm' * 200),
+                 (RuntimeError('boom'), 'boom'),
+                 (RuntimeError(), 'RuntimeError'))
+        for exc, text in cases:
+            def statuses(keys, exc=exc):
+                raise exc
+            lines = self.sync_with(statuses)
+            self.assertEqual(lines[0], head + text, repr(exc))
+            self.assertEqual(lines[-1], '✅ overview: синхронізовано 4 проєктів')
+
+
+class NoJiraCodeInThePusher(unittest.TestCase):
+    """Jira з `bin/overview_push.py` пішла в модуль `jira-tracker`: нічого з цього там більше не лишилось."""
+
+    def test_the_removed_names_are_gone(self):
+        with open(os.path.join(ROOT, 'bin', 'overview_push.py'), encoding='utf-8') as f:
+            text = f.read()
+        for gone in ('_JIRA_BASE', 'jira_statuses', '_jira_creds', 'urllib.request', '_ssl_context'):
+            self.assertFalse(gone in text, gone)           # не `assertNotIn`: той друкує весь файл при падінні
+        self.assertIsNone(re.search(r'^\s*import\s+(?:[\w, ]*\b)?(?:base64|urllib)\b', text, re.M))
+        for name in ('_JIRA_BASE', '_jira_creds', 'jira_statuses', '_ssl_context'):
+            self.assertFalse(hasattr(ov, name), name)
+

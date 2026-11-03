@@ -325,8 +325,9 @@ def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=p
     """Один прохід синку карток простору (спека §4). `cfg` — файл задач простору (`{'tasks': {…}}`); `module`/`ctx` —
     постачальник ролі `dashboard` (модуль + його `ctx`: для ЛІГИ його будує `legacy_ctx`); `call` — `deai_modules.call` (шов для
     тестів); `identity` — `(імʼя, ключ)` дизайнера, без нього — `_identity()` (git-конфіг).
-    `discover()` → `{id: запис}` (лише ЛІГА: реєстр GitLab); `statuses(keys)` → `{jira: {name, cat}}` (лише ЛІГА до 4c-2) —
-    кроки, що ще не стали ролями: звичайний простір їх не має, і ні реєстру, ні Jira тут не кличеться.
+    `discover()` → `{id: запис}` (лише ЛІГА: реєстр GitLab) — крок, що ще не став роллю: звичайний простір його не має;
+    `statuses(keys)` → `{ключ: {name, cat}}` — статуси трекера (будь-який простір із роллю `tracker`: колбек будує CLI з
+    постачальника ролі; `None` — постачальника чи конфігу нема, крок пропущено).
 
     Кроки: 0) базові картки з реєстру → `push(…, 'insert')`; 1) відкриті коментарі (`open_comments`, якщо модуль її має) →
     лічильники для статусу `review`; 2) статуси Jira; 3) задачі простору з текою НА ЦІЙ МАШИНІ → `build_card` → PII-фільтр →
@@ -352,13 +353,17 @@ def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=p
             counts = got if isinstance(got, dict) else {}
         except Exception:  # noqa: BLE001
             counts = {}
-    # 2) Реальні Jira-статуси (лише ЛІГА до 4c-2)
+    # 2) Реальні статуси трекера (будь-який простір із роллю `tracker`)
     jstatus = {}
     if statuses is not None:
         try:
             jstatus = statuses([t.get('jira') for t in cfg.get('tasks', {}).values()]) or {}
-        except Exception:  # noqa: BLE001 — best-effort: нема статусів ≠ затирати наявні
+        except Exception as e:  # noqa: BLE001 — best-effort: нема статусів ≠ затирати наявні (`{}`: картка без `jira_status`)
             jstatus = {}
+            # ⛔ НЕ мовчки: до 4c-2 збій Jira тут не лишав сліду. Текст — повідомлення модуля (ядро вже вичистило з нього
+            # секрети), інакше `str(e)`, інакше назва класу; не довше 200 знаків
+            log(f'⚠ overview: статуси трекера недоступні: '
+                f'{(getattr(e, "message", None) or str(e) or type(e).__name__)[:200]}')
     skipped = []
     cards = []
     # Фікстура в ЛОКАЛЬНОМУ кеші (живий tasks.json, затертий тестом, як
