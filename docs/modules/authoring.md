@@ -43,8 +43,9 @@ trust it.
 ```
 
 * `api` — `1`. `name` and `version` — strings shown to people.
-* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker` (called by the core
-  today); `notify` is a reserved name the core does not call yet. One provider per role per space.
+* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker`, `notify` (all of
+  them are called by the core; no role name is reserved any more, and a role the core does not know makes the manifest
+  invalid). One provider per role per space.
 * `publish_target` (publish only) — `folder` (default) or `url`. The canvas serves the local copy of a published preview
   (`/published/…`) only for the built-in `static-publish`.
 * `check_timeout_s` (optional) — an integer from 1 to 150: how many seconds the core waits for your `check` (default 5).
@@ -72,6 +73,7 @@ adds its own functions:
 | `vcs` | `status(ctx, target)`, `push(ctx, target, src, meta)`, `pull(ctx, target, dst, opts)`; optional `validate(ctx, target)`, `mirror_dir(ctx, target)` — see [The `vcs` role](#the-vcs-role) |
 | `dashboard` | `rows(ctx)`, `push(ctx, cards, mode)`; optional `open_comments(ctx)` — see [The `dashboard` role](#the-dashboard-role) |
 | `tracker` | `statuses(ctx, keys)` — see [The `tracker` role](#the-tracker-role) |
+| `notify` | `mute_state(ctx)`, `mute_set(ctx, channel, muted, by)` — see [The `notify` role](#the-notify-role) |
 
 A module that lacks `check` or a function of its roles shows as broken (the optional functions of `vcs` may be missing). The
 exact return values are those of the built-in modules — read `app/modules/static-publish/` (`folder`),
@@ -328,6 +330,53 @@ turns a failure it caused itself into a `tracker-error` («the answer is not a d
 
 **Your own module of this role** lives in `<space>/modules/<id>/` and runs after trust, like any other (section 4). Keep
 the token of a tracker in a `secret` setting and do not mark it `public`.
+
+### The `notify` role
+
+`notify` keeps the **mute** of the Teams notifications of a space: the switch «Notify Teams» in the publish menu of the
+canvas shows whether the comment channel of a task is silenced and silences or un-silences it. Sending the card itself is
+not done by the core: the service behind the module (the database, in the built-in `supabase-teams`) sends a card to Teams
+for each new pin and looks at the mute before it does. The built-in module is `app/modules/supabase-teams/`.
+
+**The functions.** Both take `ctx` first and report a failure with `ctx["ModuleError"]` (the codes are below).
+
+* `mute_state(ctx)` — returns a **list** of the silenced channels:
+  `[{"project_id": str, "muted_at": str | None, "muted_by": str}]`. `project_id` is the channel (`dc/t1`), `muted_at` the time
+  of the switch as the service wrote it, `muted_by` the signature of the person (a short hash of an e-mail, never a name or
+  an e-mail: the list is readable by anyone who may call the service). The core keeps only the dicts whose `project_id` is a
+  string of 1..**200** characters, turns a `muted_by` that is not a string or is longer than **200** into `''` and a
+  `muted_at` that is not a string or is longer than **40** into `None`, drops every other key and keeps at most **1000** rows.
+  An answer that is not a list is a `notify-error`: «I do not know» is never shown as «nothing is silenced».
+* `mute_set(ctx, channel, muted, by)` — silences (`muted` is `True`) or un-silences (`False`) one channel and returns the new
+  state as a **bool**. `channel` is a non-empty string of at most **200** characters, `muted` is a real `bool` (not `1` or
+  `"true"`), `by` is the signature of the person, a string of at most **200** characters (may be empty). The core checks the
+  arguments **before** the call, so a module never sees a bad one. Anything but a bool in the answer is a `notify-error`.
+* `check(ctx)` — as for every module (section 3): a verdict dict, never an exception. The built-in module tells apart a wrong
+  address or key, a service without its schema, and a service that cannot send (no webhook secret); the codes of a verdict are
+  free text for the screen — the table below lists only the codes you **raise**.
+
+**What the core does with the state.** A silenced channel covers its sub-channels: with `dc/t1` silenced, `dc/t1/internal` is
+silenced too (`via` names the channel that covers it). The match is by `<channel>/`, not by a bare prefix: `dc/t10` and
+`dc/t1x` are **not** sub-channels of `dc/t1`. A switch is «mine» only when its `muted_by` is not empty and equals the signature
+of this computer; a row without `muted_by` (an old one) is never «mine». The core waits **10 s** for a call
+(`NOTIFY_TIMEOUT`); keep the socket of your own requests shorter (the built-in module uses 8 s) and answer with your own text
+instead of a bare `check-timeout`.
+
+**Who is asked, and when.** A space has notifications when it has a provider of the role; without one the canvas shows no
+switch and the route `/api/teams-mute` answers `409`. A space with integrations and no module of its own uses the built-in
+`supabase-teams` through the address and the key of the installation (the same Supabase as the team comments).
+
+**The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`. The table is
+for the codes you **raise** from `mute_state` and `mute_set`; the verdict codes of `check` are separate.
+
+| code | HTTP | raise it when |
+|---|---|---|
+| `notify-unconfigured` | 409 | the service has no address or key to talk to |
+| `notify-error` | 502 | the service refused or did not answer; the text carries no key and no body of a request |
+
+**Your own module of this role** lives in `<space>/modules/<id>/` and runs after trust, like any other (section 4). Keep the
+key of a service that can write in a `secret` setting and do not mark it `public`: the switch is made from the canvas with a
+private key and never from a page.
 
 ## 4. Trust
 

@@ -154,8 +154,8 @@ class TrackerRole(tm.Env):
         return m.error
 
     def test_the_role_is_called_and_no_longer_reserved(self):
-        self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker'))
-        self.assertEqual(dm.ROLES_RESERVED, ('notify',))
+        self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))
+        self.assertEqual(dm.ROLES_RESERVED, ())
         self.assertEqual(dm.ROLE_FUNCTIONS['tracker'], ('statuses',))
         self.assertIn('tracker', dm.LEGACY_ROLES)
         self.assertIn('tracker', dm.STRICT_LEGACY_ROLES)

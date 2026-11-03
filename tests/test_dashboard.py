@@ -574,6 +574,7 @@ class ReadParity(unittest.TestCase):
         sp.pop('path', None)
         cap = sp['capabilities'].pop('dashboard')          # новий ключ 4c-1: вилучаємо ДО копії, перевіряється окремо
         sp['capabilities'].pop('tracker')                  # новий ключ 4c-2 (знімок 0.11.0 його не знає): його перевіряє test_tracker
+        sp['capabilities'].pop('notify')                   # новий ключ 4c-3 (знімок 0.11.0 його не знає): його перевіряє test_notify
         data.pop('tracker')                                # новий ключ тіла 4c-2 (знімок 0.11.0 його не знає): його перевіряє test_tasks_overview
         return {'status': status, 'body': mb.strip(data), 'volatile': volatile, 'dashboard': cap}
 
