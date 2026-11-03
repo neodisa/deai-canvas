@@ -1,8 +1,8 @@
 """Роль `notify` (етап 4c-3, спека 2026-11-03-notify-role-design.md).
 
-Тут: знімок поведінки 0.13.0 (`Before4c3Shape`, Task 1), роль у каркасі модулів (`NotifyRole`, Task 2) і чисте ядро
-`app/notify.py` (`NotifyCore`, Task 2, з паритетом проти `serve.teams_mute_view` і знімка). Наступні задачі додають
-класи модуля, маршруту й адаптера ЛІГИ, що читають той самий JSON.
+Тут: знімок поведінки 0.13.0 (`Before4c3Shape`, Task 1), роль у каркасі модулів (`NotifyRole`, Task 2), чисте ядро
+`app/notify.py` (`NotifyCore`, Task 2, з паритетом проти `serve.teams_mute_view` і знімка) і адаптер ЛІГИ
+(`LegacyAdapter`, Task 3). Наступні задачі додають класи маршруту, що читають той самий JSON.
 """
 import json
 import os
@@ -460,6 +460,99 @@ class NotifyCore(unittest.TestCase):
         for bad in ('b' * 201, None, 5, b'k'):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 notify.check_set_args('dc/t1', True, bad)
+
+
+# ------------------------------------------------------------------------------------------ Task 3: адаптер ЛІГИ
+
+class LegacyAdapter(unittest.TestCase):
+    """`notify.legacy_ctx` і `notify.legacy_module` — адаптер ЛІГИ (неявний постачальник): `ctx` будує ядро з конфігу
+    установки, а не з простору (⛔ не `module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`)."""
+
+    def setUp(self):
+        os.environ.pop('DEAI_EXTRA_MODULES', None)
+        dm.reset_caches()
+
+    def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
+        ctx = notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1', space_id='s')
+        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example'})
+        self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
+        self.assertEqual(ctx['space'], {'id': 's', 'path': ''})
+        self.assertIs(ctx['legacy'], True)
+        self.assertIs(ctx['ModuleError'], dm.ModuleError)
+        self.assertEqual(notify.legacy_ctx('https://x.example', 'k')['space']['id'], '')
+
+    def test_legacy_ctx_never_reads_the_spaces_layer(self):
+        """⛔ Урок 4c-1: `module_ctx()` при вимкненому шарі читав би справжній `~/.deai` — адаптер до нього не торкається."""
+        import spaces
+        with mock.patch.object(dm, 'module_ctx', side_effect=AssertionError('module_ctx')), \
+                mock.patch.object(dm, 'read_secrets', side_effect=AssertionError('read_secrets')), \
+                mock.patch.object(spaces, 'home', side_effect=AssertionError('spaces.home')):
+            notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1')
+
+    def test_legacy_ctx_without_a_config_is_notify_unconfigured(self):
+        for args in ((None, None), (None, 'sk-test-1')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                notify.legacy_ctx(*args)
+            self.assertEqual((cm.exception.code, cm.exception.status), ('notify-unconfigured', 409))
+            self.assertEqual(cm.exception.message, notify.UNCONFIGURED)
+
+    def test_legacy_module_is_the_builtin_supabase_teams(self):
+        m = notify.legacy_module()
+        self.assertEqual((m.id, m.status, m.roles), ('supabase-teams', 'ok', ['notify']))
+        for fn in ('check', 'mute_state', 'mute_set'):
+            self.assertTrue(callable(m.fn(fn)), fn)
+
+    def test_legacy_module_not_loaded_is_module_error(self):
+        broken = mock.Mock(status='broken')
+        for cat in ({}, {'supabase-teams': broken}):
+            with mock.patch.object(dm, 'catalog', return_value=cat):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    notify.legacy_module()
+                self.assertEqual(cm.exception.code, 'module-error')
+        with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                notify.legacy_module()
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertNotIn('boom', cm.exception.message)
+
+    def test_end_to_end_the_module_with_the_legacy_ctx(self):
+        """Справжній вбудований модуль із `legacy_ctx` (шов `_open` — записувач): адреса й ключ ідуть з конфігу, запит —
+        той самий, що `teams_rpc` 0.13.0 (знімок), `check` не кличе `teams_notify_health`."""
+        m = notify.legacy_module()
+        seen = []
+
+        class R:
+            status = 200
+
+            def __init__(self, body):
+                self._b = json.dumps(body).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n=-1):
+                return self._b
+
+        def fake(req, timeout):
+            seen.append((req.full_url, timeout, {k.lower(): v for k, v in req.header_items()}, req.data))
+            return R(True if req.full_url.endswith('teams_mute_set') else [])
+
+        ctx = notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1')
+        with mock.patch.dict(m.fn('check').__globals__, {'_open': fake}):
+            self.assertEqual(dm.call(m, 'mute_state', ctx), [])
+            self.assertIs(dm.call(m, 'mute_set', ctx, 'dc/t1', True, 'k:0123456789ab'), True)
+            self.assertTrue(dm.call(m, 'check', ctx)['ok'])
+        self.assertEqual([u.rsplit('/', 1)[-1] for u, *_ in seen],
+                         ['teams_mute_state', 'teams_mute_set', 'teams_mute_state'])
+        for url, timeout, headers, _ in seen:
+            self.assertTrue(url.startswith('https://demo.supabase.example/rest/v1/rpc/'))
+            self.assertEqual(timeout, 8)
+            self.assertEqual(headers['apikey'], 'sk-test-1')
+            self.assertEqual(headers['authorization'], 'Bearer sk-test-1')
+        self.assertEqual(json.loads(seen[1][3]), {'p_project': 'dc/t1', 'p_muted': True, 'p_by': 'k:0123456789ab'})
 
 
 if __name__ == '__main__':

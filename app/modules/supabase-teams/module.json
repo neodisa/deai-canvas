@@ -1,0 +1,6 @@
+{"api": 1, "id": "supabase-teams", "name": "Supabase · сповіщення Teams", "version": "1.0.0",
+ "roles": ["notify"],
+ "settings": [
+   {"key": "url", "type": "text", "label": "Адреса проєкту (https://<ref>.supabase.co)", "required": true},
+   {"key": "key", "type": "secret", "label": "Непублічний ключ (service_role або ключ окремої ролі)", "required": true}
+ ]}

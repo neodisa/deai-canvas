@@ -5,6 +5,7 @@
 стан) — як `app/tracker.py` і `app/dashboard.py`. `mute_signature()` (особа машини) лишається в `serve` і сюди приходить
 аргументом `me`.
 """
+import deai_modules
 
 #: Скільки секунд ядро чекає на виклик модуля (`mute_state`/`mute_set`); власний тайм-аут сокета модуля — 8 с, тож модуль
 #: відповідає СВОЇМ текстом помилки раніше, ніж спрацює `check-timeout` ядра.
@@ -71,3 +72,29 @@ def check_set_args(channel, muted, by):
         raise ValueError('notify: muted must be boolean')
     if not isinstance(by, str) or len(by) > BY_MAX:
         raise ValueError(f'notify: by must be a string of at most {BY_MAX} characters')
+
+
+def legacy_ctx(url, key, space_id=''):
+    """`ctx` неявного постачальника ЛІГИ (`'legacy'`): `supabase-teams` з адресою й ключем із конфігу установки
+    (`supabase_config()` викликача — той самий, що в коментарів і дашборда). Нема конфігу (`url is None`) —
+    `ModuleError('notify-unconfigured')` з текстом `UNCONFIGURED`.
+
+    ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
+    справжній `~/.deai` машини (той самий урок 4c-1, що `dashboard.legacy_ctx`, `tracker.legacy_ctx` і
+    `serve._comments_legacy_ctx`). `legacy: True` — модуль за ним пропускає перевірку публічності ключа й `teams_notify_health`
+    у `check` (у базі ЛІГИ цієї функції нема, а ключ там — публічний ключ сторінки: паритет з 0.13.0)."""
+    if url is None:
+        raise deai_modules.ModuleError('notify-unconfigured', message=UNCONFIGURED)
+    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url}, 'secrets': {'key': key},
+            'ModuleError': deai_modules.ModuleError, 'legacy': True}
+
+
+def legacy_module():
+    """Вбудований `supabase-teams` із каталогу БЕЗ простору (шлях ЛІГИ); не завантажився — `ModuleError('module-error')`."""
+    try:
+        m = deai_modules.catalog().get(LEGACY_MODULE)
+    except Exception as e:  # noqa: BLE001 — збій каталогу = відмова модуля, не 500
+        raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
+    if m is None or m.status != 'ok':
+        raise deai_modules.ModuleError('module-error', message=f'{LEGACY_MODULE} module is not loaded')
+    return m
