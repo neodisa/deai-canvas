@@ -50,7 +50,7 @@ MEMO = os.path.join(FIXTURES, 'memo-comments')
 ADAPTER = os.path.join(MEMO, 'adapter.js')
 NOT_FOUND = b'not found\n'                                  # тіло КОЖНОЇ відмови маршруту адаптера: ні причини, ні шляху
 #: Вбудовані модулі справжнього `app/modules` за абеткою (каталог без `DEAI_EXTRA_MODULES`): новий вбудований модуль — тут і лише тут.
-BUILTIN_IDS = ['css-tokens', 'git-sync', 'static-publish', 'supabase-comments', 'supabase-dashboard', 'vercel-publish']
+BUILTIN_IDS = ['css-tokens', 'git-sync', 'jira-tracker', 'static-publish', 'supabase-comments', 'supabase-dashboard', 'vercel-publish']
 _REAL = None
 
 
@@ -891,9 +891,7 @@ class ExtraModulesTest(CommentsEnv):
         cat = self.real_catalog(extra=None)
         comments = {k for k, m in cat.items() if 'comments' in m.roles}
         self.assertEqual(comments, set(dm.KNOWN_COMMENTS_MODULES))
-        # ⚠️ 4c-2 Task 2: `jira-tracker` уже в `KNOWN_OTHER_MODULES`, а самого модуля ще нема (Task 3 його додає). Task 3 МУСИТЬ
-        # прибрати `- {'jira-tracker'}` — інакше цей інваріант лишиться послабленим.
-        self.assertEqual(set(cat) - comments, set(dm.KNOWN_OTHER_MODULES) - {'jira-tracker'})
+        self.assertEqual(set(cat) - comments, set(dm.KNOWN_OTHER_MODULES))
         self.assertTrue(comments)
         self.assertEqual(set(dm.KNOWN_COMMENTS_MODULES) & set(dm.KNOWN_OTHER_MODULES), set())
 

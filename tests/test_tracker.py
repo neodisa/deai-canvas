@@ -464,3 +464,81 @@ class JiraConfig(unittest.TestCase):
         real = os.path.expanduser('~')
         self.assertTrue(real.startswith(self.home), real)
         self.assertEqual(install_config.jira_config(), (None, None, None))
+
+
+class LegacyAdapter(unittest.TestCase):
+    """`tracker.legacy_ctx` і `tracker.legacy_module` — адаптер ЛІГИ (неявний постачальник): `ctx` будує ядро з конфігу
+    установки, а не з простору (⛔ не `module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`)."""
+
+    def setUp(self):
+        os.environ.pop('DEAI_EXTRA_MODULES', None)
+        dm.reset_caches()
+
+    def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
+        ctx = tracker.legacy_ctx('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1', space_id='s')
+        self.assertEqual(ctx['settings'], {'base': 'https://demo.atlassian.example', 'email': 'alpha@example.com'})
+        self.assertEqual(ctx['secrets'], {'token': 'tok-test-1'})
+        self.assertEqual(ctx['space'], {'id': 's', 'path': ''})
+        self.assertIs(ctx['legacy'], True)
+        self.assertIs(ctx['ModuleError'], dm.ModuleError)
+        self.assertEqual(tracker.legacy_ctx('https://x.example', 'a@b.c', 't')['space']['id'], '')
+
+    def test_legacy_ctx_never_reads_the_spaces_layer(self):
+        """⛔ Урок 4c-1: `module_ctx()` при вимкненому шарі читав би справжній `~/.deai` — адаптер до нього не торкається."""
+        with mock.patch.object(dm, 'module_ctx', side_effect=AssertionError('module_ctx')), \
+                mock.patch.object(dm, 'read_secrets', side_effect=AssertionError('read_secrets')), \
+                mock.patch.object(spaces, 'home', side_effect=AssertionError('spaces.home')):
+            tracker.legacy_ctx('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')
+
+    def test_legacy_ctx_without_a_config_is_tracker_unconfigured(self):
+        for args in ((None, None, None), (None, 'alpha@example.com', 'tok-test-1')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                tracker.legacy_ctx(*args)
+            self.assertEqual((cm.exception.code, cm.exception.status), ('tracker-unconfigured', 409))
+            self.assertEqual(cm.exception.message, tracker.UNCONFIGURED)
+
+    def test_legacy_module_is_the_builtin_jira_tracker(self):
+        m = tracker.legacy_module()
+        self.assertEqual((m.id, m.status, m.roles), ('jira-tracker', 'ok', ['tracker']))
+        for fn in ('check', 'statuses'):
+            self.assertTrue(callable(m.fn(fn)), fn)
+
+    def test_legacy_module_not_loaded_is_module_error(self):
+        broken = mock.Mock(status='broken')
+        for cat in ({}, {'jira-tracker': broken}):
+            with mock.patch.object(dm, 'catalog', return_value=cat):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    tracker.legacy_module()
+                self.assertEqual(cm.exception.code, 'module-error')
+        with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
+            with self.assertRaises(dm.ModuleError) as cm:
+                tracker.legacy_module()
+        self.assertEqual(cm.exception.code, 'module-error')
+        self.assertNotIn('boom', cm.exception.message)
+
+    def test_end_to_end_the_module_with_the_legacy_ctx(self):
+        """Справжній вбудований модуль із `legacy_ctx` (шов `_open` — записувач): адреса, пошта й токен ідуть з конфігу."""
+        m = tracker.legacy_module()
+        seen = []
+
+        def fake(req, timeout):
+            seen.append((req.full_url, timeout, dict(req.header_items())))
+
+            class R:
+                status = 200
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self, n=-1):
+                    return json.dumps({'issues': [{'key': 'DEMO-1', 'fields': {'status': {
+                        'name': 'Done', 'statusCategory': {'key': 'done'}}}}]}).encode()
+            return R()
+        ctx = tracker.legacy_ctx('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1', space_id='liga')
+        with mock.patch.dict(m.fn('check').__globals__, {'_open': fake}):
+            out = tracker.statuses(m, ctx, ['DEMO-1'], timeout=tracker.READ_TIMEOUT, socket_s=tracker.READ_SOCKET_S)
+        self.assertEqual(out, {'DEMO-1': {'name': 'Done', 'cat': 'done'}})
+        self.assertEqual([(u, t) for u, t, _ in seen], [('https://demo.atlassian.example/rest/api/3/search/jql', 4)])

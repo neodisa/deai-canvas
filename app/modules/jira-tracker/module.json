@@ -1,0 +1,7 @@
+{"api": 1, "id": "jira-tracker", "name": "Jira Cloud · статуси задач", "version": "1.0.0",
+ "roles": ["tracker"],
+ "settings": [
+   {"key": "base", "type": "text", "label": "Адреса сайту Jira Cloud (https://<сайт>.atlassian.net)", "required": true},
+   {"key": "email", "type": "text", "label": "Email облікового запису Atlassian", "required": true},
+   {"key": "token", "type": "secret", "label": "API-токен Atlassian", "required": true}
+ ]}

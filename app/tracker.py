@@ -87,3 +87,28 @@ def statuses(module, ctx, keys, *, timeout, socket_s, call=None):
         except ValueError:
             raise deai_modules.ModuleError('tracker-error', message='модуль трекера віддав відповідь не тієї форми') from None
     return out
+
+
+def legacy_ctx(base, email, token, space_id=''):
+    """`ctx` неявного постачальника ЛІГИ (`'legacy'`): `jira-tracker` з адресою, поштою й токеном конфігу установки
+    (`install_config.jira_config()`). `base`/`email`/`token` — з нього викликача; нема конфігу (`base is None`) —
+    `ModuleError('tracker-unconfigured')` з текстом `UNCONFIGURED`.
+
+    ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
+    справжній `~/.deai` машини (той самий урок 4c-1, що `dashboard.legacy_ctx`, `serve._vcs_legacy_ctx` і
+    `serve._comments_legacy_ctx`). `legacy: True` — модуль цього прапорця не читає (поведінка для ЛІГИ та сама)."""
+    if base is None:
+        raise deai_modules.ModuleError('tracker-unconfigured', message=UNCONFIGURED)
+    return {'space': {'id': space_id, 'path': ''}, 'settings': {'base': base, 'email': email},
+            'secrets': {'token': token}, 'ModuleError': deai_modules.ModuleError, 'legacy': True}
+
+
+def legacy_module():
+    """Вбудований `jira-tracker` із каталогу БЕЗ простору (шлях ЛІГИ); не завантажився — `ModuleError('module-error')`."""
+    try:
+        m = deai_modules.catalog().get(LEGACY_MODULE)
+    except Exception as e:  # noqa: BLE001 — збій каталогу = відмова модуля, не 500
+        raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
+    if m is None or m.status != 'ok':
+        raise deai_modules.ModuleError('module-error', message=f'{LEGACY_MODULE} module is not loaded')
+    return m
