@@ -24,8 +24,27 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dashboard  # noqa: E402
+import deai_modules as dm  # noqa: E402
+import make_before_4c2 as mb2  # noqa: E402  (світ знімка 0.12.0: сервер у процесі, `scrub`)
 import sbconf  # noqa: E402
 import serve  # noqa: E402
+import spaces  # noqa: E402
+import spaces_guard  # noqa: E402
+import test_modules as tm  # noqa: E402  (каркас `Env`: тимчасові HOME/DEAI_HOME, тека модулів-фікстур)
+import tracker  # noqa: E402
+
+_REAL = None
+
+
+def setUpModule():
+    """Клас `TrackerOverviewSpaces` створює простори: справжній `~/.deai` стереже знімок на вході й звірка на виході."""
+    global _REAL
+    _REAL = spaces_guard.snapshot()
+
+
+def tearDownModule():
+    spaces_guard.assert_untouched(_REAL)
+
 
 # Справжній urlopen — клієнт тестів, коли тест підміняє `urllib.request.urlopen`
 # (глобально, бо сервер живе в своєму потоці), щоб побачити мережу СЕРВЕРА.
@@ -610,6 +629,506 @@ class TasksOverviewHttpTest(unittest.TestCase):
 
     def test_thumb_task_without_shots_is_404(self):
         self.assertEqual(self.get('/api/task-thumb?task=beta')[0], 404)
+
+
+# ---------- Статуси трекера на екрані «Задачі» (4c-2, Task 5) ----------
+
+BEFORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'tracker', 'before-4c2.json')
+
+
+def reset_tracker_cache():
+    with serve._TRACKER_LOCK:
+        serve._TRACKER_CACHE.clear()
+
+
+def _st(name, cat='done'):
+    return {'name': name, 'cat': cat}
+
+
+class _Prov:
+    """Постачальник-заглушка для `tracker_snapshot(resolved=…)`: лише `id` (`who`); сам виклик підмінено `_tracker_fetch`."""
+
+    def __init__(self, mid):
+        self.id = mid
+
+
+class _Fetch:
+    """Підміна `serve._tracker_fetch`: рахує виклики (`calls` — списки ключів) і віддає записане по черзі; останнє повторюється."""
+
+    def __init__(self, *answers):
+        self.answers, self.calls = list(answers), []
+
+    def __call__(self, space, prov, keys):
+        self.calls.append(list(keys))
+        a = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        return a(keys) if callable(a) else a
+
+
+class _OkResp:
+    """Відповідь-заглушка шва `_open` `jira-tracker`: контекстний менеджер із `status` і `read`."""
+
+    def __init__(self, body):
+        self._body, self.status = json.dumps(body).encode('utf-8'), 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n=-1):
+        return self._body
+
+
+class TrackerOverview(_TmpCase):
+    """`tasks_overview(…, tracker=…)` (пріоритет джерел), кеш `tracker_snapshot` на простір, шов `DC_TRACKER_FAKE`, ізоляція ЛІГИ
+    й диференційний зі знімком 0.12.0. Усе без мережі: `_tracker_fetch` підмінено, а справжній модуль — крізь шов `_open`."""
+
+    def setUp(self):
+        super().setUp()
+        reset_tracker_cache()
+        self.addCleanup(reset_tracker_cache)
+        # оточення ізоляції не просочується: кожен тест сам вирішує, чи воно є
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TRACKER_FAKE', 'DC_TEAM_FAKE'):
+            os.environ.pop(var, None)
+        with open(BEFORE, encoding='utf-8') as fh:
+            self.snap = json.load(fh)
+
+    def _cfg(self, **tasks):
+        return {'current': next(iter(tasks)), 'tasks': tasks}
+
+    def _snapshot(self, fetch, keys=('DEMO-1',), space='A', prov='legacy', **kw):
+        with spaces.request_space(space), mock.patch.object(serve, '_tracker_fetch', fetch):
+            return serve.tracker_snapshot(list(keys), resolved=(None, _Prov(prov) if prov != 'legacy' else 'legacy'), **kw)
+
+    # ---- пріоритет у tasks_overview ----
+
+    def test_tracker_status_wins_then_dashboard_row_then_none(self):
+        a = make_task(self.root, 'a')
+        a['jira'] = 'DEMO-1'
+        b = make_task(self.root, 'b')
+        b['jira'] = 'DEMO-2'
+        c = make_task(self.root, 'c')
+        c['jira'] = 'DEMO-3'
+        rows = [{'id': 'a', 'jira_status': 'In Review', 'jira_status_cat': 'indeterminate', 'open_comments': 1},
+                {'id': 'b', 'jira_status': 'Blocked', 'jira_status_cat': 'new'}]
+        out = serve.tasks_overview(self._cfg(a=a, b=b, c=c), (rows, None),
+                                   tracker=({'DEMO-1': _st('Done')}, None, 100.0))
+        got = {m['id']: (m['jiraStatus'], m['jiraCat']) for m in out['mine']}
+        self.assertEqual(got['a'], ('Done', 'done'), 'статус трекера перемагає рядок дашборда')
+        self.assertEqual(got['b'], ('Blocked', 'new'), 'трекер мовчить про ключ — рядок дашборда')
+        self.assertEqual(got['c'], (None, None), 'ні того, ні того — «невідомо»')
+        self.assertEqual(out['tracker'], {'error': None, 'okAt': 100.0})
+        self.assertEqual([m['comments'] for m in out['mine'] if m['id'] == 'a'], [1], 'лічильник коментарів — з дашборда')
+
+    def test_a_tracker_status_without_a_category_still_wins_with_a_none_category(self):
+        a = make_task(self.root, 'a')
+        a['jira'] = 'DEMO-1'
+        rows = [{'id': 'a', 'jira_status': 'In Review', 'jira_status_cat': 'indeterminate'}]
+        out = serve.tasks_overview(self._cfg(a=a), (rows, None), tracker=({'DEMO-1': _st('Custom', None)}, None, 1.0))
+        self.assertEqual((out['mine'][0]['jiraStatus'], out['mine'][0]['jiraCat']), ('Custom', None))
+
+    def test_team_rows_never_get_tracker_statuses(self):
+        a = make_task(self.root, 'a')
+        a['jira'] = 'DEMO-1'
+        rows = [{'id': 'a', 'jira': 'DEMO-1', 'jira_status': 'In Review', 'jira_status_cat': 'indeterminate'},
+                {'id': 'x', 'jira': 'DEMO-9', 'jira_status': None}]
+        out = serve.tasks_overview(self._cfg(a=a), (rows, None),
+                                   tracker=({'DEMO-1': _st('Done'), 'DEMO-9': _st('Done')}, None, 1.0))
+        self.assertEqual([(r['id'], r['jiraStatus'], r['jiraCat']) for r in out['team']['rows']],
+                         [('a', 'In Review', 'indeterminate'), ('x', None, None)])
+
+    def test_no_tracker_keeps_the_0_12_0_behaviour_and_says_tracker_null(self):
+        a = make_task(self.root, 'a')
+        a['jira'] = 'DEMO-1'
+        rows = [{'id': 'a', 'jira_status': 'In Review', 'jira_status_cat': 'indeterminate'}]
+        out = serve.tasks_overview(self._cfg(a=a), (rows, None))
+        self.assertIsNone(out['tracker'])
+        self.assertEqual((out['mine'][0]['jiraStatus'], out['mine'][0]['jiraCat']), ('In Review', 'indeterminate'))
+
+    def test_a_tracker_error_is_reported_next_to_the_kept_statuses(self):
+        a = make_task(self.root, 'a')
+        a['jira'] = 'DEMO-1'
+        out = serve.tasks_overview(self._cfg(a=a), ([], None), tracker=({'DEMO-1': _st('Done')}, 'Jira недосяжна', 50.0))
+        self.assertEqual(out['tracker'], {'error': 'Jira недосяжна', 'okAt': 50.0})
+        self.assertEqual(out['mine'][0]['jiraStatus'], 'Done', 'збій не знімає останній відомий статус')
+
+    # ---- диференційний зі знімком 0.12.0 ----
+
+    def test_the_league_overview_is_the_0_12_0_body_plus_tracker_null(self):
+        """⛔ Ізоляція (`DC_TASKS_FILE`): трекер ЛІГИ не кличеться — тіло ТЕ САМЕ, що записав знімок, плюс `tracker: null`; модуль
+        `jira-tracker` (`_open`) не викликано ні разу."""
+        def boom(req, timeout):
+            raise AssertionError('мережа: ізольований прогін не ходить у Jira')
+        calls = []
+        sbconf.patch_open(self, lambda req, timeout: calls.append(req) or boom(req, timeout), 'jira-tracker')
+        with mock.patch.object(serve, 'jira_config', side_effect=AssertionError('конфіг Jira з ізольованого прогону')):
+            with tempfile.TemporaryDirectory(prefix='dc-tov-diff-') as tmp:
+                for var in mb2.CLEAN:
+                    os.environ.pop(var, None)
+                got = mb2.tasks_overview(tmp)
+        reset_team_cache()
+        want = self.snap['tasks_overview']
+        self.assertEqual(calls, [])
+        self.assertEqual(got['status'], 200)
+        self.assertEqual(got['body'], {**want['body'], 'tracker': None})
+        self.assertEqual(got['volatile'], want['volatile'])
+        self.assertEqual(serve._TRACKER_CACHE, {}, 'ізоляція нічого не кешує')
+
+    # ---- шов DC_TRACKER_FAKE і ізоляція ----
+
+    def _fake_file(self, data):
+        p = os.path.join(self.root, 'trk-fake.json')
+        _write_json(p, data)
+        return p
+
+    def test_the_fake_seam_gives_statuses_even_in_isolation_and_keeps_only_asked_keys(self):
+        fake = self._fake_file({'DEMO-1': _st('Done'), 'DEMO-2': {'name': '', 'cat': 'done'}, 'DEMO-7': _st('Other'),
+                                'DEMO-3': {'name': 'Odd', 'cat': 'weird'}})
+        for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
+            reset_tracker_cache()
+            with mock.patch.dict(os.environ, {var: '1', 'DC_TRACKER_FAKE': fake}):
+                got = serve.tracker_snapshot(['DEMO-1', 'DEMO-2', 'DEMO-3'], now=10.0, resolved=(None, 'legacy'))
+            self.assertEqual(got, ({'DEMO-1': _st('Done'), 'DEMO-3': _st('Odd', None)}, None, 10.0), var)
+
+    def test_isolation_without_the_seam_means_no_tracker_and_no_work(self):
+        def boom(req, timeout):
+            raise AssertionError('мережа')
+        sbconf.patch_open(self, boom, 'jira-tracker')
+        for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
+            with self.subTest(var=var), mock.patch.dict(os.environ, {var: '1'}), \
+                    mock.patch.object(serve, 'jira_config', side_effect=AssertionError('конфіг')):
+                self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy')))
+                self.assertEqual(serve._TRACKER_CACHE, {})
+
+    def test_a_broken_fake_file_is_an_error_text_not_an_exception(self):
+        bad = os.path.join(self.root, 'bad.json')
+        with open(bad, 'w', encoding='utf-8') as fh:
+            fh.write('не json')
+        for payload in (bad, self._fake_file(['не', 'словник']), os.path.join(self.root, 'нема.json')):
+            reset_tracker_cache()
+            with mock.patch.dict(os.environ, {'DC_TRACKER_FAKE': payload}):
+                got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy'))
+            self.assertEqual((got[0], got[2]), ({}, None), payload)
+            self.assertTrue(got[1] and isinstance(got[1], str), payload)
+
+    # ---- ЛІГА без ізоляції: справжній модуль, шов `_open` ----
+
+    def _jira_answer(self, keys_seen):
+        def fake_open(req, timeout):
+            body = json.loads(req.data.decode('utf-8'))
+            keys_seen.append((body['jql'], timeout))
+            issues = [{'key': k, 'fields': {'status': {'name': 'In Review', 'statusCategory': {'key': 'indeterminate'}}}}
+                      for k in body['jql'][len('key in ('):-1].split(',')]
+            return _OkResp({'issues': issues})
+        return fake_open
+
+    def test_the_league_asks_jira_through_the_module_with_the_read_budget_and_at_most_100_keys(self):
+        seen = []
+        sbconf.patch_open(self, self._jira_answer(seen), 'jira-tracker')
+        keys = ['DEMO-%d' % i for i in range(1, 121)]
+        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')):
+            got = serve.tracker_snapshot(keys, now=5.0, resolved=(None, 'legacy'))
+        self.assertEqual(len(seen), 1, 'одним викликом')
+        self.assertEqual(seen[0][1], tracker.READ_SOCKET_S)
+        self.assertEqual(seen[0][0], 'key in (' + ','.join(keys[:100]) + ')')
+        self.assertEqual(sorted(got[0]), sorted(keys[:100]))
+        self.assertEqual((got[1], got[2]), (None, 5.0))
+        # перші 100 ключів уже в кеші: той самий набір — без повторного запиту, а не «новий ключ» щоразу
+        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')):
+            serve.tracker_snapshot(keys, now=6.0, resolved=(None, 'legacy'))
+        self.assertEqual(len(seen), 1)
+
+    def test_the_league_without_jira_base_says_so_and_makes_no_network_call(self):
+        def boom(req, timeout):
+            raise AssertionError('мережа: без конфігу Jira не питається')
+        sbconf.patch_open(self, boom, 'jira-tracker')
+        with mock.patch.object(serve, 'jira_config', return_value=(None, None, None)):
+            got = serve.tracker_snapshot(['DEMO-1'], now=5.0, resolved=(None, 'legacy'))
+            nothing = serve.tracker_snapshot([], now=5.0, refresh=True, resolved=(None, 'legacy'))
+        self.assertEqual(got, ({}, tracker.UNCONFIGURED, None))
+        self.assertEqual(nothing, ({}, None, 5.0), 'нема що питати — нема й плашки')
+
+    def test_junk_keys_are_dropped_before_anything_is_asked(self):
+        f = _Fetch(({'DEMO-1': _st('Done')}, None))
+        got = self._snapshot(f, keys=(None, 5, ['x'], 'DEMO-1', 'DEMO-1'), now=1.0)
+        self.assertEqual(f.calls, [['DEMO-1']])
+        self.assertEqual(got, ({'DEMO-1': _st('Done')}, None, 1.0))
+
+    def test_an_unexpected_exception_is_an_error_text_with_the_class_only_and_is_logged(self):
+        """Не `ModuleError` і не мережа — збій коду ядра: плашка називає лише клас (`str(e)` чужого винятку не чищений і міг би
+        винести токен), а stderr отримує назву класу."""
+        err = io.StringIO()
+        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')), \
+                mock.patch.object(tracker, 'statuses', side_effect=RuntimeError('boom tok-test-1')), \
+                contextlib.redirect_stderr(err):
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy'))
+        self.assertEqual(got, ({}, 'RuntimeError', None))
+        self.assertIn('RuntimeError', err.getvalue())
+        self.assertNotIn('tok-test-1', err.getvalue())
+
+    def test_a_network_error_is_the_class_name_and_stays_quiet_on_stderr(self):
+        err = io.StringIO()
+        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')), \
+                mock.patch.object(tracker, 'statuses', side_effect=OSError('нема VPN')), contextlib.redirect_stderr(err):
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy'))
+        self.assertEqual(got, ({}, 'OSError', None))
+        self.assertEqual(err.getvalue(), '')
+
+    # ---- кеш ----
+
+    def test_a_second_call_within_the_ttl_does_not_ask_again_and_the_ttl_expires(self):
+        f = _Fetch(({'DEMO-1': _st('Done')}, None))
+        first = self._snapshot(f, now=1000.0)
+        second = self._snapshot(f, now=1000.0 + serve.TRACKER_TTL - 1)
+        self.assertEqual(first, ({'DEMO-1': _st('Done')}, None, 1000.0))
+        self.assertEqual(second, first)
+        self.assertEqual(len(f.calls), 1)
+        self._snapshot(f, now=1000.0 + serve.TRACKER_TTL + 1)
+        self.assertEqual(len(f.calls), 2)
+
+    def test_the_ttls_are_the_designed_ones(self):
+        self.assertEqual((serve.TRACKER_TTL, serve.TRACKER_ERR_TTL), (300, 30))
+
+    def test_refresh_bypasses_the_cache(self):
+        f = _Fetch(({'DEMO-1': _st('Done')}, None))
+        self._snapshot(f, now=1000.0)
+        self._snapshot(f, now=1001.0)
+        self.assertEqual(len(f.calls), 1)
+        self._snapshot(f, now=1002.0, refresh=True)
+        self.assertEqual(len(f.calls), 2)
+
+    def test_a_key_that_was_not_asked_before_is_a_new_request_but_a_subset_is_not(self):
+        f = _Fetch(lambda keys: ({k: _st('S ' + k) for k in keys}, None))
+        self._snapshot(f, keys=('DEMO-1', 'DEMO-2'), now=1000.0)
+        self._snapshot(f, keys=('DEMO-2',), now=1001.0)
+        self.assertEqual(len(f.calls), 1, 'підмножина ключів — з кешу')
+        got = self._snapshot(f, keys=('DEMO-1', 'DEMO-3'), now=1002.0)
+        self.assertEqual(len(f.calls), 2, 'новий ключ — новий запит')
+        self.assertEqual(sorted(got[0]), ['DEMO-1', 'DEMO-3'])
+
+    def test_an_error_is_cached_shorter_so_retry_makes_sense(self):
+        self.assertLess(serve.TRACKER_ERR_TTL, serve.TRACKER_TTL)
+        f = _Fetch(({}, 'down'), ({'DEMO-1': _st('Done')}, None))
+        first = self._snapshot(f, now=1000.0)
+        self.assertEqual(first, ({}, 'down', None))
+        within = self._snapshot(f, now=1000.0 + serve.TRACKER_ERR_TTL - 1)
+        self.assertEqual((within, len(f.calls)), (first, 1), 'у вікні помилки мертвий трекер не питаємо')
+        after = self._snapshot(f, now=1000.0 + serve.TRACKER_ERR_TTL + 1)
+        self.assertEqual(after, ({'DEMO-1': _st('Done')}, None, 1000.0 + serve.TRACKER_ERR_TTL + 1))
+
+    def test_a_failure_after_a_success_keeps_the_last_statuses_and_the_time_of_success(self):
+        f = _Fetch(({'DEMO-1': _st('Done')}, None), ({}, 'down'))
+        self._snapshot(f, now=1000.0)
+        t = 1000.0 + serve.TRACKER_TTL + 1
+        got = self._snapshot(f, now=t)
+        self.assertEqual(got, ({'DEMO-1': _st('Done')}, 'down', 1000.0), 'статуси лишились, okAt — час УСПІХУ')
+        again = self._snapshot(f, now=t + 1)
+        self.assertEqual(again, got)
+        self.assertEqual(len(f.calls), 2)
+
+    def test_the_first_ever_failure_has_no_statuses_and_no_ok_at(self):
+        got = self._snapshot(_Fetch(({}, 'down')), now=1000.0)
+        self.assertEqual(got, ({}, 'down', None))
+
+    def test_a_new_key_while_the_tracker_is_down_does_not_hammer_it(self):
+        f = _Fetch(({'DEMO-1': _st('Done')}, None), ({}, 'down'))
+        self._snapshot(f, keys=('DEMO-1',), now=1000.0)
+        t = 1000.0 + serve.TRACKER_TTL + 1
+        self._snapshot(f, keys=('DEMO-1', 'DEMO-2'), now=t)
+        self._snapshot(f, keys=('DEMO-1', 'DEMO-2'), now=t + 1)
+        self.assertEqual(len(f.calls), 2, 'новий ключ при збої — один запит на вікно помилки')
+
+    def test_a_clock_that_jumped_back_does_not_keep_a_stale_cache_alive(self):
+        f = _Fetch(({'DEMO-1': _st('Done')}, None))
+        self._snapshot(f, now=5000.0)
+        self._snapshot(f, now=1000.0)
+        self.assertEqual(len(f.calls), 2)
+
+    def test_another_provider_starts_a_clean_entry(self):
+        f = _Fetch(({'DEMO-1': _st('Old')}, None), ({}, 'down'))
+        self._snapshot(f, prov='mod-a', now=1000.0)
+        got = self._snapshot(f, prov='mod-b', now=1001.0)
+        self.assertEqual(len(f.calls), 2, 'інший постачальник — запит, а не кеш попереднього')
+        self.assertEqual(got, ({}, 'down', None), 'статуси старого постачальника не стають «останніми відомими» нового')
+
+    def test_the_cache_is_per_space(self):
+        f = _Fetch(lambda keys: ({'DEMO-1': _st('Done')}, None), ({}, 'down'))
+        a = self._snapshot(f, space='A', now=1000.0)
+        b = self._snapshot(f, space='B', now=1001.0)
+        self.assertEqual(len(f.calls), 2, 'кеш простору A не видно в B')
+        self.assertEqual(a[0], {'DEMO-1': _st('Done')})
+        self.assertEqual(b, ({}, 'down', None), 'збій B не підхопив статуси A')
+        self.assertEqual(sorted(serve._TRACKER_CACHE), ['A', 'B'])
+        self.assertEqual(self._snapshot(f, space='A', now=1002.0), a, 'збій B не зачепив A')
+        self.assertEqual(len(f.calls), 2)
+
+    def test_the_lock_is_its_own_and_a_busy_team_lock_does_not_block_it(self):
+        self.assertIsNot(serve._TRACKER_LOCK, serve._TEAM_LOCK)
+        done = threading.Event()
+        box = []
+
+        def work():
+            box.append(self._snapshot(_Fetch(({'DEMO-1': _st('Done')}, None)), now=1.0))
+            done.set()
+        with serve._TEAM_LOCK:                       # «Команда» зараз чекає мертвий Supabase
+            th = threading.Thread(target=work, daemon=True)
+            th.start()
+            finished = done.wait(3)
+        th.join(3)
+        self.assertTrue(finished, 'трекер чекав лок команди')
+        self.assertEqual(box[0][0], {'DEMO-1': _st('Done')})
+
+    def test_no_provider_is_none_and_a_registry_failure_is_an_error_without_a_cache(self):
+        self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, None)))
+        boom = spaces.SpacesError('spaces-unreadable', '<registry>', 'тест')
+        with mock.patch.object(serve, 'tracker_resolve', side_effect=boom):
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0)
+        self.assertEqual(got, ({}, 'реєстр просторів не читається (spaces-unreadable)', None))
+        with mock.patch.object(serve, 'tracker_resolve', side_effect=dm.ModuleError('space-json-unreadable', message='space.json')):
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0)
+        self.assertEqual(got, ({}, 'space.json', None))
+        self.assertEqual(serve._TRACKER_CACHE, {})
+
+
+#: Модуль-фікстура ролі `tracker`: пише ключі кожного виклику в `log_file`, віддає `Fake <ключ>`; `fail` — текст помилки.
+FAKE_TRACKER_SERVER = tm.CHECK_ONLY + """
+import json
+def statuses(ctx, keys):
+    with open(ctx['settings']['log_file'], 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps(keys) + '\\n')
+    if ctx['settings'].get('fail'):
+        raise ctx['ModuleError']('tracker-error', message=ctx['settings']['fail'])
+    return {k: {'name': 'Fake ' + k, 'cat': 'done'} for k in keys}
+"""
+_TRK_SETTINGS = [{'key': 'log_file', 'type': 'text', 'label': 'Log file (test)', 'required': True},
+                 {'key': 'fail', 'type': 'text', 'label': 'Fail with this text (test)'}]
+
+
+class TrackerOverviewSpaces(tm.Env):
+    """Звичайний простір із фейковим модулем трекера (без дашборда): екран бере статуси в нього, кеш — на простір, зламане
+    рішення ролі — плашка з причиною. Мережі нема: фейковий модуль у `self.mods`."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ['DEAI_HOME'] = self.deai          # як у `DashboardRole`: статичний охоронець шукає присвоєння в самому файлі
+        reset_tracker_cache()
+        self.addCleanup(reset_tracker_cache)
+        self.mk('fake-trk', roles=('tracker',), server=FAKE_TRACKER_SERVER, settings=_TRK_SETTINGS)
+
+    def space_with_tracker(self, name='Plain', fail=None):
+        sp = self.new_space(name)
+        log = self.hp(name.lower() + '.log')
+        dm.write_module_state(sp, 'fake-trk', enabled=True, settings={'log_file': log, **({'fail': fail} if fail else {})})
+        return sp, log
+
+    def asked(self, log):
+        try:
+            with open(log, encoding='utf-8') as fh:
+                return [json.loads(line) for line in fh]
+        except OSError:
+            return []
+
+    def snap_in(self, sp, keys=('DEMO-1',), **kw):
+        with spaces.request_space(sp['id']):
+            return serve.tracker_snapshot(list(keys), **kw)
+
+    def seed_tasks(self, sp, jira='DEMO-1'):
+        d = os.path.join(sp['path'], 't1')
+        mb2._write(os.path.join(d, 'iterations.json'),
+                   {'iterations': [{'id': 'it1', 'date': '01.11.2026 10:00', 'published': False}], 'publish_url': None})
+        mb2._write(os.path.join(sp['path'], 'tasks.json'), {'design_work_root': sp['path'], 'current': 't1', 'tasks': {
+            't1': {'title': 'Demo', 'dir': d, 'profile': 'tool', 'jira': jira, 'opened': '2026-11-01T10:00:00Z'}}})
+
+    def http_overview(self, sp):
+        spaces.switch_space(sp['id'])
+        with mb2.Server() as srv:
+            status, body = srv.get('/api/tasks-overview?refresh=1')
+        self.assertEqual(status, 200, body)
+        return json.loads(body)
+
+    def test_a_plain_space_takes_statuses_from_its_tracker_with_no_dashboard(self):
+        sp, log = self.space_with_tracker()
+        self.seed_tasks(sp)
+        data = self.http_overview(sp)
+        self.assertIsNone(data['team'], 'дашборда нема — вкладки «Команда» нема')
+        self.assertEqual((data['mine'][0]['jiraStatus'], data['mine'][0]['jiraCat']), ('Fake DEMO-1', 'done'))
+        self.assertIsNone(data['tracker']['error'])
+        self.assertIsInstance(data['tracker']['okAt'], float)
+        self.assertEqual(self.asked(log), [['DEMO-1']])
+
+    def test_a_failing_tracker_module_is_a_banner_with_its_text_and_my_tasks_live(self):
+        sp, _ = self.space_with_tracker(fail='tracker is down')
+        self.seed_tasks(sp)
+        data = self.http_overview(sp)
+        self.assertEqual(data['tracker'], {'error': 'tracker is down', 'okAt': None})
+        self.assertEqual([m['id'] for m in data['mine']], ['t1'])
+        self.assertIsNone(data['mine'][0]['jiraStatus'])
+
+    def test_an_undecidable_role_is_a_banner_not_a_500_and_is_not_cached(self):
+        """Зламаний `space.json` простору з інтеграціями — `ModuleError` рішення ролі: `tracker: {error, okAt: null}`, «Мої» живуть,
+        кешу нема."""
+        ig = self.new_space('Integ', integrations=True)
+        with open(self.space_json(ig), 'w', encoding='utf-8') as fh:
+            fh.write('{broken')
+        self.seed_tasks(ig)
+        data = self.http_overview(ig)
+        self.assertIsNone(data['tracker']['okAt'])
+        self.assertTrue(data['tracker']['error'] and len(data['tracker']['error']) <= 200)
+        self.assertEqual([m['id'] for m in data['mine']], ['t1'])
+        self.assertEqual(serve._TRACKER_CACHE, {})
+
+    def test_a_space_with_no_tasks_asks_nothing_and_shows_no_banner(self):
+        sp, log = self.space_with_tracker()
+        data = self.http_overview(sp)
+        self.assertEqual((data['mine'], data['tracker']['error']), ([], None))
+        self.assertEqual(self.asked(log), [], 'нема ключів — нема виклику модуля')
+
+    def test_with_a_dashboard_too_the_tracker_wins_for_mine_and_team_rows_keep_the_dashboard(self):
+        """Простір із дашбордом І трекером: «Мої» — статус трекера, «Команда» — статус дашборда (без змін); обидва джерела живі."""
+        self.mk('fake-dash', roles=('dashboard',), server=tm.CHECK_ONLY + (
+            'def rows(ctx):\n    return [{"id": "t1", "name": "T", "jira": "DEMO-1", "jira_status": "Row Status", "jira_status_cat": "new"}]\n'
+            'def push(ctx, cards, mode):\n    return {"ok": 0, "failed": {}}\n'))
+        sp, _ = self.space_with_tracker()
+        dm.write_module_state(sp, 'fake-dash', enabled=True)
+        self.seed_tasks(sp)
+        data = self.http_overview(sp)
+        self.assertEqual((data['mine'][0]['jiraStatus'], data['mine'][0]['jiraCat']), ('Fake DEMO-1', 'done'))
+        self.assertEqual((data['team']['rows'][0]['jiraStatus'], data['team']['rows'][0]['jiraCat']), ('Row Status', 'new'))
+        self.assertIsNone(data['tracker']['error'])
+
+    def test_a_dashboard_failure_and_a_tracker_failure_are_reported_separately(self):
+        self.mk('bad-dash', roles=('dashboard',), server=tm.CHECK_ONLY + (
+            'def rows(ctx):\n    raise ctx["ModuleError"]("dashboard-error", message="dash down")\n'
+            'def push(ctx, cards, mode):\n    return {"ok": 0, "failed": {}}\n'))
+        sp, _ = self.space_with_tracker(fail='trk down')
+        dm.write_module_state(sp, 'bad-dash', enabled=True)
+        self.seed_tasks(sp)
+        data = self.http_overview(sp)
+        self.assertEqual(data['team']['error'], 'dash down')
+        self.assertEqual(data['tracker'], {'error': 'trk down', 'okAt': None})
+
+    def test_a_space_without_a_provider_has_tracker_null(self):
+        sp = self.new_space('Bare')
+        self.seed_tasks(sp)
+        data = self.http_overview(sp)
+        self.assertIsNone(data['tracker'])
+
+    def test_the_cache_keeps_two_spaces_apart_and_a_failure_keeps_the_last_statuses(self):
+        a, alog = self.space_with_tracker('Alpha')
+        b, blog = self.space_with_tracker('Bravo')
+        ra = self.snap_in(a, now=1000.0)
+        self.snap_in(b, now=1000.0)
+        self.assertEqual(ra, ({'DEMO-1': _st('Fake DEMO-1')}, None, 1000.0))
+        self.assertEqual((self.asked(alog), self.asked(blog)), ([['DEMO-1']], [['DEMO-1']]), 'кожному просторові — свій запит')
+        dm.write_module_state(a, 'fake-trk', enabled=True, settings={'log_file': alog, 'fail': 'a is down'})
+        got = self.snap_in(a, now=1000.0 + serve.TRACKER_TTL + 1)
+        self.assertEqual(got, ({'DEMO-1': _st('Fake DEMO-1')}, 'a is down', 1000.0))
+        self.assertEqual(self.snap_in(b, now=1000.0 + 5), ({'DEMO-1': _st('Fake DEMO-1')}, None, 1000.0), 'збій A не став станом B')
+        self.assertEqual(len(self.asked(blog)), 1)
 
 
 if __name__ == '__main__':

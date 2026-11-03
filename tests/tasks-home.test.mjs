@@ -280,6 +280,57 @@ test("збій команди з рядками (застарілі): банер
   assert.match(h, /data-th="retry"/);
 });
 
+/* 4c-2: банер «Трекер недоступний» — лише на «Моїх» (статуси трекера живуть у їхніх картках), `tracker` = `null` | `{error, okAt}`. */
+const TRK_AT = Date.parse("2026-10-09T08:15:00Z") / 1000;
+
+test("збій трекера: на «Моїх» банер «Трекер недоступний: …» + «дані на ГГ:ХХ» з okAt, картки лишаються", () => {
+  const d = { ...DATA, tracker: { error: "Jira недосяжна (OSError)", okAt: TRK_AT } };
+  const h = homeGridHTML(UI(), d);
+  assert.match(h, /class="th-banner"/);
+  assert.match(h, /Трекер недоступний: Jira недосяжна \(OSError\)/);
+  assert.match(h, /class="th-stale">дані на \d{2}:\d{2}</);
+  assert.match(h, /data-th="retry"/);
+  assert.equal(cards(h), 3, "збій трекера не ховає картки");
+});
+
+test("збій трекера без okAt (успіху ще не було): банер без часу", () => {
+  const h = homeGridHTML(UI(), { ...DATA, tracker: { error: "Jira не налаштовано", okAt: null } });
+  assert.match(h, /Трекер недоступний: Jira не налаштовано/);
+  assert.doesNotMatch(h, /th-stale/);
+  assert.doesNotMatch(h, /дані на/);
+});
+
+test("трекер: null чи без error — банера нема; поле tracker старої відповіді не обовʼязкове", () => {
+  assert.doesNotMatch(homeGridHTML(UI(), { ...DATA, tracker: null }), /th-banner/);
+  assert.doesNotMatch(homeGridHTML(UI(), { ...DATA, tracker: { error: null, okAt: TRK_AT } }), /th-banner/);
+  assert.doesNotMatch(homeGridHTML(UI(), DATA), /th-banner/);
+});
+
+test("збій трекера на вкладці «Команда» банера не дає, а збій команди на «Моїх» — не змішується", () => {
+  const d = { ...DATA, tracker: { error: "Jira лежить", okAt: TRK_AT } };
+  const team = homeGridHTML(UI({ tab: "team", sort: "changed" }), d);
+  assert.doesNotMatch(team, /Трекер недоступний/);
+  assert.doesNotMatch(team, /th-banner/);
+  assert.equal(cards(team), 2);
+  const both = { ...d, team: { ...DATA.team, error: "таймаут", rowsAt: TRK_AT } };
+  const mine = homeGridHTML(UI(), both);
+  assert.match(homeGridHTML(UI({ tab: "team", sort: "changed" }), both), /Дашборд команди недоступний/);
+  assert.match(mine, /Трекер недоступний/);
+  assert.doesNotMatch(mine, /Дашборд команди недоступний/);
+});
+
+test("текст помилки трекера екранований: <b> лишається текстом", () => {
+  const h = homeGridHTML(UI(), { ...DATA, tracker: { error: "<b>x</b><img src=x onerror=alert(1)>", okAt: null } });
+  assert.doesNotMatch(h, /<b>x<\/b>/);
+  assert.doesNotMatch(h, /<img src=x/);
+  assert.match(h, /&lt;b&gt;x&lt;\/b&gt;/);
+});
+
+test("збій трекера: текст є в обох мовах словника", () => {
+  assert.match(DICT.uk.thTrackerErr("x"), /^Трекер недоступний: x/);
+  assert.match(DICT.en.thTrackerErr("x"), /^Issue tracker unavailable: x/);
+});
+
 test("порожня видача: «Нічого не знайдено» + «Скинути фільтри»", () => {
   const h = homeGridHTML(UI({ q: "zzzнемає" }), DATA);
   assert.match(h, /Нічого не знайдено/);

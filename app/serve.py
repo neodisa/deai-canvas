@@ -34,6 +34,7 @@ import pages_model as pm  # чиста модель сторінок ітера�
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
+import tracker  # статуси задач у трекері (4c-2): ядро ролі `tracker` (ключі, пакети, нормалізація, адаптер ЛІГИ)
 import install_config  # конфіг установки (4c-1: спільний із ядром дашборда й CLI, без імпорту `serve`)
 from install_config import legacy_tasks_path, load_legacy_tasks  # noqa: F401 — реекспорт: ними користуються `ops/`, `bin/` і тести
 import module_trust  # довіра своїм модулям простору (етап 3c): мова вікна довіри, шов `DEAI_TRUST_CONFIRM`
@@ -1823,6 +1824,127 @@ def team_rows(now=None, refresh=False):
     return team_snapshot(now, refresh)[:2]
 
 
+# ---------- Статуси задач від трекера (4c-2): окремий кеш на простір ----------
+
+TRACKER_TTL = 300       # статуси міняються рідко, а Jira повільніший за базу дашборда
+TRACKER_ERR_TTL = 30    # помилку кешуємо коротко: «Спробувати ще» має сенс, а мертвий трекер не отримує запит на кожен вхід
+#: Кеш статусів трекера НА ПРОСТІР: `{id простору: {'at', 'statuses', 'error', 'okAt', 'who', 'keys'}}` (`''` — шлях ЛІГИ без простору
+#: запиту: інструменти, тести). `who` — хто дав статуси (`'legacy'` чи id модуля): інший постачальник = порожній запис (статуси
+#: старого не можна показувати як «останні відомі» нового). `keys` — ключі, які ПИТАЛИ (запит бере перші 100 — решта лишається без статусу, а не нескінченно «новою»): новий ключ задачі, якого тут
+#: нема, — новий запит, а не «статус невідомо» ще на `TRACKER_TTL`.
+_TRACKER_CACHE = {}
+#: ⛔ ОКРЕМИЙ від `_TEAM_LOCK`: запит у трекер іде ПІД локом (другий потік чекає перший і бере готове), а мертвий Jira тримає його
+#: до `tracker.READ_TIMEOUT`. Спільний лок зробив би так, що трекер, який не відповідає, гальмує й рядки команди (і навпаки).
+_TRACKER_LOCK = threading.Lock()
+
+
+def jira_config():
+    """Тонка обгортка (`install_config.jira_config`): ім'я в `serve` лишається точкою підміни для тестів
+    (`mock.patch.object(serve, 'jira_config', …)`), а виклик у самому `serve` іде через нього (як `supabase_config`)."""
+    return install_config.jira_config()
+
+
+def tracker_resolve():
+    """`(space, prov)` ролі `tracker` для простору ЗАПИТУ: `prov` — `Module`, `'legacy'` (ЛІГА) чи `None` (трекера нема). Як
+    `team_resolve`: `space` — запис простору лише для модуля. Кидає `spaces.SpacesError` і `deai_modules.ModuleError` (свій модуль
+    «на папері», `space.json` не читається)."""
+    prov = deai_modules.provider('tracker')
+    return (spaces.active_space() if isinstance(prov, deai_modules.Module) else None), prov
+
+
+def _tracker_fetch(space, prov, keys):
+    """Один справжній прохід за статусами `keys`: `(statuses, error)` або `None` (= трекера нема: ізоляція ЛІГИ). Не кидає.
+    `prov` — постачальник ролі `tracker` простору запиту: `'legacy'` (ЛІГА) чи `Module`; `space` — запис простору (для `module_ctx`).
+
+    Порядок джерел для `'legacy'`; ⛔ другий пункт — закон ізоляції (той самий, що в `_team_fetch`, `teams_rpc` і `_registry_push`):
+    `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають «стан не справжній цієї машини», тож ходити з нього в живу Jira не можна;
+    1. `DC_TRACKER_FAKE` — локальний JSON `{ключ: {name, cat}}` замість Jira (шов для тестів; `tracker.normalize` до `keys`);
+    2. ізольований прогін без шва — `None`: екран поводиться як без трекера (`tracker: null`), помилки НЕМАЄ (на відміну від
+       «Команди» тут нічого пояснювати: статуси лишаються з рядків дашборда, як і були);
+    3. інакше вбудований `jira-tracker` з `tracker.legacy_ctx(*jira_config())`; нема конфігу — `tracker-unconfigured` (текст для
+       плашки, мережі нема). Звичайний простір: `module_ctx(space, prov)` свого модуля.
+    Немає що питати (`keys` порожні) — `({}, None)` БЕЗ виклику й без конфігу: нічого не мовчить, нема за що показувати плашку.
+    Виклик — `tracker.statuses` (`READ_TIMEOUT`/`READ_SOCKET_S`): екран «Задачі» — перша сторінка, і висіти на ній через мертвий VPN
+    довше за кілька секунд не можна. Помилка — ТЕКСТ для плашки: `ModuleError` — його повідомлення (ядро вже вичистило секрети),
+    решта — лише назва класу (`str(e)` чужого винятку не чищений і міг би винести секрет на екран)."""
+    keys = list(keys)[:tracker.BATCH]
+    try:
+        if prov == 'legacy':
+            fake = os.environ.get('DC_TRACKER_FAKE')
+            if fake:
+                with open(fake, encoding='utf-8') as fh:
+                    data = json.load(fh)
+                return tracker.normalize(data, keys), None
+            if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
+                return None
+            if not keys:
+                return {}, None
+            module = tracker.legacy_module()
+            ctx = tracker.legacy_ctx(*jira_config(), space_id=spaces.request_space_id() or '')
+        else:
+            if not keys:
+                return {}, None
+            module, ctx = prov, deai_modules.module_ctx(space, prov)
+        return tracker.statuses(module, ctx, keys, timeout=tracker.READ_TIMEOUT, socket_s=tracker.READ_SOCKET_S), None
+    except deai_modules.ModuleError as e:
+        return {}, (e.message or e.code)[:200]
+    except Exception as e:  # noqa: BLE001 — «Мої» мусять жити без трекера
+        if not isinstance(e, (OSError, ValueError)):
+            # Не мережа й не формат даних — імовірно, ПОМИЛКА КОДУ: назва класу в stderr (без `str(e)`), щоб вона не маскувалась
+            # під «трекер недоступний». Поведінка та сама.
+            print(f'tracker_statuses: {type(e).__name__}', file=sys.stderr)
+        return {}, type(e).__name__
+
+
+def tracker_snapshot(keys, now=None, refresh=False, resolved=None):
+    """`None` (трекера нема: екран бере статуси лише з рядків дашборда) чи `(statuses, error, ok_at)`: `statuses` —
+    `{ключ: {'name', 'cat'}}`, `ok_at` — епоха ОСТАННЬОГО УСПІШНОГО читання (`None` — успіху ще не було). Не кидає.
+
+    Кеш на простір запиту (`_TRACKER_CACHE`) під `_TRACKER_LOCK`, ВКЛЮЧНО з самим запитом (сервер багатопотоковий: другий потік чекає
+    перший і бере готове). `TRACKER_TTL`, помилка — коротший `TRACKER_ERR_TTL`; `refresh=True` оминає кеш (лише СВОГО простору).
+    Новий ключ, якого нема серед запитаних у кеші, — теж запит; інший постачальник (`who`) — чистий запис.
+    ⛔ Збій НЕ стирає останні відомі статуси: мертвий Jira на хвилину не має знімати бейджі з карток. На помилці оновлюються
+    лише `error` і `at` (щоб повтор ішов за `TRACKER_ERR_TTL`), статуси й `okAt` лишаються з останнього успіху. Ключі збійного
+    запиту додаються до `keys` запису: інакше новий ключ при мертвому трекері бив би в нього на КОЖЕН вхід, а не раз на
+    `TRACKER_ERR_TTL`. `now` — шов для тестів; `0 <= now - at` стереже годинник, що стрибнув назад (як у `team_snapshot`).
+
+    Хто дає статуси — `tracker_resolve()` (маршрут, що вже вирішив, передає `resolved=(space, prov)`). Нікого — `None`. Збій реєстру
+    чи рішення ролі — рання відповідь тієї ж форми (порожні статуси + пояснення), БЕЗ кешу: відмова одного простору не мусить
+    стати «останнім відомим» станом іншого. Ізоляція ЛІГИ (`_tracker_fetch` → `None`) — теж `None` і теж без кешу."""
+    if resolved is None:
+        try:
+            resolved = tracker_resolve()
+        except spaces.SpacesError as e:
+            return {}, f'реєстр просторів не читається ({e.code})', None
+        except deai_modules.ModuleError as e:
+            return {}, (e.message or e.code)[:200], None
+    space, prov = resolved
+    if prov is None:
+        return None
+    wanted = list(dict.fromkeys(k for k in keys if isinstance(k, str)))     # чужий ввід: не-рядки не хешуємо й не питаємо
+    who = 'legacy' if prov == 'legacy' else prov.id
+    key = spaces.request_space_id() or ''
+    now = time.time() if now is None else now
+    with _TRACKER_LOCK:
+        c = _TRACKER_CACHE.get(key)
+        if c is None or c['who'] != who:
+            c = {'at': 0.0, 'statuses': None, 'error': None, 'okAt': None, 'who': who, 'keys': frozenset()}
+        ttl = TRACKER_ERR_TTL if c['error'] else TRACKER_TTL
+        if (not refresh and c['statuses'] is not None and c['keys'].issuperset(wanted)
+                and 0 <= now - c['at'] < ttl):
+            return dict(c['statuses']), c['error'], c['okAt']
+        got = _tracker_fetch(space, prov, wanted)
+        if got is None:
+            return None
+        statuses, error = got
+        if error:
+            c.update(at=now, statuses=c['statuses'] or {}, error=error, keys=c['keys'] | frozenset(wanted))
+        else:
+            c.update(at=now, statuses=statuses, error=None, okAt=now, keys=frozenset(wanted))
+        _TRACKER_CACHE[key] = c
+        return dict(c['statuses']), c['error'], c['okAt']
+
+
 def task_thumb_path(task):
     """`(abs_path, sha)` кадру для картки задачі, або None. Не кидає.
 
@@ -1886,7 +2008,7 @@ def _last_changed(task, st):
     return int(m) if m else None
 
 
-def tasks_overview(cfg, team, now=None, rows_at=None):
+def tasks_overview(cfg, team, now=None, rows_at=None, tracker=None):
     """Відповідь `/api/tasks-overview` без `current`. ЧИСТА збірка: мережі нема,
     `team` = `(rows, error)` від `team_rows()`.
 
@@ -1894,6 +2016,10 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
     дашборда, з позначкою `mine`. Поля Jira й лічильник коментарів живуть ЛИШЕ в
     дашборді, тож до своєї задачі вони підмішуються за id; немає рядка — `None`
     («невідомо»), а не 0: екран не обіцяє тиші, якої не знає.
+    Статус Jira (4c-2) має два джерела з ПРІОРИТЕТОМ: свіжий статус від трекера (`tracker` = `(statuses, error, ok_at)` від
+    `tracker_snapshot`, ключ — `task['jira']`) → рядок дашборда → `None`. Рядки «Команди» статусів трекера НЕ отримують (це
+    чужі задачі й чужі статуси дашборда). Поле відповіді `tracker` — `None` (трекера нема: ізоляція ЛІГИ чи простір без нього)
+    або `{'error', 'okAt'}`; `tracker=None` лишає поведінку знімка 0.12.0 з одним доданим `tracker: null`.
     Кадр своєї задачі — локальний (свіжіший), інакше `thumb_url` дашборда; у рядку
     команди — навпаки: те, що бачать усі, а локальний — лише коли його нема.
     `fetchedAt` — епоха, коли зібрано відповідь; `rowsAt` — коли рядки команди
@@ -1901,6 +2027,7 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
     рядками екран пише «дані на <rowsAt>»)."""
     now = time.time() if now is None else now
     rows, error = team
+    tr_statuses, tr_error, tr_ok_at = tracker if tracker is not None else ({}, None, None)
     by_id = {r['id']: r for r in rows
              if isinstance(r, dict) and isinstance(r.get('id'), str)}
     mine, local = [], {}
@@ -1910,6 +2037,8 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
         if found:
             local[tid] = _thumb_url(tid, found[1])
         row = by_id.get(tid)
+        jkey = task.get('jira')
+        trk = tr_statuses.get(jkey) if isinstance(jkey, str) else None
         mine.append({
             'id': tid, 'jira': task.get('jira'), 'title': task.get('title', tid),
             'profile': task.get('profile'), 'opened': task.get('opened'),
@@ -1917,8 +2046,8 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
             'iter': st['last_iter'], 'changed': _last_changed(task, st),
             'published': st['code_url'], 'missing': not st['dir_exists'],
             'thumb': local.get(tid) or (row.get('thumb_url') if row else None) or None,
-            'jiraStatus': row.get('jira_status') if row else None,
-            'jiraCat': row.get('jira_status_cat') if row else None,
+            'jiraStatus': trk['name'] if trk else (row.get('jira_status') if row else None),
+            'jiraCat': trk['cat'] if trk else (row.get('jira_status_cat') if row else None),
             'comments': (row.get('open_comments') or 0) if row else None,
             'tags': task_tags(task),
         })
@@ -1940,7 +2069,8 @@ def tasks_overview(cfg, team, now=None, rows_at=None):
         })
     return {'mine': mine,
             'team': {'rows': team_out, 'error': error, 'fetchedAt': now,
-                     'rowsAt': rows_at}}
+                     'rowsAt': rows_at},
+            'tracker': None if tracker is None else {'error': tr_error, 'okAt': tr_ok_at}}
 
 
 # ---------- Задача з наявної теки (етап 3b, спека 2026-10-21-first-run-wizard-design.md) ----------
@@ -5633,8 +5763,17 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 cfg = load_tasks()
             except spaces.NoTask:
-                self._send_json({'current': None, 'mine': [], 'team': None, 'space': None})
+                self._send_json({'current': None, 'mine': [], 'team': None, 'tracker': None, 'space': None})
                 return
+            refresh = q.get('refresh', [''])[0] == '1'
+            # Статуси трекера (4c-2) — НЕЗАЛЕЖНО від вкладки «Команда»: ключі «Моїх» задач, свій кеш і лок. Збій рішення ролі
+            # (зламаний власний модуль «на папері») — плашка з причиною, а не 500 і не мовчання; `SpacesError` — в обробник маршруту.
+            try:
+                trk_resolved = tracker_resolve()
+            except deai_modules.ModuleError as e:
+                trk = ({}, (e.message or e.code)[:200], None)
+            else:
+                trk = tracker_snapshot(tracker.keys_of(cfg.get('tasks')), refresh=refresh, resolved=trk_resolved)
             # Вкладка «Команда» є, коли простір має постачальника ролі `dashboard` (4c-1; було — прапорець `integrations`: для ЛІГИ
             # те саме, бо вона має `'legacy'`). `SpacesError` тут — як і з `integrations_on()` раніше (обробник маршруту).
             try:
@@ -5642,15 +5781,15 @@ class Handler(SimpleHTTPRequestHandler):
             except deai_modules.ModuleError as e:
                 # ⛔ Збій рішення ролі (зламаний власний модуль «на папері», `space.json` не читається) — НЕ «нікого»: вкладка
                 # лишається, а плашка називає причину; `team: null` мовчки сховав би вкладку, і людина не знала б, чому її нема.
-                out = tasks_overview(cfg, ([], (e.message or e.code)[:200]))
+                out = tasks_overview(cfg, ([], (e.message or e.code)[:200]), tracker=trk)
             else:
                 if resolved[1] is None:
                     # Постачальника нема: запиту немає, `team: null` (UI ховає вкладку «Команда»). `tasks_overview` чиста
                     # збірка — порожні рядки їй безпечні.
-                    out = {**tasks_overview(cfg, ([], None)), 'team': None}
+                    out = {**tasks_overview(cfg, ([], None), tracker=trk), 'team': None}
                 else:
-                    rows, err, rows_at = team_snapshot(refresh=q.get('refresh', [''])[0] == '1', resolved=resolved)
-                    out = tasks_overview(cfg, (rows, err), rows_at=rows_at)
+                    rows, err, rows_at = team_snapshot(refresh=refresh, resolved=resolved)
+                    out = tasks_overview(cfg, (rows, err), rows_at=rows_at, tracker=trk)
             self._send_json({'current': cfg.get('current'), **out,
                              'space': space_view(spaces.active_space())})
             return

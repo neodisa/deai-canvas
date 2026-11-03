@@ -2314,7 +2314,7 @@ class NoSpaces(Bare):
             with self.subTest(path=path):
                 self.assertEqual(self.jget(path), (200, {'current': None, 'tasks': [], 'space': None}))
         st, body = self.jget('/api/tasks-overview')
-        self.assertEqual((st, body), (200, {'current': None, 'mine': [], 'team': None, 'space': None}))
+        self.assertEqual((st, body), (200, {'current': None, 'mine': [], 'team': None, 'tracker': None, 'space': None}))
 
     def test_the_single_task_is_still_404_no_task(self):
         st, body = self.jget('/api/task')

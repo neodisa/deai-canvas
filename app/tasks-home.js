@@ -217,6 +217,17 @@ function bannerHTML(text, note) {
     + `<button class="th-lnk" data-th="retry">${ico("refresh")}${esc(t("retry"))}</button></div>`;
 }
 
+/** Банер «Трекер недоступний» (4c-2): лише на «Моїх» — статуси трекера живуть у картках «Моїх» (рядки «Команди» їх не
+ *  отримують). `data.tracker` = `null` (трекера нема) чи `{error, okAt}`; `okAt` — епоха останнього успіху (`null` — його не
+ *  було): статуси в картках тоді лишаються з останнього відомого й підписані часом. Текст помилки — чужий ввід, іде лише через
+ *  `bannerHTML` (esc). */
+function trackerBanner(team, data) {
+  const tr = data.tracker;
+  if (team || !tr || !tr.error) return "";
+  const at = clock(tr.okAt);
+  return bannerHTML(t("thTrackerErr", tr.error), at ? t("thStale", at) : "");
+}
+
 /** Чіпи: статус (з лічильниками після запиту), потім мітки чи дизайнери. */
 function chipsHTML(ui, data, src, shown) {
   const c = statusCounts(src, ui.q);
@@ -276,7 +287,8 @@ export function homeGridHTML(ui, data) {
   /* `loadError` — повторний запит не вдався, а попередні дані ЦІЛІ: показуємо їх
      і банер, а не стираємо екран заради «не вдалося». */
   const banner = (data.loadError ? bannerHTML(t("thLoadErr", data.loadError)) : "")
-    + (err ? bannerHTML(t("thTeamErr", err), stale ? t("thStale", stale) : "") : "");
+    + (err ? bannerHTML(t("thTeamErr", err), stale ? t("thStale", stale) : "") : "")
+    + trackerBanner(team, data);
   /* Порожній простір без інтеграцій — не «порожня видача»: скидати нічого, і кнопка
      «Скинути фільтри» вела б у нікуди. Замість неї — шлях до першої задачі. */
   const empty = noIntegrations(data) && !src.length
