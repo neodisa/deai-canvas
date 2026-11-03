@@ -14,7 +14,8 @@
     Supabase не налаштовано; простір без інтеграцій → тип винятку; мережа впала;
   * `route` — справжній сервер у процесі (ефемерний порт) у двох просторах: `liga` (інтеграції ввімкнено) і `plain` (вимкнено).
     ЛІГА на шві `DC_TEAMS_FAKE` (тимчасовий JSON замість бази): GET `/api/teams-mute` — не замовчано / замовчано мною / колегою
-    / замовчано ПАРЕНТСЬКИЙ канал при каналі `dc/t1/internal`; POST `{muted: true|false}` (з дозволеним Origin, з підписом
+    / замовчано ПАРЕНТСЬКИЙ канал при каналі `dc/t1/internal` / колізії префікса (`dc/t10`, `dc/t1x`) / застарілі
+    рядки без `muted_by` / порожній підпис машини; POST `{muted: true|false}` (з дозволеним Origin, з підписом
     `k:0123456789ab`), чужий Origin (403), `muted: "yes"` (400); шлях БЕЗ шва (підмінені `supabase_config` і `urlopen`) —
     GET/POST і збій мережі; ізоляція (`DC_TASKS_FILE` / `DC_NO_OVERVIEW`) — GET/POST; простір без інтеграцій — GET/POST (409);
   * `menu` — пункти дропдауна публікації (`app/bar-model.js`, `barModel`) через `node` для станів «з інтеграціями» і «без» та
@@ -289,9 +290,21 @@ def route(tmp):
                     ('muted_by_me', {'dc/t1': row(MINE)}, 't1'),
                     ('muted_by_colleague', {'dc/t1': row(COLLEAGUE)}, 't1'),
                     ('parent_muted_subchannel', {'dc/t1': row(COLLEAGUE)}, 't2'),
-                    ('other_channel_muted', {'dc/other': row(COLLEAGUE)}, 't1')):
+                    ('other_channel_muted', {'dc/other': row(COLLEAGUE)}, 't1'),
+                    # колізії префікса: `dc/t10` і `dc/t1x` — НЕ батьки `dc/t1` (правило `pid + '/'`, а не голий префікс)
+                    ('prefix_collision_t10', {'dc/t10': row(COLLEAGUE)}, 't1'),
+                    ('prefix_collision_t1x', {'dc/t1x': row(COLLEAGUE)}, 't1'),
+                    # застарілі рядки: без `muted_by` / з порожнім / `muted_at: None` — `mine` завжди False
+                    ('legacy_no_muted_by', {'dc/t1': {'muted_at': None}}, 't1'),
+                    ('legacy_empty_muted_by', {'dc/t1': {'muted_at': None, 'muted_by': ''}}, 't1'),
+                    ('legacy_empty_muted_by_with_time', {'dc/t1': row('')}, 't1')):
                 _write(fake, db)
                 gets[key] = {'db': stamp_type(db), 'task': task, **get(srv, task)}
+            # машина без git-особи: `mute_signature()` = '' і рядок із порожнім `muted_by` — НЕ «моє» (порожнє ≠ порожнє)
+            _write(fake, {'dc/t1': row('')})
+            with mock.patch.object(serve, 'mute_signature', lambda: ''):
+                gets['empty_signature_empty_muted_by'] = {'db': stamp_type({'dc/t1': row('')}), 'task': 't1',
+                                                          'signature': '', **get(srv, 't1')}
             out['fake_get'] = gets
 
             # ---- ЛІГА: перемикання (POST) із підписом; база після кожного кроку ----
@@ -454,9 +467,16 @@ def _code_differs_from_source():
         if subprocess.run(['git', '-C', ROOT, 'cat-file', '-e', src + '^{commit}'], capture_output=True, timeout=30).returncode != 0:
             return None
         diff = subprocess.run(['git', '-C', ROOT, 'diff', '--quiet', src, '--', 'app', 'bin'], capture_output=True, timeout=60)
+        # Нові (неіндексовані) файли в app/ і bin/ — теж «код відрізняється»: `git diff` їх не бачить.
+        untracked = subprocess.run(['git', '-C', ROOT, 'ls-files', '--others', '--exclude-standard', '--', 'app', 'bin'],
+                                   capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
-    return diff.returncode == 1
+    # ⛔ Закрито за замовчуванням: будь-який ненульовий код `git diff` (1 = є різниця, 128 = збій) і будь-який збій
+    # `ls-files` — «відрізняється», а не «однакове». Лише чисте `0` + порожній список нових файлів дозволяє перезапис.
+    if untracked.returncode != 0:
+        return True
+    return diff.returncode != 0 or bool(untracked.stdout.strip())
 
 
 def main(argv=None):

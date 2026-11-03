@@ -36,6 +36,8 @@ class Before4c3Shape(unittest.TestCase):
             self.assertEqual((c['method'], c['path'], c['timeout'], c['ssl_context']),
                              ('POST', '/rest/v1/rpc/' + fn, 8, True), key)
             self.assertTrue(c['host_is_demo'], key)
+            self.assertEqual(c['query'], '', key)
+            self.assertEqual(c['headers']['content-type'], 'application/json', key)
             # ⛔ значення ключа в знімку нема — лише мітка
             self.assertEqual(c['headers']['apikey'], '<key>')
             self.assertEqual(c['headers']['authorization'], 'Bearer <key>')
@@ -60,8 +62,18 @@ class Before4c3Shape(unittest.TestCase):
                                       'signature_real'])
         self.assertRegex(rt['signature_real'], r'^k:[0-9a-f]{12}$')
         g = rt['fake_get']
-        self.assertEqual(sorted(g), ['muted_by_colleague', 'muted_by_me', 'not_muted', 'other_channel_muted',
-                                     'parent_muted_subchannel'])
+        self.assertEqual(sorted(g), ['empty_signature_empty_muted_by', 'legacy_empty_muted_by',
+                                     'legacy_empty_muted_by_with_time', 'legacy_no_muted_by', 'muted_by_colleague',
+                                     'muted_by_me', 'not_muted', 'other_channel_muted', 'parent_muted_subchannel',
+                                     'prefix_collision_t10', 'prefix_collision_t1x'])
+        for key in ('prefix_collision_t10', 'prefix_collision_t1x'):      # `dc/t10`, `dc/t1x` — не батьки `dc/t1`
+            self.assertEqual(g[key]['body'], {'channel': 'dc/t1', 'muted': False}, key)
+        for key in ('legacy_no_muted_by', 'legacy_empty_muted_by', 'legacy_empty_muted_by_with_time',
+                    'empty_signature_empty_muted_by'):                    # порожній підпис ніколи не «мій»
+            self.assertTrue(g[key]['body']['muted'], key)
+            self.assertIs(g[key]['body']['mine'], False, key)
+            self.assertEqual(g[key]['body']['muted_by'] if 'muted_by' in g[key]['body'] else '', '', key)
+        self.assertEqual(g['empty_signature_empty_muted_by']['signature'], '')
         self.assertEqual(g['not_muted']['body'], {'channel': 'dc/t1', 'muted': False})
         self.assertEqual(g['other_channel_muted']['body'], {'channel': 'dc/t1', 'muted': False},
                          'чужий канал тишу не покриває')

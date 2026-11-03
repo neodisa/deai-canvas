@@ -354,6 +354,78 @@
   },
   "route": {
     "fake_get": {
+      "empty_signature_empty_muted_by": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": ""
+          }
+        },
+        "signature": "",
+        "status": 200,
+        "task": "t1"
+      },
+      "legacy_empty_muted_by": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "NoneType",
+          "muted_by": "",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "NoneType",
+            "muted_by": ""
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
+      "legacy_empty_muted_by_with_time": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "str",
+          "muted_by": "",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "str",
+            "muted_by": ""
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
+      "legacy_no_muted_by": {
+        "body": {
+          "channel": "dc/t1",
+          "mine": false,
+          "muted": true,
+          "muted_at": "NoneType",
+          "muted_by": "",
+          "via": "dc/t1"
+        },
+        "db": {
+          "dc/t1": {
+            "muted_at": "NoneType"
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
       "muted_by_colleague": {
         "body": {
           "channel": "dc/t1",
@@ -430,6 +502,34 @@
         },
         "status": 200,
         "task": "t2"
+      },
+      "prefix_collision_t10": {
+        "body": {
+          "channel": "dc/t1",
+          "muted": false
+        },
+        "db": {
+          "dc/t10": {
+            "muted_at": "str",
+            "muted_by": "k:ffffffffffff"
+          }
+        },
+        "status": 200,
+        "task": "t1"
+      },
+      "prefix_collision_t1x": {
+        "body": {
+          "channel": "dc/t1",
+          "muted": false
+        },
+        "db": {
+          "dc/t1x": {
+            "muted_at": "str",
+            "muted_by": "k:ffffffffffff"
+          }
+        },
+        "status": 200,
+        "task": "t1"
       }
     },
     "fake_post": {
