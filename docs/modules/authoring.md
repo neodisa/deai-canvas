@@ -43,8 +43,8 @@ trust it.
 ```
 
 * `api` — `1`. `name` and `version` — strings shown to people.
-* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard` (called by the core today);
-  `tracker`, `notify` are reserved names the core does not call yet. One provider per role per space.
+* `roles` — the roles the module provides: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker` (called by the core
+  today); `notify` is a reserved name the core does not call yet. One provider per role per space.
 * `publish_target` (publish only) — `folder` (default) or `url`. The canvas serves the local copy of a published preview
   (`/published/…`) only for the built-in `static-publish`.
 * `check_timeout_s` (optional) — an integer from 1 to 150: how many seconds the core waits for your `check` (default 5).
@@ -70,6 +70,8 @@ adds its own functions:
 | `tokens` | `tokens(ctx)` |
 | `comments` | `client_config(ctx)`, `list(ctx, channel)`, `resolve(ctx, channel, id, reason)` |
 | `vcs` | `status(ctx, target)`, `push(ctx, target, src, meta)`, `pull(ctx, target, dst, opts)`; optional `validate(ctx, target)`, `mirror_dir(ctx, target)` — see [The `vcs` role](#the-vcs-role) |
+| `dashboard` | `rows(ctx)`, `push(ctx, cards, mode)`; optional `open_comments(ctx)` — see [The `dashboard` role](#the-dashboard-role) |
+| `tracker` | `statuses(ctx, keys)` — see [The `tracker` role](#the-tracker-role) |
 
 A module that lacks `check` or a function of its roles shows as broken (the optional functions of `vcs` may be missing). The
 exact return values are those of the built-in modules — read `app/modules/static-publish/` (`folder`),
@@ -278,6 +280,44 @@ trigger that comes while it runs only asks for one more run). `DC_NO_OVERVIEW` s
 
 **Your own module of this role** lives in `<space>/modules/<id>/` and runs after trust, like any other (section 4). Keep
 the key of a service that can write in a `secret` setting and do not mark it `public`.
+
+### The `tracker` role
+
+`tracker` tells the status of tasks in the issue tracker of a space (Jira, Linear…). The core asks for the statuses of the
+task keys of the space and shows them as the badge of a task on the Tasks screen and on the cards of the team board. The
+built-in module is `app/modules/jira-tracker/`.
+
+**The function.** `statuses(ctx, keys)` takes `ctx` first and reports a failure with `ctx["ModuleError"]` (the codes are
+below). Read-only: it never changes anything in the tracker.
+
+* `keys` — a list of strings, at most **100**, without repeats. The core sends only the keys of the form
+  `[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,9}` (`KEY_RE`, a whole-string match: `DEMO-1`, `AB_2-10`; not `demo-1`, `DEMO-0`,
+  `DEMO-01`, `DEMO 1`); everything else — a hand-edited junk in the task file — is dropped **before** the call, so it never
+  reaches a query. More than 100 keys are cut into several calls.
+* Returns `{"<key>": {"name": str, "cat": str | None}}`. `name` is the status as the tracker shows it; `cat` is its
+  category: `new`, `indeterminate` or `done` (the categories of Jira), `None` when the tracker has none. A task the tracker
+  does not know is simply absent from the answer — not an error. The core keeps only the keys it asked for, cuts `name` to
+  **80** characters and drops an entry whose `name` is empty, not a string or holds a control character; a `cat` outside the
+  three values becomes `None`. An answer that is not a dict is a `module-error`.
+* `ctx["timeout_s"]` — the budget **in seconds for your own socket**; the core waits longer than that, so keep your
+  requests within it and answer with your own text instead of a bare `check-timeout`. The Tasks screen gives a socket
+  **4 s** (the core waits 6 s per call); the sync of the team board gives **15 s** (the core waits 30 s per call). The field
+  is new in the contract of this role; the `ctx` of other roles has none.
+* `check(ctx)` — as for every module (section 3).
+
+**Who is asked, and when.** A space has a tracker when it has a provider of the role; without one the Tasks screen shows no
+status from a tracker. A space with integrations and no module of its own uses the built-in `jira-tracker` through the
+address and the credentials of the installation (`jira_base` in the legacy `tasks.json`, `JIRA_EMAIL` / `JIRA_TOKEN`).
+
+**The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`.
+
+| code | HTTP | raise it when |
+|---|---|---|
+| `tracker-unconfigured` | 409 | the tracker has no address or credentials to talk to |
+| `tracker-error` | 502 | the tracker refused or did not answer; the text carries no token and no body of a request |
+
+**Your own module of this role** lives in `<space>/modules/<id>/` and runs after trust, like any other (section 4). Keep
+the token of a tracker in a `secret` setting and do not mark it `public`.
 
 ## 4. Trust
 

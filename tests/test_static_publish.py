@@ -256,7 +256,7 @@ class StaticPublish(unittest.TestCase):
     # ------------------------------------------------------------- неявний постачальник ролі
     def test_it_is_the_implicit_provider_in_a_space_without_integrations(self):
         self.assertEqual(dm.provider('publish', self.sp).id, MID)
-        self.assertEqual(dm.capabilities(self.sp), {'publish': MID, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
+        self.assertEqual(dm.capabilities(self.sp), {'publish': MID, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
         st = dm.effective_state(self.sp)[MID]
         self.assertEqual((st['enabled'], st['implicit']), (True, True))
         self.assertEqual(st['settings'], {'folder': '{home}/deai-published/{space_id}'})

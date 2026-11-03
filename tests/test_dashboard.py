@@ -573,6 +573,7 @@ class ReadParity(unittest.TestCase):
         sp.pop('id', None)
         sp.pop('path', None)
         cap = sp['capabilities'].pop('dashboard')          # новий ключ 4c-1: вилучаємо ДО копії, перевіряється окремо
+        sp['capabilities'].pop('tracker')                  # новий ключ 4c-2 (знімок 0.11.0 його не знає): його перевіряє test_tracker
         return {'status': status, 'body': mb.strip(data), 'volatile': volatile, 'dashboard': cap}
 
     def same_as_snapshot(self, got, name, dashboard_cap='legacy', error=None):

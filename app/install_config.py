@@ -67,3 +67,42 @@ def service_key_config():
         if _SUPABASE_URL_RE.fullmatch(url) and _SUPABASE_KEY_RE.fullmatch(key):
             return url.rstrip('/'), key
     return None, None
+
+
+def jira_config():
+    """`(base, email, token)` Jira простору ЛІГА з конфігу УСТАНОВКИ або `(None, None, None)` (4c-2: констант у коді нема).
+
+    Адреса — `jira_base` у корені старого `tasks.json` (той самий файл, що несе `supabase_url`): ПОВНІСТЮ
+    `https://<хост>[:порт][/]`, без `/` в кінці в результаті (форма — як у `supabase_config`: заготовка з документації
+    `https://<сайт>.atlassian.net`, адреса з шляхом чи `user@` дають «конфігу нема», а не мережу з сміттям). Облікові — пара
+    `JIRA_EMAIL`/`JIRA_TOKEN` з оточення, а коли її нема — файли `<HOME>/.claude/pipeline-feedback/jira-email|jira-token`
+    (вміст `strip()`). Оточення раніше за файли; пара береться ЦІЛОЮ з одного джерела: пошта з оточення й токен з файла не
+    змішуються. Токен — друковний ASCII без пробілів. Значень — ні в текстах, ні в журналах; кешу нема: файли маленькі.
+
+    ⛔ Токен НІКОЛИ не в git/коді/чаті — лише локальний файл (chmod 600). Урок переїхав сюди з `bin/overview_push.py`
+    (`_jira_creds`): у репозиторії живе лише адреса-заготовка, а справжні облікові — на машині людини."""
+    try:
+        cfg = load_legacy_tasks()
+    except (OSError, ValueError, RecursionError):      # надто глибока вкладеність JSON — не обвал, а «нема конфігу»
+        cfg = None
+    base = cfg.get('jira_base') if isinstance(cfg, dict) else None
+    if not isinstance(base, str):
+        return None, None, None
+    base = base.strip()
+    if not _SUPABASE_URL_RE.fullmatch(base):           # та сама форма адреси, що в `supabase_config`
+        return None, None, None
+
+    def from_file(name):
+        try:
+            with open(os.path.expanduser('~/.claude/pipeline-feedback/' + name), encoding='utf-8') as f:
+                return f.read()
+        except (OSError, ValueError):
+            return None
+    for email, token in ((os.environ.get('JIRA_EMAIL'), os.environ.get('JIRA_TOKEN')),
+                         (from_file('jira-email'), from_file('jira-token'))):
+        if not (isinstance(email, str) and isinstance(token, str)):
+            continue
+        email, token = email.strip(), token.strip()
+        if email and email.isprintable() and _SUPABASE_KEY_RE.fullmatch(token):
+            return base.rstrip('/'), email, token
+    return None, None, None

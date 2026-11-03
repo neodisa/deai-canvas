@@ -330,10 +330,10 @@ class ModuleErrorTest(unittest.TestCase):
             self.assertEqual(dm.ModuleError(code).status, status, code)
 
     def test_roles(self):
-        self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard'))   # 2b-2: `comments`, 4a: `vcs`, 4c-1: `dashboard` — ролі, які ядро кличе
-        self.assertEqual(dm.ROLES_RESERVED, ('tracker', 'notify'))
+        self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker'))   # 2b-2: `comments`, 4a: `vcs`, 4c-1: `dashboard`, 4c-2: `tracker` — ролі, які ядро кличе
+        self.assertEqual(dm.ROLES_RESERVED, ('notify',))
         self.assertEqual(dm.ROLE_FUNCTIONS['vcs'], ('status', 'push', 'pull'))
-        self.assertEqual(dm.LEGACY_ROLES, ('publish', 'comments', 'vcs', 'dashboard'))   # у ЛІГА `vcs` — зашитий шлях, як `publish`; 4c-1: і `dashboard`
+        self.assertEqual(dm.LEGACY_ROLES, ('publish', 'comments', 'vcs', 'dashboard', 'tracker'))   # у ЛІГА `vcs` — зашитий шлях, як `publish`; 4c-1: і `dashboard`; 4c-2: і `tracker`
         # що з ролей ЛІГА лишається `'legacy'` у `capabilities()`, коли роль не вирішилась: без `comments` (спільний Supabase ЛІГА)
         self.assertEqual(dm.LEGACY_ON_ERROR_ROLES, ('publish', 'vcs'))
         self.assertTrue(set(dm.LEGACY_ON_ERROR_ROLES) <= set(dm.LEGACY_ROLES))
@@ -454,10 +454,10 @@ class ManifestTest(Env):
         self.assertIn('check', self.error_of('check-not-callable'))
 
     def test_reserved_roles_need_no_function(self):
-        self.mk('reserved', roles=('tracker', 'notify'), server=CHECK_ONLY)       # 4c-1: `dashboard` уже викликана ядром
+        self.mk('reserved', roles=('notify',), server=CHECK_ONLY)       # 4c-1: `dashboard`, 4c-2: `tracker` уже викликані ядром
         m = dm.catalog()['reserved']
         self.assertEqual(m.status, 'ok')
-        self.assertEqual(m.roles, ['tracker', 'notify'])
+        self.assertEqual(m.roles, ['notify'])
 
     def test_vcs_role_needs_its_functions(self):
         """`vcs` — роль, яку ядро кличе (4a): модуль без `status`/`push`/`pull` — зламаний, а не «зарезервований»."""
@@ -2074,7 +2074,7 @@ class ProviderTest(Env):
             self.assertEqual(dm.provider('publish', ig), 'legacy')
             self.assertIsNone(dm.provider('tokens', ig))
             self.assertEqual(dm.provider('comments', ig), 'legacy')
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy'})
         dm.write_module_state(ig, 'pub-a', enabled=False)            # явне «вимкнено» — теж не модуль
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
             self.assertEqual(dm.provider('publish', ig), 'legacy')
@@ -2513,12 +2513,12 @@ class CapabilitiesTest(Env):
         self.mk('css-tokens', roles=('tokens',))
         plain = self.new_space('Plain')
         ig = self.new_space('Integ', integrations=True)
-        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
+        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy'})
         dm.write_module_state(plain, 'css-tokens', enabled=True)
-        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': 'css-tokens', 'comments': None, 'vcs': None, 'dashboard': None})
-        self.assertEqual(dm.capabilities(dict(spaces.IMPLICIT)), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
-        self.assertEqual(dm.capabilities(None), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
+        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': 'css-tokens', 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
+        self.assertEqual(dm.capabilities(dict(spaces.IMPLICIT)), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy'})
+        self.assertEqual(dm.capabilities(None), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
 
     def test_vcs_has_no_implicit_module_and_is_legacy_only_in_an_integrations_space(self):
         """`vcs` (4a): неявного модуля нема, тож у звичайному просторі — `None`, навіть коли `git-sync` лежить у каталозі
@@ -2550,21 +2550,21 @@ class CapabilitiesTest(Env):
     def test_vcs_in_an_integrations_space_survives_an_unreadable_space_json_like_publish(self):
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,   # `dashboard` — як `comments`, попри назву тесту: зашитий шлях спільний
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'tracker': None,   # `dashboard` — як `comments`, попри назву тесту: зашитий шлях спільний
                                                'error': 'space-json-unreadable'})
         plain = self.new_space('Plain')
         _write(self.space_json(plain), '{broken')                        # без інтеграцій рішення невідомі
-        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None,
+        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None,
                                                   'error': 'space-json-unreadable'})
 
     def test_the_fallback_dict_names_vcs_when_the_cache_key_itself_breaks(self):
         plain = self.new_space('Plain')
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):
-            self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None,
+            self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None,
                                                       'error': 'module-error'})
             self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
-                                                   'vcs': 'legacy', 'dashboard': None, 'error': 'module-error'})
+                                                   'vcs': 'legacy', 'dashboard': None, 'tracker': None, 'error': 'module-error'})
 
     def test_a_module_error_of_one_role_keeps_vcs_legacy_in_an_integrations_space(self):
         """Гілка `except ModuleError` (роль не вирішилась): `publish` і `vcs` — зашитий шлях ЛІГА, решта — `None`."""
@@ -2572,15 +2572,15 @@ class CapabilitiesTest(Env):
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
             self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None,
-                                                   'vcs': 'legacy', 'dashboard': None, 'error': 'bad-manifest'})
+                                                   'vcs': 'legacy', 'dashboard': None, 'tracker': None, 'error': 'bad-manifest'})
             self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None,
-                                                      'vcs': None, 'dashboard': None, 'error': 'bad-manifest'})
+                                                      'vcs': None, 'dashboard': None, 'tracker': None, 'error': 'bad-manifest'})
 
     def test_no_modules_at_all(self):
         plain = self.new_space('Plain')
         ig = self.new_space('Integ', integrations=True)
-        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy'})
+        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy'})
 
     def counting(self):
         calls = []
@@ -2618,7 +2618,7 @@ class CapabilitiesTest(Env):
             _write(os.path.join(d, 'module.json'), man)
             _bump(os.path.join(d, 'module.json'))
             # неявний `static-publish` лишається ввімкненим, але вже з іншою роллю
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': 'static-publish', 'comments': None, 'vcs': None, 'dashboard': None})
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': 'static-publish', 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
             self.assertGreater(len(calls), n)
 
     def test_cache_follows_a_server_py_that_starts_to_fail(self):
@@ -2649,30 +2649,30 @@ class CapabilitiesTest(Env):
         sp = self.new_space()
         _write(self.space_json(sp), '{broken')
         self.assertEqual(dm.capabilities(sp),
-                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'space-json-unreadable'})
+                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'error': 'space-json-unreadable'})
         _write(self.space_json(sp), json.dumps({'name': 'fixed'}))            # полагодили — помилка зникла
-        self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})
+        self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,
+        self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'tracker': None,
                                                'error': 'space-json-unreadable'})   # publish — ЛІГА-шлях; коментарі — не 'legacy'
 
     def test_capabilities_is_total(self):
         sp = self.new_space()
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'bad-manifest'})
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'error': 'bad-manifest'})
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'tracker': None,
                                                    'error': 'bad-manifest'})
         dm.reset_caches()
         with mock.patch.object(dm, '_provider_for', side_effect=RuntimeError('bug')):
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'error': 'module-error'})
-            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None,
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'error': 'module-error'})
+            self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'tracker': None,
                                                    'error': 'module-error'})
         dm.reset_caches()
         with mock.patch.object(dm, '_catalog_sig', side_effect=OSError('disk')):
             self.assertEqual(dm.capabilities(sp)['error'], 'module-error')
-        self.assertEqual(dm.capabilities({'id': 'x'}), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None})   # чужа форма запису
+        self.assertEqual(dm.capabilities({'id': 'x'}), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None})   # чужа форма запису
 
     def test_the_cache_key_is_taken_before_the_compute(self):
         """Файл змінився ПІСЛЯ того, як роль обчислено: у кеш іде ключ ДО обчислення, тож наступний виклик
@@ -2694,7 +2694,7 @@ class CapabilitiesTest(Env):
 
     def test_capabilities_is_total_for_non_dict_input(self):
         for bad in ('x', 5, ['a'], ('a',), True, object(), 3.5):
-            self.assertEqual(dm.capabilities(bad), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None}, repr(bad))
+            self.assertEqual(dm.capabilities(bad), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None}, repr(bad))
 
     def test_the_cache_key_is_per_space_flag_space_json_and_every_module_file(self):
         d = self.mk('pub-a')
