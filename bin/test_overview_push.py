@@ -35,7 +35,7 @@ def run_cli(fn, cfg, registry=None, counts=None, jira=None, fixture_reason=None,
                mock.patch.object(ov, "load_tasks_file", lambda path=None: cfg),
                mock.patch.object(ov, "discover_projects", lambda c: dict(registry or {})),
                # статуси трекера (4c-2): колбек від `_statuses` (раніше — `jira_statuses`); справжній читав би конфіг установки
-               mock.patch.object(ov, "_statuses", lambda sp, legacy, log=print: (lambda keys: jira or {})),
+               mock.patch.object(ov, "_statuses", lambda sp, log=print: (lambda keys: jira or {})),
                mock.patch.object(dashboard, "_identity", lambda: ("Alpha", "alpha@example.com"))]
     if fixture_reason is not None:
         patches.append(mock.patch.object(dashboard, "_fixture_reason", fixture_reason))

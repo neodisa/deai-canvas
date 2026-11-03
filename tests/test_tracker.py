@@ -723,7 +723,7 @@ class SyncStatuses(tm.Env):
         self.real_builtins()
         tm._write(self.legacy, {'tasks': {}})
         with mock.patch.object(tracker, 'statuses', side_effect=AssertionError('виклик трекера')):
-            cb = ov._statuses(LEAGUE, True)
+            cb = ov._statuses(LEAGUE)
         self.assertIsNone(cb)
 
     # ---- звичайний простір
@@ -792,7 +792,7 @@ class SyncStatuses(tm.Env):
         sp, _, _ = self.regular_space()
         prov = dm.provider('tracker', sp)
         with mock.patch.object(tracker, 'statuses', return_value={}) as st:
-            cb = ov._statuses(sp, False)
+            cb = ov._statuses(sp)
             cb(['DEMO-1'])
         (module, ctx, keys), kw = st.call_args
         self.assertEqual((module.id, keys), (prov.id, ['DEMO-1']))
@@ -803,15 +803,19 @@ class SyncStatuses(tm.Env):
         lines = []
         for exc in (dm.ModuleError('space-json-unreadable', message='space.json: broken'),
                     dm.ModuleError('module-error', message='x' * 500),
-                    spaces.SpacesError('spaces-unreadable', '/nowhere/spaces.json')):
+                    spaces.SpacesError('spaces-unreadable', '/nowhere/spaces.json'),
+                    RuntimeError('несподіваний збій: tok-test-1')):         # будь-що інше — теж не валить синк
             with mock.patch.object(dm, 'provider', side_effect=exc):
-                self.assertIsNone(ov._statuses({'id': 'p', 'path': '/nowhere'}, False, log=lines.append))
-        self.assertEqual(len(lines), 3)
+                self.assertIsNone(ov._statuses({'id': 'p', 'path': '/nowhere'}, log=lines.append))
+        self.assertEqual(len(lines), 4)
         self.assertTrue(all(ln.startswith('⚠ overview: статуси трекера недоступні: ') for ln in lines), lines)
         self.assertLessEqual(max(len(ln) for ln in lines), len('⚠ overview: статуси трекера недоступні: ') + 200)
+        # ⛔ чужий виняток — лише назва класу (його `str` не чищений від секретів)
+        self.assertEqual(lines[3], '⚠ overview: статуси трекера недоступні: RuntimeError')
+        self.assertNotIn('tok-test-1', ' '.join(lines))
 
     def test_cmd_sync_passes_the_callback_for_any_space(self):
-        """`statuses=_statuses(sp, legacy)` — і для ЛІГИ, і для звичайного простору (раніше — лише `legacy`)."""
+        """`statuses=_statuses(sp, log)` — і для ЛІГИ, і для звичайного простору (раніше — лише `legacy`)."""
         for legacy in (True, False):
             seen = []
             sentinel = object()
@@ -819,7 +823,7 @@ class SyncStatuses(tm.Env):
                     mock.patch.object(ov, '_target', lambda sp: (object(), {}, legacy)), \
                     mock.patch.object(ov, '_tasks_of', lambda sp: {'tasks': {}}), \
                     mock.patch.object(ov, 'discover_projects', lambda c: {}), \
-                    mock.patch.object(ov, '_statuses', lambda sp, lg, log=print: sentinel), \
+                    mock.patch.object(ov, '_statuses', lambda sp, log=print: sentinel), \
                     mock.patch.object(dashboard, 'sync', lambda *a, **kw: seen.append(kw['statuses'])):
                 ov.cmd_sync()
             self.assertEqual(seen, [sentinel], f'legacy={legacy}')
@@ -832,11 +836,12 @@ class SyncStatuses(tm.Env):
                        call=lambda module, name, ctx, *a, **kw: {'ok': len(a[0]), 'failed': {}})
         return lines
 
-    def test_the_failure_line_text_is_the_message_then_str_then_the_class_name_up_to_200(self):
+    def test_the_failure_line_text_is_the_module_error_message_else_the_class_name_up_to_200(self):
         head = '⚠ overview: статуси трекера недоступні: '
         cases = ((dm.ModuleError('tracker-error', message='Jira відповіла HTTP 502'), 'Jira відповіла HTTP 502'),
                  (dm.ModuleError('tracker-error', message='m' * 300), 'm' * 200),
-                 (RuntimeError('boom'), 'boom'),
+                 (dm.ModuleError('tracker-error'), 'ModuleError'),            # порожнє повідомлення — назва класу
+                 (RuntimeError('boom tok-test-1'), 'RuntimeError'),            # ⛔ чужий виняток: без `str(e)` (не чищений)
                  (RuntimeError(), 'RuntimeError'))
         for exc, text in cases:
             def statuses(keys, exc=exc):

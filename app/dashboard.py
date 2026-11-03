@@ -330,7 +330,7 @@ def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=p
     постачальника ролі; `None` — постачальника чи конфігу нема, крок пропущено).
 
     Кроки: 0) базові картки з реєстру → `push(…, 'insert')`; 1) відкриті коментарі (`open_comments`, якщо модуль її має) →
-    лічильники для статусу `review`; 2) статуси Jira; 3) задачі простору з текою НА ЦІЙ МАШИНІ → `build_card` → PII-фільтр →
+    лічильники для статусу `review`; 2) статуси трекера; 3) задачі простору з текою НА ЦІЙ МАШИНІ → `build_card` → PII-фільтр →
     `push(…, 'merge')`; 4) підсумок у `log`. Повертає `{'discovered', 'synced', 'skipped', 'failed'}` (для тестів; CLI ігнорує).
     ⛔ Збій кроку НЕ валить проход і НЕ мовчить: назви карток із `failed` — у `log` вголос (мовчазна «часткова» синхронізація
     виглядає як повна)."""
@@ -360,10 +360,11 @@ def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=p
             jstatus = statuses([t.get('jira') for t in cfg.get('tasks', {}).values()]) or {}
         except Exception as e:  # noqa: BLE001 — best-effort: нема статусів ≠ затирати наявні (`{}`: картка без `jira_status`)
             jstatus = {}
-            # ⛔ НЕ мовчки: до 4c-2 збій Jira тут не лишав сліду. Текст — повідомлення модуля (ядро вже вичистило з нього
-            # секрети), інакше `str(e)`, інакше назва класу; не довше 200 знаків
-            log(f'⚠ overview: статуси трекера недоступні: '
-                f'{(getattr(e, "message", None) or str(e) or type(e).__name__)[:200]}')
+            # ⛔ НЕ мовчки: до 4c-2 збій Jira тут не лишав сліду. Текст — повідомлення `ModuleError` (ядро вже вичистило з
+            # нього секрети), інакше лише назва класу: `str(e)` чужого винятку не чищений і міг би винести секрет у лог.
+            # Не довше 200 знаків
+            why = (e.message if isinstance(e, deai_modules.ModuleError) else '') or type(e).__name__
+            log(f'⚠ overview: статуси трекера недоступні: {why[:200]}')
     skipped = []
     cards = []
     # Фікстура в ЛОКАЛЬНОМУ кеші (живий tasks.json, затертий тестом, як

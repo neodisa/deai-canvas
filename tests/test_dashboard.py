@@ -1071,8 +1071,8 @@ class CliShape(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def statuses_for(self, sp, legacy, log=print):
-        self.status_calls.append((sp['id'], legacy))
+    def statuses_for(self, sp, log=print):
+        self.status_calls.append(sp['id'])
         return self.status_cb
 
     def main(self, *argv):
@@ -1092,13 +1092,13 @@ class CliShape(unittest.TestCase):
         # звичайний простір: колбека реєстру нема; статуси — від постачальника `tracker` (тут заглушка), а не прапорця ЛІГИ
         self.assertIsNone(self.synced[0]['discover'])
         self.assertIs(self.synced[0]['statuses'], self.status_cb)
-        self.assertEqual(self.status_calls, [('p', False)])
+        self.assertEqual(self.status_calls, ['p'])
 
     def test_the_league_space_gets_the_registry_and_status_callbacks(self):
         self.main('sync')
         self.assertIsNotNone(self.synced[0]['discover'])
         self.assertIs(self.synced[0]['statuses'], self.status_cb)
-        self.assertEqual(self.status_calls, [('liga', True)])
+        self.assertEqual(self.status_calls, ['liga'])
 
     def test_the_legacy_flag_is_the_league_space_and_the_id_legacy_is_a_real_space(self):
         """⛔ Псевдоніма-id нема: `--space legacy` — це справжній простір з id `legacy`, а ЛІГА — окремий прапорець `--legacy`

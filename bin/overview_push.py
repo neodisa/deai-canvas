@@ -131,7 +131,7 @@ def _tasks_of(sp):
         raise CliError("⛔ overview: файл задач простору «%s» не читається (%s)" % (sp["id"], type(e).__name__))
 
 
-def _statuses(sp, legacy, log=print):
+def _statuses(sp, log=print):
     """Колбек статусів для `dashboard.sync` від постачальника ролі `tracker` простору `sp` або `None` (кроку нема).
     `'legacy'` (простір з інтеграціями без свого трекера, ЛІГА) — вбудований `jira-tracker` з `ctx` з конфігу установки
     (`tracker.legacy_ctx(*install_config.jira_config())`, НЕ `module_ctx`: у ЛІГИ нема `space.json`/`secrets.json`; адреса —
@@ -139,7 +139,9 @@ def _statuses(sp, legacy, log=print):
     `module_ctx`. Нема постачальника — `None`. Збій вирішення ролі (нечитаний `space.json`, модуль не завантажився) — теж `None`,
     але рядком у `log`: синк іде далі без статусів, а причина не мовчить. Колбек питає трекер пакетами з бюджетами синку
     (`tracker.SYNC_TIMEOUT`/`SYNC_SOCKET_S`); його збій обробляє сам `dashboard.sync` (рядок у лог, наявні статуси не затираються).
-    `legacy` — прапорець постачальника дашборда з `_target`; сам постачальник трекера вирішує `provider`, тож тут він не читається."""
+    Хто постачальник — вирішує `provider` (прапорця ЛІГИ від дашборда тут нема: у просторі з інтеграціями й чужим дашбордом
+    трекер теж може бути `'legacy'`). ⛔ Нічого тут не валить синк: старий Jira-крок (0.12.0) не кидав ніколи, тож і непередбачений
+    збій вирішення ролі — лише `None` і назва класу в логу."""
     try:
         prov = deai_modules.provider("tracker", sp)
         if prov is None:
@@ -156,6 +158,9 @@ def _statuses(sp, legacy, log=print):
     except spaces.SpacesError as e:
         log("⚠ overview: статуси трекера недоступні: реєстр просторів не читається (%s)" % e.code)
         return None
+    except Exception as e:  # noqa: BLE001 — крок статусів не валить синк (як 0.12.0): лише назва класу, `str(e)` не чищений
+        log("⚠ overview: статуси трекера недоступні: %s" % type(e).__name__)
+        return None
     return lambda keys: tracker.statuses(module, ctx, keys, timeout=tracker.SYNC_TIMEOUT, socket_s=tracker.SYNC_SOCKET_S)
 
 
@@ -169,7 +174,7 @@ def cmd_sync(space_id=None, *, call=None, log=print):
     # Реєстр GitLab — крок ЛІГИ (колбек): звичайний простір його не має. Статуси трекера — від постачальника ролі `tracker`
     # будь-якого простору (нема постачальника чи конфігу — `None`, крок пропущено).
     dashboard.sync(cfg, module, ctx, discover=(lambda: discover_projects(cfg)) if legacy else None,
-                   statuses=_statuses(sp, legacy, log), log=log, call=call)
+                   statuses=_statuses(sp, log), log=log, call=call)
 
 
 def cmd_discover(space_id=None, *, call=None, log=print):
