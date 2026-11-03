@@ -417,7 +417,7 @@ know fails the whole batch of keys (Jira answers HTTP 400 to the query) — fix 
 **The LIGA space** reaches its Jira through the same module with no wizard step: add the address as `jira_base` to the legacy
 `tasks.json` (the file with `supabase_url`), for example `"jira_base": "https://demo.atlassian.example"`; the credentials are
 `JIRA_EMAIL` and `JIRA_TOKEN` in the environment or the two files in `~/.claude/pipeline-feedback/`. Without `jira_base` that
-space has no statuses and «Mine» says that Jira is not configured.
+space has no statuses, and when its tasks carry Jira keys «Mine» says that Jira is not configured.
 
 ## Git sync
 

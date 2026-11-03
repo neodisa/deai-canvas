@@ -128,7 +128,7 @@ Spec (with the list of deviations from its second revision):
 - **Framework** (`app/deai_modules.py`): manifest, `exec`-loading of `server.py`, per-space
   settings in `space.json`, secrets in `<DEAI_HOME>/secrets.json`, one provider per role,
   `capabilities` (`{publish, tokens}`) in the task and space responses. Roles called by the
-  core at 2a: `publish`, `tokens`; the others are reserved.
+  core at 2a: `publish`, `tokens`; the others are reserved (at 2a; since 4c-2 only `notify` is).
 - **`static-publish`**: publishes the preview to a folder **outside** the space (default
   `~/deai-published/<space-id>/<task>/`), implicit in a space without integrations. The
   folder is re-checked on every publish and serve; replacement is marker-guarded and done as
@@ -370,7 +370,7 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
 Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-02-dashboard-role-design.md`;
 plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
 
-- **The role `dashboard`** is called by the core (`ROLES_CALLED`; `tracker` and `notify` stay reserved): `rows(ctx)`,
+- **The role `dashboard`** is called by the core (`ROLES_CALLED`; `tracker` and `notify` stay reserved at 4c-1 — `tracker` is called since 4c-2): `rows(ctx)`,
   `push(ctx, cards, mode)` with `'merge'` / `'insert'`, and the optional `open_comments(ctx)`; the codes `dashboard-unconfigured`
   (409) and `dashboard-error` (502); `capabilities.dashboard`. The contract is in `docs/modules/authoring.md`. Like `comments`, it
   has the hard-wired path of the legacy space (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable `space.json` is not `'legacy'` either, `STRICT_LEGACY_ROLES`).
@@ -385,7 +385,7 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
 - **Conscious differences from 0.11.0:** batches of up to 50 cards grouped by their key set (the last card of a repeated id
   wins); the core waits 6 s for `rows` and the module's own timeout is 4 s (was 3 s); the sync child is not started for LIGA
   under `DC_TASKS_FILE`; the config of the CLI is read from `tasks.json` before the environment.
-- **Known limits:** LIGA's key is not checked for being non-public; the registry and Jira steps are LIGA's until 4d / 4c-2; one
+- **Known limits:** LIGA's key is not checked for being non-public; the registry and Jira steps are LIGA's until 4d / 4c-2 (Jira: done in 4c-2); one
   lock for the team rows of all spaces (a dead service holds another space for up to 6 s); no timer for a hung child; the sync
   of LIGA does not start when the folder of its log is missing; `open_comments` is cut at Supabase's `max-rows`. The full
   list is in the CHANGELOG, `[0.12.0]`.
