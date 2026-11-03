@@ -21,6 +21,14 @@
 
 Запуск (з кореня репо):  python3 tests/make_before_4c2.py [--out ШЛЯХ]   (типово — `tests/fixtures/tracker/before-4c2.json`)
 
+⚠️ ГЕНЕРАТОР РОБИТЬ ЗНІМОК v0.12.0 (код — коміт 3065dac) і мусить запускатись проти ЗАМОРОЖЕНОЇ копії старого коду, а не проти
+робочої теки (з Task 2–5 `app/`/`bin/` змінюються — і знімок з міткою `source_commit: 3065dac` містив би дані «після»). Як:
+    git archive 3065dac | tar -x -C <тека>             # заморожена копія коду v0.12.0
+    cp tests/make_before_4c2.py <тека>/tests/          # лише сам генератор (він бере ROOT від свого розташування)
+    python3 -B <тека>/tests/make_before_4c2.py --out tests/fixtures/tracker/before-4c2.json
+Прогін на новому коді — лише як документація: запис у типовий шлях еталона з робочої теки, де `app/`/`bin/` відрізняються від
+3065dac, генератор ВІДМОВЛЯЄ (код виходу 2); копія з `git archive` не git-теку — там довіряємо рецепту.
+
 ⛔ Ізоляція: власний тимчасовий `HOME` (файли облікових Jira й лог синку у `~/.claude/pipeline-feedback/` — лише там), без
 `DEAI_HOME` (шар просторів вимкнено: ЛІГА = `DC_TASKS_FILE`), `JIRA_*`/`SUPABASE_*` у чистому оточенні. Реєстр GitLab, Jira й
 Supabase — заглушки; `registry._temp_roots` підмінено, щоб тимчасові теки генератора не вважались «фікстурами тесту».
@@ -30,6 +38,7 @@ import base64
 import http.client
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -159,38 +168,61 @@ def sync_cards(tmp):
     import registry
     d = os.path.join(tmp, 'sync')
     tasks = {}
-    for tid, title, jira in (('t1', 'Demo one', 'DEMO-1'), ('t2', 'Demo two', 'DEMO-2')):
+    # t1/t2 — ключі, що є у відповіді Jira; t3 — без `jira` зовсім; t4 — ключ `DEMO-9`, якого відповідь-заглушка не знає.
+    for tid, title, jira in (('t1', 'Demo one', 'DEMO-1'), ('t2', 'Demo two', 'DEMO-2'), ('t3', 'Demo three', None),
+                             ('t4', 'Demo four', 'DEMO-9')):
         tdir = os.path.join(d, tid)
         _write(os.path.join(tdir, 'iterations.json'),
                {'iterations': [{'id': 'it1', 'date': '01.11.2026 10:00', 'published': False}], 'publish_url': None})
-        tasks[tid] = {'title': title, 'dir': tdir, 'profile': 'tool', 'jira': jira, 'opened': '2026-11-01T10:00:00Z'}
+        task = {'title': title, 'dir': tdir, 'profile': 'tool', 'opened': '2026-11-01T10:00:00Z'}
+        if jira:
+            task['jira'] = jira
+        tasks[tid] = task
     cfg = {'current': 't1', 'tasks': tasks}
     jira = {'DEMO-1': {'name': 'In Review', 'cat': 'indeterminate'}, 'DEMO-2': {'name': 'Done', 'cat': 'done'}}
-    asked, pushes, lines = [], [], []
+
+    def run(statuses):
+        pushes, lines = [], []
+
+        def call(module, name, ctx, *args, **kw):
+            # Єдиний очікуваний виклик модуля — `push(cards, mode)`; усе інше — помилка знімка.
+            assert name == 'push', name
+            cards, mode = args
+            pushes.append({'mode': mode, 'cards': strip(cards)})
+            return {'ok': len(cards), 'failed': {}}
+
+        with mock.patch.object(registry, '_temp_roots', return_value=[FAKE_TMP]):
+            summary = dashboard.sync(cfg, object(), {}, statuses=statuses, identity=('Alpha', EMAIL),
+                                     log=lines.append, call=call)
+        return {'pushes': pushes, 'log': [_rel(line, tmp) for line in lines], 'summary': summary}
+
+    # (1) звичайний прохід: `statuses` отримує СИРИЙ список (у 0.12.0 — із `None` для задачі без `jira`), віддає відповідь Jira
+    asked = []
 
     def statuses(keys):
         asked.append(list(keys))
         return jira
+    out = run(statuses)
+    out['statuses_asked'] = asked
 
-    def call(module, name, ctx, *args, **kw):
-        # Єдиний очікуваний виклик модуля — `push(cards, mode)`; усе інше — помилка знімка.
-        assert name == 'push', name
-        cards, mode = args
-        pushes.append({'mode': mode, 'cards': strip(cards)})
-        return {'ok': len(cards), 'failed': {}}
+    # (2) `statuses` кидає: у 0.12.0 мовчки (жодного рядка логу про це), картки йдуть БЕЗ полів `jira_status*`
+    asked_raise = []
 
-    with mock.patch.object(registry, '_temp_roots', return_value=[FAKE_TMP]):
-        summary = dashboard.sync(cfg, object(), {}, statuses=statuses, identity=('Alpha', EMAIL), log=lines.append, call=call)
-
-    def rel(text):
-        return scrub(text, tmp).replace('<tmp>/sync/', '<dir>/')
+    def statuses_raises(keys):
+        asked_raise.append(list(keys))
+        raise RuntimeError('Jira недоступна')
+    raised = run(statuses_raises)
+    raised['statuses_asked'] = asked_raise
     return {
-        'input': {'jira': jira, 'identity': ['Alpha', EMAIL], 'tasks': {tid: {**t, 'dir': '<dir>/' + tid} for tid, t in tasks.items()}},
-        'statuses_asked': asked,
-        'pushes': pushes,
-        'log': [rel(line) for line in lines],
-        'summary': summary,
+        'input': {'jira': jira, 'identity': ['Alpha', EMAIL],
+                  'tasks': {tid: {**t, 'dir': '<dir>/' + tid} for tid, t in tasks.items()}},
+        **out,
+        'statuses_raises': raised,
     }
+
+
+def _rel(text, tmp):
+    return scrub(text, tmp).replace('<tmp>/sync/', '<dir>/')
 
 
 # ---------------------------------------------------------------------------------- екран «Задачі», шлях ЛІГИ
@@ -228,9 +260,14 @@ def tasks_overview(tmp):
     tdir = os.path.join(d, 't1')
     _write(os.path.join(tdir, 'iterations.json'),
            {'iterations': [{'id': 'it1', 'date': '01.11.2026 10:00', 'published': False}], 'publish_url': None})
+    # t2 — своя задача БЕЗ рядка на дашборді: `jiraStatus`/`jiraCat`/`comments` = None («невідомо»)
+    t2dir = os.path.join(d, 't2')
+    _write(os.path.join(t2dir, 'iterations.json'),
+           {'iterations': [{'id': 'it1', 'date': '01.11.2026 11:00', 'published': False}], 'publish_url': None})
     tasks_file = os.path.join(d, 'tasks.json')
     _write(tasks_file, {'current': 't1', 'tasks': {
-        't1': {'title': 'Demo one', 'dir': tdir, 'profile': 'tool', 'jira': 'DEMO-1', 'opened': '2026-11-01T10:00:00Z'}}})
+        't1': {'title': 'Demo one', 'dir': tdir, 'profile': 'tool', 'jira': 'DEMO-1', 'opened': '2026-11-01T10:00:00Z'},
+        't2': {'title': 'Demo two', 'dir': t2dir, 'profile': 'tool', 'jira': 'DEMO-2', 'opened': '2026-11-01T11:00:00Z'}}})
     row = {'id': 't1', 'name': 'Demo one', 'jira': 'DEMO-1', 'jira_status': 'In Review',
            'jira_status_cat': 'indeterminate', 'open_comments': 2, 'thumb_url': None,
            'code_url': 'https://dc-t1.vercel.example', 'updated_at': '2026-11-01T10:00:00Z', 'designer': 'Alpha',
@@ -277,10 +314,32 @@ def _source_commit():
     return '3065dac'
 
 
+def _code_differs_from_source():
+    """`True`, якщо `app/`/`bin/` цієї теки відрізняються від `_source_commit()`. `None` — перевірити нема як (не git-теку:
+    копія з `git archive`; git відсутній; коміту нема): тоді довіряємо рецепту з докстрінга. ⛔ Саме `show-toplevel == ROOT`:
+    тека-копія всередині чужого git-репо інакше питала б ЧУЖИЙ репозиторій."""
+    try:
+        top = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--show-toplevel'], capture_output=True, text=True, timeout=30)
+        if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(ROOT):
+            return None
+        src = _source_commit()
+        if subprocess.run(['git', '-C', ROOT, 'cat-file', '-e', src + '^{commit}'], capture_output=True, timeout=30).returncode != 0:
+            return None
+        diff = subprocess.run(['git', '-C', ROOT, 'diff', '--quiet', src, '--', 'app', 'bin'], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return diff.returncode == 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--out', default=OUT_DEFAULT)
     args = ap.parse_args(argv)
+    if os.path.abspath(args.out) == os.path.abspath(OUT_DEFAULT) and _code_differs_from_source():
+        print('⛔ make_before_4c2: app/ або bin/ відрізняються від %s — це знімок «після», еталон «до» не перезаписую. '
+              'Запускай із замороженої копії (git archive %s | tar -x -C <тека>), див. докстрінг.'
+              % (_source_commit(), _source_commit()), file=sys.stderr)
+        sys.exit(2)
     snap = build()
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as f:

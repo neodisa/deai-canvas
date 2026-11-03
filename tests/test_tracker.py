@@ -41,38 +41,50 @@ class Before4c2Shape(unittest.TestCase):
     def test_jira_request_shape(self):
         jr = self.snap['jira_request']
         self.assertEqual(sorted(jr), ['network_error', 'no_credentials', 'request'])
-        call = jr['request']['calls']
-        self.assertEqual(len(call), 1, 'один запит на всі ключі')
-        self.assertEqual(call[0]['method'], 'POST')
-        self.assertEqual(call[0]['path'], '/rest/api/3/search/jql')
-        self.assertEqual(call[0]['headers']['authorization'], '<basic>')
-        self.assertEqual(call[0]['body']['jql'], 'key in (DEMO-1,DEMO-2)', 'унікальні ключі, порожні відкинуто')
+        calls = jr['request']['calls']
+        self.assertEqual(len(calls), 1, 'один запит на всі ключі')
+        self.assertEqual(calls[0]['method'], 'POST')
+        self.assertEqual(calls[0]['path'], '/rest/api/3/search/jql')
+        self.assertEqual(calls[0]['headers']['authorization'], '<basic>')
+        self.assertEqual(calls[0]['body']['jql'], 'key in (DEMO-1,DEMO-2)', 'унікальні ключі, порожні відкинуто')
         self.assertEqual(jr['request']['result']['DEMO-1'], {'name': 'In Review', 'cat': 'indeterminate'})
         self.assertEqual(jr['no_credentials'], {'result': {}, 'urlopen_calls': 0})
         self.assertEqual(jr['network_error']['result'], {})
+        self.assertEqual(jr['network_error']['urlopen_calls'], 1, 'запит був, мережа впала')
 
     def test_sync_cards_shape(self):
         sc = self.snap['sync_cards']
-        self.assertEqual(sorted(sc), ['input', 'log', 'pushes', 'statuses_asked', 'summary'])
-        self.assertEqual(sc['statuses_asked'], [['DEMO-1', 'DEMO-2']])
+        self.assertEqual(sorted(sc), ['input', 'log', 'pushes', 'statuses_asked', 'statuses_raises', 'summary'])
+        self.assertEqual(sc['statuses_asked'], [['DEMO-1', 'DEMO-2', None, 'DEMO-9']], '0.12.0: сирий список, із None')
         self.assertEqual(len(sc['pushes']), 1)
         self.assertEqual(sc['pushes'][0]['mode'], 'merge')
         cards = {c['id']: c for c in sc['pushes'][0]['cards']}
+        self.assertEqual(sorted(cards), ['t1', 't2', 't3', 't4'])
         self.assertEqual(cards['t1']['jira_status'], 'In Review')
         self.assertEqual(cards['t2']['jira_status_cat'], 'done')
+        for tid in ('t3', 't4'):        # без `jira` / ключ, якого нема у відповіді: полів статусу нема
+            self.assertFalse([k for k in cards[tid] if k.startswith('jira_status')], tid)
+        raised = sc['statuses_raises']
+        self.assertEqual(raised['statuses_asked'], sc['statuses_asked'])
+        self.assertEqual(raised['log'], sc['log'], '0.12.0: збій `statuses` мовчки, жодного рядка логу')
+        self.assertEqual(len(raised['pushes']), 1)
+        for card in raised['pushes'][0]['cards']:
+            self.assertFalse([k for k in card if k.startswith('jira_status')], card['id'])
 
     def test_tasks_overview_shape(self):
         to = self.snap['tasks_overview']
         self.assertEqual(to['status'], 200)
         self.assertEqual(sorted(to['body']), ['current', 'mine', 'space', 'team'])
         self.assertEqual(sorted(to['volatile']), ['fetchedAt', 'rowsAt'])
-        self.assertEqual(to['body']['mine'][0]['jiraStatus'], 'In Review')
+        mine = {m['id']: m for m in to['body']['mine']}
+        self.assertEqual(mine['t1']['jiraStatus'], 'In Review')
+        self.assertEqual((mine['t2']['jiraStatus'], mine['t2']['jiraCat']), (None, None), 'своя задача без рядка дашборда')
         self.assertEqual(to['body']['team']['rows'][0]['jiraCat'], 'indeterminate')
 
     def test_no_volatile_fields_or_paths(self):
         # Вихід (тіло відповіді, картки синку) без мінливого; `volatile` (лише ТИПИ вирізаних полів), `meta` (їх перелік) і
         # `input_rows` (вхідні рядки-заглушки: там `updated_at` є за задумом) не перевіряються.
-        outputs = {'sync_cards': self.snap['sync_cards']['pushes'], 'tasks_overview': self.snap['tasks_overview']['body'],
+        outputs = {'sync_cards': [self.snap['sync_cards']['pushes'], self.snap['sync_cards']['statuses_raises']['pushes']], 'tasks_overview': self.snap['tasks_overview']['body'],
                    'jira_request': self.snap['jira_request']}
         for path, key, _ in walk(outputs):
             with self.subTest(path=path, key=key):

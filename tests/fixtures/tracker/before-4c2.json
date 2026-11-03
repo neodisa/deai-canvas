@@ -119,11 +119,24 @@
           "opened": "2026-11-01T10:00:00Z",
           "profile": "tool",
           "title": "Demo two"
+        },
+        "t3": {
+          "dir": "<dir>/t3",
+          "opened": "2026-11-01T10:00:00Z",
+          "profile": "tool",
+          "title": "Demo three"
+        },
+        "t4": {
+          "dir": "<dir>/t4",
+          "jira": "DEMO-9",
+          "opened": "2026-11-01T10:00:00Z",
+          "profile": "tool",
+          "title": "Demo four"
         }
       }
     },
     "log": [
-      "✅ overview: синхронізовано 2 проєктів"
+      "✅ overview: синхронізовано 4 проєктів"
     ],
     "pushes": [
       {
@@ -151,6 +164,25 @@
             "name": "Demo two",
             "source": "canvas",
             "status": "work"
+          },
+          {
+            "designer": "Alpha",
+            "designer_key": "alpha@example.com",
+            "id": "t3",
+            "iterations": 1,
+            "name": "Demo three",
+            "source": "canvas",
+            "status": "work"
+          },
+          {
+            "designer": "Alpha",
+            "designer_key": "alpha@example.com",
+            "id": "t4",
+            "iterations": 1,
+            "jira": "DEMO-9",
+            "name": "Demo four",
+            "source": "canvas",
+            "status": "work"
           }
         ],
         "mode": "merge"
@@ -159,20 +191,106 @@
     "statuses_asked": [
       [
         "DEMO-1",
-        "DEMO-2"
+        "DEMO-2",
+        null,
+        "DEMO-9"
       ]
     ],
+    "statuses_raises": {
+      "log": [
+        "✅ overview: синхронізовано 4 проєктів"
+      ],
+      "pushes": [
+        {
+          "cards": [
+            {
+              "designer": "Alpha",
+              "designer_key": "alpha@example.com",
+              "id": "t1",
+              "iterations": 1,
+              "jira": "DEMO-1",
+              "name": "Demo one",
+              "source": "canvas",
+              "status": "work"
+            },
+            {
+              "designer": "Alpha",
+              "designer_key": "alpha@example.com",
+              "id": "t2",
+              "iterations": 1,
+              "jira": "DEMO-2",
+              "name": "Demo two",
+              "source": "canvas",
+              "status": "work"
+            },
+            {
+              "designer": "Alpha",
+              "designer_key": "alpha@example.com",
+              "id": "t3",
+              "iterations": 1,
+              "name": "Demo three",
+              "source": "canvas",
+              "status": "work"
+            },
+            {
+              "designer": "Alpha",
+              "designer_key": "alpha@example.com",
+              "id": "t4",
+              "iterations": 1,
+              "jira": "DEMO-9",
+              "name": "Demo four",
+              "source": "canvas",
+              "status": "work"
+            }
+          ],
+          "mode": "merge"
+        }
+      ],
+      "statuses_asked": [
+        [
+          "DEMO-1",
+          "DEMO-2",
+          null,
+          "DEMO-9"
+        ]
+      ],
+      "summary": {
+        "discovered": 0,
+        "failed": {},
+        "skipped": [],
+        "synced": 4
+      }
+    },
     "summary": {
       "discovered": 0,
       "failed": {},
       "skipped": [],
-      "synced": 2
+      "synced": 4
     }
   },
   "tasks_overview": {
     "body": {
       "current": "t1",
       "mine": [
+        {
+          "comments": null,
+          "id": "t2",
+          "iter": "it1",
+          "iterations": 1,
+          "jira": "DEMO-2",
+          "jiraCat": null,
+          "jiraStatus": null,
+          "missing": false,
+          "opened": "2026-11-01T11:00:00Z",
+          "pages": 0,
+          "profile": "tool",
+          "published": null,
+          "tags": [
+            "tool"
+          ],
+          "thumb": null,
+          "title": "Demo two"
+        },
         {
           "comments": 2,
           "id": "t1",
