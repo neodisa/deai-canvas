@@ -1,0 +1,6 @@
+{"api": 1, "id": "fake-tracker", "name": "Fake tracker (test)", "version": "1.0.0",
+ "roles": ["tracker"],
+ "settings": [
+   {"key": "statuses_file", "type": "text", "label": "Statuses file (test)", "required": true},
+   {"key": "log_file", "type": "text", "label": "Call log file (test)"}
+ ]}

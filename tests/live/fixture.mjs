@@ -81,7 +81,7 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   мусить бути перехоплено в самому тесті (`hermeticLiga`). Змінні `SUPABASE_URL`/`SUPABASE_KEY` оточення розробника
  *   сервер у живих тестах НЕ бачить ніколи (їх гасить фікстура): справжній проєкт сюди не потрапить.
  * @param {Array<{name: string, color?: string, id?: string, legacy?: boolean,
- *   integrations?: boolean, tasks?: Record<string, {dir: string, title?: string}>}>} [opts.spaces]
+ *   integrations?: boolean, tasks?: Record<string, {dir: string, title?: string, jira?: string}>}>} [opts.spaces]
  *   ПРОСТОРИ (Deai 1.0, етап 1). Опція змінює фікстуру цілком: `taskDir`,
  *   `extraTasks`, `title`, `profile` ігноруються (задачі кожного простору — у його
  *   `tasks`), а замість них зʼявляється ізольована машина:
@@ -176,7 +176,7 @@ function isolatedMachine(spaces, legacyFile, legacyExtra = {}) {
     mkdirSync(spPath, { recursive: true });
     writeFileSync(path.join(spPath, "space.json"), JSON.stringify({ name: sp.name, color: sp.color || "space-1" }));
     const tasks = Object.fromEntries(Object.entries(sp.tasks || {})
-      .map(([tid, tk]) => [tid, { dir: tk.dir, title: tk.title || tid }]));
+      .map(([tid, tk]) => [tid, { dir: tk.dir, title: tk.title || tid, ...(tk.jira ? { jira: tk.jira } : {}) }]));
     const cfg = { current: Object.keys(tasks)[0], design_work_root: spPath, tasks, ...(legacy ? legacyExtra : {}) };
     if (legacy) writeFileSync(legacyFile, JSON.stringify(cfg));
     else writeFileSync(path.join(spPath, "tasks.json"), JSON.stringify(cfg));
