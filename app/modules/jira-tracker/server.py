@@ -210,11 +210,9 @@ def _request(ctx, method, path, *, body=None):
             with _open(req, _timeout(ctx)) as resp:
                 status, payload = resp.status, resp.read(MAX_BODY + 1)
         except urllib.error.HTTPError as e:
+            # ⛔ Тіло помилки НЕ читаємо: текст — лише статус, а завелике тіло 4xx не мусить обернути «HTTP 4xx» на «відповідь завелика».
             status = e.code
-            try:
-                payload = e.read(MAX_BODY + 1)
-            finally:
-                e.close()
+            e.close()
     except Exception as e:  # noqa: BLE001 — URLError, тайм-аут, обрив, TLS, `http.client.*`: для людини це одне — «недосяжна»
         reason = getattr(e, 'reason', None)
         raise _NetworkError('Jira недосяжна (' + type(reason if isinstance(reason, BaseException) else e).__name__
@@ -234,11 +232,16 @@ def _json(payload):
 
 def _problem(status, secrets=()):
     """`(код, текст)` невдалої відповіді (`status` не 2xx): лише фіксовані слова й HTTP-статус. ⛔ Тіло відповіді не читаємо:
-    повідомлення Jira могло б повторити ключі й назви задач. 4xx/3xx — людині виправляти (`module-error`); 5xx — збій сервісу."""
+    повідомлення Jira могло б повторити ключі й назви задач. 4xx/3xx — людині виправляти (`module-error`); 5xx, 408 і 429 —
+    збій сервісу чи тимчасове (`tracker-error`)."""
     if status in (401, 403):
         code, text = 'module-error', f'невірний email чи токен (HTTP {status})'
     elif 300 <= status < 400:
         code, text = 'module-error', f'Jira відповіла переадресацією (HTTP {status}): за нею не йдемо — перевірте адресу сайту'
+    elif status == 400:
+        code, text = 'module-error', 'Jira відхилила запит (HTTP 400): перевірте ключі задач'
+    elif status in (408, 429):                      # тимчасове (таймаут, ліміт запитів): людині нічого виправляти — повтор згодом
+        code, text = 'tracker-error', f'Jira відповіла HTTP {status}'
     elif 400 <= status < 500:
         code, text = 'module-error', f'Jira відповіла HTTP {status}'
     else:

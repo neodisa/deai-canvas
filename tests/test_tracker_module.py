@@ -331,12 +331,28 @@ class StatusesTest(ModuleCase):
 
     def test_http_failures_carry_the_status(self):
         for status, code in ((400, 'module-error'), (401, 'module-error'), (403, 'module-error'), (404, 'module-error'),
-                             (429, 'module-error'), (500, 'tracker-error'), (503, 'tracker-error')):
+                             (408, 'tracker-error'), (429, 'tracker-error'), (500, 'tracker-error'), (503, 'tracker-error')):
             with self.subTest(status=status):
                 self.net(http_error(status, {'errorMessages': ['Issue does not exist']}))
                 e = self.raises('statuses', self.ctx(), ['DEMO-1'])
                 self.assertEqual(e.code, code)
                 self.assertIn(f'HTTP {status}', e.message)
+
+    def test_a_400_has_the_fixed_hint_without_the_body(self):
+        self.net(http_error(400, {'errorMessages': ['Issue DEMO-1 does not exist']}))
+        e = self.raises('statuses', self.ctx(), ['DEMO-1'])
+        self.assertEqual((e.code, e.message), ('module-error', 'Jira відхилила запит (HTTP 400): перевірте ключі задач'))
+
+    def test_a_huge_error_body_still_gives_the_status_text(self):
+        for status, code in ((400, 'module-error'), (404, 'module-error'), (429, 'tracker-error'), (500, 'tracker-error')):
+            with self.subTest(status=status):
+                self.net(http_error(status, b'x' * ((4 << 20) + 5)))
+                e = self.raises('statuses', self.ctx(), ['DEMO-1'])
+                self.assertEqual(e.code, code)
+                self.assertIn(f'HTTP {status}', e.message)
+                self.assertNotIn('завелика', e.message)
+                v = self.raw('check', self.ctx())
+                self.assertNotIn('завелика', v['detail'])
 
     def test_network_failure_is_tracker_error(self):
         self.net(urllib.error.URLError(OSError('refused')))
