@@ -303,18 +303,28 @@ below). Read-only: it never changes anything in the tracker.
   requests within it and answer with your own text instead of a bare `check-timeout`. The Tasks screen gives a socket
   **4 s** (the core waits 6 s per call); the sync of the team board gives **15 s** (the core waits 30 s per call). The field
   is new in the contract of this role; the `ctx` of other roles has none.
-* `check(ctx)` — as for every module (section 3).
+* `check(ctx)` — as for every module (section 3): a verdict dict, never an exception. The built-in module answers
+  `module-error` for settings that do not fit (address, e-mail, token), **`tracker-auth`** for HTTP 401/403 (a wrong e-mail or
+  token; its own code, because the Connections screen labels a `module-error` «the module crashed during the check»), `network`
+  when the tracker cannot be reached, and `tracker-error` or `module-error` (with the HTTP status) for any other answer. The
+  codes of a verdict are free text for the screen: the table of error codes below lists only the codes you **raise**.
 
 **Who is asked, and when.** A space has a tracker when it has a provider of the role; without one the Tasks screen shows no
 status from a tracker. A space with integrations and no module of its own uses the built-in `jira-tracker` through the
 address and the credentials of the installation (`jira_base` in the legacy `tasks.json`, `JIRA_EMAIL` / `JIRA_TOKEN`).
 
-**The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`.
+**The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`. The table is
+for the codes you **raise** from `statuses`; the verdict codes of `check` (above) are separate.
 
 | code | HTTP | raise it when |
 |---|---|---|
 | `tracker-unconfigured` | 409 | the tracker has no address or credentials to talk to |
-| `tracker-error` | 502 | the tracker refused or did not answer; the text carries no token and no body of a request |
+| `tracker-error` | 502 | the tracker refused or did not answer (a 5xx, a timeout, a rate limit, an answer of the wrong shape); the text carries no token and no body of a request |
+
+The built-in `jira-tracker` raises `module-error` for what a person has to fix (bad settings, HTTP 400 with a fixed hint «check
+the task keys», 401/403, a redirect) and `tracker-error` for the rest (a network failure, 5xx, and the transient 408 and 429).
+It re-checks the keys against `KEY_RE` (a list of at most 100) and answers `module-error` to anything else. The core also
+turns a failure it caused itself into a `tracker-error` («the answer is not a dict»).
 
 **Your own module of this role** lives in `<space>/modules/<id>/` and runs after trust, like any other (section 4). Keep
 the token of a tracker in a `secret` setting and do not mark it `public`.

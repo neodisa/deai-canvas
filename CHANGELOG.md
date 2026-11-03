@@ -3,6 +3,110 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.13.0] — unreleased
+
+Stage 4c-2: the task statuses of the issue tracker become a role. The badge with the status of a task («In progress», «Done»…)
+no longer depends on the team dashboard and no longer on the Jira of one company hard-wired in `bin/overview_push.py`: it
+belongs to whoever provides the role **`tracker`** in the space. The built-in module `jira-tracker` provides it for anyone with a
+Jira Cloud site, and the LIGA space reaches its Jira through the same module as an implicit provider (as in 0.8.0–0.12.0 for the
+other roles), with the address moved from the code into `tasks.json` (see *Upgrading*). The core decides which keys are asked
+and how the answer is read (`app/tracker.py`); the module only talks to the tracker. Design:
+`docs/superpowers/specs/2026-11-03-tracker-role-design.md`; plan: `docs/superpowers/plans/2026-11-03-tracker-role.md`. The
+behaviour of 0.12.0 is pinned by the snapshot `tests/fixtures/tracker/before-4c2.json`.
+
+### Added
+
+- **The role `tracker`** in the core: it is called now (only `notify` is still reserved), and `capabilities.tracker` carries the
+  module id, `'legacy'` or `null`. The function of a module: `statuses(ctx, keys)` → `{key: {"name", "cat"}}`; the core sends
+  only keys of the form `KEY_RE` (`[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,9}`), at most 100 per call, and normalizes the answer
+  (`name` ≤ 80 characters with no control characters, `cat` one of `new` / `indeterminate` / `done` or `None`). The new field
+  `ctx["timeout_s"]` is the socket budget of the module (4 s on the Tasks screen, 15 s in the sync; the core waits 6 s and 30 s).
+  The error codes `tracker-unconfigured` (409) and `tracker-error` (502). The contract is in `docs/modules/authoring.md`,
+  «The `tracker` role».
+- **The module `jira-tracker` 1.0.0** (built-in). Settings: `base` (`https://<site>.atlassian.net` or your own domain: https only,
+  a DNS name, no IP, no `localhost`, no path), `email` and `token` (a secret, the Atlassian API token). `statuses` is
+  `POST /rest/api/3/search/jql` (the same request as the 0.12.0 sync), `check` is `GET /rest/api/3/myself` and answers
+  `tracker-auth` on HTTP 401/403 and `network` when Jira cannot be reached. No redirects are followed, and no token, e-mail or
+  body of a request or answer ever gets into a text. See `app/modules/jira-tracker/README.md`.
+- **Statuses on the «Tasks» screen without a dashboard.** `/api/tasks-overview` asks the tracker of the space for the keys of
+  «Mine» (the first 100) and shows the badge on the cards; a space with a tracker and no team dashboard now has statuses too.
+  The priority is the tracker, then the row of the dashboard, then «unknown» (no badge). The «Team» rows are unchanged (their
+  statuses come from the dashboard).
+- **The banner «Issue tracker unavailable: …»** over «Mine» when the tracker did not answer, with the note «data as of HH:MM» when
+  earlier statuses are still shown. The cache is **per space** under its own lock (`TRACKER_TTL` 300 s, an error for 30 s;
+  «Try again» skips it), and a failure never wipes the last statuses.
+- **The role on the Connections screen** (the card «Issue tracker», between «Team dashboard» and the tokens) and in the new-space
+  wizard; the texts are in `app/i18n.js` (UK and EN).
+
+### Changed
+
+- **LIGA goes through the module.** `tracker.legacy_ctx` and `tracker.legacy_module` build the call for the built-in
+  `jira-tracker` from the config of the installation: `jira_base` in the legacy `tasks.json` (new) and the credentials as before
+  (`JIRA_EMAIL` / `JIRA_TOKEN`, or the files `~/.claude/pipeline-feedback/jira-email|jira-token`). The request to Jira is the
+  same as in 0.12.0. `install_config.jira_config()` reads the e-mail and the token independently (as 0.12.0 did): a bad value of
+  the environment falls through to the file.
+- **The sync takes the statuses from the provider of the role `tracker`** of the space, any space (0.12.0: LIGA only, through
+  `jira_statuses`). A space with no provider, or LIGA with no config, skips the step.
+- **A failure of the tracker in the sync goes into the log**, never silently: `⚠ overview: статуси трекера недоступні: <the text of
+  the module error | the class name>`. The statuses already on the cards are not wiped (as before).
+- **Keys outside `KEY_RE` do not go to the tracker** (0.12.0 put them into the query as they were); the module checks the keys
+  once more because they end up in a JQL.
+- **Connections:** the role has the icon `task`; turning it off outside LIGA has its own consequence text.
+
+### Removed
+
+- The Jira code of `bin/overview_push.py`: `_JIRA_BASE` (the address was a constant), `_jira_creds`, `jira_statuses`,
+  `_ssl_context`. The callback of the sync is built from the provider of the role. The tests of `jira_statuses`
+  (`TestJiraStatuses` in `bin/test_overview_push.py`) are replaced by the tests of the module and the core.
+
+### Upgrading
+
+- **LIGA: add `jira_base` to `tasks.json`** (the legacy file that already carries `supabase_url`), for example
+  `"jira_base": "https://demo.atlassian.example"`. The credentials stay as they were: `JIRA_EMAIL` and `JIRA_TOKEN` in the
+  environment, or the two files in `~/.claude/pipeline-feedback/`. **Without `jira_base` LIGA gets no statuses at all**, and when
+  tasks have Jira keys the «Mine» tab shows the banner «Jira не налаштовано…» until the key is added (intended: a status cannot be
+  asked without an address). The dashboard sync then simply skips the statuses.
+- **An ordinary space:** to get statuses, enable the module (Connections → «Issue tracker», or the wizard) with the site
+  address, your Atlassian e-mail and an API token. Without it nothing changes.
+- Scripts that imported `jira_statuses`, `_jira_creds` or `_JIRA_BASE` from `bin/overview_push.py` must move to
+  `app/tracker.py` and the module `app/modules/jira-tracker/`.
+
+### Deliberate differences from 0.12.0
+
+(everything else is checked against the snapshot)
+
+- The address of the LIGA Jira comes from `tasks.json` (`jira_base`), not from the code.
+- The Tasks screen of LIGA asks Jira directly (once per 5 minutes per computer; up to 6 s of waiting on a cache miss): the
+  status of your own task is fresher than the dashboard's (it lagged by up to 30 minutes).
+- A failure of Jira in the sync is a line in the log, not silence.
+- Keys outside `KEY_RE` no longer go to Jira.
+- HTTP 400 gets a fixed hint («check the task keys»); HTTP 408 and 429 count as transient (`tracker-error`); the body of an error
+  answer is not read at all.
+- An empty list of keys makes no call and shows no banner; keys that failed are remembered in the cache for the error time, so a
+  dead tracker is asked once per 30 s and not on every visit.
+- **Isolation:** with `DC_TASKS_FILE` or `DC_NO_OVERVIEW` the LIGA path never goes to Jira; the screen behaves as a space without a
+  tracker (`tracker: null`, statuses only from the rows of the dashboard). `DC_TRACKER_FAKE` (a local JSON `{key: {name, cat}}`)
+  is the test seam of that path.
+
+### Known limits
+
+- One key the tracker does not know fails its whole batch: Jira answers HTTP 400 to the whole query, so the batch gets no statuses
+  and the 400 hint (before 4c-2 it failed silently). Fix the task key.
+- Jira Cloud only (Basic `email:token`); Jira Server / Data Center and other trackers are separate modules later.
+- The screen asks for the first 100 keys of «Mine» only (one call).
+- The worst case of `/api/tasks-overview` is about **12 s** on a cache miss or «Try again»: the team rows (6 s) and then the
+  tracker (6 s), one after the other.
+- One lock (`_TRACKER_LOCK`) serves the tracker cache of **all** spaces: a dead Jira in one space can hold the «Tasks» screen of
+  another for up to 6 s (as the team rows do).
+- The error texts of the server are Ukrainian also in the English interface (as the isolation text of the team tab).
+- The statuses of the «Team» rows come from the dashboard only; there is no link from a key to the page of the task, and no task
+  title or assignee from the tracker.
+
+### Tests
+
+- Test-only: the live guard of the `dashboard` role over the real sync log now checks content markers in the **appended tail** of
+  the log instead of comparing its length (a flake fix; no change in the product).
+
 ## [0.12.0] — 02.11.2026
 
 Stage 4c-1: the team dashboard becomes a role. The «Team» tab of the «Tasks» screen and the writing of the task cards no longer

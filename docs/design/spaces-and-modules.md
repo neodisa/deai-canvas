@@ -7,10 +7,11 @@ stage 2b-2 (the universal `comments` role and your own Supabase, 0.4.0), stage 3
 Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a space's own
 modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0) and stage
 4b-1 (the in-house publishing through `vercel-publish`, 0.9.0), stage 4b-2 (the in-house comments through
-`supabase-comments`, 0.10.0), stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0) and stage 4c-1 (the
-team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0) — see *Status* at the end.
-Next: stages 4c-2 to 4d — the rest of the in-house integrations of the legacy space (tracker statuses and notifications) as
-optional per-space modules, and the end of the `integrations` flag.
+`supabase-comments`, 0.10.0), stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0), stage 4c-1 (the
+team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0) and stage 4c-2 (tracker statuses as the
+role `tracker` and the module `jira-tracker`, 0.13.0) — see *Status* at the end.
+Next: stages 4c-3 to 4d — the last in-house integration of the legacy space (the Teams silence, as the role `notify`) as an
+optional per-space module, and the end of the `integrations` flag.
 
 ## Goal
 
@@ -45,7 +46,7 @@ canvas for their workflow without touching the core.
   | Team comments (`comments`) | Supabase (your own project), via CommentLayer; any other service through a module that follows `docs/modules/comments.md` |
   | Publish previews (`publish`) | Static folder (always available), Vercel |
   | Design-system tokens (`tokens`) | CSS custom properties file or npm package |
-  | Issue tracker (`tracker`) | Jira, Linear |
+  | Issue tracker (`tracker`) | Jira Cloud, through `jira-tracker` (Linear and others as modules later) |
   | Team dashboard (`dashboard`) | Supabase (your own project), through `supabase-dashboard` |
   | Notifications (`notify`) | — |
 
@@ -104,7 +105,8 @@ canvas for their workflow without touching the core.
      team chat notifications as modules of that company. Three releases:
      - ✅ **4c-1** (0.12.0) — the team dashboard: the role `dashboard`, the module `supabase-dashboard`; the legacy space
        goes through it as an implicit provider;
-     - **4c-2** — tracker statuses (`tracker`, Jira);
+     - ✅ **4c-2** (0.13.0) — tracker statuses: the role `tracker`, the module `jira-tracker`; the legacy space goes through it
+       as an implicit provider;
      - **4c-3** — the Teams silence through the role `notify`;
    - **4d** — the `integrations` flag goes.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
@@ -360,7 +362,7 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
   task it writes (a newer one puts them back on its next write); `task-tags` does not hold `WRITE_LOCK` across read-modify-write (`save_tasks` locks only the write, so a concurrent change of the same file by another route can be lost: last write wins);
   the search does not highlight inside tags; a chip shows the first-seen spelling; the button «Мітки» is one more Tab stop.
 - **Tested** against the snapshot of 0.10.0 (`tests/fixtures/task-tags/before-4b3.json`); no network.
-- **Left for 4c / 4d:** the dashboard (done in 4c-1, see below), tracker statuses and notifications as modules; the `integrations` flag and the profile
+- **Left for 4c / 4d:** the dashboard (done in 4c-1) and tracker statuses (done in 4c-2), see below; notifications as a module; the `integrations` flag and the profile
   adapter go in 4d.
 
 ### Stage 4c-1 — the team dashboard as a role (0.12.0)
@@ -389,13 +391,49 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
   list is in the CHANGELOG, `[0.12.0]`.
 - **Tested** against the snapshot of 0.11.0 (`tests/fixtures/dashboard/before-4c1.json`), a fake module and a fake vcs in the live
   tests (`tests/live/dashboard-role.test.mjs`); no network and no real Supabase.
-- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses and the Teams silence as roles and modules; the `integrations` flag and the
+- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses (done in 4c-2, see below) and the Teams silence as roles and modules; the `integrations` flag and the
   literal `'legacy'` go in 4d.
+
+### Stage 4c-2 — tracker statuses as a role (0.13.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-03-tracker-role-design.md`;
+plan: `docs/superpowers/plans/2026-11-03-tracker-role.md`. What is built:
+
+- **The role `tracker`** is called by the core (`ROLES_CALLED`; only `notify` stays reserved): `statuses(ctx, keys)` →
+  `{key: {name, cat}}`; the codes `tracker-unconfigured` (409) and `tracker-error` (502); `capabilities.tracker`; the new
+  field `ctx["timeout_s"]` (the socket budget of the module). Like `dashboard`, it has the hard-wired path of the legacy space
+  (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable `space.json` is not
+  `'legacy'` either, `STRICT_LEGACY_ROLES`). The contract is in `docs/modules/authoring.md`.
+- **The core `app/tracker.py`** (no import of `serve`): `KEY_RE`, `keys_of`, `normalize`, `statuses` (batches of 100),
+  `legacy_ctx` and `legacy_module`. It filters the keys before the call and normalizes the answer, so a module only talks to
+  the tracker.
+- **The module `jira-tracker` 1.0.0** (built-in; Jira Cloud, Basic `email:token`; the token is a secret): `statuses` is the
+  same request the 0.12.0 sync made, `check` is `GET /myself` with the verdict `tracker-auth` for a wrong pair. No redirects,
+  no token, e-mail or body in any text.
+- **Two consumers of the statuses:** the dashboard sync (any space with a provider of the role; the Jira code left
+  `bin/overview_push.py`) and the «Tasks» screen, which asks the tracker itself for the keys of «Mine» — so a space with a
+  tracker and no dashboard has statuses too. The screen keeps a cache per space under its own lock (300 s, an error 30 s), a
+  failure never wipes the last statuses, and a banner «Tracker unavailable» (with «data as of» when there are older
+  statuses) appears over «Mine». The priority is the tracker, then the dashboard row, then «unknown».
+- **LIGA through the module** as an implicit provider: the address is `jira_base` in the legacy `tasks.json` (it left the code),
+  the credentials are as before. Isolation (`DC_TASKS_FILE`, `DC_NO_OVERVIEW`): the LIGA path never goes to Jira; the screen
+  behaves as without a tracker (`DC_TRACKER_FAKE` is the test seam).
+- **Conscious differences from 0.12.0:** the address comes from `tasks.json`, so LIGA without `jira_base` has no statuses; the
+  screen asks Jira itself (a fresher status than the dashboard's); a failure in the sync is a log line, not silence; keys
+  outside `KEY_RE` no longer reach Jira; HTTP 400 has a fixed hint and 408/429 are transient; the body of an error answer is not
+  read; the e-mail and the token of LIGA are read independently, as before.
+- **Known limits:** one key unknown to Jira fails its whole batch (HTTP 400); Jira Cloud only; the screen asks for the first 100
+  keys; the worst case of `/api/tasks-overview` is about 12 s on a cache miss (the team rows 6 s, then the tracker 6 s); one
+  global tracker lock for all spaces (a dead Jira holds another space for up to 6 s); the texts of the server errors are
+  Ukrainian in the English interface too. The full list is in the CHANGELOG, `[0.13.0]`.
+- **Tested** against the snapshot of 0.12.0 (`tests/fixtures/tracker/before-4c2.json`), the module and the core with a stubbed
+  network, and a fake module in the live tests (`tests/live/tracker-role.test.mjs`); no network and no real Jira.
+- **Left for 4c-3 / 4d:** the Teams silence as the role `notify`; the `integrations` flag and the literal `'legacy'` go in 4d.
 
 ### What stays for later
 
-- The roles `tracker` and `notify` are reserved names that the core does not
-  call yet (stages 4c-2 and 4c-3).
+- The role `notify` is a reserved name that the core does not
+  call yet (stage 4c-3).
 - Left out of 3c (listed in its spec): a sandbox for module code (a trusted module runs with the person's
   permissions); cleaning of snapshots that a re-trust replaced or whose folder vanished; viewing or comparing code in
   the dialog; signatures and a catalog of modules; installing a module from a URL; machine-wide modules; a banner

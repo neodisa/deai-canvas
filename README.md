@@ -15,10 +15,11 @@ links for your team.
 > **Connections** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
 > or with the `vercel login` of the computer. The in-house publishing and comments of the legacy space now run on these same
 > modules, and so does the **team dashboard** (the «Team» tab of «Tasks»): any space can get it through the
-> `supabase-dashboard` module and its own Supabase project. A few integrations
-> (tracker statuses, team chat notifications) are still wired for the original
-> setup and only run in a migrated legacy space; they are being turned into optional per-space
-> modules. A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> `supabase-dashboard` module and its own Supabase project, and the **issue tracker** (task statuses from Jira Cloud) through
+> the `jira-tracker` module. One integration
+> (team chat notifications) is still wired for the original
+> setup and only runs in a migrated legacy space; it is being turned into an optional per-space
+> module. A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -35,9 +36,10 @@ links for your team.
 | **Publish** | Build a static preview of the iterations you marked and publish it to a folder or to your own Vercel account (any space), optionally behind a password gate. |
 | **Git sync** | Send an iteration to a git repository (GitHub, GitLab, your own server) and pull a colleague's changes back as a new iteration; the state is a dot in the task bar. Any space, through the `git-sync` module. See *Git sync*. |
 | **Team dashboard** | The «Team» tab of «Tasks»: the cards of the whole team's tasks (Jira status, open comments, preview, designer) from **your own Supabase project**, in any space, through the `supabase-dashboard` module. See *Team dashboard*. |
+| **Issue tracker** | The status of a task («In progress», «Done») from **your own Jira Cloud** as a badge on the «Tasks» screen — in any space, with no dashboard needed — through the `jira-tracker` module. See *Issue tracker*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
-| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, design-system tokens) from the UI. See *Modules*. |
+| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -102,8 +104,8 @@ after a restart (what was created stays, and the rest is on «Connections»).
 A **module** is a folder — built in at `app/modules/<id>/` or a space's own at
 `<space>/modules/<id>/` — with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
-calls: `publish`, `tokens`, `comments`, `vcs` and `dashboard` today; `tracker` and `notify`
-are reserved. One provider per role per space.
+calls: `publish`, `tokens`, `comments`, `vcs`, `dashboard` and `tracker` today; `notify`
+is reserved. One provider per role per space.
 
 **Connecting a module — the Connections screen.** Open the space menu (the space chip in the
 top bar) → «Connections…», or press ⌘K and pick «Connections of the space …»; in a space
@@ -147,6 +149,7 @@ those folders out of public commits.
 | `css-tokens` | `tokens` | Reads design tokens from one CSS file so the inspector can tell on-system values from hard-coded ones. Setting: `file`. |
 | `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages), optional `shots_bucket` (screenshots of pins). Off by default. See *Comments*. |
 | `supabase-dashboard` | `dashboard` | The team dashboard in **your own Supabase project**: the canvas stores the cards of your tasks there and the «Team» tab reads the rows of the whole team back. Settings: `url`, `key` (a **non-public** secret: `service_role` or the key of a role of your own), optional `table` (`deai_dashboard`). Off by default. See *Team dashboard*. |
+| `jira-tracker` | `tracker` | The status of your tasks from **your own Jira Cloud**: the canvas asks Jira for the keys of your tasks (`DEMO-1`…) and shows the status as a badge on the «Tasks» screen and on the cards of the team dashboard. Read-only. Settings: `base` (`https://<site>.atlassian.net`), `email`, `token` (a secret: the Atlassian API token). Off by default. See *Issue tracker*. |
 | `git-sync` | `vcs` | Syncs a task's iterations with **any git repository** — GitHub, GitLab, your own server — through the git on your computer: nothing is stored by Deai, access is your SSH key or saved HTTPS sign-in. Settings: `repo` (the default for tasks; optional), `branch` (`main`), `path` (`mockup/{task}`), `ssh_key`, `host_ip`, `autosync`. Off by default. See *Git sync*. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
@@ -389,7 +392,32 @@ by a background process (`bin/overview_push.py sync --space <id>`), one at a tim
 `<DEAI_HOME>/logs/dashboard-sync.log`. Running it from a scheduler is the same: `bin/overview_push.py sync` without a flag syncs
 the LIGA space, `sync --space <id>` an ordinary one. The «Team» tab waits for the rows up to 6 s and keeps the last rows it
 read when the service goes quiet. A migrated legacy space keeps its shared Supabase through the same module and needs no step.
-The Jira statuses of the cards and the base cards from the task registry are still a part of that legacy space only.
+The statuses on the cards come from the provider of the role `tracker` (see *Issue tracker*); the base cards from the task
+registry are still a part of that legacy space only.
+
+## Issue tracker
+
+The `jira-tracker` module (role `tracker`) shows the status of a task — «In progress», «Done» and so on — as the badge of its
+card on the «Tasks» screen. A task is tied to the tracker by its **key** (`DEMO-1`; the field `jira` of the task). The canvas
+asks Jira for the keys of the tasks on «Mine» (the first 100, one call), keeps the answer for 5 minutes per space and shows
+the badge; without the module the screen shows no status from a tracker, and statuses never need the team dashboard. A space
+that also has the dashboard sends the same statuses on its cards. The module only reads: it creates and changes nothing in
+Jira. Jira Cloud only; Jira Server / Data Center is a separate module later.
+
+**Connect it:** Connections → «Issue tracker» → «Jira Cloud» → «Connect» (or the same step of the new-space wizard) with the
+site address (`https://<site>.atlassian.net`), the e-mail of your Atlassian account and an **API token** (create it in the
+security settings of the Atlassian account; the key is kept in `~/.deai/secrets.json`, owner only, and never goes into a page).
+«Check» says «connected», or «Jira rejected the email or token» for a wrong pair. The details and the network calls are in
+[the module README](app/modules/jira-tracker/README.md).
+
+**When it does not answer.** The banner «Issue tracker unavailable: …» appears over «Mine» (with «data as of HH:MM» when older
+statuses are still shown); «Try again» asks again, and the badges of the last good answer stay. A task key that Jira does not
+know fails the whole batch of keys (Jira answers HTTP 400 to the query) — fix that key.
+
+**The LIGA space** reaches its Jira through the same module with no wizard step: add the address as `jira_base` to the legacy
+`tasks.json` (the file with `supabase_url`), for example `"jira_base": "https://demo.atlassian.example"`; the credentials are
+`JIRA_EMAIL` and `JIRA_TOKEN` in the environment or the two files in `~/.claude/pipeline-feedback/`. Without `jira_base` that
+space has no statuses and «Mine» says that Jira is not configured.
 
 ## Git sync
 
@@ -457,7 +485,7 @@ text. The full list is in `CHANGELOG.md`, 0.8.0.
 
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
-app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, git-sync); the core is app/deai_modules.py
+app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, jira-tracker, git-sync); the core is app/deai_modules.py
 docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
@@ -498,7 +526,9 @@ tests/        unit, Python and live (Playwright) tests
      in the core, and the modules for them. Three releases:
      - ✅ **4c-1** (0.12) — the team dashboard: the role `dashboard` and the built-in module `supabase-dashboard` (any space
        with its own Supabase gets the «Team» tab); the legacy space goes through the same module as an implicit provider;
-     - **4c-2** — tracker statuses (`tracker`, Jira);
+     - ✅ **4c-2** (0.13) — tracker statuses: the role `tracker` and the built-in module `jira-tracker` (statuses on the «Tasks»
+       screen of any space, no dashboard needed); the legacy space goes through it as an implicit provider, its Jira address
+       moves from the code into `tasks.json` (`jira_base`);
      - **4c-3** — the Teams silence through the role `notify`.
    - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
