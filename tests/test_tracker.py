@@ -256,7 +256,7 @@ class TrackerCore(unittest.TestCase):
     def test_normalize_cuts_the_name_and_drops_bad_names(self):
         data = {'DEMO-1': {'name': 'x' * 200, 'cat': 'new'}}
         self.assertEqual(tracker.normalize(data, ['DEMO-1'])['DEMO-1']['name'], 'x' * 80)
-        for bad in ('', '   ', None, 5, ['a'], 'In\x00Review', 'In\nReview', 'In\x7fReview', 'a\u2028b'):
+        for bad in ('', '   ', None, 5, ['a'], 'In\x00Review', 'In\nReview', 'In\x7fReview', 'a\u2028b', 'a\u202eb', 'a\u200bb'):
             self.assertEqual(tracker.normalize({'DEMO-1': {'name': bad, 'cat': 'new'}}, ['DEMO-1']), {}, repr(bad))
         self.assertEqual(tracker.normalize({'DEMO-1': 'In Review', 'DEMO-2': None, 'DEMO-3': ['x']},
                                            ['DEMO-1', 'DEMO-2', 'DEMO-3']), {})
@@ -397,17 +397,31 @@ class JiraConfig(unittest.TestCase):
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'env@example.com', 'tok-env'
         self.assertEqual(install_config.jira_config(), (JIRA, 'env@example.com', 'tok-env'))
 
-    def test_the_pair_comes_whole_from_one_source(self):
-        """Адреса з оточення й токен з файла не змішуються: або обидва з оточення, або обидва з файлів."""
+    def test_email_and_token_are_read_independently(self):
+        """Як `_jira_creds` до 4c-2: кожне значення — з оточення, інакше з файла; джерела можуть бути різні."""
         self.write({'jira_base': JIRA})
         self.cred_file('jira-email', 'file@example.com')
         self.cred_file('jira-token', 'tok-file')
         os.environ['JIRA_EMAIL'] = 'env@example.com'                 # токена в оточенні нема
-        self.assertEqual(install_config.jira_config(), (JIRA, 'file@example.com', 'tok-file'))
+        self.assertEqual(install_config.jira_config(), (JIRA, 'env@example.com', 'tok-file'))
         os.environ.pop('JIRA_EMAIL')
+        os.environ['JIRA_TOKEN'] = 'tok-env'                         # а тепер навпаки
+        self.assertEqual(install_config.jira_config(), (JIRA, 'file@example.com', 'tok-env'))
         os.remove(os.path.join(self.home, '.claude', 'pipeline-feedback', 'jira-email'))
-        os.environ['JIRA_TOKEN'] = 'tok-env'                         # а тепер немає пошти скрізь, де є токен
-        self.assertEqual(install_config.jira_config(), (None, None, None))
+        self.assertEqual(install_config.jira_config(), (None, None, None), 'пошти нема ніде')
+
+    def test_an_empty_or_bad_environment_value_falls_through_to_the_file(self):
+        self.write({'jira_base': JIRA})
+        self.cred_file('jira-email', 'file@example.com')
+        self.cred_file('jira-token', 'tok-file')
+        os.environ['JIRA_TOKEN'] = 'tok-env'
+        for bad in ('', '   ', ' \n ', 'a\nb@example.com', 'a\tb@example.com'):
+            os.environ['JIRA_EMAIL'] = bad
+            self.assertEqual(install_config.jira_config(), (JIRA, 'file@example.com', 'tok-env'), repr(bad))
+        os.environ['JIRA_EMAIL'] = 'env@example.com'
+        for bad in ('', '   ', 'tok env'):
+            os.environ['JIRA_TOKEN'] = bad
+            self.assertEqual(install_config.jira_config(), (JIRA, 'env@example.com', 'tok-file'), repr(bad))
 
     def test_no_credentials_is_no_config(self):
         self.write({'jira_base': JIRA})

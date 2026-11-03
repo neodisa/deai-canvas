@@ -76,8 +76,9 @@ def jira_config():
     `https://<хост>[:порт][/]`, без `/` в кінці в результаті (форма — як у `supabase_config`: заготовка з документації
     `https://<сайт>.atlassian.net`, адреса з шляхом чи `user@` дають «конфігу нема», а не мережу з сміттям). Облікові — пара
     `JIRA_EMAIL`/`JIRA_TOKEN` з оточення, а коли її нема — файли `<HOME>/.claude/pipeline-feedback/jira-email|jira-token`
-    (вміст `strip()`). Оточення раніше за файли; пара береться ЦІЛОЮ з одного джерела: пошта з оточення й токен з файла не
-    змішуються. Токен — друковний ASCII без пробілів. Значень — ні в текстах, ні в журналах; кешу нема: файли маленькі.
+    (вміст `strip()`). Пошта й токен читаються НЕЗАЛЕЖНО, як в `_jira_creds` до 4c-2: кожне — значення з оточення, а коли воно
+    порожнє чи негодне, — вміст файла; тож пошта з оточення й токен з файла поєднуються (це не пара Supabase). Пошта —
+    непорожній друкований рядок, токен — друковний ASCII без пробілів. Значень — ні в текстах, ні в журналах; кешу нема: файли маленькі.
 
     ⛔ Токен НІКОЛИ не в git/коді/чаті — лише локальний файл (chmod 600). Урок переїхав сюди з `bin/overview_push.py`
     (`_jira_creds`): у репозиторії живе лише адреса-заготовка, а справжні облікові — на машині людини."""
@@ -98,11 +99,11 @@ def jira_config():
                 return f.read()
         except (OSError, ValueError):
             return None
-    for email, token in ((os.environ.get('JIRA_EMAIL'), os.environ.get('JIRA_TOKEN')),
-                         (from_file('jira-email'), from_file('jira-token'))):
-        if not (isinstance(email, str) and isinstance(token, str)):
-            continue
-        email, token = email.strip(), token.strip()
-        if email and email.isprintable() and _SUPABASE_KEY_RE.fullmatch(token):
-            return base.rstrip('/'), email, token
-    return None, None, None
+    def pick(env, name, valid):
+        for raw in (os.environ.get(env), from_file(name)):          # оточення раніше за файл; порожнє/негодне — далі
+            if isinstance(raw, str) and valid(raw.strip()):
+                return raw.strip()
+        return None
+    email = pick('JIRA_EMAIL', 'jira-email', lambda v: bool(v) and v.isprintable())
+    token = pick('JIRA_TOKEN', 'jira-token', lambda v: _SUPABASE_KEY_RE.fullmatch(v) is not None)
+    return (base.rstrip('/'), email, token) if (email and token) else (None, None, None)

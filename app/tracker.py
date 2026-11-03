@@ -40,10 +40,10 @@ def keys_of(tasks):
 
 
 def _clean_name(name):
-    """Назва статусу, обрізана до `NAME_MAX`, чи `None`: не рядок, порожня або з керівним символом (`Cc`, роздільники рядків)."""
+    """Назва статусу, обрізана до `NAME_MAX`, чи `None`: не рядок, порожня або з керівним символом (`Cc`, `Cf` — напр. bidi-перевизначення U+202E, роздільники рядків)."""
     if not isinstance(name, str) or not name.strip():
         return None
-    if any(unicodedata.category(c) in ('Cc', 'Zl', 'Zp') for c in name):
+    if any(unicodedata.category(c) in ('Cc', 'Cf', 'Zl', 'Zp') for c in name):
         return None
     return name[:NAME_MAX]
 

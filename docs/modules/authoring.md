@@ -298,7 +298,7 @@ below). Read-only: it never changes anything in the tracker.
   category: `new`, `indeterminate` or `done` (the categories of Jira), `None` when the tracker has none. A task the tracker
   does not know is simply absent from the answer — not an error. The core keeps only the keys it asked for, cuts `name` to
   **80** characters and drops an entry whose `name` is empty, not a string or holds a control character; a `cat` outside the
-  three values becomes `None`. An answer that is not a dict is a `module-error`.
+  three values becomes `None`. An answer that is not a dict is a `tracker-error`.
 * `ctx["timeout_s"]` — the budget **in seconds for your own socket**; the core waits longer than that, so keep your
   requests within it and answer with your own text instead of a bare `check-timeout`. The Tasks screen gives a socket
   **4 s** (the core waits 6 s per call); the sync of the team board gives **15 s** (the core waits 30 s per call). The field
