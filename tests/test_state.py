@@ -501,6 +501,20 @@ class TaskFlag(unittest.TestCase):
     def line_of(self, out, prefix):
         return next((ln for ln in out.splitlines() if ln.startswith(prefix)), None)
 
+    def _track_header(self, **keys):
+        """Шапка `state` задачі `alpha` із заданими ключами напрямку (`profile` фікстури `tool` — прибираємо, якщо не задано)."""
+        self.give('alpha', **{'profile': None, 'track': None, **keys})
+        return self.line_of(self.state_with(lambda cfg, tid, task: None), 'Пайплайн v')
+
+    def test_header_shows_the_track_with_the_new_label(self):
+        """4d-1: шапка показує напрямок задачі — `track`, інакше `profile`, інакше «—»; підпис «Напрямок:», не «Профіль:»."""
+        only_track = self._track_header(track='mobile')
+        self.assertIn('Напрямок: mobile ·', only_track)
+        self.assertNotIn('Профіль', only_track)
+        self.assertIn('Напрямок: tool ·', self._track_header(profile='tool'), 'запис машини на 0.14.0: лише `profile`')
+        self.assertIn('Напрямок: mobile ·', self._track_header(track='mobile', profile='tool'), '`track` перемагає `profile`')
+        self.assertIn('Напрямок: — ·', self._track_header())
+
     def test_the_label_is_gitlab_in_the_liga_space_and_git_in_another_one(self):
         ok = {'behind': 0, 'dirty': False, 'on_remote': True}
         legacy = self.state_with(lambda cfg, tid, task: (None, {}, True, {'path': 'p'}), ok)

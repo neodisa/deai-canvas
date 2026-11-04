@@ -459,6 +459,58 @@ class TestPullSkipsFixtures(_RegistrySandbox):
         self.assertIn('у кеші фікстура: nova', err)
 
 
+class TestTrack(_RegistrySandbox):
+    """4d-1: `track` — переносиме поле; тека задачі за напрямком (`tracks.of_task`) — і для запису машини на 0.14.0, що має лише
+    `profile`, і для нового, що має `track`; обидва — `track` перемагає."""
+
+    def _cfg(self):
+        return {'design_work_roots': {'seo': os.path.join(self.tmp, 'seo'), 'united': os.path.join(self.tmp, 'united')},
+                'design_work_root': os.path.join(self.tmp, 'shared')}
+
+    def test_track_travels_in_the_registry_next_to_profile(self):
+        self.assertIn('track', rg.SHARED)
+        self.assertIn('profile', rg.SHARED, 'колеги на 0.14.0 читають `profile`')
+        e = rg.entry_from_task('x', {'title': 'X', 'track': 'seo', 'profile': 'seo'})
+        self.assertEqual((e['track'], e['profile']), ('seo', 'seo'))
+        self.assertNotIn('track', rg.entry_from_task('x', {'title': 'X'}), 'порожнього напрямку в записі нема')
+
+    def test_work_root_reads_track_then_profile(self):
+        cfg = self._cfg()
+        seo, united, shared = (os.path.join(self.tmp, n) for n in ('seo', 'united', 'shared'))
+        self.assertEqual(rg._work_root(cfg, {'profile': 'seo'}), seo, 'запис машини на 0.14.0: лише `profile`')
+        self.assertEqual(rg._work_root(cfg, {'track': 'seo'}), seo, '⛔ лише `track` не мусить іти в спільний корінь')
+        self.assertEqual(rg._work_root(cfg, {'track': 'seo', 'profile': 'united'}), seo, '`track` перемагає')
+        self.assertEqual(rg._work_root(cfg, {'track': 'united', 'profile': 'seo'}), united)
+        self.assertEqual(rg._work_root(cfg, {'track': 'zzz'}), shared)
+        self.assertEqual(rg._work_root(cfg, {}), shared)
+
+    def test_pull_places_every_shape_of_record_in_the_same_directory(self):
+        import json
+        from unittest import mock
+        with open(self.file, 'w', encoding='utf-8') as f:
+            json.dump(dict(self._cfg(), tasks={}), f)
+        reg = {'old': {'schema': 1, 'id': 'old', 'title': 'O', 'profile': 'seo'},
+               'new': {'schema': 1, 'id': 'new', 'title': 'N', 'track': 'seo'},
+               'both': {'schema': 1, 'id': 'both', 'title': 'B', 'track': 'seo', 'profile': 'united'}}
+        with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)):
+            self._quiet(rg.cmd_pull, None)
+        with open(self.file, encoding='utf-8') as f:
+            tasks = json.load(f)['tasks']
+        for tid in reg:
+            self.assertEqual(tasks[tid]['dir'], os.path.join(self.tmp, 'seo', tid), tid)
+        self.assertEqual(tasks['new']['track'], 'seo', '`track` приїхав у локальний запис')
+        self.assertNotIn('track', tasks['old'])
+
+    def test_status_counts_tracks_from_either_key(self):
+        from unittest import mock
+        reg = {'a': {'schema': 1, 'id': 'a', 'track': 'seo'}, 'b': {'schema': 1, 'id': 'b', 'profile': 'seo'},
+               'c': {'schema': 1, 'id': 'c', 'track': 'mobile', 'profile': 'seo'}, 'd': {'schema': 1, 'id': 'd'}}
+        with mock.patch.object(rg, 'staleness', lambda cfg: {'state': 'fresh', 'age_h': 0.1, 'hint': ''}), \
+             mock.patch.object(rg, 'read_registry', lambda d: dict(reg)):
+            _rc, out, _err = self._quiet(rg.cmd_status, None)
+        self.assertIn('напрямки: ? 1, mobile 1, seo 2', out)
+
+
 class TestStatusNamesFixtures(_RegistrySandbox):
     def test_status_names_junk_instead_of_advising_pull(self):
         from unittest import mock

@@ -212,7 +212,7 @@ class Before4d1Shape(unittest.TestCase):
         b = self.snap['bin']
         self.assertEqual(sorted(b), sorted(['liga', 'no_roots', 'registry_work_root', 'registry_work_root_5',
                                             'registry_work_root_nothing', 'with_int_profile']))
-        # `registry._work_root` = `serve.work_root`
+        # `registry._work_root` = колишній `serve.work_root` (0.14.0), тепер `tracks.legacy_root`
         self.assertEqual({k: v['result'] for k, v in b['registry_work_root'].items()},
                          {'united': '~/work/united', 'seo': '~/work/seo', 'liga360': '~/work/shared', 'zzz': '~/work/shared',
                           'None': '~/work/shared', 'United': '~/work/shared', '': '~/work/shared'})
@@ -275,6 +275,17 @@ class Normalize(_Home):
     def test_not_a_list_is_empty(self):
         for raw in (None, {}, {'id': 'web'}, 'web', 5, True):
             self.assertEqual(tracks.normalize(raw, self.space), [], repr(raw))
+
+    def test_roots_false_skips_the_root_check_and_touches_no_disk(self):
+        """`roots=False` (листинг просторів): `root` завжди `None` без жодного `check_new_path`; решта полів — як із перевіркою."""
+        recs = [{'id': 'web', 'label': 'Web', 'root': 'web-dir', 'repo': 'git@example.com:studio/web.git', 'ds': 'united'},
+                {'id': 'mobile', 'root': '/'}]
+        with mock.patch.object(spaces, 'check_new_path', side_effect=AssertionError('диск чіпати не можна')):
+            got = tracks.normalize(recs, self.space, roots=False)
+        full = tracks.normalize(recs, self.space)
+        self.assertEqual([t['root'] for t in got], [None, None])
+        self.assertIsNotNone(full[0]['root'], 'контроль: з перевіркою корінь `web-dir` проходить')
+        self.assertEqual([{**t, 'root': None} for t in full], got)
 
     def test_record_not_a_dict_is_dropped(self):
         got = self.norm('web', 5, None, ['id'], {'id': 'ok'})
@@ -776,6 +787,60 @@ class LegacyParity(_LayerOff):
         self.assertIsNone(tracks.label_tag([], {'profile': 'x' * 40}, legacy=True))
 
 
+class BinParity(_LayerOff):
+    """⛔ Паритет `bin/roots.py` (`plan`, `roots_in_use`) і `bin/registry.py::_work_root` зі знімком 0.14.0 (секція `bin`).
+
+    Світ знімка будує сам генератор (`gen.bin_tools`: ті самі конфіги, теки й профілі); `registry._work_root` тепер приймає
+    ЗАДАЧУ (`track`, інакше `profile`), а знімок кликав його профілем — тож профіль загортається в `{'profile': p}`.
+    Свідомі відмінності від 0.14.0 (спека «Свідомі відмінності»; кожну названо тут і більше жодної):
+      1. `profile: 5` (не рядок) у колонці напрямку `plan` — `None` (`tracks.of_task` читає лише рядки); шлях той самий;
+      2. `roots_in_use` на конфігу з числовим профілем не падає `TypeError` (0.14.0: `sorted` на суміші числа з рядками), а
+         читає число як «без напрямку» — рядок «—», тож результат збігається з конфігом без числа."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)['bin']
+
+    def _run(self):
+        import registry
+        real = registry._work_root
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(registry, '_work_root', lambda cfg, p: real(cfg, {'profile': p})):
+            return gen.bin_tools(os.path.normpath(tmp))
+
+    def test_bin_matches_the_0_14_0_snapshot_except_the_two_named_differences(self):
+        got = self._run()
+        want = copy.deepcopy(self.snap)
+        row, = [m for m in want['with_int_profile']['plan']['result'] if m[0] == 'b-five']
+        self.assertEqual(row[1], 5)
+        row[1] = None                                                        # відмінність 1
+        self.assertEqual(want['with_int_profile']['roots_in_use'], {'raised': 'TypeError'})
+        want['with_int_profile']['roots_in_use'] = want['liga']['roots_in_use']   # відмінність 2
+        self.assertEqual(got, want)
+
+    def test_the_comparison_is_not_vacuous(self):
+        """Знімок справді має що порівнювати: п'ять рухів плану, шість напрямків, сім профілів реєстру."""
+        got = self._run()
+        self.assertEqual(len(got['liga']['plan']['result']), 5)
+        self.assertEqual(len(got['liga']['roots_in_use']['result']), 6)
+        self.assertEqual(len(got['registry_work_root']), 7)
+
+    def test_registry_work_root_takes_the_track_of_a_task(self):
+        """Новий шов `_work_root(cfg, task)` над тим самим знімком: `track` дає ту саму теку, що колись давав `profile`."""
+        import registry
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = os.path.normpath(tmp)
+            home = os.path.join(tmp, 'home')
+            os.makedirs(home)
+            cfg = {'design_work_roots': {'united': '~/work/united', 'seo': '~/work/seo'}, 'design_work_root': '~/work/shared'}
+            with mock.patch.dict(os.environ, {'HOME': home}):
+                for key, row in self.snap['registry_work_root'].items():
+                    prof = None if key == 'None' else key
+                    for task in ({'track': prof}, {'track': prof, 'profile': prof}, {'profile': prof}):
+                        self.assertEqual(gen.rel(registry._work_root(cfg, task), home), row['result'], (key, task))
+
+
 class SourceHygiene(unittest.TestCase):
     """І1: у коді ядра немає «сирих» невидимих знаків (їх не видно в ревʼю; керівні клас ПРАВИЛА мітки записаний `\\uXXXX`)."""
 
@@ -828,7 +893,7 @@ class ServerLegacyParity(_LayerOff):
         self.assertEqual((tr, default), tracks.legacy_tracks(cfg)[:2])
         self.assertEqual((default, [t['id'] for t in tr]), ('united', ['united', 'liga360', 'seo']))
 
-    def test_roots_through_track_root_and_the_thin_wrapper(self):
+    def test_roots_through_track_root(self):
         n = 0
         for name, sc in self.snap['roots'].items():
             if name == 'fallback_constant':
@@ -839,7 +904,6 @@ class ServerLegacyParity(_LayerOff):
                 prof = None if key == 'None' else key
                 want = os.path.expanduser(row['result'])
                 self.assertEqual(serve.track_root(self.sp, sc['cfg'], prof), want, (name, key))
-                self.assertEqual(serve.work_root(sc['cfg'], prof), want, (name, key))
                 n += 1
         self.assertGreaterEqual(n, 40)
 
@@ -859,7 +923,6 @@ class ServerLegacyParity(_LayerOff):
         for key in sc['by_profile']:
             prof = None if key == 'None' else key
             self.assertEqual(serve.track_root(self.sp, sc['cfg'], prof), shared, key)
-            self.assertEqual(serve.work_root(sc['cfg'], prof), shared, key)
 
     def test_repos_through_profile_repos_and_track_repo(self):
         path = os.environ['DC_TASKS_FILE']
@@ -955,9 +1018,6 @@ class ServerLegacyParity(_LayerOff):
             n += 1
         self.assertEqual(n, 11)                                               # 12 сценаріїв без `bad-profile` (5)
         self.assertEqual(out, want)
-
-    def test_bin_tools_keep_working_through_the_wrapper(self):
-        self.assertEqual(gen.bin_tools(self._tmp()), self.snap['bin'])
 
 
 class _Plain(unittest.TestCase):
@@ -1734,6 +1794,39 @@ class ApiTracks(_Plain):
         self.assertEqual(own.call_count, len(out['spaces']))                        # по одному читанню `space.json` на простір
         self.assertEqual(leg.call_count, 1)                                         # і один корінь ЛІГИ
 
+    def test_spaces_listing_checks_no_roots_at_all(self):
+        """⛔ Ревʼю Task 4: листинг віддає лише `id` і `label`, а корінь на відімкненому чи повільному томі міг би підвісити
+        `GET /api/spaces` — тож ні `check_new_path` (диск, `realpath`), ні зайвий `read_registry()` на простір, ні
+        `_drop_foreign_roots` у листингу не кличуться; результат (id, підписи, дефолт) — той самий, що з перевірками."""
+        self.two_tracks()
+        self.make_space('Plain')
+        self.liga()
+        with mock.patch.object(spaces, 'check_new_path', wraps=spaces.check_new_path) as check, \
+                mock.patch.object(spaces, 'read_registry', wraps=spaces.read_registry) as reg, \
+                mock.patch.object(serve, '_drop_foreign_roots', wraps=serve._drop_foreign_roots) as drop:
+            out = serve.spaces_listing()
+            reads_with_tracks = reg.call_count
+        self.assertEqual(check.call_count, 0, 'корені напрямків не перевіряються')
+        self.assertEqual(drop.call_count, 0)
+        listed = {e['id']: e for e in out['spaces']}
+        a = listed[self.sp['id']]
+        self.assertEqual(a['tracks'], [{'id': 'web', 'label': 'Web'}, {'id': 'mobile', 'label': 'mobile'}])
+        self.assertEqual(a['default_track'], 'web')
+        # читань реєстру стільки ж, скільки без жодного напрямку: простори не додають своїх
+        self.space_json(self.sp, tracks=[])
+        with mock.patch.object(spaces, 'read_registry', wraps=spaces.read_registry) as reg:
+            serve.spaces_listing()
+        self.assertEqual(reads_with_tracks, reg.call_count)
+
+    def test_a_track_view_with_roots_still_checks_them(self):
+        """Контроль до тесту вище: звичайний `_TrackView` (без `roots=False`) перевірки робить — інакше «не кличуться» нічого не доводило б."""
+        self.two_tracks()
+        with mock.patch.object(spaces, 'check_new_path', wraps=spaces.check_new_path) as check:
+            view = serve._TrackView(self.sp)
+            self.assertEqual([t['id'] for t in view.tracks], ['web', 'mobile'])
+        self.assertGreaterEqual(check.call_count, 1)
+        self.assertIsNotNone(view.tracks[0]['root'])
+
     def test_the_layer_off_listing_is_unchanged(self):
         with mock.patch.dict(os.environ):
             os.environ.pop('DEAI_HOME', None)
@@ -1813,12 +1906,17 @@ class ServerHygiene(unittest.TestCase):
                      'FALLBACK_WORK_ROOT'):
             self.assertFalse(hasattr(serve, name), name)
 
-    def test_the_two_wrappers_are_thin_and_marked(self):
-        for fn in (serve.work_root, serve.profile_repos):
-            self.assertIn('до 4d-4', fn.__doc__)
-        cfg = {'design_work_roots': {'x': '~/w/x'}, 'design_work_root': '~/w/s', 'profile_repos': {'x': 'git@example.com:s/w.git'}}
-        self.assertEqual(serve.work_root(cfg, 'x'), tracks.legacy_root(cfg, 'x'))
-        self.assertEqual(serve.work_root(cfg, 'y'), tracks.legacy_root(cfg, 'y'))
+    def test_the_one_wrapper_is_thin_and_marked_and_work_root_is_gone(self):
+        """`work_root` прибрано в Task 5 (`bin/` перейшов на `tracks`, більше ніхто не кличе); `profile_repos` лишається — на ній
+        тримаються `_liga_flow`, `track_repo` і тести, що її підміняють."""
+        self.assertFalse(hasattr(serve, 'work_root'))
+        self.assertIn('до 4d-4', serve.profile_repos.__doc__)
+        for name in ('roots.py', 'registry.py', 'state.py'):          # `bin/` не дублює логіку коренів і не бере її з `serve`
+            with open(os.path.join(os.path.dirname(_APP), 'bin', name), encoding='utf-8') as f:
+                text = f.read()
+            self.assertNotIn('serve.work_root', text, name)
+            self.assertNotIn('import load_tasks, save_tasks, work_root', text, name)
+            self.assertNotRegex(text, r"get\('profile'\)", name)
 
     def test_the_tag_rules_are_the_ones_of_tracks(self):
         self.assertNotIn('re.compile(', self.src[self.src.index('TAGS_MAX = 10'):self.src.index('class TagsError')])

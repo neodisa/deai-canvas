@@ -35,7 +35,9 @@ TTL_H = float(os.environ.get('DC_REGISTRY_TTL_H') or 6)
 #      `vercel_scope` — разом із `vercel_project`: імʼя саме по собі URL не
 # тримає, бо в ЧУЖОМУ акаунті `vercel link` із тим самим імʼям створює ІНШИЙ
 # проєкт (і друге посилання). Пара імʼя+скоуп — це і є прив'язка задача→превʼю.
-SHARED = ('title', 'jira', 'profile', 'gitlab', 'comment_project', 'vercel_project',
+#      `track` (4d-1) — напрямок задачі; `profile` лишається поряд до 4d-4: колеги на 0.14.0 читають зі спільного реєстру
+# саме його (без нього їхня тека, репо й мітка зламались би), а нові машини читають обидва через `tracks.of_task`.
+SHARED = ('title', 'jira', 'profile', 'track', 'gitlab', 'comment_project', 'vercel_project',
           'vercel_scope', 'figma', 'owner', 'owner_key', 'tags')
 # Машинное — живёт только локально, в реестр не уезжает.
 LOCAL_ONLY = ('dir', 'live')
@@ -427,16 +429,16 @@ def staleness(cfg, check_remote=True):
     return {'state': 'fresh', 'age_h': age, 'hint': ''}
 
 
-def _work_root(cfg, profile):
-    """Корінь напрямку через serve.work_root — щоб правило жило в ОДНОМУ місці.
+def _work_root(cfg, task):
+    """Корінь напрямку ЗАДАЧІ через `tracks` (`of_task` + `legacy_root`) — щоб правило жило в ОДНОМУ місці.
 
-    Імпорт лінивий і всередині функції: serve тягне за собою півсервера, а
-    реєстр запускають і як окремий CLI. Плюс serve сам імпортує registry (теж
-    ліниво) — модульний імпорт тут замкнув би цикл.
-    """
+    `task` — запис задачі чи запис реєстру: напрямок береться як у всіх (`track`, інакше `profile`; запис машини на 0.14.0
+    має лише `profile` і дає ту саму теку). ⛔ Читати лише ключ `profile` не можна: задача лише з `track` лягла б у спільний корінь.
+
+    Імпорт лінивий і всередині функції: реєстр запускають і як окремий CLI, а шлях до `app/` у нього свій."""
     sys.path.insert(0, os.path.join(ROOT, 'app'))
-    import serve
-    return serve.work_root(cfg, profile)
+    import tracks
+    return tracks.legacy_root(cfg, tracks.of_task(task))
 
 
 def split_fixtures(entries):
@@ -525,10 +527,10 @@ def cmd_pull(_a):
                 local[k] = v
                 mine[k] = v
         # dir выводим локально, из реестра не берём: он машинный. Корень — за
-        # профілем задачі, інакше задача чужого напрямку лягла б у чужу теку
-        # (вимога 31.08.2026: три напрямки — три теки).
+        # напрямком задачі (`track`, інакше `profile`), інакше задача чужого напрямку
+        # лягла б у чужу теку (вимога 31.08.2026: три напрямки — три теки).
         if not local.get('dir'):
-            root = _work_root(cfg, local.get('profile'))
+            root = _work_root(cfg, local)
             if root:
                 local['dir'] = os.path.join(root, tid)
                 mine['dir'] = local['dir']
@@ -710,11 +712,14 @@ def cmd_status(_a):
              and any(tasks[t].get(k) != _pulled_value(tasks[t], k, reg[t][k], reg[t])
                      for k in SHARED if k in reg[t])]
     print(f'   задач: у реєстрі {len(reg)}, локально {len(tasks)}')
-    by_profile, by_owner = {}, {}
+    sys.path.insert(0, os.path.join(ROOT, 'app'))
+    import tracks
+    by_track, by_owner = {}, {}
     for e in reg.values():
-        by_profile[e.get('profile') or '?'] = by_profile.get(e.get('profile') or '?', 0) + 1
+        k = tracks.of_task(e) or '?'
+        by_track[k] = by_track.get(k, 0) + 1
         by_owner[e.get('owner') or '—'] = by_owner.get(e.get('owner') or '—', 0) + 1
-    print('   напрямки: ' + ', '.join(f'{k} {v}' for k, v in sorted(by_profile.items())))
+    print('   напрямки: ' + ', '.join(f'{k} {v}' for k, v in sorted(by_track.items())))
     print('   хто завів: ' + ', '.join(f'{k} {v}' for k, v in sorted(by_owner.items())))
     if only_reg:
         print(f'   ⬇️ є в реєстрі, немає локально: {", ".join(only_reg)} — `pull`')

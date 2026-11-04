@@ -102,13 +102,6 @@ _TUNER_LOCK = threading.Lock()
 HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published/')
 
 
-def work_root(cfg, profile):
-    """до 4d-4: тонка обгортка над `tracks.legacy_root` для `bin/roots.py` і `bin/registry.py` (вони перейдуть на `tracks`
-    у Task 5; сам сервер користується `track_root`). Уся логіка й ⛔-уроки (три напрямки — три теки; напрямок без власного
-    кореня НЕ вигадується — спільний корінь) — там."""
-    return tracks.legacy_root(cfg, profile)
-
-
 def supabase_config():
     """Тонка обгортка (`install_config.supabase_config`): ім'я в `serve` лишається точкою підміни для тестів
     (`mock.patch.object(serve, 'supabase_config', …)`), а всі виклики в самому `serve` ідуть через нього."""
@@ -116,7 +109,7 @@ def supabase_config():
 
 
 def profile_repos():
-    """до 4d-4: тонка обгортка для `_liga_flow` (ознака потоку ЛІГА в тілі `task-new`) і тестів, що її підміняють: таблиця
+    """до 4d-4: тонка обгортка для `_liga_flow` (ознака потоку ЛІГА в тілі `task-new`), `track_repo` і тестів, що її підміняють: таблиця
     «напрямок → репозиторій макетів» ЛІГИ з кореня старого `tasks.json` УСТАНОВКИ — `tracks.legacy_repos`. Файл не
     читається / не JSON / ключа нема — `{}`. Кешу нема: файл маленький. Значень — ні в текстах, ні в журналах."""
     return tracks.legacy_repos(_legacy_cfg())
@@ -1702,13 +1695,19 @@ class _TrackView:
     (`task_tags`, `task_ds`): інакше КОЖНА задача читала б `space.json`, реєстр і міряла `check_new_path` по кореню кожного
     напрямку (O(задач × напрямків) роботи з файловою системою).
 
+    `roots=False` — для читача, якому потрібні лише `id`/`label`/дефолт (`spaces_listing`): корені напрямків не перевіряються
+    ні проти файлової системи (`tracks.normalize(roots=False)`), ні проти реєстру просторів (`_drop_foreign_roots` не кличеться) —
+    `root` усіх напрямків тоді `None`, а `repo`/`ds` не змінюються. ⛔ Корінь на відімкненому чи повільному томі інакше гальмував би
+    `GET /api/spaces`: перевірка — `realpath` по кожному напрямку кожного простору плюс `read_registry()` на простір.
+
     `sp` — запис реєстру, `None` (простору нема: нема й напрямків) або `_LAZY` (простір запиту питається аж на першу потребу —
     відповідь без жодної похідної мітки реєстру не читає взагалі). ⛔ Простір передається ЯВНО: `?all=1` обходить простори поза
     `with request_space(...)`, і мітки, пораховані щодо простору того, хто кличе, брехали б (підпис задачі ЛІГИ з боку звичайного
     простору вийшов би сирим ідентифікатором замість підпису адаптера)."""
 
-    def __init__(self, sp=_LAZY):
+    def __init__(self, sp=_LAZY, roots=True):
         self._sp = sp
+        self._roots = roots
         self._own = _LAZY
         self._items = _LAZY
 
@@ -1739,7 +1738,9 @@ class _TrackView:
                 items, default, _fallback = tracks.legacy_tracks(_legacy_cfg())
                 self._items = (items, default)
             else:
-                items = _drop_foreign_roots(sp, tracks.normalize(self._raw[0], sp.get('path')))
+                items = tracks.normalize(self._raw[0], sp.get('path'), roots=self._roots)
+                if self._roots:
+                    items = _drop_foreign_roots(sp, items)
                 self._items = (items, tracks.default_id(items, self._raw[1]))
         return self._items
 
@@ -5159,12 +5160,14 @@ def spaces_listing():
 
     `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
     браузер (форма «Нова задача» вибирає напрямок за назвою, а теку й репо додає сервер). Напрямки простору — ОДНЕ `_TrackView`
-    на простір (`space.json` читається раз, корінь ЛІГИ — раз на простір ЛІГИ), без вартості на рядок."""
+    на простір (`space.json` читається раз, корінь ЛІГИ — раз на простір ЛІГИ), без вартості на рядок. ⛔ Корені напрямків НЕ
+    перевіряються (`roots=False`): ні `realpath` по кожному, ні `read_registry()` на простір, ні `check_new_path` проти кожного
+    простору — корінь на відімкненому чи повільному томі гальмував би `GET /api/spaces`, а список їх не віддає."""
     out = spaces.listing()
     for e in out['spaces']:
         sp = {'id': e['id'], 'path': e['path'], 'integrations': e['integrations']}
         e['capabilities'] = deai_modules.capabilities(sp)
-        view = _TrackView(sp)
+        view = _TrackView(sp, roots=False)       # корені списку не потрібні: без перевірок диска й реєстру (див. `_TrackView`)
         e['tracks'] = [{'id': t['id'], 'label': t['label']} for t in view.tracks]
         e['default_track'] = view.default
     return out

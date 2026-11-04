@@ -100,14 +100,18 @@ def _norm_root(raw, space_path):
     return ok if why is None else None
 
 
-def normalize(raw, space_path):
+def normalize(raw, space_path, roots=True):
     """`tracks` з `space.json` → `[{id, label, root, repo, ds}]`. НЕ кидає на жодному JSON: поганий запис мовчки відкидається,
     решта працює; поле, що не пройшло перевірку, вважається відсутнім (`root: None`, `repo: ''`, `ds: ''`).
 
     - не список → `[]`; запис не словник, `id` поза `ID_RE`, дубль `id` (перший перемагає) → запис відкинуто;
     - `label` — за правилами мітки (`read_tag`), інакше `id`;
     - `root` — див. `_norm_root` (уже розгорнутий в абсолютний шлях, прийнятний за правилами `spaces`); `repo` — `repo_ok`; `ds` — за `ID_RE`;
-    - не більше `MAX_TRACKS` напрямків (перші)."""
+    - не більше `MAX_TRACKS` напрямків (перші).
+
+    `roots=False` — корені НЕ перевіряються (кожен `root: None`, файлової системи не торкаємось): для читача, якому корені
+    не потрібні (`GET /api/spaces` віддає лише `id` і `label`). ⛔ Перевірка кореня — це `realpath`/`stat` по кожному напрямку, а
+    корінь може лежати на відімкненому чи повільному томі: список просторів не має чекати на нього."""
     if not isinstance(raw, list):
         return []
     out, seen = [], set()
@@ -124,7 +128,7 @@ def normalize(raw, space_path):
             ds = rec.get('ds')
             out.append({'id': tid,
                         'label': read_tag(rec.get('label')) or tid,
-                        'root': _norm_root(rec.get('root'), space_path),
+                        'root': _norm_root(rec.get('root'), space_path) if roots else None,
                         'repo': repo_ok(rec.get('repo')),
                         'ds': ds if _is_id(ds) else ''})
             if len(out) >= MAX_TRACKS:

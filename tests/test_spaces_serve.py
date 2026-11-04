@@ -847,7 +847,8 @@ class Cli(Fixture):
         self.assertEqual(self.registry_cfgs[-1], ['a'])
 
     def test_state_prints_a_dash_for_a_task_without_a_profile(self):
-        """Задача простору без інтеграцій має `profile: null`: «Профіль: None» — вигадка, а не стан."""
+        """Задача простору без інтеграцій має `profile: null`: «Напрямок: None» — вигадка, а не стан
+        (4d-1: шапка `state` показує напрямок задачі — `track`, інакше `profile`, інакше «—»)."""
         self.patched_state()
         self.restore_bytes(self.p_file)
         cfg = _read(self.p_file)
@@ -855,10 +856,10 @@ class Cli(Fixture):
         _write(self.p_file, cfg)
         rc, out, err = _run(state.main, ['--task', 'x'])
         self.assertEqual(rc, 0, err)
-        self.assertIn('Профіль: — ·', out)
+        self.assertIn('Напрямок: — ·', out)
         self.assertNotIn('None', out)
         rc, out, _ = _run(state.main, ['--task', 'a'])                # із профілем — як було
-        self.assertIn('Профіль: tool ·', out)
+        self.assertIn('Напрямок: tool ·', out)
 
     def test_state_unknown_task_is_exit_2(self):
         self.patched_state()

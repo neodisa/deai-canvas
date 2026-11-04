@@ -24,6 +24,7 @@ from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E4
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
                    SpaceUnavailable, ProjectComments)
 import spaces  # noqa: E402
+import tracks  # noqa: E402
 import registry  # noqa: E402
 import pages_model as pm  # noqa: E402
 import shlex  # noqa: E402
@@ -391,7 +392,7 @@ def _main(argv):
     meta = load_meta(task)
     its = task_iterations(task)
     print(f'=== ДЕ МИ ЗАРАЗ · «{task.get("title", tid)}» ({tid}) ===')
-    print(f'Пайплайн v{_pipeline_version()} · Профіль: {task.get("profile") or "—"}'
+    print(f'Пайплайн v{_pipeline_version()} · Напрямок: {tracks.of_task(task) or "—"}'
           f' · Jira: {task.get("jira", "—")}')
     line = _registry_line(cfg)
     if line:                        # порожній рядок друкувати нічого

@@ -19,9 +19,9 @@ class Roots(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='dc-roots-')
         os.environ['DC_TASKS_FILE'] = os.path.join(self.tmp, 'tasks.json')
-        import serve
         import roots
-        self.serve, self.roots = serve, roots
+        import tracks
+        self.tracks, self.roots = tracks, roots
 
     def tearDown(self):
         os.environ.pop('DC_TASKS_FILE', None)
@@ -37,19 +37,19 @@ class Roots(unittest.TestCase):
             json.dump(cfg, fh, ensure_ascii=False)
         return cfg
 
-    # ---- work_root ----
+    # ---- корінь напрямку (`tracks.legacy_root`, раніше `serve.work_root`) ----
     def test_profile_root_wins_over_shared(self):
         cfg = self._cfg({}, roots={'seo': '/r/seo'}, single='/r/united')
-        self.assertEqual(self.serve.work_root(cfg, 'seo'), '/r/seo')
+        self.assertEqual(self.tracks.legacy_root(cfg, 'seo'), '/r/seo')
 
     def test_profile_without_own_root_falls_back_not_invents(self):
         """Свого кореня нема — беремо спільний, а не вигадуємо шлях за назвою."""
         cfg = self._cfg({}, roots={'seo': '/r/seo'}, single='/r/united')
-        self.assertEqual(self.serve.work_root(cfg, 'liga360'), '/r/united')
+        self.assertEqual(self.tracks.legacy_root(cfg, 'liga360'), '/r/united')
 
     def test_tilde_is_expanded(self):
         cfg = self._cfg({}, roots={'seo': '~/x/seo'})
-        self.assertTrue(self.serve.work_root(cfg, 'seo').startswith(os.path.expanduser('~')))
+        self.assertTrue(self.tracks.legacy_root(cfg, 'seo').startswith(os.path.expanduser('~')))
 
     # ---- план переїзду ----
     def test_task_in_foreign_root_is_planned_to_move(self):
@@ -120,6 +120,41 @@ class Roots(unittest.TestCase):
         self.roots.cmd_migrate(cfg, apply=True)
         self.assertTrue(os.path.isdir(os.path.join(united, 'widget')))
         self.assertTrue(os.path.isdir(os.path.join(self.tmp, 'seo', 'blog')))
+
+    # ---- 4d-1: напрямок задачі — `track`, інакше `profile` (`tracks.of_task`) ----
+    def _seo_cfg(self, task):
+        os.makedirs(os.path.join(self.tmp, 'united', 'blog'))
+        task = {'dir': os.path.join(self.tmp, 'united', 'blog'), **task}
+        return self._cfg({'blog': task}, roots={'seo': os.path.join(self.tmp, 'seo')}, single=os.path.join(self.tmp, 'united'))
+
+    def test_plan_reads_track_profile_and_track_wins(self):
+        """Задача лише з `track`, лише з `profile` (запис до 0.15.0) і з обома (`track` перемагає) — той самий переїзд у `seo`;
+        у колонці напрямку — те саме значення."""
+        for name, keys, shown in (('track only', {'track': 'seo'}, 'seo'),
+                                  ('profile only', {'profile': 'seo'}, 'seo'),
+                                  ('both, track wins', {'track': 'seo', 'profile': 'united'}, 'seo')):
+            with self.subTest(name):
+                shutil.rmtree(os.path.join(self.tmp, 'united'), ignore_errors=True)
+                (tid, track, cur, want, stop), = self.roots.plan(self._seo_cfg(keys))
+                self.assertEqual((tid, track, stop), ('blog', shown, None))
+                self.assertEqual(want, os.path.join(self.tmp, 'seo', 'blog'))
+
+    def test_track_only_task_is_not_sent_to_the_shared_root(self):
+        """⛔ `t.get('profile')` дав би `None` → спільний корінь, і задачу `seo` лише з `track` вважали б «на місці» в United."""
+        cfg = self._seo_cfg({'track': 'seo'})
+        self.assertEqual(len(self.roots.plan(cfg)), 1)
+
+    def test_apply_moves_a_track_only_task(self):
+        cfg = self._seo_cfg({'track': 'seo'})
+        self.roots.cmd_migrate(cfg, apply=True)
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, 'seo', 'blog')))
+
+    def test_roots_in_use_lists_track_and_survives_a_numeric_profile(self):
+        """Напрямки кореня — з `of_task`; число в `profile` (0.14.0: `TypeError` у `sorted`) — «без напрямку», не обвал."""
+        cfg = self._cfg({'a': {'track': 'seo'}, 'b': {'profile': 'liga360'}, 'c': {'profile': 5}},
+                        roots={'seo': '/r/seo'}, single='/r/shared')
+        self.assertEqual(self.roots.roots_in_use(cfg),
+                         [('liga360', '/r/shared', False), ('seo', '/r/seo', True), ('—', '/r/shared', False)])
 
 
 if __name__ == '__main__':

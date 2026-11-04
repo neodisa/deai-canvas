@@ -705,9 +705,11 @@ class TrackerOverview(_TmpCase):
         self.addCleanup(env.stop)
         for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TRACKER_FAKE', 'DC_TEAM_FAKE'):
             os.environ.pop(var, None)
-        # ⛔ Як у `TasksOverviewTest`: похідна мітка питає простір запиту (4d-1), а при `DEAI_HOME` у середовищі розробника це
-        # читання справжнього реєстру машини. Шар вимкнено — простір неявний, реєстр не читається й не пишеться.
-        os.environ.pop('DEAI_HOME', None)
+        # ⛔ Шар просторів тут УВІМКНЕНИЙ (без `DC_TASKS_FILE` `spaces.layer_on()` істинний — тести нижче цього потребують:
+        # `request_space('A')`, `jira_base` ЛІГИ), а похідна мітка (4d-1) питає реєстр просторів. Тож реєстр — у ТИМЧАСОВІЙ
+        # теці, а не у справжньому `~/.deai` (його б читав прибраний `DEAI_HOME`; ізоляції не дає й сам лише
+        # `clear_request_space()`). Справжній `~/.deai` додатково стереже `spaces_guard` модуля.
+        os.environ['DEAI_HOME'] = os.path.join(self.root, 'deai-home')
         spaces.clear_request_space()
         with open(BEFORE, encoding='utf-8') as fh:
             self.snap = json.load(fh)

@@ -3,7 +3,7 @@
 
 Вимога користувача 31.08.2026: три глобальні напрямки — Ліга Юнайтед, Ліга360,
 ЛігаСЕО — лежать у ТРЬОХ теках і трьох репозиторіях. Репозиторії вже три
-(`serve.profile_repos()`), а корінь був один: `design_work_root` = тека United, і в
+(`tracks.legacy_repos`), а корінь був один: `design_work_root` = тека United, і в
 ній опинились задачі всіх напрямків. Дизайнер це помітив і питає, чому SEO-задача
 лежить у United — назва теки бреше про напрямок, а правду знає лише tasks.json.
 
@@ -25,24 +25,27 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spaces  # noqa: E402
-from serve import load_tasks, save_tasks, work_root  # noqa: E402
+import tracks  # noqa: E402  (напрямок задачі й корінь ЛІГИ — одне місце правди; `serve` лишився лише для файла задач)
+from serve import load_tasks, save_tasks  # noqa: E402
 
 
 def plan(cfg):
     """Що куди має переїхати. Чиста функція — тому й перевіряється тестами.
 
-    Повертає список записів: (tid, profile, звідки, куди, причина-стоп або None).
+    Повертає список записів: (tid, напрямок, звідки, куди, причина-стоп або None). Напрямок задачі — `tracks.of_task`
+    (`track`, інакше `profile`: запис, створений до 0.15.0, має лише `profile`, новий — обидва чи лише `track`).
     Стоп-причини НЕ приховуємо: мовчазний пропуск задачі в міграції означав би,
     що дизайнер вважає переїзд завершеним, а частина лишилась на місці.
     """
     out = []
     for tid, t in sorted((cfg.get('tasks') or {}).items()):
+        track = tracks.of_task(t)
         cur = t.get('dir')
         if not cur:
-            out.append((tid, t.get('profile'), None, None, 'немає dir у tasks.json'))
+            out.append((tid, track, None, None, 'немає dir у tasks.json'))
             continue
         cur = os.path.expanduser(cur)
-        want = os.path.join(work_root(cfg, t.get('profile')), tid)
+        want = os.path.join(tracks.legacy_root(cfg, track), tid)
         if os.path.normpath(cur) == os.path.normpath(want):
             continue
         stop = None
@@ -50,30 +53,35 @@ def plan(cfg):
             stop = 'теки нема на диску'
         elif os.path.exists(want):
             stop = f'ціль уже існує: {want}'
-        out.append((tid, t.get('profile'), cur, want, stop))
+        out.append((tid, track, cur, want, stop))
     return out
 
 
 def roots_in_use(cfg):
-    """Корінь на кожен профіль + позначка, чи він СВІЙ, чи спільний фолбек."""
-    roots = cfg.get('design_work_roots') or {}
-    profiles = sorted({(t.get('profile') or '—') for t in (cfg.get('tasks') or {}).values()}
-                      | set(roots))
-    return [(p, work_root(cfg, p), p in roots) for p in profiles]
+    """Корінь на кожен напрямок + позначка, чи він СВІЙ, чи спільний фолбек.
+
+    Напрямки — ті, що є в задачах (`tracks.of_task`, без напрямку — «—»), і ті, що мають власний корінь. «Свій» — ключ є в
+    `design_work_roots` (як і було: порожнє значення теж «свій», хоч корінь тоді спільний). Свідомі відмінності від 0.14.0:
+    не рядок у `profile` (число) тепер читається як «без напрямку» (раніше `sorted` падав `TypeError` на суміші числа з
+    рядками), а `design_work_roots` не словник — як `{}` (спільний корінь, спека §6.4; раніше `AttributeError`)."""
+    roots = cfg.get('design_work_roots')
+    roots = roots if isinstance(roots, dict) else {}
+    found = sorted({(tracks.of_task(t) or '—') for t in (cfg.get('tasks') or {}).values()} | set(roots))
+    return [(p, tracks.legacy_root(cfg, p), p in roots) for p in found]
 
 
 def cmd_status(cfg):
     print('Корені напрямків:')
-    for profile, root, own in roots_in_use(cfg):
+    for track, root, own in roots_in_use(cfg):
         mark = '✅ свій' if own else '⚠️ спільний (свого кореня немає)'
-        print(f'   {profile:10} → {root}  [{mark}]')
+        print(f'   {track:10} → {root}  [{mark}]')
     moves = plan(cfg)
     if not moves:
         print('Усі задачі лежать у корені свого напрямку.')
         return 0
     print(f'\nНе на своєму місці: {len(moves)}')
-    for tid, profile, cur, want, stop in moves:
-        print(f'   {tid} ({profile}): {cur} → {want}'
+    for tid, track, cur, want, stop in moves:
+        print(f'   {tid} ({track}): {cur} → {want}'
               + (f'   ⛔ {stop}' if stop else ''))
     print('\nПереселити: python3 bin/roots.py migrate --apply')
     return 0
@@ -85,11 +93,11 @@ def cmd_migrate(cfg, apply):
         print('Переселяти нічого.')
         return 0
     moved = []
-    for tid, profile, cur, want, stop in moves:
+    for tid, track, cur, want, stop in moves:
         if stop:
-            print(f'⛔ {tid} ({profile}): {stop} — не чіпаю')
+            print(f'⛔ {tid} ({track}): {stop} — не чіпаю')
             continue
-        print(f'{"→" if apply else "буде"} {tid} ({profile}): {cur} → {want}')
+        print(f'{"→" if apply else "буде"} {tid} ({track}): {cur} → {want}')
         if not apply:
             continue
         os.makedirs(os.path.dirname(want), exist_ok=True)
