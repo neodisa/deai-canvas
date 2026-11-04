@@ -473,6 +473,27 @@ test("крок 2: лід секції привʼязаний до її fieldset 
   assert.doesNotMatch(odd, /wz-sl-/);
 });
 
+test("роль notify (4c-3) у майстрі: секція зі своїм заголовком, лідом і текстом «Без модуля»; рядок вимкнення й підписи полів — зі словника", () => {
+  const st = M("supabase-teams", ["notify"], { settings: [{ key: "url", type: "text" }, { key: "key", type: "secret" }] });
+  const h = wizardHTML(V({ step: 2, s2: S2({ list: [st], pick: new Set() }) }));
+  assert.match(h, /<legend class="cn-sec-h">Сповіщення Teams<\/legend><p class="cn-sec-lead" id="wz-sl-0">Картка в канал Teams на кожен новий коментар; тиша — на канал задачі\.<\/p>/);
+  assert.match(h, /<span class="wz-opt-desc">Без сповіщень — Teams мовчить\.<\/span>/, "«Без модуля» несе текст ролі");
+  assert.match(h, /Supabase — Teams/, "назва вбудованого модуля — зі словника, не сирий id");
+  const holder = M("supabase-teams", ["notify"], { enabled: true });
+  const o = wizardHTML(V({ step: 3, s3: S3({ offs: [{ role: "notify", holder, result: null }] }) }));
+  assert.match(o, /Сповіщення Teams: «Supabase — Teams» вимкнеться — Без сповіщень — Teams мовчить\./);
+  const f = wizardHTML(V({ step: 3, s3: S3({ cards: [{ entry: st, fields: [], values: {}, erase: [], errors: {},
+    result: { kind: "failed", key: "cnErrNotifyNoWebhook", detail: "x" } }] }) }));
+  assert.match(f, /У Vault нема секрету teams_webhook_url/, "перевірка модуля notify пояснена власним кодом");
+  const before = getLang();
+  try {
+    setLang("en");
+    const e = wizardHTML(V({ step: 2, s2: S2({ list: [st], pick: new Set() }) }));
+    assert.match(e, /<legend class="cn-sec-h">Teams notifications<\/legend>/);
+    assert.match(e, /No notifications — Teams stays silent\./);
+  } finally { setLang(before); }
+});
+
 test("контейнери картки й рядка «Без модуля» фокусовні програмно (tabindex=-1): контролер веде фокус на збій без контролів", () => {
   const e = M("css-tokens", ["tokens"]);
   const h = wizardHTML(V({ step: 3, s3: S3({ cards: [{ entry: e, fields: [], values: {}, erase: [], errors: {}, result: null }],

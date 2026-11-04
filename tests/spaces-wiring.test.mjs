@@ -58,9 +58,9 @@ test("`space`: не перемикає на той самий простір, п
 test("refreshGitlab і loadTeamsMute: першим рядком — вихід без запиту, коли інтеграцій нема", () => {
   // GitLab (синк із git) — на `noVcs` (роль `vcs`, 4a); коментар між гейтом і запитом дозволений.
   assert.match(fn("refreshGitlab"), /^\{[^]*?\n  if \(noVcs\(\)\) \{ glCache = null; dropGlState\(\); return; \}\n  const seq = \+\+glSeq;\n  const key = glKeyNow\(task\);\n  try \{\n    const r = await api\(`\/api\/vcs-status/);
-  assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noOutward\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
-  assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/,
-    "простір, про який знаємо, — рівно `=== false`; просторів нема зовсім — теж без опитувань");
+  assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noNotify\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
+  assert.match(src, /const noNotify = \(\) => needsWelcome\(spacesResp\) \|\| !hasNotify\(spaceNow\(\)\);/,
+    "4c-3: Teams-тиша — на ролі `notify`; просторів нема зовсім — теж без опитувань");
 });
 
 test("список просторів: спершу задача відкритого запису, потім реєстр", () => {
@@ -462,14 +462,19 @@ test("палітра й смуга: публікація — на hasPublish, к
 
 test("командний канал у app.js — `noTeamComments` на hasTeamComments; `noOutward` його не питає", () => {
   assert.match(src, /const noTeamComments = \(\) => needsWelcome\(spacesResp\) \|\| !hasTeamComments\(spaceNow\(\)\);/);
-  assert.match(src, /effectiveCommentMode, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
-  // GitLab і Teams-тиша лишились на `noOutward`, а канал `project` на нього більше не спирається
+  assert.match(src, /effectiveCommentMode, hasNotify, hasTeamComments, healTarget,/, "імпорт із spaces-model.js (4c-3: додався hasNotify)");
+  // GitLab на `noVcs`, Teams-тиша на `noNotify` (4c-3), а канал `project` на `noOutward`-подібне більше не спирається
   assert.doesNotMatch(src, /noOutward\(\)[^;\n]*(?:'project'|audiences)|(?:'project'|audiences)[^;\n]*noOutward\(\)/);
 });
 
-test("`noOutward` у app.js лишається на інтеграціях (публікація його не питає)", () => {
-  assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/);
-  assert.doesNotMatch(src, /hasPublish\(spaceNow\(\)\)[^;]*noOutward|noOutward\(\)[^;]*hasPublish/);
+test("`noNotify` у app.js — на hasNotify (роль `notify`); `noOutward` зник, публікація його не питала", () => {
+  assert.match(src, /const noNotify = \(\) => needsWelcome\(spacesResp\) \|\| !hasNotify\(spaceNow\(\)\);/);
+  assert.match(src, /effectiveCommentMode, hasNotify, hasTeamComments, healTarget,/, "імпорт із spaces-model.js");
+  assert.doesNotMatch(src, /\bnoOutward\b\(/, "4c-3: тиша Teams більше не на `integrations` — виклику noOutward() не лишилось");
+  assert.doesNotMatch(src, /hasPublish\(spaceNow\(\)\)[^;]*noNotify|noNotify\(\)[^;]*hasPublish/);
+  const model = readFileSync(new URL("../app/bar-model.js", import.meta.url), "utf8");
+  assert.match(model, /\.\.\.\(hasNotify\(s\.space\) \? \[teamsItem\(s\.teams\)\] : \[\]\),/, "пункт Teams у смузі — за роллю, не за noInteg");
+  assert.doesNotMatch(model, /noInteg/);
 });
 
 test("дропдаун публікації: підпис «локально» й застереження про ЛІГА-гейт — за моделлю", () => {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { DICT } from "../app/i18n.js";
 import {
@@ -692,4 +693,34 @@ test("ключі застережень Vercel є у словнику обох �
     assert.equal(typeof DICT.uk[n.key], "string", n.key);
     assert.equal(typeof DICT.en[n.key], "string", n.key);
   }
+});
+
+/* ── роль notify (4c-3): пункт «Сповіщати Teams» — за capabilities.notify ─────────────────── */
+
+test("дропдаун публікації 0.13.0 → тепер: той самий для всіх станів знімка (before-4c3.json, ключ `menu`)", () => {
+  /* Знімок знято на 0.13.0 (пункт за `integrations`). Простори знімка не несуть `capabilities.notify` — а без ключа
+     рішення за `integrations`, тож відповідь мусить збігтися ПОБАЙТНО, включно з вимкненими пунктами й причинами. */
+  const snap = JSON.parse(readFileSync(new URL("./fixtures/notify/before-4c3.json", import.meta.url), "utf8")).menu;
+  const keys = Object.keys(snap.input);
+  assert.ok(keys.length >= 10, "знімок не порожній");
+  for (const key of keys) {
+    const pub = barModel({ ...base, ...snap.input[key] }).zone3.find((x) => x.id === "publish");
+    const got = pub ? { items: pub.items.map((x) => x.id), teamsnotify: pub.items.find((x) => x.id === "teamsnotify") || null }
+      : { items: null, teamsnotify: null };
+    assert.deepEqual(got, snap.result[key], `стан «${key}» розійшовся зі знімком 0.13.0`);
+  }
+});
+
+test("Teams у дропдауні — за роллю notify: модуль без інтеграцій його має, notify: null (роль вимкнено) — ні", () => {
+  const sp = (notify, o = {}) => ({ id: "p", name: "P", color: "space-2", integrations: false,
+    capabilities: { publish: "static-publish", tokens: null, notify }, ...o });
+  const teams = { channel: "dc/t1", muted: false };
+  assert.ok(pubItems({ space: sp("fake-notify"), teams }).includes("teamsnotify"), "модуль ролі notify у просторі без інтеграцій");
+  assert.ok(pubItems({ space: sp("legacy", { integrations: true }), teams }).includes("teamsnotify"));
+  assert.ok(!pubItems({ space: sp(null, { integrations: true }), teams }).includes("teamsnotify"),
+    "роль вимкнено — пункту нема, хоч інтеграції є (інакше вічне «перевіряю стан у базі…»)");
+  assert.ok(!pubItems({ space: sp(null), teams }).includes("teamsnotify"));
+  const it = barModel({ ...base, space: sp("fake-notify"), teams: null }).zone3.find((x) => x.id === "publish").items
+    .find((x) => x.id === "teamsnotify");
+  assert.equal(it.whyKey, "whyTeamsLoading", "роль є, стан ще вантажиться — причина, а не зникнення");
 });

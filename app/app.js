@@ -32,7 +32,7 @@ import { barHTML, taskListHTML, taskFootHTML } from './shell-bar.js';
 import { matches, readHomeUi, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
-  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasTeamComments, healTarget,
+  FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasNotify, hasTeamComments, healTarget,
   cleanupWarning, commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
@@ -254,18 +254,18 @@ let spaceDdWasOpen = false;
 /** Поточний простір (`{id, name, color, integrations, …}`) або `null`: шар вимкнено,
  *  просторів нема. Джерело — задача, що відкрита (`curTask.space`), інакше реєстр. */
 const spaceNow = () => curTask?.space ?? currentSpace(spacesResp);
-/** Простір без інтеграцій: Teams-тиша там не опитується взагалі (публікація йде на `hasPublish`,
- *  командний канал коментарів — на `noTeamComments`, синк із git — на `noVcs`, нижче: їх дають
- *  ролі модулів, а не інтеграції). Простору, про який ми знаємо, — рівно `=== false` (невідомість
- *  красти в людини Teams не має, так само, як `bar-model.js`). Просторів на машині немає зовсім
- *  (привітання) — теж «назовні нічого»: задач нема, і опитувати нікого (`loadTeamsMute` без цього
- *  питав би порожнечу). */
-const noOutward = () => spaceNow()?.integrations === false || needsWelcome(spacesResp);
-/** Синку з git нема: роль `vcs` (`hasVcs`: ключ `capabilities.vcs`, без нього — `integrations`). Це НЕ `noOutward`:
- *  Teams лишається на інтеграціях, а простір із модулем `git-sync` має синк і без них. Просторів нема зовсім
+/** Сповіщень Teams нема: роль `notify` (`hasNotify`: ключ `capabilities.notify`, без нього — `integrations`, рівно
+ *  `=== false`: невідомість красти в людини Teams не має, так само, як `bar-model.js`). Тиша там не опитується взагалі
+ *  (публікація йде на `hasPublish`, командний канал коментарів — на `noTeamComments`, синк із git — на `noVcs`, нижче:
+ *  їх дають ролі модулів). Просторів на машині немає зовсім (привітання) — теж без сповіщень: задач нема, і опитувати
+ *  нікого (`loadTeamsMute` без цього питав би порожнечу). ⛔ Не `integrations` напряму (було до 4c-3): простір без
+ *  інтеграцій із модулем `notify` Teams має, а з інтеграціями й вимкненою роллю — ні (сервер там 409 `notify-off`). */
+const noNotify = () => needsWelcome(spacesResp) || !hasNotify(spaceNow());
+/** Синку з git нема: роль `vcs` (`hasVcs`: ключ `capabilities.vcs`, без нього — `integrations`). Це НЕ `noNotify`:
+ *  Teams — на ролі `notify`, а простір із модулем `git-sync` має синк і без інтеграцій. Просторів нема зовсім
  *  (привітання) — теж без синку: `refreshGitlab` питав би порожнечу. */
 const noVcs = () => needsWelcome(spacesResp) || !hasVcs(spaceNow());
-/** Командного каналу коментарів нема: вкладки «Команда» й аудиторії `project` — теж. Це НЕ `noOutward`: канал дає
+/** Командного каналу коментарів нема: вкладки «Команда» й аудиторії `project` — теж. Це НЕ `noNotify`: канал дає
  *  роль `comments` (зашитий ЛІГА або модуль, `capabilities.comments`), і простір без інтеграцій, але з модулем
  *  коментарів його має. Просторів нема зовсім (привітання) — теж без каналу: задач і сторінок нема. */
 const noTeamComments = () => needsWelcome(spacesResp) || !hasTeamComments(spaceNow());
@@ -2229,9 +2229,9 @@ async function copyLinkText(url) {
 /* Стан тиші Teams для дропдауна публікації. Помилка — це стан («не знаю»),
    а не виняток: пункт показує причину замість вигаданого «увімкнено». */
 async function loadTeamsMute() {
-  /* Простір без інтеграцій: сервер відповів би 409, а `catch` нижче перетворив би це
+  /* Простір без ролі `notify`: сервер відповів би 409 `notify-off`, а `catch` нижче перетворив би це
      на «помилку» в дропдауні публікації. Тут стану тиші нема взагалі — без запиту. */
-  if (noOutward()) { teamsMute = null; return; }
+  if (noNotify()) { teamsMute = null; return; }
   try { teamsMute = await api('/api/teams-mute'); }
   catch (e) { teamsMute = { error: e.message }; }
   if (openDd === 'pub') paintBar();

@@ -345,8 +345,17 @@ class CheckTest(ModuleCase):
                     # ⚠️ Свіжа помилка на кожен прогін: `HTTPError` читається один раз і закривається.
                     self.net(by_path({**self.GOOD, broken: http_error(status, body)}))
                     v = self.raw('check', self.ctx())
-                    self.assertEqual((v['ok'], v['error']), (False, 'no-schema'))
+                    self.assertEqual((v['ok'], v['error']), (False, 'notify-no-schema'),
+                                     'свій код: спільний `no-schema` клієнт підписує «нема таблиці comments»')
                     self.assertIn('schema.sql', v['detail'])
+
+    def test_the_core_passes_the_new_check_codes_as_they_are(self):
+        """`check` віддає код рядком, а ядро (`deai_modules.check`) копіює його без білого списку: `notify-no-schema` і `public-key`
+        доходять до клієнта не підмінені на `module-error`. Тут — шлях через `deai_modules.call`, як у `notify-no-webhook`."""
+        self.net(by_path({**self.GOOD, 'teams_mute_state': http_error(404, {'code': 'PGRST202'})}))
+        self.assertEqual(self.run_fn('check', self.ctx())['error'], 'notify-no-schema')
+        self.net(by_path(self.GOOD))
+        self.assertEqual(self.run_fn('check', self.ctx(secrets={'key': jwt('anon')}))['error'], 'public-key')
 
     def test_a_bad_key_and_other_statuses(self):
         for status, code in ((401, 'bad-key'), (403, 'bad-key'), (500, 'notify-error'), (400, 'notify-error')):
@@ -393,7 +402,8 @@ class PublicKeyTest(ModuleCase):
         for key in ('sb_publishable_abc123', jwt('anon')):
             with self.subTest(key=key[:20]):
                 v = self.raw('check', self.ctx(secrets={'key': key}))
-                self.assertEqual((v['ok'], v['error']), (False, 'module-error'))
+                self.assertEqual((v['ok'], v['error']), (False, 'public-key'),
+                                 'свій код: `module-error` клієнт підписує «Модуль упав під час перевірки»')
                 self.assertIn('непублічний ключ', v['detail'])
                 self.assertNotIn(key, v['detail'])
         self.assertEqual(self.calls, [])
@@ -444,7 +454,7 @@ class LegacyCheckTest(ModuleCase):
 
     def test_the_league_check_still_reports_failures(self):
         self.net(by_path({'teams_mute_state': http_error(404, {'code': 'PGRST202'})}))
-        self.assertEqual(self.raw('check', self.ctx(legacy=True))['error'], 'no-schema')
+        self.assertEqual(self.raw('check', self.ctx(legacy=True))['error'], 'notify-no-schema')
         self.net(by_path({'teams_mute_state': http_error(401, {})}))
         self.assertEqual(self.raw('check', self.ctx(legacy=True))['error'], 'bad-key')
 

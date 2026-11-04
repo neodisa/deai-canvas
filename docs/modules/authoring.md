@@ -263,7 +263,7 @@ send. The module only keeps what it is given and returns what it has. The same c
   reads the table `comments` of `supabase-comments` in the same project (no such table — `{}`); Supabase cuts any answer at
   its `max-rows` (1000 by default), so with more open comments than that the numbers are lower than the truth.
 * `check(ctx)` — as for every module (section 3): a verdict dict `{"ok": bool, "error"?: str, "detail"?: str}`, never an
-  exception. The built-in module refuses a **public** key here (`module-error`) and answers `no-schema`, `bad-key` or
+  exception. The built-in module refuses a **public** key here (`public-key`) and answers `no-schema`, `bad-key` or
   `network` for the rest; `check` is the only place that judges the key, `rows`, `push` and `open_comments` never do.
 
 **Who is asked, and when.** A space has the «Team» tab when it has a provider of the role; without one `team` is `null` and

@@ -39,9 +39,9 @@ Adaptive Card, яку база шле як є. Адреса має почина�
 ## 4. Що відбувається в мережі
 
 - `mute_state` — `POST <url>/rest/v1/rpc/teams_mute_state`, `mute_set` — `POST <url>/rest/v1/rpc/teams_mute_set`. Тайм-аут 8 с.
-- `check` — той самий `teams_mute_state`, а далі `teams_notify_health`. Вердикти: адреса чи ключ не підходять, або ключ
-  **публічний** (`sb_publishable_…`, чи JWT з `"role": "anon"`) — `module-error`; у базі нема функцій — `no-schema` («запустіть
-  schema.sql»); у Vault нема секрету `teams_webhook_url` — `notify-no-webhook`; Supabase недосяжний — `network`; ключ не
+- `check` — той самий `teams_mute_state`, а далі `teams_notify_health`. Вердикти: адреса чи ключ
+  не підходять — `module-error`; ключ **публічний** (`sb_publishable_…`, чи JWT з `"role": "anon"`) — `public-key`; у базі нема
+  функцій — `notify-no-schema` («запустіть schema.sql»); у Vault нема секрету `teams_webhook_url` — `notify-no-webhook`; Supabase недосяжний — `network`; ключ не
   прийнято — `bad-key`. Інакше «підключено» з деталлю на кшталт «доставок за 6 год: N, невдалих: M».
 - Запити не йдуть за переадресаціями, щоб ключ не потрапив на чужий хост. У текстах помилок немає ключа й вмісту
   відповідей — лише фіксовані слова, HTTP-статус і код PostgREST.

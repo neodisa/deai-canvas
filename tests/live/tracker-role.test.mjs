@@ -220,7 +220,7 @@ test("4: «Підключення» — секція «Трекер задач»
   const titles = await page.locator(".cn-sec-h").allTextContents();
   const at = titles.indexOf("Трекер задач");
   assert.ok(at >= 0, `секції: ${JSON.stringify(titles)}`);
-  assert.deepEqual(titles.slice(at - 1, at + 2), ["Командний дашборд", "Трекер задач", "Токени дизайн-системи"]);
+  assert.deepEqual(titles.slice(at - 1, at + 2), ["Командний дашборд", "Трекер задач", "Сповіщення Teams"], "4c-3: після трекера — «Сповіщення Teams», токени далі");
   const sec = page.locator(".cn-sec", { has: page.locator(".cn-sec-h", { hasText: "Трекер задач" }) });
   assert.deepEqual((await sec.locator(".cn-card").evaluateAll((els) => els.map((e) => e.dataset.id))).sort(),
     ["fake-tracker", "jira-tracker"], "у секції мусять стояти обидва модулі ролі");

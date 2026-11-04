@@ -94,7 +94,7 @@ test.after(async () => { await browser?.close(); });
 
 /**
  * Тека `DEAI_EXTRA_MODULES` цього файла: копії `memo-publish`/`memo-publish2` + `memo-note`. `memo-note` — роль `notify`
- * (зарезервована: каталог її приймає, а екран лише показує звичайною секцією), одне НЕобовʼязкове текстове поле `label` з
+ * (від 4c-3 викликана: має `mute_state`/`mute_set`-заглушки, а екран показує її звичайною секцією), одне НЕобовʼязкове текстове поле `label` з
  * типовим значенням `dflt-label`. Очистити його — «ключ знімається, діє типове»: сервер у відповіді віддає саме типове,
  * і це єдиний спосіб побачити живцем, що картка після запису бере значення З СЕРВЕРА, а не зі старого DOM.
  */
@@ -110,7 +110,9 @@ function wizardModules() {
     settings: [{ key: "label", type: "text", label: "Label (test)", default: "dflt-label" }],
   }));
   writeFileSync(path.join(dir, "server.py"),
-    "def check(ctx):\n    return {'ok': True, 'detail': 'note ok'}\n");
+    "def check(ctx):\n    return {'ok': True, 'detail': 'note ok'}\n"
+    + "def mute_state(ctx):\n    return []\n"                    // 4c-3: notify — викликана роль, функції обовʼязкові (bad-manifest без них)
+    + "def mute_set(ctx, channel, muted, by):\n    return bool(muted)\n");
   return modulesDir;
 }
 

@@ -29,6 +29,22 @@ test("секції: ROLE_ORDER, далі інші за абеткою; моду�
   assert.ok(!s.flatMap((x) => x.modules).some((e) => e.id === "gone"));
 });
 
+test("роль notify (4c-3) у майстрі — як tracker: серед відомих, між tracker і tokens; вибір, звільнення ролі й «Без модуля» без особливого коду", () => {
+  const st = M("supabase-teams", ["notify"]);
+  const list = [...LIST, M("jira-tracker", ["tracker"]), st, M("alpha", ["alpha"])];
+  assert.deepEqual(wizardSections(list).map((x) => x.role), ["publish", "comments", "tracker", "notify", "tokens", "alpha"],
+    "notify — між tracker і tokens, а не серед «інших за абеткою»");
+  /* Вибір: модуль ролі notify стає вибраним, і майстер пише його ввімкнення тим самим шляхом, що й для tracker. */
+  const p = pickModule(new Set(["static-publish"]), list, "supabase-teams");
+  assert.deepEqual(ids(p), ["static-publish", "supabase-teams"]);
+  assert.equal(pickedFor(p, list, "notify"), "supabase-teams");
+  /* Колега вже тримає роль іншим модулем: вибір заміною прибирає старого тримача, «Без модуля» — вимикає без заміни. */
+  const held = [...LIST, M("memo-notify", ["notify"], { enabled: true, status: "ok" }), st];
+  assert.deepEqual(ids(initialPick(held)), ["memo-notify", "static-publish"]);
+  assert.deepEqual(ids(pickModule(initialPick(held), held, "supabase-teams")), ["static-publish", "supabase-teams"]);
+  assert.deepEqual(offRows(held, pickNone(initialPick(held), held, "notify")).map((o) => [o.role, o.holder.id]), [["notify", "memo-notify"]]);
+});
+
 test("роль __proto__ — звичайна роль (Map), не прототип", () => {
   const s = wizardSections([M("x", ["__proto__"])]);
   assert.deepEqual(s.map((x) => x.role), ["__proto__"]);

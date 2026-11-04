@@ -208,7 +208,7 @@ class CheckTest(ModuleCase):
         self.net(Resp(200, []))
         for key in ('sb_publishable_abc123', _jwt('anon')):
             res = self.run_fn('check', self.ctx(secrets={'key': key}))
-            self.assertEqual((res['ok'], res['error']), (False, 'module-error'), key[:14])
+            self.assertEqual((res['ok'], res['error']), (False, 'public-key'), key[:14])
             self.assertIn('непублічний ключ', res['detail'])
             self.assertNotIn(key, json.dumps(res))
         self.assertEqual(self.calls, [], 'публічному ключу не віддаємо навіть запиту')

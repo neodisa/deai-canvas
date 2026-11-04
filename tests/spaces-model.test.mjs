@@ -4,7 +4,7 @@ import test from "node:test";
 import { DICT } from "../app/i18n.js";
 import {
   CHECK_POST_MARGIN_S, FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  checkPostTimeoutMs, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
+  checkPostTimeoutMs, hasNotify, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -343,4 +343,20 @@ test("taskErrShowsReason: check-timeout / module-error / vcs-error — завж�
     assert.equal(taskErrShowsReason(c, true), false, String(c));
     assert.equal(taskErrShowsReason(c), false, String(c));
   }
+});
+
+/* ── роль notify (4c-3): пункт Teams і опит тиші — за capabilities.notify ───────────────── */
+
+test("hasNotify: ключ capabilities.notify вирішує (модуль чи 'legacy'), а без ключа — integrations, як hasVcs", () => {
+  assert.equal(hasNotify({ integrations: false, capabilities: { notify: "supabase-teams" } }), true, "модуль у просторі без інтеграцій");
+  assert.equal(hasNotify({ integrations: true, capabilities: { notify: "legacy" } }), true, "зашитий шлях ЛІГА");
+  assert.equal(hasNotify({ integrations: true, capabilities: { notify: null } }), false, "роль вимкнено — Teams нема, хоч інтеграції є");
+  assert.equal(hasNotify({ integrations: true, capabilities: { publish: "legacy" } }), true, "ключа нема + інтеграції (сервер ще без ролі)");
+  assert.equal(hasNotify({ integrations: false, capabilities: { publish: "static-publish" } }), false, "ключа нема + без інтеграцій");
+  assert.equal(hasNotify({ id: "p", integrations: true }), true, "стара форма: рівно за integrations");
+  assert.equal(hasNotify({ id: "p", integrations: false }), false);
+  assert.equal(hasNotify({ id: "p" }), true, "невідомість Teams не краде: лише рівно `=== false`");
+  assert.equal(hasNotify(null), true, "hasNotify(null) — true, як hasVcs(null): шар вимкнено");
+  assert.equal(hasNotify(undefined), true);
+  assert.equal(hasNotify({ capabilities: "x", integrations: false }), false, "caps не обʼєкт — як без ключа");
 });

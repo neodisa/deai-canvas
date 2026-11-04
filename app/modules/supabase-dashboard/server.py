@@ -381,8 +381,8 @@ def _verdict(error, detail, key=''):
 
 
 def check(ctx):
-    """Вердикт `{"ok": bool, "error"?, "detail"?}` (контракт ядра): налаштування (адреса, таблиця, ключ — для не-ЛІГИ ще й
-    публічність) → `module-error`; потім `GET <table>?select=id&limit=1` за `READ_TIMEOUT_S`. Збоїв не кидає."""
+    """Вердикт `{"ok": bool, "error"?, "detail"?}` (контракт ядра): налаштування (адреса, таблиця, ключ) → `module-error`; для
+    не-ЛІГИ публічний ключ → `public-key`; потім `GET <table>?select=id&limit=1` за `READ_TIMEOUT_S`. Збоїв не кидає."""
     key = _key(ctx)
     try:
         _base(ctx)
@@ -391,7 +391,7 @@ def check(ctx):
     except Exception as e:  # noqa: BLE001 — налаштування не годяться: вердикт, а не виняток
         return _verdict('module-error', getattr(e, 'message', None) or e, key)
     if not ctx.get('legacy') and _is_public_key(key):
-        return _verdict('module-error', _PUBLIC_KEY)
+        return _verdict('public-key', _PUBLIC_KEY)    # ⛔ не `module-error`: той клієнт підписує «Модуль упав», а ключ — вина налаштування
     try:
         status, payload = _request(ctx, 'GET', _table(ctx), 'select=id&limit=1', timeout=READ_TIMEOUT_S)
     except _NetworkError as e:

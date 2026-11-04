@@ -299,9 +299,11 @@ def _count(value):
 
 
 def check(ctx):
-    """Вердикт `{"ok": bool, "error"?, "detail"?}` (контракт ядра): налаштування (адреса, ключ — для не-ЛІГИ ще й публічність)
-    → `module-error`; потім `teams_mute_state` (нема схеми → `no-schema`); для не-ЛІГИ далі `teams_notify_health`
-    (нема секрету вебхука → `notify-no-webhook`, інакше ok із деталлю «доставок за 6 год: N, невдалих: M»). Збоїв не кидає."""
+    """Вердикт `{"ok": bool, "error"?, "detail"?}` (контракт ядра): налаштування (адреса, ключ) → `module-error`; для не-ЛІГИ
+    публічний ключ → `public-key` (⛔ не `module-error`: той клієнт підписує «Модуль упав під час перевірки», а ключ — вина
+    налаштування, не модуля); потім `teams_mute_state` (нема схеми → `notify-no-schema`, ⛔ не `no-schema`: той підписано «нема
+    таблиці comments», а схема цього модуля — функції); для не-ЛІГИ далі `teams_notify_health` (нема секрету вебхука →
+    `notify-no-webhook`, інакше ok із деталлю «доставок за 6 год: N, невдалих: M»). Збоїв не кидає."""
     key = _key(ctx)
     try:
         _base(ctx)
@@ -310,7 +312,7 @@ def check(ctx):
         return _verdict('module-error', getattr(e, 'message', None) or e, key)
     legacy = bool(ctx.get('legacy'))
     if not legacy and _is_public_key(key):
-        return _verdict('module-error', _PUBLIC_KEY)
+        return _verdict('public-key', _PUBLIC_KEY)
     try:
         status, payload = _rpc(ctx, 'teams_mute_state', {})
         if 200 <= status < 300 and not isinstance(_json(payload), type([])):
@@ -339,7 +341,7 @@ def check(ctx):
 
 
 def _bad(status, payload, key, legacy=False):
-    """Вердикт за невдалою відповіддю: нема схеми → `no-schema`, ключ не прийнято → `bad-key`, решта — `notify-error`."""
+    """Вердикт за невдалою відповіддю: нема схеми → `notify-no-schema`, ключ не прийнято → `bad-key`, решта — `notify-error`."""
     if _no_function(status, payload):
-        return _verdict('no-schema', _NO_SCHEMA)
+        return _verdict('notify-no-schema', _NO_SCHEMA)
     return _verdict('bad-key' if status in (401, 403) else 'notify-error', _problem(status, payload, key, legacy), key)

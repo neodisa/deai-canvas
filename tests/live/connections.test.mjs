@@ -302,9 +302,9 @@ test("1: вхід із дропдауна, секції за ролями, не�
   await openConnections(page);
   const titles = await page.locator(".cn-sec-h").allTextContents();
   /* Від 4a між коментарями й токенами стоїть роль `vcs` («Синхронізація з git», вбудований `git-sync`), від 4c-1 — ще й `dashboard`
-     («Командний дашборд», вбудований `supabase-dashboard`) між синхронізацією й токенами, від 4c-2 — `tracker` («Трекер задач»). */
-  assert.deepEqual(titles.slice(0, 6), ["Публікація", "Командні коментарі", "Синхронізація з git", "Командний дашборд", "Трекер задач",
-    "Токени дизайн-системи"], "4c-2: між дашбордом і токенами — «Трекер задач» (вбудований jira-tracker), тож шість, а не п'ять");
+     («Командний дашборд», вбудований `supabase-dashboard`) між синхронізацією й токенами, від 4c-2 — `tracker` («Трекер задач»), від 4c-3 — `notify` («Сповіщення Teams»). */
+  assert.deepEqual(titles.slice(0, 7), ["Публікація", "Командні коментарі", "Синхронізація з git", "Командний дашборд", "Трекер задач",
+    "Сповіщення Teams", "Токени дизайн-системи"], "4c-3: між трекером і токенами — «Сповіщення Teams» (вбудований supabase-teams), тож сім, а не шість");
   assert.match(await badge(page, "supabase-dashboard"), /cn-badge--off/, "вбудований supabase-dashboard: не підключений за замовчуванням");
   assert.match(await page.locator('.cn-card[data-id="static-publish"]').textContent(), /типово/);
   assert.match(await badge(page, "css-tokens"), /cn-badge--off/);

@@ -237,8 +237,8 @@ export const spaceErrField = (code) => {
  * `serve.py` не перезапустили). Тоді, як і для відповідей без `capabilities`, рішення за `integrations`, рівно `=== false`:
  * простір без відомостей командного каналу в людини не краде (інакше ЛІГА мовчки втратила б «Команду»).
  *
- * ⚠️ Це НЕ `noOutward` (`app.js`): Teams-тиша й дашборд команди ходять назовні й лишаються на
- * `integrations`. Простір із модулем коментарів без інтеграцій має команду коментарів, але не має Teams.
+ * ⚠️ Це НЕ `noNotify` (`app.js`): Teams-тиша тепер на ролі `notify` (`hasNotify`), дашборд команди — на ролі `dashboard`.
+ * Простір із модулем коментарів без інтеграцій має команду коментарів, але Teams має лише за модулем `notify`.
  */
 export const hasTeamComments = (space) => {
   const caps = space?.capabilities;
@@ -264,12 +264,28 @@ export const effectiveCommentMode = (space, mode) =>
  * `legacy-golden`) — за `integrations`, як було до 4a: простір без відомостей не краде в людини синк.
  * `hasVcs(null)` — `true`, як `hasTeamComments(null)`: невідомий простір (шар вимкнено) синк не відбирає.
  *
- * ⚠️ Це НЕ `noOutward` (`app.js`): Teams-тиша лишається на `integrations`, а синк із git тепер дає роль `vcs` — простір із
+ * ⚠️ Це НЕ `noNotify` (`app.js`): Teams-тиша — на ролі `notify`, а синк із git дає роль `vcs` — простір із
  * модулем `git-sync` має синк і без інтеграцій.
  */
 export const hasVcs = (space) => {
   const caps = space?.capabilities;
   return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs != null : space?.integrations !== false;
+};
+
+/**
+ * Чи є в просторі сповіщення Teams (роль `notify`, етап 4c-3): пункт «Сповіщати Teams» у дропдауні публікації й опит
+ * `/api/teams-mute`. Є ключ `capabilities.notify` — він і вирішує (`'legacy'` — зашитий шлях ЛІГА, id модуля — модуль,
+ * `null` — нема). Ключа нема (стара форма відповіді, сервер без ролі, шар вимкнено, фікстури `legacy-golden`) — за
+ * `integrations`, рівно `=== false`, як було до 4c-3: невідомість Teams у людини не краде (інакше ЛІГА мовчки втратила б
+ * перемикач тиші). `hasNotify(null)` — `true`, як `hasVcs(null)`.
+ *
+ * ⚠️ Це вже НЕ «Teams лишається на `integrations`»: простір без інтеграцій, але з модулем `notify`, має і пункт, і опит;
+ * простір з інтеграціями, де роль вимкнено (`notify: null`), їх не має — інакше пункт висів би вічним «перевіряю стан у
+ * базі…», бо `/api/teams-mute` там відповідає 409 `notify-off`.
+ */
+export const hasNotify = (space) => {
+  const caps = space?.capabilities;
+  return caps && typeof caps === "object" && "notify" in caps ? caps.notify != null : space?.integrations !== false;
 };
 
 /** Синк простору — зашитий шлях ЛІГА (налаштовується в `tasks.json`, не на «Підключенні»). Правило ключа те саме, що в `hasVcs`. */
@@ -533,7 +549,7 @@ export function peekRegistered(res, taken = []) {
    інтеграцій не мав ні GitLab, ні кнопки «Опублікувати». Тепер у такому просторі публікує
    вбудований `static-publish` (локальна тека, `/published/<простір>/<задача>/`), тож питань
    стало два: чи є ХТОСЬ, хто публікує (`hasPublish`), і чи це саме ЛІГА (`isLegacyPublish`).
-   Teams лишився на `integrations`; синк із git від 4a — на `capabilities.vcs` (`hasVcs`, вище); командний канал і вкладка «Команда» від 2b-2 — на
+   Teams від 4c-3 — на `capabilities.notify` (`hasNotify`, вище); синк із git від 4a — на `capabilities.vcs` (`hasVcs`, вище); командний канал і вкладка «Команда» від 2b-2 — на
    `capabilities.comments` (`hasTeamComments`, нижче: рішення за роллю `comments`, не за `integrations`).
 
    Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | 'legacy' | null, tokens,

@@ -479,16 +479,16 @@ function declSource(name) {
   return src.slice(start, open) + balanced(open);
 }
 
-test("refreshGitlab питає /api/vcs-status за noVcs(), а loadTeamsMute лишається на noOutward()", () => {
+test("refreshGitlab питає /api/vcs-status за noVcs(), а loadTeamsMute — за noNotify() (роль notify, 4c-3)", () => {
   const body = fn("refreshGitlab");
   const guard = body.indexOf("\n  if (noVcs()) {");
   const call = body.indexOf("await api(`/api/vcs-status?it=${encodeURIComponent(picked || '')}`)");
   assert.ok(guard > 0, "вихід без запиту за noVcs()");
   assert.ok(call > guard, "запит статусу — ПІСЛЯ гейта: без ролі мережі нема");
-  assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noOutward\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
+  assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noNotify\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
   assert.match(src, /const noVcs = \(\) => needsWelcome\(spacesResp\) \|\| !hasVcs\(spaceNow\(\)\);/);
-  assert.match(src, /const noOutward = \(\) => spaceNow\(\)\?\.integrations === false \|\| needsWelcome\(spacesResp\);/,
-    "Teams лишається на integrations");
+  assert.match(src, /const noNotify = \(\) => needsWelcome\(spacesResp\) \|\| !hasNotify\(spaceNow\(\)\);/,
+    "4c-3: Teams — на ролі notify (hasNotify), а не на integrations");
 });
 
 test("дії синку ходять на /api/vcs-*, старих адрес у клієнті нема", () => {

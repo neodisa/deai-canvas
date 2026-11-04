@@ -92,13 +92,29 @@ test("тексти ролі tracker (4c-2): усі ключі є в UK і EN, а
   for (const k of [b.name, b.desc, ...Object.values(b.fields)]) assert.ok(DICT.uk[k] && DICT.en[k], k);
 });
 
+test("тексти ролі notify (4c-3): усі ключі є в UK і EN, а підписи полів supabase-teams — з BUILTIN_TEXT", () => {
+  const keys = ["cnRoleNotify", "cnRoleNotifyLead", "cnNoneNotify", "cnModSbTeamsName", "cnModSbTeamsDesc", "cnFieldSbTeamsUrl",
+    "cnFieldSbTeamsKey", "cnDisableNotify", "cnErrNotifyNoWebhook", "cnErrNotifyNoSchema", "cnErrPublicKey"];
+  for (const k of keys) for (const lang of ["uk", "en"]) assert.ok(typeof DICT[lang][k] === "string" && DICT[lang][k], `${lang}: немає ключа «${k}»`);
+  assert.equal(DICT.en.cnRoleNotify, "Teams notifications");
+  assert.equal(DICT.uk.cnRoleNotify, "Сповіщення Teams");
+  assert.equal(DICT.uk.cnErrNotifyNoSchema, "У базі нема функцій сповіщень — виконайте schema.sql модуля.");
+  assert.equal(DICT.en.cnErrNotifyNoSchema, "The database has no notification functions — run the module's schema.sql.");
+  assert.equal(DICT.uk.cnErrPublicKey, "Потрібен непублічний ключ (service_role), а вказано публічний.");
+  assert.equal(DICT.en.cnErrPublicKey, "This needs the non-public (service_role) key, not the public one.");
+  const b = builtinText("supabase-teams");
+  for (const k of [b.name, b.desc, ...Object.values(b.fields)]) assert.ok(DICT.uk[k] && DICT.en[k], k);
+});
+
 test("рядок «Зараз»: модуль, модуль без запису, legacy, нікого, space.json не читається, невідома роль", () => {
   const v = (caps) => ({ space: { ...SP, capabilities: caps }, list: LIST });
   assert.match(nowHTML("publish", v({ publish: "static-publish" })), /Зараз: Публікація в теку/);
   assert.match(nowHTML("publish", v({ publish: "ghost-id" })), /Зараз: ghost-id/, "нема в списку — показуємо id, а не падаємо");
   assert.match(nowHTML("publish", v({ publish: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("comments", v({ comments: null })), /Зараз: нікого — коментарі лише локальні/);
-  assert.match(nowHTML("notify", v({ notify: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого» (4c-2: приклад notify — tracker тепер має текст)");
+  assert.match(nowHTML("alpha", v({ alpha: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого» (4c-3: приклад alpha — tracker і notify мають тексти)");
+  assert.match(nowHTML("notify", v({ notify: null })), /Зараз: нікого — Без сповіщень — Teams мовчить\./, "4c-3: роль notify має власний текст «нікого»");
+  assert.match(nowHTML("notify", v({ notify: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого — Без трекера — статусів задач нема\./, "4c-2: роль tracker має власний текст «нікого»");
   assert.match(nowHTML("tracker", v({ tracker: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого — макети лише на цьому компʼютері/, "роль vcs має власний текст «нікого»");
@@ -108,7 +124,7 @@ test("рядок «Зараз»: модуль, модуль без запису,
   assert.match(nowHTML("vcs", { space: { ...SP, capabilities: { vcs: "git-sync" } }, list: [{ id: "git-sync", name: "Синхронізація з git", roles: ["vcs"] }] }),
     /Зараз: Git</, "постачальник — назва вбудованого модуля зі словника, а не сирий id чи назва з маніфесту");
   assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
-  assert.equal(nowHTML("notify", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка (4c-2: приклад notify)");
+  assert.equal(nowHTML("alpha", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка (4c-3: приклад alpha)");
   setLang("en");
   assert.match(nowHTML("publish", v({ error: "x" })), /Now: unknown — space\.json cannot be read/);
 });
@@ -157,7 +173,8 @@ test("назви й підписи вбудованих — мовою інте�
   assert.equal(roleTitle("vcs"), "Git sync");
   assert.equal(roleTitle("dashboard"), "Team dashboard", "4c-1: а не сире слово «dashboard»");
   assert.equal(roleTitle("tracker"), "Issue tracker", "4c-2: а не сире слово «tracker»");
-  assert.equal(roleTitle("notify"), "notify", "зарезервована роль без тексту — просто імʼя (4c-2: приклад замість tracker)");
+  assert.equal(roleTitle("notify"), "Teams notifications", "4c-3: а не сире слово «notify»");
+  assert.equal(roleTitle("alpha"), "alpha", "роль без тексту — просто імʼя (4c-3: приклад alpha замість notify)");
   assert.equal(roleTitle(""), "Other");
   assert.equal(modName({ id: "memo-publish", name: "Memo (тест)" }), "Memo (тест)");
   assert.equal(modName({ id: "bare" }), "bare", "без назви — id");
