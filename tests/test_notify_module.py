@@ -136,6 +136,15 @@ class ManifestTest(ModuleCase):
         self.assertEqual(m.private_secret_keys(), ['key'])
         self.assertEqual(m.client, ())
 
+    def test_the_check_budget_covers_the_worst_case(self):
+        """`check` робить до двох послідовних RPC (`teams_mute_state`, потім `teams_notify_health`), кожен із тайм-аутом сокета
+        `TIMEOUT_S`. Бюджет ядра (`check_timeout_s` маніфесту) мусить їх покривати, інакше на завислому Supabase «Підключення»
+        покаже загальний `check-timeout` замість вердикту `network` самого модуля (без ключа діє `CHECK_TIMEOUT` = 5 с)."""
+        budget = self.mod.check_timeout_s
+        self.assertIsNotNone(budget, 'маніфест supabase-teams мусить задавати check_timeout_s')
+        self.assertGreaterEqual(budget, 2 * self.g['TIMEOUT_S'])
+        self.assertLessEqual(budget, dm.MAX_CHECK_TIMEOUT)
+
     def test_functions_of_the_role(self):
         for fn in ('check', 'mute_state', 'mute_set'):
             self.assertIsNotNone(self.mod.fn(fn), fn)

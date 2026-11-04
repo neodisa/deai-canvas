@@ -205,6 +205,13 @@ class Behaviour(unittest.TestCase):
         self.assertLess(body.index(guard), body.index('net.http_post'))
         self.assertLess(body.index(guard), body.index('public.teams_project_mute'))
 
+    def test_the_send_failure_log_never_echoes_the_error_text(self):
+        """Помилка `pg_net` могла б повторити адресу вебхука (у ній підпис), а `raise warning` пише в логи Postgres: тому в
+        `cl_send_teams` лише `sqlstate`, без `sqlerrm`. Свідома відмінність від оригіналу ЛІГИ."""
+        body = functions()['cl_send_teams'][1]
+        self.assertNotIn('sqlerrm', body.lower())
+        self.assertRegex(body, r"raise warning 'cl_send_teams failed: sqlstate %', sqlstate;")
+
     def test_the_mute_set_validates_its_arguments(self):
         body = functions()['teams_mute_set'][1]
         self.assertIn('length(p_project) not between 1 and 200', body)

@@ -149,7 +149,8 @@ begin
 
   insert into public.teams_delivery_log(request_id, comment_id) values (req_id, c.id);
 exception when others then
-  raise warning 'cl_send_teams failed: %', sqlerrm;
+  -- only sqlstate: sqlerrm could echo the webhook address (it carries a signature) from a pg_net error into the Postgres logs
+  raise warning 'cl_send_teams failed: sqlstate %', sqlstate;
   return;
 end;
 $$;

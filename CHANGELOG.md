@@ -30,8 +30,8 @@ release **no role name is reserved any more**. Design: `docs/superpowers/specs/2
   `localhost`, no path) and `key` (a secret, **not** `public`: the `service_role` key or the key of a role of your own). The
   schema `app/modules/supabase-teams/schema.sql` is run once by a person in the SQL editor, **after** the schema of
   `supabase-comments`; it is idempotent and adds `pg_net`, the tables `teams_delivery_log` and `teams_project_mute` (RLS on, closed to
-  `anon` and `authenticated`), the card builder `comment_teams_card` (an Adaptive Card 1.4 made only with `jsonb_build_*`, no string
-  concatenation over the comment), the privileged sender `cl_send_teams` (a freshness guard of 2 minutes, the mute of a channel and
+  `anon` and `authenticated`), the card builder `comment_teams_card` (an Adaptive Card 1.4 made with `jsonb_build_*`; the only string
+  concatenation is the cut of the comment text to 500 characters, `left(c.text, 500) || '…'`), the privileged sender `cl_send_teams` (a freshness guard of 2 minutes, the mute of a channel and
   of its sub-channels, the webhook address from **Vault** under `teams_webhook_url`, `pg_net`), the trigger `cl_notify_teams` on new
   comments, and the three functions the module calls: `teams_mute_state`, `teams_mute_set` and `teams_notify_health`. Those three are
   granted to `service_role` only. The module calls them over `POST /rest/v1/rpc/…` with an 8 s socket timeout; it follows no
@@ -109,6 +109,12 @@ release **no role name is reserved any more**. Design: `docs/superpowers/specs/2
 - The card carries the id of the channel, not a project name, and its labels are Ukrainian; the receiving side (Power Automate or
   another) is set up by a person. `pg_net` and Vault must be available in the project.
 - Delivery is fire-and-forget (no retries), as in LIGA; its health is visible only in `check` on the Connections screen.
+- `cl_send_teams` is callable with the public key (`anon`), and its checks are not atomic: two parallel calls for the same comment
+  can both pass the delivery-log dedupe before either inserts its log row, and send two cards. The 2-minute freshness guard trusts
+  `comments.created_at`, which a public-key client can set. The effect is at most extra cards; no data or secret is exposed. This
+  is inherent to the open public-key model.
+- `cl_send_teams` logs only `sqlstate` on a failure (never `sqlerrm`, which could echo the signed webhook address from a `pg_net`
+  error): a deliberate difference from the LIGA original.
 - The text of the shared verdict `no-schema` («нема таблиці comments») is still shown for `supabase-dashboard`; changing it is out
   of scope of 4c-3 (the verdict of `supabase-teams` has its own code, `notify-no-schema`).
 - The error texts of the server are Ukrainian also in the English interface (as for the other roles).
