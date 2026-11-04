@@ -20,6 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sbconf  # noqa: E402
+import notify  # noqa: E402
 import serve  # noqa: E402
 
 
@@ -1765,7 +1766,7 @@ class ServeTest(unittest.TestCase):
         with mock.patch.object(urllib.request, 'urlopen',
                                side_effect=AssertionError('мережа з фікстури')):
             with self.assertRaises(OSError):
-                serve.teams_rpc('teams_mute_set', {'p_project': 'x', 'p_muted': True})
+                serve.notify_call('mute_set', 'x', True, '')
         body = json.load(urllib.request.urlopen(self.base + '/api/teams-mute'))
         self.assertEqual(body['channel'], 'dc/fixture')
         self.assertIn('error', body)
@@ -1774,23 +1775,23 @@ class ServeTest(unittest.TestCase):
     def test_e7_teams_mute_post_uses_task_channel_and_identity(self):
         calls, db = [], {}
 
-        def fake(name, body):
-            calls.append((name, body))
-            if name == 'teams_mute_set':
-                if body['p_muted']:
-                    db[body['p_project']] = body['p_by']
+        def fake(name, *args, resolved=None):
+            calls.append((name, *args))
+            if name == 'mute_set':
+                channel, muted, by = args
+                if muted:
+                    db[channel] = by
                 else:
-                    db.pop(body['p_project'], None)
-                return body['p_muted']
+                    db.pop(channel, None)
+                return muted
             return [{'project_id': k, 'muted_by': v, 'muted_at': 't'} for k, v in db.items()]
-        with mock.patch.object(serve, 'teams_rpc', fake):
+        with mock.patch.object(serve, 'notify_call', fake):
             st, body = self._post_json('/api/teams-mute', {'muted': True})
             sig = serve.mute_signature()
             self.assertRegex(sig, r'^k:[0-9a-f]{12}$')
             self.assertEqual((st, body['muted'], body['muted_by'], body['mine'], body['channel']),
                              (200, True, sig, True, 'dc/fixture'))
-            self.assertEqual(calls[0], ('teams_mute_set', {'p_project': 'dc/fixture',
-                                                           'p_muted': True, 'p_by': sig}))
+            self.assertEqual(calls[0], ('mute_set', 'dc/fixture', True, sig))
             # ⛔ Ні ПІБ, ні пошти в базі: RPC стану читає будь-хто з ключем сторінки.
             self.assertNotIn('Lead', json.dumps(calls))
             self.assertNotIn('lead@example.com', json.dumps(calls))
@@ -1819,10 +1820,10 @@ class ServeTest(unittest.TestCase):
 
     def test_e8_mute_of_a_channel_covers_its_subchannels_only(self):
         rows = [{'project_id': 'dc/blog', 'muted_by': 'S', 'muted_at': 't'}]
-        self.assertTrue(serve.teams_mute_view('dc/blog', rows)['muted'])
-        self.assertTrue(serve.teams_mute_view('dc/blog/internal', rows)['muted'])
-        self.assertFalse(serve.teams_mute_view('dc/blog-x', rows)['muted'])
-        self.assertFalse(serve.teams_mute_view('dc/blo', rows)['muted'])
+        self.assertTrue(notify.mute_view('dc/blog', rows, 'S')['muted'])
+        self.assertTrue(notify.mute_view('dc/blog/internal', rows, 'S')['muted'])
+        self.assertFalse(notify.mute_view('dc/blog-x', rows, 'S')['muted'])
+        self.assertFalse(notify.mute_view('dc/blo', rows, 'S')['muted'])
 
     def test_e4_gate_state_without_publish_is_none(self):
         self.assertEqual(serve.preview_gate_state({'dir': tempfile.gettempdir() + '/nope-dc'}, '1'),

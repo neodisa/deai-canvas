@@ -2,7 +2,8 @@
 
 Тут: знімок поведінки 0.13.0 (`Before4c3Shape`, Task 1), роль у каркасі модулів (`NotifyRole`, Task 2), чисте ядро
 `app/notify.py` (`NotifyCore`, Task 2, з паритетом проти `serve.teams_mute_view` і знімка) і адаптер ЛІГИ
-(`LegacyAdapter`, Task 3). Наступні задачі додають класи маршруту, що читають той самий JSON.
+(`LegacyAdapter`, Task 3) і сервер (`ServerPath`, Task 4: `notify_call` замість `teams_rpc`, маршрут `/api/teams-mute` за
+роллю). Наступні задачі додають класи, що читають той самий JSON.
 """
 import json
 import os
@@ -16,8 +17,9 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import deai_modules as dm  # noqa: E402
+import make_before_4c3 as mb  # noqa: E402  (лише помічники знімка: сервер у процесі, простори, записувач; ЗАПУСКУ генератора нема)
 import notify  # noqa: E402
-import serve  # noqa: E402  (лише для паритету `teams_mute_view`; ядро `notify` сам `serve` НЕ імпортує)
+import serve  # noqa: E402  (сервер Task 4; ядро `notify` сам `serve` НЕ імпортує)
 import spaces_guard  # noqa: E402
 import test_modules as tm  # noqa: E402  (каркас `Env`: тимчасові HOME/DEAI_HOME, тека модулів-фікстур)
 
@@ -291,6 +293,18 @@ def _rows_of(case):
     return rows
 
 
+def _reference_mute_view(channel, rows, me):
+    """`serve.teams_mute_view` 0.13.0 дослівно (підпис машини — аргументом замість `mute_signature()`)."""
+    for r in rows or []:
+        pid = r.get('project_id') or ''
+        if pid and (channel == pid or channel.startswith(pid + '/')):
+            by = r.get('muted_by') or ''
+            return {'channel': channel, 'muted': True, 'muted_by': by,
+                    'mine': bool(by) and by == me,
+                    'muted_at': r.get('muted_at'), 'via': pid}
+    return {'channel': channel, 'muted': False}
+
+
 def _typed(view):
     """Вигляд каналу з типом замість значення `muted_at` — як у знімку."""
     out = dict(view)
@@ -425,9 +439,9 @@ class NotifyCore(unittest.TestCase):
             got = _typed(notify.mute_view(channel, _rows_of(case), me))
             self.assertEqual(got, case['body'], name)
 
-    def test_view_equals_serve_teams_mute_view_on_the_snapshot_and_on_edge_rows(self):
-        """Диференційно проти `serve.teams_mute_view` (він лишається до Task 4): ті самі відповіді на всіх кейсах знімка й на
-        крайових рядках."""
+    def test_view_equals_the_0_13_0_reference_on_the_snapshot_and_on_edge_rows(self):
+        """Диференційно проти ДОСЛІВНОЇ копії `serve.teams_mute_view` 0.13.0 (`_reference_mute_view`; з функції в `serve` Task 4
+        її прибрав): ті самі відповіді на всіх кейсах знімка й на крайових рядках."""
         edge = [[{'project_id': 'dc/t1'}], [{'project_id': ''}], [{'project_id': None, 'muted_by': 'k:0123456789ab'}],
                 [{'muted_by': 'k:0123456789ab'}], [{'project_id': 'dc/t1', 'muted_by': None}],
                 [{'project_id': 'dc/t1', 'muted_by': 'k:0123456789ab', 'muted_at': None}],
@@ -436,8 +450,7 @@ class NotifyCore(unittest.TestCase):
                 for c in self.snap['route']['fake_get'].values()]
         pool += [(ch, rows, me) for rows in edge for ch in ('dc/t1', 'dc/t1/internal', 'x') for me in (self.ME, '')]
         for channel, rows, me in pool:
-            with mock.patch.object(serve, 'mute_signature', return_value=me):
-                want = serve.teams_mute_view(channel, rows)
+            want = _reference_mute_view(channel, rows, me)
             self.assertEqual(notify.mute_view(channel, rows, me), want, (channel, rows, me))
 
     # ----- check_set_args
@@ -553,6 +566,421 @@ class LegacyAdapter(unittest.TestCase):
             self.assertEqual(headers['apikey'], 'sk-test-1')
             self.assertEqual(headers['authorization'], 'Bearer sk-test-1')
         self.assertEqual(json.loads(seen[1][3]), {'p_project': 'dc/t1', 'p_muted': True, 'p_by': 'k:0123456789ab'})
+
+
+# ------------------------------------------------------------------------------------------ Task 4: сервер
+
+#: Модуль-фікстура `notify` для маршруту: кожен виклик пишеться в `CALLS`, поведінку задають глобали модуля (`MODE`, `STATE`,
+#: `SET_ANSWER`) — тест міняє їх через `fn.__globals__` модуля, який справді викликає сервер.
+RECORDING_NOTIFY = tm.CHECK_ONLY + """
+CALLS = []
+MODE = 'ok'
+STATE = []
+SET_ANSWER = 'echo'
+
+
+def mute_state(ctx):
+    CALLS.append(('mute_state',))
+    if MODE == 'fail':
+        raise ctx['ModuleError']('notify-error', message='service is down')
+    return STATE
+
+
+def mute_set(ctx, channel, muted, by):
+    CALLS.append(('mute_set', channel, muted, by))
+    if MODE == 'fail':
+        raise ctx['ModuleError']('notify-error', message='service is down')
+    return muted if SET_ANSWER == 'echo' else SET_ANSWER
+"""
+
+
+class _OpenResp:
+    """Відповідь шва `_open` модуля: контекстний менеджер зі `status` і `read`."""
+    status = 200
+
+    def __init__(self, body):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, *limit):
+        return self._body
+
+
+class _OpenRec(mb.Recorder):
+    """Записувач `mb.Recorder` для шва `_open(req, timeout)` модуля (знімок писав `urlopen(req, timeout, context)`)."""
+
+    answers = {}              # `{імʼя RPC: тіло}` — окрема відповідь на конкретний RPC (типово — `body`)
+
+    def __call__(self, req, timeout=None, **kw):
+        super().__call__(req, timeout=timeout)
+        return _OpenResp(self.answers.get(req.full_url.rsplit('/', 1)[-1], self.body))
+
+
+def _db_of(case):
+    """Файл шва `DC_TEAMS_FAKE` зі знімка: `{канал: {muted_at, muted_by?}}`; у знімку `muted_at` — лише ТИП."""
+    return {pid: {**rec, 'muted_at': '2026-11-01T10:00:00' if rec.get('muted_at') == 'str' else None}
+            for pid, rec in case['db'].items()}
+
+
+class ServerPath(tm.Env):
+    """Task 4: `serve.notify_resolve()` + `serve.notify_call()` замість `teams_rpc`, маршрут `/api/teams-mute` — за
+    постачальником ролі `notify`. ЛІГА (шов `DC_TEAMS_FAKE` і шлях через вбудований модуль із підміненим `_open`) — диференційно
+    проти знімка 0.13.0; звичайний простір — через фейковий модуль. Мережі нема: `_open` завжди підмінений записувачем."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)
+
+    def setUp(self):
+        # знімок оточення ДО `Env.setUp`: його скасування (після `tearDown`) повертає початкові значення
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        super().setUp()
+        os.environ['DEAI_HOME'] = self.deai          # статичний охоронець шукає присвоєння в тексті самого файла
+        for k in mb.CLEAN:
+            if k != 'DEAI_HOME':
+                os.environ.pop(k, None)               # як у генераторі знімка: чисте оточення (ізоляція — лише на час випадку)
+        os.environ.pop('SUPABASE_URL', None)
+        os.environ.pop('SUPABASE_KEY', None)
+        self.ids = mb.setup_spaces(self.tmp)         # `liga` (інтеграції; задачі t1, t2) і `plain` (без; задача p1)
+        self.fake = os.path.join(self.tmp, 'teams-fake.json')
+        self.sig = mock.patch.object(serve, 'mute_signature', lambda: mb.MINE)
+        self.sig.start()
+        self.addCleanup(self.sig.stop)
+
+    # ---- допоміжне
+    def real_builtins(self):
+        """Шлях ЛІГИ: справжній `supabase-teams` з `app/modules` (а не тека фікстур `Env`)."""
+        patch = mock.patch.object(dm, 'builtin_dir', tm._REAL_BUILTIN_DIR)
+        patch.start()
+        self.addCleanup(patch.stop)
+        dm.reset_caches()
+
+    def cfg(self):
+        """Конфіг установки ЛІГИ — вигаданий (`serve.supabase_config`)."""
+        patch = mock.patch.object(serve, 'supabase_config', return_value=(mb.URL, mb.KEY))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def open_seam(self, rec):
+        """Шов `_open` вбудованого `supabase-teams`: усе, що модуль шле в мережу, йде в записувач."""
+        patch = mock.patch.dict(notify.legacy_module().fn('check').__globals__, {'_open': rec})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def srv(self):
+        s = mb.Server().__enter__()
+        self.addCleanup(s.__exit__, None, None, None)
+        return s
+
+    def get(self, srv, task):
+        st, body = srv.req('GET', '/api/teams-mute', task)
+        return st, mb.stamp_type(body)
+
+    def post(self, srv, task, payload, origin='local'):
+        st, body = srv.req('POST', '/api/teams-mute', task, payload, origin)
+        return st, mb.stamp_type(body)
+
+    def db_now(self):
+        try:
+            with open(self.fake, encoding='utf-8') as f:
+                return mb.stamp_type(json.load(f))
+        except (OSError, ValueError):
+            return None
+
+    def fake_module_space(self):
+        """Звичайний простір без інтеграцій + свій (тут вбудований у `Env`) модуль `notify`, ЯВНО ввімкнений у ньому. Повертає
+        глобали модуля: `CALLS` (виклики), `MODE`, `STATE`, `SET_ANSWER` — їх міняє тест."""
+        self.mk('ntf-fake', roles=('notify',), server=RECORDING_NOTIFY)
+        sp = self.rec(self.ids['plain'])
+        dm.write_module_state(sp, 'ntf-fake', enabled=True)
+        return dm.provider('notify', sp).fn('mute_state').__globals__
+
+    # ---- відсутність старого API
+    def test_teams_rpc_and_teams_mute_view_are_gone_and_the_signature_stays(self):
+        self.assertFalse(hasattr(serve, 'teams_rpc'))
+        self.assertFalse(hasattr(serve, 'teams_mute_view'))
+        self.assertTrue(callable(serve.notify_resolve))
+        self.assertTrue(callable(serve.notify_call))
+        with mock.patch.dict(os.environ, {'DC_IDENTITY_NAME': 'Alpha', 'DC_IDENTITY_EMAIL': 'alpha@example.com'}):
+            self.sig.stop()
+            try:
+                self.assertEqual(serve.mute_signature(), self.snap['route']['signature_real'])
+            finally:
+                self.sig.start()
+
+    # ---- ЛІГА: шов DC_TEAMS_FAKE — маршрут = знімок 0.13.0
+    def test_the_league_fake_seam_gets_are_the_0_13_0_snapshot(self):
+        self.real_builtins()
+        srv = self.srv()
+        os.environ['DC_TEAMS_FAKE'] = self.fake
+        for key, case in self.snap['route']['fake_get'].items():
+            with self.subTest(case=key):
+                mb._write(self.fake, _db_of(case))
+                with mock.patch.object(serve, 'mute_signature', lambda: case.get('signature', mb.MINE)):
+                    st, body = self.get(srv, case['task'])
+                self.assertEqual((st, body), (case['status'], case['body']))
+
+    def test_the_league_fake_seam_posts_are_the_0_13_0_snapshot(self):
+        self.real_builtins()
+        srv = self.srv()
+        os.environ['DC_TEAMS_FAKE'] = self.fake
+        want = self.snap['route']['fake_post']
+        mb._write(self.fake, {})
+        steps = (('mute', 't1', {'muted': True}, 'local'), ('unmute', 't1', {'muted': False}, 'local'),
+                 ('mute_subchannel', 't2', {'muted': True}, 'local'))
+        for key, task, payload, origin in steps:
+            st, body = self.post(srv, task, payload, origin)
+            self.assertEqual((st, body, self.db_now()), (want[key]['status'], want[key]['body'], want[key]['db_after']), key)
+        mb._write(self.fake, {})
+        for key, payload, origin in (('bad_muted', {'muted': 'yes'}, 'local'),
+                                     ('foreign_origin', {'muted': True}, 'https://evil.example'),
+                                     ('no_origin_header', {'muted': True}, None)):
+            st, body = self.post(srv, 't1', payload, origin)
+            self.assertEqual((st, body, self.db_now()), (want[key]['status'], want[key]['body'], want[key]['db_after']), key)
+
+    # ---- ЛІГА без шва: запити модуля = запити teams_rpc 0.13.0
+    def test_the_league_rpc_requests_are_the_0_13_0_requests(self):
+        self.real_builtins()
+        self.cfg()
+        rr = self.snap['rpc_requests']
+        cases = (('state', ('mute_state',), rr['state']['stub_response']),
+                 ('set', ('mute_set', 'dc/t1', True, mb.MINE), True),
+                 ('unset', ('mute_set', 'dc/t1', False, mb.MINE), False))
+        for key, args, stub in cases:
+            with self.subTest(case=key):
+                rec = _OpenRec(json.dumps(stub).encode('utf-8'))
+                self.open_seam(rec)
+                result = serve.notify_call(*args)
+                self.assertEqual(result, stub)
+                self.assertEqual(len(rec.calls), 1)
+                got, want = rec.calls[0], rr[key]['calls'][0]
+                for field in ('method', 'path', 'query', 'body', 'timeout', 'host_is_demo', 'headers'):
+                    self.assertEqual(got[field], want[field], field)
+
+    def test_the_league_refusals_are_the_0_13_0_refusals(self):
+        """Ізоляція — той самий `OSError` з тим самим текстом і без мережі; решта відмов — свідомо інші типи (`ModuleError`)."""
+        self.real_builtins()
+        self.cfg()
+        rr = self.snap['rpc_requests']
+        for key, env in (('isolated_tasks_file', {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')}),
+                         ('isolated_no_overview', {'DC_NO_OVERVIEW': '1'})):
+            rec = _OpenRec(b'[]')
+            self.open_seam(rec)
+            with mock.patch.dict(os.environ, env), self.assertRaises(OSError) as cm:
+                serve.notify_call('mute_state')
+            self.assertEqual((type(cm.exception).__name__, str(cm.exception), len(rec.calls)),
+                             ('OSError', rr[key]['message'], 0), key)
+
+    def test_the_league_without_a_config_is_notify_unconfigured_with_the_old_text(self):
+        self.real_builtins()
+        rec = _OpenRec(b'[]')
+        self.open_seam(rec)
+        with mock.patch.object(serve, 'supabase_config', return_value=(None, None)), \
+                self.assertRaises(dm.ModuleError) as cm:
+            serve.notify_call('mute_state')
+        self.assertEqual((cm.exception.code, cm.exception.message, len(rec.calls)),
+                         ('notify-unconfigured', self.snap['rpc_requests']['no_supabase']['message'], 0))
+
+    def test_a_network_failure_is_a_notify_error_not_a_bare_oserror(self):
+        self.real_builtins()
+        self.cfg()
+        rec = _OpenRec(exc=OSError('мережі нема'))
+        self.open_seam(rec)
+        with self.assertRaises(dm.ModuleError) as cm:
+            serve.notify_call('mute_state')
+        self.assertEqual((cm.exception.code, len(rec.calls)), ('notify-error', 1))
+
+    def test_without_a_provider_notify_call_never_reaches_the_network(self):
+        """Простір без інтеграцій і без модуля: `OSError` (як було з `IntegrationsOff`), жодного запиту."""
+        self.real_builtins()
+        self.cfg()
+        rec = _OpenRec(b'[]')
+        self.open_seam(rec)
+        import spaces
+        with spaces.request_space(self.ids['plain']), self.assertRaises(OSError):
+            serve.notify_call('mute_state')
+        self.assertEqual(rec.calls, [])
+
+    # ---- ЛІГА: маршрут без шва
+    def test_the_league_route_through_the_module_matches_the_snapshot_requests(self):
+        self.real_builtins()
+        self.cfg()
+        srv = self.srv()
+        real = self.snap['route']['real_path']
+        rec = _OpenRec(json.dumps(mb.STATE_ROWS).encode('utf-8'))
+        rec.answers = {'teams_mute_set': b'true'}          # знімок віддавав список і на `mute_set` (його не читали); модуль читає `bool`
+        self.open_seam(rec)
+        st, body = self.get(srv, 't1')
+        self.assertEqual((st, body), (real['get']['status'], real['get']['body']))
+        self.assertEqual([c['path'] for c in rec.calls], [c['path'] for c in real['get']['rpc_calls']])
+        rec.calls.clear()
+        st, body = self.post(srv, 't1', {'muted': True})
+        self.assertEqual((st, body), (real['post_mute']['status'], real['post_mute']['body']))
+        got = [(c['path'], c['body']) for c in rec.calls]
+        self.assertEqual(got, [(c['path'], c['body']) for c in real['post_mute']['rpc_calls']])
+
+    def test_the_league_route_on_a_network_failure_keeps_the_0_13_0_shape(self):
+        """GET — 200 `{channel, error}` (без `muted`), POST — 502 `{ok: false, channel, error}`: форма та сама, текст — модуля."""
+        self.real_builtins()
+        self.cfg()
+        srv = self.srv()
+        self.open_seam(_OpenRec(exc=OSError('мережі нема')))
+        real = self.snap['route']['real_path']
+        st, body = self.get(srv, 't1')
+        self.assertEqual((st, sorted(body)), (200, sorted(real['get_network_error']['body'])))
+        self.assertEqual(body['channel'], 'dc/t1')
+        self.assertTrue(body['error'])
+        st, body = self.post(srv, 't1', {'muted': True})
+        self.assertEqual((st, sorted(body)), (502, sorted(real['post_network_error']['body'])))
+        self.assertIs(body['ok'], False)
+
+    def test_the_league_route_in_an_isolated_run_never_reaches_the_network(self):
+        self.real_builtins()
+        self.cfg()
+        srv = self.srv()
+        for key, env in (('tasks_file', {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')}),
+                         ('no_overview', {'DC_NO_OVERVIEW': '1'})):
+            want = self.snap['route']['isolated'][key]
+            rec = _OpenRec(json.dumps(mb.STATE_ROWS).encode('utf-8'))
+            self.open_seam(rec)
+            with mock.patch.dict(os.environ, env):
+                got_get, got_post = self.get(srv, 't1'), self.post(srv, 't1', {'muted': True})
+            self.assertEqual(got_get, (want['get']['status'], want['get']['body']), key)
+            self.assertEqual(got_post, (want['post']['status'], want['post']['body']), key)
+            self.assertEqual(rec.calls, [], key)
+
+    # ---- простір без постачальника: 409 notify-off
+    def test_a_space_without_a_provider_answers_409_notify_off(self):
+        self.real_builtins()
+        self.cfg()
+        srv = self.srv()
+        os.environ['DC_TEAMS_FAKE'] = self.fake            # шов діє лише для 'legacy': тут його мають ігнорувати
+        mb._write(self.fake, {'dc/p1': {'muted_at': None, 'muted_by': mb.COLLEAGUE}})
+        rec = _OpenRec(b'[]')
+        self.open_seam(rec)
+        off = {'ok': False, 'code': 'notify-off', 'error': 'сповіщень Teams у просторі нема'}
+        before = self.db_now()
+        self.assertEqual(self.get(srv, 'p1'), (409, off))
+        self.assertEqual(self.post(srv, 'p1', {'muted': True}), (409, off))
+        self.assertEqual(self.post(srv, 'p1', {'muted': 'yes'}), (409, off), 'шлюз — раніше за перевірку muted, як було')
+        self.assertEqual(self.post(srv, 'p1', {'muted': True}, 'https://evil.example'), (403, {'ok': False, 'error': 'foreign origin'}))
+        self.assertEqual((self.db_now(), rec.calls), (before, []))
+
+    def test_the_old_integrations_off_code_is_replaced_not_duplicated(self):
+        self.real_builtins()
+        srv = self.srv()
+        st, body = self.get(srv, 'p1')
+        self.assertEqual(st, 409)
+        self.assertNotEqual(body['code'], 'integrations-off')
+
+    # ---- звичайний простір із модулем
+    def test_a_plain_space_with_a_module_works_through_the_module(self):
+        g = self.fake_module_space()
+        srv = self.srv()
+        os.environ['DC_TEAMS_FAKE'] = self.fake            # ⛔ шов лише для 'legacy': з модулем його не читають і не пишуть
+        mb._write(self.fake, {'dc/p1': {'muted_at': None, 'muted_by': mb.COLLEAGUE}})
+        before = self.db_now()
+        g['STATE'] = [{'project_id': 'dc/p1', 'muted_at': '2026-11-01T10:00:00', 'muted_by': mb.MINE, 'extra': 1}]
+        st, body = self.get(srv, 'p1')
+        self.assertEqual((st, body), (200, {'channel': 'dc/p1', 'muted': True, 'muted_by': mb.MINE, 'mine': True,
+                                            'muted_at': 'str', 'via': 'dc/p1'}))
+        g['STATE'] = []
+        st, body = self.post(srv, 'p1', {'muted': True})
+        self.assertEqual((st, body), (200, {'ok': True, 'channel': 'dc/p1', 'muted': False}), 'вигляд — зі стану ПІСЛЯ перемикання')
+        self.assertEqual(g['CALLS'], [('mute_state',), ('mute_set', 'dc/p1', True, mb.MINE), ('mute_state',)])
+        self.assertEqual(self.db_now(), before)
+
+    def test_a_module_failure_is_get_error_and_post_502(self):
+        g = self.fake_module_space()
+        srv = self.srv()
+        g['MODE'] = 'fail'
+        st, body = self.get(srv, 'p1')
+        self.assertEqual((st, body), (200, {'channel': 'dc/p1', 'error': 'service is down'}))
+        st, body = self.post(srv, 'p1', {'muted': True})
+        self.assertEqual((st, body), (502, {'ok': False, 'channel': 'dc/p1', 'error': 'service is down'}))
+
+    def test_a_bad_muted_is_400_before_the_module_is_called(self):
+        g = self.fake_module_space()
+        srv = self.srv()
+        for bad in ('yes', 1, 0, None, 'true', [True]):
+            st, body = self.post(srv, 'p1', {'muted': bad})
+            self.assertEqual((st, body), (400, {'ok': False, 'error': 'muted must be boolean'}), repr(bad))
+        st, body = self.post(srv, 'p1', {})
+        self.assertEqual(st, 400)
+        self.assertEqual(g['CALLS'], [], 'модуль не бачить поганих аргументів')
+
+    def test_a_bad_channel_is_400_before_the_module_is_called(self):
+        """`check_set_args` стереже й канал (`comment_project` задачі довший за 200 знаків): 400, модуль не бачить."""
+        g = self.fake_module_space()
+        tasks_file = os.path.join(self.home, 'work', 'plain', 'tasks.json')
+        with open(tasks_file, encoding='utf-8') as f:
+            cfg = json.load(f)
+        cfg['tasks']['p1']['comment_project'] = 'c' * 201
+        mb._write(tasks_file, cfg)
+        srv = self.srv()
+        st, body = self.post(srv, 'p1', {'muted': True})
+        self.assertEqual((st, body['ok']), (400, False))
+        self.assertIn('channel', body['error'])
+        self.assertEqual(g['CALLS'], [])
+
+    def test_a_foreign_origin_is_403_before_everything(self):
+        g = self.fake_module_space()
+        srv = self.srv()
+        for task in ('p1', 't1'):                          # і зі своїм модулем, і в ЛІГИ
+            st, body = self.post(srv, task, {'muted': 'yes'}, 'https://evil.example')
+            self.assertEqual((st, body), (403, {'ok': False, 'error': 'foreign origin'}), task)
+        self.assertEqual(g['CALLS'], [])
+
+    def test_a_non_bool_mute_set_answer_is_a_module_error(self):
+        """Carry-over (a): відповідь `mute_set`, що не `bool` (в т.ч. `1` — `True == 1`), — `notify-error`, а не «успіх»."""
+        g = self.fake_module_space()
+        srv = self.srv()
+        for answer in (1, 0, 'true', None, {'muted': True}, [True]):
+            g['SET_ANSWER'] = answer
+            st, body = self.post(srv, 'p1', {'muted': True})
+            self.assertEqual((st, body['ok'], body['channel']), (502, False, 'dc/p1'), repr(answer))
+            self.assertTrue(body['error'], repr(answer))
+
+    def test_a_non_list_mute_state_answer_is_a_module_error(self):
+        """Carry-over (a): відповідь `mute_state`, що не список, — `notify-error` (GET `{channel, error}`, POST 502 на
+        другому кроці): «не знаю» ніколи не стає «нічого не замовчано»."""
+        g = self.fake_module_space()
+        srv = self.srv()
+        for answer in ({}, {'project_id': 'dc/p1'}, 'x', None, 0):
+            g['STATE'] = answer
+            st, body = self.get(srv, 'p1')
+            self.assertEqual((st, sorted(body)), (200, ['channel', 'error']), repr(answer))
+            self.assertNotIn('muted', body)
+            st, body = self.post(srv, 'p1', {'muted': True})
+            self.assertEqual((st, body['ok']), (502, False), repr(answer))
+
+    def test_notify_call_checks_the_set_arguments_before_the_module(self):
+        """Пояс і шлейки: сам `notify_call` теж не пропускає поганий `muted`/канал/підпис до модуля (`ValueError`)."""
+        g = self.fake_module_space()
+        import spaces
+        with spaces.request_space(self.ids['plain']):
+            for args in (('dc/p1', 'yes', ''), ('dc/p1', 1, ''), ('', True, ''), ('dc/p1', True, 'x' * 201)):
+                with self.assertRaises(ValueError, msg=repr(args)):
+                    serve.notify_call('mute_set', *args)
+        self.assertEqual(g['CALLS'], [])
+
+    def test_a_broken_own_module_is_an_error_not_notify_off(self):
+        """⛔ Свій модуль «на папері», що не працює, — НЕ «сповіщень нема»: GET/POST називають причину (як вкладка «Команда»)."""
+        self.fake_module_space()
+        srv = self.srv()
+        with mock.patch.object(serve, 'notify_resolve', side_effect=dm.ModuleError('module-untrusted', message='not trusted')):
+            st, body = self.get(srv, 'p1')
+            self.assertEqual((st, body), (200, {'channel': 'dc/p1', 'error': 'not trusted'}))
+            st, body = self.post(srv, 'p1', {'muted': True})
+            self.assertEqual((st, body), (502, {'ok': False, 'channel': 'dc/p1', 'error': 'not trusted'}))
 
 
 if __name__ == '__main__':

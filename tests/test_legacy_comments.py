@@ -1,10 +1,10 @@
 """Коментарі простору ЛІГА через модуль `supabase-comments` (етап 4b-2). Тут — тести ядра.
 
 Task 3: адреса й ключ Supabase більше не зашиті в `serve.py`: `serve.supabase_config()` бере їх з конфігу УСТАНОВКИ
-(корінь старого `tasks.json`, далі оточення). Усі споживачі (`_team_fetch`, `teams_rpc`, …) ходять лише через неї.
+(корінь старого `tasks.json`, далі оточення). Усі споживачі (`_team_fetch`, `notify_call`, …) ходять лише через неї.
 
 ⛔ Ізоляція: `DC_TASKS_FILE`/`DC_NO_OVERVIEW` прибираються лише там, де це ПОТРІБНО для перевірки (вони самі глушать
-мережу `_team_fetch`/`teams_rpc`); справжній `tasks.json` недосяжний — старий файл підставлено тимчасовий через
+мережу `_team_fetch`/`notify_call`); справжній `tasks.json` недосяжний — старий файл підставлено тимчасовий через
 `spaces.legacy_tasks_file`, а `urlopen` підмінено: або записувачем, або тим, що падає. Адреси й ключі — вигадані.
 """
 import contextlib
@@ -234,31 +234,29 @@ class TeamFetchTest(_Env):
         self.assertEqual(seen, [])
 
 
-class TeamsRpcTest(_Env):
-    """`teams_rpc`: без конфігу — `OSError` без мережі; з конфігом — той самий запит, що знято до зміни (0.9.0)."""
+class NotifyCallBaselineTest(_Env):
+    """`notify_call` ЛІГИ (4c-3: заміна `teams_rpc`): без конфігу — `notify-unconfigured` без мережі; з конфігом — той самий запит,
+    що знято до зміни (0.9.0), але крізь шов `_open` вбудованого `supabase-teams`; ізоляція — `OSError` без мережі."""
 
-    def setUp(self):
-        super().setUp()
-        patcher = mock.patch.object(spaces, 'require_integrations', lambda *a, **k: None)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    def open_seam(self):
+        seen = []
+        sbconf.patch_open(self, lambda req, timeout=None: seen.append(req) or sbconf.Resp(b'[]'), 'supabase-teams')
+        return seen
 
-    def test_without_config_raises_without_network(self):
+    def test_without_config_is_unconfigured_without_network(self):
         self.write({'tasks': {}})
-        with self.assertRaises(OSError):
-            serve.teams_rpc('teams_mute_state', {})
+        seen = self.open_seam()
+        with self.assertRaises(deai_modules.ModuleError) as cm:
+            serve.notify_call('mute_state')
+        self.assertEqual(cm.exception.code, 'notify-unconfigured')
+        self.assertEqual(seen, [])
 
     def test_with_config_matches_baseline(self):
         with open(BEFORE, encoding='utf-8') as f:
             base = json.load(f)['teams_rpc']
         self.write({'supabase_url': URL, 'supabase_key': KEY})
-        seen = []
-
-        def fake(req, timeout=None, context=None):
-            seen.append(req)
-            return _Resp(b'[]')
-        with mock.patch.object(serve.urllib.request, 'urlopen', fake):
-            serve.teams_rpc('teams_mute_state', {})
+        seen = self.open_seam()
+        serve.notify_call('mute_state')
         self.assertEqual(len(seen), 1)
         req = seen[0]
         self.assertEqual(req.full_url, URL + base['path'])
@@ -272,9 +270,11 @@ class TeamsRpcTest(_Env):
 
     def test_isolation_still_blocks_with_config(self):
         self.write({'supabase_url': URL, 'supabase_key': KEY})
+        seen = self.open_seam()
         os.environ['DC_NO_OVERVIEW'] = '1'
         with self.assertRaises(OSError):
-            serve.teams_rpc('teams_mute_state', {})
+            serve.notify_call('mute_state')
+        self.assertEqual(seen, [])
 
 
 class LigaRoutesWithoutConfigTest(tcr.PagesEnv):

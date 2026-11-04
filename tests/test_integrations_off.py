@@ -11,7 +11,7 @@ clone|ls-remote|pull`, `npx`, `vercel`, `overview_push.py`, `registry.py`), пі
 
 Три шари:
   * `Points`  — кожна точка виходу окремою функцією (`ProjectComments.pins`/`resolve` — командні піни ЛІГИ модулем
-                `supabase-comments`, `teams_rpc`, `team_snapshot`,
+                `supabase-comments`, `notify_call`, `team_snapshot`,
                 `_registry_push`, `_overview_sync`, `git_autocommit`,
                 `task_new` із дзеркалом GitLab): `with spaces.request_space('off'|'on')`;
   * `Routes`  — сервер у процесі: маршрути простору без інтеграцій (409 `integrations-off`, чи
@@ -21,7 +21,7 @@ clone|ls-remote|pull`, `npx`, `vercel`, `overview_push.py`, `registry.py`), пі
 
 ⛔ Ізоляція: власні тимчасові `HOME`, `DEAI_HOME`; `DC_TASKS_FILE` указує на ТИМЧАСОВИЙ старий файл
 (шар просторів увімкнено, бо є `DEAI_HOME`; живий `tasks.json` недосяжний), `DC_NO_OVERVIEW`,
-`DC_TEAM_FAKE`, `DC_TEAMS_FAKE` прибрані. Але `DC_TASKS_FILE` сам глушить мережу (`teams_rpc`,
+`DC_TEAM_FAKE`, `DC_TEAMS_FAKE` прибрані. Але `DC_TASKS_FILE` сам глушить мережу (`notify_call`,
 `team_snapshot`, `_registry_push`) — тож усі перевірки, чия відмова мусить належати САМЕ вимикачу,
 йдуть у `unisolated()`: змінна прибрана, старий файл підставлено через `spaces.legacy_tasks_file`.
 Розтяжка вмикається РАНІШЕ за будь-яке прибирання запобіжників; справжній `~/.deai` стереже
@@ -450,7 +450,7 @@ def isolate_team_cache(case):
 
 @contextlib.contextmanager
 def unisolated(legacy_file):
-    """Бойовий шлях зовнішніх функцій: `DC_TASKS_FILE` прибрано (він глушить `teams_rpc`,
+    """Бойовий шлях зовнішніх функцій: `DC_TASKS_FILE` прибрано (він глушить `notify_call`,
     `team_snapshot`, `_registry_push` САМ — і без цього відмову міг би дати він, а не вимикач),
     старий файл простору підставлено через `spaces.legacy_tasks_file`. Усе — під розтяжкою."""
     saved = os.environ.pop('DC_TASKS_FILE', None)
@@ -548,18 +548,20 @@ class Points(unittest.TestCase):
         self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
         self.assertEqual(self.trip.of('urlopen'), [])
 
-    def test_teams_rpc(self):
+    def test_notify_call(self):
+        """4c-3: `notify_call` замість `teams_rpc`. Простір без інтеграцій і без модуля — `OSError` («сповіщень нема») ДО мережі;
+        ЛІГА ходить у Supabase ЛІГИ вбудованим `supabase-teams` (через `socket`, а не `urlopen`)."""
         self.enter_unisolated()
         with spaces.request_space('off'):
-            with self.assertRaises(spaces.IntegrationsOff):
-                serve.teams_rpc('teams_mute_state', {})
+            with self.assertRaises(OSError):
+                serve.notify_call('mute_state')
         self.assertEqual(self.trip.hits, [])
         with spaces.request_space('on'):
-            with self.assertRaises(OSError) as cm:
-                serve.teams_rpc('teams_mute_state', {})
-        self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
-        self.assertEqual(len(self.trip.of('urlopen')), 1)
-        self.assertIn('/rest/v1/rpc/teams_mute_state', self.trip.of('urlopen')[0])
+            with self.assertRaises(serve.deai_modules.ModuleError) as cm:        # не `OSError` і не «пусто»
+                serve.notify_call('mute_state')
+        self.assertNotIsInstance(cm.exception, OSError)
+        self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
+        self.assertEqual(self.trip.of('urlopen'), [])
 
     def test_team_snapshot(self):
         self.enter_unisolated()
@@ -875,9 +877,12 @@ class Routes(World):
         self.assertIn('audiences:', html)
 
     def test_teams_mute_is_refused_both_ways(self):
-        self.assert_off(*self.jget('/api/teams-mute'))
-        self.assert_off(*self.jpost('/api/teams-mute', {}))
-        self.assert_off(*self.jpost('/api/teams-mute', {'muted': True}))
+        """4c-3: відмова — `notify-off` (немає постачальника ролі), а не `integrations-off`; решта — як була."""
+        for st, body in (self.jget('/api/teams-mute'), self.jpost('/api/teams-mute', {}),
+                         self.jpost('/api/teams-mute', {'muted': True})):
+            self.assertEqual(st, 409, body)
+            self.assertEqual((body['ok'], body['code']), (False, 'notify-off'))
+            self.assertTrue(body['error'])
         self.assertEqual(self.trip.hits, [])
         self.assert_not_off(*self.jget('/api/teams-mute', self.A))
         self.assert_not_off(*self.jpost('/api/teams-mute', {'muted': True}, self.A))

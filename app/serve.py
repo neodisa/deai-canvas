@@ -35,6 +35,7 @@ import spaces  # простори машини: який файл задач д�
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
 import tracker  # статуси задач у трекері (4c-2): ядро ролі `tracker` (ключі, пакети, нормалізація, адаптер ЛІГИ)
+import notify  # тиша сповіщень Teams (4c-3): ядро ролі `notify` (нормалізація стану, вигляд каналу, адаптер ЛІГИ)
 import install_config  # конфіг установки (4c-1: спільний із ядром дашборда й CLI, без імпорту `serve`)
 from install_config import legacy_tasks_path, load_legacy_tasks  # noqa: F401 — реекспорт: ними користуються `ops/`, `bin/` і тести
 import module_trust  # довіра своїм модулям простору (етап 3c): мова вікна довіри, шов `DEAI_TRUST_CONFIRM`
@@ -1725,7 +1726,7 @@ def _team_fetch(space, prov):
     """Один справжній прохід за рядками команди: `(rows, error)`, не кидає. `prov` — постачальник ролі `dashboard`
     простору запиту: `'legacy'` (ЛІГА) чи `Module`; `space` — запис простору (для `module_ctx`; для `'legacy'` не потрібен).
 
-    Порядок джерел важливий, і ⛔ другий пункт — закон ізоляції (той самий, що в `teams_rpc` і `_registry_push`):
+    Порядок джерел важливий, і ⛔ другий пункт — закон ізоляції (той самий, що в `notify_call` і `_registry_push`):
     `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають «стан не справжній цієї машини», тож ходити з нього в живий Supabase не можна.
     Усі три пункти — лише для `'legacy'`:
     1. `DC_TEAM_FAKE` — локальний JSON-масив замість бази (шов для тестів; рядки як є, без відбору ключів);
@@ -1856,7 +1857,7 @@ def _tracker_fetch(space, prov, keys):
     """Один справжній прохід за статусами `keys`: `(statuses, error)` або `None` (= трекера нема: ізоляція ЛІГИ). Не кидає.
     `prov` — постачальник ролі `tracker` простору запиту: `'legacy'` (ЛІГА) чи `Module`; `space` — запис простору (для `module_ctx`).
 
-    Порядок джерел для `'legacy'`; ⛔ другий пункт — закон ізоляції (той самий, що в `_team_fetch`, `teams_rpc` і `_registry_push`):
+    Порядок джерел для `'legacy'`; ⛔ другий пункт — закон ізоляції (той самий, що в `_team_fetch`, `notify_call` і `_registry_push`):
     `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають «стан не справжній цієї машини», тож ходити з нього в живу Jira не можна;
     1. `DC_TRACKER_FAKE` — локальний JSON `{ключ: {name, cat}}` замість Jira (шов для тестів; `tracker.normalize` до `keys`);
     2. ізольований прогін без шва — `None`: екран поводиться як без трекера (`tracker: null`), помилки НЕМАЄ (на відміну від
@@ -2390,47 +2391,84 @@ def integrations_off_body(what):
     return {'ok': False, 'code': 'integrations-off', 'error': what}
 
 
-def teams_rpc(name, body):
-    """RPC тиші Teams (`teams_mute_state` / `teams_mute_set`, батч 1.52).
+def notify_resolve():
+    """`(space, prov)` ролі `notify` для простору ЗАПИТУ: `prov` — `Module`, `'legacy'` (ЛІГА) чи `None` (сповіщень нема: пункта
+    «Сповіщати Teams» нема, маршрут `/api/teams-mute` — 409). Як `team_resolve`: `space` — запис простору лише для модуля.
+    Кидає `spaces.SpacesError` (реєстр не прочитати) і `deai_modules.ModuleError` (свій модуль «на папері», `space.json` не
+    читається): це НЕ «нікого» — маршрут називає причину, а не прикидається, що сповіщень нема."""
+    prov = deai_modules.provider('notify')
+    return (spaces.active_space() if isinstance(prov, deai_modules.Module) else None), prov
 
-    ⛔ Підмінений конфіг = ЗАБОРОНА чіпати спільний стан — той самий закон, що в
-    `_registry_push`: `DC_TASKS_FILE`/`DC_NO_OVERVIEW` ставлять тести й будь-який
-    ізольований прогін, і замовчати чи увімкнути живий канал Teams команди з
-    фікстури не можна НІ В ЯКОМУ РАЗІ. `DC_TEAMS_FAKE` — локальний JSON замість
-    бази для живих тестів (шов, а не другий шлях: він не пише нікуди, крім файла).
-    Кидає OSError при недоступності."""
-    fake = os.environ.get('DC_TEAMS_FAKE')
-    if fake:
+
+def notify_call(fn, *args, resolved=None):
+    """Один виклик ролі `notify` постачальника простору запиту: `notify_call('mute_state')` → список замовчаних каналів
+    (`notify.normalize_mutes`), `notify_call('mute_set', канал, muted, by)` → `bool`. `resolved=(space, prov)` — коли маршрут
+    уже вирішив постачальника (без другого читання реєстру й каталогу). Кидає `OSError` (нікого / ізоляція / шов), `ValueError`
+    (погані аргументи `mute_set` — ДО модуля) і `deai_modules.ModuleError` (нема конфігу, збій модуля, `check-timeout`).
+
+    ⛔ Підмінений конфіг = ЗАБОРОНА чіпати спільний стан — той самий закон, що в `_registry_push`: `DC_TASKS_FILE`/`DC_NO_OVERVIEW`
+    ставлять тести й будь-який ізольований прогін, і замовчати чи увімкнути живий канал Teams команди з фікстури не можна НІ В
+    ЯКОМУ РАЗІ. Лише для `'legacy'` (спільний Supabase ЛІГИ — той самий живий канал), порядок такий:
+    1. `DC_TEAMS_FAKE` — локальний JSON замість бази для живих тестів (шов, а не другий шлях: він не пише нікуди, крім свого
+       файла); відповідь — у формі модуля (`mute_state` — список, `mute_set` — `bool`). Звичайний простір із модулем шва НЕ бачить;
+    2. ізольований прогін без шва — `OSError('ізольований конфіг…')`, модуль НЕ кличеться, мережі НЕМАЄ;
+    3. інакше вбудований `supabase-teams` з `notify.legacy_ctx(*supabase_config())`: нема конфігу — `notify-unconfigured`.
+    Звичайний простір: `module_ctx(space, prov)` свого модуля. Виклик — `deai_modules.call(…, timeout=NOTIFY_TIMEOUT)`.
+    ⛔ Відповідь модуля не береться на віру: `mute_state`, що не список, і `mute_set`, що не `bool`, — `notify-error` (не «нічого
+    не замовчано» і не «успіх»: `1` і `True` — різні відповіді). ⛔ Аргументи `mute_set` перевіряє `notify.check_set_args` ДО
+    модуля, і модуль не бачить поганих."""
+    space, prov = resolved if resolved is not None else notify_resolve()
+    if fn == 'mute_set':
+        notify.check_set_args(*args)
+    if prov is None:
+        # Нікого: простір без інтеграцій і без модуля (раніше — `IntegrationsOff`). Маршрут відповідає 409 ще до цього виклику.
+        raise OSError('сповіщень Teams у просторі нема')
+    if prov == 'legacy':
+        fake = os.environ.get('DC_TEAMS_FAKE')
+        if fake:
+            try:
+                with open(fake, encoding='utf-8') as fh:
+                    db = json.load(fh)
+            except (OSError, ValueError):
+                db = {}
+            if fn == 'mute_set':
+                channel, muted, by = args
+                if muted:
+                    db[channel] = {'muted_at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'muted_by': by}
+                else:
+                    db.pop(channel, None)
+                atomic_write_json(fake, db)
+                return muted
+            return notify.normalize_mutes([{'project_id': k, **v} for k, v in sorted(db.items())])
+        # Після шва (він пише лише у свій локальний файл), але ДО будь-якої мережі.
+        if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
+            raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
+        module = notify.legacy_module()
+        ctx = notify.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
+    else:
+        module, ctx = prov, deai_modules.module_ctx(space, prov)
+    res = deai_modules.call(module, fn, ctx, *args, timeout=notify.NOTIFY_TIMEOUT)
+    if fn == 'mute_state':
         try:
-            with open(fake, encoding='utf-8') as fh:
-                db = json.load(fh)
-        except (OSError, ValueError):
-            db = {}
-        if name == 'teams_mute_set':
-            if body['p_muted']:
-                db[body['p_project']] = {'muted_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-                                         'muted_by': body.get('p_by', '')}
-            else:
-                db.pop(body['p_project'], None)
-            atomic_write_json(fake, db)
-            return body['p_muted']
-        return [{'project_id': k, **v} for k, v in sorted(db.items())]
-    # Після шва `DC_TEAMS_FAKE` (він пише лише у свій локальний файл), але ДО будь-якої мережі.
-    # Простір без інтеграцій: `IntegrationsOff` (`OSError`) — викликач, що ловить `OSError`,
-    # деградує чесно, маршрут тиші Teams відповідає 409 ще до цього виклику.
-    spaces.require_integrations()
-    if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
-        raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
-    sb_url, sb_key = supabase_config()
-    if sb_url is None:
-        raise OSError('Supabase не налаштовано')
-    req = urllib.request.Request(
-        f'{sb_url}/rest/v1/rpc/{name}', method='POST',
-        data=json.dumps(body).encode('utf-8'),
-        headers={'apikey': sb_key, 'Authorization': f'Bearer {sb_key}',
-                 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=8, context=_ssl_context()) as res:
-        return json.loads(res.read().decode('utf-8'))
+            return notify.normalize_mutes(res)
+        except ValueError as e:
+            raise deai_modules.ModuleError('notify-error', message=str(e)) from None
+    if type(res) is not bool:
+        raise deai_modules.ModuleError('notify-error', message='notify: mute_set must return a boolean')
+    return res
+
+
+def _notify_route_gate():
+    """Шлюз маршруту `/api/teams-mute`: `(resolved, error)`. `resolved` — `(space, prov)` ролі `notify`; `error` — `ModuleError` збою
+    рішення ролі (свій модуль «на папері»): це НЕ «нікого», маршрут називає причину. Нікого — `resolved[1] is None`."""
+    try:
+        return notify_resolve(), None
+    except deai_modules.ModuleError as e:
+        return None, e
+
+
+def _notify_off_body():
+    return {'ok': False, 'code': 'notify-off', 'error': 'сповіщень Teams у просторі нема'}
 
 
 def mute_signature():
@@ -2440,19 +2478,6 @@ def mute_signature():
     import hashlib
     key = machine_identity()[1].strip().lower()
     return 'k:' + hashlib.sha256(key.encode('utf-8')).hexdigest()[:12] if key else ''
-
-
-def teams_mute_view(channel, rows):
-    """Чи замовчано канал задачі. Тиша каналу покриває його підканали
-    (`<канал>/internal`) — так само рахує `cl_send_teams` у базі."""
-    for r in rows or []:
-        pid = r.get('project_id') or ''
-        if pid and (channel == pid or channel.startswith(pid + '/')):
-            by = r.get('muted_by') or ''
-            return {'channel': channel, 'muted': True, 'muted_by': by,
-                    'mine': bool(by) and by == mute_signature(),
-                    'muted_at': r.get('muted_at'), 'via': pid}
-    return {'channel': channel, 'muted': False}
 
 
 def iter_num(iid):
@@ -5724,16 +5749,20 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(out)
             return
         if self.path == '/api/teams-mute':
-            if not spaces.integrations_on():
-                self._send_json(integrations_off_body(
-                    'сповіщень Teams у просторі без інтеграцій нема'), status=409)
+            resolved, err = _notify_route_gate()
+            if err is None and resolved[1] is None:
+                self._send_json(_notify_off_body(), status=409)
                 return
             tid, task = self._current_task()
             channel = comment_channel(task, tid)
             try:
-                self._send_json(teams_mute_view(channel, teams_rpc('teams_mute_state', {})))
-            except (OSError, ValueError) as e:
+                if err is not None:
+                    raise err
+                self._send_json(notify.mute_view(channel, notify_call('mute_state', resolved=resolved), mute_signature()))
+            except deai_modules.ModuleError as e:
                 # «Не знаю» — це не «увімкнено»: перемикач мусить показати невідомість.
+                self._send_json({'channel': channel, 'error': (e.message or e.code)[:200]})
+            except (OSError, ValueError) as e:
                 self._send_json({'channel': channel, 'error': str(e)[:200]})
             return
         if self.path.split('?')[0] == '/api/tasks':
@@ -6900,13 +6929,14 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _teams_mute(self, payload):
         """Замовчати / увімкнути Teams-сповіщення для КАНАЛУ задачі (проєкт цілком,
-        для всіх, хто його коментує). Підпис «хто» — особа машини."""
+        для всіх, хто його коментує). Підпис «хто» — особа машини. Порядок: Origin → постачальник ролі `notify` (нікого — 409
+        `notify-off`) → `muted` (400) → модуль. ⛔ Аргументи перевіряються ДО виклику модуля: він не бачить поганих."""
         if not _local_origin(self.headers.get('Origin')):
             self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
             return
-        if not spaces.integrations_on():
-            self._send_json(integrations_off_body(
-                'сповіщень Teams у просторі без інтеграцій нема'), status=409)
+        resolved, err = _notify_route_gate()
+        if err is None and resolved[1] is None:
+            self._send_json(_notify_off_body(), status=409)
             return
         muted = payload.get('muted')
         if not isinstance(muted, bool):
@@ -6914,10 +6944,20 @@ class Handler(SimpleHTTPRequestHandler):
             return
         tid, task = self._current_task()
         channel = comment_channel(task, tid)
+        me = mute_signature()
         try:
-            teams_rpc('teams_mute_set', {'p_project': channel, 'p_muted': muted,
-                                         'p_by': mute_signature()})
-            view = teams_mute_view(channel, teams_rpc('teams_mute_state', {}))
+            notify.check_set_args(channel, muted, me)
+        except ValueError as e:
+            self._send_json({'ok': False, 'error': str(e)[:200]}, status=400)
+            return
+        try:
+            if err is not None:
+                raise err
+            notify_call('mute_set', channel, muted, me, resolved=resolved)
+            view = notify.mute_view(channel, notify_call('mute_state', resolved=resolved), me)
+        except deai_modules.ModuleError as e:
+            self._send_json({'ok': False, 'channel': channel, 'error': (e.message or e.code)[:200]}, status=502)
+            return
         except (OSError, ValueError) as e:
             self._send_json({'ok': False, 'channel': channel, 'error': str(e)[:200]}, status=502)
             return
