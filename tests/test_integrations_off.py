@@ -553,8 +553,9 @@ class Points(unittest.TestCase):
         ЛІГА ходить у Supabase ЛІГИ вбудованим `supabase-teams` (через `socket`, а не `urlopen`)."""
         self.enter_unisolated()
         with spaces.request_space('off'):
-            with self.assertRaises(OSError):
+            with self.assertRaises(OSError) as off:
                 serve.notify_call('mute_state')
+        self.assertEqual(str(off.exception), 'сповіщень Teams у просторі нема', 'не ізоляція, а відсутність постачальника')
         self.assertEqual(self.trip.hits, [])
         with spaces.request_space('on'):
             with self.assertRaises(serve.deai_modules.ModuleError) as cm:        # не `OSError` і не «пусто»

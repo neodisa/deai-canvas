@@ -827,6 +827,11 @@ class ServerPath(tm.Env):
         got = [(c['path'], c['body']) for c in rec.calls]
         self.assertEqual(got, [(c['path'], c['body']) for c in real['post_mute']['rpc_calls']])
 
+    def assert_no_secrets(self, text):
+        """Текст помилки для екрана не несе ні ключа, ні адреси Supabase."""
+        for needle in (mb.KEY, mb.URL, 'demo.supabase.example'):
+            self.assertNotIn(needle, str(text))
+
     def test_the_league_route_on_a_network_failure_keeps_the_0_13_0_shape(self):
         """GET — 200 `{channel, error}` (без `muted`), POST — 502 `{ok: false, channel, error}`: форма та сама, текст — модуля."""
         self.real_builtins()
@@ -838,9 +843,11 @@ class ServerPath(tm.Env):
         self.assertEqual((st, sorted(body)), (200, sorted(real['get_network_error']['body'])))
         self.assertEqual(body['channel'], 'dc/t1')
         self.assertTrue(body['error'])
+        self.assert_no_secrets(body['error'])
         st, body = self.post(srv, 't1', {'muted': True})
         self.assertEqual((st, sorted(body)), (502, sorted(real['post_network_error']['body'])))
         self.assertIs(body['ok'], False)
+        self.assert_no_secrets(body['error'])
 
     def test_the_league_route_in_an_isolated_run_never_reaches_the_network(self):
         self.real_builtins()
