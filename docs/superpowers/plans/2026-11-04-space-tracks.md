@@ -93,8 +93,23 @@ c8c3a8b | tar -x -C <тека>` у докстрінгу; охорона fail-clo
   - `route`: справжній сервер у процесі на ефемерному порту (як у `make_before_4c3.py`) з шаром ВИМКНЕНО (`DC_TASKS_FILE` на
     тимчасовий файл ЛІГИ з `design_work_root` у тимчасовій теці й `profile_repos`; `vcs_provider` → `None`):
     `POST /api/task-new` {без `profile`; `profile: 'seo'`; `profile: 5`} → статус, код, запис задачі; `GET /api/tasks` (рядки:
-    `id`, `profile`, `tags`); `GET /api/task?id=…` (поле `profile`).
+    `id`, `profile`, `tags`); `GET /api/task` із заголовком `X-Canvas-Task` (поле `profile`).
 - [ ] **Step 2:** запустити двічі (байт-у-байт), закомітити JSON + генератор + `Before4d1Shape`. Жодних змін у `app/`/`bin/`.
+
+---
+
+### Поправки контролера після Task 1 (04.11.2026) — мають перевагу над текстом Task 2–6
+
+Знімок показав справжню поведінку 0.14.0; спека доповнена §6. Для Task 2–6:
+- `tracks.legacy_tracks(cfg)` повертає `(tracks, default_id, fallback_root)`; `fallback_root` = `design_work_root` →
+  `~/deai-work`; `design_work_roots` не словник → `{}`. `track_root` для ЛІГИ: id з власним коренем → він, інакше
+  `fallback_root` (НЕ корінь дефолтного напрямку).
+- `tracks.of_task(task)` повертає збережений рядок (`track`, інакше `profile`), без звірки з `ID_RE`; не рядок / порожній →
+  `None`. `label_tag` застосовує правила мітки до `_LEGACY_LABELS.get(v, v)` (ЛІГА) / `label` (звичайний).
+- ЛІГА в маршруті: будь-який рядок приймається як є (`'United'` теж); `null`/`''`/нема → `united`; `bad-track` — лише не рядок
+  або конфлікт `track`/`profile`; `unknown-track` — ніколи. Звичайний простір — суворо за `ID_RE` і переліком.
+- `inspector_ds_arg` лишає `strip()` і шаблон як у 0.14.0 (`?ds=zzz` для невідомого напрямку ЛІГИ).
+- `/api/task` — через заголовок `X-Canvas-Task`, не `?id=` (у Task 4 й 6 так само).
 
 ---
 
