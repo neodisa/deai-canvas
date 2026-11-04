@@ -56,6 +56,7 @@ import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import state  # noqa: E402
+import tracks  # noqa: E402
 import inbox  # noqa: E402
 import registry as rg  # noqa: E402
 import roots  # noqa: E402
@@ -2039,7 +2040,7 @@ class TaskNew(Fixture):
 
     def test_the_task_folder_is_under_the_space_path_whatever_the_tasks_file_says(self):
         """Тека задачі — у `path` простору, а не там, куди вказує `design_work_root(s)` файла задач
-        (його міг написати інший інструмент чи людина), і тим паче не в `FALLBACK_WORK_ROOT`
+        (його міг написати інший інструмент чи людина), і тим паче не в `tracks.FALLBACK_ROOT` (був `serve.FALLBACK_WORK_ROOT`)
         (на машині власника це справжня тека United). Фолбек тут — пастка в тимчасовій теці."""
         self.made(os.path.join(self.p_path, 'n9'))
         cfg = _read(self.p_file)
@@ -2048,10 +2049,10 @@ class TaskNew(Fixture):
         _write(self.p_file, cfg)
         trap = os.path.join(self.tmp, 'fallback-trap')
         self.made(trap, os.path.join(self.tmp, 'elsewhere'))
-        with mock.patch.object(serve, 'FALLBACK_WORK_ROOT', trap):
+        with mock.patch.object(tracks, 'FALLBACK_ROOT', trap):
             st, body = self.post('/api/task-new', {'id': 'n9', 'space': self.p_id})
         self.assertEqual((st, body['dir']), (200, os.path.join(self.p_path, 'n9')), body)
-        self.assertFalse(os.path.exists(trap), 'задачу кинуло в FALLBACK_WORK_ROOT')
+        self.assertFalse(os.path.exists(trap), 'задачу кинуло в `tracks.FALLBACK_ROOT`')
         self.assertFalse(os.path.exists(os.path.join(self.tmp, 'elsewhere')))
 
     def test_gitlab_is_refused_without_integrations_and_nothing_is_created(self):

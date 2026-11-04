@@ -772,11 +772,13 @@ class Legacy(Core):
         self.assertEqual(os.listdir(self.systmp), [])
 
     def test_task_new_with_a_vcs_target_beats_the_profile_default(self):
-        """Явний `vcs.repo` перемагає профільний `gitlab` (той, що ставиться за `profile`) — як у `vcs_target`."""
+        """Явний `vcs.repo` перемагає `gitlab` репо напрямку (ЛІГА; раніше — за `profile`) — як у `vcs_target`."""
         self.peer_push({'mockup/nova/index.html': '<h1>з origin</h1>'})
         cfg = self.cfg()
-        r = serve.task_new(cfg, 'nova', title='Нова', profile='united', vcs={'repo': self.origin})
-        self.assertTrue(r['cloned'], 'ціль клону — профільне репо замість явного vcs.repo')
+        r = serve.task_new(cfg, 'nova', title='Нова', track='united', legacy=True, repo='ssh://git@example.com/o/r.git',
+                           vcs={'repo': self.origin})
+        self.assertEqual(cfg['tasks']['nova']['gitlab']['repo'], 'ssh://git@example.com/o/r.git')   # репо напрямку теж записано
+        self.assertTrue(r['cloned'], 'ціль клону — репо напрямку замість явного vcs.repo')
         self.assertEqual(cfg['tasks']['nova']['vcs'], {'repo': self.origin})
         with open(os.path.join(r['dir'], 'iterations', 'it1', 'index.html'), encoding='utf-8') as fh:
             self.assertEqual(fh.read(), '<h1>з origin</h1>')
@@ -787,7 +789,7 @@ class Legacy(Core):
         write(os.path.join(folder, 'index.html'), '<h1>моя тека</h1>')
         self.peer_push({'mockup/nova/index.html': '<h1>з origin</h1>'})
         with mock.patch.object(serve, '_vcs_call', side_effect=AssertionError('отримання з `from`')):
-            r = serve.task_new(self.cfg(), 'nova', title='Нова', profile=None, vcs={'repo': self.origin},
+            r = serve.task_new(self.cfg(), 'nova', title='Нова', vcs={'repo': self.origin},
                                adopt_src=folder, adopt_files=['index.html'])
         self.assertFalse(r['cloned'])
         self.assertEqual(r['adopted']['files'], 1)
@@ -1076,7 +1078,7 @@ class Plain(Core):
     # ---------------------------------------------------------------- нова задача
     def new(self, tid='t2', **kw):
         kw.setdefault('vcs', {'repo': self.origin})
-        return serve.task_new(self.cfg, tid, title='Нова', profile=None, root=self.sp['path'], **kw)
+        return serve.task_new(self.cfg, tid, title='Нова', root=self.sp['path'], **kw)
 
     def test_task_new_takes_the_mockup_from_the_repo(self):
         self.peer_state('<h1>з репо</h1>', 'Ольга Сидорук', 'designer2@example.com', path='mockup/t2')
@@ -1118,7 +1120,7 @@ class Plain(Core):
 
     def test_task_new_without_vcs_never_asks_the_provider(self):
         with mock.patch.object(serve, 'vcs_provider', side_effect=AssertionError('постачальник без vcs')):
-            r = serve.task_new(self.cfg, 't3', title='Нова', profile=None, root=self.sp['path'])
+            r = serve.task_new(self.cfg, 't3', title='Нова', root=self.sp['path'])
         self.assertFalse(r['cloned'])
         self.assertNotIn('vcs', self.cfg['tasks']['t3'])
 
@@ -1133,7 +1135,7 @@ class Plain(Core):
 
     def test_a_gitlab_mapping_is_still_refused_without_integrations(self):
         with self.assertRaises(spaces.IntegrationsOff):
-            serve.task_new(self.cfg, 't4', gitlab={'repo': self.origin, 'path': 'mockup/t4'}, profile=None,
+            serve.task_new(self.cfg, 't4', gitlab={'repo': self.origin, 'path': 'mockup/t4'},
                            root=self.sp['path'])
         self.assertFalse(os.path.exists(os.path.join(self.sp['path'], 't4')))
 

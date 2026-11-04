@@ -711,12 +711,12 @@ class Points(unittest.TestCase):
         with spaces.request_space('off'):
             cfg = serve.load_tasks()
             with self.assertRaises(spaces.IntegrationsOff):
-                serve.task_new(cfg, 'g1', gitlab=gl, profile=None, root=self.off_path)
+                serve.task_new(cfg, 'g1', gitlab=gl, root=self.off_path)
         self.assertEqual(self.trip.hits, [])
         self.assertFalse(os.path.exists(os.path.join(self.off_path, 'g1')), 'тека задачі зʼявилась')
         self.assertEqual(_read(os.path.join(self.off_path, 'tasks.json'))['tasks'], {})
         with spaces.request_space('on'), mock.patch.dict('sys.modules', {'registry': mock.MagicMock()}):
-            serve.task_new(serve.load_tasks(), 'g1', gitlab=gl, profile=None, root=self.on_path)
+            serve.task_new(serve.load_tasks(), 'g1', gitlab=gl, root=self.on_path)
         self.assertEqual(len(self.trip.of('run')), 1)       # `git clone` дзеркала
         self.assertTrue(self.trip.of('run')[0].startswith('git clone'))
 

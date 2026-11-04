@@ -36,6 +36,7 @@ import deai_modules  # вбудовані модулі (етап 2а): хто в
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
 import tracker  # статуси задач у трекері (4c-2): ядро ролі `tracker` (ключі, пакети, нормалізація, адаптер ЛІГИ)
 import notify  # тиша сповіщень Teams (4c-3): ядро ролі `notify` (нормалізація стану, вигляд каналу, адаптер ЛІГИ)
+import tracks  # напрямки простору (4d-1): чисте ядро — правила мітки, адаптер ЛІГИ, читання напрямку задачі
 import install_config  # конфіг установки (4c-1: спільний із ядром дашборда й CLI, без імпорту `serve`)
 from install_config import legacy_tasks_path, load_legacy_tasks  # noqa: F401 — реекспорт: ними користуються `ops/`, `bin/` і тести
 import module_trust  # довіра своїм модулям простору (етап 3c): мова вікна довіри, шов `DEAI_TRUST_CONFIRM`
@@ -100,35 +101,13 @@ _TUNER_LOCK = threading.Lock()
 # між цим переліком і ланцюгом if у do_GET дала перехоплення /shot.
 HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published/')
 
-# Таблиця «профіль → репозиторій макетів» живе не в коді, а в конфігу УСТАНОВКИ (`profile_repos()`, 4b-3).
-# ⛔ Урок колишньої константи: структура в усіх напрямків одна — `mockup/<task-id>`, тому напрямки розходяться
-# лише репозиторієм, а не логікою. Профіль — `[a-z0-9-]{1,32}`, репо — друковний ASCII без пробілів і без `-` на початку
-# (інакше git прочитав би його як опцію).
-_PROFILE_KEY = re.compile(r'[a-z0-9-]{1,32}')
-_REPO_OK = re.compile(r'[\x21-\x2c\x2e-\x7e][\x21-\x7e]*')
-
-
-# Останній рубіж, якщо в tasks.json немає нічого. Історична тека United — саме
-# тому вона й муляє: у ній лежали задачі всіх трьох напрямків.
-FALLBACK_WORK_ROOT = '~/deai-work'
-
 
 def work_root(cfg, profile):
-    """Корінь робочих тек ДЛЯ ЦЬОГО НАПРЯМКУ.
+    """до 4d-4: тонка обгортка над `tracks.legacy_root` для `bin/roots.py` і `bin/registry.py` (вони перейдуть на `tracks`
+    у Task 5; сам сервер користується `track_root`). Уся логіка й ⛔-уроки (три напрямки — три теки; напрямок без власного
+    кореня НЕ вигадується — спільний корінь) — там."""
+    return tracks.legacy_root(cfg, profile)
 
-    Вимога користувача 31.08.2026: три напрямки — три теки і три репозиторії.
-    Репозиторії вже три (`profile_repos()`), а корінь був один на всіх: SEO-задача
-    фізично лежала в теці з назвою United, і назва теки брехала про напрямок.
-
-    Порядок: свій корінь профілю → спільний `design_work_root` → історичний
-    фолбек. Профіль без власного кореня НЕ вигадується: краще чесно покласти в
-    спільний корінь і сказати про це (`bin/roots.py`), ніж створити теку за
-    вигаданим шляхом.
-    """
-    roots = cfg.get('design_work_roots') or {}
-    return os.path.expanduser(roots.get(profile)
-                              or cfg.get('design_work_root')
-                              or FALLBACK_WORK_ROOT)
 
 def supabase_config():
     """Тонка обгортка (`install_config.supabase_config`): ім'я в `serve` лишається точкою підміни для тестів
@@ -137,21 +116,10 @@ def supabase_config():
 
 
 def profile_repos():
-    """Таблиця «профіль → репозиторій макетів» простору ЛІГА з конфігу УСТАНОВКИ (4b-3: константи в коді нема) — корінь
-    старого `tasks.json`, ключ `profile_repos` (той самий файл і той самий читач, що в `supabase_config`). Структура в усіх
-    напрямків одна — `mockup/<task-id>`, тому напрямки розходяться лише репозиторієм, а не логікою (урок колишньої
-    константи `PROFILE_REPOS`). Профіль — `[a-z0-9-]{1,32}`, репо — друковний ASCII без пробілів і без `-` на початку
-    (інакше git прочитав би його як опцію); погані пари відкидаються,
-    файл не читається / ключа нема / не словник — `{}`. Кешу нема: файл маленький. Значень — ні в текстах, ні в журналах."""
-    try:
-        cfg = load_legacy_tasks()
-    except (OSError, ValueError, RecursionError):      # надто глибока вкладеність JSON — не обвал, а «нема конфігу»
-        return {}
-    raw = cfg.get('profile_repos') if isinstance(cfg, dict) else None
-    if not isinstance(raw, dict):
-        return {}
-    return {k: v.strip() for k, v in raw.items()
-            if isinstance(k, str) and _PROFILE_KEY.fullmatch(k) and isinstance(v, str) and _REPO_OK.fullmatch(v.strip())}
+    """до 4d-4: тонка обгортка для `_liga_flow` (ознака потоку ЛІГА в тілі `task-new`) і тестів, що її підміняють: таблиця
+    «напрямок → репозиторій макетів» ЛІГИ з кореня старого `tasks.json` УСТАНОВКИ — `tracks.legacy_repos`. Файл не
+    читається / не JSON / ключа нема — `{}`. Кешу нема: файл маленький. Значень — ні в текстах, ні в журналах."""
+    return tracks.legacy_repos(_legacy_cfg())
 
 
 # Служебное, что НЕ копируется в итерации/публикацию из папки задачи
@@ -1589,27 +1557,17 @@ def _space_id(sp):
     return sp['id'] if sp is not None and spaces.layer_on() else None
 
 
-#: Межі міток задачі (4b-3): не більше `TAGS_MAX` міток, кожна 1…`TAG_MAX_LEN` знаків, без коми (вона — роздільник у формі)
-#: і без керівних знаків.
+#: Межі міток задачі (4b-3): не більше `TAGS_MAX` міток, кожна 1…`tracks.TAG_MAX_LEN` знаків, без коми (вона — роздільник у
+#: формі) і без керівних знаків. Самі правила мітки (`TAG_BAD`, `clean_tag`, `read_tag`) — в `tracks`: ті самі читає
+#: похідна мітка напрямку, а копії розійшлись би.
 TAGS_MAX = 10
-TAG_MAX_LEN = 32
-#: Керівні знаки C0/C1, кома, а також невидимі: нульової ширини (U+200B–U+200F, U+2060–U+2064, U+FEFF) і двоспрямовані керування
-#: (U+202A–U+202E, U+2066–U+2069): мітка з U+202E виглядала б не тим, чим є, а дві «однакові» мітки різнилися б невидимим знаком.
-_TAG_BAD = re.compile('[\\x00-\\x1f\\x7f-\\x9f,\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]')
 #: Дешева відсічка ДО поелементної роботи: список довший за це — `bad-tags` (до `TAGS_MAX` після дедуплікації ще далеко, але
 #: мільйонний список не обходимо).
 TAGS_RAW_MAX = 100
-#: Похідні мітки ЛІГИ: профіль задачі без власних `tags` показується як мітка з цим підписом (адаптер ЛІГИ, як `_LEGACY_*`
-#: 4b-1; йде в 4d). Невідомий профіль — як є.
-_LEGACY_PROFILE_TAGS = {'united': 'United', 'liga360': 'LIGA360', 'seo': 'SEO'}
 
 
 class TagsError(ValueError):
     """Мітки не за правилами (`bad-tags`): не список, елемент не рядок, задовгий, з комою чи керівним знаком, понад `TAGS_MAX`."""
-
-
-def _clean_tag(raw):
-    return ' '.join(raw.split())
 
 
 def normalize_tags(raw):
@@ -1626,13 +1584,13 @@ def normalize_tags(raw):
         # ⛔ Керівні знаки (і `\n`/`\t` усередині) перевіряються ДО стиснення пробілів: `split()` мовчки склеїв би `a\nb` в `a b`,
         # а людина мусить побачити відмову, а не тихо змінену мітку.
         stripped = x.strip()
-        if _TAG_BAD.search(stripped):
-            raise TagsError(f'a tag is 1..{TAG_MAX_LEN} characters without commas or control characters')
-        tag = _clean_tag(stripped)
+        if tracks.TAG_BAD.search(stripped):
+            raise TagsError(f'a tag is 1..{tracks.TAG_MAX_LEN} characters without commas or control characters')
+        tag = tracks.clean_tag(stripped)
         if not tag:
             continue
-        if len(tag) > TAG_MAX_LEN:
-            raise TagsError(f'a tag is 1..{TAG_MAX_LEN} characters without commas or control characters')
+        if len(tag) > tracks.TAG_MAX_LEN:
+            raise TagsError(f'a tag is 1..{tracks.TAG_MAX_LEN} characters without commas or control characters')
         if tag.casefold() not in seen:
             seen.add(tag.casefold())
             out.append(tag)
@@ -1641,35 +1599,173 @@ def normalize_tags(raw):
     return out
 
 
-def _read_tag(raw):
-    """Одна мітка з файла чи профілю для ЧИТАННЯ: очищена або `None` (не рядок, порожня, задовга, з комою чи керівним знаком —
-    ті самі правила, що в `normalize_tags`, але без винятків: читання не кидає)."""
-    if not isinstance(raw, str) or _TAG_BAD.search(raw.strip()):
-        return None
-    tag = _clean_tag(raw)
-    return tag if tag and len(tag) <= TAG_MAX_LEN else None
-
-
-def task_tags(task):
+def task_tags(task, sp=None):
     """Мітки задачі для екрана й API. Є ключ `tags` — лише вони (навіть `[]`: людина свідомо прибрала всі); зіпсовані елементи
     (руками вписаний файл) тихо відкидаються — читання не кидає, і на `TAGS_MAX` скан зупиняється. Ключа нема — похідна мітка
-    ЛІГИ з профілю (`_LEGACY_PROFILE_TAGS`, невідомий профіль — як є) або `[]`. ⛔ Похідна проходить ТІ САМІ правила, що збережені
-    мітки (`_read_tag`): діалог правки заповнюється поточними мітками, і профіль із комою чи на 300 знаків після збереження
-    розпався б або не пройшов `bad-tags`; такий профіль — без похідної мітки."""
+    напрямку задачі (`tracks.label_tag`: `label` напрямку простору, невідомий напрямок — як є; у ЛІГИ через адаптер — її підписи)
+    або `[]`. `sp` — простір задачі (запис реєстру); без нього — простір запиту. ⛔ Похідна проходить ТІ САМІ правила, що
+    збережені мітки (`tracks.read_tag`): діалог правки заповнюється поточними мітками, і напрямок із комою чи на 300 знаків
+    після збереження розпався б або не пройшов `bad-tags`; такий напрямок — без похідної мітки."""
     if isinstance(task, dict) and 'tags' in task:
         raw = task['tags']
         out, seen = [], set()
         for x in raw if isinstance(raw, list) else []:
-            tag = _read_tag(x)
+            tag = tracks.read_tag(x)
             if tag and tag.casefold() not in seen:
                 seen.add(tag.casefold())
                 out.append(tag)
                 if len(out) >= TAGS_MAX:
                     break
         return out
-    p = task.get('profile') if isinstance(task, dict) else None
-    tag = _read_tag(_LEGACY_PROFILE_TAGS.get(p, p) if isinstance(p, str) else None)
+    if tracks.of_task(task) is None:
+        return []
+    sp = sp if sp is not None else _request_space()
+    adapter = _uses_adapter(sp)
+    tag = tracks.label_tag([] if adapter or sp is None else _track_view(sp)[0], task, legacy=adapter)
     return [tag] if tag else []
+
+
+# ---------- Напрямки простору (4d-1): звідки беруться, тека, репо, ДС ----------
+#
+# Спека 2026-11-04-space-tracks-design.md §2–§4, §6. Ядро (`tracks`) чисте й про простори не знає; тут — що з кожного простору
+# беруться напрямки: звичайний простір — масив `tracks` у його `space.json`; простір ЛІГИ (`integrations`) і шар вимкнено —
+# неявний адаптер із кореня старого `tasks.json`, ДОКИ в `space.json` нема власного списку `tracks` (так 4d-3 перемкне ЛІГУ
+# записом у `space.json`, без коду). ⛔ Адаптер дзеркалить 0.14.0 байт-у-байт, тож для нього значення напрямку — вільний
+# рядок (не обовʼязково з переліку), і тека/репо/ДС беруться не через `tracks.find`, а прямими функціями адаптера.
+
+def _request_space():
+    """Простір запиту (запис реєстру; шар вимкнено — неявний) або `None`. Не кидає: читач міток не має права обвалити відповідь."""
+    try:
+        return spaces.active_space()
+    except (spaces.SpacesError, OSError):
+        return None
+
+
+def _legacy_cfg():
+    """Корінь старого `tasks.json` УСТАНОВКИ для адаптера ЛІГИ; файла нема / не читається / не JSON — `{}` (адаптер читає
+    порожній конфіг як «нічого не задано»). Надто глибока вкладеність JSON — теж не обвал."""
+    try:
+        return load_legacy_tasks()
+    except (OSError, ValueError, RecursionError):
+        return {}
+
+
+def _own_tracks(sp):
+    """`(tracks, default_track)` — СИРІ значення з `space.json` простору, коли в ньому є ключ `tracks`-СПИСОК; інакше `None`
+    (простору чи теки нема, файл не читається чи не обʼєкт, ключа нема чи він не список)."""
+    path = sp.get('path') if isinstance(sp, dict) else None
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        data = spaces._read_json(os.path.join(path, 'space.json'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get('tracks'), list):
+        return None
+    return data['tracks'], data.get('default_track')
+
+
+def _liga_like(sp):
+    """Простір ЛІГИ: з прапорцем `integrations` або неявний (шар вимкнено)."""
+    return sp is not None and (not spaces.layer_on() or spaces.integrations_for(sp))
+
+
+def _uses_adapter(sp):
+    """Напрямки цього простору дає неявний адаптер ЛІГИ: простір ЛІГИ (чи шар вимкнено), у чиєму `space.json` нема списку
+    `tracks`."""
+    return _liga_like(sp) and _own_tracks(sp) is None
+
+
+def _drop_foreign_roots(sp, items):
+    """`root: None` для кореня, що збігається зі шляхом ІНШОГО простору реєстру чи лежить у ньому (і навпаки: чужий простір
+    усередині кореня) — перевірка `spaces.check_new_path` над реєстром БЕЗ власного запису простору: корінь усередині власного
+    простору дозволений. ⛔ `tracks.normalize` перевіряє `root` з ПОРОЖНІМ реєстром (він чистий і реєстру не бачить), тож
+    перетин з чужим простором ловиться лише тут: задачі напрямку лягали б у чужий простір і зʼявлялись у його «Задачах».
+    Реєстр не прочитати — корені не перевірити, тож їх нема (закрито, а не пропущено)."""
+    try:
+        others = {'spaces': [e for e in spaces.read_registry()['spaces'] if e.get('id') != sp.get('id')]}
+    except spaces.SpacesError:
+        others = None
+    out = []
+    for t in items:
+        if t['root'] is not None:
+            try:
+                ok, why = spaces.check_new_path(t['root'], others, []) if others is not None else (None, 'registry')
+            except (OSError, ValueError):
+                ok, why = None, 'fs'
+            if why is not None:
+                t = {**t, 'root': None}
+        out.append(t)
+    return out
+
+
+def _track_view(sp):
+    """`(tracks, default_id, adapter)` простору: `adapter` — напрямки дав неявний адаптер ЛІГИ. Не кидає (як і `tracks.normalize`)."""
+    if sp is None:
+        return [], None, False
+    own = _own_tracks(sp)
+    if own is None:
+        if _liga_like(sp):
+            items, default, _fallback = tracks.legacy_tracks(_legacy_cfg())
+            return items, default, True
+        return [], None, False
+    items = _drop_foreign_roots(sp, tracks.normalize(own[0], sp.get('path')))
+    return items, tracks.default_id(items, own[1]), False
+
+
+def space_tracks(sp):
+    """Напрямки простору `sp` (запис реєстру) → `(tracks, default_id)`; див. блок вище. Звичайний простір без `tracks`, із
+    битим `space.json` чи `sp=None` — `([], None)`."""
+    items, default, _adapter = _track_view(sp)
+    return items, default
+
+
+def track_root(sp, cfg, track_id):
+    """Тека, у якій лягає тека НОВОЇ задачі напрямку `track_id` у просторі `sp`; `cfg` — файл задач (корінь старого
+    `tasks.json` для ЛІГИ).
+
+    ЛІГА через адаптер — ЛИШЕ `tracks.legacy_root(cfg, track_id)` (спека §6.1): будь-який рядок як є (й «не той регістр»), невідомий —
+    спільний корінь. ⛔ НЕ через `tracks.find`: адаптер перелічує лише id за шаблоном, а 0.14.0 шанував власний корінь будь-якого
+    ключа. Інші простори: знайдений напрямок → його `root`; невідомий → `root` дефолтного; `root` нема → шлях простору;
+    напрямків нема → шлях простору (звичайний) / спільний корінь ЛІГИ."""
+    if sp is None or _uses_adapter(sp):
+        return tracks.legacy_root(cfg, track_id)
+    items, default, _adapter = _track_view(sp)
+    t = tracks.find(items, track_id) or tracks.find(items, default)
+    if t is not None:
+        return t['root'] or sp['path']
+    return tracks.legacy_root(cfg, None) if _liga_like(sp) else sp['path']
+
+
+def track_repo(sp, track_id):
+    """Типовий репозиторій макетів напрямку `track_id` або `''`. Невідомий напрямок репо НЕ бере з дефолтного (маршрут його
+    відмовить раніше). ЛІГА через адаптер — `profile_repos()` (ключ за `ID_RE`, як у 0.14.0)."""
+    if not isinstance(track_id, str) or sp is None:
+        return ''
+    if _uses_adapter(sp):
+        return profile_repos().get(track_id, '')           # одне джерело з `_liga_flow` (і з тестами, що його підміняють)
+    t = tracks.find(_track_view(sp)[0], track_id)
+    return t['repo'] if t else ''
+
+
+def task_ds(task, sp=None):
+    """Значення `?ds=` для інспектора в розмітці макета задачі: `ds` напрямку задачі (`tracks.of_task`: `track`, інакше
+    `profile`) у просторі `sp` (без нього — простір запиту) або `''`. ЛІГА через адаптер — саме значення (`ds = id` адаптера,
+    але й невідомий напрямок дає `?ds=zzz`, як 0.14.0; шаблон `[a-z0-9-]{1,32}` і `strip()` перевіряє `inspector_ds_arg`). Інший
+    простір: знайдений напрямок говорить сам — його поле `ds` (`''` — статичної ДС нема, і це відповідь, а не відсутність);
+    напрямок не знайдено (простір без напрямків, збережений `profile` чи невідомий id) — саме значення, як 0.14.0 (еталон
+    `page-none-project.html` тримає `?ds=tool&sp=…` для задачі звичайного простору): невідома ДС вимикає звірку в інспекторі.
+    Не рядок (`5`) — `''` (0.14.0 рвав зʼєднання: свідома відмінність)."""
+    v = tracks.of_task(task)
+    if v is None:
+        return ''
+    sp = sp if sp is not None else _request_space()
+    if sp is None:
+        return ''
+    if _uses_adapter(sp):
+        return v
+    t = tracks.find(_track_view(sp)[0], v)
+    return t['ds'] if t else v
 
 
 def _task_rows(cfg):
@@ -1678,10 +1774,11 @@ def _task_rows(cfg):
     `missing` — теки задачі нема на ЦІЙ машині (реєстр їде в git, теки ні): перемикач не
     пускає в таку задачу й каже причину наперед. Лише `isdir`, без читання вмісту —
     відповідь лишається дешевою."""
+    sp = _request_space()                     # один раз на відповідь, а не на кожен рядок
     return [{'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
              'profile': v.get('profile'),
              'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir'])),
-             'tags': task_tags(v)}
+             'tags': task_tags(v, sp)}
             for k, v in tasks_by_recent(cfg)]
 
 
@@ -2032,6 +2129,7 @@ def tasks_overview(cfg, team, now=None, rows_at=None, tracker=None):
     by_id = {r['id']: r for r in rows
              if isinstance(r, dict) and isinstance(r.get('id'), str)}
     mine, local = [], {}
+    sp = _request_space()                     # простір запиту — один раз на відповідь (мітки)
     for tid, task in tasks_by_recent(cfg):
         st = task_state(task)
         found = task_thumb_path(task) if NAME_RE.fullmatch(tid) else None
@@ -2050,7 +2148,7 @@ def tasks_overview(cfg, team, now=None, rows_at=None, tracker=None):
             'jiraStatus': trk['name'] if trk else (row.get('jira_status') if row else None),
             'jiraCat': trk['cat'] if trk else (row.get('jira_status_cat') if row else None),
             'comments': (row.get('open_comments') or 0) if row else None,
-            'tags': task_tags(task),
+            'tags': task_tags(task, sp),
         })
     tasks = cfg.get('tasks', {})
     team_out = []
@@ -2175,14 +2273,20 @@ class TaskRefused(ValueError):
         self.code = code
 
 
-def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=None, root=None, adopt_src=None,
-             adopt_files=(), tags=None):
+def task_new(cfg, tid, title='', jira='', track=None, gitlab=None, vcs=None, root=None, adopt_src=None,
+             adopt_files=(), tags=None, repo=None, legacy=False):
     """Бутстрап задачи: папка в design-work (или клон макета з репо) + запись в tasks.json.
     Идемпотентность обеспечивает вызывающий (проверка на существование).
 
-    `root` — теку, у якій лягає тека задачі, задає ВИКЛИКАЧ (простір без інтеграцій: `path`
-    простору); без нього — `work_root(cfg, profile)`, як було. `profile` може бути `None`
-    (простір без інтеграцій: ніякого United-ДС в інспекторі й ніякого репо профілю).
+    `track` (4d-1) — напрямок задачі (id напрямку простору; ЛІГА — вільний рядок, як був профіль): лягає в запис ключем
+    `track`, коли він є (`None` — не пишеться). `root` — теку, у якій лягає тека задачі, і `repo` — типовий репозиторій
+    макетів напрямку дає ВИКЛИКАЧ (маршрут: `track_root`/`track_repo`; простір без інтеграцій без напрямків: `path`
+    простору й без репо); без `root` — `tracks.legacy_root(cfg, track)` (корінь ЛІГИ, як був `work_root`). Дефолт
+    напрямку ставить маршрут, не ця функція: прямий виклик без `track` лишає `None`. `legacy` — задача простору ЛІГИ:
+    ⛔ запис несе й `profile` з тим самим значенням, що `track` (машини колег на 0.14.0 читають `profile` зі спільного
+    реєстру: без нього їхня тека, репо й мітка зламались би; до 4d-4), а `repo` напрямку стає `gitlab`-маппінгом
+    `mockup/<id>`; не-ЛІГА пише `profile: null` (формат запису звичайного простору не міняється), а `repo` стає
+    `vcs: {repo}` — лише коли в просторі є постачальник ролі `vcs` і явного `vcs` (чи `gitlab`) нема.
 
     `fullmatch`, а не `match`: `$` в `NAME_RE` пускав id із хвостовим переводом рядка, і
     тека задачі діставала його в назві. Не-рядок (`5`, `null`) — теж «поганий id», а не
@@ -2204,20 +2308,20 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=Non
     маршрут: 500 `task-create-failed`, повтор не впирається в `task-dir-exists`).
 
     `tags` (4b-3) — уже нормалізований список міток (`normalize_tags` робить маршрут): у запис задачі лягає лише НЕпорожній
-    (без ключа — похідна мітка ЛІГИ з `profile`, див. `task_tags`).
+    (без ключа — похідна мітка напрямку задачі, див. `task_tags`).
     """
     if not isinstance(tid, str) or not NAME_RE.fullmatch(tid):
         raise TaskRefused('bad-task-id', 'bad task id')
     if tid in cfg.get('tasks', {}):
         raise TaskRefused('task-exists', 'task already exists')
-    tdir = os.path.join(root or work_root(cfg, profile), tid)
+    tdir = os.path.join(root or tracks.legacy_root(cfg, track), tid)
     if adopt_src is not None:
         try:
             os.makedirs(tdir)                  # БЕЗ `exist_ok`: теку займає рівно один запит
         except FileExistsError:
             raise TaskRefused('task-dir-exists', 'the task folder already exists in the space') from None
     try:
-        cloned, adopted = _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src, adopt_files)
+        cloned, adopted = _task_new_write(cfg, tid, title, jira, track, gitlab, vcs, tdir, adopt_src, adopt_files, repo, legacy)
         if tags:
             cfg['tasks'][tid]['tags'] = list(tags)
         cfg['current'] = tid
@@ -2237,7 +2341,7 @@ def task_new(cfg, tid, title='', jira='', profile='united', gitlab=None, vcs=Non
     return out
 
 
-def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src, adopt_files):
+def _task_new_write(cfg, tid, title, jira, track, gitlab, vcs, tdir, adopt_src, adopt_files, repo, liga):
     """Тіло `task_new` до запису задачі в `cfg` включно (макет першої ітерації, `iterations.json`, `cfg['tasks'][tid]`):
     `(cloned, adopted)`, де `adopted` — `(файлів, байтів, пропущено)` від `adopt_copy` або `None`. Окремою функцією,
     щоб `task_new` могла прибрати зайняту теку при БУДЬ-ЯКОМУ збої тут і в `save_tasks`, але не після запису реєстру.
@@ -2245,10 +2349,20 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src
     ⛔ `adopt_src`/`adopt_files` — лише з параметрів: гілка отримання нижче має власні локальні (`tmp`, `got`, `target`, `r`) і
     цих імен не торкається."""
     it1 = os.path.join(tdir, 'iterations', 'it1')   # первая итерация = стартовый макет
-    # gitlab-маппинг по умолчанию — репо направления (см. `profile_repos()`); профіль поза таблицею — без типового репо
-    repos = profile_repos()
-    if gitlab is None and profile in repos:
-        gitlab = {'repo': repos[profile], 'path': f'mockup/{tid}'}
+    # Типовий репо напрямку (його дає маршрут: `track_repo`). ЛІГА: `gitlab`-маппінг `mockup/<id>`; напрямок без репо —
+    # без нього. ⛔ Структура в усіх напрямків одна, тому напрямки розходяться лише репозиторієм, а не логікою.
+    if liga:
+        if gitlab is None and repo:
+            gitlab = {'repo': repo, 'path': f'mockup/{tid}'}
+    elif repo and vcs is None and gitlab is None:
+        # Звичайний простір: репо напрямку стає `vcs` задачі, але лише коли роль `vcs` справді є (без постачальника — мовчки
+        # не застосовується, як і завжди для репо без ролі). Відмова постачальника (`VcsError`) — теж «нема».
+        try:
+            has_role = vcs_provider() is not None
+        except VcsError:
+            has_role = False
+        if has_role:
+            vcs = {'repo': repo}
     cloned = False
     cloned_state = {}
     legacy = True        # чий текст даних у примітці форку: типово ЛІГА (`v[2]`), поки постачальника не знайдено
@@ -2265,7 +2379,7 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src
             v = vcs_provider()
             if v is not None:
                 legacy = v[2]
-                # Явний `vcs.repo` перемагає профільний `gitlab` (той, що ставиться за `profile`) — як у `vcs_target`.
+                # Явний `vcs.repo` перемагає `gitlab` репо напрямку (ЛІГА) — як у `vcs_target`.
                 target = vcs_target(cfg, tid, {'vcs': vcs} if vcs else {'gitlab': gitlab}, v[1].get('settings') or {})
                 if target:
                     got = os.path.join(tmp, 'm')
@@ -2336,7 +2450,9 @@ def _task_new_write(cfg, tid, title, jira, profile, gitlab, vcs, tdir, adopt_src
     with open(os.path.join(tdir, 'iterations.json'), 'w', encoding='utf-8') as f:
         json.dump({'iterations': its, 'publish_url': None},
                   f, ensure_ascii=False, indent=2)
-    entry = {'dir': tdir, 'title': title or tid, 'jira': jira, 'profile': profile}
+    entry = {'dir': tdir, 'title': title or tid, 'jira': jira, 'profile': track if liga else None}
+    if track is not None:
+        entry['track'] = track
     if gitlab:
         entry['gitlab'] = gitlab
     if vcs:
@@ -2570,23 +2686,24 @@ def comment_channel(task, tid, internal=False):
 # Чому БЕЗ `onerror="window.__clDown(…)"`: той банер каже «Коментарі
 # недоступні». Інспектор до коментарів не має стосунку — його падіння збрехало б
 # дизайнеру про справні коментарі, і причину він шукав би в Supabase.
-# `?ds=<напрямок>` — єдиний спосіб, яким документ макета дізнається про
-# напрямок задачі (`profile` у tasks.json): сам він про задачу не знає нічого,
-# а ДС вибирається саме за напрямком (`united`/`liga360`; у `seo` ДС немає, і
-# інспектор має сказати це словами, а не мовчки звіряти з чужою). Чому
+# `?ds=<ДС напрямку>` — єдиний спосіб, яким документ макета дізнається про
+# напрямок задачі (`track` у tasks.json, до 4d-4 ще й `profile`): сам він про задачу
+# не знає нічого, а статична ДС вибирається саме за напрямком (вендорний інспектор
+# знає свої ДС за назвою; напрямок без ДС — інспектор мусить сказати це словами,
+# а не мовчки звіряти з чужою). Назву дає `task_ds`. Чому
 # параметром URL, а не зайвим тегом чи глобальною змінною — у `inspector.js`,
 # там же й виміряна причина (порядок тегів у сніпеті несучий).
 INSPECTOR_TAG = '\n<script type="module" src="{assets}/inspector.js{ds}"></script>'
 
 
-def inspector_ds_arg(profile, sp=None):
-    """Хвіст URL інспектора: `?ds=united`, `?ds=united&sp=design-1`, `?sp=design-1` або порожньо.
+def inspector_ds_arg(ds, sp=None):
+    """Хвіст URL інспектора: `?ds=<ДС>`, `?ds=<ДС>&sp=design-1`, `?sp=design-1` або порожньо.
 
-    `?ds=` — ЗАВЖДИ першим (старі розмітки, тести й розбір у `inspector.js` на це спираються); `sp`
-    дописується до нього через `&`, а коли напрямку нема — відкриває рядок запиту сам.
-    Порожньо — і коли напрямку немає, і коли він не схожий на напрямок: у параметр URL, що їде в
-    розмітку, не сміє потрапити нічого, крім простого імені, а невідомий напрямок і так ВИМИКАЄ
-    звірку з ДС (краще не звіряти, ніж звіряти з вигаданою).
+    `ds` — вже ДС напрямку задачі (`task_ds`), не сам напрямок. `?ds=` — ЗАВЖДИ першим (старі розмітки, тести й розбір у
+    `inspector.js` на це спираються); `sp` дописується до нього через `&`, а коли ДС нема — відкриває рядок запиту сам.
+    Порожньо — і коли ДС немає, і коли вона не схожа на імʼя: у параметр URL, що їде в
+    розмітку, не сміє потрапити нічого, крім простого імені, а невідома ДС і так ВИМИКАЄ
+    звірку (краще не звіряти, ніж звіряти з вигаданою).
 
     `sp` — простір СТОРІНКИ (запис реєстру, `spaces.active_space()`; етап 2а, Task 7): документ
     макета про простір не знає нічого, а інспектор мусить спитати `/api/ds-tokens?space=<id>`, тож
@@ -2597,11 +2714,11 @@ def inspector_ds_arg(profile, sp=None):
     розмітка не повинна триматись на тому, що хтось колись не забув перевірити.
 
     ⛔ ПУБЛІКАЦІЯ сюди не доходить і не мусить: `build_preview` кличе `inject_module_comment_layer` без
-    `inspector`, `profile` і `space` — опублікована сторінка (Vercel, тека) до `/api/ds-tokens` не
-    дістанеться. Збірка ЛІГА від цього не міняється: опубліковані сторінки, обгортка й `comment-layer/`
+    `inspector`, `profile` (назва аргумента лишилась від 0.14.0 — це `ds`) і `space` — опублікована сторінка (Vercel, тека) до
+    `/api/ds-tokens` не дістанеться. Збірка ЛІГА від цього не міняється: опубліковані сторінки, обгортка й `comment-layer/`
     байт-у-байт такі, як були; `shell/i18n.js` міняється лише новими ключами словника."""
-    p = (profile or '').strip()
-    out = f'?ds={p}' if re.fullmatch(r'[a-z0-9-]{1,32}', p) else ''
+    p = (ds or '').strip()
+    out = f'?ds={p}' if tracks.ID_RE.fullmatch(p) else ''
     d = spaces.describe(sp)
     if d is not None and spaces.SPACE_ID_RE.fullmatch(str(d['id'])):
         out += ('&' if out else '?') + f'sp={d["id"]}'
@@ -3663,7 +3780,7 @@ def copy_iteration_shared(task, it_id, dst_dir, tree=None):
     Цикл у `_publish` копіює лише теки сторінок, а `assets/`, `icons/`, `fonts/`
     лежать у КОРЕНІ ітерації і їхали тільки як побічний ефект сторінки з
     `rel == ''` (неявна `main`). Прибрав кореневу сторінку — і кожна сторінка
-    почала тягнути `../assets/united.css` у 404: превʼю відкривалось білим, а
+    почала тягнути `../assets/<тема>.css` у 404: превʼю відкривалось білим, а
     виглядало як «немає макетів» (LIGA-7010, 31.08.2026).
 
     Теки сторінок свідомо ВИКЛЮЧЕНІ — і опубліковані, і зняті з превʼю: перші
@@ -5707,7 +5824,7 @@ class Handler(SimpleHTTPRequestHandler):
             out = {'id': tid, 'title': task.get('title', tid),
                    'jira': task.get('jira'),
                    'profile': task.get('profile'),
-                   'tags': task_tags(task),
+                   'tags': task_tags(task, sp),
                    # Простір задачі (`describe`: id, name, color, path, legacy,
                    # integrations + `capabilities`; `null` — шар вимкнено) і канал коментарів. Канал
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
@@ -5997,14 +6114,14 @@ class Handler(SimpleHTTPRequestHandler):
                 # тихо нічого не робила (виміряно в браузері).
                 html = inject_module_comment_layer(
                     html, f'{origin}/app/vendor', module_client_urls(mod, page_space), module_cfg, version=ver,
-                    inspector=True, audiences=team, profile=task.get('profile') or '', space=page_space)
+                    inspector=True, audiences=team, profile=task_ds(task, page_space), space=page_space)
             else:
                 # режим «Локальні · мені» (дефолт): фідбек Claude у локальний файл, НЕ Supabase
                 local_key = f'{tid}/local' + ('' if page.get('id') == 'main' else f'/{page["id"]}')
                 html = inject_local_comment_layer(
                     html, f'{origin}/api/local-comments', local_key,
                     f'{origin}/app/vendor', version=ver, audiences=team,
-                    profile=task.get('profile') or '', space=page_space)
+                    profile=task_ds(task, page_space), space=page_space)
                 if notice:
                     html = inject_comment_notice(html, f'командні коментарі не піднялись ({notice}), показано локальні')
         body = html.encode('utf-8')
@@ -7538,7 +7655,7 @@ class Handler(SimpleHTTPRequestHandler):
         тож ПЕРЕД створенням усі файли просторів мусять читатись (`unreadable_task_files`) — інакше
         503 `space-unavailable` із назвою файла, а не дубль через простори.
         Простір без інтеграцій: `gitlab` у тілі — 400, `profile` — `null`, тека задачі — у `path`
-        простору (ніколи `FALLBACK_WORK_ROOT`). Успіх робить цільовий простір поточним —
+        простору (ніколи спільний корінь ЛІГИ). Успіх робить цільовий простір поточним —
         як `task_new` уже робить поточною саму задачу; коли реєстр у цю мить не записати, задача
         вже СТВОРЕНА, тож відповідь 200 з `space_switched: false`, а не 503, що збрехав би.
 
@@ -7635,22 +7752,27 @@ class Handler(SimpleHTTPRequestHandler):
             adopt = self._adopt_source(sp, tid, payload.get('from'), payload)
             if adopt is None:
                 return
-        if spaces.integrations_for(sp):
-            profile, root = profile or 'united', None
-        elif payload.get('gitlab'):
+        liga = spaces.integrations_for(sp)
+        if not liga and payload.get('gitlab'):
             self._space_error(400, 'gitlab-needs-integrations',
                               'gitlab mapping is not available in a space without integrations')
             return
-        else:
-            profile, root = None, sp['path']
         cfg = load_tasks()                     # ПІСЛЯ фіксації простору: файл ЦІЛЬОВОГО простору
+        if liga:
+            # ЛІГА: напрямок — `profile` тіла, без нього (чи `null`/`''`) — дефолтний напрямок простору (адаптер: той самий,
+            # що був `profile or <напрямок за замовчуванням>`); теку й типове репо дає напрямок. Звичайні простори поки
+            # без вибору напрямку (поле `track` маршрут отримає в Task 4): шлях простору, без репо.
+            track = profile or space_tracks(sp)[1]
+            root, repo = track_root(sp, cfg, track), track_repo(sp, track)
+        else:
+            track, root, repo = None, sp['path'], None
         try:
             r = task_new(cfg, tid,
                          title=str(payload.get('title', ''))[:200],
                          jira=str(payload.get('jira', ''))[:40],
-                         profile=profile, gitlab=payload.get('gitlab'), vcs=vcs, root=root,
+                         track=track, gitlab=payload.get('gitlab'), vcs=vcs, root=root,
                          adopt_src=adopt.real if adopt else None, adopt_files=adopt.files if adopt else (),
-                         tags=tags)
+                         tags=tags, repo=repo, legacy=liga)
         except TaskRefused as e:
             # `task-dir-exists` — гонка з `from`: теку встигли зайняти між перевіркою й записом (див. `task_new`)
             self._space_error(409 if e.code == 'task-dir-exists' else 400, e.code, str(e))
@@ -8459,7 +8581,7 @@ def make_server(port=0):
             # ВАЛІДАТОР. Без нього `Cache-Control: no-cache` (його дописує
             # `end_headers`) означає «тягни заново ЩОРАЗУ»: кожне відкриття
             # макета перекачувало кожен шрифт і кожну іконку з кодом 200. Для
-            # United це переверстка тексту рівно у вікні анімації входу — «весь
+            # Для макетів ЛІГИ це переверстка тексту рівно у вікні анімації входу — «весь
             # інтерфейс трохи дьоргається» на першому вході, і в того, у кого
             # шрифти теплі, не відтворюється взагалі: дефект виглядає як баг
             # макета, хоч це кеш сервера.

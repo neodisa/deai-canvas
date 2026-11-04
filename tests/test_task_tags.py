@@ -28,6 +28,7 @@ from test_spaces_serve import Fixture, _bytes, _md5, _read, _write  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
+import tracks  # noqa: E402
 
 _REAL = None
 
@@ -70,7 +71,7 @@ class NormalizeTags(unittest.TestCase):
                          'сусідні кодові точки (U+2065 не призначено, U+2010 дефіс) не зачеплено')
 
     def test_a_huge_list_is_refused_before_any_per_item_work(self):
-        with mock.patch.object(serve, '_clean_tag') as clean:
+        with mock.patch.object(tracks, 'clean_tag') as clean:
             with self.assertRaises(serve.TagsError):
                 serve.normalize_tags([''] * (serve.TAGS_RAW_MAX + 1))
         clean.assert_not_called()
@@ -95,6 +96,16 @@ class NormalizeTags(unittest.TestCase):
 
 
 class TaskTags(unittest.TestCase):
+    def setUp(self):
+        """⛔ `task_tags` без `sp` питає простір запиту (4d-1: похідна мітка залежить від напрямків простору), а при ввімкненому
+        шарі це читання справжнього реєстру машини. Шар вимкнено: лише `DC_TASKS_FILE`, без `DEAI_HOME` — простір неявний
+        (ЛІГА), реєстр не читається й не пишеться."""
+        p = mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(tempfile.gettempdir(), 'deai-no-such-tasks.json')})
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop('DEAI_HOME', None)
+        spaces.clear_request_space()
+
     def test_explicit_tags_win(self):
         self.assertEqual(serve.task_tags({'tags': ['x']}), ['x'])
 
@@ -139,8 +150,8 @@ class TaskTags(unittest.TestCase):
         self.assertEqual(serve.task_tags({'tags': ['ok', 5, 'a,b', 'OK', '  ', 'x' * 33]}), ['ok'])
 
     def test_reading_stops_scanning_at_the_limit(self):
-        """Після `TAGS_MAX` мітки не розбираються далі (файл руками набитий тисячами): лічильник викликів `_read_tag`."""
-        with mock.patch.object(serve, '_read_tag', wraps=serve._read_tag) as rt:
+        """Після `TAGS_MAX` мітки не розбираються далі (файл руками набитий тисячами): лічильник викликів `tracks.read_tag`."""
+        with mock.patch.object(tracks, 'read_tag', wraps=tracks.read_tag) as rt:
             out = serve.task_tags({'tags': [f't{i}' for i in range(500)]})
         self.assertEqual(len(out), serve.TAGS_MAX)
         self.assertEqual(rt.call_count, serve.TAGS_MAX)
@@ -451,7 +462,8 @@ class ProfileReposTest(unittest.TestCase):
         with mock.patch.object(serve, 'vcs_provider', return_value=None), \
                 mock.patch.object(spaces, 'require_integrations', lambda: None):
             serve._task_new_write(cfg, 't-demo', 'T', '', profile, None, None,
-                                  os.path.join(self.tmp.name, 'task-' + profile), None, None)
+                                  os.path.join(self.tmp.name, 'task-' + profile), None, None,
+                                  serve.track_repo(dict(spaces.IMPLICIT), profile), True)
         return cfg['tasks']['t-demo'].get('gitlab')
 
     def test_config_reproduces_the_snapshot_of_the_old_constant(self):

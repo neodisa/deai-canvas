@@ -11,7 +11,7 @@
   понад усе: усе, що колись робили `serve.work_root`, `serve.profile_repos` і похідна мітка `task_tags`, має
   відтворюватися тут байт-у-байт (знімок `tests/fixtures/tracks/before-4d1.json`).
 
-Канонічні тут (Task 3 перемикає `serve` на них, а свої копії прибирає): правила мітки (`TAG_BAD`, `TAG_MAX_LEN`,
+Канонічні тут (`serve` користується ними й власних копій не має): правила мітки (`TAG_BAD`, `TAG_MAX_LEN`,
 `clean_tag`, `read_tag` — раніше `serve._TAG_BAD`/`_clean_tag`/`_read_tag`), `ID_RE` (раніше `serve._PROFILE_KEY`),
 `REPO_OK`/`repo_ok` (раніше `serve._REPO_OK`), `legacy_root` (раніше `serve.work_root`), `legacy_repos` (раніше
 `serve.profile_repos` без читання файла), `FALLBACK_ROOT` (раніше `serve.FALLBACK_WORK_ROOT`).
