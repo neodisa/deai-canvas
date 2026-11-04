@@ -1,0 +1,5 @@
+{"api": 1, "id": "fake-notify", "name": "Fake notify (test)", "version": "1.0.0",
+ "roles": ["notify"],
+ "settings": [
+   {"key": "state_file", "type": "text", "label": "Mute state file (test)", "required": true}
+ ]}
