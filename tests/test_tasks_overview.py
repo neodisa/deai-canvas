@@ -126,6 +126,17 @@ class _TmpCase(unittest.TestCase):
 
 
 class TasksOverviewTest(_TmpCase):
+    def setUp(self):
+        """⛔ Похідна мітка задачі залежить від напрямків простору (4d-1), тож `tasks_overview` може спитати простір запиту, а
+        при ввімкненому шарі це читання справжнього реєстру машини. Шар вимкнено: лише `DC_TASKS_FILE`, без `DEAI_HOME` —
+        простір неявний (ЛІГА), реєстр не читається й не пишеться."""
+        super().setUp()
+        p = mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(self.root, 'no-such-tasks.json')})
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop('DEAI_HOME', None)
+        spaces.clear_request_space()
+
     def _cfg(self, **tasks):
         return {'current': next(iter(tasks)), 'tasks': tasks}
 

@@ -1294,6 +1294,116 @@ class ServerTracks(_Plain):
         self.assertEqual(serve.load_tasks()['tasks']['g3']['gitlab'], own)
 
 
+class ServerTrackView(_Plain):
+    """Напрямки простору рахуються ОДИН раз на відповідь і щодо ПРАВИЛЬНОГО простору (ревʼю Task 3): `?all=1`, вартість
+    циклу по задачах, ліниве питання простору, реєстр, що не читається, `task_ds` без простору."""
+
+    def write_tasks(self, sp, tasks):
+        with open(os.path.join(sp['path'], 'tasks.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tasks': tasks, 'current': next(iter(tasks))}, f)
+
+    def two_spaces(self):
+        """Alpha — звичайний, напрямок `web` з підписом `Web`; Liga — з `integrations`, без `tracks` (адаптер: `United`)."""
+        self.two_tracks()
+        liga = self.make_space('Liga', integrations=True)
+        self.write_tasks(self.sp, {'a1': {'track': 'web', 'dir': os.path.join(self.tmp, 'a1')}})
+        self.write_tasks(liga, {'l1': {'profile': 'united', 'dir': os.path.join(self.tmp, 'l1')}})
+        return liga
+
+    # ---- C1: `?all=1` — підписи щодо простору КОЖНОЇ задачі, а не того, хто кличе
+    def test_all_spaces_rows_label_each_task_by_its_own_space_from_either_side(self):
+        liga = self.two_spaces()
+        for caller in (self.sp, liga):
+            with self.subTest(caller=caller['id']):
+                self.use(caller)
+                rows = {r['id']: r for r in serve._all_space_task_rows()}
+                self.assertEqual(rows['l1']['tags'], ['United'])            # з боку звичайного простору теж не `united`
+                self.assertEqual(rows['a1']['tags'], ['Web'])               # з боку ЛІГИ теж не `web`
+                self.assertEqual((rows['l1']['space'], rows['a1']['space']), (liga['id'], self.sp['id']))
+                self.assertEqual(spaces.request_space_id(), caller['id'])   # простір того, хто кличе, повернуто
+
+    def test_task_rows_take_the_space_explicitly(self):
+        liga = self.two_spaces()
+        self.use(self.sp)
+        cfg = {'tasks': {'l1': {'profile': 'united'}}}
+        self.assertEqual(serve._task_rows(cfg, liga)[0]['tags'], ['United'])
+        self.assertEqual(serve._task_rows(cfg)[0]['tags'], ['united'])      # без `sp` — простір запиту (звичайний)
+
+    # ---- I1: простір питається лише тоді, коли похідна мітка справді потрібна
+    def test_the_request_space_is_not_asked_when_no_derived_tag_is_needed(self):
+        self.use(self.sp)
+        cfg = {'tasks': {'a': {'tags': ['X'], 'track': 'web', 'dir': self.tmp}, 'b': {'dir': self.tmp},
+                         'c': {'profile': 5, 'dir': self.tmp}}}
+        with mock.patch.object(serve, '_request_space', side_effect=AssertionError('простір без потреби')), \
+                mock.patch.object(spaces, 'active_space', side_effect=AssertionError('реєстр без потреби')):
+            self.assertEqual([r['tags'] for r in serve._task_rows(cfg)], [['X'], [], []])
+            out = serve.tasks_overview(cfg, ([], None))
+        self.assertEqual([m['tags'] for m in out['mine']], [['X'], [], []])
+
+    # ---- I2: вартість не росте з кількістю задач
+    def cost(self, n, space, call, **fields):
+        cfg = {'tasks': {f't{i}': {**(fields or {'track': 'web'}), 'dir': os.path.join(self.tmp, f't{i}')} for i in range(n)}}
+        with mock.patch.object(spaces, 'check_new_path', wraps=spaces.check_new_path) as chk, \
+                mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own, \
+                mock.patch.object(serve, '_legacy_cfg', wraps=serve._legacy_cfg) as leg:
+            tags = call(cfg, space)
+        return (chk.call_count, own.call_count, leg.call_count), tags
+
+    def test_the_cost_of_labels_does_not_grow_with_the_number_of_tasks(self):
+        liga = self.two_spaces()
+        self.use(self.sp)
+        by_rows = lambda cfg, sp: [r['tags'] for r in serve._task_rows(cfg, sp)]                   # noqa: E731
+        by_overview = lambda cfg, sp: [m['tags'] for m in serve.tasks_overview(cfg, ([], None))['mine']]   # noqa: E731
+        for name, call in (('_task_rows', by_rows), ('tasks_overview', by_overview)):
+            with self.subTest(call=name):
+                few, tags_few = self.cost(3, self.sp, call)
+                many, tags_many = self.cost(30, self.sp, call)
+                self.assertEqual(few, many)                                  # не росте з N
+                self.assertEqual((few[0] > 0, few[1]), (True, 1))            # напрямки порахували, `space.json` прочитали раз
+                self.assertEqual((tags_few, tags_many), ([['Web']] * 3, [['Web']] * 30))
+        few, _ = self.cost(3, liga, by_rows, profile='united')               # адаптер: навіть напрямків не будуємо
+        many, tags = self.cost(30, liga, by_rows, profile='united')
+        self.assertEqual((few, many), ((0, 1, 0), (0, 1, 0)))
+        self.assertEqual(tags, [['United']] * 30)
+
+    def test_all_spaces_build_the_view_once_per_space(self):
+        self.two_spaces()
+        self.use(self.sp)
+        with mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own:
+            rows = serve._all_space_task_rows()
+        self.assertEqual((len(rows), own.call_count), (2, 2))               # по одному читанню `space.json` на простір
+
+    # ---- m1: реєстр, що не читається, — корені відкидаються (закрито), а не обвал
+    def test_a_broken_registry_drops_the_roots_and_a_missing_one_does_not(self):
+        self.two_tracks()
+        reg = os.path.join(self.deai, 'spaces.json')
+        keep = os.path.join(self.sp['path'], 'web-dir')
+        self.assertEqual(serve.space_tracks(self.sp)[0][0]['root'], keep)
+        with open(reg, 'rb') as f:
+            good = f.read()
+        for raw in (b'{broken', b'[]', b'5', b'', b'{"version": 1, "spaces": "x"}', b'{"version": 2, "spaces": []}',
+                    b'{"version": 1, "spaces": [5]}'):
+            with self.subTest(raw=raw):
+                with open(reg, 'wb') as f:
+                    f.write(raw)
+                tr, default = serve.space_tracks(self.sp)
+                self.assertEqual((default, [t['root'] for t in tr]), ('web', [None, None]))
+                self.assertEqual(serve.track_root(self.sp, {}, 'web'), self.sp['path'])
+        os.remove(reg)                                                       # реєстру нема зовсім — це не відмова
+        self.assertEqual(serve.space_tracks(self.sp)[0][0]['root'], keep)
+        with open(reg, 'wb') as f:
+            f.write(good)
+
+    # ---- m3: простору нема — значення як було
+    def test_task_ds_without_a_space_is_the_raw_value(self):
+        spaces.set_request_space('')                                        # запит «без простору»
+        self.assertIsNone(spaces.active_space())
+        self.assertEqual(serve.task_ds({'profile': 'tool'}, None), 'tool')
+        self.assertEqual(serve.task_ds({'track': 'tool'}), 'tool')
+        self.assertEqual(serve.task_ds({}, None), '')
+        self.assertEqual(serve.task_ds({'track': 5}, None), '')
+
+
 class ServerHygiene(unittest.TestCase):
     """Ядро сервера не знає імен напрямків ЛІГИ; прибране справді прибране; обгортки названі й підписані."""
 

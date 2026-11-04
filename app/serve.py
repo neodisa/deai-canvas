@@ -1603,7 +1603,8 @@ def task_tags(task, sp=None):
     """Мітки задачі для екрана й API. Є ключ `tags` — лише вони (навіть `[]`: людина свідомо прибрала всі); зіпсовані елементи
     (руками вписаний файл) тихо відкидаються — читання не кидає, і на `TAGS_MAX` скан зупиняється. Ключа нема — похідна мітка
     напрямку задачі (`tracks.label_tag`: `label` напрямку простору, невідомий напрямок — як є; у ЛІГИ через адаптер — її підписи)
-    або `[]`. `sp` — простір задачі (запис реєстру); без нього — простір запиту. ⛔ Похідна проходить ТІ САМІ правила, що
+    або `[]`. `sp` — простір задачі (запис реєстру) або вже пораховане `_TrackView` цього простору (цикл по задачах рахує його
+    ОДИН раз: інакше на кожну задачу читався б `space.json`, реєстр і перевірки шляхів); без нього — простір запиту. ⛔ Похідна проходить ТІ САМІ правила, що
     збережені мітки (`tracks.read_tag`): діалог правки заповнюється поточними мітками, і напрямок із комою чи на 300 знаків
     після збереження розпався б або не пройшов `bad-tags`; такий напрямок — без похідної мітки."""
     if isinstance(task, dict) and 'tags' in task:
@@ -1618,10 +1619,9 @@ def task_tags(task, sp=None):
                     break
         return out
     if tracks.of_task(task) is None:
-        return []
-    sp = sp if sp is not None else _request_space()
-    adapter = _uses_adapter(sp)
-    tag = tracks.label_tag([] if adapter or sp is None else _track_view(sp)[0], task, legacy=adapter)
+        return []                                # простору й напрямків не питаємо, поки похідна мітка справді не потрібна
+    view = _as_view(sp)
+    tag = tracks.label_tag([] if view.adapter else view.tracks, task, legacy=view.adapter)
     return [tag] if tag else []
 
 
@@ -1670,12 +1670,6 @@ def _liga_like(sp):
     return sp is not None and (not spaces.layer_on() or spaces.integrations_for(sp))
 
 
-def _uses_adapter(sp):
-    """Напрямки цього простору дає неявний адаптер ЛІГИ: простір ЛІГИ (чи шар вимкнено), у чиєму `space.json` нема списку
-    `tracks`."""
-    return _liga_like(sp) and _own_tracks(sp) is None
-
-
 def _drop_foreign_roots(sp, items):
     """`root: None` для кореня, що збігається зі шляхом ІНШОГО простору реєстру чи лежить у ньому (і навпаки: чужий простір
     усередині кореня) — перевірка `spaces.check_new_path` над реєстром БЕЗ власного запису простору: корінь усередині власного
@@ -1699,25 +1693,77 @@ def _drop_foreign_roots(sp, items):
     return out
 
 
-def _track_view(sp):
-    """`(tracks, default_id, adapter)` простору: `adapter` — напрямки дав неявний адаптер ЛІГИ. Не кидає (як і `tracks.normalize`)."""
-    if sp is None:
-        return [], None, False
-    own = _own_tracks(sp)
-    if own is None:
-        if _liga_like(sp):
-            items, default, _fallback = tracks.legacy_tracks(_legacy_cfg())
-            return items, default, True
-        return [], None, False
-    items = _drop_foreign_roots(sp, tracks.normalize(own[0], sp.get('path')))
-    return items, tracks.default_id(items, own[1]), False
+_LAZY = object()
+
+
+class _TrackView:
+    """Напрямки ОДНОГО простору, пораховані один раз і ліниво: `sp`, `adapter`, `tracks`, `default`. Не кидає (як і
+    `tracks.normalize`). Цикл по задачах (`_task_rows`, `tasks_overview`, `?all=1`) будує його раз і передає вниз
+    (`task_tags`, `task_ds`): інакше КОЖНА задача читала б `space.json`, реєстр і міряла `check_new_path` по кореню кожного
+    напрямку (O(задач × напрямків) роботи з файловою системою).
+
+    `sp` — запис реєстру, `None` (простору нема: нема й напрямків) або `_LAZY` (простір запиту питається аж на першу потребу —
+    відповідь без жодної похідної мітки реєстру не читає взагалі). ⛔ Простір передається ЯВНО: `?all=1` обходить простори поза
+    `with request_space(...)`, і мітки, пораховані щодо простору того, хто кличе, брехали б (підпис задачі ЛІГИ з боку звичайного
+    простору вийшов би сирим ідентифікатором замість підпису адаптера)."""
+
+    def __init__(self, sp=_LAZY):
+        self._sp = sp
+        self._own = _LAZY
+        self._items = _LAZY
+
+    @property
+    def sp(self):
+        if self._sp is _LAZY:
+            self._sp = _request_space()
+        return self._sp
+
+    @property
+    def _raw(self):
+        """Сирі `(tracks, default_track)` з `space.json` простору або `None` (див. `_own_tracks`)."""
+        if self._own is _LAZY:
+            self._own = _own_tracks(self.sp)
+        return self._own
+
+    @property
+    def adapter(self):
+        """Напрямки дає неявний адаптер ЛІГИ: простір ЛІГИ (чи шар вимкнено), у чиєму `space.json` нема списку `tracks`."""
+        return _liga_like(self.sp) and self._raw is None
+
+    def _load(self):
+        if self._items is _LAZY:
+            sp = self.sp
+            if sp is None or (self._raw is None and not self.adapter):
+                self._items = ([], None)
+            elif self.adapter:
+                items, default, _fallback = tracks.legacy_tracks(_legacy_cfg())
+                self._items = (items, default)
+            else:
+                items = _drop_foreign_roots(sp, tracks.normalize(self._raw[0], sp.get('path')))
+                self._items = (items, tracks.default_id(items, self._raw[1]))
+        return self._items
+
+    @property
+    def tracks(self):
+        return self._load()[0]
+
+    @property
+    def default(self):
+        return self._load()[1]
+
+
+def _as_view(sp):
+    """`sp` — уже `_TrackView` (лишається), запис реєстру, `None` (простір запиту, ліниво)."""
+    if isinstance(sp, _TrackView):
+        return sp
+    return _TrackView(_LAZY if sp is None else sp)
 
 
 def space_tracks(sp):
     """Напрямки простору `sp` (запис реєстру) → `(tracks, default_id)`; див. блок вище. Звичайний простір без `tracks`, із
     битим `space.json` чи `sp=None` — `([], None)`."""
-    items, default, _adapter = _track_view(sp)
-    return items, default
+    view = _TrackView(sp)
+    return view.tracks, view.default
 
 
 def track_root(sp, cfg, track_id):
@@ -1728,29 +1774,30 @@ def track_root(sp, cfg, track_id):
     спільний корінь. ⛔ НЕ через `tracks.find`: адаптер перелічує лише id за шаблоном, а 0.14.0 шанував власний корінь будь-якого
     ключа. Інші простори: знайдений напрямок → його `root`; невідомий → `root` дефолтного; `root` нема → шлях простору;
     напрямків нема → шлях простору (звичайний) / спільний корінь ЛІГИ."""
-    if sp is None or _uses_adapter(sp):
+    view = sp if isinstance(sp, _TrackView) else _TrackView(sp)      # `None` тут — «простору нема», а не «простір запиту»
+    if view.sp is None or view.adapter:
         return tracks.legacy_root(cfg, track_id)
-    items, default, _adapter = _track_view(sp)
-    t = tracks.find(items, track_id) or tracks.find(items, default)
+    t = tracks.find(view.tracks, track_id) or tracks.find(view.tracks, view.default)
     if t is not None:
-        return t['root'] or sp['path']
-    return tracks.legacy_root(cfg, None) if _liga_like(sp) else sp['path']
+        return t['root'] or view.sp['path']
+    return tracks.legacy_root(cfg, None) if _liga_like(view.sp) else view.sp['path']
 
 
 def track_repo(sp, track_id):
     """Типовий репозиторій макетів напрямку `track_id` або `''`. Невідомий напрямок репо НЕ бере з дефолтного (маршрут його
     відмовить раніше). ЛІГА через адаптер — `profile_repos()` (ключ за `ID_RE`, як у 0.14.0)."""
-    if not isinstance(track_id, str) or sp is None:
+    view = sp if isinstance(sp, _TrackView) else _TrackView(sp)
+    if not isinstance(track_id, str) or view.sp is None:
         return ''
-    if _uses_adapter(sp):
+    if view.adapter:
         return profile_repos().get(track_id, '')           # одне джерело з `_liga_flow` (і з тестами, що його підміняють)
-    t = tracks.find(_track_view(sp)[0], track_id)
+    t = tracks.find(view.tracks, track_id)
     return t['repo'] if t else ''
 
 
 def task_ds(task, sp=None):
     """Значення `?ds=` для інспектора в розмітці макета задачі: `ds` напрямку задачі (`tracks.of_task`: `track`, інакше
-    `profile`) у просторі `sp` (без нього — простір запиту) або `''`. ЛІГА через адаптер — саме значення (`ds = id` адаптера,
+    `profile`) у просторі `sp` (запис реєстру чи `_TrackView`; без нього — простір запиту) або `''`. ЛІГА через адаптер — саме значення (`ds = id` адаптера,
     але й невідомий напрямок дає `?ds=zzz`, як 0.14.0; шаблон `[a-z0-9-]{1,32}` і `strip()` перевіряє `inspector_ds_arg`). Інший
     простір: знайдений напрямок говорить сам — його поле `ds` (`''` — статичної ДС нема, і це відповідь, а не відсутність);
     напрямок не знайдено (простір без напрямків, збережений `profile` чи невідомий id) — саме значення, як 0.14.0 (еталон
@@ -1759,22 +1806,23 @@ def task_ds(task, sp=None):
     v = tracks.of_task(task)
     if v is None:
         return ''
-    sp = sp if sp is not None else _request_space()
-    if sp is None:
-        return ''
-    if _uses_adapter(sp):
+    view = _as_view(sp)
+    if view.adapter:
         return v
-    t = tracks.find(_track_view(sp)[0], v)
+    t = tracks.find(view.tracks, v)                         # простору нема — напрямків нема — значення як є, як 0.14.0
     return t['ds'] if t else v
 
 
-def _task_rows(cfg):
+def _task_rows(cfg, sp=None):
     """Рядки `GET /api/tasks` одного файла задач (перемикач задач).
 
     `missing` — теки задачі нема на ЦІЙ машині (реєстр їде в git, теки ні): перемикач не
     пускає в таку задачу й каже причину наперед. Лише `isdir`, без читання вмісту —
-    відповідь лишається дешевою."""
-    sp = _request_space()                     # один раз на відповідь, а не на кожен рядок
+    відповідь лишається дешевою.
+
+    `sp` — простір цього файла задач (запис реєстру); без нього — простір запиту. ⛔ `?all=1` передає його ЯВНО: рядки збираються
+    поза `with request_space(...)`, і мітки щодо простору того, хто кличе, брехали б. Напрямки простору рахуються ОДИН раз."""
+    sp = _as_view(sp)
     return [{'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
              'profile': v.get('profile'),
              'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir'])),
@@ -1797,7 +1845,7 @@ def _all_space_task_rows():
         try:
             with spaces.request_space(sp['id']):
                 cfg = load_tasks()
-            rows += [{**r, 'space': _space_id(sp)} for r in _task_rows(cfg)]
+            rows += [{**r, 'space': _space_id(sp)} for r in _task_rows(cfg, sp)]
         except (SpaceUnavailable, AttributeError, TypeError):
             # Файл, який `load_tasks` пропустив, але рядки з нього не збираються (ручна правка:
             # `opened` різних типів ламає сортування, `TypeError`), — такий самий битий простір.
@@ -2129,7 +2177,7 @@ def tasks_overview(cfg, team, now=None, rows_at=None, tracker=None):
     by_id = {r['id']: r for r in rows
              if isinstance(r, dict) and isinstance(r.get('id'), str)}
     mine, local = [], {}
-    sp = _request_space()                     # простір запиту — один раз на відповідь (мітки)
+    sp = _TrackView()                         # простір запиту й його напрямки — один раз і лише коли мітка справді потрібна
     for tid, task in tasks_by_recent(cfg):
         st = task_state(task)
         found = task_thumb_path(task) if NAME_RE.fullmatch(tid) else None
