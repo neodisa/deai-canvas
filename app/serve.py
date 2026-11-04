@@ -1813,43 +1813,50 @@ def task_ds(task, sp=None):
     return t['ds'] if t else v
 
 
-def _task_rows(cfg, sp=None):
+def _task_rows(cfg, sp=None, items=None):
     """Рядки `GET /api/tasks` одного файла задач (перемикач задач).
 
     `missing` — теки задачі нема на ЦІЙ машині (реєстр їде в git, теки ні): перемикач не
     пускає в таку задачу й каже причину наперед. Лише `isdir`, без читання вмісту —
     відповідь лишається дешевою.
 
+    `track` (4d-1) — напрямок задачі (`tracks.of_task`: `track`, інакше `profile`); `profile` лишається як був (колеги на 0.14.0
+    читають його).
+
     `sp` — простір цього файла задач (запис реєстру); без нього — простір запиту. ⛔ `?all=1` передає його ЯВНО: рядки збираються
-    поза `with request_space(...)`, і мітки щодо простору того, хто кличе, брехали б. Напрямки простору рахуються ОДИН раз."""
+    поза `with request_space(...)`, і мітки щодо простору того, хто кличе, брехали б. Напрямки простору рахуються ОДИН раз.
+    `items` — уже впорядковані `tasks_by_recent(cfg)` (`?all=1` рахує їх у вузькому `try`, див. `_all_space_task_rows`)."""
     sp = _as_view(sp)
     return [{'id': k, 'title': v.get('title', k), 'jira': v.get('jira'),
-             'profile': v.get('profile'),
+             'profile': v.get('profile'), 'track': tracks.of_task(v),
              'missing': not (isinstance(v.get('dir'), str) and os.path.isdir(v['dir'])),
              'tags': task_tags(v, sp)}
-            for k, v in tasks_by_recent(cfg)]
+            for k, v in (tasks_by_recent(cfg) if items is None else items)]
 
 
 def _all_space_task_rows():
     """Рядки `GET /api/tasks?all=1`: задачі ВСІХ просторів реєстру, кожна з `space` (id
     простору; `None`, коли шар вимкнено). Порядок — реєстру, всередині простору — як у
-    перемикачі. Простір, файл задач якого не прочитати чи не зібрати в рядки, пропускається:
+    перемикачі. Простір, файл задач якого не прочитати чи не зібрати в порядок, пропускається:
     список решти просторів важливіший за один битий. Id, що є у двох просторах, видно двічі —
     це й є дубль, який треба побачити.
 
     Простір запиту переключається `request_space` і ПОВЕРТАЄТЬСЯ: хто кличе, лишається у
     своєму просторі (`with` повертає попереднє значення навіть після винятку).
-    Реєстр читається `read_registry()`: вхід запиту вже мігрував його (`_pin_current_space`)."""
+    Реєстр читається `read_registry()`: вхід запиту вже мігрував його (`_pin_current_space`).
+
+    ⛔ `try` стоїть ЛИШЕ над читанням файла й сортуванням (`load_tasks`, `tasks_by_recent`): файл, який `load_tasks` пропустив, але
+    впорядкувати не вийшло (ручна правка), — такий самий битий простір. Складання рядків (мітки, напрямки) — ПОЗА ним: справжня
+    вада в обчисленні мітки не мусить мовчки викинути ЦІЛИЙ простір зі списку (так вона лишилась би невидимою)."""
     rows = []
     for sp in spaces.read_registry()['spaces']:
         try:
             with spaces.request_space(sp['id']):
                 cfg = load_tasks()
-            rows += [{**r, 'space': _space_id(sp)} for r in _task_rows(cfg, sp)]
+            items = tasks_by_recent(cfg)
         except (SpaceUnavailable, AttributeError, TypeError):
-            # Файл, який `load_tasks` пропустив, але рядки з нього не збираються (ручна правка:
-            # `opened` різних типів ламає сортування, `TypeError`), — такий самий битий простір.
             continue
+        rows += [{**r, 'space': _space_id(sp)} for r in _task_rows(cfg, sp, items)]
     return rows
 
 
@@ -5145,14 +5152,21 @@ def space_view(sp):
 
 
 def spaces_listing():
-    """`spaces.listing()` + `capabilities` у кожному записі. Запис реєстру відновлюється з самого запису
+    """`spaces.listing()` + `capabilities` і `tracks`/`default_track` у кожному записі. Запис реєстру відновлюється з самого запису
     списку: реєстр валідує прапорці як справжні `bool`, тож `describe.integrations` те саме, що `integrations_for`
     (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
-    `capabilities` не кидає."""
+    `capabilities` і напрямки не кидають.
+
+    `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
+    браузер (форма «Нова задача» вибирає напрямок за назвою, а теку й репо додає сервер). Напрямки простору — ОДНЕ `_TrackView`
+    на простір (`space.json` читається раз, корінь ЛІГИ — раз на простір ЛІГИ), без вартості на рядок."""
     out = spaces.listing()
     for e in out['spaces']:
-        e['capabilities'] = deai_modules.capabilities(
-            {'id': e['id'], 'path': e['path'], 'integrations': e['integrations']})
+        sp = {'id': e['id'], 'path': e['path'], 'integrations': e['integrations']}
+        e['capabilities'] = deai_modules.capabilities(sp)
+        view = _TrackView(sp)
+        e['tracks'] = [{'id': t['id'], 'label': t['label']} for t in view.tracks]
+        e['default_track'] = view.default
     return out
 
 
@@ -5873,6 +5887,7 @@ class Handler(SimpleHTTPRequestHandler):
                    'jira': task.get('jira'),
                    'profile': task.get('profile'),
                    'tags': task_tags(task, sp),
+                   'track': tracks.of_task(task),
                    # Простір задачі (`describe`: id, name, color, path, legacy,
                    # integrations + `capabilities`; `null` — шар вимкнено) і канал коментарів. Канал
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
@@ -7720,12 +7735,28 @@ class Handler(SimpleHTTPRequestHandler):
         модуль дає `check-timeout`, а не зависання. У задачу пишуться лише непорожні, обрізані значення. Є ціль і в `<path>`
         репо лежить `index.html` — перша ітерація з нього (збій отримання — тихо стартовий макет); з `from` отримання нема.
 
+        Етап 4d-1, напрямок: `track` (рядок чи `null`; `profile` — синонім до 4d-4). Порядок відмов: чужий Origin 403 → тіло
+        (`bad-profile`, `bad-track`: не рядок чи конфлікт, `bad-tags`) → простір знайдено → `bad-track` (не за шаблоном id) і
+        `unknown-track` (нема в `space.json` простору; без напрямків у просторі — будь-який) → решта, усе ДО будь-якого запису.
+        ЛІГА приймає будь-який рядок як є й `unknown-track` не знає; поля нема (`null`, `''`) — `default_track` простору.
+
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
         поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
         profile = payload.get('profile')
         if profile is not None and not isinstance(profile, str):
             self._space_error(400, 'bad-profile', 'profile must be a string')
             return
+        # Напрямок (4d-1): `track`, а `profile` — його синонім до 4d-4. `null` і `''` — поля нема; не рядок — 400 `bad-track`
+        # (`bad-profile` лишається для поля `profile`); обидва непорожні й різні — 400 `bad-track`. Це лише те, що видно з тіла;
+        # за шаблоном id і за переліком напрямків питає простір — нижче, як тільки його знайдено (ЛІГА приймає будь-який рядок).
+        track_in = payload.get('track')
+        if track_in is not None and not isinstance(track_in, str):
+            self._space_error(400, 'bad-track', 'track must be a string')
+            return
+        if track_in and profile and track_in != profile:
+            self._space_error(400, 'bad-track', 'track and profile name different tracks')
+            return
+        want_track = track_in or profile or None
         # Мітки (4b-3): `null` — поля нема; не за правилами — 400 ДО будь-якого запису (як `bad-profile`).
         tags = payload.get('tags')
         if tags is not None:
@@ -7754,6 +7785,19 @@ class Handler(SimpleHTTPRequestHandler):
             sp = next((s for s in spaces.read_registry()['spaces'] if s['id'] == want), None)
             if sp is None:
                 self._space_error(400, 'unknown-space', 'unknown space')
+                return
+        # Напрямки простору — ОДИН раз на запит (`_TrackView` ліниво читає `space.json`/корінь ЛІГИ). Звичайний простір: напрямок
+        # з тіла — за шаблоном id (`bad-track`) і з переліку (`unknown-track`; без напрямків у просторі будь-який — невідомий),
+        # ДО будь-якого запису: ні теки, ні `tasks.json`. ЛІГА приймає будь-який рядок як є (0.14.0 так і робила) — тут їй
+        # нема чого відмовляти.
+        liga = spaces.integrations_for(sp)
+        view = _TrackView(sp)
+        if want_track is not None and not liga:
+            if not tracks.ID_RE.fullmatch(want_track):
+                self._space_error(400, 'bad-track', 'track must be lowercase letters, digits and dashes')
+                return
+            if tracks.find(view.tracks, want_track) is None:
+                self._space_error(400, 'unknown-track', 'unknown track')
                 return
         spaces.set_request_space(sp['id'])
         tid = payload.get('id', '')
@@ -7800,20 +7844,16 @@ class Handler(SimpleHTTPRequestHandler):
             adopt = self._adopt_source(sp, tid, payload.get('from'), payload)
             if adopt is None:
                 return
-        liga = spaces.integrations_for(sp)
         if not liga and payload.get('gitlab'):
             self._space_error(400, 'gitlab-needs-integrations',
                               'gitlab mapping is not available in a space without integrations')
             return
         cfg = load_tasks()                     # ПІСЛЯ фіксації простору: файл ЦІЛЬОВОГО простору
-        if liga:
-            # ЛІГА: напрямок — `profile` тіла, без нього (чи `null`/`''`) — дефолтний напрямок простору (адаптер: той самий,
-            # що був `profile or <напрямок за замовчуванням>`); теку й типове репо дає напрямок. Звичайні простори поки
-            # без вибору напрямку (поле `track` маршрут отримає в Task 4): шлях простору, без репо.
-            track = profile or space_tracks(sp)[1]
-            root, repo = track_root(sp, cfg, track), track_repo(sp, track)
-        else:
-            track, root, repo = None, sp['path'], None
+        # Напрямок за замовчуванням ставить маршрут (`task_new` без `track` лишає `None`): ЛІГА через адаптер — той самий, що
+        # колись `profile or <напрямок за замовчуванням>`; звичайний простір без напрямків — `None` (як було). Теку й типове
+        # репо дає напрямок: ЛІГА — `track_root` (спільний корінь для невідомого), звичайний — `root` напрямку чи шлях простору.
+        track = want_track or view.default
+        root, repo = track_root(view, cfg, track), track_repo(view, track)
         try:
             r = task_new(cfg, tid,
                          title=str(payload.get('title', ''))[:200],

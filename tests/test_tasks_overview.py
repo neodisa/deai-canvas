@@ -705,6 +705,10 @@ class TrackerOverview(_TmpCase):
         self.addCleanup(env.stop)
         for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TRACKER_FAKE', 'DC_TEAM_FAKE'):
             os.environ.pop(var, None)
+        # ⛔ Як у `TasksOverviewTest`: похідна мітка питає простір запиту (4d-1), а при `DEAI_HOME` у середовищі розробника це
+        # читання справжнього реєстру машини. Шар вимкнено — простір неявний, реєстр не читається й не пишеться.
+        os.environ.pop('DEAI_HOME', None)
+        spaces.clear_request_space()
         with open(BEFORE, encoding='utf-8') as fh:
             self.snap = json.load(fh)
 

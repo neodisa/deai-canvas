@@ -1329,6 +1329,30 @@ class ServerTrackView(_Plain):
         self.assertEqual(serve._task_rows(cfg, liga)[0]['tags'], ['United'])
         self.assertEqual(serve._task_rows(cfg)[0]['tags'], ['united'])      # без `sp` — простір запиту (звичайний)
 
+    # ---- (ревʼю Task 3) `?all=1`: `try` лише над читанням і сортуванням, а не над складанням рядків
+    def test_all_spaces_do_not_swallow_a_bug_in_the_label_computation(self):
+        self.two_spaces()
+        self.use(self.sp)
+        for exc in (AttributeError('вада в мітці'), TypeError('вада в мітці')):
+            with self.subTest(exc=type(exc).__name__), mock.patch.object(serve, 'task_tags', side_effect=exc), \
+                    self.assertRaises(type(exc)):
+                serve._all_space_task_rows()                  # справжня вада не викидає ЦІЛИЙ простір зі списку мовчки
+
+    def test_all_spaces_still_skip_a_space_whose_file_cannot_be_read_or_sorted(self):
+        self.two_spaces()
+        self.use(self.sp)
+        real = serve.tasks_by_recent
+
+        def sort(cfg):
+            if 'a1' in cfg.get('tasks', {}):
+                raise TypeError('порівняти не вдалось')
+            return real(cfg)
+        with mock.patch.object(serve, 'tasks_by_recent', sort):
+            self.assertEqual([r['id'] for r in serve._all_space_task_rows()], ['l1'])      # Alpha пропущено, решта — на місці
+        with open(os.path.join(self.sp['path'], 'tasks.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        self.assertEqual([r['id'] for r in serve._all_space_task_rows()], ['l1'])           # нечитабельний файл — теж
+
     # ---- I1: простір питається лише тоді, коли похідна мітка справді потрібна
     def test_the_request_space_is_not_asked_when_no_derived_tag_is_needed(self):
         self.use(self.sp)
@@ -1402,6 +1426,327 @@ class ServerTrackView(_Plain):
         self.assertEqual(serve.task_ds({'track': 'tool'}), 'tool')
         self.assertEqual(serve.task_ds({}, None), '')
         self.assertEqual(serve.task_ds({'track': 5}, None), '')
+
+
+# ======================================================================== Task 4: API
+
+def _tree(path):
+    """Знімок теки: відносні шляхи всього, що в ній лежить (теки й файли) — «нічого не створено» перевіряється порівнянням."""
+    out = []
+    for dirpath, dirs, files in os.walk(path):
+        out += [os.path.relpath(os.path.join(dirpath, n), path) for n in dirs + files]
+    return sorted(out)
+
+
+def _raw(path):
+    try:
+        with open(path, 'rb') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+class ApiTracks(_Plain):
+    """HTTP-API напрямків (Task 4): `task-new`, `/api/tasks`, `/api/task`, `/api/spaces` — крізь справжній сервер у процесі."""
+
+    def setUp(self):
+        super().setUp()
+        self.srv = gen.Server().__enter__()
+        self.addCleanup(self.srv.__exit__, None, None, None)
+        for patch in (mock.patch.object(serve, 'vcs_provider', gen.Vcs()),             # без `vcs`-ролі, без git
+                      mock.patch.object(serve.urllib.request, 'urlopen', gen.NoNet())):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def post(self, body, sp=None):
+        sp = sp or self.sp
+        return self.srv.req('POST', '/api/task-new', {'space': sp['id'], **body})
+
+    def entry(self, sp, tid):
+        with open(os.path.join(sp['path'], 'tasks.json'), encoding='utf-8') as f:
+            return json.load(f)['tasks'].get(tid)
+
+    def snapshot(self, sp):
+        return _tree(sp['path']), _raw(os.path.join(sp['path'], 'tasks.json'))
+
+    def liga(self):
+        """Простір ЛІГИ + корінь старого `tasks.json` з коренями й репо. У справжній установці це ОДИН файл (простір ЛІГИ і є
+        старий файл задач), тому ті самі ключі лягають і в `tasks.json` самого простору — з нього `track_root` бере `cfg`."""
+        liga = self.make_space('Liga', integrations=True)
+        cfg = self.legacy_cfg()
+        path = os.path.join(liga['path'], 'tasks.json')
+        with open(path, encoding='utf-8') as f:
+            own = json.load(f)
+        own.update({k: cfg[k] for k in ('design_work_roots', 'design_work_root', 'profile_repos')})
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(own, f)
+        return liga
+
+    # ---- звичайний простір: напрямок у тілі
+    def test_track_places_the_task_in_the_track(self):
+        self.two_tracks()
+        st, body = self.post({'id': 'w1', 'track': 'web'})
+        self.assertEqual((st, body.get('ok')), (200, True), body)
+        e = self.entry(self.sp, 'w1')
+        self.assertEqual((e['track'], e['profile']), ('web', None))
+        self.assertEqual(e['dir'], os.path.join(self.sp['path'], 'web-dir', 'w1'))
+        st, _ = self.post({'id': 'm1', 'track': 'mobile'})
+        self.assertEqual(st, 200)
+        self.assertEqual(self.entry(self.sp, 'm1')['dir'], os.path.join(self.sp['path'], 'm1'))      # без `root` — шлях простору
+
+    def test_profile_is_a_synonym_of_track(self):
+        self.two_tracks()
+        st, body = self.post({'id': 's1', 'profile': 'web'})
+        self.assertEqual((st, body.get('ok')), (200, True), body)
+        e = self.entry(self.sp, 's1')
+        self.assertEqual((e['track'], e['dir']), ('web', os.path.join(self.sp['path'], 'web-dir', 's1')))
+        self.assertEqual(self.post({'id': 's2', 'track': 'web', 'profile': 'web'})[0], 200)            # обидва однакові — ок
+        self.assertEqual(self.entry(self.sp, 's2')['track'], 'web')
+        self.assertEqual(self.post({'id': 's3', 'track': None, 'profile': 'mobile'})[0], 200)          # `null` — поля нема
+        self.assertEqual(self.entry(self.sp, 's3')['track'], 'mobile')
+        self.assertEqual(self.post({'id': 's4', 'track': '', 'profile': 'mobile'})[0], 200)
+        self.assertEqual(self.entry(self.sp, 's4')['track'], 'mobile')
+
+    def test_no_field_takes_the_default_track(self):
+        self.two_tracks()
+        for tid, extra in (('d1', {}), ('d2', {'track': None}), ('d3', {'track': ''}), ('d4', {'profile': None})):
+            self.assertEqual(self.post({'id': tid, **extra})[0], 200, tid)
+            e = self.entry(self.sp, tid)
+            self.assertEqual((e['track'], e['dir']), ('web', os.path.join(self.sp['path'], 'web-dir', tid)), tid)
+
+    def test_a_space_without_tracks_keeps_todays_behaviour(self):
+        st, _ = self.post({'id': 'p1'})
+        self.assertEqual(st, 200)
+        e = self.entry(self.sp, 'p1')
+        self.assertEqual((e['dir'], e['profile']), (os.path.join(self.sp['path'], 'p1'), None))
+        self.assertNotIn('track', e)
+
+    def test_conflict_and_bad_values_are_refused_before_any_write(self):
+        self.two_tracks()
+        before = self.snapshot(self.sp)
+        cases = (({'track': 'web', 'profile': 'mobile'}, 'bad-track'), ({'track': 5}, 'bad-track'),
+                 ({'track': ['web']}, 'bad-track'), ({'track': 'Bad!'}, 'bad-track'), ({'track': 'Web'}, 'bad-track'),
+                 ({'track': 'x' * 33}, 'bad-track'), ({'profile': 'Bad!'}, 'bad-track'),
+                 ({'profile': 5}, 'bad-profile'), ({'track': 'web', 'profile': 5}, 'bad-profile'))
+        for extra, code in cases:
+            st, body = self.post({'id': 'x1', **extra})
+            self.assertEqual((st, body.get('code')), (400, code), extra)
+            self.assertEqual(self.snapshot(self.sp), before, extra)
+
+    def test_an_unknown_track_is_refused_before_any_write(self):
+        self.two_tracks()
+        before = self.snapshot(self.sp)
+        for extra in ({'track': 'nope'}, {'profile': 'nope'}):
+            st, body = self.post({'id': 'u1', **extra})
+            self.assertEqual((st, body.get('code')), (400, 'unknown-track'), extra)
+            self.assertEqual(self.snapshot(self.sp), before, extra)                # ні теки, ні `tasks.json`
+            self.assertFalse(os.path.exists(os.path.join(self.sp['path'], 'web-dir')), extra)
+
+    def test_no_tracks_configured_and_a_track_in_the_body_is_unknown(self):
+        before = self.snapshot(self.sp)
+        st, body = self.post({'id': 'u2', 'track': 'x'})
+        self.assertEqual((st, body.get('code')), (400, 'unknown-track'))
+        self.assertEqual(self.snapshot(self.sp), before)
+
+    def test_the_order_of_checks(self):
+        self.two_tracks()
+        # `unknown-track` — до решти перевірок тіла: поганий id задачі, `vcs` без ролі, `gitlab` у просторі без інтеграцій
+        for body in ({'id': 'bad id', 'track': 'nope'}, {'id': 'o1', 'track': 'nope', 'vcs': {'repo': self.REPO}},
+                     {'id': 'o2', 'track': 'nope', 'gitlab': {'repo': self.REPO}}):
+            st, resp = self.post(body)
+            self.assertEqual((st, resp.get('code')), (400, 'unknown-track'), body)
+        # `bad-track` / `bad-profile` — до `bad-tags` і до `unknown-track`
+        st, resp = self.post({'id': 'o3', 'track': 5, 'tags': ['a,b']})
+        self.assertEqual((st, resp.get('code')), (400, 'bad-track'))
+        st, resp = self.post({'id': 'o4', 'profile': 5, 'track': 'nope'})
+        self.assertEqual((st, resp.get('code')), (400, 'bad-profile'))
+        st, resp = self.post({'id': 'o5', 'track': 'web', 'profile': 'nope'})
+        self.assertEqual((st, resp.get('code')), (400, 'bad-track'))                # конфлікт, а не `unknown-track`
+        # решта — як була: ПОГАНІ мітки й далі 400 `bad-tags`, а дублікат id — 400 `task-exists`
+        self.assertEqual(self.post({'id': 'o6', 'track': 'web', 'tags': ['a,b']})[1].get('code'), 'bad-tags')
+        self.assertEqual(self.post({'id': 'o7', 'track': 'web'})[0], 200)
+        self.assertEqual(self.post({'id': 'o7', 'track': 'web'})[1].get('code'), 'task-exists')
+
+    def test_a_foreign_origin_is_refused_first(self):
+        import http.client
+        self.two_tracks()
+        before = self.snapshot(self.sp)
+        conn = http.client.HTTPConnection('127.0.0.1', self.srv.port, timeout=15)
+        try:
+            conn.request('POST', '/api/task-new', body=json.dumps({'id': 'f1', 'track': 5, 'profile': 'nope'}).encode(),
+                         headers={'Origin': 'http://evil.example', 'Content-Type': 'application/json'})
+            self.assertEqual(conn.getresponse().status, 403)
+        finally:
+            conn.close()
+        self.assertEqual(self.snapshot(self.sp), before)
+
+    # ---- простір ЛІГИ: будь-який рядок як є, `unknown-track` не буває
+    def test_a_liga_space_takes_any_string_and_writes_profile_and_track(self):
+        liga = self.liga()
+        for tid, extra, want in (('l1', {'profile': 'seo'}, 'seo'), ('l2', {'track': 'seo'}, 'seo'),
+                                 ('l3', {'profile': 'United'}, 'United'), ('l4', {'track': 'zzz'}, 'zzz'),
+                                 ('l5', {'track': 'Bad!'}, 'Bad!'), ('l6', {'track': 'seo', 'profile': 'seo'}, 'seo'),
+                                 ('l7', {'track': 'zzz', 'profile': ''}, 'zzz')):
+            st, body = self.post({'id': tid, **extra}, liga)
+            self.assertEqual((st, body.get('ok')), (200, True), (tid, body))
+            e = self.entry(liga, tid)
+            self.assertEqual((e['profile'], e['track']), (want, want), tid)
+        self.assertEqual(self.entry(liga, 'l1')['dir'], os.path.join(self.home, 'work', 'seo', 'l1'))
+        self.assertEqual(self.entry(liga, 'l2')['dir'], self.entry(liga, 'l1')['dir'].replace('l1', 'l2'))
+        self.assertEqual(self.entry(liga, 'l1')['gitlab']['repo'], self.REPO)
+
+    def test_a_liga_space_defaults_to_united(self):
+        liga = self.liga()
+        for tid, extra in (('d1', {}), ('d2', {'track': None}), ('d3', {'track': ''}), ('d4', {'profile': ''}),
+                           ('d5', {'profile': None, 'track': None})):
+            self.assertEqual(self.post({'id': tid, **extra}, liga)[0], 200, tid)
+            e = self.entry(liga, tid)
+            self.assertEqual((e['profile'], e['track']), ('united', 'united'), tid)
+
+    def test_a_liga_space_refuses_only_a_non_string_or_a_conflict(self):
+        liga = self.liga()
+        before = self.snapshot(liga)
+        for extra, code in (({'track': 5}, 'bad-track'), ({'track': {}}, 'bad-track'),
+                            ({'track': 'seo', 'profile': 'united'}, 'bad-track'), ({'profile': 5}, 'bad-profile')):
+            st, body = self.post({'id': 'lx', **extra}, liga)
+            self.assertEqual((st, body.get('code')), (400, code), extra)
+            self.assertEqual(self.snapshot(liga), before, extra)
+
+    def test_a_liga_space_with_its_own_tracks_still_never_says_unknown_track(self):
+        liga = self.make_space('Liga', integrations=True)
+        self.space_json(liga, tracks=[{'id': 'web'}], default_track='web')
+        st, body = self.post({'id': 'n1', 'track': 'anything'}, liga)
+        self.assertEqual((st, self.entry(liga, 'n1')['track']), (200, 'anything'), body)
+        self.assertEqual(self.post({'id': 'n2'}, liga)[0], 200)
+        self.assertEqual(self.entry(liga, 'n2')['track'], 'web')
+
+    # ---- GET /api/tasks, GET /api/task
+    def seed(self, sp, specs):
+        tasks = {}
+        for tid, extra in specs:
+            d = os.path.join(self.tmp, 'seed', tid)
+            os.makedirs(d)
+            with open(os.path.join(d, 'iterations.json'), 'w', encoding='utf-8') as f:
+                json.dump({'iterations': [{'id': 'it1', 'date': '01.11.2026 10:00'}], 'publish_url': None}, f)
+            tasks[tid] = {'dir': d, 'title': 'Seed ' + tid, 'jira': '', **extra}
+        with open(os.path.join(sp['path'], 'tasks.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tasks': tasks, 'current': specs[0][0]}, f)
+        spaces.switch_space(sp['id'])
+
+    SPECS = (('a-track', {'track': 'web'}), ('a-profile', {'profile': 'mobile'}), ('a-both', {'track': 'web', 'profile': 'x'}),
+             ('a-none', {}), ('a-five', {'track': 5, 'profile': 'mobile'}), ('a-empty', {'track': '', 'profile': 'web'}))
+    WANT = {'a-track': ('web', None), 'a-profile': ('mobile', 'mobile'), 'a-both': ('web', 'x'), 'a-none': (None, None),
+            'a-five': ('mobile', 'mobile'), 'a-empty': ('web', 'web')}
+
+    def test_tasks_and_task_carry_track_and_keep_profile(self):
+        self.two_tracks()
+        self.seed(self.sp, self.SPECS)
+        st, body = self.srv.req('GET', '/api/tasks')
+        self.assertEqual(st, 200, body)
+        rows = {r['id']: r for r in body['tasks']}
+        self.assertEqual(sorted(rows), sorted(self.WANT))
+        for tid, (track, profile) in self.WANT.items():
+            self.assertIn('track', rows[tid])
+            self.assertEqual((rows[tid]['track'], rows[tid]['profile']), (track, profile), tid)
+            st, one = self.srv.req('GET', '/api/task', task=tid)                       # задачу вибирає заголовок, не `?id=`
+            self.assertEqual(st, 200, one)
+            self.assertEqual((one['track'], one['profile']), (track, profile), tid)
+        st, body = self.srv.req('GET', '/api/tasks?all=1')
+        self.assertEqual({r['id']: r['track'] for r in body['tasks']}, {k: v[0] for k, v in self.WANT.items()})
+
+    # ---- GET /api/spaces
+    def test_spaces_listing_names_the_tracks_but_not_their_roots_or_repos(self):
+        self.two_tracks()
+        plain = self.make_space('Plain')                      # ДО `liga()`: файл ЛІГИ реєструє «legacy»-простір над `~/work`
+        liga = self.liga()
+        st, raw = self.srv.req('GET', '/api/spaces', raw_text=True)
+        self.assertEqual(st, 200)
+        listed = {s['id']: s for s in json.loads(raw)['spaces']}
+        a = listed[self.sp['id']]
+        self.assertEqual(a['tracks'], [{'id': 'web', 'label': 'Web'}, {'id': 'mobile', 'label': 'mobile'}])
+        self.assertEqual(a['default_track'], 'web')
+        self.assertEqual(listed[liga['id']]['tracks'], [{'id': 'united', 'label': 'United'}, {'id': 'liga360', 'label': 'LIGA360'},
+                                                        {'id': 'seo', 'label': 'SEO'}])
+        self.assertEqual(listed[liga['id']]['default_track'], 'united')
+        self.assertEqual((listed[plain['id']]['tracks'], listed[plain['id']]['default_track']), ([], None))
+        for e in listed.values():
+            self.assertTrue(all(sorted(t) == ['id', 'label'] for t in e['tracks']), e['tracks'])
+        # ні корені напрямків, ні репо (у `space.json` і в кореневому `tasks.json` ЛІГИ) у тілі не зустрічаються
+        for secret in ('web-dir', self.REPO, self.OTHER, 'git@example.com', 'ssh://git@example.com', '"root"', '"repo"',
+                       os.path.join(self.home, 'work', 'seo'), os.path.join(self.home, 'work', 'united')):
+            self.assertNotIn(secret, raw, secret)
+
+    def test_spaces_listing_builds_the_tracks_once_per_space(self):
+        self.two_tracks()
+        self.make_space('Plain')
+        self.liga()
+        with mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own, \
+                mock.patch.object(serve, '_legacy_cfg', wraps=serve._legacy_cfg) as leg:
+            out = serve.spaces_listing()
+        self.assertEqual(len(out['spaces']), 4)                                     # Alpha, Plain, «legacy» (файл ЛІГИ), Liga
+        self.assertEqual(own.call_count, len(out['spaces']))                        # по одному читанню `space.json` на простір
+        self.assertEqual(leg.call_count, 1)                                         # і один корінь ЛІГИ
+
+    def test_the_layer_off_listing_is_unchanged(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('DEAI_HOME', None)
+            self.assertEqual(serve.spaces_listing(), {'current': None, 'spaces': [], 'off': True})
+
+
+class ApiTracksImplicitSpace(_LayerOff):
+    """Шар вимкнено (неявний простір ЛІГИ): нові сценарії маршруту порівнюються з тими, що вже знято, — `track` ≡ `profile`."""
+
+    def setUp(self):
+        super().setUp()
+        for name in gen.CLEAN:
+            if name not in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
+                os.environ.pop(name, None)
+        gen._write(os.environ['DC_TASKS_FILE'], gen._liga_cfg(gen.REPOS))
+        for patch in (mock.patch.object(serve, 'vcs_provider', gen.Vcs()),
+                      mock.patch.object(serve.urllib.request, 'urlopen', gen.NoNet())):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.srv = gen.Server().__enter__()
+        self.addCleanup(self.srv.__exit__, None, None, None)
+
+    def tasks(self):
+        return serve.load_tasks()['tasks']
+
+    def test_track_is_the_same_as_profile(self):
+        for name, body in (('seo', {'profile': 'seo'}), ('united', {'profile': 'united'}), ('zzz', {'profile': 'zzz'}),
+                           ('upper', {'profile': 'United'}), ('none', {}), ('empty', {'profile': ''}), ('null', {'profile': None})):
+            st_p, resp_p = self.srv.req('POST', '/api/task-new', {'id': 'p-' + name, 'title': 'T', **body})
+            twin = {'track': body['profile']} if 'profile' in body else {}
+            st_t, resp_t = self.srv.req('POST', '/api/task-new', {'id': 't-' + name, 'title': 'T', **twin})
+            self.assertEqual((st_p, st_t), (200, 200), (name, resp_p, resp_t))
+            ep, et = dict(self.tasks()['p-' + name]), dict(self.tasks()['t-' + name])
+            for e in (ep, et):
+                e.pop('opened')
+            self.assertEqual(os.path.dirname(ep.pop('dir')), os.path.dirname(et.pop('dir')), name)
+            for e, tid in ((ep, 'p-' + name), (et, 't-' + name)):
+                if 'gitlab' in e:
+                    self.assertEqual(e['gitlab'].pop('path'), 'mockup/' + tid)        # решта запису — та сама
+            self.assertEqual(ep, et, name)
+            self.assertEqual((ep['track'], ep['profile']), (et['track'], et['profile']))
+
+    def test_conflict_is_refused_before_any_write_and_unknown_is_never_refused(self):
+        before = _raw(os.environ['DC_TASKS_FILE'])
+        for extra, code in (({'track': 'seo', 'profile': 'united'}, 'bad-track'), ({'track': 5}, 'bad-track'),
+                            ({'profile': 5}, 'bad-profile')):
+            st, body = self.srv.req('POST', '/api/task-new', {'id': 'c1', **extra})
+            self.assertEqual((st, body.get('code')), (400, code), extra)
+            self.assertEqual(_raw(os.environ['DC_TASKS_FILE']), before, extra)
+        st, body = self.srv.req('POST', '/api/task-new', {'id': 'c2', 'track': 'never-heard'})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(self.tasks()['c2']['profile'], 'never-heard')
+
+    def test_tasks_rows_carry_track(self):
+        self.assertEqual(self.srv.req('POST', '/api/task-new', {'id': 'r1', 'track': 'seo'})[0], 200)
+        st, body = self.srv.req('GET', '/api/tasks')
+        row = next(r for r in body['tasks'] if r['id'] == 'r1')
+        self.assertEqual((row['track'], row['profile'], row['tags']), ('seo', 'seo', ['SEO']))
+        st, one = self.srv.req('GET', '/api/task', task='r1')
+        self.assertEqual((one['track'], one['profile']), ('seo', 'seo'))
 
 
 class ServerHygiene(unittest.TestCase):
