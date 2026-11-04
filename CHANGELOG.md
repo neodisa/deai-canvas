@@ -3,6 +3,118 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.15.0] — unreleased
+
+Stage 4d-1: the **profile** of a task (`united` / `liga360` / `seo`), a notion of one company welded into the core, is replaced by
+**tracks of a space**: a general mechanism that any space can use. A space describes its tracks in its `space.json` (an id, a label,
+a folder for the tasks, a default repository of mockups, a design system of the inspector), and a task carries `track`. The LIGA
+space stays ONE space with three tracks, supplied by an implicit adapter that reads what already lies in the root of its
+`tasks.json` — so for its designers nothing changes: the same folders, repositories, labels and `?ds=` in the markup, byte for byte.
+The old key `profile` stays a synonym until 4d-4. This is the first of four sub-releases of stage 4d (owner decision 04.11.2026):
+4d-1 profile → tracks (this one), 4d-2 the layer-off seam and the isolation of shared state without the literal `'legacy'`,
+4d-3 explicit LIGA modules with an automatic, backed-up migration of its config, 4d-4 the `integrations` flag and the old aliases
+go. Design: `docs/superpowers/specs/2026-11-04-space-tracks-design.md`; plan: `docs/superpowers/plans/2026-11-04-space-tracks.md`.
+The behaviour of 0.14.0 is pinned by the snapshot `tests/fixtures/tracks/before-4d1.json`.
+
+### Added
+
+- **`app/tracks.py`**, a pure core (no network, no import of `serve`): `ID_RE` (`[a-z0-9-]{1,32}`), `MAX_TRACKS` (20), `ROOT_MAX`
+  (1024), `normalize(raw, space_path, roots=True)` (the `tracks` of a `space.json` → `[{id, label, root, repo, ds}]`; it never
+  raises: a bad entry is dropped, a bad field counts as absent), `default_id`, `of_task` (the stored string `track`, otherwise
+  `profile`), `find`, `label_tag` and the LIGA adapter `legacy_tracks(cfg)` with `legacy_root`, `legacy_repos` and
+  `_LEGACY_LABELS`. The rules of a tag label, the repository rule and the id pattern now live here, and `serve` imports them.
+- **Tracks in `space.json`** of an ordinary space: `tracks` (a list) and `default_track`. A track has `id`, `label`, `root` (the
+  folder of its tasks: absolute, `~/…` or relative to the space), `repo` (the default repository of a new task) and `ds` (the name
+  of a static design system of the inspector). The rules and an example are in the README, «Space tracks».
+- **In `serve`:** `space_tracks(sp)` → `(tracks, default_id)`; `_TrackView` (the tracks of one space, built once per request and
+  space, and lazily, so a loop over tasks does not read the registry or the file system per task); `track_root`, `track_repo`,
+  `task_ds`.
+- **The API.** `track` in the records of new tasks and in the rows of `GET /api/tasks` and `GET /api/task`; `tracks: [{id, label}]`
+  and `default_track` in every entry of `GET /api/spaces` (never the `root` or the `repo` of a track: folders and addresses do not
+  travel to the browser); `POST /api/task-new` takes `track` (`profile` is its synonym). The new error codes `bad-track` and
+  `unknown-track` (both 400).
+- **In `bin/`:** `track` is in the `SHARED` keys of the task registry, and `roots.py` and `state.py` go through `tracks`. The head
+  of the `state.py` page now reads «Напрямок:» (it read «Профіль:»; nothing parses it).
+
+### Changed
+
+- **The folder of a new task is the folder of its track.** In an ordinary space with tracks it is the `root` of the track (or the
+  path of the space when the track has none); a track that is not found falls back to the default track. The route reads
+  `default_track` where it used to say `profile or 'united'`.
+- **The default repository of a track becomes the `vcs` of the task**, but only when the space has a provider of the role `vcs`
+  and the body of the request carries no `vcs` of its own (an explicit one wins). Without a provider the repository of a track is
+  silently not applied, and an explicit `vcs` with no provider is still 409, as before. In LIGA the repository still goes into
+  `gitlab: {repo, path: mockup/<id>}`.
+- **The label of a task** without `tags` comes from the label of its track (LIGA: `United` / `LIGA360` / `SEO`, an unknown track as
+  it is). `task_tags(task, sp)` takes the space explicitly; `?all=1` labels every row by its **own** space.
+- **The design system of the inspector** (`?ds=`) is the `ds` of the track of the task (LIGA: the id itself).
+- **LIGA records write both keys.** A new LIGA task gets `track` **and** `profile` with the same value, so teammates on 0.14.0 keep
+  reading `profile` from the shared registry. An ordinary space writes `track` only when there is one, and the old `profile: null`
+  as before.
+- **Robustness of LIGA** (places where 0.14.0 crashed; see *Deliberate differences*).
+
+### Removed
+
+- From the core of `serve.py`: `_LEGACY_PROFILE_TAGS` (it moved into the adapter as `tracks._LEGACY_LABELS`), `_PROFILE_KEY` (now
+  `tracks.ID_RE`), `_REPO_OK`, `_TAG_BAD` / `_clean_tag` / `_read_tag` / `TAG_MAX_LEN` (now in `tracks.py`), `FALLBACK_WORK_ROOT` and
+  `work_root`. `serve.py` no longer contains the names `united`, `liga360` or `seo` at all, and a test enforces it.
+- **Kept until 4d-4, as a thin wrapper:** `profile_repos()` (over `tracks.legacy_repos`); it is still used by `_liga_flow`,
+  `track_repo` and the tests that patch it.
+
+### Upgrading
+
+- **LIGA: nothing to do.** Designers see no change; the folders, repositories, labels and design systems are the same.
+- **Teams with mixed versions.** Records of LIGA tasks carry `track` and `profile` with the same value, so a teammate on 0.14.0
+  reads the folder, the repository and the label as before. A 0.14.0 machine that round-trips a record drops `track`, but the
+  `profile` of that record carries the same value, and 0.15.0 reads it.
+- **Old clients that send `profile`** (the dev-pipeline skill) keep working everywhere. In an ordinary space a `profile` that is a
+  known track is used as the track; any other `profile` value is ignored, exactly as in 0.14.0. Only the new key `track` is strict
+  (`bad-track`, `unknown-track`).
+- **An ordinary space:** to use tracks, describe them in its `space.json` (README, «Space tracks»). It is read on every request, so
+  no restart is needed. Without `tracks` the space behaves as before.
+- Scripts that imported `work_root`, `_LEGACY_PROFILE_TAGS` or `_PROFILE_KEY` from `app/serve.py` must move to `app/tracks.py`.
+
+### Deliberate differences from 0.14.0
+
+(everything else is checked against the snapshot)
+
+1. **New fields.** Records get `track`; responses get `track` / `tracks` / `default_track`.
+2. **New codes** `bad-track` and `unknown-track` (400). Only the new key `track` raises them, and `unknown-track` only in an
+   ordinary space (LIGA accepts any string as a track, as it accepted any profile; a space with no tracks of its own refuses any
+   named track).
+3. **An ordinary space with tracks:** the folder of the task is the root of its track (it was the path of the space), and the
+   repository of the track becomes the `vcs` of the task — only when a `vcs` provider exists and the body has no explicit `vcs`.
+4. **LIGA robustness** — the places where 0.14.0 crashed now answer sensibly:
+   - a `design_work_roots` that is not an object → the shared root (it was a 500, `AttributeError`);
+   - an own root or a `design_work_root` that is not a string → the fallback chain (own → shared → `~/deai-work`) (it was a
+     `TypeError`);
+   - the page of a task whose profile is a number renders cleanly, with no `?ds=` (it was a dropped connection);
+   - `bin/roots.py roots_in_use` no longer raises `TypeError` on a numeric profile mixed with strings, and `bin/roots.py plan`
+     shows a numeric profile as `None`.
+5. **`?ds=`.** A track that is found uses its own `ds`, so `ds: ''` gives no `?ds=` at all. A stored value that matches no track
+   falls back to the raw value, as in 0.14.0 (a golden pins `?ds=tool` for a task of an ordinary space).
+6. **`?all=1` labels every row by its own space** (an intermediate version of this release labelled by the space of the caller,
+   which showed the label of a LIGA task as a raw id from an ordinary space; fixed during review).
+
+### Known limits
+
+- Tracks are edited only in `space.json`; there is no UI. Only the API (the pipeline skill) puts a task into a track.
+- An invalid `root` of a track — a system folder, a hidden folder or `Library` in the home, the home itself, a folder inside the
+  repository of the tool, a folder equal to or inside another registered space, or a path longer than 1024 characters — silently
+  falls back to the path of the space. No warning is shown.
+- The roots of tracks are checked (`realpath`) on `/api/tasks` and on the creation of a task, **not** on `/api/spaces`, so the
+  list of spaces never waits for a slow or unmounted volume.
+- `profile` lives on in the records and in the API until 4d-4.
+- The names United / LIGA360 / SEO and the default `united` live in the adapter of `tracks.py` until the migration of 4d-3.
+- `_liga_flow` looks at `profile` only, not at `track` (the 409 `no-integrations-space` path); it is revisited in 4d-4.
+
+### Tests
+
+- The behaviour of 0.14.0 is pinned by `tests/fixtures/tracks/before-4d1.json`, generated by `tests/make_before_4d1.py` from
+  `c8c3a8b`. The generator is frozen: it describes 0.14.0, its guard is fail-closed, and it must not be re-run on the new code.
+- `tests/test_tracks.py` (about 160 tests: the snapshot, the core, differential tests of LIGA against the snapshot, the API); the
+  live test is `tests/live/tracks.test.mjs` (`PORT_BASE` 23000). Every new guard is proven by a mutation.
+
 ## [0.14.0] — 04.11.2026
 
 Stage 4c-3: the Teams notifications become a role, the last one of the in-house integrations. The switch «Notify Teams» in the

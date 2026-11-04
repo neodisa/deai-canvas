@@ -6,7 +6,7 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.10.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.15.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, team
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
@@ -18,8 +18,9 @@ links for your team.
 > `supabase-dashboard` module and its own Supabase project, and the **issue tracker** (task statuses from Jira Cloud) through
 > the `jira-tracker` module, and the **Teams notifications** (a card in a Teams channel for every new comment, and the
 > silence switch) through the `supabase-teams` module and the same Supabase project as the comments. The legacy space
-> runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). A space can carry
-> **its own modules** in `<space>/modules/`; their code runs only
+> runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). The old «profile» of a task
+> is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
+> `space.json`). A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -38,6 +39,7 @@ links for your team.
 | **Team dashboard** | The «Team» tab of «Tasks»: the cards of the whole team's tasks (Jira status, open comments, preview, designer) from **your own Supabase project**, in any space, through the `supabase-dashboard` module. See *Team dashboard*. |
 | **Issue tracker** | The status of a task («In progress», «Done») from **your own Jira Cloud** as a badge on the «Tasks» screen — in any space, with no dashboard needed — through the `jira-tracker` module. See *Issue tracker*. |
 | **Teams notifications** | A card in your Teams channel for every new comment, and a switch «Notify Teams» in the publish menu to silence a task's channel — from **your own Supabase project**, in any space, through the `supabase-teams` module. See *Teams notifications*. |
+| **Space tracks** | Several lines of work in one space — each with its own folder for the tasks, default repository, design system and label — described in `space.json`; a task carries its `track`. See *Space tracks*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
 | **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, Teams notifications, design-system tokens) from the UI. See *Modules*. |
@@ -358,8 +360,8 @@ a tag has, the earlier its chip; several chips mean «any of them»), and the se
 characters without a comma, a task has at most 10, and `Alpha` and `alpha` are one tag. Over the API: the key `tags` of the
 task rows, the optional `tags` of `POST /api/task-new` and `POST /api/task-tags` `{id, tags}`. The «Team» tab has no tags yet (its rows come from the dashboard).
 
-**The LIGA space.** A task there without tags shows its profile (`United`, `LIGA360`, `SEO`) as a tag, so the screen looks as
-before. The profile still decides the folder and the default repository of a task; the table «profile → repository» is read
+**The LIGA space.** A task there without tags shows its track (`United`, `LIGA360`, `SEO`; the old name was «profile») as a tag,
+so the screen looks as before. The track still decides the folder and the default repository of a task (see *Space tracks*); the table «profile → repository» is read
 from the root of the legacy `tasks.json` (the same file as the Supabase pair):
 
 ```json
@@ -368,6 +370,55 @@ from the root of the legacy `tasks.json` (the same file as the Supabase pair):
 
 A profile is `[a-z0-9-]` up to 32 characters; a repository is printable ASCII without spaces and does not start with `-`.
 Without the table new LIGA tasks get no default repository.
+
+## Space tracks
+
+A space can have several **tracks** — lines of work such as «Web» and «Mobile». Each track has its own **folder for the tasks**,
+a **default repository** of mockups, a **design system** for the inspector and a **label**; a task carries the id of its track
+in the key `track`, and without tags it shows the label of its track on the «Tasks» screen. A space with no tracks works as
+before. Tracks are described by hand in the `space.json` of the space (there is no screen for them yet); the file is read on every
+request, so no restart is needed. Example, with invented values:
+
+```json
+{
+  "name": "Studio",
+  "tracks": [
+    { "id": "web",    "label": "Web",    "root": "~/work/web", "repo": "git@example.com:studio/web.git", "ds": "" },
+    { "id": "mobile", "label": "Mobile", "root": "mobile",     "repo": "",                               "ds": "" }
+  ],
+  "default_track": "web"
+}
+```
+
+| Field | Rule | When absent or bad |
+|---|---|---|
+| `id` | **Required.** `[a-z0-9-]`, 1–32 characters, unique in the space. | The whole track is dropped (on a duplicate the first one wins). |
+| `label` | The caption and the derived tag of a task: 1–32 characters, no comma, no control or invisible characters. | The `id`. |
+| `root` | The folder where the tasks of the track are created. Absolute, `~/…`, or relative to the folder of the space. | The folder of the space. |
+| `repo` | The default repository of a new task: printable ASCII without spaces, not starting with `-`. | No default repository. |
+| `ds` | The name of a static design system of the inspector (`[a-z0-9-]`, up to 32); today the inspector knows `united` and `liga360`, and for any other name it honestly says there is none. | `''`: no static design system, the inspector takes the tokens of the space. |
+| `default_track` | The track for a task created with no `track`. | The first track (no tracks: none). |
+
+At most **20** tracks count; the rest are ignored. Reading never fails: a bad entry is dropped and a bad field counts as absent, so
+the rest of the file keeps working.
+
+**The `root` must be a sensible folder.** A system folder, a hidden folder or `Library` in your home, your home itself, a folder
+inside this tool's own repository, a folder equal to or inside **another** space of this machine, a path longer than 1024
+characters or a file — all of these are silently replaced by the folder of the space (no warning yet). A folder inside the space
+itself is fine.
+
+**Creating a task in a track.** Only the API puts a task into a track today (the pipeline skill does it): `POST /api/task-new` with
+`"track": "web"`. A body with no `track` goes to `default_track`. An unknown track is `400 unknown-track` and **nothing is
+created**; a `track` that is not a lowercase id is `400 bad-track`. The task folder is created under the `root` of the track. If
+the track has a `repo`, **and** the space has a provider of the role `vcs` (see *Git sync*), **and** the body has no `vcs` of its
+own, the task gets `vcs: {repo}` and is bootstrapped from that repository; without a provider the `repo` is just not applied.
+The old key `profile` still works as a synonym of `track`; old clients that send a `profile` that is not a track of the space are
+simply ignored, exactly as before. `GET /api/tasks` and `GET /api/task` give `track` for every task, and `GET /api/spaces` lists
+`tracks: [{id, label}]` and `default_track` — never the folders or repositories.
+
+**The LIGA space** has three tracks (`united`, `liga360`, `seo`) that come from the root of its `tasks.json` (`design_work_roots`,
+`design_work_root`, `profile_repos`) — see *Tasks and tags*. Nothing is to be done there; its tasks keep both `track` and `profile`
+so that teammates on an older version still read them.
 
 ## Team dashboard
 
@@ -565,7 +616,14 @@ tests/        unit, Python and live (Playwright) tests
      - ✅ **4c-3** (0.14) — Teams notifications: the role `notify` and the built-in module `supabase-teams` with its own
        `schema.sql` (a card for every new comment, the silence per channel, a delivery log); the legacy space goes through it as
        an implicit provider, and no role name is reserved any more.
-   - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.
+   - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space. Four releases (owner decision
+     04.11.2026):
+     - ✅ **4d-1** (0.15) — tracks: the profile of a task becomes a general **track of a space** (`tracks` in `space.json`: a
+       folder, a repository, a design system and a label per line of work); the LIGA space gets its three tracks from an implicit
+       adapter, with no change for its designers;
+     - **4d-2** (0.16) — the layer-off seam and the isolation of shared state without the literal `'legacy'`;
+     - **4d-3** (0.17) — explicit LIGA modules, with an automatic migration of its config (with a backup);
+     - **4d-4** (0.18) — the `integrations` flag and the old aliases (including `profile`) go.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.
 

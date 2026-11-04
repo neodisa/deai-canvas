@@ -10,9 +10,10 @@ modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and th
 `supabase-comments`, 0.10.0), stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0), stage 4c-1 (the
 team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0), stage 4c-2 (tracker statuses as the
 role `tracker` and the module `jira-tracker`, 0.13.0) and stage 4c-3 (the Teams notifications as the role `notify` and the
-module `supabase-teams`, 0.14.0) — see *Status* at the end.
-Next: stage 4d — the end of the `integrations` flag and of the literal `'legacy'`: the original setup becomes an ordinary
-space.
+module `supabase-teams`, 0.14.0) and stage 4d-1 (the profile of a task becomes the general tracks of a space, 0.15.0) — see
+*Status* at the end.
+Next: stage 4d-2 — the layer-off seam and the isolation of shared state without the literal `'legacy'`; stage 4d goes on to
+4d-3 and 4d-4 and ends with the original setup becoming an ordinary space.
 
 ## Goal
 
@@ -110,7 +111,14 @@ canvas for their workflow without touching the core.
        as an implicit provider;
      - ✅ **4c-3** (0.14.0) — Teams notifications: the role `notify`, the module `supabase-teams` with its own `schema.sql`; the
        legacy space goes through it as an implicit provider;
-   - **4d** — the `integrations` flag goes.
+   - **4d** — the `integrations` flag goes. Split into four releases (owner decision 04.11.2026):
+     - ✅ **4d-1** (0.15.0) — the profile of a task becomes **tracks of a space** (`tracks` in `space.json`, the key `track` of a
+       task); the LIGA space gets its three tracks from an implicit adapter, `profile` stays a synonym;
+     - **4d-2** (0.16.0) — the layer-off seam (a space with the layer switched off) and the isolation of shared state, without the
+       literal `'legacy'`;
+     - **4d-3** (0.17.0) — explicit LIGA modules, with an **automatic migration of its config with a backup**: the same
+       migration also writes its tracks into its `space.json`, and the adapter of 4d-1 goes;
+     - **4d-4** (0.18.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
 Each stage gets its own spec, plan and tests.
@@ -468,7 +476,48 @@ plan: `docs/superpowers/plans/2026-11-03-notify-role.md`. What is built:
   Postgres and no real Teams.
 - **Left for 4d:** the `integrations` flag and the literal `'legacy'` go; every in-house integration is a role by now.
 
+### Stage 4d-1 — tracks of a space instead of the profile (0.15.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-04-space-tracks-design.md`;
+plan: `docs/superpowers/plans/2026-11-04-space-tracks.md`. This is the first of the four sub-releases of 4d (owner decision
+04.11.2026). What is built:
+
+- **The core `app/tracks.py`** (no network, no import of `serve`): `ID_RE`, `MAX_TRACKS` (20), `ROOT_MAX` (1024), `normalize`
+  (`tracks` of a `space.json` → `[{id, label, root, repo, ds}]`, never raises), `default_id`, `of_task` (`track`, otherwise
+  `profile`), `find`, `label_tag` and the adapter `legacy_tracks(cfg)` with `legacy_root` and `legacy_repos`. The tag rules, the repo
+  rule and the id pattern moved here from `serve`.
+- **`serve`:** `space_tracks(sp)`, `_TrackView` (the tracks of one space, once per request and lazily), `track_root`, `track_repo`,
+  `task_ds`; `task_tags(task, sp)`. A task has `track`; it is in `/api/tasks`, `/api/task` and `/api/spaces` (`tracks`,
+  `default_track`, never `root` or `repo`); `POST /api/task-new` takes `track` (and `profile` as a synonym), with the codes
+  `bad-track` and `unknown-track`.
+- **The LIGA space as an adapter:** its tracks come from the root of the old `tasks.json` (`design_work_roots`,
+  `design_work_root`, `profile_repos`; labels `United` / `LIGA360` / `SEO`; the default `united`; `ds` = the id), unless its
+  `space.json` already has `tracks`. A LIGA record writes `track` **and** `profile` with the same value, so teammates on 0.14.0 keep
+  reading the shared registry. `bin/registry.py` (`SHARED` has `track`), `bin/roots.py` and `bin/state.py` go through `tracks`.
+- **An ordinary space with tracks:** the task folder is the `root` of the track, and its `repo` becomes the `vcs` of the task when a
+  `vcs` provider exists and the body has no `vcs`.
+- **Removed from the core:** `_LEGACY_PROFILE_TAGS`, `_PROFILE_KEY`, `_REPO_OK`, `work_root`, the tag helpers (all in `tracks.py` now);
+  `serve.py` has no `united` / `liga360` / `seo` left (a test checks it). Kept until 4d-4: the wrapper `profile_repos`.
+- **Conscious differences from 0.14.0:** new fields and the codes `bad-track` / `unknown-track`; the folder and repository of a track in an
+  ordinary space; LIGA no longer crashes on a non-object `design_work_roots`, a non-string root, a numeric profile (page and
+  `bin/roots.py`); `?ds=` follows the `ds` of the found track; `?all=1` labels each row by its own space. The full list is in the
+  CHANGELOG, `[0.15.0]`.
+- **Known limits:** tracks are edited in `space.json` only (no UI; only the API puts a task into a track); an invalid root falls
+  back to the space path with no warning; roots are validated on `/api/tasks` and on task creation, not on `/api/spaces`; `profile`
+  lives on until 4d-4; the names of the LIGA tracks live in the adapter until 4d-3; `_liga_flow` looks at `profile` only.
+- **Tested** against the snapshot of 0.14.0 (`tests/fixtures/tracks/before-4d1.json`, about 160 tests in `tests/test_tracks.py`),
+  with fake `vcs` modules and local fixture repos, and in the live test `tests/live/tracks.test.mjs`; no network.
+- **Left for 4d-2…4d-4:** see below.
+
 ### What stays for later
+
+- **Left for 4d-2…4d-4** (stage 4d, four releases):
+  - **4d-2** (0.16.0): the layer-off seam and the isolation of shared state without the literal `'legacy'`;
+  - **4d-3** (0.17.0): explicit LIGA modules with an automatic migration of its config (with a backup) — it also writes the LIGA
+    tracks into its `space.json`, so `tracks._LEGACY_LABELS`, the default `united` and the adapter go;
+  - **4d-4** (0.18.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
+    `profile_repos`, and the `profile`-only look of `_liga_flow`.
+  Not planned in 4d-1: a UI to edit tracks, a track choice in the «New task» dialog.
 
 - No role is reserved any more (every role of the map is called by the core since 4c-3).
 - Left out of 3c (listed in its spec): a sandbox for module code (a trusted module runs with the person's
