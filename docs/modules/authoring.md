@@ -338,7 +338,8 @@ canvas shows whether the comment channel of a task is silenced and silences or u
 not done by the core: the service behind the module (the database, in the built-in `supabase-teams`) sends a card to Teams
 for each new pin and looks at the mute before it does. The built-in module is `app/modules/supabase-teams/`.
 
-**The functions.** Both take `ctx` first and report a failure with `ctx["ModuleError"]` (the codes are below).
+**The functions.** Both are required: a module that declares the role `notify` and lacks `mute_state` or `mute_set` is
+`bad-manifest` (as for `tracker`). Both take `ctx` first and report a failure with `ctx["ModuleError"]` (the codes are below).
 
 * `mute_state(ctx)` — returns a **list** of the silenced channels:
   `[{"project_id": str, "muted_at": str | None, "muted_by": str}]`. `project_id` is the channel (`dc/t1`), `muted_at` the time
@@ -351,9 +352,15 @@ for each new pin and looks at the mute before it does. The built-in module is `a
   state as a **bool**. `channel` is a non-empty string of at most **200** characters, `muted` is a real `bool` (not `1` or
   `"true"`), `by` is the signature of the person, a string of at most **200** characters (may be empty). The core checks the
   arguments **before** the call, so a module never sees a bad one. Anything but a bool in the answer is a `notify-error`.
-* `check(ctx)` — as for every module (section 3): a verdict dict, never an exception. The built-in module tells apart a wrong
-  address or key, a service without its schema, and a service that cannot send (no webhook secret); the codes of a verdict are
-  free text for the screen — the table below lists only the codes you **raise**.
+* `check(ctx)` — as for every module (section 3): a verdict dict, never an exception. The built-in module answers
+  `module-error` for settings that do not fit (address, key), **`public-key`** for a public key (`sb_publishable_…` or a JWT with
+  `"role": "anon"`; its own code, because the Connections screen labels a `module-error` «the module crashed during the
+  check»; `supabase-dashboard` answers it too), **`notify-no-schema`** when the database has no notification functions (the
+  shared `no-schema` is worded «no table comments», which is wrong here), **`notify-no-webhook`** when the Vault secret
+  `teams_webhook_url` is missing, `bad-key` for HTTP 401/403, `network` when the service cannot be reached, and `notify-error`
+  (with the HTTP status) for any other answer. For the implicit LIGA path it neither refuses a public key nor asks for the
+  health of the delivery. The codes of a verdict are free text for the screen: the table of error codes below lists only the codes
+  you **raise**.
 
 **What the core does with the state.** A silenced channel covers its sub-channels: with `dc/t1` silenced, `dc/t1/internal` is
 silenced too (`via` names the channel that covers it). The match is by `<channel>/`, not by a bare prefix: `dc/t10` and
@@ -363,7 +370,9 @@ of this computer; a row without `muted_by` (an old one) is never «mine». The c
 instead of a bare `check-timeout`.
 
 **Who is asked, and when.** A space has notifications when it has a provider of the role; without one the canvas shows no
-switch and the route `/api/teams-mute` answers `409`. A space with integrations and no module of its own uses the built-in
+switch and the route `/api/teams-mute` answers `409` with the code `notify-off`. The role no longer depends on the `integrations`
+flag. A module of your own that is on in the space but cannot run (not trusted, a manifest that broke) is reported with its
+reason, not shown as «no notifications». A space with integrations and no module of its own uses the built-in
 `supabase-teams` through the address and the key of the installation (the same Supabase as the team comments).
 
 **The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`. The table is

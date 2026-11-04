@@ -8,10 +8,11 @@ Connections screen, 0.5.0), stage 3b (the new-space wizard, 0.6.0), stage 3c (a 
 modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and the `git-sync` module, 0.8.0) and stage
 4b-1 (the in-house publishing through `vercel-publish`, 0.9.0), stage 4b-2 (the in-house comments through
 `supabase-comments`, 0.10.0), stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0), stage 4c-1 (the
-team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0) and stage 4c-2 (tracker statuses as the
-role `tracker` and the module `jira-tracker`, 0.13.0) — see *Status* at the end.
-Next: stages 4c-3 to 4d — the last in-house integration of the legacy space (the Teams silence, as the role `notify`) as an
-optional per-space module, and the end of the `integrations` flag.
+team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0), stage 4c-2 (tracker statuses as the
+role `tracker` and the module `jira-tracker`, 0.13.0) and stage 4c-3 (the Teams notifications as the role `notify` and the
+module `supabase-teams`, 0.14.0) — see *Status* at the end.
+Next: stage 4d — the end of the `integrations` flag and of the literal `'legacy'`: the original setup becomes an ordinary
+space.
 
 ## Goal
 
@@ -48,7 +49,7 @@ canvas for their workflow without touching the core.
   | Design-system tokens (`tokens`) | CSS custom properties file or npm package |
   | Issue tracker (`tracker`) | Jira Cloud, through `jira-tracker` (Linear and others as modules later) |
   | Team dashboard (`dashboard`) | Supabase (your own project), through `supabase-dashboard` |
-  | Notifications (`notify`) | — |
+  | Notifications (`notify`) | Supabase (your own project), through `supabase-teams`: a card in Teams for every new comment, the silence per channel |
 
 - Built-in modules ship in `app/modules/`; a space's own modules live in
   `<space>/modules/` and are loaded the same way — but only after the person trusts them
@@ -107,7 +108,8 @@ canvas for their workflow without touching the core.
        goes through it as an implicit provider;
      - ✅ **4c-2** (0.13.0) — tracker statuses: the role `tracker`, the module `jira-tracker`; the legacy space goes through it
        as an implicit provider;
-     - **4c-3** — the Teams silence through the role `notify`;
+     - ✅ **4c-3** (0.14.0) — Teams notifications: the role `notify`, the module `supabase-teams` with its own `schema.sql`; the
+       legacy space goes through it as an implicit provider;
    - **4d** — the `integrations` flag goes.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
@@ -128,7 +130,7 @@ Spec (with the list of deviations from its second revision):
 - **Framework** (`app/deai_modules.py`): manifest, `exec`-loading of `server.py`, per-space
   settings in `space.json`, secrets in `<DEAI_HOME>/secrets.json`, one provider per role,
   `capabilities` (`{publish, tokens}`) in the task and space responses. Roles called by the
-  core at 2a: `publish`, `tokens`; the others are reserved (at 2a; since 4c-2 only `notify` is).
+  core at 2a: `publish`, `tokens`; the others were reserved (at 2a; since 4c-3 none is: every role is called).
 - **`static-publish`**: publishes the preview to a folder **outside** the space (default
   `~/deai-published/<space-id>/<task>/`), implicit in a space without integrations. The
   folder is re-checked on every publish and serve; replacement is marker-guarded and done as
@@ -362,7 +364,7 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
   task it writes (a newer one puts them back on its next write); `task-tags` does not hold `WRITE_LOCK` across read-modify-write (`save_tasks` locks only the write, so a concurrent change of the same file by another route can be lost: last write wins);
   the search does not highlight inside tags; a chip shows the first-seen spelling; the button «Мітки» is one more Tab stop.
 - **Tested** against the snapshot of 0.10.0 (`tests/fixtures/task-tags/before-4b3.json`); no network.
-- **Left for 4c / 4d:** the dashboard (done in 4c-1) and tracker statuses (done in 4c-2), see below; notifications as a module; the `integrations` flag and the profile
+- **Left for 4c / 4d:** the dashboard (done in 4c-1), tracker statuses (done in 4c-2) and notifications (done in 4c-3), see below; the `integrations` flag and the profile
   adapter go in 4d.
 
 ### Stage 4c-1 — the team dashboard as a role (0.12.0)
@@ -391,7 +393,7 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
   list is in the CHANGELOG, `[0.12.0]`.
 - **Tested** against the snapshot of 0.11.0 (`tests/fixtures/dashboard/before-4c1.json`), a fake module and a fake vcs in the live
   tests (`tests/live/dashboard-role.test.mjs`); no network and no real Supabase.
-- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses (done in 4c-2, see below) and the Teams silence as roles and modules; the `integrations` flag and the
+- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses (done in 4c-2) and the Teams silence (done in 4c-3), see below; the `integrations` flag and the
   literal `'legacy'` go in 4d.
 
 ### Stage 4c-2 — tracker statuses as a role (0.13.0)
@@ -399,7 +401,7 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
 Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-03-tracker-role-design.md`;
 plan: `docs/superpowers/plans/2026-11-03-tracker-role.md`. What is built:
 
-- **The role `tracker`** is called by the core (`ROLES_CALLED`; only `notify` stays reserved): `statuses(ctx, keys)` →
+- **The role `tracker`** is called by the core (`ROLES_CALLED`; only `notify` stayed reserved until 4c-3): `statuses(ctx, keys)` →
   `{key: {name, cat}}`; the codes `tracker-unconfigured` (409) and `tracker-error` (502); `capabilities.tracker`; the new
   field `ctx["timeout_s"]` (the socket budget of the module). Like `dashboard`, it has the hard-wired path of the legacy space
   (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable `space.json` is not
@@ -428,12 +430,47 @@ plan: `docs/superpowers/plans/2026-11-03-tracker-role.md`. What is built:
   Ukrainian in the English interface too. The full list is in the CHANGELOG, `[0.13.0]`.
 - **Tested** against the snapshot of 0.12.0 (`tests/fixtures/tracker/before-4c2.json`), the module and the core with a stubbed
   network, and a fake module in the live tests (`tests/live/tracker-role.test.mjs`); no network and no real Jira.
-- **Left for 4c-3 / 4d:** the Teams silence as the role `notify`; the `integrations` flag and the literal `'legacy'` go in 4d.
+- **Left for 4c-3 / 4d:** the Teams silence as the role `notify` (done in 4c-3, see below); the `integrations` flag and the literal `'legacy'` go in 4d.
+
+### Stage 4c-3 — Teams notifications as a role (0.14.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-03-notify-role-design.md`;
+plan: `docs/superpowers/plans/2026-11-03-notify-role.md`. What is built:
+
+- **The role `notify`** is called by the core (`ROLES_CALLED`; `ROLES_RESERVED` is empty — **no role name is reserved any
+  more**): `mute_state(ctx)` → a list of silenced channels and `mute_set(ctx, channel, muted, by)` → a bool; the codes
+  `notify-unconfigured` (409) and `notify-error` (502); `capabilities.notify`. Like `tracker`, it has the hard-wired path of the
+  legacy space (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable
+  `space.json` is not `'legacy'` either, `STRICT_LEGACY_ROLES`). The contract is in `docs/modules/authoring.md`.
+- **The core `app/notify.py`** (no import of `serve`): `normalize_mutes`, `mute_view` (a silenced channel covers its
+  sub-channels), `check_set_args`, `legacy_ctx` and `legacy_module`. `serve.py` gets `notify_resolve()` and `notify_call()` in
+  place of `teams_rpc`, and the route `/api/teams-mute` is gated by the role.
+- **The module `supabase-teams` 1.0.0** (built-in) with its own **`schema.sql`**: the person runs it once in the Supabase of the
+  comments (after the schema of `supabase-comments`), and a new pin sends a card to Teams through a webhook kept in Vault, with the
+  silence per channel and a delivery log; the module calls the RPC `teams_mute_state` / `teams_mute_set` /
+  `teams_notify_health`, granted to `service_role` only, with a **non-public** key. `check` tells apart `public-key`,
+  `notify-no-schema` and `notify-no-webhook`.
+- **LIGA through the module** as an implicit provider: the same RPC with the public key of the page, from the config of the
+  installation; its own triggers and the card stay in its database. Isolation: with `DC_TASKS_FILE` or
+  `DC_NO_OVERVIEW` the LIGA path never goes to the network; `DC_TEAMS_FAKE` is the seam of that path only.
+- **The client** follows the role: `hasNotify(space)` gates the Teams item and the polling (`noOutward` is gone); the role is on
+  the Connections screen and in the wizard (icon «eye»: there is no bell in the set).
+- **Conscious differences from 0.13.0:** the refusal without a provider is `notify-off` (not `integrations-off`); the error text of a
+  LIGA failure comes from the module; a module answer of the wrong shape is a `notify-error`; a channel over 200 characters is 400;
+  a broken own module is reported with its reason; `public-key` is also the verdict of `supabase-dashboard` (it was `module-error`);
+  the schema of the module de-duplicates the send by its delivery log (the LIGA trigger does not). The full list is in the CHANGELOG,
+  `[0.14.0]`.
+- **Known limits:** the state is cut at 1000 rows; `schema.sql` was checked statically only (no Postgres in CI), the first run on a
+  real Supabase is a manual step; fire-and-forget delivery with the health visible only in `check`; the card carries the channel id
+  in Ukrainian; the shared `no-schema` text is still worded «no table comments» for `supabase-dashboard`.
+- **Tested** against the snapshot of 0.13.0 (`tests/fixtures/notify/before-4c3.json`), the module and the core with a stubbed
+  network, static checks of the schema, and a fake module in the live tests (`tests/live/notify-role.test.mjs`); no network, no
+  Postgres and no real Teams.
+- **Left for 4d:** the `integrations` flag and the literal `'legacy'` go; every in-house integration is a role by now.
 
 ### What stays for later
 
-- The role `notify` is a reserved name that the core does not
-  call yet (stage 4c-3).
+- No role is reserved any more (every role of the map is called by the core since 4c-3).
 - Left out of 3c (listed in its spec): a sandbox for module code (a trusted module runs with the person's
   permissions); cleaning of snapshots that a re-trust replaced or whose folder vanished; viewing or comparing code in
   the dialog; signatures and a catalog of modules; installing a module from a URL; machine-wide modules; a banner

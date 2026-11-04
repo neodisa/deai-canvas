@@ -16,10 +16,10 @@ links for your team.
 > or with the `vercel login` of the computer. The in-house publishing and comments of the legacy space now run on these same
 > modules, and so does the **team dashboard** (the «Team» tab of «Tasks»): any space can get it through the
 > `supabase-dashboard` module and its own Supabase project, and the **issue tracker** (task statuses from Jira Cloud) through
-> the `jira-tracker` module. One integration
-> (team chat notifications) is still wired for the original
-> setup and only runs in a migrated legacy space; it is being turned into an optional per-space
-> module. A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> the `jira-tracker` module, and the **Teams notifications** (a card in a Teams channel for every new comment, and the
+> silence switch) through the `supabase-teams` module and the same Supabase project as the comments. The legacy space
+> runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). A space can carry
+> **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -37,9 +37,10 @@ links for your team.
 | **Git sync** | Send an iteration to a git repository (GitHub, GitLab, your own server) and pull a colleague's changes back as a new iteration; the state is a dot in the task bar. Any space, through the `git-sync` module. See *Git sync*. |
 | **Team dashboard** | The «Team» tab of «Tasks»: the cards of the whole team's tasks (Jira status, open comments, preview, designer) from **your own Supabase project**, in any space, through the `supabase-dashboard` module. See *Team dashboard*. |
 | **Issue tracker** | The status of a task («In progress», «Done») from **your own Jira Cloud** as a badge on the «Tasks» screen — in any space, with no dashboard needed — through the `jira-tracker` module. See *Issue tracker*. |
+| **Teams notifications** | A card in your Teams channel for every new comment, and a switch «Notify Teams» in the publish menu to silence a task's channel — from **your own Supabase project**, in any space, through the `supabase-teams` module. See *Teams notifications*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
-| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, design-system tokens) from the UI. See *Modules*. |
+| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, Teams notifications, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -104,8 +105,8 @@ after a restart (what was created stays, and the rest is on «Connections»).
 A **module** is a folder — built in at `app/modules/<id>/` or a space's own at
 `<space>/modules/<id>/` — with `module.json` (manifest and the settings
 it asks for) and `server.py` (functions for its role). A *role* is an interface the core
-calls: `publish`, `tokens`, `comments`, `vcs`, `dashboard` and `tracker` today; `notify`
-is reserved. One provider per role per space.
+calls: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker` and `notify`; no role name is
+reserved any more. One provider per role per space.
 
 **Connecting a module — the Connections screen.** Open the space menu (the space chip in the
 top bar) → «Connections…», or press ⌘K and pick «Connections of the space …»; in a space
@@ -150,6 +151,7 @@ those folders out of public commits.
 | `supabase-comments` | `comments` | Team comments in **your own Supabase project**: the pins are stored there, shown on the canvas, the Overview and in published previews, and read and closed by the agent. Settings: `url`, `key` (the public key; a secret that is allowed into pages), optional `shots_bucket` (screenshots of pins). Off by default. See *Comments*. |
 | `supabase-dashboard` | `dashboard` | The team dashboard in **your own Supabase project**: the canvas stores the cards of your tasks there and the «Team» tab reads the rows of the whole team back. Settings: `url`, `key` (a **non-public** secret: `service_role` or the key of a role of your own), optional `table` (`deai_dashboard`). Off by default. See *Team dashboard*. |
 | `jira-tracker` | `tracker` | The status of your tasks from **your own Jira Cloud**: the canvas asks Jira for the keys of your tasks (`DEMO-1`…) and shows the status as a badge on the «Tasks» screen and on the cards of the team dashboard. Read-only. Settings: `base` (`https://<site>.atlassian.net`), `email`, `token` (a secret: the Atlassian API token). Off by default. See *Issue tracker*. |
+| `supabase-teams` | `notify` | Teams notifications in **your own Supabase project**: the database sends a card to Teams for every new comment (its own `schema.sql`, the webhook address in Vault), and the canvas switches the silence of a task's channel. Settings: `url`, `key` (a **non-public** secret: `service_role` or the key of a role of your own). Off by default. See *Teams notifications*. |
 | `git-sync` | `vcs` | Syncs a task's iterations with **any git repository** — GitHub, GitLab, your own server — through the git on your computer: nothing is stored by Deai, access is your SSH key or saved HTTPS sign-in. Settings: `repo` (the default for tasks; optional), `branch` (`main`), `path` (`mockup/{task}`), `ssh_key`, `host_ip`, `autosync`. Off by default. See *Git sync*. |
 
 **Publishing to a folder.** Mark iterations with the green dot, press *Publish*: the
@@ -330,7 +332,7 @@ Supabase are read from the installation — the root of its `tasks.json`:
 ```
 
 (or the environment variables `SUPABASE_URL` and `SUPABASE_KEY`). The same pair feeds the
-team dashboard and the Teams silence. Without it the team comments of that space are off — the page shows the local pins
+team dashboard and the Teams silence (through the modules `supabase-dashboard` and `supabase-teams`). Without it the team comments of that space are off — the page shows the local pins
 and a notice, and `inbox` reports `comments-unconfigured`. The screenshot bucket there is `overview-thumbs`.
 
 **Your own service.** Any comment service — PocketBase, Firebase, your own API — connects with
@@ -419,6 +421,37 @@ know fails the whole batch of keys (Jira answers HTTP 400 to the query) — fix 
 `JIRA_EMAIL` and `JIRA_TOKEN` in the environment or the two files in `~/.claude/pipeline-feedback/`. Without `jira_base` that
 space has no statuses, and when its tasks carry Jira keys «Mine» says that Jira is not configured.
 
+## Teams notifications
+
+The `supabase-teams` module (role `notify`) puts a **card in a Teams channel for every new comment** (pin) and gives you a
+switch **«Notify Teams»** in the publish menu of a task that silences its comment channel (a silenced channel covers its
+sub-channels; the comments themselves are not touched). The sending is done by **your Supabase database**, not by the canvas:
+a trigger on the table of the comments posts the card through a webhook whose address lives in Vault. The canvas only reads
+and switches the silence, and its «Check» tells whether everything is in place. Without the module the space has neither the
+cards nor the switch, and the Teams item of the menu is not shown.
+
+**Connect it** (once per Supabase project; the comments of the space must already be on **that** project):
+
+1. In the SQL editor run the schema of `supabase-comments`, then
+   [`app/modules/supabase-teams/schema.sql`](app/modules/supabase-teams/schema.sql). Use a dedicated project: the script takes
+   over tables with its own names. **Do not run it in the LIGA database** — it has its own version.
+2. Put the address of your Teams webhook into Vault (https only):
+   `select vault.create_secret('<webhook address>', 'teams_webhook_url');`
+3. Create the receiving side in Teams — usually a Power Automate flow «When a Teams webhook request is received» that posts
+   the Adaptive Card it gets as it is.
+4. Connections → «Teams notifications» → «Supabase Teams» → «Connect» (or the same step of the new-space wizard) with the project
+   address and a **non-public** key (`service_role` or the key of a role of your own; kept in `~/.deai/secrets.json`, never put
+   into a page — a public key is refused, because the public key goes into every published preview).
+
+«Check» says «connected» with the number of deliveries of the last 6 hours and of the failed ones, or names what is missing: no
+functions in the database (run `schema.sql`), no `teams_webhook_url` in Vault, a public key instead of a non-public one. Delivery
+is fire-and-forget (no retries), and the card carries the id of the channel, not a project name. A comment that already has a row
+in the delivery log is never posted twice. The details, the grants and the network calls are in
+[the module README](app/modules/supabase-teams/README.md).
+
+**The LIGA space** reaches its own database through the same module with no wizard step and no schema to run (its database has
+all of this already): the address and the public key come from the same `tasks.json` pair as the comments.
+
 ## Git sync
 
 The `git-sync` module (role `vcs`) keeps a task's iterations in a git repository — GitHub, GitLab or your own server —
@@ -485,7 +518,7 @@ text. The full list is in `CHANGELOG.md`, 0.8.0.
 
 ```
 app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
-app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, jira-tracker, git-sync); the core is app/deai_modules.py
+app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, jira-tracker, supabase-teams, git-sync); the core is app/deai_modules.py
 docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
 ops/          macOS launcher (Design Canvas.app), preview gate tools
@@ -529,7 +562,9 @@ tests/        unit, Python and live (Playwright) tests
      - ✅ **4c-2** (0.13) — tracker statuses: the role `tracker` and the built-in module `jira-tracker` (statuses on the «Tasks»
        screen of any space, no dashboard needed); the legacy space goes through it as an implicit provider, its Jira address
        moves from the code into `tasks.json` (`jira_base`);
-     - **4c-3** — the Teams silence through the role `notify`.
+     - ✅ **4c-3** (0.14) — Teams notifications: the role `notify` and the built-in module `supabase-teams` with its own
+       `schema.sql` (a card for every new comment, the silence per channel, a delivery log); the legacy space goes through it as
+       an implicit provider, and no role name is reserved any more.
    - **4d** — the `integrations` flag goes: the original setup becomes an ordinary space.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.

@@ -3,6 +3,123 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.14.0] — unreleased
+
+Stage 4c-3: the Teams notifications become a role, the last one of the in-house integrations. The switch «Notify Teams» in the
+publish menu and the route `/api/teams-mute` no longer depend on the `integrations` flag and on the database of one company: they
+belong to whoever provides the role **`notify`** in the space. The built-in module `supabase-teams` provides it for anyone with a
+Supabase project, and it brings its own `schema.sql`, so an ordinary space now gets the **whole thing** — a card in a Teams
+channel for every new comment, the mute per channel and a delivery log — and not only the switch. The LIGA space reaches its own
+database through the same module as an implicit provider (as in 0.8.0–0.13.0 for the other roles) and keeps its own triggers. The
+core decides how the state of the mute is read and checked (`app/notify.py`); the module only talks to the service. After this
+release **no role name is reserved any more**. Design: `docs/superpowers/specs/2026-11-03-notify-role-design.md`; plan:
+`docs/superpowers/plans/2026-11-03-notify-role.md`. The behaviour of 0.13.0 is pinned by the snapshot
+`tests/fixtures/notify/before-4c3.json`.
+
+### Added
+
+- **The role `notify`** in the core: it is called now, `ROLES_RESERVED` is empty, and `capabilities.notify` carries the module id,
+  `'legacy'` or `null`. The functions of a module: `mute_state(ctx)` → a list of `{project_id, muted_at, muted_by}` and
+  `mute_set(ctx, channel, muted, by)` → a bool. The core normalizes the state (`notify.normalize_mutes`: `project_id` a string of
+  1..200 characters, `muted_by` a string of at most 200 or `''`, `muted_at` a string of at most 40 or `None`, at most 1000 rows;
+  an answer that is not a list is an error, never «nothing is silenced») and checks the arguments of `mute_set` **before** the
+  call. A silenced channel covers its sub-channels (`dc/t1` silences `dc/t1/internal`, not `dc/t10`). The error codes
+  `notify-unconfigured` (409) and `notify-error` (502); the core waits `NOTIFY_TIMEOUT` = 10 s. The contract is in
+  `docs/modules/authoring.md`, «The `notify` role».
+- **The module `supabase-teams` 1.0.0** (built-in). Settings: `url` (the project address: https only, a DNS name, no IP, no
+  `localhost`, no path) and `key` (a secret, **not** `public`: the `service_role` key or the key of a role of your own). The
+  schema `app/modules/supabase-teams/schema.sql` is run once by a person in the SQL editor, **after** the schema of
+  `supabase-comments`; it is idempotent and adds `pg_net`, the tables `teams_delivery_log` and `teams_project_mute` (RLS on, closed to
+  `anon` and `authenticated`), the card builder `comment_teams_card` (an Adaptive Card 1.4 made only with `jsonb_build_*`, no string
+  concatenation over the comment), the privileged sender `cl_send_teams` (a freshness guard of 2 minutes, the mute of a channel and
+  of its sub-channels, the webhook address from **Vault** under `teams_webhook_url`, `pg_net`), the trigger `cl_notify_teams` on new
+  comments, and the three functions the module calls: `teams_mute_state`, `teams_mute_set` and `teams_notify_health`. Those three are
+  granted to `service_role` only. The module calls them over `POST /rest/v1/rpc/…` with an 8 s socket timeout; it follows no
+  redirects, and no key or body of a request or answer ever gets into a text. See `app/modules/supabase-teams/README.md`.
+- **The verdicts of `check`** on the Connections screen: `notify-no-schema` (the database has no notification functions: run
+  `schema.sql`), `notify-no-webhook` (no `teams_webhook_url` secret in Vault: cards will not go) and `public-key` (a public key where
+  a non-public one is needed). The detail of a healthy check reads «доставок за 6 год: N, невдалих: M» (deliveries in 6 h, failed).
+- **The role on the Connections screen** (the card «Teams notifications», between «Issue tracker» and the tokens) and in the
+  new-space wizard; the texts are in `app/i18n.js` (UK and EN). The role icon is «eye»: the icon set has no bell.
+- **The client helper `hasNotify(space)`** (`app/spaces-model.js`): the Teams item of the publish menu and the polling of
+  `/api/teams-mute` follow `capabilities.notify`.
+
+### Changed
+
+- **The Teams item and the route follow the role, not the flag.** A space with a provider of `notify` has the item and the route
+  whatever its `integrations` flag says; a space without one has neither. For LIGA nothing changes.
+- **LIGA goes through the module.** `notify.legacy_ctx` and `notify.legacy_module` build the call for the built-in `supabase-teams`
+  from the config of the installation (`supabase_url` / `supabase_key`, the same pair as the comments and the dashboard). The
+  requests of the mute (method, path, body, headers, 8 s timeout) are the same as in 0.13.0 and are pinned by the snapshot. For LIGA
+  the module does **not** require a non-public key and does **not** call `teams_notify_health` (the LIGA database has no such
+  function, and its key is the public key of the page).
+- **The text of a failure comes from the module.** When the network or the service fails for LIGA, the error text is now the
+  module's (for example «Supabase недоступний (…)»); the shape of the answer is unchanged: GET `{channel, error}`, POST 502. LIGA with
+  no Supabase config raises `notify-unconfigured` with the same text «Supabase не налаштовано», and the route answers as in 0.13.0.
+- **The answers of a module are checked.** `mute_set` must return a real JSON bool and `mute_state` must return a list; anything
+  else is a `notify-error` (LIGA's `teams_mute_set` already `returns boolean`, so nothing changes for LIGA).
+- **`notify_call` checks its arguments too:** it runs `notify.check_set_args`, so a channel longer than 200 characters now gets 400.
+- **A broken own module of the role is reported with its reason**, not shown as «off». This follows the `dashboard` and `tracker`
+  precedent.
+- **`DC_TEAMS_FAKE`** (the test seam: a local JSON instead of the database) acts only for the `'legacy'` provider; a `muted_at` in it
+  that is not a string becomes `None`.
+- **`supabase-dashboard`:** a public key in `check` now gives the verdict `public-key` (it was `module-error`, which the screen
+  labels «the module crashed during the check»). Nothing else in that module changed.
+
+### Removed
+
+- `serve.teams_rpc` and `serve.teams_mute_view`; their place is taken by `notify_resolve` / `notify_call` in `serve.py` and
+  `notify.mute_view` in `app/notify.py`.
+- The client helper `noOutward` (`app/app.js`); the replacement is `noNotify` / `hasNotify(space)`.
+
+### Upgrading
+
+- **LIGA: nothing to do.** It still needs `jira_base` in `tasks.json` from 0.13.0, if that is not done yet.
+- **An ordinary space:** to get the cards and the switch, (1) run the schema of `supabase-comments`, then `schema.sql` of
+  `supabase-teams`, in the SQL editor of the **same** project; (2) put the address of your Teams webhook into Vault:
+  `select vault.create_secret('<webhook address>', 'teams_webhook_url');` (https only); (3) enable the module (Connections →
+  «Teams notifications», or the wizard) with the project address and a **non-public** key (`service_role` or the key of a role of
+  your own); (4) create the receiving side in Teams (a Power Automate flow or an incoming webhook that posts the card as it is).
+  Without the module nothing changes. Read `app/modules/supabase-teams/README.md`.
+- **Authors of their own modules:** a module that declares the role `notify` must now provide `mute_state` and `mute_set`, otherwise
+  it is `bad-manifest` (the same rule applied to `tracker` in 0.13.0).
+- Scripts that imported `teams_rpc` or `teams_mute_view` from `app/serve.py` must move to `notify_call` and `app/notify.py`.
+
+### Deliberate differences from 0.13.0
+
+(everything else is checked against the snapshot)
+
+- **The code of a refusal without a provider is `notify-off`** (it was `integrations-off`): a space without a `notify` provider
+  answers `/api/teams-mute` with 409 `{code: 'notify-off'}`. The Teams item of the dropdown follows the role, not the integrations
+  flag.
+- **Failures read differently** (see *Changed*): the error text of a LIGA failure comes from the module; a module answer of the
+  wrong shape is a `notify-error`; a channel over 200 characters is 400.
+- **The schema of the module is stricter than the LIGA one:** the mute RPCs are granted to `service_role` only (LIGA grants them to
+  the key of the page, and its database does not change).
+- **`cl_send_teams` de-duplicates by the delivery log:** a comment that already has a row there is never posted again, so a replayed
+  insert (or a replayed call with the same id inside the 2 minutes) does not send a second card. The LIGA trigger does not do this.
+- **Isolation:** with `DC_TASKS_FILE` or `DC_NO_OVERVIEW` the LIGA path never goes to the network (the answer is an `OSError`
+  «ізольований конфіг…»); `DC_TEAMS_FAKE` is the seam of that path, and a space with a module does not see it.
+
+### Known limits
+
+- `normalize_mutes` keeps at most 1000 rows: a silenced channel past row 1000 shows as not silenced.
+- `schema.sql` was checked **statically only** (there is no Postgres in CI or on the development machine). The first run on a real
+  Supabase is a manual step of the owner.
+- The card carries the id of the channel, not a project name, and its labels are Ukrainian; the receiving side (Power Automate or
+  another) is set up by a person. `pg_net` and Vault must be available in the project.
+- Delivery is fire-and-forget (no retries), as in LIGA; its health is visible only in `check` on the Connections screen.
+- The text of the shared verdict `no-schema` («нема таблиці comments») is still shown for `supabase-dashboard`; changing it is out
+  of scope of 4c-3 (the verdict of `supabase-teams` has its own code, `notify-no-schema`).
+- The error texts of the server are Ukrainian also in the English interface (as for the other roles).
+- The snapshot generator `tests/make_before_4c3.py` is frozen: it describes 0.13.0 and must not be re-run on the new code.
+
+### Tests
+
+- The behaviour of 0.13.0 is pinned by `tests/fixtures/notify/before-4c3.json`; the live test is
+  `tests/live/notify-role.test.mjs` (a fake module, the item with and without a provider, a failure, the Connections screen,
+  LIGA through `DC_TEAMS_FAKE`).
+
 ## [0.13.0] — 03.11.2026
 
 Stage 4c-2: the task statuses of the issue tracker become a role. The badge with the status of a task («In progress», «Done»…)
