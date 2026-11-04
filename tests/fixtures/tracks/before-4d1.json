@@ -1,0 +1,1657 @@
+{
+  "ds": {
+    "' united '": {
+      "profile": " united ",
+      "result": {
+        "result": "?ds=united"
+      }
+    },
+    "''": {
+      "profile": "",
+      "result": {
+        "result": ""
+      }
+    },
+    "'Bad!'": {
+      "profile": "Bad!",
+      "result": {
+        "result": ""
+      }
+    },
+    "'a_b'": {
+      "profile": "a_b",
+      "result": {
+        "result": ""
+      }
+    },
+    "'liga360'": {
+      "profile": "liga360",
+      "result": {
+        "result": "?ds=liga360"
+      }
+    },
+    "'seo'": {
+      "profile": "seo",
+      "result": {
+        "result": "?ds=seo"
+      }
+    },
+    "'united'": {
+      "profile": "united",
+      "result": {
+        "result": "?ds=united"
+      }
+    },
+    "'zzz'": {
+      "profile": "zzz",
+      "result": {
+        "result": "?ds=zzz"
+      }
+    },
+    "None": {
+      "profile": null,
+      "result": {
+        "result": ""
+      }
+    },
+    "x*32": {
+      "profile": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "result": {
+        "result": "?ds=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    "x*33": {
+      "profile": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "result": {
+        "result": ""
+      }
+    }
+  },
+  "meta": {
+    "generator": "tests/make_before_4d1.py",
+    "source_commit": "c8c3a8b",
+    "version": "0.14.0",
+    "volatile_stripped": [
+      "opened"
+    ]
+  },
+  "repos": {
+    "bad_key_chars": {
+      "cfg": {
+        "profile_repos": {
+          "": "git@example.com:s/w.git",
+          "a b": "git@example.com:s/w.git",
+          "a_b": "git@example.com:s/w.git",
+          "ok-1": "git@example.com:s/w.git"
+        }
+      },
+      "result": {
+        "result": {
+          "ok-1": "git@example.com:s/w.git"
+        }
+      }
+    },
+    "bad_key_uppercase": {
+      "cfg": {
+        "profile_repos": {
+          "United": "ssh://git@example.com/o/r.git",
+          "seo": "git@example.com:s/w.git"
+        }
+      },
+      "result": {
+        "result": {
+          "seo": "git@example.com:s/w.git"
+        }
+      }
+    },
+    "bad_repo_dash": {
+      "cfg": {
+        "profile_repos": {
+          "liga360": "git@example.com:s/w.git",
+          "seo": "--upload-pack=x",
+          "united": "-x"
+        }
+      },
+      "result": {
+        "result": {
+          "liga360": "git@example.com:s/w.git"
+        }
+      }
+    },
+    "bad_repo_empty": {
+      "cfg": {
+        "profile_repos": {
+          "liga360": "git@example.com:s/w.git",
+          "seo": "   ",
+          "united": ""
+        }
+      },
+      "result": {
+        "result": {
+          "liga360": "git@example.com:s/w.git"
+        }
+      }
+    },
+    "bad_repo_space": {
+      "cfg": {
+        "profile_repos": {
+          "seo": "git@example.com:s/w.git",
+          "united": "git@example.com:s/a b.git"
+        }
+      },
+      "result": {
+        "result": {
+          "seo": "git@example.com:s/w.git"
+        }
+      }
+    },
+    "bad_repo_types": {
+      "cfg": {
+        "profile_repos": {
+          "liga360": [
+            "x"
+          ],
+          "ok": "g@e:s/w",
+          "seo": null,
+          "united": 5,
+          "zzz": {
+            "a": 1
+          }
+        }
+      },
+      "result": {
+        "result": {
+          "ok": "g@e:s/w"
+        }
+      }
+    },
+    "cfg_not_dict": {
+      "cfg": [
+        "profile_repos"
+      ],
+      "result": {
+        "result": {}
+      }
+    },
+    "good_pairs": {
+      "cfg": {
+        "profile_repos": {
+          "liga360": "git@example.com:studio/web.git",
+          "seo": "https://example.com/o/seo.git",
+          "united": "ssh://git@example.com/o/r.git"
+        }
+      },
+      "result": {
+        "result": {
+          "liga360": "git@example.com:studio/web.git",
+          "seo": "https://example.com/o/seo.git",
+          "united": "ssh://git@example.com/o/r.git"
+        }
+      }
+    },
+    "key_len_32_ok_33_bad": {
+      "cfg": {
+        "profile_repos": {
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "git@example.com:s/w.git",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "git@example.com:s/w.git"
+        }
+      },
+      "result": {
+        "result": {
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "git@example.com:s/w.git"
+        }
+      }
+    },
+    "no_file": {
+      "result": {
+        "result": {}
+      }
+    },
+    "no_key": {
+      "cfg": {
+        "design_work_root": "~/work/shared"
+      },
+      "result": {
+        "result": {}
+      }
+    },
+    "not_a_dict": {
+      "cfg": {
+        "profile_repos": [
+          "united"
+        ]
+      },
+      "result": {
+        "result": {}
+      }
+    },
+    "not_json": {
+      "result": {
+        "result": {}
+      }
+    },
+    "null_value": {
+      "cfg": {
+        "profile_repos": null
+      },
+      "result": {
+        "result": {}
+      }
+    },
+    "repo_non_ascii": {
+      "cfg": {
+        "profile_repos": {
+          "united": "git@example.com:s/в.git"
+        }
+      },
+      "result": {
+        "result": {}
+      }
+    },
+    "repo_stripped": {
+      "cfg": {
+        "profile_repos": {
+          "united": "  ssh://git@example.com/o/r.git  "
+        }
+      },
+      "result": {
+        "result": {
+          "united": "ssh://git@example.com/o/r.git"
+        }
+      }
+    },
+    "string_value": {
+      "cfg": {
+        "profile_repos": "united"
+      },
+      "result": {
+        "result": {}
+      }
+    }
+  },
+  "roots": {
+    "absolute": {
+      "by_profile": {
+        "None": {
+          "result": "/srv/designs/shared"
+        },
+        "liga360": {
+          "result": "/srv/designs/shared"
+        },
+        "seo": {
+          "result": "/srv/designs/shared"
+        },
+        "united": {
+          "result": "/srv/designs/united"
+        },
+        "zzz": {
+          "result": "/srv/designs/shared"
+        }
+      },
+      "cfg": {
+        "design_work_root": "/srv/designs/shared",
+        "design_work_roots": {
+          "united": "/srv/designs/united"
+        }
+      }
+    },
+    "both": {
+      "by_profile": {
+        "None": {
+          "result": "~/work/shared"
+        },
+        "liga360": {
+          "result": "~/work/shared"
+        },
+        "seo": {
+          "result": "~/work/seo"
+        },
+        "united": {
+          "result": "~/work/united"
+        },
+        "zzz": {
+          "result": "~/work/shared"
+        }
+      },
+      "cfg": {
+        "design_work_root": "~/work/shared",
+        "design_work_roots": {
+          "seo": "~/work/seo",
+          "united": "~/work/united"
+        }
+      }
+    },
+    "empty_value": {
+      "by_profile": {
+        "None": {
+          "result": "~/work/shared"
+        },
+        "liga360": {
+          "result": "~/work/shared"
+        },
+        "seo": {
+          "result": "~/work/seo"
+        },
+        "united": {
+          "result": "~/work/shared"
+        },
+        "zzz": {
+          "result": "~/work/shared"
+        }
+      },
+      "cfg": {
+        "design_work_root": "~/work/shared",
+        "design_work_roots": {
+          "seo": "~/work/seo",
+          "united": ""
+        }
+      }
+    },
+    "fallback_constant": "~/deai-work",
+    "nothing": {
+      "by_profile": {
+        "None": {
+          "result": "~/deai-work"
+        },
+        "liga360": {
+          "result": "~/deai-work"
+        },
+        "seo": {
+          "result": "~/deai-work"
+        },
+        "united": {
+          "result": "~/deai-work"
+        },
+        "zzz": {
+          "result": "~/deai-work"
+        }
+      },
+      "cfg": {}
+    },
+    "roots_not_dict": {
+      "by_profile": {
+        "None": {
+          "raised": "AttributeError"
+        },
+        "liga360": {
+          "raised": "AttributeError"
+        },
+        "seo": {
+          "raised": "AttributeError"
+        },
+        "united": {
+          "raised": "AttributeError"
+        },
+        "zzz": {
+          "raised": "AttributeError"
+        }
+      },
+      "cfg": {
+        "design_work_root": "~/work/shared",
+        "design_work_roots": [
+          "united"
+        ]
+      }
+    },
+    "roots_null": {
+      "by_profile": {
+        "None": {
+          "result": "~/work/shared"
+        },
+        "liga360": {
+          "result": "~/work/shared"
+        },
+        "seo": {
+          "result": "~/work/shared"
+        },
+        "united": {
+          "result": "~/work/shared"
+        },
+        "zzz": {
+          "result": "~/work/shared"
+        }
+      },
+      "cfg": {
+        "design_work_root": "~/work/shared",
+        "design_work_roots": null
+      }
+    },
+    "roots_only": {
+      "by_profile": {
+        "None": {
+          "result": "~/deai-work"
+        },
+        "liga360": {
+          "result": "~/deai-work"
+        },
+        "seo": {
+          "result": "~/deai-work"
+        },
+        "united": {
+          "result": "~/work/united"
+        },
+        "zzz": {
+          "result": "~/deai-work"
+        }
+      },
+      "cfg": {
+        "design_work_roots": {
+          "united": "~/work/united"
+        }
+      }
+    },
+    "shared_only": {
+      "by_profile": {
+        "None": {
+          "result": "~/work/shared"
+        },
+        "liga360": {
+          "result": "~/work/shared"
+        },
+        "seo": {
+          "result": "~/work/shared"
+        },
+        "united": {
+          "result": "~/work/shared"
+        },
+        "zzz": {
+          "result": "~/work/shared"
+        }
+      },
+      "cfg": {
+        "design_work_root": "~/work/shared"
+      }
+    }
+  },
+  "route": {
+    "layer_on": false,
+    "task_get_no_header": {
+      "id": "s-united",
+      "profile": "united",
+      "status": 200
+    },
+    "task_get_query_id": {
+      "body_is_json": false,
+      "id": null,
+      "status": 404
+    },
+    "task_new": {
+      "empty_string": {
+        "body": {
+          "id": "r-empty",
+          "profile": "",
+          "title": "Alpha empty"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/united/r-empty",
+        "entry": {
+          "dir": "~/work/united/r-empty",
+          "gitlab": {
+            "path": "mockup/r-empty",
+            "repo": "ssh://git@example.com/o/r.git"
+          },
+          "jira": "",
+          "profile": "united",
+          "title": "Alpha empty"
+        },
+        "has_opened": true,
+        "id": "r-empty",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "explicit_gitlab": {
+        "body": {
+          "gitlab": {
+            "path": "mockup/r-gl",
+            "repo": "git@example.com:studio/web.git"
+          },
+          "id": "r-gl",
+          "profile": "zzz",
+          "title": "Alpha gl"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/shared/r-gl",
+        "entry": {
+          "dir": "~/work/shared/r-gl",
+          "gitlab": {
+            "path": "mockup/r-gl",
+            "repo": "git@example.com:studio/web.git"
+          },
+          "jira": "",
+          "profile": "zzz",
+          "title": "Alpha gl"
+        },
+        "has_opened": true,
+        "id": "r-gl",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "liga360": {
+        "body": {
+          "id": "r-liga360",
+          "jira": "DEMO-1",
+          "profile": "liga360",
+          "title": "Alpha liga360"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/shared/r-liga360",
+        "entry": {
+          "dir": "~/work/shared/r-liga360",
+          "jira": "DEMO-1",
+          "profile": "liga360",
+          "title": "Alpha liga360"
+        },
+        "has_opened": true,
+        "id": "r-liga360",
+        "keys": [
+          "dir",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 0
+      },
+      "no_profile": {
+        "body": {
+          "id": "r-none",
+          "title": "Alpha demo"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/united/r-none",
+        "entry": {
+          "dir": "~/work/united/r-none",
+          "gitlab": {
+            "path": "mockup/r-none",
+            "repo": "ssh://git@example.com/o/r.git"
+          },
+          "jira": "",
+          "profile": "united",
+          "title": "Alpha demo"
+        },
+        "has_opened": true,
+        "id": "r-none",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "not_a_string_5": {
+        "body": {
+          "id": "r-five",
+          "profile": 5,
+          "title": "Alpha five"
+        },
+        "code": "bad-profile",
+        "entry": null,
+        "ok": false,
+        "response_keys": [
+          "code",
+          "error",
+          "ok"
+        ],
+        "status": 400,
+        "vcs_provider_calls": 0
+      },
+      "null": {
+        "body": {
+          "id": "r-null",
+          "profile": null,
+          "title": "Alpha null"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/united/r-null",
+        "entry": {
+          "dir": "~/work/united/r-null",
+          "gitlab": {
+            "path": "mockup/r-null",
+            "repo": "ssh://git@example.com/o/r.git"
+          },
+          "jira": "",
+          "profile": "united",
+          "title": "Alpha null"
+        },
+        "has_opened": true,
+        "id": "r-null",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "seo": {
+        "body": {
+          "id": "r-seo",
+          "profile": "seo",
+          "title": "Alpha seo"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/seo/r-seo",
+        "entry": {
+          "dir": "~/work/seo/r-seo",
+          "gitlab": {
+            "path": "mockup/r-seo",
+            "repo": "git@example.com:studio/web.git"
+          },
+          "jira": "",
+          "profile": "seo",
+          "title": "Alpha seo"
+        },
+        "has_opened": true,
+        "id": "r-seo",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "united": {
+        "body": {
+          "id": "r-united",
+          "profile": "united",
+          "title": "Alpha united"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/united/r-united",
+        "entry": {
+          "dir": "~/work/united/r-united",
+          "gitlab": {
+            "path": "mockup/r-united",
+            "repo": "ssh://git@example.com/o/r.git"
+          },
+          "jira": "",
+          "profile": "united",
+          "title": "Alpha united"
+        },
+        "has_opened": true,
+        "id": "r-united",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "unknown_zzz": {
+        "body": {
+          "id": "r-zzz",
+          "profile": "zzz",
+          "title": "Alpha zzz"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/shared/r-zzz",
+        "entry": {
+          "dir": "~/work/shared/r-zzz",
+          "jira": "",
+          "profile": "zzz",
+          "title": "Alpha zzz"
+        },
+        "has_opened": true,
+        "id": "r-zzz",
+        "keys": [
+          "dir",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 0
+      },
+      "uppercase_United": {
+        "body": {
+          "id": "r-upper",
+          "profile": "United",
+          "title": "Alpha upper"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/shared/r-upper",
+        "entry": {
+          "dir": "~/work/shared/r-upper",
+          "jira": "",
+          "profile": "United",
+          "title": "Alpha upper"
+        },
+        "has_opened": true,
+        "id": "r-upper",
+        "keys": [
+          "dir",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 0
+      },
+      "with_empty_tags": {
+        "body": {
+          "id": "r-notags",
+          "profile": "united",
+          "tags": [],
+          "title": "Alpha notags"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/united/r-notags",
+        "entry": {
+          "dir": "~/work/united/r-notags",
+          "gitlab": {
+            "path": "mockup/r-notags",
+            "repo": "ssh://git@example.com/o/r.git"
+          },
+          "jira": "",
+          "profile": "united",
+          "title": "Alpha notags"
+        },
+        "has_opened": true,
+        "id": "r-notags",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      },
+      "with_tags": {
+        "body": {
+          "id": "r-tags",
+          "profile": "seo",
+          "tags": [
+            "A",
+            "B"
+          ],
+          "title": "Alpha tags"
+        },
+        "cloned": false,
+        "code": null,
+        "dir": "~/work/seo/r-tags",
+        "entry": {
+          "dir": "~/work/seo/r-tags",
+          "gitlab": {
+            "path": "mockup/r-tags",
+            "repo": "git@example.com:studio/web.git"
+          },
+          "jira": "",
+          "profile": "seo",
+          "tags": [
+            "A",
+            "B"
+          ],
+          "title": "Alpha tags"
+        },
+        "has_opened": true,
+        "id": "r-tags",
+        "keys": [
+          "dir",
+          "gitlab",
+          "jira",
+          "opened",
+          "profile",
+          "tags",
+          "title"
+        ],
+        "ok": true,
+        "registered": false,
+        "response_keys": [
+          "cloned",
+          "dir",
+          "id",
+          "ok",
+          "registered",
+          "space",
+          "space_switched"
+        ],
+        "space": null,
+        "space_switched": true,
+        "status": 200,
+        "vcs_provider_calls": 1
+      }
+    },
+    "task_new_current_after": "r-gl",
+    "task_seeded": {
+      "s-comma": {
+        "has_profile_key": true,
+        "id": "s-comma",
+        "profile": "Bad,Comma",
+        "status": 200,
+        "tags": [],
+        "title": "Seed s-comma"
+      },
+      "s-five": {
+        "has_profile_key": true,
+        "id": "s-five",
+        "profile": 5,
+        "status": 200,
+        "tags": [],
+        "title": "Seed s-five"
+      },
+      "s-liga360": {
+        "has_profile_key": true,
+        "id": "s-liga360",
+        "profile": "liga360",
+        "status": 200,
+        "tags": [
+          "LIGA360"
+        ],
+        "title": "Seed s-liga360"
+      },
+      "s-noprofile": {
+        "has_profile_key": true,
+        "id": "s-noprofile",
+        "profile": null,
+        "status": 200,
+        "tags": [],
+        "title": "Seed s-noprofile"
+      },
+      "s-notags": {
+        "has_profile_key": true,
+        "id": "s-notags",
+        "profile": "united",
+        "status": 200,
+        "tags": [],
+        "title": "Seed s-notags"
+      },
+      "s-seo": {
+        "has_profile_key": true,
+        "id": "s-seo",
+        "profile": "seo",
+        "status": 200,
+        "tags": [
+          "SEO"
+        ],
+        "title": "Seed s-seo"
+      },
+      "s-tags": {
+        "has_profile_key": true,
+        "id": "s-tags",
+        "profile": "united",
+        "status": 200,
+        "tags": [
+          "Custom"
+        ],
+        "title": "Seed s-tags"
+      },
+      "s-united": {
+        "has_profile_key": true,
+        "id": "s-united",
+        "profile": "united",
+        "status": 200,
+        "tags": [
+          "United"
+        ],
+        "title": "Seed s-united"
+      },
+      "s-upper": {
+        "has_profile_key": true,
+        "id": "s-upper",
+        "profile": "United",
+        "status": 200,
+        "tags": [
+          "United"
+        ],
+        "title": "Seed s-upper"
+      },
+      "s-zzz": {
+        "has_profile_key": true,
+        "id": "s-zzz",
+        "profile": "zzz",
+        "status": 200,
+        "tags": [
+          "zzz"
+        ],
+        "title": "Seed s-zzz"
+      }
+    },
+    "tasks_after_create": {
+      "current": "r-gl",
+      "rows": [
+        {
+          "id": "r-empty",
+          "profile": "united",
+          "tags": [
+            "United"
+          ]
+        },
+        {
+          "id": "r-gl",
+          "profile": "zzz",
+          "tags": [
+            "zzz"
+          ]
+        },
+        {
+          "id": "r-liga360",
+          "profile": "liga360",
+          "tags": [
+            "LIGA360"
+          ]
+        },
+        {
+          "id": "r-none",
+          "profile": "united",
+          "tags": [
+            "United"
+          ]
+        },
+        {
+          "id": "r-notags",
+          "profile": "united",
+          "tags": [
+            "United"
+          ]
+        },
+        {
+          "id": "r-null",
+          "profile": "united",
+          "tags": [
+            "United"
+          ]
+        },
+        {
+          "id": "r-seo",
+          "profile": "seo",
+          "tags": [
+            "SEO"
+          ]
+        },
+        {
+          "id": "r-tags",
+          "profile": "seo",
+          "tags": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "id": "r-united",
+          "profile": "united",
+          "tags": [
+            "United"
+          ]
+        },
+        {
+          "id": "r-upper",
+          "profile": "United",
+          "tags": [
+            "United"
+          ]
+        },
+        {
+          "id": "r-zzz",
+          "profile": "zzz",
+          "tags": [
+            "zzz"
+          ]
+        }
+      ],
+      "space": null,
+      "status": 200
+    },
+    "tasks_seeded": {
+      "current": "s-united",
+      "rows": [
+        {
+          "id": "s-united",
+          "profile": "united",
+          "tags": [
+            "United"
+          ],
+          "title": "Seed s-united"
+        },
+        {
+          "id": "s-liga360",
+          "profile": "liga360",
+          "tags": [
+            "LIGA360"
+          ],
+          "title": "Seed s-liga360"
+        },
+        {
+          "id": "s-seo",
+          "profile": "seo",
+          "tags": [
+            "SEO"
+          ],
+          "title": "Seed s-seo"
+        },
+        {
+          "id": "s-zzz",
+          "profile": "zzz",
+          "tags": [
+            "zzz"
+          ],
+          "title": "Seed s-zzz"
+        },
+        {
+          "id": "s-tags",
+          "profile": "united",
+          "tags": [
+            "Custom"
+          ],
+          "title": "Seed s-tags"
+        },
+        {
+          "id": "s-notags",
+          "profile": "united",
+          "tags": [],
+          "title": "Seed s-notags"
+        },
+        {
+          "id": "s-noprofile",
+          "profile": null,
+          "tags": [],
+          "title": "Seed s-noprofile"
+        },
+        {
+          "id": "s-comma",
+          "profile": "Bad,Comma",
+          "tags": [],
+          "title": "Seed s-comma"
+        },
+        {
+          "id": "s-five",
+          "profile": 5,
+          "tags": [],
+          "title": "Seed s-five"
+        },
+        {
+          "id": "s-upper",
+          "profile": "United",
+          "tags": [
+            "United"
+          ],
+          "title": "Seed s-upper"
+        }
+      ],
+      "space": null,
+      "status": 200
+    },
+    "urlopen_calls": 0,
+    "vcs_provider_calls_total": 8
+  },
+  "tags": {
+    "no_tags_no_profile": {
+      "result": {
+        "result": []
+      },
+      "task": {}
+    },
+    "no_tags_profile_'  seo  '": {
+      "result": {
+        "result": [
+          "seo"
+        ]
+      },
+      "task": {
+        "profile": "  seo  "
+      }
+    },
+    "no_tags_profile_' '": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": " "
+      }
+    },
+    "no_tags_profile_''": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": ""
+      }
+    },
+    "no_tags_profile_'Bad,Comma'": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": "Bad,Comma"
+      }
+    },
+    "no_tags_profile_'Seo'": {
+      "result": {
+        "result": [
+          "Seo"
+        ]
+      },
+      "task": {
+        "profile": "Seo"
+      }
+    },
+    "no_tags_profile_'a\\tb'": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": "a\tb"
+      }
+    },
+    "no_tags_profile_'liga360'": {
+      "result": {
+        "result": [
+          "LIGA360"
+        ]
+      },
+      "task": {
+        "profile": "liga360"
+      }
+    },
+    "no_tags_profile_'seo'": {
+      "result": {
+        "result": [
+          "SEO"
+        ]
+      },
+      "task": {
+        "profile": "seo"
+      }
+    },
+    "no_tags_profile_'united'": {
+      "result": {
+        "result": [
+          "United"
+        ]
+      },
+      "task": {
+        "profile": "united"
+      }
+    },
+    "no_tags_profile_'zzz'": {
+      "result": {
+        "result": [
+          "zzz"
+        ]
+      },
+      "task": {
+        "profile": "zzz"
+      }
+    },
+    "no_tags_profile_5": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": 5
+      }
+    },
+    "no_tags_profile_None": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": null
+      }
+    },
+    "no_tags_profile_x*32": {
+      "result": {
+        "result": [
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ]
+      },
+      "task": {
+        "profile": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    "no_tags_profile_x*40": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    "not_a_dict_list": {
+      "result": {
+        "result": []
+      },
+      "task": [
+        "united"
+      ]
+    },
+    "not_a_dict_none": {
+      "result": {
+        "result": []
+      },
+      "task": null
+    },
+    "tags_A_with_profile": {
+      "result": {
+        "result": [
+          "A"
+        ]
+      },
+      "task": {
+        "profile": "united",
+        "tags": [
+          "A"
+        ]
+      }
+    },
+    "tags_bad_elements": {
+      "result": {
+        "result": [
+          "ok",
+          "Dup"
+        ]
+      },
+      "task": {
+        "profile": "seo",
+        "tags": [
+          "ok",
+          5,
+          "",
+          "a,b",
+          " Dup ",
+          "dup",
+          null,
+          [
+            "x"
+          ]
+        ]
+      }
+    },
+    "tags_empty_with_profile": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": "united",
+        "tags": []
+      }
+    },
+    "tags_null_with_profile": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": "united",
+        "tags": null
+      }
+    },
+    "tags_over_max": {
+      "result": {
+        "result": [
+          "t0",
+          "t1",
+          "t2",
+          "t3",
+          "t4",
+          "t5",
+          "t6",
+          "t7",
+          "t8",
+          "t9"
+        ]
+      },
+      "task": {
+        "tags": [
+          "t0",
+          "t1",
+          "t2",
+          "t3",
+          "t4",
+          "t5",
+          "t6",
+          "t7",
+          "t8",
+          "t9",
+          "t10",
+          "t11",
+          "t12",
+          "t13"
+        ]
+      }
+    },
+    "tags_spaces_collapsed": {
+      "result": {
+        "result": [
+          "a b"
+        ]
+      },
+      "task": {
+        "tags": [
+          "  a   b  "
+        ]
+      }
+    },
+    "tags_string_with_profile": {
+      "result": {
+        "result": []
+      },
+      "task": {
+        "profile": "united",
+        "tags": "x"
+      }
+    }
+  },
+  "task_new": {
+    "None": {
+      "current": "t1",
+      "entry": {
+        "dir": "~/work/shared/t1",
+        "jira": "",
+        "profile": null,
+        "title": "t1"
+      },
+      "has_opened": true,
+      "it1_index_exists": true,
+      "keys": [
+        "dir",
+        "jira",
+        "opened",
+        "profile",
+        "title"
+      ],
+      "profile": null,
+      "result": {
+        "cloned": false,
+        "dir": "~/work/shared/t1",
+        "id": "t1",
+        "ok": true,
+        "registered": false
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 0
+    },
+    "liga360": {
+      "current": "t1",
+      "entry": {
+        "dir": "~/work/shared/t1",
+        "jira": "",
+        "profile": "liga360",
+        "title": "t1"
+      },
+      "has_opened": true,
+      "it1_index_exists": true,
+      "keys": [
+        "dir",
+        "jira",
+        "opened",
+        "profile",
+        "title"
+      ],
+      "profile": "liga360",
+      "result": {
+        "cloned": false,
+        "dir": "~/work/shared/t1",
+        "id": "t1",
+        "ok": true,
+        "registered": false
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 0
+    },
+    "seo": {
+      "current": "t1",
+      "entry": {
+        "dir": "~/work/seo/t1",
+        "jira": "",
+        "profile": "seo",
+        "title": "t1"
+      },
+      "has_opened": true,
+      "it1_index_exists": true,
+      "keys": [
+        "dir",
+        "jira",
+        "opened",
+        "profile",
+        "title"
+      ],
+      "profile": "seo",
+      "result": {
+        "cloned": false,
+        "dir": "~/work/seo/t1",
+        "id": "t1",
+        "ok": true,
+        "registered": false
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 0
+    },
+    "united": {
+      "current": "t1",
+      "entry": {
+        "dir": "~/work/united/t1",
+        "gitlab": {
+          "path": "mockup/t1",
+          "repo": "ssh://git@example.com/o/r.git"
+        },
+        "jira": "",
+        "profile": "united",
+        "title": "t1"
+      },
+      "has_opened": true,
+      "it1_index_exists": true,
+      "keys": [
+        "dir",
+        "gitlab",
+        "jira",
+        "opened",
+        "profile",
+        "title"
+      ],
+      "profile": "united",
+      "result": {
+        "cloned": false,
+        "dir": "~/work/united/t1",
+        "id": "t1",
+        "ok": true,
+        "registered": false
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 1
+    },
+    "zzz": {
+      "current": "t1",
+      "entry": {
+        "dir": "~/work/shared/t1",
+        "jira": "",
+        "profile": "zzz",
+        "title": "t1"
+      },
+      "has_opened": true,
+      "it1_index_exists": true,
+      "keys": [
+        "dir",
+        "jira",
+        "opened",
+        "profile",
+        "title"
+      ],
+      "profile": "zzz",
+      "result": {
+        "cloned": false,
+        "dir": "~/work/shared/t1",
+        "id": "t1",
+        "ok": true,
+        "registered": false
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 0
+    }
+  }
+}
