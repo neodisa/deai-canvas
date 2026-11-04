@@ -12,6 +12,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 BEFORE = os.path.join(_HERE, 'fixtures', 'tracks', 'before-4d1.json')
 
 PROFILES = ('None', 'liga360', 'seo', 'united', 'zzz')       # відсортовано (ключ для `None` — рядок)
+ROOT_PROFILES = tuple(sorted(PROFILES + ('United', '')))     # `roots`/`bin`: ще «не той регістр» і порожній рядок
 
 
 class Before4d1Shape(unittest.TestCase):
@@ -24,7 +25,7 @@ class Before4d1Shape(unittest.TestCase):
         cls.snap = json.loads(cls.raw)
 
     def test_top_level_sections(self):
-        self.assertEqual(sorted(self.snap), ['ds', 'meta', 'repos', 'roots', 'route', 'tags', 'task_new'])
+        self.assertEqual(sorted(self.snap), ['bin', 'ds', 'meta', 'pages', 'repos', 'roots', 'route', 'tags', 'task_new'])
         self.assertEqual(self.snap['meta']['version'], '0.14.0')
         self.assertEqual(self.snap['meta']['source_commit'], 'c8c3a8b')
         self.assertEqual(self.snap['meta']['generator'], 'tests/make_before_4d1.py')
@@ -44,12 +45,13 @@ class Before4d1Shape(unittest.TestCase):
         names = ['absolute', 'both', 'empty_value', 'nothing', 'roots_not_dict', 'roots_null', 'roots_only', 'shared_only']
         self.assertEqual(sorted(k for k in r if k != 'fallback_constant'), names)
         for name in names:
-            self.assertEqual(sorted(r[name]['by_profile']), list(PROFILES), name)
+            self.assertEqual(sorted(r[name]['by_profile']), list(ROOT_PROFILES), name)
         self.assertEqual(r['fallback_constant'], '~/deai-work')
         # ключові паритети: свій корінь профілю → спільний → фолбек; невідомий і `None` — спільний (НЕ корінь `united`)
         both = {p: v['result'] for p, v in r['both']['by_profile'].items()}
         self.assertEqual(both, {'united': '~/work/united', 'seo': '~/work/seo', 'liga360': '~/work/shared',
-                                'zzz': '~/work/shared', 'None': '~/work/shared'})
+                                'zzz': '~/work/shared', 'None': '~/work/shared',
+                                'United': '~/work/shared', '': '~/work/shared'})
         self.assertEqual({v['result'] for v in r['nothing']['by_profile'].values()}, {'~/deai-work'})
         self.assertEqual(r['empty_value']['by_profile']['united']['result'], '~/work/shared')
         # `design_work_roots` не словник — відмова `AttributeError` (не мовчазний фолбек)
@@ -88,10 +90,12 @@ class Before4d1Shape(unittest.TestCase):
 
     def test_ds_shape(self):
         r = self.snap['ds']
-        self.assertEqual(len(r), 11)
-        res = {k: v['result']['result'] for k, v in r.items()}
+        self.assertEqual(len(r), 13)
+        res = {k: v['result'].get('result') for k, v in r.items()}
+        self.assertEqual(r['5']['result'], {'raised': 'AttributeError'})             # не рядок — виняток, не порожньо
+        self.assertEqual(res["'United'"], '')                                         # шаблон лише малі літери
         self.assertEqual((res["'united'"], res["'seo'"], res["'zzz'"]), ('?ds=united', '?ds=seo', '?ds=zzz'))
-        for bad in ("'Bad!'", "''", 'None', "'a_b'", 'x*33'):
+        for bad in ("'Bad!'", "''", 'None', "'a_b'", 'x*33', "'United'"):
             self.assertEqual(res[bad], '', bad)
 
     def test_task_new_shape(self):
@@ -155,6 +159,53 @@ class Before4d1Shape(unittest.TestCase):
         # задачу `GET /api/task` обирає заголовок (або `current`), а `?id=` не діє — 404 (план 4d-1 писав `?id=`)
         self.assertEqual(rt['task_get_query_id']['status'], 404)
         self.assertEqual(rt['task_get_no_header']['id'], 's-united')
+
+    def test_pages_shape(self):
+        """Хвіст `inspector.js…` у розмітці `/commented`: обидва входи розмітки (локальний і модуля) дають той самий."""
+        pg = self.snap['pages']
+        self.assertEqual(pg['urlopen_calls'], 0)
+        rows = {k: v for k, v in pg.items() if k != 'urlopen_calls'}
+        self.assertEqual(len(rows), 10)
+        want = {'s-united': '?ds=united', 's-notags': '?ds=united', 's-tags': '?ds=united', 's-liga360': '?ds=liga360',
+                's-seo': '?ds=seo', 's-zzz': '?ds=zzz',
+                # без профілю, з комою, не з малих літер — хвоста нема (тег `inspector.js` лишається)
+                's-noprofile': '', 's-comma': '', 's-upper': ''}
+        for tid, tail in want.items():
+            for ch in ('local', 'project'):
+                self.assertEqual(rows[tid][ch]['status'], 200, (tid, ch))
+                self.assertEqual(rows[tid][ch]['inspector_tails'], [tail], (tid, ch))
+            self.assertFalse(rows[tid]['local']['project_channel'], tid)
+            self.assertTrue(rows[tid]['project']['project_channel'], tid)
+        # профіль не рядок (`5`): сторінка падає (`AttributeError` у `inspector_ds_arg`), зʼєднання рветься без відповіді
+        for ch in ('local', 'project'):
+            self.assertEqual(rows['s-five'][ch], {'error': 'RemoteDisconnected', 'status': None})
+
+    def test_bin_shape(self):
+        b = self.snap['bin']
+        self.assertEqual(sorted(b), sorted(['liga', 'no_roots', 'registry_work_root', 'registry_work_root_5',
+                                            'registry_work_root_nothing', 'with_int_profile']))
+        # `registry._work_root` = `serve.work_root`
+        self.assertEqual({k: v['result'] for k, v in b['registry_work_root'].items()},
+                         {'united': '~/work/united', 'seo': '~/work/seo', 'liga360': '~/work/shared', 'zzz': '~/work/shared',
+                          'None': '~/work/shared', 'United': '~/work/shared', '': '~/work/shared'})
+        self.assertEqual(b['registry_work_root_5']['result'], '~/work/shared')
+        self.assertEqual(b['registry_work_root_nothing']['result'], '~/deai-work')
+        plan = {m[0]: m for m in b['liga']['plan']['result']}
+        # переїдуть лише `united`/`seo`-задачі зі спільного кореня; решта стоп-причин названа вголос
+        self.assertEqual(sorted(plan), ['b-clash', 'b-gone', 'b-nodir', 'b-seo', 'b-united'])
+        self.assertEqual(plan['b-united'][2:], ['~/work/shared/b-united', '~/work/united/b-united', None])
+        self.assertEqual(plan['b-seo'][3], '~/work/seo/b-seo')
+        self.assertIn('ціль уже існує', plan['b-clash'][4])
+        self.assertEqual(plan['b-gone'][4], 'теки нема на диску')
+        self.assertEqual(plan['b-nodir'][2:], [None, None, 'немає dir у tasks.json'])
+        in_use = {r[0]: r[1:] for r in b['liga']['roots_in_use']['result']}
+        self.assertEqual(in_use['seo'], ['~/work/seo', True])
+        self.assertEqual(in_use['zzz'], ['~/work/shared', False])
+        self.assertEqual(in_use['—'], ['~/work/shared', False])                      # задача без профілю
+        self.assertEqual(b['no_roots']['roots_in_use']['result'], [['united', '~/deai-work', False]])
+        # профіль-число: `roots_in_use` сортує змішані типи → `TypeError`; `plan` працює (спільний корінь)
+        self.assertEqual(b['with_int_profile']['roots_in_use'], {'raised': 'TypeError'})
+        self.assertIn(['b-five', 5, '~/work/shared/b-zzz', '~/work/shared/b-five', None], b['with_int_profile']['plan']['result'])
 
 
 if __name__ == '__main__':

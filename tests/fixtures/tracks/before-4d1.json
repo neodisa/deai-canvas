@@ -1,4 +1,175 @@
 {
+  "bin": {
+    "liga": {
+      "plan": {
+        "result": [
+          [
+            "b-clash",
+            "united",
+            "~/work/shared/b-clash",
+            "~/work/united/b-clash",
+            "ціль уже існує: ~/work/united/b-clash"
+          ],
+          [
+            "b-gone",
+            "seo",
+            "~/work/shared/b-gone",
+            "~/work/seo/b-gone",
+            "теки нема на диску"
+          ],
+          [
+            "b-nodir",
+            "seo",
+            null,
+            null,
+            "немає dir у tasks.json"
+          ],
+          [
+            "b-seo",
+            "seo",
+            "~/work/shared/b-seo",
+            "~/work/seo/b-seo",
+            null
+          ],
+          [
+            "b-united",
+            "united",
+            "~/work/shared/b-united",
+            "~/work/united/b-united",
+            null
+          ]
+        ]
+      },
+      "roots_in_use": {
+        "result": [
+          [
+            "United",
+            "~/work/shared",
+            false
+          ],
+          [
+            "liga360",
+            "~/work/shared",
+            false
+          ],
+          [
+            "seo",
+            "~/work/seo",
+            true
+          ],
+          [
+            "united",
+            "~/work/united",
+            true
+          ],
+          [
+            "zzz",
+            "~/work/shared",
+            false
+          ],
+          [
+            "—",
+            "~/work/shared",
+            false
+          ]
+        ]
+      }
+    },
+    "no_roots": {
+      "plan": {
+        "result": []
+      },
+      "roots_in_use": {
+        "result": [
+          [
+            "united",
+            "~/deai-work",
+            false
+          ]
+        ]
+      }
+    },
+    "registry_work_root": {
+      "": {
+        "result": "~/work/shared"
+      },
+      "None": {
+        "result": "~/work/shared"
+      },
+      "United": {
+        "result": "~/work/shared"
+      },
+      "liga360": {
+        "result": "~/work/shared"
+      },
+      "seo": {
+        "result": "~/work/seo"
+      },
+      "united": {
+        "result": "~/work/united"
+      },
+      "zzz": {
+        "result": "~/work/shared"
+      }
+    },
+    "registry_work_root_5": {
+      "result": "~/work/shared"
+    },
+    "registry_work_root_nothing": {
+      "result": "~/deai-work"
+    },
+    "with_int_profile": {
+      "plan": {
+        "result": [
+          [
+            "b-clash",
+            "united",
+            "~/work/shared/b-clash",
+            "~/work/united/b-clash",
+            "ціль уже існує: ~/work/united/b-clash"
+          ],
+          [
+            "b-five",
+            5,
+            "~/work/shared/b-zzz",
+            "~/work/shared/b-five",
+            null
+          ],
+          [
+            "b-gone",
+            "seo",
+            "~/work/shared/b-gone",
+            "~/work/seo/b-gone",
+            "теки нема на диску"
+          ],
+          [
+            "b-nodir",
+            "seo",
+            null,
+            null,
+            "немає dir у tasks.json"
+          ],
+          [
+            "b-seo",
+            "seo",
+            "~/work/shared/b-seo",
+            "~/work/seo/b-seo",
+            null
+          ],
+          [
+            "b-united",
+            "united",
+            "~/work/shared/b-united",
+            "~/work/united/b-united",
+            null
+          ]
+        ]
+      },
+      "roots_in_use": {
+        "raised": "TypeError"
+      }
+    }
+  },
   "ds": {
     "' united '": {
       "profile": " united ",
@@ -14,6 +185,12 @@
     },
     "'Bad!'": {
       "profile": "Bad!",
+      "result": {
+        "result": ""
+      }
+    },
+    "'United'": {
+      "profile": "United",
       "result": {
         "result": ""
       }
@@ -48,6 +225,12 @@
         "result": "?ds=zzz"
       }
     },
+    "5": {
+      "profile": 5,
+      "result": {
+        "raised": "AttributeError"
+      }
+    },
     "None": {
       "profile": null,
       "result": {
@@ -74,6 +257,173 @@
     "volatile_stripped": [
       "opened"
     ]
+  },
+  "pages": {
+    "s-comma": {
+      "local": {
+        "inspector_tails": [
+          ""
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "Bad,Comma",
+      "project": {
+        "inspector_tails": [
+          ""
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-five": {
+      "local": {
+        "error": "RemoteDisconnected",
+        "status": null
+      },
+      "profile": 5,
+      "project": {
+        "error": "RemoteDisconnected",
+        "status": null
+      }
+    },
+    "s-liga360": {
+      "local": {
+        "inspector_tails": [
+          "?ds=liga360"
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "liga360",
+      "project": {
+        "inspector_tails": [
+          "?ds=liga360"
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-noprofile": {
+      "local": {
+        "inspector_tails": [
+          ""
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "<нема>",
+      "project": {
+        "inspector_tails": [
+          ""
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-notags": {
+      "local": {
+        "inspector_tails": [
+          "?ds=united"
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "united",
+      "project": {
+        "inspector_tails": [
+          "?ds=united"
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-seo": {
+      "local": {
+        "inspector_tails": [
+          "?ds=seo"
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "seo",
+      "project": {
+        "inspector_tails": [
+          "?ds=seo"
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-tags": {
+      "local": {
+        "inspector_tails": [
+          "?ds=united"
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "united",
+      "project": {
+        "inspector_tails": [
+          "?ds=united"
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-united": {
+      "local": {
+        "inspector_tails": [
+          "?ds=united"
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "united",
+      "project": {
+        "inspector_tails": [
+          "?ds=united"
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-upper": {
+      "local": {
+        "inspector_tails": [
+          ""
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "United",
+      "project": {
+        "inspector_tails": [
+          ""
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "s-zzz": {
+      "local": {
+        "inspector_tails": [
+          "?ds=zzz"
+        ],
+        "project_channel": false,
+        "status": 200
+      },
+      "profile": "zzz",
+      "project": {
+        "inspector_tails": [
+          "?ds=zzz"
+        ],
+        "project_channel": true,
+        "status": 200
+      }
+    },
+    "urlopen_calls": 0
   },
   "repos": {
     "bad_key_chars": {
@@ -272,7 +622,13 @@
   "roots": {
     "absolute": {
       "by_profile": {
+        "": {
+          "result": "/srv/designs/shared"
+        },
         "None": {
+          "result": "/srv/designs/shared"
+        },
+        "United": {
           "result": "/srv/designs/shared"
         },
         "liga360": {
@@ -297,7 +653,13 @@
     },
     "both": {
       "by_profile": {
+        "": {
+          "result": "~/work/shared"
+        },
         "None": {
+          "result": "~/work/shared"
+        },
+        "United": {
           "result": "~/work/shared"
         },
         "liga360": {
@@ -323,7 +685,13 @@
     },
     "empty_value": {
       "by_profile": {
+        "": {
+          "result": "~/work/shared"
+        },
         "None": {
+          "result": "~/work/shared"
+        },
+        "United": {
           "result": "~/work/shared"
         },
         "liga360": {
@@ -350,7 +718,13 @@
     "fallback_constant": "~/deai-work",
     "nothing": {
       "by_profile": {
+        "": {
+          "result": "~/deai-work"
+        },
         "None": {
+          "result": "~/deai-work"
+        },
+        "United": {
           "result": "~/deai-work"
         },
         "liga360": {
@@ -370,7 +744,13 @@
     },
     "roots_not_dict": {
       "by_profile": {
+        "": {
+          "raised": "AttributeError"
+        },
         "None": {
+          "raised": "AttributeError"
+        },
+        "United": {
           "raised": "AttributeError"
         },
         "liga360": {
@@ -395,7 +775,13 @@
     },
     "roots_null": {
       "by_profile": {
+        "": {
+          "result": "~/work/shared"
+        },
         "None": {
+          "result": "~/work/shared"
+        },
+        "United": {
           "result": "~/work/shared"
         },
         "liga360": {
@@ -418,7 +804,13 @@
     },
     "roots_only": {
       "by_profile": {
+        "": {
+          "result": "~/deai-work"
+        },
         "None": {
+          "result": "~/deai-work"
+        },
+        "United": {
           "result": "~/deai-work"
         },
         "liga360": {
@@ -442,7 +834,13 @@
     },
     "shared_only": {
       "by_profile": {
+        "": {
+          "result": "~/work/shared"
+        },
         "None": {
+          "result": "~/work/shared"
+        },
+        "United": {
           "result": "~/work/shared"
         },
         "liga360": {

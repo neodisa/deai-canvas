@@ -45,6 +45,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -60,12 +61,16 @@ sys.path.insert(0, _HERE)
 OUT_DEFAULT = os.path.join(_HERE, 'fixtures', 'tracks', 'before-4d1.json')
 #: Профілі сценаріїв (`None` — запис без профілю). Ключ у JSON для `None` — рядок `'None'`.
 PROFILES = ('united', 'liga360', 'seo', 'zzz', None)
+#: Профілі для `roots`/`bin` (ще «не той регістр» і порожній рядок: `work_root` бере їх як є).
+ROOT_PROFILES = PROFILES + ('United', '')
 #: Репо вигаданих напрямків (ЛІГА-подібна таблиця `profile_repos` кореня `tasks.json`).
 REPOS = {'united': 'ssh://git@example.com/o/r.git', 'seo': 'git@example.com:studio/web.git'}
 #: Змінні оточення, що ізолюють прогін або задають конфіг, — у знімку їх нема (чисте оточення).
 CLEAN = ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TEAMS_FAKE', 'SUPABASE_URL', 'SUPABASE_KEY',
          'SUPABASE_SERVICE_KEY', 'DEAI_EXTRA_MODULES', 'DEAI_HOME', 'JIRA_EMAIL', 'JIRA_TOKEN', 'DC_IDENTITY_NAME',
-         'DC_IDENTITY_EMAIL')
+         'DC_IDENTITY_EMAIL', 'DC_TRACKER_FAKE', 'DC_REGISTRY_DIR', 'DC_MIRRORS_DIR', 'DC_REGISTRY_TTL_H',
+         'DC_PAGES_LOCK_TIMEOUT', 'PORT', 'DEAI_CONFIRM_MSG', 'DEAI_CONFIRM_TITLE', 'DEAI_TRUST_CONFIRM', 'GIT_DIR',
+         'GIT_WORK_TREE', 'GIT_INDEX_FILE')
 
 
 def _write(path, obj):
@@ -133,7 +138,7 @@ def roots(home):
     out = {}
     for name, cfg in cfgs.items():
         out[name] = {'cfg': cfg, 'by_profile': {
-            str(p): _raises(lambda: rel(serve.work_root(cfg, p), home)) for p in PROFILES}}
+            str(p): _raises(lambda: rel(serve.work_root(cfg, p), home)) for p in ROOT_PROFILES}}
     out['fallback_constant'] = rel(os.path.expanduser(serve.FALLBACK_WORK_ROOT), home)
     return out
 
@@ -205,7 +210,7 @@ def tags():
 def ds():
     import serve
     out = {}
-    for p in ('united', 'liga360', 'seo', 'zzz', 'Bad!', '', None, ' united ', 'x' * 32, 'x' * 33, 'a_b'):
+    for p in ('united', 'liga360', 'seo', 'zzz', 'Bad!', '', None, ' united ', 'x' * 32, 'x' * 33, 'a_b', 'United', 5):
         out[_short(p)] = {'profile': p, 'result': _raises(lambda: serve.inspector_ds_arg(p, None))}
     return out
 
@@ -267,8 +272,8 @@ class Server:
         self.httpd.server_close()
         self._quiet.stop()
 
-    def req(self, method, path, payload=None, task=None):
-        """`(status, тіло)`; Origin — самого сервера; `task` — заголовок `X-Canvas-Task`. Не-JSON тіло → `None`."""
+    def req(self, method, path, payload=None, task=None, raw_text=False):
+        """`(status, тіло)`; Origin — самого сервера; `task` — заголовок `X-Canvas-Task`. Не-JSON тіло → `None` (`raw_text` — тіло рядком)."""
         headers = {'Origin': 'http://127.0.0.1:%d' % self.port}
         if task:
             headers['X-Canvas-Task'] = task
@@ -281,6 +286,8 @@ class Server:
             conn.request(method, path, body=body, headers=headers)
             r = conn.getresponse()
             raw = r.read().decode('utf-8', 'replace')
+            if raw_text:
+                return r.status, raw
             try:
                 return r.status, json.loads(raw)
             except ValueError:
@@ -394,6 +401,104 @@ def route(tmp):
     return out
 
 
+# ---------------------------------------------------------------------------------- pages (хвіст `?ds=` у розмітці)
+
+#: Хвіст URL інспектора в розмітці сторінки: усе, що йде в `src` одразу за `inspector.js` (`?ds=…&sp=…` або нічого).
+_INSPECTOR_SRC = re.compile(r'inspector\.js([^"\'<>\s]*)')
+
+
+def pages(tmp):
+    """Розмітка робочого місця (`GET /commented?it=it1`, БЕЗ `X-Canvas-Task`: сторінка з коментатором під названою задачею
+    відмовляється) для кожної готової задачі: хвіст `inspector.js…` — `?ds=<профіль>` (+ `&sp=` лише з простором; шар вимкнено —
+    без нього) або його відсутність. Задачу обирає `current` файла (його переписуємо перед кожним запитом). Два входи розмітки
+    (`serve.py`, два виклики `profile=task.get('profile') or ''`): локальний канал (типово) і канал модуля (`ch=project`, потрібен
+    вигаданий конфіг Supabase у корені файла)."""
+    import serve
+    home = os.path.join(tmp, 'pages', 'home')
+    os.makedirs(home)
+    path = os.path.join(home, 'tasks.json')
+    cfg, ids = _seeded(home)
+    cfg['supabase_url'], cfg['supabase_key'] = 'https://demo.supabase.example', 'pk-test-1'
+    for tid in ids:
+        _write(os.path.join(cfg['tasks'][tid]['dir'], 'iterations', 'it1', 'index.html'),
+               '<!DOCTYPE html><html><head><title>t</title></head><body><h1>Alpha</h1></body></html>')
+    out = {}
+    net = NoNet()
+    with mock.patch.dict(os.environ, {'HOME': home, 'DC_TASKS_FILE': path, 'DC_NO_OVERVIEW': '1'}), \
+            mock.patch.object(serve, 'vcs_provider', Vcs()), mock.patch.object(serve.urllib.request, 'urlopen', net), \
+            Server() as srv:
+        for tid in ids:
+            row = {'profile': cfg['tasks'][tid].get('profile', '<нема>')}
+            for key, query in (('local', '/commented?it=it1'), ('project', '/commented?it=it1&ch=project')):
+                _write(path, {**cfg, 'current': tid})
+                try:
+                    st, html = srv.req('GET', query, raw_text=True)
+                except (http.client.HTTPException, OSError) as e:       # обрив зʼєднання без відповіді — теж поведінка
+                    row[key] = {'status': None, 'error': type(e).__name__}
+                    continue
+                found = _INSPECTOR_SRC.findall(html or '')
+                row[key] = {'status': st, 'inspector_tails': found,
+                            'project_channel': isinstance(html, str) and '__deaiCommentsCfg' in html}
+            out[tid] = row
+        out['urlopen_calls'] = net.calls
+    return out
+
+
+# ---------------------------------------------------------------------------------- bin (roots.py, registry.py)
+
+def bin_tools(tmp):
+    """`bin/roots.py` (`plan`, `roots_in_use`) на готовому файлі ЛІГИ й `bin/registry.py::_work_root` для тих самих профілів.
+    Усе в тимчасовій теці, шляхи — `~/…`; мережі й справжнього реєстру нема (чисті функції над `cfg`)."""
+    import registry
+    import roots as roots_tool
+    home = os.path.join(tmp, 'bin', 'home')
+    os.makedirs(home)
+    shared, united, seo = (os.path.join(home, 'work', n) for n in ('shared', 'united', 'seo'))
+    for d in (os.path.join(shared, 'b-united'), os.path.join(shared, 'b-seo'), os.path.join(shared, 'b-liga360'),
+              os.path.join(shared, 'b-zzz'), os.path.join(shared, 'b-upper'), os.path.join(shared, 'b-clash'),
+              os.path.join(united, 'b-home'), os.path.join(united, 'b-clash')):
+        os.makedirs(d)
+    # `~/…` у конфігу — `work_root` розгортає через `expanduser`; `dir` задач — абсолютні (як їх пише `task_new`)
+    cfg = {'design_work_roots': {'united': '~/work/united', 'seo': '~/work/seo'}, 'design_work_root': '~/work/shared',
+           'tasks': {
+               'b-united': {'dir': os.path.join(shared, 'b-united'), 'profile': 'united'},     # переїде в united
+               'b-seo': {'dir': os.path.join(shared, 'b-seo'), 'profile': 'seo'},             # переїде в seo
+               'b-liga360': {'dir': os.path.join(shared, 'b-liga360'), 'profile': 'liga360'},  # свого кореня нема: на місці
+               'b-zzz': {'dir': os.path.join(shared, 'b-zzz'), 'profile': 'zzz'},             # невідомий: спільний, на місці
+               'b-upper': {'dir': os.path.join(shared, 'b-upper'), 'profile': 'United'},      # не той регістр: спільний, на місці
+               'b-home': {'dir': os.path.join(united, 'b-home'), 'profile': 'united'},        # уже на місці
+               'b-clash': {'dir': os.path.join(shared, 'b-clash'), 'profile': 'united'},      # ціль уже існує — стоп
+               'b-gone': {'dir': os.path.join(shared, 'b-gone'), 'profile': 'seo'},           # теки нема на диску — стоп
+               'b-nodir': {'profile': 'seo'},                                                  # нема `dir` — стоп
+               'b-noprofile': {'dir': os.path.join(shared, 'b-noprofile')},                    # без профілю: спільний
+           }}
+    os.makedirs(os.path.join(shared, 'b-noprofile'))
+    cfg_five = {**cfg, 'tasks': {**cfg['tasks'], 'b-five': {'dir': os.path.join(shared, 'b-zzz'), 'profile': 5}}}
+    cfg_nothing = {'tasks': {'b-n': {'dir': os.path.join(home, 'deai-work', 'b-n'), 'profile': 'united'}}}
+
+    def view(v):
+        """Кортежі → списки; шляхи → `~/…`."""
+        if isinstance(v, (list, tuple)):
+            return [view(x) for x in v]
+        return rel(v, home)
+
+    out = {}
+    with mock.patch.dict(os.environ, {'HOME': home}):
+        for name, c in (('liga', cfg), ('with_int_profile', cfg_five), ('no_roots', cfg_nothing)):
+            out[name] = {'plan': _raises_view(lambda: roots_tool.plan(c), view),
+                         'roots_in_use': _raises_view(lambda: roots_tool.roots_in_use(c), view)}
+        out['registry_work_root'] = {str(p): _raises_view(lambda: registry._work_root(cfg, p), view) for p in ROOT_PROFILES}
+        out['registry_work_root_5'] = _raises_view(lambda: registry._work_root(cfg, 5), view)
+        out['registry_work_root_nothing'] = _raises_view(lambda: registry._work_root({}, 'united'), view)
+    return out
+
+
+def _raises_view(fn, view):
+    """`_raises` з відносними шляхами в результаті."""
+    r = _raises(fn)
+    return {'result': view(r['result'])} if 'result' in r else r
+
+
 # ---------------------------------------------------------------------------------- збирання
 
 def build():
@@ -415,6 +520,8 @@ def build():
             snap['ds'] = ds()
             snap['task_new'] = task_new(tmp)
             snap['route'] = route(tmp)
+            snap['pages'] = pages(tmp)
+            snap['bin'] = bin_tools(tmp)
     spaces_guard.assert_untouched(real)
     return snap
 
@@ -426,24 +533,27 @@ def _source_commit():
 
 
 def _code_differs_from_source():
-    """`True`, якщо `app/`/`bin/` цієї теки відрізняються від `_source_commit()`. `None` — перевірити нема як (не git-теку:
-    копія з `git archive`; git відсутній; коміту нема): тоді довіряємо рецепту з докстрінга. ⛔ Саме `show-toplevel == ROOT`:
-    тека-копія всередині чужого git-репо інакше питала б ЧУЖИЙ репозиторій."""
+    """`True`, якщо `app/`/`bin/` цієї теки відрізняються від `_source_commit()` АБО перевірити не вдалося; `None` — лише коли
+    у `ROOT` нема `.git` зовсім (заморожена копія з `git archive`: довіряємо рецепту з докстрінга).
+
+    ⛔ Закрито за замовчуванням ВСЕРЕДИНІ git-теки (ревʼю Task 1: клон зі зміненим `app/serve.py` і `PATH=/nonexistent` чи
+    `GIT_DIR=/nonexistent` давав «довіряємо» й перезаписував еталон). Нема `git`, збій чи тайм-аут, зламаний `rev-parse`, чужий
+    toplevel, нема коміту-джерела, ненульовий `git diff` (1 = різниця, 128 = збій), збій `ls-files` або будь-який новий файл у
+    `app/`/`bin/` (`git diff` їх не бачить) — усе це «відрізняється». Лише чисте `0` + порожній список дозволяє перезапис."""
+    if not os.path.lexists(os.path.join(ROOT, '.git')):
+        return None
     try:
         top = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--show-toplevel'], capture_output=True, text=True, timeout=30)
         if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(ROOT):
-            return None
+            return True
         src = _source_commit()
         if subprocess.run(['git', '-C', ROOT, 'cat-file', '-e', src + '^{commit}'], capture_output=True, timeout=30).returncode != 0:
-            return None
+            return True
         diff = subprocess.run(['git', '-C', ROOT, 'diff', '--quiet', src, '--', 'app', 'bin'], capture_output=True, timeout=60)
-        # Нові (неіндексовані) файли в app/ і bin/ — теж «код відрізняється»: `git diff` їх не бачить.
         untracked = subprocess.run(['git', '-C', ROOT, 'ls-files', '--others', '--exclude-standard', '--', 'app', 'bin'],
                                    capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
-        return None
-    # ⛔ Закрито за замовчуванням: будь-який ненульовий код `git diff` (1 = є різниця, 128 = збій) і будь-який збій
-    # `ls-files` — «відрізняється», а не «однакове». Лише чисте `0` + порожній список нових файлів дозволяє перезапис.
+        return True
     if untracked.returncode != 0:
         return True
     return diff.returncode != 0 or bool(untracked.stdout.strip())
