@@ -113,6 +113,10 @@ c8c3a8b | tar -x -C <тека>` у докстрінгу; охорона fail-clo
 - (з ревʼю Task 2) `track_root` для ЛІГИ — лише через `tracks.legacy_root(cfg, v)`, НЕ через `find(tracks, v)`: `legacy_tracks`
   перелічує лише id за `ID_RE`, а 0.14.0 шанував власний корінь `design_work_roots['United']`. Тестовий цикл міток
   `LegacyParity._derived` у `tests/test_tracks.py` замінити викликом справжнього `serve.task_tags`.
+- (з ревʼю Task 2, повторне) `tracks.normalize` перевіряє `root` правилом шляху простору (`spaces.check_new_path`) з ПОРОЖНІМ
+  реєстром — перетин з іншими просторами там не ловиться. `serve.space_tracks(sp)` додатково відкидає (`root: None`) корінь,
+  що збігається з шляхом ІНШОГО простору реєстру чи лежить у ньому (`check_new_path` з реєстром БЕЗ власного запису простору;
+  корінь усередині власного простору — дозволений). Тест + мутація.
 
 ---
 
