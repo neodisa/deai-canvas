@@ -7735,10 +7735,11 @@ class Handler(SimpleHTTPRequestHandler):
         модуль дає `check-timeout`, а не зависання. У задачу пишуться лише непорожні, обрізані значення. Є ціль і в `<path>`
         репо лежить `index.html` — перша ітерація з нього (збій отримання — тихо стартовий макет); з `from` отримання нема.
 
-        Етап 4d-1, напрямок: `track` (рядок чи `null`; `profile` — синонім до 4d-4). Порядок відмов: чужий Origin 403 → тіло
-        (`bad-profile`, `bad-track`: не рядок чи конфлікт, `bad-tags`) → простір знайдено → `bad-track` (не за шаблоном id) і
-        `unknown-track` (нема в `space.json` простору; без напрямків у просторі — будь-який) → решта, усе ДО будь-якого запису.
-        ЛІГА приймає будь-який рядок як є й `unknown-track` не знає; поля нема (`null`, `''`) — `default_track` простору.
+        Етап 4d-1, напрямок: `track` (рядок чи `null`) і `profile` (застарілий синонім до 4d-4). Порядок відмов: чужий Origin 403 →
+        тіло (`bad-profile`, `bad-track`: не рядок, `bad-tags`) → простір знайдено → конфлікт `track`/`profile`, далі для
+        звичайного простору `bad-track` (не за шаблоном id) і `unknown-track` (нема в `space.json`; без напрямків — будь-який) →
+        решта, усе ДО будь-якого запису. ЛІГА приймає будь-який рядок як є й `unknown-track` не знає. У звичайному просторі
+        `profile`, що не є напрямком простору, ІГНОРУЄТЬСЯ (як у 0.14.0), а `track` суворий; поля нема — `default_track`.
 
         ⚠️ Порядок: простір запиту фіксується ПЕРЕД `load_tasks()` — конфіг ЦІЛЬОВОГО простору, а не
         поточного на вході, інакше `save_tasks` записав би чужий конфіг у файл цілі."""
@@ -7746,17 +7747,13 @@ class Handler(SimpleHTTPRequestHandler):
         if profile is not None and not isinstance(profile, str):
             self._space_error(400, 'bad-profile', 'profile must be a string')
             return
-        # Напрямок (4d-1): `track`, а `profile` — його синонім до 4d-4. `null` і `''` — поля нема; не рядок — 400 `bad-track`
-        # (`bad-profile` лишається для поля `profile`); обидва непорожні й різні — 400 `bad-track`. Це лише те, що видно з тіла;
-        # за шаблоном id і за переліком напрямків питає простір — нижче, як тільки його знайдено (ЛІГА приймає будь-який рядок).
+        # Напрямок (4d-1): `track` і `profile` — його застарілий синонім до 4d-4. `null` і `''` — поля нема; `track` не рядок —
+        # 400 `bad-track` (`bad-profile` лишається для `profile`). Це лише те, що видно з тіла; усе, що залежить від простору
+        # (шаблон id, перелік напрямків, конфлікт двох ключів), перевіряється нижче, як тільки простір знайдено.
         track_in = payload.get('track')
         if track_in is not None and not isinstance(track_in, str):
             self._space_error(400, 'bad-track', 'track must be a string')
             return
-        if track_in and profile and track_in != profile:
-            self._space_error(400, 'bad-track', 'track and profile name different tracks')
-            return
-        want_track = track_in or profile or None
         # Мітки (4b-3): `null` — поля нема; не за правилами — 400 ДО будь-якого запису (як `bad-profile`).
         tags = payload.get('tags')
         if tags is not None:
@@ -7786,19 +7783,34 @@ class Handler(SimpleHTTPRequestHandler):
             if sp is None:
                 self._space_error(400, 'unknown-space', 'unknown space')
                 return
-        # Напрямки простору — ОДИН раз на запит (`_TrackView` ліниво читає `space.json`/корінь ЛІГИ). Звичайний простір: напрямок
-        # з тіла — за шаблоном id (`bad-track`) і з переліку (`unknown-track`; без напрямків у просторі будь-який — невідомий),
-        # ДО будь-якого запису: ні теки, ні `tasks.json`. ЛІГА приймає будь-який рядок як є (0.14.0 так і робила) — тут їй
-        # нема чого відмовляти.
+        # Напрямки простору — ОДИН раз на запит (`_TrackView` ліниво читає `space.json`/корінь ЛІГИ). Усе — ДО будь-якого запису:
+        # ні теки, ні `tasks.json`.
+        # ЛІГА: будь-який рядок як є (0.14.0 так і робила), `unknown-track` їй не відомий; відмовляє лише конфлікт двох різних
+        # непорожніх ключів (`bad-track`).
+        # Звичайний простір: `track` СУВОРО — не за шаблоном id `bad-track`, нема в переліку (чи перелік порожній) `unknown-track`.
+        # ⛔ `profile` — застарілий ключ, і 0.14.0 у просторі без інтеграцій його мовчки ІГНОРУВАЛА: він мусить і далі проходити
+        # (імʼя напрямку ЛІГИ від dev-pipeline, `tool`, інший регістр). Тому `profile` береться за напрямок лише коли це справжній напрямок
+        # простору (за шаблоном id І з переліку); будь-який інший рядок ігнорується (задача — у напрямок за замовчуванням, а без
+        # напрямків — як у 0.14.0: корінь = шлях простору, `profile: null`, без ключа `track`). Конфлікт `track` і `profile`
+        # (`bad-track`) — лише коли `profile` справді був би використаний; інакше вирішує один `track`.
         liga = spaces.integrations_for(sp)
         view = _TrackView(sp)
-        if want_track is not None and not liga:
-            if not tracks.ID_RE.fullmatch(want_track):
+        if liga:
+            used_profile = profile or None
+        else:
+            known = bool(profile) and tracks.ID_RE.fullmatch(profile) and tracks.find(view.tracks, profile) is not None
+            used_profile = profile if known else None
+        if track_in and used_profile and track_in != used_profile:
+            self._space_error(400, 'bad-track', 'track and profile name different tracks')
+            return
+        if track_in and not liga:
+            if not tracks.ID_RE.fullmatch(track_in):
                 self._space_error(400, 'bad-track', 'track must be lowercase letters, digits and dashes')
                 return
-            if tracks.find(view.tracks, want_track) is None:
+            if tracks.find(view.tracks, track_in) is None:
                 self._space_error(400, 'unknown-track', 'unknown track')
                 return
+        want_track = track_in or used_profile or None
         spaces.set_request_space(sp['id'])
         tid = payload.get('id', '')
         broken = spaces.unreadable_task_files(spaces.read_registry())

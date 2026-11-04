@@ -1526,7 +1526,7 @@ class ApiTracks(_Plain):
         before = self.snapshot(self.sp)
         cases = (({'track': 'web', 'profile': 'mobile'}, 'bad-track'), ({'track': 5}, 'bad-track'),
                  ({'track': ['web']}, 'bad-track'), ({'track': 'Bad!'}, 'bad-track'), ({'track': 'Web'}, 'bad-track'),
-                 ({'track': 'x' * 33}, 'bad-track'), ({'profile': 'Bad!'}, 'bad-track'),
+                 ({'track': 'x' * 33}, 'bad-track'),
                  ({'profile': 5}, 'bad-profile'), ({'track': 'web', 'profile': 5}, 'bad-profile'))
         for extra, code in cases:
             st, body = self.post({'id': 'x1', **extra})
@@ -1536,9 +1536,9 @@ class ApiTracks(_Plain):
     def test_an_unknown_track_is_refused_before_any_write(self):
         self.two_tracks()
         before = self.snapshot(self.sp)
-        for extra in ({'track': 'nope'}, {'profile': 'nope'}):
+        for extra in ({'track': 'nope'}, {'track': 'nope', 'profile': 'nope'}, {'track': 'nope', 'profile': 'Bad!'}):
             st, body = self.post({'id': 'u1', **extra})
-            self.assertEqual((st, body.get('code')), (400, 'unknown-track'), extra)
+            self.assertEqual((st, body.get('code')), (400, 'unknown-track'), extra)       # `profile`, що не напрямок, не рятує
             self.assertEqual(self.snapshot(self.sp), before, extra)                # ні теки, ні `tasks.json`
             self.assertFalse(os.path.exists(os.path.join(self.sp['path'], 'web-dir')), extra)
 
@@ -1560,12 +1560,59 @@ class ApiTracks(_Plain):
         self.assertEqual((st, resp.get('code')), (400, 'bad-track'))
         st, resp = self.post({'id': 'o4', 'profile': 5, 'track': 'nope'})
         self.assertEqual((st, resp.get('code')), (400, 'bad-profile'))
-        st, resp = self.post({'id': 'o5', 'track': 'web', 'profile': 'nope'})
+        st, resp = self.post({'id': 'o5', 'track': 'mobile', 'profile': 'web'})
         self.assertEqual((st, resp.get('code')), (400, 'bad-track'))                # конфлікт, а не `unknown-track`
         # решта — як була: ПОГАНІ мітки й далі 400 `bad-tags`, а дублікат id — 400 `task-exists`
         self.assertEqual(self.post({'id': 'o6', 'track': 'web', 'tags': ['a,b']})[1].get('code'), 'bad-tags')
         self.assertEqual(self.post({'id': 'o7', 'track': 'web'})[0], 200)
         self.assertEqual(self.post({'id': 'o7', 'track': 'web'})[1].get('code'), 'task-exists')
+
+    # ---- `profile` — застарілий ключ: у звичайному просторі, що не є напрямком, він ІГНОРУЄТЬСЯ, як у 0.14.0
+    def test_a_profile_that_is_not_a_track_is_ignored_in_a_space_with_tracks(self):
+        self.two_tracks()
+        for i, profile in enumerate(('nope', 'united', 'United', 'tool', 'Bad!', 'x' * 40, 'mobile-extra', ' web')):
+            tid = f'i{i}'
+            st, body = self.post({'id': tid, 'profile': profile})
+            self.assertEqual((st, body.get('ok')), (200, True), (profile, body))
+            e = self.entry(self.sp, tid)
+            self.assertEqual((e['track'], e['profile']), ('web', None), profile)           # у напрямок за замовчуванням, `profile` — null
+            self.assertEqual(e['dir'], os.path.join(self.sp['path'], 'web-dir', tid), profile)
+
+    def test_a_profile_is_ignored_in_a_space_without_tracks_exactly_as_in_0_14_0(self):
+        for i, profile in enumerate(('united', 'tool', 'United', 'Bad!', 'x' * 40)):
+            tid = f'z{i}'
+            st, body = self.post({'id': tid, 'profile': profile})
+            self.assertEqual((st, body.get('ok')), (200, True), (profile, body))
+            e = self.entry(self.sp, tid)
+            self.assertEqual((e['dir'], e['profile']), (os.path.join(self.sp['path'], tid), None), profile)
+            self.assertNotIn('track', e)
+        self.assertEqual(self.post({'id': 'z9', 'profile': 5})[1].get('code'), 'bad-profile')   # не рядок — як було
+
+    def test_the_conflict_is_only_about_a_profile_that_would_be_used(self):
+        self.two_tracks()
+        before = self.snapshot(self.sp)
+        for body in ({'track': 'mobile', 'profile': 'web'}, {'track': 'web', 'profile': 'mobile'},
+                     {'track': 'nope', 'profile': 'web'}):                     # профіль — напрямок простору і різний: конфлікт
+            st, resp = self.post({'id': 'k1', **body})
+            self.assertEqual((st, resp.get('code')), (400, 'bad-track'), body)
+            self.assertEqual(self.snapshot(self.sp), before, body)
+        # профіль, що був би проігнорований, рішення не міняє: вирішує один `track`
+        for i, profile in enumerate(('nope', 'United', 'united', 'Bad!')):
+            tid = f'k{i + 2}'
+            st, resp = self.post({'id': tid, 'track': 'mobile', 'profile': profile})
+            self.assertEqual((st, resp.get('ok')), (200, True), (profile, resp))
+            e = self.entry(self.sp, tid)
+            self.assertEqual((e['track'], e['profile']), ('mobile', None), profile)
+        st, resp = self.post({'id': 'k9', 'track': 'nope', 'profile': 'united'})            # `track` суворий і тут
+        self.assertEqual((st, resp.get('code')), (400, 'unknown-track'))
+        self.assertEqual(self.post({'id': 'k10', 'track': 'web', 'profile': 'web'})[0], 200)   # однакові — ок
+
+    def test_in_a_space_without_tracks_a_strict_track_beats_an_ignored_profile(self):
+        before = self.snapshot(self.sp)
+        for body in ({'track': 'x', 'profile': 'united'}, {'track': 'united', 'profile': 'united'}):
+            st, resp = self.post({'id': 'k11', **body})
+            self.assertEqual((st, resp.get('code')), (400, 'unknown-track'), body)
+            self.assertEqual(self.snapshot(self.sp), before, body)
 
     def test_a_foreign_origin_is_refused_first(self):
         import http.client

@@ -1913,7 +1913,7 @@ class TaskNew(Fixture):
         self.made(os.path.join(self.p_path, 'n2'))
         old_before = _md5(self.legacy_file)
         st, body = self.post('/api/task-new', {'id': 'n2', 'title': 'N2', 'space': self.p_id,
-                                               'jira': 'LIGA-1'})      # 4d-1: без `profile` — у просторі без напрямків він `unknown-track`
+                                               'profile': 'united', 'jira': 'LIGA-1'})
         self.assertEqual(st, 200, body)
         self.assertEqual((body['space'], body['dir'], body['cloned'], body['registered']),
                          (self.p_id, os.path.join(self.p_path, 'n2'), False, False))
@@ -2004,7 +2004,7 @@ class TaskNew(Fixture):
         self.assertEqual((_md5(self.legacy_file), _md5(self.p_file)), before)
         self.assertFalse(os.path.exists(self.old_dir('n15')))
         self.made(os.path.join(self.p_path, 'n16'), self.old_dir('n16'))
-        for profile in (None, ''):                              # відсутнє — як було (4d-1: рядок у просторі без напрямків — `unknown-track`)
+        for profile in (None, '', 'tool'):                      # рядок і відсутнє — як було
             with self.subTest(profile=profile):
                 st, _ = self.post('/api/task-new', {'id': 'n16', 'space': self.p_id, 'profile': profile})
                 self.assertEqual(st, 200)
@@ -2181,7 +2181,7 @@ class TaskNew(Fixture):
         `gitlab` — як було (поточний простір, `profile: null`)."""
         self.no_liga()
         for i, extra in enumerate(({}, {'jira': ''}, {'jira': '   '}, {'jira': 5}, {'jira': None},
-                                   {'profile': ''}, {'profile': None},
+                                   {'profile': 'tool'}, {'profile': ''}, {'profile': None}, {'profile': 'United'},
                                    {'gitlab': None}, {'gitlab': {}}, {'gitlab': ''}, {'title': 'Т'})):
             tid = f'n21-{i}'
             self.made(os.path.join(self.p_path, tid))
@@ -2189,13 +2189,6 @@ class TaskNew(Fixture):
                 st, body = self.post('/api/task-new', {'id': tid, **extra})
                 self.assertEqual((st, body['space']), (200, self.p_id), body)
                 self.assertIsNone(_read(self.p_file)['tasks'][tid]['profile'])
-        # 4d-1: профіль-рядок не з `profile_repos()` теж не ознака ЛІГА (не 409) — тепер це просто напрямок звичайного простору, а
-        # напрямків там нема: відмова ДО запису з `unknown-track` (`United` не за шаблоном id — `bad-track`)
-        before = _md5(self.p_file)
-        for profile, code in (('tool', 'unknown-track'), ('United', 'bad-track')):
-            st, body = self.post('/api/task-new', {'id': 'n21-x', 'profile': profile})
-            self.assertEqual((st, body['code']), (400, code), body)
-        self.assertEqual(_md5(self.p_file), before)
 
     def test_a_profile_without_profile_repos_in_the_config_is_not_a_liga_sign(self):
         """4b-3: у конфігу установки нема `profile_repos` (так у фікстурі) — `profile: united` не ознака потоку ЛІГА: без
@@ -2203,12 +2196,7 @@ class TaskNew(Fixture):
         self.no_liga()
         self.assertNotIn('profile_repos', _read(self.legacy_file))
         self.made(os.path.join(self.p_path, 'n25'))
-        before = _md5(self.p_file)
         st, body = self.post('/api/task-new', {'id': 'n25', 'profile': 'united'})
-        # 4d-1: не 409, а відмова звичайного простору — напрямків у ньому нема (раніше `united` мовчки ігнорувався)
-        self.assertEqual((st, body['ok'], body['code']), (400, False, 'unknown-track'), body)
-        self.assertEqual(_md5(self.p_file), before)
-        st, body = self.post('/api/task-new', {'id': 'n25'})                     # без профілю — ПОТОЧНИЙ простір, без `gitlab`
         self.assertEqual((st, body['ok'], body['space']), (200, True, self.p_id), body)
         entry = _read(self.p_file)['tasks']['n25']
         self.assertNotIn('gitlab', entry)
@@ -2221,7 +2209,8 @@ class TaskNew(Fixture):
         st, body = self.post('/api/task-new', {'id': 'n22', 'jira': 'LIGA-2', 'profile': 'tool'})
         self.assertEqual((st, body['space']), (200, self.legacy_id), body)
         self.no_liga()
-        st, body = self.post('/api/task-new', {'id': 'n23', 'space': self.p_id, 'jira': 'LIGA-3'})   # 4d-1: без `profile`
+        st, body = self.post('/api/task-new', {'id': 'n23', 'space': self.p_id, 'jira': 'LIGA-3',
+                                               'profile': 'united'})
         self.assertEqual((st, body['space']), (200, self.p_id), body)
         st, body = self.post('/api/task-new', {'id': 'n24', 'space': self.p_id,
                                                'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n24'}})
