@@ -110,6 +110,9 @@ c8c3a8b | tar -x -C <тека>` у докстрінгу; охорона fail-clo
   або конфлікт `track`/`profile`; `unknown-track` — ніколи. Звичайний простір — суворо за `ID_RE` і переліком.
 - `inspector_ds_arg` лишає `strip()` і шаблон як у 0.14.0 (`?ds=zzz` для невідомого напрямку ЛІГИ).
 - `/api/task` — через заголовок `X-Canvas-Task`, не `?id=` (у Task 4 й 6 так само).
+- (з ревʼю Task 2) `track_root` для ЛІГИ — лише через `tracks.legacy_root(cfg, v)`, НЕ через `find(tracks, v)`: `legacy_tracks`
+  перелічує лише id за `ID_RE`, а 0.14.0 шанував власний корінь `design_work_roots['United']`. Тестовий цикл міток
+  `LegacyParity._derived` у `tests/test_tracks.py` замінити викликом справжнього `serve.task_tags`.
 
 ---
 
