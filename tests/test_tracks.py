@@ -277,8 +277,8 @@ class Normalize(_Home):
         self.assertEqual(self.norm({'id': 'a', 'root': r})[0]['root'], r)
 
     def test_root_tilde_expands(self):
-        got = self.norm({'id': 'a', 'root': '~/work/web'}, {'id': 'b', 'root': '~'})
-        self.assertEqual([t['root'] for t in got], [os.path.join(self.home, 'work', 'web'), self.home])
+        got = self.norm({'id': 'a', 'root': '~/work/web'}, {'id': 'b', 'root': '~/work/../w2'})
+        self.assertEqual([t['root'] for t in got], [os.path.join(self.home, 'work', 'web'), os.path.join(self.home, 'w2')])
 
     def test_root_relative_to_space_path(self):
         got = self.norm({'id': 'a', 'root': 'mobile'}, {'id': 'b', 'root': 'x/../y'}, {'id': 'c', 'root': './z/'})
@@ -302,6 +302,35 @@ class Normalize(_Home):
                   '/'):
             got = self.norm({'id': 'a', 'root': r, 'repo': 'g@e:s/w'})
             self.assertEqual((got[0]['id'], got[0]['root'], got[0]['repo']), ('a', None, 'g@e:s/w'), r)    # запис живий
+
+    def test_root_home_system_dirs_are_none(self):
+        """І2: правило `spaces` для шляху простору (`check_new_path`): у домівці `Library` (будь-який регістр) і приховані теки."""
+        for r in ('~/.ssh', '~/.ssh/keys', '~/.config', '~/.hidden/x', '~/Library', '~/Library/x', '~/library/x', '~/LIBRARY',
+                  os.path.join(self.home, '.ssh'), os.path.join(self.home, 'Library', 'Caches')):
+            got = self.norm({'id': 'a', 'root': r, 'repo': 'g@e:s/w'})
+            self.assertEqual((got[0]['id'], got[0]['root'], got[0]['repo']), ('a', None, 'g@e:s/w'), r)
+        # звичайна тека в домівці й тека з крапкою ГЛИБШЕ — дозволені (як для простору)
+        self.assertEqual(self.norm({'id': 'a', 'root': '~/work/.cache'})[0]['root'], os.path.join(self.home, 'work', '.cache'))
+
+    def test_root_home_itself_and_its_ancestors_are_none(self):
+        parent = os.path.dirname(self.home)
+        for r in ('~', '~/', self.home, parent, '/', os.path.join(self.home, 'x', '..')):
+            self.assertIsNone(self.norm({'id': 'a', 'root': r})[0]['root'], r)
+
+    def test_root_symlink_to_home_hidden_dir_is_none(self):
+        os.mkdir(os.path.join(self.home, '.secret'))
+        os.symlink(os.path.join(self.home, '.secret'), os.path.join(self.home, 'pub'))
+        self.assertIsNone(self.norm({'id': 'a', 'root': '~/pub'})[0]['root'])
+
+    def test_root_length_cap(self):
+        self.assertEqual(tracks.ROOT_MAX, 1024)
+        ok = 'a/' * 511 + 'aa'                                            # рівно 1024 знаки
+        long = 'a/' * 512 + 'aa'                                           # 1026
+        self.assertEqual((len(ok), len(long)), (1024, 1026))
+        self.assertEqual(self.norm({'id': 'a', 'root': ok})[0]['root'], os.path.join(self.space, ok))
+        got = self.norm({'id': 'a', 'root': long, 'label': 'L'})
+        self.assertEqual((got[0]['id'], got[0]['label'], got[0]['root']), ('a', 'L', None))     # запис живий, поле відсутнє
+        self.assertIsNone(self.norm({'id': 'a', 'root': '/' + 'x' * 1030})[0]['root'])
 
     def test_root_not_a_system_dir_by_prefix_only(self):
         # `/usrlocal` — не підтека `/usr`: порівняння за межею компонента
@@ -551,6 +580,21 @@ class LegacyTracks(_Home):
             self.assertEqual(d, 'united')
             self.assertEqual(fb, os.path.join(self.home, 'deai-work'), repr(cfg)[:60])
 
+    def test_non_string_roots_fall_back_to_the_next_link(self):
+        """Відмінність від 0.14.0 (там `TypeError` у `expanduser`): не рядок — як відсутнє, діє наступна ланка ланцюга."""
+        shared, deai = os.path.join(self.home, 'work/shared'), os.path.join(self.home, 'deai-work')
+        for bad in (5, ['x'], {'a': 1}, True, 1.5):
+            cfg = {'design_work_root': '~/work/shared', 'design_work_roots': {'united': bad, 'seo': '~/work/seo'}}
+            self.assertEqual(tracks.legacy_root(cfg, 'united'), shared, repr(bad))          # власний не рядок → спільний
+            self.assertEqual(tracks.legacy_root(cfg, 'seo'), os.path.join(self.home, 'work/seo'))
+            tr, _, fb = tracks.legacy_tracks(cfg)
+            self.assertEqual((tracks.find(tr, 'united')['root'], fb), (shared, shared), repr(bad))
+            cfg = {'design_work_root': bad, 'design_work_roots': {'united': 5, 'seo': '~/work/seo'}}
+            self.assertEqual(tracks.legacy_root(cfg, 'united'), deai, repr(bad))             # і власний, і спільний не рядки
+            self.assertEqual(tracks.legacy_root(cfg, 'zzz'), deai, repr(bad))
+            self.assertEqual(tracks.legacy_root(cfg, 'seo'), os.path.join(self.home, 'work/seo'))
+            self.assertEqual(tracks.legacy_tracks(cfg)[2], deai, repr(bad))
+
     def test_design_work_roots_not_a_dict_is_shared_root(self):
         """Свідома відмінність від 0.14.0 (спека §6.4): там `AttributeError` (500), тут — спільний корінь."""
         cfg = {'design_work_root': '~/work/shared', 'design_work_roots': ['united']}
@@ -710,6 +754,25 @@ class LegacyParity(_Home):
         self.assertIsNone(tracks.label_tag([], {'profile': 5}, legacy=True))                 # числовий профіль
         self.assertIsNone(tracks.label_tag([], {'profile': ''}, legacy=True))
         self.assertIsNone(tracks.label_tag([], {'profile': 'x' * 40}, legacy=True))
+
+
+class SourceHygiene(unittest.TestCase):
+    """І1: у коді ядра немає «сирих» невидимих знаків (їх не видно в ревʼю; керівні клас ПРАВИЛА мітки записаний `\\uXXXX`)."""
+
+    BAD = re.compile('[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff'
+                     '\x00-\x08\x0b-\x1f\x7f-\x9f]')
+
+    def test_tracks_source_has_no_raw_invisible_or_control_chars(self):
+        with open(os.path.join(_APP, 'tracks.py'), encoding='utf-8') as f:
+            src = f.read()
+        found = [(src.count('\n', 0, m.start()) + 1, hex(ord(m.group()))) for m in self.BAD.finditer(src)]
+        self.assertEqual(found, [])
+
+    def test_tag_bad_pattern_is_written_escaped(self):
+        with open(os.path.join(_APP, 'tracks.py'), encoding='utf-8') as f:
+            line = [ln for ln in f if ln.startswith('TAG_BAD = ')][0]
+        self.assertIn('\\u200b-\\u200f', line)
+        self.assertTrue(tracks.TAG_BAD.search('a\u202eb') and tracks.TAG_BAD.search('a,b') and tracks.TAG_BAD.search('a\x85b'))
 
 
 if __name__ == '__main__':

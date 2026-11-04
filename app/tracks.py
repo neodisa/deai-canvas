@@ -18,7 +18,6 @@
 """
 import os
 import re
-import unicodedata
 
 import spaces
 
@@ -32,7 +31,7 @@ MAX_TRACKS = 20
 REPO_OK = re.compile(r'[\x21-\x2c\x2e-\x7e][\x21-\x7e]*')
 #: Правила мітки (раніше `serve._TAG_BAD`): керівні C0/C1, кома, невидимі нульової ширини (U+200B–U+200F, U+2060–U+2064,
 #: U+FEFF) і двоспрямовані керування (U+202A–U+202E, U+2066–U+2069): мітка з U+202E виглядала б не тим, чим є.
-TAG_BAD = re.compile('[\\x00-\\x1f\\x7f-\\x9f,​-‏‪-‮⁠-⁤⁦-⁩﻿]')
+TAG_BAD = re.compile('[\\x00-\\x1f\\x7f-\\x9f,\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]')
 TAG_MAX_LEN = 32
 #: Останній рубіж кореня задач ЛІГИ, коли в `tasks.json` нема нічого. Історична тека United — саме тому вона й муляє: у ній
 #: лежали задачі всіх трьох напрямків.
@@ -44,6 +43,8 @@ _LEGACY_DEFAULT = 'united'
 _LEGACY_LABELS = {'united': 'United', 'liga360': 'LIGA360', 'seo': 'SEO'}
 #: Керівні знаки в шляху `root`: NUL ламає `realpath`, решта — явне сміття.
 _PATH_BAD = re.compile('[\\x00-\\x1f\\x7f]')
+#: Найдовший `root` у `space.json` (знаків); довший вважається відсутнім. `spaces` власної межі шляху не має.
+ROOT_MAX = 1024
 
 
 def clean_tag(raw):
@@ -71,53 +72,17 @@ def _is_id(v):
     return isinstance(v, str) and ID_RE.fullmatch(v) is not None
 
 
-# ── системні теки: `root` напрямку звичайного простору (дзеркало перевірок `spaces`) ─────────────────────────────────────
-
-def _nfc(s):
-    return unicodedata.normalize('NFC', s)
-
-
-def _under(p, q):
-    """`p` == `q` або всередині `q` (NFC: macOS віддає імена в NFD)."""
-    p, q = _nfc(p), _nfc(q)
-    return p == q or p.startswith(q.rstrip(os.sep) + os.sep)
-
-
-def _text(p):
-    return os.sep + os.path.normpath(p).lstrip(os.sep)
-
-
-def _real(p):
-    return os.sep + os.path.realpath(p).lstrip(os.sep)
-
-
-def _is_system(path):
-    """Тека системна: корінь `/` або `spaces.SYSTEM_DIRS` чи їхня підтека — за текстом шляху І за `realpath` (симлінк у
-    `/usr` не проходить). Усередині домівки (за `realpath`) системних тек не буває — як у `spaces`: тимчасова домівка тестів на
-    macOS лежить під `/private/var`. Помилка файлової системи — «системна» (відмова, не пропуск)."""
-    try:
-        pt, pr = _text(path), _real(path)
-        h = os.path.expanduser('~')
-        ht, hr = _text(h), _real(h)
-        if os.sep in (pt, pr):
-            return True
-        if _under(pr, hr):
-            return False
-        sysdirs = {*spaces.SYSTEM_DIRS, *(os.path.realpath(d) for d in spaces.SYSTEM_DIRS)}
-        probes = (pr,) if _under(pt, ht) else (pt, pr)
-        return any(_under(x, d) for x in probes for d in sysdirs)
-    except (OSError, ValueError):
-        return True
-
-
 def _norm_root(raw, space_path):
     """`root` напрямку → абсолютний шлях або `None`. Приймається абсолютний, `~` чи `~/…` (інші `~імʼя` — звичайна відносна
-    назва) і відносний до шляху простору; системна тека, не рядок, порожній, із керівним знаком — `None`.
-    ⛔ Відносний `../..` нормалізується ДО перевірки: інакше `mobile/../../../usr` обійшов би відсів системних тек."""
+    назва) і відносний до шляху простору; не рядок, порожній, довший за `ROOT_MAX`, із керівним знаком — `None`.
+    ⛔ Відносний `../..` нормалізується ДО перевірки: інакше `mobile/../../../usr` обійшов би відсів системних тек.
+    Прийнятність — ТА САМА, що для шляху простору: `spaces.check_new_path` (без записів реєстру, тож порівнянь
+    `path-registered`/`path-overlap` нема): системні теки й підтеки за текстом і `realpath`, надто широкий (домівка чи її
+    предок, `/`), приховані теки й `Library` у домівці, тека інструмента, файл замість теки. Слабшої копії правил тут нема."""
     if not isinstance(raw, str):
         return None
     s = raw.strip()
-    if not s or _PATH_BAD.search(s):
+    if not s or len(s) > ROOT_MAX or _PATH_BAD.search(s):
         return None
     if s == '~' or s.startswith('~/'):
         s = os.path.expanduser(s)
@@ -128,7 +93,11 @@ def _norm_root(raw, space_path):
             return None
         s = os.path.join(space_path, s)
     s = os.path.normpath(s)
-    return None if _is_system(s) else s
+    try:
+        ok, why = spaces.check_new_path(s, {'spaces': []}, [])
+    except (OSError, ValueError):             # помилка файлової системи — відмова, не пропуск
+        return None
+    return ok if why is None else None
 
 
 def normalize(raw, space_path):
@@ -137,7 +106,7 @@ def normalize(raw, space_path):
 
     - не список → `[]`; запис не словник, `id` поза `ID_RE`, дубль `id` (перший перемагає) → запис відкинуто;
     - `label` — за правилами мітки (`read_tag`), інакше `id`;
-    - `root` — див. `_norm_root` (уже розгорнутий в абсолютний шлях); `repo` — `repo_ok`; `ds` — за `ID_RE`;
+    - `root` — див. `_norm_root` (уже розгорнутий в абсолютний шлях, прийнятний за правилами `spaces`); `repo` — `repo_ok`; `ds` — за `ID_RE`;
     - не більше `MAX_TRACKS` напрямків (перші)."""
     if not isinstance(raw, list):
         return []
@@ -235,7 +204,11 @@ def legacy_root(cfg, value):
     Вимога користувача 31.08.2026: три напрямки — три теки і три репозиторії. Порядок: свій корінь напрямку →
     спільний `design_work_root` → історичний фолбек. ⛔ Напрямок без власного кореня НЕ вигадується (і не береться з
     дефолтного): краще чесно покласти в спільний корінь і сказати про це (`bin/roots.py`), ніж створити теку за вигаданим
-    шляхом. `value` — що завгодно (`'United'`, `''`, число, `None`): невідоме — спільний корінь. Не кидає на поганому `cfg`."""
+    шляхом. `value` — що завгодно (`'United'`, `''`, число, `None`): невідоме — спільний корінь. Не кидає на поганому `cfg`.
+
+    Свідома відмінність від 0.14.0: НЕ рядок у власному корені напрямку чи в `design_work_root` (число, список) раніше
+    давав `TypeError` у `expanduser` (500); тепер таке значення вважається відсутнім і діє наступна ланка ланцюга
+    (власний → спільний → `~/deai-work`)."""
     own = _legacy_roots(cfg).get(value) if isinstance(value, str) else None
     if isinstance(own, str) and own:
         return os.path.expanduser(own)
