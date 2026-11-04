@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.14.0] — unreleased
+## [0.14.0] — 04.11.2026
 
 Stage 4c-3: the Teams notifications become a role, the last one of the in-house integrations. The switch «Notify Teams» in the
 publish menu and the route `/api/teams-mute` no longer depend on the `integrations` flag and on the database of one company: they
