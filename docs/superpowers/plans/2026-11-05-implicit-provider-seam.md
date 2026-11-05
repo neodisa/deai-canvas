@@ -127,6 +127,11 @@ tar -x -C <тека>` у докстрінгу; охорона fail-closed про
 - **(після Task 3, ревʼю погодило)** ключ кешу `_FOLDER_INPUTS` (`deai_modules` ≈1258, `folder_inputs`) ЛИШАЄТЬСЯ на
   `spaces.layer_on()`: `effective_space()` для зафіксованого простору читає/мігрує реєстр і кидає поза `try` на КОЖНОМУ файлі,
   а ключ і так несе шляхи й відбитки реєстру. Пункт плану про цей ключ скасовано; у спеці — «Implementation notes» (Task 7).
+- **(після Task 4, ревʼю погодило)** для Task 6: (1) внутрішній рядок `ProjectComments.kind` `'legacy'` → `'implicit'` (читають
+  лише `bin/state.py` ≈301 і тести — оновити разом; це внутрішнє значення, не API), тоді `NoLegacyLiteral` не має винятків для
+  `kind`; (2) `_liga_like` (≈1662) тепер = `spaces.integrations_for(sp)` і тримається на тому, що `spaces.IMPLICIT` має
+  `integrations: True` — закріпити тестом (`_liga_like(dict(spaces.IMPLICIT))` істинне при вимкненому шарі) і рядком коментаря;
+  (3) регекс-охоронець `NoLegacyComparisons` Task 4 замінити строгим AST `NoLegacyLiteral` (усі `app/*.py`, `bin/*.py`).
 - **Поза етапом (не чіпати, записано для беклогу):** `tests/live/dashboard-role.test.mjs` ≈372 ЧИТАЄ справжній
   `~/.claude/pipeline-feedback/overview-sync.log` (лише читання) — окрема задача.
 
