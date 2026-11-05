@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.15.0] — unreleased
+## [0.15.0] — 05.11.2026
 
 Stage 4d-1: the **profile** of a task (`united` / `liga360` / `seo`), a notion of one company welded into the core, is replaced by
 **tracks of a space**: a general mechanism that any space can use. A space describes its tracks in its `space.json` (an id, a label,
