@@ -408,6 +408,15 @@ def active_space(reg=None):
     return reg['spaces'][0] if reg['spaces'] and not req else None
 
 
+def effective_space():
+    """Простір запиту для ядра ролей (4d-2, шов «шар вимкнено»): шар вимкнено чи простір запиту не зафіксовано → `dict(IMPLICIT)`
+    БЕЗ читання реєстру; інакше `active_space()` (може кинути `SpacesError`; `None` — простору нема). ⛔ Не плутати з
+    контекстним менеджером `request_space(sid)`, що лише фіксує простір запиту."""
+    if not layer_on() or request_space_id() is None:
+        return dict(IMPLICIT)
+    return active_space()
+
+
 def active_tasks_file():
     sp = active_space()
     if sp is None:
