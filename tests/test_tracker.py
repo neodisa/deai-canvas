@@ -373,7 +373,7 @@ class JiraConfig(unittest.TestCase):
         env = mock.patch.dict(os.environ, {'HOME': self.home}, clear=False)
         env.start()
         self.addCleanup(env.stop)
-        for name in ('DC_TASKS_FILE', 'JIRA_EMAIL', 'JIRA_TOKEN'):
+        for name in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'JIRA_EMAIL', 'JIRA_TOKEN'):      # 4d-2: поза ізоляцією — обидві змінні прибрано
             os.environ.pop(name, None)
         patch = mock.patch.object(spaces, 'legacy_tasks_file', return_value=self.legacy)
         patch.start()

@@ -426,7 +426,7 @@ def _isolate_env(case, tmp, legacy_file, class_level=False):
     for k in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TEAMS_FAKE'):
         os.environ.pop(k, None)
     os.environ['DC_TASKS_FILE'] = legacy_file
-    os.environ.update(sbconf.ENV)      # конфіг Supabase ЛІГА — вигаданий, з оточення (4b-2): точки виходу ЛІГИ живі й під розтяжкою
+    sbconf.write_root(legacy_file)     # конфіг Supabase ЛІГА — вигаданий, у корені фікстури (4d-2): точки виходу ЛІГИ живі й під розтяжкою
     os.environ.update({
         'HOME': home, 'DEAI_HOME': deai, 'DC_MIRRORS_DIR': os.path.join(tmp, 'mirrors'),
         'DC_IDENTITY_NAME': 'Lead', 'DC_IDENTITY_EMAIL': 'lead@example.com',
@@ -741,7 +741,7 @@ class World(unittest.TestCase):
         work = os.path.join(cls.tmp, 'work')
         cls.a_dir = os.path.join(work, 'a')
         cls._task_dir(cls.a_dir, 'a', published=False)
-        _write(cls.legacy_file, {'current': 'a', 'design_work_root': work, 'registry': {},
+        _write(cls.legacy_file, {**sbconf.ROOT, 'current': 'a', 'design_work_root': work, 'registry': {},   # пара — у корені (4d-2)
                                  'tasks': {'a': {'title': 'Альфа', 'dir': cls.a_dir, 'profile': 'tool',
                                                  'gitlab': {'repo': 'git@gitlab.example.test:g/a.git',
                                                             'path': 'mockup/a'}}}})

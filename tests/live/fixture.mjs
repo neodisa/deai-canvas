@@ -126,6 +126,8 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
       ...process.env, PORT: String(port), DC_TASKS_FILE: tasksFile, DC_NO_OVERVIEW: "1",
       /* ⛔ Справжній Supabase розробника (оточення) не доходить до живого тесту: конфіг ЛІГИ — лише з файла фікстури. */
       SUPABASE_URL: "", SUPABASE_KEY: "",
+      /* ⛔ Те саме для Jira: після 4d-2 ядро в ізольованому прогоні їх не читає, а пояс і підтяжки лишаються. */
+      JIRA_EMAIL: "", JIRA_TOKEN: "",
       /* Лише з `spaces`: домівка й реєстр — тимчасові, а git не питає про особу
          (інакше `git commit` у теці нової задачі мовчки не відбувся б). */
       /* Окремо від того, що простір без інтеграцій «не ходить назовні» (це й перевіряють

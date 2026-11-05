@@ -8,6 +8,38 @@
 SB_URL = 'https://demo.supabase.co'
 SB_KEY = 'sb_publishable_test'
 ENV = {'SUPABASE_URL': SB_URL, 'SUPABASE_KEY': SB_KEY}
+ROOT = {'supabase_url': SB_URL, 'supabase_key': SB_KEY}
+
+
+def write_root(path, **extra):
+    """Покласти вигадану пару Supabase (+ `extra`) у КОРІНЬ файла задач `path` (зливає з наявним вмістом, теку створює).
+
+    4d-2: в ізольованому прогоні (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`) `install_config.supabase_config()` бере пару лише з кореня
+    цього файла, оточення не читає. Тож фікстури під `DC_TASKS_FILE` кладуть її сюди, а не в `os.environ` (`ENV`)."""
+    import json
+    import os
+    try:
+        with open(path, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    cfg.update(ROOT)
+    cfg.update(extra)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f)
+
+
+def drop_root(path):
+    """Прибрати пару Supabase з кореня файла задач `path` (решта вмісту лишається): шлях «конфігу нема» для фікстур під ізоляцією."""
+    import json
+    with open(path, encoding='utf-8') as f:
+        cfg = json.load(f)
+    for k in ROOT:
+        cfg.pop(k, None)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f)
 
 
 def _ensure_builtin(mid='supabase-comments'):

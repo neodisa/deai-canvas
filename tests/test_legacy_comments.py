@@ -287,8 +287,7 @@ class LigaRoutesWithoutConfigTest(tcr.PagesEnv):
 
     def setUp(self):
         super().setUp()
-        for name in ('SUPABASE_URL', 'SUPABASE_KEY'):
-            os.environ.pop(name, None)             # відновить `tm.Env.tearDown` (вони в його `_ENV`)
+        sbconf.drop_root(self.legacy)              # конфігу нема: пару `Env.setUp` лежить у корені фікстури, оточення під ізоляцією не читається
         net = mock.patch.object(serve.urllib.request, 'urlopen', _boom)
         net.start()
         self.addCleanup(net.stop)
@@ -411,8 +410,7 @@ class LegacyPagesTest(tcr.PagesEnv):
         self.assertEqual(serve.publish_comments(self.liga, self.t2, 't2', module_publish=True), (False, None))
 
     def test_publish_comments_without_config_is_comments_unconfigured_and_the_build_carries_nothing(self):
-        for name in ('SUPABASE_URL', 'SUPABASE_KEY'):
-            os.environ.pop(name, None)
+        sbconf.drop_root(self.legacy)
         self.assertEqual(serve.publish_comments(self.liga, self.t2, 't2'), (False, 'comments-unconfigured'))
         pub = self.build(False)['dir']
         self.assertFalse(os.path.exists(os.path.join(pub, 'comment-layer')))

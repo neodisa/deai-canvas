@@ -1253,10 +1253,11 @@ class DispatchWorld(unittest.TestCase):
         os.makedirs(self.deai, mode=0o700)
         env = mock.patch.dict(os.environ, {
             'HOME': self.home, 'DEAI_HOME': self.deai,
-            'DC_TASKS_FILE': os.path.join(self.tmp, 'legacy', 'tasks.json'),     # старого файла нема
-            'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x', **sbconf.ENV})
+            'DC_TASKS_FILE': os.path.join(self.tmp, 'legacy', 'tasks.json'),     # старий файл: лише вигадана пара Supabase (4d-2)
+            'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x'})
         env.start()
         self.addCleanup(env.stop)
+        sbconf.write_root(os.path.join(self.tmp, 'legacy', 'tasks.json'))    # пара — з кореня файла, не з оточення (закон ізоляції 4d-2)
         # справжня тека інструмента (репозиторій) не може стати ціллю публікації, навіть якщо правило колись
         # зламається, а `path-tool` перевіряється саме як причина
         tool = mock.patch.object(spaces, 'ROOT', self.tool)

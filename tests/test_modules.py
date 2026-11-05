@@ -208,7 +208,7 @@ class Env(unittest.TestCase):
         os.environ['HOME'] = self.home
         os.environ['DEAI_HOME'] = self.deai
         os.environ['DC_TASKS_FILE'] = self.legacy
-        os.environ.update(sbconf.ENV)      # конфіг Supabase ЛІГА — вигаданий, з оточення (4b-2)
+        sbconf.write_root(self.legacy)     # конфіг Supabase ЛІГА — вигаданий, у корені фікстури (4d-2: під `DC_TASKS_FILE` оточення не читається)
         # Каталог тесту — рівно `self.mods`: друга тека вбудованих модулів із оточення (`DEAI_EXTRA_MODULES`, шов тестів 2b-2) сюди
         # не належить, і її модулі не можна ні перелічувати, ні — головне — переписувати (`tearDown` повертає змінну).
         os.environ.pop('DEAI_EXTRA_MODULES', None)
@@ -2441,6 +2441,7 @@ class FolderTest(Env):
         self.assertIsNone(dm.folder_inputs())
 
     def test_folder_inputs_gives_the_pair_for_the_callers(self):
+        os.remove(self.legacy)             # цей тест рахує лише звичайний простір: файл `Env.setUp` (з парою Supabase) не мусить додати `main`
         sp = self.new_space()
         _write(os.path.join(sp['path'], 'tasks.json'), {'tasks': {'t': {'dir': self.hp('d', 't')}}})
         reg, dirs = dm.folder_inputs()

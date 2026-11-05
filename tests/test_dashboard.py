@@ -192,7 +192,7 @@ class SupabaseConfigBothNames(unittest.TestCase):
         env = mock.patch.dict(os.environ, {}, clear=False)
         env.start()
         self.addCleanup(env.stop)
-        for name in ('DC_TASKS_FILE', 'SUPABASE_URL', 'SUPABASE_KEY'):
+        for name in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'SUPABASE_URL', 'SUPABASE_KEY'):      # 4d-2: поза ізоляцією — обидві змінні прибрано
             os.environ.pop(name, None)
         patch = mock.patch.object(spaces, 'legacy_tasks_file', return_value=self.legacy)
         patch.start()
@@ -1153,7 +1153,7 @@ class CliTarget(unittest.TestCase):
                         mock.patch.dict(os.environ, {}), mock.patch.object(spaces, 'legacy_tasks_file', return_value='/nowhere/tasks.json')):
             patcher.start()
             self.addCleanup(patcher.stop)
-        for k in ('SUPABASE_URL', 'SUPABASE_KEY', 'SUPABASE_SERVICE_KEY', 'DC_TASKS_FILE'):
+        for k in ('SUPABASE_URL', 'SUPABASE_KEY', 'SUPABASE_SERVICE_KEY', 'DC_TASKS_FILE', 'DC_NO_OVERVIEW'):      # 4d-2: поза ізоляцією
             os.environ.pop(k, None)
 
     def ctx(self):
@@ -1277,12 +1277,12 @@ class _SyncEnv(tm.Env):
     (ТА `HOME` тимчасова: навіть якщо шов зламати, справжній `~/.claude/pipeline-feedback/` не торкнеться)."""
 
     def setUp(self):
-        super().setUp()
         # `DC_TASKS_FILE`/`SUPABASE_*` повертає сам `tm.Env.tearDown`; а `DC_NO_OVERVIEW`/`DC_TEAM_FAKE` (їх ставлять сусідні набори)
-        # — тут, інакше зняті навічно
-        for name in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE'):
-            if name in os.environ:
-                self.addCleanup(os.environ.__setitem__, name, os.environ[name])
+        # — тут: знімок оточення ДО `Env.setUp` повертається в `addCleanup` (4d-2: і коли змінної НЕ було — тест її не лишає)
+        snap = mock.patch.dict(os.environ)
+        snap.start()
+        self.addCleanup(snap.stop)
+        super().setUp()
         for name in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TASKS_FILE', 'SUPABASE_URL', 'SUPABASE_KEY'):
             os.environ.pop(name, None)
         self.pf = os.path.join(self.home, '.claude', 'pipeline-feedback')

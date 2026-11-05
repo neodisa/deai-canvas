@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import implicit  # noqa: E402
+import install_config  # noqa: E402
 import spaces  # noqa: E402
 import dashboard  # noqa: E402
 import tracker  # noqa: E402
@@ -660,6 +661,130 @@ class NoLegacyComparisons(unittest.TestCase):
                     if self.PATTERN.search(line) and not re.search(r'\b(?:self|pc)\.kind\b', line):
                         bad.append('%s:%d: %s' % (os.path.relpath(path, root), n, line.strip()))
         self.assertEqual(bad, [])
+
+
+class IsolatedInstallConfig(unittest.TestCase):
+    """4d-2 Task 5: в ізольованому прогоні (`DC_TASKS_FILE` або `DC_NO_OVERVIEW`) `supabase_config()` і `jira_config()` беруть усе
+    ЛИШЕ з кореня файла задач — без `SUPABASE_*`/`JIRA_*` з оточення й без `<HOME>/.claude/pipeline-feedback/jira-*`; поза
+    ізоляцією — рівно значення знімка 0.15.0 (`install`). Усі значення вигадані, HOME тимчасовий.
+
+    Під самим `DC_NO_OVERVIEW` (без `DC_TASKS_FILE`) «корінь» — старий файл установки (`spaces.legacy_tasks_file`): тут його
+    підставляє `mock.patch.object`, а читається він як і в 0.15.0 — відрізаються лише оточення й `pipeline-feedback`."""
+
+    SB = ('https://sb.example.com', 'sb_test_key')
+    JIRA = 'https://jira.example.com'
+    ROOT_PAIR = {'supabase_url': SB[0], 'supabase_key': SB[1], 'jira_base': JIRA}
+    ROOT_NONE = {'design_work_root': '~/work'}
+    ENV_ON = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_KEY': 'sb_env_key',
+              'JIRA_EMAIL': 'alpha@example.com', 'JIRA_TOKEN': 'jira_env_token'}
+    MODES = ('tasks_file', 'no_overview')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.n = 0
+
+    def run_case(self, root, mode, env=None, files=False):
+        """`(supabase_config(), jira_config())` для кореня `root` у режимі `mode` (`tasks_file`/`no_overview`/`none` — без ізоляції)."""
+        self.n += 1
+        home = os.path.join(self.tmp.name, 'c%d' % self.n, 'home')
+        os.makedirs(home)
+        tasks = os.path.join(home, 'tasks.json')
+        with open(tasks, 'w', encoding='utf-8') as f:
+            json.dump(root, f)
+        if files:
+            fb = os.path.join(home, '.claude', 'pipeline-feedback')
+            os.makedirs(fb)
+            for name, val in (('jira-email', 'file@example.com'), ('jira-token', 'jira_file_token')):
+                with open(os.path.join(fb, name), 'w', encoding='utf-8') as f:
+                    f.write(val + '\n')
+        with mock.patch.dict(os.environ, {'HOME': home, **(env or {})}), \
+                mock.patch.object(spaces, 'legacy_tasks_file', return_value=tasks):
+            for k in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
+                os.environ.pop(k, None)
+            if mode == 'tasks_file':
+                os.environ['DC_TASKS_FILE'] = tasks
+            elif mode == 'no_overview':
+                os.environ['DC_NO_OVERVIEW'] = '1'
+            return install_config.supabase_config(), install_config.jira_config()
+
+    def test_supabase_isolated_ignores_env_when_root_has_no_pair(self):
+        for mode in self.MODES:
+            for files in (False, True):
+                with self.subTest(mode=mode, files=files):
+                    self.assertEqual(self.run_case(self.ROOT_NONE, mode, self.ENV_ON, files)[0], (None, None))
+
+    def test_supabase_isolated_takes_the_root_pair_not_the_env(self):
+        for mode in self.MODES:
+            for env in (self.ENV_ON, {}):
+                with self.subTest(mode=mode, env=bool(env)):
+                    self.assertEqual(self.run_case(self.ROOT_PAIR, mode, env)[0], self.SB)
+
+    def test_supabase_root_pair_form_is_checked(self):
+        for bad in ({'supabase_url': 'https://<ref>.supabase.co', 'supabase_key': 'sb_test_key'},
+                    {'supabase_url': self.SB[0], 'supabase_key': 'has space'}):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.run_case(bad, 'tasks_file', self.ENV_ON)[0], (None, None))
+
+    def test_jira_isolated_without_root_credentials_is_none_whatever_env_and_files(self):
+        for mode in self.MODES:
+            for root in (self.ROOT_PAIR, self.ROOT_NONE):
+                for env in (self.ENV_ON, {}):
+                    for files in (False, True):
+                        with self.subTest(mode=mode, base=('jira_base' in root), env=bool(env), files=files):
+                            self.assertEqual(self.run_case(root, mode, env, files)[1], (None, None, None))
+
+    def test_jira_isolated_takes_the_full_triple_from_the_root_only(self):
+        root = {**self.ROOT_PAIR, 'jira_base': self.JIRA + '/', 'jira_email': ' root@example.com ', 'jira_token': 'jira_root_token'}
+        for mode in self.MODES:
+            for env, files in ((self.ENV_ON, True), ({}, False)):
+                with self.subTest(mode=mode, env=bool(env)):
+                    self.assertEqual(self.run_case(root, mode, env, files)[1], (self.JIRA, 'root@example.com', 'jira_root_token'))
+
+    def test_jira_root_credentials_need_both_and_the_same_form_as_env(self):
+        base = {'jira_base': self.JIRA}
+        for extra in ({'jira_email': 'root@example.com'}, {'jira_token': 'jira_root_token'},
+                      {'jira_email': 'root@example.com', 'jira_token': 'has space'},
+                      {'jira_email': '', 'jira_token': 'jira_root_token'}, {'jira_email': 1, 'jira_token': 'jira_root_token'}):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.run_case({**base, **extra}, 'tasks_file', self.ENV_ON, True)[1], (None, None, None))
+
+    def test_outside_isolation_the_root_credentials_are_ignored_and_env_and_files_work(self):
+        root = {**self.ROOT_PAIR, 'jira_email': 'root@example.com', 'jira_token': 'jira_root_token'}
+        self.assertEqual(self.run_case(root, 'none')[1], (None, None, None))
+        self.assertEqual(self.run_case(root, 'none', self.ENV_ON)[1], (self.JIRA, 'alpha@example.com', 'jira_env_token'))
+        self.assertEqual(self.run_case(root, 'none', None, True)[1], (self.JIRA, 'file@example.com', 'jira_file_token'))
+
+    def test_outside_isolation_matches_the_0_15_0_snapshot(self):
+        with open(BEFORE, encoding='utf-8') as f:
+            snap = json.load(f)['install']
+        self.assertEqual(len(snap), 8)
+        for name, want in snap.items():
+            root_name, env_name, files_name = name.split('/')
+            with self.subTest(case=name):
+                sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, 'none',
+                                          self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
+                self.assertEqual((list(sup), list(jira)), (want['supabase_config'], want['jira_config']))
+
+    def test_isolation_cuts_exactly_the_env_and_files_sources_of_the_snapshot(self):
+        with open(BEFORE, encoding='utf-8') as f:
+            snap = json.load(f)['install']
+        for name in snap:
+            root_name, env_name, files_name = name.split('/')
+            for mode in self.MODES:
+                with self.subTest(case=name, mode=mode):
+                    sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, mode,
+                                              self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
+                    self.assertEqual(sup, self.SB if root_name == 'root_with_pair' else (None, None))
+                    self.assertEqual(jira, (None, None, None))
+
+    def test_no_import_cycle(self):
+        """`install_config` імпортує `implicit`, а той — лише `os`: імпорт `implicit` без жодного модуля ядра."""
+        import ast
+        with open(implicit.__file__, encoding='utf-8') as f:
+            mods = {a.name for n in ast.walk(ast.parse(f.read())) if isinstance(n, (ast.Import, ast.ImportFrom))
+                    for a in (n.names if isinstance(n, ast.Import) else [ast.alias(n.module)])}
+        self.assertEqual(mods, {'os'})
 
 
 if __name__ == '__main__':
