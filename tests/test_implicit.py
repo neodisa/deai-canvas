@@ -3,6 +3,8 @@
 Тут: знімок поведінки 0.15.0 (`Before4d2Shape`, Task 1); ядро `app/implicit.py`, шов `effective_space()`, закон ізоляції й
 охоронець літерала додаються наступними задачами. Спека `docs/superpowers/specs/2026-11-05-implicit-provider-seam-design.md`.
 """
+import ast
+import glob
 import json
 import os
 import re
@@ -645,22 +647,77 @@ class PublishModule(unittest.TestCase):
             self.assertIsNone(self.dm.publish_module(sp))
 
 
-class NoLegacyComparisons(unittest.TestCase):
-    """4d-2 Task 4: у `serve.py` і `bin/` не лишилось порівнянь постачальника ролі з літералом `'legacy'` (суворий AST-охоронець — Task 6).
-    Дозволено: внутрішній рядок `kind` у `ProjectComments` (`self.kind`/`pc.kind`), ключі словників (`sp.get('legacy')`) і `BUILD_KINDS`."""
+class NoLegacyLiteral(unittest.TestCase):
+    """4d-2 Task 6: у коді ядра (`app/**/*.py`, `bin/*.py`, без `test_*.py`) жодне порівняння (`Compare`: `==`, `!=`, `in`, `not in`,
+    `is`, `is not`) не має сторони — рядка `'legacy'` (у т. ч. у кортежі/списку/множині). Суворий AST замість регекса Task 4:
+    ловить будь-який відступ рядка, а не лише рядки з `==`. `sp.get('legacy')` і словникові ключі — `Call`/`Constant`, не `Compare`.
 
-    PATTERN = re.compile(r"""(?:[=!]=\s*['"]legacy['"])|(?:['"]legacy['"]\s*[=!]=)|(?:\bin\s*\([^)]*['"]legacy['"])""")
+    ⛔ Дозволені місця — лише `ALLOWED`: пари `(файл відносно кореня, функція чи 'module')` з причиною. Зараз порожньо: `IMPLICIT`/
+    `_is_implicit` у `spaces.py` порівнюють з `IMPLICIT['id']`, а не з літералом, `BUILD_KINDS` і `--legacy` порівнянь не мають."""
 
-    def test_no_provider_comparisons_left(self):
+    ALLOWED = {}        # {(файл, функція): причина}
+
+    @staticmethod
+    def _is_legacy(node):
+        if isinstance(node, ast.Constant):
+            return node.value == 'legacy'
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            return any(NoLegacyLiteral._is_legacy(e) for e in node.elts)
+        return False
+
+    @classmethod
+    def offenders(cls, source, name='<src>'):
+        """Список `(файл, функція, рядок)` порівнянь з `'legacy'` у тексті `source` (поза `ALLOWED`)."""
+        found = []
+
+        def walk(node, fn):
+            for ch in ast.iter_child_nodes(node):
+                cur = ch.name if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+                if isinstance(ch, ast.Compare) and any(cls._is_legacy(x) for x in [ch.left] + ch.comparators) \
+                        and (name, cur) not in cls.ALLOWED:
+                    found.append((name, cur, ch.lineno))
+                walk(ch, cur)
+        walk(ast.parse(source), 'module')
+        return found
+
+    def test_no_legacy_literal_comparisons_in_core(self):
         root = os.path.dirname(_HERE)
-        files = [os.path.join(root, 'app', 'serve.py')] + [os.path.join(root, 'bin', n) for n in ('overview_push.py', 'state.py')]
+        files = [p for pat in ('app/**/*.py', 'bin/*.py') for p in glob.glob(os.path.join(root, pat), recursive=True)
+                 if not os.path.basename(p).startswith('test_')]
+        self.assertGreater(len(files), 20)          # охоронець не мовчить через порожній glob
         bad = []
-        for path in files:
+        for path in sorted(files):
             with open(path, encoding='utf-8') as f:
-                for n, line in enumerate(f, 1):
-                    if self.PATTERN.search(line) and not re.search(r'\b(?:self|pc)\.kind\b', line):
-                        bad.append('%s:%d: %s' % (os.path.relpath(path, root), n, line.strip()))
+                bad += self.offenders(f.read(), os.path.relpath(path, root))
         self.assertEqual(bad, [])
+
+    def test_detector_catches_every_form(self):
+        for src in ("x == 'legacy'", "'legacy' == x", "x != 'legacy'", "x in ('legacy', 'a')", "x not in ['a', 'legacy']",
+                    "x in {'legacy'}", "x is 'legacy'", "x is not 'legacy'", "def f(p):\n    return p.kind == 'legacy'"):
+            with self.subTest(src=src):
+                self.assertEqual(len(self.offenders(src)), 1)
+        for src in ("x.get('legacy')", "d = {'legacy': 1}", "x == 'legacyx'", "x in ('a', 'b')"):
+            with self.subTest(src=src):
+                self.assertEqual(self.offenders(src), [])
+
+    def test_implicit_is_not_the_public_string(self):
+        """Міст прибрано: неявний постачальник НЕ дорівнює рядку `'legacy'`; різні ролі — різні обʼєкти."""
+        self.assertFalse(implicit.for_role('publish') == 'legacy')
+        self.assertTrue(implicit.for_role('publish') != 'legacy')
+        self.assertNotEqual(implicit.for_role('publish'), implicit.for_role('comments'))
+        self.assertIs(implicit.for_role('publish'), implicit.for_role('publish'))
+        self.assertNotEqual(hash(implicit.for_role('publish')), hash('legacy'))
+
+
+class LigaLikePin(unittest.TestCase):
+    """4d-2 Task 6: `serve._liga_like` = `spaces.integrations_for`; неявний простір (шар вимкнено) мусить лишатись «ЛІГОЮ»."""
+
+    def test_implicit_space_is_liga_like(self):
+        import serve
+        self.assertIs(spaces.IMPLICIT['integrations'], True)
+        self.assertTrue(serve._liga_like(dict(spaces.IMPLICIT)))
+        self.assertFalse(serve._liga_like(None))
+        self.assertFalse(serve._liga_like({'id': 'x', 'path': '/p'}))
 
 
 class IsolatedInstallConfig(unittest.TestCase):
