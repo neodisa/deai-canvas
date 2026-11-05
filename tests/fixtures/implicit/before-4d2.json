@@ -1,0 +1,731 @@
+{
+  "api": {
+    "layer_off": {
+      "layer_on": false,
+      "space_route": {
+        "body_is_json": false,
+        "note": "маршруту GET /api/space нема; простір задачі — поле `space` у GET /api/task",
+        "status": 404
+      },
+      "spaces": {
+        "keys": [
+          "current",
+          "off",
+          "spaces"
+        ],
+        "off": true,
+        "rows": [],
+        "status": 200
+      },
+      "task": {
+        "has_publish_gate": false,
+        "preview_gate": {
+          "inner_stale": 0,
+          "pages": 0,
+          "stale": 0,
+          "state": "none",
+          "ungated": 0
+        },
+        "publish_gate": null,
+        "space": null,
+        "status": 200
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 0
+    },
+    "liga_in_registry": {
+      "layer_on": true,
+      "space_route": {
+        "body_is_json": false,
+        "note": "маршруту GET /api/space нема; простір задачі — поле `space` у GET /api/task",
+        "status": 404
+      },
+      "spaces": {
+        "keys": [
+          "current",
+          "spaces"
+        ],
+        "off": null,
+        "rows": [
+          {
+            "capabilities": {
+              "comments": "legacy",
+              "dashboard": "legacy",
+              "notify": "legacy",
+              "publish": "legacy",
+              "tokens": null,
+              "tracker": "legacy",
+              "vcs": "legacy"
+            },
+            "id": "api",
+            "integrations": true,
+            "legacy": true
+          }
+        ],
+        "status": 200
+      },
+      "task": {
+        "has_publish_gate": false,
+        "preview_gate": {
+          "inner_stale": 0,
+          "pages": 0,
+          "stale": 0,
+          "state": "none",
+          "ungated": 0
+        },
+        "publish_gate": null,
+        "space": {
+          "capabilities": {
+            "comments": "legacy",
+            "dashboard": "legacy",
+            "notify": "legacy",
+            "publish": "legacy",
+            "tokens": null,
+            "tracker": "legacy",
+            "vcs": "legacy"
+          },
+          "id": "api",
+          "integrations": true,
+          "legacy": true
+        },
+        "status": 200
+      },
+      "urlopen_calls": 0,
+      "vcs_provider_calls": 0
+    }
+  },
+  "build": {
+    "BUILD_KINDS": [
+      "legacy",
+      "module"
+    ],
+    "bad_build_''": {
+      "raised": "ValueError"
+    },
+    "bad_build_'Legacy'": {
+      "raised": "ValueError"
+    },
+    "bad_build_'implicit'": {
+      "raised": "ValueError"
+    },
+    "bad_build_None": {
+      "raised": "ValueError"
+    },
+    "league_comments": {
+      "is_dict": true,
+      "keys": [
+        "channel",
+        "config",
+        "module"
+      ],
+      "module": "supabase-comments",
+      "warn": null
+    },
+    "legacy_no_comments": {
+      "build_arg": "legacy",
+      "build_is_last_key": true,
+      "has_comment_layer_dir": false,
+      "manifest_build": "legacy",
+      "manifest_keys": [
+        "build",
+        "frames",
+        "iters",
+        "outline",
+        "pages",
+        "task",
+        "widths"
+      ]
+    },
+    "legacy_with_league_comments": {
+      "build_arg": "legacy",
+      "build_is_last_key": true,
+      "has_comment_layer_dir": true,
+      "manifest_build": "legacy",
+      "manifest_keys": [
+        "build",
+        "frames",
+        "iters",
+        "outline",
+        "pages",
+        "task",
+        "widths"
+      ]
+    },
+    "module_no_comments": {
+      "build_arg": "module",
+      "build_is_last_key": true,
+      "has_comment_layer_dir": false,
+      "manifest_build": "module",
+      "manifest_keys": [
+        "build",
+        "frames",
+        "iters",
+        "outline",
+        "pages",
+        "task",
+        "widths"
+      ]
+    },
+    "publish_manifest_without_mark": {
+      "has_build_key": false
+    },
+    "urlopen_calls": 0
+  },
+  "caps": {
+    "fingerprint_failure_liga": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "error": "module-error",
+        "notify": null,
+        "publish": "legacy",
+        "tokens": null,
+        "tracker": null,
+        "vcs": "legacy"
+      },
+      "space": {
+        "id": "legacy-fp",
+        "integrations": true,
+        "legacy": true,
+        "path": "<tmp>/legacy-fp"
+      }
+    },
+    "fingerprint_failure_plain": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "error": "module-error",
+        "notify": null,
+        "publish": null,
+        "tokens": null,
+        "tracker": null,
+        "vcs": null
+      },
+      "space": {
+        "id": "plain-fp",
+        "path": "<tmp>/plain-fp"
+      }
+    },
+    "liga": {
+      "caps": {
+        "comments": "legacy",
+        "dashboard": "legacy",
+        "notify": "legacy",
+        "publish": "legacy",
+        "tokens": null,
+        "tracker": "legacy",
+        "vcs": "legacy"
+      },
+      "space": {
+        "id": "legacy",
+        "integrations": true,
+        "legacy": true,
+        "path": "<tmp>/legacy"
+      }
+    },
+    "liga_unreadable_space_json": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "error": "space-json-unreadable",
+        "notify": null,
+        "publish": "legacy",
+        "tokens": null,
+        "tracker": null,
+        "vcs": "legacy"
+      },
+      "space": {
+        "id": "legacy-bad",
+        "integrations": true,
+        "legacy": true,
+        "path": "<tmp>/legacy-bad"
+      }
+    },
+    "plain_no_modules": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "notify": null,
+        "publish": "static-publish",
+        "tokens": null,
+        "tracker": null,
+        "vcs": null
+      },
+      "space": {
+        "id": "plain",
+        "path": "<tmp>/plain"
+      }
+    },
+    "plain_own_module_untrusted": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "notify": null,
+        "publish": null,
+        "tokens": null,
+        "tracker": null,
+        "vcs": null
+      },
+      "space": {
+        "id": "plain-own",
+        "path": "<tmp>/plain-own"
+      }
+    },
+    "plain_static_publish": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "notify": null,
+        "publish": "static-publish",
+        "tokens": null,
+        "tracker": null,
+        "vcs": null
+      },
+      "space": {
+        "id": "plain-static",
+        "path": "<tmp>/plain-static"
+      }
+    },
+    "plain_unreadable_space_json": {
+      "caps": {
+        "comments": null,
+        "dashboard": null,
+        "error": "space-json-unreadable",
+        "notify": null,
+        "publish": null,
+        "tokens": null,
+        "tracker": null,
+        "vcs": null
+      },
+      "space": {
+        "id": "plain-bad",
+        "path": "<tmp>/plain-bad"
+      }
+    }
+  },
+  "install": {
+    "root_with_pair/env_set/files_absent": {
+      "jira_config": [
+        "https://jira.example.com",
+        "alpha@example.com",
+        "jira_env_token"
+      ],
+      "supabase_config": [
+        "https://sb.example.com",
+        "sb_test_key"
+      ]
+    },
+    "root_with_pair/env_set/files_present": {
+      "jira_config": [
+        "https://jira.example.com",
+        "alpha@example.com",
+        "jira_env_token"
+      ],
+      "supabase_config": [
+        "https://sb.example.com",
+        "sb_test_key"
+      ]
+    },
+    "root_with_pair/env_unset/files_absent": {
+      "jira_config": [
+        null,
+        null,
+        null
+      ],
+      "supabase_config": [
+        "https://sb.example.com",
+        "sb_test_key"
+      ]
+    },
+    "root_with_pair/env_unset/files_present": {
+      "jira_config": [
+        "https://jira.example.com",
+        "file@example.com",
+        "jira_file_token"
+      ],
+      "supabase_config": [
+        "https://sb.example.com",
+        "sb_test_key"
+      ]
+    },
+    "root_without_pair/env_set/files_absent": {
+      "jira_config": [
+        null,
+        null,
+        null
+      ],
+      "supabase_config": [
+        "https://sb-env.example.com",
+        "sb_env_key"
+      ]
+    },
+    "root_without_pair/env_set/files_present": {
+      "jira_config": [
+        null,
+        null,
+        null
+      ],
+      "supabase_config": [
+        "https://sb-env.example.com",
+        "sb_env_key"
+      ]
+    },
+    "root_without_pair/env_unset/files_absent": {
+      "jira_config": [
+        null,
+        null,
+        null
+      ],
+      "supabase_config": [
+        null,
+        null
+      ]
+    },
+    "root_without_pair/env_unset/files_present": {
+      "jira_config": [
+        null,
+        null,
+        null
+      ],
+      "supabase_config": [
+        null,
+        null
+      ]
+    }
+  },
+  "isolation": {
+    "dashboard": {
+      "a_seam": {
+        "team_fetch": {
+          "module_calls": 0,
+          "outcome": {
+            "result": [
+              [
+                {
+                  "project_id": "demo-1",
+                  "title": "Alpha demo"
+                }
+              ],
+              null
+            ]
+          },
+          "urlopen_calls": 0
+        },
+        "team_rows": {
+          "module_calls": 0,
+          "outcome": {
+            "result": [
+              [
+                {
+                  "project_id": "demo-1",
+                  "title": "Alpha demo"
+                }
+              ],
+              null
+            ]
+          },
+          "urlopen_calls": 0
+        }
+      },
+      "b_dc_tasks_file": {
+        "team_fetch": {
+          "module_calls": 0,
+          "outcome": {
+            "result": [
+              [],
+              "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+            ]
+          },
+          "urlopen_calls": 0
+        },
+        "team_rows": {
+          "module_calls": 0,
+          "outcome": {
+            "result": [
+              [],
+              "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+            ]
+          },
+          "urlopen_calls": 0
+        }
+      },
+      "c_dc_no_overview": {
+        "team_fetch": {
+          "module_calls": 0,
+          "outcome": {
+            "result": [
+              [],
+              "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+            ]
+          },
+          "urlopen_calls": 0
+        },
+        "team_rows": {
+          "module_calls": 0,
+          "outcome": {
+            "result": [
+              [],
+              "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+            ]
+          },
+          "urlopen_calls": 0
+        }
+      }
+    },
+    "note": "для `sync` шва нема: (а) — оточення без `DC_TASKS_FILE`/`DC_NO_OVERVIEW` з вигаданою парою конфігу установки (`supabase_config` підмінено); у `dashboard`/`tracker`/`notify` шов — DC_TEAM_FAKE/DC_TRACKER_FAKE/DC_TEAMS_FAKE",
+    "notify": {
+      "a_seam": {
+        "mute_set": {
+          "module_calls": 0,
+          "outcome": {
+            "result": true
+          },
+          "urlopen_calls": 0
+        },
+        "mute_state": {
+          "module_calls": 0,
+          "outcome": {
+            "result": []
+          },
+          "urlopen_calls": 0
+        },
+        "seam_file_after_set": [
+          "demo-channel"
+        ]
+      },
+      "b_dc_tasks_file": {
+        "mute_set": {
+          "module_calls": 0,
+          "outcome": {
+            "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+            "raised": "OSError"
+          },
+          "urlopen_calls": 0
+        },
+        "mute_state": {
+          "module_calls": 0,
+          "outcome": {
+            "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+            "raised": "OSError"
+          },
+          "urlopen_calls": 0
+        }
+      },
+      "c_dc_no_overview": {
+        "mute_set": {
+          "module_calls": 0,
+          "outcome": {
+            "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+            "raised": "OSError"
+          },
+          "urlopen_calls": 0
+        },
+        "mute_state": {
+          "module_calls": 0,
+          "outcome": {
+            "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+            "raised": "OSError"
+          },
+          "urlopen_calls": 0
+        }
+      }
+    },
+    "sync": {
+      "a_seam": {
+        "launched": [
+          [
+            "legacy-key",
+            true,
+            [
+              "--legacy"
+            ]
+          ]
+        ],
+        "outcome": {
+          "result": null
+        },
+        "popen_calls": 0
+      },
+      "a_seam_no_install_config": {
+        "launched": [],
+        "outcome": {
+          "result": null
+        }
+      },
+      "b_dc_tasks_file": {
+        "launched": [],
+        "outcome": {
+          "result": null
+        },
+        "popen_calls": 0
+      },
+      "c_dc_no_overview": {
+        "launched": [],
+        "outcome": {
+          "result": null
+        },
+        "popen_calls": 0
+      }
+    },
+    "tracker": {
+      "a_seam": {
+        "module_calls": 0,
+        "outcome": {
+          "result": [
+            {
+              "DEMO-1": {
+                "cat": "indeterminate",
+                "name": "In progress"
+              }
+            },
+            null
+          ]
+        },
+        "tracker_statuses_calls": 0,
+        "urlopen_calls": 0
+      },
+      "b_dc_tasks_file": {
+        "module_calls": 0,
+        "outcome": {
+          "result": null
+        },
+        "tracker_statuses_calls": 0,
+        "urlopen_calls": 0
+      },
+      "c_dc_no_overview": {
+        "module_calls": 0,
+        "outcome": {
+          "result": null
+        },
+        "tracker_statuses_calls": 0,
+        "urlopen_calls": 0
+      }
+    }
+  },
+  "meta": {
+    "generator": "tests/make_before_4d2.py",
+    "source_commit": "6e68250",
+    "version": "0.15.0",
+    "volatile_stripped": []
+  },
+  "provider": {
+    "layer_off": {
+      "layer_on": false,
+      "roles": {
+        "comments": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "dashboard": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "git-sync": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": null
+        },
+        "notify": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "publish": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "tokens": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": null
+        },
+        "tracker": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "vcs": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "zzz": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": null
+        }
+      }
+    },
+    "layer_on_request_not_fixed": {
+      "layer_on": true,
+      "roles": {
+        "comments": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "dashboard": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "git-sync": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": null
+        },
+        "notify": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "publish": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "tokens": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": null
+        },
+        "tracker": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "vcs": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": "legacy"
+        },
+        "zzz": {
+          "catalog_reads": 0,
+          "registry_reads": 0,
+          "space_json_reads": 0,
+          "value": null
+        }
+      }
+    }
+  }
+}
