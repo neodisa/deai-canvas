@@ -1918,26 +1918,34 @@ def capabilities(space):
     ховає картки — разом із «Довіритись…»). Кеш за (простір, прапорець
     `integrations`, відбиток `space.json`, теки джерел модулів (`DEAI_EXTRA_MODULES` теж), відбитки `module.json`,
     `server.py` і файлів `*.js` адаптера кожного модуля, відбиток своїх модулів і `trust.json`, `own_sig`); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
+    return _capabilities_full(space)[0]
+
+
+def _capabilities_full(space):
+    """`(caps, raw)`: `caps` — те, що віддає `capabilities` (значення назовні, через `api_value`), `raw` — ті самі рішення ролей
+    як `Module`/`Implicit`/`None` (лише для `publish_module`: рішення «публікує модуль» береться з ТОГО Ж проходу й ТОГО Ж кешу,
+    що й `capabilities`, а не вгадується з рядка). Тотальна, як `capabilities`; при збої відбитків `raw` порожній."""
     if not isinstance(space, dict) or not space:
-        return {role: None for role in ROLES_CALLED}
+        return {role: None for role in ROLES_CALLED}, {}
     try:
         key = _caps_key(space)                          # ДО обчислення: зміна під час нього — промах, не застарілий хіт
         sid = _space_id(space)
         with _STATE_LOCK:
             hit = _CAPS.get(sid)
         if hit is not None and hit[0] == key:
-            return dict(hit[1])
+            return dict(hit[1]), dict(hit[2])
         box = {}
 
         def get_cat():
             if 'c' not in box:
                 box['c'] = catalog(space)
             return box['c']
-        caps, error = {}, None
+        caps, raw, error = {}, {}, None
         for role in ROLES_CALLED:
             try:
                 p = _provider_for(role, space, get_cat)
                 caps[role] = api_value(p)
+                raw[role] = p
             except ModuleError as e:
                 if getattr(e, 'paper', False):
                     caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
@@ -1947,13 +1955,28 @@ def capabilities(space):
         if error:
             caps['error'] = error
         with _STATE_LOCK:
-            _CAPS[sid] = (key, dict(caps))
-        return dict(caps)
+            _CAPS[sid] = (key, dict(caps), dict(raw))
+        return dict(caps), raw
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
         legacy = API_IMPLICIT if space.get('integrations') is True else None
         caps = {role: legacy if role in IMPLICIT_ON_ERROR_ROLES else None for role in ROLES_CALLED}
         caps['error'] = 'module-error'
-        return caps
+        return caps, {}
+
+
+def publish_module(space):
+    """Модуль, що ПУБЛІКУЄ в просторі запиту `space` (роль `publish`), або `None`. ТОТАЛЬНА: не кидає ніколи; `Implicit`,
+    `None`, `ModuleError`, збій відбитків — `None`. Рішення те саме, що `capabilities(space)['publish']`, і з ТИМ САМИМ кешем
+    (`_capabilities_full`): `capabilities` зберігає поруч сирих постачальників, а назовні віддає `api_value`.
+    Шар вимкнено чи простір запиту не зафіксовано — модулів нема (`None`) без читання реєстру й каталогу, як і в 0.15.0: у
+    такому запиті `spaces.active_space()` міг би показати «поточний» простір реєстру, який запит не обирав."""
+    try:
+        if not (space and spaces.layer_on() and spaces.request_space_id() is not None):
+            return None
+        p = _capabilities_full(space)[1].get('publish')
+        return p if isinstance(p, Module) else None
+    except Exception:  # noqa: BLE001 — тотальність
+        return None
 
 
 # ------------------------------------------------------------------------------ роль `comments` (2b-2)

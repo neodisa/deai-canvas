@@ -5,9 +5,9 @@
     overview_push.py discover            лише базові картки з реєстру задач (ЛІГА)
 
 Збирання карток і сам прохід — у `app/dashboard.py`; запис у сховище робить МОДУЛЬ ролі `dashboard` простору
-(`deai_modules.provider('dashboard', простір)`: вбудований `supabase-dashboard`, свій модуль чи `'legacy'` для ЛІГИ з конфігом
+(`deai_modules.provider('dashboard', простір)`: вбудований `supabase-dashboard`, свій модуль чи неявний постачальник (`Implicit`) для ЛІГИ з конфігом
 установки). Статуси задач дає постачальник ролі `tracker` того самого простору (`_statuses`: вбудований `jira-tracker`, свій модуль
-чи `'legacy'` для ЛІГИ з `jira_base` у конфігу установки; Jira-коду тут більше нема, етап 4c-2). Лишився один крок, що ще не став
+чи неявний постачальник (`Implicit`) для ЛІГИ з `jira_base` у конфігу установки; Jira-коду тут більше нема, етап 4c-2). Лишився один крок, що ще не став
 роллю й передається в синк колбеком: реєстр GitLab (до 4d).
 ⛔ Скрипт НЕ імпортує сервер: його кличуть і фоном із сервера, і зовнішній планувальник, і серверу тут нічого не належить.
 """
@@ -28,6 +28,7 @@ from dashboard import (_PII, _GL_SSH, _GL_BRANCH, gitlab_web, to_iso, map_status
 from dashboard import build_card as build_row, card_has_pii as row_has_pii, discover_card as discover_row  # noqa: F401
 import dashboard
 import deai_modules
+import implicit
 import install_config
 import spaces
 import tracker
@@ -109,13 +110,13 @@ def _legacy_config():
 
 def _target(sp):
     """`(module, ctx, legacy)` постачальника ролі `dashboard` простору `sp`; `(None, None, False)` — постачальника нема.
-    `'legacy'` (ЛІГА) — вбудований модуль із `ctx` з конфігу установки (`dashboard.legacy_ctx`, НЕ `module_ctx`: у ЛІГИ нема
+    неявний постачальник (`Implicit`, ЛІГА) — вбудований модуль із `ctx` з конфігу установки (`dashboard.legacy_ctx`, НЕ `module_ctx`: у ЛІГИ нема
     `space.json`/`secrets.json`); інакше `module_ctx` простору."""
     try:
         prov = deai_modules.provider("dashboard", sp)
         if prov is None:
             return None, None, False
-        if prov == "legacy":
+        if isinstance(prov, implicit.Implicit):
             return dashboard.legacy_module(), dashboard.legacy_ctx(*_legacy_config(), space_id=sp["id"]), True
         return prov, deai_modules.module_ctx(sp, prov), False
     except deai_modules.ModuleError as e:
@@ -133,20 +134,20 @@ def _tasks_of(sp):
 
 def _statuses(sp, log=print):
     """Колбек статусів для `dashboard.sync` від постачальника ролі `tracker` простору `sp` або `None` (кроку нема).
-    `'legacy'` (простір з інтеграціями без свого трекера, ЛІГА) — вбудований `jira-tracker` з `ctx` з конфігу установки
+    `Implicit` (простір з інтеграціями без свого трекера, ЛІГА) — вбудований `jira-tracker` з `ctx` з конфігу установки
     (`tracker.legacy_ctx(*install_config.jira_config())`, НЕ `module_ctx`: у ЛІГИ нема `space.json`/`secrets.json`; адреса —
     `jira_base` у `tasks.json`); не налаштовано (`tracker-unconfigured`) — `None` БЕЗ мережі. Інакше — модуль простору з його
     `module_ctx`. Нема постачальника — `None`. Збій вирішення ролі (нечитаний `space.json`, модуль не завантажився) — теж `None`,
     але рядком у `log`: синк іде далі без статусів, а причина не мовчить. Колбек питає трекер пакетами з бюджетами синку
     (`tracker.SYNC_TIMEOUT`/`SYNC_SOCKET_S`); його збій обробляє сам `dashboard.sync` (рядок у лог, наявні статуси не затираються).
     Хто постачальник — вирішує `provider` (прапорця ЛІГИ від дашборда тут нема: у просторі з інтеграціями й чужим дашбордом
-    трекер теж може бути `'legacy'`). ⛔ Нічого тут не валить синк: старий Jira-крок (0.12.0) не кидав ніколи, тож і непередбачений
+    трекер теж може бути `Implicit`). ⛔ Нічого тут не валить синк: старий Jira-крок (0.12.0) не кидав ніколи, тож і непередбачений
     збій вирішення ролі — лише `None` і назва класу в логу."""
     try:
         prov = deai_modules.provider("tracker", sp)
         if prov is None:
             return None
-        if prov == "legacy":
+        if isinstance(prov, implicit.Implicit):
             module, ctx = tracker.legacy_module(), tracker.legacy_ctx(*install_config.jira_config(), space_id=sp["id"])
         else:
             module, ctx = prov, deai_modules.module_ctx(sp, prov)

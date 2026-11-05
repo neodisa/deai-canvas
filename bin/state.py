@@ -292,13 +292,13 @@ def _team_comments(task, tid):
     Хто веде командні коментарі, вирішує постачальник ролі `comments` ПРОСТОРУ задачі (`ProjectComments`; простір —
     явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не `spaces.integrations_on()`: у просторі з модулем
     коментарів вони є й без інтеграцій, а ЛІГА з модулем, що не завантажився, не має права йти в спільний Supabase.
-    ЛІГА (`'legacy'`) — тим самим модулем `supabase-comments` (4b-2): Supabase, що не відповів, — «не дістати (<код>)», а не
+    ЛІГА (неявний постачальник; внутрішній `kind` — `'legacy'`) — тим самим модулем `supabase-comments` (4b-2): Supabase, що не відповів, — «не дістати (<код>)», а не
     тихий «0» (свідома відмінність від 0.9.0); простір без інтеграцій — «проєктних нема», без мережі."""
     try:
         pc = ProjectComments(spaces.active_space())
     except Exception as e:  # noqa: BLE001 — реєстр не прочитати: рішення «звідки» невідоме, а не «0» і не Supabase
         return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
-    if pc.kind in ('module', 'legacy'):
+    if pc.kind in ('module', 'legacy'):         # `kind` — внутрішній рядок `ProjectComments`, не значення постачальника
         try:
             pins = pc.pins(task, tid)
             n = len([p for p in pins if p.get('status') != 'resolved'])
