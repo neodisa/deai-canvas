@@ -100,10 +100,15 @@ The behaviour of 0.14.0 is pinned by the snapshot `tests/fixtures/tracks/before-
 
 - Tracks are edited only in `space.json`; there is no UI. Only the API (the pipeline skill) puts a task into a track.
 - An invalid `root` of a track — a system folder, a hidden folder or `Library` in the home, the home itself, a folder inside the
-  repository of the tool, a folder equal to or inside another registered space, or a path longer than 1024 characters — silently
-  falls back to the path of the space. No warning is shown.
-- The roots of tracks are checked (`realpath`) on `/api/tasks` and on the creation of a task, **not** on `/api/spaces`, so the
-  list of spaces never waits for a slow or unmounted volume.
+  repository of the tool, a folder that equals, lies inside **or contains** another registered space (the overlap is checked in
+  both directions), or a path longer than 1024 characters — silently falls back to the path of the space. No warning is shown.
+- The roots of tracks are checked (`realpath`, plus one read of the registry) **only when a task is created** (its folder). Labels,
+  the design system of the inspector, `/api/tasks`, `/api/task`, the overview and `/api/spaces` read the tracks without
+  checking roots, so none of them waits for a slow or unmounted volume.
+- A LIGA space that has its own **non-empty** `tracks` in `space.json` is a plain space with those tracks: the adapter semantics
+  end (a task id outside the list no longer falls back to the shared root; the «any string is a track» acceptance stops),
+  and `design_work_roots` and `profile_repos` of the old `tasks.json` are ignored. Only an empty list (or one that normalizes to
+  empty) leaves the adapter in force. The migration of 4d-3 must write all of it.
 - `profile` lives on in the records and in the API until 4d-4.
 - The names United / LIGA360 / SEO and the default `united` live in the adapter of `tracks.py` until the migration of 4d-3.
 - `_liga_flow` looks at `profile` only, not at `track` (the 409 `no-integrations-space` path); it is revisited in 4d-4.

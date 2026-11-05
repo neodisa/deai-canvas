@@ -360,7 +360,7 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
   the new `POST /api/task-tags {id, tags}` replaces them (`404 unknown-task`, `409 ambiguous-task`, `400 bad-tags`, `503`).
   `tags` is in the registry `SHARED`, and an empty list travels too.
 - **Derived tags of LIGA:** `task_tags` gives the saved `tags` when the key exists (even `[]`), otherwise the profile as
-  `United` / `LIGA360` / `SEO` (`_LEGACY_PROFILE_TAGS`, an adapter of the core that goes in 4d). The task files are not rewritten.
+  `United` / `LIGA360` / `SEO` (`tracks._LEGACY_LABELS` through `tracks.label_tag`, an adapter of the core that goes in 4d-3). The task files are not rewritten.
 - **The screen:** chips, filter (any of the selected tags), search, the meta line of a card, the button and the dialog «Мітки»,
   the field in «New task»; `dc-tasks-ui.profiles` of 0.10.0 is migrated to tag keys. The profile stays a field of LIGA for the
   folders (`design_work_roots`), the repository and the inspector's design system.
@@ -503,7 +503,7 @@ plan: `docs/superpowers/plans/2026-11-04-space-tracks.md`. This is the first of 
   `bin/roots.py`); `?ds=` follows the `ds` of the found track; `?all=1` labels each row by its own space. The full list is in the
   CHANGELOG, `[0.15.0]`.
 - **Known limits:** tracks are edited in `space.json` only (no UI; only the API puts a task into a track); an invalid root falls
-  back to the space path with no warning; roots are validated on `/api/tasks` and on task creation, not on `/api/spaces`; `profile`
+  back to the space path with no warning; roots are validated only on task creation (labels, the inspector's design system, `/api/tasks`, `/api/task` and `/api/spaces` read tracks without the check); a LIGA space with its own non-empty `tracks` loses the adapter semantics (an unknown id no longer falls back to the shared root, «any string» is no longer accepted, `design_work_roots` and `profile_repos` are ignored) while an empty list keeps the adapter; `profile`
   lives on until 4d-4; the names of the LIGA tracks live in the adapter until 4d-3; `_liga_flow` looks at `profile` only.
 - **Tested** against the snapshot of 0.14.0 (`tests/fixtures/tracks/before-4d1.json`, about 160 tests in `tests/test_tracks.py`),
   with fake `vcs` modules and local fixture repos, and in the live test `tests/live/tracks.test.mjs`; no network.

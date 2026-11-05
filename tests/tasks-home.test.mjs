@@ -14,7 +14,7 @@ import {
    `designer`, `mine`, `preview`. `now` фіксований — відносний час детермінований. */
 const NOW = Date.parse("2026-10-09T12:00:00Z");
 const HOUR = 3600;
-/* Похідна мітка ЛІГИ — як її віддає сервер, коли в задачі нема власних `tags` (`task_tags`, `_LEGACY_PROFILE_TAGS`). */
+/* Похідна мітка ЛІГИ — як її віддає сервер, коли в задачі нема власних `tags` (`task_tags`, `tracks._LEGACY_LABELS` через `label_tag`). */
 const DERIVED = { united: "United", liga360: "LIGA360", seo: "SEO" };
 const tagsOf = (profile) => (profile == null ? [] : [DERIVED[profile] ?? profile]);
 const M = (o) => {

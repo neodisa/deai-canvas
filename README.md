@@ -403,7 +403,7 @@ At most **20** tracks count; the rest are ignored. Reading never fails: a bad en
 the rest of the file keeps working.
 
 **The `root` must be a sensible folder.** A system folder, a hidden folder or `Library` in your home, your home itself, a folder
-inside this tool's own repository, a folder equal to or inside **another** space of this machine, a path longer than 1024
+inside this tool's own repository, a folder that equals, lies inside or contains **another** space of this machine, a path longer than 1024
 characters or a file — all of these are silently replaced by the folder of the space (no warning yet). A folder inside the space
 itself is fine.
 
