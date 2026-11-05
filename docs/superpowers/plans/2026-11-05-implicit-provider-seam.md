@@ -124,6 +124,9 @@ tar -x -C <тека>` у докстрінгу; охорона fail-closed про
     `test_legacy_comments.py`/`test_dashboard.py` ≈194–246, що навмисно ходять ПОЗА ізоляцією, мусять явно прибирати і
     `DC_TASKS_FILE`, і `DC_NO_OVERVIEW` (`mock.patch.dict(..., clear=False)` + `pop`), а витік у `test_dashboard.py` — закрити
     (відновлення в `tearDown`/`addCleanup`). Кожна зміна — рядок у звіті.
+- **(після Task 3, ревʼю погодило)** ключ кешу `_FOLDER_INPUTS` (`deai_modules` ≈1258, `folder_inputs`) ЛИШАЄТЬСЯ на
+  `spaces.layer_on()`: `effective_space()` для зафіксованого простору читає/мігрує реєстр і кидає поза `try` на КОЖНОМУ файлі,
+  а ключ і так несе шляхи й відбитки реєстру. Пункт плану про цей ключ скасовано; у спеці — «Implementation notes» (Task 7).
 - **Поза етапом (не чіпати, записано для беклогу):** `tests/live/dashboard-role.test.mjs` ≈372 ЧИТАЄ справжній
   `~/.claude/pipeline-feedback/overview-sync.log` (лише читання) — окрема задача.
 
