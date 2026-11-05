@@ -298,7 +298,7 @@ def _team_comments(task, tid):
         pc = ProjectComments(spaces.active_space())
     except Exception as e:  # noqa: BLE001 — реєстр не прочитати: рішення «звідки» невідоме, а не «0» і не Supabase
         return 0, f', проєктні: не дістати ({getattr(e, "code", type(e).__name__)})'
-    if pc.kind in ('module', 'legacy'):         # `kind` — внутрішній рядок `ProjectComments`, не значення постачальника
+    if pc.kind in ('module', 'implicit'):         # `kind` — внутрішній рядок `ProjectComments`, не значення постачальника
         try:
             pins = pc.pins(task, tid)
             n = len([p for p in pins if p.get('status') != 'resolved'])

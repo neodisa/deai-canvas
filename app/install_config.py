@@ -115,14 +115,14 @@ def jira_config():
                 return f.read()
         except (OSError, ValueError):
             return None
-    def pick(env, name, valid):
+    def pick(env, name, key, valid):
         if implicit.isolated():                         # ⛔ лише корінь файла задач (ключ `jira_email`/`jira_token`)
-            raw = cfg.get('jira_' + env.split('_', 1)[1].lower())
+            raw = cfg.get(key)
             return raw.strip() if isinstance(raw, str) and valid(raw.strip()) else None
         for raw in (os.environ.get(env), from_file(name)):          # оточення раніше за файл; порожнє/негодне — далі
             if isinstance(raw, str) and valid(raw.strip()):
                 return raw.strip()
         return None
-    email = pick('JIRA_EMAIL', 'jira-email', lambda v: bool(v) and v.isprintable())
-    token = pick('JIRA_TOKEN', 'jira-token', lambda v: _SUPABASE_KEY_RE.fullmatch(v) is not None)
+    email = pick('JIRA_EMAIL', 'jira-email', 'jira_email', lambda v: bool(v) and v.isprintable())
+    token = pick('JIRA_TOKEN', 'jira-token', 'jira_token', lambda v: _SUPABASE_KEY_RE.fullmatch(v) is not None)
     return (base.rstrip('/'), email, token) if (email and token) else (None, None, None)

@@ -5,6 +5,9 @@
 установки не читається, а справжні адреса й ключ у репозиторії не живуть. Мережі це не відкриває: `urlopen` у цих тестах
 підмінено записувачем чи розтяжкою.
 """
+import json
+import os
+
 SB_URL = 'https://demo.supabase.co'
 SB_KEY = 'sb_publishable_test'
 ENV = {'SUPABASE_URL': SB_URL, 'SUPABASE_KEY': SB_KEY}
@@ -16,8 +19,6 @@ def write_root(path, **extra):
 
     4d-2: в ізольованому прогоні (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`) `install_config.supabase_config()` бере пару лише з кореня
     цього файла, оточення не читає. Тож фікстури під `DC_TASKS_FILE` кладуть її сюди, а не в `os.environ` (`ENV`)."""
-    import json
-    import os
     try:
         with open(path, encoding='utf-8') as f:
             cfg = json.load(f)
@@ -33,7 +34,6 @@ def write_root(path, **extra):
 
 def drop_root(path):
     """Прибрати пару Supabase з кореня файла задач `path` (решта вмісту лишається): шлях «конфігу нема» для фікстур під ізоляцією."""
-    import json
     with open(path, encoding='utf-8') as f:
         cfg = json.load(f)
     for k in ROOT:

@@ -708,7 +708,7 @@ class DecisionTest(AgentEnv):
     def test_the_kinds(self):
         self.enable_memo_in(self.plain)
         self.assertEqual(self.pc(self.plain).kind, 'module')
-        self.assertEqual(self.pc(self.liga).kind, 'legacy')
+        self.assertEqual(self.pc(self.liga).kind, 'implicit')
         self.assertEqual(self.pc(self.new_space('Bare')).kind, 'off')
         tcr._write(self.space_json(self.liga), '{broken')
         pc = self.pc(self.liga)
@@ -718,7 +718,7 @@ class DecisionTest(AgentEnv):
         self.enable_memo_in(self.plain)
         pc = self.pc(self.plain, request=self.liga['id'])              # запит прикріплений до ІНШОГО простору
         self.assertEqual((pc.kind, pc.prov.id), ('module', 'memo-comments'))
-        self.assertEqual(self.pc(self.liga, request=self.plain['id']).kind, 'legacy')
+        self.assertEqual(self.pc(self.liga, request=self.plain['id']).kind, 'implicit')
 
     def test_a_space_record_without_a_pinned_request_space_is_a_refusal_never_the_league_path(self):
         """Викликач передав запис простору, а запит без простору (шар просторів увімкнено): `comments_provider` у такому
@@ -735,7 +735,7 @@ class DecisionTest(AgentEnv):
 
     def test_without_any_space_the_league_tools_keep_the_league_path(self):
         """Інструменти ЛІГА без простору взагалі (`space=None`, запит не зафіксовано) — як для сторінок: `'legacy'`."""
-        self.assertEqual(serve.ProjectComments(None).kind, 'legacy')
+        self.assertEqual(serve.ProjectComments(None).kind, 'implicit')
 
     def test_the_label_names_supabase_only_when_it_is_the_source(self):
         self.enable_memo_in(self.plain)

@@ -624,7 +624,7 @@ class LegacyAgentTest(_Env):
 
     def test_the_agent_object_for_the_league(self):
         pc = serve.ProjectComments(None)
-        self.assertEqual((pc.kind, pc.label, pc.takes_iteration), ('legacy', 'Supabase', True))
+        self.assertEqual((pc.kind, pc.label, pc.takes_iteration), ('implicit', 'Supabase', True))
         self.assertEqual(pc.channel(self.TASK, 't1'), 'proj/alpha')
         self.assertEqual(pc.channel({}, 't2', internal=True), 'dc/t2/internal')
 

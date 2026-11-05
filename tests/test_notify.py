@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import make_before_4c3 as mb  # noqa: E402  (лише помічники знімка: сервер у процесі, простори, записувач; ЗАПУСКУ генератора нема)
 import notify  # noqa: E402
 import serve  # noqa: E402  (сервер Task 4; ядро `notify` сам `serve` НЕ імпортує)
@@ -232,7 +233,7 @@ class NotifyRole(tm.Env):
     def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
         ig = self.new_space('Integ', integrations=True)
         plain = self.new_space('Plain')
-        self.assertEqual(dm.provider('notify', ig), 'legacy')
+        self.assertEqual(dm.provider('notify', ig), implicit.for_role('notify'))
         self.assertEqual(dm.capabilities(ig)['notify'], 'legacy')
         self.assertIsNone(dm.provider('notify', plain))             # без інтеграцій і без модуля — нікого
         self.assertIsNone(dm.capabilities(plain)['notify'])

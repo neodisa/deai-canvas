@@ -33,6 +33,7 @@ import sbconf  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 
 _ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE', 'DEAI_EXTRA_MODULES', 'SUPABASE_URL', 'SUPABASE_KEY')
 _REAL = None
@@ -1965,7 +1966,7 @@ class ProviderTest(Env):
         self.mk('static-publish')
         self.mk('css-tokens', roles=('tokens',))
         sp = self.new_space(integrations=True)
-        self.assertEqual(dm.provider('publish', sp), 'legacy')
+        self.assertEqual(dm.provider('publish', sp), implicit.for_role('publish'))
         self.assertIsNone(dm.provider('tokens', sp))
 
     def test_explicit_publish_module_beats_legacy(self):
@@ -1981,7 +1982,7 @@ class ProviderTest(Env):
         self.assertIsNone(dm.provider('publish', sp))
         ig = self.new_space('Beta', integrations=True)
         dm.write_module_state(ig, 'pub-broken', enabled=True)
-        self.assertEqual(dm.provider('publish', ig), 'legacy')
+        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))
 
     def test_an_enabled_module_missing_on_this_machine_is_not_a_provider(self):
         sp = self.new_space()
@@ -2002,10 +2003,10 @@ class ProviderTest(Env):
         self.new_space()
         self.assertIsNone(spaces.request_space_id())
         with self.untouched():                               # без читання реєстру, space.json і каталогу
-            self.assertEqual(dm.provider('publish'), 'legacy')
+            self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))
             self.assertIsNone(dm.provider('tokens'))
-            self.assertEqual(dm.provider('comments'), 'legacy')      # 2b-2: інструменти ЛІГА мають командні коментарі
-            self.assertEqual(dm.provider('vcs'), 'legacy')           # 4a: і зашитий синк із git — той самий шлях ЛІГА
+            self.assertEqual(dm.provider('comments'), implicit.for_role('comments'))      # 2b-2: інструменти ЛІГА мають командні коментарі
+            self.assertEqual(dm.provider('vcs'), implicit.for_role('vcs'))           # 4a: і зашитий синк із git — той самий шлях ЛІГА
 
     def test_request_space_none_is_no_provider(self):
         self.mk('static-publish')
@@ -2022,7 +2023,7 @@ class ProviderTest(Env):
         with spaces.request_space(a['id']):
             self.assertEqual(dm.provider('publish').id, 'static-publish')
         with spaces.request_space(b['id']):
-            self.assertEqual(dm.provider('publish'), 'legacy')
+            self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))
 
     def test_explicit_space_wins_over_an_unfixed_request(self):
         self.mk('static-publish')
@@ -2035,19 +2036,19 @@ class ProviderTest(Env):
         del os.environ['DEAI_HOME']
         self.assertFalse(spaces.layer_on())
         with self.untouched():
-            self.assertEqual(dm.provider('publish'), 'legacy')
+            self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))
             self.assertIsNone(dm.provider('tokens'))
-            self.assertEqual(dm.provider('comments'), 'legacy')
-            self.assertEqual(dm.provider('vcs'), 'legacy')
+            self.assertEqual(dm.provider('comments'), implicit.for_role('comments'))
+            self.assertEqual(dm.provider('vcs'), implicit.for_role('vcs'))
             with spaces.request_space('whatever'):
-                self.assertEqual(dm.provider('publish'), 'legacy')
+                self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))
                 self.assertIsNone(dm.provider('tokens'))
-                self.assertEqual(dm.provider('comments'), 'legacy')
-                self.assertEqual(dm.provider('vcs'), 'legacy')
-        self.assertEqual(dm.provider('publish', dict(spaces.IMPLICIT)), 'legacy')   # явний простір: диск не потрібен
+                self.assertEqual(dm.provider('comments'), implicit.for_role('comments'))
+                self.assertEqual(dm.provider('vcs'), implicit.for_role('vcs'))
+        self.assertEqual(dm.provider('publish', dict(spaces.IMPLICIT)), implicit.for_role('publish'))   # явний простір: диск не потрібен
         self.assertIsNone(dm.provider('tokens', dict(spaces.IMPLICIT)))
-        self.assertEqual(dm.provider('comments', dict(spaces.IMPLICIT)), 'legacy')
-        self.assertEqual(dm.provider('vcs', dict(spaces.IMPLICIT)), 'legacy')
+        self.assertEqual(dm.provider('comments', dict(spaces.IMPLICIT)), implicit.for_role('comments'))
+        self.assertEqual(dm.provider('vcs', dict(spaces.IMPLICIT)), implicit.for_role('vcs'))
 
     def test_a_broken_space_json_is_409_without_integrations_and_harmless_with_them(self):
         self.mk('static-publish')
@@ -2061,8 +2062,8 @@ class ProviderTest(Env):
         self.assertEqual((cm.exception.code, cm.exception.status), ('space-json-unreadable', 409))
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
-        self.assertEqual(dm.provider('publish', ig), 'legacy')   # шлях ЛІГА пошкодженим файлом не ламається
-        self.assertEqual(dm.provider('vcs', ig), 'legacy')       # `vcs` — так само (4a): зашитий синк, а не 409
+        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))   # шлях ЛІГА пошкодженим файлом не ламається
+        self.assertEqual(dm.provider('vcs', ig), implicit.for_role('vcs'))       # `vcs` — так само (4a): зашитий синк, а не 409
         self.assertIsNone(dm.provider('tokens', ig))
         with self.assertRaises(dm.ModuleError) as cm:            # а коментарі — ні: спільний Supabase не запасний варіант
             dm.provider('comments', ig)
@@ -2072,22 +2073,22 @@ class ProviderTest(Env):
         self.mk('pub-a')
         ig = self.new_space(integrations=True)
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
-            self.assertEqual(dm.provider('publish', ig), 'legacy')
+            self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))
             self.assertIsNone(dm.provider('tokens', ig))
-            self.assertEqual(dm.provider('comments', ig), 'legacy')
+            self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
             self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'})
         dm.write_module_state(ig, 'pub-a', enabled=False)            # явне «вимкнено» — теж не модуль
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
-            self.assertEqual(dm.provider('publish', ig), 'legacy')
+            self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))
         dm.write_module_state(ig, 'pub-a', enabled=True)             # а явно ввімкнений — каталог потрібен
         self.assertEqual(dm.provider('publish', ig).id, 'pub-a')
 
     def test_a_broken_builtin_does_not_break_the_legacy_path(self):
         self.mk('pub-broken', server='raise RuntimeError("x")\n')
         ig = self.new_space(integrations=True)
-        self.assertEqual(dm.provider('publish', ig), 'legacy')
+        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))
         dm.write_module_state(ig, 'pub-broken', enabled=True)
-        self.assertEqual(dm.provider('publish', ig), 'legacy')       # зламаний модуль — не постачальник
+        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))       # зламаний модуль — не постачальник
 
     def test_explicit_beats_implicit_when_both_somehow_match(self):
         self.mk('static-publish')
@@ -2531,9 +2532,9 @@ class CapabilitiesTest(Env):
         self.assertIsNone(dm.capabilities(plain)['vcs'])
         self.assertEqual(dm.capabilities(ig)['vcs'], 'legacy')
         self.assertIsNone(dm.provider('vcs', plain))
-        self.assertEqual(dm.provider('vcs', ig), 'legacy')
+        self.assertEqual(dm.provider('vcs', ig), implicit.for_role('vcs'))
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
-            self.assertEqual(dm.provider('vcs', ig), 'legacy')
+            self.assertEqual(dm.provider('vcs', ig), implicit.for_role('vcs'))
 
     def test_vcs_follows_an_explicitly_enabled_module_and_the_cache_follows_it(self):
         self.mk('git-sync', roles=('vcs',), server=VCS_SERVER)

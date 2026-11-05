@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import install_config  # noqa: E402
 import overview_push as ov  # noqa: E402
 import registry  # noqa: E402
@@ -175,7 +176,7 @@ class TrackerRole(tm.Env):
     def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
         ig = self.new_space('Integ', integrations=True)
         plain = self.new_space('Plain')
-        self.assertEqual(dm.provider('tracker', ig), 'legacy')
+        self.assertEqual(dm.provider('tracker', ig), implicit.for_role('tracker'))
         self.assertEqual(dm.capabilities(ig)['tracker'], 'legacy')
         self.assertIsNone(dm.provider('tracker', plain))             # без інтеграцій і без модуля — нікого
         self.assertIsNone(dm.capabilities(plain)['tracker'])

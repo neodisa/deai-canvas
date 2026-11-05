@@ -1640,7 +1640,7 @@ class Dispatch(DispatchWorld):
         відповідь каже чому (`comments_unavailable`). До 2b-2 тут стояла збірка з бандлами ЛІГА."""
         with open(os.path.join(self.on_path, 'space.json'), 'w', encoding='utf-8') as fh:
             fh.write('{ це не json')
-        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
         st, body = self.post('/api/publish', {'build_only': True}, {'X-Canvas-Task': 'ty'})
         self.assertEqual(st, 200, body)
         self.assertEqual(body['dir'], os.path.join(self.ty_dir, 'publish'))
@@ -1672,7 +1672,7 @@ class Dispatch(DispatchWorld):
         `provider` дає `'legacy'` без читання реєстру, і шлях ЛІГА працює як раніше — навіть коли поточний простір
         машини БЕЗ інтеграцій. Заглушка має лише чотири методи, які `_publish` кликав завжди."""
         spaces.clear_request_space()
-        self.assertEqual(dm.provider('publish'), 'legacy')
+        self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))
         stub = _Stub()
         serve.Handler._publish(stub, {'build_only': True})
         (st, body), = stub.sent
@@ -2235,7 +2235,7 @@ class _PublishedTests:
         on_dest = os.path.join(self.home, 'deai-published', 'on', 'ty')
         self.put(os.path.join(on_dest, 'index.html'), 'on-index')
         self.put(os.path.join(on_dest, '.deai-published'), 'marker')
-        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
         self.gone('/published/on/ty/')
         self.gone('/published/on/ty/index.html')
         dm.write_module_state(self.on, MID, enabled=True)
@@ -3906,7 +3906,7 @@ class UrlTarget(DispatchWorld):
 
     def test_api_task_has_no_share_fields_for_the_league_path(self):
         """`legacy` (простір з інтеграціями без явного модуля), навіть коли модуль «за адресою» стоїть у каталозі."""
-        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
         self.seed_meta(self.ty_dir, publish_url='https://pv-12345678.vercel.app', published_at='01.01.2026 10:00')
         st, task = self.get('/api/task', {'X-Canvas-Task': 'ty'})
         self.assertEqual(st, 200, task)
@@ -4746,7 +4746,7 @@ class CommentsPublish(DispatchWorld):
         """Рішення: модуль публікації в просторі ЛІГА, де коментарі — зашитий шлях (`'legacy'`), лишає `comments=False`, як у
         0.3.0: спільний Supabase ЛІГА (адреса й ключ) не їде в превʼю, що його зібрав модуль."""
         dm.write_module_state(self.on, MID, enabled=True)
-        self.assertEqual(dm.provider('comments', self.on), 'legacy')
+        self.assertEqual(dm.provider('comments', self.on), implicit.for_role('comments'))
         st, body = self.publish(task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'local', 'iterations', 'frames']), body)
         want = os.path.join(self.home, 'deai-published', 'on', 'ty')
@@ -4758,7 +4758,7 @@ class CommentsPublish(DispatchWorld):
     def test_a_url_module_in_an_integrations_space_with_the_league_comments_ships_none(self):
         """Те саме для модуля «за адресою» (Vercel): зашитий Supabase ЛІГА не їде в превʼю, яке зібрав модуль."""
         dm.write_module_state(self.on, self.URL, enabled=True)
-        self.assertEqual(dm.provider('comments', self.on), 'legacy')
+        self.assertEqual(dm.provider('comments', self.on), implicit.for_role('comments'))
         st, body = self.publish(task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'url', 'verified', 'iterations', 'frames']), body)
         self.assert_no_comments(os.path.join(self.ty_dir, 'publish'))
@@ -4773,7 +4773,7 @@ class CommentsPublish(DispatchWorld):
 
     def test_the_league_path_gets_the_module_snippet_when_the_space_has_a_comments_module(self):
         self.enable_memo(self.on)
-        self.assertEqual(dm.provider('publish', self.on), 'legacy')
+        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
         st, body = self.publish({'build_only': True}, task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
         self.assert_module_build(body['dir'], 'deai/on/ty')
@@ -4783,7 +4783,7 @@ class CommentsPublish(DispatchWorld):
     def test_the_league_path_with_the_league_comments_ships_the_builtin_module_build(self):
         """4b-2: у просторі ЛІГА без власного модуля коментарів збірка несе вбудований `supabase-comments` (було: «стара збірка»
         з бандлами ЛІГИ): його файли, конфіг установки й канал ЛІГИ."""
-        self.assertEqual(dm.provider('comments', self.on), 'legacy')
+        self.assertEqual(dm.provider('comments', self.on), implicit.for_role('comments'))
         with mock.patch.object(serve, 'build_preview', wraps=serve.build_preview) as bp:
             st, body = self.publish({'build_only': True}, task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)

@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import module_trust as mt  # noqa: E402
 from test_modules import Env, _write, _read, _bytes, ALL_FNS, race, VCS_SERVER, VCS_OPTIONAL  # noqa: E402
 
@@ -965,14 +966,14 @@ class RolesTest(OwnEnv):
     def test_a_missing_own_module_of_another_role_does_not_touch_the_comments_path(self):
         sp = self.new_space('Liga', integrations=True)
         self.enable_raw('acme', ('publish',), sp=sp)           # тека не приїхала; роль `publish`, не `comments`
-        self.assertEqual(dm.provider('comments', sp), 'legacy')
+        self.assertEqual(dm.provider('comments', sp), implicit.for_role('comments'))
 
     def test_integrations_space_without_explicit_modules_never_reads_the_catalog(self):
         sp = self.new_space('Liga', integrations=True)
         self.own('acme', sp=sp)
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог на шляху ЛІГА')):
-            self.assertEqual(dm.provider('publish', sp), 'legacy')
-            self.assertEqual(dm.provider('comments', sp), 'legacy')
+            self.assertEqual(dm.provider('publish', sp), implicit.for_role('publish'))
+            self.assertEqual(dm.provider('comments', sp), implicit.for_role('comments'))
 
     def test_capabilities_builds_the_catalog_once_and_only_when_needed(self):
         self.mk('static-publish')

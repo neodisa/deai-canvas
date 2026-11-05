@@ -39,6 +39,7 @@ ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, _HERE)                                   # пакета `tests` нема — охоронець і `test_modules` поруч
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
@@ -129,11 +130,11 @@ class ProviderTest(CommentsEnv):
         self.mkcm()
         ig = self.new_space(integrations=True)
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
-            self.assertEqual(dm.provider('comments', ig), 'legacy')
+            self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
             self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'})
         dm.write_module_state(ig, 'cm', enabled=False)               # явне «вимкнено» — теж не модуль
         with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог не потрібен')):
-            self.assertEqual(dm.provider('comments', ig), 'legacy')
+            self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
 
     def test_an_enabled_module_is_the_provider_in_both_kinds_of_space(self):
         self.mkcm()
@@ -148,7 +149,7 @@ class ProviderTest(CommentsEnv):
         self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'cm', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'})   # publish — як було
         dm.write_module_state(ig, 'cm', enabled=False)               # вимкнули — назад до зашитого шляху
         dm.write_module_state(plain, 'cm', enabled=False)
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
         self.assertIsNone(dm.provider('comments', plain))
 
     def test_a_module_that_is_present_but_not_enabled_is_not_a_provider_and_there_is_no_implicit_default(self):
@@ -171,7 +172,7 @@ class ProviderTest(CommentsEnv):
             self.assertEqual((cm.exception.code, cm.exception.status), ('space-json-unreadable', 409))
         self.assertEqual(dm.capabilities(plain),
                          {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'space-json-unreadable'})
-        self.assertEqual(dm.provider('publish', ig), 'legacy')       # шлях ЛІГА для публікації пошкодженим файлом не ламається
+        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))       # шлях ЛІГА для публікації пошкодженим файлом не ламається
         self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'tracker': None, 'notify': None,
                                                'error': 'space-json-unreadable'})
 
@@ -253,7 +254,7 @@ class ProviderTest(CommentsEnv):
         названо), — пил у `space.json`: ЛІГА лишається на своєму шляху, без помилки."""
         ig = self.new_space('Integ', integrations=True)
         self.enabled_entry(ig, 'ghost', 'memo-comments')            # обидва — відсутні в каталозі цього тесту
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
         self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'})
 
     def test_a_broken_manifest_of_an_unknown_id_is_lost_but_of_a_known_other_builtin_is_not(self):
@@ -271,7 +272,7 @@ class ProviderTest(CommentsEnv):
                 with self.subTest(kind=kind, module=mid):
                     sp = self.new_space(f'{kind}{mid.replace("-", "")}', integrations=integrations)
                     self.enabled_entry(sp, mid)
-                    want = 'legacy' if integrations else None
+                    want = implicit.for_role('comments') if integrations else None
                     self.assertEqual(dm.provider('comments', sp), want)
                     self.assertNotIn('error', dm.capabilities(sp))
             with self.subTest(kind=kind, module='stranger'):
@@ -313,7 +314,7 @@ class ProviderTest(CommentsEnv):
         self.mkcm('cm-files', client=('a.js',), files={})
         ig = self.new_space('Integ', integrations=True)
         self.enabled_entry(ig, 'cm-files')
-        self.assertEqual(dm.provider('publish', ig), 'legacy')
+        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))
 
     def test_the_league_path_returns_once_the_lost_entry_is_gone_or_disabled(self):
         self.mkcm('cm-files', client=('a.js',), files={})
@@ -322,11 +323,11 @@ class ProviderTest(CommentsEnv):
         with self.assertRaises(dm.ModuleError):
             dm.provider('comments', ig)
         _write(self.space_json(ig), json.dumps({'modules': {'cm-files': {'enabled': False}}}))     # вимкнув
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
         self.assertEqual(dm.capabilities(ig), {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'})
         self.enabled_entry(ig, 'cm-files')
         _write(self.space_json(ig), json.dumps({'name': 'x'}))                                     # прибрав запис
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
 
     def test_a_lost_module_of_another_role_or_a_healthy_one_does_not_block_the_league_path(self):
         """Блокує лише те, що могло вести коментарі: модуль із розібраним маніфестом БЕЗ ролі `comments` (справний чи
@@ -337,7 +338,7 @@ class ProviderTest(CommentsEnv):
         self.enabled_entry(ig, 'pub-ok', 'pub-syntax')
         self.assertEqual(dm.catalog()['pub-syntax'].status, 'error')
         self.assertEqual(dm.catalog()['pub-syntax'].roles, ['publish'])
-        self.assertEqual(dm.provider('comments', ig), 'legacy')
+        self.assertEqual(dm.provider('comments', ig), implicit.for_role('comments'))
         self.assertEqual(dm.capabilities(ig)['comments'], 'legacy')
         self.assertNotIn('error', dm.capabilities(ig))
 
@@ -1403,7 +1404,7 @@ class LegacyPagesTest(PagesEnv):
         """4b-2: ЄДИНИЙ еталон, що свідомо змінився (разом з `config-legacy-project.json`): сторінка ЛІГИ — сніпет модуля
         `supabase-comments` (конфіг установки, канал `dc/x`). Решта еталонів теки — ті самі байти, що до 4b-2."""
         self.use(self.liga)
-        self.assertEqual(dm.provider('comments', self.liga), 'legacy')
+        self.assertEqual(dm.provider('comments', self.liga), implicit.for_role('comments'))
         self.golden('page-legacy-project.html', self.page('project'))
 
     def test_the_league_local_page_is_byte_identical_and_keeps_its_audience_tabs(self):
@@ -1995,7 +1996,7 @@ class SingleSpaceResolutionTest(PagesEnv):
                 seen['provider'] = space
                 return real(role, space)
             with mock.patch.object(dm, 'provider', p):
-                self.assertEqual(serve.comments_provider({'id': 'legacy', 'path': '', 'integrations': True}), ('legacy', None))
+                self.assertEqual(serve.comments_provider({'id': 'legacy', 'path': '', 'integrations': True}), (implicit.for_role('comments'), None))
         self.assertIsNone(seen['provider'])
 
 

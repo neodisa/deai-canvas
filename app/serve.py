@@ -1661,6 +1661,7 @@ def _own_tracks(sp):
 
 def _liga_like(sp):
     """Простір ЛІГИ: з прапорцем `integrations` або неявний (шар вимкнено)."""
+    # ⛔ тримається на тому, що `spaces.IMPLICIT['integrations'] is True` (закріплено `LigaLikePin` у tests/test_implicit.py)
     return sp is not None and spaces.integrations_for(sp)
 
 
@@ -3339,8 +3340,8 @@ class ProjectComments:
     """Хто веде проєктні коментарі простору `space` для АГЕНТА (див. таблицю вище). Рішення береться ОДИН раз у
     конструкторі, з явного `space`; решта методів лише виконують його для задачі `(task, tid)`.
 
-    `kind`: `'module'` | `'legacy'` | `'off'` (нікого: простір без інтеграцій і без модуля) | `'broken'` (рішення не
-    вдалось, `err` — `ModuleError`). І `'module'`, і `'legacy'` ідуть ОДНИМ шляхом — функціями модуля (`comments_route`);
+    `kind`: `'module'` | `'implicit'` | `'off'` (нікого: простір без інтеграцій і без модуля) | `'broken'` (рішення не
+    вдалось, `err` — `ModuleError`). І `'module'`, і `'implicit'` ідуть ОДНИМ шляхом — функціями модуля (`comments_route`);
     ЛІГА (4b-2) — вбудований `supabase-comments` з конфігом установки й каналом `comment_channel`.
 
     Простір запиту мусить бути ЗАФІКСОВАНИМ (`task_anywhere`, `_take_task`): `comments_provider` без нього ігнорує `space` і
@@ -3372,13 +3373,13 @@ class ProjectComments:
         if isinstance(self.prov, deai_modules.Module):
             return 'module'
         if isinstance(self.prov, implicit.Implicit):
-            return 'legacy'       # внутрішній рядок `kind` (читають `bin/state.py` і тести), НЕ значення постачальника
+            return 'implicit'       # внутрішній рядок `kind` (читають `bin/state.py` і тести), НЕ значення постачальника
         return 'broken' if self.err is not None else 'off'
 
     @property
     def label(self):
         """Хто джерело — для людини (заголовок `inbox`). «Supabase» — лише коли він справді джерело."""
-        return {'module': lambda: f'модуль {self.prov.id}', 'legacy': lambda: 'Supabase',
+        return {'module': lambda: f'модуль {self.prov.id}', 'implicit': lambda: 'Supabase',
                 'broken': lambda: 'модуль недоступний', 'off': lambda: 'не підключено'}[self.kind]()
 
     def channel(self, task, tid, internal=False):
@@ -3397,7 +3398,7 @@ class ProjectComments:
     def takes_iteration(self):
         """Чи передаємо номер ітерації в `resolve`: лише вбудованому `supabase-comments` (свій модуль простору міг оголосити
         `resolve(ctx, channel, id, reason)` — зайвий аргумент його зламав би). У ЛІГИ — завжди."""
-        if self.kind == 'legacy':
+        if self.kind == 'implicit':
             return True
         return (self.kind == 'module' and self.prov.id == COMMENTS_MODULE
                 and getattr(self.prov, 'origin', 'builtin') == 'builtin')
@@ -3409,7 +3410,7 @@ class ProjectComments:
         ⛔ ЛІГА: `spaces.require_integrations()` ПЕРЕД кожним викликом — простір без інтеграцій не має права йти в мережу
         (колись це робив старий шлях ЛІГА; модуль про простори не знає). `IntegrationsOff` — `OSError`, а не `ModuleError`:
         наявні `except OSError` деградують чесно."""
-        if self.kind == 'legacy':
+        if self.kind == 'implicit':
             spaces.require_integrations()
         try:
             mod, ctx, channel = comments_route(self.space, self.prov)

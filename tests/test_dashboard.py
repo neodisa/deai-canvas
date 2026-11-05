@@ -397,7 +397,7 @@ class DashboardRole(tm.Env):
     def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
         ig = self.new_space('Integ', integrations=True)
         plain = self.new_space('Plain')
-        self.assertEqual(dm.provider('dashboard', ig), 'legacy')
+        self.assertEqual(dm.provider('dashboard', ig), implicit.for_role('dashboard'))
         self.assertEqual(dm.capabilities(ig)['dashboard'], 'legacy')
         self.assertIsNone(dm.provider('dashboard', plain))               # без інтеграцій і без модуля — нікого
         self.assertIsNone(dm.capabilities(plain)['dashboard'])
