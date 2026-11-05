@@ -1614,7 +1614,7 @@ def task_tags(task, sp=None):
     if tracks.of_task(task) is None:
         return []                                # простору й напрямків не питаємо, поки похідна мітка справді не потрібна
     view = _as_view(sp)
-    tag = tracks.label_tag([] if view.adapter else view.tracks, task, legacy=view.adapter)
+    tag = tracks.label_tag([] if view.adapter else view.lite, task, legacy=view.adapter)
     return [tag] if tag else []
 
 
@@ -1710,6 +1710,8 @@ class _TrackView:
         self._roots = roots
         self._own = _LAZY
         self._items = _LAZY
+        self._lite = _LAZY
+        self._adapter = _LAZY
 
     @property
     def sp(self):
@@ -1726,22 +1728,48 @@ class _TrackView:
 
     @property
     def adapter(self):
-        """Напрямки дає неявний адаптер ЛІГИ: простір ЛІГИ (чи шар вимкнено), у чиєму `space.json` нема списку `tracks`."""
-        return _liga_like(self.sp) and self._raw is None
+        """Напрямки дає неявний адаптер ЛІГИ: простір ЛІГИ (чи шар вимкнено), у чиєму `space.json` нема списку `tracks`.
+        ⛔ Лише для ЛІГИ порожній власний список (`tracks: []`, чи такий, що після `tracks.normalize` порожній) теж віддає адаптер:
+        інакше він мовчки спорожнив би все (спільний корінь, нема репо, мітки малими літерами, нема напрямку за замовчуванням). Звичайний
+        простір порожній список лишає порожнім — напрямків нема. Непорожній власний список ЛІГИ адаптер вимикає (4d-3)."""
+        if self._adapter is _LAZY:
+            if not _liga_like(self.sp):
+                self._adapter = False
+            elif self._raw is None:
+                self._adapter = True
+            else:
+                path = self.sp.get('path') if isinstance(self.sp, dict) else None
+                self._adapter = not tracks.normalize(self._raw[0], path, roots=False)
+        return self._adapter
+
+    def _light(self):
+        """`(tracks, default)` БЕЗ перевірки коренів (`tracks.normalize(roots=False)`, `root` скрізь `None`) — для читача, якому
+        потрібні лише `id`/`label`/`ds`/дефолт (`task_tags`, `task_ds`, `spaces_listing`). Рахується один раз на вигляд.
+        ⛔ Перевірка кореня — `realpath` плюс читання реєстру: на /api/task, огляді задач і сторінках задач вона б
+        ішла без потреби (корінь потрібен лише створенню задачі: `track_root`)."""
+        if self._lite is _LAZY:
+            sp = self.sp
+            if sp is None or (self._raw is None and not self.adapter):
+                self._lite = ([], None)
+            elif self.adapter:
+                items, default, _fallback = tracks.legacy_tracks(_legacy_cfg())
+                self._lite = (items, default)
+            else:
+                items = tracks.normalize(self._raw[0], sp.get('path'), roots=False)
+                self._lite = (items, tracks.default_id(items, self._raw[1]))
+        return self._lite
+
+    @property
+    def lite(self):
+        return self._light()[0]
 
     def _load(self):
         if self._items is _LAZY:
-            sp = self.sp
-            if sp is None or (self._raw is None and not self.adapter):
-                self._items = ([], None)
-            elif self.adapter:
-                items, default, _fallback = tracks.legacy_tracks(_legacy_cfg())
-                self._items = (items, default)
+            if not self._roots or self.adapter or self.sp is None or self._raw is None:
+                self._items = self._light()
             else:
-                items = tracks.normalize(self._raw[0], sp.get('path'), roots=self._roots)
-                if self._roots:
-                    items = _drop_foreign_roots(sp, items)
-                self._items = (items, tracks.default_id(items, self._raw[1]))
+                items = tracks.normalize(self._raw[0], self.sp.get('path'), roots=True)
+                self._items = (_drop_foreign_roots(self.sp, items), self._light()[1])
         return self._items
 
     @property
@@ -1810,7 +1838,7 @@ def task_ds(task, sp=None):
     view = _as_view(sp)
     if view.adapter:
         return v
-    t = tracks.find(view.tracks, v)                         # простору нема — напрямків нема — значення як є, як 0.14.0
+    t = tracks.find(view.lite, v)                           # простору нема — напрямків нема — значення як є, як 0.14.0
     return t['ds'] if t else v
 
 
@@ -7654,11 +7682,15 @@ class Handler(SimpleHTTPRequestHandler):
         _registry_push(tid)
         self._send_json({'ok': True, 'tags': tags})
 
-    def _adopt_source(self, sp, tid, src, payload):
+    def _adopt_source(self, sp, tid, src, payload, tdir):
         """Перевірки `from` ДО будь-якого запису (спека 3b, «Сервер: задача з наявної теки»): `AdoptPlan(real, files,
         bytes, links)` або `None` — відмову вже надіслано. Порядок несучий: простір і тип поля — раніше за id (поле не
         для цього простору — відмова без огляду решти), id — раніше за диск (`adopt_scan` не ходить по теці заради
-        задачі, якої однаково не буде)."""
+        задачі, якої однаково не буде).
+
+        `tdir` — СПРАВЖНЯ тека майбутньої задачі (`<track_root>/<id>`, її рахує маршрут ДО цього виклику). ⛔ Не `<шлях простору>/<id>`:
+        корінь напрямку може лежати поза простором чи в підтеці, і перевірка за шляхом простору пропускала `from` = сам корінь
+        (копія в тій самій теці, що джерело; кожне наступне прийняття перепаковувало б попередні задачі)."""
         if spaces.integrations_for(sp) or payload.get('gitlab'):
             self._space_error(400, 'from-needs-plain-space', 'from is only for a space without integrations')
             return None
@@ -7687,14 +7719,14 @@ class Handler(SimpleHTTPRequestHandler):
         if os.path.islink(idx) or not os.path.isfile(idx):
             self._space_error(400, 'from-no-index', 'the folder has no index.html')
             return None
-        tdir = os.path.join(sp['path'], tid)
         # За ФАЙЛОВОЮ системою, не за рядками: на APFS `<тека простору>.upper()` — та сама тека, і `commonpath` її не
         # бачив би (копія пішла б у саму себе). Предок, якого не можна порівняти (інший диск Windows), — «не той».
-        if spaces._fs_under(os.path.realpath(tdir), real):
-            self._space_error(400, 'from-contains-space', 'the folder contains the task folder itself')
+        # Обидва напрямки: джерело містить теку задачі (копія пішла б у саму себе) І тека задачі містить джерело.
+        if spaces._fs_under(os.path.realpath(tdir), real) or spaces._fs_under(real, os.path.realpath(tdir)):
+            self._space_error(400, 'from-contains-space', 'the folder and the task folder contain one another')
             return None
         if os.path.lexists(tdir):
-            self._space_error(409, 'task-dir-exists', 'the task folder already exists in the space')
+            self._space_error(409, 'task-dir-exists', 'the task folder already exists')
             return None
         try:
             files, total, links = adopt_scan(real)
@@ -7854,21 +7886,23 @@ class Handler(SimpleHTTPRequestHandler):
                     self._space_error(deai_modules.STATUS.get(e.code, 400), e.code, str(e)[:300])
                     return
         # Задача з наявної теки (етап 3b). `from: null` — поля нема (як і без нього).
+        # Теку задачі дає напрямок (`track_root`), тож рахується ДО `from`: усі перевірки джерела — проти справжнього призначення.
+        # Напрямок за замовчуванням ставить маршрут (`task_new` без `track` лишає `None`): ЛІГА через адаптер — той самий, що
+        # колись `profile or <напрямок за замовчуванням>`; звичайний простір без напрямків — `None` (як було). Теку й типове
+        # репо дає напрямок: ЛІГА — `track_root` (спільний корінь для невідомого), звичайний — `root` напрямку чи шлях простору.
+        cfg = load_tasks()                     # ПІСЛЯ фіксації простору: файл ЦІЛЬОВОГО простору
+        track = want_track or view.default
+        root, repo = track_root(view, cfg, track), track_repo(view, track)
         adopt = None
         if payload.get('from') is not None:
-            adopt = self._adopt_source(sp, tid, payload.get('from'), payload)
+            tdir = os.path.join(root, tid) if isinstance(tid, str) else ''
+            adopt = self._adopt_source(sp, tid, payload.get('from'), payload, tdir)
             if adopt is None:
                 return
         if not liga and payload.get('gitlab'):
             self._space_error(400, 'gitlab-needs-integrations',
                               'gitlab mapping is not available in a space without integrations')
             return
-        cfg = load_tasks()                     # ПІСЛЯ фіксації простору: файл ЦІЛЬОВОГО простору
-        # Напрямок за замовчуванням ставить маршрут (`task_new` без `track` лишає `None`): ЛІГА через адаптер — той самий, що
-        # колись `profile or <напрямок за замовчуванням>`; звичайний простір без напрямків — `None` (як було). Теку й типове
-        # репо дає напрямок: ЛІГА — `track_root` (спільний корінь для невідомого), звичайний — `root` напрямку чи шлях простору.
-        track = want_track or view.default
-        root, repo = track_root(view, cfg, track), track_repo(view, track)
         try:
             r = task_new(cfg, tid,
                          title=str(payload.get('title', ''))[:200],

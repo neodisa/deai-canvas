@@ -1135,8 +1135,8 @@ class ServerTracks(_Plain):
         self.space_json(liga, tracks=[{'id': 'web'}], default_track='web')
         tr, default = serve.space_tracks(liga)
         self.assertEqual(([t['id'] for t in tr], default), (['web'], 'web'))
-        self.space_json(liga, tracks=[])                                       # явний порожній перелік теж вимикає адаптер
-        self.assertEqual(serve.space_tracks(liga), ([], None))
+        self.space_json(liga, tracks=[])                                       # порожній перелік ЛІГИ адаптер НЕ вимикає (ревʼю 4d-1)
+        self.assertEqual(serve.space_tracks(liga), tracks.legacy_tracks(self.legacy_cfg())[:2])
 
     def test_layer_off_is_the_adapter(self):
         cfg = self.legacy_cfg()
@@ -1413,6 +1413,23 @@ class ServerTrackView(_Plain):
             f.write('{broken')
         self.assertEqual([r['id'] for r in serve._all_space_task_rows()], ['l1'])           # нечитабельний файл — теж
 
+    def test_a_liga_space_with_an_empty_or_all_bad_own_list_still_uses_the_adapter(self):
+        """⛔ Ревʼю 4d-1: `tracks: []` (чи список, що після нормалізації порожній) у ЛІГИ мовчки спорожнив би все: спільний корінь,
+        нема репо, мітки малими літерами, нема дефолту `united`. Для ЛІГИ це «власного списку нема» — адаптер; непорожній — вимикає його."""
+        liga = self.make_space('Liga', integrations=True)
+        cfg = self.legacy_cfg(design_work_roots={'united': os.path.join(self.home, 'u-root')})
+        want = tracks.legacy_tracks(cfg)[:2]
+        for own in ([], [5, None], [{'id': 'BAD ID'}], [{'id': 'x y'}, 'web']):
+            with self.subTest(own=own):
+                self.space_json(liga, tracks=own, default_track='zzz')
+                self.assertEqual(serve.space_tracks(liga), want)
+                self.assertEqual(serve.task_tags({'profile': 'united'}, liga), ['United'])
+                self.assertEqual(serve.track_root(liga, cfg, 'united'), os.path.join(self.home, 'u-root'))
+                self.assertEqual(serve.track_repo(liga, 'seo'), serve.profile_repos().get('seo', ''))
+        self.space_json(liga, tracks=[{'id': 'web', 'label': 'Alpha team'}], default_track='web')      # непорожній — власний
+        self.assertEqual([t['id'] for t in serve.space_tracks(liga)[0]], ['web'])
+        self.assertEqual(serve.space_tracks(self.sp), ([], None))                                        # звичайний — як було
+
     # ---- I1: простір питається лише тоді, коли похідна мітка справді потрібна
     def test_the_request_space_is_not_asked_when_no_derived_tag_is_needed(self):
         self.use(self.sp)
@@ -1443,12 +1460,28 @@ class ServerTrackView(_Plain):
                 few, tags_few = self.cost(3, self.sp, call)
                 many, tags_many = self.cost(30, self.sp, call)
                 self.assertEqual(few, many)                                  # не росте з N
-                self.assertEqual((few[0] > 0, few[1]), (True, 1))            # напрямки порахували, `space.json` прочитали раз
+                self.assertEqual((few[0], few[1]), (0, 1))                   # `space.json` прочитали раз, коренів не перевіряли (ревʼю 4d-1)
                 self.assertEqual((tags_few, tags_many), ([['Web']] * 3, [['Web']] * 30))
         few, _ = self.cost(3, liga, by_rows, profile='united')               # адаптер: навіть напрямків не будуємо
         many, tags = self.cost(30, liga, by_rows, profile='united')
         self.assertEqual((few, many), ((0, 1, 0), (0, 1, 0)))
         self.assertEqual(tags, [['United']] * 30)
+
+    def test_labels_and_ds_never_check_roots(self):
+        """⛔ Ревʼю 4d-1: `task_tags`/`task_ds` потрібні лише `id`/`label`/`ds`, тож корені (`realpath` + реєстр) не перевіряються —
+        ні на одну задачу, ні на цикл; `track_root`/`space_tracks` перевіряють (контроль нижче)."""
+        liga = self.two_spaces()
+        self.space_json(liga, tracks=[{'id': 'web', 'label': 'W', 'root': 'web-dir', 'ds': 'united'}])
+        for sp in (self.sp, liga):
+            view = serve._TrackView(sp)
+            with mock.patch.object(spaces, 'check_new_path', side_effect=AssertionError('корінь без потреби')), \
+                    mock.patch.object(spaces, 'read_registry', side_effect=AssertionError('реєстр без потреби')):
+                self.assertEqual(serve.task_tags({'track': 'web'}, view), ['Web' if sp is self.sp else 'W'])
+                self.assertEqual(serve.task_ds({'track': 'web'}, view), 'united')
+                self.assertEqual(serve.task_tags({'track': 'web'}, sp), ['Web' if sp is self.sp else 'W'])
+        with mock.patch.object(spaces, 'check_new_path', wraps=spaces.check_new_path) as chk:
+            self.assertEqual(serve.track_root(self.sp, {}, 'web'), os.path.join(self.sp['path'], 'web-dir'))
+        self.assertGreaterEqual(chk.call_count, 1)
 
     def test_all_spaces_build_the_view_once_per_space(self):
         self.two_spaces()

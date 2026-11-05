@@ -192,6 +192,81 @@ class TaskFrom(Fixture):
         self.assertEqual(os.listdir(existing), ['mine.txt'], 'чужу теку зачеплено')
         self.assertNotIn('ad7', _read(self.p_file)['tasks'])
 
+    # ---------- Фінальне ревʼю 4d-1: `from` перевіряється проти СПРАВЖНЬОЇ теки задачі (`<корінь напрямку>/<id>`) ----------
+
+    def track_root_at(self, rel_or_abs):
+        """Напрямок `web` простору `P` з коренем `rel_or_abs` (відносний — до шляху простору); `space.json` повертається після тесту."""
+        self.restore_bytes(os.path.join(self.p_path, 'space.json'))
+        data = _read(os.path.join(self.p_path, 'space.json'))
+        data.update({'tracks': [{'id': 'web', 'root': rel_or_abs}], 'default_track': 'web'})
+        with open(os.path.join(self.p_path, 'space.json'), 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+
+    def outside_root(self):
+        root = os.path.join(self.home, 'track-root-out')       # у домівці: поза нею корінь відсіяв би відсів системних тек
+        os.makedirs(root)
+        self.addCleanup(shutil.rmtree, root, True)
+        return root
+
+    def index_in(self, folder):
+        with open(os.path.join(folder, 'index.html'), 'w', encoding='utf-8') as f:
+            f.write('<h1>mockup</h1>')
+
+    def test_from_equal_to_a_track_root_outside_the_space_is_refused(self):
+        """⛔ Вада ревʼю: перевірка йшла проти `<шлях простору>/<id>`, а задача лягала в `<корінь>/<id>` — копія всередині самого джерела."""
+        root = self.outside_root()
+        self.index_in(root)
+        self.track_root_at(root)
+        self.refused({'id': 'ad20', 'space': self.p_id, 'from': root}, 400, 'from-contains-space')
+        self.assertFalse(os.path.lexists(os.path.join(root, 'ad20')), 'копія зʼявилась у джерелі')
+        self.assertNotIn('ad20', _read(self.p_file)['tasks'])
+
+    def test_from_containing_the_track_root_is_refused(self):
+        root = self.outside_root()
+        parent = os.path.dirname(root)
+        self.index_in(parent)
+        self.addCleanup(os.remove, os.path.join(parent, 'index.html'))
+        self.track_root_at(root)
+        self.refused({'id': 'ad21', 'space': self.p_id, 'from': parent}, 400, 'from-contains-space')
+        self.assertFalse(os.path.lexists(os.path.join(root, 'ad21')))
+
+    def test_from_inside_the_task_folder_is_refused(self):
+        """Тека задачі містить джерело (зворотний напрямок): джерело вже лежить там, де має зʼявитись задача."""
+        root = self.outside_root()
+        inside = os.path.join(root, 'ad22', 'sub')
+        os.makedirs(inside)
+        self.index_in(inside)
+        self.track_root_at(root)
+        self.refused({'id': 'ad22', 'space': self.p_id, 'from': inside}, 400, 'from-contains-space')
+        self.assertNotIn('ad22', _read(self.p_file)['tasks'])
+
+    def test_the_destination_exists_check_uses_the_track_root(self):
+        root = self.outside_root()
+        os.makedirs(os.path.join(root, 'ad23'))
+        self.put('index.html')
+        self.track_root_at(root)
+        self.refused({'id': 'ad23', 'space': self.p_id, 'from': self.src}, 409, 'task-dir-exists')
+        self.assertFalse(os.path.lexists(os.path.join(self.p_path, 'ad23')), 'у ПРОСТОРІ такої теки нема: вирішує тека в корені')
+
+    def test_from_a_sibling_inside_the_track_root_is_fine(self):
+        """Джерело в корені напрямку, але НЕ на шляху до теки задачі — звичайне прийняття."""
+        root = self.outside_root()
+        sibling = os.path.join(root, 'old-mockup')
+        os.makedirs(sibling)
+        self.index_in(sibling)
+        self.track_root_at(root)
+        st, body = self.post('/api/task-new', {'id': 'ad24', 'space': self.p_id, 'from': sibling})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['dir'], os.path.join(root, 'ad24'))
+        self.assertTrue(os.path.isfile(os.path.join(root, 'ad24', 'iterations', 'it1', 'index.html')))
+
+    def test_without_tracks_the_check_is_as_before(self):
+        """Простір без напрямків: тека задачі — `<шлях простору>/<id>`, ті самі відмови й той самий успіх."""
+        self.put('index.html')
+        self.made('ad25')
+        st, body = self.post('/api/task-new', {'id': 'ad25', 'space': self.p_id, 'from': self.src})
+        self.assertEqual((st, body['dir']), (200, os.path.join(self.p_path, 'ad25')), body)
+
     def test_too_big_by_files_and_by_bytes(self):
         self.put('index.html', b'12345')
         self.put('a.css', b'12345')
