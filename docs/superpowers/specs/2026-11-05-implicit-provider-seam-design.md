@@ -42,7 +42,7 @@
 2. **Одна таблиця неявних постачальників** — роль → (вбудований модуль, збирач `ctx`, шов-фейк, чи це спільний стан).
 3. **Один шов «шар вимкнено»** — `spaces.request_space()`: запис простору запиту, а коли шар вимкнено чи простір запиту не
    зафіксовано — копія `IMPLICIT`. Перевірки `layer_on()` поза `spaces.py` і реєстровими інструментами зникають.
-4. **Один закон ізоляції** — функція `isolated()` і ворота `implicit.gate(role)` з однаковим порядком для всіх ролей
+4. **Один закон ізоляції** — функція `isolated()` і маршрут `implicit.route(prov)` з однаковим порядком для всіх ролей
    (шов-фейк → відмова в ізольованому прогоні → справжній виклик).
 5. **Ізольований прогін не бачить облікових машини**: `supabase_config()` / `jira_config()` в ізольованому прогоні читають
    лише корінь `DC_TASKS_FILE`, без змінних оточення й без `~/.claude/pipeline-feedback/`.
@@ -123,7 +123,8 @@ def request_space():
 prov = deai_modules.provider(role)            # Module | Implicit | None
 if prov is None: ...                          # як сьогодні
 if isinstance(prov, Implicit):
-    module, ctx = implicit.gate(prov, fn)     # §4: фейк / відмова / (module(), ctx())
+    kind, fake = implicit.route(prov)         # §4: 'fake' / 'isolated' / 'live' — відповідь кожного випадку дає роль
+    module, ctx = prov.module(), prov.ctx()   # лише для 'live'
 else:
     module, ctx = prov, deai_modules.module_ctx(space, prov)
 res = deai_modules.call(module, fn, ctx, ...)
@@ -137,7 +138,8 @@ res = deai_modules.call(module, fn, ctx, ...)
 
 `implicit.isolated()` — ОДНА функція: `bool(os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'))`.
 
-`implicit.gate(prov, fn)` — однаковий порядок для всіх ролей:
+`implicit.route(prov)` → `('fake', шлях)` | `('isolated', None)` | `('live', None)` — однаковий порядок для всіх ролей;
+форму відповіді кожного випадку лишає роль (у 0.15.0 вони різні: `[]`+текст, `None`, `OSError`):
 
 1. **шов-фейк** (`prov.fake_env` задано й змінна непорожня) — локальний обробник ролі (наявний код фейків `dashboard`,
    `tracker`, `notify` переїжджає в таблицю без змін поведінки й формату файлів); пише лише у свій файл;
