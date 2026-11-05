@@ -1,0 +1,1803 @@
+{
+  "api": {
+    "layer_on": true,
+    "modules": {
+      "keys": [
+        "modules"
+      ],
+      "list": [
+        {
+          "api": 1,
+          "builtin": true,
+          "enabled": false,
+          "id": "css-tokens",
+          "implicit": false,
+          "name": "Токени з CSS",
+          "roles": [
+            "tokens"
+          ],
+          "settings": [
+            {
+              "key": "file",
+              "label": "CSS-файл із токенами дизайн-системи",
+              "required": true,
+              "type": "path"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.0.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "enabled": false,
+          "id": "git-sync",
+          "implicit": false,
+          "name": "Синхронізація з git",
+          "roles": [
+            "vcs"
+          ],
+          "settings": [
+            {
+              "key": "repo",
+              "label": "Репозиторій (типовий для задач простору)",
+              "required": false,
+              "type": "text"
+            },
+            {
+              "key": "branch",
+              "label": "Гілка",
+              "required": false,
+              "type": "text",
+              "value": "main"
+            },
+            {
+              "key": "path",
+              "label": "Тека в репозиторії",
+              "required": false,
+              "type": "text",
+              "value": "mockup/{task}"
+            },
+            {
+              "key": "ssh_key",
+              "label": "SSH-ключ (необовʼязково)",
+              "required": false,
+              "type": "text"
+            },
+            {
+              "key": "host_ip",
+              "label": "IP сервера (необовʼязково)",
+              "required": false,
+              "type": "text"
+            },
+            {
+              "key": "autosync",
+              "label": "Відправляти після кожної відповіді агента",
+              "required": false,
+              "type": "bool",
+              "value": false
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.0.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "enabled": false,
+          "id": "jira-tracker",
+          "implicit": false,
+          "name": "Jira Cloud · статуси задач",
+          "roles": [
+            "tracker"
+          ],
+          "settings": [
+            {
+              "key": "base",
+              "label": "Адреса сайту Jira Cloud (https://<сайт>.atlassian.net)",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "key": "email",
+              "label": "Email облікового запису Atlassian",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "key": "token",
+              "label": "API-токен Atlassian",
+              "required": true,
+              "set": false,
+              "type": "secret"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.0.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "enabled": false,
+          "id": "static-publish",
+          "implicit": false,
+          "name": "Публікація в теку",
+          "roles": [
+            "publish"
+          ],
+          "settings": [
+            {
+              "key": "folder",
+              "label": "Тека для превʼю",
+              "required": true,
+              "type": "path",
+              "value": "{home}/deai-published/{space_id}"
+            },
+            {
+              "key": "password",
+              "label": "Пароль превʼю (необовʼязково)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.0.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "enabled": false,
+          "id": "supabase-comments",
+          "implicit": false,
+          "name": "Supabase",
+          "roles": [
+            "comments"
+          ],
+          "settings": [
+            {
+              "key": "url",
+              "label": "Адреса проєкту (https://<ref>.supabase.co)",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "key": "key",
+              "label": "Публічний ключ (anon / publishable)",
+              "required": true,
+              "set": false,
+              "type": "secret"
+            },
+            {
+              "key": "shots_bucket",
+              "label": "Кошик Storage для скріншотів пінів (необовʼязково)",
+              "required": false,
+              "type": "text"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.1.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "enabled": false,
+          "id": "supabase-dashboard",
+          "implicit": false,
+          "name": "Supabase · командний дашборд",
+          "roles": [
+            "dashboard"
+          ],
+          "settings": [
+            {
+              "key": "url",
+              "label": "Адреса проєкту (https://<ref>.supabase.co)",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "key": "key",
+              "label": "Непублічний ключ (service_role або ключ окремої ролі)",
+              "required": true,
+              "set": false,
+              "type": "secret"
+            },
+            {
+              "key": "table",
+              "label": "Таблиця дашборда (типово deai_dashboard)",
+              "required": false,
+              "type": "text"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.0.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "check_timeout_s": 20,
+          "enabled": false,
+          "id": "supabase-teams",
+          "implicit": false,
+          "name": "Supabase · сповіщення Teams",
+          "roles": [
+            "notify"
+          ],
+          "settings": [
+            {
+              "key": "url",
+              "label": "Адреса проєкту (https://<ref>.supabase.co)",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "key": "key",
+              "label": "Непублічний ключ (service_role або ключ окремої ролі)",
+              "required": true,
+              "set": false,
+              "type": "secret"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.0.0"
+        },
+        {
+          "api": 1,
+          "builtin": true,
+          "check_timeout_s": 130,
+          "enabled": false,
+          "id": "vercel-publish",
+          "implicit": false,
+          "name": "Vercel",
+          "roles": [
+            "publish"
+          ],
+          "settings": [
+            {
+              "key": "auth",
+              "label": "Вхід у Vercel",
+              "options": [
+                {
+                  "label": "Токен",
+                  "value": "token"
+                },
+                {
+                  "label": "Системний Vercel CLI (vercel login на цій машині)",
+                  "value": "cli"
+                }
+              ],
+              "required": false,
+              "type": "select",
+              "value": "token"
+            },
+            {
+              "key": "token",
+              "label": "Токен Vercel (для входу «Токен»)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            },
+            {
+              "key": "team",
+              "label": "Команда Vercel (slug або team_…; порожньо — особистий акаунт)",
+              "required": false,
+              "type": "text"
+            },
+            {
+              "key": "password",
+              "label": "Пароль превʼю (необовʼязково)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.1.0"
+        }
+      ],
+      "status": 200
+    },
+    "spaces": {
+      "current": "legacy",
+      "keys": [
+        "current",
+        "spaces"
+      ],
+      "off": null,
+      "rows": [
+        {
+          "capabilities": {
+            "comments": "legacy",
+            "dashboard": "legacy",
+            "notify": "legacy",
+            "publish": "legacy",
+            "tokens": null,
+            "tracker": "legacy",
+            "vcs": "legacy"
+          },
+          "default_track": "united",
+          "id": "legacy",
+          "integrations": true,
+          "keys": [
+            "available",
+            "capabilities",
+            "color",
+            "default_track",
+            "id",
+            "integrations",
+            "legacy",
+            "name",
+            "path",
+            "tasks",
+            "tracks"
+          ],
+          "legacy": true,
+          "tracks": [
+            {
+              "id": "united",
+              "label": "United"
+            },
+            {
+              "id": "liga360",
+              "label": "LIGA360"
+            },
+            {
+              "id": "seo",
+              "label": "SEO"
+            },
+            {
+              "id": "custom-x",
+              "label": "custom-x"
+            }
+          ]
+        }
+      ],
+      "status": 200
+    },
+    "tasks": {
+      "a-1": {
+        "comment_channel": "dc/a-1",
+        "jira": "DEMO-1",
+        "profile": null,
+        "space": {
+          "capabilities": {
+            "comments": "legacy",
+            "dashboard": "legacy",
+            "notify": "legacy",
+            "publish": "legacy",
+            "tokens": null,
+            "tracker": "legacy",
+            "vcs": "legacy"
+          },
+          "id": "legacy",
+          "integrations": true,
+          "keys": [
+            "capabilities",
+            "color",
+            "id",
+            "integrations",
+            "legacy",
+            "name",
+            "path"
+          ],
+          "legacy": true
+        },
+        "status": 200,
+        "tags": [
+          "SEO"
+        ],
+        "track": "seo"
+      },
+      "a-2": {
+        "comment_channel": "dc/a-2",
+        "jira": "",
+        "profile": "united",
+        "space": {
+          "capabilities": {
+            "comments": "legacy",
+            "dashboard": "legacy",
+            "notify": "legacy",
+            "publish": "legacy",
+            "tokens": null,
+            "tracker": "legacy",
+            "vcs": "legacy"
+          },
+          "id": "legacy",
+          "integrations": true,
+          "keys": [
+            "capabilities",
+            "color",
+            "id",
+            "integrations",
+            "legacy",
+            "name",
+            "path"
+          ],
+          "legacy": true
+        },
+        "status": 200,
+        "tags": [
+          "United"
+        ],
+        "track": "united"
+      }
+    },
+    "urlopen_calls": 0,
+    "vcs_provider_calls": 0
+  },
+  "caps": {
+    "caps": {
+      "comments": "legacy",
+      "dashboard": "legacy",
+      "notify": "legacy",
+      "publish": "legacy",
+      "tokens": null,
+      "tracker": "legacy",
+      "vcs": "legacy"
+    },
+    "space": {
+      "id": "legacy",
+      "integrations": true,
+      "legacy": true,
+      "path": "<tmp>/liga-space"
+    }
+  },
+  "check": {
+    "core_check": {
+      "jira-tracker": {
+        "outcome": {
+          "code": "bad-settings",
+          "message": "bad-settings: base: required",
+          "raised": "ModuleError"
+        },
+        "requests": []
+      },
+      "supabase-dashboard": {
+        "outcome": {
+          "code": "bad-settings",
+          "message": "bad-settings: url: required",
+          "raised": "ModuleError"
+        },
+        "requests": []
+      },
+      "supabase-teams": {
+        "outcome": {
+          "code": "bad-settings",
+          "message": "bad-settings: url: required",
+          "raised": "ModuleError"
+        },
+        "requests": []
+      }
+    },
+    "jira-tracker": {
+      "denied": {
+        "outcome": {
+          "result": {
+            "detail": "невірний email чи токен (HTTP 401)",
+            "error": "tracker-auth",
+            "ok": false
+          }
+        },
+        "requests": [
+          [
+            "GET",
+            "https://jira.example.com/rest/api/3/myself"
+          ]
+        ]
+      },
+      "network": {
+        "outcome": {
+          "result": {
+            "detail": "Jira недосяжна (OSError)",
+            "error": "network",
+            "ok": false
+          }
+        },
+        "requests": [
+          [
+            "GET",
+            "https://jira.example.com/rest/api/3/myself"
+          ]
+        ]
+      },
+      "ok": {
+        "outcome": {
+          "result": {
+            "detail": "підключено до Jira",
+            "ok": true
+          }
+        },
+        "requests": [
+          [
+            "GET",
+            "https://jira.example.com/rest/api/3/myself"
+          ]
+        ]
+      }
+    },
+    "public_key": {
+      "supabase-dashboard": {
+        "jwt_anon_legacy_absent": {
+          "outcome": {
+            "result": {
+              "detail": "key: потрібен непублічний ключ (service_role чи ключ окремої ролі): публічний anon/publishable їде в кожне превʼю",
+              "error": "public-key",
+              "ok": false
+            }
+          },
+          "requests": []
+        },
+        "jwt_anon_legacy_true": {
+          "outcome": {
+            "result": {
+              "detail": "таблиця дашборда доступна",
+              "ok": true
+            }
+          },
+          "requests": [
+            [
+              "GET",
+              "https://sb.example.com/rest/v1/overview_projects?select=id&limit=1"
+            ]
+          ]
+        },
+        "legacy_absent": {
+          "outcome": {
+            "result": {
+              "detail": "key: потрібен непублічний ключ (service_role чи ключ окремої ролі): публічний anon/publishable їде в кожне превʼю",
+              "error": "public-key",
+              "ok": false
+            }
+          },
+          "requests": []
+        },
+        "legacy_true": {
+          "outcome": {
+            "result": {
+              "detail": "таблиця дашборда доступна",
+              "ok": true
+            }
+          },
+          "requests": [
+            [
+              "GET",
+              "https://sb.example.com/rest/v1/overview_projects?select=id&limit=1"
+            ]
+          ]
+        }
+      },
+      "supabase-teams": {
+        "jwt_anon_legacy_absent": {
+          "outcome": {
+            "result": {
+              "detail": "key: потрібен непублічний ключ (service_role чи ключ окремої ролі): тишу Teams перемикає лише він, а публічний anon/publishable їде в кожне превʼю",
+              "error": "public-key",
+              "ok": false
+            }
+          },
+          "requests": []
+        },
+        "jwt_anon_legacy_true": {
+          "outcome": {
+            "result": {
+              "detail": "тиша Teams доступна",
+              "ok": true
+            }
+          },
+          "requests": [
+            [
+              "POST",
+              "https://sb.example.com/rest/v1/rpc/teams_mute_state"
+            ]
+          ]
+        },
+        "legacy_absent": {
+          "outcome": {
+            "result": {
+              "detail": "key: потрібен непублічний ключ (service_role чи ключ окремої ролі): тишу Teams перемикає лише він, а публічний anon/publishable їде в кожне превʼю",
+              "error": "public-key",
+              "ok": false
+            }
+          },
+          "requests": []
+        },
+        "legacy_true": {
+          "outcome": {
+            "result": {
+              "detail": "тиша Teams доступна",
+              "ok": true
+            }
+          },
+          "requests": [
+            [
+              "POST",
+              "https://sb.example.com/rest/v1/rpc/teams_mute_state"
+            ]
+          ]
+        }
+      }
+    },
+    "supabase-dashboard": {
+      "denied": {
+        "outcome": {
+          "result": {
+            "detail": "Supabase не прийняв ключ (HTTP 401)",
+            "error": "bad-key",
+            "ok": false
+          }
+        },
+        "requests": [
+          [
+            "GET",
+            "https://sb.example.com/rest/v1/overview_projects?select=id&limit=1"
+          ]
+        ]
+      },
+      "network": {
+        "outcome": {
+          "result": {
+            "detail": "Supabase недоступний (OSError)",
+            "error": "network",
+            "ok": false
+          }
+        },
+        "requests": [
+          [
+            "GET",
+            "https://sb.example.com/rest/v1/overview_projects?select=id&limit=1"
+          ]
+        ]
+      },
+      "ok": {
+        "outcome": {
+          "result": {
+            "detail": "таблиця дашборда доступна",
+            "ok": true
+          }
+        },
+        "requests": [
+          [
+            "GET",
+            "https://sb.example.com/rest/v1/overview_projects?select=id&limit=1"
+          ]
+        ]
+      }
+    },
+    "supabase-teams": {
+      "denied": {
+        "outcome": {
+          "result": {
+            "detail": "Supabase не прийняв ключ (HTTP 401)",
+            "error": "bad-key",
+            "ok": false
+          }
+        },
+        "requests": [
+          [
+            "POST",
+            "https://sb.example.com/rest/v1/rpc/teams_mute_state"
+          ]
+        ]
+      },
+      "network": {
+        "outcome": {
+          "result": {
+            "detail": "Supabase недоступний (OSError)",
+            "error": "network",
+            "ok": false
+          }
+        },
+        "requests": [
+          [
+            "POST",
+            "https://sb.example.com/rest/v1/rpc/teams_mute_state"
+          ]
+        ]
+      },
+      "ok": {
+        "outcome": {
+          "result": {
+            "detail": "тиша Teams доступна",
+            "ok": true
+          }
+        },
+        "requests": [
+          [
+            "POST",
+            "https://sb.example.com/rest/v1/rpc/teams_mute_state"
+          ]
+        ]
+      }
+    }
+  },
+  "connections": {
+    "hypothetical_explicit": {
+      "capabilities": {
+        "comments": "legacy",
+        "dashboard": "supabase-dashboard",
+        "notify": "supabase-teams",
+        "publish": "legacy",
+        "tokens": null,
+        "tracker": "jira-tracker",
+        "vcs": "legacy"
+      },
+      "modules_roles_enabled": {
+        "jira-tracker": {
+          "enabled": true,
+          "implicit": false,
+          "roles": [
+            "tracker"
+          ],
+          "status": "unchecked"
+        },
+        "supabase-dashboard": {
+          "enabled": true,
+          "implicit": false,
+          "roles": [
+            "dashboard"
+          ],
+          "status": "unchecked"
+        },
+        "supabase-teams": {
+          "enabled": true,
+          "implicit": false,
+          "roles": [
+            "notify"
+          ],
+          "status": "unchecked"
+        }
+      },
+      "screen": {
+        "cards": {
+          "css-tokens": {
+            "enabled": false,
+            "implicit": false,
+            "roles": [
+              "tokens"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "enable"
+              ],
+              "badge": "off",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "git-sync": {
+            "enabled": false,
+            "implicit": false,
+            "roles": [
+              "vcs"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "enable"
+              ],
+              "badge": "off",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "jira-tracker": {
+            "enabled": true,
+            "implicit": false,
+            "roles": [
+              "tracker"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "configure",
+                "check",
+                "disable"
+              ],
+              "badge": "unchecked",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "static-publish": {
+            "enabled": false,
+            "implicit": false,
+            "roles": [
+              "publish"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "enable"
+              ],
+              "badge": "off",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "supabase-comments": {
+            "enabled": false,
+            "implicit": false,
+            "roles": [
+              "comments"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "enable"
+              ],
+              "badge": "off",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "supabase-dashboard": {
+            "enabled": true,
+            "implicit": false,
+            "roles": [
+              "dashboard"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "configure",
+                "check",
+                "disable"
+              ],
+              "badge": "unchecked",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "supabase-teams": {
+            "enabled": true,
+            "implicit": false,
+            "roles": [
+              "notify"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "configure",
+                "check",
+                "disable"
+              ],
+              "badge": "unchecked",
+              "implicit": false,
+              "why": false
+            }
+          },
+          "vercel-publish": {
+            "enabled": false,
+            "implicit": false,
+            "roles": [
+              "publish"
+            ],
+            "status": "unchecked",
+            "view": {
+              "actions": [
+                "enable"
+              ],
+              "badge": "off",
+              "implicit": false,
+              "why": false
+            }
+          }
+        },
+        "duplicate_cards": [],
+        "missing": [],
+        "role_order": [
+          "publish",
+          "comments",
+          "vcs",
+          "dashboard",
+          "tracker",
+          "notify",
+          "tokens"
+        ],
+        "roles": {
+          "comments": {
+            "focus_card": "supabase-comments",
+            "provider": {
+              "entry": null,
+              "id": null,
+              "kind": "legacy",
+              "noneKey": null
+            }
+          },
+          "dashboard": {
+            "focus_card": "supabase-dashboard",
+            "provider": {
+              "entry": "supabase-dashboard",
+              "id": "supabase-dashboard",
+              "kind": "module",
+              "noneKey": null
+            }
+          },
+          "notify": {
+            "focus_card": "supabase-teams",
+            "provider": {
+              "entry": "supabase-teams",
+              "id": "supabase-teams",
+              "kind": "module",
+              "noneKey": null
+            }
+          },
+          "publish": {
+            "focus_card": "static-publish",
+            "provider": {
+              "entry": null,
+              "id": null,
+              "kind": "legacy",
+              "noneKey": null
+            }
+          },
+          "tokens": {
+            "focus_card": "css-tokens",
+            "provider": {
+              "entry": null,
+              "id": null,
+              "kind": "none",
+              "noneKey": "cnNoneTokens"
+            }
+          },
+          "tracker": {
+            "focus_card": "jira-tracker",
+            "provider": {
+              "entry": "jira-tracker",
+              "id": "jira-tracker",
+              "kind": "module",
+              "noneKey": null
+            }
+          },
+          "vcs": {
+            "focus_card": "git-sync",
+            "provider": {
+              "entry": null,
+              "id": null,
+              "kind": "legacy",
+              "noneKey": null
+            }
+          }
+        },
+        "sections": [
+          {
+            "modules": [
+              "static-publish",
+              "vercel-publish"
+            ],
+            "role": "publish"
+          },
+          {
+            "modules": [
+              "supabase-comments"
+            ],
+            "role": "comments"
+          },
+          {
+            "modules": [
+              "git-sync"
+            ],
+            "role": "vcs"
+          },
+          {
+            "modules": [
+              "supabase-dashboard"
+            ],
+            "role": "dashboard"
+          },
+          {
+            "modules": [
+              "jira-tracker"
+            ],
+            "role": "tracker"
+          },
+          {
+            "modules": [
+              "supabase-teams"
+            ],
+            "role": "notify"
+          },
+          {
+            "modules": [
+              "css-tokens"
+            ],
+            "role": "tokens"
+          }
+        ]
+      },
+      "space_json": {
+        "modules": {
+          "jira-tracker": {
+            "enabled": true,
+            "roles": [
+              "tracker"
+            ],
+            "settings": {
+              "base": "https://jira.example.com",
+              "email": "alpha@example.com"
+            }
+          },
+          "supabase-dashboard": {
+            "enabled": true,
+            "roles": [
+              "dashboard"
+            ],
+            "settings": {
+              "table": "overview_projects",
+              "url": "https://sb.example.com"
+            }
+          },
+          "supabase-teams": {
+            "enabled": true,
+            "roles": [
+              "notify"
+            ],
+            "settings": {
+              "url": "https://sb.example.com"
+            }
+          }
+        }
+      }
+    },
+    "now": {
+      "cards": {
+        "css-tokens": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "tokens"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "git-sync": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "vcs"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "jira-tracker": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "tracker"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "static-publish": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "publish"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "supabase-comments": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "comments"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "supabase-dashboard": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "dashboard"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "supabase-teams": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "notify"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        },
+        "vercel-publish": {
+          "enabled": false,
+          "implicit": false,
+          "roles": [
+            "publish"
+          ],
+          "status": "unchecked",
+          "view": {
+            "actions": [
+              "enable"
+            ],
+            "badge": "off",
+            "implicit": false,
+            "why": false
+          }
+        }
+      },
+      "duplicate_cards": [],
+      "missing": [],
+      "role_order": [
+        "publish",
+        "comments",
+        "vcs",
+        "dashboard",
+        "tracker",
+        "notify",
+        "tokens"
+      ],
+      "roles": {
+        "comments": {
+          "focus_card": "supabase-comments",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "legacy",
+            "noneKey": null
+          }
+        },
+        "dashboard": {
+          "focus_card": "supabase-dashboard",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "legacy",
+            "noneKey": null
+          }
+        },
+        "notify": {
+          "focus_card": "supabase-teams",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "legacy",
+            "noneKey": null
+          }
+        },
+        "publish": {
+          "focus_card": "static-publish",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "legacy",
+            "noneKey": null
+          }
+        },
+        "tokens": {
+          "focus_card": "css-tokens",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "none",
+            "noneKey": "cnNoneTokens"
+          }
+        },
+        "tracker": {
+          "focus_card": "jira-tracker",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "legacy",
+            "noneKey": null
+          }
+        },
+        "vcs": {
+          "focus_card": "git-sync",
+          "provider": {
+            "entry": null,
+            "id": null,
+            "kind": "legacy",
+            "noneKey": null
+          }
+        }
+      },
+      "sections": [
+        {
+          "modules": [
+            "static-publish",
+            "vercel-publish"
+          ],
+          "role": "publish"
+        },
+        {
+          "modules": [
+            "supabase-comments"
+          ],
+          "role": "comments"
+        },
+        {
+          "modules": [
+            "git-sync"
+          ],
+          "role": "vcs"
+        },
+        {
+          "modules": [
+            "supabase-dashboard"
+          ],
+          "role": "dashboard"
+        },
+        {
+          "modules": [
+            "jira-tracker"
+          ],
+          "role": "tracker"
+        },
+        {
+          "modules": [
+            "supabase-teams"
+          ],
+          "role": "notify"
+        },
+        {
+          "modules": [
+            "css-tokens"
+          ],
+          "role": "tokens"
+        }
+      ]
+    }
+  },
+  "ctx": {
+    "jira_env_beats_files": {
+      "config": {
+        "jira_config": [
+          "https://jira.example.com",
+          "alpha@example.com",
+          "<secret:20>"
+        ],
+        "supabase_config": [
+          "https://sb.example.com",
+          "<secret:17>"
+        ]
+      },
+      "dashboard": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:17>"
+              },
+              "settings": {
+                "table": "overview_projects",
+                "url": "https://sb.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "rows",
+            "module": "supabase-dashboard",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            [],
+            null
+          ]
+        },
+        "provider": "Implicit"
+      },
+      "notify": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:17>"
+              },
+              "settings": {
+                "url": "https://sb.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "mute_state",
+            "module": "supabase-teams",
+            "timeout": 10
+          }
+        ],
+        "flow_outcome": {
+          "result": []
+        },
+        "provider": "Implicit"
+      },
+      "tracker": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "token": "<secret:20>"
+              },
+              "settings": {
+                "base": "https://jira.example.com",
+                "email": "alpha@example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              },
+              "timeout_s": 4
+            },
+            "fn": "statuses",
+            "module": "jira-tracker",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            {},
+            null
+          ]
+        },
+        "provider": "Implicit"
+      }
+    },
+    "jira_from_env": {
+      "config": {
+        "jira_config": [
+          "https://jira.example.com",
+          "alpha@example.com",
+          "<secret:20>"
+        ],
+        "supabase_config": [
+          "https://sb.example.com",
+          "<secret:17>"
+        ]
+      },
+      "dashboard": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:17>"
+              },
+              "settings": {
+                "table": "overview_projects",
+                "url": "https://sb.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "rows",
+            "module": "supabase-dashboard",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            [],
+            null
+          ]
+        },
+        "provider": "Implicit"
+      },
+      "notify": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:17>"
+              },
+              "settings": {
+                "url": "https://sb.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "mute_state",
+            "module": "supabase-teams",
+            "timeout": 10
+          }
+        ],
+        "flow_outcome": {
+          "result": []
+        },
+        "provider": "Implicit"
+      },
+      "tracker": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "token": "<secret:20>"
+              },
+              "settings": {
+                "base": "https://jira.example.com",
+                "email": "alpha@example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              },
+              "timeout_s": 4
+            },
+            "fn": "statuses",
+            "module": "jira-tracker",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            {},
+            null
+          ]
+        },
+        "provider": "Implicit"
+      }
+    },
+    "jira_from_files": {
+      "config": {
+        "jira_config": [
+          "https://jira.example.com",
+          "file@example.com",
+          "<secret:21>"
+        ],
+        "supabase_config": [
+          "https://sb.example.com",
+          "<secret:17>"
+        ]
+      },
+      "dashboard": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:17>"
+              },
+              "settings": {
+                "table": "overview_projects",
+                "url": "https://sb.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "rows",
+            "module": "supabase-dashboard",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            [],
+            null
+          ]
+        },
+        "provider": "Implicit"
+      },
+      "notify": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:17>"
+              },
+              "settings": {
+                "url": "https://sb.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "mute_state",
+            "module": "supabase-teams",
+            "timeout": 10
+          }
+        ],
+        "flow_outcome": {
+          "result": []
+        },
+        "provider": "Implicit"
+      },
+      "tracker": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "token": "<secret:21>"
+              },
+              "settings": {
+                "base": "https://jira.example.com",
+                "email": "file@example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              },
+              "timeout_s": 4
+            },
+            "fn": "statuses",
+            "module": "jira-tracker",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            {},
+            null
+          ]
+        },
+        "provider": "Implicit"
+      }
+    },
+    "supabase_from_env": {
+      "config": {
+        "jira_config": [
+          null,
+          null,
+          null
+        ],
+        "supabase_config": [
+          "https://sb-env.example.com",
+          "<secret:16>"
+        ]
+      },
+      "dashboard": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:16>"
+              },
+              "settings": {
+                "table": "overview_projects",
+                "url": "https://sb-env.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "rows",
+            "module": "supabase-dashboard",
+            "timeout": 6
+          }
+        ],
+        "flow_outcome": {
+          "result": [
+            [],
+            null
+          ]
+        },
+        "provider": "Implicit"
+      },
+      "notify": {
+        "calls": [
+          {
+            "ctx": {
+              "ModuleError": "<ModuleError>",
+              "legacy": true,
+              "secrets": {
+                "key": "<secret:16>"
+              },
+              "settings": {
+                "url": "https://sb-env.example.com"
+              },
+              "space": {
+                "id": "legacy",
+                "path": ""
+              }
+            },
+            "fn": "mute_state",
+            "module": "supabase-teams",
+            "timeout": 10
+          }
+        ],
+        "flow_outcome": {
+          "result": []
+        },
+        "provider": "Implicit"
+      },
+      "tracker": {
+        "calls": [],
+        "flow_outcome": {
+          "result": [
+            {},
+            "Jira не налаштовано: додайте jira_base у tasks.json і облікові JIRA_EMAIL/JIRA_TOKEN"
+          ]
+        },
+        "provider": "Implicit"
+      }
+    },
+    "unconfigured": {
+      "config": {
+        "jira_config": [
+          null,
+          null,
+          null
+        ],
+        "supabase_config": [
+          null,
+          null
+        ]
+      },
+      "dashboard": {
+        "calls": [],
+        "flow_outcome": {
+          "result": [
+            [],
+            "Supabase не налаштовано"
+          ]
+        },
+        "provider": "Implicit"
+      },
+      "notify": {
+        "calls": [],
+        "flow_outcome": {
+          "code": "notify-unconfigured",
+          "message": "notify-unconfigured: Supabase не налаштовано",
+          "raised": "ModuleError"
+        },
+        "provider": "Implicit"
+      },
+      "tracker": {
+        "calls": [],
+        "flow_outcome": {
+          "result": [
+            {},
+            "Jira не налаштовано: додайте jira_base у tasks.json і облікові JIRA_EMAIL/JIRA_TOKEN"
+          ]
+        },
+        "provider": "Implicit"
+      }
+    }
+  },
+  "meta": {
+    "generator": "tests/make_before_4d3a.py",
+    "source_commit": "bf9bb5b",
+    "version": "0.16.0",
+    "volatile_stripped": []
+  },
+  "non_loopback_attempts": 0,
+  "tracks": {
+    "adapter": true,
+    "default_track": "united",
+    "ids": [
+      "united",
+      "liga360",
+      "seo",
+      "custom-x"
+    ],
+    "legacy_repos": {
+      "seo": "ssh://git@example.com/o/r.git",
+      "united": "git@example.com:studio/web.git"
+    },
+    "track_repo": {
+      "None": "",
+      "custom-x": "",
+      "liga360": "",
+      "seo": "ssh://git@example.com/o/r.git",
+      "united": "git@example.com:studio/web.git",
+      "zzz": ""
+    },
+    "track_root": {
+      "custom-x": "~/work/custom",
+      "liga360": "~/work/shared",
+      "seo": "~/work/shared",
+      "united": "~/work/united"
+    },
+    "track_root_unknown": {
+      "''": "~/work/shared",
+      "'United'": "~/work/shared",
+      "'zzz'": "~/work/shared",
+      "7": "~/work/shared",
+      "None": "~/work/shared"
+    },
+    "tracks": [
+      {
+        "ds": "united",
+        "id": "united",
+        "label": "United",
+        "repo": "git@example.com:studio/web.git",
+        "root": "~/work/united"
+      },
+      {
+        "ds": "liga360",
+        "id": "liga360",
+        "label": "LIGA360",
+        "repo": "",
+        "root": "~/work/shared"
+      },
+      {
+        "ds": "seo",
+        "id": "seo",
+        "label": "SEO",
+        "repo": "ssh://git@example.com/o/r.git",
+        "root": "~/work/shared"
+      },
+      {
+        "ds": "custom-x",
+        "id": "custom-x",
+        "label": "custom-x",
+        "repo": "",
+        "root": "~/work/custom"
+      }
+    ]
+  }
+}
