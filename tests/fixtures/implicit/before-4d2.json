@@ -171,6 +171,14 @@
     },
     "urlopen_calls": 0
   },
+  "cache_who": {
+    "team": {
+      "": "legacy"
+    },
+    "tracker": {
+      "": "legacy"
+    }
+  },
   "caps": {
     "fingerprint_failure_liga": {
       "caps": {
@@ -608,6 +616,7 @@
     "version": "0.15.0",
     "volatile_stripped": []
   },
+  "non_loopback_attempts": 0,
   "provider": {
     "layer_off": {
       "layer_on": false,

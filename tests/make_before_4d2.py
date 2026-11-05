@@ -22,6 +22,9 @@
     (`Handler._overview_sync` — чи запущено дитину; `_overview_launch` підмінено): (а) зі швом/фейком — результат;
     (б) з `DC_TASKS_FILE` без шва — результат чи клас і текст винятку; (в) з `DC_NO_OVERVIEW` без `DC_TASKS_FILE` — те саме;
     модуль при (б)/(в) НЕ кличеться (лічильник підмінених `deai_modules.call` і виклику модуля ролі);
+  * `cache_who` — ключі кешів `_TEAM_CACHE`/`_TRACKER_CACHE` і `who` кожного запису після прогону через шов (Task 4 міняє `who`);
+  * `non_loopback_attempts` — скільки разів за прогін хтось пішов не на loopback (розтяжка `socket.getaddrinfo` /
+    `create_connection`; очікувано 0);
   * `install` — `install_config.supabase_config()` і `jira_config()` під `DC_TASKS_FILE` (корінь фікстури з парою / без пари) ×
     {змінні `SUPABASE_URL`/`SUPABASE_KEY`/`JIRA_EMAIL`/`JIRA_TOKEN` вигадані / ні} × {файли
     `<HOME>/.claude/pipeline-feedback/jira-email|jira-token` у ТИМЧАСОВОМУ HOME є / нема}: значення (вигадані — можна писати);
@@ -399,6 +402,30 @@ def isolation(tmp):
     return out
 
 
+# ---------------------------------------------------------------------------------- cache_who
+
+def cache_who(tmp):
+    """Ключі кешів `serve._TEAM_CACHE`/`_TRACKER_CACHE` і поле `who` кожного запису після прогону через шов (`team_snapshot`,
+    `tracker_snapshot` з `resolved=(None, 'legacy')`). ⚠️ Task 4 міняє `who` з `'legacy'` на `api_value(prov)`: цей розділ —
+    еталон паритету (спека, «Паритет»)."""
+    import serve
+    d = os.path.join(tmp, 'cachewho')
+    os.makedirs(d)
+    team_fake, tracker_fake = os.path.join(d, 'team.json'), os.path.join(d, 'tracker.json')
+    _write(team_fake, [{'project_id': 'demo-1', 'title': 'Alpha demo'}])
+    _write(tracker_fake, {'DEMO-1': {'name': 'In progress', 'cat': 'indeterminate'}})
+    serve._TEAM_CACHE.clear()
+    serve._TRACKER_CACHE.clear()
+    with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': team_fake, 'DC_TRACKER_FAKE': tracker_fake}):
+        serve.team_snapshot(refresh=True, resolved=(None, 'legacy'))
+        serve.tracker_snapshot(['DEMO-1'], refresh=True, resolved=(None, 'legacy'))
+    out = {'team': {k: v['who'] for k, v in sorted(serve._TEAM_CACHE.items())},
+           'tracker': {k: v['who'] for k, v in sorted(serve._TRACKER_CACHE.items())}}
+    serve._TEAM_CACHE.clear()
+    serve._TRACKER_CACHE.clear()
+    return out
+
+
 # ---------------------------------------------------------------------------------- install
 
 def install(tmp):
@@ -480,6 +507,43 @@ def build(tmp):
 
 # ---------------------------------------------------------------------------------- збирання
 
+class SocketTripwire:
+    """Розтяжка на рівні сокетів (модулі ходять власним `build_opener`, повз `urlopen`): `socket.getaddrinfo` і
+    `socket.create_connection` на час усього прогону. Loopback проходить (справжній сервер у процесі), будь-який інший хост
+    рахується й відмовляється (`OSError`)."""
+    LOOPBACK = ('127.0.0.1', 'localhost', '::1')
+
+    def __init__(self):
+        import socket
+        self.socket = socket
+        self.count = 0
+        self._gai, self._cc = socket.getaddrinfo, socket.create_connection
+
+    def _host_ok(self, host):
+        if isinstance(host, bytes):
+            host = host.decode('ascii', 'replace')
+        return host in self.LOOPBACK
+
+    def getaddrinfo(self, host, *a, **kw):
+        if not self._host_ok(host):
+            self.count += 1
+            raise OSError('мережі нема (розтяжка getaddrinfo)')
+        return self._gai(host, *a, **kw)
+
+    def create_connection(self, address, *a, **kw):
+        if not self._host_ok(address[0]):
+            self.count += 1
+            raise OSError('мережі нема (розтяжка create_connection)')
+        return self._cc(address, *a, **kw)
+
+    def __enter__(self):
+        self.socket.getaddrinfo, self.socket.create_connection = self.getaddrinfo, self.create_connection
+        return self
+
+    def __exit__(self, *exc):
+        self.socket.getaddrinfo, self.socket.create_connection = self._gai, self._cc
+
+
 def make():
     """Збирає знімок у тимчасовому оточенні; справжній `~/.deai` стереже `spaces_guard`."""
     import spaces_guard
@@ -488,7 +552,7 @@ def make():
         tmp = os.path.normpath(tmp)
         home = os.path.join(tmp, 'home')
         os.makedirs(home)
-        with mock.patch.dict(os.environ, {'HOME': home}):
+        with mock.patch.dict(os.environ, {'HOME': home}), SocketTripwire() as wire:
             for name in CLEAN:
                 os.environ.pop(name, None)
             snap = {'meta': {'version': '0.15.0', 'source_commit': _source_commit(),
@@ -497,8 +561,10 @@ def make():
             snap['provider'] = provider(tmp)
             snap['api'] = api(tmp)
             snap['isolation'] = isolation(tmp)
+            snap['cache_who'] = cache_who(tmp)
             snap['install'] = install(tmp)
             snap['build'] = build(tmp)
+            snap['non_loopback_attempts'] = wire.count
     spaces_guard.assert_untouched(real)
     return snap
 
@@ -526,6 +592,7 @@ def _code_differs_from_source():
         if subprocess.run(['git', '-C', ROOT, 'cat-file', '-e', src + '^{commit}'], capture_output=True, timeout=30).returncode != 0:
             return True
         diff = subprocess.run(['git', '-C', ROOT, 'diff', '--quiet', src, '--', 'app', 'bin'], capture_output=True, timeout=60)
+        # `--exclude-standard`: ігноровані файли (`__pycache__`, `*.pyc`) не мають рвати охорону; будь-який ІНШИЙ новий файл — рве
         untracked = subprocess.run(['git', '-C', ROOT, 'ls-files', '--others', '--exclude-standard', '--', 'app', 'bin'],
                                    capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
@@ -539,7 +606,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--out', default=OUT_DEFAULT)
     args = ap.parse_args(argv)
-    if os.path.abspath(args.out) == os.path.abspath(OUT_DEFAULT) and _code_differs_from_source():
+    if os.path.realpath(args.out) == os.path.realpath(OUT_DEFAULT) and _code_differs_from_source():
         print('⛔ make_before_4d2: app/ або bin/ відрізняються від %s — це знімок «після», еталон «до» не перезаписую. '
               'Запускай із замороженої копії (git archive %s | tar -x -C <тека>), див. докстрінг.'
               % (_source_commit(), _source_commit()), file=sys.stderr)

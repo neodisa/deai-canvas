@@ -26,7 +26,7 @@ class Before4d2Shape(unittest.TestCase):
         cls.snap = json.loads(cls.raw)
 
     def test_top_level_sections(self):
-        self.assertEqual(sorted(self.snap), ['api', 'build', 'caps', 'install', 'isolation', 'meta', 'provider'])
+        self.assertEqual(sorted(self.snap), ['api', 'build', 'cache_who', 'caps', 'install', 'isolation', 'meta', 'non_loopback_attempts', 'provider'])
         self.assertEqual(self.snap['meta']['version'], '0.15.0')
         self.assertEqual(self.snap['meta']['source_commit'], '6e68250')
         self.assertEqual(self.snap['meta']['generator'], 'tests/make_before_4d2.py')
@@ -172,6 +172,11 @@ class Before4d2Shape(unittest.TestCase):
                          ['https://jira.example.com', 'file@example.com', 'jira_file_token'])
         self.assertEqual(n['root_without_pair/env_unset/files_present']['jira_config'], [None, None, None])
         self.assertEqual(n['root_without_pair/env_unset/files_absent']['supabase_config'], [None, None])
+
+    def test_cache_who_and_tripwire(self):
+        # ключ кешу — id простору запиту (`''` — без простору), `who` — `'legacy'`: Task 4 змінить його на `api_value(prov)`
+        self.assertEqual(self.snap['cache_who'], {'team': {'': 'legacy'}, 'tracker': {'': 'legacy'}})
+        self.assertEqual(self.snap['non_loopback_attempts'], 0)      # розтяжка сокетів: жодного виходу за loopback
 
     def test_build_shape(self):
         b = self.snap['build']
