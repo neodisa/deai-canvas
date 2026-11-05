@@ -105,7 +105,31 @@ tar -x -C <тека>` у докстрінгу; охорона fail-closed про
 
 ---
 
-### Task 2: ядро `app/implicit.py` і шов `spaces.request_space()`
+### Поправки контролера після Task 1 (05.11.2026) — мають перевагу над текстом Task 2–7 і спеки
+
+- **Імʼя шва.** `spaces.request_space(sid)` УЖЕ існує (контекстний менеджер ≈385, фіксує простір запиту на блок). Новий шов
+  «шар вимкнено» зветься **`spaces.effective_space()`** — скрізь у Task 2–7 і в спеці (§2) читати `request_space()` як
+  `effective_space()`; наявний контекстний менеджер не чіпати.
+- **`GET /api/space` не існує** (знімок фіксує 404); опис простору — поле `space` у `GET /api/task` і `GET /api/spaces`.
+  Документи Task 7 — без `/api/space`.
+- **Task 5 (ізольований конфіг) — наслідки, які знімок показав:**
+  - базовий клас `tests/test_modules.py` `Env.setUp` (≈210) ставить `DC_TASKS_FILE` і `os.environ.update(sbconf.ENV)` — його
+    успадковують `test_modules*`, `test_notify`, `test_dashboard`, `test_supabase_comments`, `test_comments_role`,
+    `test_comments_agent`, `test_tracker`, `test_tasks_overview`; так само `test_integrations_off.py` (≈428) і
+    `test_publish_module.py` (≈1255). ⛔ Їх НЕ лагодити підміною `isolated()`: пару Supabase писати в КОРІНЬ фікстури
+    `DC_TASKS_FILE` (помічник у `tests/sbconf.py`, напр. `sbconf.write_root(path)`), а `sbconf.ENV` прибрати з цих `setUp`;
+  - `tests/live/fixture.mjs` (≈126) гасить `SUPABASE_*`, але НЕ `JIRA_*` — після Task 5 це закрито в ядрі; у фікстурі
+    додатково погасити `JIRA_EMAIL`/`JIRA_TOKEN` (пояс і підтяжки);
+  - `DC_NO_OVERVIEW` протікає між наборами (`test_dashboard.py` ≈1280): тести `JiraConfig` (`test_tracker.py` ≈376–463) і
+    `test_legacy_comments.py`/`test_dashboard.py` ≈194–246, що навмисно ходять ПОЗА ізоляцією, мусять явно прибирати і
+    `DC_TASKS_FILE`, і `DC_NO_OVERVIEW` (`mock.patch.dict(..., clear=False)` + `pop`), а витік у `test_dashboard.py` — закрити
+    (відновлення в `tearDown`/`addCleanup`). Кожна зміна — рядок у звіті.
+- **Поза етапом (не чіпати, записано для беклогу):** `tests/live/dashboard-role.test.mjs` ≈372 ЧИТАЄ справжній
+  `~/.claude/pipeline-feedback/overview-sync.log` (лише читання) — окрема задача.
+
+---
+
+### Task 2: ядро `app/implicit.py` і шов `spaces.effective_space()`
 
 **Files:** Create `app/implicit.py`; Modify `app/spaces.py`; Test `tests/test_implicit.py`.
 
