@@ -3,6 +3,86 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.16.0] — unreleased
+
+Stage 4d-2: the core stops comparing the provider of a role with the string `'legacy'`. `deai_modules.provider()` now returns a
+`Module`, an **`Implicit`** object (the in-house setup of the LIGA space, or a space whose layer is switched off) or `None`; the
+layer-off case has one seam, and the isolation of shared state one law. The public contract does not change. This is the second of
+the four sub-releases of stage 4d (owner decision 04.11.2026): 4d-1 tracks (0.15.0), 4d-2 this one, 4d-3 explicit LIGA modules with
+an automatic, backed-up migration of its config, 4d-4 the `integrations` flag and the old aliases go. Design:
+`docs/superpowers/specs/2026-11-05-implicit-provider-seam-design.md`; plan:
+`docs/superpowers/plans/2026-11-05-implicit-provider-seam.md`. The behaviour of 0.15.0 is pinned by the snapshot
+`tests/fixtures/implicit/before-4d2.json`.
+
+### Added
+
+- **`app/implicit.py`**, a pure core (no network, no import of `serve`): the class `Implicit` (immutable; `role`, `module_id`,
+  `shared`, `fake_env`), the role table `IMPLICIT_ROLES` (`publish`, `comments`, `vcs`, `dashboard`, `tracker`, `notify`) with
+  `for_role`, the law `isolated()` (`DC_TASKS_FILE` or `DC_NO_OVERVIEW`) and `route(prov)`, which answers `('fake', path)`,
+  `('isolated', None)` or `('live', None)` in the same order for every role (a test seam first, then the refusal of an isolated
+  run, then the real call). What each role answers in each case stays with the role, as in 0.15.0.
+- **`spaces.effective_space()`**, the layer-off seam: with the layer off, or with no space fixed for the request, it returns a
+  copy of `IMPLICIT` without reading the registry; otherwise `active_space()`. `deai_modules.provider()` goes through it.
+- **`deai_modules.api_value(p)` and `API_IMPLICIT`**: the only place where an `Implicit` turns into the public string `'legacy'`
+  (a `Module` gives its id, `None` gives `None`; anything else is a `TypeError`).
+- **`deai_modules.publish_module(space)`**: the module that publishes in a space, or `None`; total, and with the same cache as
+  `capabilities` (it keeps the 0.15.0 condition «layer on and request space fixed»).
+- **New optional keys `jira_email` and `jira_token`** in the root of a tasks file: the only place an isolated run reads Jira
+  credentials from (meant for test fixtures; see below).
+- **A guard in the tests**: an AST check (`NoLegacyLiteral` in `tests/test_implicit.py`) keeps comparisons with `'legacy'` out of
+  `app/*.py` and `bin/*.py`; its list of allowed places is empty. Next to it, `RolesParity`, `PublishModule` and `LigaLikePin`.
+
+### Changed
+
+- **One path for every role.** The branches of `serve.py`, `bin/overview_push.py` and `bin/state.py` ask `isinstance(prov, Implicit)`
+  instead of `== 'legacy'`, and `implicit.route` replaces the per-role decisions about test seams and refusals.
+- **One isolation law for `dashboard`, `tracker` and `notify`**: the same function and the same order. The refusals keep their
+  text from 0.15.0. `publish`, `comments` and `vcs` still have no refusal of their own (their tests stand on substituted
+  functions and local fakes).
+- **An isolated run reads the install config only from the root of the tasks file** (`DC_TASKS_FILE`): `supabase_config()` takes
+  `supabase_url`/`supabase_key` from there and `jira_config()` takes `jira_base`, `jira_email` and `jira_token` from there; see
+  *Deliberate differences*.
+- **`_overview_sync`** uses `implicit.isolated()` for the in-house path rather than `route`, so a test seam such as `DC_TEAM_FAKE`
+  together with `DC_TASKS_FILE` still does not sync.
+- **The cache owner `who`** of the team rows (`dashboard`) and of the tracker statuses takes `api_value(prov)`.
+- **Tests**: the Supabase pair of the old fixtures moved into the root of the fixture tasks file (`sbconf.write_root`), and the
+  tests that deliberately run outside isolation clear `DC_TASKS_FILE` and `DC_NO_OVERVIEW` both.
+
+### Removed
+
+- The constants `LEGACY_ROLES`, `LEGACY_ON_ERROR_ROLES` and `STRICT_LEGACY_ROLES` of `app/deai_modules.py`, renamed to
+  `IMPLICIT_ROLES`, `IMPLICIT_ON_ERROR_ROLES` and `STRICT_IMPLICIT_ROLES` (same members, same meaning). **No aliases**: scripts
+  that imported the old names must move.
+
+### Unchanged public contract
+
+- `capabilities.<role>` stays `'legacy'` in `GET /api/spaces` and `GET /api/task`; the `build` key of `manifest.json` stays
+  `legacy|module`; there are no JS changes. The snapshot and the goldens (`tests/legacy-golden.test.mjs`, the comments golden pin)
+  are green without a re-shoot.
+
+### Deliberate differences from 0.15.0
+
+(everything else is checked against the snapshot)
+
+1. **An isolated run no longer sees the machine's credentials.** In a run with `DC_TASKS_FILE` or `DC_NO_OVERVIEW`,
+   `supabase_config()` and `jira_config()` no longer read the environment (`SUPABASE_*`, `JIRA_*`) or
+   `~/.claude/pipeline-feedback/jira-*`. This includes someone who sets `DC_NO_OVERVIEW` on purpose: their environment and
+   pipeline-feedback credentials are ignored, and they need the pair in the root of the tasks file. Outside isolation nothing
+   changed.
+2. **Internal API.** Providers are `Implicit` objects, not the string `'legacy'` (`provider()`, `comments_provider()`,
+   `team_resolve()` and the like). The constants are renamed: `LEGACY_ROLES` → `IMPLICIT_ROLES`, `LEGACY_ON_ERROR_ROLES` →
+   `IMPLICIT_ON_ERROR_ROLES`, `STRICT_LEGACY_ROLES` → `STRICT_IMPLICIT_ROLES`. No aliases.
+3. **`ProjectComments.kind`** (the internal state of the comments channel) changed from `'legacy'` to `'implicit'`; `bin/state.py`
+   reads it. It is not an API value.
+
+### Known limits
+
+- `'legacy'` stays in the public API, in the build manifest, in the id of the implicit space and in the registry field until
+  4d-3 / 4d-4.
+- `bin/overview_push.py` run by hand and the tools in `ops/` do not know about `isolated()` (not a test path).
+- `bin/registry.py` computes `TASKS_PATH` at import time.
+- `tests/live/dashboard-role.test.mjs` reads the real `~/.claude/pipeline-feedback/overview-sync.log`, read-only (a backlog item).
+
 ## [0.15.0] — 05.11.2026
 
 Stage 4d-1: the **profile** of a task (`united` / `liga360` / `seo`), a notion of one company welded into the core, is replaced by

@@ -271,7 +271,10 @@ the tab is hidden. A broken module of its own does not hide the tab: it shows an
 are cached **per space** (60 s; an error for 10 s, and a failure keeps the last rows that were read), and a different provider
 never shows the rows of the previous one. The cards are sent by a background process (`bin/overview_push.py sync`) after a
 publish, after a git sync that pushed and after an autosync that changed something — one process per space at a time (a
-trigger that comes while it runs only asks for one more run). `DC_NO_OVERVIEW` silences the writing for every provider.
+trigger that comes while it runs only asks for one more run). `DC_NO_OVERVIEW` silences the writing for every provider. For
+the in-house LIGA setup (an implicit provider, not a module) `DC_TASKS_FILE` silences it too: an isolated run never writes to
+the shared state. Modules of an ordinary space are not under this law: their config is the space's own `space.json` and
+`secrets.json`.
 
 **The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`.
 
@@ -313,7 +316,9 @@ below). Read-only: it never changes anything in the tracker.
 
 **Who is asked, and when.** A space has a tracker when it has a provider of the role; without one the Tasks screen shows no
 status from a tracker. A space with integrations and no module of its own uses the built-in `jira-tracker` through the
-address and the credentials of the installation (`jira_base` in the legacy `tasks.json`, `JIRA_EMAIL` / `JIRA_TOKEN`).
+address and the credentials of the installation (`jira_base` in the legacy `tasks.json`, `JIRA_EMAIL` / `JIRA_TOKEN`). In an isolated run (`DC_TASKS_FILE` or `DC_NO_OVERVIEW`) the
+credentials of the installation come only from the root of the tasks file (`jira_email`, `jira_token`), never from the
+environment; the contract of a module is the same.
 
 **The error codes.** Both are in the core's table, so they pass as they are; any other code is a `module-error`. The table is
 for the codes you **raise** from `statuses`; the verdict codes of `check` (above) are separate.

@@ -6,7 +6,7 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.15.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.16.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, team
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
@@ -20,7 +20,8 @@ links for your team.
 > silence switch) through the `supabase-teams` module and the same Supabase project as the comments. The legacy space
 > runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). The old «profile» of a task
 > is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
-> `space.json`). A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> `space.json`), and the core no longer tells the in-house setup from a module by a string: an *implicit provider* object
+> does it, and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -621,8 +622,11 @@ tests/        unit, Python and live (Playwright) tests
      - ✅ **4d-1** (0.15) — tracks: the profile of a task becomes a general **track of a space** (`tracks` in `space.json`: a
        folder, a repository, a design system and a label per line of work); the LIGA space gets its three tracks from an implicit
        adapter, with no change for its designers;
-     - **4d-2** (0.16) — the layer-off seam and the isolation of shared state without the literal `'legacy'`;
-     - **4d-3** (0.17) — explicit LIGA modules, with an automatic migration of its config (with a backup);
+     - ✅ **4d-2** (0.16) — the implicit provider (`app/implicit.py`) instead of the literal `'legacy'`, one layer-off seam
+       (`spaces.effective_space()`) and one isolation law: an isolated run reads the install config only from the root of its
+       tasks file; the public contract (`capabilities` = `'legacy'`) is unchanged;
+     - **4d-3** (0.17, next) — explicit LIGA modules, with an automatic migration of its config (with a backup); the API value
+       `'legacy'` goes here;
      - **4d-4** (0.18) — the `integrations` flag and the old aliases (including `profile`) go.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.

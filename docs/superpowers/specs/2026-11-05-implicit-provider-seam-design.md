@@ -197,6 +197,44 @@ res = deai_modules.call(module, fn, ctx, ...)
 - `bin/overview_push.py`, запущений руками поза ядром, і `ops/` не знають про `isolated()` (не тестовий шлях).
 - `bin/registry.py` обчислює `TASKS_PATH` під час імпорту — не змінюється.
 
+## Implementation notes (відхилення, прийняті на ревʼю)
+
+Де код відрізняється від тексту вище — правда за кодом; тут усе, що розійшлося з первинним задумом:
+
+- **Шов зветься `spaces.effective_space()`, а не `request_space()`** (§2): `spaces.request_space(sid)` уже існував — контекстний
+  менеджер, що фіксує простір запиту на блок. Нове імʼя не плутається з ним; наявний менеджер не чіпали. Усюди в тексті вище
+  `request_space()` читати як `effective_space()`.
+- **`GET /api/space` не існує** (знімок 0.15.0 фіксує 404): опис простору — поле `space` у `GET /api/task` плюс `GET /api/spaces`.
+  Публічний контракт `capabilities` перевіряється на них.
+- **Ключ кешу `_FOLDER_INPUTS` (`deai_modules.folder_inputs`) лишився на `spaces.layer_on()`** (§2 казав брати його з шва): для
+  зафіксованого простору `effective_space()` читає й мігрує реєстр і кидає поза `try` на КОЖНОМУ файлі, який роздається, а ключ і
+  так несе шляхи й відбитки реєстру та файла старих задач. Пункт скасовано; поведінка 0.15.0 збережена.
+- **`publish_module(space)` + `_capabilities_full`**: «публікує модуль» береться з ТОГО Ж проходу й ТОГО Ж кешу, що й
+  `capabilities` (`_capabilities_full` зберігає поруч значень назовні сирих постачальників `Module`/`Implicit`/`None`), а не
+  вгадується з рядка. Функція зберігає умову 0.15.0 «шар ввімкнено й простір запиту зафіксовано», інакше `None`: у запиті без
+  простору `spaces.active_space()` міг би показати «поточний» простір реєстру, якого запит не обирав.
+- **`task_publish_meta` насправді `task_publish_share`** (§2): це функція, що дає поля `publish_gate`, `publish_gate_stale`,
+  `publish_share_url`; вона разом із `task_preview_gate` питає `publish_module(space)`.
+- **`_overview_sync` користується `implicit.isolated()`, а не `route()`** (§4): шов `DC_TEAM_FAKE` синку не стосується (він лише
+  читає), а `route` віддав би `'fake'` раніше за відмову, тож комбінація `DC_TEAM_FAKE` + `DC_TASKS_FILE` запустила б синк.
+  Ізольований прогін не пише у спільний Supabase і з фейком.
+- **`jira_config` ніколи не повертає `(base, None, None)`**: без облікових — `(None, None, None)`, як у 0.15.0 (в ізольованому
+  прогоні облікові беруться лише з `jira_email`/`jira_token` кореня файла задач; значення мусять пройти ті самі перевірки форми).
+- **`ProjectComments.kind` став `'implicit'`** замість `'legacy'` (внутрішнє значення, не API; читають `bin/state.py` і тести), тож
+  охоронець не має винятків для `kind`.
+- **`_liga_like` тримається на тому, що `spaces.IMPLICIT['integrations'] is True`** (`_liga_like(sp)` = `spaces.integrations_for(sp)`):
+  це закріплено тестом `LigaLikePin` і рядком коментаря біля функції.
+- **Охоронець метрики літерала — строгий AST, а не регекс** (`NoLegacyLiteral` у `tests/test_implicit.py`, усі `app/*.py` і
+  `bin/*.py`): список дозволених місць `ALLOWED` ПОРОЖНІЙ. Заборонені порівняння (`==`, `!=`, `in`, `is` з рядком чи його вмістом у кортежі/списку/множині); решта входжень
+  (`API_IMPLICIT`, `IMPLICIT['id']`, `BUILD_KINDS`, `--legacy`, поле реєстру) — присвоєння, ключі словників чи виклики, а не `Compare`.
+  Регекс-охоронець проміжного коміту замінено.
+- **Міграція тестів на закон ізоляції:** пару Supabase перенесено в КОРІНЬ фікстури `DC_TASKS_FILE` помічником
+  `sbconf.write_root` (а не підміною `isolated()`), `sbconf.ENV` прибрано з `setUp` наборів, що його ставили; тести, що навмисно
+  ходять ПОЗА ізоляцією, прибирають і `DC_TASKS_FILE`, і `DC_NO_OVERVIEW` (раніше `DC_NO_OVERVIEW` протікав між наборами).
+  `tests/live/fixture.mjs` додатково гасить `JIRA_EMAIL`/`JIRA_TOKEN`.
+- **Поза етапом (беклог):** `tests/live/dashboard-role.test.mjs` читає справжній `~/.claude/pipeline-feedback/overview-sync.log`
+  (лише читання).
+
 ## Документи
 
 CHANGELOG `[0.16.0]`, README (дорожня карта, «Known limits»), `docs/design/spaces-and-modules.md` «Stage 4d-2»,

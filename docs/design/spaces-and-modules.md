@@ -10,10 +10,11 @@ modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and th
 `supabase-comments`, 0.10.0), stage 4b-3 (task tags instead of profiles on the «Tasks» screen, 0.11.0), stage 4c-1 (the
 team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0), stage 4c-2 (tracker statuses as the
 role `tracker` and the module `jira-tracker`, 0.13.0) and stage 4c-3 (the Teams notifications as the role `notify` and the
-module `supabase-teams`, 0.14.0) and stage 4d-1 (the profile of a task becomes the general tracks of a space, 0.15.0) — see
+module `supabase-teams`, 0.14.0), stage 4d-1 (the profile of a task becomes the general tracks of a space, 0.15.0) and
+stage 4d-2 (the implicit provider instead of the literal `'legacy'`, the layer-off seam and the isolation law, 0.16.0) — see
 *Status* at the end.
-Next: stage 4d-2 — the layer-off seam and the isolation of shared state without the literal `'legacy'`; stage 4d goes on to
-4d-3 and 4d-4 and ends with the original setup becoming an ordinary space.
+Next: stage 4d-3 — explicit LIGA modules with an automatic, backed-up migration of its config (the API value `'legacy'`
+goes there); stage 4d ends with 4d-4, when the original setup becomes an ordinary space.
 
 ## Goal
 
@@ -114,8 +115,8 @@ canvas for their workflow without touching the core.
    - **4d** — the `integrations` flag goes. Split into four releases (owner decision 04.11.2026):
      - ✅ **4d-1** (0.15.0) — the profile of a task becomes **tracks of a space** (`tracks` in `space.json`, the key `track` of a
        task); the LIGA space gets its three tracks from an implicit adapter, `profile` stays a synonym;
-     - **4d-2** (0.16.0) — the layer-off seam (a space with the layer switched off) and the isolation of shared state, without the
-       literal `'legacy'`;
+     - ✅ **4d-2** (0.16.0) — the layer-off seam (a space with the layer switched off) and the isolation of shared state, without the
+       literal `'legacy'` in the comparisons of the core (the API value `'legacy'` stays until 4d-3);
      - **4d-3** (0.17.0) — explicit LIGA modules, with an **automatic migration of its config with a backup**: the same
        migration also writes its tracks into its `space.json`, and the adapter of 4d-1 goes;
      - **4d-4** (0.18.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
@@ -345,7 +346,7 @@ Status: done (the date and the tag are set at the release). Spec: `docs/superpow
 - **Tested** against the snapshot of 0.9.0 (`tests/fixtures/legacy-comments/before-4b2.json`) and the old adapter kept as a
   fixture; no network and no real Supabase (the module's `_open` seam, intercepted requests in the browser tests).
 - **Left for 4c / 4d:** (4b-3 — the profiles — is done, see below); 4c — the dashboard, tracker statuses and Teams silence as roles and
-  modules (today they only read the pair from `supabase_config()`); 4d — the `integrations` flag and the literal `'legacy'` in `capabilities` go. Known limits: PostgREST
+  modules (today they only read the pair from `supabase_config()`); 4d — the `integrations` flag goes (4d-4); the comparisons with the literal `'legacy'` went in 4d-2 and the API value in `capabilities` goes in 4d-3. Known limits: PostgREST
   `max-rows` can still cut `list`; `html2canvas` loads from jsdelivr; the key is in `tasks.json` in plain text.
 
 ### Stage 4b-3 — task tags instead of profiles (0.11.0)
@@ -383,7 +384,7 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
 - **The role `dashboard`** is called by the core (`ROLES_CALLED`; `tracker` and `notify` stay reserved at 4c-1 — `tracker` is called since 4c-2): `rows(ctx)`,
   `push(ctx, cards, mode)` with `'merge'` / `'insert'`, and the optional `open_comments(ctx)`; the codes `dashboard-unconfigured`
   (409) and `dashboard-error` (502); `capabilities.dashboard`. The contract is in `docs/modules/authoring.md`. Like `comments`, it
-  has the hard-wired path of the legacy space (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable `space.json` is not `'legacy'` either, `STRICT_LEGACY_ROLES`).
+  has the hard-wired path of the legacy space (`IMPLICIT_ROLES` (`LEGACY_ROLES` until 4d-2)) but never falls back to it on an error (not in `IMPLICIT_ON_ERROR_ROLES`; an unreadable `space.json` is not `'legacy'` either, `STRICT_IMPLICIT_ROLES`).
 - **The module `supabase-dashboard` 1.0.0** (built-in; `schema.sql`; a **non-public** key: no `anon` policy, `check` refuses a
   public key). The core builds the cards (`app/dashboard.py`: `build_card`, the PII filter, the registry fixtures), the module
   only stores them and returns the rows. The legacy space reaches its shared Supabase (table `overview_projects`) through the
@@ -401,8 +402,8 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
   list is in the CHANGELOG, `[0.12.0]`.
 - **Tested** against the snapshot of 0.11.0 (`tests/fixtures/dashboard/before-4c1.json`), a fake module and a fake vcs in the live
   tests (`tests/live/dashboard-role.test.mjs`); no network and no real Supabase.
-- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses (done in 4c-2) and the Teams silence (done in 4c-3), see below; the `integrations` flag and the
-  literal `'legacy'` go in 4d.
+- **Left for 4c-2 / 4c-3 / 4d:** tracker statuses (done in 4c-2) and the Teams silence (done in 4c-3), see below; the `integrations` flag goes in 4d-4,
+  the comparisons with the literal `'legacy'` went in 4d-2 and its API value goes in 4d-3.
 
 ### Stage 4c-2 — tracker statuses as a role (0.13.0)
 
@@ -412,8 +413,8 @@ plan: `docs/superpowers/plans/2026-11-03-tracker-role.md`. What is built:
 - **The role `tracker`** is called by the core (`ROLES_CALLED`; only `notify` stayed reserved until 4c-3): `statuses(ctx, keys)` →
   `{key: {name, cat}}`; the codes `tracker-unconfigured` (409) and `tracker-error` (502); `capabilities.tracker`; the new
   field `ctx["timeout_s"]` (the socket budget of the module). Like `dashboard`, it has the hard-wired path of the legacy space
-  (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable `space.json` is not
-  `'legacy'` either, `STRICT_LEGACY_ROLES`). The contract is in `docs/modules/authoring.md`.
+  (`IMPLICIT_ROLES` (`LEGACY_ROLES` until 4d-2)) but never falls back to it on an error (not in `IMPLICIT_ON_ERROR_ROLES`; an unreadable `space.json` is not
+  `'legacy'` either, `STRICT_IMPLICIT_ROLES`). The contract is in `docs/modules/authoring.md`.
 - **The core `app/tracker.py`** (no import of `serve`): `KEY_RE`, `keys_of`, `normalize`, `statuses` (batches of 100),
   `legacy_ctx` and `legacy_module`. It filters the keys before the call and normalizes the answer, so a module only talks to
   the tracker.
@@ -438,7 +439,7 @@ plan: `docs/superpowers/plans/2026-11-03-tracker-role.md`. What is built:
   Ukrainian in the English interface too. The full list is in the CHANGELOG, `[0.13.0]`.
 - **Tested** against the snapshot of 0.12.0 (`tests/fixtures/tracker/before-4c2.json`), the module and the core with a stubbed
   network, and a fake module in the live tests (`tests/live/tracker-role.test.mjs`); no network and no real Jira.
-- **Left for 4c-3 / 4d:** the Teams silence as the role `notify` (done in 4c-3, see below); the `integrations` flag and the literal `'legacy'` go in 4d.
+- **Left for 4c-3 / 4d:** the Teams silence as the role `notify` (done in 4c-3, see below); the `integrations` flag goes in 4d-4, the comparisons with the literal `'legacy'` went in 4d-2 and its API value goes in 4d-3.
 
 ### Stage 4c-3 — Teams notifications as a role (0.14.0)
 
@@ -448,8 +449,8 @@ plan: `docs/superpowers/plans/2026-11-03-notify-role.md`. What is built:
 - **The role `notify`** is called by the core (`ROLES_CALLED`; `ROLES_RESERVED` is empty — **no role name is reserved any
   more**): `mute_state(ctx)` → a list of silenced channels and `mute_set(ctx, channel, muted, by)` → a bool; the codes
   `notify-unconfigured` (409) and `notify-error` (502); `capabilities.notify`. Like `tracker`, it has the hard-wired path of the
-  legacy space (`LEGACY_ROLES`) but never falls back to it on an error (not in `LEGACY_ON_ERROR_ROLES`; an unreadable
-  `space.json` is not `'legacy'` either, `STRICT_LEGACY_ROLES`). The contract is in `docs/modules/authoring.md`.
+  legacy space (`IMPLICIT_ROLES` (`LEGACY_ROLES` until 4d-2)) but never falls back to it on an error (not in `IMPLICIT_ON_ERROR_ROLES`; an unreadable
+  `space.json` is not `'legacy'` either, `STRICT_IMPLICIT_ROLES`). The contract is in `docs/modules/authoring.md`.
 - **The core `app/notify.py`** (no import of `serve`): `normalize_mutes`, `mute_view` (a silenced channel covers its
   sub-channels), `check_set_args`, `legacy_ctx` and `legacy_module`. `serve.py` gets `notify_resolve()` and `notify_call()` in
   place of `teams_rpc`, and the route `/api/teams-mute` is gated by the role.
@@ -474,7 +475,7 @@ plan: `docs/superpowers/plans/2026-11-03-notify-role.md`. What is built:
 - **Tested** against the snapshot of 0.13.0 (`tests/fixtures/notify/before-4c3.json`), the module and the core with a stubbed
   network, static checks of the schema, and a fake module in the live tests (`tests/live/notify-role.test.mjs`); no network, no
   Postgres and no real Teams.
-- **Left for 4d:** the `integrations` flag and the literal `'legacy'` go; every in-house integration is a role by now.
+- **Left for 4d:** the `integrations` flag goes (4d-4), the comparisons with the literal `'legacy'` went in 4d-2 and its API value goes in 4d-3; every in-house integration is a role by now.
 
 ### Stage 4d-1 — tracks of a space instead of the profile (0.15.0)
 
@@ -509,10 +510,42 @@ plan: `docs/superpowers/plans/2026-11-04-space-tracks.md`. This is the first of 
   with fake `vcs` modules and local fixture repos, and in the live test `tests/live/tracks.test.mjs`; no network.
 - **Left for 4d-2…4d-4:** see below.
 
+### Stage 4d-2 — the implicit provider instead of `'legacy'` (0.16.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-05-implicit-provider-seam-design.md`
+(and its «Implementation notes»); plan: `docs/superpowers/plans/2026-11-05-implicit-provider-seam.md`. This is the second of the four
+sub-releases of 4d. What is built:
+
+- **The core `app/implicit.py`** (no network, no import of `serve`): the immutable class `Implicit` (`role`, `module_id`, `shared`,
+  `fake_env`), the role table `IMPLICIT_ROLES`, `for_role`, `isolated()` and `route(prov)`. `deai_modules.provider()` returns
+  `Module | Implicit | None`; the branches of `serve.py`, `bin/overview_push.py` and `bin/state.py` ask `isinstance(prov, Implicit)`.
+  **The literal `'legacy'` left the comparisons of `app/` and `bin/`**: an AST guard in the tests (`NoLegacyLiteral`, an empty list of
+  allowed places) keeps it out. The comparisons that were «`'legacy'` goes in 4d» in the older stages went here; the **API value**
+  goes in 4d-3, with the explicit LIGA modules.
+- **The layer-off seam `spaces.effective_space()`**: layer off, or no space fixed for the request → a copy of `IMPLICIT` without
+  reading the registry; `deai_modules.provider()` goes through it. `task_publish_share` and `task_preview_gate` ask
+  `deai_modules.publish_module(space)` instead of repeating the layer condition by hand (`layer_on()` stays in `spaces.py`,
+  `tasks_path()` and the registry tools).
+- **One isolation law**: `isolated()` = `DC_TASKS_FILE` or `DC_NO_OVERVIEW`; `route(prov)` answers `fake` → `isolated` → `live` in the
+  same order for `dashboard`, `tracker` and `notify`. An isolated run reads the install config **only from the root of the tasks
+  file** (`supabase_url`/`supabase_key`, `jira_base`, and the new optional `jira_email`/`jira_token`), never the environment or
+  `~/.claude/pipeline-feedback/`. Modules of an ordinary space are not under the law: their config is the space's own.
+- **The border of the public API is `deai_modules.api_value`** (an `Implicit` becomes `'legacy'`, `API_IMPLICIT`); `capabilities` is
+  as total as before and returns the values of 0.15.0. The manifest `build` (`legacy|module`) and the JS are unchanged.
+- **Conscious differences from 0.15.0:** an isolated run does not see the machine's credentials (including a deliberate
+  `DC_NO_OVERVIEW`); the internal providers are `Implicit` objects and the constants are `IMPLICIT_ROLES`, `IMPLICIT_ON_ERROR_ROLES`,
+  `STRICT_IMPLICIT_ROLES` (no aliases); `ProjectComments.kind` is `'implicit'`. The full list is in the CHANGELOG, `[0.16.0]`.
+- **Known limits:** `'legacy'` stays in the public API, the build manifest, the id of the implicit space and the registry field until
+  4d-3 / 4d-4; `bin/overview_push.py` run by hand and `ops/` do not know about `isolated()`; `bin/registry.py` computes `TASKS_PATH` at
+  import time; `tests/live/dashboard-role.test.mjs` reads the real `overview-sync.log` read-only (a backlog item).
+- **Tested** against the snapshot of 0.15.0 (`tests/fixtures/implicit/before-4d2.json`), `tests/test_implicit.py` (parity of the
+  roles, the guard, the `_liga_like` pin), the goldens green without a re-shoot; no network.
+- **Left for 4d-3 / 4d-4:** see below.
+
 ### What stays for later
 
-- **Left for 4d-2…4d-4** (stage 4d, four releases):
-  - **4d-2** (0.16.0): the layer-off seam and the isolation of shared state without the literal `'legacy'`;
+- **Left for 4d-3 / 4d-4** (stage 4d, four releases; 4d-1 and 4d-2 are done; what stays of the literal `'legacy'` — the API
+  value, the build manifest, the id of the implicit space — goes in 4d-3 and 4d-4):
   - **4d-3** (0.17.0): explicit LIGA modules with an automatic migration of its config (with a backup) — it also writes the LIGA
     tracks into its `space.json`, so `tracks._LEGACY_LABELS`, the default `united` and the adapter go;
   - **4d-4** (0.18.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
