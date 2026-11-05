@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import install_config  # noqa: E402
 import overview_push as ov  # noqa: E402  (тонкий CLI синку: Task 6)
 import registry  # noqa: E402
@@ -1147,7 +1148,7 @@ class CliTarget(unittest.TestCase):
     SP = {'id': 'liga', 'path': '', 'legacy': True, 'integrations': True}
 
     def setUp(self):
-        for patcher in (mock.patch.object(dm, 'provider', return_value='legacy'),
+        for patcher in (mock.patch.object(dm, 'provider', return_value=implicit.for_role('dashboard')),
                         mock.patch.object(dashboard, 'legacy_module', return_value=_FakeDash()),
                         mock.patch.dict(os.environ, {}), mock.patch.object(spaces, 'legacy_tasks_file', return_value='/nowhere/tasks.json')):
             patcher.start()

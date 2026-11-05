@@ -312,7 +312,9 @@ class Calls:
         raise AssertionError('модуль викликано')
 
 
-def isolation(tmp):
+def isolation(tmp, prov='legacy'):
+    # `prov` — постачальник, якого передають у `_team_fetch`/`_tracker_fetch`/`notify_call`: на 0.15.0 це рядок `'legacy'` (так знято
+    # знімок), а `RolesParity` (4d-2 Task 4) передає `Implicit` і порівнює з тим самим знімком.
     import dashboard
     import deai_modules as dm
     import serve
@@ -345,7 +347,7 @@ def isolation(tmp):
     dash = {}
     for name, env in envs.items():
         seam = {'DC_TEAM_FAKE': team_fake} if name == 'a_seam' else {}
-        row = {'team_fetch': case(env, seam, lambda: list(serve._team_fetch(None, 'legacy')))}
+        row = {'team_fetch': case(env, seam, lambda: list(serve._team_fetch(None, prov)))}
         serve._TEAM_CACHE.clear()
         row['team_rows'] = case(env, seam, lambda: list(serve.team_rows(refresh=True)))
         serve._TEAM_CACHE.clear()
@@ -358,7 +360,7 @@ def isolation(tmp):
         got = {}
 
         def run():
-            r = serve._tracker_fetch(None, 'legacy', ['DEMO-1'])
+            r = serve._tracker_fetch(None, prov, ['DEMO-1'])
             return None if r is None else [r[0], r[1]]
         with mock.patch.object(tracker, 'statuses', Calls()) as st_calls:
             got = case(env, seam, run)
@@ -370,8 +372,8 @@ def isolation(tmp):
     for name, env in envs.items():
         seam = {'DC_TEAMS_FAKE': teams_fake} if name == 'a_seam' else {}
         _write(teams_fake, {})
-        row = {'mute_state': case(env, seam, lambda: serve.notify_call('mute_state', resolved=(None, 'legacy')))}
-        row['mute_set'] = case(env, seam, lambda: serve.notify_call('mute_set', 'demo-channel', True, 'k:demo', resolved=(None, 'legacy')))
+        row = {'mute_state': case(env, seam, lambda: serve.notify_call('mute_state', resolved=(None, prov)))}
+        row['mute_set'] = case(env, seam, lambda: serve.notify_call('mute_set', 'demo-channel', True, 'k:demo', resolved=(None, prov)))
         if name == 'a_seam':        # шов пише лише у свій локальний файл: знімаємо, що в ньому після `mute_set`
             with open(teams_fake, encoding='utf-8') as fh:
                 row['seam_file_after_set'] = sorted(json.load(fh))
@@ -404,7 +406,7 @@ def isolation(tmp):
 
 # ---------------------------------------------------------------------------------- cache_who
 
-def cache_who(tmp):
+def cache_who(tmp, prov='legacy'):
     """Ключі кешів `serve._TEAM_CACHE`/`_TRACKER_CACHE` і поле `who` кожного запису після прогону через шов (`team_snapshot`,
     `tracker_snapshot` з `resolved=(None, 'legacy')`). ⚠️ Task 4 міняє `who` з `'legacy'` на `api_value(prov)`: цей розділ —
     еталон паритету (спека, «Паритет»)."""
@@ -417,8 +419,8 @@ def cache_who(tmp):
     serve._TEAM_CACHE.clear()
     serve._TRACKER_CACHE.clear()
     with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': team_fake, 'DC_TRACKER_FAKE': tracker_fake}):
-        serve.team_snapshot(refresh=True, resolved=(None, 'legacy'))
-        serve.tracker_snapshot(['DEMO-1'], refresh=True, resolved=(None, 'legacy'))
+        serve.team_snapshot(refresh=True, resolved=(None, prov))
+        serve.tracker_snapshot(['DEMO-1'], refresh=True, resolved=(None, prov))
     out = {'team': {k: v['who'] for k, v in sorted(serve._TEAM_CACHE.items())},
            'tracker': {k: v['who'] for k, v in sorted(serve._TRACKER_CACHE.items())}}
     serve._TEAM_CACHE.clear()

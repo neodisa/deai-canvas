@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import make_before_4c2 as mb2  # noqa: E402  (світ знімка 0.12.0: сервер у процесі, `scrub`)
 import sbconf  # noqa: E402
 import serve  # noqa: E402
@@ -656,8 +657,9 @@ def _st(name, cat='done'):
     return {'name': name, 'cat': cat}
 
 
-class _Prov:
-    """Постачальник-заглушка для `tracker_snapshot(resolved=…)`: лише `id` (`who`); сам виклик підмінено `_tracker_fetch`."""
+class _Prov(dm.Module):
+    """Постачальник-заглушка для `tracker_snapshot(resolved=…)`: лише `id` (`who`); сам виклик підмінено `_tracker_fetch`.
+    Підклас `Module` (4d-2): `who` береться через `deai_modules.api_value`, що іншого типу не приймає."""
 
     def __init__(self, mid):
         self.id = mid
@@ -719,7 +721,7 @@ class TrackerOverview(_TmpCase):
 
     def _snapshot(self, fetch, keys=('DEMO-1',), space='A', prov='legacy', **kw):
         with spaces.request_space(space), mock.patch.object(serve, '_tracker_fetch', fetch):
-            return serve.tracker_snapshot(list(keys), resolved=(None, _Prov(prov) if prov != 'legacy' else 'legacy'), **kw)
+            return serve.tracker_snapshot(list(keys), resolved=(None, _Prov(prov) if prov != 'legacy' else implicit.for_role('tracker')), **kw)
 
     # ---- пріоритет у tasks_overview ----
 
@@ -808,7 +810,7 @@ class TrackerOverview(_TmpCase):
         for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
             reset_tracker_cache()
             with mock.patch.dict(os.environ, {var: '1', 'DC_TRACKER_FAKE': fake}):
-                got = serve.tracker_snapshot(['DEMO-1', 'DEMO-2', 'DEMO-3'], now=10.0, resolved=(None, 'legacy'))
+                got = serve.tracker_snapshot(['DEMO-1', 'DEMO-2', 'DEMO-3'], now=10.0, resolved=(None, implicit.for_role('tracker')))
             self.assertEqual(got, ({'DEMO-1': _st('Done'), 'DEMO-3': _st('Odd', None)}, None, 10.0), var)
 
     def test_isolation_without_the_seam_means_no_tracker_and_no_work(self):
@@ -818,7 +820,7 @@ class TrackerOverview(_TmpCase):
         for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
             with self.subTest(var=var), mock.patch.dict(os.environ, {var: '1'}), \
                     mock.patch.object(serve, 'jira_config', side_effect=AssertionError('конфіг')):
-                self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy')))
+                self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker'))))
                 self.assertEqual(serve._TRACKER_CACHE, {})
 
     def test_a_broken_fake_file_is_an_error_text_not_an_exception(self):
@@ -828,7 +830,7 @@ class TrackerOverview(_TmpCase):
         for payload in (bad, self._fake_file(['не', 'словник']), os.path.join(self.root, 'нема.json')):
             reset_tracker_cache()
             with mock.patch.dict(os.environ, {'DC_TRACKER_FAKE': payload}):
-                got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy'))
+                got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker')))
             self.assertEqual((got[0], got[2]), ({}, None), payload)
             self.assertTrue(got[1] and isinstance(got[1], str), payload)
 
@@ -848,7 +850,7 @@ class TrackerOverview(_TmpCase):
         sbconf.patch_open(self, self._jira_answer(seen), 'jira-tracker')
         keys = ['DEMO-%d' % i for i in range(1, 121)]
         with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')):
-            got = serve.tracker_snapshot(keys, now=5.0, resolved=(None, 'legacy'))
+            got = serve.tracker_snapshot(keys, now=5.0, resolved=(None, implicit.for_role('tracker')))
         self.assertEqual(len(seen), 1, 'одним викликом')
         self.assertEqual(seen[0][1], tracker.READ_SOCKET_S)
         self.assertEqual(seen[0][0], 'key in (' + ','.join(keys[:100]) + ')')
@@ -856,7 +858,7 @@ class TrackerOverview(_TmpCase):
         self.assertEqual((got[1], got[2]), (None, 5.0))
         # перші 100 ключів уже в кеші: той самий набір — без повторного запиту, а не «новий ключ» щоразу
         with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')):
-            serve.tracker_snapshot(keys, now=6.0, resolved=(None, 'legacy'))
+            serve.tracker_snapshot(keys, now=6.0, resolved=(None, implicit.for_role('tracker')))
         self.assertEqual(len(seen), 1)
 
     def test_the_league_without_jira_base_says_so_and_makes_no_network_call(self):
@@ -864,8 +866,8 @@ class TrackerOverview(_TmpCase):
             raise AssertionError('мережа: без конфігу Jira не питається')
         sbconf.patch_open(self, boom, 'jira-tracker')
         with mock.patch.object(serve, 'jira_config', return_value=(None, None, None)):
-            got = serve.tracker_snapshot(['DEMO-1'], now=5.0, resolved=(None, 'legacy'))
-            nothing = serve.tracker_snapshot([], now=5.0, refresh=True, resolved=(None, 'legacy'))
+            got = serve.tracker_snapshot(['DEMO-1'], now=5.0, resolved=(None, implicit.for_role('tracker')))
+            nothing = serve.tracker_snapshot([], now=5.0, refresh=True, resolved=(None, implicit.for_role('tracker')))
         self.assertEqual(got, ({}, tracker.UNCONFIGURED, None))
         self.assertEqual(nothing, ({}, None, 5.0), 'нема що питати — нема й плашки')
 
@@ -882,7 +884,7 @@ class TrackerOverview(_TmpCase):
         with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')), \
                 mock.patch.object(tracker, 'statuses', side_effect=RuntimeError('boom tok-test-1')), \
                 contextlib.redirect_stderr(err):
-            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy'))
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker')))
         self.assertEqual(got, ({}, 'RuntimeError', None))
         self.assertIn('RuntimeError', err.getvalue())
         self.assertNotIn('tok-test-1', err.getvalue())
@@ -891,7 +893,7 @@ class TrackerOverview(_TmpCase):
         err = io.StringIO()
         with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')), \
                 mock.patch.object(tracker, 'statuses', side_effect=OSError('нема VPN')), contextlib.redirect_stderr(err):
-            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, 'legacy'))
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker')))
         self.assertEqual(got, ({}, 'OSError', None))
         self.assertEqual(err.getvalue(), '')
 

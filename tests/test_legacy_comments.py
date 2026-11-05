@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import deai_modules  # noqa: E402
+import implicit  # noqa: E402
 import inbox  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
@@ -202,7 +203,7 @@ class TeamFetchTest(_Env):
 
     def test_without_config_no_network(self):
         self.write({'tasks': {}})
-        self.assertEqual(serve._team_fetch(None, 'legacy'), ([], 'Supabase не налаштовано'))
+        self.assertEqual(serve._team_fetch(None, implicit.for_role('dashboard')), ([], 'Supabase не налаштовано'))
 
     def test_with_config_requests_config_url(self):
         self.write({'supabase_url': URL, 'supabase_key': KEY})
@@ -212,7 +213,7 @@ class TeamFetchTest(_Env):
             seen.append(req)
             return sbconf.Resp(b'[{"id": "p1", "name": "One", "secret_col": "x"}]')
         sbconf.patch_dashboard_open(self, fake)
-        rows, err = serve._team_fetch(None, 'legacy')
+        rows, err = serve._team_fetch(None, implicit.for_role('dashboard'))
         self.assertIsNone(err)
         self.assertEqual([r['id'] for r in rows], ['p1'])
         self.assertEqual(rows[0]['name'], 'One')
@@ -228,7 +229,7 @@ class TeamFetchTest(_Env):
         os.environ['DC_TASKS_FILE'] = self.legacy
         seen = []
         sbconf.patch_dashboard_open(self, lambda req, timeout=None: seen.append(req) or sbconf.Resp(b'[]'))
-        rows, err = serve._team_fetch(None, 'legacy')
+        rows, err = serve._team_fetch(None, implicit.for_role('dashboard'))
         self.assertEqual(rows, [])
         self.assertIn('ізольованому', err)
         self.assertEqual(seen, [])
@@ -555,7 +556,7 @@ class LegacyAgentTest(_Env):
         self.assertNotIn(URL, str(cm.exception))
 
     def test_route_for_the_league_is_the_builtin_module_with_the_league_channel(self):
-        m, ctx, channel = serve.comments_route(None, 'legacy')
+        m, ctx, channel = serve.comments_route(None, implicit.for_role('comments'))
         self.assertEqual((m.id, m.status, m.origin), ('supabase-comments', 'ok', 'builtin'))
         self.assertEqual(ctx['settings']['url'], URL)
         ch = self.base['channels']
@@ -567,11 +568,11 @@ class LegacyAgentTest(_Env):
     def test_route_refuses_without_a_loaded_builtin_module_or_a_provider(self):
         with mock.patch.object(deai_modules, 'catalog', return_value={}):
             with self.assertRaises(deai_modules.ModuleError) as cm:
-                serve.comments_route(None, 'legacy')
+                serve.comments_route(None, implicit.for_role('comments'))
         self.assertEqual(cm.exception.code, 'module-error')
         with mock.patch.object(deai_modules, 'catalog', side_effect=RuntimeError(KEY)):
             with self.assertRaises(deai_modules.ModuleError) as cm:
-                serve.comments_route(None, 'legacy')
+                serve.comments_route(None, implicit.for_role('comments'))
         self.assertEqual(cm.exception.code, 'module-error')
         self.assertNotIn(KEY, str(cm.exception))
         for prov in (None, 'nope', 5):

@@ -515,5 +515,152 @@ class ProviderImplicit(unittest.TestCase):
         self.assertEqual(want['liga']['caps']['publish'], 'legacy')                        # знімок справді несе `'legacy'`
 
 
+class RolesParity(unittest.TestCase):
+    """4d-2 Task 4: `serve.py` і `bin/` ідуть через `isinstance(prov, Implicit)` + `implicit.route`; поведінка 0.15.0 — та сама.
+    Сценарії ті самі, що в `make_before_4d2.py` (його будівники викликаються з `Implicit` замість рядка `'legacy'`)."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)
+
+    def _run(self, builder, prov=None, **kw):
+        import make_before_4d2 as gen
+        with tempfile.TemporaryDirectory(prefix='roles-4d2-') as tmp:
+            tmp = os.path.normpath(tmp)
+            home = os.path.join(tmp, 'home')
+            os.makedirs(home)
+            with mock.patch.dict(os.environ, {'HOME': home}):
+                for name in gen.CLEAN:
+                    os.environ.pop(name, None)
+                fn = getattr(gen, builder)
+                return fn(tmp, **kw) if prov is None else fn(tmp, prov, **kw)
+
+    def test_isolation_matches_snapshot_through_new_code_paths(self):
+        """`_team_fetch`, `team_rows`, `_tracker_fetch`, `notify_call` з ПРАВДИВИМ `Implicit` своєї ролі (у кожного свій
+        `fake_env`) і `Handler._overview_sync` (постачальника бере сам) дають рівно знімок `isolation` 0.15.0: ті самі значення,
+        тексти, лічильники модуля й мережі. Генератор бере один `prov` на всі ролі, тож беремо з кожного прогону лише СВОЮ роль."""
+        want = self.snap['isolation']
+        for role in ('dashboard', 'tracker', 'notify'):
+            got = self._run('isolation', implicit.for_role(role))
+            self.assertEqual(got[role], want[role], role)
+            if role == 'dashboard':
+                self.assertEqual(got['sync'], want['sync'])
+                self.assertEqual(got['note'], want['note'])
+
+    def test_cache_who_matches_snapshot(self):
+        """Ключ і `who` кешів `team_snapshot`/`tracker_snapshot` — як у 0.15.0: `'legacy'` через `api_value`, не `Implicit`."""
+        want = self.snap['cache_who']
+        for role, cache in (('dashboard', 'team'), ('tracker', 'tracker')):
+            got = self._run('cache_who', implicit.for_role(role))
+            self.assertEqual(got[cache], want[cache], role)
+            for who in got[cache].values():
+                self.assertIs(type(who), str)
+
+    def test_tracker_empty_keys_isolated_is_none_not_empty_dict(self):
+        """⛔ Порядок `_tracker_fetch` для неявного: шов → ізоляція → `if not keys`. Ізольований прогін без ключів — `None`
+        («трекера нема»), а не `({}, None)`; (знімок має непорожні ключі, тож цього не бачить)."""
+        import serve
+        prov = implicit.for_role('tracker')
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(tempfile.gettempdir(), 'x-tasks.json')}):
+            os.environ.pop('DC_TRACKER_FAKE', None)
+            self.assertIsNone(serve._tracker_fetch(None, prov, []))
+            self.assertIsNone(serve._tracker_fetch(None, prov, ['DEMO-1']))
+
+    def test_notify_isolated_never_calls_module(self):
+        import serve
+        import deai_modules as dm
+        prov = implicit.for_role('notify')
+        with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1'}), mock.patch.object(dm, 'call', side_effect=AssertionError('модуль')):
+            os.environ.pop('DC_TEAMS_FAKE', None)
+            with self.assertRaises(OSError):
+                serve.notify_call('mute_state', resolved=(None, prov))
+
+    def test_api_matches_snapshot_in_both_modes(self):
+        """`/api/spaces` і `/api/task` (`capabilities`, `preview_gate`, `publish_gate`) після переходу на `publish_module` — як 0.15.0."""
+        got = self._run('api')
+        self.assertEqual(got, self.snap['api'])
+
+
+class PublishModule(unittest.TestCase):
+    """4d-2 Task 4: `deai_modules.publish_module(space)` — тотальний помічник «публікує модуль»; рішення = `capabilities(space)['publish']`."""
+
+    def setUp(self):
+        import deai_modules as dm
+        self.dm = dm
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        p = _clean_env()
+        p.start()
+        self.addCleanup(p.stop)
+        for k in _ENV:
+            os.environ.pop(k, None)
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+        on = [mock.patch.object(spaces, 'layer_on', return_value=True), mock.patch.object(spaces, 'request_space_id', return_value='x')]
+        for m in on:
+            m.start()
+            self.addCleanup(m.stop)
+
+    def _space(self, name, **extra):
+        path = os.path.join(self.tmp.name, name)
+        os.makedirs(path)
+        return {'id': name, 'path': path, **extra}
+
+    def test_plain_space_returns_module_equal_to_capabilities(self):
+        sp = self._space('plain')
+        mod = self.dm.publish_module(sp)
+        self.assertIsInstance(mod, self.dm.Module)
+        self.assertEqual(mod.id, self.dm.capabilities(sp)['publish'])
+        import serve
+        self.assertEqual(serve.task_preview_gate({}, None, sp), serve.MODULE_GATE_STATE)
+
+    def test_implicit_none_and_failures_are_none(self):
+        liga = self._space('liga', integrations=True)
+        self.assertEqual(self.dm.capabilities(liga)['publish'], 'legacy')
+        self.assertIsNone(self.dm.publish_module(liga))            # ⛔ `Implicit` — не модуль
+        for bad in (None, {}, 'x', 0):
+            self.assertIsNone(self.dm.publish_module(bad))
+        with mock.patch.object(self.dm, '_caps_key', side_effect=RuntimeError('збій відбитків')):
+            self.assertIsNone(self.dm.publish_module(self._space('plain2')))
+        broken = self._space('broken')
+        with open(os.path.join(broken['path'], 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{не json')
+        self.assertIsNone(self.dm.publish_module(broken))
+        self.assertIsNone(self.dm.capabilities(broken)['publish'])
+
+    def test_same_cache_as_capabilities(self):
+        """Другий виклик `publish_module` після `capabilities` не перераховує ролі (той самий кеш)."""
+        sp = self._space('plain3')
+        self.dm.capabilities(sp)
+        with mock.patch.object(self.dm, '_provider_for', side_effect=AssertionError('перерахунок')):
+            self.assertIsNotNone(self.dm.publish_module(sp))
+
+    def test_unfixed_request_space_or_layer_off_is_none(self):
+        sp = self._space('plain4')
+        with mock.patch.object(spaces, 'request_space_id', return_value=None):
+            self.assertIsNone(self.dm.publish_module(sp))
+        with mock.patch.object(spaces, 'layer_on', return_value=False):
+            self.assertIsNone(self.dm.publish_module(sp))
+
+
+class NoLegacyComparisons(unittest.TestCase):
+    """4d-2 Task 4: у `serve.py` і `bin/` не лишилось порівнянь постачальника ролі з літералом `'legacy'` (суворий AST-охоронець — Task 6).
+    Дозволено: внутрішній рядок `kind` у `ProjectComments` (`self.kind`/`pc.kind`), ключі словників (`sp.get('legacy')`) і `BUILD_KINDS`."""
+
+    PATTERN = re.compile(r"""(?:[=!]=\s*['"]legacy['"])|(?:['"]legacy['"]\s*[=!]=)|(?:\bin\s*\([^)]*['"]legacy['"])""")
+
+    def test_no_provider_comparisons_left(self):
+        root = os.path.dirname(_HERE)
+        files = [os.path.join(root, 'app', 'serve.py')] + [os.path.join(root, 'bin', n) for n in ('overview_push.py', 'state.py')]
+        bad = []
+        for path in files:
+            with open(path, encoding='utf-8') as f:
+                for n, line in enumerate(f, 1):
+                    if self.PATTERN.search(line) and not re.search(r'\b(?:self|pc)\.kind\b', line):
+                        bad.append('%s:%d: %s' % (os.path.relpath(path, root), n, line.strip()))
+        self.assertEqual(bad, [])
+
+
 if __name__ == '__main__':
     unittest.main()

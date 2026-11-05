@@ -59,6 +59,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
 import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
 import fake_npx  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
@@ -4535,14 +4536,14 @@ class PublishCommentsDecision(TaskFixture):
     def test_the_league_comments_are_the_builtin_module_only_on_the_league_path(self):
         """4b-2: ЛІГА на своєму шляху — словник вбудованого `supabase-comments` з каналом ЛІГИ (`comment_project` задачі чи
         `dc/<задача>`) і готовим `ctx` з конфігу установки; у збірці МОДУЛЯ публікації — як і було, `False`."""
-        (comments, warn), cc = self.decide('legacy', module_publish=False, task={'comment_project': 'proj/alpha'})
+        (comments, warn), cc = self.decide(implicit.for_role('comments'), module_publish=False, task={'comment_project': 'proj/alpha'})
         self.assertIsNone(warn)
         self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'proj/alpha'))
-        self.assertEqual(self.decide('legacy', module_publish=False)[0][0]['channel'], 'dc/t1')
+        self.assertEqual(self.decide(implicit.for_role('comments'), module_publish=False)[0][0]['channel'], 'dc/t1')
         ((space, prov, ctx), _kw), = cc.call_args_list[:1]
         self.assertEqual((space, prov.id), (self.SPACE, 'supabase-comments'))
         self.assertEqual(ctx['settings'], {'url': sbconf.SB_URL, 'shots_bucket': serve.LEGACY_SHOTS_BUCKET})
-        self.assertEqual(self.decide('legacy', module_publish=True)[0], (False, None))
+        self.assertEqual(self.decide(implicit.for_role('comments'), module_publish=True)[0], (False, None))
 
     def test_no_provider_means_no_comments_on_both_paths(self):
         for module_publish in (False, True):
