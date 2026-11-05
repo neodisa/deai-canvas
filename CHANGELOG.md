@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.16.0] — unreleased
+## [0.16.0] — 05.11.2026
 
 Stage 4d-2: the core stops comparing the provider of a role with the string `'legacy'`. `deai_modules.provider()` now returns a
 `Module`, an **`Implicit`** object (the in-house setup of the LIGA space, or a space whose layer is switched off) or `None`; the
