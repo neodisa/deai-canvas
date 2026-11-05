@@ -198,14 +198,14 @@ class NotifyRole(tm.Env):
         self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))
         self.assertEqual(dm.ROLES_RESERVED, ())
         self.assertEqual(dm.ROLE_FUNCTIONS['notify'], ('mute_state', 'mute_set'))
-        self.assertIn('notify', dm.LEGACY_ROLES)
-        self.assertIn('notify', dm.STRICT_LEGACY_ROLES)
+        self.assertIn('notify', dm.IMPLICIT_ROLES)
+        self.assertIn('notify', dm.STRICT_IMPLICIT_ROLES)
         self.assertIn('supabase-teams', dm.KNOWN_OTHER_MODULES)
 
     def test_the_league_path_of_notify_is_not_a_fallback_after_an_error(self):
         """⛔ Зашитий шлях `notify` — спільний Supabase ЛІГИ й живий канал Teams команди: «через помилку» на нього не
-        переходимо, тож `notify` НЕ в `LEGACY_ON_ERROR_ROLES`."""
-        self.assertNotIn('notify', dm.LEGACY_ON_ERROR_ROLES)
+        переходимо, тож `notify` НЕ в `IMPLICIT_ON_ERROR_ROLES`."""
+        self.assertNotIn('notify', dm.IMPLICIT_ON_ERROR_ROLES)
 
     def test_a_notify_module_needs_both_functions(self):
         self.mk('ntf-bare', roles=('notify',), server=tm.CHECK_ONLY)

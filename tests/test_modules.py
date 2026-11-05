@@ -333,10 +333,10 @@ class ModuleErrorTest(unittest.TestCase):
         self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))   # 2b-2: `comments`, 4a: `vcs`, 4c-1: `dashboard`, 4c-2: `tracker`, 4c-3: `notify` — ролі, які ядро кличе
         self.assertEqual(dm.ROLES_RESERVED, ())
         self.assertEqual(dm.ROLE_FUNCTIONS['vcs'], ('status', 'push', 'pull'))
-        self.assertEqual(dm.LEGACY_ROLES, ('publish', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))   # у ЛІГА `vcs` — зашитий шлях, як `publish`; 4c-1: і `dashboard`; 4c-2: і `tracker`; 4c-3: і `notify`
+        self.assertEqual(dm.IMPLICIT_ROLES, ('publish', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))   # у ЛІГА `vcs` — зашитий шлях, як `publish`; 4c-1: і `dashboard`; 4c-2: і `tracker`; 4c-3: і `notify`
         # що з ролей ЛІГА лишається `'legacy'` у `capabilities()`, коли роль не вирішилась: без `comments` (спільний Supabase ЛІГА)
-        self.assertEqual(dm.LEGACY_ON_ERROR_ROLES, ('publish', 'vcs'))
-        self.assertTrue(set(dm.LEGACY_ON_ERROR_ROLES) <= set(dm.LEGACY_ROLES))
+        self.assertEqual(dm.IMPLICIT_ON_ERROR_ROLES, ('publish', 'vcs'))
+        self.assertTrue(set(dm.IMPLICIT_ON_ERROR_ROLES) <= set(dm.IMPLICIT_ROLES))
         self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS, {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',)})
 
 

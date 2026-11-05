@@ -15,6 +15,14 @@ class Implicit:
     def __repr__(self):
         return f'Implicit({self.role!r})'
 
+    # ⛔ МІСТ 4d-2 Task 3→5: прибирається в Task 6 разом з охоронцем літерала. Поки `serve.py` і `bin/` порівнюють постачальника
+    # з `'legacy'` (вони переходять на `isinstance` у Task 4), `Implicit` дорівнює цьому рядку — інакше їхні гілки мовчки зламались би.
+    def __eq__(self, other):
+        return other == 'legacy' or other is self
+
+    def __hash__(self):
+        return hash('legacy')       # ⛔ МІСТ 4d-2 Task 3→5: узгоджено з `__eq__`; прибирається в Task 6
+
 
 #: Ролі із зашитим шляхом ЛІГИ (колишні `LEGACY_ROLES`; склад і порядок ті самі).
 IMPLICIT_ROLES = ('publish', 'comments', 'vcs', 'dashboard', 'tracker', 'notify')

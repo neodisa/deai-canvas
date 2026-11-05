@@ -369,12 +369,12 @@ class DashboardRole(tm.Env):
         self.assertNotIn('dashboard', dm.ROLES_RESERVED)
         self.assertEqual(dm.ROLE_FUNCTIONS['dashboard'], ('rows', 'push'))
         self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS['dashboard'], ('open_comments',))
-        self.assertIn('dashboard', dm.LEGACY_ROLES)
+        self.assertIn('dashboard', dm.IMPLICIT_ROLES)
 
     def test_the_league_path_of_the_dashboard_is_not_a_fallback_after_an_error(self):
         """⛔ Зашитий шлях дашборда — спільний Supabase ЛІГИ (рядки команди, картки проєктів), тож, як `comments`, «через
-        помилку» на нього не переходимо: `dashboard` НЕ в `LEGACY_ON_ERROR_ROLES`."""
-        self.assertNotIn('dashboard', dm.LEGACY_ON_ERROR_ROLES)
+        помилку» на нього не переходимо: `dashboard` НЕ в `IMPLICIT_ON_ERROR_ROLES`."""
+        self.assertNotIn('dashboard', dm.IMPLICIT_ON_ERROR_ROLES)
 
     def test_a_dashboard_module_needs_rows_and_push(self):
         self.mk('dash-bare', roles=('dashboard',), server=tm.CHECK_ONLY)

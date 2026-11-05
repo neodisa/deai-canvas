@@ -23,7 +23,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 BEFORE = os.path.join(_HERE, 'fixtures', 'implicit', 'before-4d2.json')
 
 ROLES = ('comments', 'dashboard', 'notify', 'publish', 'tokens', 'tracker', 'vcs')       # `deai_modules.ROLES_CALLED`, відсортовано
-LEGACY_ROLES = ('comments', 'dashboard', 'notify', 'publish', 'tracker', 'vcs')          # `deai_modules.LEGACY_ROLES`
+LEGACY_ROLES = ('comments', 'dashboard', 'notify', 'publish', 'tracker', 'vcs')          # `deai_modules.IMPLICIT_ROLES`
 ENVS = ('a_seam', 'b_dc_tasks_file', 'c_dc_no_overview')
 
 
@@ -364,6 +364,155 @@ class EffectiveSpace(unittest.TestCase):
         with mock.patch.object(spaces, 'active_space', return_value=sentinel):
             with spaces.request_space('alpha'):
                 self.assertIs(spaces.effective_space(), sentinel)
+
+
+class ProviderImplicit(unittest.TestCase):
+    """4d-2 Task 3: `deai_modules` віддає `Implicit` замість рядка `'legacy'`; назовні лишається `'legacy'` (`api_value`)."""
+
+    def setUp(self):
+        import deai_modules as dm
+        self.dm = dm
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        p = _clean_env()
+        p.start()
+        self.addCleanup(p.stop)
+        for k in _ENV:
+            os.environ.pop(k, None)
+        spaces.clear_request_space()
+        self.addCleanup(spaces.clear_request_space)
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+
+    def _counters(self):
+        """Лічильники читань реєстру, `space.json` і каталогу (обгортки `wraps`: поведінку не міняють)."""
+        out = []
+        for obj, name in ((spaces, 'load_registry'), (self.dm, 'space_modules'), (self.dm, 'catalog')):
+            m = mock.patch.object(obj, name, wraps=getattr(obj, name))
+            out.append(m.start())
+            self.addCleanup(m.stop)
+        return out
+
+    def _assert_implicit_roles(self):
+        reads = self._counters()
+        for role in self.dm.ROLES_CALLED:
+            p = self.dm.provider(role)
+            if role in implicit.IMPLICIT_ROLES:
+                self.assertIsInstance(p, implicit.Implicit, role)
+                self.assertIs(p, implicit.for_role(role), role)
+            else:
+                self.assertIsNone(p, role)
+        self.assertIsNone(self.dm.provider('tokens'))
+        for m in reads:
+            m.assert_not_called()
+
+    def test_layer_off_is_implicit_without_reads(self):
+        os.environ['DC_TASKS_FILE'] = os.path.join(self.tmp.name, 'tasks.json')
+        self.assertFalse(spaces.layer_on())
+        self._assert_implicit_roles()
+
+    def test_unfixed_request_space_is_implicit_without_reads(self):
+        os.environ['DEAI_HOME'] = os.path.join(self.tmp.name, 'deai')
+        self.assertTrue(spaces.layer_on())
+        self.assertIsNone(spaces.request_space_id())
+        self._assert_implicit_roles()
+
+    def test_provider_none_when_no_space(self):
+        os.environ['DEAI_HOME'] = os.path.join(self.tmp.name, 'deai')
+        with mock.patch.object(spaces, 'effective_space', return_value=None):
+            for role in self.dm.ROLES_CALLED:
+                self.assertIsNone(self.dm.provider(role), role)
+        with spaces.request_space(''):                      # запит прямо каже «без простору»
+            self.assertIsNone(self.dm.provider('publish'))
+
+    def test_provider_uses_effective_space_seam(self):
+        """`provider(role)` без простору бере його ТІЛЬКИ з шва `spaces.effective_space()`."""
+        sentinel = {'id': 'seam-probe', 'path': ''}
+        with mock.patch.object(spaces, 'effective_space', return_value=sentinel) as eff, \
+                mock.patch.object(self.dm, '_provider_for', return_value='probe') as pf:
+            self.assertEqual(self.dm.provider('publish'), 'probe')
+        eff.assert_called_once_with()
+        pf.assert_called_once_with('publish', sentinel)
+
+    def test_explicit_space_does_not_use_seam(self):
+        with mock.patch.object(spaces, 'effective_space', side_effect=AssertionError('seam')), \
+                mock.patch.object(self.dm, '_provider_for', return_value='probe') as pf:
+            self.assertEqual(self.dm.provider('publish', {'id': 'x', 'path': self.tmp.name}), 'probe')
+        pf.assert_called_once()
+
+    def test_provider_for_implicit_space_does_not_read_space_json_in_cwd(self):
+        """⛔ `_provider_for(role, dict(spaces.IMPLICIT))` не кличе `space_modules`: `space.json` у ПОТОЧНІЙ теці процесу
+        (порожній шлях неявного простору — не «поточна тека») не читається, навіть зіпсований."""
+        work = os.path.join(self.tmp.name, 'cwd')
+        os.makedirs(work)
+        with open(os.path.join(work, 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{не json')
+        reads = self._counters()
+        old = os.getcwd()
+        os.chdir(work)
+        self.addCleanup(os.chdir, old)
+        for role in self.dm.ROLES_CALLED:
+            p = self.dm._provider_for(role, dict(spaces.IMPLICIT))
+            if role in implicit.IMPLICIT_ROLES:
+                self.assertIs(p, implicit.for_role(role), role)
+            else:
+                self.assertIsNone(p, role)
+        for m in reads:
+            m.assert_not_called()
+
+    def test_provider_for_plain_space_without_integrations_has_no_implicit(self):
+        sp = {'id': 'plain', 'path': os.path.join(self.tmp.name, 'plain')}
+        os.makedirs(sp['path'])
+        for role in implicit.IMPLICIT_ROLES:
+            self.assertNotIsInstance(self.dm._provider_for(role, sp), implicit.Implicit, role)
+
+    def test_provider_for_integrations_space_returns_implicit(self):
+        sp = {'id': 'liga2', 'path': os.path.join(self.tmp.name, 'liga2'), 'integrations': True}
+        os.makedirs(sp['path'])
+        for role in implicit.IMPLICIT_ROLES:
+            self.assertIs(self.dm._provider_for(role, sp), implicit.for_role(role), role)
+        self.assertIsNone(self.dm._provider_for('tokens', sp))
+
+    def test_role_constants_renamed(self):
+        dm = self.dm
+        self.assertIs(dm.IMPLICIT_ROLES, implicit.IMPLICIT_ROLES)
+        self.assertEqual(dm.IMPLICIT_ON_ERROR_ROLES, ('publish', 'vcs'))
+        self.assertEqual(dm.STRICT_IMPLICIT_ROLES, ('comments', 'dashboard', 'tracker', 'notify'))
+        for gone in ('LEGACY_ROLES', 'LEGACY_ON_ERROR_ROLES', 'STRICT_LEGACY_ROLES'):
+            self.assertFalse(hasattr(dm, gone), gone)
+
+    def test_api_value(self):
+        dm = self.dm
+        self.assertEqual(dm.API_IMPLICIT, 'legacy')
+        for role in implicit.IMPLICIT_ROLES:
+            self.assertEqual(dm.api_value(implicit.for_role(role)), 'legacy')
+        self.assertIsNone(dm.api_value(None))
+        mod = dm.Module.__new__(dm.Module)
+        mod.id = 'acme'
+        self.assertEqual(dm.api_value(mod), 'acme')
+        for bad in ('legacy', 'acme', 0, {}, object()):
+            with self.assertRaises(TypeError):
+                dm.api_value(bad)
+
+    def test_capabilities_match_before_4d2_snapshot(self):
+        """`capabilities()` після переходу на `Implicit` дає ті самі значення, що 0.15.0 (знімок `caps`): публічний контракт."""
+        import make_before_4d2 as gen
+        with open(BEFORE, encoding='utf-8') as f:
+            want = json.load(f)['caps']
+        with tempfile.TemporaryDirectory(prefix='caps-4d2-') as tmp:
+            tmp = os.path.normpath(tmp)
+            home = os.path.join(tmp, 'home')
+            os.makedirs(home)
+            with mock.patch.dict(os.environ, {'HOME': home}):
+                for name in gen.CLEAN:
+                    os.environ.pop(name, None)
+                got = gen.caps(tmp)
+        self.assertEqual(sorted(got), sorted(want))
+        for name in want:
+            self.assertEqual(got[name]['caps'], want[name]['caps'], name)
+            for role, v in got[name]['caps'].items():
+                self.assertIs(type(v), type(want[name]['caps'][role]), (name, role))     # `str`/`None`, не `Implicit`
+        self.assertEqual(want['liga']['caps']['publish'], 'legacy')                        # знімок справді несе `'legacy'`
 
 
 if __name__ == '__main__':

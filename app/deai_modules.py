@@ -68,7 +68,7 @@
     `capabilities()` у всіх цих випадках — `comments: None` + `error`; простір без жодного запису про коментарі — просто
     `None` без помилки.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
-    ключ `error` (див. функцію). Ролі шляху ЛІГА (`LEGACY_ROLES`: `publish`, `comments`, `vcs`, `dashboard`, `tracker`, `notify`) без модуля дають `'legacy'`.
+    ключ `error` (див. функцію). Ролі шляху ЛІГА (`IMPLICIT_ROLES`: `publish`, `comments`, `vcs`, `dashboard`, `tracker`, `notify`) без модуля дають `'legacy'`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
     `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
     явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
@@ -92,6 +92,7 @@ import types
 from collections import OrderedDict
 from urllib.parse import quote, unquote, unquote_plus
 
+import implicit
 import module_trust
 import spaces
 from atomic_io import atomic_write_json
@@ -110,21 +111,24 @@ ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('
                   'tracker': ('statuses',), 'notify': ('mute_state', 'mute_set')}
 #: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
 ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',)}
-#: Ролі, що мають зашитий шлях ЛІГА: простір з `integrations` без явного модуля дає `'legacy'` (а не `None`).
-LEGACY_ROLES = ('publish', 'comments', 'vcs', 'dashboard', 'tracker', 'notify')
-#: Які з `LEGACY_ROLES` `capabilities()` лишає `'legacy'`, коли роль не вдалось вирішити (`ModuleError`, збій відбитків): зашитий
+#: Ролі, що мають зашитий шлях ЛІГА: простір з `integrations` без явного модуля дає `Implicit` (а не `None`); таблиця — в `implicit.py`.
+IMPLICIT_ROLES = implicit.IMPLICIT_ROLES
+#: Значення неявного постачальника НАЗОВНІ (`capabilities` у `/api/*`): до 4d-3: публічний контракт — рядок `'legacy'`, не `'implicit'`.
+#: Єдине місце, де цей літерал живе в ядрі; решта коду працює з `Implicit` і виходить назовні лише через `api_value()`.
+API_IMPLICIT = 'legacy'
+#: Які з `IMPLICIT_ROLES` `capabilities()` лишає `'legacy'`, коли роль не вдалось вирішити (`ModuleError`, збій відбитків): зашитий
 #: шлях `publish` і `vcs` — локальний. Без `comments`: його зашитий шлях — СПІЛЬНИЙ Supabase ЛІГА, куди піни несуть знімки
 #: приватних макетів, тож «через помилку» на нього не переходимо (див. `_provider_for`). Без `dashboard` з тієї ж причини:
 #: його зашитий шлях — теж спільний Supabase ЛІГА (рядки команди й картки проєктів), не локальний. Без `tracker` (4c-2): його
 #: зашитий шлях — сайт Jira ЛІГИ (`jira_base` у конфігу установки, облікові людини), а не локальна дія; «через помилку» ним
 #: не ходимо — нема певності, що простір узагалі мусить там бути. Без `notify` (4c-3): його зашитий шлях — спільний Supabase ЛІГИ
 #: й ЖИВИЙ канал Teams команди (тиша на канал), а не локальна дія.
-LEGACY_ON_ERROR_ROLES = ('publish', 'vcs')
+IMPLICIT_ON_ERROR_ROLES = ('publish', 'vcs')
 #: Ролі, чий зашитий шлях ЛІГА — СПІЛЬНИЙ Supabase (піни, рядки команди й картки) або сайт Jira ЛІГИ з обліковими людини
 #: (`tracker`, 4c-2) чи спільний Supabase ЛІГИ з живим каналом Teams (`notify`, 4c-3): нечитабельний `space.json` у просторі з
 #: інтеграціями для них — `space-json-unreadable`, а не `'legacy'` (не знаємо, чи людина не ввімкнула там свій модуль; див.
 #: `_provider_for`).
-STRICT_LEGACY_ROLES = ('comments', 'dashboard', 'tracker', 'notify')
+STRICT_IMPLICIT_ROLES = ('comments', 'dashboard', 'tracker', 'notify')
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
@@ -1774,7 +1778,7 @@ def _paper_failure(role, cat, explicit):
 
 
 def _provider_for(role, space, get_cat=None):
-    """Модуль, `'legacy'` (лише ролі `LEGACY_ROLES`) чи `None` — для вже відомого простору `space`.
+    """Модуль, `Implicit` (лише ролі `IMPLICIT_ROLES`) чи `None` — для вже відомого простору `space`.
     Простір з `integrations` і без жодного явно ввімкненого модуля — `'legacy'`/`None` ДО каталогу.
     Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
 
@@ -1790,11 +1794,15 @@ def _provider_for(role, space, get_cat=None):
     причини. Простір без жодного запису про коментарі лишається `None`. Для `publish` і `vcs` усе лишається як було: простір з
     інтеграціями без явного модуля — `'legacy'`, нечитабельний `space.json` у ньому шлях не ламає.
 
-    Нечитабельний `space.json` у просторі з інтеграціями — `space-json-unreadable` для КОЖНОЇ ролі з `STRICT_LEGACY_ROLES`
+    Нечитабельний `space.json` у просторі з інтеграціями — `space-json-unreadable` для КОЖНОЇ ролі з `STRICT_IMPLICIT_ROLES`
     (`comments`, `dashboard`, `tracker`, `notify`): їхній зашитий шлях — спільний Supabase ЛІГА (`tracker` — сайт Jira ЛІГИ), а не
     знаємо, чи людина не ввімкнула там свій модуль. `_enabled_module_is_lost` (зламаний явно ввімкнений модуль) — лише для `comments`."""
+    if spaces._is_implicit(space):
+        # ⛔ Неявний простір (ЛІГА без реєстру: шар вимкнено чи простір запиту не зафіксовано) — одразу, БЕЗ `space_modules` і каталогу:
+        # його порожній `path` інакше читався б як «поточна тека процесу» (`space.json` звідти). Закон колишнього `provider()`.
+        return implicit.for_role(role) if role in IMPLICIT_ROLES else None
     integrations = spaces.integrations_for(space)
-    strict = integrations and role in STRICT_LEGACY_ROLES
+    strict = integrations and role in STRICT_IMPLICIT_ROLES
     if integrations:
         try:
             explicit = space_modules(space)
@@ -1803,7 +1811,7 @@ def _provider_for(role, space, get_cat=None):
                 raise                                       # не знаємо, що людина вмикала: на спільний сервіс не йдемо
             explicit = {}                                   # пошкоджений файл не ламає шлях ЛІГА
         if not any(e['enabled'] for e in explicit.values()):
-            return 'legacy' if role in LEGACY_ROLES else None
+            return implicit.for_role(role) if role in IMPLICIT_ROLES else None
     else:
         explicit = space_modules(space)
     cat = get_cat() if get_cat is not None else catalog(space)
@@ -1815,29 +1823,31 @@ def _provider_for(role, space, get_cat=None):
         m = cat[mid]
         if m.status != 'ok' or role not in m.roles:
             continue
-        en, implicit = _enabled_in(m, space, explicit)
+        en, by_default = _enabled_in(m, space, explicit)      # `by_default` — не `implicit`: не затіняти модуль `implicit`
         if en:
-            winners.append((implicit, mid, m))
+            winners.append((by_default, mid, m))
     if winners:
         winners.sort(key=lambda w: (w[0], w[1]))        # явно ввімкнений — перед неявним
         return winners[0][2]
     if role == 'comments' and _enabled_module_is_lost(cat, explicit):
         raise ModuleError('module-error', message=COMMENTS_MODULE_BROKEN)
-    if role in LEGACY_ROLES and integrations:
-        return 'legacy'
+    if role in IMPLICIT_ROLES and integrations:
+        return implicit.for_role(role)
     return None
 
 
 def provider(role, space=None):
-    """Хто виконує роль у просторі: `Module`, `'legacy'` (зашитий шлях ЛІГА; ролі `LEGACY_ROLES` — `publish`,
+    """Хто виконує роль у просторі: `Module`, `Implicit` (зашитий шлях ЛІГА; ролі `IMPLICIT_ROLES` — `publish`,
     `comments`, `vcs`, `dashboard`, `tracker` і `notify`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); в інших ролей його нема.
+    Назовні (`/api/*`) `Implicit` — рядок `'legacy'` лише через `api_value()`.
 
-    `space` — запис реєстру; не заданий → простір запиту (`spaces.active_space()`). Шар вимкнено чи
-    простір запиту НЕ зафіксовано (`request_space_id() is None`: інструменти ЛІГА, воркери, тести без
-    ізоляції) → `'legacy'` для `publish`, `comments`, `vcs`, `dashboard`, `tracker` і `notify`, `None` для інших ролей — БЕЗ читання реєстру, `space.json` і
-    каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА). Явно переданий `space` вирішується сам по собі, незалежно
+    `space` — запис реєстру; не заданий → простір запиту з шва `spaces.effective_space()`: шар вимкнено чи простір запиту НЕ
+    зафіксовано (`request_space_id() is None`: інструменти ЛІГА, воркери, тести без ізоляції) → неявний простір, а в ньому
+    `Implicit` для `publish`, `comments`, `vcs`, `dashboard`, `tracker` і `notify` і `None` для інших ролей — БЕЗ читання реєстру,
+    `space.json` і каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА);
+    простору нема (`None`) → `None`. Явно переданий `space` вирішується сам по собі, незалежно
     від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
-    `integrations` і роль із `LEGACY_ROLES` → `'legacy'`; інакше `None`. Каталог — з СВОЇМИ модулями простору
+    `integrations` і роль із `IMPLICIT_ROLES` → `Implicit`; інакше `None`. Каталог — з СВОЇМИ модулями простору
     (`catalog(space)`): явно ввімкнений свій модуль, що тут не працює, веде роль «на папері» — `ModuleError`
     (`module-untrusted`/`module-error`), без запасного шляху (`_paper_failure`).
     ⚠️ НІКОЛИ не кликати під `spaces.WRITE_LOCK`: для простору запиту це `spaces.active_space()`, а той може
@@ -1845,12 +1855,23 @@ def provider(role, space=None):
     не прочитати) і `ModuleError('space-json-unreadable')` (простір без інтеграцій, `space.json` є, але не
     читається) — для списків і опитування є `capabilities()`, яка не кидає."""
     if space is None:
-        if not spaces.layer_on() or spaces.request_space_id() is None:
-            return 'legacy' if role in LEGACY_ROLES else None
-        space = spaces.active_space()
+        space = spaces.effective_space()
         if space is None:
             return None
     return _provider_for(role, space)
+
+
+def api_value(p):
+    """Єдина точка відображення постачальника НАЗОВНІ: `Module` → його id, `Implicit` → `API_IMPLICIT` (`'legacy'`, публічний
+    контракт до 4d-3), `None` → `None`. Усе інше (зокрема голий рядок) — `TypeError`: тихе «пропустити як є» знову розмило б
+    межу між внутрішнім `Implicit` і зовнішнім літералом."""
+    if p is None:
+        return None
+    if isinstance(p, Module):
+        return p.id
+    if isinstance(p, implicit.Implicit):
+        return API_IMPLICIT
+    raise TypeError(f'постачальник ролі: очікувано Module, Implicit чи None, отримано {type(p).__name__}')
 
 
 def own_sig(space):
@@ -1916,21 +1937,21 @@ def capabilities(space):
         for role in ROLES_CALLED:
             try:
                 p = _provider_for(role, space, get_cat)
-                caps[role] = p.id if isinstance(p, Module) else p
+                caps[role] = api_value(p)
             except ModuleError as e:
                 if getattr(e, 'paper', False):
                     caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
                     continue                # `error` — клієнт читає `error` як «space.json не читається» й сховав би картки
                 error = error or e.code
-                caps[role] = 'legacy' if role in LEGACY_ON_ERROR_ROLES and spaces.integrations_for(space) else None
+                caps[role] = API_IMPLICIT if role in IMPLICIT_ON_ERROR_ROLES and spaces.integrations_for(space) else None
         if error:
             caps['error'] = error
         with _STATE_LOCK:
             _CAPS[sid] = (key, dict(caps))
         return dict(caps)
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
-        legacy = 'legacy' if space.get('integrations') is True else None
-        caps = {role: legacy if role in LEGACY_ON_ERROR_ROLES else None for role in ROLES_CALLED}
+        legacy = API_IMPLICIT if space.get('integrations') is True else None
+        caps = {role: legacy if role in IMPLICIT_ON_ERROR_ROLES else None for role in ROLES_CALLED}
         caps['error'] = 'module-error'
         return caps
 

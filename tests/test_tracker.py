@@ -157,14 +157,14 @@ class TrackerRole(tm.Env):
         self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))
         self.assertEqual(dm.ROLES_RESERVED, ())
         self.assertEqual(dm.ROLE_FUNCTIONS['tracker'], ('statuses',))
-        self.assertIn('tracker', dm.LEGACY_ROLES)
-        self.assertIn('tracker', dm.STRICT_LEGACY_ROLES)
+        self.assertIn('tracker', dm.IMPLICIT_ROLES)
+        self.assertIn('tracker', dm.STRICT_IMPLICIT_ROLES)
         self.assertIn('jira-tracker', dm.KNOWN_OTHER_MODULES)
 
     def test_the_league_path_of_the_tracker_is_not_a_fallback_after_an_error(self):
         """⛔ Зашитий шлях трекера — сайт Jira ЛІГИ з обліковими людини, тож «через помилку» на нього не переходимо:
-        `tracker` НЕ в `LEGACY_ON_ERROR_ROLES`."""
-        self.assertNotIn('tracker', dm.LEGACY_ON_ERROR_ROLES)
+        `tracker` НЕ в `IMPLICIT_ON_ERROR_ROLES`."""
+        self.assertNotIn('tracker', dm.IMPLICIT_ON_ERROR_ROLES)
 
     def test_a_tracker_module_needs_statuses(self):
         self.mk('trk-bare', roles=('tracker',), server=tm.CHECK_ONLY)
