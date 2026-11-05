@@ -227,7 +227,7 @@ UNCONFIGURED = 'Supabase не налаштовано'
 
 
 def legacy_ctx(url, key, space_id=''):
-    """`ctx` неявного постачальника ЛІГИ (`'legacy'`): `supabase-dashboard` з адресою й ключем конфігу установки і таблицею
+    """`ctx` неявного постачальника ЛІГИ (`Implicit`): `supabase-dashboard` з адресою й ключем конфігу установки і таблицею
     `overview_projects`. `url`/`key` — з `supabase_config()` викликача (`serve` кличе СВОЮ обгортку: її підміняють тести);
     нема конфігу (`url is None`) — `ModuleError('dashboard-unconfigured')` з текстом, який на екрані «Команда» був і раніше.
 

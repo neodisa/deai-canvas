@@ -53,7 +53,7 @@
     `module-error` без значень секретів, ≤300 символів; виняток-першоджерело не чіпляється до
     нового (`__cause__`/`__context__` порожні), щоб секрет не виїхав у traceback.
   * Шлях ЛІГА недоторканий: `provider()` для простору запиту, що не зафіксований (чи шар вимкнено),
-    віддає `'legacy'`/`None` НЕ читаючи ні реєстр, ні `space.json`, ні каталог; простір з `integrations`
+    віддає неявного постачальника (`Implicit`) чи `None` НЕ читаючи ні реєстр, ні `space.json`, ні каталог; простір з `integrations`
     без жодного явно ввімкненого модуля — те саме, ДО каталогу (зламаний вбудований модуль чи
     пошкоджений `space.json` не зачепить зашитий шлях). У просторі БЕЗ інтеграцій `provider()` мусить
     знати явні рішення, тож нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)`.
@@ -62,13 +62,13 @@
     не можна. Нечитабельний `space.json` — `space-json-unreadable`; явно ввімкнений запис, що ВІВ коментарі й загубився
     (його маніфест оголошує `comments`; або маніфест не розібрано, а id не належить вбудованому модулю іншої ролі; або
     це відсутній вбудований модуль коментарів — точне правило в `_enabled_module_is_lost`), — `module-error`
-    (`COMMENTS_MODULE_BROKEN`); `'legacy'` лише коли такого запису нема. Застарілий запис чужого модуля шлях ЛІГА не
+    (`COMMENTS_MODULE_BROKEN`); неявний постачальник (`Implicit`) — лише коли такого запису нема. Застарілий запис чужого модуля шлях ЛІГА не
     вимикає. ВИДИМІСТЬ: той самий `module-error` — і в просторі БЕЗ інтеграцій (там запасного шляху нема, але тиша
     «коментарів немає» без причини була б брехнею): сторінка канваса показує примітку, `comment-config` віддає код,
     `capabilities()` у всіх цих випадках — `comments: None` + `error`; простір без жодного запису про коментарі — просто
     `None` без помилки.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
-    ключ `error` (див. функцію). Ролі шляху ЛІГА (`IMPLICIT_ROLES`: `publish`, `comments`, `vcs`, `dashboard`, `tracker`, `notify`) без модуля дають `'legacy'`.
+    ключ `error` (див. функцію). Ролі шляху ЛІГА (`IMPLICIT_ROLES`: `publish`, `comments`, `vcs`, `dashboard`, `tracker`, `notify`) без модуля дають неявного постачальника (`Implicit`).
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
     `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
     явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
@@ -1717,7 +1717,7 @@ def check(space, module_id):
 #: «загубився модуль коментарів» від «лежить застарілий запис якогось іншого модуля» потрібно (див.
 #: `_enabled_module_is_lost`). Новий вбудований модуль — у котрийсь із двох списків (інваріант у `test_comments_role.py`).
 KNOWN_COMMENTS_MODULES = frozenset({'supabase-comments'})
-# ⚠️ Явно ввімкнений, але зламаний ВБУДОВАНИЙ `supabase-dashboard` у просторі з інтеграціями лишається `'legacy'` (той самий
+# ⚠️ Явно ввімкнений, але зламаний ВБУДОВАНИЙ `supabase-dashboard` у просторі з інтеграціями лишається неявним постачальником (`Implicit`; той самий
 # продукт); рольова перевірка загубленого модуля для `dashboard` — відкладена.
 KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'git-sync', 'static-publish', 'vercel-publish',
                                 'supabase-dashboard', 'jira-tracker', 'supabase-teams'})
@@ -1757,7 +1757,7 @@ def _paper_failure(role, cat, explicit):
     """`ModuleError` для ролі `role`, яку «на папері» веде явно ввімкнений СВІЙ модуль, що тут не працює, — або `None`.
     Модуль у каталозі, свій і не `ok` → `module-untrusted` (недовірений) чи `module-error`; модуля в каталозі нема, а
     запис `space.json` несе `roles` із цією роллю (їх пише вмикання свого модуля) → `module-error` (тека не приїхала чи
-    зникла). Позначка `paper` каже `capabilities`, що роль — `None`, а не запасний `'legacy'`."""
+    зникла). Позначка `paper` каже `capabilities`, що роль — `None`, а не запасний неявний постачальник (`Implicit`)."""
     for mid in sorted(explicit):
         e = explicit[mid]
         if not e['enabled']:
@@ -1779,20 +1779,20 @@ def _paper_failure(role, cat, explicit):
 
 def _provider_for(role, space, get_cat=None):
     """Модуль, `Implicit` (лише ролі `IMPLICIT_ROLES`) чи `None` — для вже відомого простору `space`.
-    Простір з `integrations` і без жодного явно ввімкненого модуля — `'legacy'`/`None` ДО каталогу.
+    Простір з `integrations` і без жодного явно ввімкненого модуля — неявний постачальник (`Implicit`) чи `None` ДО каталогу.
     Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
 
     СВІЙ модуль, ЯВНО ввімкнений у `space.json` і не робочий тут (недовірений, `refused`, збій завантаження, теки нема), веде
     свої ролі «на папері» (`_paper_failure`): `module-untrusted`/`module-error` для БУДЬ-ЯКОЇ такої ролі й у будь-якому
-    просторі, ДО пошуку переможця — ні неявного `static-publish`, ні `'legacy'`. Помилка несе позначку `paper`.
+    просторі, ДО пошуку переможця — ні неявного `static-publish`, ні неявного постачальника (`Implicit`). Помилка несе позначку `paper`.
     `get_cat` — ледача вибірка каталогу (`capabilities` ділить її між ролями); без неї — `catalog(space)`.
 
     ВИНЯТОК для `comments` (див. docstring модуля, «приватність» і «видимість»): явно ввімкнений модуль коментарів, що не
     завантажився (`_enabled_module_is_lost`), — `module-error` у БУДЬ-ЯКОМУ просторі, а не тиша: у просторі з інтеграціями
-    мовчазне `'legacy'` повело б піни в спільний Supabase ЛІГА (і нечитабельний `space.json` там — теж
+    мовчазний неявний постачальник (`Implicit`) повів би піни в спільний Supabase ЛІГА (і нечитабельний `space.json` там — теж
     `space-json-unreadable`), а у просторі без них `None` лишив би людину без командних коментарів і без жодної
     причини. Простір без жодного запису про коментарі лишається `None`. Для `publish` і `vcs` усе лишається як було: простір з
-    інтеграціями без явного модуля — `'legacy'`, нечитабельний `space.json` у ньому шлях не ламає.
+    інтеграціями без явного модуля — неявний постачальник (`Implicit`), нечитабельний `space.json` у ньому шлях не ламає.
 
     Нечитабельний `space.json` у просторі з інтеграціями — `space-json-unreadable` для КОЖНОЇ ролі з `STRICT_IMPLICIT_ROLES`
     (`comments`, `dashboard`, `tracker`, `notify`): їхній зашитий шлях — спільний Supabase ЛІГА (`tracker` — сайт Jira ЛІГИ), а не
@@ -1817,7 +1817,7 @@ def _provider_for(role, space, get_cat=None):
     cat = get_cat() if get_cat is not None else catalog(space)
     paper = _paper_failure(role, cat, explicit)
     if paper is not None:
-        raise paper                                     # свій модуль веде роль на папері: ні неявного, ні `'legacy'`
+        raise paper                                     # свій модуль веде роль на папері: ні неявного `static-publish`, ні неявного постачальника (`Implicit`)
     winners = []
     for mid in sorted(cat):
         m = cat[mid]

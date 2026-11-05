@@ -1069,7 +1069,7 @@ def gitlab_status(task, gl, meta, it, vcs=None):
            'remote_path': gl['path'], 'web': _mask_repo(st['web']) if isinstance(st.get('web'), str) else None,
            'label': _mask_repo(st['label']) if isinstance(st.get('label'), str) and st['label'] else 'Git'}
     if v[2]:
-        # Простір ЛІГА (`'legacy'`): «Історія» й підпис — як у 0.7.0 (будь-який `git@host:`, і з IP, «GitLab»), до 4d.
+        # Простір ЛІГА (неявний постачальник, `Implicit`): «Історія» й підпис — як у 0.7.0 (будь-який `git@host:`, і з IP, «GitLab»), до 4d.
         out['web'], out['label'] = gitlab_web(gl), 'GitLab'
     return out
 
@@ -3345,9 +3345,9 @@ class ProjectComments:
     ЛІГА (4b-2) — вбудований `supabase-comments` з конфігом установки й каналом `comment_channel`.
 
     Простір запиту мусить бути ЗАФІКСОВАНИМ (`task_anywhere`, `_take_task`): `comments_provider` без нього ігнорує `space` і
-    віддав би `'legacy'` (так працюють інструменти ЛІГА без простору). Тут це НЕ годиться: викликач передав запис простору,
+    віддав би неявного постачальника (`Implicit`; так працюють інструменти ЛІГА без простору). Тут це НЕ годиться: викликач передав запис простору,
     а запиту без простору немає — це `broken` (`module-error`), а не спільний Supabase. `space=None` без простору запиту — як
-    раніше (`'legacy'`, інструменти ЛІГА).
+    раніше (`Implicit`, інструменти ЛІГА).
 
     Усі `ModuleError` назовні — з ОЧИЩЕНИМ текстом (`agent_error`): текст винятку кидає код модуля, а його друкують у термінал.
 
@@ -4414,7 +4414,7 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
 #                `_publish_by_url`: без теки, результат — адреса й `state` (ходить лише сам модуль; з ядра так само
 #                нічого назовні).
 # Коментарі превʼю (2b-2) НЕ залежать від того, хто публікує: на КОЖНОМУ шляху їх вирішує `publish_comments` — з
-# постачальника ролі `comments` простору публікації, один раз, ДО збірки. Supabase ЛІГИ з конфігу установки (`'legacy'`) їде лише у
+# постачальника ролі `comments` простору публікації, один раз, ДО збірки. Supabase ЛІГИ з конфігу установки (неявний постачальник, `Implicit`) їде лише у
 # збірку самої ЛІГА; модуль коментарів (будь-який) — у всі три шляхи; відмова — без коментарів і `comments_unavailable`.
 # ⛔ Усі помічники — МОДУЛЬНІ функції, а не методи `Handler`: зовнішні заглушки обробника
 # (`boss_autopublish.py`) мають лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод
@@ -4578,7 +4578,7 @@ def publish_with_module(h, prov, payload):
         return
     gate_pw = ctx['secrets'].get('password') or None
     # Коментарі превʼю: з постачальника ролі `comments` ЦЬОГО простору, раз, ДО збірки (`publish_comments`). Зашитий
-    # Supabase ЛІГА (`'legacy'`) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
+    # Supabase ЛІГА (неявний постачальник, `Implicit`) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
     # модуля (до `CHECK_TIMEOUT` = 5 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
     # для другого кліку (його `publish-busy` приходить тепер лише коли справді йде збірка чи копіювання).
     comments, comments_warn = publish_comments(space, task, tid, module_publish=True)
@@ -6329,7 +6329,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         prov = space = None
         if ch == 'project':
-            # Командний канал — лише коли його комусь віддано: ЛІГА (`'legacy'`, інтеграції) чи модуль ролі
+            # Командний канал — лише коли його комусь віддано: ЛІГА (`Implicit`, інтеграції) чи модуль ролі
             # `comments`; `local` працює скрізь. Не вдалось вирішити (`ModuleError`) — центральна відповідь модулів.
             # Простір — ОДИН раз: з нього постачальник, конфіг і канал.
             space = spaces.active_space()

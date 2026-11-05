@@ -75,7 +75,7 @@ def check_set_args(channel, muted, by):
 
 
 def legacy_ctx(url, key, space_id=''):
-    """`ctx` неявного постачальника ЛІГИ (`'legacy'`): `supabase-teams` з адресою й ключем із конфігу установки
+    """`ctx` неявного постачальника ЛІГИ (`Implicit`): `supabase-teams` з адресою й ключем із конфігу установки
     (`supabase_config()` викликача — той самий, що в коментарів і дашборда). Нема конфігу (`url is None`) —
     `ModuleError('notify-unconfigured')` з текстом `UNCONFIGURED`.
 

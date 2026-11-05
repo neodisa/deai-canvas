@@ -90,7 +90,7 @@ def statuses(module, ctx, keys, *, timeout, socket_s, call=None):
 
 
 def legacy_ctx(base, email, token, space_id=''):
-    """`ctx` неявного постачальника ЛІГИ (`'legacy'`): `jira-tracker` з адресою, поштою й токеном конфігу установки
+    """`ctx` неявного постачальника ЛІГИ (`Implicit`): `jira-tracker` з адресою, поштою й токеном конфігу установки
     (`install_config.jira_config()`). `base`/`email`/`token` — з нього викликача; нема конфігу (`base is None`) —
     `ModuleError('tracker-unconfigured')` з текстом `UNCONFIGURED`.
 
