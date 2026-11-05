@@ -652,8 +652,11 @@ class NoLegacyLiteral(unittest.TestCase):
     `is`, `is not`) не має сторони — рядка `'legacy'` (у т. ч. у кортежі/списку/множині). Суворий AST замість регекса Task 4:
     ловить будь-який відступ рядка, а не лише рядки з `==`. `sp.get('legacy')` і словникові ключі — `Call`/`Constant`, не `Compare`.
 
-    ⛔ Дозволені місця — лише `ALLOWED`: пари `(файл відносно кореня, функція чи 'module')` з причиною. Зараз порожньо: `IMPLICIT`/
-    `_is_implicit` у `spaces.py` порівнюють з `IMPLICIT['id']`, а не з літералом, `BUILD_KINDS` і `--legacy` порівнянь не мають."""
+    ⛔ Дозволені місця — лише `ALLOWED`: пари `(файл відносно кореня, функція чи 'module')` з причиною. Зараз `ALLOWED` порожній:
+    `IMPLICIT`/`_is_implicit` у `spaces.py` порівнюють з `IMPLICIT['id']`, а не з літералом, `BUILD_KINDS` і `--legacy` порівнянь
+    не мають, тож винятки не потрібні.
+
+    `ops/` поза охороною навмисно: `ops/reseal_gate.py` порівнює зовсім інший `kind` (не значення постачальника)."""
 
     ALLOWED = {}        # {(файл, функція): причина}
 
@@ -741,7 +744,7 @@ class IsolatedInstallConfig(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.n = 0
 
-    def run_case(self, root, mode, env=None, files=False):
+    def run_case(self, root, mode, env=None, files=False, fn=None):
         """`(supabase_config(), jira_config())` для кореня `root` у режимі `mode` (`tasks_file`/`no_overview`/`none` — без ізоляції)."""
         self.n += 1
         home = os.path.join(self.tmp.name, 'c%d' % self.n, 'home')
@@ -763,6 +766,8 @@ class IsolatedInstallConfig(unittest.TestCase):
                 os.environ['DC_TASKS_FILE'] = tasks
             elif mode == 'no_overview':
                 os.environ['DC_NO_OVERVIEW'] = '1'
+            if fn is not None:                             # інша функція конфігу в тому самому оточенні (напр. сервісний ключ)
+                return fn()
             return install_config.supabase_config(), install_config.jira_config()
 
     def test_supabase_isolated_ignores_env_when_root_has_no_pair(self):
@@ -811,6 +816,22 @@ class IsolatedInstallConfig(unittest.TestCase):
         self.assertEqual(self.run_case(root, 'none')[1], (None, None, None))
         self.assertEqual(self.run_case(root, 'none', self.ENV_ON)[1], (self.JIRA, 'alpha@example.com', 'jira_env_token'))
         self.assertEqual(self.run_case(root, 'none', None, True)[1], (self.JIRA, 'file@example.com', 'jira_file_token'))
+
+    def test_service_key_isolated_is_none_whatever_env_and_root(self):
+        """4d-2 (фінальне ревʼю): `service_key_config()` під тим самим законом, що `supabase_config()` — лише корінь файла,
+        а сервісного ключа корінь не має: в ізоляції завжди `(None, None)`, хоч би що лежало в оточенні."""
+        env = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_SERVICE_KEY': 'sb_service_env_key'}
+        for mode in self.MODES:
+            for root in (self.ROOT_PAIR, self.ROOT_NONE, {**self.ROOT_PAIR, 'supabase_service_key': 'sb_service_root_key'}):
+                with self.subTest(mode=mode, root=sorted(root)):
+                    self.assertEqual(self.run_case(root, mode, env, fn=install_config.service_key_config), (None, None))
+
+    def test_service_key_outside_isolation_is_the_0_15_0_pair(self):
+        env = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_SERVICE_KEY': ' sb_service_env_key '}
+        self.assertEqual(self.run_case(self.ROOT_NONE, 'none', env, fn=install_config.service_key_config),
+                         ('https://sb-env.example.com', 'sb_service_env_key'))
+        self.assertEqual(self.run_case(self.ROOT_NONE, 'none', {'SUPABASE_URL': env['SUPABASE_URL']},
+                                       fn=install_config.service_key_config), (None, None))
 
     def test_outside_isolation_matches_the_0_15_0_snapshot(self):
         with open(BEFORE, encoding='utf-8') as f:

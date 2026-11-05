@@ -69,7 +69,15 @@ def service_key_config():
 
     ⛔ Це ОКРЕМА функція, а не четверте джерело `supabase_config()`: його читають і командні коментарі, і Teams, а сервісний
     ключ (повний доступ до проєкту) туди потрапляти не мусить. Лише пара — адреса з `SUPABASE_URL`, ключ з
-    `SUPABASE_SERVICE_KEY`: так адреса з одного джерела й ключ з іншого не змішуються."""
+    `SUPABASE_SERVICE_KEY`: так адреса з одного джерела й ключ з іншого не змішуються.
+
+    ⛔ Той самий закон ізоляції, що в `supabase_config()`: в ізольованому прогоні (`implicit.isolated()`: `DC_TASKS_FILE` чи
+    `DC_NO_OVERVIEW`) оточення НЕ читається. Корінь файла задач сервісного ключа не має (форми для нього нема, і заводити її
+    не варто: це найпривілейованіший секрет ЛІГИ), тож у ізоляції результат завжди `(None, None)`. Інакше тест чи демо під
+    `DC_TASKS_FILE` дістали б повний доступ до справжнього проєкту через `bin/overview_push.py` (`_legacy_config`). Поза
+    ізоляцією поведінка 0.15.0 без змін."""
+    if implicit.isolated():                            # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
+        return None, None
     url, key = os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_SERVICE_KEY')
     if isinstance(url, str) and isinstance(key, str):
         url, key = url.strip(), key.strip()

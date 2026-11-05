@@ -69,6 +69,9 @@ an automatic, backed-up migration of its config, 4d-4 the `integrations` flag an
    `~/.claude/pipeline-feedback/jira-*`. This includes someone who sets `DC_NO_OVERVIEW` on purpose: their environment and
    pipeline-feedback credentials are ignored, and they need the pair in the root of the tasks file. Outside isolation nothing
    changed.
+   The fallback service key follows the same rule: `service_key_config()` (`SUPABASE_URL` + `SUPABASE_SERVICE_KEY`, used by
+   `bin/overview_push.py`) returns `(None, None)` in an isolated run, because the root of the tasks file has no service-key
+   form. Outside isolation it is unchanged.
 2. **Internal API.** Providers are `Implicit` objects, not the string `'legacy'` (`provider()`, `comments_provider()`,
    `team_resolve()` and the like). The constants are renamed: `LEGACY_ROLES` → `IMPLICIT_ROLES`, `LEGACY_ON_ERROR_ROLES` →
    `IMPLICIT_ON_ERROR_ROLES`, `STRICT_LEGACY_ROLES` → `STRICT_IMPLICIT_ROLES`. No aliases.

@@ -171,18 +171,27 @@ class TestLegacyConfig(unittest.TestCase):
 
     NAMES = ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")
 
-    def _cfg(self, body, **env):
+    def _cfg(self, body, isolated=True, **env):
+        """`isolated=False` — запуск ПОЗА ізоляцією (4d-2: сервісний ключ з оточення діє лише так): без `DC_TASKS_FILE` і
+        `DC_NO_OVERVIEW`, «файл установки» підставлено заглушкою, а не справжній."""
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
         path = os.path.join(tmp, "tasks.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(body, f)
-        patcher = mock.patch.dict(os.environ, {"DC_TASKS_FILE": path, **env})
+        patcher = mock.patch.dict(os.environ, {"DC_TASKS_FILE": path, **env} if isolated else dict(env))
         patcher.start()
         self.addCleanup(patcher.stop)
         for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
             if k not in env:
                 os.environ.pop(k, None)
+        if not isolated:
+            for k in ("DC_TASKS_FILE", "DC_NO_OVERVIEW"):
+                os.environ.pop(k, None)
+            import install_config
+            p = mock.patch.object(install_config, "load_legacy_tasks", return_value=body)
+            p.start()
+            self.addCleanup(p.stop)
 
     def test_the_file_of_the_installation_wins(self):
         self._cfg({"supabase_url": "https://demo.supabase.example/", "supabase_key": "sk-test-file"},
@@ -190,8 +199,13 @@ class TestLegacyConfig(unittest.TestCase):
         self.assertEqual(ov._legacy_config(), ("https://demo.supabase.example", "sk-test-file"))
 
     def test_no_file_pair_the_service_key_pair_from_the_environment(self):
-        self._cfg({}, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
+        self._cfg({}, isolated=False, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
         self.assertEqual(ov._legacy_config(), ("https://env.supabase.example", "sk-test-service"))
+
+    def test_isolated_run_never_takes_the_service_key_from_the_environment(self):
+        """4d-2: під `DC_TASKS_FILE` сервісний ключ з оточення не читається — це найпривілейованіший секрет ЛІГИ."""
+        self._cfg({}, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
+        self.assertEqual(ov._legacy_config(), (None, None))
 
     def test_the_service_key_without_a_url_is_nothing(self):
         """Ключ без `SUPABASE_URL` не парується ні з чим: адреса й ключ — з одного джерела."""
