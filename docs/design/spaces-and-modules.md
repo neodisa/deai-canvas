@@ -556,7 +556,7 @@ of 4d-3. What is built:
 
 - **`app/liga_migrate.py`** (it imports `spaces`, `deai_modules`, `tracks`, `install_config` and `implicit`, never `serve`):
   `plan()` is a pure calculation, `run()` writes, `restore()` rolls back, `status()` reports, `startup()` is called by
-  `serve.main` before the port opens. The CLI is `bin/migrate_liga.py status|dry-run|run|restore <stamp> [--hold]`. The write
+  `serve_main` after the port is bound, before the first request (since 0.18; in 0.17 it ran before the port opened). The CLI is `bin/migrate_liga.py status|dry-run|run|restore <stamp> [--hold]`. The write
   order is a dated backup (`<DEAI_HOME>/backups/<stamp>-liga-4d3a/`, 0700/0600, a manifest with sha256), then the secrets
   (`secrets.json` under the id of the LIGA space; the originals stay), then ONE atomic write of `space.json` with the mark
   `migrations.liga-4d3a`. A cross-process `flock` guards `run` and `restore`; a restore puts back only the LIGA entry and first
