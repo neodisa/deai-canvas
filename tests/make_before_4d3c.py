@@ -17,8 +17,12 @@
   * `ab` — ЛІГА після 4d-3a + 4d-3b (генератор кличе `liga_migrate.run_all()` КОДОМ 0.18 у тимчасовому домі).
 
 Що знято (усе — у тимчасових теках, без мережі й без справжніх Vercel, Supabase, Jira чи Teams):
-  * `publish` — 13 сценаріїв `POST /api/publish` (`first`, `second`, `pw_default`, `pw_task`, `pw_root`, `build_only`, `no_node`,
-    `err_login`, `err_scope`, `err_no_url`, `protection`, `comments_on`, `comments_off`): тіло відповіді (ПОРЯДОК ключів — список
+  * `publish` — 16 сценаріїв `POST /api/publish` (`first`, `second`, `pw_default`, `pw_task`, `pw_root`, `build_only`, `no_node`,
+    `err_login`, `err_scope`, `err_no_url`, `protection`, `comments_on`, `comments_off`, `domain_warning`, `not_task_link`,
+    `cleanup_warning`; три останні — єдині, де зʼявляються однойменні ключі відповіді; усі три ДОСЯЖНІ в гілці ЛІГИ 0.18.0:
+    `domain_warning` — `deploy` друкує лише довгий хост `pv-…-abc.vercel.app` (alias/inspect коротшого не дають),
+    `not_task_link` — `owner_key` задачі ≠ особа машини (`DC_IDENTITY_EMAIL`), `cleanup_warning` — `vercel list` завершується
+    з кодом 1): тіло відповіді (ПОРЯДОК ключів — список
     пар), записи `tasks.json` (`vercel_project`, `vercel_scope`) і `iterations.json` (`publish_url`, `published_at`→`<time>`,
     `publish_verified`; `publish_remote` відсутній), argv фальшивого `npx` (`tests/fake_npx.py` через `serve._node_bin`), мітка
     `build` у `manifest.json`, шиті сторінки (гейт `authgate`, пароль, канал/ключі коментарів), шпигуни побічних дій
@@ -29,10 +33,12 @@
     `publish_share_url`; `password` — `POST /api/preview-password` (200 + запис у `tasks.json`; 400; 409 для простору без ЛІГИ);
     `api_spaces` — `capabilities`, `compat` запису ЛІГИ; `modules_card` — картка `vercel-publish` з `GET /api/modules`;
     `js` — читання `app/spaces-model.js`/`app/bar-model.js` через `node` на записі `/api/spaces` і відповіді `/api/task`:
-    `isLegacyPublish`, `pwView`, `previewTarget`, `copyUrl` (`#k=<пароль>&p=<сторінка>`), `publishReaction`, `barModel` (рядок `pubpw`).
+    `isLegacyPublish`, `pwView`, `previewTarget`, `copyUrl` (`#k=<пароль>&p=<сторінка>`), `publishReaction`, `barModel` (рядок `pubpw`),
+    `disableConsequences` картки `vercel-publish` (для ЛІГИ 0.18.0 — порожньо: роль `publish` тримає `legacy`, не модуль).
 
-Виключено з JSON усе мінливе: час (`published_at` → `<time>`), абсолютні шляхи (тека → `~/…`/`<tmp>`), значення секретів (лише
-булеві «є в сторінці»). Прогін двічі дає той самий байт-у-байт JSON.
+Виключено з JSON усе мінливе: час (`published_at` → `<time>`), абсолютні шляхи (тека → `~/…`/`<tmp>`), ключ Supabase у сторінках
+(лише `<secret:ДОВЖИНА>`). Пароль превʼю (типовий/задачі/кореня/зміна з екрана) і канал коментарів — ВИГАДАНІ значення, зберігаються
+як є (це і є спостережувана поведінка); адреса Supabase — вигадана `sb.example.com`. Прогін двічі дає той самий байт-у-байт JSON.
 
 Запуск (з кореня репо):  python3 -B tests/make_before_4d3c.py [--out ШЛЯХ]   (типово — `tests/fixtures/liga-migration/before-4d3c.json`)
 
@@ -71,14 +77,14 @@ sys.path.insert(0, _HERE)
 # ⛔ Спільне — з генераторів 4d-3a/4d-3b (друга копія розійшлась би).
 from make_before_4d3a import (CLEAN, REPO_SEO, REPO_UNITED, SB_KEY, SB_URL, SPACE_ID, NoNet, Rig, Server,  # noqa: E402
                               SocketTripwire, _write, rel, scrub)
-from make_before_4d3b import _env_extra  # noqa: E402
+from make_before_4d3b import OTHER_KEY, _env_extra  # noqa: E402
 import fake_npx  # noqa: E402
 
 OUT_DEFAULT = os.path.join(_HERE, 'fixtures', 'liga-migration', 'before-4d3c.json')
 
 #: Ідентифікатори сценаріїв `publish` — рівно ці (порядок — порядок прогону: `second` іде ПІСЛЯ `first` на тому самому світі).
 SCENARIOS = ('first', 'second', 'pw_default', 'pw_task', 'pw_root', 'build_only', 'no_node', 'err_login', 'err_scope',
-             'err_no_url', 'protection', 'comments_on', 'comments_off')
+             'err_no_url', 'protection', 'comments_on', 'comments_off', 'domain_warning', 'not_task_link', 'cleanup_warning')
 STANDS = ('unmigrated', 'ab')
 
 TID = 'a-1'
@@ -95,6 +101,8 @@ NPX_OK = {'link': {'code': 0, 'org': SCOPE},
 #: Що модуль бачить на адресі превʼю (шов `_fetch_page`): гейт на місці / захист Vercel (302 на SSO).
 PAGE_GATE = (200, '', '<html><div id="authgate"></div></html>')
 PAGE_SSO = (302, 'https://vercel.com/sso-api?next=x', '')
+#: Вигаданий власник задачі для `not_task_link` (ключ ≠ особа машини з `_env_extra`) і його імʼя.
+OWNER_NAME = 'Beta Designer'
 
 #: Вигадані джерела сторінок: два макети ітерації `it1` і односторінкова `it2`.
 SOURCE_PAGES = {'it1/alpha/index.html': 'Альфа', 'it1/gamma/index.html': 'Гамма', 'it2/index.html': 'Друга ітерація'}
@@ -200,8 +208,9 @@ _CH = re.compile(r'"channel"\s*:\s*"([^"]*)"')
 
 
 def _pages(task_dir, home):
-    """Шиті сторінки `publish/`: для кожної HTML — гейт, пароль (літерал `P=…;`), шар коментарів, канал, чи є адреса/ключ Supabase
-    (значення секретів у знімок не йдуть — лише булеві); склад `comment-layer/`, сторінки з маніфесту, мітка `build`."""
+    """Шиті сторінки `publish/`: для кожної HTML — гейт, пароль (літерал `P=…;`, вигаданий — як є), шар коментарів, канал (як є),
+    адреса Supabase (вигадана — як є, або `None`) і ключ (лише `<secret:ДОВЖИНА>` або `None`: значення секрету в знімок не йде);
+    склад `comment-layer/`, сторінки з маніфесту, мітка `build`."""
     pub = os.path.join(task_dir, 'publish')
     pages = {}
     for dirpath, _dirs, files in sorted(os.walk(pub)):
@@ -215,7 +224,8 @@ def _pages(task_dir, home):
             pages[os.path.relpath(p, pub)] = {
                 'authgate': 'id="authgate"' in text, 'password': json.loads(pm.group(1)) if pm else None,
                 'comment_layer': 'comment-layer' in text, 'channel': cm.group(1) if cm else None,
-                'has_supabase_url': SB_URL in text, 'has_supabase_key': SB_KEY in text}
+                'supabase_url': SB_URL if SB_URL in text else None,
+                'supabase_key': '<secret:%d>' % len(SB_KEY) if SB_KEY in text else None}
     layer = os.path.join(pub, 'comment-layer')
     with open(os.path.join(pub, 'manifest.json'), encoding='utf-8') as fh:
         man = json.load(fh)
@@ -271,7 +281,7 @@ def _reset_world(rig, task_extra=None, root_extra=None, with_sb=True):
 
 
 def publish(rig, srv):
-    """13 сценаріїв `POST /api/publish`. `first` мінтить проєкт і скоуп; `second` — друга публікація ТОГО САМОГО світу (без скидання);
+    """16 сценаріїв `POST /api/publish`. `first` мінтить проєкт і скоуп; `second` — друга публікація ТОГО САМОГО світу (без скидання);
     усі решта — на чистому світі з уже відомим проєктом (`vercel_project`), щоб мінту не було."""
     out = {}
     known = {'vercel_project': PROJECT}                      # проєкт відомий, скоуп — ні (як після першої публікації старого коду)
@@ -300,6 +310,16 @@ def publish(rig, srv):
     out['comments_on'] = _publish_once(rig, srv, NPX_OK)
     _reset_world(rig, task_extra=known, with_sb=False)
     out['comments_off'] = _publish_once(rig, srv, NPX_OK)
+    # `domain_warning`: `deploy` друкує лише довгий хост (alias/`inspect` коротшого не дають) → хост ≠ `<проєкт>.vercel.app`
+    _reset_world(rig, task_extra=known)
+    out['domain_warning'] = _publish_once(rig, srv, {**NPX_OK, 'deploy': {'code': 0, 'stdout': 'Production: %s\n' % URL_D},
+                                                      'inspect': {'code': 0, 'stdout': ''}})
+    # `not_task_link`: власник задачі — інша особа, ніж особа машини
+    _reset_world(rig, task_extra={**known, 'owner_key': OTHER_KEY, 'owner': OWNER_NAME})
+    out['not_task_link'] = _publish_once(rig, srv, NPX_OK)
+    # `cleanup_warning`: публікація вдала, а `vercel list` (прибирання старих) падає
+    _reset_world(rig, task_extra=known)
+    out['cleanup_warning'] = _publish_once(rig, srv, {**NPX_OK, 'list': {'code': 1, 'stderr': 'Error: list failed'}})
     if tuple(out) != SCENARIOS:
         raise RuntimeError('набір сценаріїв розійшовся з SCENARIOS: %r' % (list(out),))
     return out
@@ -360,6 +380,7 @@ import { pathToFileURL } from 'node:url';
 const inp = JSON.parse(await new Promise((res) => { let s = ''; process.stdin.on('data', (d) => { s += d; }); process.stdin.on('end', () => res(s)); }));
 const m = await import(pathToFileURL(inp.model).href);
 const b = await import(pathToFileURL(inp.bar).href);
+const cm = await import(pathToFileURL(inp.conn).href);
 const sp = inp.space, task = inp.task;
 const view = m.pwView(task, sp);
 const target = m.previewTarget(task, sp);
@@ -375,15 +396,17 @@ console.log(JSON.stringify({
   copy_url: m.copyUrl(target, { origin: 'http://canvas.example.com', pageId: 'alpha', password: task.preview_password }),
   publish_reaction: m.publishReaction({ url: task.publish_url }, sp, true),
   publish_reaction_other_task: m.publishReaction({ url: task.publish_url }, sp, false),
+  disable_consequences_publish: cm.disableConsequences(inp.card, sp),
   bar_pubpw: items.find((x) => x.id === 'pubpw') || null,
   bar_item_ids: items.map((x) => x.id), bar_publish: pub ? { legacy: pub.legacy, notes: pub.notes } : null,
 }));
 """
 
 
-def js_section(space_row, task_body):
+def js_section(space_row, task_body, card):
     payload = json.dumps({'model': os.path.join(ROOT, 'app', 'spaces-model.js'), 'bar': os.path.join(ROOT, 'app', 'bar-model.js'),
-                          'space': space_row, 'task': task_body})
+                          'conn': os.path.join(ROOT, 'app', 'connections-model.js'),
+                          'space': space_row, 'task': task_body, 'card': card})
     r = subprocess.run(['node', '--input-type=module', '-e', NODE_JS], input=payload, capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise RuntimeError('node: ' + r.stderr[-500:])
@@ -398,7 +421,7 @@ def api_sections(rig, srv, published_body):
     st, mods = _raw(srv, 'GET', '/api/modules?space=%s' % SPACE_ID)
     card = next((m for m in mods['modules'] if m.get('id') == 'vercel-publish'), None)
     modules_card = {'status': st, 'card': scrub(card, rig.home)}
-    return api_spaces, modules_card, js_section(row, published_body)
+    return api_spaces, modules_card, js_section(row, published_body, card)
 
 
 def stand(tmp, name):

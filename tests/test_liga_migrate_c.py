@@ -18,6 +18,7 @@ for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import spaces_guard  # noqa: E402
+from make_before_4d3c import SB_KEY, SB_URL  # noqa: E402  (вигадані значення — ті самі, що в генераторі)
 
 _REAL = None
 
@@ -33,8 +34,8 @@ def tearDownModule():
 
 
 #: Рівно ці сценарії `publish` (і нічого іншого): знімок не вміє «зменшитись» непомітно.
-SCENARIOS = ['build_only', 'comments_off', 'comments_on', 'err_login', 'err_no_url', 'err_scope', 'first', 'no_node',
-             'protection', 'pw_default', 'pw_root', 'pw_task', 'second']
+SCENARIOS = ['build_only', 'cleanup_warning', 'comments_off', 'comments_on', 'domain_warning', 'err_login', 'err_no_url',
+             'err_scope', 'first', 'no_node', 'not_task_link', 'protection', 'pw_default', 'pw_root', 'pw_task', 'second']
 SCENARIO_KEYS = ['build', 'iterations_after', 'npx_argv', 'pages', 'response', 'spies', 'tasks_after']
 STAND_KEYS = ['api_spaces', 'js', 'modules_card', 'password', 'publish', 'task']
 
@@ -86,10 +87,10 @@ class Before4d3cShape(unittest.TestCase):
             self.assertEqual(sorted(st), STAND_KEYS, name)
 
     def test_publish_scenarios_are_exact(self):
-        """Рівно 13 сценаріїв на КОЖЕН стенд, і кожен має рівно свій набір ключів: ні сценарій, ні ключ не зникне непомітно."""
+        """Рівно 16 сценаріїв на КОЖЕН стенд, і кожен має рівно свій набір ключів: ні сценарій, ні ключ не зникне непомітно."""
         for name, st in self.stands():
             self.assertEqual(sorted(st['publish']), SCENARIOS, name)
-            self.assertEqual(len(st['publish']), 13, name)
+            self.assertEqual(len(st['publish']), 16, name)
             for sid, sc in st['publish'].items():
                 self.assertEqual(sorted(sc), SCENARIO_KEYS, '%s/%s' % (name, sid))
                 self.assertEqual(sorted(sc['response']), ['pairs', 'status'], '%s/%s' % (name, sid))
@@ -109,9 +110,25 @@ class Before4d3cShape(unittest.TestCase):
             self.assertEqual(sorted(st['password']), ['clear', 'no_liga_space', 'set', 'too_long'], name)
             self.assertEqual(sorted(st['api_spaces']), ['capabilities', 'compat', 'status'], name)
             self.assertEqual(sorted(st['modules_card']), ['card', 'status'], name)
-            self.assertEqual(sorted(st['js']), ['bar_item_ids', 'bar_publish', 'bar_pubpw', 'copy_url', 'is_legacy_publish',
-                                                'is_remote_publish', 'is_vercel_publish', 'preview_target', 'publish_reaction',
+            self.assertEqual(sorted(st['js']), ['bar_item_ids', 'bar_publish', 'bar_pubpw', 'copy_url',
+                                                'disable_consequences_publish', 'is_legacy_publish', 'is_remote_publish',
+                                                'is_vercel_publish', 'preview_target', 'publish_reaction',
                                                 'publish_reaction_other_task', 'pw_view'], name)
+            # внутрішні форми: на них спираються тести паритету наступних задач
+            self.assertEqual(sorted(st['api_spaces']['capabilities']),
+                             ['comments', 'dashboard', 'notify', 'publish', 'tokens', 'tracker', 'vcs'], name)
+            self.assertEqual(sorted(st['modules_card']['card']), ['api', 'builtin', 'check_timeout_s', 'enabled', 'id', 'implicit',
+                                                                  'name', 'roles', 'settings', 'status', 'version'], name)
+            self.assertEqual(sorted(st['js']['pw_view']), ['pw', 'pwCustom', 'pwStale', 'pwUngated'], name)
+            self.assertEqual(sorted(st['js']['bar_pubpw']), ['id', 'labelKey', 'pw', 'subKey', 'warnArgs', 'warnKey'], name)
+            self.assertEqual(st['js']['disable_consequences_publish'], [], name)      # роль `publish` тримає `legacy`, не модуль
+            for k, resp in st['password'].items():
+                self.assertEqual(sorted(resp), ['pairs', 'status'] if k != 'set' and k != 'clear' else
+                                 ['pairs', 'saved_in_tasks_json', 'status'], '%s/%s' % (name, k))
+                self.assertIsInstance(resp['pairs'], list, '%s/%s' % (name, k))
+                self.assertTrue(all(isinstance(p, list) and len(p) == 2 and isinstance(p[0], str) for p in resp['pairs']),
+                                '%s/%s: пари [ключ, значення]' % (name, k))
+                self.assertEqual(resp['pairs'][0][0], 'ok', '%s/%s' % (name, k))
 
     def test_machine_independent(self):
         """⛔ Знімок не несе ні справжніх шляхів, ні імен, ні тимчасових тек, ні секретів: лише `~/…`/`<tmp>`; значення — вигадані."""
@@ -120,7 +137,8 @@ class Before4d3cShape(unittest.TestCase):
         # (префікси домашніх/тимчасових тек macOS складені з двох літералів: щоб гігієнічний grep по диффу не бачив у самому тесті «шлях»)
         for bad in ('/Us' 'ers/', '/home/', '/var/folders', '/pri' 'vate/', '/tmp/', 'before-4d3c-', 'C:\\') + ((me,) if len(me) > 2 else ()):
             self.assertNotIn(bad, self.raw, bad)
-        self.assertNotIn('sb_test_key_alpha', self.raw, 'секрет у знімку: лише булеві «є в сторінці»')
+        self.assertNotIn(SB_KEY, self.raw, 'секрет у знімку: лише `<secret:ДОВЖИНА>`')
+        self.assertIn('<secret:%d>' % len(SB_KEY), self.raw)
         self.assertIsNone(re.search(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}', self.raw))          # жодного часового штампа
         self.assertIsNone(re.search(r'\d{2}\.\d{2}\.\d{4}', self.raw), 'дата запису ітерації чи час публікації — мінливе')
         self.assertEqual(self.snap['meta']['volatile_stripped'], [])
@@ -190,16 +208,39 @@ class Before4d3cShape(unittest.TestCase):
             self.assertEqual(self.pairs(prot['response'])['verify_error'], 'vercel_protection', name)
             self.assertIs(prot['iterations_after']['publish_verified'], False, name)
 
+    def test_warning_scenarios_record_their_keys(self):
+        """`domain_warning`, `not_task_link`, `cleanup_warning` — єдині сценарії з однойменними ключами відповіді; в решті їх нема."""
+        for name, st in self.stands():
+            p = st['publish']
+            for sid, key in (('domain_warning', 'domain_warning'), ('not_task_link', 'not_task_link'),
+                             ('cleanup_warning', 'cleanup_warning')):
+                body = self.pairs(p[sid]['response'])
+                self.assertEqual(p[sid]['response']['status'], 200, '%s/%s' % (name, sid))
+                self.assertIn(key, body, '%s/%s' % (name, sid))
+                self.assertIn('url', body, '%s/%s: публікація вдала' % (name, sid))
+                self.assertTrue(isinstance(body[key], str) and body[key], '%s/%s' % (name, sid))
+                for other in p:
+                    if other != sid:
+                        self.assertNotIn(key, self.pairs(p[other]['response']), '%s/%s має чужий ключ %s' % (name, other, key))
+            dom = self.pairs(p['domain_warning']['response'])
+            self.assertIn('pv-12345678-abc.vercel.app', dom['domain_warning'], name)
+            self.assertEqual(dom['url'], 'https://pv-12345678-abc.vercel.app', name)
+            self.assertEqual(self.pairs(p['not_task_link']['response'])['not_task_link'], 'Beta Designer', name)
+            self.assertIn('не віддав список', self.pairs(p['cleanup_warning']['response'])['cleanup_warning'], name)
+            self.assertEqual(self.keys(p['cleanup_warning']['response'])[-1], 'cleanup_warning', name)       # ОСТАННІЙ ключ
+
     def test_comments_channel_and_keys(self):
         for name, st in self.stands():
             inner = lambda sid: {k: v for k, v in st['publish'][sid]['pages']['html'].items() if k != 'index.html'}   # noqa: E731
             on = inner('comments_on')
             self.assertEqual({v['channel'] for v in on.values()}, {'liga-shared'}, name)
-            self.assertTrue(all(v['comment_layer'] and v['has_supabase_key'] for v in on.values()), name)
+            secret = '<secret:%d>' % len(SB_KEY)
+            self.assertTrue(all(v['comment_layer'] and v['supabase_key'] == secret and v['supabase_url'] == SB_URL
+                                for v in on.values()), name)
             self.assertEqual({v['channel'] for v in inner('pw_default').values()}, {'dc/a-1'}, name)
             off = st['publish']['comments_off']
             self.assertEqual(self.pairs(off['response'])['comments_unavailable'], 'comments-unconfigured', name)
-            self.assertTrue(all(not v['comment_layer'] and not v['has_supabase_key'] and not v['has_supabase_url']
+            self.assertTrue(all(not v['comment_layer'] and v['supabase_key'] is None and v['supabase_url'] is None
                                 and v['channel'] is None for v in off['pages']['html'].values()), name)
             self.assertIsNone(off['pages']['comment_layer_files'], name)
 

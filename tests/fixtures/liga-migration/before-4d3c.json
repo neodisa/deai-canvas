@@ -63,6 +63,7 @@
           "warnKey": ""
         },
         "copy_url": "https://pv-12345678.vercel.app/#k=1100&p=alpha",
+        "disable_consequences_publish": [],
         "is_legacy_publish": true,
         "is_remote_publish": false,
         "is_vercel_publish": false,
@@ -282,33 +283,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -349,6 +350,151 @@
           "tasks_after": {
             "vercel_project": "pv-12345678",
             "vercel_scope": null
+          }
+        },
+        "cleanup_warning": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ],
+              [
+                "cleanup_warning",
+                "Старі публікації не прибрано: Vercel CLI не віддав список публікацій."
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
           }
         },
         "comments_off": {
@@ -396,33 +542,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               }
             },
             "manifest_pages": [
@@ -541,33 +687,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "liga-shared",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "liga-shared",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "liga-shared",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -633,6 +779,151 @@
             "vercel_scope": "team_x"
           }
         },
+        "domain_warning": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678-abc.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678-abc.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678-abc.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678-abc.vercel.app"
+              ],
+              [
+                "domain_warning",
+                "Vercel видав pv-12345678-abc.vercel.app, а не pv-12345678.vercel.app: проєкт із цим імʼям уже є в ІНШОМУ акаунті, тож у тебе й у колеги РІЗНІ посилання, і публікація не бачить ітерацій колеги. Звір прив'язку задачі (vercel_scope у tasks.json)."
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678-abc.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
         "err_login": {
           "build": "legacy",
           "iterations_after": {
@@ -669,33 +960,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -783,33 +1074,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -897,33 +1188,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1024,33 +1315,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1136,33 +1427,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1218,6 +1509,151 @@
             "vercel_scope": null
           }
         },
+        "not_task_link": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "not_task_link",
+                "Beta Designer"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
         "protection": {
           "build": "legacy",
           "iterations_after": {
@@ -1267,33 +1703,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1416,33 +1852,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1557,33 +1993,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1698,33 +2134,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -1845,33 +2281,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -2045,6 +2481,7 @@
           "warnKey": ""
         },
         "copy_url": "https://pv-12345678.vercel.app/#k=1100&p=alpha",
+        "disable_consequences_publish": [],
         "is_legacy_publish": true,
         "is_remote_publish": false,
         "is_vercel_publish": false,
@@ -2264,33 +2701,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -2331,6 +2768,151 @@
           "tasks_after": {
             "vercel_project": "pv-12345678",
             "vercel_scope": null
+          }
+        },
+        "cleanup_warning": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ],
+              [
+                "cleanup_warning",
+                "Старі публікації не прибрано: Vercel CLI не віддав список публікацій."
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
           }
         },
         "comments_off": {
@@ -2378,33 +2960,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               }
             },
             "manifest_pages": [
@@ -2523,33 +3105,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "liga-shared",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "liga-shared",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "liga-shared",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -2615,6 +3197,151 @@
             "vercel_scope": "team_x"
           }
         },
+        "domain_warning": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678-abc.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678-abc.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678-abc.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678-abc.vercel.app"
+              ],
+              [
+                "domain_warning",
+                "Vercel видав pv-12345678-abc.vercel.app, а не pv-12345678.vercel.app: проєкт із цим імʼям уже є в ІНШОМУ акаунті, тож у тебе й у колеги РІЗНІ посилання, і публікація не бачить ітерацій колеги. Звір прив'язку задачі (vercel_scope у tasks.json)."
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678-abc.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
         "err_login": {
           "build": "legacy",
           "iterations_after": {
@@ -2651,33 +3378,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -2765,33 +3492,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -2879,33 +3606,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3006,33 +3733,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3118,33 +3845,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3200,6 +3927,151 @@
             "vercel_scope": null
           }
         },
+        "not_task_link": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "not_task_link",
+                "Beta Designer"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
         "protection": {
           "build": "legacy",
           "iterations_after": {
@@ -3249,33 +4121,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3398,33 +4270,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3539,33 +4411,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "rootpw-alpha"
+                "password": "rootpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3680,33 +4552,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "taskpw-alpha"
+                "password": "taskpw-alpha",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
@@ -3827,33 +4699,33 @@
                 "authgate": true,
                 "channel": null,
                 "comment_layer": false,
-                "has_supabase_key": false,
-                "has_supabase_url": false,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": null,
+                "supabase_url": null
               },
               "it1/alpha/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it1/gamma/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               },
               "it2/index.html": {
                 "authgate": true,
                 "channel": "dc/a-1",
                 "comment_layer": true,
-                "has_supabase_key": true,
-                "has_supabase_url": true,
-                "password": "1100"
+                "password": "1100",
+                "supabase_key": "<secret:17>",
+                "supabase_url": "https://sb.example.com"
               }
             },
             "manifest_pages": [
