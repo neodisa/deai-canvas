@@ -1867,7 +1867,7 @@ class _RealSteps(_WriteStand):
 
     def setUp(self):
         super().setUp()                                  # `_Stand.setUp`: STEPS = ALL_STEPS[:1] — тут перекриваємо повним переліком
-        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS)
+        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS[:2])        # 4d-3c: ці стенди — про два кроки; третій (c) — у test_liga_migrate_c.py
         p.start()
         self.addCleanup(p.stop)
 
@@ -1923,7 +1923,8 @@ class StepBConstants(unittest.TestCase):
 
     def test_steps_list_and_step_b_shape(self):
         import liga_migrate as lm
-        self.assertEqual([s.mark for s in lm.ALL_STEPS], ['liga-4d3a', 'liga-4d3b'])
+        self.assertEqual([s.mark for s in lm.ALL_STEPS][:2], ['liga-4d3a', 'liga-4d3b'])      # 4d-3c: третій крок — `StepCConstants`
+        self.assertIs(lm.ALL_STEPS[2], lm.STEP_C)
         self.assertEqual(lm.STEPS, lm.ALL_STEPS)
         b = lm.ALL_STEPS[1]
         self.assertIs(lm.STEP_B, b)
@@ -2442,7 +2443,7 @@ class AfterMigrationParity4d3b(unittest.TestCase):
             if name == 'shared':                         # united без власного кореня → напрямки мігрують
                 cfg['design_work_roots'] = {'custom-x': os.path.join(rig.home, 'work', 'custom')}
                 g._write(rig.tasks_path, cfg)
-            with rig.activate():
+            with rig.activate(), cls.mock.patch.object(lm, 'STEPS', lm.ALL_STEPS[:2]):        # 4d-3c: паритет a+b; крок c — у test_liga_migrate_c.py
                 results.append([(m, st, info.get('skipped'), info.get('roles')) for m, st, info in lm.run_all()])
             return rig, space, cfg
         with cls.mock.patch.object(g, 'liga', migrated):
@@ -2573,7 +2574,8 @@ class RealPushNonIsolated(_VcsStand):
 
     def lm_run_all(self):
         import liga_migrate
-        return [(m, st) for m, st, _i in liga_migrate.run_all()]
+        with self.mock.patch.object(liga_migrate, 'STEPS', liga_migrate.ALL_STEPS[:2]):       # 4d-3c: тут — a+b (плоске дзеркало vcs); c не додає ефектів
+            return [(m, st) for m, st, _i in liga_migrate.run_all()]
 
 
 if __name__ == '__main__':

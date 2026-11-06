@@ -24,6 +24,8 @@ import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 from make_before_4d3c import SB_KEY, SB_URL  # noqa: E402  (вигадані значення — ті самі, що в генераторі)
+from make_before_4d3a import SocketTripwire  # noqa: E402  (розтяжка мережі: нічого, крім loopback)
+from test_liga_migrate import _WriteStand  # noqa: E402  (стенд запису 4d-3a: тимчасові HOME/DEAI_HOME, CLI, пошук секретів)
 from test_publish_module import DispatchWorld, _Stub, _write_json  # noqa: E402  (світ «два простори + сервер + розтяжка»)
 
 _REAL = None
@@ -620,7 +622,7 @@ class PublishGuard(unittest.TestCase):
         alias_import = ast.parse('def f(v):\n    from implicit import Implicit as I\n    return isinstance(v, I)\n')
         self.assertEqual(self.implicit_checks(alias_import), [2])
         by_type = ast.parse('def f(v):\n    return type(v) is Implicit\n')
-        self.assertEqual(self.implicit_checks(by_type), [2, 2])
+        self.assertEqual(sorted(set(self.implicit_checks(by_type))), [2])      # рядок видно; кількість повідомлень не пінимо (дубль імені й порівняння)
         by_type_alias = ast.parse('def f(v, I):\n    return type(v) is I\n')
         self.assertEqual(self.implicit_checks(by_type_alias), [2])
         by_class = ast.parse('def f(v, I):\n    return v.__class__ == I\n')
@@ -755,6 +757,570 @@ class PublishJsGuard(unittest.TestCase):
                 if n:
                     found[name] = n
         self.assertEqual(found, {'spaces-model.js': 1})
+
+
+# ------------------------------------------------------------------------------ Task 4: крок liga-4d3c
+
+PUB_MOD = 'vercel-publish'
+PUB_ENTRY = {'enabled': True, 'shared_state': True, 'settings': {'auth': 'cli', 'team': '', 'compat': 'design-canvas'}}
+ORIG_SPACE = b'{"name": "Liga",\n  "x": {"k": [1,  2]}}\n'
+OTHER_SECRETS = {'other': {'m': {'k': 'other_value_alpha'}}}
+
+
+class _StepC(_WriteStand):
+    """Стенд трьох РЕАЛЬНИХ кроків (`ALL_STEPS = (A, B, C)`); `_Stand.setUp` ставить `STEPS = ALL_STEPS[:1]` — тут перекриваємо.
+    `HOME`/`DEAI_HOME` патчить `_Stand.setUp` (`mock.patch.dict`); значення вигадані."""
+
+    def setUp(self):
+        super().setUp()
+        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def seed(self):
+        self._write(self.space_path(), ORIG_SPACE.decode('utf-8'))
+        os.chmod(self.space_path(), 0o644)
+        self._write(self.secrets_path(), json.dumps(OTHER_SECRETS))
+        os.chmod(self.secrets_path(), 0o600)
+
+    def apply_ab(self):
+        self.assertEqual(self.lm.run(step='liga-4d3a'), 'done')
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'done')
+
+    def plan_c(self):
+        return self.lm.plan(step='liga-4d3c')
+
+    def marks(self):
+        return self.read_json(self.space_path()).get('migrations') or {}
+
+    def stamps(self):
+        m = self.marks()
+        return m['liga-4d3a']['backup'], m['liga-4d3b']['backup'], m['liga-4d3c']['backup']
+
+    def start(self):
+        return self.quiet(self.lm.startup)
+
+    def write_modules(self, mods):
+        self.space_json({'modules': mods})
+
+    def liga_space(self):
+        return {'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': True}
+
+
+class StepCConstants(unittest.TestCase):
+    """Форма кроку c і його імен; модуль міграції не імпортує `serve` (закон 4d-3a)."""
+
+    def test_steps_list_and_step_c_shape(self):
+        import liga_migrate as lm
+        self.assertEqual([s.mark for s in lm.ALL_STEPS], ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'])
+        self.assertEqual(lm.STEPS, lm.ALL_STEPS)
+        c = lm.ALL_STEPS[2]
+        self.assertIs(lm.STEP_C, c)
+        self.assertEqual((c.mark, c.roles, c.tracks, c.suffix), ('liga-4d3c', (('publish', 'vercel-publish'),), False, '-liga-4d3c'))
+        self.assertEqual(lm.ROLE_MODULES_C, (('publish', PUB_MOD),))
+        self.assertIs(c.entries, lm._entries_c)
+        self.assertIs(lm.ALL_STEPS[0], lm.STEP_A)
+        self.assertIs(lm.ALL_STEPS[1], lm.STEP_B)
+
+    def test_compat_constant_equals_the_core_one(self):
+        import liga_migrate as lm
+        self.assertEqual(lm.PUBLISH_COMPAT, 'design-canvas')
+        self.assertEqual(lm.PUBLISH_COMPAT, dm.COMPAT_DESIGN_CANVAS)
+        self.assertEqual(lm.VCS_COMPAT, dm.COMPAT_DESIGN_CANVAS)
+
+    def test_stamp_names_tell_the_steps_apart(self):
+        import liga_migrate as lm
+        a, b, c = lm.ALL_STEPS
+        self.assertTrue(c.stamp_re.fullmatch('20261106-120000-liga-4d3c'))
+        self.assertTrue(c.stamp_re.fullmatch('20261106-120000-liga-4d3c-2'))
+        self.assertIsNone(c.stamp_re.fullmatch('20261106-120000-liga-4d3c-pre-restore'))
+        self.assertIsNone(c.stamp_re.fullmatch('20261106-120000-liga-4d3b'))
+        for other in (a, b):
+            self.assertIsNone(other.stamp_re.fullmatch('20261106-120000-liga-4d3c-2'))
+        self.assertIs(lm.step_of_stamp('20261106-120000-liga-4d3c-2'), c)
+        self.assertIsNone(lm.step_of_stamp('20261106-120000-liga-4d3c-pre-restore'))
+        self.assertIs(lm.step_of_stamp('20261106-120000-liga-4d3b'), b)
+
+    def test_reason_for_publisher_present(self):
+        import liga_migrate as lm
+        self.assertIn('publisher-present', lm._REASONS)
+        self.assertIn('інший модуль', lm._REASONS['publisher-present'])
+
+    def test_liga_migrate_does_not_import_serve(self):
+        with open(os.path.join(os.path.dirname(_HERE), 'app', 'liga_migrate.py'), encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        names = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                names.update(a.name.split('.')[0] for a in n.names)
+            elif isinstance(n, ast.ImportFrom):
+                names.add((n.module or '').split('.')[0])
+        self.assertNotIn('serve', names)
+
+
+class StepCPlanTest(_StepC):
+    """`plan(step='liga-4d3c')`: чистий розрахунок запису `vercel-publish`; нічого не пише; секретів нема."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.apply_ab()
+
+    def test_ready_entry_has_exactly_the_agreed_shape(self):
+        before = self.snapshot_tree()
+        p = self.plan_c()
+        self.assertEqual(p['status'], 'ready')
+        self.assertEqual(p['roles'], {'publish': {'module': PUB_MOD, 'migrate': True, 'reason': None}})
+        mods = p['space_json']['modules']
+        self.assertEqual(mods[PUB_MOD], PUB_ENTRY)
+        self.assertEqual(sorted(mods[PUB_MOD]), ['enabled', 'settings', 'shared_state'])
+        self.assertEqual(sorted(mods[PUB_MOD]['settings']), ['auth', 'compat', 'team'])           # ні token, ні password
+        self.assertEqual(p['secrets'], {})
+        self.assertEqual(p['space_json']['migrations']['liga-4d3c'], {'roles': ['publish']})       # `at`/`backup` — запис; `tracks` нема
+        self.assertEqual((p['tracks'], p['tracks_reason']), (False, None))
+        self.assertEqual(self.snapshot_tree(), before)                                             # план нічого не пише
+
+    def test_foreign_modules_and_unknown_keys_are_kept(self):
+        p = self.plan_c()
+        sj = p['space_json']
+        self.assertIn('jira-tracker', sj['modules'])
+        self.assertIn('supabase-comments', sj['modules'])
+        self.assertEqual(sj['name'], 'Liga')
+        self.assertEqual(sj['x'], {'k': [1, 2]})
+        self.assertEqual(sorted(sj['migrations']), ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'])
+
+    def test_report_names_the_role_and_has_no_secrets_line(self):
+        text = self.lm.report(self.plan_c(), 'liga-4d3c')
+        self.assertTrue(text.startswith('liga-4d3c: ready\n'))
+        self.assertIn('publish (%s): migrate' % PUB_MOD, text)
+        self.assertNotIn('secrets', text)
+        self.assertNotIn('tracks:', text)
+        self.assert_no_secrets(text)
+
+    def test_step_c_does_not_depend_on_a_and_b(self):
+        self.setUp_fresh()
+        self.assertEqual(self.plan_c()['status'], 'ready')
+
+    def setUp_fresh(self):
+        import shutil
+        for sub in ('backups', 'migrations'):
+            shutil.rmtree(os.path.join(self.deai, sub), ignore_errors=True)
+        os.remove(self.space_path())
+        os.remove(self.secrets_path())
+
+    # --- пропуски
+    def test_skip_layer_off(self):
+        with self.mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path}):
+            os.environ.pop('DEAI_HOME')
+            p = self.plan_c()
+        self.assertEqual((p['status'], p['space_json']), ('skip-layer-off', None))
+
+    def test_skip_no_liga(self):
+        self.registry(entry=False)
+        self.assertEqual(self.plan_c()['status'], 'skip-no-liga')
+
+    def test_skip_done(self):
+        self.space_json({'migrations': {'liga-4d3c': {'at': 'x', 'roles': ['publish']}}})
+        self.assertEqual(self.plan_c()['status'], 'skip-done')
+
+    def test_skip_held_own_keeps_its_reason(self):
+        self.space_json({'migrations': {'liga-4d3c': {'held': True}}})
+        p = self.plan_c()
+        self.assertEqual((p['status'], p['reason']), ('skip-held', self.lm._REASONS['skip-held']))
+
+    def test_skip_held_by_an_earlier_step_names_it(self):
+        for earlier in ('liga-4d3a', 'liga-4d3b'):
+            self.space_json({'migrations': {earlier: {'held': True}}})
+            p = self.plan_c()
+            self.assertEqual((p['status'], p['space_json']), ('skip-held', None), earlier)
+            self.assertTrue(p['reason'].startswith('утримано разом із'), earlier)
+            self.assertIn(earlier, p['reason'])
+
+    def test_skip_integrations_off(self):
+        self._write(os.path.join(self.deai, 'spaces.json'), {'version': 1, 'current': 'legacy', 'spaces': [
+            {'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': False}]})
+        p = self.plan_c()
+        self.assertEqual((p['status'], p['space_json'], p['secrets']), ('skip-integrations-off', None, {}))
+
+    def test_skip_no_path_and_path_in_git(self):
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        self.assertEqual(self.plan_c()['status'], 'skip-path-in-git')
+        self.registry(path=os.path.join(self.tmp, 'nowhere'))
+        self.assertEqual(self.plan_c()['status'], 'skip-no-path')
+
+    def test_skip_space_json_unreadable(self):
+        self.space_json('{broken')
+        self.assertEqual(self.plan_c()['status'], 'skip-space-json-unreadable')
+
+    def test_skip_tasks_unreadable(self):
+        self._write(self.tasks_path, '{broken')
+        self.assertEqual(self.plan_c()['status'], 'skip-tasks-unreadable')
+
+    def test_skip_nothing_when_the_module_is_already_there(self):
+        self.write_modules({PUB_MOD: {'enabled': False, 'settings': {'auth': 'token'}}})
+        p = self.plan_c()
+        self.assertEqual((p['status'], p['space_json'], p['secrets']), ('skip-nothing', None, {}))
+        self.assertEqual(p['roles']['publish']['reason'], 'module-present')            # навіть вимкнений: чужий запис не чіпаємо
+
+    # --- провайдер
+    def test_provider_check_runs_in_memory_and_aborts(self):
+        seen = []
+        real = self.dm._provider_for
+
+        def spy(role, space, get_cat=None, explicit_override=None):
+            seen.append((role, explicit_override is not None))
+            return real(role, space, get_cat, explicit_override)
+        with self.mock.patch.object(self.dm, '_provider_for', spy):
+            self.assertEqual(self.plan_c()['status'], 'ready')
+        self.assertEqual(seen, [('publish', True), ('publish', True)])        # присутність видавця + перевірка розрахованого
+        for fake in (lambda *a, **k: None, lambda *a, **k: self.dm.implicit.for_role('publish')):
+            with self.mock.patch.object(self.dm, '_provider_for', fake):
+                p = self.plan_c()
+            self.assertEqual((p['status'], p['space_json'], p['secrets']), ('abort-provider', None, {}))
+
+
+class PublisherPresent(_StepC):
+    """Поправка 5: ІНШИЙ явно ввімкнений модуль публікації не перебивається (`publisher-present`, не вічний `abort-provider`);
+    зламаний СВІЙ — `abort-provider`; результат не залежить від порядку каталогу."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.apply_ab()
+        self.pre = self.read_json(self.space_path())
+
+    def put_other(self, mods):
+        sj = dict(self.pre)
+        sj['modules'] = dict(self.pre['modules'], **mods)
+        self.space_json(sj)
+
+    def test_working_other_module_is_publisher_present_not_abort(self):
+        self.put_other({'static-publish': {'enabled': True, 'settings': {}}})
+        before = self.snapshot_tree()
+        p = self.plan_c()
+        self.assertEqual((p['status'], p['space_json'], p['secrets']), ('skip-nothing', None, {}))
+        self.assertEqual(p['roles'], {'publish': {'module': PUB_MOD, 'migrate': False, 'reason': 'publisher-present'}})
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.run(step='liga-4d3c'), 'skip-nothing')
+        self.assertEqual(self.snapshot_tree(), before)                            # ні позначки, ні бекапу, ні last.json
+        self.assertNotIn('liga-4d3c', self.marks())
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_skip_nothing_of_c_blocks_nothing_and_startup_is_calm(self):
+        self.setUp_fresh_modules()
+        self.space_json({'modules': {'static-publish': {'enabled': True, 'settings': {}}}})
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'done'), ('liga-4d3b', 'done'), ('liga-4d3c', 'skip-nothing')])
+        self.assertEqual(res[2][2]['skipped'], {'publish': 'publisher-present'})
+        self.assertNotIn(PUB_MOD, self.read_json(self.space_path())['modules'])
+        st, err = self.start()
+        self.assertEqual(st, 'skip-done')
+        self.assertNotIn('abort', err)
+
+    def setUp_fresh_modules(self):
+        import shutil
+        for sub in ('backups', 'migrations'):
+            shutil.rmtree(os.path.join(self.deai, sub), ignore_errors=True)
+        os.remove(self.space_path())
+        os.remove(self.secrets_path())
+
+    def test_disabled_other_module_does_not_count(self):
+        self.put_other({'static-publish': {'enabled': False, 'settings': {}}})
+        p = self.plan_c()
+        self.assertEqual((p['status'], p['roles']['publish']['migrate']), ('ready', True))
+
+    def test_broken_own_module_aborts_and_writes_nothing(self):
+        self.put_other({'my-pub': {'enabled': True, 'roles': ['publish'], 'settings': {}}})      # теки модуля нема
+        before = self.snapshot_tree()
+        p = self.plan_c()
+        self.assertEqual((p['status'], p['space_json'], p['secrets']), ('abort-provider', None, {}))
+        self.assertEqual(self.lm.run(step='liga-4d3c'), 'abort-provider')
+        after = self.snapshot_tree()
+        last = os.path.join(self.deai, 'migrations', 'last.json')
+        self.assertEqual({k: v for k, v in after.items() if k != last}, {k: v for k, v in before.items() if k != last})
+        self.assertEqual(self.read_json(last)['status'], 'abort-provider')
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_publisher_present_is_total_and_exact(self):
+        sp = self.liga_space()
+        present = self.lm._publisher_present
+        self.assertIs(present(sp, {}), False)
+        self.assertIs(present(sp, {'jira-tracker': {'enabled': True, 'settings': {}}}), False)           # Implicit — не модуль
+        self.assertIs(present(sp, {'static-publish': {'enabled': True, 'settings': {}}}), True)
+        self.assertIs(present(sp, {'static-publish': {'enabled': False, 'settings': {}}}), False)
+        self.assertIs(present(sp, {'my-pub': {'enabled': True, 'roles': ['publish'], 'settings': {}}}), False)   # ModuleError → False
+        with self.mock.patch.object(self.dm, '_provider_for', side_effect=RuntimeError('boom')):
+            self.assertIs(present(sp, {'static-publish': {'enabled': True, 'settings': {}}}), False)
+
+    def test_asks_the_core_with_the_override_not_the_disk(self):
+        seen = []
+        real = self.dm._provider_for
+
+        def spy(role, space, get_cat=None, explicit_override=None):
+            seen.append((role, sorted(explicit_override or {})))
+            return real(role, space, get_cat, explicit_override)
+        with self.mock.patch.object(self.dm, '_provider_for', spy):
+            self.lm._publisher_present(self.liga_space(), {'static-publish': {'enabled': True, 'settings': {}}})
+        self.assertEqual(seen, [('publish', ['static-publish'])])
+
+    def test_independent_of_catalog_order(self):
+        real = self.dm.catalog
+
+        def reversed_catalog(*a, **k):
+            return dict(reversed(list(real(*a, **k).items())))
+        cases = ({'static-publish': {'enabled': True, 'settings': {}}}, {'my-pub': {'enabled': True, 'roles': ['publish'], 'settings': {}}})
+        for mods in cases:
+            self.put_other(mods)
+            straight = self.plan_c()
+            with self.mock.patch.object(self.dm, 'catalog', reversed_catalog):
+                flipped = self.plan_c()
+            self.assertEqual((straight['status'], straight['roles']), (flipped['status'], flipped['roles']))
+
+
+class StepCRunTest(_StepC):
+    """`run(step='liga-4d3c')`: власний бекап, один запис `space.json`, секрети не чіпаємо, відкат побайтно, жодних значень у виходах."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.apply_ab()
+        self.after_ab = (self.read(self.space_path()), self.read(self.secrets_path()))
+
+    def run_c(self):
+        self.assertEqual(self.lm.run(step='liga-4d3c'), 'done')
+        return self.stamps()
+
+    def test_backup_is_its_own_complete_and_private(self):
+        old = {f: self.read(p) for f, p in (('tasks.json', self.tasks_path), ('spaces.json', os.path.join(self.deai, 'spaces.json')),
+                                            ('space.json', self.space_path()), ('secrets.json', self.secrets_path()))}
+        a, b, c = self.run_c()
+        self.assertTrue(c.endswith('-liga-4d3c'))
+        self.assertEqual(self.backups(), sorted([a, b, c]))
+        d = os.path.join(self.deai, 'backups', c)
+        self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+        self.assertEqual(sorted(os.listdir(d)), ['manifest.json', 'secrets.json', 'space.json', 'spaces.json', 'tasks.json'])
+        m = self.read_json(d, 'manifest.json')
+        self.assertEqual(m['migration'], 'liga-4d3c')
+        for fname, orig in old.items():
+            self.assertEqual(self.read(d, fname), orig, fname)
+            self.assertEqual(os.stat(os.path.join(d, fname)).st_mode & 0o777, 0o600, fname)
+            self.assertEqual(m['files'][fname]['sha256'], self.sha(orig), fname)
+        self.assertEqual(self.read(d, 'space.json'), self.after_ab[0])                  # стан ПІСЛЯ a і b
+        self.assert_no_secrets_in_logs()
+
+    def test_mark_content_and_secrets_untouched(self):
+        self.run_c()
+        mk = self.marks()['liga-4d3c']
+        self.assertEqual(sorted(mk), ['at', 'backup', 'roles'])
+        self.assertEqual(mk['roles'], ['publish'])
+        sj = self.read_json(self.space_path())
+        self.assertEqual(sj['modules'][PUB_MOD], PUB_ENTRY)
+        self.assertIn('jira-tracker', sj['modules'])
+        self.assertEqual(sj['name'], 'Liga')
+        self.assertEqual(sj['x'], {'k': [1, 2]})
+        self.assertEqual(self.read(self.secrets_path()), self.after_ab[1])             # секретів нема: файл байт-у-байт той самий
+        self.assertEqual(os.stat(self.secrets_path()).st_mode & 0o777, 0o600)
+
+    def test_space_json_is_written_once_and_no_secret_is_written(self):
+        writes, secrets = [], []
+        ws, wsec = self.lm._write_space, self.dm.write_secrets
+
+        def spy_w(*a, **k):
+            writes.append(1)
+            return ws(*a, **k)
+
+        def spy_s(*a, **k):
+            secrets.append(1)
+            return wsec(*a, **k)
+        with self.mock.patch.object(self.lm, '_write_space', spy_w), self.mock.patch.object(self.dm, 'write_secrets', spy_s):
+            self.run_c()
+        self.assertEqual((len(writes), len(secrets)), (1, 0))
+
+    def test_second_start_is_skip_done_and_writes_nothing(self):
+        self.run_c()
+        before = self.snapshot_tree()
+        st, err = self.start()
+        self.assertEqual((st, err), ('skip-done', ''))
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.run(step='liga-4d3c'), 'skip-done')
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_restore_returns_the_state_after_b_byte_for_byte(self):
+        _a, _b, c = self.run_c()
+        self.assertEqual(self.lm.restore(c), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.after_ab[0])
+        self.assertEqual(self.read(self.secrets_path()), self.after_ab[1])
+        self.assertIn('liga-4d3b', self.marks())
+        self.assertNotIn('liga-4d3c', self.marks())
+
+    def test_no_secret_value_anywhere(self):
+        code, out, err = self.cli('run')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d3c: done', out)
+        self.assertIn('ролі: publish; бекап: ', out)
+        self.assert_no_secrets(out, err)
+        self.assert_no_secrets_in_logs()
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['secrets'], {})
+
+
+class LifoThreeSteps(_StepC):
+    """Відкат LIFO на три кроки; відмова називає ОСТАННІЙ застосований бекап (Поправка 8)."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.apply_ab()
+        self.after_a_b = (self.read(self.space_path()), self.read(self.secrets_path()))
+        self.assertEqual(self.lm.run(step='liga-4d3c'), 'done')
+        self.a, self.b, self.c = self.stamps()
+
+    def test_restore_a_refused_names_the_last_applied_and_writes_nothing(self):
+        before = self.snapshot_tree()
+        st, info = self.lm._restore(self.a)
+        self.assertEqual((st, info['rollback_first']), ('refuse-later-applied', self.c))
+        self.assertEqual(self.lm.restore(self.a, hold=True), 'refuse-later-applied')
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_restore_b_refused_names_c(self):
+        before = self.snapshot_tree()
+        st, info = self.lm._restore(self.b)
+        self.assertEqual((st, info['rollback_first']), ('refuse-later-applied', self.c))
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_cli_names_c_and_exits_nonzero(self):
+        code, out, _err = self.cli('restore', self.a)
+        self.assertEqual(code, 1)
+        self.assertIn(self.c, out)
+        self.assertNotIn(self.b, out)
+
+    def test_after_restoring_c_then_b_then_a_in_order(self):
+        self.assertEqual(self.lm.restore(self.c), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.after_a_b[0])
+        self.assertEqual(self.lm.restore(self.a), 'refuse-later-applied')            # b ще застосований
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.restore(self.a), 'restored')
+        self.assertEqual(self.read(self.space_path()), ORIG_SPACE)
+        self.assertEqual(self.read_json(self.secrets_path()), OTHER_SECRETS)
+
+    def test_hold_marks_only_c(self):
+        a_mark, b_mark = self.marks()['liga-4d3a'], self.marks()['liga-4d3b']
+        self.assertEqual(self.lm.restore(self.c, hold=True), 'restored')
+        mk = self.marks()
+        self.assertEqual(mk['liga-4d3c'], {'held': True})
+        self.assertEqual((mk['liga-4d3a'], mk['liga-4d3b']), (a_mark, b_mark))
+        self.assertEqual(self.lm.plan(step='liga-4d3c')['status'], 'skip-held')
+
+    def test_held_c_does_not_block_restore_of_b(self):
+        self.assertEqual(self.lm.restore(self.c, hold=True), 'restored')
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.restore(self.a), 'restored')
+        self.assertEqual(self.read(self.space_path()), ORIG_SPACE)
+
+    def test_held_b_holds_c_on_the_next_start(self):
+        self.assertEqual(self.lm.restore(self.c), 'restored')
+        self.assertEqual(self.lm.restore(self.b, hold=True), 'restored')
+        before = self.snapshot_tree()
+        p = self.plan_c()
+        self.assertEqual(p['status'], 'skip-held')
+        self.assertIn('liga-4d3b', p['reason'])
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'skip-done'), ('liga-4d3b', 'skip-held'), ('liga-4d3c', 'skip-held')])
+        st, _err = self.start()                              # перший крок — `skip-done`: усі три `skip-*`, статус першого
+        self.assertEqual(st, 'skip-done')
+        self.assertEqual(self.snapshot_tree(), before)
+
+
+class ThreeStepsStartup(_StepC):
+    """`startup()`: a, b, c по порядку; `abort-*` раннього не пускає наступні; `skip-nothing` раннього — пускає."""
+
+    def test_user_jumping_from_016_gets_all_three_in_one_start(self):
+        self.seed()
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        a, b, c = self.stamps()
+        self.assertEqual(self.backups(), sorted([a, b, c]))
+        self.assertLess(err.index('liga-4d3a: done'), err.index('liga-4d3b: done'))
+        self.assertLess(err.index('liga-4d3b: done'), err.index('liga-4d3c: done'))
+        for mark, stamp in (('liga-4d3a', a), ('liga-4d3b', b), ('liga-4d3c', c)):
+            self.assertEqual(self.read_json(self.deai, 'backups', stamp, 'manifest.json')['migration'], mark)
+        self.assertIn('liga-4d3b', self.read_json(self.deai, 'backups', c, 'space.json')['migrations'])     # c рахувався ПІСЛЯ запису b
+        self.assertIn(PUB_MOD, self.read_json(self.space_path())['modules'])
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['step'], last['status'], sorted(last['steps'])), ('liga-4d3c', 'done', ['liga-4d3a', 'liga-4d3b', 'liga-4d3c']))
+        self.assertEqual(last['steps']['liga-4d3a']['backup'], a)                      # звіти a, b не стерті
+        self.assertEqual(last['steps']['liga-4d3b']['backup'], b)
+        self.assertEqual(last['steps']['liga-4d3c']['roles'], ['publish'])
+        self.assert_no_secrets_in_logs()
+
+    def test_order_of_steps_is_the_order_of_startup(self):
+        self.seed()
+        order = []
+        real = self.lm._run
+
+        def spy(home, step=None):
+            order.append(step.mark)
+            return real(home, step)
+        with self.mock.patch.object(self.lm, '_run', spy):
+            self.start()
+        self.assertEqual(order, ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'])
+
+    def test_abort_of_an_early_step_stops_the_later_ones(self):
+        self.seed()
+        with self.mock.patch.object(self.dm, '_provider_for', lambda *a, **k: None):
+            st, err = self.start()
+        self.assertEqual(st, 'abort-provider')
+        self.assertEqual(self.backups(), [])
+        self.assertNotIn('liga-4d3b', err)
+        self.assertNotIn('liga-4d3c', err)
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['step'], list(last['steps'])), ('abort-provider', 'liga-4d3a', ['liga-4d3a']))
+
+    def test_skip_nothing_of_a_and_b_does_not_block_c(self):
+        self.config(supabase=False, jira=False, design_work_root=None)
+        cfg = self.cfg
+        cfg['tasks']['x'] = {'dir': os.path.join(self.home, 'work', 'x')}
+        self._write(self.tasks_path, cfg)
+        self.write_modules({'supabase-comments': {'enabled': True, 'settings': {}}, 'git-sync': {'enabled': True, 'settings': {}}})
+        self.assertEqual(self.lm.plan(step='liga-4d3a')['status'], 'skip-nothing')
+        self.assertEqual(self.lm.plan(step='liga-4d3b')['status'], 'skip-nothing')
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'skip-nothing'), ('liga-4d3b', 'skip-nothing'), ('liga-4d3c', 'done')])
+        self.assertEqual(list(self.marks()), ['liga-4d3c'])
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_exception_in_c_does_not_break_startup_and_keeps_a_b(self):
+        self.seed()
+        real = self.lm._run
+
+        def boom(home, step=None):
+            if step.mark == 'liga-4d3c':
+                raise RuntimeError('boom')
+            return real(home, step)
+        with self.mock.patch.object(self.lm, '_run', boom):
+            st, err = self.start()
+        self.assertEqual(st, 'abort-internal')
+        self.assertIn('liga-4d3a: done', err)
+        self.assertIn('liga-4d3b: done', err)
+        self.assertEqual(sorted(self.marks()), ['liga-4d3a', 'liga-4d3b'])
+        self.assertNotIn('boom', err)
+
+
+class CheckVerdictIsolated(_StepC):
+    """Поправка 9: «Перевірити» мігрованого `vercel-publish` в ізольованому прогоні — вердикт `isolated` без `npx` і мережі
+    (холодний справжній `npx vercel whoami` тут не перевіряється: мережі нема, це нотатка власнику в CHANGELOG)."""
+
+    def test_isolated_verdict_runs_no_npx_and_no_network(self):
+        self.write_modules({PUB_MOD: PUB_ENTRY})
+        space = self.liga_space()
+        with self.mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path}), \
+                self.mock.patch.object(serve, '_node_bin', side_effect=AssertionError('npx не має викликатись')), \
+                self.mock.patch.object(dm, 'check', side_effect=AssertionError('перевірка модуля не має запускатись')), \
+                SocketTripwire() as wire:
+            self.assertTrue(implicit.isolated())
+            self.assertTrue(dm.shared_state(space, PUB_MOD))
+            verdict = serve.module_check_verdict(space, PUB_MOD)
+        self.assertEqual((verdict['ok'], verdict['error']), (False, 'isolated'))
+        self.assertEqual(wire.count, 0)
 
 
 if __name__ == '__main__':

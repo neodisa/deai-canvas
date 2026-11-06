@@ -67,6 +67,7 @@ _REASONS = {
     'skip-registry-unreadable': 'реєстр просторів не читається',
     'skip-tasks-unreadable': 'старий tasks.json не читається: конфіг ЛІГИ невідомий',
     'skip-nothing': 'нічого мігрувати (нема ні ролей, ні напрямків): позначку не пишемо, наступний старт перевірить знову',
+    'publisher-present': 'публікацію вже веде інший модуль простору: крок його не перебиває',
     'skip-busy': 'міграція вже виконується іншим процесом (замок migrations/.lock зайнятий)',
     'abort-provider': 'ядро не вирішує мігровану роль на розрахованому space.json: міграція нічого не пише',
     'abort-internal': 'непередбачена помилка розрахунку: міграція нічого не пише',
@@ -222,6 +223,35 @@ def _entries_b(cfg, present):
     return out
 
 
+#: 4d-3c: роль третього кроку → вбудований модуль (напрямки крок не мігрує, секретів нема).
+ROLE_MODULES_C = (('publish', 'vercel-publish'),)
+#: Ключ `compat` запису `vercel-publish`: шлях ЛІГИ (`deai_modules.publish_legacy_path`); тест зіставляє з `COMPAT_DESIGN_CANVAS`.
+PUBLISH_COMPAT = 'design-canvas'
+
+
+def _entries_c(cfg, present):
+    """Роль → `(module, ознака_пропуску | None, запис space.json | None, секрети | None)` кроку 4d-3c (форма `_entries_b`).
+    `publish` → `vercel-publish` з `compat: design-canvas`: публікація, пароль превʼю, `pv-…` і URL — ті самі, що в неявному шляху.
+    ⛔ Секретів нема (`token`/`password` не пишемо: `auth: cli`, пароль превʼю дає задача/корінь, а не `secrets.json`); `cfg` не потрібен.
+    `publisher-present` тут НЕ проставляється: функція не знає простору — це робить `_plan` одним блоком (Поправка 4 плану)."""
+    if 'vercel-publish' in present:
+        return {'publish': ('vercel-publish', 'module-present', None, None)}
+    return {'publish': ('vercel-publish', None, {'enabled': True, 'shared_state': True,
+                                                 'settings': {'auth': 'cli', 'team': '', 'compat': PUBLISH_COMPAT}}, None)}
+
+
+def _publisher_present(space, mods):
+    """Чи роль `publish` на ПОТОЧНОМУ `space.json` (`mods` — сирі модулі) уже веде модуль (`Module`, не `Implicit`) — не `vercel-publish`
+    (той — `module-present`), а ІНШИЙ явно ввімкнений (напр. `static-publish`): два явні модулі публікації розв'язуються за id
+    (`static-publish` < `vercel-publish`), тож без цього коду крок дав би вічний `abort-provider`. Будь-який виняток (зламаний СВІЙ
+    модуль → `ModuleError`) — «не присутній»: далі той самий виклик на розрахованому `space.json` теж кине → `abort-provider`."""
+    try:
+        prov = deai_modules._provider_for('publish', space, explicit_override=deai_modules._normalize(mods))
+        return isinstance(prov, deai_modules.Module)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def plan(home=None, step=None):
     """Чистий розрахунок міграції ЛІГИ; див. докстрінг модуля. Нічого не пише; не кидає (збій — `abort-internal`).
     `step` — крок (`Step`, його позначка чи `None` = 4d-3a): 4d-3b узагальнює модуль до впорядкованого списку кроків."""
@@ -273,6 +303,11 @@ def _plan(home, step):
         raise _Stop('skip-tasks-unreadable', space_id=sid)
 
     roles = (step.entries or _role_entries)(cfg, set(mods))      # ролі кроку (4d-3a — `_role_entries`; пошук за імʼям на виклик: точка підміни)
+    # 4d-3c (Поправка 4 плану): `_entries_c` не знає простору, тож «публікацію вже веде інший модуль» проставляємо тут, одним блоком,
+    # ДО підрахунку `new_mods`/`skip-nothing`/`abort-provider`. `space` — ТАК САМО, як у перевірці `abort-provider` нижче.
+    if step is STEP_C and roles['publish'][1] is None:
+        if _publisher_present({'id': sid, 'path': path, 'legacy': True, 'integrations': liga.get('integrations') is True}, mods):
+            roles['publish'] = (roles['publish'][0], 'publisher-present', None, None)
     new_mods, secrets = dict(mods), {}
     for role, (mid, skip, entry, secret) in roles.items():
         if skip is None:
@@ -361,7 +396,9 @@ STEP_A = Step(MARK, ROLE_MODULES, True, BACKUP_SUFFIX, STAMP_RE)
 #: Другий крок (4d-3b, 0.18.0): `comments` і `vcs` ЛІГИ — явні модулі; без напрямків (`tracks=False`), свій бекап і позначка без `tracks`.
 STEP_B = Step('liga-4d3b', ROLE_MODULES_B, False, '-liga-4d3b', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3b(?:-[0-9]{1,3})?'), _entries_b)
 #: Усі відомі кроки в порядку застосування (відкат — у зворотному: LIFO) і ті, що біжать на старті/в CLI.
-ALL_STEPS = (STEP_A, STEP_B)
+#: Третій крок (4d-3c, 0.19.0): `publish` ЛІГИ — явний `vercel-publish` з `compat`; без напрямків і секретів, свій бекап і позначка.
+STEP_C = Step('liga-4d3c', ROLE_MODULES_C, False, '-liga-4d3c', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3c(?:-[0-9]{1,3})?'), _entries_c)
+ALL_STEPS = (STEP_A, STEP_B, STEP_C)
 STEPS = ALL_STEPS
 
 
@@ -833,7 +870,8 @@ def _restore(stamp, hold=False, home=None):
 
 
 def _applied_later(sp, step):
-    """Бекап (імʼя) першого з ПІЗНІШИХ за `step` кроків, що застосований у `space.json` (`migrations[mark]` є і не `held`), чи `None`.
+    """Бекап (імʼя) ОСТАННЬОГО з ПІЗНІШИХ за `step` кроків, що застосований у `space.json` (`migrations[mark]` є і не `held`), чи `None`
+    (4d-3c: для `restore <a>` при застосованих b і c це бекап c — відкочувати треба спершу його, а не b, якого вже не відкотиш).
     Застосований без імені бекапу (позначку хтось дописав руками) — `''`: відмова все одно (імені просто нема). `space.json`,
     що не читається, пізніших кроків не показує (відкат його й так замінює)."""
     try:
@@ -842,7 +880,7 @@ def _applied_later(sp, step):
         return None
     if not isinstance(mig, dict):
         return None
-    for s in ALL_STEPS[ALL_STEPS.index(step) + 1:]:
+    for s in reversed(ALL_STEPS[ALL_STEPS.index(step) + 1:]):
         mark = mig.get(s.mark)
         if mark is not None and not (isinstance(mark, dict) and mark.get('held') is True):
             return (mark.get('backup') if isinstance(mark, dict) else None) or ''
