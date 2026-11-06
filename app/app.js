@@ -7169,7 +7169,7 @@ function paletteState() {
        постачальниками (`capabilities.publish`/`capabilities.comments`). */
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
-    space: st.space ? { id: st.space.id, integrations: st.space.integrations, capabilities: st.space.capabilities } : null,
+    space: st.space ? { id: st.space.id, integrations: st.space.integrations, capabilities: st.space.capabilities, compat: st.space.compat } : null,
   };
 }
 

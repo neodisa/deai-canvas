@@ -1065,6 +1065,18 @@ class SpaceCompatKey(_VcsStand):
             f.write('{broken')
         self.assertEqual(dm.compat_view(sp2, {'vcs': VCS_ID}), {})
 
+    def test_compat_view_returns_only_the_allowed_value_of_the_module(self):
+        """Ревʼю M4: сире значення з `space.json` клієнту не віддаємо, якщо воно не дозволене цьому модулю (vcs — `design-canvas`,
+        comments — `comment-layer`); перехресне й сміття — ключа нема."""
+        dm = self.dm
+        d = os.path.join(self.tmp, 'cva')
+        os.makedirs(d)
+        sp = {'id': 'cva', 'path': d, 'integrations': False}
+        caps = {'vcs': VCS_ID}
+        for val, want in ((DC, {'vcs': DC}), ('comment-layer', {}), ('<script>', {}), ('DESIGN-CANVAS', {})):
+            self.mb._write(os.path.join(d, 'space.json'), {'modules': {VCS_ID: {'enabled': True, 'settings': {'compat': val}}}})
+            self.assertEqual(dm.compat_view(sp, caps), want, val)
+
     def test_compat_view_requires_a_builtin_raw_provider(self):
         """Захист у глибину: сирий постачальник ролі — вбудований `Module` цього id; свій модуль (`origin == 'space'`) з тим самим
         id і `compat` ключа не дає. Постачальник береться з кешу `_capabilities_full`, каталог не обходиться."""

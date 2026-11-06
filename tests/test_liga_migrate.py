@@ -1811,12 +1811,45 @@ class StartupTest(_WriteStand):
         self.assertEqual(len(self.backups()), 1)
         self.assertEqual(self.deai, os.path.join(self.home, '.deai'))
 
-    def test_serve_main_calls_startup_before_make_server(self):
-        with open(os.path.join(os.path.dirname(_HERE), 'app', 'serve.py'), encoding='utf-8') as f:
-            src = f.read()
-        tail = src[src.index("if __name__ == '__main__':"):]
-        self.assertIn('liga_migrate.startup()', tail)
-        self.assertLess(tail.index('liga_migrate.startup()'), tail.index('make_server(port).serve_forever()'))
+    def test_serve_main_binds_port_then_migrates_then_serves(self):
+        """Ревʼю I1: порт займаємо ПЕРШИМ (`make_server`), міграція — після, `serve_forever` — останнім. Інакше при зайнятому порті
+        міграція переписала б простір, а старіший сервер, що тримає порт, обслуговував би простір, якого не розуміє."""
+        import serve
+        calls = []
+
+        class FakeSrv:
+            def serve_forever(self_):
+                calls.append('serve')
+
+        with self.mock.patch.object(serve, 'make_server', lambda port: calls.append('bind') or FakeSrv()), \
+                self.mock.patch.object(self.lm, 'startup', lambda: calls.append('migrate')):
+            serve.serve_main(0)
+        self.assertEqual(calls, ['bind', 'migrate', 'serve'])
+
+    def test_serve_main_with_busy_port_leaves_the_space_unmigrated(self):
+        import socket
+        import serve
+        before = self.snapshot_tree()
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            blocker.bind(('127.0.0.1', 0))
+            blocker.listen(1)
+            with self.assertRaises(OSError):
+                self.quiet(serve.serve_main, blocker.getsockname()[1])
+        finally:
+            blocker.close()
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.snapshot_tree(), before)                  # space.json і решта — байт у байт
+
+    def test_done_line_names_backup_stamp_and_restore_hint(self):
+        """Ревʼю M1: рядок старту при `done` називає імʼя бекапу (без шляху й значень) і підказку відкату."""
+        st, err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'done')
+        stamp = self.backups()[0]
+        self.assertIn('бекап: %s' % stamp, err)
+        self.assertIn('відкат: bin/migrate_liga.py restore %s --hold' % stamp, err)
+        self.assertNotIn(self.tmp, err)
+        self.assert_no_secrets_in_logs()
 
 
 if __name__ == '__main__':

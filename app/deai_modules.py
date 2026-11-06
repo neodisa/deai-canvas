@@ -2111,6 +2111,8 @@ VCS_MODULE = 'git-sync'
 COMPAT_DESIGN_CANVAS = 'design-canvas'
 #: Ролі, чий явний вбудований модуль має `compat`, що видно клієнту: `{роль: id модуля}`.
 COMPAT_ROLES = (('comments', COMMENTS_MODULE), ('vcs', VCS_MODULE))
+#: Єдине дозволене непорожнє значення `compat` ролі (клієнту віддаємо лише його; сире з `space.json` — ні).
+COMPAT_ALLOWED = {'comments': COMPAT_COMMENT_LAYER, 'vcs': COMPAT_DESIGN_CANVAS}
 
 
 def compat_view(space, caps):
@@ -2133,7 +2135,7 @@ def compat_view(space, caps):
         if not (isinstance(p, Module) and getattr(p, 'origin', 'builtin') == 'builtin' and p.id == mid):
             continue
         v = compat_of(space, mid)
-        if v:
+        if v and v == COMPAT_ALLOWED.get(role):
             out[role] = v
     return out
 

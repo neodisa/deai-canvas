@@ -517,7 +517,7 @@ def _exclusive():
     мовчки скіпати міграцію на кожному старті. Безпечніше й видиме: `'error'` → `abort-lock` у `last.json`/статусі, нічого не
     пишемо (йти без міжпроцесного замка не ризикуємо; `WRITE_LOCK` стереже лише потоки одного процесу). ⚠️ Замок стереже міграцію від другої міграції/відкату; з правками
     з екрана канваса він не знайомий: `run` із CLI, поки канвас того ж дому працює, може розійтись із правками UI (сам канвас
-    мігрує лише на старті, до відкриття порту)."""
+    мігрує лише на старті, після відкриття порту й до першого запиту)."""
     d = os.path.join(spaces.home(), 'migrations')
     os.makedirs(d, mode=0o700, exist_ok=True)
     fd = os.open(os.path.join(d, '.lock'), os.O_CREAT | os.O_RDWR, 0o600)
@@ -1014,7 +1014,7 @@ def _real_home():
 
 
 def startup():
-    """Виклик із `serve.main` ДО `make_server`. Ізольований прогін (`implicit.isolated()`) не мігрує, крім шва
+    """Виклик із `serve.serve_main` ПІСЛЯ `make_server` (порт уже зайнято), до `serve_forever`. Ізольований прогін (`implicit.isolated()`) не мігрує, крім шва
     `DC_MIGRATE_LIGA=1` ЛИШЕ з тимчасовим `DEAI_HOME` (справжній `~/.deai` — гучна відмова). Не кидає ніколи: виняток — у stderr
     (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`. Кроки `STEPS` — по порядку (`run_all`): `abort-*` і `skip-busy`
     зупиняють наступні на цьому старті; `held` раннього кроку теж тримає наступні (їхній `plan` — `skip-held`); решта `skip-*`
@@ -1037,6 +1037,9 @@ def startup():
                     print('  ' + info['hint'], file=sys.stderr)
                 # ⛔ Часткова міграція мовчить найгірше: позначку записано, а роль (напр. трекер без облікових у оточенні, коли
                 # старт — з Dock/PWA) лишилась неявною й не повториться. Рядок: роль і КОД причини, без значень.
+                stamp = info.get('backup')
+                if st == 'done' and step_of_stamp(stamp):                    # лише імʼя бекапу (без шляху до дому) і як повернути
+                    print('  бекап: %s; відкат: bin/migrate_liga.py restore %s --hold' % (stamp, stamp), file=sys.stderr)
                 skipped = info.get('skipped')
                 if isinstance(skipped, dict) and skipped:
                     print('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(skipped.items())), file=sys.stderr)

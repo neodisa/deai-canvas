@@ -582,7 +582,7 @@ tests/        unit, Python and live (Playwright) tests
 ## LIGA migration
 
 The in-house LIGA space moves its config into its own `space.json` and `secrets.json` by itself, once, when the canvas starts
-(before the port opens). The old file and the environment are not touched; a dated backup is made first. From the command line:
+(right after the port is bound, before the first request is served; a busy port stops the start before anything is migrated). The old file and the environment are not touched; a dated backup is made first. From the command line:
 
 ```
 python3 bin/migrate_liga.py status                      # the mark, the last report, the backups
@@ -617,7 +617,7 @@ the later ones too.
 be cloned again under `<DEAI_HOME>/cache`. Rotation: the Supabase key of the comments is a copy in `secrets.json` too (rotate it on
 Connections); `gitlab_ssh_key` / `gitlab_host_ip` in the root of `tasks.json` keep working until 4d-4.
 
-Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: the `liga-4d3a` stamp); the tracks are migrated only
+Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-b> --hold`, then `restore <stamp-a> --hold`, since `restore <stamp-a>` is refused while step b is applied); the tracks are migrated only
 when they match the old adapter exactly (otherwise they stay as in 0.16 until 4d-4); a LIGA folder inside a git work tree is not
 migrated; a partial migration is final. The full list and the status codes are in `CHANGELOG.md`, `[0.18.0]` and `[0.17.0]`.
 

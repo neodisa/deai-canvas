@@ -9113,6 +9113,16 @@ def make_server(port=0):
     return ThreadingHTTPServer(('127.0.0.1', port), Routed)
 
 
+def serve_main(port):
+    """Порт — ПЕРШИМ (`make_server` біндить у конструкторі): зайнятий порт кидає `OSError` ДО міграції ЛІГИ, і простір лишається
+    як був (старіший сервер, що тримає порт, не бачить простору, якого не розуміє). Далі міграція (не кидає, ізольовані прогони
+    пропускає), і лише потім `serve_forever`: зʼєднання тим часом чекають у черзі, запит обслуговується вже після міграції."""
+    srv = make_server(port)
+    import liga_migrate
+    liga_migrate.startup()
+    srv.serve_forever()
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8765))
     print(f'Design Canvas v2: http://localhost:{port}/app/')
@@ -9123,6 +9133,4 @@ if __name__ == '__main__':
     extra_line = extra_modules_line()
     if extra_line:
         print(extra_line, file=sys.stderr)
-    import liga_migrate
-    liga_migrate.startup()                  # міграція ЛІГИ (4d-3a) ДО відкриття порту; не кидає, ізольовані прогони пропускає
-    make_server(port).serve_forever()
+    serve_main(port)

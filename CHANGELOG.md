@@ -96,7 +96,17 @@ The behaviour of 0.17.0 is pinned by the snapshot `tests/fixtures/liga-migration
   overwritten). It applies to all five roles (`comments`, `vcs`, `dashboard`, `tracker`, `notify`) and closes a gap of 0.17, where
   an isolated run over a real `DEAI_HOME` could read the real `secrets.json` through «Check». New label `cnErrIsolated`.
 - **Every built-in module field has a compat label** in the Connections screen (`compat_view` is built for built-in modules only,
-  and a test covers the labels of all built-in modules).
+  and a test covers the labels of all built-in modules). New field labels: `cnFieldSbDashCompat` (`supabase-dashboard` `compat`),
+  `cnFieldSbTeamsCompat` (`supabase-teams` `compat`) and `cnFieldVercelAuth` (`vercel-publish` `auth`), next to
+  `cnFieldSbCompat` and `cnFieldGitCompat`.
+- **Start order (final review).** The server binds the port first (`serve.serve_main`), then runs the migration, then serves: the
+  migration is after the port opens and before the first request. A busy port stops the start BEFORE anything is migrated (before,
+  an older server holding the port would have kept serving a space it does not understand). Connections wait in the backlog during
+  the migration. This replaces «before the port opens» of 0.17.0.
+- **The start line of a finished step names the backup** (`бекап: <stamp>; відкат: bin/migrate_liga.py restore <stamp> --hold`;
+  the name only, no path, no values).
+- `compat` of a role in `/api/spaces` is returned only when it is the allowed value of that module (`design-canvas` for
+  `git-sync`, `comment-layer` for `supabase-comments`); the palette state of the canvas carries `compat` too.
 
 ### Status codes
 
@@ -123,6 +133,8 @@ The behaviour of 0.17.0 is pinned by the snapshot `tests/fixtures/liga-migration
 - **⛔ Before a downgrade to 0.17 run `python3 bin/migrate_liga.py restore <stamp-b> --hold`.** 0.17 ignores the setting
   `compat`: without the restore the comment channels switch to `deai/<space>/<task>` (the history and the silence «disappear»)
   and the mirrors are cloned again under `<DEAI_HOME>/cache` (orphaned unpushed commits of the old mirrors).
+- **⛔ Downgrade to 0.16 (two steps applied):** `restore <stamp-b> --hold`, then `restore <stamp-a> --hold`. `restore <stamp-a>`
+  alone is refused (`refuse-later-applied`) while step b is applied; the `liga-4d3a` stamp is not enough.
 - **Rotation.** The Supabase key for the comments is now a copy in `secrets.json`: rotating `supabase_key` in the old `tasks.json`
   (or in the environment) no longer reaches the comments; rotate it on the Connections screen (the same as for the dashboard and
   Teams since 0.17).

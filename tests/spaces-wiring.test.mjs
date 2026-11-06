@@ -327,7 +327,7 @@ test("палітра ⌘K: простори — масив лише коли ш�
   assert.match(body, /spaceId: st\.space\?\.id \?\? null,/);
   /* Task 8 (модулі 2а): до вимикача додано `capabilities` — на них тепер стоїть публікація в ⌘K
      (`hasPublish`), а лише `integrations` не відрізняє «публікує модуль» від «публікації нема». */
-  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, integrations: st\.space\.integrations, capabilities: st\.space\.capabilities \} : null,/);
+  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, integrations: st\.space\.integrations, capabilities: st\.space\.capabilities, compat: st\.space\.compat \} : null,/);
   assert.match(fn("openPalette"), /loadSpaces\(\)\.then\(\(\) => \{ if \(paletteOverlay === 'pal'\) repaintPaletteList\(\); \}\);/);
 });
 

@@ -146,7 +146,7 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   });
   S.running = S.first.child;
   const { deaiHome } = S.first;
-  /* Міграція йде ДО відкриття порту (`serve.main`): коли сервер відповів, усе вже на диску. */
+  /* Міграція йде після відкриття порту, але до обслуговування запитів (`serve.serve_main`): коли сервер відповів, усе вже на диску. */
   const all = readdirSync(path.join(deaiHome, "backups")).sort();
   const backups = all.filter((n) => /-liga-4d3a$/.test(n));
   assert.equal(backups.length, 1, `рівно один бекап кроку 4d-3a: ${JSON.stringify(backups)}`);
