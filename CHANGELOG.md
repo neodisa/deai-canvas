@@ -109,6 +109,9 @@ The behaviour of 0.18.0 is pinned by the snapshot `tests/fixtures/liga-migration
    with `shared_state` **stays**. LIGA publishes through the LIGA branch (`module_publish=False`, the comments work), and the refusal
    guards the real builds of a MODULE (another publish module, or `vercel-publish` without `compat`) from carrying the Supabase key
    of LIGA into a preview. The two notes of `[0.18.0]` are corrected (see below), the docstring of `publish_comments` too.
+8. **Enabling another publish module by hand in a migrated LIGA answers `role-taken`** unless «replace» is chosen: the role is now
+   held by the explicit `vercel-publish` record, while in 0.18 the implicit provider did not occupy it. «Replace» works; the
+   replaced record keeps its settings, as for any replaced module.
 
 ### Known limits
 
