@@ -487,6 +487,24 @@ class ChannelCallSites(_ChanStand):
                 self.dashboard.sync({'tasks': keep}, mod, {'secrets': {}}, identity=mb.IDENTITY, log=lambda *_: None, call=call, **kw)
             self.assertEqual(counts.asked, want)
 
+    def test_sync_reads_space_json_at_most_once(self):
+        """Схема каналу вирішується ОДИН раз при побудові колбека, а не на кожну задачу проходу синку."""
+        import overview_push as ov
+        for compat in (LAYER, None):
+            rig, space, cfg = self.stand(compat=compat)
+            reads = []
+            real = self.dm.compat_of
+
+            def counting(sp, mid):
+                reads.append(mid)
+                return real(sp, mid)
+            with self.pinned(rig), self.mock.patch.object(self.dm, 'compat_of', counting):
+                cb = ov._channel_of(space, log=lambda *_: None)
+                for _ in range(3):
+                    for tid in ('a-1', 'a-2'):
+                        cb(cfg['tasks'][tid], tid)
+            self.assertLessEqual(len(reads), 1, (compat, reads))
+
     def test_decision_failure_falls_back_to_the_legacy_scheme(self):
         """Збій рішення (нечитабельний `space.json`; id задачі, непридатний для `channel_for`) — схема comment-layer, не 5xx і не виняток."""
         serve = self.serve
@@ -635,12 +653,12 @@ class ChannelGuard(unittest.TestCase):
                     out.append(os.path.join(root, d, n))
         return out
 
-    def calls(self, tree):
+    def calls(self, tree, names=None):
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 f = node.func
                 name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
-                if name in self.FORBIDDEN:
+                if name in (names or self.FORBIDDEN):
                     yield node
 
     def test_no_direct_calls_outside_the_wrappers(self):
@@ -651,9 +669,22 @@ class ChannelGuard(unittest.TestCase):
             bad += ['%s:%d' % (os.path.basename(p), n.lineno) for n in self.calls(tree)]
         self.assertEqual(bad, [], 'канал коментарів — лише через deai_modules.comment_channel_of (чи legacy_comment_channel)')
 
+    def test_channel_for_is_called_only_inside_deai_modules(self):
+        """`channel_for` кличе лише `deai_modules.py` (визначення і `comment_channel_of`): будь-де інде — повз рішення про схему."""
+        bad = []
+        for p in self.files():
+            if os.path.basename(p) == 'deai_modules.py':
+                continue
+            with open(p, encoding='utf-8') as f:
+                tree = ast.parse(f.read(), p)
+            bad += ['%s:%d' % (os.path.basename(p), n.lineno) for n in self.calls(tree, ('channel_for',))]
+        self.assertEqual(bad, [])
+
     def test_guard_sees_a_planted_call(self):
         tree = ast.parse('x = comment_project_key(t, 1)\ny = mod.comment_channel(t, 1)\nz = comment_channel_of(1)')
         self.assertEqual(len(list(self.calls(tree))), 2)
+        planted = ast.parse('a = deai_modules.channel_for(s, 1)\nb = channel_for(s, 1)\nc = comment_channel_of(1)')
+        self.assertEqual(len(list(self.calls(planted, ('channel_for',)))), 2)
 
     def test_dashboard_sync_uses_channel_of(self):
         with open(os.path.join(os.path.dirname(_HERE), 'app', 'dashboard.py'), encoding='utf-8') as f:

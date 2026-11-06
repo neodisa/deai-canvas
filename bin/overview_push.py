@@ -179,10 +179,13 @@ def _channel_of(sp, log=print):
         log("⚠ overview: постачальника коментарів не визначено (%s): ключ лічильника — схема comment-layer" % (getattr(e, "code", None) or type(e).__name__))
         prov = None
 
+    # Рішення про схему — ОДИН раз тут (читає `space.json`), а не на кожну задачу проходу синку.
+    legacy = deai_modules.comment_scheme_legacy(sp, prov) if prov is not None else True
+
     def channel_of(task, tid):
         if prov is not None:
             try:
-                return deai_modules.comment_channel_of(sp, prov, task, tid)
+                return deai_modules.comment_channel_of(sp, prov, task, tid, legacy=legacy)
             except deai_modules.ModuleError:
                 pass
         return deai_modules.legacy_comment_channel(task, tid)

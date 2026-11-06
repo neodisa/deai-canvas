@@ -2122,11 +2122,12 @@ def comment_scheme_legacy(space, prov):
             and compat_of(space, prov.id) == COMPAT_COMMENT_LAYER)
 
 
-def comment_channel_of(space, prov, task, tid, internal=False):
+def comment_channel_of(space, prov, task, tid, internal=False, legacy=None):
     """Канал коментарів задачі `tid` для вже вирішеного постачальника `prov`: схема comment-layer (`comment_scheme_legacy`) —
     `legacy_comment_channel`, інакше `channel_for` (`deai/<простір>/<задача>`, може кинути `ModuleError`). УСІ місця каналу ходять
-    через цю функцію."""
-    if comment_scheme_legacy(space, prov):
+    через цю функцію. `legacy` — вже прийняте рішення `comment_scheme_legacy(space, prov)` (синк рахує його ОДИН раз на прохід, а не
+    читає `space.json` на кожну задачу); `None` — порахувати тут."""
+    if comment_scheme_legacy(space, prov) if legacy is None else legacy:
         return legacy_comment_channel(task, tid, internal)
     return channel_for(space, tid, internal)
 
