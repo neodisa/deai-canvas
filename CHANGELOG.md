@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.17.0] — unreleased
+## [0.17.0] — 06.11.2026
 
 Stage 4d-3a: the first of three steps that turn the LIGA space into an ordinary one. A **migration** moves the config the LIGA
 space used to take from the root of the old `tasks.json` and from the environment into its own `space.json` and `secrets.json`:
