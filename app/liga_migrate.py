@@ -530,9 +530,9 @@ def _run(home):
     (`skip-busy`, якщо зайнято); `plan()` рахується ВСЕРЕДИНІ замка, тож позначку/`held`, що зʼявились раніше, бачимо ДО запису секретів."""
     if home and os.path.realpath(os.path.expanduser(home)) != os.path.realpath(spaces.home()):
         return 'abort-internal', {'status': 'abort-internal', 'reason': 'home не збігається з DEAI_HOME: запис пішов би в іншу теку'}
-    if not spaces.layer_on():                                # шар вимкнено: нічого (навіть замка) у справжньому домі не створюємо
-        p = plan(home)
-        return p['status'], _info(p)
+    p0 = plan(home)                                          # ⛔ дешевий розрахунок ПОЗА замком: нема що робити — диск не чіпаємо
+    if p0['status'] != 'ready':                              # (ні `migrations/`, ні `.lock` у домі звичайного не-ЛІГА користувача)
+        return _not_ready(p0)
     try:
         with _exclusive() as got:
             if got == 'busy':

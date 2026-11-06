@@ -1092,6 +1092,7 @@ class RunTest(_WriteStand):
         self.assertEqual(self.backups(), [])
         self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations', 'last.json')))
         self.assertFalse(os.path.exists(self.secrets_path()))
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations')))     # ⛔ ні теки, ні `.lock`: дім не-ЛІГА лишається чистим
 
     def test_skip_nothing_writes_nothing(self):
         """⛔ `skip-nothing`: ні бекапу, ні позначки, ні `last.json`; наступний запуск перевірить знову."""
@@ -1282,6 +1283,14 @@ class RunTest(_WriteStand):
         self.assertEqual(last['status'], 'abort-lock')
         self.assertIn('abort-lock', self.lm.status_text(self.lm.status()))
         self.assertEqual(self.lm.run(), 'done')                                    # лише flock відновився — міграція доходить до кінця
+
+    def test_ready_creates_lock_dir_but_non_ready_does_not(self):
+        self.registry(entry=False)
+        self.assertEqual(self.lm.run(), 'skip-no-liga')
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations')))
+        self.registry()
+        self.assertEqual(self.lm.run(), 'done')
+        self.assertTrue(os.path.exists(os.path.join(self.deai, 'migrations', '.lock')))
 
     def test_nested_run_during_write_is_busy_and_secrets_written_once(self):
         real = self.dm.write_secrets
