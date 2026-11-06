@@ -1087,5 +1087,159 @@ class SpaceCompatKey(_VcsStand):
             self.assertEqual(dm.compat_view(sp, caps), {}, 'збій кешу — тотальність')
 
 
+# ------------------------------------------------------------------------------ Task 4: закон ізоляції, відмова публікації
+
+OWN_KEY = 'sb_chan_key_alpha'          # ключ у secrets.json запису; відрізняється від кореня старого tasks.json (`SB_KEY`)
+ISO_ENVS = ({'DC_TASKS_FILE': '<tasks>'}, {'DC_NO_OVERVIEW': '1'})
+
+
+class SharedStateIsolationB(_VcsStand):
+    """Закон ізоляції для `comments`/`vcs` (спека §5): запис із `shared_state: true` в ізольованому прогоні будує `ctx` неявного
+    шляху (налаштування й секрети запису НЕ читаються); поза ізоляцією — `module_ctx`; без `shared_state` (чи не-`bool`) — звичайний
+    модуль. Ключ у `secrets.json` ІНШИЙ, ніж у корені старого `tasks.json`: за ним видно, звідки прочитано."""
+
+    def _iso(self, rig, which):
+        env = dict(ISO_ENVS[which])
+        env = {k: (rig.tasks_path if v == '<tasks>' else v) for k, v in env.items()}
+        return self.mb._stack(rig, self.mb._env_extra(rig, **env))
+
+    def cstand(self, shared=True, compat=LAYER, root_supabase=True):
+        rig, space, cfg = self.stand(compat=compat)
+        rec = {'enabled': True, 'settings': {'url': 'https://sb-own.example.com', 'shots_bucket': 'own-bucket'}}
+        if compat:
+            rec['settings']['compat'] = compat
+        if shared is not None:
+            rec['shared_state'] = shared
+        self.mb._write(os.path.join(rig.space_dir, 'space.json'), {'modules': {COMMENTS_ID: rec}})
+        if not root_supabase:
+            cfg = {k: v for k, v in cfg.items() if k not in ('supabase_url', 'supabase_key')}
+            self.mb._write(rig.tasks_path, cfg)
+        return rig, space, cfg
+
+    def route(self, rig, space):
+        self.dm.reset_caches()
+        prov, err = self.serve.comments_provider(space)
+        self.assertIsNone(err)
+        return self.serve.comments_route(space, prov)
+
+    # ---- comments_route
+    def test_comments_isolated_takes_the_legacy_ctx_not_the_record(self):
+        for which in (0, 1):
+            rig, space, cfg = self.cstand()
+            with self._iso(rig, which):
+                mod, ctx, chan = self.route(rig, space)
+                self.assertEqual(ctx['secrets'], {'key': self.mb.SB_KEY}, which)          # ключ кореня задач, НЕ secrets.json
+                self.assertNotEqual(ctx['secrets']['key'], OWN_KEY)
+                self.assertEqual(ctx['settings'], {'url': self.mb.SB_URL, 'shots_bucket': self.serve.LEGACY_SHOTS_BUCKET}, which)
+                self.assertEqual(chan(cfg['tasks']['a-1'], 'a-1'), 'liga-shared')           # канал і предикат — за compat
+                self.assertEqual(chan(cfg['tasks']['a-2'], 'a-2'), 'dc/a-2')
+
+    def test_comments_isolated_channel_follows_compat_without_it(self):
+        rig, space, cfg = self.cstand(compat=None)
+        with self._iso(rig, 0):
+            _mod, ctx, chan = self.route(rig, space)
+            self.assertEqual(ctx['secrets'], {'key': self.mb.SB_KEY})
+            self.assertEqual(chan(cfg['tasks']['a-1'], 'a-1'), 'deai/legacy/a-1')
+
+    def test_comments_isolated_without_root_config_is_unconfigured(self):
+        for which in (0, 1):
+            rig, space, _cfg = self.cstand(root_supabase=False)
+            with self._iso(rig, which):
+                with self.assertRaises(self.dm.ModuleError) as cm:
+                    self.route(rig, space)
+                self.assertEqual(cm.exception.code, 'comments-unconfigured', which)
+
+    def test_comments_outside_isolation_takes_the_record(self):
+        rig, space, _cfg = self.cstand()
+        with self.pinned(rig):
+            _mod, ctx, _chan = self.route(rig, space)
+        self.assertEqual(ctx['secrets'], {'key': OWN_KEY})
+        self.assertEqual(ctx['settings']['url'], 'https://sb-own.example.com')
+        self.assertEqual(ctx['settings']['shots_bucket'], 'own-bucket')
+
+    def test_comments_without_shared_state_is_a_plain_module_even_isolated(self):
+        for shared in (None, False, 'true', 1, [], {}):
+            rig, space, _cfg = self.cstand(shared=shared)
+            with self._iso(rig, 0):
+                _mod, ctx, _chan = self.route(rig, space)
+                self.assertEqual(ctx['secrets'], {'key': OWN_KEY}, repr(shared))
+                self.assertEqual(ctx['settings']['url'], 'https://sb-own.example.com', repr(shared))
+
+    # ---- vcs_provider
+    def vcs_env(self, rig, iso):
+        return self._iso(rig, 0) if iso else self.pinned(rig)
+
+    def test_vcs_isolated_takes_the_legacy_ctx(self):
+        for compat in (DC, None):
+            rig, _space, _cfg = self.vstand(compat=compat, autosync=False, extra={'branch': 'dev', 'path': 'x/{task}'})
+            with self.vcs_env(rig, True):
+                self.dm.reset_caches()
+                _mod, ctx, legacy = self.serve.vcs_provider()
+            self.assertEqual(ctx['settings'], {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True}, compat)
+            self.assertIs(ctx['mirror_flat'], True, compat)
+            self.assertEqual(ctx['cache_dir'], os.path.join(rig.home, 'mirrors'), compat)
+            self.assertIs(legacy, compat == DC, compat)                                    # предикат текстів — за compat
+
+    def test_vcs_outside_isolation_takes_the_record(self):
+        rig, _space, _cfg = self.vstand(compat=DC, autosync=False, extra={'branch': 'dev'})
+        with self.vcs_env(rig, False):
+            self.dm.reset_caches()
+            _mod, ctx, legacy = self.serve.vcs_provider()
+        self.assertEqual((ctx['settings']['branch'], ctx['settings']['autosync']), ('dev', False))
+        self.assertIs(ctx['mirror_flat'], True)                                            # накладка Task 3 лишається
+        self.assertTrue(legacy)
+
+    def test_vcs_without_shared_state_is_a_plain_module_even_isolated(self):
+        for shared in (None, False, 'true', 1, [], {}):
+            rig, _space, _cfg = self.vstand(compat=None, extra={'branch': 'dev'})
+            sp = os.path.join(rig.space_dir, 'space.json')
+            with open(sp, encoding='utf-8') as f:
+                data = json.load(f)
+            rec = data['modules'][VCS_ID]
+            rec.pop('shared_state', None)
+            if shared is not None:
+                rec['shared_state'] = shared
+            self.mb._write(sp, data)
+            with self.vcs_env(rig, True):
+                self.dm.reset_caches()
+                _mod, ctx, _legacy = self.serve.vcs_provider()
+            self.assertEqual(ctx['settings']['branch'], 'dev', repr(shared))
+            self.assertNotIn('mirror_flat', ctx, repr(shared))
+
+    # ---- publish_comments
+    def test_publish_comments_refuses_shared_state_module_in_module_publish(self):
+        serve = self.serve
+        rig, space, cfg = self.cstand()
+        task = cfg['tasks']['a-1']
+        with self.pinned(rig):
+            self.dm.reset_caches()
+            self.assertEqual(serve.publish_comments(space, task, 'a-1', module_publish=True), (False, None))
+            res, warn = serve.publish_comments(space, task, 'a-1', module_publish=False)    # шлях `_publish` — словник модуля
+            self.assertIsNone(warn)
+            self.assertIsInstance(res, dict)
+            self.assertEqual(res['channel'], 'liga-shared')
+        rig, space, cfg = self.cstand(shared=None)
+        with self.pinned(rig):
+            self.dm.reset_caches()
+            for mp in (True, False):
+                res, warn = serve.publish_comments(space, cfg['tasks']['a-1'], 'a-1', module_publish=mp)
+                self.assertIsNone(warn, mp)
+                self.assertIsInstance(res, dict, mp)
+
+    # ---- ProjectComments._module
+    def test_project_comments_module_is_not_gated_by_integrations(self):
+        """Мігрований запис — явний модуль: `require_integrations()` його не гейтить (гейт лише в `Implicit`)."""
+        serve, spaces = self.serve, self.spaces
+        rig, space, cfg = self.cstand()
+        with self.pinned(rig):
+            self.dm.reset_caches()
+            pc = serve.ProjectComments(space)
+            self.assertEqual(pc.kind, 'module')
+            with self.mock.patch.object(spaces, 'require_integrations', side_effect=AssertionError('gated')), \
+                    self.mock.patch.object(self.dm, 'call', return_value=[]) as call:
+                pc.pins(cfg['tasks']['a-1'], 'a-1')
+            self.assertEqual(call.call_count, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

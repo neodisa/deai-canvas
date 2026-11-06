@@ -659,8 +659,13 @@ def vcs_provider():
         return m, _vcs_legacy_ctx(), vcs_legacy_texts(prov, None)
     try:
         space = spaces.active_space()
-        ctx = deai_modules.module_ctx(space, prov)
         legacy = vcs_legacy_texts(prov, space)                       # ОДИН раз: третій елемент для всіх споживачів текстів
+        if _shared_module(space, prov) and implicit.isolated():
+            # ⛔ Закон ізоляції (4d-3b, спека §5): запис `shared_state` в ізольованому прогоні (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`)
+            # будує `ctx` НЕЯВНОГО шляху — налаштування запису не читаються, дзеркала плоскі в `DC_MIRRORS_DIR`. Місце ізоляції
+            # одне: ця функція і `comments_route`. Тексти — за `compat` (предикат вище), не за ізоляцією.
+            return prov, _vcs_legacy_ctx(), legacy
+        ctx = deai_modules.module_ctx(space, prov)
         if legacy:                                                   # `compat == "design-canvas"` = рівно поведінка `Implicit`
             ctx = {**ctx, **_flat_mirror_overlay()}
         return prov, ctx, legacy
@@ -3155,8 +3160,13 @@ def comments_route(space, prov):
         raise deai_modules.ModuleError('module-error', message='comments: no provider')
     # Канал — функція `comment_channel_of`: вбудований `supabase-comments` із `compat: "comment-layer"` (мігрована ЛІГА) веде
     # коментарі схемою comment-layer, решта модулів — `deai/<простір>/<задача>` (`channel_for`).
-    return (prov, deai_modules.module_ctx(space, prov),
-            lambda task, tid, internal=False: deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
+    channel = (lambda task, tid, internal=False:
+               deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
+    if _shared_module(space, prov) and implicit.isolated():
+        # ⛔ Закон ізоляції (4d-3b, спека §5): запис `shared_state` в ізольованому прогоні бере ключ із кореня файла задач, а не з
+        # `secrets.json` (`_comments_legacy_ctx`; нема конфігу — `comments-unconfigured`, як в `Implicit`). Місце ізоляції одне.
+        return prov, _comments_legacy_ctx(), channel
+    return prov, deai_modules.module_ctx(space, prov), channel
 
 
 # ---------- Агент і командні коментарі (етап 2b-2, Task 4) ----------
@@ -4313,6 +4323,7 @@ def publish_comments(space, task, tid, *, module_publish=False):
 
         постачальник        шлях ЛІГИ (`_publish`)                 модуль публікації (`module_publish=True`)
         Module              словник модуля                         словник модуля
+        Module+shared_state словник модуля                         False (4d-3b, знімається в 4d-3c)
         Implicit            словник `supabase-comments`            False — як у 0.3.0
                             (конфіг установки, канал ЛІГИ)
         None                False                                  False
@@ -4320,6 +4331,8 @@ def publish_comments(space, task, tid, *, module_publish=False):
 
     ⛔ `Implicit` у збірці МОДУЛЯ публікації — `False`: Supabase ЛІГА (адреса й ключ спільного проєкту, куди піни несуть
     знімки макетів) не їде в превʼю, яке зібрав модуль, — це був би новий вихід даних, якого людина не вмикала.
+    Та сама відмова — для `Module` із `shared_state` (мігрована ЛІГА, 4d-3b): інакше увімкнений модуль публікації ніс би ключ
+    у превʼю. Шлях `_publish` (`module_publish=False`) не змінюється.
     ⛔ Відмова (`ModuleError`: явно ввімкнений модуль коментарів загубився, `space.json` не прочитати, `client_config`,
     канал чи конфіг установки ЛІГИ — `comments-unconfigured` — не вдались) — ЗАВЖДИ `False` + `warning` (код, без тексту й
     значень): сама публікація йде далі, а відповідь несе `comments_unavailable`. Модуль коментарів виконує свій код
@@ -4328,7 +4341,7 @@ def publish_comments(space, task, tid, *, module_publish=False):
     if err is not None:
         return False, err.code
     is_implicit = isinstance(prov, implicit.Implicit)
-    if prov is None or (is_implicit and module_publish):
+    if prov is None or ((is_implicit or _shared_module(space, prov)) and module_publish):
         return False, None
     if not is_implicit and not isinstance(prov, deai_modules.Module):
         return False, None                 # значення, що не є ні постачальником, ні неявним, — «нікого», як і було
