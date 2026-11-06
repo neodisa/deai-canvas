@@ -21,6 +21,18 @@
  *        мережу замість шва).
  *   4 (другий старт нічого не пише) — позначка `skip-done` у `plan()` + «`plan()` поза замком» у `_run` (без нього зʼявляються
  *        лише `.lock`/`migrations/`, але вже створені тут; тож ключове — незмінність `space.json`, `secrets.json`, `last.json`).
+ *
+ * Етап 4d-3b (0.18.0, другий крок `liga-4d3b`: `comments` і `vcs` ЛІГИ — явні модулі `supabase-comments`/`git-sync`):
+ *   1b (два бекапи на старті)      — `liga_migrate.run_all`/`startup` ітерують `STEPS` (без цього — один бекап або жодного для b); суфікс
+ *        і маніфест кроку — `Step.stamp_re`/`_backup`; бекап b знімає space.json ПІСЛЯ запису a (план b рахується після a);
+ *        ключ коментарів лише в `secrets.json` (`_commit_space` b) і `last.json.steps` (`_write_last` зберігає мапу кроків).
+ *   2b («Підключення»: п'ять карток)  — `plan(step b)` записує обидва модулі; capabilities: `comments`/`vcs` — id, `publish` лишається
+ *        `legacy` (крок публікацію не мігрує). Одна картка на роль (`connections-model.js`).
+ *   3b (форма «Нова задача» без «Репозиторій») — `compat: design-canvas` запису `git-sync` → `serve.vcs_legacy_texts` → ключ `compat` у
+ *        `/api/spaces` → `isLegacyVcs` у `spaces-model.js` (без `compat` поле зʼявилось би: поведінка людини змінилась би).
+ *   4b (другий старт, дзеркала)    — `skip-done` ОБОХ кроків у `plan()`; теку `.mirrors` не створено й `<DEAI_HOME>/cache/liga/git-sync/mirrors`
+ *        нема (накладка `cache_dir`/`mirror_flat` запису `git-sync` у `serve.vcs_provider`/`module_ctx`).
+ *   Паритет усього, що бачить людина (канали, тексти, дзеркала), — юніти `AfterMigrationParity4d3b` (`tests/test_liga_migrate_b.py`).
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -42,6 +54,7 @@ const JIRA_EMAIL = "alpha@example.com";
 const JIRA_TOKEN = "jira_live_token_alpha";
 const SB_KEY = "sb_publishable_test"; // `LIGA_SUPABASE.supabase_key` фікстури
 const MODULES = { tracker: "jira-tracker", dashboard: "supabase-dashboard", notify: "supabase-teams" };
+const ALL_MODULES = { ...MODULES, comments: "supabase-comments", vcs: "git-sync" }; // + роли другого кроку (4d-3b)
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
@@ -90,8 +103,13 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   S.running = S.first.child;
   const { deaiHome } = S.first;
   /* Міграція йде ДО відкриття порту (`serve.main`): коли сервер відповів, усе вже на диску. */
-  const backups = readdirSync(path.join(deaiHome, "backups")).filter((n) => /-liga-4d3a$/.test(n));
-  assert.equal(backups.length, 1, `рівно один бекап міграції: ${JSON.stringify(backups)}`);
+  const all = readdirSync(path.join(deaiHome, "backups")).sort();
+  const backups = all.filter((n) => /-liga-4d3a$/.test(n));
+  assert.equal(backups.length, 1, `рівно один бекап кроку 4d-3a: ${JSON.stringify(backups)}`);
+  /* 4d-3b: два незалежні кроки на одному старті — два датовані бекапи з суфіксом СВОГО кроку (раніше був один). */
+  const backupsB = all.filter((n) => /-liga-4d3b$/.test(n));
+  assert.equal(backupsB.length, 1, `рівно один бекап кроку 4d-3b: ${JSON.stringify(backupsB)}`);
+  assert.equal(all.length, 2, `рівно два бекапи на старті: ${JSON.stringify(all)}`);
   const manifest = readJson(path.join(deaiHome, "backups", backups[0], "manifest.json"));
   assert.ok(manifest.files["tasks.json"] && manifest.files["spaces.json"], `маніфест: ${JSON.stringify(Object.keys(manifest.files))}`);
   assert.equal(statSync(path.join(deaiHome, "backups", backups[0])).mode & 0o777, 0o700);
@@ -101,7 +119,16 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   assert.ok(mark, `позначки нема в space.json: ${JSON.stringify(sj)}`);
   assert.equal(mark.backup, backups[0]);
   assert.deepEqual(mark.roles, ["tracker", "dashboard", "notify"]);
-  assert.deepEqual(Object.keys(sj.modules).sort(), ["jira-tracker", "supabase-dashboard", "supabase-teams"]);
+  /* Другий крок (4d-3b): свій бекап, своя позначка, ролі `comments` і `vcs`; бекап b знімає вже мігрований кроком a space.json. */
+  const markB = sj.migrations?.["liga-4d3b"];
+  assert.ok(markB, `позначки 4d-3b нема: ${JSON.stringify(sj.migrations)}`);
+  assert.equal(markB.backup, backupsB[0]);
+  assert.deepEqual(markB.roles, ["comments", "vcs"]);
+  assert.ok(readJson(path.join(deaiHome, "backups", backupsB[0], "space.json")).migrations["liga-4d3a"], "бекап b бачить запис a");
+  assert.equal(readJson(path.join(deaiHome, "backups", backupsB[0], "manifest.json")).migration, "liga-4d3b");
+  assert.equal(readJson(path.join(deaiHome, "backups", backups[0], "manifest.json")).migration, "liga-4d3a");
+  assert.equal(statSync(path.join(deaiHome, "backups", backupsB[0])).mode & 0o777, 0o700);
+  assert.deepEqual(Object.keys(sj.modules).sort(), ["git-sync", "jira-tracker", "supabase-comments", "supabase-dashboard", "supabase-teams"]);
   assert.equal(sj.name, "Liga", "чужі ключі space.json (імʼя, колір) збережено");
   assert.equal(sj.color, "space-2");
   /* ⛔ Значення секретів — лише в `secrets.json` (0600): ні в `space.json`, ні в `last.json`, ні в маніфесті. */
@@ -110,24 +137,34 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   const sec = readJson(secretsPath);
   assert.equal(sec.liga["jira-tracker"].token, JIRA_TOKEN);
   assert.equal(sec.liga["supabase-dashboard"].key, SB_KEY);
+  assert.equal(sec.liga["supabase-comments"].key, SB_KEY, "ключ Supabase для коментарів — теж лише в secrets.json");
   const last = readJson(path.join(deaiHome, "migrations", "last.json"));
   assert.equal(last.status, "done");
-  for (const f of [spacePath, path.join(deaiHome, "migrations", "last.json"), path.join(deaiHome, "backups", backups[0], "manifest.json")]) {
+  assert.deepEqual(Object.keys(last.steps).sort(), ["liga-4d3a", "liga-4d3b"], "last.json тримає звіт кожного кроку");
+  for (const f of [spacePath, path.join(deaiHome, "migrations", "last.json"), path.join(deaiHome, "backups", backups[0], "manifest.json"),
+    path.join(deaiHome, "backups", backupsB[0], "manifest.json")]) {
     const body = readFileSync(f, "utf8");
     assert.ok(!body.includes(JIRA_TOKEN) && !body.includes(SB_KEY), `секрет у ${path.basename(f)}`);
   }
   S.spacePath = spacePath;
   S.backups = backups;
+  S.backupsB = backupsB;
+  /* Дзеркала ЛІГИ — плоска тека `.mirrors` 0.7.0; міграція її не створює й не чіпає, а дзеркал модуля під `<DEAI_HOME>/cache` не буває. */
+  S.mirrorsDir = path.join(S.first.home, ".mirrors");
+  S.mirrorsBefore = existsSync(S.mirrorsDir) ? readdirSync(S.mirrorsDir).sort() : null;
+  assert.equal(S.mirrorsBefore, null, "міграція не створює теку дзеркал");
+  assert.equal(existsSync(path.join(deaiHome, "cache", "liga", "git-sync", "mirrors")), false);
 });
 
-test("2: «Підключення» ЛІГИ — три модулі ввімкнені, по одній картці на роль; решта ролей — вбудовані", async (t) => {
+test("2: «Підключення» ЛІГИ — п'ять модулів ввімкнені (три кроку a + comments і vcs кроку b), по одній картці на роль; публікація — вбудована", async (t) => {
   const { url } = S.first;
   const spaces = (await (await fetch(`${url}/api/spaces`)).json()).spaces;
   const caps = spaces.find((s) => s.id === "liga").capabilities;
   assert.deepEqual({ tracker: caps.tracker, dashboard: caps.dashboard, notify: caps.notify }, MODULES);
-  assert.deepEqual({ publish: caps.publish, comments: caps.comments, vcs: caps.vcs }, { publish: "legacy", comments: "legacy", vcs: "legacy" });
+  /* 4d-3b: `comments` і `vcs` — явні модулі; публікація й далі вбудована (`publish` не мігрує). */
+  assert.deepEqual({ publish: caps.publish, comments: caps.comments, vcs: caps.vcs }, { publish: "legacy", comments: "supabase-comments", vcs: "git-sync" });
   const mods = (await (await fetch(`${url}/api/modules?space=liga`)).json()).modules;
-  for (const id of Object.values(MODULES)) {
+  for (const id of Object.values(ALL_MODULES)) {
     const m = mods.find((x) => x.id === id);
     assert.ok(m && m.enabled === true && m.implicit !== true, `${id} мусить бути явно ввімкнений: ${JSON.stringify(m)}`);
   }
@@ -136,7 +173,7 @@ test("2: «Підключення» ЛІГИ — три модулі ввімк�
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
   await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
-  for (const id of Object.values(MODULES)) {
+  for (const id of Object.values(ALL_MODULES)) {
     assert.equal(await page.locator(`.cn-card[data-id="${id}"]`).count(), 1, `${id}: рівно одна картка (без дубля «вбудованої»)`);
     const cls = await page.locator(`.cn-card[data-id="${id}"] .cn-badge`).getAttribute("class");
     assert.ok(!/cn-badge--off\b/.test(cls), `${id}: картка мусить бути ввімкненою, а клас бейджа ${cls}`);
@@ -166,6 +203,35 @@ test("3: «Задачі» ЛІГИ — статус Jira на картці й в
   assert.deepEqual(page.outside, [], "запити назовні");
 });
 
+test("3b: форма «Нова задача» мігрованої ЛІГИ — без поля «Репозиторій» (ціль синку живе в tasks.json, як до міграції)", async (t) => {
+  const { url } = S.first;
+  const page = await newPage(t, url);
+  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
+  /* ⚠️ У ЛІГА (інтеграції ввімкнені) голова екрана без кнопки «Нова задача» (`noIntegrations` у `tasks-home.js`), тож форму відкриваємо тим
+     самим делегованим обробником, що й кнопка: вузол `data-th="newtask"` доданий у `#tasks-home` і натиснутий — `newTaskDialog()` справжній. */
+  await page.evaluate(() => {
+    const b = document.createElement("button");
+    b.dataset.th = "newtask";
+    b.id = "t-newtask";
+    document.getElementById("tasks-home").append(b);
+  });
+  await page.click("#t-newtask");
+  await page.waitForSelector('form[data-form="task"]', { timeout: 15000 });
+  assert.equal(await page.locator("#tf-title").count(), 1, "форма відкрилась");
+  const model = await page.evaluate(async () => {
+    const m = await import("/app/spaces-model.js");
+    const row = (await (await fetch("/api/spaces")).json()).spaces.find((s) => s.id === "liga");
+    return { hasVcs: m.hasVcs(row), isLegacyVcs: m.isLegacyVcs(row), compat: row.compat };
+  });
+  assert.deepEqual(model, { hasVcs: true, isLegacyVcs: true, compat: { comments: "comment-layer", vcs: "design-canvas" } },
+    "рішення форми: роль vcs є, але це зашитий git-sync → поле не показуємо");
+  assert.equal(await page.locator("#tf-repo").count(), 0, "поля «Репозиторій» нема: git-sync у ЛІГА — зашитий (compat design-canvas)");
+  assert.equal(await page.locator('form[data-form="task"]').getByText("Репозиторій", { exact: false }).count(), 0, "жодного підпису «Репозиторій» у формі");
+  assert.deepEqual(page.errors, []);
+  assert.deepEqual(page.outside, [], "запити назовні");
+});
+
 test("4: другий старт того самого дому нічого не пише (mtime і sha256 незмінні, нового бекапу нема)", async (t) => {
   const { deaiHome } = S.first;
   const files = [S.spacePath, path.join(deaiHome, "secrets.json"), path.join(deaiHome, "migrations", "last.json"), path.join(deaiHome, "spaces.json")];
@@ -183,11 +249,20 @@ test("4: другий старт того самого дому нічого н�
     assert.equal(sha(b.f), b.sha, `вміст змінився: ${path.basename(b.f)}`);
   }
   assert.deepEqual(readdirSync(path.join(deaiHome, "backups")).sort(), backupsBefore, "зʼявився новий бекап");
+  assert.equal(backupsBefore.length, 2, "лишились рівно два бекапи (a і b), третього нема");
+  assert.deepEqual(backupsBefore.map((n) => n.replace(/^.*-liga-/, "liga-")).sort(), ["liga-4d3a", "liga-4d3b"]);
+  assert.deepEqual([S.backups[0], S.backupsB[0]].sort(), backupsBefore);
   const sj = readJson(S.spacePath);
   assert.ok(sj.migrations["liga-4d3a"], "позначка лишилась");
+  assert.ok(sj.migrations["liga-4d3b"], "позначка 4d-3b лишилась");
+  /* Дзеркала: теку `.mirrors` не створено, дзеркал модуля під `<DEAI_HOME>/cache` нема (як `git-sync.test.mjs`, тест 7). */
+  assert.equal(existsSync(S.mirrorsDir), false, "другий старт не створює теку `.mirrors`");
+  assert.equal(existsSync(path.join(deaiHome, "cache", "liga", "git-sync", "mirrors")), false, "дзеркал git-sync у <DEAI_HOME>/cache нема");
   assert.equal(existsSync(path.join(deaiHome, "migrations", ".lock")), true);
   const caps = (await (await fetch(`${S.second.url}/api/spaces`)).json()).spaces.find((s) => s.id === "liga").capabilities;
   assert.equal(caps.tracker, "jira-tracker", "після рестарту ролі лишились явними");
+  assert.deepEqual({ comments: caps.comments, vcs: caps.vcs, publish: caps.publish },
+    { comments: "supabase-comments", vcs: "git-sync", publish: "legacy" }, "ролі кроку b теж лишились явними, публікація — вбудована");
 });
 
 guardRealDeai("5: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");

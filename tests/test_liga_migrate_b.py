@@ -2327,5 +2327,162 @@ class StepBStartupTest(_RealSteps):
         self.assertEqual(self.read(self.space_path()), ORIG_SPACE)
 
 
+# ---------------------------------------------------------------------------------------------------------------- Task 7: паритет
+
+_ABSENT = '<ABSENT>'
+
+
+def _flat(obj, path=''):
+    """Знімок → плаский `{шлях: листок}`. Порожні контейнери — теж листки (`{}`/`[]`). Списки ключів `space_keys` (їх порядок — це
+    сортування `Object.keys`, а не зміст) — множина: додаток ключа не зсуває решту індексів у звіті відмінностей."""
+    out = {}
+    if isinstance(obj, dict):
+        if not obj:
+            out[path + '{}'] = {}
+        for k, v in obj.items():
+            out.update(_flat(v, '%s/%s' % (path, k)))
+    elif isinstance(obj, list):
+        if path.endswith('/space_keys'):
+            for k in obj:
+                out['%s/%s' % (path, k)] = True
+        elif not obj:
+            out[path + '[]'] = []
+        for i, v in enumerate(obj if not path.endswith('/space_keys') else ()):
+            out.update(_flat(v, '%s[%d]' % (path, i)))
+    else:
+        out[path] = obj
+    return out
+
+
+def _diff(before, after):
+    """Точний звіт відмінностей `{шлях: (було, стало)}`; відсутній ключ — `_ABSENT`."""
+    a, b = _flat(before), _flat(after)
+    return {k: (a.get(k, _ABSENT), b.get(k, _ABSENT)) for k in sorted(set(a) | set(b)) if a.get(k, _ABSENT) != b.get(k, _ABSENT)}
+
+
+def _expect_diff():
+    """ЄДИНИЙ перелік свідомих відмінностей знімка 0.17.0 → мігрована ЛІГА (кроки 4d-3a, потім 4d-3b). Усе інше — рівно знімок.
+    ⛔ Точне порівняння, не `assertIn`: зайва різниця падає так само, як і зникла очікувана."""
+    exp = {}
+    cache = '~/.deai/cache/legacy/supabase-comments'
+    # comments: `ctx` будує `module_ctx` (ті самі значення + `compat`; `space.path` = тека простору; додатки `folder_ok`/`find_tool`/
+    # `cache_dir`) — і для `comments_route`, і для трьох викликів `list`/`resolve` модуля через `ProjectComments`
+    for p in ['/comments/route/ctx'] + ['/comments/project_comments/calls[%d]/ctx' % i for i in range(3)]:
+        exp[p + '/cache_dir'] = (_ABSENT, cache)
+        exp[p + '/find_tool'] = (_ABSENT, '<_find_tool>')
+        exp[p + '/folder_ok'] = (_ABSENT, '<folder_ok_here>')
+        exp[p + '/settings/compat'] = (_ABSENT, 'comment-layer')
+        exp[p + '/space/path'] = ('', '<tmp>/liga-space')
+    exp['/comments/route/provider'] = ('Implicit', 'Module')
+    exp['/comments/project_comments/provider'] = ('Implicit', 'Module')
+    exp['/comments/project_comments/kind'] = ('implicit', 'module')
+    # vcs: той самий `cache_dir` (під `DC_MIRRORS_DIR`) і `mirror_flat` — тут лише `compat`, `space.path`, додатки і постачальник
+    exp['/vcs/provider/provider'] = ('Implicit', 'Module')
+    exp['/vcs/provider/ctx/find_tool'] = (_ABSENT, '<_find_tool>')
+    exp['/vcs/provider/ctx/folder_ok'] = ('<<lambda>>', '<folder_ok_here>')
+    exp['/vcs/provider/ctx/settings/compat'] = (_ABSENT, 'design-canvas')
+    exp['/vcs/provider/ctx/space/path'] = ('', '<tmp>/liga-space')
+    # `capabilities`: `comments`/`vcs` — id модулів (крок b); `dashboard`/`notify` — id модулів кроку a (на тому самому старті);
+    # `publish` лишається `legacy`
+    for base in ('/vcs/form/capabilities', '/vcs/form/space_row/capabilities'):
+        exp[base + '/comments'] = ('legacy', 'supabase-comments')
+        exp[base + '/vcs'] = ('legacy', 'git-sync')
+        exp[base + '/dashboard'] = ('legacy', 'supabase-dashboard')
+        exp[base + '/notify'] = ('legacy', 'supabase-teams')
+    # `/api/spaces`: запис простору дістає ключ `compat` (хто зашитий на «старих» значеннях)
+    exp['/vcs/form/space_row/compat/comments'] = (_ABSENT, 'comment-layer')
+    exp['/vcs/form/space_row/compat/vcs'] = (_ABSENT, 'design-canvas')
+    exp['/vcs/form/model/space_keys/compat'] = (_ABSENT, True)
+    return exp
+
+
+class AfterMigrationParity4d3b(unittest.TestCase):
+    """Task 7: сценарії знімка 0.17.0 (`before-4d3b.json`) на МІГРОВАНІЙ ЛІГІ — обидва кроки (`run_all`: 4d-3a, потім 4d-3b) у
+    тимчасовому `DEAI_HOME` — дають те саме, крім `_expect_diff()`. Знімання — той самий генератор `tests/make_before_4d3b.py`, лише
+    стенд ЛІГИ після створення мігрується (підміна `liga`). Мережі нема (шви-фейки, loopback), справжній `~/.deai` стереже `spaces_guard`.
+
+    Дві конфігурації стенду, як у 4d-3a: `snapshot` — `united` має власний корінь ≠ спільного (напрямки лишаються на адаптері) і
+    `shared` — `united` без власного кореня (напрямки мігрують у явні `tracks`). Різниці для `comments`/`vcs` в обох однакові."""
+
+    CONFIGS = ('snapshot', 'shared')
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest import mock
+        import make_before_4d3b as g
+        import liga_migrate as lm
+        cls.mock, cls.g, cls.lm = mock, g, lm
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.before = json.load(f)
+        cls.after, cls.results = {}, {}
+        for name in cls.CONFIGS:
+            cls.after[name], cls.results[name] = cls._build(name)
+
+    @classmethod
+    def _build(cls, name):
+        g, lm = cls.g, cls.lm
+        orig, results = g.liga, []
+
+        def migrated(tmp, label):
+            rig, space, cfg = orig(tmp, label)
+            if name == 'shared':                         # united без власного кореня → напрямки мігрують
+                cfg['design_work_roots'] = {'custom-x': os.path.join(rig.home, 'work', 'custom')}
+                g._write(rig.tasks_path, cfg)
+            with rig.activate():
+                results.append([(m, st, info.get('skipped'), info.get('roles')) for m, st, info in lm.run_all()])
+            return rig, space, cfg
+        with cls.mock.patch.object(g, 'liga', migrated):
+            snap = g.make()
+        return snap, results
+
+    def test_both_steps_ran_on_every_scenario_rig(self):
+        """Кожен стенд (comments, vcs) справді мігровано: a і b `done`; тож порівняння йде з МІГРОВАНОЮ ЛІГОЮ, а не зі знімком."""
+        for name in self.CONFIGS:
+            self.assertEqual(len(self.results[name]), 2, name)
+            for res in self.results[name]:
+                self.assertEqual([(m, st) for m, st, _s, _r in res], [('liga-4d3a', 'done'), ('liga-4d3b', 'done')], name)
+                self.assertEqual(res[1][3], ['comments', 'vcs'], name)
+                self.assertEqual(res[1][2], {}, name)
+
+    def test_snapshot_is_big_enough_to_mean_something(self):
+        """Порівняння не порожнє: сотні листків, обидва розділи на місці (інакше «нема відмінностей» нічого б не казало)."""
+        flat = _flat(self.before)
+        self.assertGreater(len(flat), 400)
+        self.assertEqual(sorted(self.after['snapshot']), sorted(self.before))
+
+    def test_only_expected_differences_snapshot_config(self):
+        self.assertEqual(_diff(self.before, self.after['snapshot']), _expect_diff())
+
+    def test_only_expected_differences_shared_config(self):
+        self.assertEqual(_diff(self.before, self.after['shared']), _expect_diff())
+
+    def test_expected_diff_is_exact_not_loose(self):
+        """Охоронець самого порівняння: зайвий листок і зниклий очікуваний — обидва червоніють (`_diff` ловить і додане, і зникле)."""
+        a = json.loads(json.dumps(self.after['snapshot']))
+        a['comments']['channels']['a-1']['plain'] = 'other'
+        self.assertIn('/comments/channels/a-1/plain', _diff(self.before, a))
+        self.assertNotEqual(_diff(self.before, a), _expect_diff())
+        b = json.loads(json.dumps(self.after['snapshot']))
+        del b['vcs']['form']['space_row']['compat']
+        self.assertNotEqual(_diff(self.before, b), _expect_diff())
+
+    def test_nothing_a_person_sees_changed(self):
+        """Те, що бачить людина, — рівно знімок: канали всіх місць, `comment-config`, тема коміту й README, `web`/`label`, «GitLab»/
+        «репозиторію», примітка форку, рядок `state.py`, префікс `inbox`, ключ лічильника, дзеркала, прапорці форми. Бо жодного такого
+        шляху нема серед відмінностей (їхні гілки — лише ctx/постачальник/capabilities/compat)."""
+        seen = ('/comments/channels', '/comments/api', '/comments/dashboard', '/comments/inbox', '/vcs/texts', '/vcs/mirrors',
+                '/vcs/mirrors_base', '/vcs/form/model/is_legacy_vcs', '/vcs/form/model/has_vcs', '/vcs/form/model/with_repo',
+                '/vcs/form/model/label_empty', '/vcs/form/model/label_git', '/vcs/form/model/brand_empty', '/vcs/form/model/clones',
+                '/vcs/form/model/fail_key_target', '/vcs/provider/ctx/mirror_flat', '/vcs/provider/ctx/cache_dir',
+                '/comments/route/channels')
+        for name in self.CONFIGS:
+            for path in _diff(self.before, self.after[name]):
+                for s in seen:
+                    self.assertFalse(path.startswith(s), '%s: змінилося те, що бачить людина: %s' % (name, path))
+            flat = _flat(self.after[name])
+            for s in seen:
+                self.assertTrue(any(k.startswith(s) for k in flat), 'порожній розділ порівняння: ' + s)
+
+
 if __name__ == '__main__':
     unittest.main()
