@@ -53,13 +53,14 @@ ROLE_MODULES = (('tracker', 'jira-tracker'), ('dashboard', 'supabase-dashboard')
 DASHBOARD_TABLE = 'overview_projects'
 COMPAT = 'comment-layer'
 SKIP_CODES = ('skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-no-path', 'skip-path-in-git',
-              'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable', 'skip-nothing', 'skip-busy')
+              'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable', 'skip-nothing', 'skip-busy', 'skip-integrations-off')
 ABORT_CODES = ('abort-provider', 'abort-internal', 'abort-lock')
 _REASONS = {
     'skip-layer-off': 'шар просторів вимкнено: міграція не біжить',
     'skip-no-liga': 'у реєстрі нема простору ЛІГА',
     'skip-done': 'міграцію вже виконано (позначка в space.json)',
     'skip-held': 'міграцію вимкнено вручну (held у space.json)',
+    'skip-integrations-off': 'інтеграції простору ЛІГА вимкнено — мігрувати нічого (ролі й так вимкнені)',
     'skip-no-path': 'теки простору ЛІГА не існує',
     'skip-path-in-git': 'тека простору лежить у робочому дереві git: space.json не має потрапити в чужий коміт',
     'skip-space-json-unreadable': 'space.json простору ЛІГА не читається',
@@ -240,6 +241,10 @@ def _plan(home, step):
     if liga is None:
         raise _Stop('skip-no-liga')
     sid, path = liga['id'], liga['path']
+    # ⛔ Без інтеграцій (`integrations` не `True`) ролі ЛІГИ в 0.17 вимкнені (немає неявних постачальників): явні записи їх увімкнули б —
+    # злам паритету. Для КОЖНОГО кроку: нічого не пишемо (ні позначки, ні `migrations/`).
+    if liga.get('integrations') is not True:
+        raise _Stop('skip-integrations-off', space_id=sid)
     if not os.path.isdir(path):
         raise _Stop('skip-no-path', space_id=sid)
     try:
@@ -381,7 +386,7 @@ def step_of_stamp(stamp):
     return next((s for s in ALL_STEPS if s.stamp_re.fullmatch(stamp)), None)
 BACKUP_FILES = ('tasks.json', 'space.json', 'secrets.json', 'spaces.json')
 #: Статуси, після яких CLI не вважає запуск помилкою (нічого не зламано; «done» — міграцію виконано).
-BENIGN = ('done', 'skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-nothing')
+BENIGN = ('done', 'skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-nothing', 'skip-integrations-off')
 _RUN_REASONS = {
     'done': 'міграцію виконано',
     'abort-backup': 'бекап не створено: міграція нічого не записала',
@@ -964,8 +969,9 @@ def status_text(st):
             elif m.get('held'):
                 lines.append('  позначка: вимкнено вручну (held)')
             else:
-                lines.append('  позначка: %s, ролі: %s, напрямки: %s, бекап: %s' % (
-                    m.get('at'), ', '.join(m.get('roles') or []) or '-', 'так' if m.get('tracks') else 'ні', m.get('backup')))
+                tr = (', напрямки: ' + ('так' if m.get('tracks') else 'ні')) if _step(key).tracks else ''     # рядок напрямків — лише кроку з напрямками
+                lines.append('  позначка: %s, ролі: %s%s, бекап: %s' % (
+                    m.get('at'), ', '.join(m.get('roles') or []) or '-', tr, m.get('backup')))
         rep = ((last or {}).get('steps') or {}).get(key) if multi and isinstance(last, dict) else last   # звіт ЦЬОГО кроку
         if isinstance(rep, dict):
             if rep.get('status'):
@@ -1019,12 +1025,12 @@ def startup():
             if os.environ.get('DC_MIGRATE_LIGA') != '1':
                 return None
             if _real_home():
-                print('liga-4d3a: DC_MIGRATE_LIGA=1 разом зі справжнім DEAI_HOME (~/.deai): відмова, міграцію не запущено', file=sys.stderr)
+                print('міграція ЛІГИ: DC_MIGRATE_LIGA=1 разом зі справжнім DEAI_HOME (~/.deai): відмова, міграцію не запущено', file=sys.stderr)
                 return 'refuse-real-home'
 
         def announce(mark, st, info):
             done.append(st)
-            if st != 'skip-layer-off' and not st.startswith('skip-no') and st != 'skip-done':
+            if st not in ('skip-layer-off', 'skip-done', 'skip-integrations-off') and not st.startswith('skip-no'):
                 print('%s: %s — %s' % (mark, st, info.get('reason') or ''), file=sys.stderr)
                 if info.get('hint') and info['hint'] not in hints:           # однакова підказка (тека в git) — раз на старт
                     hints.add(info['hint'])

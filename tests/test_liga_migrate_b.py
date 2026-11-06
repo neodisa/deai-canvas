@@ -1942,6 +1942,8 @@ class StepBPlanTest(_RealSteps):
                                               'settings': {'url': self.SB_URL, 'shots_bucket': 'overview-thumbs', 'compat': 'comment-layer'}})
         self.assertEqual(mods[VCS_MOD], {'enabled': True, 'shared_state': True,
                                          'settings': {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True, 'compat': 'design-canvas'}})
+        self.assertEqual(sorted(mods[COMMENTS_MOD]['settings']), ['compat', 'shots_bucket', 'url'])          # рівно ці ключі
+        self.assertEqual(sorted(mods[VCS_MOD]['settings']), ['autosync', 'branch', 'compat', 'path'])
         self.assertEqual(p['secrets'], {COMMENTS_MOD: {'key': self.SB_KEY}})          # у git-sync секретів нема
         self.assertIn('jira-tracker', mods)                                           # модулі 4d-3a збережено
         self.assertEqual(p['space_json']['migrations']['liga-4d3b'], {'roles': ['comments', 'vcs']})      # `at`/`backup` — запис
@@ -2220,6 +2222,49 @@ class StepBRunTest(_RealSteps):
         self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['secrets'], {COMMENTS_MOD: ['key']})
 
 
+class IntegrationsOffTest(_RealSteps):
+    """Ревʼю Task 6: ЛІГА з `integrations: false` має ролі ВИМКНЕНИМИ в 0.17 — явні записи їх увімкнули б (злам паритету): обидва кроки
+    `skip-integrations-off`, нічого не пишуть, CLI — успіх."""
+
+    def setUp(self):
+        super().setUp()
+        self._write(os.path.join(self.deai, 'spaces.json'), {'version': 1, 'current': 'legacy', 'spaces': [
+            {'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': False}]})
+
+    def test_plan_of_every_step_skips(self):
+        for step in ('liga-4d3a', 'liga-4d3b'):
+            p = self.lm.plan(step=step)
+            self.assertEqual((p['status'], p['space_id'], p['space_json'], p['secrets']), ('skip-integrations-off', 'legacy', None, {}), step)
+            self.assertIn('інтеграції', p['reason'])
+        self.assertIn('skip-integrations-off', self.lm.SKIP_CODES)
+        self.assertIn('skip-integrations-off', self.lm.BENIGN)
+
+    def test_missing_integrations_key_also_skips(self):
+        self._write(os.path.join(self.deai, 'spaces.json'), {'version': 1, 'current': 'legacy', 'spaces': [
+            {'id': 'legacy', 'path': self.space_dir, 'legacy': True}]})
+        self.assertEqual(self.plan_b()['status'], 'skip-integrations-off')
+
+    def test_run_all_and_startup_write_nothing_and_stay_quiet(self):
+        before = self.snapshot_tree()
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'skip-integrations-off'), ('liga-4d3b', 'skip-integrations-off')])
+        st, err = self.start()
+        self.assertEqual((st, err), ('skip-integrations-off', ''))
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations')))
+        self.assertEqual(self.backups(), [])
+
+    def test_cli_exit_code_is_zero_and_nothing_written(self):
+        before = self.snapshot_tree()
+        for cmd in ('run', 'dry-run', 'status'):
+            code, out, _err = self.cli(cmd)
+            self.assertEqual(code, 0, cmd)
+        code, out, _err = self.cli('run')
+        self.assertIn('liga-4d3b: skip-integrations-off', out)
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations')))
+
+
 class StepBStartupTest(_RealSteps):
     """Два РЕАЛЬНІ кроки на одному старті: два бекапи, порядок a → b; план b бачить запис a."""
 
@@ -2254,6 +2299,23 @@ class StepBStartupTest(_RealSteps):
         self.assertEqual(mk['liga-4d3b']['roles'], ['vcs'])
         self.assertEqual(len(self.backups()), 1)
         self.assertEqual(res[1][2]['skipped'], {'comments': 'no-supabase'})
+
+    def test_status_text_tracks_line_only_for_the_step_with_tracks(self):
+        self.seed()
+        self.start()
+        text = self.lm.status_text(self.lm.status())
+        a_part, b_part = text.split('Міграція ЛІГИ (liga-4d3b)')
+        self.assertIn('напрямки: так', a_part)
+        self.assertNotIn('напрямки', b_part)
+        self.assertIn('ролі: comments, vcs, бекап:', b_part)
+
+    def test_real_home_refusal_line_is_step_neutral(self):
+        with self.mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1', 'DC_MIGRATE_LIGA': '1'}), \
+                self.mock.patch.object(self.lm, '_real_home', lambda: True):
+            st, err = self.start()
+        self.assertEqual(st, 'refuse-real-home')
+        self.assertNotIn('liga-4d3a', err)
+        self.assertIn('DC_MIGRATE_LIGA=1', err)
 
     def test_lifo_over_the_real_steps(self):
         self.seed()
