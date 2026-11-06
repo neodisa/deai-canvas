@@ -660,7 +660,7 @@ def vcs_provider():
     try:
         space = spaces.active_space()
         legacy = vcs_legacy_texts(prov, space)                       # ОДИН раз: третій елемент для всіх споживачів текстів
-        if _shared_module(space, prov) and implicit.isolated():
+        if _builtin_shared(space, prov) and implicit.isolated():
             # ⛔ Закон ізоляції (4d-3b, спека §5): запис `shared_state` в ізольованому прогоні (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`)
             # будує `ctx` НЕЯВНОГО шляху — налаштування запису не читаються, дзеркала плоскі в `DC_MIRRORS_DIR`. Місце ізоляції
             # одне: ця функція і `comments_route`. Тексти — за `compat` (предикат вище), не за ізоляцією.
@@ -1984,10 +1984,16 @@ def _team_fetch(space, prov):
 def _shared_module(space, prov):
     """4d-3a: явний `Module` із `shared_state: true` — спільний стан ЛІГИ: ролі `dashboard`/`tracker`/`notify` і синк ведуть його за
     законом ізоляції (`implicit.route`), як `Implicit`, але живий виклик — модулем із `module_ctx`, а не легасі-збирачем."""
-    # ⛔ Лише ВБУДОВАНІ (4d-3b, ревʼю): свій модуль із вручну виставленим `shared_state` не дістає ні ключ кореня задач (закон
-    # ізоляції `comments_route`/`vcs_provider`), ні відмову публікації. Записи 4d-3a — вбудовані, їхня поведінка не змінюється.
-    return (isinstance(prov, deai_modules.Module) and getattr(prov, 'origin', 'builtin') == 'builtin'
-            and deai_modules.shared_state(space, prov.id))
+    # ⛔ Предикат БЕЗ походження (як у 4d-3a): свій модуль із `shared_state` в ізольованому прогоні й далі йде законом маршруту
+    # (`implicit.route`: шов/ізоляція), а не живим викликом зі справжніми секретами. Умова «вбудований» — лише в гілках ізоляції
+    # `comments_route`/`vcs_provider` (`_builtin_shared`), де підставляється ключ кореня задач (4d-3b, ревʼю 2).
+    return isinstance(prov, deai_modules.Module) and deai_modules.shared_state(space, prov.id)
+
+
+def _builtin_shared(space, prov):
+    """4d-3b: `_shared_module` І вбудований модуль (`origin == 'builtin'`) — ЄДИНА умова гілок ізоляції `comments_route` і
+    `vcs_provider`: свій модуль із вручну виставленим `shared_state` не дістає ключ кореня задач і лишається звичайним модулем."""
+    return _shared_module(space, prov) and getattr(prov, 'origin', 'builtin') == 'builtin'
 
 
 def team_resolve():
@@ -3165,7 +3171,7 @@ def comments_route(space, prov):
     # коментарі схемою comment-layer, решта модулів — `deai/<простір>/<задача>` (`channel_for`).
     channel = (lambda task, tid, internal=False:
                deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
-    if _shared_module(space, prov) and implicit.isolated():
+    if _builtin_shared(space, prov) and implicit.isolated():
         # ⛔ Закон ізоляції (4d-3b, спека §5): запис `shared_state` в ізольованому прогоні бере ключ із кореня файла задач, а не з
         # `secrets.json` (`_comments_legacy_ctx`; нема конфігу — `comments-unconfigured`, як в `Implicit`). Місце ізоляції одне.
         return prov, _comments_legacy_ctx(), channel

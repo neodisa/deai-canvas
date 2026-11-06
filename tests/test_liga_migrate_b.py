@@ -1266,12 +1266,13 @@ class SharedStateIsolationB(_VcsStand):
         self.assertNotIn(OWN_KEY, json.dumps(body))
 
     # ---- ревʼю: лише вбудовані модулі
-    def test_shared_module_is_builtin_only(self):
-        """Свій модуль (`origin == 'space'`) із вручну виставленим `shared_state` не дістає ключ кореня задач (спека §5)."""
+    def test_comments_isolation_branch_is_builtin_only(self):
+        """Свій модуль (`origin == 'space'`) із вручну виставленим `shared_state` не дістає ключ кореня задач (спека §5): умова
+        «вбудований» — лише в гілці ізоляції `comments_route`; сам предикат `_shared_module` — як у 4d-3a, без походження."""
         rig, space, _cfg = self.cstand()
         prov = self.mock.Mock(spec=self.dm.Module)
         prov.id, prov.origin = COMMENTS_ID, 'space'
-        self.assertFalse(self.serve._shared_module(space, prov))
+        self.assertTrue(self.serve._shared_module(space, prov))
         prov.origin = 'builtin'
         self.assertTrue(self.serve._shared_module(space, prov))
         marker = {'marker': 'module-ctx'}
@@ -1279,6 +1280,28 @@ class SharedStateIsolationB(_VcsStand):
         with self._iso(rig, 0), self.mock.patch.object(self.dm, 'module_ctx', return_value=marker), \
                 self.mock.patch.object(self.serve, '_comments_legacy_ctx', side_effect=AssertionError('root key')):
             self.assertIs(self.serve.comments_route(space, prov)[1], marker)
+
+    def test_own_dashboard_tracker_notify_with_shared_state_keep_the_4d3a_route_law(self):
+        """Ревʼю 2: умова «вбудований» НЕ в `_shared_module`: свій модуль ролі dashboard/tracker/notify із `shared_state` в
+        ізольованому прогоні іде законом маршруту (ізоляція/шов), а не живим викликом із справжніми секретами (`module_ctx`)."""
+        serve, dm = self.serve, self.dm
+        for which in (0, 1):
+            for mid in ('supabase-dashboard', 'jira-tracker', 'supabase-teams'):
+                rig, space = self.check_stand(mid, True)
+                prov = self.mock.Mock(spec=dm.Module)
+                prov.id, prov.origin = mid, 'space'
+                with self._iso(rig, which), self.mock.patch.object(dm, 'module_ctx', side_effect=AssertionError('real secrets')), \
+                        self.mock.patch.object(dm, 'read_secrets', side_effect=AssertionError('secrets read')), \
+                        self.mock.patch.object(dm, 'call', side_effect=AssertionError('module called')), \
+                        self.mock.patch.object(serve.urllib.request, 'urlopen', self.mb.NoNet()):
+                    self.assertTrue(serve._shared_module(space, prov), (mid, which))
+                    if mid == 'supabase-dashboard':
+                        self.assertEqual(serve._team_fetch(space, prov), ([], serve.TEAM_ISOLATED), which)
+                    elif mid == 'jira-tracker':
+                        self.assertIsNone(serve._tracker_fetch(space, prov, ['k-1']), which)
+                    else:
+                        with self.assertRaises(OSError):
+                            serve.notify_call('mute_state', resolved=(space, prov))
 
     def test_vcs_provider_of_own_module_ignores_isolation(self):
         rig, _space, _cfg = self.vstand(compat=None)
