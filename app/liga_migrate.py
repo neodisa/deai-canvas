@@ -4,11 +4,13 @@
 наступна задача). Модуль не імпортує `serve` (лише `spaces`, `deai_modules`, `tracks`, `install_config`).
 
 `plan(home=None)` → словник:
-    status        'ready' | 'skip-*' | 'abort-*' (коди — `SKIP_CODES`, `ABORT_CODES`)
+    status        'ready' | 'skip-*' | 'abort-*' (коди — `SKIP_CODES`, `ABORT_CODES`). 'skip-nothing' — жодна роль і не напрямки не
+                  мігрують: `space_json` = None, позначка НЕ пишеться (наступний старт перевірить знову)
     reason        короткий український опис БЕЗ значень секретів і адрес
     space_id      id запису ЛІГИ в реєстрі або `None`
     roles         {'tracker'|'dashboard'|'notify': {'module': id, 'migrate': bool, 'reason': None | код}}; для skip/abort — `{}`
-    tracks        bool: чи мігрують напрямки; `tracks_reason` — код, коли ні (`tracks-present`, `tracks-unknown-values`)
+    tracks        bool: чи мігрують напрямки; `tracks_reason` — код, коли ні: `tracks-present`, `tracks-parity` (розраховане не
+                  збігається з адаптером), `tracks-unknown-values`. Роль від цього не залежить: ролі мігрують далі
     space_json    НОВИЙ вміст `space.json` (повний, з наявним злитим) або `None`; позначка `migrations['liga-4d3a']` тут має лише
                   `roles` і `tracks` — `at` і `backup` дописує запис (Task 5)
     secrets       {module_id: {ключ: "<значення>"}} — ⛔ значення секретів потрібні ЗАПИСУ; назовні (журнал, звіт) — лише `report()`
@@ -28,8 +30,8 @@ ROLE_MODULES = (('tracker', 'jira-tracker'), ('dashboard', 'supabase-dashboard')
 DASHBOARD_TABLE = 'overview_projects'
 COMPAT = 'comment-layer'
 SKIP_CODES = ('skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-no-path', 'skip-path-in-git',
-              'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable')
-ABORT_CODES = ('abort-tracks-parity', 'abort-provider', 'abort-internal')
+              'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable', 'skip-nothing')
+ABORT_CODES = ('abort-provider', 'abort-internal')
 _REASONS = {
     'skip-layer-off': 'шар просторів вимкнено: міграція не біжить',
     'skip-no-liga': 'у реєстрі нема простору ЛІГА',
@@ -40,7 +42,7 @@ _REASONS = {
     'skip-space-json-unreadable': 'space.json простору ЛІГА не читається',
     'skip-registry-unreadable': 'реєстр просторів не читається',
     'skip-tasks-unreadable': 'старий tasks.json не читається: конфіг ЛІГИ невідомий',
-    'abort-tracks-parity': 'розраховані напрямки не збігаються з адаптером: міграція нічого не пише',
+    'skip-nothing': 'нічого мігрувати (нема ні ролей, ні напрямків): позначку не пишемо, наступний старт перевірить знову',
     'abort-provider': 'ядро не вирішує мігровану роль на розрахованому space.json: міграція нічого не пише',
     'abort-internal': 'непередбачена помилка розрахунку: міграція нічого не пише',
 }
@@ -116,7 +118,12 @@ def _unknown_values(cfg, ids, norm):
     """Поправка контролера після Task 1: чи веде явний `tracks` невідоме значення напрямку інакше, ніж адаптер.
     (а) у старому `tasks.json` є задача, чий `track`/`profile` (`tracks.of_task`) не рядок із переліку мігрованих id
     (включно з `None`, `''`, іншим регістром); (б) корінь дефолтного напрямку ≠ спільному кореню адаптера
-    (`legacy_root(cfg, None)`): тоді нова задача з невідомим значенням лягла б в інше місце."""
+    (`legacy_root(cfg, None)`): тоді нова задача з невідомим значенням лягла б в інше місце; (в) ключ `design_work_roots` чи
+    `profile_repos` поза `ID_RE` (напр. `Foo` зі своїм коренем чи репо): він не стає напрямком, тож задачі з ним втратили б свій корінь."""
+    for key in ('design_work_roots', 'profile_repos'):
+        raw = cfg.get(key) if isinstance(cfg, dict) else None
+        if isinstance(raw, dict) and any(not tracks_core._is_id(k) for k in raw):
+            return True
     tasks = cfg.get('tasks') if isinstance(cfg, dict) else None
     for t in (tasks.values() if isinstance(tasks, dict) else ()):
         if isinstance(t, dict) and tracks_core.of_task(t) not in ids:
@@ -200,12 +207,16 @@ def _plan(home):
         others = {'spaces': [s for s in reg['spaces'] if s.get('id') != sid]}
         computed = _compute_tracks(cfg, path, others)
         if computed is None:
-            raise _Stop('abort-tracks-parity', space_id=sid, roles=out_roles)
-        raw, norm, default = computed
-        if _unknown_values(cfg, {t['id'] for t in raw}, norm):
-            tracks_reason = 'tracks-unknown-values'
+            tracks_reason = 'tracks-parity'                     # напрямки не мігрують, ролі — так
         else:
-            do_tracks, new_tracks = True, (raw, default)
+            raw, norm, default = computed
+            if _unknown_values(cfg, {t['id'] for t in raw}, norm):
+                tracks_reason = 'tracks-unknown-values'
+            else:
+                do_tracks, new_tracks = True, (raw, default)
+
+    if not do_tracks and not any(skip is None for (_m, skip, _e, _s) in roles.values()):
+        raise _Stop('skip-nothing', space_id=sid, roles=out_roles, tracks_reason=tracks_reason)
 
     # Перевірка В ПАМʼЯТІ: ядро вирішує кожну мігровану роль саме цим модулем на розрахованому `space.json` (нічого не пишемо).
     explicit = deai_modules._normalize(new_mods)

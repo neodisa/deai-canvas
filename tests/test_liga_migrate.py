@@ -764,16 +764,25 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(len(p['space_json']['modules']), 3)                      # ролі мігрують далі
 
     # --- паритет напрямків
-    def test_tracks_parity_abort(self):
-        """Корінь, який `normalize` відкидає (тека всередині `Library`), а адаптер зберігає, — міграція цілком не пише нічого."""
+    def _assert_parity_miss(self, p):
+        """Паритету нема: напрямки не мігрують (`tracks-parity`), ролі мігрують далі, `tracks` у `space_json` не з'являється."""
+        self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-parity'))
+        self.assertNotIn('tracks', p['space_json'])
+        self.assertEqual(len(p['space_json']['modules']), 3)
+        self.assertEqual(sorted(p['secrets']), ['jira-tracker', 'supabase-dashboard', 'supabase-teams'])
+
+    def test_tracks_parity_miss(self):
+        """Корінь, який `normalize` відкидає (тека всередині `Library`), а адаптер зберігає, — `tracks-parity`, не обвал міграції."""
         bad = os.path.join(self.home, 'Library', 'work')
         self.config(design_work_roots={'seo': bad})
-        p = self.plan()
-        self.assertEqual(p['status'], 'abort-tracks-parity')
-        self.assertIsNone(p['space_json'])
-        self.assertEqual(p['secrets'], {})
+        self._assert_parity_miss(self.plan())
 
-    def test_tracks_parity_abort_foreign_space_root(self):
+    def test_tracks_parity_miss_relative_shared_root(self):
+        """Відносний `design_work_root`: адаптер читає його від cwd, `normalize` — від теки простору → `tracks-parity`."""
+        self.config(design_work_root='relative/shared')
+        self._assert_parity_miss(self.plan())
+
+    def test_tracks_parity_miss_foreign_space_root(self):
         """Корінь напрямку лежить усередині ІНШОГО простору реєстру: у явних напрямках `serve` його скине, адаптер — ні."""
         other = os.path.join(self.tmp, 'other-space')
         os.makedirs(other)
@@ -781,7 +790,7 @@ class PlanTest(unittest.TestCase):
             {'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': True},
             {'id': 'other', 'path': other, 'integrations': False}]})
         self.config(design_work_roots={'seo': os.path.join(other, 'work')})
-        self.assertEqual(self.plan()['status'], 'abort-tracks-parity')
+        self._assert_parity_miss(self.plan())
 
     # --- поправка контролера: невідомі значення напрямку
     def test_tracks_unknown_values_task_condition(self):
@@ -804,6 +813,36 @@ class PlanTest(unittest.TestCase):
         p = self.plan()
         self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-unknown-values'))
         self.assertEqual(len(p['space_json']['modules']), 3)
+
+    def test_tracks_unknown_values_key_outside_id_re(self):
+        """(в): ключ `design_work_roots`/`profile_repos` поза `ID_RE` не стає напрямком — напрямки НЕ мігрують, ролі — так."""
+        work = os.path.join(self.home, 'work')
+        for extra in ({'design_work_roots': {'Foo': os.path.join(work, 'foo'), 'custom-x': os.path.join(work, 'custom')}},
+                      {'profile_repos': {'Bar': self.REPO_U, 'united': self.REPO_U}}):
+            with self.subTest(extra=sorted(extra)):
+                self.config(**extra)
+                p = self.plan()
+                self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-unknown-values'))
+                self.assertEqual(len(p['space_json']['modules']), 3)
+
+    def test_skip_nothing(self):
+        """Жодна роль і не напрямки: `skip-nothing`, `space_json` = None (позначку не пишемо); достатньо ролі чи напрямків — `ready`."""
+        self.config(supabase=False, jira=False, design_work_root=None)       # нема облікових; ключ `design_work_root` знімаємо
+        cfg = self.cfg
+        cfg['tasks']['x'] = {'dir': os.path.join(self.home, 'work', 'x')}    # задача без напрямку → tracks-unknown-values
+        self._write(self.tasks_path, cfg)
+        p = self.plan()
+        self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('skip-nothing', False, 'tracks-unknown-values'))
+        self.assertIsNone(p['space_json'])
+        self.assertEqual(p['secrets'], {})
+        self.assertFalse(any(r['migrate'] for r in p['roles'].values()))
+        self.assertIn('skip-nothing', self.lm.report(p))
+        cfg['tasks'].pop('x')
+        self._write(self.tasks_path, cfg)
+        self.assertEqual(self.plan()['status'], 'ready')                     # напрямки мігрують — не skip-nothing
+        self.config(supabase=False, jira=True, **{'tasks': {'x': {'dir': 'd'}}})
+        p = self.plan()
+        self.assertEqual((p['status'], p['tracks']), ('ready', False))       # напрямків нема, але роль tracker є
 
     def test_tracks_migrate_when_default_root_equals_shared(self):
         shared = os.path.join(self.home, 'work', 'shared')
