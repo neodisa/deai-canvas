@@ -573,13 +573,6 @@ class _Stand(unittest.TestCase):
         import tempfile
         from unittest import mock
         import deai_modules as dm
-        # ⛔ `bin/liga_migrate.py` (CLI) носить те саме імʼя, що `app/liga_migrate.py`: інші тести кладуть `bin` на початок `sys.path`.
-        # Модуль міграції беремо ЗАВЖДИ з `app` (і скидаємо кеш, якщо туди потрапив CLI).
-        app_dir = os.path.join(os.path.dirname(_HERE), 'app')
-        if sys.path[0] != app_dir:
-            sys.path[:] = [app_dir] + [x for x in sys.path if x != app_dir]
-        if not hasattr(sys.modules.get('liga_migrate'), 'plan'):
-            sys.modules.pop('liga_migrate', None)
         import liga_migrate
         import spaces
         self.dm, self.lm, self.spaces, self.mock = dm, liga_migrate, spaces, mock
@@ -642,6 +635,8 @@ class _Stand(unittest.TestCase):
         out = {}
         for base, _dirs, files in os.walk(self.tmp):
             for f in files:
+                if f == '.lock':                      # замок міграції (`migrations/.lock`) — не стан: його створює будь-який запуск
+                    continue
                 p = os.path.join(base, f)
                 with open(p, 'rb') as fh:
                     out[p] = fh.read()
@@ -928,7 +923,7 @@ class PlanTest(_Stand):
 # ================================================================================================ Task 5: запис, відкат, старт
 
 class _WriteStand(_Stand):
-    """Стенд запису: перехоплення stdout/stderr, пошук значень секретів у ВСІХ виходах, CLI `bin/liga_migrate.py`."""
+    """Стенд запису: перехоплення stdout/stderr, пошук значень секретів у ВСІХ виходах, CLI `bin/migrate_liga.py`."""
 
     def setUp(self):
         super().setUp()
@@ -940,7 +935,7 @@ class _WriteStand(_Stand):
 
     def cli(self, *argv):
         import importlib.util
-        spec = importlib.util.spec_from_file_location('liga_migrate_cli', os.path.join(os.path.dirname(_HERE), 'bin', 'liga_migrate.py'))
+        spec = importlib.util.spec_from_file_location('liga_migrate_cli', os.path.join(os.path.dirname(_HERE), 'bin', 'migrate_liga.py'))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         out, err = self.io.StringIO(), self.io.StringIO()
@@ -1094,12 +1089,8 @@ class RunTest(_WriteStand):
         self.assertEqual(self.lm.run(), 'skip-held')
         self.space_json('not json')
         self.assertEqual(self.lm.run(), 'skip-space-json-unreadable')
-        self.space_json({})
-        os.makedirs(os.path.join(self.space_dir, '.git'))
-        self.assertEqual(self.lm.run(), 'skip-path-in-git')
-        os.rmdir(os.path.join(self.space_dir, '.git'))
         self.assertEqual(self.backups(), [])
-        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations')))
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations', 'last.json')))
         self.assertFalse(os.path.exists(self.secrets_path()))
 
     def test_skip_nothing_writes_nothing(self):
@@ -1221,6 +1212,186 @@ class RunTest(_WriteStand):
         with self.mock.patch.object(self.lm, '_backup', side_effect=RuntimeError(self.SB_KEY)):
             self.assertEqual(self.lm.run(), 'abort-internal')
         self.assert_no_secrets_in_logs()
+
+    def test_skip_path_in_git_persists_reason_under_separate_key(self):
+        """Постійний пропуск: код і підказка лишаються в `last.json` (ключ `skip`), справжній звіт не затирається; `status` їх показує."""
+        self.lm._write_last({'status': 'done', 'reason': 'real report'})
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        before = self.tree_without_logs()
+        self.assertEqual(self.lm.run(), 'skip-path-in-git')
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['reason']), ('done', 'real report'))          # справжній звіт на місці
+        self.assertEqual(last['skip']['status'], 'skip-path-in-git')
+        self.assertIn('git', last['skip']['hint'])
+        self.assertEqual(self.tree_without_logs(), before)                                   # крім last.json — нічого
+        self.assertEqual(self.lm.run(), 'skip-path-in-git')                                  # повтор не churn-ить файл
+        code, out, _ = self.cli('status')
+        self.assertIn('skip-path-in-git', out)
+        self.assertIn('що робити', out)
+        code, out, _ = self.cli('run')
+        self.assertEqual(code, 1)
+        self.assertIn('що робити', out)
+        os.rmdir(os.path.join(self.space_dir, '.git'))                                       # вийшло з git → мігрує, ключ skip зникає
+        self.assertEqual(self.lm.run(), 'done')
+        self.assertNotIn('skip', self.read_json(self.deai, 'migrations', 'last.json'))
+
+    def test_abort_changed_when_registry_path_moves_between_plan_and_write(self):
+        other = os.path.join(self.tmp, 'other-space')
+        os.makedirs(other)
+        entry = {'id': 'legacy', 'path': other, 'legacy': True, 'integrations': True}
+        before = self.tree_without_logs()
+        with self.mock.patch.object(self.lm, '_liga_entry', lambda home: entry):
+            self.assertEqual(self.lm.run(), 'abort-changed')
+        self.assertEqual(self.tree_without_logs(), before)                       # ні бекапу, ні секретів, ні space.json
+        self.assertEqual(os.listdir(other), [])
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['status'], 'abort-changed')
+
+    def test_plan_returns_path_used(self):
+        self.assertEqual(self.lm.plan()['space_path'], self.space_dir)
+
+    def test_lock_busy_by_other_process_skips_without_writing(self):
+        import fcntl
+        os.makedirs(os.path.join(self.deai, 'migrations'), mode=0o700)
+        fd = os.open(os.path.join(self.deai, 'migrations', '.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        before = self.snapshot_tree()
+        self.assertEqual(self.lm.run(), 'skip-busy')
+        self.assertEqual(self.lm.restore('20260101-000000-liga-4d3a'), 'skip-busy')
+        self.assertEqual(self.snapshot_tree(), before)
+        st, _err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'skip-busy')                                          # старт не чекає
+        self.assertEqual(os.stat(os.path.join(self.deai, 'migrations', '.lock')).st_mode & 0o777, 0o600)
+
+    def test_nested_run_during_write_is_busy_and_secrets_written_once(self):
+        real = self.dm.write_secrets
+        calls, inner = [], []
+
+        def spy(sid, mid, patch, *a, **kw):
+            calls.append(mid)
+            if not inner:
+                inner.append(self.lm.run())                                        # «другий процес» посеред першого
+            return real(sid, mid, patch, *a, **kw)
+        with self.mock.patch.object(self.dm, 'write_secrets', spy):
+            self.assertEqual(self.lm.run(), 'done')
+        self.assertEqual(inner, ['skip-busy'])
+        self.assertEqual(sorted(calls), ['jira-tracker', 'supabase-dashboard', 'supabase-teams'])     # рівно раз
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_two_threads_one_done_secrets_once(self):
+        import threading
+        real = self.dm.write_secrets
+        calls, res = [], []
+        gate = threading.Event()
+
+        def slow(sid, mid, patch, *a, **kw):
+            calls.append(mid)
+            gate.wait(2)
+            return real(sid, mid, patch, *a, **kw)
+        with self.mock.patch.object(self.dm, 'write_secrets', slow):
+            t1 = threading.Thread(target=lambda: res.append(self.lm.run()))
+            t1.start()
+            while not calls:
+                pass
+            res.append(self.lm.run())                                              # перший тримає замок, поки gate закритий
+            gate.set()
+            t1.join(10)
+        self.assertEqual(sorted(res), ['done', 'skip-busy'])
+        self.assertEqual(sorted(calls), ['jira-tracker', 'supabase-dashboard', 'supabase-teams'])
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_mark_found_inside_lock_before_any_secret(self):
+        """`plan()` рахується під замком: позначка, що зʼявилась ДО запуску, не дає записати жодного секрету."""
+        self._write(self.space_path(), {'migrations': {'liga-4d3a': {'at': 'x'}}})
+        with self.mock.patch.object(self.dm, 'write_secrets', side_effect=AssertionError('secret written')):
+            self.assertEqual(self.lm.run(), 'skip-done')
+        self.assertFalse(os.path.exists(self.secrets_path()))
+
+    def test_backup_source_changed_mid_copy_aborts(self):
+        self.seed_space()
+        real = self.lm.shutil.copyfile
+
+        def mutating(src, dst, *a, **kw):
+            r = real(src, dst, *a, **kw)
+            if os.path.basename(src) == 'space.json':
+                with open(src, 'ab') as f:
+                    f.write(b' ')
+            return r
+        before = self.tree_without_logs()
+        with self.mock.patch.object(self.lm.shutil, 'copyfile', mutating):
+            self.assertEqual(self.lm.run(), 'abort-backup')
+        with open(self.space_path(), 'wb') as f:
+            f.write(self.ORIG_SPACE)
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.tree_without_logs(), before)
+
+    def test_backup_copy_corrupted_aborts(self):
+        real = self.lm.shutil.copyfile
+
+        def corrupting(src, dst, *a, **kw):
+            r = real(src, dst, *a, **kw)
+            with open(dst, 'ab') as f:
+                f.write(b' ')
+            return r
+        with self.mock.patch.object(self.lm.shutil, 'copyfile', corrupting):
+            self.assertEqual(self.lm.run(), 'abort-backup')
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(os.path.exists(self.secrets_path()))
+
+    def test_backup_source_vanishes_mid_backup_aborts(self):
+        real = self.lm.shutil.copyfile
+
+        def vanishing(src, dst, *a, **kw):
+            r = real(src, dst, *a, **kw)
+            if os.path.basename(src) == 'spaces.json':
+                os.rename(src, src + '.gone')
+            return r
+        with self.mock.patch.object(self.lm.shutil, 'copyfile', vanishing):
+            self.assertEqual(self.lm.run(), 'abort-backup')
+        os.rename(os.path.join(self.deai, 'spaces.json.gone'), os.path.join(self.deai, 'spaces.json'))
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(os.path.exists(self.secrets_path()))
+
+    def test_backup_required_source_missing_aborts(self):
+        """`tasks.json`/`spaces.json` обовʼязкові: їхня відсутність у момент бекапу — збій, а не мовчазний пропуск."""
+        for name in ('legacy-tasks.json', 'spaces.json'):
+            with self.mock.patch.object(self.lm.os.path, 'isfile', lambda p, n=name: False if os.path.basename(p) == n else os.path.exists(p)):
+                with self.assertRaises(OSError):
+                    self.lm._backup(self.deai, 'legacy', self.space_dir)
+            self.assertEqual(self.backups(), [])
+
+    def test_status_lists_only_backups_with_manifest(self):
+        self.assertEqual(self.lm.run(), 'done')
+        good = self.backups()[0]
+        junk = os.path.join(self.deai, 'backups', '20260101-000000-liga-4d3a')
+        os.makedirs(junk)                                                          # недописана тека без маніфесту
+        self.assertEqual(self.lm.status()['backups'], [good])
+        self.assertNotIn('20260101-000000-liga-4d3a', self.cli('status')[1])
+
+    def test_tracks_empty_list_is_present(self):
+        self.space_json({'tracks': [], 'default_track': 'zzz'})
+        p = self.lm.plan()
+        self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-present'))
+        self.assertEqual(self.lm.run(), 'done')
+        sj = self.read_json(self.space_path())
+        self.assertEqual((sj['tracks'], sj['default_track']), ([], 'zzz'))
+
+    def test_userinfo_urls_are_not_migrated(self):
+        """Зараз форму адреси стереже `install_config` (userinfo не проходить регулярку); `bad-url` — другий рубіж у самій міграції."""
+        ic = self.lm.install_config
+        with self.mock.patch.object(ic, 'jira_from', lambda cfg: ('https://user:pass@jira.example.com', self.JIRA_EMAIL, self.JIRA_TOKEN)):
+            p = self.lm.plan()
+        self.assertEqual((p['roles']['tracker']['migrate'], p['roles']['tracker']['reason']), (False, 'bad-url'))
+        self.assertNotIn('jira-tracker', p['secrets'])
+        self.assertNotIn('pass', repr(p['space_json']))
+        self.assertNotIn('pass', self.lm.report(p))
+        self.assertTrue(p['roles']['dashboard']['migrate'])
+        with self.mock.patch.object(ic, 'supabase_from', lambda cfg: ('https://k:v@sb.example.com', self.SB_KEY)):
+            p = self.lm.plan()
+        for role in ('dashboard', 'notify'):
+            self.assertEqual((p['roles'][role]['migrate'], p['roles'][role]['reason']), (False, 'bad-url'))
+            self.assertNotIn(self.lm.ROLE_MODULES[1 if role == 'dashboard' else 2][1], p['secrets'])
+        self.assertTrue(p['roles']['tracker']['migrate'])
 
     # --- CLI
     def test_cli_status_dry_run_run(self):
@@ -1388,6 +1559,77 @@ class RestoreTest(_WriteStand):
         self.assertEqual(self.lm.restore(stamp), 'refuse-no-liga')
         self.assertEqual(self.read(self.space_path()), migrated)
 
+    def test_restore_keeps_foreign_secrets_added_after_migration(self):
+        """⛔ Відкат чіпає лише запис ЛІГИ: секрет іншого простору/модуля, доданий ПІСЛЯ міграції, виживає."""
+        stamp = self.migrate()
+        cur = self.read_json(self.secrets_path())
+        cur['other-space'] = {'m': {'k': 'later_value_alpha'}}
+        cur['other']['m2'] = {'k': 'later_value_beta'}
+        self._write(self.secrets_path(), cur)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        after = self.read_json(self.secrets_path())
+        self.assertEqual(after['other-space'], {'m': {'k': 'later_value_alpha'}})
+        self.assertEqual(after['other'], {'m': {'k': 'other_value_alpha'}, 'm2': {'k': 'later_value_beta'}})
+        self.assertNotIn('legacy', after)                                          # у бекапі запису ЛІГИ не було
+        self.assertEqual(os.stat(self.secrets_path()).st_mode & 0o777, 0o600)
+
+    def test_restore_restores_liga_secrets_entry_from_backup(self):
+        self._write(self.secrets_path(), {'legacy': {'jira-tracker': {'token': 'old_token_alpha'}}, 'other': {'m': {'k': 'v'}}})
+        stamp = self.migrate(seed=False)
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['jira-tracker'], {'token': self.JIRA_TOKEN})
+        cur = self.read_json(self.secrets_path())
+        cur['later'] = {'m': {'k': 'later_value_alpha'}}
+        self._write(self.secrets_path(), cur)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        after = self.read_json(self.secrets_path())
+        self.assertEqual(after['legacy'], {'jira-tracker': {'token': 'old_token_alpha'}})
+        self.assertEqual((after['other'], after['later']), ({'m': {'k': 'v'}}, {'m': {'k': 'later_value_alpha'}}))
+
+    def test_pre_restore_safety_copy_holds_later_edits(self):
+        """⛔ Правки ПІСЛЯ міграції не зникають мовчки: поточні `space.json` і ліговий шматок секретів — у `…-pre-restore`."""
+        stamp = self.migrate()
+        edited = self.read_json(self.space_path())
+        edited['edited_later'] = {'keep': 1}
+        self._write(self.space_path(), edited)
+        edited_bytes = self.read(self.space_path())
+        sec = self.read_json(self.secrets_path())
+        sec['legacy']['jira-tracker']['token'] = 'edited_later_token_alpha'
+        self._write(self.secrets_path(), sec)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.ORIG_SPACE)
+        names = [n for n in os.listdir(os.path.join(self.deai, 'backups')) if n.endswith('-pre-restore')]
+        self.assertEqual(names, [stamp + '-pre-restore'])
+        self.assertIsNone(self.lm.STAMP_RE.fullmatch(names[0]))                    # це не бекап міграції
+        b = os.path.join(self.deai, 'backups', names[0])
+        self.assertEqual(os.stat(b).st_mode & 0o777, 0o700)
+        self.assertEqual(self.read(b, 'space.json'), edited_bytes)
+        self.assertEqual(self.read_json(b, 'secrets-liga.json')['legacy']['jira-tracker'], {'token': 'edited_later_token_alpha'})
+        for f in os.listdir(b):
+            self.assertEqual(os.stat(os.path.join(b, f)).st_mode & 0o777, 0o600, f)
+        m = self.read_json(b, 'manifest.json')
+        for fname, meta in m['files'].items():
+            self.assertEqual(meta['sha256'], self.sha(self.read(b, fname)), fname)
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['safety_copy'], names[0])
+        self.assertEqual(self.lm.status()['backups'], [stamp])                     # pre-restore у списку бекапів міграції нема
+        self.assertEqual(self.lm.restore(stamp + '-pre-restore'), 'refuse-stamp')  # і відкотитись із нього не можна
+        self.assertEqual(self.lm.restore(stamp), 'restored')                       # другий відкат — нова копія з суфіксом
+        self.assertEqual(sorted(n for n in os.listdir(os.path.join(self.deai, 'backups')) if 'pre-restore' in n),
+                         [stamp + '-pre-restore', stamp + '-pre-restore-2'])
+
+    def test_safety_copy_failure_restores_nothing(self):
+        stamp = self.migrate()
+        migrated = self.read(self.space_path())
+        with self.mock.patch.object(self.lm, '_write_pre_restore', side_effect=OSError('disk')):
+            self.assertEqual(self.lm.restore(stamp), 'abort-restore')
+        self.assertEqual(self.read(self.space_path()), migrated)
+
+    def test_cli_restore_mentions_safety_copy(self):
+        stamp = self.migrate()
+        code, out, _ = self.cli('restore', stamp)
+        self.assertEqual(code, 0)
+        self.assertIn('pre-restore', out)
+        self.assertIn('запобіжна', out)
+
     def test_cli_restore(self):
         stamp = self.migrate()
         code, out, _ = self.cli('restore', stamp, '--hold')
@@ -1479,6 +1721,14 @@ class StartupTest(_WriteStand):
         with self.mock.patch.object(self.lm, '_run', side_effect=RuntimeError('x')), \
                 self.mock.patch.object(self.lm, '_write_last', side_effect=OSError('y')):
             self.assertEqual(self.quiet(self.lm.startup)[0], 'abort-internal')
+
+    def test_home_only_overridden_deai_home_unset_production_runs(self):
+        """Лише `HOME` підмінено, `DEAI_HOME` не заданий: дім — `<HOME>/.deai`; не ізольований прогін мігрує саме туди."""
+        os.environ.pop('DEAI_HOME', None)
+        st, _err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'done')
+        self.assertEqual(len(self.backups()), 1)
+        self.assertEqual(self.deai, os.path.join(self.home, '.deai'))
 
     def test_serve_main_calls_startup_before_make_server(self):
         with open(os.path.join(os.path.dirname(_HERE), 'app', 'serve.py'), encoding='utf-8') as f:

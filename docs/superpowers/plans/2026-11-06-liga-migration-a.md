@@ -8,7 +8,7 @@
 підлягають закону ізоляції. Реліз 0.17.0.
 
 **Architecture:** новий `app/liga_migrate.py` (чистий розрахунок `plan()` + `run()` із бекапом/записом/позначкою +
-`restore()`), CLI `bin/liga_migrate.py` (`status|dry-run|run|restore`), виклик на старті `serve.py main` до відкриття порту.
+`restore()`), CLI `bin/migrate_liga.py` (`status|dry-run|run|restore`), виклик на старті `serve.py main` до відкриття порту.
 Модулі `supabase-dashboard`/`supabase-teams`: налаштування `compat`. Ядро ролей `dashboard`/`tracker`/`notify`: запис модуля з
 `shared_state: true` іде через `implicit.route()`.
 
@@ -69,7 +69,7 @@
 | `app/modules/supabase-dashboard/{module.json,server.py}`, `app/modules/supabase-teams/{module.json,server.py}`, `app/dashboard.py`, `app/notify.py` | `compat` (Task 2) |
 | `app/serve.py`, `app/deai_modules.py` | `shared_state` → `implicit.route()` для `dashboard`/`tracker`/`notify` і синку (Task 3); старт міграції (Task 5) |
 | `app/liga_migrate.py` (новий) | `plan()`, `run()`, `restore()`, `status()` (Task 4–5) |
-| `bin/liga_migrate.py` (новий) | CLI (Task 5) |
+| `bin/migrate_liga.py` (новий) | CLI (Task 5) |
 | `app/connections-model.js` | лише якщо знімок Task 1/6 покаже дубль картки (Task 6) |
 | `tests/test_liga_migrate.py` (новий), `tests/live/liga-migrate.test.mjs` (новий) | тести |
 | `CHANGELOG.md`, `README.md`, `docs/design/spaces-and-modules.md`, `docs/modules/authoring.md`, `package.json` | Task 7 |
@@ -185,7 +185,7 @@
 
 ### Task 5: запис, бекап, позначка, відкат, CLI, старт сервера
 
-**Files:** Modify `app/liga_migrate.py`, `app/serve.py` (`main`); Create `bin/liga_migrate.py`; Test `tests/test_liga_migrate.py`
+**Files:** Modify `app/liga_migrate.py`, `app/serve.py` (`main`); Create `bin/migrate_liga.py`; Test `tests/test_liga_migrate.py`
 (`RunTest`, `RestoreTest`, `StartupTest`).
 
 - [ ] **Step 1 (тести, червоні):** `run()` у тимчасовому `DEAI_HOME`: бекап `<home>/backups/<stamp>-liga-4d3a/` (0700) з
@@ -199,7 +199,7 @@
   `serve.main` кличе `liga_migrate.startup()` до `make_server`; у ізольованому прогоні — ні, крім `DC_MIGRATE_LIGA=1` з
   тимчасовим `DEAI_HOME` (справжній `~/.deai` — відмова навіть зі швом); будь-який виняток міграції не валить старт (лише
   stderr і `last.json`).
-- [ ] **Step 2:** реалізація; CLI `bin/liga_migrate.py status|dry-run|run|restore <stamp> [--hold]` (exit 0 / 1, людський
+- [ ] **Step 2:** реалізація; CLI `bin/migrate_liga.py status|dry-run|run|restore <stamp> [--hold]` (exit 0 / 1, людський
   текст українською, без значень секретів). Порядок замків: жодних `load_registry`/`catalog`/`provider` під `WRITE_LOCK`.
 - [ ] **Step 3:** мутації (поміняти місцями секрети й `space.json` у `run()` → тест «збій посередині» червоний або
   позначка/ідемпотентність червоні; прибрати перевірку «справжній ~/.deai» у шві → тест червоний); тести, `npm test`, коміт.

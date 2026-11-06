@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Міграція простору ЛІГА (етап 4d-3a): стан, прогноз, запуск, відкат.
 
-    python3 bin/liga_migrate.py status                       # позначка, останній звіт, бекапи
-    python3 bin/liga_migrate.py dry-run                      # що мігрувало б (нічого не пише)
-    python3 bin/liga_migrate.py run                          # виконати (бекап → секрети → space.json)
-    python3 bin/liga_migrate.py restore <бекап> [--hold]     # повернути space.json і secrets.json з бекапу
+    python3 bin/migrate_liga.py status                       # позначка, останній звіт, бекапи
+    python3 bin/migrate_liga.py dry-run                      # що мігрувало б (нічого не пише)
+    python3 bin/migrate_liga.py run                          # виконати (бекап → секрети → space.json)
+    python3 bin/migrate_liga.py restore <бекап> [--hold]     # повернути space.json і секрети ЛІГИ з бекапу (поточні — у backups/<бекап>-pre-restore)
 
 Вихід 0 — успіх, 1 — інакше. ⛔ Друкує лише коди, імена ролей і ключів; значень секретів і адрес — ніколи.
 """
@@ -17,7 +17,7 @@ import liga_migrate  # noqa: E402
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog='liga_migrate.py', description='Міграція простору ЛІГА (4d-3a)')
+    ap = argparse.ArgumentParser(prog='migrate_liga.py', description='Міграція простору ЛІГА (4d-3a)')
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('status')
     sub.add_parser('dry-run')
@@ -37,12 +37,16 @@ def main(argv=None):
         st, info = liga_migrate._run(None)
         print('liga-4d3a: %s' % st)
         print('  ' + str(info.get('reason') or ''))
+        if info.get('hint'):
+            print('  що робити: ' + str(info['hint']))
         if st == 'done':
             print('  ролі: %s; напрямки: %s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', 'так' if info.get('tracks') else 'ні', info.get('backup')))
-            print('  відкат: python3 bin/liga_migrate.py restore %s [--hold]' % info.get('backup'))
+            print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % info.get('backup'))
         return 0 if st in liga_migrate.BENIGN else 1
-    st = liga_migrate.restore(a.stamp, hold=a.hold)
+    st, info = liga_migrate._restore(a.stamp, hold=a.hold)
     print('liga-4d3a restore: %s' % st)
+    if st == 'restored':
+        print('  запобіжна копія поточних space.json і секретів ЛІГИ (до відкату): backups/%s' % info.get('safety_copy'))
     return 0 if st == 'restored' else 1
 
 
