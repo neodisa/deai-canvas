@@ -116,7 +116,8 @@ class ManifestTest(ModuleCase):
         self.assertEqual((m.id, m.status, m.version), ('supabase-dashboard', 'ok', '1.0.0'))
         self.assertEqual(m.roles, ['dashboard'])
         st = {s['key']: s for s in m.settings}
-        self.assertEqual(set(st), {'url', 'key', 'table'})
+        self.assertEqual(set(st), {'url', 'key', 'table', 'compat'})
+        self.assertEqual((st['compat']['type'], st['compat']['required']), ('select', False))
         self.assertEqual((st['url']['type'], st['url']['required']), ('text', True))
         self.assertEqual((st['key']['type'], st['key']['required']), ('secret', True))
         self.assertFalse(st['key'].get('public'), 'ключ дашборда непублічний: у сторінки він не потрапляє')
@@ -219,13 +220,13 @@ class CheckTest(ModuleCase):
             self.assertTrue(self.run_fn('check', self.ctx(secrets={'key': key}))['ok'], key[:14])
 
     def test_liga_path_does_not_refuse_a_public_key(self):
-        """ЛІГА: ключ той самий, що до 4c-1 (паритет); `check` у `ctx['legacy']` публічності не перевіряє."""
+        """ЛІГА: ключ той самий, що до 4c-1 (паритет); `check` при `settings.compat == "comment-layer"` публічності не перевіряє."""
         self.net(Resp(200, []))
-        ctx = self.ctx(secrets={'key': 'sb_publishable_abc123'}, settings={'table': 'overview_projects'}, legacy=True)
+        ctx = self.ctx(secrets={'key': 'sb_publishable_abc123'}, settings={'table': 'overview_projects', 'compat': 'comment-layer'})
         res = self.run_fn('check', ctx)
         self.assertTrue(res['ok'], res)
         self.assertIn('/rest/v1/overview_projects?', self.calls[0]['url'])
-        ctx = self.ctx(secrets={'key': _jwt('anon')}, legacy=True)
+        ctx = self.ctx(secrets={'key': _jwt('anon')}, settings={'compat': 'comment-layer'})
         self.assertTrue(self.run_fn('check', ctx)['ok'])
 
     def test_bad_table_name(self):

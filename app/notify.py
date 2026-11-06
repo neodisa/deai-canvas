@@ -81,11 +81,12 @@ def legacy_ctx(url, key, space_id=''):
 
     ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
     справжній `~/.deai` машини (той самий урок 4c-1, що `dashboard.legacy_ctx`, `tracker.legacy_ctx` і
-    `serve._comments_legacy_ctx`). `legacy: True` — модуль за ним пропускає перевірку публічності ключа й `teams_notify_health`
-    у `check` (у базі ЛІГИ цієї функції нема, а ключ там — публічний ключ сторінки: паритет з 0.13.0)."""
+    `serve._comments_legacy_ctx`). `settings.compat = 'comment-layer'` — модуль за ним пропускає перевірку публічності ключа й `teams_notify_health`
+    у `check` (у базі ЛІГИ цієї функції нема, а ключ там — публічний ключ сторінки: паритет з 0.13.0).
+    `legacy: True` лишено для чужих модулів: вбудовані його НЕ читають."""
     if url is None:
         raise deai_modules.ModuleError('notify-unconfigured', message=UNCONFIGURED)
-    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url}, 'secrets': {'key': key},
+    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url, 'compat': 'comment-layer'}, 'secrets': {'key': key},
             'ModuleError': deai_modules.ModuleError, 'legacy': True}
 
 

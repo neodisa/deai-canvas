@@ -488,7 +488,7 @@ class LegacyAdapter(unittest.TestCase):
 
     def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
         ctx = notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1', space_id='s')
-        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example'})
+        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'compat': 'comment-layer'})
         self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
         self.assertEqual(ctx['space'], {'id': 's', 'path': ''})
         self.assertIs(ctx['legacy'], True)

@@ -853,10 +853,11 @@ class DashboardHelpers(unittest.TestCase):
 
     def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
         ctx = dashboard.legacy_ctx('https://demo.supabase.example', 'sk-test-1', 'liga')
-        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'table': 'overview_projects'})
+        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'table': 'overview_projects',
+                                               'compat': 'comment-layer'})
         self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
         self.assertEqual(ctx['space'], {'id': 'liga', 'path': ''})
-        self.assertIs(ctx['legacy'], True, 'модуль не відмовляє публічному ключу ЛІГИ')
+        self.assertIs(ctx['legacy'], True, 'прапорець лишено для чужих модулів; вбудований дашборд читає `settings.compat`')
         self.assertIs(ctx['ModuleError'], dm.ModuleError)
         self.assertEqual(dashboard.legacy_ctx('https://x.example', 'k')['space']['id'], '')
 

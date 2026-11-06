@@ -8,7 +8,7 @@
 Лише stdlib (`urllib`, `json`, `re`, `base64`, `ssl`) і за наявності `certifi`. `server.py` виконується ядром через `exec` у
 свіжий модуль: без імпорту `serve`, `deai_modules` чи сусідніх файлів (хелпери адреси/TLS ТУТ ПРОДУБЛЬОВАНО з
 `supabase-dashboard`, а не імпортовано: модулі не знають один про одного). Із `ctx` береться `ctx['settings']['url']`,
-`ctx['secrets']['key']`, `ctx['ModuleError']` і прапорець `ctx['legacy']` (див. нижче).
+`ctx['secrets']['key']`, `ctx['ModuleError']` і налаштування `compat` (див. нижче).
 ⚠️ Для однорідності з `supabase-dashboard` перевірки типу — `isinstance(x, type([]))`, а не `list`.
 
 Адреса й ключ
@@ -18,8 +18,8 @@
     публічний ключ їде в кожне опубліковане превʼю. Тому `check` відмовляє публічному (`sb_publishable_…`, JWT з
     `"role": "anon"`). Ключ іде ЛИШЕ в заголовки `apikey` і `Authorization: Bearer` запитів до `url` (єдине місце —
     `_request`); ні в адресу, ні в тіло, ні в тексти помилок.
-  ⚠️ Шлях ЛІГИ (`ctx['legacy'] is True`, ctx будує ядро з конфігу установки): база ЛІГИ — стара схема comment-layer, де RPC
-  тиші віддані ключу сторінки (публічному), а `teams_notify_health` НЕМАЄ. Тож для `legacy` `check` публічність ключа НЕ
+  ⚠️ Шлях ЛІГИ (`settings.compat == "comment-layer"`; ядро ставить його в `notify.legacy_ctx`, а 4d-3a міграція пише в `space.json`): база ЛІГИ — стара схема comment-layer, де RPC
+  тиші віддані ключу сторінки (публічному), а `teams_notify_health` НЕМАЄ. Тож для `compat` `check` публічність ключа НЕ
   перевіряє і `teams_notify_health` НЕ кличе (паритет з 0.13.0); `mute_state`/`mute_set` публічності не перевіряють НІКОЛИ —
   вирішує лише `check`, а справжню межу ставить сама база (`grant`).
 
@@ -32,7 +32,7 @@
   * `mute_state` — `POST <url>/rest/v1/rpc/teams_mute_state` `{}`;
   * `mute_set` — `POST <url>/rest/v1/rpc/teams_mute_set` `{"p_project", "p_muted", "p_by"}`;
   * заголовки рівно `apikey`, `Authorization: Bearer <ключ>`, `Content-Type: application/json`; тайм-аут `TIMEOUT_S` = 8;
-  * `check` додає `POST …/rpc/teams_notify_health` `{"window_hours": 6}` (не для `legacy`).
+  * `check` додає `POST …/rpc/teams_notify_health` `{"window_hours": 6}` (не для `compat`).
 """
 import base64
 import json
@@ -120,6 +120,12 @@ def _host_ok(host):
 def _setting(ctx, name):
     st = ctx.get('settings') if isinstance(ctx, dict) else None
     return st.get(name) if isinstance(st, dict) else None
+
+
+def _compat(ctx):
+    """`settings.compat == "comment-layer"` (ЛІГА: база — стара схема comment-layer). ⛔ Прапорець `ctx['legacy']` вбудовані модулі НЕ
+    читають: його лишено лише чужим модулям; тут вирішує явне налаштування, тож запис у `space.json` поводиться так само, як ctx ядра."""
+    return _setting(ctx, 'compat') == 'comment-layer'
 
 
 def _base(ctx):
@@ -250,7 +256,7 @@ def _problem(status, payload, key, legacy=False):
 
 def _fail(ctx, status, payload):
     """`notify-error` за невдалою відповіддю сервісу."""
-    return _error(ctx, 'notify-error', _problem(status, payload, _key(ctx), bool(ctx.get('legacy'))))
+    return _error(ctx, 'notify-error', _problem(status, payload, _key(ctx), _compat(ctx)))
 
 
 def _unreachable(ctx, e):
@@ -310,7 +316,7 @@ def check(ctx):
         _need_key(ctx)
     except Exception as e:  # noqa: BLE001 — налаштування не годяться: вердикт, а не виняток
         return _verdict('module-error', getattr(e, 'message', None) or e, key)
-    legacy = bool(ctx.get('legacy'))
+    legacy = _compat(ctx)
     if not legacy and _is_public_key(key):
         return _verdict('public-key', _PUBLIC_KEY)
     try:

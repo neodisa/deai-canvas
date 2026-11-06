@@ -3,5 +3,7 @@
  "settings": [
    {"key": "url", "type": "text", "label": "Адреса проєкту (https://<ref>.supabase.co)", "required": true},
    {"key": "key", "type": "secret", "label": "Непублічний ключ (service_role або ключ окремої ролі)", "required": true},
-   {"key": "table", "type": "text", "label": "Таблиця дашборда (типово deai_dashboard)", "required": false}
+   {"key": "table", "type": "text", "label": "Таблиця дашборда (типово deai_dashboard)", "required": false},
+   {"key": "compat", "type": "select", "label": "Сумісність (лише для ЛІГИ: comment-layer — публічний ключ сторінки)", "required": false, "default": "",
+    "options": [{"value": "", "label": "Немає"}, {"value": "comment-layer", "label": "comment-layer (ЛІГА)"}]}
  ]}

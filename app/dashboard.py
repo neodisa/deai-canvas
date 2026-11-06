@@ -233,10 +233,11 @@ def legacy_ctx(url, key, space_id=''):
 
     ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
     справжній `~/.deai` машини (той самий урок, що `serve._vcs_legacy_ctx`/`_comments_legacy_ctx`).
-    `legacy: True` — модуль не відмовляє публічному ключу ЛІГИ (паритет з 0.11.0; `check` ЛІГИ кличеться лише з «Підключення»)."""
+    `settings.compat = 'comment-layer'` — модуль не відмовляє публічному ключу ЛІГИ (паритет з 0.11.0; `check` ЛІГИ кличеться лише з
+    «Підключення»). `legacy: True` лишено для чужих модулів: вбудовані його НЕ читають (охоронець у `tests/test_liga_migrate.py`)."""
     if url is None:
         raise deai_modules.ModuleError('dashboard-unconfigured', message=UNCONFIGURED)
-    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url, 'table': LEGACY_TABLE},
+    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url, 'table': LEGACY_TABLE, 'compat': 'comment-layer'},
             'secrets': {'key': key}, 'ModuleError': deai_modules.ModuleError, 'legacy': True}
 
 

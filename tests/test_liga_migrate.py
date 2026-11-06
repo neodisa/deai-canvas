@@ -161,5 +161,155 @@ class Before4d3aShape(unittest.TestCase):
             self.assertEqual(h['screen']['cards'][mid]['view']['badge'], 'unchecked', mid)
 
 
+class CompatSetting(unittest.TestCase):
+    """Task 2 (4d-3a): налаштування `compat` модулів `supabase-dashboard`/`supabase-teams` замість прапорця `ctx['legacy']`.
+
+    ⛔ `check` на неявному шляху ЛІГИ (`legacy_ctx`) лишається побайтно тим, що в знімку 0.16.0 (секції `check`): порівняння
+    через будівники ТОГО Ж генератора (`tests/make_before_4d3a.py`), без мережі (шов `_open` підмінено, сокети під розтяжкою)."""
+
+    MODS = ('supabase-dashboard', 'supabase-teams')
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        for p in (os.path.join(os.path.dirname(_HERE), 'app'), os.path.join(os.path.dirname(_HERE), 'bin'), _HERE):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        import make_before_4d3a as gen
+        cls.gen = gen
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)['check']
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        gen = self.gen
+        self._tmp = tempfile.TemporaryDirectory(prefix='compat-')
+        self.addCleanup(self._tmp.cleanup)
+        home = os.path.join(os.path.normpath(self._tmp.name), 'home')
+        os.makedirs(home)
+        patch = mock.patch.dict(os.environ, {'HOME': home})
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in gen.CLEAN:
+            os.environ.pop(name, None)
+        wire = gen.SocketTripwire()
+        wire.__enter__()
+        self.addCleanup(lambda: wire.__exit__(None, None, None))
+        self.wire = wire
+        self.rig = gen.Rig(os.path.normpath(self._tmp.name), 'cs')
+        self.rig.config()
+        self.rig.registry()
+
+    def _ctxs(self):
+        import dashboard
+        import install_config
+        import notify
+        url, key = install_config.supabase_config()
+        return {'supabase-dashboard': dashboard.legacy_ctx(url, key, space_id=self.gen.SPACE_ID),
+                'supabase-teams': notify.legacy_ctx(url, key, space_id=self.gen.SPACE_ID)}
+
+    def _run(self, mid, ctx, scenario='ok'):
+        return json.loads(json.dumps(self.gen.scrub(self.gen._run_check(mid, ctx, scenario), self.rig.home)))
+
+    @staticmethod
+    def _with(ctx, key=None, compat=None, legacy=None):
+        """Копія ctx: ключ; `compat` (`None` — прибрати налаштування); `legacy` (`None` — прибрати прапорець)."""
+        c = dict(ctx)
+        c['settings'] = {k: v for k, v in ctx['settings'].items() if k != 'compat'}
+        if compat is not None:
+            c['settings']['compat'] = compat
+        c.pop('legacy', None)
+        if legacy is not None:
+            c['legacy'] = legacy
+        if key is not None:
+            c['secrets'] = {'key': key}
+        return c
+
+    def test_legacy_ctx_carries_compat(self):
+        with self.rig.activate():
+            for mid, ctx in self._ctxs().items():
+                self.assertEqual(ctx['settings']['compat'], 'comment-layer', mid)
+                self.assertIs(ctx['legacy'], True, 'прапорець лишено для чужих модулів')
+
+    def test_implicit_path_verdicts_equal_snapshot(self):
+        """Вердикти `check` на `legacy_ctx` (ok/denied/network і публічні ключі) — побайтно секція `check` знімка."""
+        with self.rig.activate():
+            ctxs = self._ctxs()
+            for mid in self.MODS:
+                for sc in ('ok', 'denied', 'network'):
+                    self.assertEqual(self._run(mid, ctxs[mid], sc), self.snap[mid][sc], (mid, sc))
+                pub = self.snap['public_key'][mid]
+                c = dict(ctxs[mid], secrets={'key': 'sb_publishable_alpha'})      # compat — саме з `legacy_ctx`, не дописаний тестом
+                self.assertEqual(self._run(mid, c), pub['legacy_true'], mid)
+                jwt = self.gen._jwt_anon()
+                c = dict(ctxs[mid], secrets={'key': jwt})
+                self.assertEqual(self._run(mid, c), pub['jwt_anon_legacy_true'], mid)
+
+    def test_without_compat_public_key_refused_even_with_legacy_flag(self):
+        """Без `compat` (нема/`""`) прапорець `ctx['legacy'] = True` нічого не змінює: публічний ключ → `public-key`, мережі нема."""
+        with self.rig.activate():
+            ctxs = self._ctxs()
+            for mid in self.MODS:
+                for compat in (None, ''):
+                    for key in ('sb_publishable_alpha', self.gen._jwt_anon()):
+                        c = self._with(ctxs[mid], key=key, compat=compat, legacy=True)
+                        out = self._run(mid, c)
+                        self.assertEqual(out['outcome']['result']['error'], 'public-key', (mid, compat))
+                        self.assertEqual(out['requests'], [])
+                ref = self._with(ctxs[mid], key='sb_publishable_alpha', compat=None)
+                self.assertEqual(self._run(mid, self._with(ctxs[mid], key='sb_publishable_alpha', compat=None, legacy=True)),
+                                 self._run(mid, ref), 'прапорець legacy не змінює нічого')
+                self.assertEqual(self._run(mid, ref), self.snap['public_key'][mid]['legacy_absent'], mid)
+
+    def test_teams_compat_skips_health_and_uses_legacy_texts(self):
+        """`supabase-teams` + `compat`: лише `teams_mute_state` (без `teams_notify_health`); без нього — обидва виклики."""
+        with self.rig.activate():
+            ctx = self._ctxs()['supabase-teams']
+            on = self._run('supabase-teams', ctx)
+            self.assertEqual([r[1].rsplit('/', 1)[-1] for r in on['requests']], ['teams_mute_state'])
+            off = self._run('supabase-teams', self._with(ctx, compat=None, legacy=True, key='sb_secret_alpha'))
+            self.assertEqual([r[1].rsplit('/', 1)[-1] for r in off['requests']][:2], ['teams_mute_state', 'teams_notify_health'])
+            self.assertEqual(self._run('supabase-teams', ctx, 'denied'), self.snap['supabase-teams']['denied'])
+
+    def test_manifests_declare_compat_as_select(self):
+        """Формат `select` — як у наявних модулях (`options: [{value, label}]`); невідоме значення — `bad-settings` наявним механізмом."""
+        import deai_modules as dm
+        dm.reset_caches()
+        for mid in self.MODS:
+            mod = dm.catalog()[mid]
+            s = {x['key']: x for x in mod.settings}['compat']
+            self.assertEqual(s['type'], 'select')
+            self.assertFalse(s['required'])
+            self.assertEqual(s.get('default'), '')
+            self.assertEqual([o['value'] for o in s['options']], ['', 'comment-layer'])
+            self.assertEqual(dm.resolve_settings({'id': 'x', 'path': ''}, mod, {'url': 'https://sb.example.com', 'compat': 'comment-layer'})['compat'],
+                             'comment-layer')
+            self.assertEqual(dm.resolve_settings({'id': 'x', 'path': ''}, mod, {'url': 'https://sb.example.com'})['compat'], '')
+            for bad in ('legacy', 'Comment-Layer', 'comment-layer ', 1, True):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.resolve_settings({'id': 'x', 'path': ''}, mod, {'url': 'https://sb.example.com', 'compat': bad})
+                self.assertEqual(cm.exception.code, 'bad-settings', repr(bad))
+
+    def test_builtin_modules_do_not_read_legacy_flag(self):
+        """⛔ Охоронець: у `app/modules/*/server.py` нема читання `ctx.get('legacy')` / `ctx['legacy']` (AST: коментарі й докстрінги,
+        що згадують прапорець, не рахуються). Прапорець лишено чужим модулям, вбудовані вирішують `settings.compat`."""
+        import ast
+        import glob
+        files = sorted(glob.glob(os.path.join(os.path.dirname(_HERE), 'app', 'modules', '*', 'server.py')))
+        self.assertGreaterEqual(len(files), 6)
+        hits = []
+        for path in files:
+            with open(path, encoding='utf-8') as f:
+                tree = ast.parse(f.read(), path)
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == 'legacy':
+                    hits.append((path, n.lineno))
+                elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'get'
+                      and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == 'legacy'):
+                    hits.append((path, n.lineno))
+        self.assertEqual(hits, [])
+
+
 if __name__ == '__main__':
     unittest.main()

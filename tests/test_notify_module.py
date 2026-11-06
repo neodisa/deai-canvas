@@ -74,6 +74,10 @@ def by_path(table):
     return script
 
 
+#: ЛІГА (4d-3a): модуль читає `settings.compat`, а не прапорець `ctx['legacy']` (той вбудовані модулі не читають).
+COMPAT = {'settings': {'compat': 'comment-layer'}}
+
+
 class ModuleCase(unittest.TestCase):
     def setUp(self):
         os.environ.pop('DEAI_EXTRA_MODULES', None)
@@ -129,7 +133,8 @@ class ManifestTest(ModuleCase):
         self.assertEqual((m.id, m.status, m.version), ('supabase-teams', 'ok', '1.0.0'))
         self.assertEqual(m.roles, ['notify'])
         st = {s['key']: s for s in m.settings}
-        self.assertEqual(set(st), {'url', 'key'})
+        self.assertEqual(set(st), {'url', 'key', 'compat'})
+        self.assertEqual((st['compat']['type'], st['compat']['required']), ('select', False))
         self.assertEqual((st['url']['type'], st['url']['required']), ('text', True))
         self.assertEqual((st['key']['type'], st['key']['required']), ('secret', True))
         self.assertFalse(st['key'].get('public'), 'ключ непублічний: у сторінки він не потрапляє')
@@ -424,11 +429,11 @@ class PublicKeyTest(ModuleCase):
                 self.assertTrue(self.raw('check', self.ctx(secrets={'key': key}))['ok'])
 
     def test_the_league_path_skips_the_public_key_check(self):
-        """⛔ ЛІГА: ключ там — публічний ключ сторінки (паритет з 0.13.0), тож `legacy` публічності не перевіряє."""
+        """⛔ ЛІГА: ключ там — публічний ключ сторінки (паритет з 0.13.0), тож `compat: comment-layer` публічності не перевіряє."""
         self.net(by_path(self.GOOD))
         for key in ('sb_publishable_abc123', jwt('anon')):
             self.calls.clear()
-            self.assertTrue(self.raw('check', self.ctx(secrets={'key': key}, legacy=True))['ok'], key[:20])
+            self.assertTrue(self.raw('check', self.ctx(secrets={'key': key}, **COMPAT))['ok'], key[:20])
             self.assertEqual(len(self.calls), 1)
 
     def test_mute_calls_never_check_the_key_publicity(self):
@@ -445,7 +450,7 @@ class LegacyForbiddenTextTest(ModuleCase):
         for legacy, hint in ((True, False), (False, True)):
             with self.subTest(legacy=legacy):
                 self.net(lambda i, call: http_error(403, {}))          # свіжа помилка на кожен запит: `HTTPError` читається раз
-                ctx = self.ctx(legacy=True) if legacy else self.ctx()
+                ctx = self.ctx(**COMPAT) if legacy else self.ctx()
                 texts = [self.raw('check', ctx)['detail'], self.raises('mute_state', ctx).message,
                          self.raises('mute_set', ctx, 'dc/t1', True, ME).message]
                 for t in texts:
@@ -457,15 +462,15 @@ class LegacyCheckTest(ModuleCase):
     def test_the_league_check_does_not_call_the_health_function(self):
         """⛔ У базі ЛІГИ `teams_notify_health` нема: `check` лише читає стан тиші."""
         self.net(by_path({'teams_mute_state': Resp(200, STATE)}))        # будь-який інший RPC зламав би `KeyError`
-        v = self.raw('check', self.ctx(legacy=True))
+        v = self.raw('check', self.ctx(**COMPAT))
         self.assertEqual(v, {'ok': True, 'detail': 'тиша Teams доступна'})
         self.assertEqual([c['url'].rsplit('/', 1)[-1] for c in self.calls], ['teams_mute_state'])
 
     def test_the_league_check_still_reports_failures(self):
         self.net(by_path({'teams_mute_state': http_error(404, {'code': 'PGRST202'})}))
-        self.assertEqual(self.raw('check', self.ctx(legacy=True))['error'], 'notify-no-schema')
+        self.assertEqual(self.raw('check', self.ctx(**COMPAT))['error'], 'notify-no-schema')
         self.net(by_path({'teams_mute_state': http_error(401, {})}))
-        self.assertEqual(self.raw('check', self.ctx(legacy=True))['error'], 'bad-key')
+        self.assertEqual(self.raw('check', self.ctx(**COMPAT))['error'], 'bad-key')
 
 
 class NoRedirectTest(ModuleCase):

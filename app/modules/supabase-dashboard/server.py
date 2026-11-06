@@ -7,7 +7,7 @@
 Лише stdlib (`urllib`, `json`, `re`, `base64`, `ssl`) і за наявності `certifi`. `server.py` виконується ядром через `exec` у
 свіжий модуль: без імпорту `serve`, `deai_modules` чи сусідніх файлів (хелпери адреси/TLS ТУТ ПРОДУБЛЬОВАНО з
 `supabase-comments`, а не імпортовано: модулі не знають один про одного). Із `ctx` береться `ctx['settings']['url'|'table']`,
-`ctx['secrets']['key']`, `ctx['ModuleError']` і прапорець `ctx['legacy']` (див. нижче).
+`ctx['secrets']['key']`, `ctx['ModuleError']` і налаштування `compat` (див. нижче).
 ⚠️ Для однорідності з `supabase-comments` перевірки типу — `isinstance(x, type([]))`, а не `list`.
 
 Адреса, ключ, таблиця
@@ -18,7 +18,7 @@
     ЛИШЕ в заголовки `apikey` і `Authorization: Bearer` запитів до `url` (єдине місце — `_request`); ні в адресу, ні в тіло,
     ні в тексти помилок;
   * `table` — типово `deai_dashboard`, інакше за `[a-z_][a-z0-9_]{0,62}`.
-  ⚠️ Шлях ЛІГИ (`ctx['legacy'] is True`, ctx будує ядро з конфігу установки): ключ там — той самий, що й до 4c-1, тож `check`
+  ⚠️ Шлях ЛІГИ (`settings.compat == "comment-layer"`; ядро ставить його в `dashboard.legacy_ctx`, а 4d-3a міграція пише в `space.json`): ключ там — той самий, що й до 4c-1, тож `check`
   публічність НЕ перевіряє (паритет з 0.11.0); `rows`/`push`/`open_comments` публічності ключа не перевіряють НІКОЛИ — вирішує
   лише `check`, а справжню межу ставить сама база (RLS).
 
@@ -127,6 +127,12 @@ def _host_ok(host):
 def _setting(ctx, name):
     st = ctx.get('settings') if isinstance(ctx, dict) else None
     return st.get(name) if isinstance(st, dict) else None
+
+
+def _compat(ctx):
+    """`settings.compat == "comment-layer"` (ЛІГА: ключ — публічний ключ сторінки). ⛔ Прапорець `ctx['legacy']` вбудовані модулі НЕ
+    читають: його лишено лише чужим модулям; тут вирішує явне налаштування, тож запис у `space.json` поводиться так само, як ctx ядра."""
+    return _setting(ctx, 'compat') == 'comment-layer'
 
 
 def _base(ctx):
@@ -390,7 +396,7 @@ def check(ctx):
         _need_key(ctx)
     except Exception as e:  # noqa: BLE001 — налаштування не годяться: вердикт, а не виняток
         return _verdict('module-error', getattr(e, 'message', None) or e, key)
-    if not ctx.get('legacy') and _is_public_key(key):
+    if not _compat(ctx) and _is_public_key(key):
         return _verdict('public-key', _PUBLIC_KEY)    # ⛔ не `module-error`: той клієнт підписує «Модуль упав», а ключ — вина налаштування
     try:
         status, payload = _request(ctx, 'GET', _table(ctx), 'select=id&limit=1', timeout=READ_TIMEOUT_S)
