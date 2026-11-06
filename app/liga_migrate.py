@@ -19,6 +19,7 @@
 ⛔ Секрети живуть лише в `plan['secrets']`. `report()` друкує імена ключів, не значення; `plan` не друкувати цілком.
 """
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -48,7 +49,7 @@ DASHBOARD_TABLE = 'overview_projects'
 COMPAT = 'comment-layer'
 SKIP_CODES = ('skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-no-path', 'skip-path-in-git',
               'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable', 'skip-nothing', 'skip-busy')
-ABORT_CODES = ('abort-provider', 'abort-internal')
+ABORT_CODES = ('abort-provider', 'abort-internal', 'abort-lock')
 _REASONS = {
     'skip-layer-off': 'шар просторів вимкнено: міграція не біжить',
     'skip-no-liga': 'у реєстрі нема простору ЛІГА',
@@ -63,6 +64,7 @@ _REASONS = {
     'skip-busy': 'міграція вже виконується іншим процесом (замок migrations/.lock зайнятий)',
     'abort-provider': 'ядро не вирішує мігровану роль на розрахованому space.json: міграція нічого не пише',
     'abort-internal': 'непередбачена помилка розрахунку: міграція нічого не пише',
+    'abort-lock': 'міжпроцесний замок недоступний (flock не працює на цій файловій системі): міграція нічого не пише, щоб не йти без замка',
 }
 
 
@@ -409,8 +411,11 @@ def _write_skip(info):
 
 @contextlib.contextmanager
 def _exclusive():
-    """Міжпроцесний замок `<DEAI_HOME>/migrations/.lock` (0600, `flock` БЕЗ очікування) на ВЕСЬ `run`/`restore`: дає `True`, якщо
-    взяли, `False`, якщо зайнято (старт сервера ніколи не чекає). ⚠️ Замок стереже міграцію від другої міграції/відкату; з правками
+    """Міжпроцесний замок `<DEAI_HOME>/migrations/.lock` (0600, `flock` БЕЗ очікування) на ВЕСЬ `run`/`restore`: дає `'ok'`, якщо
+    взяли, `'busy'`, якщо зайнято іншим процесом (старт сервера ніколи не чекає), `'error'`, якщо `flock` відмовив з ІНШОЇ причини.
+    ⛔ «Зайнято» — ЛИШЕ `EWOULDBLOCK`/`EAGAIN`: будь-яка інша `OSError` (напр. `ENOLCK` на файловій системі без flock) не має
+    мовчки скіпати міграцію на кожному старті. Безпечніше й видиме: `'error'` → `abort-lock` у `last.json`/статусі, нічого не
+    пишемо (йти без міжпроцесного замка не ризикуємо; `WRITE_LOCK` стереже лише потоки одного процесу). ⚠️ Замок стереже міграцію від другої міграції/відкату; з правками
     з екрана канваса він не знайомий: `run` із CLI, поки канвас того ж дому працює, може розійтись із правками UI (сам канвас
     мігрує лише на старті, до відкриття порту)."""
     d = os.path.join(spaces.home(), 'migrations')
@@ -420,10 +425,10 @@ def _exclusive():
         if fcntl is not None:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                yield False
+            except OSError as e:
+                yield 'busy' if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN) else 'error'
                 return
-        yield True
+        yield 'ok'
     finally:
         os.close(fd)
 
@@ -530,23 +535,33 @@ def _run(home):
         return p['status'], _info(p)
     try:
         with _exclusive() as got:
-            if not got:
+            if got == 'busy':
                 return 'skip-busy', {'status': 'skip-busy', 'reason': _REASONS['skip-busy']}
+            if got != 'ok':
+                info = {'status': 'abort-lock', 'reason': _REASONS['abort-lock']}
+                _write_last(info)                            # видимо в last.json і status; не мовчки
+                return 'abort-lock', info
             return _run_locked(home)
     except OSError as e:
         return 'abort-internal', {'status': 'abort-internal', 'reason': _REASONS['abort-internal'], 'error': type(e).__name__}
 
 
+def _not_ready(p):
+    """Результат не-`ready` розрахунку: `(статус, підсумок)`; на диск — лише журнал `abort-*` та постійний `skip-path-in-git`."""
+    st = p['status']
+    info = _info(p)
+    if st.startswith('abort-'):
+        _write_last(info)                                    # лише журнал: стан не чіпаємо; skip-* журнал не затирає
+    elif st == 'skip-path-in-git':
+        _write_skip(info)                                    # постійний пропуск: окремий ключ, справжній звіт лишається
+    return st, info
+
+
 def _run_locked(home):
-    p = plan(home)
+    p = plan(home)                                           # повторно ВСЕРЕДИНІ замка: позначка/`held` могли зʼявитись, поки чекали
     st = p['status']
     if st != 'ready':
-        info = _info(p)
-        if st.startswith('abort-'):
-            _write_last(info)                                # лише журнал: стан не чіпаємо; skip-* журнал не затирає
-        elif st == 'skip-path-in-git':
-            _write_skip(info)                                # постійний пропуск: окремий ключ, справжній звіт лишається
-        return st, info
+        return _not_ready(p)
     try:
         liga = _liga_entry(home)
         if os.path.realpath(liga['path']) != os.path.realpath(p['space_path']) or liga['id'] != p['space_id']:
@@ -686,8 +701,10 @@ def _restore(stamp, hold=False, home=None):
         if not spaces.layer_on():
             return 'skip-layer-off', {}
         with _exclusive() as got:
-            if not got:
+            if got == 'busy':
                 return 'skip-busy', {}
+            if got != 'ok':
+                return 'abort-lock', {}
             return _restore_locked(stamp, hold, home)
     except Exception:  # noqa: BLE001 — без тексту винятку
         return 'abort-restore', {}

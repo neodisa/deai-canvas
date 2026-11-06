@@ -1263,6 +1263,26 @@ class RunTest(_WriteStand):
         self.assertEqual(st, 'skip-busy')                                          # старт не чекає
         self.assertEqual(os.stat(os.path.join(self.deai, 'migrations', '.lock')).st_mode & 0o777, 0o600)
 
+    def test_flock_other_errors_are_abort_lock_not_busy(self):
+        """⛔ «Зайнято» — лише EWOULDBLOCK/EAGAIN; `ENOLCK` (файлова система без flock) — видимий `abort-lock`, нічого не записано."""
+        import errno
+        for code in (errno.EWOULDBLOCK, errno.EAGAIN):                             # справжня зайнятість — як і раніше skip-busy
+            with self.mock.patch('fcntl.flock', side_effect=OSError(code, 'busy')):
+                self.assertEqual(self.lm.run(), 'skip-busy')
+        self.assertEqual(self.backups(), [])
+        with self.mock.patch('fcntl.flock', side_effect=OSError(errno.ENOLCK, 'no locks')):
+            st, _err = self.quiet(self.lm.startup)
+            self.assertEqual(st, 'abort-lock')
+            self.assertEqual(self.lm.run(), 'abort-lock')
+            self.assertEqual(self.lm.restore('20260101-000000-liga-4d3a'), 'abort-lock')
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(os.path.exists(self.space_path()))
+        self.assertFalse(os.path.exists(self.secrets_path()))
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual(last['status'], 'abort-lock')
+        self.assertIn('abort-lock', self.lm.status_text(self.lm.status()))
+        self.assertEqual(self.lm.run(), 'done')                                    # лише flock відновився — міграція доходить до кінця
+
     def test_nested_run_during_write_is_busy_and_secrets_written_once(self):
         real = self.dm.write_secrets
         calls, inner = [], []
