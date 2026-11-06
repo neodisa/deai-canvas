@@ -1,0 +1,3978 @@
+{
+  "meta": {
+    "generator": "tests/make_before_4d3c.py",
+    "source_commit": "6ce8e61",
+    "version": "0.18.0",
+    "volatile_stripped": []
+  },
+  "non_loopback_attempts": 0,
+  "stands": {
+    "ab": {
+      "api_spaces": {
+        "capabilities": {
+          "comments": "supabase-comments",
+          "dashboard": "supabase-dashboard",
+          "notify": "supabase-teams",
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": "legacy",
+          "vcs": "git-sync"
+        },
+        "compat": {
+          "comments": "comment-layer",
+          "vcs": "design-canvas"
+        },
+        "status": 200
+      },
+      "js": {
+        "bar_item_ids": [
+          "home",
+          "palette",
+          "space",
+          "task",
+          "iter",
+          "mode",
+          "layout",
+          "overview",
+          "vp",
+          "desktop",
+          "tablet",
+          "mobile",
+          "inspector",
+          "figma",
+          "gl",
+          "glpush",
+          "glhistory",
+          "publish",
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "bar_publish": {
+          "legacy": true,
+          "notes": []
+        },
+        "bar_pubpw": {
+          "id": "pubpw",
+          "labelKey": "pubPw",
+          "pw": "1100",
+          "subKey": "pubPwDefault",
+          "warnArgs": [],
+          "warnKey": ""
+        },
+        "copy_url": "https://pv-12345678.vercel.app/#k=1100&p=alpha",
+        "is_legacy_publish": true,
+        "is_remote_publish": false,
+        "is_vercel_publish": false,
+        "preview_target": {
+          "at": null,
+          "kind": "external",
+          "url": "https://pv-12345678.vercel.app"
+        },
+        "publish_reaction": {
+          "kind": "legacy",
+          "show": "render"
+        },
+        "publish_reaction_other_task": {
+          "key": "publishToastDone",
+          "kind": "legacy",
+          "show": "toast"
+        },
+        "pw_view": {
+          "pw": "1100",
+          "pwCustom": false,
+          "pwStale": false,
+          "pwUngated": 0
+        }
+      },
+      "modules_card": {
+        "card": {
+          "api": 1,
+          "builtin": true,
+          "check_timeout_s": 130,
+          "enabled": false,
+          "id": "vercel-publish",
+          "implicit": false,
+          "name": "Vercel",
+          "roles": [
+            "publish"
+          ],
+          "settings": [
+            {
+              "key": "auth",
+              "label": "Вхід у Vercel",
+              "options": [
+                {
+                  "label": "Токен",
+                  "value": "token"
+                },
+                {
+                  "label": "Системний Vercel CLI (vercel login на цій машині)",
+                  "value": "cli"
+                }
+              ],
+              "required": false,
+              "type": "select",
+              "value": "token"
+            },
+            {
+              "key": "token",
+              "label": "Токен Vercel (для входу «Токен»)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            },
+            {
+              "key": "team",
+              "label": "Команда Vercel (slug або team_…; порожньо — особистий акаунт)",
+              "required": false,
+              "type": "text"
+            },
+            {
+              "key": "password",
+              "label": "Пароль превʼю (необовʼязково)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.1.0"
+        },
+        "status": 200
+      },
+      "password": {
+        "clear": {
+          "pairs": [
+            [
+              "ok",
+              true
+            ],
+            [
+              "preview_password",
+              "1100"
+            ],
+            [
+              "preview_password_custom",
+              false
+            ],
+            [
+              "preview_gate",
+              [
+                [
+                  "state",
+                  "current"
+                ],
+                [
+                  "stale",
+                  0
+                ],
+                [
+                  "ungated",
+                  0
+                ],
+                [
+                  "inner_stale",
+                  0
+                ],
+                [
+                  "pages",
+                  4
+                ]
+              ]
+            ]
+          ],
+          "saved_in_tasks_json": null,
+          "status": 200
+        },
+        "no_liga_space": {
+          "pairs": [
+            [
+              "ok",
+              false
+            ],
+            [
+              "code",
+              "integrations-off"
+            ],
+            [
+              "error",
+              "публікація зʼявиться з модулями"
+            ]
+          ],
+          "status": 409
+        },
+        "set": {
+          "pairs": [
+            [
+              "ok",
+              true
+            ],
+            [
+              "preview_password",
+              "newpw-alpha"
+            ],
+            [
+              "preview_password_custom",
+              true
+            ],
+            [
+              "preview_gate",
+              [
+                [
+                  "state",
+                  "stale"
+                ],
+                [
+                  "stale",
+                  4
+                ],
+                [
+                  "ungated",
+                  0
+                ],
+                [
+                  "inner_stale",
+                  3
+                ],
+                [
+                  "pages",
+                  4
+                ]
+              ]
+            ]
+          ],
+          "saved_in_tasks_json": "newpw-alpha",
+          "status": 200
+        },
+        "too_long": {
+          "pairs": [
+            [
+              "ok",
+              false
+            ],
+            [
+              "error",
+              "password is longer than 64"
+            ]
+          ],
+          "status": 400
+        }
+      },
+      "publish": {
+        "build_only": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "comments_off": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": null,
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "comments_unavailable",
+                "comments-unconfigured"
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "comments_on": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "liga-shared",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "liga-shared",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "liga-shared",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "err_login": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "Vercel не авторизований на цій машині — виконай у терміналі `npx vercel login`, тоді натисни «Опублікувати» ще раз.\n\n— вивід vercel —\nError: Please run vercel login"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "err_no_url": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "деплой пройшов, але URL у виводі vercel не знайдено — посилання не зберігаю, щоб не вигадати неправильне"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "err_scope": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "Проєкт цієї задачі живе в ІНШОМУ Vercel-скоупі, і цей акаунт до нього не має доступу. Публікація звідси створила б ДРУГЕ посилання, а те, що вже в менеджера, тихо застаріло б — тому vercel відмовив. Попроси власника задачі опублікувати; щоб публікувати могли всі, потрібна спільна Vercel-команда, і її треба вписати в tasks.json → vercel_scope.\n\n— вивід vercel —\nError: You don't have access to the team 'x'"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "first": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "no_node": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "Node/npx не знайдено — опублікувати на Vercel з цієї машини не вийде.\n1) Встанови Node LTS: https://nodejs.org (або `brew install node`).\n2) Один раз авторизуйся: `npx vercel login`.\n3) Перезапусти інструмент: ./stop.command і ./start.command.\nЯкщо Node стоїть через nvm — запускай ./start.command з ТЕРМІНАЛА, а не подвійним кліком з Finder (див. _node_bin).\nМакет уже зібрано локально — можна попросити Андрія опублікувати."
+              ],
+              [
+                "deploy_blocked",
+                "no-node"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "protection": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": false,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                false
+              ],
+              [
+                "verify_error",
+                "vercel_protection"
+              ],
+              [
+                "verify_hint",
+                "Vercel Deployment Protection увімкнена: Project → Settings → Deployment Protection → Vercel Authentication → Disabled. Інакше замість макета редірект на SSO, і наш пароль 1100 не показується."
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "pw_default": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "pw_root": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "rootpw-alpha"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "rootpw-alpha"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "rootpw-alpha"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "rootpw-alpha"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "pw_task": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "taskpw-alpha"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "taskpw-alpha"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "taskpw-alpha"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "taskpw-alpha"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "second": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--scope",
+              "team_x",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes",
+              "--scope",
+              "team_x"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json",
+              "--scope",
+              "team_x"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        }
+      },
+      "task": {
+        "after_change": {
+          "has_publish_gate": false,
+          "has_publish_remote": false,
+          "has_publish_share_url": false,
+          "preview_gate": {
+            "inner_stale": 3,
+            "pages": 4,
+            "stale": 4,
+            "state": "stale",
+            "ungated": 0
+          },
+          "preview_password": "newpw-alpha",
+          "preview_password_custom": true,
+          "publish_url": "https://pv-12345678.vercel.app",
+          "space_capabilities_publish": "legacy",
+          "status": 200
+        },
+        "fresh": {
+          "has_publish_gate": false,
+          "has_publish_remote": false,
+          "has_publish_share_url": false,
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "none",
+            "ungated": 0
+          },
+          "preview_password": "1100",
+          "preview_password_custom": false,
+          "publish_url": null,
+          "space_capabilities_publish": "legacy",
+          "status": 200
+        },
+        "published": {
+          "has_publish_gate": false,
+          "has_publish_remote": false,
+          "has_publish_share_url": false,
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 4,
+            "stale": 0,
+            "state": "current",
+            "ungated": 0
+          },
+          "preview_password": "1100",
+          "preview_password_custom": false,
+          "publish_url": "https://pv-12345678.vercel.app",
+          "space_capabilities_publish": "legacy",
+          "status": 200
+        }
+      }
+    },
+    "unmigrated": {
+      "api_spaces": {
+        "capabilities": {
+          "comments": "legacy",
+          "dashboard": "legacy",
+          "notify": "legacy",
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": "legacy",
+          "vcs": "legacy"
+        },
+        "compat": null,
+        "status": 200
+      },
+      "js": {
+        "bar_item_ids": [
+          "home",
+          "palette",
+          "space",
+          "task",
+          "iter",
+          "mode",
+          "layout",
+          "overview",
+          "vp",
+          "desktop",
+          "tablet",
+          "mobile",
+          "inspector",
+          "figma",
+          "gl",
+          "glpush",
+          "glhistory",
+          "publish",
+          "togglepub",
+          "openpreview",
+          "copylink",
+          "teamsnotify",
+          "pubpw"
+        ],
+        "bar_publish": {
+          "legacy": true,
+          "notes": []
+        },
+        "bar_pubpw": {
+          "id": "pubpw",
+          "labelKey": "pubPw",
+          "pw": "1100",
+          "subKey": "pubPwDefault",
+          "warnArgs": [],
+          "warnKey": ""
+        },
+        "copy_url": "https://pv-12345678.vercel.app/#k=1100&p=alpha",
+        "is_legacy_publish": true,
+        "is_remote_publish": false,
+        "is_vercel_publish": false,
+        "preview_target": {
+          "at": null,
+          "kind": "external",
+          "url": "https://pv-12345678.vercel.app"
+        },
+        "publish_reaction": {
+          "kind": "legacy",
+          "show": "render"
+        },
+        "publish_reaction_other_task": {
+          "key": "publishToastDone",
+          "kind": "legacy",
+          "show": "toast"
+        },
+        "pw_view": {
+          "pw": "1100",
+          "pwCustom": false,
+          "pwStale": false,
+          "pwUngated": 0
+        }
+      },
+      "modules_card": {
+        "card": {
+          "api": 1,
+          "builtin": true,
+          "check_timeout_s": 130,
+          "enabled": false,
+          "id": "vercel-publish",
+          "implicit": false,
+          "name": "Vercel",
+          "roles": [
+            "publish"
+          ],
+          "settings": [
+            {
+              "key": "auth",
+              "label": "Вхід у Vercel",
+              "options": [
+                {
+                  "label": "Токен",
+                  "value": "token"
+                },
+                {
+                  "label": "Системний Vercel CLI (vercel login на цій машині)",
+                  "value": "cli"
+                }
+              ],
+              "required": false,
+              "type": "select",
+              "value": "token"
+            },
+            {
+              "key": "token",
+              "label": "Токен Vercel (для входу «Токен»)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            },
+            {
+              "key": "team",
+              "label": "Команда Vercel (slug або team_…; порожньо — особистий акаунт)",
+              "required": false,
+              "type": "text"
+            },
+            {
+              "key": "password",
+              "label": "Пароль превʼю (необовʼязково)",
+              "required": false,
+              "set": false,
+              "type": "secret"
+            }
+          ],
+          "status": "unchecked",
+          "version": "1.1.0"
+        },
+        "status": 200
+      },
+      "password": {
+        "clear": {
+          "pairs": [
+            [
+              "ok",
+              true
+            ],
+            [
+              "preview_password",
+              "1100"
+            ],
+            [
+              "preview_password_custom",
+              false
+            ],
+            [
+              "preview_gate",
+              [
+                [
+                  "state",
+                  "current"
+                ],
+                [
+                  "stale",
+                  0
+                ],
+                [
+                  "ungated",
+                  0
+                ],
+                [
+                  "inner_stale",
+                  0
+                ],
+                [
+                  "pages",
+                  4
+                ]
+              ]
+            ]
+          ],
+          "saved_in_tasks_json": null,
+          "status": 200
+        },
+        "no_liga_space": {
+          "pairs": [
+            [
+              "ok",
+              false
+            ],
+            [
+              "code",
+              "integrations-off"
+            ],
+            [
+              "error",
+              "публікація зʼявиться з модулями"
+            ]
+          ],
+          "status": 409
+        },
+        "set": {
+          "pairs": [
+            [
+              "ok",
+              true
+            ],
+            [
+              "preview_password",
+              "newpw-alpha"
+            ],
+            [
+              "preview_password_custom",
+              true
+            ],
+            [
+              "preview_gate",
+              [
+                [
+                  "state",
+                  "stale"
+                ],
+                [
+                  "stale",
+                  4
+                ],
+                [
+                  "ungated",
+                  0
+                ],
+                [
+                  "inner_stale",
+                  3
+                ],
+                [
+                  "pages",
+                  4
+                ]
+              ]
+            ]
+          ],
+          "saved_in_tasks_json": "newpw-alpha",
+          "status": 200
+        },
+        "too_long": {
+          "pairs": [
+            [
+              "ok",
+              false
+            ],
+            [
+              "error",
+              "password is longer than 64"
+            ]
+          ],
+          "status": 400
+        }
+      },
+      "publish": {
+        "build_only": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "comments_off": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": null,
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "comments_unavailable",
+                "comments-unconfigured"
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "comments_on": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "liga-shared",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "liga-shared",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "liga-shared",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "err_login": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "Vercel не авторизований на цій машині — виконай у терміналі `npx vercel login`, тоді натисни «Опублікувати» ще раз.\n\n— вивід vercel —\nError: Please run vercel login"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "err_no_url": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "деплой пройшов, але URL у виводі vercel не знайдено — посилання не зберігаю, щоб не вигадати неправильне"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "err_scope": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "Проєкт цієї задачі живе в ІНШОМУ Vercel-скоупі, і цей акаунт до нього не має доступу. Публікація звідси створила б ДРУГЕ посилання, а те, що вже в менеджера, тихо застаріло б — тому vercel відмовив. Попроси власника задачі опублікувати; щоб публікувати могли всі, потрібна спільна Vercel-команда, і її треба вписати в tasks.json → vercel_scope.\n\n— вивід vercel —\nError: You don't have access to the team 'x'"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "first": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "no_node": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": null,
+            "publish_verified": null,
+            "published_at": null
+          },
+          "npx_argv": [],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "deploy_error",
+                "Node/npx не знайдено — опублікувати на Vercel з цієї машини не вийде.\n1) Встанови Node LTS: https://nodejs.org (або `brew install node`).\n2) Один раз авторизуйся: `npx vercel login`.\n3) Перезапусти інструмент: ./stop.command і ./start.command.\nЯкщо Node стоїть через nvm — запускай ./start.command з ТЕРМІНАЛА, а не подвійним кліком з Finder (див. _node_bin).\nМакет уже зібрано локально — можна попросити Андрія опублікувати."
+              ],
+              [
+                "deploy_blocked",
+                "no-node"
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": []
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": null
+          }
+        },
+        "protection": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": false,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                false
+              ],
+              [
+                "verify_error",
+                "vercel_protection"
+              ],
+              [
+                "verify_hint",
+                "Vercel Deployment Protection увімкнена: Project → Settings → Deployment Protection → Vercel Authentication → Disabled. Інакше замість макета редірект на SSO, і наш пароль 1100 не показується."
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "pw_default": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "pw_root": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "rootpw-alpha"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "rootpw-alpha"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "rootpw-alpha"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "rootpw-alpha"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "pw_task": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "taskpw-alpha"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "taskpw-alpha"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "taskpw-alpha"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "taskpw-alpha"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        },
+        "second": {
+          "build": "legacy",
+          "iterations_after": {
+            "publish_remote": "absent",
+            "publish_url": "https://pv-12345678.vercel.app",
+            "publish_verified": true,
+            "published_at": "<time>"
+          },
+          "npx_argv": [
+            [
+              "--yes",
+              "vercel",
+              "link",
+              "--yes",
+              "--scope",
+              "team_x",
+              "--project",
+              "pv-12345678"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "deploy",
+              "--prod",
+              "--yes",
+              "--scope",
+              "team_x"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "inspect",
+              "https://pv-12345678.vercel.app"
+            ],
+            [
+              "--yes",
+              "vercel",
+              "list",
+              "pv-12345678",
+              "--json",
+              "--scope",
+              "team_x"
+            ]
+          ],
+          "pages": {
+            "comment_layer_files": [
+              "adapter.js",
+              "comment-layer.min.js",
+              "supabase.min.js"
+            ],
+            "html": {
+              "index.html": {
+                "authgate": true,
+                "channel": null,
+                "comment_layer": false,
+                "has_supabase_key": false,
+                "has_supabase_url": false,
+                "password": "1100"
+              },
+              "it1/alpha/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it1/gamma/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              },
+              "it2/index.html": {
+                "authgate": true,
+                "channel": "dc/a-1",
+                "comment_layer": true,
+                "has_supabase_key": true,
+                "has_supabase_url": true,
+                "password": "1100"
+              }
+            },
+            "manifest_pages": [
+              "it1/alpha/index.html",
+              "it1/gamma/index.html",
+              "it2/index.html"
+            ]
+          },
+          "response": {
+            "pairs": [
+              [
+                "ok",
+                true
+              ],
+              [
+                "dir",
+                "~/work/a-1/publish"
+              ],
+              [
+                "iterations",
+                2
+              ],
+              [
+                "frames",
+                0
+              ],
+              [
+                "url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "deploy_url",
+                "https://pv-12345678.vercel.app"
+              ],
+              [
+                "verified",
+                true
+              ]
+            ],
+            "status": 200
+          },
+          "spies": {
+            "calls": [
+              [
+                "registry_push",
+                "a-1"
+              ],
+              [
+                "git_autocommit",
+                "~/work/a-1",
+                "publish: 2 iteration(s)"
+              ],
+              [
+                "overview_sync"
+              ]
+            ],
+            "fetched_urls": [
+              "https://pv-12345678.vercel.app"
+            ]
+          },
+          "tasks_after": {
+            "vercel_project": "pv-12345678",
+            "vercel_scope": "team_x"
+          }
+        }
+      },
+      "task": {
+        "after_change": {
+          "has_publish_gate": false,
+          "has_publish_remote": false,
+          "has_publish_share_url": false,
+          "preview_gate": {
+            "inner_stale": 3,
+            "pages": 4,
+            "stale": 4,
+            "state": "stale",
+            "ungated": 0
+          },
+          "preview_password": "newpw-alpha",
+          "preview_password_custom": true,
+          "publish_url": "https://pv-12345678.vercel.app",
+          "space_capabilities_publish": "legacy",
+          "status": 200
+        },
+        "fresh": {
+          "has_publish_gate": false,
+          "has_publish_remote": false,
+          "has_publish_share_url": false,
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "none",
+            "ungated": 0
+          },
+          "preview_password": "1100",
+          "preview_password_custom": false,
+          "publish_url": null,
+          "space_capabilities_publish": "legacy",
+          "status": 200
+        },
+        "published": {
+          "has_publish_gate": false,
+          "has_publish_remote": false,
+          "has_publish_share_url": false,
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 4,
+            "stale": 0,
+            "state": "current",
+            "ungated": 0
+          },
+          "preview_password": "1100",
+          "preview_password_custom": false,
+          "publish_url": "https://pv-12345678.vercel.app",
+          "space_capabilities_publish": "legacy",
+          "status": 200
+        }
+      }
+    }
+  }
+}
