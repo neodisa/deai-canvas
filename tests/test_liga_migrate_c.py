@@ -7,6 +7,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1504,6 +1505,7 @@ class AfterMigrationParity4d3c(unittest.TestCase):
             self.assertEqual(marks['liga-4d3c']['roles'], ['publish'], name)
             self.assertNotIn('tracks', marks['liga-4d3c'], name)
         self.assertEqual(self.results['unmigrated'][2][2], ['publish'])
+        self.assertEqual(self.after['non_loopback_attempts'], 0)                        # мережі не було ні на одному стенді
         for name in ('unmigrated', 'ab'):
             ent = self.marks[name]['modules']['vercel-publish']
             self.assertEqual(ent, {'enabled': True, 'shared_state': True, 'settings': {'auth': 'cli', 'team': '', 'compat': 'design-canvas'}})
@@ -1552,6 +1554,21 @@ class AfterMigrationParity4d3c(unittest.TestCase):
             first = dict((k, v) for k, v in self.after['stands'][name]['publish']['first']['response']['pairs'])
             self.assertEqual((first['url'], first['deploy_url'], first['verified']), ('https://pv-12345678.vercel.app',) * 2 + (True,))
 
+    def test_legacy_reaction_wins_over_vercel_reaction(self):
+        """Інваріант «`isLegacyPublish` раніше за `isVercelPublish`»: запис із `capabilities.publish == 'vercel-publish'` і
+        `compat.publish == 'design-canvas'` дає `publishReaction` = `legacy` (а не `remote`), як і для немігрованої ЛІГИ.
+        Той самий механізм, що й розділ `js` генератора знімка: справжній `spaces-model.js` у `node`."""
+        js = ("import { pathToFileURL } from 'node:url';"
+              "const m = await import(pathToFileURL(process.argv[1]).href);"
+              "const url = { url: 'https://pv-12345678.vercel.app' };"
+              "const mig = { capabilities: { publish: 'vercel-publish' }, compat: { publish: 'design-canvas' } };"
+              "const plain = { capabilities: { publish: 'vercel-publish' } };"
+              "console.log(JSON.stringify({ mig: m.publishReaction(url, mig, true).kind, plain: m.publishReaction(url, plain, true).kind }));")
+        r = subprocess.run(['node', '--input-type=module', '-e', js, os.path.join(os.path.dirname(_HERE), 'app', 'spaces-model.js')],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr[-500:])
+        self.assertEqual(json.loads(r.stdout), {'mig': 'legacy', 'plain': 'remote'})
+
     def test_card_is_enabled_without_secrets(self):
         """Картка мігрованого `vercel-publish`: увімкнена, `compat` = `design-canvas`; секретні `token`/`password` лишились
         `set: false` (крок секретів не пише: `secrets.json` не змінюється)."""
@@ -1582,7 +1599,8 @@ class RealPublishNonIsolated(unittest.TestCase):
     тож твердження про шлях власника — ТУТ: справжній `serve._node_bin` знаходить фальшивий `npx`, що стоїть ПЕРШИМ на `PATH`
     (а не підмінений шов), справжній сервер і `Handler._publish`, справжні запис `tasks.json`/`iterations.json` і шиті сторінки.
     Підмінено лише те, що вийшло б у мережу чи в спільний стан: `_fetch_page` модуля, `serve._registry_push`,
-    `Handler._overview_sync`, `serve.git_autocommit` — це шпигуни, що записують ПОРЯДОК і аргументи викликів.
+    `Handler._overview_sync`, `serve.git_autocommit` — це шпигуни, що записують ПОРЯДОК і аргументи викликів; окрім них
+    `serve.server_code_staleness` заглушено в `None` (перевірка свіжості коду сервера до публікації не належить сценарію).
 
     Той самий сценарій на НЕмігрованій лізі (`Implicit`) дає ТІ САМІ дані: порівнюємо два прогони між собою, а не лише зі знімком.
     Тимчасові `HOME`/`DEAI_HOME` через `mock.patch.dict` у `setUp`; вигадані значення; мережі нема (`NoNet`, `SocketTripwire`)."""
