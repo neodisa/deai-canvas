@@ -3130,8 +3130,9 @@ def comments_provider(space=None):
 
 #: Модуль, яким простір ЛІГА веде командні коментарі (4b-2) — той самий вбудований, що й у звичайних просторів.
 COMMENTS_MODULE = 'supabase-comments'
-#: Кошик Storage ЛІГИ для скріншотів пінів: картка Teams бере `meta.shotUrl` звідти (як старий адаптер 0.9.0).
-LEGACY_SHOTS_BUCKET = 'overview-thumbs'
+#: Кошик Storage ЛІГИ для скріншотів пінів: картка Teams бере `meta.shotUrl` звідти (як старий адаптер 0.9.0). Джерело правди —
+#: `install_config.LEGACY_SHOTS_BUCKET` (його ділить міграція ЛІГИ, 4d-3b); тут — аліас.
+LEGACY_SHOTS_BUCKET = install_config.LEGACY_SHOTS_BUCKET
 COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано (supabase_url і supabase_key у tasks.json)'
 
 

@@ -190,6 +190,37 @@ def _role_entries(cfg, present):
     return out
 
 
+#: 4d-3b: ролі другого кроку → вбудований модуль, у порядку запису (напрямки крок не мігрує).
+ROLE_MODULES_B = (('comments', 'supabase-comments'), ('vcs', 'git-sync'))
+#: Ключ `compat` запису `git-sync`: тексти «design-canvas»/«GitLab» (див. `serve.vcs_legacy_texts`). Для коментарів — `COMPAT`.
+VCS_COMPAT = 'design-canvas'
+
+
+def _entries_b(cfg, present):
+    """Роль → `(module, ознака_пропуску | None, запис space.json | None, секрети | None)` кроку 4d-3b (форма `_role_entries`).
+    `comments` → `supabase-comments`: адреса й ключ — `install_config.supabase_from` (ті самі джерела, що `serve._comments_legacy_ctx`);
+    кошик — `install_config.LEGACY_SHOTS_BUCKET`. `vcs` → `git-sync`: налаштування ті самі, що в `serve._vcs_legacy_ctx` (тест зіставляє).
+    ⛔ `ssh_key`/`host_ip`/`repo` НЕ копіюємо: ключ і IP дає корінь (`_vcs_ssh`), репо — ціль задачі; секретів у `git-sync` нема."""
+    sb_url, sb_key = install_config.supabase_from(cfg)
+    out = {}
+    for role, mid in ROLE_MODULES_B:
+        if mid in present:
+            out[role] = (mid, 'module-present', None, None)
+        elif role == 'comments':
+            if not (sb_url and sb_key):
+                out[role] = (mid, 'no-supabase', None, None)
+            elif _has_userinfo(sb_url):                      # `user:pass@хост` в адресі: облікові в адресу не мігрують
+                out[role] = (mid, 'bad-url', None, None)
+            else:
+                out[role] = (mid, None, {'enabled': True, 'shared_state': True,
+                                         'settings': {'url': sb_url, 'shots_bucket': install_config.LEGACY_SHOTS_BUCKET, 'compat': COMPAT}},
+                             {'key': sb_key})
+        else:
+            out[role] = (mid, None, {'enabled': True, 'shared_state': True,
+                                     'settings': {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True, 'compat': VCS_COMPAT}}, None)
+    return out
+
+
 def plan(home=None, step=None):
     """Чистий розрахунок міграції ЛІГИ; див. докстрінг модуля. Нічого не пише; не кидає (збій — `abort-internal`).
     `step` — крок (`Step`, його позначка чи `None` = 4d-3a): 4d-3b узагальнює модуль до впорядкованого списку кроків."""
@@ -225,7 +256,8 @@ def _plan(home, step):
     for earlier in ALL_STEPS[:ALL_STEPS.index(step)]:
         em = mig.get(earlier.mark) if isinstance(mig, dict) else None
         if isinstance(em, dict) and em.get('held') is True:
-            raise _Stop('skip-held', space_id=sid)
+            # свій текст: власне «вимкнено вручну» цей крок не казав — його тримає ранній (мінор ревʼю Task 5)
+            raise _Stop('skip-held', space_id=sid, reason='утримано разом із %s (ранній крок вимкнено вручну: held у space.json)' % earlier.mark)
     if _in_git(path):
         raise _Stop('skip-path-in-git', space_id=sid)
     try:
@@ -240,7 +272,8 @@ def _plan(home, step):
     for role, (mid, skip, entry, secret) in roles.items():
         if skip is None:
             new_mods[mid] = entry
-            secrets[mid] = secret
+            if secret:                                      # `git-sync` (4d-3b) секретів не має: порожнього запису в secrets.json нема
+                secrets[mid] = secret
     out_roles = {r: {'module': m, 'migrate': skip is None, 'reason': skip} for r, (m, skip, _e, _s) in roles.items()}
 
     do_tracks, tracks_reason, new_tracks = False, None, None
@@ -320,8 +353,10 @@ STAMP_RE = re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3a(?:-[0-9]{1,3})?')
 #: (`None` = `_role_entries`, 4d-3a; `_entries_b` додає Task 6). `hold` кроку — це `{held: True}` у ЙОГО позначці.
 Step = namedtuple('Step', 'mark roles tracks suffix stamp_re entries', defaults=(None,))
 STEP_A = Step(MARK, ROLE_MODULES, True, BACKUP_SUFFIX, STAMP_RE)
-#: Усі відомі кроки в порядку застосування (відкат — у зворотному: LIFO) і ті, що біжать на старті/в CLI. Task 6 дописує крок 4d-3b.
-ALL_STEPS = (STEP_A,)
+#: Другий крок (4d-3b, 0.18.0): `comments` і `vcs` ЛІГИ — явні модулі; без напрямків (`tracks=False`), свій бекап і позначка без `tracks`.
+STEP_B = Step('liga-4d3b', ROLE_MODULES_B, False, '-liga-4d3b', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3b(?:-[0-9]{1,3})?'), _entries_b)
+#: Усі відомі кроки в порядку застосування (відкат — у зворотному: LIFO) і ті, що біжать на старті/в CLI.
+ALL_STEPS = (STEP_A, STEP_B)
 STEPS = ALL_STEPS
 
 
@@ -975,8 +1010,9 @@ def _real_home():
 def startup():
     """Виклик із `serve.main` ДО `make_server`. Ізольований прогін (`implicit.isolated()`) не мігрує, крім шва
     `DC_MIGRATE_LIGA=1` ЛИШЕ з тимчасовим `DEAI_HOME` (справжній `~/.deai` — гучна відмова). Не кидає ніколи: виняток — у stderr
-    (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`. Кроки `STEPS` — по порядку (`run_all`): `abort-*` зупиняє
-    наступні на цьому старті, `skip-*` — ні. Повертає статус ПЕРШОГО кроку, що не `skip-*` (найважливіше), інакше — першого кроку."""
+    (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`. Кроки `STEPS` — по порядку (`run_all`): `abort-*` і `skip-busy`
+    зупиняють наступні на цьому старті; `held` раннього кроку теж тримає наступні (їхній `plan` — `skip-held`); решта `skip-*`
+    (`skip-nothing`/`skip-done`/…) наступних не блокує. Повертає статус ПЕРШОГО кроку, що не `skip-*` (найважливіше), інакше — першого кроку."""
     done, hints = [], set()
     try:
         if implicit.isolated():

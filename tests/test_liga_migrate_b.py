@@ -1843,5 +1843,427 @@ class CliStepsTest(_TwoSteps):
         self.assert_no_secrets_in_logs()
 
 
+# ================================================================================================ Task 6: крок `liga-4d3b` (comments + vcs)
+#
+# Тут — РЕАЛЬНІ два кроки (`ALL_STEPS = (STEP_A, STEP_B)`); стенд знімає патч `STEPS = ALL_STEPS[:1]` зі `_Stand`. Значення вигадані.
+
+COMMENTS_MOD, VCS_MOD = 'supabase-comments', 'git-sync'
+
+
+class _RealSteps(_WriteStand):
+    """Стенд двох РЕАЛЬНИХ кроків. `setUp` лишає простір НЕмігрованим; `apply_a()` застосовує 4d-3a."""
+
+    def setUp(self):
+        super().setUp()                                  # `_Stand.setUp`: STEPS = ALL_STEPS[:1] — тут перекриваємо повним переліком
+        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def seed(self):
+        self._write(self.space_path(), ORIG_SPACE.decode('utf-8'))
+        os.chmod(self.space_path(), 0o644)
+        self._write(self.secrets_path(), json.dumps(OTHER_SECRETS))
+        os.chmod(self.secrets_path(), 0o600)
+
+    def apply_a(self):
+        self.assertEqual(self.lm.run(step='liga-4d3a'), 'done')
+
+    def plan_b(self):
+        return self.lm.plan(step='liga-4d3b')
+
+    def marks(self):
+        return self.read_json(self.space_path()).get('migrations') or {}
+
+    def stamps(self):
+        m = self.marks()
+        return m['liga-4d3a']['backup'], m['liga-4d3b']['backup']
+
+    def start(self):
+        return self.quiet(self.lm.startup)
+
+    def write_modules(self, mods):
+        self.space_json({'modules': mods})
+
+
+class StepBConstants(unittest.TestCase):
+    """Поправка 6: `LEGACY_SHOTS_BUCKET` живе в `install_config` (джерело), `serve` лишає аліас; міграція не імпортує `serve`."""
+
+    @classmethod
+    def setUpClass(cls):
+        _app_paths()
+
+    def test_legacy_shots_bucket_is_one_value_with_an_alias(self):
+        import install_config
+        import serve
+        self.assertEqual(install_config.LEGACY_SHOTS_BUCKET, 'overview-thumbs')
+        self.assertEqual(serve.LEGACY_SHOTS_BUCKET, install_config.LEGACY_SHOTS_BUCKET)
+
+    def test_liga_migrate_does_not_import_serve(self):
+        with open(os.path.join(os.path.dirname(_HERE), 'app', 'liga_migrate.py'), encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        names = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                names.update(a.name.split('.')[0] for a in n.names)
+            elif isinstance(n, ast.ImportFrom):
+                names.add((n.module or '').split('.')[0])
+        self.assertNotIn('serve', names)
+
+    def test_steps_list_and_step_b_shape(self):
+        import liga_migrate as lm
+        self.assertEqual([s.mark for s in lm.ALL_STEPS], ['liga-4d3a', 'liga-4d3b'])
+        self.assertEqual(lm.STEPS, lm.ALL_STEPS)
+        b = lm.ALL_STEPS[1]
+        self.assertIs(lm.STEP_B, b)
+        self.assertEqual((b.mark, b.suffix, b.tracks), ('liga-4d3b', '-liga-4d3b', False))
+        self.assertEqual(b.roles, lm.ROLE_MODULES_B)
+        self.assertEqual(lm.ROLE_MODULES_B, (('comments', COMMENTS_MOD), ('vcs', VCS_MOD)))
+        self.assertIsNotNone(b.entries)
+        self.assertTrue(b.stamp_re.fullmatch('20261106-120000-liga-4d3b-2'))
+        self.assertIsNone(b.stamp_re.fullmatch('20261106-120000-liga-4d3a'))
+        self.assertIs(lm.step_of_stamp('20261106-120000-liga-4d3b'), b)
+
+
+class StepBPlanTest(_RealSteps):
+    """`plan(step='liga-4d3b')`: чистий розрахунок записів `supabase-comments` і `git-sync`; нічого не пише."""
+
+    def setUp(self):
+        super().setUp()
+        self.apply_a()
+
+    def test_ready_comments_and_vcs_entries(self):
+        before = self.snapshot_tree()
+        p = self.plan_b()
+        self.assertEqual(p['status'], 'ready')
+        self.assertEqual(p['roles'], {'comments': {'module': COMMENTS_MOD, 'migrate': True, 'reason': None},
+                                      'vcs': {'module': VCS_MOD, 'migrate': True, 'reason': None}})
+        mods = p['space_json']['modules']
+        self.assertEqual(mods[COMMENTS_MOD], {'enabled': True, 'shared_state': True,
+                                              'settings': {'url': self.SB_URL, 'shots_bucket': 'overview-thumbs', 'compat': 'comment-layer'}})
+        self.assertEqual(mods[VCS_MOD], {'enabled': True, 'shared_state': True,
+                                         'settings': {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True, 'compat': 'design-canvas'}})
+        self.assertEqual(p['secrets'], {COMMENTS_MOD: {'key': self.SB_KEY}})          # у git-sync секретів нема
+        self.assertIn('jira-tracker', mods)                                           # модулі 4d-3a збережено
+        self.assertEqual(p['space_json']['migrations']['liga-4d3b'], {'roles': ['comments', 'vcs']})      # `at`/`backup` — запис
+        self.assertEqual((p['tracks'], p['tracks_reason']), (False, None))
+        self.assertEqual(self.snapshot_tree(), before)                                # план нічого не пише
+
+    def test_vcs_entry_has_no_ssh_key_host_ip_or_repo(self):
+        self.config(gitlab_ssh_key='/keys/alpha', gitlab_host_ip='10.9.8.7', gitlab_repo='git@example.com:studio/web.git')
+        p = self.plan_b()
+        entry = p['space_json']['modules'][VCS_MOD]
+        self.assertEqual(sorted(entry), ['enabled', 'settings', 'shared_state'])
+        self.assertEqual(sorted(entry['settings']), ['autosync', 'branch', 'compat', 'path'])
+        for needle in ('ssh_key', 'host_ip', '/keys/alpha', '10.9.8.7', 'repo'):
+            self.assertNotIn(needle, json.dumps(entry))
+        self.assertNotIn(VCS_MOD, p['secrets'])
+
+    def test_vcs_settings_without_compat_equal_the_implicit_legacy_ctx(self):
+        """Поправка 6: міграція й неявний шлях ділять `branch/path/autosync` (розʼїзд = зміна поведінки ЛІГИ)."""
+        import serve
+        got = {k: v for k, v in self.plan_b()['space_json']['modules'][VCS_MOD]['settings'].items() if k != 'compat'}
+        self.assertEqual(got, serve._vcs_legacy_ctx()['settings'])
+
+    def test_url_and_key_come_from_supabase_from(self):
+        ic = self.lm.install_config
+        with self.mock.patch.object(ic, 'supabase_from', lambda cfg: ('https://sb-other.example.com', 'other_key_alpha')):
+            p = self.plan_b()
+        self.assertEqual(p['space_json']['modules'][COMMENTS_MOD]['settings']['url'], 'https://sb-other.example.com')
+        self.assertEqual(p['secrets'], {COMMENTS_MOD: {'key': 'other_key_alpha'}})
+
+    def test_report_names_keys_not_values(self):
+        p = self.plan_b()
+        text = self.lm.report(p, 'liga-4d3b')
+        self.assertTrue(text.startswith('liga-4d3b: ready\n'))
+        self.assertIn('comments (%s): migrate' % COMMENTS_MOD, text)
+        self.assertIn('vcs (%s): migrate' % VCS_MOD, text)
+        self.assertIn('secrets %s: key' % COMMENTS_MOD, text)
+        self.assertNotIn('tracks:', text)                                             # крок b напрямків не мігрує
+        self.assert_no_secrets(text)
+        self.assertNotIn(self.SB_URL, text)
+
+    # --- пропуски
+    def test_skip_layer_off(self):
+        with self.mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path}):
+            os.environ.pop('DEAI_HOME')
+            p = self.plan_b()
+        self.assertEqual((p['status'], p['space_json']), ('skip-layer-off', None))
+
+    def test_skip_no_liga(self):
+        self.registry(entry=False)
+        self.assertEqual(self.plan_b()['status'], 'skip-no-liga')
+
+    def test_skip_done(self):
+        self.space_json({'migrations': {'liga-4d3a': {'at': 'x', 'roles': [], 'tracks': False}, 'liga-4d3b': {'at': 'x', 'roles': []}}})
+        self.assertEqual(self.plan_b()['status'], 'skip-done')
+
+    def test_skip_held_own_keeps_its_reason(self):
+        self.space_json({'migrations': {'liga-4d3b': {'held': True}}})
+        p = self.plan_b()
+        self.assertEqual(p['status'], 'skip-held')
+        self.assertEqual(p['reason'], self.lm._REASONS['skip-held'])
+
+    def test_skip_held_by_an_earlier_step_has_its_own_reason(self):
+        """Мінор ревʼю Task 5: b, утриманий РАННІМ кроком, не називає це «вимкнено вручну» самого b."""
+        self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
+        p = self.plan_b()
+        self.assertEqual((p['status'], p['space_id']), ('skip-held', 'legacy'))
+        self.assertIn('liga-4d3a', p['reason'])
+        self.assertTrue(p['reason'].startswith('утримано разом із'))
+        self.assertNotEqual(p['reason'], self.lm._REASONS['skip-held'])
+        self.assertEqual(self.lm.plan(step='liga-4d3a')['reason'], self.lm._REASONS['skip-held'])     # власне утримання a — як було
+        self.assertIn('утримано разом із liga-4d3a', self.lm.report(p, 'liga-4d3b'))
+        st, err = self.start()
+        self.assertEqual(st, 'skip-held')
+        self.assertIn('liga-4d3b: skip-held — утримано разом із liga-4d3a', err)
+        self.assertIn('liga-4d3a: skip-held — ' + self.lm._REASONS['skip-held'], err)
+
+    def test_skip_no_path_and_path_in_git(self):
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        self.assertEqual(self.plan_b()['status'], 'skip-path-in-git')
+        self.registry(path=os.path.join(self.tmp, 'nowhere'))
+        self.assertEqual(self.plan_b()['status'], 'skip-no-path')
+
+    def test_skip_space_json_unreadable(self):
+        self.space_json('{broken')
+        self.assertEqual(self.plan_b()['status'], 'skip-space-json-unreadable')
+
+    def test_skip_tasks_unreadable(self):
+        self._write(self.tasks_path, '{broken')
+        self.assertEqual(self.plan_b()['status'], 'skip-tasks-unreadable')
+
+    def test_skip_nothing_when_both_modules_exist(self):
+        self.write_modules({COMMENTS_MOD: {'enabled': True, 'settings': {}}, VCS_MOD: {'enabled': True, 'settings': {}}})
+        p = self.plan_b()
+        self.assertEqual((p['status'], p['space_json'], p['secrets']), ('skip-nothing', None, {}))
+        self.assertEqual({r: v['reason'] for r, v in p['roles'].items()}, {'comments': 'module-present', 'vcs': 'module-present'})
+
+    # --- коди ролей
+    def test_no_supabase_skips_only_comments(self):
+        self.config(supabase=False)
+        p = self.plan_b()
+        self.assertEqual(p['status'], 'ready')
+        self.assertEqual((p['roles']['comments']['migrate'], p['roles']['comments']['reason']), (False, 'no-supabase'))
+        self.assertTrue(p['roles']['vcs']['migrate'])
+        self.assertNotIn(COMMENTS_MOD, p['space_json']['modules'])
+        self.assertIn(VCS_MOD, p['space_json']['modules'])
+        self.assertEqual(p['secrets'], {})
+        self.assertEqual(p['space_json']['migrations']['liga-4d3b'], {'roles': ['vcs']})
+
+    def test_bad_url_userinfo_is_not_migrated(self):
+        ic = self.lm.install_config
+        with self.mock.patch.object(ic, 'supabase_from', lambda cfg: ('https://user:pass@sb.example.com', self.SB_KEY)):
+            p = self.plan_b()
+        self.assertEqual((p['roles']['comments']['migrate'], p['roles']['comments']['reason']), (False, 'bad-url'))
+        self.assertNotIn(COMMENTS_MOD, p['secrets'])
+        self.assertNotIn('pass', repr(p['space_json']))
+        self.assertNotIn('pass', self.lm.report(p, 'liga-4d3b'))
+        self.assertTrue(p['roles']['vcs']['migrate'])
+
+    def test_module_present_per_role(self):
+        self.write_modules({COMMENTS_MOD: {'enabled': True, 'settings': {}}})
+        p = self.plan_b()
+        self.assertEqual((p['roles']['comments']['reason'], p['roles']['vcs']['reason']), ('module-present', None))
+        self.assertEqual(p['space_json']['modules'][COMMENTS_MOD], {'enabled': True, 'settings': {}})        # чужий запис не чіпаємо
+        self.assertEqual(p['secrets'], {})
+        self.write_modules({VCS_MOD: {'enabled': False, 'settings': {'branch': 'dev'}}})
+        p = self.plan_b()
+        self.assertEqual((p['roles']['comments']['reason'], p['roles']['vcs']['reason']), (None, 'module-present'))
+        self.assertEqual(p['space_json']['modules'][VCS_MOD], {'enabled': False, 'settings': {'branch': 'dev'}})   # навіть вимкнений
+
+    # --- провайдер
+    def test_provider_check_runs_in_memory_per_migrated_role_and_aborts(self):
+        seen = []
+        real = self.dm._provider_for
+
+        def spy(role, space, get_cat=None, explicit_override=None):
+            seen.append((role, explicit_override is not None))
+            return real(role, space, get_cat, explicit_override)
+        with self.mock.patch.object(self.dm, '_provider_for', spy):
+            self.assertEqual(self.plan_b()['status'], 'ready')
+        self.assertEqual(seen, [('comments', True), ('vcs', True)])
+        for fake in (lambda *a, **k: None, lambda *a, **k: self.dm.catalog()['supabase-teams'], lambda *a, **k: self.dm.implicit.for_role('comments')):
+            with self.mock.patch.object(self.dm, '_provider_for', fake):
+                p = self.plan_b()
+            self.assertEqual((p['status'], p['space_json'], p['secrets']), ('abort-provider', None, {}))
+
+    def test_partial_migration_vcs_migrates_comments_stays_implicit(self):
+        self.config(supabase=False)
+        before_secrets = self.read(self.secrets_path()) if os.path.exists(self.secrets_path()) else None
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        sj = self.read_json(self.space_path())
+        self.assertIn(VCS_MOD, sj['modules'])
+        self.assertNotIn(COMMENTS_MOD, sj['modules'])
+        self.assertEqual(sorted(sj['migrations']['liga-4d3b']), ['at', 'backup', 'roles'])
+        self.assertEqual(sj['migrations']['liga-4d3b']['roles'], ['vcs'])
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['step'], last['status']), ('liga-4d3b', 'done'))
+        self.assertEqual(last['skipped'], {'comments': 'no-supabase'})
+        self.assertIn('liga-4d3b: done', err)
+        self.assertIn('не мігровано: comments (no-supabase)', err)
+        self.assertIn('comments (no-supabase)', self.lm.status_text(self.lm.status()))
+        if before_secrets is not None:
+            self.assertNotIn(COMMENTS_MOD, json.dumps(self.read_json(self.secrets_path()).get('legacy') or {}))
+        self.assert_no_secrets_in_logs()
+
+
+class StepBRunTest(_RealSteps):
+    """`run(step='liga-4d3b')`: власний бекап, порядок запису, відкат побайтно, жодних значень секретів у виходах."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.apply_a()
+        self.after_a = (self.read(self.space_path()), self.read(self.secrets_path()))
+
+    def run_b(self):
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'done')
+        return self.stamps()
+
+    def test_backup_is_its_own_complete_and_private(self):
+        old = {f: self.read(p) for f, p in (('tasks.json', self.tasks_path), ('spaces.json', os.path.join(self.deai, 'spaces.json')),
+                                            ('space.json', self.space_path()), ('secrets.json', self.secrets_path()))}
+        a, b = self.run_b()
+        self.assertTrue(b.endswith('-liga-4d3b') and a.endswith('-liga-4d3a'))
+        self.assertEqual(self.backups(), sorted([a, b]))
+        d = os.path.join(self.deai, 'backups', b)
+        self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+        self.assertEqual(sorted(os.listdir(d)), ['manifest.json', 'secrets.json', 'space.json', 'spaces.json', 'tasks.json'])
+        m = self.read_json(d, 'manifest.json')
+        self.assertEqual(m['migration'], 'liga-4d3b')
+        for fname, orig in old.items():
+            self.assertEqual(self.read(d, fname), orig, fname)
+            self.assertEqual(os.stat(os.path.join(d, fname)).st_mode & 0o777, 0o600, fname)
+            self.assertEqual(m['files'][fname]['sha256'], self.sha(orig), fname)
+        self.assertEqual(self.read(d, 'space.json'), self.after_a[0])                  # стан ПІСЛЯ a
+        self.assert_no_secrets_in_logs()
+
+    def test_mark_has_no_tracks_and_content_is_merged(self):
+        self.run_b()
+        mk = self.marks()['liga-4d3b']
+        self.assertEqual(sorted(mk), ['at', 'backup', 'roles'])
+        self.assertEqual(mk['roles'], ['comments', 'vcs'])
+        sj = self.read_json(self.space_path())
+        self.assertEqual(sj['name'], 'Liga')
+        self.assertEqual(sj['x'], {'k': [1, 2]})                                        # невідомі ключі збережено
+        self.assertEqual(sj['modules'][COMMENTS_MOD]['settings']['compat'], 'comment-layer')
+        self.assertEqual(sj['modules'][VCS_MOD]['settings']['compat'], 'design-canvas')
+        self.assertIn('jira-tracker', sj['modules'])
+        sec = self.read_json(self.secrets_path())
+        self.assertEqual(sec['legacy'][COMMENTS_MOD], {'key': self.SB_KEY})
+        self.assertNotIn(VCS_MOD, sec['legacy'])
+        self.assertEqual(sec['other'], OTHER_SECRETS['other'])
+        self.assertEqual(os.stat(self.secrets_path()).st_mode & 0o777, 0o600)
+        self.assertNotIn(self.SB_KEY, self.read(self.space_path()).decode('utf-8'))
+
+    def test_foreign_modules_and_keys_survive(self):
+        sj = self.read_json(self.space_path())
+        sj['modules']['x-mod'] = {'enabled': False, 'settings': {'q': 1}}
+        sj['custom'] = {'keep': True}
+        self.space_json(sj)
+        self.run_b()
+        now = self.read_json(self.space_path())
+        self.assertEqual(now['modules']['x-mod'], {'enabled': False, 'settings': {'q': 1}})
+        self.assertEqual(now['custom'], {'keep': True})
+
+    def test_write_order_secrets_then_one_space_write(self):
+        order = []
+        rs, ws = self.dm.write_secrets, self.lm._write_space
+
+        def spy_s(*a, **k):
+            order.append('secrets')
+            return rs(*a, **k)
+
+        def spy_w(*a, **k):
+            order.append('space')
+            return ws(*a, **k)
+        with self.mock.patch.object(self.dm, 'write_secrets', spy_s), self.mock.patch.object(self.lm, '_write_space', spy_w):
+            self.run_b()
+        self.assertEqual(order, ['secrets', 'space'])
+
+    def test_failure_between_secrets_and_space_then_recovery(self):
+        with self.mock.patch.object(self.lm, '_write_space', side_effect=OSError('boom')):
+            self.assertEqual(self.lm.run(step='liga-4d3b'), 'abort-write')
+        self.assertEqual(self.read_json(self.secrets_path())['legacy'][COMMENTS_MOD], {'key': self.SB_KEY})   # секрет вже є — нешкідливо
+        self.assertNotIn('liga-4d3b', self.marks())
+        self.assertNotIn(COMMENTS_MOD, self.read_json(self.space_path())['modules'])
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['status'], 'abort-write')
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'done')                        # наступний запуск доводить до кінця
+        self.assertIn(COMMENTS_MOD, self.read_json(self.space_path())['modules'])
+        self.assert_no_secrets_in_logs()
+
+    def test_second_start_is_skip_done_and_writes_nothing(self):
+        self.run_b()
+        before = self.snapshot_tree()
+        st, err = self.start()
+        self.assertEqual((st, err), ('skip-done', ''))
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-done')
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_restore_returns_the_state_after_a_byte_for_byte(self):
+        _a, b = self.run_b()
+        self.assertEqual(self.lm.restore(b), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.after_a[0])
+        self.assertEqual(self.read(self.secrets_path()), self.after_a[1])
+        self.assertNotIn(COMMENTS_MOD, self.read(self.secrets_path()).decode('utf-8'))
+        self.assertIn('liga-4d3a', self.marks())
+
+    def test_no_secret_value_anywhere(self):
+        code, out, err = self.cli('run')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d3b: done', out)
+        self.assertIn('ролі: comments, vcs; напрямки: ні', out)
+        self.assert_no_secrets(out, err)
+        self.assert_no_secrets_in_logs()
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['secrets'], {COMMENTS_MOD: ['key']})
+
+
+class StepBStartupTest(_RealSteps):
+    """Два РЕАЛЬНІ кроки на одному старті: два бекапи, порядок a → b; план b бачить запис a."""
+
+    def test_two_real_steps_on_one_start_two_backups_a_then_b(self):
+        self.seed()
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        a, b = self.stamps()
+        self.assertEqual(self.backups(), sorted([a, b]))
+        self.assertLess(err.index('liga-4d3a: done'), err.index('liga-4d3b: done'))
+        self.assertEqual(self.read_json(self.deai, 'backups', a, 'manifest.json')['migration'], 'liga-4d3a')
+        self.assertEqual(self.read_json(self.deai, 'backups', b, 'manifest.json')['migration'], 'liga-4d3b')
+        self.assertIn('liga-4d3a', self.read_json(self.deai, 'backups', b, 'space.json')['migrations'])     # b рахувався ПІСЛЯ запису a
+        sj = self.read_json(self.space_path())
+        for mid in ('jira-tracker', 'supabase-dashboard', 'supabase-teams', COMMENTS_MOD, VCS_MOD):
+            self.assertIn(mid, sj['modules'])
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['step'], sorted(last['steps'])), ('liga-4d3b', ['liga-4d3a', 'liga-4d3b']))
+        self.assert_no_secrets_in_logs()
+
+    def test_skip_nothing_of_a_does_not_block_b(self):
+        """`skip-nothing` кроку a (нема облікових і напрямків) наступний крок не блокує: vcs мігрує без жодного конфігу."""
+        self.config(supabase=False, jira=False, design_work_root=None)
+        cfg = self.cfg
+        cfg['tasks']['x'] = {'dir': os.path.join(self.home, 'work', 'x')}
+        self._write(self.tasks_path, cfg)
+        self.assertEqual(self.lm.plan(step='liga-4d3a')['status'], 'skip-nothing')
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'skip-nothing'), ('liga-4d3b', 'done')])
+        mk = self.marks()
+        self.assertNotIn('liga-4d3a', mk)
+        self.assertEqual(mk['liga-4d3b']['roles'], ['vcs'])
+        self.assertEqual(len(self.backups()), 1)
+        self.assertEqual(res[1][2]['skipped'], {'comments': 'no-supabase'})
+
+    def test_lifo_over_the_real_steps(self):
+        self.seed()
+        self.start()
+        a, b = self.stamps()
+        self.assertEqual(self.lm.restore(a), 'refuse-later-applied')
+        self.assertEqual(self.lm.restore(b), 'restored')
+        self.assertEqual(self.lm.restore(a), 'restored')
+        self.assertEqual(self.read(self.space_path()), ORIG_SPACE)
+
+
 if __name__ == '__main__':
     unittest.main()

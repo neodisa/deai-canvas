@@ -24,6 +24,10 @@ def load_legacy_tasks():
         return json.load(f)
 
 
+#: Кошик Storage ЛІГИ для скріншотів пінів: картка Teams бере `meta.shotUrl` звідти (як старий адаптер 0.9.0). Джерело правди —
+#: тут (4d-3b): його потребує й міграція ЛІГИ (`liga_migrate`), яка не імпортує `serve`; `serve.LEGACY_SHOTS_BUCKET` — аліас.
+LEGACY_SHOTS_BUCKET = 'overview-thumbs'
+
 _SUPABASE_URL_RE = re.compile(r'https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/?', re.ASCII)
 _SUPABASE_KEY_RE = re.compile(r'[\x21-\x7e]+', re.ASCII)
 
