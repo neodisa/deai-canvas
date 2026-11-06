@@ -143,20 +143,20 @@
           "cards": [
             {
               "comment_project": "liga-shared",
+              "has_open_comments_field": false,
               "id": "a-1",
-              "keys_with_open_comments": false,
               "status": "review"
             },
             {
               "comment_project": null,
+              "has_open_comments_field": false,
               "id": "a-2",
-              "keys_with_open_comments": false,
               "status": "review"
             },
             {
               "comment_project": null,
+              "has_open_comments_field": false,
               "id": "a-3",
-              "keys_with_open_comments": false,
               "status": "work"
             }
           ],
@@ -166,6 +166,28 @@
       ]
     },
     "inbox": {
+      "a2_full_prefix": {
+        "module_calls": [
+          {
+            "fn": "list",
+            "module": "supabase-comments"
+          }
+        ],
+        "rc": 0,
+        "stderr": [],
+        "stdout": [
+          "[dry-run] Supabase: resolve dc/a-2 abcdef12deadbeef Іт.1 \"ok\"",
+          "[dry-run] нічого не записано"
+        ]
+      },
+      "a2_short_prefix": {
+        "module_calls": [],
+        "rc": 2,
+        "stderr": [
+          "error: префікс коротший за 6 символів: abc"
+        ],
+        "stdout": []
+      },
       "full_prefix": {
         "module_calls": [
           {

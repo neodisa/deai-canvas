@@ -273,7 +273,7 @@ def _dashboard(cfg, rig):
             return counts                       # лічильник, що пише, які ключі питали
         sent.append({'fn': fn, 'mode': mode, 'cards': [{'id': c['id'], 'status': c['status'],
                                                         'comment_project': c.get('comment_project'),
-                                                        'keys_with_open_comments': 'open_comments' in c}
+                                                        'has_open_comments_field': 'open_comments' in c}
                                                        for c in cards or []]})
         return {'ok': len(cards or []), 'failed': {}}
     keep = {tid: t for tid, t in cfg['tasks'].items() if tid != 'p-1'}
@@ -294,13 +294,14 @@ def _inbox(cfg, rig, liga_space):
     pin = {'id': 'abcdef12deadbeef', 'text': 'Alpha pin', 'status': 'open', 'author': 'Beta', 'ts': 'x', 'fp': 'a/b/c',
            'meta': {}, 'bornV': 'it1'}
     out = {}
-    for label, prefixes in (('short_prefix', ['abc']), ('full_prefix', ['abcdef12'])):
+    for label, tid, prefixes in (('short_prefix', 'a-1', ['abc']), ('full_prefix', 'a-1', ['abcdef12']),
+                                 ('a2_short_prefix', 'a-2', ['abc']), ('a2_full_prefix', 'a-2', ['abcdef12'])):
         rec = Rec({'list': [pin]})
         so, se = io.StringIO(), io.StringIO()
         with mock.patch.object(dm, 'call', rec), contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
             dm.reset_caches()
             try:
-                rc = inbox.cmd_resolve(ap.Namespace(task='a-1', prefixes=prefixes, reason='ok', it=1, dry_run=True))
+                rc = inbox.cmd_resolve(ap.Namespace(task=tid, prefixes=prefixes, reason='ok', it=1, dry_run=True))
             finally:
                 spaces.clear_request_space()
         out[label] = {'rc': rc, 'stdout': rel(so.getvalue(), rig.home).splitlines(),

@@ -65,6 +65,8 @@ class Before4d3bShape(unittest.TestCase):
     def test_comments_channel_scenarios(self):
         """Канал: задача з `comment_project` і без × `internal` — чотири і більше сценаріїв, у кожному з місць, що рахують канал."""
         c = self.snap['comments']
+        for sec in (c['space'], self.snap['vcs']['space']):
+            self.assertTrue(sec['legacy'] and sec['integrations'])
         self.assertEqual(sorted(c), ['api', 'channels', 'dashboard', 'inbox', 'project_comments', 'route', 'space'])
         ch = c['channels']
         self.assertEqual(sorted(ch), ['a-1', 'a-2', 'a-3'])
@@ -90,6 +92,8 @@ class Before4d3bShape(unittest.TestCase):
         self.assertRegex(r['ctx']['secrets']['key'], r'^<secret:\d+>$')
         self.assertEqual(r['ctx']['space'], {'id': 'legacy', 'path': ''})
         pc = c['project_comments']
+        self.assertEqual(sorted(pc), ['calls', 'channels', 'kind', 'label', 'outcomes', 'provider', 'takes_iteration'])
+        self.assertEqual(sorted(pc['outcomes']), ['pins_a1', 'pins_a2_internal', 'resolve_a1'])
         self.assertEqual((pc['kind'], pc['label'], pc['takes_iteration'], pc['provider']), ('implicit', 'Supabase', True, 'Implicit'))
         self.assertEqual([x['fn'] for x in pc['calls']], ['list', 'list', 'resolve'])
         self.assertEqual([x['args'][0] for x in pc['calls']], ['liga-shared', 'dc/a-2/internal', 'liga-shared'])
@@ -110,6 +114,10 @@ class Before4d3bShape(unittest.TestCase):
             self.assertEqual(sorted(v['config']), ['key', 'shotsBucket', 'url'])
             self.assertRegex(v['config']['key'], r'^<secret:\d+>$')
             self.assertEqual(len(v['client']), 2)
+        for v in cc.values():
+            self.assertEqual(v['client'], ['/api/module-client/supabase-comments/supabase.min.js',
+                                           '/api/module-client/supabase-comments/adapter.js'])
+            self.assertEqual(sorted(v), ['ch', 'channel', 'client', 'config', 'keys', 'module', 'status', 'version'])
         self.assertEqual(a['comment_config_local']['status'], 200)
         self.assertEqual(a['task_comment_channel'], {'a-1': 'liga-shared', 'a-2': 'dc/a-2', 'a-3': 'dc/a-3'})
         # тиша Teams: той самий канал, що в `/api/task`; POST пише саме його в шов
@@ -125,10 +133,17 @@ class Before4d3bShape(unittest.TestCase):
         d = self.snap['comments']['dashboard']
         self.assertEqual(d['counter_keys_asked'], ['liga-shared', 'dc/a-2', 'dc/a-3'])
         self.assertEqual({c['id']: c['status'] for c in d['pushed'][0]['cards']}, {'a-1': 'review', 'a-2': 'review', 'a-3': 'work'})
-        self.assertFalse(any(c['keys_with_open_comments'] for c in d['pushed'][0]['cards']), 'open_comments на картці не шлемо')
+        self.assertFalse(any(c['has_open_comments_field'] for c in d['pushed'][0]['cards']), 'open_comments на картці не шлемо')
 
     def test_inbox_short_prefix(self):
         i = self.snap['comments']['inbox']
+        self.assertEqual(sorted(i), ['a2_full_prefix', 'a2_short_prefix', 'full_prefix', 'short_prefix'])
+        for v in i.values():
+            self.assertEqual(sorted(v), ['module_calls', 'rc', 'stderr', 'stdout'])
+        self.assertEqual((i['a2_short_prefix']['rc'], i['a2_short_prefix']['stderr']),
+                         (2, ['error: префікс коротший за 6 символів: abc']))
+        self.assertEqual((i['a2_full_prefix']['rc'], i['a2_full_prefix']['stdout'][0]),
+                         (0, '[dry-run] Supabase: resolve dc/a-2 abcdef12deadbeef Іт.1 "ok"'))
         self.assertEqual(i['short_prefix']['rc'], 2)
         self.assertEqual(i['short_prefix']['stderr'], ['error: префікс коротший за 6 символів: abc'])
         self.assertEqual(i['short_prefix']['module_calls'], [])
@@ -151,7 +166,7 @@ class Before4d3bShape(unittest.TestCase):
 
     def test_vcs_mirror_dirs(self):
         rows = {r['task']: r for r in self.snap['vcs']['mirrors']}
-        self.assertGreaterEqual(len(rows), 3)
+        self.assertEqual(sorted(rows), ['a-1', 'a-2', 'a-3', 'v-https', 'v-nested', 'v-seo', 'v-ssh'])
         # плоскі теки 0.7.0: slug адреси без хеша й без хоста (SSH), з хостом (https, вкладений шлях)
         self.assertEqual(rows['a-1']['mirror_dir'], {'result': '~/mirrors/studio-web.git'})
         self.assertEqual(rows['a-2']['mirror_dir'], {'result': '~/mirrors/git.example.com-studio-web.git'})
@@ -169,6 +184,11 @@ class Before4d3bShape(unittest.TestCase):
         self.assertEqual(s1['subject'], 'design-canvas: sync mockup/a-1 (Alpha demo) · it1')
         self.assertIn('Мультисторінковий макет (design-canvas, задача `a-1`)', s1['readme'])
         self.assertIn('README.md', s1['files'])
+        self.assertEqual(sorted(t['sync']), ['a-1', 'a-2'])
+        for tid in ('a-1', 'a-2'):
+            self.assertEqual(sorted(t['sync'][tid]), ['outcome', 'push'])
+            self.assertEqual(len(t['sync'][tid]['push']), 1)
+            self.assertEqual(sorted(t['sync'][tid]['outcome']['result']), ['changed', 'ok', 'remote', 'sha', 'synced'])
         self.assertIsNone(t['sync']['a-2']['push'][0]['readme'])
         self.assertEqual(s1['author'], {'name': 'Alpha Designer', 'email': 'alpha@example.com'})
         # статус: «GitLab»; `web` — з SSH-адреси (https-адреса вебу не має)
