@@ -1,0 +1,747 @@
+{
+  "comments": {
+    "api": {
+      "comment_config": {
+        "a-1": {
+          "ch": "project",
+          "channel": "liga-shared",
+          "client": [
+            "/api/module-client/supabase-comments/supabase.min.js",
+            "/api/module-client/supabase-comments/adapter.js"
+          ],
+          "config": {
+            "key": "<secret:17>",
+            "shotsBucket": "overview-thumbs",
+            "url": "https://sb.example.com"
+          },
+          "keys": [
+            "ch",
+            "channel",
+            "client",
+            "config",
+            "module",
+            "user",
+            "version"
+          ],
+          "module": "supabase-comments",
+          "status": 200,
+          "version": "1"
+        },
+        "a-2": {
+          "ch": "project",
+          "channel": "dc/a-2",
+          "client": [
+            "/api/module-client/supabase-comments/supabase.min.js",
+            "/api/module-client/supabase-comments/adapter.js"
+          ],
+          "config": {
+            "key": "<secret:17>",
+            "shotsBucket": "overview-thumbs",
+            "url": "https://sb.example.com"
+          },
+          "keys": [
+            "ch",
+            "channel",
+            "client",
+            "config",
+            "module",
+            "user",
+            "version"
+          ],
+          "module": "supabase-comments",
+          "status": 200,
+          "version": "1"
+        }
+      },
+      "comment_config_local": {
+        "keys": [
+          "ch",
+          "endpoint",
+          "project",
+          "user",
+          "version"
+        ],
+        "status": 200
+      },
+      "task_comment_channel": {
+        "a-1": "liga-shared",
+        "a-2": "dc/a-2",
+        "a-3": "dc/a-3"
+      },
+      "teams_mute_get": {
+        "a-1": {
+          "body": {
+            "channel": "liga-shared",
+            "muted": false
+          },
+          "status": 200
+        },
+        "a-2": {
+          "body": {
+            "channel": "dc/a-2",
+            "muted": false
+          },
+          "status": 200
+        }
+      },
+      "teams_mute_post": {
+        "a1_after": {
+          "channel": "liga-shared",
+          "muted": true,
+          "via": "liga-shared"
+        },
+        "a2_after": {
+          "channel": "dc/a-2",
+          "muted": false,
+          "via": null
+        },
+        "channel": "liga-shared",
+        "fake_file_keys": [
+          "liga-shared"
+        ],
+        "muted": true,
+        "ok": true,
+        "status": 200
+      },
+      "urlopen_calls": 0
+    },
+    "channels": {
+      "a-1": {
+        "comment_project": "liga-shared",
+        "internal": "liga-shared/internal",
+        "plain": "liga-shared"
+      },
+      "a-2": {
+        "comment_project": null,
+        "internal": "dc/a-2/internal",
+        "plain": "dc/a-2"
+      },
+      "a-3": {
+        "comment_project": null,
+        "internal": "dc/a-3/internal",
+        "plain": "dc/a-3"
+      }
+    },
+    "dashboard": {
+      "counter_keys_asked": [
+        "liga-shared",
+        "dc/a-2",
+        "dc/a-3"
+      ],
+      "counts_given": {
+        "dc/a-2": 2,
+        "deai/legacy/a-1": 5,
+        "deai/legacy/a-2": 7,
+        "deai/legacy/a-3": 11,
+        "liga-shared": 3
+      },
+      "log": [
+        "✅ overview: синхронізовано 3 проєктів"
+      ],
+      "pushed": [
+        {
+          "cards": [
+            {
+              "comment_project": "liga-shared",
+              "id": "a-1",
+              "keys_with_open_comments": false,
+              "status": "review"
+            },
+            {
+              "comment_project": null,
+              "id": "a-2",
+              "keys_with_open_comments": false,
+              "status": "review"
+            },
+            {
+              "comment_project": null,
+              "id": "a-3",
+              "keys_with_open_comments": false,
+              "status": "work"
+            }
+          ],
+          "fn": "push",
+          "mode": "merge"
+        }
+      ]
+    },
+    "inbox": {
+      "full_prefix": {
+        "module_calls": [
+          {
+            "fn": "list",
+            "module": "supabase-comments"
+          }
+        ],
+        "rc": 0,
+        "stderr": [],
+        "stdout": [
+          "[dry-run] Supabase: resolve liga-shared abcdef12deadbeef Іт.1 \"ok\"",
+          "[dry-run] нічого не записано"
+        ]
+      },
+      "short_prefix": {
+        "module_calls": [],
+        "rc": 2,
+        "stderr": [
+          "error: префікс коротший за 6 символів: abc"
+        ],
+        "stdout": []
+      }
+    },
+    "project_comments": {
+      "calls": [
+        {
+          "args": [
+            "liga-shared"
+          ],
+          "ctx": {
+            "ModuleError": "<ModuleError>",
+            "secrets": {
+              "key": "<secret:17>"
+            },
+            "settings": {
+              "shots_bucket": "overview-thumbs",
+              "url": "https://sb.example.com"
+            },
+            "space": {
+              "id": "legacy",
+              "path": ""
+            }
+          },
+          "fn": "list",
+          "module": "supabase-comments",
+          "timeout": 10
+        },
+        {
+          "args": [
+            "dc/a-2/internal"
+          ],
+          "ctx": {
+            "ModuleError": "<ModuleError>",
+            "secrets": {
+              "key": "<secret:17>"
+            },
+            "settings": {
+              "shots_bucket": "overview-thumbs",
+              "url": "https://sb.example.com"
+            },
+            "space": {
+              "id": "legacy",
+              "path": ""
+            }
+          },
+          "fn": "list",
+          "module": "supabase-comments",
+          "timeout": 10
+        },
+        {
+          "args": [
+            "liga-shared",
+            "abcdef12",
+            "ok",
+            1
+          ],
+          "ctx": {
+            "ModuleError": "<ModuleError>",
+            "secrets": {
+              "key": "<secret:17>"
+            },
+            "settings": {
+              "shots_bucket": "overview-thumbs",
+              "url": "https://sb.example.com"
+            },
+            "space": {
+              "id": "legacy",
+              "path": ""
+            }
+          },
+          "fn": "resolve",
+          "module": "supabase-comments",
+          "timeout": 10
+        }
+      ],
+      "channels": {
+        "a-1": {
+          "internal": "liga-shared/internal",
+          "plain": "liga-shared"
+        },
+        "a-2": {
+          "internal": "dc/a-2/internal",
+          "plain": "dc/a-2"
+        },
+        "a-3": {
+          "internal": "dc/a-3/internal",
+          "plain": "dc/a-3"
+        }
+      },
+      "kind": "implicit",
+      "label": "Supabase",
+      "outcomes": {
+        "pins_a1": {
+          "result": []
+        },
+        "pins_a2_internal": {
+          "result": []
+        },
+        "resolve_a1": {
+          "result": null
+        }
+      },
+      "provider": "Implicit",
+      "takes_iteration": true
+    },
+    "route": {
+      "channels": {
+        "a-1": {
+          "internal": "liga-shared/internal",
+          "plain": "liga-shared"
+        },
+        "a-2": {
+          "internal": "dc/a-2/internal",
+          "plain": "dc/a-2"
+        },
+        "a-3": {
+          "internal": "dc/a-3/internal",
+          "plain": "dc/a-3"
+        }
+      },
+      "ctx": {
+        "ModuleError": "<ModuleError>",
+        "secrets": {
+          "key": "<secret:17>"
+        },
+        "settings": {
+          "shots_bucket": "overview-thumbs",
+          "url": "https://sb.example.com"
+        },
+        "space": {
+          "id": "legacy",
+          "path": ""
+        }
+      },
+      "module": "supabase-comments",
+      "provider": "Implicit",
+      "provider_error": null
+    },
+    "space": {
+      "id": "legacy",
+      "integrations": true,
+      "legacy": true,
+      "path": "<tmp>/liga-space"
+    }
+  },
+  "meta": {
+    "generator": "tests/make_before_4d3b.py",
+    "source_commit": "6906621",
+    "version": "0.17.0",
+    "volatile_stripped": []
+  },
+  "non_loopback_attempts": 0,
+  "vcs": {
+    "form": {
+      "capabilities": {
+        "comments": "legacy",
+        "dashboard": "legacy",
+        "notify": "legacy",
+        "publish": "legacy",
+        "tokens": null,
+        "tracker": "legacy",
+        "vcs": "legacy"
+      },
+      "model": {
+        "brand_empty": "",
+        "clones": true,
+        "fail_key_target": null,
+        "has_notify": true,
+        "has_publish": true,
+        "has_vcs": true,
+        "is_legacy_vcs": true,
+        "label_empty": "GitLab",
+        "label_git": "Git",
+        "space_keys": [
+          "available",
+          "capabilities",
+          "color",
+          "default_track",
+          "id",
+          "integrations",
+          "legacy",
+          "name",
+          "path",
+          "tasks",
+          "tracks"
+        ],
+        "with_repo": false
+      },
+      "space_row": {
+        "available": true,
+        "capabilities": {
+          "comments": "legacy",
+          "dashboard": "legacy",
+          "notify": "legacy",
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": "legacy",
+          "vcs": "legacy"
+        },
+        "color": "space-1",
+        "default_track": "united",
+        "id": "legacy",
+        "integrations": true,
+        "legacy": true,
+        "name": "liga-space",
+        "path": "<tmp>/liga-space",
+        "tasks": 4,
+        "tracks": [
+          {
+            "id": "united",
+            "label": "United"
+          },
+          {
+            "id": "liga360",
+            "label": "LIGA360"
+          },
+          {
+            "id": "seo",
+            "label": "SEO"
+          },
+          {
+            "id": "custom-x",
+            "label": "custom-x"
+          }
+        ]
+      },
+      "status": 200,
+      "urlopen_calls": 0
+    },
+    "mirrors": [
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/studio-web.git"
+        },
+        "target": {
+          "branch": "main",
+          "path": "mockup/a-1",
+          "repo": "git@example.com:studio/web.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "a-1"
+        },
+        "task": "a-1"
+      },
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/git.example.com-studio-web.git"
+        },
+        "target": {
+          "branch": "main",
+          "path": "mockup/a-2",
+          "repo": "https://git.example.com/studio/web.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "a-2"
+        },
+        "task": "a-2"
+      },
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/git.example.com-group-sub-web.git"
+        },
+        "target": {
+          "branch": "main",
+          "path": "mockup/a-3",
+          "repo": "https://git.example.com/group/sub/web.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "a-3"
+        },
+        "task": "a-3"
+      },
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/studio-web.git"
+        },
+        "target": {
+          "branch": "main",
+          "path": "mockup/v-ssh",
+          "repo": "git@example.com:studio/web.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "v-ssh"
+        },
+        "task": "v-ssh"
+      },
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/git-example.com-o-r.git"
+        },
+        "target": {
+          "branch": "main",
+          "path": "mockup/v-seo",
+          "repo": "ssh://git@example.com/o/r.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "v-seo"
+        },
+        "task": "v-seo"
+      },
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/git.example.com-studio-web.git"
+        },
+        "target": {
+          "branch": "dev",
+          "path": "mockup/v-https",
+          "repo": "https://git.example.com/studio/web.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "v-https"
+        },
+        "task": "v-https"
+      },
+      {
+        "mirror_dir": {
+          "result": "~/mirrors/git.example.com-group-sub-web.git"
+        },
+        "target": {
+          "branch": "main",
+          "path": "mockup/v-nested",
+          "repo": "https://git.example.com/group/sub/web.git",
+          "ssh_key": "~/.ssh/example",
+          "task": "v-nested"
+        },
+        "task": "v-nested"
+      }
+    ],
+    "mirrors_base": "~/mirrors",
+    "provider": {
+      "ctx": {
+        "ModuleError": "<ModuleError>",
+        "cache_dir": "~/mirrors",
+        "folder_ok": "<<lambda>>",
+        "mirror_flat": true,
+        "secrets": {},
+        "settings": {
+          "autosync": true,
+          "branch": "main",
+          "path": "mockup/{task}"
+        },
+        "space": {
+          "id": "legacy",
+          "path": ""
+        }
+      },
+      "legacy": true,
+      "module": "git-sync",
+      "provider": "Implicit",
+      "tuple_len": 3
+    },
+    "space": {
+      "id": "legacy",
+      "integrations": true,
+      "legacy": true,
+      "path": "<tmp>/liga-space"
+    },
+    "texts": {
+      "autosync": {
+        "commit_messages": [
+          "it1: автосинк (design-canvas)"
+        ],
+        "outcome": {
+          "result": {
+            "changed": false,
+            "it": "it1",
+            "local_sha": "abc1234",
+            "ok": true,
+            "remote": "git@example.com:studio/web.git:mockup/a-1",
+            "sha": null,
+            "synced": false
+          }
+        },
+        "push_subjects": [
+          "design-canvas: sync mockup/a-1 (Alpha demo) · it1"
+        ]
+      },
+      "pull": {
+        "notes": [
+          "first",
+          "оновлення з GitLab",
+          "продовження моєї роботи — з GitLab приїхала старша версія"
+        ],
+        "outcome": {
+          "result": {
+            "continue_from": "it1",
+            "fork": {
+              "author": "Alpha Designer",
+              "author_key": "alpha@example.com",
+              "from": "it1",
+              "id": "it3",
+              "note": "продовження моєї роботи — з GitLab приїхала старша версія",
+              "published": false
+            },
+            "iteration": {
+              "author": "Beta Designer",
+              "author_key": "",
+              "from_gitlab": true,
+              "id": "it2",
+              "note": "оновлення з GitLab",
+              "published": false
+            },
+            "ok": true
+          }
+        }
+      },
+      "state": {
+        "git_lines": [
+          "GitLab (mockup/a-1): синхронізовано · є незбережені зміни обраної ітерації"
+        ],
+        "rc": 0
+      },
+      "status": {
+        "a-1": {
+          "result": {
+            "behind": 0,
+            "behind_path": 0,
+            "configured": true,
+            "dirty": true,
+            "gitlab_it": null,
+            "label": "GitLab",
+            "on_remote": true,
+            "remote_path": "mockup/a-1",
+            "synced_at": null,
+            "synced_it": null,
+            "unpushed": 0,
+            "web": "https://example.com/studio/web/-/commits/main/mockup/a-1"
+          }
+        },
+        "a-2": {
+          "result": {
+            "behind": 0,
+            "behind_path": 0,
+            "configured": true,
+            "dirty": true,
+            "gitlab_it": null,
+            "label": "GitLab",
+            "on_remote": true,
+            "remote_path": "mockup/a-2",
+            "synced_at": null,
+            "synced_it": null,
+            "unpushed": 0,
+            "web": null
+          }
+        },
+        "a-3": {
+          "result": {
+            "behind": 0,
+            "behind_path": 0,
+            "configured": true,
+            "dirty": true,
+            "gitlab_it": null,
+            "label": "GitLab",
+            "on_remote": true,
+            "remote_path": "mockup/a-3",
+            "synced_at": null,
+            "synced_it": null,
+            "unpushed": 0,
+            "web": null
+          }
+        }
+      },
+      "status_self_lookup": {
+        "result": {
+          "behind": 0,
+          "behind_path": 0,
+          "configured": true,
+          "dirty": true,
+          "gitlab_it": null,
+          "label": "GitLab",
+          "on_remote": true,
+          "remote_path": "mockup/a-1",
+          "synced_at": null,
+          "synced_it": null,
+          "unpushed": 0,
+          "web": "https://example.com/studio/web/-/commits/main/mockup/a-1"
+        }
+      },
+      "sync": {
+        "a-1": {
+          "outcome": {
+            "result": {
+              "changed": false,
+              "ok": true,
+              "remote": "git@example.com:studio/web.git:mockup/a-1",
+              "sha": null,
+              "synced": false
+            }
+          },
+          "push": [
+            {
+              "author": {
+                "email": "alpha@example.com",
+                "name": "Alpha Designer"
+              },
+              "body_shape": "Ітерація: it1 · Хеш: <hash> · <time>\nЩо змінено: first",
+              "files": [
+                ".canvas-state.json",
+                "README.md",
+                "alpha/index.html",
+                "beta/index.html",
+                "pages.json"
+              ],
+              "readme": "# Alpha demo\n\nМультисторінковий макет (design-canvas, задача `a-1`). Не редагувати тут напряму.\n\n| Тека | Сторінка |\n|---|---|\n| `alpha/` | Альфа |\n| `beta/` | Бета |\n",
+              "subject": "design-canvas: sync mockup/a-1 (Alpha demo) · it1",
+              "target": {
+                "branch": "main",
+                "path": "mockup/a-1",
+                "repo": "git@example.com:studio/web.git",
+                "ssh_key": "~/.ssh/example",
+                "task": "a-1"
+              }
+            }
+          ]
+        },
+        "a-2": {
+          "outcome": {
+            "result": {
+              "changed": false,
+              "ok": true,
+              "remote": "https://git.example.com/studio/web.git:mockup/a-2",
+              "sha": null,
+              "synced": false
+            }
+          },
+          "push": [
+            {
+              "author": {
+                "email": "alpha@example.com",
+                "name": "Alpha Designer"
+              },
+              "body_shape": "Ітерація: it1 · Хеш: <hash> · <time>\nЩо змінено: first",
+              "files": [
+                ".canvas-state.json",
+                "index.html"
+              ],
+              "readme": null,
+              "subject": "design-canvas: sync mockup/a-2 (Beta demo) · it1",
+              "target": {
+                "branch": "main",
+                "path": "mockup/a-2",
+                "repo": "https://git.example.com/studio/web.git",
+                "ssh_key": "~/.ssh/example",
+                "task": "a-2"
+              }
+            }
+          ]
+        }
+      },
+      "task_new_fork": {
+        "notes": [
+          "початкова",
+          "продовження макета з GitLab"
+        ],
+        "outcome": {
+          "result": [
+            true,
+            null
+          ]
+        }
+      }
+    },
+    "urlopen_calls": 0
+  }
+}
