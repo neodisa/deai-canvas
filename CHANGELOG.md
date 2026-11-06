@@ -3,6 +3,161 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.18.0] — unreleased
+
+Stage 4d-3b: the second of the three steps that turn the LIGA space into an ordinary one. The roles `comments` and `vcs` of LIGA
+become explicit built-in modules (`supabase-comments`, `git-sync`) through a **second migration step, `liga-4d3b`**, and the
+two things that an explicit record could not express before (the old channel scheme of the comments, the flat mirrors of git
+sync with their texts) become the setting `compat` of those two modules. For a person nothing changes: the same channels
+(`comment_project`, `dc/<task>`), the same pin history, the same Teams silence and counters, the same mirror folders (no
+re-clone, no orphaned commits), the same «design-canvas» / «GitLab» texts, the same «New task» form without a Repository field.
+4d-3c (0.19.0) `publish` and 4d-4 (0.20.0) follow.
+Design: `docs/superpowers/specs/2026-11-06-liga-migration-b-design.md`; plan: `docs/superpowers/plans/2026-11-06-liga-migration-b.md`.
+The behaviour of 0.17.0 is pinned by the snapshot `tests/fixtures/liga-migration/before-4d3b.json`.
+
+### Added
+
+- **A second migration step `liga-4d3b`** in `app/liga_migrate.py`, which is now an ordered list of steps (`STEPS`). Every step is
+  independent and has its own mark, its own dated backup and its own restore. On the first start of 0.18 the server runs
+  `liga-4d3a`, then `liga-4d3b`; a user who jumps from 0.16 gets **both steps at one start and two backups**. The plan of the
+  second step is calculated AFTER the first one is written (it reads the current `space.json`).
+- **What `liga-4d3b` writes** (the LIGA `space.json` is merged: foreign keys and modules stay; a role that already has a module is
+  `module-present`):
+  - `comments` -> `supabase-comments` with `shared_state: true`, `settings {url, shots_bucket: "overview-thumbs", compat:
+    "comment-layer"}` and the Supabase key as a copy in `secrets.json` (the address and the key come from
+    `install_config.supabase_from`, by the same rules as the implicit path). Skip codes of the role: `no-supabase`, `bad-url`
+    (`user:pass@` in the address), `module-present`;
+  - `vcs` -> `git-sync` with `shared_state: true`, `settings {branch: "main", path: "mockup/{task}", autosync: true, compat:
+    "design-canvas"}`; no secrets; `ssh_key` and `host_ip` are NOT copied (see Upgrading); the setting `repo` is not written (the
+    repository comes from the target of a task);
+  - the mark `migrations.liga-4d3b` (`at`, `roles`, `backup`; no `tracks`);
+  - the check `abort-provider`: on the `space.json` calculated in memory the core must resolve every migrated role with exactly
+    this module, otherwise nothing is written.
+  A partial migration is final, as in 0.17: without a Supabase config `vcs` migrates, the mark is written and `comments` stays
+  implicit; the start line, `status` and `last.json` (`skipped`) name the code.
+- **Restore is LIFO.** The name of a backup says whose step it is: `bin/migrate_liga.py restore <stamp-b>` puts back `space.json`
+  and the LIGA part of the secrets as they were after 4d-3a (4d-3a stays applied). `restore <stamp-a>` while 4d-3b is applied
+  (a mark without `held`) is refused with **`refuse-later-applied`** (exit code 1, nothing is written; the text names the backup
+  to roll back first). `--hold` writes `{"held": true}` into the mark of that step only. **A held earlier step holds the later
+  ones** (the later step answers `skip-held` with its own reason): otherwise `restore <b>` followed by `restore <a> --hold` would
+  bring step b back to life at the next start.
+- **Order and stopping rules at one start:** `abort-*` and `skip-busy` of a step stop the later steps at this start (the state is
+  doubtful, or another process may be in the middle of a step); the other `skip-*` codes (`skip-nothing`, `skip-done`, ...) do not
+  block the later steps.
+- **`skip-integrations-off`** (new, benign): a LIGA registry record with `integrations` off is not migrated at all, because in 0.17
+  its roles are off (there is no implicit provider) and explicit records would switch them on. It is checked in the plan of EVERY
+  step, so it also applies to step 4d-3a (nothing is written, not even a mark).
+- **`last.json`** keeps its 4d-3a shape at the top level (the report of the last action, now with `step`) and adds
+  `steps: {mark: report}`, so a report of 4d-3b does not erase the one of 4d-3a. The CLI `status`, `dry-run` and `run` print every
+  step; `restore <stamp>` finds the step by the name of the backup. The line `напрямки` of the `run` output is printed only for a
+  step that has tracks (4d-3a); the output of a single step is byte-for-byte what 0.17 printed.
+- **The setting `compat` of `supabase-comments`** (`select`: empty or `comment-layer`, default empty; module version 1.2.0).
+  `comment-layer` keeps the old channel scheme (`comment_project` of the task, or `dc/<task>`, plus `/internal`); empty means
+  `deai/<space>/<task>`. The label warns that changing the value on a live space cuts off the existing pin history.
+- **The setting `compat` of `git-sync`** (`select`: empty or `design-canvas`, default empty; module version 1.1.0).
+  `design-canvas` means exactly what the implicit provider did: flat mirrors in the old mirrors folder (`DC_MIRRORS_DIR` or
+  `<ROOT>/.mirrors`, laid over the module ctx by the core as `cache_dir` and `mirror_flat`), the texts «design-canvas: sync», the
+  README and the label «GitLab» / «repository», the fork note. The label warns that a change makes the mirror folders and the
+  texts different.
+- **One function for the comment channel**, `deai_modules.comment_channel_of(space, prov, task, tid, internal=False)`: the
+  implicit provider or a **built-in** `supabase-comments` with `compat == "comment-layer"` gives the comment-layer scheme, every
+  other provider gives `channel_for` (`deai/<space>/<task>`). All six places go through it: `comments_route` (and with it
+  `/commented`, `/api/comment-config`, `publish_comments`), `ProjectComments.channel`, `GET /api/task`, `GET` and `POST
+  /api/teams-mute`, and the counters of the dashboard (`dashboard.sync` takes an optional callback `channel_of`, built by
+  `bin/overview_push.cmd_sync`). `serve.comment_channel` and `dashboard.comment_project_key` are thin wrappers; an AST guard
+  forbids a direct call outside them. `deai_modules.compat_of(space, module_id)` is total (an empty string on any failure). Where
+  the provider cannot be resolved (`ModuleError`) `api/task`, the silence and the counters fall back to the comment-layer scheme,
+  as in 0.17.
+- **One predicate for the legacy texts**, `serve.vcs_legacy_texts(prov, space)` (the implicit provider, or a built-in `git-sync`
+  with `compat == "design-canvas"`), computed once in `vcs_provider` and read by every consumer through the third element of the
+  tuple; a guard forbids `isinstance(..., Implicit)` for decisions about texts or channels anywhere else.
+- **`compat` map in `/api/spaces`**: a neighbouring key `compat` of the space object (`{role: value}`, only for roles whose
+  explicit built-in module has a non-empty `compat`; absent otherwise). `isLegacyVcs` in `spaces-model.js` reads
+  `capabilities.vcs === 'legacy' || compat.vcs === 'design-canvas'`, so the «New task» form of a migrated LIGA still has no
+  Repository field and the labels stay «GitLab».
+- **`ProjectComments` for the agent** keeps the LIGA look after the migration: the label stays «Supabase», and `bin/inbox.py`
+  keeps the minimum prefix length (the rule that drops it applies to modules that are not on the comment-layer scheme).
+- **The isolation law covers `comments` and `vcs`** records marked `shared_state`: in an isolated run (`DC_TASKS_FILE`,
+  `DC_NO_OVERVIEW`) a **built-in** record builds its ctx like the implicit path (`_comments_legacy_ctx()` /
+  `_vcs_legacy_ctx()`: the key comes from the root of the tasks file, never from `secrets.json` of a real `DEAI_HOME`); the
+  condition lives only in the two branches of `comments_route` and `vcs_provider` (`_builtin_shared`). Outside isolation the
+  record's own `module_ctx` is used. A module of your own with a hand-set `shared_state` stays an ordinary module there.
+- **`publish_comments(module_publish=True)` refuses** (returns `False`) a comments record with `shared_state`, as it already
+  did for the implicit provider: a preview built by a publish module must not carry the Supabase key of LIGA. It also refuses a
+  module of your own with a hand-set flag (the safe side). Lifted in 4d-3c.
+- **`LEGACY_SHOTS_BUCKET`** moved to `install_config.py` (the migration needs it and does not import `serve`); `serve` keeps an
+  alias, and a test compares the values. `serve._vcs_legacy_ctx()['settings']` and the record of the migration share
+  `branch`, `path` and `autosync`, and a test compares them.
+
+### Improved
+
+- **«Check» of a module with `shared_state` no longer reads secrets and no longer touches the network in an isolated run**
+  (`POST /api/module-check` and the tail of a module write answer `{ok: false, error: "isolated"}`; `last_check` is not
+  overwritten). It applies to all five roles (`comments`, `vcs`, `dashboard`, `tracker`, `notify`) and closes a gap of 0.17, where
+  an isolated run over a real `DEAI_HOME` could read the real `secrets.json` through «Check». New label `cnErrIsolated`.
+- **Every built-in module field has a compat label** in the Connections screen (`compat_view` is built for built-in modules only,
+  and a test covers the labels of all built-in modules).
+
+### Status codes
+
+- **New skip code:** `skip-integrations-off` (benign; also for 4d-3a). `skip-held` of a later step may now come from an earlier
+  held step (the reason says so).
+- **New refusal of `restore`:** `refuse-later-applied`.
+- **Codes of the roles of 4d-3b** (in `skipped` of `last.json`): `no-supabase`, `bad-url`, `module-present`.
+- `skip-nothing` of 4d-3b: both roles are already explicit; the mark is not written.
+
+### Unchanged public contract
+
+- `publish` of the LIGA space stays implicit (`'legacy'` in `capabilities`) until 4d-3c. The tests `tests/legacy-golden.test.mjs`
+  and `GoldenPinTest` are green without a re-shoot, and so are the 4d-3a snapshot tests (their stand sees one step: one line in `_Stand.setUp` of `tests/test_liga_migrate.py`
+  is the only change of the 4d-3a tests; the other changed existing tests only pin the new module versions and the new
+  `compat` setting).
+- The implicit path stays as a fallback until 4d-4: switch the explicit record off and the built-in mode is back.
+- The migration does not run in an isolated run, except with the seam `DC_MIGRATE_LIGA=1` and a temporary `DEAI_HOME`; the real
+  `~/.deai` is always refused.
+
+### Upgrading
+
+- **Two steps, two backups.** A user who comes from 0.16 gets `<stamp>-liga-4d3a` and `<stamp>-liga-4d3b`; from 0.17 only the
+  second. Roll them back in reverse order (the newest first).
+- **⛔ Before a downgrade to 0.17 run `python3 bin/migrate_liga.py restore <stamp-b> --hold`.** 0.17 ignores the setting
+  `compat`: without the restore the comment channels switch to `deai/<space>/<task>` (the history and the silence «disappear»)
+  and the mirrors are cloned again under `<DEAI_HOME>/cache` (orphaned unpushed commits of the old mirrors).
+- **Rotation.** The Supabase key for the comments is now a copy in `secrets.json`: rotating `supabase_key` in the old `tasks.json`
+  (or in the environment) no longer reaches the comments; rotate it on the Connections screen (the same as for the dashboard and
+  Teams since 0.17).
+- `gitlab_ssh_key` and `gitlab_host_ip` in the root of `tasks.json` keep working (`_vcs_ssh` reads them for any provider); they
+  move in 4d-4.
+
+### Deliberate differences from 0.17.0
+
+(everything else is checked against the snapshot, on the migrated space too)
+
+1. **After the migration `comments` and `vcs` of LIGA are explicit modules**: their ids are in `capabilities` (`publish` stays
+   `'legacy'`), there is one card per role on the Connections screen, and the settings can be edited there. `/api/spaces` has the new
+   key `compat`.
+2. **A Supabase key changed in the environment or the root of `tasks.json` no longer affects the comments of LIGA** (the copy
+   lives in `secrets.json`).
+3. **A space with an explicit comments module without `compat` now has its real channel `deai/<space>/<task>` in `GET /api/task`,
+   in the Teams silence and in the dashboard counters** (before, these three always used `dc/<task>`, so the silence and the
+   counters looked past the pins). Plan amendment 5: `/api/teams-mute` and the counters have no `integrations` gate, so this also
+   applies to spaces without integrations.
+4. **The ctx of the migrated roles** is built by `module_ctx` (`space.path` and the other extras; the same values plus `compat`).
+5. **`publish_comments` refuses a comments record with `shared_state`** in a preview built by a publish module (also one of your
+   own with a hand-set flag).
+6. **Teams and dashboard counters, the silence, `api/task`, `inbox` and the labels follow `compat`, not the kind of the provider**
+   (the lesson of 4d-3a: «LIGA» is a registry record, not a provider type).
+
+### Known limits
+
+- **A partial migration is final** (as in 0.17): without a Supabase config at the first start `comments` stays implicit and is not
+  retried; add the `supabase-comments` card on the Connections screen.
+- **A downgrade to 0.17 after 4d-3b is unsafe without `restore`** (see Upgrading).
+- **LIGA has no in-UI entry point to the «New task» form** (pre-existing); the Repository field stays hidden for LIGA even when a
+  `repo` is set on the `git-sync` card (the setting works for tasks without a target, but the form does not offer it).
+- `skip-path-in-git` and `skip-no-path`, the missing `flock` on Windows, and a CLI `run` racing with UI edits: as in 0.17.
+- `publish` is still implicit: a preview built by a publish module carries no comments of LIGA (4d-3c).
+
 ## [0.17.0] — 06.11.2026
 
 Stage 4d-3a: the first of three steps that turn the LIGA space into an ordinary one. A **migration** moves the config the LIGA

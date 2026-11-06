@@ -394,20 +394,42 @@ private key and never from a page.
 
 ### The `compat` setting, `shared_state` and `ctx['legacy']`
 
-Three things concern the in-house LIGA setup and what its migration (0.17.0, `bin/migrate_liga.py`) writes into `space.json`.
-An ordinary module does not need any of them.
+Three things concern the in-house LIGA setup and what its migration (0.17.0 and 0.18.0, `bin/migrate_liga.py`) writes into
+`space.json`. An ordinary module does not need any of them.
 
-* **`compat`** is an optional `select` setting of the built-in `supabase-dashboard` and `supabase-teams`: `""` (default) or
-  `"comment-layer"`. It says that the Supabase base is the old comment-layer schema: a **public** key is allowed (`check` does not
-  answer `public-key`), and `supabase-teams` does not call `teams_notify_health`, which that schema does not have. The migration
-  writes it into the explicit record of the LIGA space; the implicit path puts it into `settings` too.
+* **`compat`** is an optional `select` setting of four built-in modules, each with its own meaning (the core reads it only for a
+  **built-in** module with that exact id, never for a module of your own that declares a setting of the same name):
+  * `supabase-dashboard` and `supabase-teams`: `""` (default) or `"comment-layer"`. It says that the Supabase base is the old
+    comment-layer schema: a **public** key is allowed (`check` does not answer `public-key`), and `supabase-teams` does not call
+    `teams_notify_health`, which that schema does not have. The migration writes it into the explicit record of the LIGA space; the
+    implicit path puts it into `settings` too.
+  * `supabase-comments` (0.18): `""` (default) or `"comment-layer"`. `comment-layer` keeps the old **channel scheme** of the
+    comments: `comment_project` of the task, or `dc/<task>`, plus `/internal`; empty means `deai/<space>/<task>`. The scheme is
+    decided by one function of the core, `deai_modules.comment_channel_of`, in every place (pins, `/api/task`, the Teams silence,
+    the dashboard counters), so the module itself never has to know it. Changing the value on a live space cuts off the existing
+    pin history: the channel is another one.
+  * `git-sync` (0.18): `""` (default) or `"design-canvas"`. `design-canvas` is the behaviour of the old implicit provider: the core
+    lays `cache_dir` (the old mirrors folder: `DC_MIRRORS_DIR` or `<ROOT>/.mirrors`) and `mirror_flat: true` over your `ctx` (flat
+    folders `<slug>` instead of `<host>/<slug>-<hash8>`), and the texts («design-canvas: sync», README, «GitLab» / «repository»,
+    the fork note) are the old ones (one predicate, `serve.vcs_legacy_texts`). The module does not know `ROOT`; it only honours
+    `ctx['mirror_flat']` and `ctx['cache_dir']`. Changing the value makes the mirror folders and the texts different.
+
+  **The «built-in + id» rule.** A space's own module cannot take the id of a built-in one (the Connections screen shows the note
+  `id-taken` and the module is skipped), and the predicates above also test `origin == 'builtin'`; so a module of your own called
+  anything else cannot pick up the LIGA channel scheme or the LIGA texts by declaring `compat`.
 * **`shared_state`** is a boolean on a module record in `space.json` (`"modules": {"<id>": {"enabled": true, "settings": {…},
   "shared_state": true}}`). The migration writes it; a value that is not a boolean is ignored. A record marked `true` is the
   shared state of the LIGA space although it is explicit, so for the roles `dashboard`, `tracker` and `notify` it is under the
   **isolation law**: in an isolated run (`DC_TASKS_FILE` or `DC_NO_OVERVIEW`) the core does not call the module, but answers like
-  for the implicit provider (a test seam first, then a refusal, then the real call). `deai_modules.shared_state(space,
-  module_id)` is the question; the Connections screen does not show or change the flag. Do not set it on a module of your own
-  unless it really talks to a state that tests must never touch.
+  for the implicit provider (a test seam first, then a refusal, then the real call). Since 0.18 the law covers `comments` and `vcs`
+  too: there a **built-in** record with the flag builds its `ctx` like the implicit path (the Supabase key comes from the root of
+  the tasks file, never from `secrets.json` of the real home; the git mirrors are flat in `DC_MIRRORS_DIR`), and outside isolation
+  the record's own `module_ctx` is used. `publish_comments` refuses such a comments record in a preview built by a publish module
+  (the key must not travel in a preview; this also refuses a module of your own with a hand-set flag). The module **«Check»**
+  of a record with the flag does not read the secrets and does not call the module in an isolated run: the answer is
+  `{"ok": false, "error": "isolated"}` and the last real check result is kept (all five roles).
+  `deai_modules.shared_state(space, module_id)` is the question; the Connections screen does not show or change the flag. Do not
+  set it on a module of your own unless it really talks to a state that tests must never touch.
 * **`ctx['legacy']`**: the built-in modules **do not read it any more**; they read `settings.compat`. The flag stays in the ctx
   of the implicit path only for foreign modules and goes with the implicit path in 4d-4. A module of your own that checks it will
   keep working there, but must not expect it anywhere else.

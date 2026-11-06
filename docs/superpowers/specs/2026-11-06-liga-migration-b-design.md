@@ -295,3 +295,86 @@ CHANGELOG `[0.18.0]` (Upgrading, Deliberate differences, Known limits), README (
 6. **Крок `liga-4d3b`** — розрахунок, запис, коди пропуску, `abort-provider`; тести плану/запуску/відкату, два кроки на старті.
 7. **Паритет і живий тест** — `AfterMigrationParity4d3b` з `EXPECT_DIFF`, розширення `liga-migrate.test.mjs`.
 8. **Документи, мутаційні докази, фінальне ревʼю, реліз.**
+
+## Implementation notes (відхилення, прийняті під час реалізації й ревʼю)
+
+Де код відрізняється від тексту вище — правда за кодом. Поправки контролера 1–11 до плану (`docs/superpowers/plans/2026-11-06-liga-migration-b.md`)
+мають перевагу над текстом спеки; тут їх зведення і рішення, що зʼявились на ревʼю.
+
+**Поправки до плану (1–11).**
+
+1. **«Тести 4d-3a зелені без правок» не буквальне.** `plan/run/_run/restore/_restore/status` БЕЗ `step` лишаються кроком 4d-3a;
+   `run_all()`, `startup()` і CLI ітерують `STEPS`. Єдина правка тесту 4d-3a — один рядок у `_Stand.setUp`
+   (`mock.patch.object(liga_migrate, 'STEPS', liga_migrate.ALL_STEPS[:1])`); нові тести — у `tests/test_liga_migrate_b.py`.
+2. **`compat_of`** читає сирий запис `space_modules(space)[id]['settings']['compat']` (лише `str`, інакше `""`), а не `resolve_settings`:
+   функція тотальна без обходу каталогу, результат ідентичний.
+3. **Захист за id:** предикати кажуть «вбудований І `id == 'supabase-comments'`» (канал) та «вбудований І `id == 'git-sync'`» (тексти),
+   бо `supabase-dashboard`/`supabase-teams` мають СВОЄ `compat`.
+4. **Ключ `compat` обʼєкта простору** — лише коли непорожній (інакше відсутній).
+5. **Свідома відмінність ширша:** `/api/teams-mute` і лічильники дашборда не мають гейта `integrations`, тож справжній канал
+   `deai/<простір>/<задача>` при явному модулі коментарів без `compat` бачать і простори без інтеграцій.
+6. **`LEGACY_SHOTS_BUCKET`** перенесено в `install_config.py` (міграція не імпортує `serve`), `serve` лишає аліас; тест зіставляє
+   значення; запис міграції для `vcs` звіряється з `serve._vcs_legacy_ctx()['settings']`.
+7. **`BENIGN` не розширюється:** `restore` повертає 0 лише для `restored`, тож `refuse-later-applied` дає код 1 (доводить тест).
+8. **`last.json`:** `_write_last` зливає мапу `steps` (читає `_read_last()` під замком), інакше звіт 3b стер би звіт 3a.
+9. **Номери рядків спеки** звірено з кодом (збігаються); шість місць каналу = `comments_route`, `ProjectComments.channel`, `api/task`,
+   `teams-mute` GET, `teams-mute` POST, лічильники дашборда.
+10. **Порядок появи `STEP_B`:** у Task 5 `ALL_STEPS = (STEP_A,)`, тести механізму — на синтетичному другому кроці; реальний `STEP_B` — Task 6.
+11. **Живий `liga-migrate` між Task 6 і Task 7 очікувано червоний** (старт пише два бекапи); його розширила Task 7.
+
+**Рішення з ревʼю (понад поправки).**
+
+- **«Перевірка» модуля й закон ізоляції — для ВСІХ п'яти ролей.** `module_check_verdict`: запис із `shared_state` в ізольованому
+  прогоні не перевіряється (вердикт `isolated`; ні `secrets.json`, ні мережі; `last_check` не перезаписується). Це закрило прогалину
+  0.17 (там так само читався справжній `secrets.json` через «Перевірку» `dashboard`/`tracker`/`notify`). Умова — без походження:
+  відмова безпечна для будь-якого модуля. Новий код `isolated` у `connections-model.js` (`cnErrIsolated`, uk/en).
+- **`_builtin_shared` лише в гілках `comments_route`/`vcs_provider`.** Перша спроба обмежити «лише вбудовані» в самому
+  `_shared_module` ламала закон 4d-3a для власних модулів (`implicit.route`); предикат `_shared_module` лишився без походження,
+  а підстановка ключа кореня задач (`_comments_legacy_ctx`/`_vcs_legacy_ctx`) — тільки для вбудованих (`_builtin_shared`).
+  `publish_comments` відмовляє за `_shared_module` (безпечний бік — і для свого модуля з вручну виставленим прапорцем).
+- **Утримання раннього кроку тримає наступні** (`skip-held` із власним текстом причини «утримано разом із …»): інакше після
+  `restore <b>` і `restore <a> --hold` крок b ожив би на наступному старті. Лише `held`; `done`/`skip-nothing` не блокують.
+- **`skip-busy` зупиняє наступні кроки на старті** (як `abort-*`), `abort` не маскується пізнішим успіхом у підсумку `startup()`.
+- **`skip-integrations-off`** (ЛІГА з вимкненими інтеграціями не мігрує): у 0.17 її ролі вимкнені (неявного постачальника нема),
+  явні записи їх увімкнули б. Перевіряється у `_plan` КОЖНОГО кроку, отже діє й на 4d-3a; доброякісний код (`BENIGN`), старт мовчить.
+- **Рядок «напрямки»** виводиться лише для кроку з напрямками — і в рядку старту/`status_text`, і в CLI `run` (виправлено в Task 8;
+  вивід одного кроку 4d-3a побайтно як у 0.17, пінить `CliStepsTest`).
+- **Живі прогони `liga-migrate` ізольовані** (`DC_TASKS_FILE` + шов `DC_MIGRATE_LIGA=1`, тимчасовий `DEAI_HOME`): закон ізоляції
+  віддає гілку неявного `ctx`, тому шлях власника (НЕізольований: мігрований `git-sync` бере старе плоске дзеркало) покритий
+  юніт-тестом `RealPushNonIsolated` (справжній `git push` у локальний `origin`), а живий тест перевіряє лише відсутність нових тек.
+- **Змінені наявні тести** (по рядку): `tests/test_liga_migrate.py` — `_Stand.setUp` бачить один крок (Поправка 1);
+  `tests/test_supabase_comments.py` і `tests/test_git_sync_module.py` — нові версії модулів (1.2.0, 1.1.0) і налаштування `compat`;
+  `tests/connections-model.test.mjs`, `tests/connections-view.test.mjs`, `tests/vcs-client.test.mjs` — підписи `compat`/код `isolated`/
+  `isLegacyVcs` через ключ `compat`.
+
+**Мутаційні докази.** Кожна мутація — один рядок, `python3 -B`, файл відновлено, `sha256` збігся. Усі рядки нижче повторно прогнано
+виконавцем Task 8 (06.11.2026) проти `tests/test_liga_migrate_b.py` (157 тестів) — у ревʼю/коммітах окремих звітів із мутаціями
+нема, тож цифри цієї таблиці — з повторного прогону. Списки тестів не вичерпні (показано перші червоні; числа в дужках — оцінка).
+
+| Блок | Мутація | Червоніє |
+|---|---|---|
+| Функція каналу, гілка `compat` | у `comment_scheme_legacy` умова `compat_of(…) == COMPAT_COMMENT_LAYER` → `False` | `CommentChannel.test_builtin_with_compat_uses_the_legacy_scheme` |
+| Функція каналу, гілка `Implicit` | `comment_scheme_legacy` для `Implicit` повертає `False` | `CommentChannel.test_implicit_uses_the_legacy_scheme`, `ChannelCallSites.test_http_implicit_space_keeps_the_legacy_scheme`, `ProjectCommentsParity.test_label_and_legacy_scheme` |
+| Шість місць: `comments_route` | замість `comment_channel_of` — `channel_for` | `AfterMigrationParity4d3b` (3), `ChannelCallSites` (2), `ChannelGuard`, `SharedStateIsolationB` (кілька) |
+| Шість місць: `ProjectComments.channel` | замість функції — `channel_for` | `AfterMigrationParity4d3b` (3), `ChannelCallSites.test_in_process_sites_follow_compat`, `ProjectCommentsParity.test_inbox_matches_the_0_17_snapshot_on_a_migrated_view`, `ChannelGuard` |
+| Шість місць: `api/task`/`teams-mute` (спільний помічник) | замість функції — `channel_for` | `AfterMigrationParity4d3b` (3), `ChannelCallSites` (3), `ChannelGuard` |
+| Предикат текстів | `vcs_legacy_texts` лише `isinstance(prov, Implicit)` (решта → `False`) | `VcsLegacyTexts.test_matrix`, `…test_consumers_read_the_third_element_not_the_provider_type`, `VcsCompat` (4), `RealPushNonIsolated`, `SharedStateIsolationB.test_vcs_outside_isolation_takes_the_record` |
+| Накладка дзеркал | у `vcs_provider` прибрано `{**ctx, **_flat_mirror_overlay()}` | `VcsCompat.test_compat_overlays_flat_mirrors_on_the_module_ctx`, `…test_both_paths_take_the_overlay_from_one_helper`, `RealPushNonIsolated`, `AfterMigrationParity4d3b` (3) |
+| Гілка ізоляції `comments_route` | `and implicit.isolated()` → `and False` | `SharedStateIsolationB` (5: ctx, канал, без конфігу, HTTP-конфіг, публікація) |
+| Гілка ізоляції `vcs_provider` | те саме | `SharedStateIsolationB.test_vcs_isolated_takes_the_legacy_ctx` |
+| Відмова публікації | `publish_comments`: умова без `_shared_module` | `SharedStateIsolationB.test_publish_comments_refuses_shared_state_module_in_module_publish` |
+| Страж «Перевірки» модуля | `module_check_verdict`: `implicit.isolated()` → `False` | `SharedStateIsolationB.test_check_verdict_isolated_shared_record_touches_nothing` |
+| LIFO | прибрано перевірку `later is not None` у `_restore_locked` | `LifoRestoreTest.test_restore_a_refused_while_b_applied_and_writes_nothing`, `CliStepsTest.test_restore_finds_the_step_by_stamp_and_lifo_refusal_exits_1`, `StepBStartupTest.test_lifo_over_the_real_steps` |
+| Порядок кроків | `ALL_STEPS = (STEP_B, STEP_A)` | `StepBConstants`, `StepsDefaults` (2), `StepBStartupTest` (6), `AfterMigrationParity4d3b`, `IntegrationsOffTest`, `RealPushNonIsolated` |
+| Утримання раннього кроку | цикл `earlier` у `_plan` вимкнено | `LifoRestoreTest` (2), `StepBPlanTest.test_skip_held_by_an_earlier_step_has_its_own_reason`, `StepsTest.test_marks_are_independent`, `TwoStepsStartupTest.test_held_first_step_holds_the_second` |
+| `skip-integrations-off` | перевірку `integrations` вимкнено | `IntegrationsOffTest` (4) |
+| Запис кроку b | `shared_state` → `False` у записі `git-sync` | `StepBPlanTest.test_ready_comments_and_vcs_entries` |
+| Запис кроку b | з `git-sync` прибрано `compat` | `AfterMigrationParity4d3b` (3), `RealPushNonIsolated`, `StepBPlanTest` (2) |
+| Запис кроку b | з `supabase-comments` прибрано `compat` | `AfterMigrationParity4d3b` (3), `StepBPlanTest.test_ready_comments_and_vcs_entries` |
+| Охоронець `ChannelGuard` | прямий виклик `comment_channel(` у `ProjectComments.channel` | `ChannelGuard.test_no_direct_calls_outside_the_wrappers` |
+| Охоронець `TextPredicateGuard` | `isinstance(v[0], implicit.Implicit)` у споживачі тексту | `TextPredicateGuard.test_consumers_do_not_test_the_provider_type` |
+| Рядок «напрямки» в CLI | умова `step.tracks` → `True` | `StepBRunTest.test_no_secret_value_anywhere` |
+
+Не повторювались (мутації Task 5/6 із плану: `abort-*` не зупиняє наступні, спільний `STAMP_RE`, `_write_last` без злиття `steps`,
+`_load_manifest` ігнорує крок, `hold` усіх кроків, `status()` без `steps`, копіювання `ssh_key`/`host_ip`, `abort-provider`, порядок
+секрети/`space.json`, `tracks` у позначці b, `skip-nothing` блокує): таблиця їх не стверджує.

@@ -12,9 +12,9 @@ team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12
 role `tracker` and the module `jira-tracker`, 0.13.0) and stage 4c-3 (the Teams notifications as the role `notify` and the
 module `supabase-teams`, 0.14.0), stage 4d-1 (the profile of a task becomes the general tracks of a space, 0.15.0) and
 stage 4d-2 (the implicit provider instead of the literal `'legacy'`, the layer-off seam and the isolation law, 0.16.0) and
-stage 4d-3a (the migration of the LIGA space: explicit tracks and the roles `tracker`, `dashboard`, `notify`, 0.17.0) — see
-*Status* at the end.
-Next: stages 4d-3b (`comments`, `vcs`, 0.18.0) and 4d-3c (`publish`, 0.19.0), which finish the explicit LIGA modules (the API value
+stage 4d-3a (the migration of the LIGA space: explicit tracks and the roles `tracker`, `dashboard`, `notify`, 0.17.0) and stage
+4d-3b (the second migration step: the roles `comments` and `vcs` of LIGA as explicit modules, 0.18.0) — see *Status* at the end.
+Next: stage 4d-3c (`publish`, 0.19.0), which finishes the explicit LIGA modules (the API value
 `'legacy'` goes there); stage 4d ends with 4d-4 (0.20.0), when the original setup becomes an ordinary space.
 
 ## Goal
@@ -123,7 +123,7 @@ canvas for their workflow without touching the core.
        decision 05.11.2026), because the roles `comments`, `vcs` and `publish` of LIGA do things that the built-in modules cannot
        express through `space.json` yet:
        - ✅ **4d-3a** (0.17.0) — the mechanism, the tracks and the roles `tracker`, `dashboard`, `notify`;
-       - **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
+       - ✅ **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
        - **4d-3c** (0.19.0) — `publish`;
      - **4d-4** (0.20.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
@@ -581,14 +581,58 @@ of 4d-3. What is built:
   `tests/live/liga-migrate.test.mjs`; no network. The goldens are green without a re-shoot.
 - **Left for 4d-3b / 4d-3c / 4d-4:** see below.
 
+### Stage 4d-3b — `comments` and `vcs` of the LIGA space (0.18.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-06-liga-migration-b-design.md`
+(and its «Implementation notes»); plan: `docs/superpowers/plans/2026-11-06-liga-migration-b.md`. The second of the three
+sub-releases of 4d-3. What is built:
+
+- **One comment channel function.** `deai_modules.comment_channel_of(space, prov, task, tid, internal=False)`: the implicit provider
+  or a **built-in** `supabase-comments` with `compat == "comment-layer"` gives the old scheme (`comment_project` of the task, or
+  `dc/<task>`, plus `/internal`), any other provider `channel_for` (`deai/<space>/<task>`). All six places go through it:
+  `comments_route` (hence `/commented`, `/api/comment-config`, `publish_comments`), `ProjectComments.channel`, `GET /api/task`,
+  `GET` and `POST /api/teams-mute`, the counters of the dashboard (the callback `channel_of` of `dashboard.sync`). `compat_of`
+  is total; the old formula lives once, in `legacy_comment_channel`. An AST guard forbids a direct call elsewhere.
+- **`compat` of `git-sync`** (`""` or `design-canvas`) and **one predicate of the legacy texts**, `serve.vcs_legacy_texts(prov,
+  space)`: the implicit provider or a built-in `git-sync` with `design-canvas`. `vcs_provider` computes it once and every consumer
+  reads it from the third element of the tuple; for `design-canvas` the core lays `cache_dir` (the old mirrors folder) and
+  `mirror_flat` over the module ctx (the module knows neither `ROOT` nor `DC_MIRRORS_DIR`). A guard forbids `isinstance(...,
+  Implicit)` for decisions about texts or channels outside the two predicates.
+- **The key `compat` of the space object** (`/api/spaces`): `{role: value}` for explicit built-in modules with a non-empty `compat`,
+  absent otherwise; `isLegacyVcs` reads it, so the «New task» form of a migrated LIGA keeps hiding the Repository field.
+- **The isolation law for `comments` and `vcs`.** A built-in record with `shared_state` in an isolated run builds its ctx like the
+  implicit path (`_comments_legacy_ctx()` / `_vcs_legacy_ctx()`; the key from the root of the tasks file); the condition is
+  `_builtin_shared`, only in the branches of `comments_route` and `vcs_provider`. `publish_comments(module_publish=True)` refuses a
+  comments record with `shared_state` (lifted in 4d-3c). The module «Check» answers `isolated` for a `shared_state` record in an
+  isolated run and reads no secrets (all five roles; it closes a gap of 0.17).
+- **The migration is an ordered list of steps** (`STEPS`, each a `Step(mark, roles, tracks, suffix, stamp_re)`): its own mark,
+  backup, restore. `startup()` and the CLI iterate it; `abort-*` and `skip-busy` stop the later steps at that start, a held earlier
+  step holds the later ones (`skip-held`), the other skips do not block. `restore` is **LIFO**: `refuse-later-applied` while a later
+  step is applied. `last.json` keeps its shape and adds `step` and `steps`. `skip-integrations-off` (a LIGA with integrations off
+  is not migrated, for every step). `plan/run/restore/status` without a step still mean 4d-3a.
+- **The step `liga-4d3b`** writes `supabase-comments` (`url`, `shots_bucket: overview-thumbs`, `compat: comment-layer`, the key as a
+  copy in `secrets.json`) and `git-sync` (`branch`, `path`, `autosync`, `compat: design-canvas`), both `shared_state: true`; no
+  `ssh_key`/`host_ip` (the root of `tasks.json` still gives them; 4d-4). Codes of the roles: `no-supabase`, `bad-url`,
+  `module-present`; the check `abort-provider` runs on the calculated `space.json` in memory.
+- **Unchanged:** `publish` is still implicit (`'legacy'` in `capabilities`); the implicit path stays as a fallback until 4d-4.
+- **Known limits:** a downgrade to 0.17 needs `restore <stamp-b> --hold` (0.17 ignores `compat`); a partial migration is final;
+  LIGA has no in-UI entry point to the «New task» form (pre-existing); no `flock` on Windows; `skip-path-in-git` / `skip-no-path`.
+  The full list and the codes are in the CHANGELOG, `[0.18.0]`.
+- **Tested** against the snapshot of 0.17.0 (`tests/fixtures/liga-migration/before-4d3b.json`, `tests/make_before_4d3b.py`),
+  `tests/test_liga_migrate_b.py` (`CommentChannel`, `ChannelGuard`, `TextPredicateGuard`, `StepsTest`, `LifoRestoreTest`,
+  `StepBPlanTest`, `StepBRunTest`, `AfterMigrationParity4d3b`, …), the live test `tests/live/liga-migrate.test.mjs`; no network.
+  The goldens are green without a re-shoot.
+- **Left for 4d-3c / 4d-4:** see below.
+
 ### What stays for later
 
-- **Left for 4d-3b / 4d-3c / 4d-4** (stage 4d; 4d-1, 4d-2 and 4d-3a are done; what stays of the literal `'legacy'` — the API
-  value, the build manifest, the id of the implicit space — goes in 4d-3b / 4d-3c and 4d-4):
-  - **4d-3b** (0.18.0): the roles `comments` and `vcs` of LIGA as explicit modules;
-  - **4d-3c** (0.19.0): the role `publish` of LIGA as an explicit module;
+- **Left for 4d-3c / 4d-4** (stage 4d; 4d-1, 4d-2, 4d-3a and 4d-3b are done; what stays of the literal `'legacy'` — the API
+  value of `publish`, the build manifest, the id of the implicit space — goes in 4d-3c and 4d-4):
+  - **4d-3c** (0.19.0): the role `publish` of LIGA as an explicit module (and the lift of the refusal of `publish_comments` for
+    `shared_state` records);
   - **4d-4** (0.20.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
-    `profile_repos`, and the `profile`-only look of `_liga_flow`. The tracks that 4d-3a could not migrate move here, so
+    `profile_repos`, and the `profile`-only look of `_liga_flow`; the move of `gitlab_ssh_key` / `gitlab_host_ip` from the root of
+    `tasks.json` into the settings of `git-sync` and the removal of the originals (the copied secrets stay until then). The tracks that 4d-3a could not migrate move here, so
     `tracks._LEGACY_LABELS`, the default `united` and the adapter of 4d-1 go in 4d-4.
   Not planned in 4d-1: a UI to edit tracks, a track choice in the «New task» dialog.
 
