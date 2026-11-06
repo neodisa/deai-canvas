@@ -1240,6 +1240,96 @@ class SharedStateIsolationB(_VcsStand):
                 pc.pins(cfg['tasks']['a-1'], 'a-1')
             self.assertEqual(call.call_count, 1)
 
+    # ---- ревʼю: споживачі в ізольованому прогоні
+    def test_isolated_publish_comments_ships_the_tasks_root_config(self):
+        """`_publish` (module_publish=False) під ізоляцією: адреса й ключ — з кореня файла задач, не з `secrets.json` запису."""
+        rig, space, cfg = self.cstand()
+        with self._iso(rig, 0):
+            self.dm.reset_caches()
+            res, warn = self.serve.publish_comments(space, cfg['tasks']['a-1'], 'a-1', module_publish=False)
+        self.assertIsNone(warn)
+        self.assertEqual((res['config']['url'], res['config']['key']), (self.mb.SB_URL, self.mb.SB_KEY))
+        self.assertNotIn(OWN_KEY, json.dumps(res['config']))
+        self.assertEqual(res['channel'], 'liga-shared')
+
+    def test_isolated_comment_config_over_http_returns_the_root_config(self):
+        mb, serve = self.mb, self.serve
+        rig, _space, _cfg = self.cstand()
+        env = {'HOME': rig.home, 'DEAI_HOME': rig.deai, 'DC_TASKS_FILE': rig.tasks_path, 'DC_NO_OVERVIEW': '1', **mb._env_extra(rig)}
+        with self.mock.patch.dict(os.environ, env), self.mock.patch.object(serve.urllib.request, 'urlopen', mb.NoNet()):
+            self.dm.reset_caches()
+            with mb.Server() as srv:
+                st, body = mb._call(srv, 'GET', '/api/comment-config?ch=project&it=it1', task='a-1')
+        self.assertEqual(st, 200)
+        self.assertEqual(body['channel'], 'liga-shared')
+        self.assertEqual((body['config']['url'], body['config']['key']), (mb.SB_URL, mb.SB_KEY))
+        self.assertNotIn(OWN_KEY, json.dumps(body))
+
+    # ---- ревʼю: лише вбудовані модулі
+    def test_shared_module_is_builtin_only(self):
+        """Свій модуль (`origin == 'space'`) із вручну виставленим `shared_state` не дістає ключ кореня задач (спека §5)."""
+        rig, space, _cfg = self.cstand()
+        prov = self.mock.Mock(spec=self.dm.Module)
+        prov.id, prov.origin = COMMENTS_ID, 'space'
+        self.assertFalse(self.serve._shared_module(space, prov))
+        prov.origin = 'builtin'
+        self.assertTrue(self.serve._shared_module(space, prov))
+        marker = {'marker': 'module-ctx'}
+        prov.origin = 'space'
+        with self._iso(rig, 0), self.mock.patch.object(self.dm, 'module_ctx', return_value=marker), \
+                self.mock.patch.object(self.serve, '_comments_legacy_ctx', side_effect=AssertionError('root key')):
+            self.assertIs(self.serve.comments_route(space, prov)[1], marker)
+
+    def test_vcs_provider_of_own_module_ignores_isolation(self):
+        rig, _space, _cfg = self.vstand(compat=None)
+        prov = self.mock.Mock(spec=self.dm.Module)
+        prov.id, prov.origin = VCS_ID, 'space'
+        marker = {'marker': 'module-ctx'}
+        with self._iso(rig, 0), self.mock.patch.object(self.dm, 'provider', return_value=prov), \
+                self.mock.patch.object(self.dm, 'module_ctx', return_value=marker), \
+                self.mock.patch.object(self.serve, '_vcs_legacy_ctx', side_effect=AssertionError('legacy')):
+            self.assertIs(self.serve.vcs_provider()[1], marker)
+
+    # ---- ревʼю: перевірка модуля (`check`) не читає секрети спільного стану в ізольованому прогоні
+    CHECK_MODULES = ('supabase-comments', 'git-sync', 'supabase-dashboard', 'jira-tracker', 'supabase-teams')
+
+    def check_stand(self, mid, shared):
+        rig, space, _cfg = self.stand(module=False)
+        rec = {'enabled': True, 'settings': {}}
+        if shared is not None:
+            rec['shared_state'] = shared
+        self.mb._write(os.path.join(rig.space_dir, 'space.json'), {'modules': {mid: rec}})
+        self.mb._write(os.path.join(rig.deai, 'secrets.json'), {self.mb.SPACE_ID: {mid: {'key': OWN_KEY}}})
+        return rig, space
+
+    def test_check_verdict_isolated_shared_record_touches_nothing(self):
+        dm, serve = self.dm, self.serve
+        for mid in self.CHECK_MODULES:
+            rig, space = self.check_stand(mid, True)
+            for which in (0, 1):
+                with self._iso(rig, which), self.mock.patch.object(serve.urllib.request, 'urlopen', self.mb.NoNet()), \
+                        self.mock.patch.object(dm, 'read_secrets', side_effect=AssertionError('secrets read')) as rs, \
+                        self.mock.patch.object(dm, 'call', side_effect=AssertionError('module called')) as call, \
+                        self.mock.patch.object(dm, '_remember', side_effect=AssertionError('last_check overwritten')):
+                    v = serve.module_check_verdict(space, mid)
+                self.assertEqual(v['ok'], False, (mid, which))
+                self.assertEqual(v['error'], 'isolated', (mid, which))
+                self.assertTrue(v['detail'], (mid, which))
+                self.assertEqual((rs.call_count, call.call_count), (0, 0), (mid, which))
+
+    def test_check_verdict_outside_isolation_or_without_shared_state_is_the_normal_path(self):
+        dm, serve = self.dm, self.serve
+        for mid in self.CHECK_MODULES:
+            for shared, iso in ((True, False), (None, True), (False, True), ('true', True)):
+                rig, space = self.check_stand(mid, shared)
+                ctx = self._iso(rig, 0) if iso else self.pinned(rig)
+                with ctx, self.mock.patch.object(dm, '_ctx', return_value={'secrets': {}}), \
+                        self.mock.patch.object(dm, 'call', return_value={'ok': True}) as call:
+                    dm.reset_caches()
+                    v = serve.module_check_verdict(space, mid)
+                self.assertEqual(v, {'ok': True}, (mid, shared, iso))
+                self.assertEqual(call.call_count, 1, (mid, shared, iso))
+
 
 if __name__ == '__main__':
     unittest.main()

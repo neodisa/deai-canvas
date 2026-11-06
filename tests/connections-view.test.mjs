@@ -658,3 +658,9 @@ test("панель git-sync: підписи шести полів — зі сл�
   assert.match(en, /Send after every agent reply/);
   assert.doesNotMatch(en, /[а-яіїєґ]/i, "англійська панель git-sync без кирилиці (мова автора модуля сюди не просочується)");
 });
+
+test("вердикт «isolated» (4d-3b): перевірку спільного стану в ізольованому прогоні не виконано — свій текст UK/EN, не «Модуль упав»", () => {
+  assert.deepEqual(verdictText({ ok: false, error: "isolated", detail: "x" }), { key: "cnErrIsolated", detail: "x" });
+  assert.equal(refusalView({ code: "isolated" }).key, "cnErrIsolated");
+  for (const lang of ["uk", "en"]) assert.ok(typeof DICT[lang].cnErrIsolated === "string" && DICT[lang].cnErrIsolated, lang);
+});

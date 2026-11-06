@@ -210,6 +210,8 @@ const CHECK_KEYS = new Map([
   /* Роль `vcs` (4a): коди перевірки `git-sync` і відмов синку. */
   ["vcs-offline", "cnErrVcsOffline"], ["vcs-auth", "cnErrVcsAuth"], ["vcs-bad-target", "cnErrVcsTarget"],
   ["vcs-busy", "cnErrVcsBusy"], ["vcs-error", "cnErrVcsError"],
+  /* Закон ізоляції (4d-3b): запис зі спільним станом ЛІГИ в ізольованому прогоні не перевіряється (сервер не читає секрети й не кличе модуль). */
+  ["isolated", "cnErrIsolated"],
 ]);
 
 /**

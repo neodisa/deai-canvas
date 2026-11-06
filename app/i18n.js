@@ -1010,6 +1010,7 @@ const UK = {
   cnErrVcsTarget: 'Адреса, гілка чи тека не підходять.',
   cnErrVcsBusy: 'Синхронізація вже йде — перевір за хвилину.',
   cnErrVcsError: 'Git відмовив.',
+  cnErrIsolated: 'Ізольований прогін: перевірку спільного стану ЛІГИ не виконано.',
   cnErrGeneric: 'Перевірка не пройшла.',
   // Відмови HTTP на запис (`module-enable|settings|disable`): нічого не збережено.
   cnRefRoleTaken: 'Роль уже зайнята іншим модулем — оновіть сторінку й спробуйте ще раз.',
@@ -1968,6 +1969,7 @@ const EN = {
   cnErrVcsTarget: 'The address, branch or folder is not valid.',
   cnErrVcsBusy: 'A sync is running — check again in a minute.',
   cnErrVcsError: 'Git refused.',
+  cnErrIsolated: 'Isolated run: the shared-state check was not performed.',
   cnErrGeneric: 'The check failed.',
   // HTTP refusals on a write (`module-enable|settings|disable`): nothing was saved.
   cnRefRoleTaken: 'Another module already holds this role — reload the page and try again.',

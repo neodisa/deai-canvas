@@ -1984,7 +1984,10 @@ def _team_fetch(space, prov):
 def _shared_module(space, prov):
     """4d-3a: явний `Module` із `shared_state: true` — спільний стан ЛІГИ: ролі `dashboard`/`tracker`/`notify` і синк ведуть його за
     законом ізоляції (`implicit.route`), як `Implicit`, але живий виклик — модулем із `module_ctx`, а не легасі-збирачем."""
-    return isinstance(prov, deai_modules.Module) and deai_modules.shared_state(space, prov.id)
+    # ⛔ Лише ВБУДОВАНІ (4d-3b, ревʼю): свій модуль із вручну виставленим `shared_state` не дістає ні ключ кореня задач (закон
+    # ізоляції `comments_route`/`vcs_provider`), ні відмову публікації. Записи 4d-3a — вбудовані, їхня поведінка не змінюється.
+    return (isinstance(prov, deai_modules.Module) and getattr(prov, 'origin', 'builtin') == 'builtin'
+            and deai_modules.shared_state(space, prov.id))
 
 
 def team_resolve():
@@ -5395,7 +5398,16 @@ def module_entry(space, mid):
 
 def module_check_verdict(space, mid):
     """`deai_modules.check` з усіма відмовами, крім `CHECK_NOT_A_VERDICT`, перетвореними на вердикт
-    `{ok: false, error, detail}` — рівно той, що `check` запамʼятав для `last_check` (там, де запамʼятав). Решта летить."""
+    `{ok: false, error, detail}` — рівно той, що `check` запамʼятав для `last_check` (там, де запамʼятав). Решта летить.
+
+    ⛔ Закон ізоляції (4d-3b, ревʼю): запис із `shared_state` в ізольованому прогоні (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`) НЕ
+    перевіряється — ні секрети (`secrets.json` справжнього `DEAI_HOME`), ні код модуля (мережа Supabase/ls-remote). Вердикт
+    `isolated`; `last_check` НЕ перезаписуємо (`deai_modules.check` не кличемо): це не результат перевірки модуля, і стара
+    правдива відповідь не мусить затертись «відмовою», якої модуль не давав. Усі п'ять ролей (comments/vcs/dashboard/tracker/
+    notify): сюди ходять і `POST /api/module-check`, і хвіст `module_write`. Будь-якого походження — відмова безпечна."""
+    if implicit.isolated() and deai_modules.shared_state(space, mid):
+        return {'ok': False, 'error': 'isolated',
+                'detail': 'Перевірка спільного стану в ізольованому прогоні не виконується.'}
     try:
         return deai_modules.check(space, mid)
     except deai_modules.ModuleError as e:
