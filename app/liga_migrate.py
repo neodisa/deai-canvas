@@ -819,6 +819,9 @@ def status_text(st):
     if last:
         if last.get('status'):
             lines.append('  останній звіт: %s (%s)' % (last.get('status'), last.get('at')))
+        unmig = last.get('skipped')
+        if isinstance(unmig, dict) and unmig:
+            lines.append('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(unmig.items())))
         skip = last.get('skip')
         if isinstance(skip, dict):
             lines.append('  пропущено: %s — %s' % (skip.get('status'), skip.get('reason')))
@@ -858,6 +861,11 @@ def startup():
             print('liga-4d3a: %s — %s' % (st, info.get('reason') or ''), file=sys.stderr)
             if info.get('hint'):
                 print('  ' + info['hint'], file=sys.stderr)
+            # ⛔ Часткова міграція мовчить найгірше: позначку записано, а роль (напр. трекер без облікових у оточенні, коли
+            # старт — з Dock/PWA) лишилась неявною й не повториться. Рядок: роль і КОД причини, без значень.
+            skipped = info.get('skipped')
+            if isinstance(skipped, dict) and skipped:
+                print('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(skipped.items())), file=sys.stderr)
         return st
     except Exception as e:  # noqa: BLE001
         try:

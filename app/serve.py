@@ -7617,9 +7617,13 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if prov is None:
             return
-        legacy = isinstance(prov, implicit.Implicit)
+        legacy = isinstance(prov, implicit.Implicit)     # постачальник неявний: гейти ізоляції/конфігу нижче — саме про нього
         try:
-            shared = (not legacy) and _shared_module(spaces.active_space(), prov)
+            space = spaces.active_space()
+            shared = (not legacy) and _shared_module(space, prov)
+            # ⛔ «Простір ЛІГА» (лог `OVERVIEW_LOG`, крок реєстру GitLab) — НЕ «постачальник неявний»: після міграції 4d-3a дашборд
+            # ЛІГИ — `Module` із `shared_state`, а запис реєстру лишається з `legacy: True`.
+            liga = legacy or bool(space and space.get('legacy') is True)
         except Exception:  # noqa: BLE001 — простір не вирішився: як і вище, пушити нікуди
             return
         if shared and implicit.isolated():
@@ -7633,7 +7637,7 @@ class Handler(SimpleHTTPRequestHandler):
             if sb_url is None:
                 return                  # конфігу установки нема — пушити нікуди (і лога не відкриваємо)
         key, target = _overview_target()
-        _overview_launch(key, legacy, target)
+        _overview_launch(key, liga, target)
 
     # ---------- Реестр задач (интеграция dev-pipeline) ----------
 

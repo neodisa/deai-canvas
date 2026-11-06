@@ -110,15 +110,18 @@ def _legacy_config():
 
 def _target(sp):
     """`(module, ctx, legacy)` постачальника ролі `dashboard` простору `sp`; `(None, None, False)` — постачальника нема.
-    неявний постачальник (`Implicit`, ЛІГА) — вбудований модуль із `ctx` з конфігу установки (`dashboard.legacy_ctx`, НЕ `module_ctx`: у ЛІГИ нема
-    `space.json`/`secrets.json`); інакше `module_ctx` простору."""
+    неявний постачальник (`Implicit`) — вбудований модуль із `ctx` з конфігу установки (`dashboard.legacy_ctx`, НЕ `module_ctx`: у нього нема
+    `space.json`/`secrets.json`); інакше `module_ctx` простору. ⛔ `legacy` («це простір ЛІГА: є крок реєстру GitLab») — НЕ «постачальник
+    неявний»: після міграції 4d-3a дашборд ЛІГИ — `Module` із `shared_state`, а простір лишається ЛІГОЮ (запис реєстру `legacy: True`).
+    Тож ЛІГА = неявний постачальник АБО запис із `legacy is True`; вибір збирача `ctx` — і далі за типом постачальника."""
     try:
         prov = deai_modules.provider("dashboard", sp)
         if prov is None:
             return None, None, False
+        liga = isinstance(prov, implicit.Implicit) or sp.get("legacy") is True
         if isinstance(prov, implicit.Implicit):
-            return dashboard.legacy_module(), dashboard.legacy_ctx(*_legacy_config(), space_id=sp["id"]), True
-        return prov, deai_modules.module_ctx(sp, prov), False
+            return dashboard.legacy_module(), dashboard.legacy_ctx(*_legacy_config(), space_id=sp["id"]), liga
+        return prov, deai_modules.module_ctx(sp, prov), liga
     except deai_modules.ModuleError as e:
         raise CliError("⛔ overview: %s" % (e.message or e.code))
     except spaces.SpacesError as e:

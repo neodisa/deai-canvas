@@ -468,5 +468,65 @@ class TestFixturesNeverReachDashboard(unittest.TestCase):
         self.assertIn("«nova»", out)
 
 
+class TestMigratedLigaIsStillLiga(unittest.TestCase):
+    """4d-3a (фінальне ревʼю): «простір ЛІГА» = запис реєстру з `legacy: True`, а не «постачальник неявний». Після міграції дашборд ЛІГИ —
+    явний `Module` із `shared_state`, і крок реєстру GitLab (`discover`) мусить вижити. Звичайний простір — без змін."""
+
+    def _run(self, fn, sp, **kw):
+        module = FakeModule({"push": lambda ctx, cards, mode: {"ok": 0, "failed": {}}})
+        calls = {"discover": 0, "sync": None, "registry": 0}
+
+        def discover(cfg):
+            calls["discover"] += 1
+            return {}
+
+        def sync(cfg, mod, ctx, **k):
+            calls["sync"] = k
+            if callable(k.get("discover")):          # виклик ДО виходу з підмін: інакше піде справжній discover_projects
+                k["discover"]()
+
+        def push_registry(mod, ctx, reg, path, log=print, call=None):
+            calls["registry"] += 1
+            return {}, 0, {}
+        with contextlib.ExitStack() as st:
+            for pt in (mock.patch.object(ov, "_space", lambda sid: sp),
+                       mock.patch.object(ov.deai_modules, "provider", lambda role, space=None: module),
+                       mock.patch.object(ov.deai_modules, "module_ctx", lambda space, prov: {"secrets": {}}),
+                       mock.patch.object(ov, "load_tasks_file", lambda path=None: {"tasks": {}}),
+                       mock.patch.object(ov, "discover_projects", discover),
+                       mock.patch.object(ov, "_statuses", lambda sp, log=print: None),
+                       mock.patch.object(dashboard, "sync", sync),
+                       mock.patch.object(dashboard, "push_registry", push_registry)):
+                st.enter_context(pt)
+            with contextlib.redirect_stdout(io.StringIO()):
+                fn(**kw)
+        return calls
+
+    LIGA = {"id": "legacy", "path": "/x", "legacy": True, "integrations": True}
+    PLAIN = {"id": "alpha", "path": "/y", "legacy": False, "integrations": False}
+
+    def test_target_migrated_liga_keeps_legacy_flag_but_uses_module_ctx(self):
+        module = FakeModule({})
+        with mock.patch.object(ov.deai_modules, "provider", lambda role, space=None: module), \
+                mock.patch.object(ov.deai_modules, "module_ctx", lambda space, prov: {"marker": "module-ctx"}):
+            m, ctx, legacy = ov._target(self.LIGA)
+            self.assertEqual((m, ctx, legacy), (module, {"marker": "module-ctx"}, True))
+            self.assertIs(ov._target(self.PLAIN)[2], False)
+
+    def test_sync_migrated_liga_still_discovers(self):
+        calls = self._run(ov.cmd_sync, self.LIGA)
+        self.assertTrue(callable(calls["sync"]["discover"]))
+        self.assertEqual(calls["discover"], 1)
+
+    def test_sync_ordinary_space_has_no_discover(self):
+        self.assertIsNone(self._run(ov.cmd_sync, self.PLAIN)["sync"]["discover"])
+
+    def test_discover_works_for_migrated_liga_and_refuses_ordinary_space(self):
+        calls = self._run(ov.cmd_discover, self.LIGA)
+        self.assertEqual((calls["discover"], calls["registry"]), (1, 1))
+        with self.assertRaises(ov.CliError):
+            self._run(ov.cmd_discover, self.PLAIN)
+
+
 if __name__ == "__main__":
     unittest.main()
