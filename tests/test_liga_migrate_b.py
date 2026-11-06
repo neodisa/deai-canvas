@@ -1817,8 +1817,9 @@ class CliStepsTest(_TwoSteps):
         self.assertEqual(code, 0)
         a, b = self.stamps()
         self.assertLess(out.index('liga-4d3a: done'), out.index('liga-4d3b: done'))
-        self.assertIn('restore %s [--hold]' % a, out)
+        self.assertNotIn('restore %s [--hold]' % a, out)           # 4d-3c ревʼю I2: LIFO — підказка лише для найпізнішого кроку
         self.assertIn('restore %s [--hold]' % b, out)
+        self.assertIn('бекап: %s' % a, out)
         code, out, _ = self.cli('status')
         self.assertLess(out.index('Міграція ЛІГИ (liga-4d3a)'), out.index('Міграція ЛІГИ (liga-4d3b)'))
         code, out, _ = self.cli('run')

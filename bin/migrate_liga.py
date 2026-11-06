@@ -38,6 +38,7 @@ def main(argv=None):
         return code
     if a.cmd == 'run':
         code = 0
+        stamps_done = []
         for step in liga_migrate.STEPS:
             st, info = liga_migrate._run(None, step)
             print('%s: %s' % (step.mark, st))
@@ -47,11 +48,15 @@ def main(argv=None):
             if st == 'done':
                 tr = ('; напрямки: ' + ('так' if info.get('tracks') else 'ні')) if step.tracks else ''     # лише крок з напрямками
                 print('  ролі: %s%s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', tr, info.get('backup')))
-                print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % info.get('backup'))
+                stamps_done.append(info.get('backup'))
             if st not in liga_migrate.BENIGN:
                 code = 1
             if st.startswith('abort-') or st == 'skip-busy':     # як на старті: `abort-*`/`skip-busy` зупиняють наступні кроки
                 break
+        if stamps_done:                                          # ⛔ LIFO: підказка відкату — одна, для найпізнішого виконаного кроку
+            print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % stamps_done[-1])
+            if len(stamps_done) > 1:
+                print('  раніші кроки (%s) — лише після відкату пізніших, у зворотному порядку' % ', '.join(stamps_done[:-1]))
         return code
     step = liga_migrate.step_of_stamp(a.stamp) or liga_migrate.ALL_STEPS[0]     # крок визначає імʼя бекапу
     st, info = liga_migrate._restore(a.stamp, hold=a.hold)

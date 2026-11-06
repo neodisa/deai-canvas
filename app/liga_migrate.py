@@ -7,6 +7,7 @@
 4d-3b (0.18.0): модуль — ВПОРЯДКОВАНИЙ СПИСОК кроків (`Step`, `ALL_STEPS`/`STEPS`): свій бекап, позначка й відкат на крок; `plan/run/
 restore/status` без аргументу `step` — крок 4d-3a; `run_all()`/`startup()`/CLI ідуть по `STEPS` (`abort-*` зупиняє наступні, `skip-*` — ні);
 відкат LIFO (`refuse-later-applied`); `last.json` — верхній рівень як у 4d-3a + `step`, і мапа `steps`. Нижче документація 4d-3a.
+4d-3c (0.19.0): кроків ТРИ (`liga-4d3a`, `liga-4d3b`, `liga-4d3c`); відкат і підказки — від найпізнішого застосованого до раннього.
 
 `plan(home=None)` → словник:
     status        'ready' | 'skip-*' | 'abort-*' (коди — `SKIP_CODES`, `ABORT_CODES`). 'skip-nothing' — жодна роль і не напрямки не
@@ -243,12 +244,14 @@ def _entries_c(cfg, present):
 def _publisher_present(space, mods):
     """Чи роль `publish` на ПОТОЧНОМУ `space.json` (`mods` — сирі модулі) уже веде модуль (`Module`, не `Implicit`) — не `vercel-publish`
     (той — `module-present`), а ІНШИЙ явно ввімкнений (напр. `static-publish`): два явні модулі публікації розв'язуються за id
-    (`static-publish` < `vercel-publish`), тож без цього коду крок дав би вічний `abort-provider`. Будь-який виняток (зламаний СВІЙ
-    модуль → `ModuleError`) — «не присутній»: далі той самий виклик на розрахованому `space.json` теж кине → `abort-provider`."""
+    (`static-publish` < `vercel-publish`), тож без цього коду крок дав би вічний `abort-provider`. Лише `ModuleError` (зламаний СВІЙ
+    модуль) — «не присутній»: далі той самий виклик на розрахованому `space.json` теж кине → `abort-provider`. ⛔ Інший виняток
+    (напр. `OSError` при скануванні каталогу) НЕ ковтаємо: «не присутній» перезаписав би робочий СВІЙ видавець, чий id сортується
+    після `vercel-publish`; виняток іде до `plan()` → `abort-internal`, нічого не пишемо."""
     try:
         prov = deai_modules._provider_for('publish', space, explicit_override=deai_modules._normalize(mods))
         return isinstance(prov, deai_modules.Module)
-    except Exception:  # noqa: BLE001
+    except deai_modules.ModuleError:
         return False
 
 
@@ -851,7 +854,7 @@ def _restore(stamp, hold=False, home=None):
     `secrets.json` (інші простори/модулі, додані після міграції) ЗАВЖДИ лишаються; файл повертається побайтно, коли чужого
     вмісту не змінилось, інакше записується злиттям. Старий `tasks.json` і `spaces.json` не чіпаємо.
     ⛔ ПЕРЕД записом поточний `space.json` і ліговий шматок секретів кладуться в `backups/<бекап>-pre-restore/` (правки після
-    міграції не губляться). `hold=True` дописує `migrations.liga-4d3a.held` — наступний старт не мігрує. Невідоме/підроблене імʼя —
+    міграції не губляться). `hold=True` дописує `migrations.<позначка кроку цього бекапу>.held` (лише його; ранній `held` тримає й наступні) — наступний старт не мігрує. Невідоме/підроблене імʼя —
     відмова (`refuse-stamp`/`refuse-tampered`/`refuse-no-liga`), нічого не пишемо. Увесь відкат — під міжпроцесним замком
     (`skip-busy`). Повертає `(статус, підсумок)`: статус `restored`, відмова, `skip-busy` чи `abort-restore`."""
     try:
@@ -1066,6 +1069,8 @@ def startup():
                 print('міграція ЛІГИ: DC_MIGRATE_LIGA=1 разом зі справжнім DEAI_HOME (~/.deai): відмова, міграцію не запущено', file=sys.stderr)
                 return 'refuse-real-home'
 
+        stamps_done = []                                                     # бекапи кроків, виконаних на цьому старті (у порядку a, b, c)
+
         def announce(mark, st, info):
             done.append(st)
             if st not in ('skip-layer-off', 'skip-done', 'skip-integrations-off') and not st.startswith('skip-no'):
@@ -1076,12 +1081,20 @@ def startup():
                 # ⛔ Часткова міграція мовчить найгірше: позначку записано, а роль (напр. трекер без облікових у оточенні, коли
                 # старт — з Dock/PWA) лишилась неявною й не повториться. Рядок: роль і КОД причини, без значень.
                 stamp = info.get('backup')
-                if st == 'done' and step_of_stamp(stamp):                    # лише імʼя бекапу (без шляху до дому) і як повернути
-                    print('  бекап: %s; відкат: bin/migrate_liga.py restore %s --hold' % (stamp, stamp), file=sys.stderr)
+                if st == 'done' and step_of_stamp(stamp):                    # лише імʼя бекапу (без шляху до дому)
+                    stamps_done.append(stamp)
+                    print('  бекап: %s' % stamp, file=sys.stderr)
                 skipped = info.get('skipped')
                 if isinstance(skipped, dict) and skipped:
                     print('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(skipped.items())), file=sys.stderr)
-        run_all(None, on_result=announce)
+        try:
+            run_all(None, on_result=announce)
+        finally:
+            # ⛔ LIFO: підказка відкату — ОДНА, для найпізнішого виконаного кроку (відкат раннього при застосованому пізнішому — відмова).
+            if stamps_done:
+                print('  відкат: bin/migrate_liga.py restore %s --hold' % stamps_done[-1], file=sys.stderr)
+                if len(stamps_done) > 1:
+                    print('  раніші кроки (%s) — лише після відкату пізніших, у зворотному порядку' % ', '.join(stamps_done[:-1]), file=sys.stderr)
         # abort не маскуємо пізнішим успіхом: перший `abort-*`, інакше перший не-`skip-*`, інакше перший
         return (next((s for s in done if s.startswith('abort-')), None) or next((s for s in done if not s.startswith('skip-')), None)
                 or (done[0] if done else None))

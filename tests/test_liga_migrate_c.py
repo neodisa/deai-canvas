@@ -1049,8 +1049,34 @@ class PublisherPresent(_StepC):
         self.assertIs(present(sp, {'static-publish': {'enabled': True, 'settings': {}}}), True)
         self.assertIs(present(sp, {'static-publish': {'enabled': False, 'settings': {}}}), False)
         self.assertIs(present(sp, {'my-pub': {'enabled': True, 'roles': ['publish'], 'settings': {}}}), False)   # ModuleError → False
-        with self.mock.patch.object(self.dm, '_provider_for', side_effect=RuntimeError('boom')):
-            self.assertIs(present(sp, {'static-publish': {'enabled': True, 'settings': {}}}), False)
+        with self.mock.patch.object(self.dm, '_provider_for', side_effect=self.dm.ModuleError('module-error', message='x')):
+            self.assertIs(present(sp, {'static-publish': {'enabled': True, 'settings': {}}}), False)       # лише ModuleError → «не присутній»
+
+    def test_other_exception_is_not_swallowed_and_nothing_is_written(self):
+        """Ревʼю I1: тимчасовий збій (напр. `OSError` у каталозі) не має робити «не присутній» і перезаписувати робочого видавця."""
+        self.put_other({'static-publish': {'enabled': True, 'settings': {}}})
+        with self.mock.patch.object(self.dm, '_provider_for', side_effect=OSError('boom')):
+            with self.assertRaises(OSError):
+                self.lm._publisher_present(self.liga_space(), {'static-publish': {'enabled': True, 'settings': {}}})
+            before = self.snapshot_tree()
+            p = self.plan_c()
+            self.assertEqual((p['status'], p['space_json'], p['secrets']), ('abort-internal', None, {}))
+            self.assertEqual(self.lm.run(step='liga-4d3c'), 'abort-internal')
+        last = os.path.join(self.deai, 'migrations', 'last.json')
+        after = self.snapshot_tree()
+        self.assertEqual({k: v for k, v in after.items() if k != last}, {k: v for k, v in before.items() if k != last})
+        self.assertNotIn('liga-4d3c', self.marks())
+        self.assertNotIn(PUB_MOD, self.read_json(self.space_path())['modules'])
+
+    def test_publisher_present_is_quiet_on_startup_but_visible_in_dry_run(self):
+        """Ревʼю M2: стабільний стан не новина — старт мовчить; «dry-run» показує причину."""
+        self.put_other({'static-publish': {'enabled': True, 'settings': {}}})
+        st, err = self.start()
+        self.assertEqual(st, 'skip-done')
+        self.assertEqual(err, '')
+        code, out, _e = self.cli('dry-run')
+        self.assertEqual(code, 0)
+        self.assertIn('publish (%s): skip: publisher-present' % PUB_MOD, out)
 
     def test_asks_the_core_with_the_override_not_the_disk(self):
         seen = []
@@ -1251,6 +1277,33 @@ class ThreeStepsStartup(_StepC):
         self.assertEqual(last['steps']['liga-4d3b']['backup'], b)
         self.assertEqual(last['steps']['liga-4d3c']['roles'], ['publish'])
         self.assert_no_secrets_in_logs()
+
+    def test_startup_suggests_restoring_only_the_latest_step_first(self):
+        """Ревʼю I2: LIFO відмовить у відкаті a/b при застосованому c — підказка одна, для c; бекапи a, b видно."""
+        self.seed()
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        a, b, c = self.stamps()
+        for stamp in (a, b, c):
+            self.assertIn('бекап: %s' % stamp, err)
+        self.assertEqual(err.count('відкат:'), 1)
+        self.assertIn('відкат: bin/migrate_liga.py restore %s --hold' % c, err)
+        self.assertNotIn('restore %s' % a, err)
+        self.assertNotIn('restore %s' % b, err)
+        self.assertIn('раніші кроки (%s, %s)' % (a, b), err)
+
+    def test_cli_run_suggests_restoring_only_the_latest_step_first(self):
+        self.seed()
+        code, out, _err = self.cli('run')
+        self.assertEqual(code, 0)
+        a, b, c = self.stamps()
+        for stamp in (a, b, c):
+            self.assertIn('бекап: %s' % stamp, out)
+        self.assertEqual(out.count('відкат:'), 1)
+        self.assertIn('відкат: python3 bin/migrate_liga.py restore %s [--hold]' % c, out)
+        self.assertNotIn('restore %s' % a, out)
+        self.assertNotIn('restore %s' % b, out)
+        self.assertIn('раніші кроки (%s, %s)' % (a, b), out)
 
     def test_order_of_steps_is_the_order_of_startup(self):
         self.seed()
