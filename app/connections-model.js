@@ -41,7 +41,8 @@ const BUILTIN_TEXT = {
   "static-publish": { name: "cnModStaticName", desc: "cnModStaticDesc",
     fields: { folder: "cnFieldStaticFolder", password: "cnFieldPreviewPassword" } },
   "vercel-publish": { name: "cnModVercelName", desc: "cnModVercelDesc",
-    fields: { auth: "cnFieldVercelAuth", token: "cnFieldVercelToken", team: "cnFieldVercelTeam", password: "cnFieldPreviewPassword" } },
+    fields: { auth: "cnFieldVercelAuth", token: "cnFieldVercelToken", team: "cnFieldVercelTeam", password: "cnFieldPreviewPassword",
+      compat: "cnFieldVercelCompat" } },       // compat — 4d-3c
   "supabase-comments": { name: "cnModSupabaseName", desc: "cnModSupabaseDesc",
     fields: { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket", compat: "cnFieldSbCompat" } },
   "css-tokens": { name: "cnModCssName", desc: "cnModCssDesc", fields: { file: "cnFieldCssFile" } },

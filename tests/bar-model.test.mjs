@@ -724,3 +724,9 @@ test("Teams у дропдауні — за роллю notify: модуль бе�
     .find((x) => x.id === "teamsnotify");
   assert.equal(it.whyKey, "whyTeamsLoading", "роль є, стан ще вантажиться — причина, а не зникнення");
 });
+
+test("`pubpw` є для мігрованого запису ЛІГА (compat.publish), хоч capabilities.publish — id модуля (4d-3c)", () => {
+  const mig = CAPS("vercel-publish", { integrations: true, compat: { publish: "design-canvas" } });
+  assert.ok(pubItems({ space: mig }).includes("pubpw"));
+  assert.ok(!pubItems({ space: CAPS("vercel-publish", { integrations: true }) }).includes("pubpw"), "без compat — модуль, пароля ЛІГА нема");
+});

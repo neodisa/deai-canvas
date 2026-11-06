@@ -2003,7 +2003,8 @@ PUBLISH_MODULE = 'vercel-publish'
 def publish_legacy_path(prov, space=None):
     """ЄДИНА умова «публікація йде шляхом ЛІГИ» (проєкти `pv-…` і скоуп із `tasks.json`, пароль превʼю задачі/кореня/`1100`, гілка
     `Handler._publish` для ЛІГИ): `Implicit` АБО вбудований `Module` `vercel-publish` із `compat == "design-canvas"` у `space.json`
-    простору `space` (`None` — `spaces.active_space()`). ТОТАЛЬНА: будь-який збій — `False`, не виняток.
+    простору `space` (`None` — `spaces.active_space()`). ТОТАЛЬНА: будь-який збій — `False`, не виняток. Очікує постачальника, якого
+    віддав `provider()` (статус/«ввімкнено» там уже відфільтровано): сама їх не перевіряє.
 
     ⛔ ЛІГА — запис реєстру, а не тип постачальника (урок 4d-3a/4d-3b): після міграції постачальник — звичайний `Module`, і
     рішення читається лише звідси. Лише вбудований І саме цей id: свій модуль простору міг би оголосити власне `compat` з іншим
@@ -2133,9 +2134,9 @@ def compat_of(space, module_id):
 VCS_MODULE = 'git-sync'
 COMPAT_DESIGN_CANVAS = 'design-canvas'
 #: Ролі, чий явний вбудований модуль має `compat`, що видно клієнту: `{роль: id модуля}`.
-COMPAT_ROLES = (('comments', COMMENTS_MODULE), ('vcs', VCS_MODULE))
+COMPAT_ROLES = (('comments', COMMENTS_MODULE), ('vcs', VCS_MODULE), ('publish', PUBLISH_MODULE))
 #: Єдине дозволене непорожнє значення `compat` ролі (клієнту віддаємо лише його; сире з `space.json` — ні).
-COMPAT_ALLOWED = {'comments': COMPAT_COMMENT_LAYER, 'vcs': COMPAT_DESIGN_CANVAS}
+COMPAT_ALLOWED = {'comments': COMPAT_COMMENT_LAYER, 'vcs': COMPAT_DESIGN_CANVAS, 'publish': COMPAT_DESIGN_CANVAS}
 
 
 def compat_view(space, caps):

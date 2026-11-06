@@ -1,4 +1,4 @@
-{"api": 1, "id": "vercel-publish", "name": "Vercel", "version": "1.1.0",
+{"api": 1, "id": "vercel-publish", "name": "Vercel", "version": "1.2.0",
  "roles": ["publish"], "publish_target": "url", "check_timeout_s": 130,
  "settings": [
    {"key": "auth", "type": "select", "label": "Вхід у Vercel", "default": "token",
@@ -6,5 +6,7 @@
                 {"value": "cli", "label": "Системний Vercel CLI (vercel login на цій машині)"}]},
    {"key": "token", "type": "secret", "label": "Токен Vercel (для входу «Токен»)"},
    {"key": "team", "type": "text", "label": "Команда Vercel (slug або team_…; порожньо — особистий акаунт)"},
-   {"key": "password", "type": "secret", "label": "Пароль превʼю (необовʼязково)"}
+   {"key": "password", "type": "secret", "label": "Пароль превʼю (необовʼязково)"},
+   {"key": "compat", "type": "select", "label": "Сумісність (⚠ у режимі ЛІГА поля auth, team і password не читаються: вхід, скоуп і пароль превʼю беруться зі старих налаштувань; зміна значення на живому просторі перемикає на шлях модуля — нові проєкти й нові URL)", "required": false, "default": "",
+    "options": [{"value": "", "label": "Немає"}, {"value": "design-canvas", "label": "design-canvas (ЛІГА): проєкти pv-…, скоуп і пароль превʼю з tasks.json"}]}
  ]}

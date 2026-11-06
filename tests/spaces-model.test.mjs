@@ -4,7 +4,7 @@ import test from "node:test";
 import { DICT } from "../app/i18n.js";
 import {
   CHECK_POST_MARGIN_S, FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  checkPostTimeoutMs, hasNotify, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
+  checkPostTimeoutMs, hasNotify, isLegacyPublish, isRemotePublish, previewTarget, publishReaction, pwView, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -359,4 +359,32 @@ test("hasNotify: ключ capabilities.notify вирішує (модуль чи 
   assert.equal(hasNotify(null), true, "hasNotify(null) — true, як hasVcs(null): шар вимкнено");
   assert.equal(hasNotify(undefined), true);
   assert.equal(hasNotify({ capabilities: "x", integrations: false }), false, "caps не обʼєкт — як без ключа");
+});
+
+/* ── роль publish (4d-3c): «ЛІГА» живе в `compat.publish`, а `capabilities.publish` — id модуля ──────────── */
+
+const MIG = { id: "liga", integrations: true, capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
+const PLAIN = { id: "p", integrations: true, capabilities: { publish: "vercel-publish" } };
+
+test("isLegacyPublish: compat.publish === design-canvas — ЛІГА, хоч capabilities.publish — id модуля", () => {
+  assert.equal(isLegacyPublish(MIG), true);
+  assert.equal(isLegacyPublish(PLAIN), false, "звичайний vercel-publish без compat — модуль-шлях");
+  assert.equal(isLegacyPublish({ capabilities: { publish: "legacy" } }), true);
+  assert.equal(isLegacyPublish({ integrations: true }), true, "стара відповідь без capabilities — за integrations");
+  assert.equal(isLegacyPublish({ integrations: false }), false);
+  assert.equal(isLegacyPublish({ capabilities: { publish: "vercel-publish" }, compat: { publish: "other" } }), false, "інше значення — не ЛІГА");
+  assert.equal(isLegacyPublish({ capabilities: { publish: "static-publish" }, compat: { vcs: "design-canvas" } }), false, "compat чужої ролі");
+});
+
+test("мігрований запис ЛІГА читається гілкою ЛІГА скрізь: isRemotePublish, previewTarget, publishReaction, pwView", () => {
+  const task = { id: "T", publish_url: "https://pv-12345678.vercel.app", preview_password: "1100", preview_password_custom: false,
+    publish_remote: { module: "vercel-publish", url: "https://pv-12345678.vercel.app" } };
+  assert.equal(isRemotePublish(task, MIG), false, "слід модуля не береться за публікацію модуля: це ЛІГА");
+  assert.equal(isRemotePublish(task, PLAIN), true, "контроль: без compat той самий слід — модуль");
+  assert.deepEqual(previewTarget(task, MIG), { kind: "external", url: "https://pv-12345678.vercel.app", at: null });
+  assert.deepEqual(publishReaction({ url: "https://pv-12345678.vercel.app" }, MIG, true), { kind: "legacy", show: "render" });
+  assert.deepEqual(publishReaction({ url: "https://pv-12345678.vercel.app" }, MIG, false), { kind: "legacy", show: "toast", key: "publishToastDone" });
+  assert.equal(publishReaction({ url: "https://pv-12345678.vercel.app" }, PLAIN, true).kind, "remote");
+  assert.equal(pwView(task, MIG).pw, "1100", "пароль превʼю ЛІГА показано");
+  assert.equal(pwView(task, PLAIN).pw, "", "контроль: у модуль-шляху пароль ЛІГА не показуємо");
 });

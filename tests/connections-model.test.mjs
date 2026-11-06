@@ -587,3 +587,9 @@ test("vercel-publish: поле auth — select з варіантами token/cli
   assert.equal(initialForm(f).values.auth, "token");
   assert.equal(f.find((x) => x.key === "token").type, "secret");
 });
+
+test("наслідки вимкнення мігрованого vercel-publish (4d-3c): у просторі з інтеграціями — legacy, без правки коду", () => {
+  const e = M("vercel-publish");
+  const sp = { integrations: true, capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
+  assert.deepEqual(disableConsequences(e, sp), [{ role: "publish", kind: "legacy" }]);
+});

@@ -557,11 +557,22 @@ class PublishGuard(unittest.TestCase):
 
     @staticmethod
     def implicit_checks(node):
+        """Рядки, де тіло ТОРКАЄТЬСЯ типу `Implicit` будь-яким способом: імʼя/атрибут із `Implicit` (зокрема правий бік псевдоніма
+        `I = implicit.Implicit`), імпорт `… import Implicit as I`, порівняння через `type(x)` чи `x.__class__` (псевдонім так не зловити)."""
         out = []
         for n in ast.walk(node):
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'isinstance' and len(n.args) == 2:
-                if 'Implicit' in ast.dump(n.args[1]):
-                    out.append(n.lineno)
+            if isinstance(n, ast.Name) and 'Implicit' in n.id:
+                out.append(n.lineno)
+            elif isinstance(n, ast.Attribute) and 'Implicit' in n.attr:
+                out.append(n.lineno)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)) and any('Implicit' in a.name for a in n.names):
+                out.append(n.lineno)
+            elif isinstance(n, ast.Compare):
+                for part in [n.left] + list(n.comparators):
+                    if any((isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == 'type')
+                           or (isinstance(x, ast.Attribute) and x.attr == '__class__') for x in ast.walk(part)):
+                        out.append(n.lineno)
+                        break
         return out
 
     @staticmethod
@@ -603,8 +614,147 @@ class PublishGuard(unittest.TestCase):
         self.assertEqual(self.implicit_checks(planted), [2])
         clean = ast.parse('def f(v):\n    return isinstance(v, dict)\n')
         self.assertEqual(self.implicit_checks(clean), [])
+        # псевдонім типу (присвоєння й імпорт) і порівняння через `type`/`__class__` — теж видно
+        alias = ast.parse('def f(v):\n    I = implicit.Implicit\n    return isinstance(v, I)\n')
+        self.assertEqual(self.implicit_checks(alias), [2])
+        alias_import = ast.parse('def f(v):\n    from implicit import Implicit as I\n    return isinstance(v, I)\n')
+        self.assertEqual(self.implicit_checks(alias_import), [2])
+        by_type = ast.parse('def f(v):\n    return type(v) is Implicit\n')
+        self.assertEqual(self.implicit_checks(by_type), [2, 2])
+        by_type_alias = ast.parse('def f(v, I):\n    return type(v) is I\n')
+        self.assertEqual(self.implicit_checks(by_type_alias), [2])
+        by_class = ast.parse('def f(v, I):\n    return v.__class__ == I\n')
+        self.assertEqual(self.implicit_checks(by_class), [2])
+        harmless = ast.parse('def f(v):\n    return type(v)\n')
+        self.assertEqual(self.implicit_checks(harmless), [], 'саме `type(x)` без порівняння не ознака')
         planted_call = ast.parse('def f(v):\n    return dm.publish_module(v)\n')
         self.assertEqual(self.calls(planted_call, 'publish_module'), [2])
+
+
+# ---------------------------------------------------------------------------------------------------- Task 3: compat
+
+class PublishCompatSetting(unittest.TestCase):
+    """Налаштування `compat` вбудованого `vercel-publish` (маніфест 1.2.0): формат — як `git-sync`."""
+
+    @classmethod
+    def setUpClass(cls):
+        dm.reset_caches()
+        cls.m = dm.catalog()[VID]
+
+    def setting(self):
+        return {s['key']: s for s in self.m.settings}['compat']
+
+    def test_version_and_loaded(self):
+        self.assertEqual((self.m.status, self.m.version), ('ok', '1.2.0'))
+
+    def test_compat_is_the_last_select(self):
+        self.assertEqual([s['key'] for s in self.m.settings], ['auth', 'token', 'team', 'password', 'compat'])
+        s = self.setting()
+        self.assertEqual((s['type'], s['required'], s['default']), ('select', False, ''))
+        self.assertEqual([(o['value'], o['label']) for o in s['options']][0], ('', 'Немає'))
+        self.assertEqual([o['value'] for o in s['options']], ['', DC])
+
+    def test_label_warns_about_what_is_not_read_and_the_switch(self):
+        label = self.setting()['label']
+        self.assertIn('⚠', label)
+        for word in ('auth', 'team', 'password'):
+            self.assertIn(word, label)
+        self.assertIn('не чита', label)                  # «не читаються»
+        self.assertIn('проєкти', label)                  # зміна значення на живому просторі = нові проєкти й URL
+        self.assertIn('URL', label)
+
+    def test_unknown_value_is_bad_settings(self):
+        for bad in ('comment-layer', 'DESIGN-CANVAS', 7, ['design-canvas']):
+            with self.subTest(bad=bad):
+                with self.assertRaises(dm.ModuleError) as cm:
+                    dm.validate_settings(VID, {'compat': bad})
+                self.assertEqual(cm.exception.code, 'bad-settings')
+        for ok in ('', DC):
+            self.assertEqual(dm.validate_settings(VID, {'compat': ok}), {'compat': ok})
+
+    def test_secret_keys_unchanged(self):
+        self.assertEqual(self.m.secret_keys(), ['token', 'password'])
+
+
+class PublishCompatView(_PubWorld):
+    """`compat_view` і обʼєкт простору: ключ `compat.publish` — лише для явного ВБУДОВАНОГО `vercel-publish` із `compat`."""
+
+    def caps(self, sp, sid='on'):
+        with spaces.request_space(sid):
+            return dm.capabilities(sp)
+
+    def test_registry_constants(self):
+        self.assertIn(('publish', VID), dm.COMPAT_ROLES)
+        self.assertEqual(dm.COMPAT_ALLOWED['publish'], DC)
+        self.assertEqual(dm.COMPAT_ROLES[:2], (('comments', dm.COMMENTS_MODULE), ('vcs', dm.VCS_MODULE)), 'ролі 4d-3b на місці')
+
+    def test_builtin_vercel_with_compat_gives_the_key(self):
+        self.vercel(DC)
+        caps = self.caps(self.on)
+        self.assertEqual(caps['publish'], VID)
+        self.assertEqual(dm.compat_view(self.on, caps), {'publish': DC})
+
+    def test_key_sits_next_to_the_other_roles(self):
+        extra = {'git-sync': {'enabled': True, 'settings': {'compat': DC}}}
+        self.vercel(DC, extra=extra)
+        caps = self.caps(self.on)
+        self.assertEqual(dm.compat_view(self.on, caps), {'vcs': DC, 'publish': DC})
+
+    def test_no_key_without_compat_or_for_foreign_providers(self):
+        for compat in (None, ''):
+            with self.subTest(compat=compat):
+                self.vercel(compat)
+                self.assertEqual(dm.compat_view(self.on, self.caps(self.on)), {})
+        self.vercel(DC)
+        caps = self.caps(self.on)
+        self.assertEqual(dm.compat_view(self.on, dict(caps, publish='static-publish')), {}, 'роль веде інший модуль')
+        self.assertEqual(dm.compat_view(self.on, dict(caps, publish='legacy')), {}, 'Implicit — ключа нема')
+
+    def test_implicit_has_no_key(self):
+        caps = self.caps(self.on)
+        self.assertEqual(caps['publish'], 'legacy')
+        self.assertEqual(dm.compat_view(self.on, caps), {})
+
+    def test_space_owned_provider_gives_no_key(self):
+        self.vercel(DC)
+        caps = self.caps(self.on)
+        fake = {'publish': self.fake(VID, origin='space')}
+        with mock.patch.object(dm, '_capabilities_full', lambda s: (caps, fake)):
+            self.assertEqual(dm.compat_view(self.on, caps), {})
+
+    def test_the_value_is_only_the_allowed_one(self):
+        # сире значення з `space.json`, не дозволене ролі, клієнту не віддаємо (хоч `compat_of` його прочитала б)
+        self.write_modules(self.on, {VID: {'enabled': True, 'settings': {'compat': 'comment-layer'}}})
+        self.assertEqual(dm.compat_view(self.on, self.caps(self.on)), {})
+
+    def test_space_view_and_listing_carry_it_and_capabilities_stay(self):
+        self.vercel(DC)
+        with spaces.request_space('on'):
+            view = serve.space_view(self.on)
+            listing = {e['id']: e for e in serve.spaces_listing()['spaces']}
+        self.assertEqual(view['compat'], {'publish': DC})
+        self.assertEqual(listing['on']['compat'], {'publish': DC})
+        for o in (view, listing['on']):
+            self.assertEqual(o['capabilities']['publish'], VID, 'capabilities не змінено: це id модуля')
+        self.assertNotIn('compat', listing['off'])
+        self.vercel(None)
+        with spaces.request_space('on'):
+            self.assertNotIn('compat', serve.space_view(self.on))
+
+
+class PublishJsGuard(unittest.TestCase):
+    """Клієнт питає «ЛІГА?» в ОДНОМУ місці (`isLegacyPublish`): другий літерал порівняння з `"legacy"` обійшов би `compat.publish`."""
+
+    def test_one_literal_in_spaces_model(self):
+        app = os.path.join(os.path.dirname(_HERE), 'app')
+        found = {}
+        for name in sorted(os.listdir(app)):
+            if name.endswith('.js'):
+                with open(os.path.join(app, name), encoding='utf-8') as f:
+                    n = f.read().count('publish === "legacy"')
+                if n:
+                    found[name] = n
+        self.assertEqual(found, {'spaces-model.js': 1})
 
 
 if __name__ == '__main__':

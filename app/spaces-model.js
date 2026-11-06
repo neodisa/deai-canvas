@@ -570,6 +570,8 @@ export const hasPublish = (space) =>
  * показав би чужий пароль під чужою публікацією.
  */
 export const isLegacyPublish = (space) =>
+  // Після міграції 4d-3c `capabilities.publish` — id модуля, а «ЛІГА» живе в ключі `compat` обʼєкта простору (його кладе сервер).
+  space?.compat?.publish === "design-canvas" ||
   (space?.capabilities ? space.capabilities.publish === "legacy" : space?.integrations !== false);
 
 /** Слід ЛОКАЛЬНОЇ публікації з `/api/task` (`{module, path, published_at}`) — обʼєкт або `null`. */
