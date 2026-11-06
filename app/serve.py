@@ -4333,7 +4333,7 @@ def publish_comments(space, task, tid, *, module_publish=False):
 
         постачальник        шлях ЛІГИ (`_publish`)                 модуль публікації (`module_publish=True`)
         Module              словник модуля                         словник модуля
-        Module+shared_state словник модуля                         False (4d-3b, знімається в 4d-3c)
+        Module+shared_state словник модуля                         False (4d-3b; лишається — стереже збірки модуля від ключа ЛІГИ)
         Implicit            словник `supabase-comments`            False — як у 0.3.0
                             (конфіг установки, канал ЛІГИ)
         None                False                                  False

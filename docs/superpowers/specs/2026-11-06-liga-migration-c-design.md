@@ -282,3 +282,69 @@ CHANGELOG `[0.19.0]` (Upgrading — відкат c→b→a і застереже
 6. **Живий тест** — розширення `liga-migrate.test.mjs`.
 7. **Документи, мутаційні докази.**
 8. **Фінальне ревʼю, реліз** (CHANGELOG, тег, памʼять).
+
+## Implementation notes (відхилення, прийняті під час реалізації й ревʼю)
+
+Де код відрізняється від тексту вище — правда за кодом. Поправки 1–10 плану (`docs/superpowers/plans/2026-11-06-liga-migration-c.md`,
+«Поправки до спеки») мають перевагу над текстом спеки; нижче — що з них застосовано і що знайшли задачі 1–6.
+
+**Поправки 1–10 — застосовано.**
+
+1. `ALL_STEPS = (A, B, C)`; чотири стенди 4d-3b пінують `STEPS` на `ALL_STEPS[:2]` (`_RealSteps.setUp`, `AfterMigrationParity4d3b._build`,
+   `RealPushNonIsolated`, shape-тест: `[marks][:2] == [a, b]` + `ALL_STEPS[2] is STEP_C`); `_TwoSteps` і `_Stand` не чіпали. Нові
+   тести — у `tests/test_liga_migrate_c.py`.
+2. `tests/test_vercel_publish.py`: версія `1.2.0` і перелік налаштувань із `compat` ОСТАННІМ — два рядки.
+3. AST-охоронець §2 забороняє лише `isinstance(…, Implicit)` у `_publish`, `_preview_password`, `task_preview_gate`, `task_publish_share`
+   і тримає `publish_module(` у `serve.py` на двох викликах (сам виклик `provider('publish')` легітимний).
+4. `publisher-present` = результат на ПОТОЧНОМУ `space.json` є `Module` (не `vercel-publish`); проставляється в `_plan` одним блоком, а
+   не в `_entries_c` (функція не знає простору).
+5. Відкрите питання 1 закрито: зламаний СВІЙ модуль (`ModuleError`) = «не присутній» → далі `abort-provider`; тест доводить обидва
+   випадки й незалежність від порядку каталогу. ⚠️ **Інший виняток** перевірки присутності (не `ModuleError`) НЕ ковтається:
+   `abort-internal`, нічого не пишемо (інакше робочий СВІЙ видавець, чий id сортується після `vercel-publish`, був би перезаписаний).
+6. Два точні словники `EXPECT_DIFF` (стенд «нічого не мігровано» — `capabilities` усіх шести ролей і `compat` для comments/vcs/publish;
+   стенд «після a+b» — лише `capabilities.publish`, `compat.publish`, картка `vercel-publish`).
+7. Живий `liga-migrate` переписано під три бекапи й `publish: 'vercel-publish'` (Task 6); червоним був між Task 4 і Task 6, як планувалось.
+8. `_applied_later` іде `reversed(...)` і повертає ОСТАННІЙ застосований пізніший крок.
+9. Відкриті питання 2 і 3 закриті: `auth`/`team`/`password` лишаються, застереження — у підписі `compat`; холодний «Перевірити»
+   (`npx vercel whoami`, `check_timeout_s: 130`) без мережі не перевіряється (вердикт `isolated` — юніт `CheckVerdictIsolated`); нотатка
+   для першого живого запуску власником — у CHANGELOG «Known limits».
+10. Номери рядків звірено без розбіжностей (`deai_modules.py:1849` → `:1850`).
+
+**Що знайшли задачі 1–6 (відхилення від тексту спеки).**
+
+- **Формат підказки відкату змінився.** Старт і `bin/migrate_liga.py run` друкують `бекап: <stamp>` для КОЖНОГО виконаного кроку, потім
+  ОДНУ підказку `відкат:` лише для останнього виконаного кроку й рядок `раніші кроки (…) — лише після відкату пізніших, у зворотному
+  порядку` (підказка кожного кроку відразу веліла б спершу виконати відмовний `restore`). Для одного кроку вихід тепер із ДВОХ рядків
+  замість одного складеного.
+- **Діалог вимкнення** на щойно ввімкненій картці `vercel-publish` дістає один рядок (`cnDisableLegacy`, «Роль "publish" знову
+  виконуватиме вбудована інтеграція ЛІГА») — єдиний видимий текст, що змінюється; рядок правдивий (вимкнений запис повертає `Implicit`).
+  Єдині різниці `/js` стенду паритету: `is_vercel_publish` і `disable_consequences_publish`.
+- **`publisher-present`** мовчить на старті й видно в `status`/`dry-run` (як інші доброякісні коди ролі).
+- **Паритетний стенд:** `tracker` лишається неявним лише тому, що там нема облікових Jira — не різниця кроку c.
+- **Знімок 0.18** (`bdc7292`) покриває ще й попередження `domain`/`not_task_link`/`cleanup_warning`, а `Before4d3cShape` звужено.
+- **Відмова `publish_comments(module_publish=True)` для `shared_state` НЕ знімається** (виправлення нотаток 4d-3b у спеці 4d-3b,
+  CHANGELOG `[0.18.0]` і докстрінгу `publish_comments`).
+- **Мутаційний доказ знайшов дірку в тесті предиката** (Task 7): мутація «без перевірки `id`» виживала, бо
+  `test_another_builtin_module_with_a_compat_is_not` писав запис `vercel-publish` БЕЗ `compat` (рішення читає `compat` саме цього запису,
+  тож без нього будь-який інший видавець давав `False` і без перевірки `id`). Запис тепер із `compat: design-canvas`; мутація червоніє.
+
+**Зведена таблиця мутаційних доказів** (`python3 -B`, один рядок, відновлення через `Edit` + збіг `sha256` до/після; «червоне» = тести блока падають):
+
+| # | Блок | Мутація | Тести | Результат |
+|---|---|---|---|---|
+| 1 | предикат | гілка `Implicit` → `False` | `PublishLegacyPath` | червоне (1) |
+| 2 | предикат | `== COMPAT_DESIGN_CANVAS` → `!=` | `PublishLegacyPath` | червоне (10) |
+| 3 | предикат | прибрано захист `origin` | `PublishLegacyPath` | червоне (1) |
+| 4 | предикат | прибрано захист `id` | `PublishLegacyPath` | ВИЖИВАЛА → запис у тесті з `compat`; після правки червоне (3) |
+| 5 | `publish_module` | без фільтра предиката | `PublishModuleFilter`, `PublishConsumers` | червоне (3) |
+| 6 | `_publish` | назад на `isinstance(prov, Implicit)` | `PublishConsumers`, `PublishGuard` | червоне (3) |
+| 7 | `_preview_password` | назад на `isinstance(…, Implicit)` | `PublishConsumers`, `PublishGuard` | червоне (3) |
+| 8 | `compat_view` | `COMPAT_ROLES` без `publish` | `PublishCompatView` | червоне (4) |
+| 9 | JS | `isLegacyPublish` без `compat` | `spaces-model`/`bar-model`/`connections-model` | червоне (3) |
+| 10 | `STEP_C` | запис без `compat` | `StepCPlanTest`, `StepCRunTest` | червоне (2) |
+| 10b | `STEP_C` | `shared_state` → `False` | `StepCPlanTest`, `StepCRunTest` | червоне (2) |
+| 11 | `ALL_STEPS` | порядок `(A, C, B)` | `StepCConstants`, `ThreeStepsStartup`, `LifoThreeSteps` | червоне (15) |
+| 12 | `_applied_later` | перший замість останнього | `LifoThreeSteps` | червоне (2) |
+| 13 | `publisher-present` | вимкнено (`if False and …`) | `PublisherPresent` | червоне (4) |
+| 14 | піни `STEPS[:2]` | `_RealSteps` без `[:2]` | `test_liga_migrate_b` | червоне (7) |
+| 15 | генератор знімка | `PW_TASK` змінено | `AfterMigrationParity4d3c`, `RealPublishNonIsolated`, `Before4d3cShape` | червоне (3) |

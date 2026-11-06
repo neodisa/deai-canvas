@@ -13,9 +13,10 @@ role `tracker` and the module `jira-tracker`, 0.13.0) and stage 4c-3 (the Teams 
 module `supabase-teams`, 0.14.0), stage 4d-1 (the profile of a task becomes the general tracks of a space, 0.15.0) and
 stage 4d-2 (the implicit provider instead of the literal `'legacy'`, the layer-off seam and the isolation law, 0.16.0) and
 stage 4d-3a (the migration of the LIGA space: explicit tracks and the roles `tracker`, `dashboard`, `notify`, 0.17.0) and stage
-4d-3b (the second migration step: the roles `comments` and `vcs` of LIGA as explicit modules, 0.18.0) — see *Status* at the end.
-Next: stage 4d-3c (`publish`, 0.19.0), which finishes the explicit LIGA modules (the API value
-`'legacy'` goes there); stage 4d ends with 4d-4 (0.20.0), when the original setup becomes an ordinary space.
+4d-3b (the second migration step: the roles `comments` and `vcs` of LIGA as explicit modules, 0.18.0) and stage 4d-3c (the
+third migration step: the role `publish` of LIGA as the explicit module `vercel-publish`, 0.19.0) — see *Status* at the end.
+Next: stage 4d-4 (0.20.0), when the original setup becomes an ordinary space (the API value `'legacy'` goes there, with the
+implicit provider).
 
 ## Goal
 
@@ -124,7 +125,7 @@ canvas for their workflow without touching the core.
        express through `space.json` yet:
        - ✅ **4d-3a** (0.17.0) — the mechanism, the tracks and the roles `tracker`, `dashboard`, `notify`;
        - ✅ **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
-       - **4d-3c** (0.19.0) — `publish`;
+       - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stays for a non-migrated LIGA: it goes from 4d-4);
      - **4d-4** (0.20.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
@@ -603,7 +604,7 @@ sub-releases of 4d-3. What is built:
 - **The isolation law for `comments` and `vcs`.** A built-in record with `shared_state` in an isolated run builds its ctx like the
   implicit path (`_comments_legacy_ctx()` / `_vcs_legacy_ctx()`; the key from the root of the tasks file); the condition is
   `_builtin_shared`, only in the branches of `comments_route` and `vcs_provider`. `publish_comments(module_publish=True)` refuses a
-  comments record with `shared_state` (lifted in 4d-3c). The module «Check» answers `isolated` for a `shared_state` record in an
+  comments record with `shared_state` (stays, see 4d-3c). The module «Check» answers `isolated` for a `shared_state` record in an
   isolated run and reads no secrets (all five roles; it closes a gap of 0.17).
 - **The migration is an ordered list of steps** (`STEPS`, each a `Step(mark, roles, tracks, suffix, stamp_re)`): its own mark,
   backup, restore. `startup()` and the CLI iterate it; `abort-*` and `skip-busy` stop the later steps at that start, a held earlier
@@ -614,7 +615,7 @@ sub-releases of 4d-3. What is built:
   copy in `secrets.json`) and `git-sync` (`branch`, `path`, `autosync`, `compat: design-canvas`), both `shared_state: true`; no
   `ssh_key`/`host_ip` (the root of `tasks.json` still gives them; 4d-4). Codes of the roles: `no-supabase`, `bad-url`,
   `module-present`; the check `abort-provider` runs on the calculated `space.json` in memory.
-- **Unchanged:** `publish` is still implicit (`'legacy'` in `capabilities`); the implicit path stays as a fallback until 4d-4.
+- **Unchanged:** `publish` is still implicit (`'legacy'` in `capabilities`) in 0.18; the implicit path stays as a fallback until 4d-4.
 - **Known limits:** a downgrade to 0.17 needs `restore <stamp-b> --hold` (0.17 ignores `compat`); a partial migration is final;
   LIGA has no in-UI entry point to the «New task» form (pre-existing); no `flock` on Windows; `skip-path-in-git` / `skip-no-path`.
   The full list and the codes are in the CHANGELOG, `[0.18.0]`.
@@ -624,12 +625,51 @@ sub-releases of 4d-3. What is built:
   The goldens are green without a re-shoot.
 - **Left for 4d-3c / 4d-4:** see below.
 
+### Stage 4d-3c — `publish` of the LIGA space (0.19.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-06-liga-migration-c-design.md`
+(and its «Implementation notes»); plan: `docs/superpowers/plans/2026-11-06-liga-migration-c.md`. The last of the three
+sub-releases of 4d-3. What is built:
+
+- **One predicate of the publishing path of LIGA.** The publishing of LIGA is not «just the module `vercel-publish`»: it keeps the
+  project `pv-…` and the scope in `tasks.json` (not in `iterations.json`), accepts old safe project names (`legacy_state`), takes
+  the preview password from the task / the root / `1100` (not from a module secret), marks the build `legacy` and does the side
+  effects and the answer keys of the old branch. So `Handler._publish` is **not changed**: `deai_modules.publish_legacy_path(prov,
+  space=None)` (the implicit provider, or a **built-in** `vercel-publish` with `compat == "design-canvas"`; total) only switches it.
+  `Handler._preview_password` reads the same predicate, and `deai_modules.publish_module` returns `None` for the LIGA path, so
+  `task_preview_gate` and `task_publish_share` (its two callers) need no change. An AST guard forbids `isinstance(…, Implicit)` in
+  those four functions and keeps `publish_module(` to two callers.
+- **`compat` of `vercel-publish`** (`""` or `design-canvas`; module version 1.2.0; the last setting). In `design-canvas` mode `auth`,
+  `team` and `password` of the record are not read (the label says so); a change on a live space moves the publishing to the module
+  path (new projects, other URLs). `compat_view` adds `publish` to the `compat` map of `/api/spaces`, and `isLegacyPublish` in
+  `spaces-model.js` reads `capabilities.publish === 'legacy' || compat.publish === 'design-canvas'`: the one JS decision.
+- **The step `liga-4d3c`** (`ALL_STEPS = (A, B, C)`) writes `vercel-publish` with `shared_state: true` and `settings {auth: cli,
+  team: "", compat: design-canvas}`; no secrets. Codes of the role: `module-present` and `publisher-present` (another explicit publish
+  module of the space is not overridden; quiet at the start line); the check `abort-provider` runs in memory. `_applied_later`
+  names the last applied step (LIFO on three steps). The start line and the CLI `run` print `бекап: <stamp>` per done step, one
+  rollback hint for the latest one and a line about the earlier ones.
+- **The isolation law needs no new code**: the LIGA branch of publishing never had a seam, and a migrated record walks the same
+  branch; the «Check» answers `isolated` for a `shared_state` record (no `npx`). The real effects are proven by the non-isolated
+  unit test `RealPublishNonIsolated`, not by the (isolated) live test.
+- **Unchanged:** the refusal of `publish_comments(module_publish=True)` for comments records with `shared_state` **stays** (the note
+  «lifted in 4d-3c» of 4d-3b was wrong): it guards the builds of a MODULE from carrying the Supabase key of LIGA.
+  `capabilities.publish` of a migrated LIGA is `'vercel-publish'`; `'legacy'` stays for a non-migrated LIGA, a switched-off record,
+  a broken built-in module and a failed resolution — it goes from 4d-4, with the implicit provider.
+- **Known limits:** a downgrade to 0.18 needs `restore <stamp-c> --hold` (otherwise the module path: new projects, other URLs, no
+  gate); a `vercel-publish` enabled by hand without `compat` is the module path and the card does not warn; the cold «Check»
+  (`npx vercel whoami`) is untested without a network; the scope carry-over is proven by the unit test only. The full list and
+  the codes are in the CHANGELOG, `[0.19.0]`.
+- **Tested** against the snapshot of 0.18.0 (`tests/fixtures/liga-migration/before-4d3c.json`, `tests/make_before_4d3c.py`),
+  `tests/test_liga_migrate_c.py` (`Before4d3cShape`, `AfterMigrationParity4d3c`, `RealPublishNonIsolated`, the plan and run tests
+  of the step, the predicate and consumer tests), the live test `tests/live/liga-migrate.test.mjs`; no network. The goldens are
+  green without a re-shoot.
+- **Left for 4d-4:** see below.
+
 ### What stays for later
 
-- **Left for 4d-3c / 4d-4** (stage 4d; 4d-1, 4d-2, 4d-3a and 4d-3b are done; what stays of the literal `'legacy'` — the API
-  value of `publish`, the build manifest, the id of the implicit space — goes in 4d-3c and 4d-4):
-  - **4d-3c** (0.19.0): the role `publish` of LIGA as an explicit module (and the lift of the refusal of `publish_comments` for
-    `shared_state` records);
+- **Left for 4d-4** (stage 4d; 4d-1, 4d-2, 4d-3a, 4d-3b and 4d-3c are done; what stays of the literal `'legacy'` — the API
+  value of `capabilities` for a non-migrated LIGA, the build manifest, the id of the implicit space — goes in 4d-4, with the
+  implicit provider):
   - **4d-4** (0.20.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
     `profile_repos`, and the `profile`-only look of `_liga_flow`; the move of `gitlab_ssh_key` / `gitlab_host_ip` from the root of
     `tasks.json` into the settings of `git-sync` and the removal of the originals (the copied secrets stay until then). The tracks that 4d-3a could not migrate move here, so

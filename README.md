@@ -6,7 +6,7 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.18.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.19.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, team
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
@@ -22,7 +22,7 @@ links for your team.
 > is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
 > `space.json`), and the core no longer tells the in-house setup from a module by a string: an *implicit provider* object
 > does it, and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. Since 0.17 the legacy space moves its
-> tracker, dashboard and Teams config, and since 0.18 its comments and git sync, into explicit modules of its own by itself, with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> tracker, dashboard and Teams config, since 0.18 its comments and git sync, and since 0.19 its publishing, into explicit modules of its own by itself, with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -598,11 +598,13 @@ Upgrading: after the migration the Jira token and the Supabase key of LIGA live 
 screen. The old sources (environment, `pipeline-feedback`, the root of `tasks.json`) stay only as a fallback for the `bin/` tools.
 Migrated tracks are a snapshot: edit `tracks` in the LIGA `space.json`, not `design_work_root(s)`/`profile_repos` in the old file.
 
-**Two steps.** The migration is an ordered list of independent steps, each with its own mark, its own dated backup and its own
-restore: `liga-4d3a` (0.17: tracks and the roles `tracker`, `dashboard`, `notify`) and `liga-4d3b` (0.18: the roles `comments` and
+**Three steps.** The migration is an ordered list of independent steps, each with its own mark, its own dated backup and its own
+restore: `liga-4d3a` (0.17: tracks and the roles `tracker`, `dashboard`, `notify`), `liga-4d3b` (0.18: the roles `comments` and
 `vcs` as the built-in modules `supabase-comments` and `git-sync`, with the setting `compat` that keeps the old channels, flat
-mirrors and «design-canvas» / «GitLab» texts). One start runs them in order (a jump from 0.16 gives two backups,
-`<stamp>-liga-4d3a` and `<stamp>-liga-4d3b`); an `abort-*` or `skip-busy` of a step stops the later ones at that start. A LIGA with
+mirrors and «design-canvas» / «GitLab» texts) and `liga-4d3c` (0.19: the role `publish` as the built-in module `vercel-publish`
+with `compat: design-canvas`, which keeps the projects and the scope of `tasks.json`, the preview password and the old URLs; no
+secrets are written). One start runs them in order (a jump from 0.16 gives three backups,
+`<stamp>-liga-4d3a`, `<stamp>-liga-4d3b` and `<stamp>-liga-4d3c`); an `abort-*` or `skip-busy` of a step stops the later ones at that start. A LIGA with
 `integrations` off is not migrated at all (`skip-integrations-off`). `status`, `dry-run` and `run` print every step; the journal
 `<DEAI_HOME>/migrations/last.json` keeps the report of the last action and a map `steps` with the report of each step.
 
@@ -612,14 +614,16 @@ nothing is written; the message names the backup to roll back first). `restore` 
 `backups/<stamp>-pre-restore/`. `--hold` keeps the next start from migrating that step again, and a held earlier step holds
 the later ones too.
 
-⛔ Before downgrading from 0.18 to 0.17 run `python3 bin/migrate_liga.py restore <stamp-b> --hold` (the stamp of the
-`liga-4d3b` backup): 0.17 ignores `compat`, so the comment channels would switch to `deai/<space>/<task>` and the git mirrors would
-be cloned again under `<DEAI_HOME>/cache`. Rotation: the Supabase key of the comments is a copy in `secrets.json` too (rotate it on
+⛔ Before downgrading from 0.19 to 0.18 run `python3 bin/migrate_liga.py restore <stamp-c> --hold` (the stamp of the
+`liga-4d3c` backup): 0.18 ignores `compat` of `vercel-publish`, so the module path would be taken: a new project and a new URL
+for every published task, and the preview without the gate. To 0.17: `restore <stamp-c> --hold`, then `restore <stamp-b> --hold`
+(0.17 ignores `compat` of the comments and git sync, so the comment channels would switch to `deai/<space>/<task>` and the git mirrors would
+be cloned again under `<DEAI_HOME>/cache`). Rotation: the Supabase key of the comments is a copy in `secrets.json` too (rotate it on
 Connections); `gitlab_ssh_key` / `gitlab_host_ip` in the root of `tasks.json` keep working until 4d-4.
 
-Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-b> --hold`, then `restore <stamp-a> --hold`, since `restore <stamp-a>` is refused while step b is applied); the tracks are migrated only
+Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-c> --hold`, `restore <stamp-b> --hold`, then `restore <stamp-a> --hold`, since an earlier step is refused while a later one is applied); a `vercel-publish` card enabled by hand without `compat` publishes through the module path (new URLs, no gate); the tracks are migrated only
 when they match the old adapter exactly (otherwise they stay as in 0.16 until 4d-4); a LIGA folder inside a git work tree is not
-migrated; a partial migration is final. The full list and the status codes are in `CHANGELOG.md`, `[0.18.0]` and `[0.17.0]`.
+migrated; a partial migration is final. The full list and the status codes are in `CHANGELOG.md`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
 
 ## Roadmap
 
@@ -668,15 +672,17 @@ migrated; a partial migration is final. The full list and the status codes are i
      - ✅ **4d-2** (0.16) — the implicit provider (`app/implicit.py`) instead of the literal `'legacy'`, one layer-off seam
        (`spaces.effective_space()`) and one isolation law: an isolated run reads the install config only from the root of its
        tasks file; the public contract (`capabilities` = `'legacy'`) is unchanged;
-     - **4d-3** — explicit LIGA modules, with an automatic migration of its config (with a backup); the API value `'legacy'`
-       goes here. Three releases (owner decision 05.11.2026):
+     - ✅ **4d-3** — explicit LIGA modules, with an automatic migration of its config (with a backup); the API value `'legacy'`
+       stays for a non-migrated LIGA until 4d-4. Three releases (owner decision 05.11.2026):
        - ✅ **4d-3a** (0.17) — the migration mechanism (a dated backup, a mark, a restore, the CLI `bin/migrate_liga.py`), the
          explicit tracks, and the roles `tracker`, `dashboard` and `notify` as explicit modules; the setting `compat` replaces
          `ctx['legacy']`;
        - ✅ **4d-3b** (0.18) — the roles `comments` and `vcs` as explicit modules, through a second migration step
          (`liga-4d3b`, LIFO restore); the setting `compat` of `supabase-comments` and `git-sync` keeps the old channels, the flat
          mirrors and the texts; the isolation law covers both roles;
-       - **4d-3c** (0.19) — the role `publish`;
+       - ✅ **4d-3c** (0.19) — the role `publish` as the explicit module `vercel-publish` with `compat: design-canvas`, through a
+         third migration step (`liga-4d3c`, LIFO restore on three steps); one predicate, `publish_legacy_path`, keeps the
+         projects, URLs and the preview password of LIGA;
      - **4d-4** (0.20) — the `integrations` flag and the old aliases (including `profile`) go.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.

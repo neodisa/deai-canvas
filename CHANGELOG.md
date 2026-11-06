@@ -3,6 +3,131 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.19.0] — unreleased
+
+Stage 4d-3c: the last of the three steps that turn the LIGA space into an ordinary one. The role `publish` of LIGA becomes an
+explicit built-in module (`vercel-publish`) through a **third migration step, `liga-4d3c`**, and the one thing an explicit record
+could not express before (the publishing path of LIGA: the projects `pv-…` and the scope kept in `tasks.json`, the preview password
+of the task / of the root / `1100`, the build mark `legacy`, the side effects and the answer keys) becomes the setting `compat` of
+`vercel-publish`. For a person nothing changes: the same projects and URLs (no new ones), the same scope, the same password, the
+same `#k=` in «Copy link», the same side effects, answer keys and texts. 4d-4 (0.20.0) follows.
+Design: `docs/superpowers/specs/2026-11-06-liga-migration-c-design.md`; plan: `docs/superpowers/plans/2026-11-06-liga-migration-c.md`.
+The behaviour of 0.18.0 is pinned by the snapshot `tests/fixtures/liga-migration/before-4d3c.json`.
+
+### Added
+
+- **A third migration step `liga-4d3c`** in `app/liga_migrate.py` (`ALL_STEPS = (STEP_A, STEP_B, STEP_C)`). It has its own mark, its
+  own dated backup and its own restore, like the first two. On the first start of 0.19 the server runs `liga-4d3a`, `liga-4d3b`,
+  `liga-4d3c` in order; a user who jumps from 0.16 gets **three steps at one start and three backups**.
+- **What `liga-4d3c` writes** (the LIGA `space.json` is merged: foreign keys and modules stay):
+  - `publish` -> `vercel-publish` with `enabled: true`, `shared_state: true` and `settings {auth: "cli", team: "", compat:
+    "design-canvas"}`. **No secrets**: there is no token (the sign-in is the `vercel login` of the machine) and the preview password
+    stays in `tasks.json` (4d-4). `auth: "cli"` only makes the «Check» of the card (`vercel whoami`) truthful; the LIGA path does
+    not read it;
+  - the mark `migrations.liga-4d3c` (`at`, `roles`, `backup`; no `tracks`);
+  - the check `abort-provider`: on the `space.json` calculated in memory the core must resolve `publish` with exactly the
+    `vercel-publish` module, otherwise nothing is written.
+- **Skip codes of the role:** `module-present` (`vercel-publish` is already in `space.json`) and **`publisher-present`** (a person
+  has already enabled another explicit publish module in the space: the step does not override it, and does not leave an eternal
+  `abort-provider` at every start). `publisher-present` is quiet at the start line and visible in `status` and `dry-run`; a
+  broken module of the space's own (`ModuleError`) counts as not present, so the later check gives `abort-provider`; any other error
+  of the presence check is `abort-internal`.
+- **The setting `compat` of `vercel-publish`** (`select`: empty or `design-canvas`, default empty; module version 1.2.0, `compat`
+  is the last setting). `design-canvas` keeps the path of LIGA: the projects and the scope from `tasks.json`, the password of the
+  task / of the root / `1100`, the legacy build mark, the old side effects and answer keys. The label warns that in this mode `auth`,
+  `team` and `password` of the record are **not read**, and that changing the value on a live space switches the publishing to the
+  module path (new projects, other URLs).
+- **One predicate for «the publishing path of LIGA»**, `deai_modules.publish_legacy_path(prov, space=None)`: the implicit provider,
+  or a **built-in** `vercel-publish` (`origin == 'builtin'` and exactly this id) with `compat == "design-canvas"`. It is total (a
+  failure is `False`). Every consumer reads it: `Handler._publish`, `Handler._preview_password`, and `deai_modules.publish_module`
+  (which returns `None` for the LIGA path, so `task_preview_gate` and `task_publish_share` need no change). An AST guard forbids
+  `isinstance(..., Implicit)` in those four functions and keeps `publish_module(` to its two callers in `serve.py`.
+- **`compat.publish` in `/api/spaces`** (next to `compat.comments` and `compat.vcs`; the key is present only for an explicit built-in
+  record with a non-empty `compat`). `isLegacyPublish` in `spaces-model.js` reads `capabilities.publish === 'legacy' ||
+  compat.publish === 'design-canvas'`; the preview password row of the bar, the «Copy link» with `#k=`, the publish reaction and
+  the Connections screen read that one function.
+- **`capabilities.publish` of a migrated LIGA is `'vercel-publish'`**; `'legacy'` stays for a LIGA that is not migrated, a switched-off
+  record, a broken built-in module and a failed resolution, until 4d-4.
+- **`last.json` and the CLI for three steps.** `restore <stamp-a>` while steps b and c are applied is refused
+  (`refuse-later-applied`) and the text names the **last** applied step, the one to roll back first (0.18 named the first later one).
+  The start line and `bin/migrate_liga.py run` print `бекап: <stamp>` for every step done, then ONE `відкат:` hint (for the latest
+  step done only) and a line `раніші кроки (…) — лише після відкату пізніших, у зворотному порядку`; the hint of every step at once
+  would have told the person to run a refused restore first.
+
+### Status codes
+
+- **New skip code:** `publisher-present` (benign, a role code of `liga-4d3c`).
+- **Codes of the role of 4d-3c** (in `skipped` of `last.json`): `module-present`, `publisher-present`.
+- `skip-nothing` of 4d-3c: the role is already explicit; the mark is not written. `skip-held` and `skip-integrations-off` apply as in
+  0.18.
+
+### Unchanged public contract
+
+- The tests `tests/legacy-golden.test.mjs` and `GoldenPinTest` are green without a re-shoot, and so are the snapshot tests of
+  4d-3a and 4d-3b. Four stands of `tests/test_liga_migrate_b.py` pin `STEPS` to `ALL_STEPS[:2]` (they see the first two steps only),
+  and the shape test checks `ALL_STEPS[2] is STEP_C`; `tests/test_vercel_publish.py` pins the new module version and the new
+  setting. These are the only changes of existing tests.
+- The branch of LIGA in `Handler._publish` is **not changed**: it is switched by the predicate. The projects, the scope, the
+  `legacy_state`, the gate, the build mark, the comments of the preview (`module_publish=False`) and every side effect and key
+  are the code of 0.18.
+- The implicit path stays as a fallback until 4d-4: switch the explicit record off and the built-in mode is back.
+- The migration does not run in an isolated run, except with the seam `DC_MIGRATE_LIGA=1` and a temporary `DEAI_HOME`; the real
+  `~/.deai` is always refused.
+
+### Upgrading
+
+- **Three steps, three backups.** A user who comes from 0.16 gets `<stamp>-liga-4d3a`, `<stamp>-liga-4d3b` and
+  `<stamp>-liga-4d3c`; from 0.17 the last two; from 0.18 only the third. Roll them back in reverse order (the newest first).
+- **⛔ Before a downgrade to 0.18 run `python3 bin/migrate_liga.py restore <stamp-c> --hold`.** 0.18 ignores the setting `compat`
+  of `vercel-publish`, so the migrated record would be published by the **module path**: a new project and a new URL for every
+  published task, and the preview **without the gate** (the record has no `password` secret). Without the restore the people who
+  already have your old URLs lose them.
+- **⛔ Downgrade to 0.17 (steps b and c applied):** `restore <stamp-c> --hold`, then `restore <stamp-b> --hold`.
+  **Downgrade to 0.16 (all three applied):** `restore <stamp-c> --hold`, `restore <stamp-b> --hold`, `restore <stamp-a> --hold`.
+  An earlier step alone is refused (`refuse-later-applied`) while a later one is applied.
+- Nothing to rotate: the step copies no secret. The preview password, `vercel_project` and `vercel_scope` stay in `tasks.json`.
+
+### Deliberate differences from 0.18.0
+
+(everything else is checked against the snapshot, on the migrated space too: two stands, «nothing migrated» and «after 4d-3a and
+4d-3b»; the only diffs of the JS predicates are `is_vercel_publish` and `disable_consequences_publish`)
+
+1. **After the migration `publish` of LIGA is an explicit module**: its id is in `capabilities`, there is one `vercel-publish` card
+   on the Connections screen, and `/api/spaces` has the key `compat.publish`.
+2. **`auth`, `team` and `password` on the card are decorative in the mode `design-canvas`** (the path of LIGA does not read them);
+   the label of `compat` says so. The preview password is changed from the bar, as before.
+3. **`restore <stamp-a>` with several later steps applied names the LAST applied one** (0.18: the first later one).
+4. **The start line and the CLI `run` print two lines for a single step** (`бекап: <stamp>` and `відкат: …`) where 0.18 printed one
+   combined line; with several steps the rollback hint names the latest done step only, plus the line about the earlier ones
+   (see Added).
+5. **The disable dialog of the newly enabled `vercel-publish` card has one more line**, «The role "publish" is taken back by the
+   built-in LIGA integration» (`cnDisableLegacy`): switching the record off returns the implicit provider, and that is true. It is
+   the only visible text that changes.
+6. **`publisher-present`**: a LIGA space whose person already enabled another publish module keeps it; the step is skipped
+   and without an eternal `abort-provider`.
+7. **The note of 0.18.0 «lifted in 4d-3c» was wrong**: the refusal of `publish_comments(module_publish=True)` for comments records
+   with `shared_state` **stays**. LIGA publishes through the LIGA branch (`module_publish=False`, the comments work), and the refusal
+   guards the real builds of a MODULE (another publish module, or `vercel-publish` without `compat`) from carrying the Supabase key
+   of LIGA into a preview. The two notes of `[0.18.0]` are corrected (see below), the docstring of `publish_comments` too.
+
+### Known limits
+
+- **A downgrade to 0.18 after 4d-3c is unsafe without `restore <stamp-c> --hold`** (see Upgrading): the module path, new URLs, no
+  gate.
+- **`vercel-publish` enabled by hand in a LIGA space WITHOUT `compat` is the module path**: new projects, new URLs, and the password
+  is the module secret `password` (empty means no gate). The card does not warn about it; the warning is in the label of `compat`.
+- **The cold «Check» of the card is untested without a network.** For a record with `shared_state` in an isolated run the answer is
+  `isolated` (no `npx`), covered by a unit test; the real first «Check» (`npx vercel whoami`, `check_timeout_s: 130`) can be slow
+  while `npx` fetches the package. **A note for the owner's first live run.**
+- **The carry-over of the scope is proven by the non-isolated unit test only** (`RealPublishNonIsolated`: the first publish mints
+  `pv-…` and writes the scope, the second reuses the same project, URL and scope). The live test is isolated and has no network,
+  so it proves the same `link` / `deploy` argv and texts, not the saved URL.
+- The preview password, `vercel_project` and `vercel_scope` stay in `tasks.json` (4d-4); there is no copy in `space.json`.
+- A partial migration is final (as in 0.17 and 0.18); `skip-path-in-git` and `skip-no-path`, the missing `flock` on Windows, and a
+  CLI `run` racing with UI edits: as before.
+- The publishing of LIGA has no seam and no isolation branch (and never had): an isolated run under the LIGA branch calls the real
+  `npx`; only the tests' substitutes isolate it.
+
 ## [0.18.0] — 06.11.2026
 
 Stage 4d-3b: the second of the three steps that turn the LIGA space into an ordinary one. The roles `comments` and `vcs` of LIGA
@@ -84,7 +209,7 @@ The behaviour of 0.17.0 is pinned by the snapshot `tests/fixtures/liga-migration
   record's own `module_ctx` is used. A module of your own with a hand-set `shared_state` stays an ordinary module there.
 - **`publish_comments(module_publish=True)` refuses** (returns `False`) a comments record with `shared_state`, as it already
   did for the implicit provider: a preview built by a publish module must not carry the Supabase key of LIGA. It also refuses a
-  module of your own with a hand-set flag (the safe side). Lifted in 4d-3c.
+  module of your own with a hand-set flag (the safe side). Stays (see 4d-3c).
 - **`LEGACY_SHOTS_BUCKET`** moved to `install_config.py` (the migration needs it and does not import `serve`); `serve` keeps an
   alias, and a test compares the values. `serve._vcs_legacy_ctx()['settings']` and the record of the migration share
   `branch`, `path` and `autosync`, and a test compares them.
@@ -168,7 +293,7 @@ The behaviour of 0.17.0 is pinned by the snapshot `tests/fixtures/liga-migration
 - **LIGA has no in-UI entry point to the «New task» form** (pre-existing); the Repository field stays hidden for LIGA even when a
   `repo` is set on the `git-sync` card (the setting works for tasks without a target, but the form does not offer it).
 - `skip-path-in-git` and `skip-no-path`, the missing `flock` on Windows, and a CLI `run` racing with UI edits: as in 0.17.
-- `publish` is still implicit: a preview built by a publish module carries no comments of LIGA (4d-3c).
+- `publish` is still implicit: a preview built by a publish module carries no comments of LIGA (stays, see 4d-3c).
 
 ## [0.17.0] — 06.11.2026
 

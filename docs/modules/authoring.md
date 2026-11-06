@@ -394,10 +394,10 @@ private key and never from a page.
 
 ### The `compat` setting, `shared_state` and `ctx['legacy']`
 
-Three things concern the in-house LIGA setup and what its migration (0.17.0 and 0.18.0, `bin/migrate_liga.py`) writes into
+Three things concern the in-house LIGA setup and what its migration (0.17.0 to 0.19.0, `bin/migrate_liga.py`) writes into
 `space.json`. An ordinary module does not need any of them.
 
-* **`compat`** is an optional `select` setting of four built-in modules, each with its own meaning (the core reads it only for a
+* **`compat`** is an optional `select` setting of five built-in modules, each with its own meaning (the core reads it only for a
   **built-in** module with that exact id, never for a module of your own that declares a setting of the same name):
   * `supabase-dashboard` and `supabase-teams`: `""` (default) or `"comment-layer"`. It says that the Supabase base is the old
     comment-layer schema: a **public** key is allowed (`check` does not answer `public-key`), and `supabase-teams` does not call
@@ -413,10 +413,19 @@ Three things concern the in-house LIGA setup and what its migration (0.17.0 and 
     folders `<slug>` instead of `<host>/<slug>-<hash8>`), and the texts («design-canvas: sync», README, «GitLab» / «repository»,
     the fork note) are the old ones (one predicate, `serve.vcs_legacy_texts`). The module does not know `ROOT`; it only honours
     `ctx['mirror_flat']` and `ctx['cache_dir']`. Changing the value makes the mirror folders and the texts different.
+  * `vercel-publish` (0.19, module version 1.2.0; the last setting): `""` (default) or `"design-canvas"`. `design-canvas` sends
+    the publishing down the **path of LIGA**: the core does not call `publish` of the module, but runs its old branch (the
+    project `pv-…` and the scope kept in `tasks.json`, old safe project names accepted, the preview password of the task / of the
+    root / `1100`, the build mark `legacy`, the old side effects and answer keys). In this mode `auth`, `team` and `password` of
+    the record are **not read** (the label says so). One predicate decides it, `deai_modules.publish_legacy_path` (the implicit
+    provider, or the built-in `vercel-publish` with this `compat`); `deai_modules.publish_module` returns `None` for that path.
+    Changing the value on a live space moves the publishing to the module path: new projects, other URLs, and the password is
+    the module secret `password` (empty means no gate).
 
   **The «built-in + id» rule.** A space's own module cannot take the id of a built-in one (the Connections screen shows the note
-  `id-taken` and the module is skipped), and the predicates above also test `origin == 'builtin'`; so a module of your own called
-  anything else cannot pick up the LIGA channel scheme or the LIGA texts by declaring `compat`.
+  `id-taken` and the module is skipped), and the predicates above also test `origin == 'builtin'` and the exact id (for the
+  publish predicate: `origin == 'builtin'` and `id == 'vercel-publish'`); so a module of your own called anything else cannot
+  pick up the LIGA channel scheme, the LIGA texts or the LIGA publishing path by declaring `compat`.
 * **`shared_state`** is a boolean on a module record in `space.json` (`"modules": {"<id>": {"enabled": true, "settings": {…},
   "shared_state": true}}`). The migration writes it; a value that is not a boolean is ignored. A record marked `true` is the
   shared state of the LIGA space although it is explicit, so for the roles `dashboard`, `tracker` and `notify` it is under the

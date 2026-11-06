@@ -51,6 +51,7 @@
  *   ⚠️ ЗБЕРЕЖЕННЯ URL (той самий `pv-…`, ті самі адреса й скоуп, `publish_remote` відсутній) тут довести неможливо: мережі нема, а модуль перевіряє
  *        сторінку лише ПІСЛЯ знайденої адреси (сценарій «deploy без адреси» її свідомо не дає). Це доводить НЕізольований юніт
  *        `RealPublishNonIsolated` (`tests/test_liga_migrate_c.py`), а паритет усього, що бачить людина, — `AfterMigrationParity4d3c`.
+ *        Так само перенесення скоупу (`vercel_scope`) між публікаціями доведене лише тим юнітом, а не живим прогоном.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -456,15 +457,18 @@ test("5: «Опублікувати» мігрованої ЛІГИ — ті с�
   } finally {
     await stop(unmigrated.child);
     rmSync(unmigrated.home, { recursive: true, force: true });
+    /* Тека конфігу `dc-live-cfg-*` (старий `tasks.json` цього сервера) — за ТОЧНИМ шляхом: прямо в tmpdir і з цим префіксом. */
+    const cfgDir = path.dirname(unmigrated.tasksFile);
+    if (path.dirname(realpathSync(cfgDir)) === realpathSync(tmpdir()) && path.basename(cfgDir).startsWith("dc-live-cfg-")) rmSync(cfgDir, { recursive: true, force: true });
   }
   assert.equal(before.caps, "legacy", "еталон: немігрована ЛІГА веде публікацію вбудованим шляхом");
 
   /* ── ПІСЛЯ міграції: той самий диск, що й тести 1–4 (машина S.first), сервер перезапущено з фальшивим npx. ── */
   await stop(S.running);
   const fakeAfter = makeFakeNpx();                              // живе до кінця файла (тест 6 читає його журнал); прибирає `test.after`
+  S.fakeAfter = fakeAfter;                                      // одразу: падіння нижче не лишає теку `dc-live-npx-*` (прибирає `test.after`)
   S.third = await startServer(null, { portBase: PORT_BASE, env: { ...S.env, PATH: `${fakeAfter}:${process.env.PATH}` }, machine: S.first });
   S.running = S.third.child;
-  S.fakeAfter = fakeAfter;
   const after = await publishAsPerson(t, S.third, fakeAfter, S.taskDir);
   assert.equal(after.caps, "vercel-publish", "після міграції публікацію веде явний модуль (але шлях — ЛІГИ)");
 

@@ -363,10 +363,12 @@ class PublishLegacyPath(_PubWorld):
         self.assertIs(dm.publish_legacy_path(self.fake(VID, origin='space'), self.on), False)
 
     def test_another_builtin_module_with_a_compat_is_not(self):
-        # `compat` чужої ролі чи чужого модуля (4d-3b: comments/vcs мають СВОЄ `compat`) не робить публікацію «ЛІГОЮ»
+        # `compat` чужої ролі чи чужого модуля (4d-3b: comments/vcs мають СВОЄ `compat`) не робить публікацію «ЛІГОЮ». ⛔ Запис
+        # `vercel-publish` ТЕЖ із `compat` (мутація «без перевірки id» інакше виживала: рішення читає `compat` саме `vercel-publish`,
+        # і без нього будь-який інший вбудований видавець — напр. `static-publish`, що випередив його за id — теж дав би `False`).
         extra = {mid: {'enabled': True, 'settings': {'compat': DC}}
                  for mid in ('static-publish', 'supabase-comments', 'git-sync')}
-        self.write_modules(self.on, {VID: {'enabled': True, 'settings': {}}, **extra})
+        self.write_modules(self.on, {VID: {'enabled': True, 'settings': {'compat': DC}}, **extra})
         for mid in extra:
             with self.subTest(mid=mid):
                 self.assertIs(dm.publish_legacy_path(self.fake(mid), self.on), False)
