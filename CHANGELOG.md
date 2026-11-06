@@ -3,6 +3,127 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.17.0] — unreleased
+
+Stage 4d-3a: the first of three steps that turn the LIGA space into an ordinary one. A **migration** moves the config the LIGA
+space used to take from the root of the old `tasks.json` and from the environment into its own `space.json` and `secrets.json`:
+the roles `tracker`, `dashboard` and `notify` become explicit built-in modules (`jira-tracker`, `supabase-dashboard`,
+`supabase-teams`), and its tracks become explicit `tracks`. The owner split 4d-3 into three releases (05.11.2026), because the
+other three roles do things that the built-in modules cannot express through `space.json` yet: 4d-3a (this one) the mechanism,
+the tracks and `tracker`/`dashboard`/`notify`; 4d-3b (0.18.0) `comments` and `vcs`; 4d-3c (0.19.0) `publish`; 4d-4 becomes 0.20.0.
+Design: `docs/superpowers/specs/2026-11-05-liga-migration-a-design.md`; plan: `docs/superpowers/plans/2026-11-06-liga-migration-a.md`.
+The behaviour of 0.16.0 is pinned by the snapshot `tests/fixtures/liga-migration/before-4d3a.json`.
+
+### Added
+
+- **`app/liga_migrate.py`**, the LIGA migration. It runs automatically **once**, at the start of the canvas server, before the
+  port opens (`serve.main` calls `liga_migrate.startup()`), and on demand through the CLI. A failure never stops the start: the
+  server starts as 0.16 would, and the reason goes to stderr and to `<DEAI_HOME>/migrations/last.json` (never a secret).
+  `plan()` is a pure calculation (nothing is written; the secrets live only in the plan, `report()` prints key names, never
+  values); `run()` writes.
+- **A dated backup** `<DEAI_HOME>/backups/<stamp>-liga-4d3a/` (folder 0700, files 0600): copies of the old `tasks.json`, of the
+  LIGA `space.json` (if there was one), of `secrets.json` and of `spaces.json`, and a `manifest.json` with the source paths and
+  the sha256 of every file. The backup is verified (the source is hashed before and after the copy, and again at the end), and a
+  half-written folder is removed. A failed backup is `abort-backup` and nothing else is written.
+- **The mark `migrations.liga-4d3a`** in the LIGA `space.json` (`at`, `roles`, `tracks`, `backup`). A mark means the migration
+  does not run again, even if a person later turns a module off on the Connections screen: that is their decision.
+- **Copied secrets, the originals kept.** The Jira token and the Supabase key are copied into `secrets.json` under the id of the
+  LIGA space; the root of the old `tasks.json`, the environment and `~/.claude/pipeline-feedback/` are not touched, so the tools in
+  `bin/` keep reading them and a downgrade needs no manual steps beyond the one below. The write order is: backup → secrets →
+  ONE atomic write of `space.json` (existing keys such as `name`, `color` and foreign ones are kept). A failure between the last
+  two leaves secrets that nobody reads, and the next start repeats the migration.
+- **A cross-process lock** `<DEAI_HOME>/migrations/.lock` (`flock`, no waiting) around `run` and `restore`; a second process gets
+  `skip-busy`. A `flock` error other than «busy» (for example `ENOLCK`) is a visible `abort-lock`, not a silent skip. `plan()` is
+  calculated inside the lock; the first look (to decide that there is nothing to do) is outside it and creates neither `migrations/`
+  nor `.lock`.
+- **Restore.** `bin/migrate_liga.py restore <stamp> [--hold]` puts back the LIGA `space.json` and **only the LIGA entry** of
+  `secrets.json` (foreign entries added after the migration stay) and verifies the manifest sha256 first. Before it writes, it
+  copies the current `space.json` and the LIGA part of the secrets to `backups/<stamp>-pre-restore/`, so edits made after the
+  migration are not lost. After a restore the mark is gone and the next start migrates again; `--hold` writes
+  `migrations.liga-4d3a: {"held": true}` so it does not. An unknown or forged stamp is refused (`refuse-stamp`,
+  `refuse-tampered`, `refuse-no-liga`) and nothing is written.
+- **The CLI `bin/migrate_liga.py status|dry-run|run|restore <stamp> [--hold]`** (exit 0 or 1; it prints codes, role names and key
+  names, never secret values or addresses).
+- **The setting `compat`** (`select`: empty or `comment-layer`, default empty) of `supabase-dashboard` and `supabase-teams`. It
+  replaces the flag `ctx['legacy']`: `comment-layer` means that the base is the old comment-layer schema (a public key is
+  allowed, and `teams_notify_health` does not exist). The implicit path (`dashboard.legacy_ctx`, `notify.legacy_ctx`) puts it into
+  `settings`, and the migration writes it into `space.json`.
+- **`shared_state`** on the module records of `space.json` (a boolean the migration writes; a non-boolean is ignored) and
+  **`deai_modules.shared_state(space, module_id)`**. A record marked `shared_state: true` is the shared state of the LIGA space
+  even though it is explicit, so it falls under the isolation law: in an isolated run (`DC_TASKS_FILE` or `DC_NO_OVERVIEW`) it
+  behaves as the implicit provider (a test seam, then a refusal, then the real call). The Connections screen does not show or
+  change the flag.
+- **The `install_config` refactor**: `supabase_from(cfg)` and `jira_from(cfg)` are the bodies of `supabase_config()` and
+  `jira_config()`, moved out unchanged, so the migration takes the credentials by the same rules and in the same order as the
+  implicit path, not by a copy of them.
+- **`_provider_for(…, explicit_override=…)`**: the migration checks a calculated `space.json` in memory (every migrated role must
+  be resolved by exactly its module, otherwise `abort-provider`) without writing anything.
+
+### Status codes
+
+Every code is in the report, in `last.json` and in the CLI output.
+
+- **Skip** (nothing is written; `skip-*` never overwrite the journal): `skip-layer-off`, `skip-no-liga`, `skip-done`,
+  `skip-held`, `skip-no-path`, `skip-path-in-git`, `skip-space-json-unreadable`, `skip-registry-unreadable`,
+  `skip-tasks-unreadable`, `skip-nothing` (no role and no tracks to migrate: the mark is not written, the next start looks
+  again), `skip-busy`.
+- **Abort** (nothing is written, or the next run starts again): `abort-provider`, `abort-internal`, `abort-lock` (from the
+  calculation or the lock); `abort-backup`, `abort-secrets`, `abort-changed` (the LIGA record of the registry changed between the
+  calculation and the write), `abort-write` (the secrets are in, `space.json` is not: harmless) from `run`; `abort-restore`
+  from `restore`.
+- **Done:** `done` (migration), `restored` (restore). A restore may also answer `refuse-stamp`, `refuse-tampered` or
+  `refuse-no-liga`; the server start answers `refuse-real-home` when the test seam `DC_MIGRATE_LIGA=1` meets the real `~/.deai`.
+- **Why the tracks are not migrated** (`tracks_reason`; the roles migrate anyway): `tracks-present` (the space already has
+  `tracks`, even an empty list), `tracks-parity` (the calculated tracks do not match the adapter) and `tracks-unknown-values`.
+- `last.json` is written only for `done`, the `abort-*` codes and `restored`. The permanent `skip-path-in-git` goes into its own
+  key `skip` of `last.json`, so a real report is not erased by it.
+
+### Improved
+
+- **«Check» of the LIGA modules on the Connections screen really checks.** In 0.16.0 it answered `bad-settings` for all three
+  modules; after the migration it is the ordinary check of a module with settings.
+
+### Unchanged public contract
+
+- `publish`, `comments` and `vcs` of the LIGA space stay implicit (`'legacy'` in `capabilities`) until 4d-3b / 4d-3c. The tests
+  `tests/legacy-golden.test.mjs` and `GoldenPinTest` of `tests/test_comments_role.py` are green without a re-shoot.
+- The migration does not run in an isolated run (`DC_TASKS_FILE`, `DC_NO_OVERVIEW`), except with the test seam
+  `DC_MIGRATE_LIGA=1` together with a temporary `DEAI_HOME`; the real `~/.deai` is always refused. With the layer off nothing runs.
+
+### Deliberate differences from 0.16.0
+
+(everything else is checked against the snapshot, on the migrated space too)
+
+1. **After the migration `tracker`, `dashboard` and `notify` of LIGA are explicit modules**: their ids are in `capabilities`,
+   there is one card per role on the Connections screen, and the settings can be edited there.
+2. **A Jira token or a Supabase key changed in the environment, in `pipeline-feedback` or in the root of `tasks.json` no longer
+   affects LIGA.** The copy lives in `secrets.json`; change it on the Connections screen.
+3. **Built-in modules ignore `ctx['legacy']`**: `supabase-dashboard` and `supabase-teams` read `settings.compat`. A module of your
+   own can no longer pretend to be LIGA with the flag; the flag stays in the ctx of the implicit path, for foreign modules only.
+4. **The ctx of the migrated roles** is built by `module_ctx` like for any module, so it now has `space.path` and the other
+   extras; the values of the settings and the secrets are the same, and `compat` replaces `legacy`.
+
+### Known limits
+
+- **The tracks are often NOT migrated.** They are skipped (`tracks-unknown-values`) when the LIGA `united` track has its own root
+  different from the shared `design_work_root`, when a task carries an unknown track value (anything that is not a migrated id,
+  including `None`, an empty string or another letter case), or when `design_work_roots` / `profile_repos` has a key outside the id
+  pattern; and on a parity miss (`tracks-parity`). The reason: the adapter sends an unknown value into the shared root, while
+  explicit `tracks` send it into the root of the default track, so a new task could land in another folder. In those cases the
+  tracks adapter stays exactly as in 0.16.0 and the roles migrate anyway. This is likely common for real LIGA setups; the tracks
+  then move in 4d-4.
+- **A downgrade to 0.16 after the migration breaks the dashboard and the notifications** (`public-key`: 0.16 does not know
+  `compat`). Run `bin/migrate_liga.py restore <stamp> --hold` first.
+- `skip-path-in-git` and `skip-no-path`: a LIGA folder inside a git work tree, or one that does not exist, is not migrated, and
+  LIGA stays as in 0.16.0.
+- `bin/migrate_liga.py run` while a canvas of the same home is serving can race with edits made on the screen; the lock guards the
+  migration against another migration or restore, not against the UI. The canvas itself migrates only at the start.
+- There is no `flock` on Windows (`fcntl` is missing): one copy of the canvas per home is the limit there.
+- The migrated secrets are not synchronized with their originals.
+- `SUPABASE_SERVICE_KEY` (environment only, used by `bin/overview_push.py`) is not migrated: the most privileged secret has no
+  place in a space.
+- The originals, the `integrations` flag, `gitlab_*` and `profile` stay until 4d-4.
+
 ## [0.16.0] — 05.11.2026
 
 Stage 4d-2: the core stops comparing the provider of a role with the string `'legacy'`. `deai_modules.provider()` now returns a

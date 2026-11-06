@@ -6,7 +6,7 @@ iterations, a bird's-eye overview of every screen, user-flow maps, a design-toke
 inspector, comments addressed straight to the agent, and password-protected preview
 links for your team.
 
-> **Status — v0.16.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
+> **Status — v0.17.0 (private; extracted from an in-house tool, source 1.55.0 @ `796b3df`).**
 > Spaces (several projects on one machine) and the first **modules** are in: publishing to
 > a folder or to your own Vercel account, design-system tokens from a CSS file, team
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
@@ -21,7 +21,8 @@ links for your team.
 > runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). The old «profile» of a task
 > is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
 > `space.json`), and the core no longer tells the in-house setup from a module by a string: an *implicit provider* object
-> does it, and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> does it, and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. Since 0.17 the legacy space moves its
+> tracker, dashboard and Teams config into explicit modules of its own by itself, with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -578,6 +579,23 @@ flows/demo    example flow
 tests/        unit, Python and live (Playwright) tests
 ```
 
+## LIGA migration
+
+The in-house LIGA space moves its config into its own `space.json` and `secrets.json` by itself, once, when the canvas starts
+(before the port opens). The old file and the environment are not touched; a dated backup is made first. From the command line:
+
+```
+python3 bin/migrate_liga.py status                      # the mark, the last report, the backups
+python3 bin/migrate_liga.py dry-run                     # what would be migrated; nothing is written, no secret is printed
+python3 bin/migrate_liga.py run                         # migrate now (backup -> secrets -> space.json)
+python3 bin/migrate_liga.py restore <stamp> [--hold]    # put back space.json and the LIGA secrets from <DEAI_HOME>/backups/<stamp>
+```
+
+`restore` first saves the current files to `backups/<stamp>-pre-restore/`; `--hold` keeps the next start from migrating again.
+Known limits: a downgrade to 0.16 after the migration needs `restore <stamp> --hold` first; the tracks are migrated only when
+they match the old adapter exactly (otherwise they stay as in 0.16 until 4d-4); a LIGA folder inside a git work tree is not
+migrated. The full list and the status codes are in `CHANGELOG.md`, `[0.17.0]`.
+
 ## Roadmap
 
 1. ✅ **Spaces** (0.1) — several projects/companies on one machine, each with its own task list and settings.
@@ -625,9 +643,14 @@ tests/        unit, Python and live (Playwright) tests
      - ✅ **4d-2** (0.16) — the implicit provider (`app/implicit.py`) instead of the literal `'legacy'`, one layer-off seam
        (`spaces.effective_space()`) and one isolation law: an isolated run reads the install config only from the root of its
        tasks file; the public contract (`capabilities` = `'legacy'`) is unchanged;
-     - **4d-3** (0.17, next) — explicit LIGA modules, with an automatic migration of its config (with a backup); the API value
-       `'legacy'` goes here;
-     - **4d-4** (0.18) — the `integrations` flag and the old aliases (including `profile`) go.
+     - **4d-3** — explicit LIGA modules, with an automatic migration of its config (with a backup); the API value `'legacy'`
+       goes here. Three releases (owner decision 05.11.2026):
+       - ✅ **4d-3a** (0.17) — the migration mechanism (a dated backup, a mark, a restore, the CLI `bin/migrate_liga.py`), the
+         explicit tracks, and the roles `tracker`, `dashboard` and `notify` as explicit modules; the setting `compat` replaces
+         `ctx['legacy']`;
+       - **4d-3b** (0.18) — the roles `comments` and `vcs`;
+       - **4d-3c** (0.19) — the role `publish`;
+     - **4d-4** (0.20) — the `integrations` flag and the old aliases (including `profile`) go.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.
 

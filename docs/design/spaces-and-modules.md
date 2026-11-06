@@ -11,10 +11,11 @@ modules with a trust dialog, 0.7.0), stage 4a (git sync as the `vcs` role and th
 team dashboard as the role `dashboard` and the module `supabase-dashboard`, 0.12.0), stage 4c-2 (tracker statuses as the
 role `tracker` and the module `jira-tracker`, 0.13.0) and stage 4c-3 (the Teams notifications as the role `notify` and the
 module `supabase-teams`, 0.14.0), stage 4d-1 (the profile of a task becomes the general tracks of a space, 0.15.0) and
-stage 4d-2 (the implicit provider instead of the literal `'legacy'`, the layer-off seam and the isolation law, 0.16.0) — see
+stage 4d-2 (the implicit provider instead of the literal `'legacy'`, the layer-off seam and the isolation law, 0.16.0) and
+stage 4d-3a (the migration of the LIGA space: explicit tracks and the roles `tracker`, `dashboard`, `notify`, 0.17.0) — see
 *Status* at the end.
-Next: stage 4d-3 — explicit LIGA modules with an automatic, backed-up migration of its config (the API value `'legacy'`
-goes there); stage 4d ends with 4d-4, when the original setup becomes an ordinary space.
+Next: stages 4d-3b (`comments`, `vcs`, 0.18.0) and 4d-3c (`publish`, 0.19.0), which finish the explicit LIGA modules (the API value
+`'legacy'` goes there); stage 4d ends with 4d-4 (0.20.0), when the original setup becomes an ordinary space.
 
 ## Goal
 
@@ -117,9 +118,14 @@ canvas for their workflow without touching the core.
        task); the LIGA space gets its three tracks from an implicit adapter, `profile` stays a synonym;
      - ✅ **4d-2** (0.16.0) — the layer-off seam (a space with the layer switched off) and the isolation of shared state, without the
        literal `'legacy'` in the comparisons of the core (the API value `'legacy'` stays until 4d-3);
-     - **4d-3** (0.17.0) — explicit LIGA modules, with an **automatic migration of its config with a backup**: the same
-       migration also writes its tracks into its `space.json`, and the adapter of 4d-1 goes;
-     - **4d-4** (0.18.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
+     - **4d-3** — explicit LIGA modules, with an **automatic migration of its config with a backup**: the same
+       migration also writes its tracks into its `space.json`, and the adapter of 4d-1 goes. Split into three releases (owner
+       decision 05.11.2026), because the roles `comments`, `vcs` and `publish` of LIGA do things that the built-in modules cannot
+       express through `space.json` yet:
+       - ✅ **4d-3a** (0.17.0) — the mechanism, the tracks and the roles `tracker`, `dashboard`, `notify`;
+       - **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
+       - **4d-3c** (0.19.0) — `publish`;
+     - **4d-4** (0.20.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
 Each stage gets its own spec, plan and tests.
@@ -542,14 +548,48 @@ sub-releases of 4d. What is built:
   roles, the guard, the `_liga_like` pin), the goldens green without a re-shoot; no network.
 - **Left for 4d-3 / 4d-4:** see below.
 
+### Stage 4d-3a — the migration of the LIGA space (0.17.0)
+
+Status: done (the date and the tag are set at the release). Spec: `docs/superpowers/specs/2026-11-05-liga-migration-a-design.md`
+(and its «Implementation notes»); plan: `docs/superpowers/plans/2026-11-06-liga-migration-a.md`. The first of the three sub-releases
+of 4d-3. What is built:
+
+- **`app/liga_migrate.py`** (it imports `spaces`, `deai_modules`, `tracks`, `install_config` and `implicit`, never `serve`):
+  `plan()` is a pure calculation, `run()` writes, `restore()` rolls back, `status()` reports, `startup()` is called by
+  `serve.main` before the port opens. The CLI is `bin/migrate_liga.py status|dry-run|run|restore <stamp> [--hold]`. The write
+  order is a dated backup (`<DEAI_HOME>/backups/<stamp>-liga-4d3a/`, 0700/0600, a manifest with sha256), then the secrets
+  (`secrets.json` under the id of the LIGA space; the originals stay), then ONE atomic write of `space.json` with the mark
+  `migrations.liga-4d3a`. A cross-process `flock` guards `run` and `restore`; a restore puts back only the LIGA entry and first
+  saves a safety copy. A failure never stops the start of the server.
+- **What migrates:** `tracker` (`jira-tracker`), `dashboard` (`supabase-dashboard`), `notify` (`supabase-teams`) as explicit
+  records with `shared_state: true`, and the tracks (`tracks` and `default_track`), checked against the adapter of 4d-1 (parity).
+  The tracks are skipped on `tracks-unknown-values` (an unknown track value in a task, a `united` root different from the shared
+  root, a key outside the id pattern), `tracks-parity` or `tracks-present`; the roles migrate anyway.
+- **`compat`**, a setting of `supabase-dashboard` and `supabase-teams` (`""` or `comment-layer`), replaces the flag `ctx['legacy']`:
+  the built-in modules read the setting, the implicit path (`dashboard.legacy_ctx`, `notify.legacy_ctx`) puts it into `settings`.
+- **`shared_state`** on a module record and `deai_modules.shared_state(space, module_id)`: an explicit record marked so is under the
+  isolation law of 4d-2 (a seam, then a refusal, then the real call). `_provider_for(…, explicit_override=…)` lets the migration check
+  its calculated `space.json` in memory; `install_config.supabase_from` / `jira_from` give the migration the same credential rules.
+- **Unchanged:** `publish`, `comments` and `vcs` stay implicit (`'legacy'` in `capabilities`) until 4d-3b / 4d-3c. «Check» of the
+  LIGA modules on the Connections screen now really checks (in 0.16.0 it answered `bad-settings`).
+- **Known limits:** the tracks are often not migrated (they move in 4d-4); a downgrade to 0.16 needs `restore <stamp> --hold`;
+  `skip-path-in-git` / `skip-no-path`; no `flock` on Windows; a CLI `run` beside a serving canvas can race with UI edits; the
+  migrated secrets do not sync with the originals; `SUPABASE_SERVICE_KEY` is not migrated. Statuses and the full list are in the
+  CHANGELOG, `[0.17.0]`.
+- **Tested** against the snapshot of 0.16.0 (`tests/fixtures/liga-migration/before-4d3a.json`, `tests/make_before_4d3a.py`),
+  `tests/test_liga_migrate.py` (`PlanTest`, `RunTest`, `RestoreTest`, `StartupTest`, `AfterMigrationParity`), the live test
+  `tests/live/liga-migrate.test.mjs`; no network. The goldens are green without a re-shoot.
+- **Left for 4d-3b / 4d-3c / 4d-4:** see below.
+
 ### What stays for later
 
-- **Left for 4d-3 / 4d-4** (stage 4d, four releases; 4d-1 and 4d-2 are done; what stays of the literal `'legacy'` — the API
-  value, the build manifest, the id of the implicit space — goes in 4d-3 and 4d-4):
-  - **4d-3** (0.17.0): explicit LIGA modules with an automatic migration of its config (with a backup) — it also writes the LIGA
-    tracks into its `space.json`, so `tracks._LEGACY_LABELS`, the default `united` and the adapter go;
-  - **4d-4** (0.18.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
-    `profile_repos`, and the `profile`-only look of `_liga_flow`.
+- **Left for 4d-3b / 4d-3c / 4d-4** (stage 4d; 4d-1, 4d-2 and 4d-3a are done; what stays of the literal `'legacy'` — the API
+  value, the build manifest, the id of the implicit space — goes in 4d-3b / 4d-3c and 4d-4):
+  - **4d-3b** (0.18.0): the roles `comments` and `vcs` of LIGA as explicit modules;
+  - **4d-3c** (0.19.0): the role `publish` of LIGA as an explicit module;
+  - **4d-4** (0.20.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
+    `profile_repos`, and the `profile`-only look of `_liga_flow`. The tracks that 4d-3a could not migrate move here, so
+    `tracks._LEGACY_LABELS`, the default `united` and the adapter of 4d-1 go in 4d-4.
   Not planned in 4d-1: a UI to edit tracks, a track choice in the «New task» dialog.
 
 - No role is reserved any more (every role of the map is called by the core since 4c-3).

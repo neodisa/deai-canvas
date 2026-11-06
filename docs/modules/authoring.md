@@ -392,6 +392,26 @@ for the codes you **raise** from `mute_state` and `mute_set`; the verdict codes 
 key of a service that can write in a `secret` setting and do not mark it `public`: the switch is made from the canvas with a
 private key and never from a page.
 
+### The `compat` setting, `shared_state` and `ctx['legacy']`
+
+Three things concern the in-house LIGA setup and what its migration (0.17.0, `bin/migrate_liga.py`) writes into `space.json`.
+An ordinary module does not need any of them.
+
+* **`compat`** is an optional `select` setting of the built-in `supabase-dashboard` and `supabase-teams`: `""` (default) or
+  `"comment-layer"`. It says that the Supabase base is the old comment-layer schema: a **public** key is allowed (`check` does not
+  answer `public-key`), and `supabase-teams` does not call `teams_notify_health`, which that schema does not have. The migration
+  writes it into the explicit record of the LIGA space; the implicit path puts it into `settings` too.
+* **`shared_state`** is a boolean on a module record in `space.json` (`"modules": {"<id>": {"enabled": true, "settings": {…},
+  "shared_state": true}}`). The migration writes it; a value that is not a boolean is ignored. A record marked `true` is the
+  shared state of the LIGA space although it is explicit, so for the roles `dashboard`, `tracker` and `notify` it is under the
+  **isolation law**: in an isolated run (`DC_TASKS_FILE` or `DC_NO_OVERVIEW`) the core does not call the module, but answers like
+  for the implicit provider (a test seam first, then a refusal, then the real call). `deai_modules.shared_state(space,
+  module_id)` is the question; the Connections screen does not show or change the flag. Do not set it on a module of your own
+  unless it really talks to a state that tests must never touch.
+* **`ctx['legacy']`**: the built-in modules **do not read it any more**; they read `settings.compat`. The flag stays in the ctx
+  of the implicit path only for foreign modules and goes with the implicit path in 4d-4. A module of your own that checks it will
+  keep working there, but must not expect it anywhere else.
+
 ## 4. Trust
 
 1. Put the folder into `<space>/modules/`. The Connections screen shows the module with «own» and «Needs trust»; its
