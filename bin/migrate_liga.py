@@ -30,23 +30,36 @@ def main(argv=None):
         print(liga_migrate.status_text(liga_migrate.status()))
         return 0
     if a.cmd == 'dry-run':
-        p = liga_migrate.plan()
-        print(liga_migrate.report(p))
-        return 1 if p['status'].startswith('abort-') else 0
+        code = 0
+        for step in liga_migrate.STEPS:                      # кожен крок рахується на ПОТОЧНОМУ диску (нічого не пишемо)
+            p = liga_migrate.plan(step=step)
+            print(liga_migrate.report(p, step))
+            code = 1 if p['status'].startswith('abort-') else code
+        return code
     if a.cmd == 'run':
-        st, info = liga_migrate._run(None)
-        print('liga-4d3a: %s' % st)
-        print('  ' + str(info.get('reason') or ''))
-        if info.get('hint'):
-            print('  що робити: ' + str(info['hint']))
-        if st == 'done':
-            print('  ролі: %s; напрямки: %s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', 'так' if info.get('tracks') else 'ні', info.get('backup')))
-            print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % info.get('backup'))
-        return 0 if st in liga_migrate.BENIGN else 1
+        code = 0
+        for step in liga_migrate.STEPS:
+            st, info = liga_migrate._run(None, step)
+            print('%s: %s' % (step.mark, st))
+            print('  ' + str(info.get('reason') or ''))
+            if info.get('hint'):
+                print('  що робити: ' + str(info['hint']))
+            if st == 'done':
+                print('  ролі: %s; напрямки: %s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', 'так' if info.get('tracks') else 'ні', info.get('backup')))
+                print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % info.get('backup'))
+            if st not in liga_migrate.BENIGN:
+                code = 1
+            if st.startswith('abort-'):                      # як на старті: `abort-*` зупиняє наступні кроки, `skip-*` — ні
+                break
+        return code
+    step = liga_migrate.step_of_stamp(a.stamp) or liga_migrate.ALL_STEPS[0]     # крок визначає імʼя бекапу
     st, info = liga_migrate._restore(a.stamp, hold=a.hold)
-    print('liga-4d3a restore: %s' % st)
+    print('%s restore: %s' % (step.mark, st))
     if st == 'restored':
         print('  запобіжна копія поточних space.json і секретів ЛІГИ (до відкату): backups/%s' % info.get('safety_copy'))
+    if st == 'refuse-later-applied':
+        print('  пізніший крок застосований: спершу відкотіть його бекап%s' % (
+            ': python3 bin/migrate_liga.py restore %s [--hold]' % info['rollback_first'] if info.get('rollback_first') else ''))
     return 0 if st == 'restored' else 1
 
 

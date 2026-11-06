@@ -18,6 +18,7 @@ for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import spaces_guard  # noqa: E402
+from test_liga_migrate import _WriteStand  # noqa: E402  (стенд запису 4d-3a: тимчасові HOME/DEAI_HOME, CLI, пошук секретів)
 
 _REAL = None
 
@@ -1352,6 +1353,431 @@ class SharedStateIsolationB(_VcsStand):
                     v = serve.module_check_verdict(space, mid)
                 self.assertEqual(v, {'ok': True}, (mid, shared, iso))
                 self.assertEqual(call.call_count, 1, (mid, shared, iso))
+
+
+# ================================================================================================ Task 5: упорядковані кроки міграції
+#
+# Механізм кроків перевіряється на СИНТЕТИЧНОМУ другому кроці (`fake_b`: один вигаданий модуль і секрет): реальний `STEP_B` — Task 6.
+
+FAKE_SECRET = 'fake_b_secret_alpha'
+FAKE_URL = 'https://sb-fake-b.example.com'
+ORIG_SPACE = b'{"name": "Liga",\n  "x": {"k": [1,  2]}}\n'
+OTHER_SECRETS = {'other': {'m': {'k': 'other_value_alpha'}}}
+
+
+class _TwoSteps(_WriteStand):
+    """Стенд двох кроків: реальний 4d-3a + синтетичний `liga-4d3b` (роль `comments` → `supabase-comments`, ключ `FAKE_SECRET`)."""
+
+    def setUp(self):
+        super().setUp()                              # `_Stand.setUp` ставить `STEPS = ALL_STEPS[:1]` — тут його перекриваємо
+        lm = self.lm
+
+        def entries(cfg, present):
+            if 'supabase-comments' in present:
+                return {'comments': ('supabase-comments', 'module-present', None, None)}
+            return {'comments': ('supabase-comments', None,
+                                 {'enabled': True, 'shared_state': True, 'settings': {'url': FAKE_URL}}, {'key': FAKE_SECRET})}
+        self.step_a = lm.STEP_A
+        self.step_b = lm.Step('liga-4d3b', (('comments', 'supabase-comments'),), False, '-liga-4d3b',
+                              re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3b(?:-[0-9]{1,3})?'), entries)
+        self.steps = (self.step_a, self.step_b)
+        for name in ('ALL_STEPS', 'STEPS'):
+            p = self.mock.patch.object(lm, name, self.steps)
+            p.start()
+            self.addCleanup(p.stop)
+        self.secret_values = self.secret_values + (FAKE_SECRET,)
+
+    def seed(self):
+        self._write(self.space_path(), ORIG_SPACE.decode('utf-8'))
+        os.chmod(self.space_path(), 0o644)
+        self._write(self.secrets_path(), json.dumps(OTHER_SECRETS))
+        os.chmod(self.secrets_path(), 0o600)
+
+    def marks(self):
+        return self.read_json(self.space_path()).get('migrations') or {}
+
+    def stamps(self):
+        m = self.marks()
+        return m['liga-4d3a']['backup'], m['liga-4d3b']['backup']
+
+    def start(self):
+        return self.quiet(self.lm.startup)
+
+
+class StepsDefaults(_WriteStand):
+    """Без синтетики: аліаси кроку a й «без `step` = 4d-3a»."""
+
+    def test_aliases_are_step_a(self):
+        lm = self.lm
+        self.assertIs(lm.ALL_STEPS[0], lm.STEP_A)
+        self.assertEqual(lm.Step._fields[:5], ('mark', 'roles', 'tracks', 'suffix', 'stamp_re'))
+        self.assertEqual((lm.MARK, lm.ROLE_MODULES, lm.BACKUP_SUFFIX), (lm.STEP_A.mark, lm.STEP_A.roles, lm.STEP_A.suffix))
+        self.assertIs(lm.STAMP_RE, lm.STEP_A.stamp_re)
+        self.assertEqual((lm.STEP_A.mark, lm.STEP_A.suffix, lm.STEP_A.tracks), ('liga-4d3a', '-liga-4d3a', True))
+
+    def test_no_step_argument_is_step_a(self):
+        lm = self.lm
+        self.assertEqual(lm.plan(), lm.plan(step='liga-4d3a'))
+        self.assertEqual(lm.plan(), lm.plan(step=lm.STEP_A))
+        self.assertEqual(lm.run(), 'done')
+        sj = self.read_json(self.space_path())
+        self.assertEqual(sorted(sj['migrations']), ['liga-4d3a'])
+        self.assertEqual(len(self.backups()), 1)
+        st = lm.status()
+        self.assertEqual(st['mark'], {k: sj['migrations']['liga-4d3a'][k] for k in ('at', 'roles', 'tracks', 'backup')})
+        self.assertEqual(lm.restore(self.backups()[0]), 'restored')
+
+    def test_unknown_step_never_raises(self):
+        self.assertEqual(self.lm.plan(step='liga-nope')['status'], 'abort-internal')
+
+
+class StepsTest(_TwoSteps):
+    """Крок = (позначка, ролі, напрямки, суфікс, `STAMP_RE`): імʼя бекапу однозначно називає крок; позначки незалежні."""
+
+    NAMES = (('20261106-120000-liga-4d3a', 'liga-4d3a'), ('20261106-120000-liga-4d3a-2', 'liga-4d3a'),
+             ('20261106-120000-liga-4d3b', 'liga-4d3b'), ('20261106-120000-liga-4d3b-17', 'liga-4d3b'),
+             ('20261106-120000-liga-4d3a-pre-restore', None), ('20261106-120000-liga-4d3b-pre-restore', None),
+             ('20261106-120000-liga-4d3b-1234', None), ('x20261106-120000-liga-4d3b', None), ('../20261106-120000-liga-4d3b', None))
+
+    def test_stamp_re_tells_the_steps_apart(self):
+        for name, mark in self.NAMES:
+            got = [s.mark for s in self.steps if s.stamp_re.fullmatch(name)]
+            self.assertEqual(got, [mark] if mark else [], name)
+            step = self.lm.step_of_stamp(name)
+            self.assertEqual(step.mark if step else None, mark, name)
+        for bad in (None, 5, '', ['20261106-120000-liga-4d3a']):
+            self.assertIsNone(self.lm.step_of_stamp(bad))
+
+    def test_list_backups_and_status_cover_all_steps(self):
+        self.assertEqual(self.lm.run_all()[0][:2], ('liga-4d3a', 'done'))
+        os.makedirs(os.path.join(self.deai, 'backups', '20260101-000000-liga-4d3b'))     # недописана тека без маніфесту
+        a, b = self.stamps()
+        self.assertEqual(self.lm._list_backups(), sorted([a, b]))
+        st = self.lm.status()
+        self.assertEqual(st['backups'], sorted([a, b]))
+        self.assertTrue(a.endswith('-liga-4d3a') and b.endswith('-liga-4d3b'))
+
+    def test_status_keeps_4d3a_keys_and_adds_steps(self):
+        self.lm.run_all()
+        st = self.lm.status()
+        self.assertTrue({'liga', 'space_id', 'mark', 'last', 'backups', 'error'} <= set(st))
+        self.assertEqual(st['mark'], st['steps']['liga-4d3a']['mark'])
+        self.assertEqual(list(st['steps']), ['liga-4d3a', 'liga-4d3b'])
+        for mark, step_info in st['steps'].items():
+            self.assertEqual(sorted(step_info), ['backups', 'mark'], mark)
+            self.assertEqual(step_info['backups'], st['backups'], mark)
+        self.assertEqual(sorted(st['steps']['liga-4d3a']['mark']), ['at', 'backup', 'roles', 'tracks'])
+        self.assertEqual(sorted(st['steps']['liga-4d3b']['mark']), ['at', 'backup', 'roles'])      # без `tracks`
+        self.assertEqual(st['steps']['liga-4d3b']['mark']['roles'], ['comments'])
+
+    def test_status_text_has_a_section_per_step(self):
+        self.lm.run_all()
+        text = self.lm.status_text(self.lm.status())
+        self.assertLess(text.index('Міграція ЛІГИ (liga-4d3a)'), text.index('Міграція ЛІГИ (liga-4d3b)'))
+        a, b = self.stamps()
+        self.assertIn('бекап: ' + a, text)
+        self.assertIn('бекап: ' + b, text)
+        self.assert_no_secrets(text)
+
+    def test_manifest_migration_must_match_the_step(self):
+        self.lm.run_all()
+        a, b = self.stamps()
+        for stamp, wrong in ((a, 'liga-4d3b'), (b, 'liga-4d3a')):
+            mp = os.path.join(self.deai, 'backups', stamp, 'manifest.json')
+            m = self.read_json(mp)
+            m['migration'] = wrong
+            with open(mp, 'w', encoding='utf-8') as f:
+                json.dump(m, f)
+            self.assertEqual(self.lm.restore(stamp), 'refuse-tampered', stamp)
+
+    def test_marks_are_independent(self):
+        """`skip-held`/`skip-done` одного кроку не чіпають другого; кожен пише лише свою позначку."""
+        self.space_json({'migrations': {'liga-4d3b': {'held': True}}})
+        self.assertEqual(self.lm.plan(step='liga-4d3b')['status'], 'skip-held')
+        self.assertEqual(self.lm.plan(step='liga-4d3a')['status'], 'ready')
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-held')
+        self.assertEqual(self.lm.run(step='liga-4d3a'), 'done')
+        self.assertEqual(self.marks()['liga-4d3b'], {'held': True})
+        self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
+        self.assertEqual(self.lm.plan(step='liga-4d3a')['status'], 'skip-held')
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'done')
+        mk = self.marks()
+        self.assertEqual(mk['liga-4d3a'], {'held': True})
+        self.assertEqual(sorted(mk['liga-4d3b']), ['at', 'backup', 'roles'])
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-done')
+
+    def test_step_b_backup_is_its_own_and_manifest_names_it(self):
+        self.lm.run_all()
+        a, b = self.stamps()
+        self.assertEqual(self.read_json(self.deai, 'backups', a, 'manifest.json')['migration'], 'liga-4d3a')
+        self.assertEqual(self.read_json(self.deai, 'backups', b, 'manifest.json')['migration'], 'liga-4d3b')
+        self.assertEqual(os.stat(os.path.join(self.deai, 'backups', b)).st_mode & 0o777, 0o700)
+        # крок b бачить стан ПІСЛЯ запису a: його бекап `space.json` уже має позначку 4d-3a
+        self.assertIn('liga-4d3a', self.read_json(self.deai, 'backups', b, 'space.json')['migrations'])
+        self.assertNotIn('liga-4d3b', self.read_json(self.deai, 'backups', b, 'space.json')['migrations'])
+
+
+class TwoStepsStartupTest(_TwoSteps):
+    """`startup()`: кроки по порядку; `abort-*` зупиняє наступні на цьому старті, `skip-*` — ні."""
+
+    def test_both_steps_on_one_start_in_order(self):
+        self.seed()
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        a, b = self.stamps()
+        self.assertEqual(sorted(self.backups()), sorted([a, b]))
+        self.assertLess(err.index('liga-4d3a: done'), err.index('liga-4d3b: done'))
+        sj = self.read_json(self.space_path())
+        self.assertIn('supabase-comments', sj['modules'])
+        self.assertIn('jira-tracker', sj['modules'])
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['supabase-comments'], {'key': FAKE_SECRET})
+        self.assertEqual(self.read_json(self.secrets_path())['other'], OTHER_SECRETS['other'])
+        self.assert_no_secrets_in_logs()
+
+    def test_last_json_is_the_last_action_plus_steps(self):
+        self.seed()
+        self.start()
+        a, b = self.stamps()
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['step'], last['backup'], last['roles']), ('done', 'liga-4d3b', b, ['comments']))
+        self.assertEqual(sorted(last['steps']), ['liga-4d3a', 'liga-4d3b'])
+        self.assertEqual(last['steps']['liga-4d3a']['backup'], a)          # звіт a не стертий звітом b (Поправка 8)
+        self.assertEqual(last['steps']['liga-4d3a']['roles'], ['tracker', 'dashboard', 'notify'])
+        self.assertEqual(last['steps']['liga-4d3b']['backup'], b)
+        self.assertEqual(last['secrets'], {'supabase-comments': ['key']})
+        self.assertRegex(last['at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$')
+        self.assert_no_secrets_in_logs()
+
+    def test_order_of_steps_is_the_order_of_startup(self):
+        self.seed()
+        order = []
+        real = self.lm._run
+
+        def spy(home, step=None):
+            order.append(step.mark)
+            return real(home, step)
+        with self.mock.patch.object(self.lm, '_run', spy):
+            self.start()
+        self.assertEqual(order, ['liga-4d3a', 'liga-4d3b'])
+
+    def test_abort_of_first_step_stops_the_second(self):
+        self.seed()
+        with self.mock.patch.object(self.dm, '_provider_for', lambda *a, **k: None):
+            st, err = self.start()
+        self.assertEqual(st, 'abort-provider')
+        self.assertEqual(self.backups(), [])
+        self.assertNotIn('liga-4d3b', err)
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['step']), ('abort-provider', 'liga-4d3a'))
+        self.assertEqual(list(last['steps']), ['liga-4d3a'])
+        self.assertNotIn('liga-4d3b', json.dumps(self.read_json(self.space_path()).get('migrations') or {}))
+
+    def test_skip_of_first_step_does_not_block_the_second(self):
+        for kind in ('done', 'held', 'nothing'):
+            self.setUp_fresh()
+            if kind == 'done':
+                self.space_json({'migrations': {'liga-4d3a': {'at': 'x', 'roles': [], 'tracks': False}}})
+            elif kind == 'held':
+                self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
+            else:
+                self.config(supabase=False, jira=False, design_work_root=None)
+                cfg = self.cfg
+                cfg['tasks']['x'] = {'dir': os.path.join(self.home, 'work', 'x')}
+                self._write(self.tasks_path, cfg)
+            st, err = self.start()
+            self.assertEqual(st, 'done', kind)
+            mk = self.marks()
+            self.assertEqual(sorted(mk['liga-4d3b']), ['at', 'backup', 'roles'], kind)
+            self.assertEqual(len(self.backups()), 1, kind)
+            self.assertIn('liga-4d3b: done', err, kind)
+            if kind == 'held':
+                self.assertIn('liga-4d3a: skip-held', err)               # `skip-held` стартовий рядок друкує, як у 4d-3a
+            else:
+                self.assertNotIn('liga-4d3a:', err, kind)                # `skip-done`/`skip-nothing` — тихо, як у 4d-3a
+            if kind == 'nothing':
+                self.assertNotIn('liga-4d3a', mk)
+
+    def setUp_fresh(self):
+        """Чистий дім між варіантами одного тесту (реєстр і конфіг — як на старті стенда)."""
+        import shutil
+        for sub in ('backups', 'migrations'):
+            shutil.rmtree(os.path.join(self.deai, sub), ignore_errors=True)
+        for p in (self.space_path(), self.secrets_path()):
+            if os.path.exists(p):
+                os.remove(p)
+        self.config()
+
+    def test_exception_does_not_break_startup_and_keeps_the_first_report(self):
+        real = self.lm._run
+
+        def flaky(home, step=None):
+            if step.mark == 'liga-4d3b':
+                raise RuntimeError(FAKE_SECRET)
+            return real(home, step)
+        with self.mock.patch.object(self.lm, '_run', flaky):
+            st, err = self.start()
+        self.assertEqual(st, 'abort-internal')
+        self.assertIn('liga-4d3a: done', err)
+        self.assertIn('abort-internal — RuntimeError', err)
+        self.assertNotIn(FAKE_SECRET, err)
+        self.assert_no_secrets_in_logs()
+
+    def test_second_start_is_silent_and_writes_nothing(self):
+        self.start()
+        before = self.snapshot_tree()
+        st, err = self.start()
+        self.assertEqual(st, 'skip-done')
+        self.assertEqual(err, '')
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_run_all_returns_marks_statuses_infos(self):
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'done'), ('liga-4d3b', 'done')])
+        self.assertEqual(res[1][2]['roles'], ['comments'])
+        self.assertEqual([(m, s) for m, s, _i in self.lm.run_all()], [('liga-4d3a', 'skip-done'), ('liga-4d3b', 'skip-done')])
+        self.assert_no_secrets(repr(res))
+
+
+class LifoRestoreTest(_TwoSteps):
+    """Відкат LIFO: `restore <a>` при застосованому b — відмова без запису; `restore <b>` лишає a застосованим."""
+
+    def setUp(self):
+        super().setUp()
+        self.seed()
+        self.assertEqual(self.lm.run(step='liga-4d3a'), 'done')
+        self.after_a = (self.read(self.space_path()), self.read(self.secrets_path()))
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'done')
+        self.a, self.b = self.stamps()
+
+    def test_restore_a_refused_while_b_applied_and_writes_nothing(self):
+        before = self.snapshot_tree()
+        st, info = self.lm._restore(self.a)
+        self.assertEqual(st, 'refuse-later-applied')
+        self.assertEqual(info['rollback_first'], self.b)
+        self.assertEqual(self.lm.restore(self.a, hold=True), 'refuse-later-applied')
+        self.assertEqual(self.snapshot_tree(), before)                    # ні space.json, ні секретів, ні last.json, ні pre-restore
+
+    def test_restore_b_returns_the_state_after_a(self):
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.after_a[0])
+        self.assertEqual(self.read(self.secrets_path()), self.after_a[1])
+        self.assertIn('liga-4d3a', self.marks())
+        self.assertNotIn('liga-4d3b', self.marks())
+        self.assertNotIn(FAKE_SECRET, self.read(self.secrets_path()).decode('utf-8'))
+        self.assertTrue(any(n.startswith(self.b + '-pre-restore') for n in self.backups()))
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['step']), ('restored', 'liga-4d3b'))
+        self.assertEqual(sorted(last['steps']), ['liga-4d3a', 'liga-4d3b'])
+        self.assertEqual(last['steps']['liga-4d3a']['status'], 'done')    # звіт кроку a не стертий
+
+    def test_restore_a_allowed_after_b_was_rolled_back(self):
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.restore(self.a), 'restored')
+        self.assertEqual(self.read(self.space_path()), ORIG_SPACE)
+        self.assertEqual(self.read_json(self.secrets_path()), OTHER_SECRETS)
+
+    def test_hold_marks_only_its_own_step(self):
+        a_mark = self.marks()['liga-4d3a']
+        self.assertEqual(self.lm.restore(self.b, hold=True), 'restored')
+        mk = self.marks()
+        self.assertEqual(mk['liga-4d3b'], {'held': True})
+        self.assertEqual(mk['liga-4d3a'], a_mark)                          # a недоторкана
+        self.assertEqual(self.lm.plan(step='liga-4d3b')['status'], 'skip-held')
+
+    def test_held_b_does_not_block_restore_of_a(self):
+        self.assertEqual(self.lm.restore(self.b, hold=True), 'restored')
+        self.assertEqual(self.lm.restore(self.a), 'restored')
+        self.assertEqual(self.read(self.space_path()), ORIG_SPACE)
+
+    def test_hold_on_a_marks_only_a(self):
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.restore(self.a, hold=True), 'restored')
+        self.assertEqual(self.marks(), {'liga-4d3a': {'held': True}})
+
+    def test_restore_a_alone_is_still_allowed_when_b_was_never_applied(self):
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.run(step='liga-4d3a'), 'skip-done')
+        self.assertEqual(self.lm.restore(self.a), 'restored')
+
+
+class CliStepsTest(_TwoSteps):
+    """`bin/migrate_liga.py`: усі кроки, `restore` за імʼям бекапу, відмова LIFO → код 1; з одним кроком вивід = 4d-3a."""
+
+    def test_single_step_output_is_byte_identical_to_4d3a(self):
+        lm = self.lm
+        with self.mock.patch.object(lm, 'STEPS', (self.step_a,)):
+            code, out, _ = self.cli('status')
+            self.assertEqual(out, 'Міграція ЛІГИ (liga-4d3a)\n  простір: legacy\n'
+                                  '  позначки нема: міграція ще не виконана (або відкочена)\n  бекапи: нема\n')
+            code, out, _ = self.cli('dry-run')
+            self.assertEqual((code, out), (0, lm.report(lm.plan(step=self.step_a)) + '\n'))
+            self.assertTrue(out.startswith('liga-4d3a: ready\n'))
+            self.assertEqual(self.backups(), [])
+            code, out, _ = self.cli('run')
+            b = self.backups()[0]
+            self.assertEqual((code, out), (0, 'liga-4d3a: done\n  міграцію виконано\n'
+                                              '  ролі: tracker, dashboard, notify; напрямки: так; бекап: %s\n'
+                                              '  відкат: python3 bin/migrate_liga.py restore %s [--hold]\n' % (b, b)))
+            self.assertEqual(len(self.backups()), 1)
+            code, out, _ = self.cli('status')
+            self.assertRegex(out, r'^Міграція ЛІГИ \(liga-4d3a\)\n  простір: legacy\n'
+                                  r'  позначка: \S+, ролі: tracker, dashboard, notify, напрямки: так, бекап: %s\n'
+                                  r'  останній звіт: done \(\S+\)\n  бекапи: %s\n$' % (re.escape(b), re.escape(b)))
+            code, out, _ = self.cli('run')
+            self.assertEqual((code, out), (0, 'liga-4d3a: skip-done\n  міграцію вже виконано (позначка в space.json)\n'))
+            code, out, _ = self.cli('restore', b)
+            self.assertEqual(code, 0)
+            self.assertRegex(out, r'^liga-4d3a restore: restored\n  запобіжна копія поточних space.json і секретів ЛІГИ '
+                                  r'\(до відкату\): backups/%s-pre-restore\n$' % re.escape(b))
+            code, out, _ = self.cli('restore', '20990101-000000-liga-4d3a')
+            self.assertEqual((code, out), (1, 'liga-4d3a restore: refuse-stamp\n'))
+        self.assert_no_secrets_in_logs()
+
+    def test_status_dry_run_run_show_all_steps(self):
+        code, out, _ = self.cli('dry-run')
+        self.assertEqual(code, 0)
+        self.assertLess(out.index('liga-4d3a: ready'), out.index('liga-4d3b: ready'))
+        self.assertEqual(self.backups(), [])
+        code, out, _ = self.cli('run')
+        self.assertEqual(code, 0)
+        a, b = self.stamps()
+        self.assertLess(out.index('liga-4d3a: done'), out.index('liga-4d3b: done'))
+        self.assertIn('restore %s [--hold]' % a, out)
+        self.assertIn('restore %s [--hold]' % b, out)
+        code, out, _ = self.cli('status')
+        self.assertLess(out.index('Міграція ЛІГИ (liga-4d3a)'), out.index('Міграція ЛІГИ (liga-4d3b)'))
+        code, out, _ = self.cli('run')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d3a: skip-done', out)
+        self.assertIn('liga-4d3b: skip-done', out)
+        self.assert_no_secrets_in_logs()
+
+    def test_run_stops_after_abort_and_exits_1(self):
+        with self.mock.patch.object(self.dm, '_provider_for', lambda *a, **k: None):
+            code, out, _ = self.cli('run')
+        self.assertEqual(code, 1)
+        self.assertIn('liga-4d3a: abort-provider', out)
+        self.assertNotIn('liga-4d3b', out)
+        self.assertEqual(self.backups(), [])
+
+    def test_restore_finds_the_step_by_stamp_and_lifo_refusal_exits_1(self):
+        self.cli('run')
+        a, b = self.stamps()
+        before = self.snapshot_tree()
+        code, out, err = self.cli('restore', a)
+        self.assertEqual(code, 1)
+        self.assertIn('liga-4d3a restore: refuse-later-applied', out)
+        self.assertIn(b, out)                                              # називає бекап, який відкочувати першим
+        self.assertEqual(self.snapshot_tree(), before)
+        code, out, _ = self.cli('restore', b)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith('liga-4d3b restore: restored\n'))
+        code, out, _ = self.cli('restore', b, '--hold')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.marks()['liga-4d3b'], {'held': True})
+        code, out, _ = self.cli('restore', a)
+        self.assertEqual((code, out.split('\n')[0]), (0, 'liga-4d3a restore: restored'))
+        self.assert_no_secrets_in_logs()
 
 
 if __name__ == '__main__':
