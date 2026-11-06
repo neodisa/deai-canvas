@@ -2485,5 +2485,82 @@ class AfterMigrationParity4d3b(unittest.TestCase):
                 self.assertTrue(any(k.startswith(s) for k in flat), 'порожній розділ порівняння: ' + s)
 
 
+class RealPushNonIsolated(_VcsStand):
+    """Task 7 (ревʼю 2): справжній push МІГРОВАНОГО `git-sync` НЕІЗОЛЬОВАНИМ шляхом — тим, яким піде власник на першому старті (нема
+    `DC_TASKS_FILE`/`DC_NO_OVERVIEW`: `vcs_provider()` будує `ctx` через `module_ctx` + `_flat_mirror_overlay()`, а не через
+    `_vcs_legacy_ctx()` закону ізоляції, яким ходить живий тест). Справжній git, лише локально: bare-origin із початковим комітом
+    і передстворене ПЛОСКЕ дзеркало 0.7.0 (справжній клон) там, де його лишила б версія 0.17. Мережі й сервера нема: викликається та
+    сама серверна функція, що й `/api/vcs-push` (`vcs_task` → `gitlab_sync`). Вигадані значення, `~/.gitconfig` не читається."""
+
+    def git(self, rig, cwd, *args):
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env.update(HOME=rig.home, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0', LC_ALL='C',
+                   GIT_AUTHOR_NAME='Seed', GIT_AUTHOR_EMAIL='seed@example.invalid',
+                   GIT_COMMITTER_NAME='Seed', GIT_COMMITTER_EMAIL='seed@example.invalid')
+        r = subprocess.run(['git'] + list(args), cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, 'git %s: %s' % (' '.join(args), r.stderr))
+        return r.stdout.strip()
+
+    def test_migrated_git_sync_pushes_through_the_precreated_flat_mirror(self):
+        mb, serve = self.mb, self.serve
+        rig, space, cfg = mb.liga(self.tmp, 'push')
+        mirrors = os.path.join(rig.home, 'mirrors')
+        origin = os.path.join(rig.home, 'origin.git')
+        self.git(rig, rig.home, 'init', '--bare', '--quiet', '--initial-branch=main', origin)
+        seed = os.path.join(rig.home, 'seed')
+        self.git(rig, rig.home, 'clone', '--quiet', origin, seed)
+        self.git(rig, seed, 'symbolic-ref', 'HEAD', 'refs/heads/main')
+        with open(os.path.join(seed, 'README.md'), 'w', encoding='utf-8') as f:
+            f.write('seed\n')
+        self.git(rig, seed, 'add', '-A')
+        self.git(rig, seed, 'commit', '--quiet', '-m', 'seed')
+        self.git(rig, seed, 'push', '--quiet', 'origin', 'main')
+        # плоске дзеркало 0.7.0: `<DC_MIRRORS_DIR>/<slug останнього відрізка після ':'>` — правило `_mirror` (`mirror_flat`)
+        slug = re.sub(r'[^\w.-]+', '-', origin.split(':')[-1]).strip('-')
+        mirror = os.path.join(mirrors, slug)
+        self.git(rig, rig.home, 'clone', '--quiet', '--branch', 'main', origin, mirror)
+        head_before = self.git(rig, mirror, 'rev-parse', 'HEAD')
+        # ціль синку — зашитий формат 0.17: `gitlab{repo, path}` у `tasks.json`
+        cfg['tasks']['a-1']['gitlab'] = {'repo': origin, 'path': 'mockup/a-1', 'branch': 'main'}
+        mb._write(rig.tasks_path, cfg)
+        env = {'DC_MIRRORS_DIR': mirrors, 'DC_IDENTITY_NAME': mb.IDENTITY[0], 'DC_IDENTITY_EMAIL': mb.IDENTITY[1],
+               'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0', 'GIT_SSH_COMMAND': 'false'}
+        with rig.activate(env):
+            self.assertEqual(self.lm_run_all(), [('liga-4d3a', 'done'), ('liga-4d3b', 'done')])
+            self.assertFalse(self.implicit.isolated(), 'неізольований прогін: нема ні DC_TASKS_FILE, ні DC_NO_OVERVIEW')
+            with self.spaces.request_space(mb.SPACE_ID):
+                self.dm.reset_caches()
+                try:
+                    prov, ctx, legacy = serve.vcs_provider()
+                    self.assertIsInstance(prov, self.dm.Module)
+                    self.assertTrue(legacy)
+                    self.assertTrue(ctx['mirror_flat'])
+                    self.assertEqual(ctx['cache_dir'], mirrors)
+                    self.assertIn('find_tool', ctx)                       # `ctx` від `module_ctx`, не від `_vcs_legacy_ctx()`
+                    self.assertTrue(ctx['space']['path'])
+                    cfg2 = serve.load_tasks()
+                    task = cfg2['tasks']['a-1']
+                    v = serve.vcs_task(cfg2, 'a-1', task)
+                    self.assertIsNotNone(v[3])
+                    res = serve.gitlab_sync('a-1', task, v[3], 'it1', vcs=v[:3])
+                finally:
+                    self.dm.reset_caches()
+        self.assertTrue(res.get('synced'), res)
+        self.assertEqual(self.git(rig, origin, 'log', '-1', '--format=%s', 'main'), 'design-canvas: sync mockup/a-1 (Alpha demo) · it1')
+        tree = self.git(rig, origin, 'ls-tree', '-r', '--name-only', 'main').split('\n')
+        self.assertIn('mockup/a-1/pages.json', tree)
+        head_after = self.git(rig, mirror, 'rev-parse', 'HEAD')
+        self.assertNotEqual(head_after, head_before, 'push пішов не через передстворене дзеркало')
+        self.assertEqual(head_after, self.git(rig, origin, 'rev-parse', 'main'))
+        self.assertEqual(sorted(n for n in os.listdir(mirrors) if not n.endswith('@lock')), [slug], 'зʼявилось нове дзеркало')
+        self.assertFalse(os.path.exists(os.path.join(rig.deai, 'cache', mb.SPACE_ID, 'git-sync', 'mirrors')))
+        self.assertFalse(os.path.exists(os.path.join(rig.deai, 'cache', mb.SPACE_ID)))
+
+    def lm_run_all(self):
+        import liga_migrate
+        return [(m, st) for m, st, _i in liga_migrate.run_all()]
+
+
 if __name__ == '__main__':
     unittest.main()
