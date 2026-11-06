@@ -26,6 +26,7 @@ import spaces_guard  # noqa: E402
 from make_before_4d3c import SB_KEY, SB_URL  # noqa: E402  (вигадані значення — ті самі, що в генераторі)
 from make_before_4d3a import SocketTripwire  # noqa: E402  (розтяжка мережі: нічого, крім loopback)
 from test_liga_migrate import _WriteStand  # noqa: E402  (стенд запису 4d-3a: тимчасові HOME/DEAI_HOME, CLI, пошук секретів)
+from test_liga_migrate_b import _ABSENT, _diff, _flat  # noqa: E402  (порівняння знімків ключ у ключ — імпорт, не друга копія)
 from test_publish_module import DispatchWorld, _Stub, _write_json  # noqa: E402  (світ «два простори + сервер + розтяжка»)
 
 _REAL = None
@@ -1374,6 +1375,457 @@ class CheckVerdictIsolated(_StepC):
             verdict = serve.module_check_verdict(space, PUB_MOD)
         self.assertEqual((verdict['ok'], verdict['error']), (False, 'isolated'))
         self.assertEqual(wire.count, 0)
+
+
+# ---------------------------------------------------------------------------------- Task 5: паритет після міграції
+
+#: Підписи нового поля `compat` картки `vercel-publish` — ТОЧНО як бачить людина (зміна підпису — свідома й видима в цьому тесті).
+_COMPAT_LABEL = ('Сумісність (⚠ у режимі ЛІГА поля auth, team і password не читаються: вхід, скоуп і пароль превʼю беруться зі '
+                 'старих налаштувань; зміна значення на живому просторі перемикає на шлях модуля — нові проєкти й нові URL)')
+_COMPAT_OPT = 'design-canvas (ЛІГА): проєкти pv-…, скоуп і пароль превʼю з tasks.json'
+
+
+def _expect_card():
+    """Картка `vercel-publish` у `GET /api/modules` після кроку c: увімкнена, `auth` = `cli`, `team` порожня, нове поле `compat`
+    (секретні `token`/`password` — без змін: `set: false`), версія модуля 1.2.0 (1.1.0 до `compat`)."""
+    c = '/modules_card/card'
+    return {c + '/enabled': (False, True),
+            c + '/version': ('1.1.0', '1.2.0'),
+            c + '/settings[0]/value': ('token', 'cli'),
+            c + '/settings[2]/value': (_ABSENT, ''),
+            c + '/settings[4]/key': (_ABSENT, 'compat'),
+            c + '/settings[4]/label': (_ABSENT, _COMPAT_LABEL),
+            c + '/settings[4]/options[0]/label': (_ABSENT, 'Немає'),
+            c + '/settings[4]/options[0]/value': (_ABSENT, ''),
+            c + '/settings[4]/options[1]/label': (_ABSENT, _COMPAT_OPT),
+            c + '/settings[4]/options[1]/value': (_ABSENT, 'design-canvas'),
+            c + '/settings[4]/required': (_ABSENT, False),
+            c + '/settings[4]/type': (_ABSENT, 'select'),
+            c + '/settings[4]/value': (_ABSENT, 'design-canvas')}
+
+
+def _expect_publish_derived():
+    """Похідне від `capabilities.publish` і картки, що рахує JS і `GET /api/task` із НИХ, а не з гілки публікації:
+    `is_vercel_publish` (хто веде роль — модуль), `disable_consequences_publish` (вимкнення картки в просторі з інтеграціями
+    повертає вбудовану публікацію: `kind: legacy`, Task 3) і дзеркало `capabilities.publish` у `GET /api/task`."""
+    exp = {'/js/is_vercel_publish': (False, True),
+           '/js/disable_consequences_publish[0]/kind': (_ABSENT, 'legacy'),
+           '/js/disable_consequences_publish[0]/role': (_ABSENT, 'publish'),
+           '/js/disable_consequences_publish[]': ([], _ABSENT)}
+    for k in ('fresh', 'published', 'after_change'):
+        exp['/task/%s/space_capabilities_publish' % k] = ('legacy', 'vercel-publish')
+    return exp
+
+
+def _expect_diff_ab():
+    """Стенд «після a+b»: крок c змінює лише `capabilities.publish`, `compat.publish`, картку `vercel-publish` і похідне від них
+    (`_expect_publish_derived`). Точний словник: зайва різниця червоніє так само, як зникла очікувана."""
+    exp = {'/api_spaces/capabilities/publish': ('legacy', 'vercel-publish'),
+           '/api_spaces/compat/publish': (_ABSENT, 'design-canvas')}
+    exp.update(_expect_card())
+    exp.update(_expect_publish_derived())
+    return exp
+
+
+def _expect_diff_unmigrated():
+    """Стенд «нічого не мігровано» (ЛІГА 0.18): після `run_all()` (a, b, c) змінюються `capabilities` п'яти ролей (`tracker` лишається
+    `legacy`: у стенді знімка нема облікових даних Jira) і `compat` для `comments`/`vcs`/`publish`; решта — як у `_expect_diff_ab`
+    (картка, похідне). `compat` у знімку до — `None` (ключа нема): лист `/api_spaces/compat` зникає разом із `None`."""
+    exp = {'/api_spaces/capabilities/comments': ('legacy', 'supabase-comments'),
+           '/api_spaces/capabilities/dashboard': ('legacy', 'supabase-dashboard'),
+           '/api_spaces/capabilities/notify': ('legacy', 'supabase-teams'),
+           '/api_spaces/capabilities/publish': ('legacy', 'vercel-publish'),
+           '/api_spaces/capabilities/vcs': ('legacy', 'git-sync'),
+           '/api_spaces/compat': (None, _ABSENT),
+           '/api_spaces/compat/comments': (_ABSENT, 'comment-layer'),
+           '/api_spaces/compat/publish': (_ABSENT, 'design-canvas'),
+           '/api_spaces/compat/vcs': (_ABSENT, 'design-canvas')}
+    exp.update(_expect_card())
+    exp.update(_expect_publish_derived())
+    return exp
+
+
+EXPECT_DIFF_AB = _expect_diff_ab()
+EXPECT_DIFF_UNMIGRATED = _expect_diff_unmigrated()
+
+#: Що бачить людина і чого НЕ можуть торкнутись кроки: усе, що публікація, пароль і задача віддають; у `/task` — крім дзеркала
+#: `capabilities` (воно — не «що бачить людина», а те саме значення, що в `/api_spaces`), у `/js` — крім двох похідних від ролі.
+_SEEN_PREFIXES = ('/publish/', '/password/', '/task/',
+                  '/js/is_legacy_publish', '/js/is_remote_publish', '/js/pw_view', '/js/preview_target', '/js/copy_url',
+                  '/js/publish_reaction', '/js/bar_')
+_NOT_SEEN_LEAVES = ('/space_capabilities_publish',)
+
+
+def _is_seen(path):
+    return path.startswith(_SEEN_PREFIXES) and not path.endswith(_NOT_SEEN_LEAVES)
+
+
+class AfterMigrationParity4d3c(unittest.TestCase):
+    """Сценарії знімка 0.18.0 (`before-4d3c.json`) на МІГРОВАНІЙ ЛІЗІ у тимчасовому домі: стенд `unmigrated` — `run_all()` (a, b, c),
+    стенд `ab` — a+b КОДОМ кроків (пін `STEPS[:2]`, як у знімку) і далі `run(step='liga-4d3c')`. Знімання — той самий генератор
+    `tests/make_before_4d3c.py` (імпорт: `Rig`, `liga`-стенд, сценарії, `Server`), лише стенд після створення мігрується (підміна
+    `_stand`). Мережі нема (`NoNet`, `SocketTripwire`), справжній `~/.deai` стереже `spaces_guard`.
+
+    Те, що бачить людина (`/publish`, `/task`, `/password`, `/js`), — рівно знімок; різниці лише в `capabilities`/`compat`/картці."""
+
+    @classmethod
+    def setUpClass(cls):
+        import liga_migrate as lm
+        import make_before_4d3c as g
+        cls.g, cls.lm = g, lm
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.before = json.load(f)
+        cls.results, cls.marks = {}, {}
+        orig = g._stand
+
+        def migrated(tmp, name, migrate):
+            rig = orig(tmp, name, migrate=False)
+            with rig.activate():
+                if name == 'ab':
+                    with mock.patch.object(lm, 'STEPS', lm.ALL_STEPS[:2]):                  # a+b як у знімку; c — окремо
+                        res = [(m, st, i.get('roles')) for m, st, i in lm.run_all()]
+                    res.append(('liga-4d3c', lm.run(step='liga-4d3c'), None))
+                else:
+                    res = [(m, st, i.get('roles')) for m, st, i in lm.run_all()]
+                with open(os.path.join(rig.space_dir, 'space.json'), encoding='utf-8') as fh:
+                    cls.marks[name] = json.load(fh)
+            cls.results[name] = res
+            return rig
+        with mock.patch.object(g, '_stand', migrated):
+            cls.after = g.make()
+
+    def test_all_steps_ran(self):
+        """Обидва стенди справді мігровано (a, b, c = `done`; ролі c = `['publish']`): порівняння — з МІГРОВАНОЮ лігою."""
+        for name in ('unmigrated', 'ab'):
+            self.assertEqual([(m, st) for m, st, _r in self.results[name]],
+                             [('liga-4d3a', 'done'), ('liga-4d3b', 'done'), ('liga-4d3c', 'done')], name)
+            marks = self.marks[name]['migrations']
+            self.assertEqual(sorted(marks), ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'], name)
+            self.assertEqual(marks['liga-4d3c']['roles'], ['publish'], name)
+            self.assertNotIn('tracks', marks['liga-4d3c'], name)
+        self.assertEqual(self.results['unmigrated'][2][2], ['publish'])
+        for name in ('unmigrated', 'ab'):
+            ent = self.marks[name]['modules']['vercel-publish']
+            self.assertEqual(ent, {'enabled': True, 'shared_state': True, 'settings': {'auth': 'cli', 'team': '', 'compat': 'design-canvas'}})
+
+    def test_snapshot_is_big_enough_to_mean_something(self):
+        """Порівняння не порожнє: сотні листків на стенд, усі розділи на місці (інакше «нема відмінностей» нічого б не казало)."""
+        for name in ('unmigrated', 'ab'):
+            self.assertGreater(len(_flat(self.before['stands'][name])), 400)
+            self.assertEqual(sorted(self.after['stands'][name]), sorted(self.before['stands'][name]))
+
+    def test_only_expected_differences_unmigrated(self):
+        self.assertEqual(_diff(self.before['stands']['unmigrated'], self.after['stands']['unmigrated']), EXPECT_DIFF_UNMIGRATED)
+
+    def test_only_expected_differences_ab(self):
+        self.assertEqual(_diff(self.before['stands']['ab'], self.after['stands']['ab']), EXPECT_DIFF_AB)
+
+    def test_expected_diff_is_exact_not_loose(self):
+        """Охоронець самого порівняння: зайвий листок і зниклий очікуваний — обидва червоніють на ОБОХ стендах."""
+        for name, exp in (('unmigrated', EXPECT_DIFF_UNMIGRATED), ('ab', EXPECT_DIFF_AB)):
+            before = self.before['stands'][name]
+            extra = json.loads(json.dumps(self.after['stands'][name]))
+            extra['publish']['first']['response']['status'] = 500                      # зайвий листок
+            d = _diff(before, extra)
+            self.assertIn('/publish/first/response/status', d)
+            self.assertNotEqual(d, exp)
+            missing = json.loads(json.dumps(self.after['stands'][name]))
+            del missing['api_spaces']['compat']['publish']                              # зник очікуваний листок
+            self.assertNotEqual(_diff(before, missing), exp)
+            self.assertNotIn('/api_spaces/compat/publish', _diff(before, missing))
+
+    def test_nothing_a_person_sees_changed(self):
+        """Публікація (відповідь, `tasks.json`, `iterations.json`, argv `npx`, сторінки, шпигуни), `GET /api/task`, пароль превʼю
+        і JS-читання (`pwView`, `previewTarget`, `copyUrl`, `publishReaction`, `barState`) — рівно знімок: жодної різниці й УСІ розділи
+        непорожні. Різниці є лише в `capabilities`/`compat`/картці й похідному від них (`is_vercel_publish`, `disable_consequences`,
+        дзеркало `capabilities` у `/api/task`)."""
+        for name in ('unmigrated', 'ab'):
+            for path in _diff(self.before['stands'][name], self.after['stands'][name]):
+                self.assertFalse(_is_seen(path), '%s: змінилося те, що бачить людина: %s' % (name, path))
+            flat = _flat(self.after['stands'][name])
+            for prefix in ('/publish/', '/task/', '/password/', '/js/'):
+                self.assertGreater(len([k for k in flat if k.startswith(prefix)]), 20, name + ' ' + prefix)
+            for sc in self.g.SCENARIOS:
+                self.assertTrue(any(k.startswith('/publish/%s/response/' % sc) for k in flat), name + ' ' + sc)
+            self.assertIn('/js/copy_url', flat)
+            self.assertEqual(flat['/js/copy_url'], 'https://pv-12345678.vercel.app/#k=1100&p=alpha')
+            first = dict((k, v) for k, v in self.after['stands'][name]['publish']['first']['response']['pairs'])
+            self.assertEqual((first['url'], first['deploy_url'], first['verified']), ('https://pv-12345678.vercel.app',) * 2 + (True,))
+
+    def test_card_is_enabled_without_secrets(self):
+        """Картка мігрованого `vercel-publish`: увімкнена, `compat` = `design-canvas`; секретні `token`/`password` лишились
+        `set: false` (крок секретів не пише: `secrets.json` не змінюється)."""
+        for name in ('unmigrated', 'ab'):
+            card = self.after['stands'][name]['modules_card']['card']
+            self.assertTrue(card['enabled'])
+            by = {s['key']: s for s in card['settings']}
+            self.assertEqual((by['auth']['value'], by['compat']['value']), ('cli', 'design-canvas'))
+            for key in ('token', 'password'):
+                self.assertEqual((by[key]['type'], by[key]['set']), ('secret', False), name + ' ' + key)
+                self.assertNotIn('value', by[key])
+
+    def test_capabilities_and_compat_after_migration(self):
+        for name in ('unmigrated', 'ab'):
+            a = self.after['stands'][name]['api_spaces']
+            self.assertEqual(a['capabilities']['publish'], 'vercel-publish')
+            self.assertEqual(a['compat']['publish'], 'design-canvas')
+            # на обох стендах п'ять ролей ведуть модулі (на `ab` — після a+b+c, на `unmigrated` — після `run_all`); `tracker` лишається
+            # `legacy`: у стенді знімка нема облікових даних Jira, тож крок a нічого не мігрує для цієї ролі
+            self.assertEqual({k: v for k, v in a['capabilities'].items() if k != 'tokens'}, {**_ROLE_IDS, 'tracker': 'legacy'})
+
+
+# ---------------------------------------------------------------------------------- Task 5: НЕізольований шлях власника
+
+class RealPublishNonIsolated(unittest.TestCase):
+    """Task 5: публікація МІГРОВАНОЇ ЛІГИ НЕІЗОЛЬОВАНИМ шляхом — тим, яким піде власник на першому старті 0.19 (нема `DC_TASKS_FILE`/
+    `DC_NO_OVERVIEW`: `assertFalse(implicit.isolated())`). Живий тест ізольований (`DC_TASKS_FILE`) і доводить ізольований шлях,
+    тож твердження про шлях власника — ТУТ: справжній `serve._node_bin` знаходить фальшивий `npx`, що стоїть ПЕРШИМ на `PATH`
+    (а не підмінений шов), справжній сервер і `Handler._publish`, справжні запис `tasks.json`/`iterations.json` і шиті сторінки.
+    Підмінено лише те, що вийшло б у мережу чи в спільний стан: `_fetch_page` модуля, `serve._registry_push`,
+    `Handler._overview_sync`, `serve.git_autocommit` — це шпигуни, що записують ПОРЯДОК і аргументи викликів.
+
+    Той самий сценарій на НЕмігрованій лізі (`Implicit`) дає ТІ САМІ дані: порівнюємо два прогони між собою, а не лише зі знімком.
+    Тимчасові `HOME`/`DEAI_HOME` через `mock.patch.dict` у `setUp`; вигадані значення; мережі нема (`NoNet`, `SocketTripwire`)."""
+
+    def setUp(self):
+        import contextlib
+        import fake_npx
+        import liga_migrate as lm
+        import make_before_4d3c as g
+        self.g, self.fake_npx, self.lm = g, fake_npx, lm
+        self._tmp = tempfile.TemporaryDirectory(prefix='b4d3c-real-')
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = os.path.realpath(self._tmp.name)
+        env = mock.patch.dict(os.environ, {'HOME': os.path.join(self.tmp, 'home0'), 'DEAI_HOME': os.path.join(self.tmp, 'deai0')})
+        env.start()
+        self.addCleanup(env.stop)
+        for name in g.CLEAN:                                        # чисте оточення (`mock.patch.dict` поверне його в `stop`)
+            os.environ.pop(name, None)
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.wire = stack.enter_context(SocketTripwire())
+        self.net = g.NoNet()
+        stack.enter_context(mock.patch.object(serve.urllib.request, 'urlopen', self.net))
+
+    def tearDown(self):
+        self.assertEqual(self.wire.count, 0)
+        self.assertEqual(self.net.calls, 0)
+
+    # --- один прогін сценарію на стенді (мігрованому чи ні)
+    def publish_once(self, rig, srv, npxdir, scenario, body=None, page=None, mint=False):
+        """Одна публікація `POST /api/publish` НЕІЗОЛЬОВАНИМ шляхом: `serve._node_bin` НЕ підмінено (його знаходить `PATH`)."""
+        import secrets
+        g = self.g
+        calls, fetched = [], []
+
+        def fetch(url):
+            fetched.append(url)
+            return page or g.PAGE_GATE
+        dm.reset_caches()
+        module_globals = dm.catalog()['vercel-publish'].fn('publish').__globals__
+        self.fake_npx.make(npxdir, scenario)
+        with mock.patch.dict(module_globals, {'_fetch_page': fetch}), \
+                mock.patch.object(serve, '_registry_push', lambda tid: calls.append(['registry_push', tid]) or False), \
+                mock.patch.object(serve, 'git_autocommit',
+                                  lambda d, msg, push=None: calls.append(['git_autocommit', g.rel(d, rig.home), msg])), \
+                mock.patch.object(serve.Handler, '_overview_sync', lambda handler: calls.append(['overview_sync'])), \
+                mock.patch.object(serve, 'server_code_staleness', lambda *a, **kw: None), \
+                mock.patch.object(secrets, 'choice', g._Mint() if mint else secrets.choice):
+            status, resp = g._raw(srv, 'POST', '/api/publish', task=g.TID, body=body or {}, hook=g._pairs)
+        with open(rig.tasks_path, encoding='utf-8') as fh:
+            task = json.load(fh)['tasks'][g.TID]
+        task_dir = os.path.join(rig.home, 'work', g.TID)
+        with open(os.path.join(task_dir, 'iterations.json'), encoding='utf-8') as fh:
+            meta = json.load(fh)
+        pages, build = g._pages(task_dir, rig.home)
+        snap = {'response': {'status': status, 'pairs': resp},
+                'tasks_after': {'vercel_project': task.get('vercel_project'), 'vercel_scope': task.get('vercel_scope')},
+                'iterations_after': {'publish_url': meta.get('publish_url'),
+                                     'published_at': '<time>' if meta.get('published_at') else None,
+                                     'publish_verified': meta.get('publish_verified'),
+                                     'publish_remote': 'present' if 'publish_remote' in meta else 'absent'},
+                'npx_argv': [c['argv'] for c in self.fake_npx.calls(npxdir)],
+                'build': build, 'pages': pages, 'spies': {'calls': calls, 'fetched_urls': fetched}}
+        return g.scrub(snap, rig.home)
+
+    def exercise(self, migrated):
+        """Стенд ЛІГИ (`migrated` — після `run_all()`: a, b, c) → `(дані, мета)`; `дані` мусять збігатись між двома прогонами,
+        `мета` — те, що різниться за задумом (`capabilities.publish`, постачальник)."""
+        g = self.g
+        name = 'mig' if migrated else 'imp'
+        rig = g._stand(self.tmp, name, migrate=False)
+        npxdir = os.path.join(rig.home, 'fake-npx')
+        self.fake_npx.make(npxdir, g.NPX_OK)
+        env = {**g._env_extra(rig), 'PATH': npxdir + os.pathsep + os.environ.get('PATH', '')}
+        data, meta = {}, {}
+        space = {'id': g.SPACE_ID, 'path': rig.space_dir, 'legacy': True, 'integrations': True}
+        with rig.activate(env):
+            if migrated:
+                res = [(m, st) for m, st, _i in self.lm.run_all()]
+                self.assertEqual(res, [('liga-4d3a', 'done'), ('liga-4d3b', 'done'), ('liga-4d3c', 'done')])
+            dm.reset_caches()
+            # ⛔ НЕізольований прогін: нема ні `DC_TASKS_FILE`, ні `DC_NO_OVERVIEW`; `npx` — фальшивий, перший на `PATH`
+            self.assertFalse(implicit.isolated(), 'неізольований прогін: нема ні DC_TASKS_FILE, ні DC_NO_OVERVIEW')
+            self.assertNotIn('DC_TASKS_FILE', os.environ)
+            self.assertNotIn('DC_NO_OVERVIEW', os.environ)
+            self.assertEqual(serve._node_bin('npx'), os.path.join(npxdir, 'npx'))
+            with spaces.request_space(g.SPACE_ID):
+                prov = dm.provider('publish', space)
+                meta['implicit'] = isinstance(prov, implicit.Implicit)
+                meta['caps_publish'] = dm.capabilities(space)['publish']
+                data['publish_module_is_none'] = dm.publish_module(space) is None
+                self.assertTrue(data['publish_module_is_none'])
+                self.assertTrue(dm.publish_legacy_path(prov, space))
+            with g.Server() as srv:
+                g._reset_world(rig)
+                data['first'] = self.publish_once(rig, srv, npxdir, g.NPX_OK, mint=True)
+                data['second'] = self.publish_once(rig, srv, npxdir, g.NPX_OK)                      # той самий світ: проєкт, скоуп, URL
+                st, task_body = g._raw(srv, 'GET', '/api/task', task=g.TID)
+                self.assertEqual(st, 200)
+                data['task_keys'] = {'publish_gate': 'publish_gate' in task_body, 'publish_share_url': 'publish_share_url' in task_body,
+                                     'publish_remote': 'publish_remote' in task_body, 'preview_password': task_body.get('preview_password'),
+                                     'publish_url': task_body.get('publish_url')}
+                _api, _card, data['js'] = g.api_sections(rig, srv, task_body)
+                with open(os.path.join(rig.home, 'work', g.TID, 'iterations.json'), encoding='utf-8') as fh:
+                    it_meta = json.load(fh)
+                with spaces.request_space(g.SPACE_ID):
+                    data['task_publish_share'] = serve.task_publish_share(space, it_meta)
+                    cfg = serve.load_tasks()
+                    data['comments_module_publish'] = list(serve.publish_comments(space, cfg['tasks'][g.TID], g.TID, module_publish=True))
+                    res, warn = serve.publish_comments(space, cfg['tasks'][g.TID], g.TID, module_publish=False)
+                    data['comments_legacy_path'] = {'channel': res['channel'] if res else None, 'warning': warn}
+                known = {'vercel_project': g.PROJECT}
+                g._reset_world(rig, task_extra={**known, 'preview_password': g.PW_TASK})
+                data['pw_task'] = self.publish_once(rig, srv, npxdir, g.NPX_OK)
+                g._reset_world(rig, task_extra=known, root_extra={'preview_password': g.PW_ROOT})
+                data['pw_root'] = self.publish_once(rig, srv, npxdir, g.NPX_OK)
+            dm.reset_caches()
+        return data, meta
+
+    # --- перелік тверджень про шлях власника
+    def check_owner_path(self, data):
+        g = self.g
+        first, second = data['first'], data['second']
+        # перша публікація мінтить `pv-NNNNNNNN` і пише скоуп із `.vercel/project.json` фальшивого `npx` у `tasks.json`
+        self.assertEqual(first['response']['status'], 200)
+        self.assertEqual(first['tasks_after'], {'vercel_project': g.PROJECT, 'vercel_scope': g.SCOPE})
+        # друга — той самий проєкт, той самий URL, той самий скоуп; `link --project pv-… --scope …` зі стану `tasks.json`
+        self.assertEqual(second['tasks_after'], first['tasks_after'])
+        self.assertEqual(second['iterations_after']['publish_url'], first['iterations_after']['publish_url'])
+        pairs = dict((k, v) for k, v in second['response']['pairs'])
+        self.assertEqual((pairs['url'], pairs['deploy_url'], pairs['verified']), (g.URL_A, g.URL_A, True))
+        self.assertEqual(second['npx_argv'][0], ['--yes', 'vercel', 'link', '--yes', '--scope', g.SCOPE, '--project', g.PROJECT])
+        self.assertEqual(second['npx_argv'][1][:4], ['--yes', 'vercel', 'deploy', '--prod'])
+        self.assertEqual(second['npx_argv'][-1], ['--yes', 'vercel', 'list', g.PROJECT, '--json', '--scope', g.SCOPE])
+        # шлях ЛІГИ: збірка ядра (`build == 'legacy'`), `publish_remote` ВІДСУТНІЙ, превʼю перевірене за адресою
+        for sc in (first, second):
+            self.assertEqual(sc['build'], 'legacy')
+            self.assertEqual(sc['iterations_after']['publish_remote'], 'absent')
+            self.assertIs(sc['iterations_after']['publish_verified'], True)
+            self.assertEqual(sc['spies']['fetched_urls'], [g.URL_A])
+            # гейт зі `1100` у ВСІХ шитих сторінках; коментарі ЛІГИ ін'єктовані (канал `dc/a-1`, адреса й ключ Supabase)
+            for rel_path, page in sc['pages']['html'].items():
+                self.assertEqual((page['authgate'], page['password']), (True, '1100'), rel_path)
+            alpha = sc['pages']['html']['it1/alpha/index.html']
+            self.assertEqual((alpha['comment_layer'], alpha['channel'], alpha['supabase_url']), (True, 'dc/a-1', g.SB_URL))
+            self.assertEqual(alpha['supabase_key'], '<secret:%d>' % len(g.SB_KEY))
+            # побічні дії НЕізольованого шляху — ВСІ три, у цьому порядку й з цими аргументами (`registry_push` → автокоміт → огляд)
+            self.assertEqual(sc['spies']['calls'], [['registry_push', 'a-1'], ['git_autocommit', '~/work/a-1', 'publish: 2 iteration(s)'],
+                                                    ['overview_sync']])
+        # пароль задачі/кореня змінює гейт
+        for key, pw in (('pw_task', g.PW_TASK), ('pw_root', g.PW_ROOT)):
+            self.assertEqual({p['password'] for p in data[key]['pages']['html'].values()}, {pw}, key)
+            self.assertEqual(data[key]['tasks_after']['vercel_project'], g.PROJECT)
+            self.assertEqual(data[key]['iterations_after']['publish_remote'], 'absent')
+        # `copyUrl` = `#k=<пароль>&p=<сторінка>`, `task_publish_share` → `{}` (шлях ЛІГИ), нових полів `publish_*` у `/api/task` нема
+        self.assertEqual(data['js']['copy_url'], g.URL_A + '/#k=1100&p=alpha')
+        self.assertEqual(data['task_publish_share'], {})
+        self.assertEqual(data['task_keys'], {'publish_gate': False, 'publish_share_url': False, 'publish_remote': False,
+                                             'preview_password': '1100', 'publish_url': g.URL_A})
+        self.assertIs(data['js']['is_legacy_publish'], True)
+        self.assertIs(data['js']['is_remote_publish'], False)
+        # відмова модуль-шляху НЕ змінилась: у збірці модуля публікації коментарі `shared_state`/`Implicit` не їдуть
+        self.assertEqual(data['comments_module_publish'], [False, None])
+        self.assertEqual(data['comments_legacy_path'], {'channel': 'dc/a-1', 'warning': None})
+
+    def test_migrated_liga_publishes_the_owner_path_unchanged(self):
+        data, meta = self.exercise(True)
+        self.assertEqual((meta['implicit'], meta['caps_publish']), (False, 'vercel-publish'))
+        self.check_owner_path(data)
+
+    def test_unmigrated_liga_gives_the_same_data(self):
+        data, meta = self.exercise(False)
+        self.assertEqual((meta['implicit'], meta['caps_publish']), (True, 'legacy'))
+        self.check_owner_path(data)
+
+    def test_two_runs_are_identical_and_match_the_snapshot(self):
+        """Звіряємо два прогони ОДИН з ОДНИМ (мігрована ≡ немігрована), а потім із знімком 0.18.0 (ключі, що не залежать від шляху
+        ізоляції: відповідь, `tasks.json`, `iterations.json`, argv, збірка, сторінки). Шпигуни знімка — ізольований шлях; тут — справжній."""
+        imp, _m1 = self.exercise(False)
+        mig, _m2 = self.exercise(True)
+        for d in (imp, mig):                                         # похідні від ролі, а не від публікації: різняться за задумом
+            d['js'] = {k: v for k, v in d['js'].items() if k not in ('is_vercel_publish', 'disable_consequences_publish')}
+        self.maxDiff = None
+        self.assertEqual(mig, imp)
+        with open(BEFORE, encoding='utf-8') as f:
+            before = json.load(f)
+        for stand in ('unmigrated', 'ab'):
+            for sc in ('first', 'second'):
+                snap = before['stands'][stand]['publish'][sc]
+                for key in ('response', 'tasks_after', 'iterations_after', 'npx_argv', 'build', 'pages'):
+                    self.assertEqual(mig[sc][key], snap[key], '%s/%s/%s' % (stand, sc, key))
+            self.assertEqual(mig['js']['copy_url'], before['stands'][stand]['js']['copy_url'])
+
+
+# ---------------------------------------------------------------------------------- Task 5: три кроки на одному старті
+
+_ROLE_IDS = {'comments': 'supabase-comments', 'dashboard': 'supabase-dashboard', 'notify': 'supabase-teams',
+             'publish': 'vercel-publish', 'tracker': 'jira-tracker', 'vcs': 'git-sync'}
+
+
+class ThreeStepsParityStartup(_StepC):
+    """`startup()` у тимчасовому домі: три бекапи, у `capabilities` усіх шести ролей — id модулів (жодного `legacy`); другий старт
+    нічого не пише (mtime і sha256 `space.json`/`secrets.json`/`last.json`, нових бекапів нема)."""
+
+    def stat_of(self, *paths):
+        out = {}
+        for p in paths:
+            st = os.stat(p)
+            out[p] = (st.st_mtime_ns, self.sha(self.read(p)))
+        return out
+
+    def test_one_start_gives_three_backups_and_six_explicit_roles(self):
+        self.seed()
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        a, b, c = self.stamps()
+        self.assertEqual(self.backups(), sorted([a, b, c]))
+        self.assertLess(err.index('liga-4d3a: done'), err.index('liga-4d3b: done'))      # порядок кроків на старті
+        self.assertLess(err.index('liga-4d3b: done'), err.index('liga-4d3c: done'))
+        at = [self.marks()[m]['at'] for m in ('liga-4d3a', 'liga-4d3b', 'liga-4d3c')]
+        self.assertEqual(at, sorted(at))
+        with spaces.request_space('legacy'):
+            self.dm.reset_caches()
+            caps = self.dm.capabilities(self.liga_space())
+        self.assertEqual({r: caps[r] for r in _ROLE_IDS}, _ROLE_IDS)
+        self.assertNotIn('legacy', caps.values())
+        self.assert_no_secrets_in_logs()
+
+    def test_second_start_writes_nothing(self):
+        self.seed()
+        self.assertEqual(self.start()[0], 'done')
+        files = [self.space_path(), self.secrets_path(), os.path.join(self.deai, 'migrations', 'last.json')]
+        before = self.stat_of(*files)
+        backups = self.backups()
+        tree = self.snapshot_tree()
+        st, err = self.start()
+        self.assertEqual(st, 'skip-done')
+        self.assertEqual(err, '')
+        self.assertEqual(self.stat_of(*files), before)               # ні байта, ні mtime
+        self.assertEqual(self.backups(), backups)                    # нових бекапів нема
+        self.assertEqual(self.snapshot_tree(), tree)
 
 
 if __name__ == '__main__':
