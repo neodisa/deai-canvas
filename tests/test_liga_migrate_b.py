@@ -2474,7 +2474,8 @@ class AfterMigrationParity4d3b(unittest.TestCase):
                 '/vcs/mirrors_base', '/vcs/form/model/is_legacy_vcs', '/vcs/form/model/has_vcs', '/vcs/form/model/with_repo',
                 '/vcs/form/model/label_empty', '/vcs/form/model/label_git', '/vcs/form/model/brand_empty', '/vcs/form/model/clones',
                 '/vcs/form/model/fail_key_target', '/vcs/provider/ctx/mirror_flat', '/vcs/provider/ctx/cache_dir',
-                '/comments/route/channels')
+                '/comments/route/channels', '/comments/route/module', '/comments/project_comments/channels',
+                '/comments/project_comments/label', '/comments/project_comments/outcomes')
         for name in self.CONFIGS:
             for path in _diff(self.before, self.after[name]):
                 for s in seen:

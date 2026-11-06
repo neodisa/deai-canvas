@@ -30,13 +30,19 @@
  *        `legacy` (крок публікацію не мігрує). Одна картка на роль (`connections-model.js`).
  *   3b (форма «Нова задача» без «Репозиторій») — `compat: design-canvas` запису `git-sync` → `serve.vcs_legacy_texts` → ключ `compat` у
  *        `/api/spaces` → `isLegacyVcs` у `spaces-model.js` (без `compat` поле зʼявилось би: поведінка людини змінилась би).
- *   4b (другий старт, дзеркала)    — `skip-done` ОБОХ кроків у `plan()`; теку `.mirrors` не створено й `<DEAI_HOME>/cache/liga/git-sync/mirrors`
- *        нема (накладка `cache_dir`/`mirror_flat` запису `git-sync` у `serve.vcs_provider`/`module_ctx`).
+ *   3c (мігрований git-sync бере старе дзеркало) — накладка `_flat_mirror_overlay` (`cache_dir = _mirrors_base()`, `mirror_flat`) у `serve.py`:
+ *        без неї push створив би дзеркало модуля під `<DEAI_HOME>/cache/liga/git-sync/mirrors` замість передствореного плоского
+ *        `<DC_MIRRORS_DIR>/<slug>` (HEAD того не зрушив би, у базі дзеркал зʼявилась би зайва тека). ⚠️ У ізольованому прогоні запис
+ *        `shared_state` йде шляхом `_vcs_legacy_ctx()` (закон ізоляції), тож накладку тут стереже саме він; гілку `if legacy:` у
+ *        `vcs_provider` (звичайний прогін) стережуть юніти `VcsCompat`.
+ *   4b (другий старт, дзеркала)    — `skip-done` ОБОХ кроків у `plan()`; старт нічого не пише в дзеркала (HEAD і перелік після 3c ті самі),
+ *        `<DEAI_HOME>/cache/liga/git-sync/mirrors` нема.
  *   Паритет усього, що бачить людина (канали, тексти, дзеркала), — юніти `AfterMigrationParity4d3b` (`tests/test_liga_migrate_b.py`).
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -58,7 +64,24 @@ const ALL_MODULES = { ...MODULES, comments: "supabase-comments", vcs: "git-sync"
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
-test.after(async () => { await browser?.close(); if (S.running) await stop(S.running); });
+test.after(async () => {
+  await browser?.close();
+  if (S.running) await stop(S.running);
+  /* Свою git-теку прибираємо за ТОЧНИМ шляхом (лише `dc-live-ligamig-*` прямо в tmpdir), не за шаблоном. */
+  if (S.gitDir && path.dirname(S.gitDir) === realpathSync(tmpdir()) && path.basename(S.gitDir).startsWith("dc-live-ligamig-")) rmSync(S.gitDir, { recursive: true, force: true });
+});
+
+/* ── git: лише локально (як `git-sync.test.mjs`): оточення без глобального конфігу людини, без підказок і без мережі ── */
+const gitEnv = (home) => ({
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))),
+  HOME: home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "false", LC_ALL: "C",
+});
+const git = (home, cwd, ...args) => execFileSync("git", args, { cwd, env: gitEnv(home), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+/** Імʼя плоского дзеркала 0.7.0 (`_mirror` у `git-sync/server.py`, `mirror_flat`): slug останнього відрізка після `:` адреси. */
+const flatSlug = (repo) => repo.split(":").pop().replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
+
+/** Теки дзеркал у базі (без `<slug>@lock` — замок `git-sync` лишається поруч після кожного синку, і в 0.17 теж). */
+const mirrorDirs = () => readdirSync(S.mirrorsDir).filter((n) => !n.endsWith("@lock")).sort();
 
 const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
 const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
@@ -94,7 +117,28 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   writeFileSync(team, JSON.stringify([
     { id: "mine1", name: "Моя задача", designer: "Alpha", code_url: "https://example.com/p/mine1" },
     { id: "colleague", name: "Задача колеги", designer: "Beta", code_url: "https://example.com/p/colleague" }]));
-  S.env = { DC_MIGRATE_LIGA: "1", DC_TRACKER_FAKE: tracker, DC_TEAM_FAKE: team, DC_TEAMS_FAKE: "" };
+  /* Локальний bare-origin і плоске дзеркало 0.7.0, створене ДО першого старту рівно там, де його лишила б версія 0.17: у `DC_MIRRORS_DIR`
+     (тимчасова тека, не `.mirrors` репо) під імʼям `flatSlug(origin)`; справжній клон origin, як це робить сам `git-sync`. Без нього
+     «дзеркал не зʼявилось» трималось би й коли накладка `cache_dir`/`mirror_flat` зламана: у тесті нічого не синкається. */
+  S.gitDir = realpathSync(mkdtempSync(path.join(tmpdir(), "dc-live-ligamig-")));
+  S.origin = path.join(S.gitDir, "origin.git");
+  S.mirrorsDir = path.join(S.gitDir, "mirrors");
+  S.slug = flatSlug(S.origin);
+  git(S.gitDir, S.gitDir, "init", "--bare", "--quiet", "--initial-branch=main", S.origin);
+  const seed = path.join(S.gitDir, "seed");
+  git(S.gitDir, S.gitDir, "clone", "--quiet", S.origin, seed);
+  git(S.gitDir, seed, "symbolic-ref", "HEAD", "refs/heads/main");
+  writeFileSync(path.join(seed, "README.md"), "seed\n");
+  git(S.gitDir, seed, "add", "-A");
+  git(S.gitDir, seed, "-c", "user.name=Seed", "-c", "user.email=seed@example.invalid", "commit", "--quiet", "-m", "seed");
+  git(S.gitDir, seed, "push", "--quiet", "origin", "main");
+  git(S.gitDir, S.gitDir, "clone", "--quiet", "--branch", "main", S.origin, path.join(S.mirrorsDir, S.slug));
+  S.mirror = path.join(S.mirrorsDir, S.slug);
+  S.mirrorHeadBefore = git(S.gitDir, S.mirror, "rev-parse", "HEAD");
+  S.mirrorsListBefore = readdirSync(S.mirrorsDir).sort();
+  assert.deepEqual(S.mirrorsListBefore, [S.slug]);
+  S.env = { DC_MIGRATE_LIGA: "1", DC_TRACKER_FAKE: tracker, DC_TEAM_FAKE: team, DC_TEAMS_FAKE: "", DC_MIRRORS_DIR: S.mirrorsDir,
+    GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", DC_IDENTITY_NAME: "Дизайнерка Тест", DC_IDENTITY_EMAIL: "me@example.invalid" };
   S.first = await startServer(null, {
     portBase: PORT_BASE, env: S.env, supabase: true, deaiDir: "state-deai",
     legacyExtra: { jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
@@ -149,10 +193,9 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   S.spacePath = spacePath;
   S.backups = backups;
   S.backupsB = backupsB;
-  /* Дзеркала ЛІГИ — плоска тека `.mirrors` 0.7.0; міграція її не створює й не чіпає, а дзеркал модуля під `<DEAI_HOME>/cache` не буває. */
-  S.mirrorsDir = path.join(S.first.home, ".mirrors");
-  S.mirrorsBefore = existsSync(S.mirrorsDir) ? readdirSync(S.mirrorsDir).sort() : null;
-  assert.equal(S.mirrorsBefore, null, "міграція не створює теку дзеркал");
+  /* Дзеркала ЛІГИ — плоска тека 0.7.0; міграція її не чіпає (сам синк — тест 3c), а дзеркал модуля під `<DEAI_HOME>/cache` не буває. */
+  assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "міграція не додала дзеркал");
+  assert.equal(git(S.gitDir, S.mirror, "rev-parse", "HEAD"), S.mirrorHeadBefore, "міграція не чіпала дзеркала");
   assert.equal(existsSync(path.join(deaiHome, "cache", "liga", "git-sync", "mirrors")), false);
 });
 
@@ -232,6 +275,35 @@ test("3b: форма «Нова задача» мігрованої ЛІГИ —
   assert.deepEqual(page.outside, [], "запити назовні");
 });
 
+test("3c: мігрований git-sync справді бере СТАРЕ плоске дзеркало: push через локальний origin лягає в нього, нових дзеркал нема", async () => {
+  const { url, legacyFile, deaiHome } = S.first;
+  /* Ціль синку — зашитий у `tasks.json` формат 0.17 (`gitlab{repo, path}`); сервер читає файл на кожен запит. */
+  const cfg = readJson(legacyFile);
+  cfg.tasks.mine1.gitlab = { repo: S.origin, path: "mockup/mine1", branch: "main" };
+  writeFileSync(legacyFile, JSON.stringify(cfg));
+  const st = await (await fetch(`${url}/api/vcs-status?it=it1`, { headers: { "X-Canvas-Task": "mine1" } })).json();
+  assert.equal(st.configured, true, `ціль мусить бути видна: ${JSON.stringify(st)}`);
+  const res = await fetch(`${url}/api/vcs-push`, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Canvas-Task": "mine1" }, body: JSON.stringify({ it: "it1" }),
+  });
+  const body = await res.json();
+  assert.equal(body.ok === false ? body.error : null, null, `push відмовлено: ${JSON.stringify(body)}`);
+  assert.equal(body.synced, true, `push не дійшов до origin: ${JSON.stringify(body)}`);
+  /* Дійшло до origin (локальний bare-репо) із зашитим текстом «design-canvas: sync». */
+  assert.match(git(S.gitDir, S.origin, "log", "-1", "--format=%s", "main"), /^design-canvas: sync mockup\/mine1/);
+  const tree = git(S.gitDir, S.origin, "ls-tree", "-r", "--name-only", "main").split("\n");
+  assert.ok(tree.includes("mockup/mine1/pages.json") && tree.includes("mockup/mine1/holovna/index.html"), `дерево origin: ${JSON.stringify(tree)}`);
+  /* Це зробило САМЕ передстворене плоске дзеркало: його HEAD зрушив і збігся з origin; нових тек у базі дзеркал нема. */
+  const originHead = git(S.gitDir, S.origin, "rev-parse", "main");
+  const mirrorHead = git(S.gitDir, S.mirror, "rev-parse", "HEAD");
+  assert.notEqual(mirrorHead, S.mirrorHeadBefore, "HEAD старого дзеркала не змінився: push пішов не через нього");
+  assert.equal(mirrorHead, originHead);
+  assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "у базі дзеркал зʼявилась нова тека");
+  assert.equal(existsSync(path.join(deaiHome, "cache", "liga", "git-sync", "mirrors")), false, "дзеркал модуля під <DEAI_HOME>/cache нема");
+  assert.equal(existsSync(path.join(deaiHome, "cache", "liga")), false, "ЛІГА не заводить кеш модуля");
+  S.mirrorHeadAfter = mirrorHead;
+});
+
 test("4: другий старт того самого дому нічого не пише (mtime і sha256 незмінні, нового бекапу нема)", async (t) => {
   const { deaiHome } = S.first;
   const files = [S.spacePath, path.join(deaiHome, "secrets.json"), path.join(deaiHome, "migrations", "last.json"), path.join(deaiHome, "spaces.json")];
@@ -255,8 +327,9 @@ test("4: другий старт того самого дому нічого н�
   const sj = readJson(S.spacePath);
   assert.ok(sj.migrations["liga-4d3a"], "позначка лишилась");
   assert.ok(sj.migrations["liga-4d3b"], "позначка 4d-3b лишилась");
-  /* Дзеркала: теку `.mirrors` не створено, дзеркал модуля під `<DEAI_HOME>/cache` нема (як `git-sync.test.mjs`, тест 7). */
-  assert.equal(existsSync(S.mirrorsDir), false, "другий старт не створює теку `.mirrors`");
+  /* Дзеркала: старт нічого в них не пише (HEAD і перелік після push 3c ті самі), дзеркал модуля під `<DEAI_HOME>/cache` нема. */
+  assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "другий старт змінив базу дзеркал");
+  assert.equal(git(S.gitDir, S.mirror, "rev-parse", "HEAD"), S.mirrorHeadAfter, "другий старт зрушив дзеркало");
   assert.equal(existsSync(path.join(deaiHome, "cache", "liga", "git-sync", "mirrors")), false, "дзеркал git-sync у <DEAI_HOME>/cache нема");
   assert.equal(existsSync(path.join(deaiHome, "migrations", ".lock")), true);
   const caps = (await (await fetch(`${S.second.url}/api/spaces`)).json()).spaces.find((s) => s.id === "liga").capabilities;
