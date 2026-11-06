@@ -909,7 +909,19 @@ def _normalize(mods):
         if (isinstance(roles, list) and roles
                 and all(isinstance(r, str) and r in ROLES_CALLED + ROLES_RESERVED for r in roles)):
             out[mid]['roles'] = list(dict.fromkeys(roles))
+        if isinstance(e.get('shared_state'), bool):  # 4d-3a: запис СПІЛЬНОГО стану ЛІГИ (пише міграція); не-bool ігнорується
+            out[mid]['shared_state'] = e['shared_state']
     return out
+
+
+def shared_state(space, module_id):
+    """Чи явний запис модуля в `space.json` позначено `shared_state: true` (4d-3a): спільний стан ЛІГИ, що підлягає закону ізоляції
+    (`implicit.isolated`) так само, як неявний шлях. ⛔ Тотальна: нема запису, не-`bool`, збій читання — `False`, не виняток
+    (відмова читання не має вмикати спільний шлях і не має ламати екран)."""
+    try:
+        return space_modules(space).get(module_id, {}).get('shared_state') is True
+    except Exception:  # noqa: BLE001 — будь-який збій = «не спільний»
+        return False
 
 
 def space_modules(space):

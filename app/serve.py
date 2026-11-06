@@ -1922,8 +1922,9 @@ def _team_fetch(space, prov):
     для решти, а не вузький перелік: контракт «ніколи не кидає» тримає екран живим для «Моїх» навіть тоді, коли відповідь бази —
     не те, що очікували."""
     try:
-        if isinstance(prov, implicit.Implicit):
-            kind, fake = implicit.route(prov)           # шов + закон ізоляції: порядок «шов → ізоляція → живий» один для ролей
+        if isinstance(prov, implicit.Implicit) or _shared_module(space, prov):
+            # ⛔ `shared_state`-модуль іде тим самим законом (4d-3a): шов → ізоляція → живий, роль — з `implicit.for_role`
+            kind, fake = implicit.route(prov if isinstance(prov, implicit.Implicit) else implicit.for_role('dashboard'))
             if kind == 'fake':
                 with open(fake, encoding='utf-8') as fh:
                     data = json.load(fh)
@@ -1932,6 +1933,8 @@ def _team_fetch(space, prov):
                 return [r for r in data if isinstance(r, dict)], None
             if kind == 'isolated':
                 return [], TEAM_ISOLATED
+            if not isinstance(prov, implicit.Implicit):
+                return dashboard.rows(prov, deai_modules.module_ctx(space, prov)), None
             # Конфігу установки нема: дашборд команди недосяжний, «Мої» живуть без нього (і без мережі) — `dashboard-unconfigured`.
             ctx = dashboard.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
             return dashboard.rows(dashboard.legacy_module(), ctx), None
@@ -1944,6 +1947,12 @@ def _team_fetch(space, prov):
             # вона не маскувалась під «команда недоступна». Поведінка та сама.
             print(f'team_rows: {type(e).__name__}: {e}', file=sys.stderr)
         return [], (str(e) or type(e).__name__)[:200]
+
+
+def _shared_module(space, prov):
+    """4d-3a: явний `Module` із `shared_state: true` — спільний стан ЛІГИ: ролі `dashboard`/`tracker`/`notify` і синк ведуть його за
+    законом ізоляції (`implicit.route`), як `Implicit`, але живий виклик — модулем із `module_ctx`, а не легасі-збирачем."""
+    return isinstance(prov, deai_modules.Module) and deai_modules.shared_state(space, prov.id)
 
 
 def team_resolve():
@@ -2053,8 +2062,8 @@ def _tracker_fetch(space, prov, keys):
     решта — лише назва класу (`str(e)` чужого винятку не чищений і міг би винести секрет на екран)."""
     keys = list(keys)[:tracker.BATCH]
     try:
-        if isinstance(prov, implicit.Implicit):
-            kind, fake = implicit.route(prov)
+        if isinstance(prov, implicit.Implicit) or _shared_module(space, prov):
+            kind, fake = implicit.route(prov if isinstance(prov, implicit.Implicit) else implicit.for_role('tracker'))
             if kind == 'fake':
                 with open(fake, encoding='utf-8') as fh:
                     data = json.load(fh)
@@ -2063,8 +2072,11 @@ def _tracker_fetch(space, prov, keys):
                 return None
             if not keys:       # ⛔ ПІСЛЯ шва й ізоляції (як у 0.15.0): ізольований прогін без ключів — `None`, а не `({}, None)`
                 return {}, None
-            module = tracker.legacy_module()
-            ctx = tracker.legacy_ctx(*jira_config(), space_id=spaces.request_space_id() or '')
+            if isinstance(prov, implicit.Implicit):
+                module = tracker.legacy_module()
+                ctx = tracker.legacy_ctx(*jira_config(), space_id=spaces.request_space_id() or '')
+            else:
+                module, ctx = prov, deai_modules.module_ctx(space, prov)     # `shared_state` (4d-3a): модуль, не легасі-збирач
         else:
             if not keys:
                 return {}, None
@@ -2625,8 +2637,8 @@ def notify_call(fn, *args, resolved=None):
     if prov is None:
         # Нікого: простір без інтеграцій і без модуля (раніше — `IntegrationsOff`). Маршрут відповідає 409 ще до цього виклику.
         raise OSError('сповіщень Teams у просторі нема')
-    if isinstance(prov, implicit.Implicit):
-        kind, fake = implicit.route(prov)
+    if isinstance(prov, implicit.Implicit) or _shared_module(space, prov):
+        kind, fake = implicit.route(prov if isinstance(prov, implicit.Implicit) else implicit.for_role('notify'))
         if kind == 'fake':
             try:
                 with open(fake, encoding='utf-8') as fh:
@@ -2645,8 +2657,11 @@ def notify_call(fn, *args, resolved=None):
         # Після шва (він пише лише у свій локальний файл), але ДО будь-якої мережі.
         if kind == 'isolated':
             raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
-        module = notify.legacy_module()
-        ctx = notify.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
+        if isinstance(prov, implicit.Implicit):
+            module = notify.legacy_module()
+            ctx = notify.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
+        else:
+            module, ctx = prov, deai_modules.module_ctx(space, prov)         # `shared_state` (4d-3a): модуль, не легасі-збирач
     else:
         module, ctx = prov, deai_modules.module_ctx(space, prov)
     res = deai_modules.call(module, fn, ctx, *args, timeout=notify.NOTIFY_TIMEOUT)
@@ -7603,6 +7618,12 @@ class Handler(SimpleHTTPRequestHandler):
         if prov is None:
             return
         legacy = isinstance(prov, implicit.Implicit)
+        try:
+            shared = (not legacy) and _shared_module(spaces.active_space(), prov)
+        except Exception:  # noqa: BLE001 — простір не вирішився: як і вище, пушити нікуди
+            return
+        if shared and implicit.isolated():
+            return                      # ⛔ `shared_state`-модуль (4d-3a): ізольований прогін не пише в спільний стан і за ним
         if legacy:
             # ⛔ Закон ізоляції, а не `route`: шов `DC_TEAM_FAKE` синку не стосується (він лише читає), а ізольований прогін
             # не пише в спільний Supabase і за ним (`DC_NO_OVERVIEW` уже відсічено вище, тож тут це лише `DC_TASKS_FILE`).

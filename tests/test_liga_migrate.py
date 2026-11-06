@@ -6,6 +6,7 @@
 import json
 import os
 import re
+import sys
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -14,6 +15,23 @@ BEFORE = os.path.join(_HERE, 'fixtures', 'liga-migration', 'before-4d3a.json')
 ROLES = ('comments', 'dashboard', 'notify', 'publish', 'tokens', 'tracker', 'vcs')
 LEGACY_ROLES = ('comments', 'dashboard', 'notify', 'publish', 'tracker', 'vcs')
 MODULES = ('jira-tracker', 'supabase-dashboard', 'supabase-teams')
+
+for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import spaces_guard  # noqa: E402
+
+_REAL = None
+
+
+def setUpModule():
+    """⛔ Справжній реєстр `~/.deai` стереже `spaces_guard` (тести цього файлу пишуть `space.json` — лише у власних теках)."""
+    global _REAL
+    _REAL = spaces_guard.snapshot()
+
+
+def tearDownModule():
+    spaces_guard.assert_untouched(_REAL)
 
 
 class Before4d3aShape(unittest.TestCase):
@@ -309,6 +327,229 @@ class CompatSetting(unittest.TestCase):
                       and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == 'legacy'):
                     hits.append((path, n.lineno))
         self.assertEqual(hits, [])
+
+
+class SharedStateIsolation(unittest.TestCase):
+    """Task 3 (4d-3a): явний запис модуля з `shared_state: true` — спільний стан ЛІГИ, закон ізоляції той самий, що в `Implicit`:
+    шов ролі → точна ізольована відповідь БЕЗ виклику модуля → живий виклик модулем із `module_ctx` (не легасі-збирачем).
+    Запис без `shared_state` (чи з не-`bool`) — як сьогодні: жодного шва, модуль кличеться навіть під ізоляцією."""
+
+    ROLES = {'dashboard': ('supabase-dashboard', 'DC_TEAM_FAKE'), 'tracker': ('jira-tracker', 'DC_TRACKER_FAKE'),
+             'notify': ('supabase-teams', 'DC_TEAMS_FAKE')}
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        for p in (os.path.join(os.path.dirname(_HERE), 'app'), os.path.join(os.path.dirname(_HERE), 'bin')):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        import deai_modules as dm
+        self.dm = dm
+        self._tmp = tempfile.TemporaryDirectory(prefix='shared-state-')
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = os.path.normpath(self._tmp.name)
+        self.space = {'id': 'liga-x', 'path': os.path.join(self.tmp, 'space'), 'integrations': True}
+        os.makedirs(self.space['path'])
+        patch = mock.patch.dict(os.environ, {'HOME': os.path.join(self.tmp, 'home'), 'DEAI_HOME': os.path.join(self.tmp, 'deai')})
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TRACKER_FAKE', 'DC_TEAMS_FAKE'):
+            os.environ.pop(name, None)
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+
+    def _write(self, mid, **extra):
+        rec = {'enabled': True, 'settings': {}}
+        rec.update(extra)
+        with open(os.path.join(self.space['path'], 'space.json'), 'w', encoding='utf-8') as f:
+            json.dump({'modules': {mid: rec}}, f)
+
+    def _mod(self, role):
+        return self.dm.catalog()[self.ROLES[role][0]]
+
+    def _fake_file(self, content):
+        path = os.path.join(self.tmp, 'fake.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(content, f)
+        return path
+
+    def _call(self, role):
+        """Виклик ядра ролі напряму; `(результат, кількість викликів модуля, ctx)` — модуль і `module_ctx` підмінено."""
+        import dashboard
+        import notify
+        import serve
+        import tracker
+        from unittest import mock
+        mod = self._mod(role)
+        ctx = {'marker': 'module-ctx'}
+        with mock.patch.object(self.dm, 'module_ctx', return_value=ctx) as mc:
+            if role == 'dashboard':
+                with mock.patch.object(dashboard, 'rows', return_value=[{'id': 'live'}]) as m:
+                    res = serve._team_fetch(self.space, mod)
+            elif role == 'tracker':
+                with mock.patch.object(tracker, 'statuses', return_value={'K-1': {'name': 'live', 'cat': 'x'}}) as m:
+                    res = serve._tracker_fetch(self.space, mod, ['K-1'])
+            else:
+                with mock.patch.object(self.dm, 'call', return_value=[]) as m:
+                    try:
+                        res = serve.notify_call('mute_state', resolved=(self.space, mod))
+                    except OSError as e:
+                        res = ('OSError', str(e))
+        return res, m.call_count, mc.call_count
+
+    def _fake_value(self, role):
+        return {'dashboard': [{'id': 'seam'}], 'tracker': {'K-1': {'name': 'S', 'cat': 'new'}}, 'notify': {}}[role]
+
+    def test_shared_state_helper(self):
+        mid = 'supabase-dashboard'
+        self.assertFalse(self.dm.shared_state(self.space, mid))                       # файла нема
+        self._write(mid)
+        self.assertFalse(self.dm.shared_state(self.space, mid))                       # прапорця нема
+        self._write(mid, shared_state=True)
+        self.assertTrue(self.dm.shared_state(self.space, mid))
+        self.assertFalse(self.dm.shared_state(self.space, 'jira-tracker'))            # іншого запису нема
+        self._write(mid, shared_state=False)
+        self.assertFalse(self.dm.shared_state(self.space, mid))
+        for bad in ('true', 1, 'yes', [], {}, None):                                  # не-bool — як False, не виняток
+            self._write(mid, shared_state=bad)
+            self.assertFalse(self.dm.shared_state(self.space, mid), repr(bad))
+        with open(os.path.join(self.space['path'], 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        self.assertFalse(self.dm.shared_state(self.space, mid))                       # збій читання — False
+        self.assertFalse(self.dm.shared_state(None, mid))
+
+    def test_normalize_keeps_bool_only(self):
+        self._write('jira-tracker', shared_state=True)
+        self.assertIs(self.dm.space_modules(self.space)['jira-tracker']['shared_state'], True)
+        self._write('jira-tracker', shared_state='true')
+        self.assertNotIn('shared_state', self.dm.space_modules(self.space)['jira-tracker'])
+
+    def test_seam_wins_for_shared_module(self):
+        for role, (mid, env) in self.ROLES.items():
+            self._write(mid, shared_state=True)
+            with self.subTest(role=role):
+                from unittest import mock
+                with mock.patch.dict(os.environ, {env: self._fake_file({} if role == 'notify' else
+                                                                       ([{'id': 'seam'}] if role == 'dashboard' else {'K-1': {'name': 'S', 'cat': 'new'}})),
+                                                  'DC_TASKS_FILE': os.path.join(self.tmp, 't.json')}):
+                    res, called, ctxs = self._call(role)
+                self.assertEqual((called, ctxs), (0, 0))
+                if role == 'dashboard':
+                    self.assertEqual(res, ([{'id': 'seam'}], None))
+                elif role == 'tracker':
+                    self.assertEqual(res[1], None)
+                    self.assertEqual(res[0]['K-1']['name'], 'S')
+                else:
+                    self.assertEqual(res, [])
+
+    def test_isolated_answers_exact_and_module_not_called(self):
+        import serve
+        want = {'dashboard': ([], serve.TEAM_ISOLATED), 'tracker': None,
+                'notify': ('OSError', 'ізольований конфіг: спільний стан Teams не чіпаємо')}
+        for role, (mid, env) in self.ROLES.items():
+            self._write(mid, shared_state=True)
+            for iso in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
+                with self.subTest(role=role, iso=iso):
+                    from unittest import mock
+                    with mock.patch.dict(os.environ, {iso: os.path.join(self.tmp, 't.json') if iso == 'DC_TASKS_FILE' else '1'}):
+                        res, called, ctxs = self._call(role)
+                    self.assertEqual(res, want[role])
+                    self.assertEqual((called, ctxs), (0, 0), 'модуль не кличеться і ctx не збирається')
+
+    def test_tracker_order_isolated_before_empty_keys(self):
+        """⛔ Порядок `tracker`: шов → ізоляція → `if not keys`: ізольований прогін без ключів — `None`, поза ізоляцією — `({}, None)`."""
+        import serve
+        from unittest import mock
+        self._write('jira-tracker', shared_state=True)
+        mod = self._mod('tracker')
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(self.tmp, 't.json')}):
+            self.assertIsNone(serve._tracker_fetch(self.space, mod, []))
+        self.assertEqual(serve._tracker_fetch(self.space, mod, []), ({}, None))
+
+    def test_live_uses_module_with_module_ctx(self):
+        import dashboard
+        import tracker
+        for role, (mid, env) in self.ROLES.items():
+            self._write(mid, shared_state=True)
+            with self.subTest(role=role):
+                res, called, ctxs = self._call(role)
+                self.assertEqual((called, ctxs), (1, 1), 'один виклик модуля, один module_ctx')
+                if role == 'dashboard':
+                    self.assertEqual(res, ([{'id': 'live'}], None))
+                elif role == 'tracker':
+                    self.assertEqual(res[0]['K-1']['name'], 'live')
+
+    def test_live_never_uses_legacy_builders(self):
+        import dashboard
+        import notify
+        import serve
+        import tracker
+        from unittest import mock
+        for role, (mid, env) in self.ROLES.items():
+            self._write(mid, shared_state=True)
+            with self.subTest(role=role), mock.patch.object(dashboard, 'legacy_ctx', side_effect=AssertionError('legacy')), \
+                    mock.patch.object(tracker, 'legacy_ctx', side_effect=AssertionError('legacy')), \
+                    mock.patch.object(notify, 'legacy_ctx', side_effect=AssertionError('legacy')), \
+                    mock.patch.object(serve, 'supabase_config', side_effect=AssertionError('cfg')), \
+                    mock.patch.object(serve, 'jira_config', side_effect=AssertionError('cfg')):
+                res, called, _ = self._call(role)
+                self.assertEqual(called, 1)
+
+    def test_without_shared_state_behaves_as_today(self):
+        """Той самий запис БЕЗ `shared_state` (і з не-`bool`): шов ігнорується, модуль кличеться навіть під ізоляцією."""
+        from unittest import mock
+        for role, (mid, env) in self.ROLES.items():
+            for extra in ({}, {'shared_state': False}, {'shared_state': 'true'}, {'shared_state': 1}):
+                self._write(mid, **extra)
+                with self.subTest(role=role, extra=extra), mock.patch.dict(
+                        os.environ, {env: self._fake_file({}), 'DC_TASKS_FILE': os.path.join(self.tmp, 't.json')}):
+                    _, called, ctxs = self._call(role)
+                    self.assertEqual((called, ctxs), (1, 1))
+
+    def _sync(self, prov):
+        import serve
+        from unittest import mock
+        with mock.patch.object(self.dm, 'provider', return_value=prov), \
+                mock.patch.object(serve.spaces, 'active_space', return_value=self.space), \
+                mock.patch.object(serve, '_overview_target', return_value=('liga-x', ['--space', 'liga-x'])), \
+                mock.patch.object(serve, '_overview_launch') as launch:
+            serve.Handler._overview_sync(None)
+        return launch
+
+    def test_sync_shared_not_spawned_under_isolation(self):
+        from unittest import mock
+        mod = self._mod('dashboard')
+        self._write(mod.id, shared_state=True)
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(self.tmp, 't.json')}):
+            self._sync(mod).assert_not_called()
+        with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1'}):
+            self._sync(mod).assert_not_called()
+        self._sync(mod).assert_called_once()                                          # поза ізоляцією — стартує
+
+    def test_sync_without_shared_state_unchanged(self):
+        from unittest import mock
+        mod = self._mod('dashboard')
+        for extra in ({}, {'shared_state': 'true'}):
+            self._write(mod.id, **extra)
+            with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(self.tmp, 't.json')}):
+                self._sync(mod).assert_called_once()                                  # як сьогодні: модуль без прапорця синкає
+
+    def test_connections_write_keeps_shared_state(self):
+        """Екран «Підключення» правит налаштування й `enabled` через `write_module_state`: `shared_state` переживає обидві правки."""
+        mid = 'supabase-dashboard'
+        self._write(mid, shared_state=True, settings={'url': 'https://sb.example.com'})
+        self.dm.write_module_state(self.space, mid, settings={'url': 'https://sb2.example.com'})
+        self.assertTrue(self.dm.shared_state(self.space, mid))
+        self.dm.write_module_state(self.space, mid, enabled=False)
+        self.assertTrue(self.dm.shared_state(self.space, mid))
+        self.dm.write_module_state(self.space, mid, enabled=True)
+        self.assertTrue(self.dm.shared_state(self.space, mid))
+        rec = self.dm.space_modules(self.space)[mid]
+        self.assertEqual((rec['enabled'], rec['settings']['url']), (True, 'https://sb2.example.com'))
 
 
 if __name__ == '__main__':
