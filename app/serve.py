@@ -9029,4 +9029,6 @@ if __name__ == '__main__':
     extra_line = extra_modules_line()
     if extra_line:
         print(extra_line, file=sys.stderr)
+    import liga_migrate
+    liga_migrate.startup()                  # міграція ЛІГИ (4d-3a) ДО відкриття порту; не кидає, ізольовані прогони пропускає
     make_server(port).serve_forever()

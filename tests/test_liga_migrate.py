@@ -552,8 +552,8 @@ class SharedStateIsolation(unittest.TestCase):
         self.assertEqual((rec['enabled'], rec['settings']['url']), (True, 'https://sb2.example.com'))
 
 
-class PlanTest(unittest.TestCase):
-    """Task 4 (4d-3a): чистий розрахунок `liga_migrate.plan()` — нічого не пишемо, секрети лише в `plan['secrets']`, `report()` без
+class _Stand(unittest.TestCase):
+    """Спільний стенд Task 4–5 (4d-3a); Task 4 (4d-3a): чистий розрахунок `liga_migrate.plan()` — нічого не пишемо, секрети лише в `plan['secrets']`, `report()` без
     значень. Стенд: тимчасові HOME/DEAI_HOME, реєстр із записом ЛІГИ, старий `tasks.json` у тимчасовій теці (підміна
     `spaces.legacy_tasks_file`), вигадані значення."""
 
@@ -573,6 +573,13 @@ class PlanTest(unittest.TestCase):
         import tempfile
         from unittest import mock
         import deai_modules as dm
+        # ⛔ `bin/liga_migrate.py` (CLI) носить те саме імʼя, що `app/liga_migrate.py`: інші тести кладуть `bin` на початок `sys.path`.
+        # Модуль міграції беремо ЗАВЖДИ з `app` (і скидаємо кеш, якщо туди потрапив CLI).
+        app_dir = os.path.join(os.path.dirname(_HERE), 'app')
+        if sys.path[0] != app_dir:
+            sys.path[:] = [app_dir] + [x for x in sys.path if x != app_dir]
+        if not hasattr(sys.modules.get('liga_migrate'), 'plan'):
+            sys.modules.pop('liga_migrate', None)
         import liga_migrate
         import spaces
         self.dm, self.lm, self.spaces, self.mock = dm, liga_migrate, spaces, mock
@@ -642,6 +649,9 @@ class PlanTest(unittest.TestCase):
 
     def plan(self, **kw):
         return self.lm.plan(**kw)
+
+class PlanTest(_Stand):
+    """Task 4 (4d-3a): тести `plan()` на спільному стенді `_Stand`."""
 
     # --- пропуски
     def test_skip_layer_off(self):
@@ -913,6 +923,569 @@ class PlanTest(unittest.TestCase):
             p = self.plan()
         self.assertEqual(p['status'], 'abort-internal')
         self.assertNotIn('sb_plan_key_alpha', repr(p))
+
+
+# ================================================================================================ Task 5: запис, відкат, старт
+
+class _WriteStand(_Stand):
+    """Стенд запису: перехоплення stdout/stderr, пошук значень секретів у ВСІХ виходах, CLI `bin/liga_migrate.py`."""
+
+    def setUp(self):
+        super().setUp()
+        import io
+        import contextlib
+        self.io, self.contextlib = io, contextlib
+        self.secret_values = (self.SB_KEY, self.JIRA_TOKEN)
+        self.cap = []                                  # усе, що надруковано (stdout+stderr) за час тесту
+
+    def cli(self, *argv):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('liga_migrate_cli', os.path.join(os.path.dirname(_HERE), 'bin', 'liga_migrate.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        out, err = self.io.StringIO(), self.io.StringIO()
+        with self.contextlib.redirect_stdout(out), self.contextlib.redirect_stderr(err):
+            code = mod.main(list(argv))
+        self.cap.extend([out.getvalue(), err.getvalue()])
+        return code, out.getvalue(), err.getvalue()
+
+    def quiet(self, fn, *a, **kw):
+        err = self.io.StringIO()
+        with self.contextlib.redirect_stderr(err):
+            r = fn(*a, **kw)
+        self.cap.append(err.getvalue())
+        return r, err.getvalue()
+
+    def read(self, *parts):
+        with open(os.path.join(*parts), 'rb') as f:
+            return f.read()
+
+    def read_json(self, *parts):
+        return json.loads(self.read(*parts).decode('utf-8'))
+
+    def space_path(self):
+        return os.path.join(self.space_dir, 'space.json')
+
+    def secrets_path(self):
+        return os.path.join(self.deai, 'secrets.json')
+
+    def backups(self):
+        d = os.path.join(self.deai, 'backups')
+        return sorted(os.listdir(d)) if os.path.isdir(d) else []
+
+    def sha(self, data):
+        import hashlib
+        return hashlib.sha256(data).hexdigest()
+
+    def assert_no_secrets(self, *texts):
+        for text in texts:
+            for v in self.secret_values:
+                self.assertNotIn(v, text)
+
+    def assert_no_secrets_in_logs(self):
+        """⛔ Значень секретів нема ні в `last.json`, ні в маніфестах бекапів, ні в `space.json`, ні в усьому надрукованому."""
+        for base, _d, files in os.walk(self.deai):
+            for f in files:
+                if f in ('last.json', 'manifest.json'):
+                    self.assert_no_secrets(self.read(base, f).decode('utf-8'))
+        if os.path.exists(self.space_path()):
+            self.assert_no_secrets(self.read(self.space_path()).decode('utf-8'))
+        self.assert_no_secrets(*self.cap)
+
+    def tree_without_logs(self):
+        t = self.snapshot_tree()
+        return {k: v for k, v in t.items() if os.sep + 'migrations' + os.sep not in k}
+
+
+class RunTest(_WriteStand):
+    """Task 5 (4d-3a): `run()` — бекап, секрети, ОДИН запис `space.json` з позначкою, `last.json`; усе в тимчасовому DEAI_HOME."""
+
+    ORIG_SPACE = b'{"name": "Liga",\n  "color": "#112233",\n  "x": {"k": [1,  2]}}\n'
+
+    def seed_space(self):
+        self._write(self.space_path(), self.ORIG_SPACE.decode('utf-8'))
+        os.chmod(self.space_path(), 0o644)
+        self._write(self.secrets_path(), json.dumps({'other': {'m': {'k': 'other_value_alpha'}}}))
+        os.chmod(self.secrets_path(), 0o644)
+
+    def test_backup_content_modes_manifest(self):
+        self.seed_space()
+        old_tasks, old_reg = self.read(self.tasks_path), self.read(self.deai, 'spaces.json')
+        old_space, old_secrets = self.read(self.space_path()), self.read(self.secrets_path())
+        self.assertEqual(self.lm.run(), 'done')
+        names = self.backups()
+        self.assertEqual(len(names), 1)
+        self.assertRegex(names[0], self.lm.STAMP_RE.pattern)
+        b = os.path.join(self.deai, 'backups', names[0])
+        self.assertEqual(os.stat(b).st_mode & 0o777, 0o700)
+        self.assertEqual(sorted(os.listdir(b)), ['manifest.json', 'secrets.json', 'space.json', 'spaces.json', 'tasks.json'])
+        for fname, orig in (('tasks.json', old_tasks), ('spaces.json', old_reg), ('space.json', old_space), ('secrets.json', old_secrets)):
+            self.assertEqual(self.read(b, fname), orig, fname)
+            self.assertEqual(os.stat(os.path.join(b, fname)).st_mode & 0o777, 0o600, fname)
+        m = self.read_json(b, 'manifest.json')
+        self.assertEqual(m['version'], self.lm._tool_version())
+        self.assertEqual(m['space_id'], 'legacy')
+        self.assertEqual(sorted(m['files']), ['secrets.json', 'space.json', 'spaces.json', 'tasks.json'])
+        for fname, meta in m['files'].items():
+            self.assertEqual(meta['sha256'], self.sha(self.read(b, fname)), fname)
+        self.assertEqual(m['files']['space.json']['source'], self.space_path())
+        self.assertEqual(m['files']['space.json']['mode'], 0o644)
+        self.assertEqual(os.stat(self.secrets_path()).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(self.deai).st_mode & 0o777, 0o700)
+        self.assert_no_secrets_in_logs()
+
+    def test_backup_without_space_and_secrets(self):
+        self.assertEqual(self.lm.run(), 'done')
+        b = os.path.join(self.deai, 'backups', self.backups()[0])
+        self.assertEqual(sorted(os.listdir(b)), ['manifest.json', 'spaces.json', 'tasks.json'])
+        self.assertEqual(sorted(self.read_json(b, 'manifest.json')['files']), ['spaces.json', 'tasks.json'])
+
+    def test_backup_stamp_suffix_when_dir_exists(self):
+        with self.mock.patch.object(self.lm.time, 'strftime', lambda fmt: '20261106-120000' if 'T' not in fmt else '2026-11-06T12:00:00'):
+            os.makedirs(os.path.join(self.deai, 'backups', '20261106-120000-liga-4d3a'), mode=0o700)
+            self.assertEqual(self.lm.run(), 'done')
+        self.assertEqual(self.backups(), ['20261106-120000-liga-4d3a', '20261106-120000-liga-4d3a-2'])
+        self.assertEqual(self.read_json(self.space_path())['migrations']['liga-4d3a']['backup'], '20261106-120000-liga-4d3a-2')
+
+    def test_mark_merge_and_secrets(self):
+        self.seed_space()
+        self.assertEqual(self.lm.run(), 'done')
+        sj = self.read_json(self.space_path())
+        self.assertEqual((sj['name'], sj['color'], sj['x']), ('Liga', '#112233', {'k': [1, 2]}))
+        self.assertEqual(sorted(sj['modules']), ['jira-tracker', 'supabase-dashboard', 'supabase-teams'])
+        self.assertIn('custom-x', [t['id'] for t in sj['tracks']])
+        self.assertEqual(sj['default_track'], 'united')
+        mark = sj['migrations']['liga-4d3a']
+        self.assertEqual(sorted(mark), ['at', 'backup', 'roles', 'tracks'])
+        self.assertRegex(mark['at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$')
+        self.assertEqual(mark['backup'], self.backups()[0])
+        self.assertEqual(mark['roles'], ['tracker', 'dashboard', 'notify'])
+        self.assertTrue(mark['tracks'])
+        sec = self.read_json(self.secrets_path())
+        self.assertEqual(sec['legacy'], {'jira-tracker': {'token': self.JIRA_TOKEN}, 'supabase-dashboard': {'key': self.SB_KEY},
+                                         'supabase-teams': {'key': self.SB_KEY}})
+        self.assertEqual(sec['other'], {'m': {'k': 'other_value_alpha'}})
+        self.assertEqual(os.stat(self.space_path()).st_mode & 0o777, 0o644)
+
+    def test_new_space_json_is_public_mode(self):
+        self.assertEqual(self.lm.run(), 'done')
+        self.assertEqual(os.stat(self.space_path()).st_mode & 0o777, 0o644)
+
+    def test_last_json_has_no_secret_values(self):
+        self.assertEqual(self.lm.run(), 'done')
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['space_id'], last['roles'], last['tracks']), ('done', 'legacy', ['tracker', 'dashboard', 'notify'], True))
+        self.assertEqual(last['secrets'], {'jira-tracker': ['token'], 'supabase-dashboard': ['key'], 'supabase-teams': ['key']})
+        self.assertEqual(last['backup'], self.backups()[0])
+        self.assert_no_secrets_in_logs()
+
+    def test_second_run_is_skip_done_and_writes_nothing(self):
+        self.assertEqual(self.lm.run(), 'done')
+        before = self.snapshot_tree()
+        self.assertEqual(self.lm.run(), 'skip-done')
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_non_ready_statuses_write_nothing(self):
+        """Усе, крім `ready`: статус назад, диск не змінено ні на байт (включно з `last.json`)."""
+        self.registry(entry=False)
+        self.assertEqual(self.lm.run(), 'skip-no-liga')
+        self.registry()
+        self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
+        self.assertEqual(self.lm.run(), 'skip-held')
+        self.space_json('not json')
+        self.assertEqual(self.lm.run(), 'skip-space-json-unreadable')
+        self.space_json({})
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        self.assertEqual(self.lm.run(), 'skip-path-in-git')
+        os.rmdir(os.path.join(self.space_dir, '.git'))
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'migrations')))
+        self.assertFalse(os.path.exists(self.secrets_path()))
+
+    def test_skip_nothing_writes_nothing(self):
+        """⛔ `skip-nothing`: ні бекапу, ні позначки, ні `last.json`; наступний запуск перевірить знову."""
+        self.config(supabase=False, jira=False, design_work_root=None)
+        cfg = self.cfg
+        cfg['tasks']['x'] = {'dir': os.path.join(self.home, 'work', 'x')}
+        self._write(self.tasks_path, cfg)
+        before = self.snapshot_tree()
+        self.assertEqual(self.lm.run(), 'skip-nothing')
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(os.path.exists(self.space_path()))
+
+    def test_abort_provider_writes_only_log(self):
+        before = self.tree_without_logs()
+        with self.mock.patch.object(self.dm, '_provider_for', lambda *a, **k: None):
+            self.assertEqual(self.lm.run(), 'abort-provider')
+        self.assertEqual(self.tree_without_logs(), before)
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['status'], 'abort-provider')
+
+    def test_backup_failure_writes_nothing(self):
+        self.seed_space()
+        with open(os.path.join(self.deai, 'backups'), 'w') as f:      # на місці теки бекапів — файл: тека не створюється
+            f.write('x')
+        before = self.tree_without_logs()
+        self.assertEqual(self.lm.run(), 'abort-backup')
+        self.assertEqual(self.tree_without_logs(), before)
+        self.assertEqual(self.read(self.space_path()), self.ORIG_SPACE)
+        self.assertEqual(self.read_json(self.secrets_path()), {'other': {'m': {'k': 'other_value_alpha'}}})
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['status'], 'abort-backup')
+
+    def test_backup_copy_failure_removes_partial_dir_and_writes_nothing(self):
+        self.seed_space()
+        before = self.tree_without_logs()
+        with self.mock.patch.object(self.lm.shutil, 'copyfile', side_effect=OSError('disk')):
+            self.assertEqual(self.lm.run(), 'abort-backup')
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.tree_without_logs(), before)
+
+    def test_failure_between_secrets_and_space_then_recovery(self):
+        self.seed_space()
+        with self.mock.patch.object(self.lm, '_write_space', side_effect=OSError('boom')):
+            self.assertEqual(self.lm.run(), 'abort-write')
+        self.assertEqual(self.read(self.space_path()), self.ORIG_SPACE)              # space.json не змінено
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['jira-tracker'], {'token': self.JIRA_TOKEN})   # секрети вже є
+        self.assertNotIn('migrations', self.read_json(self.space_path()))
+        self.assertEqual(self.lm.plan()['status'], 'ready')                          # позначки нема → наступний запуск починає заново
+        self.assertEqual(self.lm.run(), 'done')
+        sj = self.read_json(self.space_path())
+        self.assertIn('liga-4d3a', sj['migrations'])
+        self.assertEqual(sorted(sj['modules']), ['jira-tracker', 'supabase-dashboard', 'supabase-teams'])
+        self.assertEqual(self.lm.run(), 'skip-done')
+        self.assert_no_secrets_in_logs()
+
+    def test_failure_in_secrets_leaves_space_untouched_then_recovers(self):
+        self.seed_space()
+        err = self.dm.ModuleError('unwritable', message='secrets.json: OSError')
+        with self.mock.patch.object(self.dm, 'write_secrets', side_effect=err):
+            self.assertEqual(self.lm.run(), 'abort-secrets')
+        self.assertEqual(self.read(self.space_path()), self.ORIG_SPACE)
+        self.assertEqual(self.lm.run(), 'done')
+
+    def test_secrets_written_before_space_json(self):
+        """Порядок: секрети ДО `space.json` (запис `space.json` бачить секрети вже на диску)."""
+        seen = []
+        real = self.lm._write_space
+
+        def spy(path, data):
+            seen.append(os.path.exists(self.secrets_path()) and 'legacy' in self.read_json(self.secrets_path()))
+            return real(path, data)
+        with self.mock.patch.object(self.lm, '_write_space', spy):
+            self.assertEqual(self.lm.run(), 'done')
+        self.assertEqual(seen, [True])
+
+    def test_concurrent_edit_between_plan_and_write_is_kept(self):
+        """Правка `space.json` ПІСЛЯ `plan()` (тут — під час запису секретів) не губиться: запис зливається з поточним диском."""
+        self.seed_space()
+        real = self.dm.write_secrets
+        done = []
+
+        def racing(*a, **kw):
+            r = real(*a, **kw)
+            if not done:
+                done.append(1)
+                cur = self.read_json(self.space_path())
+                cur['foreign'] = {'keep': 7}
+                cur['modules'] = {'custom-mod': {'enabled': False}}
+                self._write(self.space_path(), cur)
+            return r
+        with self.mock.patch.object(self.dm, 'write_secrets', racing):
+            self.assertEqual(self.lm.run(), 'done')
+        sj = self.read_json(self.space_path())
+        self.assertEqual(sj['foreign'], {'keep': 7})
+        self.assertEqual(sj['modules']['custom-mod'], {'enabled': False})
+        self.assertEqual(sj['name'], 'Liga')
+        for mid in ('jira-tracker', 'supabase-dashboard', 'supabase-teams'):
+            self.assertIn(mid, sj['modules'])
+        self.assertIn('liga-4d3a', sj['migrations'])
+
+    def test_mark_added_concurrently_wins(self):
+        real = self.dm.write_secrets
+
+        def racing(*a, **kw):
+            r = real(*a, **kw)
+            self._write(self.space_path(), {'migrations': {'liga-4d3a': {'held': True}}})
+            return r
+        with self.mock.patch.object(self.dm, 'write_secrets', racing):
+            self.assertEqual(self.lm.run(), 'skip-done')
+        self.assertEqual(self.read_json(self.space_path()), {'migrations': {'liga-4d3a': {'held': True}}})
+
+    def test_home_must_match_deai_home(self):
+        before = self.snapshot_tree()
+        self.assertEqual(self.lm.run(home=os.path.join(self.tmp, 'elsewhere')), 'abort-internal')
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.run(home=self.deai), 'done')
+
+    def test_run_never_raises(self):
+        with self.mock.patch.object(self.lm, '_backup', side_effect=RuntimeError(self.SB_KEY)):
+            self.assertEqual(self.lm.run(), 'abort-internal')
+        self.assert_no_secrets_in_logs()
+
+    # --- CLI
+    def test_cli_status_dry_run_run(self):
+        code, out, _ = self.cli('status')
+        self.assertEqual(code, 0)
+        self.assertIn('позначки нема', out)
+        code, out, _ = self.cli('dry-run')
+        self.assertEqual(code, 0)
+        self.assertIn('ready', out)
+        self.assertEqual(out.strip(), self.lm.report(self.lm.plan()).strip())
+        self.assertEqual(self.backups(), [])                                          # dry-run нічого не пише
+        self.assertFalse(os.path.exists(self.space_path()))
+        code, out, _ = self.cli('run')
+        self.assertEqual(code, 0)
+        self.assertIn('done', out)
+        code, out, _ = self.cli('run')
+        self.assertEqual((code, 'skip-done' in out), (0, True))
+        code, out, _ = self.cli('status')
+        self.assertIn('позначка:', out)
+        self.assertIn(self.backups()[0], out)
+        self.assert_no_secrets_in_logs()
+
+    def test_cli_exit_codes(self):
+        self.registry(entry=False)
+        self.assertEqual(self.cli('run')[0], 0)                                        # нема простору ЛІГА — не помилка
+        self.registry()
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        self.assertEqual(self.cli('run')[0], 1)                                        # тека в git — потрібна увага
+        os.rmdir(os.path.join(self.space_dir, '.git'))
+        with self.mock.patch.object(self.dm, '_provider_for', lambda *a, **k: None):
+            self.assertEqual(self.cli('dry-run')[0], 1)
+        self.assertEqual(self.cli('restore', '../nope')[0], 1)
+        self.assert_no_secrets_in_logs()
+
+
+class RestoreTest(_WriteStand):
+    """Task 5 (4d-3a): `restore()` — побайтно, з перевіркою sha256, без чужих файлів, відмова на підроблене імʼя."""
+
+    ORIG_SPACE = b'{"name": "Liga",\n  "x": [1,  2]}\n'
+    ORIG_SECRETS = b'{"other": {"m": {"k": "other_value_alpha"}},\n "z": 1}\n'
+
+    def migrate(self, seed=True):
+        if seed:
+            self._write(self.space_path(), self.ORIG_SPACE.decode('utf-8'))
+            os.chmod(self.space_path(), 0o640)
+            self._write(self.secrets_path(), self.ORIG_SECRETS.decode('utf-8'))
+            os.chmod(self.secrets_path(), 0o600)
+        self.assertEqual(self.lm.run(), 'done')
+        return self.backups()[-1]
+
+    def test_restore_byte_for_byte(self):
+        stamp = self.migrate()
+        tasks, reg = self.read(self.tasks_path), self.read(self.deai, 'spaces.json')
+        self.assertNotEqual(self.read(self.space_path()), self.ORIG_SPACE)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.ORIG_SPACE)
+        self.assertEqual(self.read(self.secrets_path()), self.ORIG_SECRETS)
+        self.assertEqual(os.stat(self.space_path()).st_mode & 0o777, 0o640)
+        self.assertEqual(os.stat(self.secrets_path()).st_mode & 0o777, 0o600)
+        self.assertEqual((self.read(self.tasks_path), self.read(self.deai, 'spaces.json')), (tasks, reg))   # їх міграція не міняла
+        self.assertEqual(self.lm.plan()['status'], 'ready')                          # позначки нема → мігрує знову
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['status'], 'restored')
+        self.assert_no_secrets_in_logs()
+
+    def test_restore_hold(self):
+        stamp = self.migrate()
+        self.assertEqual(self.lm.restore(stamp, hold=True), 'restored')
+        sj = self.read_json(self.space_path())
+        self.assertEqual(sj, {'name': 'Liga', 'x': [1, 2], 'migrations': {'liga-4d3a': {'held': True}}})
+        self.assertEqual(self.read(self.secrets_path()), self.ORIG_SECRETS)
+        self.assertEqual(self.lm.plan()['status'], 'skip-held')
+        self.assertEqual(self.lm.run(), 'skip-held')
+
+    def test_restore_when_backup_had_no_space_json(self):
+        stamp = self.migrate(seed=False)
+        self.assertTrue(os.path.exists(self.space_path()))
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        self.assertFalse(os.path.exists(self.space_path()))
+        self.assertFalse(os.path.exists(self.secrets_path()))                       # секретів у бекапі теж не було
+        self.assertEqual(self.lm.plan()['status'], 'ready')
+
+    def test_restore_hold_when_backup_had_no_space_json(self):
+        stamp = self.migrate(seed=False)
+        self.assertEqual(self.lm.restore(stamp, hold=True), 'restored')
+        self.assertEqual(self.read_json(self.space_path()), {'migrations': {'liga-4d3a': {'held': True}}})
+
+    def test_restore_without_secrets_in_backup_keeps_foreign_secrets(self):
+        stamp = self.migrate(seed=False)
+        cur = self.read_json(self.secrets_path())
+        cur['other-space'] = {'m': {'k': 'later_value_alpha'}}
+        self._write(self.secrets_path(), cur)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        self.assertEqual(self.read_json(self.secrets_path()), {'other-space': {'m': {'k': 'later_value_alpha'}}})
+
+    def test_refuses_bad_stamps(self):
+        stamp = self.migrate()
+        before = self.snapshot_tree()
+        os.symlink(os.path.join(self.deai, 'backups', stamp), os.path.join(self.deai, 'backups', '20260101-000000-liga-4d3a'))
+        before = self.snapshot_tree()
+        for bad in (None, '', 5, '../' + stamp, stamp + '/..', os.path.join(self.deai, 'backups', stamp), stamp + '\n', 'nope',
+                    stamp.replace('liga-4d3a', 'other'), '20990101-000000-liga-4d3a', '20260101-000000-liga-4d3a', '.', '..'):
+            self.assertEqual(self.lm.restore(bad), 'refuse-stamp', repr(bad))
+            self.assertEqual(self.lm.restore(bad, hold=True), 'refuse-stamp', repr(bad))
+        self.assertEqual(self.snapshot_tree(), before)                              # символічний лінк на справжній бекап — теж відмова
+
+    def test_refuses_tampered_backup_files_before_any_write(self):
+        stamp = self.migrate()
+        b = os.path.join(self.deai, 'backups', stamp)
+        migrated = self.read(self.space_path())
+        with open(os.path.join(b, 'secrets.json'), 'ab') as f:                      # підробка САМЕ секретів: space.json бекапу цілий
+            f.write(b' ')
+        self.assertEqual(self.lm.restore(stamp), 'refuse-tampered')
+        self.assertEqual(self.read(self.space_path()), migrated)                    # нічого не відновлено — навіть цілий space.json
+        with open(os.path.join(b, 'secrets.json'), 'wb') as f:
+            f.write(self.ORIG_SECRETS)
+        with open(os.path.join(b, 'space.json'), 'wb') as f:
+            f.write(b'{"name": "Evil"}')
+        self.assertEqual(self.lm.restore(stamp, hold=True), 'refuse-tampered')
+        self.assertEqual(self.read(self.space_path()), migrated)
+
+    def test_refuses_tampered_manifest(self):
+        stamp = self.migrate()
+        b = os.path.join(self.deai, 'backups', stamp)
+        m = self.read_json(b, 'manifest.json')
+        migrated = self.read(self.space_path())
+        for mutate in (lambda x: x['files']['space.json'].update(sha256='0' * 64),
+                       lambda x: x['files'].update({'../evil.json': {'sha256': 'a', 'mode': 420}}),
+                       lambda x: x.pop('files'),
+                       lambda x: x.update(migration='other')):
+            bad = json.loads(json.dumps(m))
+            mutate(bad)
+            with open(os.path.join(b, 'manifest.json'), 'w') as f:
+                json.dump(bad, f)
+            self.assertEqual(self.lm.restore(stamp), 'refuse-tampered')
+            self.assertEqual(self.read(self.space_path()), migrated)
+        with open(os.path.join(b, 'manifest.json'), 'w') as f:
+            f.write('not json')
+        self.assertEqual(self.lm.restore(stamp), 'refuse-tampered')
+
+    def test_manifest_paths_are_never_trusted(self):
+        """Куди писати, береться з реєстру, а не з маніфесту: підроблений `space_path` нікуди не веде."""
+        stamp = self.migrate()
+        b = os.path.join(self.deai, 'backups', stamp)
+        m = self.read_json(b, 'manifest.json')
+        evil = os.path.join(self.tmp, 'evil')
+        os.makedirs(evil)
+        m['space_path'] = evil
+        m['files']['space.json']['source'] = os.path.join(evil, 'space.json')
+        with open(os.path.join(b, 'manifest.json'), 'w') as f:
+            json.dump(m, f)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        self.assertEqual(os.listdir(evil), [])
+        self.assertEqual(self.read(self.space_path()), self.ORIG_SPACE)
+
+    def test_refuses_when_space_differs_or_missing(self):
+        stamp = self.migrate()
+        migrated = self.read(self.space_path())
+        self.registry(entry=False)
+        self.assertEqual(self.lm.restore(stamp), 'refuse-no-liga')
+        self.registry()
+        reg = self.read_json(self.deai, 'spaces.json')
+        reg['spaces'][0]['id'] = 'other'
+        reg['current'] = 'other'
+        self._write(os.path.join(self.deai, 'spaces.json'), reg)
+        self.assertEqual(self.lm.restore(stamp), 'refuse-no-liga')
+        self.assertEqual(self.read(self.space_path()), migrated)
+
+    def test_cli_restore(self):
+        stamp = self.migrate()
+        code, out, _ = self.cli('restore', stamp, '--hold')
+        self.assertEqual(code, 0)
+        self.assertIn('restored', out)
+        self.assertEqual(self.read_json(self.space_path())['migrations'], {'liga-4d3a': {'held': True}})
+        code, out, _ = self.cli('status')
+        self.assertIn('held', out)
+        self.assertEqual(self.cli('restore', 'bad')[0], 1)
+        self.assert_no_secrets_in_logs()
+
+
+class StartupTest(_WriteStand):
+    """Task 5 (4d-3a): `startup()` — матриця ізоляції/шва/справжнього дому; виняток не валить старт."""
+
+    def alt_home(self):
+        """Тимчасовий DEAI_HOME, що НЕ є `~/.deai` (у стенді HOME підмінено, тож `self.deai` і є «справжнім»)."""
+        alt = os.path.join(self.tmp, 'alt-deai')
+        os.makedirs(alt)
+        with open(os.path.join(self.deai, 'spaces.json'), 'rb') as f, open(os.path.join(alt, 'spaces.json'), 'wb') as g:
+            g.write(f.read())
+        return alt
+
+    def test_production_runs(self):
+        st, err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'done')
+        self.assertIn('liga-4d3a: done', err)
+        self.assertEqual(self.quiet(self.lm.startup)[0], 'skip-done')
+        self.assert_no_secrets_in_logs()
+
+    def test_isolated_does_not_run(self):
+        for env in ({'DC_NO_OVERVIEW': '1'}, {'DC_TASKS_FILE': self.tasks_path}, {'DC_TASKS_FILE': self.tasks_path, 'DC_NO_OVERVIEW': '1'}):
+            with self.mock.patch.dict(os.environ, env):
+                before = self.snapshot_tree()
+                st, err = self.quiet(self.lm.startup)
+                self.assertIsNone(st, env)
+                self.assertEqual(err, '')
+                self.assertEqual(self.snapshot_tree(), before, env)
+
+    def test_isolated_with_seam_and_temp_home_runs(self):
+        alt = self.alt_home()
+        with self.mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1', 'DC_MIGRATE_LIGA': '1', 'DEAI_HOME': alt}):
+            st, _err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'done')
+        self.assertEqual(len(os.listdir(os.path.join(alt, 'backups'))), 1)
+        self.assertTrue(os.path.exists(os.path.join(alt, 'secrets.json')))
+        self.assertFalse(os.path.exists(os.path.join(self.deai, 'secrets.json')))         # "справжній" дім не чіпано
+        self.assert_no_secrets(*self.cap)
+
+    def test_seam_value_must_be_exactly_one(self):
+        alt = self.alt_home()
+        for val in ('0', '', 'true', 'yes'):
+            with self.mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1', 'DC_MIGRATE_LIGA': val, 'DEAI_HOME': alt}):
+                self.assertIsNone(self.quiet(self.lm.startup)[0], val)
+        self.assertFalse(os.path.exists(os.path.join(alt, 'backups')))
+
+    def test_seam_with_real_home_is_refused_loudly(self):
+        before = self.snapshot_tree()
+        for env_home in (self.deai, None, '~/.deai'):
+            env = {'DC_NO_OVERVIEW': '1', 'DC_MIGRATE_LIGA': '1'}
+            with self.mock.patch.dict(os.environ, env):
+                if env_home is None:
+                    os.environ.pop('DEAI_HOME', None)
+                else:
+                    os.environ['DEAI_HOME'] = env_home
+                st, err = self.quiet(self.lm.startup)
+            self.assertEqual(st, 'refuse-real-home', env_home)
+            self.assertIn('DC_MIGRATE_LIGA', err)
+            self.assertIn('відмова', err)
+        self.assertEqual(self.snapshot_tree(), before)
+
+    def test_seam_with_symlink_to_real_home_is_refused(self):
+        link = os.path.join(self.tmp, 'link-deai')
+        os.symlink(self.deai, link)
+        with self.mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1', 'DC_MIGRATE_LIGA': '1', 'DEAI_HOME': link}):
+            self.assertEqual(self.quiet(self.lm.startup)[0], 'refuse-real-home')
+        self.assertEqual(self.backups(), [])
+
+    def test_exception_does_not_break_startup(self):
+        with self.mock.patch.object(self.lm, '_run', side_effect=RuntimeError(self.SB_KEY)):
+            st, err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'abort-internal')
+        self.assertIn('RuntimeError', err)
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual((last['status'], last['error']), ('abort-internal', 'RuntimeError'))
+        self.assert_no_secrets_in_logs()
+
+    def test_exception_with_unwritable_log_does_not_break_startup(self):
+        with self.mock.patch.object(self.lm, '_run', side_effect=RuntimeError('x')), \
+                self.mock.patch.object(self.lm, '_write_last', side_effect=OSError('y')):
+            self.assertEqual(self.quiet(self.lm.startup)[0], 'abort-internal')
+
+    def test_serve_main_calls_startup_before_make_server(self):
+        with open(os.path.join(os.path.dirname(_HERE), 'app', 'serve.py'), encoding='utf-8') as f:
+            src = f.read()
+        tail = src[src.index("if __name__ == '__main__':"):]
+        self.assertIn('liga_migrate.startup()', tail)
+        self.assertLess(tail.index('liga_migrate.startup()'), tail.index('make_server(port).serve_forever()'))
 
 
 if __name__ == '__main__':

@@ -1,7 +1,8 @@
 """Міграція простору ЛІГА в явні `tracks` і модулі (етап 4d-3a, 0.17.0; спека `docs/superpowers/specs/2026-11-05-liga-migration-a-design.md`).
 
-Тут — ЧИСТИЙ розрахунок `plan()` і безпечний для друку `report(plan)`: нічого не пишемо на диск (запис, бекап, позначка, відкат —
-наступна задача). Модуль не імпортує `serve` (лише `spaces`, `deai_modules`, `tracks`, `install_config`).
+Тут — ЧИСТИЙ розрахунок `plan()` і безпечний для друку `report(plan)`: `plan()` нічого не пише на диск. Запис (`run`), відкат
+(`restore`), `status` і старт сервера (`startup`) — нижче, після `report()`. Модуль не імпортує `serve` (лише `spaces`,
+`deai_modules`, `tracks`, `install_config`, `implicit`).
 
 `plan(home=None)` → словник:
     status        'ready' | 'skip-*' | 'abort-*' (коди — `SKIP_CODES`, `ABORT_CODES`). 'skip-nothing' — жодна роль і не напрямки не
@@ -17,12 +18,21 @@
 
 ⛔ Секрети живуть лише в `plan['secrets']`. `report()` друкує імена ключів, не значення; `plan` не друкувати цілком.
 """
+import hashlib
+import json
 import os
+import re
+import shutil
+import sys
+import tempfile
+import time
 
 import deai_modules
+import implicit
 import install_config
 import spaces
 import tracks as tracks_core
+from atomic_io import TMP_SUFFIX, atomic_write_json
 
 MARK = 'liga-4d3a'
 #: Роль → вбудований модуль, у порядку запису.
@@ -254,3 +264,394 @@ def report(p):
         for mid, sec in (p.get('secrets') or {}).items():
             lines.append('  secrets %s: %s' % (mid, ', '.join(sorted(sec)) or '-'))
     return '\n'.join(lines)
+
+
+# ================================================================================================ запис, відкат, старт (Task 5)
+#
+# ⛔ Замки: `spaces.WRITE_LOCK` — звичайний `Lock`, не вкладений. Його тримаємо ЛИШЕ на один запис (`write_secrets` бере його сам,
+# `_commit_space`/`_restore_file`/`_write_last` — окремо). Під ним НІКОЛИ не кличемо `plan()`, `load_registry`, `catalog`, `provider`.
+
+BACKUP_SUFFIX = '-liga-4d3a'
+#: Строгий вигляд імені бекапу (`<YYYYMMDD-HHMMSS>-liga-4d3a[-N]`): жодних шляхів, крапок і розділювачів.
+STAMP_RE = re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3a(?:-[0-9]{1,3})?')
+BACKUP_FILES = ('tasks.json', 'space.json', 'secrets.json', 'spaces.json')
+#: Статуси, після яких CLI не вважає запуск помилкою (нічого не зламано; «done» — міграцію виконано).
+BENIGN = ('done', 'skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-nothing')
+_RUN_REASONS = {
+    'done': 'міграцію виконано',
+    'abort-backup': 'бекап не створено: міграція нічого не записала',
+    'abort-secrets': 'секрети не записано: space.json не змінено, наступний запуск почне заново',
+    'abort-write': 'space.json не записано (секрети вже є — нешкідливо): наступний запуск почне заново',
+}
+
+
+def _tool_version():
+    """Версія інструмента з `package.json` кореня репо (для маніфесту бекапу); не читається — `unknown`."""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, 'package.json'), encoding='utf-8') as f:
+            return str(json.load(f).get('version') or 'unknown')
+    except (OSError, ValueError, AttributeError):
+        return 'unknown'
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(65536), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _atomic_bytes(path, data, mode):
+    """Атомарний запис БАЙТІВ (відкат побайтно: `atomic_write_json` перепакував би JSON). Тимчасовий файл — власний, у тій самій теці."""
+    path = os.path.realpath(path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.', prefix=os.path.basename(path) + '.', suffix=TMP_SUFFIX)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_space(path, data):
+    """Єдиний запис `space.json` міграції й відкату `--hold` (точка підміни для тестів «збій між секретами й space.json»)."""
+    spaces._write_public(path, data)
+
+
+def _info(p, **extra):
+    """Безпечний підсумок для `last.json` і друку: коди, імена ролей, без значень секретів і адрес."""
+    out = {'status': p.get('status'), 'reason': p.get('reason') or '', 'space_id': p.get('space_id'),
+           'roles': [r for r, v in (p.get('roles') or {}).items() if v.get('migrate')],
+           'skipped': {r: v.get('reason') for r, v in (p.get('roles') or {}).items() if not v.get('migrate')},
+           'tracks': bool(p.get('tracks')), 'tracks_reason': p.get('tracks_reason')}
+    out.update(extra)
+    return out
+
+
+def _write_last(info):
+    """`<DEAI_HOME>/migrations/last.json` — журнал останньої дії (без значень секретів). Найкращі зусилля: не кидає."""
+    try:
+        d = os.path.join(spaces.home(), 'migrations')
+        with spaces.WRITE_LOCK:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            atomic_write_json(os.path.join(d, 'last.json'), dict(info, at=time.strftime('%Y-%m-%dT%H:%M:%S')))
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _liga_entry(home):
+    reg = _registry(home)
+    liga = next((s for s in reg['spaces'] if s.get('legacy') is True), None)
+    if liga is None:
+        raise _Stop('skip-no-liga')
+    return liga
+
+
+def _backup(base, space_id, space_path):
+    """Датований бекап; повертає імʼя теки. Збій — виняток (викликач робить `abort-backup`); недописану теку прибираємо.
+    Усі файли бекапу 0600, тека 0700: у `tasks.json` лежать облікові."""
+    root = os.path.join(base, 'backups')
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    stamp = time.strftime('%Y%m%d-%H%M%S') + BACKUP_SUFFIX
+    name, n = stamp, 1
+    while True:
+        try:
+            os.mkdir(os.path.join(root, name), 0o700)
+            break
+        except FileExistsError:
+            n += 1
+            name = '%s-%d' % (stamp, n)
+    d = os.path.join(root, name)
+    try:
+        os.chmod(d, 0o700)
+        sources = {'tasks.json': install_config.legacy_tasks_path(), 'space.json': os.path.join(space_path, 'space.json'),
+                   'secrets.json': deai_modules._secrets_path(), 'spaces.json': spaces.registry_path()}
+        files = {}
+        for fname, src in sources.items():
+            if not os.path.isfile(src):
+                continue
+            dst = os.path.join(d, fname)
+            shutil.copyfile(src, dst)
+            os.chmod(dst, 0o600)
+            files[fname] = {'source': src, 'sha256': _sha256(dst), 'mode': os.stat(src).st_mode & 0o777}
+        manifest = {'tool': 'deai-canvas', 'version': _tool_version(), 'migration': MARK, 'space_id': space_id,
+                    'space_path': space_path, 'files': files}
+        mp = os.path.join(d, 'manifest.json')
+        with open(mp, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        os.chmod(mp, 0o600)
+    except BaseException:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    return name
+
+
+def _commit_space(space_path, p, stamp):
+    """ОДИН атомарний запис `space.json`: злиття з ПОТОЧНИМ вмістом диска (перечитуємо під замком, відразу перед записом): чужі
+    ключі й правки, зроблені після `plan()`, не губляться. Модуль, що зʼявився тим часом, не перезаписуємо. Позначка вже є — `skip-done`."""
+    sp = os.path.join(space_path, 'space.json')
+    with spaces.WRITE_LOCK:
+        cur = deai_modules._load_space_json(sp)
+        mods = dict(deai_modules._raw_modules(cur))
+        marks = cur.get('migrations')
+        marks = dict(marks) if isinstance(marks, dict) else {}
+        if MARK in marks:
+            return 'skip-done'
+        planned = p['space_json']
+        for role, r in p['roles'].items():
+            if r['migrate'] and r['module'] not in mods:
+                mods[r['module']] = planned['modules'][r['module']]
+        new = dict(cur)
+        new['modules'] = mods
+        if p['tracks'] and not cur.get('tracks'):
+            new['tracks'], new['default_track'] = planned['tracks'], planned['default_track']
+        marks[MARK] = dict(planned['migrations'][MARK], at=time.strftime('%Y-%m-%dT%H:%M:%S'), backup=stamp)
+        new['migrations'] = marks
+        _write_space(sp, new)
+    return 'done'
+
+
+def _run(home):
+    """`(статус, підсумок)`; кожен виняток — код, без тексту винятку (там можуть бути значення)."""
+    if home and os.path.realpath(os.path.expanduser(home)) != os.path.realpath(spaces.home()):
+        return 'abort-internal', {'status': 'abort-internal', 'reason': 'home не збігається з DEAI_HOME: запис пішов би в іншу теку'}
+    p = plan(home)
+    st = p['status']
+    if st != 'ready':
+        info = _info(p)
+        if st.startswith('abort-'):
+            _write_last(info)                                # лише журнал: стан не чіпаємо; skip-* журнал не затирає
+        return st, info
+    try:
+        liga = _liga_entry(home)
+        try:
+            stamp = _backup(spaces.home(), p['space_id'], liga['path'])
+        except (OSError, ValueError):
+            info = _info(p, status='abort-backup', reason=_RUN_REASONS['abort-backup'])
+            _write_last(info)
+            return 'abort-backup', info
+        try:
+            for mid, patch in p['secrets'].items():
+                deai_modules.write_secrets(p['space_id'], mid, patch)
+        except deai_modules.ModuleError as e:
+            info = _info(p, status='abort-secrets', reason=_RUN_REASONS['abort-secrets'], backup=stamp, error=getattr(e, 'code', 'secrets'))
+            _write_last(info)
+            return 'abort-secrets', info
+        try:
+            st = _commit_space(liga['path'], p, stamp)
+        except (OSError, ValueError, deai_modules.ModuleError):
+            info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
+            _write_last(info)
+            return 'abort-write', info
+        info = _info(p, status=st, reason=_RUN_REASONS.get(st) or _REASONS.get(st, ''), backup=stamp)
+        if st == 'done':
+            info['secrets'] = {m: sorted(s) for m, s in p['secrets'].items()}      # лише імена ключів
+            _write_last(info)
+        return st, info
+    except _Stop as s:
+        return s.status, {'status': s.status, 'reason': _REASONS.get(s.status, '')}
+    except Exception as e:  # noqa: BLE001
+        info = _info(p, status='abort-internal', reason=_REASONS['abort-internal'], error=type(e).__name__)
+        _write_last(info)
+        return 'abort-internal', info
+
+
+def run(home=None):
+    """Міграція ЛІГИ: `plan()` → бекап → секрети → ОДИН запис `space.json` (з позначкою) → `last.json`. Повертає статус
+    (`done`, `skip-*`, `abort-*`); будь-що, крім `ready` у `plan()`, нічого не пише (лише `abort-*` лишають рядок у `last.json`).
+    Збій між секретами й `space.json` лишає нешкідливі секрети без позначки: наступний запуск починає з нуля."""
+    return _run(home)[0]
+
+
+# ---------------------------------------------------------------------------------------------------------------- відкат
+
+def _backup_dir(stamp):
+    """Тека бекапу за ЗАВАЖНО строгим імʼям; не символічне посилання, лежить прямо в `<DEAI_HOME>/backups`."""
+    if not isinstance(stamp, str) or not STAMP_RE.fullmatch(stamp):
+        return None
+    root = os.path.join(spaces.home(), 'backups')
+    d = os.path.join(root, stamp)
+    if os.path.islink(d) or not os.path.isdir(d) or os.path.dirname(os.path.realpath(d)) != os.path.realpath(root):
+        return None
+    return d
+
+
+def _load_manifest(d):
+    """Маніфест бекапу, перевірений на форму й sha256 КОЖНОГО файла; будь-яка розбіжність — `None` (нічого не відновлюємо)."""
+    try:
+        with open(os.path.join(d, 'manifest.json'), encoding='utf-8') as f:
+            m = json.load(f)
+        files = m['files']
+        if m.get('migration') != MARK or not isinstance(files, dict) or not isinstance(m.get('space_id'), str):
+            return None
+        for fname, meta in files.items():
+            if fname not in BACKUP_FILES or not isinstance(meta, dict):
+                return None
+            fp = os.path.join(d, fname)
+            if os.path.islink(fp) or not os.path.isfile(fp) or _sha256(fp) != meta.get('sha256'):
+                return None
+            if not isinstance(meta.get('mode'), int):
+                return None
+        return m
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def restore(stamp, hold=False, home=None):
+    """Відкат: `space.json` ЛІГИ і `secrets.json` повертаються побайтно з бекапу (sha256 з маніфесту звіряється ДО будь-якого
+    запису). Бекап без `space.json` — мігрований `space.json` прибираємо. Старий `tasks.json` і `spaces.json` не чіпаємо.
+    `hold=True` дописує `migrations.liga-4d3a.held` — наступний старт не мігрує. Невідоме/підроблене імʼя — відмова
+    (`refuse-stamp`/`refuse-tampered`/`refuse-no-liga`), нічого не пишемо. Повертає статус (`restored` чи відмова/`abort-restore`)."""
+    try:
+        if home and os.path.realpath(os.path.expanduser(home)) != os.path.realpath(spaces.home()):
+            return 'abort-internal'
+        d = _backup_dir(stamp)
+        if d is None:
+            return 'refuse-stamp'
+        m = _load_manifest(d)
+        if m is None:
+            return 'refuse-tampered'
+        try:
+            liga = _liga_entry(home)
+        except _Stop:
+            return 'refuse-no-liga'
+        if liga['id'] != m['space_id']:
+            return 'refuse-no-liga'
+        files = m['files']
+        sp = os.path.join(liga['path'], 'space.json')
+
+        def read(fname):
+            with open(os.path.join(d, fname), 'rb') as f:
+                return f.read()
+        # Спершу space.json: збій між двома записами лишає простір НЕмігрованим (секрети без запису нешкідливі), а не навпаки.
+        with spaces.WRITE_LOCK:
+            if 'space.json' in files:
+                _atomic_bytes(sp, read('space.json'), files['space.json']['mode'] & 0o777)
+            elif os.path.lexists(sp):
+                os.remove(sp)
+        with spaces.WRITE_LOCK:
+            secrets_p = deai_modules._secrets_path()
+            if 'secrets.json' in files:
+                _atomic_bytes(secrets_p, read('secrets.json'), 0o600)
+            elif os.path.lexists(secrets_p):                 # бекап без секретів: знімаємо лише записане для ЛІГИ, чужі лишаємо
+                cur = deai_modules._load_secrets()
+                cur.pop(m['space_id'], None)
+                if cur:
+                    atomic_write_json(secrets_p, cur)
+                    os.chmod(secrets_p, 0o600)
+                else:
+                    os.remove(secrets_p)
+        if hold:
+            with spaces.WRITE_LOCK:
+                cur = deai_modules._load_space_json(sp)
+                marks = cur.get('migrations')
+                marks = dict(marks) if isinstance(marks, dict) else {}
+                marks[MARK] = {'held': True}
+                new = dict(cur)
+                new['migrations'] = marks
+                _write_space(sp, new)
+        _write_last({'status': 'restored', 'reason': 'простір ЛІГА повернено з бекапу', 'space_id': m['space_id'], 'backup': stamp,
+                     'held': bool(hold)})
+        return 'restored'
+    except Exception:  # noqa: BLE001 — без тексту винятку
+        return 'abort-restore'
+
+
+# ---------------------------------------------------------------------------------------------------------------- статус
+
+def status(home=None):
+    """Стан для людини (словник без значень секретів): запис ЛІГИ, позначка, останній звіт, бекапи."""
+    out = {'liga': False, 'space_id': None, 'mark': None, 'last': None, 'backups': [], 'error': None}
+    try:
+        liga = _liga_entry(home)
+    except _Stop as s:
+        out['error'] = s.status
+        liga = None
+    if liga:
+        out['liga'], out['space_id'] = True, liga['id']
+        try:
+            data = deai_modules._load_space_json(os.path.join(liga['path'], 'space.json'))
+            mig = data.get('migrations')
+            mark = mig.get(MARK) if isinstance(mig, dict) else None
+            out['mark'] = {k: mark[k] for k in ('at', 'roles', 'tracks', 'backup', 'held') if k in mark} if isinstance(mark, dict) else None
+        except deai_modules.ModuleError:
+            out['error'] = 'skip-space-json-unreadable'
+    try:
+        with open(os.path.join(spaces.home(), 'migrations', 'last.json'), encoding='utf-8') as f:
+            last = json.load(f)
+        out['last'] = last if isinstance(last, dict) else None
+    except (OSError, ValueError):
+        pass
+    try:
+        out['backups'] = sorted(n for n in os.listdir(os.path.join(spaces.home(), 'backups')) if STAMP_RE.fullmatch(n))
+    except OSError:
+        pass
+    return out
+
+
+def status_text(st):
+    """Український текст `status()`. ⛔ Без значень секретів."""
+    lines = ['Міграція ЛІГИ (liga-4d3a)']
+    if not st['liga']:
+        lines.append('  простору ЛІГА в реєстрі нема' + (' (%s)' % st['error'] if st.get('error') else ''))
+    else:
+        lines.append('  простір: ' + str(st['space_id']))
+        m = st['mark']
+        if m is None:
+            lines.append('  позначки нема: міграція ще не виконана (або відкочена)')
+        elif m.get('held'):
+            lines.append('  позначка: вимкнено вручну (held)')
+        else:
+            lines.append('  позначка: %s, ролі: %s, напрямки: %s, бекап: %s' % (
+                m.get('at'), ', '.join(m.get('roles') or []) or '-', 'так' if m.get('tracks') else 'ні', m.get('backup')))
+    last = st.get('last')
+    if last:
+        lines.append('  останній звіт: %s (%s)' % (last.get('status'), last.get('at')))
+    lines.append('  бекапи: ' + (', '.join(st['backups']) or 'нема'))
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------------------------------------------- старт сервера
+
+def _real_home():
+    """Чи `spaces.home()` — справжній `~/.deai` (за `realpath`; і за теками з пароля ОС, і за `$HOME`)."""
+    cur = os.path.realpath(spaces.home())
+    cands = {os.path.realpath(os.path.expanduser('~/.deai'))}
+    try:
+        import pwd
+        cands.add(os.path.realpath(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.deai')))
+    except (ImportError, KeyError, OSError):
+        pass
+    return cur in cands
+
+
+def startup():
+    """Виклик із `serve.main` ДО `make_server`. Ізольований прогін (`implicit.isolated()`) не мігрує, крім шва
+    `DC_MIGRATE_LIGA=1` ЛИШЕ з тимчасовим `DEAI_HOME` (справжній `~/.deai` — гучна відмова). Не кидає ніколи: виняток — у stderr
+    (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`."""
+    try:
+        if implicit.isolated():
+            if os.environ.get('DC_MIGRATE_LIGA') != '1':
+                return None
+            if _real_home():
+                print('liga-4d3a: DC_MIGRATE_LIGA=1 разом зі справжнім DEAI_HOME (~/.deai): відмова, міграцію не запущено', file=sys.stderr)
+                return 'refuse-real-home'
+        st, info = _run(None)
+        if st != 'skip-layer-off' and not st.startswith('skip-no') and st != 'skip-done':
+            print('liga-4d3a: %s — %s' % (st, info.get('reason') or ''), file=sys.stderr)
+        return st
+    except Exception as e:  # noqa: BLE001
+        try:
+            print('liga-4d3a: abort-internal — %s' % type(e).__name__, file=sys.stderr)
+            _write_last({'status': 'abort-internal', 'reason': _REASONS['abort-internal'], 'error': type(e).__name__})
+        except Exception:  # noqa: BLE001
+            pass
+        return 'abort-internal'
