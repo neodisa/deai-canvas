@@ -41,9 +41,9 @@ const BUILTIN_TEXT = {
   "static-publish": { name: "cnModStaticName", desc: "cnModStaticDesc",
     fields: { folder: "cnFieldStaticFolder", password: "cnFieldPreviewPassword" } },
   "vercel-publish": { name: "cnModVercelName", desc: "cnModVercelDesc",
-    fields: { token: "cnFieldVercelToken", team: "cnFieldVercelTeam", password: "cnFieldPreviewPassword" } },
+    fields: { auth: "cnFieldVercelAuth", token: "cnFieldVercelToken", team: "cnFieldVercelTeam", password: "cnFieldPreviewPassword" } },
   "supabase-comments": { name: "cnModSupabaseName", desc: "cnModSupabaseDesc",
-    fields: { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket" } },
+    fields: { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket", compat: "cnFieldSbCompat" } },
   "css-tokens": { name: "cnModCssName", desc: "cnModCssDesc", fields: { file: "cnFieldCssFile" } },
   /* Синхронізація з git (4a): підписи шести налаштувань маніфесту `modules/git-sync/module.json`. */
   "git-sync": { name: "cnModGitName", desc: "cnModGitDesc",
@@ -51,13 +51,13 @@ const BUILTIN_TEXT = {
       host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync", compat: "cnFieldGitCompat" } },
   /* Командний дашборд (4c-1): підписи трьох налаштувань маніфесту `modules/supabase-dashboard/module.json`. */
   "supabase-dashboard": { name: "cnModSbDashName", desc: "cnModSbDashDesc",
-    fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable" } },
+    fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable", compat: "cnFieldSbDashCompat" } },
   /* Трекер задач (4c-2): підписи трьох налаштувань маніфесту `modules/jira-tracker/module.json`. */
   "jira-tracker": { name: "cnModJiraName", desc: "cnModJiraDesc",
     fields: { base: "cnFieldJiraBase", email: "cnFieldJiraEmail", token: "cnFieldJiraToken" } },
   /* Сповіщення Teams (4c-3): підписи двох налаштувань маніфесту `modules/supabase-teams/module.json`. */
   "supabase-teams": { name: "cnModSbTeamsName", desc: "cnModSbTeamsDesc",
-    fields: { url: "cnFieldSbTeamsUrl", key: "cnFieldSbTeamsKey" } },
+    fields: { url: "cnFieldSbTeamsUrl", key: "cnFieldSbTeamsKey", compat: "cnFieldSbTeamsCompat" } },
 };
 /** Ключі словника вбудованого модуля (`name`, `desc`, `fields{ключ: ключ словника}`) або `null`. */
 export const builtinText = (id) => get(BUILTIN_TEXT, id) ?? null;

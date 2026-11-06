@@ -1064,6 +1064,28 @@ class SpaceCompatKey(_VcsStand):
             f.write('{broken')
         self.assertEqual(dm.compat_view(sp2, {'vcs': VCS_ID}), {})
 
+    def test_compat_view_requires_a_builtin_raw_provider(self):
+        """Захист у глибину: сирий постачальник ролі — вбудований `Module` цього id; свій модуль (`origin == 'space'`) з тим самим
+        id і `compat` ключа не дає. Постачальник береться з кешу `_capabilities_full`, каталог не обходиться."""
+        dm = self.dm
+        d = os.path.join(self.tmp, 'cvo')
+        os.makedirs(d)
+        sp = {'id': 'cvo', 'path': d, 'integrations': False}
+        self.mb._write(os.path.join(d, 'space.json'), {'modules': {VCS_ID: {'enabled': True, 'settings': {'compat': DC}}}})
+
+        def fake(origin, mid=VCS_ID):
+            m = self.mock.Mock(spec=dm.Module)
+            m.id, m.origin = mid, origin
+            return m
+        caps = {'vcs': VCS_ID}
+        for origin, mid, want in (('builtin', VCS_ID, {'vcs': DC}), ('space', VCS_ID, {}), ('builtin', 'other-vcs', {})):
+            with self.mock.patch.object(dm, '_capabilities_full', lambda s, o=origin, i=mid: (caps, {'vcs': fake(o, i)})):
+                self.assertEqual(dm.compat_view(sp, caps), want, (origin, mid))
+        with self.mock.patch.object(dm, '_capabilities_full', lambda s: (caps, {})):
+            self.assertEqual(dm.compat_view(sp, caps), {}, 'нема сирого постачальника — ключа нема')
+        with self.mock.patch.object(dm, '_capabilities_full', self.mock.Mock(side_effect=RuntimeError('x'))):
+            self.assertEqual(dm.compat_view(sp, caps), {}, 'збій кешу — тотальність')
+
 
 if __name__ == '__main__':
     unittest.main()

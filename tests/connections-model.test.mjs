@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
-import { DICT } from "../app/i18n.js";
+import { DICT, setLang, t } from "../app/i18n.js";
 
 import {
   ROLE_ORDER, builtinText, canErase, cardView, disableConsequences, formFields, formPatch, groupModules, initialForm,
@@ -44,13 +44,13 @@ test("вбудовані тексти: вісім модулів (git-sync 4a, s
   }
   assert.equal(builtinText("static-publish").fields.folder, "cnFieldStaticFolder");
   assert.deepEqual(builtinText("supabase-comments").fields,
-    { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket" });
+    { url: "cnFieldSupabaseUrl", key: "cnFieldSupabaseKey", shots_bucket: "cnFieldSupabaseShotsBucket", compat: "cnFieldSbCompat" });
   assert.deepEqual(builtinText("supabase-dashboard"), { name: "cnModSbDashName", desc: "cnModSbDashDesc",
-    fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable" } }, "4c-1: модуль ролі dashboard");
+    fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable", compat: "cnFieldSbDashCompat" } }, "4c-1: модуль ролі dashboard");
   assert.deepEqual(builtinText("jira-tracker"), { name: "cnModJiraName", desc: "cnModJiraDesc",
     fields: { base: "cnFieldJiraBase", email: "cnFieldJiraEmail", token: "cnFieldJiraToken" } }, "4c-2: модуль ролі tracker");
   assert.deepEqual(builtinText("supabase-teams"), { name: "cnModSbTeamsName", desc: "cnModSbTeamsDesc",
-    fields: { url: "cnFieldSbTeamsUrl", key: "cnFieldSbTeamsKey" } }, "4c-3: модуль ролі notify");
+    fields: { url: "cnFieldSbTeamsUrl", key: "cnFieldSbTeamsKey", compat: "cnFieldSbTeamsCompat" } }, "4c-3: модуль ролі notify");
   assert.equal(builtinText("memo-publish"), null);
   assert.equal(builtinText("__proto__"), null);
 });
@@ -501,6 +501,24 @@ test("git-sync: назва, опис і шість полів — ключами
   const manifest = JSON.parse(readFileSync(new URL("../app/modules/git-sync/module.json", import.meta.url), "utf8"));
   assert.deepEqual(Object.keys(b.fields).sort(), manifest.settings.map((x) => x.key).sort(),
     "підписи полів мають покривати рівно налаштування маніфесту: нове поле без підпису показало б сирий label");
+});
+
+test("підписи полів: для КОЖНОГО вбудованого модуля ключі словника = ключі налаштувань маніфесту, і кожен підпис є в обох мовах", () => {
+  const dir = new URL("../app/modules/", import.meta.url);
+  const ids = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  assert.ok(ids.length >= 8, "модулі знайдені");
+  for (const id of ids) {
+    const man = JSON.parse(readFileSync(new URL(`${id}/module.json`, dir), "utf8"));
+    const b = builtinText(id);
+    assert.ok(b, `${id}: є запис у BUILTIN_TEXT`);
+    assert.deepEqual(Object.keys(b.fields).sort(), man.settings.map((x) => x.key).sort(),
+      `${id}: нове налаштування маніфесту без підпису у словнику показало б сирий label`);
+    for (const lang of ["uk", "en"]) {
+      setLang(lang);
+      for (const key of Object.values(b.fields)) assert.notEqual(t(key), key, `${id}/${key}: нема підпису (${lang})`);
+    }
+  }
+  setLang("uk");
 });
 
 test("вердикт перевірки vcs-*: кожен код має свій текст, деталь (повідомлення git) іде окремо", () => {

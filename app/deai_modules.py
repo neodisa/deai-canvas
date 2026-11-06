@@ -2120,11 +2120,21 @@ def compat_view(space, caps):
     out = {}
     if not isinstance(caps, dict):
         return out
+    try:
+        raw = _capabilities_full(space)[1]          # кеш того ж проходу, що й `capabilities`: каталог знову не обходимо
+    except Exception:  # noqa: BLE001 — тотальність
+        return out
     for role, mid in COMPAT_ROLES:
-        if caps.get(role) == mid:
-            v = compat_of(space, mid)
-            if v:
-                out[role] = v
+        if caps.get(role) != mid:
+            continue
+        # Захист у глибину: сирий постачальник — саме ВБУДОВАНИЙ `Module` цього id. Свій модуль із тим самим id каркас
+        # відхиляє (`id-taken`), але ключ `compat` для клієнта не мусить на це покладатися (як і предикати текстів/каналу).
+        p = raw.get(role)
+        if not (isinstance(p, Module) and getattr(p, 'origin', 'builtin') == 'builtin' and p.id == mid):
+            continue
+        v = compat_of(space, mid)
+        if v:
+            out[role] = v
     return out
 
 
