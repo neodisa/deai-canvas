@@ -1,0 +1,1784 @@
+{
+  "meta": {
+    "generator": "tests/make_before_4d4a.py",
+    "source_commit": "80dc34a",
+    "version": "0.19.0",
+    "volatile_stripped": []
+  },
+  "non_loopback_attempts": 0,
+  "stands": {
+    "explicit": {
+      "api": {
+        "space_row": {
+          "default_track": "united",
+          "tracks": [
+            {
+              "id": "united",
+              "label": "United"
+            },
+            {
+              "id": "liga360",
+              "label": "LIGA360"
+            },
+            {
+              "id": "seo",
+              "label": "SEO"
+            },
+            {
+              "id": "custom-x",
+              "label": "custom-x"
+            }
+          ]
+        },
+        "task": {
+          "a-1": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "status": 200,
+            "tags": [
+              "SEO"
+            ],
+            "track": "seo"
+          },
+          "a-2": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "united",
+            "status": 200,
+            "tags": [
+              "United"
+            ],
+            "track": "united"
+          },
+          "a-3": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "liga360",
+            "status": 200,
+            "tags": [
+              "LIGA360"
+            ],
+            "track": "liga360"
+          },
+          "a-6": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "status": 200,
+            "tags": [],
+            "track": null
+          },
+          "a-8": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": 5,
+            "status": 200,
+            "tags": [],
+            "track": null
+          }
+        },
+        "tasks": {
+          "rows": [
+            {
+              "id": "a-1",
+              "profile": null,
+              "tags": [
+                "SEO"
+              ],
+              "track": "seo"
+            },
+            {
+              "id": "a-2",
+              "profile": "united",
+              "tags": [
+                "United"
+              ],
+              "track": "united"
+            },
+            {
+              "id": "a-3",
+              "profile": "liga360",
+              "tags": [
+                "LIGA360"
+              ],
+              "track": "liga360"
+            },
+            {
+              "id": "a-6",
+              "profile": null,
+              "tags": [],
+              "track": null
+            },
+            {
+              "id": "a-7",
+              "profile": "united",
+              "tags": [
+                "SEO"
+              ],
+              "track": "seo"
+            },
+            {
+              "id": "a-8",
+              "profile": 5,
+              "tags": [],
+              "track": null
+            }
+          ],
+          "status": 200
+        }
+      },
+      "ds": {
+        "a-1": "seo",
+        "a-2": "united",
+        "a-3": "liga360",
+        "a-6": "",
+        "a-7": "seo",
+        "a-8": ""
+      },
+      "labels": {
+        "a-1": [
+          "SEO"
+        ],
+        "a-2": [
+          "United"
+        ],
+        "a-3": [
+          "LIGA360"
+        ],
+        "a-6": [],
+        "a-7": [
+          "SEO"
+        ],
+        "a-8": []
+      },
+      "registry": {
+        "both_conflict": "~/work/seo",
+        "none": "~/work/shared",
+        "profile_only_seo": "~/work/seo",
+        "profile_unknown": "~/work/shared",
+        "track_only_seo": "~/work/seo"
+      },
+      "repos": {
+        "''": "",
+        "'United'": "",
+        "'custom-x'": "",
+        "'liga360'": "",
+        "'seo'": "ssh://git@example.com/o/r.git",
+        "'united'": "git@example.com:studio/web.git",
+        "'zzz'": "",
+        "7": "",
+        "None": ""
+      },
+      "roots": {
+        "''": "~/work/shared",
+        "'United'": "~/work/shared",
+        "'custom-x'": "~/work/custom",
+        "'liga360'": "~/work/shared",
+        "'seo'": "~/work/seo",
+        "'united'": "~/work/shared",
+        "'zzz'": "~/work/shared",
+        "7": "~/work/shared",
+        "None": "~/work/shared"
+      },
+      "roots_cli": {
+        "in_use": {
+          "custom-x": [
+            "~/work/custom",
+            true
+          ],
+          "liga360": [
+            "~/work/shared",
+            false
+          ],
+          "seo": [
+            "~/work/seo",
+            true
+          ],
+          "united": [
+            "~/work/shared",
+            false
+          ],
+          "—": [
+            "~/work/shared",
+            false
+          ]
+        },
+        "plan": {
+          "a-1": [
+            "seo",
+            "~/work/a-1",
+            "~/work/seo/a-1",
+            null
+          ],
+          "a-2": [
+            "united",
+            "~/work/a-2",
+            "~/work/shared/a-2",
+            null
+          ],
+          "a-3": [
+            "liga360",
+            "~/work/a-3",
+            "~/work/shared/a-3",
+            null
+          ],
+          "a-6": [
+            null,
+            "~/work/a-6",
+            "~/work/shared/a-6",
+            null
+          ],
+          "a-7": [
+            "seo",
+            "~/work/a-7",
+            "~/work/seo/a-7",
+            null
+          ],
+          "a-8": [
+            null,
+            "~/work/a-8",
+            "~/work/shared/a-8",
+            null
+          ]
+        }
+      },
+      "task_new": {
+        "none": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-none",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "united",
+            "track": "united"
+          },
+          "status": 200
+        },
+        "profile_not_a_string": {
+          "code": "bad-profile",
+          "entry": null,
+          "status": 400
+        },
+        "profile_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/seo/n-pseo",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "seo",
+            "track": "seo"
+          },
+          "status": 200
+        },
+        "profile_united_track_seo": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "profile_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pup",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "United",
+            "track": "United"
+          },
+          "status": 200
+        },
+        "profile_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pzzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "zzz",
+            "track": "zzz"
+          },
+          "status": 200
+        },
+        "track_not_a_string": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/seo/n-seo",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "seo",
+            "track": "seo"
+          },
+          "status": 200
+        },
+        "track_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-up",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "United",
+            "track": "United"
+          },
+          "status": 200
+        },
+        "track_with_slash": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-bad",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "Bad/Id",
+            "track": "Bad/Id"
+          },
+          "status": 200
+        },
+        "track_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-zzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "zzz",
+            "track": "zzz"
+          },
+          "status": 200
+        }
+      },
+      "view": {
+        "default": "united",
+        "ds": {
+          "custom-x": "custom-x",
+          "liga360": "liga360",
+          "seo": "seo",
+          "united": "united"
+        },
+        "ids": [
+          "united",
+          "liga360",
+          "seo",
+          "custom-x"
+        ],
+        "labels": [
+          "United",
+          "LIGA360",
+          "SEO",
+          "custom-x"
+        ],
+        "repos": {
+          "custom-x": "",
+          "liga360": "",
+          "seo": "ssh://git@example.com/o/r.git",
+          "united": "git@example.com:studio/web.git"
+        },
+        "roots": {
+          "custom-x": "~/work/custom",
+          "liga360": "~/work/shared",
+          "seo": "~/work/seo",
+          "united": "~/work/shared"
+        }
+      }
+    },
+    "notes": {
+      "api": {
+        "space_row": {
+          "default_track": "united",
+          "tracks": [
+            {
+              "id": "united",
+              "label": "United"
+            },
+            {
+              "id": "liga360",
+              "label": "LIGA360"
+            },
+            {
+              "id": "seo",
+              "label": "SEO"
+            },
+            {
+              "id": "custom-x",
+              "label": "custom-x"
+            }
+          ]
+        },
+        "task": {
+          "a-1": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "status": 200,
+            "tags": [
+              "SEO"
+            ],
+            "track": "seo"
+          },
+          "a-2": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "united",
+            "status": 200,
+            "tags": [
+              "United"
+            ],
+            "track": "united"
+          },
+          "a-3": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "liga360",
+            "status": 200,
+            "tags": [
+              "LIGA360"
+            ],
+            "track": "liga360"
+          },
+          "a-6": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "status": 200,
+            "tags": [],
+            "track": null
+          },
+          "a-8": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": 5,
+            "status": 200,
+            "tags": [],
+            "track": null
+          }
+        },
+        "tasks": {
+          "rows": [
+            {
+              "id": "a-1",
+              "profile": null,
+              "tags": [
+                "SEO"
+              ],
+              "track": "seo"
+            },
+            {
+              "id": "a-2",
+              "profile": "united",
+              "tags": [
+                "United"
+              ],
+              "track": "united"
+            },
+            {
+              "id": "a-3",
+              "profile": "liga360",
+              "tags": [
+                "LIGA360"
+              ],
+              "track": "liga360"
+            },
+            {
+              "id": "a-4",
+              "profile": null,
+              "tags": [
+                "zzz"
+              ],
+              "track": "zzz"
+            },
+            {
+              "id": "a-5",
+              "profile": null,
+              "tags": [
+                "United"
+              ],
+              "track": "United"
+            },
+            {
+              "id": "a-6",
+              "profile": null,
+              "tags": [],
+              "track": null
+            },
+            {
+              "id": "a-7",
+              "profile": "united",
+              "tags": [
+                "SEO"
+              ],
+              "track": "seo"
+            },
+            {
+              "id": "a-8",
+              "profile": 5,
+              "tags": [],
+              "track": null
+            },
+            {
+              "id": "a-9",
+              "profile": "Weird",
+              "tags": [
+                "Weird"
+              ],
+              "track": "Weird"
+            }
+          ],
+          "status": 200
+        }
+      },
+      "ds": {
+        "a-1": "seo",
+        "a-2": "united",
+        "a-3": "liga360",
+        "a-4": "zzz",
+        "a-5": "United",
+        "a-6": "",
+        "a-7": "seo",
+        "a-8": "",
+        "a-9": "Weird"
+      },
+      "labels": {
+        "a-1": [
+          "SEO"
+        ],
+        "a-2": [
+          "United"
+        ],
+        "a-3": [
+          "LIGA360"
+        ],
+        "a-4": [
+          "zzz"
+        ],
+        "a-5": [
+          "United"
+        ],
+        "a-6": [],
+        "a-7": [
+          "SEO"
+        ],
+        "a-8": [],
+        "a-9": [
+          "Weird"
+        ]
+      },
+      "registry": {
+        "both_conflict": "~/.hidden/seo",
+        "none": "~/work/shared",
+        "profile_only_seo": "~/.hidden/seo",
+        "profile_unknown": "~/work/shared",
+        "track_only_seo": "~/.hidden/seo"
+      },
+      "repos": {
+        "''": "",
+        "'United'": "",
+        "'custom-x'": "",
+        "'liga360'": "",
+        "'seo'": "ssh://git@example.com/o/r.git",
+        "'united'": "git@example.com:studio/web.git",
+        "'zzz'": "",
+        "7": "",
+        "None": ""
+      },
+      "roots": {
+        "''": "~/work/shared",
+        "'United'": "~/work/shared",
+        "'custom-x'": "~/work/custom",
+        "'liga360'": "rel/l360",
+        "'seo'": "~/.hidden/seo",
+        "'united'": "~/work/united",
+        "'zzz'": "~/work/shared",
+        "7": "~/work/shared",
+        "None": "~/work/shared"
+      },
+      "roots_cli": {
+        "in_use": {
+          "Bad_Key": [
+            "~/work/bad",
+            true
+          ],
+          "United": [
+            "~/work/shared",
+            false
+          ],
+          "Weird": [
+            "~/work/shared",
+            false
+          ],
+          "custom-x": [
+            "~/work/custom",
+            true
+          ],
+          "liga360": [
+            "rel/l360",
+            true
+          ],
+          "seo": [
+            "~/.hidden/seo",
+            true
+          ],
+          "united": [
+            "~/work/united",
+            true
+          ],
+          "zzz": [
+            "~/work/shared",
+            false
+          ],
+          "—": [
+            "~/work/shared",
+            false
+          ]
+        },
+        "plan": {
+          "a-1": [
+            "seo",
+            "~/work/a-1",
+            "~/.hidden/seo/a-1",
+            null
+          ],
+          "a-2": [
+            "united",
+            "~/work/a-2",
+            "~/work/united/a-2",
+            null
+          ],
+          "a-3": [
+            "liga360",
+            "~/work/a-3",
+            "rel/l360/a-3",
+            null
+          ],
+          "a-4": [
+            "zzz",
+            "~/work/a-4",
+            "~/work/shared/a-4",
+            null
+          ],
+          "a-5": [
+            "United",
+            "~/work/a-5",
+            "~/work/shared/a-5",
+            null
+          ],
+          "a-6": [
+            null,
+            "~/work/a-6",
+            "~/work/shared/a-6",
+            null
+          ],
+          "a-7": [
+            "seo",
+            "~/work/a-7",
+            "~/.hidden/seo/a-7",
+            null
+          ],
+          "a-8": [
+            null,
+            "~/work/a-8",
+            "~/work/shared/a-8",
+            null
+          ],
+          "a-9": [
+            "Weird",
+            "~/work/a-9",
+            "~/work/shared/a-9",
+            "теки нема на диску"
+          ]
+        }
+      },
+      "task_new": {
+        "none": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/united/n-none",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "united",
+            "track": "united"
+          },
+          "status": 200
+        },
+        "profile_not_a_string": {
+          "code": "bad-profile",
+          "entry": null,
+          "status": 400
+        },
+        "profile_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/.hidden/seo/n-pseo",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "seo",
+            "track": "seo"
+          },
+          "status": 200
+        },
+        "profile_united_track_seo": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "profile_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pup",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "United",
+            "track": "United"
+          },
+          "status": 200
+        },
+        "profile_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pzzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "zzz",
+            "track": "zzz"
+          },
+          "status": 200
+        },
+        "track_not_a_string": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/.hidden/seo/n-seo",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "seo",
+            "track": "seo"
+          },
+          "status": 200
+        },
+        "track_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-up",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "United",
+            "track": "United"
+          },
+          "status": 200
+        },
+        "track_with_slash": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-bad",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "Bad/Id",
+            "track": "Bad/Id"
+          },
+          "status": 200
+        },
+        "track_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-zzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "zzz",
+            "track": "zzz"
+          },
+          "status": 200
+        }
+      },
+      "view": {
+        "default": "united",
+        "ds": {
+          "custom-x": "custom-x",
+          "liga360": "liga360",
+          "seo": "seo",
+          "united": "united"
+        },
+        "ids": [
+          "united",
+          "liga360",
+          "seo",
+          "custom-x"
+        ],
+        "labels": [
+          "United",
+          "LIGA360",
+          "SEO",
+          "custom-x"
+        ],
+        "repos": {
+          "custom-x": "",
+          "liga360": "",
+          "seo": "ssh://git@example.com/o/r.git",
+          "united": "git@example.com:studio/web.git"
+        },
+        "roots": {
+          "custom-x": "~/work/custom",
+          "liga360": "rel/l360",
+          "seo": "~/.hidden/seo",
+          "united": "~/work/united"
+        }
+      }
+    },
+    "parity": {
+      "api": {
+        "space_row": {
+          "default_track": "united",
+          "tracks": [
+            {
+              "id": "united",
+              "label": "United"
+            },
+            {
+              "id": "liga360",
+              "label": "LIGA360"
+            },
+            {
+              "id": "seo",
+              "label": "SEO"
+            },
+            {
+              "id": "custom-x",
+              "label": "custom-x"
+            }
+          ]
+        },
+        "task": {
+          "a-1": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "status": 200,
+            "tags": [
+              "SEO"
+            ],
+            "track": "seo"
+          },
+          "a-2": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "united",
+            "status": 200,
+            "tags": [
+              "United"
+            ],
+            "track": "united"
+          },
+          "a-3": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "liga360",
+            "status": 200,
+            "tags": [
+              "LIGA360"
+            ],
+            "track": "liga360"
+          },
+          "a-6": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "status": 200,
+            "tags": [],
+            "track": null
+          },
+          "a-8": {
+            "keys": {
+              "comment_channel": true,
+              "id": true,
+              "iterations": true,
+              "jira": true,
+              "my_key": true,
+              "preview_gate": true,
+              "preview_password": true,
+              "preview_password_custom": true,
+              "profile": true,
+              "publish_url": true,
+              "published_at": true,
+              "space": true,
+              "tags": true,
+              "title": true,
+              "track": true
+            },
+            "profile": 5,
+            "status": 200,
+            "tags": [],
+            "track": null
+          }
+        },
+        "tasks": {
+          "rows": [
+            {
+              "id": "a-1",
+              "profile": null,
+              "tags": [
+                "SEO"
+              ],
+              "track": "seo"
+            },
+            {
+              "id": "a-2",
+              "profile": "united",
+              "tags": [
+                "United"
+              ],
+              "track": "united"
+            },
+            {
+              "id": "a-3",
+              "profile": "liga360",
+              "tags": [
+                "LIGA360"
+              ],
+              "track": "liga360"
+            },
+            {
+              "id": "a-6",
+              "profile": null,
+              "tags": [],
+              "track": null
+            },
+            {
+              "id": "a-7",
+              "profile": "united",
+              "tags": [
+                "SEO"
+              ],
+              "track": "seo"
+            },
+            {
+              "id": "a-8",
+              "profile": 5,
+              "tags": [],
+              "track": null
+            }
+          ],
+          "status": 200
+        }
+      },
+      "ds": {
+        "a-1": "seo",
+        "a-2": "united",
+        "a-3": "liga360",
+        "a-6": "",
+        "a-7": "seo",
+        "a-8": ""
+      },
+      "labels": {
+        "a-1": [
+          "SEO"
+        ],
+        "a-2": [
+          "United"
+        ],
+        "a-3": [
+          "LIGA360"
+        ],
+        "a-6": [],
+        "a-7": [
+          "SEO"
+        ],
+        "a-8": []
+      },
+      "registry": {
+        "both_conflict": "~/work/shared",
+        "none": "~/work/shared",
+        "profile_only_seo": "~/work/shared",
+        "profile_unknown": "~/work/shared",
+        "track_only_seo": "~/work/shared"
+      },
+      "repos": {
+        "''": "",
+        "'United'": "",
+        "'custom-x'": "",
+        "'liga360'": "",
+        "'seo'": "ssh://git@example.com/o/r.git",
+        "'united'": "git@example.com:studio/web.git",
+        "'zzz'": "",
+        "7": "",
+        "None": ""
+      },
+      "roots": {
+        "''": "~/work/shared",
+        "'United'": "~/work/shared",
+        "'custom-x'": "~/work/custom",
+        "'liga360'": "~/work/shared",
+        "'seo'": "~/work/shared",
+        "'united'": "~/work/shared",
+        "'zzz'": "~/work/shared",
+        "7": "~/work/shared",
+        "None": "~/work/shared"
+      },
+      "roots_cli": {
+        "in_use": {
+          "custom-x": [
+            "~/work/custom",
+            true
+          ],
+          "liga360": [
+            "~/work/shared",
+            false
+          ],
+          "seo": [
+            "~/work/shared",
+            false
+          ],
+          "united": [
+            "~/work/shared",
+            false
+          ],
+          "—": [
+            "~/work/shared",
+            false
+          ]
+        },
+        "plan": {
+          "a-1": [
+            "seo",
+            "~/work/a-1",
+            "~/work/shared/a-1",
+            null
+          ],
+          "a-2": [
+            "united",
+            "~/work/a-2",
+            "~/work/shared/a-2",
+            null
+          ],
+          "a-3": [
+            "liga360",
+            "~/work/a-3",
+            "~/work/shared/a-3",
+            null
+          ],
+          "a-6": [
+            null,
+            "~/work/a-6",
+            "~/work/shared/a-6",
+            null
+          ],
+          "a-7": [
+            "seo",
+            "~/work/a-7",
+            "~/work/shared/a-7",
+            null
+          ],
+          "a-8": [
+            null,
+            "~/work/a-8",
+            "~/work/shared/a-8",
+            null
+          ]
+        }
+      },
+      "task_new": {
+        "none": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-none",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "united",
+            "track": "united"
+          },
+          "status": 200
+        },
+        "profile_not_a_string": {
+          "code": "bad-profile",
+          "entry": null,
+          "status": 400
+        },
+        "profile_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pseo",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "seo",
+            "track": "seo"
+          },
+          "status": 200
+        },
+        "profile_united_track_seo": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "profile_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pup",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "United",
+            "track": "United"
+          },
+          "status": 200
+        },
+        "profile_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-pzzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "zzz",
+            "track": "zzz"
+          },
+          "status": 200
+        },
+        "track_not_a_string": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-seo",
+            "keys": {
+              "dir": true,
+              "gitlab": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "seo",
+            "track": "seo"
+          },
+          "status": 200
+        },
+        "track_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-up",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "United",
+            "track": "United"
+          },
+          "status": 200
+        },
+        "track_with_slash": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-bad",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "Bad/Id",
+            "track": "Bad/Id"
+          },
+          "status": 200
+        },
+        "track_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/work/shared/n-zzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": "zzz",
+            "track": "zzz"
+          },
+          "status": 200
+        }
+      },
+      "view": {
+        "default": "united",
+        "ds": {
+          "custom-x": "custom-x",
+          "liga360": "liga360",
+          "seo": "seo",
+          "united": "united"
+        },
+        "ids": [
+          "united",
+          "liga360",
+          "seo",
+          "custom-x"
+        ],
+        "labels": [
+          "United",
+          "LIGA360",
+          "SEO",
+          "custom-x"
+        ],
+        "repos": {
+          "custom-x": "",
+          "liga360": "",
+          "seo": "ssh://git@example.com/o/r.git",
+          "united": "git@example.com:studio/web.git"
+        },
+        "roots": {
+          "custom-x": "~/work/custom",
+          "liga360": "~/work/shared",
+          "seo": "~/work/shared",
+          "united": "~/work/shared"
+        }
+      }
+    },
+    "plain": {
+      "api": {
+        "space_row": {
+          "default_track": "web",
+          "tracks": [
+            {
+              "id": "web",
+              "label": "Web"
+            },
+            {
+              "id": "app",
+              "label": "App"
+            }
+          ]
+        },
+        "task": {},
+        "tasks": {
+          "rows": [],
+          "status": 200
+        }
+      },
+      "ds": {
+        "a-1": "seo",
+        "a-2": "united",
+        "a-3": "liga360",
+        "a-6": "",
+        "a-7": "seo",
+        "a-8": ""
+      },
+      "labels": {
+        "a-1": [
+          "seo"
+        ],
+        "a-2": [
+          "united"
+        ],
+        "a-3": [
+          "liga360"
+        ],
+        "a-6": [],
+        "a-7": [
+          "seo"
+        ],
+        "a-8": []
+      },
+      "repos": {
+        "''": "",
+        "'United'": "",
+        "'app'": "",
+        "'custom-x'": "",
+        "'liga360'": "",
+        "'seo'": "",
+        "'united'": "",
+        "'web'": "git@example.com:studio/web.git",
+        "'zzz'": "",
+        "7": "",
+        "None": ""
+      },
+      "roots": {
+        "''": "~/plain-space/web",
+        "'United'": "~/plain-space/web",
+        "'app'": "~/plain-space",
+        "'custom-x'": "~/plain-space/web",
+        "'liga360'": "~/plain-space/web",
+        "'seo'": "~/plain-space/web",
+        "'united'": "~/plain-space/web",
+        "'web'": "~/plain-space/web",
+        "'zzz'": "~/plain-space/web",
+        "7": "~/plain-space/web",
+        "None": "~/plain-space/web"
+      },
+      "task_new": {
+        "none": {
+          "code": null,
+          "entry": {
+            "dir": "~/plain-space/web/n-none",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "track": "web"
+          },
+          "status": 200
+        },
+        "profile_not_a_string": {
+          "code": "bad-profile",
+          "entry": null,
+          "status": 400
+        },
+        "profile_seo": {
+          "code": null,
+          "entry": {
+            "dir": "~/plain-space/web/n-pseo",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "track": "web"
+          },
+          "status": 200
+        },
+        "profile_united_track_seo": {
+          "code": "unknown-track",
+          "entry": null,
+          "status": 400
+        },
+        "profile_upper": {
+          "code": null,
+          "entry": {
+            "dir": "~/plain-space/web/n-pup",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "track": "web"
+          },
+          "status": 200
+        },
+        "profile_zzz": {
+          "code": null,
+          "entry": {
+            "dir": "~/plain-space/web/n-pzzz",
+            "keys": {
+              "dir": true,
+              "jira": true,
+              "opened": true,
+              "profile": true,
+              "title": true,
+              "track": true
+            },
+            "profile": null,
+            "track": "web"
+          },
+          "status": 200
+        },
+        "track_not_a_string": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_seo": {
+          "code": "unknown-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_upper": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_with_slash": {
+          "code": "bad-track",
+          "entry": null,
+          "status": 400
+        },
+        "track_zzz": {
+          "code": "unknown-track",
+          "entry": null,
+          "status": 400
+        }
+      },
+      "view": {
+        "default": "web",
+        "ds": {
+          "app": "",
+          "web": "web"
+        },
+        "ids": [
+          "web",
+          "app"
+        ],
+        "labels": [
+          "Web",
+          "App"
+        ],
+        "repos": {
+          "app": "",
+          "web": "git@example.com:studio/web.git"
+        },
+        "roots": {
+          "app": null,
+          "web": "~/plain-space/web"
+        }
+      }
+    }
+  }
+}
