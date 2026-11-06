@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.19.0] — unreleased
+## [0.19.0] — 06.11.2026
 
 Stage 4d-3c: the last of the three steps that turn the LIGA space into an ordinary one. The role `publish` of LIGA becomes an
 explicit built-in module (`vercel-publish`) through a **third migration step, `liga-4d3c`**, and the one thing an explicit record
