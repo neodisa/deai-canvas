@@ -2216,7 +2216,9 @@ class StepBRunTest(_RealSteps):
         code, out, err = self.cli('run')
         self.assertEqual(code, 0)
         self.assertIn('liga-4d3b: done', out)
-        self.assertIn('ролі: comments, vcs; напрямки: ні', out)
+        self.assertIn('ролі: comments, vcs; бекап: ', out)       # крок без напрямків не друкує «напрямки»
+        self.assertNotIn('напрямки: ні', out)
+        self.assertNotIn('напрямки', out)                         # 4d-3a тут skip-done; його рядок пінить CliStepsTest
         self.assert_no_secrets(out, err)
         self.assert_no_secrets_in_logs()
         self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['secrets'], {COMMENTS_MOD: ['key']})

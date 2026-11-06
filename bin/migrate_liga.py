@@ -45,7 +45,8 @@ def main(argv=None):
             if info.get('hint'):
                 print('  що робити: ' + str(info['hint']))
             if st == 'done':
-                print('  ролі: %s; напрямки: %s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', 'так' if info.get('tracks') else 'ні', info.get('backup')))
+                tr = ('; напрямки: ' + ('так' if info.get('tracks') else 'ні')) if step.tracks else ''     # лише крок з напрямками
+                print('  ролі: %s%s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', tr, info.get('backup')))
                 print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % info.get('backup'))
             if st not in liga_migrate.BENIGN:
                 code = 1
