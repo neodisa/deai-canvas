@@ -101,14 +101,21 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   типова тека нового простору (`~/deai-work/<назва>`) з ними не перетиналась.
  *   Готовність сервера — опитування `/api/spaces` (на порожній машині `/api/task`
  *   відповідає 404, і чекання на нього не скінчилось би).
+ *   · `legacyExtra` (лише з `spaces`) — ще ключі в корінь старого `tasks.json` простору `legacy` (поверх `supabase: true`): напр. `jira_base`
+ *     з обліковими для тестів міграції ЛІГИ (4d-3a), якої без цих ключів нема що мігрувати;
+ *   · `deaiDir` (лише з `spaces`) — імʼя теки `DEAI_HOME` під тимчасовою домівкою, типово `.deai`. Інше потрібне там, де сервер мігрує ЛІГУ
+ *     за швом `DC_MIGRATE_LIGA=1`: `<HOME>/.deai` він вважає «справжнім» (HOME у процесі підмінено) і відмовляє;
+ *   · `machine` — `{home, deaiHome, legacyFile, spaces}` з попереднього запуску: той самий диск, жодного нового запису машини
+ *     (другий старт того самого дому: «міграція нічого не пише»). `spaces`/`legacyExtra` тоді ігноруються.
  *   Повертає ще `{home, deaiHome, legacyFile, spaces: [{id, name, path, legacy, integrations}]}`
  *   (`legacyFile` — куди сервер дивиться як на старий `tasks.json`; на порожній машині його ще
  *   нема, тест може покласти туди будь-що, зокрема зіпсований файл).
  */
-export async function startServer(taskDir, { portBase, extraTasks = {}, title = "Фікстура", profile = "", env = {}, root = ROOT, spaces, supabase = false }) {
+export async function startServer(taskDir, { portBase, extraTasks = {}, title = "Фікстура", profile = "", env = {}, root = ROOT, spaces, supabase = false, legacyExtra = {}, machine = null, deaiDir = ".deai" }) {
   const cfgDir = mkdtempSync(path.join(tmpdir(), "dc-live-cfg-"));
-  const tasksFile = path.join(cfgDir, "tasks.json");
-  const iso = spaces ? isolatedMachine(spaces, tasksFile, supabase ? LIGA_SUPABASE : {}) : null;
+  const tasksFile = machine ? machine.legacyFile : path.join(cfgDir, "tasks.json");
+  const iso = machine ? { home: machine.home, deaiHome: machine.deaiHome, spaces: machine.spaces }
+    : spaces ? isolatedMachine(spaces, tasksFile, { ...(supabase ? LIGA_SUPABASE : {}), ...legacyExtra }, deaiDir) : null;
   if (!iso) {
     writeFileSync(tasksFile, JSON.stringify({
       current: "fixture", design_work_root: cfgDir,
@@ -164,9 +171,9 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
  * Домівка — реальний шлях (`realpath`): macOS кладе `/var/folders/…` за симлінком
  * `/private/var`, а перевірки теки на сервері порівнюють обидва вигляди.
  */
-function isolatedMachine(spaces, legacyFile, legacyExtra = {}) {
+function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai") {
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), "dc-live-home-")));
-  const deaiHome = path.join(home, ".deai");
+  const deaiHome = path.join(home, deaiDir);
   const used = new Set();
   const out = spaces.map((sp, i) => {
     const slug = String(sp.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);

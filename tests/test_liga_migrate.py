@@ -1769,3 +1769,257 @@ class StartupTest(_WriteStand):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AfterMigrationParity(unittest.TestCase):
+    """Task 6 (4d-3a): сценарії знімка 0.16.0 (`before-4d3a.json`) на МІГРОВАНІЙ ЛІГІ (`run()` у тимчасовому DEAI_HOME) дають ті самі
+    результати, крім задокументованих відмінностей. Стенд і засоби знімання — з генератора `tests/make_before_4d3a.py` (`Rig`,
+    `_ctx_case`, `_run_check`, `_api_pass`, `_connections_from`). Мережі нема (шви-фейки, loopback), справжній `~/.deai` стереже `spaces_guard`.
+
+    Дві конфігурації: `snapshot` — РІВНО як у знімку (`united` має власний корінь ≠ спільного → за поправкою контролера напрямки НЕ
+    мігрують, адаптер лишається) і `shared` — `united` без власного кореня (напрямки мігрують у явні `tracks`)."""
+
+    ROLE_MODULE = {'dashboard': 'supabase-dashboard', 'tracker': 'jira-tracker', 'notify': 'supabase-teams'}
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from unittest import mock
+        import make_before_4d3a as g
+        import deai_modules as dm
+        import liga_migrate as lm
+        cls.g, cls.dm, cls.lm, cls.mock = g, dm, lm, mock
+        with open(BEFORE, encoding='utf-8') as f:
+            cls.snap = json.load(f)
+        env = mock.patch.dict(os.environ)
+        env.start()
+        cls.addClassCleanup(env.stop)
+        for name in g.CLEAN:
+            os.environ.pop(name, None)
+        tmp = tempfile.TemporaryDirectory(prefix='liga-parity-')
+        cls.addClassCleanup(tmp.cleanup)
+        cls.tmp = os.path.realpath(tmp.name)
+        cls.views = {}
+        for name in ('snapshot', 'shared'):
+            cls.views[name] = cls._build(name)
+
+    @classmethod
+    def _build(cls, name):
+        g, lm, dm = cls.g, cls.lm, cls.dm
+        rig = g.Rig(cls.tmp, name)
+        extra = None
+        if name == 'shared':                           # united без власного кореня: ведеться в спільний, як невідомі значення
+            w = os.path.join(rig.home, 'work')
+            extra = {'design_work_roots': {'custom-x': os.path.join(w, 'custom')}}
+        rig.config(extra=extra)
+        liga = rig.registry()
+        v = {'rig': rig, 'liga': liga}
+        with rig.activate({'JIRA_EMAIL': g.JIRA_ENV_EMAIL, 'JIRA_TOKEN': g.JIRA_ENV_TOKEN}):
+            v['plan'] = lm.plan()
+            v['status'] = lm.run()
+        # ⛔ Далі оточення БЕЗ облікових Jira: усе, що модулі бачать, — копії з `space.json`/`secrets.json`, а не живе оточення
+        with rig.activate():
+            v['caps'] = dm.capabilities(liga)
+            v['mark'] = lm.status()['mark']
+        v['ctx'] = g._ctx_case(rig, {})
+        v['api'] = g.scrub(g._api_pass(rig), rig.home)
+        return v
+
+    # --- спільне
+    def view(self, name='snapshot'):
+        return self.views[name]
+
+    @staticmethod
+    def _strip_ctx(c):
+        """ctx мігрованого модуля до порівняння зі знімком; повертає (ctx без додатків `module_ctx`, наявні додатки)."""
+        extras = sorted(k for k in ('folder_ok', 'cache_dir', 'find_tool') if k in c)
+        return {k: v for k, v in c.items() if k not in ('folder_ok', 'cache_dir', 'find_tool')}, extras
+
+    def test_migration_ran_with_expected_mark(self):
+        for name, tracks in (('snapshot', False), ('shared', True)):
+            v = self.view(name)
+            self.assertEqual(v['status'], 'done', name)
+            self.assertEqual(v['plan']['status'], 'ready', name)
+            self.assertEqual(v['mark']['roles'], ['tracker', 'dashboard', 'notify'], name)
+            self.assertEqual(v['mark']['tracks'], tracks, name)
+        self.assertEqual(self.view('snapshot')['plan']['tracks_reason'], 'tracks-unknown-values')     # умова (б): корінь united ≠ спільного
+
+    # --- tracks / track_root
+    def _tracks(self, name):
+        import serve
+        v = self.view(name)
+        rig, liga = v['rig'], v['liga']
+        g = self.g
+        with rig.activate():
+            cfg = rig.cfg
+            items, default = serve.space_tracks(liga)
+            ids = [t['id'] for t in items]
+            out = {'tracks': g.scrub(items, rig.home), 'default_track': default, 'ids': ids, 'track_root': {}, 'track_root_unknown': {},
+                   'track_repo': {}}
+            for i in ids:
+                out['track_root'][i] = g.rel(serve.track_root(liga, cfg, i), rig.home)
+                out['track_repo'][i] = serve.track_repo(liga, i)
+            for raw in ('United', 'zzz', '', None, 7):
+                out['track_root_unknown'][repr(raw)] = g.rel(serve.track_root(liga, cfg, raw), rig.home)
+            out['track_repo']['zzz'] = serve.track_repo(liga, 'zzz')
+            out['track_repo']['None'] = serve.track_repo(liga, None)
+            out['adapter'] = bool(serve._TrackView(liga).adapter)
+        return out
+
+    def test_tracks_identical_when_adapter_stays(self):
+        """Конфіг знімка: напрямки не мігрують (united має власний корінь) — адаптер той самий, усе байт-у-байт як у знімку."""
+        got, want = self._tracks('snapshot'), self.snap['tracks']
+        for k in ('tracks', 'default_track', 'ids', 'track_root', 'track_root_unknown', 'track_repo', 'adapter'):
+            self.assertEqual(got[k], want[k], k)
+
+    def test_tracks_identical_when_explicit_except_united_root(self):
+        """`united` без власного кореня: явні `tracks` дають ті самі id, мітки, репо, ds, корені й той самий корінь для невідомих
+        значень; різниця з знімком лише в тому, що в знімку `united` мав власний корінь, а тут його нема (спільний)."""
+        got, want = self._tracks('shared'), self.snap['tracks']
+        self.assertFalse(got['adapter'], 'явні tracks: адаптер ЛІГИ вже не веде')
+        self.assertEqual(got['ids'], want['ids'])
+        self.assertEqual(got['default_track'], want['default_track'])
+        self.assertEqual(got['track_repo'], want['track_repo'])
+        exp_roots = dict(want['track_root'], united='~/work/shared')
+        self.assertEqual(got['track_root'], exp_roots)
+        self.assertEqual(got['track_root_unknown'], want['track_root_unknown'], 'невідомі значення — той самий спільний корінь')
+        exp_tracks = [dict(t, root=exp_roots[t['id']]) for t in want['tracks']]
+        self.assertEqual(got['tracks'], exp_tracks)
+
+    # --- ctx трьох ролей
+    #: Точний перелік відмінностей ctx (знімок 0.16.0 → мігрований модуль): інших нема.
+    EXPECT_CTX_DIFF = {
+        'dashboard': {'removed': ['legacy'], 'settings_added': {'compat': 'comment-layer'}},
+        'notify': {'removed': ['legacy'], 'settings_added': {'compat': 'comment-layer'}},
+        'tracker': {'removed': ['legacy'], 'settings_added': {}},
+    }
+
+    def _ctx_diff(self, role, name='snapshot'):
+        old = self.snap['ctx']['jira_from_env'][role]['calls'][0]
+        new = self.view(name)['ctx'][role]['calls'][0]
+        self.assertEqual((new['module'], new['fn'], new['timeout']), (old['module'], old['fn'], old['timeout']), role)
+        oc, (nc, extras) = old['ctx'], self._strip_ctx(new['ctx'])
+        self.assertEqual(extras, ['cache_dir', 'find_tool', 'folder_ok'], 'додатки module_ctx')
+        self.assertTrue(nc['space']['path'].endswith('liga-space'), role)
+        oc = dict(oc, space={'id': oc['space']['id']})
+        nc = dict(nc, space={'id': nc['space']['id']})
+        diff = {'removed': sorted(set(oc) - set(nc)), 'added': sorted(set(nc) - set(oc))}
+        self.assertEqual(diff['added'], [], role)
+        osett, nsett = dict(oc['settings']), dict(nc['settings'])
+        added = {k: nsett.pop(k) for k in list(nsett) if k not in osett}
+        self.assertEqual(nsett, osett, '%s: значення налаштувань ті самі' % role)
+        for k in set(oc) - {'legacy', 'settings'}:
+            self.assertEqual(nc[k], oc[k], '%s: ctx.%s' % (role, k))
+        return {'removed': diff['removed'], 'settings_added': added}
+
+    def test_ctx_same_values_only_documented_differences(self):
+        """Те саме значення налаштувань і секретів (секрети — з `secrets.json`, оточення Jira вимкнене); різниця рівно така:
+        `legacy` прибрано, `settings.compat='comment-layer'` у dashboard/notify, `space.path` = тека простору (було `''`;
+        `space.id` той самий) і додатки `module_ctx` (`folder_ok`, `cache_dir`, `find_tool`)."""
+        for role in self.ROLE_MODULE:
+            self.assertEqual(self._ctx_diff(role), self.EXPECT_CTX_DIFF[role], role)
+            self.assertEqual(self.view()['ctx'][role]['provider'], 'Module', role)
+            self.assertEqual(self.view()['ctx'][role]['flow_outcome'], self.snap['ctx']['jira_from_env'][role]['flow_outcome'], role)
+
+    def test_ctx_same_in_shared_variant(self):
+        for role in self.ROLE_MODULE:
+            self.assertEqual(self._ctx_diff(role, 'shared'), self.EXPECT_CTX_DIFF[role], role)
+
+    # --- check
+    def _ctx_for(self, mid, name='snapshot', **override):
+        dm, v = self.dm, self.view(name)
+        with v['rig'].activate():
+            dm.reset_caches()
+            c = dm.module_ctx(v['liga'], mid)
+        c = dict(c)
+        if 'secrets' in override:
+            c['secrets'] = override['secrets']
+        if override.get('no_compat'):
+            c['settings'] = {k: x for k, x in c['settings'].items() if k != 'compat'}
+        return c
+
+    def test_check_verdicts_same(self):
+        g, snap = self.g, self.snap['check']
+        v = self.view()
+        for mid in self.ROLE_MODULE.values():
+            c = self._ctx_for(mid)
+            with v['rig'].activate():
+                for sc in ('ok', 'denied', 'network'):
+                    self.assertEqual(g._run_check(mid, c, sc), snap[mid][sc], (mid, sc))
+
+    def test_public_key_rule_same_via_compat(self):
+        """У знімку правило публічного ключа трималось на `ctx['legacy']`; тепер — на `settings.compat` (без нього — `public-key`)."""
+        g, snap = self.g, self.snap['check']['public_key']
+        v = self.view()
+        for mid in ('supabase-dashboard', 'supabase-teams'):
+            with v['rig'].activate():
+                for sec, variant in (('sb_publishable_alpha', ''), (g._jwt_anon(), 'jwt_anon_')):
+                    c = self._ctx_for(mid, secrets={'key': sec})
+                    self.assertEqual(g._run_check(mid, c, 'ok'), snap[mid][variant + 'legacy_true'], (mid, variant))
+                    c = self._ctx_for(mid, secrets={'key': sec}, no_compat=True)
+                    self.assertEqual(g._run_check(mid, c, 'ok'), snap[mid][variant + 'legacy_absent'], (mid, variant))
+
+    def test_core_check_now_succeeds_instead_of_bad_settings(self):
+        """Покращення: кнопка «Перевірити» ядра на ЛІГІ в 0.16 давала `bad-settings` (нема space.json), тепер — справжня перевірка
+        з тим самим запитом, що й `check` на ctx знімка."""
+        g, dm = self.g, self.dm
+        v = self.view()
+        for mid in self.ROLE_MODULE.values():
+            self.assertEqual(self.snap['check']['core_check'][mid]['outcome']['code'], 'bad-settings')      # було
+            dm.reset_caches()
+            mod = dm.catalog()[mid]
+            reqs = []
+
+            def fake(req, timeout, _reqs=reqs, _mid=mid):
+                _reqs.append([req.get_method(), req.full_url])
+                return g.Resp(200, {'accountId': 'x'} if _mid == 'jira-tracker' else [])
+            with v['rig'].activate(), self.mock.patch.dict(mod.fn('check').__globals__, {'_open': fake}):
+                with __import__('spaces').request_space('legacy'):
+                    res = dm.check(v['liga'], mid)
+                dm.forget_check('legacy', mid)
+            self.assertTrue(res['ok'], mid)                                                                # стало
+            self.assertNotIn('error', res, mid)
+            self.assertEqual(reqs, self.snap['check'][mid]['ok']['requests'], mid)
+
+    # --- caps / api / connections
+    def test_caps_module_ids_and_legacy(self):
+        for name in ('snapshot', 'shared'):
+            c = self.view(name)['caps']
+            self.assertEqual({r: c[r] for r in self.ROLE_MODULE}, self.ROLE_MODULE, name)
+            self.assertEqual({r: c[r] for r in ('publish', 'comments', 'vcs')}, {'publish': 'legacy', 'comments': 'legacy', 'vcs': 'legacy'}, name)
+            self.assertIsNone(c['tokens'], name)
+            self.assertEqual(sorted(c), sorted(self.snap['caps']['caps']), name)
+
+    def test_api_tasks_same_capabilities_differ(self):
+        a, want = self.view()['api'], self.snap['api']
+        for tid in ('a-1', 'a-2'):
+            got, old = dict(a['tasks'][tid]), dict(want['tasks'][tid])
+            gs, os_ = dict(got.pop('space')), dict(old.pop('space'))
+            self.assertEqual(got, old, tid)                                               # track, profile, tags, jira, comment_channel
+            self.assertEqual((gs['capabilities']['tracker'], gs['capabilities']['dashboard'], gs['capabilities']['notify']),
+                             ('jira-tracker', 'supabase-dashboard', 'supabase-teams'))
+            for k in ('keys', 'id', 'integrations', 'legacy'):
+                self.assertEqual(gs[k], os_[k], k)
+        row, old = a['spaces']['rows'][0], want['spaces']['rows'][0]
+        self.assertEqual((row['id'], row['integrations'], row['legacy'], row['default_track']), (old['id'], old['integrations'], old['legacy'], old['default_track']))
+        self.assertEqual(row['tracks'], old['tracks'])
+        self.assertEqual({e['id']: (e['enabled'], e['implicit']) for e in a['modules']['list'] if e['id'] in self.ROLE_MODULE.values()},
+                         {m: (True, False) for m in self.ROLE_MODULE.values()})
+        self.assertEqual((a['vcs_provider_calls'], a['urlopen_calls']), (0, 0))
+
+    def test_connections_one_card_per_role_no_duplicate(self):
+        g = self.g
+        for name in ('snapshot', 'shared'):
+            scr = g._connections_from(self.view(name)['api'])
+            self.assertEqual(scr['duplicate_cards'], [], name)
+            self.assertEqual(scr['sections'], self.snap['connections']['now']['sections'], name)
+            self.assertEqual(scr['sections'], self.snap['connections']['hypothetical_explicit']['screen']['sections'], name)
+            by_role = {s['role']: s['modules'] for s in scr['sections']}
+            for role, mid in self.ROLE_MODULE.items():
+                self.assertEqual(by_role[role], [mid], '%s/%s: рівно одна картка ролі' % (name, role))
+                self.assertEqual(scr['roles'][role]['provider']['kind'], 'module', role)
+                self.assertEqual(scr['roles'][role]['provider']['id'], mid, role)
+                self.assertEqual(scr['cards'][mid]['enabled'], True, role)
+            for role in ('publish', 'comments', 'vcs'):
+                self.assertEqual(scr['roles'][role]['provider']['kind'], 'legacy', role)
+            self.assertEqual(scr['roles'], self.snap['connections']['hypothetical_explicit']['screen']['roles'], name)
