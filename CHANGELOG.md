@@ -90,6 +90,12 @@ Every code is in the report, in `last.json` and in the CLI output.
 - The migration does not run in an isolated run (`DC_TASKS_FILE`, `DC_NO_OVERVIEW`), except with the test seam
   `DC_MIGRATE_LIGA=1` together with a temporary `DEAI_HOME`; the real `~/.deai` is always refused. With the layer off nothing runs.
 
+### Upgrading
+
+After the migration the Jira token and the Supabase key of LIGA live in `secrets.json`: **rotate them on the Connections
+screen**. The old sources (the environment, `pipeline-feedback`, the root of `tasks.json`) stay only as a fallback for the tools
+in `bin/` (for example `bin/overview_push.py`), so a rotation made there does not reach the canvas.
+
 ### Deliberate differences from 0.16.0
 
 (everything else is checked against the snapshot, on the migrated space too)
@@ -102,9 +108,19 @@ Every code is in the report, in `last.json` and in the CLI output.
    own can no longer pretend to be LIGA with the flag; the flag stays in the ctx of the implicit path, for foreign modules only.
 4. **The ctx of the migrated roles** is built by `module_ctx` like for any module, so it now has `space.path` and the other
    extras; the values of the settings and the secrets are the same, and `compat` replaces `legacy`.
+5. **Explicit tracks are a snapshot.** Once the tracks are migrated, later edits of `design_work_root`, `design_work_roots` or
+   `profile_repos` in the old `tasks.json` no longer affect LIGA. Edit `tracks` in the `space.json` of the LIGA space instead.
+6. **«The LIGA space» is the registry record (`legacy: true`), not the implicit provider.** The dashboard sync of a migrated LIGA
+   (an explicit `supabase-dashboard` with `shared_state`) keeps its GitLab-registry step, `overview_push.py discover` and the
+   log in `pipeline-feedback/overview-sync.log`, exactly as before the migration.
 
 ### Known limits
 
+- **A partial migration is final.** If the first start of 0.17 comes from the Dock or the PWA (no shell environment) while the Jira
+  credentials live only in the environment, the tracker is not migrated (`no-jira`), the mark is written, and the tracker is never
+  retried: it stays implicit and works as in 0.16. Put the credentials in `tasks.json` or in `pipeline-feedback` before the first
+  start, or add the `jira-tracker` card on the Connections screen. The start line in stderr, `bin/migrate_liga.py status` and
+  `last.json` (`skipped`) name every role that was not migrated with its reason code, never a value.
 - **The tracks are often NOT migrated.** They are skipped (`tracks-unknown-values`) when the LIGA `united` track has its own root
   different from the shared `design_work_root`, when a task carries an unknown track value (anything that is not a migrated id,
   including `None`, an empty string or another letter case), or when `design_work_roots` / `profile_repos` has a key outside the id

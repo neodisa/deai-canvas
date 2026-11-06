@@ -174,6 +174,12 @@ comment-layer: публікабельний ключ дозволений, `team
   «Підключення»). Те саме — ключ Supabase в корені `tasks.json`.
 - `supabase-dashboard` і `supabase-teams` читають `settings.compat`, а не `ctx['legacy']` (свій модуль, що підробляв ЛІГУ
   прапорцем, більше цього не може — прапорець лише для неявного шляху).
+- Явні `tracks` — знімок: після міграції правки `design_work_root(s)`/`profile_repos` у старому `tasks.json` на ЛІГУ не діють;
+  редагувати `tracks` у `space.json` простору ЛІГА.
+- «Простір ЛІГА» для синку дашборда — запис реєстру з `legacy: true`, а не неявний постачальник: мігрований дашборд (явний модуль
+  із `shared_state`) зберігає крок реєстру GitLab, `discover` і лог `overview-sync.log`.
+- Ротація: після міграції токен Jira і ключ Supabase ЛІГИ живуть у `secrets.json` — міняти на «Підключеннях»; старі джерела
+  (оточення, `pipeline-feedback`, корінь `tasks.json`) лишаються лише запасними для інструментів `bin/`.
 
 ## Відомі обмеження
 
@@ -181,6 +187,9 @@ comment-layer: публікабельний ключ дозволений, `team
   `public-key`. Перед відкатом — `bin/migrate_liga.py restore <бекап> --hold`.
 - Тека ЛІГИ в робочому дереві git чи неіснуюча — міграції нема (`skip-path-in-git` / `skip-no-path`), ЛІГА лишається як у 0.16.
 - Мігрований токен не синхронізується з оригіналом (див. «Свідомі відмінності»).
+- Часткова міграція остаточна: перший старт 0.17 з Dock/PWA (без оточення), а облікові Jira лише в оточенні → трекер не мігрує
+  (`no-jira`), позначку записано, повтору нема. Облікові — в `tasks.json`/`pipeline-feedback` до першого старту або картка
+  `jira-tracker` на «Підключеннях». Рядок старту, `status` і `last.json` (`skipped`) називають кожну немігровану роль і код.
 
 ## Документи
 
@@ -215,7 +224,7 @@ CHANGELOG → тег `v0.17.0` → push → памʼять. ⛔ Міграцію
   невідомий), `skip-nothing`, `skip-busy`. Помилки: `abort-internal` (розрахунок і невідповідність дому `DEAI_HOME`),
   `abort-lock`, `abort-secrets`, `abort-write`, `abort-changed`, `abort-restore`; відмови відкату — `refuse-stamp`,
   `refuse-tampered`, `refuse-no-liga`; шов старту — `refuse-real-home`.
-- **CLI зветься `bin/migrate_liga.py`** (перейменовано на ревʼю Task 5; назва в цій спеці вище — `bin/migrate_liga.py`): `status|dry-run|run|restore <stamp> [--hold]`.
+- **CLI зветься `bin/migrate_liga.py`** (раніше в чернетках фігурував під іншою назвою): `status|dry-run|run|restore <stamp> [--hold]`.
 - **Відкат стосується лише запису ЛІГИ.** Спека казала «повертає `secrets.json`»; код повертає `space.json` і ЛИШЕ запис ЛІГИ в
   `secrets.json` (чужі записи, додані після міграції, лишаються; файл повертається побайтно, коли чужого не змінилось, інакше
   злиттям). ПЕРЕД записом поточні `space.json` і ліговий шматок секретів кладуться в `backups/<бекап>-pre-restore/` — правки після

@@ -591,6 +591,13 @@ python3 bin/migrate_liga.py run                         # migrate now (backup ->
 python3 bin/migrate_liga.py restore <stamp> [--hold]    # put back space.json and the LIGA secrets from <DEAI_HOME>/backups/<stamp>
 ```
 
+Before the first start, put the Jira credentials in `tasks.json` or `pipeline-feedback` (not only in the shell environment): a first
+start from the Dock/PWA has no environment, then the tracker is not migrated and is not retried (add the `jira-tracker` card on
+Connections instead). The start line and `status` list every role that was not migrated, with its reason code.
+Upgrading: after the migration the Jira token and the Supabase key of LIGA live in `secrets.json`; rotate them on the Connections
+screen. The old sources (environment, `pipeline-feedback`, the root of `tasks.json`) stay only as a fallback for the `bin/` tools.
+Migrated tracks are a snapshot: edit `tracks` in the LIGA `space.json`, not `design_work_root(s)`/`profile_repos` in the old file.
+
 `restore` first saves the current files to `backups/<stamp>-pre-restore/`; `--hold` keeps the next start from migrating again.
 Known limits: a downgrade to 0.16 after the migration needs `restore <stamp> --hold` first; the tracks are migrated only when
 they match the old adapter exactly (otherwise they stay as in 0.16 until 4d-4); a LIGA folder inside a git work tree is not
