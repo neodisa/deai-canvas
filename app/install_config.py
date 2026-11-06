@@ -48,6 +48,13 @@ def supabase_config():
         cfg = load_legacy_tasks()
     except (OSError, ValueError, RecursionError):      # надто глибока вкладеність JSON — не обвал, а «нема конфігу»
         cfg = None
+    return supabase_from(cfg)
+
+
+def supabase_from(cfg):
+    """`(url, key)` за вже прочитаним коренем старого `tasks.json` (`cfg`; не словник — як порожній) — та сама логіка й ті самі
+    джерела, що в `supabase_config()` (його тіло, винесене сюди без змін, щоб міграція ЛІГИ `liga_migrate.plan` брала облікові
+    ТИМИ САМИМИ правилами, а не копією; ізоляція `implicit.isolated()` — як там)."""
     cfg = cfg if isinstance(cfg, dict) else {}
     sources = [(cfg.get('supabase_url'), cfg.get('supabase_key'))]
     if not implicit.isolated():                        # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
@@ -110,6 +117,12 @@ def jira_config():
         cfg = load_legacy_tasks()
     except (OSError, ValueError, RecursionError):      # надто глибока вкладеність JSON — не обвал, а «нема конфігу»
         cfg = None
+    return jira_from(cfg)
+
+
+def jira_from(cfg):
+    """`(base, email, token)` за вже прочитаним коренем старого `tasks.json` (`cfg`) — тіло `jira_config()`, винесене без змін
+    (див. його докстрінг: джерела, порядок, ізоляція). Спільний помічник для `liga_migrate.plan`: ті самі правила, не копія."""
     base = cfg.get('jira_base') if isinstance(cfg, dict) else None
     if not isinstance(base, str):
         return None, None, None

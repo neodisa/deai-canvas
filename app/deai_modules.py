@@ -1789,7 +1789,7 @@ def _paper_failure(role, cat, explicit):
     return None
 
 
-def _provider_for(role, space, get_cat=None):
+def _provider_for(role, space, get_cat=None, explicit_override=None):
     """Модуль, `Implicit` (лише ролі `IMPLICIT_ROLES`) чи `None` — для вже відомого простору `space`.
     Простір з `integrations` і без жодного явно ввімкненого модуля — неявний постачальник (`Implicit`) чи `None` ДО каталогу.
     Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
@@ -1798,6 +1798,9 @@ def _provider_for(role, space, get_cat=None):
     свої ролі «на папері» (`_paper_failure`): `module-untrusted`/`module-error` для БУДЬ-ЯКОЇ такої ролі й у будь-якому
     просторі, ДО пошуку переможця — ні неявного `static-publish`, ні неявного постачальника (`Implicit`). Помилка несе позначку `paper`.
     `get_cat` — ледача вибірка каталогу (`capabilities` ділить її між ролями); без неї — `catalog(space)`.
+    `explicit_override` — готові явні рішення (форма `space_modules`: `{id: {enabled, settings, …}}`) ЗАМІСТЬ читання `space.json` з
+    диска: так міграція ЛІГИ (`liga_migrate.plan`, 4d-3a) перевіряє розрахований `space.json` В ПАМʼЯТІ, нічого не пишучи. Лише
+    для цього; звичайні виклики його не передають.
 
     ВИНЯТОК для `comments` (див. docstring модуля, «приватність» і «видимість»): явно ввімкнений модуль коментарів, що не
     завантажився (`_enabled_module_is_lost`), — `module-error` у БУДЬ-ЯКОМУ просторі, а не тиша: у просторі з інтеграціями
@@ -1817,7 +1820,7 @@ def _provider_for(role, space, get_cat=None):
     strict = integrations and role in STRICT_IMPLICIT_ROLES
     if integrations:
         try:
-            explicit = space_modules(space)
+            explicit = space_modules(space) if explicit_override is None else explicit_override
         except ModuleError:
             if strict:
                 raise                                       # не знаємо, що людина вмикала: на спільний сервіс не йдемо
@@ -1825,7 +1828,7 @@ def _provider_for(role, space, get_cat=None):
         if not any(e['enabled'] for e in explicit.values()):
             return implicit.for_role(role) if role in IMPLICIT_ROLES else None
     else:
-        explicit = space_modules(space)
+        explicit = space_modules(space) if explicit_override is None else explicit_override
     cat = get_cat() if get_cat is not None else catalog(space)
     paper = _paper_failure(role, cat, explicit)
     if paper is not None:

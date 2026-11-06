@@ -552,5 +552,329 @@ class SharedStateIsolation(unittest.TestCase):
         self.assertEqual((rec['enabled'], rec['settings']['url']), (True, 'https://sb2.example.com'))
 
 
+class PlanTest(unittest.TestCase):
+    """Task 4 (4d-3a): чистий розрахунок `liga_migrate.plan()` — нічого не пишемо, секрети лише в `plan['secrets']`, `report()` без
+    значень. Стенд: тимчасові HOME/DEAI_HOME, реєстр із записом ЛІГИ, старий `tasks.json` у тимчасовій теці (підміна
+    `spaces.legacy_tasks_file`), вигадані значення."""
+
+    SB_URL, SB_KEY = 'https://sb.example.com', 'sb_plan_key_alpha'
+    JIRA_BASE, JIRA_EMAIL, JIRA_TOKEN = 'https://jira.example.com', 'alpha@example.com', 'jira_plan_token_alpha'
+    REPO_U, REPO_S = 'git@example.com:studio/web.git', 'ssh://git@example.com/o/r.git'
+    CLEAN = ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TEAMS_FAKE', 'DC_TRACKER_FAKE', 'SUPABASE_URL', 'SUPABASE_KEY',
+             'SUPABASE_SERVICE_KEY', 'JIRA_EMAIL', 'JIRA_TOKEN', 'DEAI_EXTRA_MODULES')
+
+    @classmethod
+    def setUpClass(cls):
+        for p in (os.path.join(os.path.dirname(_HERE), 'app'),):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        import deai_modules as dm
+        import liga_migrate
+        import spaces
+        self.dm, self.lm, self.spaces, self.mock = dm, liga_migrate, spaces, mock
+        self._tmp = tempfile.TemporaryDirectory(prefix='liga-plan-')
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = os.path.realpath(self._tmp.name)
+        self.home = os.path.join(self.tmp, 'home')
+        self.deai = os.path.join(self.home, '.deai')
+        self.space_dir = os.path.join(self.tmp, 'liga-space')
+        self.tasks_path = os.path.join(self.tmp, 'legacy-tasks.json')
+        for d in (self.home, self.deai, self.space_dir):
+            os.makedirs(d)
+        env = mock.patch.dict(os.environ, {'HOME': self.home, 'DEAI_HOME': self.deai})
+        env.start()
+        self.addCleanup(env.stop)
+        for name in self.CLEAN:
+            os.environ.pop(name, None)
+        lf = mock.patch.object(spaces, 'legacy_tasks_file', lambda: self.tasks_path)
+        lf.start()
+        self.addCleanup(lf.stop)
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+        self.registry()
+        self.config()
+
+    # --- стенд
+    def _write(self, path, obj):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(obj if isinstance(obj, str) else json.dumps(obj))
+
+    def registry(self, entry=True, path=None):
+        spaces_list = [{'id': 'legacy', 'path': path or self.space_dir, 'legacy': True, 'integrations': True}] if entry else []
+        self._write(os.path.join(self.deai, 'spaces.json'), {'version': 1, 'current': 'legacy' if entry else None, 'spaces': spaces_list})
+
+    def space_json(self, obj):
+        self._write(os.path.join(self.space_dir, 'space.json'), obj)
+
+    def config(self, supabase=True, jira=True, **extra):
+        work = os.path.join(self.home, 'work')
+        cfg = {'design_work_root': os.path.join(work, 'shared'),
+               'design_work_roots': {'custom-x': os.path.join(work, 'custom')},
+               'profile_repos': {'united': self.REPO_U, 'seo': self.REPO_S},
+               'tasks': {'a-1': {'dir': os.path.join(work, 'a-1'), 'title': 'Alpha', 'track': 'seo'},
+                         'a-2': {'dir': os.path.join(work, 'a-2'), 'title': 'Beta', 'profile': 'united'}}}
+        if supabase:
+            cfg.update(supabase_url=self.SB_URL, supabase_key=self.SB_KEY)
+        if jira:
+            cfg.update(jira_base=self.JIRA_BASE)
+            os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = self.JIRA_EMAIL, self.JIRA_TOKEN
+        else:
+            os.environ.pop('JIRA_EMAIL', None)
+            os.environ.pop('JIRA_TOKEN', None)
+        cfg.update(extra)
+        self.cfg = cfg
+        self._write(self.tasks_path, cfg)
+        return cfg
+
+    def snapshot_tree(self):
+        out = {}
+        for base, _dirs, files in os.walk(self.tmp):
+            for f in files:
+                p = os.path.join(base, f)
+                with open(p, 'rb') as fh:
+                    out[p] = fh.read()
+        return out
+
+    def plan(self, **kw):
+        return self.lm.plan(**kw)
+
+    # --- пропуски
+    def test_skip_layer_off(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path}):
+            os.environ.pop('DEAI_HOME')
+            p = self.plan()
+        self.assertEqual(p['status'], 'skip-layer-off')
+        self.assertIsNone(p['space_json'])
+
+    def test_skip_no_liga(self):
+        self.registry(entry=False)
+        self.assertEqual(self.plan()['status'], 'skip-no-liga')
+
+    def test_skip_done(self):
+        self.space_json({'migrations': {'liga-4d3a': {'at': 'x', 'roles': [], 'tracks': False}}})
+        self.assertEqual(self.plan()['status'], 'skip-done')
+
+    def test_skip_held(self):
+        self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
+        self.assertEqual(self.plan()['status'], 'skip-held')
+
+    def test_skip_no_path(self):
+        self.registry(path=os.path.join(self.tmp, 'nowhere'))
+        self.assertEqual(self.plan()['status'], 'skip-no-path')
+
+    def test_skip_path_in_git(self):
+        os.makedirs(os.path.join(self.space_dir, '.git'))                      # `.git` — тека у самій теці простору
+        self.assertEqual(self.plan()['status'], 'skip-path-in-git')
+
+    def test_skip_path_in_git_ancestor_file(self):
+        outer = os.path.join(self.tmp, 'checkout')
+        inner = os.path.join(outer, 'sub', 'liga')
+        os.makedirs(inner)
+        self._write(os.path.join(outer, '.git'), 'gitdir: elsewhere')           # `.git` — ФАЙЛ (worktree) у предку
+        self.registry(path=inner)
+        self.assertEqual(self.plan()['status'], 'skip-path-in-git')
+
+    def test_skip_space_json_unreadable(self):
+        self.space_json('{broken')
+        self.assertEqual(self.plan()['status'], 'skip-space-json-unreadable')
+        self.space_json({'modules': []})                                        # `modules` не обʼєкт — теж нечитабельний
+        self.assertEqual(self.plan()['status'], 'skip-space-json-unreadable')
+
+    def test_skip_tasks_unreadable_and_registry_unreadable(self):
+        self._write(self.tasks_path, '{broken')
+        self.assertEqual(self.plan()['status'], 'skip-tasks-unreadable')
+        self.config()
+        self._write(os.path.join(self.deai, 'spaces.json'), '{broken')
+        self.assertEqual(self.plan()['status'], 'skip-registry-unreadable')
+
+    # --- повний розрахунок
+    def test_full_plan(self):
+        before = self.snapshot_tree()
+        p = self.plan()
+        self.assertEqual(self.snapshot_tree(), before)                          # ⛔ нічого не записано
+        self.assertEqual(p['status'], 'ready')
+        self.assertEqual(p['space_id'], 'legacy')
+        self.assertEqual({r: v['migrate'] for r, v in p['roles'].items()}, {'tracker': True, 'dashboard': True, 'notify': True})
+        self.assertTrue(p['tracks'])
+        sj = p['space_json']
+        self.assertEqual(sj['modules'], {
+            'jira-tracker': {'enabled': True, 'shared_state': True, 'settings': {'base': self.JIRA_BASE, 'email': self.JIRA_EMAIL}},
+            'supabase-dashboard': {'enabled': True, 'shared_state': True,
+                                   'settings': {'url': self.SB_URL, 'table': 'overview_projects', 'compat': 'comment-layer'}},
+            'supabase-teams': {'enabled': True, 'shared_state': True, 'settings': {'url': self.SB_URL, 'compat': 'comment-layer'}}})
+        self.assertEqual(p['secrets'], {'jira-tracker': {'token': self.JIRA_TOKEN}, 'supabase-dashboard': {'key': self.SB_KEY},
+                                        'supabase-teams': {'key': self.SB_KEY}})
+        shared = os.path.join(self.home, 'work', 'shared')
+        self.assertEqual(sj['default_track'], 'united')
+        self.assertEqual([(t['id'], t['label'], t['root'], t['repo'], t['ds']) for t in sj['tracks']], [
+            ('united', 'United', shared, self.REPO_U, 'united'), ('liga360', 'LIGA360', shared, '', 'liga360'),
+            ('seo', 'SEO', shared, self.REPO_S, 'seo'),
+            ('custom-x', 'custom-x', os.path.join(self.home, 'work', 'custom'), '', 'custom-x')])      # нестандартний ключ
+        self.assertEqual(sj['migrations'], {'liga-4d3a': {'roles': ['tracker', 'dashboard', 'notify'], 'tracks': True}})
+
+    def test_existing_space_json_keys_kept(self):
+        self.space_json({'name': 'Liga', 'color': '#123456', 'foreign': {'k': 1},
+                         'migrations': {'other': {'at': 'x'}}, 'modules': {'static-publish': {'enabled': False}}})
+        sj = self.plan()['space_json']
+        self.assertEqual((sj['name'], sj['color'], sj['foreign']), ('Liga', '#123456', {'k': 1}))
+        self.assertEqual(sj['migrations']['other'], {'at': 'x'})
+        self.assertEqual(sj['modules']['static-publish'], {'enabled': False})
+        self.assertIn('jira-tracker', sj['modules'])
+
+    def test_home_argument(self):
+        self.assertEqual(self.plan(home=self.deai)['status'], 'ready')
+        self.assertEqual(self.plan(home=os.path.join(self.tmp, 'empty-home'))['status'], 'skip-no-liga')
+
+    def test_no_supabase_only_tracker(self):
+        self.config(supabase=False)
+        p = self.plan()
+        self.assertEqual(p['status'], 'ready')
+        self.assertEqual(sorted(p['space_json']['modules']), ['jira-tracker'])
+        self.assertEqual([p['roles'][r]['reason'] for r in ('dashboard', 'notify')], ['no-supabase'] * 2)
+        self.assertEqual(sorted(p['secrets']), ['jira-tracker'])
+
+    def test_no_jira_no_tracker(self):
+        self.config(jira=False)
+        p = self.plan()
+        self.assertEqual(sorted(p['space_json']['modules']), ['supabase-dashboard', 'supabase-teams'])
+        self.assertEqual(p['roles']['tracker'], {'module': 'jira-tracker', 'migrate': False, 'reason': 'no-jira'})
+        self.assertNotIn('jira-tracker', p['secrets'])
+
+    def test_module_already_present_role_not_migrated(self):
+        self.space_json({'modules': {'supabase-dashboard': {'enabled': False, 'settings': {'url': 'https://own.example.com'}}}})
+        p = self.plan()
+        self.assertEqual(p['roles']['dashboard'], {'module': 'supabase-dashboard', 'migrate': False, 'reason': 'module-present'})
+        self.assertEqual(p['space_json']['modules']['supabase-dashboard'], {'enabled': False, 'settings': {'url': 'https://own.example.com'}})
+        self.assertNotIn('supabase-dashboard', p['secrets'])
+        self.assertEqual(p['space_json']['migrations']['liga-4d3a']['roles'], ['tracker', 'notify'])
+
+    def test_non_empty_tracks_not_touched(self):
+        own = [{'id': 'mine', 'label': 'Mine'}]
+        self.space_json({'tracks': own, 'default_track': 'mine'})
+        p = self.plan()
+        self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-present'))
+        self.assertEqual((p['space_json']['tracks'], p['space_json']['default_track']), (own, 'mine'))
+        self.assertFalse(p['space_json']['migrations']['liga-4d3a']['tracks'])
+        self.assertEqual(len(p['space_json']['modules']), 3)                      # ролі мігрують далі
+
+    # --- паритет напрямків
+    def test_tracks_parity_abort(self):
+        """Корінь, який `normalize` відкидає (тека всередині `Library`), а адаптер зберігає, — міграція цілком не пише нічого."""
+        bad = os.path.join(self.home, 'Library', 'work')
+        self.config(design_work_roots={'seo': bad})
+        p = self.plan()
+        self.assertEqual(p['status'], 'abort-tracks-parity')
+        self.assertIsNone(p['space_json'])
+        self.assertEqual(p['secrets'], {})
+
+    def test_tracks_parity_abort_foreign_space_root(self):
+        """Корінь напрямку лежить усередині ІНШОГО простору реєстру: у явних напрямках `serve` його скине, адаптер — ні."""
+        other = os.path.join(self.tmp, 'other-space')
+        os.makedirs(other)
+        self._write(os.path.join(self.deai, 'spaces.json'), {'version': 1, 'current': 'legacy', 'spaces': [
+            {'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': True},
+            {'id': 'other', 'path': other, 'integrations': False}]})
+        self.config(design_work_roots={'seo': os.path.join(other, 'work')})
+        self.assertEqual(self.plan()['status'], 'abort-tracks-parity')
+
+    # --- поправка контролера: невідомі значення напрямку
+    def test_tracks_unknown_values_task_condition(self):
+        """(а): задача з `track`/`profile` не з переліку мігрованих id (інший регістр, порожнє, нема) — напрямки НЕ мігрують."""
+        for tid, task in (('x1', {'track': 'Seo'}), ('x2', {'profile': 'zzz'}), ('x3', {'title': 'без напрямку'}),
+                          ('x4', {'track': ''}), ('x5', {'track': None, 'profile': None}), ('x6', {'track': 5})):
+            with self.subTest(task=task):
+                cfg = self.config()
+                cfg['tasks'][tid] = dict(task, dir=os.path.join(self.home, 'work', tid))
+                self._write(self.tasks_path, cfg)
+                p = self.plan()
+                self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-unknown-values'))
+                self.assertNotIn('tracks', p['space_json'])
+                self.assertEqual(len(p['space_json']['modules']), 3)              # ролі мігрують далі
+                self.assertFalse(p['space_json']['migrations']['liga-4d3a']['tracks'])
+
+    def test_tracks_unknown_values_default_root_condition(self):
+        """(б): корінь дефолтного `united` ≠ спільному кореню адаптера — нова задача з невідомим значенням лягла б в інше місце."""
+        self.config(design_work_roots={'united': os.path.join(self.home, 'work', 'united'), 'custom-x': os.path.join(self.home, 'work', 'custom')})
+        p = self.plan()
+        self.assertEqual((p['status'], p['tracks'], p['tracks_reason']), ('ready', False, 'tracks-unknown-values'))
+        self.assertEqual(len(p['space_json']['modules']), 3)
+
+    def test_tracks_migrate_when_default_root_equals_shared(self):
+        shared = os.path.join(self.home, 'work', 'shared')
+        self.config(design_work_roots={'united': shared, 'custom-x': os.path.join(self.home, 'work', 'custom')})
+        p = self.plan()
+        self.assertTrue(p['tracks'])
+        self.assertIsNone(p['tracks_reason'])
+
+    # --- провайдер
+    def test_provider_check_runs_in_memory_and_aborts(self):
+        before = self.snapshot_tree()
+        seen = []
+        real = self.dm._provider_for
+
+        def spy(role, space, get_cat=None, explicit_override=None):
+            seen.append((role, explicit_override is not None))
+            return real(role, space, get_cat, explicit_override)
+        with self.mock.patch.object(self.dm, '_provider_for', spy):
+            p = self.plan()
+        self.assertEqual(p['status'], 'ready')
+        self.assertEqual(seen, [('tracker', True), ('dashboard', True), ('notify', True)])      # у памʼяті, кожна мігрована роль
+        self.assertEqual(self.snapshot_tree(), before)
+        with self.mock.patch.object(self.dm, '_provider_for', return_value=None):
+            p = self.plan()
+        self.assertEqual(p['status'], 'abort-provider')
+        self.assertIsNone(p['space_json'])
+        self.assertEqual(p['secrets'], {})
+        with self.mock.patch.object(self.dm, '_provider_for', lambda *a, **k: self.dm.catalog()['supabase-teams']):
+            self.assertEqual(self.plan()['status'], 'abort-provider')                           # інший модуль, ніж розрахований
+
+    # --- облікові
+    def test_credentials_same_sources_as_install_config(self):
+        """Jira: пошта й токен незалежно (оточення → файл); Supabase — ціла пара з одного джерела. Ті самі функції, що в сервері."""
+        import install_config
+        fb = os.path.join(self.home, '.claude', 'pipeline-feedback')
+        self._write(os.path.join(fb, 'jira-token'), 'jira_file_token_alpha\n')
+        os.environ.pop('JIRA_TOKEN')                                           # пошта — з оточення, токен — з файла
+        p = self.plan()
+        self.assertEqual(p['space_json']['modules']['jira-tracker']['settings']['email'], self.JIRA_EMAIL)
+        self.assertEqual(p['secrets']['jira-tracker'], {'token': 'jira_file_token_alpha'})
+        self.assertEqual((p['space_json']['modules']['jira-tracker']['settings']['base'], p['space_json']['modules']['jira-tracker']['settings']['email'],
+                          p['secrets']['jira-tracker']['token']), install_config.jira_config())
+        # Supabase: у корені лише адреса, ключ в оточенні — пара НЕ змішується; без пари з жодного джерела ролей нема
+        self.config(supabase=False, supabase_url=self.SB_URL)
+        os.environ['SUPABASE_KEY'] = 'sb_env_key_alpha'
+        self.assertEqual(self.plan()['roles']['dashboard']['reason'], 'no-supabase')
+        os.environ['SUPABASE_URL'] = 'https://sb-env.example.com'
+        p = self.plan()
+        self.assertEqual((p['space_json']['modules']['supabase-teams']['settings']['url'], p['secrets']['supabase-teams']['key']),
+                         ('https://sb-env.example.com', 'sb_env_key_alpha'))
+        self.assertEqual((p['space_json']['modules']['supabase-teams']['settings']['url'], p['secrets']['supabase-teams']['key']),
+                         install_config.supabase_config())
+
+    # --- звіт
+    def test_report_has_no_secret_values(self):
+        for p in (self.plan(),):
+            text = self.lm.report(p)
+            for secret in (self.SB_KEY, self.JIRA_TOKEN, self.SB_URL, self.JIRA_BASE, self.JIRA_EMAIL):
+                self.assertNotIn(secret, text)
+            self.assertIn('ready', text)
+            self.assertIn('token', text)                                       # імена ключів — так
+            self.assertIn('supabase-dashboard', text)
+        self.registry(entry=False)
+        self.assertIn('skip-no-liga', self.lm.report(self.plan()))
+
+    def test_plan_never_raises(self):
+        with self.mock.patch.object(self.lm, '_compute_tracks', side_effect=RuntimeError('sb_plan_key_alpha')):
+            p = self.plan()
+        self.assertEqual(p['status'], 'abort-internal')
+        self.assertNotIn('sb_plan_key_alpha', repr(p))
+
+
 if __name__ == '__main__':
     unittest.main()
