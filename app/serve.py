@@ -2767,8 +2767,21 @@ def comment_channel(task, tid, internal=False):
     коментарі колег тримаємо в одному потоці, а конкретну ітерацію коментаря
     несе `version` у CommentLayer.init (тег + перенос відкритих по fp). Канал
     береться з tasks.json `comment_project`; internal → підканал робочих пінів."""
-    base = task.get('comment_project') or f'dc/{tid}'
-    return base + ('/internal' if internal else '')
+    return deai_modules.legacy_comment_channel(task, tid, internal)
+
+
+def _comment_channel_in(sp, task, tid, internal=False):
+    """Канал коментарів задачі для місць, що раніше завжди рахували `comment_channel` (`api/task`, `teams-mute` GET/POST): рішення
+    за постачальником ролі `comments` простору `sp` (з кешу `_capabilities_full`, не новим обходом каталогу), як і скрізь —
+    через `deai_modules.comment_channel_of`. Збій рішення (нема постачальника, `ModuleError`, `channel_for` на непридатному id) —
+    схема comment-layer, як у 0.17.0: ні 5xx, ні `None`, помилку бачить сама роль коментарів."""
+    prov = deai_modules.comments_prov_cached(sp)
+    if isinstance(prov, (implicit.Implicit, deai_modules.Module)):
+        try:
+            return deai_modules.comment_channel_of(sp, prov, task, tid, internal=internal)
+        except deai_modules.ModuleError:
+            pass
+    return deai_modules.legacy_comment_channel(task, tid, internal)
 
 
 # Інспектор ДС — окремим тегом і за ПРАПОРЦЕМ, не назавжди в шаблоні.
@@ -3109,11 +3122,14 @@ def comments_route(space, prov):
             raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
         if m is None or m.status != 'ok':
             raise deai_modules.ModuleError('module-error', message=f'{COMMENTS_MODULE} module is not loaded')
-        return m, _comments_legacy_ctx(), (lambda task, tid, internal=False: comment_channel(task, tid, internal=internal))
+        return m, _comments_legacy_ctx(), (lambda task, tid, internal=False:
+                                           deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
     if not isinstance(prov, deai_modules.Module):
         raise deai_modules.ModuleError('module-error', message='comments: no provider')
+    # Канал — функція `comment_channel_of`: вбудований `supabase-comments` із `compat: "comment-layer"` (мігрована ЛІГА) веде
+    # коментарі схемою comment-layer, решта модулів — `deai/<простір>/<задача>` (`channel_for`).
     return (prov, deai_modules.module_ctx(space, prov),
-            lambda task, tid, internal=False: deai_modules.channel_for(space, tid, internal=internal))
+            lambda task, tid, internal=False: deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
 
 
 # ---------- Агент і командні коментарі (етап 2b-2, Task 4) ----------
@@ -3392,16 +3408,25 @@ class ProjectComments:
         return 'broken' if self.err is not None else 'off'
 
     @property
+    def legacy_scheme(self):
+        """Чи коментарі ведуться за схемою comment-layer (неявна ЛІГА або мігрований вбудований `supabase-comments` із
+        `compat`): та сама умова, що в функції каналу. ⛔ Те, що раніше різнилось за `kind == 'module'` («це не ЛІГА»), мусить
+        читати ЦЕЙ предикат: `kind` мігрованої ЛІГИ лишається `'module'`."""
+        return deai_modules.comment_scheme_legacy(self.space, self.prov)
+
+    @property
     def label(self):
-        """Хто джерело — для людини (заголовок `inbox`). «Supabase» — лише коли він справді джерело."""
+        """Хто джерело — для людини (заголовок `inbox`). «Supabase» — лише коли він справді джерело (і для мігрованої ЛІГИ)."""
+        if self.kind == 'module' and self.legacy_scheme:
+            return 'Supabase'
         return {'module': lambda: f'модуль {self.prov.id}', 'implicit': lambda: 'Supabase',
                 'broken': lambda: 'модуль недоступний', 'off': lambda: 'не підключено'}[self.kind]()
 
     def channel(self, task, tid, internal=False):
-        """Канал задачі: модуль — `deai_modules.channel_for` (канал простору), ЛІГА — `comment_channel`."""
-        if self.kind == 'module':
-            return deai_modules.channel_for(self.space, tid, internal=internal)
-        return comment_channel(task, tid, internal=internal)
+        """Канал задачі: модуль чи ЛІГА — `deai_modules.comment_channel_of` (схема за `compat`); нікого/збій — схема comment-layer."""
+        if self.kind in ('module', 'implicit'):
+            return deai_modules.comment_channel_of(self.space, self.prov, task, tid, internal=internal)
+        return deai_modules.legacy_comment_channel(task, tid, internal)
 
     def _check(self):
         if self.err is not None:
@@ -5935,7 +5960,7 @@ class Handler(SimpleHTTPRequestHandler):
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
                    # `comments` не мусить вгадувати це зі старого файла.
                    'space': space_view(sp),
-                   'comment_channel': (comment_channel(task, tid)
+                   'comment_channel': (_comment_channel_in(sp, task, tid)
                                        if spaces.integrations_on() else None),
                    'iterations': task_api_iterations(meta),
                    # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
@@ -5976,7 +6001,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(_notify_off_body(), status=409)
                 return
             tid, task = self._current_task()
-            channel = comment_channel(task, tid)
+            channel = _comment_channel_in(spaces.active_space(), task, tid)
             try:
                 if err is not None:
                     raise err
@@ -7165,7 +7190,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'error': 'muted must be boolean'}, status=400)
             return
         tid, task = self._current_task()
-        channel = comment_channel(task, tid)
+        channel = _comment_channel_in(spaces.active_space(), task, tid)
         me = mute_signature()
         try:
             notify.check_set_args(channel, muted, me)

@@ -2089,6 +2089,60 @@ def channel_for(space, tid, internal=False):
     return f'deai/{sid}/{tid}' + ('/internal' if internal else '')
 
 
+#: Вбудований модуль командних коментарів і значення його налаштування `compat` (4d-3b): схема каналів ЛІГИ (`comment_project`
+#: або `dc/<задача>`) — історія пінів, тиша Teams і лічильники дашборда прив'язані до цього каналу.
+COMMENTS_MODULE = 'supabase-comments'
+COMPAT_COMMENT_LAYER = 'comment-layer'
+
+
+def compat_of(space, module_id):
+    """Сире налаштування `compat` запису `module_id` у `space.json` простору (лише `str`, інакше `""`). ТОТАЛЬНА: нема запису,
+    не-`str`, нечитабельний `space.json`, нема теки простору — `""`, не виняток. Каталог не читаємо (Поправка 2): рівність
+    перевіряється лише з двома дозволеними значеннями, а недозволене `resolve_settings` усе одно відкидає (`bad-settings`)."""
+    try:
+        v = space_modules(space).get(module_id, {}).get('settings', {}).get('compat')
+        return v if isinstance(v, str) else ''
+    except Exception:  # noqa: BLE001 — тотальність: збій читання не ламає рішення про канал
+        return ''
+
+
+def legacy_comment_channel(task, tid, internal=False):
+    """Схема каналу ЛІГИ: `comment_project` задачі або `dc/<tid>` (+ `/internal`). ЄДИНА копія формули: `serve.comment_channel` і
+    `dashboard.comment_project_key` — тонкі обгортки."""
+    return (task.get('comment_project') or f'dc/{tid}') + ('/internal' if internal else '')
+
+
+def comment_scheme_legacy(space, prov):
+    """ЄДИНА умова «коментарі ведуться за схемою comment-layer»: `Implicit` АБО вбудований `Module` `supabase-comments` із
+    `compat == "comment-layer"`. ⛔ Лише вбудований І саме цей id (Поправка 3): свій модуль простору міг оголосити власне `compat`
+    з іншим змістом, а `supabase-dashboard`/`supabase-teams` мають СВОЄ `compat` (`comment-layer` — публічний ключ сторінки)."""
+    if isinstance(prov, implicit.Implicit):
+        return True
+    return (isinstance(prov, Module) and getattr(prov, 'origin', 'builtin') == 'builtin' and prov.id == COMMENTS_MODULE
+            and compat_of(space, prov.id) == COMPAT_COMMENT_LAYER)
+
+
+def comment_channel_of(space, prov, task, tid, internal=False):
+    """Канал коментарів задачі `tid` для вже вирішеного постачальника `prov`: схема comment-layer (`comment_scheme_legacy`) —
+    `legacy_comment_channel`, інакше `channel_for` (`deai/<простір>/<задача>`, може кинути `ModuleError`). УСІ місця каналу ходять
+    через цю функцію."""
+    if comment_scheme_legacy(space, prov):
+        return legacy_comment_channel(task, tid, internal)
+    return channel_for(space, tid, internal)
+
+
+def comments_prov_cached(space):
+    """Постачальник ролі `comments` простору `space` з кешу `_capabilities_full` (той самий прохід, що `capabilities`, а не новий
+    обхід каталогу на кожен запит), як `publish_module`. ТОТАЛЬНА: шар вимкнено, простір запиту не зафіксовано, збій рішення —
+    `None`; НЕ кидає. `Module`, `Implicit` чи `None`."""
+    try:
+        if not (space and spaces.layer_on() and spaces.request_space_id() is not None):
+            return None
+        return _capabilities_full(space)[1].get('comments')
+    except Exception:  # noqa: BLE001 — тотальність
+        return None
+
+
 # ------------------------------------------------------------------------------ довіра своїм модулям (3c)
 
 def _own_or_404(space, mid):

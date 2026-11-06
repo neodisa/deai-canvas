@@ -562,7 +562,10 @@ def cmd_resolve(a, rp=None):
     module_space = None
     if n is None or short:
         try:
-            module_space = project_comments().kind == 'module'
+            # ⛔ «Не ЛІГА»: `kind == 'module'` І схема не comment-layer — мігрована ЛІГА (4d-3b) теж `kind == 'module'`, але
+            # поводиться як у 0.17: без цього ліміт `MIN_PREFIX` мовчки зник би.
+            pc = project_comments()
+            module_space = pc.kind == 'module' and not pc.legacy_scheme
         except Exception:  # noqa: BLE001 — рішення «звідки» не вдалось: поводимось як для ЛІГА
             module_space = False
     if short and not module_space:

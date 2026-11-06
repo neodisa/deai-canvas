@@ -144,7 +144,7 @@ def _identity():
 
 def comment_project_key(task, task_id):
     """Ключ проєкту в таблиці comments: явний comment_project, інакше «dc/<id>» (канвас)."""
-    return task.get("comment_project") or f"dc/{task_id}"
+    return deai_modules.legacy_comment_channel(task, task_id)
 
 def _registry():
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
@@ -322,13 +322,15 @@ def push_registry(module, ctx, entries, where, *, log=print, call=None):
     return reg, ok, failed
 
 
-def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=print, call=None):
+def sync(cfg, module, ctx, *, discover=None, statuses=None, channel_of=None, identity=None, log=print, call=None):
     """Один прохід синку карток простору (спека §4). `cfg` — файл задач простору (`{'tasks': {…}}`); `module`/`ctx` —
     постачальник ролі `dashboard` (модуль + його `ctx`: для ЛІГИ його будує `legacy_ctx`); `call` — `deai_modules.call` (шов для
     тестів); `identity` — `(імʼя, ключ)` дизайнера, без нього — `_identity()` (git-конфіг).
     `discover()` → `{id: запис}` (лише ЛІГА: реєстр GitLab) — крок, що ще не став роллю: звичайний простір його не має;
     `statuses(keys)` → `{ключ: {name, cat}}` — статуси трекера (будь-який простір із роллю `tracker`: колбек будує CLI з
-    постачальника ролі; `None` — постачальника чи конфігу нема, крок пропущено).
+    постачальника ролі; `None` — постачальника чи конфігу нема, крок пропущено);
+    `channel_of(task, tid)` → канал коментарів задачі (ключ лічильника відкритих): його будує CLI з постачальника ролі `comments`
+    через `deai_modules.comment_channel_of`; без нього — схема comment-layer (`legacy_comment_channel`, як у 0.17.0).
 
     Кроки: 0) базові картки з реєстру → `push(…, 'insert')`; 1) відкриті коментарі (`open_comments`, якщо модуль її має) →
     лічильники для статусу `review`; 2) статуси трекера; 3) задачі простору з текою НА ЦІЙ МАШИНІ → `build_card` → PII-фільтр →
@@ -336,6 +338,7 @@ def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=p
     ⛔ Збій кроку НЕ валить проход і НЕ мовчить: назви карток із `failed` — у `log` вголос (мовчазна «часткова» синхронізація
     виглядає як повна)."""
     call = call or deai_modules.call
+    channel_of = channel_of or deai_modules.legacy_comment_channel
     designer, designer_key = identity if identity is not None else _identity()
     summary = {'discovered': 0, 'synced': 0, 'skipped': [], 'failed': {}}
     # 0) Реєстр: усі заведені задачі всіх напрямків (базові картки); локальні задачі нижче їх збагатять
@@ -380,7 +383,7 @@ def sync(cfg, module, ctx, *, discover=None, statuses=None, identity=None, log=p
             skipped.append(tid)
             continue
         st = task_state(task)
-        st['open_comments'] = counts.get(comment_project_key(task, tid), 0)
+        st['open_comments'] = counts.get(channel_of(task, tid), 0)
         js = jstatus.get(task.get('jira') or '')
         if js and js.get('name'):
             st['jira_status'] = js['name']

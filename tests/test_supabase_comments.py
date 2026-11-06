@@ -413,7 +413,7 @@ class CatalogTest(Base):
     def test_the_real_catalog_loads_the_module_as_a_comments_provider(self):
         m = dm.catalog()[MID]
         self.assertEqual((m.status, m.error), ('ok', None))
-        self.assertEqual((m.roles, m.name, m.version, m.api, m.dir), (['comments'], 'Supabase', '1.1.0', 1, MODULE_DIR))
+        self.assertEqual((m.roles, m.name, m.version, m.api, m.dir), (['comments'], 'Supabase', '1.2.0', 1, MODULE_DIR))
         self.assertEqual(m.client, ('supabase.min.js', 'adapter.js'))
         self.assertEqual(m.secret_keys(), ['key'])
         self.assertEqual(m.private_secret_keys(), [], 'публічний ключ — єдиний секрет модуля, і він public')
@@ -426,14 +426,18 @@ class CatalogTest(Base):
         with open(os.path.join(MODULE_DIR, 'module.json'), encoding='utf-8') as f:
             man = json.load(f)
         self.assertEqual(man, {
-            'api': 1, 'id': 'supabase-comments', 'name': 'Supabase', 'version': '1.1.0', 'roles': ['comments'],
+            'api': 1, 'id': 'supabase-comments', 'name': 'Supabase', 'version': '1.2.0', 'roles': ['comments'],
             'client': ['supabase.min.js', 'adapter.js'],
             'settings': [
                 {'key': 'url', 'type': 'text', 'label': 'Адреса проєкту (https://<ref>.supabase.co)', 'required': True},
                 {'key': 'key', 'type': 'secret', 'public': True, 'label': 'Публічний ключ (anon / publishable)',
                  'required': True},
                 {'key': 'shots_bucket', 'type': 'text', 'label': 'Кошик Storage для скріншотів пінів (необовʼязково)',
-                 'required': False}]})
+                 'required': False},
+                {'key': 'compat', 'type': 'select', 'required': False, 'default': '',
+                 'label': 'Канали коментарів (⚠ зміна значення на живому просторі відриває наявну історію пінів: канал інший)',
+                 'options': [{'value': '', 'label': 'Deai: deai/<простір>/<задача>'},
+                             {'value': 'comment-layer', 'label': 'comment-layer: comment_project або dc/<задача>'}]}]})
 
     def test_the_declared_client_files_are_regular_unlinked_and_small(self):
         for name in dm.catalog()[MID].client:

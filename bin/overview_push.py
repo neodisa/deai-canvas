@@ -168,6 +168,27 @@ def _statuses(sp, log=print):
     return lambda keys: tracker.statuses(module, ctx, keys, timeout=tracker.SYNC_TIMEOUT, socket_s=tracker.SYNC_SOCKET_S)
 
 
+def _channel_of(sp, log=print):
+    """Колбек `channel_of(task, tid)` для `dashboard.sync` від постачальника ролі `comments` простору `sp`: канал рахує
+    `deai_modules.comment_channel_of` (явний `supabase-comments` із `compat: "comment-layer"` — схема comment-layer, без — канал
+    простору). Збій рішення про постачальника (реєстр, `space.json`, модуль) чи непридатний id задачі — схема comment-layer, як
+    у 0.17.0; причина — рядком у `log` (один раз), синк іде далі."""
+    try:
+        prov = deai_modules.provider("comments", sp)
+    except (deai_modules.ModuleError, spaces.SpacesError) as e:
+        log("⚠ overview: постачальника коментарів не визначено (%s): ключ лічильника — схема comment-layer" % (getattr(e, "code", None) or type(e).__name__))
+        prov = None
+
+    def channel_of(task, tid):
+        if prov is not None:
+            try:
+                return deai_modules.comment_channel_of(sp, prov, task, tid)
+            except deai_modules.ModuleError:
+                pass
+        return deai_modules.legacy_comment_channel(task, tid)
+    return channel_of
+
+
 def cmd_sync(space_id=None, *, call=None, log=print):
     sp = _space(space_id)
     module, ctx, legacy = _target(sp)
@@ -178,7 +199,7 @@ def cmd_sync(space_id=None, *, call=None, log=print):
     # Реєстр GitLab — крок ЛІГИ (колбек): звичайний простір його не має. Статуси трекера — від постачальника ролі `tracker`
     # будь-якого простору (нема постачальника чи конфігу — `None`, крок пропущено).
     dashboard.sync(cfg, module, ctx, discover=(lambda: discover_projects(cfg)) if legacy else None,
-                   statuses=_statuses(sp, log), log=log, call=call)
+                   statuses=_statuses(sp, log), channel_of=_channel_of(sp, log), log=log, call=call)
 
 
 def cmd_discover(space_id=None, *, call=None, log=print):
