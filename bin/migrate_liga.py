@@ -49,7 +49,7 @@ def main(argv=None):
                 print('  відкат: python3 bin/migrate_liga.py restore %s [--hold]' % info.get('backup'))
             if st not in liga_migrate.BENIGN:
                 code = 1
-            if st.startswith('abort-'):                      # як на старті: `abort-*` зупиняє наступні кроки, `skip-*` — ні
+            if st.startswith('abort-') or st == 'skip-busy':     # як на старті: `abort-*`/`skip-busy` зупиняють наступні кроки
                 break
         return code
     step = liga_migrate.step_of_stamp(a.stamp) or liga_migrate.ALL_STEPS[0]     # крок визначає імʼя бекапу

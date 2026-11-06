@@ -1498,11 +1498,15 @@ class StepsTest(_TwoSteps):
         self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-held')
         self.assertEqual(self.lm.run(step='liga-4d3a'), 'done')
         self.assertEqual(self.marks()['liga-4d3b'], {'held': True})
+        # ревʼю: УТРИМАНИЙ ранній крок тримає всі наступні (раніше b ішов далі) — решта пропусків a (done) не блокує b
         self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
         self.assertEqual(self.lm.plan(step='liga-4d3a')['status'], 'skip-held')
+        self.assertEqual(self.lm.plan(step='liga-4d3b')['status'], 'skip-held')
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-held')
+        self.assertEqual(self.marks(), {'liga-4d3a': {'held': True}})
+        self.space_json({'migrations': {'liga-4d3a': {'at': 'x', 'roles': [], 'tracks': False}}})
         self.assertEqual(self.lm.run(step='liga-4d3b'), 'done')
         mk = self.marks()
-        self.assertEqual(mk['liga-4d3a'], {'held': True})
         self.assertEqual(sorted(mk['liga-4d3b']), ['at', 'backup', 'roles'])
         self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-done')
 
@@ -1573,12 +1577,10 @@ class TwoStepsStartupTest(_TwoSteps):
         self.assertNotIn('liga-4d3b', json.dumps(self.read_json(self.space_path()).get('migrations') or {}))
 
     def test_skip_of_first_step_does_not_block_the_second(self):
-        for kind in ('done', 'held', 'nothing'):
+        for kind in ('done', 'nothing'):          # `held` винесено в `test_held_first_step_holds_the_second` (ревʼю)
             self.setUp_fresh()
             if kind == 'done':
                 self.space_json({'migrations': {'liga-4d3a': {'at': 'x', 'roles': [], 'tracks': False}}})
-            elif kind == 'held':
-                self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
             else:
                 self.config(supabase=False, jira=False, design_work_root=None)
                 cfg = self.cfg
@@ -1590,12 +1592,55 @@ class TwoStepsStartupTest(_TwoSteps):
             self.assertEqual(sorted(mk['liga-4d3b']), ['at', 'backup', 'roles'], kind)
             self.assertEqual(len(self.backups()), 1, kind)
             self.assertIn('liga-4d3b: done', err, kind)
-            if kind == 'held':
-                self.assertIn('liga-4d3a: skip-held', err)               # `skip-held` стартовий рядок друкує, як у 4d-3a
-            else:
-                self.assertNotIn('liga-4d3a:', err, kind)                # `skip-done`/`skip-nothing` — тихо, як у 4d-3a
+            self.assertNotIn('liga-4d3a:', err, kind)                    # `skip-done`/`skip-nothing` — тихо, як у 4d-3a
             if kind == 'nothing':
                 self.assertNotIn('liga-4d3a', mk)
+
+    def test_held_first_step_holds_the_second(self):
+        """Ревʼю I1: `held` раннього кроку тримає наступні (старт нічого не пише), на відміну від done/nothing."""
+        self.space_json({'migrations': {'liga-4d3a': {'held': True}}})
+        before = self.snapshot_tree()
+        st, err = self.start()
+        self.assertEqual(st, 'skip-held')
+        self.assertIn('liga-4d3a: skip-held', err)
+        self.assertIn('liga-4d3b: skip-held', err)
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.plan(step='liga-4d3b')['status'], 'skip-held')
+
+    def test_startup_return_does_not_mask_a_later_abort(self):
+        """Ревʼю M1: a=done, b=abort-* → `startup()` повертає abort."""
+        real = self.lm._run
+
+        def run(home, step=None):
+            if step.mark == 'liga-4d3b':
+                return 'abort-write', {'status': 'abort-write', 'reason': 'x'}
+            return real(home, step)
+        with self.mock.patch.object(self.lm, '_run', run):
+            st, _err = self.start()
+        self.assertEqual(st, 'abort-write')
+
+    def test_skip_busy_stops_later_steps(self):
+        """Ревʼю M2: `skip-busy` кроку, як `abort-*`, зупиняє наступні (b не йде, поки хтось посеред a)."""
+        seen = []
+
+        def run(home, step=None):
+            seen.append(step.mark)
+            return 'skip-busy', {'status': 'skip-busy', 'reason': 'busy'}
+        with self.mock.patch.object(self.lm, '_run', run):
+            res = self.lm.run_all()
+            self.assertEqual([m for m, _s, _i in res], ['liga-4d3a'])
+            code, out, _ = self.cli('run')
+        self.assertEqual(seen, ['liga-4d3a', 'liga-4d3a'])
+        self.assertNotIn('liga-4d3b', out)
+
+    def test_identical_hint_is_printed_once(self):
+        """Ревʼю M3: однакова підказка (тека в git) на старті друкується один раз для всіх кроків."""
+        self.space_json({})
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        st, err = self.start()
+        self.assertEqual(err.count('Перенесіть теку простору ЛІГА'), 1)
+        self.assertIn('liga-4d3a: skip-path-in-git', err)
+        self.assertIn('liga-4d3b: skip-path-in-git', err)
 
     def setUp_fresh(self):
         """Чистий дім між варіантами одного тесту (реєстр і конфіг — як на старті стенда)."""
@@ -1693,6 +1738,24 @@ class LifoRestoreTest(_TwoSteps):
         self.assertEqual(self.lm.restore(self.b), 'restored')
         self.assertEqual(self.lm.restore(self.a, hold=True), 'restored')
         self.assertEqual(self.marks(), {'liga-4d3a': {'held': True}})
+        # ревʼю I1: утримання a тримає й b — наступний старт нічого не пише (раніше b запускався)
+        before = self.snapshot_tree()
+        st, _err = self.start()
+        self.assertEqual(st, 'skip-held')
+        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.plan(step='liga-4d3b')['status'], 'skip-held')
+
+    def test_full_sequence_run_restore_b_restore_a_hold_then_startup_writes_nothing(self):
+        """Ревʼю I1: run a, run b, restore b, restore a --hold, startup → дерево побайтно те саме, b `skip-held`."""
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.restore(self.a, hold=True), 'restored')
+        before = self.snapshot_tree()
+        self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-held')
+        res = self.lm.run_all()
+        self.assertEqual([(m, s) for m, s, _i in res], [('liga-4d3a', 'skip-held'), ('liga-4d3b', 'skip-held')])
+        st, _err = self.start()
+        self.assertEqual(st, 'skip-held')
+        self.assertEqual(self.snapshot_tree(), before)
 
     def test_restore_a_alone_is_still_allowed_when_b_was_never_applied(self):
         self.assertEqual(self.lm.restore(self.b), 'restored')

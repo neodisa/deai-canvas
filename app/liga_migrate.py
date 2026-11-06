@@ -220,6 +220,12 @@ def _plan(home, step):
     mark = mig.get(step.mark) if isinstance(mig, dict) else None
     if mark is not None:
         raise _Stop('skip-held' if isinstance(mark, dict) and mark.get('held') is True else 'skip-done', space_id=sid)
+    # ⛔ УТРИМАНИЙ (`held: true`) ранній крок тримає всі наступні: інакше `restore <b>` + `restore <a> --hold` лишив би b живим на
+    # наступному старті. Лише `held`: done/skip-nothing/інші пропуски раннього кроку наступний не блокують.
+    for earlier in ALL_STEPS[:ALL_STEPS.index(step)]:
+        em = mig.get(earlier.mark) if isinstance(mig, dict) else None
+        if isinstance(em, dict) and em.get('held') is True:
+            raise _Stop('skip-held', space_id=sid)
     if _in_git(path):
         raise _Stop('skip-path-in-git', space_id=sid)
     try:
@@ -668,8 +674,8 @@ def run(home=None, step=None):
 
 
 def run_all(home=None, on_result=None):
-    """Усі кроки `STEPS` по порядку: `[(позначка, статус, підсумок)]`. `abort-*` кроку зупиняє НАСТУПНІ (стан сумнівний); `skip-*`
-    (зокрема `skip-nothing`/`skip-done`/`skip-held`) — ні. План наступного кроку рахується ПІСЛЯ запису попереднього (читає актуальний
+    """Усі кроки `STEPS` по порядку: `[(позначка, статус, підсумок)]`. `abort-*` і `skip-busy` кроку зупиняють НАСТУПНІ (стан сумнівний /
+    інший процес посеред кроку); решта `skip-*` (`skip-nothing`/`skip-done`) — ні, а `held` раннього кроку тримає наступні в `plan`. План наступного кроку рахується ПІСЛЯ запису попереднього (читає актуальний
     `space.json`). `on_result(mark, status, info)` — після кожного кроку (старт друкує рядок, поки наступний ще не пішов)."""
     out = []
     for step in STEPS:
@@ -677,7 +683,7 @@ def run_all(home=None, on_result=None):
         out.append((step.mark, st, info))
         if on_result is not None:
             on_result(step.mark, st, info)
-        if st.startswith('abort-'):
+        if st.startswith('abort-') or st == 'skip-busy':      # зайнято іншим процесом: він може бути посеред кроку — наступні не рушаємо
             break
     return out
 
@@ -971,7 +977,7 @@ def startup():
     `DC_MIGRATE_LIGA=1` ЛИШЕ з тимчасовим `DEAI_HOME` (справжній `~/.deai` — гучна відмова). Не кидає ніколи: виняток — у stderr
     (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`. Кроки `STEPS` — по порядку (`run_all`): `abort-*` зупиняє
     наступні на цьому старті, `skip-*` — ні. Повертає статус ПЕРШОГО кроку, що не `skip-*` (найважливіше), інакше — першого кроку."""
-    done = []
+    done, hints = [], set()
     try:
         if implicit.isolated():
             if os.environ.get('DC_MIGRATE_LIGA') != '1':
@@ -984,7 +990,8 @@ def startup():
             done.append(st)
             if st != 'skip-layer-off' and not st.startswith('skip-no') and st != 'skip-done':
                 print('%s: %s — %s' % (mark, st, info.get('reason') or ''), file=sys.stderr)
-                if info.get('hint'):
+                if info.get('hint') and info['hint'] not in hints:           # однакова підказка (тека в git) — раз на старт
+                    hints.add(info['hint'])
                     print('  ' + info['hint'], file=sys.stderr)
                 # ⛔ Часткова міграція мовчить найгірше: позначку записано, а роль (напр. трекер без облікових у оточенні, коли
                 # старт — з Dock/PWA) лишилась неявною й не повториться. Рядок: роль і КОД причини, без значень.
@@ -992,7 +999,9 @@ def startup():
                 if isinstance(skipped, dict) and skipped:
                     print('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(skipped.items())), file=sys.stderr)
         run_all(None, on_result=announce)
-        return next((s for s in done if not s.startswith('skip-')), done[0] if done else None)
+        # abort не маскуємо пізнішим успіхом: перший `abort-*`, інакше перший не-`skip-*`, інакше перший
+        return (next((s for s in done if s.startswith('abort-')), None) or next((s for s in done if not s.startswith('skip-')), None)
+                or (done[0] if done else None))
     except Exception as e:  # noqa: BLE001
         try:
             mark = (STEPS[min(len(done), len(STEPS) - 1)] if STEPS else _step(None)).mark     # крок, що не дійшов до звіту

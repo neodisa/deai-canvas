@@ -624,7 +624,9 @@ class _Stand(unittest.TestCase):
         lf = mock.patch.object(spaces, 'legacy_tasks_file', lambda: self.tasks_path)
         lf.start()
         self.addCleanup(lf.stop)
-        self.addCleanup((_sp := mock.patch.object(liga_migrate, 'STEPS', liga_migrate.ALL_STEPS[:1])).stop) or _sp.start()  # 4d-3b: стенд 4d-3a бачить лише свій крок
+        sp = mock.patch.object(liga_migrate, 'STEPS', liga_migrate.ALL_STEPS[:1])      # 4d-3b: стенд 4d-3a бачить лише свій крок
+        sp.start()
+        self.addCleanup(sp.stop)
         dm.reset_caches()
         self.addCleanup(dm.reset_caches)
         self.registry()
