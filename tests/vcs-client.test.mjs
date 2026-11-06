@@ -62,6 +62,31 @@ test("isLegacyVcs: 'legacy' і «ключа нема за інтеграцій»
   assert.equal(isLegacyVcs({ integrations: false, capabilities: { publish: "static-publish" } }), false);
 });
 
+test("isLegacyVcs (4d-3b): явний git-sync із compat «design-canvas» — як ЛІГА; без compat чи з чужим значенням — модуль", () => {
+  const MIGRATED = { integrations: true, capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
+  assert.equal(isLegacyVcs(MIGRATED), true);
+  assert.equal(isLegacyVcs({ ...MIGRATED, integrations: false }), true, "compat вирішує й без інтеграцій");
+  assert.equal(isLegacyVcs({ capabilities: { vcs: "legacy" }, compat: { comments: "comment-layer" } }), true, "'legacy' лишається");
+  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" } }), false, "без compat — модуль");
+  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" }, compat: {} }), false);
+  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" }, compat: { comments: "comment-layer" } }), false,
+    "compat лише коментарів не робить синк «ЛІГОЮ»");
+  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" }, compat: { vcs: "other" } }), false);
+});
+
+test("мігрований запис: підписи, ключ відмови, форма «Нова задача» — як для 'legacy'", () => {
+  const MIGRATED = { integrations: true, capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
+  const LEGACY = { integrations: true, capabilities: { vcs: "legacy" } };
+  for (const x of ["", "zzz", null, undefined, 5]) assert.equal(vcsLabel(x, MIGRATED), vcsLabel(x, LEGACY), `vcsLabel ${String(x)}`);
+  assert.equal(vcsLabel("", MIGRATED), "GitLab");
+  assert.equal(vcsBrand("", MIGRATED), "");
+  assert.equal(vcsFailKey("vcs-bad-target", MIGRATED), null, "ціль у tasks.json: «виправ на Підключенні» не радимо");
+  assert.equal(vcsFailKey("vcs-bad-target", MIGRATED), vcsFailKey("vcs-bad-target", LEGACY));
+  assert.equal(hasVcs(MIGRATED) && !isLegacyVcs(MIGRATED), false, "withRepo: поле «Репозиторій» приховане, як у ЛІГИ");
+  assert.equal(hasVcs(MIGRATED), true);
+  assert.equal(taskCreateClones(MIGRATED, {}), taskCreateClones(LEGACY, {}));
+});
+
 test("стеля запиту створення задачі, що клонує, — 400 с: не менша за найгірший шлях сервера (validate 5 + клон 180 + другий клон 180), довша за стелю форми", () => {
   assert.equal(TASK_VCS_POST_TIMEOUT_MS, 400000);
   assert.ok(TASK_VCS_POST_TIMEOUT_MS > FORM_POST_TIMEOUT_MS);

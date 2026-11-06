@@ -291,6 +291,8 @@ export const hasNotify = (space) => {
 /** Синк простору — зашитий шлях ЛІГА (налаштовується в `tasks.json`, не на «Підключенні»). Правило ключа те саме, що в `hasVcs`. */
 export const isLegacyVcs = (space) => {
   const caps = space?.capabilities;
+  // Після міграції 4d-3b `capabilities.vcs` — id модуля, а «ЛІГА» живе в ключі `compat` обʼєкта простору (його кладе сервер).
+  if (space?.compat?.vcs === "design-canvas") return true;
   return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs === "legacy" : space?.integrations !== false;
 };
 

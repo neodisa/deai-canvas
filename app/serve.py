@@ -566,7 +566,7 @@ def gitlab_web(gl):
     return f'https://{m.group(1)}/{m.group(2)}/-/commits/{gl["branch"]}/{gl["path"]}'
 
 
-VCS_MODULE = 'git-sync'
+VCS_MODULE = deai_modules.VCS_MODULE          # одне джерело id: його читає й предикат `deai_modules.compat_view`
 
 #: Userinfo адреси (`://TOKEN@`, `://user:pass@`) — те саме правило, що `_USERINFO`/`_mask` модуля `git-sync` (нутрощі модуля
 #: не імпортуємо): до ОСТАННЬОГО `@` перед першим `/`, тож `p@ss` у паролі теж.
@@ -608,7 +608,29 @@ def _vcs_legacy_ctx():
             'secrets': {}, 'folder_ok': lambda folder: (False, 'bad-folder'),
             'ModuleError': deai_modules.ModuleError,
             # `find_tool` тут не потрібен: `git-sync` кличе лише `git`, а `ctx['find_tool']` (npx/node) — для модуля Vercel (4b-1)
-            'cache_dir': _mirrors_base(), 'mirror_flat': True}
+            **_flat_mirror_overlay()}
+
+
+def _flat_mirror_overlay():
+    """Накладка плоских дзеркал 0.7.0: `mirror_flat` і `cache_dir = _mirrors_base()`. ЄДИНА копія: її кладуть і неявний шлях
+    (`_vcs_legacy_ctx`), і явний запис `git-sync` із `compat == "design-canvas"` (`vcs_provider`). Модуль не знає ні `ROOT`, ні
+    `DC_MIRRORS_DIR`, тож друга копія в ньому розсинхронізувалась би."""
+    return {'mirror_flat': True, 'cache_dir': _mirrors_base()}
+
+
+def vcs_legacy_texts(prov, space):
+    """ЄДИНИЙ предикат «легасі-тексти» ЛІГИ (тема коміту «design-canvas: sync», «GitLab», «репозиторію», автокоміт, плоскі дзеркала):
+    неявний постачальник (`Implicit`) АБО вбудований `git-sync` із `compat == "design-canvas"` у `space.json` простору.
+
+    ⛔ ЛІГА — запис реєстру, а не тип постачальника (урок 4d-3a): після міграції ЛІГА веде явний `Module`, а тексти лишаються
+    ті самі. ⛔ Лише вбудований І саме `git-sync` (Поправка 3): свій модуль міг оголосити власне `compat` з іншим змістом.
+    Споживачі НЕ перевіряють тип постачальника самі — читають третій елемент `vcs_provider()` (`TextPredicateGuard`).
+    ТОТАЛЬНА: нечитабельний `space.json` — `False`, не виняток (`compat_of`)."""
+    if isinstance(prov, implicit.Implicit):
+        return True
+    return (isinstance(prov, deai_modules.Module) and getattr(prov, 'origin', 'builtin') == 'builtin'
+            and prov.id == deai_modules.VCS_MODULE
+            and deai_modules.compat_of(space, prov.id) == deai_modules.COMPAT_DESIGN_CANVAS)
 
 
 def _frame_reason(e):
@@ -634,9 +656,14 @@ def vcs_provider():
             raise VcsError('vcs-error', f'module catalog: {type(e).__name__}') from None
         if m is None or m.status != 'ok':
             raise VcsError('vcs-error', f'{VCS_MODULE} module is not loaded')
-        return m, _vcs_legacy_ctx(), True
+        return m, _vcs_legacy_ctx(), vcs_legacy_texts(prov, None)
     try:
-        return prov, deai_modules.module_ctx(spaces.active_space(), prov), False
+        space = spaces.active_space()
+        ctx = deai_modules.module_ctx(space, prov)
+        legacy = vcs_legacy_texts(prov, space)                       # ОДИН раз: третій елемент для всіх споживачів текстів
+        if legacy:                                                   # `compat == "design-canvas"` = рівно поведінка `Implicit`
+            ctx = {**ctx, **_flat_mirror_overlay()}
+        return prov, ctx, legacy
     except (deai_modules.ModuleError, spaces.SpacesError) as e:
         raise VcsError(getattr(e, 'code', 'vcs-error'), _frame_reason(e)) from None
 
@@ -5213,6 +5240,9 @@ def space_view(sp):
     out = spaces.describe(sp)
     if out is not None:
         out['capabilities'] = deai_modules.capabilities(sp)
+        compat = deai_modules.compat_view(sp, out['capabilities'])
+        if compat:                       # ключ лише коли непорожній (Поправка 4): точні тести `describe`/`listing` не зачеплені
+            out['compat'] = compat
     return out
 
 
@@ -5231,6 +5261,9 @@ def spaces_listing():
     for e in out['spaces']:
         sp = {'id': e['id'], 'path': e['path'], 'integrations': e['integrations']}
         e['capabilities'] = deai_modules.capabilities(sp)
+        compat = deai_modules.compat_view(sp, e['capabilities'])
+        if compat:
+            e['compat'] = compat
         view = _TrackView(sp, roots=False)       # корені списку не потрібні: без перевірок диска й реєстру (див. `_TrackView`)
         e['tracks'] = [{'id': t['id'], 'label': t['label']} for t in view.tracks]
         e['default_track'] = view.default

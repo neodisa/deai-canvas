@@ -2106,6 +2106,28 @@ def compat_of(space, module_id):
         return ''
 
 
+#: Вбудований модуль синку з git і значення його налаштування `compat` (4d-3b): плоскі дзеркала й тексти 0.7.0 («design-canvas», «GitLab»).
+VCS_MODULE = 'git-sync'
+COMPAT_DESIGN_CANVAS = 'design-canvas'
+#: Ролі, чий явний вбудований модуль має `compat`, що видно клієнту: `{роль: id модуля}`.
+COMPAT_ROLES = (('comments', COMMENTS_MODULE), ('vcs', VCS_MODULE))
+
+
+def compat_view(space, caps):
+    """Ключ `compat` обʼєкта простору: `{роль: значення}` лише для ролей, які веде ЯВНИЙ вбудований модуль (`caps[роль]` — його id)
+    з непорожнім `compat` у `space.json`. Порожній словник — ключа в обʼєкті простору нема (Поправка 4). ТОТАЛЬНА: не кидає
+    (`compat_of` сама тотальна; не-словник `caps` — `{}`). Клієнт читає звідси «ЛІГА за налаштуванням» (`isLegacyVcs`)."""
+    out = {}
+    if not isinstance(caps, dict):
+        return out
+    for role, mid in COMPAT_ROLES:
+        if caps.get(role) == mid:
+            v = compat_of(space, mid)
+            if v:
+                out[role] = v
+    return out
+
+
 def legacy_comment_channel(task, tid, internal=False):
     """Схема каналу ЛІГИ: `comment_project` задачі або `dc/<tid>` (+ `/internal`). ЄДИНА копія формули: `serve.comment_channel` і
     `dashboard.comment_project_key` — тонкі обгортки."""

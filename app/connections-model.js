@@ -48,7 +48,7 @@ const BUILTIN_TEXT = {
   /* Синхронізація з git (4a): підписи шести налаштувань маніфесту `modules/git-sync/module.json`. */
   "git-sync": { name: "cnModGitName", desc: "cnModGitDesc",
     fields: { repo: "cnFieldGitRepo", branch: "cnFieldGitBranch", path: "cnFieldGitPath", ssh_key: "cnFieldGitSshKey",
-      host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync" } },
+      host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync", compat: "cnFieldGitCompat" } },
   /* Командний дашборд (4c-1): підписи трьох налаштувань маніфесту `modules/supabase-dashboard/module.json`. */
   "supabase-dashboard": { name: "cnModSbDashName", desc: "cnModSbDashDesc",
     fields: { url: "cnFieldSbDashUrl", key: "cnFieldSbDashKey", table: "cnFieldSbDashTable" } },

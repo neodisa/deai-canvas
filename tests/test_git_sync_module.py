@@ -2096,7 +2096,7 @@ class Catalog(Base):
         self.assertEqual((m.id, m.roles), ('git-sync', ['vcs']))
         self.assertEqual([(s['key'], s['type'], s.get('default')) for s in m.settings],
                          [('repo', 'text', None), ('branch', 'text', 'main'), ('path', 'text', 'mockup/{task}'),
-                          ('ssh_key', 'text', None), ('host_ip', 'text', None), ('autosync', 'bool', False)])
+                          ('ssh_key', 'text', None), ('host_ip', 'text', None), ('autosync', 'bool', False), ('compat', 'select', '')])   # compat — 4d-3b, 1.1.0
         self.assertTrue(callable(m.fn('check')))
         for name in ('status', 'push', 'pull'):                  # обовʼязкові функції ролі `vcs` (каркас 4a)
             self.assertTrue(callable(m.fn(name)), name)

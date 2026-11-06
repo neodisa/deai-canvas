@@ -1,4 +1,4 @@
-{"api": 1, "id": "git-sync", "name": "Синхронізація з git", "version": "1.0.0",
+{"api": 1, "id": "git-sync", "name": "Синхронізація з git", "version": "1.1.0",
  "roles": ["vcs"],
  "settings": [
    {"key": "repo", "type": "text", "label": "Репозиторій (типовий для задач простору)"},
@@ -6,5 +6,7 @@
    {"key": "path", "type": "text", "label": "Тека в репозиторії", "default": "mockup/{task}"},
    {"key": "ssh_key", "type": "text", "label": "SSH-ключ (необовʼязково)"},
    {"key": "host_ip", "type": "text", "label": "IP сервера (необовʼязково)"},
-   {"key": "autosync", "type": "bool", "label": "Відправляти після кожної відповіді агента", "default": false}
+   {"key": "autosync", "type": "bool", "label": "Відправляти після кожної відповіді агента", "default": false},
+   {"key": "compat", "type": "select", "label": "Сумісність (⚠ зміна значення на живому просторі відриває наявні дзеркала: теки й тексти інші)", "required": false, "default": "",
+    "options": [{"value": "", "label": "Немає"}, {"value": "design-canvas", "label": "design-canvas (ЛІГА): плоскі дзеркала, тексти й підпис 0.7.0"}]}
  ]}

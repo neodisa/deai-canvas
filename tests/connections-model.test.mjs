@@ -496,7 +496,7 @@ test("git-sync: назва, опис і шість полів — ключами
   assert.equal(b.desc, "cnModGitDesc");
   assert.deepEqual(b.fields, {
     repo: "cnFieldGitRepo", branch: "cnFieldGitBranch", path: "cnFieldGitPath",
-    ssh_key: "cnFieldGitSshKey", host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync",
+    ssh_key: "cnFieldGitSshKey", host_ip: "cnFieldGitHostIp", autosync: "cnFieldGitAutosync", compat: "cnFieldGitCompat", // compat — 4d-3b
   });
   const manifest = JSON.parse(readFileSync(new URL("../app/modules/git-sync/module.json", import.meta.url), "utf8"));
   assert.deepEqual(Object.keys(b.fields).sort(), manifest.settings.map((x) => x.key).sort(),

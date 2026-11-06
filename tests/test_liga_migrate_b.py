@@ -697,5 +697,373 @@ class ChannelGuard(unittest.TestCase):
                             for n in ast.walk(sync)), 'ключ лічильника рахує виклик channel_of(...)')
 
 
+# ------------------------------------------------------------------------------ Task 3: vcs
+
+VCS_ID = 'git-sync'
+DC = 'design-canvas'
+
+
+class _VcsStand(_ChanStand):
+    """Стенд `vcs`: ЛІГА з явним записом `git-sync` (як його пише міграція: `shared_state`, `autosync: true`) із `compat` чи без."""
+
+    def vstand(self, compat=DC, autosync=True, extra=None):
+        self.n += 1
+        rig, space, cfg = self.mb.liga(self.tmp, 'v%d' % self.n)
+        settings = {'branch': 'main', 'path': 'mockup/{task}', 'autosync': autosync}
+        if compat:
+            settings['compat'] = compat
+        settings.update(extra or {})
+        self.mb._write(os.path.join(rig.space_dir, 'space.json'),
+                       {'modules': {VCS_ID: {'enabled': True, 'shared_state': True, 'settings': settings}}})
+        return rig, space, cfg
+
+    def provider_in(self, rig, mirrors_env):
+        """`vcs_provider()` у стенді; `DC_MIRRORS_DIR` — як у `mirrors_env` (порожньо = НЕ виставлено, запасний `<ROOT>/.mirrors`)."""
+        with self.mock.patch.dict(os.environ, {'DEAI_HOME': rig.deai, 'HOME': rig.home}):
+            with self.mock.patch.object(self.spaces, 'legacy_tasks_file', lambda: rig.tasks_path):
+                with self.spaces.request_space(self.mb.SPACE_ID):
+                    os.environ.pop('DC_MIRRORS_DIR', None)
+                    os.environ.update(mirrors_env)
+                    self.dm.reset_caches()
+                    try:
+                        return self.serve.vcs_provider()
+                    finally:
+                        self.dm.reset_caches()
+
+    def sections(self, rig, cfg, space):
+        """Ті самі секції, що знімає `make_before_4d3b.vcs`, але з явним записом: → словник, санітизований як знімок."""
+        mb, serve, dm = self.mb, self.serve, self.dm
+        net = mb.NoNet()
+        out = {}
+        with mb._stack(rig, mb._env_extra(rig), self.mock.patch.object(serve.urllib.request, 'urlopen', net)):
+            dm.reset_caches()
+            out['provider'] = mb._vcs_ctx(serve, rig)
+            v = serve.vcs_provider()
+            out['mirrors'] = mb._mirrors(serve, cfg, rig, v)
+            out['texts'] = mb._texts(serve, cfg, rig, v)
+            out['mirrors_base'] = mb.rel(serve._mirrors_base(), rig.home)
+            dm.reset_caches()
+        out['form'] = mb._form(rig)
+        out['urlopen_calls'] = net.calls
+        return mb.scrub(out, rig.home)
+
+
+class VcsCompat(_VcsStand):
+    """Налаштування `compat` модуля `git-sync` (1.1.0) і `ctx`, який ядро збирає для запису з `compat == "design-canvas"`."""
+
+    def test_manifest_declares_compat_select(self):
+        with open(os.path.join(os.path.dirname(_HERE), 'app', 'modules', VCS_ID, 'module.json'), encoding='utf-8') as f:
+            man = json.load(f)
+        self.assertEqual(man['version'], '1.1.0')
+        s = {x['key']: x for x in man['settings']}
+        c = s['compat']
+        self.assertEqual((c['type'], c['required'], c['default']), ('select', False, ''))
+        self.assertEqual([o['value'] for o in c['options']], ['', DC])
+        self.assertIn('відрив', c['label'], 'підпис застерігає, що зміна відриває наявні дзеркала')
+        self.assertEqual(list(s), ['repo', 'branch', 'path', 'ssh_key', 'host_ip', 'autosync', 'compat'], 'новий ключ — останнім')
+
+    def test_catalog_module_carries_it_and_rejects_unknown_values(self):
+        m = self.dm.catalog()[VCS_ID]
+        self.assertEqual(m.version, '1.1.0')
+        space = {'id': 'sp1', 'path': '', 'integrations': False}
+        self.assertEqual(self.dm.resolve_settings(space, m, {'compat': DC})['compat'], DC)
+        self.assertEqual(self.dm.resolve_settings(space, m, {})['compat'], '')
+        with self.assertRaises(self.dm.ModuleError) as cm:
+            self.dm.resolve_settings(space, m, {'compat': 'zzz'})
+        self.assertEqual(cm.exception.code, 'bad-settings')
+
+    def test_compat_overlays_flat_mirrors_on_the_module_ctx(self):
+        rig, _sp, _cfg = self.vstand()
+        mirrors = os.path.join(self.tmp, 'mirrors-x')
+        for env in ({'DC_MIRRORS_DIR': mirrors}, {}):
+            with self.subTest(env=env):
+                mod, ctx, legacy = self.provider_in(rig, env)
+                self.assertEqual(mod.id, VCS_ID)
+                self.assertIs(legacy, True)
+                self.assertIs(ctx['mirror_flat'], True)
+                self.assertEqual(ctx['cache_dir'], mirrors if env else os.path.join(self.serve.ROOT, '.mirrors'))
+                self.assertEqual({k: ctx['settings'][k] for k in ('branch', 'path', 'autosync')},
+                                 {'branch': 'main', 'path': 'mockup/{task}', 'autosync': True})
+                self.assertEqual(ctx['space']['id'], self.mb.SPACE_ID)
+
+    def test_without_compat_the_ctx_is_the_framework_one(self):
+        rig, _sp, _cfg = self.vstand(compat=None)
+        mod, ctx, legacy = self.provider_in(rig, {'DC_MIRRORS_DIR': os.path.join(self.tmp, 'm')})
+        self.assertIs(legacy, False)
+        self.assertNotIn('mirror_flat', ctx)
+        self.assertEqual(ctx['cache_dir'], os.path.join(rig.deai, 'cache', self.mb.SPACE_ID, VCS_ID))
+
+    def test_mirrors_fallback_is_shared_by_both_paths(self):
+        """Відгук Task 1: запасний `<ROOT>/.mirrors` (`DC_MIRRORS_DIR` не виставлено) НЕ змінився і спільний для неявного шляху,
+        `_vcs_legacy_ctx` і накладки `compat`."""
+        want = os.path.join(self.serve.ROOT, '.mirrors')
+        with self.mock.patch.dict(os.environ, {'DEAI_HOME': os.path.join(self.tmp, 'd'), 'HOME': self.tmp}):
+            os.environ.pop('DC_MIRRORS_DIR', None)
+            self.assertEqual(self.serve._mirrors_base(), want)
+            self.assertEqual(self.serve._vcs_legacy_ctx()['cache_dir'], want)
+            self.assertEqual(self.serve._flat_mirror_overlay(), {'mirror_flat': True, 'cache_dir': want})
+            os.environ['DC_MIRRORS_DIR'] = '/x/override'
+            self.assertEqual(self.serve._flat_mirror_overlay(), {'mirror_flat': True, 'cache_dir': '/x/override'})
+            self.assertEqual(self.serve._vcs_legacy_ctx()['cache_dir'], '/x/override')
+        rig, _sp, _cfg = self.vstand()
+        implicit_rig = self.mb.liga(self.tmp, 'imp')[0]
+        self.assertEqual(self.provider_in(rig, {})[1]['cache_dir'], want)
+        self.assertEqual(self.provider_in(implicit_rig, {})[1]['cache_dir'], want)
+
+    def test_both_paths_take_the_overlay_from_one_helper(self):
+        with open(os.path.join(os.path.dirname(_HERE), 'app', 'serve.py'), encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        for name in ('_vcs_legacy_ctx', 'vcs_provider'):
+            calls = [c.func.id for c in ast.walk(fns[name]) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
+            self.assertIn('_flat_mirror_overlay', calls, name)
+        for name in ('_vcs_legacy_ctx', 'vcs_provider'):
+            consts = [k.value for c in ast.walk(fns[name]) if isinstance(c, ast.Dict) for k in c.keys
+                      if isinstance(k, ast.Constant) and k.value in ('mirror_flat', 'cache_dir')]
+            self.assertEqual(consts, [], '%s: накладка живе лише в _flat_mirror_overlay' % name)
+
+    def test_explicit_compat_record_equals_the_0_17_snapshot(self):
+        """Запис `git-sync{compat: design-canvas}` дає РІВНО знімок 0.17.0: дзеркала, тексти всіх споживачів, прапорці форми."""
+        with open(BEFORE, encoding='utf-8') as f:
+            snap = json.load(f)['vcs']
+        rig, space, cfg = self.vstand()
+        got = self.sections(rig, cfg, space)
+        self.assertEqual(got['provider']['module'], VCS_ID)
+        self.assertEqual(got['provider']['provider'], 'Module', 'явний запис, а не неявний постачальник')
+        self.assertIs(got['provider']['legacy'], True)
+        self.assertEqual(got['mirrors'], snap['mirrors'])
+        self.assertEqual(got['mirrors_base'], snap['mirrors_base'])
+        self.assertEqual(got['texts'], snap['texts'])
+        ctx, want = got['provider']['ctx'], snap['provider']['ctx']
+        for k in ('cache_dir', 'mirror_flat'):
+            self.assertEqual(ctx[k], want[k], k)
+        self.assertEqual({k: ctx['settings'][k] for k in ('branch', 'path', 'autosync')}, want['settings'])
+        m, wm = dict(got['form']['model']), dict(snap['form']['model'])
+        keys, wkeys = m.pop('space_keys'), wm.pop('space_keys')
+        self.assertEqual(m, wm, 'прапорці форми «Нова задача» й підписи — як у ЛІГИ 0.17')
+        self.assertEqual(sorted(keys), sorted(wkeys + ['compat']), 'єдина різниця обʼєкта простору — ключ compat')
+        self.assertEqual(got['form']['space_row']['compat'], {'vcs': DC})
+        self.assertEqual(got['form']['capabilities']['vcs'], VCS_ID)
+        self.assertEqual(got['urlopen_calls'], 0)
+
+    def test_without_compat_texts_and_mirrors_are_neutral(self):
+        """Контроль: той самий запис БЕЗ `compat` — інші тексти, інша тека дзеркал, форма з полем «Репозиторій»."""
+        with open(BEFORE, encoding='utf-8') as f:
+            snap = json.load(f)['vcs']
+        rig, space, cfg = self.vstand(compat=None)
+        got = self.sections(rig, cfg, space)
+        self.assertIs(got['provider']['legacy'], False)
+        self.assertNotIn('mirror_flat', got['provider']['ctx'])
+        self.assertNotEqual(got['mirrors'], snap['mirrors'])
+        self.assertNotEqual(got['texts'], snap['texts'])
+        self.assertTrue(all(s.startswith('deai: sync') for s in got['texts']['autosync']['push_subjects']))
+        self.assertTrue(all(m.startswith('it1: ') and 'design-canvas' not in m for m in got['texts']['autosync']['commit_messages']))
+        self.assertNotIn('GitLab', json.dumps(got['texts']['pull']['notes'], ensure_ascii=False))
+        self.assertNotIn('compat', got['form']['space_row'])
+        self.assertIs(got['form']['model']['is_legacy_vcs'], False)
+        self.assertIs(got['form']['model']['with_repo'], True)
+
+
+class VcsLegacyTexts(_VcsStand):
+    """ЄДИНИЙ предикат `serve.vcs_legacy_texts(prov, space)` і те, що `vcs_provider` кладе третім елементом."""
+
+    def setUp(self):
+        super().setUp()
+        self.builtin = self.dm.catalog()[VCS_ID]
+        self.space = {'id': 'sp1', 'path': os.path.join(self.tmp, 'sp1'), 'integrations': True}
+        os.makedirs(self.space['path'])
+
+    def write(self, settings, **extra):
+        self.mb._write(os.path.join(self.space['path'], 'space.json'),
+                       {'modules': {VCS_ID: {'enabled': True, 'settings': settings, **extra}}})
+
+    def test_matrix(self):
+        pred = self.serve.vcs_legacy_texts
+        self.assertIs(pred(self.implicit.for_role('vcs'), self.space), True, 'неявний постачальник')
+        self.assertIs(pred(self.implicit.for_role('vcs'), None), True)
+        self.write({'compat': DC})
+        self.assertIs(pred(self.builtin, self.space), True)
+        self.write({})
+        self.assertIs(pred(self.builtin, self.space), False)
+        self.write({'compat': ''})
+        self.assertIs(pred(self.builtin, self.space), False)
+
+    def test_own_module_with_the_same_setting_is_not_legacy(self):
+        """Поправка 3: свій модуль простору міг оголосити власне `compat`; рівно як і інший вбудований модуль."""
+        self.write({'compat': DC})
+        own = self.mock.Mock(spec=self.dm.Module)
+        own.id, own.origin = VCS_ID, 'space'
+        self.assertIs(self.serve.vcs_legacy_texts(own, self.space), False)
+        other = self.mock.Mock(spec=self.dm.Module)
+        other.id, other.origin = 'supabase-dashboard', 'builtin'
+        self.mb._write(os.path.join(self.space['path'], 'space.json'),
+                       {'modules': {'supabase-dashboard': {'enabled': True, 'settings': {'compat': DC}}}})
+        self.assertIs(self.serve.vcs_legacy_texts(other, self.space), False)
+
+    def test_predicate_is_total_on_unreadable_space_json(self):
+        with open(os.path.join(self.space['path'], 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        self.assertIs(self.serve.vcs_legacy_texts(self.builtin, self.space), False)
+        self.assertIs(self.serve.vcs_legacy_texts(self.builtin, {'id': 'zz', 'path': '/nope-x', 'integrations': False}), False)
+
+    def test_provider_computes_it_once_and_puts_it_third(self):
+        real = self.serve.vcs_legacy_texts
+        self.n += 1
+        implicit_rig = self.mb.liga(self.tmp, 'q%d' % self.n)[0]
+        cases = (('module-compat', self.vstand(compat=DC)[0], True), ('module-plain', self.vstand(compat=None)[0], False),
+                 ('implicit', implicit_rig, True))
+        for tag, rig, want in cases:
+            calls = []
+
+            def counted(prov, space, calls=calls):
+                calls.append(type(prov).__name__)
+                return real(prov, space)
+            with self.mock.patch.object(self.serve, 'vcs_legacy_texts', counted):
+                v = self.provider_in(rig, {'DC_MIRRORS_DIR': os.path.join(self.tmp, 'mm')})
+            self.assertEqual(len(calls), 1, tag)
+            self.assertIs(v[2], want, tag)
+
+    def test_consumers_read_the_third_element_not_the_provider_type(self):
+        """Усі споживачі текстів дають слова 0.17 для вбудованого `git-sync` з `compat` (повний знімок — `VcsCompat`) і нейтральні без
+        нього; тут — стрижневий: тема коміту/автокомміт/підпис, кожен окремо з готовим `v = (module, ctx, legacy)`."""
+        mb, serve, dm = self.mb, self.serve, self.dm
+        for compat, want_legacy in ((DC, True), (None, False)):
+            rig, _sp, cfg = self.vstand(compat=compat)
+            with mb._stack(rig, mb._env_extra(rig)):
+                dm.reset_caches()
+                v = serve.vcs_provider()
+                self.assertIs(v[2], want_legacy)
+                task = cfg['tasks']['a-1']
+                gl = serve.vcs_target(cfg, 'a-1', task, v[1].get('settings') or {})
+                seen, rec = [], mb.Rec({'push': mb._push_answer([]), 'status': {'behind': 0, 'behind_path': 0, 'unpushed': 0,
+                                                                                  'on_remote': True, 'web': None, 'label': 'Example'}})
+                with self.mock.patch.object(dm, 'call', rec):
+                    st = serve.gitlab_status(task, gl, {'iterations': [{'id': 'it1'}]}, 'it1', vcs=v)
+                self.assertEqual(st.get('label'), 'GitLab' if want_legacy else 'Example', compat)
+                dm.reset_caches()
+
+
+class TextPredicateGuard(unittest.TestCase):
+    """AST: у споживачах текстів жодного `isinstance(…, Implicit)` — «ЛІГА» (легасі-тексти) читається лише з `vcs_legacy_texts`
+    (урок 4d-3a: не прирівнювати ЛІГУ до «неявного постачальника»)."""
+
+    CONSUMERS = ('gitlab_sync', 'gitlab_status', 'autosync', 'gitlab_pull', '_task_new_write')
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(os.path.dirname(_HERE), 'app', 'serve.py'), encoding='utf-8') as f:
+            cls.tree = ast.parse(f.read())
+
+    @staticmethod
+    def implicit_checks(node):
+        out = []
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'isinstance' and len(n.args) == 2:
+                second = ast.dump(n.args[1])
+                if 'Implicit' in second:
+                    out.append(n.lineno)
+        return out
+
+    def fn(self, name, cls=None):
+        scope = self.tree.body
+        if cls:
+            scope = next(n for n in scope if isinstance(n, ast.ClassDef) and n.name == cls).body
+        return next(n for n in scope if isinstance(n, ast.FunctionDef) and n.name == name)
+
+    def test_consumers_do_not_test_the_provider_type(self):
+        bad = {n: self.implicit_checks(self.fn(n)) for n in self.CONSUMERS}
+        bad['ProjectComments.channel'] = self.implicit_checks(self.fn('channel', 'ProjectComments'))
+        self.assertEqual({k: v for k, v in bad.items() if v}, {})
+
+    def test_predicate_lives_in_one_place(self):
+        pred = self.fn('vcs_legacy_texts')
+        self.assertTrue(self.implicit_checks(pred), 'єдине місце, де тип постачальника впливає на тексти')
+        self.assertEqual([self.fn(n) for n in ('vcs_provider',)].count(None), 0)
+        calls = [c for c in ast.walk(self.fn('vcs_provider'))
+                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == 'vcs_legacy_texts']
+        self.assertEqual(len(calls), 2, 'по одному виклику на гілку (Implicit / Module); кожна гілка — рівно один')
+
+    def test_guard_sees_a_planted_check(self):
+        planted = ast.parse('def f(v):\n    return isinstance(v[0], implicit.Implicit)\n')
+        self.assertEqual(self.implicit_checks(planted), [2])
+        clean = ast.parse('def f(v):\n    return isinstance(v, dict)\n')
+        self.assertEqual(self.implicit_checks(clean), [])
+
+
+class SpaceCompatKey(_VcsStand):
+    """Ключ `compat` обʼєкта простору (`space_view`, `spaces_listing`): лише коли явний вбудований модуль має непорожнє `compat`."""
+
+    def views(self, rig, sp):
+        with self.pinned(rig):
+            self.dm.reset_caches()
+            try:
+                view = self.serve.space_view(sp)
+                row = next(s for s in self.serve.spaces_listing()['spaces'] if s['id'] == sp['id'])
+            finally:
+                self.dm.reset_caches()
+        return view, row
+
+    def write_both(self, rig, vcs_compat=DC, comments_compat=LAYER):
+        mods = {}
+        vs = {'autosync': True}
+        if vcs_compat:
+            vs['compat'] = vcs_compat
+        mods[VCS_ID] = {'enabled': True, 'shared_state': True, 'settings': vs}
+        cs = {'url': 'https://sb.example.com'}
+        if comments_compat:
+            cs['compat'] = comments_compat
+        mods[COMMENTS_ID] = {'enabled': True, 'shared_state': True, 'settings': cs}
+        self.mb._write(os.path.join(rig.space_dir, 'space.json'), {'modules': mods})
+        self.mb._write(os.path.join(rig.deai, 'secrets.json'), {self.mb.SPACE_ID: {COMMENTS_ID: {'key': 'sb_chan_key_alpha'}}})
+
+    def test_both_roles_present_when_set(self):
+        rig, sp, _cfg = self.mb.liga(self.tmp, 'k1')
+        self.write_both(rig)
+        view, row = self.views(rig, sp)
+        for o in (view, row):
+            self.assertEqual(o['compat'], {'comments': LAYER, 'vcs': DC})
+            self.assertEqual(o['capabilities']['vcs'], VCS_ID)
+            self.assertEqual(o['capabilities']['comments'], COMMENTS_ID)
+
+    def test_key_absent_when_empty(self):
+        rig, sp, _cfg = self.mb.liga(self.tmp, 'k2')
+        self.write_both(rig, vcs_compat=None, comments_compat=None)
+        view, row = self.views(rig, sp)
+        for o in (view, row):
+            self.assertNotIn('compat', o)
+            self.assertEqual(o['capabilities']['vcs'], VCS_ID)
+
+    def test_one_role_only(self):
+        rig, sp, _cfg = self.mb.liga(self.tmp, 'k3')
+        self.write_both(rig, vcs_compat=DC, comments_compat=None)
+        view, row = self.views(rig, sp)
+        self.assertEqual(view['compat'], {'vcs': DC})
+        self.assertEqual(row['compat'], {'vcs': DC})
+
+    def test_implicit_liga_has_no_key_and_capabilities_stay(self):
+        rig, sp, _cfg = self.mb.liga(self.tmp, 'k4')
+        view, row = self.views(rig, sp)
+        for o in (view, row):
+            self.assertNotIn('compat', o)
+            self.assertEqual(o['capabilities']['vcs'], 'legacy')
+
+    def test_compat_view_is_total_and_keyed_by_capabilities(self):
+        dm = self.dm
+        sp = {'id': 'zz', 'path': os.path.join(self.tmp, 'nope'), 'integrations': False}
+        self.assertEqual(dm.compat_view(sp, {'vcs': VCS_ID}), {})
+        self.assertEqual(dm.compat_view(None, None), {})
+        self.assertEqual(dm.compat_view(sp, {'vcs': 'legacy', 'comments': None}), {})
+        d = os.path.join(self.tmp, 'cv')
+        os.makedirs(d)
+        sp2 = {'id': 'cv', 'path': d, 'integrations': False}
+        self.mb._write(os.path.join(d, 'space.json'), {'modules': {VCS_ID: {'enabled': True, 'settings': {'compat': DC}}}})
+        self.assertEqual(dm.compat_view(sp2, {'vcs': VCS_ID}), {'vcs': DC})
+        self.assertEqual(dm.compat_view(sp2, {'vcs': 'other-vcs'}), {}, 'ролі веде інший модуль — ключа нема')
+        self.assertEqual(dm.compat_view(sp2, {'vcs': 'legacy'}), {})
+        with open(os.path.join(d, 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        self.assertEqual(dm.compat_view(sp2, {'vcs': VCS_ID}), {})
+
+
 if __name__ == '__main__':
     unittest.main()
