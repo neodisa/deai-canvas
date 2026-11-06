@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.18.0] — unreleased
+## [0.18.0] — 06.11.2026
 
 Stage 4d-3b: the second of the three steps that turn the LIGA space into an ordinary one. The roles `comments` and `vcs` of LIGA
 become explicit built-in modules (`supabase-comments`, `git-sync`) through a **second migration step, `liga-4d3b`**, and the
