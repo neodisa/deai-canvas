@@ -3,6 +3,7 @@
 Тут: знімок поведінки 0.18.0 (`Before4d3cShape`, Task 1); предикат, `compat`, крок `liga-4d3c`, паритет і три кроки додаються
 наступними задачами. Спека `docs/superpowers/specs/2026-11-06-liga-migration-c-design.md`.
 """
+import ast
 import json
 import os
 import re
@@ -17,8 +18,13 @@ BEFORE = os.path.join(_HERE, 'fixtures', 'liga-migration', 'before-4d3c.json')
 for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+import deai_modules as dm  # noqa: E402
+import implicit  # noqa: E402
+import serve  # noqa: E402
+import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 from make_before_4d3c import SB_KEY, SB_URL  # noqa: E402  (вигадані значення — ті самі, що в генераторі)
+from test_publish_module import DispatchWorld, _Stub, _write_json  # noqa: E402  (світ «два простори + сервер + розтяжка»)
 
 _REAL = None
 
@@ -290,6 +296,315 @@ class Before4d3cShape(unittest.TestCase):
         self.assertEqual(a['api_spaces']['capabilities']['comments'], 'supabase-comments')
         self.assertEqual(a['api_spaces']['capabilities']['vcs'], 'git-sync')
         self.assertEqual(u['api_spaces']['capabilities']['comments'], 'legacy')
+
+
+# ---------------------------------------------------------------------------------------------------- Task 2: предикат
+
+VID = 'vercel-publish'
+DC = 'design-canvas'
+
+
+class _PubWorld(DispatchWorld):
+    """Світ `DispatchWorld` (шар просторів увімкнено; `off` без інтеграцій, `on` з ними = «ЛІГА»; сервер, розтяжка, шпигуни) +
+    помічники для явного запису `vercel-publish` у `space.json`. Запис пишемо напряму (`compat` у маніфесті зʼявиться лише в
+    Task 3, тож `write_module_state` його б відхилив); `compat_of` читає саме `space.json`."""
+
+    def write_modules(self, sp, mods):
+        _write_json(os.path.join(sp['path'], 'space.json'), {'name': 'On', 'color': 'space-1', 'modules': mods})
+        dm.reset_caches()
+
+    def vercel(self, compat=DC, sp=None, extra=None):
+        """Явно ввімкнений `vercel-publish` із `compat` (`None` — без ключа) у просторі `sp` (типово `on`)."""
+        settings = {} if compat is None else {'compat': compat}
+        self.write_modules(sp or self.on, {VID: {'enabled': True, 'settings': settings}, **(extra or {})})
+
+    def prov(self, sid='on'):
+        with spaces.request_space(sid):
+            return dm.provider('publish')
+
+    def fake(self, mid, origin='builtin'):
+        """Підроблений `Module` ролі `publish` (власний id/origin): каркас такого б не віддав, а предикат мусить відмовити сам."""
+        return dm.Module(mid, roles=['publish'], origin=origin)
+
+
+class PublishLegacyPath(_PubWorld):
+    """`deai_modules.publish_legacy_path(prov, space=None)`: ТОТАЛЬНИЙ предикат «публікація йде шляхом ЛІГИ»."""
+
+    def test_constant(self):
+        self.assertEqual(dm.PUBLISH_MODULE, VID)
+        self.assertEqual(dm.COMPAT_DESIGN_CANVAS, DC)
+
+    def test_implicit_is_the_league_path(self):
+        prov = self.prov()
+        self.assertIsInstance(prov, implicit.Implicit)
+        self.assertIs(dm.publish_legacy_path(prov), True)
+        self.assertIs(dm.publish_legacy_path(prov, self.on), True)
+
+    def test_builtin_vercel_with_compat_is_the_league_path(self):
+        self.vercel(DC)
+        prov = self.prov()
+        self.assertEqual((prov.id, prov.origin), (VID, 'builtin'))
+        self.assertIs(dm.publish_legacy_path(prov, self.on), True)
+
+    def test_builtin_vercel_without_the_compat_is_not(self):
+        for compat in (None, '', 'comment-layer', 'DESIGN-CANVAS', 123, ['design-canvas']):
+            with self.subTest(compat=compat):
+                self.vercel(compat)
+                prov = self.prov()
+                self.assertEqual(prov.id, VID)
+                self.assertIs(dm.publish_legacy_path(prov, self.on), False)
+
+    def test_a_space_owned_module_with_the_same_id_and_compat_is_not(self):
+        self.vercel(DC)
+        self.assertIs(dm.publish_legacy_path(self.fake(VID, origin='space'), self.on), False)
+
+    def test_another_builtin_module_with_a_compat_is_not(self):
+        # `compat` чужої ролі чи чужого модуля (4d-3b: comments/vcs мають СВОЄ `compat`) не робить публікацію «ЛІГОЮ»
+        extra = {mid: {'enabled': True, 'settings': {'compat': DC}}
+                 for mid in ('static-publish', 'supabase-comments', 'git-sync')}
+        self.write_modules(self.on, {VID: {'enabled': True, 'settings': {}}, **extra})
+        for mid in extra:
+            with self.subTest(mid=mid):
+                self.assertIs(dm.publish_legacy_path(self.fake(mid), self.on), False)
+
+    def test_none_and_foreign_objects_are_not(self):
+        for prov in (None, 'legacy', {}, object(), True):
+            with self.subTest(prov=prov):
+                self.assertIs(dm.publish_legacy_path(prov, self.on), False)
+
+    def test_no_space_means_the_active_space_exactly_once(self):
+        self.vercel(DC)
+        prov = self.prov()
+        with spaces.request_space('on'):
+            with mock.patch.object(dm.spaces, 'active_space', wraps=spaces.active_space) as active:
+                self.assertIs(dm.publish_legacy_path(prov), True)
+        self.assertEqual(active.call_count, 1)
+        with spaces.request_space('on'):
+            with mock.patch.object(dm.spaces, 'active_space', wraps=spaces.active_space) as active:
+                self.assertIs(dm.publish_legacy_path(prov, self.on), True)
+        self.assertEqual(active.call_count, 0, 'явно переданий простір не підміняємо активним')
+
+    def test_the_active_space_decides_not_another_one(self):
+        # `off` без запису, `on` із записом: рішення — за простором запиту
+        self.vercel(DC)
+        prov = self.prov()
+        with spaces.request_space('off'):
+            self.assertIs(dm.publish_legacy_path(prov), False)
+        with spaces.request_space('on'):
+            self.assertIs(dm.publish_legacy_path(prov), True)
+
+    def test_total_on_any_failure(self):
+        self.vercel(DC)
+        prov = self.prov()
+        with mock.patch.object(dm, 'compat_of', side_effect=RuntimeError('boom')):
+            self.assertIs(dm.publish_legacy_path(prov, self.on), False)
+        with mock.patch.object(dm.spaces, 'active_space', side_effect=OSError('boom')):
+            self.assertIs(dm.publish_legacy_path(prov), False)
+        with open(os.path.join(self.on_path, 'space.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{ це не json')
+        dm.reset_caches()
+        self.assertIs(dm.publish_legacy_path(prov, self.on), False)
+        self.assertIs(dm.publish_legacy_path(prov, {'id': 'nope', 'path': os.path.join(self.tmp, 'nope')}), False)
+
+
+class PublishModuleFilter(_PubWorld):
+    """`publish_module(space)` не віддає `Module`, коли публікація йде шляхом ЛІГИ: обидва споживачі (`task_preview_gate`,
+    `task_publish_share`) лишаються без змін."""
+
+    def pm(self, sp, sid='on'):
+        with spaces.request_space(sid):
+            return dm.publish_module(sp)
+
+    def test_implicit_is_none(self):
+        self.assertIsNone(self.pm(self.on))
+
+    def test_migrated_record_is_none(self):
+        self.vercel(DC)
+        self.assertIsNone(self.pm(self.on))
+
+    def test_plain_vercel_is_the_module(self):
+        self.vercel(None)
+        mod = self.pm(self.on)
+        self.assertIsNotNone(mod)
+        self.assertEqual((mod.id, mod.origin), (VID, 'builtin'))
+
+    def test_the_filter_is_on_publish_module_not_on_the_capability(self):
+        # роль `publish` у `capabilities` і далі називає модуль: це відповідь «хто веде», а не «шлях ЛІГИ»
+        self.vercel(DC)
+        with spaces.request_space('on'):
+            self.assertEqual(dm.capabilities(self.on)['publish'], VID)
+
+    def test_other_publishers_are_unaffected(self):
+        mod = self.pm(self.off, 'off')
+        self.assertIsNotNone(mod)
+        self.assertEqual(mod.id, 'static-publish')
+
+
+class PublishConsumers(_PubWorld):
+    """Споживачі предиката на справжньому `Handler`/сервері: `_publish`, `_preview_password`, `task_preview_gate`, `task_publish_share`."""
+
+    LEGACY_RES = {'url': 'https://pv-12345678.vercel.app', 'deploy_url': 'https://pv-12345678-abc.vercel.app',
+                  'verified': True, 'state': {'scope': 'team_x'}}
+
+    def setUp(self):
+        super().setUp()
+        self.spies['_publish_legacy_call'].return_value = dict(self.LEGACY_RES)
+        self.spies['_node_bin'].return_value = '/bin/npx'
+        patch = mock.patch.object(serve, 'publish_with_module')
+        self.module_spy = patch.start()
+        self.addCleanup(patch.stop)
+
+    def publish(self, payload=None, sid='on'):
+        stub = _Stub()
+        with spaces.request_space(sid):
+            serve.Handler._publish(stub, {} if payload is None else payload)
+        return stub
+
+    def build_mark(self):
+        with open(os.path.join(self.ty_dir, 'publish', 'manifest.json'), encoding='utf-8') as fh:
+            return json.load(fh).get('build')
+
+    def assert_league_branch(self):
+        stub = self.publish()
+        self.assertEqual(self.module_spy.call_count, 0, 'модуль-шлях кликано')
+        self.assertEqual(self.spies['_publish_legacy_call'].call_count, 1, 'гілка ЛІГИ не дійшла до деплою')
+        self.assertEqual(self.build_mark(), 'legacy')
+        status, body = stub.sent[0]
+        self.assertEqual((status, body['ok'], body['url']), (200, True, self.LEGACY_RES['url']))
+
+    def test_publish_implicit_takes_the_league_branch(self):
+        self.assert_league_branch()
+
+    def test_publish_migrated_record_takes_the_league_branch(self):
+        self.vercel(DC)
+        self.assert_league_branch()
+
+    def test_publish_plain_vercel_takes_the_module_path(self):
+        self.vercel(None)
+        stub = self.publish()
+        self.assertEqual(self.module_spy.call_count, 1)
+        self.assertEqual(self.module_spy.call_args[0][1].id, VID)
+        self.assertEqual(self.spies['_publish_legacy_call'].call_count, 0)
+        self.assertEqual(stub.sent, [])
+        self.assertFalse(os.path.exists(os.path.join(self.ty_dir, 'publish')), 'збірку ЛІГИ зроблено на шляху модуля')
+
+    def test_publish_without_a_provider_is_409(self):
+        dm.write_module_state(self.off, 'static-publish', enabled=False)
+        stub = self.publish(sid='off')
+        status, body = stub.sent[0]
+        self.assertEqual((status, body['code']), (409, 'no-publish-module'))
+        self.assertEqual(self.module_spy.call_count, 0)
+
+    def password(self, pw='abcd'):
+        return self.post('/api/preview-password', {'password': pw}, {'X-Canvas-Task': 'ty'})
+
+    def test_password_migrated_record_is_accepted(self):
+        self.vercel(DC)
+        st, body = self.password()
+        self.assertEqual((st, body['ok'], body['preview_password']), (200, True, 'abcd'), body)
+        with open(os.path.join(self.on_path, 'tasks.json'), encoding='utf-8') as fh:
+            self.assertEqual(json.load(fh)['tasks']['ty']['preview_password'], 'abcd')
+
+    def test_password_plain_vercel_is_refused(self):
+        self.vercel(None)
+        tasks = os.path.join(self.on_path, 'tasks.json')
+        with open(tasks, 'rb') as fh:
+            before = fh.read()
+        st, body = self.password()
+        self.assertEqual((st, body['code']), (409, 'integrations-off'), body)
+        with open(tasks, 'rb') as fh:
+            self.assertEqual(fh.read(), before, 'пароль ЛІГИ записано, хоч публікує модуль')
+
+    def test_password_with_a_provider_error_is_the_same_409(self):
+        # нечитабельний `space.json` у просторі З інтеграціями дає `Implicit` (як і було), тож `ModuleError` підставляємо напряму
+        with mock.patch.object(dm, 'provider', side_effect=dm.ModuleError('module-error')):
+            st, body = self.password()
+        self.assertEqual((st, body), (409, serve.integrations_off_body('публікація зʼявиться з модулями')))
+
+    def test_gate_state_follows_the_predicate(self):
+        task = {'title': 'T', 'dir': self.ty_dir}
+        for compat, want in ((DC, serve.preview_gate_state(task, '1100')), (None, dict(serve.MODULE_GATE_STATE))):
+            with self.subTest(compat=compat):
+                self.vercel(compat)
+                with spaces.request_space('on'):
+                    self.assertEqual(serve.task_preview_gate(task, '1100', self.on), want)
+        self.assertNotEqual(serve.preview_gate_state(task, '1100'), dict(serve.MODULE_GATE_STATE))
+
+    def test_share_fields_follow_the_predicate(self):
+        meta = {'publish_url': None}
+        self.vercel(DC)
+        with spaces.request_space('on'):
+            self.assertEqual(serve.task_publish_share(self.on, meta), {})
+        self.vercel(None)
+        with spaces.request_space('on'):
+            fields = serve.task_publish_share(self.on, meta)
+        self.assertIn('publish_gate', fields)
+
+
+class PublishGuard(unittest.TestCase):
+    """AST: рішення «публікація ЛІГИ» читається з ОДНОГО предиката (урок 4d-3a/3b: ЛІГА — запис реєстру, а не тип постачальника)."""
+
+    CONSUMERS = (('Handler', '_publish'), ('Handler', '_preview_password'), (None, 'task_preview_gate'),
+                 (None, 'task_publish_share'))
+
+    @classmethod
+    def setUpClass(cls):
+        app = os.path.join(os.path.dirname(_HERE), 'app')
+        with open(os.path.join(app, 'serve.py'), encoding='utf-8') as f:
+            cls.serve_tree = ast.parse(f.read())
+        with open(os.path.join(app, 'deai_modules.py'), encoding='utf-8') as f:
+            cls.dm_tree = ast.parse(f.read())
+
+    @staticmethod
+    def implicit_checks(node):
+        out = []
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'isinstance' and len(n.args) == 2:
+                if 'Implicit' in ast.dump(n.args[1]):
+                    out.append(n.lineno)
+        return out
+
+    @staticmethod
+    def calls(node, name):
+        out = []
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call):
+                f = n.func
+                if (isinstance(f, ast.Attribute) and f.attr == name) or (isinstance(f, ast.Name) and f.id == name):
+                    out.append(n.lineno)
+        return out
+
+    @staticmethod
+    def fn(tree, name, cls=None):
+        scope = tree.body
+        if cls:
+            scope = next(n for n in scope if isinstance(n, ast.ClassDef) and n.name == cls).body
+        return next(n for n in scope if isinstance(n, ast.FunctionDef) and n.name == name)
+
+    def test_consumers_do_not_test_the_provider_type(self):
+        bad = {name: self.implicit_checks(self.fn(self.serve_tree, name, cls)) for cls, name in self.CONSUMERS}
+        self.assertEqual({k: v for k, v in bad.items() if v}, {})
+
+    def test_the_two_handlers_ask_the_predicate(self):
+        for cls, name in self.CONSUMERS[:2]:
+            self.assertEqual(len(self.calls(self.fn(self.serve_tree, name, cls), 'publish_legacy_path')), 1, name)
+
+    def test_publish_module_is_called_from_exactly_two_places(self):
+        self.assertEqual(len(self.calls(self.serve_tree, 'publish_module')), 2)
+        for name in ('task_preview_gate', 'task_publish_share'):
+            self.assertEqual(len(self.calls(self.fn(self.serve_tree, name), 'publish_module')), 1, name)
+
+    def test_the_type_test_lives_in_the_predicate_only(self):
+        self.assertEqual(len(self.implicit_checks(self.fn(self.dm_tree, 'publish_legacy_path'))), 1)
+        self.assertEqual(self.implicit_checks(self.fn(self.dm_tree, 'publish_module')), [])
+
+    def test_guard_sees_a_planted_check(self):
+        planted = ast.parse('def f(v):\n    return isinstance(v, implicit.Implicit)\n')
+        self.assertEqual(self.implicit_checks(planted), [2])
+        clean = ast.parse('def f(v):\n    return isinstance(v, dict)\n')
+        self.assertEqual(self.implicit_checks(clean), [])
+        planted_call = ast.parse('def f(v):\n    return dm.publish_module(v)\n')
+        self.assertEqual(self.calls(planted_call, 'publish_module'), [2])
 
 
 if __name__ == '__main__':

@@ -1981,7 +1981,9 @@ def _capabilities_full(space):
 
 def publish_module(space):
     """Модуль, що ПУБЛІКУЄ в просторі запиту `space` (роль `publish`), або `None`. ТОТАЛЬНА: не кидає ніколи; `Implicit`,
-    `None`, `ModuleError`, збій відбитків — `None`. Рішення те саме, що `capabilities(space)['publish']`, і з ТИМ САМИМ кешем
+    шлях ЛІГИ (`publish_legacy_path`: вбудований `vercel-publish` із `compat == "design-canvas"`), `None`, `ModuleError`, збій
+    відбитків — `None` (обидва споживачі, `task_preview_gate` і `task_publish_share`, тому не міняються: для них публікація
+    ЛІГИ — не «модуль»). Рішення те саме, що `capabilities(space)['publish']`, і з ТИМ САМИМ кешем
     (`_capabilities_full`): `capabilities` зберігає поруч сирих постачальників, а назовні віддає `api_value`.
     Шар вимкнено чи простір запиту не зафіксовано — модулів нема (`None`) без читання реєстру й каталогу, як і в 0.15.0: у
     такому запиті `spaces.active_space()` міг би показати «поточний» простір реєстру, який запит не обирав."""
@@ -1989,9 +1991,30 @@ def publish_module(space):
         if not (space and spaces.layer_on() and spaces.request_space_id() is not None):
             return None
         p = _capabilities_full(space)[1].get('publish')
-        return p if isinstance(p, Module) else None
+        return p if isinstance(p, Module) and not publish_legacy_path(p, space) else None
     except Exception:  # noqa: BLE001 — тотальність
         return None
+
+
+#: Вбудований модуль публікації в Vercel (4b-1): його запис із `compat == "design-canvas"` — публікація ЛІГИ (4d-3c).
+PUBLISH_MODULE = 'vercel-publish'
+
+
+def publish_legacy_path(prov, space=None):
+    """ЄДИНА умова «публікація йде шляхом ЛІГИ» (проєкти `pv-…` і скоуп із `tasks.json`, пароль превʼю задачі/кореня/`1100`, гілка
+    `Handler._publish` для ЛІГИ): `Implicit` АБО вбудований `Module` `vercel-publish` із `compat == "design-canvas"` у `space.json`
+    простору `space` (`None` — `spaces.active_space()`). ТОТАЛЬНА: будь-який збій — `False`, не виняток.
+
+    ⛔ ЛІГА — запис реєстру, а не тип постачальника (урок 4d-3a/4d-3b): після міграції постачальник — звичайний `Module`, і
+    рішення читається лише звідси. Лише вбудований І саме цей id: свій модуль простору міг би оголосити власне `compat` з іншим
+    змістом, а `compat` інших модулів (`supabase-comments`, `git-sync`…) — про інші ролі."""
+    try:
+        if isinstance(prov, implicit.Implicit):
+            return True
+        return bool(isinstance(prov, Module) and getattr(prov, 'origin', 'builtin') == 'builtin' and prov.id == PUBLISH_MODULE
+                    and compat_of(space or spaces.active_space(), PUBLISH_MODULE) == COMPAT_DESIGN_CANVAS)
+    except Exception:  # noqa: BLE001 — тотальність: збій читання не ламає рішення про шлях публікації
+        return False
 
 
 # ------------------------------------------------------------------------------ роль `comments` (2b-2)

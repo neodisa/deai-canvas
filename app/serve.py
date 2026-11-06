@@ -4937,8 +4937,9 @@ def _publish_by_url(h, prov, payload, space, tid, task, its):
 
 
 def task_publish_share(space, meta):
-    """Поля `/api/task` для простору, де публікує модуль `publish_target: url`. Для неявного постачальника, `folder`-модуля і
-    простору без постачальника — `{}`.
+    """Поля `/api/task` для простору, де публікує модуль `publish_target: url`. Для неявного постачальника, шляху ЛІГИ
+    (`vercel-publish` із `compat == "design-canvas"`: `publish_module` дає `None`), `folder`-модуля і простору без
+    постачальника — `{}`.
 
     • `publish_gate` — чи превʼю ОПУБЛІКОВАНЕ з паролем. Коли є `publish_remote` ЦЬОГО модуля з тією самою адресою,
       що `publish_url` (збіг, див. нижче), — `publish_remote.gated`, тобто те, що справді вийшло (опубліковано без
@@ -4989,7 +4990,8 @@ MODULE_GATE_STATE = {'state': 'module', 'stale': 0, 'ungated': 0, 'inner_stale':
 def task_preview_gate(task, pw, space):
     """`preview_gate` для `/api/task`. Питаємо `deai_modules.capabilities` (ТОТАЛЬНА, не кидає), а не
     `provider`: зіпсований `space.json` не мусить гасити весь `/api/task`. Шар вимкнено чи простір запиту не
-    зафіксовано — модулів нема (як у `provider`: без читання реєстру й каталогу модулів)."""
+    зафіксовано — модулів нема (як у `provider`: без читання реєстру й каталогу модулів). Шлях ЛІГИ (`publish_module` → `None`,
+    у т.ч. мігрований `vercel-publish`) — звичайний стан гейта за паролем ЛІГИ."""
     if deai_modules.publish_module(space) is not None:
         return dict(MODULE_GATE_STATE)
     return preview_gate_state(task, pw)
@@ -7216,7 +7218,7 @@ class Handler(SimpleHTTPRequestHandler):
         # (секрет `password`), тож для простору, де публікує модуль чи не публікує ніхто, — та сама 409, що й була
         # без інтеграцій. Нечитабельний `space.json` (`ModuleError`) — теж «не ЛІГА», а не окрема помилка.
         try:
-            league = isinstance(deai_modules.provider('publish'), implicit.Implicit)
+            league = deai_modules.publish_legacy_path(deai_modules.provider('publish'))
         except deai_modules.ModuleError:
             league = False
         if not league:
@@ -8226,9 +8228,10 @@ class Handler(SimpleHTTPRequestHandler):
         сохраняется в iterations.json.
 
         Хто публікує, вирішує `deai_modules.provider('publish')` — ПЕРШИМ рядком, до збірки `publish/` (вона
-        `rmtree`-ить теку): неявний постачальник (`Implicit`) — цей шлях (простір з інтеграціями, шар вимкнено, простір запиту не
-        зафіксовано — інструменти ЛІГА й зовнішні заглушки обробника); `None` — 409 `no-publish-module`;
-        модуль — `publish_with_module` (локальна тека, нічого назовні). Лише `self._send_json`,
+        `rmtree`-ить теку): шлях ЛІГИ (`deai_modules.publish_legacy_path`: неявний постачальник `Implicit` — простір з
+        інтеграціями, шар вимкнено, простір запиту не зафіксовано, інструменти ЛІГА й зовнішні заглушки обробника — АБО
+        вбудований `vercel-publish` із `compat == "design-canvas"`) — цей шлях; `None` — 409 `no-publish-module`;
+        решта модулів — `publish_with_module` (локальна тека чи свій деплой). Лише `self._send_json`,
         `send_error`, `_current_task`, `_overview_sync`: зовнішні заглушки обробника мають лише їх, тож
         нові помічники — модульні функції.
 
@@ -8241,7 +8244,7 @@ class Handler(SimpleHTTPRequestHandler):
         if prov is None:
             self._send_json(no_publish_module_body(), status=409)
             return
-        if not isinstance(prov, implicit.Implicit):
+        if not deai_modules.publish_legacy_path(prov):
             publish_with_module(self, prov, payload)
             return
         tid, task = self._current_task()
