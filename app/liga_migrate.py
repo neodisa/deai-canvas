@@ -41,7 +41,7 @@ import implicit
 import install_config
 import spaces
 import tracks as tracks_core
-from atomic_io import TMP_SUFFIX, atomic_write_json
+from atomic_io import TMP_SUFFIX, atomic_write_json, fsync_path
 
 try:
     import fcntl
@@ -399,7 +399,7 @@ def _publisher_present(space, mods):
 
 #: 4d-4b: вісім «оригіналів» кореня `tasks.json` ЛІГИ і де лежить їхня копія. `kind`: `s` — налаштування запису, `k` — секрет запису.
 #: `copy` — крок Е сам кладе значення в запис, коли там порожньо (4d-3 це свідомо не копіював). Рядки — ТІ САМІ, що були в читачів рантайму
-#: (вони видалені: `install_config.{supabase,jira}_*`, `serve.preview_password`, `_vcs_ssh`); міграція — єдине місце, що їх ще знає.
+#: (їх приберуть у Task 11: `install_config.{supabase,jira}_*`, `serve.preview_password`, `_vcs_ssh` — поки що вони ще в коді); міграція — єдине місце, що знає ці рядки назавжди.
 SB_MODULES = ('supabase-dashboard', 'supabase-teams', 'supabase-comments')
 ORIGINALS = (
     ('supabase_url', SB_MODULES, 's', 'url', False),
@@ -434,8 +434,8 @@ def _effective(key, raw):
         s = raw.strip() if isinstance(raw, str) else ''
         return s if s and s.isprintable() else None
     if key == 'preview_password':
-        if isinstance(raw, bool):                            # `True` — не пароль (читач бачив би «True»): непридатне
-            return None
+        if isinstance(raw, bool) or (isinstance(raw, (int, float)) and not raw):
+            return None                                      # `True` — не пароль; `0`/`0.0`/`False` старий читач вважав ВІДСУТНІМ (→ 1100): непридатне
         v = str(raw) if isinstance(raw, (int, float)) else raw
         return v if isinstance(v, str) and v.strip() and _fits(v) else None
     return raw if isinstance(raw, str) and raw.strip() and _fits(raw) else None        # gitlab_ssh_key / gitlab_host_ip: як є
@@ -463,8 +463,8 @@ def _held(norm, secrets, sid, mid, kind, field):
 def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
     """ЧИСТИЙ розрахунок кроку Е (нічого не читає з диска): `{'copy_settings': {mid: {поле: значення}}, 'copy_secrets': {mid: {поле:
     значення}}, 'remove': [ключі], 'kept': [ключі], 'notes': [коди]}`. Правила (спека §1.1): нема в корені — мовчки; непридатне —
-    `unfit:<ключ>`; тримача нема — `no-record:<модуль>`; значення відмінне — `differs:<ключ>` (для `preview_password` — перезапис, Д4,
-    `overwrote:password`); порожнє й копіюємо — у план копії; збіг — у список видалення. Пара Supabase — лише разом: не всі три
+    `unfit:<ключ>`; тримача нема — `no-record:<модуль>`; значення відмінне — `differs:<ключ>` (і для `preview_password`: секрет, відмінний від
+    кореня, не перезаписується — рішення контролера 07.11.2026); порожнє й копіюємо — у план копії; збіг — у список видалення. Пара Supabase — лише разом: не всі три
     тримачі — `partial:supabase`, жоден із двох не видаляється. ⛔ Значень у виході НЕМАЄ нікуди, крім `copy_*` (їх пише запис)."""
     out = {'copy_settings': {}, 'copy_secrets': {}, 'copied': [], 'remove': [], 'kept': [], 'notes': []}
     notes = out['notes']
@@ -488,7 +488,7 @@ def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
             note('unfit:' + key)
             out['kept'].append(key)
             continue
-        if key in ('supabase_url', 'supabase_key') and sb_blocked:
+        if key in ('supabase_url', 'supabase_key') and sb_blocked:      # мертва оборона: той самий предикат, що й перевірка тримачів нижче
             out['kept'].append(key)
             continue
         holders = [m for m in mods_ if _holder_ready(norm, m, key)]
@@ -503,14 +503,10 @@ def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
             cur = _held(norm, secrets, sid, m, kind, field)
             if cur == eff:
                 continue
-            if cur is None and copyable:                    # порожньо — копіюємо
+            if cur in (None, '') and copyable:                  # порожньо — копіюємо
                 out['copy_secrets' if kind == 'k' else 'copy_settings'].setdefault(m, {})[field] = eff
                 out['copied'].append(key)
-            elif key == 'preview_password':                 # Д4: корінь був ЕФЕКТИВНИМ, секрет — інертним: перезапис
-                out['copy_secrets'].setdefault(m, {})[field] = eff
-                out['copied'].append(key)
-                note('overwrote:password')
-            else:
+            else:           # рішення контролера 07.11.2026 (замість Д4): секрет `password`, відмінний від кореня, НІКОЛИ не перезаписуємо
                 note('differs:' + key)
                 equal = False
         if equal:
@@ -1065,6 +1061,25 @@ def _secrets_writable():
     return (not os.path.exists(home) or os.access(home, os.W_OK)) and (not os.path.exists(p) or os.access(p, os.W_OK))
 
 
+def _space_writable(space_path):
+    """Чи можна писати `space.json` простору (тека — для тимчасового файла, сам файл — якщо є): перевірка ДО бекапу (як `_records_writable`)."""
+    sp = os.path.join(space_path, 'space.json')
+    return os.access(space_path, os.W_OK) and (not os.path.exists(sp) or os.access(sp, os.W_OK))
+
+
+def _durable_before_delete(space_path, stamp):
+    """Крок Е ВИДАЛЯЄ з кореня: до того копії (`secrets.json`, `space.json`) і файли бекапу мусять бути на пластині, інакше збій живлення
+    лишив би корінь без ключів, а копію — порожньою. Скидає файли й теки; збій — виняток (викликач: `abort-write`, нічого не видалено)."""
+    bdir = os.path.join(spaces.home(), 'backups', stamp)
+    paths = [deai_modules._secrets_path(), os.path.join(space_path, 'space.json')]
+    paths += [os.path.join(bdir, n) for n in sorted(os.listdir(bdir))]
+    for p in paths:
+        if os.path.isfile(p):
+            fsync_path(p)
+    for p in (bdir, space_path, os.path.dirname(deai_modules._secrets_path())):
+        fsync_path(p)
+
+
 def _merge_settings(space_path, patches):
     """Копії налаштувань у ПОТОЧНИЙ `space.json` під `WRITE_LOCK`: перечитуємо, кладемо лише відсутні/порожні ключі запису, що ще є; чужі
     правки (і запис, що зник) не чіпаємо — розбіжність побачить перевірка `abort-verify`."""
@@ -1130,7 +1145,7 @@ def _commit_originals(sid, space_path, planned_remove):
                 del cfg[k]
             shutil.copy2(path, path + '.bak')
             if _file_sig(path) == before:
-                atomic_write_json(path, cfg)
+                atomic_write_json(path, cfg, fsync=True)     # єдиний видаляючий запис кроку Е: довговічно (не `_commit_records`)
                 return todo
         raise OSError('tasks file keeps changing')
 
@@ -1147,6 +1162,10 @@ def _run_originals(home, step, p, space_path):
         info = _info(p, status='abort-secrets', reason=_RUN_REASONS['abort-secrets'])
         _write_last(info, step)
         return 'abort-secrets', info
+    if not _space_writable(space_path):                      # `space.json` не запишемо: інакше копії/позначка зламались б ПІСЛЯ бекапу
+        info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'])
+        _write_last(info, step)
+        return 'abort-write', info
     try:
         stamp = _backup(spaces.home(), p['space_id'], space_path, step)
     except (OSError, ValueError):
@@ -1172,6 +1191,12 @@ def _run_originals(home, step, p, space_path):
         info = _info(p, status='abort-verify', reason=_REASONS['abort-verify'], backup=stamp)
         _write_last(info, step)
         return 'abort-verify', info
+    try:
+        _durable_before_delete(space_path, stamp)           # копії й бекап — на пластину ДО видалення з кореня
+    except (OSError, ValueError):
+        info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
+        _write_last(info, step)
+        return 'abort-write', info
     try:
         removed = _commit_originals(sid, space_path, d['remove'])
     except (OSError, ValueError, RecursionError, KeyError, TypeError, deai_modules.ModuleError):

@@ -158,13 +158,37 @@ class PlanE(_StandE):
         self.assertNotIn('ssh_key', d['copy_settings'].get('git-sync', {}))
         self.assertIn('host_ip', d['copy_settings']['git-sync'])       # порожнє поле копіюється й тоді, коли сусіднє відрізняється
 
-    def test_password_conflict_is_overwritten_with_the_root(self):                    # Д4
+    def test_password_conflict_never_overwrites_the_secret(self):                    # рішення контролера 07.11.2026 замість Д4
         self.rec_all(secrets={'vercel-publish': {'password': 'inert-old'}})
         self.root()
         d = self.lm.plan(step=self.E)['originals']
+        self.assertEqual(d['copy_secrets'], {})
+        self.assertIn('differs:preview_password', d['notes'])
+        self.assertNotIn('overwrote:password', d['notes'])
+        self.assertIn('preview_password', d['kept'])
+        self.assertNotIn('preview_password', d['remove'])
+
+    def test_empty_password_secret_is_still_filled_from_the_root(self):
+        self.rec_all()
+        self.root()
+        d = self.lm.plan(step=self.E)['originals']
         self.assertEqual(d['copy_secrets'], {'vercel-publish': {'password': self.PW}})
-        self.assertIn('overwrote:password', d['notes'])
         self.assertIn('preview_password', d['remove'])
+
+    def test_blank_password_secret_is_still_filled_from_the_root(self):
+        self.rec_all(secrets={'vercel-publish': {'password': ''}})
+        self.root()
+        d = self.lm.plan(step=self.E)['originals']
+        self.assertEqual(d['copy_secrets'], {'vercel-publish': {'password': self.PW}})
+
+    def test_falsy_number_or_bool_password_is_unfit(self):
+        for bad in (0, 0.0, False, True):
+            with self.subTest(bad=bad):
+                self.root(preview_password=bad)
+                d = self.lm.plan(step=self.E)['originals']
+                self.assertIn('unfit:preview_password', d['notes'])
+                self.assertIn('preview_password', d['kept'])
+                self.assertEqual(d['copy_secrets'], {})
 
     def test_password_needs_design_canvas_compat(self):
         self.rec_all(mods={'vercel-publish': {'enabled': True, 'shared_state': True, 'settings': {'auth': 'cli', 'compat': ''}}})
@@ -284,6 +308,56 @@ class RunE(_StandE):
         self.assertEqual(st, 'abort-secrets')
         self.assertEqual(self.tree_without_logs(), {k: v for k, v in before.items() if os.sep + 'migrations' + os.sep not in k})
         self.assertEqual(self.backups(), [])
+
+    def test_abort_before_backup_when_the_space_dir_is_read_only(self):
+        if os.geteuid() == 0:
+            self.skipTest('root ignores permission bits')
+        self.root()
+        before = self.snapshot_tree()
+        os.chmod(self.space_dir, 0o555)
+        self.addCleanup(os.chmod, self.space_dir, 0o755)
+        st, _info = self.run_e()
+        os.chmod(self.space_dir, 0o755)
+        self.assertEqual(st, 'abort-write')
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.tree_without_logs(), {k: v for k, v in before.items() if os.sep + 'migrations' + os.sep not in k})
+
+    def test_abort_before_backup_when_space_json_is_read_only(self):
+        if os.geteuid() == 0:
+            self.skipTest('root ignores permission bits')
+        self.root()
+        os.chmod(self.space_path(), 0o444)
+        self.addCleanup(os.chmod, self.space_path(), 0o644)
+        st, _info = self.run_e()
+        self.assertEqual(st, 'abort-write')
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.tasks()['preview_password'], self.PW)
+
+    def test_copies_and_backup_are_fsynced_before_the_root_is_touched(self):
+        self.root()
+        events = []
+        real = self.lm._commit_originals
+        for name, fn in (('fsync_path', lambda p: events.append(('sync', os.path.basename(p)))),
+                         ('_commit_originals', lambda *a, **k: events.append(('root', '')) or real(*a, **k))):
+            patcher = self.mock.patch.object(self.lm, name, fn)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        at = events.index(('root', ''))
+        synced = {n for kind, n in events[:at] if kind == 'sync'}
+        self.assertTrue({'secrets.json', 'space.json', 'tasks.json', 'manifest.json'} <= synced, synced)
+
+    def test_root_write_asks_for_fsync(self):
+        self.root()
+        seen = []
+        real = self.lm.atomic_write_json
+        patcher = self.mock.patch.object(self.lm, 'atomic_write_json',
+                                         lambda path, data, *a, **k: seen.append((os.path.basename(path), k.get('fsync'))) or real(path, data, *a, **k))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.run_e()
+        self.assertIn(('legacy-tasks.json', True), seen)
 
     def test_abort_verify_when_the_copy_does_not_read_back(self):
         self.root()

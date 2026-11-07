@@ -48,11 +48,36 @@ TMP_SUFFIX = '.tmp'
 # пару, яку ніхто не планував. Хай краще вона стане видимим дедлоком.
 WRITE_LOCK = threading.Lock()
 
+try:                                                         # лише macOS/Unix; на Windows `fsync_path` падає на `os.fsync`
+    import fcntl as _fcntl
+except ImportError:                                          # pragma: no cover
+    _fcntl = None
 
-def atomic_write_json(path, data, indent=2):
+
+def fsync_path(path):
+    """Скинути файл (або теку) на пластину: на macOS — `F_FULLFSYNC`, де він є, інакше `os.fsync`. Відкриває `path` лише на читання:
+    `fsync` скидає дані файла незалежно від того, яким дескриптором їх писали. Опційний інструмент довговічності для кроків, що
+    ВИДАЛЯЮТЬ дані (міграції): звичайні писарі його не кличуть (див. `atomic_write_json`, «fsync тут свідомо немає»)."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        full = getattr(_fcntl, 'F_FULLFSYNC', None) if _fcntl is not None else None
+        if full is not None:
+            try:
+                _fcntl.fcntl(fd, full)
+                return
+            except OSError:                                  # файлова система без F_FULLFSYNC: звичайний fsync
+                pass
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def atomic_write_json(path, data, indent=2, fsync=False):
     """Записати JSON так, щоб КРАШ ПРОЦЕСУ не лишив обрізаного файла.
 
-    Саме краш процесу, не втрата живлення: `fsync` тут свідомо немає. На macOS
+    Саме краш процесу, не втрата живлення: `fsync` тут за замовчуванням свідомо немає
+    (`fsync=True` — опція для кроків, що видаляють дані: файл і тека скидаються
+    на пластину ПІСЛЯ rename; поки нею користується лише міграція ЛІГИ). На macOS
     чесний скид на пластину вимагає `F_FULLFSYNC` (звичайний fsync драйв може
     збрехати), і платити цим на кожен чих полотна ми не готові. Після паніки
     ядра чи зникнення струму файл може виявитись порожнім — це визнана межа.
@@ -95,6 +120,9 @@ def atomic_write_json(path, data, indent=2):
         except FileNotFoundError:
             pass
         os.replace(tmp, path)
+        if fsync:                                            # ПІСЛЯ rename: файл (дані) і тека (сам rename)
+            fsync_path(path)
+            fsync_path(d)
     except BaseException:
         # BaseException, а не Exception, і це НЕ перестраховка: Ctrl-C посеред
         # json.dump — це і є «убитий прогін», заради якого весь цей модуль.
