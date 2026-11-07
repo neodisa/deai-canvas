@@ -471,14 +471,19 @@ _PULL_VIEW = None
 def _work_root(cfg, task):
     """Корінь теки задачі через ЯВНІ напрямки простору ЛІГИ (`serve.track_root`); простору/напрямків нема → спільний корінь
     `serve.default_task_root(cfg)`. Підпис без `view` свідомо: тести підміняють `_work_root(cfg, task)`."""
-    global _PULL_VIEW
     sys.path.insert(0, os.path.join(ROOT, 'app'))
     import serve
-    if _PULL_VIEW is not None:
-        view = _PULL_VIEW[0] if _PULL_VIEW else _PULL_VIEW.append(_liga_view()) or _PULL_VIEW[0]
-    else:
-        view = _liga_view()
-    return serve.track_root(view, _track_of_entry(task)) or serve.default_task_root(cfg)
+    return serve.track_root(_pull_view(), _track_of_entry(task)) or serve.default_task_root(cfg)
+
+
+def _pull_view():
+    """Вигляд напрямків для `_work_root`: у межах `pull` — один на весь виклик (комірка `_PULL_VIEW` будується ліниво, перше звернення),
+    поза ним — свіжий на кожен виклик."""
+    if _PULL_VIEW is None:
+        return _liga_view()
+    if not _PULL_VIEW:
+        _PULL_VIEW.append(_liga_view())
+    return _PULL_VIEW[0]
 
 
 def split_fixtures(entries):
@@ -506,6 +511,17 @@ def _say_junk(junk, stream=None):
 
 
 def cmd_pull(_a):
+    """`pull` реєстру. Вигляд напрямків (`_PULL_VIEW`) живе рівно на час виклику: `finally` скидає його й після винятку (інакше наступний
+    виклик у тому ж процесі — тест, `push` після невдалого `pull` — читав би застарілий вигляд)."""
+    global _PULL_VIEW
+    _PULL_VIEW = []                           # вигляд напрямків ЛІГИ — ліниво й раз на `pull` (див. `_pull_view`)
+    try:
+        return _cmd_pull(_a)
+    finally:
+        _PULL_VIEW = None
+
+
+def _cmd_pull(_a):
     # Модульного шляху до app/ тут нема (лише лінивий у `_work_root`), а `spaces` потрібен
     # одразу: реєстр командний, і задача колеги не мусить ліпитись у старий файл, якщо її id
     # уже живе в ІНШОМУ просторі цієї машини.
@@ -529,8 +545,6 @@ def cmd_pull(_a):
     # Що САМЕ ця синхронізація визначає — по полях. Записуємо потім точково, на
     # свіжо перечитаний конфіг: див. `_save_registry_state`.
     writes = {}
-    global _PULL_VIEW
-    _PULL_VIEW = []                           # вигляд напрямків ЛІГИ — ліниво й раз на `pull` (див. `_work_root`)
     for tid, e in reg.items():
         local = tasks.get(tid)
         if local is None:
@@ -570,8 +584,10 @@ def cmd_pull(_a):
                 mine[k] = v
         # МЕЖА track/profile (4d-4a): запис реєстру старої машини має лише `profile`, а рантайм читає тільки `track` — без цього
         # такий запис у кеші не мав би напрямку (ні мітки, ні `?ds=`, ні кореня). `track` із реєстру (SHARED вище) не чіпаємо.
+        # Запис БЕЗ власного `track` написала стара машина: її `profile` — істина, тож локальний `track` ЗАМІНЮЄМО (а не лише дописуємо до
+        # порожнього: інакше `track` зі старішого `pull` пережив би зміну напрямку колегою). Запис із власним `track` — його вже скопійовано.
         t = _track_of_entry(e)
-        if t and not local.get('track'):
+        if t and not (isinstance(e.get('track'), str) and e['track']):
             local['track'] = t
             mine['track'] = t
         # dir выводим локально, из реестра не берём: он машинный. Корень — за
@@ -588,7 +604,6 @@ def cmd_pull(_a):
     local_junk = {t: w for t, w in ((t, fixture_path_reason(tasks[t])) for t in tasks)
                   if w and t not in junk}
     only_local = [t for t in tasks if t not in reg and t not in junk and t not in local_junk]
-    _PULL_VIEW = None
     head = _git(['rev-parse', 'HEAD'], d, cfg).stdout.strip()
     _save_registry_state(writes, {'synced_at': time.strftime('%Y-%m-%dT%H:%M:%SZ',
                                                              time.gmtime()),

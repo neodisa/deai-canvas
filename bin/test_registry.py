@@ -183,11 +183,24 @@ class TestSyncDoesNotClobberConcurrentEdits(unittest.TestCase):
             json.dump({'current': 'a', 'tasks': {'a': {'title': 'A'}, 'b': {'title': 'B'}}}, f)
         self._path = rg.TASKS_PATH
         rg.TASKS_PATH = self.file
+        # 4d-4a: `pull` → `_work_root` читає реєстр просторів (`DEAI_HOME`) і `~/deai-work` (`HOME`): без підміни тест читав би справжній
+        # `~/.deai` розробника (як `_RegistrySandbox`; клас лишається власним — він не мусить мати фікстур `nova`/`courts`)
+        from unittest import mock
+        env = mock.patch.dict(os.environ, {'HOME': self.tmp, 'DEAI_HOME': os.path.join(self.tmp, 'deai')})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop('DC_TASKS_FILE', None)
 
     def tearDown(self):
         import shutil
         rg.TASKS_PATH = self._path
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_class_is_sandboxed_from_the_developers_machine(self):
+        # (l) `pull` читає реєстр просторів (`DEAI_HOME`) і `~/deai-work` (`HOME`): обидва — тимчасові, а не справжні `~/.deai`/`~`
+        self.assertEqual(os.path.realpath(os.environ['HOME']), os.path.realpath(self.tmp))
+        self.assertEqual(os.path.realpath(os.environ['DEAI_HOME']), os.path.realpath(os.path.join(self.tmp, 'deai')))
+        self.assertNotIn('DC_TASKS_FILE', os.environ)
 
     def _switch_to_b(self):
         """Те, що робить `POST /api/task-switch` у вікні між читанням і записом."""
@@ -622,18 +635,66 @@ class TestTrack(_RegistrySandbox):
         self.assertNotIn('track', writes['none'])
         self.assertEqual(tasks['both']['dir'], os.path.join(liga, 'seo-dir', 'both'))
 
-    def test_pull_keeps_a_local_track(self):
-        # локальний `track` непорожній — межа його не перезаписує (`profile` реєстру лише підказка для порожнього)
+    def _pull_over_local_track(self, entry):
+        """`pull` одного запису реєстру поверх локальної задачі `x` із `track: plain`: `(tasks, writes)`."""
         import json
         from unittest import mock
         self._liga()
         with open(self.file, 'w', encoding='utf-8') as f:
             json.dump(dict(self._cfg(), tasks={'x': {'title': 'X', 'track': 'plain', 'dir': os.path.join(self.tmp, 'x')}}), f)
-        reg = {'x': {'schema': 1, 'id': 'x', 'title': 'X', 'profile': 'seo'}}
-        with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)):
+        saved = []
+        real = rg._save_registry_state
+        with mock.patch.object(rg, 'read_registry', lambda d: {'x': dict({'schema': 1, 'id': 'x', 'title': 'X'}, **entry)}), \
+                mock.patch.object(rg, '_save_registry_state', lambda w, r: saved.append(w) or real(w, r)):
             self._quiet(rg.cmd_pull, None)
         with open(self.file, encoding='utf-8') as f:
-            self.assertEqual(json.load(f)['tasks']['x']['track'], 'plain')
+            return json.load(f)['tasks'], saved[0]
+
+    def test_pull_a_profile_only_entry_replaces_a_local_track(self):
+        # (m) запис БЕЗ `track` написала стара машина: її `profile` — істина, тож локальний `track` замінюється (раніше: лише коли порожній)
+        tasks, writes = self._pull_over_local_track({'profile': 'seo'})
+        self.assertEqual((tasks['x']['track'], tasks['x']['profile']), ('seo', 'seo'))
+        self.assertEqual(writes['x']['track'], 'seo', 'і в точковому записі `pull`')
+
+    def test_pull_an_entry_with_its_own_track_wins_over_the_local_one(self):
+        tasks, writes = self._pull_over_local_track({'track': 'seo', 'profile': 'united'})
+        self.assertEqual((tasks['x']['track'], tasks['x']['profile']), ('seo', 'united'))
+        self.assertEqual(writes['x']['track'], 'seo')
+
+    def test_pull_keeps_a_local_track_when_the_entry_names_no_direction(self):
+        # (було `test_pull_keeps_a_local_track` з записом `profile: seo`: правило (m) його змінило — профіль-only запис тепер ЗАМІНЮЄ)
+        tasks, writes = self._pull_over_local_track({})
+        self.assertEqual(tasks['x']['track'], 'plain')
+        self.assertNotIn('track', writes['x'])
+        tasks, _w = self._pull_over_local_track({'profile': 5})
+        self.assertEqual(tasks['x']['track'], 'plain', '`profile` не рядок — напрямку нема, локальний лишається')
+
+    def test_pull_view_is_reset_even_after_an_exception(self):
+        # (k) `_PULL_VIEW` живе рівно на час `pull`: збій посеред роботи не лишає застарілий вигляд для наступного виклику
+        from unittest import mock
+        self._liga()
+        with open(self.file, 'w', encoding='utf-8') as f:
+            f.write('{"tasks": {}}')
+        with mock.patch.object(rg, 'read_registry', lambda d: {'a': {'schema': 1, 'id': 'a', 'title': 'A', 'profile': 'seo'}}), \
+                mock.patch.object(rg, '_save_registry_state', side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                self._quiet(rg.cmd_pull, None)
+        self.assertIsNone(rg._PULL_VIEW)
+
+    def test_pull_view_is_built_once_per_pull_and_fresh_outside_it(self):
+        from unittest import mock
+        self._liga()
+        calls = []
+        real = rg._liga_view
+        with mock.patch.object(rg, '_liga_view', lambda: calls.append(1) or real()):
+            self._pull({'a': {'schema': 1, 'id': 'a', 'title': 'A', 'profile': 'seo'},
+                        'b': {'schema': 1, 'id': 'b', 'title': 'B', 'track': 'united'},
+                        'c': {'schema': 1, 'id': 'c', 'title': 'C', 'profile': 'united'}})
+            self.assertEqual(len(calls), 1, 'вигляд збудовано раз на pull, а не на кожну задачу')
+            self.assertIsNone(rg._PULL_VIEW)
+            rg._work_root(self._cfg(), {'track': 'seo'})
+            rg._work_root(self._cfg(), {'track': 'seo'})
+            self.assertEqual(len(calls), 3, 'поза `pull` — свіжий вигляд на кожен виклик')
 
     def test_status_shows_no_drift_after_such_a_pull(self):
         # (в) `status` порівнює лише ключі, що є в записі реєстру: допис `track` розбіжності не дає

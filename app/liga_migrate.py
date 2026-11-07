@@ -842,8 +842,10 @@ def _file_sig(path):
 
 
 def _records_writable(path):
-    """Чи можна записати `tasks.json` (тека — для тимчасового файла й `.bak`, сам файл — якщо є); перевіряємо ДО бекапу кроку."""
-    return os.access(os.path.dirname(path) or '.', os.W_OK) and (not os.path.exists(path) or os.access(path, os.W_OK))
+    """Чи можна записати `tasks.json` (тека — для тимчасового файла й `.bak`, сам файл і наявний `tasks.json.bak` — якщо є); перевіряємо
+    ДО бекапу кроку: `.bak` без прав на запис зламав би `copy2` уже ПІСЛЯ бекапу простору."""
+    return (os.access(os.path.dirname(path) or '.', os.W_OK) and (not os.path.exists(path) or os.access(path, os.W_OK))
+            and (not os.path.exists(path + '.bak') or os.access(path + '.bak', os.W_OK)))
 
 
 def _commit_records(p, step):
