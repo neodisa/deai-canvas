@@ -47,6 +47,8 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import test from "node:test";
 
+// 4d-4b: кеш браузерів Playwright читається при ІМПОРТІ playwright — `_env.mjs` мусить бути раніше за нього
+import "./_env.mjs";
 import { chromium } from "playwright";
 
 import { CLUSTER_W } from "../../app/overview-pins.js";

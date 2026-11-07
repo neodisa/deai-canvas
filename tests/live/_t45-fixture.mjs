@@ -4,6 +4,8 @@
  * справжній `CommentLayerAnchor.fingerprint` у bare-сторінці, не рука.
  * Спільна для живого тесту `overview-comments.test.mjs` і ручного огляду.
  */
+// 4d-4b: Playwright-кеш і git-ідентичність у тимчасовому HOME — ДО будь-якого запуску браузера/git
+import "./_env.mjs";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

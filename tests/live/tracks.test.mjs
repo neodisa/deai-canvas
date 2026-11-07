@@ -27,6 +27,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+// 4d-4b: кеш браузерів Playwright читається при ІМПОРТІ playwright — `_env.mjs` мусить бути раніше за нього
+import "./_env.mjs";
 import { chromium } from "playwright";
 import { guardRealDeai, postJson, stop } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";

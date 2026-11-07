@@ -5,6 +5,8 @@
  * Файл НЕ `*.test.mjs` навмисно: `npm run test:live` бере `tests/live/*.test.mjs`,
  * і helper під таким іменем поїхав би в прогін окремим файлом без жодного тесту.
  */
+// 4d-4b: Playwright-кеш і git-ідентичність у тимчасовому HOME — ДО будь-якого запуску браузера/git
+import "./_env.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

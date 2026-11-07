@@ -11,6 +11,8 @@
  * може підмінити хто завгодно, і тоді охоронець дивився б не туди. Статичний охоронець
  * `.mjs` не сканує (ревʼю Task 5), тож цей — єдиний, що бачить живий прогін.
  */
+// 4d-4b: Playwright-кеш і git-ідентичність у тимчасовому HOME — ДО будь-якого запуску браузера/git
+import "./_env.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
