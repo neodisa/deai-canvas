@@ -988,7 +988,7 @@ def _backup(base, space_id, space_path, step=None):
     return name
 
 
-def _commit_space(space_path, p, stamp, step=None, records=None):
+def _commit_space(space_path, p, stamp, step=None, records=None, mark_patch=None):
     """ОДИН атомарний запис `space.json`: злиття з ПОТОЧНИМ вмістом диска (перечитуємо під замком, відразу перед записом): чужі
     ключі й правки, зроблені після `plan()`, не губляться. Модуль, що зʼявився тим часом, не перезаписуємо. Позначка вже є — `skip-done`."""
     step = _step(step)
@@ -1010,7 +1010,7 @@ def _commit_space(space_path, p, stamp, step=None, records=None):
         if step.tracks and p['tracks'] and (tracks_core.adapter_applies(cur.get('tracks'), space_path) if step.ungated else cur.get('tracks') is None):
             new['tracks'], new['default_track'] = planned['tracks'], planned['default_track']
             wrote = True
-        marks[step.mark] = dict(planned['migrations'][step.mark], at=time.strftime('%Y-%m-%dT%H:%M:%S'), backup=stamp)
+        marks[step.mark] = dict(planned['migrations'][step.mark], at=time.strftime('%Y-%m-%dT%H:%M:%S'), backup=stamp, **(mark_patch or {}))
         if step.ungated:                                    # 4d-4a: позначка каже, що крок записав НАСПРАВДІ (власні напрямки, що зʼявились, не затираємо)
             marks[step.mark]['tracks'], marks[step.mark]['records'] = wrote, records
         new['migrations'] = marks
@@ -1057,6 +1057,139 @@ def _commit_records(p, step):
                 atomic_write_json(path, cfg)
                 return len(todo)
         raise OSError('tasks file keeps changing')           # постійна гонка: не пишемо поверх чужого, наступний старт повторить
+
+
+def _secrets_writable():
+    """Чи можна писати `secrets.json` (тека дому — для тимчасового файла, сам файл — якщо є): перевірка ДО бекапу (як `_records_writable`)."""
+    p, home = deai_modules._secrets_path(), spaces.home()
+    return (not os.path.exists(home) or os.access(home, os.W_OK)) and (not os.path.exists(p) or os.access(p, os.W_OK))
+
+
+def _merge_settings(space_path, patches):
+    """Копії налаштувань у ПОТОЧНИЙ `space.json` під `WRITE_LOCK`: перечитуємо, кладемо лише відсутні/порожні ключі запису, що ще є; чужі
+    правки (і запис, що зник) не чіпаємо — розбіжність побачить перевірка `abort-verify`."""
+    if not patches:
+        return
+    sp = os.path.join(space_path, 'space.json')
+    with spaces.WRITE_LOCK:
+        cur = deai_modules._load_space_json(sp)
+        mods = dict(deai_modules._raw_modules(cur))
+        changed = False
+        for mid, patch in patches.items():
+            rec = mods.get(mid)
+            if not isinstance(rec, dict):
+                continue
+            st = rec.get('settings')
+            st = dict(st) if isinstance(st, dict) else {}
+            for k, v in patch.items():
+                if not (isinstance(st.get(k), str) and st[k]):
+                    st[k] = v
+                    changed = True
+            mods[mid] = dict(rec, settings=st)
+        if changed:
+            new = dict(cur)
+            new['modules'] = mods
+            _write_space(sp, new)
+
+
+def _verify_copies(sid, space_path, d):
+    """Після запису копій: перечитане з диска (без локу) дорівнює плану. Інакше `abort-verify` — нічого не видалено."""
+    secrets = deai_modules._load_secrets()
+    data = deai_modules._load_space_json(os.path.join(space_path, 'space.json'))
+    norm = deai_modules._normalize(deai_modules._raw_modules(data))
+    for mid, patch in d['copy_secrets'].items():
+        for k, v in patch.items():
+            if deai_modules._bucket(secrets, sid, mid).get(k) != v:
+                return False
+    for mid, patch in d['copy_settings'].items():
+        for k, v in patch.items():
+            if (norm.get(mid, {}).get('settings') or {}).get(k) != v:
+                return False
+    return True
+
+
+def _commit_originals(sid, space_path, planned_remove):
+    """Видаляє з кореня `tasks.json` ЛІГИ ключі зі списку, чия рівність з копією ПІДТВЕРДЖЕНА щойно перечитаним диском. Під `WRITE_LOCK`:
+    `_file_sig` → читання → повторне звіряння (людина могла змінити налаштування між копією й видаленням) → `.bak` → `_file_sig` →
+    `atomic_write_json`. Ключі видаляються ПО ОДНОМУ з щойно прочитаного файла: записи задач і чужі ключі — як є. Повертає
+    список видалених; постійна гонка — `OSError`.
+    ⛔ Ключ, що в свіжому рішенні ще потребує КОПІЇ (`fresh['copied']`: людина стерла налаштування між перевіркою й видаленням), не
+    видаляється: корінь тоді — єдина копія значення."""
+    path = install_config.legacy_tasks_path()
+    sp = os.path.join(space_path, 'space.json')
+    with spaces.WRITE_LOCK:
+        for _attempt in range(_RECORDS_ATTEMPTS):
+            before = _file_sig(path)
+            cfg = install_config.load_legacy_tasks()
+            norm, secrets = _originals_state(space_path, deai_modules._load_space_json(sp), cfg)
+            fresh = _decide_originals(cfg, norm, secrets, sid)
+            todo = [k for k in planned_remove if k in fresh['remove'] and k not in fresh['copied'] and k in cfg]
+            if not todo:
+                return []
+            for k in todo:
+                del cfg[k]
+            shutil.copy2(path, path + '.bak')
+            if _file_sig(path) == before:
+                atomic_write_json(path, cfg)
+                return todo
+        raise OSError('tasks file keeps changing')
+
+
+def _run_originals(home, step, p, space_path):
+    """Запис кроку Е (спека §1.4): precheck → бекап → секрети → налаштування `space.json` → перевірка прочитанням → видалення з кореня →
+    позначка (остання). Повертає `(статус, підсумок)`; кожен збій — код, без значень."""
+    d = p['originals']
+    if (p['originals']['remove'] or d['copy_settings'] or d['copy_secrets']) and not _records_writable(install_config.legacy_tasks_path()):
+        info = _info(p, status='abort-originals', reason=_REASONS['abort-originals'])
+        _write_last(info, step)
+        return 'abort-originals', info
+    if d['copy_secrets'] and not _secrets_writable():
+        info = _info(p, status='abort-secrets', reason=_RUN_REASONS['abort-secrets'])
+        _write_last(info, step)
+        return 'abort-secrets', info
+    try:
+        stamp = _backup(spaces.home(), p['space_id'], space_path, step)
+    except (OSError, ValueError):
+        info = _info(p, status='abort-backup', reason=_RUN_REASONS['abort-backup'])
+        _write_last(info, step)
+        return 'abort-backup', info
+    sid = p['space_id']
+    try:
+        for mid, patch in d['copy_secrets'].items():
+            deai_modules.write_secrets(sid, mid, patch)
+    except deai_modules.ModuleError as e:
+        info = _info(p, status='abort-secrets', reason=_RUN_REASONS['abort-secrets'], backup=stamp, error=getattr(e, 'code', 'secrets'))
+        _write_last(info, step)
+        return 'abort-secrets', info
+    try:
+        _merge_settings(space_path, d['copy_settings'])
+        ok = _verify_copies(sid, space_path, d)
+    except (OSError, ValueError, deai_modules.ModuleError):
+        info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
+        _write_last(info, step)
+        return 'abort-write', info
+    if not ok:
+        info = _info(p, status='abort-verify', reason=_REASONS['abort-verify'], backup=stamp)
+        _write_last(info, step)
+        return 'abort-verify', info
+    try:
+        removed = _commit_originals(sid, space_path, d['remove'])
+    except (OSError, ValueError, RecursionError, KeyError, TypeError, deai_modules.ModuleError):
+        info = _info(p, status='abort-originals', reason=_REASONS['abort-originals'], backup=stamp)
+        _write_last(info, step)
+        return 'abort-originals', info
+    kept = sorted(set(p['space_json']['migrations'][step.mark]['kept']) | (set(d['remove']) - set(removed)))
+    try:
+        st = _commit_space(space_path, p, stamp, step, None, mark_patch={'removed': sorted(removed), 'kept': kept})
+    except (OSError, ValueError, deai_modules.ModuleError):
+        info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
+        _write_last(info, step)
+        return 'abort-write', info
+    info = _info(p, status=st, reason=_RUN_REASONS.get(st) or _REASONS.get(st, ''), backup=stamp)
+    info.update(copied=sorted(d['copied']), removed=sorted(removed), kept=kept)
+    if st == 'done':
+        _write_last(info, step)
+    return st, info
 
 
 def _run(home, step=None):
@@ -1106,6 +1239,8 @@ def _run_locked(home, step=None):
             _write_last(info, step)
             return 'abort-changed', info
         space_path = p['space_path']                         # пишемо ТУДИ Ж, звідки рахували
+        if step.originals:
+            return _run_originals(home, step, p, space_path)
         if step.ungated and p.get('records') and not _records_writable(install_config.legacy_tasks_path()):
             # ⛔ постійний збій запису (лише читання): бекап не робимо — кожен старт інакше лишав би по теці бекапу
             info = _info(p, status='abort-records', reason=_REASONS['abort-records'], records=0, records_planned=len(p['records']))

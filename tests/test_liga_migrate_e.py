@@ -229,5 +229,227 @@ class PlanE(_StandE):
             self.assertEqual(self.lm.plan(step=self.E)['status'], 'abort-provider')
 
 
+class RunE(_StandE):
+    def test_run_copies_verifies_removes_then_marks(self):
+        self.root()
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        t = self.tasks()
+        for k in self.ALL:
+            self.assertNotIn(k, t)
+        self.assertEqual(sorted(t['tasks']), ['a-1', 'a-2'])          # решта файла — як була
+        self.assertIn('design_work_root', t)
+        sj = self.read_json(self.space_path())
+        self.assertEqual(sj['modules']['git-sync']['settings']['ssh_key'], self.SSH)
+        self.assertEqual(sj['modules']['git-sync']['settings']['host_ip'], self.HOSTIP)
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['vercel-publish'], {'password': self.PW})
+        m = self.mark()
+        self.assertEqual((m['roles'], m['copied'], m['kept'], m['notes']),
+                         ([], ['gitlab_host_ip', 'gitlab_ssh_key', 'preview_password'], [], []))
+        self.assertEqual(sorted(m['removed']), sorted(self.ALL))
+        self.assertTrue(m['backup'].endswith('-liga-4d4b'))
+        self.assert_no_secrets_in_logs()
+
+    def test_mark_is_written_last(self):
+        self.root()
+        order = []
+        real_commit, real_space = self.lm._commit_originals, self.lm._commit_space
+        self.mock.patch.object(self.lm, '_commit_originals', lambda *a, **k: order.append('root') or real_commit(*a, **k)).start()
+        self.mock.patch.object(self.lm, '_commit_space', lambda *a, **k: order.append('mark') or real_space(*a, **k)).start()
+        self.addCleanup(self.mock.patch.stopall)
+        self.run_e()
+        self.assertEqual(order, ['root', 'mark'])
+
+    def test_backup_and_dot_bak_hold_the_bytes_before(self):
+        self.root()
+        before = self.read(self.tasks_path)
+        _st, info = self.run_e()
+        self.assertEqual(self.read(self.deai, 'backups', info['backup'], 'tasks.json'), before)
+        self.assertEqual(self.read(self.tasks_path + '.bak'), before)
+
+    def test_abort_before_backup_when_tasks_unwritable(self):
+        self.root()
+        before = self.snapshot_tree()
+        with self.mock.patch.object(self.lm, '_records_writable', lambda p: False):
+            st, _info = self.run_e()
+        self.assertEqual(st, 'abort-originals')
+        self.assertEqual(self.tree_without_logs(), {k: v for k, v in before.items() if os.sep + 'migrations' + os.sep not in k})
+        self.assertEqual(self.backups(), [])
+
+    def test_abort_before_backup_when_secrets_unwritable(self):
+        self.root()
+        before = self.snapshot_tree()
+        with self.mock.patch.object(self.lm, '_secrets_writable', lambda: False):
+            st, _info = self.run_e()
+        self.assertEqual(st, 'abort-secrets')
+        self.assertEqual(self.tree_without_logs(), {k: v for k, v in before.items() if os.sep + 'migrations' + os.sep not in k})
+        self.assertEqual(self.backups(), [])
+
+    def test_abort_verify_when_the_copy_does_not_read_back(self):
+        self.root()
+        real = self.dm._load_secrets
+        calls = {'n': 0}
+
+        def lying():
+            calls['n'] += 1
+            out = real()
+            if calls['n'] >= 3:                                     # перевірка прочитанням — після плану, бекапу й запису
+                out = json.loads(json.dumps(out))
+                out.get('legacy', {}).pop('vercel-publish', None)
+            return out
+        with self.mock.patch.object(self.dm, '_load_secrets', lying):
+            st, _i = self.run_e()
+        self.assertEqual(st, 'abort-verify')
+        self.assertEqual(self.tasks()['preview_password'], self.PW)      # нічого не видалено
+        self.assertNotIn('liga-4d4b', self.read_json(self.space_path()).get('migrations', {}))
+
+    def test_failure_before_the_root_leaves_copies_and_next_start_finishes(self):
+        self.root()
+        with self.mock.patch.object(self.lm, '_commit_originals', side_effect=OSError('x')):
+            st, _i = self.run_e()
+        self.assertEqual(st, 'abort-originals')
+        self.assertIn('preview_password', self.tasks())                  # корінь цілий
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['vercel-publish'], {'password': self.PW})   # копії лежать
+        self.assertNotIn('liga-4d4b', self.read_json(self.space_path()).get('migrations', {}))
+        st, _i = self.run_e()                                          # повтор доробляє
+        self.assertEqual(st, 'done')
+        self.assertNotIn('preview_password', self.tasks())
+
+    def test_failure_between_root_and_mark_is_finished_by_next_start(self):
+        self.root()
+        with self.mock.patch.object(self.lm, '_commit_space', side_effect=OSError('x')):
+            st, _i = self.run_e()
+        self.assertEqual(st, 'abort-write')
+        for k in self.ALL:
+            self.assertNotIn(k, self.tasks())                           # ключі вже видалені, позначки нема
+        p = self.lm.plan(step=self.E)
+        self.assertEqual(p['status'], 'skip-nothing')                    # нічого видаляти; позначка не пишеться (див. Поправку)
+
+    def test_a_person_changed_a_setting_between_copy_and_delete_keeps_that_key(self):
+        """Вікно між перевіркою копій і видаленням: людина міняє `ssh_key` на екрані «Підключення» ПІСЛЯ `abort-verify`-перевірки, але ДО запису кореня.
+        Свіже рішення всередині `_commit_originals` бачить розбіжність і ключ лишає (інакше єдина копія була б значенням, якого людина вже не хоче)."""
+        self.root()
+        real = self.lm._verify_copies
+
+        def verify_then_tamper(sid, space_path, d):
+            ok = real(sid, space_path, d)
+            data = self.read_json(self.space_path())
+            data['modules']['git-sync']['settings']['ssh_key'] = '/changed/by/a/person'
+            self._write(self.space_path(), data)
+            return ok
+        with self.mock.patch.object(self.lm, '_verify_copies', verify_then_tamper):
+            st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertIn('gitlab_ssh_key', self.tasks())
+        self.assertIn('gitlab_ssh_key', self.mark()['kept'])
+        self.assertNotIn('gitlab_ssh_key', self.mark()['removed'])
+        self.assertNotIn('gitlab_host_ip', self.tasks())             # решта ключів видалена, як планувалось
+        self.assertEqual(self.read_json(self.space_path())['modules']['git-sync']['settings']['ssh_key'], '/changed/by/a/person')   # правку людини не перетерто
+
+    def test_a_setting_cleared_between_copy_and_delete_keeps_the_root_value(self):
+        """Людина стирає щойно скопійований `host_ip` між перевіркою й видаленням: у записі порожньо, тож корінь — ЄДИНА копія значення й лишається
+        (свіже рішення бачить «порожньо й копіюємо», а не «рівність»)."""
+        self.root()
+        real = self.lm._verify_copies
+
+        def verify_then_clear(sid, space_path, d):
+            ok = real(sid, space_path, d)
+            data = self.read_json(self.space_path())
+            data['modules']['git-sync']['settings']['host_ip'] = ''
+            self._write(self.space_path(), data)
+            return ok
+        with self.mock.patch.object(self.lm, '_verify_copies', verify_then_clear):
+            st, _info = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertEqual(self.tasks()['gitlab_host_ip'], self.HOSTIP)
+        self.assertIn('gitlab_host_ip', self.mark()['kept'])
+        self.assertNotIn('gitlab_host_ip', self.mark()['removed'])
+        self.assertNotIn('gitlab_ssh_key', self.tasks())                 # решта — видалено
+
+    def test_merge_never_overwrites_a_value_a_person_set(self):
+        """Людина вписала `host_ip` між планом і записом налаштувань: злиття його не перетирає, перевірка каже `abort-verify`, корінь цілий."""
+        self.root()
+        real = self.lm._merge_settings
+
+        def person_then_merge(space_path, patches):
+            sj = self.read_json(self.space_path())
+            sj['modules']['git-sync']['settings']['host_ip'] = '198.51.100.9'
+            self._write(self.space_path(), sj)
+            return real(space_path, patches)
+        with self.mock.patch.object(self.lm, '_merge_settings', person_then_merge):
+            st, _info = self.run_e()
+        self.assertEqual(st, 'abort-verify')
+        self.assertEqual(self.read_json(self.space_path())['modules']['git-sync']['settings']['host_ip'], '198.51.100.9')
+        self.assertEqual(self.tasks()['gitlab_host_ip'], self.HOSTIP)
+
+    def test_run_never_deletes_the_last_marker_key(self):
+        self.root(registry=None)                                      # без `registry` єдиний маркер файла ЛІГИ — `gitlab_*`
+        st, _info = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertEqual(self.tasks()['gitlab_host_ip'], self.HOSTIP)
+        self.assertIn('marker-kept:gitlab_host_ip', self.mark()['notes'])
+        self.assertIn('gitlab_host_ip', self.mark()['kept'])
+        self.assertTrue(self.spaces.has_markers(self.tasks()))
+
+    def test_race_on_tasks_file_aborts(self):
+        self.root()
+        before = self.read(self.tasks_path)
+        n = {'i': 0}
+
+        def moving(p):
+            n['i'] += 1
+            return (n['i'], 1)
+        with self.mock.patch.object(self.lm, '_file_sig', moving):
+            st, _i = self.run_e()
+        self.assertEqual(st, 'abort-originals')
+        self.assertEqual(self.read(self.tasks_path), before)             # постійна гонка: файл не переписано
+
+    def test_a_concurrent_edit_of_the_root_is_never_overwritten(self):
+        """Інший процес дописує в `tasks.json` між читанням і записом (сервер зберігає задачі): `_file_sig` бачить зміну, ретрай читає свіже — правка вціліла."""
+        self.root()
+        real_sig = self.lm._file_sig
+        n = {'i': 0}
+
+        def sig_with_a_foreign_write(p):
+            n['i'] += 1
+            if n['i'] == 2:                                           # друга звірка першої спроби: між читанням файла й записом
+                cur = self.tasks()
+                cur['tasks']['a-3'] = {'dir': '/new', 'title': 'Added by another process'}
+                self._write(self.tasks_path, cur)
+            return real_sig(p)
+        with self.mock.patch.object(self.lm, '_file_sig', sig_with_a_foreign_write):
+            st, _i = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertIn('a-3', self.tasks()['tasks'])                      # правка іншого процесу не затерта (ретрай прочитав свіже)
+        for k in self.ALL:
+            self.assertNotIn(k, self.tasks())
+
+    def test_idempotent(self):
+        self.root()
+        self.assertEqual(self.run_e()[0], 'done')
+        self.assertEqual(self.lm.plan(step=self.E)['status'], 'skip-done')
+
+    def test_notes_only_still_writes_mark(self):
+        self.root(**dict({k: None for k in self.ALL}, jira_base='https://example.com/x'))
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertEqual(self.mark()['notes'], ['unfit:jira_base'])
+        self.assertEqual(self.mark()['removed'], [])
+        self.assertEqual(self.lm.plan(step=self.E)['status'], 'skip-done')
+
+    def test_foreign_edits_to_space_json_survive(self):
+        self.root()
+        real = self.lm._merge_settings
+
+        def edit_then_merge(space_path, patches):
+            sj = self.read_json(self.space_path())
+            sj['name'] = 'Renamed by a person'
+            self._write(self.space_path(), sj)
+            return real(space_path, patches)
+        with self.mock.patch.object(self.lm, '_merge_settings', edit_then_merge):
+            self.run_e()
+        self.assertEqual(self.read_json(self.space_path())['name'], 'Renamed by a person')
+
+
 if __name__ == '__main__':
     unittest.main()
