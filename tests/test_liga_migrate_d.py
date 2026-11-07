@@ -805,7 +805,11 @@ def _expect_notes(before):
                  "/roots/'liga360'": space, "/roots/'seo'": space,
                  '/roots_cli/in_use/United[0]': united, '/roots_cli/in_use/Weird[0]': united, '/roots_cli/in_use/zzz[0]': united,
                  '/roots_cli/in_use/—[0]': united, '/roots_cli/in_use/liga360[0]': space, '/roots_cli/in_use/seo[0]': space,
-                 '/roots_cli/plan/a-1[2]': space + '/a-1', '/roots_cli/plan/a-3[2]': space + '/a-3', '/roots_cli/plan/a-7[2]': space + '/a-7',
+                 # напрямок відомий, корінь відкинуто: `plan` не стягує задачу зі спільної теки в теку простору, а називає й лишає
+                 # (було: ціль — тека простору, без причини-стопу)
+                 '/roots_cli/plan/a-1[2]': None, '/roots_cli/plan/a-3[2]': None, '/roots_cli/plan/a-7[2]': None,
+                 '/roots_cli/plan/a-1[3]': 'корінь напрямку не задано', '/roots_cli/plan/a-3[3]': 'корінь напрямку не задано',
+                 '/roots_cli/plan/a-7[3]': 'корінь напрямку не задано',
                  '/task_new/profile_seo/entry/dir': space + '/n-pseo', '/task_new/track_seo/entry/dir': space + '/n-seo',
                  '/task_new/profile_upper/entry/dir': united + '/n-pup', '/task_new/profile_zzz/entry/dir': united + '/n-pzzz',
                  '/view/roots/liga360': None, '/view/roots/seo': None}.items():

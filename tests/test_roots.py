@@ -197,6 +197,20 @@ class Roots(unittest.TestCase):
         with open(os.environ['DC_TASKS_FILE'], encoding='utf-8') as fh:
             self.assertEqual({k: v['dir'] for k, v in json.load(fh)['tasks'].items()}, {k: v['dir'] for k, v in tasks.items()})
 
+    def test_known_track_without_own_root_is_never_moved(self):
+        """⛔ Ревʼю Task 7: напрямок відомий, але корінь не заданий (після кроку D корінь, що його адаптер брав зі спільного, відкинуто →
+        `None`). `_root_of` дав би теку простору, і `migrate --apply` стягнув би задачу зі спільної теки в простір. Як з невідомим
+        напрямком: лише називаємо, не чіпаємо."""
+        shared = os.path.join(self.tmp, 'shared')
+        d = os.path.join(shared, 'blog')
+        os.makedirs(d)
+        view = self._view([{'id': 'united', 'root': os.path.join(self.tmp, 'united')}, {'id': 'seo'}], default='united')
+        cfg = self._cfg({'blog': {'dir': d, 'track': 'seo'}}, single=shared)
+        self.assertEqual(self.roots.plan(cfg, view), [('blog', 'seo', d, None, 'корінь напрямку не задано')])
+        self.roots.cmd_migrate(cfg, apply=True, view=view)
+        self.assertTrue(os.path.isdir(d))
+        self.assertFalse(os.path.exists(os.path.join(self.space, 'blog')))
+
     def test_track_only_task_is_not_sent_to_the_default_root(self):
         """⛔ Задачу `seo` лише з `track` не мають вважати «на місці» в United (корінь дефолтного напрямку)."""
         cfg = self._seo_cfg({'track': 'seo'})

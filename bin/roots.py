@@ -55,7 +55,13 @@ def plan(cfg, view=None):
             out.append((tid, track, None, None, 'немає dir у tasks.json'))
             continue
         cur = os.path.expanduser(cur)
-        if tracks.find(view.tracks, track) is None:
+        known = tracks.find(view.tracks, track)
+        if known is not None and not known.get('root'):
+            # ⛔ Напрямок відомий, але СВОГО кореня не має (після кроку D корінь, узятий адаптером зі спільного, відкинуто): `_root_of`
+            # дав би теку простору, і задачу стягнуло б туди зі спільної теки. Як з невідомим напрямком: лише називаємо.
+            out.append((tid, track, cur, None, 'корінь напрямку не задано'))
+            continue
+        if known is None:
             # ⛔ Напрямок невідомий простору (нема `track`, чи він поза переліком): такій задачі «свого» кореня нема, а корінь
             # дефолтного напрямку — не її. Переселення стягнуло б її з теки, де вона лежить, у чужу: не чіпаємо, лише називаємо.
             out.append((tid, track, cur, None, 'напрямок невідомий'))
