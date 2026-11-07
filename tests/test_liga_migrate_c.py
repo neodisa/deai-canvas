@@ -20,7 +20,7 @@ for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
+import isolation  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -338,11 +338,14 @@ class PublishLegacyPath(_PubWorld):
         self.assertEqual(dm.PUBLISH_MODULE, VID)
         self.assertEqual(dm.COMPAT_DESIGN_CANVAS, DC)
 
-    def test_implicit_is_the_league_path(self):
+    def test_a_provider_without_compat_and_no_provider_are_not_the_league_path(self):
+        """Було `test_implicit_is_the_league_path`: неявний постачальник вів шлях ЛІГА. 4d-4b (R2): неявного нема — шлях ЛІГА лише в запису
+        `vercel-publish` із `compat` (його тримають тести нижче); модуль без `compat` і відсутність постачальника (`None`) — НЕ шлях ЛІГА."""
         prov = self.prov()
-        self.assertIsInstance(prov, implicit.Implicit)
-        self.assertIs(dm.publish_legacy_path(prov), True)
-        self.assertIs(dm.publish_legacy_path(prov, self.on), True)
+        self.assertIsInstance(prov, dm.Module)
+        self.assertIs(dm.publish_legacy_path(prov), False)
+        self.assertIs(dm.publish_legacy_path(prov, self.on), False)
+        self.assertIs(dm.publish_legacy_path(None), False)
 
     def test_builtin_vercel_with_compat_is_the_league_path(self):
         self.vercel(DC)
@@ -663,8 +666,11 @@ class PublishCompatSetting(unittest.TestCase):
     def test_label_warns_about_what_is_not_read_and_the_switch(self):
         label = self.setting()['label']
         self.assertIn('⚠', label)
-        for word in ('auth', 'team', 'password'):
+        # Поправка 7 (4d-4b): пароль превʼю ТЕПЕР читається (задача, далі секрет модуля) — підпис попереджає лише про `auth` і `team`
+        for word in ('auth', 'team'):
             self.assertIn(word, label)
+        self.assertNotIn('password', label)
+        self.assertIn('пароль превʼю — спершу пароль задачі, далі секрет цього модуля', label)
         self.assertIn('не чита', label)                  # «не читаються»
         self.assertIn('проєкти', label)                  # зміна значення на живому просторі = нові проєкти й URL
         self.assertIn('URL', label)
@@ -1376,7 +1382,7 @@ class CheckVerdictIsolated(_StepC):
                 self.mock.patch.object(serve, '_node_bin', side_effect=AssertionError('npx не має викликатись')), \
                 self.mock.patch.object(dm, 'check', side_effect=AssertionError('перевірка модуля не має запускатись')), \
                 SocketTripwire() as wire:
-            self.assertTrue(implicit.isolated())
+            self.assertTrue(isolation.isolated())
             self.assertTrue(dm.shared_state(space, PUB_MOD))
             verdict = serve.module_check_verdict(space, PUB_MOD)
         self.assertEqual((verdict['ok'], verdict['error']), (False, 'isolated'))
@@ -1693,13 +1699,13 @@ class RealPublishNonIsolated(unittest.TestCase):
                 self.assertEqual(res, [('liga-4d3a', 'done'), ('liga-4d3b', 'done'), ('liga-4d3c', 'done')])
             dm.reset_caches()
             # ⛔ НЕізольований прогін: нема ні `DC_TASKS_FILE`, ні `DC_NO_OVERVIEW`; `npx` — фальшивий, перший на `PATH`
-            self.assertFalse(implicit.isolated(), 'неізольований прогін: нема ні DC_TASKS_FILE, ні DC_NO_OVERVIEW')
+            self.assertFalse(isolation.isolated(), 'неізольований прогін: нема ні DC_TASKS_FILE, ні DC_NO_OVERVIEW')
             self.assertNotIn('DC_TASKS_FILE', os.environ)
             self.assertNotIn('DC_NO_OVERVIEW', os.environ)
             self.assertEqual(serve._node_bin('npx'), os.path.join(npxdir, 'npx'))
             with spaces.request_space(g.SPACE_ID):
                 prov = dm.provider('publish', space)
-                meta['implicit'] = isinstance(prov, implicit.Implicit)
+                meta['implicit'] = False             # `Implicit` видалено (4d-4b): неявного постачальника нема ні до, ні після міграції
                 meta['caps_publish'] = dm.capabilities(space)['publish']
                 data['publish_module_is_none'] = dm.publish_module(space) is None
                 self.assertTrue(data['publish_module_is_none'])

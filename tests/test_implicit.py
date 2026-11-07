@@ -15,7 +15,6 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import implicit  # noqa: E402
 import install_config  # noqa: E402
 import spaces  # noqa: E402
 import dashboard  # noqa: E402
@@ -220,95 +219,15 @@ def _clean_env():
     return mock.patch.dict(os.environ, {}, clear=False)
 
 
-class ImplicitCore(unittest.TestCase):
-    def setUp(self):
-        p = _clean_env()
-        p.start()
-        self.addCleanup(p.stop)
-        for k in _ENV:
-            os.environ.pop(k, None)
-
-    def test_roles_order(self):
-        self.assertEqual(implicit.IMPLICIT_ROLES, _ROLES)
-
-    def test_singleton_and_immutable(self):
-        for r in _ROLES:
-            p = implicit.for_role(r)
-            self.assertIs(p, implicit.for_role(r))
-            self.assertEqual(p.role, r)
-            with self.assertRaises(AttributeError):
-                p.module_id = 'x'
-            with self.assertRaises(AttributeError):
-                p.extra = 1
-
-    def test_table(self):
-        want = {
-            'publish': ('vercel-publish', True, None),
-            'comments': ('supabase-comments', True, None),
-            'vcs': ('git-sync', True, None),
-            'dashboard': ('supabase-dashboard', True, 'DC_TEAM_FAKE'),
-            'tracker': ('jira-tracker', True, 'DC_TRACKER_FAKE'),
-            'notify': ('supabase-teams', True, 'DC_TEAMS_FAKE'),
-        }
-        for r, (mid, shared, fake) in want.items():
-            p = implicit.for_role(r)
-            self.assertEqual((p.module_id, p.shared, p.fake_env), (mid, shared, fake), r)
-
-    def test_module_ids_match_real_code(self):
-        """Таблиця не розходиться з тим, що реально беруть гілки 0.15.0."""
-        import serve
-        self.assertEqual(implicit.for_role('publish').module_id, serve.PUBLISH_LEGACY_MODULE)
-        self.assertEqual(implicit.for_role('comments').module_id, serve.COMMENTS_MODULE)
-        self.assertEqual(implicit.for_role('vcs').module_id, serve.VCS_MODULE)
-        self.assertEqual(implicit.for_role('dashboard').module_id, dashboard.LEGACY_MODULE)
-        self.assertEqual(implicit.for_role('tracker').module_id, tracker.LEGACY_MODULE)
-        self.assertEqual(implicit.for_role('notify').module_id, notify.LEGACY_MODULE)
-
-    def test_unknown_role(self):
-        with self.assertRaises(KeyError):
-            implicit.for_role('tokens')
-
-    def test_isolated_truth_table(self):
-        for tf in (None, '', '/x/tasks.json'):
-            for no in (None, '', '1'):
-                with mock.patch.dict(os.environ, {}, clear=False):
-                    os.environ.pop('DC_TASKS_FILE', None)
-                    os.environ.pop('DC_NO_OVERVIEW', None)
-                    if tf is not None:
-                        os.environ['DC_TASKS_FILE'] = tf
-                    if no is not None:
-                        os.environ['DC_NO_OVERVIEW'] = no
-                    self.assertEqual(implicit.isolated(), bool(tf) or bool(no), (tf, no))
-
-    def test_route_fake_wins_even_isolated(self):
-        p = implicit.for_role('dashboard')
-        with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': '/tmp/fake.json', 'DC_TASKS_FILE': '/x/t.json'}):
-            self.assertEqual(implicit.route(p), ('fake', '/tmp/fake.json'))
-
-    def test_route_empty_fake_is_absent(self):
-        p = implicit.for_role('dashboard')
-        with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': '', 'DC_NO_OVERVIEW': '1'}):
-            self.assertEqual(implicit.route(p), ('isolated', None))
-
-    def test_route_isolated_and_live(self):
-        for r in _ROLES:
-            p = implicit.for_role(r)
-            self.assertEqual(implicit.route(p), ('live', None), r)
-            with mock.patch.dict(os.environ, {'DC_TASKS_FILE': '/x/t.json'}):
-                self.assertEqual(implicit.route(p), ('isolated', None), r)
-            with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1'}):
-                self.assertEqual(implicit.route(p), ('isolated', None), r)
-
-    def test_route_not_shared_is_live_when_isolated(self):
-        p = implicit.Implicit('x', 'm', False, None)
-        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': '/x/t.json'}):
-            self.assertEqual(implicit.route(p), ('live', None))
-
-    def test_no_serve_import(self):
-        with open(implicit.__file__, encoding='utf-8') as f:
-            src = f.read()
-        self.assertNotIn('import serve', src)
-        self.assertNotIn('deai_modules', src)
+# ⛔ Клас `ImplicitCore` (11 тестів) ретировано в 4d-4b: `app/implicit.py` видалено, ядро ізоляції — `app/isolation.py`. Відповідність:
+#   `test_roles_order`, `test_singleton_and_immutable`, `test_table`, `test_module_ids_match_real_code`, `test_unknown_role` -> R6 (`Implicit`
+#     нема; таблиця швів — `test_isolation.IsolationCore.test_fake_env_table_is_the_old_one`, ролі — `liga_migrate.LIGA_ROLES`);
+#   `test_isolated_truth_table` -> `test_isolation.IsolationCore.test_isolated_is_tasks_file_or_no_overview`;
+#   `test_route_fake_wins_even_isolated`, `test_route_isolated_and_live` -> `test_isolation.IsolationCore.test_route_order_fake_then_isolated_then_live`;
+#   `test_route_empty_fake_is_absent` -> `test_isolation.IsolationCore.test_an_empty_seam_is_absent`;
+#   `test_route_not_shared_is_live_when_isolated` -> R6 (параметр `shared` завжди був `True`; ролі без шва —
+#     `test_isolation.IsolationCore.test_roles_without_a_seam_are_only_isolated_or_live`);
+#   `test_no_serve_import` -> `test_isolation.IsolationCore.test_imports_nothing_but_os`.
 
 
 class EffectiveSpace(unittest.TestCase):
@@ -396,29 +315,25 @@ class ProviderImplicit(unittest.TestCase):
             self.addCleanup(m.stop)
         return out
 
-    def _assert_implicit_roles(self):
+    def _assert_no_roles_without_reads(self):
         reads = self._counters()
         for role in self.dm.ROLES_CALLED:
-            p = self.dm.provider(role)
-            if role in implicit.IMPLICIT_ROLES:
-                self.assertIsInstance(p, implicit.Implicit, role)
-                self.assertIs(p, implicit.for_role(role), role)
-            else:
-                self.assertIsNone(p, role)
+            self.assertIsNone(self.dm.provider(role), role)       # було `Implicit` для шести ролей ЛІГИ; 4d-4b: ролей нема
         self.assertIsNone(self.dm.provider('tokens'))
         for m in reads:
             m.assert_not_called()
 
-    def test_layer_off_is_implicit_without_reads(self):
+    def test_layer_off_has_no_roles_without_reads(self):
+        """Було `…_is_implicit_without_reads` (шість ролей віддавали `Implicit`); тепер `None`, і так само БЕЗ читань реєстру/`space.json`/каталогу."""
         os.environ['DC_TASKS_FILE'] = os.path.join(self.tmp.name, 'tasks.json')
         self.assertFalse(spaces.layer_on())
-        self._assert_implicit_roles()
+        self._assert_no_roles_without_reads()
 
-    def test_unfixed_request_space_is_implicit_without_reads(self):
+    def test_unfixed_request_space_has_no_roles_without_reads(self):
         os.environ['DEAI_HOME'] = os.path.join(self.tmp.name, 'deai')
         self.assertTrue(spaces.layer_on())
         self.assertIsNone(spaces.request_space_id())
-        self._assert_implicit_roles()
+        self._assert_no_roles_without_reads()
 
     def test_provider_none_when_no_space(self):
         os.environ['DEAI_HOME'] = os.path.join(self.tmp.name, 'deai')
@@ -455,45 +370,31 @@ class ProviderImplicit(unittest.TestCase):
         os.chdir(work)
         self.addCleanup(os.chdir, old)
         for role in self.dm.ROLES_CALLED:
-            p = self.dm._provider_for(role, dict(spaces.IMPLICIT))
-            if role in implicit.IMPLICIT_ROLES:
-                self.assertIs(p, implicit.for_role(role), role)
-            else:
-                self.assertIsNone(p, role)
+            self.assertIsNone(self.dm._provider_for(role, dict(spaces.IMPLICIT)), role)     # було `Implicit` для ролей ЛІГИ
         for m in reads:
             m.assert_not_called()
 
-    def test_provider_for_plain_space_without_integrations_has_no_implicit(self):
+    def test_provider_for_plain_space_without_integrations_has_no_provider(self):
         sp = {'id': 'plain', 'path': os.path.join(self.tmp.name, 'plain')}
         os.makedirs(sp['path'])
-        for role in implicit.IMPLICIT_ROLES:
-            self.assertNotIsInstance(self.dm._provider_for(role, sp), implicit.Implicit, role)
+        for role in self.dm.ROLES_CALLED:
+            p = self.dm._provider_for(role, sp)
+            if role == 'publish':
+                self.assertEqual(p.id, 'static-publish')           # єдиний типовий модуль простору без запису
+            else:
+                self.assertIsNone(p, role)
 
-    def test_provider_for_integrations_space_returns_implicit(self):
-        sp = {'id': 'liga2', 'path': os.path.join(self.tmp.name, 'liga2'), 'integrations': True}
-        os.makedirs(sp['path'])
-        for role in implicit.IMPLICIT_ROLES:
-            self.assertIs(self.dm._provider_for(role, sp), implicit.for_role(role), role)
-        self.assertIsNone(self.dm._provider_for('tokens', sp))
-
-    def test_role_constants_renamed(self):
-        dm = self.dm
-        self.assertIs(dm.IMPLICIT_ROLES, implicit.IMPLICIT_ROLES)
-        self.assertEqual(dm.IMPLICIT_ON_ERROR_ROLES, ('publish', 'vcs'))
-        self.assertEqual(dm.STRICT_IMPLICIT_ROLES, ('comments', 'dashboard', 'tracker', 'notify'))
-        for gone in ('LEGACY_ROLES', 'LEGACY_ON_ERROR_ROLES', 'STRICT_LEGACY_ROLES'):
-            self.assertFalse(hasattr(dm, gone), gone)
+    # Ретировано (4d-4b): `test_provider_for_integrations_space_returns_implicit` -> ІНВЕРТОВАНО в
+    # `test_originals_gone.ProviderWithoutImplicit.test_a_liga_role_without_a_record_is_none`; `test_role_constants_renamed` -> R6
+    # (`test_originals_gone.ProviderWithoutImplicit.test_the_core_has_no_fallback_names`: `IMPLICIT_*` констант нема).
 
     def test_api_value(self):
         dm = self.dm
-        self.assertEqual(dm.API_IMPLICIT, 'legacy')
-        for role in implicit.IMPLICIT_ROLES:
-            self.assertEqual(dm.api_value(implicit.for_role(role)), 'legacy')
         self.assertIsNone(dm.api_value(None))
         mod = dm.Module.__new__(dm.Module)
         mod.id = 'acme'
         self.assertEqual(dm.api_value(mod), 'acme')
-        for bad in ('legacy', 'acme', 0, {}, object()):
+        for bad in ('legacy', 'acme', 0, {}, object()):            # рядок `'legacy'` — теж `TypeError`: неявного випадку нема
             with self.assertRaises(TypeError):
                 dm.api_value(bad)
 
@@ -512,10 +413,13 @@ class ProviderImplicit(unittest.TestCase):
                 got = gen.caps(tmp)
         self.assertEqual(sorted(got), sorted(want))
         for name in want:
-            self.assertEqual(got[name]['caps'], want[name]['caps'], name)
+            # 4d-4b: знімок 0.15.0 — еталон, а не вимога: неявні `'legacy'` стали `None` (запасного постачальника нема); решта — без змін
+            expected = {r: (None if v == 'legacy' else v) for r, v in want[name]['caps'].items()}
+            self.assertEqual(got[name]['caps'], expected, name)
             for role, v in got[name]['caps'].items():
-                self.assertIs(type(v), type(want[name]['caps'][role]), (name, role))     # `str`/`None`, не `Implicit`
+                self.assertTrue(v is None or isinstance(v, str), (name, role))           # `str`/`None`
         self.assertEqual(want['liga']['caps']['publish'], 'legacy')                        # знімок справді несе `'legacy'`
+        self.assertTrue(all(v is None for v in got['liga']['caps'].values()), 'ЛІГА без явних записів — жодної ролі')
 
 
 class RolesParity(unittest.TestCase):
@@ -539,50 +443,53 @@ class RolesParity(unittest.TestCase):
                 fn = getattr(gen, builder)
                 return fn(tmp, **kw) if prov is None else fn(tmp, prov, **kw)
 
-    def test_isolation_matches_snapshot_through_new_code_paths(self):
-        """`_team_fetch`, `team_rows`, `_tracker_fetch`, `notify_call` з ПРАВДИВИМ `Implicit` своєї ролі (у кожного свій
-        `fake_env`) і `Handler._overview_sync` (постачальника бере сам) дають рівно знімок `isolation` 0.15.0: ті самі значення,
-        тексти, лічильники модуля й мережі. Генератор бере один `prov` на всі ролі, тож беремо з кожного прогону лише СВОЮ роль."""
-        want = self.snap['isolation']
-        for role in ('dashboard', 'tracker', 'notify'):
-            got = self._run('isolation', implicit.for_role(role))
-            self.assertEqual(got[role], want[role], role)
-            if role == 'dashboard':
-                self.assertEqual(got['sync'], want['sync'])
-                self.assertEqual(got['note'], want['note'])
+    def league(self, role):
+        """`(space, prov)` ролі `role` простору ЛІГА з ЯВНИМ записом (4d-4b, R3; було `implicit.for_role(role)`). Простір закріплено простором запиту."""
+        import deai_modules as dm
+        import liga_fixture
+        fx = liga_fixture.LigaFixture(self).env().build(roles=(role,))
+        fx.fix_space()
+        space = {'id': 'legacy', 'path': fx.space_dir, 'legacy': True, 'integrations': True}
+        return space, dm.provider(role, space)
 
-    def test_cache_who_matches_snapshot(self):
-        """Ключ і `who` кешів `team_snapshot`/`tracker_snapshot` — як у 0.15.0: `'legacy'` через `api_value`, не `Implicit`."""
-        want = self.snap['cache_who']
-        for role, cache in (('dashboard', 'team'), ('tracker', 'tracker')):
-            got = self._run('cache_who', implicit.for_role(role))
-            self.assertEqual(got[cache], want[cache], role)
-            for who in got[cache].values():
-                self.assertIs(type(who), str)
+    # Ретировано (4d-4b): `test_isolation_matches_snapshot_through_new_code_paths` і `test_cache_who_matches_snapshot` — вони гонили
+    # генератор знімка 0.15.0 (`make_before_4d2`) з `Implicit` і читачами оригіналів, яких нема. Замінено: ізоляція дашборда/сповіщень/
+    # трекера — `test_dashboard.test_isolation_does_not_call_the_module`, `test_notify.test_the_league_route_in_an_isolated_run_never_reaches_the_network`,
+    # `test_tasks_overview.test_isolation_without_the_seam_means_no_tracker_and_no_work`; ключ `who` кешів (`'legacy'` через `api_value`)
+    # більше не існує — його значення тепер id явного модуля (покриває `test_originals_gone.ProviderWithoutImplicit`).
 
     def test_tracker_empty_keys_isolated_is_none_not_empty_dict(self):
-        """⛔ Порядок `_tracker_fetch` для неявного: шов → ізоляція → `if not keys`. Ізольований прогін без ключів — `None`
-        («трекера нема»), а не `({}, None)`; (знімок має непорожні ключі, тож цього не бачить)."""
+        """⛔ Порядок `_tracker_fetch` для `shared_state`-запису: шов → ізоляція → `if not keys`. Ізольований прогін без ключів — `None`
+        («трекера нема»), а не `({}, None)`; (знімок має непорожні ключі, тож цього не бачить). Постачальник — явний запис `jira-tracker`."""
         import serve
-        prov = implicit.for_role('tracker')
+        space, prov = self.league('tracker')
         with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(tempfile.gettempdir(), 'x-tasks.json')}):
             os.environ.pop('DC_TRACKER_FAKE', None)
-            self.assertIsNone(serve._tracker_fetch(None, prov, []))
-            self.assertIsNone(serve._tracker_fetch(None, prov, ['DEMO-1']))
+            self.assertIsNone(serve._tracker_fetch(space, prov, []))
+            self.assertIsNone(serve._tracker_fetch(space, prov, ['DEMO-1']))
 
     def test_notify_isolated_never_calls_module(self):
         import serve
         import deai_modules as dm
-        prov = implicit.for_role('notify')
+        space, prov = self.league('notify')
         with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1'}), mock.patch.object(dm, 'call', side_effect=AssertionError('модуль')):
             os.environ.pop('DC_TEAMS_FAKE', None)
             with self.assertRaises(OSError):
-                serve.notify_call('mute_state', resolved=(None, prov))
+                serve.notify_call('mute_state', resolved=(space, prov))
 
     def test_api_matches_snapshot_in_both_modes(self):
-        """`/api/spaces` і `/api/task` (`capabilities`, `preview_gate`, `publish_gate`) після переходу на `publish_module` — як 0.15.0."""
+        """`/api/spaces` і `/api/task` (`capabilities`, `preview_gate`, `publish_gate`) — як 0.15.0, КРІМ простору ЛІГА в реєстрі:
+        там неявні `'legacy'` стали `null` (запасного постачальника нема, 4d-4b; значення знімка — еталон 0.15, а не вимога)."""
+        def no_fallback(obj):
+            if isinstance(obj, dict):
+                return {k: ({r: (None if v == 'legacy' else v) for r, v in val.items()} if k == 'capabilities' and isinstance(val, dict)
+                            else no_fallback(val)) for k, val in obj.items()}
+            if isinstance(obj, list):
+                return [no_fallback(x) for x in obj]
+            return obj
         got = self._run('api')
-        self.assertEqual(got, self.snap['api'])
+        want = dict(self.snap['api'], liga_in_registry=no_fallback(self.snap['api']['liga_in_registry']))
+        self.assertEqual(got, want)
 
 
 class PublishModule(unittest.TestCase):
@@ -618,10 +525,10 @@ class PublishModule(unittest.TestCase):
         import serve
         self.assertEqual(serve.task_preview_gate({}, None, sp), serve.MODULE_GATE_STATE)
 
-    def test_implicit_none_and_failures_are_none(self):
+    def test_no_provider_and_failures_are_none(self):
         liga = self._space('liga', integrations=True)
-        self.assertEqual(self.dm.capabilities(liga)['publish'], 'legacy')
-        self.assertIsNone(self.dm.publish_module(liga))            # ⛔ `Implicit` — не модуль
+        self.assertIsNone(self.dm.capabilities(liga)['publish'])   # було 'legacy' (неявний постачальник); запасного нема (4d-4b)
+        self.assertIsNone(self.dm.publish_module(liga))            # просторові з інтеграціями без запису публікація не дісталась
         for bad in (None, {}, 'x', 0):
             self.assertIsNone(self.dm.publish_module(bad))
         with mock.patch.object(self.dm, '_caps_key', side_effect=RuntimeError('збій відбитків')):
@@ -703,13 +610,8 @@ class NoLegacyLiteral(unittest.TestCase):
             with self.subTest(src=src):
                 self.assertEqual(self.offenders(src), [])
 
-    def test_implicit_is_not_the_public_string(self):
-        """Міст прибрано: неявний постачальник НЕ дорівнює рядку `'legacy'`; різні ролі — різні обʼєкти."""
-        self.assertFalse(implicit.for_role('publish') == 'legacy')
-        self.assertTrue(implicit.for_role('publish') != 'legacy')
-        self.assertNotEqual(implicit.for_role('publish'), implicit.for_role('comments'))
-        self.assertIs(implicit.for_role('publish'), implicit.for_role('publish'))
-        self.assertNotEqual(hash(implicit.for_role('publish')), hash('legacy'))
+    # `test_implicit_is_not_the_public_string` ретировано (4d-4b, R6): `Implicit` видалено, порівнювати нема з чим; що неявного постачальника
+    # нема ні під якою назвою, стереже `test_originals_gone.ProviderWithoutImplicit.test_the_core_has_no_fallback_names`.
 
 
 class LigaLikePin(unittest.TestCase):
@@ -723,147 +625,19 @@ class LigaLikePin(unittest.TestCase):
         self.assertFalse(serve._liga_like({'id': 'x', 'path': '/p'}))
 
 
-class IsolatedInstallConfig(unittest.TestCase):
-    """4d-2 Task 5: в ізольованому прогоні (`DC_TASKS_FILE` або `DC_NO_OVERVIEW`) `supabase_config()` і `jira_config()` беруть усе
-    ЛИШЕ з кореня файла задач — без `SUPABASE_*`/`JIRA_*` з оточення й без `<HOME>/.claude/pipeline-feedback/jira-*`; поза
-    ізоляцією — рівно значення знімка 0.15.0 (`install`). Усі значення вигадані, HOME тимчасовий.
-
-    Під самим `DC_NO_OVERVIEW` (без `DC_TASKS_FILE`) «корінь» — старий файл установки (`spaces.legacy_tasks_file`): тут його
-    підставляє `mock.patch.object`, а читається він як і в 0.15.0 — відрізаються лише оточення й `pipeline-feedback`."""
-
-    SB = ('https://sb.example.com', 'sb_test_key')
-    JIRA = 'https://jira.example.com'
-    ROOT_PAIR = {'supabase_url': SB[0], 'supabase_key': SB[1], 'jira_base': JIRA}
-    ROOT_NONE = {'design_work_root': '~/work'}
-    ENV_ON = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_KEY': 'sb_env_key',
-              'JIRA_EMAIL': 'alpha@example.com', 'JIRA_TOKEN': 'jira_env_token'}
-    MODES = ('tasks_file', 'no_overview')
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.n = 0
-
-    def run_case(self, root, mode, env=None, files=False, fn=None):
-        """`(supabase_config(), jira_config())` для кореня `root` у режимі `mode` (`tasks_file`/`no_overview`/`none` — без ізоляції)."""
-        self.n += 1
-        home = os.path.join(self.tmp.name, 'c%d' % self.n, 'home')
-        os.makedirs(home)
-        tasks = os.path.join(home, 'tasks.json')
-        with open(tasks, 'w', encoding='utf-8') as f:
-            json.dump(root, f)
-        if files:
-            fb = os.path.join(home, '.claude', 'pipeline-feedback')
-            os.makedirs(fb)
-            for name, val in (('jira-email', 'file@example.com'), ('jira-token', 'jira_file_token')):
-                with open(os.path.join(fb, name), 'w', encoding='utf-8') as f:
-                    f.write(val + '\n')
-        with mock.patch.dict(os.environ, {'HOME': home, **(env or {})}), \
-                mock.patch.object(spaces, 'legacy_tasks_file', return_value=tasks):
-            for k in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
-                os.environ.pop(k, None)
-            if mode == 'tasks_file':
-                os.environ['DC_TASKS_FILE'] = tasks
-            elif mode == 'no_overview':
-                os.environ['DC_NO_OVERVIEW'] = '1'
-            if fn is not None:                             # інша функція конфігу в тому самому оточенні (напр. сервісний ключ)
-                return fn()
-            return install_config.supabase_config(), install_config.jira_config()
-
-    def test_supabase_isolated_ignores_env_when_root_has_no_pair(self):
-        for mode in self.MODES:
-            for files in (False, True):
-                with self.subTest(mode=mode, files=files):
-                    self.assertEqual(self.run_case(self.ROOT_NONE, mode, self.ENV_ON, files)[0], (None, None))
-
-    def test_supabase_isolated_takes_the_root_pair_not_the_env(self):
-        for mode in self.MODES:
-            for env in (self.ENV_ON, {}):
-                with self.subTest(mode=mode, env=bool(env)):
-                    self.assertEqual(self.run_case(self.ROOT_PAIR, mode, env)[0], self.SB)
-
-    def test_supabase_root_pair_form_is_checked(self):
-        for bad in ({'supabase_url': 'https://<ref>.supabase.co', 'supabase_key': 'sb_test_key'},
-                    {'supabase_url': self.SB[0], 'supabase_key': 'has space'}):
-            with self.subTest(bad=bad):
-                self.assertEqual(self.run_case(bad, 'tasks_file', self.ENV_ON)[0], (None, None))
-
-    def test_jira_isolated_without_root_credentials_is_none_whatever_env_and_files(self):
-        for mode in self.MODES:
-            for root in (self.ROOT_PAIR, self.ROOT_NONE):
-                for env in (self.ENV_ON, {}):
-                    for files in (False, True):
-                        with self.subTest(mode=mode, base=('jira_base' in root), env=bool(env), files=files):
-                            self.assertEqual(self.run_case(root, mode, env, files)[1], (None, None, None))
-
-    def test_jira_isolated_takes_the_full_triple_from_the_root_only(self):
-        root = {**self.ROOT_PAIR, 'jira_base': self.JIRA + '/', 'jira_email': ' root@example.com ', 'jira_token': 'jira_root_token'}
-        for mode in self.MODES:
-            for env, files in ((self.ENV_ON, True), ({}, False)):
-                with self.subTest(mode=mode, env=bool(env)):
-                    self.assertEqual(self.run_case(root, mode, env, files)[1], (self.JIRA, 'root@example.com', 'jira_root_token'))
-
-    def test_jira_root_credentials_need_both_and_the_same_form_as_env(self):
-        base = {'jira_base': self.JIRA}
-        for extra in ({'jira_email': 'root@example.com'}, {'jira_token': 'jira_root_token'},
-                      {'jira_email': 'root@example.com', 'jira_token': 'has space'},
-                      {'jira_email': '', 'jira_token': 'jira_root_token'}, {'jira_email': 1, 'jira_token': 'jira_root_token'}):
-            with self.subTest(extra=extra):
-                self.assertEqual(self.run_case({**base, **extra}, 'tasks_file', self.ENV_ON, True)[1], (None, None, None))
-
-    def test_outside_isolation_the_root_credentials_are_ignored_and_env_and_files_work(self):
-        root = {**self.ROOT_PAIR, 'jira_email': 'root@example.com', 'jira_token': 'jira_root_token'}
-        self.assertEqual(self.run_case(root, 'none')[1], (None, None, None))
-        self.assertEqual(self.run_case(root, 'none', self.ENV_ON)[1], (self.JIRA, 'alpha@example.com', 'jira_env_token'))
-        self.assertEqual(self.run_case(root, 'none', None, True)[1], (self.JIRA, 'file@example.com', 'jira_file_token'))
-
-    def test_service_key_isolated_is_none_whatever_env_and_root(self):
-        """4d-2 (фінальне ревʼю): `service_key_config()` під тим самим законом, що `supabase_config()` — лише корінь файла,
-        а сервісного ключа корінь не має: в ізоляції завжди `(None, None)`, хоч би що лежало в оточенні."""
-        env = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_SERVICE_KEY': 'sb_service_env_key'}
-        for mode in self.MODES:
-            for root in (self.ROOT_PAIR, self.ROOT_NONE, {**self.ROOT_PAIR, 'supabase_service_key': 'sb_service_root_key'}):
-                with self.subTest(mode=mode, root=sorted(root)):
-                    self.assertEqual(self.run_case(root, mode, env, fn=install_config.service_key_config), (None, None))
-
-    def test_service_key_outside_isolation_is_the_0_15_0_pair(self):
-        env = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_SERVICE_KEY': ' sb_service_env_key '}
-        self.assertEqual(self.run_case(self.ROOT_NONE, 'none', env, fn=install_config.service_key_config),
-                         ('https://sb-env.example.com', 'sb_service_env_key'))
-        self.assertEqual(self.run_case(self.ROOT_NONE, 'none', {'SUPABASE_URL': env['SUPABASE_URL']},
-                                       fn=install_config.service_key_config), (None, None))
-
-    def test_outside_isolation_matches_the_0_15_0_snapshot(self):
-        with open(BEFORE, encoding='utf-8') as f:
-            snap = json.load(f)['install']
-        self.assertEqual(len(snap), 8)
-        for name, want in snap.items():
-            root_name, env_name, files_name = name.split('/')
-            with self.subTest(case=name):
-                sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, 'none',
-                                          self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
-                self.assertEqual((list(sup), list(jira)), (want['supabase_config'], want['jira_config']))
-
-    def test_isolation_cuts_exactly_the_env_and_files_sources_of_the_snapshot(self):
-        with open(BEFORE, encoding='utf-8') as f:
-            snap = json.load(f)['install']
-        for name in snap:
-            root_name, env_name, files_name = name.split('/')
-            for mode in self.MODES:
-                with self.subTest(case=name, mode=mode):
-                    sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, mode,
-                                              self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
-                    self.assertEqual(sup, self.SB if root_name == 'root_with_pair' else (None, None))
-                    self.assertEqual(jira, (None, None, None))
-
-    def test_no_import_cycle(self):
-        """`install_config` імпортує `implicit`, а той — лише `os`: імпорт `implicit` без жодного модуля ядра."""
-        import ast
-        with open(implicit.__file__, encoding='utf-8') as f:
-            mods = {a.name for n in ast.walk(ast.parse(f.read())) if isinstance(n, (ast.Import, ast.ImportFrom))
-                    for a in (n.names if isinstance(n, ast.Import) else [ast.alias(n.module)])}
-        self.assertEqual(mods, {'os'})
-
+# ⛔ Клас `IsolatedInstallConfig` (12 тестів) ретировано в 4d-4b: читачі оригіналів (`install_config.supabase_config`/`jira_config`/
+# `service_key_config`) видалено, тож ізоляція їх уже нічого не відрізає. Відповідність (нічого не губимо):
+#   * `…supabase_isolated_ignores_env_when_root_has_no_pair`, `…supabase_isolated_takes_the_root_pair_not_the_env`,
+#     `…jira_isolated_without_root_credentials_is_none_whatever_env_and_files`, `…jira_isolated_takes_the_full_triple_from_the_root_only`,
+#     `…service_key_isolated_is_none_whatever_env_and_root`, `…service_key_outside_isolation_is_the_0_15_0_pair`,
+#     `…outside_isolation_matches_the_0_15_0_snapshot`  -> замінено `test_originals_gone.CommentsInIsolation`,
+#     `PreviewPasswordFromTheRecord`, `DashboardSyncWithoutLegacy` і охоронцем `NoOriginalsRead` (R6: поведінки нема);
+#   * `…no_import_cycle` -> замінено `test_isolation.IsolationCore.test_imports_nothing_but_os`;
+#   * ВІДКЛАДЕНО на хвилю 3 (Task 14, `tests/test_liga_migrate.py`, клас `OriginalsReadersCopy`; мене там чіпати не можна): форма пари
+#     (`…supabase_root_pair_form_is_checked`), вимога обох полів Jira (`…jira_root_credentials_need_both_and_the_same_form_as_env`),
+#     «поза ізоляцією корінь ігнорується, працюють оточення й файли» (`…outside_isolation_the_root_credentials_are_ignored…`) і «ізоляція
+#     відрізає рівно оточення й файли знімка» (`…isolation_cuts_exactly_the_env_and_files_sources_of_the_snapshot`) — проти копій
+#     міграції `liga_migrate._supabase_from`/`_jira_from`. Тимчасово без покриття.
 
 if __name__ == '__main__':
     unittest.main()
