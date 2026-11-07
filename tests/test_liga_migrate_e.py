@@ -525,5 +525,136 @@ class RunE(_StandE):
         self.assertEqual(self.read_json(self.space_path())['name'], 'Renamed by a person')
 
 
+class RestoreE(_StandE):
+    """Відкат кроку Е: домердж видалених ключів у ЖИВИЙ `tasks.json` (корінь першим), потім `space.json` і секрети; LIFO на п'ять кроків."""
+
+    def ran(self, **root):
+        self.root(**root)
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        return info['backup']
+
+    def live_edit(self, fn):
+        cfg = self.tasks()
+        fn(cfg)
+        self._write(self.tasks_path, cfg)
+
+    def test_restore_merges_removed_keys_back_and_keeps_live_edits(self):
+        stamp = self.ran()
+        before_space = self.read_json(self.deai, 'backups', stamp, 'space.json')
+
+        def edit(cfg):
+            cfg['tasks']['fresh'] = {'dir': '/x', 'title': 'created after the step'}
+            cfg['preview_password'] = 'my-own-password'              # людина вписала свій ключ у корінь після кроку
+        self.live_edit(edit)
+        st, info = self.lm._restore(stamp)
+        self.assertEqual(st, 'restored')
+        t = self.tasks()
+        self.assertIn('fresh', t['tasks'])
+        self.assertEqual(t['preview_password'], 'my-own-password')       # `kept-live`
+        for k in self.ALL:
+            if k != 'preview_password':
+                self.assertEqual(t[k], self.cfg[k], k)
+        self.assertEqual(info['root_restored'], sorted(k for k in self.ALL if k != 'preview_password'))
+        self.assertEqual(info['kept_live'], ['preview_password'])
+        self.assertEqual(self.read_json(self.space_path()), before_space)
+        self.assertNotIn('password', self.read_json(self.secrets_path())['legacy'].get('vercel-publish', {}))
+
+    def test_restore_never_rewrites_the_whole_file(self):
+        stamp = self.ran()
+
+        def edit(cfg):
+            cfg['design_work_root'] = '/changed/after/the/step'       # ключ є і в бекапі, але з іншим значенням
+            cfg['live_only_key'] = {'x': 1}
+            cfg['tasks']['fresh'] = {'dir': '/x'}
+        self.live_edit(edit)
+        self.assertEqual(self.lm.restore(stamp), 'restored')
+        t = self.tasks()
+        self.assertEqual(t['design_work_root'], '/changed/after/the/step')
+        self.assertEqual(t['live_only_key'], {'x': 1})
+        self.assertIn('fresh', t['tasks'])
+        self.assertEqual(t['gitlab_host_ip'], self.HOSTIP)
+
+    def test_restore_with_hold_marks_only_e(self):
+        stamp = self.ran()
+        self.assertEqual(self.lm.restore(stamp, hold=True), 'restored')
+        self.assertEqual(self.read_json(self.space_path())['migrations'], {'liga-4d4b': {'held': True}})
+        self.assertEqual(self.tasks()['jira_base'], self.JIRA_BASE)
+        self.assertEqual(self.lm.plan(step=self.E)['status'], 'skip-held')
+
+    def test_restore_takes_the_key_list_from_the_mark(self):
+        stamp = self.ran()
+        sj = self.read_json(self.space_path())
+        sj['migrations'][self.E.mark]['removed'] = ['jira_base']
+        self._write(self.space_path(), sj)
+        st, info = self.lm._restore(stamp)
+        self.assertEqual((st, info['root_restored']), ('restored', ['jira_base']))
+        self.assertEqual(sorted(k for k in self.ALL if k in self.tasks()), ['jira_base'])
+
+    def test_restore_fallback_when_mark_lacks_removed(self):
+        stamp = self.ran()
+        sj = self.read_json(self.space_path())
+        del sj['migrations'][self.E.mark]['removed']
+        self._write(self.space_path(), sj)
+        st, info = self.lm._restore(stamp)
+        self.assertEqual(st, 'restored')
+        self.assertEqual(info['root_restored'], sorted(self.ALL))
+        self.assertEqual(self.tasks()['preview_password'], self.PW)
+
+    def test_restore_fallback_when_space_json_is_unreadable(self):
+        stamp = self.ran()
+        self._write(self.space_path(), '{not json')
+        st, info = self.lm._restore(stamp)
+        self.assertEqual(st, 'restored')
+        self.assertEqual(info['root_restored'], sorted(self.ALL))
+
+    def test_restore_aborts_when_the_live_file_keeps_changing(self):
+        stamp = self.ran()
+        tasks_before, space_before = self.read(self.tasks_path), self.read(self.space_path())
+        n = {'i': 0}
+
+        def moving(path):
+            n['i'] += 1
+            return (n['i'], 1)
+        with self.mock.patch.object(self.lm, '_file_sig', moving):
+            st, _info = self.lm._restore(stamp)
+        self.assertEqual(st, 'abort-restore')
+        self.assertEqual(self.read(self.tasks_path), tasks_before)
+        self.assertEqual(self.read(self.space_path()), space_before)         # корінь першим: space.json не чіпано
+
+    def test_restore_refuses_when_the_live_file_is_unreadable(self):
+        stamp = self.ran()
+        self._write(self.tasks_path, '{broken')
+        space_before = self.read(self.space_path())
+        st, _info = self.lm._restore(stamp)
+        self.assertEqual(st, 'refuse-tasks-unreadable')
+        self.assertEqual(self.read(self.tasks_path), b'{broken')
+        self.assertEqual(self.read(self.space_path()), space_before)
+
+    def test_lifo_five_steps(self):
+        self.root()
+        sid = self.lm.plan(step=self.E)['space_id']
+        names = {}
+        for s in self.lm.ALL_STEPS[:4]:
+            names[s.mark] = self.lm._backup(self.spaces.home(), sid, self.space_dir, s)
+        sj = self.read_json(self.space_path())
+        sj['migrations'] = {m: {'at': '2026-11-07T00:00:00', 'backup': b} for m, b in names.items()}
+        self._write(self.space_path(), sj)
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        e = info['backup']
+        for m in ('liga-4d3a', 'liga-4d3b', 'liga-4d3c', 'liga-4d4a'):
+            before = self.snapshot_tree()
+            got, extra = self.lm._restore(names[m])
+            self.assertEqual((got, extra['rollback_first']), ('refuse-later-applied', e), m)
+            self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(self.lm.restore(e), 'restored')
+        for m in ('liga-4d3a', 'liga-4d3b', 'liga-4d3c'):
+            got, extra = self.lm._restore(names[m])
+            self.assertEqual((got, extra['rollback_first']), ('refuse-later-applied', names['liga-4d4a']), m)
+        self.assertEqual(self.lm.restore(names['liga-4d4a']), 'restored')
+        self.assertEqual(self.lm.restore(names['liga-4d3c']), 'restored')
+
+
 if __name__ == '__main__':
     unittest.main()

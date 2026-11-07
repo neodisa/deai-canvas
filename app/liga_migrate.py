@@ -1458,6 +1458,48 @@ def _applied_later(sp, step):
     return None
 
 
+def _restore_root(sp, d):
+    """Відкат кроку Е (4d-4b): ДОМЕРДЖ видалених ключів у ЖИВИЙ `tasks.json` ЛІГИ (НЕ перезапис файла: там уже нові задачі й правки людини).
+    Перелік — з позначки `removed` ПОТОЧНОГО `space.json` (читаємо ДО його заміни); позначка нечитана чи без `removed` — усі `ORIGINAL_KEYS`
+    бекапного `tasks.json`. Значення — з бекапу. Додається ЛИШЕ ключ, якого в живому корені нема; свій ключ людини лишається (`kept-live`).
+    Під `WRITE_LOCK`: `_file_sig` → читання → `.bak` → `_file_sig` → `atomic_write_json`; ретраї `_RECORDS_ATTEMPTS`, постійна гонка — `OSError`.
+    Живий файл не читається — `_Stop('refuse-tasks-unreadable')` (нічого не записано). Повертає `(повернуто, kept_live)` — списки імен ключів."""
+    keys = None
+    try:
+        mark = (deai_modules._load_space_json(sp).get('migrations') or {}).get(STEP_E.mark)
+        removed = mark.get('removed') if isinstance(mark, dict) else None
+        if isinstance(removed, list) and all(isinstance(k, str) for k in removed):
+            keys = [k for k in removed if k in ORIGINAL_KEYS]
+    except (deai_modules.ModuleError, AttributeError):
+        keys = None
+    with open(os.path.join(d, 'tasks.json'), encoding='utf-8') as f:
+        old = json.load(f)
+    if not isinstance(old, dict):
+        raise ValueError('tasks backup: not an object')
+    keys = [k for k in (ORIGINAL_KEYS if keys is None else keys) if k in old]
+    path = install_config.legacy_tasks_path()
+    with spaces.WRITE_LOCK:
+        for _attempt in range(_RECORDS_ATTEMPTS):
+            try:
+                before = _file_sig(path)
+                cfg = install_config.load_legacy_tasks()
+            except (OSError, ValueError):
+                raise _Stop('refuse-tasks-unreadable')
+            if not isinstance(cfg, dict):
+                raise _Stop('refuse-tasks-unreadable')
+            add = [k for k in keys if k not in cfg]
+            kept = sorted(k for k in keys if k in cfg)
+            if not add:
+                return [], kept
+            for k in add:
+                cfg[k] = old[k]
+            shutil.copy2(path, path + '.bak')
+            if _file_sig(path) == before:
+                atomic_write_json(path, cfg, fsync=True)
+                return sorted(add), kept
+        raise OSError('tasks file keeps changing')
+
+
 def _restore_locked(stamp, hold, home):
     d = _backup_dir(stamp)
     if d is None:
@@ -1489,6 +1531,12 @@ def _restore_locked(stamp, hold, home):
         safety = _write_pre_restore(stamp, sid, sp, part)
     except Exception:  # noqa: BLE001 — запобіжної копії нема: нічого не відкочуємо
         return 'abort-restore', {}
+    root_restored = kept_live = None
+    if step.originals:                                       # 4d-4b: корінь ПЕРШИМ — збій далі лишає простір мігрованим І з поверненими ключами
+        try:
+            root_restored, kept_live = _restore_root(sp, d)
+        except _Stop as s:
+            return s.status, {}
     # Спершу space.json: збій між двома записами лишає простір НЕмігрованим (секрети без запису нешкідливі), а не навпаки.
     with spaces.WRITE_LOCK:
         if 'space.json' in files:
@@ -1526,6 +1574,8 @@ def _restore_locked(stamp, hold, home):
             _write_space(sp, new)
     info = {'status': 'restored', 'reason': 'простір ЛІГА повернено з бекапу', 'space_id': sid, 'backup': stamp,
             'held': bool(hold), 'safety_copy': safety}
+    if step.originals:
+        info.update(root_restored=root_restored, kept_live=kept_live)
     _write_last(info, step)
     return 'restored', info
 
