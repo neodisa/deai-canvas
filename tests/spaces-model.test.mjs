@@ -4,7 +4,7 @@ import test from "node:test";
 import { DICT } from "../app/i18n.js";
 import {
   CHECK_POST_MARGIN_S, FORM_POST_TIMEOUT_MS, ID_MAX, NAME_RE, SPACE_COLORS, defaultSpacePath, isRegisteredPath, spaceColorToken, spaceErrField,
-  checkPostTimeoutMs, hasNotify, isLegacyPublish, isRemotePublish, previewTarget, publishReaction, pwView, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
+  checkPostTimeoutMs, hasNotify, hasPublish, hasTeamComments, hasVcs, isLegacyPublish, isLegacyVcs, isRemotePublish, previewTarget, publishReaction, pwView, spaceErrKey, spaceRows, spaceSlug, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, taskIdFrom, validTaskId,
 } from "../app/spaces-model.js";
 
 /* Модель UI просторів — чисті функції без DOM, `t()` і мережі. Усе, що вони
@@ -387,4 +387,15 @@ test("мігрований запис ЛІГА читається гілкою �
   assert.equal(publishReaction({ url: "https://pv-12345678.vercel.app" }, PLAIN, true).kind, "remote");
   assert.equal(pwView(task, MIG).pw, "1100", "пароль превʼю ЛІГА показано");
   assert.equal(pwView(task, PLAIN).pw, "", "контроль: у модуль-шляху пароль ЛІГА не показуємо");
+});
+
+test("4d-4b: capabilities без запасного постачальника (збій → null, не 'legacy') читаються як «ролі нема», а не падають", () => {
+  const sp = { id: "legacy", integrations: true, capabilities: { publish: null, comments: null, vcs: null, dashboard: null, tracker: null, notify: null, error: "space-json-unreadable" } };
+  assert.equal(hasPublish(sp), false);
+  assert.equal(hasVcs(sp), false);
+  assert.equal(hasNotify(sp), false);
+  assert.equal(hasTeamComments(sp), false);
+  assert.equal(isLegacyVcs(sp), false);
+  assert.equal(isLegacyPublish(sp), false);
+  assert.equal(isRemotePublish({ publish_url: "https://pv-12345678.vercel.app" }, sp), false);
 });

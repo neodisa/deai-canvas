@@ -53,22 +53,17 @@
     `module-error` без значень секретів, ≤300 символів; виняток-першоджерело не чіпляється до
     нового (`__cause__`/`__context__` порожні), щоб секрет не виїхав у traceback.
   * Шлях ЛІГА недоторканий: `provider()` для простору запиту, що не зафіксований (чи шар вимкнено),
-    віддає неявного постачальника (`Implicit`) чи `None` НЕ читаючи ні реєстр, ні `space.json`, ні каталог; простір з `integrations`
-    без жодного явно ввімкненого модуля — те саме, ДО каталогу (зламаний вбудований модуль чи
-    пошкоджений `space.json` не зачепить зашитий шлях). У просторі БЕЗ інтеграцій `provider()` мусить
-    знати явні рішення, тож нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)`.
-    ВИНЯТОК — роль `comments` у просторі з інтеграціями (приватність): зашитий шлях ЛІГА — це СПІЛЬНИЙ Supabase, куди
-    піни несуть знімки приватних макетів, тож мовчки переходити на нього, коли людина ЯВНО ввімкнула модуль коментарів,
-    не можна. Нечитабельний `space.json` — `space-json-unreadable`; явно ввімкнений запис, що ВІВ коментарі й загубився
+    віддає `None` (ролей нема) НЕ читаючи ні реєстр, ні `space.json`, ні каталог. Запасного постачальника нема (4d-4b): роль без явного ввімкненого
+    запису — `None`; нечитабельний `space.json` — `ModuleError('space-json-unreadable', 409)` для КОЖНОЇ ролі.
+    Роль `comments` (приватність): явно ввімкнений запис, що ВІВ коментарі й загубився
     (його маніфест оголошує `comments`; або маніфест не розібрано, а id не належить вбудованому модулю іншої ролі; або
     це відсутній вбудований модуль коментарів — точне правило в `_enabled_module_is_lost`), — `module-error`
-    (`COMMENTS_MODULE_BROKEN`); неявний постачальник (`Implicit`) — лише коли такого запису нема. Застарілий запис чужого модуля шлях ЛІГА не
-    вимикає. ВИДИМІСТЬ: той самий `module-error` — і в просторі БЕЗ інтеграцій (там запасного шляху нема, але тиша
-    «коментарів немає» без причини була б брехнею): сторінка канваса показує примітку, `comment-config` віддає код,
+    (`COMMENTS_MODULE_BROKEN`). ВИДИМІСТЬ: тиша
+    «коментарів немає» без причини була б брехнею: сторінка канваса показує примітку, `comment-config` віддає код,
     `capabilities()` у всіх цих випадках — `comments: None` + `error`; простір без жодного запису про коментарі — просто
     `None` без помилки.
   * `capabilities()` — ТОТАЛЬНА (опитування, списки просторів): ніколи не кидає, а помилку кладе в
-    ключ `error` (див. функцію). Ролі шляху ЛІГА (`IMPLICIT_ROLES`: `publish`, `comments`, `vcs`, `dashboard`, `tracker`, `notify`) без модуля дають неявного постачальника (`Implicit`).
+    ключ `error` (див. функцію). Запасного постачальника нема (4d-4b): роль без явного ввімкненого запису — `None`.
   * Правила теки публікації живуть тут (`published_root`, `folder_ok`, `folder_inputs`), щоб їх ділили
     `serve.py` і модуль; код модулів НЕ імпортує ні `serve`, ні `deai_modules` (їхній список імпортів —
     явний stdlib-allowlist у тестах): правило теки й клас `ModuleError` модуль отримує в `ctx`
@@ -92,7 +87,7 @@ import types
 from collections import OrderedDict
 from urllib.parse import quote, unquote, unquote_plus
 
-import implicit
+import isolation
 import module_trust
 import spaces
 from atomic_io import atomic_write_json
@@ -111,24 +106,9 @@ ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('
                   'tracker': ('statuses',), 'notify': ('mute_state', 'mute_set')}
 #: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
 ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',)}
-#: Ролі, що мають зашитий шлях ЛІГА: простір з `integrations` без явного модуля дає `Implicit` (а не `None`); таблиця — в `implicit.py`.
-IMPLICIT_ROLES = implicit.IMPLICIT_ROLES
-#: Значення неявного постачальника НАЗОВНІ (`capabilities` у `/api/*`): до 4d-3: публічний контракт — рядок `'legacy'`, не `'implicit'`.
-#: Єдине місце, де цей літерал живе в ядрі; решта коду працює з `Implicit` і виходить назовні лише через `api_value()`.
+#: Значення «зашитий шлях ЛІГА» НАЗОВНІ (`capabilities`): з 4d-4b ядро його БІЛЬШЕ НЕ ПОВЕРТАЄ (запасного постачальника нема); літерал живе до 4d-4c
+#: (JS-запасні гілки `connections-model.js`/`spaces-model.js` і охоронці їх ще розбирають).
 API_IMPLICIT = 'legacy'
-#: Які з `IMPLICIT_ROLES` `capabilities()` лишає `'legacy'`, коли роль не вдалось вирішити (`ModuleError`, збій відбитків): зашитий
-#: шлях `publish` і `vcs` — локальний. Без `comments`: його зашитий шлях — СПІЛЬНИЙ Supabase ЛІГА, куди піни несуть знімки
-#: приватних макетів, тож «через помилку» на нього не переходимо (див. `_provider_for`). Без `dashboard` з тієї ж причини:
-#: його зашитий шлях — теж спільний Supabase ЛІГА (рядки команди й картки проєктів), не локальний. Без `tracker` (4c-2): його
-#: зашитий шлях — сайт Jira ЛІГИ (`jira_base` у конфігу установки, облікові людини), а не локальна дія; «через помилку» ним
-#: не ходимо — нема певності, що простір узагалі мусить там бути. Без `notify` (4c-3): його зашитий шлях — спільний Supabase ЛІГИ
-#: й ЖИВИЙ канал Teams команди (тиша на канал), а не локальна дія.
-IMPLICIT_ON_ERROR_ROLES = ('publish', 'vcs')
-#: Ролі, чий зашитий шлях ЛІГА — СПІЛЬНИЙ Supabase (піни, рядки команди й картки) або сайт Jira ЛІГИ з обліковими людини
-#: (`tracker`, 4c-2) чи спільний Supabase ЛІГИ з живим каналом Teams (`notify`, 4c-3): нечитабельний `space.json` у просторі з
-#: інтеграціями для них — `space-json-unreadable`, а не `'legacy'` (не знаємо, чи людина не ввімкнула там свій модуль; див.
-#: `_provider_for`).
-STRICT_IMPLICIT_ROLES = ('comments', 'dashboard', 'tracker', 'notify')
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
@@ -916,7 +896,7 @@ def _normalize(mods):
 
 def shared_state(space, module_id):
     """Чи явний запис модуля в `space.json` позначено `shared_state: true` (4d-3a): спільний стан ЛІГИ, що підлягає закону ізоляції
-    (`implicit.isolated`) так само, як неявний шлях. ⛔ Тотальна: нема запису, не-`bool`, збій читання — `False`, не виняток
+    (`isolation.isolated`) так само, як неявний шлях. ⛔ Тотальна: нема запису, не-`bool`, збій читання — `False`, не виняток
     (відмова читання не має вмикати спільний шлях і не має ламати екран)."""
     try:
         return space_modules(space).get(module_id, {}).get('shared_state') is True
@@ -1729,8 +1709,8 @@ def check(space, module_id):
 #: «загубився модуль коментарів» від «лежить застарілий запис якогось іншого модуля» потрібно (див.
 #: `_enabled_module_is_lost`). Новий вбудований модуль — у котрийсь із двох списків (інваріант у `test_comments_role.py`).
 KNOWN_COMMENTS_MODULES = frozenset({'supabase-comments'})
-# ⚠️ Явно ввімкнений, але зламаний ВБУДОВАНИЙ `supabase-dashboard` у просторі з інтеграціями лишається неявним постачальником (`Implicit`; той самий
-# продукт); рольова перевірка загубленого модуля для `dashboard` — відкладена.
+# ⚠️ Явно ввімкнений, але зламаний ВБУДОВАНИЙ `supabase-dashboard` у просторі з інтеграціями веде роль на папері (`_paper_failure`);
+# рольова перевірка загубленого модуля для `dashboard` — відкладена.
 KNOWN_OTHER_MODULES = frozenset({'css-tokens', 'git-sync', 'static-publish', 'vercel-publish',
                                 'supabase-dashboard', 'jira-tracker', 'supabase-teams'})
 
@@ -1769,7 +1749,7 @@ def _paper_failure(role, cat, explicit):
     """`ModuleError` для ролі `role`, яку «на папері» веде явно ввімкнений СВІЙ модуль, що тут не працює, — або `None`.
     Модуль у каталозі, свій і не `ok` → `module-untrusted` (недовірений) чи `module-error`; модуля в каталозі нема, а
     запис `space.json` несе `roles` із цією роллю (їх пише вмикання свого модуля) → `module-error` (тека не приїхала чи
-    зникла). Позначка `paper` каже `capabilities`, що роль — `None`, а не запасний неявний постачальник (`Implicit`)."""
+    зникла). Позначка `paper` каже `capabilities`, що роль — `None`, а не помилка простору."""
     for mid in sorted(explicit):
         e = explicit[mid]
         if not e['enabled']:
@@ -1790,55 +1770,35 @@ def _paper_failure(role, cat, explicit):
 
 
 def _provider_for(role, space, get_cat=None, explicit_override=None):
-    """Модуль, `Implicit` (лише ролі `IMPLICIT_ROLES`) чи `None` — для вже відомого простору `space`.
-    Простір з `integrations` і без жодного явно ввімкненого модуля — неявний постачальник (`Implicit`) чи `None` ДО каталогу.
-    Без інтеграцій потрібні явні рішення, тож нечитабельний `space.json` — `space-json-unreadable`.
+    """Модуль чи `None` — для вже відомого простору `space`. Запасного постачальника нема (4d-4b): роль без явно ввімкненого запису — `None`.
+    Неявний простір — `None` ДО каталогу. Нечитабельний `space.json` — `space-json-unreadable` для КОЖНОЇ ролі.
 
     СВІЙ модуль, ЯВНО ввімкнений у `space.json` і не робочий тут (недовірений, `refused`, збій завантаження, теки нема), веде
     свої ролі «на папері» (`_paper_failure`): `module-untrusted`/`module-error` для БУДЬ-ЯКОЇ такої ролі й у будь-якому
-    просторі, ДО пошуку переможця — ні неявного `static-publish`, ні неявного постачальника (`Implicit`). Помилка несе позначку `paper`.
+    просторі, ДО пошуку переможця — ні неявного `static-publish`. Помилка несе позначку `paper`.
     `get_cat` — ледача вибірка каталогу (`capabilities` ділить її між ролями); без неї — `catalog(space)`.
     `explicit_override` — готові явні рішення (форма `space_modules`: `{id: {enabled, settings, …}}`) ЗАМІСТЬ читання `space.json` з
     диска: так міграція ЛІГИ (`liga_migrate.plan`, 4d-3a) перевіряє розрахований `space.json` В ПАМʼЯТІ, нічого не пишучи. Лише
     для цього; звичайні виклики його не передають.
 
     ВИНЯТОК для `comments` (див. docstring модуля, «приватність» і «видимість»): явно ввімкнений модуль коментарів, що не
-    завантажився (`_enabled_module_is_lost`), — `module-error` у БУДЬ-ЯКОМУ просторі, а не тиша: у просторі з інтеграціями
-    мовчазний неявний постачальник (`Implicit`) повів би піни в спільний Supabase ЛІГА (і нечитабельний `space.json` там — теж
-    `space-json-unreadable`), а у просторі без них `None` лишив би людину без командних коментарів і без жодної
-    причини. Простір без жодного запису про коментарі лишається `None`. Для `publish` і `vcs` усе лишається як було: простір з
-    інтеграціями без явного модуля — неявний постачальник (`Implicit`), нечитабельний `space.json` у ньому шлях не ламає.
-
-    Нечитабельний `space.json` у просторі з інтеграціями — `space-json-unreadable` для КОЖНОЇ ролі з `STRICT_IMPLICIT_ROLES`
-    (`comments`, `dashboard`, `tracker`, `notify`): їхній зашитий шлях — спільний Supabase ЛІГА (`tracker` — сайт Jira ЛІГИ), а не
-    знаємо, чи людина не ввімкнула там свій модуль. `_enabled_module_is_lost` (зламаний явно ввімкнений модуль) — лише для `comments`."""
+    завантажився (`_enabled_module_is_lost`), — `module-error` у БУДЬ-ЯКОМУ просторі, а не тиша: `None` лишив би людину без
+    командних коментарів і без жодної причини. Простір без жодного запису про коментарі лишається `None`."""
     if spaces._is_implicit(space):
-        # ⛔ Неявний простір (ЛІГА без реєстру: шар вимкнено чи простір запиту не зафіксовано) — одразу, БЕЗ `space_modules` і каталогу:
-        # його порожній `path` інакше читався б як «поточна тека процесу» (`space.json` звідти). Закон колишнього `provider()`.
-        return implicit.for_role(role) if role in IMPLICIT_ROLES else None
-    integrations = spaces.integrations_for(space)
-    strict = integrations and role in STRICT_IMPLICIT_ROLES
-    if integrations:
-        try:
-            explicit = space_modules(space) if explicit_override is None else explicit_override
-        except ModuleError:
-            if strict:
-                raise                                       # не знаємо, що людина вмикала: на спільний сервіс не йдемо
-            explicit = {}                                   # пошкоджений файл не ламає шлях ЛІГА
-        if not any(e['enabled'] for e in explicit.values()):
-            return implicit.for_role(role) if role in IMPLICIT_ROLES else None
-    else:
-        explicit = space_modules(space) if explicit_override is None else explicit_override
+        # ⛔ Неявний простір (шар вимкнено чи простір запиту не зафіксовано) — «стан не справжній»: ролей у ньому нема (4d-4b), БЕЗ
+        # `space_modules` і каталогу (його порожній `path` інакше читався б як «поточна тека процесу»).
+        return None
+    explicit = space_modules(space) if explicit_override is None else explicit_override   # `space-json-unreadable` — для КОЖНОЇ ролі
     cat = get_cat() if get_cat is not None else catalog(space)
     paper = _paper_failure(role, cat, explicit)
     if paper is not None:
-        raise paper                                     # свій модуль веде роль на папері: ні неявного `static-publish`, ні неявного постачальника (`Implicit`)
+        raise paper                                     # свій модуль веде роль на папері: ні неявного `static-publish`
     winners = []
     for mid in sorted(cat):
         m = cat[mid]
         if m.status != 'ok' or role not in m.roles:
             continue
-        en, by_default = _enabled_in(m, space, explicit)      # `by_default` — не `implicit`: не затіняти модуль `implicit`
+        en, by_default = _enabled_in(m, space, explicit)
         if en:
             winners.append((by_default, mid, m))
     if winners:
@@ -1846,23 +1806,17 @@ def _provider_for(role, space, get_cat=None, explicit_override=None):
         return winners[0][2]
     if role == 'comments' and _enabled_module_is_lost(cat, explicit):
         raise ModuleError('module-error', message=COMMENTS_MODULE_BROKEN)
-    if role in IMPLICIT_ROLES and integrations:
-        return implicit.for_role(role)
     return None
 
 
 def provider(role, space=None):
-    """Хто виконує роль у просторі: `Module`, `Implicit` (зашитий шлях ЛІГА; ролі `IMPLICIT_ROLES` — `publish`,
-    `comments`, `vcs`, `dashboard`, `tracker` і `notify`) чи `None`. Неявний типовий модуль є лише в `publish` (`static-publish`); в інших ролей його нема.
-    Назовні (`/api/*`) `Implicit` — рядок `'legacy'` лише через `api_value()`.
+    """Хто виконує роль у просторі: `Module` чи `None` (запасного постачальника нема, 4d-4b). Неявний типовий модуль є лише в `publish` (`static-publish`).
 
     `space` — запис реєстру; не заданий → простір запиту з шва `spaces.effective_space()`: шар вимкнено чи простір запиту НЕ
     зафіксовано (`request_space_id() is None`: інструменти ЛІГА, воркери, тести без ізоляції) → неявний простір, а в ньому
-    `Implicit` для `publish`, `comments`, `vcs`, `dashboard`, `tracker` і `notify` і `None` для інших ролей — БЕЗ читання реєстру,
-    `space.json` і каталогу (як `spaces.integrations_on()`: там інтеграції ввімкнені, а з ними й командні коментарі ЛІГА);
+    ролей нема (`None`) — БЕЗ читання реєстру, `space.json` і каталогу;
     простору нема (`None`) → `None`. Явно переданий `space` вирішується сам по собі, незалежно
-    від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше простір з
-    `integrations` і роль із `IMPLICIT_ROLES` → `Implicit`; інакше `None`. Каталог — з СВОЇМИ модулями простору
+    від стану запиту. Явно чи неявно ввімкнений `ok`-модуль із роллю перемагає; інакше `None`. Каталог — з СВОЇМИ модулями простору
     (`catalog(space)`): явно ввімкнений свій модуль, що тут не працює, веде роль «на папері» — `ModuleError`
     (`module-untrusted`/`module-error`), без запасного шляху (`_paper_failure`).
     ⚠️ НІКОЛИ не кликати під `spaces.WRITE_LOCK`: для простору запиту це `spaces.active_space()`, а той може
@@ -1877,16 +1831,13 @@ def provider(role, space=None):
 
 
 def api_value(p):
-    """Єдина точка відображення постачальника НАЗОВНІ: `Module` → його id, `Implicit` → `API_IMPLICIT` (`'legacy'`, публічний
-    контракт до 4d-3), `None` → `None`. Усе інше (зокрема голий рядок) — `TypeError`: тихе «пропустити як є» знову розмило б
-    межу між внутрішнім `Implicit` і зовнішнім літералом."""
+    """Єдина точка відображення постачальника НАЗОВНІ: `Module` → його id, `None` → `None`. Усе інше (зокрема голий рядок) — `TypeError`:
+    тихе «пропустити як є» розмило б межу між внутрішнім постачальником і зовнішнім літералом (запасного `Implicit` більше нема, 4d-4b)."""
     if p is None:
         return None
     if isinstance(p, Module):
         return p.id
-    if isinstance(p, implicit.Implicit):
-        return API_IMPLICIT
-    raise TypeError(f'постачальник ролі: очікувано Module, Implicit чи None, отримано {type(p).__name__}')
+    raise TypeError(f'постачальник ролі: очікувано Module чи None, отримано {type(p).__name__}')
 
 
 def own_sig(space):
@@ -1938,7 +1889,7 @@ def capabilities(space):
 
 def _capabilities_full(space):
     """`(caps, raw)`: `caps` — те, що віддає `capabilities` (значення назовні, через `api_value`), `raw` — ті самі рішення ролей
-    як `Module`/`Implicit`/`None` (лише для `publish_module`: рішення «публікує модуль» береться з ТОГО Ж проходу й ТОГО Ж кешу,
+    як `Module`/`None` (лише для `publish_module`: рішення «публікує модуль» береться з ТОГО Ж проходу й ТОГО Ж кешу,
     що й `capabilities`, а не вгадується з рядка). Тотальна, як `capabilities`; при збої відбитків `raw` порожній."""
     if not isinstance(space, dict) or not space:
         return {role: None for role in ROLES_CALLED}, {}
@@ -1966,22 +1917,20 @@ def _capabilities_full(space):
                     caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
                     continue                # `error` — клієнт читає `error` як «space.json не читається» й сховав би картки
                 error = error or e.code
-                caps[role] = API_IMPLICIT if role in IMPLICIT_ON_ERROR_ROLES and spaces.integrations_for(space) else None
+                caps[role] = None
         if error:
             caps['error'] = error
         with _STATE_LOCK:
             _CAPS[sid] = (key, dict(caps), dict(raw))
         return dict(caps), raw
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
-        legacy = API_IMPLICIT if space.get('integrations') is True else None
-        caps = {role: legacy if role in IMPLICIT_ON_ERROR_ROLES else None for role in ROLES_CALLED}
+        caps = {role: None for role in ROLES_CALLED}
         caps['error'] = 'module-error'
         return caps, {}
 
 
 def publish_module(space):
-    """Модуль, що ПУБЛІКУЄ в просторі запиту `space` (роль `publish`), або `None`. ТОТАЛЬНА: не кидає ніколи; `Implicit`,
-    шлях ЛІГИ (`publish_legacy_path`: вбудований `vercel-publish` із `compat == "design-canvas"`), `None`, `ModuleError`, збій
+    """Модуль, що ПУБЛІКУЄ в просторі запиту `space` (роль `publish`), або `None`. ТОТАЛЬНА: не кидає ніколи; шлях ЛІГИ (`publish_legacy_path`: вбудований `vercel-publish` із `compat == "design-canvas"`), `None`, `ModuleError`, збій
     відбитків — `None` (обидва споживачі, `task_preview_gate` і `task_publish_share`, тому не міняються: для них публікація
     ЛІГИ — не «модуль»). Рішення те саме, що `capabilities(space)['publish']`, і з ТИМ САМИМ кешем
     (`_capabilities_full`): `capabilities` зберігає поруч сирих постачальників, а назовні віддає `api_value`.
@@ -2001,8 +1950,8 @@ PUBLISH_MODULE = 'vercel-publish'
 
 
 def publish_legacy_path(prov, space=None):
-    """ЄДИНА умова «публікація йде шляхом ЛІГИ» (проєкти `pv-…` і скоуп із `tasks.json`, пароль превʼю задачі/кореня/`1100`, гілка
-    `Handler._publish` для ЛІГИ): `Implicit` АБО вбудований `Module` `vercel-publish` із `compat == "design-canvas"` у `space.json`
+    """ЄДИНА умова «публікація йде шляхом ЛІГИ» (проєкти `pv-…` і скоуп із `tasks.json`, пароль превʼю задачі/секрету/`1100`, гілка
+    `Handler._publish` для ЛІГИ): вбудований `Module` `vercel-publish` із `compat == "design-canvas"` у `space.json`
     простору `space` (`None` — `spaces.active_space()`). ТОТАЛЬНА: будь-який збій — `False`, не виняток. Очікує постачальника, якого
     віддав `provider()` (статус/«ввімкнено» там уже відфільтровано): сама їх не перевіряє.
 
@@ -2010,12 +1959,29 @@ def publish_legacy_path(prov, space=None):
     рішення читається лише звідси. Лише вбудований І саме цей id: свій модуль простору міг би оголосити власне `compat` з іншим
     змістом, а `compat` інших модулів (`supabase-comments`, `git-sync`…) — про інші ролі."""
     try:
-        if isinstance(prov, implicit.Implicit):
-            return True
         return bool(isinstance(prov, Module) and getattr(prov, 'origin', 'builtin') == 'builtin' and prov.id == PUBLISH_MODULE
                     and compat_of(space or spaces.active_space(), PUBLISH_MODULE) == COMPAT_DESIGN_CANVAS)
     except Exception:  # noqa: BLE001 — тотальність: збій читання не ламає рішення про шлях публікації
         return False
+
+
+def publish_password(space):
+    """Пароль превʼю ЛІГИ з СЕКРЕТУ `password` явного `vercel-publish` (4d-4b: корінь `tasks.json` більше не читається) або `None` — тоді
+    пароль веде задача чи типовий `1100` (`serve.preview_password`). Умова — та сама `publish_legacy_path(prov, space)`, що веде гілку
+    ЛІГИ публікації: вбудований `vercel-publish` із `compat == "design-canvas"`; модуль-режим (`compat` порожній) цього секрета читає
+    САМ (`publish_with_module`), тож тут `None`. ТОТАЛЬНА: не кидає. ⛔ Закон ізоляції (Д6): ізольований прогін у СПРАВЖНЬОМУ домі
+    (`isolation.real_home`) — `None` (спільний секрет не беремо); у тимчасовому домі тесту — секрет фікстури."""
+    try:
+        if not isinstance(space, dict) or not space or spaces._is_implicit(space) or not spaces.layer_on():
+            return None
+        if isolation.isolated() and isolation.real_home(spaces.home()):
+            return None
+        prov = _capabilities_full(space)[1].get('publish')
+        if not publish_legacy_path(prov, space):
+            return None
+        return read_secrets(_space_id(space), PUBLISH_MODULE).get('password') or None
+    except Exception:  # noqa: BLE001 — тотальність: збій читання секрета не ламає `/api/task`
+        return None
 
 
 # ------------------------------------------------------------------------------ роль `comments` (2b-2)
@@ -2171,11 +2137,9 @@ def legacy_comment_channel(task, tid, internal=False):
 
 
 def comment_scheme_legacy(space, prov):
-    """ЄДИНА умова «коментарі ведуться за схемою comment-layer»: `Implicit` АБО вбудований `Module` `supabase-comments` із
+    """ЄДИНА умова «коментарі ведуться за схемою comment-layer»: вбудований `Module` `supabase-comments` із
     `compat == "comment-layer"`. ⛔ Лише вбудований І саме цей id (Поправка 3): свій модуль простору міг оголосити власне `compat`
     з іншим змістом, а `supabase-dashboard`/`supabase-teams` мають СВОЄ `compat` (`comment-layer` — публічний ключ сторінки)."""
-    if isinstance(prov, implicit.Implicit):
-        return True
     return (isinstance(prov, Module) and getattr(prov, 'origin', 'builtin') == 'builtin' and prov.id == COMMENTS_MODULE
             and compat_of(space, prov.id) == COMPAT_COMMENT_LAYER)
 
@@ -2193,7 +2157,7 @@ def comment_channel_of(space, prov, task, tid, internal=False, legacy=None):
 def comments_prov_cached(space):
     """Постачальник ролі `comments` простору `space` з кешу `_capabilities_full` (той самий прохід, що `capabilities`, а не новий
     обхід каталогу на кожен запит), як `publish_module`. ТОТАЛЬНА: шар вимкнено, простір запиту не зафіксовано, збій рішення —
-    `None`; НЕ кидає. `Module`, `Implicit` чи `None`."""
+    `None`; НЕ кидає. `Module` чи `None`."""
     try:
         if not (space and spaces.layer_on() and spaces.request_space_id() is not None):
             return None
