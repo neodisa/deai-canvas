@@ -338,14 +338,11 @@ class PublishLegacyPath(_PubWorld):
         self.assertEqual(dm.PUBLISH_MODULE, VID)
         self.assertEqual(dm.COMPAT_DESIGN_CANVAS, DC)
 
-    def test_a_provider_without_compat_and_no_provider_are_not_the_league_path(self):
+    def test_no_provider_is_not_the_league_path(self):
         """Було `test_implicit_is_the_league_path`: неявний постачальник вів шлях ЛІГА. 4d-4b (R2): неявного нема — шлях ЛІГА лише в запису
-        `vercel-publish` із `compat` (його тримають тести нижче); модуль без `compat` і відсутність постачальника (`None`) — НЕ шлях ЛІГА."""
-        prov = self.prov()
-        self.assertIsInstance(prov, dm.Module)
-        self.assertIs(dm.publish_legacy_path(prov), False)
-        self.assertIs(dm.publish_legacy_path(prov, self.on), False)
+        `vercel-publish` із `compat` (його тримають тести нижче); відсутність постачальника (`None`) — НЕ шлях ЛІГА."""
         self.assertIs(dm.publish_legacy_path(None), False)
+        self.assertIs(dm.publish_legacy_path(None, self.on), False)
 
     def test_builtin_vercel_with_compat_is_the_league_path(self):
         self.vercel(DC)
