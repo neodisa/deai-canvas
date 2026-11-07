@@ -1992,8 +1992,7 @@ class StepBPlanTest(_RealSteps):
         self.assertEqual(got, serve._vcs_legacy_ctx()['settings'])
 
     def test_url_and_key_come_from_supabase_from(self):
-        ic = self.lm.install_config
-        with self.mock.patch.object(ic, 'supabase_from', lambda cfg: ('https://sb-other.example.com', 'other_key_alpha')):
+        with self.mock.patch.object(self.lm, '_supabase_from', lambda cfg: ('https://sb-other.example.com', 'other_key_alpha')):
             p = self.plan_b()
         self.assertEqual(p['space_json']['modules'][COMMENTS_MOD]['settings']['url'], 'https://sb-other.example.com')
         self.assertEqual(p['secrets'], {COMMENTS_MOD: {'key': 'other_key_alpha'}})
@@ -2078,8 +2077,7 @@ class StepBPlanTest(_RealSteps):
         self.assertEqual(p['space_json']['migrations']['liga-4d3b'], {'roles': ['vcs']})
 
     def test_bad_url_userinfo_is_not_migrated(self):
-        ic = self.lm.install_config
-        with self.mock.patch.object(ic, 'supabase_from', lambda cfg: ('https://user:pass@sb.example.com', self.SB_KEY)):
+        with self.mock.patch.object(self.lm, '_supabase_from', lambda cfg: ('https://user:pass@sb.example.com', self.SB_KEY)):
             p = self.plan_b()
         self.assertEqual((p['roles']['comments']['migrate'], p['roles']['comments']['reason']), (False, 'bad-url'))
         self.assertNotIn(COMMENTS_MOD, p['secrets'])

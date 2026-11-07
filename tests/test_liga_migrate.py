@@ -1441,15 +1441,15 @@ class RunTest(_WriteStand):
 
     def test_userinfo_urls_are_not_migrated(self):
         """Зараз форму адреси стереже `install_config` (userinfo не проходить регулярку); `bad-url` — другий рубіж у самій міграції."""
-        ic = self.lm.install_config
-        with self.mock.patch.object(ic, 'jira_from', lambda cfg: ('https://user:pass@jira.example.com', self.JIRA_EMAIL, self.JIRA_TOKEN)):
+        ic = self.lm
+        with self.mock.patch.object(ic, '_jira_from', lambda cfg: ('https://user:pass@jira.example.com', self.JIRA_EMAIL, self.JIRA_TOKEN)):
             p = self.lm.plan()
         self.assertEqual((p['roles']['tracker']['migrate'], p['roles']['tracker']['reason']), (False, 'bad-url'))
         self.assertNotIn('jira-tracker', p['secrets'])
         self.assertNotIn('pass', repr(p['space_json']))
         self.assertNotIn('pass', self.lm.report(p))
         self.assertTrue(p['roles']['dashboard']['migrate'])
-        with self.mock.patch.object(ic, 'supabase_from', lambda cfg: ('https://k:v@sb.example.com', self.SB_KEY)):
+        with self.mock.patch.object(ic, '_supabase_from', lambda cfg: ('https://k:v@sb.example.com', self.SB_KEY)):
             p = self.lm.plan()
         for role in ('dashboard', 'notify'):
             self.assertEqual((p['roles'][role]['migrate'], p['roles'][role]['reason']), (False, 'bad-url'))

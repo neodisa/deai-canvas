@@ -76,11 +76,7 @@ LIGA_COMPAT = {'comments': 'comment-layer', 'vcs': 'design-canvas', 'publish': '
 def setUpModule():
     global _REAL
     _REAL = spaces_guard.snapshot()
-    # Конфіг Supabase ЛІГА — підставний на весь модуль (4b-2: констант нема, а справжній `tasks.json` установки не читаємо):
-    # тут перевіряється розмітка/збірка, а не пошук конфігу (його стережуть `test_legacy_comments`).
-    cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
-    cfg.start()
-    unittest.addModuleCleanup(cfg.stop)
+    # 4d-4b: підміни `serve.supabase_config` більше нема — читача оригіналів видалено; облікові ЛІГИ — з явних записів фікстури.
 
 
 def tearDownModule():

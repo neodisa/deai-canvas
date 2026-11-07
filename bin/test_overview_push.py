@@ -164,9 +164,14 @@ class TestDiscover(unittest.TestCase):
         self.assertEqual(row["name"], "X")
 
 
-# 4d-4b Task 10: `TestLegacyConfig` (6 тестів про `_legacy_config` і запасну пару `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`) ретировано —
-# читач видалено; усі шість замінює `tests/test_originals_gone.py::DashboardSyncWithoutLegacy` (без запису дашборда — постачальника нема,
-# навіть із сервісним ключем в оточенні; із записом — `module_ctx`).
+# 4d-4b: `TestLegacyConfig` (6 тестів) ретировано — читач `_legacy_config` видалено разом із запасними джерелами. Свідомо ВІДКИНУТО як
+# функціональність, що зникла (замінника нема, бо нема що тестувати): «файл установки раніше за оточення»
+# (`test_the_file_of_the_installation_wins`), запасна пара `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` з оточення
+# (`test_no_file_pair_the_service_key_pair_from_the_environment`, `test_the_service_key_without_a_url_is_nothing`,
+# `test_the_service_key_never_reaches_supabase_config`) і її ізоляція (`test_isolated_run_never_takes_the_service_key_from_the_environment`):
+# `service_key_config` видалено. Покрито замінниками: «нема запису дашборда — нема постачальника, навіть із сервісним ключем в оточенні;
+# із записом — `module_ctx`» — `tests/test_originals_gone.py::DashboardSyncWithoutLegacy`; «CLI називає відсутність конфігу без значень»
+# (`test_neither_is_unconfigured_and_cli_names_it_without_values`) — `TextsNameTheConnectionsScreen` (+ повідомлення `cmd_sync`).
 
 
 class TestSync(unittest.TestCase):

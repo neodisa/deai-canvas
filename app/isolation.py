@@ -33,14 +33,29 @@ def route(role):
 
 
 def real_home(home):
-    """Чи `home` (шлях до `DEAI_HOME`) — справжній `~/.deai` машини: `<дім з пароля ОС>/.deai`, порівняння за `realpath`. Не вдалось
-    дізнатись дім ОС (`pwd` нема, `KeyError`) — вважаємо справжнім (безпечніший бік: облікових із цієї теки не беремо)."""
+    """Чи `home` (шлях до `DEAI_HOME`) — справжній `~/.deai` машини: `<дім з пароля ОС>/.deai`. Порівняння — `realpath`, а коли він не
+    збігся, ще й `os.path.samefile` (на macOS `realpath` не є перевіркою тотожності: регістр `~/.Deai` на нечутливій ФС і firmlink
+    `/System/Volumes/Data/…` дають `samefile == True` при різних `realpath`; без цього Д6 відкривалася б). `samefile` кидає `OSError` (теки
+    нема) — лишаємо результат `realpath`. Без `pwd` (Windows) дім ОС — `USERPROFILE` (НЕ `HOME`: його підміняє тест); не вдалось
+    дізнатись дім ОС — вважаємо справжнім (безпечніший бік: облікових із цієї теки не беремо)."""
     try:
-        import pwd
-        real = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.deai')
-    except (ImportError, KeyError, OSError):
+        try:
+            import pwd
+            base = pwd.getpwuid(os.getuid()).pw_dir
+        except ImportError:
+            base = os.environ.get('USERPROFILE')
+            if not base:
+                return True
+        real = os.path.join(base, '.deai')
+    except (KeyError, OSError):
         return True
     try:
-        return os.path.realpath(os.path.expanduser(home)) == os.path.realpath(real)
+        mine = os.path.expanduser(home)
+        if os.path.realpath(mine) == os.path.realpath(real):
+            return True
+        try:
+            return os.path.samefile(mine, real)
+        except OSError:
+            return False
     except (OSError, ValueError, TypeError):
         return True

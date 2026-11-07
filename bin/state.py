@@ -411,7 +411,7 @@ def _main(argv):
     # Синк із git — за РОЛЛЮ `vcs` простору, а не за інтеграціями: звичайний простір із `git-sync` синкає так само. Ролі нема
     # (простір без модуля) — «не налаштований», як для задачі без цілі; GitLab-маппінг у файлі такого простору ігнорується.
     try:
-        vcs = vcs_task(cfg, tid, task)
+        vcs = vcs_task(tid, task)
     except OSError as e:            # `VcsError` — відмова постачальника; решта `OSError` — теж не traceback у точці входу в задачу
         vcs, vcs_err = None, e
     else:

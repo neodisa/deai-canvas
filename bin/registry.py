@@ -258,14 +258,26 @@ def fixture_path_reason(task):
     return None
 
 
-def _ssh_key(cfg):
-    key = cfg.get('gitlab_ssh_key') or '~/.ssh/gitlab_ed25519'
-    return os.path.expanduser(key)
+def _ssh_key():
+    """SSH-ключ git спільного реєстру: налаштування `ssh_key` запису `git-sync` простору ЛІГА (4d-4b: корінь `tasks.json` не читаємо), інакше
+    типовий `~/.ssh/gitlab_ed25519`. Простору/запису/шару нема, реєстр просторів чи `space.json` не читаються — типовий."""
+    key = None
+    try:
+        sys.path.insert(0, os.path.join(ROOT, 'app'))
+        import deai_modules
+        import spaces
+        if spaces.layer_on():
+            sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
+            if sp is not None:
+                key = (deai_modules.space_modules(sp).get('git-sync') or {}).get('settings', {}).get('ssh_key')
+    except Exception:  # noqa: BLE001 — реєстр/space.json не читаються: типовий ключ, а не збій синку реєстру
+        key = None
+    return os.path.expanduser(key if isinstance(key, str) and key.strip() else '~/.ssh/gitlab_ed25519')
 
 
 def _git(args, cwd, cfg, check=True, timeout=120):
     env = dict(os.environ,
-               GIT_SSH_COMMAND=f'ssh -i {_ssh_key(cfg)} -o StrictHostKeyChecking=no')
+               GIT_SSH_COMMAND=f'ssh -i {_ssh_key()} -o StrictHostKeyChecking=no')
     r = subprocess.run(['git', *args], cwd=cwd, env=env, text=True,
                        capture_output=True, timeout=timeout)
     if check and r.returncode != 0:

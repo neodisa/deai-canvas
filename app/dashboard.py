@@ -221,6 +221,7 @@ MAX_ROWS = 500
 #: було 3 с на запит), а ядро мусить чекати ТРОХИ довше — тоді модуль встигає відповісти СВОЇМ текстом («Supabase недоступний
 #: (…)»), а людина не бачить голого `check-timeout` ядра (урок `COMMENTS_TIMEOUT`). Тест `ReadPath` стереже нерівність.
 READ_TIMEOUT = 6
+#: Таблиця й модуль запису дашборда ЛІГИ (явний `supabase-dashboard`; запасного неявного постачальника більше нема, 4d-4b).
 LEGACY_TABLE = 'overview_projects'
 LEGACY_MODULE = 'supabase-dashboard'
 UNCONFIGURED = 'Supabase не налаштовано: додайте адресу й ключ на екрані «Підключення»'

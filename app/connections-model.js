@@ -302,14 +302,11 @@ export function roleHolders(e, list) {
     && o.status !== "missing" && Array.isArray(o.roles) && o.roles.some((r) => mine.has(r)));
 }
 
-/** Ролі з вбудованим шляхом у ЛІГИ (`'legacy'` у `capabilities`) — вимкнення модуля повертає його, а не «нікого». Токенів ЛІГА не має. */
-const LEGACY_ROLES = new Set(["publish", "comments", "vcs", "dashboard", "tracker", "notify"]);
-
 /**
  * Що станеться з ролями, які `e` зараз ВИКОНУЄ (`capabilities[role] === e.id`), якщо його вимкнути:
- * `[{role, kind: 'legacy'}]` — простір з інтеграціями (ЛІГА) повернеться до вбудованої публікації, коментарів, синку з git, дашборда, трекера чи сповіщень Teams;
  * `[{role, kind: 'none', noneKey}]` — роль лишиться без модуля (для `tracker` і `notify` ще й `consKey` — свій текст наслідку:
- * статуси зникнуть; картки Teams перестануть надходити, а перемикач тиші зникне).
+ * статуси зникнуть; картки Teams перестануть надходити, а перемикач тиші зникне). 4d-4b: у ЛІГИ так само, як деінде, — запасного шляху
+ * (`'legacy'`) після вимкнення запису вже нема, тож «повернеться до вбудованого» було б неправдою.
  */
 export function disableConsequences(e, space) {
   const caps = space?.capabilities;
@@ -317,8 +314,7 @@ export function disableConsequences(e, space) {
   const out = [];
   for (const role of Array.isArray(e.roles) ? e.roles : []) {
     if (role === "error" || !has(caps, role) || caps[role] !== e.id) continue;
-    if (space.integrations === true && LEGACY_ROLES.has(role)) out.push({ role, kind: "legacy" });
-    else if (role === "tracker") out.push({ role, kind: "none", noneKey: roleKeys(role).none, consKey: "cnDisableTracker" });
+    if (role === "tracker") out.push({ role, kind: "none", noneKey: roleKeys(role).none, consKey: "cnDisableTracker" });
     else if (role === "notify") out.push({ role, kind: "none", noneKey: roleKeys(role).none, consKey: "cnDisableNotify" });
     else out.push({ role, kind: "none", noneKey: roleKeys(role)?.none ?? null });
   }

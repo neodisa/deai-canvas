@@ -173,8 +173,142 @@ class ProviderCallersPinTheSpace(unittest.TestCase):
         self.assertEqual(self.scan(ast.parse("x = m.provider('vcs')")), {'<module>': 'vcs'})
 
 
+class PreviewPasswordFromTheRecord(unittest.TestCase):
+    """Пароль превʼю: задача > секрет `password` запису `vercel-publish` (режим `design-canvas`) > `1100`. Корінь `tasks.json` не читається."""
+
+    def test_task_then_secret_then_default(self):
+        fx = lf.LigaFixture(self).env().build()
+        sp = _liga(fx)
+        self.assertEqual(serve.preview_password({'preview_password': 'task-pw'}, sp), 'task-pw')
+        self.assertEqual(serve.preview_password({}, sp), lf.PASSWORD)
+        fx.build(roles=tuple(r for r in lf.ALL_ROLES if r != 'publish'))
+        self.assertEqual(serve.preview_password({}, sp), serve.DEFAULT_PREVIEW_PW)
+        self.assertEqual(serve.preview_password(None, None), serve.DEFAULT_PREVIEW_PW)
+
+    def test_the_root_password_is_ignored(self):
+        fx = lf.LigaFixture(self).env().build(root_extra={'preview_password': 'root-pw'})
+        self.assertEqual(serve.preview_password({}, _liga(fx)), lf.PASSWORD)
+        fx.build(roles=(), root_extra={'preview_password': 'root-pw'})
+        self.assertEqual(serve.preview_password({}, _liga(fx)), serve.DEFAULT_PREVIEW_PW)
+
+    def test_module_mode_does_not_use_the_legacy_secret_here(self):
+        """`compat` порожній: пароль у режимі модуля читає сам `publish_with_module`; `/api/task` дає типовий (так було й до 4d-4b для режиму модуля)."""
+        fx = lf.LigaFixture(self).env().build(overrides={'publish': {'settings': {'compat': ''}}})
+        self.assertIsNone(deai_modules.publish_password(_liga(fx)))
+
+    def test_isolated_run_in_a_temp_home_uses_the_fixture_secret(self):
+        fx = lf.LigaFixture(self).env(DC_TASKS_FILE='/nonexistent/tasks.json').build()
+        self.assertEqual(serve.preview_password({}, _liga(fx)), lf.PASSWORD)
+
+    def test_isolated_run_in_the_real_home_never_reads_the_shared_secret(self):
+        """Д6: ізольований прогін у СПРАВЖНЬОМУ домі — `1100`, секрет не береться (закон ізоляції)."""
+        fx = lf.LigaFixture(self).env(DC_TASKS_FILE='/nonexistent/tasks.json').build()
+        with mock.patch.object(isolation, 'real_home', lambda home: True):
+            self.assertEqual(serve.preview_password({}, _liga(fx)), serve.DEFAULT_PREVIEW_PW)
+
+    def test_the_old_signature_is_gone(self):
+        fx = lf.LigaFixture(self).env().build()
+        with self.assertRaises(TypeError):
+            serve.preview_password({'preview_password': 'x'}, {}, _liga(fx))
+
+    def test_unreadable_secrets_fail_closed_not_to_1100(self):
+        """t9-1: файл секретів ІСНУЄ, але не читається — помилка, а не мовчазний спільний `1100` (відкрите превʼю замість закритого)."""
+        fx = lf.LigaFixture(self).env().build()
+        with open(deai_modules._secrets_path(), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        for call in (lambda: deai_modules.publish_password(_liga(fx)),
+                     lambda: serve.preview_password({}, _liga(fx))):
+            with self.assertRaises(deai_modules.ModuleError) as cm:
+                call()
+            self.assertEqual(cm.exception.code, 'secrets-unreadable')
+        self.assertEqual(serve.preview_password({'preview_password': 'task-pw'}, _liga(fx)), 'task-pw')   # пароль задачі секретів не питає
+
+    def test_absent_secrets_file_or_key_is_the_default(self):
+        fx = lf.LigaFixture(self).env().build()
+        os.remove(deai_modules._secrets_path())
+        self.assertIsNone(deai_modules.publish_password(_liga(fx)))
+        self.assertEqual(serve.preview_password({}, _liga(fx)), serve.DEFAULT_PREVIEW_PW)
+
+
+class GitChainWithoutTheRoot(unittest.TestCase):
+    """Ключ і IP git: своє поле задачі > налаштування запису `git-sync`. Кореня `tasks.json` у ланцюгу нема."""
+
+    def test_the_target_carries_only_the_tasks_own_fields(self):
+        lf.LigaFixture(self).env().build(root_extra={'gitlab_ssh_key': '/root/key', 'gitlab_host_ip': '198.51.100.1'})
+        settings = {'branch': 'main', 'path': 'mockup/{task}'}
+        with spaces.request_space('legacy'):
+            t = serve.vcs_target('a-1', {'gitlab': {'repo': 'git@example.com:o/r.git', 'path': 'mockup/a-1'}}, settings)
+            self.assertNotIn('ssh_key', t)
+            self.assertNotIn('host_ip', t)
+            own = serve.vcs_target('a-1', {'gitlab': {'repo': 'git@example.com:o/r.git', 'path': 'mockup/a-1', 'ssh_key': '/own/key',
+                                                       'host_ip': '198.51.100.9'}}, settings)
+            self.assertEqual((own['ssh_key'], own['host_ip']), ('/own/key', '198.51.100.9'))
+            v = serve.vcs_target('a-1', {'vcs': {'repo': 'git@example.com:o/r.git'}}, settings)
+            self.assertNotIn('ssh_key', v)
+
+    def test_gitlab_cfg_has_no_root(self):
+        lf.LigaFixture(self).env().build(root_extra={'gitlab_ssh_key': '/root/key'})
+        got = serve.gitlab_cfg({'gitlab': {'repo': 'r', 'path': 'p'}})
+        self.assertIsNone(got['ssh_key'])
+        self.assertIsNone(got['host_ip'])
+        self.assertEqual(serve.gitlab_cfg({'gitlab': {'repo': 'r', 'path': 'p', 'ssh_key': '~/k'}})['ssh_key'], os.path.expanduser('~/k'))
+        with self.assertRaises(TypeError):
+            serve.gitlab_cfg({}, {'gitlab': {}})                      # старий підпис `gitlab_cfg(cfg, task)`
+
+    def test_the_effective_values_come_from_the_record(self):
+        """Ефективні ключ і IP для git (ціль, інакше налаштування запису) — ті самі, що давав корінь до міграції (паритет)."""
+        lf.LigaFixture(self).env().build()
+        with spaces.request_space('legacy'):
+            _mod, ctx, _legacy = serve.vcs_provider()
+        self.assertEqual((ctx['settings']['ssh_key'], ctx['settings']['host_ip']), (lf.SSH_KEY, lf.HOST_IP))
+
+
+class RegistrySshKey(unittest.TestCase):
+    def test_key_from_the_record_else_default_never_the_root(self):
+        import registry
+        fx = lf.LigaFixture(self).env().build(root_extra={'gitlab_ssh_key': '/root/key'})
+        self.assertEqual(registry._ssh_key(), os.path.expanduser(lf.SSH_KEY))
+        fx.build(overrides={'vcs': {'settings': {'ssh_key': '/other/key'}}})
+        self.assertEqual(registry._ssh_key(), '/other/key')
+        fx.build(overrides={'vcs': {'settings': {'ssh_key': ''}}}, root_extra={'gitlab_ssh_key': '/root/key'})
+        self.assertEqual(registry._ssh_key(), os.path.expanduser('~/.ssh/gitlab_ed25519'))
+        fx.build(roles=())
+        self.assertEqual(registry._ssh_key(), os.path.expanduser('~/.ssh/gitlab_ed25519'))
+
+    def test_layer_off_or_unreadable_registry_is_the_default(self):
+        import registry
+        fx = lf.LigaFixture(self).env().build()
+        with open(os.path.join(fx.deai, 'spaces.json'), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        self.assertEqual(registry._ssh_key(), os.path.expanduser('~/.ssh/gitlab_ed25519'))
+        os.environ.pop('DEAI_HOME')
+        os.environ['DC_TASKS_FILE'] = '/nonexistent/tasks.json'
+        self.assertEqual(registry._ssh_key(), os.path.expanduser('~/.ssh/gitlab_ed25519'))
+
+
+class OneRoleFailsAlone(unittest.TestCase):
+    def test_a_type_error_from_api_value_fails_only_that_role(self):
+        """t9-4: чужий постачальник однієї ролі (не `Module`/`None`) не обвалює решту п'ять."""
+        fx = lf.LigaFixture(self).env().build()
+        sp = _liga(fx)
+        real = deai_modules.api_value
+        deai_modules._CAPS.clear()
+        self.addCleanup(deai_modules._CAPS.clear)
+
+        def picky(p):
+            if getattr(p, 'id', None) == deai_modules.VCS_MODULE:
+                raise TypeError('boom')
+            return real(p)
+        with mock.patch.object(deai_modules, 'api_value', picky):
+            caps = deai_modules.capabilities(sp)
+        self.assertIsNone(caps['vcs'])
+        self.assertEqual(caps['error'], 'module-error')
+        for role in ('publish', 'comments', 'dashboard', 'tracker', 'notify'):
+            self.assertIsNotNone(caps[role], role)
+
+
 class CommentsInIsolation(unittest.TestCase):
-    """Д6: ізольований прогін читає облікові коментарів із запису лише в ТИМЧАСОВОМУ домі; у справжньому — `comments-unconfigured`."""
+    """Д6: ізольований прогін читає облікові коментарів із запису лише в ТИМЧАСОВОМУ домі; у справжньому — `comments-isolated`."""
 
     def route(self, fx):
         sp = _liga(fx)
@@ -192,8 +326,27 @@ class CommentsInIsolation(unittest.TestCase):
         with mock.patch.object(isolation, 'real_home', lambda home: True):
             with self.assertRaises(deai_modules.ModuleError) as cm:
                 self.route(fx)
-        self.assertEqual(cm.exception.code, 'comments-unconfigured')
-        self.assertIn('«Підключення»', cm.exception.message)
+        self.assertEqual(cm.exception.code, 'comments-isolated')           # m3: окремий код, не «не налаштовано»
+        self.assertNotIn('«Підключення»', cm.exception.message)
+        self.assertEqual(deai_modules.STATUS['comments-isolated'], 409)
+
+    def test_a_custom_shared_module_is_not_refused_by_the_isolation_law(self):
+        """m8 (Д6: закон — для ВБУДОВАНОГО `shared_state`-запису): свій модуль (`origin != 'builtin'`) у справжньому домі не відмовляє."""
+        import copy
+        fx = lf.LigaFixture(self).env(DC_TASKS_FILE='/nonexistent/tasks.json').build()
+        sp = _liga(fx)
+        with spaces.request_space('legacy'):
+            prov, _err = serve.comments_provider(sp)
+            custom = copy.copy(prov)
+            custom.origin = 'space'
+            self.assertTrue(serve._shared_module(sp, custom))
+            self.assertFalse(serve._builtin_shared(sp, custom))
+            with mock.patch.object(isolation, 'real_home', lambda home: True), \
+                    mock.patch.object(deai_modules, 'module_ctx', lambda s, p: {'marker': 'ctx'}):
+                mod, ctx, _ch = serve.comments_route(sp, custom)
+                self.assertEqual(ctx, {'marker': 'ctx'})
+                with self.assertRaises(deai_modules.ModuleError):      # той самий запис, вбудований — відмова
+                    serve.comments_route(sp, prov)
 
     def test_non_isolated_uses_the_record_in_any_home(self):
         fx = lf.LigaFixture(self).env().build()
@@ -215,6 +368,20 @@ class DashboardSyncWithoutLegacy(unittest.TestCase):
         fx = lf.LigaFixture(self).env(SUPABASE_URL=lf.SB_URL, SUPABASE_SERVICE_KEY='service-key-alpha').build(roles=())
         self.assertEqual(overview_push._target(_liga(fx)), (None, None, False))
         self.assertFalse(hasattr(overview_push, '_legacy_config'))
+
+    def test_discover_without_a_dashboard_record_names_the_missing_provider(self):
+        """m6: ЛІГА без запису дашборда — «нема постачальника», а не «лише для простору ЛІГА» (той самий текст, що в `cmd_sync`)."""
+        import overview_push
+        fx = lf.LigaFixture(self).env().build(roles=())
+        with self.assertRaises(overview_push.CliError) as cm:
+            self._discover(overview_push, fx)
+        self.assertIn('нема постачальника командного дашборда', str(cm.exception))
+        self.assertNotIn('лише для простору ЛІГА', str(cm.exception))
+
+    @staticmethod
+    def _discover(overview_push, fx):
+        with mock.patch.object(overview_push, '_space', lambda sid=None: _liga(fx)):
+            return overview_push.cmd_discover(log=lambda *a: None)
 
     def test_with_the_record_the_module_ctx_is_used(self):
         import overview_push

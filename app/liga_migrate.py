@@ -310,11 +310,66 @@ def _has_userinfo(url):
         return True
 
 
+#: ⛔ Читачі ОРИГІНАЛІВ кореня `tasks.json`/оточення/`pipeline-feedback` — ЄДИНІ копії на весь код (4d-4b: з `install_config` вони видалені).
+#: Міграція ще читає оригінали на першому старті старої установки (кроки A–C), далі їх тримає лише вона. Тіла — байт у байт ті, що були
+#: в `install_config.supabase_from`/`jira_from`; ізоляція — `isolation.isolated()`.
+def _supabase_from(cfg):
+    """`(url, key)` за вже прочитаним коренем старого `tasks.json` (`cfg`; не словник — як порожній). Джерела по черзі: корінь файла
+    (`supabase_url`, `supabase_key`), далі змінні оточення `SUPABASE_URL`/`SUPABASE_KEY`; пара береться ЦІЛОЮ з одного джерела.
+    Адреса — ПОВНІСТЮ `https://<хост>[:порт][/]` (без `/` в кінці в результаті), ключ — друковний ASCII без пробілів.
+    ⛔ В ізольованому прогоні (`isolation.isolated()`) оточення не читаємо: джерело ОДНЕ — корінь файла."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    sources = [(cfg.get('supabase_url'), cfg.get('supabase_key'))]
+    if not isolation.isolated():                       # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
+        sources.append((os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_KEY')))
+    for url, key in sources:
+        if not (isinstance(url, str) and isinstance(key, str)):
+            continue
+        url, key = url.strip(), key.strip()
+        # адреса — повністю `https://<хост>[:порт][/]`; ключ — друковний ASCII без пробілів (див. докстрінг)
+        if install_config._SUPABASE_URL_RE.fullmatch(url) and install_config._SUPABASE_KEY_RE.fullmatch(key):
+            return url.rstrip('/'), key
+    return None, None
+
+
+def _jira_from(cfg):
+    """`(base, email, token)` за вже прочитаним коренем старого `tasks.json` (`cfg`). Адреса — `jira_base` кореня (форма — як
+    в `_supabase_from`, без `/` в кінці). Облікові — пара `JIRA_EMAIL`/`JIRA_TOKEN` з оточення, а коли її нема — файли
+    `<HOME>/.claude/pipeline-feedback/jira-email|jira-token`; пошта й токен читаються НЕЗАЛЕЖНО (оточення раніше за файл; порожнє чи
+    негодне — далі). ⛔ В ізольованому прогоні (`isolation.isolated()`) — ЛИШЕ корінь: `jira_email`, `jira_token`; `JIRA_*` і
+    `pipeline-feedback` НЕ читаються. Значень — ні в текстах, ні в журналах."""
+    base = cfg.get('jira_base') if isinstance(cfg, dict) else None
+    if not isinstance(base, str):
+        return None, None, None
+    base = base.strip()
+    if not install_config._SUPABASE_URL_RE.fullmatch(base):           # та сама форма адреси, що в `_supabase_from`
+        return None, None, None
+
+    def from_file(name):
+        try:
+            with open(os.path.expanduser('~/.claude/pipeline-feedback/' + name), encoding='utf-8') as f:
+                return f.read()
+        except (OSError, ValueError):
+            return None
+
+    def pick(env, name, key, valid):
+        if isolation.isolated():                        # ⛔ лише корінь файла задач (ключ `jira_email`/`jira_token`)
+            raw = cfg.get(key)
+            return raw.strip() if isinstance(raw, str) and valid(raw.strip()) else None
+        for raw in (os.environ.get(env), from_file(name)):          # оточення раніше за файл; порожнє/негодне — далі
+            if isinstance(raw, str) and valid(raw.strip()):
+                return raw.strip()
+        return None
+    email = pick('JIRA_EMAIL', 'jira-email', 'jira_email', lambda v: bool(v) and v.isprintable())
+    token = pick('JIRA_TOKEN', 'jira-token', 'jira_token', lambda v: install_config._SUPABASE_KEY_RE.fullmatch(v) is not None)
+    return (base.rstrip('/'), email, token) if (email and token) else (None, None, None)
+
+
 def _role_entries(cfg, present):
-    """`{role: (module, ознака_пропуску | None, запис space.json | None, секрети | None)}` за вже прочитаним `cfg`; облікові — ті
-    самі функції `install_config`, що в сервері (`supabase_from`/`jira_from`): джерела й порядок не продубльовано."""
-    sb_url, sb_key = install_config.supabase_from(cfg)
-    base, email, token = install_config.jira_from(cfg)
+    """`{role: (module, ознака_пропуску | None, запис space.json | None, секрети | None)}` за вже прочитаним `cfg`; облікові — приватні
+    читачі оригіналів цього модуля (`_supabase_from`/`_jira_from`): джерела й порядок ті самі, що були в рантаймі до 4d-4b."""
+    sb_url, sb_key = _supabase_from(cfg)
+    base, email, token = _jira_from(cfg)
     spec = {
         'tracker': ((base and email and token), 'no-jira', {'base': base, 'email': email}, {'token': token}),
         'dashboard': ((sb_url and sb_key), 'no-supabase', {'url': sb_url, 'table': DASHBOARD_TABLE, 'compat': COMPAT}, {'key': sb_key}),
@@ -343,10 +398,10 @@ VCS_COMPAT = 'design-canvas'
 
 def _entries_b(cfg, present):
     """Роль → `(module, ознака_пропуску | None, запис space.json | None, секрети | None)` кроку 4d-3b (форма `_role_entries`).
-    `comments` → `supabase-comments`: адреса й ключ — `install_config.supabase_from` (ті самі джерела, що `serve._comments_legacy_ctx`);
-    кошик — `install_config.LEGACY_SHOTS_BUCKET`. `vcs` → `git-sync`: налаштування ті самі, що в `serve._vcs_legacy_ctx` (тест зіставляє).
-    ⛔ `ssh_key`/`host_ip`/`repo` НЕ копіюємо: ключ і IP дає корінь (`_vcs_ssh`), репо — ціль задачі; секретів у `git-sync` нема."""
-    sb_url, sb_key = install_config.supabase_from(cfg)
+    `comments` → `supabase-comments`: адреса й ключ — `_supabase_from` (читач оригіналів міграції);
+    кошик — `install_config.LEGACY_SHOTS_BUCKET`. `vcs` → `git-sync`: налаштування ті самі, що були в неявного шляху 0.7.0 (гілка `main`, `mockup/{task}`, автосинк).
+    ⛔ `ssh_key`/`host_ip`/`repo` НЕ копіюємо тут: ключ і IP до 4d-4b давав корінь, їх переносить крок Е; репо — ціль задачі; секретів у `git-sync` нема."""
+    sb_url, sb_key = _supabase_from(cfg)
     out = {}
     for role, mid in ROLE_MODULES_B:
         if mid in present:
@@ -384,7 +439,7 @@ def _entries_c(cfg, present):
 
 
 def _publisher_present(space, mods):
-    """Чи роль `publish` на ПОТОЧНОМУ `space.json` (`mods` — сирі модулі) уже веде модуль (`Module`, не `Implicit`) — не `vercel-publish`
+    """Чи роль `publish` на ПОТОЧНОМУ `space.json` (`mods` — сирі модулі) уже веде модуль (`Module`) — не `vercel-publish`
     (той — `module-present`), а ІНШИЙ явно ввімкнений (напр. `static-publish`): два явні модулі публікації розв'язуються за id
     (`static-publish` < `vercel-publish`), тож без цього коду крок дав би вічний `abort-provider`. Лише `ModuleError` (зламаний СВІЙ
     модуль) — «не присутній»: далі той самий виклик на розрахованому `space.json` теж кине → `abort-provider`. ⛔ Інший виняток
@@ -399,7 +454,7 @@ def _publisher_present(space, mods):
 
 #: 4d-4b: вісім «оригіналів» кореня `tasks.json` ЛІГИ і де лежить їхня копія. `kind`: `s` — налаштування запису, `k` — секрет запису.
 #: `copy` — крок Е сам кладе значення в запис, коли там порожньо (4d-3 це свідомо не копіював). Рядки — ТІ САМІ, що були в читачів рантайму
-#: (їх приберуть у Task 11: `install_config.{supabase,jira}_*`, `serve.preview_password`, `_vcs_ssh` — поки що вони ще в коді); міграція — єдине місце, що знає ці рядки назавжди.
+#: (рантайм їх більше не читає: `install_config.{supabase,jira}_*`, `serve.preview_password`, `_vcs_ssh` видалено чи переписано); міграція — єдине місце, що знає ці рядки назавжди.
 SB_MODULES = ('supabase-dashboard', 'supabase-teams', 'supabase-comments')
 ORIGINALS = (
     ('supabase_url', SB_MODULES, 's', 'url', False),

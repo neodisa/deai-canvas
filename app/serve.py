@@ -103,12 +103,6 @@ _TUNER_LOCK = threading.Lock()
 HANDLED_PREFIXES = ('/app', '/api/', '/commented', '/comments', '/it-assets', '/shot', '/published/')
 
 
-def supabase_config():
-    """Тонка обгортка (`install_config.supabase_config`): ім'я в `serve` лишається точкою підміни для тестів
-    (`mock.patch.object(serve, 'supabase_config', …)`), а всі виклики в самому `serve` ідуть через нього."""
-    return install_config.supabase_config()
-
-
 # Служебное, что НЕ копируется в итерации/публикацию из папки задачи
 SKIP = {'iterations', 'iterations.json', 'publish', 'node_modules', '.git',
         '.vercel', '.DS_Store'}
@@ -536,19 +530,18 @@ def copy_mockup(src_dir, dst_dir):
 # в `iterations.json` — внутрішня назва стану синку (сумісність тек задач, які читає `task_state.py`).
 
 
-def gitlab_cfg(cfg, task):
-    """Git-sync конфиг задачи или None. cfg = весь tasks.json (для дефолтного ssh)."""
+def gitlab_cfg(task):
+    """Git-sync конфиг задачи или None. Лише поля самої задачі: спільні ключ і IP — налаштування запису `git-sync` (4d-4b: корінь `tasks.json` не читаємо)."""
     gl = task.get('gitlab')
     if not gl or not gl.get('repo') or not gl.get('path'):
         return None
-    key = gl.get('ssh_key') or cfg.get('gitlab_ssh_key')
+    key = gl.get('ssh_key')
     return {'repo': gl['repo'], 'path': gl['path'].strip('/'),
             'ssh_key': os.path.expanduser(key) if key else None,
             'branch': gl.get('branch', 'main'),
-            # Адреса хоста для повтору при збої резолвера (модуль `git-sync`). Береться
-            # з конфіга задачі або зі спільного кореня tasks.json; немає — повтору
-            # не буде, і це правильніше за вигадану адресу.
-            'host_ip': gl.get('host_ip') or cfg.get('gitlab_host_ip')}
+            # Адреса хоста для повтору при збої резолвера (модуль `git-sync`): з конфіга задачі; немає — з налаштувань модуля (їх бере сам
+            # модуль), а ні — повтору не буде, і це правильніше за вигадану адресу.
+            'host_ip': gl.get('host_ip')}
 
 
 def gitlab_web(gl):
@@ -590,7 +583,8 @@ def _mirrors_base():
 
 
 def _vcs_legacy_ctx():
-    """`ctx` неявного постачальника простору ЛІГА (`Implicit`): той самий `git-sync`, без `space.json`. Дзеркала — старі
+    """`ctx` ізольованого шляху `git-sync` ЛІГИ (запис `shared_state` в ізольованому прогоні, 4d-3b; запасного постачальника більше нема):
+    фіксовані налаштування, без `space.json`. Дзеркала — старі
     теки 0.7.0 (`mirror_flat`: дизайнери не перегортають великі репо, а незапушені коміти старих дзеркал не осиротіють),
     автосинк увімкнено, як і було. Ключ і IP сервера несе ціль (`gitlab_cfg`), не налаштування.
 
@@ -613,7 +607,7 @@ def _flat_mirror_overlay():
 
 def vcs_legacy_texts(prov, space):
     """ЄДИНИЙ предикат «легасі-тексти» ЛІГИ (тема коміту «design-canvas: sync», «GitLab», «репозиторію», автокоміт, плоскі дзеркала):
-    неявний постачальник (`Implicit`) АБО вбудований `git-sync` із `compat == "design-canvas"` у `space.json` простору.
+    вбудований `git-sync` із `compat == "design-canvas"` у `space.json` простору (запасного неявного постачальника більше нема, 4d-4b).
 
     ⛔ ЛІГА — запис реєстру, а не тип постачальника (урок 4d-3a): після міграції ЛІГА веде явний `Module`, а тексти лишаються
     ті самі. ⛔ Лише вбудований І саме `git-sync` (Поправка 3): свій модуль міг оголосити власне `compat` з іншим змістом.
@@ -649,7 +643,7 @@ def vcs_provider():
             # одне: ця функція і `comments_route`. Тексти — за `compat` (предикат вище), не за ізоляцією.
             return prov, _vcs_legacy_ctx(), legacy
         ctx = deai_modules.module_ctx(space, prov)
-        if legacy:                                                   # `compat == "design-canvas"` = рівно поведінка `Implicit`
+        if legacy:                                                   # `compat == "design-canvas"` = поведінка ЛІГИ 0.7.0
             ctx = {**ctx, **_flat_mirror_overlay()}
         return prov, ctx, legacy
     except (deai_modules.ModuleError, spaces.SpacesError) as e:
@@ -660,25 +654,23 @@ def _vcs_str(v):
     return isinstance(v, str) and v.strip() != ''
 
 
-def _vcs_ssh(cfg, settings, *own):
+def _vcs_ssh(*own):
     """`{ssh_key, host_ip}` цілі — лише у просторі з інтеграціями (ЛІГА). Правило ОДНЕ для кожного шляху цілі й окремо для
     кожного з двох полів: перше непорожнє серед `own` (словники самої задачі: `vcs{}`, далі `gitlab{}`) > налаштування модуля
-    (поле тоді НЕ кладемо в ціль — модуль бере своє) > спільний `gitlab_ssh_key`/`gitlab_host_ip` з кореня `tasks.json`."""
+    (поле тоді НЕ кладемо в ціль — модуль бере своє). Кореня `tasks.json` більше нема (4d-4b): його ключ і IP — налаштування запису `git-sync`."""
     if not spaces.integrations_on():
         return {}
     out = {}
-    for name, shared in (('ssh_key', 'gitlab_ssh_key'), ('host_ip', 'gitlab_host_ip')):
+    for name in ('ssh_key', 'host_ip'):
         val = next((d[name] for d in own if isinstance(d, dict) and d.get(name)), None)
         if val is None:
-            if (settings or {}).get(name):
-                continue
-            val = cfg.get(shared)
+            continue                                         # поля нема в задачі: модуль візьме своє з налаштувань
         if isinstance(val, str) and val:
             out[name] = os.path.expanduser(val) if name == 'ssh_key' else val
     return out
 
 
-def vcs_target(cfg, tid, task, settings):
+def vcs_target(tid, task, settings):
     """Ціль задачі для модуля або `None` (задачу не налаштовано). Порядок (спека 4a, «Роль `vcs`»): поле задачі
     `vcs{repo, path?, branch?}` (лише з непорожнім `repo`) → старе `gitlab{…}` (лише простір з інтеграціями; як
     `gitlab_cfg` 0.7.0: без `repo` чи `path` — не налаштована) → налаштування модуля. `{task}` у `path` — id задачі;
@@ -687,8 +679,8 @@ def vcs_target(cfg, tid, task, settings):
     ⛔ `repo` кладемо ОБРІЗАНИМ: `validate` модуля відкидає `repo != repo.strip()`, тож пробіл із форми чи ручної правки
     `tasks.json` інакше давав би `vcs-bad-target` замість синку.
 
-    Ключ і IP (`_vcs_ssh`), для КОЖНОГО шляху цілі однаково: у просторі з інтеграціями — своє поле задачі (`vcs{}`, далі `gitlab{}`)
-    > налаштування модуля > спільний корінь `tasks.json`; у звичайному просторі ціль ключа й IP не несе."""
+    Ключ і IP (`_vcs_ssh`): у просторі з інтеграціями — лише своє поле задачі (`vcs{}`, далі `gitlab{}`); нема — ціль їх не несе, і
+    модуль бере налаштування свого запису. Кореня `tasks.json` у ланцюгу нема (4d-4b). У звичайному просторі ціль ключа й IP не несе."""
     def tpath(p):
         return str(p).replace('{task}', tid).strip('/')
     v = task.get('vcs')
@@ -696,26 +688,25 @@ def vcs_target(cfg, tid, task, settings):
         return {'repo': v['repo'].strip(), 'task': tid,
                 'path': tpath(v['path'] if _vcs_str(v.get('path')) else settings.get('path') or 'mockup/{task}'),
                 'branch': (v['branch'] if _vcs_str(v.get('branch')) else settings.get('branch') or 'main').strip(),
-                **_vcs_ssh(cfg, settings, v, task.get('gitlab'))}
+                **_vcs_ssh(v, task.get('gitlab'))}
     if task.get('gitlab') and spaces.integrations_on():
-        gl = gitlab_cfg(cfg, task)
+        gl = gitlab_cfg(task)
         if gl is None:
             return None
-        # Ключі `gl` перезаписуємо НА МІСЦІ (порядок ключів цілі — як у 0.7.0): `gitlab_cfg` бере корінь, не знаючи про налаштування.
-        gl = {**gl, 'ssh_key': None, 'host_ip': None, **_vcs_ssh(cfg, settings, task['gitlab'])}
+        # Ключі `gl` перезаписуємо НА МІСЦІ (порядок ключів цілі — як у 0.7.0) за правилом `_vcs_ssh`.
+        gl = {**gl, 'ssh_key': None, 'host_ip': None, **_vcs_ssh(task['gitlab'])}
         return {**{k: x for k, x in gl.items() if x}, 'task': tid, 'repo': str(gl['repo']).strip()}
     if _vcs_str(settings.get('repo')):
         return {'repo': settings['repo'].strip(), 'task': tid,
                 'path': tpath(settings.get('path') or 'mockup/{task}'),
-                'branch': (settings.get('branch') or 'main').strip(),
-                **_vcs_ssh(cfg, settings)}
+                'branch': (settings.get('branch') or 'main').strip()}
     return None
 
 
-def vcs_task(cfg, tid, task):
+def vcs_task(tid, task):
     """`None` — у просторі запиту нема ролі `vcs`; інакше `(module, ctx, legacy, target | None)`. Відмова — `VcsError`."""
     p = vcs_provider()
-    return None if p is None else (*p, vcs_target(cfg, tid, task, p[1].get('settings') or {}))
+    return None if p is None else (*p, vcs_target(tid, task, p[1].get('settings') or {}))
 
 
 #: Форма результату функцій ролі, які кличе ядро. Свій модуль (довіра 3c) може повернути що завгодно: `None` чи рядок
@@ -1084,7 +1075,7 @@ def gitlab_status(task, gl, meta, it, vcs=None):
            'remote_path': gl['path'], 'web': _mask_repo(st['web']) if isinstance(st.get('web'), str) else None,
            'label': _mask_repo(st['label']) if isinstance(st.get('label'), str) and st['label'] else 'Git'}
     if v[2]:
-        # Простір ЛІГА (неявний постачальник, `Implicit`): «Історія» й підпис — як у 0.7.0 (будь-який `git@host:`, і з IP, «GitLab»), до 4d.
+        # Простір ЛІГА (простір з інтеграціями, `git-sync` із `compat: design-canvas`): «Історія» й підпис — як у 0.7.0 (будь-який `git@host:`, і з IP, «GitLab»), до 4d.
         out['web'], out['label'] = gitlab_web(gl), 'GitLab'
     return out
 
@@ -1681,7 +1672,7 @@ def _own_tracks(sp):
 
 def _liga_like(sp):
     """Простір ЛІГИ: з прапорцем `integrations` або неявний (шар вимкнено)."""
-    # ⛔ тримається на тому, що `spaces.IMPLICIT['integrations'] is True` (закріплено `LigaLikePin` у tests/test_implicit.py)
+    # ⛔ неявний простір (шар вимкнено) — ЛІГА-подібний: `spaces.IMPLICIT['integrations'] is True` (закріплено в `tests/test_spaces.py`)
     return sp is not None and spaces.integrations_for(sp)
 
 
@@ -1949,7 +1940,7 @@ def _builtin_shared(space, prov):
 
 
 def team_resolve():
-    """`(space, prov)` ролі `dashboard` для простору ЗАПИТУ: `prov` — `Module`, неявний постачальник (`Implicit`, ЛІГА) чи `None` (нікого: вкладки «Команда»
+    """`(space, prov)` ролі `dashboard` для простору ЗАПИТУ: `prov` — `Module` чи `None` (нікого: вкладки «Команда»
     нема). `space` — запис простору (лише для модуля; `None` для решти). Кидає `spaces.SpacesError` (реєстр не прочитати) і
     `deai_modules.ModuleError` (свій модуль «на папері», `space.json` не читається): це НЕ «нікого» — вкладка лишається, а плашка
     називає причину (рішення 4c-1: зламаний власний модуль не ховає вкладку мовчки)."""
@@ -2024,14 +2015,8 @@ _TRACKER_CACHE = {}
 _TRACKER_LOCK = threading.Lock()
 
 
-def jira_config():
-    """Тонка обгортка (`install_config.jira_config`): ім'я в `serve` лишається точкою підміни для тестів
-    (`mock.patch.object(serve, 'jira_config', …)`), а виклик у самому `serve` іде через нього (як `supabase_config`)."""
-    return install_config.jira_config()
-
-
 def tracker_resolve():
-    """`(space, prov)` ролі `tracker` для простору ЗАПИТУ: `prov` — `Module`, неявний постачальник (`Implicit`, ЛІГА) чи `None` (трекера нема). Як
+    """`(space, prov)` ролі `tracker` для простору ЗАПИТУ: `prov` — `Module` чи `None` (трекера нема). Як
     `team_resolve`: `space` — запис простору лише для модуля. Кидає `spaces.SpacesError` і `deai_modules.ModuleError` (свій модуль
     «на папері», `space.json` не читається)."""
     prov = deai_modules.provider('tracker')
@@ -2477,7 +2462,7 @@ def _task_new_write(cfg, tid, title, jira, track, gitlab, vcs, tdir, adopt_src, 
             if v is not None:
                 legacy = v[2]
                 # Явний `vcs.repo` перемагає `gitlab` репо напрямку (ЛІГА) — як у `vcs_target`.
-                target = vcs_target(cfg, tid, {'vcs': vcs} if vcs else {'gitlab': gitlab}, v[1].get('settings') or {})
+                target = vcs_target(tid, {'vcs': vcs} if vcs else {'gitlab': gitlab}, v[1].get('settings') or {})
                 if target:
                     got = os.path.join(tmp, 'm')
                     os.makedirs(got)
@@ -2605,7 +2590,7 @@ def integrations_off_body(what):
 
 
 def notify_resolve():
-    """`(space, prov)` ролі `notify` для простору ЗАПИТУ: `prov` — `Module`, неявний постачальник (`Implicit`, ЛІГА) чи `None` (сповіщень нема: пункта
+    """`(space, prov)` ролі `notify` для простору ЗАПИТУ: `prov` — `Module` чи `None` (сповіщень нема: пункта
     «Сповіщати Teams» нема, маршрут `/api/teams-mute` — 409). Як `team_resolve`: `space` — запис простору лише для модуля.
     Кидає `spaces.SpacesError` (реєстр не прочитати) і `deai_modules.ModuleError` (свій модуль «на папері», `space.json` не
     читається): це НЕ «нікого» — маршрут називає причину, а не прикидається, що сповіщень нема."""
@@ -3088,16 +3073,19 @@ COMMENTS_MODULE = 'supabase-comments'
 #: `install_config.LEGACY_SHOTS_BUCKET` (його ділить міграція ЛІГИ, 4d-3b); тут — аліас.
 LEGACY_SHOTS_BUCKET = install_config.LEGACY_SHOTS_BUCKET
 COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано: додайте адресу й ключ на екрані «Підключення»'
+#: Закон ізоляції (Д6): ізольований/тестовий прогін у справжньому домі спільних коментарів не читає. Це не «не налаштовано» — на «Підключення» не посилаємо.
+COMMENTS_ISOLATED = 'спільні коментарі вимкнено в тестовому (ізольованому) запуску: він не ходить у спільний проєкт'
 
 
 def comments_route(space, prov):
     """Як вести командні коментарі для ВЖЕ вирішеного постачальника `prov` (`Module` з `comments_provider`):
     `(module, ctx, channel)`, де `channel(task, tid, internal=False)` — канал задачі (`deai_modules.comment_channel_of`: схема comment-layer для
     мігрованої ЛІГИ — `comment_project` чи `dc/<задача>`, інакше `deai/<простір>/<задача>`) і `ctx` — `module_ctx` запису.
-    Кидає `ModuleError` (`comments-unconfigured`, `module-error`, коди `module_ctx`). Не кличе код модуля.
+    Кидає `ModuleError` (`comments-isolated`, `module-error`, коди `module_ctx`). Не кличе код модуля.
 
     ⛔ Закон ізоляції (Д6, 4d-4b): ізольований прогін (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`) із вбудованим `shared_state`-записом у СПРАВЖНЬОМУ
-    домі машини (`isolation.real_home`) — спільного ключа не беремо: `comments-unconfigured`. У тимчасовому домі тесту `module_ctx` бере
+    домі машини (`isolation.real_home`) — спільного ключа не беремо: `comments-isolated` (окремий код: це не «не налаштовано», на екран
+    «Підключення» не посилаємо). Свій (не вбудований) модуль цим законом не зачіпається (`_builtin_shared`). У тимчасовому домі тесту `module_ctx` бере
     налаштування й секрет ФІКСТУРИ (вигадану пару), а жива мережа відрізана підміною шва `_open` модуля."""
     if not isinstance(prov, deai_modules.Module):
         raise deai_modules.ModuleError('module-error', message='comments: no provider')
@@ -3106,7 +3094,7 @@ def comments_route(space, prov):
     channel = (lambda task, tid, internal=False:
                deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
     if _builtin_shared(space, prov) and isolation.isolated() and isolation.real_home(spaces.home()):
-        raise deai_modules.ModuleError('comments-unconfigured', message=COMMENTS_UNCONFIGURED)
+        raise deai_modules.ModuleError('comments-isolated', message=COMMENTS_ISOLATED)
     return prov, deai_modules.module_ctx(space, prov), channel
 
 
@@ -3380,7 +3368,7 @@ class ProjectComments:
 
     @property
     def legacy_scheme(self):
-        """Чи коментарі ведуться за схемою comment-layer (неявна ЛІГА або мігрований вбудований `supabase-comments` із
+        """Чи коментарі ведуться за схемою comment-layer (мігрований вбудований `supabase-comments` із
         `compat`): та сама умова, що в функції каналу. ⛔ Те, що раніше різнилось за `kind == 'module'` («це не ЛІГА»), мусить
         читати ЦЕЙ предикат: `kind` мігрованої ЛІГИ лишається `'module'`."""
         return deai_modules.comment_scheme_legacy(self.space, self.prov)
@@ -3416,9 +3404,9 @@ class ProjectComments:
         """Виклик функції модуля (`list`/`resolve`) для каналу задачі — і для модуля простору, і для ЛІГИ (`comments_route`);
         будь-який `ModuleError` — з очищеним текстом.
 
-        ⛔ ЛІГА: `spaces.require_integrations()` ПЕРЕД кожним викликом — простір без інтеграцій не має права йти в мережу
-        (колись це робив старий шлях ЛІГА; модуль про простори не знає). `IntegrationsOff` — `OSError`, а не `ModuleError`:
-        наявні `except OSError` деградують чесно."""
+        Простір без постачальника ролі (`kind == 'off'`) сюди не доходить: `_check` відмовляє раніше (`IntegrationsOff` — `OSError`, а не
+        `ModuleError`: наявні `except OSError` деградують чесно). Умови «є інтеграції» тут нема: їх рішення — наявність явного запису
+        `supabase-comments` (4d-4b), а закон ізоляції тримає `comments_route`."""
         try:
             mod, ctx, channel = comments_route(self.space, self.prov)
             return deai_modules.call(mod, fn, ctx, channel(task, tid, internal), *args,
@@ -3427,9 +3415,9 @@ class ProjectComments:
             raise agent_error(e) from None
 
     def pins(self, task, tid, internal=False):
-        """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`, чи ЛІГА без інтеграцій),
-        `ModuleError` — рішення чи виклик модуля не вдались (або відповідь не список; ЛІГА без конфігу —
-        `comments-unconfigured`)."""
+        """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`: ролі `comments` ніхто не веде),
+        `ModuleError` — рішення чи виклик модуля не вдались (або відповідь не список; ізольований прогін у справжньому домі —
+        `comments-isolated`)."""
         self._check()
         return agent_pins(self._module('list', task, tid, internal))
 
@@ -4069,10 +4057,15 @@ def _preview_domain_warning(url, proj):
 
 
 DEFAULT_PREVIEW_PW = '1100'
+#: Відмова публікації/зміни пароля, коли файл секретів простору є, але не читається (`ModuleError('secrets-unreadable')`).
+SECRETS_UNREADABLE_TEXT = 'секрети простору не читаються — пароль превʼю невідомий, дію зупинено'
 
 
-def preview_password(cfg, task):
-    """Пароль превʼю задачі. `preview_password` у tasks.json, інакше спільний 1100.
+def preview_password(task, space=None):
+    """Пароль превʼю задачі: `preview_password` ЗАДАЧІ, далі секрет `password` запису `vercel-publish` ЛІГИ (`space`;
+    `deai_modules.publish_password`), інакше спільний 1100. Кореня `tasks.json` більше не читаємо (4d-4b: крок `liga-4d4b` переніс його
+    значення в секрет). ⛔ Файл секретів є, але не читається — `ModuleError('secrets-unreadable')` летить ДО виклику (fail-closed:
+    мовчки віддати `1100` означало б відкрите превʼю замість закритого); споживачі відмовляють із ясним текстом.
 
     До 03.08.2026 пароль був захардкожений один на ВСІ задачі й усіх людей: одна
     злита ссилка відкривала будь-яке превʼю. Тепер його можна задати на задачу й
@@ -4084,7 +4077,7 @@ def preview_password(cfg, task):
     рівні Vercel (Deployment Protection), і вона ламає цей гейт.
     """
     return str((task or {}).get('preview_password')
-               or (cfg or {}).get('preview_password') or DEFAULT_PREVIEW_PW)
+               or deai_modules.publish_password(space) or DEFAULT_PREVIEW_PW)
 
 
 PREVIEW_PW_MAX = 64
@@ -4413,14 +4406,14 @@ def build_preview(task, tid, its, *, comments, gate_pw, build):
 
 # ---------------------------------------------------------------------------------------------------
 # Диспетчер ролі `publish` (етап 2а, Task 4b). `Handler._publish` питає `deai_modules.provider('publish')`:
-#   `'legacy'` — зашитий шлях ЛІГА (збірка з коментатором + vercel deploy), відповіді незмінні;
+#   `Module` із `compat: design-canvas` — шлях ЛІГА (збірка з коментатором + vercel deploy), відповіді незмінні (`publish_legacy_path`);
 #   `None`     — 409 `no-publish-module`;
 #   `Module`   — `publish_with_module` нижче: збірка в локальну теку модуля, без жодного виходу назовні (ні Vercel,
 #                ні дашборд команди, ні реєстр, ні git-пуш, ні мережа); модуль `publish_target: url` (2b-1) —
 #                `_publish_by_url`: без теки, результат — адреса й `state` (ходить лише сам модуль; з ядра так само
 #                нічого назовні).
 # Коментарі превʼю (2b-2) НЕ залежать від того, хто публікує: на КОЖНОМУ шляху їх вирішує `publish_comments` — з
-# постачальника ролі `comments` простору публікації, один раз, ДО збірки. Supabase ЛІГИ з конфігу установки (неявний постачальник, `Implicit`) їде лише у
+# постачальника ролі `comments` простору публікації, один раз, ДО збірки. Supabase ЛІГИ із запису `supabase-comments` їде лише у
 # збірку самої ЛІГА; модуль коментарів (будь-який) — у всі три шляхи; відмова — без коментарів і `comments_unavailable`.
 # ⛔ Усі помічники — МОДУЛЬНІ функції, а не методи `Handler`: зовнішні заглушки обробника
 # (`boss_autopublish.py`) мають лише `_current_task/send_error/_send_json/_overview_sync`, і новий метод
@@ -4584,7 +4577,7 @@ def publish_with_module(h, prov, payload):
         return
     gate_pw = ctx['secrets'].get('password') or None
     # Коментарі превʼю: з постачальника ролі `comments` ЦЬОГО простору, раз, ДО збірки (`publish_comments`). Зашитий
-    # Supabase ЛІГА (неявний постачальник, `Implicit`) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
+    # Supabase ЛІГА (запис `supabase-comments` шляху ЛІГИ) у збірку модуля не їде — `False`, як у 0.3.0. ПОЗА замками: рішення виконує код
     # модуля (до `CHECK_TIMEOUT` = 5 с) і нічого не пише, тож тримати під ним замок збірки задачі — зайве очікування
     # для другого кліку (його `publish-busy` приходить тепер лише коли справді йде збірка чи копіювання).
     comments, comments_warn = publish_comments(space, task, tid, module_publish=True)
@@ -4876,7 +4869,7 @@ def task_publish_share(space, meta):
     зіпсована мета — `{}` чи менше полів, а не 5xx (`/api/task` годує весь інтерфейс); шар вимкнено чи простір запиту
     не зафіксовано — модулів нема (як у `task_preview_gate`)."""
     try:
-        mod = deai_modules.publish_module(space)       # `None`: шар вимкнено, простір не зафіксовано, `Implicit`, збій
+        mod = deai_modules.publish_module(space)       # `None`: шар вимкнено, простір не зафіксовано, шлях ЛІГИ (`publish_legacy_path`), збій
         if mod is None or mod.status != 'ok' or mod.publish_target != 'url':
             return {}
         # як `deai_modules._ctx`: секрети читаються лише в модуля, що їх оголосив
@@ -5009,7 +5002,7 @@ _LEGACY_NO_URL = ('деплой пройшов, але URL у виводі verce
 
 
 def _publish_legacy_ctx(npx):
-    """`ctx` неявного постачальника публікації ЛІГИ. ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`, а секретів
+    """`ctx` публікації ЛІГИ (запис `vercel-publish` із `compat: design-canvas`). ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`, а секретів
     модуль у режимі `cli` не читає (див. `_vcs_legacy_ctx`). `find_tool` віддає ЛИШЕ `npx` — той самий, що ядро вже знайшло
     (`_node_bin` може запускати login-shell, повторно його не кличемо)."""
     return {'space': {'id': spaces.request_space_id() or '', 'path': ''},
@@ -5931,8 +5924,11 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == '/api/task':
             tid, task = self._current_task()
             meta = load_meta(task)
-            pw = preview_password(load_tasks(), task)
             sp = spaces.active_space()
+            try:
+                pw, pw_err = preview_password(task, sp), None
+            except deai_modules.ModuleError as e:      # секрети не читаються: екран живий, але пароль не вгадуємо
+                pw, pw_err = None, e.code
             out = {'id': tid, 'title': task.get('title', tid),
                    'jira': task.get('jira'),
                    'tags': task_tags(task, sp),
@@ -5962,7 +5958,10 @@ class Handler(SimpleHTTPRequestHandler):
                    # сторінці). `stale` — «Копіювати посилання» дало б
                    # менеджеру ключ, який превʼю не відкриває. Публікує
                    # модуль — `state: 'module'` (див. `task_preview_gate`).
-                   'preview_gate': task_preview_gate(task, pw, sp)}
+                   'preview_gate': (task_preview_gate(task, pw, sp) if pw_err is None
+                                    else {'state': 'none', 'stale': 0, 'ungated': 0, 'inner_stale': 0, 'pages': 0})}
+            if pw_err:
+                out['preview_password_error'] = pw_err
             # Остання ЛОКАЛЬНА публікація модуля (`{module, path, published_at}`) — лише коли вона була:
             # відповідь простору з ЛІГА лишається такою, якою була.
             if meta.get('publish_local'):
@@ -6183,7 +6182,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not bare:
             origin = f'http://{self.headers.get("Host", "localhost:8765")}'
             ch = q.get('ch', ['local'])[0]
-            # Хто дає командні коментарі простору: `Module` (роль `comments`), `Implicit` (ЛІГА: вбудований
+            # Хто дає командні коментарі простору: `Module` (роль `comments`; у ЛІГИ — вбудований
             # `supabase-comments`, `comments_route`) чи `None` (нікого — лише локальні). `team` — чи є вкладка «Команда» й канал `project`
             # узагалі. Без постачальника (простір без інтеграцій і без модуля) канал Supabase (і CDN із supabase-js)
             # недоступний, тож `ch=project` ПОНИЖУЄТЬСЯ до локального; вкладок аудиторій нема зовсім — контракт
@@ -6351,8 +6350,8 @@ class Handler(SimpleHTTPRequestHandler):
             return
         prov = space = None
         if ch == 'project':
-            # Командний канал — лише коли його комусь віддано: ЛІГА (`Implicit`, інтеграції) чи модуль ролі
-            # `comments`; `local` працює скрізь. Не вдалось вирішити (`ModuleError`) — центральна відповідь модулів.
+            # Командний канал — лише коли його комусь віддано: модуль ролі
+            # `comments` (у ЛІГИ — її запис `supabase-comments`); `local` працює скрізь. Не вдалось вирішити (`ModuleError`) — центральна відповідь модулів.
             # Простір — ОДИН раз: з нього постачальник, конфіг і канал.
             space = spaces.active_space()
             prov, prov_err = comments_provider(space)
@@ -6735,9 +6734,9 @@ class Handler(SimpleHTTPRequestHandler):
         (`ProjectComments`, простір — явним аргументом), а не `integrations_on()`:
 
             нікого (`None`)        409 — «командних коментарів нема», як у просторі без інтеграцій
-            ЛІГА (`Implicit`)      модуль `supabase-comments` з конфігом установки (4b-2): `{project, comments}` у формі
-                                   рядків REST, але вже ОЧИЩЕНІ (`agent_pins`) — свідома відмінність від 0.9.0 (сирі рядки)
-            модуль                 `{project, comments}` у тій самій формі рядків REST (+ `warning`, коли щось не ввійшло)
+            модуль                 `{project, comments}` у формі рядків REST, але вже ОЧИЩЕНІ (`agent_pins`) — свідома відмінність
+                                   від 0.9.0 (сирі рядки); (+ `warning`, коли щось не ввійшло). ЛІГА — той самий вбудований
+                                   `supabase-comments` зі свого запису
             рішення не вдалось     центральна відповідь модулів (`{ok: false, code, error}`, 502/409) — НІКОЛИ не
                                    Supabase ЛІГИ і не порожній список
             виклик модуля не вдався  `{project, comments: [], error}` — як недоступна мережа колись у ЛІГИ (у ЛІГИ без конфігу
@@ -7143,6 +7142,12 @@ class Handler(SimpleHTTPRequestHandler):
         if err:
             self._send_json({'ok': False, 'error': err}, status=400)
             return
+        space = spaces.active_space()
+        try:
+            deai_modules.publish_password(space)      # ДО запису: нечитабельні секрети — відмова, а не пароль, що мовчки впав у 1100
+        except deai_modules.ModuleError as e:
+            self._space_error(deai_modules.STATUS.get(e.code, 409), e.code, SECRETS_UNREADABLE_TEXT)
+            return
         cfg = load_tasks()
         # Не `cfg['current']`: пароль піде в ту задачу, яку названо запитом.
         _, task = task_for(cfg, self._task_override)
@@ -7151,7 +7156,7 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             task.pop('preview_password', None)
         save_tasks(cfg)
-        now = preview_password(cfg, task)
+        now = preview_password(task, space)
         self._send_json({'ok': True, 'preview_password': now,
                          'preview_password_custom': bool(task.get('preview_password')),
                          'preview_gate': preview_gate_state(task, now)})
@@ -7487,11 +7492,10 @@ class Handler(SimpleHTTPRequestHandler):
     def _vcs_ctx(self):
         """`(tid, task, vcs, err)`: `vcs` — `(module, ctx, legacy, target | None)` або `None` (ролі нема), `err` — `VcsError`
         постачальника (нечитабельний `space.json`, свій модуль «на папері», `git-sync` не завантажився). Ціль будує `vcs_target`
-        (обрізана адреса, ключ і IP ЛІГИ, `{task}`), а не `gitlab_cfg`."""
-        cfg = load_tasks()
+        (обрізана адреса, ключ і IP задачі, `{task}`), а не `gitlab_cfg`."""
         tid, task = self._current_task()
         try:
-            return tid, task, vcs_task(cfg, tid, task), None
+            return tid, task, vcs_task(tid, task), None
         except VcsError as e:
             return tid, task, None, e
 
@@ -7897,7 +7901,7 @@ class Handler(SimpleHTTPRequestHandler):
             # запису, — а ціль із ним (`{task}` у `path`) відмовила б раніше й іншим кодом: тут його не чіпаємо.
             if prov[0].fn('validate') is not None and isinstance(tid, str) and NAME_RE.fullmatch(tid):
                 try:
-                    _vcs_call(prov, 'validate', vcs_target({}, tid, {'vcs': vcs}, prov[1].get('settings') or {}),
+                    _vcs_call(prov, 'validate', vcs_target(tid, {'vcs': vcs}, prov[1].get('settings') or {}),
                               timeout=deai_modules.CHECK_TIMEOUT)
                 except VcsError as e:
                     self._space_error(deai_modules.STATUS.get(e.code, 400), e.code, str(e)[:300])
@@ -8130,16 +8134,15 @@ class Handler(SimpleHTTPRequestHandler):
         сохраняется в iterations.json.
 
         Хто публікує, вирішує `deai_modules.provider('publish')` — ПЕРШИМ рядком, до збірки `publish/` (вона
-        `rmtree`-ить теку): шлях ЛІГИ (`deai_modules.publish_legacy_path`: неявний постачальник `Implicit` — простір з
-        інтеграціями, шар вимкнено, простір запиту не зафіксовано, інструменти ЛІГА й зовнішні заглушки обробника — АБО
-        вбудований `vercel-publish` із `compat == "design-canvas"`) — цей шлях; `None` — 409 `no-publish-module`;
+        `rmtree`-ить теку): шлях ЛІГИ (`deai_modules.publish_legacy_path`: вбудований `vercel-publish` із
+        `compat == "design-canvas"`) — цей шлях; `None` — 409 `no-publish-module`;
         решта модулів — `publish_with_module` (локальна тека чи свій деплой). Лише `self._send_json`,
         `send_error`, `_current_task`, `_overview_sync`: зовнішні заглушки обробника мають лише їх, тож
         нові помічники — модульні функції.
 
         Коментарі збірки ЛІГА (2b-2, з 4b-2) — з `publish_comments`: простір, де публікує ЛІГА, звичайно веде командні
-        коментарі вбудованим `supabase-comments` (`Implicit` → словник модуля з конфігом установки й каналом ЛІГИ; без
-        конфігу — без коментарів + `comments_unavailable: comments-unconfigured`), але людина могла ввімкнути там власний
+        коментарі вбудованим `supabase-comments` (запис `supabase-comments` → словник модуля з каналом ЛІГИ; без
+        запису — без коментарів + `comments_unavailable: comments-unconfigured`), але людина могла ввімкнути там власний
         модуль коментарів — тоді збірка несе ЙОГО канал; а явно ввімкнений модуль, що зламався, дає збірку без коментарів
         узагалі (не спільний Supabase) і `comments_unavailable` у відповіді."""
         prov = deai_modules.provider('publish')
@@ -8156,16 +8159,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(400, 'no iterations marked for publish - '
                                  'toggle the green dot first')
             return
-        # Пароль ЛІГА — завжди є (типовий 1100, якщо не задано): гейт тут обовʼязковий, і лише
+        # Пароль ЛІГА — завжди є (задачі, секрет запису чи типовий 1100): гейт тут обовʼязковий, і лише
         # модуль без пароля передає `gate_pw=None` (див. `build_preview`). Читаємо його ДО збірки (раніше
-        # — після `rmtree`): збій читання tasks.json більше не лишає напівзібраний `publish/`.
-        pw = preview_password(load_tasks(), task)
-        # Коментарі превʼю — з постачальника ролі `comments` простору публікації (а не з `integrations_on()`), раз, ДО
-        # збірки: `Implicit` → вбудований `supabase-comments` з конфігом установки й каналом ЛІГИ, модуль → його канал,
-        # відмова (в т.ч. `comments-unconfigured`) → без коментарів узагалі + `comments_unavailable` у відповіді (див.
-        # `publish_comments`). Простір береться лише
+        # — після `rmtree`): збій читання не лишає напівзібраний `publish/`. Простір береться лише
         # коли він зафіксований за запитом: інструменти ЛІГА й заглушки обробника його не мають, і реєстру тоді не читаємо.
         space = spaces.active_space() if spaces.layer_on() and spaces.request_space_id() is not None else None
+        try:
+            pw = preview_password(task, space)
+        except deai_modules.ModuleError as e:        # fail-closed (t9-1): нечитабельні секрети — відмова ДО збірки, не мовчки `1100`
+            self._send_json({'ok': False, 'code': e.code, 'error': SECRETS_UNREADABLE_TEXT},
+                            status=deai_modules.STATUS.get(e.code, 409))
+            return
+        # Коментарі превʼю — з постачальника ролі `comments` простору публікації (а не з `integrations_on()`), раз, ДО
+        # збірки: запис `supabase-comments` → вбудований модуль з каналом ЛІГИ, свій модуль → його канал,
+        # відмова (в т.ч. `comments-unconfigured`) → без коментарів узагалі + `comments_unavailable` у відповіді (див.
+        # `publish_comments`).
         comments, comments_warn = publish_comments(space, task, tid)
         built = build_preview(task, tid, its, comments=comments, gate_pw=pw, build='legacy')
         # ⛔ `pub` потрібен ДАЛІ — деплою (`_publish_legacy_call(…, pub, …)` — модуль запускає `vercel` у цій теці); його

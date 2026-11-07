@@ -153,12 +153,12 @@ test("хто тримає ролі: увімкнені (і неявний) з п
   assert.deepEqual(roleHolders(me, null), []);
 });
 
-test("наслідки вимкнення: legacy для ЛІГА publish/comments, «нікого» інакше, лише для ролей, які він тримає", () => {
+test("наслідки вимкнення: «нікого» і в ЛІГА (запасного шляху нема, 4d-4b), лише для ролей, які він тримає", () => {
   const e = M("vercel-publish");
   assert.deepEqual(disableConsequences(e, { integrations: false, capabilities: { publish: "vercel-publish" } }),
     [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }]);
   assert.deepEqual(disableConsequences(e, { integrations: true, capabilities: { publish: "vercel-publish" } }),
-    [{ role: "publish", kind: "legacy" }]);
+    [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }], "4d-4b: у ЛІГА так само, як деінде");
   assert.deepEqual(disableConsequences(e, { integrations: false, capabilities: { publish: "static-publish" } }), []);
   const tok = M("css-tokens", { roles: ["tokens"] });
   assert.deepEqual(disableConsequences(tok, { integrations: true, capabilities: { tokens: "css-tokens" } }),
@@ -166,7 +166,7 @@ test("наслідки вимкнення: legacy для ЛІГА publish/commen
   assert.deepEqual(disableConsequences(e, null), []);
   const sd = M("supabase-dashboard", { roles: ["dashboard"] });
   assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "supabase-dashboard" } }),
-    [{ role: "dashboard", kind: "legacy" }], "4c-1: у ЛІГА вимкнення повертає вбудований дашборд, а не «нікого»");
+    [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }], "4d-4b: у ЛІГА дашборд після вимкнення — «нікого», як деінде");
   assert.deepEqual(disableConsequences(sd, { integrations: false, capabilities: { dashboard: "supabase-dashboard" } }),
     [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }]);
   assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "legacy" } }), [],
@@ -174,7 +174,7 @@ test("наслідки вимкнення: legacy для ЛІГА publish/commen
   /* 4c-2: tracker. У ЛІГА вимкнення повертає Jira з конфігу установки; деінде статуси зникають — свій текст наслідку. */
   const jt = M("jira-tracker", { roles: ["tracker"] });
   assert.deepEqual(disableConsequences(jt, { integrations: true, capabilities: { tracker: "jira-tracker" } }),
-    [{ role: "tracker", kind: "legacy" }], "4c-2: у ЛІГА вимкнення повертає вбудований шлях Jira, а не «нікого»");
+    [{ role: "tracker", kind: "none", noneKey: "cnNoneTracker", consKey: "cnDisableTracker" }], "4d-4b: у ЛІГА статуси після вимкнення зникають, як деінде");
   assert.deepEqual(disableConsequences(jt, { integrations: false, capabilities: { tracker: "jira-tracker" } }),
     [{ role: "tracker", kind: "none", noneKey: "cnNoneTracker", consKey: "cnDisableTracker" }],
     "4c-2: поза ЛІГА статуси зникають — наслідок власним текстом");
@@ -391,7 +391,7 @@ test("код tracker-auth (4c-2): невірний email чи токен Jira �
 test("наслідки вимкнення notify (4c-3): у ЛІГА — вбудована тиша Teams, деінде — свій текст наслідку (картки й перемикач зникнуть)", () => {
   const st = M("supabase-teams", { roles: ["notify"] });
   assert.deepEqual(disableConsequences(st, { integrations: true, capabilities: { notify: "supabase-teams" } }),
-    [{ role: "notify", kind: "legacy" }], "у ЛІГА вимкнення повертає вбудований шлях Teams, а не «нікого»");
+    [{ role: "notify", kind: "none", noneKey: "cnNoneNotify", consKey: "cnDisableNotify" }], "4d-4b: у ЛІГА картки Teams після вимкнення зникають, як деінде");
   assert.deepEqual(disableConsequences(st, { integrations: false, capabilities: { notify: "supabase-teams" } }),
     [{ role: "notify", kind: "none", noneKey: "cnNoneNotify", consKey: "cnDisableNotify" }],
     "поза ЛІГА — наслідок власним текстом, а не загальним «роль лишиться без модуля»");
@@ -534,7 +534,7 @@ test("вердикт перевірки vcs-*: кожен код має свій
 test("наслідки вимкнення git-sync: у ЛІГА — «знову вбудований синк», без інтеграцій — «нікого» з текстом cnNoneVcs", () => {
   const gs = M("git-sync", { roles: ["vcs"], enabled: true });
   assert.deepEqual(disableConsequences(gs, { integrations: true, capabilities: { vcs: "git-sync" } }),
-    [{ role: "vcs", kind: "legacy" }], "у ЛІГА при вимкненні роль повертає зашитий шлях, а не лишається «нікого»");
+    [{ role: "vcs", kind: "none", noneKey: "cnNoneVcs" }], "4d-4b: у ЛІГА при вимкненні роль лишається «нікого», запасного синку нема");
   assert.deepEqual(disableConsequences(gs, { integrations: false, capabilities: { vcs: "git-sync" } }),
     [{ role: "vcs", kind: "none", noneKey: "cnNoneVcs" }]);
   assert.deepEqual(disableConsequences(gs, { integrations: true, capabilities: { vcs: "legacy" } }), [],
@@ -588,8 +588,8 @@ test("vercel-publish: поле auth — select з варіантами token/cli
   assert.equal(f.find((x) => x.key === "token").type, "secret");
 });
 
-test("наслідки вимкнення мігрованого vercel-publish (4d-3c): у просторі з інтеграціями — legacy, без правки коду", () => {
+test("наслідки вимкнення мігрованого vercel-publish (4d-3c, 4d-4b): у просторі з інтеграціями — «нікого», запасного шляху нема", () => {
   const e = M("vercel-publish");
   const sp = { integrations: true, capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
-  assert.deepEqual(disableConsequences(e, sp), [{ role: "publish", kind: "legacy" }]);
+  assert.deepEqual(disableConsequences(e, sp), [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }]);
 });

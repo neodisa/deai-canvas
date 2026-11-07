@@ -155,6 +155,8 @@ STATUS = {'bad-manifest': 500, 'module-error': 502, 'role-taken': 409, 'unknown-
           'vcs-offline': 502, 'vcs-auth': 502, 'vcs-bad-target': 400, 'vcs-busy': 409, 'vcs-error': 502,
           # простір ЛІГА без адреси/ключа Supabase у конфігу установки (4b-2; `supabase_url`/`supabase_key` у tasks.json)
           'comments-unconfigured': 409,
+          # закон ізоляції (4d-4b, Д6): ізольований прогін у справжньому домі спільних коментарів не читає — не «не налаштовано»
+          'comments-isolated': 409,
           # роль `dashboard` (4c-1): простір ЛІГА без адреси/ключа Supabase; збій запиту модуля до сховища дашборда
           'dashboard-unconfigured': 409, 'dashboard-error': 502,
           # роль `tracker` (4c-2): простір ЛІГА без адреси Jira (`jira_base`) чи облікових; збій запиту модуля до трекера
@@ -1872,14 +1874,11 @@ def _caps_key(space):
 
 
 def capabilities(space):
-    """`{"publish": id | 'legacy' | None, "tokens": id | None, "comments": id | 'legacy' | None, "vcs": id | 'legacy' | None,
-    "dashboard": id | 'legacy' | None, "tracker": id | 'legacy' | None, "notify": id | 'legacy' | None}`
-    для простору `space` (запис реєстру). ТОТАЛЬНА: не кидає ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово
-    нечитабельний `space.json`), віддає `{"publish": None, "tokens": None, "comments": None, "vcs": None, "dashboard": None, "tracker": None, "notify": None, "error": <код>}`:
-    кожна роль вирішується окремо, і та, що не вирішилась, — `None`; лише `publish` і `vcs` у просторі з інтеграціями
-    лишаються `'legacy'` (зашитий шлях ЛІГА: неявного модуля в `vcs` нема, а нечитабельний `space.json` його не зачіпає). Тобто
-    `comments`, `dashboard`, `tracker` і `notify` ніколи не стають `'legacy'` через помилку (спільний Supabase, Jira й канал Teams ЛІГИ — не запасний варіант, див. `_provider_for`);
-    без помилки ключа `error` нема. Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
+    """`{"publish": id | None, "tokens": id | None, "comments": id | None, "vcs": id | None, "dashboard": id | None,
+    "tracker": id | None, "notify": id | None}` для простору `space` (запис реєстру): id модуля, що веде роль, або `None` — ролі
+    ніхто не веде. Запасного значення `'legacy'` більше нема (4d-4b): ЛІГА — звичайний простір із явними записами. ТОТАЛЬНА: не кидає
+    ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово нечитабельний `space.json`), та роль — `None`, а в результаті є
+    ключ `error` з кодом: кожна роль вирішується окремо, решта віддають своє. Без помилки ключа `error` нема. Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
     без ключа `error`: це стан ролі, а не простору (екран «Підключення» показує `error` як нечитабельний `space.json` і
     ховає картки — разом із «Довіритись…»). Кеш за (простір, прапорець
     `integrations`, відбиток `space.json`, теки джерел модулів (`DEAI_EXTRA_MODULES` теж), відбитки `module.json`,
@@ -1917,6 +1916,10 @@ def _capabilities_full(space):
                     caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
                     continue                # `error` — клієнт читає `error` як «space.json не читається» й сховав би картки
                 error = error or e.code
+                caps[role] = None
+            except TypeError:
+                # `api_value` не впізнав постачальника цієї ролі (свій баг, не стан простору): падає ЛИШЕ ця роль, решта п'ять живі.
+                error = error or 'module-error'
                 caps[role] = None
         if error:
             caps['error'] = error
@@ -1969,8 +1972,12 @@ def publish_password(space):
     """Пароль превʼю ЛІГИ з СЕКРЕТУ `password` явного `vercel-publish` (4d-4b: корінь `tasks.json` більше не читається) або `None` — тоді
     пароль веде задача чи типовий `1100` (`serve.preview_password`). Умова — та сама `publish_legacy_path(prov, space)`, що веде гілку
     ЛІГИ публікації: вбудований `vercel-publish` із `compat == "design-canvas"`; модуль-режим (`compat` порожній) цього секрета читає
-    САМ (`publish_with_module`), тож тут `None`. ТОТАЛЬНА: не кидає. ⛔ Закон ізоляції (Д6): ізольований прогін у СПРАВЖНЬОМУ домі
-    (`isolation.real_home`) — `None` (спільний секрет не беремо); у тимчасовому домі тесту — секрет фікстури."""
+    САМ (`publish_with_module`), тож тут `None`. ⛔ Закон ізоляції (Д6): ізольований прогін у СПРАВЖНЬОМУ домі
+    (`isolation.real_home`) — `None` (спільний секрет не беремо); у тимчасовому домі тесту — секрет фікстури.
+
+    ⛔ ЄДИНИЙ виняток із тотальності — `ModuleError('secrets-unreadable')`: файл секретів ІСНУЄ, але не читається. Тоді пароль не можна
+    мовчки замінити спільним `1100` (відкрите превʼю замість закритого), тож помилка йде до виклику, а публікація відмовляє.
+    Нема файла чи ключа — `None`. Решта збоїв — `None`."""
     try:
         if not isinstance(space, dict) or not space or spaces._is_implicit(space) or not spaces.layer_on():
             return None
@@ -1979,8 +1986,16 @@ def publish_password(space):
         prov = _capabilities_full(space)[1].get('publish')
         if not publish_legacy_path(prov, space):
             return None
-        return read_secrets(_space_id(space), PUBLISH_MODULE).get('password') or None
-    except Exception:  # noqa: BLE001 — тотальність: збій читання секрета не ламає `/api/task`
+        sid = _space_id(space)
+    except Exception:  # noqa: BLE001 — тотальність: збій визначення шляху не ламає `/api/task`
+        return None
+    try:
+        return read_secrets(sid, PUBLISH_MODULE).get('password') or None
+    except ModuleError as e:
+        if e.code == 'secrets-unreadable':
+            raise                                  # fail-CLOSED: не підміняти закритий пароль відкритим типовим
+        return None
+    except Exception:  # noqa: BLE001
         return None
 
 

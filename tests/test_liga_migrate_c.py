@@ -640,7 +640,7 @@ class PublishGuard(unittest.TestCase):
 # ---------------------------------------------------------------------------------------------------- Task 3: compat
 
 class PublishCompatSetting(unittest.TestCase):
-    """Налаштування `compat` вбудованого `vercel-publish` (маніфест 1.2.0): формат — як `git-sync`."""
+    """Налаштування `compat` вбудованого `vercel-publish` (маніфест 1.3.0): формат — як `git-sync`."""
 
     @classmethod
     def setUpClass(cls):
@@ -651,7 +651,7 @@ class PublishCompatSetting(unittest.TestCase):
         return {s['key']: s for s in self.m.settings}['compat']
 
     def test_version_and_loaded(self):
-        self.assertEqual((self.m.status, self.m.version), ('ok', '1.2.0'))
+        self.assertEqual((self.m.status, self.m.version), ('ok', '1.3.0'))
 
     def test_compat_is_the_last_select(self):
         self.assertEqual([s['key'] for s in self.m.settings], ['auth', 'token', 'team', 'password', 'compat'])
@@ -1386,17 +1386,18 @@ class CheckVerdictIsolated(_StepC):
 # ---------------------------------------------------------------------------------- Task 5: паритет після міграції
 
 #: Підписи нового поля `compat` картки `vercel-publish` — ТОЧНО як бачить людина (зміна підпису — свідома й видима в цьому тесті).
-_COMPAT_LABEL = ('Сумісність (⚠ у режимі ЛІГА поля auth, team і password не читаються: вхід, скоуп і пароль превʼю беруться зі '
-                 'старих налаштувань; зміна значення на живому просторі перемикає на шлях модуля — нові проєкти й нові URL)')
-_COMPAT_OPT = 'design-canvas (ЛІГА): проєкти pv-…, скоуп і пароль превʼю з tasks.json'
+_COMPAT_LABEL = ('Сумісність (⚠ у режимі ЛІГА поля auth і team не читаються: вхід і скоуп беруться зі старих налаштувань; '
+                 'пароль превʼю — спершу пароль задачі, далі секрет цього модуля; зміна значення на живому просторі перемикає '
+                 'на шлях модуля — нові проєкти й нові URL)')
+_COMPAT_OPT = 'design-canvas (ЛІГА): проєкти pv-…, скоуп з tasks.json, пароль превʼю: задача, далі секрет модуля'
 
 
 def _expect_card():
     """Картка `vercel-publish` у `GET /api/modules` після кроку c: увімкнена, `auth` = `cli`, `team` порожня, нове поле `compat`
-    (секретні `token`/`password` — без змін: `set: false`), версія модуля 1.2.0 (1.1.0 до `compat`)."""
+    (секретні `token`/`password` — без змін: `set: false`), версія модуля 1.3.0 (1.1.0 до `compat`)."""
     c = '/modules_card/card'
     return {c + '/enabled': (False, True),
-            c + '/version': ('1.1.0', '1.2.0'),
+            c + '/version': ('1.1.0', '1.3.0'),
             c + '/settings[0]/value': ('token', 'cli'),
             c + '/settings[2]/value': (_ABSENT, ''),
             c + '/settings[4]/key': (_ABSENT, 'compat'),

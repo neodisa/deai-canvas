@@ -548,7 +548,7 @@ class Catalog(Base):
         self.assertEqual((m.status, m.error), ('ok', None))
         self.assertEqual(m.roles, ['publish'])
         self.assertEqual(m.publish_target, 'url')
-        self.assertEqual((m.api, m.name, m.version, m.dir), (1, 'Vercel', '1.2.0', MODULE_DIR))
+        self.assertEqual((m.api, m.name, m.version, m.dir), (1, 'Vercel', '1.3.0', MODULE_DIR))
         by = {s['key']: s for s in m.settings}
         self.assertEqual(list(by), ['auth', 'token', 'team', 'password', 'compat'])        # 4b-1: `auth` (token | cli) — перший
         self.assertEqual((by['token']['type'], by['token']['required']), ('secret', False))   # обовʼязковість у режимі `token` — у модулі

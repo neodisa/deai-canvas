@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(ROOT, "app"))
 # ⛔ Обгортку НЕ збираємо тут своїми руками: і перелік сторінок, і сам HTML
 # віддає serve. До 04.08.2026 цей скрипт мав власний обхід сторінок із власним
 # фільтром — копія логіки публікації, яка мовчки розійшлась би з нею.
+import spaces  # noqa: E402
+from deai_modules import ModuleError  # noqa: E402
 from serve import (BUILD_KINDS, BUNDLES, gate_html, load_meta, preview_gate_state,  # noqa: E402
                    preview_index_html, preview_password, legacy_tasks_path)
 
@@ -25,6 +27,15 @@ def load_tasks():
     # СТАРИЙ файл, а не файл «поточного простору»: це інструмент ЛІГА (Vercel-превʼю її задач).
     with open(legacy_tasks_path(), encoding="utf-8") as f:
         return json.load(f)
+
+
+def liga_space():
+    """Запис простору ЛІГА з реєстру (`legacy: true`) або `None`: пароль превʼю — секрет явного `vercel-publish` цього простору (4d-4b).
+    Реєстр не читається — `None` (пароль задачі чи `1100`)."""
+    try:
+        return next((s for s in spaces.read_registry()["spaces"] if s.get("legacy") is True), None)
+    except spaces.SpacesError:
+        return None
 
 
 def rebuild_index(tid, task):
@@ -38,7 +49,7 @@ def rebuild_index(tid, task):
     # ⚠️ Цей скрипт перезбирає ЛИШЕ обгортку. Гейт у внутрішніх сторінках додає
     # публікація; якщо превʼю зібрано до 03.08.2026, потрібна саме перепублікація,
     # а не reseal — інакше пряме посилання на сторінку так і минатиме пароль.
-    pw = preview_password(load_tasks(), task)
+    pw = preview_password(task, liga_space())
     # ⛔ Обгортка з 02.09.2026 — тонкий каркас: перелік сторінок і назва задачі
     # лежать у `publish/manifest.json`, який пише ЛИШЕ публікація. Тому цей
     # скрипт їх більше не рахує — і не може зістарити (раніше рахував би, а
@@ -115,7 +126,11 @@ def main():
                 continue
         # ⛔ Питаємо ДО перезапису обгортки (ревʼю 1.52): інакше після відмови
         # локальний publish/ уже мав би обгортку з новим паролем, а деплой — ні.
-        pw = preview_password(cfg, task)
+        try:
+            pw = preview_password(task, liga_space())
+        except ModuleError:       # fail-closed: нечитабельні секрети — пароль невідомий, не підміняємо його на 1100
+            print(f"⚠ {tid}: секрети простору не читаються — пароль превʼю невідомий. Пропуск.")
+            continue
         gate = preview_gate_state(task, pw)
         if gate["inner_stale"]:
             print(f"⚠ {tid}: {gate['inner_stale']} внутрішніх сторінок зі старим паролем — "

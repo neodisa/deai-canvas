@@ -24,12 +24,7 @@ import notify  # noqa: E402
 import serve  # noqa: E402
 
 
-def setUpModule():
-    # Конфіг Supabase ЛІГА — підставний на весь модуль (4b-2: констант нема, а справжній `tasks.json` установки не читаємо):
-    # тут перевіряється розмітка/збірка, а не пошук конфігу (його стережуть `test_legacy_comments`).
-    cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
-    cfg.start()
-    unittest.addModuleCleanup(cfg.stop)
+# 4d-4b: модульної підміни `serve.supabase_config` більше нема — читача оригіналів видалено (облікові ЛІГИ — з явних записів, Task 13).
 
 
 def _git(args, cwd):

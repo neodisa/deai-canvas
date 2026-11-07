@@ -34,9 +34,9 @@ import tracker
 
 # ---------- sync CLI: файл задач простору → картки → `push` модуля ролі `dashboard` ----------
 # ⛔ Клієнта Supabase (`_supabase`, `upsert_project`, `open_comment_counts`) тут більше нема: запис і читання лічильників
-# робить модуль (`supabase-dashboard`), конфіг — з УСТАНОВКИ (`install_config.supabase_config()`: файл раніше за оточення — як
-# у сервера; відоме обмеження 0.10.0, коли пушер читав оточення першим, закрито). Урок, що зник разом із `_supabase`: окремий
-# `overview_push.py sync` із чужим `SUPABASE_URL`/`SUPABASE_KEY` в оточенні писав ТУДИ; тепер оточення — лише запасний шлях.
+# робить модуль (`supabase-dashboard`), конфіг — з ЗАПИСУ ролі `dashboard` простору (`space.json` + `secrets.json`). Оточення
+# (`SUPABASE_URL`/`SUPABASE_KEY`/`SUPABASE_SERVICE_KEY`) і корінь `tasks.json` пушер НЕ читає (4d-4b): запасного шляху нема. Урок, що
+# зник разом із `_supabase`: окремий `overview_push.py sync` із чужим `SUPABASE_URL` в оточенні писав ТУДИ — тепер це неможливо.
 
 def load_tasks_file(path=None):
     """Файл задач (`{'tasks': {…}}`). Без `path` — старий файл ЛІГИ (`install_config.legacy_tasks_path`: той самий `DC_TASKS_FILE`,
@@ -188,6 +188,8 @@ def cmd_discover(space_id=None, *, call=None, log=print):
     """Лише базові картки з реєстру (ігнорує наявні рядки). Лише для ЛІГИ: реєстр GitLab — її крок."""
     sp = _space(space_id)
     module, ctx, legacy = _target(sp)
+    if module is None:                 # те саме повідомлення, що в `cmd_sync`: у ЛІГИ без запису дашборда це «нема постачальника», а не «не ЛІГА»
+        raise CliError("⛔ overview: у просторі «%s» нема постачальника командного дашборда — discover нічого не може" % sp["id"], EXIT_USAGE)
     if not legacy:
         raise CliError("⛔ overview: discover — лише для простору ЛІГА (реєстр задач GitLab)", EXIT_USAGE)
     cfg = _tasks_of(sp)

@@ -93,6 +93,42 @@ class IsolationCore(unittest.TestCase):
     def test_real_home_garbage_is_real(self):
         self.assertTrue(isolation.real_home(None))
 
+    def _fake_os_home(self, t):
+        """Дім ОС (`pwd`) = тимчасова тека `t` з готовою `.deai`."""
+        os.mkdir(os.path.join(t, '.deai'))
+        return mock.patch('pwd.getpwuid', return_value=mock.Mock(pw_dir=t))
+
+    def test_real_home_asks_samefile_when_realpath_differs(self):
+        """I1 (ревʼю Task 10): на macOS `realpath` не є перевіркою тотожності (регістр, firmlink `/System/Volumes/Data`) — `samefile`
+        ловить те, що `realpath` пропустив. Без цього Д6 відкривалась би."""
+        with tempfile.TemporaryDirectory() as t, self._fake_os_home(t):
+            other = os.path.join(t, 'elsewhere')
+            os.mkdir(other)
+            self.assertFalse(isolation.real_home(other))
+            with mock.patch('os.path.samefile', return_value=True):
+                self.assertTrue(isolation.real_home(other))
+            with mock.patch('os.path.samefile', side_effect=OSError('gone')):
+                self.assertFalse(isolation.real_home(other))        # теки нема — лишається результат `realpath`
+
+    def test_real_home_case_variant_on_a_case_insensitive_fs(self):
+        with tempfile.TemporaryDirectory() as t, self._fake_os_home(t):
+            variant = os.path.join(t, '.DEAI')
+            if not os.path.exists(variant):
+                self.skipTest('ФС чутлива до регістру: варіанта `.DEAI` не існує')
+            self.assertNotEqual(os.path.realpath(variant), os.path.realpath(os.path.join(t, '.deai')))
+            self.assertTrue(isolation.real_home(variant))
+
+    def test_real_home_without_pwd_uses_userprofile_not_home(self):
+        """m5: без `pwd` (Windows) дім ОС — `USERPROFILE`, а не `HOME`, який підміняє тест; не вдалось — справжній."""
+        with tempfile.TemporaryDirectory() as prof, tempfile.TemporaryDirectory() as fake_home:
+            os.mkdir(os.path.join(prof, '.deai'))
+            with mock.patch.dict(sys.modules, {'pwd': None}), mock.patch.dict(os.environ, {'USERPROFILE': prof, 'HOME': fake_home}):
+                self.assertTrue(isolation.real_home(os.path.join(prof, '.deai')))
+                self.assertFalse(isolation.real_home(os.path.join(fake_home, '.deai')))
+            env = {k: v for k, v in os.environ.items() if k != 'USERPROFILE'}
+            with mock.patch.dict(sys.modules, {'pwd': None}), mock.patch.dict(os.environ, env, clear=True):
+                self.assertTrue(isolation.real_home(os.path.join(fake_home, '.deai')))   # дім ОС невідомий — fail-closed
+
 
 if __name__ == '__main__':
     unittest.main()
