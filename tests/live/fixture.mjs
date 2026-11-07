@@ -119,7 +119,9 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
   if (!iso) {
     writeFileSync(tasksFile, JSON.stringify({
       current: "fixture", design_work_root: cfgDir,
-      tasks: { fixture: { dir: taskDir, title, ...(profile ? { profile } : {}) }, ...extraTasks },
+      /* 4d-4a: напрямок задачі рантайм читає лише з `track` (`profile` — старий ключ, його читає тільки межа `task-new`/реєстру): пишемо обидва,
+         як записує ЛІГА після кроку `liga-4d4a`. */
+      tasks: { fixture: { dir: taskDir, title, ...(profile ? { profile, track: profile } : {}) }, ...extraTasks },
       ...(supabase ? LIGA_SUPABASE : {}),
     }));
   }

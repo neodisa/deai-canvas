@@ -28,7 +28,9 @@ async function boot(t, portBase, { team } = {}) {
   const extraTasks = {};
   for (let i = 0; i < 10; i += 1) {
     extraTasks[`t${i}`] = { dir, jira: `LIGA-${10000 + i}`, title: `LIGA-${10000 + i} · Задача ${i} для пошуку`,
-      profile: i % 2 ? "united" : "liga360" };
+      /* 4d-4a: напрямок — лише `track` (адаптера, що виводив мітку з `profile`, нема): запис ЛІГИ несе обидва ключі, як після кроку
+         `liga-4d4a`. Напрямків простору в ізольованому режимі нема → мітка — значення як є, нижнім регістром. */
+      profile: i % 2 ? "united" : "liga360", track: i % 2 ? "united" : "liga360" };
   }
   extraTasks.ghost = { dir: `${dir}-нема-на-цій-машині`, jira: "LIGA-7021", title: "Привид без теки" };
   const env = {};
@@ -235,7 +237,7 @@ test("мітки ЛІГИ з профілю (без tags): чипи United/LIGA3
   await page.waitForSelector("#tasks-home .th-card");
   const chips = await page.$$eval('#tasks-home [data-th="tag"]', (els) => els.map((e) => e.textContent.trim()));
   assert.equal(chips.length, 2, `чипи міток: ${JSON.stringify(chips)}`);
-  assert.ok(chips.some((c) => c.startsWith("United")) && chips.some((c) => c.startsWith("LIGA360")), `чипи: ${JSON.stringify(chips)}`);
+  assert.ok(chips.some((c) => c.startsWith("united")) && chips.some((c) => c.startsWith("liga360")), `чипи: ${JSON.stringify(chips)}`);
   await page.click('#tasks-home [data-th="tag"][data-v="united"]');
   const only = await cardIds(page);
   assert.deepEqual([...only].sort(), ["t1", "t3", "t5", "t7", "t9"], `фільтр United видав не рівно United-задачі: ${only}`);
@@ -473,7 +475,7 @@ test("мітки 3: кнопка «Мітки» відкриває діалог 
   await page.waitForSelector('form[data-form="tags"]');
   assert.equal(await homeShown(page), true, "екран зник: клік по «Мітки» відкрив задачу");
   assert.equal(await cur(url), "fixture", "клік по «Мітки» переключив задачу");
-  assert.equal(await page.inputValue("#tg-tags"), "LIGA360", "діалог не заповнений похідною міткою");
+  assert.equal(await page.inputValue("#tg-tags"), "liga360", "діалог не заповнений похідною міткою");
 
   // помилка: 33 знаки — текст під полем, діалог лишається, файл без змін
   const before = readFileSync(tasksFile, "utf8");

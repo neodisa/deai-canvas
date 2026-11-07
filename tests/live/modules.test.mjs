@@ -345,11 +345,11 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
     spaces: [{ name: "Tok", id: "tok", color: "space-2", tasks: { lab: { dir, title: "Лабораторія" } } }],
     /* Напрямок задачі — `tool`: статичної ДС у нього нема, тож до токенів простору інспектор чесно каже
        «ДС немає». Фікстура з `spaces` напрямку не бере (її `profile` ігнорується), тож пишемо його в
-       `tasks.json` простору до першого запиту. */
+       `tasks.json` простору до першого запиту (4d-4a: напрямок задачі — лише `track`; `profile` рантайм не читає). */
     beforeOpen: (server) => {
       const file = path.join(server.spaces[0].path, "tasks.json");
       const cfg = JSON.parse(readFileSync(file, "utf8"));
-      cfg.tasks.lab.profile = "tool";
+      cfg.tasks.lab.track = "tool";
       writeFileSync(file, JSON.stringify(cfg));
     },
   });

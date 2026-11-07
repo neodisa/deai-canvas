@@ -159,7 +159,9 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   S.taskDir = A.dir;
   S.first = await startServer(null, {
     portBase: PORT_BASE, env: S.env, supabase: true, deaiDir: "state-deai",
-    legacyExtra: { jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
+    /* 4d-4a: старий запис лише з `profile` (без `track`) — крок D дописує йому `track`; відносний корінь `liga360` адаптер у явні напрямки не бере. */
+    legacyExtra: { jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN, design_work_roots: { liga360: "rel/l360" },
+      tasks: { mine1: { dir: A.dir, title: "Моя задача", jira: "DEMO-1", profile: "united" } } },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A.dir, title: "Моя задача", jira: "DEMO-1" } } }],
   });
   S.running = S.first.child;
@@ -174,7 +176,10 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   /* 4d-3c: третій незалежний крок — свій датований бекап із суфіксом `-liga-4d3c`. */
   const backupsC = all.filter((n) => /-liga-4d3c$/.test(n));
   assert.equal(backupsC.length, 1, `рівно один бекап кроку 4d-3c: ${JSON.stringify(backupsC)}`);
-  assert.equal(all.length, 3, `рівно три бекапи на старті: ${JSON.stringify(all)}`);
+  /* 4d-4a: четвертий незалежний крок — свій датований бекап із суфіксом `-liga-4d4a`. */
+  const backupsD = all.filter((n) => /-liga-4d4a$/.test(n));
+  assert.equal(backupsD.length, 1, `рівно один бекап кроку 4d-4a: ${JSON.stringify(backupsD)}`);
+  assert.equal(all.length, 4, `рівно чотири бекапи на старті: ${JSON.stringify(all)}`);
   const manifest = readJson(path.join(deaiHome, "backups", backups[0], "manifest.json"));
   assert.ok(manifest.files["tasks.json"] && manifest.files["spaces.json"], `маніфест: ${JSON.stringify(Object.keys(manifest.files))}`);
   assert.equal(statSync(path.join(deaiHome, "backups", backups[0])).mode & 0o777, 0o700);
@@ -203,6 +208,21 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   assert.equal(spaceInC.migrations["liga-4d3c"], undefined, "бекап c знятий ДО запису власної позначки");
   assert.equal(readJson(path.join(deaiHome, "backups", backupsC[0], "manifest.json")).migration, "liga-4d3c");
   assert.equal(statSync(path.join(deaiHome, "backups", backupsC[0])).mode & 0o777, 0o700);
+  /* Четвертий крок (4d-4a): без ролей; напрямки вже явні (крок a), тож пише лише `track = profile` у записи; бекап d знімає space.json ПІСЛЯ c і
+     лічить у собі `tasks.json` ДО запису (`tasks.json.bak` лежить поруч із файлом задач). */
+  const markD = sj.migrations?.["liga-4d4a"];
+  assert.ok(markD, `позначки 4d-4a нема: ${JSON.stringify(sj.migrations)}`);
+  assert.equal(markD.backup, backupsD[0]);
+  assert.deepEqual([markD.roles, markD.tracks, markD.records, markD.notes], [[], true, 1, ["root-rebased:liga360"]],
+    "напрямки адаптера записано явними (їх пише саме цей крок), `track = profile` у записі, відносний корінь `liga360` — нотатка без шляху");
+  assert.equal(readJson(path.join(deaiHome, "backups", backupsD[0], "manifest.json")).migration, "liga-4d4a");
+  assert.equal(statSync(path.join(deaiHome, "backups", backupsD[0])).mode & 0o777, 0o700);
+  assert.ok(readJson(path.join(deaiHome, "backups", backupsD[0], "space.json")).migrations["liga-4d3c"], "бекап d бачить позначку c");
+  assert.equal(readJson(path.join(deaiHome, "backups", backupsD[0], "tasks.json")).tasks.mine1.track, undefined, "бекап d — tasks.json ДО запису");
+  const migrated = readJson(S.first.legacyFile).tasks.mine1;
+  assert.deepEqual([migrated.track, migrated.profile], ["united", "united"], "запис дістав `track` (= `profile`), `profile` лишився");
+  assert.equal(readJson(`${S.first.legacyFile}.bak`).tasks.mine1.track, undefined, "`tasks.json.bak` — файл задач ДО кроку");
+  assert.deepEqual(sj.tracks.map((x) => x.id), ["united", "liga360", "seo"], "явні напрямки ЛІГИ (крок a)");
   /* Запис без секретів і з `compat`: саме він утримує шлях ЛІГИ (`publish_legacy_path`). */
   assert.deepEqual(sj.modules["vercel-publish"], { enabled: true, shared_state: true, settings: { auth: "cli", team: "", compat: "design-canvas" } });
   assert.deepEqual(Object.keys(sj.modules).sort(), ["git-sync", "jira-tracker", "supabase-comments", "supabase-dashboard", "supabase-teams", "vercel-publish"]);
@@ -217,9 +237,10 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   assert.equal(sec.liga["supabase-comments"].key, SB_KEY, "ключ Supabase для коментарів — теж лише в secrets.json");
   const last = readJson(path.join(deaiHome, "migrations", "last.json"));
   assert.equal(last.status, "done");
-  assert.deepEqual(Object.keys(last.steps).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c"], "last.json тримає звіт кожного кроку");
+  assert.deepEqual(Object.keys(last.steps).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c", "liga-4d4a"], "last.json тримає звіт кожного кроку");
   for (const f of [spacePath, path.join(deaiHome, "migrations", "last.json"), path.join(deaiHome, "backups", backups[0], "manifest.json"),
-    path.join(deaiHome, "backups", backupsB[0], "manifest.json"), path.join(deaiHome, "backups", backupsC[0], "manifest.json")]) {
+    path.join(deaiHome, "backups", backupsB[0], "manifest.json"), path.join(deaiHome, "backups", backupsC[0], "manifest.json"),
+    path.join(deaiHome, "backups", backupsD[0], "manifest.json")]) {
     const body = readFileSync(f, "utf8");
     assert.ok(!body.includes(JIRA_TOKEN) && !body.includes(SB_KEY), `секрет у ${path.basename(f)}`);
   }
@@ -227,6 +248,7 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   S.backups = backups;
   S.backupsB = backupsB;
   S.backupsC = backupsC;
+  S.backupsD = backupsD;
   S.seams = { DC_TRACKER_FAKE: tracker, DC_TEAM_FAKE: team };
   /* Дзеркала ЛІГИ — плоска тека 0.7.0; міграція її не чіпає (сам синк — тест 3c), а дзеркал модуля під `<DEAI_HOME>/cache` не буває. */
   assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "міграція не додала дзеркал");
@@ -360,13 +382,14 @@ test("4: другий старт того самого дому нічого н�
     assert.equal(sha(b.f), b.sha, `вміст змінився: ${path.basename(b.f)}`);
   }
   assert.deepEqual(readdirSync(path.join(deaiHome, "backups")).sort(), backupsBefore, "зʼявився новий бекап");
-  assert.equal(backupsBefore.length, 3, "лишились рівно три бекапи (a, b і c), нового нема");
-  assert.deepEqual(backupsBefore.map((n) => n.replace(/^.*-liga-/, "liga-")).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c"]);
-  assert.deepEqual([S.backups[0], S.backupsB[0], S.backupsC[0]].sort(), backupsBefore);
+  assert.equal(backupsBefore.length, 4, "лишились рівно чотири бекапи (a, b, c і d), нового нема");
+  assert.deepEqual(backupsBefore.map((n) => n.replace(/^.*-liga-/, "liga-")).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c", "liga-4d4a"]);
+  assert.deepEqual([S.backups[0], S.backupsB[0], S.backupsC[0], S.backupsD[0]].sort(), backupsBefore);
   const sj = readJson(S.spacePath);
   assert.ok(sj.migrations["liga-4d3a"], "позначка лишилась");
   assert.ok(sj.migrations["liga-4d3b"], "позначка 4d-3b лишилась");
   assert.ok(sj.migrations["liga-4d3c"], "позначка 4d-3c лишилась");
+  assert.ok(sj.migrations["liga-4d4a"], "позначка 4d-4a лишилась");
   /* Дзеркала: старт нічого в них не пише (HEAD і перелік після push 3c ті самі), дзеркал модуля під `<DEAI_HOME>/cache` нема. */
   assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "другий старт змінив базу дзеркал");
   assert.equal(git(S.gitDir, S.mirror, "rev-parse", "HEAD"), S.mirrorHeadAfter, "другий старт зрушив дзеркало");
@@ -517,7 +540,7 @@ test("6: «Перевірити» на картці vercel-publish — верд�
     assert.equal(statSync(b.f).mtimeMs, b.mtime, `mtime змінився: ${path.basename(b.f)}`);
     assert.equal(sha(b.f), b.sha, `вміст змінився: ${path.basename(b.f)}`);
   }
-  assert.equal(readdirSync(path.join(S.first.deaiHome, "backups")).length, 3, "зʼявився новий бекап");
+  assert.equal(readdirSync(path.join(S.first.deaiHome, "backups")).length, 4, "зʼявився новий бекап (їх рівно чотири: a, b, c, d)");
 });
 
 guardRealDeai("7: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");

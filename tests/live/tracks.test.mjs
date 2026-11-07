@@ -16,7 +16,8 @@
  *   3 (`track: 'nope'` → 400 `unknown-track`, теки й задачі нема) — перевірка напрямку в маршруті ДО `task_new`
  *     (мутація «після запису» червонить саме цей сценарій).
  *   4 (ЛІГА без поля → `united`; запис має і `track`, і `profile`; мітка `United`) — `task_new(legacy=True)` пише обидва
- *     ключі (колеги на 0.14.0 читають `profile` зі спільного реєстру) + адаптер `legacy_tracks` / `_LEGACY_LABELS`.
+ *     ключі (колеги на 0.14.0 читають `profile` зі спільного реєстру) + ЯВНІ напрямки `space.json` (4b; після 4d-4a адаптера
+ *     `legacy_tracks` нема, їх пише крок міграції). 4a — шар вимкнено: напрямків нема, `track` → `unknown-track` (ізольований режим).
  *   5 (`/api/spaces`: `tracks` без `root`/`repo`) — проєкція в `_space_view`.
  *   6 (`profile: 'united'` у звичайному просторі → 200, напрямок за замовчуванням, без помилки) — спека §6.7: застарілий
  *     ключ, що не є напрямком простору, ігнорується, як у 0.14.0 (скіл пайплайну шле його всім).
@@ -193,20 +194,37 @@ async function ligaCase(t, server) {
   assert.ok(chips.includes("United"), `чіпа «United» нема серед ${JSON.stringify(chips)}`);
 }
 
-test("4a: ЛІГА (шар просторів вимкнено, `DC_TASKS_FILE`) — нова задача без поля → `track` і `profile` = `united`, мітка `United`", async (t) => {
+test("4a: шар просторів вимкнено (`DC_TASKS_FILE`) — напрямків нема (4d-4a: адаптера ЛІГИ більше нема): нова задача без поля — без `track` і без мітки, `track` → 400 `unknown-track`", async (t) => {
   const A = taskFixture({ html: MOCKUP });
   const server = await startServer(A.dir, { portBase: PORT_BASE + 300 });
   shutdown(t, server);
-  await ligaCase(t, server);
+  const res = await postJson(server.url, "/api/task-new", { id: "l1", title: "Задача ліги" });
+  const body = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(body));
+  const rec = JSON.parse(readFileSync(server.tasksFile, "utf8")).tasks.l1;
+  assert.equal(rec?.track, undefined, "без напрямків `track` не пишеться (раніше адаптер ставив `united`)");
+  assert.ok(!rec?.profile, "`profile` лишається порожнім: нема напрямку, який дзеркалити");
+  const row = await taskRow(server.url, "l1");
+  assert.equal(row?.track ?? null, null);
+  assert.deepEqual(row?.tags, [], "мітки нема: адаптерної `United` більше нема");
+  const bad = await postJson(server.url, "/api/task-new", { id: "l2", title: "Привид", track: "united" });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).code, "unknown-track", "напрямків нема — будь-який `track` невідомий (ізольований режим)");
+  assert.ok(!(JSON.parse(readFileSync(server.tasksFile, "utf8")).tasks.l2), "відмова не лишила запису");
 });
 
-test("4b: ЛІГА як простір з інтеграціями — те саме: `track` і `profile` = `united`, мітка `United`", async (t) => {
+test("4b: ЛІГА як простір з інтеграціями й ЯВНИМИ напрямками (те, що пише крок `liga-4d4a`) — нова задача без поля → `track` і `profile` = `united`, мітка `United`", async (t) => {
   const A = taskFixture({ html: MOCKUP });
   const server = await startServer(null, {
     portBase: PORT_BASE + 400,
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { t1: { dir: A.dir, title: "Задача один" } } }],
   });
   shutdown(t, server);
+  /* Напрямки ЛІГИ — явні в `space.json`, як після кроку міграції (сервер читає файл на кожен запит). Корінь `liga360` нема — тека простору. */
+  writeFileSync(path.join(server.spaces[0].path, "space.json"), JSON.stringify({
+    name: "Liga", color: "space-2", default_track: "united",
+    tracks: [{ id: "united", label: "United", ds: "united" }, { id: "liga360", label: "LIGA360", ds: "liga360" }, { id: "seo", label: "SEO", ds: "seo" }],
+  }));
   await ligaCase(t, server);
 });
 
