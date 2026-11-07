@@ -123,54 +123,114 @@ class PublishPassword(unittest.TestCase):
 
 
 class ProviderCallersPinTheSpace(unittest.TestCase):
-    """Аудит (Р4): `provider(<роль>)` БЕЗ простору мовчки дає `None`, коли простір запиту не зафіксовано (раніше — `Implicit`). Дозволені лише ті
-    виклики, що йдуть із потоку запиту (простір фіксує `task_anywhere`/`set_request_space`) чи обгорнутого `_in_space` фонового потоку; новий
-    однопараметровий виклик — свідоме рішення з правкою цього списку. Решта викликів (`bin/*`, `serve.comments_provider`) передають `space` явно."""
+    """Аудит (Р4): `provider(<роль>)` БЕЗ простору мовчки дає `None`, коли простір запиту не зафіксовано (раніше — `Implicit`). Сканер бачить
+    КОЖЕН виклик `provider(…)`/`comments_provider(…)` (рахує, а не ключує словником, тож другий виклик тієї ж ролі в тій самій функції теж
+    видно) у будь-якій формі: `deai_modules.provider(…)`, голе `provider(…)` після `from deai_modules import provider`, роль не літералом
+    (`provider(role)`), простір відсутній / літерал `None` / імʼя / інший вираз, позиційно чи `space=`. Точний набір пінується буквально:
+    новий виклик, нова форма чи зміна кількості — свідоме рішення з правкою списку. Виклики «без простору» (`absent`) дозволені лише з потоку
+    запиту (простір фіксує `task_anywhere`/`set_request_space`) чи обгорнутого `_in_space` фонового потоку; решта передає `space` явно
+    (`name`: змінна простору, яку вирішив викликач)."""
 
-    ALLOWED = {('app/serve.py', 'team_resolve'): 'dashboard', ('app/serve.py', 'tracker_resolve'): 'tracker',
-               ('app/serve.py', 'notify_resolve'): 'notify', ('app/serve.py', 'vcs_provider'): 'vcs',
-               ('app/serve.py', '_publish'): 'publish', ('app/serve.py', '_overview_sync'): 'dashboard',
-               ('app/serve.py', '_preview_password'): 'publish'}
+    CALLEES = {'provider': 1, 'comments_provider': 0}   # імʼя -> позиція аргументу простору
+    #: (файл, функція, виклик, роль, форма простору) -> кількість викликів.
+    ALLOWED = {
+        ('app/serve.py', 'team_resolve', 'provider', 'dashboard', 'absent'): 1,
+        ('app/serve.py', 'tracker_resolve', 'provider', 'tracker', 'absent'): 1,
+        ('app/serve.py', 'notify_resolve', 'provider', 'notify', 'absent'): 1,
+        ('app/serve.py', 'vcs_provider', 'provider', 'vcs', 'absent'): 1,
+        ('app/serve.py', 'Handler._publish', 'provider', 'publish', 'absent'): 1,
+        ('app/serve.py', 'Handler._overview_sync', 'provider', 'dashboard', 'absent'): 1,
+        ('app/serve.py', 'Handler._preview_password', 'provider', 'publish', 'absent'): 1,
+        ('app/serve.py', 'comments_provider', 'provider', 'comments', 'name'): 1,
+        ('app/serve.py', 'ds_tokens_view', 'provider', 'tokens', 'name'): 1,
+        ('app/serve.py', 'published_target', 'provider', 'publish', 'name'): 1,
+        ('app/serve.py', 'ProjectComments.__init__', 'comments_provider', 'comments', 'name'): 1,
+        ('app/serve.py', 'publish_comments', 'comments_provider', 'comments', 'name'): 1,
+        ('app/serve.py', 'Handler._commented', 'comments_provider', 'comments', 'name'): 1,
+        ('app/serve.py', 'Handler._comment_config', 'comments_provider', 'comments', 'name'): 1,
+        ('bin/overview_push.py', '_target', 'provider', 'dashboard', 'name'): 1,
+        ('bin/overview_push.py', '_statuses', 'provider', 'tracker', 'name'): 1,
+        ('bin/overview_push.py', '_channel_of', 'provider', 'comments', 'name'): 1,
+    }
 
-    @staticmethod
-    def scan(tree):
-        """`{імʼя функції: роль}` для викликів `<щось>.provider('<роль>')` з ОДНИМ позиційним аргументом (простір не передано)."""
+    @classmethod
+    def scan(cls, tree):
+        """Список `(функція, виклик, роль, форма простору)` для КОЖНОГО виклику; роль — літерал або `<non-literal>`; форма — `absent`/`None`/
+        `name`/`other`. Імпорт `from deai_modules import provider` дає `('<module>', 'import', 'provider', 'from-import')`."""
         import ast
         parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
-        out = {}
+
+        def where(n):
+            names = []
+            while n in parents:
+                n = parents[n]
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.append(n.name)
+            return '.'.join(reversed(names)) or '<module>'
+        out = []
         for n in ast.walk(tree):
-            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'provider' and len(n.args) == 1
-                    and not n.keywords and isinstance(n.args[0], ast.Constant)):
-                f = n
-                while f in parents:
-                    f = parents[f]
-                    if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        break
-                out[getattr(f, 'name', '<module>')] = n.args[0].value
+            if isinstance(n, ast.ImportFrom) and any(a.name in cls.CALLEES for a in n.names):
+                out.append((where(n), 'import', 'provider', 'from-import'))
+            if not isinstance(n, ast.Call):
+                continue
+            f = n.func
+            callee = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+            if callee not in cls.CALLEES:
+                continue
+            pos = cls.CALLEES[callee]
+            role_node = n.args[0] if callee == 'provider' and n.args else None
+            role = ('comments' if callee == 'comments_provider' else
+                    role_node.value if isinstance(role_node, ast.Constant) and isinstance(role_node.value, str) else '<non-literal>')
+            sp = n.args[pos] if len(n.args) > pos else next((k.value for k in n.keywords if k.arg == 'space'), None)
+            if sp is None:
+                form = 'absent'
+            elif isinstance(sp, ast.Constant) and sp.value is None:
+                form = 'None'
+            elif isinstance(sp, ast.Name):
+                form = 'name'
+            else:
+                form = 'other'
+            out.append((where(n), callee, role, form))
         return out
 
     @classmethod
     def found(cls):
         import ast
+        import collections
         import glob
         root = os.path.dirname(_HERE)
-        out = {}
+        out = collections.Counter()
         for p in sorted(glob.glob(os.path.join(root, 'app', '*.py')) + glob.glob(os.path.join(root, 'bin', '*.py')) + glob.glob(os.path.join(root, 'ops', '*.py'))):
             if os.path.basename(p).startswith('test_'):
                 continue
             with open(p, encoding='utf-8') as f:
-                for fn, role in cls.scan(ast.parse(f.read())).items():
-                    out[(os.path.relpath(p, root), fn)] = role
+                for hit in cls.scan(ast.parse(f.read())):
+                    out[(os.path.relpath(p, root),) + hit] += 1
         return out
 
     def test_only_the_audited_callers_ask_without_a_space(self):
-        self.assertEqual(self.found(), self.ALLOWED)
+        self.assertEqual(dict(self.found()), self.ALLOWED)
 
     def test_the_audit_can_fail(self):
         import ast
-        self.assertEqual(self.scan(ast.parse("def f():\n    return deai_modules.provider('tracker')\n")), {'f': 'tracker'})
-        self.assertEqual(self.scan(ast.parse("def f(sp):\n    return deai_modules.provider('tracker', sp)\n")), {})
-        self.assertEqual(self.scan(ast.parse("x = m.provider('vcs')")), {'<module>': 'vcs'})
+        s = lambda src: self.scan(ast.parse(src))  # noqa: E731
+        self.assertEqual(s("def f():\n    return deai_modules.provider('tracker')\n"), [('f', 'provider', 'tracker', 'absent')])
+        self.assertEqual(s("def f(sp):\n    return deai_modules.provider('tracker', sp)\n"), [('f', 'provider', 'tracker', 'name')])
+        self.assertEqual(s("x = m.provider('vcs')"), [('<module>', 'provider', 'vcs', 'absent')])
+        # другий виклик тієї ж ролі в тій самій функції — два записи, а не один
+        self.assertEqual(len(s("def f():\n    a = m.provider('vcs')\n    b = m.provider('vcs')\n")), 2)
+        # роль не літералом
+        self.assertEqual(s("def f(role):\n    return m.provider(role)\n"), [('f', 'provider', '<non-literal>', 'absent')])
+        # форма `from deai_modules import provider` і голий виклик
+        self.assertIn(('<module>', 'import', 'provider', 'from-import'), s("from deai_modules import provider"))
+        self.assertEqual(s("def f():\n    return provider('vcs')\n"), [('f', 'provider', 'vcs', 'absent')])
+        # явний None, простір ключем, обгортка comments_provider
+        self.assertEqual(s("def f():\n    return m.provider('vcs', None)\n"), [('f', 'provider', 'vcs', 'None')])
+        self.assertEqual(s("def f():\n    return m.provider('vcs', space=None)\n"), [('f', 'provider', 'vcs', 'None')])
+        self.assertEqual(s("def f():\n    return serve.comments_provider(space=None)\n"), [('f', 'comments_provider', 'comments', 'None')])
+        self.assertEqual(s("def f():\n    return serve.comments_provider()\n"), [('f', 'comments_provider', 'comments', 'absent')])
+        self.assertEqual(s("def f():\n    return serve.comments_provider(sp)\n"), [('f', 'comments_provider', 'comments', 'name')])
+        self.assertEqual(s("def f():\n    return m.provider('vcs', a.b)\n"), [('f', 'provider', 'vcs', 'other')])
 
 
 class PreviewPasswordFromTheRecord(unittest.TestCase):
