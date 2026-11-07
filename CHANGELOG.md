@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.20.0] — DD.MM.YYYY
+## [0.20.0] — 07.11.2026
 
 Stage 4d-4a: the tracks of LIGA become explicit for good, and the implicit track adapter leaves the runtime. A **fourth migration
 step, `liga-4d4a`**, writes the tracks of the adapter into the LIGA `space.json` (when the adapter still applies) and gives the old
