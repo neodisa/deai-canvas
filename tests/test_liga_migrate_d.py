@@ -114,7 +114,7 @@ class _StepD(_WriteStand):
 
     def setUp(self):
         super().setUp()
-        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS)
+        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS[:4])      # пін 4d-4b: стенд 4d-4a — чотири кроки, крок Е тут не біжить
         p.start()
         self.addCleanup(p.stop)
 
@@ -137,11 +137,15 @@ class _StepD(_WriteStand):
 class StepDConstants(_StepD):
     def test_steps_list_and_shape(self):
         lm = self.lm
-        self.assertEqual([s.mark for s in lm.ALL_STEPS], ['liga-4d3a', 'liga-4d3b', 'liga-4d3c', D])
+        self.assertEqual([s.mark for s in lm.ALL_STEPS], ['liga-4d3a', 'liga-4d3b', 'liga-4d3c', D, 'liga-4d4b'])
         self.assertIs(lm.ALL_STEPS[3], lm.STEP_D)
-        self.assertEqual(lm.STEPS, lm.ALL_STEPS)
+        self.assertIs(lm.ALL_STEPS[4], lm.STEP_E)
+        self.assertEqual(lm.STEPS, lm.ALL_STEPS[:4])                    # 4d-4b: на старті до Task 7 біжать чотири кроки (запису Е ще нема)
         d = lm.STEP_D
-        self.assertEqual((d.mark, d.roles, d.tracks, d.suffix, d.ungated), (D, (), True, '-liga-4d4a', True))
+        self.assertEqual((d.mark, d.roles, d.tracks, d.suffix, d.ungated, d.originals), (D, (), True, '-liga-4d4a', True, False))
+        e = lm.STEP_E
+        self.assertEqual((e.mark, e.roles, e.tracks, e.suffix, e.ungated, e.originals), ('liga-4d4b', (), False, '-liga-4d4b', False, True))
+        self.assertEqual(e.entries(self.cfg, set()), {}, 'ролей крок Е не має')
         self.assertEqual(d.entries(self.cfg, set()), {}, 'ролей крок не має')
 
     def test_stamp_names_tell_the_steps_apart(self):

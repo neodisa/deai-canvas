@@ -55,7 +55,7 @@ DASHBOARD_TABLE = 'overview_projects'
 COMPAT = 'comment-layer'
 SKIP_CODES = ('skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-no-path', 'skip-path-in-git',
               'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable', 'skip-nothing', 'skip-busy', 'skip-integrations-off')
-ABORT_CODES = ('abort-provider', 'abort-internal', 'abort-lock', 'abort-tracks', 'abort-records')
+ABORT_CODES = ('abort-provider', 'abort-internal', 'abort-lock', 'abort-tracks', 'abort-records', 'abort-originals', 'abort-verify')
 _REASONS = {
     'skip-layer-off': 'шар просторів вимкнено: міграція не біжить',
     'skip-no-liga': 'у реєстрі нема простору ЛІГА',
@@ -74,6 +74,8 @@ _REASONS = {
     'abort-internal': 'непередбачена помилка розрахунку: міграція нічого не пише',
     'abort-tracks': 'розраховані напрямки не збігаються з адаптером за id чи дефолтом: міграція нічого не пише',
     'abort-records': 'tasks.json не записано: space.json не змінено, наступний запуск почне заново',
+    'abort-originals': 'tasks.json ЛІГИ не записано: копії вже лежать у записах, нічого не видалено — наступний запуск почне заново',
+    'abort-verify': 'скопійоване значення не збіглося з планом після запису: нічого не видалено з tasks.json',
     'abort-lock': 'міжпроцесний замок недоступний (flock не працює на цій файловій системі): міграція нічого не пише, щоб не йти без замка',
 }
 
@@ -395,6 +397,181 @@ def _publisher_present(space, mods):
         return False
 
 
+#: 4d-4b: вісім «оригіналів» кореня `tasks.json` ЛІГИ і де лежить їхня копія. `kind`: `s` — налаштування запису, `k` — секрет запису.
+#: `copy` — крок Е сам кладе значення в запис, коли там порожньо (4d-3 це свідомо не копіював). Рядки — ТІ САМІ, що були в читачів рантайму
+#: (вони видалені: `install_config.{supabase,jira}_*`, `serve.preview_password`, `_vcs_ssh`); міграція — єдине місце, що їх ще знає.
+SB_MODULES = ('supabase-dashboard', 'supabase-teams', 'supabase-comments')
+ORIGINALS = (
+    ('supabase_url', SB_MODULES, 's', 'url', False),
+    ('supabase_key', SB_MODULES, 'k', 'key', False),
+    ('jira_base', ('jira-tracker',), 's', 'base', False),
+    ('jira_email', ('jira-tracker',), 's', 'email', False),
+    ('jira_token', ('jira-tracker',), 'k', 'token', False),
+    ('gitlab_ssh_key', ('git-sync',), 's', 'ssh_key', True),
+    ('gitlab_host_ip', ('git-sync',), 's', 'host_ip', True),
+    ('preview_password', ('vercel-publish',), 'k', 'password', True),
+)
+ORIGINAL_KEYS = tuple(o[0] for o in ORIGINALS)
+#: Ключі, наявність яких у корені робить файл «файлом ЛІГИ» для `spaces.has_markers` (реєстр без запису ЛІГИ відновлюється з нуля).
+_MARKER_KEYS = ('gitlab_host_ip', 'gitlab_ssh_key')
+
+
+def _fits(v):
+    """Значення можна покласти в запис (`write_secrets`/налаштування `text`): рядок ≤ `MAX_VALUE_LEN`, кодується в UTF-8."""
+    return isinstance(v, str) and len(v) <= deai_modules.MAX_VALUE_LEN and deai_modules._encodable(v)
+
+
+def _effective(key, raw):
+    """Значення, яке віддав би ВИДАЛЕНИЙ читач (після його `strip`/`rstrip('/')`/форми), або `None` — «непридатне» (`unfit`)."""
+    if key in ('supabase_url', 'jira_base'):
+        s = raw.strip() if isinstance(raw, str) else ''
+        ok = install_config._SUPABASE_URL_RE.fullmatch(s) and not _has_userinfo(s)
+        return s.rstrip('/') if ok else None
+    if key in ('supabase_key', 'jira_token'):
+        s = raw.strip() if isinstance(raw, str) else ''
+        return s if install_config._SUPABASE_KEY_RE.fullmatch(s) else None
+    if key == 'jira_email':
+        s = raw.strip() if isinstance(raw, str) else ''
+        return s if s and s.isprintable() else None
+    if key == 'preview_password':
+        if isinstance(raw, bool):                            # `True` — не пароль (читач бачив би «True»): непридатне
+            return None
+        v = str(raw) if isinstance(raw, (int, float)) else raw
+        return v if isinstance(v, str) and v.strip() and _fits(v) else None
+    return raw if isinstance(raw, str) and raw.strip() and _fits(raw) else None        # gitlab_ssh_key / gitlab_host_ip: як є
+
+
+def _holder_ready(norm, mid, key):
+    """Запис `mid` готовий тримати оригінал: є, `enabled`, `shared_state`; для `preview_password` — ще й `compat == design-canvas`
+    (інакше секрет `password` має інший зміст: модуль-режим, а не пароль превʼю ЛІГИ)."""
+    e = norm.get(mid)
+    if not (isinstance(e, dict) and e.get('enabled') is True and e.get('shared_state') is True):
+        return None
+    if key == 'preview_password' and (e.get('settings') or {}).get('compat') != PUBLISH_COMPAT:
+        return None
+    return e
+
+
+def _held(norm, secrets, sid, mid, kind, field):
+    e = norm.get(mid) or {}
+    if kind == 'k':
+        return deai_modules._bucket(secrets, sid, mid).get(field)
+    v = (e.get('settings') or {}).get(field)
+    return v if isinstance(v, str) and v else None
+
+
+def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
+    """ЧИСТИЙ розрахунок кроку Е (нічого не читає з диска): `{'copy_settings': {mid: {поле: значення}}, 'copy_secrets': {mid: {поле:
+    значення}}, 'remove': [ключі], 'kept': [ключі], 'notes': [коди]}`. Правила (спека §1.1): нема в корені — мовчки; непридатне —
+    `unfit:<ключ>`; тримача нема — `no-record:<модуль>`; значення відмінне — `differs:<ключ>` (для `preview_password` — перезапис, Д4,
+    `overwrote:password`); порожнє й копіюємо — у план копії; збіг — у список видалення. Пара Supabase — лише разом: не всі три
+    тримачі — `partial:supabase`, жоден із двох не видаляється. ⛔ Значень у виході НЕМАЄ нікуди, крім `copy_*` (їх пише запис)."""
+    out = {'copy_settings': {}, 'copy_secrets': {}, 'copied': [], 'remove': [], 'kept': [], 'notes': []}
+    notes = out['notes']
+
+    def note(code):
+        if code not in notes:
+            notes.append(code)
+
+    sb_blocked = False
+    present = [o for o in ORIGINALS if cfg.get(o[0]) is not None]
+    if any(o[0] in ('supabase_url', 'supabase_key') for o in present):
+        missing = [m for m in SB_MODULES if not _holder_ready(norm, m, 'supabase_url')]
+        if missing:
+            sb_blocked = True
+            note('partial:supabase')
+            for m in missing:
+                note('no-record:' + m)
+    for key, mods_, kind, field, copyable in present:
+        eff = _effective(key, cfg[key])
+        if eff is None:
+            note('unfit:' + key)
+            out['kept'].append(key)
+            continue
+        if key in ('supabase_url', 'supabase_key') and sb_blocked:
+            out['kept'].append(key)
+            continue
+        holders = [m for m in mods_ if _holder_ready(norm, m, key)]
+        if len(holders) != len(mods_):
+            for m in mods_:
+                if m not in holders:
+                    note('no-record:' + m)
+            out['kept'].append(key)
+            continue
+        equal = True
+        for m in mods_:
+            cur = _held(norm, secrets, sid, m, kind, field)
+            if cur == eff:
+                continue
+            if cur is None and copyable:                    # порожньо — копіюємо
+                out['copy_secrets' if kind == 'k' else 'copy_settings'].setdefault(m, {})[field] = eff
+                out['copied'].append(key)
+            elif key == 'preview_password':                 # Д4: корінь був ЕФЕКТИВНИМ, секрет — інертним: перезапис
+                out['copy_secrets'].setdefault(m, {})[field] = eff
+                out['copied'].append(key)
+                note('overwrote:password')
+            else:
+                note('differs:' + key)
+                equal = False
+        if equal:
+            out['remove'].append(key)
+        else:
+            out['kept'].append(key)
+    # Охоронець маркера: без `registry`/задач з `gitlab` реєстр, відновлений з нуля, створив би ЛІГУ з `integrations: false`.
+    if had_markers is None:
+        had_markers = spaces.has_markers(cfg)
+    if had_markers:
+        left = {k: v for k, v in cfg.items() if k not in out['remove']}
+        if not spaces.has_markers(left):
+            for k in _MARKER_KEYS:
+                if k in out['remove']:
+                    out['remove'].remove(k)
+                    out['kept'].append(k)
+                    note('marker-kept:' + k)
+                    break
+    return out
+
+
+def _originals_state(path, data, cfg):
+    """`(norm, secrets)` для `_decide_originals`: явні записи `space.json` ЛІГИ (`data`) і весь `secrets.json`."""
+    mods = deai_modules._raw_modules(data)
+    return deai_modules._normalize(mods), deai_modules._load_secrets()
+
+
+def _plan_originals(reg, liga, sid, path, data, mods, mig, cfg, step):
+    """`plan()` кроку Е (див. `_decide_originals`): ворота вже пройдено в `_plan`."""
+    norm, secrets = _originals_state(path, data, cfg)
+    d = _decide_originals(cfg, norm, secrets, sid)
+    if not (d['copy_settings'] or d['copy_secrets'] or d['remove'] or d['notes']):
+        raise _Stop('skip-nothing', space_id=sid)
+    new_mods = {k: (dict(v) if isinstance(v, dict) else v) for k, v in mods.items()}
+    for mid, patch in d['copy_settings'].items():
+        rec = dict(new_mods[mid])
+        st = dict(rec.get('settings') or {})
+        st.update(patch)
+        rec['settings'] = st
+        new_mods[mid] = rec
+    # Перевірка В ПАМʼЯТІ: запис із новими налаштуваннями лишається тим самим постачальником (ролі кроку Е нема — міняти нічого не вільно).
+    space = {'id': sid, 'path': path, 'legacy': True, 'integrations': liga.get('integrations') is True}
+    for role in deai_modules.ROLES_CALLED:
+        got = []
+        for m in (mods, new_mods):
+            try:
+                prov = deai_modules._provider_for(role, space, explicit_override=deai_modules._normalize(m))
+            except deai_modules.ModuleError:
+                prov = None
+            got.append((getattr(prov, 'id', None), isinstance(prov, deai_modules.Module)))
+        if got[0] != got[1]:
+            raise _Stop('abort-provider', space_id=sid)
+    space_json = dict(data)
+    space_json['modules'] = new_mods
+    marks = dict(mig) if isinstance(mig, dict) else {}
+    marks[step.mark] = {'roles': [], 'copied': sorted(d['copied']), 'removed': sorted(d['remove']), 'kept': sorted(d['kept']),
+                        'notes': list(d['notes'])}
+    space_json['migrations'] = marks
+    return _result('ready', space_id=sid, space_path=path, space_json=space_json, notes=list(d['notes']), originals=d)
+
+
 def plan(home=None, step=None):
     """Чистий розрахунок міграції ЛІГИ; див. докстрінг модуля. Нічого не пише; не кидає (збій — `abort-internal`).
     `step` — крок (`Step`, його позначка чи `None` = 4d-3a): 4d-3b узагальнює модуль до впорядкованого списку кроків."""
@@ -444,6 +621,8 @@ def _plan(home, step):
         raise _Stop('skip-tasks-unreadable', space_id=sid) from None
     if not isinstance(cfg, dict):
         raise _Stop('skip-tasks-unreadable', space_id=sid)
+    if step.originals:                                       # 4d-4b: оригінали кореня (копія й видалення), ролей нема
+        return _plan_originals(reg, liga, sid, path, data, mods, mig, cfg, step)
 
     roles = (step.entries or _role_entries)(cfg, set(mods))      # ролі кроку (4d-3a — `_role_entries`; пошук за імʼям на виклик: точка підміни)
     # 4d-3c (Поправка 4 плану): `_entries_c` не знає простору, тож «публікацію вже веде інший модуль» проставляємо тут, одним блоком,
@@ -532,6 +711,10 @@ def report(p, step=None):
             lines.append('  tracks: ' + ('migrate' if p.get('tracks') else 'skip: ' + str(p.get('tracks_reason'))))
         if _step(step).ungated:
             lines.append('  records: %d; notes: %s' % (len(p.get('records') or []), ', '.join(p.get('notes') or []) or '-'))
+        if _step(step).originals:                            # 4d-4b: імена ключів кореня, без значень
+            o = p.get('originals') or {}
+            lines.append('  copy: %s; remove: %s; kept: %s; notes: %s' % tuple(
+                ', '.join(o.get(k) or []) or '-' for k in ('copied', 'remove', 'kept', 'notes')))
         for mid, sec in (p.get('secrets') or {}).items():
             lines.append('  secrets %s: %s' % (mid, ', '.join(sorted(sec)) or '-'))
     return '\n'.join(lines)
@@ -550,7 +733,7 @@ STAMP_RE = re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3a(?:-[0-9]{1,3})?')
 #: `roles` — `((роль, модуль), …)` у порядку запису; `tracks` — чи мігрує напрямки (лише 4d-3a); `suffix` — хвіст імені бекапу;
 #: `stamp_re` — строге імʼя бекапу (імʼя однозначно каже, чий це крок); `entries(cfg, present)` — розрахунок ролей кроку
 #: (`None` = `_role_entries`, 4d-3a; `_entries_b` додає Task 6). `hold` кроку — це `{held: True}` у ЙОГО позначці.
-Step = namedtuple('Step', 'mark roles tracks suffix stamp_re entries ungated', defaults=(None, False))
+Step = namedtuple('Step', 'mark roles tracks suffix stamp_re entries ungated originals', defaults=(None, False, False))
 STEP_A = Step(MARK, ROLE_MODULES, True, BACKUP_SUFFIX, STAMP_RE)
 #: Другий крок (4d-3b, 0.18.0): `comments` і `vcs` ЛІГИ — явні модулі; без напрямків (`tracks=False`), свій бекап і позначка без `tracks`.
 STEP_B = Step('liga-4d3b', ROLE_MODULES_B, False, '-liga-4d3b', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3b(?:-[0-9]{1,3})?'), _entries_b)
@@ -560,8 +743,12 @@ STEP_C = Step('liga-4d3c', ROLE_MODULES_C, False, '-liga-4d3c', re.compile(r'[0-
 #: Четвертий крок (4d-4a, 0.20.0): напрямки ЛІГИ — остаточно явні (БЕЗ воріт паритету, розбіжності — нотатки позначки) і записи задач
 #: (`track = profile`). Ролей нема; `ungated=True` — крок без воріт паритету й з записом `tasks.json`.
 STEP_D = Step('liga-4d4a', (), True, '-liga-4d4a', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d4a(?:-[0-9]{1,3})?'), lambda cfg, present: {}, True)
-ALL_STEPS = (STEP_A, STEP_B, STEP_C, STEP_D)
-STEPS = ALL_STEPS
+#: П'ятий крок (4d-4b, 0.21.0): останні оригінали кореня `tasks.json` ЛІГИ — копія в записи (`gitlab_*`, `preview_password`) і видалення
+#: з кореня за рівністю. Ролей нема; `originals=True` — гілка «оригінали» в `_plan`/`_run_locked`/`_restore_locked`.
+STEP_E = Step('liga-4d4b', (), False, '-liga-4d4b', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d4b(?:-[0-9]{1,3})?'), lambda cfg, present: {}, False, True)
+ALL_STEPS = (STEP_A, STEP_B, STEP_C, STEP_D, STEP_E)
+#: До Task 7 на старті й в CLI біжать чотири кроки: запису, відкату й виводу кроку Е ще нема.
+STEPS = ALL_STEPS[:4]
 
 
 def _step(x):

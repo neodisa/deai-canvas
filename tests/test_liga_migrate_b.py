@@ -1926,7 +1926,7 @@ class StepBConstants(unittest.TestCase):
         import liga_migrate as lm
         self.assertEqual([s.mark for s in lm.ALL_STEPS][:2], ['liga-4d3a', 'liga-4d3b'])      # 4d-3c: третій крок — `StepCConstants`
         self.assertIs(lm.ALL_STEPS[2], lm.STEP_C)
-        self.assertEqual(lm.STEPS, lm.ALL_STEPS)
+        self.assertEqual(lm.STEPS, lm.ALL_STEPS[:4])             # 4d-4b: на старті до Task 7 — чотири кроки
         b = lm.ALL_STEPS[1]
         self.assertIs(lm.STEP_B, b)
         self.assertEqual((b.mark, b.suffix, b.tracks), ('liga-4d3b', '-liga-4d3b', False))
