@@ -162,8 +162,8 @@ class Roots(unittest.TestCase):
 
     def test_plan_reads_only_track(self):
         """Було `…reads_track_profile_and_track_wins`: задача лише з `profile` (запис до 0.15.0) переїжджала в `seo`. Тепер лише з
-        `track`: `track` переїжджає, `profile` — без напрямку (міграція ЛІГИ дописує `track`, реєстр — на межі пулу), тож лягла
-        б у корінь дефолтного напрямку, де вона вже лежить, — у плані її нема."""
+        `track`: `track` переїжджає, а `profile` без `track` — «напрямок невідомий», задачу не чіпаємо (міграція ЛІГИ дописує
+        `track`, реєстр — на межі пулу)."""
         view = self._seo_view()
         for name, keys, shown in (('track only', {'track': 'seo'}, 'seo'),
                                   ('both, track wins', {'track': 'seo', 'profile': 'united'}, 'seo')):
