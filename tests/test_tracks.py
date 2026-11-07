@@ -1293,7 +1293,8 @@ class ApiTracks(_Plain):
             e = self.entry(liga, tid)
             self.assertEqual((e['profile'], e['track']), (want, want), tid)            # `profile` у записі лишається (колеги на 0.14–0.19)
         self.assertEqual(self.entry(liga, 'l1')['dir'], os.path.join(liga['path'], 'seo-dir', 'l1'))
-        self.assertEqual(self.entry(liga, 'l2')['dir'], self.entry(liga, 'l1')['dir'].replace('l1', 'l2'))
+        # ⛔ не `.replace('l1', 'l2')` по всьому шляху: випадкове імʼя тимчасової теки (`srv-tracks-l1…`) інколи містить `l1` — тест мигав у повному прогоні
+        self.assertEqual(self.entry(liga, 'l2')['dir'], os.path.join(liga['path'], 'seo-dir', 'l2'))
         self.assertEqual(self.entry(liga, 'l1')['gitlab']['repo'], self.REPO)
 
     def test_a_liga_space_refuses_an_unknown_or_malformed_track(self):
