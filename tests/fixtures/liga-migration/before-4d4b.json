@@ -1,0 +1,1555 @@
+{
+  "meta": {
+    "generator": "tests/make_before_4d4b.py",
+    "source_commit": "0d52a74",
+    "version": "0.20.0",
+    "volatile_stripped": [
+      "backup stamps → <stamp>"
+    ]
+  },
+  "non_loopback_attempts": 10,
+  "stands": {
+    "differs": {
+      "api": {
+        "comment_config": {
+          "channel": "dc/a-1",
+          "code": null,
+          "config": {
+            "key": "sb_test_key_alpha",
+            "shotsBucket": "overview-thumbs",
+            "url": "https://sb.example.com"
+          },
+          "module": "supabase-comments",
+          "status": 200
+        },
+        "modules": {
+          "list": {
+            "css-tokens": {
+              "enabled": false,
+              "fields": {
+                "file": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "git-sync": {
+              "enabled": true,
+              "fields": {
+                "autosync": true,
+                "branch": "main",
+                "compat": "design-canvas",
+                "host_ip": "<unset>",
+                "path": "mockup/{task}",
+                "repo": "<unset>",
+                "ssh_key": "/other/key"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "jira-tracker": {
+              "enabled": true,
+              "fields": {
+                "base": "https://jira.example.com",
+                "email": "alpha@example.com",
+                "token": "<set>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "static-publish": {
+              "enabled": false,
+              "fields": {
+                "folder": "{home}/deai-published/{space_id}",
+                "password": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-comments": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "shots_bucket": "overview-thumbs",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-dashboard": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "table": "overview_projects",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-teams": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "vercel-publish": {
+              "enabled": true,
+              "fields": {
+                "auth": "cli",
+                "compat": "design-canvas",
+                "password": "<set>",
+                "team": "",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            }
+          },
+          "status": 200
+        },
+        "task": {
+          "capabilities": {
+            "comments": "supabase-comments",
+            "dashboard": "supabase-dashboard",
+            "notify": "supabase-teams",
+            "publish": "vercel-publish",
+            "tokens": null,
+            "tracker": "jira-tracker",
+            "vcs": "git-sync"
+          },
+          "comment_channel": "dc/a-1",
+          "compat": {
+            "comments": "comment-layer",
+            "publish": "design-canvas",
+            "vcs": "design-canvas"
+          },
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "none",
+            "ungated": 0
+          },
+          "preview_password": "pw-alpha",
+          "preview_password_custom": false,
+          "status": 200
+        },
+        "tasks_overview": {
+          "status": 200,
+          "team": {
+            "error": "Supabase недоступний (OSError)",
+            "tab": null
+          },
+          "tracker": {
+            "error": "Jira недосяжна (OSError)",
+            "okAt": null
+          }
+        },
+        "teams_mute": {
+          "body": {
+            "channel": "dc/a-1",
+            "error": "Supabase недоступний (OSError)"
+          },
+          "status": 200
+        }
+      },
+      "capabilities": {
+        "error_path": {
+          "comments": null,
+          "dashboard": null,
+          "error": "space-json-unreadable",
+          "notify": null,
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": null,
+          "vcs": "legacy"
+        },
+        "ok": {
+          "comments": "supabase-comments",
+          "dashboard": "supabase-dashboard",
+          "notify": "supabase-teams",
+          "publish": "vercel-publish",
+          "tokens": null,
+          "tracker": "jira-tracker",
+          "vcs": "git-sync"
+        }
+      },
+      "isolation": {
+        "comments_ctx": {
+          "key_set": true,
+          "url": "https://sb.example.com"
+        },
+        "notify_state": {
+          "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+          "raised": "OSError"
+        },
+        "overview_launch_gate": {
+          "isolated": true
+        },
+        "team_rows": [
+          [],
+          "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+        ],
+        "tracker": null
+      },
+      "provider": {
+        "implicit_space": {
+          "comments": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "dashboard": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "legacy",
+            "type": "Implicit"
+          }
+        },
+        "in_space": {
+          "comments": {
+            "api": "supabase-comments",
+            "type": "Module"
+          },
+          "dashboard": {
+            "api": "supabase-dashboard",
+            "type": "Module"
+          },
+          "notify": {
+            "api": "supabase-teams",
+            "type": "Module"
+          },
+          "publish": {
+            "api": "vercel-publish",
+            "type": "Module"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "jira-tracker",
+            "type": "Module"
+          },
+          "vcs": {
+            "api": "git-sync",
+            "type": "Module"
+          }
+        }
+      },
+      "registry_ssh": "~/.ssh/example",
+      "root_keys": [
+        "current",
+        "design_work_root",
+        "design_work_roots",
+        "gitlab_host_ip",
+        "gitlab_ssh_key",
+        "jira_base",
+        "jira_email",
+        "jira_token",
+        "preview_password",
+        "profile_repos",
+        "registry",
+        "supabase_key",
+        "supabase_url",
+        "tasks"
+      ],
+      "vcs_target": {
+        "provider": {
+          "legacy_texts": true,
+          "settings": {
+            "autosync": true,
+            "branch": "main",
+            "compat": "design-canvas",
+            "host_ip": null,
+            "path": "mockup/{task}",
+            "ssh_key": "/other/key"
+          }
+        },
+        "task_gitlab": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "/other/key"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "task": "a-1"
+          }
+        },
+        "task_gitlab_own_key": {
+          "effective": {
+            "host_ip": "198.51.100.9",
+            "ssh_key": "/own/key"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "198.51.100.9",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "/own/key",
+            "task": "a-1"
+          }
+        },
+        "task_vcs": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "/other/key"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "task": "a-1"
+          }
+        }
+      }
+    },
+    "partial": {
+      "api": {
+        "comment_config": {
+          "channel": "dc/a-1",
+          "code": null,
+          "config": {
+            "key": "sb_test_key_alpha",
+            "shotsBucket": "overview-thumbs",
+            "url": "https://sb.example.com"
+          },
+          "module": "supabase-comments",
+          "status": 200
+        },
+        "modules": {
+          "list": {
+            "css-tokens": {
+              "enabled": false,
+              "fields": {
+                "file": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "git-sync": {
+              "enabled": true,
+              "fields": {
+                "autosync": true,
+                "branch": "main",
+                "compat": "design-canvas",
+                "host_ip": "<unset>",
+                "path": "mockup/{task}",
+                "repo": "<unset>",
+                "ssh_key": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "jira-tracker": {
+              "enabled": false,
+              "fields": {
+                "base": "<unset>",
+                "email": "<unset>",
+                "token": "<set>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "static-publish": {
+              "enabled": false,
+              "fields": {
+                "folder": "{home}/deai-published/{space_id}",
+                "password": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-comments": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "shots_bucket": "overview-thumbs",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-dashboard": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "table": "overview_projects",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-teams": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<set>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "vercel-publish": {
+              "enabled": true,
+              "fields": {
+                "auth": "cli",
+                "compat": "design-canvas",
+                "password": "<unset>",
+                "team": "",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            }
+          },
+          "status": 200
+        },
+        "task": {
+          "capabilities": {
+            "comments": "supabase-comments",
+            "dashboard": "supabase-dashboard",
+            "notify": "legacy",
+            "publish": "vercel-publish",
+            "tokens": null,
+            "tracker": "legacy",
+            "vcs": "git-sync"
+          },
+          "comment_channel": "dc/a-1",
+          "compat": {
+            "comments": "comment-layer",
+            "publish": "design-canvas",
+            "vcs": "design-canvas"
+          },
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "none",
+            "ungated": 0
+          },
+          "preview_password": "pw-alpha",
+          "preview_password_custom": false,
+          "status": 200
+        },
+        "tasks_overview": {
+          "status": 200,
+          "team": {
+            "error": "Supabase недоступний (OSError)",
+            "tab": null
+          },
+          "tracker": {
+            "error": "Jira не налаштовано: додайте jira_base у tasks.json і облікові JIRA_EMAIL/JIRA_TOKEN",
+            "okAt": null
+          }
+        },
+        "teams_mute": {
+          "body": {
+            "channel": "dc/a-1",
+            "error": "Supabase недоступний (OSError)"
+          },
+          "status": 200
+        }
+      },
+      "capabilities": {
+        "error_path": {
+          "comments": null,
+          "dashboard": null,
+          "error": "space-json-unreadable",
+          "notify": null,
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": null,
+          "vcs": "legacy"
+        },
+        "ok": {
+          "comments": "supabase-comments",
+          "dashboard": "supabase-dashboard",
+          "notify": "legacy",
+          "publish": "vercel-publish",
+          "tokens": null,
+          "tracker": "legacy",
+          "vcs": "git-sync"
+        }
+      },
+      "isolation": {
+        "comments_ctx": {
+          "key_set": true,
+          "url": "https://sb.example.com"
+        },
+        "notify_state": {
+          "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+          "raised": "OSError"
+        },
+        "overview_launch_gate": {
+          "isolated": true
+        },
+        "team_rows": [
+          [],
+          "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+        ],
+        "tracker": null
+      },
+      "provider": {
+        "implicit_space": {
+          "comments": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "dashboard": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "legacy",
+            "type": "Implicit"
+          }
+        },
+        "in_space": {
+          "comments": {
+            "api": "supabase-comments",
+            "type": "Module"
+          },
+          "dashboard": {
+            "api": "supabase-dashboard",
+            "type": "Module"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "vercel-publish",
+            "type": "Module"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "git-sync",
+            "type": "Module"
+          }
+        }
+      },
+      "registry_ssh": "~/.ssh/example",
+      "root_keys": [
+        "current",
+        "design_work_root",
+        "design_work_roots",
+        "gitlab_host_ip",
+        "gitlab_ssh_key",
+        "jira_base",
+        "jira_email",
+        "jira_token",
+        "preview_password",
+        "profile_repos",
+        "registry",
+        "supabase_key",
+        "supabase_url",
+        "tasks"
+      ],
+      "vcs_target": {
+        "provider": {
+          "legacy_texts": true,
+          "settings": {
+            "autosync": true,
+            "branch": "main",
+            "compat": "design-canvas",
+            "host_ip": null,
+            "path": "mockup/{task}",
+            "ssh_key": null
+          }
+        },
+        "task_gitlab": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "~/.ssh/example"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "~/.ssh/example",
+            "task": "a-1"
+          }
+        },
+        "task_gitlab_own_key": {
+          "effective": {
+            "host_ip": "198.51.100.9",
+            "ssh_key": "/own/key"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "198.51.100.9",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "/own/key",
+            "task": "a-1"
+          }
+        },
+        "task_vcs": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "~/.ssh/example"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "~/.ssh/example",
+            "task": "a-1"
+          }
+        }
+      }
+    },
+    "plain": {
+      "api": {
+        "comment_config": {
+          "channel": null,
+          "code": "integrations-off",
+          "config": null,
+          "module": null,
+          "status": 409
+        },
+        "modules": {
+          "list": {
+            "css-tokens": {
+              "enabled": false,
+              "fields": {
+                "file": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "git-sync": {
+              "enabled": false,
+              "fields": {
+                "autosync": false,
+                "branch": "main",
+                "compat": "",
+                "host_ip": "<unset>",
+                "path": "mockup/{task}",
+                "repo": "<unset>",
+                "ssh_key": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "jira-tracker": {
+              "enabled": false,
+              "fields": {
+                "base": "<unset>",
+                "email": "<unset>",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "static-publish": {
+              "enabled": true,
+              "fields": {
+                "folder": "{home}/deai-published/{space_id}",
+                "password": "<unset>"
+              },
+              "implicit": true,
+              "status": "unchecked"
+            },
+            "supabase-comments": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<unset>",
+                "shots_bucket": "<unset>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-dashboard": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<unset>",
+                "table": "<unset>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-teams": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<unset>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "vercel-publish": {
+              "enabled": false,
+              "fields": {
+                "auth": "token",
+                "compat": "",
+                "password": "<unset>",
+                "team": "<unset>",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            }
+          },
+          "status": 200
+        },
+        "task": {
+          "capabilities": {
+            "comments": null,
+            "dashboard": null,
+            "notify": null,
+            "publish": "static-publish",
+            "tokens": null,
+            "tracker": null,
+            "vcs": null
+          },
+          "comment_channel": null,
+          "compat": "<absent>",
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "module",
+            "ungated": 0
+          },
+          "preview_password": "1100",
+          "preview_password_custom": false,
+          "status": 200
+        },
+        "tasks_overview": {
+          "status": 200,
+          "team": null,
+          "tracker": null
+        },
+        "teams_mute": {
+          "body": {
+            "code": "notify-off",
+            "error": "сповіщень Teams у просторі нема",
+            "ok": false
+          },
+          "status": 409
+        }
+      },
+      "capabilities": {
+        "error_path": {
+          "comments": null,
+          "dashboard": null,
+          "error": "space-json-unreadable",
+          "notify": null,
+          "publish": null,
+          "tokens": null,
+          "tracker": null,
+          "vcs": null
+        },
+        "ok": {
+          "comments": null,
+          "dashboard": null,
+          "notify": null,
+          "publish": "static-publish",
+          "tokens": null,
+          "tracker": null,
+          "vcs": null
+        }
+      },
+      "provider": {
+        "implicit_space": {
+          "comments": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "dashboard": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "legacy",
+            "type": "Implicit"
+          }
+        },
+        "in_space": {
+          "comments": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "dashboard": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "notify": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "publish": {
+            "api": "static-publish",
+            "type": "Module"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "vcs": {
+            "api": null,
+            "type": "NoneType"
+          }
+        }
+      },
+      "root_keys": [
+        "current",
+        "design_work_root",
+        "design_work_roots",
+        "gitlab_host_ip",
+        "gitlab_ssh_key",
+        "jira_base",
+        "jira_email",
+        "jira_token",
+        "preview_password",
+        "profile_repos",
+        "registry",
+        "supabase_key",
+        "supabase_url",
+        "tasks"
+      ]
+    },
+    "regular": {
+      "api": {
+        "comment_config": {
+          "channel": "dc/a-1",
+          "code": null,
+          "config": {
+            "key": "sb_test_key_alpha",
+            "shotsBucket": "overview-thumbs",
+            "url": "https://sb.example.com"
+          },
+          "module": "supabase-comments",
+          "status": 200
+        },
+        "modules": {
+          "list": {
+            "css-tokens": {
+              "enabled": false,
+              "fields": {
+                "file": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "git-sync": {
+              "enabled": true,
+              "fields": {
+                "autosync": true,
+                "branch": "main",
+                "compat": "design-canvas",
+                "host_ip": "<unset>",
+                "path": "mockup/{task}",
+                "repo": "<unset>",
+                "ssh_key": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "jira-tracker": {
+              "enabled": true,
+              "fields": {
+                "base": "https://jira.example.com",
+                "email": "alpha@example.com",
+                "token": "<set>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "static-publish": {
+              "enabled": false,
+              "fields": {
+                "folder": "{home}/deai-published/{space_id}",
+                "password": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-comments": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "shots_bucket": "overview-thumbs",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-dashboard": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "table": "overview_projects",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-teams": {
+              "enabled": true,
+              "fields": {
+                "compat": "comment-layer",
+                "key": "<set>",
+                "url": "https://sb.example.com"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "vercel-publish": {
+              "enabled": true,
+              "fields": {
+                "auth": "cli",
+                "compat": "design-canvas",
+                "password": "<unset>",
+                "team": "",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            }
+          },
+          "status": 200
+        },
+        "task": {
+          "capabilities": {
+            "comments": "supabase-comments",
+            "dashboard": "supabase-dashboard",
+            "notify": "supabase-teams",
+            "publish": "vercel-publish",
+            "tokens": null,
+            "tracker": "jira-tracker",
+            "vcs": "git-sync"
+          },
+          "comment_channel": "dc/a-1",
+          "compat": {
+            "comments": "comment-layer",
+            "publish": "design-canvas",
+            "vcs": "design-canvas"
+          },
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "none",
+            "ungated": 0
+          },
+          "preview_password": "pw-alpha",
+          "preview_password_custom": false,
+          "status": 200
+        },
+        "tasks_overview": {
+          "status": 200,
+          "team": {
+            "error": "Supabase недоступний (OSError)",
+            "tab": null
+          },
+          "tracker": {
+            "error": "Jira недосяжна (OSError)",
+            "okAt": null
+          }
+        },
+        "teams_mute": {
+          "body": {
+            "channel": "dc/a-1",
+            "error": "Supabase недоступний (OSError)"
+          },
+          "status": 200
+        }
+      },
+      "capabilities": {
+        "error_path": {
+          "comments": null,
+          "dashboard": null,
+          "error": "space-json-unreadable",
+          "notify": null,
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": null,
+          "vcs": "legacy"
+        },
+        "ok": {
+          "comments": "supabase-comments",
+          "dashboard": "supabase-dashboard",
+          "notify": "supabase-teams",
+          "publish": "vercel-publish",
+          "tokens": null,
+          "tracker": "jira-tracker",
+          "vcs": "git-sync"
+        }
+      },
+      "isolation": {
+        "comments_ctx": {
+          "key_set": true,
+          "url": "https://sb.example.com"
+        },
+        "notify_state": {
+          "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+          "raised": "OSError"
+        },
+        "overview_launch_gate": {
+          "isolated": true
+        },
+        "team_rows": [
+          [],
+          "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+        ],
+        "tracker": null
+      },
+      "provider": {
+        "implicit_space": {
+          "comments": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "dashboard": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "legacy",
+            "type": "Implicit"
+          }
+        },
+        "in_space": {
+          "comments": {
+            "api": "supabase-comments",
+            "type": "Module"
+          },
+          "dashboard": {
+            "api": "supabase-dashboard",
+            "type": "Module"
+          },
+          "notify": {
+            "api": "supabase-teams",
+            "type": "Module"
+          },
+          "publish": {
+            "api": "vercel-publish",
+            "type": "Module"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "jira-tracker",
+            "type": "Module"
+          },
+          "vcs": {
+            "api": "git-sync",
+            "type": "Module"
+          }
+        }
+      },
+      "registry_ssh": "~/.ssh/example",
+      "root_keys": [
+        "current",
+        "design_work_root",
+        "design_work_roots",
+        "gitlab_host_ip",
+        "gitlab_ssh_key",
+        "jira_base",
+        "jira_email",
+        "jira_token",
+        "preview_password",
+        "profile_repos",
+        "registry",
+        "supabase_key",
+        "supabase_url",
+        "tasks"
+      ],
+      "startup_text": [
+        "liga-4d3a: done — міграцію виконано",
+        "  бекап: <stamp>-liga-4d3a",
+        "liga-4d3b: done — міграцію виконано",
+        "  бекап: <stamp>-liga-4d3b",
+        "liga-4d3c: done — міграцію виконано",
+        "  бекап: <stamp>-liga-4d3c",
+        "liga-4d4a: done — міграцію виконано",
+        "  бекап: <stamp>-liga-4d4a",
+        "  напрямки: записано; записи: 1; нотатки: default-root-differs",
+        "  відкат: bin/migrate_liga.py restore <stamp>-liga-4d4a --hold",
+        "  раніші кроки (<stamp>-liga-4d3a, <stamp>-liga-4d3b, <stamp>-liga-4d3c) — лише після відкату пізніших, у зворотному порядку"
+      ],
+      "vcs_target": {
+        "provider": {
+          "legacy_texts": true,
+          "settings": {
+            "autosync": true,
+            "branch": "main",
+            "compat": "design-canvas",
+            "host_ip": null,
+            "path": "mockup/{task}",
+            "ssh_key": null
+          }
+        },
+        "task_gitlab": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "~/.ssh/example"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "~/.ssh/example",
+            "task": "a-1"
+          }
+        },
+        "task_gitlab_own_key": {
+          "effective": {
+            "host_ip": "198.51.100.9",
+            "ssh_key": "/own/key"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "198.51.100.9",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "/own/key",
+            "task": "a-1"
+          }
+        },
+        "task_vcs": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "~/.ssh/example"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "~/.ssh/example",
+            "task": "a-1"
+          }
+        }
+      }
+    },
+    "unmigrated": {
+      "api": {
+        "comment_config": {
+          "channel": "dc/a-1",
+          "code": null,
+          "config": {
+            "key": "sb_test_key_alpha",
+            "shotsBucket": "overview-thumbs",
+            "url": "https://sb.example.com"
+          },
+          "module": "supabase-comments",
+          "status": 200
+        },
+        "modules": {
+          "list": {
+            "css-tokens": {
+              "enabled": false,
+              "fields": {
+                "file": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "git-sync": {
+              "enabled": false,
+              "fields": {
+                "autosync": false,
+                "branch": "main",
+                "compat": "",
+                "host_ip": "<unset>",
+                "path": "mockup/{task}",
+                "repo": "<unset>",
+                "ssh_key": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "jira-tracker": {
+              "enabled": false,
+              "fields": {
+                "base": "<unset>",
+                "email": "<unset>",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "static-publish": {
+              "enabled": false,
+              "fields": {
+                "folder": "{home}/deai-published/{space_id}",
+                "password": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-comments": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<unset>",
+                "shots_bucket": "<unset>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-dashboard": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<unset>",
+                "table": "<unset>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "supabase-teams": {
+              "enabled": false,
+              "fields": {
+                "compat": "",
+                "key": "<unset>",
+                "url": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            },
+            "vercel-publish": {
+              "enabled": false,
+              "fields": {
+                "auth": "token",
+                "compat": "",
+                "password": "<unset>",
+                "team": "<unset>",
+                "token": "<unset>"
+              },
+              "implicit": false,
+              "status": "unchecked"
+            }
+          },
+          "status": 200
+        },
+        "task": {
+          "capabilities": {
+            "comments": "legacy",
+            "dashboard": "legacy",
+            "notify": "legacy",
+            "publish": "legacy",
+            "tokens": null,
+            "tracker": "legacy",
+            "vcs": "legacy"
+          },
+          "comment_channel": "dc/a-1",
+          "compat": "<absent>",
+          "preview_gate": {
+            "inner_stale": 0,
+            "pages": 0,
+            "stale": 0,
+            "state": "none",
+            "ungated": 0
+          },
+          "preview_password": "pw-alpha",
+          "preview_password_custom": false,
+          "status": 200
+        },
+        "tasks_overview": {
+          "status": 200,
+          "team": {
+            "error": "Supabase недоступний (OSError)",
+            "tab": null
+          },
+          "tracker": {
+            "error": "Jira не налаштовано: додайте jira_base у tasks.json і облікові JIRA_EMAIL/JIRA_TOKEN",
+            "okAt": null
+          }
+        },
+        "teams_mute": {
+          "body": {
+            "channel": "dc/a-1",
+            "error": "Supabase недоступний (OSError)"
+          },
+          "status": 200
+        }
+      },
+      "capabilities": {
+        "error_path": {
+          "comments": null,
+          "dashboard": null,
+          "error": "space-json-unreadable",
+          "notify": null,
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": null,
+          "vcs": "legacy"
+        },
+        "ok": {
+          "comments": "legacy",
+          "dashboard": "legacy",
+          "notify": "legacy",
+          "publish": "legacy",
+          "tokens": null,
+          "tracker": "legacy",
+          "vcs": "legacy"
+        }
+      },
+      "isolation": {
+        "comments_ctx": {
+          "key_set": true,
+          "url": "https://sb.example.com"
+        },
+        "notify_state": {
+          "message": "ізольований конфіг: спільний стан Teams не чіпаємо",
+          "raised": "OSError"
+        },
+        "overview_launch_gate": {
+          "isolated": true
+        },
+        "team_rows": [
+          [],
+          "вимкнено в ізольованому прогоні (DC_TASKS_FILE / DC_NO_OVERVIEW)"
+        ],
+        "tracker": null
+      },
+      "provider": {
+        "implicit_space": {
+          "comments": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "dashboard": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "legacy",
+            "type": "Implicit"
+          }
+        },
+        "in_space": {
+          "comments": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "dashboard": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "notify": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "publish": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "tokens": {
+            "api": null,
+            "type": "NoneType"
+          },
+          "tracker": {
+            "api": "legacy",
+            "type": "Implicit"
+          },
+          "vcs": {
+            "api": "legacy",
+            "type": "Implicit"
+          }
+        }
+      },
+      "registry_ssh": "~/.ssh/example",
+      "root_keys": [
+        "current",
+        "design_work_root",
+        "design_work_roots",
+        "gitlab_host_ip",
+        "gitlab_ssh_key",
+        "jira_base",
+        "jira_email",
+        "jira_token",
+        "preview_password",
+        "profile_repos",
+        "registry",
+        "supabase_key",
+        "supabase_url",
+        "tasks"
+      ],
+      "startup_text": [
+        "liga-4d3a: skip-held — міграцію вимкнено вручну (held у space.json)",
+        "liga-4d3b: skip-held — утримано разом із liga-4d3a (ранній крок вимкнено вручну: held у space.json)",
+        "liga-4d3c: skip-held — утримано разом із liga-4d3a (ранній крок вимкнено вручну: held у space.json)",
+        "liga-4d4a: skip-held — утримано разом із liga-4d3a (ранній крок вимкнено вручну: held у space.json)",
+        "  напрямки ЛІГИ не мігровані — нові задачі лягають у теку простору"
+      ],
+      "vcs_target": {
+        "provider": {
+          "legacy_texts": true,
+          "settings": {
+            "autosync": true,
+            "branch": "main",
+            "compat": null,
+            "host_ip": null,
+            "path": "mockup/{task}",
+            "ssh_key": null
+          }
+        },
+        "task_gitlab": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "~/.ssh/example"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "~/.ssh/example",
+            "task": "a-1"
+          }
+        },
+        "task_gitlab_own_key": {
+          "effective": {
+            "host_ip": "198.51.100.9",
+            "ssh_key": "/own/key"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "198.51.100.9",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "/own/key",
+            "task": "a-1"
+          }
+        },
+        "task_vcs": {
+          "effective": {
+            "host_ip": "203.0.113.7",
+            "ssh_key": "~/.ssh/example"
+          },
+          "target": {
+            "branch": "main",
+            "host_ip": "203.0.113.7",
+            "path": "mockup/a-1",
+            "repo": "git@example.com:o/r.git",
+            "ssh_key": "~/.ssh/example",
+            "task": "a-1"
+          }
+        }
+      }
+    }
+  }
+}
