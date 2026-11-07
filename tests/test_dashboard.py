@@ -28,8 +28,8 @@ sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 import install_config  # noqa: E402
+import liga_fixture  # noqa: E402
 import overview_push as ov  # noqa: E402  (тонкий CLI синку: Task 6)
 import registry  # noqa: E402
 import make_before_4c1 as mb  # noqa: E402  (шаблон світу знімка 0.11.0: простори, сервер у процесі, `scrub`/`strip`)
@@ -182,8 +182,9 @@ ENV_KEY = 'sb_publishable_test_env'
 
 
 class SupabaseConfigBothNames(unittest.TestCase):
-    """`install_config.supabase_config` і `serve.supabase_config` (тонка обгортка) поводяться однаково: файл раніше за
-    оточення, пара цілою, заготовки відкидаються. Кейси — ті самі, що в `test_legacy_comments.SupabaseConfigTest`."""
+    """Читач оригіналів Supabase ЛІГИ: файл раніше за оточення, пара цілою, заготовки відкидаються. З 4d-4b рантайм його не має
+    (`install_config.supabase_config` і `serve.supabase_config` видалено), а копія живе в міграції (`liga_migrate._supabase_from`) — ті самі
+    кейси тепер проти неї (`each()` віддає одну функцію, що читає старий файл). Кейси — ті самі, що були в `test_legacy_comments.SupabaseConfigTest`."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -203,9 +204,15 @@ class SupabaseConfigBothNames(unittest.TestCase):
             f.write(raw if raw is not None else json.dumps(obj))
 
     def each(self):
-        for name, fn in (('install_config', install_config.supabase_config), ('serve', serve.supabase_config)):
-            with self.subTest(getter=name):
-                yield fn
+        import liga_migrate
+
+        def from_the_file():
+            try:
+                root = install_config.load_legacy_tasks()
+            except (OSError, ValueError, RecursionError):      # зламаний чи відсутній файл — порожній корінь (як читав рантайм)
+                root = {}
+            return liga_migrate._supabase_from(root)
+        yield from_the_file
 
     def test_file_wins_over_environment_and_trims_slash(self):
         self.write({'supabase_url': URL + '/', 'supabase_key': KEY})
@@ -250,11 +257,13 @@ class SupabaseConfigBothNames(unittest.TestCase):
             for fn in self.each():
                 self.assertEqual(fn(), (ENV_URL, ENV_KEY), raw[:6])
 
-    def test_serve_is_a_thin_wrapper_and_keeps_the_legacy_names(self):
-        """Підміна `serve.supabase_config` (як у тестах) діє на викликачів у `serve`; `legacy_*` лишаються імпортованими."""
+    def test_serve_keeps_the_legacy_file_names_and_has_no_config_readers(self):
+        """4d-4b (було `…_is_a_thin_wrapper_…`): `serve.supabase_config`/`jira_config` і `install_config.*_config` видалено; `legacy_*` лишаються
+        імпортованими (ними користуються `ops/`, `bin/` і тести)."""
         self.write({'supabase_url': URL, 'supabase_key': KEY})
-        with mock.patch.object(install_config, 'supabase_config', return_value=('https://x.example', 'k')):
-            self.assertEqual(serve.supabase_config(), ('https://x.example', 'k'))
+        for mod, names in ((serve, ('supabase_config', 'jira_config')), (install_config, ('supabase_config', 'jira_config', 'service_key_config'))):
+            for name in names:
+                self.assertFalse(hasattr(mod, name), f'{mod.__name__}.{name}')
         self.assertIs(serve.legacy_tasks_path, install_config.legacy_tasks_path)
         self.assertIs(serve.load_legacy_tasks, install_config.load_legacy_tasks)
         self.assertEqual(serve.load_legacy_tasks()['supabase_key'], KEY)
@@ -370,12 +379,10 @@ class DashboardRole(tm.Env):
         self.assertNotIn('dashboard', dm.ROLES_RESERVED)
         self.assertEqual(dm.ROLE_FUNCTIONS['dashboard'], ('rows', 'push'))
         self.assertEqual(dm.ROLE_OPTIONAL_FUNCTIONS['dashboard'], ('open_comments',))
-        self.assertIn('dashboard', dm.IMPLICIT_ROLES)
-
-    def test_the_league_path_of_the_dashboard_is_not_a_fallback_after_an_error(self):
-        """⛔ Зашитий шлях дашборда — спільний Supabase ЛІГИ (рядки команди, картки проєктів), тож, як `comments`, «через
-        помилку» на нього не переходимо: `dashboard` НЕ в `IMPLICIT_ON_ERROR_ROLES`."""
-        self.assertNotIn('dashboard', dm.IMPLICIT_ON_ERROR_ROLES)
+        # 4d-4b: `IMPLICIT_ROLES`/`IMPLICIT_ON_ERROR_ROLES` зникли разом із запасним постачальником
+        # (`test_originals_gone.ProviderWithoutImplicit.test_the_core_has_no_fallback_names`).
+        for gone in ('IMPLICIT_ROLES', 'STRICT_IMPLICIT_ROLES', 'IMPLICIT_ON_ERROR_ROLES'):
+            self.assertFalse(hasattr(dm, gone), gone)
 
     def test_a_dashboard_module_needs_rows_and_push(self):
         self.mk('dash-bare', roles=('dashboard',), server=tm.CHECK_ONLY)
@@ -394,13 +401,13 @@ class DashboardRole(tm.Env):
         self.assertIsNone(cat['dash-plain'].fn('open_comments'))
         self.assertEqual(cat['dash-full'].fn('open_comments')({}), {'dc/t1': 2})
 
-    def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
+    def test_a_space_without_a_dashboard_record_has_no_provider_with_or_without_integrations(self):
+        """4d-4b (було `…_is_legacy`): запасного шляху нема — простір з інтеграціями без запису `dashboard` теж без нікого."""
         ig = self.new_space('Integ', integrations=True)
         plain = self.new_space('Plain')
-        self.assertEqual(dm.provider('dashboard', ig), implicit.for_role('dashboard'))
-        self.assertEqual(dm.capabilities(ig)['dashboard'], 'legacy')
-        self.assertIsNone(dm.provider('dashboard', plain))               # без інтеграцій і без модуля — нікого
-        self.assertIsNone(dm.capabilities(plain)['dashboard'])
+        for sp in (ig, plain):
+            self.assertIsNone(dm.provider('dashboard', sp))
+            self.assertIsNone(dm.capabilities(sp)['dashboard'])
 
     def test_an_enabled_module_is_the_provider_in_both_kinds_of_space(self):
         self.mk('dash-ok', roles=('dashboard',), server=DASH_SERVER)
@@ -411,7 +418,7 @@ class DashboardRole(tm.Env):
             self.assertEqual(dm.provider('dashboard', sp).id, 'dash-ok')
             self.assertEqual(dm.capabilities(sp)['dashboard'], 'dash-ok')
         dm.write_module_state(ig, 'dash-ok', enabled=False)
-        self.assertEqual(dm.capabilities(ig)['dashboard'], 'legacy')     # вимкнули: ЛІГА повертається до зашитого шляху
+        self.assertIsNone(dm.capabilities(ig)['dashboard'])              # вимкнули: запасного шляху нема (4d-4b) — нікого
         dm.write_module_state(plain, 'dash-ok', enabled=False)
         self.assertIsNone(dm.capabilities(plain)['dashboard'])
 
@@ -421,7 +428,7 @@ class DashboardRole(tm.Env):
             caps = dm.capabilities(ig)
         self.assertIsNone(caps['dashboard'])
         self.assertEqual(caps['error'], 'bad-manifest')
-        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # а локальні ролі лишились зашитими
+        self.assertEqual((caps['publish'], caps['vcs']), (None, None))     # 4d-4b: підміна кидає для КОЖНОЇ ролі, зашитих нема
         dm.reset_caches()
         with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):      # запасний словник: теж не 'legacy'
             self.assertIsNone(dm.capabilities(ig)['dashboard'])
@@ -438,7 +445,41 @@ class DashboardRole(tm.Env):
         caps = dm.capabilities(ig)
         self.assertIsNone(caps['dashboard'])
         self.assertEqual(caps['error'], 'space-json-unreadable')
-        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # локальні ролі шлях ЛІГИ не втрачають
+        self.assertEqual((caps['publish'], caps['vcs']), (None, None))     # 4d-4b: нечитабельний `space.json` — помилка КОЖНОЇ ролі
+
+    def real_builtins(self):
+        self.addCleanup(dm.reset_caches)
+        patch = mock.patch.object(dm, 'builtin_dir', tm._REAL_BUILTIN_DIR)
+        patch.start()
+        self.addCleanup(patch.stop)
+        dm.reset_caches()
+
+    def test_league_ctx_is_built_from_the_record(self):
+        """Замінює `DashboardHelpers.test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame` (`dashboard.legacy_ctx` видалено, 4d-4b):
+        `ctx` будує ядро (`module_ctx`) із ЗАПИСУ `supabase-dashboard` і секрету `key`, а не з кореня `tasks.json`."""
+        self.real_builtins()
+        sp = self.liga_space(roles=('dashboard',), overrides={'dashboard': {'settings': {'url': 'https://demo.supabase.example'},
+                                                                              'secrets': {'key': 'sk-test-1'}}})
+        tm._write(self.legacy, {'supabase_url': 'https://root.example.com', 'supabase_key': 'root-key'})
+        m = dm.provider('dashboard', sp)
+        self.assertEqual((m.id, m.status, m.roles), ('supabase-dashboard', 'ok', ['dashboard']))
+        ctx = dm.module_ctx(sp, m)
+        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'table': 'overview_projects', 'compat': 'comment-layer'})
+        self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
+        self.assertEqual(ctx['space']['id'], 'legacy')
+        self.assertIs(ctx['ModuleError'], dm.ModuleError)
+
+    def test_a_record_without_an_address_is_unconfigured(self):
+        """Замінює `DashboardHelpers.test_legacy_ctx_without_a_config_is_dashboard_unconfigured`: «нема конфігу» — запис без адреси; код 409
+        `dashboard-unconfigured` кидає сам модуль (текст — модуля), а без запису постачальника нема взагалі."""
+        self.real_builtins()
+        sp = self.liga_space(roles=('dashboard',), overrides={'dashboard': {'settings': {'url': ''}}})
+        m = dm.provider('dashboard', sp)
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.call(m, 'rows', dm.module_ctx(sp, m), timeout=5)
+        self.assertEqual((cm.exception.code, cm.exception.status), ('dashboard-unconfigured', 409))
+        sp = self.liga_space(roles=('tracker',))
+        self.assertIsNone(dm.provider('dashboard', sp))
 
     def test_the_error_codes_have_http_statuses(self):
         self.assertEqual(dm.STATUS['dashboard-unconfigured'], 409)
@@ -549,22 +590,34 @@ class ReadParity(unittest.TestCase):
         cls.addClassCleanup(legacy.stop)
         dm.reset_caches()
         cls.ids = mb.setup_spaces(cls.tmp)
+        cls.deai = os.path.join(cls.tmp, 'deai')
         cls.srv = mb.Server().__enter__()
         cls.addClassCleanup(cls.srv.__exit__, None, None, None)
+
+    @classmethod
+    def league_record(cls, roles=('dashboard', 'comments'), **dashboard_override):
+        """Явні записи `supabase-dashboard` і `supabase-comments` (лічильники коментарів у рядках) у просторі `liga` (4d-4b: запасного шляху
+        й оригіналів кореня нема): адреса й ключ — вигадані (`mb.URL`/`mb.KEY`); `roles=()` — ЛІГА без записів."""
+        sp = next(s for s in spaces.read_registry()['spaces'] if s['id'] == cls.ids['liga'])
+        own = {'settings': {'url': mb.URL}, 'secrets': {'key': mb.KEY}}
+        liga_fixture.write_records(sp['path'], cls.deai, cls.ids['liga'], roles,
+                                   {'dashboard': dict(own, **dashboard_override), 'comments': dict(own)})
+        dm.reset_caches()
 
     def setUp(self):
         spaces.clear_request_space()
         serve._TEAM_CACHE.clear()
         self.addCleanup(serve._TEAM_CACHE.clear)
+        self.league_record()                       # кожен тест починає з типового запису (тест, що його міняє, не псує сусідів)
         self.hits = block_network(self)
         self.hits.allow_ports.add(self.srv.port)
         self.net = _Net()
         sbconf.patch_dashboard_open(self, self.net)
 
-    def overview(self, space='liga', env=None, cfg=(mb.URL, mb.KEY)):
+    def overview(self, space='liga', env=None):
         """`GET /api/tasks-overview?refresh=1` у просторі `space` → `{body, volatile, dashboard}` (форма запису знімка)."""
         spaces.switch_space(self.ids[space])
-        with mock.patch.dict(os.environ, env or {}), mock.patch.object(serve, 'supabase_config', return_value=cfg):
+        with mock.patch.dict(os.environ, env or {}):
             status, body = self.srv.get('/api/tasks-overview?refresh=1')
         self.assertEqual(status, 200, body)
         data = json.loads(mb.scrub(body, self.tmp))
@@ -573,19 +626,27 @@ class ReadParity(unittest.TestCase):
         sp = data.get('space')
         sp.pop('id', None)
         sp.pop('path', None)
+        sp.pop('compat', None)                             # 4d-3: ключ є лише в простору з явним записом (знімок 0.11.0 його не знає)
         cap = sp['capabilities'].pop('dashboard')          # новий ключ 4c-1: вилучаємо ДО копії, перевіряється окремо
         sp['capabilities'].pop('tracker')                  # новий ключ 4c-2 (знімок 0.11.0 його не знає): його перевіряє test_tracker
         sp['capabilities'].pop('notify')                   # новий ключ 4c-3 (знімок 0.11.0 його не знає): його перевіряє test_notify
         data.pop('tracker')                                # новий ключ тіла 4c-2 (знімок 0.11.0 його не знає): його перевіряє test_tasks_overview
         return {'status': status, 'body': mb.strip(data), 'volatile': volatile, 'dashboard': cap}
 
-    def same_as_snapshot(self, got, name, dashboard_cap='legacy', error=None):
-        """Тіло збігається із записаним. `error` — свідомо ІНШИЙ текст помилки (модуль замість сирого винятку)."""
+    def same_as_snapshot(self, got, name, dashboard_cap='supabase-dashboard', error=None):
+        """Тіло збігається із записаним. `error` — свідомо ІНШИЙ текст помилки (модуль замість сирого винятку). `dashboard_cap` — 4d-4b:
+        `'supabase-dashboard'` (явний запис; було `'legacy'`), а не неявний шлях."""
         want = copy.deepcopy(self.snap[name])
         # 4d-4a (спека, відмінності 3 і 4): рядки «Моїх» більше не несуть `profile`, а задача лише з `profile` (знімок засіяв
         # `profile: 'tool'` без `track`) втрачає похідну мітку: `['tool']` → `[]`; решта тіла — як у знімку 0.11.0
         self.assertTrue(all(m['profile'] == 'tool' and m['tags'] == ['tool'] for m in want['body']['mine']))
         want['body']['mine'] = [{**{k: v for k, v in m.items() if k != 'profile'}, 'tags': []} for m in want['body']['mine']]
+        # 4d-4b: у знімку 0.11.0 ролі ЛІГИ — `'legacy'`; тепер це явні записи: `comments` — `supabase-comments`, а зашитих `publish`/`vcs` нема
+        # (`None`). Решту тіла знімок диктує як було.
+        caps = want['body']['space']['capabilities']
+        for role, now in (('comments', 'supabase-comments'), ('publish', None), ('vcs', None)):
+            if caps.get(role) == 'legacy':
+                caps[role] = now
         self.assertEqual(got['dashboard'], dashboard_cap, 'новий ключ capabilities.dashboard — рівно такий')
         if error is not None:
             self.assertEqual(got['body']['team']['error'], error)
@@ -623,9 +684,21 @@ class ReadParity(unittest.TestCase):
         self.assertEqual(len(self.net.calls), want['urlopen_calls'])
 
     def test_no_config_says_so_and_asks_nothing(self):
-        got = self.overview(cfg=(None, None))
-        self.same_as_snapshot(got, 'no_config')
-        self.assertEqual(got['body']['team']['error'], 'Supabase не налаштовано')
+        """4d-4b: «конфігу нема» — запис `supabase-dashboard` без адреси (оригіналів кореня нема). Текст — тепер із «Підключення» (R5)."""
+        self.league_record(settings={'url': ''})
+        got = self.overview()
+        self.same_as_snapshot(got, 'no_config', error='url: адресу проєкту Supabase не задано')   # текст МОДУЛЯ для запису без адреси
+        self.assertIn('«Підключення»', dashboard.UNCONFIGURED)                                    # а константа ядра веде на екран, не в tasks.json
+        self.assertEqual(self.net.calls, [])
+
+    def test_a_league_without_a_dashboard_record_has_no_team_and_asks_nothing(self):
+        """4d-4b: ЛІГА без запису `supabase-dashboard` — вкладки «Команда» нема (`team: null`), мережі нема, навіть коли корінь і оточення
+        несуть старі `supabase_*` (вони запису не замінюють)."""
+        self.league_record(roles=())
+        mb._write(os.path.join(self.tmp, 'legacy', 'tasks.json'), {'supabase_url': mb.URL, 'supabase_key': mb.KEY})
+        got = self.overview(env={'SUPABASE_URL': mb.URL, 'SUPABASE_KEY': mb.KEY})
+        self.assertIsNone(got['body']['team'])
+        self.assertIsNone(got['dashboard'])
         self.assertEqual(self.net.calls, [])
 
     def test_isolation_does_not_call_the_module(self):
@@ -666,8 +739,7 @@ class ReadParity(unittest.TestCase):
     def test_an_unreadable_registry_names_the_reason_and_leaves_the_cache_alone(self):
         want = self.snap['team_snapshot_spaces_error']
         boom = spaces.SpacesError('spaces-unreadable', '<registry>', 'тест')
-        with spaces.request_space(self.ids['liga']), mock.patch.object(spaces, 'active_space', side_effect=boom), \
-                mock.patch.object(serve, 'supabase_config', return_value=(mb.URL, mb.KEY)):
+        with spaces.request_space(self.ids['liga']), mock.patch.object(spaces, 'active_space', side_effect=boom):
             rows, error, rows_at = serve.team_snapshot(refresh=True)
         self.assertEqual({'rows': rows, 'error': error, 'rows_at': rows_at, 'urlopen_calls': len(self.net.calls),
                           'cache_untouched': serve._TEAM_CACHE == {}}, want)
@@ -853,23 +925,8 @@ class ReadPath(tm.Env):
 
 
 class DashboardHelpers(unittest.TestCase):
-    """`dashboard.legacy_ctx` і `dashboard.normalize_rows` — чисті функції ядра."""
-
-    def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
-        ctx = dashboard.legacy_ctx('https://demo.supabase.example', 'sk-test-1', 'liga')
-        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'table': 'overview_projects',
-                                               'compat': 'comment-layer'})
-        self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
-        self.assertEqual(ctx['space'], {'id': 'liga', 'path': ''})
-        self.assertIs(ctx['legacy'], True, 'прапорець лишено для чужих модулів; вбудований дашборд читає `settings.compat`')
-        self.assertIs(ctx['ModuleError'], dm.ModuleError)
-        self.assertEqual(dashboard.legacy_ctx('https://x.example', 'k')['space']['id'], '')
-
-    def test_legacy_ctx_without_a_config_is_dashboard_unconfigured(self):
-        with self.assertRaises(dm.ModuleError) as cm:
-            dashboard.legacy_ctx(None, None)
-        self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message), ('dashboard-unconfigured', 409,
-                                                                                         'Supabase не налаштовано'))
+    """`dashboard.normalize_rows` — чиста функція ядра (4d-4b: `legacy_ctx`/`legacy_module` видалено — їхні тести перейшли до
+    `DashboardRole.test_league_ctx_is_built_from_the_record` і `…test_a_record_without_an_address_is_unconfigured`)."""
 
     def test_normalize_rows(self):
         n = dashboard.normalize_rows
@@ -1024,7 +1081,7 @@ class SyncParity(unittest.TestCase):
         self.assertEqual(mod.calls, [])
 
     def test_the_real_module_gets_the_same_cards_over_http(self):
-        """Наскрізно ЛІГА: справжній вбудований `supabase-dashboard` із `legacy_ctx` (шов `_open` — записувач): URL таблиці
+        """Наскрізно ЛІГА: справжній вбудований `supabase-dashboard` із `ctx` явного запису (4d-4b; було `legacy_ctx`; шов `_open` — записувач): URL таблиці
         `overview_projects`, `Prefer` на режим, і ті самі картки, що у знімку, а лічильники коментарів — з `comments`."""
         bodies = []
 
@@ -1032,11 +1089,15 @@ class SyncParity(unittest.TestCase):
             body = json.loads(req.data.decode('utf-8')) if req.data else None
             bodies.append((req.get_method(), req.full_url, req.headers.get('Prefer'), body))
             return sbconf.Resp(json.dumps([{'project_id': 'dc/t1'}]).encode('utf-8') if '/comments?' in req.full_url else b'')
+        fx = liga_fixture.LigaFixture(self).env().build(      # ДО `patch_dashboard_open`: `env()` скидає кеші модулів, і підміна шва загубилась би
+            roles=('dashboard',), overrides={'dashboard': {'settings': {'url': mb.URL}, 'secrets': {'key': mb.KEY}}})
         hits = block_network(self)
         sbconf.patch_dashboard_open(self, net)
         cfg, reg = self.world()
-        ctx = dashboard.legacy_ctx(mb.URL, mb.KEY, 'liga')
-        dashboard.sync(cfg, dashboard.legacy_module(), ctx, discover=lambda: dict(reg),
+        liga = {'id': 'legacy', 'path': fx.space_dir, 'legacy': True, 'integrations': True}
+        module = dm.provider('dashboard', liga)
+        ctx = dm.module_ctx(liga, module)
+        dashboard.sync(cfg, module, ctx, discover=lambda: dict(reg),
                        statuses=lambda keys: self.push['input']['jira_statuses'],
                        identity=tuple(self.push['input']['identity']), log=lambda m: None)
         self.assertEqual(hits, [], 'мережа тільки через шов модуля')
@@ -1147,52 +1208,13 @@ class CliShape(unittest.TestCase):
 
 
 class CliTarget(unittest.TestCase):
-    """Конфіг ЛІГИ для CLI: файл установки раніше за оточення; `SUPABASE_SERVICE_KEY` — лише запасний ключ ЛІГИ, і лише з
-    `SUPABASE_URL` (спека §5). `provider` і модуль — заглушки: перевіряється саме побудова `ctx`."""
+    """Побудова `ctx` постачальника дашборда для CLI. 4d-4b: ключ кореня й `SUPABASE_SERVICE_KEY` більше не джерела (рантайм не читає оригіналів) —
+    чотири тести «файл раніше за оточення / сервісний ключ» (`…installation_file_wins_over_the_service_key`, `…no_file_the_service_key_pair…`,
+    `…service_key_alone_is_not_a_config`, `…malformed_service_pair…`) ретировано: їх замінюють `test_originals_gone.DashboardSyncWithoutLegacy`
+    (`test_no_dashboard_record_means_no_provider_even_with_the_service_key`, `test_with_the_record_the_module_ctx_is_used`). Лишились
+    тести звичайного постачальника (заглушки)."""
 
     SP = {'id': 'liga', 'path': '', 'legacy': True, 'integrations': True}
-
-    def setUp(self):
-        for patcher in (mock.patch.object(dm, 'provider', return_value=implicit.for_role('dashboard')),
-                        mock.patch.object(dashboard, 'legacy_module', return_value=_FakeDash()),
-                        mock.patch.dict(os.environ, {}), mock.patch.object(spaces, 'legacy_tasks_file', return_value='/nowhere/tasks.json')):
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        for k in ('SUPABASE_URL', 'SUPABASE_KEY', 'SUPABASE_SERVICE_KEY', 'DC_TASKS_FILE', 'DC_NO_OVERVIEW'):      # 4d-2: поза ізоляцією
-            os.environ.pop(k, None)
-
-    def ctx(self):
-        module, ctx, legacy = ov._target(self.SP)
-        self.assertTrue(legacy)
-        return ctx
-
-    def test_the_installation_file_wins_over_the_service_key(self):
-        os.environ.update(SUPABASE_URL='https://env.supabase.example', SUPABASE_SERVICE_KEY='sk-test-service')
-        with mock.patch.object(install_config, 'load_legacy_tasks',
-                               return_value={'supabase_url': 'https://demo.supabase.example', 'supabase_key': 'sk-test-file'}):
-            ctx = self.ctx()
-        self.assertEqual((ctx['settings']['url'], ctx['secrets']['key']), ('https://demo.supabase.example', 'sk-test-file'))
-
-    def test_no_file_the_service_key_pair_from_the_environment(self):
-        os.environ.update(SUPABASE_URL='https://env.supabase.example', SUPABASE_SERVICE_KEY='sk-test-service')
-        with mock.patch.object(install_config, 'load_legacy_tasks', side_effect=FileNotFoundError):
-            ctx = self.ctx()
-        self.assertEqual((ctx['settings']['url'], ctx['secrets']['key']), ('https://env.supabase.example', 'sk-test-service'))
-        self.assertEqual(ctx['space']['id'], 'liga')
-
-    def test_the_service_key_alone_is_not_a_config(self):
-        os.environ.update(SUPABASE_SERVICE_KEY='sk-test-service')
-        with mock.patch.object(install_config, 'load_legacy_tasks', side_effect=FileNotFoundError), \
-                self.assertRaises(ov.CliError) as cm:
-            ov._target(self.SP)
-        self.assertIn('не налаштовано', cm.exception.args[0])
-        self.assertNotIn('sk-test-service', cm.exception.args[0])
-
-    def test_a_malformed_service_pair_is_not_a_config_either(self):
-        os.environ.update(SUPABASE_URL='http://insecure.example', SUPABASE_SERVICE_KEY='sk-test-service')
-        with mock.patch.object(install_config, 'load_legacy_tasks', side_effect=FileNotFoundError), \
-                self.assertRaises(ov.CliError):
-            ov._target(self.SP)
 
     def test_an_ordinary_provider_gets_the_module_ctx_and_no_callbacks(self):
         mod = _FakeDash()
@@ -1277,7 +1299,7 @@ def wait_until(test, cond, what, seconds=5.0):
 
 
 class _SyncEnv(tm.Env):
-    """Світ запуску синку: тимчасові `HOME`/`DEAI_HOME`, простір ЛІГА (інтеграції, постачальник `'legacy'`), звичайний простір,
+    """Світ запуску синку: тимчасові `HOME`/`DEAI_HOME`, простір ЛІГА (інтеграції, явний запис `supabase-dashboard`), звичайний простір,
     що має модуль дашборда, і звичайний без нього. `Popen` — заглушка; лог ЛІГИ — шов `serve.OVERVIEW_LOG` у тимчасовій теці
     (ТА `HOME` тимчасова: навіть якщо шов зламати, справжній `~/.claude/pipeline-feedback/` не торкнеться)."""
 
@@ -1298,12 +1320,12 @@ class _SyncEnv(tm.Env):
         self.popen = _Popen()
         self.addCleanup(self.stop_runner)
         for patcher in (mock.patch.object(serve.subprocess, 'Popen', self.popen), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
-                        mock.patch.object(serve, 'supabase_config', return_value=(mb.URL, mb.KEY)),
                         mock.patch.dict(serve._SYNC_RUNS, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.mk('dash', roles=('dashboard',), server=GATE_SERVER)
-        self.liga = self.new_space('Liga', integrations=True)
+        sbconf._ensure_builtin('supabase-dashboard')      # шлях ЛІГИ — справжній вбудований модуль (4d-4b: явний запис), а не фікстура
+        self.liga = self.liga_space(roles=('dashboard',), sid='liga')
         self.plain = self.new_space('Plain')
         self.modp = self.new_space('Modp')
         dm.write_module_state(self.modp, 'dash', enabled=True)
@@ -1329,21 +1351,24 @@ class GateParity(_SyncEnv):
         with open(BEFORE, encoding='utf-8') as f:
             cls.gate = json.load(f)['sync_gate']
 
-    def decide(self, sp, env=None, cfg=(mb.URL, mb.KEY)):
-        """Чи стартувала дитина (і чи відкрито лог) для простору `sp` за оточення `env` і конфігу ЛІГИ `cfg`."""
-        with mock.patch.dict(os.environ, env or {}), mock.patch.object(serve, 'supabase_config', return_value=cfg):
+    def decide(self, sp, env=None):
+        """Чи стартувала дитина (і чи відкрито лог) для простору `sp` за оточення `env`."""
+        with mock.patch.dict(os.environ, env or {}):
             self.trigger(sp)
         return {'popen_started': bool(self.popen.started), 'log_created': os.path.exists(self.log)}
 
     def test_the_decisions_match_the_snapshot(self):
-        cases = {'integrations_on_with_config': (self.liga, None, (mb.URL, mb.KEY)),
-                 'integrations_off': (self.plain, None, (mb.URL, mb.KEY)),
-                 'no_config': (self.liga, None, (None, None)),
-                 'dc_no_overview': (self.liga, {'DC_NO_OVERVIEW': '1'}, (mb.URL, mb.KEY))}
-        for name, (sp, env, cfg) in cases.items():
+        """4d-4b: випадок знімка `no_config` («конфігу Supabase нема») — тепер ЛІГА БЕЗ запису `supabase-dashboard` (оригіналів кореня
+        нема, тож «нема конфігу» = «нема постачальника»); рішення те саме: дитина не стартує, лог не відкрито."""
+        cases = {'integrations_on_with_config': (self.liga, None),
+                 'integrations_off': (self.plain, None),
+                 'no_config': (self.liga, None),
+                 'dc_no_overview': (self.liga, {'DC_NO_OVERVIEW': '1'})}
+        for name, (sp, env) in cases.items():
             with self.subTest(case=name):
                 self.setUp_again()
-                got = self.decide(sp, env, cfg)
+                self.liga_space(roles=() if name == 'no_config' else ('dashboard',), sid='liga')     # запис на диску — за випадком
+                got = self.decide(sp, env)
                 want = {k: self.gate[name][k] for k in ('popen_started', 'log_created')}
                 self.assertEqual(got, want)
 
@@ -1498,15 +1523,17 @@ class SyncRunner(_SyncEnv):
         self.mark_league(self.liga)
         real = self.new_space('Legacy', integrations=True)
         self.assertEqual(real['id'], 'legacy')
+        dm.write_module_state(real, 'dash', enabled=True)       # 4d-4b: без запасного шляху синкає лише простір із постачальником дашборда
         self.trigger(real)
         self.trigger(self.liga)
         self.assertEqual([st['argv'][-2:] for st in self.popen.started],
                          [['--space', 'legacy'], ['--space', self.liga['id']]], 'кожен синк веде СВІЙ простір')
         self.assertEqual(sorted(serve._SYNC_RUNS), sorted(['legacy', self.liga['id']]))
 
-    def test_unfixed_and_fixed_league_triggers_are_one_run(self):
-        """Синк ЛІГИ без фіксованого простору запиту має ТОЙ САМИЙ ключ, що тригер, фіксований на її записі: дві синки однієї
-        ЛІГИ не біжать разом."""
+    def test_unfixed_league_triggers_are_silent_and_leave_the_fixed_run_alone(self):
+        """4d-4b (було `test_unfixed_and_fixed_league_triggers_are_one_run`): простір запиту НЕ зафіксовано — неявний простір, ролей у ньому
+        нема, тож і синку нема (раніше `Implicit` вів дашборд ЛІГИ й тригер ділив ключ із зафіксованим). Тригер, зафіксований на записі ЛІГИ,
+        стартує один синк; «безхазяйні» тригери нічого не стартують і не ставлять позначку «ще раз»."""
         self.mark_league(self.liga)
         self.trigger(self.liga)
         with spaces.request_space(None):
@@ -1514,14 +1541,23 @@ class SyncRunner(_SyncEnv):
             serve.Handler._overview_sync(None)
         self.assertEqual(len(self.popen.started), 1)
         self.assertEqual(list(serve._SYNC_RUNS), [self.liga['id']])
-        self.assertTrue(serve._SYNC_RUNS[self.liga['id']]['pending'])
+        self.assertFalse(serve._SYNC_RUNS[self.liga['id']]['pending'])
 
-    def test_unfixed_league_without_a_registry_entry_uses_the_flag_and_a_key_no_space_can_have(self):
+    def test_an_unfixed_trigger_with_no_registry_entry_starts_nothing(self):
+        """4d-4b (було `test_unfixed_league_without_a_registry_entry_uses_the_flag_and_a_key_no_space_can_have`): безхазяйний тригер синк
+        не стартує. А сам вибір аргументів `_overview_target` (запис реєстру з `legacy`, інакше `--legacy` і ключ `LEAGUE_KEY`, якого
+        не може мати жоден простір) лишився — закріплено прямо."""
         with spaces.request_space(None):
             serve.Handler._overview_sync(None)
-        self.assertEqual(self.popen.started[0]['argv'][-1:], ['--legacy'])
-        self.assertEqual(list(serve._SYNC_RUNS), [serve.LEAGUE_KEY])
+        self.assertEqual(self.popen.started, [])
+        self.assertEqual(serve._SYNC_RUNS, {})
         self.assertIsNone(spaces.SPACE_ID_RE.fullmatch(serve.LEAGUE_KEY))
+        with spaces.request_space(None):
+            self.assertEqual(serve._overview_target(), (self.liga['id'], ['--space', self.liga['id']]))     # запис реєстру з `legacy`
+            reg = serve.spaces.read_registry()
+            reg['spaces'] = [s for s in reg['spaces'] if not s.get('legacy')]
+            mb._write(self.reg_file, reg)
+            self.assertEqual(serve._overview_target(), (serve.LEAGUE_KEY, ['--legacy']))
 
     # ---- спостерігач і чужий запис -------------------------------------------------------------------------------------
 

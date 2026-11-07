@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
+import liga_fixture  # noqa: E402
 import make_before_4c3 as mb  # noqa: E402  (лише помічники знімка: сервер у процесі, простори, записувач; ЗАПУСКУ генератора нема)
 import notify  # noqa: E402
 import serve  # noqa: E402  (сервер Task 4; ядро `notify` сам `serve` НЕ імпортує)
@@ -199,14 +199,11 @@ class NotifyRole(tm.Env):
         self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))
         self.assertEqual(dm.ROLES_RESERVED, ())
         self.assertEqual(dm.ROLE_FUNCTIONS['notify'], ('mute_state', 'mute_set'))
-        self.assertIn('notify', dm.IMPLICIT_ROLES)
-        self.assertIn('notify', dm.STRICT_IMPLICIT_ROLES)
         self.assertIn('supabase-teams', dm.KNOWN_OTHER_MODULES)
-
-    def test_the_league_path_of_notify_is_not_a_fallback_after_an_error(self):
-        """⛔ Зашитий шлях `notify` — спільний Supabase ЛІГИ й живий канал Teams команди: «через помилку» на нього не
-        переходимо, тож `notify` НЕ в `IMPLICIT_ON_ERROR_ROLES`."""
-        self.assertNotIn('notify', dm.IMPLICIT_ON_ERROR_ROLES)
+        # 4d-4b: `IMPLICIT_ROLES`/`STRICT_IMPLICIT_ROLES`/`IMPLICIT_ON_ERROR_ROLES` зникли разом із запасним постачальником
+        # (`test_originals_gone.ProviderWithoutImplicit.test_the_core_has_no_fallback_names`).
+        for gone in ('IMPLICIT_ROLES', 'STRICT_IMPLICIT_ROLES', 'IMPLICIT_ON_ERROR_ROLES'):
+            self.assertFalse(hasattr(dm, gone), gone)
 
     def test_a_notify_module_needs_both_functions(self):
         self.mk('ntf-bare', roles=('notify',), server=tm.CHECK_ONLY)
@@ -230,13 +227,13 @@ class NotifyRole(tm.Env):
         self.assertEqual(got['good']['roles'], ['notify'])
         self.assertNotIn('roles', got['bad'])
 
-    def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
+    def test_a_space_without_a_notify_record_has_no_provider_with_or_without_integrations(self):
+        """4d-4b (було `…_is_legacy`): запасного шляху нема — простір з інтеграціями без запису `notify` теж без нікого."""
         ig = self.new_space('Integ', integrations=True)
         plain = self.new_space('Plain')
-        self.assertEqual(dm.provider('notify', ig), implicit.for_role('notify'))
-        self.assertEqual(dm.capabilities(ig)['notify'], 'legacy')
-        self.assertIsNone(dm.provider('notify', plain))             # без інтеграцій і без модуля — нікого
-        self.assertIsNone(dm.capabilities(plain)['notify'])
+        for sp in (ig, plain):
+            self.assertIsNone(dm.provider('notify', sp))
+            self.assertIsNone(dm.capabilities(sp)['notify'])
 
     def test_an_enabled_module_is_the_provider_in_both_kinds_of_space(self):
         self.mk('ntf-ok', roles=('notify',), server=NOTIFY_SERVER)
@@ -247,7 +244,7 @@ class NotifyRole(tm.Env):
             self.assertEqual(dm.provider('notify', sp).id, 'ntf-ok')
             self.assertEqual(dm.capabilities(sp)['notify'], 'ntf-ok')
         dm.write_module_state(ig, 'ntf-ok', enabled=False)
-        self.assertEqual(dm.capabilities(ig)['notify'], 'legacy')   # вимкнули: ЛІГА повертається до зашитого шляху
+        self.assertIsNone(dm.capabilities(ig)['notify'])            # вимкнули: запасного шляху нема (4d-4b) — нікого
         dm.write_module_state(plain, 'ntf-ok', enabled=False)
         self.assertIsNone(dm.capabilities(plain)['notify'])
 
@@ -257,7 +254,7 @@ class NotifyRole(tm.Env):
             caps = dm.capabilities(ig)
         self.assertIsNone(caps['notify'])
         self.assertEqual(caps['error'], 'bad-manifest')
-        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # а локальні ролі лишились зашитими
+        self.assertEqual((caps['publish'], caps['vcs']), (None, None))     # 4d-4b: підміна кидає для КОЖНОЇ ролі, зашитих нема
         dm.reset_caches()
         with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):      # запасний словник: теж не 'legacy'
             self.assertIsNone(dm.capabilities(ig)['notify'])
@@ -274,7 +271,7 @@ class NotifyRole(tm.Env):
         caps = dm.capabilities(ig)
         self.assertIsNone(caps['notify'])
         self.assertEqual(caps['error'], 'space-json-unreadable')
-        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # локальні ролі шлях ЛІГИ не втрачають
+        self.assertEqual((caps['publish'], caps['vcs']), (None, None))     # 4d-4b: нечитабельний `space.json` — помилка КОЖНОЇ ролі
 
     def test_the_error_codes_have_http_statuses(self):
         self.assertEqual(dm.STATUS['notify-unconfigured'], 409)
@@ -326,7 +323,7 @@ class NotifyCore(unittest.TestCase):
         self.assertEqual((notify.NOTIFY_TIMEOUT, notify.MAX_MUTES, notify.CHANNEL_MAX, notify.BY_MAX),
                          (10, 1000, 200, 200))
         self.assertEqual(notify.LEGACY_MODULE, 'supabase-teams')
-        self.assertEqual(notify.UNCONFIGURED, 'Supabase не налаштовано')
+        self.assertEqual(notify.UNCONFIGURED, 'Supabase не налаштовано: додайте адресу й ключ на екрані «Підключення»')   # R5 (4d-4b)
 
     def test_the_core_does_not_import_serve(self):
         """⛔ `serve` тягне сервер, мережу й увесь стан: ядро ролі його не імпортує (як `tracker.py`, `dashboard.py`)."""
@@ -478,61 +475,57 @@ class NotifyCore(unittest.TestCase):
 
 # ------------------------------------------------------------------------------------------ Task 3: адаптер ЛІГИ
 
-class LegacyAdapter(unittest.TestCase):
-    """`notify.legacy_ctx` і `notify.legacy_module` — адаптер ЛІГИ (неявний постачальник): `ctx` будує ядро з конфігу
-    установки, а не з простору (⛔ не `module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`)."""
+class LeagueNotifyRecord(tm.Env):
+    """4d-4b (було `LegacyAdapter`): `notify.legacy_ctx`/`legacy_module` — адаптер неявного постачальника — видалено. Сповіщення ЛІГИ — звичайний
+    запис `supabase-teams` (`compat: comment-layer`) із секретом `key`: `ctx` будує ядро (`module_ctx`) з ЗАПИСУ, корінь `tasks.json` не читається."""
 
     def setUp(self):
-        os.environ.pop('DEAI_EXTRA_MODULES', None)
+        super().setUp()
+        os.environ['DEAI_HOME'] = self.deai          # статичний охоронець `test_serve.TestsCannotWriteLiveConfig` шукає присвоєння в файлі
+        self.addCleanup(dm.reset_caches)
+        patch = mock.patch.object(dm, 'builtin_dir', tm._REAL_BUILTIN_DIR)
+        patch.start()
+        self.addCleanup(patch.stop)
         dm.reset_caches()
 
-    def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
-        ctx = notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1', space_id='s')
-        self.assertEqual(ctx['settings'], {'url': 'https://demo.supabase.example', 'compat': 'comment-layer'})
-        self.assertEqual(ctx['secrets'], {'key': 'sk-test-1'})
-        self.assertEqual(ctx['space'], {'id': 's', 'path': ''})
-        self.assertIs(ctx['legacy'], True)
-        self.assertIs(ctx['ModuleError'], dm.ModuleError)
-        self.assertEqual(notify.legacy_ctx('https://x.example', 'k')['space']['id'], '')
-
-    def test_legacy_ctx_never_reads_the_spaces_layer(self):
-        """⛔ Урок 4c-1: `module_ctx()` при вимкненому шарі читав би справжній `~/.deai` — адаптер до нього не торкається."""
-        import spaces
-        with mock.patch.object(dm, 'module_ctx', side_effect=AssertionError('module_ctx')), \
-                mock.patch.object(dm, 'read_secrets', side_effect=AssertionError('read_secrets')), \
-                mock.patch.object(spaces, 'home', side_effect=AssertionError('spaces.home')):
-            notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1')
-
-    def test_legacy_ctx_without_a_config_is_notify_unconfigured(self):
-        for args in ((None, None), (None, 'sk-test-1')):
-            with self.assertRaises(dm.ModuleError) as cm:
-                notify.legacy_ctx(*args)
-            self.assertEqual((cm.exception.code, cm.exception.status), ('notify-unconfigured', 409))
-            self.assertEqual(cm.exception.message, notify.UNCONFIGURED)
-
-    def test_legacy_module_is_the_builtin_supabase_teams(self):
-        m = notify.legacy_module()
+    def test_ctx_is_built_from_the_record_and_the_secret(self):
+        """Замінює `test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame` і `test_legacy_module_is_the_builtin_supabase_teams`."""
+        sp = self.liga_space(roles=('notify',))
+        m = dm.provider('notify', sp)
         self.assertEqual((m.id, m.status, m.roles), ('supabase-teams', 'ok', ['notify']))
         for fn in ('check', 'mute_state', 'mute_set'):
             self.assertTrue(callable(m.fn(fn)), fn)
+        ctx = dm.module_ctx(sp, m)
+        self.assertEqual(ctx['settings'], {'url': liga_fixture.SB_URL, 'compat': 'comment-layer'})
+        self.assertEqual(ctx['secrets'], {'key': liga_fixture.SB_KEY})
+        self.assertEqual(ctx['space']['id'], 'legacy')
+        self.assertIs(ctx['ModuleError'], dm.ModuleError)
 
-    def test_legacy_module_not_loaded_is_module_error(self):
-        broken = mock.Mock(status='broken')
-        for cat in ({}, {'supabase-teams': broken}):
-            with mock.patch.object(dm, 'catalog', return_value=cat):
-                with self.assertRaises(dm.ModuleError) as cm:
-                    notify.legacy_module()
-                self.assertEqual(cm.exception.code, 'module-error')
-        with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
-            with self.assertRaises(dm.ModuleError) as cm:
-                notify.legacy_module()
-        self.assertEqual(cm.exception.code, 'module-error')
-        self.assertNotIn('boom', cm.exception.message)
+    def test_the_root_and_the_environment_are_never_read(self):
+        """Замінює `test_legacy_ctx_never_reads_the_spaces_layer` (урок 4c-1) під 4d-4b: ні корінь, ні `SUPABASE_*` облікових не дають."""
+        import install_config
+        sp = self.liga_space(roles=('notify',))
+        tm._write(self.legacy, {'supabase_url': 'https://root.example.com', 'supabase_key': 'root-key'})
+        with mock.patch.dict(os.environ, {'SUPABASE_URL': 'https://env.example.com', 'SUPABASE_KEY': 'env-key'}), \
+                mock.patch.object(install_config, 'load_legacy_tasks', side_effect=AssertionError('корінь не читаємо')):
+            ctx = dm.module_ctx(sp, dm.provider('notify', sp))
+        self.assertEqual((ctx['settings']['url'], ctx['secrets']['key']), (liga_fixture.SB_URL, liga_fixture.SB_KEY))
 
-    def test_end_to_end_the_module_with_the_legacy_ctx(self):
-        """Справжній вбудований модуль із `legacy_ctx` (шов `_open` — записувач): адреса й ключ ідуть з конфігу, запит —
-        той самий, що `teams_rpc` 0.13.0 (знімок), `check` не кличе `teams_notify_health`."""
-        m = notify.legacy_module()
+    def test_without_a_record_or_with_a_disabled_one_there_is_no_provider(self):
+        """Замінює `test_legacy_ctx_without_a_config_is_notify_unconfigured` і `test_legacy_module_not_loaded_is_module_error`: нема запису
+        (або він вимкнений) — постачальника нема (`None`)."""
+        sp = self.liga_space(roles=('tracker',))
+        self.assertIsNone(dm.provider('notify', sp))
+        sp = self.liga_space(roles=('notify',), overrides={'notify': {'enabled': False}})
+        self.assertIsNone(dm.provider('notify', sp))
+        self.assertIsNone(dm.capabilities(sp)['notify'])
+
+    def test_end_to_end_the_module_with_the_record_ctx(self):
+        """Замінює `test_end_to_end_the_module_with_the_legacy_ctx`: справжній вбудований модуль із `ctx` запису (шов `_open` — записувач):
+        адреса й ключ ідуть із запису, запит — той самий, що `teams_rpc` 0.13.0 (знімок), `check` не кличе `teams_notify_health`."""
+        sp = self.liga_space(roles=('notify',), overrides={'notify': {'settings': {'url': 'https://demo.supabase.example'},
+                                                                        'secrets': {'key': 'sk-test-1'}}})
+        m = dm.provider('notify', sp)
         seen = []
 
         class R:
@@ -554,7 +547,7 @@ class LegacyAdapter(unittest.TestCase):
             seen.append((req.full_url, timeout, {k.lower(): v for k, v in req.header_items()}, req.data))
             return R(True if req.full_url.endswith('teams_mute_set') else [])
 
-        ctx = notify.legacy_ctx('https://demo.supabase.example', 'sk-test-1')
+        ctx = dm.module_ctx(sp, m)
         with mock.patch.dict(m.fn('check').__globals__, {'_open': fake}):
             self.assertEqual(dm.call(m, 'mute_state', ctx), [])
             self.assertIs(dm.call(m, 'mute_set', ctx, 'dc/t1', True, 'k:0123456789ab'), True)
@@ -651,6 +644,7 @@ class ServerPath(tm.Env):
         os.environ.pop('SUPABASE_URL', None)
         os.environ.pop('SUPABASE_KEY', None)
         self.ids = mb.setup_spaces(self.tmp)         # `liga` (інтеграції; задачі t1, t2) і `plain` (без; задача p1)
+        self.league_record()
         self.fake = os.path.join(self.tmp, 'teams-fake.json')
         self.sig = mock.patch.object(serve, 'mute_signature', lambda: mb.MINE)
         self.sig.start()
@@ -664,15 +658,23 @@ class ServerPath(tm.Env):
         self.addCleanup(patch.stop)
         dm.reset_caches()
 
-    def cfg(self):
-        """Конфіг установки ЛІГИ — вигаданий (`serve.supabase_config`)."""
-        patch = mock.patch.object(serve, 'supabase_config', return_value=(mb.URL, mb.KEY))
-        patch.start()
-        self.addCleanup(patch.stop)
+    def league_record(self, roles=('notify',), **notify_override):
+        """Явний запис `supabase-teams` у просторі `liga` (4d-4b: запасного шляху й оригіналів кореня нема): адреса й ключ — вигадані
+        (`mb.URL`/`mb.KEY`), секрет — у `secrets.json` дому тесту; `roles=()` — без запису (ЛІГА без сповіщень)."""
+        liga_fixture.write_records(self.rec(self.ids['liga'])['path'], self.deai, self.ids['liga'], roles,
+                                   {'notify': dict({'settings': {'url': mb.URL}, 'secrets': {'key': mb.KEY}}, **notify_override)})
+        dm.reset_caches()
+
+    def pin_league(self):
+        """Закріпити простір `liga` простором запиту ПОТОЧНОГО потоку (як це робить обробник): без цього `notify_call` напряму бачить неявний
+        простір (ролей нема)."""
+        import spaces
+        spaces.set_request_space(self.ids['liga'])
+        self.addCleanup(spaces.clear_request_space)
 
     def open_seam(self, rec):
         """Шов `_open` вбудованого `supabase-teams`: усе, що модуль шле в мережу, йде в записувач."""
-        patch = mock.patch.dict(notify.legacy_module().fn('check').__globals__, {'_open': rec})
+        patch = mock.patch.dict(dm.catalog()['supabase-teams'].fn('check').__globals__, {'_open': rec})
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -750,7 +752,7 @@ class ServerPath(tm.Env):
     # ---- ЛІГА без шва: запити модуля = запити teams_rpc 0.13.0
     def test_the_league_rpc_requests_are_the_0_13_0_requests(self):
         self.real_builtins()
-        self.cfg()
+        self.pin_league()
         rr = self.snap['rpc_requests']
         cases = (('state', ('mute_state',), rr['state']['stub_response']),
                  ('set', ('mute_set', 'dc/t1', True, mb.MINE), True),
@@ -769,7 +771,7 @@ class ServerPath(tm.Env):
     def test_the_league_refusals_are_the_0_13_0_refusals(self):
         """Ізоляція — той самий `OSError` з тим самим текстом і без мережі; решта відмов — свідомо інші типи (`ModuleError`)."""
         self.real_builtins()
-        self.cfg()
+        self.pin_league()
         rr = self.snap['rpc_requests']
         for key, env in (('isolated_tasks_file', {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')}),
                          ('isolated_no_overview', {'DC_NO_OVERVIEW': '1'})):
@@ -780,19 +782,35 @@ class ServerPath(tm.Env):
             self.assertEqual((type(cm.exception).__name__, str(cm.exception), len(rec.calls)),
                              ('OSError', rr[key]['message'], 0), key)
 
-    def test_the_league_without_a_config_is_notify_unconfigured_with_the_old_text(self):
+    def test_the_league_record_without_an_address_is_notify_unconfigured(self):
+        """4d-4b (було `…without_a_config_is_notify_unconfigured_with_the_old_text`): «нема конфігу» тепер — запис без адреси (оригіналів
+        кореня нема). Код той самий, мережі нема; ТЕКСТ — модуля (знімок 0.13.0 мав «Supabase не налаштовано», R5)."""
         self.real_builtins()
+        self.pin_league()
+        self.league_record(settings={'url': ''})
         rec = _OpenRec(b'[]')
         self.open_seam(rec)
-        with mock.patch.object(serve, 'supabase_config', return_value=(None, None)), \
-                self.assertRaises(dm.ModuleError) as cm:
+        with self.assertRaises(dm.ModuleError) as cm:
             serve.notify_call('mute_state')
-        self.assertEqual((cm.exception.code, cm.exception.message, len(rec.calls)),
-                         ('notify-unconfigured', self.snap['rpc_requests']['no_supabase']['message'], 0))
+        self.assertEqual((cm.exception.code, len(rec.calls)), ('notify-unconfigured', 0))
+        self.assertNotEqual(cm.exception.message, self.snap['rpc_requests']['no_supabase']['message'])
+
+    def test_the_league_without_a_notify_record_has_no_provider(self):
+        """4d-4b: ЛІГА без запису `supabase-teams` — сповіщень нема (`OSError`, мережі нема), а не `notify-unconfigured`: оригінали кореня
+        (адреса й ключ у `tasks.json`/оточенні) запису не замінюють."""
+        self.real_builtins()
+        self.pin_league()
+        self.league_record(roles=())
+        mb._write(self.legacy, {'supabase_url': mb.URL, 'supabase_key': mb.KEY})
+        rec = _OpenRec(b'[]')
+        self.open_seam(rec)
+        with mock.patch.dict(os.environ, {'SUPABASE_URL': mb.URL, 'SUPABASE_KEY': mb.KEY}), self.assertRaises(OSError):
+            serve.notify_call('mute_state')
+        self.assertEqual(rec.calls, [])
 
     def test_a_network_failure_is_a_notify_error_not_a_bare_oserror(self):
         self.real_builtins()
-        self.cfg()
+        self.pin_league()
         rec = _OpenRec(exc=OSError('мережі нема'))
         self.open_seam(rec)
         with self.assertRaises(dm.ModuleError) as cm:
@@ -802,7 +820,6 @@ class ServerPath(tm.Env):
     def test_without_a_provider_notify_call_never_reaches_the_network(self):
         """Простір без інтеграцій і без модуля: `OSError` (як було з `IntegrationsOff`), жодного запиту."""
         self.real_builtins()
-        self.cfg()
         rec = _OpenRec(b'[]')
         self.open_seam(rec)
         import spaces
@@ -813,7 +830,6 @@ class ServerPath(tm.Env):
     # ---- ЛІГА: маршрут без шва
     def test_the_league_route_through_the_module_matches_the_snapshot_requests(self):
         self.real_builtins()
-        self.cfg()
         srv = self.srv()
         real = self.snap['route']['real_path']
         rec = _OpenRec(json.dumps(mb.STATE_ROWS).encode('utf-8'))
@@ -836,7 +852,6 @@ class ServerPath(tm.Env):
     def test_the_league_route_on_a_network_failure_keeps_the_0_13_0_shape(self):
         """GET — 200 `{channel, error}` (без `muted`), POST — 502 `{ok: false, channel, error}`: форма та сама, текст — модуля."""
         self.real_builtins()
-        self.cfg()
         srv = self.srv()
         self.open_seam(_OpenRec(exc=OSError('мережі нема')))
         real = self.snap['route']['real_path']
@@ -852,7 +867,6 @@ class ServerPath(tm.Env):
 
     def test_the_league_route_in_an_isolated_run_never_reaches_the_network(self):
         self.real_builtins()
-        self.cfg()
         srv = self.srv()
         for key, env in (('tasks_file', {'DC_TASKS_FILE': os.path.join(self.tmp, 'x-tasks.json')}),
                          ('no_overview', {'DC_NO_OVERVIEW': '1'})):
@@ -868,7 +882,6 @@ class ServerPath(tm.Env):
     # ---- простір без постачальника: 409 notify-off
     def test_a_space_without_a_provider_answers_409_notify_off(self):
         self.real_builtins()
-        self.cfg()
         srv = self.srv()
         os.environ['DC_TEAMS_FAKE'] = self.fake            # шов діє лише для 'legacy': тут його мають ігнорувати
         mb._write(self.fake, {'dc/p1': {'muted_at': None, 'muted_by': mb.COLLEAGUE}})

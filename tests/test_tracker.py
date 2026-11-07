@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 import install_config  # noqa: E402
+import liga_fixture  # noqa: E402
 import overview_push as ov  # noqa: E402
 import registry  # noqa: E402
 import spaces  # noqa: E402
@@ -158,14 +158,11 @@ class TrackerRole(tm.Env):
         self.assertEqual(dm.ROLES_CALLED, ('publish', 'tokens', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'))
         self.assertEqual(dm.ROLES_RESERVED, ())
         self.assertEqual(dm.ROLE_FUNCTIONS['tracker'], ('statuses',))
-        self.assertIn('tracker', dm.IMPLICIT_ROLES)
-        self.assertIn('tracker', dm.STRICT_IMPLICIT_ROLES)
         self.assertIn('jira-tracker', dm.KNOWN_OTHER_MODULES)
-
-    def test_the_league_path_of_the_tracker_is_not_a_fallback_after_an_error(self):
-        """⛔ Зашитий шлях трекера — сайт Jira ЛІГИ з обліковими людини, тож «через помилку» на нього не переходимо:
-        `tracker` НЕ в `IMPLICIT_ON_ERROR_ROLES`."""
-        self.assertNotIn('tracker', dm.IMPLICIT_ON_ERROR_ROLES)
+        # 4d-4b: `IMPLICIT_ROLES`/`STRICT_IMPLICIT_ROLES`/`IMPLICIT_ON_ERROR_ROLES` зникли разом із запасним постачальником
+        # (їхню відсутність стереже `test_originals_gone.ProviderWithoutImplicit.test_the_core_has_no_fallback_names`).
+        for gone in ('IMPLICIT_ROLES', 'STRICT_IMPLICIT_ROLES', 'IMPLICIT_ON_ERROR_ROLES'):
+            self.assertFalse(hasattr(dm, gone), gone)
 
     def test_a_tracker_module_needs_statuses(self):
         self.mk('trk-bare', roles=('tracker',), server=tm.CHECK_ONLY)
@@ -173,13 +170,13 @@ class TrackerRole(tm.Env):
         self.mk('trk-ok', roles=('tracker',), server=TRACKER_SERVER)
         self.assertEqual(dm.catalog()['trk-ok'].status, 'ok')
 
-    def test_the_provider_of_an_integrations_space_without_a_module_is_legacy(self):
+    def test_a_space_without_a_tracker_record_has_no_provider_with_or_without_integrations(self):
+        """4d-4b (було `…_is_legacy`): запасного шляху нема — простір з інтеграціями без запису `tracker` теж без нікого."""
         ig = self.new_space('Integ', integrations=True)
         plain = self.new_space('Plain')
-        self.assertEqual(dm.provider('tracker', ig), implicit.for_role('tracker'))
-        self.assertEqual(dm.capabilities(ig)['tracker'], 'legacy')
-        self.assertIsNone(dm.provider('tracker', plain))             # без інтеграцій і без модуля — нікого
-        self.assertIsNone(dm.capabilities(plain)['tracker'])
+        for sp in (ig, plain):
+            self.assertIsNone(dm.provider('tracker', sp))
+            self.assertIsNone(dm.capabilities(sp)['tracker'])
 
     def test_an_enabled_module_is_the_provider_in_both_kinds_of_space(self):
         self.mk('trk-ok', roles=('tracker',), server=TRACKER_SERVER)
@@ -190,7 +187,7 @@ class TrackerRole(tm.Env):
             self.assertEqual(dm.provider('tracker', sp).id, 'trk-ok')
             self.assertEqual(dm.capabilities(sp)['tracker'], 'trk-ok')
         dm.write_module_state(ig, 'trk-ok', enabled=False)
-        self.assertEqual(dm.capabilities(ig)['tracker'], 'legacy')   # вимкнули: ЛІГА повертається до зашитого шляху
+        self.assertIsNone(dm.capabilities(ig)['tracker'])            # вимкнули: запасного шляху нема (4d-4b) — нікого
         dm.write_module_state(plain, 'trk-ok', enabled=False)
         self.assertIsNone(dm.capabilities(plain)['tracker'])
 
@@ -200,7 +197,7 @@ class TrackerRole(tm.Env):
             caps = dm.capabilities(ig)
         self.assertIsNone(caps['tracker'])
         self.assertEqual(caps['error'], 'bad-manifest')
-        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # а локальні ролі лишились зашитими
+        self.assertEqual((caps['publish'], caps['vcs']), (None, None))     # 4d-4b: підміна кидає для КОЖНОЇ ролі, зашитих нема
         dm.reset_caches()
         with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):      # запасний словник: теж не 'legacy'
             self.assertIsNone(dm.capabilities(ig)['tracker'])
@@ -217,7 +214,7 @@ class TrackerRole(tm.Env):
         caps = dm.capabilities(ig)
         self.assertIsNone(caps['tracker'])
         self.assertEqual(caps['error'], 'space-json-unreadable')
-        self.assertEqual((caps['publish'], caps['vcs']), ('legacy', 'legacy'))     # локальні ролі шлях ЛІГИ не втрачають
+        self.assertEqual((caps['publish'], caps['vcs']), (None, None))     # 4d-4b: помилка КОЖНОЇ ролі (було: локальні ролі шлях ЛІГИ не втрачають
 
     def test_the_error_codes_have_http_statuses(self):
         self.assertEqual(dm.STATUS['tracker-unconfigured'], 409)
@@ -240,7 +237,8 @@ class TrackerCore(unittest.TestCase):
         self.assertEqual(tracker.CATS, ('new', 'indeterminate', 'done'))
         self.assertEqual(tracker.LEGACY_MODULE, 'jira-tracker')
         self.assertTrue(tracker.UNCONFIGURED.startswith('Jira не налаштовано'))
-        self.assertIn('jira_base', tracker.UNCONFIGURED)
+        self.assertIn('«Підключення»', tracker.UNCONFIGURED)       # 4d-4b (R5): текст веде на екран, а не в `tasks.json`
+        self.assertNotIn('jira_base', tracker.UNCONFIGURED)
 
     def test_key_re_accepts_only_whole_well_formed_keys(self):
         for ok in ('DEMO-1', 'AB_2-10', 'A-1', 'X9-9999999999', 'A' * 32 + '-7'):
@@ -362,8 +360,10 @@ JIRA = 'https://demo.atlassian.example'
 
 
 class JiraConfig(unittest.TestCase):
-    """`install_config.jira_config()`: адреса з `tasks.json` установки, облікові — оточення раніше за файли. Тимчасові
-    HOME і старий файл задач: справжні `~/.claude/pipeline-feedback/` і `tasks.json` не читаються."""
+    """Читач оригіналів Jira ЛІГИ: адреса з кореня старого `tasks.json`, облікові — оточення раніше за файли. З 4d-4b рантайм його не
+    має (`install_config.jira_config` видалено), а копія живе в міграції (`liga_migrate._jira_from`) — ті самі твердження тепер проти неї:
+    `jira_config()` нижче читає старий файл і віддає його корінь читачу (зламаний чи відсутній файл — порожній корінь, без винятку).
+    Тимчасові HOME і старий файл задач: справжні `~/.claude/pipeline-feedback/` і `tasks.json` не читаються."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -384,6 +384,14 @@ class JiraConfig(unittest.TestCase):
         with open(self.legacy, 'w', encoding='utf-8') as f:
             f.write(raw if raw is not None else json.dumps(obj))
 
+    def jira_config(self):
+        import liga_migrate
+        try:
+            root = install_config.load_legacy_tasks()
+        except (OSError, ValueError, RecursionError):
+            root = {}
+        return liga_migrate._jira_from(root)
+
     def cred_file(self, name, text):
         with open(os.path.join(self.home, '.claude', 'pipeline-feedback', name), 'w', encoding='utf-8') as f:
             f.write(text)
@@ -391,20 +399,20 @@ class JiraConfig(unittest.TestCase):
     def test_base_and_credentials_from_environment(self):
         self.write({'jira_base': JIRA + '/'})
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'alpha@example.com', 'tok-test-1'
-        self.assertEqual(install_config.jira_config(), (JIRA, 'alpha@example.com', 'tok-test-1'))
+        self.assertEqual(self.jira_config(), (JIRA, 'alpha@example.com', 'tok-test-1'))
 
     def test_credentials_from_files_when_there_is_no_environment(self):
         self.write({'jira_base': JIRA})
         self.cred_file('jira-email', 'alpha@example.com\n')
         self.cred_file('jira-token', ' tok-test-1 \n')
-        self.assertEqual(install_config.jira_config(), (JIRA, 'alpha@example.com', 'tok-test-1'))
+        self.assertEqual(self.jira_config(), (JIRA, 'alpha@example.com', 'tok-test-1'))
 
     def test_environment_wins_over_files(self):
         self.write({'jira_base': JIRA})
         self.cred_file('jira-email', 'file@example.com')
         self.cred_file('jira-token', 'tok-file')
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'env@example.com', 'tok-env'
-        self.assertEqual(install_config.jira_config(), (JIRA, 'env@example.com', 'tok-env'))
+        self.assertEqual(self.jira_config(), (JIRA, 'env@example.com', 'tok-env'))
 
     def test_email_and_token_are_read_independently(self):
         """Як `_jira_creds` до 4c-2: кожне значення — з оточення, інакше з файла; джерела можуть бути різні."""
@@ -412,12 +420,12 @@ class JiraConfig(unittest.TestCase):
         self.cred_file('jira-email', 'file@example.com')
         self.cred_file('jira-token', 'tok-file')
         os.environ['JIRA_EMAIL'] = 'env@example.com'                 # токена в оточенні нема
-        self.assertEqual(install_config.jira_config(), (JIRA, 'env@example.com', 'tok-file'))
+        self.assertEqual(self.jira_config(), (JIRA, 'env@example.com', 'tok-file'))
         os.environ.pop('JIRA_EMAIL')
         os.environ['JIRA_TOKEN'] = 'tok-env'                         # а тепер навпаки
-        self.assertEqual(install_config.jira_config(), (JIRA, 'file@example.com', 'tok-env'))
+        self.assertEqual(self.jira_config(), (JIRA, 'file@example.com', 'tok-env'))
         os.remove(os.path.join(self.home, '.claude', 'pipeline-feedback', 'jira-email'))
-        self.assertEqual(install_config.jira_config(), (None, None, None), 'пошти нема ніде')
+        self.assertEqual(self.jira_config(), (None, None, None), 'пошти нема ніде')
 
     def test_an_empty_or_bad_environment_value_falls_through_to_the_file(self):
         self.write({'jira_base': JIRA})
@@ -426,108 +434,119 @@ class JiraConfig(unittest.TestCase):
         os.environ['JIRA_TOKEN'] = 'tok-env'
         for bad in ('', '   ', ' \n ', 'a\nb@example.com', 'a\tb@example.com'):
             os.environ['JIRA_EMAIL'] = bad
-            self.assertEqual(install_config.jira_config(), (JIRA, 'file@example.com', 'tok-env'), repr(bad))
+            self.assertEqual(self.jira_config(), (JIRA, 'file@example.com', 'tok-env'), repr(bad))
         os.environ['JIRA_EMAIL'] = 'env@example.com'
         for bad in ('', '   ', 'tok env'):
             os.environ['JIRA_TOKEN'] = bad
-            self.assertEqual(install_config.jira_config(), (JIRA, 'env@example.com', 'tok-file'), repr(bad))
+            self.assertEqual(self.jira_config(), (JIRA, 'env@example.com', 'tok-file'), repr(bad))
 
     def test_no_credentials_is_no_config(self):
         self.write({'jira_base': JIRA})
-        self.assertEqual(install_config.jira_config(), (None, None, None))
+        self.assertEqual(self.jira_config(), (None, None, None))
         self.cred_file('jira-email', 'alpha@example.com')
-        self.assertEqual(install_config.jira_config(), (None, None, None), 'є пошта, токена нема')
+        self.assertEqual(self.jira_config(), (None, None, None), 'є пошта, токена нема')
         self.cred_file('jira-token', '  \n')
-        self.assertEqual(install_config.jira_config(), (None, None, None), 'порожній токен')
+        self.assertEqual(self.jira_config(), (None, None, None), 'порожній токен')
 
     def test_no_base_or_a_bad_base_is_no_config(self):
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'alpha@example.com', 'tok-test-1'
         self.write({'tasks': {}})
-        self.assertEqual(install_config.jira_config(), (None, None, None))
+        self.assertEqual(self.jira_config(), (None, None, None))
         for base in ('http://demo.atlassian.example', '', 5, None, 'https://demo.atlassian.example/path',
                      'https://user@demo.atlassian.example', 'https://<сайт>.atlassian.net', 'https://<site>.atlassian.net',
                      'demo.atlassian.example', 'https://demo atlassian.example'):
             self.write({'jira_base': base})
-            self.assertEqual(install_config.jira_config(), (None, None, None), repr(base))
+            self.assertEqual(self.jira_config(), (None, None, None), repr(base))
 
     def test_a_token_with_a_space_is_no_config(self):
         self.write({'jira_base': JIRA})
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'alpha@example.com', 'tok test'
-        self.assertEqual(install_config.jira_config(), (None, None, None))
+        self.assertEqual(self.jira_config(), (None, None, None))
 
     def test_a_port_is_allowed_and_the_slash_trimmed(self):
         self.write({'jira_base': 'https://demo.atlassian.example:8443/'})
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'alpha@example.com', 'tok-test-1'
-        self.assertEqual(install_config.jira_config()[0], 'https://demo.atlassian.example:8443')
+        self.assertEqual(self.jira_config()[0], 'https://demo.atlassian.example:8443')
 
     def test_a_broken_or_missing_tasks_file_is_no_config_without_an_exception(self):
         os.environ['JIRA_EMAIL'], os.environ['JIRA_TOKEN'] = 'alpha@example.com', 'tok-test-1'
-        self.assertEqual(install_config.jira_config(), (None, None, None))          # файла нема
+        self.assertEqual(self.jira_config(), (None, None, None))          # файла нема
         for raw in ('{oops', '[]', 'null', '[' * 100000, '{"a":' * 100000):
             self.write(None, raw=raw)
-            self.assertEqual(install_config.jira_config(), (None, None, None), raw[:6])
+            self.assertEqual(self.jira_config(), (None, None, None), raw[:6])
 
     def test_the_real_home_is_never_read(self):
         """Файли облікових шукаються під `HOME` тесту, а не в справжньому домашньому каталозі."""
         self.write({'jira_base': JIRA})
         real = os.path.expanduser('~')
         self.assertTrue(real.startswith(self.home), real)
-        self.assertEqual(install_config.jira_config(), (None, None, None))
+        self.assertEqual(self.jira_config(), (None, None, None))
 
 
-class LegacyAdapter(unittest.TestCase):
-    """`tracker.legacy_ctx` і `tracker.legacy_module` — адаптер ЛІГИ (неявний постачальник): `ctx` будує ядро з конфігу
-    установки, а не з простору (⛔ не `module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`)."""
+class LeagueTrackerRecord(tm.Env):
+    """4d-4b (було `LegacyAdapter`): `tracker.legacy_ctx`/`legacy_module` — адаптер неявного постачальника — видалено. Трекер ЛІГИ — звичайний
+    запис `jira-tracker` у `space.json` із секретом `token` у `secrets.json`: `ctx` будує ядро (`module_ctx`) з ЗАПИСУ, а корінь `tasks.json`
+    не читається. Стенд — явна фікстура (`Env.liga_space`: `liga_fixture.write_records`)."""
 
     def setUp(self):
-        os.environ.pop('DEAI_EXTRA_MODULES', None)
+        super().setUp()
+        os.environ['DEAI_HOME'] = self.deai          # статичний охоронець `test_serve.TestsCannotWriteLiveConfig` шукає присвоєння в файлі
+        self.real_builtins()
+
+    def real_builtins(self):
+        self.addCleanup(dm.reset_caches)
+        patch = mock.patch.object(dm, 'builtin_dir', _REAL_BUILTIN)
+        patch.start()
+        self.addCleanup(patch.stop)
         dm.reset_caches()
 
-    def test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame(self):
-        ctx = tracker.legacy_ctx('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1', space_id='s')
-        self.assertEqual(ctx['settings'], {'base': 'https://demo.atlassian.example', 'email': 'alpha@example.com'})
-        self.assertEqual(ctx['secrets'], {'token': 'tok-test-1'})
-        self.assertEqual(ctx['space'], {'id': 's', 'path': ''})
-        self.assertIs(ctx['legacy'], True)
+    def test_ctx_is_built_from_the_record_and_the_secret_not_from_the_root(self):
+        """Замінює `test_legacy_ctx_is_built_from_the_install_config_not_from_the_frame`: ті самі `settings`/`secrets`, але з запису."""
+        sp = self.liga_space(roles=('tracker',))
+        prov = dm.provider('tracker', sp)
+        self.assertEqual((prov.id, prov.status, prov.roles), ('jira-tracker', 'ok', ['tracker']))
+        ctx = dm.module_ctx(sp, prov)
+        self.assertEqual(ctx['settings'], {'base': liga_fixture.JIRA_BASE, 'email': liga_fixture.JIRA_EMAIL})
+        self.assertEqual(ctx['secrets'], {'token': liga_fixture.JIRA_TOKEN})
+        self.assertEqual(ctx['space']['id'], 'legacy')
         self.assertIs(ctx['ModuleError'], dm.ModuleError)
-        self.assertEqual(tracker.legacy_ctx('https://x.example', 'a@b.c', 't')['space']['id'], '')
-
-    def test_legacy_ctx_never_reads_the_spaces_layer(self):
-        """⛔ Урок 4c-1: `module_ctx()` при вимкненому шарі читав би справжній `~/.deai` — адаптер до нього не торкається."""
-        with mock.patch.object(dm, 'module_ctx', side_effect=AssertionError('module_ctx')), \
-                mock.patch.object(dm, 'read_secrets', side_effect=AssertionError('read_secrets')), \
-                mock.patch.object(spaces, 'home', side_effect=AssertionError('spaces.home')):
-            tracker.legacy_ctx('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')
-
-    def test_legacy_ctx_without_a_config_is_tracker_unconfigured(self):
-        for args in ((None, None, None), (None, 'alpha@example.com', 'tok-test-1')):
-            with self.assertRaises(dm.ModuleError) as cm:
-                tracker.legacy_ctx(*args)
-            self.assertEqual((cm.exception.code, cm.exception.status), ('tracker-unconfigured', 409))
-            self.assertEqual(cm.exception.message, tracker.UNCONFIGURED)
-
-    def test_legacy_module_is_the_builtin_jira_tracker(self):
-        m = tracker.legacy_module()
-        self.assertEqual((m.id, m.status, m.roles), ('jira-tracker', 'ok', ['tracker']))
         for fn in ('check', 'statuses'):
-            self.assertTrue(callable(m.fn(fn)), fn)
+            self.assertTrue(callable(prov.fn(fn)), fn)
 
-    def test_legacy_module_not_loaded_is_module_error(self):
-        broken = mock.Mock(status='broken')
-        for cat in ({}, {'jira-tracker': broken}):
-            with mock.patch.object(dm, 'catalog', return_value=cat):
-                with self.assertRaises(dm.ModuleError) as cm:
-                    tracker.legacy_module()
-                self.assertEqual(cm.exception.code, 'module-error')
-        with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
-            with self.assertRaises(dm.ModuleError) as cm:
-                tracker.legacy_module()
-        self.assertEqual(cm.exception.code, 'module-error')
-        self.assertNotIn('boom', cm.exception.message)
+    def test_the_root_of_the_old_tasks_file_is_never_read(self):
+        """Замінює `test_legacy_ctx_never_reads_the_spaces_layer` (урок 4c-1 — «не читати чуже») під 4d-4b: ні корінь, ні оточення не дають
+        облікових; запис живе сам."""
+        sp = self.liga_space(roles=('tracker',))
+        tm._write(self.legacy, {'jira_base': 'https://root.example.com', 'jira_email': 'root@example.com', 'jira_token': 'root-token'})
+        with mock.patch.dict(os.environ, {'JIRA_EMAIL': 'env@example.com', 'JIRA_TOKEN': 'env-token'}), \
+                mock.patch.object(install_config, 'load_legacy_tasks', side_effect=AssertionError('корінь не читаємо')):
+            ctx = dm.module_ctx(sp, dm.provider('tracker', sp))
+        self.assertEqual((ctx['settings']['base'], ctx['settings']['email'], ctx['secrets']['token']),
+                         (liga_fixture.JIRA_BASE, liga_fixture.JIRA_EMAIL, liga_fixture.JIRA_TOKEN))
 
-    def test_end_to_end_the_module_with_the_legacy_ctx(self):
-        """Справжній вбудований модуль із `legacy_ctx` (шов `_open` — записувач): адреса, пошта й токен ідуть з конфігу."""
-        m = tracker.legacy_module()
+    def test_without_a_record_or_with_a_disabled_one_there_is_no_provider(self):
+        """Замінює `test_legacy_ctx_without_a_config_is_tracker_unconfigured` і `test_legacy_module_*`: нема запису (або він вимкнений) —
+        постачальника нема (`None`), а не `tracker-unconfigured`; «не налаштовано» тепер казав би сам модуль із порожніми налаштуваннями."""
+        sp = self.liga_space(roles=('dashboard',))
+        self.assertIsNone(dm.provider('tracker', sp))
+        sp = self.liga_space(roles=('tracker',), overrides={'tracker': {'enabled': False}})
+        self.assertIsNone(dm.provider('tracker', sp))
+        self.assertIsNone(dm.capabilities(sp)['tracker'])
+
+    def test_a_record_without_the_address_or_the_token_is_unconfigured(self):
+        """Запис без адреси/токена: `module_ctx` — `bad-settings` (обовʼязкові), модуль без токена кидає `tracker-unconfigured`."""
+        sp = self.liga_space(roles=('tracker',), overrides={'tracker': {'secrets': {'token': ''}}})
+        prov = dm.provider('tracker', sp)
+        ctx = dm.module_ctx(sp, prov)
+        with self.assertRaises(dm.ModuleError) as cm:
+            tracker.statuses(prov, ctx, ['DEMO-1'], timeout=tracker.READ_TIMEOUT, socket_s=tracker.READ_SOCKET_S)
+        self.assertEqual((cm.exception.code, cm.exception.status), ('tracker-unconfigured', 409))
+
+    def test_end_to_end_the_module_with_the_record_ctx(self):
+        """Замінює `test_end_to_end_the_module_with_the_legacy_ctx`: справжній вбудований модуль із `ctx` запису (шов `_open` — записувач)."""
+        sp = self.liga_space(roles=('tracker',), overrides={'tracker': {'settings': {'base': 'https://demo.atlassian.example'},
+                                                                          'secrets': {'token': 'tok-test-1'}}})
+        m = dm.provider('tracker', sp)
         seen = []
 
         def fake(req, timeout):
@@ -546,7 +565,7 @@ class LegacyAdapter(unittest.TestCase):
                     return json.dumps({'issues': [{'key': 'DEMO-1', 'fields': {'status': {
                         'name': 'Done', 'statusCategory': {'key': 'done'}}}}]}).encode()
             return R()
-        ctx = tracker.legacy_ctx('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1', space_id='liga')
+        ctx = dm.module_ctx(sp, m)
         with mock.patch.dict(m.fn('check').__globals__, {'_open': fake}):
             out = tracker.statuses(m, ctx, ['DEMO-1'], timeout=tracker.READ_TIMEOUT, socket_s=tracker.READ_SOCKET_S)
         self.assertEqual(out, {'DEMO-1': {'name': 'Done', 'cat': 'done'}})
@@ -555,10 +574,8 @@ class LegacyAdapter(unittest.TestCase):
 
 # ------------------------------------------------------------------------------- Task 4: синк дашборда через `tracker`
 
-#: Вигадані облікові Jira ЛІГИ (`install_config.jira_config` у тестах підмінено на них: справжніх файлів і оточення не читаємо).
-JIRA_CFG = (JIRA, 'alpha@example.com', 'tok-test-1')
-#: Запис реєстру ЛІГИ (як `spaces` віддає для простору з `legacy`).
-LEAGUE = {'id': 'liga', 'path': '', 'legacy': True, 'integrations': True}
+#: Запис `jira-tracker` ЛІГИ для синку (4d-4b: явний запис фікстури, а не оригінали кореня): адреса й токен — вигадані.
+TRACKER_RECORD = {'tracker': {'settings': {'base': JIRA, 'email': 'alpha@example.com'}, 'secrets': {'token': 'tok-test-1'}}}
 #: Вигадана «тека-фікстура» в `registry._temp_roots`: тимчасові теки тестів не мають вважатись фікстурами (як у генераторі знімка).
 FAKE_TMP = '/deai-fixture-tmp'
 
@@ -643,10 +660,11 @@ class SyncStatuses(tm.Env):
             tasks[tid] = dict(task, dir=tdir)
         return {'current': 't1', 'tasks': tasks}
 
-    def run_league(self, open_fn=None, jira_config=JIRA_CFG):
-        """`cmd_sync` ЛІГИ: простір `LEAGUE`, дашборд — запис `call` (`push`), реєстр — порожній, Jira — шов `_open`. Повертає
-        `(лог, [{'mode', 'cards'}], [запити до Jira])`."""
+    def run_league(self, open_fn=None, record=True):
+        """`cmd_sync` ЛІГИ: простір ЛІГА з явним записом `jira-tracker` (`record=False` — без нього), дашборд — запис `call` (`push`),
+        реєстр — порожній, Jira — шов `_open`. Повертає `(лог, [{'mode', 'cards'}], [запити до Jira])`."""
         self.real_builtins()
+        league = self.liga_space(roles=('tracker',) if record else (), overrides=TRACKER_RECORD)
         reqs, lines, pushes = [], [], []
         stub = self.snap['jira_request']['request']['stub_response']
 
@@ -661,14 +679,13 @@ class SyncStatuses(tm.Env):
             pushes.append({'mode': mode, 'cards': [_strip(c) for c in cards]})
             return {'ok': len(cards), 'failed': {}}
         cfg = self.world()
-        mod = tracker.legacy_module()
+        mod = dm.catalog()['jira-tracker']
         with contextlib.ExitStack() as st:
-            st.enter_context(mock.patch.object(ov, '_space', lambda sid: LEAGUE))
+            st.enter_context(mock.patch.object(ov, '_space', lambda sid: league))
             st.enter_context(mock.patch.object(ov, '_target', lambda sp: (object(), {}, True)))
             st.enter_context(mock.patch.object(ov, '_tasks_of', lambda sp: cfg))
             st.enter_context(mock.patch.object(ov, 'discover_projects', lambda c: {}))
             st.enter_context(mock.patch.object(dashboard, '_identity', lambda: ('Alpha', 'alpha@example.com')))
-            st.enter_context(mock.patch.object(install_config, 'jira_config', lambda: jira_config))
             st.enter_context(mock.patch.dict(mod.fn('check').__globals__, {'_open': open_fn or fake_open}))
             ov.cmd_sync(call=call, log=lines.append)
         return lines, pushes, reqs
@@ -709,22 +726,25 @@ class SyncStatuses(tm.Env):
         self.assertNotIn('tok-test-1', ' '.join(lines))
 
     def test_the_league_without_jira_base_has_no_statuses_and_no_network(self):
-        """Конфігу Jira нема (`jira_base` у `tasks.json` не задано): крок пропущено, мережі й виклику модуля нема, синк іде далі."""
+        """Запису `jira-tracker` нема (4d-4b; було: `jira_base` у `tasks.json` не задано): крок пропущено, мережі й виклику модуля нема, синк іде далі."""
         def boom(req, timeout):
-            raise AssertionError('мережа: Jira без конфігу не питається')
-        lines, pushes, reqs = self.run_league(open_fn=boom, jira_config=(None, None, None))
+            raise AssertionError('мережа: Jira без запису не питається')
+        lines, pushes, reqs = self.run_league(open_fn=boom, record=False)
         self.assertEqual(reqs, [])
         self.assertEqual(lines, self.snap['sync_cards']['log'])      # жодного рядка про Jira: «не налаштовано» — не збій
         cards = [c for p in pushes for c in p['cards']]
         self.assertEqual(len(cards), 4)
         self.assertTrue(all('jira_status' not in c for c in cards))
 
-    def test_the_real_install_config_without_jira_base_is_the_same(self):
-        """Те саме на справжньому `install_config.jira_config` (тимчасові HOME і `tasks.json` без `jira_base`)."""
+    def test_a_root_with_the_old_credentials_but_no_record_is_the_same(self):
+        """4d-4b (було `…real_install_config_without_jira_base…`): навіть кореня з усіма старими обліковими Jira й оточення `JIRA_*` замало —
+        без запису `jira-tracker` колбека нема і трекер не кличеться."""
         self.real_builtins()
-        tm._write(self.legacy, {'tasks': {}})
-        with mock.patch.object(tracker, 'statuses', side_effect=AssertionError('виклик трекера')):
-            cb = ov._statuses(LEAGUE)
+        league = self.liga_space(roles=('dashboard',))
+        tm._write(self.legacy, {'tasks': {}, 'jira_base': JIRA, 'jira_email': 'alpha@example.com', 'jira_token': 'tok-test-1'})
+        with mock.patch.dict(os.environ, {'JIRA_EMAIL': 'alpha@example.com', 'JIRA_TOKEN': 'tok-test-1'}), \
+                mock.patch.object(tracker, 'statuses', side_effect=AssertionError('виклик трекера')):
+            cb = ov._statuses(league)
         self.assertIsNone(cb)
 
     # ---- звичайний простір
