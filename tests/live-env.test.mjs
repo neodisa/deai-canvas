@@ -4,7 +4,25 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { applyLiveEnv, playwrightCache } from "./live/_env.mjs";
+
+const ENV_URL = new URL("./live/_env.mjs", import.meta.url).href;     // не залежить від cwd
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("test:live підключає _env.mjs через --import (playwright читає кеш при імпорті, раніше за фікстуру)", () => {
+  const script = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts["test:live"];
+  assert.match(script, /--import \.\/tests\/live\/_env\.mjs\b/);
+});
+
+test("ідентичність git — одне детерміноване місце: повторні виклики не плодять тек", () => {
+  const a = { HOME: mkdtempSync(path.join(tmpdir(), "h-")) };
+  const b = { HOME: mkdtempSync(path.join(tmpdir(), "h-")) };
+  applyLiveEnv(a, null);
+  applyLiveEnv(b, null);
+  assert.equal(a.GIT_CONFIG_GLOBAL, b.GIT_CONFIG_GLOBAL);
+  assert.match(readFileSync(a.GIT_CONFIG_GLOBAL, "utf8"), /live@example\.invalid/);
+});
 
 test("кеш Playwright береться з дому ОС, а не з $HOME", () => {
   const osHome = mkdtempSync(path.join(tmpdir(), "osh-"));
@@ -36,7 +54,7 @@ test("тимчасовий HOME без .gitconfig отримує вигадан�
 
 test("імпорт у дочірньому процесі з тимчасовим HOME виставляє обидві змінні", () => {
   const home = mkdtempSync(path.join(tmpdir(), "h-"));
-  const r = spawnSync(process.execPath, ["-e", `import("${path.resolve("tests/live/_env.mjs")}").then(()=>console.log(JSON.stringify({g:process.env.GIT_CONFIG_GLOBAL||null})))`],
+  const r = spawnSync(process.execPath, ["-e", `import(${JSON.stringify(ENV_URL)}).then(()=>console.log(JSON.stringify({g:process.env.GIT_CONFIG_GLOBAL||null})))`],
     { env: { PATH: process.env.PATH, HOME: home }, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.match(JSON.parse(r.stdout).g, /gitconfig$/);

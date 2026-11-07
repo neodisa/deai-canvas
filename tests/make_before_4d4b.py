@@ -16,9 +16,11 @@
   * `unmigrated` — ЛІГА з `held` на кроці 4d-3a: ролі веде `Implicit` (еталон таблиці «стало вимкнено»);
   * `plain`      — звичайний простір без інтеграцій.
 Секції: `capabilities` (+ `error_path`: нечитабельний `space.json`), `provider` (для простору ЛІГА і для неявного простору запиту), `api`
-(`/api/task`: пароль превʼю й гейт, канал; `/api/modules`; `/api/comment-config`; `/api/teams-mute`; `/api/tasks`), `vcs_target` (цілі й
+(`/api/task`: пароль превʼю й гейт, канал; `/api/modules`; `/api/comment-config`; `/api/teams-mute`; `/api/tasks-overview`), `vcs_target` (цілі й
 ЕФЕКТИВНІ ключ і IP), `registry_ssh` (ключ git реєстру), `startup_text` (рядки старту), `root_keys` (ключі кореня `tasks.json`),
-`isolation` (форми відповідей ізольованого прогону: рядки команди, статуси, мовчання Teams, `ctx` коментарів).
+`isolation` (форми відповідей ізольованого прогону: рядки команди, статуси, мовчання Teams, `ctx` коментарів),
+`dashboard_sync` (пуск синку дашборда на всіх п'яти стендах: `<non_isolated|isolated|no_overview>` × `<in_space|implicit_space>` →
+`{called, args}`; шпигун на `serve._overview_launch`, реальний `Handler._overview_sync`).
 
 ⚠️ ПІДПИСИ 0.20.0: `serve.vcs_target(cfg, tid, task, settings)`, `registry._ssh_key(cfg)`, `serve.preview_password(cfg, task)`; у новому коді —
 `vcs_target(tid, task, settings)`, `_ssh_key()`, `preview_password(task, space)`. Тести «після» кличуть нову форму. Не міняти тут.
@@ -218,7 +220,6 @@ def _startup_text(tmp, name):
 
 def _isolation(rig, sp):
     """Форми відповідей ІЗОЛЬОВАНОГО прогону (`DC_TASKS_FILE`): рядки команди, статуси, мовчання Teams, `ctx` коментарів (де беруться облікові)."""
-    import dashboard
     import serve
     out = {}
     env = {'DC_TASKS_FILE': rig.tasks_path, 'DC_NO_OVERVIEW': '1'}
@@ -242,6 +243,30 @@ def _isolation(rig, sp):
     return scrub(out, rig.home)
 
 
+def _dashboard_sync(rig, sp):
+    """Поведінка ПУСКУ синку дашборда (`Handler._overview_sync`, РЕАЛЬНИЙ метод) без процесів: шпигун на `serve._overview_launch` пише
+    «викликано чи ні» й аргументи `(ключ, legacy, ціль)`. Три оточення: `non_isolated` (шлях власника), `isolated` (лише `DC_TASKS_FILE`),
+    `no_overview` (`DC_NO_OVERVIEW`); кожне — для простору, ЗАФІКСОВАНОГО в запиті (`in_space`), і для НЕзафіксованого (`implicit_space`).
+    Форма значення: `{'called': bool, 'args': [key, legacy, target] | None}` або `{'raised': <тип>}`. Це читає паритет Task 15."""
+    import serve
+
+    def one(env, fixed):
+        calls = []
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(serve, '_overview_launch', lambda *a: calls.append(list(a))), \
+                    serve.spaces.request_space(sp['id'] if fixed else None):
+                serve.deai_modules.reset_caches()
+                serve.Handler._overview_sync(None)
+        except Exception as e:  # noqa: BLE001
+            return {'raised': type(e).__name__}
+        finally:
+            serve.deai_modules.reset_caches()
+        return {'called': bool(calls), 'args': calls[0] if calls else None}
+    envs = {'non_isolated': {}, 'isolated': {'DC_TASKS_FILE': rig.tasks_path}, 'no_overview': {'DC_NO_OVERVIEW': '1'}}
+    out = {k: {'in_space': one(e, True), 'implicit_space': one(e, False)} for k, e in envs.items()}
+    return scrub(out, rig.home)
+
+
 def _scenarios(tmp, name):
     rig, sp = _stand(tmp, name)
     out = {}
@@ -253,6 +278,7 @@ def _scenarios(tmp, name):
         out['capabilities'] = _capabilities(sp, rig)
         out['provider'] = _provider(sp)
         out['api'] = _api(rig, sp)
+        out['dashboard_sync'] = _dashboard_sync(rig, sp)
         if name != 'plain':
             out['vcs_target'] = _vcs_target(rig, sp)
             out['registry_ssh'] = _registry_ssh(rig)

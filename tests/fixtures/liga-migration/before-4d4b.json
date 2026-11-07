@@ -179,6 +179,52 @@
           "vcs": "git-sync"
         }
       },
+      "dashboard_sync": {
+        "isolated": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "no_overview": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "non_isolated": {
+          "implicit_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          },
+          "in_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          }
+        }
+      },
       "isolation": {
         "comments_ctx": {
           "key_set": true,
@@ -500,6 +546,52 @@
           "vcs": "git-sync"
         }
       },
+      "dashboard_sync": {
+        "isolated": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "no_overview": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "non_isolated": {
+          "implicit_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          },
+          "in_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          }
+        }
+      },
       "isolation": {
         "comments_ctx": {
           "key_set": true,
@@ -810,6 +902,45 @@
           "vcs": null
         }
       },
+      "dashboard_sync": {
+        "isolated": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "no_overview": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "non_isolated": {
+          "implicit_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        }
+      },
       "provider": {
         "implicit_space": {
           "comments": {
@@ -1057,6 +1188,52 @@
           "tokens": null,
           "tracker": "jira-tracker",
           "vcs": "git-sync"
+        }
+      },
+      "dashboard_sync": {
+        "isolated": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "no_overview": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "non_isolated": {
+          "implicit_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          },
+          "in_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          }
         }
       },
       "isolation": {
@@ -1389,6 +1566,52 @@
           "tokens": null,
           "tracker": "legacy",
           "vcs": "legacy"
+        }
+      },
+      "dashboard_sync": {
+        "isolated": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "no_overview": {
+          "implicit_space": {
+            "args": null,
+            "called": false
+          },
+          "in_space": {
+            "args": null,
+            "called": false
+          }
+        },
+        "non_isolated": {
+          "implicit_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          },
+          "in_space": {
+            "args": [
+              "legacy",
+              true,
+              [
+                "--space",
+                "legacy"
+              ]
+            ],
+            "called": true
+          }
         }
       },
       "isolation": {
