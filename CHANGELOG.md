@@ -125,7 +125,7 @@ The behaviour of 0.19.0 is pinned by the snapshot `tests/fixtures/liga-migration
 ### Known limits
 
 - **`abort-tracks` for more than 20 track ids is permanent** (`MAX_TRACKS = 20`): the person must clean `profile_repos` /
-  `design_work_roots` of the old file; LIGA stays without tracks in `space.json`, new tasks go to `default_task_root`.
+  `design_work_roots` of the old file; LIGA stays without tracks in `space.json`, new tasks go to the LIGA space folder (`track_root`).
 - **A small TOCTOU between the re-stat and the atomic write of the records** (`_commit_records`): a concurrent external edit of
   `tasks.json` in that window is overwritten (the `.bak` has the pre-step bytes).
 - **`tasks.json.bak` is a manual restore** (see Upgrading).

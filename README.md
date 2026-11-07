@@ -625,7 +625,7 @@ and `tasks.json.bak` is a manual copy.
 for every published task, and the preview without the gate. To 0.17: `restore <stamp-c> --hold`, then `restore <stamp-b> --hold`
 (0.17 ignores `compat` of the comments and git sync, so the comment channels would switch to `deai/<space>/<task>` and the git mirrors would
 be cloned again under `<DEAI_HOME>/cache`). Rotation: the Supabase key of the comments is a copy in `secrets.json` too (rotate it on
-Connections); `gitlab_ssh_key` / `gitlab_host_ip` in the root of `tasks.json` keep working until 4d-4.
+Connections); `gitlab_ssh_key` / `gitlab_host_ip` in the root of `tasks.json` keep working until 4d-4b (0.21).
 
 Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-d> --hold`, `<stamp-c>`, `<stamp-b>`, then `<stamp-a>`, since an earlier step is refused while a later one is applied); a `vercel-publish` card enabled by hand without `compat` publishes through the module path (new URLs, no gate); the fourth step writes the tracks even when they differ from the old adapter (the differences are notes of the step, see `CHANGELOG.md`), except for more than 20 track ids, which stays `abort-tracks` until `profile_repos` / `design_work_roots` are cleaned; a LIGA folder inside a git work tree is not
 migrated; a partial migration is final. The full list and the status codes are in `CHANGELOG.md`, `[0.20.0]`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
@@ -678,7 +678,7 @@ migrated; a partial migration is final. The full list and the status codes are i
        (`spaces.effective_space()`) and one isolation law: an isolated run reads the install config only from the root of its
        tasks file; the public contract (`capabilities` = `'legacy'`) is unchanged;
      - ✅ **4d-3** — explicit LIGA modules, with an automatic migration of its config (with a backup); the API value `'legacy'`
-       stays for a non-migrated LIGA until 4d-4. Three releases (owner decision 05.11.2026):
+       stays for a non-migrated LIGA until 4d-4c (0.22). Three releases (owner decision 05.11.2026):
        - ✅ **4d-3a** (0.17) — the migration mechanism (a dated backup, a mark, a restore, the CLI `bin/migrate_liga.py`), the
          explicit tracks, and the roles `tracker`, `dashboard` and `notify` as explicit modules; the setting `compat` replaces
          `ctx['legacy']`;

@@ -127,7 +127,7 @@ canvas for their workflow without touching the core.
        express through `space.json` yet:
        - ✅ **4d-3a** (0.17.0) — the mechanism, the tracks and the roles `tracker`, `dashboard`, `notify`;
        - ✅ **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
-       - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stays for a non-migrated LIGA: it goes from 4d-4);
+       - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stays for a non-migrated LIGA: it goes in 4d-4c, 0.22);
      - **4d-4** — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go. Three releases:
        - ✅ **4d-4a** (0.20.0) — the tracks of LIGA explicit (the fourth migration step), no adapter in the runtime, `profile` on the boundaries only;
        - **4d-4b** (0.21.0) — the last copies, the implicit provider, the core stops reading the originals;
