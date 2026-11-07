@@ -73,6 +73,19 @@ def main(argv=None):
         print('%s unhold: %s' % (a.mark, st))
         if st == 'unheld':
             print('  наступний запуск виконає крок: python3 bin/migrate_liga.py run')
+        else:
+            why = {
+                'refuse-mark': 'невідома позначка; чинні: ' + ', '.join(s.mark for s in liga_migrate.ALL_STEPS),
+                'refuse-not-held': 'крок не утримано (позначка не «вимкнено вручну») — знімати нічого',
+                'refuse-no-liga': 'простору ЛІГА в реєстрі нема',
+                'skip-layer-off': 'шар просторів вимкнено',
+                'abort-unhold': 'не вдалося зняти утримання (space.json не читається чи не пишеться): перевірте файл простору ЛІГА',
+                'skip-busy': 'міграцію зараз виконує інший процес: повторіть за мить',
+                'abort-lock': 'не вдалося взяти замок міграції: перевірте теку migrations/ у домі Deai',
+                'abort-internal': 'home не збігається з DEAI_HOME',
+            }.get(st)
+            if why:
+                print('  ' + why)
         return 0 if st == 'unheld' else 1
     step = liga_migrate.step_of_stamp(a.stamp) or liga_migrate.ALL_STEPS[0]     # крок визначає імʼя бекапу
     st, info = liga_migrate._restore(a.stamp, hold=a.hold)
@@ -83,7 +96,12 @@ def main(argv=None):
         print('  пізніший крок застосований: спершу відкотіть його бекап%s' % (
             ': python3 bin/migrate_liga.py restore %s [--hold]' % info['rollback_first'] if info.get('rollback_first') else ''))
     if st == 'refuse-tasks-unreadable':                      # 4d-4b: живий tasks.json не читається — відкат кроку Е нічого не записав
-        print('  живий tasks.json не читається: виправте файл (чи відновіть його з tasks.json.bak) і повторіть відкат')
+        print('  живий tasks.json не читається або його нема: виправте файл (чи відновіть його з tasks.json.bak), '
+              'а коли файла нема — створіть його (достатньо {}), і повторіть відкат')
+    if st == 'restored' and info.get('root_fallback'):
+        print('  перелік ключів кореня узято з бекапу (позначка кроку нечитана чи без переліку): повернено всі відсутні оригінали')
+    if st == 'restored' and info.get('root_durability_unconfirmed'):
+        print('  корінь tasks.json записано, але довговічність не підтверджено (fsync)')
     return 0 if st == 'restored' else 1
 
 

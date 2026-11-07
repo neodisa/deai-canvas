@@ -33,6 +33,24 @@ class AtomicFsync(unittest.TestCase):
         with open(self.path) as f:
             self.assertEqual(json.load(f), {'a': 2})
 
+    def test_fsync_failure_after_rename_keeps_the_file_and_raises_unconfirmed(self):
+        """Збій `fsync` ПІСЛЯ `os.replace`: файл уже на місці (не «обрізаний і не записаний»), виняток — окремий підклас `OSError`."""
+        with mock.patch.object(atomic_io, 'fsync_path', side_effect=OSError('no fsync')):
+            with self.assertRaises(atomic_io.DurabilityUnconfirmed) as cm:
+                atomic_io.atomic_write_json(self.path, {'a': 3}, fsync=True)
+        self.assertIsInstance(cm.exception, OSError)
+        with open(self.path) as f:
+            self.assertEqual(json.load(f), {'a': 3})
+        self.assertEqual([n for n in os.listdir(self.tmp) if n.endswith(atomic_io.TMP_SUFFIX)], [])
+
+    def test_failure_before_the_rename_is_still_a_plain_error(self):
+        with mock.patch.object(atomic_io.os, 'replace', side_effect=OSError('boom')):
+            with self.assertRaises(OSError) as cm:
+                atomic_io.atomic_write_json(self.path, {'a': 4}, fsync=True)
+        self.assertNotIsInstance(cm.exception, atomic_io.DurabilityUnconfirmed)
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(os.listdir(self.tmp), [])
+
     def test_fsync_path_flushes_a_file_and_a_directory(self):
         open(self.path, 'w').close()
         with mock.patch.object(atomic_io, '_fcntl', None), mock.patch.object(atomic_io.os, 'fsync') as fs:

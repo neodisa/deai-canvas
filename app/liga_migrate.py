@@ -41,7 +41,7 @@ import implicit
 import install_config
 import spaces
 import tracks as tracks_core
-from atomic_io import TMP_SUFFIX, atomic_write_json, fsync_path
+from atomic_io import TMP_SUFFIX, DurabilityUnconfirmed, atomic_write_json, fsync_path
 
 try:
     import fcntl
@@ -1123,13 +1123,15 @@ def _verify_copies(sid, space_path, d):
     return True
 
 
-def _commit_originals(sid, space_path, planned_remove):
+def _commit_originals(sid, space_path, planned_remove, unconfirmed=None):
     """Видаляє з кореня `tasks.json` ЛІГИ ключі зі списку, чия рівність з копією ПІДТВЕРДЖЕНА щойно перечитаним диском. Під `WRITE_LOCK`:
     `_file_sig` → читання → повторне звіряння (людина могла змінити налаштування між копією й видаленням) → `.bak` → `_file_sig` →
     `atomic_write_json`. Ключі видаляються ПО ОДНОМУ з щойно прочитаного файла: записи задач і чужі ключі — як є. Повертає
     список видалених; постійна гонка — `OSError`.
     ⛔ Ключ, що в свіжому рішенні ще потребує КОПІЇ (`fresh['copied']`: людина стерла налаштування між перевіркою й видаленням), не
-    видаляється: корінь тоді — єдина копія значення."""
+    видаляється: корінь тоді — єдина копія значення.
+    `fsync` ПІСЛЯ rename не вдався (`DurabilityUnconfirmed`): корінь УЖЕ переписано — це не збій; у список `unconfirmed` (якщо передано)
+    кладеться `True`, а викликач звітує «записано, довговічність не підтверджено»."""
     path = install_config.legacy_tasks_path()
     sp = os.path.join(space_path, 'space.json')
     with spaces.WRITE_LOCK:
@@ -1145,7 +1147,11 @@ def _commit_originals(sid, space_path, planned_remove):
                 del cfg[k]
             shutil.copy2(path, path + '.bak')
             if _file_sig(path) == before:
-                atomic_write_json(path, cfg, fsync=True)     # єдиний видаляючий запис кроку Е: довговічно (не `_commit_records`)
+                try:
+                    atomic_write_json(path, cfg, fsync=True)     # єдиний видаляючий запис кроку Е: довговічно (не `_commit_records`)
+                except DurabilityUnconfirmed:                    # файл уже записано: звітуємо, не відкочуємо й не падаємо
+                    if unconfirmed is not None:
+                        unconfirmed.append(True)
                 return todo
         raise OSError('tasks file keeps changing')
 
@@ -1197,8 +1203,9 @@ def _run_originals(home, step, p, space_path):
         info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
         _write_last(info, step)
         return 'abort-write', info
+    unconfirmed = []
     try:
-        removed = _commit_originals(sid, space_path, d['remove'])
+        removed = _commit_originals(sid, space_path, d['remove'], unconfirmed)
     except (OSError, ValueError, RecursionError, KeyError, TypeError, deai_modules.ModuleError):
         info = _info(p, status='abort-originals', reason=_REASONS['abort-originals'], backup=stamp)
         _write_last(info, step)
@@ -1212,6 +1219,8 @@ def _run_originals(home, step, p, space_path):
         return 'abort-write', info
     info = _info(p, status=st, reason=_RUN_REASONS.get(st) or _REASONS.get(st, ''), backup=stamp)
     info.update(copied=sorted(d['copied']), removed=sorted(removed), kept=kept)
+    if unconfirmed:
+        info['durability_unconfirmed'] = True
     if st == 'done':
         _write_last(info, step)
     return st, info
@@ -1422,7 +1431,8 @@ def _restore(stamp, hold=False, home=None):
     `secrets.json` (інші простори/модулі, додані після міграції) ЗАВЖДИ лишаються; файл повертається побайтно, коли чужого
     вмісту не змінилось, інакше записується злиттям. Старий `tasks.json` і `spaces.json` не чіпаємо.
     ⛔ ПЕРЕД записом поточний `space.json` і ліговий шматок секретів кладуться в `backups/<бекап>-pre-restore/` (правки після
-    міграції не губляться). `hold=True` дописує `migrations.<позначка кроку цього бекапу>.held` (лише його; ранній `held` тримає й наступні) — наступний старт не мігрує. Невідоме/підроблене імʼя —
+    міграції не губляться). Крок Е спершу домерджує корінь: якщо він відмовив чи збоїв (`refuse-tasks-unreadable`, `abort-restore`), НІЧОГО не
+    записано, а запобіжну копію прибрано (осиротілої теки нема). `hold=True` дописує `migrations.<позначка кроку цього бекапу>.held` (лише його; ранній `held` тримає й наступні) — наступний старт не мігрує. Невідоме/підроблене імʼя —
     відмова (`refuse-stamp`/`refuse-tampered`/`refuse-no-liga`), нічого не пишемо. Увесь відкат — під міжпроцесним замком
     (`skip-busy`). Повертає `(статус, підсумок)`: статус `restored`, відмова, `skip-busy` чи `abort-restore`."""
     try:
@@ -1463,7 +1473,10 @@ def _restore_root(sp, d):
     Перелік — з позначки `removed` ПОТОЧНОГО `space.json` (читаємо ДО його заміни); позначка нечитана чи без `removed` — усі `ORIGINAL_KEYS`
     бекапного `tasks.json`. Значення — з бекапу. Додається ЛИШЕ ключ, якого в живому корені нема; свій ключ людини лишається (`kept-live`).
     Під `WRITE_LOCK`: `_file_sig` → читання → `.bak` → `_file_sig` → `atomic_write_json`; ретраї `_RECORDS_ATTEMPTS`, постійна гонка — `OSError`.
-    Живий файл не читається — `_Stop('refuse-tasks-unreadable')` (нічого не записано). Повертає `(повернуто, kept_live)` — списки імен ключів."""
+    Живий файл не читається чи ЙОГО НЕМА — `_Stop('refuse-tasks-unreadable')` (нічого не записано). Повертає `(повернуто, kept_live, flags)`: списки
+    імен ключів і `flags` = `{'root_fallback': перелік узято з усіх ORIGINAL_KEYS (позначка нечитана/без `removed`/`held`),
+    'root_durability_unconfirmed': fsync після rename не вдався, файл записано}`.
+    ⚠️ `tasks.json.bak` при цьому ПЕРЕЗАПИСУЄТЬСЯ станом ПЕРЕД відкатом (стан до кроку Е лишається в `backups/<бекап>`)."""
     keys = None
     try:
         mark = (deai_modules._load_space_json(sp).get('migrations') or {}).get(STEP_E.mark)
@@ -1476,6 +1489,7 @@ def _restore_root(sp, d):
         old = json.load(f)
     if not isinstance(old, dict):
         raise ValueError('tasks backup: not an object')
+    flags = {'root_fallback': keys is None, 'root_durability_unconfirmed': False}
     keys = [k for k in (ORIGINAL_KEYS if keys is None else keys) if k in old]
     path = install_config.legacy_tasks_path()
     with spaces.WRITE_LOCK:
@@ -1490,13 +1504,16 @@ def _restore_root(sp, d):
             add = [k for k in keys if k not in cfg]
             kept = sorted(k for k in keys if k in cfg)
             if not add:
-                return [], kept
+                return [], kept, flags
             for k in add:
                 cfg[k] = old[k]
             shutil.copy2(path, path + '.bak')
             if _file_sig(path) == before:
-                atomic_write_json(path, cfg, fsync=True)
-                return sorted(add), kept
+                try:
+                    atomic_write_json(path, cfg, fsync=True)
+                except DurabilityUnconfirmed:                    # файл уже записано: звітуємо, не абортуємо
+                    flags['root_durability_unconfirmed'] = True
+                return sorted(add), kept, flags
         raise OSError('tasks file keeps changing')
 
 
@@ -1532,11 +1549,16 @@ def _restore_locked(stamp, hold, home):
     except Exception:  # noqa: BLE001 — запобіжної копії нема: нічого не відкочуємо
         return 'abort-restore', {}
     root_restored = kept_live = None
+    root_flags = {}
     if step.originals:                                       # 4d-4b: корінь ПЕРШИМ — збій далі лишає простір мігрованим І з поверненими ключами
         try:
-            root_restored, kept_live = _restore_root(sp, d)
-        except _Stop as s:
-            return s.status, {}
+            root_restored, kept_live, root_flags = _restore_root(sp, d)
+        except BaseException as s:
+            # m4: до цього місця нічого, крім запобіжної копії, не записано — відмова/збій не лишає осиротілої `-pre-restore`.
+            shutil.rmtree(os.path.join(spaces.home(), 'backups', safety), ignore_errors=True)
+            if isinstance(s, _Stop):
+                return s.status, {}
+            raise
     # Спершу space.json: збій між двома записами лишає простір НЕмігрованим (секрети без запису нешкідливі), а не навпаки.
     with spaces.WRITE_LOCK:
         if 'space.json' in files:
@@ -1575,7 +1597,7 @@ def _restore_locked(stamp, hold, home):
     info = {'status': 'restored', 'reason': 'простір ЛІГА повернено з бекапу', 'space_id': sid, 'backup': stamp,
             'held': bool(hold), 'safety_copy': safety}
     if step.originals:
-        info.update(root_restored=root_restored, kept_live=kept_live)
+        info.update(root_restored=root_restored, kept_live=kept_live, **root_flags)
     _write_last(info, step)
     return 'restored', info
 
@@ -1593,7 +1615,7 @@ _ROLE_FIX = {
     'no-jira': _ENTRY_FIX, 'no-supabase': _ENTRY_FIX, 'bad-url': _ENTRY_FIX, 'not-migrated': _ENTRY_FIX,
     'publisher-present': 'публікацію веде інший модуль простору — так і було',
     'module-present': 'модуль ролі вже є в просторі — так і було',
-    'skip-path-in-git': _HINTS['skip-path-in-git'],
+    'skip-path-in-git': 'перенесіть теку простору ЛІГА поза робоче дерево git, далі: ' + _RUN_FIX,      # коротко: повна підказка друкується в рядку кроку раз
     'skip-tasks-unreadable': 'виправте старий tasks.json і запустіть: ' + _RUN_FIX,
     'skip-space-json-unreadable': 'виправте space.json простору ЛІГА і запустіть: ' + _RUN_FIX,
     'skip-registry-unreadable': 'виправте реєстр просторів (spaces.json) і запустіть: ' + _RUN_FIX,
@@ -1605,6 +1627,7 @@ _ROLE_FIX = {
     'secrets-unreadable': 'secrets.json не читається: виправте файл у домі Deai',
     'space-json-unreadable': 'space.json не читається: виправте файл простору ЛІГА',
     'no-record': 'запустіть: ' + _RUN_FIX,
+    'record-removed': 'запис видалено після міграції: додайте його на екрані «Підключення» чи поверніть простір з бекапу (bin/migrate_liga.py restore <бекап>)',
 }
 
 
@@ -1621,9 +1644,11 @@ def _held_mark(mig, owner):
     return None
 
 
-def _reason_from_reports(role, owner, mig, last):
+def _reason_from_reports(role, owner, mig, last, home=None):
     """Код причини, чому в просторі нема ЗАПИСУ `role` (за порядком спеки §4.1): `held` (власника чи раннього кроку) → `skipped` кроку-власника
-    (звіт `last.json` цього кроку) → позначка кроку (застосований без ролі — `not-migrated`) → останній звіт кроку (`skip-*`/`abort-*`) → `no-record`."""
+    (звіт `last.json` цього кроку) → позначка кроку (застосований без ролі — `not-migrated`; роль у `roles` позначки, а запису нема —
+    `record-removed`) → статус ЧИСТОГО `plan(step=owner)` (`skip-path-in-git`, `skip-tasks-unreadable`, `abort-*`…: `last.json` постійних
+    пропусків не зберігає, тож читати його тут — мертва гілка) → `no-record`."""
     mark = mig.get(owner.mark) if isinstance(mig, dict) else None
     rep = ((last or {}).get('steps') or {}).get(owner.mark) if isinstance(last, dict) else None
     rep = rep if isinstance(rep, dict) else {}
@@ -1632,10 +1657,11 @@ def _reason_from_reports(role, owner, mig, last):
         return 'skip-held'
     if role in skipped and skipped[role]:
         return skipped[role]
-    if isinstance(mark, dict):                                # крок застосований, а запису нема: роль пропущено (код не збережено)
-        return 'not-migrated' if role not in (mark.get('roles') or []) else 'no-record'
-    st = rep.get('status')
-    if isinstance(st, str) and (st.startswith('skip-') or st.startswith('abort-')) and st not in ('skip-done', 'skip-nothing', 'skip-layer-off'):
+    if isinstance(mark, dict):                                # крок застосований, а запису нема: роль пропущено (код не збережено) чи запис видалено
+        return 'not-migrated' if role not in (mark.get('roles') or []) else 'record-removed'
+    st = plan(home, owner).get('status')                      # чистий розрахунок: нічого не пише
+    if isinstance(st, str) and (st.startswith('skip-') or st.startswith('abort-')) and st not in (
+            'skip-done', 'skip-nothing', 'skip-layer-off', 'skip-no-liga', 'skip-integrations-off', 'skip-held', 'abort-internal'):
         return st
     return 'no-record'
 
@@ -1669,9 +1695,9 @@ def roles_state(home=None):
         reason = None
         try:
             prov = deai_modules._provider_for(role, space)
-            if isinstance(prov, deai_modules.Module) and prov.id == mid:
+            if isinstance(prov, deai_modules.Module):         # m5: ЯВНИЙ модуль ролі — свій чи ІНШИЙ (`static-publish`…): роль працює, з його id
                 deai_modules.module_ctx(space, prov)
-                out.append({'role': role, 'module': mid, 'on': True, 'reason': None, 'fix': ''})
+                out.append({'role': role, 'module': prov.id, 'on': True, 'reason': None if prov.id == mid else 'served-by:%s' % prov.id, 'fix': ''})
                 continue
         except deai_modules.ModuleError as e:
             reason = e.code if e.code in _ROLE_FIX else 'module-error'
@@ -1680,13 +1706,15 @@ def roles_state(home=None):
             if e_ is not None and e_.get('enabled') is not True:
                 reason = 'disabled'
             elif e_ is None:
-                reason = _reason_from_reports(role, owner, mig, last)
+                reason = _reason_from_reports(role, owner, mig, last, home)
             else:
                 reason = 'module-error'
         if reason == 'skip-held':
             fix = 'python3 bin/migrate_liga.py unhold %s, далі: %s' % (_held_mark(mig, owner) or owner.mark, _RUN_FIX)
         elif reason.startswith('abort-'):
-            fix = 'python3 bin/migrate_liga.py status, усуньте причину, далі: ' + _RUN_FIX
+            fix = 'дивіться python3 bin/migrate_liga.py status (рядок кроку %s) і усуньте причину, далі: %s' % (owner.mark, _RUN_FIX)
+        elif reason == 'not-migrated' and role in ('vcs', 'comments'):
+            fix = 'запустіть %s (або увімкніть модуль на екрані «Підключення»)' % _RUN_FIX
         else:
             fix = _ROLE_FIX.get(reason, _RUN_FIX)
         out.append({'role': role, 'module': mid, 'on': False, 'reason': reason, 'fix': fix})
@@ -1712,6 +1740,8 @@ def originals_summary(info):
             parts.append('%s: %s' % (label, ', '.join(info[key])))
     if info.get('notes'):
         parts.append('нотатки: ' + ', '.join(info['notes']))
+    if info.get('durability_unconfirmed'):
+        parts.append('записано, довговічність не підтверджено (fsync)')
     return '; '.join(parts) or 'нічого не змінено'
 
 
@@ -1720,6 +1750,8 @@ def unhold(mark, home=None):
     що є РІВНО `{held: true}` (позначка застосованого кроку — відмова `refuse-not-held`); невідомий ключ — `refuse-mark`. Під міжпроцесним
     замком і `WRITE_LOCK`. Повертає статус: `unheld`, `refuse-mark`, `refuse-not-held`, `refuse-no-liga`, `skip-busy`, `skip-layer-off`, `abort-unhold`."""
     try:
+        if home and os.path.realpath(os.path.expanduser(home)) != os.path.realpath(spaces.home()):     # як `_run`: запис пішов би в іншу теку
+            return 'abort-internal'
         step = next((s for s in ALL_STEPS if s.mark == mark), None)
         if step is None:
             return 'refuse-mark'
@@ -1798,7 +1830,7 @@ def status_text(st):
             if m is None:
                 lines.append('  позначки нема: міграція ще не виконана (або відкочена)')
             elif m.get('held'):
-                lines.append('  позначка: вимкнено вручну (held)')
+                lines.append('  позначка: вимкнено вручну (held); зняти: python3 bin/migrate_liga.py unhold %s' % key)
             else:
                 tr = (', напрямки: ' + ('так' if m.get('tracks') else 'ні')) if _step(key).tracks else ''     # рядок напрямків — лише кроку з напрямками
                 if _step(key).ungated:                                       # 4d-4a: записи й нотатки (лише коди, без шляхів і значень)
@@ -1825,7 +1857,8 @@ def status_text(st):
         if all(r['reason'] == 'integrations-off' for r in roles):
             lines.append('  інтеграції вимкнено — так і було')
         else:
-            lines.extend('  %s (%s): %s' % (r['role'], r['module'], 'так' if r['on'] else 'ні (%s)' % r['reason']) for r in roles)
+            lines.extend('  %s (%s): %s' % (r['role'], r['module'], ('так (інший модуль)' if str(r['reason']).startswith('served-by:') else 'так')
+                                              if r['on'] else 'ні (%s)' % r['reason']) for r in roles)
     return '\n'.join(lines)
 
 
@@ -1897,12 +1930,19 @@ def startup():
                 return 'refuse-real-home'
 
         stamps_done = []                                                     # бекапи кроків, виконаних на цьому старті (у порядку a, b, c)
+        repeats = {}                                                         # (статус, причина) постійного пропуску → позначки кроків-повторів
 
         def announce(mark, st, info):
             done.append(st)
             if mark == STEP_D.mark and tracks_not_migrated(st):             # 4d-4a: що буде з напрямками, коли крок не виконано
                 hints_tracks.append(TRACKS_NOT_MIGRATED)
             if st not in ('skip-layer-off', 'skip-done', 'skip-integrations-off') and not st.startswith('skip-no'):
+                if st.startswith('skip-'):                                   # M1: той самий постійний пропуск на кількох кроках — один рядок
+                    key = (st, info.get('reason') or '')
+                    if key in repeats:
+                        repeats[key].append(mark)
+                        return
+                    repeats[key] = []
                 print('%s: %s — %s' % (mark, st, info.get('reason') or ''), file=sys.stderr)
                 if info.get('hint') and info['hint'] not in hints:           # однакова підказка (тека в git) — раз на старт
                     hints.add(info['hint'])
@@ -1925,6 +1965,9 @@ def startup():
         try:
             run_all(None, on_result=announce)
         finally:
+            for (rst, _reason), marks in repeats.items():
+                if marks:
+                    print('  те саме для: %s (%s)' % (', '.join(marks), rst), file=sys.stderr)
             for line in hints_tracks:                                       # після рядка статусу кроку (він друкується в `announce`)
                 print('  ' + line, file=sys.stderr)
             # ⛔ LIFO: підказка відкату — ОДНА, для найпізнішого виконаного кроку (відкат раннього при застосованому пізнішому — відмова).
@@ -1933,8 +1976,11 @@ def startup():
                 if len(stamps_done) > 1:
                     print('  раніші кроки (%s) — лише після відкату пізніших, у зворотному порядку' % ', '.join(stamps_done[:-1]), file=sys.stderr)
         if not implicit.isolated():                                          # 4d-4b: кожна вимкнена роль — рядком, причина й команда виправлення
-            for line in roles_lines(roles_state()):
-                print(line, file=sys.stderr)
+            try:                                                             # I3: звіт про ролі не має перетворити вдалу міграцію на `abort-internal`
+                for line in roles_lines(roles_state()):
+                    print(line, file=sys.stderr)
+            except Exception as e:  # noqa: BLE001 — лише імʼя типу
+                print('ролі ЛІГИ: стан не визначено (%s)' % type(e).__name__, file=sys.stderr)
         # abort не маскуємо пізнішим успіхом: перший `abort-*`, інакше перший не-`skip-*`, інакше перший
         return (next((s for s in done if s.startswith('abort-')), None) or next((s for s in done if not s.startswith('skip-')), None)
                 or (done[0] if done else None))

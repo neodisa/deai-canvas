@@ -1582,7 +1582,7 @@ class TwoStepsStartupTest(_TwoSteps):
             st, err = self.start()
         self.assertEqual(st, 'abort-provider')
         self.assertEqual(self.backups(), [])
-        self.assertNotIn('liga-4d3b', err)
+        self.assertNotIn('liga-4d3b: ', err)                          # рядка КРОКУ нема (назва кроку в підказці ролі — не рядок кроку)
         last = self.read_json(self.deai, 'migrations', 'last.json')
         self.assertEqual((last['status'], last['step']), ('abort-provider', 'liga-4d3a'))
         self.assertEqual(list(last['steps']), ['liga-4d3a'])
@@ -1652,7 +1652,8 @@ class TwoStepsStartupTest(_TwoSteps):
         st, err = self.start()
         self.assertEqual(err.count('Перенесіть теку простору ЛІГА'), 1)
         self.assertIn('liga-4d3a: skip-path-in-git', err)
-        self.assertIn('liga-4d3b: skip-path-in-git', err)
+        self.assertEqual(err.count('skip-path-in-git —'), 1)           # M1: однаковий постійний пропуск — один рядок статусу
+        self.assertIn('те саме для: liga-4d3b', err)
 
     def setUp_fresh(self):
         """Чистий дім між варіантами одного тесту (реєстр і конфіг — як на старті стенда)."""
@@ -1687,8 +1688,8 @@ class TwoStepsStartupTest(_TwoSteps):
         self.assertEqual(st, 'skip-done')
         self.assertEqual(err.splitlines(), [
             'ролі ЛІГИ вимкнено: publish (vercel-publish) — no-record; виправити: запустіть: python3 bin/migrate_liga.py run',
-            'ролі ЛІГИ вимкнено: vcs (git-sync) — not-migrated; виправити: додайте адресу й облікові на екрані «Підключення» '
-            '(змінні оточення й pipeline-feedback більше не читаються)'])
+            'ролі ЛІГИ вимкнено: vcs (git-sync) — not-migrated; виправити: запустіть python3 bin/migrate_liga.py run '
+            '(або увімкніть модуль на екрані «Підключення»)'])
         self.assertEqual(self.snapshot_tree(), before)
 
     def test_run_all_returns_marks_statuses_infos(self):

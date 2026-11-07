@@ -1079,8 +1079,7 @@ class PublisherPresent(_StepC):
         before = self.snapshot_tree()
         st, err = self.start()
         self.assertEqual(st, 'skip-done')
-        self.assertEqual(err.splitlines(), [
-            'ролі ЛІГИ вимкнено: publish (vercel-publish) — no-record; виправити: запустіть: python3 bin/migrate_liga.py run'])
+        self.assertEqual(err, '')                                    # I2: роль веде інший явний модуль — вона `on`, старт знову мовчить
         self.assertEqual(self.snapshot_tree(), before)
         code, out, _e = self.cli('dry-run')
         self.assertEqual(code, 0)
@@ -1331,9 +1330,9 @@ class ThreeStepsStartup(_StepC):
             st, err = self.start()
         self.assertEqual(st, 'abort-provider')
         self.assertEqual(self.backups(), [])
-        self.assertNotIn('liga-4d3b', err)
-        self.assertNotIn('liga-4d3c', err)
-        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertNotIn('liga-4d3b: ', err)                          # рядка КРОКУ нема (назва кроку в підказці ролі — не рядок кроку)
+        self.assertNotIn('liga-4d3c: ', err)
+        last =self.read_json(self.deai, 'migrations', 'last.json')
         self.assertEqual((last['status'], last['step'], list(last['steps'])), ('abort-provider', 'liga-4d3a', ['liga-4d3a']))
 
     def test_skip_nothing_of_a_and_b_does_not_block_c(self):

@@ -8,6 +8,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+import atomic_io  # noqa: E402
 import spaces_guard  # noqa: E402
 from test_liga_migrate import _WriteStand  # noqa: E402
 
@@ -499,6 +500,18 @@ class RunE(_StandE):
         for k in self.ALL:
             self.assertNotIn(k, self.tasks())
 
+    def test_fsync_failure_after_rename_is_reported_not_aborted(self):
+        """m2: корінь УЖЕ переписано, лише `fsync` після rename збоїв: `done` (позначка є) + прапорець у звіті й підсумку, а не `abort-originals`."""
+        self.root()
+        with self.mock.patch.object(atomic_io, 'fsync_path', side_effect=OSError('no fsync')):
+            st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertIs(info['durability_unconfirmed'], True)
+        for k in self.ALL:
+            self.assertNotIn(k, self.tasks())
+        self.assertEqual(self.mark()['removed'], sorted(self.ALL))
+        self.assertIn('довговічність', self.lm.originals_summary(info))
+
     def test_idempotent(self):
         self.root()
         self.assertEqual(self.run_e()[0], 'done')
@@ -558,6 +571,7 @@ class RestoreE(_StandE):
                 self.assertEqual(t[k], self.cfg[k], k)
         self.assertEqual(info['root_restored'], sorted(k for k in self.ALL if k != 'preview_password'))
         self.assertEqual(info['kept_live'], ['preview_password'])
+        self.assertIs(info['root_fallback'], False)                       # перелік ключів — з позначки `removed`
         self.assertEqual(self.read_json(self.space_path()), before_space)
         self.assertNotIn('password', self.read_json(self.secrets_path())['legacy'].get('vercel-publish', {}))
 
@@ -601,6 +615,7 @@ class RestoreE(_StandE):
         self.assertEqual(st, 'restored')
         self.assertEqual(info['root_restored'], sorted(self.ALL))
         self.assertEqual(self.tasks()['preview_password'], self.PW)
+        self.assertIs(info['root_fallback'], True)                        # m1: перелік узято з усіх `ORIGINAL_KEYS`, а не з позначки
 
     def test_restore_fallback_when_space_json_is_unreadable(self):
         stamp = self.ran()
@@ -608,6 +623,29 @@ class RestoreE(_StandE):
         st, info = self.lm._restore(stamp)
         self.assertEqual(st, 'restored')
         self.assertEqual(info['root_restored'], sorted(self.ALL))
+        self.assertIs(info['root_fallback'], True)
+
+    def test_restore_fallback_when_the_mark_is_held(self):
+        stamp = self.ran()
+        sj = self.read_json(self.space_path())
+        sj['migrations'][self.E.mark] = {'held': True}
+        self._write(self.space_path(), sj)
+        st, info = self.lm._restore(stamp)
+        self.assertEqual((st, info['root_fallback']), ('restored', True))
+
+    def pre_restore_dirs(self):
+        root = os.path.join(self.deai, 'backups')
+        return sorted(n for n in os.listdir(root) if n.endswith('-pre-restore') or '-pre-restore-' in n)
+
+    def test_restore_fsync_failure_after_rename_is_reported_not_aborted(self):
+        """m2: `fsync` ПІСЛЯ rename не вдався — файл уже записано: відкат не `abort-restore`, а `restored` + прапорець."""
+        stamp = self.ran()
+        with self.mock.patch.object(atomic_io, 'fsync_path', side_effect=OSError('no fsync')):
+            st, info = self.lm._restore(stamp)
+        self.assertEqual(st, 'restored')
+        self.assertIs(info['root_durability_unconfirmed'], True)
+        self.assertEqual(self.tasks()['jira_base'], self.JIRA_BASE)       # ключі справді повернено
+        self.assertEqual([n for n in os.listdir(os.path.dirname(self.tasks_path)) if n.endswith('.tmp')], [])
 
     def test_restore_aborts_when_the_live_file_keeps_changing(self):
         stamp = self.ran()
@@ -622,6 +660,7 @@ class RestoreE(_StandE):
         self.assertEqual(st, 'abort-restore')
         self.assertEqual(self.read(self.tasks_path), tasks_before)
         self.assertEqual(self.read(self.space_path()), space_before)         # корінь першим: space.json не чіпано
+        self.assertEqual(self.pre_restore_dirs(), [])                         # m4: збій до запису не лишає осиротілої запобіжної копії
 
     def test_restore_refuses_when_the_live_file_is_unreadable(self):
         stamp = self.ran()
@@ -631,6 +670,19 @@ class RestoreE(_StandE):
         self.assertEqual(st, 'refuse-tasks-unreadable')
         self.assertEqual(self.read(self.tasks_path), b'{broken')
         self.assertEqual(self.read(self.space_path()), space_before)
+        self.assertEqual(self.pre_restore_dirs(), [])                         # m4: відмова — нічого не записано, зокрема й `-pre-restore`
+
+    def test_restore_with_a_missing_live_file_refuses_and_the_cli_says_to_recreate_it(self):
+        """m3: ВІДСУТНІЙ живий tasks.json теж `refuse-tasks-unreadable`; підказка CLI каже створити файл."""
+        stamp = self.ran()
+        os.remove(self.tasks_path)
+        self.assertEqual(self.lm._restore(stamp)[0], 'refuse-tasks-unreadable')
+        code, out, _e = self.cli('restore', stamp)
+        self.assertEqual(code, 1)
+        self.assertIn('нема', out)
+        self.assertIn('створіть', out)
+        self.assertFalse(os.path.exists(self.tasks_path))
+        self.assertEqual(self.pre_restore_dirs(), [])
 
     def test_lifo_five_steps(self):
         self.root()
@@ -701,14 +753,70 @@ class RolesState(_StandE):
             self.assertEqual(r['reason'], 'skip-held', role)
             self.assertIn('migrate_liga.py unhold liga-4d3a', r['fix'], role)
 
-    def test_last_report_skip_codes_have_their_own_fix(self):
+    def test_permanent_skip_codes_come_from_the_real_plan_not_from_last_json(self):
+        """I1: постійні пропуски (`_not_ready` пише їх НЕ в `last['steps']`) — реальні сценарії: тека простору в git; нечитаний старий tasks.json."""
         self.rec_all(drop=('vercel-publish',))
-        for code, needle in (('skip-path-in-git', 'поза робоче дерево git'), ('skip-tasks-unreadable', 'tasks.json'),
-                             ('skip-space-json-unreadable', 'space.json'), ('abort-write', 'status'), ('skip-busy', 'повторіть')):
-            self._write(os.path.join(self.deai, 'migrations', 'last.json'), {'steps': {'liga-4d3c': {'status': code}}})
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        r = self.by_role()['publish']
+        self.assertEqual(r['reason'], 'skip-path-in-git')
+        self.assertIn('поза робоче дерево git', r['fix'])
+        self.assertNotEqual(r['reason'], 'no-record')
+        os.rmdir(os.path.join(self.space_dir, '.git'))
+        self._write(self.tasks_path, '{broken')
+        r = self.by_role()['publish']
+        self.assertEqual(r['reason'], 'skip-tasks-unreadable')
+        self.assertIn('tasks.json', r['fix'])
+
+    def test_real_startup_with_the_space_in_git_names_the_cause_not_run(self):
+        """I1: справжній старт (простір у git work tree): роль `publish` — `skip-path-in-git` з підказкою перенести теку, а не оманливий `no-record → run`."""
+        self.rec_all(drop=('vercel-publish',))
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        _st, err = self.quiet(self.lm.startup)
+        line = [ln for ln in err.splitlines() if ln.startswith('ролі ЛІГИ вимкнено: publish')]
+        self.assertEqual(len(line), 1, err)
+        self.assertIn('skip-path-in-git', line[0])
+        self.assertNotIn('no-record', line[0])
+
+    def test_abort_code_from_the_plan_points_to_status(self):
+        self.rec_all(drop=('vercel-publish',))
+        with self.mock.patch.object(self.lm, 'plan', lambda *a, **k: {'status': 'abort-write'}):
             r = self.by_role()['publish']
-            self.assertEqual(r['reason'], code)
-            self.assertIn(needle, r['fix'], code)
+        self.assertEqual(r['reason'], 'abort-write')
+        self.assertIn('migrate_liga.py status', r['fix'])
+        self.assertIn('рядок кроку', r['fix'])
+
+    def test_record_deleted_after_the_step_is_not_told_to_run(self):
+        """I1: крок застосовано і роль у `roles` позначки, а запису нема (людина видалила): окремий код; `run` нічого б не зробив."""
+        self.rec_all(drop=('jira-tracker',), migrations={'liga-4d3a': {'at': 'x', 'roles': ['dashboard', 'notify', 'tracker'], 'tracks': False, 'backup': 'b'}})
+        r = self.by_role()['tracker']
+        self.assertEqual(r['reason'], 'record-removed')
+        self.assertIn('«Підключення»', r['fix'])
+        self.assertIn('restore', r['fix'])
+        self.assertNotIn('migrate_liga.py run', r['fix'])
+
+    def test_fix_wording_for_not_migrated_vcs_and_comments(self):
+        self.rec_all(drop=('git-sync', 'supabase-comments'), migrations={'liga-4d3b': {'at': 'x', 'roles': [], 'tracks': False, 'backup': 'b'}})
+        for role in ('vcs', 'comments'):
+            r = self.by_role()[role]
+            self.assertEqual(r['reason'], 'not-migrated', role)
+            self.assertIn('migrate_liga.py run', r['fix'], role)
+            self.assertIn('«Підключення»', r['fix'], role)
+
+    def test_role_served_by_another_explicit_module_is_on_with_that_module(self):
+        """m5/I2: `publish` веде ІНШИЙ явний модуль (`static-publish`) — роль `on`, `served-by:<id>`, а не `no-record` з порадою `run`."""
+        self.rec_all(drop=('vercel-publish',), mods={'static-publish': {'enabled': True, 'shared_state': True, 'settings': {}}})
+        r = self.by_role()['publish']
+        self.assertEqual((r['on'], r['module'], r['reason'], r['fix']), (True, 'static-publish', 'served-by:static-publish', ''))
+        self.assertEqual(self.lm.roles_lines(self.lm.roles_state()), [])
+        self.assertEqual(self.by_role()['tracker']['module'], 'jira-tracker')
+        self.assertIn('publish (static-publish): так (інший модуль)', self.lm.status_text(self.lm.status()))
+
+    def test_both_publishers_enabled_is_never_module_error(self):
+        """I2: власний запис увімкнено, а роль веде інший модуль — не `module-error`: роль працює."""
+        self.rec_all(mods={'static-publish': {'enabled': True, 'shared_state': True, 'settings': {}}})
+        r = self.by_role()['publish']
+        self.assertTrue(r['on'], r)
+        self.assertNotEqual(r['reason'], 'module-error')
 
     def test_no_record_default_names_run(self):
         self.rec_all(drop=('supabase-comments',))
@@ -808,6 +916,41 @@ class StartupE(_StandE):
         for v in (self.SB_KEY, self.tmp):
             self.assertNotIn(v, err1 + err2)
 
+    def test_roles_state_failure_does_not_turn_a_good_migration_into_abort_internal(self):
+        """I3: `roles_state()` кинув — старт повертає СПРАВЖНІЙ статус міграції, `last.json` не отруєно `abort-internal`."""
+        self.fresh_unmigrated_tree()
+        with self.mock.patch.object(self.lm, 'roles_state', side_effect=RuntimeError('boom')):
+            st, err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'done')
+        self.assertNotIn('abort-internal', err)
+        self.assertIn('RuntimeError', err)                                # один рядок із кодом, без тексту винятку
+        self.assertNotIn('boom', err)
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertNotEqual(last.get('status'), 'abort-internal')
+
+    def test_identical_permanent_skip_is_printed_once_naming_the_steps(self):
+        """M1: п'ять однакових `skip-path-in-git` — один рядок статусу, решта кроків названо в одному рядку."""
+        self.registry()
+        self.space_json({'name': 'Liga'})
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        _st, err = self.quiet(self.lm.startup)
+        self.assertEqual(err.count('skip-path-in-git —'), 1, err)
+        same = [ln for ln in err.splitlines() if 'те саме для' in ln]
+        self.assertEqual(len(same), 1, err)
+        for m in ('liga-4d3b', 'liga-4d3c', 'liga-4d4a', 'liga-4d4b'):
+            self.assertIn(m, same[0])
+        self.assertNotIn('liga-4d3a', same[0])
+
+    def test_second_start_of_a_fully_migrated_liga_is_silent_and_writes_nothing(self):
+        """M2: усі шість ролей `on`, другий старт — stderr порожній, дерево файлів не змінилось."""
+        self.fresh_unmigrated_tree()
+        self.quiet(self.lm.startup)
+        self.assertTrue(all(s['on'] for s in self.lm.roles_state()))
+        before = self.snapshot_tree()
+        st, err = self.quiet(self.lm.startup)
+        self.assertEqual((st, err), ('skip-done', ''))
+        self.assertEqual(self.snapshot_tree(), before)
+
     def test_isolated_run_prints_no_roles_block(self):
         self.fresh_unmigrated_tree()
         for k in ('JIRA_EMAIL', 'JIRA_TOKEN'):
@@ -859,6 +1002,32 @@ class StatusAndCli(_StandE):
         self.assertEqual(code, 1)
         self.assertIn('refuse-not-held', out)
         self.assertEqual(self.cli('unhold', 'liga-nope')[0], 1)
+
+    def test_cli_unhold_explains_every_refusal_in_one_line(self):
+        """M3: кожна відмова `unhold` — рядок «що сталось»; `refuse-mark` перелічує чинні позначки."""
+        self.space_json({'modules': {}, 'migrations': {'liga-4d4b': {'at': 'x', 'backup': 'b'}}})
+        _c, out, _e = self.cli('unhold', 'liga-nope')
+        self.assertIn('refuse-mark', out)
+        for m in ('liga-4d3a', 'liga-4d3b', 'liga-4d3c', 'liga-4d4a', 'liga-4d4b'):
+            self.assertIn(m, out)
+        _c, out, _e = self.cli('unhold', 'liga-4d4b')
+        self.assertIn('не утримано', out)
+        for st, needle in (('abort-unhold', 'не вдалося'), ('skip-busy', 'інший процес'), ('abort-lock', 'замок')):
+            with self.mock.patch.object(self.lm, 'unhold', lambda *a, _s=st, **k: _s):
+                _c, out, _e = self.cli('unhold', 'liga-4d4a')
+            self.assertIn('unhold: %s' % st, out)
+            self.assertIn(needle, out, st)
+
+    def test_status_names_unhold_for_a_held_step(self):
+        self.space_json({'modules': {}, 'migrations': {'liga-4d4a': {'held': True}}})
+        text = self.lm.status_text(self.lm.status())
+        self.assertIn('migrate_liga.py unhold liga-4d4a', text)
+
+    def test_unhold_checks_home_like_run(self):
+        self.space_json({'modules': {}, 'migrations': {'liga-4d4a': {'held': True}}})
+        self.assertEqual(self.lm.unhold('liga-4d4a', home=os.path.join(self.tmp, 'elsewhere')), 'abort-internal')
+        self.assertEqual(self.read_json(self.space_path())['migrations'], {'liga-4d4a': {'held': True}})
+        self.assertEqual(self.lm.unhold('liga-4d4a', home=self.deai), 'unheld')
 
     def test_unhold_lets_the_step_run_again(self):
         self.root()

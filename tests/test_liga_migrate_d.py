@@ -523,7 +523,8 @@ class FourStepsStartup(_StepD):
         os.makedirs(os.path.join(self.space_dir, '.git'))
         self.space_json({})
         _st, err = self.start()
-        self.assertIn('liga-4d4a: skip-path-in-git', err)
+        self.assertIn('liga-4d4a', err)                                     # M1: перший рядок — liga-4d3a, решту названо в «те саме для»
+        self.assertIn('skip-path-in-git', err)
         self.assertIn(self.lm.TRACKS_NOT_MIGRATED, err)
 
     def test_not_said_when_nothing_is_wrong(self):

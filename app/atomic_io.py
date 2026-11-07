@@ -72,6 +72,11 @@ def fsync_path(path):
         os.close(fd)
 
 
+class DurabilityUnconfirmed(OSError):
+    """`fsync=True`: файл УЖЕ атомарно записано (після `os.replace`), але скинути його на пластину не вдалося. Це не «запис не відбувся»:
+    викликач, що розрізняє ці випадки (міграція ЛІГИ), ловить саме цей клас і звітує «записано, довговічність не підтверджено»."""
+
+
 def atomic_write_json(path, data, indent=2, fsync=False):
     """Записати JSON так, щоб КРАШ ПРОЦЕСУ не лишив обрізаного файла.
 
@@ -121,8 +126,11 @@ def atomic_write_json(path, data, indent=2, fsync=False):
             pass
         os.replace(tmp, path)
         if fsync:                                            # ПІСЛЯ rename: файл (дані) і тека (сам rename)
-            fsync_path(path)
-            fsync_path(d)
+            try:
+                fsync_path(path)
+                fsync_path(d)
+            except OSError as e:                             # файл уже на місці: це не збій запису, а непідтверджена довговічність
+                raise DurabilityUnconfirmed(str(e)) from e
     except BaseException:
         # BaseException, а не Exception, і це НЕ перестраховка: Ctrl-C посеред
         # json.dump — це і є «убитий прогін», заради якого весь цей модуль.
