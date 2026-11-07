@@ -3,7 +3,7 @@
 
 Вимога користувача 31.08.2026: три глобальні напрямки — Ліга Юнайтед, Ліга360,
 ЛігаСЕО — лежать у ТРЬОХ теках і трьох репозиторіях. Репозиторії вже три
-(`tracks.legacy_repos`), а корінь був один: `design_work_root` = тека United, і в
+(явні `tracks` простору ЛІГИ), а корінь був один: `design_work_root` = тека United, і в
 ній опинились задачі всіх напрямків. Дизайнер це помітив і питає, чому SEO-задача
 лежить у United — назва теки бреше про напрямок, а правду знає лише tasks.json.
 
@@ -25,18 +25,28 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spaces  # noqa: E402
-import tracks  # noqa: E402  (напрямок задачі й корінь ЛІГИ — одне місце правди; `serve` лишився лише для файла задач)
+import tracks  # noqa: E402
+import serve  # noqa: E402
 from serve import load_tasks, save_tasks  # noqa: E402
 
 
-def plan(cfg):
-    """Що куди має переїхати. Чиста функція — тому й перевіряється тестами.
+def _view():
+    """Напрямки простору ЛІГИ на час команди (`serve._TrackView`); простору нема — порожній вигляд."""
+    sp = spaces.active_space()
+    return serve._TrackView(sp)
 
-    Повертає список записів: (tid, напрямок, звідки, куди, причина-стоп або None). Напрямок задачі — `tracks.of_task`
-    (`track`, інакше `profile`: запис, створений до 0.15.0, має лише `profile`, новий — обидва чи лише `track`).
-    Стоп-причини НЕ приховуємо: мовчазний пропуск задачі в міграції означав би,
-    що дизайнер вважає переїзд завершеним, а частина лишилась на місці.
-    """
+
+def _root_of(cfg, view, track):
+    return serve.track_root(view, track) or serve.default_task_root(cfg)
+
+
+def plan(cfg, view=None):
+    """Що куди має переїхати. Чиста функція — тому й перевіряється тестами. Корені — з ЯВНИХ напрямків простору ЛІГИ
+    (`serve.track_root`); `view` — `serve._TrackView` цього простору (типово — активний).
+
+    Повертає список записів: (tid, напрямок, звідки, куди, причина-стоп або None). Напрямок задачі — `tracks.of_task` (`track`).
+    Стоп-причини НЕ приховуємо."""
+    view = view or _view()
     out = []
     for tid, t in sorted((cfg.get('tasks') or {}).items()):
         track = tracks.of_task(t)
@@ -45,7 +55,7 @@ def plan(cfg):
             out.append((tid, track, None, None, 'немає dir у tasks.json'))
             continue
         cur = os.path.expanduser(cur)
-        want = os.path.join(tracks.legacy_root(cfg, track), tid)
+        want = os.path.join(_root_of(cfg, view, track), tid)
         if os.path.normpath(cur) == os.path.normpath(want):
             continue
         stop = None
@@ -57,25 +67,21 @@ def plan(cfg):
     return out
 
 
-def roots_in_use(cfg):
-    """Корінь на кожен напрямок + позначка, чи він СВІЙ, чи спільний фолбек.
-
-    Напрямки — ті, що є в задачах (`tracks.of_task`, без напрямку — «—»), і ті, що мають власний корінь. «Свій» — ключ є в
-    `design_work_roots` (як і було: порожнє значення теж «свій», хоч корінь тоді спільний). Свідомі відмінності від 0.14.0:
-    не рядок у `profile` (число) тепер читається як «без напрямку» (раніше `sorted` падав `TypeError` на суміші числа з
-    рядками), а `design_work_roots` не словник — як `{}` (спільний корінь, спека §6.4; раніше `AttributeError`)."""
-    roots = cfg.get('design_work_roots')
-    roots = roots if isinstance(roots, dict) else {}
-    found = sorted({(tracks.of_task(t) or '—') for t in (cfg.get('tasks') or {}).values()} | set(roots))
-    return [(p, tracks.legacy_root(cfg, p), p in roots) for p in found]
+def roots_in_use(cfg, view=None):
+    """Корінь на кожен напрямок + позначка, чи він СВІЙ (`root` напрямку), чи тека простору. Напрямки — ті, що є в задачах
+    (`tracks.of_task`, без напрямку — «—»), і явні напрямки простору."""
+    view = view or _view()
+    found = sorted({(tracks.of_task(t) or '—') for t in (cfg.get('tasks') or {}).values()} | {t['id'] for t in view.tracks})
+    own = {t['id'] for t in view.tracks if t['root']}
+    return [(p, _root_of(cfg, view, p), p in own) for p in found]
 
 
-def cmd_status(cfg):
+def cmd_status(cfg, view=None):
     print('Корені напрямків:')
-    for track, root, own in roots_in_use(cfg):
+    for track, root, own in roots_in_use(cfg, view):
         mark = '✅ свій' if own else '⚠️ спільний (свого кореня немає)'
         print(f'   {track:10} → {root}  [{mark}]')
-    moves = plan(cfg)
+    moves = plan(cfg, view)
     if not moves:
         print('Усі задачі лежать у корені свого напрямку.')
         return 0
@@ -87,8 +93,8 @@ def cmd_status(cfg):
     return 0
 
 
-def cmd_migrate(cfg, apply):
-    moves = plan(cfg)
+def cmd_migrate(cfg, apply, view=None):
+    moves = plan(cfg, view)
     if not moves:
         print('Переселяти нічого.')
         return 0

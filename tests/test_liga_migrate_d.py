@@ -160,7 +160,7 @@ class StepDConstants(_StepD):
 
 
 class AdapterApplies(unittest.TestCase):
-    """`tracks.adapter_applies(raw, path)` — ОДИН критерій «зараз діє адаптер» (рантайм і міграція кличуть його)."""
+    """`tracks.adapter_applies(raw, path)` — ОДИН критерій «зараз діє адаптер» (кличе лише міграція; рантайм — ні, див. `NoTracksAdapter`)."""
 
     def test_matrix(self):
         import tracks
@@ -168,16 +168,6 @@ class AdapterApplies(unittest.TestCase):
         for raw, want in ((None, True), ([], True), ({}, True), ('x', True), (5, True), ([{'id': 'Bad'}], True),
                           ([5, None], True), (good, False), ([{'id': 'united'}, {'id': 'Bad'}], False)):
             self.assertEqual(tracks.adapter_applies(raw, '/x'), want, repr(raw))
-
-    def test_the_view_asks_the_same_function(self):
-        import serve
-        import spaces
-        import tracks
-        liga = {'id': 'legacy', 'path': '', 'legacy': True, 'integrations': True}
-        with mock.patch.object(tracks, 'adapter_applies', return_value=False) as m, \
-                mock.patch.object(spaces, '_read_json', side_effect=OSError):
-            self.assertFalse(serve._TrackView(liga).adapter)
-        self.assertEqual(m.call_count, 1, 'вигляд питає `tracks.adapter_applies`, а не має власної копії критерію')
 
 
 class StepDPlanTest(_StepD):

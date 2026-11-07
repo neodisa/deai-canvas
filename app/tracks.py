@@ -1,20 +1,15 @@
 """Напрямки простору (етап 4d-1, спека 2026-11-04-space-tracks-design.md): чисте ядро без мережі й без імпорту `serve`.
 
 Напрямок — одна «лінія роботи» простору з власною текою задач, типовим репозиторієм макетів, статичною ДС інспектора й
-підписом: `{id, label, root, repo, ds}`. Задача несе `track` (id напрямку); до 4d-4 старий ключ `profile` — його синонім.
+підписом: `{id, label, root, repo, ds}`. Задача несе `track` (id напрямку); старий ключ `profile` рантайм не читає (4d-4a).
 
-Звідки беруться напрямки:
-- звичайний простір — масив `tracks` у його `space.json` (`normalize`);
-- простір ЛІГИ — неявний адаптер `legacy_tracks(cfg)` з кореня старого `tasks.json` (`design_work_roots`,
-  `design_work_root`, `profile_repos`). ⛔ Адаптер ТИМЧАСОВИЙ: у 4d-3 міграція запише ті самі напрямки в `space.json`
-  простору ЛІГИ, і тоді `_LEGACY_LABELS` та дефолт `united` підуть звідси разом з адаптером. Поки він живе, паритет з 0.14.0
-  понад усе: усе, що колись робили `serve.work_root`, `serve.profile_repos` і похідна мітка `task_tags`, має
-  відтворюватися тут байт-у-байт (знімок `tests/fixtures/tracks/before-4d1.json`).
+Звідки беруться напрямки: масив `tracks` у `space.json` простору (`normalize`) — для всіх просторів, ЛІГА теж. Неявного
+адаптера (з кореня старого `tasks.json`) у рантаймі більше нема: його копія живе ЛИШЕ в `liga_migrate` (приватні `_legacy_*`)
+і потрібна кроку `liga-4d4a`; охоронець `NoTracksAdapter`.
 
 Канонічні тут (`serve` користується ними й власних копій не має): правила мітки (`TAG_BAD`, `TAG_MAX_LEN`,
 `clean_tag`, `read_tag` — раніше `serve._TAG_BAD`/`_clean_tag`/`_read_tag`), `ID_RE` (раніше `serve._PROFILE_KEY`),
-`REPO_OK`/`repo_ok` (раніше `serve._REPO_OK`), `legacy_root` (раніше `serve.work_root`), `legacy_repos` (раніше
-`serve.profile_repos` без читання файла), `FALLBACK_ROOT` (раніше `serve.FALLBACK_WORK_ROOT`).
+`REPO_OK`/`repo_ok` (раніше `serve._REPO_OK`).
 """
 import os
 import re
@@ -33,14 +28,6 @@ REPO_OK = re.compile(r'[\x21-\x2c\x2e-\x7e][\x21-\x7e]*')
 #: U+FEFF) і двоспрямовані керування (U+202A–U+202E, U+2066–U+2069): мітка з U+202E виглядала б не тим, чим є.
 TAG_BAD = re.compile('[\\x00-\\x1f\\x7f-\\x9f,\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]')
 TAG_MAX_LEN = 32
-#: Останній рубіж кореня задач ЛІГИ, коли в `tasks.json` нема нічого. Історична тека United — саме тому вона й муляє: у ній
-#: лежали задачі всіх трьох напрямків.
-FALLBACK_ROOT = '~/deai-work'
-#: Напрямки ЛІГИ, що є завжди (порядок = порядок переліку адаптера) і дефолт для задачі без напрямку.
-_LEGACY_IDS = ('united', 'liga360', 'seo')
-_LEGACY_DEFAULT = 'united'
-#: Підписи адаптера ЛІГИ (раніше `serve._LEGACY_PROFILE_TAGS`): невідомий напрямок показується як є. Піде в 4d-3.
-_LEGACY_LABELS = {'united': 'United', 'liga360': 'LIGA360', 'seo': 'SEO'}
 #: Керівні знаки в шляху `root`: NUL ламає `realpath`, решта — явне сміття.
 _PATH_BAD = re.compile('[\\x00-\\x1f\\x7f]')
 #: Найдовший `root` у `space.json` (знаків); довший вважається відсутнім. `spaces` власної межі шляху не має.
@@ -139,8 +126,9 @@ def normalize(raw, space_path, roots=True):
 
 
 def adapter_applies(raw, path):
-    """Чи діє адаптер ЛІГИ: напрямків у `space.json` нема (`None`) або список непридатний (`normalize` дає порожнє).
-    Єдиний критерій для рантайму (до 4d-4a) і для кроку `liga-4d4a`; ⛔ не дублювати умову в інших місцях."""
+    """Чи діє неявний адаптер напрямків ЛІГИ на цьому `space.json` (`raw` — вміст ключа `tracks` або `None`): напрямків нема
+    (`None`) або список непридатний (`normalize` дає порожнє). Живе лише для кроку `liga-4d4a`; ⛔ рантайм його не кличе
+    (охоронець `NoTracksAdapter`)."""
     return raw is None or not normalize(raw, path, roots=False)
 
 
@@ -153,16 +141,12 @@ def default_id(tracks, raw):
 
 
 def of_task(task):
-    """Напрямок задачі — збережений РЯДОК: `track`, інакше `profile` (синонім до 4d-4). Без звірки з `ID_RE`: ЛІГА приймає
-    будь-який рядок як є (`'United'` теж, як 0.14.0), а перевірка шаблону — справа того місця, що читає (звичайний простір,
-    `?ds=`). Не словник, не рядок чи порожній — `None`; порожній/не рядок `track` не затуляє валідний `profile`."""
+    """Напрямок задачі — збережений РЯДОК `track` (4d-4a: `profile` з записів більше не читається). Без звірки з `ID_RE`:
+    значення вільне, перевірка шаблону — справа того, хто читає. Не словник, не рядок чи порожній — `None`."""
     if not isinstance(task, dict):
         return None
-    for key in ('track', 'profile'):
-        v = task.get(key)
-        if isinstance(v, str) and v:
-            return v
-    return None
+    v = task.get('track')
+    return v if isinstance(v, str) and v else None
 
 
 def find(tracks, tid):
@@ -175,90 +159,16 @@ def find(tracks, tid):
     return None
 
 
-def label_tag(tracks, task, legacy=False):
+def label_tag(tracks, task):
     """Похідна мітка задачі (рядок) або `None`; список `[tag]` / `[]` складає той, хто кличе (`serve.task_tags`).
 
-    Звичайний простір: напрямок знайдено → його `label`; не знайдено, але id є → сам id (паритет «невідомий — як є»). ЛІГА
-    (`legacy=True`, неявний адаптер): значення — вільний рядок, не обовʼязково з переліку, тож береться `_LEGACY_LABELS.get(v,
-    v)` без звірки з `tracks`. Обидва шляхи проходять ті самі правила мітки (`read_tag`): ⛔ діалог правки заповнюється
-    поточними мітками, і значення з комою чи на 300 знаків після збереження розпалося б або не пройшло `bad-tags`; такий
-    напрямок — без похідної мітки."""
+    Напрямок знайдено → його `label`; не знайдено, але id є → сам id (паритет «невідомий — як є»). Усе проходить правила мітки
+    (`read_tag`): ⛔ діалог правки заповнюється поточними мітками, і значення з комою чи на 300 знаків після збереження
+    розпалося б або не пройшло `bad-tags`; такий напрямок — без похідної мітки."""
     v = of_task(task)
     if v is None:
         return None
-    if legacy:
-        return read_tag(_LEGACY_LABELS.get(v, v))
     t = find(tracks, v)
     if t is None:
         return read_tag(v)
     return read_tag(t.get('label')) or read_tag(v)
-
-
-# ── адаптер ЛІГИ: корінь старого `tasks.json` → напрямки ──────────────────────────────────────────────────────────────
-
-def _legacy_roots(cfg):
-    """`design_work_roots` ЛІГИ. ⛔ Не словник → `{}` (0.14.0 тут падав `AttributeError`; свідома відмінність спеки §6.4: спільний
-    корінь замість обвалу)."""
-    raw = cfg.get('design_work_roots') if isinstance(cfg, dict) else None
-    return raw if isinstance(raw, dict) else {}
-
-
-def _legacy_fallback(cfg):
-    shared = cfg.get('design_work_root') if isinstance(cfg, dict) else None
-    return os.path.expanduser(shared if isinstance(shared, str) and shared else FALLBACK_ROOT)
-
-
-def legacy_root(cfg, value):
-    """Корінь робочих тек ДЛЯ ЦЬОГО НАПРЯМКУ ЛІГИ (раніше `serve.work_root(cfg, profile)`), з розгорнутим `~`.
-
-    Вимога користувача 31.08.2026: три напрямки — три теки і три репозиторії. Порядок: свій корінь напрямку →
-    спільний `design_work_root` → історичний фолбек. ⛔ Напрямок без власного кореня НЕ вигадується (і не береться з
-    дефолтного): краще чесно покласти в спільний корінь і сказати про це (`bin/roots.py`), ніж створити теку за вигаданим
-    шляхом. `value` — що завгодно (`'United'`, `''`, число, `None`): невідоме — спільний корінь. Не кидає на поганому `cfg`.
-
-    Свідома відмінність від 0.14.0: НЕ рядок у власному корені напрямку чи в `design_work_root` (число, список) раніше
-    давав `TypeError` у `expanduser` (500); тепер таке значення вважається відсутнім і діє наступна ланка ланцюга
-    (власний → спільний → `~/deai-work`)."""
-    own = _legacy_roots(cfg).get(value) if isinstance(value, str) else None
-    if isinstance(own, str) and own:
-        return os.path.expanduser(own)
-    return _legacy_fallback(cfg)
-
-
-def legacy_repos(cfg):
-    """Таблиця «напрямок → репозиторій макетів» ЛІГИ з кореня `tasks.json` (раніше `serve.profile_repos` без читання файла).
-    Ключ — за `ID_RE`, репо — `repo_ok` (обрізане); погані пари відкидаються, `cfg` не словник / ключа нема / не словник —
-    `{}`. ⛔ Структура в усіх напрямків одна — `mockup/<task-id>`, тому напрямки розходяться лише репозиторієм, а не логікою
-    (урок колишньої константи `PROFILE_REPOS`). Значень — ні в текстах, ні в журналах."""
-    raw = cfg.get('profile_repos') if isinstance(cfg, dict) else None
-    if not isinstance(raw, dict):
-        return {}
-    out = {}
-    for k, v in raw.items():
-        r = repo_ok(v)
-        if r and _is_id(k):
-            out[k] = r
-    return out
-
-
-def legacy_tracks(cfg):
-    """Неявні напрямки ЛІГИ → `(tracks, default_id, fallback_root)`.
-
-    Перелік id: `united`, `liga360`, `seo`, далі ключі `design_work_roots` і `profile_repos` (лише за `ID_RE`, у такому
-    порядку, без дублів). `root` — `legacy_root` (свій → спільний → `~/deai-work`, розгорнутий); `repo` — з `legacy_repos`
-    або `''`; `label` — `_LEGACY_LABELS` або `id`; `ds` = `id` (вендорний інспектор сам каже «ДС нема» для невідомого);
-    дефолт — `united`. `fallback_root` — корінь для будь-якого значення поза переліком (`'United'`, невідомий, `None`):
-    не корінь дефолтного напрямку (спека §6.1). Перелік не обмежений `MAX_TRACKS`: адаптер дзеркалить довільний конфіг, а
-    репо 21-го ключа 0.14.0 теж віддавав. Не кидає на поганому `cfg`."""
-    ids = list(_LEGACY_IDS)
-    seen = set(ids)
-    raw_repos = cfg.get('profile_repos') if isinstance(cfg, dict) else None
-    for src in (_legacy_roots(cfg), raw_repos if isinstance(raw_repos, dict) else {}):
-        for k in src:
-            if _is_id(k) and k not in seen:
-                seen.add(k)
-                ids.append(k)
-    repos = legacy_repos(cfg)
-    tracks = [{'id': i, 'label': _LEGACY_LABELS.get(i, i), 'root': legacy_root(cfg, i),
-               'repo': repos.get(i, ''), 'ds': i} for i in ids]
-    return tracks, _LEGACY_DEFAULT, _legacy_fallback(cfg)

@@ -36,7 +36,8 @@ TTL_H = float(os.environ.get('DC_REGISTRY_TTL_H') or 6)
 # тримає, бо в ЧУЖОМУ акаунті `vercel link` із тим самим імʼям створює ІНШИЙ
 # проєкт (і друге посилання). Пара імʼя+скоуп — це і є прив'язка задача→превʼю.
 #      `track` (4d-1) — напрямок задачі; `profile` лишається поряд до 4d-4: колеги на 0.14.0 читають зі спільного реєстру
-# саме його (без нього їхня тека, репо й мітка зламались би), а нові машини читають обидва через `tracks.of_task`.
+# саме його (без нього їхня тека, репо й мітка зламались би); нові машини читають `track`, а запис лише з `profile` береться
+# через межу `_track_of_entry` (4d-4a).
 SHARED = ('title', 'jira', 'profile', 'track', 'gitlab', 'comment_project', 'vercel_project',
           'vercel_scope', 'figma', 'owner', 'owner_key', 'tags')
 # Машинное — живёт только локально, в реестр не уезжает.
@@ -429,16 +430,25 @@ def staleness(cfg, check_remote=True):
     return {'state': 'fresh', 'age_h': age, 'hint': ''}
 
 
+def _track_of_entry(e):
+    """Напрямок запису спільного реєстру (МЕЖА 4d-4a): `track`, коли непорожній рядок, інакше `profile` (колеги на старому
+    інструменті шлють лише `profile`). Єдине місце, де `profile` ще читається."""
+    if not isinstance(e, dict):
+        return None
+    for key in ('track', 'profile'):
+        v = e.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
 def _work_root(cfg, task):
-    """Корінь напрямку ЗАДАЧІ через `tracks` (`of_task` + `legacy_root`) — щоб правило жило в ОДНОМУ місці.
-
-    `task` — запис задачі чи запис реєстру: напрямок береться як у всіх (`track`, інакше `profile`; запис машини на 0.14.0
-    має лише `profile` і дає ту саму теку). ⛔ Читати лише ключ `profile` не можна: задача лише з `track` лягла б у спільний корінь.
-
-    Імпорт лінивий і всередині функції: реєстр запускають і як окремий CLI, а шлях до `app/` у нього свій."""
+    """Корінь теки задачі через ЯВНІ напрямки простору ЛІГИ (`serve.track_root`); простору/напрямків нема → `None`."""
     sys.path.insert(0, os.path.join(ROOT, 'app'))
-    import tracks
-    return tracks.legacy_root(cfg, tracks.of_task(task))
+    import serve
+    import spaces
+    sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
+    return serve.track_root(sp, _track_of_entry(task)) or serve.default_task_root(cfg)
 
 
 def split_fixtures(entries):
@@ -712,11 +722,9 @@ def cmd_status(_a):
              and any(tasks[t].get(k) != _pulled_value(tasks[t], k, reg[t][k], reg[t])
                      for k in SHARED if k in reg[t])]
     print(f'   задач: у реєстрі {len(reg)}, локально {len(tasks)}')
-    sys.path.insert(0, os.path.join(ROOT, 'app'))
-    import tracks
     by_track, by_owner = {}, {}
     for e in reg.values():
-        k = tracks.of_task(e) or '?'
+        k = _track_of_entry(e) or '?'
         by_track[k] = by_track.get(k, 0) + 1
         by_owner[e.get('owner') or '—'] = by_owner.get(e.get('owner') or '—', 0) + 1
     print('   напрямки: ' + ', '.join(f'{k} {v}' for k, v in sorted(by_track.items())))

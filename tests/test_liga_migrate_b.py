@@ -2409,6 +2409,13 @@ def _expect_diff():
     exp['/vcs/form/space_row/compat/comments'] = (_ABSENT, 'comment-layer')
     exp['/vcs/form/space_row/compat/vcs'] = (_ABSENT, 'design-canvas')
     exp['/vcs/form/model/space_keys/compat'] = (_ABSENT, True)
+    # 4d-4a: адаптера напрямків у рантаймі нема, а крок D у цьому стенді (лише a+b) не гнано — рядок простору в `/api/spaces`
+    # без напрямків: знімок 0.17.0 мав чотири напрямки адаптера й дефолт `united`
+    exp['/vcs/form/space_row/default_track'] = ('united', None)
+    for i, (tid, label) in enumerate((('united', 'United'), ('liga360', 'LIGA360'), ('seo', 'SEO'), ('custom-x', 'custom-x'))):
+        exp['/vcs/form/space_row/tracks[%d]/id' % i] = (tid, _ABSENT)
+        exp['/vcs/form/space_row/tracks[%d]/label' % i] = (label, _ABSENT)
+    exp['/vcs/form/space_row/tracks[]'] = (_ABSENT, [])
     return exp
 
 

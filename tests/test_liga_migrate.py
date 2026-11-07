@@ -1936,32 +1936,45 @@ class AfterMigrationParity(unittest.TestCase):
         rig, liga = v['rig'], v['liga']
         g = self.g
         with rig.activate():
-            cfg = rig.cfg
             items, default = serve.space_tracks(liga)
             ids = [t['id'] for t in items]
             out = {'tracks': g.scrub(items, rig.home), 'default_track': default, 'ids': ids, 'track_root': {}, 'track_root_unknown': {},
                    'track_repo': {}}
             for i in ids:
-                out['track_root'][i] = g.rel(serve.track_root(liga, cfg, i), rig.home)
+                out['track_root'][i] = g.rel(serve.track_root(liga, i), rig.home)
                 out['track_repo'][i] = serve.track_repo(liga, i)
             for raw in ('United', 'zzz', '', None, 7):
-                out['track_root_unknown'][repr(raw)] = g.rel(serve.track_root(liga, cfg, raw), rig.home)
+                out['track_root_unknown'][repr(raw)] = g.rel(serve.track_root(liga, raw), rig.home)
             out['track_repo']['zzz'] = serve.track_repo(liga, 'zzz')
             out['track_repo']['None'] = serve.track_repo(liga, None)
-            out['adapter'] = bool(serve._TrackView(liga).adapter)
         return out
 
-    def test_tracks_identical_when_adapter_stays(self):
-        """Конфіг знімка: напрямки не мігрують (united має власний корінь) — адаптер той самий, усе байт-у-байт як у знімку."""
+    def test_snapshot_config_without_explicit_tracks_has_no_tracks_after_4d4a(self):
+        """Конфіг знімка: напрямки НЕ мігрують у 4d-3a (united має власний корінь), а адаптера в рантаймі 4d-4a більше нема —
+        напрямків нема (задокументована відмінність; їх дописує крок `liga-4d4a`). Щоб знімок 0.16.0 лишався на сторожі,
+        його значення звіряються з копією адаптера в `liga_migrate` (`_legacy_*`): вона відтворює їх байт-у-байт."""
         got, want = self._tracks('snapshot'), self.snap['tracks']
-        for k in ('tracks', 'default_track', 'ids', 'track_root', 'track_root_unknown', 'track_repo', 'adapter'):
-            self.assertEqual(got[k], want[k], k)
+        self.assertEqual((got['tracks'], got['default_track'], got['ids']), ([], None, []))
+        v = self.view('snapshot')
+        g, lm = self.g, self.lm
+        with v['rig'].activate():
+            cfg = v['rig'].cfg
+            items, default, _fb = lm._legacy_tracks(cfg)
+            self.assertEqual(g.scrub(items, v['rig'].home), want['tracks'])
+            self.assertEqual(default, want['default_track'])
+            self.assertEqual([t['id'] for t in items], want['ids'])
+            for i in want['ids']:
+                self.assertEqual(g.rel(lm._legacy_root(cfg, i), v['rig'].home), want['track_root'][i], i)
+            for raw in ('United', 'zzz', '', None, 7):
+                self.assertEqual(g.rel(lm._legacy_root(cfg, raw), v['rig'].home), want['track_root_unknown'][repr(raw)], repr(raw))
+            repos = lm._legacy_repos(cfg)
+            for k, r in want['track_repo'].items():
+                self.assertEqual(repos.get(k, ''), r, k)
 
     def test_tracks_identical_when_explicit_except_united_root(self):
         """`united` без власного кореня: явні `tracks` дають ті самі id, мітки, репо, ds, корені й той самий корінь для невідомих
         значень; різниця з знімком лише в тому, що в знімку `united` мав власний корінь, а тут його нема (спільний)."""
         got, want = self._tracks('shared'), self.snap['tracks']
-        self.assertFalse(got['adapter'], 'явні tracks: адаптер ЛІГИ вже не веде')
         self.assertEqual(got['ids'], want['ids'])
         self.assertEqual(got['default_track'], want['default_track'])
         self.assertEqual(got['track_repo'], want['track_repo'])
@@ -2080,14 +2093,26 @@ class AfterMigrationParity(unittest.TestCase):
         for tid in ('a-1', 'a-2'):
             got, old = dict(a['tasks'][tid]), dict(want['tasks'][tid])
             gs, os_ = dict(got.pop('space')), dict(old.pop('space'))
+            # 4d-4a: на стенді знімка (4d-3a, напрямки НЕ мігрували, кроку D ще не було) адаптера в рантаймі нема — похідна
+            # мітка = сам id (нижній регістр), а не підпис адаптера («SEO»). Це задокументована відмінність (Поправка 6 плану).
+            # Задача лише з `profile` (a-2) втрачає й `track`, і мітку: `tracks.of_task` читає лише `track` (Поправка 11); `/api/task`
+            # більше не віддає `profile` (стенд мапить відсутній ключ у `None`).
+            profile_only = old['profile'] is not None
+            old['profile'] = None
+            if profile_only:
+                old['track'], old['tags'] = None, []
+            else:
+                old['tags'] = [t.lower() for t in old['tags']]
             self.assertEqual(got, old, tid)                                               # track, profile, tags, jira, comment_channel
             self.assertEqual((gs['capabilities']['tracker'], gs['capabilities']['dashboard'], gs['capabilities']['notify']),
                              ('jira-tracker', 'supabase-dashboard', 'supabase-teams'))
             for k in ('keys', 'id', 'integrations', 'legacy'):
                 self.assertEqual(gs[k], os_[k], k)
         row, old = a['spaces']['rows'][0], want['spaces']['rows'][0]
-        self.assertEqual((row['id'], row['integrations'], row['legacy'], row['default_track']), (old['id'], old['integrations'], old['legacy'], old['default_track']))
-        self.assertEqual(row['tracks'], old['tracks'])
+        self.assertEqual((row['id'], row['integrations'], row['legacy']), (old['id'], old['integrations'], old['legacy']))
+        # 4d-4a: на стенді знімка напрямки не мігрували (кроку D ще не було), а адаптера в рантаймі нема — перелік порожній
+        self.assertNotEqual(old['tracks'], [], 'знімок 0.16.0 мав напрямки адаптера')
+        self.assertEqual((row['default_track'], row['tracks']), (None, []))
         self.assertEqual({e['id']: (e['enabled'], e['implicit']) for e in a['modules']['list'] if e['id'] in self.ROLE_MODULE.values()},
                          {m: (True, False) for m in self.ROLE_MODULE.values()})
         self.assertEqual((a['vcs_provider_calls'], a['urlopen_calls']), (0, 0))
