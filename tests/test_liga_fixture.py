@@ -46,5 +46,33 @@ class LigaFixtureBothWays(unittest.TestCase):
         self.assertTrue(st['notify']['on'])
 
 
+class WriteRecordsStandalone(unittest.TestCase):
+    """`write_records` для стендів, що самі створюють реєстр: записи в `space.json` і секрети в бакеті `sid`; `fix_space` фіксує простір запиту."""
+
+    def test_records_and_secrets_bucket(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            mods = liga_fixture.write_records(os.path.join(d, 'sp'), os.path.join(d, 'deai'), 'sid-7', roles=('tracker', 'vcs'), name='N')
+            self.assertEqual(sorted(mods), ['git-sync', 'jira-tracker'])
+            with open(os.path.join(d, 'sp', 'space.json'), encoding='utf-8') as f:
+                sj = json.load(f)
+            self.assertEqual((sj['name'], sorted(sj['modules'])), ('N', ['git-sync', 'jira-tracker']))
+            with open(os.path.join(d, 'deai', 'secrets.json'), encoding='utf-8') as f:
+                self.assertEqual(json.load(f), {'sid-7': {'jira-tracker': {'token': liga_fixture.JIRA_TOKEN}}})
+            self.assertEqual(os.stat(os.path.join(d, 'deai', 'secrets.json')).st_mode & 0o777, 0o600)
+
+    def test_fix_space_pins_the_request_space_and_cleans_up(self):
+        import spaces
+
+        class T(unittest.TestCase):
+            def runTest(self):
+                liga_fixture.LigaFixture(self).fix_space()
+                self.seen = spaces.request_space_id()
+        t = T()
+        res = unittest.TestResult()
+        t.run(res)
+        self.assertEqual((t.seen, spaces.request_space_id()), ('legacy', None))
+
+
 if __name__ == '__main__':
     unittest.main()

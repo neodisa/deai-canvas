@@ -33,6 +33,29 @@ ROLE_RECORDS = {
 ALL_ROLES = tuple(ROLE_RECORDS)
 
 
+def write_records(space_dir, deai_dir, sid='legacy', roles=ALL_ROLES, overrides=None, name='Liga'):
+    """Явні записи `roles` у `space.json` теки `space_dir` і їхні секрети в `secrets.json` дому `deai_dir` (бакет `sid`). Для стендів, що самі
+    створюють реєстр і простір (`spaces.create_space`), а `LigaFixture` їм зайвий; `LigaFixture.build` викликає її ж. Існуючі `space.json`/
+    `secrets.json` ПЕРЕПИСУЮТЬСЯ (стенд кладе записи до того, як щось у них пише). Повертає `{модуль: запис}`."""
+    mods, sec = {}, {}
+    for role in roles:
+        mid, settings, secrets = ROLE_RECORDS[role]
+        o = (overrides or {}).get(role, {})
+        mods[mid] = {'enabled': o.get('enabled', True), 'shared_state': True, 'settings': dict(settings, **o.get('settings', {}))}
+        s = dict(secrets, **o.get('secrets', {}))
+        if s:
+            sec[mid] = s
+    os.makedirs(space_dir, exist_ok=True)
+    with open(os.path.join(space_dir, 'space.json'), 'w', encoding='utf-8') as f:
+        json.dump({'name': name, 'modules': mods, 'migrations': {}}, f)
+    os.makedirs(deai_dir, exist_ok=True)
+    secrets_path = os.path.join(deai_dir, 'secrets.json')
+    with open(secrets_path, 'w', encoding='utf-8') as f:
+        json.dump({sid: sec}, f)
+    os.chmod(secrets_path, 0o600)
+    return mods
+
+
 class LigaFixture:
     """Тимчасовий `HOME`/`DEAI_HOME` + реєстр із простором ЛІГА (`legacy: true`, `integrations: true`) + `space.json` + `secrets.json`."""
 
@@ -69,6 +92,14 @@ class LigaFixture:
         self.test.addCleanup(deai_modules.reset_caches)
         return self
 
+    def fix_space(self):
+        """Зафіксувати простір ЛІГА простором запиту ПОТОЧНОГО потоку (як це робить обробник запиту): без цього `spaces.effective_space()` віддає неявний
+        простір (шар «не зафіксовано»), а не запис реєстру, і явні записи ролей не діють. Прибирається в `addCleanup`."""
+        import spaces
+        spaces.set_request_space('legacy')
+        self.test.addCleanup(spaces.clear_request_space)
+        return self
+
     def _write(self, path, obj):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
@@ -83,19 +114,8 @@ class LigaFixture:
         """Явні записи `roles` (рівні тим, що пишуть кроки A–C) + `secrets.json`; корінь `tasks.json` БЕЗ облікових (лише `tasks`/маркер `registry`).
         `overrides[роль] = {'enabled': False, 'settings': {…}, 'secrets': {…}}` — заміна окремих частин запису."""
         self.registry()
-        mods, sec = {}, {}
-        for role in roles:
-            mid, settings, secrets = ROLE_RECORDS[role]
-            o = (overrides or {}).get(role, {})
-            mods[mid] = {'enabled': o.get('enabled', True), 'shared_state': True, 'settings': dict(settings, **o.get('settings', {}))}
-            s = dict(secrets, **o.get('secrets', {}))
-            if s:
-                sec[mid] = s
-        self._write(os.path.join(self.space_dir, 'space.json'), {'name': 'Liga', 'modules': mods, 'migrations': {}})
-        secrets_path = os.path.join(self.deai, 'secrets.json')
-        self._write(secrets_path, {'legacy': sec})
-        os.chmod(secrets_path, 0o600)
-        root = dict({'registry': {'head': 'abc123', 'synced_at': '2026-11-01T10:00:00Z'}, 'tasks': tasks or {}}, **(root_extra or {}))
+        write_records(self.space_dir, self.deai, 'legacy', roles, overrides)
+        root =dict({'registry': {'head': 'abc123', 'synced_at': '2026-11-01T10:00:00Z'}, 'tasks': tasks or {}}, **(root_extra or {}))
         self._write(self.tasks_path, root)
         import deai_modules
         deai_modules.reset_caches()

@@ -53,6 +53,7 @@ sys.path.insert(0, os.path.join(ROOT, 'ops'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sbconf  # noqa: E402
 import serve  # noqa: E402
+import liga_fixture  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import state  # noqa: E402
@@ -65,6 +66,11 @@ import reseal_gate  # noqa: E402
 _ENV = ('HOME', 'DEAI_HOME', 'DC_TASKS_FILE', 'DC_NO_OVERVIEW',
         'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL')
 _REAL = None
+#: Ролі простору ЛІГА в `capabilities` (4d-4b): явні записи фікстури (`liga_fixture.write_records`) → id їхніх модулів.
+LIGA_CAPABILITIES = dict({'tokens': None}, **{role: liga_fixture.ROLE_RECORDS[role][0] for role in liga_fixture.ALL_ROLES})
+
+#: Ключ `compat` простору ЛІГА: ролі з явним вбудованим модулем у режимі ЛІГА (4d-3c); так, як пише міграція.
+LIGA_COMPAT = {'comments': 'comment-layer', 'vcs': 'design-canvas', 'publish': 'design-canvas'}
 
 
 def setUpModule():
@@ -184,6 +190,8 @@ class Fixture(unittest.TestCase):
         cls.p_path = os.path.join(cls.home, 'deai-work', 'p')
         cls.p_id = spaces.create_space('P', 'space-2', cls.p_path)
         cls.legacy_id = next(s['id'] for s in spaces.read_registry()['spaces'] if s.get('legacy'))
+        # 4d-4b: ролі ЛІГИ — ЯВНІ записи простору (вигадані адреси/секрети), а не запасний постачальник: рантайм після 0.21 іншого не знає
+        liga_fixture.write_records(os.path.dirname(cls.a_dir), cls.deai, cls.legacy_id, name=os.path.basename(os.path.dirname(cls.a_dir)))
         cls.x_dir = os.path.join(cls.p_path, 'x')
         _task_dir(cls.x_dir, 'x')
         cls.p_file = os.path.join(cls.p_path, 'tasks.json')
@@ -1304,10 +1312,11 @@ class SpaceRoutes(Fixture):
         self.assertNotIn('off', body)
         for s in body['spaces']:
             # `capabilities` (етап 2а, Task 6) додає `serve.spaces_listing`; `spaces.listing()` і `describe` — без нього
-            self.assertEqual(set(s), {'id', 'name', 'color', 'path', 'tasks', 'available',
-                                      'integrations', 'legacy', 'capabilities', 'tracks', 'default_track'})   # `tracks` — 4d-1
+            self.assertEqual(set(s) - {'compat'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
+                                                   'integrations', 'legacy', 'capabilities', 'tracks', 'default_track'})   # `tracks` — 4d-1
+            self.assertEqual('compat' in s, s['id'] == self.legacy_id, s['id'])      # `compat` — лише простір з явним `vercel-publish` у режимі ЛІГА (4d-3c)
         legacy, p, e = body['spaces']
-        self.assertEqual(legacy['capabilities'], {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'})   # з інтеграціями
+        self.assertEqual(legacy['capabilities'], LIGA_CAPABILITIES)   # з інтеграціями: явні записи ролей ЛІГИ (4d-4b), а не запасний `legacy`
         self.assertEqual(p['capabilities'], {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})   # без — локальна публікація
         self.assertEqual((legacy['integrations'], legacy['legacy'], legacy['tasks'], legacy['available']),
                          (True, True, 1, True))
@@ -1566,8 +1575,7 @@ class TaskResponses(Fixture):
         self.assertEqual(body['space'], {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
                                          'color': 'space-1', 'path': os.path.dirname(self.a_dir),
                                          'legacy': True, 'integrations': True,
-                                         'capabilities': {'publish': 'legacy', 'tokens': None,
-                                                          'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'}})
+                                         'capabilities': LIGA_CAPABILITIES, 'compat': LIGA_COMPAT})
         self.assertEqual(body['comment_channel'], 'dc/a')
         # задача іншого простору — його простір, і без інтеграцій каналу коментарів немає
         st, body = self.jget('/t/x/api/task')

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
 import implicit  # noqa: E402
+import liga_fixture  # noqa: E402
 import make_before_4c2 as mb2  # noqa: E402  (світ знімка 0.12.0: сервер у процесі, `scrub`)
 import sbconf  # noqa: E402
 import serve  # noqa: E402
@@ -275,10 +276,9 @@ class TasksOverviewTest(_TmpCase):
 class TeamRowsTest(_TmpCase):
     def setUp(self):
         super().setUp()
-        # конфіг Supabase — підставний (4b-2): без нього `_team_fetch` не ходить у мережу, а тут мережу підмінено навмисно
-        cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
-        cfg.start()
-        self.addCleanup(cfg.stop)
+        # 4d-4b: простір ЛІГА з ЯВНИМ записом дашборда (вигадані адреса й ключ у `secrets.json`): без запису `_team_fetch` не ходить у мережу,
+        # а тут мережу підмінено навмисно. Шар увімкнено (тимчасові `HOME`/`DEAI_HOME`), корінь `tasks.json` — без облікових.
+        self.fx = liga_fixture.LigaFixture(self).env().build(roles=('dashboard',)).fix_space()
 
     def _fake(self, rows):
         p = os.path.join(self.root, 'team.json')
@@ -428,7 +428,7 @@ class TeamRowsTest(_TmpCase):
         self.assertEqual(len(net.calls), 1)
         # 4c-1 (свідома відмінність від 0.11.0): тайм-аут запиту — 4 с модуля (було 3 с), а текст помилки — модуля, а не `OSError`
         self.assertEqual(net.calls[0][1], 4)
-        self.assertEqual(net.calls[0][0].full_url.split('?')[0], sbconf.SB_URL + '/rest/v1/overview_projects')
+        self.assertEqual(net.calls[0][0].full_url.split('?')[0], liga_fixture.SB_URL + '/rest/v1/overview_projects')
         self.assertEqual((rows, err), ([], 'Supabase недоступний (OSError)'))
 
 
