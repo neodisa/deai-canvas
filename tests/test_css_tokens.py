@@ -30,7 +30,6 @@ sys.path.insert(0, _HERE)
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 
 MODULE_DIR = os.path.join(os.path.dirname(_HERE), 'app', 'modules', 'css-tokens')
 SERVER = os.path.join(MODULE_DIR, 'server.py')
@@ -1155,7 +1154,7 @@ class FrameworkTest(unittest.TestCase):
         self.assertIsNone(dm.provider('tokens', sp))
         dm.write_module_state(sp, 'css-tokens', enabled=True, settings={'file': 'tokens.css'})
         self.assertEqual(dm.provider('tokens', sp).id, 'css-tokens')
-        self.assertEqual(dm.provider('publish', sp), implicit.for_role('publish'))       # публікацію ЛІГА це не зачепило
+        self.assertIsNone(dm.provider('publish', sp))                  # публікацію це не зачепило (було `implicit.for_role('publish')`: запасного нема, 4d-4b)
 
 
 def _md5(path):

@@ -21,7 +21,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 import module_trust as mt  # noqa: E402
 from test_modules import Env, _write, _read, _bytes, ALL_FNS, race, VCS_SERVER, VCS_OPTIONAL  # noqa: E402
 
@@ -966,14 +965,18 @@ class RolesTest(OwnEnv):
     def test_a_missing_own_module_of_another_role_does_not_touch_the_comments_path(self):
         sp = self.new_space('Liga', integrations=True)
         self.enable_raw('acme', ('publish',), sp=sp)           # тека не приїхала; роль `publish`, не `comments`
-        self.assertEqual(dm.provider('comments', sp), implicit.for_role('comments'))
+        self.assertIsNone(dm.provider('comments', sp))          # було `implicit.for_role('comments')`: запасного постачальника нема (4d-4b)
 
-    def test_integrations_space_without_explicit_modules_never_reads_the_catalog(self):
+    def test_an_implicit_space_never_reads_the_catalog(self):
+        """Замість «простір з інтеграціями без явних модулів не читає каталог» (4d-4b: шляху ЛІГА без запису нема — простір з інтеграціями
+        вирішується як будь-який). Незмінним лишився інший бік: НЕЯВНИЙ простір (запит не закріплено) — ролей нема й без каталогу."""
         sp = self.new_space('Liga', integrations=True)
         self.own('acme', sp=sp)
-        with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог на шляху ЛІГА')):
-            self.assertEqual(dm.provider('publish', sp), implicit.for_role('publish'))
-            self.assertEqual(dm.provider('comments', sp), implicit.for_role('comments'))
+        spaces.clear_request_space()
+        with mock.patch.object(dm, 'catalog', side_effect=AssertionError('каталог для неявного простору')), \
+                mock.patch.object(dm, 'space_modules', side_effect=AssertionError('space.json для неявного простору')):
+            self.assertIsNone(dm.provider('publish'))
+            self.assertIsNone(dm.provider('comments'))
 
     def test_capabilities_builds_the_catalog_once_and_only_when_needed(self):
         self.mk('static-publish')
@@ -990,7 +993,7 @@ class RolesTest(OwnEnv):
             calls.clear()
             ig = self.new_space('Liga', integrations=True)
             dm.capabilities(ig)
-            self.assertEqual(calls, [], 'простір ЛІГА без явних модулів — без каталогу')
+            self.assertEqual(len(calls), 1, 'простір з інтеграціями — як будь-який: один каталог (було — без каталогу, шлях ЛІГА, 4d-4b)')
 
     def test_tokens_role_errors_too(self):
         self.own('ds', roles=('tokens',))

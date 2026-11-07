@@ -25,7 +25,6 @@ sys.path.insert(0, _HERE)
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 
 MODULE_DIR = os.path.join(os.path.dirname(_HERE), 'app', 'modules', 'static-publish')
 SERVER = os.path.join(MODULE_DIR, 'server.py')
@@ -264,11 +263,11 @@ class StaticPublish(unittest.TestCase):
 
     def test_legacy_and_none_cases_stay_as_they_were(self):
         ig = self.new_space('Liga', integrations=True)
-        self.assertEqual(dm.provider('publish', ig), implicit.for_role('publish'))       # простір ЛІГА: зашитий шлях
-        self.assertEqual(dm.capabilities(ig)['publish'], 'legacy')
+        self.assertIsNone(dm.provider('publish', ig))              # було `implicit.for_role('publish')` (зашитий шлях ЛІГА): запасного нема (4d-4b)
+        self.assertIsNone(dm.capabilities(ig)['publish'])          # було 'legacy'
         self.assertIsNone(dm.provider('tokens', self.sp))
         spaces.clear_request_space()
-        self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))           # простір запиту не зафіксовано
+        self.assertIsNone(dm.provider('publish'))                  # простір запиту не зафіксовано: було шлях ЛІГА, тепер роль нікому не віддана
         self.assertIsNone(dm.provider('tokens'))
         dm.write_module_state(self.sp, MID, enabled=False)           # явне «вимкнено» — модуля нема, а ЛІГИ теж
         self.assertIsNone(dm.provider('publish', self.sp))
