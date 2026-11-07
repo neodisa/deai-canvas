@@ -5,6 +5,7 @@
     python3 bin/migrate_liga.py dry-run                      # що мігрувало б (нічого не пише)
     python3 bin/migrate_liga.py run                          # виконати (бекап → секрети → space.json)
     python3 bin/migrate_liga.py restore <бекап> [--hold]     # повернути space.json і секрети ЛІГИ з бекапу (поточні — у backups/<бекап>-pre-restore)
+    python3 bin/migrate_liga.py unhold <позначка>            # зняти `held` кроку (liga-4d4a…), щоб наступний запуск його виконав
 
 Вихід 0 — успіх, 1 — інакше. ⛔ Друкує лише коди, імена ролей і ключів; значень секретів і адрес — ніколи.
 """
@@ -25,6 +26,8 @@ def main(argv=None):
     r = sub.add_parser('restore')
     r.add_argument('stamp')
     r.add_argument('--hold', action='store_true', help='після відкату не мігрувати на наступному старті')
+    u = sub.add_parser('unhold')
+    u.add_argument('mark', help='позначка кроку, напр. liga-4d4a')
     a = ap.parse_args(argv)
     if a.cmd == 'status':
         print(liga_migrate.status_text(liga_migrate.status()))
@@ -46,13 +49,15 @@ def main(argv=None):
             if info.get('hint'):
                 print('  що робити: ' + str(info['hint']))
             if st == 'done':
-                if step.ungated:                                         # 4d-4a: ролей нема — підсумок напрямків, записів і нотаток
+                if step.originals:                                       # 4d-4b: ролей нема — що скопійовано, видалено й лишилось (імена ключів)
+                    print('  %s; бекап: %s' % (liga_migrate.originals_summary(info), info.get('backup')))
+                elif step.ungated:                                       # 4d-4a: ролей нема — підсумок напрямків, записів і нотаток
                     print('  %s; бекап: %s' % (liga_migrate.summary_line(info), info.get('backup')))
                 else:
                     tr = ('; напрямки: ' + ('так' if info.get('tracks') else 'ні')) if step.tracks else ''     # лише крок з напрямками
                     print('  ролі: %s%s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', tr, info.get('backup')))
                 stamps_done.append(info.get('backup'))
-            elif step.ungated and liga_migrate.tracks_not_migrated(st):
+            elif step.ungated and not step.originals and liga_migrate.tracks_not_migrated(st):
                 print('  ' + liga_migrate.TRACKS_NOT_MIGRATED)
             if st not in liga_migrate.BENIGN:
                 code = 1
@@ -63,6 +68,12 @@ def main(argv=None):
             if len(stamps_done) > 1:
                 print('  раніші кроки (%s) — лише після відкату пізніших, у зворотному порядку' % ', '.join(stamps_done[:-1]))
         return code
+    if a.cmd == 'unhold':
+        st = liga_migrate.unhold(a.mark)
+        print('%s unhold: %s' % (a.mark, st))
+        if st == 'unheld':
+            print('  наступний запуск виконає крок: python3 bin/migrate_liga.py run')
+        return 0 if st == 'unheld' else 1
     step = liga_migrate.step_of_stamp(a.stamp) or liga_migrate.ALL_STEPS[0]     # крок визначає імʼя бекапу
     st, info = liga_migrate._restore(a.stamp, hold=a.hold)
     print('%s restore: %s' % (step.mark, st))
@@ -71,6 +82,8 @@ def main(argv=None):
     if st == 'refuse-later-applied':
         print('  пізніший крок застосований: спершу відкотіть його бекап%s' % (
             ': python3 bin/migrate_liga.py restore %s [--hold]' % info['rollback_first'] if info.get('rollback_first') else ''))
+    if st == 'refuse-tasks-unreadable':                      # 4d-4b: живий tasks.json не читається — відкат кроку Е нічого не записав
+        print('  живий tasks.json не читається: виправте файл (чи відновіть його з tasks.json.bak) і повторіть відкат')
     return 0 if st == 'restored' else 1
 
 

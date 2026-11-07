@@ -1679,12 +1679,16 @@ class TwoStepsStartupTest(_TwoSteps):
         self.assertNotIn(FAKE_SECRET, err)
         self.assert_no_secrets_in_logs()
 
-    def test_second_start_is_silent_and_writes_nothing(self):
+    def test_second_start_prints_only_the_off_roles_and_writes_nothing(self):
+        """4d-4b (Поправка 6): другий старт мовчить про кроки, але КОЖНУ вимкнену роль називає (рядки `ролі ЛІГИ вимкнено: …`); дерево файлів не змінюється."""
         self.start()
         before = self.snapshot_tree()
         st, err = self.start()
         self.assertEqual(st, 'skip-done')
-        self.assertEqual(err, '')
+        self.assertEqual(err.splitlines(), [
+            'ролі ЛІГИ вимкнено: publish (vercel-publish) — no-record; виправити: запустіть: python3 bin/migrate_liga.py run',
+            'ролі ЛІГИ вимкнено: vcs (git-sync) — not-migrated; виправити: додайте адресу й облікові на екрані «Підключення» '
+            '(змінні оточення й pipeline-feedback більше не читаються)'])
         self.assertEqual(self.snapshot_tree(), before)
 
     def test_run_all_returns_marks_statuses_infos(self):
@@ -1783,7 +1787,10 @@ class CliStepsTest(_TwoSteps):
         with self.mock.patch.object(lm, 'STEPS', (self.step_a,)):
             code, out, _ = self.cli('status')
             self.assertEqual(out, 'Міграція ЛІГИ (liga-4d3a)\n  простір: legacy\n'
-                                  '  позначки нема: міграція ще не виконана (або відкочена)\n  бекапи: нема\n')
+                                  '  позначки нема: міграція ще не виконана (або відкочена)\n  бекапи: нема\n'
+                                  'Ролі ЛІГИ\n  publish (vercel-publish): ні (no-record)\n  comments (supabase-comments): ні (no-record)\n'
+                                  '  vcs (git-sync): ні (no-record)\n  dashboard (supabase-dashboard): ні (no-record)\n'
+                                  '  tracker (jira-tracker): ні (no-record)\n  notify (supabase-teams): ні (no-record)\n')   # 4d-4b: секція «Ролі ЛІГИ»
             code, out, _ = self.cli('dry-run')
             self.assertEqual((code, out), (0, lm.report(lm.plan(step=self.step_a)) + '\n'))
             self.assertTrue(out.startswith('liga-4d3a: ready\n'))
@@ -1797,7 +1804,10 @@ class CliStepsTest(_TwoSteps):
             code, out, _ = self.cli('status')
             self.assertRegex(out, r'^Міграція ЛІГИ \(liga-4d3a\)\n  простір: legacy\n'
                                   r'  позначка: \S+, ролі: tracker, dashboard, notify, напрямки: так, бекап: %s\n'
-                                  r'  останній звіт: done \(\S+\)\n  бекапи: %s\n$' % (re.escape(b), re.escape(b)))
+                                  r'  останній звіт: done \(\S+\)\n  бекапи: %s\n'
+                                  r'Ролі ЛІГИ\n  publish \(vercel-publish\): ні \(no-record\)\n  comments \(supabase-comments\): ні \(no-record\)\n'
+                                  r'  vcs \(git-sync\): ні \(no-record\)\n  dashboard \(supabase-dashboard\): так\n'
+                                  r'  tracker \(jira-tracker\): так\n  notify \(supabase-teams\): так\n$' % (re.escape(b), re.escape(b)))
             code, out, _ = self.cli('run')
             self.assertEqual((code, out), (0, 'liga-4d3a: skip-done\n  міграцію вже виконано (позначка в space.json)\n'))
             code, out, _ = self.cli('restore', b)
@@ -1926,7 +1936,7 @@ class StepBConstants(unittest.TestCase):
         import liga_migrate as lm
         self.assertEqual([s.mark for s in lm.ALL_STEPS][:2], ['liga-4d3a', 'liga-4d3b'])      # 4d-3c: третій крок — `StepCConstants`
         self.assertIs(lm.ALL_STEPS[2], lm.STEP_C)
-        self.assertEqual(lm.STEPS, lm.ALL_STEPS[:4])             # 4d-4b: на старті до Task 7 — чотири кроки
+        self.assertEqual(lm.STEPS, lm.ALL_STEPS)                 # 4d-4b (Task 7): на старті п'ять кроків
         b = lm.ALL_STEPS[1]
         self.assertIs(lm.STEP_B, b)
         self.assertEqual((b.mark, b.suffix, b.tracks), ('liga-4d3b', '-liga-4d3b', False))
@@ -2213,7 +2223,9 @@ class StepBRunTest(_RealSteps):
         self.run_b()
         before = self.snapshot_tree()
         st, err = self.start()
-        self.assertEqual((st, err), ('skip-done', ''))
+        self.assertEqual(st, 'skip-done')
+        self.assertEqual(err.splitlines(), [          # 4d-4b (Поправка 6): тиша про кроки; вимкнену роль `publish` старт називає
+            'ролі ЛІГИ вимкнено: publish (vercel-publish) — no-record; виправити: запустіть: python3 bin/migrate_liga.py run'])
         self.assertEqual(self.snapshot_tree(), before)
         self.assertEqual(self.lm.run(step='liga-4d3b'), 'skip-done')
         self.assertEqual(self.snapshot_tree(), before)

@@ -743,8 +743,8 @@ STEP_D = Step('liga-4d4a', (), True, '-liga-4d4a', re.compile(r'[0-9]{8}-[0-9]{6
 #: з кореня за рівністю. Ролей нема; `originals=True` — гілка «оригінали» в `_plan`/`_run_locked`/`_restore_locked`.
 STEP_E = Step('liga-4d4b', (), False, '-liga-4d4b', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d4b(?:-[0-9]{1,3})?'), lambda cfg, present: {}, False, True)
 ALL_STEPS = (STEP_A, STEP_B, STEP_C, STEP_D, STEP_E)
-#: До Task 7 на старті й в CLI біжать чотири кроки: запису, відкату й виводу кроку Е ще нема.
-STEPS = ALL_STEPS[:4]
+#: Те, що біжить на старті й в CLI (4d-4b, Task 7: запис, відкат і вивід кроку Е вже є — п'ять кроків).
+STEPS = ALL_STEPS
 
 
 def _step(x):
@@ -1580,12 +1580,180 @@ def _restore_locked(stamp, hold, home):
     return 'restored', info
 
 
+# ---------------------------------------------------------------------------------------------------------------- ролі ЛІГИ (4d-4b)
+
+#: Шість ролей ЛІГИ: `(роль, вбудований модуль, крок-власник)`. Запасного постачальника нема (4d-4b): роль працює лише через ЯВНИЙ запис.
+LIGA_ROLES = (('publish', 'vercel-publish', STEP_C), ('comments', 'supabase-comments', STEP_B), ('vcs', 'git-sync', STEP_B),
+              ('dashboard', 'supabase-dashboard', STEP_A), ('tracker', 'jira-tracker', STEP_A), ('notify', 'supabase-teams', STEP_A))
+_ENTRY_FIX = 'додайте адресу й облікові на екрані «Підключення» (змінні оточення й pipeline-feedback більше не читаються)'
+_RUN_FIX = 'python3 bin/migrate_liga.py run'
+#: Код причини → що робити. Рядки без шляхів і значень (друкуються на КОЖНОМУ старті, поки роль вимкнена).
+_ROLE_FIX = {
+    'disabled': 'увімкніть запис на екрані «Підключення»',
+    'no-jira': _ENTRY_FIX, 'no-supabase': _ENTRY_FIX, 'bad-url': _ENTRY_FIX, 'not-migrated': _ENTRY_FIX,
+    'publisher-present': 'публікацію веде інший модуль простору — так і було',
+    'module-present': 'модуль ролі вже є в просторі — так і було',
+    'skip-path-in-git': _HINTS['skip-path-in-git'],
+    'skip-tasks-unreadable': 'виправте старий tasks.json і запустіть: ' + _RUN_FIX,
+    'skip-space-json-unreadable': 'виправте space.json простору ЛІГА і запустіть: ' + _RUN_FIX,
+    'skip-registry-unreadable': 'виправте реєстр просторів (spaces.json) і запустіть: ' + _RUN_FIX,
+    'skip-no-path': 'теки простору ЛІГА не існує: відновіть її чи змініть шлях у реєстрі, далі: ' + _RUN_FIX,
+    'skip-busy': 'повторіть старт: міграцію зараз виконує інший процес',
+    'module-error': 'модуль не завантажився: перевірте його на екрані «Підключення»',
+    'module-untrusted': 'довіртесь модулю на екрані «Підключення»',
+    'bad-settings': 'виправте налаштування запису на екрані «Підключення»',
+    'secrets-unreadable': 'secrets.json не читається: виправте файл у домі Deai',
+    'space-json-unreadable': 'space.json не читається: виправте файл простору ЛІГА',
+    'no-record': 'запустіть: ' + _RUN_FIX,
+}
+
+
+def _held_mark(mig, owner):
+    """Позначка першого кроку до `owner` включно, що утримано (`{held: true}`), чи `None`: `held` раннього кроку тримає й пізніші (спека §1)."""
+    if not isinstance(mig, dict):
+        return None
+    for step in ALL_STEPS:
+        m = mig.get(step.mark)
+        if isinstance(m, dict) and m.get('held') is True:
+            return step.mark
+        if step is owner:
+            break
+    return None
+
+
+def _reason_from_reports(role, owner, mig, last):
+    """Код причини, чому в просторі нема ЗАПИСУ `role` (за порядком спеки §4.1): `held` (власника чи раннього кроку) → `skipped` кроку-власника
+    (звіт `last.json` цього кроку) → позначка кроку (застосований без ролі — `not-migrated`) → останній звіт кроку (`skip-*`/`abort-*`) → `no-record`."""
+    mark = mig.get(owner.mark) if isinstance(mig, dict) else None
+    rep = ((last or {}).get('steps') or {}).get(owner.mark) if isinstance(last, dict) else None
+    rep = rep if isinstance(rep, dict) else {}
+    skipped = rep.get('skipped') if isinstance(rep.get('skipped'), dict) else {}
+    if _held_mark(mig, owner):                                # `held` власника АБО раннього кроку (ранній тримає пізніші)
+        return 'skip-held'
+    if role in skipped and skipped[role]:
+        return skipped[role]
+    if isinstance(mark, dict):                                # крок застосований, а запису нема: роль пропущено (код не збережено)
+        return 'not-migrated' if role not in (mark.get('roles') or []) else 'no-record'
+    st = rep.get('status')
+    if isinstance(st, str) and (st.startswith('skip-') or st.startswith('abort-')) and st not in ('skip-done', 'skip-nothing', 'skip-layer-off'):
+        return st
+    return 'no-record'
+
+
+def roles_state(home=None):
+    """Стан шести ролей ЛІГИ для старту й `status`: `[{role, module, on, reason, fix}]` (порядок `LIGA_ROLES`) або `[]`, коли шару нема / простору
+    ЛІГА нема. ЧИСТА: без мережі й без коду модуля (`module_ctx` лише збирає налаштування й секрет). `on` — `_provider_for` дає ЯВНИЙ
+    `Module` цієї ролі і `module_ctx` будується. Причина — перша застосовна: `disabled` (запис вимкнено) → причина кроку (`no-jira`,
+    `no-supabase`, `bad-url`, `skip-held`, `skip-path-in-git`, `abort-*`…) → `module-error`/`module-untrusted`/`bad-settings` (запис є, не
+    працює) → `no-record`. `integrations` ЛІГИ вимкнено — усі ролі `on: False`, `reason: 'integrations-off'`, `fix: ''` (так було й у 0.20)."""
+    try:
+        if not spaces.layer_on():
+            return []
+        liga = _liga_entry(home)
+    except _Stop:
+        return []
+    if liga.get('integrations') is not True:
+        return [{'role': r, 'module': m, 'on': False, 'reason': 'integrations-off', 'fix': ''} for r, m, _s in LIGA_ROLES]
+    space = {'id': liga['id'], 'path': liga['path'], 'legacy': True, 'integrations': True}
+    try:
+        data = deai_modules._load_space_json(os.path.join(liga['path'], 'space.json'))
+        mods = deai_modules._raw_modules(data)
+        norm = deai_modules._normalize(mods)
+        mig = data.get('migrations')
+    except deai_modules.ModuleError:
+        return [{'role': r, 'module': m, 'on': False, 'reason': 'space-json-unreadable', 'fix': _ROLE_FIX['space-json-unreadable']}
+                for r, m, _s in LIGA_ROLES]
+    last = _read_last()
+    out = []
+    for role, mid, owner in LIGA_ROLES:
+        reason = None
+        try:
+            prov = deai_modules._provider_for(role, space)
+            if isinstance(prov, deai_modules.Module) and prov.id == mid:
+                deai_modules.module_ctx(space, prov)
+                out.append({'role': role, 'module': mid, 'on': True, 'reason': None, 'fix': ''})
+                continue
+        except deai_modules.ModuleError as e:
+            reason = e.code if e.code in _ROLE_FIX else 'module-error'
+        if reason is None:
+            e_ = norm.get(mid)
+            if e_ is not None and e_.get('enabled') is not True:
+                reason = 'disabled'
+            elif e_ is None:
+                reason = _reason_from_reports(role, owner, mig, last)
+            else:
+                reason = 'module-error'
+        if reason == 'skip-held':
+            fix = 'python3 bin/migrate_liga.py unhold %s, далі: %s' % (_held_mark(mig, owner) or owner.mark, _RUN_FIX)
+        elif reason.startswith('abort-'):
+            fix = 'python3 bin/migrate_liga.py status, усуньте причину, далі: ' + _RUN_FIX
+        else:
+            fix = _ROLE_FIX.get(reason, _RUN_FIX)
+        out.append({'role': role, 'module': mid, 'on': False, 'reason': reason, 'fix': fix})
+    return out
+
+
+def roles_lines(states):
+    """Рядки старту про вимкнені ролі: `ролі ЛІГИ вимкнено: <роль> (<модуль>) — <код>; виправити: <команда>` по рядку на роль. Усі ролі
+    ввімкнено чи `integrations` вимкнено (так було й у 0.20) — порожньо."""
+    return ['ролі ЛІГИ вимкнено: %s (%s) — %s; виправити: %s' % (s['role'], s['module'], s['reason'], s['fix'])
+            for s in states if not s['on'] and s['reason'] != 'integrations-off']
+
+
+#: Рядок після кроку Е: де тепер лежать облікові (спека §6, ризик «єдина копія»).
+ORIGINALS_REMOVED_LINE = 'оригінали видалено з tasks.json; єдина копія — secrets.json і backups/ у домі Deai'
+
+
+def originals_summary(info):
+    """Підсумок кроку Е для старту й CLI: `скопійовано: …; видалено: …; лишилось: …; нотатки: …` (імена ключів і коди, без значень)."""
+    parts = []
+    for key, label in (('copied', 'скопійовано'), ('removed', 'видалено'), ('kept', 'лишилось')):
+        if info.get(key):
+            parts.append('%s: %s' % (label, ', '.join(info[key])))
+    if info.get('notes'):
+        parts.append('нотатки: ' + ', '.join(info['notes']))
+    return '; '.join(parts) or 'нічого не змінено'
+
+
+def unhold(mark, home=None):
+    """Знімає `{held: true}` кроку `mark` (ключ позначки, `liga-4d4a`…) у `space.json` ЛІГИ: наступний старт знову виконає крок. Лише позначку,
+    що є РІВНО `{held: true}` (позначка застосованого кроку — відмова `refuse-not-held`); невідомий ключ — `refuse-mark`. Під міжпроцесним
+    замком і `WRITE_LOCK`. Повертає статус: `unheld`, `refuse-mark`, `refuse-not-held`, `refuse-no-liga`, `skip-busy`, `skip-layer-off`, `abort-unhold`."""
+    try:
+        step = next((s for s in ALL_STEPS if s.mark == mark), None)
+        if step is None:
+            return 'refuse-mark'
+        if not spaces.layer_on():
+            return 'skip-layer-off'
+        with _exclusive() as got:
+            if got == 'busy':
+                return 'skip-busy'
+            if got != 'ok':
+                return 'abort-lock'
+            try:
+                liga = _liga_entry(home)
+            except _Stop:
+                return 'refuse-no-liga'
+            sp = os.path.join(liga['path'], 'space.json')
+            with spaces.WRITE_LOCK:
+                cur = deai_modules._load_space_json(sp)
+                marks = cur.get('migrations')
+                if not (isinstance(marks, dict) and marks.get(step.mark) == {'held': True}):
+                    return 'refuse-not-held'
+                new = dict(cur)
+                new['migrations'] = {k: v for k, v in marks.items() if k != step.mark}
+                _write_space(sp, new)
+            return 'unheld'
+    except Exception:  # noqa: BLE001 — без тексту винятку
+        return 'abort-unhold'
+
+
 # ---------------------------------------------------------------------------------------------------------------- статус
 
 def status(home=None):
     """Стан для людини (словник без значень секретів): запис ЛІГИ, позначка, останній звіт, бекапи. Ключі 4d-3a без змін (`mark` —
     позначка кроку 4d-3a), плюс `steps`: `{позначка: {'mark': позначка кроку | None, 'backups': усі бекапи}}` для кожного кроку `STEPS`."""
-    out = {'liga': False, 'space_id': None, 'mark': None, 'last': None, 'backups': [], 'error': None, 'steps': {}}
+    out = {'liga': False, 'space_id': None, 'mark': None, 'last': None, 'backups': [], 'error': None, 'steps': {}, 'roles': []}
     try:
         liga = _liga_entry(home)
     except _Stop as s:
@@ -1599,7 +1767,7 @@ def status(home=None):
             mig = data.get('migrations')
             for key in marks:
                 mark = mig.get(key) if isinstance(mig, dict) else None
-                marks[key] = ({k: mark[k] for k in ('at', 'roles', 'tracks', 'records', 'notes', 'backup', 'held') if k in mark}
+                marks[key] = ({k: mark[k] for k in ('at', 'roles', 'tracks', 'records', 'notes', 'backup', 'held', 'copied', 'removed', 'kept') if k in mark}
                               if isinstance(mark, dict) else None)
             out['mark'] = marks.get(_step(None).mark)
         except deai_modules.ModuleError:
@@ -1607,6 +1775,10 @@ def status(home=None):
     out['last'] = _read_last() or None
     out['backups'] = _list_backups()
     out['steps'] = {key: {'mark': m, 'backups': list(out['backups'])} for key, m in marks.items()}
+    try:
+        out['roles'] = roles_state(home)
+    except Exception:  # noqa: BLE001 — `status` не падає через стан ролей
+        out['roles'] = []
     return out
 
 
@@ -1631,6 +1803,8 @@ def status_text(st):
                 tr = (', напрямки: ' + ('так' if m.get('tracks') else 'ні')) if _step(key).tracks else ''     # рядок напрямків — лише кроку з напрямками
                 if _step(key).ungated:                                       # 4d-4a: записи й нотатки (лише коди, без шляхів і значень)
                     tr += ', записи: %s, нотатки: %s' % (m.get('records', 0), ', '.join(m.get('notes') or []) or '-')
+                if _step(key).originals:                                     # 4d-4b: ключі кореня (імена, без значень)
+                    tr += ', ' + originals_summary(m)
                 lines.append('  позначка: %s, ролі: %s%s, бекап: %s' % (
                     m.get('at'), ', '.join(m.get('roles') or []) or '-', tr, m.get('backup')))
         rep = ((last or {}).get('steps') or {}).get(key) if multi and isinstance(last, dict) else last   # звіт ЦЬОГО кроку
@@ -1645,6 +1819,13 @@ def status_text(st):
     if multi:
         lines.extend(_skip_lines(last))
     lines.append('  бекапи: ' + (', '.join(st['backups']) or 'нема'))
+    roles = st.get('roles') or []
+    if roles:                                                        # 4d-4b: усі шість ролей ЛІГИ — `так`/`ні (<код>)`
+        lines.append('Ролі ЛІГИ')
+        if all(r['reason'] == 'integrations-off' for r in roles):
+            lines.append('  інтеграції вимкнено — так і було')
+        else:
+            lines.extend('  %s (%s): %s' % (r['role'], r['module'], 'так' if r['on'] else 'ні (%s)' % r['reason']) for r in roles)
     return '\n'.join(lines)
 
 
@@ -1734,6 +1915,10 @@ def startup():
                     print('  бекап: %s' % stamp, file=sys.stderr)
                 if mark == STEP_D.mark and st == 'done':                     # 4d-4a: що людина бачитиме (нотатки)
                     print('  ' + summary_line(info), file=sys.stderr)
+                if mark == STEP_E.mark and st == 'done':                     # 4d-4b: що скопійовано/видалено/лишилось (імена ключів) і де єдина копія
+                    print('  ' + originals_summary(info), file=sys.stderr)
+                    if info.get('removed'):
+                        print('  ' + ORIGINALS_REMOVED_LINE, file=sys.stderr)
                 skipped = info.get('skipped')
                 if isinstance(skipped, dict) and skipped:
                     print('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(skipped.items())), file=sys.stderr)
@@ -1747,6 +1932,9 @@ def startup():
                 print('  відкат: bin/migrate_liga.py restore %s --hold' % stamps_done[-1], file=sys.stderr)
                 if len(stamps_done) > 1:
                     print('  раніші кроки (%s) — лише після відкату пізніших, у зворотному порядку' % ', '.join(stamps_done[:-1]), file=sys.stderr)
+        if not implicit.isolated():                                          # 4d-4b: кожна вимкнена роль — рядком, причина й команда виправлення
+            for line in roles_lines(roles_state()):
+                print(line, file=sys.stderr)
         # abort не маскуємо пізнішим успіхом: перший `abort-*`, інакше перший не-`skip-*`, інакше перший
         return (next((s for s in done if s.startswith('abort-')), None) or next((s for s in done if not s.startswith('skip-')), None)
                 or (done[0] if done else None))

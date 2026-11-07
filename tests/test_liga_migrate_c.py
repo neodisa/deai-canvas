@@ -818,7 +818,7 @@ class StepCConstants(unittest.TestCase):
         import liga_migrate as lm
         self.assertEqual([s.mark for s in lm.ALL_STEPS[:3]], ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'])
         self.assertEqual(lm.ALL_STEPS[3].mark, 'liga-4d4a', 'четвертий крок — 4d-4a (його тести — у test_liga_migrate_d)')
-        self.assertEqual(lm.STEPS, lm.ALL_STEPS[:4])             # 4d-4b: на старті до Task 7 — чотири кроки
+        self.assertEqual(lm.STEPS, lm.ALL_STEPS)                 # 4d-4b (Task 7): на старті п'ять кроків
         c = lm.ALL_STEPS[2]
         self.assertIs(lm.STEP_C, c)
         self.assertEqual((c.mark, c.roles, c.tracks, c.suffix), ('liga-4d3c', (('publish', 'vercel-publish'),), False, '-liga-4d3c'))
@@ -1074,11 +1074,14 @@ class PublisherPresent(_StepC):
         self.assertNotIn(PUB_MOD, self.read_json(self.space_path())['modules'])
 
     def test_publisher_present_is_quiet_on_startup_but_visible_in_dry_run(self):
-        """Ревʼю M2: стабільний стан не новина — старт мовчить; «dry-run» показує причину."""
+        """Ревʼю M2: стабільний стан не новина — старт не друкує кроків; «dry-run» показує причину. 4d-4b (Поправка 6): вимкнену роль старт називає."""
         self.put_other({'static-publish': {'enabled': True, 'settings': {}}})
+        before = self.snapshot_tree()
         st, err = self.start()
         self.assertEqual(st, 'skip-done')
-        self.assertEqual(err, '')
+        self.assertEqual(err.splitlines(), [
+            'ролі ЛІГИ вимкнено: publish (vercel-publish) — no-record; виправити: запустіть: python3 bin/migrate_liga.py run'])
+        self.assertEqual(self.snapshot_tree(), before)
         code, out, _e = self.cli('dry-run')
         self.assertEqual(code, 0)
         self.assertIn('publish (%s): skip: publisher-present' % PUB_MOD, out)

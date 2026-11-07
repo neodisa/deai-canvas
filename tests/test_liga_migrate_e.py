@@ -278,9 +278,10 @@ class RunE(_StandE):
         self.root()
         order = []
         real_commit, real_space = self.lm._commit_originals, self.lm._commit_space
-        self.mock.patch.object(self.lm, '_commit_originals', lambda *a, **k: order.append('root') or real_commit(*a, **k)).start()
-        self.mock.patch.object(self.lm, '_commit_space', lambda *a, **k: order.append('mark') or real_space(*a, **k)).start()
-        self.addCleanup(self.mock.patch.stopall)
+        for name, tag, real in (('_commit_originals', 'root', real_commit), ('_commit_space', 'mark', real_space)):
+            patcher = self.mock.patch.object(self.lm, name, lambda *a, _t=tag, _r=real, **k: order.append(_t) or _r(*a, **k))
+            patcher.start()
+            self.addCleanup(patcher.stop)                                # ⛔ не `stopall`: він зупинив би й патчі HOME/DEAI_HOME стенда
         self.run_e()
         self.assertEqual(order, ['root', 'mark'])
 
@@ -654,6 +655,224 @@ class RestoreE(_StandE):
             self.assertEqual((got, extra['rollback_first']), ('refuse-later-applied', names['liga-4d4a']), m)
         self.assertEqual(self.lm.restore(names['liga-4d4a']), 'restored')
         self.assertEqual(self.lm.restore(names['liga-4d3c']), 'restored')
+
+
+class RolesState(_StandE):
+    """`roles_state()` (§4.1): шість ролей, причина — перша застосовна, команда виправлення без шляхів і значень."""
+
+    def by_role(self):
+        return {r['role']: r for r in self.lm.roles_state()}
+
+    def test_all_six_on_when_records_are_enabled(self):
+        got = self.lm.roles_state()
+        self.assertEqual([r['role'] for r in got], ['publish', 'comments', 'vcs', 'dashboard', 'tracker', 'notify'])
+        self.assertTrue(all(r['on'] and r['reason'] is None and r['fix'] == '' for r in got))
+        self.assertEqual(self.lm.roles_lines(got), [])
+
+    def test_disabled_record(self):
+        self.rec_all(mods={'jira-tracker': {'enabled': False, 'shared_state': True, 'settings': {'base': self.JIRA_BASE, 'email': self.JIRA_EMAIL}}})
+        r = self.by_role()['tracker']
+        self.assertEqual((r['on'], r['reason']), (False, 'disabled'))
+        self.assertIn('«Підключення»', r['fix'])
+
+    def test_no_record_with_skipped_code_from_the_last_report(self):
+        self.rec_all(drop=('jira-tracker',), migrations={'liga-4d3a': {'at': 'x', 'roles': ['dashboard', 'notify'], 'tracks': False, 'backup': 'b'}})
+        self._write(os.path.join(self.deai, 'migrations', 'last.json'),
+                    {'steps': {'liga-4d3a': {'status': 'done', 'skipped': {'tracker': 'no-jira'}}}})
+        r = self.by_role()['tracker']
+        self.assertEqual(r['reason'], 'no-jira')
+        self.assertIn('pipeline-feedback', r['fix'])                     # текст каже, що оточення й pipeline-feedback більше не читаються
+
+    def test_applied_step_without_the_role_and_without_a_report_is_not_migrated(self):
+        self.rec_all(drop=('jira-tracker',), migrations={'liga-4d3a': {'at': 'x', 'roles': ['dashboard', 'notify'], 'tracks': False, 'backup': 'b'}})
+        self.assertEqual(self.by_role()['tracker']['reason'], 'not-migrated')
+
+    def test_held_step_names_unhold(self):
+        self.rec_all(drop=('jira-tracker', 'supabase-dashboard', 'supabase-teams'), migrations={'liga-4d3a': {'held': True}})
+        r = self.by_role()['tracker']
+        self.assertEqual(r['reason'], 'skip-held')
+        self.assertIn('migrate_liga.py unhold liga-4d3a', r['fix'])
+
+    def test_early_step_held_names_the_early_mark_for_later_owners(self):
+        """`held` кроку A тримає B і C: роль `publish` (власник C) каже `skip-held` і `unhold liga-4d3a`, а не оманливе `no-record`/`run`."""
+        self.rec_all(drop=('vercel-publish', 'git-sync', 'supabase-comments'), migrations={'liga-4d3a': {'held': True}})
+        for role in ('publish', 'comments', 'vcs'):
+            r = self.by_role()[role]
+            self.assertEqual(r['reason'], 'skip-held', role)
+            self.assertIn('migrate_liga.py unhold liga-4d3a', r['fix'], role)
+
+    def test_last_report_skip_codes_have_their_own_fix(self):
+        self.rec_all(drop=('vercel-publish',))
+        for code, needle in (('skip-path-in-git', 'поза робоче дерево git'), ('skip-tasks-unreadable', 'tasks.json'),
+                             ('skip-space-json-unreadable', 'space.json'), ('abort-write', 'status'), ('skip-busy', 'повторіть')):
+            self._write(os.path.join(self.deai, 'migrations', 'last.json'), {'steps': {'liga-4d3c': {'status': code}}})
+            r = self.by_role()['publish']
+            self.assertEqual(r['reason'], code)
+            self.assertIn(needle, r['fix'], code)
+
+    def test_no_record_default_names_run(self):
+        self.rec_all(drop=('supabase-comments',))
+        r = self.by_role()['comments']
+        self.assertEqual(r['reason'], 'no-record')
+        self.assertIn('migrate_liga.py run', r['fix'])
+
+    def test_broken_module_is_module_error(self):
+        self.rec_all(mods={'git-sync': {'enabled': True, 'shared_state': True, 'settings': {'compat': 'bogus-value'}}})
+        r = self.by_role()['vcs']
+        self.assertFalse(r['on'])
+        self.assertIn(r['reason'], ('bad-settings', 'module-error'))
+
+    def test_unreadable_space_json_names_every_role(self):
+        self._write(self.space_path(), '{not json')
+        got = self.lm.roles_state()
+        self.assertEqual({r['reason'] for r in got}, {'space-json-unreadable'})
+        self.assertEqual(len(got), 6)
+
+    def test_integrations_off_is_quiet(self):
+        self.registry()
+        reg = self.read_json(os.path.join(self.deai, 'spaces.json'))
+        reg['spaces'][0]['integrations'] = False
+        self._write(os.path.join(self.deai, 'spaces.json'), reg)
+        got = self.lm.roles_state()
+        self.assertEqual({r['reason'] for r in got}, {'integrations-off'})
+        self.assertEqual(self.lm.roles_lines(got), [])
+
+    def test_layer_off_and_no_liga_give_nothing(self):
+        self.registry(entry=False)
+        self.assertEqual(self.lm.roles_state(), [])
+
+    def test_lines_carry_no_values_or_paths(self):
+        self.rec_all(drop=('jira-tracker',))
+        text = '\n'.join(self.lm.roles_lines(self.lm.roles_state()))
+        self.assertIn('ролі ЛІГИ вимкнено: tracker (jira-tracker) — no-record; виправити:', text)
+        for bad in (self.tmp, self.SB_KEY, self.JIRA_TOKEN):
+            self.assertNotIn(bad, text)
+
+    def test_restore_tasks_unreadable_has_a_cli_hint(self):
+        """Task 6 віддає `refuse-tasks-unreadable`; CLI `restore` підказує, що робити (без шляхів)."""
+        self.root()
+        self.run_e()
+        stamp = self.mark()['backup']
+        with self.mock.patch.object(self.lm, '_restore', lambda *a, **k: ('refuse-tasks-unreadable', {})):
+            code, out, _e = self.cli('restore', stamp)
+        self.assertEqual(code, 1)
+        self.assertIn('refuse-tasks-unreadable', out)
+        self.assertIn('tasks.json', out.split('refuse-tasks-unreadable', 1)[1])
+
+
+class StartupE(_StandE):
+    """Старт: п'ять кроків, рядки Е, рядок «єдина копія», блок вимкнених ролей; ізольований прогін блок не друкує."""
+
+    def fresh_unmigrated_tree(self):
+        """Стара установка 0.16: записів нема, корінь має оригінали; `JIRA_*` у оточенні (старт з терміналу)."""
+        import shutil
+        shutil.rmtree(self.space_dir)
+        os.makedirs(self.space_dir)
+        if os.path.exists(self.secrets_path()):
+            os.remove(self.secrets_path())
+        self.root()
+        for k, v in (('JIRA_EMAIL', self.JIRA_EMAIL), ('JIRA_TOKEN', self.JIRA_TOKEN)):
+            patcher = self.mock.patch.dict(os.environ, {k: v})
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_five_steps_five_backups_one_restore_hint(self):
+        self.fresh_unmigrated_tree()
+        st, err = self.quiet(self.lm.startup)
+        self.assertEqual(st, 'done')
+        marks = ('liga-4d3a', 'liga-4d3b', 'liga-4d3c', 'liga-4d4a', 'liga-4d4b')
+        for m in marks:
+            self.assertIn('%s: ' % m, err)
+        self.assertEqual(len(self.backups()), 5)
+        e_stamp = [b for b in self.backups() if b.endswith('-liga-4d4b')][0]
+        self.assertEqual(err.count('відкат: bin/migrate_liga.py restore'), 1)
+        self.assertIn('restore %s --hold' % e_stamp, err)               # підказка відкату — для найпізнішого кроку, E включно
+        self.assertIn(self.lm.ORIGINALS_REMOVED_LINE, err)
+        self.assertIn('скопійовано: gitlab_host_ip, gitlab_ssh_key, preview_password', err)
+        self.assertIn('видалено:', err)
+        self.assertNotIn('ролі ЛІГИ вимкнено', err)                       # усі шість ролей увімкнено
+        for v in (self.SB_KEY, self.JIRA_TOKEN, self.PW, self.SSH, self.HOSTIP, self.tmp):
+            self.assertNotIn(v, err)
+
+    def test_off_roles_are_named_on_every_start_while_off(self):
+        self.fresh_unmigrated_tree()
+        for k in ('JIRA_EMAIL', 'JIRA_TOKEN'):
+            patcher = self.mock.patch.dict(os.environ)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            os.environ.pop(k)                                             # трекер не мігрує: `no-jira`
+        _st, err1 = self.quiet(self.lm.startup)
+        self.assertIn('ролі ЛІГИ вимкнено: tracker (jira-tracker) — no-jira; виправити:', err1)
+        _st, err2 = self.quiet(self.lm.startup)                           # другий старт: кроки skip-done, але рядок лишається
+        self.assertIn('ролі ЛІГИ вимкнено: tracker (jira-tracker) — no-jira', err2)
+        for v in (self.SB_KEY, self.tmp):
+            self.assertNotIn(v, err1 + err2)
+
+    def test_isolated_run_prints_no_roles_block(self):
+        self.fresh_unmigrated_tree()
+        for k in ('JIRA_EMAIL', 'JIRA_TOKEN'):
+            patcher = self.mock.patch.dict(os.environ)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            os.environ.pop(k)
+        self.quiet(self.lm.startup)
+        alt = os.path.join(self.tmp, 'alt-deai')                          # ⛔ не `~/.deai` стенда: на ньому шов — `refuse-real-home` і до блоку не доходить
+        os.makedirs(alt)
+        with self.mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path, 'DEAI_HOME': alt, 'DC_MIGRATE_LIGA': '1'}):
+            off = [{'role': 'tracker', 'module': 'jira-tracker', 'on': False, 'reason': 'no-jira', 'fix': 'x'}]
+            with self.mock.patch.object(self.lm, 'roles_state', lambda *a, **k: off):      # навіть коли роль «вимкнена» — ізольований прогін мовчить
+                st, err = self.quiet(self.lm.startup)
+        self.assertNotEqual(st, 'refuse-real-home')                       # шов відпрацював: до блоку дійшли
+        self.assertNotIn('ролі ЛІГИ вимкнено', err)
+
+
+class StatusAndCli(_StandE):
+    def test_status_text_has_originals_and_roles_sections(self):
+        self.root()
+        self.run_e()
+        text = self.lm.status_text(self.lm.status())
+        self.assertIn('Міграція ЛІГИ (liga-4d4b)', text)
+        self.assertIn('скопійовано: gitlab_host_ip, gitlab_ssh_key, preview_password', text)
+        self.assertIn('видалено:', text)
+        self.assertIn('Ролі ЛІГИ', text)
+        self.assertIn('publish (vercel-publish): так', text)
+        for v in (self.SB_KEY, self.JIRA_TOKEN, self.PW, self.SSH, self.HOSTIP):
+            self.assertNotIn(v, text)
+
+    def test_cli_dry_run_names_keys_not_values(self):
+        self.root()
+        code, out, _err = self.cli('dry-run')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d4b: ready', out)
+        self.assertIn('copy: gitlab_ssh_key, gitlab_host_ip, preview_password', out)
+        self.assert_no_secrets(out)
+        self.assertNotIn(self.SSH, out)
+
+    def test_cli_unhold(self):
+        self.space_json({'modules': {}, 'migrations': {'liga-4d4a': {'held': True}, 'liga-4d4b': {'at': 'x', 'backup': 'b'}}})
+        code, out, _e = self.cli('unhold', 'liga-4d4a')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d4a unhold: unheld', out)
+        self.assertNotIn('liga-4d4a', self.read_json(self.space_path())['migrations'])
+        self.assertIn('liga-4d4b', self.read_json(self.space_path())['migrations'])      # чужі позначки лишились
+        code, out, _e = self.cli('unhold', 'liga-4d4b')                  # застосований крок — не `held`
+        self.assertEqual(code, 1)
+        self.assertIn('refuse-not-held', out)
+        self.assertEqual(self.cli('unhold', 'liga-nope')[0], 1)
+
+    def test_unhold_lets_the_step_run_again(self):
+        self.root()
+        self.space_json({'modules': {}, 'migrations': {'liga-4d4b': {'held': True}}})
+        self.assertEqual(self.lm.plan(step=self.E)['status'], 'skip-held')
+        self.assertEqual(self.lm.unhold('liga-4d4b'), 'unheld')
+        self.assertNotEqual(self.lm.plan(step=self.E)['status'], 'skip-held')
+
+    def test_unhold_refuses_without_liga_and_in_layer_off(self):
+        self.registry(entry=False)
+        self.assertEqual(self.lm.unhold('liga-4d4a'), 'refuse-no-liga')
+        with self.mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path}):
+            os.environ.pop('DEAI_HOME')
+            self.assertEqual(self.lm.unhold('liga-4d4a'), 'skip-layer-off')
 
 
 if __name__ == '__main__':
