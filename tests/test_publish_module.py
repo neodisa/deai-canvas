@@ -59,8 +59,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 import fake_npx  # noqa: E402
+import liga_fixture  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
@@ -113,11 +113,6 @@ _REAL_TASKS_ENV_BEFORE = os.environ.get('DC_TASKS_FILE')
 def setUpModule():
     global _REAL
     _REAL = spaces_guard.snapshot()
-    # Конфіг Supabase ЛІГА — підставний на весь модуль (4b-2: констант нема, а справжній `tasks.json` установки не читаємо):
-    # тут перевіряється розмітка/збірка, а не пошук конфігу (його стережуть `test_legacy_comments`).
-    cfg = mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY))
-    cfg.start()
-    unittest.addModuleCleanup(cfg.stop)
 
 
 def tearDownModule():
@@ -232,8 +227,21 @@ class TaskFixture(unittest.TestCase):
             'HOME': self.home, 'DC_TASKS_FILE': os.path.join(self.cfgdir, 'tasks.json'),
             'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x'})
         env.start()
-        self.addCleanup(env.stop)       # `patch.dict` повертає й прибраний нижче `DEAI_HOME`
-        os.environ.pop('DEAI_HOME', None)
+        self.addCleanup(env.stop)       # `patch.dict` повертає й виставлений нижче `DEAI_HOME`
+        # 4d-4b: шлях ЛІГА (`/api/publish`, коментарі превʼю) живе лише на ЯВНИХ записах `vercel-publish` і `supabase-comments` простору ЛІГА
+        # (запасного шляху без простору нема), тож світ цієї фікстури — реєстр із одним простором ЛІГА (`legacy`: його задачі — у `DC_TASKS_FILE`).
+        # Пароль превʼю в записі порожній: типовий 1100 — той, що перевіряють тести (секрет записів ЛІГИ окремо стереже `test_liga_migrate*`).
+        self.deai = os.path.join(self.home, 'league-deai')
+        self.league_path = os.path.join(self.home, 'league-space')
+        os.makedirs(self.deai, mode=0o700)
+        liga_fixture.write_records(self.league_path, self.deai, 'liga', ('publish', 'comments'),
+                                   {'publish': {'secrets': {'password': ''}}})
+        atomic_write_json(os.path.join(self.deai, 'spaces.json'), {
+            'version': 1, 'current': 'liga',
+            'spaces': [{'id': 'liga', 'path': self.league_path, 'legacy': True, 'integrations': True}]})
+        os.environ['DEAI_HOME'] = self.deai
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
         for rel, title in SOURCE_PAGES.items():
             src = os.path.join(self.tmp, 'iterations', rel)
             os.makedirs(os.path.dirname(src), exist_ok=True)
@@ -260,10 +268,12 @@ class TaskFixture(unittest.TestCase):
         return task, tid, its
 
     def _league(self):
-        """Рішення про коментарі для збірки ЛІГА (4b-2): вбудований `supabase-comments` з підставним конфігом установки
-        (`setUpModule`) і каналом `dc/<задача>` — те саме, що `Handler._publish` отримує з `publish_comments`."""
+        """Рішення про коментарі для збірки ЛІГА: вбудований `supabase-comments` із ЯВНОГО запису простору ЛІГА (4d-4b: конфіг установки й
+        `serve.supabase_config` зникли; було — підставний конфіг на весь модуль) і каналом `dc/<задача>` — те саме, що `Handler._publish`
+        отримує з `publish_comments`; простір ЛІГА — із `setUp` цієї фікстури, закріплений простором запиту на час виклику."""
         task, tid, _its = self._args()
-        comments, warn = serve.publish_comments(None, task, tid)
+        with spaces.request_space('liga'):
+            comments, warn = serve.publish_comments(spaces.active_space(), task, tid)
         self.assertIsNone(warn)
         self.assertIsInstance(comments, dict)
         return comments
@@ -419,9 +429,11 @@ class BuildPreview(TaskFixture):
         def spy(*a, **kw):
             calls.append(kw)
             return orig(*a, **kw)
+        comments = self._league()           # ДО підміни простору: рішення й задача — із простору ЛІГА фікстури, а не з підставного `real`
+        task, tid, its = self._args()
         with mock.patch.object(serve.spaces, 'active_space', return_value=real), \
                 mock.patch.object(serve, 'inject_module_comment_layer', spy):
-            pub = self._build(comments=self._league(), gate_pw='x')['dir']
+            pub = serve.build_preview(task, tid, its, comments=comments, gate_pw='x', build='legacy')['dir']
         self.assertEqual(len(calls), len(SOURCE_PAGES), 'кожна сторінка пройшла через інʼєкцію')
         for kw in calls:
             self.assertEqual(set(kw) - {'version', 'inspector', 'audiences'}, set(), f'публікація передала зайве: {sorted(kw)}')
@@ -554,7 +566,7 @@ class BuildPreview(TaskFixture):
                 if custom:
                     task['preview_password'] = custom
                 self._tasks(task)
-                want = serve.preview_password(serve.load_tasks(), self._args()[0])
+                want = serve.preview_password(self._args()[0])          # 4d-4b: `(task, space)`, корінь `tasks.json` не читається
                 self.assertEqual(want, custom or serve.DEFAULT_PREVIEW_PW)
                 with mock.patch.object(serve, 'build_preview', wraps=serve.build_preview) as bp:
                     body = json.load(_post(base + '/api/publish', {'build_only': True}))
@@ -568,11 +580,23 @@ class BuildPreview(TaskFixture):
                 # гейт справді несе саме цей пароль — на КОЖНІЙ сторінці
                 self.assertEqual(serve.preview_gate_state(args[0], want)['state'], 'current')
 
+    def test_the_league_preview_password_is_the_secret_of_the_publish_record(self):
+        """4d-4b: пароль превʼю — задачі, далі секрет `password` запису `vercel-publish` простору, далі 1100; кореня `tasks.json` не читаємо."""
+        task = self._args()[0]
+        with spaces.request_space('liga'):
+            space = spaces.active_space()
+        self.assertEqual(serve.preview_password(task, space), serve.DEFAULT_PREVIEW_PW, 'секрет запису порожній — типовий')
+        liga_fixture.write_records(self.league_path, self.deai, 'liga', ('publish', 'comments'),
+                                   {'publish': {'secrets': {'password': 'record-pw'}}})
+        dm.reset_caches()
+        self.assertEqual(serve.preview_password(task, space), 'record-pw')
+        self.assertEqual(serve.preview_password(dict(task, preview_password='own-pw'), space), 'own-pw', 'пароль задачі — вище секрету запису')
+
     def test_league_publish_tree_equals_the_direct_build(self):
         base = self._server()
         body = json.load(_post(base + '/api/publish', {'build_only': True}))
         via_http = _tree(body['dir'])
-        pw = serve.preview_password(serve.load_tasks(), self._args()[0])
+        pw = serve.preview_password(self._args()[0])
         direct = _tree(self._build(comments=self._league(), gate_pw=pw)['dir'])
         self.assertEqual(via_http, direct)
         self.assertIn('comment-layer/comment-layer.min.js', direct)
@@ -1010,19 +1034,27 @@ class LegacyPublishViaModule(TaskFixture):
 
     # ---- 8: модуль не завантажився ----
 
-    def test_8_a_module_that_is_not_loaded_is_a_deploy_error_not_a_500(self):
+    def test_8_a_module_that_is_not_loaded_is_refused_before_any_build(self):
+        """Було: «модуль не завантажено» — `deploy_error` ПІСЛЯ збірки (неявний постачальник не питав каталогу). 4d-4b: ЛІГА публікує лише явним
+        записом `vercel-publish`, тож незавантажений модуль = немає постачальника: `409 no-publish-module` ДО збірки, жоден `vercel` не
+        запускається, git і дашборд не чіпаються (замінено тим, що відмова раніша й чесніша)."""
         real = serve.deai_modules.catalog
-        broken = types.SimpleNamespace(id='vercel-publish', status='error')
+        broken = types.SimpleNamespace(id='vercel-publish', status='error', roles=('publish',), origin='builtin')
         variants = {'missing': lambda *a, **kw: {k: v for k, v in real(*a, **kw).items() if k != 'vercel-publish'},
                     'broken': lambda *a, **kw: {**real(*a, **kw), 'vercel-publish': broken}}
         for name, fake in variants.items():
             with self.subTest(catalog=name):
-                obs = self._legacy(LP_OK, extra_patches=[mock.patch.object(serve.deai_modules, 'catalog', fake)])
-                self.assertIn('vercel-publish module is not loaded', self._resp(obs)['deploy_error'])
-                self.assertEqual([c for c in obs['npx_calls']], [], 'без модуля жоден vercel не запускався')
-                self.assertEqual(obs['spies']['git_autocommit'], [['<TASK>', 'publish: 2 iteration(s)']])
-                self.assertEqual(obs['spies']['overview_sync'], 1)
-                self.assertNotIn('url', self._resp(obs))
+                base = self._server()
+                with mock.patch.object(serve.deai_modules, 'catalog', fake), \
+                        mock.patch.object(serve, 'build_preview') as bp, \
+                        mock.patch.object(serve, '_node_bin') as node, \
+                        mock.patch.object(serve, 'git_autocommit') as gc:
+                    with self.assertRaises(urllib.error.HTTPError) as cm:
+                        _post(base + '/api/publish', {})
+                body = json.loads(cm.exception.read().decode('utf-8'))
+                self.assertEqual((cm.exception.code, body['ok'], body['code']), (409, False, 'no-publish-module'))
+                for spy in (bp, node, gc):
+                    spy.assert_not_called()
 
     # ---- 9: звичайний простір ----
 
@@ -1257,7 +1289,6 @@ class DispatchWorld(unittest.TestCase):
             'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x'})
         env.start()
         self.addCleanup(env.stop)
-        sbconf.write_root(os.path.join(self.tmp, 'legacy', 'tasks.json'))    # пара — з кореня файла, не з оточення (закон ізоляції 4d-2)
         # справжня тека інструмента (репозиторій) не може стати ціллю публікації, навіть якщо правило колись
         # зламається, а `path-tool` перевіряється саме як причина
         tool = mock.patch.object(spaces, 'ROOT', self.tool)
@@ -1271,6 +1302,11 @@ class DispatchWorld(unittest.TestCase):
         self.on_path = os.path.join(self.home, 'deai-work', 'on')
         self.off = self._space('off', self.off_path, False, 'tx')
         self.on = self._space('on', self.on_path, True, 'ty')
+        # 4d-4b: простір з інтеграціями («ЛІГА») публікує й веде коментарі лише ЯВНИМИ записами `vercel-publish` і `supabase-comments`
+        # (запасного шляху нема); пароль превʼю в записі порожній — типовий 1100, як було. Пишемо ДО реєстру й до кешів модулів.
+        liga_fixture.write_records(self.on_path, self.deai, 'on', ('publish', 'comments'),
+                                   {'publish': {'secrets': {'password': ''}},
+                                    'comments': {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}}}, 'On')
         atomic_write_json(os.path.join(self.deai, 'spaces.json'),
                           {'version': 1, 'current': 'off', 'spaces': [self.off, self.on]})
         self.tx_dir = os.path.join(self.off_path, 'tx')
@@ -1308,6 +1344,13 @@ class DispatchWorld(unittest.TestCase):
             'tasks': {tid: {'title': f'Задача {tid}', 'dir': os.path.join(path, tid)}}})
         _write_task_files(os.path.join(path, tid))
         return {'id': sid, 'path': path, 'legacy': False, 'integrations': integrations}
+
+    def replace_publisher(self, space, mid):
+        """Власний модуль публікації ЗАМІНЮЄ запис ЛІГИ `vercel-publish` у `on` (одна роль — один постачальник, інакше `role-taken`): запис
+        спершу вимикається (налаштування й секрет лишаються), далі вмикається `mid`. У інших просторах — просто вмикає."""
+        if space['id'] == self.on['id']:
+            dm.write_module_state(space, 'vercel-publish', enabled=False)
+        dm.write_module_state(space, mid, enabled=True)
 
     def _register(self, rec):
         """Додати запис простору в реєстр (мимо `create_space`: він відмовив би в повторі id задачі)."""
@@ -1632,24 +1675,22 @@ class Dispatch(DispatchWorld):
         self.assertEqual((st, body['code']), (502, 'module-error'), body)
         self.assertNotIn('publish_local', self.meta())
 
-    def test_a_broken_space_json_with_integrations_still_publishes_the_league_way(self):
-        """Простір з інтеграціями не потребує `space.json` для вибору ШЛЯХУ: `provider('publish')` ковтає
-        `space-json-unreadable` і віддає `'legacy'` — ЛІГА-публікація (збірка в `publish/`, далі деплой) працює.
-        2b-2: а от КОМЕНТАРІ — ні: не знаючи, чи людина вмикала там власний модуль коментарів, збірка не переходить
-        на спільний Supabase ЛІГА (піни несли б знімки приватних макетів), а лишається без коментарів узагалі, і
-        відповідь каже чому (`comments_unavailable`). До 2b-2 тут стояла збірка з бандлами ЛІГА."""
+    def test_a_broken_space_json_with_integrations_refuses_to_publish(self):
+        """Було: `provider('publish')` ковтав `space-json-unreadable` і віддавав неявного постачальника — ЛІГА-публікація працювала без
+        `space.json` (а комментарі йшли без шару з `comments_unavailable`). 4d-4b: запису публікації прочитати нема звідки, запасного нема —
+        `space-json-unreadable` для КОЖНОЇ ролі, публікація відмовляє ДО збірки (спільний Supabase тим паче не їде)."""
         with open(os.path.join(self.on_path, 'space.json'), 'w', encoding='utf-8') as fh:
             fh.write('{ це не json')
-        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
+        with self.assertRaises(dm.ModuleError) as cm:
+            dm.provider('publish', self.on)
+        self.assertEqual(cm.exception.code, 'space-json-unreadable')
         st, body = self.post('/api/publish', {'build_only': True}, {'X-Canvas-Task': 'ty'})
-        self.assertEqual(st, 200, body)
-        self.assertEqual(body['dir'], os.path.join(self.ty_dir, 'publish'))
-        self.assertEqual(body['comments_unavailable'], 'space-json-unreadable')
-        self.assertFalse(os.path.exists(os.path.join(body['dir'], 'comment-layer')), 'спільний Supabase не їде')
+        self.assertEqual((st, body['ok'], body['code']), (dm.STATUS['space-json-unreadable'], False, 'space-json-unreadable'), body)
+        self.assertFalse(os.path.exists(os.path.join(self.ty_dir, 'publish')), 'збірку не починали')
 
     # ---- простір ЛІГА, неявний і зафіксований шляхи ----
 
-    def test_a_space_with_integrations_and_no_module_is_the_league_path(self):
+    def test_a_space_with_integrations_and_the_league_record_is_the_league_path(self):
         st, body = self.post('/api/publish', {'build_only': True}, {'X-Canvas-Task': 'ty'})
         self.assertEqual((st, list(body)[:4]), (200, ['ok', 'dir', 'iterations', 'frames']), body)
         self.assertTrue(os.path.isdir(os.path.join(body['dir'], 'comment-layer')))
@@ -1658,7 +1699,7 @@ class Dispatch(DispatchWorld):
         self.assertFalse(os.path.exists(os.path.join(self.home, 'deai-published')))
 
     def test_an_explicitly_enabled_module_wins_where_integrations_are_on(self):
-        dm.write_module_state(self.on, MID, enabled=True)
+        self.replace_publisher(self.on, MID)
         st, body = self.post('/api/publish', {}, {'X-Canvas-Task': 'ty'})
         self.assertEqual(st, 200, body)
         want = os.path.join(self.home, 'deai-published', 'on', 'ty')
@@ -1667,19 +1708,17 @@ class Dispatch(DispatchWorld):
         self.assertEqual(self.meta(self.ty_dir)['publish_local']['path'], want)
         self.assert_quiet()
 
-    def test_an_unpinned_request_space_is_the_league_path(self):
-        """Інструменти ЛІГА й зовнішні заглушки обробника кличуть `_publish` БЕЗ зафіксованого простору запиту:
-        `provider` дає `'legacy'` без читання реєстру, і шлях ЛІГА працює як раніше — навіть коли поточний простір
-        машини БЕЗ інтеграцій. Заглушка має лише чотири методи, які `_publish` кликав завжди."""
+    def test_an_unpinned_request_space_has_nobody_to_publish(self):
+        """Було: інструменти ЛІГА й зовнішні заглушки обробника кликали `_publish` БЕЗ зафіксованого простору запиту, і `provider` віддавав
+        неявного постачальника — шлях ЛІГА працював навіть у машині БЕЗ інтеграцій. 4d-4b: явний запис діє лише в закріпленому просторі,
+        тож без простору запиту публікувати нікому: `409 no-publish-module`, збірки й дашборда нема."""
         spaces.clear_request_space()
-        self.assertEqual(dm.provider('publish'), implicit.for_role('publish'))
+        self.assertIsNone(dm.provider('publish'))
         stub = _Stub()
         serve.Handler._publish(stub, {'build_only': True})
-        (st, body), = stub.sent
-        self.assertEqual((st, body['ok']), (200, True), body)
-        self.assertEqual(body['dir'], os.path.join(self.tx_dir, 'publish'))
-        self.assertTrue(os.path.isdir(os.path.join(body['dir'], 'comment-layer')))
-        self.assertEqual(stub.overview, 1, 'шлях ЛІГА лишився як був: дашборд команди штовхається')
+        self.assertEqual(stub.sent, [(409, serve.no_publish_module_body())])
+        self.assert_nothing_built()
+        self.assertEqual(stub.overview, 0)
 
     def test_a_request_without_any_space_has_nobody_to_publish(self):
         """`''` — запит прямо сказав «без простору» (просторів нема): це не простір ЛІГА, публікувати нікому."""
@@ -2018,7 +2057,7 @@ class Dispatch(DispatchWorld):
         self.assertEqual((st, body), (409, serve.integrations_off_body('публікація зʼявиться з модулями')))
         self.assertEqual(_bytes(tasks), before, 'пароль записано в простір, де публікує модуль')
         # явно ввімкнений модуль у просторі З інтеграціями — теж не шлях ЛІГА
-        dm.write_module_state(self.on, MID, enabled=True)
+        self.replace_publisher(self.on, MID)
         st, body = self.post('/api/preview-password', {'password': 'abcd'}, {'X-Canvas-Task': 'ty'})
         self.assertEqual((st, body['code']), (409, 'integrations-off'), body)
         # нечитабельний space.json у просторі без інтеграцій — та сама відповідь, а не `space-json-unreadable`
@@ -2235,10 +2274,10 @@ class _PublishedTests:
         on_dest = os.path.join(self.home, 'deai-published', 'on', 'ty')
         self.put(os.path.join(on_dest, 'index.html'), 'on-index')
         self.put(os.path.join(on_dest, '.deai-published'), 'marker')
-        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
+        self.assertEqual(dm.provider('publish', self.on).id, 'vercel-publish')      # було `implicit.for_role('publish')`: тепер явний запис ЛІГИ
         self.gone('/published/on/ty/')
         self.gone('/published/on/ty/index.html')
-        dm.write_module_state(self.on, MID, enabled=True)
+        self.replace_publisher(self.on, MID)
         self.assertEqual(self.ok('/published/on/ty/index.html')[1], b'on-index')
 
     def test_a_space_where_the_module_is_switched_off_serves_nothing_any_more(self):
@@ -3153,7 +3192,7 @@ class ResealModuleBuilds(TaskFixture):
         """Контроль: без нього «модуль пропущено» могло б означати, що reseal не робить нічого."""
         task, tid, its = self._args()
         serve.build_preview(task, tid, its, comments=self._league(), build='legacy',
-                            gate_pw=serve.preview_password(serve.load_tasks(), task))
+                            gate_pw=serve.preview_password(task))
         out, deployed = self._reseal('fixture')
         self.assertIn('передеплоєно', out)
         self.assertEqual(deployed, [os.path.join(self.tmp, 'publish')])
@@ -3196,7 +3235,7 @@ class ResealModuleBuilds(TaskFixture):
         task, tid, its = self._args()
         comments = {'module': prov, 'config': {'endpoint': ENDPOINT}, 'channel': 'deai/s/fixture'}
         serve.build_preview(task, tid, its, comments=comments, build='legacy',
-                            gate_pw=serve.preview_password(serve.load_tasks(), task))
+                            gate_pw=serve.preview_password(task))
         self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, 'publish', 'comment-layer'))),
                          ['adapter.js', 'comment-layer.min.js'], 'контроль: бандлів ЛІГА там нема')
         out, deployed = self._reseal('fixture')
@@ -3207,7 +3246,7 @@ class ResealModuleBuilds(TaskFixture):
         """ЛІГА, де коментарі не піднялись (`comments_unavailable`): `comment-layer/` нема зовсім, збірка — все одно ЛІГА."""
         task, tid, its = self._args()
         serve.build_preview(task, tid, its, comments=False, build='legacy',
-                            gate_pw=serve.preview_password(serve.load_tasks(), task))
+                            gate_pw=serve.preview_password(task))
         self.assertFalse(os.path.exists(os.path.join(self.tmp, 'publish', 'comment-layer')), 'контроль')
         out, deployed = self._reseal('fixture')
         self.assertIn('передеплоєно', out)
@@ -3363,6 +3402,9 @@ class UrlTarget(DispatchWorld):
         self.mods = os.path.join(self.tmp, 'modules')
         shutil.copytree(os.path.join(ROOT, 'app', 'modules', MID), os.path.join(self.mods, MID),
                         ignore=shutil.ignore_patterns('__pycache__'))
+        for league_mid in ('vercel-publish', 'supabase-comments'):        # записи простору ЛІГА (`on`) — вбудовані модулі (4d-4b)
+            shutil.copytree(os.path.join(ROOT, 'app', 'modules', league_mid), os.path.join(self.mods, league_mid),
+                            ignore=shutil.ignore_patterns('__pycache__'))
         self.module(URL_MID, URL_SERVER, publish_target='url')
         patch = mock.patch.object(dm, 'builtin_dir', lambda: self.mods)
         patch.start()
@@ -3388,7 +3430,7 @@ class UrlTarget(DispatchWorld):
 
     def enable_url(self, space):
         dm.write_module_state(space, MID, enabled=False)
-        dm.write_module_state(space, URL_MID, enabled=True)
+        self.replace_publisher(space, URL_MID)
 
     def enable_folder(self, space):
         dm.write_module_state(space, URL_MID, enabled=False)
@@ -3905,8 +3947,8 @@ class UrlTarget(DispatchWorld):
         self.assertIn('publish_local', task)
 
     def test_api_task_has_no_share_fields_for_the_league_path(self):
-        """`legacy` (простір з інтеграціями без явного модуля), навіть коли модуль «за адресою» стоїть у каталозі."""
-        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
+        """Шлях ЛІГА (простір з інтеграціями, явний запис `vercel-publish`), навіть коли модуль «за адресою» стоїть у каталозі."""
+        self.assertEqual(dm.provider('publish', self.on).id, 'vercel-publish')
         self.seed_meta(self.ty_dir, publish_url='https://pv-12345678.vercel.app', published_at='01.01.2026 10:00')
         st, task = self.get('/api/task', {'X-Canvas-Task': 'ty'})
         self.assertEqual(st, 200, task)
@@ -4523,28 +4565,32 @@ class PublishCommentsDecision(TaskFixture):
 
     CTX = {'ctx': 'sentinel'}         # `module_ctx` підставний: простір `/nowhere` справжнього `space.json` не має
 
-    def decide(self, prov, *, module_publish, tid='t1', err=None, config=None, config_error=None, task=None):
+    def decide(self, prov, *, module_publish, tid='t1', err=None, config=None, config_error=None, task=None, space=None):
+        space = space or self.SPACE
         asked = []
         provider = mock.patch.object(serve, 'comments_provider',
                                      lambda space: (asked.append(space), (prov, err))[1])
         client = mock.patch.object(dm, 'comments_client', mock.Mock(
             side_effect=config_error, return_value=config if config is not None else {'endpoint': ENDPOINT}))
         with provider, client as cc, mock.patch.object(dm, 'module_ctx', return_value=self.CTX):
-            out = serve.publish_comments(self.SPACE, task or {}, tid, module_publish=module_publish)
-        self.assertEqual(asked, [self.SPACE], 'простір передається провайдеру як є, один раз')
+            out = serve.publish_comments(space, task or {}, tid, module_publish=module_publish)
+        self.assertEqual(asked, [space], 'простір передається провайдеру як є, один раз')
         return out, cc
 
     def test_the_league_comments_are_the_builtin_module_only_on_the_league_path(self):
         """4b-2: ЛІГА на своєму шляху — словник вбудованого `supabase-comments` з каналом ЛІГИ (`comment_project` задачі чи
-        `dc/<задача>`) і готовим `ctx` з конфігу установки; у збірці МОДУЛЯ публікації — як і було, `False`."""
-        (comments, warn), cc = self.decide(implicit.for_role('comments'), module_publish=False, task={'comment_project': 'proj/alpha'})
+        `dc/<задача>`) і `ctx` із `module_ctx` запису; у збірці МОДУЛЯ публікації — як і було, `False`. 4d-4b: постачальник — запис `supabase-comments`
+        простору ЛІГА фікстури (було `implicit.for_role('comments')` і ctx з конфігу установки)."""
+        league = {'id': 'liga', 'path': self.league_path, 'legacy': True, 'integrations': True}
+        prov = dm.catalog(league)['supabase-comments']
+        (comments, warn), cc = self.decide(prov, module_publish=False, task={'comment_project': 'proj/alpha'}, space=league)
         self.assertIsNone(warn)
         self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'proj/alpha'))
-        self.assertEqual(self.decide(implicit.for_role('comments'), module_publish=False)[0][0]['channel'], 'dc/t1')
-        ((space, prov, ctx), _kw), = cc.call_args_list[:1]
-        self.assertEqual((space, prov.id), (self.SPACE, 'supabase-comments'))
-        self.assertEqual(ctx['settings'], {'url': sbconf.SB_URL, 'shots_bucket': serve.LEGACY_SHOTS_BUCKET})
-        self.assertEqual(self.decide(implicit.for_role('comments'), module_publish=True)[0], (False, None))
+        self.assertEqual(self.decide(prov, module_publish=False, space=league)[0][0]['channel'], 'dc/t1')
+        ((space, mod, ctx), _kw), = cc.call_args_list[:1]
+        self.assertEqual((space, mod.id), (league, 'supabase-comments'))
+        self.assertEqual(ctx, self.CTX, 'ctx — від `module_ctx` запису, а не з конфігу установки')
+        self.assertEqual(self.decide(prov, module_publish=True, space=league)[0], (False, None))
 
     def test_no_provider_means_no_comments_on_both_paths(self):
         for module_publish in (False, True):
@@ -4601,6 +4647,7 @@ class CommentsPublish(DispatchWorld):
         _copy_module(os.path.join(ROOT, 'app', 'modules', MID), self.mods)
         _copy_module(MEMO_SRC, self.mods)
         _copy_module(os.path.join(ROOT, 'app', 'modules', 'supabase-comments'), self.mods)   # ЛІГА (4b-2) — вбудований модуль
+        _copy_module(os.path.join(ROOT, 'app', 'modules', 'vercel-publish'), self.mods)      # ЛІГА публікує явним записом (4d-4b)
         _write_json(os.path.join(self.mods, self.URL, 'module.json'),
                     {'api': 1, 'id': self.URL, 'name': self.URL, 'version': '1.0.0', 'roles': ['publish'],
                      'publish_target': 'url',
@@ -4621,13 +4668,15 @@ class CommentsPublish(DispatchWorld):
     # ---- фікстури ----
 
     def enable_memo(self, space, token=TOKEN, pubkey=PUBKEY, endpoint=ENDPOINT):
+        if space['id'] == self.on['id']:
+            dm.write_module_state(space, 'supabase-comments', enabled=False)   # одна роль — один постачальник: свій модуль ЗАМІНЮЄ запис ЛІГИ
         dm.write_module_state(space, MEMO_ID, enabled=True, settings={'endpoint': endpoint})
         dm.write_secrets(space['id'], MEMO_ID, {'token': token, 'pubkey': pubkey})
         self.assertIsInstance(dm.provider('comments', space), dm.Module)
 
     def enable_url(self, space):
         dm.write_module_state(space, MID, enabled=False)
-        dm.write_module_state(space, self.URL, enabled=True)
+        self.replace_publisher(space, self.URL)
 
     def break_memo(self):
         """Явно ввімкнений модуль коментарів, що не завантажився (оголошений файл адаптера зник)."""
@@ -4745,8 +4794,8 @@ class CommentsPublish(DispatchWorld):
     def test_a_module_publish_in_an_integrations_space_with_the_league_comments_ships_none(self):
         """Рішення: модуль публікації в просторі ЛІГА, де коментарі — зашитий шлях (`'legacy'`), лишає `comments=False`, як у
         0.3.0: спільний Supabase ЛІГА (адреса й ключ) не їде в превʼю, що його зібрав модуль."""
-        dm.write_module_state(self.on, MID, enabled=True)
-        self.assertEqual(dm.provider('comments', self.on), implicit.for_role('comments'))
+        self.replace_publisher(self.on, MID)
+        self.assertEqual(dm.provider('comments', self.on).id, 'supabase-comments')       # було `implicit.for_role('comments')`
         st, body = self.publish(task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'local', 'iterations', 'frames']), body)
         want = os.path.join(self.home, 'deai-published', 'on', 'ty')
@@ -4757,14 +4806,14 @@ class CommentsPublish(DispatchWorld):
 
     def test_a_url_module_in_an_integrations_space_with_the_league_comments_ships_none(self):
         """Те саме для модуля «за адресою» (Vercel): зашитий Supabase ЛІГА не їде в превʼю, яке зібрав модуль."""
-        dm.write_module_state(self.on, self.URL, enabled=True)
-        self.assertEqual(dm.provider('comments', self.on), implicit.for_role('comments'))
+        self.replace_publisher(self.on, self.URL)
+        self.assertEqual(dm.provider('comments', self.on).id, 'supabase-comments')
         st, body = self.publish(task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'url', 'verified', 'iterations', 'frames']), body)
         self.assert_no_comments(os.path.join(self.ty_dir, 'publish'))
 
     def test_a_module_publish_in_an_integrations_space_with_a_comments_module_ships_the_module_comments(self):
-        dm.write_module_state(self.on, MID, enabled=True)
+        self.replace_publisher(self.on, MID)
         self.enable_memo(self.on)
         st, body = self.publish(task='ty')
         self.assertEqual(st, 200, body)
@@ -4773,7 +4822,7 @@ class CommentsPublish(DispatchWorld):
 
     def test_the_league_path_gets_the_module_snippet_when_the_space_has_a_comments_module(self):
         self.enable_memo(self.on)
-        self.assertEqual(dm.provider('publish', self.on), implicit.for_role('publish'))
+        self.assertEqual(dm.provider('publish', self.on).id, 'vercel-publish')
         st, body = self.publish({'build_only': True}, task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
         self.assert_module_build(body['dir'], 'deai/on/ty')
@@ -4782,8 +4831,8 @@ class CommentsPublish(DispatchWorld):
 
     def test_the_league_path_with_the_league_comments_ships_the_builtin_module_build(self):
         """4b-2: у просторі ЛІГА без власного модуля коментарів збірка несе вбудований `supabase-comments` (було: «стара збірка»
-        з бандлами ЛІГИ): його файли, конфіг установки й канал ЛІГИ."""
-        self.assertEqual(dm.provider('comments', self.on), implicit.for_role('comments'))
+        з бандлами ЛІГИ): його файли, конфіг ЗАПИСУ ЛІГИ й канал ЛІГИ."""
+        self.assertEqual(dm.provider('comments', self.on).id, 'supabase-comments')
         with mock.patch.object(serve, 'build_preview', wraps=serve.build_preview) as bp:
             st, body = self.publish({'build_only': True}, task='ty')
         self.assertEqual((st, list(body)), (200, ['ok', 'dir', 'iterations', 'frames']), body)
@@ -4812,16 +4861,18 @@ class CommentsPublish(DispatchWorld):
         self.assertIs(bp.call_args.kwargs['comments'], False)
         self.assert_no_comments(body['dir'])
 
-    def test_the_league_path_with_an_unreadable_space_json_ships_no_comments_and_warns(self):
+    def test_the_league_path_with_an_unreadable_space_json_refuses_before_any_build(self):
+        """Було: збірка без коментарів + `comments_unavailable: space-json-unreadable`. 4d-4b: без `space.json` нема й запису публікації —
+        відмова ДО збірки (`space-json-unreadable` для кожної ролі), коментарі тим паче не їдуть."""
         with open(os.path.join(self.on_path, 'space.json'), 'w', encoding='utf-8') as fh:
             fh.write('{broken')
         st, body = self.publish({'build_only': True}, task='ty')
-        self.assertEqual(st, 200, body)
-        self.assertEqual(body['comments_unavailable'], 'space-json-unreadable')
-        self.assert_no_comments(body['dir'])
+        self.assertEqual((st, body['ok'], body['code']), (dm.STATUS['space-json-unreadable'], False, 'space-json-unreadable'), body)
+        self.assertNotIn('dir', body)
+        self.assertFalse(os.path.exists(os.path.join(self.ty_dir, 'publish')))
 
     def test_a_module_publish_with_a_broken_enabled_comments_module_still_publishes_without_comments(self):
-        dm.write_module_state(self.on, MID, enabled=True)
+        self.replace_publisher(self.on, MID)
         self.enable_memo(self.on)
         self.break_memo()
         st, body = self.publish(task='ty')
@@ -4877,8 +4928,10 @@ class CommentsPublish(DispatchWorld):
         with open(os.path.join(self.deai, 'secrets.json'), 'w', encoding='utf-8') as fh:
             fh.write('{broken')
         st, body = self.publish({'build_only': True}, task=task)
-        self.assertEqual((st, body['comments_unavailable']), (200, 'secrets-unreadable'), body)
-        self.assert_no_comments(body['dir'])
+        # було: збірка без коментарів + `comments_unavailable`. 4d-4b: пароль превʼю — секрет запису ЛІГИ, тож нечитабельні секрети
+        # відмовляють ДО збірки (fail-closed, `preview_password`), а не після неї
+        self.assertEqual((st, body['ok'], body['code']), (dm.STATUS['secrets-unreadable'], False, 'secrets-unreadable'), body)
+        self.assertNotIn('dir', body)
 
     def test_the_warning_is_the_code_only_never_a_message_or_a_value(self):
         self.leak_memo()
