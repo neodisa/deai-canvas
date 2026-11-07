@@ -164,66 +164,9 @@ class TestDiscover(unittest.TestCase):
         self.assertEqual(row["name"], "X")
 
 
-class TestLegacyConfig(unittest.TestCase):
-    """Конфіг ЛІГИ для CLI (`_legacy_config`; замінив `TestSupabaseGetter`/`TestUpsertProject` — клієнт Supabase пішов у модуль
-    `supabase-dashboard`, його HTTP-форму стереже `tests/test_dashboard_module.py`): файл установки раніше за оточення;
-    запасна пара `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` лише коли файла/пари нема. Старий файл — тимчасовий."""
-
-    NAMES = ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY", "DC_TASKS_FILE")
-
-    def _cfg(self, body, isolated=True, **env):
-        """`isolated=False` — запуск ПОЗА ізоляцією (4d-2: сервісний ключ з оточення діє лише так): без `DC_TASKS_FILE` і
-        `DC_NO_OVERVIEW`, «файл установки» підставлено заглушкою, а не справжній."""
-        tmp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, tmp, True)
-        path = os.path.join(tmp, "tasks.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(body, f)
-        patcher = mock.patch.dict(os.environ, {"DC_TASKS_FILE": path, **env} if isolated else dict(env))
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        for k in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_KEY"):
-            if k not in env:
-                os.environ.pop(k, None)
-        if not isolated:
-            for k in ("DC_TASKS_FILE", "DC_NO_OVERVIEW"):
-                os.environ.pop(k, None)
-            import install_config
-            p = mock.patch.object(install_config, "load_legacy_tasks", return_value=body)
-            p.start()
-            self.addCleanup(p.stop)
-
-    def test_the_file_of_the_installation_wins(self):
-        self._cfg({"supabase_url": "https://demo.supabase.example/", "supabase_key": "sk-test-file"},
-                  SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
-        self.assertEqual(ov._legacy_config(), ("https://demo.supabase.example", "sk-test-file"))
-
-    def test_no_file_pair_the_service_key_pair_from_the_environment(self):
-        self._cfg({}, isolated=False, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
-        self.assertEqual(ov._legacy_config(), ("https://env.supabase.example", "sk-test-service"))
-
-    def test_isolated_run_never_takes_the_service_key_from_the_environment(self):
-        """4d-2: під `DC_TASKS_FILE` сервісний ключ з оточення не читається — це найпривілейованіший секрет ЛІГИ."""
-        self._cfg({}, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
-        self.assertEqual(ov._legacy_config(), (None, None))
-
-    def test_the_service_key_without_a_url_is_nothing(self):
-        """Ключ без `SUPABASE_URL` не парується ні з чим: адреса й ключ — з одного джерела."""
-        self._cfg({"supabase_url": "https://demo.supabase.example"}, SUPABASE_SERVICE_KEY="sk-test-service")
-        self.assertEqual(ov._legacy_config(), (None, None))
-
-    def test_the_service_key_never_reaches_supabase_config(self):
-        """Сервісний ключ — лише запасний ключ ЛІГИ для CLI: `supabase_config()` (його бачать коментарі) його НЕ бачить."""
-        import install_config
-        self._cfg({}, SUPABASE_URL="https://env.supabase.example", SUPABASE_SERVICE_KEY="sk-test-service")
-        self.assertEqual(install_config.supabase_config(), (None, None))
-
-    def test_neither_is_unconfigured_and_cli_names_it_without_values(self):
-        self._cfg({})
-        with self.assertRaises(Exception) as ctx:
-            dashboard.legacy_ctx(*ov._legacy_config())
-        self.assertEqual(ctx.exception.code, "dashboard-unconfigured")
-        self.assertIn("не налаштовано", str(ctx.exception.message))
+# 4d-4b Task 10: `TestLegacyConfig` (6 тестів про `_legacy_config` і запасну пару `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`) ретировано —
+# читач видалено; усі шість замінює `tests/test_originals_gone.py::DashboardSyncWithoutLegacy` (без запису дашборда — постачальника нема,
+# навіть із сервісним ключем в оточенні; із записом — `module_ctx`).
 
 
 class TestSync(unittest.TestCase):
