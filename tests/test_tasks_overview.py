@@ -25,7 +25,6 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dashboard  # noqa: E402
 import deai_modules as dm  # noqa: E402
-import implicit  # noqa: E402
 import liga_fixture  # noqa: E402
 import make_before_4c2 as mb2  # noqa: E402  (світ знімка 0.12.0: сервер у процесі, `scrub`)
 import sbconf  # noqa: E402
@@ -532,6 +531,19 @@ class TasksOverviewHttpTest(unittest.TestCase):
         cls.team_file = os.path.join(cfgdir, 'team.json')
         _write_json(cls.team_file, [{'id': 'alpha', 'name': 'A', 'jira_status': 'Done',
                                      'open_comments': 5}])
+        # 4d-4b: запасного постачальника нема — «Команда» (шов `DC_TEAM_FAKE`) є лише в простору ЛІГА з ЯВНИМ записом `supabase-dashboard`.
+        # Тимчасовий дім із реєстром і записом; оточення (`HOME`/`DEAI_HOME`) повертає `addClassCleanup`.
+        cls.home = os.path.join(cfgdir, 'home')
+        cls.deai = os.path.join(cls.home, '.deai')
+        space_dir = os.path.join(cfgdir, 'liga-space')
+        liga_fixture.write_records(space_dir, cls.deai, 'legacy', ('dashboard',))
+        _write_json(os.path.join(cls.deai, 'spaces.json'), {'version': 1, 'current': 'legacy', 'spaces': [
+            {'id': 'legacy', 'path': space_dir, 'legacy': True, 'integrations': True}]})
+        env = mock.patch.dict(os.environ, {'HOME': cls.home, 'DEAI_HOME': cls.deai})
+        env.start()
+        cls.addClassCleanup(env.stop)
+        cls.addClassCleanup(dm.reset_caches)
+        dm.reset_caches()
         os.environ['DC_TASKS_FILE'] = cls.tasks_file
         os.environ['DC_NO_OVERVIEW'] = '1'
         os.environ['DC_TEAM_FAKE'] = cls.team_file
@@ -589,12 +601,11 @@ class TasksOverviewHttpTest(unittest.TestCase):
 
     def test_overview_isolated_without_fake_reports_error_not_500(self):
         # патч глобальний (сервер у своєму потоці) — і мутація «прибрали гвард»
-        # не піде в живий Supabase, а лише зачепить лічильник нижче. 4c-1: мережа ЛІГИ — шов `_open` модуля; конфіг підставний,
-        # інакше «Supabase не налаштовано» зупинило б запит і без ізоляції (тест був би порожнім).
+        # не піде в живий Supabase, а лише зачепить лічильник нижче. 4c-1: мережа ЛІГИ — шов `_open` модуля; запис `supabase-dashboard`
+        # (4d-4b) у фікстурі класу — інакше «нікого» зупинило б запит і без ізоляції (тест був би порожнім).
         net = _NetLog(OSError('мережі нема'))
         sbconf.patch_dashboard_open(self, net)
-        with mock.patch.dict(os.environ), \
-                mock.patch.object(serve, 'supabase_config', return_value=(sbconf.SB_URL, sbconf.SB_KEY)):
+        with mock.patch.dict(os.environ):
             os.environ.pop('DC_TEAM_FAKE')
             with mock.patch('urllib.request.urlopen', side_effect=OSError('мережі нема')) as uo:
                 status, _, body = self.get('/api/tasks-overview')
@@ -693,6 +704,10 @@ class _OkResp:
         return self._body
 
 
+#: Запис `jira-tracker` ЛІГИ з вигаданою адресою й токеном (замість заглушених читачів `serve.jira_config`, які 4d-4b видалив).
+DEMO_JIRA = {'settings': {'base': 'https://demo.atlassian.example', 'email': 'alpha@example.com'}, 'secrets': {'token': 'tok-test-1'}}
+
+
 class TrackerOverview(_TmpCase):
     """`tasks_overview(…, tracker=…)` (пріоритет джерел), кеш `tracker_snapshot` на простір, шов `DC_TRACKER_FAKE`, ізоляція ЛІГИ
     й диференційний зі знімком 0.12.0. Усе без мережі: `_tracker_fetch` підмінено, а справжній модуль — крізь шов `_open`."""
@@ -719,9 +734,19 @@ class TrackerOverview(_TmpCase):
     def _cfg(self, **tasks):
         return {'current': next(iter(tasks)), 'tasks': tasks}
 
-    def _snapshot(self, fetch, keys=('DEMO-1',), space='A', prov='legacy', **kw):
+    def lg(self, **override):
+        """`(space, prov)` ролі `tracker` простору ЛІГА з ЯВНИМ записом `jira-tracker` (4d-4b: запасного `Implicit` нема; було
+        `implicit.for_role('tracker')`). `override` — частини запису (`settings`, `secrets`, `enabled`); дім тимчасовий (`DEAI_HOME` у `setUp`)."""
+        space_dir = os.path.join(self.root, 'liga-space')
+        liga_fixture.write_records(space_dir, os.environ['DEAI_HOME'], 'legacy', ('tracker',), {'tracker': override})
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+        space = {'id': 'legacy', 'path': space_dir, 'legacy': True, 'integrations': True}
+        return space, dm.provider('tracker', space)
+
+    def _snapshot(self, fetch, keys=('DEMO-1',), space='A', prov='jira-tracker', **kw):
         with spaces.request_space(space), mock.patch.object(serve, '_tracker_fetch', fetch):
-            return serve.tracker_snapshot(list(keys), resolved=(None, _Prov(prov) if prov != 'legacy' else implicit.for_role('tracker')), **kw)
+            return serve.tracker_snapshot(list(keys), resolved=(None, _Prov(prov)), **kw)
 
     # ---- пріоритет у tasks_overview ----
 
@@ -784,11 +809,20 @@ class TrackerOverview(_TmpCase):
             raise AssertionError('мережа: ізольований прогін не ходить у Jira')
         calls = []
         sbconf.patch_open(self, lambda req, timeout: calls.append(req) or boom(req, timeout), 'jira-tracker')
-        with mock.patch.object(serve, 'jira_config', side_effect=AssertionError('конфіг Jira з ізольованого прогону')):
-            with tempfile.TemporaryDirectory(prefix='dc-tov-diff-') as tmp:
-                for var in mb2.CLEAN:
-                    os.environ.pop(var, None)
-                got = mb2.tasks_overview(tmp)
+        with tempfile.TemporaryDirectory(prefix='dc-tov-diff-') as tmp:      # (4d-4b: читача `serve.jira_config` нема — вартового на нього не ставимо)
+            for var in mb2.CLEAN:
+                os.environ.pop(var, None)
+            # 4d-4b: ЛІГА — простір із ЯВНИМИ записами (дашборд для «Команди» через шов `DC_TEAM_FAKE` і трекер, якого ізоляція не кличе);
+            # без реєстру неявний простір не має ролей, і «Команди» у відповіді не було б
+            deai = os.path.join(tmp, 'home', '.deai')
+            os.environ.update(HOME=os.path.join(tmp, 'home'), DEAI_HOME=deai)
+            space_dir = os.path.join(tmp, 'liga-space')
+            liga_fixture.write_records(space_dir, deai, 'legacy', ('dashboard', 'tracker'))
+            _write_json(os.path.join(deai, 'spaces.json'), {'version': 1, 'current': 'legacy', 'spaces': [
+                {'id': 'legacy', 'path': space_dir, 'legacy': True, 'integrations': True}]})
+            dm.reset_caches()
+            self.addCleanup(dm.reset_caches)
+            got = mb2.tasks_overview(tmp)
         reset_team_cache()
         want = self.snap['tasks_overview']
         self.assertEqual(calls, [])
@@ -799,6 +833,11 @@ class TrackerOverview(_TmpCase):
         self.assertTrue(all(m['profile'] == 'tool' and m['tags'] == ['tool'] for m in want_body['mine']),
                         'знімок і справді мав `profile` і похідну мітку з нього')
         want_body['mine'] = [{**{k: v for k, v in m.items() if k != 'profile'}, 'tags': []} for m in want_body['mine']]
+        # 4d-4b: знімок знято при вимкненому шарі (`space: None`); тепер ЛІГА — простір з явними записами, і відповідь називає його ролі
+        space = got['body'].pop('space')
+        self.assertEqual((space['id'], space['capabilities']['dashboard'], space['capabilities']['tracker']),
+                         ('legacy', 'supabase-dashboard', 'jira-tracker'))
+        self.assertIsNone(want_body.pop('space'))
         self.assertEqual(got['body'], want_body)
         self.assertEqual(got['volatile'], want['volatile'])
         self.assertEqual(serve._TRACKER_CACHE, {}, 'ізоляція нічого не кешує')
@@ -816,17 +855,17 @@ class TrackerOverview(_TmpCase):
         for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
             reset_tracker_cache()
             with mock.patch.dict(os.environ, {var: '1', 'DC_TRACKER_FAKE': fake}):
-                got = serve.tracker_snapshot(['DEMO-1', 'DEMO-2', 'DEMO-3'], now=10.0, resolved=(None, implicit.for_role('tracker')))
+                got = serve.tracker_snapshot(['DEMO-1', 'DEMO-2', 'DEMO-3'], now=10.0, resolved=self.lg())
             self.assertEqual(got, ({'DEMO-1': _st('Done'), 'DEMO-3': _st('Odd', None)}, None, 10.0), var)
 
     def test_isolation_without_the_seam_means_no_tracker_and_no_work(self):
         def boom(req, timeout):
             raise AssertionError('мережа')
+        resolved = self.lg()                       # ДО підміни шва: `lg()` скидає кеші модулів
         sbconf.patch_open(self, boom, 'jira-tracker')
         for var in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
-            with self.subTest(var=var), mock.patch.dict(os.environ, {var: '1'}), \
-                    mock.patch.object(serve, 'jira_config', side_effect=AssertionError('конфіг')):
-                self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker'))))
+            with self.subTest(var=var), mock.patch.dict(os.environ, {var: '1'}):
+                self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=resolved))
                 self.assertEqual(serve._TRACKER_CACHE, {})
 
     def test_a_broken_fake_file_is_an_error_text_not_an_exception(self):
@@ -836,7 +875,7 @@ class TrackerOverview(_TmpCase):
         for payload in (bad, self._fake_file(['не', 'словник']), os.path.join(self.root, 'нема.json')):
             reset_tracker_cache()
             with mock.patch.dict(os.environ, {'DC_TRACKER_FAKE': payload}):
-                got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker')))
+                got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=self.lg())
             self.assertEqual((got[0], got[2]), ({}, None), payload)
             self.assertTrue(got[1] and isinstance(got[1], str), payload)
 
@@ -853,29 +892,41 @@ class TrackerOverview(_TmpCase):
 
     def test_the_league_asks_jira_through_the_module_with_the_read_budget_and_at_most_100_keys(self):
         seen = []
+        resolved = self.lg(**DEMO_JIRA)
         sbconf.patch_open(self, self._jira_answer(seen), 'jira-tracker')
         keys = ['DEMO-%d' % i for i in range(1, 121)]
-        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')):
-            got = serve.tracker_snapshot(keys, now=5.0, resolved=(None, implicit.for_role('tracker')))
+        got = serve.tracker_snapshot(keys, now=5.0, resolved=resolved)
         self.assertEqual(len(seen), 1, 'одним викликом')
         self.assertEqual(seen[0][1], tracker.READ_SOCKET_S)
         self.assertEqual(seen[0][0], 'key in (' + ','.join(keys[:100]) + ')')
         self.assertEqual(sorted(got[0]), sorted(keys[:100]))
         self.assertEqual((got[1], got[2]), (None, 5.0))
         # перші 100 ключів уже в кеші: той самий набір — без повторного запиту, а не «новий ключ» щоразу
-        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')):
-            serve.tracker_snapshot(keys, now=6.0, resolved=(None, implicit.for_role('tracker')))
+        serve.tracker_snapshot(keys, now=6.0, resolved=resolved)
         self.assertEqual(len(seen), 1)
 
-    def test_the_league_without_jira_base_says_so_and_makes_no_network_call(self):
+    def test_the_league_record_without_a_base_says_so_and_makes_no_network_call(self):
+        """4d-4b (було `…_without_jira_base_…`): «конфігу нема» — запис без адреси (`jira_base` кореня запису не замінює). Плашка — текст
+        модуля/ядра для обовʼязкового налаштування, мережі нема; а коли питати нічого — немає й плашки."""
         def boom(req, timeout):
-            raise AssertionError('мережа: без конфігу Jira не питається')
+            raise AssertionError('мережа: без адреси Jira не питається')
+        resolved = self.lg(settings={'base': ''})
         sbconf.patch_open(self, boom, 'jira-tracker')
-        with mock.patch.object(serve, 'jira_config', return_value=(None, None, None)):
-            got = serve.tracker_snapshot(['DEMO-1'], now=5.0, resolved=(None, implicit.for_role('tracker')))
-            nothing = serve.tracker_snapshot([], now=5.0, refresh=True, resolved=(None, implicit.for_role('tracker')))
-        self.assertEqual(got, ({}, tracker.UNCONFIGURED, None))
+        got = serve.tracker_snapshot(['DEMO-1'], now=5.0, resolved=resolved)
+        nothing = serve.tracker_snapshot([], now=5.0, refresh=True, resolved=resolved)
+        self.assertEqual((got[0], got[2]), ({}, None))
+        self.assertTrue(got[1] and 'base' in got[1], got)
         self.assertEqual(nothing, ({}, None, 5.0), 'нема що питати — нема й плашки')
+
+    def test_the_league_without_a_tracker_record_has_no_tracker(self):
+        """4d-4b: без запису `jira-tracker` трекера нема (`None`), навіть коли корінь і оточення несуть старі `jira_*`/`JIRA_*`."""
+        space_dir = os.path.join(self.root, 'liga-space')
+        liga_fixture.write_records(space_dir, os.environ['DEAI_HOME'], 'legacy', ('dashboard',))
+        dm.reset_caches()
+        self.addCleanup(dm.reset_caches)
+        space = {'id': 'legacy', 'path': space_dir, 'legacy': True, 'integrations': True}
+        with mock.patch.dict(os.environ, {'JIRA_EMAIL': 'alpha@example.com', 'JIRA_TOKEN': 'tok-test-1'}):
+            self.assertIsNone(serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(space, dm.provider('tracker', space))))
 
     def test_junk_keys_are_dropped_before_anything_is_asked(self):
         f = _Fetch(({'DEMO-1': _st('Done')}, None))
@@ -887,19 +938,19 @@ class TrackerOverview(_TmpCase):
         """Не `ModuleError` і не мережа — збій коду ядра: плашка називає лише клас (`str(e)` чужого винятку не чищений і міг би
         винести токен), а stderr отримує назву класу."""
         err = io.StringIO()
-        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')), \
-                mock.patch.object(tracker, 'statuses', side_effect=RuntimeError('boom tok-test-1')), \
+        resolved = self.lg(**DEMO_JIRA)
+        with mock.patch.object(tracker, 'statuses', side_effect=RuntimeError('boom tok-test-1')), \
                 contextlib.redirect_stderr(err):
-            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker')))
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=resolved)
         self.assertEqual(got, ({}, 'RuntimeError', None))
         self.assertIn('RuntimeError', err.getvalue())
         self.assertNotIn('tok-test-1', err.getvalue())
 
     def test_a_network_error_is_the_class_name_and_stays_quiet_on_stderr(self):
         err = io.StringIO()
-        with mock.patch.object(serve, 'jira_config', return_value=('https://demo.atlassian.example', 'alpha@example.com', 'tok-test-1')), \
-                mock.patch.object(tracker, 'statuses', side_effect=OSError('нема VPN')), contextlib.redirect_stderr(err):
-            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=(None, implicit.for_role('tracker')))
+        resolved = self.lg(**DEMO_JIRA)
+        with mock.patch.object(tracker, 'statuses', side_effect=OSError('нема VPN')), contextlib.redirect_stderr(err):
+            got = serve.tracker_snapshot(['DEMO-1'], now=1.0, resolved=resolved)
         self.assertEqual(got, ({}, 'OSError', None))
         self.assertEqual(err.getvalue(), '')
 

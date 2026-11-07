@@ -294,10 +294,11 @@ class Env(unittest.TestCase):
     def rec(self, sid):
         return next(s for s in spaces.read_registry()['spaces'] if s['id'] == sid)
 
-    def liga_space(self, roles=liga_fixture.ALL_ROLES, overrides=None, name='Liga', sid='legacy'):
-        """Простір ЛІГА (`id: sid`, типово `legacy`; `legacy`, `integrations`) із ЯВНИМИ записами `roles` у `space.json` і секретами в
-        `secrets.json` дому тесту (4d-4b: запасного шляху нема, ролі ЛІГИ — звичайні записи; `liga_fixture.write_records`). Додає запис до
-        наявного реєстру й ДОЛУЧАЄ секрети до наявних (інші простори тесту не чіпає). Повторний виклик ПЕРЕПИСУЄ записи ролей того ж
+    def liga_space(self, roles=liga_fixture.ALL_ROLES, overrides=None, name='Liga', sid='legacy', legacy=True):
+        """Простір ЛІГА (`id: sid`, типово `legacy`; `legacy` — прапорець реєстру, типово істинний; `integrations`) із ЯВНИМИ записами `roles`
+        у `space.json` і секретами в `secrets.json` дому тесту (4d-4b: запасного шляху нема, ролі ЛІГИ — звичайні записи;
+        `liga_fixture.write_records`). `legacy=False` — звичайний простір з інтеграціями (файл задач у теці простору, а не старий корінь). Додає
+        запис до наявного реєстру й ДОЛУЧАЄ секрети до наявних (інші простори тесту не чіпає). Повторний виклик ПЕРЕПИСУЄ записи ролей того ж
         простору. Повертає запис реєстру (як `new_space`)."""
         path = self.hp('work', sid + '-space')
         old = _read(self.secrets_file) if os.path.exists(self.secrets_file) else {}
@@ -306,7 +307,7 @@ class Env(unittest.TestCase):
         _write(self.secrets_file, merged)
         os.chmod(self.secrets_file, 0o600)
         reg = _read(self.reg_file) if os.path.exists(self.reg_file) else {'version': 1, 'current': sid, 'spaces': []}
-        reg['spaces'] = [s for s in reg['spaces'] if s['id'] != sid] + [{'id': sid, 'path': path, 'legacy': True, 'integrations': True}]
+        reg['spaces'] = [s for s in reg['spaces'] if s['id'] != sid] + [{'id': sid, 'path': path, 'legacy': legacy, 'integrations': True}]
         _write(self.reg_file, reg)
         dm.reset_caches()
         return self.rec(sid)

@@ -1,7 +1,7 @@
 """Коментарі простору ЛІГА через модуль `supabase-comments` (етап 4b-2). Тут — тести ядра.
 
-Task 3: адреса й ключ Supabase більше не зашиті в `serve.py`: `serve.supabase_config()` бере їх з конфігу УСТАНОВКИ
-(корінь старого `tasks.json`, далі оточення). Усі споживачі (`_team_fetch`, `notify_call`, …) ходять лише через неї.
+Task 3: адреса й ключ Supabase більше не зашиті в `serve.py`. 4d-4b: і з конфігу УСТАНОВКИ (корінь старого `tasks.json`, оточення) рантайм їх не
+бере — ЛІГА веде коментарі, «Команду» й сповіщення ЯВНИМИ записами (`liga_fixture`), а читач оригіналів лишився лише в міграції.
 
 ⛔ Ізоляція: `DC_TASKS_FILE`/`DC_NO_OVERVIEW` прибираються лише там, де це ПОТРІБНО для перевірки (вони самі глушать
 мережу `_team_fetch`/`notify_call`); справжній `tasks.json` недосяжний — старий файл підставлено тимчасовий через
@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, _HERE)
 import deai_modules  # noqa: E402
-import implicit  # noqa: E402
 import inbox  # noqa: E402
+import liga_fixture  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import sbconf  # noqa: E402
@@ -98,35 +98,58 @@ class _Env(unittest.TestCase):
         with open(self.legacy, 'w', encoding='utf-8') as f:
             f.write(raw if raw is not None else json.dumps(obj))
 
+    def league(self, role, url=URL, key=KEY, **override):
+        """`(space, prov)` ролі `role` простору ЛІГА з ЯВНИМ записом (4d-4b: оригіналів кореня й `Implicit` нема; було
+        `implicit.for_role(role)` + корінь `tasks.json`): адреса й ключ — вигадані. Простір закріплено простором запиту; `override` — частини
+        запису (`enabled`, `settings`, `secrets`). ⛔ Викликати ДО `sbconf.patch_*_open`: фікстура скидає кеші модулів."""
+        settings = {'url': url} if role != 'tracker' else {}
+        secrets = {'key': key} if role != 'tracker' else {}
+        fx = liga_fixture.LigaFixture(self, tmp=self.tmp.name).env().build(
+            roles=(role,), overrides={role: dict({'settings': settings, 'secrets': secrets}, **override)})
+        fx.fix_space()
+        space = {'id': 'legacy', 'path': fx.space_dir, 'legacy': True, 'integrations': True}
+        return space, deai_modules.provider(role, space)
+
 
 class SupabaseConfigTest(_Env):
-    """`serve.supabase_config()`: конфіг УСТАНОВКИ, а не константи коду."""
+    """Читач оригіналів Supabase ЛІГИ — конфіг УСТАНОВКИ, а не константи коду: корінь старого `tasks.json`, далі оточення. З 4d-4b рантайм його
+    не має (`serve.supabase_config` видалено), а копія живе в міграції (`liga_migrate._supabase_from`) — ті самі кейси тепер проти неї
+    (`self.cfg()` читає старий файл; зламаний чи відсутній — порожній корінь, без винятку)."""
+
+    def cfg(self):
+        import install_config
+        import liga_migrate
+        try:
+            root = install_config.load_legacy_tasks()
+        except (OSError, ValueError, RecursionError):
+            root = {}
+        return liga_migrate._supabase_from(root)
 
     def test_reads_root_of_legacy_tasks_and_trims_slash(self):
         self.write({'supabase_url': URL + '/', 'supabase_key': KEY})
-        self.assertEqual(serve.supabase_config(), (URL, KEY))
+        self.assertEqual(self.cfg(), (URL, KEY))
 
     def test_falls_back_to_environment(self):
         self.write({'tasks': {}})
         os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-        self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+        self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
 
     def test_file_wins_over_environment(self):
         self.write({'supabase_url': URL, 'supabase_key': KEY})
         os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-        self.assertEqual(serve.supabase_config(), (URL, KEY))
+        self.assertEqual(self.cfg(), (URL, KEY))
 
     def test_pair_comes_whole_from_one_source(self):
         # Адреса з файла й ключ з оточення не змішуються: або ціла пара з файла, або ціла з оточення.
         self.write({'supabase_url': URL})
         os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-        self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+        self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
         # …а коли й оточення неповне — нічого.
         del os.environ['SUPABASE_URL']
-        self.assertEqual(serve.supabase_config(), (None, None))
+        self.assertEqual(self.cfg(), (None, None))
         os.environ['SUPABASE_URL'] = ENV_URL
         del os.environ['SUPABASE_KEY']
-        self.assertEqual(serve.supabase_config(), (None, None))
+        self.assertEqual(self.cfg(), (None, None))
 
     def test_only_https_and_non_blank_strings(self):
         for url, key in (('http://demo.supabase.co', KEY), ('', KEY), (5, KEY), (None, KEY),
@@ -135,7 +158,7 @@ class SupabaseConfigTest(_Env):
                          ('https://  /', KEY)):
             with self.subTest(url=url, key=key):
                 self.write({'supabase_url': url, 'supabase_key': key})
-                self.assertEqual(serve.supabase_config(), (None, None))
+                self.assertEqual(self.cfg(), (None, None))
 
     def test_documentation_placeholders_are_not_a_config(self):
         # `cp tasks.example.json tasks.json`-подібна заготовка з документації: `<ref>` — не хост, `…` — не ключ
@@ -144,49 +167,49 @@ class SupabaseConfigTest(_Env):
                          ('https://demo supabase.co', KEY), ('https://user@demo.supabase.co', KEY)):
             with self.subTest(url=url, key=key):
                 self.write({'supabase_url': url, 'supabase_key': key})
-                self.assertEqual(serve.supabase_config(), (None, None))
+                self.assertEqual(self.cfg(), (None, None))
 
     def test_key_with_a_space_is_not_a_config(self):
         self.write({'supabase_url': URL, 'supabase_key': 'sb_publishable_ab cd'})
-        self.assertEqual(serve.supabase_config(), (None, None))
+        self.assertEqual(self.cfg(), (None, None))
 
     def test_port_is_allowed(self):
         self.write({'supabase_url': 'https://demo.supabase.co:8443/', 'supabase_key': KEY})
-        self.assertEqual(serve.supabase_config(), ('https://demo.supabase.co:8443', KEY))
+        self.assertEqual(self.cfg(), ('https://demo.supabase.co:8443', KEY))
 
     def test_bad_file_pair_falls_to_a_good_environment_pair(self):
         self.write({'supabase_url': 'https://<ref>.supabase.co', 'supabase_key': KEY})
         os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-        self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+        self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
 
     def test_http_in_file_does_not_fall_through_to_mixed_pair(self):
         # Негодна пара з файла відкидається ЦІЛКОМ; оточення береться теж лише цілим.
         self.write({'supabase_url': 'http://demo.supabase.co', 'supabase_key': KEY})
         os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-        self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+        self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
 
     def test_unreadable_file_means_environment_or_nothing(self):
         # нема файла
-        self.assertEqual(serve.supabase_config(), (None, None))
+        self.assertEqual(self.cfg(), (None, None))
         os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-        self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+        self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
         # не JSON і не обʼєкт
         for raw in ('{oops', '[]', '"x"', '5', 'null'):
             with self.subTest(raw=raw):
                 self.write(None, raw=raw)
-                self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+                self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
         del os.environ['SUPABASE_KEY']
         self.write(None, raw='{oops')
-        self.assertEqual(serve.supabase_config(), (None, None))
+        self.assertEqual(self.cfg(), (None, None))
 
     def test_deeply_nested_file_is_no_config_not_a_crash(self):
         # `json.load` на надто глибокій вкладеності кидає `RecursionError` (не `ValueError`): це «конфігу нема», а не обвал.
         for raw in ('[' * 100000, '{"a":' * 100000):
             with self.subTest(raw=raw[:6]):
                 self.write(None, raw=raw)
-                self.assertEqual(serve.supabase_config(), (None, None))
+                self.assertEqual(self.cfg(), (None, None))
                 os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'] = ENV_URL, ENV_KEY
-                self.assertEqual(serve.supabase_config(), (ENV_URL, ENV_KEY))
+                self.assertEqual(self.cfg(), (ENV_URL, ENV_KEY))
                 del os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY']
 
     def test_no_constants_left_in_serve(self):
@@ -202,18 +225,21 @@ class TeamFetchTest(_Env):
     4c-1: підпис `_team_fetch(space, prov)` і мережа ЛІГИ — шов `_open` вбудованого `supabase-dashboard` (не `urlopen`)."""
 
     def test_without_config_no_network(self):
-        self.write({'tasks': {}})
-        self.assertEqual(serve._team_fetch(None, implicit.for_role('dashboard')), ([], 'Supabase не налаштовано'))
+        """4d-4b: «конфігу нема» — запис `supabase-dashboard` без адреси (корінь `tasks.json` запису не замінює); мережі нема, текст — модуля."""
+        self.write({'supabase_url': URL, 'supabase_key': KEY})       # корінь з парою — БЕЗ запису це нічого не дає
+        space, prov = self.league('dashboard', url='')
+        rows, err = serve._team_fetch(space, prov)
+        self.assertEqual((rows, err), ([], 'url: адресу проєкту Supabase не задано'))
 
     def test_with_config_requests_config_url(self):
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
+        space, prov = self.league('dashboard')
         seen = []
 
         def fake(req, timeout=None):
             seen.append(req)
             return sbconf.Resp(b'[{"id": "p1", "name": "One", "secret_col": "x"}]')
         sbconf.patch_dashboard_open(self, fake)
-        rows, err = serve._team_fetch(None, implicit.for_role('dashboard'))
+        rows, err = serve._team_fetch(space, prov)
         self.assertIsNone(err)
         self.assertEqual([r['id'] for r in rows], ['p1'])
         self.assertEqual(rows[0]['name'], 'One')
@@ -225,11 +251,11 @@ class TeamFetchTest(_Env):
 
     def test_isolation_still_wins_over_config(self):
         # ⛔ Закон ізоляції не змінився: `DC_TASKS_FILE` глушить мережу, навіть коли конфіг є.
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
+        space, prov = self.league('dashboard')
         os.environ['DC_TASKS_FILE'] = self.legacy
         seen = []
         sbconf.patch_dashboard_open(self, lambda req, timeout=None: seen.append(req) or sbconf.Resp(b'[]'))
-        rows, err = serve._team_fetch(None, implicit.for_role('dashboard'))
+        rows, err = serve._team_fetch(space, prov)
         self.assertEqual(rows, [])
         self.assertIn('ізольованому', err)
         self.assertEqual(seen, [])
@@ -245,7 +271,9 @@ class NotifyCallBaselineTest(_Env):
         return seen
 
     def test_without_config_is_unconfigured_without_network(self):
-        self.write({'tasks': {}})
+        """4d-4b: «конфігу нема» — запис `supabase-teams` без адреси (корінь запису не замінює); `notify-unconfigured`, мережі нема."""
+        self.write({'supabase_url': URL, 'supabase_key': KEY})
+        self.league('notify', url='')
         seen = self.open_seam()
         with self.assertRaises(deai_modules.ModuleError) as cm:
             serve.notify_call('mute_state')
@@ -255,7 +283,7 @@ class NotifyCallBaselineTest(_Env):
     def test_with_config_matches_baseline(self):
         with open(BEFORE, encoding='utf-8') as f:
             base = json.load(f)['teams_rpc']
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
+        self.league('notify')
         seen = self.open_seam()
         serve.notify_call('mute_state')
         self.assertEqual(len(seen), 1)
@@ -270,7 +298,7 @@ class NotifyCallBaselineTest(_Env):
         self.assertTrue(apikey_is_config and bearer_is_config)
 
     def test_isolation_still_blocks_with_config(self):
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
+        self.league('notify')
         seen = self.open_seam()
         os.environ['DC_NO_OVERVIEW'] = '1'
         with self.assertRaises(OSError):
@@ -279,34 +307,39 @@ class NotifyCallBaselineTest(_Env):
 
 
 class LigaRoutesWithoutConfigTest(tcr.PagesEnv):
-    """Справжній сервер, простір ЛІГА (інтеграції, без модуля коментарів), конфігу Supabase НЕМА ні в файлі, ні в оточенні.
+    """Справжній сервер, простір ЛІГА (інтеграції), де ЯВНОГО запису `supabase-comments` НЕМА (4d-4b: оригіналів кореня й оточення рантайм не
+    читає, тож «конфігу нема» = «запису нема»; було — порожній корінь `tasks.json` і код `comments-unconfigured`).
 
-    ⛔ Сторінка без конфігу НЕ стирається і НЕ несе порожніх адреси й ключа (так було до 4b-2: `inject_comment_layer` без
-    конфігу вставляв сніпет з `url: ''` і банер «недоступні»): вона лишається РОБОЧОЮ — локальний шар коментарів — і каже
-    причину приміткою з кодом `comments-unconfigured`; вкладки «Команда» нема (вона вела б у ту саму відмову)."""
+    ⛔ Сторінка без запису НЕ стирається і НЕ несе порожніх адреси й ключа: вона лишається РОБОЧОЮ — локальний шар коментарів; вкладки
+    «Команда» нема, а `comment-config` каже `integrations-off` (командних коментарів ніхто не веде) без жодних значень."""
 
     def setUp(self):
         super().setUp()
-        sbconf.drop_root(self.legacy)              # конфігу нема: пару `Env.setUp` лежить у корені фікстури, оточення під ізоляцією не читається
+        self.liga = self.liga_space(roles=(), sid='liga', legacy=False)       # простір ЛІГА без жодного запису ролей
+        self.write_task(self.liga)
         net = mock.patch.object(serve.urllib.request, 'urlopen', _boom)
         net.start()
         self.addCleanup(net.stop)
         self.use(self.liga)
 
-    def test_comment_config_is_409_comments_unconfigured_without_values(self):
+    def test_comment_config_is_409_integrations_off_without_values(self):
         st, raw = self.fetch('/api/comment-config?ch=project&it=it1')
         body = json.loads(raw)
-        self.assertEqual((st, body['ok'], body['code']), (409, False, 'comments-unconfigured'))
+        self.assertEqual((st, body['ok'], body['code']), (409, False, 'integrations-off'))
         for leaked in ('sbUrl', 'sbKey', 'https://'):
             self.assertNotIn(leaked, raw)
 
-    def test_project_page_keeps_its_content_and_says_comments_are_down(self):
+    def test_project_page_keeps_its_content_and_stays_local(self):
         """Заміна двох старих перевірок `InjectWithoutConfigTest` (сторінка живе без конфігу; порожня адреса в сніпеті):
-        тепер сторінка локальна + примітка, а порожніх `url: ''` у розмітці нема взагалі."""
+        сторінка локальна, а порожніх `url: ''` і спільних адрес у розмітці нема взагалі."""
         html = self.page('project')
         self.assertIn('<h1>x</h1>', html)
-        self.assert_local_with_notice(html, 'comments-unconfigured')
+        self.assertIn('local-adapter.js', html)
+        self.assertNotIn('__deaiCommentsCfg', html)
+        self.assertNotIn('audiences:', html)
         self.assertNotIn("url: ''", html)
+        for shared in self.SHARED + (sbconf.SB_URL, sbconf.SB_KEY):
+            self.assertNotIn(shared, html, shared)
 
 
 class LegacyPagesTest(tcr.PagesEnv):
@@ -340,6 +373,12 @@ class LegacyPagesTest(tcr.PagesEnv):
         m = re.search(r'version: ("(?:[^"\\]|\\.)*")', html)
         return {'version': json.loads(m.group(1)),
                 'audiences': 'audiences:' in html, 'inspector': '/inspector.js' in html}
+
+    def decide(self, **kw):
+        """`serve.publish_comments` для простору ЛІГА: простір ЗАКРІПЛЕНО простором запиту, як це робить обробник (без закріплення
+        постачальника нема — 4d-4b: явний запис діє лише в закріпленому просторі)."""
+        with spaces.request_space(self.liga['id']):
+            return serve.publish_comments(self.liga, self.t2, 't2', **kw)
 
     def build(self, comments):
         task, its = self.t2, [{'id': 'it1', 'published': True}]
@@ -382,7 +421,7 @@ class LegacyPagesTest(tcr.PagesEnv):
     # ---- превʼю -----------------------------------------------------------------------------------------------------
 
     def test_the_preview_carries_exactly_the_layer_and_the_module_adapter_files(self):
-        comments, warn = serve.publish_comments(self.liga, self.t2, 't2')
+        comments, warn = self.decide()
         self.assertIsNone(warn)
         pub = self.build(comments)['dir']
         self.assertEqual(sorted(os.listdir(os.path.join(pub, 'comment-layer'))),
@@ -403,15 +442,17 @@ class LegacyPagesTest(tcr.PagesEnv):
         self.assertEqual(man['build'], 'legacy')
 
     def test_publish_comments_for_the_league(self):
-        comments, warn = serve.publish_comments(self.liga, self.t2, 't2')
+        comments, warn = self.decide()
         self.assertIsNone(warn)
         self.assertEqual((comments['module'].id, comments['channel']), ('supabase-comments', 'dc/t2'))
         self.assertEqual(set(comments['config']), {'url', 'key', 'shotsBucket'})
-        self.assertEqual(serve.publish_comments(self.liga, self.t2, 't2', module_publish=True), (False, None))
+        self.assertEqual(self.decide(module_publish=True), (False, None))
 
-    def test_publish_comments_without_config_is_comments_unconfigured_and_the_build_carries_nothing(self):
-        sbconf.drop_root(self.legacy)
-        self.assertEqual(serve.publish_comments(self.liga, self.t2, 't2'), (False, 'comments-unconfigured'))
+    def test_publish_comments_without_a_record_is_none_and_the_build_carries_nothing(self):
+        """Було: без конфігу кореня — `(False, 'comments-unconfigured')`. 4d-4b: «нема конфігу» = «нема запису» — постачальника ролі нема,
+        превʼю без коментарів і без попередження (як і в будь-якому просторі, де коментарі не підключено)."""
+        self.liga = self.liga_space(roles=(), sid='liga', legacy=False)
+        self.assertEqual(self.decide(), (False, None))
         pub = self.build(False)['dir']
         self.assertFalse(os.path.exists(os.path.join(pub, 'comment-layer')))
         self.assertNotIn('CommentLayer', _text(os.path.join(pub, 'it1', 'index.html')))
@@ -471,27 +512,35 @@ class OverviewSyncTest(_Env):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_without_config_no_popen_and_no_log(self):
-        self.write({'tasks': {}})
+    def test_without_a_dashboard_record_no_popen_and_no_log(self):
+        """Було: «без конфігу установки» (порожній корінь). 4d-4b: рішення — запис ролі `dashboard` простору; у просторі ЛІГА без нього
+        (є лише запис коментарів) постачальника нема — ні лога, ні `Popen`."""
+        self.league('comments')
         with mock.patch.object(serve.subprocess, 'Popen') as popen:
             serve.Handler._overview_sync(None)
         popen.assert_not_called()
         self.assertFalse(os.path.exists(self.log))
 
-    def test_with_config_child_starts_for_the_league_and_gets_no_config(self):
-        """Запит без фіксованого простору: ЛІГА — запис реєстру з `legacy` (його id, ключ той самий, що в фіксованого тригера);
-        запису нема — `--legacy` (не псевдонім-id: `legacy` може бути id справжнього простору)."""
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
+    def test_with_a_dashboard_record_child_starts_for_the_league_and_gets_no_config(self):
+        """Простір ЛІГА закріплено простором запиту (явний запис діє лише так): дитина стартує з `--space <id>` (ключ синку — той самий id), БЕЗ конфігу.
+        Було: запит без закріплення брав запис реєстру з `legacy` чи `--legacy` — з 4d-4b провайдера без закріпленого простору нема, тож гілка
+        недосяжна звідси (її лишає `_overview_target` для інструментів без обробника)."""
+        self.league('dashboard')
         script = os.path.join(ROOT, 'bin', 'overview_push.py')
-        for reg, tail in (({'spaces': [{'id': 'liga', 'legacy': True}, {'id': 'legacy', 'legacy': False}]}, ['--space', 'liga']),
-                          ({'spaces': []}, ['--legacy'])):
-            with self.subTest(tail=tail), mock.patch.object(serve.spaces, 'read_registry', return_value=reg), \
-                    mock.patch.object(serve.subprocess, 'Popen') as popen:
-                serve._SYNC_RUNS.clear()
-                serve.Handler._overview_sync(None)
-            popen.assert_called_once()
-            self.assertEqual(popen.call_args.args[0], [sys.executable, script, 'sync', *tail])
-            self.assertNotIn('env', popen.call_args.kwargs, 'конфіг дитині не передається: вона читає install_config')
+        with mock.patch.object(serve.subprocess, 'Popen') as popen:
+            serve._SYNC_RUNS.clear()
+            serve.Handler._overview_sync(None)
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], [sys.executable, script, 'sync', '--space', 'legacy'])
+        self.assertNotIn('env', popen.call_args.kwargs, 'конфіг дитині не передається: вона читає install_config')
+
+    def test_the_isolated_run_does_not_start_a_child_for_the_shared_league_record(self):
+        """Закон ізоляції: `shared_state`-запис ЛІГИ + ізольований прогін (`DC_TASKS_FILE`) — синку нема (пишемо у спільний Supabase)."""
+        self.league('dashboard')
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(self.tmp.name, 'iso.json')}), \
+                mock.patch.object(serve.subprocess, 'Popen') as popen:
+            serve.Handler._overview_sync(None)
+        popen.assert_not_called()
 
 
 # Рядки Supabase, які віддає «сервер» у тестах агента (ті самі, що записані в `before-4b2.json` на 0.9.0).
@@ -510,8 +559,8 @@ PIN_FIELDS = ('id', 'text', 'status', 'author', 'ts', 'meta', 'born_v', 'fp', 'h
 class LegacyAgentTest(_Env):
     """Task 4: агент (`ProjectComments`, `inbox`, `state`) веде командні коментарі ЛІГИ вбудованим `supabase-comments`.
 
-    Конфіг — фікстура старого `tasks.json` (`supabase_url`/`supabase_key`); мережа — лише шов `_open` модуля
-    (`sbconf.patch_open`), `urlopen` — розтяжка (`_boom`). Усе порівнюється зі знімком 0.9.0 (`before-4b2.json`)."""
+    Конфіг — ЯВНИЙ запис `supabase-comments` простору ЛІГА (`self.league('comments')`, 4d-4b; було — фікстура старого `tasks.json`); мережа —
+    лише шов `_open` модуля (`sbconf.patch_open`), `urlopen` — розтяжка (`_boom`). Усе порівнюється зі знімком 0.9.0 (`before-4b2.json`)."""
 
     TASK = {'comment_project': 'proj/alpha'}
 
@@ -519,14 +568,19 @@ class LegacyAgentTest(_Env):
         super().setUp()
         with open(BEFORE, encoding='utf-8') as f:
             self.base = json.load(f)
-        self.write({'supabase_url': URL, 'supabase_key': KEY})
         self.seen = []
         self.rows = ROWS
+        self.space, self.prov = self.league('comments')          # ДО `patch_open`: фікстура скидає кеші модулів
         sbconf.patch_open(self, self.fake_open)
-        # шар просторів тут не потрібен: перевірка інтеграцій — окремий тест (`test_integrations_gate…`)
-        gate = mock.patch.object(spaces, 'require_integrations', lambda *a, **k: None)
-        gate.start()
-        self.addCleanup(gate.stop)
+
+    def pc(self):
+        return serve.ProjectComments(self.space)
+
+    def no_record(self):
+        """Простір ЛІГА без запису коментарів (є лише запис дашборда): ролі `comments` ніхто не веде. Заміна «без конфігу кореня»."""
+        space, _ = self.league('dashboard')
+        sbconf.patch_open(self, self.fake_open)
+        return space
 
     def fake_open(self, req, timeout=None):
         self.seen.append({'method': req.get_method(), 'url': req.full_url, 'timeout': timeout,
@@ -537,24 +591,18 @@ class LegacyAgentTest(_Env):
         return sbconf.Resp(json.dumps([{'id': re.search(r'[?&]id=eq\.([^&]+)', req.full_url).group(1)}]).encode('utf-8'))
 
     # --- ctx і маршрут ---
-    def test_ctx_comes_from_the_install_config_not_from_the_frame(self):
-        with mock.patch.object(deai_modules, 'module_ctx', side_effect=AssertionError('module_ctx у ctx ЛІГИ')):
-            ctx = serve._comments_legacy_ctx()
-        self.assertEqual(ctx['settings'], {'url': URL, 'shots_bucket': 'overview-thumbs'})
+    def test_ctx_comes_from_the_league_record(self):
+        """Було: `serve._comments_legacy_ctx()` читав конфіг УСТАНОВКИ (корінь `tasks.json`); з 4d-4b ctx дає `module_ctx` з ЗАПИСУ простору
+        (адреса — налаштування, ключ — секрет); читача оригіналів нема."""
+        self.assertFalse(hasattr(serve, '_comments_legacy_ctx'))
+        _, ctx, _ = serve.comments_route(self.space, self.prov)
+        self.assertEqual(ctx['settings']['url'], URL)
         self.assertEqual(ctx['secrets'], {'key': KEY})
         self.assertIs(ctx['ModuleError'], deai_modules.ModuleError)
         self.assertEqual((serve.COMMENTS_MODULE, serve.LEGACY_SHOTS_BUCKET), ('supabase-comments', 'overview-thumbs'))
 
-    def test_ctx_without_config_is_comments_unconfigured_409(self):
-        self.write({'tasks': {}})
-        with mock.patch.object(deai_modules, 'module_ctx', side_effect=AssertionError('module_ctx у ctx ЛІГИ')):
-            with self.assertRaises(deai_modules.ModuleError) as cm:
-                serve._comments_legacy_ctx()
-        self.assertEqual((cm.exception.code, cm.exception.status), ('comments-unconfigured', 409))
-        self.assertNotIn(URL, str(cm.exception))
-
     def test_route_for_the_league_is_the_builtin_module_with_the_league_channel(self):
-        m, ctx, channel = serve.comments_route(None, implicit.for_role('comments'))
+        m, ctx, channel = serve.comments_route(self.space, self.prov)
         self.assertEqual((m.id, m.status, m.origin), ('supabase-comments', 'ok', 'builtin'))
         self.assertEqual(ctx['settings']['url'], URL)
         ch = self.base['channels']
@@ -564,13 +612,11 @@ class LegacyAgentTest(_Env):
         self.assertEqual(channel({}, 't2', internal=True), ch['t2_internal'])
 
     def test_route_refuses_without_a_loaded_builtin_module_or_a_provider(self):
-        with mock.patch.object(deai_modules, 'catalog', return_value={}):
+        # Було: пропажа вбудованого модуля з каталогу (`catalog` → `{}`/збій) — каталог ЛІГА більше не опитує (постачальник уже вирішений);
+        # лишився збій `module_ctx` (`secrets-unreadable`, `bad-settings`…) — маршрут не ковтає його й не показує ключа.
+        with mock.patch.object(deai_modules, 'module_ctx', side_effect=deai_modules.ModuleError('module-error', message='comments: ctx')):
             with self.assertRaises(deai_modules.ModuleError) as cm:
-                serve.comments_route(None, implicit.for_role('comments'))
-        self.assertEqual(cm.exception.code, 'module-error')
-        with mock.patch.object(deai_modules, 'catalog', side_effect=RuntimeError(KEY)):
-            with self.assertRaises(deai_modules.ModuleError) as cm:
-                serve.comments_route(None, implicit.for_role('comments'))
+                serve.comments_route(self.space, self.prov)
         self.assertEqual(cm.exception.code, 'module-error')
         self.assertNotIn(KEY, str(cm.exception))
         for prov in (None, 'nope', 5):
@@ -589,7 +635,7 @@ class LegacyAgentTest(_Env):
 
     # --- диференційні: 0.9.0 ↔ модуль ---
     def test_pins_match_the_recorded_0_9_0_pins_field_by_field(self):
-        pins = serve.ProjectComments(None).pins(self.TASK, 't1')
+        pins = self.pc().pins(self.TASK, 't1')
         self.assertEqual([p['id'] for p in pins], [p['id'] for p in self.base['pins']])
         for got, want in zip(pins, self.base['pins']):
             for field in PIN_FIELDS:
@@ -610,7 +656,7 @@ class LegacyAgentTest(_Env):
         self.assertEqual(req['headers']['authorization'], 'Bearer ' + KEY)
 
     def test_resolve_body_contains_the_recorded_0_9_0_body_and_filters_by_id_and_channel(self):
-        serve.ProjectComments(None).resolve(self.TASK, 't1', 'c1', 'виправлено', iteration=3)
+        self.pc().resolve(self.TASK, 't1', 'c1', 'виправлено', iteration=3)
         [req] = self.seen
         want = self.base['resolve']
         self.assertEqual(req['method'], 'PATCH')
@@ -623,8 +669,9 @@ class LegacyAgentTest(_Env):
         self.assertIs(type(req['body']['resolved_v']), int)
 
     def test_the_agent_object_for_the_league(self):
-        pc = serve.ProjectComments(None)
-        self.assertEqual((pc.kind, pc.label, pc.takes_iteration), ('implicit', 'Supabase', True))
+        pc = self.pc()
+        # було `kind == 'implicit'` (неявний постачальник); тепер ЛІГА — явний запис, тож `module`, а підпис «Supabase» дає схема comment-layer
+        self.assertEqual((pc.kind, pc.label, pc.takes_iteration), ('module', 'Supabase', True))
         self.assertEqual(pc.channel(self.TASK, 't1'), 'proj/alpha')
         self.assertEqual(pc.channel({}, 't2', internal=True), 'dc/t2/internal')
 
@@ -648,7 +695,7 @@ class LegacyAgentTest(_Env):
         got = []
         own = mock.Mock(spec=deai_modules.Module)
         own.id, own.origin = 'own-comments', 'space'
-        pc = serve.ProjectComments(None)
+        pc = self.pc()                                  # простір закріплено: без нього `Module` не мав би запису простору (4d-4b)
         pc.prov = own
         with mock.patch.object(serve, 'comments_route', return_value=(own, {}, lambda t, i, internal=False: 'ch')), \
                 mock.patch.object(deai_modules, 'call', lambda mod, fn, ctx, ch, *args, timeout=None: got.append((fn, args))):
@@ -656,30 +703,31 @@ class LegacyAgentTest(_Env):
         self.assertEqual(got, [('resolve', ('c1', 'готово'))])
 
     # --- відмови ---
-    def test_without_config_pins_and_resolve_are_comments_unconfigured_without_network(self):
-        self.write({'tasks': {}})
-        pc = serve.ProjectComments(None)
-        with self.assertRaises(deai_modules.ModuleError) as cm:
+    def test_without_a_record_pins_and_resolve_are_integrations_off_without_network(self):
+        """Було: без конфігу кореня — `comments-unconfigured` (`ModuleError`). 4d-4b: «нема конфігу» = «нема запису ролі»: `IntegrationsOff`
+        (`OSError`, `kind == 'off'`: ролі нікого не ведуть), а мережа мовчить."""
+        pc = serve.ProjectComments(self.no_record())
+        self.assertEqual((pc.kind, pc.label), ('off', 'не підключено'))
+        with self.assertRaises(spaces.IntegrationsOff):
             pc.pins(self.TASK, 't1')
-        self.assertEqual(cm.exception.code, 'comments-unconfigured')
-        self.assertNotIsInstance(cm.exception, OSError)
-        with self.assertRaises(deai_modules.ModuleError) as cm:
+        with self.assertRaises(spaces.IntegrationsOff):
             pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
-        self.assertEqual(cm.exception.code, 'comments-unconfigured')
         self.assertEqual(self.seen, [])
 
-    def test_integrations_gate_comes_before_any_module_call(self):
-        """Простір ЛІГИ без інтеграцій не ходить у мережу: `spaces.require_integrations()` у `ProjectComments._module`
-        ПЕРЕД кожним викликом (модуль про простори не знає)."""
-        off = mock.patch.object(spaces, 'require_integrations', side_effect=spaces.IntegrationsOff('integrations-off'))
-        pc = serve.ProjectComments(None)
-        with off:
-            with self.assertRaises(spaces.IntegrationsOff):
-                pc.pins(self.TASK, 't1')
-            with self.assertRaises(spaces.IntegrationsOff):
-                pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
+    def test_a_disabled_record_gives_nobody_and_no_module_call(self):
+        """Було: перевірка інтеграцій (`spaces.require_integrations`) ПЕРЕД викликом модуля. З 4d-4b рішення — наявність УВІМКНЕНОГО запису:
+        вимкнений запис — ролі ніхто не веде (`IntegrationsOff`), мережі нема; контроль — увімкнений той самий виклик іде в модуль."""
+        off_space, _ = self.league('comments', enabled=False)
+        sbconf.patch_open(self, self.fake_open)
+        pc = serve.ProjectComments(off_space)
+        with self.assertRaises(spaces.IntegrationsOff):
+            pc.pins(self.TASK, 't1')
+        with self.assertRaises(spaces.IntegrationsOff):
+            pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
         self.assertEqual(self.seen, [])
-        self.assertEqual(len(pc.pins(self.TASK, 't1')), 2, 'контроль: без заборони той самий виклик іде в модуль')
+        on_space, _ = self.league('comments')
+        sbconf.patch_open(self, self.fake_open)
+        self.assertEqual(len(serve.ProjectComments(on_space).pins(self.TASK, 't1')), 2, 'контроль: з увімкненим записом виклик іде в модуль')
 
     def test_old_league_path_is_gone(self):
         self.assertFalse(hasattr(serve, 'supabase_pins'))
@@ -692,17 +740,17 @@ class LegacyAgentTest(_Env):
     def test_comments_client_takes_a_ready_ctx_and_does_not_build_its_own(self):
         """`comments_client(…, ctx=…)`: публічна конфігурація браузерного адаптера — з ГОТОВОГО `ctx` ЛІГИ (без `space.json` і
         `secrets.json`: `_ctx` не кличеться); публічний ключ і кошик скріншотів у ній є."""
-        mod = deai_modules.catalog()['supabase-comments']
-        ctx = serve._comments_legacy_ctx()
+        mod = self.prov
+        _, ctx, _ = serve.comments_route(self.space, self.prov)
         with mock.patch.object(deai_modules, '_ctx', side_effect=AssertionError('_ctx при готовому ctx')):
             cfg = deai_modules.comments_client(None, mod, ctx=ctx)
         self.assertEqual(cfg, {'url': URL, 'key': KEY, 'shotsBucket': 'overview-thumbs'})
 
     # --- state ---
-    def setUpState(self):
-        """`state._team_comments` будує `ProjectComments(spaces.active_space())`: простір ЛІГИ без простору запиту — це
-        `broken` (див. `ProjectComments.__init__`), тож тут активного простору нема, як у інструментів ЛІГИ без просторів."""
-        active = mock.patch.object(spaces, 'active_space', return_value=None)
+    def setUpState(self, space=None):
+        """`state._team_comments` будує `ProjectComments(spaces.active_space())`: простір ЛІГА — явний запис, закріплений простором запиту
+        (`league()`), тож активним простором тут лишається він (чи `space`, підставлений тестом)."""
+        active = mock.patch.object(spaces, 'active_space', return_value=space or self.space)
         active.start()
         self.addCleanup(active.stop)
 
@@ -715,24 +763,22 @@ class LegacyAgentTest(_Env):
         self.rows = {'not': 'a list'}
         n, tail = state._team_comments(self.TASK, 't1')
         self.assertEqual((n, tail), (0, ', проєктні: не дістати (module-error)'))
-        self.write({'tasks': {}})
-        self.assertEqual(state._team_comments(self.TASK, 't1'), (0, ', проєктні: Supabase не налаштовано'))
+
+    def test_state_without_a_record_says_none_and_asks_nobody(self):
+        """Заміна двох перевірок: «Supabase не налаштовано» (порожній корінь) і «без інтеграцій» (`require_integrations`) — тепер обидві це
+        «запису ролі нема»: `проєктних нема`, жодного запиту."""
+        self.setUpState(self.no_record())
+        self.assertEqual(state._team_comments(self.TASK, 't1'), (0, ', проєктних нема'))
+        self.assertEqual(self.seen, [])
 
     def test_the_league_resolve_refuses_an_unsafe_pin_id_before_any_request(self):
         """Білий список `id` піна діє й для ЛІГИ (як для модуля простору): чужий `id` іде в адресу PATCH."""
-        pc = serve.ProjectComments(None)
+        pc = self.pc()
         for bad in ('a/b?x', 'x&project_id=neq.y', '', None, 5, 'a b'):
             with self.subTest(bad=bad), self.assertRaises(deai_modules.ModuleError) as cm:
                 pc.resolve(self.TASK, 't1', bad, 'r', iteration=1)
             self.assertEqual(cm.exception.code, 'module-error')
         self.assertEqual(self.seen, [])
-
-    def test_state_without_integrations_says_none_and_asks_nobody(self):
-        self.setUpState()
-        with mock.patch.object(spaces, 'require_integrations', side_effect=spaces.IntegrationsOff('integrations-off')):
-            self.assertEqual(state._team_comments(self.TASK, 't1'), (0, ', проєктних нема'))
-        self.assertEqual(self.seen, [])
-
 
 if __name__ == '__main__':
     unittest.main()

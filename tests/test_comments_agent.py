@@ -6,8 +6,8 @@
 
     постачальник     читання                                 закриття
     Module           `list` модуля → форма рядків REST       `resolve` модуля
-    'legacy'         `list` вбудованого `supabase-comments`  `resolve` того ж модуля (з номером ітерації);
-                     з конфігом установки (4b-2)             шов мережі — `_open` модуля (`sbconf.patch_open`)
+    Module ЛІГИ      `list` вбудованого `supabase-comments`  `resolve` того ж модуля (з номером ітерації);
+    (явний запис)    з ЯВНОГО запису простору (4d-4b)        шов мережі — `_open` модуля (`sbconf.patch_open`)
     None             «командних коментарів нема» (409)       —
     ModuleError      лише локальні піни + повідомлення       —       (НІКОЛИ не зашитий Supabase)
 
@@ -158,7 +158,10 @@ class AgentEnv(tcr.CommentsEnv):
         os.environ['DEAI_HOME'] = self.deai
         tcr.loopback_only(self)
         self.plain = self.new_space('Plain')
-        self.liga = self.new_space('Liga', integrations=True)
+        # 4d-4b: ЛІГА веде коментарі ЯВНИМ записом `supabase-comments` (запасного шляху нема; було — простір з `integrations` без записів).
+        # Будуємо ДО `sbconf.patch_open`: `liga_space` скидає кеші модулів. Не `legacy`: файл задач — у теці простору.
+        self.liga = self.liga_space(roles=('comments',), sid='liga', legacy=False,
+                                    overrides={'comments': {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}}})
         self.write_task(self.plain, 'px')
         self.write_task(self.liga, 'lx')
         self.net = Net()
@@ -180,6 +183,9 @@ class AgentEnv(tcr.CommentsEnv):
         """`memo-comments` у `sp` (токен непублічний, ключ публічний). Модуль ставиться один раз на тест."""
         if not os.path.isdir(os.path.join(self.mods, 'memo-comments')):
             self.install_memo()
+        if sp['id'] == self.liga['id']:
+            # одна роль — один постачальник: свій модуль ЗАМІНЮЄ запис ЛІГИ (спершу вимикаємо запис: налаштування й секрет лишаються)
+            dm.write_module_state(sp, 'supabase-comments', enabled=False)
         dm.write_module_state(sp, 'memo-comments', enabled=True, settings={'endpoint': endpoint})
         dm.write_secrets(sp['id'], 'memo-comments',
                          {'token': tcr.TOKEN, 'pubkey': tcr.PUBKEY} if secrets is None else secrets)
@@ -516,9 +522,11 @@ class InboxOtherProvidersTest(AgentEnv):
         self.assert_local_only(self.plain, 'px', 'space-json-unreadable')
 
     def test_a_disabled_entry_in_a_league_space_returns_the_league_path(self):
-        """Контроль: людина вимкнула модуль — це вже не помилка, а шлях ЛІГА (як у сторінках)."""
+        """Контроль: людина вимкнула модуль і повернула запис ЛІГИ — це вже не помилка, а шлях ЛІГА (як у сторінках). 4d-4b: сам по собі вимкнений
+        модуль шляху ЛІГА не повертає (запасного нема) — `enable` вимикає запис ЛІГИ, тож його вмикають назад явно."""
         self.break_module(self.liga)
         dm.write_module_state(self.liga, 'memo-comments', enabled=False)
+        dm.write_module_state(self.liga, 'supabase-comments', enabled=True)
         self.use(self.liga)
         self.net.rows = [rest('c0ffee01-aaaa', 'Кнопку вирівняти')]
         rc, out, _ = self.inbox([])
@@ -708,7 +716,7 @@ class DecisionTest(AgentEnv):
     def test_the_kinds(self):
         self.enable_memo_in(self.plain)
         self.assertEqual(self.pc(self.plain).kind, 'module')
-        self.assertEqual(self.pc(self.liga).kind, 'implicit')
+        self.assertEqual(self.pc(self.liga).kind, 'module')        # було 'implicit': ЛІГА — явний запис `supabase-comments`, а не неявний постачальник
         self.assertEqual(self.pc(self.new_space('Bare')).kind, 'off')
         tcr._write(self.space_json(self.liga), '{broken')
         pc = self.pc(self.liga)
@@ -718,7 +726,7 @@ class DecisionTest(AgentEnv):
         self.enable_memo_in(self.plain)
         pc = self.pc(self.plain, request=self.liga['id'])              # запит прикріплений до ІНШОГО простору
         self.assertEqual((pc.kind, pc.prov.id), ('module', 'memo-comments'))
-        self.assertEqual(self.pc(self.liga, request=self.plain['id']).kind, 'implicit')
+        self.assertEqual(self.pc(self.liga, request=self.plain['id']).kind, 'module')       # було 'implicit'; рішення — за записом ПЕРЕДАНОГО простору
 
     def test_a_space_record_without_a_pinned_request_space_is_a_refusal_never_the_league_path(self):
         """Викликач передав запис простору, а запит без простору (шар просторів увімкнено): `comments_provider` у такому
@@ -733,18 +741,24 @@ class DecisionTest(AgentEnv):
                 pc.resolve({}, 'x', 'abc', 'r')
             self.assert_no_legacy()
 
-    def test_without_any_space_the_league_tools_keep_the_league_path(self):
-        """Інструменти ЛІГА без простору взагалі (`space=None`, запит не зафіксовано) — як для сторінок: `'legacy'`."""
-        self.assertEqual(serve.ProjectComments(None).kind, 'implicit')
+    def test_without_any_space_the_league_tools_have_no_provider(self):
+        """Було: інструменти ЛІГА без простору взагалі (`space=None`, запит не зафіксовано) вели ЛІГУ неявним постачальником (`'implicit'`). З
+        4d-4b неявного нема: без закріпленого простору запис не діє — `off`, а мережі нема."""
+        pc = serve.ProjectComments(None)
+        self.assertEqual((pc.kind, pc.label), ('off', 'не підключено'))
+        with self.assertRaises(spaces.IntegrationsOff):
+            pc.pins({}, 'lx')
+        self.assert_no_legacy()
 
     def test_the_label_names_supabase_only_when_it_is_the_source(self):
         self.enable_memo_in(self.plain)
+        self.assertEqual(self.pc(self.liga).label, 'Supabase')                  # запис ЛІГИ — джерело (схема comment-layer)
         tcr._write(self.space_json(self.liga), '{broken')
         labels = {'plain': self.pc(self.plain).label, 'liga': self.pc(self.liga).label}
         self.assertEqual(labels, {'plain': 'модуль memo-comments', 'liga': 'модуль недоступний'})
         self.assertEqual(self.pc(self.new_space('Bare')).label, 'не підключено')
         tcr._write(self.space_json(self.liga), '{}')
-        self.assertEqual(self.pc(self.liga).label, 'Supabase')
+        self.assertEqual(self.pc(self.liga).label, 'не підключено')            # було 'Supabase': запису нема — нема й джерела
 
     def test_module_and_broken_and_off_never_ask_integrations_on(self):
         self.enable_memo_in(self.plain)
