@@ -55,6 +55,11 @@ def plan(cfg, view=None):
             out.append((tid, track, None, None, 'немає dir у tasks.json'))
             continue
         cur = os.path.expanduser(cur)
+        if tracks.find(view.tracks, track) is None:
+            # ⛔ Напрямок невідомий простору (нема `track`, чи він поза переліком): такій задачі «свого» кореня нема, а корінь
+            # дефолтного напрямку — не її. Переселення стягнуло б її з теки, де вона лежить, у чужу: не чіпаємо, лише називаємо.
+            out.append((tid, track, cur, None, 'напрямок невідомий'))
+            continue
         want = os.path.join(_root_of(cfg, view, track), tid)
         if os.path.normpath(cur) == os.path.normpath(want):
             continue
@@ -79,7 +84,7 @@ def roots_in_use(cfg, view=None):
 def cmd_status(cfg, view=None):
     print('Корені напрямків:')
     for track, root, own in roots_in_use(cfg, view):
-        mark = '✅ свій' if own else '⚠️ спільний (свого кореня немає)'
+        mark = '✅ свій корінь' if own else '⚠️ тека простору (свого кореня немає)'
         print(f'   {track:10} → {root}  [{mark}]')
     moves = plan(cfg, view)
     if not moves:
@@ -87,8 +92,8 @@ def cmd_status(cfg, view=None):
         return 0
     print(f'\nНе на своєму місці: {len(moves)}')
     for tid, track, cur, want, stop in moves:
-        print(f'   {tid} ({track}): {cur} → {want}'
-              + (f'   ⛔ {stop}' if stop else ''))
+        print(f'   {tid} ({track}): {cur}' + (f' → {want}' if want else '')
+              + (f'   ⛔ {stop}' + (' — не чіпаю' if want is None else '') if stop else ''))
     print('\nПереселити: python3 bin/roots.py migrate --apply')
     return 0
 

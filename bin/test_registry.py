@@ -362,6 +362,12 @@ class _RegistrySandbox(unittest.TestCase):
         rg.TASKS_PATH = self.file
         self.addCleanup(setattr, rg, 'TASKS_PATH', self._path)
         self.git_calls = []
+        # 4d-4a: `_work_root` читає реєстр просторів (`spaces.read_registry`) і `~/deai-work`: домівка й `DEAI_HOME` — тимчасові,
+        # справжні `~/.deai`/`~/deai-work` тут не бачать і не чіпають; реєстру просторів у `DEAI_HOME` нема (читання не пише).
+        env = mock.patch.dict(os.environ, {'HOME': self.tmp, 'DEAI_HOME': os.path.join(self.tmp, 'deai')})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop('DC_TASKS_FILE', None)
 
         class R:
             stdout = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
@@ -460,12 +466,38 @@ class TestPullSkipsFixtures(_RegistrySandbox):
 
 
 class TestTrack(_RegistrySandbox):
-    """4d-1: `track` — переносиме поле; тека задачі за напрямком (`tracks.of_task`) — і для запису машини на 0.14.0, що має лише
-    `profile`, і для нового, що має `track`; обидва — `track` перемагає."""
+    """4d-1: `track` — переносиме поле. 4d-4a: межа `track`/`profile` — одна функція `_track_of_entry`; запис машини на 0.14.0 має
+    лише `profile`, і `pull` дописує йому `track`; тека задачі — з ЯВНИХ напрямків простору ЛІГИ (було: `design_work_roots`
+    старого файла через адаптер)."""
 
     def _cfg(self):
-        return {'design_work_roots': {'seo': os.path.join(self.tmp, 'seo'), 'united': os.path.join(self.tmp, 'united')},
-                'design_work_root': os.path.join(self.tmp, 'shared')}
+        return {'design_work_root': os.path.join(self.tmp, 'shared')}
+
+    def _liga(self, tracks_list=None, default='united'):
+        """Простір ЛІГИ реєстру з явними напрямками (`space.json` у тимчасовій теці); `spaces.read_registry` підмінено."""
+        import json
+        from unittest import mock
+        sys.path.insert(0, os.path.join(rg.ROOT, 'app'))
+        import spaces
+        path = os.path.realpath(os.path.join(self.tmp, 'liga'))
+        os.makedirs(path, exist_ok=True)
+        tracks_list = [{'id': 'united', 'root': 'united-dir'}, {'id': 'seo', 'root': 'seo-dir'}, {'id': 'plain'}] \
+            if tracks_list is None else tracks_list
+        with open(os.path.join(path, 'space.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tracks': tracks_list, 'default_track': default}, f)
+        reg = {'version': 1, 'spaces': [{'id': 'liga', 'name': 'Liga', 'legacy': True, 'path': path}]}
+        p = mock.patch.object(spaces, 'read_registry', lambda: reg)
+        p.start()
+        self.addCleanup(p.stop)
+        return path
+
+    def test_track_of_entry_is_the_one_boundary(self):
+        for e, want in (({'track': 'seo', 'profile': 'united'}, 'seo'), ({'profile': 'united'}, 'united'),
+                        ({'track': 'seo'}, 'seo'), ({'track': '', 'profile': 'united'}, 'united'),
+                        ({'track': 5, 'profile': 'united'}, 'united'), ({'track': None, 'profile': 'united'}, 'united'),
+                        ({}, None), ({'track': '', 'profile': ''}, None), ({'profile': 5}, None), (None, None),
+                        (['united'], None), ('united', None)):
+            self.assertEqual(rg._track_of_entry(e), want, repr(e))
 
     def test_track_travels_in_the_registry_next_to_profile(self):
         self.assertIn('track', rg.SHARED)
@@ -474,32 +506,148 @@ class TestTrack(_RegistrySandbox):
         self.assertEqual((e['track'], e['profile']), ('seo', 'seo'))
         self.assertNotIn('track', rg.entry_from_task('x', {'title': 'X'}), 'порожнього напрямку в записі нема')
 
-    def test_work_root_reads_track_then_profile(self):
+    def test_work_root_takes_the_track_of_an_entry(self):
+        # (г) було `…reads_track_then_profile`: корені з `design_work_roots` старого файла; тепер — `root` явних напрямків
         cfg = self._cfg()
-        seo, united, shared = (os.path.join(self.tmp, n) for n in ('seo', 'united', 'shared'))
+        liga = self._liga()
+        seo, united = os.path.join(liga, 'seo-dir'), os.path.join(liga, 'united-dir')
         self.assertEqual(rg._work_root(cfg, {'profile': 'seo'}), seo, 'запис машини на 0.14.0: лише `profile`')
         self.assertEqual(rg._work_root(cfg, {'track': 'seo'}), seo, '⛔ лише `track` не мусить іти в спільний корінь')
         self.assertEqual(rg._work_root(cfg, {'track': 'seo', 'profile': 'united'}), seo, '`track` перемагає')
         self.assertEqual(rg._work_root(cfg, {'track': 'united', 'profile': 'seo'}), united)
-        self.assertEqual(rg._work_root(cfg, {'track': 'zzz'}), shared)
-        self.assertEqual(rg._work_root(cfg, {}), shared)
+        self.assertEqual(rg._work_root(cfg, {'track': 'plain'}), liga, 'напрямок без `root` — тека простору')
+        self.assertEqual(rg._work_root(cfg, {'track': 'zzz'}), united, 'невідомий — `root` дефолтного')
+        self.assertEqual(rg._work_root(cfg, {}), united, 'без напрямку — `root` дефолтного')
 
-    def test_pull_places_every_shape_of_record_in_the_same_directory(self):
+    def test_work_root_without_a_liga_space_is_the_shared_root(self):
+        cfg = self._cfg()
+        shared = os.path.join(self.tmp, 'shared')
+        for task in ({'profile': 'seo'}, {'track': 'seo'}, {}):
+            self.assertEqual(rg._work_root(cfg, task), shared, repr(task))          # у `DEAI_HOME` реєстру просторів нема
+        self.assertEqual(rg._work_root({}, {'track': 'seo'}), os.path.expanduser('~/deai-work'), 'нема й кореня в cfg')
+
+    def test_work_root_survives_a_broken_spaces_registry_and_says_so_once(self):
+        # реєстр просторів не читається (`SpacesError`): `pull` НЕ падає посеред роботи, корінь — спільний, причина вголос раз
+        from unittest import mock
+        sys.path.insert(0, os.path.join(rg.ROOT, 'app'))
+        import spaces
+        cfg = self._cfg()
+        shared = os.path.join(self.tmp, 'shared')
+        self.addCleanup(setattr, rg, '_WORK_ROOT_WARNED', rg._WORK_ROOT_WARNED)
+        rg._WORK_ROOT_WARNED = False
+        boom = spaces.SpacesError('spaces-unreadable', os.path.join(self.tmp, 'spaces.json'), 'broken')
+        with mock.patch.object(spaces, 'read_registry', side_effect=boom):
+            res1, _out, err1 = self._quiet(rg._work_root, cfg, {'track': 'seo'})
+            res2, _out, err2 = self._quiet(rg._work_root, cfg, {'profile': 'united'})
+        self.assertEqual((res1, res2), (shared, shared))
+        self.assertIn('spaces-unreadable', err1)
+        self.assertEqual(err2, '', 'друге попередження не друкується')
+
+    def test_pull_survives_a_broken_spaces_registry(self):
+        import json
+        from unittest import mock
+        sys.path.insert(0, os.path.join(rg.ROOT, 'app'))
+        import spaces
+        with open(self.file, 'w', encoding='utf-8') as f:
+            json.dump(dict(self._cfg(), tasks={}), f)
+        self.addCleanup(setattr, rg, '_WORK_ROOT_WARNED', rg._WORK_ROOT_WARNED)
+        rg._WORK_ROOT_WARNED = False
+        reg = {'old': {'schema': 1, 'id': 'old', 'title': 'O', 'profile': 'seo'}}
+        with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)), \
+                mock.patch.object(spaces, 'read_registry', side_effect=spaces.SpacesError('spaces-unreadable', 'x')):
+            self._quiet(rg.cmd_pull, None)
+        with open(self.file, encoding='utf-8') as f:
+            task = json.load(f)['tasks']['old']
+        self.assertEqual((task['dir'], task['track']), (os.path.join(self.tmp, 'shared', 'old'), 'seo'))
+
+    def test_pull_with_a_really_corrupt_spaces_json_still_saves_state_and_reads_once(self):
+        import json
+        from unittest import mock
+        sys.path.insert(0, os.path.join(rg.ROOT, 'app'))
+        import spaces
+        os.makedirs(os.environ['DEAI_HOME'])
+        with open(os.path.join(os.environ['DEAI_HOME'], 'spaces.json'), 'w', encoding='utf-8') as f:
+            f.write('{broken')
+        with open(self.file, 'w', encoding='utf-8') as f:
+            json.dump(dict(self._cfg(), tasks={}), f)
+        self.addCleanup(setattr, rg, '_WORK_ROOT_WARNED', rg._WORK_ROOT_WARNED)
+        rg._WORK_ROOT_WARNED = False
+        reg = {'a': {'schema': 1, 'id': 'a', 'title': 'A', 'profile': 'seo'},
+               'b': {'schema': 1, 'id': 'b', 'title': 'B', 'track': 'united'}}
+        with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)), \
+                mock.patch.object(spaces, 'read_registry', wraps=spaces.read_registry) as rr:
+            _res, _out, err = self._quiet(rg.cmd_pull, None)
+        self.assertEqual(rr.call_count, 1, 'вигляд збудовано раз на pull, а не на кожну задачу')
+        self.assertIn('spaces-unreadable', err)
+        with open(self.file, encoding='utf-8') as f:
+            cfg = json.load(f)
+        self.assertEqual(sorted(cfg['tasks']), ['a', 'b'])
+        self.assertEqual(cfg['tasks']['a']['dir'], os.path.join(self.tmp, 'shared', 'a'))
+        self.assertIn('registry', cfg, 'стан синхронізації збережено')
+
+    def _pull(self, reg):
+        """`cmd_pull` над порожнім локальним файлом: `(tasks, writes)` — що лягло в `tasks.json` і що `pull` передав у
+        `_save_registry_state` як «своє» (точковий запис)."""
         import json
         from unittest import mock
         with open(self.file, 'w', encoding='utf-8') as f:
             json.dump(dict(self._cfg(), tasks={}), f)
-        reg = {'old': {'schema': 1, 'id': 'old', 'title': 'O', 'profile': 'seo'},
-               'new': {'schema': 1, 'id': 'new', 'title': 'N', 'track': 'seo'},
-               'both': {'schema': 1, 'id': 'both', 'title': 'B', 'track': 'seo', 'profile': 'united'}}
+        saved = []
+        real = rg._save_registry_state
+        with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)), \
+                mock.patch.object(rg, '_save_registry_state', lambda w, r: saved.append(w) or real(w, r)):
+            self._quiet(rg.cmd_pull, None)
+        with open(self.file, encoding='utf-8') as f:
+            return json.load(f)['tasks'], saved[0]
+
+    def test_pull_gives_a_profile_only_entry_its_track(self):
+        # (а) межа: запис реєстру старої машини має лише `profile`; без цього в кеші він не мав би напрямку
+        liga = self._liga()
+        tasks, writes = self._pull({'old': {'schema': 1, 'id': 'old', 'title': 'O', 'profile': 'seo'}})
+        self.assertEqual((tasks['old']['track'], tasks['old']['profile']), ('seo', 'seo'))
+        self.assertEqual(writes['old']['track'], 'seo', 'і в точковому записі `pull`, а не лише в памʼяті')
+        self.assertEqual(tasks['old']['dir'], os.path.join(liga, 'seo-dir', 'old'))
+
+    def test_pull_track_wins_over_profile(self):
+        # (б)
+        liga = self._liga()
+        tasks, writes = self._pull({'both': {'schema': 1, 'id': 'both', 'title': 'B', 'track': 'seo', 'profile': 'united'},
+                                    'new': {'schema': 1, 'id': 'new', 'title': 'N', 'track': 'seo'},
+                                    'empty': {'schema': 1, 'id': 'empty', 'title': 'E', 'track': '', 'profile': 'united'},
+                                    'none': {'schema': 1, 'id': 'none', 'title': 'X'}})
+        self.assertEqual((tasks['both']['track'], tasks['both']['profile']), ('seo', 'united'))
+        self.assertEqual(tasks['new']['track'], 'seo')
+        self.assertEqual(tasks['empty']['track'], 'united', 'порожній `track` не затуляє `profile`')
+        self.assertNotIn('track', tasks['none'], 'нема ні `track`, ні `profile` — напрямку не вигадуємо')
+        self.assertNotIn('track', writes['none'])
+        self.assertEqual(tasks['both']['dir'], os.path.join(liga, 'seo-dir', 'both'))
+
+    def test_pull_keeps_a_local_track(self):
+        # локальний `track` непорожній — межа його не перезаписує (`profile` реєстру лише підказка для порожнього)
+        import json
+        from unittest import mock
+        self._liga()
+        with open(self.file, 'w', encoding='utf-8') as f:
+            json.dump(dict(self._cfg(), tasks={'x': {'title': 'X', 'track': 'plain', 'dir': os.path.join(self.tmp, 'x')}}), f)
+        reg = {'x': {'schema': 1, 'id': 'x', 'title': 'X', 'profile': 'seo'}}
         with mock.patch.object(rg, 'read_registry', lambda d: dict(reg)):
             self._quiet(rg.cmd_pull, None)
         with open(self.file, encoding='utf-8') as f:
-            tasks = json.load(f)['tasks']
-        for tid in reg:
-            self.assertEqual(tasks[tid]['dir'], os.path.join(self.tmp, 'seo', tid), tid)
-        self.assertEqual(tasks['new']['track'], 'seo', '`track` приїхав у локальний запис')
-        self.assertNotIn('track', tasks['old'])
+            self.assertEqual(json.load(f)['tasks']['x']['track'], 'plain')
+
+    def test_status_shows_no_drift_after_such_a_pull(self):
+        # (в) `status` порівнює лише ключі, що є в записі реєстру: допис `track` розбіжності не дає
+        from unittest import mock
+        self._liga()
+        reg = {'old': {'schema': 1, 'id': 'old', 'title': 'O', 'profile': 'seo'},
+               'new': {'schema': 1, 'id': 'new', 'title': 'N', 'track': 'seo', 'profile': 'seo'}}
+        self._pull(reg)
+        with mock.patch.object(rg, 'staleness', lambda cfg: {'state': 'fresh', 'age_h': 0.1, 'hint': ''}), \
+                mock.patch.object(rg, 'fixture_path_reason', lambda e: None), \
+                mock.patch.object(rg, 'read_registry', lambda d: dict(reg)):       # теки тесту лежать у тимчасовій — не «фікстури»
+            _rc, out, _err = self._quiet(rg.cmd_status, None)
+        self.assertIn('розбіжностей немає', out)
+        self.assertNotIn('розійшлися', out)
 
     def test_status_counts_tracks_from_either_key(self):
         from unittest import mock

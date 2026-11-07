@@ -55,6 +55,17 @@ class NoTracksAdapter(unittest.TestCase):
                 hits.add('adapter')
         return hits
 
+    @staticmethod
+    def _reads_profile(n):
+        """Вузол, що читає ключ `profile`: `x.get('profile')`, `x['profile']` або літерал-перелік із ним (кортеж, список, множина:
+        `for key in ('track', 'profile')` — запасний хід через цикл, а не лише кортеж)."""
+        is_get = (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'get' and n.args
+                  and isinstance(n.args[0], ast.Constant) and n.args[0].value == 'profile')
+        is_sub = isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == 'profile'
+        is_seq = (isinstance(n, (ast.Tuple, ast.List, ast.Set))
+                  and any(isinstance(e, ast.Constant) and e.value == 'profile' for e in n.elts))
+        return is_get or is_sub or is_seq
+
     def test_the_runtime_has_no_adapter(self):
         bad = {}
         for p in self._files():
@@ -84,11 +95,7 @@ class NoTracksAdapter(unittest.TestCase):
                         return n.name
                 return '<module>'
             for n in ast.walk(tree):
-                is_get = (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'get' and n.args
-                          and isinstance(n.args[0], ast.Constant) and n.args[0].value == 'profile')
-                is_sub = isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == 'profile'
-                is_tup = isinstance(n, ast.Tuple) and any(isinstance(e, ast.Constant) and e.value == 'profile' for e in n.elts)
-                if is_get or is_sub or is_tup:
+                if self._reads_profile(n):
                     seen.append((os.path.relpath(p, ROOT), fn_of(n)))
         self.assertTrue(seen, 'межі зникли: охоронець порожній')
         stray = [x for x in seen if x[1] not in self.PROFILE_OK]
@@ -100,6 +107,16 @@ class NoTracksAdapter(unittest.TestCase):
         tree = ast.parse(src)
         self.assertEqual((self._idents(tree) & self.FORBIDDEN) | self._adapter_member(tree), {'legacy_root', 'adapter'})
         self.assertEqual(self._adapter_member(ast.parse('adapter = 1\nprint(adapter)')), set())
+
+    def test_the_profile_detector_catches_every_fallback_shape(self):
+        """Запасний хід `profile` у циклі: кортеж, СПИСОК і МНОЖИНА літералів, `.get`, індекс — усе червоніє; чисте читання `track` — ні."""
+        for src in ("for key in ('track', 'profile'):\n    v = t.get(key)",
+                    "for key in ['track', 'profile']:\n    v = t.get(key)",
+                    "for key in {'track', 'profile'}:\n    v = t.get(key)",
+                    "v = t.get('profile')", "v = t['profile']"):
+            with self.subTest(src=src):
+                self.assertTrue(any(self._reads_profile(n) for n in ast.walk(ast.parse(src))), src)
+        self.assertFalse(any(self._reads_profile(n) for n in ast.walk(ast.parse("for key in ['track']:\n    v = t.get('track')"))))
 
 
 if __name__ == '__main__':

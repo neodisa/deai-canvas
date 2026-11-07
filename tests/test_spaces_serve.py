@@ -1900,8 +1900,10 @@ class TaskNew(Fixture):
                          (True, 'n1', self.legacy_id, True))
         old = _read(self.legacy_file)
         self.assertEqual(old['current'], 'n1')
+        # 4d-4a: було `profile == 'tool'`. Простір ЛІГИ без явних напрямків; `profile` із тіла береться лише коли це напрямок
+        # простору, тож `tool` ігнорується і запис дістає `profile: null` (спека, відмінність 1: профіль-не-напрямок ігнорується)
         self.assertEqual((old['tasks']['n1']['dir'], old['tasks']['n1']['profile']),
-                         (self.old_dir('n1'), 'tool'))
+                         (self.old_dir('n1'), None))
         # Сусіди нової задачі вижили: конфіг ЦІЛЬОВОГО простору прочитано ПІСЛЯ фіксації простору.
         # Інакше в старий файл ліг би конфіг ПОТОЧНОГО (P): `a` зник би, а `x`/`gone` зʼявились.
         self.assertEqual(sorted(old['tasks']), ['a', 'n1'])
@@ -1932,7 +1934,7 @@ class TaskNew(Fixture):
         self.assertEqual(spaces.read_registry()['current'], self.p_id)      # став поточним
         self.assertEqual(_md5(self.legacy_file), old_before)                 # старий файл — байт-у-байт
         st, body = self.jget('/api/task')
-        self.assertEqual((st, body['id'], body['profile'], body['comment_channel']), (200, 'n2', None, None))
+        self.assertEqual((st, body['id'], body['track'], body['comment_channel']), (200, 'n2', None, None))   # було `body['profile']`
 
     BROKEN = ('{ битий', '[]', '{"tasks": []}', '{"tasks": {"x": 5}}', '{"tasks": null}')
 
@@ -2041,7 +2043,7 @@ class TaskNew(Fixture):
 
     def test_the_task_folder_is_under_the_space_path_whatever_the_tasks_file_says(self):
         """Тека задачі — у `path` простору, а не там, куди вказує `design_work_root(s)` файла задач
-        (його міг написати інший інструмент чи людина), і тим паче не в `tracks.FALLBACK_ROOT` (був `serve.FALLBACK_WORK_ROOT`)
+        (його міг написати інший інструмент чи людина), і тим паче не в `serve.DEFAULT_TASK_ROOT` (було `tracks.FALLBACK_ROOT`)
         (на машині власника це справжня тека United). Фолбек тут — пастка в тимчасовій теці."""
         self.made(os.path.join(self.p_path, 'n9'))
         cfg = _read(self.p_file)
@@ -2050,10 +2052,10 @@ class TaskNew(Fixture):
         _write(self.p_file, cfg)
         trap = os.path.join(self.tmp, 'fallback-trap')
         self.made(trap, os.path.join(self.tmp, 'elsewhere'))
-        with mock.patch.object(tracks, 'FALLBACK_ROOT', trap):
+        with mock.patch.object(serve, 'DEFAULT_TASK_ROOT', trap):
             st, body = self.post('/api/task-new', {'id': 'n9', 'space': self.p_id})
         self.assertEqual((st, body['dir']), (200, os.path.join(self.p_path, 'n9')), body)
-        self.assertFalse(os.path.exists(trap), 'задачу кинуло в `tracks.FALLBACK_ROOT`')
+        self.assertFalse(os.path.exists(trap), 'задачу кинуло в `serve.DEFAULT_TASK_ROOT`')
         self.assertFalse(os.path.exists(os.path.join(self.tmp, 'elsewhere')))
 
     def test_gitlab_is_refused_without_integrations_and_nothing_is_created(self):
@@ -2152,22 +2154,72 @@ class TaskNew(Fixture):
         reg['current'] = self.p_id
         _write(self.reg_path, reg)
 
+    def liga_tracks(self, tracks_list, default=None):
+        """Явні напрямки простору ЛІГИ (`space.json` старого простору реєстру); після тесту файл повертається як був.
+        4d-4a: було — таблиця `profile_repos` з кореня старого файла (`serve.profile_repos`), якої рантайм більше не читає."""
+        sp = next(s for s in spaces.read_registry()['spaces'] if s.get('legacy'))
+        path = os.path.join(sp['path'], 'space.json')
+        old = _bytes(path) if os.path.isfile(path) else None
+
+        def restore():
+            if old is None:
+                if os.path.isfile(path):
+                    os.remove(path)
+            else:
+                with open(path, 'wb') as f:
+                    f.write(old)
+        self.addCleanup(restore)
+        _write(path, {'tracks': tracks_list, **({'default_track': default} if default else {})})
+
+    def test_the_snapshot_scenarios_of_track_and_profile_in_a_liga_space(self):
+        """Таблиця з 11 сценаріїв знімка 0.19 (`before-4d4a.json`, стенд `explicit`) проти ЯВНИХ напрямків простору ЛІГИ.
+        Відмінності від знімка — свідомі (спека, відмінність 1): `track` суворий (`bad-track` / `unknown-track` замість
+        «будь-який рядок як є»), `profile`, що не напрямок (`United`, `zzz`), ігнорується і задача йде в `united`.
+        Мутація «`task-new` знову лояльний до `track` для ЛІГИ» червоніє на рядках `track_*`."""
+        self.liga_tracks([{'id': i} for i in ('united', 'liga360', 'seo')], default='united')
+        # (id, тіло, статус, код, (track, profile) запису)
+        table = (('none', {}, 200, None, ('united', 'united')),
+                 ('profile_not_a_string', {'profile': 5}, 400, 'bad-profile', None),
+                 ('profile_seo', {'profile': 'seo'}, 200, None, ('seo', 'seo')),
+                 ('profile_united_track_seo', {'profile': 'united', 'track': 'seo'}, 400, 'bad-track', None),
+                 ('profile_upper', {'profile': 'United'}, 200, None, ('united', 'united')),
+                 ('profile_zzz', {'profile': 'zzz'}, 200, None, ('united', 'united')),
+                 ('track_not_a_string', {'track': 5}, 400, 'bad-track', None),
+                 ('track_seo', {'track': 'seo'}, 200, None, ('seo', 'seo')),
+                 ('track_upper', {'track': 'United'}, 400, 'bad-track', None),
+                 ('track_with_slash', {'track': 'Bad/Id'}, 400, 'bad-track', None),
+                 ('track_zzz', {'track': 'zzz'}, 400, 'unknown-track', None))
+        self.assertEqual(len(table), 11)
+        for name, body, status, code, want in table:
+            tid = 'sc-' + name.replace('_', '-')
+            self.made(self.old_dir(tid))
+            with self.subTest(scenario=name):
+                st, resp = self.post('/api/task-new', {'id': tid, **body})
+                self.assertEqual((st, resp.get('code')), (status, code), resp)
+                if want is None:
+                    self.assertFalse(os.path.exists(self.old_dir(tid)), 'відмова нічого не створила')
+                else:
+                    entry = _read(self.legacy_file)['tasks'][tid]
+                    self.assertEqual((entry['track'], entry['profile']), want)
+
     def test_liga_signs_without_space_and_without_a_liga_space_are_409_and_create_nothing(self):
-        """Потік dev-pipeline ЛІГА (`jira`, `profile` напрямку, `gitlab`) без `space`, а простору з
+        """Потік dev-pipeline ЛІГА (`jira`, `profile`/`track` напрямку, `gitlab`) без `space`, а простору з
         інтеграціями нема: тихо завести задачу в ПОТОЧНИЙ простір означало б Jira/GitLab-бутстрап,
         що став локальною задачею з `profile: null`. Відмова JSON-ом, нічого не створено,
-        поточний простір не змінено."""
+        поточний простір не змінено. Напрямок — ознака лише коли він має `repo` у явних напрямках простору ЛІГИ реєстру
+        (`legacy: true`), ЯКИЙ БИ не був його прапорець `integrations` (тут — `false`, як у 0.19)."""
         self.no_liga()
+        # 4d-4a: було `profile_repos` старого файла; тепер — явні напрямки простору ЛІГИ (вигадані репо)
+        self.liga_tracks([{'id': p, 'repo': f'git@git.example:org/{p}-design.git'} for p in ('united', 'liga360', 'seo')]
+                         + [{'id': 'plain'}])
         before = (_md5(self.legacy_file), _md5(self.p_file), _md5(self.reg_path), _md5(self.e_file))
         listed = (sorted(os.listdir(self.p_path)), sorted(os.listdir(self.e_path)),
                   sorted(os.listdir(os.path.dirname(self.a_dir))))
-        # 4b-3: профіль — ознака потоку ЛІГА лише коли він є в `profile_repos` конфігу установки (константи в коді нема);
-        # у фікстурі такого конфігу нема, тож таблицю підставляє тест (вигадані репо).
-        table = {p: f'git@git.example:org/{p}-design.git' for p in ('united', 'liga360', 'seo')}
         for sign in ({'jira': 'LIGA-1'}, {'profile': 'united'}, {'profile': 'liga360'}, {'profile': 'seo'},
+                     {'track': 'seo'}, {'track': 'united', 'profile': 'united'},
                      {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n20'}},
                      {'jira': 'LIGA-1', 'profile': 'tool', 'title': 'Т'}):
-            with self.subTest(sign=sign), mock.patch.object(serve, 'profile_repos', return_value=table):
+            with self.subTest(sign=sign):
                 st, body = self.post('/api/task-new', {'id': 'n20', **sign})
                 self.assertEqual((st, body['ok'], body['code'], body['error']),
                                  (409, False, 'no-integrations-space', self.LIGA_ERROR), body)
@@ -2333,14 +2385,42 @@ class NoSpaces(Bare):
     def test_liga_signs_get_the_liga_refusal_not_the_create_a_space_one(self):
         """Простору ЛІГА нема й нічого нема: «створіть простір» послало б агента в «Новий простір»,
         який простору ЛІГА не дає. Без ознак — `no-space`, як було (тест вище)."""
-        for sign in ({'jira': 'LIGA-1'}, {'profile': 'united'},
-                     {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n1'}}):
-            # 4b-3: профіль — ознака ЛІГИ лише з `profile_repos` конфігу установки; у цій фікстурі конфігу нема
-            with self.subTest(sign=sign), mock.patch.object(serve, 'profile_repos',
-                                                            return_value={'united': 'git@git.example:org/united-design.git'}):
+        for sign in ({'jira': 'LIGA-1'}, {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n1'}}):
+            with self.subTest(sign=sign):
                 st, body = self.post('/api/task-new', {'id': 'n1', **sign})
                 self.assertEqual((st, body['ok'], body['code'], body['error']),
                                  (409, False, 'no-integrations-space', TaskNew.LIGA_ERROR), body)
+        # 4d-4a (Поправка 16): було `{'profile': 'united'}` + підмінена `profile_repos` → `no-integrations-space`. Простору ЛІГИ
+        # нема, тож напрямку з репо теж нема: `profile` не ознака, і відмова — звичайна `no-space`
+        for sign in ({'profile': 'united'}, {'track': 'united'}):
+            with self.subTest(sign=sign):
+                st, body = self.post('/api/task-new', {'id': 'n1', **sign})
+                self.assertEqual((st, body['ok'], body['code']), (409, False, 'no-space'), body)
+
+    def test_a_liga_space_with_integrations_off_still_makes_a_track_with_a_repo_a_liga_sign(self):
+        """Простір `legacy: true` БЕЗ прапорця `integrations` (так у 0.19 машина без простору з інтеграціями) і напрямок із репо:
+        `{"profile": "<id>"}` без `space` — 409 `no-integrations-space`, а не тиха задача в поточний простір."""
+        path = os.path.join(self.home, 'deai-work', 'liga')
+        sid = spaces.create_space('Liga', 'space-1', path)
+        reg_file = os.path.join(self.deai, 'spaces.json')
+        reg = _read(reg_file)
+        for sp in reg['spaces']:
+            if sp['id'] == sid:
+                sp['legacy'], sp['integrations'] = True, False
+        _write(reg_file, reg)
+        _write(os.path.join(path, 'space.json'), {'tracks': [{'id': 'united', 'repo': 'git@git.example:org/united-design.git'},
+                                                             {'id': 'plain'}], 'default_track': 'united'})
+        self.addCleanup(shutil.rmtree, path, True)
+        self.addCleanup(shutil.rmtree, self.deai, True)
+        _write(self.legacy_file, {'tasks': {}, 'current': ''})          # файл задач простору `legacy` читається
+        self.addCleanup(shutil.rmtree, os.path.dirname(self.legacy_file), True)
+        for sign in ({'profile': 'united'}, {'track': 'united'}):
+            with self.subTest(sign=sign):
+                st, body = self.post('/api/task-new', {'id': 'n1', **sign})
+                self.assertEqual((st, body['code']), (409, 'no-integrations-space'), body)
+                self.assertFalse(os.path.exists(os.path.join(path, 'n1')))
+        st, body = self.post('/api/task-new', {'id': 'n2', 'track': 'plain'})          # напрямок без репо — не ознака
+        self.assertEqual((st, body.get('space'), body.get('code')), (200, sid, None), body)
 
     def test_nothing_of_the_above_wrote_to_the_deai_home(self):
         for path in ('/api/spaces', '/api/tasks', '/api/tasks?all=1', '/api/tasks-overview', '/api/task'):
@@ -2471,20 +2551,23 @@ class FirstSpace(Bare):
         st, body = self.jget('/api/tasks')
         self.assertEqual((st, body['current'], body['tasks'], body['space']['id']), (200, None, [], sid))
         self.assertEqual(self.jget('/api/task')[1]['code'], 'no-task')
-        # Ознаки потоку ЛІГА (`profile: united`) без `space` у просторі без інтеграцій — відмова
+        # Ознаки потоку ЛІГА (`jira`) без `space` у просторі без інтеграцій — відмова
         # (раніше тут була тиха локальна задача з `profile: null`); нічого не створено.
-        # 4b-3: профіль — ознака ЛІГИ лише з `profile_repos` конфігу установки (у фікстурі його нема — таблицю дає тест)
-        with mock.patch.object(serve, 'profile_repos',
-                               return_value={'united': 'git@git.example:org/united-design.git'}):
-            st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша', 'profile': 'united'})
+        # 4d-4a: було `profile: united` + підмінена `profile_repos`; `profile` без простору ЛІГИ з репо більше не ознака
+        # (див. нижче), тож відмову тут дає `jira`
+        st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша', 'jira': 'LIGA-1'})
         self.assertEqual((st, body['code']), (409, 'no-integrations-space'), body)
         self.assertFalse(os.path.exists(os.path.join(path, 'first')))
         st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша'})
         self.assertEqual((st, body['space'], body['dir']), (200, sid, os.path.join(path, 'first')), body)
         st, body = self.jget('/api/task')
-        self.assertEqual((st, body['id'], body['profile'], body['comment_channel'], body['space']['name']),
-                         (200, 'first', None, None, 'Особисте'))
+        self.assertEqual((st, body['id'], body['track'], body['comment_channel'], body['space']['name']),
+                         (200, 'first', None, None, 'Особисте'))               # було `body['profile']`
         self.assertEqual(self.jget('/api/tasks?all=1')[1]['tasks'][0]['space'], sid)
+        # `profile` без простору ЛІГИ з таким напрямком — не ознака потоку: задача лягає в простір і `profile` ігнорується
+        st, body = self.post('/api/task-new', {'id': 'second', 'profile': 'united'})
+        self.assertEqual((st, body['space']), (200, sid), body)
+        self.assertIsNone(_read(os.path.join(path, 'tasks.json'))['tasks']['second']['profile'])
 
 
 class LayerOff(Bare):
@@ -2550,7 +2633,9 @@ class LayerOff(Bare):
         st, body = self.post('/api/task-new', {'id': 'n1', 'title': 'N', 'profile': 'tool'})
         self.assertEqual((st, body['space']), (200, None), body)
         task = _read(self.legacy_file)['tasks']['n1']
-        self.assertEqual((task['profile'], task['dir']), ('tool', os.path.join(self.tmp, 'work', 'n1')))
+        # 4d-4a: було `profile == 'tool'`: шар вимкнено = неявний простір без напрямків, `profile` із тіла ігнорується; тека — у
+        # `design_work_root` файла (`default_task_root`), бо шляху в простору нема
+        self.assertEqual((task['profile'], task['dir']), (None, os.path.join(self.tmp, 'work', 'n1')))
         self.assertFalse(os.path.exists(os.path.join(self.home, '.deai')))
 
 

@@ -442,13 +442,43 @@ def _track_of_entry(e):
     return None
 
 
-def _work_root(cfg, task):
-    """Корінь теки задачі через ЯВНІ напрямки простору ЛІГИ (`serve.track_root`); простору/напрямків нема → `None`."""
+_WORK_ROOT_WARNED = False
+
+
+def _liga_view():
+    """Вигляд напрямків простору ЛІГИ реєстру (`serve._TrackView`) — будується ОДИН раз на `pull`. Реєстр просторів, що не
+    читається (`SpacesError`), НЕ валить `pull` на півдорозі (ще до збереження стану): вигляд порожній (корінь — спільний), а
+    причину кажемо вголос один раз."""
+    global _WORK_ROOT_WARNED
     sys.path.insert(0, os.path.join(ROOT, 'app'))
     import serve
     import spaces
-    sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
-    return serve.track_root(sp, _track_of_entry(task)) or serve.default_task_root(cfg)
+    try:
+        sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
+    except spaces.SpacesError as err:
+        sp = None
+        if not _WORK_ROOT_WARNED:
+            _WORK_ROOT_WARNED = True
+            print(f'   ⚠ реєстр просторів не прочитати ({err.code}) — теки нових задач беруться зі спільного кореня',
+                  file=sys.stderr)
+    return serve._TrackView(sp)
+
+
+#: Кеш вигляду на час ОДНОГО `pull` (`None` поза ним): реєстр просторів і `space.json` читаються раз, а не на кожну задачу.
+_PULL_VIEW = None
+
+
+def _work_root(cfg, task):
+    """Корінь теки задачі через ЯВНІ напрямки простору ЛІГИ (`serve.track_root`); простору/напрямків нема → спільний корінь
+    `serve.default_task_root(cfg)`. Підпис без `view` свідомо: тести підміняють `_work_root(cfg, task)`."""
+    global _PULL_VIEW
+    sys.path.insert(0, os.path.join(ROOT, 'app'))
+    import serve
+    if _PULL_VIEW is not None:
+        view = _PULL_VIEW[0] if _PULL_VIEW else _PULL_VIEW.append(_liga_view()) or _PULL_VIEW[0]
+    else:
+        view = _liga_view()
+    return serve.track_root(view, _track_of_entry(task)) or serve.default_task_root(cfg)
 
 
 def split_fixtures(entries):
@@ -499,6 +529,8 @@ def cmd_pull(_a):
     # Що САМЕ ця синхронізація визначає — по полях. Записуємо потім точково, на
     # свіжо перечитаний конфіг: див. `_save_registry_state`.
     writes = {}
+    global _PULL_VIEW
+    _PULL_VIEW = []                           # вигляд напрямків ЛІГИ — ліниво й раз на `pull` (див. `_work_root`)
     for tid, e in reg.items():
         local = tasks.get(tid)
         if local is None:
@@ -536,6 +568,12 @@ def cmd_pull(_a):
                     continue                  # поле машинне й локально відсутнє
                 local[k] = v
                 mine[k] = v
+        # МЕЖА track/profile (4d-4a): запис реєстру старої машини має лише `profile`, а рантайм читає тільки `track` — без цього
+        # такий запис у кеші не мав би напрямку (ні мітки, ні `?ds=`, ні кореня). `track` із реєстру (SHARED вище) не чіпаємо.
+        t = _track_of_entry(e)
+        if t and not local.get('track'):
+            local['track'] = t
+            mine['track'] = t
         # dir выводим локально, из реестра не берём: он машинный. Корень — за
         # напрямком задачі (`track`, інакше `profile`), інакше задача чужого напрямку
         # лягла б у чужу теку (вимога 31.08.2026: три напрямки — три теки).
@@ -550,6 +588,7 @@ def cmd_pull(_a):
     local_junk = {t: w for t, w in ((t, fixture_path_reason(tasks[t])) for t in tasks)
                   if w and t not in junk}
     only_local = [t for t in tasks if t not in reg and t not in junk and t not in local_junk]
+    _PULL_VIEW = None
     head = _git(['rev-parse', 'HEAD'], d, cfg).stdout.strip()
     _save_registry_state(writes, {'synced_at': time.strftime('%Y-%m-%dT%H:%M:%SZ',
                                                              time.gmtime()),
