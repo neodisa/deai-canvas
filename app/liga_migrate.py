@@ -831,6 +831,21 @@ def _commit_space(space_path, p, stamp, step=None, records=None):
     return 'done'
 
 
+#: Скільки разів `_commit_records` перечитує файл задач, якщо його змінив інший процес між читанням і записом.
+_RECORDS_ATTEMPTS = 3
+
+
+def _file_sig(path):
+    """`(mtime_ns, size)` файла — дешевий знак «файл не змінювали» між читанням і записом."""
+    st = os.stat(path)
+    return st.st_mtime_ns, st.st_size
+
+
+def _records_writable(path):
+    """Чи можна записати `tasks.json` (тека — для тимчасового файла й `.bak`, сам файл — якщо є); перевіряємо ДО бекапу кроку."""
+    return os.access(os.path.dirname(path) or '.', os.W_OK) and (not os.path.exists(path) or os.access(path, os.W_OK))
+
+
 def _commit_records(p, step):
     """4d-4a: `track = profile` у записах задач ЛІГИ (файл задач ЛІГИ — `install_config.legacy_tasks_path()`, той самий, що читав
     `plan`). Файл ПЕРЕЧИТУЄМО під `WRITE_LOCK` відразу перед записом (задача, додана після `plan()`, теж виправляється; чужі правки не
@@ -839,15 +854,20 @@ def _commit_records(p, step):
     if not step.ungated or not p.get('records'):
         return 0
     path = install_config.legacy_tasks_path()
-    with spaces.WRITE_LOCK:
-        cfg = install_config.load_legacy_tasks()
-        todo = _records_to_fix(cfg)
-        for tid in todo:
-            cfg['tasks'][tid]['track'] = cfg['tasks'][tid]['profile']
-        if todo:
+    with spaces.WRITE_LOCK:                                  # ⛔ замок — лише ВНУТРІШНІЙ: інший ПРОЦЕС (сервер, CLI) його не бачить
+        for _attempt in range(_RECORDS_ATTEMPTS):
+            before = _file_sig(path)                         # (mtime_ns, size) ДО читання: зміна після нього помітна
+            cfg = install_config.load_legacy_tasks()
+            todo = _records_to_fix(cfg)
+            if not todo:
+                return 0
+            for tid in todo:
+                cfg['tasks'][tid]['track'] = cfg['tasks'][tid]['profile']
             shutil.copy2(path, path + '.bak')
-            atomic_write_json(path, cfg)
-    return len(todo)
+            if _file_sig(path) == before:                    # ще раз ПЕРЕД записом: файл не чіпали — пишемо
+                atomic_write_json(path, cfg)
+                return len(todo)
+        raise OSError('tasks file keeps changing')           # постійна гонка: не пишемо поверх чужого, наступний старт повторить
 
 
 def _run(home, step=None):
@@ -897,6 +917,11 @@ def _run_locked(home, step=None):
             _write_last(info, step)
             return 'abort-changed', info
         space_path = p['space_path']                         # пишемо ТУДИ Ж, звідки рахували
+        if step.ungated and p.get('records') and not _records_writable(install_config.legacy_tasks_path()):
+            # ⛔ постійний збій запису (лише читання): бекап не робимо — кожен старт інакше лишав би по теці бекапу
+            info = _info(p, status='abort-records', reason=_REASONS['abort-records'], records=0, records_planned=len(p['records']))
+            _write_last(info, step)
+            return 'abort-records', info
         try:
             stamp = _backup(spaces.home(), p['space_id'], space_path, step)
         except (OSError, ValueError):
@@ -913,13 +938,16 @@ def _run_locked(home, step=None):
         try:
             n_records = _commit_records(p, step)
         except (OSError, ValueError, RecursionError, KeyError, TypeError):
-            info = _info(p, status='abort-records', reason=_REASONS['abort-records'], backup=stamp)
+            info = _info(p, status='abort-records', reason=_REASONS['abort-records'], backup=stamp,
+                         records=0, records_planned=len(p['records']))      # `records` — скільки ЗАПИСАНО (атомарний запис: нуль)
             _write_last(info, step)
             return 'abort-records', info
         try:
             st = _commit_space(space_path, p, stamp, step, n_records if step.ungated else None)
         except (OSError, ValueError, deai_modules.ModuleError):
             info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
+            if step.ungated:                                 # `records` — скільки ЗАПИСАНО вже (нешкідливо), не скільки планувалось
+                info['records'], info['records_planned'] = n_records, len(p['records'])
             _write_last(info, step)
             return 'abort-write', info
         info = _info(p, status=st, reason=_RUN_REASONS.get(st) or _REASONS.get(st, ''), backup=stamp)
@@ -1172,7 +1200,7 @@ def status(home=None):
             mig = data.get('migrations')
             for key in marks:
                 mark = mig.get(key) if isinstance(mig, dict) else None
-                marks[key] = ({k: mark[k] for k in ('at', 'roles', 'tracks', 'backup', 'held') if k in mark}
+                marks[key] = ({k: mark[k] for k in ('at', 'roles', 'tracks', 'records', 'notes', 'backup', 'held') if k in mark}
                               if isinstance(mark, dict) else None)
             out['mark'] = marks.get(_step(None).mark)
         except deai_modules.ModuleError:
@@ -1202,6 +1230,8 @@ def status_text(st):
                 lines.append('  позначка: вимкнено вручну (held)')
             else:
                 tr = (', напрямки: ' + ('так' if m.get('tracks') else 'ні')) if _step(key).tracks else ''     # рядок напрямків — лише кроку з напрямками
+                if _step(key).ungated:                                       # 4d-4a: записи й нотатки (лише коди, без шляхів і значень)
+                    tr += ', записи: %s, нотатки: %s' % (m.get('records', 0), ', '.join(m.get('notes') or []) or '-')
                 lines.append('  позначка: %s, ролі: %s%s, бекап: %s' % (
                     m.get('at'), ', '.join(m.get('roles') or []) or '-', tr, m.get('backup')))
         rep = ((last or {}).get('steps') or {}).get(key) if multi and isinstance(last, dict) else last   # звіт ЦЬОГО кроку
@@ -1217,6 +1247,32 @@ def status_text(st):
         lines.extend(_skip_lines(last))
     lines.append('  бекапи: ' + (', '.join(st['backups']) or 'нема'))
     return '\n'.join(lines)
+
+
+#: Рядок для старту й CLI, коли напрямки ЛІГИ НЕ мігровано (крок 4d-4a пропущено чи не вдався): що бачитиме людина.
+TRACKS_NOT_MIGRATED = 'напрямки ЛІГИ не мігровані — нові задачі лягають у теку простору'
+
+#: Статуси кроку 4d-4a, після яких про «напрямки не мігровані» мовчимо: нічого не зламано, або кроку тут нема, або він уже виконаний.
+TRACKS_QUIET = ('done', 'skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-nothing', 'skip-integrations-off', 'skip-busy')
+
+
+def tracks_not_migrated(status):
+    """Чи казати людині «напрямки ЛІГИ не мігровані» після цього статусу кроку 4d-4a (held, пропуски, `abort-*`)."""
+    return status not in TRACKS_QUIET
+
+
+def summary_line(info):
+    """Підсумок кроку 4d-4a для старту й CLI: `напрямки: записано|вже явні; записи: N; нотатки: a, b` (нотатки — коди без шляхів)."""
+    if info.get('tracks'):
+        head = 'записано'
+    else:
+        head = 'вже явні' if info.get('tracks_reason') == 'tracks-present' else 'не змінено (%s)' % (info.get('tracks_reason') or '-')
+    parts = ['напрямки: ' + head]
+    if info.get('records'):
+        parts.append('записи: %d' % info['records'])
+    if info.get('notes'):
+        parts.append('нотатки: ' + ', '.join(info['notes']))
+    return '; '.join(parts)
 
 
 def _skip_lines(last):
@@ -1251,7 +1307,7 @@ def startup():
     (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`. Кроки `STEPS` — по порядку (`run_all`): `abort-*` і `skip-busy`
     зупиняють наступні на цьому старті; `held` раннього кроку теж тримає наступні (їхній `plan` — `skip-held`); решта `skip-*`
     (`skip-nothing`/`skip-done`/…) наступних не блокує. Повертає статус ПЕРШОГО кроку, що не `skip-*` (найважливіше), інакше — першого кроку."""
-    done, hints = [], set()
+    done, hints, hints_tracks = [], set(), []
     try:
         if implicit.isolated():
             if os.environ.get('DC_MIGRATE_LIGA') != '1':
@@ -1264,6 +1320,8 @@ def startup():
 
         def announce(mark, st, info):
             done.append(st)
+            if mark == STEP_D.mark and tracks_not_migrated(st):             # 4d-4a: що буде з напрямками, коли крок не виконано
+                hints_tracks.append(TRACKS_NOT_MIGRATED)
             if st not in ('skip-layer-off', 'skip-done', 'skip-integrations-off') and not st.startswith('skip-no'):
                 print('%s: %s — %s' % (mark, st, info.get('reason') or ''), file=sys.stderr)
                 if info.get('hint') and info['hint'] not in hints:           # однакова підказка (тека в git) — раз на старт
@@ -1275,12 +1333,16 @@ def startup():
                 if st == 'done' and step_of_stamp(stamp):                    # лише імʼя бекапу (без шляху до дому)
                     stamps_done.append(stamp)
                     print('  бекап: %s' % stamp, file=sys.stderr)
+                if mark == STEP_D.mark and st == 'done':                     # 4d-4a: що людина бачитиме (нотатки)
+                    print('  ' + summary_line(info), file=sys.stderr)
                 skipped = info.get('skipped')
                 if isinstance(skipped, dict) and skipped:
                     print('  не мігровано: ' + ', '.join('%s (%s)' % (r, c) for r, c in sorted(skipped.items())), file=sys.stderr)
         try:
             run_all(None, on_result=announce)
         finally:
+            for line in hints_tracks:                                       # після рядка статусу кроку (він друкується в `announce`)
+                print('  ' + line, file=sys.stderr)
             # ⛔ LIFO: підказка відкату — ОДНА, для найпізнішого виконаного кроку (відкат раннього при застосованому пізнішому — відмова).
             if stamps_done:
                 print('  відкат: bin/migrate_liga.py restore %s --hold' % stamps_done[-1], file=sys.stderr)

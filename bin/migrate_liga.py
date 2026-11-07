@@ -46,9 +46,14 @@ def main(argv=None):
             if info.get('hint'):
                 print('  що робити: ' + str(info['hint']))
             if st == 'done':
-                tr = ('; напрямки: ' + ('так' if info.get('tracks') else 'ні')) if step.tracks else ''     # лише крок з напрямками
-                print('  ролі: %s%s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', tr, info.get('backup')))
+                if step.ungated:                                         # 4d-4a: ролей нема — підсумок напрямків, записів і нотаток
+                    print('  %s; бекап: %s' % (liga_migrate.summary_line(info), info.get('backup')))
+                else:
+                    tr = ('; напрямки: ' + ('так' if info.get('tracks') else 'ні')) if step.tracks else ''     # лише крок з напрямками
+                    print('  ролі: %s%s; бекап: %s' % (', '.join(info.get('roles') or []) or '-', tr, info.get('backup')))
                 stamps_done.append(info.get('backup'))
+            elif step.ungated and liga_migrate.tracks_not_migrated(st):
+                print('  ' + liga_migrate.TRACKS_NOT_MIGRATED)
             if st not in liga_migrate.BENIGN:
                 code = 1
             if st.startswith('abort-') or st == 'skip-busy':     # як на старті: `abort-*`/`skip-busy` зупиняють наступні кроки

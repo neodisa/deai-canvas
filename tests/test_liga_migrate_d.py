@@ -427,3 +427,221 @@ class StepDRunTest(_StepD):
         self.assertEqual(code, 0)
         self.assert_no_secrets(out, err)
         self.assert_no_secrets_in_logs()
+
+
+# ---------------------------------------------------------------------------------------------------------------- Task 3: вивід, status, CLI, LIFO
+
+class LifoFourSteps(_StepD):
+    """Відкат LIFO на чотири кроки; відмова називає ОСТАННІЙ застосований бекап (тепер це бекап кроку d)."""
+
+    def setUp(self):
+        super().setUp()
+        self._write(self.space_path(), ORIG_SPACE.decode('utf-8'))
+        for s in self.lm.ALL_STEPS[:3]:
+            self.assertEqual(self.lm.run(step=s), 'done', s.mark)
+        self.after_abc = (self.read(self.space_path()), os.path.exists(self.secrets_path()) and self.read(self.secrets_path()))
+        self.assertEqual(self.lm.run(step=D), 'done')
+        self.a, self.b, self.c, self.d = [next(x for x in self.backups() if x.endswith(s)) for s in ('4d3a', '4d3b', '4d3c', '4d4a')]
+
+    def test_restore_of_an_earlier_step_is_refused_naming_d_and_writes_nothing(self):
+        for stamp in (self.a, self.b, self.c):
+            before = self.snapshot_tree()
+            st, info = self.lm._restore(stamp)
+            self.assertEqual((st, info['rollback_first']), ('refuse-later-applied', self.d), stamp)
+            self.assertEqual(self.lm.restore(stamp, hold=True), 'refuse-later-applied')
+            self.assertEqual(self.snapshot_tree(), before)
+
+    def test_cli_names_d_and_exits_nonzero(self):
+        code, out, _err = self.cli('restore', self.c)
+        self.assertEqual(code, 1)
+        self.assertIn(self.d, out)
+        self.assertNotIn(self.b, out)
+
+    def test_in_order_d_then_c_then_b_then_a(self):
+        self.assertEqual(self.lm.restore(self.d), 'restored')
+        self.assertEqual(self.read(self.space_path()), self.after_abc[0], 'space.json — побайтно стан після c')
+        self.assertEqual(self.lm.restore(self.b), 'refuse-later-applied')
+        self.assertEqual(self.lm.restore(self.c), 'restored')
+        self.assertEqual(self.lm.restore(self.b), 'restored')
+        self.assertEqual(self.lm.restore(self.a), 'restored')
+
+    def test_hold_of_d_holds_only_d(self):
+        self.assertEqual(self.lm.restore(self.d, hold=True), 'restored')
+        marks = self.marks()
+        self.assertEqual(marks[D], {'held': True})
+        self.assertEqual({k: ('held' in v) for k, v in marks.items() if k != D}, {'liga-4d3a': False, 'liga-4d3b': False, 'liga-4d3c': False})
+        self.assertEqual(self.plan_d()['status'], 'skip-held')
+        self.assertEqual(self.lm.run(step=D), 'skip-held')
+
+    def test_a_held_d_does_not_hold_the_earlier_steps(self):
+        self.assertEqual(self.lm.restore(self.d, hold=True), 'restored')
+        self.assertEqual(self.lm.restore(self.c), 'restored', 'ранні кроки відкочуються далі')
+
+    def test_a_held_c_holds_d_on_the_next_start(self):
+        self.assertEqual(self.lm.restore(self.d), 'restored')
+        self.assertEqual(self.lm.restore(self.c, hold=True), 'restored')
+        p = self.plan_d()
+        self.assertEqual(p['status'], 'skip-held')
+        self.assertIn('liga-4d3c', p['reason'])
+
+
+class FourStepsStartup(_StepD):
+    """`startup()`/CLI: чотири кроки по порядку; підсумок напрямків одним рядком; підказка відкату — для останнього кроку."""
+
+    def test_order_backups_and_one_restore_hint(self):
+        st, err = self.start()
+        self.assertEqual(st, 'done')
+        marks = [m for m in re.findall(r'^(liga-4d\w+): done', err, re.M)]
+        self.assertEqual(marks, ['liga-4d3a', 'liga-4d3b', 'liga-4d3c', D])
+        stamps = self.backups()
+        self.assertEqual(len(stamps), 4)
+        self.assertEqual(err.count('відкат:'), 1)
+        self.assertIn('відкат: bin/migrate_liga.py restore %s --hold' % stamps[-1], err)
+        self.assertIn('раніші кроки (%s)' % ', '.join(stamps[:3]), err)
+        last = self.read_json(self.deai, 'migrations', 'last.json')
+        self.assertEqual(sorted(last['steps']), ['liga-4d3a', 'liga-4d3b', 'liga-4d3c', D], 'звіт d не стирає звіти a, b, c')
+        self.assertEqual(last['step'], D)
+
+    def test_the_tracks_line_has_the_notes_and_no_paths(self):
+        work = os.path.join(self.home, 'work')
+        self.config(design_work_roots={'united': os.path.join(work, 'united'), 'seo': self.hidden_root()})
+        _st, err = self.start()
+        line = next(x for x in err.splitlines() if x.strip().startswith('напрямки:'))
+        self.assertEqual(line.strip(), 'напрямки: записано; записи: 1; нотатки: root-dropped:seo, default-root-differs')
+        self.assertNotIn(self.home, err)
+        self.assert_no_secrets(err)
+
+    def test_a_clean_parity_run_says_only_the_tracks_and_records(self):
+        _st, err = self.start()
+        line = next(x for x in err.splitlines() if x.strip().startswith('напрямки:'))
+        self.assertEqual(line.strip(), 'напрямки: вже явні; записи: 1', 'крок а уже записав напрямки — d дописує лише записи')
+
+    def test_skip_nothing_of_d_is_silent_and_the_second_start_prints_nothing(self):
+        self.start()
+        st, err = self.start()
+        self.assertEqual((st, err), ('skip-done', ''))
+
+    def test_the_not_migrated_line_when_d_is_skipped_for_a_reason(self):
+        self.space_json({'migrations': {D: {'held': True}}})
+        _st, err = self.start()
+        self.assertIn(self.lm.TRACKS_NOT_MIGRATED, err)
+        self.assertIn('нові задачі лягають у теку простору', err)
+        os.makedirs(os.path.join(self.space_dir, '.git'))
+        self.space_json({})
+        _st, err = self.start()
+        self.assertIn('liga-4d4a: skip-path-in-git', err)
+        self.assertIn(self.lm.TRACKS_NOT_MIGRATED, err)
+
+    def test_not_said_when_nothing_is_wrong(self):
+        self.start()
+        _st, err = self.start()
+        self.assertNotIn(self.lm.TRACKS_NOT_MIGRATED, err)
+
+    def test_an_abort_of_d_is_the_start_result_and_is_not_masked(self):
+        self.config(profile_repos={'t%02d' % i: self.REPO_U for i in range(21)})
+        st, err = self.start()
+        self.assertEqual(st, 'abort-tracks')
+        self.assertIn('liga-4d4a: abort-tracks', err)
+        self.assertIn(self.lm.TRACKS_NOT_MIGRATED, err)
+        self.assertEqual(len([m for m in re.findall(r'^liga-4d\w+: done', err, re.M)]), 3, 'a, b, c пройшли')
+
+    def test_cli_run_dry_run_and_status(self):
+        code, out, _err = self.cli('dry-run')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d4a: ready', out)
+        self.assertIn('records: 1; notes: -', out)
+        code, out, _err = self.cli('run')
+        self.assertEqual(code, 0)
+        self.assertIn('liga-4d4a: done', out)
+        self.assertIn('  напрямки: вже явні; записи: 1; бекап: ', out)
+        self.assertEqual(out.count('відкат:'), 1)
+        code, out, _err = self.cli('status')
+        self.assertEqual(code, 0)
+        self.assertIn('ролі: -, напрямки: ні, записи: 1, нотатки: -', out)
+        self.assert_no_secrets(out)
+
+    def test_cli_prints_the_not_migrated_line_for_a_refused_step(self):
+        self.space_json({'migrations': {D: {'held': True}}})
+        code, out, _err = self.cli('run')
+        self.assertEqual(code, 0, 'skip-held — не помилка')
+        self.assertIn(self.lm.TRACKS_NOT_MIGRATED, out)
+
+
+
+class FollowUpsOfTask2(_StepD):
+    """Правки за ревʼю Task 2: A — `records`/`notes` видно в `status`; B — гонка за `tasks.json` між процесами; C — збій запису
+    не лишає бекапів; D — `records` у звіті збою означає «записано», а не «планувалось»."""
+
+    def test_a_status_shows_records_and_notes_codes_only(self):
+        self.config(design_work_roots={'united': os.path.join(self.home, 'work', 'united'), 'seo': self.hidden_root()})
+        self.assertEqual(self.lm.run(step=D), 'done')
+        m = self.lm.status()['steps'][D]['mark']
+        self.assertEqual((m['records'], m['notes']), (1, ['root-dropped:seo', 'default-root-differs']))
+        text = self.lm.status_text(self.lm.status())
+        self.assertIn('записи: 1, нотатки: root-dropped:seo, default-root-differs', text)
+        self.assertNotIn(self.home, text)
+
+    def _racing_copy2(self, times):
+        """`shutil.copy2`, що ПІСЛЯ копії дописує в `tasks.json` чужу задачу (інший процес) `times` разів поспіль."""
+        real, calls = self.lm.shutil.copy2, []
+
+        def copy2(src, dst, *a, **kw):
+            out = real(src, dst, *a, **kw)
+            if len(calls) < times:
+                cfg = self.read_json(self.tasks_path)
+                cfg['tasks']['race%d' % len(calls)] = {'dir': '/x', 'profile': 'seo', 'pad': 'x' * (len(calls) + 1)}
+                self._write(self.tasks_path, cfg)
+            calls.append(1)
+            return out
+        return copy2
+
+    def test_b_a_write_by_another_process_between_read_and_write_is_not_lost(self):
+        with self.mock.patch.object(self.lm.shutil, 'copy2', self._racing_copy2(1)):
+            self.assertEqual(self.lm.run(step=D), 'done')
+        t = self.tasks()
+        self.assertEqual((t['race0']['track'], t['a-2']['track']), ('seo', 'united'), 'чужу задачу збережено й виправлено')
+        self.assertEqual(self.marks()[D]['records'], 2)
+
+    def test_b_a_file_that_keeps_changing_is_abort_records_and_not_overwritten(self):
+        with self.mock.patch.object(self.lm.shutil, 'copy2', self._racing_copy2(99)):
+            self.assertEqual(self.lm.run(step=D), 'abort-records')
+        self.assertNotIn('track', self.tasks()['a-2'], 'ми поверх чужого запису не писали')
+        self.assertNotIn(D, self.marks() if os.path.exists(self.space_path()) else {})
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root ігнорує права')
+    def test_c_a_read_only_tasks_folder_gives_abort_records_without_a_backup(self):
+        folder = os.path.dirname(self.tasks_path)
+        before = os.listdir(os.path.join(self.deai, 'backups')) if os.path.isdir(os.path.join(self.deai, 'backups')) else []
+        os.chmod(folder, 0o555)
+        self.addCleanup(os.chmod, folder, 0o755)
+        self.assertEqual(self.lm.run(step=D), 'abort-records')
+        after = os.listdir(os.path.join(self.deai, 'backups')) if os.path.isdir(os.path.join(self.deai, 'backups')) else []
+        self.assertEqual(after, before, 'бекап не створено — нема що чистити, коли збій постійний')
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root ігнорує права')
+    def test_c_a_read_only_tasks_file_gives_abort_records_without_a_backup(self):
+        os.chmod(self.tasks_path, 0o444)
+        self.addCleanup(os.chmod, self.tasks_path, 0o644)
+        self.assertEqual(self.lm.run(step=D), 'abort-records')
+        self.assertEqual(self.backups(), [])
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root ігнорує права')
+    def test_c_a_read_only_folder_does_not_matter_when_there_are_no_records(self):
+        cfg = self.read_json(self.tasks_path)
+        cfg['tasks']['a-2']['track'] = 'united'
+        self._write(self.tasks_path, cfg)
+        folder = os.path.dirname(self.tasks_path)
+        os.chmod(folder, 0o555)
+        self.addCleanup(os.chmod, folder, 0o755)
+        self.assertEqual(self.lm.run(step=D), 'done', 'записувати tasks.json нема чого — не вимагаємо прав')
+
+    def test_d_a_failed_records_write_reports_zero_written_and_the_planned_count(self):
+        with self.mock.patch.object(self.lm.shutil, 'copy2', side_effect=OSError):
+            st, info = self.lm._run(None, self.lm.STEP_D)
+        self.assertEqual((st, info['records'], info['records_planned']), ('abort-records', 0, 1))
+        self.assertEqual(self.read_json(self.deai, 'migrations', 'last.json')['records'], 0)
+
+    def test_d_a_failed_space_write_reports_the_records_really_written(self):
+        with self.mock.patch.object(self.lm, '_write_space', side_effect=OSError):
+            st, info = self.lm._run(None, self.lm.STEP_D)
+        self.assertEqual((st, info['records'], info['records_planned']), ('abort-write', 1, 1))
