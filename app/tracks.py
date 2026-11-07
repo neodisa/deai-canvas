@@ -138,6 +138,12 @@ def normalize(raw, space_path, roots=True):
     return out
 
 
+def adapter_applies(raw, path):
+    """Чи діє адаптер ЛІГИ: напрямків у `space.json` нема (`None`) або список непридатний (`normalize` дає порожнє).
+    Єдиний критерій для рантайму (до 4d-4a) і для кроку `liga-4d4a`; ⛔ не дублювати умову в інших місцях."""
+    return raw is None or not normalize(raw, path, roots=False)
+
+
 def default_id(tracks, raw):
     """Напрямок за замовчуванням: `raw` з переліку → він; інакше перший; порожній перелік → `None`."""
     ids = [t['id'] for t in tracks]

@@ -777,7 +777,7 @@ class _StepC(_WriteStand):
 
     def setUp(self):
         super().setUp()
-        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS)
+        p = self.mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS[:3])      # пін 4d-4a (Поправка 10): крок D тут не біжить
         p.start()
         self.addCleanup(p.stop)
 
@@ -816,7 +816,8 @@ class StepCConstants(unittest.TestCase):
 
     def test_steps_list_and_step_c_shape(self):
         import liga_migrate as lm
-        self.assertEqual([s.mark for s in lm.ALL_STEPS], ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'])
+        self.assertEqual([s.mark for s in lm.ALL_STEPS[:3]], ['liga-4d3a', 'liga-4d3b', 'liga-4d3c'])
+        self.assertEqual(lm.ALL_STEPS[3].mark, 'liga-4d4a', 'четвертий крок — 4d-4a (його тести — у test_liga_migrate_d)')
         self.assertEqual(lm.STEPS, lm.ALL_STEPS)
         c = lm.ALL_STEPS[2]
         self.assertIs(lm.STEP_C, c)
@@ -834,7 +835,7 @@ class StepCConstants(unittest.TestCase):
 
     def test_stamp_names_tell_the_steps_apart(self):
         import liga_migrate as lm
-        a, b, c = lm.ALL_STEPS
+        a, b, c = lm.ALL_STEPS[:3]
         self.assertTrue(c.stamp_re.fullmatch('20261106-120000-liga-4d3c'))
         self.assertTrue(c.stamp_re.fullmatch('20261106-120000-liga-4d3c-2'))
         self.assertIsNone(c.stamp_re.fullmatch('20261106-120000-liga-4d3c-pre-restore'))
@@ -1489,7 +1490,8 @@ class AfterMigrationParity4d3c(unittest.TestCase):
                         res = [(m, st, i.get('roles')) for m, st, i in lm.run_all()]
                     res.append(('liga-4d3c', lm.run(step='liga-4d3c'), None))
                 else:
-                    res = [(m, st, i.get('roles')) for m, st, i in lm.run_all()]
+                    with mock.patch.object(lm, 'STEPS', lm.ALL_STEPS[:3]):                  # пін 4d-4a: знімок 0.18.0 — до кроку D
+                        res = [(m, st, i.get('roles')) for m, st, i in lm.run_all()]
                 with open(os.path.join(rig.space_dir, 'space.json'), encoding='utf-8') as fh:
                     cls.marks[name] = json.load(fh)
             cls.results[name] = res
@@ -1683,7 +1685,8 @@ class RealPublishNonIsolated(unittest.TestCase):
         space = {'id': g.SPACE_ID, 'path': rig.space_dir, 'legacy': True, 'integrations': True}
         with rig.activate(env):
             if migrated:
-                res = [(m, st) for m, st, _i in self.lm.run_all()]
+                with mock.patch.object(self.lm, 'STEPS', self.lm.ALL_STEPS[:3]):           # пін 4d-4a: знімок 0.18.0 — до кроку D
+                    res = [(m, st) for m, st, _i in self.lm.run_all()]
                 self.assertEqual(res, [('liga-4d3a', 'done'), ('liga-4d3b', 'done'), ('liga-4d3c', 'done')])
             dm.reset_caches()
             # ⛔ НЕізольований прогін: нема ні `DC_TASKS_FILE`, ні `DC_NO_OVERVIEW`; `npx` — фальшивий, перший на `PATH`

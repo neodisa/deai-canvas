@@ -55,7 +55,7 @@ DASHBOARD_TABLE = 'overview_projects'
 COMPAT = 'comment-layer'
 SKIP_CODES = ('skip-layer-off', 'skip-no-liga', 'skip-done', 'skip-held', 'skip-no-path', 'skip-path-in-git',
               'skip-space-json-unreadable', 'skip-registry-unreadable', 'skip-tasks-unreadable', 'skip-nothing', 'skip-busy', 'skip-integrations-off')
-ABORT_CODES = ('abort-provider', 'abort-internal', 'abort-lock')
+ABORT_CODES = ('abort-provider', 'abort-internal', 'abort-lock', 'abort-tracks', 'abort-records')
 _REASONS = {
     'skip-layer-off': 'шар просторів вимкнено: міграція не біжить',
     'skip-no-liga': 'у реєстрі нема простору ЛІГА',
@@ -67,11 +67,13 @@ _REASONS = {
     'skip-space-json-unreadable': 'space.json простору ЛІГА не читається',
     'skip-registry-unreadable': 'реєстр просторів не читається',
     'skip-tasks-unreadable': 'старий tasks.json не читається: конфіг ЛІГИ невідомий',
-    'skip-nothing': 'нічого мігрувати (нема ні ролей, ні напрямків): позначку не пишемо, наступний старт перевірить знову',
+    'skip-nothing': 'нічого мігрувати (нема ні ролей, ні напрямків, ні записів задач): позначку не пишемо, наступний старт перевірить знову',
     'publisher-present': 'публікацію вже веде інший модуль простору: крок його не перебиває',
     'skip-busy': 'міграція вже виконується іншим процесом (замок migrations/.lock зайнятий)',
     'abort-provider': 'ядро не вирішує мігровану роль на розрахованому space.json: міграція нічого не пише',
     'abort-internal': 'непередбачена помилка розрахунку: міграція нічого не пише',
+    'abort-tracks': 'розраховані напрямки не збігаються з адаптером за id чи дефолтом: міграція нічого не пише',
+    'abort-records': 'tasks.json не записано: space.json не змінено, наступний запуск почне заново',
     'abort-lock': 'міжпроцесний замок недоступний (flock не працює на цій файловій системі): міграція нічого не пише, щоб не йти без замка',
 }
 
@@ -85,7 +87,7 @@ class _Stop(Exception):
 
 def _result(status, space_id=None, **kw):
     out = {'status': status, 'reason': _REASONS.get(status, ''), 'space_id': space_id, 'roles': {}, 'tracks': False,
-           'tracks_reason': None, 'space_json': None, 'secrets': {}, 'space_path': None}
+           'tracks_reason': None, 'space_json': None, 'secrets': {}, 'space_path': None, 'records': [], 'notes': []}
     out.update(kw)
     return out
 
@@ -116,6 +118,98 @@ def _in_git(path):
     return False
 
 
+#: Адаптер ЛІГИ (4d-4a: ЛИШЕ тут, для міграції): останній рубіж кореня, перелік id, дефолт і підписи.
+_FALLBACK_ROOT = '~/deai-work'
+_LEGACY_IDS = ('united', 'liga360', 'seo')
+_LEGACY_DEFAULT = 'united'
+_LEGACY_LABELS = {'united': 'United', 'liga360': 'LIGA360', 'seo': 'SEO'}
+
+
+def _legacy_of_task(task):
+    """Старе читання напрямку задачі: `track`, інакше `profile` (лише міграція: `tracks.of_task` читає один `track`)."""
+    if not isinstance(task, dict):
+        return None
+    for key in ('track', 'profile'):
+        v = task.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+def _legacy_label(value):
+    return tracks_core.read_tag(_LEGACY_LABELS.get(value, value))
+
+
+# ── адаптер ЛІГИ: корінь старого `tasks.json` → напрямки ──────────────────────────────────────────────────────────────
+
+def _legacy_roots_of(cfg):
+    """`design_work_roots` ЛІГИ. ⛔ Не словник → `{}` (0.14.0 тут падав `AttributeError`; свідома відмінність спеки §6.4: спільний
+    корінь замість обвалу)."""
+    raw = cfg.get('design_work_roots') if isinstance(cfg, dict) else None
+    return raw if isinstance(raw, dict) else {}
+
+
+def _legacy_fallback(cfg):
+    shared = cfg.get('design_work_root') if isinstance(cfg, dict) else None
+    return os.path.expanduser(shared if isinstance(shared, str) and shared else _FALLBACK_ROOT)
+
+
+def _legacy_root(cfg, value):
+    """Корінь робочих тек ДЛЯ ЦЬОГО НАПРЯМКУ ЛІГИ (раніше `serve.work_root(cfg, profile)`), з розгорнутим `~`.
+
+    Вимога користувача 31.08.2026: три напрямки — три теки і три репозиторії. Порядок: свій корінь напрямку →
+    спільний `design_work_root` → історичний фолбек. ⛔ Напрямок без власного кореня НЕ вигадується (і не береться з
+    дефолтного): краще чесно покласти в спільний корінь і сказати про це (`bin/roots.py`), ніж створити теку за вигаданим
+    шляхом. `value` — що завгодно (`'United'`, `''`, число, `None`): невідоме — спільний корінь. Не кидає на поганому `cfg`.
+
+    Свідома відмінність від 0.14.0: НЕ рядок у власному корені напрямку чи в `design_work_root` (число, список) раніше
+    давав `TypeError` у `expanduser` (500); тепер таке значення вважається відсутнім і діє наступна ланка ланцюга
+    (власний → спільний → `~/deai-work`)."""
+    own = _legacy_roots_of(cfg).get(value) if isinstance(value, str) else None
+    if isinstance(own, str) and own:
+        return os.path.expanduser(own)
+    return _legacy_fallback(cfg)
+
+
+def _legacy_repos(cfg):
+    """Таблиця «напрямок → репозиторій макетів» ЛІГИ з кореня `tasks.json` (раніше `serve.profile_repos` без читання файла).
+    Ключ — за `ID_RE`, репо — `repo_ok` (обрізане); погані пари відкидаються, `cfg` не словник / ключа нема / не словник —
+    `{}`. ⛔ Структура в усіх напрямків одна — `mockup/<task-id>`, тому напрямки розходяться лише репозиторієм, а не логікою
+    (урок колишньої константи `PROFILE_REPOS`). Значень — ні в текстах, ні в журналах."""
+    raw = cfg.get('profile_repos') if isinstance(cfg, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in raw.items():
+        r = tracks_core.repo_ok(v)
+        if r and tracks_core._is_id(k):
+            out[k] = r
+    return out
+
+
+def _legacy_tracks(cfg):
+    """Неявні напрямки ЛІГИ → `(tracks, default_id, fallback_root)`.
+
+    Перелік id: `united`, `liga360`, `seo`, далі ключі `design_work_roots` і `profile_repos` (лише за `ID_RE`, у такому
+    порядку, без дублів). `root` — `_legacy_root` (свій → спільний → `~/deai-work`, розгорнутий); `repo` — з `_legacy_repos`
+    або `''`; `label` — `_LEGACY_LABELS` або `id`; `ds` = `id` (вендорний інспектор сам каже «ДС нема» для невідомого);
+    дефолт — `united`. `fallback_root` — корінь для будь-якого значення поза переліком (`'United'`, невідомий, `None`):
+    не корінь дефолтного напрямку (спека §6.1). Перелік не обмежений `MAX_TRACKS`: адаптер дзеркалить довільний конфіг, а
+    репо 21-го ключа 0.14.0 теж віддавав. Не кидає на поганому `cfg`."""
+    ids = list(_LEGACY_IDS)
+    seen = set(ids)
+    raw_repos = cfg.get('profile_repos') if isinstance(cfg, dict) else None
+    for src in (_legacy_roots_of(cfg), raw_repos if isinstance(raw_repos, dict) else {}):
+        for k in src:
+            if tracks_core._is_id(k) and k not in seen:
+                seen.add(k)
+                ids.append(k)
+    repos = _legacy_repos(cfg)
+    tracks = [{'id': i, 'label': _LEGACY_LABELS.get(i, i), 'root': _legacy_root(cfg, i),
+               'repo': repos.get(i, ''), 'ds': i} for i in ids]
+    return tracks, _LEGACY_DEFAULT, _legacy_fallback(cfg)
+
+
 def _foreign_dropped(root, others):
     """Так само, як `serve._drop_foreign_roots`: корінь, що перетинається з ІНШИМ простором реєстру, у явних напрямках стає
     `None` (в адаптері ЛІГИ він лишився б). `others` — реєстр без запису ЛІГИ."""
@@ -126,18 +220,32 @@ def _foreign_dropped(root, others):
     return why is not None
 
 
-def _compute_tracks(cfg, path, others):
-    """Явні напрямки з адаптера + перевірка паритету → `(список для space.json, нормалізований, дефолт)` чи `None` (паритету нема)."""
-    items, default, _fallback = tracks_core.legacy_tracks(cfg)
+def _adapter_tracks(cfg, path, others):
+    """Явні напрямки з адаптера БЕЗ воріт паритету → `(список для space.json, нормалізований, дефолт, нотатки-про-корені)`.
+    `нотатки-про-корені` — `root-dropped:<id>` (корінь відкинув `normalize` чи перетин з іншим простором) і `root-rebased:<id>`
+    (відносний корінь став відносним до теки простору)."""
+    items, default, _fallback = _legacy_tracks(cfg)
     raw = [{'id': t['id'], 'label': t['label'], 'root': t['root'], 'repo': t['repo'], 'ds': t['ds']} for t in items]
     norm = tracks_core.normalize(raw, path)
     norm = [{**t, 'root': None} if t['root'] is not None and _foreign_dropped(t['root'], others) else t for t in norm]
+    notes = []
+    for a in items:
+        n = tracks_core.find(norm, a['id'])
+        if n is not None and n['root'] != os.path.normpath(a['root']):
+            notes.append(('root-dropped:' if n['root'] is None else 'root-rebased:') + a['id'])
+    return raw, norm, default, notes
+
+
+def _compute_tracks(cfg, path, others):
+    """4d-3a: явні напрямки + ВОРОТА паритету → `(список для space.json, нормалізований, дефолт)` чи `None` (паритету нема)."""
+    raw, norm, default, _notes_roots = _adapter_tracks(cfg, path, others)
+    items = _legacy_tracks(cfg)[0]
     if tracks_core.default_id(norm, default) != default:
         return None
     for a in items:
         n = tracks_core.find(norm, a['id'])
         if (n is None or n['root'] != os.path.normpath(a['root']) or n['repo'] != a['repo'] or n['ds'] != a['ds']
-                or n['label'] != tracks_core.label_tag([], {'track': a['id']}, legacy=True)):
+                or n['label'] != _legacy_label(a['id'])):
             return None
     return raw, norm, default
 
@@ -154,10 +262,42 @@ def _unknown_values(cfg, ids, norm):
             return True
     tasks = cfg.get('tasks') if isinstance(cfg, dict) else None
     for t in (tasks.values() if isinstance(tasks, dict) else ()):
-        if isinstance(t, dict) and tracks_core.of_task(t) not in ids:
+        if isinstance(t, dict) and _legacy_of_task(t) not in ids:
             return True
     default = tracks_core.find(norm, 'united')
-    return default is None or default['root'] != os.path.normpath(tracks_core.legacy_root(cfg, None))
+    return default is None or default['root'] != os.path.normpath(_legacy_root(cfg, None))
+
+
+def _nonempty_str(v):
+    return isinstance(v, str) and bool(v)
+
+
+def _notes(cfg, ids, norm, root_notes):
+    """Нотатки четвертого кроку (коди без шляхів і значень; id напрямків — можна), у порядку: корені, `unknown-values`,
+    `default-root-differs`, `non-id-keys`. `unknown-values` — задача зі значенням напрямку (`_legacy_of_task`), якого нема в
+    переліку (задачі БЕЗ значення нотатки не дають: мітка й ДС у них і так порожні)."""
+    notes = list(root_notes)
+    tasks = cfg.get('tasks') if isinstance(cfg, dict) else None
+    if any(isinstance(t, dict) and _legacy_of_task(t) is not None and _legacy_of_task(t) not in ids
+           for t in (tasks.values() if isinstance(tasks, dict) else ())):
+        notes.append('unknown-values')
+    default = tracks_core.find(norm, 'united')
+    if default is None or default['root'] != os.path.normpath(_legacy_root(cfg, None)):
+        notes.append('default-root-differs')
+    for key in ('design_work_roots', 'profile_repos'):
+        raw = cfg.get(key) if isinstance(cfg, dict) else None
+        if isinstance(raw, dict) and any(not tracks_core._is_id(k) for k in raw):
+            notes.append('non-id-keys')
+            break
+    return notes
+
+
+def _records_to_fix(cfg):
+    """Ідентифікатори задач ЛІГИ, у яких `track` — не непорожній рядок, а `profile` — непорожній: їм крок пише `track = profile`
+    (старий запис до 0.15.0 мав лише `profile`; після 4d-4a `tracks.of_task` читає один `track`)."""
+    tasks = cfg.get('tasks') if isinstance(cfg, dict) else None
+    return sorted(tid for tid, t in (tasks.items() if isinstance(tasks, dict) else ())
+                  if isinstance(t, dict) and not _nonempty_str(t.get('track')) and _nonempty_str(t.get('profile')))
 
 
 def _has_userinfo(url):
@@ -319,9 +459,21 @@ def _plan(home, step):
                 secrets[mid] = secret
     out_roles = {r: {'module': m, 'migrate': skip is None, 'reason': skip} for r, (m, skip, _e, _s) in roles.items()}
 
-    do_tracks, tracks_reason, new_tracks = False, None, None
-    if not step.tracks:                                     # напрямки мігрує лише 4d-3a
+    do_tracks, tracks_reason, new_tracks, notes = False, None, None, []
+    records = _records_to_fix(cfg) if step.ungated else []
+    if not step.tracks:                                     # напрямки мігрують лише 4d-3a і 4d-4a
         pass
+    elif step.ungated:                                      # 4d-4a: рівно тоді, коли ЗАРАЗ діє адаптер (та сама функція, що в рантаймі)
+        if not tracks_core.adapter_applies(data.get('tracks'), path):
+            tracks_reason = 'tracks-present'
+        else:
+            others = {'spaces': [s for s in reg['spaces'] if s.get('id') != sid]}
+            raw, norm, default, root_notes = _adapter_tracks(cfg, path, others)
+            chk = tracks_core.normalize(raw, path, roots=False)          # перевірка В ПАМʼЯТІ: ті самі id і дефолт, що адаптер
+            if [x['id'] for x in chk] != [x['id'] for x in raw] or tracks_core.default_id(chk, default) != default:
+                raise _Stop('abort-tracks', space_id=sid)
+            do_tracks, new_tracks = True, (raw, default)
+            notes = _notes(cfg, {x['id'] for x in raw}, norm, root_notes)
     elif data.get('tracks') is not None:                    # навіть `[]`: власник свідомо обрав «жодного напрямку»
         tracks_reason = 'tracks-present'
     else:
@@ -336,7 +488,7 @@ def _plan(home, step):
             else:
                 do_tracks, new_tracks = True, (raw, default)
 
-    if not do_tracks and not any(skip is None for (_m, skip, _e, _s) in roles.values()):
+    if not do_tracks and not records and not any(skip is None for (_m, skip, _e, _s) in roles.values()):
         raise _Stop('skip-nothing', space_id=sid, roles=out_roles, tracks_reason=tracks_reason)
 
     # Перевірка В ПАМʼЯТІ: ядро вирішує кожну мігровану роль саме цим модулем на розрахованому `space.json` (нічого не пишемо).
@@ -358,11 +510,13 @@ def _plan(home, step):
         space_json['tracks'], space_json['default_track'] = new_tracks
     marks = dict(mig) if isinstance(mig, dict) else {}
     marks[step.mark] = {'roles': [r for r, (_m, skip, _e, _s) in roles.items() if skip is None]}
-    if step.tracks:                                         # позначка 4d-3b — без `tracks`
+    if step.tracks:                                         # позначка 4d-3b/3c — без `tracks`
         marks[step.mark]['tracks'] = do_tracks
+    if step.ungated:
+        marks[step.mark]['records'], marks[step.mark]['notes'] = len(records), notes
     space_json['migrations'] = marks
     return _result('ready', space_id=sid, space_path=path, roles=out_roles, tracks=do_tracks, tracks_reason=tracks_reason,
-                   space_json=space_json, secrets=secrets)
+                   space_json=space_json, secrets=secrets, records=records, notes=notes)
 
 
 def report(p, step=None):
@@ -376,6 +530,8 @@ def report(p, step=None):
     if p.get('status') == 'ready':
         if _step(step).tracks:
             lines.append('  tracks: ' + ('migrate' if p.get('tracks') else 'skip: ' + str(p.get('tracks_reason'))))
+        if _step(step).ungated:
+            lines.append('  records: %d; notes: %s' % (len(p.get('records') or []), ', '.join(p.get('notes') or []) or '-'))
         for mid, sec in (p.get('secrets') or {}).items():
             lines.append('  secrets %s: %s' % (mid, ', '.join(sorted(sec)) or '-'))
     return '\n'.join(lines)
@@ -394,14 +550,17 @@ STAMP_RE = re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3a(?:-[0-9]{1,3})?')
 #: `roles` — `((роль, модуль), …)` у порядку запису; `tracks` — чи мігрує напрямки (лише 4d-3a); `suffix` — хвіст імені бекапу;
 #: `stamp_re` — строге імʼя бекапу (імʼя однозначно каже, чий це крок); `entries(cfg, present)` — розрахунок ролей кроку
 #: (`None` = `_role_entries`, 4d-3a; `_entries_b` додає Task 6). `hold` кроку — це `{held: True}` у ЙОГО позначці.
-Step = namedtuple('Step', 'mark roles tracks suffix stamp_re entries', defaults=(None,))
+Step = namedtuple('Step', 'mark roles tracks suffix stamp_re entries ungated', defaults=(None, False))
 STEP_A = Step(MARK, ROLE_MODULES, True, BACKUP_SUFFIX, STAMP_RE)
 #: Другий крок (4d-3b, 0.18.0): `comments` і `vcs` ЛІГИ — явні модулі; без напрямків (`tracks=False`), свій бекап і позначка без `tracks`.
 STEP_B = Step('liga-4d3b', ROLE_MODULES_B, False, '-liga-4d3b', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3b(?:-[0-9]{1,3})?'), _entries_b)
 #: Усі відомі кроки в порядку застосування (відкат — у зворотному: LIFO) і ті, що біжать на старті/в CLI.
 #: Третій крок (4d-3c, 0.19.0): `publish` ЛІГИ — явний `vercel-publish` з `compat`; без напрямків і секретів, свій бекап і позначка.
 STEP_C = Step('liga-4d3c', ROLE_MODULES_C, False, '-liga-4d3c', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d3c(?:-[0-9]{1,3})?'), _entries_c)
-ALL_STEPS = (STEP_A, STEP_B, STEP_C)
+#: Четвертий крок (4d-4a, 0.20.0): напрямки ЛІГИ — остаточно явні (БЕЗ воріт паритету, розбіжності — нотатки позначки) і записи задач
+#: (`track = profile`). Ролей нема; `ungated=True` — крок без воріт паритету й з записом `tasks.json`.
+STEP_D = Step('liga-4d4a', (), True, '-liga-4d4a', re.compile(r'[0-9]{8}-[0-9]{6}-liga-4d4a(?:-[0-9]{1,3})?'), lambda cfg, present: {}, True)
+ALL_STEPS = (STEP_A, STEP_B, STEP_C, STEP_D)
 STEPS = ALL_STEPS
 
 
@@ -487,7 +646,8 @@ def _info(p, **extra):
     out = {'status': p.get('status'), 'reason': p.get('reason') or '', 'space_id': p.get('space_id'),
            'roles': [r for r, v in (p.get('roles') or {}).items() if v.get('migrate')],
            'skipped': {r: v.get('reason') for r, v in (p.get('roles') or {}).items() if not v.get('migrate')},
-           'tracks': bool(p.get('tracks')), 'tracks_reason': p.get('tracks_reason')}
+           'tracks': bool(p.get('tracks')), 'tracks_reason': p.get('tracks_reason'),
+           'records': len(p.get('records') or []), 'notes': list(p.get('notes') or [])}
     if p.get('status') in _HINTS:
         out['hint'] = _HINTS[p['status']]
     out.update(extra)
@@ -641,7 +801,7 @@ def _backup(base, space_id, space_path, step=None):
     return name
 
 
-def _commit_space(space_path, p, stamp, step=None):
+def _commit_space(space_path, p, stamp, step=None, records=None):
     """ОДИН атомарний запис `space.json`: злиття з ПОТОЧНИМ вмістом диска (перечитуємо під замком, відразу перед записом): чужі
     ключі й правки, зроблені після `plan()`, не губляться. Модуль, що зʼявився тим часом, не перезаписуємо. Позначка вже є — `skip-done`."""
     step = _step(step)
@@ -659,12 +819,35 @@ def _commit_space(space_path, p, stamp, step=None):
                 mods[r['module']] = planned['modules'][r['module']]
         new = dict(cur)
         new['modules'] = mods
-        if step.tracks and p['tracks'] and cur.get('tracks') is None:
+        wrote = False
+        if step.tracks and p['tracks'] and (tracks_core.adapter_applies(cur.get('tracks'), space_path) if step.ungated else cur.get('tracks') is None):
             new['tracks'], new['default_track'] = planned['tracks'], planned['default_track']
+            wrote = True
         marks[step.mark] = dict(planned['migrations'][step.mark], at=time.strftime('%Y-%m-%dT%H:%M:%S'), backup=stamp)
+        if step.ungated:                                    # 4d-4a: позначка каже, що крок записав НАСПРАВДІ (власні напрямки, що зʼявились, не затираємо)
+            marks[step.mark]['tracks'], marks[step.mark]['records'] = wrote, records
         new['migrations'] = marks
         _write_space(sp, new)
     return 'done'
+
+
+def _commit_records(p, step):
+    """4d-4a: `track = profile` у записах задач ЛІГИ (файл задач ЛІГИ — `install_config.legacy_tasks_path()`, той самий, що читав
+    `plan`). Файл ПЕРЕЧИТУЄМО під `WRITE_LOCK` відразу перед записом (задача, додана після `plan()`, теж виправляється; чужі правки не
+    губляться), `.bak` — як `serve.save_tasks`. Повертає кількість записаних записів; не кидає лише коли писати нічого. Крок
+    без `ungated` чи без записів — `0` без дотику до диска."""
+    if not step.ungated or not p.get('records'):
+        return 0
+    path = install_config.legacy_tasks_path()
+    with spaces.WRITE_LOCK:
+        cfg = install_config.load_legacy_tasks()
+        todo = _records_to_fix(cfg)
+        for tid in todo:
+            cfg['tasks'][tid]['track'] = cfg['tasks'][tid]['profile']
+        if todo:
+            shutil.copy2(path, path + '.bak')
+            atomic_write_json(path, cfg)
+    return len(todo)
 
 
 def _run(home, step=None):
@@ -728,12 +911,20 @@ def _run_locked(home, step=None):
             _write_last(info, step)
             return 'abort-secrets', info
         try:
-            st = _commit_space(space_path, p, stamp, step)
+            n_records = _commit_records(p, step)
+        except (OSError, ValueError, RecursionError, KeyError, TypeError):
+            info = _info(p, status='abort-records', reason=_REASONS['abort-records'], backup=stamp)
+            _write_last(info, step)
+            return 'abort-records', info
+        try:
+            st = _commit_space(space_path, p, stamp, step, n_records if step.ungated else None)
         except (OSError, ValueError, deai_modules.ModuleError):
             info = _info(p, status='abort-write', reason=_RUN_REASONS['abort-write'], backup=stamp)
             _write_last(info, step)
             return 'abort-write', info
         info = _info(p, status=st, reason=_RUN_REASONS.get(st) or _REASONS.get(st, ''), backup=stamp)
+        if step.ungated:
+            info['records'] = n_records
         if st == 'done':
             info['secrets'] = {m: sorted(s) for m, s in p['secrets'].items()}      # лише імена ключів
             _write_last(info, step)

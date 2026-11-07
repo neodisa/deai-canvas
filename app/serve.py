@@ -1769,11 +1769,9 @@ class _TrackView:
         if self._adapter is _LAZY:
             if not _liga_like(self.sp):
                 self._adapter = False
-            elif self._raw is None:
-                self._adapter = True
-            else:
+            else:                                       # єдиний критерій — `tracks.adapter_applies` (його ж питає міграція 4d-4a)
                 path = self.sp.get('path') if isinstance(self.sp, dict) else None
-                self._adapter = not tracks.normalize(self._raw[0], path, roots=False)
+                self._adapter = tracks.adapter_applies(None if self._raw is None else self._raw[0], path)
         return self._adapter
 
     def _light(self):
