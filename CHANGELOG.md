@@ -3,6 +3,139 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.20.0] — DD.MM.YYYY
+
+Stage 4d-4a: the tracks of LIGA become explicit for good, and the implicit track adapter leaves the runtime. A **fourth migration
+step, `liga-4d4a`**, writes the tracks of the adapter into the LIGA `space.json` (when the adapter still applies) and gives the old
+task records that have a `profile` but no `track` a `track` equal to it. After that the runtime has no adapter: `tracks.of_task`
+reads only `track`, the API does not return `profile`, and `profile` is read on three boundaries only (`task-new`, the shared
+registry, `_liga_flow`). For a person nothing changes in the usual case: the same labels, `?ds=`, repositories and folders of new
+tasks. The differences are listed below.
+Stage 4d-4 is split into three releases (the tracks, 4d-4a, 0.20.0; the last copies and the implicit provider, 4d-4b, 0.21.0; the
+`integrations` flag and the API value `'legacy'`, 4d-4c, 0.22.0); 1.0 comes after 0.22.0. Deleting the **originals outside
+`tasks.json`** (environment variables, the `pipeline-feedback` files) is not the job of Deai: they are shared with the separate
+LIGA tool. Deai stops reading them in 4d-4b; removing them is a decision of the person when that tool goes.
+Design: `docs/superpowers/specs/2026-11-07-liga-tracks-final-design.md`; plan: `docs/superpowers/plans/2026-11-07-liga-tracks-final.md`.
+The behaviour of 0.19.0 is pinned by the snapshot `tests/fixtures/liga-migration/before-4d4a.json`.
+
+### Added
+
+- **A fourth migration step `liga-4d4a`** in `app/liga_migrate.py` (`ALL_STEPS = (A, B, C, D)`). The first step without roles and
+  without the parity gate (`ungated`). It has its own mark, its own dated backup and its own restore. On the first start of 0.20
+  the server runs the steps in order; a user who jumps from 0.16 gets **four steps at one start and four backups**.
+- **What `liga-4d4a` writes**:
+  - **the tracks** — exactly when the adapter applies now (`tracks` is absent, or empty/unusable after `tracks.normalize`; the
+    single predicate `tracks.adapter_applies(raw, path)`): the ids of the adapter in its order, `label`, `root`, `repo`, `ds = id`,
+    `default_track: "united"`, with no parity gate. A non-empty `tracks` of the person is never touched (`tracks-present`);
+  - **the records** — every task of the LIGA `tasks.json` whose `track` is not a non-empty string and whose `profile` is one gets
+    `track = profile` (the value as is: LIGA always kept a free string). `profile` stays in the record. The file is written under
+    the write lock, with `tasks.json.bak` next to it; a failed write is `abort-records` and `space.json` is not changed;
+  - the mark `migrations.liga-4d4a` (`at`, `roles: []`, `tracks`, `records`, `notes`, `backup`).
+- **Notes of the mark** (codes only, no paths or values; ids of tracks are allowed), printed in one line at the start and in `status`
+  (`напрямки: записано; записи: N; нотатки: …`):
+  - `root-dropped:<id>` — `normalize` dropped the root of the track (a system or hidden folder, an overlap with another space): a
+    new task of that track goes to the folder of the LIGA space;
+  - `root-rebased:<id>` — a relative root of the adapter was rebased onto the folder of the space (the adapter's own behaviour,
+    now visible);
+  - `unknown-values` — some task has a non-empty track that is not in the list (only non-empty values count; the gate of 4d-3a
+    still counts empty ones);
+  - `default-root-differs` — the root of `united` differs from the shared root of the adapter;
+  - `non-id-keys` — a key of `design_work_roots` / `profile_repos` is not an `ID_RE` id: its own root/repo no longer applies to NEW tasks.
+- **Codes:** `abort-tracks` (the computed ids or the default differ from the adapter, and always for more than 20 ids — see Known
+  limits) and `abort-records` (the write of the records failed) in `ABORT_CODES`; `skip-nothing` now also requires that there are
+  no records to fix. `Step.ungated` is the new field of the step.
+- **A guard `NoTracksAdapter`** (AST, `tests/test_no_adapter.py`): `app/**/*.py` (except `liga_migrate.py`) and `bin/*.py` do not
+  mention `legacy_tracks`, `legacy_root`, `legacy_repos`, `_LEGACY_LABELS`, `profile_repos`, and do not read `profile` from a
+  record. The adapter lives on as private `_legacy_*` names inside `liga_migrate` (the migration still reads the old root).
+- **A line at the start** for a LIGA that was not migrated (`held`, a folder in git, an unreadable file): «напрямки ЛІГИ не
+  мігровані — нові задачі лягають у теку простору».
+- **`serve.default_task_root(cfg)`** — `design_work_root` of the config, else `~/deai-work`; `track_root(space, track_id)` lost its
+  `cfg` argument and returns: the root of the found track, the root of the default track, the folder of the space, or `None` (an
+  implicit space without a path).
+
+### Status codes
+
+- **New codes:** `abort-tracks`, `abort-records` (`ABORT_CODES`); the notes above (not statuses).
+- `skip-nothing` of 4d-4a: no tracks to write and no record without `track`; the mark is not written.
+- `skip-held`, `skip-busy`, `skip-integrations-off`, `skip-path-in-git`, `skip-no-path`, `skip-tasks-unreadable` apply as in 0.19.
+  `skip-busy`, `skip-nothing` and the other quiet statuses do not print the «tracks not migrated» hint.
+
+### Unchanged public contract
+
+- The tests `tests/legacy-golden.test.mjs` and `GoldenPinTest` are green without a re-shoot; the snapshots of 4d-3a … 4d-3c still
+  pass (their stands run the fourth step or pin `STEPS` to the first three). The snapshot of 0.19.0 for this stage is
+  `before-4d4a.json`, compared by `AfterMigrationParity4d4a` on four stands (parity, notes, explicit tracks, an ordinary space)
+  with an exact table of expected differences.
+- Retired with their subject, with a correspondence table in the commit messages: the 0.14.0 classes `LegacyTracks`,
+  `ServerLegacyParity`, `LegacyParity`, `BinParity`. The adapter-specific ones moved to `tests/test_liga_adapter.py` and aim at
+  `liga_migrate._legacy_*`.
+- `profile` stays in the records of `tasks.json` on disk and is still written into new LIGA records (old colleagues and the external
+  dev-pipeline read it). Nothing is removed from `tasks.json` except by the person.
+
+### Upgrading
+
+- **Four steps, four backups.** A user who comes from 0.16 gets `<stamp>-liga-4d3a`, `-4d3b`, `-4d3c`, `-4d4a`; from 0.17 the last
+  three; from 0.18 the last two; from 0.19 only the fourth. Roll them back in reverse order (the newest first).
+- **⛔ Before a downgrade to 0.19 run `python3 bin/migrate_liga.py restore <stamp-d> --hold`.** The restore returns `space.json`
+  (the tracks written by the step disappear; the mark of the step goes) and **does not return `tasks.json`**: it is the live file of the
+  person (new tasks, statuses), and putting an old copy back would erase them. The records keep `track = profile`; that is safe for
+  0.19, whose `of_task` reads `track` first and then `profile` (they are equal). `tasks.json.bak` next to the file is **manual**: copy
+  it back yourself only if you want the records as they were.
+- **Downgrade to 0.18 (steps c and d applied):** `restore <stamp-d> --hold`, `restore <stamp-c> --hold`. **To 0.17:** also
+  `restore <stamp-b> --hold`; **to 0.16:** also `restore <stamp-a> --hold`. An earlier step alone is refused
+  (`refuse-later-applied`) while a later one is applied.
+- Nothing to rotate: the step copies no secret.
+- The first start of 0.20 prints the notes of the step; read the line and check the tracks on the Connections screen or in
+  `space.json` if it names `root-dropped`, `root-rebased`, `default-root-differs` or `non-id-keys`.
+
+### Deliberate differences from 0.19.0
+
+(everything else is checked against the snapshot, on a migrated and a non-migrated stand; the differences are pinned literally in
+`AfterMigrationParity4d4a`)
+
+1. **After the migration the tracks of LIGA are explicit** in `space.json`: `capabilities` and the screens read them like in any
+   space. For a LIGA that is not migrated (the step skipped or aborted) there are **no tracks**: the label of a task is its raw
+   value, the folder of a new task is the folder of the space, and the start says so.
+2. **Records of a task with only `profile` in an ordinary (non-LIGA) space lose the label and `?ds=`.** Such a space never wrote
+   `track`, so after 0.20 a record with only `profile` has no track. (For LIGA the step copies `profile` into `track`, so nothing is lost.)
+3. **`task-new` is strict about `track` in every space**, LIGA too: `track` not of the shape of an id (`'United'`, any uppercase or
+   odd character) → 400 **`bad-track`** (malformed); a well-formed id that is not in the list → **`unknown-track`**. A `track` that is not a
+   string → `bad-track` as before. A layer-off run (`DC_TASKS_FILE` without `DEAI_HOME`) has no tracks, so any `track` there is
+   `unknown-track`.
+4. **`profile` of `task-new` is a lenient boundary input.** It is used only when it is a track id of the space; otherwise it is ignored,
+   and the task goes to the default track. So `profile: 'United'` or `'zzz'` gives a task in the default track `united` with the
+   repository mapping of `united` (the `gitlab` key), and `profile`/`track` of the record equal `united` (0.19 stored the raw
+   profile and had no `gitlab` key). A conflict of `track` with a used `profile` is `bad-track`.
+5. **Unknown or missing track → the root of the default track** for a new task (`task-new`) and for the folder of a task pulled
+   from the registry (`bin/registry.py`), instead of the shared root of the adapter. For known tracks nothing changes.
+6. **`/api/task` and `/api/tasks` do not return `profile`.** No client reads it; `track` stays.
+7. **`bin/roots.py` never moves a task whose track is missing or unknown, or whose track has no root of its own.** They are listed
+   with the reason «напрямок невідомий — не чіпаю» / «корінь напрямку не задано — не чіпаю». The «own root» flag of a track now
+   means that the explicit track has a `root`. Before, such tasks were pulled into the shared root or the folder of the space.
+8. **Registry pull: an entry WITHOUT its own `track` was written by an old machine, so its `profile` is authoritative:** the local
+   `track` is replaced with it (a hand-edited local track is overwritten until the first 0.20 push). An entry with a `track` keeps
+   it. The first `push` from 0.20 writes `track` into the registry entries.
+9. **`_liga_flow` without a LIGA space in the registry** answers `no-space` instead of `no-integrations-space` for a sign that comes
+   from `profile` alone, because the source of the repositories is now the explicit tracks of that space.
+10. **The notes of the mark are visible effects on NEW tasks only** (the old folders stay where they are): `root-dropped` (a new task
+    goes to the folder of the space), `non-id-keys` (the root/repo of such a key no longer applies), `default-root-differs` (an
+    unknown track of the registry goes to the root of `united`).
+11. **`restore` of the fourth step returns `space.json` only** (see Upgrading).
+
+### Known limits
+
+- **`abort-tracks` for more than 20 track ids is permanent** (`MAX_TRACKS = 20`): the person must clean `profile_repos` /
+  `design_work_roots` of the old file; LIGA stays without tracks in `space.json`, new tasks go to `default_task_root`.
+- **A small TOCTOU between the re-stat and the atomic write of the records** (`_commit_records`): a concurrent external edit of
+  `tasks.json` in that window is overwritten (the `.bak` has the pre-step bytes).
+- **`tasks.json.bak` is a manual restore** (see Upgrading).
+- **`profile` stays in the records of `tasks.json`.** The external dev-pipeline reads `profile` straight from the records and posts
+  `profile` to `task-new`; this is covered by the boundary rules, but it is a risk of that tool, not of this repo.
+- The first `push` of 0.20 adds `track` to the registry entries of the machine (no `status` drift: only keys present in the entry are compared).
+- `serve._liga_like` has no callers after this stage (pinned by `LigaLikePin`); it goes in 4d-4c.
+- **Backlog:** the live tests need a git identity in `HOME` (`overview-comments` #14/#20 fail with a bare temporary `HOME`); this is not a regression.
+- A partial migration is final; the missing `flock` on Windows and a CLI `run` racing with UI edits: as before.
+
 ## [0.19.0] — 06.11.2026
 
 Stage 4d-3c: the last of the three steps that turn the LIGA space into an ordinary one. The role `publish` of LIGA becomes an

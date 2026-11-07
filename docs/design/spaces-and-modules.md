@@ -14,9 +14,11 @@ module `supabase-teams`, 0.14.0), stage 4d-1 (the profile of a task becomes the 
 stage 4d-2 (the implicit provider instead of the literal `'legacy'`, the layer-off seam and the isolation law, 0.16.0) and
 stage 4d-3a (the migration of the LIGA space: explicit tracks and the roles `tracker`, `dashboard`, `notify`, 0.17.0) and stage
 4d-3b (the second migration step: the roles `comments` and `vcs` of LIGA as explicit modules, 0.18.0) and stage 4d-3c (the
-third migration step: the role `publish` of LIGA as the explicit module `vercel-publish`, 0.19.0) — see *Status* at the end.
-Next: stage 4d-4 (0.20.0), when the original setup becomes an ordinary space (the API value `'legacy'` goes there, with the
-implicit provider).
+third migration step: the role `publish` of LIGA as the explicit module `vercel-publish`, 0.19.0) and stage 4d-4a (the fourth
+migration step: the tracks of LIGA explicit for good, the implicit track adapter and the reading of `profile` from records gone,
+0.20.0) — see *Status* at the end.
+Next: stage 4d-4b (0.21.0, the last copies and the implicit provider) and 4d-4c (0.22.0, the `integrations` flag and the API
+value `'legacy'`), when the original setup becomes an ordinary space.
 
 ## Goal
 
@@ -126,7 +128,10 @@ canvas for their workflow without touching the core.
        - ✅ **4d-3a** (0.17.0) — the mechanism, the tracks and the roles `tracker`, `dashboard`, `notify`;
        - ✅ **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
        - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stays for a non-migrated LIGA: it goes from 4d-4);
-     - **4d-4** (0.20.0) — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go.
+     - **4d-4** — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go. Three releases:
+       - ✅ **4d-4a** (0.20.0) — the tracks of LIGA explicit (the fourth migration step), no adapter in the runtime, `profile` on the boundaries only;
+       - **4d-4b** (0.21.0) — the last copies, the implicit provider, the core stops reading the originals;
+       - **4d-4c** (0.22.0) — the `integrations` flag, the API value `'legacy'`, the fallback JS branches, `_liga_flow`, the `/api/gitlab-*` aliases;
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
 Each stage gets its own spec, plan and tests.
@@ -665,15 +670,33 @@ sub-releases of 4d-3. What is built:
   green without a re-shoot.
 - **Left for 4d-4:** see below.
 
+### Stage 4d-4a — the tracks of the LIGA space, explicit for good (0.20.0)
+
+- **A fourth migration step, `liga-4d4a`**, with no roles and no parity gate: it writes the tracks of the old adapter into
+  `space.json` whenever the adapter still applied (`tracks.adapter_applies`), and gives every old task record that has a `profile` but
+  no `track` a `track` equal to it (`tasks.json` is written under the write lock, with `tasks.json.bak`). What the old parity gate
+  refused over becomes the **notes** of the mark (`root-dropped`, `root-rebased`, `unknown-values`, `default-root-differs`,
+  `non-id-keys`). `restore` of the step returns `space.json` only.
+- **The runtime has no adapter:** `of_task` reads `track` only; `track_root(space, track_id)` has no `cfg`; `default_task_root(cfg)` is the
+  fallback of `task-new`. The adapter lives on as private `_legacy_*` names in `liga_migrate`; an AST guard keeps it out of the rest.
+- **`profile` is a boundary:** the input of `task-new` (lenient), the pull of the shared registry (`_track_of_entry`) and `_liga_flow`;
+  it is still written into new LIGA records for old colleagues.
+- Details, differences and limits: `CHANGELOG.md`, `[0.20.0]`; design: `docs/superpowers/specs/2026-11-07-liga-tracks-final-design.md`.
+
 ### What stays for later
 
-- **Left for 4d-4** (stage 4d; 4d-1, 4d-2, 4d-3a, 4d-3b and 4d-3c are done; what stays of the literal `'legacy'` — the API
-  value of `capabilities` for a non-migrated LIGA, the build manifest, the id of the implicit space — goes in 4d-4, with the
+- **Left for 4d-4b / 4d-4c** (stage 4d; 4d-1, 4d-2, 4d-3a, 4d-3b, 4d-3c and 4d-4a are done; what stays of the literal `'legacy'` —
+  the API value of `capabilities` for a non-migrated LIGA, the build manifest, the id of the implicit space — goes with the
   implicit provider):
-  - **4d-4** (0.20.0): the `integrations` flag and the old aliases go — `profile` in the records and the API, the thin wrapper
-    `profile_repos`, and the `profile`-only look of `_liga_flow`; the move of `gitlab_ssh_key` / `gitlab_host_ip` from the root of
-    `tasks.json` into the settings of `git-sync` and the removal of the originals (the copied secrets stay until then). The tracks that 4d-3a could not migrate move here, so
-    `tracks._LEGACY_LABELS`, the default `united` and the adapter of 4d-1 go in 4d-4.
+  - ✅ **4d-4a** (0.20.0, done): the tracks of LIGA are explicit (`liga-4d4a`), `tracks.of_task` reads `track` only, `profile` is
+    read on three boundaries (`task-new`, the registry pull, `_liga_flow`), `legacy_*`/`profile_repos` live only inside
+    `liga_migrate`. See `CHANGELOG.md`, `[0.20.0]`.
+  - **4d-4b** (0.21.0): the move of `gitlab_ssh_key` / `gitlab_host_ip` from the root of `tasks.json` into the settings of
+    `git-sync`, the preview password into `vercel-publish`, the implicit provider goes, the core stops reading the originals
+    (the root of `tasks.json`, the environment, `pipeline-feedback`). Deleting the originals outside `tasks.json` is not Deai's
+    job: they are shared with the separate LIGA tool.
+  - **4d-4c** (0.22.0): the `integrations` flag (the outgoing gate, `static-publish` by default, `task-new`), the API value `'legacy'`,
+    the fallback JS branches, `_liga_flow`, the `/api/gitlab-*` route aliases, `serve._liga_like`.
   Not planned in 4d-1: a UI to edit tracks, a track choice in the «New task» dialog.
 
 - No role is reserved any more (every role of the map is called by the core since 4c-3).

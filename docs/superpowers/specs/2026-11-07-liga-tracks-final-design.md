@@ -149,8 +149,9 @@ AST-охоронець `NoTracksAdapter`: `app/**/*.py` (крім `liga_migrate.
 
 ## Свідомі відмінності (для людини)
 
-1. API `task-new` у ЛІЗІ не приймає довільний рядок напрямку: `track: 'United'` → 400 `unknown-track`; `profile: 'United'`
-   ігнорується (задача — у `united`). Інтерфейс таких значень не шле (вбудованої форми нової задачі в ЛІГИ нема).
+1. API `task-new` у ЛІЗІ не приймає довільний рядок напрямку: `track: 'United'` (не за шаблоном id) → 400 `bad-track`;
+   `unknown-track` — лише для добре сформованого id, якого нема в переліку; `profile: 'United'` ігнорується (задача — у `united`,
+   з його репо-маппінгом `gitlab`). Інтерфейс таких значень не шле (вбудованої форми нової задачі в ЛІГИ нема).
 2. Нотатки `root-dropped`/`non-id-keys`/`default-root-differs` — корінь НОВОЇ задачі (див. таблицю §1); старі теки на місці.
 3. `/api/task` і рядки задач без ключа `profile`.
 4. Немігрована ЛІГА — без напрямків (§2).
@@ -187,3 +188,36 @@ AST-охоронець `NoTracksAdapter`: `app/**/*.py` (крім `liga_migrate.
   `create_space`, `has_markers` при першій міграції реєстру, JS `integrations !== false`.
 - **Публічне `'legacy'`:** `API_IMPLICIT`, JS (`connections-model.js`, `spaces-model.js`, `connections-view.js`), золоті файли,
   `NoLegacyLiteral`, `PublishJsGuard`; `build: 'legacy'` у маніфесті збірки читає `ops/reseal_gate.py` — інше значення, лишається.
+
+## Implementation notes
+
+Що в реалізації відрізняється від тексту спеки (код — правда; план `2026-11-07-liga-tracks-final.md` має перевагу над текстом
+спеки). Поправки плану (номери — з розділу «Поправки до спеки»):
+
+1. `restore` не повертає `tasks.json` (лише `space.json`; `tasks.json.bak` — ручний). 2. `Step.roles` — кортеж пар, нове поле
+`ungated`. 3. `unknown-values` рахує лише непорожні значення. 4. П'ять кодів нотаток (додано `root-rebased`). 5. `task_new` без
+`root` бере `default_task_root(cfg)`, бо неявний простір має `path == ''`; `track_root` без `cfg` може дати `None`. 6. Шар-OFF —
+без напрямків. 7. Нові `abort-records`, постійний `abort-tracks` для >20 id; `skip-nothing` вимагає й відсутності записів. 8. Більше
+читачів `legacy_*`, ніж у спеці (`liga_migrate` отримав приватні `_legacy_*`). 9. `_legacy_cfg` видалено разом з `profile_repos`.
+10. Зростання `ALL_STEPS` до чотирьох ламає стенди 4d-3a…3c (піни `STEPS[:3]`). 11. Точна поведінка 0.19 для `tracks: []`.
+12. `roots.plan`/`roots_in_use` приймають `view`. 13. Pull реєстру сам виставляє `track` з `profile`. 14. `abort-tracks` для >20 id —
+постійний. 15. Зовнішній dev-pipeline читає `profile` напряму — ризик не цього репо. 16. `_liga_flow` без простору ЛІГИ дає
+`no-space`.
+
+Після поправок, із ревʼю задач:
+
+- `_records_writable` перевіряє й `tasks.json.bak`; на успіху `.bak` = байти до міграції, на збої `tasks.json` не змінено.
+- Pull реєстру: запис БЕЗ власного `track` написала стара машина, тож `profile` — істина, локальний `track` замінюється; вигляд
+  `_PULL_VIEW` скидається у `finally`.
+- `task-new`: `profile`, що не є id напрямку, ігнорується для ВСІХ просторів (задача — у `united` з його `gitlab`-маппінгом);
+  `track` суворий (`bad-track` — не за шаблоном id; `unknown-track` — лише добре сформований id поза переліком) для всіх, шар-OFF — `unknown-track`.
+- Охоронець `NoTracksAdapter` ловить читання `profile` і в циклі за списком чи множиною літералів, не лише за кортежем.
+- `bin/roots.py plan` НЕ стягує задачу відомого напрямку без власного кореня (після кроку D корінь відкинуто) у теку простору: вона в
+  плані з причиною «корінь напрямку не задано» і «не чіпаю» (як невідомий напрямок). Стенд «notes» `AfterMigrationParity4d4a`:
+  `roots_cli/plan` a-1, a-3, a-7 закріплені буквально. Мутація умови в `plan` червонить `test_roots` і стенд «notes».
+- `test_tracks.ApiTracks` більше не мутує випадкову теку через `.replace` (мигав). `bin/test_registry.TestFixturePathReason.
+  test_tmpdir_equal_to_home_does_not_poison_real_tasks` червоніє, коли тимчасовий `HOME` лежить усередині тимчасової теки — це
+  властивість стенда, не регресія (так само на 0.19).
+
+Мутації: кожну нову перевірку доводили мутацією одного рядка під `python3 -B` (файл відновлено, `sha256` до/після збігається);
+повна таблиця — у звітах виконавців задач 1–8.
