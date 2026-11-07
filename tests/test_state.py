@@ -507,12 +507,13 @@ class TaskFlag(unittest.TestCase):
         return self.line_of(self.state_with(lambda cfg, tid, task: None), 'Пайплайн v')
 
     def test_header_shows_the_track_with_the_new_label(self):
-        """4d-1: шапка показує напрямок задачі — `track`, інакше `profile`, інакше «—»; підпис «Напрямок:», не «Профіль:»."""
+        """4d-1: шапка показує напрямок задачі — `track`, інакше «—»; підпис «Напрямок:», не «Профіль:». 4d-4a: `profile` у записі
+        більше не читається (було: лише `profile` → «Напрямок: tool»; міграція ЛІГИ дописує `track`, реєстр — на межі пулу)."""
         only_track = self._track_header(track='mobile')
         self.assertIn('Напрямок: mobile ·', only_track)
         self.assertNotIn('Профіль', only_track)
-        self.assertIn('Напрямок: tool ·', self._track_header(profile='tool'), 'запис машини на 0.14.0: лише `profile`')
-        self.assertIn('Напрямок: mobile ·', self._track_header(track='mobile', profile='tool'), '`track` перемагає `profile`')
+        self.assertIn('Напрямок: — ·', self._track_header(profile='tool'), 'запис лише з `profile` — напрямку нема')
+        self.assertIn('Напрямок: mobile ·', self._track_header(track='mobile', profile='tool'), '`track` — єдине джерело')
         self.assertIn('Напрямок: — ·', self._track_header())
 
     def test_the_label_is_gitlab_in_the_liga_space_and_git_in_another_one(self):

@@ -793,7 +793,13 @@ class TrackerOverview(_TmpCase):
         want = self.snap['tasks_overview']
         self.assertEqual(calls, [])
         self.assertEqual(got['status'], 200)
-        self.assertEqual(got['body'], {**want['body'], 'tracker': None})
+        # 4d-4a (спека, відмінності 3 і 4): рядки «Моїх» більше не несуть `profile`, а задача лише з `profile` (знімок засіяв
+        # `profile: 'tool'` без `track`) втрачає похідну мітку: `['tool']` → `[]`. Решта тіла — ТА САМА, що записав знімок 0.12.0
+        want_body = {**want['body'], 'tracker': None}
+        self.assertTrue(all(m['profile'] == 'tool' and m['tags'] == ['tool'] for m in want_body['mine']),
+                        'знімок і справді мав `profile` і похідну мітку з нього')
+        want_body['mine'] = [{**{k: v for k, v in m.items() if k != 'profile'}, 'tags': []} for m in want_body['mine']]
+        self.assertEqual(got['body'], want_body)
         self.assertEqual(got['volatile'], want['volatile'])
         self.assertEqual(serve._TRACKER_CACHE, {}, 'ізоляція нічого не кешує')
 

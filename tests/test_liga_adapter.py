@@ -330,5 +330,58 @@ class LegacyParity(_Home):
         self.assertIsNone(lm._legacy_label(lm._legacy_of_task({'profile': 'x' * 40})))
 
 
+class LegacyReposTable(unittest.TestCase):
+    """Було `test_task_tags.ProfileReposTest` (4b-3, `serve.profile_repos()`): таблиця «напрямок → репо» з кореня старого
+    `tasks.json`. 4d-4a прибрав `serve.profile_repos` і читання файла; лишилась чиста функція `liga_migrate._legacy_repos(cfg)`
+    (її питає крок `liga-4d4a`). Правила таблиці ті самі, тести перенесено зі зміною обʼєкта; кроки «файла нема / не JSON / глибока
+    вкладеність» належали завантажувачу `serve._legacy_cfg` — він зник разом із читачем (кроки з нечитабельним КОРЕНЕМ `cfg` лишились)."""
+
+    REPO = 'git@git.example:org/a.git'
+
+    def test_keeps_only_well_formed_pairs(self):
+        cfg = {'profile_repos': {'alpha': self.REPO, 'Bad Key': 'x', 'beta': '', 'gamma': 'has space', 'delta': 5}}
+        self.assertEqual(lm._legacy_repos(cfg), {'alpha': self.REPO})
+
+    def test_profile_key_form(self):
+        ok, bad = 'a-1', ('A', 'a_b', 'a b', '', 'x' * 33, 'а')
+        self.assertEqual(lm._legacy_repos({'profile_repos': {ok: self.REPO, **{b: self.REPO for b in bad}}}), {ok: self.REPO})
+        self.assertEqual(lm._legacy_repos({'profile_repos': {'x' * 32: self.REPO}}), {'x' * 32: self.REPO})
+
+    def test_repo_is_printable_ascii_without_spaces_and_is_trimmed(self):
+        cfg = {'profile_repos': {'a': '  ' + self.REPO + ' ', 'b': 'x\ny', 'c': 'x\x7fy', 'd': 'репо', 'e': '  '}}
+        self.assertEqual(lm._legacy_repos(cfg), {'a': self.REPO})
+
+    def test_repo_cannot_start_with_a_dash(self):
+        """`-…` git прочитав би як опцію (`--upload-pack=…`): такі репо відкидаються, дефіс усередині — ні."""
+        cfg = {'profile_repos': {'a': '--upload-pack=x', 'b': '-x', 'c': ' -x', 'd': 'git@git.example:org/a-b.git'}}
+        self.assertEqual(lm._legacy_repos(cfg), {'d': 'git@git.example:org/a-b.git'})
+
+    def test_empty_when_there_is_no_usable_config(self):
+        for label, cfg in (('нема ключа', {'tasks': {}}), ('не словник', {'profile_repos': ['a']}),
+                           ('рядок', {'profile_repos': 'a'}), ('null', {'profile_repos': None}),
+                           ('корінь — не обʼєкт', ['x']), ('корінь — None', None), ('порожній', {})):
+            with self.subTest(label):
+                self.assertEqual(lm._legacy_repos(cfg), {})
+
+    def test_the_constant_is_gone(self):
+        import serve
+        self.assertIs(hasattr(serve, 'PROFILE_REPOS'), False)
+        self.assertIs(hasattr(serve, 'profile_repos'), False)
+
+    def test_config_reproduces_the_snapshot_of_the_old_constant(self):
+        """Таблиця з конфігу дає ті самі репо, що давала константа (знімок `before-4b3.json`): `united`/`liga360`/`seo` — з
+        репо, `tool` — без. (Друга половина колишнього тесту — `gitlab` запису й `_liga_flow` — тепер у `test_task_tags`: їх дає
+        рантайм з ЯВНИХ напрямків простору, а не з цієї таблиці.)"""
+        with open(os.path.join(_HERE, 'fixtures', 'task-tags', 'before-4b3.json'), encoding='utf-8') as f:
+            snap = json.load(f)['gitlab']
+        self.assertGreaterEqual(len(snap), 4, 'знімок має профілі з репо й без')
+        table = {p: v['gitlab']['repo'] for p, v in snap.items() if v['gitlab']}
+        self.assertEqual(sorted(table), ['liga360', 'seo', 'united'])
+        got = lm._legacy_repos({'profile_repos': table})
+        for profile, want in snap.items():
+            with self.subTest(profile=profile):
+                self.assertEqual(got.get(profile), want['gitlab']['repo'] if want['gitlab'] else None)
+
+
 if __name__ == '__main__':
     unittest.main()

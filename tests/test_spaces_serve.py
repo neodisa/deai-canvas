@@ -179,7 +179,7 @@ class Fixture(unittest.TestCase):
         _task_dir(cls.a_dir, 'a')
         _write(cls.legacy_file, {'current': 'a', 'design_work_root': work, 'registry': {},
                                  'tasks': {'a': {'title': 'Альфа', 'dir': cls.a_dir,
-                                                 'profile': 'tool'}}})
+                                                 'track': 'tool'}}})          # 4d-4a: було `profile` — рантайм читає лише `track`
         # Другий простір `P` з задачею `x` (+ `gone`: є в реєстрі, теки на машині нема).
         cls.p_path = os.path.join(cls.home, 'deai-work', 'p')
         cls.p_id = spaces.create_space('P', 'space-2', cls.p_path)
@@ -188,9 +188,9 @@ class Fixture(unittest.TestCase):
         _task_dir(cls.x_dir, 'x')
         cls.p_file = os.path.join(cls.p_path, 'tasks.json')
         _write(cls.p_file, {'design_work_root': cls.p_path, 'current': 'x', 'tasks': {
-            'x': {'title': 'Ікс', 'dir': cls.x_dir, 'profile': 'tool'},
+            'x': {'title': 'Ікс', 'dir': cls.x_dir, 'track': 'tool'},
             'gone': {'title': 'Зникла', 'dir': os.path.join(cls.p_path, 'nowhere'),
-                     'profile': 'tool'}}})
+                     'track': 'tool'}}})
         # Порожній простір `E`.
         cls.e_path = os.path.join(cls.home, 'deai-work', 'e')
         cls.e_id = spaces.create_space('E', 'space-3', cls.e_path)
@@ -417,7 +417,7 @@ class RequestSpace(Fixture):
         ассет не відповідає JSON-409 (ця відмова — для API, а не для картинки)."""
         self.restore_bytes(self.p_file)
         cfg = _read(self.p_file)
-        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'profile': 'tool'}
+        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'track': 'tool'}
         _write(self.p_file, cfg)
         st, body = self.get('/root-abs.svg', {'Referer': f'{self.base}/t/a/commented?it=it1'})
         self.assertEqual(st, 404)
@@ -698,7 +698,7 @@ class CentralResponses(Fixture):
         тому велике тіло мусить бути вичитане центральною гілкою."""
         self.restore_bytes(self.p_file)
         cfg = _read(self.p_file)
-        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'profile': 'tool'}
+        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'track': 'tool'}
         _write(self.p_file, cfg)
         for path, headers in (('/api/task', {'X-Canvas-Task': 'a'}), ('/t/a/api/task', {})):
             with self.subTest(path=path):
@@ -852,13 +852,13 @@ class Cli(Fixture):
         self.patched_state()
         self.restore_bytes(self.p_file)
         cfg = _read(self.p_file)
-        cfg['tasks']['x']['profile'] = None
+        cfg['tasks']['x']['track'] = None             # 4d-4a: було `profile = None` — фікстура несе напрямок у `track`
         _write(self.p_file, cfg)
         rc, out, err = _run(state.main, ['--task', 'x'])
         self.assertEqual(rc, 0, err)
         self.assertIn('Напрямок: — ·', out)
         self.assertNotIn('None', out)
-        rc, out, _ = _run(state.main, ['--task', 'a'])                # із профілем — як було
+        rc, out, _ = _run(state.main, ['--task', 'a'])                # з напрямком — як було
         self.assertIn('Напрямок: tool ·', out)
 
     def test_state_unknown_task_is_exit_2(self):
@@ -1594,7 +1594,7 @@ class TaskResponses(Fixture):
         self.assertEqual((st, body['current'], [t['id'] for t in body['tasks']]), (200, 'a', ['a']))
         self.assertEqual(body['space']['id'], self.legacy_id)
         self.assertNotIn('space', body['tasks'][0], 'без all=1 рядки лишаються як були')
-        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'profile', 'track', 'missing', 'tags'})   # `tags` — 4b-3, `track` — 4d-1
+        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'track', 'missing', 'tags'})   # `tags` — 4b-3, `track` — 4d-1; `profile` прибрано 4d-4a
         spaces.switch_space(self.p_id)
         body = self.jget('/api/tasks')[1]
         self.assertEqual((body['current'], body['space']['id']), ('x', self.p_id))
@@ -1607,7 +1607,7 @@ class TaskResponses(Fixture):
                          {'a': self.legacy_id, 'x': self.p_id, 'gone': self.p_id})
         self.assertEqual({t['id']: t['missing'] for t in body['tasks']},
                          {'a': False, 'x': False, 'gone': True})
-        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'profile', 'track', 'missing', 'tags', 'space'})   # `tags` — 4b-3, `track` — 4d-1
+        self.assertEqual(set(body['tasks'][0]), {'id', 'title', 'jira', 'track', 'missing', 'tags', 'space'})   # `tags` — 4b-3, `track` — 4d-1; `profile` прибрано 4d-4a
 
     def test_tasks_all_restores_the_request_space_for_the_rest_of_the_response(self):
         """Обхід просторів не лишає запит у ОСТАННЬОМУ з них: `space` і `current` у відповіді —
@@ -1715,7 +1715,7 @@ class TaskResponses(Fixture):
     def test_tasks_all_keeps_a_duplicate_id_visible_in_both_spaces(self):
         self.restore_bytes(self.p_file)
         cfg = _read(self.p_file)
-        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'profile': 'tool'}
+        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'track': 'tool'}
         _write(self.p_file, cfg)
         rows = [(t['id'], t['space']) for t in self.jget('/api/tasks?all=1')[1]['tasks'] if t['id'] == 'a']
         self.assertEqual(sorted(rows), sorted([('a', self.legacy_id), ('a', self.p_id)]))
@@ -1795,7 +1795,7 @@ class TaskSwitch(Fixture):
     def test_an_id_in_two_spaces_is_ambiguous_409_and_nothing_moves(self):
         self.restore_bytes(self.p_file)
         cfg = _read(self.p_file)
-        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'profile': 'tool'}
+        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'track': 'tool'}
         _write(self.p_file, cfg)
         before = (_md5(self.reg_path), _md5(self.legacy_file), _md5(self.p_file))
         st, body = self.post('/api/task-switch', {'id': 'a'})
@@ -2081,7 +2081,7 @@ class TaskNew(Fixture):
 
     def test_an_id_already_in_two_spaces_is_still_just_a_400(self):
         cfg = _read(self.p_file)
-        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'profile': 'tool'}
+        cfg['tasks']['a'] = {'title': 'Дубль', 'dir': self.a_dir, 'track': 'tool'}
         _write(self.p_file, cfg)
         st, body = self.post('/api/task-new', {'id': 'a', 'space': self.e_id})
         self.assertEqual((st, body['code']), (400, 'task-exists'))
@@ -2292,7 +2292,7 @@ class Bare(Fixture):
             cls.a_dir = os.path.join(cls.tmp, 'work', 'a')
             _task_dir(cls.a_dir, 'a')
             _write(cls.legacy_file, {'current': 'a', 'design_work_root': os.path.join(cls.tmp, 'work'),
-                                     'tasks': {'a': {'title': 'Альфа', 'dir': cls.a_dir, 'profile': 'tool'}}})
+                                     'tasks': {'a': {'title': 'Альфа', 'dir': cls.a_dir, 'track': 'tool'}}})
         cls.httpd = serve.make_server(0)
         cls.port = cls.httpd.server_address[1]
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
@@ -2439,7 +2439,7 @@ class BrokenLegacyFirstStart(Bare):
         a_dir = os.path.join(work, 'a')
         _task_dir(a_dir, 'a')
         _write(self.legacy_file, {'current': 'a', 'design_work_root': work, 'registry': {},
-                                  'tasks': {'a': {'title': 'Альфа', 'dir': a_dir, 'profile': 'tool'}}})
+                                  'tasks': {'a': {'title': 'Альфа', 'dir': a_dir, 'track': 'tool'}}})
         st, body = self.jget('/api/spaces')
         self.assertEqual(st, 200)
         self.assertNotIn('legacy_error', body)

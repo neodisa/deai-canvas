@@ -7,8 +7,8 @@
   * `POST /api/task-new` приймає `tags` (400 `bad-tags`), `POST /api/task-tags` замінює їх у ТОМУ просторі, де лежить
     задача, і не чіпає ні поточну задачу, ні поточний простір машини; після запису — `_registry_push`;
   * `bin/registry.py`: `tags` у `SHARED`;
-  * `profile_repos()` — таблиця «профіль → репозиторій» з кореня старого `tasks.json` УСТАНОВКИ (Task 3), а не з коду;
-    `_task_new_write` і `_liga_flow` дають за нею те саме, що давала константа `PROFILE_REPOS` (знімок `before-4b3.json`).
+  * 4d-4a: `serve.profile_repos()` зник; таблиця «напрямок → репозиторій» — `tests/test_liga_adapter.py::LegacyReposTable`;
+    `_task_new_write` і `_liga_flow` беруть репо з ЯВНИХ напрямків простору ЛІГИ (`TaskNewFromTracksTest`, знімок `before-4b3.json`).
 
 Сервер і простори — фікстура `test_spaces_serve.Fixture`: старий простір з інтеграціями (`legacy_id`, задача `a`,
 профіль `tool`), `P` без інтеграцій (`p_id`, задачі `x`, `gone`), порожній `E`. ⛔ Ізоляція та сама: тимчасові `HOME`,
@@ -111,40 +111,44 @@ class TaskTags(unittest.TestCase):
 
     def test_an_explicit_empty_list_is_not_replaced_by_the_profile(self):
         """Людина свідомо прибрала всі мітки: похідна мітка не воскресає."""
-        self.assertEqual(serve.task_tags({'tags': [], 'profile': 'united'}), [])
+        self.assertEqual(serve.task_tags({'tags': [], 'track': 'united'}), [])
 
-    def test_derived_from_the_profile_without_the_key(self):
-        for profile, tag in (('united', 'United'), ('liga360', 'LIGA360'), ('seo', 'SEO'), ('tool', 'tool')):
-            with self.subTest(profile=profile):
-                self.assertEqual(serve.task_tags({'profile': profile}), [tag])
+    def test_derived_from_the_track_without_the_key(self):
+        # 4d-4a: було `…from_the_profile…` — читалось `profile`, а підписи United/LIGA360/SEO давав адаптер ЛІГИ. Тепер читається
+        # `track`, а простір без напрямків (шар вимкнено) віддає значення як є: нижній регістр (відмінність спеки 4)
+        for track, tag in (('united', 'united'), ('liga360', 'liga360'), ('seo', 'seo'), ('tool', 'tool')):
+            with self.subTest(track=track):
+                self.assertEqual(serve.task_tags({'track': track}), [tag])
+                self.assertEqual(serve.task_tags({'profile': track}), [], 'лише `profile` — без похідної мітки')
 
     def test_the_derived_tag_obeys_the_stored_tag_rules(self):
         """Діалог правки заповнюється поточними мітками: похідна, що після збереження розпалась би (кома) чи не пройшла б
         (довга, керівний знак), — не показується; пробіли обрізаються й стискаються."""
         for profile in ('a,b', 'x' * 33, 'a\nb', 'a\x00b', '\x85'):
             with self.subTest(profile=profile):
-                self.assertEqual(serve.task_tags({'profile': profile}), [])
-        self.assertEqual(serve.task_tags({'profile': '  my   tool '}), ['my tool'])
-        self.assertEqual(serve.task_tags({'profile': 'x' * 32}), ['x' * 32])
+                self.assertEqual(serve.task_tags({'track': profile}), [])         # 4d-4a: значення читається з `track`, не з `profile`
+        self.assertEqual(serve.task_tags({'track': '  my   tool '}), ['my tool'])
+        self.assertEqual(serve.task_tags({'track': 'x' * 32}), ['x' * 32])
         # і те, що показано, проходить `normalize_tags` без змін (замкнений цикл «показали → зберегли»)
-        for profile in ('united', 'tool', '  my   tool '):
-            tags = serve.task_tags({'profile': profile})
+        for track in ('united', 'tool', '  my   tool '):
+            tags = serve.task_tags({'track': track})
             self.assertEqual(serve.normalize_tags(tags), tags)
 
-    def test_no_profile_means_no_tags(self):
-        for task in ({'profile': None}, {'profile': ''}, {'profile': '  '}, {}, {'profile': 5}):
+    def test_no_track_means_no_tags(self):
+        # було `test_no_profile_means_no_tags`; `profile` теж більше нічого не дає (див. `…derived_from_the_track…`)
+        for task in ({'track': None}, {'track': ''}, {'track': '  '}, {}, {'track': 5}, {'profile': 'united'}):
             with self.subTest(task=task):
                 self.assertEqual(serve.task_tags(task), [])
 
-    def test_a_corrupt_key_does_not_fall_back_to_the_profile(self):
-        self.assertEqual(serve.task_tags({'tags': 'junk', 'profile': 'seo'}), [])
-        self.assertEqual(serve.task_tags({'tags': None, 'profile': 'seo'}), [])
+    def test_a_corrupt_key_does_not_fall_back_to_the_track(self):
+        self.assertEqual(serve.task_tags({'tags': 'junk', 'track': 'seo'}), [])
+        self.assertEqual(serve.task_tags({'tags': None, 'track': 'seo'}), [])
 
     def test_reading_drops_invisible_and_bidi_items_and_derived_tags(self):
         self.assertEqual(serve.task_tags({'tags': ['ok', 'a\u202eb', 'c\u200bd', '\ufeffe', 'f']}), ['ok', 'f'])
         for profile in ('a\u202eb', 'a\u200bb', '\ufeffseo'):
             with self.subTest(profile=profile):
-                self.assertEqual(serve.task_tags({'profile': profile}), [])
+                self.assertEqual(serve.task_tags({'track': profile}), [])         # 4d-4a: з `track`
 
     def test_reading_never_raises_and_drops_bad_items(self):
         self.assertEqual(serve.task_tags({'tags': ['ok', 5, 'a,b', 'OK', '  ', 'x' * 33]}), ['ok'])
@@ -193,7 +197,7 @@ class TagsApi(Fixture):
         self.assertEqual(st, 200)
         row = body['tasks'][0]
         self.assertEqual(list(row)[-1], 'tags')
-        self.assertEqual(row['tags'], ['tool'], 'без ключа tags — похідна мітка з profile')
+        self.assertEqual(row['tags'], ['tool'], 'без ключа tags — похідна мітка з track')
         cfg = _read(self.legacy_file)
         cfg['tasks']['a']['tags'] = ['Alpha', 'beta']
         _write(self.legacy_file, cfg)
@@ -210,14 +214,15 @@ class TagsApi(Fixture):
             self.assertEqual(list(row)[-2:], ['tags', 'space'])
             self.assertEqual(row['tags'], ['tool'])
 
-    def test_task_carries_tags_right_after_profile(self):
+    def test_task_carries_tags_right_after_jira(self):
         """`/api/task` — не рядок списку, а відповідь про одну задачу з багатьма доданими ключами: `tags` стоїть у «шапці»
-        (після `profile`), не в хвості, який дописують публікація й превʼю."""
+        (було після `profile`, який 4d-4a прибрав з відповіді; тепер після `jira`), не в хвості, який дописують публікація й превʼю."""
         st, body = self.jget('/api/task')
         self.assertEqual(st, 200)
         self.assertEqual(body['tags'], ['tool'])
         keys = list(body)
-        self.assertEqual(keys[keys.index('profile') + 1], 'tags')
+        self.assertNotIn('profile', keys)
+        self.assertEqual(keys[keys.index('jira') + 1], 'tags')
         cfg = _read(self.legacy_file)
         cfg['tasks']['a']['tags'] = ['k']
         _write(self.legacy_file, cfg)
@@ -281,7 +286,7 @@ class TagsApi(Fixture):
         self.assertEqual((st, body), (200, {'ok': True, 'tags': []}))
         self.assertEqual(self.tags_of(self.legacy_file, 'a'), [])
         self.assertEqual(self.jget('/api/task')[1]['tags'], [])
-        self.assertEqual(self.jget('/api/task')[1]['profile'], 'tool', 'профіль лишається полем ЛІГИ')
+        self.assertEqual(self.jget('/api/task')[1]['track'], 'tool', 'напрямок лишається полем задачі (було `profile`)')
 
     def test_task_tags_unknown_task_is_json_404(self):
         before = (_md5(self.p_file), _md5(self.legacy_file), _md5(self.reg_path))
@@ -395,59 +400,30 @@ class TagsApi(Fixture):
 
 
 
-class ProfileReposTest(unittest.TestCase):
-    """`serve.profile_repos()` (Task 3, спека §4): таблиця «профіль → репо» з кореня старого `tasks.json` установки.
+class TaskNewFromTracksTest(unittest.TestCase):
+    """Було `ProfileReposTest` (4b-3, `serve.profile_repos()` з кореня старого `tasks.json`). 4d-4a: таблицю й її тести перенесено
+    в `tests/test_liga_adapter.py::LegacyReposTable` (`liga_migrate._legacy_repos`); тут лишилось те, що рантайм робить з
+    РЕПО НАПРЯМКУ: `gitlab`-маппінг запису (`_task_new_write`) і ознака потоку ЛІГА (`_liga_flow`) — з ЯВНИХ напрямків простору
+    ЛІГИ реєстру (`space.json`), а не з файла.
 
-    ⛔ Ізоляція: `spaces.legacy_tasks_file` підмінено на тимчасовий файл — справжній `tasks.json` не читається й не
-    пишеться; `_task_new_write` працює лише над словником `cfg` і тимчасовою текою, `vcs_provider` — без мережі."""
+    ⛔ Ізоляція: `spaces.read_registry` підмінено — реєстр машини не читається, `space.json` лежить у тимчасовій теці;
+    `_task_new_write` працює лише над словником `cfg`, `vcs_provider` — без мережі."""
 
     REPO = 'git@git.example:org/a.git'
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.legacy = os.path.join(self.tmp.name, 'tasks.json')
-        patcher = mock.patch.object(spaces, 'legacy_tasks_file', return_value=self.legacy)
+        self.liga = {'id': 'sp-liga', 'name': 'Liga', 'legacy': True, 'path': os.path.join(self.tmp.name, 'liga')}
+        os.makedirs(self.liga['path'])
+        self.registry = {'version': 1, 'spaces': [self.liga]}
+        patcher = mock.patch.object(spaces, 'read_registry', side_effect=lambda: self.registry)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def write(self, obj=None, raw=None):
-        with open(self.legacy, 'w', encoding='utf-8') as f:
-            f.write(raw if raw is not None else json.dumps(obj))
-
-    def test_keeps_only_well_formed_pairs(self):
-        self.write({'profile_repos': {'alpha': self.REPO, 'Bad Key': 'x', 'beta': '', 'gamma': 'has space', 'delta': 5}})
-        self.assertEqual(serve.profile_repos(), {'alpha': self.REPO})
-
-    def test_profile_key_form(self):
-        ok, bad = 'a-1', ('A', 'a_b', 'a b', '', 'x' * 33, 'а')
-        self.write({'profile_repos': {ok: self.REPO, **{b: self.REPO for b in bad}}})
-        self.assertEqual(serve.profile_repos(), {ok: self.REPO})
-        self.write({'profile_repos': {'x' * 32: self.REPO}})
-        self.assertEqual(serve.profile_repos(), {'x' * 32: self.REPO})
-
-    def test_repo_is_printable_ascii_without_spaces_and_is_trimmed(self):
-        self.write({'profile_repos': {'a': '  ' + self.REPO + ' ', 'b': 'x\ny', 'c': 'x\x7fy', 'd': 'репо', 'e': '  '}})
-        self.assertEqual(serve.profile_repos(), {'a': self.REPO})
-
-    def test_repo_cannot_start_with_a_dash(self):
-        """`-…` git прочитав би як опцію (`--upload-pack=…`): такі репо відкидаються, дефіс усередині — ні."""
-        self.write({'profile_repos': {'a': '--upload-pack=x', 'b': '-x', 'c': ' -x', 'd': 'git@git.example:org/a-b.git'}})
-        self.assertEqual(serve.profile_repos(), {'d': 'git@git.example:org/a-b.git'})
-
-    def test_empty_when_there_is_no_usable_config(self):
-        for label, kw in (('нема ключа', {'obj': {'tasks': {}}}), ('не словник', {'obj': {'profile_repos': ['a']}}),
-                          ('рядок', {'obj': {'profile_repos': 'a'}}), ('null', {'obj': {'profile_repos': None}}),
-                          ('корінь — не обʼєкт', {'obj': ['x']}), ('не JSON', {'raw': '{oops'}),
-                          ('глибока вкладеність', {'raw': '[' * 100000})):
-            with self.subTest(label):
-                self.write(**kw)
-                self.assertEqual(serve.profile_repos(), {})
-        os.remove(self.legacy)
-        self.assertEqual(serve.profile_repos(), {}, 'файла нема')
-
-    def test_the_constant_is_gone(self):
-        self.assertIs(hasattr(serve, 'PROFILE_REPOS'), False)
+    def write(self, tracks_list):
+        with open(os.path.join(self.liga['path'], 'space.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tracks': tracks_list}, f)
 
     # ---------- диференційний: те саме, що давала константа ----------
 
@@ -456,39 +432,51 @@ class ProfileReposTest(unittest.TestCase):
                   encoding='utf-8') as f:
             return json.load(f)['gitlab']
 
-    def new_gitlab(self, profile):
-        """`gitlab` запису, який `_task_new_write` кладе в задачу `t-demo` з цим профілем (мережі й GitLab-модуля нема)."""
+    def new_gitlab(self, track):
+        """`gitlab` запису, який `_task_new_write` кладе в задачу `t-demo` з цим напрямком: репо дає `track_repo` явних напрямків
+        простору ЛІГИ (мережі й GitLab-модуля нема)."""
         cfg = {}
         with mock.patch.object(serve, 'vcs_provider', return_value=None), \
                 mock.patch.object(spaces, 'require_integrations', lambda: None):
-            serve._task_new_write(cfg, 't-demo', 'T', '', profile, None, None,
-                                  os.path.join(self.tmp.name, 'task-' + profile), None, None,
-                                  serve.track_repo(dict(spaces.IMPLICIT), profile), True)
+            serve._task_new_write(cfg, 't-demo', 'T', '', track, None, None,
+                                  os.path.join(self.tmp.name, 'task-' + track), None, None,
+                                  serve.track_repo(serve._TrackView(self.liga), track), True)
         return cfg['tasks']['t-demo'].get('gitlab')
 
-    def test_config_reproduces_the_snapshot_of_the_old_constant(self):
+    def test_explicit_tracks_reproduce_the_snapshot_of_the_old_constant(self):
         snap = self.snapshot()
         self.assertGreaterEqual(len(snap), 4, 'знімок має профілі з репо й без')
-        table = {p: v['gitlab']['repo'] for p, v in snap.items() if v['gitlab']}
-        self.assertEqual(sorted(table), ['liga360', 'seo', 'united'])
-        self.write({'profile_repos': table})
+        self.write([{'id': p, 'repo': v['gitlab']['repo'] if v['gitlab'] else ''} for p, v in snap.items()])
         for profile, want in snap.items():
             with self.subTest(profile=profile):
                 self.assertEqual(self.new_gitlab(profile), want['gitlab'])
+                # ознака потоку ЛІГА: і за `track`, і за `profile` (вхід межі) — було лише за `profile`
                 self.assertIs(serve._liga_flow({'profile': profile}), want['liga_flow'])
+                self.assertIs(serve._liga_flow({'track': profile}), want['liga_flow'])
 
-    def test_without_profile_repos_a_liga_task_has_no_default_repo(self):
-        self.write({'tasks': {}})
+    def test_without_repos_a_liga_task_has_no_default_repo(self):
+        self.write([{'id': 'united'}])
         self.assertIsNone(self.new_gitlab('united'))
         self.assertIs(serve._liga_flow({'profile': 'united'}), False)
+        self.assertIs(serve._liga_flow({'track': 'united'}), False)
         self.assertIs(serve._liga_flow({'jira': 'X-1'}), True, 'інші ознаки потоку ЛІГА — як були')
         self.assertIs(serve._liga_flow({'gitlab': {'repo': self.REPO}}), True)
 
-    def test_liga_flow_does_not_trust_a_hand_made_profile_that_the_config_dropped(self):
-        """Зіпсований запис таблиці (пробіл у репо) не робить профіль ознакою потоку."""
-        self.write({'profile_repos': {'alpha': 'has space'}})
-        self.assertIs(serve._liga_flow({'profile': 'alpha'}), False)
+    def test_liga_flow_does_not_trust_a_value_that_is_not_a_track_with_a_repo(self):
+        """Напрямок із зіпсованим репо (пробіл) не має репо, а значення поза переліком — не ознака потоку."""
+        self.write([{'id': 'alpha', 'repo': 'has space'}, {'id': 'beta', 'repo': self.REPO}])
+        for body in ({'profile': 'alpha'}, {'track': 'alpha'}, {'track': 'gamma'}, {'track': 5}, {'profile': ''}):
+            self.assertIs(serve._liga_flow(body), False, body)
+        self.assertIs(serve._liga_flow({'track': 'beta'}), True)
         self.assertIsNone(self.new_gitlab('alpha'))
+
+    def test_a_broken_registry_or_no_liga_space_is_no_sign(self):
+        self.write([{'id': 'beta', 'repo': self.REPO}])
+        self.registry['spaces'] = [{**self.liga, 'legacy': False}]
+        self.assertIs(serve._liga_flow({'track': 'beta'}), False)
+        with mock.patch.object(spaces, 'read_registry', side_effect=spaces.SpacesError('spaces-unreadable', 'x')):
+            self.assertIs(serve._liga_flow({'track': 'beta'}), False)
+            self.assertIs(serve._liga_flow({'jira': 'X-1'}), True)
 
 
 if __name__ == '__main__':

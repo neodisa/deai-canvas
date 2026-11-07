@@ -1315,7 +1315,7 @@ class PagesEnv(CommentsEnv):
                f'<!DOCTYPE html><html><head><title>t</title></head><body><h1>{tid}</h1></body></html>')
         _write(os.path.join(sp['path'], 'tasks.json'), json.dumps(
             {'design_work_root': sp['path'], 'current': tid,
-             'tasks': {tid: {'title': 'Ікс', 'dir': d, 'profile': 'tool'}}}))
+             'tasks': {tid: {'title': 'Ікс', 'dir': d, 'track': 'tool'}}}))        # 4d-4a: було `profile` — `?ds=` читається з `track`
 
     def use(self, sp):
         spaces.switch_space(sp['id'])

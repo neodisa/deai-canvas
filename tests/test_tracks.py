@@ -479,17 +479,18 @@ class TaskTrack(unittest.TestCase):
     def test_of_task_prefers_track(self):
         self.assertEqual(tracks.of_task({'track': 'web', 'profile': 'seo'}), 'web')
 
-    def test_of_task_falls_back_to_profile(self):
-        self.assertEqual(tracks.of_task({'profile': 'seo'}), 'seo')
-        self.assertEqual(tracks.of_task({'track': None, 'profile': 'seo'}), 'seo')
-        self.assertEqual(tracks.of_task({'track': '', 'profile': 'seo'}), 'seo')
-        self.assertEqual(tracks.of_task({'track': 5, 'profile': 'seo'}), 'seo')
+    def test_of_task_ignores_profile(self):
+        # 4d-4a: було `falls_back_to_profile` — `profile` у записах більше не читається (читає лише міграція та три межі)
+        self.assertIsNone(tracks.of_task({'profile': 'seo'}))
+        self.assertIsNone(tracks.of_task({'track': None, 'profile': 'seo'}))
+        self.assertIsNone(tracks.of_task({'track': '', 'profile': 'seo'}))
+        self.assertIsNone(tracks.of_task({'track': 5, 'profile': 'seo'}))
 
     def test_of_task_returns_the_stored_string_as_is(self):
-        # без звірки з `ID_RE`: ЛІГА приймає будь-який рядок (`'United'`, з комою, довгий, з пробілами)
+        # без звірки з `ID_RE`: значення `track` вільне (`'United'`, з комою, довгий, з пробілами)
         for v in ('United', 'Bad,Comma', 'x' * 40, '  seo  ', ' ', 'a\tb'):
-            self.assertEqual(tracks.of_task({'profile': v}), v, repr(v))
             self.assertEqual(tracks.of_task({'track': v}), v, repr(v))
+            self.assertIsNone(tracks.of_task({'profile': v}), repr(v))       # було: `profile` віддавався як є
 
     def test_of_task_non_string_or_empty_is_none(self):
         for task in ({}, {'profile': ''}, {'profile': None}, {'profile': 5}, {'profile': ['united']}, {'track': 5},
@@ -509,7 +510,7 @@ class TaskTrack(unittest.TestCase):
 
     def test_label_tag_known_track_uses_label(self):
         self.assertEqual(tracks.label_tag(self.TRACKS, {'track': 'mobile'}), 'Мобільний')
-        self.assertEqual(tracks.label_tag(self.TRACKS, {'profile': 'web'}), 'Web')
+        self.assertIsNone(tracks.label_tag(self.TRACKS, {'profile': 'web'}))           # було 'Web': `profile` не читається
 
     def test_label_tag_unknown_id_is_the_id_itself(self):
         self.assertEqual(tracks.label_tag(self.TRACKS, {'track': 'zzz'}), 'zzz')
@@ -658,37 +659,37 @@ class ServerTracks(_Plain):
         self.assertEqual(serve.space_tracks(self.sp), ([], None))
         self.assertEqual(serve.space_tracks(None), ([], None))
 
-    def test_a_liga_space_without_tracks_uses_the_adapter(self):
+    # 4d-4a: ЛІГА читає ЛИШЕ свій `space.json`, як і будь-який простір. Було чотири тести адаптера (`…without_tracks_uses_the_adapter`,
+    # `…does_not_get_the_adapter`, `layer_off_is_the_adapter`, `…broken_legacy_file_gives_the_bare_adapter`): їхня копія в
+    # `tests/test_liga_adapter.py`, а тут — три тести про відсутність адаптера (спека, відмінність 1: «нема напрямків»).
+    def test_a_liga_space_without_tracks_has_none_even_with_a_legacy_file(self):
         liga = self.make_space('Liga', integrations=True)
-        cfg = self.legacy_cfg()
-        self.assertEqual(serve.space_tracks(liga), tracks.legacy_tracks(cfg)[:2])
-        for raw in ('{не json', '[1]', '{"tracks": 5}', '{"name": "x"}'):      # ключа нема / не список / файл битий — адаптер
+        self.legacy_cfg()                                                      # корінь старого файла з коренями й репо — не читається
+        self.assertEqual(serve.space_tracks(liga), ([], None))
+        for raw in ('{не json', '[1]', '{"tracks": 5}', '{"name": "x"}'):      # ключа нема / не список / файл битий — напрямків нема
             with self.subTest(raw=raw):
                 self.space_json(liga, raw=raw)
-                self.assertEqual(serve.space_tracks(liga), tracks.legacy_tracks(cfg)[:2])
+                self.assertEqual(serve.space_tracks(liga), ([], None))
+        gen._write(self.legacy_file, '{not json')                              # зіпсований старий файл нічого не міняє
+        self.assertEqual(serve.space_tracks(liga), ([], None))
+        os.remove(self.legacy_file)
+        self.assertEqual(serve.space_tracks(liga), ([], None))
 
-    def test_a_liga_space_with_tracks_in_its_space_json_does_not_get_the_adapter(self):
+    def test_a_liga_space_reads_its_own_tracks_and_an_empty_list_stays_empty(self):
         liga = self.make_space('Liga', integrations=True)
         self.legacy_cfg()
         self.space_json(liga, tracks=[{'id': 'web'}], default_track='web')
         tr, default = serve.space_tracks(liga)
         self.assertEqual(([t['id'] for t in tr], default), (['web'], 'web'))
-        self.space_json(liga, tracks=[])                                       # порожній перелік ЛІГИ адаптер НЕ вимикає (ревʼю 4d-1)
-        self.assertEqual(serve.space_tracks(liga), tracks.legacy_tracks(self.legacy_cfg())[:2])
+        self.space_json(liga, tracks=[])                                       # було: порожній перелік ЛІГИ вмикав адаптер (ревʼю 4d-1)
+        self.assertEqual(serve.space_tracks(liga), ([], None))
 
-    def test_layer_off_is_the_adapter(self):
-        cfg = self.legacy_cfg()
+    def test_layer_off_has_no_tracks(self):
+        self.legacy_cfg()
         with mock.patch.dict(os.environ):
             os.environ.pop('DEAI_HOME')
             self.assertFalse(spaces.layer_on())
-            self.assertEqual(serve.space_tracks(spaces.active_space()), tracks.legacy_tracks(cfg)[:2])
-
-    def test_a_missing_or_broken_legacy_file_gives_the_bare_adapter(self):
-        liga = self.make_space('Liga', integrations=True)
-        want = tracks.legacy_tracks({})[:2]
-        self.assertEqual(serve.space_tracks(liga), want)                       # файла нема
-        gen._write(self.legacy_file, '{not json')
-        self.assertEqual(serve.space_tracks(liga), want)
+            self.assertEqual(serve.space_tracks(spaces.active_space()), ([], None))
 
     # ---- корінь напрямку в чужому просторі
     def test_a_root_in_another_space_is_dropped(self):
@@ -705,9 +706,8 @@ class ServerTracks(_Plain):
         self.assertEqual(got, {'same': None, 'inside': None, 'own': os.path.join(self.sp['path'], 'own-sub'),
                                'ownself': self.sp['path'], 'out': outside})
         # корінь, що пропав, — шлях простору (`track_root`), а не чужий
-        cfg = serve.load_tasks()
-        self.assertEqual(serve.track_root(self.sp, cfg, 'same'), self.sp['path'])
-        self.assertEqual(serve.track_root(self.sp, cfg, 'inside'), self.sp['path'])
+        self.assertEqual(serve.track_root(self.sp, 'same'), self.sp['path'])
+        self.assertEqual(serve.track_root(self.sp, 'inside'), self.sp['path'])
 
     def test_the_overlap_check_does_not_touch_the_stored_tracks_of_the_other_space(self):
         """Простір Beta лежить у реєстрі, його напрямки читаються зі СВОГО `space.json` (кореня Alpha вони не стосуються)."""
@@ -720,26 +720,38 @@ class ServerTracks(_Plain):
     # ---- track_root / track_repo / task_ds
     def test_track_root_of_an_ordinary_space(self):
         self.two_tracks()
-        cfg = serve.load_tasks()
         web = os.path.join(self.sp['path'], 'web-dir')
-        self.assertEqual(serve.track_root(self.sp, cfg, 'web'), web)
-        self.assertEqual(serve.track_root(self.sp, cfg, 'mobile'), self.sp['path'])      # напрямок без `root` — шлях простору
-        self.assertEqual(serve.track_root(self.sp, cfg, 'zzz'), web)                     # невідомий — `root` дефолтного
-        self.assertEqual(serve.track_root(self.sp, cfg, None), web)
+        self.assertEqual(serve.track_root(self.sp, 'web'), web)
+        self.assertEqual(serve.track_root(self.sp, 'mobile'), self.sp['path'])      # напрямок без `root` — шлях простору
+        self.assertEqual(serve.track_root(self.sp, 'zzz'), web)                     # невідомий — `root` дефолтного
+        self.assertEqual(serve.track_root(self.sp, None), web)
         self.space_json(self.sp, tracks=[])
         for tid in ('web', None):
-            self.assertEqual(serve.track_root(self.sp, cfg, tid), self.sp['path'])       # напрямків нема — шлях простору
+            self.assertEqual(serve.track_root(self.sp, tid), self.sp['path'])       # напрямків нема — шлях простору
 
-    def test_track_root_of_a_liga_space(self):
+    def test_track_root_of_a_liga_space_is_the_same_as_of_any_space(self):
+        # 4d-4a: було `…of_a_liga_space` — корінь із `design_work_roots` старого файла через адаптер; тепер ЛІГА — як усі: корінь
+        # напрямку з її `space.json`, інакше шлях простору (спільний корінь старого файла більше не береться: відмінність спеки)
         liga = self.make_space('Liga', integrations=True)
-        cfg = self.legacy_cfg(design_work_roots={'united': '~/w/u', 'seo': '~/w/s'}, design_work_root='~/w/shared')
+        self.legacy_cfg(design_work_roots={'united': '~/w/u', 'seo': '~/w/s'}, design_work_root='~/w/shared')
         for tid in ('united', 'seo', 'liga360', 'zzz', 'United', None):
-            self.assertEqual(serve.track_root(liga, cfg, tid), tracks.legacy_root(cfg, tid), tid)
-        self.space_json(liga, tracks=[])                                       # власні напрямки є, але порожні — спільний корінь
-        self.assertEqual(serve.track_root(liga, cfg, 'web'), tracks.legacy_root(cfg, None))
+            self.assertEqual(serve.track_root(liga, tid), liga['path'], tid)
+        self.space_json(liga, tracks=[])
+        self.assertEqual(serve.track_root(liga, 'web'), liga['path'])
         self.space_json(liga, tracks=[{'id': 'web', 'root': os.path.join(liga['path'], 'web')}])
-        self.assertEqual(serve.track_root(liga, cfg, 'web'), os.path.join(liga['path'], 'web'))
-        self.assertEqual(serve.track_root(liga, cfg, 'zzz'), os.path.join(liga['path'], 'web'))   # невідомий — дефолтний
+        self.assertEqual(serve.track_root(liga, 'web'), os.path.join(liga['path'], 'web'))
+        self.assertEqual(serve.track_root(liga, 'zzz'), os.path.join(liga['path'], 'web'))   # невідомий — дефолтний
+
+    def test_track_root_without_a_space_is_none(self):
+        self.assertIsNone(serve.track_root(None, 'web'))                           # викликач бере `default_task_root(cfg)`
+        with mock.patch.dict(os.environ):
+            os.environ.pop('DEAI_HOME')
+            self.assertIsNone(serve.track_root(spaces.active_space(), 'united'))   # шар вимкнено: неявний простір без шляху
+
+    def test_default_task_root(self):
+        self.assertEqual(serve.default_task_root({'design_work_root': '~/w/shared'}), os.path.expanduser('~/w/shared'))
+        for cfg in ({}, None, {'design_work_root': ''}, {'design_work_root': 5}, []):
+            self.assertEqual(serve.default_task_root(cfg), os.path.expanduser('~/deai-work'), repr(cfg))
 
     def test_track_repo(self):
         self.two_tracks()
@@ -747,7 +759,9 @@ class ServerTracks(_Plain):
         for tid in ('mobile', 'zzz', None, 5):
             self.assertEqual(serve.track_repo(self.sp, tid), '', tid)         # невідомий НЕ береться з дефолтного
         liga = self.make_space('Liga', integrations=True)
-        self.legacy_cfg()
+        self.legacy_cfg()                                                      # `profile_repos` старого файла більше не читається
+        self.assertEqual((serve.track_repo(liga, 'united'), serve.track_repo(liga, 'seo')), ('', ''))
+        self.space_json(liga, tracks=[{'id': 'united', 'repo': self.OTHER}, {'id': 'seo', 'repo': self.REPO}, {'id': 'liga360'}])
         self.assertEqual((serve.track_repo(liga, 'united'), serve.track_repo(liga, 'seo'), serve.track_repo(liga, 'liga360')),
                          (self.OTHER, self.REPO, ''))
 
@@ -755,7 +769,7 @@ class ServerTracks(_Plain):
         self.two_tracks()
         sid = self.sp['id']
         for task, ds, tail in (({'track': 'web'}, 'united', f'?ds=united&sp={sid}'),
-                               ({'profile': 'web'}, 'united', f'?ds=united&sp={sid}'),     # синонім
+                               ({'profile': 'web'}, '', f'?sp={sid}'),                      # 4d-4a: було `united` — `profile` не читається
                                ({'track': 'mobile'}, '', f'?sp={sid}'),                     # `ds: ''` — лише `?sp=`
                                ({'track': 'zzz'}, 'zzz', f'?ds=zzz&sp={sid}'),             # напрямку нема — значення як є, як 0.14.0
                                ({}, '', f'?sp={sid}'), ({'track': 5}, '', f'?sp={sid}')):
@@ -763,10 +777,13 @@ class ServerTracks(_Plain):
                 self.assertEqual(serve.task_ds(task, self.sp), ds)
                 self.assertEqual(serve.inspector_ds_arg(serve.task_ds(task, self.sp), self.sp), tail)
         self.assertEqual(serve.task_ds(None, self.sp), '')
-        # збережений `profile` без напрямку, що його називає, діє як у 0.14.0 (еталон `page-none-project.html`)
-        self.assertEqual(serve.task_ds({'profile': 'united'}, self.sp), 'united')
+        # збережений `track` без напрямку, що його називає, діє як у 0.14.0 (еталон `page-none-project.html`); було те саме для
+        # `profile` — тепер запис лише з `profile` дає `''` (відмінність спеки 4: міграція дописує `track` ЛІГІ)
+        self.assertEqual(serve.task_ds({'track': 'united'}, self.sp), 'united')
+        self.assertEqual(serve.task_ds({'profile': 'united'}, self.sp), '')
         self.space_json(self.sp, tracks=[])
-        self.assertEqual(serve.task_ds({'profile': 'tool'}, self.sp), 'tool')
+        self.assertEqual(serve.task_ds({'track': 'tool'}, self.sp), 'tool')
+        self.assertEqual(serve.task_ds({'profile': 'tool'}, self.sp), '')
 
     def test_the_inspector_argument_is_the_ds_not_the_track(self):
         self.space_json(self.sp, tracks=[{'id': 'web', 'ds': 'liga360'}, {'id': 'plain'}])
@@ -777,23 +794,28 @@ class ServerTracks(_Plain):
     # ---- мітки
     def test_task_tags_of_an_ordinary_space_come_from_the_track_label(self):
         self.two_tracks()
-        for task, want in (({'track': 'web'}, ['Web']), ({'profile': 'web'}, ['Web']), ({'track': 'mobile'}, ['mobile']),
+        for task, want in (({'track': 'web'}, ['Web']), ({'profile': 'web'}, []), ({'track': 'mobile'}, ['mobile']),   # `profile` — 4d-4a: без мітки
                            ({'track': 'zzz'}, ['zzz']), ({'track': 'a,b'}, []), ({'track': 'web', 'tags': ['X']}, ['X']),
                            ({'track': 'web', 'tags': []}, []), ({}, []), ({'track': 5}, [])):
             with self.subTest(task=task):
                 self.assertEqual(serve.task_tags(task, self.sp), want)
         # без `sp` — простір запиту
         self.assertEqual(serve.task_tags({'track': 'web'}), ['Web'])
-        # профіль ЛІГИ в звичайному просторі НЕ перекладається таблицею адаптера
-        self.assertEqual(serve.task_tags({'profile': 'united'}, self.sp), ['united'])
+        # `track` ЛІГИ в звичайному просторі НЕ перекладається таблицею адаптера
+        self.assertEqual(serve.task_tags({'track': 'united'}, self.sp), ['united'])
 
-    def test_task_tags_of_a_liga_space_use_the_adapter_labels(self):
+    def test_task_tags_of_a_liga_space_come_from_its_own_tracks_not_from_the_adapter_table(self):
+        # 4d-4a: було `…use_the_adapter_labels` (United/LIGA360/SEO з таблиці адаптера за `profile`). Тепер — підписи з `space.json`
+        # простору, а де напрямків нема — значення `track` як є (нижній регістр: відмінність спеки, ЛІГА без напрямків)
         liga = self.make_space('Liga', integrations=True)
         self.legacy_cfg()
-        for prof, want in (('united', ['United']), ('liga360', ['LIGA360']), ('seo', ['SEO']), ('zzz', ['zzz'])):
-            self.assertEqual(serve.task_tags({'profile': prof}, liga), want, prof)
+        for prof, want in (('united', ['united']), ('liga360', ['liga360']), ('seo', ['seo']), ('zzz', ['zzz'])):
+            self.assertEqual(serve.task_tags({'track': prof}, liga), want, prof)
+            self.assertEqual(serve.task_tags({'profile': prof}, liga), [], prof)           # лише `profile` — без мітки
+        self.space_json(liga, tracks=[{'id': 'united', 'label': 'United'}, {'id': 'seo', 'label': 'SEO'}])
+        self.assertEqual([serve.task_tags({'track': t}, liga) for t in ('united', 'seo', 'zzz')], [['United'], ['SEO'], ['zzz']])
         self.space_json(liga, tracks=[{'id': 'united', 'label': 'Alpha team'}])            # власні напрямки — їхні підписи
-        self.assertEqual(serve.task_tags({'profile': 'united'}, liga), ['Alpha team'])
+        self.assertEqual(serve.task_tags({'track': 'united'}, liga), ['Alpha team'])
 
     # ---- task_new у звичайному просторі
     def fake_vcs(self, provider=True):
@@ -812,7 +834,7 @@ class ServerTracks(_Plain):
 
     def new(self, tid, track, **kw):
         cfg = serve.load_tasks()
-        res = serve.task_new(cfg, tid, title='Alpha', track=track, root=serve.track_root(self.sp, cfg, track),
+        res = serve.task_new(cfg, tid, title='Alpha', track=track, root=serve.track_root(self.sp, track),
                              repo=serve.track_repo(self.sp, track), **kw)
         return res, serve.load_tasks()['tasks'][tid]
 
@@ -875,19 +897,19 @@ class ServerTracks(_Plain):
         self.space_json(liga, tracks=[{'id': 'web', 'repo': self.REPO}, {'id': 'plain'}], default_track='web')
         self.fake_vcs(provider=False)
         cfg = serve.load_tasks()
-        serve.task_new(cfg, 'g1', title='Alpha', track='web', legacy=True, root=serve.track_root(liga, cfg, 'web'),
+        serve.task_new(cfg, 'g1', title='Alpha', track='web', legacy=True, root=serve.track_root(liga, 'web'),
                        repo=serve.track_repo(liga, 'web'))
         entry = serve.load_tasks()['tasks']['g1']
         self.assertEqual((entry['profile'], entry['track']), ('web', 'web'))
         self.assertEqual(entry['gitlab'], {'repo': self.REPO, 'path': 'mockup/g1'})
         self.assertNotIn('vcs', entry)
         cfg = serve.load_tasks()
-        serve.task_new(cfg, 'g2', title='Alpha', track='plain', legacy=True, root=serve.track_root(liga, cfg, 'plain'),
+        serve.task_new(cfg, 'g2', title='Alpha', track='plain', legacy=True, root=serve.track_root(liga, 'plain'),
                        repo=serve.track_repo(liga, 'plain'))
         self.assertNotIn('gitlab', serve.load_tasks()['tasks']['g2'])
         cfg = serve.load_tasks()                                               # явний `gitlab` перемагає репо напрямку
         own = {'repo': self.OTHER, 'path': 'mockup/x'}
-        serve.task_new(cfg, 'g3', title='Alpha', track='web', legacy=True, gitlab=own, root=serve.track_root(liga, cfg, 'web'),
+        serve.task_new(cfg, 'g3', title='Alpha', track='web', legacy=True, gitlab=own, root=serve.track_root(liga, 'web'),
                        repo=serve.track_repo(liga, 'web'))
         self.assertEqual(serve.load_tasks()['tasks']['g3']['gitlab'], own)
 
@@ -901,11 +923,13 @@ class ServerTrackView(_Plain):
             json.dump({'tasks': tasks, 'current': next(iter(tasks))}, f)
 
     def two_spaces(self):
-        """Alpha — звичайний, напрямок `web` з підписом `Web`; Liga — з `integrations`, без `tracks` (адаптер: `United`)."""
+        """Alpha — звичайний, напрямок `web` з підписом `Web`; Liga — з `integrations` і ЯВНИМ напрямком `united` з підписом `United`
+        (4d-4a: було — без `tracks`, підпис давав адаптер, задача мала лише `profile`)."""
         self.two_tracks()
         liga = self.make_space('Liga', integrations=True)
+        self.space_json(liga, tracks=[{'id': 'united', 'label': 'United'}], default_track='united')
         self.write_tasks(self.sp, {'a1': {'track': 'web', 'dir': os.path.join(self.tmp, 'a1')}})
-        self.write_tasks(liga, {'l1': {'profile': 'united', 'dir': os.path.join(self.tmp, 'l1')}})
+        self.write_tasks(liga, {'l1': {'track': 'united', 'dir': os.path.join(self.tmp, 'l1')}})
         return liga
 
     # ---- C1: `?all=1` — підписи щодо простору КОЖНОЇ задачі, а не того, хто кличе
@@ -923,7 +947,7 @@ class ServerTrackView(_Plain):
     def test_task_rows_take_the_space_explicitly(self):
         liga = self.two_spaces()
         self.use(self.sp)
-        cfg = {'tasks': {'l1': {'profile': 'united'}}}
+        cfg = {'tasks': {'l1': {'track': 'united'}}}
         self.assertEqual(serve._task_rows(cfg, liga)[0]['tags'], ['United'])
         self.assertEqual(serve._task_rows(cfg)[0]['tags'], ['united'])      # без `sp` — простір запиту (звичайний)
 
@@ -951,19 +975,19 @@ class ServerTrackView(_Plain):
             f.write('{broken')
         self.assertEqual([r['id'] for r in serve._all_space_task_rows()], ['l1'])           # нечитабельний файл — теж
 
-    def test_a_liga_space_with_an_empty_or_all_bad_own_list_still_uses_the_adapter(self):
-        """⛔ Ревʼю 4d-1: `tracks: []` (чи список, що після нормалізації порожній) у ЛІГИ мовчки спорожнив би все: спільний корінь,
-        нема репо, мітки малими літерами, нема дефолту `united`. Для ЛІГИ це «власного списку нема» — адаптер; непорожній — вимикає його."""
+    def test_a_liga_space_with_an_empty_or_all_bad_own_list_no_longer_uses_the_adapter(self):
+        """4d-4a: було `…still_uses_the_adapter` (ревʼю 4d-1: `tracks: []` у ЛІГИ вмикав адаптер, щоб не спорожнити все). Адаптера
+        нема, тож порожній чи зіпсований власний список ЛІГИ — як у будь-якому просторі: напрямків нема, мітка — значення `track`
+        як є, корінь — шлях простору, репо немає."""
         liga = self.make_space('Liga', integrations=True)
-        cfg = self.legacy_cfg(design_work_roots={'united': os.path.join(self.home, 'u-root')})
-        want = tracks.legacy_tracks(cfg)[:2]
+        self.legacy_cfg(design_work_roots={'united': os.path.join(self.home, 'u-root')})
         for own in ([], [5, None], [{'id': 'BAD ID'}], [{'id': 'x y'}, 'web']):
             with self.subTest(own=own):
                 self.space_json(liga, tracks=own, default_track='zzz')
-                self.assertEqual(serve.space_tracks(liga), want)
-                self.assertEqual(serve.task_tags({'profile': 'united'}, liga), ['United'])
-                self.assertEqual(serve.track_root(liga, cfg, 'united'), os.path.join(self.home, 'u-root'))
-                self.assertEqual(serve.track_repo(liga, 'seo'), serve.profile_repos().get('seo', ''))
+                self.assertEqual(serve.space_tracks(liga), ([], None))
+                self.assertEqual(serve.task_tags({'track': 'united'}, liga), ['united'])
+                self.assertEqual(serve.track_root(liga, 'united'), liga['path'])
+                self.assertEqual(serve.track_repo(liga, 'seo'), '')
         self.space_json(liga, tracks=[{'id': 'web', 'label': 'Alpha team'}], default_track='web')      # непорожній — власний
         self.assertEqual([t['id'] for t in serve.space_tracks(liga)[0]], ['web'])
         self.assertEqual(serve.space_tracks(self.sp), ([], None))                                        # звичайний — як було
@@ -983,10 +1007,9 @@ class ServerTrackView(_Plain):
     def cost(self, n, space, call, **fields):
         cfg = {'tasks': {f't{i}': {**(fields or {'track': 'web'}), 'dir': os.path.join(self.tmp, f't{i}')} for i in range(n)}}
         with mock.patch.object(spaces, 'check_new_path', wraps=spaces.check_new_path) as chk, \
-                mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own, \
-                mock.patch.object(serve, '_legacy_cfg', wraps=serve._legacy_cfg) as leg:
+                mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own:
             tags = call(cfg, space)
-        return (chk.call_count, own.call_count, leg.call_count), tags
+        return (chk.call_count, own.call_count), tags
 
     def test_the_cost_of_labels_does_not_grow_with_the_number_of_tasks(self):
         liga = self.two_spaces()
@@ -1000,9 +1023,9 @@ class ServerTrackView(_Plain):
                 self.assertEqual(few, many)                                  # не росте з N
                 self.assertEqual((few[0], few[1]), (0, 1))                   # `space.json` прочитали раз, коренів не перевіряли (ревʼю 4d-1)
                 self.assertEqual((tags_few, tags_many), ([['Web']] * 3, [['Web']] * 30))
-        few, _ = self.cost(3, liga, by_rows, profile='united')               # адаптер: навіть напрямків не будуємо
-        many, tags = self.cost(30, liga, by_rows, profile='united')
-        self.assertEqual((few, many), ((0, 1, 0), (0, 1, 0)))
+        few, _ = self.cost(3, liga, by_rows, track='united')                 # ЛІГА теж явна (4d-4a): те саме `(0, 1)`, без адаптера
+        many, tags = self.cost(30, liga, by_rows, track='united')
+        self.assertEqual((few, many), ((0, 1), (0, 1)))
         self.assertEqual(tags, [['United']] * 30)
 
     def test_labels_and_ds_never_check_roots(self):
@@ -1018,7 +1041,7 @@ class ServerTrackView(_Plain):
                 self.assertEqual(serve.task_ds({'track': 'web'}, view), 'united')
                 self.assertEqual(serve.task_tags({'track': 'web'}, sp), ['Web' if sp is self.sp else 'W'])
         with mock.patch.object(spaces, 'check_new_path', wraps=spaces.check_new_path) as chk:
-            self.assertEqual(serve.track_root(self.sp, {}, 'web'), os.path.join(self.sp['path'], 'web-dir'))
+            self.assertEqual(serve.track_root(self.sp, 'web'), os.path.join(self.sp['path'], 'web-dir'))
         self.assertGreaterEqual(chk.call_count, 1)
 
     def test_all_spaces_build_the_view_once_per_space(self):
@@ -1043,8 +1066,8 @@ class ServerTrackView(_Plain):
                     f.write(raw)
                 tr, default = serve.space_tracks(self.sp)
                 self.assertEqual((default, [t['root'] for t in tr]), ('web', [None, None]))
-                self.assertEqual(serve.track_root(self.sp, {}, 'web'), self.sp['path'])
-        os.remove(reg)                                                       # реєстру нема зовсім — це не відмова
+                self.assertEqual(serve.track_root(self.sp, 'web'), self.sp['path'])
+        os.remove(reg)                                                      # реєстру нема зовсім — це не відмова
         self.assertEqual(serve.space_tracks(self.sp)[0][0]['root'], keep)
         with open(reg, 'wb') as f:
             f.write(good)
@@ -1053,7 +1076,8 @@ class ServerTrackView(_Plain):
     def test_task_ds_without_a_space_is_the_raw_value(self):
         spaces.set_request_space('')                                        # запит «без простору»
         self.assertIsNone(spaces.active_space())
-        self.assertEqual(serve.task_ds({'profile': 'tool'}, None), 'tool')
+        self.assertEqual(serve.task_ds({'track': 'tool'}, None), 'tool')
+        self.assertEqual(serve.task_ds({'profile': 'tool'}, None), '')          # 4d-4a: було 'tool' — `profile` не читається
         self.assertEqual(serve.task_ds({'track': 'tool'}), 'tool')
         self.assertEqual(serve.task_ds({}, None), '')
         self.assertEqual(serve.task_ds({'track': 5}, None), '')
@@ -1101,16 +1125,14 @@ class ApiTracks(_Plain):
         return _tree(sp['path']), _raw(os.path.join(sp['path'], 'tasks.json'))
 
     def liga(self):
-        """Простір ЛІГИ + корінь старого `tasks.json` з коренями й репо. У справжній установці це ОДИН файл (простір ЛІГИ і є
-        старий файл задач), тому ті самі ключі лягають і в `tasks.json` самого простору — з нього `track_root` бере `cfg`."""
+        """Простір ЛІГИ з ЯВНИМИ напрямками в `space.json` (4d-4a: було — адаптер з кореня старого `tasks.json`, ключі якого тут
+        дублювались у `tasks.json` простору). Ті самі id, підписи, репо; корені — відносні (у теці простору: `~/work/…` старого файла
+        лежав би в чужому «legacy»-просторі й відкидався б)."""
         liga = self.make_space('Liga', integrations=True)
-        cfg = self.legacy_cfg()
-        path = os.path.join(liga['path'], 'tasks.json')
-        with open(path, encoding='utf-8') as f:
-            own = json.load(f)
-        own.update({k: cfg[k] for k in ('design_work_roots', 'design_work_root', 'profile_repos')})
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(own, f)
+        self.space_json(liga, tracks=[{'id': 'united', 'label': 'United', 'root': 'united-dir', 'repo': self.OTHER, 'ds': 'united'},
+                                      {'id': 'liga360', 'label': 'LIGA360', 'ds': 'liga360'},
+                                      {'id': 'seo', 'label': 'SEO', 'root': 'seo-dir', 'repo': self.REPO, 'ds': 'seo'}],
+                        default_track='united')
         return liga
 
     # ---- звичайний простір: напрямок у тілі
@@ -1258,20 +1280,30 @@ class ApiTracks(_Plain):
             conn.close()
         self.assertEqual(self.snapshot(self.sp), before)
 
-    # ---- простір ЛІГИ: будь-який рядок як є, `unknown-track` не буває
-    def test_a_liga_space_takes_any_string_and_writes_profile_and_track(self):
+    # ---- простір ЛІГИ: суворо, як усі (4d-4a, відмінність спеки 1)
+    def test_a_liga_space_takes_a_known_track_and_writes_profile_and_track(self):
+        # було `…takes_any_string…`: `profile: 'United'` → запис `United`, `track: 'zzz'` → запис `zzz`. Тепер `profile`, що не є
+        # напрямком, ігнорується (задача — у напрямок за замовчуванням), а `track` суворий (див. наступний тест)
         liga = self.liga()
         for tid, extra, want in (('l1', {'profile': 'seo'}, 'seo'), ('l2', {'track': 'seo'}, 'seo'),
-                                 ('l3', {'profile': 'United'}, 'United'), ('l4', {'track': 'zzz'}, 'zzz'),
-                                 ('l5', {'track': 'Bad!'}, 'Bad!'), ('l6', {'track': 'seo', 'profile': 'seo'}, 'seo'),
-                                 ('l7', {'track': 'zzz', 'profile': ''}, 'zzz')):
+                                 ('l3', {'profile': 'United'}, 'united'), ('l4', {'profile': 'zzz'}, 'united'),
+                                 ('l6', {'track': 'seo', 'profile': 'seo'}, 'seo'), ('l7', {'track': 'seo', 'profile': ''}, 'seo')):
             st, body = self.post({'id': tid, **extra}, liga)
             self.assertEqual((st, body.get('ok')), (200, True), (tid, body))
             e = self.entry(liga, tid)
-            self.assertEqual((e['profile'], e['track']), (want, want), tid)
-        self.assertEqual(self.entry(liga, 'l1')['dir'], os.path.join(self.home, 'work', 'seo', 'l1'))
+            self.assertEqual((e['profile'], e['track']), (want, want), tid)            # `profile` у записі лишається (колеги на 0.14–0.19)
+        self.assertEqual(self.entry(liga, 'l1')['dir'], os.path.join(liga['path'], 'seo-dir', 'l1'))
         self.assertEqual(self.entry(liga, 'l2')['dir'], self.entry(liga, 'l1')['dir'].replace('l1', 'l2'))
         self.assertEqual(self.entry(liga, 'l1')['gitlab']['repo'], self.REPO)
+
+    def test_a_liga_space_refuses_an_unknown_or_malformed_track(self):
+        liga = self.liga()
+        before = self.snapshot(liga)
+        for extra, code in (({'track': 'zzz'}, 'unknown-track'), ({'track': 'United'}, 'bad-track'),
+                            ({'track': 'Bad!'}, 'bad-track'), ({'track': 'zzz', 'profile': ''}, 'unknown-track')):
+            st, body = self.post({'id': 'lu', **extra}, liga)
+            self.assertEqual((st, body.get('code')), (400, code), extra)
+            self.assertEqual(self.snapshot(liga), before, extra)
 
     def test_a_liga_space_defaults_to_united(self):
         liga = self.liga()
@@ -1281,7 +1313,7 @@ class ApiTracks(_Plain):
             e = self.entry(liga, tid)
             self.assertEqual((e['profile'], e['track']), ('united', 'united'), tid)
 
-    def test_a_liga_space_refuses_only_a_non_string_or_a_conflict(self):
+    def test_a_liga_space_refuses_a_non_string_or_a_conflict(self):
         liga = self.liga()
         before = self.snapshot(liga)
         for extra, code in (({'track': 5}, 'bad-track'), ({'track': {}}, 'bad-track'),
@@ -1290,13 +1322,25 @@ class ApiTracks(_Plain):
             self.assertEqual((st, body.get('code')), (400, code), extra)
             self.assertEqual(self.snapshot(liga), before, extra)
 
-    def test_a_liga_space_with_its_own_tracks_still_never_says_unknown_track(self):
+    def test_a_liga_space_with_its_own_tracks_now_says_unknown_track(self):
+        # було `…still_never_says_unknown_track`: `track: 'anything'` писався як є — тепер 400 (відмінність спеки 1)
         liga = self.make_space('Liga', integrations=True)
         self.space_json(liga, tracks=[{'id': 'web'}], default_track='web')
+        before = self.snapshot(liga)
         st, body = self.post({'id': 'n1', 'track': 'anything'}, liga)
-        self.assertEqual((st, self.entry(liga, 'n1')['track']), (200, 'anything'), body)
+        self.assertEqual((st, body.get('code')), (400, 'unknown-track'), body)
+        self.assertEqual(self.snapshot(liga), before)
         self.assertEqual(self.post({'id': 'n2'}, liga)[0], 200)
         self.assertEqual(self.entry(liga, 'n2')['track'], 'web')
+
+    def test_a_liga_space_without_tracks_writes_no_track_and_lands_in_the_space(self):
+        # відмінність спеки 4: немігрована ЛІГА — без напрямків, нова задача лягає в теку простору; будь-який `track` — unknown-track
+        liga = self.make_space('Liga', integrations=True)
+        self.assertEqual(self.post({'id': 'm1', 'track': 'seo'}, liga)[1].get('code'), 'unknown-track')
+        st, body = self.post({'id': 'm2', 'profile': 'seo'}, liga)                         # `profile`, що не напрямок, ігнорується
+        self.assertEqual((st, body.get('ok')), (200, True), body)
+        self.assertEqual(self.entry(liga, 'm2')['dir'], os.path.join(liga['path'], 'm2'))
+        self.assertIsNone(self.entry(liga, 'm2').get('track'))
 
     # ---- GET /api/tasks, GET /api/task
     def seed(self, sp, specs):
@@ -1313,30 +1357,33 @@ class ApiTracks(_Plain):
 
     SPECS = (('a-track', {'track': 'web'}), ('a-profile', {'profile': 'mobile'}), ('a-both', {'track': 'web', 'profile': 'x'}),
              ('a-none', {}), ('a-five', {'track': 5, 'profile': 'mobile'}), ('a-empty', {'track': '', 'profile': 'web'}))
-    WANT = {'a-track': ('web', None), 'a-profile': ('mobile', 'mobile'), 'a-both': ('web', 'x'), 'a-none': (None, None),
-            'a-five': ('mobile', 'mobile'), 'a-empty': ('web', 'web')}
+    # 4d-4a: `profile` з API прибрано, а `track` читається лише з `track` (було: `a-profile` → 'mobile', `a-five`/`a-empty` теж)
+    WANT = {'a-track': 'web', 'a-profile': None, 'a-both': 'web', 'a-none': None, 'a-five': None, 'a-empty': None}
 
-    def test_tasks_and_task_carry_track_and_keep_profile(self):
+    def test_tasks_and_task_carry_track_and_no_profile(self):
         self.two_tracks()
         self.seed(self.sp, self.SPECS)
         st, body = self.srv.req('GET', '/api/tasks')
         self.assertEqual(st, 200, body)
         rows = {r['id']: r for r in body['tasks']}
         self.assertEqual(sorted(rows), sorted(self.WANT))
-        for tid, (track, profile) in self.WANT.items():
+        for tid, track in self.WANT.items():
             self.assertIn('track', rows[tid])
-            self.assertEqual((rows[tid]['track'], rows[tid]['profile']), (track, profile), tid)
+            self.assertNotIn('profile', rows[tid], tid)
+            self.assertEqual(rows[tid]['track'], track, tid)
             st, one = self.srv.req('GET', '/api/task', task=tid)                       # задачу вибирає заголовок, не `?id=`
             self.assertEqual(st, 200, one)
-            self.assertEqual((one['track'], one['profile']), (track, profile), tid)
+            self.assertNotIn('profile', one, tid)
+            self.assertEqual(one['track'], track, tid)
         st, body = self.srv.req('GET', '/api/tasks?all=1')
-        self.assertEqual({r['id']: r['track'] for r in body['tasks']}, {k: v[0] for k, v in self.WANT.items()})
+        self.assertEqual({r['id']: r['track'] for r in body['tasks']}, self.WANT)
 
     # ---- GET /api/spaces
     def test_spaces_listing_names_the_tracks_but_not_their_roots_or_repos(self):
         self.two_tracks()
-        plain = self.make_space('Plain')                      # ДО `liga()`: файл ЛІГИ реєструє «legacy»-простір над `~/work`
+        plain = self.make_space('Plain')
         liga = self.liga()
+        self.legacy_cfg()                                     # корінь старого файла з репо — теж у тілі не зустрічається
         st, raw = self.srv.req('GET', '/api/spaces', raw_text=True)
         self.assertEqual(st, 200)
         listed = {s['id']: s for s in json.loads(raw)['spaces']}
@@ -1358,12 +1405,11 @@ class ApiTracks(_Plain):
         self.two_tracks()
         self.make_space('Plain')
         self.liga()
-        with mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own, \
-                mock.patch.object(serve, '_legacy_cfg', wraps=serve._legacy_cfg) as leg:
+        with mock.patch.object(serve, '_own_tracks', wraps=serve._own_tracks) as own:
             out = serve.spaces_listing()
-        self.assertEqual(len(out['spaces']), 4)                                     # Alpha, Plain, «legacy» (файл ЛІГИ), Liga
+        self.assertGreaterEqual(len(out['spaces']), 3)                              # Alpha, Plain, Liga (+ можливий «legacy»)
         self.assertEqual(own.call_count, len(out['spaces']))                        # по одному читанню `space.json` на простір
-        self.assertEqual(leg.call_count, 1)                                         # і один корінь ЛІГИ
+        self.assertFalse(hasattr(serve, '_legacy_cfg'))                             # 4d-4a: кореня старого файла рантайм не читає
 
     def test_spaces_listing_checks_no_roots_at_all(self):
         """⛔ Ревʼю Task 4: листинг віддає лише `id` і `label`, а корінь на відімкненому чи повільному томі міг би підвісити
@@ -1423,41 +1469,89 @@ class ApiTracksImplicitSpace(_LayerOff):
     def tasks(self):
         return serve.load_tasks()['tasks']
 
-    def test_track_is_the_same_as_profile(self):
+    # 4d-4a: у режимі «шар вимкнено» напрямків нема (адаптер зник): три тести про `track ≡ profile` переписано під це.
+    def test_a_profile_is_ignored_and_nothing_is_written_as_a_track(self):
+        # було `…track_is_the_same_as_profile`: `profile: 'seo'` і `track: 'seo'` давали ідентичні записи з `track == profile`
         for name, body in (('seo', {'profile': 'seo'}), ('united', {'profile': 'united'}), ('zzz', {'profile': 'zzz'}),
                            ('upper', {'profile': 'United'}), ('none', {}), ('empty', {'profile': ''}), ('null', {'profile': None})):
-            st_p, resp_p = self.srv.req('POST', '/api/task-new', {'id': 'p-' + name, 'title': 'T', **body})
-            twin = {'track': body['profile']} if 'profile' in body else {}
-            st_t, resp_t = self.srv.req('POST', '/api/task-new', {'id': 't-' + name, 'title': 'T', **twin})
-            self.assertEqual((st_p, st_t), (200, 200), (name, resp_p, resp_t))
-            ep, et = dict(self.tasks()['p-' + name]), dict(self.tasks()['t-' + name])
-            for e in (ep, et):
-                e.pop('opened')
-            self.assertEqual(os.path.dirname(ep.pop('dir')), os.path.dirname(et.pop('dir')), name)
-            for e, tid in ((ep, 'p-' + name), (et, 't-' + name)):
-                if 'gitlab' in e:
-                    self.assertEqual(e['gitlab'].pop('path'), 'mockup/' + tid)        # решта запису — та сама
-            self.assertEqual(ep, et, name)
-            self.assertEqual((ep['track'], ep['profile']), (et['track'], et['profile']))
+            st, resp = self.srv.req('POST', '/api/task-new', {'id': 'p-' + name, 'title': 'T', **body})
+            self.assertEqual(st, 200, (name, resp))
+            e = self.tasks()['p-' + name]
+            self.assertIsNone(e.get('track'), name)
+            self.assertIsNone(e.get('profile'), name)
+            self.assertNotIn('gitlab', e, name)                                     # `profile_repos` старого файла не читається
+            self.assertEqual(os.path.dirname(e['dir']), os.path.expanduser('~/work/shared'), name)   # `design_work_root` файла
 
-    def test_conflict_is_refused_before_any_write_and_unknown_is_never_refused(self):
+    def test_conflict_and_any_track_are_refused_before_any_write(self):
+        # було `…and_unknown_is_never_refused`: `track: 'never-heard'` писався як є — тепер `unknown-track` (відмінність спеки 1/4)
         before = _raw(os.environ['DC_TASKS_FILE'])
-        for extra, code in (({'track': 'seo', 'profile': 'united'}, 'bad-track'), ({'track': 5}, 'bad-track'),
-                            ({'profile': 5}, 'bad-profile')):
+        for extra, code in (({'track': 'seo', 'profile': 'united'}, 'unknown-track'), ({'track': 5}, 'bad-track'),
+                            ({'profile': 5}, 'bad-profile'), ({'track': 'never-heard'}, 'unknown-track'),
+                            ({'track': 'United'}, 'bad-track')):
             st, body = self.srv.req('POST', '/api/task-new', {'id': 'c1', **extra})
             self.assertEqual((st, body.get('code')), (400, code), extra)
             self.assertEqual(_raw(os.environ['DC_TASKS_FILE']), before, extra)
-        st, body = self.srv.req('POST', '/api/task-new', {'id': 'c2', 'track': 'never-heard'})
-        self.assertEqual(st, 200, body)
-        self.assertEqual(self.tasks()['c2']['profile'], 'never-heard')
 
-    def test_tasks_rows_carry_track(self):
-        self.assertEqual(self.srv.req('POST', '/api/task-new', {'id': 'r1', 'track': 'seo'})[0], 200)
+    def test_tasks_rows_carry_track_and_the_label_is_the_value(self):
+        for name in ('r1', 'r2'):
+            os.makedirs(os.path.join(self.home, name))
+        cfg = serve.load_tasks()
+        cfg['tasks']['r1'] = {'dir': os.path.join(self.home, 'r1'), 'title': 'R', 'track': 'seo'}
+        cfg['tasks']['r2'] = {'dir': os.path.join(self.home, 'r2'), 'title': 'R', 'profile': 'seo'}
+        gen._write(os.environ['DC_TASKS_FILE'], cfg)
         st, body = self.srv.req('GET', '/api/tasks')
-        row = next(r for r in body['tasks'] if r['id'] == 'r1')
-        self.assertEqual((row['track'], row['profile'], row['tags']), ('seo', 'seo', ['SEO']))
+        rows = {r['id']: r for r in body['tasks']}
+        self.assertEqual((rows['r1']['track'], rows['r1']['tags']), ('seo', ['seo']))       # було ['SEO']: підпис адаптера зник
+        self.assertEqual((rows['r2']['track'], rows['r2']['tags']), (None, []))              # лише `profile` — без мітки
+        self.assertNotIn('profile', rows['r1'])
         st, one = self.srv.req('GET', '/api/task', task='r1')
-        self.assertEqual((one['track'], one['profile']), ('seo', 'seo'))
+        self.assertEqual(one['track'], 'seo')
+        self.assertNotIn('profile', one)
+
+
+class OfTaskTrackOnly(_Plain):
+    """4d-4a (спека §3): `of_task` читає ЛИШЕ `track`; `profile` у записах не читається ні ядром, ні API, ні мітками, ні `?ds=`.
+    Мутація «`of_task` знову падає на `profile`» червоніє тут (і в `TaskTrack`)."""
+
+    def test_of_task_never_reads_profile(self):
+        self.assertIsNone(tracks.of_task({'profile': 'united'}))
+        self.assertEqual(tracks.of_task({'track': 'seo', 'profile': 'united'}), 'seo')
+        self.assertIsNone(tracks.of_task({'track': '', 'profile': 'united'}))     # порожній `track` НЕ відкриває `profile`
+        self.assertIsNone(tracks.of_task({'track': 5, 'profile': 'united'}))
+
+    def test_label_tag_has_no_legacy_parameter(self):
+        self.assertEqual(list(inspect.signature(tracks.label_tag).parameters), ['tracks', 'task'])
+        self.assertIsNone(tracks.label_tag([], {'profile': 'united'}))
+
+    def test_the_api_has_no_profile_key_but_has_track(self):
+        self.two_tracks()
+        d = os.path.join(self.tmp, 'ot', 'a-2')
+        os.makedirs(d)
+        with open(os.path.join(self.sp['path'], 'tasks.json'), 'w', encoding='utf-8') as f:
+            json.dump({'tasks': {'a-1': {'dir': d, 'title': 'T', 'track': 'web', 'profile': 'web'},
+                                 'a-2': {'dir': d, 'title': 'T', 'profile': 'web'}}, 'current': 'a-1'}, f)
+        spaces.switch_space(self.sp['id'])
+        srv = gen.Server().__enter__()
+        self.addCleanup(srv.__exit__, None, None, None)
+        st, body = srv.req('GET', '/api/tasks')
+        rows = {r['id']: r for r in body['tasks']}
+        self.assertEqual((st, sorted(rows)), (200, ['a-1', 'a-2']))
+        for tid, want in (('a-1', 'web'), ('a-2', None)):
+            self.assertIn('track', rows[tid])
+            self.assertNotIn('profile', rows[tid], tid)
+            self.assertEqual(rows[tid]['track'], want, tid)
+            st, one = srv.req('GET', '/api/task', task=tid)
+            self.assertEqual(st, 200, one)
+            self.assertNotIn('profile', one, tid)
+            self.assertEqual(one['track'], want, tid)
+
+    def test_a_profile_only_record_has_no_label_and_no_ds_in_an_ordinary_space(self):
+        self.two_tracks()
+        plain = {'profile': 'web'}                                                 # виміряно на прототипі: стенд `plain`, `a-2`
+        self.assertEqual(serve.task_tags(plain, self.sp), [])
+        self.assertEqual(serve.task_ds(plain, self.sp), '')
+        self.assertEqual(serve.task_tags({'track': 'web', 'profile': 'zzz'}, self.sp), ['Web'])
+        self.assertEqual(serve.task_ds({'track': 'web', 'profile': 'zzz'}, self.sp), 'united')
 
 
 class ServerHygiene(unittest.TestCase):
@@ -1477,11 +1571,12 @@ class ServerHygiene(unittest.TestCase):
                      'FALLBACK_WORK_ROOT'):
             self.assertFalse(hasattr(serve, name), name)
 
-    def test_the_one_wrapper_is_thin_and_marked_and_work_root_is_gone(self):
-        """`work_root` прибрано в Task 5 (`bin/` перейшов на `tracks`, більше ніхто не кличе); `profile_repos` лишається — на ній
-        тримаються `_liga_flow`, `track_repo` і тести, що її підміняють."""
+    def test_work_root_and_the_adapter_wrappers_are_gone(self):
+        """`work_root` прибрано в 4d-1 (`bin/` перейшов на `tracks`); 4d-4a прибрав і `profile_repos`, `_legacy_cfg` (було:
+        `…the_one_wrapper_is_thin_and_marked` — `profile_repos` лишалась обгорткою «до 4d-4»)."""
         self.assertFalse(hasattr(serve, 'work_root'))
-        self.assertIn('до 4d-4', serve.profile_repos.__doc__)
+        self.assertFalse(hasattr(serve, 'profile_repos'))
+        self.assertFalse(hasattr(serve, '_legacy_cfg'))
         for name in ('roots.py', 'registry.py', 'state.py'):          # `bin/` не дублює логіку коренів і не бере її з `serve`
             with open(os.path.join(os.path.dirname(_APP), 'bin', name), encoding='utf-8') as f:
                 text = f.read()

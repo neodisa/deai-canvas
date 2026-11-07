@@ -582,6 +582,10 @@ class ReadParity(unittest.TestCase):
     def same_as_snapshot(self, got, name, dashboard_cap='legacy', error=None):
         """Тіло збігається із записаним. `error` — свідомо ІНШИЙ текст помилки (модуль замість сирого винятку)."""
         want = copy.deepcopy(self.snap[name])
+        # 4d-4a (спека, відмінності 3 і 4): рядки «Моїх» більше не несуть `profile`, а задача лише з `profile` (знімок засіяв
+        # `profile: 'tool'` без `track`) втрачає похідну мітку: `['tool']` → `[]`; решта тіла — як у знімку 0.11.0
+        self.assertTrue(all(m['profile'] == 'tool' and m['tags'] == ['tool'] for m in want['body']['mine']))
+        want['body']['mine'] = [{**{k: v for k, v in m.items() if k != 'profile'}, 'tags': []} for m in want['body']['mine']]
         self.assertEqual(got['dashboard'], dashboard_cap, 'новий ключ capabilities.dashboard — рівно такий')
         if error is not None:
             self.assertEqual(got['body']['team']['error'], error)
