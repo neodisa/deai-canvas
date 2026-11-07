@@ -94,30 +94,5 @@ class IsolationCore(unittest.TestCase):
         self.assertTrue(isolation.real_home(None))
 
 
-class ParityWithImplicitUntilRemoval(unittest.TestCase):
-    """До видалення `app/implicit.py` (4d-4b Task 10) його `isolated`/`route` — ОРИГІНАЛ, а `isolation` — точна копія: на всіх комбінаціях оточення відповіді рівні
-    (`implicit.py` не чіпаємо: тести `ImplicitCore` стверджують його форму, зокрема `shared=False`). Клас видаляється разом із модулем."""
-
-    COMBOS = ({}, {'DC_TASKS_FILE': '1'}, {'DC_NO_OVERVIEW': '1'}, {'DC_TEAM_FAKE': '/tmp/f.json'}, {'DC_TRACKER_FAKE': '/tmp/f.json', 'DC_NO_OVERVIEW': '1'},
-              {'DC_TEAMS_FAKE': '/tmp/f.json', 'DC_TASKS_FILE': '1'}, {'DC_TEAM_FAKE': ''})
-
-    def setUp(self):
-        e = mock.patch.dict(os.environ, {})
-        e.start()
-        self.addCleanup(e.stop)
-        for k in ENVS:
-            os.environ.pop(k, None)
-
-    def test_the_copy_equals_the_original(self):
-        import implicit
-        for env in self.COMBOS:
-            with mock.patch.dict(os.environ, env):
-                self.assertEqual(implicit.isolated(), isolation.isolated(), env)
-                for role in implicit.IMPLICIT_ROLES:
-                    self.assertEqual(implicit.route(implicit.for_role(role)), isolation.route(role), (env, role))
-        self.assertEqual({r: implicit.for_role(r).fake_env for r in implicit.IMPLICIT_ROLES if implicit.for_role(r).fake_env},
-                         isolation.FAKE_ENV)
-
-
 if __name__ == '__main__':
     unittest.main()

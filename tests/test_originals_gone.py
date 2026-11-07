@@ -13,6 +13,7 @@ import liga_fixture as lf  # noqa: E402
 import deai_modules  # noqa: E402
 import isolation  # noqa: E402
 import spaces  # noqa: E402
+import serve  # noqa: E402
 
 ROLES = ('publish', 'comments', 'vcs', 'dashboard', 'tracker', 'notify')
 
@@ -170,6 +171,67 @@ class ProviderCallersPinTheSpace(unittest.TestCase):
         self.assertEqual(self.scan(ast.parse("def f():\n    return deai_modules.provider('tracker')\n")), {'f': 'tracker'})
         self.assertEqual(self.scan(ast.parse("def f(sp):\n    return deai_modules.provider('tracker', sp)\n")), {})
         self.assertEqual(self.scan(ast.parse("x = m.provider('vcs')")), {'<module>': 'vcs'})
+
+
+class CommentsInIsolation(unittest.TestCase):
+    """Д6: ізольований прогін читає облікові коментарів із запису лише в ТИМЧАСОВОМУ домі; у справжньому — `comments-unconfigured`."""
+
+    def route(self, fx):
+        sp = _liga(fx)
+        with spaces.request_space('legacy'):
+            prov, _err = serve.comments_provider(sp)
+            return serve.comments_route(sp, prov)
+
+    def test_temp_home_gives_the_fixture_context(self):
+        fx = lf.LigaFixture(self).env(DC_TASKS_FILE='/nonexistent/tasks.json').build()
+        _mod, ctx, _ch = self.route(fx)
+        self.assertEqual((ctx['settings']['url'], ctx['secrets']['key']), (lf.SB_URL, lf.SB_KEY))
+
+    def test_real_home_is_refused(self):
+        fx = lf.LigaFixture(self).env(DC_TASKS_FILE='/nonexistent/tasks.json').build()
+        with mock.patch.object(isolation, 'real_home', lambda home: True):
+            with self.assertRaises(deai_modules.ModuleError) as cm:
+                self.route(fx)
+        self.assertEqual(cm.exception.code, 'comments-unconfigured')
+        self.assertIn('«Підключення»', cm.exception.message)
+
+    def test_non_isolated_uses_the_record_in_any_home(self):
+        fx = lf.LigaFixture(self).env().build()
+        with mock.patch.object(isolation, 'real_home', lambda home: True):
+            _mod, ctx, _ch = self.route(fx)
+        self.assertEqual(ctx['settings']['url'], lf.SB_URL)
+
+    def test_a_missing_record_is_unconfigured_not_the_root(self):
+        fx = lf.LigaFixture(self).env().build(roles=(), root_extra={'supabase_url': lf.SB_URL, 'supabase_key': lf.SB_KEY})
+        sp = _liga(fx)
+        with spaces.request_space('legacy'):
+            prov, _err = serve.comments_provider(sp)
+        self.assertIsNone(prov)
+
+
+class DashboardSyncWithoutLegacy(unittest.TestCase):
+    def test_no_dashboard_record_means_no_provider_even_with_the_service_key(self):
+        import overview_push
+        fx = lf.LigaFixture(self).env(SUPABASE_URL=lf.SB_URL, SUPABASE_SERVICE_KEY='service-key-alpha').build(roles=())
+        self.assertEqual(overview_push._target(_liga(fx)), (None, None, False))
+        self.assertFalse(hasattr(overview_push, '_legacy_config'))
+
+    def test_with_the_record_the_module_ctx_is_used(self):
+        import overview_push
+        fx = lf.LigaFixture(self).env().build()
+        mod, ctx, legacy = overview_push._target(_liga(fx))
+        self.assertEqual((mod.id, ctx['settings']['url'], legacy), ('supabase-dashboard', lf.SB_URL, True))
+
+
+class TextsNameTheConnectionsScreen(unittest.TestCase):
+    def test_no_text_sends_the_person_to_tasks_json(self):
+        import dashboard
+        import notify
+        import tracker
+        for text in (serve.COMMENTS_UNCONFIGURED, dashboard.UNCONFIGURED, notify.UNCONFIGURED, tracker.UNCONFIGURED):
+            self.assertIn('«Підключення»', text)
+            for bad in ('tasks.json', 'jira_base', 'JIRA_EMAIL', 'JIRA_TOKEN', 'supabase_url'):
+                self.assertNotIn(bad, text)
 
 
 if __name__ == '__main__':

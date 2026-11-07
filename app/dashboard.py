@@ -223,33 +223,7 @@ MAX_ROWS = 500
 READ_TIMEOUT = 6
 LEGACY_TABLE = 'overview_projects'
 LEGACY_MODULE = 'supabase-dashboard'
-UNCONFIGURED = 'Supabase не налаштовано'
-
-
-def legacy_ctx(url, key, space_id=''):
-    """`ctx` неявного постачальника ЛІГИ (`Implicit`): `supabase-dashboard` з адресою й ключем конфігу установки і таблицею
-    `overview_projects`. `url`/`key` — з `supabase_config()` викликача (`serve` кличе СВОЮ обгортку: її підміняють тести);
-    нема конфігу (`url is None`) — `ModuleError('dashboard-unconfigured')` з текстом, який на екрані «Команда» був і раніше.
-
-    ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
-    справжній `~/.deai` машини (той самий урок, що `serve._vcs_legacy_ctx`/`_comments_legacy_ctx`).
-    `settings.compat = 'comment-layer'` — модуль не відмовляє публічному ключу ЛІГИ (паритет з 0.11.0; `check` ЛІГИ кличеться лише з
-    «Підключення»). `legacy: True` лишено для чужих модулів: вбудовані його НЕ читають (охоронець у `tests/test_liga_migrate.py`)."""
-    if url is None:
-        raise deai_modules.ModuleError('dashboard-unconfigured', message=UNCONFIGURED)
-    return {'space': {'id': space_id, 'path': ''}, 'settings': {'url': url, 'table': LEGACY_TABLE, 'compat': 'comment-layer'},
-            'secrets': {'key': key}, 'ModuleError': deai_modules.ModuleError, 'legacy': True}
-
-
-def legacy_module():
-    """Вбудований `supabase-dashboard` із каталогу БЕЗ простору (шлях ЛІГИ); не завантажився — `ModuleError('module-error')`."""
-    try:
-        m = deai_modules.catalog().get(LEGACY_MODULE)
-    except Exception as e:  # noqa: BLE001 — збій каталогу = відмова модуля, не 500
-        raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
-    if m is None or m.status != 'ok':
-        raise deai_modules.ModuleError('module-error', message=f'{LEGACY_MODULE} module is not loaded')
-    return m
+UNCONFIGURED = 'Supabase не налаштовано: додайте адресу й ключ на екрані «Підключення»'
 
 
 def normalize_rows(data):
@@ -324,7 +298,7 @@ def push_registry(module, ctx, entries, where, *, log=print, call=None):
 
 def sync(cfg, module, ctx, *, discover=None, statuses=None, channel_of=None, identity=None, log=print, call=None):
     """Один прохід синку карток простору (спека §4). `cfg` — файл задач простору (`{'tasks': {…}}`); `module`/`ctx` —
-    постачальник ролі `dashboard` (модуль + його `ctx`: для ЛІГИ його будує `legacy_ctx`); `call` — `deai_modules.call` (шов для
+    постачальник ролі `dashboard` (модуль + його `ctx`: `module_ctx` запису); `call` — `deai_modules.call` (шов для
     тестів); `identity` — `(імʼя, ключ)` дизайнера, без нього — `_identity()` (git-конфіг).
     `discover()` → `{id: запис}` (лише ЛІГА: реєстр GitLab) — крок, що ще не став роллю: звичайний простір його не має;
     `statuses(keys)` → `{ключ: {name, cat}}` — статуси трекера (будь-який простір із роллю `tracker`: колбек будує CLI з

@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
-import implicit  # неявний постачальник ролі (4d-2): `Implicit`, закон ізоляції `route`
+import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
 import tracker  # статуси задач у трекері (4c-2): ядро ролі `tracker` (ключі, пакети, нормалізація, адаптер ЛІГИ)
@@ -619,8 +619,6 @@ def vcs_legacy_texts(prov, space):
     ті самі. ⛔ Лише вбудований І саме `git-sync` (Поправка 3): свій модуль міг оголосити власне `compat` з іншим змістом.
     Споживачі НЕ перевіряють тип постачальника самі — читають третій елемент `vcs_provider()` (`TextPredicateGuard`).
     ТОТАЛЬНА: нечитабельний `space.json` — `False`, не виняток (`compat_of`)."""
-    if isinstance(prov, implicit.Implicit):
-        return True
     return (isinstance(prov, deai_modules.Module) and getattr(prov, 'origin', 'builtin') == 'builtin'
             and prov.id == deai_modules.VCS_MODULE
             and deai_modules.compat_of(space, prov.id) == deai_modules.COMPAT_DESIGN_CANVAS)
@@ -642,20 +640,12 @@ def vcs_provider():
         raise VcsError(getattr(e, 'code', 'vcs-error'), _frame_reason(e)) from None
     if prov is None:
         return None
-    if isinstance(prov, implicit.Implicit):
-        try:
-            m = deai_modules.catalog().get(VCS_MODULE)                 # лише вбудовані: без простору
-        except Exception as e:  # noqa: BLE001 — шлях ЛІГИ тепер залежить від каталогу: збій = vcs-error, не 500
-            raise VcsError('vcs-error', f'module catalog: {type(e).__name__}') from None
-        if m is None or m.status != 'ok':
-            raise VcsError('vcs-error', f'{VCS_MODULE} module is not loaded')
-        return m, _vcs_legacy_ctx(), vcs_legacy_texts(prov, None)
     try:
         space = spaces.active_space()
         legacy = vcs_legacy_texts(prov, space)                       # ОДИН раз: третій елемент для всіх споживачів текстів
-        if _builtin_shared(space, prov) and implicit.isolated():
+        if _builtin_shared(space, prov) and isolation.isolated():
             # ⛔ Закон ізоляції (4d-3b, спека §5): запис `shared_state` в ізольованому прогоні (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`)
-            # будує `ctx` НЕЯВНОГО шляху — налаштування запису не читаються, дзеркала плоскі в `DC_MIRRORS_DIR`. Місце ізоляції
+            # будує `ctx` ізольованого шляху — налаштування запису не читаються, дзеркала плоскі в `DC_MIRRORS_DIR`. Місце ізоляції
             # одне: ця функція і `comments_route`. Тексти — за `compat` (предикат вище), не за ізоляцією.
             return prov, _vcs_legacy_ctx(), legacy
         ctx = deai_modules.module_ctx(space, prov)
@@ -1906,24 +1896,23 @@ TEAM_NO_PROVIDER = 'вимкнено: у просторі нема постач�
 
 def _team_fetch(space, prov):
     """Один справжній прохід за рядками команди: `(rows, error)`, не кидає. `prov` — постачальник ролі `dashboard`
-    простору запиту: неявний постачальник (`Implicit`, ЛІГА) чи `Module`; `space` — запис простору (для `module_ctx`; для `Implicit` не потрібен).
+    простору запиту (`Module`); `space` — запис простору (для `module_ctx`).
 
     Порядок джерел важливий, і ⛔ другий пункт — закон ізоляції (той самий, що в `notify_call` і `_registry_push`):
     `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають «стан не справжній цієї машини», тож ходити з нього в живий Supabase не можна.
-    Усі три пункти — лише для неявного постачальника (`Implicit`):
+    Усі три пункти — лише для запису `shared_state` (ЛІГА):
     1. `DC_TEAM_FAKE` — локальний JSON-масив замість бази (шов для тестів; рядки як є, без відбору ключів);
     2. ізольований прогін без шва — модуль НЕ кличеться, мережі НЕМАЄ, чесне пояснення замість рядків;
-    3. інакше вбудований `supabase-dashboard` з `legacy_ctx(*supabase_config())` — ту саму таблицю `overview_projects` і ті самі
-       заголовки, що колись зашитий `urlopen`. Звичайний простір: `module_ctx(space, prov)` свого модуля.
+    3. інакше модуль із `module_ctx(space, prov)` — налаштування й секрет ЗАПИСУ.
     Виклик модуля — `dashboard.rows` (`READ_TIMEOUT`): екран «Задачі» — перша сторінка, і висіти на ній через мертвий VPN
     довше за кілька секунд не можна.
     `ModuleError` (нема конфігу, збій модуля, `check-timeout`) — це ТЕКСТ для плашки, не помилка коду; `except Exception`
     для решти, а не вузький перелік: контракт «ніколи не кидає» тримає екран живим для «Моїх» навіть тоді, коли відповідь бази —
     не те, що очікували."""
     try:
-        if isinstance(prov, implicit.Implicit) or _shared_module(space, prov):
-            # ⛔ `shared_state`-модуль іде тим самим законом (4d-3a): шов → ізоляція → живий, роль — з `implicit.for_role`
-            kind, fake = implicit.route(prov if isinstance(prov, implicit.Implicit) else implicit.for_role('dashboard'))
+        if _shared_module(space, prov):
+            # ⛔ `shared_state`-модуль іде законом ізоляції (4d-3a): шов → ізоляція → живий (`isolation.route`)
+            kind, fake = isolation.route('dashboard')
             if kind == 'fake':
                 with open(fake, encoding='utf-8') as fh:
                     data = json.load(fh)
@@ -1932,11 +1921,7 @@ def _team_fetch(space, prov):
                 return [r for r in data if isinstance(r, dict)], None
             if kind == 'isolated':
                 return [], TEAM_ISOLATED
-            if not isinstance(prov, implicit.Implicit):
-                return dashboard.rows(prov, deai_modules.module_ctx(space, prov)), None
-            # Конфігу установки нема: дашборд команди недосяжний, «Мої» живуть без нього (і без мережі) — `dashboard-unconfigured`.
-            ctx = dashboard.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
-            return dashboard.rows(dashboard.legacy_module(), ctx), None
+            return dashboard.rows(prov, deai_modules.module_ctx(space, prov)), None
         return dashboard.rows(prov, deai_modules.module_ctx(space, prov)), None
     except deai_modules.ModuleError as e:
         return [], (e.message or e.code)[:200]
@@ -1950,9 +1935,9 @@ def _team_fetch(space, prov):
 
 def _shared_module(space, prov):
     """4d-3a: явний `Module` із `shared_state: true` — спільний стан ЛІГИ: ролі `dashboard`/`tracker`/`notify` і синк ведуть його за
-    законом ізоляції (`implicit.route`), як `Implicit`, але живий виклик — модулем із `module_ctx`, а не легасі-збирачем."""
+    законом ізоляції (`isolation.route`); живий виклик — модулем із `module_ctx`."""
     # ⛔ Предикат БЕЗ походження (як у 4d-3a): свій модуль із `shared_state` в ізольованому прогоні й далі йде законом маршруту
-    # (`implicit.route`: шов/ізоляція), а не живим викликом зі справжніми секретами. Умова «вбудований» — лише в гілках ізоляції
+    # (`isolation.route`: шов/ізоляція), а не живим викликом зі справжніми секретами. Умова «вбудований» — лише в гілках ізоляції
     # `comments_route`/`vcs_provider` (`_builtin_shared`), де підставляється ключ кореня задач (4d-3b, ревʼю 2).
     return isinstance(prov, deai_modules.Module) and deai_modules.shared_state(space, prov.id)
 
@@ -2055,23 +2040,23 @@ def tracker_resolve():
 
 def _tracker_fetch(space, prov, keys):
     """Один справжній прохід за статусами `keys`: `(statuses, error)` або `None` (= трекера нема: ізоляція ЛІГИ). Не кидає.
-    `prov` — постачальник ролі `tracker` простору запиту: неявний (`Implicit`, ЛІГА) чи `Module`; `space` — запис простору (для `module_ctx`).
+    `prov` — постачальник ролі `tracker` простору запиту (`Module`); `space` — запис простору (для `module_ctx`).
 
-    Порядок джерел для `Implicit`; ⛔ другий пункт — закон ізоляції (той самий, що в `_team_fetch`, `notify_call` і `_registry_push`):
+    Порядок джерел для запису `shared_state` (ЛІГА); ⛔ другий пункт — закон ізоляції (той самий, що в `_team_fetch`, `notify_call` і `_registry_push`):
     `DC_TASKS_FILE`/`DC_NO_OVERVIEW` означають «стан не справжній цієї машини», тож ходити з нього в живу Jira не можна;
     1. `DC_TRACKER_FAKE` — локальний JSON `{ключ: {name, cat}}` замість Jira (шов для тестів; `tracker.normalize` до `keys`);
     2. ізольований прогін без шва — `None`: екран поводиться як без трекера (`tracker: null`), помилки НЕМАЄ (на відміну від
        «Команди» тут нічого пояснювати: статуси лишаються з рядків дашборда, як і були);
-    3. інакше вбудований `jira-tracker` з `tracker.legacy_ctx(*jira_config())`; нема конфігу — `tracker-unconfigured` (текст для
-       плашки, мережі нема). Звичайний простір: `module_ctx(space, prov)` свого модуля.
+    3. інакше модуль із `module_ctx(space, prov)` — налаштування й секрет ЗАПИСУ; нема конфігу — `tracker-unconfigured` (текст для
+       плашки, мережі нема).
     Немає що питати (`keys` порожні) — `({}, None)` БЕЗ виклику й без конфігу: нічого не мовчить, нема за що показувати плашку.
     Виклик — `tracker.statuses` (`READ_TIMEOUT`/`READ_SOCKET_S`): екран «Задачі» — перша сторінка, і висіти на ній через мертвий VPN
     довше за кілька секунд не можна. Помилка — ТЕКСТ для плашки: `ModuleError` — його повідомлення (ядро вже вичистило секрети),
     решта — лише назва класу (`str(e)` чужого винятку не чищений і міг би винести секрет на екран)."""
     keys = list(keys)[:tracker.BATCH]
     try:
-        if isinstance(prov, implicit.Implicit) or _shared_module(space, prov):
-            kind, fake = implicit.route(prov if isinstance(prov, implicit.Implicit) else implicit.for_role('tracker'))
+        if _shared_module(space, prov):
+            kind, fake = isolation.route('tracker')
             if kind == 'fake':
                 with open(fake, encoding='utf-8') as fh:
                     data = json.load(fh)
@@ -2080,11 +2065,7 @@ def _tracker_fetch(space, prov, keys):
                 return None
             if not keys:       # ⛔ ПІСЛЯ шва й ізоляції (як у 0.15.0): ізольований прогін без ключів — `None`, а не `({}, None)`
                 return {}, None
-            if isinstance(prov, implicit.Implicit):
-                module = tracker.legacy_module()
-                ctx = tracker.legacy_ctx(*jira_config(), space_id=spaces.request_space_id() or '')
-            else:
-                module, ctx = prov, deai_modules.module_ctx(space, prov)     # `shared_state` (4d-3a): модуль, не легасі-збирач
+            module, ctx = prov, deai_modules.module_ctx(space, prov)         # `shared_state` (4d-3a): модуль із ctx запису
         else:
             if not keys:
                 return {}, None
@@ -2640,11 +2621,11 @@ def notify_call(fn, *args, resolved=None):
 
     ⛔ Підмінений конфіг = ЗАБОРОНА чіпати спільний стан — той самий закон, що в `_registry_push`: `DC_TASKS_FILE`/`DC_NO_OVERVIEW`
     ставлять тести й будь-який ізольований прогін, і замовчати чи увімкнути живий канал Teams команди з фікстури не можна НІ В
-    ЯКОМУ РАЗІ. Лише для неявного постачальника (`Implicit`, спільний Supabase ЛІГИ — той самий живий канал), порядок такий:
+    ЯКОМУ РАЗІ. Лише для запису `shared_state` (спільний Supabase ЛІГИ — той самий живий канал), порядок такий:
     1. `DC_TEAMS_FAKE` — локальний JSON замість бази для живих тестів (шов, а не другий шлях: він не пише нікуди, крім свого
        файла); відповідь — у формі модуля (`mute_state` — список, `mute_set` — `bool`). Звичайний простір із модулем шва НЕ бачить;
     2. ізольований прогін без шва — `OSError('ізольований конфіг…')`, модуль НЕ кличеться, мережі НЕМАЄ;
-    3. інакше вбудований `supabase-teams` з `notify.legacy_ctx(*supabase_config())`: нема конфігу — `notify-unconfigured`.
+    3. інакше модуль із `module_ctx(space, prov)` запису: нема конфігу — `notify-unconfigured`.
     Звичайний простір: `module_ctx(space, prov)` свого модуля. Виклик — `deai_modules.call(…, timeout=NOTIFY_TIMEOUT)`.
     ⛔ Відповідь модуля не береться на віру: `mute_state`, що не список, і `mute_set`, що не `bool`, — `notify-error` (не «нічого
     не замовчано» і не «успіх»: `1` і `True` — різні відповіді). ⛔ Аргументи `mute_set` перевіряє `notify.check_set_args` ДО
@@ -2655,8 +2636,8 @@ def notify_call(fn, *args, resolved=None):
     if prov is None:
         # Нікого: простір без інтеграцій і без модуля (раніше — `IntegrationsOff`). Маршрут відповідає 409 ще до цього виклику.
         raise OSError('сповіщень Teams у просторі нема')
-    if isinstance(prov, implicit.Implicit) or _shared_module(space, prov):
-        kind, fake = implicit.route(prov if isinstance(prov, implicit.Implicit) else implicit.for_role('notify'))
+    if _shared_module(space, prov):
+        kind, fake = isolation.route('notify')
         if kind == 'fake':
             try:
                 with open(fake, encoding='utf-8') as fh:
@@ -2675,11 +2656,7 @@ def notify_call(fn, *args, resolved=None):
         # Після шва (він пише лише у свій локальний файл), але ДО будь-якої мережі.
         if kind == 'isolated':
             raise OSError('ізольований конфіг: спільний стан Teams не чіпаємо')
-        if isinstance(prov, implicit.Implicit):
-            module = notify.legacy_module()
-            ctx = notify.legacy_ctx(*supabase_config(), space_id=spaces.request_space_id() or '')
-        else:
-            module, ctx = prov, deai_modules.module_ctx(space, prov)         # `shared_state` (4d-3a): модуль, не легасі-збирач
+        module, ctx = prov, deai_modules.module_ctx(space, prov)             # `shared_state` (4d-3a): модуль із ctx запису
     else:
         module, ctx = prov, deai_modules.module_ctx(space, prov)
     res = deai_modules.call(module, fn, ctx, *args, timeout=notify.NOTIFY_TIMEOUT)
@@ -2794,7 +2771,7 @@ def _comment_channel_in(sp, task, tid, internal=False):
     через `deai_modules.comment_channel_of`. Збій рішення (нема постачальника, `ModuleError`, `channel_for` на непридатному id) —
     схема comment-layer, як у 0.17.0: ні 5xx, ні `None`, помилку бачить сама роль коментарів."""
     prov = deai_modules.comments_prov_cached(sp)
-    if isinstance(prov, (implicit.Implicit, deai_modules.Module)):
+    if isinstance(prov, deai_modules.Module):
         try:
             return deai_modules.comment_channel_of(sp, prov, task, tid, internal=internal)
         except deai_modules.ModuleError:
@@ -3083,16 +3060,16 @@ def inject_comment_notice(html, why):
 
 
 def comments_provider(space=None):
-    """`(постачальник, відмова)` ролі `comments` для простору ЗАПИТУ: `Module`, `Implicit` чи `None`; якщо вирішити
+    """`(постачальник, відмова)` ролі `comments` для простору ЗАПИТУ: `Module` чи `None`; якщо вирішити
     не вдалось (`ModuleError`) — `(None, помилка)`. Хто відповідає людині сторінкою (а не JSON), не мусить ловити виняток
     сам.
 
     `space` — запис простору, який викликач ВЖЕ вирішив (`spaces.active_space()`, один раз на запит): постачальник, конфіг
     і канал тоді рахуються з ОДНОГО запису, а не з трьох читань реєстру. Без шару просторів чи без простору запиту
-    (`provider` читає реєстр лише коли простір зафіксовано) аргумент ігнорується — шлях ЛІГИ (Supabase з конфігу установки), як і було.
+    (`provider` читає реєстр лише коли простір зафіксовано) аргумент ігнорується — постачальника нема (`None`).
 
-    Помилка НІКОЛИ не перетворюється на `Implicit`, навіть у просторі з інтеграціями: шлях ЛІГИ — спільний Supabase (конфіг установки),
-    куди піни несуть знімки приватних макетів, а `provider('comments')` кидає лише тоді, коли людина ЯВНО ввімкнула
+    Помилка НІКОЛИ не перетворюється на запасного постачальника, навіть у просторі з інтеграціями: ЛІГА — спільний Supabase (запис
+    `supabase-comments`), куди піни несуть знімки приватних макетів, а `provider('comments')` кидає лише тоді, коли людина ЯВНО ввімкнула
     модуль коментарів і той не завантажився (чи `space.json` не прочитати, тож невідомо, що вона вмикала). Сторінка
     тоді лишається на локальному шарі з приміткою (`_commented`), а `/api/comment-config` віддає центральну відповідь
     модулів (`_comment_config`). У просторі БЕЗ інтеграцій те саме: явно ввімкнений і загублений модуль коментарів —
@@ -3110,49 +3087,26 @@ COMMENTS_MODULE = 'supabase-comments'
 #: Кошик Storage ЛІГИ для скріншотів пінів: картка Teams бере `meta.shotUrl` звідти (як старий адаптер 0.9.0). Джерело правди —
 #: `install_config.LEGACY_SHOTS_BUCKET` (його ділить міграція ЛІГИ, 4d-3b); тут — аліас.
 LEGACY_SHOTS_BUCKET = install_config.LEGACY_SHOTS_BUCKET
-COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано (supabase_url і supabase_key у tasks.json)'
-
-
-def _comments_legacy_ctx():
-    """`ctx` неявного постачальника коментарів простору ЛІГА: `supabase-comments` з адресою й ключем конфігу установки
-    (`supabase_config`) і кошиком скріншотів ЛІГИ. Нема конфігу — `ModuleError('comments-unconfigured')`.
-
-    ⛔ НЕ `deai_modules.module_ctx()`: у ЛІГИ нема `space.json`/`secrets.json`, а при вимкненому шарі `spaces.home()` — це
-    справжній `~/.deai` машини (той самий урок, що `_vcs_legacy_ctx`)."""
-    url, key = supabase_config()
-    if url is None:
-        raise deai_modules.ModuleError('comments-unconfigured', message=COMMENTS_UNCONFIGURED)
-    return {'space': {'id': spaces.request_space_id() or '', 'path': ''},
-            'settings': {'url': url, 'shots_bucket': LEGACY_SHOTS_BUCKET},
-            'secrets': {'key': key}, 'ModuleError': deai_modules.ModuleError}
+COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано: додайте адресу й ключ на екрані «Підключення»'
 
 
 def comments_route(space, prov):
-    """Як вести командні коментарі для ВЖЕ вирішеного постачальника `prov` (`Module` чи `Implicit` з `comments_provider`):
-    `(module, ctx, channel)`, де `channel(task, tid, internal=False)` — канал задачі.
+    """Як вести командні коментарі для ВЖЕ вирішеного постачальника `prov` (`Module` з `comments_provider`):
+    `(module, ctx, channel)`, де `channel(task, tid, internal=False)` — канал задачі (`deai_modules.comment_channel_of`: схема comment-layer для
+    мігрованої ЛІГИ — `comment_project` чи `dc/<задача>`, інакше `deai/<простір>/<задача>`) і `ctx` — `module_ctx` запису.
+    Кидає `ModuleError` (`comments-unconfigured`, `module-error`, коди `module_ctx`). Не кличе код модуля.
 
-    `Implicit` (ЛІГА) — вбудований `COMMENTS_MODULE`, `_comments_legacy_ctx()` і канал `comment_channel` (`comment_project`
-    чи `dc/<задача>`: на ньому історія, тиша Teams і лічильники дашборда); модуль — `module_ctx` і `channel_for`.
-    Кидає `ModuleError` (`comments-unconfigured`, `module-error`, коди `module_ctx`). Не кличе код модуля."""
-    if isinstance(prov, implicit.Implicit):
-        try:
-            m = deai_modules.catalog().get(COMMENTS_MODULE)            # лише вбудовані: без простору
-        except Exception as e:  # noqa: BLE001 — збій каталогу = відмова модуля, не 500
-            raise deai_modules.ModuleError('module-error', message=f'module catalog: {type(e).__name__}') from None
-        if m is None or m.status != 'ok':
-            raise deai_modules.ModuleError('module-error', message=f'{COMMENTS_MODULE} module is not loaded')
-        return m, _comments_legacy_ctx(), (lambda task, tid, internal=False:
-                                           deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
+    ⛔ Закон ізоляції (Д6, 4d-4b): ізольований прогін (`DC_TASKS_FILE`/`DC_NO_OVERVIEW`) із вбудованим `shared_state`-записом у СПРАВЖНЬОМУ
+    домі машини (`isolation.real_home`) — спільного ключа не беремо: `comments-unconfigured`. У тимчасовому домі тесту `module_ctx` бере
+    налаштування й секрет ФІКСТУРИ (вигадану пару), а жива мережа відрізана підміною шва `_open` модуля."""
     if not isinstance(prov, deai_modules.Module):
         raise deai_modules.ModuleError('module-error', message='comments: no provider')
     # Канал — функція `comment_channel_of`: вбудований `supabase-comments` із `compat: "comment-layer"` (мігрована ЛІГА) веде
     # коментарі схемою comment-layer, решта модулів — `deai/<простір>/<задача>` (`channel_for`).
     channel = (lambda task, tid, internal=False:
                deai_modules.comment_channel_of(space, prov, task, tid, internal=internal))
-    if _builtin_shared(space, prov) and implicit.isolated():
-        # ⛔ Закон ізоляції (4d-3b, спека §5): запис `shared_state` в ізольованому прогоні бере ключ із кореня файла задач, а не з
-        # `secrets.json` (`_comments_legacy_ctx`; нема конфігу — `comments-unconfigured`, як в `Implicit`). Місце ізоляції одне.
-        return prov, _comments_legacy_ctx(), channel
+    if _builtin_shared(space, prov) and isolation.isolated() and isolation.real_home(spaces.home()):
+        raise deai_modules.ModuleError('comments-unconfigured', message=COMMENTS_UNCONFIGURED)
     return prov, deai_modules.module_ctx(space, prov), channel
 
 
@@ -3163,15 +3117,12 @@ def comments_route(space, prov):
 #
 #     постачальник        читання                                   закриття
 #     Module              `list` модуля → піни у формі REST         `resolve` модуля
-#     Implicit            `list` модуля `supabase-comments` з       `resolve` того ж модуля (з номером
-#                         конфігом установки, канал                 ітерації), `spaces.require_integrations()`
-#                         `comment_channel` (`comments_route`)      перед кожним викликом
-#     None                `IntegrationsOff` (як у просторі без      `IntegrationsOff`
+#     None               `IntegrationsOff` (як у просторі без      `IntegrationsOff`
 #                         інтеграцій: командних коментарів нема)
 #     ModuleError         `ModuleError` — лише локальні піни        `ModuleError`
 #
-# ⛔ `ModuleError` (явно ввімкнений модуль загубився чи `space.json` не прочитати) НІКОЛИ не перетворюється на `Implicit`:
-# Supabase ЛІГИ (конфіг установки) — СПІЛЬНИЙ проєкт, куди піни несуть знімки приватних макетів (той самий закон, що в `_commented`,
+# ⛔ `ModuleError` (явно ввімкнений модуль загубився чи `space.json` не прочитати) НІКОЛИ не перетворюється на запасного постачальника:
+# Supabase ЛІГИ (запис `supabase-comments`) — СПІЛЬНИЙ проєкт, куди піни несуть знімки приватних макетів (той самий закон, що в `_commented`,
 # `_comment_config` і `publish_comments`). Простір — ЯВНИМ аргументом (`spaces.active_space()`, один раз на запит чи
 # команду CLI), а не з `threading.local` усередині: так рішення не залежить від того, чий простір зараз зафіксовано.
 
@@ -3395,14 +3346,12 @@ class ProjectComments:
     """Хто веде проєктні коментарі простору `space` для АГЕНТА (див. таблицю вище). Рішення береться ОДИН раз у
     конструкторі, з явного `space`; решта методів лише виконують його для задачі `(task, tid)`.
 
-    `kind`: `'module'` | `'implicit'` | `'off'` (нікого: простір без інтеграцій і без модуля) | `'broken'` (рішення не
-    вдалось, `err` — `ModuleError`). І `'module'`, і `'implicit'` ідуть ОДНИМ шляхом — функціями модуля (`comments_route`);
-    ЛІГА (4b-2) — вбудований `supabase-comments` з конфігом установки й каналом `comment_channel`.
+    `kind`: `'module'` | `'off'` (нікого: простір без інтеграцій і без модуля) | `'broken'` (рішення не вдалось, `err` —
+    `ModuleError`). `'module'` іде функціями модуля (`comments_route`); ЛІГА — явний запис `supabase-comments` із каналом `comment_channel`.
 
     Простір запиту мусить бути ЗАФІКСОВАНИМ (`task_anywhere`, `_take_task`): `comments_provider` без нього ігнорує `space` і
-    віддав би неявного постачальника (`Implicit`; так працюють інструменти ЛІГА без простору). Тут це НЕ годиться: викликач передав запис простору,
-    а запиту без простору немає — це `broken` (`module-error`), а не спільний Supabase. `space=None` без простору запиту — як
-    раніше (`Implicit`, інструменти ЛІГА).
+    віддав би `None` (інструменти ЛІГА без простору). Тут це НЕ годиться: викликач передав запис простору, а запиту без простору
+    немає — це `broken` (`module-error`), а не мовчазне «нікого». `space=None` без простору запиту — `None`, як і було.
 
     Усі `ModuleError` назовні — з ОЧИЩЕНИМ текстом (`agent_error`): текст винятку кидає код модуля, а його друкують у термінал.
 
@@ -3427,8 +3376,6 @@ class ProjectComments:
     def kind(self):
         if isinstance(self.prov, deai_modules.Module):
             return 'module'
-        if isinstance(self.prov, implicit.Implicit):
-            return 'implicit'       # внутрішній рядок `kind` (читають `bin/state.py` і тести), НЕ значення постачальника
         return 'broken' if self.err is not None else 'off'
 
     @property
@@ -3443,12 +3390,12 @@ class ProjectComments:
         """Хто джерело — для людини (заголовок `inbox`). «Supabase» — лише коли він справді джерело (і для мігрованої ЛІГИ)."""
         if self.kind == 'module' and self.legacy_scheme:
             return 'Supabase'
-        return {'module': lambda: f'модуль {self.prov.id}', 'implicit': lambda: 'Supabase',
+        return {'module': lambda: f'модуль {self.prov.id}',
                 'broken': lambda: 'модуль недоступний', 'off': lambda: 'не підключено'}[self.kind]()
 
     def channel(self, task, tid, internal=False):
         """Канал задачі: модуль чи ЛІГА — `deai_modules.comment_channel_of` (схема за `compat`); нікого/збій — схема comment-layer."""
-        if self.kind in ('module', 'implicit'):
+        if self.kind == 'module':
             return deai_modules.comment_channel_of(self.space, self.prov, task, tid, internal=internal)
         return deai_modules.legacy_comment_channel(task, tid, internal)
 
@@ -3461,9 +3408,7 @@ class ProjectComments:
     @property
     def takes_iteration(self):
         """Чи передаємо номер ітерації в `resolve`: лише вбудованому `supabase-comments` (свій модуль простору міг оголосити
-        `resolve(ctx, channel, id, reason)` — зайвий аргумент його зламав би). У ЛІГИ — завжди."""
-        if self.kind == 'implicit':
-            return True
+        `resolve(ctx, channel, id, reason)` — зайвий аргумент його зламав би). У мігрованої ЛІГИ — так само (її запис — вбудований)."""
         return (self.kind == 'module' and self.prov.id == COMMENTS_MODULE
                 and getattr(self.prov, 'origin', 'builtin') == 'builtin')
 
@@ -3474,8 +3419,6 @@ class ProjectComments:
         ⛔ ЛІГА: `spaces.require_integrations()` ПЕРЕД кожним викликом — простір без інтеграцій не має права йти в мережу
         (колись це робив старий шлях ЛІГА; модуль про простори не знає). `IntegrationsOff` — `OSError`, а не `ModuleError`:
         наявні `except OSError` деградують чесно."""
-        if self.kind == 'implicit':
-            spaces.require_integrations()
         try:
             mod, ctx, channel = comments_route(self.space, self.prov)
             return deai_modules.call(mod, fn, ctx, channel(task, tid, internal), *args,
@@ -4305,21 +4248,18 @@ def publish_comments(space, task, tid, *, module_publish=False):
     `comments_provider`, простір — явним аргументом), а НЕ з `spaces.integrations_on()`: «ЛІГА ввімкнено» ≠ «коментарі
     — спільний Supabase» (простір ЛІГА може вести коментарі власним модулем, а простір без інтеграцій — теж). `space`
     — запис простору, який викликач ВЖЕ вирішив (одне читання реєстру на публікацію); `None` — шар вимкнено чи простір
-    запиту не зафіксовано (інструменти ЛІГА): `comments_provider` тоді віддає `Implicit` БЕЗ читання реєстру. `task` —
+    запиту не зафіксовано (інструменти ЛІГА): `comments_provider` тоді віддає `None` БЕЗ читання реєстру. `task` —
     задача публікації: від неї канал ЛІГИ (`comment_project` чи `dc/<задача>`, `comments_route`).
 
         постачальник        шлях ЛІГИ (`_publish`)                 модуль публікації (`module_publish=True`)
         Module              словник модуля                         словник модуля
         Module+shared_state словник модуля                         False (4d-3b; лишається — стереже збірки модуля від ключа ЛІГИ)
-        Implicit            словник `supabase-comments`            False — як у 0.3.0
-                            (конфіг установки, канал ЛІГИ)
-        None                False                                  False
+        None               False                                  False
         ModuleError         False + код відмови                    False + код відмови
 
-    ⛔ `Implicit` у збірці МОДУЛЯ публікації — `False`: Supabase ЛІГА (адреса й ключ спільного проєкту, куди піни несуть
-    знімки макетів) не їде в превʼю, яке зібрав модуль, — це був би новий вихід даних, якого людина не вмикала.
-    Та сама відмова — для `Module` із `shared_state` (мігрована ЛІГА, 4d-3b): інакше увімкнений модуль публікації ніс би ключ
-    у превʼю. Шлях `_publish` (`module_publish=False`) не змінюється.
+    ⛔ `Module` із `shared_state` (ЛІГА) у збірці МОДУЛЯ публікації — `False`: Supabase ЛІГА (адреса й ключ спільного проєкту, куди піни
+    несуть знімки макетів) не їде в превʼю, яке зібрав модуль, — це був би новий вихід даних, якого людина не вмикала (інакше
+    увімкнений модуль публікації ніс би ключ у превʼю, 4d-3b). Шлях `_publish` (`module_publish=False`) не змінюється.
     ⛔ Відмова (`ModuleError`: явно ввімкнений модуль коментарів загубився, `space.json` не прочитати, `client_config`,
     канал чи конфіг установки ЛІГИ — `comments-unconfigured` — не вдались) — ЗАВЖДИ `False` + `warning` (код, без тексту й
     значень): сама публікація йде далі, а відповідь несе `comments_unavailable`. Модуль коментарів виконує свій код
@@ -4327,11 +4267,10 @@ def publish_comments(space, task, tid, *, module_publish=False):
     prov, err = comments_provider(space)
     if err is not None:
         return False, err.code
-    is_implicit = isinstance(prov, implicit.Implicit)
-    if prov is None or ((is_implicit or _shared_module(space, prov)) and module_publish):
+    if prov is None or (_shared_module(space, prov) and module_publish):
         return False, None
-    if not is_implicit and not isinstance(prov, deai_modules.Module):
-        return False, None                 # значення, що не є ні постачальником, ні неявним, — «нікого», як і було
+    if not isinstance(prov, deai_modules.Module):
+        return False, None                 # значення, що не є постачальником, — «нікого», як і було
     try:
         mod, ctx, route_channel = comments_route(space, prov)
         channel = route_channel(task, tid)                 # ⛔ канал — ДО коду модуля: непридатний id задачі не доходить до `client_config`
@@ -5391,7 +5330,7 @@ def module_check_verdict(space, mid):
     `isolated`; `last_check` НЕ перезаписуємо (`deai_modules.check` не кличемо): це не результат перевірки модуля, і стара
     правдива відповідь не мусить затертись «відмовою», якої модуль не давав. Усі п'ять ролей (comments/vcs/dashboard/tracker/
     notify): сюди ходять і `POST /api/module-check`, і хвіст `module_write`. Будь-якого походження — відмова безпечна."""
-    if implicit.isolated() and deai_modules.shared_state(space, mid):
+    if isolation.isolated() and deai_modules.shared_state(space, mid):
         return {'ok': False, 'error': 'isolated',
                 'detail': 'Перевірка спільного стану в ізольованому прогоні не виконується.'}
     try:
@@ -7668,9 +7607,9 @@ class Handler(SimpleHTTPRequestHandler):
         прапорцем `integrations` (4c-1): звичайний простір із модулем дашборда синкає так само, як ЛІГА.
 
         Гейти (кожен — тиша, без лога й без `Popen`): `DC_NO_OVERVIEW` — для БУДЬ-ЯКОГО постачальника; нікого немає (`None`,
-        збій реєстру чи рішення ролі); `Implicit` (ЛІГА) разом із `DC_TASKS_FILE` — ізольований прогін не має писати в
+        збій реєстру чи рішення ролі); запис `shared_state` (ЛІГА) разом із `DC_TASKS_FILE` — ізольований прогін не має писати в
         спільний Supabase (закон 03.08.2026; у 0.11.0 цей гейт був лише на читанні, а `Popen` стартував і за `DC_TASKS_FILE` —
-        дірка закрита свідомо); ЛІГА без конфігу установки — пушити нікуди. Конфіг дитині НЕ передається (оточенням чи ще
+        дірка закрита свідомо). Конфіг дитині НЕ передається (оточенням чи ще
         чимось): вона читає `install_config` сама. Не більше одного синку на простір одночасно (`_overview_launch`)."""
         if os.environ.get('DC_NO_OVERVIEW'):
             # ⛔ Тести й будь-який офлайн-прогін не мають писати в ПРОД-Supabase.
@@ -7685,25 +7624,16 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if prov is None:
             return
-        legacy = isinstance(prov, implicit.Implicit)     # постачальник неявний: гейти ізоляції/конфігу нижче — саме про нього
         try:
             space = spaces.active_space()
-            shared = (not legacy) and _shared_module(space, prov)
-            # ⛔ «Простір ЛІГА» (лог `OVERVIEW_LOG`, крок реєстру GitLab) — НЕ «постачальник неявний»: після міграції 4d-3a дашборд
-            # ЛІГИ — `Module` із `shared_state`, а запис реєстру лишається з `legacy: True`.
-            liga = legacy or bool(space and space.get('legacy') is True)
+            shared = _shared_module(space, prov)
+            # ⛔ «Простір ЛІГА» (лог `OVERVIEW_LOG`, крок реєстру GitLab): дашборд ЛІГИ — `Module` із `shared_state`, а запис
+            # реєстру лишається з `legacy: True`.
+            liga = bool(space and space.get('legacy') is True)
         except Exception:  # noqa: BLE001 — простір не вирішився: як і вище, пушити нікуди
             return
-        if shared and implicit.isolated():
+        if shared and isolation.isolated():
             return                      # ⛔ `shared_state`-модуль (4d-3a): ізольований прогін не пише в спільний стан і за ним
-        if legacy:
-            # ⛔ Закон ізоляції, а не `route`: шов `DC_TEAM_FAKE` синку не стосується (він лише читає), а ізольований прогін
-            # не пише в спільний Supabase і за ним (`DC_NO_OVERVIEW` уже відсічено вище, тож тут це лише `DC_TASKS_FILE`).
-            if implicit.isolated():
-                return
-            sb_url, _ = supabase_config()
-            if sb_url is None:
-                return                  # конфігу установки нема — пушити нікуди (і лога не відкриваємо)
         key, target = _overview_target()
         _overview_launch(key, liga, target)
 

@@ -8,7 +8,7 @@ import json
 import os
 import re
 
-import implicit  # закон ізоляції (`implicit.isolated()`); імпортує лише `os` — циклу з ядром нема
+import isolation  # закон ізоляції (`isolation.isolated()`); імпортує лише `os` (і `pwd`) — циклу з ядром нема
 import spaces  # простори машини: де лежить старий файл задач (`spaces.legacy_tasks_file`)
 
 
@@ -43,7 +43,7 @@ def supabase_config():
     мережу з сміттям. Повну перевірку (DNS-імʼя, сервісний ключ) робить модуль `supabase-comments`. Кешу нема: файл маленький.
     Значень — ні в текстах, ні в журналах.
 
-    ⛔ В ізольованому прогоні (`implicit.isolated()`: `DC_TASKS_FILE` чи `DC_NO_OVERVIEW`) джерело ОДНЕ — корінь файла задач:
+    ⛔ В ізольованому прогоні (`isolation.isolated()`: `DC_TASKS_FILE` чи `DC_NO_OVERVIEW`) джерело ОДНЕ — корінь файла задач:
     `SUPABASE_URL`/`SUPABASE_KEY` з оточення ігноруються. Причина: ізольований прогін — «стан не справжній цієї машини», а
     змінні оточення розробника несуть справжній проєкт ЛІГИ; тест чи демо під `DC_TASKS_FILE` не мусять мовчки дістати його.
     Під самим `DC_NO_OVERVIEW` (без `DC_TASKS_FILE`) «файл задач» — старий файл установки (`load_legacy_tasks`), як і раніше:
@@ -58,10 +58,10 @@ def supabase_config():
 def supabase_from(cfg):
     """`(url, key)` за вже прочитаним коренем старого `tasks.json` (`cfg`; не словник — як порожній) — та сама логіка й ті самі
     джерела, що в `supabase_config()` (його тіло, винесене сюди без змін, щоб міграція ЛІГИ `liga_migrate.plan` брала облікові
-    ТИМИ САМИМИ правилами, а не копією; ізоляція `implicit.isolated()` — як там)."""
+    ТИМИ САМИМИ правилами, а не копією; ізоляція `isolation.isolated()` — як там)."""
     cfg = cfg if isinstance(cfg, dict) else {}
     sources = [(cfg.get('supabase_url'), cfg.get('supabase_key'))]
-    if not implicit.isolated():                        # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
+    if not isolation.isolated():                       # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
         sources.append((os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_KEY')))
     for url, key in sources:
         if not (isinstance(url, str) and isinstance(key, str)):
@@ -82,12 +82,12 @@ def service_key_config():
     ключ (повний доступ до проєкту) туди потрапляти не мусить. Лише пара — адреса з `SUPABASE_URL`, ключ з
     `SUPABASE_SERVICE_KEY`: так адреса з одного джерела й ключ з іншого не змішуються.
 
-    ⛔ Той самий закон ізоляції, що в `supabase_config()`: в ізольованому прогоні (`implicit.isolated()`: `DC_TASKS_FILE` чи
+    ⛔ Той самий закон ізоляції, що в `supabase_config()`: в ізольованому прогоні (`isolation.isolated()`: `DC_TASKS_FILE` чи
     `DC_NO_OVERVIEW`) оточення НЕ читається. Корінь файла задач сервісного ключа не має (форми для нього нема, і заводити її
     не варто: це найпривілейованіший секрет ЛІГИ), тож у ізоляції результат завжди `(None, None)`. Інакше тест чи демо під
     `DC_TASKS_FILE` дістали б повний доступ до справжнього проєкту через `bin/overview_push.py` (`_legacy_config`). Поза
     ізоляцією поведінка 0.15.0 без змін."""
-    if implicit.isolated():                            # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
+    if isolation.isolated():                           # ⛔ в ізольованому прогоні оточення не читаємо (див. докстрінг)
         return None, None
     url, key = os.environ.get('SUPABASE_URL'), os.environ.get('SUPABASE_SERVICE_KEY')
     if isinstance(url, str) and isinstance(key, str):
@@ -108,7 +108,7 @@ def jira_config():
     порожнє чи негодне, — вміст файла; тож пошта з оточення й токен з файла поєднуються (це не пара Supabase). Пошта —
     непорожній друкований рядок, токен — друковний ASCII без пробілів. Значень — ні в текстах, ні в журналах; кешу нема: файли маленькі.
 
-    ⛔ В ізольованому прогоні (`implicit.isolated()`: `DC_TASKS_FILE` чи `DC_NO_OVERVIEW`) і адреса, і облікові — ЛИШЕ з кореня
+    ⛔ В ізольованому прогоні (`isolation.isolated()`: `DC_TASKS_FILE` чи `DC_NO_OVERVIEW`) і адреса, і облікові — ЛИШЕ з кореня
     файла задач: `jira_base`, `jira_email`, `jira_token` (два останні — нові необовʼязкові ключі для тестових фікстур; форма
     перевіряється так само, як у джерел оточення). Змінні `JIRA_*` і `<HOME>/.claude/pipeline-feedback/jira-*` НЕ читаються:
     інакше токен справжньої Jira розробника потрапляв би в тест чи демо. Без облікових у корені — `(None, None, None)`. Під
@@ -141,7 +141,7 @@ def jira_from(cfg):
         except (OSError, ValueError):
             return None
     def pick(env, name, key, valid):
-        if implicit.isolated():                         # ⛔ лише корінь файла задач (ключ `jira_email`/`jira_token`)
+        if isolation.isolated():                        # ⛔ лише корінь файла задач (ключ `jira_email`/`jira_token`)
             raw = cfg.get(key)
             return raw.strip() if isinstance(raw, str) and valid(raw.strip()) else None
         for raw in (os.environ.get(env), from_file(name)):          # оточення раніше за файл; порожнє/негодне — далі

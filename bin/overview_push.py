@@ -5,9 +5,9 @@
     overview_push.py discover            лише базові картки з реєстру задач (ЛІГА)
 
 Збирання карток і сам прохід — у `app/dashboard.py`; запис у сховище робить МОДУЛЬ ролі `dashboard` простору
-(`deai_modules.provider('dashboard', простір)`: вбудований `supabase-dashboard`, свій модуль чи неявний постачальник (`Implicit`) для ЛІГИ з конфігом
-установки). Статуси задач дає постачальник ролі `tracker` того самого простору (`_statuses`: вбудований `jira-tracker`, свій модуль
-чи неявний постачальник (`Implicit`) для ЛІГИ з `jira_base` у конфігу установки; Jira-коду тут більше нема, етап 4c-2). Лишився один крок, що ще не став
+(`deai_modules.provider('dashboard', простір)`: вбудований `supabase-dashboard` чи свій модуль; без явного запису — «постачальника нема», запасного нема).
+Статуси задач дає постачальник ролі `tracker` того самого простору (`_statuses`: вбудований `jira-tracker` чи свій модуль;
+Jira-коду тут більше нема, етап 4c-2). Лишився один крок, що ще не став
 роллю й передається в синк колбеком: реєстр GitLab (до 4d).
 ⛔ Скрипт НЕ імпортує сервер: його кличуть і фоном із сервера, і зовнішній планувальник, і серверу тут нічого не належить.
 """
@@ -28,7 +28,6 @@ from dashboard import (_PII, _GL_SSH, _GL_BRANCH, gitlab_web, to_iso, map_status
 from dashboard import build_card as build_row, card_has_pii as row_has_pii, discover_card as discover_row  # noqa: F401
 import dashboard
 import deai_modules
-import implicit
 import install_config
 import spaces
 import tracker
@@ -99,29 +98,15 @@ def _space(space_id):
     return found
 
 
-def _legacy_config():
-    """`(url, key)` ЛІГИ: конфіг установки (файл раніше за оточення); нема — запасна пара `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`
-    з оточення (спека §5), і лише так: `supabase_config()` сервісного ключа НЕ бачить (його читають і коментарі)."""
-    url, key = install_config.supabase_config()
-    if url is None:
-        url, key = install_config.service_key_config()
-    return url, key
-
-
 def _target(sp):
-    """`(module, ctx, legacy)` постачальника ролі `dashboard` простору `sp`; `(None, None, False)` — постачальника нема.
-    неявний постачальник (`Implicit`) — вбудований модуль із `ctx` з конфігу установки (`dashboard.legacy_ctx`, НЕ `module_ctx`: у нього нема
-    `space.json`/`secrets.json`); інакше `module_ctx` простору. ⛔ `legacy` («це простір ЛІГА: є крок реєстру GitLab») — НЕ «постачальник
-    неявний»: після міграції 4d-3a дашборд ЛІГИ — `Module` із `shared_state`, а простір лишається ЛІГОЮ (запис реєстру `legacy: True`).
-    Тож ЛІГА = неявний постачальник АБО запис із `legacy is True`; вибір збирача `ctx` — і далі за типом постачальника."""
+    """`(module, ctx, legacy)` постачальника ролі `dashboard` простору `sp`; `(None, None, False)` — постачальника нема (запасного нема:
+    без явного ввімкненого запису `supabase-dashboard` синкати нікуди). `ctx` — `module_ctx` запису. ⛔ `legacy` («це простір ЛІГА: є
+    крок реєстру GitLab») — запис реєстру `legacy is True` (дашборд ЛІГИ — `Module` із `shared_state`)."""
     try:
         prov = deai_modules.provider("dashboard", sp)
         if prov is None:
             return None, None, False
-        liga = isinstance(prov, implicit.Implicit) or sp.get("legacy") is True
-        if isinstance(prov, implicit.Implicit):
-            return dashboard.legacy_module(), dashboard.legacy_ctx(*_legacy_config(), space_id=sp["id"]), liga
-        return prov, deai_modules.module_ctx(sp, prov), liga
+        return prov, deai_modules.module_ctx(sp, prov), sp.get("legacy") is True
     except deai_modules.ModuleError as e:
         raise CliError("⛔ overview: %s" % (e.message or e.code))
     except spaces.SpacesError as e:
@@ -137,25 +122,19 @@ def _tasks_of(sp):
 
 def _statuses(sp, log=print):
     """Колбек статусів для `dashboard.sync` від постачальника ролі `tracker` простору `sp` або `None` (кроку нема).
-    `Implicit` (простір з інтеграціями без свого трекера, ЛІГА) — вбудований `jira-tracker` з `ctx` з конфігу установки
-    (`tracker.legacy_ctx(*install_config.jira_config())`, НЕ `module_ctx`: у ЛІГИ нема `space.json`/`secrets.json`; адреса —
-    `jira_base` у `tasks.json`); не налаштовано (`tracker-unconfigured`) — `None` БЕЗ мережі. Інакше — модуль простору з його
-    `module_ctx`. Нема постачальника — `None`. Збій вирішення ролі (нечитаний `space.json`, модуль не завантажився) — теж `None`,
+    Модуль простору (явний запис `jira-tracker`, ЛІГА теж) — з його `module_ctx`; не налаштовано (`tracker-unconfigured`) —
+    `None` БЕЗ мережі. Нема постачальника — `None`. Збій вирішення ролі (нечитаний `space.json`, модуль не завантажився) — теж `None`,
     але рядком у `log`: синк іде далі без статусів, а причина не мовчить. Колбек питає трекер пакетами з бюджетами синку
     (`tracker.SYNC_TIMEOUT`/`SYNC_SOCKET_S`); його збій обробляє сам `dashboard.sync` (рядок у лог, наявні статуси не затираються).
-    Хто постачальник — вирішує `provider` (прапорця ЛІГИ від дашборда тут нема: у просторі з інтеграціями й чужим дашбордом
-    трекер теж може бути `Implicit`). ⛔ Нічого тут не валить синк: старий Jira-крок (0.12.0) не кидав ніколи, тож і непередбачений
+    Хто постачальник — вирішує `provider` (прапорця ЛІГИ від дашборда тут нема). ⛔ Нічого тут не валить синк: старий Jira-крок (0.12.0) не кидав ніколи, тож і непередбачений
     збій вирішення ролі — лише `None` і назва класу в логу."""
     try:
         prov = deai_modules.provider("tracker", sp)
         if prov is None:
             return None
-        if isinstance(prov, implicit.Implicit):
-            module, ctx = tracker.legacy_module(), tracker.legacy_ctx(*install_config.jira_config(), space_id=sp["id"])
-        else:
-            module, ctx = prov, deai_modules.module_ctx(sp, prov)
+        module, ctx = prov, deai_modules.module_ctx(sp, prov)
     except deai_modules.ModuleError as e:
-        if e.code == "tracker-unconfigured":        # ЛІГА без `jira_base`/облікових — не збій, а «трекера нема»
+        if e.code == "tracker-unconfigured":        # запис без адреси/облікових — не збій, а «трекера нема»
             return None
         log("⚠ overview: статуси трекера недоступні: %s" % (e.message or e.code)[:200])
         return None

@@ -2,7 +2,7 @@
 
 Тут — ЧИСТИЙ розрахунок `plan()` і безпечний для друку `report(plan)`: `plan()` нічого не пише на диск. Запис (`run`), відкат
 (`restore`), `status` і старт сервера (`startup`) — нижче, після `report()`. Модуль не імпортує `serve` (лише `spaces`,
-`deai_modules`, `tracks`, `install_config`, `implicit`).
+`deai_modules`, `tracks`, `install_config`, `isolation`).
 
 4d-3b (0.18.0): модуль — ВПОРЯДКОВАНИЙ СПИСОК кроків (`Step`, `ALL_STEPS`/`STEPS`): свій бекап, позначка й відкат на крок; `plan/run/
 restore/status` без аргументу `step` — крок 4d-3a; `run_all()`/`startup()`/CLI ідуть по `STEPS` (`abort-*` зупиняє наступні, `skip-*` — ні);
@@ -37,8 +37,8 @@ from collections import namedtuple
 from urllib.parse import urlsplit
 
 import deai_modules
-import implicit
 import install_config
+import isolation
 import spaces
 import tracks as tracks_core
 from atomic_io import TMP_SUFFIX, DurabilityUnconfirmed, atomic_write_json, fsync_path
@@ -1915,14 +1915,14 @@ def _real_home():
 
 
 def startup():
-    """Виклик із `serve.serve_main` ПІСЛЯ `make_server` (порт уже зайнято), до `serve_forever`. Ізольований прогін (`implicit.isolated()`) не мігрує, крім шва
+    """Виклик із `serve.serve_main` ПІСЛЯ `make_server` (порт уже зайнято), до `serve_forever`. Ізольований прогін (`isolation.isolated()`) не мігрує, крім шва
     `DC_MIGRATE_LIGA=1` ЛИШЕ з тимчасовим `DEAI_HOME` (справжній `~/.deai` — гучна відмова). Не кидає ніколи: виняток — у stderr
     (імʼя типу, без значень) і в `last.json`. Повертає статус чи `None`. Кроки `STEPS` — по порядку (`run_all`): `abort-*` і `skip-busy`
     зупиняють наступні на цьому старті; `held` раннього кроку теж тримає наступні (їхній `plan` — `skip-held`); решта `skip-*`
     (`skip-nothing`/`skip-done`/…) наступних не блокує. Повертає статус ПЕРШОГО кроку, що не `skip-*` (найважливіше), інакше — першого кроку."""
     done, hints, hints_tracks = [], set(), []
     try:
-        if implicit.isolated():
+        if isolation.isolated():
             if os.environ.get('DC_MIGRATE_LIGA') != '1':
                 return None
             if _real_home():
@@ -1975,7 +1975,7 @@ def startup():
                 print('  відкат: bin/migrate_liga.py restore %s --hold' % stamps_done[-1], file=sys.stderr)
                 if len(stamps_done) > 1:
                     print('  раніші кроки (%s) — лише після відкату пізніших, у зворотному порядку' % ', '.join(stamps_done[:-1]), file=sys.stderr)
-        if not implicit.isolated():                                          # 4d-4b: кожна вимкнена роль — рядком, причина й команда виправлення
+        if not isolation.isolated():                                         # 4d-4b: кожна вимкнена роль — рядком, причина й команда виправлення
             try:                                                             # I3: звіт про ролі не має перетворити вдалу міграцію на `abort-internal`
                 for line in roles_lines(roles_state()):
                     print(line, file=sys.stderr)
