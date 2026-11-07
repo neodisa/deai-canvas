@@ -1,0 +1,123 @@
+import os
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
+import isolation  # noqa: E402
+
+ENVS = ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TRACKER_FAKE', 'DC_TEAMS_FAKE')
+
+
+class IsolationCore(unittest.TestCase):
+    """Закон ізоляції й шви тестів (раніше `ImplicitCore`): `isolated`, `route`, таблиця `FAKE_ENV`, `real_home`."""
+
+    def setUp(self):
+        e = mock.patch.dict(os.environ, {})
+        e.start()
+        self.addCleanup(e.stop)
+        for k in ENVS:
+            os.environ.pop(k, None)
+
+    def test_imports_nothing_but_os(self):
+        """Чистий модуль: цикл імпорту з `spaces`/`serve`/`deai_modules` неможливий."""
+        import ast
+        with open(isolation.__file__.replace('.pyc', '.py'), encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        mods = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        mods |= {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        self.assertEqual(mods, {'os', 'pwd'})
+
+    def test_fake_env_table_is_the_old_one(self):
+        self.assertEqual(isolation.FAKE_ENV, {'dashboard': 'DC_TEAM_FAKE', 'tracker': 'DC_TRACKER_FAKE', 'notify': 'DC_TEAMS_FAKE'})
+
+    def test_isolated_is_tasks_file_or_no_overview(self):
+        self.assertFalse(isolation.isolated())
+        for k in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW'):
+            with mock.patch.dict(os.environ, {k: '1'}):
+                self.assertTrue(isolation.isolated(), k)
+        with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': 'x'}):
+            self.assertFalse(isolation.isolated())                 # шов сам по собі не робить прогін ізольованим
+
+    def test_route_order_fake_then_isolated_then_live(self):
+        self.assertEqual(isolation.route('dashboard'), ('live', None))
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': '1'}):
+            self.assertEqual(isolation.route('dashboard'), ('isolated', None))
+            with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': '/tmp/fake.json'}):
+                self.assertEqual(isolation.route('dashboard'), ('fake', '/tmp/fake.json'))   # шов раніше за ізоляцію
+
+    def test_an_empty_seam_is_absent(self):
+        """Порожнє значення шва (`DC_TEAM_FAKE=`) — як відсутнє: ні шва, ні ізоляції не вмикає."""
+        with mock.patch.dict(os.environ, {'DC_TEAM_FAKE': ''}):
+            self.assertEqual(isolation.route('dashboard'), ('live', None))
+            with mock.patch.dict(os.environ, {'DC_TASKS_FILE': '1'}):
+                self.assertEqual(isolation.route('dashboard'), ('isolated', None))
+
+    def test_each_role_uses_its_own_seam(self):
+        for role, env in isolation.FAKE_ENV.items():
+            with mock.patch.dict(os.environ, {env: '/tmp/x.json'}):
+                self.assertEqual(isolation.route(role), ('fake', '/tmp/x.json'), role)
+                for other in set(isolation.FAKE_ENV) - {role}:
+                    self.assertEqual(isolation.route(other), ('live', None), (role, other))
+
+    def test_roles_without_a_seam_are_only_isolated_or_live(self):
+        for role in ('comments', 'vcs', 'publish', 'tokens'):
+            self.assertEqual(isolation.route(role), ('live', None))
+            with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1', 'DC_TEAM_FAKE': '/tmp/x.json'}):
+                self.assertEqual(isolation.route(role), ('isolated', None), role)
+
+    def test_real_home_is_the_pwd_home_not_the_HOME_variable(self):
+        import pwd
+        real = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.deai')
+        self.assertTrue(isolation.real_home(real))
+        with tempfile.TemporaryDirectory() as t:
+            with mock.patch.dict(os.environ, {'HOME': t}):          # тест підміняє HOME, але не пароль ОС
+                self.assertFalse(isolation.real_home(os.path.join(t, '.deai')))
+                self.assertFalse(isolation.real_home(t))
+                self.assertTrue(isolation.real_home(real))
+
+    def test_real_home_follows_symlinks(self):
+        import pwd
+        real = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.deai')
+        with tempfile.TemporaryDirectory() as t:
+            link = os.path.join(t, 'link')
+            os.symlink(real, link)
+            self.assertTrue(isolation.real_home(link))
+
+    def test_real_home_unknown_os_home_is_real(self):
+        """Безпечніший бік: не вдалось дізнатись дім ОС — вважаємо справжнім (облікових із цієї теки не беремо)."""
+        with mock.patch('pwd.getpwuid', side_effect=KeyError('x')):
+            self.assertTrue(isolation.real_home('/anything'))
+
+    def test_real_home_garbage_is_real(self):
+        self.assertTrue(isolation.real_home(None))
+
+
+class ParityWithImplicitUntilRemoval(unittest.TestCase):
+    """До видалення `app/implicit.py` (4d-4b Task 10) його `isolated`/`route` — ОРИГІНАЛ, а `isolation` — точна копія: на всіх комбінаціях оточення відповіді рівні
+    (`implicit.py` не чіпаємо: тести `ImplicitCore` стверджують його форму, зокрема `shared=False`). Клас видаляється разом із модулем."""
+
+    COMBOS = ({}, {'DC_TASKS_FILE': '1'}, {'DC_NO_OVERVIEW': '1'}, {'DC_TEAM_FAKE': '/tmp/f.json'}, {'DC_TRACKER_FAKE': '/tmp/f.json', 'DC_NO_OVERVIEW': '1'},
+              {'DC_TEAMS_FAKE': '/tmp/f.json', 'DC_TASKS_FILE': '1'}, {'DC_TEAM_FAKE': ''})
+
+    def setUp(self):
+        e = mock.patch.dict(os.environ, {})
+        e.start()
+        self.addCleanup(e.stop)
+        for k in ENVS:
+            os.environ.pop(k, None)
+
+    def test_the_copy_equals_the_original(self):
+        import implicit
+        for env in self.COMBOS:
+            with mock.patch.dict(os.environ, env):
+                self.assertEqual(implicit.isolated(), isolation.isolated(), env)
+                for role in implicit.IMPLICIT_ROLES:
+                    self.assertEqual(implicit.route(implicit.for_role(role)), isolation.route(role), (env, role))
+        self.assertEqual({r: implicit.for_role(r).fake_env for r in implicit.IMPLICIT_ROLES if implicit.for_role(r).fake_env},
+                         isolation.FAKE_ENV)
+
+
+if __name__ == '__main__':
+    unittest.main()
