@@ -420,6 +420,8 @@ class ProviderImplicit(unittest.TestCase):
                 expected['errors'] = {r: expected['error'] for r in self.dm.ROLES_CALLED}
             self.assertEqual(got[name]['caps'], expected, name)
             for role, v in got[name]['caps'].items():
+                if role == 'errors':
+                    continue                                                                   # r15-1: роль → код, а не значення ролі
                 self.assertTrue(v is None or isinstance(v, str), (name, role))           # `str`/`None`
         self.assertEqual(want['liga']['caps']['publish'], 'legacy')                        # знімок справді несе `'legacy'`
         self.assertTrue(all(v is None for v in got['liga']['caps'].values()), 'ЛІГА без явних записів — жодної ролі')
