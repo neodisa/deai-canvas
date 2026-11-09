@@ -141,6 +141,8 @@ class ProviderCallersPinTheSpace(unittest.TestCase):
         ('app/serve.py', 'Handler._publish', 'provider', 'publish', 'absent'): 1,
         ('app/serve.py', 'Handler._overview_sync', 'provider', 'dashboard', 'absent'): 1,
         ('app/serve.py', 'Handler._preview_password', 'provider', 'publish', 'absent'): 1,
+        # Форма `name` — лише ВИГЛЯД аргументу в коді: змінна `space` може бути `None` під час роботи, і `serve.comments_provider` свідомо
+        # ставить `space = None` (~3055: шар вимкнено чи простір запиту не зафіксовано → неявний простір → роль `comments` дає `None`, не збій).
         ('app/serve.py', 'comments_provider', 'provider', 'comments', 'name'): 1,
         ('app/serve.py', 'ds_tokens_view', 'provider', 'tokens', 'name'): 1,
         ('app/serve.py', 'published_target', 'provider', 'publish', 'name'): 1,
@@ -193,16 +195,30 @@ class ProviderCallersPinTheSpace(unittest.TestCase):
             out.append((where(n), callee, role, form))
         return out
 
+    @staticmethod
+    def files():
+        """Усі `.py` без `test_*`: `app/` РЕКУРСИВНО (`app/modules/*/*.py` теж, як у `NoOriginalsRead`), `bin/*.py`, `ops/*.py`."""
+        import glob
+        root = os.path.dirname(_HERE)
+        walked = []
+        for base, _d, fs in os.walk(os.path.join(root, 'app')):
+            walked += [os.path.join(base, f) for f in fs if f.endswith('.py')]
+        walked += glob.glob(os.path.join(root, 'bin', '*.py')) + glob.glob(os.path.join(root, 'ops', '*.py'))
+        return sorted(p for p in walked if not os.path.basename(p).startswith('test_'))
+
+    def test_the_scan_reaches_the_module_servers(self):
+        rel = {os.path.relpath(p, os.path.dirname(_HERE)) for p in self.files()}
+        self.assertTrue({r for r in rel if r.startswith(os.path.join('app', 'modules') + os.sep)}, 'app/modules/*/*.py не скановано')
+        self.assertIn(os.path.join('app', 'serve.py'), rel)
+        self.assertIn(os.path.join('ops', 'reseal_gate.py'), rel)
+
     @classmethod
     def found(cls):
         import ast
         import collections
-        import glob
         root = os.path.dirname(_HERE)
         out = collections.Counter()
-        for p in sorted(glob.glob(os.path.join(root, 'app', '*.py')) + glob.glob(os.path.join(root, 'bin', '*.py')) + glob.glob(os.path.join(root, 'ops', '*.py'))):
-            if os.path.basename(p).startswith('test_'):
-                continue
+        for p in cls.files():
             with open(p, encoding='utf-8') as f:
                 for hit in cls.scan(ast.parse(f.read())):
                     out[(os.path.relpath(p, root),) + hit] += 1

@@ -42,29 +42,43 @@ class NoOriginalsRead(unittest.TestCase):
         return sorted(p for p in out if os.path.basename(p) != 'liga_migrate.py')
 
     @classmethod
+    def _fold(cls, n):
+        """Рядок, який вузол складає з рядкових констант (`'a'`, `'a' + 'b'`, `'a' + 'b' + 'c'`), інакше `None`."""
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            return n.value
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+            left, right = cls._fold(n.left), cls._fold(n.right)
+            if left is not None and right is not None:
+                return left + right
+        return None
+
+    @classmethod
     def scan(cls, tree):
         """Що в дереві порушує закон: `{'str:<значення>', 'name:<імʼя>', 'preview_password'}`."""
         doc = _docstring_nodes(tree)
         hits = set()
         for n in ast.walk(tree):
-            if isinstance(n, ast.Constant) and isinstance(n.value, str) and n not in doc:
-                if n.value in cls.STRINGS:
-                    hits.add('str:' + n.value)
-                if 'pipeline-feedback' in n.value:
+            # Рядок: літерал або згорнутий `'a' + 'b'` (BinOp Add над рядковими константами) — інакше `'supabase_' + 'url'` проходить.
+            text = cls._fold(n)
+            if text is not None and n not in doc:
+                if text in cls.STRINGS:
+                    hits.add('str:' + text)
+                if 'pipeline-feedback' in text:
                     hits.add('str:pipeline-feedback')
-            ident = None
+            idents = []
             if isinstance(n, ast.Name):
-                ident = n.id
+                idents = [n.id]
             elif isinstance(n, ast.Attribute):
-                ident = n.attr
+                idents = [n.attr]
             elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                ident = n.name
+                idents = [n.name]
             elif isinstance(n, ast.alias):
-                ident = n.name.split('.')[-1]
+                idents = [n.name.split('.')[-1], n.asname]       # `import x as legacy_ctx` теж називає імʼя
             elif isinstance(n, ast.arg):
-                ident = n.arg
-            if ident in cls.NAMES:
-                hits.add('name:' + ident)
+                idents = [n.arg]
+            elif isinstance(n, ast.keyword):
+                idents = [n.arg]                                  # `f(legacy_ctx=1)`; `**kw` має `arg=None`
+            hits |= {'name:' + i for i in idents if i in cls.NAMES}
         hits |= cls._preview_password_misuse(tree, doc)
         return hits
 
@@ -111,13 +125,18 @@ class NoOriginalsRead(unittest.TestCase):
                           ("import x\nx.supabase_from(cfg)", 'name:supabase_from'),
                           ("def legacy_ctx():\n    return 1", 'name:legacy_ctx'),
                           ("cfg.get('preview_password')", 'preview_password'), ("cfg['preview_password']", 'preview_password'),
-                          ("cfg.pop('preview_password', None)", 'preview_password')):
+                          ("cfg.pop('preview_password', None)", 'preview_password'),
+                          ("import x as legacy_ctx", 'name:legacy_ctx'), ("from m import ok as supabase_config", 'name:supabase_config'),
+                          ("f(jira_config=1)", 'name:jira_config'),
+                          ("cfg.get('supabase_' + 'url')", 'str:supabase_url'), ("os.environ['JIRA_' + 'TO' + 'KEN']", 'str:JIRA_TOKEN'),
+                          ("p = '.claude/pipe' + 'line-feedback'", 'str:pipeline-feedback')):
             with self.subTest(src=src):
                 self.assertIn(want, self.scan(ast.parse(src)))
         self.assertEqual(self.scan(ast.parse("task.get('preview_password')")), set())
         self.assertEqual(self.scan(ast.parse("t['preview_password']")), set())
         self.assertEqual(self.scan(ast.parse("(task or {}).get('preview_password')")), set())
         self.assertEqual(self.scan(ast.parse("r = {'preview_password': pw}")), set())
+        self.assertEqual(self.scan(ast.parse("import x as ok\nf(a=1, **kw)\nk = 'jira_' + name")), set())   # чисте: аліас, `**kw`, не-константна складова
         self.assertEqual(self.scan(ast.parse('def f():\n    """supabase_url лишилась лише в докстрінгу"""\n    return 1')), set())
 
     def test_the_scan_sees_the_migration_module(self):
