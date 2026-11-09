@@ -27,7 +27,8 @@ import spaces_guard  # noqa: E402
 from make_before_4d3c import SB_KEY, SB_URL  # noqa: E402  (вигадані значення — ті самі, що в генераторі)
 from make_before_4d3a import SocketTripwire  # noqa: E402  (розтяжка мережі: нічого, крім loopback)
 from test_liga_migrate import _WriteStand  # noqa: E402  (стенд запису 4d-3a: тимчасові HOME/DEAI_HOME, CLI, пошук секретів)
-from test_liga_migrate_b import _ABSENT, _diff, _flat  # noqa: E402  (порівняння знімків ключ у ключ — імпорт, не друга копія)
+from test_liga_migrate_b import _ABSENT, _flat  # noqa: E402  (порівняння знімків ключ у ключ — імпорт, не друга копія)
+from test_liga_migrate_b import _diff as _diff_all  # noqa: E402
 from test_publish_module import DispatchWorld, _Stub, _write_json  # noqa: E402  (світ «два простори + сервер + розтяжка»)
 
 _REAL = None
@@ -611,13 +612,17 @@ class PublishGuard(unittest.TestCase):
         for name in ('task_preview_gate', 'task_publish_share'):
             self.assertEqual(len(self.calls(self.fn(self.serve_tree, name), 'publish_module')), 1, name)
 
-    def test_the_type_test_lives_in_the_predicate_only(self):
-        # 4d-4b: типу `Implicit` нема, тож предикат уже не торкається його (було: рівно одне звернення); єдина перевірка ТИПУ постачальника
-        # тепер — `isinstance(prov, Module)` у предикаті, а `publish_module` типів не перевіряє взагалі
+    def test_exactly_one_isinstance_in_the_predicate_the_module_check(self):
+        """Було `test_the_type_test_lives_in_the_predicate_only`: предикат рівно один раз торкався типу `Implicit`. 4d-4b: типу нема, тож
+        `assertEqual(implicit_checks(pred), [])` стало б порожнім (завжди істинним) — його прибрано. Справжнє твердження: у предикаті РІВНО один
+        `isinstance` — перевірка `Module` (єдина перевірка типу постачальника); `publish_module` теж має рівно один `isinstance` — той самий `Module`."""
+        def isinstances(node):
+            return [n for n in ast.walk(node) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'isinstance']
         pred = self.fn(self.dm_tree, 'publish_legacy_path')
-        self.assertEqual(self.implicit_checks(pred), [])
-        self.assertEqual(len([n for n in ast.walk(pred) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'isinstance']), 1)
-        self.assertEqual(self.implicit_checks(self.fn(self.dm_tree, 'publish_module')), [])
+        [check] = isinstances(pred)
+        self.assertEqual(ast.unparse(check.args[1]), 'Module')
+        [pm] = isinstances(self.fn(self.dm_tree, 'publish_module'))          # теж лише `Module` (не тип старого постачальника)
+        self.assertEqual(ast.unparse(pm.args[1]), 'Module')
 
     def test_guard_sees_a_planted_check(self):
         planted = ast.parse('def f(v):\n    return isinstance(v, implicit.Implicit)\n')
@@ -1462,8 +1467,22 @@ def _expect_diff_unmigrated():
     return exp
 
 
-EXPECT_DIFF_AB = _expect_diff_ab()
-EXPECT_DIFF_UNMIGRATED = _expect_diff_unmigrated()
+def _is_4d4b_leaf(path):
+    """Листки, що залежать від причин 4d-4b, — у цей клас не входять (Task 14 Step 2), їх звіряє `AfterMigrationParity4d4b` (Task 15) або тест,
+    названий поруч: `capabilities.tracker` (без облікових Jira в записі роль вимкнена, а не неявний `legacy`); `comments_off` (сценарій
+    прибирає пару Supabase з КОРЕНЯ — корінь більше не читається, коментарі ведуть записи); `pw_root` (пароль у корені не читається —
+    `PreviewPasswordFromTheRecord`); `disable_consequences_publish` (наслідок вимкнення без запасного шляху — `tests/connections-model.test.mjs`)."""
+    return (path == '/api_spaces/capabilities/tracker' or path.startswith(('/publish/comments_off/', '/publish/pw_root/'))
+            or path.startswith('/js/disable_consequences_publish'))
+
+
+def _diff(before, after):
+    """Звіт відмінностей знімків без листків причин 4d-4b (`_is_4d4b_leaf`)."""
+    return {k: v for k, v in _diff_all(before, after).items() if not _is_4d4b_leaf(k)}
+
+
+EXPECT_DIFF_AB = {k: v for k, v in _expect_diff_ab().items() if not _is_4d4b_leaf(k)}
+EXPECT_DIFF_UNMIGRATED = {k: v for k, v in _expect_diff_unmigrated().items() if not _is_4d4b_leaf(k)}
 
 #: Що бачить людина і чого НЕ можуть торкнутись кроки: усе, що публікація, пароль і задача віддають; у `/task` — крім дзеркала
 #: `capabilities` (воно — не «що бачить людина», а те саме значення, що в `/api_spaces`), у `/js` — крім двох похідних від ролі.
@@ -1603,9 +1622,11 @@ class AfterMigrationParity4d3c(unittest.TestCase):
             a = self.after['stands'][name]['api_spaces']
             self.assertEqual(a['capabilities']['publish'], 'vercel-publish')
             self.assertEqual(a['compat']['publish'], 'design-canvas')
-            # на обох стендах п'ять ролей ведуть модулі (на `ab` — після a+b+c, на `unmigrated` — після `run_all`); `tracker` лишається
-            # `legacy`: у стенді знімка нема облікових даних Jira, тож крок a нічого не мігрує для цієї ролі
-            self.assertEqual({k: v for k, v in a['capabilities'].items() if k != 'tokens'}, {**_ROLE_IDS, 'tracker': 'legacy'})
+            # на обох стендах п'ять ролей ведуть модулі (на `ab` — після a+b+c, на `unmigrated` — після `run_all`); `tracker`: у стенді знімка
+            # нема облікових даних Jira, тож крок a нічого не мігрує для цієї ролі. Було `'tracker': 'legacy'` (неявний постачальник); 4d-4b: роль
+            # без запису вимкнена (`None`) — це причина 4d-4b, її звіряє `AfterMigrationParity4d4b` (Task 15), тут `tracker` не порівнюється.
+            self.assertEqual({k: v for k, v in a['capabilities'].items() if k not in ('tokens', 'tracker')},
+                             {k: v for k, v in _ROLE_IDS.items() if k != 'tracker'})
 
 
 # ---------------------------------------------------------------------------------- Task 5: НЕізольований шлях власника
@@ -1685,11 +1706,11 @@ class RealPublishNonIsolated(unittest.TestCase):
                 'build': build, 'pages': pages, 'spies': {'calls': calls, 'fetched_urls': fetched}}
         return g.scrub(snap, rig.home)
 
-    def exercise(self, migrated):
+    def exercise(self, migrated, name=None):
         """Стенд ЛІГИ (`migrated` — після `run_all()`: a, b, c) → `(дані, мета)`; `дані` мусять збігатись між двома прогонами,
-        `мета` — те, що різниться за задумом (`capabilities.publish`, постачальник)."""
+        `мета` — те, що різниться за задумом (`capabilities.publish`, постачальник). `name` — тека стенда (два прогони — дві теки)."""
         g = self.g
-        name = 'mig' if migrated else 'imp'
+        name = name or ('mig' if migrated else 'imp')
         rig = g._stand(self.tmp, name, migrate=False)
         npxdir = os.path.join(rig.home, 'fake-npx')
         self.fake_npx.make(npxdir, g.NPX_OK)
@@ -1770,8 +1791,9 @@ class RealPublishNonIsolated(unittest.TestCase):
             # побічні дії НЕізольованого шляху — ВСІ три, у цьому порядку й з цими аргументами (`registry_push` → автокоміт → огляд)
             self.assertEqual(sc['spies']['calls'], [['registry_push', 'a-1'], ['git_autocommit', '~/work/a-1', 'publish: 2 iteration(s)'],
                                                     ['overview_sync']])
-        # пароль задачі/кореня змінює гейт
-        for key, pw in (('pw_task', g.PW_TASK), ('pw_root', g.PW_ROOT)):
+        # пароль задачі змінює гейт; 4d-4b: пароль у КОРЕНІ більше не читається (було `('pw_root', g.PW_ROOT)`: гейт ставав паролем кореня) —
+        # типовий `1100`, поки спільний пароль не заданий секретом запису (`test_publish_module`, `PreviewPasswordFromTheRecord`)
+        for key, pw in (('pw_task', g.PW_TASK), ('pw_root', '1100')):
             self.assertEqual({p['password'] for p in data[key]['pages']['html'].values()}, {pw}, key)
             self.assertEqual(data[key]['tasks_after']['vercel_project'], g.PROJECT)
             self.assertEqual(data[key]['iterations_after']['publish_remote'], 'absent')
@@ -1791,20 +1813,34 @@ class RealPublishNonIsolated(unittest.TestCase):
         self.assertEqual((meta['implicit'], meta['caps_publish']), (False, 'vercel-publish'))
         self.check_owner_path(data)
 
-    def test_unmigrated_liga_gives_the_same_data(self):
-        data, meta = self.exercise(False)
-        self.assertEqual((meta['implicit'], meta['caps_publish']), (True, 'legacy'))
-        self.check_owner_path(data)
+    def test_unmigrated_liga_has_no_publish_provider(self):
+        """Було `test_unmigrated_liga_gives_the_same_data`: немігрована ЛІГА (неявний постачальник) публікує ТИМ САМИМ шляхом власника
+        (ті самі дані, що мігрована). 4d-4b видалила це навмисно: без запису `vercel-publish` ролі `publish` немає — «замінено тестом» цим
+        (нема постачальника, нема capabilities, публікація з ядра не ходить) і `test_migrated_liga_publishes_the_owner_path_unchanged`
+        (шлях власника — лише через мігрований запис)."""
+        g = self.g
+        rig = g._stand(self.tmp, 'imp', migrate=False)
+        space = {'id': g.SPACE_ID, 'path': rig.space_dir, 'legacy': True, 'integrations': True}
+        with rig.activate(g._env_extra(rig)):
+            dm.reset_caches()
+            with spaces.request_space(g.SPACE_ID):
+                self.assertIsNone(dm.provider('publish', space))
+                self.assertIsNone(dm.capabilities(space)['publish'])
+                self.assertIsNone(dm.publish_module(space))
+                self.assertFalse(dm.publish_legacy_path(None, space))
+            dm.reset_caches()
 
     def test_two_runs_are_identical_and_match_the_snapshot(self):
-        """Звіряємо два прогони ОДИН з ОДНИМ (мігрована ≡ немігрована), а потім із знімком 0.18.0 (ключі, що не залежать від шляху
-        ізоляції: відповідь, `tasks.json`, `iterations.json`, argv, збірка, сторінки). Шпигуни знімка — ізольований шлях; тут — справжній."""
-        imp, _m1 = self.exercise(False)
-        mig, _m2 = self.exercise(True)
-        for d in (imp, mig):                                         # похідні від ролі, а не від публікації: різняться за задумом
+        """Було: два прогони ОДИН з ОДНИМ (мігрована ≡ немігрована), а потім знімок 0.18.0. 4d-4b: немігрованого прогону нема (див.
+        `test_unmigrated_liga_has_no_publish_provider`) — тут два прогони ТОГО САМОГО мігрованого стенда ідентичні (детермінізм) і збігаються
+        зі знімком 0.18.0 (ключі, що не залежать від шляху ізоляції: відповідь, `tasks.json`, `iterations.json`, argv, збірка, сторінки).
+        Шпигуни знімка — ізольований шлях; тут — справжній. Сценарій `pw_root` у знімку — пароль кореня, який більше не береться: поза порівнянням."""
+        mig1, _m1 = self.exercise(True)
+        mig, _m2 = self.exercise(True, name='mig-again')
+        for d in (mig1, mig):                                        # похідні від ролі, а не від публікації: різняться за задумом
             d['js'] = {k: v for k, v in d['js'].items() if k not in ('is_vercel_publish', 'disable_consequences_publish')}
         self.maxDiff = None
-        self.assertEqual(mig, imp)
+        self.assertEqual(mig, mig1)
         with open(BEFORE, encoding='utf-8') as f:
             before = json.load(f)
         for stand in ('unmigrated', 'ab'):

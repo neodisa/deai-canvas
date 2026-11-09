@@ -220,12 +220,16 @@ class CompatSetting(unittest.TestCase):
         self.rig.registry()
 
     def _ctxs(self):
-        import dashboard
-        import install_config
-        import notify
-        url, key = install_config.supabase_config()
-        return {'supabase-dashboard': dashboard.legacy_ctx(url, key, space_id=self.gen.SPACE_ID),
-                'supabase-teams': notify.legacy_ctx(url, key, space_id=self.gen.SPACE_ID)}
+        """ctx двох Supabase-модулів з ЯВНОГО запису мігрованої ЛІГИ (крок A: `compat = comment-layer` + секрет). Було — збирачі
+        `dashboard.legacy_ctx`/`notify.legacy_ctx` з `install_config.supabase_config()`; 4d-4b видалив і ті, й ці (запис — єдине джерело)."""
+        import deai_modules as dm
+        import liga_migrate as lm
+        gen = self.gen
+        liga = self.rig.registry()
+        with self.rig.activate({'JIRA_EMAIL': gen.JIRA_ENV_EMAIL, 'JIRA_TOKEN': gen.JIRA_ENV_TOKEN}):
+            lm.run()
+            dm.reset_caches()
+            return {mid: dm.module_ctx(liga, mid) for mid in ('supabase-dashboard', 'supabase-teams')}
 
     def _run(self, mid, ctx, scenario='ok'):
         return json.loads(json.dumps(self.gen.scrub(self.gen._run_check(mid, ctx, scenario), self.rig.home)))
@@ -244,14 +248,18 @@ class CompatSetting(unittest.TestCase):
             c['secrets'] = {'key': key}
         return c
 
-    def test_legacy_ctx_carries_compat(self):
+    def test_record_ctx_carries_compat(self):
+        """Було `test_legacy_ctx_carries_compat`: ще й `ctx['legacy'] is True` («прапорець лишено для чужих модулів»). 4d-4b: прапорець ставив
+        збирач `legacy_ctx`, якого нема, а `module_ctx` запису його не кладе — твердження ретайрено (їх береже `test_builtin_modules_do_not_read_
+        legacy_flag` нижче); `compat` — з запису."""
         with self.rig.activate():
             for mid, ctx in self._ctxs().items():
                 self.assertEqual(ctx['settings']['compat'], 'comment-layer', mid)
-                self.assertIs(ctx['legacy'], True, 'прапорець лишено для чужих модулів')
+                self.assertNotIn('legacy', ctx, mid)
 
-    def test_implicit_path_verdicts_equal_snapshot(self):
-        """Вердикти `check` на `legacy_ctx` (ok/denied/network і публічні ключі) — побайтно секція `check` знімка."""
+    def test_record_path_verdicts_equal_snapshot(self):
+        """Було `test_implicit_path_verdicts_equal_snapshot` (ctx із `legacy_ctx`). Вердикти `check` на ctx ЯВНОГО запису мігрованої ЛІГИ
+        (ok/denied/network і публічні ключі) — побайтно секція `check` знімка 0.16.0."""
         with self.rig.activate():
             ctxs = self._ctxs()
             for mid in self.MODS:
@@ -483,19 +491,20 @@ class SharedStateIsolation(unittest.TestCase):
                 elif role == 'tracker':
                     self.assertEqual(res[0]['K-1']['name'], 'live')
 
-    def test_live_never_uses_legacy_builders(self):
+    def test_live_has_no_legacy_builders_to_use(self):
+        """Було `test_live_never_uses_legacy_builders`: підміняло `legacy_ctx` трьох модулів і `serve.supabase_config/jira_config` на «кинь,
+        якщо кличуть». 4d-4b: ці збирачі й читачі ВИДАЛЕНО (підміняти нічого) — тепер доводиться саме це (їх нема), а те, що живий шлях іде одним
+        викликом модуля, лишилось."""
         import dashboard
         import notify
         import serve
         import tracker
-        from unittest import mock
+        for mod, name in ((dashboard, 'legacy_ctx'), (tracker, 'legacy_ctx'), (notify, 'legacy_ctx'),
+                          (serve, 'supabase_config'), (serve, 'jira_config')):
+            self.assertFalse(hasattr(mod, name), '%s.%s' % (mod.__name__, name))
         for role, (mid, env) in self.ROLES.items():
             self._write(mid, shared_state=True)
-            with self.subTest(role=role), mock.patch.object(dashboard, 'legacy_ctx', side_effect=AssertionError('legacy')), \
-                    mock.patch.object(tracker, 'legacy_ctx', side_effect=AssertionError('legacy')), \
-                    mock.patch.object(notify, 'legacy_ctx', side_effect=AssertionError('legacy')), \
-                    mock.patch.object(serve, 'supabase_config', side_effect=AssertionError('cfg')), \
-                    mock.patch.object(serve, 'jira_config', side_effect=AssertionError('cfg')):
+            with self.subTest(role=role):
                 res, called, _ = self._call(role)
                 self.assertEqual(called, 1)
 
@@ -913,9 +922,11 @@ class PlanTest(_Stand):
             self.assertEqual(self.plan()['status'], 'abort-provider')                           # інший модуль, ніж розрахований
 
     # --- облікові
-    def test_credentials_same_sources_as_install_config(self):
-        """Jira: пошта й токен незалежно (оточення → файл); Supabase — ціла пара з одного джерела. Ті самі функції, що в сервері."""
-        import install_config
+    def test_credentials_same_sources_as_the_removed_install_config(self):
+        """Jira: пошта й токен незалежно (оточення → файл); Supabase — ціла пара з одного джерела. Було `…_as_install_config`: ще й звіряло
+        результат з `install_config.jira_config()/supabase_config()` (чотири рядки `assertEqual` на кортежі). 4d-4b: ті читачі ВИДАЛЕНО —
+        звірка ретайрена («замінено тестом»: `OriginalsReadersCopy`, ті самі твердження про джерела проти `liga_migrate._supabase_from`/
+        `_jira_from`); конкретні значення нижче лишились як були."""
         fb = os.path.join(self.home, '.claude', 'pipeline-feedback')
         self._write(os.path.join(fb, 'jira-token'), 'jira_file_token_alpha\n')
         os.environ.pop('JIRA_TOKEN')                                           # пошта — з оточення, токен — з файла
@@ -923,7 +934,7 @@ class PlanTest(_Stand):
         self.assertEqual(p['space_json']['modules']['jira-tracker']['settings']['email'], self.JIRA_EMAIL)
         self.assertEqual(p['secrets']['jira-tracker'], {'token': 'jira_file_token_alpha'})
         self.assertEqual((p['space_json']['modules']['jira-tracker']['settings']['base'], p['space_json']['modules']['jira-tracker']['settings']['email'],
-                          p['secrets']['jira-tracker']['token']), install_config.jira_config())
+                          p['secrets']['jira-tracker']['token']), (self.JIRA_BASE, self.JIRA_EMAIL, 'jira_file_token_alpha'))
         # Supabase: у корені лише адреса, ключ в оточенні — пара НЕ змішується; без пари з жодного джерела ролей нема
         self.config(supabase=False, supabase_url=self.SB_URL)
         os.environ['SUPABASE_KEY'] = 'sb_env_key_alpha'
@@ -932,8 +943,6 @@ class PlanTest(_Stand):
         p = self.plan()
         self.assertEqual((p['space_json']['modules']['supabase-teams']['settings']['url'], p['secrets']['supabase-teams']['key']),
                          ('https://sb-env.example.com', 'sb_env_key_alpha'))
-        self.assertEqual((p['space_json']['modules']['supabase-teams']['settings']['url'], p['secrets']['supabase-teams']['key']),
-                         install_config.supabase_config())
 
     # --- звіт
     def test_report_has_no_secret_values(self):
@@ -1856,6 +1865,35 @@ if __name__ == '__main__':
     unittest.main()
 
 
+def _ctx_case_without_originals(g, rig, env):
+    """Копія `make_before_4d3a._ctx_case` БЕЗ розділу `config` (4d-4b: читачі оригіналів `install_config.supabase_config/jira_config` видалено,
+    генератор знімка 0.16.0 не переганяється й не правиться — він лишається еталоном; тут збирається те, що не залежить від оригіналів:
+    три потоки ролей на мігрованій ЛІЗІ). Розділ `config` знімка — «що читав рантайм з кореня/оточення» — після 4d-4b не має аналога: його
+    замінює `NoOriginalsRead` (tests/test_no_originals.py) і `AfterMigrationParity4d4b` (Task 15)."""
+    from unittest import mock
+    import deai_modules as dm
+    import serve
+    import spaces
+    liga = rig.registry()
+    rec = g.Recorder()
+    out = {}
+    with rig.activate(env), mock.patch.object(dm, 'call', rec), spaces.request_space(g.SPACE_ID):
+        dm.reset_caches()
+        provs = {role: dm.provider(role, liga) for role in ('dashboard', 'tracker', 'notify')}
+        serve._TEAM_CACHE.clear()
+        flows = {'dashboard': lambda: serve._team_fetch(liga, provs['dashboard']),
+                 'tracker': lambda: serve._tracker_fetch(liga, provs['tracker'], ['DEMO-1']),
+                 'notify': lambda: serve.notify_call('mute_state', resolved=(liga, provs['notify']))}
+        for role, flow in flows.items():
+            before = len(rec.calls)
+            res = g._outcome(lambda: g._jsonable(flow()), rig.home)
+            new = rec.calls[before:]
+            out[role] = {'provider': type(provs[role]).__name__, 'flow_outcome': res,
+                         'calls': [{'module': m, 'fn': fn, 'timeout': t, 'ctx': g.san_ctx(c)} for m, fn, c, t in new]}
+        dm.reset_caches()
+    return out
+
+
 class AfterMigrationParity(unittest.TestCase):
     """Task 6 (4d-3a): сценарії знімка 0.16.0 (`before-4d3a.json`) на МІГРОВАНІЙ ЛІГІ (`run()` у тимчасовому DEAI_HOME) дають ті самі
     результати, крім задокументованих відмінностей. Стенд і засоби знімання — з генератора `tests/make_before_4d3a.py` (`Rig`,
@@ -1906,7 +1944,7 @@ class AfterMigrationParity(unittest.TestCase):
         with rig.activate():
             v['caps'] = dm.capabilities(liga)
             v['mark'] = lm.status()['mark']
-        v['ctx'] = g._ctx_case(rig, {})
+        v['ctx'] = _ctx_case_without_originals(g, rig, {})            # 4d-4b: без розділу `config` (читачів оригіналів нема)
         v['api'] = g.scrub(g._api_pass(rig), rig.home)
         return v
 
@@ -2084,7 +2122,9 @@ class AfterMigrationParity(unittest.TestCase):
         for name in ('snapshot', 'shared'):
             c = self.view(name)['caps']
             self.assertEqual({r: c[r] for r in self.ROLE_MODULE}, self.ROLE_MODULE, name)
-            self.assertEqual({r: c[r] for r in ('publish', 'comments', 'vcs')}, {'publish': 'legacy', 'comments': 'legacy', 'vcs': 'legacy'}, name)
+            # 4d-4b: ролі без запису (publish/comments/vcs) після кроку A більше не ведуть неявний `'legacy'` — це причина 4d-4b, тож
+            # твердження про них у цей клас НЕ входить: його переносить `AfterMigrationParity4d4b` (Task 15, листки `provider.implicit_space.*`
+            # і `capabilities.error_path.*`). Було: `{'publish': 'legacy', 'comments': 'legacy', 'vcs': 'legacy'}`.
             self.assertIsNone(c['tokens'], name)
             self.assertEqual(sorted(c), sorted(self.snap['caps']['caps']), name)
 
@@ -2130,6 +2170,100 @@ class AfterMigrationParity(unittest.TestCase):
                 self.assertEqual(scr['roles'][role]['provider']['kind'], 'module', role)
                 self.assertEqual(scr['roles'][role]['provider']['id'], mid, role)
                 self.assertEqual(scr['cards'][mid]['enabled'], True, role)
-            for role in ('publish', 'comments', 'vcs'):
-                self.assertEqual(scr['roles'][role]['provider']['kind'], 'legacy', role)
-            self.assertEqual(scr['roles'], self.snap['connections']['hypothetical_explicit']['screen']['roles'], name)
+            # 4d-4b: було ще `provider.kind == 'legacy'` для publish/comments/vcs і рівність `scr['roles']` знімку `hypothetical_explicit` (там ці
+            # три ролі — неявні). Це причина 4d-4b (`Implicit` видалено): до цього класу не входить, див. `AfterMigrationParity4d4b` (Task 15).
+            for role in self.ROLE_MODULE:
+                self.assertEqual(scr['roles'][role], self.snap['connections']['hypothetical_explicit']['screen']['roles'][role], (name, role))
+
+
+class OriginalsReadersCopy(unittest.TestCase):
+    """Приватні читачі оригіналів міграції — `liga_migrate._supabase_from(cfg)` / `_jira_from(cfg)` (тіла — байт у байт ті, що були в
+    `install_config.supabase_from/jira_from`; рантайм їх більше не кличе, 4d-4b). Переїхали з `tests/test_implicit.py::IsolatedInstallConfig`
+    (Task 13 → Task 14): ті самі твердження про ДЖЕРЕЛА й ФОРМУ, але проти читачів міграції, що ще читають оригіналі на першому старті старої
+    установки. «Корінь» тут — вже прочитаний словник `cfg` (читачі не відкривають файла); ізоляція — `isolation.isolated()` (`DC_TASKS_FILE`/
+    `DC_NO_OVERVIEW`): в ізоляції — лише корінь, поза нею — корінь/оточення/`pipeline-feedback`. Значення вигадані, `HOME` тимчасовий.
+
+    Відповідність (нічого не втрачено): `…supabase_root_pair_form_is_checked`, `…jira_root_credentials_need_both_and_the_same_form_as_env`,
+    `…outside_isolation_the_root_credentials_are_ignored_and_env_and_files_work`, `…isolation_cuts_exactly_the_env_and_files_sources_of_the_snapshot`
+    — ті самі імена нижче; `…outside_isolation_matches_the_0_15_0_snapshot` — теж перенесено (його план ретайрив би, а перенос дешевий)."""
+
+    SB = ('https://sb.example.com', 'sb_test_key')
+    JIRA = 'https://jira.example.com'
+    ROOT_PAIR = {'supabase_url': SB[0], 'supabase_key': SB[1], 'jira_base': JIRA}
+    ROOT_NONE = {'design_work_root': '~/work'}
+    ENV_ON = {'SUPABASE_URL': 'https://sb-env.example.com', 'SUPABASE_KEY': 'sb_env_key',
+              'JIRA_EMAIL': 'alpha@example.com', 'JIRA_TOKEN': 'jira_env_token'}
+    MODES = ('tasks_file', 'no_overview')
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.n = 0
+
+    def run_case(self, root, mode, env=None, files=False):
+        """`(_supabase_from(root), _jira_from(root))` у режимі `mode` (`tasks_file`/`no_overview`/`none` — без ізоляції)."""
+        from unittest import mock
+        import liga_migrate as lm
+        self.n += 1
+        home = os.path.join(self.tmp.name, 'c%d' % self.n, 'home')
+        os.makedirs(home)
+        if files:
+            fb = os.path.join(home, '.claude', 'pipeline-feedback')
+            os.makedirs(fb)
+            for name, val in (('jira-email', 'file@example.com'), ('jira-token', 'jira_file_token')):
+                with open(os.path.join(fb, name), 'w', encoding='utf-8') as f:
+                    f.write(val + '\n')
+        with mock.patch.dict(os.environ, {'HOME': home, **(env or {})}):
+            for k in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW', 'SUPABASE_URL', 'SUPABASE_KEY', 'JIRA_EMAIL', 'JIRA_TOKEN'):
+                if k not in (env or {}):
+                    os.environ.pop(k, None)
+            if mode == 'tasks_file':
+                os.environ['DC_TASKS_FILE'] = os.path.join(home, 'tasks.json')
+            elif mode == 'no_overview':
+                os.environ['DC_NO_OVERVIEW'] = '1'
+            return lm._supabase_from(root), lm._jira_from(root)
+
+    def test_supabase_root_pair_form_is_checked(self):
+        for bad in ({'supabase_url': 'https://<ref>.supabase.co', 'supabase_key': 'sb_test_key'},
+                    {'supabase_url': self.SB[0], 'supabase_key': 'has space'}):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.run_case(bad, 'tasks_file', self.ENV_ON)[0], (None, None))
+
+    def test_jira_root_credentials_need_both_and_the_same_form_as_env(self):
+        base = {'jira_base': self.JIRA}
+        for extra in ({'jira_email': 'root@example.com'}, {'jira_token': 'jira_root_token'},
+                      {'jira_email': 'root@example.com', 'jira_token': 'has space'},
+                      {'jira_email': '', 'jira_token': 'jira_root_token'}, {'jira_email': 1, 'jira_token': 'jira_root_token'}):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.run_case({**base, **extra}, 'tasks_file', self.ENV_ON, True)[1], (None, None, None))
+
+    def test_outside_isolation_the_root_credentials_are_ignored_and_env_and_files_work(self):
+        root = {**self.ROOT_PAIR, 'jira_email': 'root@example.com', 'jira_token': 'jira_root_token'}
+        self.assertEqual(self.run_case(root, 'none')[1], (None, None, None))
+        self.assertEqual(self.run_case(root, 'none', self.ENV_ON)[1], (self.JIRA, 'alpha@example.com', 'jira_env_token'))
+        self.assertEqual(self.run_case(root, 'none', None, True)[1], (self.JIRA, 'file@example.com', 'jira_file_token'))
+
+    def _snapshot(self):
+        with open(os.path.join(_HERE, 'fixtures', 'implicit', 'before-4d2.json'), encoding='utf-8') as f:
+            snap = json.load(f)['install']
+        self.assertEqual(len(snap), 8)
+        return snap
+
+    def test_isolation_cuts_exactly_the_env_and_files_sources_of_the_snapshot(self):
+        for name in self._snapshot():
+            root_name, env_name, files_name = name.split('/')
+            for mode in self.MODES:
+                with self.subTest(case=name, mode=mode):
+                    sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, mode,
+                                              self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
+                    self.assertEqual(sup, self.SB if root_name == 'root_with_pair' else (None, None))
+                    self.assertEqual(jira, (None, None, None))
+
+    def test_outside_isolation_matches_the_0_15_0_snapshot(self):
+        for name, want in self._snapshot().items():
+            root_name, env_name, files_name = name.split('/')
+            with self.subTest(case=name):
+                sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, 'none',
+                                          self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
+                self.assertEqual((list(sup), list(jira)), (want['supabase_config'], want['jira_config']))

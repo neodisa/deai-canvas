@@ -1316,7 +1316,7 @@ class LayerOff(Http, unittest.TestCase):
 class Capabilities(World):
 
     #: Простір З інтеграціями, але без жодного запису ролі (4d-4b: неявного постачальника `'legacy'` нема, роль без запису — `None`).
-    LEGACY_SHAPE = {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}
+    NO_ROLES = {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}
     NO_INTEGRATIONS = {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}
 
     def caps_everywhere(self):
@@ -1341,21 +1341,21 @@ class Capabilities(World):
         self.assertEqual(got['task'], self.NO_INTEGRATIONS)
         self.assertEqual(got['tasks'], self.NO_INTEGRATIONS)
         self.assertEqual(got['overview'], self.NO_INTEGRATIONS)
-        self.assertEqual(got['spaces'], {'off': self.NO_INTEGRATIONS, 'on': self.LEGACY_SHAPE})
+        self.assertEqual(got['spaces'], {'off': self.NO_INTEGRATIONS, 'on': self.NO_ROLES})
 
     def test_a_task_of_another_space_names_its_own_capabilities(self):
         st, body = self.get('/t/ty/api/task')
         self.assertEqual(st, 200, body)
-        self.assertEqual((body['space']['id'], body['space']['capabilities']), ('on', self.LEGACY_SHAPE))
+        self.assertEqual((body['space']['id'], body['space']['capabilities']), ('on', self.NO_ROLES))
 
     def test_an_explicit_record_names_the_module_not_a_fallback_string(self):
         """НОВЕ (4d-4b; замінює колишнє «простір з інтеграціями → `'legacy'`»): роль простору з інтеграціями називає модуль лише за ЯВНИМ записом;
-        без запису — `None` (див. `LEGACY_SHAPE`)."""
+        без запису — `None` (див. `NO_ROLES`)."""
         st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'static-publish', 'settings': {'folder': '{home}/pub/{space_id}'}})
         self.assertEqual(st, 200, body)
         st, body = self.get('/api/spaces')
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
-        self.assertEqual(caps['on'], dict(self.LEGACY_SHAPE, publish='static-publish'))
+        self.assertEqual(caps['on'], dict(self.NO_ROLES, publish='static-publish'))
 
     def test_all_tasks_listing_carries_the_space_of_the_request(self):
         st, body = self.get('/api/tasks?all=1')
@@ -1386,7 +1386,7 @@ class Capabilities(World):
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
         self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'space-json-unreadable'})
-        self.assertEqual(caps['on'], self.LEGACY_SHAPE)             # решта просторів — як були
+        self.assertEqual(caps['on'], self.NO_ROLES)             # решта просторів — як були
         self.assertEqual([s['id'] for s in body['spaces']], ['off', 'on'])
         st, body = self.get('/api/task')                            # і єдина задача теж відповідає
         self.assertEqual(st, 200, body)
@@ -1411,7 +1411,7 @@ class Capabilities(World):
             caps = {s['id']: s['capabilities'] for s in body['spaces']}
             st2, task = self.get('/api/task')
         self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error'})
-        self.assertEqual(caps['on'], self.LEGACY_SHAPE)
+        self.assertEqual(caps['on'], self.NO_ROLES)
         self.assertEqual((st2, task['space']['capabilities']['error']), (200, 'module-error'))
 
     def test_a_broken_space_json_of_a_space_with_integrations_has_no_roles_and_the_error(self):
@@ -1421,7 +1421,7 @@ class Capabilities(World):
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
         # жодної ролі (ні публікації, ні коментарів «з запасного варіанта») + помилка
-        self.assertEqual(caps['on'], dict(self.LEGACY_SHAPE, error='space-json-unreadable'))
+        self.assertEqual(caps['on'], dict(self.NO_ROLES, error='space-json-unreadable'))
 
     def test_a_broken_catalog_does_not_break_the_listing(self):
         """Не завантажений модуль УВІМКНЕНО (роль `tokens`) — він постачальником не стає, а списки відповідають."""
@@ -1432,7 +1432,7 @@ class Capabilities(World):
         self.assertEqual(st, 200, body)
         self.assertEqual({s['id']: s['capabilities'] for s in body['spaces']},
                          {'off': {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None},
-                          'on': self.LEGACY_SHAPE})
+                          'on': self.NO_ROLES})
         st, body = self.get('/api/task')
         self.assertEqual((st, body['space']['capabilities']),
                          (200, {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}))

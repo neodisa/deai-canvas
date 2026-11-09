@@ -495,7 +495,14 @@ class ResealGateRegistryEdges(unittest.TestCase):
         with open(deai_modules._secrets_path(), 'w', encoding='utf-8') as f:
             f.write('{not json')
         deai_modules.reset_caches()
-        self.assertIsNone(reseal_gate.rebuild_index('a', {'dir': tdir}))
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):                 # попередження — друк у stdout; ловимо, щоб не шуміло і було перевірено
+            res = reseal_gate.rebuild_index('a', {'dir': tdir})
+        self.assertIsNone(res)
+        self.assertIn('секрети простору не читаються', out.getvalue())
+        self.assertIn('a:', out.getvalue())
         with open(os.path.join(pub, 'index.html'), encoding='utf-8') as f:
             self.assertEqual(f.read(), 'old')
 

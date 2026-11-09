@@ -1000,7 +1000,34 @@ class AfterMigrationServer4d4a(_StepD):
         self.assertEqual(self.lm.run(step=D), 'done')
         sp = self.spaces.active_space()
         self.assertEqual(sp['id'], 'legacy')
+        self.add_comments_record(sp)
         return sp, self.serve.load_legacy_tasks()
+
+    def add_comments_record(self, sp):
+        """4d-4b: у знімку 0.14.0 ЛІГА мала проєктний канал коментарів (неявний постачальник; пара Supabase у корені). Стенд кроку D пари в корені
+        не має (`supabase=False`), а неявного постачальника нема — тож очікування «канал проєкту є» (`project_channel: True`) тримає ЯВНИЙ запис
+        `supabase-comments`, який поклали б кроки A–E з оригіналів (форма запису — з `liga_fixture`). Кладемо ПІСЛЯ кроку D: його позначка й
+        відкат не зачеплені. Очікування знімка НЕ перевернуто."""
+        import liga_fixture
+        mid, settings, secrets = liga_fixture.ROLE_RECORDS['comments']
+        path = os.path.join(sp['path'], 'space.json')
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        data.setdefault('modules', {})[mid] = {'enabled': True, 'shared_state': True, 'settings': dict(settings)}
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        sec_path = os.path.join(os.environ['DEAI_HOME'], 'secrets.json')
+        try:
+            with open(sec_path, encoding='utf-8') as f:
+                sec = json.load(f)
+        except (OSError, ValueError):
+            sec = {}
+        sec.setdefault(sp['id'], {})[mid] = dict(secrets)
+        with open(sec_path, 'w', encoding='utf-8') as f:
+            json.dump(sec, f)
+        os.chmod(sec_path, 0o600)
+        import deai_modules
+        deai_modules.reset_caches()
 
     def rel(self, text):
         return self.gen.rel(text, self.home)

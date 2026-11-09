@@ -244,11 +244,11 @@ class _ChanStand(unittest.TestCase):
         _app_paths()
         import dashboard
         import deai_modules
-        import implicit
+        import isolation                    # 4d-4b (R1): `implicit` → `isolation` (закон ізоляції); неявного постачальника нема
         import make_before_4d3b as mb
         import serve
         import spaces
-        cls.mb, cls.dm, cls.serve, cls.spaces, cls.implicit, cls.dashboard = mb, deai_modules, serve, spaces, implicit, dashboard
+        cls.mb, cls.dm, cls.serve, cls.spaces, cls.isolation, cls.dashboard = mb, deai_modules, serve, spaces, isolation, dashboard
 
     def setUp(self):
         from unittest import mock
@@ -279,8 +279,15 @@ class _ChanStand(unittest.TestCase):
             settings = {'url': 'https://sb.example.com', 'shots_bucket': 'overview-thumbs'}
             if compat:
                 settings['compat'] = compat
-            self.mb._write(sp_path, {'modules': {COMMENTS_ID: {'enabled': True, 'shared_state': True, 'settings': settings}}})
-            self.mb._write(os.path.join(rig.deai, 'secrets.json'), {self.mb.SPACE_ID: {COMMENTS_ID: {'key': 'sb_chan_key_alpha'}}})
+            # 4d-4b: і запис `notify` (`supabase-teams`): раніше `teams-mute` вів неявний постачальник; тепер без запису роль вимкнена (409
+            # `notify-off`), а канал мʼюта читають тести цього стенда. `compat` — той самий, що в коментарів (схема каналу — одна на простір).
+            teams = {'url': 'https://sb.example.com'}
+            if compat:
+                teams['compat'] = compat
+            self.mb._write(sp_path, {'modules': {COMMENTS_ID: {'enabled': True, 'shared_state': True, 'settings': settings},
+                                                 'supabase-teams': {'enabled': True, 'shared_state': True, 'settings': teams}}})
+            self.mb._write(os.path.join(rig.deai, 'secrets.json'),
+                           {self.mb.SPACE_ID: {COMMENTS_ID: {'key': 'sb_chan_key_alpha'}, 'supabase-teams': {'key': 'sb_chan_key_alpha'}}})
         return rig, space, cfg
 
     def pinned(self, rig):
@@ -325,8 +332,7 @@ class CommentChannel(unittest.TestCase):
     def setUpClass(cls):
         _app_paths()
         import deai_modules
-        import implicit
-        cls.dm, cls.implicit = deai_modules, implicit
+        cls.dm = deai_modules
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix='chan-fn-')
@@ -344,13 +350,14 @@ class CommentChannel(unittest.TestCase):
     def rec(self, **settings):
         return {COMMENTS_ID: {'enabled': True, 'settings': settings}}
 
-    def test_implicit_uses_the_legacy_scheme(self):
-        prov = self.implicit.for_role('comments')
+    def test_no_provider_never_gets_the_legacy_scheme(self):
+        """Було `test_implicit_uses_the_legacy_scheme` (неявний постачальник вів схему comment-layer: `shared-x`, `dc/t1`…). 4d-4b: неявного
+        нема (замінено тестом `test_builtin_with_compat_uses_the_legacy_scheme`: схема лише в ЯВНОГО вбудованого з `compat`); а «нема
+        постачальника» (`None`) схеми comment-layer не дістає — як і будь-який не-`Module`."""
         f = self.dm.comment_channel_of
-        self.assertEqual(f(self.space, prov, self.task, 't1'), 'shared-x')
-        self.assertEqual(f(self.space, prov, self.task, 't1', internal=True), 'shared-x/internal')
-        self.assertEqual(f(self.space, prov, self.bare, 't1'), 'dc/t1')
-        self.assertEqual(f(self.space, prov, self.bare, 't1', True), 'dc/t1/internal')
+        self.assertFalse(self.dm.comment_scheme_legacy(self.space, None))
+        self.assertEqual(f(self.space, None, self.task, 't1'), 'deai/sp1/t1')
+        self.assertEqual(f(self.space, None, self.bare, 't1', True), 'deai/sp1/t1/internal')
 
     def test_builtin_with_compat_uses_the_legacy_scheme(self):
         self.write(self.rec(compat=LAYER))
@@ -426,11 +433,16 @@ class ChannelCallSites(_ChanStand):
             for site in ('task', 'mute_get', 'mute_post', 'config'):
                 self.assertEqual(out[site], want, (compat, site))
 
-    def test_http_implicit_space_keeps_the_legacy_scheme(self):
+    def test_http_space_without_records_has_no_mute_channel(self):
+        """Було `test_http_implicit_space_keeps_the_legacy_scheme`: ЛІГА без записів вела неявний постачальник зі схемою comment-layer на всіх
+        чотирьох місцях. 4d-4b: неявного нема (R2) — без записів `notify` і `comments` `teams-mute` і `comment-config` вимкнені (409, каналу
+        нема); `api/task` лишається 200 (схему comment-layer тепер дає лише ЯВНИЙ запис із `compat`: `test_http_sites_follow_compat`)."""
         rig, _space, _cfg = self.stand(module=False)
         out = self.http(rig)
-        for site in ('task', 'mute_get', 'mute_post', 'config'):
-            self.assertEqual(out[site], LAYER_CHANNELS, site)
+        for site in ('mute_get', 'mute_post', 'config'):
+            self.assertEqual(out[site], {'a-1': None, 'a-2': None}, site)
+        self.assertEqual(out['status'].count(409), 6, out['status'])       # три маршрути на двох задачах; `api/task` — 200
+        self.assertEqual(out['status'].count(200), 2, out['status'])
 
     def test_in_process_sites_follow_compat(self):
         serve = self.serve
@@ -566,7 +578,8 @@ class ProjectCommentsParity(_ChanStand):
         rig, space, _cfg = self.stand(module=False)
         with self.pinned(rig):
             pc = serve.ProjectComments(space)
-            self.assertEqual((pc.kind, pc.label, pc.legacy_scheme), ('implicit', 'Supabase', True))
+            # 4d-4b: було `('implicit', 'Supabase', True)`; без запису роль вимкнена — вид `off`, схеми comment-layer нема
+            self.assertEqual((pc.kind, pc.label, pc.legacy_scheme), ('off', 'не підключено', False))
 
     def _inbox(self, compat):
         rig, space, cfg = self.stand(compat=compat)
@@ -731,12 +744,20 @@ class _VcsStand(_ChanStand):
                     finally:
                         self.dm.reset_caches()
 
+    def old_vcs_target(self):
+        """Генератор знімка 0.17.0 (`make_before_4d3b`, НЕ правиться — еталон) кличе `serve.vcs_target(cfg, tid, task, settings)`. 4d-4b (R4): підпис
+        `vcs_target(tid, task, settings)` — без `cfg`. Перехідник на час збору: перший аргумент відкидається (ключ і IP кореня цілі більше й не
+        несли б — цілі збираються за новим правилом). Виклики самого ядра (3 аргументи) проходять як є."""
+        serve = self.serve
+        new = serve.vcs_target
+        return self.mock.patch.object(serve, 'vcs_target', lambda *a: new(*a[-3:]))
+
     def sections(self, rig, cfg, space):
         """Ті самі секції, що знімає `make_before_4d3b.vcs`, але з явним записом: → словник, санітизований як знімок."""
         mb, serve, dm = self.mb, self.serve, self.dm
         net = mb.NoNet()
         out = {}
-        with mb._stack(rig, mb._env_extra(rig), self.mock.patch.object(serve.urllib.request, 'urlopen', net)):
+        with mb._stack(rig, mb._env_extra(rig), self.mock.patch.object(serve.urllib.request, 'urlopen', net), self.old_vcs_target()):
             dm.reset_caches()
             out['provider'] = mb._vcs_ctx(serve, rig)
             v = serve.vcs_provider()
@@ -807,9 +828,8 @@ class VcsCompat(_VcsStand):
             self.assertEqual(self.serve._flat_mirror_overlay(), {'mirror_flat': True, 'cache_dir': '/x/override'})
             self.assertEqual(self.serve._vcs_legacy_ctx()['cache_dir'], '/x/override')
         rig, _sp, _cfg = self.vstand()
-        implicit_rig = self.mb.liga(self.tmp, 'imp')[0]
         self.assertEqual(self.provider_in(rig, {})[1]['cache_dir'], want)
-        self.assertEqual(self.provider_in(implicit_rig, {})[1]['cache_dir'], want)
+        # 4d-4b: другий рядок `provider_in(неявна ЛІГА)['cache_dir'] == want` ретайрено (неявного шляху нема); ізольований `ctx` ловить перший блок
 
     def test_both_paths_take_the_overlay_from_one_helper(self):
         with open(os.path.join(os.path.dirname(_HERE), 'app', 'serve.py'), encoding='utf-8') as f:
@@ -832,15 +852,30 @@ class VcsCompat(_VcsStand):
         self.assertEqual(got['provider']['module'], VCS_ID)
         self.assertEqual(got['provider']['provider'], 'Module', 'явний запис, а не неявний постачальник')
         self.assertIs(got['provider']['legacy'], True)
-        self.assertEqual(got['mirrors'], snap['mirrors'])
+        # 4d-4b: у знімку 0.17.0 `target` ніс спільні `ssh_key`/`host_ip` з КОРЕНЯ; тепер корінь не читається, ціль цих полів не несе (модуль бере
+        # свої з налаштувань запису). Це причина 4d-4b — у цей клас не входить: ефективні значення звіряє `AfterMigrationParity4d4b` (Task 15,
+        # листки `vcs_target.*`). Тут порівнюється решта цілі (репо, шлях, гілка, задача) і ТЕКА ДЗЕРКАЛА.
+        def no_keys(obj):                     # з кожного словника під ключем `target` (у т.ч. у `push[i].target` текстів) прибрати ключ і IP
+            if isinstance(obj, dict):
+                return {k: ({a: no_keys(b) for a, b in v.items() if a not in ('ssh_key', 'host_ip')} if k == 'target' and isinstance(v, dict)
+                            else no_keys(v)) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [no_keys(x) for x in obj]
+            return obj
+        self.assertEqual(no_keys(got['mirrors']), no_keys(snap['mirrors']))
         self.assertEqual(got['mirrors_base'], snap['mirrors_base'])
-        self.assertEqual(got['texts'], snap['texts'])
+        self.assertEqual(no_keys(got['texts']), no_keys(snap['texts']))
         ctx, want = got['provider']['ctx'], snap['provider']['ctx']
         for k in ('cache_dir', 'mirror_flat'):
             self.assertEqual(ctx[k], want[k], k)
         self.assertEqual({k: ctx['settings'][k] for k in ('branch', 'path', 'autosync')}, want['settings'])
         m, wm = dict(got['form']['model']), dict(snap['form']['model'])
         keys, wkeys = m.pop('space_keys'), wm.pop('space_keys')
+        # 4d-4b: `has_notify` у знімку 0.17.0 істинний (роль `notify` вела неявний постачальник), а тут запису `notify` нема — причина 4d-4b
+        # (`Implicit` видалено); у цей клас не входить, його звіряє `AfterMigrationParity4d4b` (Task 15, розділ `api`). Решту прапорців — як було.
+        for flag in ('has_notify', 'has_publish'):              # так само `has_publish`: запису `publish` нема
+            self.assertIs(m.pop(flag), False, flag)
+            self.assertIs(wm.pop(flag), True, flag)
         self.assertEqual(m, wm, 'прапорці форми «Нова задача» й підписи — як у ЛІГИ 0.17')
         self.assertEqual(sorted(keys), sorted(wkeys + ['compat']), 'єдина різниця обʼєкта простору — ключ compat')
         self.assertEqual(got['form']['space_row']['compat'], {'vcs': DC})
@@ -880,8 +915,10 @@ class VcsLegacyTexts(_VcsStand):
 
     def test_matrix(self):
         pred = self.serve.vcs_legacy_texts
-        self.assertIs(pred(self.implicit.for_role('vcs'), self.space), True, 'неявний постачальник')
-        self.assertIs(pred(self.implicit.for_role('vcs'), None), True)
+        # 4d-4b: було ще `pred(implicit.for_role('vcs'), space/None) is True` («неявний постачальник» — ЛІГА); неявного нема. Тепер «не `Module`»
+        # (`None`, чужий тип) — ніколи не ЛІГА.
+        self.assertIs(pred(None, self.space), False, 'нема постачальника')
+        self.assertIs(pred(None, None), False)
         self.write({'compat': DC})
         self.assertIs(pred(self.builtin, self.space), True)
         self.write({})
@@ -909,10 +946,8 @@ class VcsLegacyTexts(_VcsStand):
 
     def test_provider_computes_it_once_and_puts_it_third(self):
         real = self.serve.vcs_legacy_texts
-        self.n += 1
-        implicit_rig = self.mb.liga(self.tmp, 'q%d' % self.n)[0]
-        cases = (('module-compat', self.vstand(compat=DC)[0], True), ('module-plain', self.vstand(compat=None)[0], False),
-                 ('implicit', implicit_rig, True))
+        # 4d-4b: випадок `('implicit', неявна ЛІГА, True)` ретайрено — неявного постачальника нема (ЛІГА без запису ролі `vcs` не має)
+        cases = (('module-compat', self.vstand(compat=DC)[0], True), ('module-plain', self.vstand(compat=None)[0], False))
         for tag, rig, want in cases:
             calls = []
 
@@ -935,7 +970,7 @@ class VcsLegacyTexts(_VcsStand):
                 v = serve.vcs_provider()
                 self.assertIs(v[2], want_legacy)
                 task = cfg['tasks']['a-1']
-                gl = serve.vcs_target(cfg, 'a-1', task, v[1].get('settings') or {})
+                gl = serve.vcs_target('a-1', task, v[1].get('settings') or {})
                 seen, rec = [], mb.Rec({'push': mb._push_answer([]), 'status': {'behind': 0, 'behind_path': 0, 'unpushed': 0,
                                                                                   'on_remote': True, 'web': None, 'label': 'Example'}})
                 with self.mock.patch.object(dm, 'call', rec):
@@ -957,11 +992,22 @@ class TextPredicateGuard(unittest.TestCase):
 
     @staticmethod
     def implicit_checks(node):
+        """Рядки `isinstance(x, <…Implicit…>)` (4d-4b: типу `Implicit` уже нема — охоронець лишається на випадок його повернення)."""
         out = []
         for n in ast.walk(node):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'isinstance' and len(n.args) == 2:
                 second = ast.dump(n.args[1])
                 if 'Implicit' in second:
+                    out.append(n.lineno)
+        return out
+
+    @staticmethod
+    def module_checks(node):
+        """Рядки `isinstance(x, <…Module…>)`: перевірка типу постачальника, що й лишилась у предикаті (4d-4b)."""
+        out = []
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'isinstance' and len(n.args) == 2:
+                if 'Module' in ast.dump(n.args[1]):
                     out.append(n.lineno)
         return out
 
@@ -977,18 +1023,23 @@ class TextPredicateGuard(unittest.TestCase):
         self.assertEqual({k: v for k, v in bad.items() if v}, {})
 
     def test_predicate_lives_in_one_place(self):
+        """Було: у предикаті є перевірка `Implicit` (`assertTrue(implicit_checks)`), а `vcs_provider` кличе предикат двічі — по одному на гілку
+        (Implicit / Module). 4d-4b: гілки `Implicit` нема — предикат має РІВНО одну перевірку типу (`Module`) і жодної `Implicit`, а
+        `vcs_provider` кличе його рівно один раз."""
         pred = self.fn('vcs_legacy_texts')
-        self.assertTrue(self.implicit_checks(pred), 'єдине місце, де тип постачальника впливає на тексти')
-        self.assertEqual([self.fn(n) for n in ('vcs_provider',)].count(None), 0)
+        self.assertEqual(self.implicit_checks(pred), [])
+        self.assertEqual(len(self.module_checks(pred)), 1, 'єдине місце, де тип постачальника впливає на тексти: одна перевірка `Module`')
         calls = [c for c in ast.walk(self.fn('vcs_provider'))
                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == 'vcs_legacy_texts']
-        self.assertEqual(len(calls), 2, 'по одному виклику на гілку (Implicit / Module); кожна гілка — рівно один')
+        self.assertEqual(len(calls), 1, 'один виклик предиката у `vcs_provider`')
 
     def test_guard_sees_a_planted_check(self):
         planted = ast.parse('def f(v):\n    return isinstance(v[0], implicit.Implicit)\n')
         self.assertEqual(self.implicit_checks(planted), [2])
         clean = ast.parse('def f(v):\n    return isinstance(v, dict)\n')
         self.assertEqual(self.implicit_checks(clean), [])
+        self.assertEqual(self.module_checks(clean), [])
+        self.assertEqual(self.module_checks(ast.parse('def f(v):\n    return isinstance(v, deai_modules.Module)\n')), [2])
 
 
 class SpaceCompatKey(_VcsStand):
@@ -1041,12 +1092,14 @@ class SpaceCompatKey(_VcsStand):
         self.assertEqual(view['compat'], {'vcs': DC})
         self.assertEqual(row['compat'], {'vcs': DC})
 
-    def test_implicit_liga_has_no_key_and_capabilities_stay(self):
+    def test_liga_without_records_has_no_key_and_no_providers(self):
+        """Було `test_implicit_liga_has_no_key_and_capabilities_stay`: неявна ЛІГА без ключа `compat` і з `capabilities.vcs == 'legacy'`.
+        4d-4b (R2): ключа нема й тепер, а роль без запису вимкнена — `None`."""
         rig, sp, _cfg = self.mb.liga(self.tmp, 'k4')
         view, row = self.views(rig, sp)
         for o in (view, row):
             self.assertNotIn('compat', o)
-            self.assertEqual(o['capabilities']['vcs'], 'legacy')
+            self.assertIsNone(o['capabilities']['vcs'])
 
     def test_compat_view_is_total_and_keyed_by_capabilities(self):
         dm = self.dm
@@ -1136,31 +1189,38 @@ class SharedStateIsolationB(_VcsStand):
         return self.serve.comments_route(space, prov)
 
     # ---- comments_route
-    def test_comments_isolated_takes_the_legacy_ctx_not_the_record(self):
+    def test_comments_isolated_in_a_temp_home_takes_the_record_in_the_real_home_is_refused(self):
+        """Було `test_comments_isolated_takes_the_legacy_ctx_not_the_record`: ізольований прогін брав ключ і адресу з КОРЕНЯ задач (`SB_KEY`), а не
+        з `secrets.json`. 4d-4b (Д6): кореня нема; у ТИМЧАСОВОМУ домі — ctx запису (його секрет і налаштування), у СПРАВЖНЬОМУ — `comments-isolated`.
+        Канал і предикат — за `compat`, як і було."""
         for which in (0, 1):
             rig, space, cfg = self.cstand()
             with self._iso(rig, which):
                 mod, ctx, chan = self.route(rig, space)
-                self.assertEqual(ctx['secrets'], {'key': self.mb.SB_KEY}, which)          # ключ кореня задач, НЕ secrets.json
-                self.assertNotEqual(ctx['secrets']['key'], OWN_KEY)
-                self.assertEqual(ctx['settings'], {'url': self.mb.SB_URL, 'shots_bucket': self.serve.LEGACY_SHOTS_BUCKET}, which)
+                self.assertEqual(ctx['secrets'], {'key': OWN_KEY}, which)
+                self.assertEqual((ctx['settings']['url'], ctx['settings']['shots_bucket']), ('https://sb-own.example.com', 'own-bucket'), which)
                 self.assertEqual(chan(cfg['tasks']['a-1'], 'a-1'), 'liga-shared')           # канал і предикат — за compat
                 self.assertEqual(chan(cfg['tasks']['a-2'], 'a-2'), 'dc/a-2')
+                with self.mock.patch.object(self.isolation, 'real_home', lambda home: True):
+                    with self.assertRaises(self.dm.ModuleError) as cm:
+                        self.route(rig, space)
+                self.assertEqual(cm.exception.code, 'comments-isolated', which)
 
     def test_comments_isolated_channel_follows_compat_without_it(self):
         rig, space, cfg = self.cstand(compat=None)
         with self._iso(rig, 0):
             _mod, ctx, chan = self.route(rig, space)
-            self.assertEqual(ctx['secrets'], {'key': self.mb.SB_KEY})
+            self.assertEqual(ctx['secrets'], {'key': OWN_KEY})
             self.assertEqual(chan(cfg['tasks']['a-1'], 'a-1'), 'deai/legacy/a-1')
 
-    def test_comments_isolated_without_root_config_is_unconfigured(self):
+    def test_comments_isolated_does_not_need_the_root_config(self):
+        """Було `…_without_root_config_is_unconfigured` (без пари Supabase у корені — `comments-unconfigured`). 4d-4b: корінь не читається ніде —
+        ізольований маршрут працює без нього (як і з ним: `cstand(root_supabase=False)` не міняє ctx)."""
         for which in (0, 1):
             rig, space, _cfg = self.cstand(root_supabase=False)
             with self._iso(rig, which):
-                with self.assertRaises(self.dm.ModuleError) as cm:
-                    self.route(rig, space)
-                self.assertEqual(cm.exception.code, 'comments-unconfigured', which)
+                _mod, ctx, _chan = self.route(rig, space)
+                self.assertEqual(ctx['secrets'], {'key': OWN_KEY}, which)
 
     def test_comments_outside_isolation_takes_the_record(self):
         rig, space, _cfg = self.cstand()
@@ -1254,18 +1314,19 @@ class SharedStateIsolationB(_VcsStand):
             self.assertEqual(call.call_count, 1)
 
     # ---- ревʼю: споживачі в ізольованому прогоні
-    def test_isolated_publish_comments_ships_the_tasks_root_config(self):
-        """`_publish` (module_publish=False) під ізоляцією: адреса й ключ — з кореня файла задач, не з `secrets.json` запису."""
+    def test_isolated_publish_comments_ships_the_record_config_in_a_temp_home(self):
+        """Було `…_ships_the_tasks_root_config`: `_publish` (module_publish=False) під ізоляцією віддавав адресу й ключ з КОРЕНЯ файла задач, не
+        з `secrets.json`. 4d-4b: кореня нема — у тимчасовому домі це конфіг запису (адреса й секрет)."""
         rig, space, cfg = self.cstand()
         with self._iso(rig, 0):
             self.dm.reset_caches()
             res, warn = self.serve.publish_comments(space, cfg['tasks']['a-1'], 'a-1', module_publish=False)
         self.assertIsNone(warn)
-        self.assertEqual((res['config']['url'], res['config']['key']), (self.mb.SB_URL, self.mb.SB_KEY))
-        self.assertNotIn(OWN_KEY, json.dumps(res['config']))
+        self.assertEqual((res['config']['url'], res['config']['key']), ('https://sb-own.example.com', OWN_KEY))
+        self.assertNotIn(self.mb.SB_KEY, json.dumps(res['config']), 'ключ кореня старого tasks.json не береться')
         self.assertEqual(res['channel'], 'liga-shared')
 
-    def test_isolated_comment_config_over_http_returns_the_root_config(self):
+    def test_isolated_comment_config_over_http_returns_the_record_config(self):
         mb, serve = self.mb, self.serve
         rig, _space, _cfg = self.cstand()
         env = {'HOME': rig.home, 'DEAI_HOME': rig.deai, 'DC_TASKS_FILE': rig.tasks_path, 'DC_NO_OVERVIEW': '1', **mb._env_extra(rig)}
@@ -1275,8 +1336,9 @@ class SharedStateIsolationB(_VcsStand):
                 st, body = mb._call(srv, 'GET', '/api/comment-config?ch=project&it=it1', task='a-1')
         self.assertEqual(st, 200)
         self.assertEqual(body['channel'], 'liga-shared')
-        self.assertEqual((body['config']['url'], body['config']['key']), (mb.SB_URL, mb.SB_KEY))
-        self.assertNotIn(OWN_KEY, json.dumps(body))
+        # 4d-4b: було `(SB_URL, SB_KEY)` кореня і `assertNotIn(OWN_KEY)`; тепер конфіг — запису (у тимчасовому домі), кореня не береться
+        self.assertEqual((body['config']['url'], body['config']['key']), ('https://sb-own.example.com', OWN_KEY))
+        self.assertNotIn(mb.SB_KEY, json.dumps(body))
 
     # ---- ревʼю: лише вбудовані модулі
     def test_comments_isolation_branch_is_builtin_only(self):
@@ -1290,9 +1352,15 @@ class SharedStateIsolationB(_VcsStand):
         self.assertTrue(self.serve._shared_module(space, prov))
         marker = {'marker': 'module-ctx'}
         prov.origin = 'space'
-        with self._iso(rig, 0), self.mock.patch.object(self.dm, 'module_ctx', return_value=marker), \
-                self.mock.patch.object(self.serve, '_comments_legacy_ctx', side_effect=AssertionError('root key')):
+        # 4d-4b: було — гілка ізоляції не кликала `_comments_legacy_ctx` (ключ кореня); тепер гілка ізоляції — відмова `comments-isolated` у
+        # СПРАВЖНЬОМУ домі, і вона так само лише для вбудованого: свій модуль іде `module_ctx`, вбудований — відмовлено
+        with self._iso(rig, 0), self.mock.patch.object(self.isolation, 'real_home', lambda home: True), \
+                self.mock.patch.object(self.dm, 'module_ctx', return_value=marker):
             self.assertIs(self.serve.comments_route(space, prov)[1], marker)
+            prov.origin = 'builtin'
+            with self.assertRaises(self.dm.ModuleError) as cm:
+                self.serve.comments_route(space, prov)
+            self.assertEqual(cm.exception.code, 'comments-isolated')
 
     def test_own_dashboard_tracker_notify_with_shared_state_keep_the_4d3a_route_law(self):
         """Ревʼю 2: умова «вбудований» НЕ в `_shared_module`: свій модуль ролі dashboard/tracker/notify із `shared_state` в
@@ -2381,10 +2449,20 @@ def _flat(obj, path=''):
     return out
 
 
+def _is_4d4b_leaf(path):
+    """Листки, що залежать від причин 4d-4b (`Implicit` видалено; оригіналів кореня нема), — у ЦЕЙ клас не входять (Task 14 Step 2): їх звіряє
+    `AfterMigrationParity4d4b` (Task 15). Тут: ролі без запису (`publish`, `tracker`) — неявний `legacy` → `None` у capabilities форми (й похідний
+    прапорець `has_publish`); `ssh_key` цілі — тепер не з кореня, а з налаштувань запису (ціль його не несе)."""
+    return (path in ('/vcs/form/capabilities/publish', '/vcs/form/capabilities/tracker', '/vcs/form/model/has_publish',
+                     '/vcs/form/space_row/capabilities/publish', '/vcs/form/space_row/capabilities/tracker')
+            or path.endswith('/target/ssh_key'))
+
+
 def _diff(before, after):
-    """Точний звіт відмінностей `{шлях: (було, стало)}`; відсутній ключ — `_ABSENT`."""
+    """Точний звіт відмінностей `{шлях: (було, стало)}`; відсутній ключ — `_ABSENT`. Без листків причин 4d-4b (`_is_4d4b_leaf`)."""
     a, b = _flat(before), _flat(after)
-    return {k: (a.get(k, _ABSENT), b.get(k, _ABSENT)) for k in sorted(set(a) | set(b)) if a.get(k, _ABSENT) != b.get(k, _ABSENT)}
+    return {k: (a.get(k, _ABSENT), b.get(k, _ABSENT)) for k in sorted(set(a) | set(b))
+            if a.get(k, _ABSENT) != b.get(k, _ABSENT) and not _is_4d4b_leaf(k)}
 
 
 def _expect_diff():
@@ -2465,7 +2543,10 @@ class AfterMigrationParity4d3b(unittest.TestCase):
             with rig.activate(), cls.mock.patch.object(lm, 'STEPS', lm.ALL_STEPS[:2]):        # 4d-3c: паритет a+b; крок c — у test_liga_migrate_c.py
                 results.append([(m, st, info.get('skipped'), info.get('roles')) for m, st, info in lm.run_all()])
             return rig, space, cfg
-        with cls.mock.patch.object(g, 'liga', migrated):
+        import serve
+        new_target = serve.vcs_target
+        # 4d-4b (R4): генератор знімка (еталон, не правиться) кличе `vcs_target(cfg, tid, task, settings)`; перехідник відкидає `cfg`
+        with cls.mock.patch.object(g, 'liga', migrated), cls.mock.patch.object(serve, 'vcs_target', lambda *a: new_target(*a[-3:])):
             snap = g.make()
         return snap, results
 
@@ -2562,7 +2643,7 @@ class RealPushNonIsolated(_VcsStand):
                'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0', 'GIT_SSH_COMMAND': 'false'}
         with rig.activate(env):
             self.assertEqual(self.lm_run_all(), [('liga-4d3a', 'done'), ('liga-4d3b', 'done')])
-            self.assertFalse(self.implicit.isolated(), 'неізольований прогін: нема ні DC_TASKS_FILE, ні DC_NO_OVERVIEW')
+            self.assertFalse(self.isolation.isolated(), 'неізольований прогін: нема ні DC_TASKS_FILE, ні DC_NO_OVERVIEW')
             with self.spaces.request_space(mb.SPACE_ID):
                 self.dm.reset_caches()
                 try:
@@ -2575,7 +2656,7 @@ class RealPushNonIsolated(_VcsStand):
                     self.assertTrue(ctx['space']['path'])
                     cfg2 = serve.load_tasks()
                     task = cfg2['tasks']['a-1']
-                    v = serve.vcs_task(cfg2, 'a-1', task)
+                    v = serve.vcs_task('a-1', task)
                     self.assertIsNotNone(v[3])
                     res = serve.gitlab_sync('a-1', task, v[3], 'it1', vcs=v[:3])
                 finally:

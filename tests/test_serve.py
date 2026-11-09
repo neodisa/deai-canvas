@@ -45,6 +45,9 @@ def league_stand(cls, tasks_file, space_dir=None):
         fx.space_dir = space_dir
     fx.env()
     over = {role: {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}} for role in ('comments', 'dashboard', 'notify')}
+    # ⚠ Ці стенди працюють на ТИПОВОМУ паролі `1100` і БЕЗ ключа SSH/IP (нижче: порожні `ssh_key`/`host_ip`, порожній `password`) — це
+    # навмисно: вони перевіряють маршрути, а не облікові. Спільний пароль превʼю закріплюють `test_publish_module` і
+    # `PreviewGate::test_gate_uses_task_password_when_set`; ключ/IP запису `git-sync` — `test_vcs_core::LeagueKeyFromTheRecord`.
     over['vcs'] = {'settings': {'ssh_key': '', 'host_ip': ''}}
     over['publish'] = {'secrets': {'password': ''}}       # у старому корені пароля превʼю не було: типовий `1100`, поки його не задали (тести пароля)
     fx.build(overrides=over)
