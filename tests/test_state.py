@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sbconf  # noqa: E402
 import state  # noqa: E402
+from liga_fixture import LigaFixture  # noqa: E402
 from serve import VcsError  # noqa: E402  (`state` уже додав `app` у sys.path)
 
 
@@ -376,9 +377,15 @@ class TaskFlag(unittest.TestCase):
         # диску немає (реєстр їде в git, теки — ні).
         self.gone_dir = os.path.join(self.tmp, 'gone-here')
         tasks_file = os.path.join(self.tmp, 'tasks.json')
+        # 4d-4b (R3): адреса й ключ Supabase — ЯВНИЙ запис `supabase-comments` простору ЛІГА (`LigaFixture`, тимчасовий дім), а не
+        # `supabase_url`/`supabase_key` у корені файла (рантайм їх не читає). Файл задач пишемо ПІСЛЯ `build` — той переписує корінь.
+        fx = LigaFixture(self, tmp=self.tmp)
+        fx.tasks_path = tasks_file
+        fx.env(DC_TASKS_FILE=tasks_file)
+        fx.build(roles=('comments',),
+                 overrides={'comments': {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}}}).fix_space()
         with open(tasks_file, 'w', encoding='utf-8') as fh:
-            # `supabase_url`/`supabase_key` — конфіг УСТАНОВКИ в корені файла (4b-2: проєктні піни ЛІГИ — модулем з цим конфігом)
-            json.dump({'supabase_url': sbconf.SB_URL, 'supabase_key': sbconf.SB_KEY, 'current': 'alpha', 'tasks': {
+            json.dump({'current': 'alpha', 'tasks': {
                 'alpha': {'title': 'Альфа', 'dir': dirs['alpha'], 'profile': 'tool'},
                 'beta': {'title': 'Бета', 'dir': dirs['beta'], 'profile': 'tool'},
                 'theirs': {'title': 'Чужа', 'dir': dirs['theirs'], 'profile': 'tool'},
@@ -470,7 +477,7 @@ class TaskFlag(unittest.TestCase):
         дійти до обох підказок із ендпоїнтом."""
         from unittest import mock
         behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
-        with mock.patch.object(state, 'vcs_task', lambda cfg, tid, task: (None, {}, True, {'path': 'p'})), \
+        with mock.patch.object(state, 'vcs_task', lambda tid, task: (None, {}, True, {'path': 'p'})), \
                 mock.patch.object(state, 'gitlab_status', lambda *a, **k: behind):
             _, named, _ = self.run_main(['--task', 'theirs'])
             _, plain, _ = self.run_main([])
@@ -504,7 +511,7 @@ class TaskFlag(unittest.TestCase):
     def _track_header(self, **keys):
         """Шапка `state` задачі `alpha` із заданими ключами напрямку (`profile` фікстури `tool` — прибираємо, якщо не задано)."""
         self.give('alpha', **{'profile': None, 'track': None, **keys})
-        return self.line_of(self.state_with(lambda cfg, tid, task: None), 'Пайплайн v')
+        return self.line_of(self.state_with(lambda tid, task: None), 'Пайплайн v')
 
     def test_header_shows_the_track_with_the_new_label(self):
         """4d-1: шапка показує напрямок задачі — `track`, інакше «—»; підпис «Напрямок:», не «Профіль:». 4d-4a: `profile` у записі
@@ -518,23 +525,23 @@ class TaskFlag(unittest.TestCase):
 
     def test_the_label_is_gitlab_in_the_liga_space_and_git_in_another_one(self):
         ok = {'behind': 0, 'dirty': False, 'on_remote': True}
-        legacy = self.state_with(lambda cfg, tid, task: (None, {}, True, {'path': 'p'}), ok)
+        legacy = self.state_with(lambda tid, task: (None, {}, True, {'path': 'p'}), ok)
         self.assertIn('GitLab (p): синхронізовано', legacy)
-        other = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), ok)
+        other = self.state_with(lambda tid, task: (None, {}, False, {'path': 'p'}), ok)
         self.assertIn('Git (p): синхронізовано', other)
         self.assertNotIn('GitLab', other)
 
     def test_the_label_of_the_status_wins_over_the_default(self):
         """Підпис — з `label` статусу (модуль каже «GitHub»); ЛІГА його перекриває сама, у `serve.gitlab_status`."""
         st = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True, 'label': 'GitHub'}
-        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), st)
+        out = self.state_with(lambda tid, task: (None, {}, False, {'path': 'p'}), st)
         self.assertIn('GitHub (p): ⚠ на GitHub НОВІШЕ (2)', out)
         self.assertNotIn('GitLab', out)
 
     def test_a_space_without_the_role_or_a_task_without_a_target_is_not_set_up(self):
-        out = self.state_with(lambda cfg, tid, task: None)
+        out = self.state_with(lambda tid, task: None)
         self.assertEqual(self.line_of(out, 'GitLab:'), 'GitLab: не налаштований для задачі')
-        out = self.state_with(lambda cfg, tid, task: (None, {}, False, None))
+        out = self.state_with(lambda tid, task: (None, {}, False, None))
         self.assertEqual(self.line_of(out, 'Git:'), 'Git: не налаштований для задачі')
 
     def test_a_refusing_provider_for_a_task_with_no_target_of_its_own_is_not_set_up(self):
@@ -542,14 +549,14 @@ class TaskFlag(unittest.TestCase):
         на кожній задачі при зламаному каталозі)."""
         from unittest import mock
 
-        def refuse(cfg, tid, task):
+        def refuse(tid, task):
             raise VcsError('vcs-error', 'git-sync module is not loaded')
         out = self.state_with(refuse)
         self.assertEqual(self.line_of(out, 'GitLab:'), 'GitLab: не налаштований для задачі')
         self.assertNotIn('не дістати', out)
 
     def test_a_refusing_provider_for_a_task_with_a_target_says_it_cannot_get_the_status(self):
-        def refuse(cfg, tid, task):
+        def refuse(tid, task):
             raise VcsError('space-json-unreadable', 'space.json is not readable')
         for key, val in (('gitlab', {'repo': 'git@h:o/r.git', 'path': 'mockup/alpha'}), ('vcs', {'repo': '/x/r.git'})):
             with self.subTest(key=key):
@@ -563,14 +570,14 @@ class TaskFlag(unittest.TestCase):
 
         def boom(*a, **k):
             raise OSError(f'clone of https://{token}@github.com/o/r.git failed')
-        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), boom)
+        out = self.state_with(lambda tid, task: (None, {}, False, {'path': 'p'}), boom)
         self.assertNotIn(token, out)
         self.assertIn('Git: не дістати статус (clone of https://***@github.com/o/r.git failed)', out)
 
     def test_a_token_in_what_the_provider_raises_never_reaches_the_output(self):
         token = 'ghp_SECRETTOKEN123'
 
-        def boom(cfg, tid, task):
+        def boom(tid, task):
             raise OSError(f'provider of https://{token}@github.com/o/r.git failed')
         self.give('alpha', vcs={'repo': '/x/r.git'})
         out = self.state_with(boom)
@@ -580,13 +587,13 @@ class TaskFlag(unittest.TestCase):
     def test_a_busy_mirror_in_the_status_says_to_try_again(self):
         """Поправка 7: і коли статус каже `vcs-busy` словником, і коли це летить винятком."""
         busy = {'configured': True, 'error': 'mirror is busy', 'code': 'vcs-busy'}
-        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), busy)
+        out = self.state_with(lambda tid, task: (None, {}, False, {'path': 'p'}), busy)
         self.assertIn('Git (p): зайнято (іде синхронізація), спробуй ще раз', out)
         self.assertNotIn('помилка', out)
 
         def raises(*a, **k):
             raise VcsError('vcs-busy', 'mirror is busy')
-        out = self.state_with(lambda cfg, tid, task: (None, {}, False, {'path': 'p'}), raises)
+        out = self.state_with(lambda tid, task: (None, {}, False, {'path': 'p'}), raises)
         self.assertIn('Git (p): зайнято', out)
         self.assertNotIn('не дістати', out)
 
@@ -597,8 +604,22 @@ class TaskFlag(unittest.TestCase):
             seen.append((gl, it, vcs))
             return {'behind': 0, 'dirty': False, 'on_remote': True}
         triple = (object(), {'k': 1}, False)
-        self.state_with(lambda cfg, tid, task: (*triple, {'path': 'p'}), status)
+        self.state_with(lambda tid, task: (*triple, {'path': 'p'}), status)
         self.assertEqual(seen, [({'path': 'p'}, 'it1', triple)])
+
+    def test_shared_comments_off_in_an_isolated_run_have_a_clear_line(self):
+        """n6 (4d-4b): закон ізоляції для справжнього дому дає `ModuleError('comments-isolated')` — раніше рядок був загальним «не дістати
+        (comments-isolated)», тепер каже, ЩО це і чому. Дім «справжній» імітуємо підміною `isolation.real_home` (стенд лежить у тимчасовому)."""
+        import isolation
+        from unittest import mock
+        with mock.patch.object(isolation, 'real_home', return_value=True):
+            rc, out, _ = self.run_main(['--task', 'alpha'])
+        self.assertEqual(rc, 0)
+        line = self.line_of(out, 'Відкриті коментарі')
+        self.assertIsNotNone(line, out)
+        self.assertIn('спільні коментарі вимкнено в ізольованому (тестовому) запуску', line)
+        self.assertNotIn('comments-isolated', line, 'код не показуємо замість пояснення')
+        self.assertNotIn('не дістати', line)
 
     def test_empty_id_is_not_the_current_task(self):
         """`--task ''` — це ЯВНА (порожня) назва, а не «не задано»."""

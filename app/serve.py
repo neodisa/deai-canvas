@@ -632,6 +632,8 @@ def vcs_provider():
         prov = deai_modules.provider('vcs')
     except (deai_modules.ModuleError, spaces.SpacesError) as e:
         raise VcsError(getattr(e, 'code', 'vcs-error'), _frame_reason(e)) from None
+    except Exception as e:  # noqa: BLE001 — каталог модулів зламався (раніше це ловив неявний шлях ЛІГИ): збій = vcs-error, не 500
+        raise VcsError('vcs-error', f'module catalog: {type(e).__name__}') from None
     if prov is None:
         return None
     try:

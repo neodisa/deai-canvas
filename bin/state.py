@@ -308,6 +308,8 @@ def _team_comments(task, tid):
             code = getattr(e, 'code', type(e).__name__)
             if code == 'comments-unconfigured':      # установка без конфігу Supabase — не збій, а «не налаштовано»
                 return 0, ', проєктні: Supabase не налаштовано'
+            if code == 'comments-isolated':      # закон ізоляції (4d-4b): тестовий запуск не ходить у спільний проєкт — не збій
+                return 0, ', проєктні: спільні коментарі вимкнено в ізольованому (тестовому) запуску'
             return 0, f', проєктні: не дістати ({code})'
         # Те, що не ввійшло (зіпсовані елементи, понад межу), — у тому ж рядку: «N відкритих» без цього збрехало б.
         note = pins.note() if hasattr(pins, 'note') else ''
