@@ -845,6 +845,20 @@ export function pwView(task, space) {
   };
 }
 
+/**
+ * Сервер не зміг прочитати секрети простору (`/api/task` віддав `preview_password_error`, а `preview_password` — `null`): пароль превʼю
+ * НЕВІДОМИЙ. Лише для ЛІГА-публікації (чужий для модуля пароль нас не стосується). Показуємо помилку замість пароля й не даємо скопіювати
+ * посилання з порожнім ключем (fail-closed — рівно як сервер: `1100` не підставляємо).
+ */
+export function pwUnreadable(task, space) {
+  return !!task && isLegacyPublish(space) && typeof task.preview_password_error === "string" && task.preview_password_error !== "";
+}
+
+/** `copylink` мусить відмовити: ціль — ЗОВНІШНЄ ЛІГА-превʼю (`#k=<пароль>`; локальна адреса, модуль і залишок пароля не мають), а пароль невідомий. */
+export function copyLinkRefused(task, space, target) {
+  return !!target && target.kind === "external" && !target.leftover && !target.remote && pwUnreadable(task, space);
+}
+
 /* Відмови `POST /api/publish` (`code`) → ключі словника. `Map`, не обʼєкт (як `ERR_KEYS`). */
 const PUBLISH_ERR_KEYS = new Map([
   ["no-publish-module", "publishErrNoModule"],

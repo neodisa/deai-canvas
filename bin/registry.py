@@ -262,14 +262,18 @@ def _ssh_key():
     """SSH-ключ git спільного реєстру: налаштування `ssh_key` запису `git-sync` простору ЛІГА (4d-4b: корінь `tasks.json` не читаємо), інакше
     типовий `~/.ssh/gitlab_ed25519`. Простору/запису/шару нема, реєстр просторів чи `space.json` не читаються — типовий."""
     key = None
+    app = os.path.join(ROOT, 'app')
+    if app not in sys.path:
+        sys.path.insert(0, app)
     try:
-        sys.path.insert(0, os.path.join(ROOT, 'app'))
         import deai_modules
         import spaces
         if spaces.layer_on():
             sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
             if sp is not None:
-                key = (deai_modules.space_modules(sp).get('git-sync') or {}).get('settings', {}).get('ssh_key')
+                rec = deai_modules.space_modules(sp).get('git-sync') or {}
+                if rec.get('enabled') is not False:         # вимкнений запис ключа не дає (як `provider`)
+                    key = rec.get('settings', {}).get('ssh_key')
     except Exception:  # noqa: BLE001 — реєстр/space.json не читаються: типовий ключ, а не збій синку реєстру
         key = None
     return os.path.expanduser(key if isinstance(key, str) and key.strip() else '~/.ssh/gitlab_ed25519')

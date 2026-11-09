@@ -4,8 +4,8 @@ import test from "node:test";
 
 import { DICT } from "../app/i18n.js";
 import {
-  cleanupWarning, commentsUnavailableCode, copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
-  publishErr, publishReaction, pwView, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
+  cleanupWarning, commentsUnavailableCode, copyLinkRefused, copyUrl, hasPublish, isLegacyPublish, isPublished, isRemotePublish, isVercelPublish, localPublishUrl, previewTarget,
+  publishErr, publishReaction, pwUnreadable, pwView, remoteNoticeLines, remoteOpenUrl, remoteShareUrl, safeLocalUrl, safeRemoteUrl,
 } from "../app/spaces-model.js";
 
 /* Публікація за `capabilities.publish` (модулі 2а, Task 8) — чисті правила, які приймає `app.js`:
@@ -822,4 +822,32 @@ test("app.js: попередження прибирання — у списку 
   assert.ok(m, "список `const warn = [ … ].filter(Boolean)` є в app.js");
   assert.match(m[1], /r\.domain_warning,\s*cleanupWarning\(r\),/, "cleanupWarning(r) стоїть у warn одразу за domain_warning");
   assert.doesNotMatch(src, /publishCleanupWarn/, "без t()-обгортки");
+});
+
+/* ── секрети простору не читаються (4d-4b, ревʼю T11 I2) ──────────────────────
+   `/api/task` віддає `preview_password: null` + `preview_password_error`; UI не має підставляти `1100` і не копіює посилання з порожнім `#k=`. */
+const BROKEN = (extra = {}) => GATE_TASK("none", { preview_password: null, preview_password_error: "secrets-unreadable", ...extra });
+const EXT = { kind: "external", url: "https://pv-1.example.app", at: null };
+
+test("pwUnreadable: лише ЛІГА-публікація й лише з кодом помилки", () => {
+  assert.equal(pwUnreadable(BROKEN(), LEG), true);
+  assert.equal(pwUnreadable(GATE_TASK("current"), LEG), false, "без помилки — пароль є");
+  assert.equal(pwUnreadable(BROKEN({ preview_password_error: "" }), LEG), false);
+  assert.equal(pwUnreadable(BROKEN(), MOD), false, "модуль має свій пароль — ЛІГА-шна помилка його не стосується");
+  assert.equal(pwUnreadable(null, LEG), false);
+});
+
+test("copyLinkRefused: ЗОВНІШНЄ ЛІГА-превʼю без відомого пароля — відмова; локальна, модуль, залишок, нема цілі — ні", () => {
+  assert.equal(copyLinkRefused(BROKEN(), LEG, EXT), true);
+  assert.equal(copyLinkRefused(GATE_TASK("current"), LEG, EXT), false, "пароль відомий — копіюємо");
+  assert.equal(copyLinkRefused(BROKEN(), LEG, { kind: "local", url: "/published/x/", at: null }), false, "локальній адресі пароль не потрібен");
+  assert.equal(copyLinkRefused(BROKEN(), LEG, { ...EXT, remote: true }), false);
+  assert.equal(copyLinkRefused(BROKEN(), LEG, { ...EXT, leftover: true }), false);
+  assert.equal(copyLinkRefused(BROKEN(), LEG, null), false);
+  assert.equal(copyLinkRefused(BROKEN(), MOD, EXT), false);
+});
+
+test("текст `pwUnreadable` є в обох мовах і співпадає з відмовою сервера за початком", () => {
+  assert.match(DICT.uk.pwUnreadable, /^секрети простору не читаються/);
+  assert.match(DICT.en.pwUnreadable, /^the space secrets cannot be read/);
 });

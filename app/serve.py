@@ -7143,11 +7143,14 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'error': err}, status=400)
             return
         space = spaces.active_space()
-        try:
-            deai_modules.publish_password(space)      # ДО запису: нечитабельні секрети — відмова, а не пароль, що мовчки впав у 1100
-        except deai_modules.ModuleError as e:
-            self._space_error(deai_modules.STATUS.get(e.code, 409), e.code, SECRETS_UNREADABLE_TEXT)
-            return
+        if not pw:
+            # Зняття власного пароля → пароль повертається до секрету запису: ДО запису перевіряємо, що секрети читаються (інакше він
+            # мовчки впав би в 1100). Непорожній свій пароль задачі секретів не питає (m4) — зберігається й за зіпсованого файла.
+            try:
+                deai_modules.publish_password(space)
+            except deai_modules.ModuleError as e:
+                self._space_error(deai_modules.STATUS.get(e.code, 409), e.code, SECRETS_UNREADABLE_TEXT)
+                return
         cfg = load_tasks()
         # Не `cfg['current']`: пароль піде в ту задачу, яку названо запитом.
         _, task = task_for(cfg, self._task_override)
@@ -8163,6 +8166,7 @@ class Handler(SimpleHTTPRequestHandler):
         # модуль без пароля передає `gate_pw=None` (див. `build_preview`). Читаємо його ДО збірки (раніше
         # — після `rmtree`): збій читання не лишає напівзібраний `publish/`. Простір береться лише
         # коли він зафіксований за запитом: інструменти ЛІГА й заглушки обробника його не мають, і реєстру тоді не читаємо.
+        # (m3: справжній запит завжди зафіксований за простором — `_pin_current_space` на вході, ~5843; гілка `None` — лише для заглушок.)
         space = spaces.active_space() if spaces.layer_on() and spaces.request_space_id() is not None else None
         try:
             pw = preview_password(task, space)

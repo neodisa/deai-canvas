@@ -403,6 +403,7 @@ test("смуга: `published` — publish_url АБО publish_local, ціль п�
   assert.match(body, /\.\.\.pwView\(curTask, spaceNow\(\)\),/, "пароль і попередження про гейт — повз правило");
   assert.doesNotMatch(body, /curTask\?\.preview_password/, "сирий пароль ЛІГА в смузі повз `pwView`");
   assert.doesNotMatch(body, /preview_gate\?\.state === 'stale'/, "pwStale повз `pwView`");
+  assert.match(body, /pwError: pwUnreadable\(curTask, spaceNow\(\)\),/, "помилка секретів доходить до смуги через модель");
   assert.match(body, /pubLocal: /);
   assert.match(body, /pubWhen: /);
   assert.match(body, /previewTarget\(curTask, spaceNow\(\)\)/);
@@ -445,6 +446,8 @@ test("«Відкрити превью» і «Скопіювати посилан
   assert.match(copy, /copyUrl\(target, \{/);
   assert.match(copy, /origin: location\.origin/);
   assert.doesNotMatch(copy, /#k=/, "фрагмент із паролем збирається лише в моделі (`copyUrl`)");
+  assert.match(copy, /if \(copyLinkRefused\(curTask, spaceNow\(\), target\)\) \{ tell\(t\('pwUnreadable'\)\); return; \}/, "нечитабельні секрети — помилка, а не посилання з порожнім ключем");
+  assert.ok(copy.indexOf("copyLinkRefused(") < copy.indexOf("copyUrl(target"), "відмова — ДО складання посилання");
 });
 
 test("палітра й смуга: публікація — на hasPublish, командний канал — на hasTeamComments, GitLab — на hasVcs", () => {

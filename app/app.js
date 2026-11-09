@@ -33,7 +33,7 @@ import { matches, readHomeUi, relTime, taskKey } from './tasks-model.js';
 import { effectiveTab, homeGridHTML, homeHTML, pruneFilters, thumbBrokenHTML } from './tasks-home.js';
 import {
   FORM_POST_TIMEOUT_MS, TASK_VCS_POST_TIMEOUT_MS, checkPostTimeoutMs, VCS_BUSY_MAX_TRIES, VCS_BUSY_RETRY_MS, copyUrl, currentSpace, effectiveCommentMode, hasNotify, hasTeamComments, healTarget,
-  cleanupWarning, commentsUnavailableCode, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwView, readErrKey,
+  cleanupWarning, commentsUnavailableCode, copyLinkRefused, hasVcs, isLegacyVcs, isPublished, isReadErrKey, needsWelcome, previewTarget, publishErr, publishReaction, pwUnreadable, pwView, readErrKey,
   remoteNoticeLines, remoteOpenUrl, remoteShareUrl, requestErrText, rovingIndex, safeLocalUrl, shouldRefreshHome, spaceChanged,
   spaceErrField, spaceErrKey, taskCreateClones, taskErrField, taskErrKey, taskErrShowsReason, taskFormError, vcsBrand, vcsFailKey, vcsLabel, vcsWebUrl,
 } from './spaces-model.js';
@@ -995,6 +995,8 @@ function barState() {
        «Сторінки БЕЗ гейта» (зібрані до фікса TD-37) — інша причина, інший підпис; посилання
        при цьому працює, тож його не вимикаємо. */
     ...pwView(curTask, spaceNow()),
+    /* Секрети простору не читаються: пароль невідомий — замість пароля показуємо помилку (`pwUnreadable`, `spaces-model.js`). */
+    pwError: pwUnreadable(curTask, spaceNow()),
     teams: teamsMute,
     pagePub: !pickedPg || visibleIds(panelPages).has(pickedPg.id),
     figmaBusy,
@@ -2199,6 +2201,8 @@ const BAR_ACTIONS = {
   copylink: async () => {
     const target = previewTarget(curTask, spaceNow());
     if (!target) return;
+    /* Пароль невідомий (секрети не читаються) — посилання з порожнім ключем менеджеру б не відкрило превʼю: показуємо помилку, не копіюємо. */
+    if (copyLinkRefused(curTask, spaceNow(), target)) { tell(t('pwUnreadable')); return; }
     const pageId = pickedPage && pickedPage !== 'main' ? `${picked}/${pickedPage}` : picked;
     /* Локальне посилання — адреса канваса БЕЗ фрагмента з паролем: пароль модуля — секрет, якого UI не
        знає (посилання збирає `copyUrl`, `spaces-model.js`); ЛІГА-посилання — як було, з паролем і сторінкою. */

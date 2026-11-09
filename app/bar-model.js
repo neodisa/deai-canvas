@@ -360,7 +360,7 @@ export function barModel(s) {
     ...(legacy ? [{
       id: "pubpw", labelKey: "pubPw", pw: s.pw || "",
       subKey: s.pwCustom ? "pubPwCustom" : "pubPwDefault",
-      warnKey: s.pwStale ? "pubPwStale" : (s.pwUngated ? "pubPwUngated" : ""),
+      warnKey: s.pwError ? "pwUnreadable" : (s.pwStale ? "pubPwStale" : (s.pwUngated ? "pubPwUngated" : "")),
       warnArgs: s.pwUngated ? [s.pwUngated] : [],
     }] : []),
   ];

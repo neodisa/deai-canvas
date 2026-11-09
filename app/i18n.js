@@ -276,6 +276,7 @@ const UK = {
   pubPwDefault: 'спільний типовий · змінити для цієї задачі',
   pubPwCustom: 'свій для задачі · лише на цій машині',
   pubPwStale: 'новий пароль ще не в превью — натисніть «Оновити»',
+  pwUnreadable: 'секрети простору не читаються — пароль превʼю невідомий, посилання не скопійовано',
   askPreviewPw: 'Пароль превью цієї задачі. Порожньо — повернути спільний типовий.\n'
     + 'Це оверлей у браузері: він обмежує радіус зливу, а не захищає.',
   pwSavedNotPublished: 'Пароль збережено. Він потрапить у превью з першою публікацією.',
@@ -1399,6 +1400,7 @@ const EN = {
   pubPwDefault: 'shared default · change for this task',
   pubPwCustom: 'task-specific · this machine only',
   pubPwStale: 'the new password is not in the preview yet — press “Update”',
+  pwUnreadable: 'the space secrets cannot be read — the preview password is unknown, the link was not copied',
   askPreviewPw: 'Preview password for this task. Leave empty to restore the shared default.\n'
     + 'It is a browser overlay: it limits the blast radius, it does not protect.',
   pwSavedNotPublished: 'Password saved. It reaches the preview with the first publish.',

@@ -583,6 +583,14 @@ test("простір ЛІГА (`publish: 'legacy'`): усе як було, па�
     ["togglepub", "openpreview", "copylink", "teamsnotify", "pubpw"]);
 });
 
+test("`pubpw`: нечитабельні секрети (`pwError`) — попередження замість пароля, вище за stale/ungated", () => {
+  const sp = CAPS("legacy", { integrations: true });
+  const warn = (s) => barModel({ ...base, space: sp, ...s }).zone3.find((x) => x.id === "publish").items.find((x) => x.id === "pubpw").warnKey;
+  assert.equal(warn({ pwError: true, pwStale: true }), "pwUnreadable");
+  assert.equal(warn({ pwError: false, pwStale: true }), "pubPwStale");
+  assert.equal(warn({}), "");
+});
+
 test("`pubpw` — лише коли публікує ЛІГА: ні для модуля, ні там, де модуль підмінив ЛІГА при інтеграціях", () => {
   assert.ok(!pubItems({ space: CAPS("static-publish") }).includes("pubpw"));
   assert.ok(!pubItems({ space: CAPS("static-publish", { integrations: true }) }).includes("pubpw"));

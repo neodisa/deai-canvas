@@ -7,7 +7,7 @@ from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-for _p in (os.path.join(os.path.dirname(_HERE), 'app'), os.path.join(os.path.dirname(_HERE), 'bin')):
+for _p in (os.path.join(os.path.dirname(_HERE), 'app'), os.path.join(os.path.dirname(_HERE), 'bin'), os.path.join(os.path.dirname(_HERE), 'ops')):
     sys.path.insert(0, _p)
 import liga_fixture as lf  # noqa: E402
 import deai_modules  # noqa: E402
@@ -344,6 +344,144 @@ class RegistrySshKey(unittest.TestCase):
         os.environ.pop('DEAI_HOME')
         os.environ['DC_TASKS_FILE'] = '/nonexistent/tasks.json'
         self.assertEqual(registry._ssh_key(), os.path.expanduser('~/.ssh/gitlab_ed25519'))
+
+
+class UnreadableSecretsConsumers(unittest.TestCase):
+    """t11-I1: файл секретів ІСНУЄ, але не читається — кожен споживач пароля превʼю відмовляє вголос (fail-closed), а не падає в `1100`.
+    Справжній `Handler` на тимчасовому домі (як `test_spaces_serve`), задача в просторі ЛІГИ із записом `vercel-publish`; мережі нема."""
+
+    def setUp(self):
+        import json
+        import threading
+        self.fx = lf.LigaFixture(self).env(DC_NO_OVERVIEW='1', DC_IDENTITY_NAME='Lead', DC_IDENTITY_EMAIL='lead@example.com')
+        tdir = os.path.join(self.fx.tmp, 'work', 'a')
+        os.makedirs(os.path.join(tdir, 'iterations', 'it1'))
+        with open(os.path.join(tdir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            json.dump({'iterations': [{'id': 'it1', 'date': '01.01.2026 10:00', 'note': 'n', 'published': True}], 'publish_url': None}, f)
+        with open(os.path.join(tdir, 'iterations', 'it1', 'index.html'), 'w', encoding='utf-8') as f:
+            f.write('<!DOCTYPE html><html><body>x</body></html>')
+        self.tdir = tdir
+        self.fx.build(tasks={'a': {'title': 'A', 'dir': tdir, 'track': 'tool'}}, root_extra={'current': 'a'})
+        with open(deai_modules._secrets_path(), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        deai_modules.reset_caches()
+        spaces.clear_request_space()
+        self.addCleanup(spaces.clear_request_space)
+        self.httpd = serve.make_server(0)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+        self.base = 'http://127.0.0.1:%d' % self.httpd.server_address[1]
+
+    def call(self, path, payload=None):
+        import json
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.base + path, method='GET' if payload is None else 'POST',
+                                     data=None if payload is None else json.dumps(payload).encode(),
+                                     headers={'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode('utf-8'))
+
+    @staticmethod
+    def raw(path):
+        with open(path, 'rb') as f:
+            return f.read()
+
+    def test_api_task_degrades_with_the_error_and_no_default(self):
+        st, body = self.call('/api/task')
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['preview_password_error'], 'secrets-unreadable')
+        self.assertIsNone(body['preview_password'])
+        self.assertEqual(body['preview_gate']['state'], 'none')
+        self.assertNotIn(serve.DEFAULT_PREVIEW_PW, str(body['preview_password']))
+
+    def test_publish_is_refused_before_the_build(self):
+        st, body = self.call('/api/publish', {'build_only': True})
+        self.assertEqual((st, body['code'], body['error']), (409, 'secrets-unreadable', serve.SECRETS_UNREADABLE_TEXT), body)
+        self.assertFalse(os.path.exists(os.path.join(self.tdir, 'publish')))
+
+    def test_clearing_the_password_is_refused_and_the_task_file_is_untouched(self):
+        before = self.raw(self.fx.tasks_path)
+        st, body = self.call('/api/preview-password', {'password': ''})
+        self.assertEqual((st, body['code']), (409, 'secrets-unreadable'), body)
+        self.assertEqual(self.raw(self.fx.tasks_path), before)
+
+    def test_setting_a_nonempty_password_does_not_need_the_secrets(self):
+        """m4: свій пароль задачі секретів не питає — запис проходить, навіть коли файл секретів зіпсовано."""
+        import json
+        st, body = self.call('/api/preview-password', {'password': 'abcd'})
+        self.assertEqual((st, body.get('preview_password')), (200, 'abcd'), body)
+        with open(self.fx.tasks_path, encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['tasks']['a']['preview_password'], 'abcd')
+
+    def test_reseal_gate_skips_the_task_and_keeps_its_wrapper(self):
+        import contextlib
+        import io
+        import json
+        import reseal_gate
+        pub = os.path.join(self.tdir, 'publish')
+        os.makedirs(pub)
+        with open(os.path.join(pub, 'manifest.json'), 'w', encoding='utf-8') as f:
+            json.dump({'build': 'legacy'}, f)
+        idx = os.path.join(pub, 'index.html')
+        with open(idx, 'w', encoding='utf-8') as f:
+            f.write('<html>old wrapper</html>')
+        before = self.raw(idx)
+        out = io.StringIO()
+        with mock.patch.object(sys, 'argv', ['reseal_gate.py', '--build', 'a']), contextlib.redirect_stdout(out):
+            reseal_gate.main()
+        self.assertIn('секрети простору не читаються', out.getvalue())
+        self.assertEqual(self.raw(idx), before)
+
+
+class RegistrySshKeyRecord(unittest.TestCase):
+    """m1: `git-sync` з `enabled: false` — ключ не береться; `sys.path` доповнюється один раз."""
+
+    def test_a_disabled_git_sync_record_gives_the_default(self):
+        import registry
+        lf.LigaFixture(self).env().build(overrides={'vcs': {'enabled': False, 'settings': {'ssh_key': '/other/key'}}})
+        self.assertEqual(registry._ssh_key(), os.path.expanduser('~/.ssh/gitlab_ed25519'))
+
+    def test_sys_path_is_not_grown_by_repeated_calls(self):
+        import registry
+        lf.LigaFixture(self).env().build()
+        registry._ssh_key()
+        n = len(sys.path)
+        registry._ssh_key()
+        registry._ssh_key()
+        self.assertEqual(len(sys.path), n)
+
+
+class ResealGateRegistryEdges(unittest.TestCase):
+    """m2: `liga_space()` без ключа `spaces` не падає; `rebuild_index` із нечитабельними секретами пропускає, а не падає."""
+
+    def test_liga_space_survives_a_registry_without_spaces(self):
+        import reseal_gate
+        for reg in ({'version': 1}, {'spaces': None}):
+            with mock.patch.object(spaces, 'read_registry', lambda reg=reg: reg):
+                self.assertIsNone(reseal_gate.liga_space())
+
+    def test_rebuild_index_with_unreadable_secrets_is_skipped(self):
+        import json
+        import reseal_gate
+        fx = lf.LigaFixture(self).env().build()
+        tdir = os.path.join(fx.tmp, 'work', 'a')
+        pub = os.path.join(tdir, 'publish')
+        os.makedirs(pub)
+        with open(os.path.join(pub, 'index.html'), 'w', encoding='utf-8') as f:
+            f.write('old')
+        with open(os.path.join(tdir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            json.dump({'iterations': [{'id': 'it1', 'published': True}]}, f)
+        with open(deai_modules._secrets_path(), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        deai_modules.reset_caches()
+        self.assertIsNone(reseal_gate.rebuild_index('a', {'dir': tdir}))
+        with open(os.path.join(pub, 'index.html'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'old')
 
 
 class OneRoleFailsAlone(unittest.TestCase):

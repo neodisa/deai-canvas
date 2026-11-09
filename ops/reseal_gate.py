@@ -34,7 +34,7 @@ def liga_space():
     Реєстр не читається — `None` (пароль задачі чи `1100`)."""
     try:
         return next((s for s in spaces.read_registry()["spaces"] if s.get("legacy") is True), None)
-    except spaces.SpacesError:
+    except (spaces.SpacesError, KeyError, TypeError):     # реєстр без `spaces` чи з не-списком — «нема простору», а не збій
         return None
 
 
@@ -49,7 +49,11 @@ def rebuild_index(tid, task):
     # ⚠️ Цей скрипт перезбирає ЛИШЕ обгортку. Гейт у внутрішніх сторінках додає
     # публікація; якщо превʼю зібрано до 03.08.2026, потрібна саме перепублікація,
     # а не reseal — інакше пряме посилання на сторінку так і минатиме пароль.
-    pw = preview_password(task, liga_space())
+    try:
+        pw = preview_password(task, liga_space())
+    except ModuleError:       # fail-closed: нечитабельні секрети — обгортку не чіпаємо (`main` питає раніше й пропускає задачу)
+        print(f"⚠ {tid}: секрети простору не читаються — пароль превʼю невідомий. Пропуск.")
+        return None
     # ⛔ Обгортка з 02.09.2026 — тонкий каркас: перелік сторінок і назва задачі
     # лежать у `publish/manifest.json`, який пише ЛИШЕ публікація. Тому цей
     # скрипт їх більше не рахує — і не може зістарити (раніше рахував би, а
