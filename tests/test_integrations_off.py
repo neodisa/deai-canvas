@@ -49,6 +49,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.join(ROOT, 'bin'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import liga_fixture  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
@@ -426,13 +427,20 @@ def _isolate_env(case, tmp, legacy_file, class_level=False):
     for k in ('DC_NO_OVERVIEW', 'DC_TEAM_FAKE', 'DC_TEAMS_FAKE'):
         os.environ.pop(k, None)
     os.environ['DC_TASKS_FILE'] = legacy_file
-    sbconf.write_root(legacy_file)     # конфіг Supabase ЛІГА — вигаданий, у корені фікстури (4d-2): точки виходу ЛІГИ живі й під розтяжкою
     os.environ.update({
         'HOME': home, 'DEAI_HOME': deai, 'DC_MIRRORS_DIR': os.path.join(tmp, 'mirrors'),
         'DC_IDENTITY_NAME': 'Lead', 'DC_IDENTITY_EMAIL': 'lead@example.com',
         'GIT_AUTHOR_NAME': 'Lead', 'GIT_AUTHOR_EMAIL': 'lead@example.com',
         'GIT_COMMITTER_NAME': 'Lead', 'GIT_COMMITTER_EMAIL': 'lead@example.com'})
     return home, deai
+
+
+def league_records(space_dir, deai, sid):
+    """ЯВНІ записи ролей простору ЛІГА (4d-4b; було — вигаданий конфіг у корені `tasks.json`, `sbconf.write_root`): точки виходу ЛІГИ живі й
+    під розтяжкою лише тут. Адреса й ключ Supabase — вигадані (`sbconf`), решта — з `liga_fixture`."""
+    over = {role: {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}} for role in ('comments', 'dashboard', 'notify')}
+    over['vcs'] = {'settings': {'ssh_key': '', 'host_ip': ''}}        # у старому корені ключа SSH не було: ціль іде типовим ключем, а не неіснуючим файлом
+    return liga_fixture.write_records(space_dir, deai, sid, liga_fixture.ALL_ROLES, over)
 
 
 def isolate_team_cache(case):
@@ -521,6 +529,7 @@ class Points(unittest.TestCase):
             'version': 1, 'current': 'off', 'spaces': [
                 {'id': 'on', 'path': self.on_path, 'legacy': False, 'integrations': True},
                 {'id': 'off', 'path': self.off_path, 'legacy': False, 'integrations': False}]})
+        league_records(self.on_path, self.deai, 'on')       # простір з інтеграціями = ЛІГА: явні записи ролей
         isolate_team_cache(self)       # чужий прогін не має підсунути «свіжі» рядки (і не лишати свої)
         spaces.clear_request_space()
         self.addCleanup(spaces.clear_request_space)
@@ -741,13 +750,14 @@ class World(unittest.TestCase):
         work = os.path.join(cls.tmp, 'work')
         cls.a_dir = os.path.join(work, 'a')
         cls._task_dir(cls.a_dir, 'a', published=False)
-        _write(cls.legacy_file, {**sbconf.ROOT, 'current': 'a', 'design_work_root': work, 'registry': {},   # пара — у корені (4d-2)
+        _write(cls.legacy_file, {'current': 'a', 'design_work_root': work, 'registry': {},
                                  'tasks': {'a': {'title': 'Альфа', 'dir': cls.a_dir, 'profile': 'tool',
                                                  'gitlab': {'repo': 'git@gitlab.example.test:g/a.git',
                                                             'path': 'mockup/a'}}}})
         cls.p_path = os.path.join(cls.home, 'deai-work', 'p')
         cls.p_id = spaces.create_space('P', 'space-2', cls.p_path)
         cls.legacy_id = next(s['id'] for s in spaces.read_registry()['spaces'] if s.get('legacy'))
+        league_records(next(s['path'] for s in spaces.read_registry()['spaces'] if s['id'] == cls.legacy_id), cls.deai, cls.legacy_id)
         cls.x_dir = os.path.join(cls.p_path, 'x')
         # ітерація ПОЗНАЧЕНА до публікації: без вимикача `/api/publish` пішов би збирати й деплоїти
         cls._task_dir(cls.x_dir, 'x', published=True)
