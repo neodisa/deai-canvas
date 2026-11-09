@@ -1830,7 +1830,7 @@ ORIGINALS_REMOVED_LINE = 'оригінали видалено з tasks.json; к�
 
 #: Рядок, коли корінь ЛІГИ ще має `preview_password`, якого 0.21 не читає: закритий превʼю тихо став би спільним `1100`. Лише імʼя ключа.
 UNREAD_PREVIEW_PASSWORD_LINE = ('preview_password у корені tasks.json ігнорується 0.21 — превʼю візьме спільний пароль за замовчуванням; '
-                                'виправити: %s (або задайте секрет password запису vercel-publish)' % _RUN_FIX)
+                                'виправити: %s (крок утримано (held) — спершу unhold; або задайте секрет password запису vercel-publish)' % _RUN_FIX)
 
 
 def unread_preview_password_line(home=None):
