@@ -457,6 +457,25 @@ class LegacyPagesTest(tcr.PagesEnv):
         self.assertFalse(os.path.exists(os.path.join(pub, 'comment-layer')))
         self.assertNotIn('CommentLayer', _text(os.path.join(pub, 'it1', 'index.html')))
 
+    def _assert_publish_has_no_comment_layer(self):
+        self.assertEqual(self.decide(), (False, None))
+        pub = self.build(False)['dir']
+        self.assertFalse(os.path.exists(os.path.join(pub, 'comment-layer')))
+        self.assertNotIn('CommentLayer', _text(os.path.join(pub, 'it1', 'index.html')))
+
+    def test_a_migrated_liga_whose_comments_record_is_disabled_publishes_without_the_layer(self):
+        """r15-4: ЛІГА після міграції з ВИМКНЕНИМ записом `supabase-comments` (решта п'ять ролей живі) — превʼю без шару коментарів і без
+        попередження: рішення за записом, а не за тим, що в пари Supabase була адреса."""
+        self.assertIsNotNone(self.decide()[0], 'контроль: із увімкненим записом шар є')
+        self.liga = self.liga_space(overrides={'comments': {'enabled': False}})
+        self._assert_publish_has_no_comment_layer()
+
+    def test_a_migrated_liga_whose_comments_record_is_removed_publishes_without_the_layer(self):
+        """r15-4: те саме, коли запис `supabase-comments` ВИДАЛЕНО з `space.json` (решта п'ять ролей лишаються)."""
+        self.assertIsNotNone(self.decide()[0], 'контроль: із записом шар є')
+        self.liga = self.liga_space(roles=tuple(r for r in liga_fixture.ALL_ROLES if r != 'comments'))
+        self._assert_publish_has_no_comment_layer()
+
     def test_build_preview_true_is_a_value_error_before_the_disk_is_touched(self):
         pub = os.path.join(self.t2['dir'], 'publish')
         os.makedirs(pub)
