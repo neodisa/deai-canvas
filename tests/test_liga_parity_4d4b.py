@@ -450,5 +450,124 @@ class AfterMigrationParity4d4b(unittest.TestCase):
         self.assertFalse(a['dashboard_sync']['non_isolated']['implicit_space']['called'])
 
 
+#: Листки старших паритетів (4d-3b, 4d-3c), які Task 14 свідомо виніс із ТИХ класів (`_is_4d4b_leaf`), бо їх причина — 4d-4b (`Implicit` видалено,
+#: оригіналів кореня нема). Тут вони закріплені ТОЧНО: «було» зі знімка старого етапу, «стало» — буквально. Значення виміряно на реальній поведінці
+#: (однакові після кроків A–C і A–E: сценарії міняють корінь ПІСЛЯ міграції).
+_CH = '/publish/comments_off/pages/html/%s/index.html/%s'
+EXPECT_4D3C_LEAVES = dict({
+    # capabilities.tracker: у знімку 4d-3c облікових Jira в записі нема → роль вимкнена (було неявний `legacy`)
+    '/api_spaces/capabilities/tracker': None,
+    # вимкнення `vercel-publish` у просторі з інтеграціями більше не повертає вбудовану публікацію: «немає» (було `[]`/нічого)
+    '/js/disable_consequences_publish[0]/kind': 'none',
+    '/js/disable_consequences_publish[0]/noneKey': 'cnNonePublish',
+    '/js/disable_consequences_publish[0]/role': 'publish',
+    '/js/disable_consequences_publish[]': ABSENT,
+    # comments_off: сценарій прибирає пару Supabase з КОРЕНЯ; корінь не читається, коментарі ведуть записи → шар коментарів ПРИСУТНІЙ
+    '/publish/comments_off/pages/comment_layer_files': ABSENT,
+    '/publish/comments_off/pages/comment_layer_files[0]': 'adapter.js',
+    '/publish/comments_off/pages/comment_layer_files[1]': 'comment-layer.min.js',
+    '/publish/comments_off/pages/comment_layer_files[2]': 'supabase.min.js',
+    '/publish/comments_off/response/pairs[4][0]': 'url',
+    '/publish/comments_off/response/pairs[4][1]': 'https://pv-12345678.vercel.app',
+    '/publish/comments_off/response/pairs[5][0]': 'deploy_url',
+    '/publish/comments_off/response/pairs[6][0]': 'verified',
+    '/publish/comments_off/response/pairs[6][1]': True,
+    '/publish/comments_off/response/pairs[7][0]': ABSENT,
+    '/publish/comments_off/response/pairs[7][1]': ABSENT,
+    # pw_root: пароль у корені після міграції не діє (крок Е переносить лише наявний на ту мить; пізніша зміна кореня ігнорується) → типовий 1100
+    '/publish/pw_root/pages/html/index.html/password': '1100',
+    '/publish/pw_root/pages/html/it1/alpha/index.html/password': '1100',
+    '/publish/pw_root/pages/html/it1/gamma/index.html/password': '1100',
+    '/publish/pw_root/pages/html/it2/index.html/password': '1100',
+}, **{_CH % (p, k): v for p in ('it1/alpha', 'it1/gamma', 'it2') for k, v in
+      (('channel', 'dc/a-1'), ('comment_layer', True), ('supabase_key', '<secret:17>'), ('supabase_url', 'https://sb.example.com'))})
+
+#: 4d-3b (`before-4d3b.json`), конфігурації `snapshot` і `shared`: ролі без запису (`publish`, `tracker`) у формі «Нова задача» — `None` (було неявний
+#: `legacy`), прапорець `has_publish` хибний; ціль git (дзеркала й тексти) більше НЕ несе `ssh_key` кореня — ключ бере модуль з налаштувань запису.
+EXPECT_4D3B_LEAVES = dict({
+    '/vcs/form/capabilities/publish': None,
+    '/vcs/form/capabilities/tracker': None,
+    '/vcs/form/model/has_publish': False,
+    '/vcs/form/space_row/capabilities/publish': None,
+    '/vcs/form/space_row/capabilities/tracker': None,
+    '/vcs/texts/sync/a-1/push[0]/target/ssh_key': 'ABSENT',
+    '/vcs/texts/sync/a-2/push[0]/target/ssh_key': 'ABSENT',
+}, **{'/vcs/mirrors[%d]/target/ssh_key' % i: 'ABSENT' for i in range(7)})
+
+
+class OlderParityLeaves4d4b(unittest.TestCase):
+    """I3 (Task 14 → Task 15): листки 4d-3b/4d-3c, чия причина — 4d-4b, закріплені точно. Збір — ті самі генератори знімків (`make_before_4d3b/c`) на
+    мігрованій ЛІЗІ, що й у старих класах; фільтр — їхній `_is_4d4b_leaf`. ssh_key/host_ip цілей git: у цьому класі (`/target/ssh_key` дзеркал і
+    текстів — ABSENT) і в `AfterMigrationParity4d4b` (листки `vcs_target.*`: ціль без ключа/IP, ефективні значення рівні знімку)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest import mock
+        import liga_migrate as lm
+        import make_before_4d3b as gb
+        import make_before_4d3c as gc
+        import test_liga_migrate_b as tb
+        import test_liga_migrate_c as tc
+        cls.tb, cls.tc = tb, tc
+        # 4d-3c: ті самі два стенди, що в `AfterMigrationParity4d3c`, але ПОВНИЙ ланцюг A–E.
+        with open(tc.BEFORE, encoding='utf-8') as f:
+            cls.before_c = json.load(f)
+        orig = gc._stand
+
+        def migrated(tmp, name, migrate):
+            rig = orig(tmp, name, migrate=False)
+            with rig.activate():
+                with mock.patch.object(lm, 'STEPS', lm.ALL_STEPS[:2 if name == 'ab' else 3]):
+                    lm.run_all()
+                if name == 'ab':
+                    lm.run(step='liga-4d3c')
+                for s in lm.ALL_STEPS[3:]:
+                    lm.run(step=s)
+            return rig
+        with mock.patch.object(gc, '_stand', migrated):
+            cls.after_c = gc.make()
+        # 4d-3b: колектор старого класу (його `_build`), конфігурація `snapshot` і `shared`.
+        class Holder:
+            pass
+        Holder.mock, Holder.g, Holder.lm = mock, gb, lm
+        with open(tb.BEFORE, encoding='utf-8') as f:
+            cls.before_b = json.load(f)
+        cls.after_b = {n: tb.AfterMigrationParity4d3b._build.__func__(Holder, n)[0] for n in ('snapshot', 'shared')}
+
+    @staticmethod
+    def _leaves(flat_fn, absent, before, after, pred):
+        fb, fa = flat_fn(before), flat_fn(after)
+        return {k: (fb.get(k, absent), fa.get(k, absent)) for k in sorted(set(fb) | set(fa)) if fb.get(k, absent) != fa.get(k, absent) and pred(k)}
+
+    @staticmethod
+    def _want(flat_fn, absent, before, table):
+        fb = flat_fn(before)
+        lit = {k: (absent if v in ('ABSENT', ABSENT) else v) for k, v in table.items()}
+        return {k: (fb.get(k, absent), v) for k, v in lit.items()}
+
+    def test_4d3c_leaves_are_pinned_exactly_on_both_stands(self):
+        tc = self.tc
+        for name in ('unmigrated', 'ab'):
+            got = self._leaves(tc._flat, tc._ABSENT, self.before_c['stands'][name], self.after_c['stands'][name], tc._is_4d4b_leaf)
+            want = self._want(tc._flat, tc._ABSENT, self.before_c['stands'][name], EXPECT_4D3C_LEAVES)
+            self.assertEqual(got, want, name)
+
+    def test_4d3b_leaves_are_pinned_exactly_on_both_configs(self):
+        tb = self.tb
+        for name in ('snapshot', 'shared'):
+            got = self._leaves(tb._flat, tb._ABSENT, self.before_b, self.after_b[name], tb._is_4d4b_leaf)
+            want = self._want(tb._flat, tb._ABSENT, self.before_b, EXPECT_4D3B_LEAVES)
+            self.assertEqual(got, want, name)
+
+    def test_the_pin_is_exact_not_loose(self):
+        """Зайвий і зниклий листок червоніють: зміна одного очікуваного значення дає інший результат порівняння."""
+        tb = self.tb
+        got = self._leaves(tb._flat, tb._ABSENT, self.before_b, self.after_b['snapshot'], tb._is_4d4b_leaf)
+        bad = dict(EXPECT_4D3B_LEAVES, **{'/vcs/form/model/has_publish': True})
+        self.assertNotEqual(got, self._want(tb._flat, tb._ABSENT, self.before_b, bad))
+        short = {k: v for k, v in EXPECT_4D3B_LEAVES.items() if k != '/vcs/form/capabilities/tracker'}
+        self.assertNotEqual(got, self._want(tb._flat, tb._ABSENT, self.before_b, short))
+
+
 if __name__ == '__main__':
     unittest.main()
