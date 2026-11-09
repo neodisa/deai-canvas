@@ -113,7 +113,7 @@ class ProviderWithoutImplicit(unittest.TestCase):
         with mock.patch.object(deai_modules, 'own_sig', side_effect=RuntimeError('boom')):
             caps = deai_modules.capabilities(_liga(fx))
         self.assertEqual(caps['error'], 'module-error')
-        self.assertEqual({k: v for k, v in caps.items() if k != 'error'}, {r: None for r in deai_modules.ROLES_CALLED})
+        self.assertEqual({k: v for k, v in caps.items() if k not in ('error', 'errors')}, {r: None for r in deai_modules.ROLES_CALLED})
 
     def test_publish_legacy_path_and_comment_scheme_read_only_the_module(self):
         fx = lf.LigaFixture(self).env().build()
@@ -641,6 +641,43 @@ class OneRoleFailsAlone(unittest.TestCase):
         self.assertEqual(caps['error'], 'module-error')
         for role in ('publish', 'comments', 'dashboard', 'tracker', 'notify'):
             self.assertIsNotNone(caps[role], role)
+        self.assertEqual(caps['errors'], {'vcs': 'module-error'}, 'r15-1: помилка названа за роллю')
+
+
+class CapabilityErrorsArePerRole(unittest.TestCase):
+    """r15-1: `capabilities.error` читав клієнт як «space.json не читається» для БУДЬ-ЯКОГО коду й ховав усі картки. Тепер
+    простір-рівневе — лише `space-json-unreadable` (без `errors`), а збій модуля однієї ролі названий в `errors[роль]`."""
+
+    def setUp(self):
+        self.fx = lf.LigaFixture(self).env().build()
+        deai_modules.reset_caches()
+        self.addCleanup(deai_modules.reset_caches)
+
+    def test_unreadable_space_json_is_space_level_without_a_role_map(self):
+        with open(os.path.join(self.fx.space_dir, 'space.json'), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        caps = deai_modules.capabilities(_liga(self.fx))
+        self.assertEqual(caps['error'], 'space-json-unreadable')
+        self.assertNotIn('errors', caps)
+
+    def test_a_module_lost_by_one_role_names_that_role_only(self):
+        real = deai_modules._provider_for
+
+        def lost(role, space, *rest):
+            if role == 'vcs':
+                raise deai_modules.ModuleError('module-error', message='git-sync не завантажився')
+            return real(role, space, *rest)
+        with mock.patch.object(deai_modules, '_provider_for', lost):
+            caps = deai_modules.capabilities(_liga(self.fx))
+        self.assertEqual(caps['errors'], {'vcs': 'module-error'})
+        self.assertIsNone(caps['vcs'])
+        for role in ('publish', 'comments', 'dashboard', 'tracker', 'notify'):
+            self.assertIsNotNone(caps[role], role)
+
+    def test_a_total_failure_names_every_role(self):
+        with mock.patch.object(deai_modules, 'own_sig', side_effect=RuntimeError('boom')):
+            caps = deai_modules.capabilities(_liga(self.fx))
+        self.assertEqual(caps['errors'], {r: 'module-error' for r in deai_modules.ROLES_CALLED})
 
 
 class CommentsInIsolation(unittest.TestCase):

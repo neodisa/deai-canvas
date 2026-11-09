@@ -2576,9 +2576,10 @@ class CapabilitiesTest(Env):
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_caps_key', side_effect=RuntimeError('bug')):
             self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None,
-                                                      'error': 'module-error'})
+                                                      'error': 'module-error', 'errors': {r: 'module-error' for r in dm.ROLES_CALLED}})
             self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None,
-                                                   'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error'})
+                                                   'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error',
+                                                   'errors': {r: 'module-error' for r in dm.ROLES_CALLED}})
 
     def test_a_module_error_of_a_role_is_none_in_an_integrations_space_too(self):
         """Гілка `except ModuleError` (роль не вирішилась): 4d-4b (було `…_keeps_vcs_legacy_…`) — зашитих `publish`/`vcs` нема, усі ролі `None`."""
@@ -2586,9 +2587,11 @@ class CapabilitiesTest(Env):
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
             self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None,
-                                                   'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'bad-manifest'})
+                                                   'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'bad-manifest',
+                                                   'errors': {r: 'bad-manifest' for r in dm.ROLES_CALLED}})
             self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None,
-                                                      'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'bad-manifest'})
+                                                      'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'bad-manifest',
+                                                      'errors': {r: 'bad-manifest' for r in dm.ROLES_CALLED}})
 
     def test_no_modules_at_all(self):
         plain = self.new_space('Plain')
@@ -2675,14 +2678,16 @@ class CapabilitiesTest(Env):
         sp = self.new_space()
         ig = self.new_space('Integ', integrations=True)
         with mock.patch.object(dm, '_provider_for', side_effect=dm.ModuleError('bad-manifest', message='x')):
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'bad-manifest'})
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'bad-manifest',
+                                                  'errors': {r: 'bad-manifest' for r in dm.ROLES_CALLED}})
             self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None,
-                                                   'error': 'bad-manifest'})
+                                                   'error': 'bad-manifest', 'errors': {r: 'bad-manifest' for r in dm.ROLES_CALLED}})
         dm.reset_caches()
         with mock.patch.object(dm, '_provider_for', side_effect=RuntimeError('bug')):
-            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error'})
+            self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error',
+                                                  'errors': {r: 'module-error' for r in dm.ROLES_CALLED}})
             self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None,
-                                                   'error': 'module-error'})
+                                                   'error': 'module-error', 'errors': {r: 'module-error' for r in dm.ROLES_CALLED}})
         dm.reset_caches()
         with mock.patch.object(dm, '_catalog_sig', side_effect=OSError('disk')):
             self.assertEqual(dm.capabilities(sp)['error'], 'module-error')

@@ -126,7 +126,7 @@ test("рядок «Зараз»: модуль, модуль без запису,
   assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
   assert.equal(nowHTML("alpha", v({ publish: "static-publish" })), "", "роль, якої capabilities не знає, — без рядка (4c-3: приклад alpha)");
   setLang("en");
-  assert.match(nowHTML("publish", v({ error: "x" })), /Now: unknown — space\.json cannot be read/);
+  assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Now: unknown — space\.json cannot be read/);
 });
 
 test("картка: бейдж, «типово», дії з data-cn і data-id, опис вбудованого, причина помилки", () => {

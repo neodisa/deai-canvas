@@ -125,17 +125,33 @@ export function groupModules(list) {
 }
 
 /**
+ * Чи `capabilities` кажуть «space.json не читається». ТІЛЬКИ код `space-json-unreadable`: решта кодів `capabilities.error`
+ * (`module-error`, `bad-manifest`…) — збій МОДУЛЯ, а не простору, і не мусять ховати картки решти ролей (r15-1). Збій ролі —
+ * в `capabilities.errors[роль]` (`roleError`).
+ */
+export const spaceJsonBad = (caps) => get(caps, "error") === "space-json-unreadable";
+
+/** Код збою модуля саме цієї ролі з `capabilities.errors` (`''`, коли роль не зламана чи сервер старої форми). */
+export function roleError(caps, role) {
+  const e = get(get(caps, "errors"), role);
+  return typeof e === "string" ? e : "";
+}
+
+/**
  * Рядок «Зараз» ролі з `capabilities` простору: `{kind: 'module', id, entry|null}`, `{kind: 'legacy'}`,
- * `{kind: 'waiting', id, entry}`, `{kind: 'none', noneKey}`, `{kind: 'error'}`; `null` — роль, якої `capabilities` не
- * знає (нема що казати).
+ * `{kind: 'waiting', id, entry}`, `{kind: 'none', noneKey}`, `{kind: 'error'}`, `{kind: 'roleError', code}`; `null` — роль,
+ * якої `capabilities` не знає (нема що казати).
  *
- * ⛔ `capabilities.error` (space.json не читається) — окремий стан і перевіряється РАНІШЕ за читання ролі: тоді решта
- * `capabilities` нічого не варта (стара чи порожня), і показувати з неї «Зараз працює …» було б неправдою.
+ * ⛔ Просторовий збій (`spaceJsonBad`) — окремий стан і перевіряється РАНІШЕ за читання ролі: тоді решта `capabilities`
+ * нічого не варта (стара чи порожня), і показувати з неї «Зараз працює …» було б неправдою. Збій модуля ролі (`roleError`) —
+ * лише рядок ЦІЄЇ ролі; решта ролей показують своє.
  */
 export function providerLine(role, caps, list) {
   if (!caps || typeof caps !== "object") return null;
-  if (get(caps, "error")) return { kind: "error" };
-  if (role === "error" || !has(caps, role)) return null;
+  if (spaceJsonBad(caps)) return { kind: "error" };
+  if (role === "error" || role === "errors" || !has(caps, role)) return null;
+  const failed = roleError(caps, role);
+  if (failed) return { kind: "roleError", code: failed };
   const v = caps[role];
   if (v === "legacy") return { kind: "legacy" };
   if (typeof v !== "string" || !v) {

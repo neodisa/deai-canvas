@@ -32,7 +32,7 @@ import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 import {
-  DETAIL_MAX, builtinText, canErase, cardView, groupModules, isOwn, noteView, providerLine, roleIcon, roleKeys, trustLine, whyOf,
+  DETAIL_MAX, builtinText, canErase, cardView, groupModules, isOwn, noteView, providerLine, roleIcon, roleKeys, spaceJsonBad, trustLine, whyOf,
 } from "./connections-model.js";
 
 /** Назва модуля: вбудований — мовою інтерфейсу, інший — `name` маніфесту як є. */
@@ -133,6 +133,7 @@ export function nowHTML(role, v) {
   if (!p) return "";
   const txt = p.kind === "legacy" ? t("cnNowLegacy")
     : p.kind === "error" ? t("cnNowError")
+      : p.kind === "roleError" ? t("cnNowRoleError")
       : p.kind === "waiting" ? t("cnNowWaiting", modName(p.entry))
         : p.kind === "none" ? (p.noneKey ? t("cnNowNone", t(p.noneKey)) : t("cnNowNobody"))
           : t("cnNow", p.entry ? modName(p.entry) : p.id);
@@ -168,9 +169,10 @@ export function connPageHTML(v) {
   const head = `<h1 class="th-h" id="cn-title">${esc(t("cnTitleIn", sp.name))}</h1>
     <p class="cn-lead">${esc(t("cnLead"))} ${esc(t("cnLeadWhere", sp.path || ""))}</p>`;
   const wrap = (inner) => `<div class="th-in cn-in">${head}${inner}</div>`;
-  /* space.json не читається — двома шляхами: сервер сказав у `capabilities.error` або відмовив списку модулів
-     (`409 space-json-unreadable`). В обох випадках решта `capabilities` нічого не варта, картки не малюємо. */
-  const sjBad = !!sp.capabilities?.error || v.failed?.code === "space-json-unreadable";
+  /* space.json не читається — двома шляхами: сервер сказав `capabilities.error === "space-json-unreadable"` або відмовив
+     списку модулів (`409 space-json-unreadable`). В обох випадках решта `capabilities` нічого не варта, картки не малюємо.
+     Збій МОДУЛЯ ролі (інший код `error`) сюди не потрапляє: він іде в рядок «Зараз» своєї ролі, решта карток живі (r15-1). */
+  const sjBad = spaceJsonBad(sp.capabilities) || v.failed?.code === "space-json-unreadable";
   if (sjBad || v.failed) {
     const msg = sjBad ? t("cnErrSpaceJson", sp.path || "") : t("cnErrLoad");
     const det = !sjBad && v.failed?.message ? detailHTML(String(v.failed.message).slice(0, DETAIL_MAX)) : "";

@@ -1898,12 +1898,19 @@ def capabilities(space):
     "tracker": id | None, "notify": id | None}` для простору `space` (запис реєстру): id модуля, що веде роль, або `None` — ролі
     ніхто не веде. Запасного значення `'legacy'` більше нема (4d-4b): ЛІГА — звичайний простір із явними записами. ТОТАЛЬНА: не кидає
     ніколи. Якщо вирішити роль не вдалось (`ModuleError`, типово нечитабельний `space.json`), та роль — `None`, а в результаті є
-    ключ `error` з кодом: кожна роль вирішується окремо, решта віддають своє. Без помилки ключа `error` нема. Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
+    ключ `error` з кодом: кожна роль вирішується окремо, решта віддають своє. Без помилки ключа `error` нема. Просторовий збій — лише
+    `error == 'space-json-unreadable'`; будь-який інший код — збій модуля, названий ще й за роллю в `errors` (`{роль: код}`; ключа нема,
+    коли всі збої просторові). Роль, яку «на папері» веде свій модуль, що тут не працює (`_paper_failure`), — `None`
     без ключа `error`: це стан ролі, а не простору (екран «Підключення» показує `error` як нечитабельний `space.json` і
     ховає картки — разом із «Довіритись…»). Кеш за (простір, прапорець
     `integrations`, відбиток `space.json`, теки джерел модулів (`DEAI_EXTRA_MODULES` теж), відбитки `module.json`,
     `server.py` і файлів `*.js` адаптера кожного модуля, відбиток своїх модулів і `trust.json`, `own_sig`); повертає копію. `None`, порожнє чи не-словник замість простору — нічого не вміє."""
     return _capabilities_full(space)[0]
+
+
+#: Єдиний код `capabilities.error`, що означає ПРОСТІР-рівневий збій («space.json не читається»: клієнт ховає всі картки модулів).
+#: Решта кодів — збій модуля КОЖНОЇ/однієї ролі: вони ще й іменні в `capabilities.errors` (роль → код), картки лишаються.
+SPACE_LEVEL_ERROR = 'space-json-unreadable'
 
 
 def _capabilities_full(space):
@@ -1925,7 +1932,7 @@ def _capabilities_full(space):
             if 'c' not in box:
                 box['c'] = catalog(space)
             return box['c']
-        caps, raw, error = {}, {}, None
+        caps, raw, error, errors = {}, {}, None, {}
         for role in ROLES_CALLED:
             try:
                 p = _provider_for(role, space, get_cat)
@@ -1936,19 +1943,24 @@ def _capabilities_full(space):
                     caps[role] = None       # роль «на папері» за своїм модулем, що тут не працює: не `'legacy'` і НЕ
                     continue                # `error` — клієнт читає `error` як «space.json не читається» й сховав би картки
                 error = error or e.code
+                errors[role] = e.code
                 caps[role] = None
             except TypeError:
                 # `api_value` не впізнав постачальника цієї ролі (свій баг, не стан простору): падає ЛИШЕ ця роль, решта п'ять живі.
                 error = error or 'module-error'
+                errors[role] = 'module-error'
                 caps[role] = None
         if error:
             caps['error'] = error
+            if any(code != SPACE_LEVEL_ERROR for code in errors.values()):
+                caps['errors'] = errors     # r15-1: збій ролі названий за роллю; клієнт ховає картки лише за `SPACE_LEVEL_ERROR`
         with _STATE_LOCK:
             _CAPS[sid] = (key, dict(caps), dict(raw))
         return dict(caps), raw
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
         caps = {role: None for role in ROLES_CALLED}
         caps['error'] = 'module-error'
+        caps['errors'] = {role: 'module-error' for role in ROLES_CALLED}
         return caps, {}
 
 

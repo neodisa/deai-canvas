@@ -415,6 +415,9 @@ class ProviderImplicit(unittest.TestCase):
         for name in want:
             # 4d-4b: знімок 0.15.0 — еталон, а не вимога: неявні `'legacy'` стали `None` (запасного постачальника нема); решта — без змін
             expected = {r: (None if v == 'legacy' else v) for r, v in want[name]['caps'].items()}
+            if expected.get('error') not in (None, 'space-json-unreadable'):
+                # r15-1: збій НЕ простору тепер іменний за роллю (`errors`) — додатковий ключ, значення ролей і `error` ті самі
+                expected['errors'] = {r: expected['error'] for r in dm.ROLES_CALLED}
             self.assertEqual(got[name]['caps'], expected, name)
             for role, v in got[name]['caps'].items():
                 self.assertTrue(v is None or isinstance(v, str), (name, role))           # `str`/`None`

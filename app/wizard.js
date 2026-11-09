@@ -40,7 +40,7 @@
  */
 import { t } from "./i18n.js";
 import {
-  formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, verdictText, writePayload,
+  formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, spaceJsonBad, verdictText, writePayload,
 } from "./connections-model.js";
 import { modName } from "./connections-view.js";
 import { wireSpaceDialog, wireTaskForm } from "./space-dialogs.js";
@@ -117,7 +117,7 @@ export function createWizard(deps) {
     return {
       step: wz.step, created: wz.created, busy: wz.busy,
       s1: wz.s1,
-      s2: { list: wz.list, failed: wz.failed, pick: wz.pick ?? new Set(), capsError: !!sp?.capabilities?.error, path: sp?.path ?? "" },
+      s2: { list: wz.list, failed: wz.failed, pick: wz.pick ?? new Set(), capsError: spaceJsonBad(sp?.capabilities), path: sp?.path ?? "" },
       s3: { cards: wz.cards, offs: wz.offs, waits: wz.waits, failed: wz.s3failed, loading: wz.s3loading },
       s4: { ...wz.s4, spaceName: sp?.name ?? wz.s1.name, tasks: Number(sp?.tasks) || 0 },
     };
@@ -365,7 +365,7 @@ export function createWizard(deps) {
   }
 
   function submit2() {
-    const skip = !Array.isArray(wz.list) || !!wz.failed || !!spaceRec()?.capabilities?.error;
+    const skip = !Array.isArray(wz.list) || !!wz.failed || spaceJsonBad(spaceRec()?.capabilities);
     wz.skipped3 = skip;
     go(skip ? 4 : 3);
   }

@@ -327,12 +327,12 @@ test("списки: форма стартує з того, що людина Б�
   assert.equal(initialForm(SEL({ value: "a", options: [] })).values.s, "");
 });
 
-test("рядок «Зараз»: непорожній capabilities.error — окремий стан, раніше за читання ролі", () => {
+test("рядок «Зараз»: capabilities.error === space-json-unreadable — окремий стан, раніше за читання ролі", () => {
   const list = [M("vercel-publish")];
   assert.deepEqual(providerLine("publish", { error: "space-json-unreadable" }, list), { kind: "error" });
-  assert.deepEqual(providerLine("alpha", { error: "x" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає (4c-3: приклад alpha — notify тепер знана)");
-  assert.deepEqual(providerLine("error", { error: "x" }, list), { kind: "error" });
-  assert.deepEqual(providerLine("publish", { publish: "vercel-publish", error: "x" }, list), { kind: "error" },
+  assert.deepEqual(providerLine("alpha", { error: "space-json-unreadable" }, list), { kind: "error" }, "навіть для ролі, якої caps не знає (4c-3: приклад alpha — notify тепер знана)");
+  assert.deepEqual(providerLine("error", { error: "space-json-unreadable" }, list), { kind: "error" });
+  assert.deepEqual(providerLine("publish", { publish: "vercel-publish", error: "space-json-unreadable" }, list), { kind: "error" },
     "помилка перемагає застарілого постачальника");
   assert.equal(providerLine("publish", { publish: "vercel-publish", error: "" }, list).kind, "module");
   assert.equal(providerLine("publish", { publish: "vercel-publish", error: null }, list).kind, "module");

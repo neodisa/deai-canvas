@@ -1410,7 +1410,8 @@ class Capabilities(World):
             self.assertEqual(st, 200, body)
             caps = {s['id']: s['capabilities'] for s in body['spaces']}
             st2, task = self.get('/api/task')
-        self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error'})
+        self.assertEqual(caps['off'], {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error',
+                                     'errors': {r: 'module-error' for r in dm.ROLES_CALLED}})
         self.assertEqual(caps['on'], self.NO_ROLES)
         self.assertEqual((st2, task['space']['capabilities']['error']), (200, 'module-error'))
 

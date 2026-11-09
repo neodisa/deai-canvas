@@ -209,7 +209,7 @@ class ProviderTest(CommentsEnv):
         self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message),
                          ('module-error', 502, dm.COMMENTS_MODULE_BROKEN))
         self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None,
-                                                  'error': 'module-error'})
+                                                  'error': 'module-error', 'errors': {'comments': 'module-error'}})
 
     def test_a_plain_space_without_any_comments_entry_stays_none_without_an_error(self):
         """Тиша лишається тишею там, де людина про коментарі нічого не вирішувала: порожній `space.json`, лише вимкнений
@@ -245,7 +245,7 @@ class ProviderTest(CommentsEnv):
                 self.assertEqual((cm.exception.code, cm.exception.status, cm.exception.message),
                                  ('module-error', 502, dm.COMMENTS_MODULE_BROKEN))
                 self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None,
-                                                       'error': 'module-error'})
+                                                       'error': 'module-error', 'errors': {'comments': 'module-error'}})
         self.assertEqual(dm.catalog()['cm-files'].status, 'error')
         self.assertEqual(dm.catalog()['cm-syntax'].status, 'error')
         self.assertEqual(dm.catalog()['cm-json'].status, 'error')
@@ -367,7 +367,7 @@ class ProviderTest(CommentsEnv):
         self.assertEqual(dm.capabilities(ig)['comments'], 'cm')
         os.remove(os.path.join(d, 'adapter.js'))                     # модуль зламався → помилка
         self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None,
-                                               'error': 'module-error'})
+                                               'error': 'module-error', 'errors': {'comments': 'module-error'}})
         _write(os.path.join(d, 'adapter.js'), tm.CLIENT_JS)
         self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': 'cm', 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
 
@@ -1565,7 +1565,8 @@ class PlainSpaceLostModuleTest(PagesEnv):
     def test_the_task_endpoint_carries_the_error(self):
         self.break_module(self.plain)
         self.assertEqual(self.capabilities(),
-                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error'})
+                         {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'module-error',
+                          'errors': {'comments': 'module-error'}})
 
     def test_the_local_page_has_no_notice_and_the_local_comments_work(self):
         self.break_module(self.plain)
