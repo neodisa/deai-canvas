@@ -3,7 +3,7 @@
 цього не доводять). Збір — `after_4d4b_collect.collect_all` (ті самі розділи, що в генераторі знімка, нові підписи функцій; на стендах `differs`/`partial` запис
 міняється ПЕРЕД кроком Е, бо Е ці розбіжності й оцінює). Очікуваний перелік відмінностей — ТОЧНИЙ: кожен листок із «було» зі знімка і «стало» буквально.
 Таблиці виміряні на реальній поведінці; кожен листок — або задуманий наслідок 4d-4b (`Implicit` видалено, оригінали не читаються), або зафіксована
-відмінність (пароль превʼю `differs`: рішення контролера — відмінний секрет НЕ перезаписується). Мережі нема (`SocketTripwire` + `NoNet`), справжній
+відмінність (пароль превʼю `differs`: рішення власника 09.11.2026 — корінь перезаписує відмінний секрет, видимої зміни нема; решта `differs` — не перезаписується). Мережі нема (`SocketTripwire` + `NoNet`), справжній
 `~/.deai` стереже `spaces_guard`."""
 import json
 import os
@@ -89,11 +89,10 @@ EXPECT_REGULAR = dict({
     '/vcs_target/task_vcs/target/ssh_key': ABSENT,
 }, **DASH_IMPLICIT)
 
-#: `differs`: ключ SSH запису (`/other/key`) і секрет `password` (`inert-old`) НЕ перезаписуються коренем (рішення контролера замість Д4). Режим модуля
-#: тепер бере секрет запису, а не корінь → пароль превʼю стає `inert-old` (єдиний листок понад прототип Додатка Д).
+#: `differs`: ключ SSH запису (`/other/key`) НЕ перезаписується коренем (рішення контролера 07.11.2026), а секрет `password` (`inert-old`) — ПЕРЕЗАПИСУЄТЬСЯ
+#: коренем (рішення власника 09.11.2026): режим модуля бере секрет запису, що тепер = корінь → пароль превʼю `pw-alpha` НЕ змінюється (листка нема).
 EXPECT_DIFFERS = dict({
     '/api/modules/list/git-sync/fields/host_ip': '203.0.113.7',
-    '/api/task/preview_password': 'inert-old',
     '/capabilities/error_path/publish': None,
     '/capabilities/error_path/vcs': None,
     '/provider/implicit_space/comments/api': None,
@@ -273,8 +272,7 @@ EXPECT_PLAIN = dict({
 }, **DASH_IMPLICIT)
 
 ROOT_KEYS_AFTER_REGULAR = ['current', 'design_work_root', 'design_work_roots', 'profile_repos', 'registry', 'tasks']
-ROOT_KEYS_AFTER_DIFFERS = ['current', 'design_work_root', 'design_work_roots', 'gitlab_ssh_key', 'jira_token', 'preview_password', 'profile_repos',
-                           'registry', 'tasks']
+ROOT_KEYS_AFTER_DIFFERS = ['current', 'design_work_root', 'design_work_roots', 'gitlab_ssh_key', 'jira_token', 'profile_repos', 'registry', 'tasks']
 ROOT_KEYS_AFTER_PARTIAL = ['current', 'design_work_root', 'design_work_roots', 'jira_base', 'jira_email', 'jira_token', 'profile_repos', 'registry',
                            'supabase_key', 'supabase_url', 'tasks']
 ROOT_KEYS_AFTER_UNMIGRATED = ['current', 'design_work_root', 'design_work_roots', 'gitlab_host_ip', 'gitlab_ssh_key', 'jira_base', 'jira_email',
@@ -319,9 +317,9 @@ STARTUP_UNMIGRATED = [
 STEP_E_SUMMARY = {
     'regular': 'скопійовано: gitlab_host_ip, gitlab_ssh_key, preview_password; видалено: gitlab_host_ip, gitlab_ssh_key, jira_base, jira_email, '
                'jira_token, preview_password, supabase_key, supabase_url',
-    'differs': 'скопійовано: gitlab_host_ip; видалено: gitlab_host_ip, jira_base, jira_email, supabase_key, supabase_url; '
-               'лишилось: gitlab_ssh_key, jira_token, preview_password; '
-               'нотатки: differs:jira_token, differs:gitlab_ssh_key, differs:preview_password',
+    'differs': 'скопійовано: gitlab_host_ip, preview_password; видалено: gitlab_host_ip, jira_base, jira_email, preview_password, supabase_key, '
+               'supabase_url; лишилось: gitlab_ssh_key, jira_token; '
+               'нотатки: differs:jira_token, differs:gitlab_ssh_key, replaced:preview_password',
     'partial': 'скопійовано: gitlab_host_ip, gitlab_ssh_key, preview_password; видалено: gitlab_host_ip, gitlab_ssh_key, preview_password; '
                'лишилось: jira_base, jira_email, jira_token, supabase_key, supabase_url; '
                'нотатки: partial:supabase, no-record:supabase-teams, no-record:jira-tracker',
@@ -387,6 +385,7 @@ class AfterMigrationParity4d4b(unittest.TestCase):
     def test_step_e_summaries_name_keys_not_values(self):
         """Рядок кроку Е на мігрованих стендах: імена ключів і коди розбіжностей (`differs:*`, `partial:supabase`, `no-record:*`); значень нема."""
         self.assertEqual(self.summary, STEP_E_SUMMARY)
+        self.assertIn('replaced:preview_password', self.summary['differs'])             # код `replaced:` — лише ім'я ключа, без старого й нового значень
         for text in self.summary.values():
             for secret in ('pw-alpha', 'inert-old', 'other-token', '/other/key', '203.0.113.7'):
                 self.assertNotIn(secret, text)
@@ -418,14 +417,16 @@ class AfterMigrationParity4d4b(unittest.TestCase):
         self.assertEqual(a['task']['capabilities'], self.before['regular']['api']['task']['capabilities'])
         self.assertEqual(a['comment_config']['config']['key'], 'sb_test_key_alpha')
 
-    def test_differing_password_is_never_overwritten_by_the_root(self):
-        """Рішення контролера (замість Д4): у `differs` секрет `password` був `inert-old`, корінь — `pw-alpha`. Крок Е НЕ перезаписує секрет коренем:
-        корінь лишає `preview_password`, підсумок називає `differs:preview_password`, а режим модуля віддає секрет запису (єдина видима зміна)."""
+    def test_differing_password_is_replaced_by_the_root(self):
+        """Рішення власника 09.11.2026 (замість рішення контролера 07.11): у `differs` секрет `password` був `inert-old`, корінь — `pw-alpha`. Крок Е
+        перезаписує секрет коренем: люди бачать той самий пароль, корінь `preview_password` видалено, підсумок називає `replaced:preview_password`
+        (значень нема); старе значення лишається в датованому бекапі."""
         self.assertEqual(self.before['differs']['api']['task']['preview_password'], 'pw-alpha')
-        self.assertEqual(self.after['differs']['api']['task']['preview_password'], 'inert-old')
-        self.assertIn('preview_password', self.after['differs']['root_keys'])
-        self.assertIn('differs:preview_password', self.summary['differs'])
-        self.assertIn('лишилось: gitlab_ssh_key, jira_token, preview_password', self.summary['differs'])
+        self.assertEqual(self.after['differs']['api']['task']['preview_password'], 'pw-alpha')
+        self.assertNotIn('preview_password', self.after['differs']['root_keys'])
+        self.assertIn('replaced:preview_password', self.summary['differs'])
+        self.assertNotIn('differs:preview_password', self.summary['differs'])
+        self.assertIn('лишилось: gitlab_ssh_key, jira_token;', self.summary['differs'])
 
     def test_differing_ssh_key_stays_the_records_and_registry_follows_it(self):
         """`differs`: запис вигравав (`/other/key`), корінь лишився з нотаткою `differs:gitlab_ssh_key`; реєстр тепер іде ключем запису."""

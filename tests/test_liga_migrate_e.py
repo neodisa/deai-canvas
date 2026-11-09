@@ -159,15 +159,39 @@ class PlanE(_StandE):
         self.assertNotIn('ssh_key', d['copy_settings'].get('git-sync', {}))
         self.assertIn('host_ip', d['copy_settings']['git-sync'])       # порожнє поле копіюється й тоді, коли сусіднє відрізняється
 
-    def test_password_conflict_never_overwrites_the_secret(self):                    # рішення контролера 07.11.2026 замість Д4
+    def test_password_conflict_root_wins_and_names_the_key(self):                    # рішення власника 09.11.2026 (замінює рішення контролера 07.11)
         self.rec_all(secrets={'vercel-publish': {'password': 'inert-old'}})
         self.root()
         d = self.lm.plan(step=self.E)['originals']
-        self.assertEqual(d['copy_secrets'], {})
-        self.assertIn('differs:preview_password', d['notes'])
-        self.assertNotIn('overwrote:password', d['notes'])
-        self.assertIn('preview_password', d['kept'])
-        self.assertNotIn('preview_password', d['remove'])
+        self.assertEqual(d['copy_secrets'], {'vercel-publish': {'password': self.PW}})
+        self.assertIn('replaced:preview_password', d['notes'])
+        self.assertNotIn('differs:preview_password', d['notes'])
+        self.assertNotIn('preview_password', d['kept'])
+        self.assertIn('preview_password', d['remove'])
+        self.assertIn('preview_password', d['copied'])
+
+    def test_password_conflict_keeps_other_differs_never_overwritten(self):
+        """Лише `preview_password` перемагає корінь: `jira_token`/`gitlab_ssh_key` з відмінним значенням запису не перезаписуються."""
+        self.rec_all(mods={'git-sync': {'enabled': True, 'shared_state': True, 'settings': {'ssh_key': '/other/key', 'compat': 'design-canvas'}}},
+                     secrets={'jira-tracker': {'token': 'other-token'}, 'vercel-publish': {'password': 'inert-old'}})
+        self.root()
+        d = self.lm.plan(step=self.E)['originals']
+        self.assertEqual(d['copy_secrets'], {'vercel-publish': {'password': self.PW}})
+        self.assertIn('differs:jira_token', d['notes'])
+        self.assertIn('differs:gitlab_ssh_key', d['notes'])
+        self.assertIn('jira_token', d['kept'])
+        self.assertIn('gitlab_ssh_key', d['kept'])
+
+    def test_password_conflict_executes_replace_and_removes_root_key(self):
+        self.rec_all(secrets={'vercel-publish': {'password': 'inert-old'}})
+        self.root()
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['vercel-publish']['password'], self.PW)
+        self.assertNotIn('preview_password', self.tasks())
+        self.assertIn('replaced:preview_password', info['notes'])
+        bk = self.read_json(self.deai, 'backups', info['backup'], 'secrets.json')           # старе значення живе в датованому бекапі
+        self.assertEqual(bk['legacy']['vercel-publish']['password'], 'inert-old')
 
     def test_empty_password_secret_is_still_filled_from_the_root(self):
         self.rec_all()
@@ -574,6 +598,35 @@ class RestoreE(_StandE):
         self.assertIs(info['root_fallback'], False)                       # перелік ключів — з позначки `removed`
         self.assertEqual(self.read_json(self.space_path()), before_space)
         self.assertNotIn('password', self.read_json(self.secrets_path())['legacy'].get('vercel-publish', {}))
+
+    def _ran_with_old_password(self):
+        self.rec_all(secrets={'vercel-publish': {'password': 'inert-old'}})
+        return self.ran()
+
+    def test_restore_puts_the_replaced_password_secret_back(self):
+        """Рішення власника 09.11.2026: крок замінив `inert-old` на корінь; відкат — справжній `undo`: секрет `inert-old` і корінь `preview_password` назад."""
+        stamp = self._ran_with_old_password()
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['vercel-publish']['password'], self.PW)
+        st, info = self.lm._restore(stamp)
+        self.assertEqual(st, 'restored')
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['vercel-publish']['password'], 'inert-old')
+        self.assertEqual(self.tasks()['preview_password'], self.PW)
+        self.assertEqual(info['kept_live_secrets'], [])
+
+    def test_restore_keeps_a_password_secret_changed_by_a_person_after_the_step(self):
+        """Людина змінила секрет ПІСЛЯ кроку: відкат його не затирає (`kept_live_secrets`, лише ім'я ключа); корінь усе одно повертається."""
+        stamp = self._ran_with_old_password()
+        sec = self.read_json(self.secrets_path())
+        sec['legacy']['vercel-publish']['password'] = 'person-new'
+        self._write(self.secrets_path(), sec)
+        os.chmod(self.secrets_path(), 0o600)
+        st, info = self.lm._restore(stamp)
+        self.assertEqual(st, 'restored')
+        self.assertEqual(self.read_json(self.secrets_path())['legacy']['vercel-publish']['password'], 'person-new')
+        self.assertEqual(self.tasks()['preview_password'], self.PW)
+        self.assertEqual(info['kept_live_secrets'], ['preview_password'])
+        self.assertNotIn('person-new', json.dumps(info))
+        self.assertNotIn('inert-old', json.dumps(info))
 
     def test_restore_never_rewrites_the_whole_file(self):
         stamp = self.ran()

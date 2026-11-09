@@ -518,8 +518,8 @@ def _held(norm, secrets, sid, mid, kind, field):
 def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
     """ЧИСТИЙ розрахунок кроку Е (нічого не читає з диска): `{'copy_settings': {mid: {поле: значення}}, 'copy_secrets': {mid: {поле:
     значення}}, 'remove': [ключі], 'kept': [ключі], 'notes': [коди]}`. Правила (спека §1.1): нема в корені — мовчки; непридатне —
-    `unfit:<ключ>`; тримача нема — `no-record:<модуль>`; значення відмінне — `differs:<ключ>` (і для `preview_password`: секрет, відмінний від
-    кореня, не перезаписується — рішення контролера 07.11.2026); порожнє й копіюємо — у план копії; збіг — у список видалення. Пара Supabase — лише разом: не всі три
+    `unfit:<ключ>`; тримача нема — `no-record:<модуль>`; значення відмінне — `differs:<ключ>` (КРІМ `preview_password`: секрет, відмінний від
+    кореня, ПЕРЕЗАПИСУЄТЬСЯ коренем — рішення власника 09.11.2026, `replaced:preview_password`, старе значення — у бекапі кроку); порожнє й копіюємо — у план копії; збіг — у список видалення. Пара Supabase — лише разом: не всі три
     тримачі — `partial:supabase`, жоден із двох не видаляється. ⛔ Значень у виході НЕМАЄ нікуди, крім `copy_*` (їх пише запис)."""
     out = {'copy_settings': {}, 'copy_secrets': {}, 'copied': [], 'remove': [], 'kept': [], 'notes': []}
     notes = out['notes']
@@ -561,7 +561,11 @@ def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
             if cur in (None, '') and copyable:                  # порожньо — копіюємо
                 out['copy_secrets' if kind == 'k' else 'copy_settings'].setdefault(m, {})[field] = eff
                 out['copied'].append(key)
-            else:           # рішення контролера 07.11.2026 (замість Д4): секрет `password`, відмінний від кореня, НІКОЛИ не перезаписуємо
+            elif key == 'preview_password':                     # рішення власника 09.11.2026: КОРІНЬ перемагає (люди бачать той самий пароль);
+                out['copy_secrets'].setdefault(m, {})[field] = eff   # старий секрет — у датованому бекапі, у підсумку лише `replaced:<ключ>`
+                out['copied'].append(key)
+                note('replaced:' + key)
+            else:           # решта відмінних значень запису (`ssh_key`, `jira_token`, …) НІКОЛИ не перезаписуємо: `differs:<ключ>`
                 note('differs:' + key)
                 equal = False
         if equal:
@@ -1572,6 +1576,22 @@ def _restore_root(sp, d):
         raise OSError('tasks file keeps changing')
 
 
+def _replaced_password(sid, d, files):
+    """Відкат кроку Е: чи крок ЗАМІНИВ секрет `password` запису `vercel-publish` коренем `preview_password` (рішення власника 09.11.2026). Лише з БЕКАПУ:
+    `(значення з кореня, старий секрет)` — коли обидва є і різні, інакше `None`. Бекап, що не читається, — виняток (відкат нічого не пише)."""
+    if 'secrets.json' not in files:
+        return None
+    with open(os.path.join(d, 'tasks.json'), encoding='utf-8') as f:
+        old_root = json.load(f)
+    with open(os.path.join(d, 'secrets.json'), encoding='utf-8') as f:
+        old_secrets = json.load(f)
+    if not isinstance(old_root, dict) or not isinstance(old_secrets, dict) or 'preview_password' not in old_root:
+        return None
+    eff = _effective('preview_password', old_root['preview_password'])
+    was = deai_modules._bucket(old_secrets, sid, 'vercel-publish').get('password')
+    return (eff, was) if eff and was and eff != was else None
+
+
 def _restore_locked(stamp, hold, home):
     d = _backup_dir(stamp)
     if d is None:
@@ -1605,8 +1625,10 @@ def _restore_locked(stamp, hold, home):
         return 'abort-restore', {}
     root_restored = kept_live = None
     root_flags = {}
+    replaced = None
     if step.originals:                                       # 4d-4b: корінь ПЕРШИМ — збій далі лишає простір мігрованим І з поверненими ключами
         try:
+            replaced = _replaced_password(sid, d, files)     # читання бекапу ДО будь-якого запису
             root_restored, kept_live, root_flags = _restore_root(sp, d)
         except BaseException as s:
             # m4: до цього місця нічого, крім запобіжної копії, не записано — відмова/збій не лишає осиротілої `-pre-restore`.
@@ -1620,6 +1642,7 @@ def _restore_locked(stamp, hold, home):
             _atomic_bytes(sp, read('space.json'), files['space.json']['mode'] & 0o777)
         elif os.path.lexists(sp):
             os.remove(sp)
+    kept_live_secrets = []
     with spaces.WRITE_LOCK:
         secrets_p = deai_modules._secrets_path()
         cur = deai_modules._load_secrets()
@@ -1629,12 +1652,22 @@ def _restore_locked(stamp, hold, home):
             raise ValueError('secrets backup: not an object')
         cur_rest = {k: v for k, v in cur.items() if k != sid}
         bk_rest = {k: v for k, v in bk.items() if k != sid}
-        if raw is not None and cur_rest == bk_rest:
+        keep_pw = None                                       # секрет, який людина змінила ПІСЛЯ кроку (≠ корінь, ≠ старий): не затираємо (`kept_live_secrets`)
+        if replaced is not None:
+            live = deai_modules._bucket(cur, sid, 'vercel-publish').get('password')
+            if live and live not in replaced:
+                keep_pw = live
+                kept_live_secrets.append('preview_password')
+        if raw is not None and cur_rest == bk_rest and keep_pw is None:
             _atomic_bytes(secrets_p, raw, 0o600)             # чужого не змінилось — побайтно
         else:
             new = dict(cur_rest)                             # лише запис ЛІГИ — з бекапу; чужі секрети лишаються
             if sid in bk:
                 new[sid] = bk[sid]
+            if keep_pw is not None:
+                part = dict(new.get(sid) if isinstance(new.get(sid), dict) else {})
+                part['vercel-publish'] = dict(part.get('vercel-publish') if isinstance(part.get('vercel-publish'), dict) else {}, password=keep_pw)
+                new[sid] = part
             if new:
                 atomic_write_json(secrets_p, new)
                 os.chmod(secrets_p, 0o600)
@@ -1652,7 +1685,7 @@ def _restore_locked(stamp, hold, home):
     info = {'status': 'restored', 'reason': 'простір ЛІГА повернено з бекапу', 'space_id': sid, 'backup': stamp,
             'held': bool(hold), 'safety_copy': safety}
     if step.originals:
-        info.update(root_restored=root_restored, kept_live=kept_live, **root_flags)
+        info.update(root_restored=root_restored, kept_live=kept_live, kept_live_secrets=kept_live_secrets, **root_flags)
     _write_last(info, step)
     return 'restored', info
 
