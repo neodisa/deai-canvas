@@ -293,7 +293,7 @@ STARTUP_REGULAR = [
     '  бекап: <stamp>-liga-4d4b',
     '  скопійовано: gitlab_host_ip, gitlab_ssh_key, preview_password; видалено: gitlab_host_ip, gitlab_ssh_key, jira_base, jira_email, jira_token, '
     'preview_password, supabase_key, supabase_url',
-    '  оригінали видалено з tasks.json; єдина копія — secrets.json і backups/ у домі Deai',
+    '  оригінали видалено з tasks.json; копії — secrets.json, backups/ у домі Deai і tasks.json.bak (права 0600)',
     '  відкат: bin/migrate_liga.py restore <stamp>-liga-4d4b --hold',
     '  раніші кроки (<stamp>-liga-4d3a, <stamp>-liga-4d3b, <stamp>-liga-4d3c, <stamp>-liga-4d4a) — лише після відкату пізніших, у зворотному порядку',
 ]
@@ -311,6 +311,8 @@ STARTUP_UNMIGRATED = [
     'ролі ЛІГИ вимкнено: dashboard (supabase-dashboard) — ' + _HOLD_TAIL,
     'ролі ЛІГИ вимкнено: tracker (jira-tracker) — ' + _HOLD_TAIL,
     'ролі ЛІГИ вимкнено: notify (supabase-teams) — ' + _HOLD_TAIL,
+    'preview_password у корені tasks.json ігнорується 0.21 — превʼю візьме спільний пароль за замовчуванням; '
+    'виправити: python3 bin/migrate_liga.py run (або задайте секрет password запису vercel-publish)',
 ]
 
 #: Підсумок кроку Е (імена ключів і коди, без значень) на мігрованих стендах.

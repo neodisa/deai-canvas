@@ -102,10 +102,20 @@ The behaviour of 0.20.0 is pinned by the snapshot `tests/fixtures/liga-migration
 
 ### Known limits
 
-- **The single copy of the credentials is in the Deai home** (`secrets.json` and `backups/` side by side). After the step the root
-  of `tasks.json` no longer holds them; keep your own copy of the home if you need one.
+- **The copies of the credentials are in the Deai home** (`secrets.json` and `backups/` side by side) **and in `tasks.json.bak`**
+  next to the LIGA `tasks.json` (the bytes before the last deleting run, in plaintext; the file is created with mode 0600). After
+  the step the root of `tasks.json` no longer holds them; keep your own copy of the home if you need one, and do not share the
+  folder that holds `tasks.json.bak`.
 - **`tasks.json.bak` is the manual rollback**, not a copy of the original: a second deleting run overwrites it.
 - **The root `preview_password` of an ordinary space no longer works** (only the task or the secret of `vercel-publish`).
+  If step E did not complete (`skip-path-in-git`, `skip-held`, `skip-tasks-unreadable`, `abort-*`, or the note
+  `no-record:vercel-publish`) a root `preview_password` stays on disk unread and a closed preview would fall to the shared `1100`;
+  so the start prints one line («preview_password у корені tasks.json ігнорується 0.21 …», the key name only) and `bin/migrate_liga.py
+  status` repeats it until the key is consumed: run `bin/migrate_liga.py run` or set the secret `password` of `vercel-publish`.
+- **`restore` of step E puts the root keys back, but 0.21 does not read them:** the runtime keeps using `space.json` and
+  `secrets.json`; the restored keys matter only for a downgrade to 0.20.
+- **`isolation.real_home()` recognises only `<home>/.deai`:** a custom `DEAI_HOME` that points at a real location is not protected
+  by the isolation law.
 - **`skip-path-in-git` is permanent** while the space folder is inside a git work tree: the roles do not come back until the
   folder moves out of it.
 - **The law of isolation (Д6) guards the real-home location, not the content:** an isolated run whose Deai home is a copy of the

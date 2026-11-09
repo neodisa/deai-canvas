@@ -650,7 +650,7 @@ be cloned again under `<DEAI_HOME>/cache`). Rotation: the Supabase key of the co
 Connections); since 0.21 `gitlab_ssh_key` / `gitlab_host_ip` of the root are copied into `git-sync` by the fifth step and the root is not read.
 
 Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-d> --hold`, `<stamp-c>`, `<stamp-b>`, then `<stamp-a>`, since an earlier step is refused while a later one is applied); a `vercel-publish` card enabled by hand without `compat` publishes through the module path (new URLs, no gate); the fourth step writes the tracks even when they differ from the old adapter (the differences are notes of the step, see `CHANGELOG.md`), except for more than 20 track ids, which stays `abort-tracks` until `profile_repos` / `design_work_roots` are cleaned; a LIGA folder inside a git work tree is not
-migrated; a partial migration is final; the single copy of the credentials is in the Deai home (`secrets.json` and `backups/`), and `skip-path-in-git` keeps the roles of LIGA off until the folder leaves the git work tree. The full list and the status codes are in `CHANGELOG.md`, `[0.21.0]`, `[0.20.0]`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
+migrated; a partial migration is final; the copies of the credentials are in the Deai home (`secrets.json` and `backups/`) and in `tasks.json.bak` (mode 0600), and `skip-path-in-git` keeps the roles of LIGA off until the folder leaves the git work tree. The full list and the status codes are in `CHANGELOG.md`, `[0.21.0]`, `[0.20.0]`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
 
 ## Roadmap
 
