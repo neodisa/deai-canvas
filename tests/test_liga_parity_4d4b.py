@@ -341,6 +341,7 @@ class AfterMigrationParity4d4b(unittest.TestCase):
         col.EXTRA.clear()
         cls.after = col.collect_all()
         cls.wire = cls.after.pop('_wire')
+        cls.wire_stands = cls.after.pop('_wire_stands')
         cls.summary = cls.after.pop('_step_e_summary')
         deai_modules.reset_caches()
 
@@ -348,10 +349,11 @@ class AfterMigrationParity4d4b(unittest.TestCase):
         return _diff(self.before[name], self.after[name])
 
     def test_no_network_and_all_stands_present(self):
-        # `SocketTripwire` рахує спроби НЕ-loopback з'єднань, які `NoNet`/розтяжка зупинили (жодна не дійшла до мережі); у знімку їх 10 — без `Implicit`
-        # і без читання оригіналів спроб не побільшало.
-        with open(BEFORE, encoding='utf-8') as f:
-            self.assertLessEqual(self.wire, json.load(f)['non_loopback_attempts'])
+        # `SocketTripwire` рахує спроби НЕ-loopback з'єднань, які `NoNet`/розтяжка зупинили (жодна не дійшла до мережі). Точно, а не «не більше»
+        # (r15-3): у знімку 10, нині 7 — без `Implicit` і без читання оригіналів. Побільшало чи побіднішало — треба знати, чому.
+        self.assertEqual(self.wire, 7)
+        self.assertEqual(self.wire_stands, {'regular': 3, 'differs': 3, 'partial': 1, 'unmigrated': 0, 'plain': 0})
+        self.assertEqual(sum(self.wire_stands.values()), self.wire)
         self.assertEqual(sorted(self.after), sorted(STANDS))
 
     def test_snapshot_is_big_enough_to_mean_something(self):
@@ -463,7 +465,8 @@ EXPECT_4D3C_LEAVES = dict({
     '/js/disable_consequences_publish[0]/noneKey': 'cnNonePublish',
     '/js/disable_consequences_publish[0]/role': 'publish',
     '/js/disable_consequences_publish[]': ABSENT,
-    # comments_off: сценарій прибирає пару Supabase з КОРЕНЯ; корінь не читається, коментарі ведуть записи → шар коментарів ПРИСУТНІЙ
+    # comments_off (імʼя сценарію зі знімка): пару кореня прибрано ПІСЛЯ міграції (записи й далі несуть конфіг); корінь не читається,
+    # коментарі ведуть записи → шар коментарів ПРИСУТНІЙ. Вимкнений чи видалений ЗАПИС шару не дає — `test_legacy_comments.LegacyPagesTest`.
     '/publish/comments_off/pages/comment_layer_files': ABSENT,
     '/publish/comments_off/pages/comment_layer_files[0]': 'adapter.js',
     '/publish/comments_off/pages/comment_layer_files[1]': 'comment-layer.min.js',

@@ -276,9 +276,13 @@ def collect_all():
         with mock.patch.dict(os.environ, {'HOME': home}), SocketTripwire() as wire, mock.patch('urllib.request.urlopen', NoNet()):
             for n in CLEAN:
                 os.environ.pop(n, None)
+            by_stand = {}
             for name in STANDS:
+                seen = wire.count
                 out[name] = _scenarios(tmp, name)
+                by_stand[name] = wire.count - seen
             out['_wire'] = wire.count
+            out['_wire_stands'] = by_stand
             out['_step_e_summary'] = dict(EXTRA)
     spaces_guard.assert_untouched(real)
     return out
