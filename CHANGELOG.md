@@ -29,7 +29,8 @@ The behaviour of 0.20.0 is pinned by the snapshot `tests/fixtures/liga-migration
   `fsync` before the deletion. A marker guard (`marker-kept:<key>`) keeps the registry from being rebuilt as a space without
   integrations. Environment variables and `pipeline-feedback` are not touched.
 - **New statuses and notes.** `abort-originals` (the root was not written; the copies lie there, nothing was deleted — the next
-  start repeats), `abort-verify` (a copy does not read back; nothing deleted), `abort-write` (the space folder is read-only);
+  start repeats), `abort-secrets` (the secrets of the module cannot be written, or the secrets file is not writable; `space.json` is not changed, the
+  next start repeats), `abort-verify` (a copy does not read back; nothing deleted), `abort-write` (the space folder is read-only);
   restore of the step has `refuse-tasks-unreadable` (the live `tasks.json` is unreadable **or missing** — recreate the file, `{}` is
   enough). Notes: `differs:<key>`, `no-record:<module>`, `partial:supabase`, `unfit:<key>`, `marker-kept:<key>`,
   `replaced:preview_password`. A root `preview_password` of `0`, `0.0` or a boolean is `unfit`.

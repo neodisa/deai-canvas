@@ -555,7 +555,8 @@ export function peekRegistered(res, taken = []) {
    `capabilities.comments` (`hasTeamComments`, нижче: рішення за роллю `comments`, не за `integrations`).
 
    Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | 'legacy' | null, tokens,
-   [error]}`): нечитабельний `space.json` лягає в `capabilities.error`, а не в 5xx. Відповіді
+   [error], [errors]}`): нечитабельний `space.json` лягає в `capabilities.error`, а не в 5xx;
+   `errors` ({роль: код}) є лише коли збій — не `space-json-unreadable`. Відповіді
    СТАРОЇ форми (без `capabilities`) лишаються валідними — тоді рішення за `integrations`, рівно
    `=== false`, як скрізь: простір без відомостей публікації в людини не краде. */
 
