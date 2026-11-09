@@ -1816,8 +1816,29 @@ def roles_lines(states):
             for s in states if not s['on'] and s['reason'] != 'integrations-off']
 
 
-#: Рядок після кроку Е: де тепер лежать облікові (спека §6, ризик «єдина копія»).
-ORIGINALS_REMOVED_LINE = 'оригінали видалено з tasks.json; єдина копія — secrets.json і backups/ у домі Deai'
+#: Рядок після кроку Е: де тепер лежать облікові (спека §6, ризик «єдина копія»). `tasks.json.bak` — теж копія (0600), поки його не перезапише наступний запис.
+ORIGINALS_REMOVED_LINE = 'оригінали видалено з tasks.json; копії — secrets.json, backups/ у домі Deai і tasks.json.bak (права 0600)'
+
+#: Рядок, коли корінь ЛІГИ ще має `preview_password`, якого 0.21 не читає: закритий превʼю тихо став би спільним `1100`. Лише імʼя ключа.
+UNREAD_PREVIEW_PASSWORD_LINE = ('preview_password у корені tasks.json ігнорується 0.21 — превʼю візьме спільний пароль за замовчуванням; '
+                                'виправити: %s (або задайте секрет password запису vercel-publish)' % _RUN_FIX)
+
+
+def unread_preview_password_line(home=None):
+    """`UNREAD_PREVIEW_PASSWORD_LINE`, коли корінь `tasks.json` ЛІГИ має непорожній `preview_password`, якого немає в секреті `password` запису
+    `vercel-publish` (крок Е не виконано чи не спожив ключ); інакше `None`. Чиста; не кидає (нечитане — `None`). Значення не повертає."""
+    try:
+        if not spaces.layer_on():
+            return None
+        liga = _liga_entry(home)
+        raw = install_config.load_legacy_tasks().get('preview_password')
+        eff = _effective('preview_password', raw)
+        if eff is None:
+            return None
+        held = deai_modules._bucket(deai_modules._load_secrets(), liga['id'], 'vercel-publish').get('password')
+        return None if held == eff else UNREAD_PREVIEW_PASSWORD_LINE
+    except (_Stop, OSError, ValueError, AttributeError, deai_modules.ModuleError):
+        return None
 
 
 def originals_summary(info):
@@ -1899,6 +1920,7 @@ def status(home=None):
         out['roles'] = roles_state(home)
     except Exception:  # noqa: BLE001 — `status` не падає через стан ролей
         out['roles'] = []
+    out['unread_preview_password'] = bool(liga) and unread_preview_password_line(home) is not None
     return out
 
 
@@ -1939,6 +1961,8 @@ def status_text(st):
     if multi:
         lines.extend(_skip_lines(last))
     lines.append('  бекапи: ' + (', '.join(st['backups']) or 'нема'))
+    if st.get('unread_preview_password'):                            # 4d-4b: лише імʼя ключа
+        lines.append('  ' + UNREAD_PREVIEW_PASSWORD_LINE)
     roles = st.get('roles') or []
     if roles:                                                        # 4d-4b: усі шість ролей ЛІГИ — `так`/`ні (<код>)`
         lines.append('Ролі ЛІГИ')
@@ -2067,6 +2091,9 @@ def startup():
             try:                                                             # I3: звіт про ролі не має перетворити вдалу міграцію на `abort-internal`
                 for line in roles_lines(roles_state()):
                     print(line, file=sys.stderr)
+                pw_line = unread_preview_password_line()
+                if pw_line:
+                    print(pw_line, file=sys.stderr)
             except Exception as e:  # noqa: BLE001 — лише імʼя типу
                 print('ролі ЛІГИ: стан не визначено (%s)' % type(e).__name__, file=sys.stderr)
         # abort не маскуємо пізнішим успіхом: перший `abort-*`, інакше перший не-`skip-*`, інакше перший

@@ -1022,6 +1022,42 @@ class StartupE(_StandE):
         self.assertNotIn('ролі ЛІГИ вимкнено', err)
 
 
+class UnreadPreviewPassword(_StandE):
+    """Fix 1 (review): корінь `preview_password`, якого 0.21 не читає, не має мовчки знижувати пароль до спільного 1100."""
+
+    def test_line_when_root_has_the_key_and_step_e_not_done(self):
+        self.root()
+        line = self.lm.unread_preview_password_line()
+        self.assertIn('preview_password', line)
+        self.assertIn('migrate_liga.py run', line)
+        self.assertNotIn(self.PW, line)
+
+    def test_start_prints_one_line_and_status_has_it_without_the_value(self):
+        self.root()
+        with self.mock.patch.object(self.lm, 'run_all', lambda *a, **k: []):
+            _st, err = self.quiet(self.lm.startup)
+        self.assertEqual(err.count('preview_password'), 1, err)
+        text = self.lm.status_text(self.lm.status())
+        self.assertIn('preview_password', text)
+        for out in (err, text):
+            self.assertNotIn(self.PW, out)
+
+    def test_absent_after_step_e_done(self):
+        self.root()
+        self.assertEqual(self.run_e()[0], 'done')
+        self.assertIsNone(self.lm.unread_preview_password_line())
+        self.assertNotIn('ігнорується', self.lm.status_text(self.lm.status()))
+
+    def test_absent_without_the_key(self):
+        self.root(preview_password=None)
+        self.assertIsNone(self.lm.unread_preview_password_line())
+
+    def test_absent_when_the_record_secret_already_holds_it(self):
+        self.root()
+        self.rec_all(secrets={'vercel-publish': {'password': self.PW}})
+        self.assertIsNone(self.lm.unread_preview_password_line())
+
+
 class StatusAndCli(_StandE):
     def test_status_text_has_originals_and_roles_sections(self):
         self.root()
