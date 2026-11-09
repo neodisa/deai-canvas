@@ -8,16 +8,48 @@
 // 4d-4b: Playwright-кеш і git-ідентичність у тимчасовому HOME — ДО будь-якого запуску браузера/git
 import "./_env.mjs";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Вигадані адреса й ключ Supabase простору ЛІГА (4b-2): сервер бере їх з КОРЕНЯ старого `tasks.json`. Хост не існує, а
- *  сторінкові запити до нього перехоплює `_liga-supabase.mjs` — справжньої мережі й справжнього проєкту тут нема. */
-export const LIGA_SUPABASE = Object.freeze({ supabase_url: "https://abcdefghijkl.supabase.co", supabase_key: "sb_publishable_test" });
+/** Вигадані адреса й ключ Supabase простору ЛІГА. Хост не існує, а сторінкові запити до нього перехоплює `_liga-supabase.mjs` —
+ *  справжньої мережі й справжнього проєкту тут нема. 4d-4b: рантайм оригіналів кореня `tasks.json` НЕ читає — адреса й ключ живуть у
+ *  ЯВНИХ записах `space.json` (`supabase-comments|dashboard|teams`) і в `secrets.json` дому Deai (`startServer(…, { supabase: true })`
+ *  будує МІГРОВАНУ ЛІГУ). У корінь старого файла ці ключі кладе лише тест міграції (`LIGA_SUPABASE_ORIGINALS` у `legacyExtra`). */
+export const LIGA_SB = Object.freeze({ url: "https://abcdefghijkl.supabase.co", key: "sb_publishable_test" });
+/** Оригінали Supabase у ФОРМІ КОРЕНЯ старого `tasks.json`: ЛИШЕ для тестів міграції ЛІГИ (`legacyExtra`); рантайм їх не читає. */
+export const LIGA_SUPABASE_ORIGINALS = Object.freeze({ supabase_url: LIGA_SB.url, supabase_key: LIGA_SB.key });
+
+/** Шість ролей ЛІГИ → `[модуль, налаштування, секрети]` — форма, яку пишуть кроки A–C міграції (як `ROLE_RECORDS` у `tests/liga_fixture.py`). */
+const LIGA_ROLE_RECORDS = Object.freeze({
+  dashboard: ["supabase-dashboard", { url: LIGA_SB.url, table: "overview_projects", compat: "comment-layer" }, { key: LIGA_SB.key }],
+  notify: ["supabase-teams", { url: LIGA_SB.url, compat: "comment-layer" }, { key: LIGA_SB.key }],
+  comments: ["supabase-comments", { url: LIGA_SB.url, shots_bucket: "overview-thumbs", compat: "comment-layer" }, { key: LIGA_SB.key }],
+  tracker: ["jira-tracker", { base: "https://jira.example.com", email: "alpha@example.com" }, { token: "jira_fixture_token_alpha" }],
+  vcs: ["git-sync", { branch: "main", path: "mockup/{task}", autosync: true, compat: "design-canvas" }, {}],
+  publish: ["vercel-publish", { auth: "cli", team: "", compat: "design-canvas" }, {}],
+});
+/** Ролі мігрованої ЛІГИ за замовчуванням: з `supabase: true` — те, що ЛІГА мала неявно до 4d-4b (Supabase-трійка + git + Vercel);
+ *  без нього — лише git і Vercel (`tracker` — лише коли тест просить його `roles`). */
+const LIGA_ROLES_SUPABASE = ["comments", "dashboard", "notify", "vcs", "publish"];
+const LIGA_ROLES_PLAIN = ["vcs", "publish"];
+
+/** `{modules, secrets}` для `space.json`/`secrets.json` мігрованої ЛІГИ. `overrides` — `{роль: {settings?, secrets?, enabled?}}`. */
+function ligaRecords(roles, overrides = {}) {
+  const modules = {};
+  const secrets = {};
+  for (const role of roles) {
+    const [mid, settings, sec] = LIGA_ROLE_RECORDS[role];
+    const o = overrides[role] || {};
+    modules[mid] = { enabled: o.enabled ?? true, shared_state: true, settings: { ...settings, ...(o.settings || {}) } };
+    const s = { ...sec, ...(o.secrets || {}) };
+    if (Object.keys(s).length) secrets[mid] = s;
+  }
+  return { modules, secrets };
+}
 
 /**
  * Тека задачі з однією ітерацією (`it1`) і двома сторінками (`holovna`, `poshuk`).
@@ -77,11 +109,17 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   довга потрібна там, де перевіряється сама ГЕОМЕТРІЯ крошки — назва, що не
  *   влазить, малювалась поверх сусідів, і на короткій фікстурі це не
  *   відтворюється взагалі.
- * @param {boolean} [opts.supabase] дописати в КОРІНЬ старого `tasks.json` (тобто в конфіг простору ЛІГА)
- *   `LIGA_SUPABASE` — без нього `/commented?ch=project` — локальна сторінка з приміткою `comments-unconfigured`.
- *   Типово вимкнено: увімкнений конфіг змушує сторінку каналу «Команда» йти до `abcdefghijkl.supabase.co`, а це
- *   мусить бути перехоплено в самому тесті (`hermeticLiga`). Змінні `SUPABASE_URL`/`SUPABASE_KEY` оточення розробника
- *   сервер у живих тестах НЕ бачить ніколи (їх гасить фікстура): справжній проєкт сюди не потрапить.
+ * @param {boolean} [opts.liga] те саме, але БЕЗ Supabase: мігрована ЛІГА лише з `git-sync` і `vercel-publish` (задачі, що публікують чи
+ *   синхронізують; при вимкненому шарі ролей ЛІГИ нема, тож `POST /api/publish` дав би `no-publish-module`).
+ * @param {boolean} [opts.supabase] збудувати МІГРОВАНУ ЛІГУ (4d-4b): простір `legacy: true` отримує ЯВНІ записи ролей
+ *   `supabase-comments|dashboard|teams`, `git-sync`, `vercel-publish` у `space.json` і секрети в `secrets.json` дому Deai (0600),
+ *   а корінь старого `tasks.json` лишається БЕЗ облікових — рантайм оригіналів не читає. Без `spaces` фікстура сама робить простір
+ *   `liga` із задачею `fixture` (при вимкненому шарі, лише `DC_TASKS_FILE`, ролей ЛІГИ нема взагалі). Без цього
+ *   `/commented?ch=project` — локальна сторінка з приміткою `comments-unconfigured`. Типово вимкнено: увімкнений конфіг змушує
+ *   сторінку каналу «Команда» йти до `abcdefghijkl.supabase.co`, а це мусить бути перехоплено в самому тесті (`hermeticLiga`).
+ *   Змінні `SUPABASE_URL`/`SUPABASE_KEY` оточення розробника сервер у живих тестах НЕ бачить ніколи (їх гасить фікстура).
+ *   Простір `legacy: true` у `spaces` може й сам просити записи: `roles` (імена ролей) і `records` (`{роль: {settings, secrets, enabled}}`),
+ *   напр. `records: { vcs: { settings: { ssh_key, host_ip } }, publish: { secrets: { password } } }`.
  * @param {Array<{name: string, color?: string, id?: string, legacy?: boolean,
  *   integrations?: boolean, tasks?: Record<string, {dir: string, title?: string, jira?: string}>}>} [opts.spaces]
  *   ПРОСТОРИ (Deai 1.0, етап 1). Опція змінює фікстуру цілком: `taskDir`,
@@ -103,8 +141,8 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   типова тека нового простору (`~/deai-work/<назва>`) з ними не перетиналась.
  *   Готовність сервера — опитування `/api/spaces` (на порожній машині `/api/task`
  *   відповідає 404, і чекання на нього не скінчилось би).
- *   · `legacyExtra` (лише з `spaces`) — ще ключі в корінь старого `tasks.json` простору `legacy` (поверх `supabase: true`): напр. `jira_base`
- *     з обліковими для тестів міграції ЛІГИ (4d-3a), якої без цих ключів нема що мігрувати;
+ *   · `legacyExtra` (лише з `spaces`) — ключі в корінь старого `tasks.json` простору `legacy`: ТІЛЬКИ для тестів міграції ЛІГИ (там
+ *     оригіналів і шукає міграція: `LIGA_SUPABASE_ORIGINALS`, `jira_base`…); рантайм кореня облікових не читає;
  *   · `deaiDir` (лише з `spaces`) — імʼя теки `DEAI_HOME` під тимчасовою домівкою, типово `.deai`. Інше потрібне там, де сервер мігрує ЛІГУ
  *     за швом `DC_MIGRATE_LIGA=1`: `<HOME>/.deai` він вважає «справжнім» (HOME у процесі підмінено) і відмовляє;
  *   · `machine` — `{home, deaiHome, legacyFile, spaces}` з попереднього запуску: той самий диск, жодного нового запису машини
@@ -113,18 +151,22 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   (`legacyFile` — куди сервер дивиться як на старий `tasks.json`; на порожній машині його ще
  *   нема, тест може покласти туди будь-що, зокрема зіпсований файл).
  */
-export async function startServer(taskDir, { portBase, extraTasks = {}, title = "Фікстура", profile = "", env = {}, root = ROOT, spaces, supabase = false, legacyExtra = {}, machine = null, deaiDir = ".deai" }) {
+export async function startServer(taskDir, { portBase, extraTasks = {}, title = "Фікстура", profile = "", env = {}, root = ROOT, spaces, supabase = false, liga = false, legacyExtra = {}, machine = null, deaiDir = ".deai" }) {
   const cfgDir = mkdtempSync(path.join(tmpdir(), "dc-live-cfg-"));
   const tasksFile = machine ? machine.legacyFile : path.join(cfgDir, "tasks.json");
+  /* 4d-4b: `supabase: true` без `spaces` — ТА САМА задача, але в МІГРОВАНІЙ ЛІЗІ (простір `liga`, `legacy: true`, явні записи ролей), бо
+     оригіналів кореня рантайм не читає, а при вимкненому шарі (лише `DC_TASKS_FILE`) ролей ЛІГИ нема взагалі. */
+  const ligaSpaces = !machine && !spaces && (supabase || liga)
+    ? [{ name: "Liga", id: "liga", color: "space-2", legacy: true, roles: supabase ? LIGA_ROLES_SUPABASE : LIGA_ROLES_PLAIN,
+      tasks: { fixture: { dir: taskDir, title, ...(profile ? { profile } : {}) }, ...extraTasks } }] : null;
   const iso = machine ? { home: machine.home, deaiHome: machine.deaiHome, spaces: machine.spaces }
-    : spaces ? isolatedMachine(spaces, tasksFile, { ...(supabase ? LIGA_SUPABASE : {}), ...legacyExtra }, deaiDir) : null;
+    : (spaces || ligaSpaces) ? isolatedMachine(spaces || ligaSpaces, tasksFile, legacyExtra, deaiDir, supabase) : null;
   if (!iso) {
     writeFileSync(tasksFile, JSON.stringify({
       current: "fixture", design_work_root: cfgDir,
       /* 4d-4a: напрямок задачі рантайм читає лише з `track` (`profile` — старий ключ, його читає тільки межа `task-new`/реєстру): пишемо обидва,
          як записує ЛІГА після кроку `liga-4d4a`. */
       tasks: { fixture: { dir: taskDir, title, ...(profile ? { profile, track: profile } : {}) }, ...extraTasks },
-      ...(supabase ? LIGA_SUPABASE : {}),
     }));
   }
   // Number(), а не Math.floor(): Math.floor на BigInt кидає TypeError і тест упав
@@ -175,10 +217,11 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
  * Домівка — реальний шлях (`realpath`): macOS кладе `/var/folders/…` за симлінком
  * `/private/var`, а перевірки теки на сервері порівнюють обидва вигляди.
  */
-function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai") {
+function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai", supabase = false) {
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), "dc-live-home-")));
   const deaiHome = path.join(home, deaiDir);
   const used = new Set();
+  const ligaSecrets = {};
   const out = spaces.map((sp, i) => {
     const slug = String(sp.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
     let id = sp.id || (slug || `space-${i + 1}`);
@@ -187,9 +230,18 @@ function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai"
     const legacy = !!sp.legacy;
     const spPath = legacy ? path.join(home, "Liga") : path.join(home, "work", id);
     mkdirSync(spPath, { recursive: true });
-    writeFileSync(path.join(spPath, "space.json"), JSON.stringify({ name: sp.name, color: sp.color || "space-1" }));
+    /* МІГРОВАНА ЛІГА: явні записи ролей у `space.json` + секрети в `secrets.json` дому Deai (бакет простору) — форма `LigaFixture.build()`
+       (`tests/liga_fixture.py`). Лише для простору `legacy: true` і лише коли тест просить (`supabase`, `roles`, `records`): простір ЛІГА
+       без записів — «немігрована» ЛІГА, ролі вимкнені. */
+    const migrated = legacy && (supabase || sp.roles || sp.records);
+    const recs = migrated ? ligaRecords(sp.roles || (supabase ? LIGA_ROLES_SUPABASE : LIGA_ROLES_PLAIN), sp.records || {}) : null;
+    if (recs && Object.keys(recs.secrets).length) ligaSecrets[id] = recs.secrets;
+    writeFileSync(path.join(spPath, "space.json"), JSON.stringify({
+      name: sp.name, color: sp.color || "space-1", ...(recs ? { modules: recs.modules, migrations: {} } : {}),
+    }));
     const tasks = Object.fromEntries(Object.entries(sp.tasks || {})
-      .map(([tid, tk]) => [tid, { dir: tk.dir, title: tk.title || tid, ...(tk.jira ? { jira: tk.jira } : {}) }]));
+      .map(([tid, tk]) => [tid, { dir: tk.dir, title: tk.title || tid, ...(tk.jira ? { jira: tk.jira } : {}),
+        ...(tk.profile ? { profile: tk.profile, track: tk.profile } : {}) }]));
     const cfg = { current: Object.keys(tasks)[0], design_work_root: spPath, tasks, ...(legacy ? legacyExtra : {}) };
     if (legacy) writeFileSync(legacyFile, JSON.stringify(cfg));
     else writeFileSync(path.join(spPath, "tasks.json"), JSON.stringify(cfg));
@@ -203,6 +255,11 @@ function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai"
       version: 1, current: out[0].id,
       spaces: out.map(({ id, path: p, legacy, integrations }) => ({ id, path: p, legacy, integrations })),
     }));
+    if (Object.keys(ligaSecrets).length) {
+      const secretsFile = path.join(deaiHome, "secrets.json");
+      writeFileSync(secretsFile, JSON.stringify(ligaSecrets), { mode: 0o600 });
+      chmodSync(secretsFile, 0o600);
+    }
   }
   return { home, deaiHome, spaces: out };
 }

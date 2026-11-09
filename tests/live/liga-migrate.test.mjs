@@ -63,7 +63,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { guardRealDeai, sleep, stop } from "./_spaces-kit.mjs";
-import { startServer, taskFixture } from "./fixture.mjs";
+import { LIGA_SUPABASE_ORIGINALS, startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
 const PORT_BASE = 23100;
@@ -73,7 +73,11 @@ const MOCKUP = () => "<!doctype html><html><body><h1>Макет</h1></body></htm
 const JIRA_BASE = "https://jira.example.com";
 const JIRA_EMAIL = "alpha@example.com";
 const JIRA_TOKEN = "jira_live_token_alpha";
-const SB_KEY = "sb_publishable_test"; // `LIGA_SUPABASE.supabase_key` фікстури
+const SB_KEY = LIGA_SUPABASE_ORIGINALS.supabase_key; // оригінал кореня для кроків A–Е
+/* 4d-4b: ще три оригінали кореня, які копіює й видаляє крок Е (`liga-4d4b`). */
+const PW_ROOT = "pw-live-root";
+const SSH_ROOT = "~/.ssh/id_live_root";
+const HOST_ROOT = "203.0.113.7";
 const MODULES = { tracker: "jira-tracker", dashboard: "supabase-dashboard", notify: "supabase-teams" };
 const ALL_MODULES = { ...MODULES, comments: "supabase-comments", vcs: "git-sync", publish: "vercel-publish" }; // + роли 4d-3b і 4d-3c
 
@@ -158,9 +162,11 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
     GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", DC_IDENTITY_NAME: "Дизайнерка Тест", DC_IDENTITY_EMAIL: "me@example.invalid" };
   S.taskDir = A.dir;
   S.first = await startServer(null, {
-    portBase: PORT_BASE, env: S.env, supabase: true, deaiDir: "state-deai",
-    /* 4d-4a: старий запис лише з `profile` (без `track`) — крок D дописує йому `track`; відносний корінь `liga360` адаптер у явні напрямки не бере. */
-    legacyExtra: { jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN, design_work_roots: { liga360: "rel/l360" },
+    portBase: PORT_BASE, env: S.env, deaiDir: "state-deai",
+    /* 4d-4b: оригінали Supabase/Jira/git/пароля лежать у КОРЕНІ старого файла (немігрована ЛІГА) — їх мігрують кроки A–Е; фікстура сама записів не пише.
+       4d-4a: старий запис лише з `profile` (без `track`) — крок D дописує йому `track`; відносний корінь `liga360` адаптер у явні напрямки не бере. */
+    legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN,
+      gitlab_ssh_key: SSH_ROOT, gitlab_host_ip: HOST_ROOT, preview_password: PW_ROOT, design_work_roots: { liga360: "rel/l360" },
       tasks: { mine1: { dir: A.dir, title: "Моя задача", jira: "DEMO-1", profile: "united" } } },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A.dir, title: "Моя задача", jira: "DEMO-1" } } }],
   });
@@ -179,7 +185,10 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   /* 4d-4a: четвертий незалежний крок — свій датований бекап із суфіксом `-liga-4d4a`. */
   const backupsD = all.filter((n) => /-liga-4d4a$/.test(n));
   assert.equal(backupsD.length, 1, `рівно один бекап кроку 4d-4a: ${JSON.stringify(backupsD)}`);
-  assert.equal(all.length, 4, `рівно чотири бекапи на старті: ${JSON.stringify(all)}`);
+  /* 4d-4b: п'ятий незалежний крок — свій датований бекап із суфіксом `-liga-4d4b`. */
+  const backupsE = all.filter((n) => /-liga-4d4b$/.test(n));
+  assert.equal(backupsE.length, 1, `рівно один бекап кроку 4d-4b: ${JSON.stringify(backupsE)}`);
+  assert.equal(all.length, 5, `рівно п'ять бекапів на старті: ${JSON.stringify(all)}`);
   const manifest = readJson(path.join(deaiHome, "backups", backups[0], "manifest.json"));
   assert.ok(manifest.files["tasks.json"] && manifest.files["spaces.json"], `маніфест: ${JSON.stringify(Object.keys(manifest.files))}`);
   assert.equal(statSync(path.join(deaiHome, "backups", backups[0])).mode & 0o777, 0o700);
@@ -221,7 +230,24 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   assert.equal(readJson(path.join(deaiHome, "backups", backupsD[0], "tasks.json")).tasks.mine1.track, undefined, "бекап d — tasks.json ДО запису");
   const migrated = readJson(S.first.legacyFile).tasks.mine1;
   assert.deepEqual([migrated.track, migrated.profile], ["united", "united"], "запис дістав `track` (= `profile`), `profile` лишився");
-  assert.equal(readJson(`${S.first.legacyFile}.bak`).tasks.mine1.track, undefined, "`tasks.json.bak` — файл задач ДО кроку");
+  /* П'ятий крок (4d-4b): копії в записи, видалення з кореня, `tasks.json.bak` — байти ДО видалення (тут уже після кроку D: `track` є, оригінали ще є). */
+  const markE = sj.migrations?.["liga-4d4b"];
+  assert.ok(markE, `позначки 4d-4b нема: ${JSON.stringify(sj.migrations)}`);
+  assert.equal(markE.backup, backupsE[0]);
+  assert.deepEqual(markE.roles, []);
+  for (const k of ["gitlab_ssh_key", "gitlab_host_ip", "preview_password"]) assert.ok(markE.copied.includes(k), `крок Е не скопіював ${k}: ${JSON.stringify(markE)}`);
+  assert.equal(readJson(path.join(deaiHome, "backups", backupsE[0], "manifest.json")).migration, "liga-4d4b");
+  assert.equal(statSync(path.join(deaiHome, "backups", backupsE[0])).mode & 0o777, 0o700);
+  assert.ok(readJson(path.join(deaiHome, "backups", backupsE[0], "space.json")).migrations["liga-4d4a"], "бекап e бачить позначку d");
+  assert.equal(readJson(path.join(deaiHome, "backups", backupsE[0], "tasks.json")).preview_password, PW_ROOT, "бекап e — tasks.json ДО видалення");
+  const rootNow = readJson(S.first.legacyFile);
+  for (const k of ["supabase_url", "supabase_key", "jira_base", "jira_email", "jira_token", "preview_password"]) assert.equal(k in rootNow, false, `корінь ще несе ${k}`);
+  assert.equal(rootNow.tasks.mine1.title, "Моя задача", "записи задач крок Е не чіпав");
+  assert.deepEqual(markE.removed.slice().sort(), Object.keys(readJson(path.join(deaiHome, "backups", backupsE[0], "tasks.json")))
+    .filter((k) => !(k in rootNow)).sort(), "`removed` позначки = ключі, яких у корені справді нема");
+  const gitSettings = sj.modules["git-sync"].settings;
+  assert.deepEqual([gitSettings.ssh_key, gitSettings.host_ip, gitSettings.compat], [SSH_ROOT, HOST_ROOT, "design-canvas"], "ключ і IP скопійовано в запис git-sync");
+  assert.equal(readJson(`${S.first.legacyFile}.bak`).preview_password, PW_ROOT, "`tasks.json.bak` — корінь ДО видалення");
   assert.deepEqual(sj.tracks.map((x) => x.id), ["united", "liga360", "seo"], "явні напрямки ЛІГИ (крок a)");
   /* Запис без секретів і з `compat`: саме він утримує шлях ЛІГИ (`publish_legacy_path`). */
   assert.deepEqual(sj.modules["vercel-publish"], { enabled: true, shared_state: true, settings: { auth: "cli", team: "", compat: "design-canvas" } });
@@ -235,20 +261,22 @@ test("1: перший старт мігрує ЛІГУ: датований бе�
   assert.equal(sec.liga["jira-tracker"].token, JIRA_TOKEN);
   assert.equal(sec.liga["supabase-dashboard"].key, SB_KEY);
   assert.equal(sec.liga["supabase-comments"].key, SB_KEY, "ключ Supabase для коментарів — теж лише в secrets.json");
+  assert.equal(sec.liga["vercel-publish"].password, PW_ROOT, "пароль превʼю з кореня — секрет `password` запису vercel-publish (крок Е)");
   const last = readJson(path.join(deaiHome, "migrations", "last.json"));
   assert.equal(last.status, "done");
-  assert.deepEqual(Object.keys(last.steps).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c", "liga-4d4a"], "last.json тримає звіт кожного кроку");
+  assert.deepEqual(Object.keys(last.steps).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c", "liga-4d4a", "liga-4d4b"], "last.json тримає звіт кожного кроку");
   for (const f of [spacePath, path.join(deaiHome, "migrations", "last.json"), path.join(deaiHome, "backups", backups[0], "manifest.json"),
     path.join(deaiHome, "backups", backupsB[0], "manifest.json"), path.join(deaiHome, "backups", backupsC[0], "manifest.json"),
-    path.join(deaiHome, "backups", backupsD[0], "manifest.json")]) {
+    path.join(deaiHome, "backups", backupsD[0], "manifest.json"), path.join(deaiHome, "backups", backupsE[0], "manifest.json")]) {
     const body = readFileSync(f, "utf8");
-    assert.ok(!body.includes(JIRA_TOKEN) && !body.includes(SB_KEY), `секрет у ${path.basename(f)}`);
+    assert.ok(!body.includes(JIRA_TOKEN) && !body.includes(SB_KEY) && !body.includes(PW_ROOT), `секрет у ${path.basename(f)}`);
   }
   S.spacePath = spacePath;
   S.backups = backups;
   S.backupsB = backupsB;
   S.backupsC = backupsC;
   S.backupsD = backupsD;
+  S.backupsE = backupsE;
   S.seams = { DC_TRACKER_FAKE: tracker, DC_TEAM_FAKE: team };
   /* Дзеркала ЛІГИ — плоска тека 0.7.0; міграція її не чіпає (сам синк — тест 3c), а дзеркал модуля під `<DEAI_HOME>/cache` не буває. */
   assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "міграція не додала дзеркал");
@@ -382,14 +410,15 @@ test("4: другий старт того самого дому нічого н�
     assert.equal(sha(b.f), b.sha, `вміст змінився: ${path.basename(b.f)}`);
   }
   assert.deepEqual(readdirSync(path.join(deaiHome, "backups")).sort(), backupsBefore, "зʼявився новий бекап");
-  assert.equal(backupsBefore.length, 4, "лишились рівно чотири бекапи (a, b, c і d), нового нема");
-  assert.deepEqual(backupsBefore.map((n) => n.replace(/^.*-liga-/, "liga-")).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c", "liga-4d4a"]);
-  assert.deepEqual([S.backups[0], S.backupsB[0], S.backupsC[0], S.backupsD[0]].sort(), backupsBefore);
+  assert.equal(backupsBefore.length, 5, "лишились рівно п'ять бекапів (a, b, c, d і e), нового нема");
+  assert.deepEqual(backupsBefore.map((n) => n.replace(/^.*-liga-/, "liga-")).sort(), ["liga-4d3a", "liga-4d3b", "liga-4d3c", "liga-4d4a", "liga-4d4b"]);
+  assert.deepEqual([S.backups[0], S.backupsB[0], S.backupsC[0], S.backupsD[0], S.backupsE[0]].sort(), backupsBefore);
   const sj = readJson(S.spacePath);
   assert.ok(sj.migrations["liga-4d3a"], "позначка лишилась");
   assert.ok(sj.migrations["liga-4d3b"], "позначка 4d-3b лишилась");
   assert.ok(sj.migrations["liga-4d3c"], "позначка 4d-3c лишилась");
   assert.ok(sj.migrations["liga-4d4a"], "позначка 4d-4a лишилась");
+  assert.ok(sj.migrations["liga-4d4b"], "позначка 4d-4b лишилась");
   /* Дзеркала: старт нічого в них не пише (HEAD і перелік після push 3c ті самі), дзеркал модуля під `<DEAI_HOME>/cache` нема. */
   assert.deepEqual(mirrorDirs(), S.mirrorsListBefore, "другий старт змінив базу дзеркал");
   assert.equal(git(S.gitDir, S.mirror, "rev-parse", "HEAD"), S.mirrorHeadAfter, "другий старт зрушив дзеркало");
@@ -462,21 +491,23 @@ async function publishAsPerson(t, server, fakeDir, taskDir) {
     caps: (await (await fetch(`${server.url}/api/spaces`)).json()).spaces.find((s) => s.id === "liga").capabilities.publish };
 }
 
-test("5: «Опублікувати» мігрованої ЛІГИ — ті самі link/deploy argv, той самий текст помилки й рядок «Пароль превʼю», що на немігрованій", async (t) => {
+test("5: «Опублікувати» мігрованої ЛІГИ — link/deploy argv і текст помилки ЛІГИ, рядок «Пароль превʼю» з секрету; немігрована ЛІГА не публікує зовсім", async (t) => {
   const want = legacyNoUrl();
-  /* ── ДО міграції: окремий сервер на власній машині (без `DC_MIGRATE_LIGA` ізольований прогін не мігрує) — еталон для порівняння. ── */
-  const fakeBefore = makeFakeNpx();
-  t.after(() => rmSync(fakeBefore, { recursive: true, force: true }));
+  /* ── ДО міграції: окремий сервер на власній машині (без `DC_MIGRATE_LIGA` ізольований прогін не мігрує). 4d-4b: немігрована ЛІГА має ВСІ шість
+     ролей вимкнених, тож публікації нема зовсім (до 0.21 її вів `Implicit`): ні кнопки, ні `POST /api/publish`. ── */
   const A2 = taskFixture({ html: MOCKUP });
   t.after(() => rmSync(A2.dir, { recursive: true, force: true }));
   const unmigrated = await startServer(null, {
-    portBase: PORT_BASE, supabase: true, deaiDir: "state-deai", legacyExtra: { jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
-    env: { PATH: `${fakeBefore}:${process.env.PATH}`, ...S.seams, DC_TEAMS_FAKE: "", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    portBase: PORT_BASE, deaiDir: "state-deai", legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
+    env: { ...S.seams, DC_TEAMS_FAKE: "", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A2.dir, title: "Моя задача", jira: "DEMO-1" } } }],
   });
-  let before;
   try {
-    before = await publishAsPerson(t, unmigrated, fakeBefore, A2.dir);
+    const caps = (await (await fetch(`${unmigrated.url}/api/spaces`)).json()).spaces.find((s) => s.id === "liga").capabilities;
+    assert.equal(caps.publish, null, "еталон: немігрована ЛІГА без ролі publish");
+    const res = await fetch(`${unmigrated.url}/api/publish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_only: true }) });
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).code, "no-publish-module");
   } finally {
     await stop(unmigrated.child);
     rmSync(unmigrated.home, { recursive: true, force: true });
@@ -484,7 +515,6 @@ test("5: «Опублікувати» мігрованої ЛІГИ — ті с�
     const cfgDir = path.dirname(unmigrated.tasksFile);
     if (path.dirname(realpathSync(cfgDir)) === realpathSync(tmpdir()) && path.basename(cfgDir).startsWith("dc-live-cfg-")) rmSync(cfgDir, { recursive: true, force: true });
   }
-  assert.equal(before.caps, "legacy", "еталон: немігрована ЛІГА веде публікацію вбудованим шляхом");
 
   /* ── ПІСЛЯ міграції: той самий диск, що й тести 1–4 (машина S.first), сервер перезапущено з фальшивим npx. ── */
   await stop(S.running);
@@ -496,15 +526,11 @@ test("5: «Опублікувати» мігрованої ЛІГИ — ті с�
   assert.equal(after.caps, "vercel-publish", "після міграції публікацію веде явний модуль (але шлях — ЛІГИ)");
 
   /* Те саме, що бачила людина до міграції. Мутація «без compat»: шлях модуля — інші argv (мінтить проєкт інакше), інший текст і
-     немає рядка `pubpw` (`isLegacyPublish` хибне → `pwView` без пароля) — червоніє тут. */
-  assert.match(after.pubpw, /1100/, `рядок «Пароль превʼю» мусить показувати пароль: ${after.pubpw}`);
-  assert.equal(after.pubpw, before.pubpw, "рядок смуги pubpw не такий, як до міграції");
+     немає рядка `pubpw` (`isLegacyPublish` хибне → `pwView` без пароля) — червоніє тут. Пароль — з СЕКРЕТУ (крок Е скопіював його з кореня). */
+  assert.match(after.pubpw, new RegExp(PW_ROOT), `рядок «Пароль превʼю» мусить показувати пароль із секрету: ${after.pubpw}`);
   assert.equal(after.answer.deploy_error, want, "текст помилки не той, що в ЛІГИ");
-  assert.equal(after.answer.deploy_error, before.answer.deploy_error, "текст помилки не такий, як до міграції");
   assert.ok(after.shown.includes(want), `у вікні нема тексту ЛІГИ: ${after.shown}`);
-  assert.equal(after.shown, before.shown, "вікно не таке, як до міграції");
   assert.equal(after.answer.url, undefined, "адреси нема — і в відповіді її бути не може");
-  assert.deepEqual(after.calls, before.calls, "argv/cwd фальшивого npx не такі, як до міграції");
   const sub = (c) => c.argv[2];
   const link = after.calls.find((c) => sub(c) === "link");
   const deploy = after.calls.find((c) => sub(c) === "deploy");
@@ -516,7 +542,6 @@ test("5: «Опублікувати» мігрованої ЛІГИ — ті с�
   assert.equal(deploy.cwd, "publish");
   assert.deepEqual(after.calls.filter((c) => ["list", "remove", "rm"].includes(sub(c))), [], "адреси нема → чистки старих деплоїв бути не повинно");
   assert.match(after.project ?? "", /^pv-\d{8}$/, "vercel_project не змінтився в tasks.json");
-  assert.match(before.project ?? "", /^pv-\d{8}$/);
 });
 
 test("6: «Перевірити» на картці vercel-publish — вердикт isolated, npx не викликано; після публікації нічого з печаті міграції не змінилось", async (t) => {
@@ -540,7 +565,36 @@ test("6: «Перевірити» на картці vercel-publish — верд�
     assert.equal(statSync(b.f).mtimeMs, b.mtime, `mtime змінився: ${path.basename(b.f)}`);
     assert.equal(sha(b.f), b.sha, `вміст змінився: ${path.basename(b.f)}`);
   }
-  assert.equal(readdirSync(path.join(S.first.deaiHome, "backups")).length, 4, "зʼявився новий бекап (їх рівно чотири: a, b, c, d)");
+  assert.equal(readdirSync(path.join(S.first.deaiHome, "backups")).length, 5, "зʼявився новий бекап (їх рівно п'ять: a, b, c, d, e)");
+});
+
+test("6b: немігрована ЛІГА — `status` називає всі шість вимкнених ролей і команду виправлення; `unhold` знімає утримання кроку", async (t) => {
+  /* Окрема машина без `DC_MIGRATE_LIGA`: старт нічого не мігрує, ролі вимкнені. CLI читає ТОЙ САМИЙ тимчасовий дім (`DEAI_HOME`), справжній `~/.deai` — ні. */
+  const A3 = taskFixture({ html: MOCKUP });
+  t.after(() => rmSync(A3.dir, { recursive: true, force: true }));
+  const server = await startServer(null, {
+    portBase: PORT_BASE, deaiDir: "state-deai", legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
+    env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A3.dir, title: "Моя задача" } } }],
+  });
+  t.after(() => rmSync(server.home, { recursive: true, force: true }));
+  t.after(() => rmSync(path.dirname(server.tasksFile), { recursive: true, force: true }));
+  await stop(server.child);
+  const cli = (...args) => spawnSync("python3", ["-B", path.join(ROOT, "bin", "migrate_liga.py"), ...args], {
+    encoding: "utf8", cwd: ROOT,
+    env: { ...process.env, HOME: server.home, DEAI_HOME: server.deaiHome, DC_TASKS_FILE: server.legacyFile },
+  });
+  const status = cli("status");
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /Ролі ЛІГИ/);
+  for (const role of ["publish", "comments", "vcs", "dashboard", "tracker", "notify"]) assert.match(status.stdout, new RegExp(`${role} \\(`), `status не називає роль ${role}`);
+  assert.doesNotMatch(status.stdout, new RegExp(`${SB_KEY}|${JIRA_TOKEN}`), "значення секретів у виводі");
+  /* `unhold` — лише для утриманого кроку: на неутриманому — відмова з поясненням, нічого не пишеться. */
+  const refused = cli("unhold", "liga-4d4b");
+  assert.equal(refused.status, 1);
+  assert.match(refused.stdout, /refuse-not-held|не утримано|refuse-/);
+  assert.equal(existsSync(path.join(server.spaces[0].path, "space.json")), true);
+  assert.equal(readJson(path.join(server.spaces[0].path, "space.json")).migrations, undefined, "відмова unhold нічого не записала");
 });
 
 guardRealDeai("7: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");

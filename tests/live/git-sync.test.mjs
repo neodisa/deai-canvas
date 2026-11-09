@@ -129,6 +129,8 @@ async function boot(t, { enable = "repo", legacy = false, open = true } = {}) {
   });
   const spaces = legacy
     ? [{ name: "Liga", id: "liga", color: "space-2", legacy: true,
+      /* 4d-4b: мігрована ЛІГА — явний запис `git-sync` (`compat: design-canvas`); ключ і IP — з ЗАПИСУ, а не з кореня `tasks.json`. */
+      roles: ["vcs", "publish"], records: { vcs: { settings: { ssh_key: "~/.ssh/id_live_fixture", host_ip: "203.0.113.9" } } },
       tasks: { plain: { dir: A.dir, title: "Без маппінгу" }, mapped: { dir: B.dir, title: "З маппінгом" } } }]
     : [{ name: "Studio", id: "studio", color: "space-2", tasks: { t1: { dir: A.dir, title: "Задача" } } }];
   server = await startServer(null, {
@@ -475,7 +477,10 @@ test("6c: без ролі vcs поля «Репозиторій» у формі 
 test("7: ЛІГА без змін — підпис «GitLab», «Налаштувати…» для задачі без маппінгу каже про tasks.json (не «Підключення»), push іде зашитим шляхом і дає design-canvas: sync", async (t) => {
   const s = await boot(t, { enable: null, legacy: true });
   const { page } = s;
-  assert.equal((await (await fetch(`${s.url}/api/spaces`)).json()).spaces[0].capabilities.vcs, "legacy");
+  assert.equal((await (await fetch(`${s.url}/api/spaces`)).json()).spaces[0].capabilities.vcs, "git-sync", "4d-4b: ЛІГА веде git явним записом, а не 'legacy'");
+  const sj = readJson(path.join(s.spaces[0].path, "space.json")).modules["git-sync"].settings;
+  assert.deepEqual([sj.ssh_key, sj.host_ip, sj.compat], ["~/.ssh/id_live_fixture", "203.0.113.9", "design-canvas"], "ключ і IP — у налаштуваннях запису");
+  assert.equal("gitlab_ssh_key" in readJson(s.legacyFile), false, "корінь tasks.json ключа не несе");
   /* Поточна задача — без `gitlab`: зона є, але репозиторій не налаштований → єдиний пункт «Налаштувати…». */
   await page.waitForSelector(GL, { timeout: 15000 });
   assert.equal((await glLabel(page)).trim(), "GitLab", "у ЛІГА підпис — «GitLab»");

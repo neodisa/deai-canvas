@@ -71,14 +71,11 @@ const calls = (logFile) => (existsSync(logFile)
   ? readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 
 /**
- * Конфіг Supabase ЛІГИ з хостом `.example` — він не резолвиться ніколи (RFC 2606), тож гейт ізоляції можна прибрати мутацією,
- * не боячись справжньої мережі. Конфіг установки читається на кожен виклик (кешу нема), тож пишемо ПІСЛЯ старту сервера.
- * Спільний хост `abcdefghijkl.supabase.co` із `fixture.mjs` не чіпаємо: інші тести спираються на нього.
+ * Записи ЛІГИ (4d-4b: явні, а не корінь `tasks.json`) з хостом `.example` — він не резолвиться ніколи (RFC 2606), тож гейт ізоляції можна
+ * прибрати мутацією, не боячись справжньої мережі. Спільний хост `abcdefghijkl.supabase.co` із `fixture.mjs` не чіпаємо: інші тести
+ * спираються на нього.
  */
-function useExampleSupabase(legacyFile) {
-  const cfg = JSON.parse(readFileSync(legacyFile, "utf8"));
-  writeFileSync(legacyFile, JSON.stringify({ ...cfg, supabase_url: "https://demo.supabase.example", supabase_key: "sb_publishable_test" }));
-}
+const EXAMPLE_SUPABASE = { dashboard: { settings: { url: "https://demo.supabase.example" } } };
 
 /** Дочекатись умови (опитування, а не фіксована пауза); `null` — не дочекались. */
 async function until(fn, ms = 15000) {
@@ -252,7 +249,7 @@ test("3: «Підключення» — секція «Командний даш
   assert.deepEqual(page.errors, []);
 });
 
-test("4: ЛІГА з DC_TEAM_FAKE — вкладка «Команда» як у 0.11.0: рядки зі шва, постачальник 'legacy', фейковий модуль не кликано", async (t) => {
+test("4: ЛІГА з DC_TEAM_FAKE — вкладка «Команда» як у 0.11.0: рядки зі шва, явний запис ЛІГИ, фейковий модуль не кликано", async (t) => {
   const w = workDir();
   const A = taskFixture({ html: MOCKUP });
   const seam = path.join(w.dir, "team.json");
@@ -266,7 +263,7 @@ test("4: ЛІГА з DC_TEAM_FAKE — вкладка «Команда» як у 
   });
   t.after(() => stop(server.child));
   const caps = (await (await fetch(`${server.url}/api/spaces`)).json()).spaces.find((s) => s.id === "liga").capabilities;
-  assert.equal(caps.dashboard, "legacy", `ЛІГА мусить лишатись неявним постачальником: ${JSON.stringify(caps)}`);
+  assert.equal(caps.dashboard, "supabase-dashboard", `ЛІГА веде дашборд явним записом (4d-4b): ${JSON.stringify(caps)}`);
   const page = await newPage(t, server.url);
   await openHome(page);
   assert.match(await tabTeam(page).textContent(), /Команда · 2/);
@@ -280,16 +277,16 @@ test("4: ЛІГА з DC_TEAM_FAKE — вкладка «Команда» як у 
 
 test("5: ЛІГА без шва — ізольований прогін: вкладка є, рядків нема, пояснення замість мережі (модуль не кликано)", async (t) => {
   const A = taskFixture({ html: MOCKUP });
+  /* Запис із хостом `.example`: без гейта ізоляції модуль пішов би до нього й відповів би «Supabase недоступний» замість
+     пояснення — тест червоніє, а справжньої мережі нема (`.example` не резолвиться). */
   const server = await startServer(null, {
     portBase: PORT_BASE + 400, env: { DEAI_EXTRA_MODULES: MODULES_DIR },
-    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A.dir, title: "Моя задача" } } }],
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, records: EXAMPLE_SUPABASE, tasks: { mine1: { dir: A.dir, title: "Моя задача" } } }],
+    supabase: true,
   });
   t.after(() => stop(server.child));
-  /* Конфіг із хостом `.example`: без гейта ізоляції модуль пішов би до нього й відповів би «Supabase недоступний» замість
-     пояснення — тест червоніє, а справжньої мережі нема (`.example` не резолвиться). */
-  useExampleSupabase(server.legacyFile);
   const ov = await overview(server.url, "?refresh=1");
-  assert.ok(ov.team, "ЛІГА мусить мати вкладку «Команда» (постачальник 'legacy')");
+  assert.ok(ov.team, "ЛІГА мусить мати вкладку «Команда» (явний запис `supabase-dashboard`)");
   assert.deepEqual(ov.team.rows, []);
   assert.match(ov.team.error, /ізольованому прогоні/, `пояснення ізоляції: ${JSON.stringify(ov.team)}`);
   const page = await newPage(t, server.url);
@@ -349,10 +346,10 @@ test("9: ЛІГА під DC_TASKS_FILE мовчить: збірка превʼю
      «прибери гейт» безпечна: дитина синку дійшла б лише до хоста, що не резолвиться, і лишила б лог — на ньому тест і червоніє. */
   const server = await startServer(null, {
     portBase: PORT_BASE + 700, env: { DEAI_EXTRA_MODULES: MODULES_DIR, DC_NO_OVERVIEW: "" },
-    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A.dir, title: "Моя задача" } } }],
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, records: EXAMPLE_SUPABASE, tasks: { mine1: { dir: A.dir, title: "Моя задача" } } }],
+    supabase: true,
   });
   t.after(() => stop(server.child));
-  useExampleSupabase(server.legacyFile);
   /* ⛔ Теки лога ЛІГИ в тимчасовій домівці нема, а `_overview_spawn` її не створює: без неї `open(лог)` падав би мовчки, дитина не
      стартувала б ЗА БУДЬ-ЯКОГО гейта, і тест зеленів би й без нього (мутація «прибери гейт» це виявила). */
   mkdirSync(path.join(server.home, ".claude", "pipeline-feedback"), { recursive: true });

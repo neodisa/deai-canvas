@@ -19,7 +19,7 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head><b
 test("Teams: вимкнути з підтвердженням, увімкнути без, стан пережив перезавантаження", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
   const fake = path.join(mkdtempSync(path.join(tmpdir(), "dc-teams-")), "mute.json");
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE, env: { DC_TEAMS_FAKE: fake } });
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, env: { DC_TEAMS_FAKE: fake }, supabase: true });   // 4d-4b: сповіщення веде явний запис `supabase-teams` мігрованої ЛІГИ
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());

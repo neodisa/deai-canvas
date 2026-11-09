@@ -587,7 +587,7 @@ test("e: ЛІГА-простір — модульний сніпет supabase-co
   const spaces = (await spacesApi(url)).spaces;
   const ligaSpace = spaces.find((s) => s.id === "liga");
   assert.equal(ligaSpace.integrations, true, "свідок: простір ЛІГА має інтеграції");
-  assert.equal(ligaSpace.capabilities.comments, "legacy", `capabilities ЛІГА: ${JSON.stringify(ligaSpace.capabilities)}`);
+  assert.equal(ligaSpace.capabilities.comments, "supabase-comments", `capabilities ЛІГА (4d-4b: явний запис): ${JSON.stringify(ligaSpace.capabilities)}`);
   assert.equal(spaces.find((s) => s.id === SPACE).capabilities.comments, MODULE, "свідок: у `mod` модуль ввімкнено");
   assert.equal(memo.log.length, 0, "свідок: memo ще нічого не бачив");
 
@@ -625,21 +625,20 @@ test("e: ЛІГА-простір — модульний сніпет supabase-co
 
 /* ── e3: ЛІГА без конфігу Supabase ─────────────────────────────────────────────────────────────────── */
 
-test("e3: ЛІГА без supabase_url у tasks.json — сторінка каналу локальна з банером comments-unconfigured, рамка працює (локальний пін ставиться)", async (t) => {
+test("e3: ЛІГА без запису supabase-comments — сторінка каналу локальна, без модульного сніпета, рамка працює (локальний пін ставиться)", async (t) => {
+  /* 4d-4b: «конфігу нема» = «запису нема» (оригіналів кореня рантайм не читає): ні банера `comments-unconfigured`, ні спільних адрес. */
   const env = await boot(t, { withLiga: true, ligaSupabase: false, enable: false, stub: [CDN] });
   const { page, url, memo, requests, outside } = env;
 
   const target = `${url}/commented?it=it1&page=holovna&ch=project`;
   const html = await (await fetch(target)).text();
-  assert.ok(html.includes("comments-unconfigured"), "примітки про незаданий конфіг нема в сторінці");
-  assert.equal(html.includes("__deaiCommentsCfg") || html.includes("/api/module-client/"), false, "без конфігу сторінка отримала модульний сніпет");
+  assert.ok(html.includes("local-adapter.js"), "без запису сторінка мусить бути локальною");
+  assert.equal(html.includes("__deaiCommentsCfg") || html.includes("/api/module-client/"), false, "без запису сторінка отримала модульний сніпет");
   const res = await fetch(`${url}/api/comment-config?ch=project&it=it1`);
-  assert.equal(res.status, 409, "/api/comment-config ЛІГИ без конфігу мусить відмовити (409)");
+  assert.equal(res.status, 409, "/api/comment-config ЛІГИ без запису мусить відмовити (409)");
+  assert.equal((await res.json()).code, "integrations-off");
 
   await page.goto(target);
-  const banner = page.locator("#cl-down");
-  await banner.waitFor({ timeout: 5000 });
-  assert.match(await banner.textContent(), /comments-unconfigured/, "текст банера");
 
   /* Рамка робоча: локальний шар піднято, пін ставиться (локально) — як у каналі «Клод». */
   await until(async () => (await docState(page)).inited, "піднятий локальний шар коментатора");

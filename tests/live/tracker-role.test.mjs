@@ -264,12 +264,13 @@ test("5: ЛІГА з DC_TASKS_FILE + DC_TEAM_FAKE — як у 0.12.0: `tracker: 
     portBase: PORT_BASE + 400,
     /* Явно гасимо шви трекера й сповіщень, що могли б протекти з оболонки розробника (сервер успадковує `process.env`). */
     env: { DEAI_EXTRA_MODULES: MODULES_DIR, DC_TEAM_FAKE: seam, DC_TRACKER_FAKE: "", DC_TEAMS_FAKE: "" },
-    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { d1: { dir: A.dir, title: "Задача один", jira: "DEMO-1" } } }],
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, roles: ["comments", "dashboard", "notify", "vcs", "publish", "tracker"],
+      tasks: { d1: { dir: A.dir, title: "Задача один", jira: "DEMO-1" } } }],
     supabase: true,
   });
   t.after(() => stop(server.child));
   const caps = (await (await fetch(`${server.url}/api/spaces`)).json()).spaces.find((s) => s.id === "liga").capabilities;
-  assert.equal(caps.tracker, "legacy", `ЛІГА мусить лишатись неявним постачальником: ${JSON.stringify(caps)}`);
+  assert.equal(caps.tracker, "jira-tracker", `ЛІГА веде трекер явним записом (4d-4b): ${JSON.stringify(caps)}`);
   const ov = await overview(server.url, "?refresh=1");
   assert.equal(ov.tracker, null, "ізольований прогін ЛІГИ: трекера для екрана нема (мережі нема, пояснювати нічого)");
   const page = await newPage(t, server.url);

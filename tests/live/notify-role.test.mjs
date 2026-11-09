@@ -251,7 +251,7 @@ test("5: ЛІГА з DC_TEAMS_FAKE — як у 0.13.0: пункт є, тиша �
     supabase: true,
   });
   t.after(() => stop(server.child));
-  assert.equal((await capsOf(server.url, "liga")).notify, "legacy", "ЛІГА мусить лишатись неявним постачальником");
+  assert.equal((await capsOf(server.url, "liga")).notify, "supabase-teams", "ЛІГА веде сповіщення явним записом (4d-4b)");
   const page = await newPage(t, server.url);
 
   let el = await settledTeams(page);

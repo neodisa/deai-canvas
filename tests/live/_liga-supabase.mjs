@@ -1,7 +1,7 @@
 /**
  * Герметичність живих тестів простору ЛІГА після 4b-2: командні коментарі ЛІГИ йдуть через вбудований модуль
  * `supabase-comments` (його `supabase.min.js` і `adapter.js` сторінка бере з `/api/module-client/…`, без CDN), а адреса й
- * ключ Supabase — з конфігу установки (`startServer(…, { supabase: true })` пише їх у корінь `tasks.json`).
+ * ключ Supabase — з ЯВНИХ записів мігрованої ЛІГИ (`startServer(…, { supabase: true })` пише їх у `space.json` і `secrets.json`; корінь `tasks.json` рантайм не читає, 4d-4b).
  *
  * Файл НЕ `*.test.mjs` навмисно (див. `fixture.mjs`): `npm run test:live` бере лише `*.test.mjs`.
  *

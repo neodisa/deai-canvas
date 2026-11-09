@@ -112,7 +112,7 @@ async function staticServer(root, port) {
 
 test("D: зовнішнє превʼю — акорд і кнопка", async (t) => {
   const { dir } = taskFixture({ html: PAGE, pages: ["holovna"] });
-  const tool = await startServer(dir, { portBase: PORT_BASE + 200 });
+  const tool = await startServer(dir, { portBase: PORT_BASE + 200, liga: true });   // 4d-4b: збірка превʼю — через `vercel-publish` ЛІГИ
   t.after(() => tool.child.kill());
   const built = await (await fetch(`${tool.url}/api/publish`, { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ build_only: true }) })).json();

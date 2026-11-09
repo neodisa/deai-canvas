@@ -40,7 +40,7 @@ async function boot(t, portBase, { team } = {}) {
     writeFileSync(f, JSON.stringify(team));
     env.DC_TEAM_FAKE = f;
   }
-  const { child, url, tasksFile } = await startServer(dir, { portBase, extraTasks, env });
+  const { child, url, tasksFile } = await startServer(dir, { portBase, extraTasks, env, supabase: team !== undefined });   // 4d-4b: вкладку «Команда» веде явний запис дашборда мігрованої ЛІГИ
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());

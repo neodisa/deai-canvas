@@ -81,7 +81,7 @@ async function boot(t, { legacy = false, fakeVercel = !legacy } = {}) {
   const B = taskFixture({ html: MOCKUP });
   const tasks = { a: { dir: A.dir, title: "Задача A" }, b: { dir: B.dir, title: "Задача B" } };
   const space = legacy
-    ? { name: "Liga", id: "liga", color: "space-2", legacy: true, tasks }
+    ? { name: "Liga", id: "liga", color: "space-2", legacy: true, tasks, roles: ["vcs", "publish", "notify"] }     // 4d-4b: мігрована ЛІГА — явні записи
     : { name: "P", id: "p", color: "space-3", tasks };
   const server = await startServer(null, { portBase: PORT_BASE, spaces: [space] });
   t.after(() => stop(server.child));
@@ -436,7 +436,7 @@ test("e: ЛІГА-простір — жодних застережень Vercel,
   const env = await boot(t, { legacy: true });
   const { page, url } = env;
   const reg = await spacesApi(url);
-  assert.equal(reg.spaces.find((s) => s.id === "liga").capabilities.publish, "legacy", "свідок: форма ЛІГА");
+  assert.equal(reg.spaces.find((s) => s.id === "liga").capabilities.publish, "vercel-publish", "свідок: форма ЛІГА (4d-4b: явний запис, а не 'legacy')");
 
   await openCanvas(page, url);
   await page.click('#bar [data-dd="pub"]');

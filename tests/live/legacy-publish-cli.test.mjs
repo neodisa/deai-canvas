@@ -73,7 +73,7 @@ test("публікація ЛІГИ: клік → модуль → фальши�
   const server = await startServer(null, {
     portBase: PORT_BASE,
     env: { PATH: `${fakeDir}:${process.env.PATH}` },
-    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { a: { dir: A.dir, title: "Задача A" } } }],
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, roles: ["vcs", "publish"], tasks: { a: { dir: A.dir, title: "Задача A" } } }],   // 4d-4b: явні записи мігрованої ЛІГИ
   });
   t.after(() => stop(server.child));
   t.after(() => rmSync(server.home, { recursive: true, force: true }));

@@ -468,7 +468,7 @@ test("3: ЛІГА-простір — capabilities.publish 'legacy', смуга �
 
   const reg = await spacesApi(url);
   const liga = reg.spaces.find((s) => s.id === "liga");
-  assert.equal(liga.capabilities.publish, "legacy", `capabilities простору ЛІГА: ${JSON.stringify(liga.capabilities)}`);
+  assert.equal(liga.capabilities.publish, "vercel-publish", `capabilities простору ЛІГА (4d-4b: явний запис): ${JSON.stringify(liga.capabilities)}`);
   assert.equal(liga.integrations, true, "свідок: ЛІГА-простір має інтеграції");
 
   await openCanvas(page, url);

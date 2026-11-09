@@ -149,7 +149,7 @@ describe("зовнішня оболонка на зібраному publish/", (
   before(async () => {
     const { dir } = taskFixture({ html: PAGE });
     secondIteration(dir);
-    tool = await startServer(dir, { portBase: PORT_BASE });
+    tool = await startServer(dir, { portBase: PORT_BASE, liga: true });   // 4d-4b: збірка превʼю — через `vercel-publish` ЛІГИ
     const res = await fetch(`${tool.url}/api/publish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -490,7 +490,7 @@ describe("«Огляд» на зібраному publish/ з кадрами", ()
        знімає), і рівно на ній перевіряється, що «Огляд» без кадрів вибиває в
        «Макет», а не в порожнє полотно. */
     secondIteration(dir);
-    tool = await startServer(dir, { portBase: SHOT_PORT_BASE });
+    tool = await startServer(dir, { portBase: SHOT_PORT_BASE, liga: true });
     /* Справжня зʼємка фікстури: після неї в `iterations/it1/shots/` лежать
        `.webp` і манифест, які публікація повезе в `publish/it1/_frames/`. */
     await runShoot({ dir: it1, it: "it1", url: tool.url, all: true,
@@ -806,7 +806,7 @@ describe("довга назва задачі не вилазить із крош
   before(async () => {
     const { dir } = taskFixture({ html: PAGE });
     secondIteration(dir);
-    tool = await startServer(dir, { portBase: CRUMB_PORT_BASE, title: LONG_TITLE });
+    tool = await startServer(dir, { portBase: CRUMB_PORT_BASE, title: LONG_TITLE, liga: true });
     const res = await fetch(`${tool.url}/api/publish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

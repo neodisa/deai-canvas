@@ -64,7 +64,7 @@ test.after(async () => { await browser?.close(); });
 async function boot(t, { first = "liga", portBase = PORT_BASE, requests = null } = {}) {
   const A = taskFixture({ html: HTML("A") });
   const X = taskFixture({ html: HTML("X") });
-  const legacy = { name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { a: { dir: A.dir, title: "Задача A" } } };
+  const legacy = { name: "Liga", id: "liga", color: "space-2", legacy: true, roles: ["comments", "dashboard", "notify", "vcs", "publish"], tasks: { a: { dir: A.dir, title: "Задача A" } } };   // 4d-4b: мігрована ЛІГА — явні записи
   const p = { name: "P", id: "p", color: "space-3", tasks: { x: { dir: X.dir, title: "Задача X" } } };
   const spaces = first === "liga" ? [legacy, p] : [p, legacy];
   const server = await startServer(null, { portBase, spaces });

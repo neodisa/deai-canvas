@@ -17,7 +17,9 @@ const PAGE = (id) => `<!DOCTYPE html><html><head><meta charset="utf-8"></head><b
 
 test("пароль превʼю: задати з дропдауна, чесний стан до й після публікації", async (t) => {
   const { dir } = taskFixture({ html: PAGE });
-  const { child, url } = await startServer(dir, { portBase: PORT_BASE });
+  /* 4d-4b: дропдаун публікації є лише там, де є постачальник публікації, — мігрована ЛІГА з `vercel-publish` (секрету `password` нема → типовий 1100;
+     корінь `tasks.json` пароля не дає). */
+  const { child, url } = await startServer(dir, { portBase: PORT_BASE, liga: true });
   t.after(() => child.kill());
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -88,4 +90,26 @@ test("пароль превʼю: задати з дропдауна, чесни�
   st = await item();
   assert.doesNotMatch(st.cls, /dd-item--warn/);
   assert.equal(st.link.disabled, false);
+});
+
+test("пароль превʼю з СЕКРЕТУ vercel-publish (4d-4b): дропдаун показує його, а не 1100; корінь tasks.json пароля не дає", async (t) => {
+  const { dir } = taskFixture({ html: PAGE });
+  const { child, url, legacyFile } = await startServer(null, {
+    portBase: PORT_BASE + 50,
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, roles: ["vcs", "publish"],
+      records: { publish: { secrets: { password: "pw-from-record" } } }, tasks: { fixture: { dir, title: "Фікстура" } } }],
+  });
+  t.after(() => child.kill());
+  /* Корінь старого файла з іншим паролем — рантайм його не читає. */
+  const cfg = JSON.parse(readFileSync(legacyFile, "utf8"));
+  writeFileSync(legacyFile, JSON.stringify({ ...cfg, preview_password: "pw-from-root" }));
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  await page.goto(`${url}/app/`);
+  await page.waitForSelector('#bar [data-dd="pub"]');
+  await page.click('#bar [data-dd="pub"]');
+  const text = await page.locator('#bar [data-act="pubpw"]').innerText();
+  assert.match(text, /pw-from-record/, `пароль із секрету запису: ${text}`);
+  assert.doesNotMatch(text, /pw-from-root|1100/, "корінь tasks.json і типовий 1100 пароля не дають");
 });
