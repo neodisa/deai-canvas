@@ -20,9 +20,9 @@ links for your team.
 > silence switch) through the `supabase-teams` module and the same Supabase project as the comments. The legacy space
 > runs on all of these modules too; what is left of it is the `integrations` flag (stage 4d). The old «profile» of a task
 > is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
-> `space.json`), and the core no longer tells the in-house setup from a module by a string: an *implicit provider* object
-> does it, and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. Since 0.17 the legacy space moves its
-> tracker, dashboard and Teams config, since 0.18 its comments and git sync, and since 0.19 its publishing, into explicit modules of its own by itself, and since 0.20 its tracks are explicit for good (no implicit adapter in the runtime), with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> `space.json`), and the core no longer tells the in-house setup from a module by a string (since 0.21 there is no implicit
+> provider at all: a role without an explicit enabled record is off), and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. Since 0.17 the legacy space moves its
+> tracker, dashboard and Teams config, since 0.18 its comments and git sync, and since 0.19 its publishing, into explicit modules of its own by itself, since 0.20 its tracks are explicit for good (no implicit adapter in the runtime), and since 0.21 the last originals (the git key, the preview password) are copied and **no original is read any more** (the root of `tasks.json`, the environment, `pipeline-feedback`) — credentials are entered on the Connections screen — all with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -295,10 +295,10 @@ Comments have two channels. The **local** one is for the agent: pins you leave f
 `comments` *role*: a module connects a comment service, and the same pins then appear on the
 canvas pages (the «Team» tab), on the Overview, in published previews (folder and Vercel) and
 for the agent (`inbox`, `inbox resolve`). A space without a `comments` module has no team
-channel; enabling one adds it. A migrated legacy (in-house) space keeps its original shared
-Supabase until you enable a module there — through the same `supabase-comments` module, as an
-implicit provider — and **a disabled module in such a space returns it to
-the shared service** (so does removing its entry from `space.json`). If an enabled module is
+channel; enabling one adds it. A migrated legacy (in-house) space has its shared Supabase as an
+ordinary `supabase-comments` record (since 0.21 there is no implicit provider): **a disabled or
+removed record means no team comments** in that space, and nothing brings the shared service
+back. If an enabled module is
 broken — in any space — a canvas page shows local comments with a notice and the Overview and
 `inbox` report the error; nothing falls back silently to the shared service. (A stale entry of
 some unknown module, one that never was a comments module, is not an enabled comments module and
@@ -328,16 +328,15 @@ same project) and the browser adapter uploads the screenshot of a pin to
 `<bucket>/comment-shots/<id>.jpg` and keeps the public address in the pin; without it pins have no
 uploaded screenshot. The bucket and its policies are yours to create (details in the module README).
 
-**The legacy (LIGA) space** has no module to enable: the address and the **public** key of its shared
-Supabase are read from the installation — the root of its `tasks.json`:
-
-```json
-{ "supabase_url": "https://<ref>.supabase.co", "supabase_key": "sb_publishable_…" }
-```
-
-(or the environment variables `SUPABASE_URL` and `SUPABASE_KEY`). The same pair feeds the
-team dashboard and the Teams silence (through the modules `supabase-dashboard` and `supabase-teams`). Without it the team comments of that space are off — the page shows the local pins
-and a notice, and `inbox` reports `comments-unconfigured`. The screenshot bucket there is `overview-thumbs`.
+**The legacy (LIGA) space** keeps the address and the **public** key of its shared Supabase in its
+`supabase-comments` record (the address in the settings, the key as a secret) — the migration of
+0.17–0.21 copies them there, and you enter or rotate them on the **Connections** screen. **The old
+sources are not read any more** (since 0.21): not the root of `tasks.json` (`supabase_url`,
+`supabase_key`), not the environment variables `SUPABASE_URL` and `SUPABASE_KEY`, not
+`pipeline-feedback`; a key added to the root by hand has no effect. The same address and key feed the
+team dashboard and the Teams silence (the records of `supabase-dashboard` and `supabase-teams`).
+Without the record the team comments of that space are off — the page shows the local pins and a
+notice, and `inbox` reports `comments-unconfigured`. The screenshot bucket there is `overview-thumbs`.
 
 **Your own service.** Any comment service — PocketBase, Firebase, your own API — connects with
 a small module: a browser adapter (`window.DeaiComments.create(cfg)`) and four server
@@ -469,10 +468,11 @@ security settings of the Atlassian account; the key is kept in `~/.deai/secrets.
 statuses are still shown); «Try again» asks again, and the badges of the last good answer stay. A task key that Jira does not
 know fails the whole batch of keys (Jira answers HTTP 400 to the query) — fix that key.
 
-**The LIGA space** reaches its Jira through the same module with no wizard step: add the address as `jira_base` to the legacy
-`tasks.json` (the file with `supabase_url`), for example `"jira_base": "https://demo.atlassian.example"`; the credentials are
-`JIRA_EMAIL` and `JIRA_TOKEN` in the environment or the two files in `~/.claude/pipeline-feedback/`. Without `jira_base` that
-space has no statuses, and when its tasks carry Jira keys «Mine» says that Jira is not configured.
+**The LIGA space** reaches its Jira through the same module, and since 0.21 only through its explicit `jira-tracker` record: the
+address, the email and the token are entered on the **Connections** screen (the migration copied the old values there). The old
+sources — `jira_base`, `jira_email`, `jira_token` in the root of `tasks.json`, `JIRA_EMAIL` and `JIRA_TOKEN` in the environment, the
+two files in `~/.claude/pipeline-feedback/` — are not read any more. Without the record that space has no statuses, and when its
+tasks carry Jira keys «Mine» says that Jira is not configured.
 
 ## Teams notifications
 
@@ -591,22 +591,39 @@ python3 bin/migrate_liga.py run                         # migrate now (backup ->
 python3 bin/migrate_liga.py restore <stamp> [--hold]    # put back space.json and the LIGA secrets from <DEAI_HOME>/backups/<stamp>
 ```
 
-Before the first start, put the Jira credentials in `tasks.json` or `pipeline-feedback` (not only in the shell environment): a first
-start from the Dock/PWA has no environment, then the tracker is not migrated and is not retried (add the `jira-tracker` card on
-Connections instead). The start line and `status` list every role that was not migrated, with its reason code.
-Upgrading: after the migration the Jira token and the Supabase key of LIGA live in `secrets.json`; rotate them on the Connections
-screen. The old sources (environment, `pipeline-feedback`, the root of `tasks.json`) stay only as a fallback for the `bin/` tools.
-Migrated tracks are a snapshot: edit `tracks` in the LIGA `space.json`, not `design_work_root(s)`/`profile_repos` in the old file.
+Credentials go in on the **Connections** screen. Before the first start of the migration the old values must be in the root of
+`tasks.json` (a first start from the Dock/PWA has no environment, so the shell variables are not enough, and `pipeline-feedback` is
+not read by the runtime any more); a role that had nothing to migrate from (`no-jira`, `no-supabase`) is not retried — add its card on
+Connections. The start line and `status` list every role that is **off**, with its reason code and the command to fix it (a role that was
+not migrated is simply off since 0.21; `python3 bin/migrate_liga.py unhold <mark>` lifts a manual hold).
+Upgrading: after the migration the Jira token, the Supabase key and the preview password of LIGA live in `secrets.json`, and the
+git key and the host IP in the settings of `git-sync`; **the old sources (the root of `tasks.json`, the environment, `pipeline-feedback`) are
+not read by Deai any more**, and a root key edited by hand after the migration has no effect. Rotate on the Connections screen.
+Migrated tracks are a snapshot: edit `tracks` in the LIGA `space.json`, not `design_work_roots`/`profile_repos` in the old file.
 
-**Four steps.** The migration is an ordered list of independent steps, each with its own mark, its own dated backup and its own
+**Where a value lives now (the map «key → holder»).** Look for it on the Connections screen:
+
+| Old place (root of `tasks.json`, environment, `pipeline-feedback`) | Holder since 0.21 |
+|---|---|
+| `supabase_url`, `SUPABASE_URL` | the setting `url` of `supabase-comments`, `supabase-dashboard`, `supabase-teams` |
+| `supabase_key`, `SUPABASE_KEY` (and `SUPABASE_SERVICE_KEY` for `bin/overview_push.py`) | the secret `key` of the same three records |
+| `jira_base`, `jira_email` | the settings `base`, `email` of `jira-tracker` |
+| `jira_token`, `JIRA_TOKEN` and the `pipeline-feedback` files | the secret `token` of `jira-tracker` |
+| `gitlab_ssh_key`, `gitlab_host_ip` | the settings `ssh_key`, `host_ip` of `git-sync` |
+| `preview_password` | the secret `password` of `vercel-publish` (a password of a task wins over it; without either, `1100`) |
+
+**Five steps.** The migration is an ordered list of independent steps, each with its own mark, its own dated backup and its own
 restore: `liga-4d3a` (0.17: tracks and the roles `tracker`, `dashboard`, `notify`), `liga-4d3b` (0.18: the roles `comments` and
 `vcs` as the built-in modules `supabase-comments` and `git-sync`, with the setting `compat` that keeps the old channels, flat
 mirrors and «design-canvas» / «GitLab» texts), `liga-4d3c` (0.19: the role `publish` as the built-in module `vercel-publish`
 with `compat: design-canvas`, which keeps the projects and the scope of `tasks.json`, the preview password and the old URLs; no
-secrets are written) and `liga-4d4a` (0.20: the tracks of the old adapter are written into `space.json` whenever it still applied,
+secrets are written), `liga-4d4a` (0.20: the tracks of the old adapter are written into `space.json` whenever it still applied,
 and an old task record that has a `profile` but no `track` gets `track = profile`, with `tasks.json.bak` next to the file; the
-start line prints the notes of the step). One start runs them in order (a jump from 0.16 gives four backups,
-`<stamp>-liga-4d3a`, `-4d3b`, `-4d3c` and `-4d4a`); an `abort-*` or `skip-busy` of a step stops the later ones at that start. A LIGA with
+start line prints the notes of the step) and `liga-4d4b` (0.21: the last originals are copied — `gitlab_ssh_key` / `gitlab_host_ip`
+into `git-sync`, `preview_password` into the secret of `vercel-publish` — and then every original whose value provably lives in a
+record is removed from the root of `tasks.json`, with `tasks.json.bak` next to the file; a root password that differs from the
+secret replaces it, and the old secret stays in the backup). One start runs them in order (a jump from 0.16 gives five backups,
+`<stamp>-liga-4d3a`, `-4d3b`, `-4d3c`, `-4d4a` and `-4d4b`); an `abort-*` or `skip-busy` of a step stops the later ones at that start. A LIGA with
 `integrations` off is not migrated at all (`skip-integrations-off`). `status`, `dry-run` and `run` print every step; the journal
 `<DEAI_HOME>/migrations/last.json` keeps the report of the last action and a map `steps` with the report of each step.
 
@@ -615,6 +632,11 @@ they were before that step. While a later step is applied, restoring an earlier 
 nothing is written; the message names the backup to roll back first). `restore` first saves the current files to
 `backups/<stamp>-pre-restore/`. `--hold` keeps the next start from migrating that step again, and a held earlier step holds
 the later ones too.
+
+⛔ Before downgrading from 0.21 to 0.20 run `python3 bin/migrate_liga.py restore <stamp-e> --hold` (the stamp of the `liga-4d4b`
+backup): it puts back `space.json` and the secrets and **merges the deleted keys back** into the live `tasks.json` (a key a person
+wrote there after the step is kept). Without it 0.20 has no preview password, no git key for the registry and no fallbacks. Then,
+if needed, the older steps in reverse order. `tasks.json.bak` is a manual rollback only.
 
 ⛔ Before downgrading from 0.20 to 0.19 run `python3 bin/migrate_liga.py restore <stamp-d> --hold` (the stamp of the `liga-4d4a`
 backup). It puts back `space.json` only: `tasks.json` is the live file of the person, so it keeps `track = profile` (safe for 0.19),
@@ -625,10 +647,10 @@ and `tasks.json.bak` is a manual copy.
 for every published task, and the preview without the gate. To 0.17: `restore <stamp-c> --hold`, then `restore <stamp-b> --hold`
 (0.17 ignores `compat` of the comments and git sync, so the comment channels would switch to `deai/<space>/<task>` and the git mirrors would
 be cloned again under `<DEAI_HOME>/cache`). Rotation: the Supabase key of the comments is a copy in `secrets.json` too (rotate it on
-Connections); `gitlab_ssh_key` / `gitlab_host_ip` in the root of `tasks.json` keep working until 4d-4b (0.21).
+Connections); since 0.21 `gitlab_ssh_key` / `gitlab_host_ip` of the root are copied into `git-sync` by the fifth step and the root is not read.
 
 Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-d> --hold`, `<stamp-c>`, `<stamp-b>`, then `<stamp-a>`, since an earlier step is refused while a later one is applied); a `vercel-publish` card enabled by hand without `compat` publishes through the module path (new URLs, no gate); the fourth step writes the tracks even when they differ from the old adapter (the differences are notes of the step, see `CHANGELOG.md`), except for more than 20 track ids, which stays `abort-tracks` until `profile_repos` / `design_work_roots` are cleaned; a LIGA folder inside a git work tree is not
-migrated; a partial migration is final. The full list and the status codes are in `CHANGELOG.md`, `[0.20.0]`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
+migrated; a partial migration is final; the single copy of the credentials is in the Deai home (`secrets.json` and `backups/`), and `skip-path-in-git` keeps the roles of LIGA off until the folder leaves the git work tree. The full list and the status codes are in `CHANGELOG.md`, `[0.21.0]`, `[0.20.0]`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
 
 ## Roadmap
 
@@ -692,9 +714,10 @@ migrated; a partial migration is final. The full list and the status codes are i
        - ✅ **4d-4a** (0.20) — the tracks of LIGA are explicit for good (a fourth migration step, `liga-4d4a`, LIFO restore on
          four steps), the implicit track adapter leaves the runtime, and `profile` is read on the boundaries only (`task-new`,
          the shared registry, `_liga_flow`);
-       - **4d-4b** (0.21) — the last copies (`gitlab_ssh_key` / `gitlab_host_ip` into `git-sync`, the preview password into
-         `vercel-publish`), the implicit provider goes, the core stops reading the originals (the root of `tasks.json`, the
-         environment, `pipeline-feedback`; deleting those is not Deai's job: they are shared with the separate LIGA tool);
+       - ✅ **4d-4b** (0.21) — the last copies (`gitlab_ssh_key` / `gitlab_host_ip` into `git-sync`, the preview password into
+         `vercel-publish`) by a fifth migration step (`liga-4d4b`), the implicit provider goes, the core stops reading the originals
+         (the root of `tasks.json`, the environment, `pipeline-feedback`; deleting those is not Deai's job: they are shared with the
+         separate LIGA tool); a LIGA that was not migrated has all six roles off, named at the start;
        - **4d-4c** (0.22) — the `integrations` flag, the API value `'legacy'`, the fallback branches of the JS, `_liga_flow` and
          the `/api/gitlab-*` route aliases.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.

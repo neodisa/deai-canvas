@@ -3,6 +3,114 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.21.0] — 09.11.2026
+
+Stage 4d-4b: the originals of the LIGA space are gone from the runtime, and the implicit provider leaves. A **fifth migration step,
+`liga-4d4b`**, copies the last originals of the root of the LIGA `tasks.json` into the explicit records and then removes from that
+root every original whose value provably lives in a record. After that the runtime reads **no original**: not the root of
+`tasks.json`, not the environment, not `pipeline-feedback` — including a root key that a person edits by hand after the migration
+(it simply has no effect). `Implicit` is removed: a role of LIGA without an explicit enabled record is off. For a person nothing
+changes in the usual case (a migrated LIGA): the same comments, dashboard, statuses, git sync and publishing. The differences are
+listed below. Deleting the originals **outside** `tasks.json` (environment variables, the `pipeline-feedback` files) is not the job
+of Deai: they are shared with the separate LIGA tool; Deai only stops reading them.
+Design: `docs/superpowers/specs/2026-11-07-liga-originals-gone-design.md`; plan: `docs/superpowers/plans/2026-11-07-liga-originals-gone.md`.
+The behaviour of 0.20.0 is pinned by the snapshot `tests/fixtures/liga-migration/before-4d4b.json`.
+
+### Added
+
+- **A fifth migration step `liga-4d4b`** in `app/liga_migrate.py` (`ALL_STEPS = (A, B, C, D, E)`, the new field `Step.originals`). It
+  has its own mark (`migrations.liga-4d4b`: `copied`, `removed`, `kept`, `notes` — key names only, never values), its own dated
+  backup and its own restore. **What it copies:** `gitlab_ssh_key` / `gitlab_host_ip` into the settings `ssh_key` / `host_ip` of the
+  `git-sync` record, and `preview_password` into the secret `password` of the `vercel-publish` record (only into an existing record).
+  **What it removes** from the root: `supabase_url`, `supabase_key`, `jira_base`, `jira_email`, `jira_token`, `gitlab_ssh_key`,
+  `gitlab_host_ip`, `preview_password` — each only when its effective value is proven in the holder (the `partial:supabase` rule keeps
+  the Supabase pair unless all three records hold it). `design_work_root(s)`, `profile_repos`, `registry`, `current` and `tasks` are
+  never touched. The order is copy, verify by reading, then delete under the write lock with `tasks.json.bak` next to the file and an
+  `fsync` before the deletion. A marker guard (`marker-kept:<key>`) keeps the registry from being rebuilt as a space without
+  integrations. Environment variables and `pipeline-feedback` are not touched.
+- **New statuses and notes.** `abort-originals` (the root was not written; the copies lie there, nothing was deleted — the next
+  start repeats), `abort-verify` (a copy does not read back; nothing deleted), `abort-write` (the space folder is read-only);
+  restore of the step has `refuse-tasks-unreadable` (the live `tasks.json` is unreadable **or missing** — recreate the file, `{}` is
+  enough). Notes: `differs:<key>`, `no-record:<module>`, `partial:supabase`, `unfit:<key>`, `marker-kept:<key>`,
+  `replaced:preview_password`. A root `preview_password` of `0`, `0.0` or a boolean is `unfit`.
+- **Unmigrated LIGA: all six roles are off, and the start and `status` name them.** When a step is skipped or aborted (`skip-held`,
+  `skip-path-in-git`, `skip-tasks-unreadable`, `skip-space-json-unreadable`, `abort-*`…) the roles `publish`, `comments`, `vcs`,
+  `dashboard`, `tracker` and `notify` are simply off. `liga_migrate.roles_state()` gives one line per role (the module, the reason
+  code, the command to fix it); the start prints them and `bin/migrate_liga.py status` has a section «Ролі ЛІГИ». A LIGA with
+  `integrations` off had no roles in 0.20 either and says so.
+- **`bin/migrate_liga.py unhold <mark>`** removes a `{held: true}` mark (it removes nothing else); the old way was a hand edit of
+  `space.json`. `status` names it for a held step, and `restore` prints the keys it **kept live** (`kept_live` of the root and
+  `kept_live_secrets`; key names only).
+- **The isolation law lives in `app/isolation.py`** (it replaces `app/implicit.py`): `route(role)` for the layer-off seam, the fake
+  seams `DC_TEAM_FAKE` / `DC_TRACKER_FAKE` / `DC_TEAMS_FAKE` for `shared_state` records, and `real_home()` (the home by `pwd`, not by
+  `$HOME`). An isolated run in the **real** Deai home never reaches the shared service: comments answer **`comments-isolated`**
+  (HTTP 409), and the preview password is `1100`; in a temporary home of a test the secrets of the record work.
+- **A capability error is named per role.** `capabilities.error` stays the first error code, and the new `capabilities.errors`
+  (`{role: code}`) names every failed role. Only `error == "space-json-unreadable"` means «the space file is unreadable» (the
+  Connections screen hides the cards); a lost module of one role is shown on the line «Now» of that role and the other cards stay.
+- **Guards:** `NoOriginalsRead` (AST: no runtime reader of an original except the migration, `LEGACY_MARKERS` and the log path),
+  `NoImplicit`, `ProviderCallersPinTheSpace`, a parity test `AfterMigrationParity4d4b` (five stands, the exact table of differences,
+  the exact count of stopped network attempts) and the mutation table of the plan.
+
+### Changed
+
+- **The preview password is: the task, then the secret `password` of `vercel-publish`, then `1100`.** The root `preview_password` is
+  never read. An unreadable `secrets.json` **fails closed**: publishing answers 409 «секрети простору не читаються», setting a
+  password through `/api/preview-password` is refused (a non-empty per-task password needs no secrets file and is still set), the
+  daily rotation script skips the task, the interface shows the message in the bar and refuses to copy a link (no empty `#k=` link).
+- **Owner decision 09.11.2026: a root `preview_password` that differs from the secret of the record replaces the secret.** People keep
+  the password they used; the old secret goes to the backup of the step, the summary names `replaced:preview_password`, and `restore`
+  puts the old secret back (a secret that a person changed after the step is not overwritten: `kept_live_secrets`). Every other
+  `differs:*` keeps the root and the record untouched.
+- **The git key comes from the `git-sync` record** (`ssh_key`, `host_ip`); the root `gitlab_*` keys are not read any more, the
+  shared registry (`bin/registry.py`) takes the key from the record too and ignores a disabled record. Without a key the default
+  `~/.ssh/gitlab_ed25519` stays.
+- **An enabled built-in record whose module cannot be loaded is `module-error` for every role** (it was a silent «none» or a
+  «not loaded»); publishing with an enabled but unloadable `vercel-publish` answers **502 `module-error`** (it was 409
+  `no-publish-module`). A broken module catalog is `vcs-error` instead of a raw exception.
+- **`capabilities` of a space whose `space.json` is unreadable has `None` for every role** (it had `'legacy'` for `publish` and
+  `vcs`), so for such a LIGA the publish and sync buttons are hidden and the Connections screen shows the error.
+- **After a migration a publish whose root pair was removed still carries the comment layer:** the comments follow the record (a
+  disabled or removed `supabase-comments` record gives a preview with no layer, as before).
+- **The texts «not configured» of comments, dashboard, notify and tracker name the «Підключення» screen** instead of `tasks.json` or
+  the environment. `bin/overview_push.py` reads no environment: with no dashboard record it says «нема постачальника командного
+  дашборда»; the service key is entered as the secret `key` of `supabase-dashboard`.
+- **`vercel-publish` 1.3.0:** the label of the setting `compat` now says that the preview password is the task's first, then the
+  secret of the module (it used to say «from `tasks.json`»).
+- **Signatures:** `serve.vcs_target`, `vcs_task`, `gitlab_cfg` and `preview_password(task, space)` have no `cfg` argument;
+  `serve.supabase_config`, `serve.jira_config` and `install_config.{supabase,jira,service_key}_*` are removed (the copies live in
+  `liga_migrate`).
+
+### Removed
+
+- **`Implicit`** (`app/implicit.py`, the `'legacy'` provider of a role) and the reading of the root of `tasks.json`, of
+  `SUPABASE_*`, `JIRA_*` and of `~/.claude/pipeline-feedback/` by the runtime and by `bin/overview_push.py`.
+
+### Upgrading
+
+- **Five steps, five backups.** A user who comes from 0.16 gets `<stamp>-liga-4d3a`, `-4d3b`, `-4d3c`, `-4d4a`, `-4d4b`; from 0.20 only
+  the last one. Roll them back in reverse order (the newest first).
+- **⛔ Before a downgrade to 0.20 run `python3 bin/migrate_liga.py restore <stamp-E> --hold`** (the stamp of the `liga-4d4b`
+  backup). It puts back `space.json` and the LIGA secrets and **merges the deleted keys back** into the live `tasks.json` (a key a
+  person wrote there after the step is kept; the file is never rewritten as a whole). Without it 0.20 works without the preview
+  password (the gate falls to `1100`), without the git key of the registry and without the Supabase and Jira fallbacks.
+  `tasks.json.bak` is a manual rollback (the bytes before the last deleting run); copying it back erases the tasks created after
+  the step. Further, if needed, `restore` of `-4d4a`, `-4d3c`, `-4d3b`, `-4d3a` (LIFO).
+- On a machine where the step did not run (an unmigrated LIGA) there is nothing to roll back; 0.20 brings the implicit provider back.
+- Rotation: the keys of LIGA live in `secrets.json`; rotate them on the Connections screen.
+
+### Known limits
+
+- **The single copy of the credentials is in the Deai home** (`secrets.json` and `backups/` side by side). After the step the root
+  of `tasks.json` no longer holds them; keep your own copy of the home if you need one.
+- **`tasks.json.bak` is the manual rollback**, not a copy of the original: a second deleting run overwrites it.
+- **The root `preview_password` of an ordinary space no longer works** (only the task or the secret of `vercel-publish`).
+- **`skip-path-in-git` is permanent** while the space folder is inside a git work tree: the roles do not come back until the
+  folder moves out of it.
+- **The law of isolation (Д6) guards the real-home location, not the content:** an isolated run whose Deai home is a copy of the
+  real one still reaches the live service.
+- A partial migration is final, and the Supabase pair is all or nothing (`partial:supabase`).
+
 ## [0.20.0] — 07.11.2026
 
 Stage 4d-4a: the tracks of LIGA become explicit for good, and the implicit track adapter leaves the runtime. A **fourth migration

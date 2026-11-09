@@ -16,9 +16,9 @@ stage 4d-3a (the migration of the LIGA space: explicit tracks and the roles `tra
 4d-3b (the second migration step: the roles `comments` and `vcs` of LIGA as explicit modules, 0.18.0) and stage 4d-3c (the
 third migration step: the role `publish` of LIGA as the explicit module `vercel-publish`, 0.19.0) and stage 4d-4a (the fourth
 migration step: the tracks of LIGA explicit for good, the implicit track adapter and the reading of `profile` from records gone,
-0.20.0) — see *Status* at the end.
-Next: stage 4d-4b (0.21.0, the last copies and the implicit provider) and 4d-4c (0.22.0, the `integrations` flag and the API
-value `'legacy'`), when the original setup becomes an ordinary space.
+0.20.0) and stage 4d-4b (the fifth migration step: the last originals copied and removed from the root of `tasks.json`, no original
+read by the runtime, the implicit provider gone, 0.21.0) — see *Status* at the end.
+Next: stage 4d-4c (0.22.0, the `integrations` flag and the API value `'legacy'`), when the original setup becomes an ordinary space.
 
 ## Goal
 
@@ -130,7 +130,7 @@ canvas for their workflow without touching the core.
        - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stays for a non-migrated LIGA: it goes in 4d-4c, 0.22);
      - **4d-4** — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go. Three releases:
        - ✅ **4d-4a** (0.20.0) — the tracks of LIGA explicit (the fourth migration step), no adapter in the runtime, `profile` on the boundaries only;
-       - **4d-4b** (0.21.0) — the last copies, the implicit provider, the core stops reading the originals;
+       - ✅ **4d-4b** (0.21.0) — the last copies, the implicit provider, the core stops reading the originals;
        - **4d-4c** (0.22.0) — the `integrations` flag, the API value `'legacy'`, the fallback JS branches, `_liga_flow`, the `/api/gitlab-*` aliases;
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
@@ -683,19 +683,39 @@ sub-releases of 4d-3. What is built:
   it is still written into new LIGA records for old colleagues.
 - Details, differences and limits: `CHANGELOG.md`, `[0.20.0]`; design: `docs/superpowers/specs/2026-11-07-liga-tracks-final-design.md`.
 
+### Stage 4d-4b — the originals of the LIGA space are gone from the runtime (0.21.0)
+
+Status: done. Spec: `docs/superpowers/specs/2026-11-07-liga-originals-gone-design.md`; plan:
+`docs/superpowers/plans/2026-11-07-liga-originals-gone.md`.
+
+- **A fifth migration step, `liga-4d4b`** (`ALL_STEPS = (A, B, C, D, E)`, LIFO restore on five steps): it copies `gitlab_ssh_key` /
+  `gitlab_host_ip` into `git-sync` and `preview_password` into the secret of `vercel-publish`, then removes from the root of the LIGA
+  `tasks.json` every original whose value provably lives in a record (copy, verify by reading, delete under the write lock, with
+  `tasks.json.bak` next to the file). A root password that differs from the secret replaces it (owner decision 09.11.2026): the old
+  secret stays in the backup and `restore` puts it back. `restore` of the step **merges** the deleted keys back into the live
+  `tasks.json`.
+- **The runtime reads no original:** not the root of `tasks.json`, not `SUPABASE_*`/`JIRA_*`, not `pipeline-feedback` (an AST guard,
+  `NoOriginalsRead`, keeps readers out of everything but the migration). A key edited by hand after the migration has no effect;
+  credentials are entered on the Connections screen.
+- **`Implicit` is removed** (`app/implicit.py`): the provider of a role is an explicit enabled record or nothing. The layer-off seam,
+  the fake seams and the isolation law moved to the pure module `app/isolation.py`; an isolated run in the real home never reaches
+  the shared service (`comments-isolated`).
+- **An unmigrated LIGA has all six roles off**, and the start and `status` name each one with its reason and the command to fix it;
+  `bin/migrate_liga.py unhold <mark>` lifts a manual hold. An enabled built-in record whose module cannot be loaded is
+  `module-error` for every role.
+- **Preview password:** task, then the secret of `vercel-publish`, then `1100`; an unreadable `secrets.json` fails closed.
+- **Capability errors are per role** (`capabilities.errors`); only `space-json-unreadable` hides the cards of the Connections screen.
+- Details, differences and limits: `CHANGELOG.md`, `[0.21.0]`.
+
 ### What stays for later
 
-- **Left for 4d-4b / 4d-4c** (stage 4d; 4d-1, 4d-2, 4d-3a, 4d-3b, 4d-3c and 4d-4a are done; what stays of the literal `'legacy'` —
-  the API value of `capabilities` for a non-migrated LIGA, the build manifest, the id of the implicit space — goes with the
-  implicit provider):
+- **Left for 4d-4c** (stage 4d; 4d-1, 4d-2, 4d-3a, 4d-3b, 4d-3c, 4d-4a and 4d-4b are done; what stays of the literal `'legacy'` —
+  the API value of `capabilities` for a non-migrated LIGA, the build manifest, the id of the implicit space — goes with 4d-4c):
   - ✅ **4d-4a** (0.20.0, done): the tracks of LIGA are explicit (`liga-4d4a`), `tracks.of_task` reads `track` only, `profile` is
     read on three boundaries (`task-new`, the registry pull, `_liga_flow`), `legacy_*`/`profile_repos` live only inside
     `liga_migrate`. See `CHANGELOG.md`, `[0.20.0]`.
-  - **4d-4b** (0.21.0): the move of `gitlab_ssh_key` / `gitlab_host_ip` from the root of `tasks.json` into the settings of
-    `git-sync`, the preview password into `vercel-publish`, the implicit provider goes, the core stops reading the originals
-    (the root of `tasks.json`, the environment, `pipeline-feedback`). Deleting the originals outside `tasks.json` is not Deai's
-    job: they are shared with the separate LIGA tool.
-  - **4d-4c** (0.22.0): the `integrations` flag (the outgoing gate, `static-publish` by default, `task-new`), the API value `'legacy'`,
+  - ✅ **4d-4b** (0.21.0, done): the last copies, the implicit provider gone, the core reads no original (see above).
+  - **4d-4c** (0.22.0, next): the `integrations` flag (the outgoing gate, `static-publish` by default, `task-new`), the API value `'legacy'`,
     the fallback JS branches, `_liga_flow`, the `/api/gitlab-*` route aliases, `serve._liga_like`.
   Not planned in 4d-1: a UI to edit tracks, a track choice in the «New task» dialog.
 
