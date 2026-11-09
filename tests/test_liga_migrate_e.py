@@ -1046,7 +1046,7 @@ class UnreadPreviewPassword(_StandE):
         self.root()
         self.assertEqual(self.run_e()[0], 'done')
         self.assertIsNone(self.lm.unread_preview_password_line())
-        self.assertNotIn('ігнорується', self.lm.status_text(self.lm.status()))
+        self.assertNotIn('preview_password у корені', self.lm.status_text(self.lm.status()))
 
     def test_absent_without_the_key(self):
         self.root(preview_password=None)
@@ -1056,6 +1056,22 @@ class UnreadPreviewPassword(_StandE):
         self.root()
         self.rec_all(secrets={'vercel-publish': {'password': self.PW}})
         self.assertIsNone(self.lm.unread_preview_password_line())
+
+    def test_line_says_the_shared_default_only_when_the_record_has_no_password(self):
+        self.root()
+        self.assertEqual(self.lm.unread_preview_password_line(), self.lm.UNREAD_PREVIEW_PASSWORD_LINE)
+        self.assertIn('за замовчуванням', self.lm.UNREAD_PREVIEW_PASSWORD_LINE)
+
+    def test_a_differing_record_secret_gets_its_own_line_record_wins(self):
+        self.root()
+        self.rec_all(secrets={'vercel-publish': {'password': 'other-' + self.PW}})
+        line = self.lm.unread_preview_password_line()
+        self.assertEqual(line, self.lm.DIFFERING_PREVIEW_PASSWORD_LINE)
+        self.assertNotIn('за замовчуванням', line)
+        text = self.lm.status_text(self.lm.status())
+        self.assertIn(line, text)
+        for out in (line, text):
+            self.assertNotIn(self.PW, out)
 
 
 class BakAndDurability(_StandE):

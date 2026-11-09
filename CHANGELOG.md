@@ -110,8 +110,10 @@ The behaviour of 0.20.0 is pinned by the snapshot `tests/fixtures/liga-migration
 - **The root `preview_password` of an ordinary space no longer works** (only the task or the secret of `vercel-publish`).
   If step E did not complete (`skip-path-in-git`, `skip-held`, `skip-tasks-unreadable`, `abort-*`, or the note
   `no-record:vercel-publish`) a root `preview_password` stays on disk unread and a closed preview would fall to the shared `1100`;
-  so the start prints one line («preview_password у корені tasks.json ігнорується 0.21 …», the key name only) and `bin/migrate_liga.py
-  status` repeats it until the key is consumed: run `bin/migrate_liga.py run` or set the secret `password` of `vercel-publish`.
+  so the start prints one line (the key name only) and `bin/migrate_liga.py status` repeats it until the key is consumed: run
+  `bin/migrate_liga.py run` (after `unhold` for a held step) or set the same value as the secret `password` of `vercel-publish`.
+  When the record already holds a DIFFERENT password (e.g. after `restore` or a manual change) the line says so instead: the record
+  wins; remove the root key, or run the migration to let the root win.
 - **`restore` of step E puts the root keys back, but 0.21 does not read them:** the runtime keeps using `space.json` and
   `secrets.json`; the restored keys matter only for a downgrade to 0.20.
 - **`isolation.real_home()` recognises only `<home>/.deai`:** a custom `DEAI_HOME` that points at a real location is not protected

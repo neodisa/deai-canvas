@@ -311,8 +311,9 @@ STARTUP_UNMIGRATED = [
     'ролі ЛІГИ вимкнено: dashboard (supabase-dashboard) — ' + _HOLD_TAIL,
     'ролі ЛІГИ вимкнено: tracker (jira-tracker) — ' + _HOLD_TAIL,
     'ролі ЛІГИ вимкнено: notify (supabase-teams) — ' + _HOLD_TAIL,
-    'preview_password у корені tasks.json ігнорується 0.21 — превʼю візьме спільний пароль за замовчуванням; '
-    'виправити: python3 bin/migrate_liga.py run (крок утримано (held) — спершу unhold; або задайте секрет password запису vercel-publish)',
+    'preview_password у корені tasks.json Deai не читає, а запис vercel-publish пароля не має — превʼю візьме спільний '
+    'пароль за замовчуванням; виправити: python3 bin/migrate_liga.py run (крок утримано (held) — спершу unhold; або задайте секрет password '
+    'запису vercel-publish)',
 ]
 
 #: Підсумок кроку Е (імена ключів і коди, без значень) на мігрованих стендах.

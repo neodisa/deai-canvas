@@ -1828,14 +1828,20 @@ def roles_lines(states):
 #: Рядок після кроку Е: де тепер лежать облікові (спека §6, ризик «єдина копія»). `tasks.json.bak` — теж копія (0600), поки його не перезапише наступний запис.
 ORIGINALS_REMOVED_LINE = 'оригінали видалено з tasks.json; копії — secrets.json, backups/ у домі Deai і tasks.json.bak (права 0600)'
 
-#: Рядок, коли корінь ЛІГИ ще має `preview_password`, якого 0.21 не читає: закритий превʼю тихо став би спільним `1100`. Лише імʼя ключа.
-UNREAD_PREVIEW_PASSWORD_LINE = ('preview_password у корені tasks.json ігнорується 0.21 — превʼю візьме спільний пароль за замовчуванням; '
-                                'виправити: %s (крок утримано (held) — спершу unhold; або задайте секрет password запису vercel-publish)' % _RUN_FIX)
+#: Рядок, коли корінь ЛІГИ ще має `preview_password`, а запис `vercel-publish` секрету `password` не має: Deai корінь не читає, тож закритий
+#: превʼю тихо став би спільним `1100`. Лише імʼя ключа.
+UNREAD_PREVIEW_PASSWORD_LINE = ('preview_password у корені tasks.json Deai не читає, а запис vercel-publish пароля не має — превʼю візьме спільний '
+                                'пароль за замовчуванням; виправити: %s (крок утримано (held) — спершу unhold; або задайте секрет password '
+                                'запису vercel-publish)' % _RUN_FIX)
+#: Рядок, коли корінь має `preview_password`, а секрет `password` запису — ІНШИЙ (напр. після `restore` чи ручної зміни): діє запис.
+DIFFERING_PREVIEW_PASSWORD_LINE = ('preview_password у корені tasks.json розходиться із секретом password запису vercel-publish; діє запис '
+                                   '(корінь Deai не читає) — приберіть ключ із кореня або, щоб переміг корінь, %s' % _RUN_FIX)
 
 
 def unread_preview_password_line(home=None):
-    """`UNREAD_PREVIEW_PASSWORD_LINE`, коли корінь `tasks.json` ЛІГИ має непорожній `preview_password`, якого немає в секреті `password` запису
-    `vercel-publish` (крок Е не виконано чи не спожив ключ); інакше `None`. Чиста; не кидає (нечитане — `None`). Значення не повертає."""
+    """Коли корінь `tasks.json` ЛІГИ має непорожній `preview_password`, якого немає в секреті `password` запису `vercel-publish` (крок Е не
+    виконано чи не спожив ключ): `UNREAD_PREVIEW_PASSWORD_LINE`, якщо секрету немає (превʼю впаде на спільний), або
+    `DIFFERING_PREVIEW_PASSWORD_LINE`, якщо секрет інший (діє запис); інакше `None`. Чиста; не кидає (нечитане — `None`). Значення не повертає."""
     try:
         if not spaces.layer_on():
             return None
@@ -1845,7 +1851,9 @@ def unread_preview_password_line(home=None):
         if eff is None:
             return None
         held = deai_modules._bucket(deai_modules._load_secrets(), liga['id'], 'vercel-publish').get('password')
-        return None if held == eff else UNREAD_PREVIEW_PASSWORD_LINE
+        if held == eff:
+            return None
+        return DIFFERING_PREVIEW_PASSWORD_LINE if held else UNREAD_PREVIEW_PASSWORD_LINE
     except (_Stop, OSError, ValueError, AttributeError, deai_modules.ModuleError):
         return None
 
@@ -1929,7 +1937,7 @@ def status(home=None):
         out['roles'] = roles_state(home)
     except Exception:  # noqa: BLE001 — `status` не падає через стан ролей
         out['roles'] = []
-    out['unread_preview_password'] = bool(liga) and unread_preview_password_line(home) is not None
+    out['unread_preview_password'] = unread_preview_password_line(home) if liga else None      # рядок (лише імʼя ключа) або None
     return out
 
 
@@ -1971,7 +1979,7 @@ def status_text(st):
         lines.extend(_skip_lines(last))
     lines.append('  бекапи: ' + (', '.join(st['backups']) or 'нема'))
     if st.get('unread_preview_password'):                            # 4d-4b: лише імʼя ключа
-        lines.append('  ' + UNREAD_PREVIEW_PASSWORD_LINE)
+        lines.append('  ' + st['unread_preview_password'])
     roles = st.get('roles') or []
     if roles:                                                        # 4d-4b: усі шість ролей ЛІГИ — `так`/`ні (<код>)`
         lines.append('Ролі ЛІГИ')
