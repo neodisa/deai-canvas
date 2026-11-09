@@ -32,6 +32,11 @@ from liga_fixture import LigaFixture  # noqa: E402
 
 
 def sh(args, cwd):
+    # `cwd=None` (напр. `vcs_mirror_dir` без ролі vcs) пустив би git у ТЕКУ ЗАПУСКУ — справжній репо, і `remote set-url` переписав би його
+    # origin (так і сталося 09.11.2026). Лише наявна тека під тимчасовою.
+    tmp = os.path.realpath(tempfile.gettempdir())
+    if not cwd or not os.path.isdir(cwd) or not os.path.realpath(cwd).startswith(tmp + os.sep):
+        raise AssertionError('sh: cwd має бути наявною текою під тимчасовою, а не %r' % (cwd,))
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
 
 

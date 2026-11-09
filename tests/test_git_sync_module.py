@@ -53,6 +53,10 @@ needs_symlink = unittest.skipUnless(_can_symlink(), 'симлінки недос
 
 
 def sh(args, cwd):
+    # `cwd=None` пустив би git у теку запуску — справжній репо (див. tests/test_gitlab_sync.py `sh`). Лише наявна тека під тимчасовою.
+    tmp = os.path.realpath(tempfile.gettempdir())
+    if not cwd or not os.path.isdir(cwd) or not os.path.realpath(cwd).startswith(tmp + os.sep):
+        raise AssertionError('sh: cwd має бути наявною текою під тимчасовою, а не %r' % (cwd,))
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
 
 
