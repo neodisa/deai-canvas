@@ -39,6 +39,15 @@ class LigaFixtureBothWays(unittest.TestCase):
         self.assertEqual(deai_modules._bucket(deai_modules._load_secrets(), 'legacy', 'vercel-publish').get('password'), liga_fixture.PASSWORD)
         self.assertTrue(all(s['on'] for s in liga_migrate.roles_state()))
 
+    def test_key_file_option_creates_the_key_of_the_record_inside_the_temp_home_only_on_request(self):
+        """Типово ключа нема (`SSH_KEY` веде в неіснуючий файл — поведінка наявних стендів); `key_file=True` кладе справжній файл у тимчасовий дім."""
+        liga_fixture.LigaFixture(self).env().build(roles=('vcs',))
+        self.assertFalse(os.path.exists(os.path.expanduser(liga_fixture.SSH_KEY)))
+        fx2 = liga_fixture.LigaFixture(self).env().build(roles=('vcs',), key_file=True)
+        key = os.path.expanduser(liga_fixture.SSH_KEY)
+        self.assertTrue(os.path.isfile(key))
+        self.assertTrue(key.startswith(fx2.home + os.sep), 'ключ мусить лежати в тимчасовому домі')
+
     def test_overrides_disable_one_role(self):
         fx = liga_fixture.LigaFixture(self).env().build(overrides={'tracker': {'enabled': False}})
         st = {s['role']: s for s in liga_migrate.roles_state()}

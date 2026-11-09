@@ -13,7 +13,7 @@
 стику з git баг і жив, а мок-обʼєкти його б не зловили.
 
 Етап 4a: git тепер виконує модуль `git-sync` (роль `vcs`), а ядро кличе його через старі імена (`gitlab_sync`/
-`gitlab_pull`/`gitlab_status`/`autosync`) з ціллю `gl`. Тут — поведінка ЛІГИ (неявний постачальник `'legacy'`) на тих
+`gitlab_pull`/`gitlab_status`/`autosync`) з ціллю `gl`. Тут — поведінка ЛІГИ (явний запис `git-sync` із `compat = design-canvas`, 4d-4b) на тих
 самих сценаріях; внутрішні лічильники й транспорт (`_behind_count`, `ensure_mirror`, `_git`…) переїхали в модуль і
 `tests/test_git_sync_module.py`, а лічильники в тестах нижче читає прямий git у теці дзеркала.
 """
@@ -27,6 +27,8 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from liga_fixture import LigaFixture  # noqa: E402
 
 
 def sh(args, cwd):
@@ -61,6 +63,14 @@ class GitlabSyncHonesty(unittest.TestCase):
         # serve читає DC_MIRRORS_DIR на кожен виклик (`_mirrors_base`), тому імпорт тут безпечний
         import serve
         self.serve = serve
+        # 4d-4b (R2): неявного постачальника ЛІГИ нема — стенд веде ЯВНИЙ запис `git-sync` (`compat = design-canvas`) у тимчасовому домі
+        # (`LigaFixture` підміняє `HOME`/`DEAI_HOME`). Ізоляцію (`DC_TASKS_FILE`) лишаємо: `ctx` фіксований, як був у неявного.
+        fx = LigaFixture(self, tmp=self.tmp)
+        fx.tasks_path = os.environ['DC_TASKS_FILE']
+        fx.env(DC_TASKS_FILE=fx.tasks_path, DC_MIRRORS_DIR=os.environ['DC_MIRRORS_DIR'], **self._GIT_ENV)
+        fx.build(roles=('vcs',), overrides={'vcs': {'settings': {'ssh_key': '', 'host_ip': ''}}}).fix_space()
+        with open(fx.tasks_path, 'w', encoding='utf-8') as fh:
+            json.dump({'tasks': {}, 'current': None}, fh)
 
         self.origin = os.path.join(self.tmp, 'origin.git')
         os.makedirs(self.origin)

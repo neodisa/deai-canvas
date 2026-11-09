@@ -110,9 +110,21 @@ class LigaFixture:
                     {'version': 1, 'current': 'legacy', 'spaces': [{'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': integrations}]})
 
     # --- спосіб (а): прямі записи
-    def build(self, roles=ALL_ROLES, overrides=None, tasks=None, root_extra=None):
+    def key_file(self):
+        """Справжній файл ключа SSH у тимчасовому `HOME` за шляхом, що веде `SSH_KEY` (`~/.ssh/id_example`): без нього `git-sync` із типовим
+        записом дає `vcs-bad-target` («not an existing file»), і «ключ записи ЛІГИ резолвиться» ніхто б не довів. Вміст — не ключ (вигаданий
+        рядок): модуль перевіряє лише наявність файла. Повертає абсолютний шлях."""
+        path = os.path.join(self.home, '.ssh', 'id_example')
+        self._write(path, 'not a real key\n')
+        os.chmod(path, 0o600)
+        return path
+
+    def build(self, roles=ALL_ROLES, overrides=None, tasks=None, root_extra=None, key_file=False):
         """Явні записи `roles` (рівні тим, що пишуть кроки A–C) + `secrets.json`; корінь `tasks.json` БЕЗ облікових (лише `tasks`/маркер `registry`).
-        `overrides[роль] = {'enabled': False, 'settings': {…}, 'secrets': {…}}` — заміна окремих частин запису."""
+        `overrides[роль] = {'enabled': False, 'settings': {…}, 'secrets': {…}}` — заміна окремих частин запису. `key_file=True` — ще й справжній
+        файл ключа за шляхом запису `git-sync` (`key_file()`); типово ні: поведінка наявних стендів не змінюється."""
+        if key_file:
+            self.key_file()
         self.registry()
         write_records(self.space_dir, self.deai, 'legacy', roles, overrides)
         root =dict({'registry': {'head': 'abc123', 'synced_at': '2026-11-01T10:00:00Z'}, 'tasks': tasks or {}}, **(root_extra or {}))

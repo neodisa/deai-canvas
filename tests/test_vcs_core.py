@@ -36,6 +36,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'app'))
 sys.path.insert(0, _HERE)
 import deai_modules as dm  # noqa: E402
+from liga_fixture import LigaFixture  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -220,6 +221,21 @@ class Core(unittest.TestCase):
     def write_it1(self, html):
         write(os.path.join(self.it1, 'index.html'), html)
 
+    def league_explicit(self):
+        """ІЗОЛЬОВАНИЙ простір ЛІГА з явним записом `git-sync` (`compat = design-canvas`) на місці колишнього неявного постачальника
+        (4d-4b): `LigaFixture` кладе реєстр, запис і секрети в тимчасовий дім, простір запиту зафіксовано. `DC_TASKS_FILE`/`DC_NO_OVERVIEW`
+        лишаються (ізоляція), тож `ctx` — фіксований (закон ізоляції): налаштування запису не читаються, дзеркала плоскі в `DC_MIRRORS_DIR`."""
+        fx = LigaFixture(self, tmp=self.tmp)
+        fx.tasks_path = os.environ['DC_TASKS_FILE']
+        fx.env(DC_TASKS_FILE=os.environ['DC_TASKS_FILE'], DC_NO_OVERVIEW='1', DC_MIRRORS_DIR=self.mirrors)
+        # ключ і IP сервера в записі не потрібні (ізольований `ctx` їх не бачить; цілі їх несе саме задача)
+        fx.build(roles=('vcs',), overrides={'vcs': {'settings': {'ssh_key': '', 'host_ip': ''}}})
+        fx.fix_space()
+        with open(fx.tasks_path, 'w', encoding='utf-8') as f:
+            json.dump({'tasks': {}, 'current': None}, f)
+        self.fx = fx
+        return fx
+
     # ---- простір (Plain) ----
     def make_space(self, name='Alpha', integrations=False, enable=True, **settings):
         sid = spaces.create_space(name, 'space-1', os.path.join(self.home, 'work', name.lower()))
@@ -240,7 +256,13 @@ class Core(unittest.TestCase):
 
 
 class Legacy(Core):
-    """Шар просторів вимкнено (лише `DC_TASKS_FILE`): постачальник — неявний `'legacy'`, простір ЛІГА."""
+    """Ізольований прогін у просторі ЛІГА (`DC_TASKS_FILE`): постачальник — ЯВНИЙ запис `git-sync` із `compat == "design-canvas"` (4d-4b:
+    неявного `'legacy'` більше нема; запис кладе `LigaFixture`, простір запиту зафіксовано на ньому). В ізольованому прогоні `ctx` — фіксований
+    (закон ізоляції), тож налаштування запису тут не читаються, як і раніше в неявного постачальника."""
+
+    def setUp(self):
+        super().setUp()
+        self.league_explicit()
 
     # ---------------------------------------------------------------- постачальник
     def test_the_provider_is_git_sync_run_with_the_legacy_ctx(self):
@@ -269,13 +291,13 @@ class Legacy(Core):
                          os.path.join(self.mirrors, re.sub(r'[^\w.-]+', '-', self.origin).strip('-')))
 
     def test_the_legacy_ctx_never_points_at_the_deai_home_cache(self):
-        """Поправка 9 ревʼю Task 3: `module_ctx` каркаса кладе `cache_dir` під `spaces.home()`, а при вимкненому шарі це
-        справжній `~/.deai`. Неявний постачальник живе на СВОЄМУ `ctx`: дзеркало — під `DC_MIRRORS_DIR`."""
+        """Поправка 9 ревʼю Task 3: `module_ctx` каркаса кладе `cache_dir` під `spaces.home()`. Ізольований шлях ЛІГИ живе на СВОЄМУ `ctx`:
+        дзеркало — під `DC_MIRRORS_DIR`. 4d-4b: дім Deai у стенді існує (реєстр і запис), тож замість «домівки нема» — «кешу під домівкою нема»."""
         self.assertTrue(spaces.home().startswith(self.tmp), 'передумова: домівка — тимчасова')
         self.assertTrue(self.sync()['synced'])
         self.assertTrue(os.path.isdir(os.path.join(serve.vcs_mirror_dir(self.gl), '.git')))
         self.assertFalse(os.path.exists(os.path.join(spaces.home(), 'cache')), 'кеш зʼявився під домівкою Deai')
-        self.assertFalse(os.path.exists(spaces.home()), 'шар вимкнено, а домівка Deai створена')
+        self.assertEqual(sorted(os.listdir(spaces.home())), ['secrets.json', 'spaces.json'], 'у домі Deai зʼявилось щось крім стенда')
 
     def test_the_ctx_of_legacy_is_not_built_by_module_ctx(self):
         with mock.patch.object(dm, 'module_ctx', side_effect=AssertionError('legacy не йде через module_ctx')):
@@ -288,18 +310,19 @@ class Legacy(Core):
                 serve.vcs_provider()
         self.assertEqual(cm.exception.code, 'vcs-error')
         self.assertIsInstance(cm.exception, OSError)
+        self.assertIn('module catalog', str(cm.exception))
+        # 4d-4b: було «каталог без `git-sync` → `VcsError('… not loaded')»» (неявний постачальник ішов у каталог за модулем). Явний запис
+        # веде роль лише коли модуль у каталозі: порожній каталог — «ролі нема» (`None`), як у будь-якому просторі.
         with mock.patch.object(dm, 'catalog', return_value={}):
-            with self.assertRaises(serve.VcsError) as cm:
-                serve.vcs_provider()
-        self.assertIn('not loaded', str(cm.exception))
+            self.assertIsNone(serve.vcs_provider())
         with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
             st = serve.gitlab_status(self.task, self.gl, self.meta(), 'it1')
         self.assertEqual((st['configured'], st['code']), (True, 'vcs-error'))
 
     # ---------------------------------------------------------------- ціль
-    def target(self, task, settings=None, cfg=None, tid='t1'):
-        return serve.vcs_target(cfg if cfg is not None else {}, tid, task,
-                                {'branch': 'main', 'path': 'mockup/{task}'} if settings is None else settings)
+    def target(self, task, settings=None, tid='t1'):
+        # 4d-4b (R4): `vcs_target(tid, task, settings)` — без `cfg`: кореня `tasks.json` у ланцюгу ключа й IP більше нема.
+        return serve.vcs_target(tid, task, {'branch': 'main', 'path': 'mockup/{task}'} if settings is None else settings)
 
     def test_a_gitlab_task_gives_a_target_without_none_fields(self):
         t = self.target({'gitlab': {'repo': 'git@h:o/r.git', 'path': '/mockup/t1/'}})
@@ -311,22 +334,36 @@ class Legacy(Core):
                 self.assertIsNone(self.target({'gitlab': gl}))
         self.assertIsNone(self.target({}))
 
-    def test_the_gitlab_target_carries_the_key_and_ip_of_the_task_or_the_shared_ones(self):
-        """Як `gitlab_cfg` 0.7.0: ключ і IP — задачі, інакше спільні з кореня `tasks.json`; `ctx` `'legacy'` їх не має."""
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
-        t = self.target({'gitlab': {'repo': 'git@h:o/r.git', 'path': 'p'}}, cfg=cfg)
-        self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/shared', '10.0.0.7'))
-        t = self.target({'gitlab': {'repo': 'git@h:o/r.git', 'path': 'p', 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}}, cfg=cfg)
+    def test_the_gitlab_target_carries_the_key_and_ip_of_the_task_only(self):
+        """Було `…_of_the_task_or_the_shared_ones` (ключ і IP — задачі, інакше спільні з кореня `tasks.json`). 4d-4b: спільні живуть в
+        налаштуваннях запису `git-sync` (їх бере модуль), ціль їх не несе; корінь `tasks.json` не читається взагалі (негатив)."""
+        self.write_root_keys('/k/shared', '10.0.0.7')
+        t = self.target({'gitlab': {'repo': 'git@h:o/r.git', 'path': 'p'}})
+        self.assertNotIn('ssh_key', t, 'спільний ключ — справа налаштувань модуля, а не цілі')
+        self.assertNotIn('host_ip', t)
+        t = self.target({'gitlab': {'repo': 'git@h:o/r.git', 'path': 'p', 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}})
         self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/own', '10.0.0.8'))
         self.assertNotIn('ssh_key', serve.vcs_provider()[1]['settings'])
         self.assertNotIn('host_ip', serve.vcs_provider()[1]['settings'])
 
-    def test_the_gitlab_target_of_the_legacy_provider_is_the_070_result_byte_for_byte(self):
-        """Ревʼю c191cfb (Minor 3): ОДНА функція пріоритету ключа/IP не змінює ЛІГУ — ціль зі старого `gitlab{}` це те, що давали
-        `gitlab_cfg` + відсів порожніх у 0.7.0: і значення, і набір, і ПОРЯДОК ключів (`json.dumps` без `sort_keys`)."""
-        def old(cfg, tid, task):
-            gl = serve.gitlab_cfg(cfg, task)
-            return None if gl is None else {**{k: x for k, x in gl.items() if x}, 'task': tid, 'repo': str(gl['repo']).strip()}
+    def write_root_keys(self, key, ip):
+        """Старий спільний ключ і IP у КОРЕНІ файла задач — лише щоб довести, що корінь більше не читається (негативний assert)."""
+        with open(os.environ['DC_TASKS_FILE'], 'w', encoding='utf-8') as f:
+            json.dump({'tasks': {}, 'current': None, 'gitlab_ssh_key': key, 'gitlab_host_ip': ip}, f)
+
+    def test_the_gitlab_target_of_the_league_is_the_070_result_in_effective_values(self):
+        """Було `…_of_the_legacy_provider_is_the_070_result_byte_for_byte` (ревʼю c191cfb, Minor 3): ціль зі старого `gitlab{}` = `gitlab_cfg` +
+        відсів порожніх 0.7.0, байт у байт. 4d-4b: спільні ключ і IP — налаштування запису `git-sync`, а не корінь, тож ціль їх НЕ несе, коли
+        задача не має своїх; еталон 0.7.0 (власна копія в тесті, з `cfg` = налаштування запису) порівнюється ЕФЕКТИВНИМИ значеннями
+        (`ціль.поле або налаштування.поле` — так обирає модуль) і порядком решти ключів цілі."""
+        def old(cfg, tid, task):                     # `gitlab_cfg` 0.7.0 + відсів порожніх, дослівно
+            g = task.get('gitlab')
+            if not g or not g.get('repo') or not g.get('path'):
+                return None
+            key = g.get('ssh_key') or cfg.get('gitlab_ssh_key')
+            gl = {'repo': g['repo'], 'path': g['path'].strip('/'), 'ssh_key': os.path.expanduser(key) if key else None,
+                  'branch': g.get('branch', 'main'), 'host_ip': g.get('host_ip') or cfg.get('gitlab_host_ip')}
+            return {**{k: x for k, x in gl.items() if x}, 'task': tid, 'repo': str(gl['repo']).strip()}
         settings = serve._vcs_legacy_ctx()['settings']
         r, p = 'git@h:o/r.git', 'mockup/t1'
         gitlabs = ({'repo': r, 'path': '/mockup/t1/'}, {'repo': r, 'path': p, 'branch': 'dev'}, {'repo': r, 'path': p, 'ssh_key': '/k/own'},
@@ -337,34 +374,46 @@ class Legacy(Core):
         seen = 0
         for gl in gitlabs:
             for cfg in cfgs:
-                with self.subTest(gitlab=gl, cfg=cfg):
+                with self.subTest(gitlab=gl, shared=cfg):
                     task = {'gitlab': gl}
-                    got, want = serve.vcs_target(cfg, 't1', task, settings), old(cfg, 't1', task)
-                    self.assertEqual(got, want)
-                    self.assertEqual(json.dumps(got), json.dumps(want), 'порядок ключів цілі змінився')
-                    seen += want is not None
+                    got, want = serve.vcs_target('t1', task, settings), old(cfg, 't1', task)
+                    if want is None:
+                        self.assertIsNone(got)
+                        continue
+                    seen += 1
+                    rec = {'ssh_key': cfg.get('gitlab_ssh_key'), 'host_ip': cfg.get('gitlab_host_ip')}      # налаштування запису `git-sync`
+
+                    def effective(target):
+                        key, ip = target.get('ssh_key') or rec['ssh_key'], target.get('host_ip') or rec['host_ip']
+                        return {'ssh_key': os.path.expanduser(key) if key else None, 'host_ip': ip or None}
+                    self.assertEqual(effective(got), effective(want), 'ефективні ключ і IP змінились')
+                    rest = lambda t: {k: x for k, x in t.items() if k not in ('ssh_key', 'host_ip')}  # noqa: E731
+                    self.assertEqual(rest(got), rest(want))
+                    self.assertEqual(json.dumps(rest(got)), json.dumps(rest(want)), 'порядок ключів цілі змінився')
         self.assertGreater(seen, 30, 'передумова: більшість рядків таблиці дає справжню ціль')
 
-    def test_the_vcs_field_of_a_liga_task_carries_the_shared_key_and_ip_too(self):
-        """Ревʼю Task 5 (M7), поправка 7 до спеки: у просторі ЛІГА ключ/IP задачі, інакше спільні з кореня `tasks.json` — і коли ціль
-        із `task.vcs`, а не з `gitlab{}`."""
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
-        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}}, cfg=cfg)
-        self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/shared', '10.0.0.7'))
-        self.assertEqual((t['repo'], t['path'], t['branch'], t['task']), ('git@h:o/r.git', 'mockup/t1', 'main', 't1'))
-        # `~` розгортається, як у `gitlab_cfg`
-        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}}, cfg={'gitlab_ssh_key': '~/k'})
+    def test_the_vcs_field_of_a_liga_task_does_not_take_the_root_key_and_ip(self):
+        """Було `…_carries_the_shared_key_and_ip_too` (ревʼю Task 5 (M7), поправка 7: ключ/IP задачі, інакше спільні з кореня — і коли ціль із
+        `task.vcs`). 4d-4b: корінь не читається — ціль із `task.vcs` без своїх полів ключа й IP не несе (їх бере модуль з налаштувань запису);
+        `~` власного ключа розгортається, як і було."""
+        self.write_root_keys('/k/shared', '10.0.0.7')
+        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}})
+        self.assertEqual(t, {'repo': 'git@h:o/r.git', 'path': 'mockup/t1', 'branch': 'main', 'task': 't1'})
+        t = self.target({'vcs': {'repo': 'git@h:o/r.git', 'ssh_key': '~/k'}})
         self.assertEqual(t['ssh_key'], os.path.expanduser('~/k'))
 
-    def test_the_own_key_and_ip_of_a_liga_task_beat_the_shared_ones_for_a_vcs_target(self):
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
-        own_in_vcs = self.target({'vcs': {'repo': 'git@h:o/r.git', 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}}, cfg=cfg)
+    def test_the_own_key_and_ip_of_a_liga_task_are_the_only_ones_in_a_vcs_target(self):
+        """Було `…_beat_the_shared_ones_for_a_vcs_target`: пріоритет тепер `своє поле задачі (vcs{}, далі gitlab{}) > налаштування модуля`;
+        корінь — лише негатив (див. `write_root_keys`)."""
+        self.write_root_keys('/k/shared', '10.0.0.7')
+        own_in_vcs = self.target({'vcs': {'repo': 'git@h:o/r.git', 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}})
         self.assertEqual((own_in_vcs['ssh_key'], own_in_vcs['host_ip']), ('/k/own', '10.0.0.8'))
-        own_in_gitlab = self.target({'vcs': {'repo': 'git@h:o/r.git'}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}}, cfg=cfg)
+        own_in_gitlab = self.target({'vcs': {'repo': 'git@h:o/r.git'}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}})
         self.assertEqual((own_in_gitlab['ssh_key'], own_in_gitlab['host_ip']), ('/k/g', '10.0.0.9'))
 
     def test_a_vcs_target_of_a_liga_task_has_no_key_fields_when_nobody_sets_them(self):
-        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}}, cfg={'gitlab_ssh_key': '', 'gitlab_host_ip': None})
+        self.write_root_keys('', None)
+        t = self.target({'vcs': {'repo': 'git@h:o/r.git'}})
         self.assertEqual(t, {'repo': 'git@h:o/r.git', 'task': 't1', 'path': 'mockup/t1', 'branch': 'main'})
         self.assertEqual(self.target({'vcs': {'repo': 'git@h:o/r.git'}}),
                          {'repo': 'git@h:o/r.git', 'task': 't1', 'path': 'mockup/t1', 'branch': 'main'})
@@ -729,7 +778,7 @@ class Legacy(Core):
         """Контракт: `vcs_task` дає `(module, ctx, legacy, target)`, і маршрут передає ЦЕЙ кортеж як `vcs=` у всі старі імена.
         Розпаковка з трьох (`m, ctx, legacy = v`) падала б тут, а не на живому маршруті."""
         task = {**self.task, 'gitlab': dict(self.gl)}
-        v = serve.vcs_task({}, 't1', task)
+        v = serve.vcs_task('t1', task)               # 4d-4b (R4): без `cfg`
         self.assertEqual((len(v), v[2]), (4, True))
         gl = v[3]
         r = serve.gitlab_sync('t1', task, gl, 'it1', vcs=v)
@@ -808,7 +857,7 @@ class Plain(Core):
 
     def vt(self):
         """`vcs_task` для задачі `t1`: `(module, ctx, legacy, target)`."""
-        return serve.vcs_task(self.cfg, 't1', self.task)
+        return serve.vcs_task('t1', self.task)
 
     # ---------------------------------------------------------------- постачальник і ціль
     def test_the_provider_is_the_module_of_the_space_with_a_cache_under_the_deai_home(self):
@@ -828,82 +877,92 @@ class Plain(Core):
     def test_a_gitlab_field_of_a_task_is_ignored_without_integrations(self):
         """Ключ `gitlab{}` у задачі діє лише в просторі з інтеграціями: тут цілі з нього не буде, лише з налаштувань."""
         task = {**self.task, 'gitlab': {'repo': 'git@h:o/r.git', 'path': 'mockup/x'}}
-        self.assertEqual(serve.vcs_task(self.cfg, 't1', task)[3]['repo'], self.origin)
+        self.assertEqual(serve.vcs_task('t1', task)[3]['repo'], self.origin)
         dm.write_module_state(self.sp, 'git-sync', settings={'repo': None})
-        self.assertIsNone(serve.vcs_task(self.cfg, 't1', task)[3], 'gitlab{} без інтеграцій став ціллю')
+        self.assertIsNone(serve.vcs_task('t1', task)[3], 'gitlab{} без інтеграцій став ціллю')
 
     def test_a_vcs_field_of_a_task_overrides_the_settings(self):
         other = self.make_origin('other.git')
         task = {**self.task, 'vcs': {'repo': other, 'path': 'x/{task}'}}
-        self.assertEqual(serve.vcs_task(self.cfg, 't1', task)[3],
+        self.assertEqual(serve.vcs_task('t1', task)[3],
                          {'repo': other, 'task': 't1', 'path': 'x/t1', 'branch': 'main'})
 
     def test_the_shared_key_of_the_root_is_not_for_a_space_without_integrations(self):
-        """Ключ і IP кореня `tasks.json` — речі ЛІГИ: у звичайному просторі `task.vcs` і налаштування модуля їх не беруть."""
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
-        t = serve.vcs_task(cfg, 't1', {**self.task, 'vcs': {'repo': self.origin}})[3]
+        """Ключ і IP цілі — речі простору з інтеграціями (ЛІГА): у звичайному просторі `task.vcs` їх не несе, навіть свої (4d-4b: корінь
+        `tasks.json` не читається ніде, тож «спільного» тут нема й у вигляді негатива)."""
+        t = serve.vcs_task('t1', {**self.task, 'vcs': {'repo': self.origin}})[3]
         self.assertEqual(t, {'repo': self.origin, 'task': 't1', 'path': 'mockup/t1', 'branch': 'main'})
-        t = serve.vcs_task(cfg, 't1', self.task)[3]
+        t = serve.vcs_task('t1', {**self.task, 'vcs': {'repo': self.origin, 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}})[3]
         self.assertNotIn('ssh_key', t)
         self.assertNotIn('host_ip', t)
 
-    def test_an_explicit_git_sync_in_a_liga_space_takes_the_shared_key_for_any_origin_of_the_target(self):
-        """Поправка 7 до спеки: і для явного `git-sync` у просторі ЛІГА, звідки б не була ціль (`task.vcs` чи налаштування модуля)."""
-        self.make_space('Liga', integrations=True)
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+    def test_an_explicit_git_sync_in_a_liga_space_leaves_the_shared_key_to_the_module_for_any_origin_of_the_target(self):
+        """Було `…_takes_the_shared_key_for_any_origin_of_the_target` (поправка 7 до спеки: спільний ключ з кореня клався в ціль, звідки б вона
+        не була). 4d-4b: спільні ключ і IP — налаштування запису; ціль їх не несе (модуль бере з налаштувань), і це так для будь-якого
+        походження цілі (`task.vcs` чи налаштування модуля)."""
+        self.make_space('Liga', integrations=True, ssh_key='/k/shared', host_ip='10.0.0.7')
         for what, task in (('task.vcs', {**self.task, 'vcs': {'repo': 'git@h:o/r.git'}}), ('налаштування модуля', self.task)):
             with self.subTest(target=what):
-                t = serve.vcs_task(cfg, 't1', task)[3]
-                self.assertEqual((t['ssh_key'], t['host_ip']), ('/k/shared', '10.0.0.7'))
+                v = serve.vcs_task('t1', task)
+                self.assertNotIn('ssh_key', v[3])
+                self.assertNotIn('host_ip', v[3])
+                self.assertEqual((v[1]['settings']['ssh_key'], v[1]['settings']['host_ip']), ('/k/shared', '10.0.0.7'))
 
-    def test_a_key_in_the_settings_of_the_module_beats_the_shared_one_of_the_root(self):
-        """Явне налаштування модуля конкретніше за спільне з кореня: модуль сам бере його, коли в цілі ключа нема."""
+    def test_a_key_in_the_settings_of_the_module_is_not_overridden_by_the_target(self):
+        """Було `…_beats_the_shared_one_of_the_root`: тепер спільний — і є налаштуванням запису; ціль ключа не несе, модуль бере його сам."""
         sp = self.make_space('Liga', integrations=True)
         dm.write_module_state(sp, 'git-sync', settings={'ssh_key': '/k/mine'})
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
-        t = serve.vcs_task(cfg, 't1', self.task)[3]
-        self.assertNotIn('ssh_key', t)
-        self.assertEqual(t['host_ip'], '10.0.0.7')
+        v = serve.vcs_task('t1', self.task)
+        self.assertNotIn('ssh_key', v[3])
+        self.assertNotIn('host_ip', v[3])
+        self.assertEqual(v[1]['settings']['ssh_key'], '/k/mine')
 
     def test_the_key_and_ip_priority_is_one_for_every_path_of_the_target(self):
         """Ревʼю c191cfb (Minor 3). Правило ОДНЕ для всіх шляхів цілі й окремо для `ssh_key` та `host_ip`: своє поле задачі
-        (`vcs{}`, далі `gitlab{}`) > налаштування модуля (цілі поля не несуть — модуль бере своє) > спільний корінь `tasks.json`."""
+        (`vcs{}`, далі `gitlab{}`) > налаштування модуля (цілі поля не несуть — модуль бере своє). 4d-4b: третього щабля (спільний корінь
+        `tasks.json`) більше нема — корінь у стенді лежить із «чужими» значеннями лише щоб довести, що жоден шлях цілі його не бере.
+        Таблиця: (налаштування запису, поля задачі, що несе ЦІЛЬ, ЕФЕКТИВНІ значення = ціль, інакше налаштування)."""
         sp = self.make_space('Liga', integrations=True)
-        cfg = {'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}
+        write(os.path.join(sp['path'], 'tasks.json'),
+              json.dumps({'tasks': {}, 'gitlab_ssh_key': '/k/shared', 'gitlab_host_ip': '10.0.0.7'}))
         r = 'git@h:o/r.git'
         gl = {'repo': r, 'path': 'mockup/t1'}
         both, only_key, only_ip, none = ({'ssh_key': '/k/mine', 'host_ip': '10.1.1.1'}, {'ssh_key': '/k/mine'},
                                          {'host_ip': '10.1.1.1'}, {})
-        shared = {'ssh_key': '/k/shared', 'host_ip': '10.0.0.7'}
         rows = (
-            # (що в налаштуваннях модуля, поля задачі, що несе ціль)
-            ('gitlab{} + ключ у налаштуваннях → налаштування', both, {'gitlab': gl}, {}),
-            ('vcs{} + ключ у налаштуваннях → налаштування', both, {'vcs': {'repo': r}}, {}),
-            ('налаштування repo + ключ у налаштуваннях → налаштування', both, {}, {}),
+            ('gitlab{} + ключ у налаштуваннях → налаштування', both, {'gitlab': gl}, {}, both),
+            ('vcs{} + ключ у налаштуваннях → налаштування', both, {'vcs': {'repo': r}}, {}, both),
+            ('налаштування repo + ключ у налаштуваннях → налаштування', both, {}, {}, both),
             ('свій у vcs{} + налаштування → свій', both, {'vcs': {'repo': r, 'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}},
-             {'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}),
+             {'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}, {'ssh_key': '/k/own', 'host_ip': '10.0.0.8'}),
             ('свій у gitlab{} + налаштування → свій (ціль із gitlab{})', both, {'gitlab': {**gl, 'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}},
-             {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}),
+             {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}, {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}),
             ('свій у gitlab{} + налаштування → свій (ціль із vcs{})', both, {'vcs': {'repo': r}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}},
-             {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}),
+             {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}, {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}),
             ('vcs{} свій раніше за gitlab{} свій, по полях', both, {'vcs': {'repo': r, 'ssh_key': '/k/v'}, 'gitlab': {'ssh_key': '/k/g', 'host_ip': '10.0.0.9'}},
-             {'ssh_key': '/k/v', 'host_ip': '10.0.0.9'}),
-            ('налаштування тримають лише своє поле: ключ', only_key, {'gitlab': gl}, {'host_ip': '10.0.0.7'}),
-            ('налаштування тримають лише своє поле: IP', only_ip, {'vcs': {'repo': r}}, {'ssh_key': '/k/shared'}),
-            ('своє поле однієї назви + налаштування іншої', only_key, {'vcs': {'repo': r, 'host_ip': '10.0.0.8'}}, {'host_ip': '10.0.0.8'}),
-            ('без налаштувань: корінь для gitlab{}', none, {'gitlab': gl}, shared),
-            ('без налаштувань: корінь для vcs{}', none, {'vcs': {'repo': r}}, shared),
-            ('без налаштувань: корінь для налаштувань repo', none, {}, shared),
-            ('без налаштувань: свій у vcs{} > корінь', none, {'vcs': {'repo': r, 'ssh_key': '/k/own'}}, {'ssh_key': '/k/own', 'host_ip': '10.0.0.7'}),
-            ('без налаштувань: свій у gitlab{} > корінь', none, {'gitlab': {**gl, 'host_ip': '10.0.0.9'}}, {'ssh_key': '/k/shared', 'host_ip': '10.0.0.9'}),
+             {'ssh_key': '/k/v', 'host_ip': '10.0.0.9'}, {'ssh_key': '/k/v', 'host_ip': '10.0.0.9'}),
+            ('налаштування тримають лише своє поле: ключ', only_key, {'gitlab': gl}, {}, {'ssh_key': '/k/mine'}),
+            ('налаштування тримають лише своє поле: IP', only_ip, {'vcs': {'repo': r}}, {}, {'host_ip': '10.1.1.1'}),
+            ('своє поле однієї назви + налаштування іншої', only_key, {'vcs': {'repo': r, 'host_ip': '10.0.0.8'}},
+             {'host_ip': '10.0.0.8'}, {'ssh_key': '/k/mine', 'host_ip': '10.0.0.8'}),
+            ('без налаштувань: ніхто не каже — нічого (корінь НЕ береться) для gitlab{}', none, {'gitlab': gl}, {}, {}),
+            ('без налаштувань: корінь НЕ береться для vcs{}', none, {'vcs': {'repo': r}}, {}, {}),
+            ('без налаштувань: корінь НЕ береться для налаштувань repo', none, {}, {}, {}),
+            ('без налаштувань: свій у vcs{}', none, {'vcs': {'repo': r, 'ssh_key': '/k/own'}}, {'ssh_key': '/k/own'}, {'ssh_key': '/k/own'}),
+            ('без налаштувань: свій у gitlab{}', none, {'gitlab': {**gl, 'host_ip': '10.0.0.9'}}, {'host_ip': '10.0.0.9'}, {'host_ip': '10.0.0.9'}),
         )
-        for what, settings, fields, want in rows:
+        for what, settings, fields, carried, effective in rows:
             with self.subTest(what):
                 dm.write_module_state(sp, 'git-sync', settings={'ssh_key': None, 'host_ip': None, **settings})
-                self.assertEqual({k: (serve.vcs_provider()[1]['settings'].get(k) or None) for k in settings},
-                                 {k: v for k, v in settings.items()}, 'передумова: налаштування модуля записались')
-                t = serve.vcs_task(cfg, 't1', {**self.task, **fields})[3]
-                self.assertEqual({k: t[k] for k in ('ssh_key', 'host_ip') if k in t}, want)
+                v = serve.vcs_task('t1', {**self.task, **fields})
+                self.assertEqual({k: (v[1]['settings'].get(k) or None) for k in settings},
+                                 {k: x for k, x in settings.items()}, 'передумова: налаштування модуля записались')
+                t = v[3]
+                self.assertEqual({k: t[k] for k in ('ssh_key', 'host_ip') if k in t}, carried)
+                eff = {k: t.get(k) or v[1]['settings'].get(k) for k in ('ssh_key', 'host_ip')}      # так обирає модуль (`_pick`)
+                self.assertEqual({k: x for k, x in eff.items() if x}, effective)
+                self.assertNotIn('/k/shared', json.dumps(t), 'ключ кореня `tasks.json` потрапив у ціль')
+                self.assertNotIn('10.0.0.7', json.dumps(t), 'IP кореня `tasks.json` потрапив у ціль')
 
     def test_the_local_autocommit_of_the_autosync_is_signed_deai_in_an_ordinary_space(self):
         """Ревʼю Task 5 (M10), поправка 12: «автосинк (deai)» у звичайному просторі — і з готовим постачальником, і без."""
@@ -918,7 +977,7 @@ class Plain(Core):
     def test_a_space_without_the_module_has_no_provider(self):
         self.make_space('Beta', enable=False)
         self.assertIsNone(serve.vcs_provider())
-        self.assertIsNone(serve.vcs_task(self.cfg, 't1', self.task))
+        self.assertIsNone(serve.vcs_task('t1', self.task))
         self.assertEqual(serve.gitlab_status(self.task, self.gl, self.meta(), 'it1', vcs=None), {'configured': False})
 
     def test_an_unreadable_space_json_is_a_vcs_error_with_the_frame_code(self):
@@ -928,7 +987,7 @@ class Plain(Core):
         self.assertEqual(cm.exception.code, 'space-json-unreadable')
         self.assertIsInstance(cm.exception, OSError)
         with self.assertRaises(serve.VcsError):
-            serve.vcs_task(self.cfg, 't1', self.task)
+            serve.vcs_task('t1', self.task)
 
     def test_a_long_refusal_of_the_frame_is_masked_before_it_is_cut_in_the_provider(self):
         """Ревʼю c191cfb (Minor 2): обидва місця `vcs_provider`, що пакують відмову каркаса у `VcsError`, ріжуть текст до 300
@@ -971,8 +1030,17 @@ class Plain(Core):
         self.assertIsNone(serve.vcs_mirror_dir(self.gl, vcs=(no_dir, {}, False)),
                           'без mirror_dir шлях дзеркала невідомий і не показується')
 
-    def test_a_legacy_space_with_integrations_and_no_module_runs_the_legacy_provider(self):
+    def test_a_liga_space_with_integrations_and_no_record_has_no_provider(self):
+        """Було `…_and_no_module_runs_the_legacy_provider` (простір з інтеграціями без запису вів неявний постачальник). 4d-4b: неявного нема —
+        без запису `git-sync` ролі `vcs` у просторі немає (як у будь-якому)."""
         self.make_space('Liga', integrations=True, enable=False)
+        self.assertIsNone(serve.vcs_provider())
+
+    def test_a_liga_space_with_the_compat_record_runs_the_league_texts_and_flat_mirrors(self):
+        """Те, що перевіряв попередник на неявному постачальнику, — на ЯВНОМУ записі (`compat = design-canvas`): тексти ЛІГИ, плоскі дзеркала в
+        `DC_MIRRORS_DIR`, кешу Deai нема."""
+        sp = self.make_space('Liga', integrations=True, enable=False)
+        dm.write_module_state(sp, 'git-sync', enabled=True, settings={'compat': 'design-canvas'})
         m, ctx, legacy = serve.vcs_provider()
         self.assertEqual((m.id, legacy), ('git-sync', True))
         self.assertEqual((ctx['cache_dir'], ctx['mirror_flat']), (self.mirrors, True))
@@ -985,7 +1053,7 @@ class Plain(Core):
         self.assertFalse(legacy)
         self.assertEqual(ctx['cache_dir'], os.path.join(self.deai, 'cache', sp['id'], 'git-sync'))
         task = {**self.task, 'gitlab': {'repo': 'git@h:o/r.git', 'path': 'mockup/t1', 'ssh_key': '/k'}}
-        t = serve.vcs_task(self.cfg, 't1', task)[3]
+        t = serve.vcs_task('t1', task)[3]
         self.assertEqual((t['repo'], t['ssh_key']), ('git@h:o/r.git', '/k'))
 
     # ---------------------------------------------------------------- повний цикл
@@ -1155,6 +1223,10 @@ SECRET_REPOS = {
 class AddressMask(Core):
     """`remote`, `web`, тексти помилок і рядок автосинку НІКОЛИ не несуть userinfo адреси (спека: «тексти помилок і `remote`
     ніколи не несуть пароля з адреси»). Модуль — заглушка: справжній ходив би в мережу по `https://github.com`."""
+
+    def setUp(self):
+        super().setUp()
+        self.league_explicit()           # 4d-4b: маршрути без явного запису не мають постачальника (було — неявний)
 
     def mod(self, ctx, repo, **fns):
         return (self.stub(**fns), ctx, False)
@@ -1360,6 +1432,29 @@ class AddressMask(Core):
                 self.assertNotIn(TOKEN, json.dumps(sent))
 
 
+# ======================================================================== ключ і IP з запису ЛІГИ (4d-4b)
+class LeagueKeyFromTheRecord(unittest.TestCase):
+    """ПОЗИТИВ до негативів «кореня нема»: ключ і IP, що міграція перенесла в запис `git-sync`, ДІЙСНО доходять до модуля. Стенд — явний запис
+    ЛІГИ (`LigaFixture`, неізольований прогін) із справжнім файлом ключа в тимчасовому домі (`key_file=True`)."""
+
+    def setUp(self):
+        self.fx = LigaFixture(self).env().build(roles=('vcs',), key_file=True).fix_space()
+
+    def test_the_key_and_ip_of_the_record_resolve_for_a_target_that_carries_none(self):
+        v = serve.vcs_task('t1', {'gitlab': {'repo': 'git@h:o/r.git', 'path': 'mockup/t1'}})
+        self.assertNotIn('ssh_key', v[3])
+        self.assertNotIn('host_ip', v[3])
+        got = serve._vcs_call(v, 'validate', v[3], timeout=5)            # справжній `validate` `git-sync`: ключ мусить існувати
+        self.assertEqual((got['ssh_key'], got['host_ip']), (os.path.expanduser('~/.ssh/id_example'), '203.0.113.7'))
+        self.assertTrue(os.path.isfile(got['ssh_key']) and got['ssh_key'].startswith(self.fx.home + os.sep))
+
+    def test_the_own_key_of_the_task_still_beats_the_record(self):
+        own = os.path.join(self.fx.home, 'own_key')
+        write(own, 'x\n')
+        v = serve.vcs_task('t1', {'gitlab': {'repo': 'git@h:o/r.git', 'path': 'mockup/t1', 'ssh_key': own}})
+        self.assertEqual(serve._vcs_call(v, 'validate', v[3], timeout=5)['ssh_key'], own)
+
+
 # ======================================================================== кривий результат модуля
 class ModuleShape(Core):
     """Свій модуль ролі `vcs` (довіра 3c) може віддати не обʼєкт чи обʼєкт без ключів: це `VcsError('module-error')` або
@@ -1558,6 +1653,9 @@ class Http(Core):
     def setUp(self):
         super().setUp()
         self.liga = self.make_space('Liga', integrations=True, enable=False)
+        # 4d-4b: ЛІГА веде ЯВНИЙ запис `git-sync` (`compat = design-canvas`, автосинк увімкнено — як у неявного постачальника), без `repo`
+        dm.write_module_state(self.liga, 'git-sync', enabled=True,
+                              settings={'branch': 'main', 'path': 'mockup/{task}', 'autosync': True, 'compat': 'design-canvas'})
         self.a_dir = self.mk_task('a', '<h1>a1</h1>')
         self.liga_root = os.path.join(self.tmp, 'liga-root')
         self.liga_tasks = os.path.join(self.liga['path'], 'tasks.json')

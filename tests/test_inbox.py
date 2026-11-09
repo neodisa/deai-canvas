@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import inbox  # noqa: E402
 import sbconf  # noqa: E402
 import serve  # noqa: E402
+from liga_fixture import LigaFixture  # noqa: E402
 
 SHOT = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ' + 'A' * 40000
 INLINE_IMG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
@@ -100,15 +101,21 @@ class InboxCase(unittest.TestCase):
         self.task_dir = os.path.join(self.tmp, 'task')
         os.makedirs(self.task_dir)
         self.tasks_file = os.path.join(self.tmp, 'tasks.json')
-        with open(self.tasks_file, 'w', encoding='utf-8') as f:
-            # `supabase_url`/`supabase_key` — конфіг УСТАНОВКИ в корені файла (4b-2: констант у коді нема)
-            json.dump({'supabase_url': sbconf.SB_URL, 'supabase_key': sbconf.SB_KEY,
-                       'current': 'fx', 'tasks': {'fx': {
-                           'title': 'Фікстура', 'dir': self.task_dir,
-                           'comment_project': 'dc/fixture-inbox-test'}}}, f)
         self._env = {k: os.environ.get(k) for k in
                      ('DC_TASKS_FILE', 'DC_IDENTITY_NAME', 'DC_IDENTITY_EMAIL')}
-        os.environ['DC_TASKS_FILE'] = self.tasks_file
+        # `DC_TASKS_FILE` виставляє `fx.env(...)` нижче: знімок оточення фікстури береться ДО виставлення, тож її прибирання повертає чистий
+        # стан (раніше присвоєння стояло перед `fx.env` — знімок уже містив шлях і той «витікав» у наступні модулі прогону).
+        # 4d-4b (R3): адреса й ключ Supabase — ЯВНИЙ запис `supabase-comments` простору ЛІГА у тимчасовому домі (`LigaFixture`), а не
+        # `supabase_url`/`supabase_key` у корені файла задач (корінь рантайм більше не читає). Ізоляція (`DC_TASKS_FILE`) лишається.
+        self.fx = LigaFixture(self, tmp=self.tmp)
+        self.fx.tasks_path = self.tasks_file
+        self.fx.env(DC_TASKS_FILE=self.tasks_file)
+        self.fx.build(roles=('comments',),
+                      overrides={'comments': {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}}}).fix_space()
+        with open(self.tasks_file, 'w', encoding='utf-8') as f:
+            json.dump({'current': 'fx', 'tasks': {'fx': {
+                'title': 'Фікстура', 'dir': self.task_dir,
+                'comment_project': 'dc/fixture-inbox-test'}}}, f)
         os.environ['DC_IDENTITY_NAME'] = 'Я'
         os.environ['DC_IDENTITY_EMAIL'] = 'me@example.test'
         self.net = FakeNet()
@@ -479,7 +486,7 @@ class ResolveProject(InboxCase):
         rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'текст оновлено',
                                     '--it', '2'])
         self.assertEqual(rc, 0, out)
-        url, key = serve.supabase_config()
+        url, key = sbconf.SB_URL, sbconf.SB_KEY      # 4d-4b: `serve.supabase_config()` видалено; адреса й ключ — у записі стенда
         [call] = self.net.patches()
         # Модуль додає до фільтра `id` ще й канал (`project_id`): пін чужого каналу не закриється — свідома відмінність
         # від PATCH 0.9.0 (`?id=eq.<id>`), див. 4b-2 поправка 8.
@@ -545,11 +552,19 @@ class DryRun(InboxCase):
     def test_without_config_the_project_is_unreachable_and_nothing_is_written(self):
         """Колишній «dry-run без конфігу» (рядок «Supabase не налаштовано»): тепер конфіг потрібен уже для ЧИТАННЯ піна
         (він іде модулем), тож без нього пін не знайдено, а рядок — «проєкт недоступний (comments-unconfigured)»;
-        значень у виводі нема, запису нема."""
-        with mock.patch.object(serve, 'supabase_config', return_value=(None, None)):
-            rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
+        значень у виводі нема, запису нема.
+
+        4d-4b: коду `comments-unconfigured` для ЛІГИ більше нема (конфіг установки не читається). «Конфігу нема» = у просторі НЕМАЄ запису
+        `supabase-comments` (роль вимкнена): командних коментарів немає зовсім, тож пін «не знайдено серед пінів поточної задачі», мережі й запису
+        теж нема. Було `проєкт недоступний (comments-unconfigured…)`."""
+        with open(self.tasks_file, encoding='utf-8') as f:
+            tasks_root = f.read()
+        self.fx.build(roles=())
+        with open(self.tasks_file, 'w', encoding='utf-8') as f:     # `build` переписав корінь файла задач: повертаємо фікстуру задачі
+            f.write(tasks_root)
+        rc, out, _ = self.run_main(['resolve', 'b7e1c0', '--reason', 'готово', '--it', '4', '--dry-run'])
         self.assertEqual(rc, 1, out)
-        self.assertIn('проєкт недоступний (comments-unconfigured', out)
+        self.assertIn('не знайдено серед пінів поточної задачі', out)
         self.assertNotIn(sbconf.SB_URL, out)
         self.assertEqual(self.net.calls, [])
 
