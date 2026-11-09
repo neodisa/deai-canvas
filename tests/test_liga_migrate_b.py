@@ -750,7 +750,7 @@ class _VcsStand(_ChanStand):
         несли б — цілі збираються за новим правилом). Виклики самого ядра (3 аргументи) проходять як є."""
         serve = self.serve
         new = serve.vcs_target
-        return self.mock.patch.object(serve, 'vcs_target', lambda *a: new(*a[-3:]))
+        return self.mock.patch.object(serve, 'vcs_target', lambda *a: new(*a[1:]) if len(a) == 4 else new(*a))
 
     def sections(self, rig, cfg, space):
         """Ті самі секції, що знімає `make_before_4d3b.vcs`, але з явним записом: → словник, санітизований як знімок."""
@@ -2546,7 +2546,7 @@ class AfterMigrationParity4d3b(unittest.TestCase):
         import serve
         new_target = serve.vcs_target
         # 4d-4b (R4): генератор знімка (еталон, не правиться) кличе `vcs_target(cfg, tid, task, settings)`; перехідник відкидає `cfg`
-        with cls.mock.patch.object(g, 'liga', migrated), cls.mock.patch.object(serve, 'vcs_target', lambda *a: new_target(*a[-3:])):
+        with cls.mock.patch.object(g, 'liga', migrated), cls.mock.patch.object(serve, 'vcs_target', lambda *a: new_target(*a[1:]) if len(a) == 4 else new_target(*a)):
             snap = g.make()
         return snap, results
 

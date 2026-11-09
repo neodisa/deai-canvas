@@ -1861,10 +1861,6 @@ class StartupTest(_WriteStand):
         self.assert_no_secrets_in_logs()
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 def _ctx_case_without_originals(g, rig, env):
     """Копія `make_before_4d3a._ctx_case` БЕЗ розділу `config` (4d-4b: читачі оригіналів `install_config.supabase_config/jira_config` видалено,
     генератор знімка 0.16.0 не переганяється й не правиться — він лишається еталоном; тут збирається те, що не залежить від оригіналів:
@@ -2267,3 +2263,7 @@ class OriginalsReadersCopy(unittest.TestCase):
                 sup, jira = self.run_case(self.ROOT_PAIR if root_name == 'root_with_pair' else self.ROOT_NONE, 'none',
                                           self.ENV_ON if env_name == 'env_set' else {}, files_name == 'files_present')
                 self.assertEqual((list(sup), list(jira)), (want['supabase_config'], want['jira_config']))
+
+
+if __name__ == '__main__':
+    unittest.main()
