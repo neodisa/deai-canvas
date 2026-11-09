@@ -612,7 +612,11 @@ class PublishGuard(unittest.TestCase):
             self.assertEqual(len(self.calls(self.fn(self.serve_tree, name), 'publish_module')), 1, name)
 
     def test_the_type_test_lives_in_the_predicate_only(self):
-        self.assertEqual(len(self.implicit_checks(self.fn(self.dm_tree, 'publish_legacy_path'))), 1)
+        # 4d-4b: типу `Implicit` нема, тож предикат уже не торкається його (було: рівно одне звернення); єдина перевірка ТИПУ постачальника
+        # тепер — `isinstance(prov, Module)` у предикаті, а `publish_module` типів не перевіряє взагалі
+        pred = self.fn(self.dm_tree, 'publish_legacy_path')
+        self.assertEqual(self.implicit_checks(pred), [])
+        self.assertEqual(len([n for n in ast.walk(pred) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'isinstance']), 1)
         self.assertEqual(self.implicit_checks(self.fn(self.dm_tree, 'publish_module')), [])
 
     def test_guard_sees_a_planted_check(self):
@@ -717,11 +721,13 @@ class PublishCompatView(_PubWorld):
         self.vercel(DC)
         caps = self.caps(self.on)
         self.assertEqual(dm.compat_view(self.on, dict(caps, publish='static-publish')), {}, 'роль веде інший модуль')
-        self.assertEqual(dm.compat_view(self.on, dict(caps, publish='legacy')), {}, 'Implicit — ключа нема')
+        self.assertEqual(dm.compat_view(self.on, dict(caps, publish='legacy')), {}, 'рядок `legacy` — не модуль: ключа нема')
 
     def test_implicit_has_no_key(self):
+        """Було: простір без запису → `Implicit` (`'legacy'`), ключа нема. 4d-4b: без запису роль — `None`, ключа так само нема."""
+        self.write_modules(self.on, {})                  # світ кладе явний запис ЛІГИ (`DispatchWorld`): тут — простір без жодного запису
         caps = self.caps(self.on)
-        self.assertEqual(caps['publish'], 'legacy')
+        self.assertIsNone(caps['publish'])
         self.assertEqual(dm.compat_view(self.on, caps), {})
 
     def test_space_owned_provider_gives_no_key(self):
@@ -981,7 +987,8 @@ class StepCPlanTest(_StepC):
         with self.mock.patch.object(self.dm, '_provider_for', spy):
             self.assertEqual(self.plan_c()['status'], 'ready')
         self.assertEqual(seen, [('publish', True), ('publish', True)])        # присутність видавця + перевірка розрахованого
-        for fake in (lambda *a, **k: None, lambda *a, **k: self.dm.implicit.for_role('publish')):
+        # 4d-4b: другий підставний постачальник — раніше `implicit.for_role('publish')` (не `Module`), тепер — об'єкт із потрібним id, але НЕ `Module`
+        for fake in (lambda *a, **k: None, lambda *a, **k: self.mock.MagicMock(id=PUB_MOD)):
             with self.mock.patch.object(self.dm, '_provider_for', fake):
                 p = self.plan_c()
             self.assertEqual((p['status'], p['space_json'], p['secrets']), ('abort-provider', None, {}))
