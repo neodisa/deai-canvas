@@ -1315,7 +1315,8 @@ class LayerOff(Http, unittest.TestCase):
 
 class Capabilities(World):
 
-    LEGACY_SHAPE = {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'}
+    #: Простір З інтеграціями, але без жодного запису ролі (4d-4b: неявного постачальника `'legacy'` нема, роль без запису — `None`).
+    LEGACY_SHAPE = {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}
     NO_INTEGRATIONS = {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}
 
     def caps_everywhere(self):
@@ -1346,6 +1347,15 @@ class Capabilities(World):
         st, body = self.get('/t/ty/api/task')
         self.assertEqual(st, 200, body)
         self.assertEqual((body['space']['id'], body['space']['capabilities']), ('on', self.LEGACY_SHAPE))
+
+    def test_an_explicit_record_names_the_module_not_a_fallback_string(self):
+        """НОВЕ (4d-4b; замінює колишнє «простір з інтеграціями → `'legacy'`»): роль простору з інтеграціями називає модуль лише за ЯВНИМ записом;
+        без запису — `None` (див. `LEGACY_SHAPE`)."""
+        st, body = self.post('/api/module-enable', {'space': 'on', 'id': 'static-publish', 'settings': {'folder': '{home}/pub/{space_id}'}})
+        self.assertEqual(st, 200, body)
+        st, body = self.get('/api/spaces')
+        caps = {s['id']: s['capabilities'] for s in body['spaces']}
+        self.assertEqual(caps['on'], dict(self.LEGACY_SHAPE, publish='static-publish'))
 
     def test_all_tasks_listing_carries_the_space_of_the_request(self):
         st, body = self.get('/api/tasks?all=1')
@@ -1404,14 +1414,14 @@ class Capabilities(World):
         self.assertEqual(caps['on'], self.LEGACY_SHAPE)
         self.assertEqual((st2, task['space']['capabilities']['error']), (200, 'module-error'))
 
-    def test_a_broken_space_json_of_a_space_with_integrations_keeps_the_league_publish_but_never_reroutes_comments(self):
+    def test_a_broken_space_json_of_a_space_with_integrations_has_no_roles_and_the_error(self):
+        """Було `…keeps_the_league_publish_but_never_reroutes_comments` (4d-4b: шляху ЛІГА без запису нема — `publish`/`vcs` теж `None`)."""
         _write(os.path.join(self.on_path, 'space.json'), '{not json')
         st, body = self.get('/api/spaces')
         self.assertEqual(st, 200, body)
         caps = {s['id']: s['capabilities'] for s in body['spaces']}
-        # публікація — шлях ЛІГА недоторканий; коментарі — НЕ 'legacy' (спільний Supabase не запасний варіант) + помилка
-        self.assertEqual(caps['on'], {'publish': 'legacy', 'tokens': None, 'comments': None, 'vcs': 'legacy', 'dashboard': None, 'tracker': None, 'notify': None,
-                                      'error': 'space-json-unreadable'})
+        # жодної ролі (ні публікації, ні коментарів «з запасного варіанта») + помилка
+        self.assertEqual(caps['on'], dict(self.LEGACY_SHAPE, error='space-json-unreadable'))
 
     def test_a_broken_catalog_does_not_break_the_listing(self):
         """Не завантажений модуль УВІМКНЕНО (роль `tokens`) — він постачальником не стає, а списки відповідають."""
@@ -1422,7 +1432,7 @@ class Capabilities(World):
         self.assertEqual(st, 200, body)
         self.assertEqual({s['id']: s['capabilities'] for s in body['spaces']},
                          {'off': {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None},
-                          'on': {'publish': 'legacy', 'tokens': None, 'comments': 'legacy', 'vcs': 'legacy', 'dashboard': 'legacy', 'tracker': 'legacy', 'notify': 'legacy'}})
+                          'on': self.LEGACY_SHAPE})
         st, body = self.get('/api/task')
         self.assertEqual((st, body['space']['capabilities']),
                          (200, {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}))
