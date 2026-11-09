@@ -1808,7 +1808,27 @@ def _provider_for(role, space, get_cat=None, explicit_override=None):
         return winners[0][2]
     if role == 'comments' and _enabled_module_is_lost(cat, explicit):
         raise ModuleError('module-error', message=COMMENTS_MODULE_BROKEN)
+    if _builtin_role_is_lost(role, cat, explicit):
+        raise ModuleError('module-error', message=BUILTIN_MODULE_BROKEN % _BUILTIN_ROLE_MODULE[role])
     return None
+
+
+#: Вбудований модуль кожної ролі ЛІГИ (запис `space.json` з тим самим id веде роль). Рішення контролера 4d-4b: ЯВНО ввімкнений запис, який обслужити
+#: нічим (модуля нема в каталозі чи він не `ok`), — ПОМИЛКА для будь-якої ролі, а не мовчазне `None` (інакше здорова ЛІГА тихо втратила б, напр.,
+#: `vcs`: до 4d-4b це був «not loaded»). `comments` має ще й свій, ширший розбір (`_enabled_module_is_lost`).
+_BUILTIN_ROLE_MODULE = {'publish': 'vercel-publish', 'comments': 'supabase-comments', 'vcs': 'git-sync',
+                        'dashboard': 'supabase-dashboard', 'tracker': 'jira-tracker', 'notify': 'supabase-teams'}
+BUILTIN_MODULE_BROKEN = 'модуль %s простору не завантажився — роль вимкнено'
+
+
+def _builtin_role_is_lost(role, cat, explicit):
+    """Чи ЯВНО ввімкнений запис вбудованого модуля ролі `role` не можна обслужити: модуля нема в каталозі або він не `ok`."""
+    mid = _BUILTIN_ROLE_MODULE.get(role)
+    e = explicit.get(mid) if mid else None
+    if not isinstance(e, dict) or not e.get('enabled'):
+        return False
+    m = cat.get(mid)
+    return m is None or m.status != 'ok'
 
 
 def provider(role, space=None):

@@ -41,6 +41,30 @@ class ProviderWithoutImplicit(unittest.TestCase):
         for r in ROLES:
             self.assertIsNone(deai_modules.provider(r, _liga(fx)), r)
 
+    def test_an_enabled_record_that_cannot_be_served_is_an_error_for_every_role(self):
+        """I2 (рішення контролера): ЯВНО ввімкнений запис вбудованого модуля, якого нема в каталозі чи який не `ok`, — `module-error` для КОЖНОЇ з шести
+        ролей, а не мовчазне `None`. Без запису чи з вимкненим — `None`; чужа роль цим не зачеплена."""
+        fx = lf.LigaFixture(self).env().build()
+        real = deai_modules.catalog(_liga(fx))
+        for role in ROLES:
+            mid = lf.ROLE_RECORDS[role][0]
+            broken = deai_modules.Module(mid, roles=[role], status='error', error='x', error_code='module-error')
+            for name, cat in (('missing', {k: v for k, v in real.items() if k != mid}), ('broken', dict(real, **{mid: broken})),
+                              ('empty', {})):
+                with self.subTest(role=role, catalog=name), mock.patch.object(deai_modules, 'catalog', return_value=cat):
+                    with self.assertRaises(deai_modules.ModuleError) as cm:
+                        deai_modules.provider(role, _liga(fx))
+                    self.assertEqual(cm.exception.code, 'module-error')
+                    other = next(r for r in ROLES if r != role)
+                    if name != 'empty':                                              # живий модуль іншої ролі далі веде свою
+                        self.assertEqual(deai_modules.provider(other, _liga(fx)).id, lf.ROLE_RECORDS[other][0])
+        for role in ROLES:                                                            # запису нема / вимкнений — як було, `None`
+            mid = lf.ROLE_RECORDS[role][0]
+            for kw in ({'roles': ()}, {'overrides': {role: {'enabled': False}}}):
+                fx.build(**kw)
+                with self.subTest(role=role, case=sorted(kw)[0]), mock.patch.object(deai_modules, 'catalog', return_value={}):
+                    self.assertIsNone(deai_modules.provider(role, _liga(fx)))
+
     def test_a_disabled_record_is_none(self):
         fx = lf.LigaFixture(self).env().build(overrides={'tracker': {'enabled': False}})
         self.assertIsNone(deai_modules.provider('tracker', _liga(fx)))

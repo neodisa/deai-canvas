@@ -311,10 +311,16 @@ class Legacy(Core):
         self.assertEqual(cm.exception.code, 'vcs-error')
         self.assertIsInstance(cm.exception, OSError)
         self.assertIn('module catalog', str(cm.exception))
-        # 4d-4b: було «каталог без `git-sync` → `VcsError('… not loaded')»» (неявний постачальник ішов у каталог за модулем). Явний запис
-        # веде роль лише коли модуль у каталозі: порожній каталог — «ролі нема» (`None`), як у будь-якому просторі.
+        # Рішення контролера 4d-4b (I2): порожній каталог при ЯВНО ввімкненому записі `git-sync` — ПОМИЛКА (`module-error` → `VcsError`), а не
+        # мовчазне `None` (інакше здорова ЛІГА тихо втратила б `vcs`: `task-new` 400, `configured: False`); БЕЗ запису лишається `None`.
         with mock.patch.object(dm, 'catalog', return_value={}):
-            self.assertIsNone(serve.vcs_provider())
+            with self.assertRaises(serve.VcsError) as cm:
+                serve.vcs_provider()
+            self.assertEqual(cm.exception.code, 'module-error')
+            st = serve.gitlab_status(self.task, self.gl, self.meta(), 'it1')
+            self.assertEqual((st['configured'], st['code']), (True, 'module-error'))
+            with mock.patch.object(dm, 'space_modules', return_value={}):               # запису нема — ролі нема
+                self.assertIsNone(serve.vcs_provider())
         with mock.patch.object(dm, 'catalog', side_effect=RuntimeError('boom')):
             st = serve.gitlab_status(self.task, self.gl, self.meta(), 'it1')
         self.assertEqual((st['configured'], st['code']), (True, 'vcs-error'))

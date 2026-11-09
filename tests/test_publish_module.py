@@ -1036,7 +1036,7 @@ class LegacyPublishViaModule(TaskFixture):
 
     def test_8_a_module_that_is_not_loaded_is_refused_before_any_build(self):
         """Було: «модуль не завантажено» — `deploy_error` ПІСЛЯ збірки (неявний постачальник не питав каталогу). 4d-4b: ЛІГА публікує лише явним
-        записом `vercel-publish`, тож незавантажений модуль = немає постачальника: `409 no-publish-module` ДО збірки, жоден `vercel` не
+        записом `vercel-publish`, тож незавантажений модуль (запис є, ввімкнений) = помилка `module-error` (502, рішення I2) ДО збірки, жоден `vercel` не
         запускається, git і дашборд не чіпаються (замінено тим, що відмова раніша й чесніша)."""
         real = serve.deai_modules.catalog
         broken = types.SimpleNamespace(id='vercel-publish', status='error', roles=('publish',), origin='builtin')
@@ -1052,7 +1052,8 @@ class LegacyPublishViaModule(TaskFixture):
                     with self.assertRaises(urllib.error.HTTPError) as cm:
                         _post(base + '/api/publish', {})
                 body = json.loads(cm.exception.read().decode('utf-8'))
-                self.assertEqual((cm.exception.code, body['ok'], body['code']), (409, False, 'no-publish-module'))
+                # Рішення контролера 4d-4b (I2): ЯВНО ввімкнений запис, який нічим обслужити, — ПОМИЛКА (`module-error`, 502), а не «нікого» (409).
+                self.assertEqual((cm.exception.code, body['ok'], body['code']), (502, False, 'module-error'))
                 for spy in (bp, node, gc):
                     spy.assert_not_called()
 

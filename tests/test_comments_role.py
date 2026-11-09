@@ -275,8 +275,14 @@ class ProviderTest(CommentsEnv):
                     sp = self.new_space(f'{kind}{mid.replace("-", "")}', integrations=integrations)
                     self.enabled_entry(sp, mid)
                     self.assertIsNone(dm.provider('comments', sp))               # 4d-4b: і в ЛІГІ — без запасного
-
-                    self.assertNotIn('error', dm.capabilities(sp))
+                    if mid == 'vercel-publish':
+                        # I2 (4d-4b): ввімкнений зламаний `vercel-publish` — помилка ДЛЯ СВОЄЇ ролі `publish`, а коментарів не стосується.
+                        with self.assertRaises(dm.ModuleError) as pcm:
+                            dm.provider('publish', sp)
+                        self.assertEqual(pcm.exception.code, 'module-error')
+                        self.assertEqual(dm.capabilities(sp)['error'], 'module-error')
+                    else:
+                        self.assertNotIn('error', dm.capabilities(sp))
             with self.subTest(kind=kind, module='stranger'):
                 sp = self.new_space(f'{kind}stranger', integrations=integrations)
                 self.enabled_entry(sp, 'stranger')
