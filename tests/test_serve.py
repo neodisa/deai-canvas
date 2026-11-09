@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -19,6 +20,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import liga_fixture  # noqa: E402
 import sbconf  # noqa: E402
 import notify  # noqa: E402
 import serve  # noqa: E402
@@ -30,6 +32,23 @@ import serve  # noqa: E402
 def _git(args, cwd):
     return subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t',
                            *args], cwd=cwd, capture_output=True, text=True)
+
+
+def league_stand(cls, tasks_file, space_dir=None):
+    """Простір ЛІГА з ЯВНИМИ записами ролей для класу-стенда (4d-4b; було — модульна підміна читача оригіналів, а в ізольованому прогоні роль
+    вела неявна ЛІГА). `liga_fixture` кладе тимчасові `HOME`/`DEAI_HOME`, реєстр (поточний простір — ЛІГА) і записи; `tasks_file` — файл задач
+    цього простору (його ж стенд пише далі й ставить у `DC_TASKS_FILE`). Викликати ПЕРШИМ у `setUpClass`: `env()` знімає `DC_*` оточення,
+    які клас виставляє потім. Адреса й ключ Supabase — вигадані (`sbconf`); ключа SSH і IP хоста в записі `git-sync` нема — як у старому корені."""
+    fx = liga_fixture.LigaFixture(types.SimpleNamespace(addCleanup=cls.addClassCleanup))
+    fx.tasks_path = tasks_file
+    if space_dir is not None:             # тека простору = корінь нових задач стенда (шар із реєстром кладе нову задачу в теку простору)
+        fx.space_dir = space_dir
+    fx.env()
+    over = {role: {'settings': {'url': sbconf.SB_URL}, 'secrets': {'key': sbconf.SB_KEY}} for role in ('comments', 'dashboard', 'notify')}
+    over['vcs'] = {'settings': {'ssh_key': '', 'host_ip': ''}}
+    over['publish'] = {'secrets': {'password': ''}}       # у старому корені пароля превʼю не було: типовий `1100`, поки його не задали (тести пароля)
+    fx.build(overrides=over)
+    return fx
 
 
 def post(url, payload):
@@ -44,6 +63,10 @@ class ServeTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls.cfgdir = tempfile.mkdtemp(prefix='dc-cfg-')
+        cls.tasks_file = os.path.join(cls.cfgdir, 'tasks.json')
+        cls.dwroot = tempfile.mkdtemp(prefix='dc-dwroot-')
+        league_stand(cls, cls.tasks_file, cls.dwroot)
         cls.tmp = tempfile.mkdtemp(prefix='dc-task-')
         it1 = os.path.join(cls.tmp, 'iterations', 'it1')
         os.makedirs(it1)
@@ -69,7 +92,6 @@ class ServeTest(unittest.TestCase):
         shutil.rmtree(seed, ignore_errors=True)
         cls.mirrors = tempfile.mkdtemp(prefix='dc-mirrors-')
         os.environ['DC_MIRRORS_DIR'] = cls.mirrors
-        cls.dwroot = tempfile.mkdtemp(prefix='dc-dwroot-')
         # ⛔ Конфіг задач — у ТИМЧАСОВІЙ теці, а не живий tasks.json. Раніше тут був
         # backup+запис поверх робочого файла: падіння тесту між setUp і tearDown
         # лишало конфіг дизайнера фікстурою, save_tasks() затирав його .bak, а
@@ -77,8 +99,6 @@ class ServeTest(unittest.TestCase):
         # DC_TASKS_FILE читається serve.tasks_path() на кожен виклик, тому порядок
         # відносно `import serve` не важливий. Сиблінг .bak від save_tasks() теж
         # ляже сюди — живий бекап лишається недоторканим.
-        cls.cfgdir = tempfile.mkdtemp(prefix='dc-cfg-')
-        cls.tasks_file = os.path.join(cls.cfgdir, 'tasks.json')
         os.environ['DC_TASKS_FILE'] = cls.tasks_file
         os.environ['DC_NO_OVERVIEW'] = '1'   # жодного пуша реєстру в прод-Supabase
         # Особа машини — ФІКСТУРНА, а не git-конфіг того, хто запустив тест:
@@ -2182,16 +2202,16 @@ class OverviewSyncGuard(unittest.TestCase):
         # для ЛІГИ дивиться й на `DC_TASKS_FILE` (його ставить `setUpClass` великих класів цього файла), а конфіг ЛІГИ
         # читався з ЖИВОГО `tasks.json` установки. Тепер: `DC_TASKS_FILE` знято, конфіг — вигадана пара, лог — шов
         # `OVERVIEW_LOG` у тимчасовій теці (справжній `~/.claude/pipeline-feedback/` не пишемо), `Popen` — заглушка.
+        # 4d-4b: «вигадана пара» → явний запис `supabase-dashboard` простору ЛІГА (`liga_fixture`, тимчасові `HOME`/`DEAI_HOME`), простір запиту
+        # зафіксовано на ньому — без фіксації простір неявний і ролей у ньому нема.
         tmp = tempfile.mkdtemp(prefix='ovsync-guard-')
         self.addCleanup(shutil.rmtree, tmp, True)
         self.log = os.path.join(tmp, 'overview-sync.log')
         for patcher in (mock.patch.dict(os.environ, {}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
-                        mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.example', 'sk-test-1')),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True),
-                        # запит без фіксованого простору читає реєстр (`_overview_target`): справжній `~/.deai` тест не читає
-                        mock.patch.object(serve.spaces, 'read_registry', return_value={'spaces': []})):
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
+        liga_fixture.LigaFixture(self).env().build(roles=('dashboard',)).fix_space()
         os.environ.pop('DC_TASKS_FILE', None)
 
     def tearDown(self):
@@ -2240,12 +2260,12 @@ class OverviewSyncLog(unittest.TestCase):
         self.log = os.path.join(self.tmp, '.claude', 'pipeline-feedback', 'overview-sync.log')
         # 4c-1 (Task 6): гейти `_overview_sync` — `DC_TASKS_FILE` (його лишають сусідні класи), конфіг ЛІГИ (раніше — живий
         # `tasks.json`) і стан «один синк на простір» (спільний на процес) — задає сам тест.
+        # 4d-4b: конфіг ЛІГИ — явний запис `supabase-dashboard` у тимчасовому домі (`liga_fixture`), простір запиту зафіксовано на ньому.
         for patcher in (mock.patch.dict(os.environ, {'HOME': self.tmp}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
-                        mock.patch.object(serve, 'supabase_config', return_value=('https://demo.supabase.example', 'sk-test-1')),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True),
-                        mock.patch.object(serve.spaces, 'read_registry', return_value={'spaces': []})):
+                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
+        liga_fixture.LigaFixture(self).env().build(roles=('dashboard',)).fix_space()
         os.environ.pop('DC_TASKS_FILE', None)
         os.environ.pop('DC_NO_OVERVIEW', None)
 
@@ -2313,15 +2333,19 @@ class PreviewGate(unittest.TestCase):
 
     def test_gate_uses_task_password_when_set(self):
         cfg = {'tasks': {'t1': {'preview_password': '7788'}}}
-        self.assertEqual(
-            serve.preview_password(cfg, cfg['tasks']['t1']), '7788')
+        self.assertEqual(serve.preview_password(cfg['tasks']['t1']), '7788')       # 4d-4b: `(task, space)`, без `cfg`
 
     def test_gate_falls_back_to_shared_default(self):
-        self.assertEqual(serve.preview_password({}, {}), serve.DEFAULT_PREVIEW_PW)
+        self.assertEqual(serve.preview_password({}), serve.DEFAULT_PREVIEW_PW)
 
-    def test_config_level_password_applies_to_all_tasks(self):
-        self.assertEqual(serve.preview_password({'preview_password': '4242'}, {}),
-                         '4242')
+    def test_config_level_password_is_no_longer_read(self):
+        """Було `test_config_level_password_applies_to_all_tasks` (пароль у корені `tasks.json` для всіх задач). 4d-4b: корінь не читається —
+        спільний пароль живе в секреті запису `vercel-publish` (його закріплює `test_publish_module`:
+        `test_the_league_preview_password_is_the_secret_of_the_publish_record`), тут — лише негатив: пароль у корені нічого не змінює."""
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(d, 'tasks.json')}):
+            with open(os.path.join(d, 'tasks.json'), 'w') as f:
+                json.dump({'preview_password': '4242', 'tasks': {}}, f)
+            self.assertEqual(serve.preview_password({}), serve.DEFAULT_PREVIEW_PW)
 
     def test_gate_is_in_logo_palette_without_old_blue(self):
         """Гейт превʼю — окрема сторінка без styles.css, тож палітру несуть літерали.
@@ -3632,6 +3656,8 @@ class PublishFlagsForeignPreview(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls.cfgdir = tempfile.mkdtemp(prefix='dc-pubflags-cfg-')
+        league_stand(cls, os.path.join(cls.cfgdir, 'tasks.json'))
         cls.tmp = tempfile.mkdtemp(prefix='dc-pubflags-')
         it1 = os.path.join(cls.tmp, 'iterations', 'it1')
         os.makedirs(it1)
@@ -3640,7 +3666,6 @@ class PublishFlagsForeignPreview(unittest.TestCase):
         with open(os.path.join(cls.tmp, 'iterations.json'), 'w') as f:
             json.dump({'iterations': [{'id': 'it1', 'date': '29.09.2026 12:00',
                                        'note': 'ф', 'published': True}]}, f)
-        cls.cfgdir = tempfile.mkdtemp(prefix='dc-pubflags-cfg-')
         cls.env = {'DC_TASKS_FILE': os.path.join(cls.cfgdir, 'tasks.json'),
                    'DC_NO_OVERVIEW': '1', 'DC_IDENTITY_NAME': 'Я',
                    'DC_IDENTITY_EMAIL': 'me@x'}
@@ -3683,6 +3708,8 @@ class ShotsEndpoints(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls.cfgdir = tempfile.mkdtemp(prefix='dc-shots-cfg-')
+        league_stand(cls, os.path.join(cls.cfgdir, 'tasks.json'))
         cls.tmp = tempfile.mkdtemp(prefix='dc-shots-')
         it1 = os.path.join(cls.tmp, 'iterations', 'it1')
         os.makedirs(os.path.join(it1, 'shots'))
@@ -3706,7 +3733,6 @@ class ShotsEndpoints(unittest.TestCase):
         with open(os.path.join(cls.tmp, 'iterations.json'), 'w') as f:
             json.dump({'iterations': [{'id': 'it1', 'date': '24.08.2026 12:00',
                                        'note': 'ф', 'published': True}]}, f)
-        cls.cfgdir = tempfile.mkdtemp(prefix='dc-shots-cfg-')
         os.environ['DC_TASKS_FILE'] = os.path.join(cls.cfgdir, 'tasks.json')
         os.environ['DC_NO_OVERVIEW'] = '1'
         with open(os.environ['DC_TASKS_FILE'], 'w') as f:
@@ -5936,6 +5962,7 @@ class TaskPerRequest(unittest.TestCase):
         cls.cfgdir = tempfile.mkdtemp(prefix='dc-taskreq-cfg-')
         cls.root = tempfile.mkdtemp(prefix='dc-taskreq-')
         cls.tasks_file = os.path.join(cls.cfgdir, 'tasks.json')
+        league_stand(cls, cls.tasks_file, cls.cfgdir)
         os.environ['DC_TASKS_FILE'] = cls.tasks_file
         os.environ['DC_NO_OVERVIEW'] = '1'
         cls.httpd = serve.make_server(0)
