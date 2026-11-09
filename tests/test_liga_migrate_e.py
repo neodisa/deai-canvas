@@ -1058,6 +1058,29 @@ class UnreadPreviewPassword(_StandE):
         self.assertIsNone(self.lm.unread_preview_password_line())
 
 
+class BakAndDurability(_StandE):
+    """Fix 2/3 (review): `tasks.json.bak` несе видалені облікові — 0600; `backups/` теж скидається на пластину."""
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX-права')
+    def test_bak_is_0600_after_step_e_and_after_restore(self):
+        self.root()
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        bak = self.tasks_path + '.bak'
+        self.assertEqual(os.stat(bak).st_mode & 0o777, 0o600)
+        os.chmod(bak, 0o644)
+        self.assertEqual(self.lm.restore(info['backup']), 'restored')
+        self.assertEqual(os.stat(bak).st_mode & 0o777, 0o600)
+
+    def test_backups_parent_dir_is_fsynced_before_delete(self):
+        self.root()
+        synced = []
+        real = self.lm.fsync_path
+        with self.mock.patch.object(self.lm, 'fsync_path', lambda p: (synced.append(p), real(p))[1]):
+            self.assertEqual(self.run_e()[0], 'done')
+        self.assertIn(os.path.join(self.deai, 'backups'), synced)
+
+
 class StatusAndCli(_StandE):
     def test_status_text_has_originals_and_roles_sections(self):
         self.root()

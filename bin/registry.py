@@ -16,6 +16,7 @@ import calendar
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -281,7 +282,7 @@ def _ssh_key():
 
 def _git(args, cwd, cfg, check=True, timeout=120):
     env = dict(os.environ,
-               GIT_SSH_COMMAND=f'ssh -i {_ssh_key()} -o StrictHostKeyChecking=no')
+               GIT_SSH_COMMAND=f'ssh -i {shlex.quote(_ssh_key())} -o StrictHostKeyChecking=no')
     r = subprocess.run(['git', *args], cwd=cwd, env=env, text=True,
                        capture_output=True, timeout=timeout)
     if check and r.returncode != 0:

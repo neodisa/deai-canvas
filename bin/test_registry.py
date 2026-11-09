@@ -1040,3 +1040,21 @@ class TestIdentitySameAsServer(unittest.TestCase):
         from unittest import mock
         with mock.patch.dict(os.environ, {'DC_IDENTITY_NAME': 'Я', 'DC_IDENTITY_EMAIL': 'me@x'}):
             self.assertEqual(rg._identity(), ('Я', 'me@x'))
+
+
+class TestGitQuotesSshKey(unittest.TestCase):
+    """Шлях ключа зі пробілом не має розвалити `GIT_SSH_COMMAND` (див. `shlex.quote` у модулі git-sync)."""
+
+    def test_key_path_with_a_space_is_one_shell_word(self):
+        import shlex
+        from unittest import mock
+        seen = {}
+
+        def fake_run(args, **kw):
+            seen['env'] = kw['env']
+            return mock.Mock(returncode=0, stdout='', stderr='')
+        with mock.patch.object(rg, '_ssh_key', return_value='/tmp/dir with space/id key'), \
+                mock.patch.object(rg.subprocess, 'run', fake_run):
+            rg._git(['status'], '.', {})
+        argv = shlex.split(seen['env']['GIT_SSH_COMMAND'])
+        self.assertEqual(argv[:3], ['ssh', '-i', '/tmp/dir with space/id key'])

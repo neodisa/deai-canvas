@@ -1090,6 +1090,15 @@ def _records_writable(path):
             and (not os.path.exists(path + '.bak') or os.access(path + '.bak', os.W_OK)))
 
 
+def _bak_copy(path):
+    """`tasks.json.bak` — копія кореня, де можуть лежати облікові: права 0600 (збій `chmod` на не-POSIX ігноруємо)."""
+    shutil.copy2(path, path + '.bak')
+    try:
+        os.chmod(path + '.bak', 0o600)
+    except OSError:
+        pass
+
+
 def _commit_records(p, step):
     """4d-4a: `track = profile` у записах задач ЛІГИ (файл задач ЛІГИ — `install_config.legacy_tasks_path()`, той самий, що читав
     `plan`). Файл ПЕРЕЧИТУЄМО під `WRITE_LOCK` відразу перед записом (задача, додана після `plan()`, теж виправляється; чужі правки не
@@ -1107,7 +1116,7 @@ def _commit_records(p, step):
                 return 0
             for tid in todo:
                 cfg['tasks'][tid]['track'] = cfg['tasks'][tid]['profile']
-            shutil.copy2(path, path + '.bak')
+            _bak_copy(path)
             if _file_sig(path) == before:                    # ще раз ПЕРЕД записом: файл не чіпали — пишемо
                 atomic_write_json(path, cfg)
                 return len(todo)
@@ -1135,7 +1144,7 @@ def _durable_before_delete(space_path, stamp):
     for p in paths:
         if os.path.isfile(p):
             fsync_path(p)
-    for p in (bdir, space_path, os.path.dirname(deai_modules._secrets_path())):
+    for p in (bdir, os.path.dirname(bdir), space_path, os.path.dirname(deai_modules._secrets_path())):
         fsync_path(p)
 
 
@@ -1204,7 +1213,7 @@ def _commit_originals(sid, space_path, planned_remove, unconfirmed=None):
                 return []
             for k in todo:
                 del cfg[k]
-            shutil.copy2(path, path + '.bak')
+            _bak_copy(path)
             if _file_sig(path) == before:
                 try:
                     atomic_write_json(path, cfg, fsync=True)     # єдиний видаляючий запис кроку Е: довговічно (не `_commit_records`)
@@ -1566,7 +1575,7 @@ def _restore_root(sp, d):
                 return [], kept, flags
             for k in add:
                 cfg[k] = old[k]
-            shutil.copy2(path, path + '.bak')
+            _bak_copy(path)
             if _file_sig(path) == before:
                 try:
                     atomic_write_json(path, cfg, fsync=True)
