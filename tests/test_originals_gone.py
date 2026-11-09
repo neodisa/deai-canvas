@@ -674,6 +674,35 @@ class CapabilityErrorsArePerRole(unittest.TestCase):
         for role in ('publish', 'comments', 'dashboard', 'tracker', 'notify'):
             self.assertIsNotNone(caps[role], role)
 
+    def test_space_level_error_wins_over_an_earlier_module_error(self):
+        real = deai_modules._provider_for
+
+        def mixed(role, space, *rest):
+            if role == 'publish':
+                raise deai_modules.ModuleError('module-error', message='раніше за порядком')
+            if role == 'comments':
+                raise deai_modules.ModuleError(deai_modules.SPACE_LEVEL_ERROR, message='space.json')
+            return real(role, space, *rest)
+        with mock.patch.object(deai_modules, '_provider_for', mixed):
+            caps = deai_modules.capabilities(_liga(self.fx))
+        self.assertEqual(caps['error'], deai_modules.SPACE_LEVEL_ERROR)
+        self.assertEqual(caps['errors']['publish'], 'module-error')
+
+    def test_the_cache_does_not_share_the_errors_dict(self):
+        real = deai_modules._provider_for
+
+        def lost(role, space, *rest):
+            if role == 'vcs':
+                raise deai_modules.ModuleError('module-error', message='x')
+            return real(role, space, *rest)
+        with mock.patch.object(deai_modules, '_provider_for', lost):
+            first = deai_modules.capabilities(_liga(self.fx))
+            first['errors']['vcs'] = 'tampered'
+            second = deai_modules.capabilities(_liga(self.fx))
+            second['errors']['x'] = 1
+            third = deai_modules.capabilities(_liga(self.fx))
+        self.assertEqual(third['errors'], {'vcs': 'module-error'})
+
     def test_a_total_failure_names_every_role(self):
         with mock.patch.object(deai_modules, 'own_sig', side_effect=RuntimeError('boom')):
             caps = deai_modules.capabilities(_liga(self.fx))

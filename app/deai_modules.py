@@ -1913,6 +1913,14 @@ def capabilities(space):
 SPACE_LEVEL_ERROR = 'space-json-unreadable'
 
 
+def _copy_caps(caps):
+    """Копія `caps` з власним `errors` (поверхнева копія ділила б вкладений словник між кешем і викликачами)."""
+    out = dict(caps)
+    if isinstance(out.get('errors'), dict):
+        out['errors'] = dict(out['errors'])
+    return out
+
+
 def _capabilities_full(space):
     """`(caps, raw)`: `caps` — те, що віддає `capabilities` (значення назовні, через `api_value`), `raw` — ті самі рішення ролей
     як `Module`/`None` (лише для `publish_module`: рішення «публікує модуль» береться з ТОГО Ж проходу й ТОГО Ж кешу,
@@ -1925,7 +1933,7 @@ def _capabilities_full(space):
         with _STATE_LOCK:
             hit = _CAPS.get(sid)
         if hit is not None and hit[0] == key:
-            return dict(hit[1]), dict(hit[2])
+            return _copy_caps(hit[1]), dict(hit[2])
         box = {}
 
         def get_cat():
@@ -1950,13 +1958,15 @@ def _capabilities_full(space):
                 error = error or 'module-error'
                 errors[role] = 'module-error'
                 caps[role] = None
+        if SPACE_LEVEL_ERROR in errors.values():
+            error = SPACE_LEVEL_ERROR           # простір-рівневий стан не ховається за порядком ролей («перший код виграє»)
         if error:
             caps['error'] = error
             if any(code != SPACE_LEVEL_ERROR for code in errors.values()):
                 caps['errors'] = errors     # r15-1: збій ролі названий за роллю; клієнт ховає картки лише за `SPACE_LEVEL_ERROR`
         with _STATE_LOCK:
-            _CAPS[sid] = (key, dict(caps), dict(raw))
-        return dict(caps), raw
+            _CAPS[sid] = (key, _copy_caps(caps), dict(raw))
+        return _copy_caps(caps), raw
     except Exception:  # noqa: BLE001 — тотальність: збій відбитків/каталогу не ламає опитування
         caps = {role: None for role in ROLES_CALLED}
         caps['error'] = 'module-error'
