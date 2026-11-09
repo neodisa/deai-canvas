@@ -43,9 +43,7 @@ class GitlabSyncHonesty(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='dc-syncverify-')
-        self._saved_git_env = {k: os.environ.get(k) for k in self._GIT_ENV}
-        os.environ.update(self._GIT_ENV)
-        os.environ['DC_MIRRORS_DIR'] = os.path.join(self.tmp, 'mirrors')
+        mirrors = os.path.join(self.tmp, 'mirrors')
         # ⛔ КОНФІГ ЗАДАЧ — теж у тимчасову теку, і це не перестраховка.
         # 15.09.2026 тест, який кличе `task_new`, записав фікстуру ПОВЕРХ
         # робочого `tasks.json` дизайнера: 21 задача зникла посеред його
@@ -55,10 +53,10 @@ class GitlabSyncHonesty(unittest.TestCase):
         # `LiveConfigUntouched` цього не спіймав: він стереже конфіг лише
         # навколо `ServeTest`, а `unittest discover` бере файли за абеткою і
         # `test_gitlab_sync` іде ПЕРШИМ.
-        os.environ['DC_TASKS_FILE'] = os.path.join(self.tmp, 'tasks.json')
+        tasks_file = os.path.join(self.tmp, 'tasks.json')
         # Файл мусить ІСНУВАТИ: `save_tasks` спершу робить `.bak` копією
         # наявного, і на порожньому місці падає копіюванням.
-        with open(os.environ['DC_TASKS_FILE'], 'w', encoding='utf-8') as fh:
+        with open(tasks_file, 'w', encoding='utf-8') as fh:
             json.dump({'tasks': {}, 'current': None}, fh)
         # serve читає DC_MIRRORS_DIR на кожен виклик (`_mirrors_base`), тому імпорт тут безпечний
         import serve
@@ -66,8 +64,10 @@ class GitlabSyncHonesty(unittest.TestCase):
         # 4d-4b (R2): неявного постачальника ЛІГИ нема — стенд веде ЯВНИЙ запис `git-sync` (`compat = design-canvas`) у тимчасовому домі
         # (`LigaFixture` підміняє `HOME`/`DEAI_HOME`). Ізоляцію (`DC_TASKS_FILE`) лишаємо: `ctx` фіксований, як був у неявного.
         fx = LigaFixture(self, tmp=self.tmp)
-        fx.tasks_path = os.environ['DC_TASKS_FILE']
-        fx.env(DC_TASKS_FILE=fx.tasks_path, DC_MIRRORS_DIR=os.environ['DC_MIRRORS_DIR'], **self._GIT_ENV)
+        fx.tasks_path = tasks_file
+        # ⛔ Оточення — ЛИШЕ через `fx.env` (`patch.dict` знімає знімок до змін і відновлює його в cleanup): ручні `os.environ[...] = …` до нього
+        # потрапляли б у знімок і після тесту відновлювали б шлях у видалену теку (ламало `RealStateGuards`).
+        fx.env(DC_TASKS_FILE=tasks_file, DC_MIRRORS_DIR=mirrors, **self._GIT_ENV)
         fx.build(roles=('vcs',), overrides={'vcs': {'settings': {'ssh_key': '', 'host_ip': ''}}}).fix_space()
         with open(fx.tasks_path, 'w', encoding='utf-8') as fh:
             json.dump({'tasks': {}, 'current': None}, fh)
@@ -98,13 +98,6 @@ class GitlabSyncHonesty(unittest.TestCase):
                    'branch': 'main', 'ssh_key': None}
 
     def tearDown(self):
-        os.environ.pop('DC_MIRRORS_DIR', None)
-        os.environ.pop('DC_TASKS_FILE', None)
-        for k, v in self._saved_git_env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # ---- хелпери ----
