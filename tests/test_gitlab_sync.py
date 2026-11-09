@@ -68,6 +68,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         # ⛔ Оточення — ЛИШЕ через `fx.env` (`patch.dict` знімає знімок до змін і відновлює його в cleanup): ручні `os.environ[...] = …` до нього
         # потрапляли б у знімок і після тесту відновлювали б шлях у видалену теку (ламало `RealStateGuards`).
         fx.env(DC_TASKS_FILE=tasks_file, DC_MIRRORS_DIR=mirrors, **self._GIT_ENV)
+        self.assertEqual(os.environ['DC_TASKS_FILE'], tasks_file)       # ізоляція конфіга задач діє (на неї дивиться і статичний охоронець `test_serve`)
         fx.build(roles=('vcs',), overrides={'vcs': {'settings': {'ssh_key': '', 'host_ip': ''}}}).fix_space()
         with open(fx.tasks_path, 'w', encoding='utf-8') as fh:
             json.dump({'tasks': {}, 'current': None}, fh)
