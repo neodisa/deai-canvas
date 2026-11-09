@@ -98,6 +98,10 @@ def main(argv=None):
     if st == 'refuse-tasks-unreadable':                      # 4d-4b: живий tasks.json не читається — відкат кроку Е нічого не записав
         print('  живий tasks.json не читається або його нема: виправте файл (чи відновіть його з tasks.json.bak), '
               'а коли файла нема — створіть його (достатньо {}), і повторіть відкат')
+    if st == 'restored' and info.get('kept_live'):           # лише імена ключів, значень не друкуємо
+        print('  залишено живими (корінь tasks.json): %s' % ', '.join(str(k) for k in info['kept_live']))
+    if st == 'restored' and info.get('kept_live_secrets'):
+        print('  залишено живими (секрети): %s' % ', '.join(str(k) for k in info['kept_live_secrets']))
     if st == 'restored' and info.get('root_fallback'):
         print('  перелік ключів кореня узято з бекапу (позначка кроку нечитана чи без переліку): повернено всі відсутні оригінали')
     if st == 'restored' and info.get('root_durability_unconfirmed'):

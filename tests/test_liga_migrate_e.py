@@ -1044,6 +1044,36 @@ class StatusAndCli(_StandE):
         self.assert_no_secrets(out)
         self.assertNotIn(self.SSH, out)
 
+    def _stamp_with_old_password(self):
+        self.rec_all(secrets={'vercel-publish': {'password': 'inert-old'}})
+        self.root()
+        st, info = self.run_e()
+        self.assertEqual(st, 'done')
+        return info['backup']
+
+    def test_cli_restore_lists_kept_live_key_names_only(self):
+        """`restore` друкує, що залишено живим: ключі кореня (`kept_live`) і секрети (`kept_live_secrets`) — лише імена, без значень."""
+        stamp = self._stamp_with_old_password()
+        sec = self.read_json(self.secrets_path())
+        sec['legacy']['vercel-publish']['password'] = 'person-new'
+        self._write(self.secrets_path(), sec)
+        os.chmod(self.secrets_path(), 0o600)
+        cfg = self.tasks()
+        cfg['preview_password'] = 'my-own-password'
+        self._write(self.tasks_path, cfg)
+        code, out, _err = self.cli('restore', stamp)
+        self.assertEqual(code, 0, out)
+        self.assertIn('залишено живими (корінь tasks.json): preview_password', out)
+        self.assertIn('залишено живими (секрети): preview_password', out)
+        for value in ('person-new', 'my-own-password', 'inert-old', self.PW):
+            self.assertNotIn(value, out)
+
+    def test_cli_restore_prints_no_kept_lines_when_nothing_was_kept(self):
+        stamp = self._stamp_with_old_password()
+        code, out, _err = self.cli('restore', stamp)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('залишено живими', out)
+
     def test_cli_unhold(self):
         self.space_json({'modules': {}, 'migrations': {'liga-4d4a': {'held': True}, 'liga-4d4b': {'at': 'x', 'backup': 'b'}}})
         code, out, _e = self.cli('unhold', 'liga-4d4a')
