@@ -433,6 +433,38 @@ class UnreadableSecretsConsumers(unittest.TestCase):
         self.assertEqual((st, body.get('preview_password')), (200, 'abcd'), body)
         with open(self.fx.tasks_path, encoding='utf-8') as f:
             self.assertEqual(json.load(f)['tasks']['a']['preview_password'], 'abcd')
+        # fp-2: усе, що людина бачить ПІСЛЯ, теж живе без секретів (файл секретів і далі зіпсовано).
+        st, body = self.call('/api/task')                                    # знімок задачі: пароль задачі, помилки нема
+        self.assertEqual(st, 200, body)
+        self.assertEqual((body['preview_password'], body['preview_password_custom']), ('abcd', True))
+        self.assertNotIn('preview_password_error', body)
+        st, body = self.call('/api/publish', {'build_only': True})           # збірка: гейт із паролем задачі, а не типовий 1100
+        self.assertEqual((st, body.get('ok')), (200, True), body)
+        with open(os.path.join(self.tdir, 'publish', 'index.html'), encoding='utf-8') as f:
+            wrapper = f.read()
+        self.assertIn('abcd', wrapper)
+        self.assertNotIn(serve.DEFAULT_PREVIEW_PW, wrapper)
+        before = self.raw(self.fx.tasks_path)
+        st, body = self.call('/api/preview-password', {'password': ''})      # зняти власний — пароль упав би в 1100: відмова, файл не змінено
+        self.assertEqual((st, body['code']), (409, 'secrets-unreadable'), body)
+        self.assertEqual(self.raw(self.fx.tasks_path), before)
+
+    def test_secrets_breaking_between_the_probe_and_the_save_is_a_clean_refusal(self):
+        """fp-1: зняття власного пароля — пробна перевірка секретів ПРОЙШЛА, а друге читання (після зміни задачі) їх уже не бачить: відповідь — чиста
+        409 `secrets-unreadable` (не 500), а `tasks.json` НЕ змінено (результат рахуємо ДО запису)."""
+        import json
+        with open(self.fx.tasks_path, encoding='utf-8') as f:
+            cfg = json.load(f)
+        cfg['tasks']['a']['preview_password'] = 'oldpw'
+        with open(self.fx.tasks_path, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f)
+        before = self.raw(self.fx.tasks_path)
+        boom = deai_modules.ModuleError('secrets-unreadable', message='x')
+        with mock.patch.object(deai_modules, 'publish_password', side_effect=[None, boom]) as pp:
+            st, body = self.call('/api/preview-password', {'password': ''})
+        self.assertEqual(pp.call_count, 2)
+        self.assertEqual((st, body.get('code'), body.get('error')), (409, 'secrets-unreadable', serve.SECRETS_UNREADABLE_TEXT), body)
+        self.assertEqual(self.raw(self.fx.tasks_path), before)
 
     def test_reseal_gate_skips_the_task_and_keeps_its_wrapper(self):
         import contextlib
@@ -452,6 +484,65 @@ class UnreadableSecretsConsumers(unittest.TestCase):
             reseal_gate.main()
         self.assertIn('секрети простору не читаються', out.getvalue())
         self.assertEqual(self.raw(idx), before)
+
+
+class PublishIsAlwaysPinned(unittest.TestCase):
+    """fp-3: `_publish` береться за простір лише коли запит ним зафіксовано; без нього `publish_password(None)` дав би `None` і гейт упав би в `1100`.
+    Справжній `Handler`, простір ЛІГА з секретом `password` запису `vercel-publish` (шар увімкнено): КОЖНА форма запиту (без назви задачі, заголовок
+    `X-Canvas-Task`, префікс `/t/<id>/`) мусить фіксуватися, а гейт збірки — нести секрет запису, а не типовий пароль."""
+    SECRET = 'sec-from-record-7'
+
+    def setUp(self):
+        import json
+        import threading
+        self.fx = lf.LigaFixture(self).env(DC_NO_OVERVIEW='1', DC_IDENTITY_NAME='Lead', DC_IDENTITY_EMAIL='lead@example.com')
+        tdir = os.path.join(self.fx.tmp, 'work', 'a')
+        os.makedirs(os.path.join(tdir, 'iterations', 'it1'))
+        with open(os.path.join(tdir, 'iterations.json'), 'w', encoding='utf-8') as f:
+            json.dump({'iterations': [{'id': 'it1', 'date': '01.01.2026 10:00', 'note': 'n', 'published': True}], 'publish_url': None}, f)
+        with open(os.path.join(tdir, 'iterations', 'it1', 'index.html'), 'w', encoding='utf-8') as f:
+            f.write('<!DOCTYPE html><html><body>x</body></html>')
+        self.tdir = tdir
+        self.fx.build(tasks={'a': {'title': 'A', 'dir': tdir, 'track': 'tool'}}, root_extra={'current': 'a'},
+                      overrides={'publish': {'secrets': {'password': self.SECRET}}})
+        spaces.clear_request_space()
+        self.addCleanup(spaces.clear_request_space)
+        self.httpd = serve.make_server(0)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+        self.base = 'http://127.0.0.1:%d' % self.httpd.server_address[1]
+
+    def _publish(self, path, headers=None):
+        import json
+        import urllib.request
+        req = urllib.request.Request(self.base + path, method='POST', data=json.dumps({'build_only': True}).encode(),
+                                     headers=dict({'Content-Type': 'application/json'}, **(headers or {})))
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read().decode('utf-8'))
+
+    def test_every_request_shape_is_pinned_and_the_gate_uses_the_record_secret(self):
+        orig = deai_modules.publish_password
+        seen = []
+
+        def spy(space):
+            seen.append((space, spaces.request_space_id()))
+            return orig(space)
+        shapes = (('/api/publish', None), ('/api/publish', {'X-Canvas-Task': 'a'}), ('/t/a/api/publish', None))
+        for path, headers in shapes:
+            del seen[:]
+            with mock.patch.object(deai_modules, 'publish_password', side_effect=spy):
+                st, body = self._publish(path, headers)
+            self.assertEqual((st, body.get('ok')), (200, True), (path, body))
+            self.assertTrue(seen, path)
+            for space, pin in seen:
+                self.assertIsNotNone(pin, path)                      # запит зафіксовано…
+                self.assertIsInstance(space, dict, path)             # …тож `_publish` бере простір, а не `None`
+                self.assertEqual(space.get('id'), 'legacy', path)
+            with open(os.path.join(self.tdir, 'publish', 'index.html'), encoding='utf-8') as f:
+                wrapper = f.read()
+            self.assertIn(self.SECRET, wrapper, path)
+            self.assertNotIn(serve.DEFAULT_PREVIEW_PW, wrapper, path)
 
 
 class RegistrySshKeyRecord(unittest.TestCase):

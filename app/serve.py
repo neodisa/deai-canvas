@@ -7160,8 +7160,13 @@ class Handler(SimpleHTTPRequestHandler):
             task['preview_password'] = pw
         else:
             task.pop('preview_password', None)
+        # fp-1: результат — ДО запису. Секрети могли зіпсуватися між пробою вище й цим читанням (TOCTOU): тоді відмова чиста, а `tasks.json` не змінено.
+        try:
+            now = preview_password(task, space)
+        except deai_modules.ModuleError as e:
+            self._space_error(deai_modules.STATUS.get(e.code, 409), e.code, SECRETS_UNREADABLE_TEXT)
+            return
         save_tasks(cfg)
-        now = preview_password(task, space)
         self._send_json({'ok': True, 'preview_password': now,
                          'preview_password_custom': bool(task.get('preview_password')),
                          'preview_gate': preview_gate_state(task, now)})
