@@ -878,7 +878,8 @@ class VcsCompat(_VcsStand):
             self.assertIs(m.pop(flag), False, flag)
             self.assertIs(wm.pop(flag), True, flag)
         self.assertEqual(m, wm, 'прапорці форми «Нова задача» й підписи — як у ЛІГИ 0.17')
-        self.assertEqual(sorted(keys), sorted(wkeys + ['compat']), 'єдина різниця обʼєкта простору — ключ compat')
+        self.assertEqual(sorted(keys), sorted([k for k in wkeys if k != 'integrations'] + ['compat']),
+                         'єдина різниця обʼєкта простору — ключ compat (і зник `integrations`, 4d-4c)')
         self.assertEqual(got['form']['space_row']['compat'], {'vcs': DC})
         self.assertEqual(got['form']['capabilities']['vcs'], VCS_ID)
         self.assertEqual(got['urlopen_calls'], 0)
@@ -1304,15 +1305,14 @@ class SharedStateIsolationB(_VcsStand):
 
     # ---- ProjectComments._module
     def test_project_comments_module_is_not_gated_by_integrations(self):
-        """Мігрований запис — явний модуль: `require_integrations()` його не гейтить (гейт лише в `Implicit`)."""
+        """Мігрований запис — явний модуль: жодного гейта «інтеграцій» нема (прапорець геть, 4d-4c)."""
         serve, spaces = self.serve, self.spaces
         rig, space, cfg = self.cstand()
         with self.pinned(rig):
             self.dm.reset_caches()
             pc = serve.ProjectComments(space)
             self.assertEqual(pc.kind, 'module')
-            with self.mock.patch.object(spaces, 'require_integrations', side_effect=AssertionError('gated')), \
-                    self.mock.patch.object(self.dm, 'call', return_value=[]) as call:
+            with self.mock.patch.object(self.dm, 'call', return_value=[]) as call:
                 pc.pins(cfg['tasks']['a-1'], 'a-1')
             self.assertEqual(call.call_count, 1)
 
@@ -2501,6 +2501,9 @@ def _expect_diff():
     exp['/vcs/form/space_row/compat/comments'] = (_ABSENT, 'comment-layer')
     exp['/vcs/form/space_row/compat/vcs'] = (_ABSENT, 'design-canvas')
     exp['/vcs/form/model/space_keys/compat'] = (_ABSENT, True)
+    # 4d-4c: прапорець `integrations` сервер більше не віддає (запис ЛІГИ без ключа; знімок 0.17.0 мав `True`)
+    exp['/vcs/form/space_row/integrations'] = (True, _ABSENT)
+    exp['/vcs/form/model/space_keys/integrations'] = (True, _ABSENT)
     # 4d-4a: адаптера напрямків у рантаймі нема, а крок D у цьому стенді (лише a+b) не гнано — рядок простору в `/api/spaces`
     # без напрямків: знімок 0.17.0 мав чотири напрямки адаптера й дефолт `united`
     exp['/vcs/form/space_row/default_track'] = ('united', None)

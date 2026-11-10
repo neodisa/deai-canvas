@@ -59,7 +59,7 @@ def write_records(space_dir, deai_dir, sid='legacy', roles=ALL_ROLES, overrides=
 
 
 class LigaFixture:
-    """Тимчасовий `HOME`/`DEAI_HOME` + реєстр із простором ЛІГА (`legacy: true`, `integrations: true`) + `space.json` + `secrets.json`."""
+    """Тимчасовий `HOME`/`DEAI_HOME` + реєстр із простором ЛІГА (`legacy: true`, без прапорця `integrations`) + `space.json` + `secrets.json`."""
 
     def __init__(self, test, tmp=None):
         self.test = test
@@ -107,9 +107,10 @@ class LigaFixture:
         with open(path, 'w', encoding='utf-8') as f:
             f.write(obj if isinstance(obj, str) else json.dumps(obj))
 
-    def registry(self, integrations=True):
+    def registry(self):
+        """Запис ЛІГИ БЕЗ ключа `integrations` (4d-4c: так пише 0.22); рішення «ЛІГА чи ні» — `liga_migrate._liga_integrations` за маркерами кореня."""
         self._write(os.path.join(self.deai, 'spaces.json'),
-                    {'version': 1, 'current': 'legacy', 'spaces': [{'id': 'legacy', 'path': self.space_dir, 'legacy': True, 'integrations': integrations}]})
+                    {'version': 1, 'current': 'legacy', 'spaces': [{'id': 'legacy', 'path': self.space_dir, 'legacy': True}]})
 
     # --- спосіб (а): прямі записи
     def key_file(self):

@@ -183,7 +183,7 @@ class Migration(Env):
                           design_work_root=self.hp('Liga', 'United', 'design-work'), registry={})
         reg = spaces.load_registry()
         want = {'version': 1, 'current': 'liga', 'spaces': [
-            {'id': 'liga', 'path': self.hp('Liga'), 'legacy': True, 'integrations': True}]}
+            {'id': 'liga', 'path': self.hp('Liga'), 'legacy': True}]}        # 4d-4c: без `integrations`
         self.assertEqual(reg, want)
         self.assertEqual(_read(self.reg_file), want)
         self.assertEqual(_mode(self.deai), 0o700)
@@ -228,21 +228,16 @@ class Migration(Env):
         self.assertEqual(_bytes(self.reg_file), body)
         self.assertEqual(_md5(self.legacy), before_legacy)
 
-    def test_no_markers_means_integrations_off(self):
-        self.write_legacy({'a': {'dir': self.hp('Liga', 'a')}, 'b': {'dir': self.hp('Liga', 'b')}})
-        self.assertIs(spaces.load_registry()['spaces'][0]['integrations'], False)
-
-    def test_marker_only_in_a_task_means_integrations_on(self):
-        self.write_legacy({'a': {'dir': self.hp('Liga', 'a')},
-                           'b': {'dir': self.hp('Liga', 'b'), 'gitlab': {'project': 'g/p'}}})
-        self.assertIs(spaces.load_registry()['spaces'][0]['integrations'], True)
-
-    def test_top_level_markers_each_switch_integrations_on(self):
-        for key in ('registry', 'gitlab_host_ip', 'gitlab_ssh_key'):
-            with self.subTest(key=key):
+    def test_the_first_migration_never_writes_the_integrations_flag(self):
+        """4d-4c (Р1): ні з маркерами, ні без — прапорця в записі ЛІГИ нема (рішення за маркерами тепер живе в `liga_migrate`)."""
+        cases = (('plain', {}), ('task-marker', {'gitlab': {'project': 'g/p'}}), ('registry', None), ('host', None), ('key', None))
+        for name, extra in cases:
+            with self.subTest(case=name):
                 shutil.rmtree(self.deai, ignore_errors=True)
-                self.write_legacy({'a': {'dir': self.hp('Liga', 'a')}}, **{key: 'x'})
-                self.assertIs(spaces.load_registry()['spaces'][0]['integrations'], True)
+                tasks = {'a': {'dir': self.hp('Liga', 'a')}, 'b': dict({'dir': self.hp('Liga', 'b')}, **(extra or {}))}
+                top = {'registry': {'registry': 'x'}, 'host': {'gitlab_host_ip': 'x'}, 'key': {'gitlab_ssh_key': 'x'}}.get(name, {})
+                self.write_legacy(tasks, **top)
+                self.assertNotIn('integrations', spaces.load_registry()['spaces'][0])
 
     def test_existing_registry_keeps_current_and_gets_legacy_first(self):
         personal = {'id': 'personal', 'path': self.hp('deai-work', 'personal'),
@@ -448,7 +443,6 @@ class Broken(Env):
         self.write_registry([{'id': 'a', 'path': self.hp('a')}], 'a')
         reg = spaces.load_registry()
         self.assertEqual(reg['spaces'], [{'id': 'a', 'path': self.hp('a')}])
-        self.assertIs(spaces.integrations_for(reg['spaces'][0]), False)
 
     def test_valid_registry_with_max_length_id_is_accepted(self):
         self.write_registry([{'id': 'a' * 40, 'path': self.hp('a'), 'legacy': False, 'integrations': False}], None)
@@ -590,51 +584,35 @@ class ActiveSpace(Env):
         self.assertEqual(spaces.default_new_task_space()['id'], 'p')
 
 
-class Integrations(Env):
-    def test_no_request_space_means_on_and_the_registry_is_never_touched(self):
-        """Інструменти ЛІГА (doctor, registry, тести без ізоляції): простору запиту нема —
-        інтеграції є, і `<DEAI_HOME>` ми не створюємо й не читаємо."""
-        self.assertIsNone(spaces.request_space_id())
-        self.assertIs(spaces.integrations_on(), True)
-        spaces.require_integrations()
-        self.assertFalse(os.path.exists(self.deai))
+class IntegrationsFlagGone(Env):
+    """4d-4c (Р1): прапорця `integrations` у `spaces` більше нема — ні читання, ні запису; `RoleOff` лишився як «роль ніхто не веде»."""
 
-    def test_no_request_space_ignores_even_a_broken_registry(self):
-        _write(self.reg_file, '{ битий')
-        self.assertIs(spaces.integrations_on(), True)          # не кинув SpacesError
-        self.assertEqual(_bytes(self.reg_file), '{ битий'.encode())
+    def test_the_flag_api_is_gone(self):
+        for n in ('integrations_for', 'integrations_on', 'require_integrations', 'IntegrationsOff', 'has_markers', 'LEGACY_MARKERS'):
+            with self.subTest(name=n):
+                self.assertFalse(hasattr(spaces, n))
+        self.assertTrue(hasattr(spaces, 'RoleOff'))
+        self.assertTrue(issubclass(spaces.RoleOff, OSError))      # наявні `except OSError` деградують чесно
+        self.assertEqual(spaces.IMPLICIT, {'id': 'legacy', 'path': '', 'legacy': True})
 
-    def test_no_request_space_ignores_the_current_space(self):
-        self.two_spaces()
-        spaces.switch_space('p')                               # поточний — без інтеграцій
-        self.assertIs(spaces.integrations_on(), True)
-        spaces.require_integrations()
+    def test_a_registry_entry_without_the_key_parses_like_one_with_it(self):
+        """Відкат на 0.21: запис БЕЗ `integrations` (створено 0.22) читається; запис з `bool`-ключем (0.21) теж; не-`bool` — `spaces-unreadable`."""
+        for entry in ({'id': 'a', 'path': self.hp('a'), 'legacy': False},
+                      {'id': 'a', 'path': self.hp('a'), 'legacy': False, 'integrations': True},
+                      {'id': 'a', 'path': self.hp('a'), 'legacy': False, 'integrations': False}):
+            with self.subTest(entry=entry):
+                self.write_registry([entry], 'a')
+                self.assertEqual(spaces.load_registry()['spaces'], [entry])
+        self.write_registry([{'id': 'a', 'path': self.hp('a'), 'integrations': 'yes'}], 'a')
+        with self.assertRaises(spaces.SpacesError):
+            spaces.load_registry()
 
-    def test_request_space_decides(self):
-        self.two_spaces()
-        with spaces.request_space('liga'):
-            self.assertIs(spaces.integrations_on(), True)
-            spaces.require_integrations()
-        with spaces.request_space('p'):
-            self.assertIs(spaces.integrations_on(), False)
-            with self.assertRaises(spaces.IntegrationsOff) as cm:
-                spaces.require_integrations()
-            self.assertIsInstance(cm.exception, OSError)   # наявні `except OSError` деградують чесно
-        with spaces.request_space(''):
-            self.assertIs(spaces.integrations_on(), False)  # запит без простору
-        with spaces.request_space('ghost'):
-            self.assertIs(spaces.integrations_on(), False)  # невідомий простір
-
-    def test_integrations_for(self):
-        self.assertIs(spaces.integrations_for(None), False)
-        self.assertIs(spaces.integrations_for({}), False)
-        self.assertIs(spaces.integrations_for({'integrations': 0}), False)
-        self.assertIs(spaces.integrations_for({'integrations': False}), False)
-        self.assertIs(spaces.integrations_for({'integrations': True}), True)
-        # вимикач закривається: усе, що не рівно True, — «ні»
-        for junk in ('yes', 1, [1], {'a': 1}, 'true'):
-            with self.subTest(value=junk):
-                self.assertIs(spaces.integrations_for({'integrations': junk}), False)
+    def test_create_space_and_describe_and_listing_show_no_flag(self):
+        sid = spaces.create_space('Особисте', 'space-2', self.hp('deai-work', 'personal'))
+        entry = next(s for s in spaces.read_registry()['spaces'] if s['id'] == sid)
+        self.assertNotIn('integrations', entry)
+        self.assertNotIn('integrations', spaces.describe(entry))
+        self.assertTrue(all('integrations' not in e for e in spaces.listing()['spaces']))
 
 
 class RegistryHelpers(Env):
@@ -716,7 +694,6 @@ class LayerOff(Env):
         self.write_legacy({'a': {'dir': self.hp('Liga', 'a')}})
         self.assertIs(spaces.layer_on(), False)
         self.assertEqual(spaces.active_tasks_file(), self.legacy)
-        self.assertIs(spaces.integrations_on(), True)
         self.assertEqual(spaces.find_task('a')['id'], 'legacy')
         self.assertIsNone(spaces.find_task('nope'))
         spaces.switch_space('whatever')                   # шар вимкнено — мовчки, без запису
@@ -733,12 +710,14 @@ class LayerOff(Env):
         self.assertEqual(spaces.current_id(), 'legacy')
         self.assertFalse(os.path.exists(self.hp('.deai')))
 
-    def test_integrations_are_on_whatever_the_request_space(self):
+    def test_the_implicit_space_has_no_outbound_whatever_the_request_space(self):
+        """Було `…integrations_are_on_whatever_the_request_space`: рішення «ходити назовні» тепер — `vcs_outbound`; неявний простір закритий."""
+        import deai_modules
         del os.environ['DEAI_HOME']
         for sid in (None, '', 'p'):
             with self.subTest(request=sid):
                 with spaces.request_space(sid):
-                    self.assertIs(spaces.integrations_on(), True)
+                    self.assertIs(deai_modules.vcs_outbound(spaces.effective_space()), False)
 
     def test_load_registry_is_virtual_and_does_not_touch_deai_home(self):
         """Старий файл є, `DEAI_HOME` нема: при ввімкненому шарі тут була б міграція
@@ -765,9 +744,9 @@ class LayerOff(Env):
         del os.environ['DEAI_HOME']
         for get in (spaces.load_registry, spaces.read_registry):
             reg = get()
-            reg['spaces'][0]['integrations'] = False
+            reg['spaces'][0]['legacy'] = False
             reg['spaces'][0]['id'] = 'hacked'
-        self.assertIs(spaces.IMPLICIT['integrations'], True)
+        self.assertIs(spaces.IMPLICIT['legacy'], True)
         self.assertEqual(spaces.IMPLICIT['id'], 'legacy')
         self.assertEqual(spaces.load_registry()['spaces'][0], spaces.IMPLICIT)
         self.assertIsNot(spaces.load_registry()['spaces'][0], spaces.IMPLICIT)
@@ -782,8 +761,8 @@ class LayerOff(Env):
                 got = get()
                 self.assertEqual(got, spaces.IMPLICIT)
                 self.assertIsNot(got, spaces.IMPLICIT)
-                got['integrations'] = False
-                self.assertIs(spaces.IMPLICIT['integrations'], True)
+                got['legacy'] = False
+                self.assertIs(spaces.IMPLICIT['legacy'], True)
 
     def test_describe_hides_the_implicit_space(self):
         del os.environ['DEAI_HOME']
@@ -1450,9 +1429,9 @@ class Listing(Env):
         _write(os.path.join(self.p_path, 'space.json'), {'name': 'Клієнт', 'color': 'space-4'})
         self.assertEqual(spaces.listing(), {'current': 'liga', 'spaces': [
             {'id': 'liga', 'name': 'Liga', 'color': 'space-1', 'path': self.hp('Liga'),
-             'legacy': True, 'integrations': True, 'tasks': 1, 'available': True},
+             'legacy': True, 'tasks': 1, 'available': True},
             {'id': 'p', 'name': 'Клієнт', 'color': 'space-4', 'path': self.p_path,
-             'legacy': False, 'integrations': False, 'tasks': 1, 'available': True}]})
+             'legacy': False, 'tasks': 1, 'available': True}]})
 
     def test_current_follows_the_switch(self):
         self.two_spaces()
@@ -1509,10 +1488,10 @@ class Describe(Env):
         _write(os.path.join(self.p_path, 'space.json'), {'name': 'Клієнт', 'color': 'space-4'})
         liga = spaces.describe(spaces.find_task('a'))
         self.assertEqual(liga, {'id': 'liga', 'name': 'Liga', 'color': 'space-1', 'path': self.hp('Liga'),
-                                'legacy': True, 'integrations': True})
+                                'legacy': True})
         p = spaces.describe(spaces.find_task('x'))
         self.assertEqual(p, {'id': 'p', 'name': 'Клієнт', 'color': 'space-4', 'path': self.p_path,
-                             'legacy': False, 'integrations': False})
+                             'legacy': False})
         self.assertIsNone(spaces.describe(None))
 
 
@@ -1525,7 +1504,7 @@ class CreateSpace(Env):
                          {'name': 'Особисте', 'color': 'space-2', 'modules': {'static-publish': {'enabled': True}}})        # 4d-4c: явний запис публікації
         self.assertEqual(_read(os.path.join(p, 'tasks.json')), {'design_work_root': p, 'tasks': {}})
         reg = spaces.load_registry()
-        self.assertEqual(reg['spaces'], [{'id': 'space-1', 'path': p, 'legacy': False, 'integrations': False}])
+        self.assertEqual(reg['spaces'], [{'id': 'space-1', 'path': p, 'legacy': False}])        # 4d-4c: прапорця `integrations` не пишемо
         self.assertEqual(reg['current'], 'space-1')
 
     def test_new_files_are_world_readable_like_the_rest_of_the_work(self):

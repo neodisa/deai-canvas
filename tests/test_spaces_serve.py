@@ -1210,7 +1210,7 @@ class BackgroundThreads(Fixture):
         seen = []
 
         def spy(line, progress, tail):
-            seen.append((spaces.request_space_id(), serve.tasks_path(), spaces.integrations_on()))
+            seen.append((spaces.request_space_id(), serve.tasks_path()))
         killed = []
         with mock.patch.object(serve.subprocess, 'Popen', self.fake_child(stderr='рядок\n')), \
                 mock.patch.object(serve, '_node_bin', lambda name='npx': '/usr/bin/node'), \
@@ -1219,8 +1219,8 @@ class BackgroundThreads(Fixture):
             st, body = self.post('/t/x/api/shoot', {'it': 'it1'})
         self.assertEqual(st, 200, body)
         self.assertEqual(killed, [], 'тест зʼємки сигналив групі процесів')
-        # поточний — старий простір (з інтеграціями), запит — про `x` із `P` (без них)
-        self.assertEqual(seen, [(self.p_id, self.p_file, False)])
+        # поточний — старий простір, запит — про `x` із `P`: потік зʼємки живе в просторі запиту (4d-4c: без третього елемента — прапорця нема)
+        self.assertEqual(seen, [(self.p_id, self.p_file)])
 
     def test_shoot_watchdog_timer_lives_in_the_space_of_its_request(self):
         killed = threading.Event()
@@ -1309,15 +1309,13 @@ class SpaceRoutes(Fixture):
         for s in body['spaces']:
             # `capabilities` (етап 2а, Task 6) додає `serve.spaces_listing`; `spaces.listing()` і `describe` — без нього
             self.assertEqual(set(s) - {'compat'}, {'id', 'name', 'color', 'path', 'tasks', 'available',
-                                                   'integrations', 'legacy', 'capabilities', 'tracks', 'default_track'})   # `tracks` — 4d-1
+                                                   'legacy', 'capabilities', 'tracks', 'default_track'})   # `tracks` — 4d-1
             self.assertEqual('compat' in s, s['id'] == self.legacy_id, s['id'])      # `compat` — лише простір з явним `vercel-publish` у режимі ЛІГА (4d-3c)
         legacy, p, e = body['spaces']
         self.assertEqual(legacy['capabilities'], LIGA_CAPABILITIES)   # з інтеграціями: явні записи ролей ЛІГИ (4d-4b), а не запасний `legacy`
         self.assertEqual(p['capabilities'], {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})   # без — локальна публікація
-        self.assertEqual((legacy['integrations'], legacy['legacy'], legacy['tasks'], legacy['available']),
-                         (True, True, 1, True))
-        self.assertEqual((p['name'], p['color'], p['path'], p['integrations'], p['legacy']),
-                         ('P', 'space-2', self.p_path, False, False))
+        self.assertEqual((legacy['legacy'], legacy['tasks'], legacy['available']), (True, 1, True))
+        self.assertEqual((p['name'], p['color'], p['path'], p['legacy']), ('P', 'space-2', self.p_path, False))
         self.assertEqual((p['tasks'], p['available']), (2, True))      # `x` і `gone`
         self.assertEqual((e['name'], e['tasks'], e['available']), ('E', 0, True))
 
@@ -1414,8 +1412,8 @@ class SpaceRoutes(Fixture):
         self.assertEqual(_read(os.path.join(path, 'tasks.json')),
                          {'design_work_root': path, 'tasks': {}})
         listed = {s['id']: s for s in self.jget('/api/spaces')[1]['spaces']}['q']
-        self.assertEqual((listed['name'], listed['integrations'], listed['tasks'], listed['legacy']),
-                         ('Q', False, 0, False))
+        self.assertEqual((listed['name'], listed['tasks'], listed['legacy']), ('Q', 0, False))
+        self.assertNotIn('integrations', listed)
 
     def test_space_new_ignores_the_task_header_and_refuses_the_prefix(self):
         self.keep_registry()
@@ -1572,13 +1570,13 @@ class TaskResponses(Fixture):
         # `capabilities` — поле відповіді (етап 2а, Task 6), його додає `serve.space_view`, а не `spaces.describe`
         self.assertEqual(body['space'], {'id': self.legacy_id, 'name': os.path.basename(os.path.dirname(self.a_dir)),
                                          'color': 'space-1', 'path': os.path.dirname(self.a_dir),
-                                         'legacy': True, 'integrations': True,
+                                         'legacy': True,
                                          'capabilities': LIGA_CAPABILITIES, 'compat': LIGA_COMPAT})
         self.assertEqual(body['comment_channel'], 'dc/a')
         # задача іншого простору — його простір, і без інтеграцій каналу коментарів немає
         st, body = self.jget('/t/x/api/task')
-        self.assertEqual((st, body['id'], body['space']['id'], body['space']['integrations']),
-                         (200, 'x', self.p_id, False))
+        self.assertEqual((st, body['id'], body['space']['id']), (200, 'x', self.p_id))
+        self.assertNotIn('integrations', body['space'])
         self.assertEqual((body['space']['name'], body['space']['color']), ('P', 'space-2'))
         self.assertIsNone(body['comment_channel'])
 
@@ -1742,7 +1740,7 @@ class TaskResponses(Fixture):
         body = self.jget('/api/tasks-overview')[1]
         self.assertEqual((body['current'], body['space']['id']), ('x', self.p_id))
         self.assertEqual([r['id'] for r in body['mine']], ['x', 'gone'])
-        self.assertEqual(body['space']['integrations'], False)
+        self.assertNotIn('integrations', body['space'])
 
 
 class TaskSwitch(Fixture):

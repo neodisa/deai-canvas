@@ -17,7 +17,7 @@
                           (не записати), 'spaces-off' (шар вимкнено, а викликали запис);
   AmbiguousTask           той самий id задачі у двох просторах;
   NoTask                  просторів нема / у просторі нема поточної задачі;
-  IntegrationsOff         зовнішній виклик у просторі без інтеграцій (підклас OSError).
+  RoleOff                 зовнішній виклик у ролі, яку ніхто не веде (підклас OSError).
 
 Права: `spaces.json` лишається таким, яким його робить `atomic_write_json` (новий
 файл — 0600), тека `<DEAI_HOME>` — 0700. `space.json` і `tasks.json`, які створює
@@ -41,14 +41,13 @@ ROOT = os.path.dirname(APP)
 VERSION = 1
 SPACE_ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
 COLORS = ('space-1', 'space-2', 'space-3', 'space-4', 'space-5', 'space-6')
-LEGACY_MARKERS = ('registry', 'gitlab_host_ip', 'gitlab_ssh_key')
 SYSTEM_DIRS = ('/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private',
                '/var', '/Applications')
 #: Скільки найбільше читаємо з JSON-файла (реєстр, tasks.json, space.json).
 MAX_JSON_BYTES = 1 << 20
 #: Простір, коли шар вимкнено (лише `DC_TASKS_FILE`): поведінка як до просторів.
 #: Назовні віддається ЛИШЕ копією (`dict(IMPLICIT)`), щоб ніхто не змінив константу.
-IMPLICIT = {'id': 'legacy', 'path': '', 'legacy': True, 'integrations': True}
+IMPLICIT = {'id': 'legacy', 'path': '', 'legacy': True}
 
 
 class SpacesError(Exception):
@@ -79,8 +78,8 @@ class AmbiguousTask(LookupError):
     """Той самий id у двох просторах — відмова, а не перший-ліпший."""
 
 
-class IntegrationsOff(OSError):
-    """Зовнішній виклик у просторі без інтеграцій. Підклас OSError: наявні
+class RoleOff(OSError):
+    """Зовнішній виклик у ролі, яку ніхто не веде. Підклас OSError: наявні
     `except OSError` навколо мережі деградують чесно (порожньо + помилка);
     маршрути, яким треба 409, ловлять його ПЕРЕД OSError."""
 
@@ -156,7 +155,7 @@ def _validate(reg, path):
                     and isinstance(s.get('path'), str) and os.path.isabs(s['path'])
                     and _usable_path_text(s['path'])
                     and s['id'] not in seen
-                    # прапорці — лише справжні bool: вимикач закривається, а не «усе, що truthy»
+                    # прапорці — лише справжні bool; ключ `integrations` більше не пишемо, але толеруємо (реєстр 0.21 і відкат на 0.21)
                     and all(isinstance(s[k], bool) for k in ('integrations', 'legacy') if k in s)):
                 ok = False
                 break
@@ -278,13 +277,6 @@ def legacy_path(cfg):
     return os.path.join(os.path.expanduser('~'), 'deai-work', 'main')
 
 
-def has_markers(cfg):
-    if any(k in cfg for k in LEGACY_MARKERS):
-        return True
-    tasks = cfg.get('tasks') if isinstance(cfg.get('tasks'), dict) else {}
-    return any(isinstance(t, dict) and t.get('gitlab') for t in tasks.values())
-
-
 def load_registry():
     """Реєстр + міграція старого файла. Пише на диск ЛИШЕ щоб додати простір
     `legacy`; «нічого нема» — віртуальний порожній реєстр (блокер №1 ревʼю: checkout
@@ -314,7 +306,7 @@ def load_registry():
             return reg
         path = legacy_path(cfg)
         entry = {'id': unique_id(slug(os.path.basename(path)), {s['id'] for s in reg['spaces']}),
-                 'path': path, 'legacy': True, 'integrations': has_markers(cfg)}
+                 'path': path, 'legacy': True}
         reg['spaces'].insert(0, entry)
         if not reg.get('current'):
             reg['current'] = entry['id']
@@ -362,7 +354,7 @@ def describe(sp):
         return None
     name, color = space_meta(sp)
     return {'id': sp['id'], 'name': name, 'color': color, 'path': sp.get('path', ''),
-            'legacy': bool(sp.get('legacy')), 'integrations': bool(sp.get('integrations'))}
+            'legacy': bool(sp.get('legacy'))}
 
 
 _LOCAL = threading.local()
@@ -422,39 +414,6 @@ def active_tasks_file():
     if sp is None:
         raise NoTask(None)
     return tasks_file(sp)
-
-
-def integrations_for(sp):
-    """Вимикач закривається: лише рівно `True` вмикає (не `'yes'`, не `1`)."""
-    return bool(sp) and sp.get('integrations') is True
-
-
-def integrations_on():
-    """Чи ввімкнені зовнішні інтеграції для ЦЬОГО запиту.
-    Шар вимкнено → так. Простір запиту не зафіксовано (`None`: інструменти ЛІГА) → так,
-    і реєстру ми НЕ читаємо взагалі. `''` (запит без простору) → ні. `'<id>'` → прапорець
-    цього простору (невідомий id → ні).
-
-    ⚠️ Простір запиту живе в `threading.local`: потік, який запустив сервер (фоновий
-    воркер, таймер, опитування), його НЕ успадковує — тож без `request_space(...)` такий
-    воркер працює з УВІМКНЕНИМИ інтеграціями. Хто породжує воркери, мусить огорнути
-    їхнє тіло в `with request_space(<id>)` (або `request_space('')`)."""
-    if not layer_on():
-        return True
-    req = request_space_id()
-    if req is None:
-        return True
-    if req == '':
-        return False
-    for sp in load_registry()['spaces']:
-        if sp['id'] == req:
-            return integrations_for(sp)
-    return False
-
-
-def require_integrations():
-    if not integrations_on():
-        raise IntegrationsOff('integrations-off')
 
 
 def _space_tasks(sp):
@@ -876,7 +835,7 @@ def create_space(name, color, path):
         except (OSError, ValueError) as e:
             raise InputError('path-unwritable') from e
         sid = unique_id(slug(name), {s['id'] for s in reg['spaces']})
-        reg['spaces'].append({'id': sid, 'path': p, 'legacy': False, 'integrations': False})
+        reg['spaces'].append({'id': sid, 'path': p, 'legacy': False})
         reg['current'] = sid
         _write_locked(reg)
     return sid

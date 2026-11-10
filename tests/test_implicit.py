@@ -255,8 +255,8 @@ class EffectiveSpace(unittest.TestCase):
         sp = spaces.effective_space()
         self.assertEqual(sp, spaces.IMPLICIT)
         self.assertIsNot(sp, spaces.IMPLICIT)
-        sp['integrations'] = False
-        self.assertIs(spaces.IMPLICIT['integrations'], True)
+        sp['legacy'] = False
+        self.assertIs(spaces.IMPLICIT['legacy'], True)
         lr.assert_not_called()
 
     def test_layer_off_with_fixed_space_still_implicit(self):
@@ -490,8 +490,14 @@ class RolesParity(unittest.TestCase):
             if isinstance(obj, list):
                 return [no_fallback(x) for x in obj]
             return obj
-        got = self._run('api')
-        want = dict(self.snap['api'], liga_in_registry=no_fallback(self.snap['api']['liga_in_registry']))
+        def no_flag(obj):          # 4d-4c: `integrations` сервер більше не віддає (знімок 0.15.0 його знає)
+            if isinstance(obj, dict):
+                return {k: no_flag(v) for k, v in obj.items() if k != 'integrations'}
+            if isinstance(obj, list):
+                return [no_flag(x) for x in obj]
+            return obj
+        got = no_flag(self._run('api'))       # заморожений збирач знімка кладе `integrations: None`, коли сервер ключа не віддав
+        want = no_flag(dict(self.snap['api'], liga_in_registry=no_fallback(self.snap['api']['liga_in_registry'])))
         self.assertEqual(got, want)
 
 

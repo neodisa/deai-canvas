@@ -1381,10 +1381,10 @@ class Capabilities(World):
 
     def test_describe_and_the_registry_listing_stay_as_they_were(self):
         d = spaces.describe(self.off)
-        self.assertEqual(set(d), {'id', 'name', 'color', 'path', 'legacy', 'integrations'})
+        self.assertEqual(set(d), {'id', 'name', 'color', 'path', 'legacy'})        # 4d-4c: без `integrations`
         self.assertNotIn('capabilities', d)
         self.assertEqual(set(spaces.listing()['spaces'][0]),
-                         {'id', 'name', 'color', 'path', 'legacy', 'integrations', 'tasks', 'available'})
+                         {'id', 'name', 'color', 'path', 'legacy', 'tasks', 'available'})
 
     def test_a_broken_space_json_of_one_space_does_not_break_the_listing(self):
         _write(os.path.join(self.off_path, 'space.json'), '{not json')

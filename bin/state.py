@@ -290,7 +290,7 @@ def _team_comments(task, tid):
     """`(відкритих проєктних, хвіст рядка «Відкриті коментарі»)`.
 
     Хто веде командні коментарі, вирішує постачальник ролі `comments` ПРОСТОРУ задачі (`ProjectComments`; простір —
-    явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не `spaces.integrations_on()`: у просторі з модулем
+    явним записом `spaces.active_space()`, який зафіксував `task_anywhere`), а не прапорця `integrations`: у просторі з модулем
     коментарів вони є й без інтеграцій, а ЛІГА з модулем, що не завантажився, не має права йти в спільний Supabase.
     ЛІГА — тим самим модулем `supabase-comments` (явний запис, 4b-2): Supabase, що не відповів, — «не дістати (<код>)», а не
     тихий «0» (свідома відмінність від 0.9.0); простір без інтеграцій — «проєктних нема», без мережі."""
@@ -302,7 +302,7 @@ def _team_comments(task, tid):
         try:
             pins = pc.pins(task, tid)
             n = len([p for p in pins if p.get('status') != 'resolved'])
-        except spaces.IntegrationsOff:      # ЛІГА без інтеграцій: командних коментарів нема, мережі не було
+        except spaces.RoleOff:      # ЛІГА без інтеграцій: командних коментарів нема, мережі не було
             return 0, ', проєктних нема'
         except Exception as e:  # noqa: BLE001 — модуль не відповів: «0» читалось би як «тихо», а це «не дістати»
             code = getattr(e, 'code', type(e).__name__)

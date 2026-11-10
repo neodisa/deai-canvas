@@ -2588,7 +2588,7 @@ def notify_call(fn, *args, resolved=None):
     if fn == 'mute_set':
         notify.check_set_args(*args)
     if prov is None:
-        # Нікого: простір без інтеграцій і без модуля (раніше — `IntegrationsOff`). Маршрут відповідає 409 ще до цього виклику.
+        # Нікого: простір без інтеграцій і без модуля (раніше — `RoleOff`). Маршрут відповідає 409 ще до цього виклику.
         raise OSError('сповіщень Teams у просторі нема')
     if _shared_module(space, prov):
         kind, fake = isolation.route('notify')
@@ -3078,11 +3078,11 @@ def comments_route(space, prov):
 # ---------- Агент і командні коментарі (етап 2b-2, Task 4) ----------
 #
 # `bin/inbox.py`, `bin/state.py` і маршрут `/comments` читають (а `inbox` і закриває) проєктні піни. Звідки — вирішує
-# ПОСТАЧАЛЬНИК ролі `comments` ПРОСТОРУ задачі (`ProjectComments`), а не `spaces.integrations_on()`:
+# ПОСТАЧАЛЬНИК ролі `comments` ПРОСТОРУ задачі (`ProjectComments`), а не з прапорця простору:
 #
 #     постачальник        читання                                   закриття
 #     Module              `list` модуля → піни у формі REST         `resolve` модуля
-#     None               `IntegrationsOff` (як у просторі без      `IntegrationsOff`
+#     None               `RoleOff` (як у просторі без      `RoleOff`
 #                         інтеграцій: командних коментарів нема)
 #     ModuleError         `ModuleError` — лише локальні піни        `ModuleError`
 #
@@ -3368,7 +3368,7 @@ class ProjectComments:
         if self.err is not None:
             raise self.err
         if self.kind == 'off':
-            raise spaces.IntegrationsOff('integrations-off')
+            raise spaces.RoleOff('integrations-off')
 
     @property
     def takes_iteration(self):
@@ -3381,7 +3381,7 @@ class ProjectComments:
         """Виклик функції модуля (`list`/`resolve`) для каналу задачі — і для модуля простору, і для ЛІГИ (`comments_route`);
         будь-який `ModuleError` — з очищеним текстом.
 
-        Простір без постачальника ролі (`kind == 'off'`) сюди не доходить: `_check` відмовляє раніше (`IntegrationsOff` — `OSError`, а не
+        Простір без постачальника ролі (`kind == 'off'`) сюди не доходить: `_check` відмовляє раніше (`RoleOff` — `OSError`, а не
         `ModuleError`: наявні `except OSError` деградують чесно). Умови «є інтеграції» тут нема: їх рішення — наявність явного запису
         `supabase-comments` (4d-4b), а закон ізоляції тримає `comments_route`."""
         try:
@@ -3392,7 +3392,7 @@ class ProjectComments:
             raise agent_error(e) from None
 
     def pins(self, task, tid, internal=False):
-        """Проєктні піни задачі у формі рядків REST. `IntegrationsOff` — нікого (`'off'`: ролі `comments` ніхто не веде),
+        """Проєктні піни задачі у формі рядків REST. `RoleOff` — нікого (`'off'`: ролі `comments` ніхто не веде),
         `ModuleError` — рішення чи виклик модуля не вдались (або відповідь не список; ізольований прогін у справжньому домі —
         `comments-isolated`)."""
         self._check()
@@ -4215,7 +4215,7 @@ def publish_comments(space, task, tid, *, module_publish=False):
     """`(comments, warning)` — рішення про коментарі превʼю для `build_preview(comments=…)`, ОДИН раз на публікацію.
 
     Рішення — з ПОСТАЧАЛЬНИКА ролі `comments` ПРОСТОРУ публікації (`deai_modules.provider('comments', space)` через
-    `comments_provider`, простір — явним аргументом), а НЕ з `spaces.integrations_on()`: «ЛІГА ввімкнено» ≠ «коментарі
+    `comments_provider`, простір — явним аргументом), а НЕ з прапорця простору: «ЛІГА ввімкнено» ≠ «коментарі
     — спільний Supabase» (простір ЛІГА може вести коментарі власним модулем, а простір без інтеграцій — теж). `space`
     — запис простору, який викликач ВЖЕ вирішив (одне читання реєстру на публікацію); `None` — шар вимкнено чи простір
     запиту не зафіксовано (інструменти ЛІГА): `comments_provider` тоді віддає `None` БЕЗ читання реєстру. `task` —
@@ -5070,7 +5070,7 @@ def _in_space(fn):
 
     Простір запиту живе в `threading.local`, а потік, який запускає сервер (читач виводу
     зʼємки, сторож, таймер вбивства), його НЕ успадковує: без явного простору він жив би з
-    УВІМКНЕНИМИ інтеграціями (`spaces.integrations_on()` без простору → так) і з файлом задач
+    УВІМКНЕНИМИ інтеграціями (без зафіксованого простору рішення — «неявний простір») і з файлом задач
     ПОТОЧНОГО простору машини, а не того, чиїм запитом його запущено. Простір береться
     тут, у потоці запиту, ДО старту; кожен `threading.Thread`/`threading.Timer` у цьому файлі
     мусить отримати ціль через цю функцію (стереже `tests/test_spaces_serve.py`)."""
@@ -5159,8 +5159,7 @@ def space_view(sp):
 
 def spaces_listing():
     """`spaces.listing()` + `capabilities` і `tracks`/`default_track` у кожному записі. Запис реєстру відновлюється з самого запису
-    списку: реєстр валідує прапорці як справжні `bool`, тож `describe.integrations` те саме, що `integrations_for`
-    (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
+    списку: запис реєстру відновлюється з самого запису списку (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
     `capabilities` і напрямки не кидають.
 
     `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
@@ -5170,7 +5169,7 @@ def spaces_listing():
     простору — корінь на відімкненому чи повільному томі гальмував би `GET /api/spaces`, а список їх не віддає."""
     out = spaces.listing()
     for e in out['spaces']:
-        sp = {'id': e['id'], 'path': e['path'], 'integrations': e['integrations']}
+        sp = {'id': e['id'], 'path': e['path']}
         e['capabilities'] = deai_modules.capabilities(sp)
         compat = deai_modules.compat_view(sp, e['capabilities'])
         if compat:
@@ -5763,8 +5762,7 @@ class Handler(SimpleHTTPRequestHandler):
         його, навіть коли хтось перемкне поточний посеред обробки (друге вікно канваса, агент).
 
         Реєстр не прочитати чи не записати (міграція): API-запит НЕ виконується — `SpacesError`
-        летить до центрального обробника (503). Без зафіксованого простору `integrations_on()`
-        каже «так», тож обробник, що дійшов би до мережі, ходив би назовні при битому реєстрі.
+        летить до центрального обробника (503). Без зафіксованого простору обробник, що дійшов би до мережі, ходив би назовні при битому реєстрі.
         Єдиний виняток — статика UI (`/app/*` та все, що не з `HANDLED_PREFIXES`): вона не читає
         задач, і мусить віддатись, щоб UI показав смугу помилки; простір лишається
         незафіксованим, а перший же `load_tasks()` (якщо він колись буде) підніме ту саму помилку."""
@@ -5911,7 +5909,7 @@ class Handler(SimpleHTTPRequestHandler):
                    'tags': task_tags(task, sp),
                    'track': tracks.of_task(task),
                    # Простір задачі (`describe`: id, name, color, path, legacy,
-                   # integrations + `capabilities`; `null` — шар вимкнено) і канал коментарів. Канал
+                   # `capabilities`; `null` — шар вимкнено) і канал коментарів. Канал
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
                    # `comments` не мусить вгадувати це зі старого файла.
                    'space': space_view(sp),
@@ -6008,7 +6006,7 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 trk = tracker_snapshot(tracker.keys_of(cfg.get('tasks')), refresh=refresh, resolved=trk_resolved)
             # Вкладка «Команда» є, коли простір має постачальника ролі `dashboard` (4c-1; було — прапорець `integrations`: для ЛІГИ
-            # те саме, бо вона має `'legacy'`). `SpacesError` тут — як і з `integrations_on()` раніше (обробник маршруту).
+            # те саме, бо вона має `'legacy'`). `SpacesError` тут — як і раніше (обробник маршруту).
             try:
                 resolved = team_resolve()
             except deai_modules.ModuleError as e:
@@ -6707,7 +6705,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _comments(self):
         """Проєктні піни задачі для агента. Хто їх веде, вирішує постачальник ролі `comments` ПРОСТОРУ запиту
-        (`ProjectComments`, простір — явним аргументом), а не `integrations_on()`:
+        (`ProjectComments`, простір — явним аргументом), а не прапорця `integrations`:
 
             нікого (`None`)        409 — «командних коментарів нема», як у просторі без інтеграцій
             модуль                 `{project, comments}` у формі рядків REST, але вже ОЧИЩЕНІ (`agent_pins`) — свідома відмінність
@@ -7468,7 +7466,7 @@ class Handler(SimpleHTTPRequestHandler):
     #
     # `/api/vcs-status|push|pull` — нові адреси, `/api/gitlab-status|sync|pull` — псевдоніми з тими самими обробниками й формами
     # відповідей (на них спираються Stop-хук dev-pipeline і зовнішні скрипти). Гейт — роль `vcs` простору запиту
-    # (`provider('vcs')`), а не `integrations_on()`: звичайний простір із `git-sync` синкає так само, як ЛІГА.
+    # (`provider('vcs')`), а не прапорця `integrations`: звичайний простір із `git-sync` синкає так само, як ЛІГА.
     #
     # Простір без ролі — це «синку нема», а НЕ 409: UI опитує `vcs-status` на кожному старті, а Stop-хук — `autosync` після кожної
     # відповіді. Перевірка тут, у маршрутах, а НЕ в `gitlab_cfg`: його кличе доктор, і він мусить бачити GitLab-конфіг будь-якої задачі.
@@ -8145,7 +8143,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'code': e.code, 'error': SECRETS_UNREADABLE_TEXT},
                             status=deai_modules.STATUS.get(e.code, 409))
             return
-        # Коментарі превʼю — з постачальника ролі `comments` простору публікації (а не з `integrations_on()`), раз, ДО
+        # Коментарі превʼю — з постачальника ролі `comments` простору публікації (а не з прапорця `integrations`), раз, ДО
         # збірки: запис `supabase-comments` → вбудований модуль з каналом ЛІГИ, свій модуль → його канал,
         # відмова (в т.ч. `comments-unconfigured`) → без коментарів узагалі + `comments_unavailable` у відповіді (див.
         # `publish_comments`).

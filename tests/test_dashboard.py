@@ -643,6 +643,7 @@ class ReadParity(unittest.TestCase):
         want['body']['mine'] = [{**{k: v for k, v in m.items() if k != 'profile'}, 'tags': []} for m in want['body']['mine']]
         # 4d-4b: у знімку 0.11.0 ролі ЛІГИ — `'legacy'`; тепер це явні записи: `comments` — `supabase-comments`, а зашитих `publish`/`vcs` нема
         # (`None`). Решту тіла знімок диктує як було.
+        want['body']['space'].pop('integrations', None)         # 4d-4c: прапорець `integrations` сервер більше не віддає
         caps = want['body']['space']['capabilities']
         for role, now in (('comments', 'supabase-comments'), ('publish', None), ('vcs', None)):
             if caps.get(role) == 'legacy':
@@ -1405,7 +1406,7 @@ class GateParity(_SyncEnv):
         self.assertFalse(st['stdout_closed_at_start'])
 
     def test_an_ordinary_space_with_a_dashboard_module_starts_without_integrations(self):
-        self.assertFalse(spaces.integrations_for(self.modp))
+        self.assertNotIn('integrations', self.modp)         # прапорця нема: рішення — за постачальником ролі
         self.assertTrue(self.decide(self.modp)['popen_started'])
         self.assertEqual(self.popen.started[0]['argv'][-2:], ['--space', self.modp['id']])
 

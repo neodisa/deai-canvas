@@ -547,13 +547,13 @@ class Points(unittest.TestCase):
         """Колишній `test_supabase_pins`: з 4b-2 піни ЛІГИ читає модуль `supabase-comments` (його запит іде не крізь
         `urlopen`, а крізь `socket.create_connection` власного opener-а — тож розтяжка бачить `socket`)."""
         with spaces.request_space('off'):
-            with self.assertRaises(spaces.IntegrationsOff):
+            with self.assertRaises(spaces.RoleOff):
                 self.project_comments().pins({}, 'x')
         self.assertEqual(self.trip.hits, [])
         with spaces.request_space('on'):
             with self.assertRaises(serve.deai_modules.ModuleError) as cm:        # не `IntegrationsOff` і не «пусто»
                 self.project_comments().pins({}, 'x')
-        self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
+        self.assertNotIsInstance(cm.exception, spaces.RoleOff)
         self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
         self.assertEqual(self.trip.of('urlopen'), [])
 
@@ -705,13 +705,13 @@ class Points(unittest.TestCase):
         """Колишній `test_patch_project_pin`: закриття піна ЛІГИ — `resolve` модуля, і простір без інтеграцій його не
         кличе (`spaces.require_integrations()` у `ProjectComments._module`)."""
         with spaces.request_space('off'):
-            with self.assertRaises(spaces.IntegrationsOff):
+            with self.assertRaises(spaces.RoleOff):
                 self.project_comments().resolve({}, 'x', 'c0ffee01', 'r', iteration=1)
         self.assertEqual(self.trip.hits, [])
         with spaces.request_space('on'):
             with self.assertRaises(serve.deai_modules.ModuleError) as cm:
                 self.project_comments().resolve({}, 'x', 'c0ffee01', 'r', iteration=1)
-        self.assertNotIsInstance(cm.exception, spaces.IntegrationsOff)
+        self.assertNotIsInstance(cm.exception, spaces.RoleOff)
         self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
         self.assertEqual(self.trip.of('urlopen'), [])
 
@@ -761,8 +761,9 @@ class World(unittest.TestCase):
         _write(cls.p_file, {'design_work_root': cls.p_path, 'current': 'x', 'tasks': {
             'x': {'title': 'Ікс', 'dir': cls.x_dir, 'profile': None,
                   'gitlab': {'repo': 'git@gitlab.example.test:g/x.git', 'path': 'mockup/x'}}}})
-        flags = {s['id']: s.get('integrations') for s in spaces.read_registry()['spaces']}
-        assert flags == {cls.legacy_id: True, cls.p_id: False}, flags
+        flags = {s['id']: s.get('legacy') for s in spaces.read_registry()['spaces']}
+        assert flags == {cls.legacy_id: True, cls.p_id: False}, flags       # 4d-4c: прапорця `integrations` нема, лише `legacy`
+        assert not any('integrations' in s for s in spaces.read_registry()['spaces'])
 
         cls.httpd = serve.make_server(0)
         cls.port = cls.httpd.server_address[1]

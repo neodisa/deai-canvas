@@ -5003,10 +5003,9 @@ class CommentsPublish(DispatchWorld):
         self.assert_asked_once_about(self.comments_asked('ty'), self.on)
 
     def test_a_module_publish_never_asks_which_comments_the_league_would_use(self):
-        """Коментарі модульної публікації в `off` — не за `integrations_on()` (це «чи ввімкнено ЛІГА»), а за постачальником."""
+        """Коментарі модульної публікації в `off` — не за прапорцем простору (його вже нема, 4d-4c), а за постачальником."""
         self.enable_memo(self.off)
-        with mock.patch.object(spaces, 'integrations_on', side_effect=AssertionError('integrations_on')):
-            st, body = self.publish({'build_only': True})
+        st, body = self.publish({'build_only': True})
         self.assertEqual(st, 200, body)
         self.assert_module_build(body['dir'], 'deai/off/tx')
 

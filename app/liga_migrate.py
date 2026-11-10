@@ -467,8 +467,18 @@ ORIGINALS = (
     ('preview_password', ('vercel-publish',), 'k', 'password', True),
 )
 ORIGINAL_KEYS = tuple(o[0] for o in ORIGINALS)
-#: Ключі, наявність яких у корені робить файл «файлом ЛІГИ» для `spaces.has_markers` (реєстр без запису ЛІГИ відновлюється з нуля).
+#: Ключі, наявність яких у корені робить файл «файлом ЛІГИ» для `_has_markers` (реєстр без запису ЛІГИ відновлюється з нуля).
 _MARKER_KEYS = ('gitlab_host_ip', 'gitlab_ssh_key')
+#: Усі маркери кореня: `registry` + ключі вище (задачі з `gitlab` — окремо, у `_has_markers`).
+_LEGACY_MARKERS = ('registry',) + _MARKER_KEYS
+
+
+def _has_markers(cfg):
+    """Корінь старого `tasks.json` має ознаки «файла ЛІГИ» (переїхало з `spaces`: прапорець `integrations` там більше не пишеться)."""
+    if any(k in cfg for k in _LEGACY_MARKERS):
+        return True
+    tasks = cfg.get('tasks') if isinstance(cfg.get('tasks'), dict) else {}
+    return any(isinstance(t, dict) and t.get('gitlab') for t in tasks.values())
 
 
 def _fits(v):
@@ -572,12 +582,12 @@ def _decide_originals(cfg, norm, secrets, sid, had_markers=None):
             out['remove'].append(key)
         else:
             out['kept'].append(key)
-    # Охоронець маркера: без `registry`/задач з `gitlab` реєстр, відновлений з нуля, створив би ЛІГУ з `integrations: false`.
+    # Охоронець маркера: без `registry`/задач з `gitlab` реєстр, відновлений з нуля, створив би запис ЛІГИ без ознак інтеграцій.
     if had_markers is None:
-        had_markers = spaces.has_markers(cfg)
+        had_markers = _has_markers(cfg)
     if had_markers:
         left = {k: v for k, v in cfg.items() if k not in out['remove']}
-        if not spaces.has_markers(left):
+        if not _has_markers(left):
             for k in _MARKER_KEYS:
                 if k in out['remove']:
                     out['remove'].remove(k)
@@ -607,7 +617,7 @@ def _plan_originals(reg, liga, sid, path, data, mods, mig, cfg, step):
         rec['settings'] = st
         new_mods[mid] = rec
     # Перевірка В ПАМʼЯТІ: запис із новими налаштуваннями лишається тим самим постачальником (ролі кроку Е нема — міняти нічого не вільно).
-    space = {'id': sid, 'path': path, 'legacy': True, 'integrations': liga.get('integrations') is True}
+    space = {'id': sid, 'path': path, 'legacy': True}
     for role in deai_modules.ROLES_CALLED:
         got = []
         for m in (mods, new_mods):
@@ -648,7 +658,7 @@ def _plan(home, step):
     sid, path = liga['id'], liga['path']
     # ⛔ Без інтеграцій (`integrations` не `True`) ролі ЛІГИ в 0.17 вимкнені (немає неявних постачальників): явні записи їх увімкнули б —
     # злам паритету. Для КОЖНОГО кроку: нічого не пишемо (ні позначки, ні `migrations/`).
-    if liga.get('integrations') is not True:
+    if not _liga_integrations(liga):
         raise _Stop('skip-integrations-off', space_id=sid)
     if not os.path.isdir(path):
         raise _Stop('skip-no-path', space_id=sid)
@@ -683,7 +693,7 @@ def _plan(home, step):
     # 4d-3c (Поправка 4 плану): `_entries_c` не знає простору, тож «публікацію вже веде інший модуль» проставляємо тут, одним блоком,
     # ДО підрахунку `new_mods`/`skip-nothing`/`abort-provider`. `space` — ТАК САМО, як у перевірці `abort-provider` нижче.
     if step is STEP_C and roles['publish'][1] is None:
-        if _publisher_present({'id': sid, 'path': path, 'legacy': True, 'integrations': liga.get('integrations') is True}, mods):
+        if _publisher_present({'id': sid, 'path': path, 'legacy': True}, mods):
             roles['publish'] = (roles['publish'][0], 'publisher-present', None, None)
     new_mods, secrets = dict(mods), {}
     for role, (mid, skip, entry, secret) in roles.items():
@@ -727,7 +737,7 @@ def _plan(home, step):
 
     # Перевірка В ПАМʼЯТІ: ядро вирішує кожну мігровану роль саме цим модулем на розрахованому `space.json` (нічого не пишемо).
     explicit = deai_modules._normalize(new_mods)
-    space = {'id': sid, 'path': path, 'legacy': True, 'integrations': liga.get('integrations') is True}
+    space = {'id': sid, 'path': path, 'legacy': True}
     for role, (mid, skip, _e, _s) in roles.items():
         if skip is not None:
             continue
@@ -1775,9 +1785,9 @@ def roles_state(home=None):
         liga = _liga_entry(home)
     except _Stop:
         return []
-    if liga.get('integrations') is not True:
+    if not _liga_integrations(liga):
         return [{'role': r, 'module': m, 'on': False, 'reason': 'integrations-off', 'fix': ''} for r, m, _s in LIGA_ROLES]
-    space = {'id': liga['id'], 'path': liga['path'], 'legacy': True, 'integrations': True}
+    space = {'id': liga['id'], 'path': liga['path'], 'legacy': True}
     try:
         data = deai_modules._load_space_json(os.path.join(liga['path'], 'space.json'))
         mods = deai_modules._raw_modules(data)
@@ -2045,14 +2055,14 @@ def _real_home():
 
 def _liga_integrations(liga):
     """Чи простір `legacy: true` — ЛІГА (інтеграції ввімкнені): явний `bool` ключа `integrations` виграє (історичні записи 0.21), а коли
-    ключа нема — за маркерами кореня старого `tasks.json` (`spaces.has_markers`). Будь-яка помилка читання — `True` (безпечний бік: не чіпаємо).
-    Решта читань ключа в цьому модулі переходить сюди в Task 6."""
+    ключа нема — за маркерами кореня старого `tasks.json` (`_has_markers`). Будь-яка помилка читання — `True` (безпечний бік: не чіпаємо).
+    Єдине місце в коді, що читає ключ `integrations`."""
     v = liga.get('integrations')
     if isinstance(v, bool):
         return v
     try:
         cfg = spaces._read_json(spaces.legacy_tasks_file())
-        return bool(isinstance(cfg, dict) and spaces.has_markers(cfg))
+        return bool(isinstance(cfg, dict) and _has_markers(cfg))
     except Exception:  # noqa: BLE001 — будь-який збій = «ЛІГА»
         return True
 

@@ -727,9 +727,9 @@ class LegacyAgentTest(_Env):
         (`OSError`, `kind == 'off'`: ролі нікого не ведуть), а мережа мовчить."""
         pc = serve.ProjectComments(self.no_record())
         self.assertEqual((pc.kind, pc.label), ('off', 'не підключено'))
-        with self.assertRaises(spaces.IntegrationsOff):
+        with self.assertRaises(spaces.RoleOff):
             pc.pins(self.TASK, 't1')
-        with self.assertRaises(spaces.IntegrationsOff):
+        with self.assertRaises(spaces.RoleOff):
             pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
         self.assertEqual(self.seen, [])
 
@@ -739,9 +739,9 @@ class LegacyAgentTest(_Env):
         off_space, _ = self.league('comments', enabled=False)
         sbconf.patch_open(self, self.fake_open)
         pc = serve.ProjectComments(off_space)
-        with self.assertRaises(spaces.IntegrationsOff):
+        with self.assertRaises(spaces.RoleOff):
             pc.pins(self.TASK, 't1')
-        with self.assertRaises(spaces.IntegrationsOff):
+        with self.assertRaises(spaces.RoleOff):
             pc.resolve(self.TASK, 't1', 'c1', 'r', iteration=1)
         self.assertEqual(self.seen, [])
         on_space, _ = self.league('comments')

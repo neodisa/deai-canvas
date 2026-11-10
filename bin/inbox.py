@@ -356,7 +356,7 @@ def project_comments():
 
     Простір — ЯВНО: `resolve_task` (`task_anywhere`) зафіксував на потоці простір, де лежить задача (названа `--task` — у
     БУДЬ-ЯКОМУ просторі, а не лише поточному), і `spaces.active_space()` віддає саме його запис. Далі рішення
-    приймає постачальник ролі `comments` цього запису (`ProjectComments`), а не `spaces.integrations_on()`: простір із
+    приймає постачальник ролі `comments` цього запису (`ProjectComments`), а не прапорця `integrations`: простір із
     модулем коментарів, але без інтеграцій, має командні коментарі, а простір ЛІГА з модулем, що не завантажився, — не
     має права йти в спільний Supabase."""
     return ProjectComments(spaces.active_space())
@@ -374,7 +374,7 @@ def cmd_list(where=False, task_id=None):
         pc = project_comments()
         source = pc.label
         proj, proj_err = pc.pins(task, tid), None
-    except spaces.IntegrationsOff:
+    except spaces.RoleOff:
         # Простір без інтеграцій і без модуля коментарів: командних коментарів у ньому нема, а не «не дістати».
         proj, proj_err, team_off = [], None, True
     except Exception as e:  # noqa: BLE001 — зокрема `ModuleError`: лише локальні піни + повідомлення, не Supabase
@@ -479,7 +479,7 @@ def find_target(prefix, local, project_loader):
         return 'local', hits[0]
     try:
         project = project_loader()
-    except spaces.IntegrationsOff:
+    except spaces.RoleOff:
         project = []        # простір без інтеграцій: проєктних пінів нема, шукаємо лише серед локальних
     except Exception as e:  # noqa: BLE001
         # ⛔ Не «не знайдено»: ми не знаємо, чи він там є.

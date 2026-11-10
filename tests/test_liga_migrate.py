@@ -2143,10 +2143,12 @@ class AfterMigrationParity(unittest.TestCase):
             self.assertEqual(got, old, tid)                                               # track, profile, tags, jira, comment_channel
             self.assertEqual((gs['capabilities']['tracker'], gs['capabilities']['dashboard'], gs['capabilities']['notify']),
                              ('jira-tracker', 'supabase-dashboard', 'supabase-teams'))
-            for k in ('keys', 'id', 'integrations', 'legacy'):
+            for k in ('id', 'legacy'):
                 self.assertEqual(gs[k], os_[k], k)
+            self.assertEqual(gs['keys'], [k for k in os_['keys'] if k != 'integrations'])      # 4d-4c: `integrations` сервер більше не віддає
         row, old = a['spaces']['rows'][0], want['spaces']['rows'][0]
-        self.assertEqual((row['id'], row['integrations'], row['legacy']), (old['id'], old['integrations'], old['legacy']))
+        self.assertEqual((row['id'], row['legacy']), (old['id'], old['legacy']))
+        self.assertIsNone(row['integrations'])           # збирач стенда мапить відсутній ключ у `None`
         # 4d-4a: на стенді знімка напрямки не мігрували (кроку D ще не було), а адаптера в рантаймі нема — перелік порожній
         self.assertNotEqual(old['tracks'], [], 'знімок 0.16.0 мав напрямки адаптера')
         self.assertEqual((row['default_track'], row['tracks']), (None, []))

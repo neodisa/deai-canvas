@@ -2,7 +2,7 @@
 
 `bin/inbox.py` (читання, `resolve`), `bin/state.py` (лічильник відкритих) і маршрут `/comments` вирішують, ЗВІДКИ брати
 командні піни, за ПОСТАЧАЛЬНИКОМ ролі `comments` ПРОСТОРУ задачі (`serve.ProjectComments`, простір — явним аргументом), а
-не за `spaces.integrations_on()`:
+не за прапорцем простору (його вже нема, 4d-4c):
 
     постачальник     читання                                 закриття
     Module           `list` модуля → форма рядків REST       `resolve` модуля
@@ -706,12 +706,7 @@ class AgentPinUnitTest(unittest.TestCase):
 # ----------------------------------------------------------------------------------------- таблиця рішень
 
 class DecisionTest(AgentEnv):
-    """`ProjectComments`: простір — аргумент, а не простір запиту й не `integrations_on()`."""
-
-    def forbid_integrations_on(self):
-        p = mock.patch.object(spaces, 'integrations_on', side_effect=AssertionError('integrations_on() у рішенні'))
-        p.start()
-        self.addCleanup(p.stop)
+    """`ProjectComments`: простір — аргумент, а не простір запиту (прапорця `integrations` більше нема, 4d-4c)."""
 
     def test_the_kinds(self):
         self.enable_memo_in(self.plain)
@@ -746,7 +741,7 @@ class DecisionTest(AgentEnv):
         4d-4b неявного нема: без закріпленого простору запис не діє — `off`, а мережі нема."""
         pc = serve.ProjectComments(None)
         self.assertEqual((pc.kind, pc.label), ('off', 'не підключено'))
-        with self.assertRaises(spaces.IntegrationsOff):
+        with self.assertRaises(spaces.RoleOff):
             pc.pins({}, 'lx')
         self.assert_no_legacy()
 
@@ -760,10 +755,9 @@ class DecisionTest(AgentEnv):
         tcr._write(self.space_json(self.liga), '{}')
         self.assertEqual(self.pc(self.liga).label, 'не підключено')            # було 'Supabase': запису нема — нема й джерела
 
-    def test_module_and_broken_and_off_never_ask_integrations_on(self):
+    def test_module_and_broken_and_off_decide_by_the_provider_alone(self):
         self.enable_memo_in(self.plain)
         self.seed(self.plain, 'px', [cl('c0ffee01-aaaa', 'x')])
-        self.forbid_integrations_on()
         pc = self.pc(self.plain)
         self.assertEqual([p['id'] for p in pc.pins({}, 'px')], ['c0ffee01-aaaa'])
         pc.resolve({}, 'px', 'c0ffee01-aaaa', 'ok')
@@ -771,7 +765,7 @@ class DecisionTest(AgentEnv):
         with self.assertRaises(dm.ModuleError):
             self.pc(self.liga).pins({}, 'lx')
         with spaces.request_space(''):
-            with self.assertRaises(spaces.IntegrationsOff):
+            with self.assertRaises(spaces.RoleOff):
                 serve.ProjectComments(None).pins({}, 'zz')
 
     def test_each_kind_takes_exactly_its_own_branch(self):
@@ -813,7 +807,7 @@ class DecisionTest(AgentEnv):
         tcr._write(self.space_json(self.liga), '{broken')
         with self.assertRaises(dm.ModuleError):
             self.pc(self.liga).resolve({}, 'lx', 'p', 'r')
-        with self.assertRaises(spaces.IntegrationsOff):
+        with self.assertRaises(spaces.RoleOff):
             self.pc(self.plain).resolve({}, 'px', 'p', 'r')
         self.assert_no_legacy()
 

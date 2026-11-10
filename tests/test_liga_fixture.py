@@ -17,7 +17,7 @@ class LigaFixtureBothWays(unittest.TestCase):
     """Обидва способи фікстури дають ОДНАКОВИХ постачальників і однакові ефективні налаштування/секрети; корінь без облікових."""
 
     def space(self, fx):
-        return {'id': 'legacy', 'path': fx.space_dir, 'legacy': True, 'integrations': True}
+        return {'id': 'legacy', 'path': fx.space_dir, 'legacy': True}
 
     def test_build_makes_all_six_roles_explicit(self):
         fx = liga_fixture.LigaFixture(self).env().build()

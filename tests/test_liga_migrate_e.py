@@ -9,6 +9,8 @@ for _p in (os.path.join(os.path.dirname(_HERE), 'app'), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import atomic_io  # noqa: E402
+import liga_fixture as lf  # noqa: E402
+import liga_migrate  # noqa: E402
 import spaces_guard  # noqa: E402
 from test_liga_migrate import _WriteStand  # noqa: E402
 
@@ -489,7 +491,7 @@ class RunE(_StandE):
         self.assertEqual(self.tasks()['gitlab_host_ip'], self.HOSTIP)
         self.assertIn('marker-kept:gitlab_host_ip', self.mark()['notes'])
         self.assertIn('gitlab_host_ip', self.mark()['kept'])
-        self.assertTrue(self.spaces.has_markers(self.tasks()))
+        self.assertTrue(self.lm._has_markers(self.tasks()))
 
     def test_race_on_tasks_file_aborts(self):
         self.root()
@@ -1200,6 +1202,47 @@ class StatusAndCli(_StandE):
         with self.mock.patch.dict(os.environ, {'DC_TASKS_FILE': self.tasks_path}):
             os.environ.pop('DEAI_HOME')
             self.assertEqual(self.lm.unhold('liga-4d4a'), 'skip-layer-off')
+
+
+class LigaIntegrationsWithoutTheKey(unittest.TestCase):
+    """Поправка 1 (4d-4c): запис ЛІГИ без ключа `integrations` (створено 0.22) мігрує за маркерами кореня; явний `bool` 0.21 — поважаємо."""
+
+    def test_has_markers(self):
+        self.assertTrue(liga_migrate._has_markers({'registry': {}}))
+        self.assertTrue(liga_migrate._has_markers({'gitlab_host_ip': '203.0.113.7'}))
+        self.assertTrue(liga_migrate._has_markers({'gitlab_ssh_key': '~/.ssh/id_example'}))
+        self.assertTrue(liga_migrate._has_markers({'tasks': {'a': {'gitlab': {'repo': 'g/r'}}}}))
+        self.assertFalse(liga_migrate._has_markers({'tasks': {'a': {}}}))
+        self.assertFalse(liga_migrate._has_markers({'tasks': 5}))
+
+    def test_the_key_wins_when_present_else_the_markers(self):
+        fx = lf.LigaFixture(self).env()
+        fx.legacy_root()                                              # є маркер `registry`
+        self.assertTrue(liga_migrate._liga_integrations({'id': 'legacy'}))
+        self.assertFalse(liga_migrate._liga_integrations({'id': 'legacy', 'integrations': False}))
+        self.assertTrue(liga_migrate._liga_integrations({'id': 'legacy', 'integrations': True}))
+        fx.legacy_root(registry=None, gitlab_ssh_key=None, gitlab_host_ip=None)
+        self.assertFalse(liga_migrate._liga_integrations({'id': 'legacy'}))
+        self.assertFalse(liga_migrate._liga_integrations({'id': 'legacy', 'integrations': 'yes'}))    # не `bool` — ключ не рахується
+
+    def test_a_fresh_liga_without_the_key_migrates(self):
+        fx = lf.LigaFixture(self).env()
+        res = fx.migrate()                                            # запис БЕЗ ключа + корінь із маркером `registry`
+        self.assertFalse(any(st == 'skip-integrations-off' for _m, st, _i in res), res)
+        self.assertTrue(any(st == 'done' for _m, st, _i in res), res)
+
+    def test_an_explicit_false_of_0_21_still_skips(self):
+        fx = lf.LigaFixture(self).env()
+        fx.registry()
+        reg_path = os.path.join(fx.deai, 'spaces.json')
+        with open(reg_path, encoding='utf-8') as f:
+            reg = json.load(f)
+        reg['spaces'][0]['integrations'] = False
+        with open(reg_path, 'w', encoding='utf-8') as f:
+            json.dump(reg, f)
+        fx._write(os.path.join(fx.space_dir, 'space.json'), {'name': 'Liga'})
+        fx.legacy_root()
+        self.assertEqual(liga_migrate.plan()['status'], 'skip-integrations-off')
 
 
 if __name__ == '__main__':
