@@ -5448,6 +5448,9 @@ def _overview_spawn(target, note=None):
         path = _overview_log_path()
         log = open(path, 'a', encoding='utf-8')
         os.chmod(path, 0o600)           # у лозі назви задач: файл лише для власника (тека вже 0o700)
+        # Лог спільний для всіх просторів: заголовок із часом і ціллю відрізняє рядки одного запуску від іншого.
+        log.write('--- %s sync %s\n' % (time.strftime('%Y-%m-%dT%H:%M:%S%z'), ' '.join(target)))
+        log.flush()
         if note:
             log.write(note + '\n')
             log.flush()
