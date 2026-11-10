@@ -69,6 +69,10 @@ export const realDeai = () => ({
      мало «існує чи ні»: запис у УЖЕ наявну справжню теку лишив би `existsSync` рівним `true` до й після — тому вміст (імена підтек). */
   trust: sha(path.join(REAL_DEAI, "trust.json")),
   trusted: trustedNames(path.join(REAL_DEAI, "trusted")),
+  /* Журнали (`logs/`, напр. `dashboard-sync.log`): лише наявність і ПЕРЕЛІК імен, ніколи вміст — це лог справжньої машини; живий тест,
+     що дописав у справжній журнал дашборда, додав би файл або теку, і це буде видно. */
+  logs: existsSync(path.join(REAL_DEAI, "logs")),
+  logsList: trustedNames(path.join(REAL_DEAI, "logs")),
 });
 /** Знімок ДО будь-якого сервера: модуль імпортується до першого `startServer`. */
 export const REAL_BEFORE = realDeai();
