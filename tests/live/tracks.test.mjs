@@ -219,11 +219,15 @@ test("4b: ЛІГА як простір з інтеграціями й ЯВНИМ
   const A = taskFixture({ html: MOCKUP });
   const server = await startServer(null, {
     portBase: PORT_BASE + 400,
-    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { t1: { dir: A.dir, title: "Задача один" } } }],
+    /* 4d-4c: ЛІГУ визначає запис `vcs` зі схемою ЛІГИ (`git-sync` + `compat`), а не прапорець — без нього `profile` не пишеться. */
+    spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, roles: ["vcs"], tasks: { t1: { dir: A.dir, title: "Задача один" } } }],
   });
   shutdown(t, server);
-  /* Напрямки ЛІГИ — явні в `space.json`, як після кроку міграції (сервер читає файл на кожен запит). Корінь `liga360` нема — тека простору. */
-  writeFileSync(path.join(server.spaces[0].path, "space.json"), JSON.stringify({
+  /* Напрямки ЛІГИ — явні в `space.json`, як після кроку міграції (сервер читає файл на кожен запит). Корінь `liga360` нема — тека простору.
+     Записи модулів (`git-sync` фікстури) лишаються — дописуємо лише напрямки. */
+  const spFile = path.join(server.spaces[0].path, "space.json");
+  writeFileSync(spFile, JSON.stringify({
+    ...JSON.parse(readFileSync(spFile, "utf8")),
     name: "Liga", color: "space-2", default_track: "united",
     tracks: [{ id: "united", label: "United", ds: "united" }, { id: "liga360", label: "LIGA360", ds: "liga360" }, { id: "seo", label: "SEO", ds: "seo" }],
   }));

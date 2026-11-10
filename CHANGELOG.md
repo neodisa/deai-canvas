@@ -3,7 +3,7 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
-## [0.22.0] — 11.11.2026
+## [0.22.0] — 10.11.2026
 
 Stage 4d-4c: no runtime decision depends on the space flag `integrations` any more, and the API value `'legacy'` is gone. The
 question «may this space push outward?» is answered by a record: the space has an **enabled `vcs` record with the LIGA scheme**
