@@ -498,7 +498,7 @@ test("5: «Опублікувати» мігрованої ЛІГИ — link/dep
   const A2 = taskFixture({ html: MOCKUP });
   t.after(() => rmSync(A2.dir, { recursive: true, force: true }));
   const unmigrated = await startServer(null, {
-    portBase: PORT_BASE, deaiDir: "state-deai", legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
+    portBase: PORT_BASE, deaiDir: "state-deai", legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN, registry: {} },  // маркер ЛІГИ (`registry`, його кроки міграції не читають): без ключа `integrations` її впізнають за коренем (інакше простір матеріалізує `static-publish`, 0.22)
     env: { ...S.seams, DC_TEAMS_FAKE: "", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A2.dir, title: "Моя задача", jira: "DEMO-1" } } }],
   });
@@ -573,7 +573,7 @@ test("6b: немігрована ЛІГА — `status` називає всі ш�
   const A3 = taskFixture({ html: MOCKUP });
   t.after(() => rmSync(A3.dir, { recursive: true, force: true }));
   const server = await startServer(null, {
-    portBase: PORT_BASE, deaiDir: "state-deai", legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN },
+    portBase: PORT_BASE, deaiDir: "state-deai", legacyExtra: { ...LIGA_SUPABASE_ORIGINALS, jira_base: JIRA_BASE, jira_email: JIRA_EMAIL, jira_token: JIRA_TOKEN, registry: {} },  // маркер ЛІГИ (`registry`, його кроки міграції не читають): без ключа `integrations` її впізнають за коренем (інакше простір матеріалізує `static-publish`, 0.22)
     env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     spaces: [{ name: "Liga", id: "liga", color: "space-2", legacy: true, tasks: { mine1: { dir: A3.dir, title: "Моя задача" } } }],
   });

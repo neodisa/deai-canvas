@@ -121,7 +121,7 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   Простір `legacy: true` у `spaces` може й сам просити записи: `roles` (імена ролей) і `records` (`{роль: {settings, secrets, enabled}}`),
  *   напр. `records: { vcs: { settings: { ssh_key, host_ip } }, publish: { secrets: { password } } }`.
  * @param {Array<{name: string, color?: string, id?: string, legacy?: boolean,
- *   integrations?: boolean, tasks?: Record<string, {dir: string, title?: string, jira?: string}>}>} [opts.spaces]
+ *   publish?: boolean, tasks?: Record<string, {dir: string, title?: string, jira?: string}>}>} [opts.spaces]
  *   ПРОСТОРИ (Deai 1.0, етап 1). Опція змінює фікстуру цілком: `taskDir`,
  *   `extraTasks`, `title`, `profile` ігноруються (задачі кожного простору — у його
  *   `tasks`), а замість них зʼявляється ізольована машина:
@@ -130,8 +130,8 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *   · реєстр `<DEAI_HOME>/spaces.json` пишеться заздалегідь (форма з `app/spaces.py`),
  *     якщо просторів є;
  *   · простір `legacy: true` живе у старому файлі (`DC_TASKS_FILE` = тимчасовий
- *     `tasks.json`) і за замовчуванням має інтеграції; решта — у власній теці з
- *     `space.json` і `tasks.json` і без інтеграцій (`integrations: true` вмикає);
+ *     `tasks.json`) і за замовчуванням має роль ЛІГИ лише коли просить `supabase`/`roles`/`records`; решта — у власній теці з
+ *     `space.json` (явний запис `static-publish`; `publish: false` його не пише) і `tasks.json`;
  *   · старий файл пишеться ЛИШЕ коли є простір `legacy: true`: для `spaces: []` його
  *     нема зовсім — інакше міграція створила б простір, і привітання не зʼявилось би.
  *     З тієї ж причини `spaces: []` не пише й реєстр: порожня машина — це машина без
@@ -147,7 +147,7 @@ export function taskFixture({ html, pages = ["holovna", "poshuk"] }) {
  *     за швом `DC_MIGRATE_LIGA=1`: `<HOME>/.deai` він вважає «справжнім» (HOME у процесі підмінено) і відмовляє;
  *   · `machine` — `{home, deaiHome, legacyFile, spaces}` з попереднього запуску: той самий диск, жодного нового запису машини
  *     (другий старт того самого дому: «міграція нічого не пише»). `spaces`/`legacyExtra` тоді ігноруються.
- *   Повертає ще `{home, deaiHome, legacyFile, spaces: [{id, name, path, legacy, integrations}]}`
+ *   Повертає ще `{home, deaiHome, legacyFile, spaces: [{id, name, path, legacy}]}`
  *   (`legacyFile` — куди сервер дивиться як на старий `tasks.json`; на порожній машині його ще
  *   нема, тест може покласти туди будь-що, зокрема зіпсований файл).
  */
@@ -238,6 +238,9 @@ function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai"
     if (recs && Object.keys(recs.secrets).length) ligaSecrets[id] = recs.secrets;
     writeFileSync(path.join(spPath, "space.json"), JSON.stringify({
       name: sp.name, color: sp.color || "space-1", ...(recs ? { modules: recs.modules, migrations: {} } : {}),
+      /* Звичайний простір: явний запис `static-publish` (0.22 і так матеріалізує його на старті — фікстура лише робить його видимим
+         до першого запиту). `publish: false` у записі простору лишає `space.json` без нього. */
+      ...(!legacy && sp.publish !== false ? { modules: { "static-publish": { enabled: true } } } : {}),
     }));
     const tasks = Object.fromEntries(Object.entries(sp.tasks || {})
       .map(([tid, tk]) => [tid, { dir: tk.dir, title: tk.title || tid, ...(tk.jira ? { jira: tk.jira } : {}),
@@ -245,7 +248,7 @@ function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai"
     const cfg = { current: Object.keys(tasks)[0], design_work_root: spPath, tasks, ...(legacy ? legacyExtra : {}) };
     if (legacy) writeFileSync(legacyFile, JSON.stringify(cfg));
     else writeFileSync(path.join(spPath, "tasks.json"), JSON.stringify(cfg));
-    return { id, name: sp.name, path: spPath, legacy, integrations: sp.integrations ?? legacy };
+    return { id, name: sp.name, path: spPath, legacy };
   });
   /* Порожня машина — це машина БЕЗ `~/.deai` зовсім (так вона виглядає до першого
      простору), а не з порожнім реєстром: екран привітання стережуть саме її. */
@@ -253,7 +256,7 @@ function isolatedMachine(spaces, legacyFile, legacyExtra = {}, deaiDir = ".deai"
     mkdirSync(deaiHome, { recursive: true, mode: 0o700 });
     writeFileSync(path.join(deaiHome, "spaces.json"), JSON.stringify({
       version: 1, current: out[0].id,
-      spaces: out.map(({ id, path: p, legacy, integrations }) => ({ id, path: p, legacy, integrations })),
+      spaces: out.map(({ id, path: p, legacy }) => ({ id, path: p, legacy })),
     }));
     if (Object.keys(ligaSecrets).length) {
       const secretsFile = path.join(deaiHome, "secrets.json");

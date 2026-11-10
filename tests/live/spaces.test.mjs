@@ -16,9 +16,9 @@
  *
  * Мапа «перевірка → запобіжник», знята мутаційно (прибери охорону — подивись, чи
  * червоніє):
- *   1 (перемикання)  — `space` у `BAR_ACTIONS` (`app.js`), `integrations` (GitLab) і `hasPublish`
+ *   1 (перемикання)  — `space` у `BAR_ACTIONS` (`app.js`), `capabilities.vcs` (GitLab) і `hasPublish`
  *        (публікація, `capabilities.publish`) у `bar-model.js`.
- *        Мутація «`space` не кличе `space-switch`» червонить 1; «зона GitLab без `integrations`» і
+ *        Мутація «`space` не кличе `space-switch`» червонить 1; «зона GitLab без `capabilities.vcs`» і
  *        «публікація не за `hasPublish`» — теж 1.
  *   2 (нова задача)  — `space: sp.id` у `newTaskDialog` і `task_new(root=sp['path'])`.
  *   3 (новий простір) — `check_new_path` (типова тека не мусить перетинатись зі старим
@@ -148,8 +148,8 @@ test("1: перемикання на «P» без інтеграцій — см�
     "у перемикачі задач чужі задачі іншого простору");
   await page.keyboard.press("Escape");
 
-  /* Зони назовні: GitLab — немає (він на `integrations`). Публікація — Є: з модулями 2а (Task 8) вона
-     стоїть на `capabilities.publish`, а в «P» без інтеграцій публікує вбудований `static-publish` (локальна
+  /* Зони назовні: GitLab — немає (він на `capabilities.vcs`). Публікація — Є: з модулями 2а (Task 8) вона
+     стоїть на `capabilities.publish`, а в «P» без синку публікує явний `static-publish` (локальна
      тека, нічого назовні). Дропдаун публікації — лише показ, відкриття й посилання: без пароля ЛІГА і без
      Teams-каналу (його стан у просторі без інтеграцій не питається, і пункт висів би вічним «перевіряю»). */
   const acts = await barActs(page);
@@ -230,7 +230,12 @@ test("3: «Новий простір…» → «Client», тека типова 
   assert.deepEqual(reg.spaces.map((s) => s.id), ["liga", "p", "client"]);
   const made = reg.spaces.find((s) => s.id === "client");
   assert.equal(made.path, path.join(home, "deai-work", "client"), "тека простору — типова під домівкою");
-  assert.equal(made.integrations, false);
+  assert.equal(made.capabilities.vcs, null, "свідок: у новому просторі синку нема");
+  const mods = await (await fetch(`${url}/api/modules?space=${made.id}`)).json();
+  const pubRec = (mods.modules || mods).find((m) => m.id === "static-publish");
+  assert.ok(pubRec, `запис static-publish у новому просторі: ${JSON.stringify(mods).slice(0, 300)}`);
+  assert.equal(pubRec.enabled, true, "static-publish ввімкнено явно");
+  assert.equal(pubRec.implicit, false, "static-publish — явний запис, не неявний");
   assert.ok(existsSync(path.join(made.path, "space.json")) && existsSync(path.join(made.path, "tasks.json")), "файли простору");
 });
 

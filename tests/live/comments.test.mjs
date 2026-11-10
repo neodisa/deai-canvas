@@ -586,7 +586,7 @@ test("e: ЛІГА-простір — модульний сніпет supabase-co
 
   const spaces = (await spacesApi(url)).spaces;
   const ligaSpace = spaces.find((s) => s.id === "liga");
-  assert.equal(ligaSpace.integrations, true, "свідок: простір ЛІГА має інтеграції");
+  assert.equal(ligaSpace.compat?.vcs, "design-canvas", "свідок: простір ЛІГА має явний запис vcs зі схемою ЛІГИ");
   assert.equal(ligaSpace.capabilities.comments, "supabase-comments", `capabilities ЛІГА (4d-4b: явний запис): ${JSON.stringify(ligaSpace.capabilities)}`);
   assert.equal(spaces.find((s) => s.id === SPACE).capabilities.comments, MODULE, "свідок: у `mod` модуль ввімкнено");
   assert.equal(memo.log.length, 0, "свідок: memo ще нічого не бачив");

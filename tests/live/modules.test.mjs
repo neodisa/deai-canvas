@@ -11,8 +11,9 @@
  * Мапа «сценарій → запобіжник», знята мутаційно (прибери охорону — подивись, чи червоніє):
  *   1 (публікація в теку) — `Access-Control-Allow-Origin` у `PUBLISHED_HEADERS` (`serve.py`): без нього обгортка
  *        в пісочниці не вантажить `shell/*.js` (`<script type=module>` — завжди CORS) і `manifest.json`, смуга
- *        не зʼявляється, `requestfailed` непорожній. `IMPLICIT_MODULE` (`deai_modules.py`): без неявного
- *        `static-publish` у просторі без інтеграцій публікувати нікому — кнопка зникає з моделі смуги.
+ *        не зʼявляється, `requestfailed` непорожній. Явний запис `static-publish` у `space.json` (0.22: новий простір
+ *        пише його сам, наявні — стартовий крок `spaces.materialize_static_publish`): без нього у звичайному просторі публікувати нікому —
+ *        кнопка зникає з моделі смуги.
  *        `sandbox …` у CSP (без `allow-same-origin`): без нього `POST` зі сторінки превʼю йшов би з origin
  *        канваса (200 і нова публікація), а не з `Origin: null` (403).
  *   2 (токени простору)   — `?sp=` у теґу інспектора (`inspector_ds_arg`), фонове завантаження й перемальовка
@@ -341,7 +342,7 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
   const cssDir = mkdtempSync(path.join(tmpdir(), "dc-live-tokens-"));
   const cssFile = path.join(cssDir, "tokens.css");
   writeFileSync(cssFile, TOKENS_CSS);
-  const { page, url, spaces, requests, outside } = await boot(t, {
+  const { page, url, requests, outside } = await boot(t, {
     spaces: [{ name: "Tok", id: "tok", color: "space-2", tasks: { lab: { dir, title: "Лабораторія" } } }],
     /* Напрямок задачі — `tool`: статичної ДС у нього нема, тож до токенів простору інспектор чесно каже
        «ДС немає». Фікстура з `spaces` напрямку не бере (її `profile` ігнорується), тож пишемо його в
@@ -353,7 +354,7 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
       writeFileSync(file, JSON.stringify(cfg));
     },
   });
-  assert.equal(spaces[0].integrations, false, "свідок: простір без інтеграцій");
+  assert.equal((await spacesApi(url)).spaces[0].capabilities.vcs, null, "свідок: у звичайному просторі синку нема");
 
   /* До модуля токенів нема: сервер відповідає «профілю немає», а не помилкою. */
   assert.deepEqual(await (await fetch(`${url}/api/ds-tokens?space=tok`)).json(), { profile: null },
@@ -469,7 +470,7 @@ test("3: ЛІГА-простір — capabilities.publish 'legacy', смуга �
   const reg = await spacesApi(url);
   const liga = reg.spaces.find((s) => s.id === "liga");
   assert.equal(liga.capabilities.publish, "vercel-publish", `capabilities простору ЛІГА (4d-4b: явний запис): ${JSON.stringify(liga.capabilities)}`);
-  assert.equal(liga.integrations, true, "свідок: ЛІГА-простір має інтеграції");
+  assert.equal(liga.compat?.vcs, "design-canvas", "свідок: ЛІГА-простір має явний запис vcs зі схемою ЛІГИ");
 
   await openCanvas(page, url);
   await page.waitForSelector('#bar [data-act="publish"]', { timeout: 15000 });

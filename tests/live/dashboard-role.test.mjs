@@ -5,7 +5,7 @@
  *
  * Юніти (`tests/test_dashboard*.py`, `tests/test_serve_*`) доводять кожну ланку окремо; тут те, чого вони не бачать:
  * що вкладка «Команда» у звичайному просторі справді йде від ПОСТАЧАЛЬНИКА ролі (модуль простору), що синк карток іде тим
- * самим модулем (серверний тригер → дитина `bin/overview_push.py sync --space` → `push`), що ЛІГА лишається `'legacy'` і мовчить
+ * самим модулем (серверний тригер → дитина `bin/overview_push.py sync --space` → `push`), що ЛІГА (явні записи ролей) мовчить
  * в ізольованому прогоні, і що екран «Підключення» показує секцію «Командний дашборд».
  *
  * Мапа «сценарій → запобіжник», знята мутаційно (прибери охорону — подивись, чи червоніє):
@@ -17,19 +17,18 @@
  *     червоніє, коли зламано ОБИДВА шари разом (глибока оборона, а не доказ одного).
  *   2 (модуль відмовив) — `except ModuleError` у `_team_fetch`: текст модуля у банері, «Мої» живі.
  *   3 («Підключення») — `ROLE_ORDER`/`ROLE_KEYS` у `connections-model.js`: секція «Командний дашборд» і картки.
- *   4 (ЛІГА: `DC_TEAM_FAKE`) і 5 (ЛІГА без шва — ізольований прогін) — гілка `'legacy'` у `_team_fetch`.
- *   6 (синк звичайного простору) — `_overview_sync` (постачальник, а не `integrations`) + `dashboard.sync` (`merge`, без
+ *   4 (ЛІГА: `DC_TEAM_FAKE`) і 5 (ЛІГА без шва — ізольований прогін) — гейти ЛІГИ в `_team_fetch`.
+ *   6 (синк звичайного простору) — `_overview_sync` (постачальник ролі) + `dashboard.sync` (`merge`, без
  *     `insert`: реєстр — крок ЛІГИ); 7 — бар'єр фікстур `_drop_fixtures`; 8 — гейт `DC_NO_OVERVIEW` для будь-якого постачальника;
  *     9 — ЛІГА під `DC_TASKS_FILE` мовчить.
  */
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { appendGuard } from "./_append-guard.mjs";
 import { guardRealDeai, postJson, sleep, stop } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
@@ -341,7 +340,7 @@ test("8: DC_NO_OVERVIEW (типове оточення живих тестів) 
 
 test("9: ЛІГА під DC_TASKS_FILE мовчить: збірка превʼю (build_only) не стартує синк, лога нема ні в ЛІГИ, ні в домівці простору", async (t) => {
   const A = taskFixture({ html: MOCKUP });
-  /* `DC_NO_OVERVIEW: ""` вимикає ЛИШЕ загальний гейт: тримати має гейт `DC_TASKS_FILE` саме для постачальника 'legacy'. Конфіг
+  /* `DC_NO_OVERVIEW: ""` вимикає ЛИШЕ загальний гейт: тримати має гейт `DC_TASKS_FILE` саме для ЛІГИ (запис `shared_state` — закон ізоляції). Конфіг
      установки є (хост `.example`), тож «нема куди пушити» мовчання не пояснює (інакше тест зеленів би й без гейта), а мутація
      «прибери гейт» безпечна: дитина синку дійшла б лише до хоста, що не резолвиться, і лишила б лог — на ньому тест і червоніє. */
   const server = await startServer(null, {
@@ -350,29 +349,16 @@ test("9: ЛІГА під DC_TASKS_FILE мовчить: збірка превʼю
     supabase: true,
   });
   t.after(() => stop(server.child));
-  /* ⛔ Теки лога ЛІГИ в тимчасовій домівці нема, а `_overview_spawn` її не створює: без неї `open(лог)` падав би мовчки, дитина не
-     стартувала б ЗА БУДЬ-ЯКОГО гейта, і тест зеленів би й без нього (мутація «прибери гейт» це виявила). */
-  mkdirSync(path.join(server.home, ".claude", "pipeline-feedback"), { recursive: true });
+  /* Лог синку тепер один на машину — `<DEAI_HOME>/logs/dashboard-sync.log`, а `_overview_log_path` САМ створює теку `logs`: тож тека —
+     слід спроби стартувати дитину (старого шляху в `~/.claude/pipeline-feedback` сервер не пише взагалі). */
   const built = await (await postJson(server.url, "/api/publish", { build_only: true })).json();
   assert.equal(built.ok, true, JSON.stringify(built));
   await sleep(2500);
-  assert.equal(existsSync(path.join(server.home, ".claude", "pipeline-feedback", "overview-sync.log")), false,
+  assert.equal(existsSync(path.join(server.deaiHome, "logs", "dashboard-sync.log")), false,
     "ЛІГА під DC_TASKS_FILE відкрила лог синку: дитина стартувала б у спільний Supabase");
-  assert.equal(existsSync(path.join(server.deaiHome, "logs")), false, "синк ЛІГИ пішов лозі звичайного простору");
+  assert.equal(existsSync(path.join(server.deaiHome, "logs")), false, "синк ЛІГИ навіть не дійшов до відкриття лога, але тека logs зʼявилась");
 });
 
-/* Справжній лог синку ЛІГИ (`~/.claude/pipeline-feedback/overview-sync.log`): лише читання (нічого не пишемо). Свій, а не в спільному
-   `_spaces-kit.mjs`: його читають усі файли просторів, а справжній канвас на машині міг би дописати в лог сам по собі.
-   ⛔ Не `mtime:size` (так було до 03.11.2026): лог дописує ІНШИЙ процес (справжній канвас), і «файл змінився» червоніло без нашої
-   вини. Охоронець дивиться на ЗМІСТ дописаного після знімка (`_append-guard.mjs`): чи є там наші мітки — тимчасова домівка, наші
-   теки й вигадані хости. Повідомлення називає лише мітку, не вміст логу. */
-const REAL_SYNC_LOG = path.join(userInfo().homedir, ".claude", "pipeline-feedback", "overview-sync.log");
-/* Голий `tmpdir()` не мітка: справжній канвас того ж користувача міг би писати й свої тимчасові шляхи. Наші — `<tmp>/dc-…`. */
-const OUR_MARKERS = [path.join(tmpdir(), "dc-"), path.join(realpathSync(tmpdir()), "dc-"), "dc-live-", "dc-dash-", ".live-dash-", "demo.supabase.example", "abcdefghijkl",
-  "sb_publishable_test", "DEMO-", "alpha@example.com"];
-const syncLogCheck = appendGuard(REAL_SYNC_LOG, OUR_MARKERS);
-test("10: у справжній лог синку ЛІГИ не дописано слідів цього тесту", () => {
-  syncLogCheck();
-});
-
+/* Справжнього логу ЛІГИ (`~/.claude/pipeline-feedback/overview-sync.log`) більше ніхто не пише (0.22: єдиний лог у `<DEAI_HOME>/logs/`), тож
+   охоронця «дописано в чужий лог» тут нема. Лог тимчасового `DEAI_HOME` перевіряють самі тести (8, 9), а справжній `~/.deai` — охоронець нижче. */
 guardRealDeai("11: справжній ~/.deai не зʼявився і не змінився (ізоляція живих тестів)");

@@ -252,6 +252,8 @@ async function boot(t, { two = false, marked = false } = {}) {
 const badge = (page, id) => page.locator(`.cn-card[data-id="${id}"] .cn-badge`).getAttribute("class");
 const waitBadge = (page, id, kind) => page.waitForSelector(`.cn-card[data-id="${id}"] .cn-badge--${kind}`, { timeout: 15000 });
 const spaceJson = (p) => JSON.parse(readFileSync(path.join(p, "space.json"), "utf8"));
+/* Явний запис, що фікстура кладе звичайному простору (0.22): до дій тесту `modules` — рівно він, а не `undefined`. */
+const STATIC_ONLY = { "static-publish": { enabled: true } };
 const secretsJson = (deaiHome) => JSON.parse(readFileSync(path.join(deaiHome, "secrets.json"), "utf8"));
 const modulesList = async (url, space = "studio") => (await (await fetch(`${url}/api/modules?space=${space}`)).json()).modules;
 const tokenOf = (list, id = "memo-publish") => list.find((m) => m.id === id).settings.find((s) => s.key === "token");
@@ -297,7 +299,7 @@ async function assertSecretNowhere({ page, requests, posts, bodies }) {
 
 /* ── сценарії ──────────────────────────────────────────────────────────────────────────────────────── */
 
-test("1: вхід із дропдауна, секції за ролями, неявний static-publish «типово», крихта «Підключення», фокус на картці", async (t) => {
+test("1: вхід із дропдауна, секції за ролями, явний static-publish (без «типово»), крихта «Підключення», фокус на картці", async (t) => {
   const { page, outside, errors } = await boot(t);
   await openConnections(page);
   const titles = await page.locator(".cn-sec-h").allTextContents();
@@ -306,7 +308,7 @@ test("1: вхід із дропдауна, секції за ролями, не�
   assert.deepEqual(titles.slice(0, 7), ["Публікація", "Командні коментарі", "Синхронізація з git", "Командний дашборд", "Трекер задач",
     "Сповіщення Teams", "Токени дизайн-системи"], "4c-3: між трекером і токенами — «Сповіщення Teams» (вбудований supabase-teams), тож сім, а не шість");
   assert.match(await badge(page, "supabase-dashboard"), /cn-badge--off/, "вбудований supabase-dashboard: не підключений за замовчуванням");
-  assert.match(await page.locator('.cn-card[data-id="static-publish"]').textContent(), /типово/);
+  assert.doesNotMatch(await page.locator('.cn-card[data-id="static-publish"]').textContent(), /типово/, "0.22: static-publish — явний запис, не «типово»");
   assert.match(await badge(page, "css-tokens"), /cn-badge--off/);
   assert.match(await page.locator("#bar .crumb--flat").textContent(), /Підключення/);
   assert.equal(await page.evaluate(() => document.activeElement?.dataset?.cn ?? null) !== null, true, "фокус на кнопці картки");
@@ -322,7 +324,7 @@ test("2: css-tokens — «Підключити» з файлом простор�
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="file"]');
   await page.click('#cn-drawer [data-cn-dr="submit"]');
   await page.waitForSelector('#cn-drawer [aria-invalid="true"]');
-  assert.equal(spaceJson(spacePath).modules, undefined, "порожнє обовʼязкове — запиту не було");
+  assert.deepEqual(spaceJson(spacePath).modules, STATIC_ONLY, "порожнє обовʼязкове — запиту не було");
   await page.fill('#cn-drawer [data-cn-field="file"]', "{space}/ds.css");
   await page.click('#cn-drawer [data-cn-dr="submit"]');
   await waitBadge(page, "css-tokens", "ok");
@@ -370,7 +372,7 @@ test("4: відмова від заміни лишає все як було; Esc
   await page.waitForSelector(".cv-ask-scrim");
   await page.click('.cv-ask-scrim button[data-a="cancel"]');
   await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
-  assert.equal(spaceJson(spacePath).modules, undefined, "скасування — нічого не записано");
+  assert.deepEqual(spaceJson(spacePath).modules, STATIC_ONLY, "скасування — нічого не записано");
   assert.equal(await page.locator("#cn-drawer").isVisible(), true, "панель лишилась");
   await page.keyboard.press("Escape");                       // незбережене → питання
   await page.waitForSelector(".cv-ask-scrim");
@@ -500,7 +502,7 @@ test("7: простір перемкнули з відкритою панелл�
   assert.match(await badge(page, "memo-publish"), /cn-badge--unchecked/, "картки — нового простору (memo-publish там увімкнено)");
   assert.match(await page.locator(".cn-sec").first().textContent(), /Зараз: Memo publish \(test\)/);
   assert.equal(readFileSync(path.join(atelier.path, "space.json"), "utf8"), atelierBefore, "у новий простір нічого не записано");
-  assert.equal(spaceJson(studio.path).modules, undefined, "у старий простір теж");
+  assert.deepEqual(spaceJson(studio.path).modules, STATIC_ONLY, "у старий простір теж");
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });
@@ -856,7 +858,7 @@ test("19: відмовлений запис теж перечитує списо
   await page.waitForSelector("#cn-drawer .cn-res--err");
   assert.match(await page.locator("#cn-drawer .cn-res--err").textContent(), /Не вдалося записати space\.json/, "HTTP-відмова, а не вердикт перевірки");
   assert.equal(secretsJson(deaiHome).studio["memo-publish"].token, SECRET, "свідок: сервер записав секрет ДО відмови");
-  assert.equal(spaceJson(spacePath).modules, undefined, "space.json не записано");
+  assert.deepEqual(spaceJson(spacePath).modules, STATIC_ONLY, "space.json не записано");
   await page.keyboard.press("Escape");                       // панель брудна: питання «Відкинути?»
   await page.waitForSelector(".cv-ask-scrim");
   await page.click('.cv-ask-scrim button[data-a="ok"]');
