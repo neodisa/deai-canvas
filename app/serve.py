@@ -9010,7 +9010,7 @@ def serve_main(port):
     liga_migrate.startup()
     try:
         if not (isolation.isolated() and isolation.real_home(spaces.home())):
-            for sid in spaces.materialize_static_publish():
+            for sid in spaces.materialize_static_publish(skip=liga_migrate.liga_space):
                 print('простір %s: публікація в теку тепер явний запис static-publish (екран «Підключення»)' % sid, file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — крок не валить старт
         print('static-publish: крок пропущено (%s)' % type(e).__name__, file=sys.stderr)

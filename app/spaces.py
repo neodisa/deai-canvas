@@ -776,7 +776,7 @@ STATIC_PUBLISH_ID = 'static-publish'
 
 def _ensure_static_publish_locked(space_path):
     """`True`, коли `space.json` змінено. Додає `modules.static-publish = {enabled: true}`, якщо ключа нема (будь-який стан запису —
-    рішення людини) і нема ВВІМКНЕНОГО запису, що веде `publish` (`vercel-publish` чи `roles` зі `publish`). Нечитаний/не-обʼєкт файл і
+    рішення людини; значення-не-обʼєкт теж «ключ є» — рішення людини не перезаписуємо) і нема ВВІМКНЕНОГО запису, що веде `publish` (`vercel-publish` чи `roles` зі `publish`). Нечитаний/не-обʼєкт файл і
     `modules` не-обʼєкт — не чіпаємо; тека, якої нема, — теж. Лише додає ключ: решта файла збережена. Кличе той, хто ТРИМАЄ `WRITE_LOCK`."""
     if not os.path.isdir(space_path):
         return False
@@ -815,16 +815,28 @@ def ensure_static_publish(space_path):
         return _ensure_static_publish_locked(space_path)
 
 
-def materialize_static_publish():
-    """Стартовий крок 0.22 (не крок ЛІГИ): кожному простору без `legacy: true` добирає запис `static-publish` (див.
-    `_ensure_static_publish_locked`). Ідемпотентний; шар вимкнено — нічого. Повертає id просторів, чий файл змінено."""
+def materialize_static_publish(skip=None):
+    """Стартовий крок 0.22 (не крок ЛІГИ): добирає запис `static-publish` (див. `_ensure_static_publish_locked`) кожному простору, який
+    `skip(sp)` не пропускає; без предиката пропускається кожен `legacy: true` (консервативно). `serve_main` передає
+    `liga_migrate.liga_space`: `legacy`-простір без ЛІГИ (старий звичайний) запис отримує, ЛІГА — ні (паритет 0.21 `_implicit_on`).
+    Збій одного простору (немає/не рядок `path`) решту не зупиняє. Ідемпотентний; шар вимкнено — нічого. Повертає id просторів, чий файл змінено."""
     if not layer_on():
         return []
     try:
         reg = read_registry()
     except SpacesError:
         return []
-    return [sp['id'] for sp in reg['spaces'] if sp.get('legacy') is not True and ensure_static_publish(sp['path'])]
+    if skip is None:
+        def skip(sp):
+            return sp.get('legacy') is True
+    out = []
+    for sp in reg['spaces']:
+        try:
+            if not skip(sp) and ensure_static_publish(sp['path']):
+                out.append(sp['id'])
+        except Exception:  # noqa: BLE001 — один зіпсований запис не зупиняє решту
+            continue
+    return out
 
 
 def create_space(name, color, path):

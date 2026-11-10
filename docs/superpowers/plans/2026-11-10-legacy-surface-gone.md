@@ -66,6 +66,7 @@
 17. **Заголовок `Deprecation`:** у `Handler.end_headers` (покриває й `send_error`), атрибут `_successor` скидається в `_guarded` (поруч із `_resp_started`, `serve.py:5656`).
 18. **Журнал синку без `legacy`:** `_overview_log_path()` бере `spaces.home()`; до запуску синку доходить лише простір із постачальником `dashboard` (шар увімкнено), тож у шарі «вимкнено» справжній `~/.deai` не пишеться.
 19. **Тестовий інвентар** (за `grep`): Python — `test_spaces.py` (58 згадок), `test_modules.py` (48), `test_dashboard.py` (34), `test_spaces_serve.py` (31), `test_integrations_off.py`, `test_comments_role.py`, `test_notify.py`, `test_publish_module.py`, `test_liga_migrate*.py`, `test_vcs_core.py`, `test_comments_agent.py`, `test_legacy_comments.py`, `test_task_tags.py`, `test_task_from.py`, `test_tasks_overview.py`, `test_tracks.py`, `test_serve.py`, `test_static_publish.py`, `test_modules_api.py`, `bin/test_overview_push.py`; JS — `bar-model`, `connections-model`, `connections-view`, `shell-palette`, `shell-bar`, `spaces-model`, `spaces-state`, `spaces-wiring`, `spaces-publish`, `tasks-home`, `vcs-client`, `caps-role-errors`, `_legacy-golden-kit.mjs`; живі — `tests/live/{fixture,modules,spaces,comments,dashboard-role}`. Знімки `make_before_*.py`/`after_4d4b_collect.py` — заморожені, їх не чіпаємо (ключ `integrations` реєстр толерує).
+20. **Уточнення Р3 (після ревʼю T5): `legacy`-простір без ЛІГИ матеріалізується.** «Без `legacy: true`» зі спеки уточнено: `legacy`-простір, що не є ЛІГОЮ за `liga_migrate._liga_integrations` (явний `bool` ключа `integrations` виграє, інакше — маркери кореня старого `tasks.json`, збій читання = ЛІГА), теж дістає запис `static-publish` — паритет із 0.21 `_implicit_on` (`not integrations`); інакше старий звичайний простір без маркерів утратив би публікацію (409 `no-publish-module`). Немігрована ЛІГА не чіпається. `spaces.materialize_static_publish(skip=None)`: без предиката пропускає кожен `legacy`, `serve_main` передає `liga_migrate.liga_space`; `spaces` не імпортує `liga_migrate`. Збій одного запису реєстру решту не зупиняє.
 
 ### Рішення контролера (потрібні до старту)
 
@@ -898,6 +899,8 @@ R-C — лишити. Поправки 1–19 прийнято. `bin/state.py` (
 ---
 
 ### Task 6: прапорець геть з `spaces.py`; `RoleOff`; маркери — у `liga_migrate`
+
+> Примітка (Поправка 20): `liga_migrate._liga_integrations` і `liga_space` уже існують з T5. Task 6 лише переспрямовує на неї шість читань ключа й переносить маркери (`has_markers`).
 
 **Files:** Modify `app/spaces.py` (20, 44, 51, 82-85, 160, 281-285, 317, 365, 427-458, 808, 861-870), `app/liga_migrate.py` (470-481, 577-580, 610, 651, 686, 730, 1778-1780), `app/serve.py` (3110, 3396, 5198, 5791-5792 коментарі), `bin/inbox.py`, `bin/state.py`, `tests/liga_fixture.py`; Create `tests/test_no_integrations_flag.py` (Python-частина охоронця); тести.
 

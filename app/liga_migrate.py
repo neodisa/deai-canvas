@@ -2043,6 +2043,28 @@ def _real_home():
     return cur in cands
 
 
+def _liga_integrations(liga):
+    """Чи простір `legacy: true` — ЛІГА (інтеграції ввімкнені): явний `bool` ключа `integrations` виграє (історичні записи 0.21), а коли
+    ключа нема — за маркерами кореня старого `tasks.json` (`spaces.has_markers`). Будь-яка помилка читання — `True` (безпечний бік: не чіпаємо).
+    Решта читань ключа в цьому модулі переходить сюди в Task 6."""
+    v = liga.get('integrations')
+    if isinstance(v, bool):
+        return v
+    try:
+        cfg = spaces._read_json(spaces.legacy_tasks_file())
+        return bool(isinstance(cfg, dict) and spaces.has_markers(cfg))
+    except Exception:  # noqa: BLE001 — будь-який збій = «ЛІГА»
+        return True
+
+
+def liga_space(sp):
+    """`True` для запису `legacy: true`, що є ЛІГОЮ (див. `_liga_integrations`); для решти — `False`. Збій — `True` для `legacy`-запису."""
+    try:
+        return sp.get('legacy') is True and _liga_integrations(sp)
+    except Exception:  # noqa: BLE001
+        return isinstance(sp, dict) and sp.get('legacy') is True
+
+
 def startup():
     """Виклик із `serve.serve_main` ПІСЛЯ `make_server` (порт уже зайнято), до `serve_forever`. Ізольований прогін (`isolation.isolated()`) не мігрує, крім шва
     `DC_MIGRATE_LIGA=1` ЛИШЕ з тимчасовим `DEAI_HOME` (справжній `~/.deai` — гучна відмова). Не кидає ніколи: виняток — у stderr
