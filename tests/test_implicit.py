@@ -619,17 +619,6 @@ class NoLegacyLiteral(unittest.TestCase):
     # нема ні під якою назвою, стереже `test_originals_gone.ProviderWithoutImplicit.test_the_core_has_no_fallback_names`.
 
 
-class LigaLikePin(unittest.TestCase):
-    """4d-2 Task 6: `serve._liga_like` = `spaces.integrations_for`; неявний простір (шар вимкнено) мусить лишатись «ЛІГОЮ»."""
-
-    def test_implicit_space_is_liga_like(self):
-        import serve
-        self.assertIs(spaces.IMPLICIT['integrations'], True)
-        self.assertTrue(serve._liga_like(dict(spaces.IMPLICIT)))
-        self.assertFalse(serve._liga_like(None))
-        self.assertFalse(serve._liga_like({'id': 'x', 'path': '/p'}))
-
-
 # ⛔ Клас `IsolatedInstallConfig` (12 тестів) ретировано в 4d-4b: читачі оригіналів (`install_config.supabase_config`/`jira_config`/
 # `service_key_config`) видалено, тож ізоляція їх уже нічого не відрізає. Відповідність (нічого не губимо):
 #   * `…supabase_isolated_ignores_env_when_root_has_no_pair`, `…supabase_isolated_takes_the_root_pair_not_the_env`,

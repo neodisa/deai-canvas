@@ -190,7 +190,6 @@ test("коди відмов задачі з теки → ключі й поле 
   assert.equal(taskErrField("wzErrFromNoIndex"), "from");
   assert.equal(taskErrField("wzFromRequired"), "from");
   assert.equal(taskErrField("wzErrTaskDirExists"), "id");
-  assert.equal(taskErrField("wzErrFromPlain"), null);
   assert.equal(taskErrField("idTaken"), "id");
 });
 
@@ -200,7 +199,6 @@ test("кожен код відмови `from` на сервері має сві�
     "from-no-index": ["wzErrFromNoIndex", "from"],
     "from-contains-space": ["wzErrFromContains", "from"],
     "from-too-big": ["wzErrFromTooBig", "from"],
-    "from-needs-plain-space": ["wzErrFromPlain", null],
     "task-dir-exists": ["wzErrTaskDirExists", "id"],
   };
   for (const [code, [key, field]] of Object.entries(map)) {

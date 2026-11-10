@@ -403,8 +403,8 @@ class TagsApi(Fixture):
 class TaskNewFromTracksTest(unittest.TestCase):
     """Було `ProfileReposTest` (4b-3, `serve.profile_repos()` з кореня старого `tasks.json`). 4d-4a: таблицю й її тести перенесено
     в `tests/test_liga_adapter.py::LegacyReposTable` (`liga_migrate._legacy_repos`); тут лишилось те, що рантайм робить з
-    РЕПО НАПРЯМКУ: `gitlab`-маппінг запису (`_task_new_write`) і ознака потоку ЛІГА (`_liga_flow`) — з ЯВНИХ напрямків простору
-    ЛІГИ реєстру (`space.json`), а не з файла.
+    РЕПО НАПРЯМКУ: `gitlab`-маппінг запису (`_task_new_write`) — з ЯВНИХ напрямків простору ЛІГИ реєстру (`space.json`), а не з
+    файла. (Ознака потоку ЛІГА `_liga_flow` зникла в 4d-4c.)
 
     ⛔ Ізоляція: `spaces.read_registry` підмінено — реєстр машини не читається, `space.json` лежить у тимчасовій теці;
     `_task_new_write` працює лише над словником `cfg`, `vcs_provider` — без мережі."""
@@ -436,8 +436,7 @@ class TaskNewFromTracksTest(unittest.TestCase):
         """`gitlab` запису, який `_task_new_write` кладе в задачу `t-demo` з цим напрямком: репо дає `track_repo` явних напрямків
         простору ЛІГИ (мережі й GitLab-модуля нема)."""
         cfg = {}
-        with mock.patch.object(serve, 'vcs_provider', return_value=None), \
-                mock.patch.object(spaces, 'require_integrations', lambda: None):
+        with mock.patch.object(serve, 'vcs_provider', return_value=None):
             serve._task_new_write(cfg, 't-demo', 'T', '', track, None, None,
                                   os.path.join(self.tmp.name, 'task-' + track), None, None,
                                   serve.track_repo(serve._TrackView(self.liga), track), True)
@@ -449,34 +448,11 @@ class TaskNewFromTracksTest(unittest.TestCase):
         self.write([{'id': p, 'repo': v['gitlab']['repo'] if v['gitlab'] else ''} for p, v in snap.items()])
         for profile, want in snap.items():
             with self.subTest(profile=profile):
-                self.assertEqual(self.new_gitlab(profile), want['gitlab'])
-                # ознака потоку ЛІГА: і за `track`, і за `profile` (вхід межі) — було лише за `profile`
-                self.assertIs(serve._liga_flow({'profile': profile}), want['liga_flow'])
-                self.assertIs(serve._liga_flow({'track': profile}), want['liga_flow'])
+                self.assertEqual(self.new_gitlab(profile), want['gitlab'])      # ключ `liga_flow` знімка заморожено, не читаємо (4d-4c)
 
     def test_without_repos_a_liga_task_has_no_default_repo(self):
         self.write([{'id': 'united'}])
         self.assertIsNone(self.new_gitlab('united'))
-        self.assertIs(serve._liga_flow({'profile': 'united'}), False)
-        self.assertIs(serve._liga_flow({'track': 'united'}), False)
-        self.assertIs(serve._liga_flow({'jira': 'X-1'}), True, 'інші ознаки потоку ЛІГА — як були')
-        self.assertIs(serve._liga_flow({'gitlab': {'repo': self.REPO}}), True)
-
-    def test_liga_flow_does_not_trust_a_value_that_is_not_a_track_with_a_repo(self):
-        """Напрямок із зіпсованим репо (пробіл) не має репо, а значення поза переліком — не ознака потоку."""
-        self.write([{'id': 'alpha', 'repo': 'has space'}, {'id': 'beta', 'repo': self.REPO}])
-        for body in ({'profile': 'alpha'}, {'track': 'alpha'}, {'track': 'gamma'}, {'track': 5}, {'profile': ''}):
-            self.assertIs(serve._liga_flow(body), False, body)
-        self.assertIs(serve._liga_flow({'track': 'beta'}), True)
-        self.assertIsNone(self.new_gitlab('alpha'))
-
-    def test_a_broken_registry_or_no_liga_space_is_no_sign(self):
-        self.write([{'id': 'beta', 'repo': self.REPO}])
-        self.registry['spaces'] = [{**self.liga, 'legacy': False}]
-        self.assertIs(serve._liga_flow({'track': 'beta'}), False)
-        with mock.patch.object(spaces, 'read_registry', side_effect=spaces.SpacesError('spaces-unreadable', 'x')):
-            self.assertIs(serve._liga_flow({'track': 'beta'}), False)
-            self.assertIs(serve._liga_flow({'jira': 'X-1'}), True)
 
 
 if __name__ == '__main__':

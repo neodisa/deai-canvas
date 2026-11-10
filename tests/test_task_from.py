@@ -129,13 +129,16 @@ class TaskFrom(Fixture):
         self.assertFalse(os.path.lexists(os.path.join(self.p_path, tid)), 'тека задачі зʼявилась')
         self.assertNotIn(tid, _read(self.p_file)['tasks'])
 
-    def test_only_a_space_without_integrations(self):
+    def test_from_is_allowed_in_a_liga_space_but_not_with_gitlab(self):
+        """4d-4c: `from` більше не лише для простору «без інтеграцій» (код `from-needs-plain-space` зник): у просторі ЛІГА він копіює
+        теку; а `from` разом із `gitlab` — 400 `bad-request`, нічого не створено."""
         self.put('index.html')
-        before = _read(self.legacy_file)
-        self.refused({'id': 'ad3', 'space': self.legacy_id, 'from': self.src}, 400, 'from-needs-plain-space')
-        self.assertEqual(_read(self.legacy_file), before)
+        st, body = self.post('/api/task-new', {'id': 'ad3l', 'space': self.legacy_id, 'from': self.src})
+        self.assertEqual(st, 200, body)
+        self.addCleanup(shutil.rmtree, body['dir'], True)
+        self.assertIn('copied', body)
         self.refused({'id': 'ad3', 'space': self.p_id, 'from': self.src, 'gitlab': {'repo': 'r', 'path': 'p'}},
-                     400, 'from-needs-plain-space')
+                     400, 'bad-request')
         self.assert_nothing('ad3')
 
     def test_bad_from_values(self):

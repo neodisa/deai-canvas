@@ -1546,38 +1546,6 @@ def _opened_mark(task):
     return opened if isinstance(opened, str) else ''
 
 
-#: Текст відмови `task-new` (409 `no-integrations-space`): куди дивитись, коли простору ЛІГА нема.
-NO_INTEGRATIONS_SPACE_MSG = ('простір ЛІГА береться з design-canvas/tasks.json '
-                             '(копія tasks.example.json), а не з «Новий простір»')
-
-
-def _liga_flow(payload):
-    """Тіло `task-new` несе ознаки потоку ЛІГА (Jira → напрямок → GitLab-бутстрап):
-    `jira` — непорожній (не лише пробіли) рядок, `track`/`profile` — id напрямку з репо в просторі ЛІГИ реєстру
-    (`_liga_track_repos`; `profile` — м'який вхід на межі, див. `_task_new`), `gitlab` непорожній. Не-рядок у
-    `jira`/`profile`/`track` ознакою не є (так само як порожнє й `null`)."""
-    jira = payload.get('jira')
-    repos = None
-    for key in ('profile', 'track'):
-        v = payload.get(key)
-        if isinstance(v, str) and v:
-            repos = _liga_track_repos() if repos is None else repos
-            if v in repos:
-                return True
-    return bool((isinstance(jira, str) and jira.strip()) or payload.get('gitlab'))
-
-
-def _liga_track_repos():
-    """Ідентифікатори напрямків простору ЛІГИ реєстру, що мають непорожній `repo` (явні `tracks` його `space.json`)."""
-    try:
-        liga = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
-    except spaces.SpacesError:
-        return set()
-    if liga is None:
-        return set()
-    return {t['id'] for t in _TrackView(liga).lite if t['repo']}
-
-
 def _space_id(sp):
     """Id простору для відповідей API; `None`, коли простору нема: шар вимкнено (неявний
     простір — не простір для UI, див. `spaces.describe`) чи просторів нема взагалі."""
@@ -1678,12 +1646,6 @@ def _own_tracks(sp):
     if not isinstance(data, dict) or not isinstance(data.get('tracks'), list):
         return None
     return data['tracks'], data.get('default_track')
-
-
-def _liga_like(sp):
-    """Простір ЛІГИ: з прапорцем `integrations` або неявний (шар вимкнено)."""
-    # ⛔ неявний простір (шар вимкнено) — ЛІГА-подібний: `spaces.IMPLICIT['integrations'] is True` (закріплено в `tests/test_spaces.py`)
-    return sp is not None and spaces.integrations_for(sp)
 
 
 def _drop_foreign_roots(sp, items):
@@ -2460,12 +2422,6 @@ def _task_new_write(cfg, tid, title, jira, track, gitlab, vcs, tdir, adopt_src, 
     legacy = True        # чий текст даних у примітці форку: типово ЛІГА (`v[2]`), поки постачальника не знайдено
     # Клон — для `vcs` БЕЗ `from` (`adopt_src`); профільний `gitlab` ЛІГИ бутстрапить, як і було.
     if gitlab or (vcs and adopt_src is None):
-        if gitlab:
-            # ⛔ ПЕРЕД `try` нижче: `IntegrationsOff` — підклас `OSError`, а `except OSError: pass`
-            # там читає це як «дзеркало недоступне → порожній стартовий макет» і мовчки записав би
-            # в простір без інтеграцій GitLab-маппінг. Маршрут `task-new` такий `gitlab` відхиляє
-            # раніше (400); тут — другий замок для будь-якого іншого викликача.
-            spaces.require_integrations()
         tmp = tempfile.mkdtemp(prefix='deai-vcs-')
         try:  # если макет уже есть в репо — берём его в it1, не начинаем с нуля
             v = vcs_provider()
@@ -7741,8 +7697,8 @@ class Handler(SimpleHTTPRequestHandler):
         `tdir` — СПРАВЖНЯ тека майбутньої задачі (`<track_root>/<id>`, її рахує маршрут ДО цього виклику). ⛔ Не `<шлях простору>/<id>`:
         корінь напрямку може лежати поза простором чи в підтеці, і перевірка за шляхом простору пропускала `from` = сам корінь
         (копія в тій самій теці, що джерело; кожне наступне прийняття перепаковувало б попередні задачі)."""
-        if spaces.integrations_for(sp) or payload.get('gitlab'):
-            self._space_error(400, 'from-needs-plain-space', 'from is only for a space without integrations')
+        if payload.get('gitlab'):
+            self._space_error(400, 'bad-request', 'from cannot be combined with gitlab')
             return None
         if not isinstance(src, str) or not src.strip():
             self._space_error(400, 'bad-request', 'from must be a non-empty string')
@@ -7789,26 +7745,22 @@ class Handler(SimpleHTTPRequestHandler):
         return AdoptPlan(real, files, total, links)
 
     def _task_new(self, payload):
-        """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір з
-        інтеграціями: мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без
-        `space` — простір з інтеграціями, якщо він є, інакше поточний (усі сьогоднішні виклики
-        без поля — потік dev-pipeline ЛІГА). Просторів нема зовсім — 409 `no-space`.
-        ⛔ Простору з інтеграціями нема, а тіло несе ознаки потоку ЛІГА (`_liga_flow`) — 409
-        `no-integrations-space` (теж коли просторів нема зовсім), нічого не створено: інакше
-        Jira/GitLab-бутстрап тихо став би локальною задачею з `profile: null` в «особистому».
-        Без ознак — поточний простір, як було. Явний `space` цього правила не торкається.
+        """Нова задача. Простір: `space` з тіла (є, але такого нема — 400, НЕ відкат у простір ЛІГА:
+        мовчки завести «особисту» задачу в реєстр ЛІГА гірше за відмову); без `space` — простір
+        із `legacy: true`, якщо він є, інакше поточний (4d-4c: ознак потоку ЛІГА більше нема —
+        `jira`/`profile`/`track` простір не обирають). Просторів нема зовсім — 409 `no-space`.
 
         Id унікальний на машині через УСІ простори (`find_task`), не лише в цільовому. Але
         `find_task` вважає нечитабельний файл задач порожнім, а id, що лежить у ньому, невидимий:
         тож ПЕРЕД створенням усі файли просторів мусять читатись (`unreadable_task_files`) — інакше
         503 `space-unavailable` із назвою файла, а не дубль через простори.
-        Простір без інтеграцій: `gitlab` у тілі — 400, `profile` — `null`, тека задачі — у `path`
-        простору (ніколи спільний корінь ЛІГИ). Успіх робить цільовий простір поточним —
+        Простір без схеми ЛІГИ (`vcs_outbound`): `gitlab` у тілі — 400 `gitlab-needs-vcs-scheme`, `profile` — `null`, тека задачі —
+        у `path` простору (ніколи спільний корінь ЛІГИ). Успіх робить цільовий простір поточним —
         як `task_new` уже робить поточною саму задачу; коли реєстр у цю мить не записати, задача
         вже СТВОРЕНА, тож відповідь 200 з `space_switched: false`, а не 503, що збрехав би.
 
         Етап 3b: необовʼязкове `from` — тека з `index.html`, яку сервер копіює в першу ітерацію замість стартового
-        макета (лише простір без інтеграцій; усі перевірки й обхід — `_adopt_source`, до будь-якого запису; відповідь
+        макета (`from` разом із `gitlab` — 400 `bad-request`; усі перевірки й обхід — `_adopt_source`, до будь-якого запису; відповідь
         несе `copied: {files, bytes, skipped_links}` — що скопійовано НАСПРАВДІ; тека задачі займається атомарно, збій
         прибирає її: `task_new`). `from: null` — поля нема.
 
@@ -7848,18 +7800,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self._space_error(400, 'bad-tags', str(e))
                 return
         # Старий файл є, а простору з нього нема, бо він не читається: id в ньому невидимі, тож
-        # створювати нічого (як і при інших нечитабельних файлах нижче). ПЕРЕД `no-space` /
-        # `no-integrations-space`: «створіть простір» чи «потрібен простір з інтеграціями» тут
-        # брехали б — задачі й простір ЛІГА лежать у файлі, який треба лише полагодити.
+        # створювати нічого (як і при інших нечитабельних файлах нижче). ПЕРЕД `no-space`:
+        # «створіть простір» тут брехало б — задачі й простір ЛІГА лежать у файлі, який треба лише полагодити.
         raise_if_legacy_unreadable(spaces.read_registry())
         want = payload.get('space')
         if want is None:
             sp = spaces.default_new_task_space()
-            if not spaces.integrations_for(sp) and _liga_flow(payload):
-                # ДО `no-space`: простору ЛІГА нема (і «Новий простір» його не дасть) — це чесніша
-                # відмова, ніж «створіть простір». ДО фіксації простору й будь-якого запису.
-                self._space_error(409, 'no-integrations-space', NO_INTEGRATIONS_SPACE_MSG)
-                return
             if sp is None:
                 self._space_error(409, 'no-space', 'no space to put the task in — create a space first')
                 return
@@ -7877,7 +7823,6 @@ class Handler(SimpleHTTPRequestHandler):
         # переліку); будь-який інший рядок ігнорується (задача — у напрямок за замовчуванням, а без напрямків: корінь = шлях
         # простору, `profile: null`, без ключа `track`). Конфлікт `track` і `profile` (`bad-track`) — лише коли `profile` справді
         # був би використаний; інакше вирішує один `track`.
-        liga = spaces.integrations_for(sp)
         view = _TrackView(sp)
         known = bool(profile) and tracks.ID_RE.fullmatch(profile) and tracks.find(view.tracks, profile) is not None
         used_profile = profile if known else None
@@ -7893,6 +7838,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
         want_track = track_in or used_profile or None
         spaces.set_request_space(sp['id'])
+        liga = deai_modules.vcs_outbound(sp)       # ПІСЛЯ фіксації простору: схема ЛІГИ (`compat`) його git-синку
         tid = payload.get('id', '')
         broken = spaces.unreadable_task_files(spaces.read_registry())
         if broken:
@@ -7946,8 +7892,8 @@ class Handler(SimpleHTTPRequestHandler):
             if adopt is None:
                 return
         if not liga and payload.get('gitlab'):
-            self._space_error(400, 'gitlab-needs-integrations',
-                              'gitlab mapping is not available in a space without integrations')
+            self._space_error(400, 'gitlab-needs-vcs-scheme',
+                              'gitlab mapping needs a space whose git sync uses the design-canvas scheme')
             return
         try:
             r = task_new(cfg, tid,

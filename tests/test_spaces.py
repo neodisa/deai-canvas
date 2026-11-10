@@ -575,13 +575,18 @@ class ActiveSpace(Env):
             spaces.active_tasks_file()
         self.assertIsNone(cm.exception.space)
 
-    def test_default_new_task_space_prefers_integrations_then_current(self):
+    def test_default_new_task_space_prefers_the_legacy_entry_then_current(self):
+        """4d-4c (Д1): перший запис із `legacy: true`, а не з прапорця `integrations`; без нього — поточний."""
         self.two_spaces()
         spaces.switch_space('p')
         self.assertEqual(spaces.default_new_task_space()['id'], 'liga')
         reg = _read(self.reg_file)
-        reg['spaces'][0]['integrations'] = False
+        reg['spaces'][0]['integrations'] = False                 # прапорець ні на що не впливає
         _write(self.reg_file, reg)
+        self.assertEqual(spaces.default_new_task_space()['id'], 'liga')
+        reg['spaces'][0]['legacy'] = False
+        _write(self.reg_file, reg)
+        os.remove(spaces.legacy_tasks_file())                    # інакше перша міграція повернула б запис `legacy`
         self.assertEqual(spaces.default_new_task_space()['id'], 'p')
 
 

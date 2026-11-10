@@ -649,6 +649,23 @@ import tempfile  # noqa: E402
 from test_liga_migrate_b import _ABSENT, _diff  # noqa: E402  (порівняння знімків ключ у ключ — імпорт, не друга копія)
 
 
+def _add_vcs_record(sp):
+    """4d-4c: простір ЛІГА впізнається за ЯВНИМ записом `git-sync` зі схемою `design-canvas` (`vcs_outbound`), а не за прапорцем
+    `integrations`. Стенд кроку D імітує мігровану ЛІГУ, тож кладе такий запис (форма — з `liga_fixture`) ПІСЛЯ кроку D: його позначка
+    й відкат не зачеплені. Без запису `gitlab`-маппінг і `profile` нової задачі зникли б — це свідома поведінка немігрованої ЛІГИ
+    (її доводить `test_spaces_serve`), а паритет 0.19 тут мірює саме мігровану. Очікування знімка НЕ перевернуто."""
+    import deai_modules
+    import liga_fixture
+    mid, settings, _secrets = liga_fixture.ROLE_RECORDS['vcs']
+    path = os.path.join(sp['path'], 'space.json')
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    data.setdefault('modules', {})[mid] = {'enabled': True, 'shared_state': True, 'settings': dict(settings)}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f)
+    deai_modules.reset_caches()
+
+
 def _collect(tmp, name, run_d=True):
     """Один стенд знімка 0.19.0 у НЕізольованому шарі (`DEAI_HOME` + реєстр просторів, без `DC_TASKS_FILE`) з ЛІГОЮ, мігрованою кроком D
     (`plain` — без D: звичайний простір). Збирає ті самі розділи, що `tests/make_before_4d4a.py`, але НОВИМИ формами підписів:
@@ -668,6 +685,7 @@ def _collect(tmp, name, run_d=True):
             mock.patch.object(serve.Handler, '_overview_sync', lambda *a, **k: None):
         if run_d and name != 'plain':
             dinfo = {'status': lm.run(step=lm.STEP_D), 'mark': lm.status()['steps'][D]['mark']}
+            _add_vcs_record(sp)
         tasks = cfg['tasks']
         items, default = serve.space_tracks(sp)
         out['view'] = {'ids': [t['id'] for t in items], 'labels': [t['label'] for t in items], 'default': default,
@@ -1001,6 +1019,7 @@ class AfterMigrationServer4d4a(_StepD):
         sp = self.spaces.active_space()
         self.assertEqual(sp['id'], 'legacy')
         self.add_comments_record(sp)
+        _add_vcs_record(sp)
         return sp, self.serve.load_legacy_tasks()
 
     def add_comments_record(self, sp):
@@ -1344,27 +1363,3 @@ class Task3Minors4d4a(_StepD):
             with self.subTest(status=status), self.stub_d(status):
                 _code, out, _err = self.cli('run')
                 self.assertEqual(self.lm.TRACKS_NOT_MIGRATED in out, status not in self.lm.TRACKS_QUIET, status)
-
-
-class LigaFlowPositive4d4a(_StepD):
-    """Позитивний шлях `_liga_flow` на ЛІЗІ у НЕізольованому шарі (стенд кроку D: тимчасові `HOME`/`DEAI_HOME`, реєстр з простором ЛІГИ)."""
-
-    def test_j_liga_flow_recognises_a_track_with_a_repo_in_a_liga_space_whose_integrations_are_off(self):
-        """Ознака потоку ЛІГА (Task 6) — `profile`/`track` = id напрямку з непорожнім `repo` у просторі ЛІГИ реєстру (`legacy: true`), ЯКИЙ БИ
-        не був його прапорець `integrations` (тут — `false`, як у 0.19 без інтеграцій). Інакше — лише `jira`/`gitlab`."""
-        import serve
-        reg = self.read_json(self.deai, 'spaces.json')
-        reg['spaces'][0]['integrations'] = False
-        self._write(os.path.join(self.deai, 'spaces.json'), reg)
-        self.space_json({'tracks': [{'id': 'united', 'repo': self.REPO_U}, {'id': 'seo'}], 'default_track': 'united'})
-        for payload, want in (({'profile': 'united'}, True), ({'track': 'united'}, True), ({'track': 'united', 'profile': 'seo'}, True),
-                              ({'profile': 'seo'}, False), ({'track': 'zzz'}, False), ({'profile': 5}, False), ({'profile': ''}, False),
-                              ({'profile': 'United'}, False), ({}, False),
-                              ({'jira': 'LIGA-1'}, True), ({'jira': '  '}, False), ({'gitlab': {'repo': 'git@x:y/z.git'}}, True)):
-            with self.subTest(payload=payload):
-                self.assertIs(serve._liga_flow(payload), want)
-        self.space_json({'tracks': [{'id': 'united'}]})                               # репо нема — напрямок не ознака
-        self.assertIs(serve._liga_flow({'profile': 'united'}), False)
-        self._write(os.path.join(self.deai, 'spaces.json'), '{broken')               # реєстр не читається — не ознака, не 500
-        self.assertIs(serve._liga_flow({'profile': 'united'}), False)
-        self.assertIs(serve._liga_flow({'jira': 'LIGA-1'}), True)

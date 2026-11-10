@@ -27,6 +27,7 @@ import tracks  # noqa: E402  (чисте ядро; `serve` воно не імп�
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
+import liga_fixture  # noqa: E402
 import make_before_4d1 as gen  # noqa: E402  (хелпери знімка: `Server`, `Vcs`, `NoNet`, `pages`, `route`; ГЕНЕРАТОР не кличемо)
 
 _REAL = None
@@ -1132,7 +1133,10 @@ class ApiTracks(_Plain):
         self.space_json(liga, tracks=[{'id': 'united', 'label': 'United', 'root': 'united-dir', 'repo': self.OTHER, 'ds': 'united'},
                                       {'id': 'liga360', 'label': 'LIGA360', 'ds': 'liga360'},
                                       {'id': 'seo', 'label': 'SEO', 'root': 'seo-dir', 'repo': self.REPO, 'ds': 'seo'}],
-                        default_track='united')
+                        default_track='united',
+                        # 4d-4c: «ЛІГА» (`gitlab`-маппінг, `profile` у записі) — це явний запис `git-sync` зі схемою `design-canvas`, а не прапорець
+                        modules={'git-sync': {'enabled': True, 'shared_state': True,
+                                              'settings': dict(liga_fixture.ROLE_RECORDS['vcs'][1])}})
         return liga
 
     # ---- звичайний простір: напрямок у тілі

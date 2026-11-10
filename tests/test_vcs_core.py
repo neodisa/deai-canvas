@@ -1210,12 +1210,6 @@ class Plain(Core):
         self.assertFalse(r['cloned'])
         self.assertEqual(self.cfg['tasks']['t2']['vcs'], {'repo': self.origin})
 
-    def test_a_gitlab_mapping_is_still_refused_without_integrations(self):
-        with self.assertRaises(spaces.IntegrationsOff):
-            serve.task_new(self.cfg, 't4', gitlab={'repo': self.origin, 'path': 'mockup/t4'},
-                           root=self.sp['path'])
-        self.assertFalse(os.path.exists(os.path.join(self.sp['path'], 't4')))
-
 
 
 # ======================================================================== адреса без userinfo

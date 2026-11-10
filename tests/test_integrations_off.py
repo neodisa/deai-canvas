@@ -715,18 +715,11 @@ class Points(unittest.TestCase):
         self.assertEqual(self.trip.of('socket'), [LIGA_HOST], 'питали Supabase ЛІГИ (конфіг установки), і лише його')
         self.assertEqual(self.trip.of('urlopen'), [])
 
-    def test_task_new_does_not_touch_the_gitlab_mirror(self):
-        """Спека: «дзеркала в `task_new`». Маршрут `task-new` уже відхиляє `gitlab` для простору без
-        інтеграцій, але сама функція не мусить полагатись на це: відмова отримання (`VcsError`, це `OSError`) ловиться
-        `except OSError: pass` і мовчки повернула б порожній макет із ЗАПИСАНИМ маппінгом GitLab."""
+    def test_task_new_with_gitlab_clones_the_mirror_in_the_liga_space(self):
+        """Було `…does_not_touch_the_gitlab_mirror` (друга замкова перевірка `require_integrations` у `task_new`). 4d-4c: замок
+        прибрано — `gitlab` для простору без схеми ЛІГИ відхиляє маршрут (400 `gitlab-needs-vcs-scheme`, `test_spaces_serve.TaskNew`);
+        лишилась позитивна половина: у просторі, що ходить назовні, `task_new` справді клонує дзеркало."""
         gl = {'repo': 'git@gitlab.example.test:g/r.git', 'path': 'mockup/g1'}
-        with spaces.request_space('off'):
-            cfg = serve.load_tasks()
-            with self.assertRaises(spaces.IntegrationsOff):
-                serve.task_new(cfg, 'g1', gitlab=gl, root=self.off_path)
-        self.assertEqual(self.trip.hits, [])
-        self.assertFalse(os.path.exists(os.path.join(self.off_path, 'g1')), 'тека задачі зʼявилась')
-        self.assertEqual(_read(os.path.join(self.off_path, 'tasks.json'))['tasks'], {})
         with spaces.request_space('on'), mock.patch.dict('sys.modules', {'registry': mock.MagicMock()}):
             serve.task_new(serve.load_tasks(), 'g1', gitlab=gl, root=self.on_path)
         self.assertEqual(len(self.trip.of('run')), 1)       # `git clone` дзеркала

@@ -2067,7 +2067,7 @@ class TaskNew(Fixture):
         before = _md5(self.p_file)
         st, body = self.post('/api/task-new', {'id': 'n3', 'space': self.p_id,
                                                'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n3'}})
-        self.assertEqual((st, body['ok'], body['code']), (400, False, 'gitlab-needs-integrations'), body)
+        self.assertEqual((st, body['ok'], body['code']), (400, False, 'gitlab-needs-vcs-scheme'), body)
         self.assertEqual(_md5(self.p_file), before)
         self.assertFalse(os.path.exists(os.path.join(self.p_path, 'n3')))
         self.assertEqual(spaces.read_registry()['current'], self.legacy_id)
@@ -2135,11 +2135,7 @@ class TaskNew(Fixture):
 
     def test_no_integrations_space_anywhere_the_default_is_the_current_one(self):
         self.made(os.path.join(self.p_path, 'n8'))
-        reg = _read(self.reg_path)
-        for sp in reg['spaces']:
-            sp['integrations'] = False
-        reg['current'] = self.p_id
-        _write(self.reg_path, reg)
+        self.no_liga()                    # 4d-4c: «без простору ЛІГА» — реєстр без запису `legacy`, а не прапорець `integrations`
         st, body = self.post('/api/task-new', {'id': 'n8'})
         self.assertEqual((st, body['space']), (200, self.p_id), body)
         self.assertIsNone(_read(self.p_file)['tasks']['n8']['profile'])
@@ -2150,13 +2146,14 @@ class TaskNew(Fixture):
                   'а не з «Новий простір»')
 
     def no_liga(self):
-        """Реєстр БЕЗ простору з інтеграціями (так виглядає машина дизайнера без старого файла);
-        поточний — P."""
+        """Реєстр БЕЗ простору ЛІГА (так виглядає машина дизайнера без старого файла); поточний — P. Старий файл задач відкладено вбік:
+        без нього `load_registry` не вмикає першу міграцію, що повернула б запис `legacy` (після тесту файл на місці)."""
         reg = _read(self.reg_path)
-        for sp in reg['spaces']:
-            sp['integrations'] = False
+        reg['spaces'] = [s for s in reg['spaces'] if not s.get('legacy')]
         reg['current'] = self.p_id
         _write(self.reg_path, reg)
+        os.replace(self.legacy_file, self.legacy_file + '.off')
+        self.addCleanup(os.replace, self.legacy_file + '.off', self.legacy_file)
 
     def liga_tracks(self, tracks_list, default=None):
         """Явні напрямки простору ЛІГИ (`space.json` старого простору реєстру); після тесту файл повертається як був.
@@ -2173,7 +2170,9 @@ class TaskNew(Fixture):
                 with open(path, 'wb') as f:
                     f.write(old)
         self.addCleanup(restore)
-        _write(path, {'tracks': tracks_list, **({'default_track': default} if default else {})})
+        base = _read(path) if old is not None else {}
+        # ⛔ Записи модулів лишаються: схема ЛІГИ (`vcs_outbound`) читає `git-sync` з цього ж `space.json`, і без неї `profile` став би `null`
+        _write(path, {**base, 'tracks': tracks_list, **({'default_track': default} if default else {})})
 
     def test_the_snapshot_scenarios_of_track_and_profile_in_a_liga_space(self):
         """Таблиця з 11 сценаріїв знімка 0.19 (`before-4d4a.json`, стенд `explicit`) проти ЯВНИХ напрямків простору ЛІГИ.
@@ -2206,31 +2205,25 @@ class TaskNew(Fixture):
                     entry = _read(self.legacy_file)['tasks'][tid]
                     self.assertEqual((entry['track'], entry['profile']), want)
 
-    def test_liga_signs_without_space_and_without_a_liga_space_are_409_and_create_nothing(self):
-        """Потік dev-pipeline ЛІГА (`jira`, `profile`/`track` напрямку, `gitlab`) без `space`, а простору з
-        інтеграціями нема: тихо завести задачу в ПОТОЧНИЙ простір означало б Jira/GitLab-бутстрап,
-        що став локальною задачею з `profile: null`. Відмова JSON-ом, нічого не створено,
-        поточний простір не змінено. Напрямок — ознака лише коли він має `repo` у явних напрямках простору ЛІГИ реєстру
-        (`legacy: true`), ЯКИЙ БИ не був його прапорець `integrations` (тут — `false`, як у 0.19)."""
+    def test_liga_signs_without_a_liga_space_go_to_the_current_space(self):
+        """4d-4c: ознак потоку ЛІГА більше нема — без простору ЛІГА `jira`/`profile`/`track` не дають 409, задача йде в ПОТОЧНИЙ простір.
+        `gitlab` без схеми ЛІГИ — 400 `gitlab-needs-vcs-scheme`, нічого не створено; `track` суворий, `profile` поза переліком ігнорується."""
         self.no_liga()
-        # 4d-4a: було `profile_repos` старого файла; тепер — явні напрямки простору ЛІГИ (вигадані репо)
-        self.liga_tracks([{'id': p, 'repo': f'git@git.example:org/{p}-design.git'} for p in ('united', 'liga360', 'seo')]
-                         + [{'id': 'plain'}])
-        before = (_md5(self.legacy_file), _md5(self.p_file), _md5(self.reg_path), _md5(self.e_file))
-        listed = (sorted(os.listdir(self.p_path)), sorted(os.listdir(self.e_path)),
-                  sorted(os.listdir(os.path.dirname(self.a_dir))))
-        for sign in ({'jira': 'LIGA-1'}, {'profile': 'united'}, {'profile': 'liga360'}, {'profile': 'seo'},
-                     {'track': 'seo'}, {'track': 'united', 'profile': 'united'},
-                     {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n20'}},
-                     {'jira': 'LIGA-1', 'profile': 'tool', 'title': 'Т'}):
+        for i, sign in enumerate(({'jira': 'LIGA-1'}, {'profile': 'united'}, {'profile': 'liga360'}, {'profile': 'seo'},
+                                  {'jira': 'LIGA-1', 'profile': 'tool', 'title': 'Т'})):
+            tid = f'n20-{i}'
+            self.made(os.path.join(self.p_path, tid))
             with self.subTest(sign=sign):
-                st, body = self.post('/api/task-new', {'id': 'n20', **sign})
-                self.assertEqual((st, body['ok'], body['code'], body['error']),
-                                 (409, False, 'no-integrations-space', self.LIGA_ERROR), body)
-        self.assertEqual((_md5(self.legacy_file), _md5(self.p_file), _md5(self.reg_path), _md5(self.e_file)),
-                         before)
-        self.assertEqual((sorted(os.listdir(self.p_path)), sorted(os.listdir(self.e_path)),
-                          sorted(os.listdir(os.path.dirname(self.a_dir)))), listed, 'відмова лишила теку')
+                st, body = self.post('/api/task-new', {'id': tid, **sign})
+                self.assertEqual((st, body['space']), (200, self.p_id), body)
+                self.assertTrue(os.path.isfile(self.p_file))
+                self.assertIn(tid, _read(self.p_file)['tasks'])
+        st, body = self.post('/api/task-new', {'id': 'n20-t', 'track': 'seo'})            # `track` суворий: у поточному просторі напрямків нема
+        self.assertEqual((st, body['code']), (400, 'unknown-track'), body)
+        before = (_md5(self.p_file), _md5(self.reg_path), sorted(os.listdir(self.p_path)))
+        st, body = self.post('/api/task-new', {'id': 'n20-g', 'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n20'}})
+        self.assertEqual((st, body['ok'], body['code']), (400, False, 'gitlab-needs-vcs-scheme'), body)
+        self.assertEqual((_md5(self.p_file), _md5(self.reg_path), sorted(os.listdir(self.p_path))), before, 'відмова лишила слід')
         self.assertEqual(spaces.read_registry()['current'], self.p_id)
 
     def test_without_liga_signs_the_task_still_goes_to_the_current_space(self):
@@ -2248,10 +2241,9 @@ class TaskNew(Fixture):
                 self.assertIsNone(_read(self.p_file)['tasks'][tid]['profile'])
 
     def test_a_profile_without_profile_repos_in_the_config_is_not_a_liga_sign(self):
-        """4b-3: у конфігу установки нема `profile_repos` (так у фікстурі) — `profile: united` не ознака потоку ЛІГА: без
-        409 `no-integrations-space`, задача лягає в ПОТОЧНИЙ простір, як звичайна, без типового `gitlab`."""
+        """4b-3: у конфігу установки нема `profile_repos` (так у фікстурі) — `profile: united` не ознака потоку ЛІГА: задача лягає в
+        ПОТОЧНИЙ простір, як звичайна, без типового `gitlab`."""
         self.no_liga()
-        self.assertNotIn('profile_repos', _read(self.legacy_file))
         self.made(os.path.join(self.p_path, 'n25'))
         st, body = self.post('/api/task-new', {'id': 'n25', 'profile': 'united'})
         self.assertEqual((st, body['ok'], body['space']), (200, True, self.p_id), body)
@@ -2259,8 +2251,7 @@ class TaskNew(Fixture):
         self.assertNotIn('gitlab', entry)
 
     def test_liga_signs_with_a_liga_space_or_an_explicit_space_are_not_refused(self):
-        """409 лише коли простору ЛІГА нема. Є він — задача йде в нього; явний `space` — у названий
-        (для `gitlab` у просторі без інтеграцій лишається своя відмова 400)."""
+        """Є простір ЛІГА — задача йде в нього; явний `space` — у названий (для `gitlab` у просторі без схеми ЛІГИ — своя відмова 400)."""
         self.made(self.old_dir('n22'), os.path.join(self.p_path, 'n23'))
         spaces.switch_space(self.p_id)
         st, body = self.post('/api/task-new', {'id': 'n22', 'jira': 'LIGA-2', 'profile': 'tool'})
@@ -2271,7 +2262,17 @@ class TaskNew(Fixture):
         self.assertEqual((st, body['space']), (200, self.p_id), body)
         st, body = self.post('/api/task-new', {'id': 'n24', 'space': self.p_id,
                                                'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n24'}})
-        self.assertEqual((st, body['code']), (400, 'gitlab-needs-integrations'), body)
+        self.assertEqual((st, body['code']), (400, 'gitlab-needs-vcs-scheme'), body)
+
+    def test_default_space_is_the_legacy_entry_and_profile_follows_the_scheme(self):
+        """4d-4c (Д1): простір за замовчуванням — запис із `legacy: true`, а не з прапорця `integrations`; `profile` у звичайному просторі — `null`."""
+        self.made(self.old_dir('n30'), os.path.join(self.p_path, 'n31'))
+        spaces.switch_space(self.p_id)
+        st, body = self.post('/api/task-new', {'id': 'n30'})
+        self.assertEqual((st, body['space']), (200, self.legacy_id), body)
+        st, body = self.post('/api/task-new', {'id': 'n31', 'space': self.p_id})
+        self.assertEqual((st, body['space']), (200, self.p_id), body)
+        self.assertIsNone(_read(self.p_file)['tasks']['n31']['profile'])
 
 
 class ForeignOrigin(Fixture):
@@ -2386,24 +2387,18 @@ class NoSpaces(Bare):
         st, body = self.post('/api/space-switch', {'id': 'nope'})
         self.assertEqual((st, body['code']), (404, 'unknown-space'))
 
-    def test_liga_signs_get_the_liga_refusal_not_the_create_a_space_one(self):
-        """Простору ЛІГА нема й нічого нема: «створіть простір» послало б агента в «Новий простір»,
-        який простору ЛІГА не дає. Без ознак — `no-space`, як було (тест вище)."""
-        for sign in ({'jira': 'LIGA-1'}, {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n1'}}):
-            with self.subTest(sign=sign):
-                st, body = self.post('/api/task-new', {'id': 'n1', **sign})
-                self.assertEqual((st, body['ok'], body['code'], body['error']),
-                                 (409, False, 'no-integrations-space', TaskNew.LIGA_ERROR), body)
-        # 4d-4a (Поправка 16): було `{'profile': 'united'}` + підмінена `profile_repos` → `no-integrations-space`. Простору ЛІГИ
-        # нема, тож напрямку з репо теж нема: `profile` не ознака, і відмова — звичайна `no-space`
-        for sign in ({'profile': 'united'}, {'track': 'united'}):
+    def test_liga_signs_without_any_space_get_no_space(self):
+        """Просторів нема зовсім: ознак потоку ЛІГА більше нема (4d-4c), тож `jira`/`gitlab`/`profile`/`track` дають ту саму звичайну
+        409 `no-space` («створіть простір»), що й тіло без них (тест вище)."""
+        for sign in ({'jira': 'LIGA-1'}, {'gitlab': {'repo': 'git@x:y/z.git', 'path': 'mockup/n1'}},
+                     {'profile': 'united'}, {'track': 'united'}):
             with self.subTest(sign=sign):
                 st, body = self.post('/api/task-new', {'id': 'n1', **sign})
                 self.assertEqual((st, body['ok'], body['code']), (409, False, 'no-space'), body)
 
-    def test_a_liga_space_with_integrations_off_still_makes_a_track_with_a_repo_a_liga_sign(self):
+    def test_a_liga_space_with_integrations_off_takes_a_task_without_space_by_the_legacy_flag(self):
         """Простір `legacy: true` БЕЗ прапорця `integrations` (так у 0.19 машина без простору з інтеграціями) і напрямок із репо:
-        `{"profile": "<id>"}` без `space` — 409 `no-integrations-space`, а не тиха задача в поточний простір."""
+        `{"profile": "<id>"}` без `space` — задача йде в нього за `legacy: true` (4d-4c, Д1), а не за прапорцем."""
         path = os.path.join(self.home, 'deai-work', 'liga')
         sid = spaces.create_space('Liga', 'space-1', path)
         reg_file = os.path.join(self.deai, 'spaces.json')
@@ -2418,12 +2413,11 @@ class NoSpaces(Bare):
         self.addCleanup(shutil.rmtree, self.deai, True)
         _write(self.legacy_file, {'tasks': {}, 'current': ''})          # файл задач простору `legacy` читається
         self.addCleanup(shutil.rmtree, os.path.dirname(self.legacy_file), True)
-        for sign in ({'profile': 'united'}, {'track': 'united'}):
+        for i, sign in enumerate(({'profile': 'united'}, {'track': 'united'})):
             with self.subTest(sign=sign):
-                st, body = self.post('/api/task-new', {'id': 'n1', **sign})
-                self.assertEqual((st, body['code']), (409, 'no-integrations-space'), body)
-                self.assertFalse(os.path.exists(os.path.join(path, 'n1')))
-        st, body = self.post('/api/task-new', {'id': 'n2', 'track': 'plain'})          # напрямок без репо — не ознака
+                st, body = self.post('/api/task-new', {'id': f'n1-{i}', **sign})
+                self.assertEqual((st, body.get('space'), body.get('code')), (200, sid, None), body)
+        st, body = self.post('/api/task-new', {'id': 'n2', 'track': 'plain'})
         self.assertEqual((st, body.get('space'), body.get('code')), (200, sid, None), body)
 
     def test_nothing_of_the_above_wrote_to_the_deai_home(self):
@@ -2555,12 +2549,10 @@ class FirstSpace(Bare):
         st, body = self.jget('/api/tasks')
         self.assertEqual((st, body['current'], body['tasks'], body['space']['id']), (200, None, [], sid))
         self.assertEqual(self.jget('/api/task')[1]['code'], 'no-task')
-        # Ознаки потоку ЛІГА (`jira`) без `space` у просторі без інтеграцій — відмова
-        # (раніше тут була тиха локальна задача з `profile: null`); нічого не створено.
-        # 4d-4a: було `profile: united` + підмінена `profile_repos`; `profile` без простору ЛІГИ з репо більше не ознака
-        # (див. нижче), тож відмову тут дає `jira`
-        st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша', 'jira': 'LIGA-1'})
-        self.assertEqual((st, body['code']), (409, 'no-integrations-space'), body)
+        # 4d-4c: `jira` без `space` ознакою не є (його відмова `no-integrations-space` зникла); `gitlab` без схеми ЛІГИ — відмова,
+        # нічого не створено
+        st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша', 'gitlab': {'repo': 'git@x:y/z.git', 'path': 'm/first'}})
+        self.assertEqual((st, body['code']), (400, 'gitlab-needs-vcs-scheme'), body)
         self.assertFalse(os.path.exists(os.path.join(path, 'first')))
         st, body = self.post('/api/task-new', {'id': 'first', 'title': 'Перша'})
         self.assertEqual((st, body['space'], body['dir']), (200, sid, os.path.join(path, 'first')), body)

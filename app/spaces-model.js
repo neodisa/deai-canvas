@@ -434,7 +434,6 @@ const TASK_ERR_KEYS = new Map([
   ["from-no-index", "wzErrFromNoIndex"],
   ["from-contains-space", "wzErrFromContains"],
   ["from-too-big", "wzErrFromTooBig"],
-  ["from-needs-plain-space", "wzErrFromPlain"],
   ["task-dir-exists", "wzErrTaskDirExists"],
   /* Ціль синку нової задачі (`vcs`, 4a). Адресу людина виправляє в полі «Репозиторій»; без ролі — підключити її на «Підключенні». */
   ["vcs-bad-target", "taskErrVcsTarget"],
@@ -462,8 +461,7 @@ export const taskErrShowsReason = (code, hadTarget = false) =>
 /** Ключ словника для відмови створення задачі; невідомий код (і мережа) — загальний. */
 export const taskErrKey = (code) => TASK_ERR_KEYS.get(code) ?? "taskErrGeneric";
 
-/* Ключі помилок, що стосуються поля «Тека» майстра (`from`). `wzErrFromPlain` сюди НЕ входить: простір без інтеграцій
-   людина в майстрі не вибирає, тож це не помилка поля. */
+/* Ключі помилок, що стосуються поля «Тека» майстра (`from`). */
 const FROM_KEYS = new Set(["wzFromRequired", "wzErrFromNotFound", "wzErrFromNoIndex", "wzErrFromContains", "wzErrFromTooBig"]);
 
 /** Поле форми задачі, про яке ключ помилки (`taskFormError`/`taskErrKey`): `title`, `id`, `repo` (адреса синку), `tags` (мітки), `from` (тека майстра) або `null`. */

@@ -192,7 +192,6 @@ test("taskErrKey: коди task-new → ключі; невідомий (і ме�
     "from-no-index": "wzErrFromNoIndex",
     "from-contains-space": "wzErrFromContains",
     "from-too-big": "wzErrFromTooBig",
-    "from-needs-plain-space": "wzErrFromPlain",
     "task-dir-exists": "wzErrTaskDirExists",
   };
   for (const [code, key] of Object.entries(map)) {

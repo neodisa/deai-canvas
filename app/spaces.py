@@ -859,11 +859,11 @@ def switch_space(sid):
 
 
 def default_new_task_space():
-    """Простір для `task-new` без `space`: з інтеграціями, якщо є, інакше поточний."""
+    """Простір для `task-new` без `space`: перший запис із `legacy: true` (простір ЛІГА), інакше поточний."""
     if not layer_on():
         return dict(IMPLICIT)
     reg = load_registry()
     for sp in reg['spaces']:
-        if sp.get('integrations'):
+        if sp.get('legacy') is True:
             return sp
     return active_space(reg)

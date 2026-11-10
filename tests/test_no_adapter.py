@@ -17,7 +17,7 @@ class NoTracksAdapter(unittest.TestCase):
     ADAPTER_APPLIES_OK = {'tracks.py'}
     #: Читання `profile` з запису задачі дозволене лише на межах (спека: `profile` — тільки на вході `task-new`, у реєстрі й у
     #: `SHARED`). Ключ — імʼя функції, у якій воно стоїть.
-    PROFILE_OK = {'_task_new', '_liga_flow', '_track_of_entry', '<module>'}
+    PROFILE_OK = {'_task_new', '_track_of_entry', '<module>'}
 
     @staticmethod
     def _files():
