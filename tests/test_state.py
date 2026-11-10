@@ -69,15 +69,15 @@ class GitlabLine(unittest.TestCase):
         behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
         line = state.gitlab_line(behind, 'p', tid='beta')
         self.assertIn('Спершу Підтягнути!', line)
-        self.assertIn('POST /t/beta/api/gitlab-pull', line)
+        self.assertIn('POST /t/beta/api/vcs-pull', line)
         never = {'behind': 0, 'dirty': False, 'on_remote': False}
         line = state.gitlab_line(never, 'p', tid='beta')
-        self.assertIn('POST /t/beta/api/gitlab-sync', line)
+        self.assertIn('POST /t/beta/api/vcs-push', line)
         self.assertIn('діє на поточну задачу канваса, не на названу', line,
                       'кнопка канваса діє на ПОТОЧНУ — під названою про це мовчати не можна')
         # id із керівними символами не ламає шлях
         line = state.gitlab_line(behind, 'p', tid='a b/c')
-        self.assertIn('POST /t/a%20b%2Fc/api/gitlab-pull', line)
+        self.assertIn('POST /t/a%20b%2Fc/api/vcs-pull', line)
 
     def test_unnamed_hints_stay_exactly_as_before(self):
         behind = {'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}
@@ -212,12 +212,12 @@ class IterationLine(unittest.TestCase):
         line = state.gitlab_line(cases['новіше'], 'p', label='GitHub')
         self.assertIn('на GitHub НОВІШЕ (2)', line)
 
-    def test_the_hints_with_an_endpoint_keep_the_old_addresses_under_any_label(self):
-        """Підказки з `/api/gitlab-sync` і `/api/gitlab-pull` не міняються: це псевдоніми, і вони діють у будь-якому просторі."""
+    def test_the_hints_with_an_endpoint_point_to_the_vcs_addresses_under_any_label(self):
+        """Підказки з ендпоїнтом ведуть на `/api/vcs-push` і `/api/vcs-pull` у будь-якому просторі (4d-4c); `/api/gitlab-*` — застарілі псевдоніми."""
         never = state.gitlab_line({'behind': 0, 'dirty': False, 'on_remote': False}, 'p', 'beta', label='GitHub')
-        self.assertIn('POST /t/beta/api/gitlab-sync', never)
+        self.assertIn('POST /t/beta/api/vcs-push', never)
         behind = state.gitlab_line({'behind': 2, 'behind_path': 1, 'dirty': False, 'on_remote': True}, 'p', 'beta', label='GitHub')
-        self.assertIn('POST /t/beta/api/gitlab-pull', behind)
+        self.assertIn('POST /t/beta/api/vcs-pull', behind)
 
     def test_a_busy_mirror_is_asked_again_not_called_an_error(self):
         """Поправка 7: опит під час відправки дає `code: vcs-busy` — це «зайнято, спробуй ще раз», а не «помилка»."""
@@ -481,11 +481,11 @@ class TaskFlag(unittest.TestCase):
                 mock.patch.object(state, 'gitlab_status', lambda *a, **k: behind):
             _, named, _ = self.run_main(['--task', 'theirs'])
             _, plain, _ = self.run_main([])
-        self.assertIn('POST /t/theirs/api/gitlab-pull', named)
+        self.assertIn('POST /t/theirs/api/vcs-pull', named)
         self.assertIn('POST /t/theirs/api/iteration {"from": "it1"}', named)
         self.assertNotIn('POST /api/', named, 'підказка без префікса б\'є в поточну')
         self.assertNotIn('/t/', plain)
-        self.assertNotIn('gitlab-pull', plain)
+        self.assertNotIn('vcs-pull', plain)
 
     # ---- роль `vcs` (етап 4a): гейт за постачальником, підпис із `label`
     def give(self, tid, **keys):

@@ -53,8 +53,8 @@ def gitlab_line(st, path, tid=None, label='GitLab'):
     """Рядок стану синку з git. Чиста функція — тому й перевіряється тестами.
 
     `label` — підпис віддаленого репо (`GitLab` у просторі ЛІГА й для старих викликів, `Git`/`GitHub`… — те, що каже `label`
-    статусу модуля): у кожному рядку замість слова «GitLab». Підказки з ендпоїнтом (`/api/gitlab-sync`, `/api/gitlab-pull`)
-    не міняються: це псевдоніми, і вони діють у будь-якому просторі.
+    статусу модуля): у кожному рядку замість слова «GitLab». Підказки з ендпоїнтом (`/api/vcs-push`, `/api/vcs-pull`)
+    ведуть на нові адреси; старі `/api/gitlab-*` — застарілі псевдоніми, вони діють до 1.0.
 
     `tid` — задачу НАЗВАНО (`--task`): підказки з ендпоїнтом несуть префікс
     `/t/<id>/`, а кнопки канваса названі як діючі на ПОТОЧНУ задачу канваса.
@@ -71,7 +71,7 @@ def gitlab_line(st, path, tid=None, label='GitLab'):
     if st.get('on_remote') is False:
         if tid is not None:
             # Кнопка в канвасі діє на ПОТОЧНУ задачу канваса, а не на названу.
-            send = (f'POST {_api_prefix(tid)}/api/gitlab-sync {{"it": "itN"}} '
+            send = (f'POST {_api_prefix(tid)}/api/vcs-push {{"it": "itN"}} '
                     '(кнопка «↑ Надіслати Іт.N» в канвасі діє на поточну задачу '
                     'канваса, не на названу)')
         else:
@@ -86,7 +86,7 @@ def gitlab_line(st, path, tid=None, label='GitLab'):
         # Розбивки немає (старий статус) — лишаємось гучними: немає факту, немає
         # й підстав заспокоювати.
         if st.get('behind_path') or 'behind_path' not in st:
-            pull = (f' (POST {_api_prefix(tid)}/api/gitlab-pull)' if tid is not None
+            pull = (f' (POST {_api_prefix(tid)}/api/vcs-pull)' if tid is not None
                     else '')
             return (f'{label} ({path}): ⚠ на {label} НОВІШЕ ({st["behind"]}) — '
                     f'хтось (інший дизайнер/машина) оновив макет. '

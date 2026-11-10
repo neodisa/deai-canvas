@@ -5539,6 +5539,9 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=ROOT, **kwargs)
 
     def end_headers(self):
+        if self._successor:                                  # 4d-4c: псевдонім `/api/gitlab-*` живе до 1.0
+            self.send_header('Deprecation', 'true')
+            self.send_header('Link', '<%s>; rel="successor-version"' % self._successor)
         # dev-инструмент: иначе браузер кэширует ES-модули и «не видит» правок.
         # Але тільки якщо відповідь ще НЕ поставила свій Cache-Control сама
         # (кадр у `_shot` уже поставив): два заголовки Cache-Control браузер
@@ -5581,6 +5584,7 @@ class Handler(SimpleHTTPRequestHandler):
     #: Відповідь цього запиту вже почата (рядок статусу пішов). Виставляє `send_response_only`;
     #: скидає `_guarded` на вході кожного запиту.
     _resp_started = False
+    _successor = None       # 4d-4c: адреса наступника, коли запит прийшов на застарілий псевдонім `/api/gitlab-*`
     #: Тіло POST уже вичитане. Виставляє `do_POST` одразу після `rfile.read`; без нього
     #: центральна відмова ДО читання тіла лишила б його в буфері (RST замість відповіді).
     _body_read = False
@@ -5624,6 +5628,7 @@ class Handler(SimpleHTTPRequestHandler):
         `finally` скидає простір запиту — захист для keep-alive (потік обробника живе довше за
         запит). Мутаційно він не доводиться: `_take_task` і так скидає простір першим рядком."""
         self._resp_started = False
+        self._successor = None          # keep-alive: заголовок псевдоніма не переходить на наступний запит зʼєднання
         self._body_read = False
         try:
             return run()
@@ -6100,8 +6105,12 @@ class Handler(SimpleHTTPRequestHandler):
             self._comments()
             return
         # `/api/vcs-status` — нова адреса того самого обробника; `/api/gitlab-status` лишається псевдонімом (Stop-хук dev-pipeline,
-        # зовнішні скрипти).
-        if self.path.startswith('/api/gitlab-status') or self.path.startswith('/api/vcs-status'):
+        # зовнішні скрипти): псевдоніми до 1.0 із `Deprecation`; видалення — після перемикання скіла dev-pipeline.
+        if self.path.startswith('/api/gitlab-status'):
+            self._successor = '/api/vcs-status'
+            self._gitlab_status()
+            return
+        if self.path.startswith('/api/vcs-status'):
             self._gitlab_status()
             return
         super().do_GET()
@@ -6961,12 +6970,14 @@ class Handler(SimpleHTTPRequestHandler):
         # ⛔ Нові адреси `/api/vcs-push|pull` — ОКРЕМІ гілки, а не кортеж `in (…)`: охоронець `bad-body` (`test_serve`) збирає маршрути
         # регексом `self.path == '/api/…'`, і кортеж пропустив би нову адресу повз перевірку «тіло — не обʼєкт».
         elif self.path == '/api/gitlab-sync':
+            self._successor = '/api/vcs-push'
             self._gitlab_sync(payload)
         elif self.path == '/api/vcs-push':
             self._gitlab_sync(payload)
         elif self.path == '/api/autosync':
             self._autosync(payload)
         elif self.path == '/api/gitlab-pull':
+            self._successor = '/api/vcs-pull'
             self._gitlab_pull(payload)
         elif self.path == '/api/vcs-pull':
             self._gitlab_pull(payload)
