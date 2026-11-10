@@ -2402,6 +2402,9 @@ def _task_new_write(cfg, tid, title, jira, track, gitlab, vcs, tdir, adopt_src, 
     `current` і збереження `tasks.json` лишаються в `task_new` (їх читання `current` стереже `CurrentTaskReadGuard`).
     ⛔ `adopt_src`/`adopt_files` — лише з параметрів: гілка отримання нижче має власні локальні (`tmp`, `got`, `target`, `r`) і
     цих імен не торкається."""
+    if gitlab and not liga:
+        # Остання ланка: маршрут відмовляє раніше, але прямий виклик `task_new` не має клонувати `gitlab`-ціль у просторі без схеми ЛІГИ.
+        raise TaskRefused('gitlab-needs-vcs-scheme', 'gitlab mapping needs a space whose git sync uses the design-canvas scheme')
     it1 = os.path.join(tdir, 'iterations', 'it1')   # первая итерация = стартовый макет
     # Типовий репо напрямку (його дає маршрут: `track_repo`). ЛІГА: `gitlab`-маппінг `mockup/<id>`; напрямок без репо —
     # без нього. ⛔ Структура в усіх напрямків одна, тому напрямки розходяться лише репозиторієм, а не логікою.

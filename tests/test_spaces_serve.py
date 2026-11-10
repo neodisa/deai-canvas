@@ -1940,6 +1940,48 @@ class TaskNew(Fixture):
         st, body = self.jget('/api/task')
         self.assertEqual((st, body['id'], body['track'], body['comment_channel']), (200, 'n2', None, None))   # було `body['profile']`
 
+    def _second_legacy(self, with_vcs):
+        """Другий запис `legacy: true` у реєстрі (після першого); `with_vcs` — з git-sync записом ЛІГИ. Файл задач
+        усіх `legacy`-просторів один (`legacy_tasks_file`), тож розрізняє їх лише `space` у відповіді."""
+        path = os.path.join(self.tmp, 'legacy2')
+        self.addCleanup(shutil.rmtree, path, True)
+        os.makedirs(path)
+        if with_vcs:
+            liga_fixture.write_records(path, self.deai, 'legacy2', roles=('vcs',), name='Liga2')
+        else:
+            _write(os.path.join(path, 'space.json'), {'name': 'Liga2', 'modules': {}})
+        reg = _read(self.reg_path)
+        reg['spaces'].append({'id': 'legacy2', 'path': path, 'legacy': True})
+        _write(self.reg_path, reg)
+        return path
+
+    def test_with_two_legacy_spaces_the_first_in_registry_order_wins(self):
+        self._second_legacy(True)
+        self.made(self.old_dir('n-two'))
+        st, body = self.post('/api/task-new', {'id': 'n-two'})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['space'], self.legacy_id)
+        self.assertIn('n-two', _read(self.legacy_file)['tasks'])
+
+    def test_a_legacy_space_without_a_git_sync_record_takes_the_task_without_profile_and_refuses_gitlab(self):
+        self._second_legacy(False)
+        # робимо його ПЕРШИМ legacy-записом реєстру: інакше `default_new_task_space` обере основний
+        reg = _read(self.reg_path)
+        reg['spaces'].sort(key=lambda s: 0 if s['id'] == 'legacy2' else 1)
+        _write(self.reg_path, reg)
+        self.made(self.old_dir('n-nov'), self.old_dir('n-gl'))
+        st, body = self.post('/api/task-new', {'id': 'n-nov', 'profile': 'tool'})
+        self.assertEqual(st, 200, body)
+        self.assertEqual(body['space'], 'legacy2')
+        task = _read(self.legacy_file)['tasks']['n-nov']
+        self.assertIsNone(task['profile'])
+        self.assertNotIn('gitlab', task)
+        before = _md5(self.legacy_file)
+        st, body = self.post('/api/task-new', {'id': 'n-gl', 'gitlab': {'repo': 'git@git.example:org/x.git'}})
+        self.assertEqual((st, body['ok'], body['code']), (400, False, 'gitlab-needs-vcs-scheme'), body)
+        self.assertEqual(_md5(self.legacy_file), before)
+        self.assertFalse(os.path.exists(self.old_dir('n-gl')))
+
     BROKEN = ('{ битий', '[]', '{"tasks": []}', '{"tasks": {"x": 5}}', '{"tasks": null}')
 
     def test_an_unreadable_tasks_file_of_another_space_blocks_task_new(self):

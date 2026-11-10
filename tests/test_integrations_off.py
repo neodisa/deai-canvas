@@ -721,7 +721,7 @@ class Points(unittest.TestCase):
         лишилась позитивна половина: у просторі, що ходить назовні, `task_new` справді клонує дзеркало."""
         gl = {'repo': 'git@gitlab.example.test:g/r.git', 'path': 'mockup/g1'}
         with spaces.request_space('on'), mock.patch.dict('sys.modules', {'registry': mock.MagicMock()}):
-            serve.task_new(serve.load_tasks(), 'g1', gitlab=gl, root=self.on_path)
+            serve.task_new(serve.load_tasks(), 'g1', gitlab=gl, root=self.on_path, legacy=True)
         self.assertEqual(len(self.trip.of('run')), 1)       # `git clone` дзеркала
         self.assertTrue(self.trip.of('run')[0].startswith('git clone'))
 

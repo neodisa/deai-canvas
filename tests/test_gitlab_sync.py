@@ -819,7 +819,7 @@ class GitlabSyncHonesty(unittest.TestCase):
             cfg = {'tasks': {}, 'design_work_root': os.path.join(self.tmp, 'dw'),
                    'gitlab': {}}
             r = self.serve.task_new(cfg, 'nova', title='Нова',
-                                    gitlab={'repo': self.origin, 'path': 'mockup/t1'})
+                                    gitlab={'repo': self.origin, 'path': 'mockup/t1'}, legacy=True)
         finally:
             os.environ.pop('DC_IDENTITY_NAME', None)
             os.environ.pop('DC_IDENTITY_EMAIL', None)
@@ -850,7 +850,7 @@ class GitlabSyncHonesty(unittest.TestCase):
         try:
             cfg = {'tasks': {}, 'design_work_root': os.path.join(self.tmp, 'dw'), 'gitlab': {}}
             r = self.serve.task_new(cfg, 'fresh', title='Свіжа задача',
-                                    gitlab={'repo': self.origin, 'path': 'mockup/never-existed'})
+                                    gitlab={'repo': self.origin, 'path': 'mockup/never-existed'}, legacy=True)
         finally:
             os.environ.pop('DC_IDENTITY_NAME', None)
             os.environ.pop('DC_IDENTITY_EMAIL', None)

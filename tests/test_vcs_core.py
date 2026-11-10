@@ -746,7 +746,7 @@ class Legacy(Core):
                          'у спільному репо зʼявилась гілка')
 
     def test_a_missing_branch_gives_the_starter_mockup_for_a_new_task(self):
-        r = serve.task_new(self.cfg(), 'nova', title='Нова', gitlab={'repo': self.origin, 'path': 'mockup/nova', 'branch': 'nope'})
+        r = serve.task_new(self.cfg(), 'nova', title='Нова', gitlab={'repo': self.origin, 'path': 'mockup/nova', 'branch': 'nope'}, legacy=True)
         self.assertFalse(r['cloned'])
         self.assertTrue(os.path.isfile(os.path.join(r['dir'], 'iterations', 'it1', 'index.html')))
 
@@ -806,7 +806,7 @@ class Legacy(Core):
     def test_a_foreign_clone_in_legacy_forks_with_the_gitlab_note(self):
         self.sync()
         self.peer_state('<h1>чуже</h1>', 'Ольга Сидорук', 'designer2@example.com')
-        r = serve.task_new(self.cfg(), 'nova', title='Нова', gitlab={'repo': self.origin, 'path': 'mockup/t1'})
+        r = serve.task_new(self.cfg(), 'nova', title='Нова', gitlab={'repo': self.origin, 'path': 'mockup/t1'}, legacy=True)
         self.assertTrue(r['cloned'])
         with open(os.path.join(r['dir'], 'iterations.json'), encoding='utf-8') as fh:
             its = json.load(fh)['iterations']
@@ -816,12 +816,12 @@ class Legacy(Core):
 
     def test_task_new_records_the_gitlab_mapping_and_no_vcs_field(self):
         cfg = self.cfg()
-        serve.task_new(cfg, 'nova', title='Нова', gitlab={'repo': self.origin, 'path': 'mockup/nova'})
+        serve.task_new(cfg, 'nova', title='Нова', gitlab={'repo': self.origin, 'path': 'mockup/nova'}, legacy=True)
         self.assertEqual(cfg['tasks']['nova']['gitlab'], {'repo': self.origin, 'path': 'mockup/nova'})
         self.assertNotIn('vcs', cfg['tasks']['nova'])
 
     def test_task_new_from_an_unreachable_gitlab_gives_the_starter_mockup(self):
-        r = serve.task_new(self.cfg(), 'nova', title='Нова', gitlab={'repo': '/нема/такого.git', 'path': 'mockup/nova'})
+        r = serve.task_new(self.cfg(), 'nova', title='Нова', gitlab={'repo': '/нема/такого.git', 'path': 'mockup/nova'}, legacy=True)
         self.assertFalse(r['cloned'])
         self.assertTrue(os.path.isfile(os.path.join(r['dir'], 'iterations', 'it1', 'index.html')))
         self.assertEqual(os.listdir(self.systmp), [])

@@ -454,6 +454,26 @@ class TaskNewFromTracksTest(unittest.TestCase):
         self.write([{'id': 'united'}])
         self.assertIsNone(self.new_gitlab('united'))
 
+    def test_a_track_with_a_corrupt_repo_gives_no_gitlab(self):
+        """Напрямок із зіпсованим репо (пробіл) не має репо: запис задачі без `gitlab` (втрачена в 4d-4c перевірка)."""
+        self.write([{'id': 'alpha', 'repo': 'has space'}, {'id': 'beta', 'repo': self.REPO}])
+        self.assertIsNone(self.new_gitlab('alpha'))
+        self.assertEqual(self.new_gitlab('beta'), {'repo': self.REPO, 'path': 'mockup/t-demo'})
+
+    def test_direct_task_new_with_gitlab_outside_the_liga_scheme_is_refused_and_creates_nothing(self):
+        """Остання ланка поза маршрутом: `gitlab` без схеми ЛІГИ (`legacy=False`) — `TaskRefused('gitlab-needs-vcs-scheme')`,
+        ні теки задачі, ні запису, ні `current`."""
+        root = os.path.join(self.tmp.name, 'work')
+        cfg = {'tasks': {}}
+        with mock.patch.object(serve, 'vcs_provider', return_value=None), \
+                mock.patch.object(serve, 'save_tasks') as save:
+            with self.assertRaises(serve.TaskRefused) as cm:
+                serve.task_new(cfg, 't-direct', gitlab={'repo': self.REPO, 'path': 'mockup/t-direct'}, root=root, legacy=False)
+        self.assertEqual(cm.exception.code, 'gitlab-needs-vcs-scheme')
+        self.assertEqual(cfg, {'tasks': {}})
+        self.assertFalse(os.path.exists(root))
+        save.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
