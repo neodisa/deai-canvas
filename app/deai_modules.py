@@ -106,9 +106,6 @@ ROLE_FUNCTIONS = {'publish': ('publish',), 'tokens': ('tokens',), 'comments': ('
                   'tracker': ('statuses',), 'notify': ('mute_state', 'mute_set')}
 #: Необовʼязкові функції ролі: беруться з server.py, якщо є й callable; свій модуль без них валідний.
 ROLE_OPTIONAL_FUNCTIONS = {'vcs': ('validate', 'mirror_dir'), 'dashboard': ('open_comments',)}
-#: Значення «зашитий шлях ЛІГА» НАЗОВНІ (`capabilities`): з 4d-4b ядро його БІЛЬШЕ НЕ ПОВЕРТАЄ (запасного постачальника нема); літерал живе до 4d-4c
-#: (JS-запасні гілки `connections-model.js`/`spaces-model.js` і охоронці їх ще розбирають).
-API_IMPLICIT = 'legacy'
 #: Куди публікує модуль ролі `publish` (необовʼязкове поле маніфесту `publish_target`): `folder` — у локальну теку
 #: (`static-publish`), `url` — на віддалений хост, де результат — адреса (`vercel-publish`). Типово `folder`.
 PUBLISH_TARGETS = ('folder', 'url')
