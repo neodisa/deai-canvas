@@ -1,0 +1,285 @@
+{
+ "_meta": {
+  "code": "0.21.0",
+  "what": "вихідні рішення за прапорцем integrations"
+ },
+ "layer_off": {
+  "autocommit": {
+   "pushed": true
+  },
+  "autocommit_unfixed": {
+   "pushed": true
+  },
+  "comment_channel": {
+   "comment_channel": "dc/t1",
+   "status": 200
+  },
+  "registry": {
+   "called": false,
+   "result": false
+  },
+  "targets": {
+   "gitlab": {
+    "branch": "main",
+    "host_ip": "203.0.113.7",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "ssh_key": "<tmp>/layer_off/home/.ssh/k",
+    "task": "t1"
+   },
+   "vcs": {
+    "branch": "main",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "ssh_key": "<tmp>/layer_off/home/.ssh/k",
+    "task": "t1"
+   }
+  },
+  "task_new": {
+   "from": {
+    "code": "from-needs-plain-space",
+    "created": false,
+    "space": null,
+    "status": 400
+   },
+   "gitlab": {
+    "code": null,
+    "created": true,
+    "space": null,
+    "status": 200
+   },
+   "jira": {
+    "code": null,
+    "created": true,
+    "space": null,
+    "status": 200
+   },
+   "plain": {
+    "code": null,
+    "created": true,
+    "space": null,
+    "status": 200
+   }
+  }
+ },
+ "liga": {
+  "autocommit": {
+   "pushed": true
+  },
+  "autocommit_unfixed": {
+   "pushed": true
+  },
+  "comment_channel": {
+   "comment_channel": "dc/t1",
+   "status": 200
+  },
+  "registry": {
+   "called": true,
+   "result": true
+  },
+  "targets": {
+   "gitlab": {
+    "branch": "main",
+    "host_ip": "203.0.113.7",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "ssh_key": "<tmp>/liga/home/.ssh/k",
+    "task": "t1"
+   },
+   "vcs": {
+    "branch": "main",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "ssh_key": "<tmp>/liga/home/.ssh/k",
+    "task": "t1"
+   }
+  },
+  "task_new": {
+   "from": {
+    "code": "from-needs-plain-space",
+    "created": false,
+    "space": null,
+    "status": 400
+   },
+   "gitlab": {
+    "code": null,
+    "created": true,
+    "space": "legacy",
+    "status": 200
+   },
+   "jira": {
+    "code": null,
+    "created": true,
+    "space": "legacy",
+    "status": 200
+   },
+   "plain": {
+    "code": null,
+    "created": true,
+    "space": "legacy",
+    "status": 200
+   }
+  }
+ },
+ "liga_unmigrated": {
+  "autocommit": {
+   "pushed": true
+  },
+  "autocommit_unfixed": {
+   "pushed": true
+  },
+  "comment_channel": {
+   "comment_channel": "dc/t1",
+   "status": 200
+  },
+  "registry": {
+   "called": true,
+   "result": true
+  },
+  "targets": {
+   "gitlab": {
+    "branch": "main",
+    "host_ip": "203.0.113.7",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "ssh_key": "<tmp>/liga_unmigrated/home/.ssh/k",
+    "task": "t1"
+   },
+   "vcs": {
+    "branch": "main",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "ssh_key": "<tmp>/liga_unmigrated/home/.ssh/k",
+    "task": "t1"
+   }
+  },
+  "task_new": {
+   "from": {
+    "code": "from-needs-plain-space",
+    "created": false,
+    "space": null,
+    "status": 400
+   },
+   "gitlab": {
+    "code": null,
+    "created": true,
+    "space": "legacy",
+    "status": 200
+   },
+   "jira": {
+    "code": null,
+    "created": true,
+    "space": "legacy",
+    "status": 200
+   },
+   "plain": {
+    "code": null,
+    "created": true,
+    "space": "legacy",
+    "status": 200
+   }
+  }
+ },
+ "plain": {
+  "autocommit": {
+   "pushed": false
+  },
+  "autocommit_unfixed": {
+   "pushed": true
+  },
+  "comment_channel": {
+   "comment_channel": null,
+   "status": 200
+  },
+  "registry": {
+   "called": false,
+   "result": false
+  },
+  "targets": {
+   "gitlab": null,
+   "vcs": {
+    "branch": "main",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "task": "t1"
+   }
+  },
+  "task_new": {
+   "from": {
+    "code": null,
+    "created": true,
+    "space": "plain",
+    "status": 200
+   },
+   "gitlab": {
+    "code": "no-integrations-space",
+    "created": false,
+    "space": null,
+    "status": 409
+   },
+   "jira": {
+    "code": "no-integrations-space",
+    "created": false,
+    "space": null,
+    "status": 409
+   },
+   "plain": {
+    "code": null,
+    "created": true,
+    "space": "plain",
+    "status": 200
+   }
+  }
+ },
+ "plain_git": {
+  "autocommit": {
+   "pushed": false
+  },
+  "autocommit_unfixed": {
+   "pushed": true
+  },
+  "comment_channel": {
+   "comment_channel": null,
+   "status": 200
+  },
+  "registry": {
+   "called": false,
+   "result": false
+  },
+  "targets": {
+   "gitlab": null,
+   "vcs": {
+    "branch": "main",
+    "path": "mockup/t1",
+    "repo": "g/r",
+    "task": "t1"
+   }
+  },
+  "task_new": {
+   "from": {
+    "code": null,
+    "created": true,
+    "space": "plain",
+    "status": 200
+   },
+   "gitlab": {
+    "code": "no-integrations-space",
+    "created": false,
+    "space": null,
+    "status": 409
+   },
+   "jira": {
+    "code": "no-integrations-space",
+    "created": false,
+    "space": null,
+    "status": 409
+   },
+   "plain": {
+    "code": null,
+    "created": true,
+    "space": "plain",
+    "status": 200
+   }
+  }
+ }
+}
