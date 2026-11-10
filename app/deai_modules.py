@@ -115,9 +115,6 @@ PUBLISH_TARGETS = ('folder', 'url')
 SETTING_TYPES = ('text', 'path', 'bool', 'select', 'secret')
 ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
 KEY_RE = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,63}')
-#: Єдиний модуль із неявним типовим станом: діє в просторі без `integrations`, доки людина не
-#: вирішила інакше (`modules["static-publish"]` у `space.json`).
-IMPLICIT_MODULE = 'static-publish'
 #: Скільки секунд чекаємо на `check` модуля (виклик у робочому потоці).
 CHECK_TIMEOUT = 5
 #: Необовʼязковий ключ маніфесту `check_timeout_s` (ціле 1..`MAX_CHECK_TIMEOUT`): модулю, чия перевірка запускає процес
@@ -915,19 +912,10 @@ def space_modules(space):
     return _normalize(_raw_modules(_load_space_json(path)))
 
 
-def _implicit_on(mid, space, explicit):
-    return (mid == IMPLICIT_MODULE and mid not in explicit and bool(space)
-            and not spaces.integrations_for(space))
-
-
 def _enabled_in(m, space, explicit):
-    """(увімкнено, неявно) для модуля `m` за явними рішеннями `explicit` і неявним типовим."""
+    """(увімкнено, неявно) за явними рішеннями `explicit`. Неявного типового нема (4d-4c): `implicit` — завжди `False` (ключ API до 1.0)."""
     e = explicit.get(m.id)
-    if e is not None:
-        return e['enabled'], False
-    if _implicit_on(m.id, space, explicit):
-        return True, True
-    return False, False
+    return (e['enabled'], False) if e is not None else (False, False)
 
 
 def _entry_state(m, space, explicit):
@@ -946,8 +934,8 @@ def _entry_state(m, space, explicit):
 
 def effective_state(space):
     """Для кожного модуля каталогу: `{enabled, implicit, settings}` (налаштування символьні, із
-    типовими значеннями маніфесту, без секретів). `implicit` — увімкнений неявним типовим
-    (`static-publish` у просторі без інтеграцій, поки нема явного рішення).
+    типовими значеннями маніфесту, без секретів). `implicit` — завжди `False`: неявного типового нема (4d-4c),
+    `static-publish` — явний запис `space.json`.
     ⚠️ Виконує код модулів (каталог) і може кинути `space-json-unreadable`."""
     if not space:
         return {}
@@ -1889,7 +1877,7 @@ def own_sig(space):
 
 def _caps_key(space):
     jp = _space_json_path(space)
-    return (_space_id(space), spaces.integrations_for(space), _space_path(space),
+    return (_space_id(space), _space_path(space),
             _sig(jp) if jp else None, _catalog_sig(), own_sig(space))
 
 

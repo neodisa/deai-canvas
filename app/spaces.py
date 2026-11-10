@@ -770,6 +770,63 @@ def _write_public(path, data):
         os.chmod(path, 0o644)
 
 
+#: Вбудований модуль публікації «у теку»: типовий запис нового простору (до 4d-4c був неявним типовим).
+STATIC_PUBLISH_ID = 'static-publish'
+
+
+def _ensure_static_publish_locked(space_path):
+    """`True`, коли `space.json` змінено. Додає `modules.static-publish = {enabled: true}`, якщо ключа нема (будь-який стан запису —
+    рішення людини) і нема ВВІМКНЕНОГО запису, що веде `publish` (`vercel-publish` чи `roles` зі `publish`). Нечитаний/не-обʼєкт файл і
+    `modules` не-обʼєкт — не чіпаємо; тека, якої нема, — теж. Лише додає ключ: решта файла збережена. Кличе той, хто ТРИМАЄ `WRITE_LOCK`."""
+    if not os.path.isdir(space_path):
+        return False
+    p = os.path.join(space_path, 'space.json')
+    try:
+        data = _read_json(p)
+    except FileNotFoundError:
+        data = {}
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    mods = data.get('modules')
+    if mods is None:
+        mods = {}
+    elif not isinstance(mods, dict):
+        return False
+    if STATIC_PUBLISH_ID in mods:
+        return False
+    for mid, e in mods.items():
+        if isinstance(e, dict) and e.get('enabled') is True and (
+                mid == 'vercel-publish' or (isinstance(e.get('roles'), list) and 'publish' in e['roles'])):
+            return False
+    out = dict(data)
+    out['modules'] = dict(mods, **{STATIC_PUBLISH_ID: {'enabled': True}})
+    try:
+        _write_public(p, out)
+    except OSError:
+        return False
+    return True
+
+
+def ensure_static_publish(space_path):
+    """Те саме, що `_ensure_static_publish_locked`, але бере `WRITE_LOCK` сам."""
+    with WRITE_LOCK:
+        return _ensure_static_publish_locked(space_path)
+
+
+def materialize_static_publish():
+    """Стартовий крок 0.22 (не крок ЛІГИ): кожному простору без `legacy: true` добирає запис `static-publish` (див.
+    `_ensure_static_publish_locked`). Ідемпотентний; шар вимкнено — нічого. Повертає id просторів, чий файл змінено."""
+    if not layer_on():
+        return []
+    try:
+        reg = read_registry()
+    except SpacesError:
+        return []
+    return [sp['id'] for sp in reg['spaces'] if sp.get('legacy') is not True and ensure_static_publish(sp['path'])]
+
+
 def create_space(name, color, path):
     """Створити простір: тека, `space.json`, `tasks.json`, запис у реєстрі, `current`.
     Перевірка шляху, колізій id й запис реєстру — ПІД одним `WRITE_LOCK` (два паралельні
@@ -799,7 +856,9 @@ def create_space(name, color, path):
         try:
             os.makedirs(p, exist_ok=True)
             if not os.path.exists(os.path.join(p, 'space.json')):
-                _write_public(os.path.join(p, 'space.json'), {'name': name, 'color': color})
+                _write_public(os.path.join(p, 'space.json'),
+                              {'name': name, 'color': color, 'modules': {STATIC_PUBLISH_ID: {'enabled': True}}})
+            _ensure_static_publish_locked(p)           # усиновлена тека з готовим `space.json` теж дістає запис
             if not os.path.exists(os.path.join(p, 'tasks.json')):
                 _write_public(os.path.join(p, 'tasks.json'), {'design_work_root': p, 'tasks': {}})
         except (OSError, ValueError) as e:

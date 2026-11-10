@@ -280,9 +280,16 @@ class Env(unittest.TestCase):
             _write(os.path.join(d, 'server.py'), server)
         return d
 
-    def new_space(self, name='Alpha', integrations=False):
-        """Запис реєстру `{id, path, legacy, integrations}` нового простору (як віддає `spaces`)."""
+    def new_space(self, name='Alpha', integrations=False, publish=False):
+        """Запис реєстру `{id, path, legacy, integrations}` нового простору (як віддає `spaces`). `create_space` від 4d-4c пише явний
+        запис `static-publish`; за замовчуванням тут його знято (простір без жодного модуля — вихідна точка більшості тестів),
+        `publish=True` лишає запис, як у справжнього нового простору."""
         sid = spaces.create_space(name, 'space-1', self.hp('work', name.lower()))
+        if not publish:
+            sj = os.path.join(self.hp('work', name.lower()), 'space.json')
+            data = _read(sj)
+            data.pop('modules', None)
+            _write(sj, data)
         if integrations:
             reg = _read(self.reg_file)
             for s in reg['spaces']:
@@ -1438,17 +1445,25 @@ class StateTest(Env):
             dm.space_modules(sp)
         self.assertEqual(cm.exception.code, 'space-json-unreadable')
 
-    # ---- неявне типове ----
-    def test_static_publish_is_implicitly_on_without_integrations_and_writes_nothing(self):
+    # ---- явний запис публікації (4d-4c: неявного типового нема) ----
+    def test_static_publish_is_an_explicit_record_of_a_new_space_and_reading_writes_nothing(self):
         self.mk('static-publish', settings=[{'key': 'folder', 'type': 'path', 'default': '{home}/p/{space_id}'}])
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
+        self.assertEqual(_read(self.space_json(sp))['modules'], {'static-publish': {'enabled': True}})
         before = _md5(self.space_json(sp))
         st = dm.effective_state(sp)['static-publish']
-        self.assertEqual((st['enabled'], st['implicit']), (True, True))
+        self.assertEqual((st['enabled'], st['implicit']), (True, False))
         self.assertEqual(st['settings'], {'folder': '{home}/p/{space_id}'})     # символьно, з типового
         self.assertEqual(dm.provider('publish', sp).id, 'static-publish')
         dm.capabilities(sp)
-        self.assertEqual(_md5(self.space_json(sp)), before, 'неявне типове не пише на диск')
+        self.assertEqual(_md5(self.space_json(sp)), before, 'читання стану не пише на диск')
+
+    def test_without_the_record_a_space_has_no_publisher(self):
+        self.mk('static-publish')
+        sp = self.new_space()
+        st = dm.effective_state(sp)['static-publish']
+        self.assertEqual((st['enabled'], st['implicit']), (False, False))
+        self.assertIsNone(dm.provider('publish', sp))
 
     def test_static_publish_is_not_implicit_in_an_integrations_space(self):
         self.mk('static-publish')
@@ -1559,16 +1574,16 @@ class StateTest(Env):
         dm.write_module_state(sp, 'pub-b', enabled=True)     # звільнена роль — можна
         self.assertEqual(dm.provider('publish', sp).id, 'pub-b')
 
-    def test_role_taken_counts_the_implicit_static_publish(self):
+    def test_role_taken_counts_the_explicit_static_publish(self):
         self.mk('static-publish')
         self.mk('other-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         with self.assertRaises(dm.ModuleError) as cm:
             dm.write_module_state(sp, 'other-publish', enabled=True)
         self.assertEqual(cm.exception.code, 'role-taken')
         dm.write_module_state(sp, 'static-publish', enabled=False)
         dm.write_module_state(sp, 'other-publish', enabled=True)
-        ig = self.new_space('Beta', integrations=True)       # з інтеграціями неявного нема — роль вільна
+        ig = self.new_space('Beta', integrations=True)       # без запису публікатора роль вільна
         dm.write_module_state(ig, 'other-publish', enabled=True)
 
     def test_role_taken_ignores_modules_that_cannot_provide(self):
@@ -1643,9 +1658,9 @@ class StateTest(Env):
             dm.write_module_state(sp, 'ghost', enabled=True)
         self.assertEqual((cm.exception.code, cm.exception.status), ('unknown-module', 404))
 
-    def test_a_settings_write_never_flips_the_implicit_state(self):
+    def test_a_settings_write_never_flips_the_enabled_state(self):
         self.mk('static-publish', settings=[{'key': 'folder', 'type': 'path'}])
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         st = dm.write_module_state(sp, 'static-publish', settings={'folder': '~/p'})
         self.assertEqual(st['enabled'], True)
         self.assertEqual(_read(self.space_json(sp))['modules']['static-publish']['enabled'], True)
@@ -1693,10 +1708,10 @@ class StateTest(Env):
 
     def test_empty_write_does_not_touch_the_disk(self):
         self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         before = _md5(self.space_json(sp))
         st = dm.write_module_state(sp, 'static-publish')
-        self.assertEqual((st['enabled'], st['implicit']), (True, True))
+        self.assertEqual((st['enabled'], st['implicit']), (True, False))
         self.assertEqual(_md5(self.space_json(sp)), before)
 
     def test_new_space_json_is_0644_and_existing_mode_is_kept(self):
@@ -1971,9 +1986,9 @@ class ProviderTest(Env):
         dm.write_module_state(sp, 'pub-a', enabled=False)
         self.assertIsNone(dm.provider('publish', sp))
 
-    def test_implicit_static_publish(self):
+    def test_explicit_static_publish(self):
         self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         self.assertEqual(dm.provider('publish', sp).id, 'static-publish')
         self.assertIsNone(dm.provider('tokens', sp))
         dm.write_module_state(sp, 'static-publish', enabled=False)
@@ -2035,7 +2050,7 @@ class ProviderTest(Env):
 
     def test_request_space_fixed_resolves_that_space(self):
         self.mk('static-publish')
-        a = self.new_space('Alpha')
+        a = self.new_space('Alpha', publish=True)
         b = self.new_space('Beta', integrations=True)
         with spaces.request_space(a['id']):
             self.assertEqual(dm.provider('publish').id, 'static-publish')
@@ -2044,7 +2059,7 @@ class ProviderTest(Env):
 
     def test_explicit_space_wins_over_an_unfixed_request(self):
         self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         self.assertIsNone(spaces.request_space_id())
         self.assertEqual(dm.provider('publish', sp).id, 'static-publish')
 
@@ -2526,7 +2541,7 @@ class CapabilitiesTest(Env):
     def test_shape_for_every_branch(self):
         self.mk('static-publish')
         self.mk('css-tokens', roles=('tokens',))
-        plain = self.new_space('Plain')
+        plain = self.new_space('Plain', publish=True)
         ig = self.new_space('Integ', integrations=True)
         self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
         self.assertEqual(dm.capabilities(ig), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})   # 4d-4b: було 'legacy'
@@ -2610,7 +2625,7 @@ class CapabilitiesTest(Env):
 
     def test_cached_until_space_json_changes(self):
         self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         calls, patch = self.counting()
         with patch:
             self.assertEqual(dm.capabilities(sp)['publish'], 'static-publish')
@@ -2625,7 +2640,7 @@ class CapabilitiesTest(Env):
 
     def test_cached_until_a_manifest_changes(self):
         d = self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         calls, patch = self.counting()
         with patch:
             self.assertEqual(dm.capabilities(sp)['publish'], 'static-publish')
@@ -2634,30 +2649,30 @@ class CapabilitiesTest(Env):
             man['roles'] = ['tokens']
             _write(os.path.join(d, 'module.json'), man)
             _bump(os.path.join(d, 'module.json'))
-            # неявний `static-publish` лишається ввімкненим, але вже з іншою роллю
+            # явний `static-publish` лишається ввімкненим, але вже з іншою роллю
             self.assertEqual(dm.capabilities(sp), {'publish': None, 'tokens': 'static-publish', 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
             self.assertGreater(len(calls), n)
 
     def test_cache_follows_a_server_py_that_starts_to_fail(self):
         d = self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         self.assertEqual(dm.capabilities(sp)['publish'], 'static-publish')
         _write(os.path.join(d, 'server.py'), 'def check(:\n')
         _bump(os.path.join(d, 'server.py'))
         self.assertIsNone(dm.capabilities(sp)['publish'])
 
-    def test_cache_is_per_space_and_follows_integrations_flag(self):
+    def test_cache_is_per_space_and_ignores_the_integrations_flag(self):
         self.mk('static-publish')
-        a = self.new_space('Alpha')
-        b = self.new_space('Beta')
+        a = self.new_space('Alpha', publish=True)
+        b = self.new_space('Beta', publish=True)
         self.assertEqual(dm.capabilities(a)['publish'], 'static-publish')
         self.assertEqual(dm.capabilities(b)['publish'], 'static-publish')
-        b2 = dict(b, integrations=True)                      # реєстр змінив прапорець — ключ кешу інший
-        self.assertIsNone(dm.capabilities(b2)['publish'])       # 4d-4b: з інтеграціями `static-publish` не неявний, а зашитого нема
+        b2 = dict(b, integrations=True)                      # 4d-4c: прапорець не впливає ні на ключ кешу, ні на ролі
+        self.assertEqual(dm.capabilities(b2)['publish'], 'static-publish')
 
     def test_returned_dict_is_a_copy(self):
         self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         dm.capabilities(sp)['publish'] = 'hacked'
         self.assertEqual(dm.capabilities(sp)['publish'], 'static-publish')
 
@@ -2667,7 +2682,7 @@ class CapabilitiesTest(Env):
         _write(self.space_json(sp), '{broken')
         self.assertEqual(dm.capabilities(sp),
                          {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None, 'error': 'space-json-unreadable'})
-        _write(self.space_json(sp), json.dumps({'name': 'fixed'}))            # полагодили — помилка зникла
+        _write(self.space_json(sp), json.dumps({'name': 'fixed', 'modules': {'static-publish': {'enabled': True}}}))            # полагодили — помилка зникла
         self.assertEqual(dm.capabilities(sp), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
         ig = self.new_space('Integ', integrations=True)
         _write(self.space_json(ig), '{broken')
@@ -2697,7 +2712,7 @@ class CapabilitiesTest(Env):
         """Файл змінився ПІСЛЯ того, як роль обчислено: у кеш іде ключ ДО обчислення, тож наступний виклик
         бачить новий стан, а не застарілий результат під новим ключем."""
         self.mk('static-publish')
-        sp = self.new_space()
+        sp = self.new_space(publish=True)
         real = dm._provider_for
         flipped = []
 
@@ -2715,12 +2730,12 @@ class CapabilitiesTest(Env):
         for bad in ('x', 5, ['a'], ('a',), True, object(), 3.5):
             self.assertEqual(dm.capabilities(bad), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None}, repr(bad))
 
-    def test_the_cache_key_is_per_space_flag_space_json_and_every_module_file(self):
+    def test_the_cache_key_is_per_space_space_json_and_every_module_file_but_not_the_flag(self):
         d = self.mk('pub-a')
         sp = self.new_space()
         k1 = dm._caps_key(sp)
         self.assertEqual(dm._caps_key(sp), k1)
-        self.assertNotEqual(dm._caps_key(dict(sp, integrations=True)), k1)
+        self.assertEqual(dm._caps_key(dict(sp, integrations=True)), k1)       # 4d-4c: прапорець у ключ не входить
         self.assertNotEqual(dm._caps_key(dict(sp, id='other')), k1)
         for name in ('module.json', 'server.py'):
             path = os.path.join(d, name)

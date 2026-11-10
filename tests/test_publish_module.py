@@ -1339,7 +1339,9 @@ class DispatchWorld(unittest.TestCase):
 
     def _space(self, sid, path, integrations, tid):
         """Простір `sid` із задачею `tid`: тека, `space.json`, `tasks.json`, файли задачі. Повертає запис реєстру."""
-        _write_json(os.path.join(path, 'space.json'), {'name': sid.title(), 'color': 'space-1'})
+        # 4d-4c: публікація «у теку» — явний запис (як у `create_space`); простір «з інтеграціями» дістає записи ЛІГИ окремо
+        _write_json(os.path.join(path, 'space.json'), {'name': sid.title(), 'color': 'space-1',
+                                                       'modules': {} if integrations else liga_fixture.PLAIN_PUBLISH})
         _write_json(os.path.join(path, 'tasks.json'), {
             'design_work_root': path, 'current': tid,
             'tasks': {tid: {'title': f'Задача {tid}', 'dir': os.path.join(path, tid)}}})

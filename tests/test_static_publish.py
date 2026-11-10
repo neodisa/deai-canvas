@@ -253,16 +253,22 @@ class StaticPublish(unittest.TestCase):
         dm.catalog()
         self.assertFalse(os.path.exists(os.path.join(MODULE_DIR, '__pycache__')))
 
-    # ------------------------------------------------------------- неявний постачальник ролі
-    def test_it_is_the_implicit_provider_in_a_space_without_integrations(self):
+    # ------------------------------------------------------------- постачальник ролі за явним записом (4d-4c)
+    def test_it_is_the_explicit_provider_of_a_new_space(self):
         self.assertEqual(dm.provider('publish', self.sp).id, MID)
         self.assertEqual(dm.capabilities(self.sp), {'publish': MID, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
         st = dm.effective_state(self.sp)[MID]
-        self.assertEqual((st['enabled'], st['implicit']), (True, True))
+        self.assertEqual((st['enabled'], st['implicit']), (True, False))
         self.assertEqual(st['settings'], {'folder': '{home}/deai-published/{space_id}'})
 
     def test_legacy_and_none_cases_stay_as_they_were(self):
         ig = self.new_space('Liga', integrations=True)
+        ig_sj = os.path.join(ig['path'], 'space.json')
+        with open(ig_sj, encoding='utf-8') as f:
+            ig_data = json.load(f)
+        ig_data.pop('modules')                                      # 4d-4c: `create_space` пише явний запис; тут потрібен простір без нього
+        with open(ig_sj, 'w', encoding='utf-8') as f:
+            json.dump(ig_data, f)
         self.assertIsNone(dm.provider('publish', ig))              # було `implicit.for_role('publish')` (зашитий шлях ЛІГА): запасного нема (4d-4b)
         self.assertIsNone(dm.capabilities(ig)['publish'])          # було 'legacy'
         self.assertIsNone(dm.provider('tokens', self.sp))

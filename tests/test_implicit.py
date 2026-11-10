@@ -378,11 +378,7 @@ class ProviderImplicit(unittest.TestCase):
         sp = {'id': 'plain', 'path': os.path.join(self.tmp.name, 'plain')}
         os.makedirs(sp['path'])
         for role in self.dm.ROLES_CALLED:
-            p = self.dm._provider_for(role, sp)
-            if role == 'publish':
-                self.assertEqual(p.id, 'static-publish')           # єдиний типовий модуль простору без запису
-            else:
-                self.assertIsNone(p, role)
+            self.assertIsNone(self.dm._provider_for(role, sp), role)       # 4d-4c: неявного `static-publish` нема — без запису ніхто
 
     # Ретировано (4d-4b): `test_provider_for_integrations_space_returns_implicit` -> ІНВЕРТОВАНО в
     # `test_originals_gone.ProviderWithoutImplicit.test_a_liga_role_without_a_record_is_none`; `test_role_constants_renamed` -> R6
@@ -415,6 +411,8 @@ class ProviderImplicit(unittest.TestCase):
         for name in want:
             # 4d-4b: знімок 0.15.0 — еталон, а не вимога: неявні `'legacy'` стали `None` (запасного постачальника нема); решта — без змін
             expected = {r: (None if v == 'legacy' else v) for r, v in want[name]['caps'].items()}
+            if name == 'plain_no_modules':
+                expected['publish'] = None            # 4d-4c: неявний `static-publish` зник; явний запис дає `plain_static_publish`
             if expected.get('error') not in (None, 'space-json-unreadable'):
                 # r15-1: збій НЕ простору тепер іменний за роллю (`errors`) — додатковий ключ, значення ролей і `error` ті самі
                 expected['errors'] = {r: expected['error'] for r in self.dm.ROLES_CALLED}
@@ -517,13 +515,16 @@ class PublishModule(unittest.TestCase):
             m.start()
             self.addCleanup(m.stop)
 
-    def _space(self, name, **extra):
+    def _space(self, name, publish=False, **extra):
         path = os.path.join(self.tmp.name, name)
         os.makedirs(path)
+        if publish:                                              # 4d-4c: публікація «у теку» — явний запис `space.json`
+            with open(os.path.join(path, 'space.json'), 'w', encoding='utf-8') as f:
+                json.dump({'modules': {'static-publish': {'enabled': True}}}, f)
         return {'id': name, 'path': path, **extra}
 
     def test_plain_space_returns_module_equal_to_capabilities(self):
-        sp = self._space('plain')
+        sp = self._space('plain', publish=True)
         mod = self.dm.publish_module(sp)
         self.assertIsInstance(mod, self.dm.Module)
         self.assertEqual(mod.id, self.dm.capabilities(sp)['publish'])
@@ -546,7 +547,7 @@ class PublishModule(unittest.TestCase):
 
     def test_same_cache_as_capabilities(self):
         """Другий виклик `publish_module` після `capabilities` не перераховує ролі (той самий кеш)."""
-        sp = self._space('plain3')
+        sp = self._space('plain3', publish=True)
         self.dm.capabilities(sp)
         with mock.patch.object(self.dm, '_provider_for', side_effect=AssertionError('перерахунок')):
             self.assertIsNotNone(self.dm.publish_module(sp))

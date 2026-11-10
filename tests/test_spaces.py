@@ -1521,7 +1521,8 @@ class CreateSpace(Env):
         p = self.hp('deai-work', 'personal')
         sid = spaces.create_space('Особисте', 'space-2', p)
         self.assertEqual(sid, 'space-1')                   # кирилична назва — слаг порожній
-        self.assertEqual(_read(os.path.join(p, 'space.json')), {'name': 'Особисте', 'color': 'space-2'})
+        self.assertEqual(_read(os.path.join(p, 'space.json')),
+                         {'name': 'Особисте', 'color': 'space-2', 'modules': {'static-publish': {'enabled': True}}})        # 4d-4c: явний запис публікації
         self.assertEqual(_read(os.path.join(p, 'tasks.json')), {'design_work_root': p, 'tasks': {}})
         reg = spaces.load_registry()
         self.assertEqual(reg['spaces'], [{'id': 'space-1', 'path': p, 'legacy': False, 'integrations': False}])
@@ -1541,7 +1542,8 @@ class CreateSpace(Env):
         os.chmod(os.path.join(p, 'space.json'), 0o600)
         os.chmod(os.path.join(p, 'tasks.json'), 0o640)
         spaces.create_space('Нове', 'space-2', p)
-        self.assertEqual(_read(os.path.join(p, 'space.json')), {'name': 'Старе', 'color': 'space-4'})
+        # 4d-4c: готовий `space.json` не перезаписується, до нього лише ДОДАНО явний запис публікації (решта ключів і права лишились)
+        self.assertEqual(_read(os.path.join(p, 'space.json')), {'name': 'Старе', 'color': 'space-4', 'modules': {'static-publish': {'enabled': True}}})
         self.assertEqual(_read(os.path.join(p, 'tasks.json')), {'tasks': {'z': {}}})
         self.assertEqual(_mode(os.path.join(p, 'space.json')), 0o600)
         self.assertEqual(_mode(os.path.join(p, 'tasks.json')), 0o640)

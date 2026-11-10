@@ -53,6 +53,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))     # пакета `tests` нема — охоронець поруч
 import deai_modules as dm  # noqa: E402
+import liga_fixture  # noqa: E402
 import serve  # noqa: E402
 import spaces  # noqa: E402
 import spaces_guard  # noqa: E402
@@ -250,7 +251,9 @@ class World(Http, unittest.TestCase):
 
     def _space(self, sid, path, integrations, tid):
         """Простір `sid` із задачею `tid`. Повертає запис реєстру."""
-        _write(os.path.join(path, 'space.json'), json.dumps({'name': sid.title(), 'color': 'space-1'}))
+        # 4d-4c: публікація «у теку» — явний запис (як у `create_space`); `on` («з інтеграціями») його не має
+        _write(os.path.join(path, 'space.json'), json.dumps({'name': sid.title(), 'color': 'space-1',
+                                                             **({} if integrations else {'modules': liga_fixture.PLAIN_PUBLISH})}))
         os.makedirs(os.path.join(path, tid))
         _write(os.path.join(path, 'tasks.json'), json.dumps({
             'design_work_root': path, 'current': tid,
@@ -321,7 +324,8 @@ class Routes(World):
             with self.subTest(header=header):
                 st, body = self.get('/api/modules', h)
                 self.assertEqual(st, 200, body)
-                self.assertTrue({m['id']: m for m in body['modules']}['static-publish']['implicit'])   # простір `off`
+                e = {m['id']: m for m in body['modules']}['static-publish']
+                self.assertEqual((e['enabled'], e['implicit']), (True, False))      # простір `off`: явний запис
                 self.assertEqual(self.get('/api/ds-tokens', h), (200, {'profile': None}))
                 for r in ROUTES_POST:
                     st, body = self.post(r, {'id': 'css-tokens'}, h)
@@ -364,7 +368,8 @@ class Routes(World):
         self.assertNotIn('access-control-allow-origin', headers)
 
     def test_the_default_space_is_the_pinned_one_and_follows_the_current_space(self):
-        self.assertTrue(self.entry('static-publish')['implicit'])           # поточний `off`: без інтеграцій
+        e = self.entry('static-publish')
+        self.assertEqual((e['enabled'], e['implicit']), (True, False))      # поточний `off`: явний запис (4d-4c)
         spaces.switch_space('on')
         e = self.entry('static-publish')
         self.assertEqual((e['enabled'], e['implicit']), (False, False))     # поточний `on`: з інтеграціями
@@ -376,7 +381,7 @@ class Routes(World):
                                                     'settings': {'file': 'ds.css'}})
         self.assertEqual(st, 200, body)
         self.assertIn('css-tokens', self.sj(self.on)['modules'])
-        self.assertNotIn('modules', self.sj(self.off))
+        self.assertEqual(self.sj(self.off)['modules'], liga_fixture.PLAIN_PUBLISH)      # `off` не чіпали
 
     def test_the_space_of_the_request_is_the_named_one_else_the_pinned_one(self):
         """Названий простір стає простором запиту (воркер `call` його успадковує); без назви — зафіксований на вході."""
@@ -451,7 +456,7 @@ class Listing(World):
 
     def test_the_implicit_publisher_and_its_secret_setting(self):
         e = self.entry('static-publish')
-        self.assertEqual((e['enabled'], e['implicit'], e['status'], e['roles']), (True, True, 'unchecked', ['publish']))
+        self.assertEqual((e['enabled'], e['implicit'], e['status'], e['roles']), (True, False, 'unchecked', ['publish']))
         folder, password = e['settings']
         self.assertEqual(folder, {'key': 'folder', 'type': 'path', 'label': 'Тека для превʼю', 'required': True,
                                   'value': '{home}/deai-published/{space_id}'})      # символьне, не підставлене
@@ -493,7 +498,7 @@ class Listing(World):
 
     def test_missing_an_enabled_module_that_is_not_in_the_catalog(self):
         sj = self.sj()
-        sj['modules'] = {'gone-mod': {'enabled': True, 'settings': {'x': 1}}, 'also-gone': {'enabled': False}}
+        sj['modules'] = {**liga_fixture.PLAIN_PUBLISH, 'gone-mod': {'enabled': True, 'settings': {'x': 1}}, 'also-gone': {'enabled': False}}
         _write(os.path.join(self.off_path, 'space.json'), json.dumps(sj))
         mods = self.listing()
         self.assertEqual(sorted(mods), sorted([*BUILTIN_IDS, 'gone-mod']))    # вимкнений відсутній — без запису
@@ -547,7 +552,7 @@ class Enable(World):
 
     def test_enable_css_tokens_writes_the_symbolic_setting_and_checks(self):
         self.css()
-        before = self.sj()
+        before = {k: v for k, v in self.sj().items() if k != 'modules'}
         st, body = self.post('/api/module-enable', {'id': 'css-tokens', 'settings': {'file': '{space}/ds.css'}})
         self.assertEqual(st, 200, body)
         self.assertEqual(body['ok'], True)
@@ -559,7 +564,8 @@ class Enable(World):
                                           'label': 'CSS-файл із токенами дизайн-системи',
                                           'value': '{space}/ds.css'}])
         after = self.sj()
-        self.assertEqual(after['modules'], {'css-tokens': {'enabled': True, 'settings': {'file': '{space}/ds.css'}}})
+        self.assertEqual(after['modules'], {**liga_fixture.PLAIN_PUBLISH,
+                                            'css-tokens': {'enabled': True, 'settings': {'file': '{space}/ds.css'}}})
         self.assertEqual({k: v for k, v in after.items() if k != 'modules'}, before)    # решта файла живе
         self.assertEqual(self.entry('css-tokens'), m)                    # і в списку те саме
 
@@ -599,7 +605,7 @@ class Enable(World):
                 payload = {} if mid is None else {'id': mid}
                 st, body = self.post('/api/module-enable', payload)
                 self.refused(st, body, 404, 'unknown-module')
-        self.assertNotIn('modules', self.sj())
+        self.assertEqual(self.sj()['modules'], liga_fixture.PLAIN_PUBLISH)      # лише явний запис публікації
 
     def test_bad_settings_are_400_and_write_nothing(self):
         before = self.sj_bytes()
@@ -828,7 +834,7 @@ class Replace(World):
                                                               'replace': bad})
                 self.assertEqual(st, 200, body)
                 self.assertNotIn('replaced', body)
-        self.assertNotIn('static-publish', self.sj()['modules'], 'settings не вмикає і не замінює')
+        self.assertEqual(self.sj()['modules']['static-publish'], {'enabled': True}, 'settings не вмикає і не замінює')
         listing = self.listing()
         self.assertEqual((listing['static-publish']['enabled'], listing['alt-publish']['enabled']), (True, False))
         for bad in (True, None, 'x'):
@@ -857,15 +863,15 @@ class Replace(World):
     # ---- краї ----
 
     def test_a_non_object_entry_of_the_holder_does_not_crash_and_ends_sane(self):
-        """Запис `static-publish` у `space.json` — не обʼєкт: `_normalize` його пропускає, неявний типовий лишається
-        постачальником, `replace` перезаписує запис нормальним `{enabled: false}`."""
+        """Запис `static-publish` у `space.json` — не обʼєкт: `_normalize` його пропускає (неявного типового після 4d-4c нема),
+        тож ніхто не тримає роль: `replace` нічого не звільняє, а `alt-publish` вмикається."""
         self.modules(extra=('alt-publish',))
         data = self.sj()
         data['modules'] = {'static-publish': 'x'}
         _write(os.path.join(self.off_path, 'space.json'), json.dumps(data))
         st, body = self.post('/api/module-enable', {'id': 'alt-publish', 'replace': True})
-        self.assertEqual((st, body['ok'], body['replaced']), (200, True, ['static-publish']), body)
-        self.assertEqual(self.sj()['modules'], {'static-publish': {'enabled': False}, 'alt-publish': {'enabled': True}})
+        self.assertEqual((st, body['ok'], body['replaced']), (200, True, []), body)
+        self.assertEqual(self.sj()['modules'], {'static-publish': 'x', 'alt-publish': {'enabled': True}})
         listing = self.listing()
         self.assertEqual((listing['static-publish']['enabled'], listing['alt-publish']['enabled']), (False, True))
 

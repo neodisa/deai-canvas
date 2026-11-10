@@ -1409,7 +1409,8 @@ class SpaceRoutes(Fixture):
         st, body = self.post('/api/space-new', {'name': 'Q', 'color': 'space-4', 'path': path})
         self.assertEqual((st, body), (200, {'ok': True, 'id': 'q'}))
         self.assertEqual(spaces.read_registry()['current'], 'q')
-        self.assertEqual(_read(os.path.join(path, 'space.json')), {'name': 'Q', 'color': 'space-4'})
+        self.assertEqual(_read(os.path.join(path, 'space.json')),
+                         {'name': 'Q', 'color': 'space-4', 'modules': {'static-publish': {'enabled': True}}})        # 4d-4c: явний запис публікації
         self.assertEqual(_read(os.path.join(path, 'tasks.json')),
                          {'design_work_root': path, 'tasks': {}})
         listed = {s['id']: s for s in self.jget('/api/spaces')[1]['spaces']}['q']
@@ -1515,7 +1516,8 @@ class SpaceRoutes(Fixture):
         self.restore_bytes(os.path.join(self.p_path, 'space.json'))
         st, body = self.post('/api/space-update', {'id': self.p_id, 'name': 'Pp'})
         self.assertEqual((st, body), (200, {'ok': True, 'id': self.p_id, 'name': 'Pp', 'color': 'space-2'}))
-        self.assertEqual(_read(os.path.join(self.p_path, 'space.json')), {'name': 'Pp', 'color': 'space-2'})
+        self.assertEqual(_read(os.path.join(self.p_path, 'space.json')),
+                         {'name': 'Pp', 'color': 'space-2', 'modules': {'static-publish': {'enabled': True}}})   # решта ключів файла збережена
         st, body = self.post('/api/space-update', {'id': self.p_id, 'color': 'space-5'})
         self.assertEqual((st, body['name'], body['color']), (200, 'Pp', 'space-5'))
         listed = {s['id']: s for s in self.jget('/api/spaces')[1]['spaces']}[self.p_id]

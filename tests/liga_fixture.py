@@ -31,6 +31,8 @@ ROLE_RECORDS = {
     'publish': ('vercel-publish', {'auth': 'cli', 'team': '', 'compat': 'design-canvas'}, {'password': PASSWORD}),
 }
 ALL_ROLES = tuple(ROLE_RECORDS)
+#: Явний запис публікації «у теку» (4d-4c: неявного типового нема) — для простору, зібраного руками, а не `create_space`.
+PLAIN_PUBLISH = {'static-publish': {'enabled': True}}
 
 
 def write_records(space_dir, deai_dir, sid='legacy', roles=ALL_ROLES, overrides=None, name='Liga'):

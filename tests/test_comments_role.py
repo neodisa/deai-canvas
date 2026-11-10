@@ -152,12 +152,12 @@ class ProviderTest(CommentsEnv):
         self.assertIsNone(dm.provider('comments', plain))
 
     def test_a_module_that_is_present_but_not_enabled_is_not_a_provider_and_there_is_no_implicit_default(self):
-        self.mk('static-publish')                                    # неявний типовий є лише в `publish`
+        self.mk('static-publish')                                    # 4d-4c: неявного типового нема в жодної ролі (і в `publish`)
         self.mkcm()
         plain = self.new_space()
-        self.assertEqual(dm.provider('publish', plain).id, 'static-publish')
+        self.assertIsNone(dm.provider('publish', plain))
         self.assertIsNone(dm.provider('comments', plain))
-        self.assertEqual(dm.capabilities(plain), {'publish': 'static-publish', 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
+        self.assertEqual(dm.capabilities(plain), {'publish': None, 'tokens': None, 'comments': None, 'vcs': None, 'dashboard': None, 'tracker': None, 'notify': None})
 
     def test_a_broken_space_json_is_total_for_capabilities_and_409_for_provider(self):
         self.mkcm()

@@ -258,6 +258,14 @@ EXPECT_UNMIGRATED = dict({
 }, **dict(DASH_IMPLICIT, **DASH_IN_SPACE))
 
 EXPECT_PLAIN = dict({
+    # 4d-4c: простір без запису `static-publish` не має неявного публікатора (стенд складено без `create_space`)
+    '/api/modules/list/static-publish/enabled': False,
+    '/api/modules/list/static-publish/implicit': False,
+    '/api/task/capabilities/publish': None,
+    '/api/task/preview_gate/state': 'none',
+    '/capabilities/ok/publish': None,
+    '/provider/in_space/publish/api': None,
+    '/provider/in_space/publish/type': 'NoneType',
     '/provider/implicit_space/comments/api': None,
     '/provider/implicit_space/comments/type': 'NoneType',
     '/provider/implicit_space/dashboard/api': None,

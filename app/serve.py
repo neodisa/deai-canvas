@@ -9004,10 +9004,16 @@ def make_server(port=0):
 def serve_main(port):
     """Порт — ПЕРШИМ (`make_server` біндить у конструкторі): зайнятий порт кидає `OSError` ДО міграції ЛІГИ, і простір лишається
     як був (старіший сервер, що тримає порт, не бачить простору, якого не розуміє). Далі міграція (не кидає, ізольовані прогони
-    пропускає), і лише потім `serve_forever`: зʼєднання тим часом чекають у черзі, запит обслуговується вже після міграції."""
+    пропускає), далі явний запис `static-publish` наявним просторам (`spaces.materialize_static_publish`, ідемпотентно), і лише потім `serve_forever`: зʼєднання тим часом чекають у черзі, запит обслуговується вже після міграції."""
     srv = make_server(port)
     import liga_migrate
     liga_migrate.startup()
+    try:
+        if not (isolation.isolated() and isolation.real_home(spaces.home())):
+            for sid in spaces.materialize_static_publish():
+                print('простір %s: публікація в теку тепер явний запис static-publish (екран «Підключення»)' % sid, file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — крок не валить старт
+        print('static-publish: крок пропущено (%s)' % type(e).__name__, file=sys.stderr)
     srv.serve_forever()
 
 

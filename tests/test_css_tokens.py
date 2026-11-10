@@ -1154,6 +1154,7 @@ class FrameworkTest(unittest.TestCase):
         self.assertIsNone(dm.provider('tokens', sp))
         dm.write_module_state(sp, 'css-tokens', enabled=True, settings={'file': 'tokens.css'})
         self.assertEqual(dm.provider('tokens', sp).id, 'css-tokens')
+        dm.write_module_state(sp, 'static-publish', enabled=False)      # 4d-4c: `create_space` пише явний запис публікації — вимикаємо його
         self.assertIsNone(dm.provider('publish', sp))                  # публікацію це не зачепило (було `implicit.for_role('publish')`: запасного нема, 4d-4b)
 
 

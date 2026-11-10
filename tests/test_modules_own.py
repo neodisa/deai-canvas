@@ -134,6 +134,13 @@ class OwnEnv(Env):
         except FileNotFoundError:
             return []
 
+    def publish_record(self, sp=None):
+        """Явний запис `static-publish` у `space.json` (4d-4c: неявного типового нема; `new_space` його знімає)."""
+        p = self.space_json(sp or self.sp)
+        data = _read(p)
+        data.setdefault('modules', {})['static-publish'] = {'enabled': True}
+        _write(p, data)
+
     def enable_raw(self, mid='acme', roles=('publish',), sp=None):
         """Як колега, що закомітив `space.json`: запис увімкненого свого модуля без жодної довіри тут."""
         p = self.space_json(sp or self.sp)
@@ -1004,6 +1011,7 @@ class RolesTest(OwnEnv):
 
     def test_paper_error_is_per_role_of_the_own_module(self):
         self.mk('static-publish')
+        self.publish_record()
         self.own('ds', roles=('tokens',))
         self.enable_raw('ds', ('tokens',))
         self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish', 'роль `publish` модуль `ds` не веде')
@@ -1014,11 +1022,12 @@ class RolesTest(OwnEnv):
 
     def test_a_disabled_untrusted_own_module_is_no_paper_provider(self):
         self.mk('static-publish')
+        self.publish_record()
         self.own()
         self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish')
         p = self.space_json(self.sp)
         data = _read(p)
-        data['modules'] = {'acme': {'enabled': False, 'settings': {}, 'roles': ['publish']}}
+        data['modules'] = {'static-publish': {'enabled': True}, 'acme': {'enabled': False, 'settings': {}, 'roles': ['publish']}}
         _write(p, data)
         self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish')
 
@@ -1027,7 +1036,7 @@ class RolesTest(OwnEnv):
         self.mk('broken', server='def check(:\n')
         sj = self.space_json(self.sp)
         data = _read(sj)
-        data['modules'] = {'broken': {'enabled': True, 'settings': {}}}            # напряму: `role-taken` з неявним типовим
+        data['modules'] = {'static-publish': {'enabled': True}, 'broken': {'enabled': True, 'settings': {}}}   # напряму: `role-taken` з явним записом
         _write(sj, data)
         self.assertEqual(dm.catalog(self.sp)['broken'].status, 'error')
         self.assertEqual(dm.provider('publish', self.sp).id, 'static-publish')     # як і було: зламаний вбудований не веде роль
@@ -1098,6 +1107,7 @@ class RolesTest(OwnEnv):
 
     def test_caps_key_sees_a_changed_module_folder(self):
         self.mk('static-publish')
+        self.publish_record()
         d = self.own()
         self.enable_raw()
         self.assertIsNone(dm.capabilities(self.sp)['publish'])
