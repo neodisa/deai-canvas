@@ -52,7 +52,7 @@ EXPECT_DIFF = {
     'plain_git.task_new.gitlab': {'status': 400, 'code': 'gitlab-needs-vcs-scheme'},
     'liga.task_new.from': {'status': 200, 'code': None, 'space': 'legacy', 'created': True},        # було 400 from-needs-plain-space
     'liga_unmigrated.task_new.from': {'status': 200, 'code': None, 'space': 'legacy', 'created': True},
-    'liga_unmigrated.task_new.gitlab': {'status': 400, 'code': 'gitlab-needs-vcs-scheme', 'created': False},
+    'liga_unmigrated.task_new.gitlab': {'status': 400, 'code': 'gitlab-needs-vcs-scheme', 'created': False, 'space': None},   # 400 не створює задачі (Поправка 8)
     'layer_off.task_new.from': {'status': 200, 'code': None, 'created': True},
     'layer_off.task_new.gitlab': {'status': 400, 'code': 'gitlab-needs-vcs-scheme', 'created': False},
 }
@@ -83,10 +83,13 @@ class ParityAfter4d4c(unittest.TestCase):
         b, a = {}, {}
         _leaves((), {k: v for k, v in before.items() if not k.startswith('_')}, b)
         _leaves((), after, a)
-        allowed = tuple(p + '.' for p in EXPECT_DIFF)
-        changed = sorted(k for k in set(b) | set(a) if b.get(k, '<нема>') != a.get(k, '<нема>'))
-        stray = [k for k in changed if not any((k + '.').startswith(p) for p in allowed)]
-        self.assertEqual(stray, [], 'вимірювана відмінність поза EXPECT_DIFF — ЗУПИНИТИСЬ і доповісти, перелік мовчки не розширювати')
+        # точна перевірка за листками: очікуване = «до» з підміною лише перелічених листків; будь-який інший дрейф червоніє
+        expected = dict(b)
         for path, want in EXPECT_DIFF.items():
             for leaf, val in want.items():
-                self.assertEqual(_get(after, path + '.' + leaf), val, '%s.%s' % (path, leaf))
+                key = path + '.' + leaf
+                for k in [k for k in expected if k == key or k.startswith(key + '.')]:
+                    del expected[k]
+                if val is not ABSENT:
+                    expected[key] = val
+        self.assertEqual(expected, a, 'відмінність поза EXPECT_DIFF — ЗУПИНИТИСЬ і доповісти, перелік мовчки не розширювати')

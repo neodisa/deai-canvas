@@ -43,6 +43,8 @@ class NoIntegrationsFlag(unittest.TestCase):
                        or (isinstance(ch, ast.Name) and ch.id in GONE) or (isinstance(ch, ast.Attribute) and ch.attr in GONE)
                        or (isinstance(ch, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)) and ch.name in GONE)
                        or (isinstance(ch, ast.keyword) and ch.arg == 'integrations')
+                       or (isinstance(ch, ast.Attribute) and ch.attr == 'integrations') or (isinstance(ch, ast.Name) and ch.id == 'integrations')
+                       or (isinstance(ch, ast.arg) and ch.arg == 'integrations')
                        or (isinstance(ch, ast.alias) and ch.name in GONE))
                 if hit and (name, cur) not in ALLOWED:
                     found.append((name, cur, getattr(ch, 'lineno', 0)))
@@ -63,7 +65,7 @@ class NoIntegrationsFlag(unittest.TestCase):
     def test_the_detector_catches_every_form(self):
         for src in ("x = sp['integrations']", "sp.get('integrations')", "spaces.integrations_on()", "def integrations_for(sp): pass",
                     "f(integrations=True)", "raise IntegrationsOff('x')", "from spaces import require_integrations",
-                    "API_IMPLICIT = 'legacy'"):
+                    "API_IMPLICIT = 'legacy'", "x = sp.integrations", "integrations = 1", "def f(integrations): pass"):
             with self.subTest(src=src):
                 self.assertTrue(self.offenders(src), src)
         for src in ("'''integrations'''", "def f():\n    '''integrations'''", "x = 'integrations-off'"):
@@ -83,10 +85,18 @@ class NoIntegrationsFlag(unittest.TestCase):
 class NoLegacyApiValue(unittest.TestCase):
     """У `app/*.js` нема порівнянь із `"legacy"`; виняток — вигляд `publishReaction` (`view.kind`, `app.js`)."""
     CMP = re.compile(r'[!=]==?\s*["\']legacy["\']|["\']legacy["\']\s*[!=]==?')
+    #: єдиний дозволений запис: порівняння `view.kind === 'legacy'` — лише в `app.js`; після його вирізання в рядку не лишається жодного порівняння
+    ALLOWED_FORM = re.compile(r'\bview\.kind\s*===\s*["\']legacy["\']')
 
     @classmethod
     def offenders(cls, text, name='<src>'):
-        return [(name, i + 1) for i, line in enumerate(text.splitlines()) if cls.CMP.search(line) and 'view.kind' not in line]
+        out = []
+        for i, line in enumerate(text.splitlines()):
+            if name == 'app.js':
+                line = cls.ALLOWED_FORM.sub('', line)
+            if cls.CMP.search(line):
+                out.append((name, i + 1))
+        return out
 
     def test_no_comparison_with_the_literal_in_the_client(self):
         files = sorted(glob.glob(os.path.join(ROOT, 'app', '*.js')))
@@ -101,7 +111,11 @@ class NoLegacyApiValue(unittest.TestCase):
         for src in ('caps.vcs === "legacy"', "p.kind === 'legacy'", 'v !== "legacy"', '"legacy" === v'):
             self.assertEqual(len(self.offenders(src)), 1, src)
         for src in ("if (view.kind === 'legacy') {}", 'kind: "legacy"', 'x === "legacyx"'):
-            self.assertEqual(self.offenders(src), [], src)
+            self.assertEqual(self.offenders(src, 'app.js'), [], src)
+        # виняток точний: лише `app.js` і лише сама форма, а не будь-який рядок зі словом `view.kind`
+        self.assertEqual(len(self.offenders("if (view.kind === 'legacy') {}", 'other.js')), 1)
+        for src in ("view.kind === 'legacy' && x === 'legacy'", "x === 'legacy' || view.kind === 'legacy'", "view.kind === 'legacy' && view.kind !== 'legacy'"):
+            self.assertEqual(len(self.offenders(src, 'app.js')), 1, src)
 
 
 class NoIntegrationsInClient(unittest.TestCase):
