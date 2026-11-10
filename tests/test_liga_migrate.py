@@ -2135,6 +2135,7 @@ class AfterMigrationParity(unittest.TestCase):
             # більше не віддає `profile` (стенд мапить відсутній ключ у `None`).
             profile_only = old['profile'] is not None
             old['profile'] = None
+            old['comment_channel'] = None      # 4d-4c (Поправка 10): стенд без запису `comments` — каналу нема (раніше — за прапорцем)
             if profile_only:
                 old['track'], old['tags'] = None, []
             else:

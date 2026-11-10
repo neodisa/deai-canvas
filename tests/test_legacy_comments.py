@@ -523,7 +523,7 @@ class OverviewSyncTest(_Env):
         env = mock.patch.dict(os.environ, {'HOME': home})
         env.start()
         self.addCleanup(env.stop)
-        out = mock.patch.object(serve, '_outbound_ok', return_value=True)
+        out = mock.patch.object(serve, '_vcs_outbound_here', return_value=True)
         out.start()
         self.addCleanup(out.stop)
         # шов лога (справжній `~/.claude/pipeline-feedback/` не пишемо) і чистий стан «один синк на простір»

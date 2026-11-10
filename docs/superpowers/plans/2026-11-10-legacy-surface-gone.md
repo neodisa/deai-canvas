@@ -1365,6 +1365,9 @@ R-C — лишити. Поправки 1–19 прийнято. `bin/state.py` (
       'liga_unmigrated.comment_channel': {'comment_channel': None},
       'layer_off.targets': {'gitlab': None},
       'layer_off.comment_channel': {'comment_channel': None},
+      # Поправка 10 (T3): звичайний простір із ввімкненим модулем коментарів тепер отримує `comment_channel` — знімок 0.21 такого стенду
+      # не має (`plain` без модуля коментарів), тож рядка в EXPECT_DIFF нема; факт закріплений прямо: `tests/test_outbound.py`
+      # `test_a_plain_space_with_a_comments_module_gets_a_channel`.
       # task-new
       'plain.task_new.jira': {'status': 200, 'code': None, 'space': 'plain', 'created': True},        # було 409 no-integrations-space
       'plain.task_new.gitlab': {'status': 400, 'code': 'gitlab-needs-vcs-scheme', 'created': False},  # було 409

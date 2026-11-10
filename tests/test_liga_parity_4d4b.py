@@ -157,6 +157,7 @@ EXPECT_PARTIAL = dict({
 }, **DASH_IMPLICIT)
 
 EXPECT_UNMIGRATED = dict({
+    '/api/task/comment_channel': None,          # 4d-4c (Поправка 10): канал є лише за постачальником `comments`; немігрована ЛІГА без запису — `None`
     '/api/comment_config/channel': None,
     '/api/comment_config/code': 'integrations-off',
     '/api/comment_config/config': None,

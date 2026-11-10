@@ -2583,7 +2583,7 @@ class LayerOff(Bare):
 
     def test_responses_carry_a_null_space_and_the_channel_as_before(self):
         body = self.jget('/api/task')[1]
-        self.assertEqual((body['id'], body['space'], body['comment_channel']), ('a', None, 'dc/a'))
+        self.assertEqual((body['id'], body['space'], body['comment_channel']), ('a', None, None))     # 4d-4c: канал — за постачальником `comments`, а в шарі «вимкнено» його нема
         body = self.jget('/api/tasks')[1]
         self.assertEqual((body['current'], body['space'], [t['id'] for t in body['tasks']]), ('a', None, ['a']))
         body = self.jget('/api/tasks?all=1')[1]

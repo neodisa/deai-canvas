@@ -18,7 +18,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'app'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from serve import (load_tasks, load_meta, task_iterations, iter_num,  # noqa: E402
+from serve import (registry_allowed, load_tasks, load_meta, task_iterations, iter_num,  # noqa: E402
                    vcs_task, _mask_repo, gitlab_status,
                    machine_identity, iteration_is_mine, iteration_pages,
                    task_anywhere, UnknownTask, TaskNotHere, NoTask, AmbiguousTask,
@@ -272,9 +272,9 @@ def local_url_line(task, its, my_key, port, tid=None):
 def _registry_line(cfg):
     """Свежесть локального кеша задач против реестра (источник истины).
 
-    Простір без інтеграцій: реєстру команди для нього нема, рядок не друкується (порожній) і
+    Простір без схеми ЛІГИ: реєстру команди для нього нема, рядок не друкується (порожній) і
     `registry.staleness` — а це `git ls-remote` — не кличеться."""
-    if not spaces.integrations_on():
+    if not registry_allowed():
         return ''
     try:
         st = registry.staleness(cfg)

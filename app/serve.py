@@ -193,29 +193,37 @@ def ensure_task_gitignore(task_dir):
     return missing
 
 
-def _outbound_ok():
-    """`spaces.integrations_on()` для best-effort викликів, що не мають права кидати (пуш автокоміту,
-    реєстр, овервʼю): реєстр просторів, що зіпсувався посеред запиту
-    (`SpacesError`), — «назовні не ходимо». Те, що ВЖЕ зроблено (коміт, нова задача), через це
-    не стає 503, а кожен виклик назовні, якому потрібна відповідь, питає `spaces` напряму
-    (`require_integrations`) і дає центральний 503."""
+def _vcs_outbound_here():
+    """Чи може простір запиту ходити назовні гітом за схемою ЛІГИ (`deai_modules.vcs_outbound`). Простір запиту не зафіксовано — неявний
+    простір, записів нема → `False` (закрито; Поправка 2 плану 4d-4c). Реєстр, що зіпсувався посеред запиту (`SpacesError`), — теж
+    `False`: те, що ВЖЕ зроблено (коміт, нова задача), через це не стає 503."""
     try:
-        return spaces.integrations_on()
+        return deai_modules.vcs_outbound(spaces.effective_space())
     except spaces.SpacesError:
         return False
+
+
+def registry_allowed():
+    """Спільний реєстр задач команди — лише для простору ЛІГА (`legacy: true`) із його схемою git (`vcs_outbound`). Звичайні простори,
+    немігрована ЛІГА, шар вимкнено й незафіксований простір у спільний реєстр не пишуть НІКОЛИ."""
+    try:
+        sp = spaces.effective_space()
+    except spaces.SpacesError:
+        return False
+    return bool(sp) and sp.get('legacy') is True and deai_modules.vcs_outbound(sp)
 
 
 def git_autocommit(task_dir, msg, push=None):
     """Автосохранение папки задачи в git — скриптом, без участия AI.
     init при первом вызове; push best-effort, если настроен remote (GitLab).
 
-    Простір без інтеграцій (`spaces.integrations_on()`) коміт робить, а `git push` — НІ: його
+    Простір без схеми ЛІГИ (`vcs_outbound`) коміт робить, а `git push` — НІ: його
     папка може мати `origin` (клон чужого репо, рука дизайнера), але зовнішніх викликів із такого
     простору не буває. `push` — явне рішення викликача (`True`/`False`); `None` — за простором.
 
     ⚠️ Питаємо простір ЛІНИВО й лише коли `origin` є: автокоміт без `origin` (кожна нова задача,
     кожна правка сторінки) не читає реєстр просторів. Реєстр, що не читається, — «не пушимо»
-    (`_outbound_ok`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш."""
+    (`_vcs_outbound_here`): коміт уже вийшов, і 503 після нього був би гіршим за пропущений пуш."""
     try:
         if not os.path.isdir(os.path.join(task_dir, '.git')):
             subprocess.run(['git', 'init', '-q'], cwd=task_dir, check=True, timeout=20)
@@ -232,7 +240,7 @@ def git_autocommit(task_dir, msg, push=None):
                              capture_output=True, text=True, timeout=10)
         if rem.returncode == 0 and rem.stdout.strip():
             if push is None:
-                push = _outbound_ok()
+                push = _vcs_outbound_here()
             if push:
                 p = subprocess.run(['git', 'push', '-q'], cwd=task_dir,
                                    capture_output=True, text=True, timeout=60)
@@ -660,7 +668,7 @@ def _vcs_ssh(*own):
     """`{ssh_key, host_ip}` цілі — лише у просторі з інтеграціями (ЛІГА). Правило ОДНЕ для кожного шляху цілі й окремо для
     кожного з двох полів: перше непорожнє серед `own` (словники самої задачі: `vcs{}`, далі `gitlab{}`) > налаштування модуля
     (поле тоді НЕ кладемо в ціль — модуль бере своє). Кореня `tasks.json` більше нема (4d-4b): його ключ і IP — налаштування запису `git-sync`."""
-    if not spaces.integrations_on():
+    if not _vcs_outbound_here():
         return {}
     out = {}
     for name in ('ssh_key', 'host_ip'):
@@ -691,7 +699,7 @@ def vcs_target(tid, task, settings):
                 'path': tpath(v['path'] if _vcs_str(v.get('path')) else settings.get('path') or 'mockup/{task}'),
                 'branch': (v['branch'] if _vcs_str(v.get('branch')) else settings.get('branch') or 'main').strip(),
                 **_vcs_ssh(v, task.get('gitlab'))}
-    if task.get('gitlab') and spaces.integrations_on():
+    if task.get('gitlab') and _vcs_outbound_here():
         gl = gitlab_cfg(task)
         if gl is None:
             return None
@@ -2559,10 +2567,10 @@ def _registry_push(tid):
     видалив о 16:05, о 16:11 воно було знову. `DC_NO_OVERVIEW` цей шлях не покривав:
     він глушить лише синк Supabase (`_overview_sync`), а тут окремий, git-овий.
 
-    Простір без інтеграцій (`spaces.integrations_on()`) у спільний реєстр команди не пише НІКОЛИ:
+    Простір без схеми ЛІГИ (`registry_allowed`) у спільний реєстр команди не пише НІКОЛИ:
     його задачі — особисті, і «зареєструвати» їх колегам означало б вивести їх з простору.
     """
-    if not _outbound_ok():
+    if not registry_allowed():
         return False
     if os.environ.get('DC_TASKS_FILE') or os.environ.get('DC_NO_OVERVIEW'):
         return False
@@ -2750,6 +2758,13 @@ def comment_channel(task, tid, internal=False):
     несе `version` у CommentLayer.init (тег + перенос відкритих по fp). Канал
     береться з tasks.json `comment_project`; internal → підканал робочих пінів."""
     return deai_modules.legacy_comment_channel(task, tid, internal)
+
+
+def _task_comment_channel(sp, task, tid):
+    """`comment_channel` для `/api/task` (Д5): канал є, коли простір має постачальника ролі `comments` (модуль) — не за прапорцем."""
+    if isinstance(deai_modules.comments_prov_cached(sp), deai_modules.Module):
+        return _comment_channel_in(sp, task, tid)
+    return None
 
 
 def _comment_channel_in(sp, task, tid, internal=False):
@@ -5940,8 +5955,7 @@ class Handler(SimpleHTTPRequestHandler):
                    # лише з інтеграціями: без них командних коментарів нема, і скіл
                    # `comments` не мусить вгадувати це зі старого файла.
                    'space': space_view(sp),
-                   'comment_channel': (_comment_channel_in(sp, task, tid)
-                                       if spaces.integrations_on() else None),
+                   'comment_channel': _task_comment_channel(sp, task, tid),
                    'iterations': task_api_iterations(meta),
                    # Ключ ЦІЄЇ машини: браузер не знає git-конфіга, а
                    # «своя/чужа» ітерація рахується саме по ньому.

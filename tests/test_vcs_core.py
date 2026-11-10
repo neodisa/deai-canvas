@@ -959,7 +959,7 @@ class Plain(Core):
         )
         for what, settings, fields, carried, effective in rows:
             with self.subTest(what):
-                dm.write_module_state(sp, 'git-sync', settings={'ssh_key': None, 'host_ip': None, **settings})
+                dm.write_module_state(sp, 'git-sync', settings={'ssh_key': None, 'host_ip': None, 'compat': 'design-canvas', **settings})
                 v = serve.vcs_task('t1', {**self.task, **fields})
                 self.assertEqual({k: (v[1]['settings'].get(k) or None) for k in settings},
                                  {k: x for k, x in settings.items()}, 'передумова: налаштування модуля записались')
@@ -1053,14 +1053,17 @@ class Plain(Core):
         self.assertEqual(ctx['space']['id'], 'liga')
         self.assertFalse(os.path.exists(os.path.join(self.deai, 'cache')), 'кеш Deai створено для ЛІГИ')
 
-    def test_an_explicit_git_sync_in_a_liga_space_wins_over_legacy_and_uses_the_gitlab_target(self):
+    def test_an_explicit_git_sync_without_the_liga_scheme_ignores_the_gitlab_target(self):
+        """4d-4c: `gitlab{}` задачі й її ключ діють лише за схемою ЛІГИ (`vcs_outbound`); прапорець простору (`integrations=True`) без
+        `compat` більше нічого не відкриває — ціль із налаштувань модуля, без ключа задачі."""
         sp = self.make_space('Liga', integrations=True)
         m, ctx, legacy = serve.vcs_provider()
         self.assertFalse(legacy)
         self.assertEqual(ctx['cache_dir'], os.path.join(self.deai, 'cache', sp['id'], 'git-sync'))
         task = {**self.task, 'gitlab': {'repo': 'git@h:o/r.git', 'path': 'mockup/t1', 'ssh_key': '/k'}}
         t = serve.vcs_task('t1', task)[3]
-        self.assertEqual((t['repo'], t['ssh_key']), ('git@h:o/r.git', '/k'))
+        self.assertEqual(t['repo'], self.origin)
+        self.assertNotIn('ssh_key', t)
 
     # ---------------------------------------------------------------- повний цикл
     def test_the_full_cycle(self):

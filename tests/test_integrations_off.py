@@ -609,7 +609,10 @@ class Points(unittest.TestCase):
                 self.assertIs(serve._registry_push('x'), False)
             fake.push_tasks.assert_not_called()
             with spaces.request_space('on'):
-                serve._registry_push('x')
+                self.assertIs(serve._registry_push('x'), False)      # 4d-4c: реєстр лише для `legacy: true` (`registry_allowed`)
+                fake.push_tasks.assert_not_called()
+                with mock.patch.object(serve, 'registry_allowed', return_value=True):
+                    serve._registry_push('x')
             fake.push_tasks.assert_called_once_with(['x'])
 
     def test_overview_sync(self):
@@ -664,7 +667,7 @@ class Points(unittest.TestCase):
         os.makedirs(bare)
         _write(os.path.join(bare, 'a.txt'), 'x')
         with spaces.request_space('on'), \
-                mock.patch.object(spaces, 'integrations_on', side_effect=AssertionError('запитано')):
+                mock.patch.object(serve.deai_modules, 'vcs_outbound', side_effect=AssertionError('запитано')):
             r = serve.git_autocommit(bare, 'm')
         self.assertIsNotNone(r['sha'])
 
@@ -673,7 +676,7 @@ class Points(unittest.TestCase):
         500 після вдалого коміту — гірше за пропущений пуш."""
         repo = _repo_with_remote(os.path.join(self.tmp, 'broken-registry'))
         with spaces.request_space('on'), mock.patch.object(
-                spaces, 'integrations_on', side_effect=spaces.SpacesError('spaces-unreadable', 'p')):
+                spaces, 'effective_space', side_effect=spaces.SpacesError('spaces-unreadable', 'p')):
             r = serve.git_autocommit(repo, 'm')
         self.assertIsNotNone(r['sha'])
         self.assertIs(r['pushed'], False)

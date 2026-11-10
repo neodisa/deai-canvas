@@ -526,7 +526,7 @@ class ChannelCallSites(_ChanStand):
             self.assertEqual(serve._comment_channel_in(space, cfg['tasks']['a-1'], 'a-1'), 'liga-shared')
             self.assertEqual(serve._comment_channel_in(space, cfg['tasks']['a-2'], 'a-2', internal=True), 'dc/a-2/internal')
         out = self.http(rig)
-        self.assertEqual(out['task'], LAYER_CHANNELS)
+        self.assertEqual(out['task'], {'a-1': None, 'a-2': None})      # 4d-4c: `/api/task` без постачальника `comments` каналу не має
         self.assertEqual(out['mute_get'], LAYER_CHANNELS)
         rig, space, cfg = self.stand(compat=None)
         with self.pinned(rig):
@@ -971,6 +971,8 @@ class VcsLegacyTexts(_VcsStand):
                 self.assertIs(v[2], want_legacy)
                 task = cfg['tasks']['a-1']
                 gl = serve.vcs_target('a-1', task, v[1].get('settings') or {})
+                if gl is None:        # 4d-4c: без схеми ЛІГИ `gitlab{}` задачі ціллю не стає — тексти перевіряємо на тій самій цілі
+                    gl = serve.gitlab_cfg(task)
                 seen, rec = [], mb.Rec({'push': mb._push_answer([]), 'status': {'behind': 0, 'behind_path': 0, 'unpushed': 0,
                                                                                   'on_remote': True, 'web': None, 'label': 'Example'}})
                 with self.mock.patch.object(dm, 'call', rec):

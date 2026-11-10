@@ -2748,6 +2748,10 @@ class RegistryPushGuard(unittest.TestCase):
     def setUp(self):
         self._saved = {k: os.environ.get(k)
                        for k in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW')}
+        # 4d-4c: без простору ЛІГИ `registry_allowed()` закрито ще ДО перевірки конфігу; тут перевіряємо саме гвард конфігу — ворота відкриті.
+        p = mock.patch.object(serve, 'registry_allowed', return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         for k, v in self._saved.items():
