@@ -63,6 +63,19 @@ DASH_IMPLICIT = {
 #: Те саме для простору, ЗАФІКСОВАНОГО в запиті, на немігрованій ЛІЗІ: роль `dashboard` вимкнена → синку нема.
 DASH_IN_SPACE = {k.replace('/implicit_space/', '/in_space/'): v for k, v in DASH_IMPLICIT.items()}
 
+#: 4d-4c, Д8: `_overview_launch(key, target)` — без прапорця `legacy` (журнал синку один для всіх просторів): аргументи шпигуна були `[ключ, legacy, ціль]`,
+#: стали `[ключ, ціль]`. Лише на мігрованій ЛІЗІ (там синк стартує): ціль `['--space', 'legacy']` зсунулась з `args[2]` на `args[1]`.
+DASH_LAUNCH_NO_LEGACY = {
+    '/dashboard_sync/non_isolated/in_space/args[1]': ABSENT,
+    '/dashboard_sync/non_isolated/in_space/args[1][0]': '--space',
+    '/dashboard_sync/non_isolated/in_space/args[1][1]': 'legacy',
+    '/dashboard_sync/non_isolated/in_space/args[1][]': 2,
+    '/dashboard_sync/non_isolated/in_space/args[2][0]': ABSENT,
+    '/dashboard_sync/non_isolated/in_space/args[2][1]': ABSENT,
+    '/dashboard_sync/non_isolated/in_space/args[2][]': ABSENT,
+    '/dashboard_sync/non_isolated/in_space/args[]': 2,
+}
+
 EXPECT_REGULAR = dict({
     '/api/modules/list/git-sync/fields/host_ip': '203.0.113.7',
     '/api/modules/list/git-sync/fields/ssh_key': '~/.ssh/example',
@@ -87,7 +100,7 @@ EXPECT_REGULAR = dict({
     '/vcs_target/task_gitlab/target/ssh_key': ABSENT,
     '/vcs_target/task_vcs/target/host_ip': ABSENT,
     '/vcs_target/task_vcs/target/ssh_key': ABSENT,
-}, **DASH_IMPLICIT)
+}, **dict(DASH_IMPLICIT, **DASH_LAUNCH_NO_LEGACY))
 
 #: `differs`: ключ SSH запису (`/other/key`) НЕ перезаписується коренем (рішення контролера 07.11.2026), а секрет `password` (`inert-old`) — ПЕРЕЗАПИСУЄТЬСЯ
 #: коренем (рішення власника 09.11.2026): режим модуля бере секрет запису, що тепер = корінь → пароль превʼю `pw-alpha` НЕ змінюється (листка нема).
@@ -111,7 +124,7 @@ EXPECT_DIFFERS = dict({
     '/vcs_target/provider/settings/host_ip': '203.0.113.7',
     '/vcs_target/task_gitlab/target/host_ip': ABSENT,
     '/vcs_target/task_vcs/target/host_ip': ABSENT,
-}, **DASH_IMPLICIT)
+}, **dict(DASH_IMPLICIT, **DASH_LAUNCH_NO_LEGACY))
 
 EXPECT_PARTIAL = dict({
     '/api/modules/list/git-sync/fields/host_ip': '203.0.113.7',
@@ -154,7 +167,7 @@ EXPECT_PARTIAL = dict({
     '/vcs_target/task_gitlab/target/ssh_key': ABSENT,
     '/vcs_target/task_vcs/target/host_ip': ABSENT,
     '/vcs_target/task_vcs/target/ssh_key': ABSENT,
-}, **DASH_IMPLICIT)
+}, **dict(DASH_IMPLICIT, **DASH_LAUNCH_NO_LEGACY))
 
 EXPECT_UNMIGRATED = dict({
     '/api/task/comment_channel': None,          # 4d-4c (Поправка 10): канал є лише за постачальником `comments`; немігрована ЛІГА без запису — `None`

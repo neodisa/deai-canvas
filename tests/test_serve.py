@@ -2203,18 +2203,17 @@ class OverviewSyncGuard(unittest.TestCase):
         self._saved = os.environ.get('DC_NO_OVERVIEW')
         # ⛔ 4c-1 (Task 6): ізоляцію цього класу тепер задає САМ тест, а не оточення, що лишив сусід: гейт `_overview_sync`
         # для ЛІГИ дивиться й на `DC_TASKS_FILE` (його ставить `setUpClass` великих класів цього файла), а конфіг ЛІГИ
-        # читався з ЖИВОГО `tasks.json` установки. Тепер: `DC_TASKS_FILE` знято, конфіг — вигадана пара, лог — шов
-        # `OVERVIEW_LOG` у тимчасовій теці (справжній `~/.claude/pipeline-feedback/` не пишемо), `Popen` — заглушка.
+        # читався з ЖИВОГО `tasks.json` установки. Тепер: `DC_TASKS_FILE` знято, конфіг — вигадана пара, лог —
+        # `<DEAI_HOME>/logs/dashboard-sync.log` тимчасового дому (4d-4c: `OVERVIEW_LOG` геть), `Popen` — заглушка.
         # 4d-4b: «вигадана пара» → явний запис `supabase-dashboard` простору ЛІГА (`liga_fixture`, тимчасові `HOME`/`DEAI_HOME`), простір запиту
         # зафіксовано на ньому — без фіксації простір неявний і ролей у ньому нема.
         tmp = tempfile.mkdtemp(prefix='ovsync-guard-')
         self.addCleanup(shutil.rmtree, tmp, True)
-        self.log = os.path.join(tmp, 'overview-sync.log')
-        for patcher in (mock.patch.dict(os.environ, {}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+        for patcher in (mock.patch.dict(os.environ, {}), mock.patch.dict(serve._SYNC_RUNS, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
         liga_fixture.LigaFixture(self).env().build(roles=('dashboard',)).fix_space()
+        self.log = serve._overview_log_path()               # після `env()`: тимчасовий `DEAI_HOME`
         os.environ.pop('DC_TASKS_FILE', None)
 
     def tearDown(self):
@@ -2253,19 +2252,16 @@ class OverviewSyncLog(unittest.TestCase):
     """`_overview_sync` відкриває лог синку ДО `Popen` і мусить його закрити сам: дитина вже має
     власну копію дескриптора, а батьківський файловий обʼєкт лишався відкритим — на збої `Popen`
     назавжди (ResourceWarning), на успіху до збирача сміття. ⛔ Лог — у ТИМЧАСОВІЙ теці: справжній
-    `~/.claude/pipeline-feedback/overview-sync.log` тут не відкривається (шов `serve.OVERVIEW_LOG`, 4c-1: раніше підмінявся
-    `HOME`, але шлях був зашитий у метод — тепер підміна явна й не залежить від домівки)."""
+    `~/.claude/pipeline-feedback/overview-sync.log` тут не відкривається (4d-4c: журнал один для всіх просторів —
+    `<DEAI_HOME>/logs/dashboard-sync.log`, а `DEAI_HOME` тимчасовий)."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='ovsync-')
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        os.makedirs(os.path.join(self.tmp, '.claude', 'pipeline-feedback'))
-        self.log = os.path.join(self.tmp, '.claude', 'pipeline-feedback', 'overview-sync.log')
         # 4c-1 (Task 6): гейти `_overview_sync` — `DC_TASKS_FILE` (його лишають сусідні класи), конфіг ЛІГИ (раніше — живий
         # `tasks.json`) і стан «один синк на простір» (спільний на процес) — задає сам тест.
         # 4d-4b: конфіг ЛІГИ — явний запис `supabase-dashboard` у тимчасовому домі (`liga_fixture`), простір запиту зафіксовано на ньому.
-        for patcher in (mock.patch.dict(os.environ, {'HOME': self.tmp}), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+        for patcher in (mock.patch.dict(os.environ, {'HOME': self.tmp}), mock.patch.dict(serve._SYNC_RUNS, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
         liga_fixture.LigaFixture(self).env().build(roles=('dashboard',)).fix_space()
@@ -2320,7 +2316,10 @@ class OverviewSyncLog(unittest.TestCase):
     def test_a_log_that_cannot_be_opened_is_swallowed_and_nothing_starts(self):
         """Тека логу відсутня → `open` кидає ще до `Popen`: best-effort метод не має кидати далі
         (закриття в `finally` не сміє впасти на ще не створеному обʼєкті)."""
-        shutil.rmtree(os.path.join(self.tmp, '.claude'))
+        logs = os.path.dirname(serve._overview_log_path())           # 4d-4c: тека `<DEAI_HOME>/logs`; замінюємо її файлом — `makedirs` кидає
+        shutil.rmtree(logs)
+        with open(logs, 'w', encoding='utf-8'):
+            pass
         self.assertEqual(self.sync(), [])
 
 

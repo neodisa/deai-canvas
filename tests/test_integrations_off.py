@@ -617,14 +617,12 @@ class Points(unittest.TestCase):
 
     def test_overview_sync(self):
         # 4c-1 (Task 6): гейт `_overview_sync` для ЛІГИ дивиться й на `DC_TASKS_FILE` (ізольований прогін не пише у спільний
-        # Supabase), тож «бойовий» шлях — без нього (`enter_unisolated`, як у сусідніх точках виходу); лог — шов `OVERVIEW_LOG`
-        # у тимчасовій домівці, стан «один синк на простір» — чистий.
+        # Supabase), тож «бойовий» шлях — без нього (`enter_unisolated`, як у сусідніх точках виходу); лог (4d-4c) — у тимчасовому
+        # `DEAI_HOME`, стан «один синк на простір» — чистий.
         self.enter_unisolated()
-        for patcher in (mock.patch.object(serve, 'OVERVIEW_LOG',
-                                          os.path.join(self.home, '.claude', 'pipeline-feedback', 'overview-sync.log')),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        patcher = mock.patch.dict(serve._SYNC_RUNS, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         with spaces.request_space('off'):
             serve.Handler._overview_sync(object())
         self.assertEqual(self.trip.hits, [])

@@ -519,17 +519,18 @@ class OverviewSyncTest(_Env):
         super().setUp()
         home = os.path.join(self.tmp.name, 'home')
         os.makedirs(os.path.join(home, '.claude', 'pipeline-feedback'))
-        self.log = os.path.join(home, '.claude', 'pipeline-feedback', 'overview-sync.log')
+        self.old_log = os.path.join(home, '.claude', 'pipeline-feedback', 'overview-sync.log')
         env = mock.patch.dict(os.environ, {'HOME': home})
         env.start()
         self.addCleanup(env.stop)
         out = mock.patch.object(serve, '_vcs_outbound_here', return_value=True)
         out.start()
         self.addCleanup(out.stop)
-        # шов лога (справжній `~/.claude/pipeline-feedback/` не пишемо) і чистий стан «один синк на простір»
-        for patcher in (mock.patch.object(serve, 'OVERVIEW_LOG', self.log), mock.patch.dict(serve._SYNC_RUNS, clear=True)):
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        # лог синку (4d-4c) — `<DEAI_HOME>/logs/dashboard-sync.log` тимчасового `DEAI_HOME`; і чистий стан «один синк на простір»
+        self.log = serve._overview_log_path()
+        patcher = mock.patch.dict(serve._SYNC_RUNS, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_without_a_dashboard_record_no_popen_and_no_log(self):
         """Було: «без конфігу установки» (порожній корінь). 4d-4b: рішення — запис ролі `dashboard` простору; у просторі ЛІГА без нього
@@ -552,6 +553,8 @@ class OverviewSyncTest(_Env):
         popen.assert_called_once()
         self.assertEqual(popen.call_args.args[0], [sys.executable, script, 'sync', '--space', 'legacy'])
         self.assertNotIn('env', popen.call_args.kwargs, 'конфіг дитині не передається: вона читає install_config')
+        self.assertTrue(os.path.exists(self.log), 'лог — `<DEAI_HOME>/logs/dashboard-sync.log`')
+        self.assertFalse(os.path.exists(self.old_log), 'старий лог ЛІГИ в pipeline-feedback сервер не пише')
 
     def test_the_isolated_run_does_not_start_a_child_for_the_shared_league_record(self):
         """Закон ізоляції: `shared_state`-запис ЛІГИ + ізольований прогін (`DC_TASKS_FILE`) — синку нема (пишемо у спільний Supabase)."""

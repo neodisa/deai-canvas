@@ -547,15 +547,15 @@ class SharedStateIsolation(unittest.TestCase):
             with mock.patch.dict(os.environ, {'DC_TASKS_FILE': os.path.join(self.tmp, 't.json')}):
                 self._sync(mod).assert_called_once()                                  # як сьогодні: модуль без прапорця синкає
 
-    def test_sync_migrated_liga_stays_liga_for_log_and_launch(self):
-        """Фінальне ревʼю 4d-3a: дашборд ЛІГИ після міграції — `Module` + `shared_state`, але простір лишається ЛІГОЮ (`legacy: True` у
-        записі): лог дитини — `OVERVIEW_LOG` (не `<DEAI_HOME>/logs/dashboard-sync.log`), прапорець `legacy` у `_overview_launch` істинний.
-        Звичайний простір із тим самим модулем — як і було: свій лог, `legacy` хибний."""
+    def test_sync_migrated_liga_and_plain_space_share_one_log_and_launch_signature(self):
+        """Фінальне ревʼю 4d-3a → 4d-4c: дашборд ЛІГИ після міграції — `Module` + `shared_state`; лог дитини однаковий для ЛІГИ й звичайного простору —
+        `<DEAI_HOME>/logs/dashboard-sync.log` (`OVERVIEW_LOG` геть), `_overview_launch(key, target)` без прапорця `legacy`."""
         import serve
         from unittest import mock
         mod = self._mod('dashboard')
         self._write(mod.id, shared_state=True)
-        liga_log = os.path.join(self.tmp, 'liga-overview.log')
+        home_log = os.path.join(self.tmp, 'deai', 'logs', 'dashboard-sync.log')
+        old_log = os.path.join(self.tmp, 'home', '.claude', 'pipeline-feedback', 'overview-sync.log')
         for legacy_flag in (True, False):
             space = dict(self.space, legacy=legacy_flag)
             with self.subTest(legacy=legacy_flag):
@@ -566,16 +566,12 @@ class SharedStateIsolation(unittest.TestCase):
                 with mock.patch.object(self.dm, 'provider', return_value=mod), \
                         mock.patch.object(serve.spaces, 'active_space', return_value=space), \
                         mock.patch.object(serve, '_overview_target', return_value=('liga-x', ['--space', 'liga-x'])), \
-                        mock.patch.object(serve, 'OVERVIEW_LOG', liga_log), \
                         mock.patch.object(serve.subprocess, 'Popen', return_value=popen), \
                         mock.patch.object(serve, '_overview_launch', wraps=serve._overview_launch) as launch:
                     serve.Handler._overview_sync(None)
-                self.assertEqual(launch.call_args[0][1], legacy_flag)
-                home_log = os.path.join(self.tmp, 'deai', 'logs', 'dashboard-sync.log')
-                self.assertEqual((os.path.exists(liga_log), os.path.exists(home_log)), (legacy_flag, not legacy_flag))
-                for path in (liga_log, home_log):
-                    if os.path.exists(path):
-                        os.remove(path)
+                self.assertEqual(launch.call_args[0], ('liga-x', ['--space', 'liga-x']))
+                self.assertEqual((os.path.exists(home_log), os.path.exists(old_log)), (True, False))
+                os.remove(home_log)
         serve._SYNC_RUNS.clear()
 
     def test_connections_write_keeps_shared_state(self):

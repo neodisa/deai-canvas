@@ -1301,8 +1301,8 @@ def wait_until(test, cond, what, seconds=5.0):
 
 class _SyncEnv(tm.Env):
     """Світ запуску синку: тимчасові `HOME`/`DEAI_HOME`, простір ЛІГА (інтеграції, явний запис `supabase-dashboard`), звичайний простір,
-    що має модуль дашборда, і звичайний без нього. `Popen` — заглушка; лог ЛІГИ — шов `serve.OVERVIEW_LOG` у тимчасовій теці
-    (ТА `HOME` тимчасова: навіть якщо шов зламати, справжній `~/.claude/pipeline-feedback/` не торкнеться)."""
+    що має модуль дашборда, і звичайний без нього. `Popen` — заглушка; лог синку (4d-4c) — один для всіх просторів,
+    `<DEAI_HOME>/logs/dashboard-sync.log` у тимчасовій теці (`HOME` теж тимчасова: справжній `~/.claude/pipeline-feedback/` не торкнеться)."""
 
     def setUp(self):
         # `DC_TASKS_FILE`/`SUPABASE_*` повертає сам `tm.Env.tearDown`; а `DC_NO_OVERVIEW`/`DC_TEAM_FAKE` (їх ставлять сусідні набори)
@@ -1315,13 +1315,10 @@ class _SyncEnv(tm.Env):
             os.environ.pop(name, None)
         self.pf = os.path.join(self.home, '.claude', 'pipeline-feedback')
         os.makedirs(self.pf)
-        # шов ≠ шлях від `HOME` (`~/.claude/pipeline-feedback/…`): інакше зашитий літерал дав би ТОЙ САМИЙ файл і підміна шва лишилась би недоведеною
-        os.makedirs(os.path.join(self.tmp, 'seam'))
-        self.log = os.path.join(self.tmp, 'seam', 'overview-sync.log')
+        self.log = os.path.join(self.deai, 'logs', 'dashboard-sync.log')
         self.popen = _Popen()
         self.addCleanup(self.stop_runner)
-        for patcher in (mock.patch.object(serve.subprocess, 'Popen', self.popen), mock.patch.object(serve, 'OVERVIEW_LOG', self.log),
-                        mock.patch.dict(serve._SYNC_RUNS, clear=True)):
+        for patcher in (mock.patch.object(serve.subprocess, 'Popen', self.popen), mock.patch.dict(serve._SYNC_RUNS, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.mk('dash', roles=('dashboard',), server=GATE_SERVER)
@@ -1433,7 +1430,7 @@ class GateParity(_SyncEnv):
 
 class SyncRunner(_SyncEnv):
     """Один синк на простір: поки дитина жива, повторний тригер лише ставить позначку «ще раз», і після її завершення стартує
-    РІВНО ОДИН повтор (а не по одному на тригер); тригер іншого простору — паралельно. Логи: ЛІГА — шов `OVERVIEW_LOG`, інші —
+    РІВНО ОДИН повтор (а не по одному на тригер); тригер іншого простору — паралельно. Лог — один для всіх просторів:
     `<DEAI_HOME>/logs/dashboard-sync.log` (тека 0o700)."""
 
     def test_a_second_trigger_while_the_child_lives_does_not_start_another(self):
@@ -1452,6 +1449,7 @@ class SyncRunner(_SyncEnv):
         wait_until(self, lambda: len(self.popen.started) == 2, 'повтор після завершення')
         time.sleep(0.1)
         self.assertEqual(len(self.popen.started), 2, 'рівно ОДИН повтор, а не п\'ять')
+        self.assertEqual(self.popen.started[1]['argv'], self.popen.started[0]['argv'], 'повтор веде ту саму ціль, що й перший синк')
         self.assertFalse(serve._SYNC_RUNS[self.liga['id']]['pending'], 'позначка зірвана: повтор уже йде')
         # повтор завершився, нових запитів не було → тиша й чистий стан
         self.popen.children[1].finish()
@@ -1479,11 +1477,14 @@ class SyncRunner(_SyncEnv):
         self.trigger(self.liga)                                        # наступний тригер стартує як звичайно
         self.assertEqual(len(self.popen.started), 1)
 
-    def test_the_league_log_is_the_seam(self):
+    def test_the_league_logs_to_the_same_file_and_not_to_pipeline_feedback(self):
+        """4d-4c, Д8: старого логу ЛІГИ (`~/.claude/pipeline-feedback/overview-sync.log`) сервер не пише — ЛІГА лишає слід там само, де всі."""
         self.trigger(self.liga)
         self.assertEqual(self.popen.started[0]['log'], self.log)
-        self.assertNotEqual(os.path.dirname(self.log), self.pf)        # шов ≠ шлях від HOME: літерал у коді був би видний
         self.assertTrue(self.popen.started[0]['log'].startswith(self.tmp + os.sep), 'лог — під тимчасовою текою тесту')
+        self.assertEqual(os.listdir(self.pf), [], 'у `<HOME>/.claude/pipeline-feedback` нічого не з’явилось')
+        self.trigger(self.modp)
+        self.assertEqual({st['log'] for st in self.popen.started}, {self.log}, 'усі простори — один лог')
 
     def test_another_space_logs_under_deai_home_in_a_private_dir(self):
         old = os.umask(0)                                              # щедра маска: `makedirs(mode=)` без `chmod` дала б 0o777
@@ -1492,7 +1493,6 @@ class SyncRunner(_SyncEnv):
         d = os.path.join(self.deai, 'logs')
         self.assertEqual(self.popen.started[0]['log'], os.path.join(d, 'dashboard-sync.log'))
         self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
-        self.assertFalse(os.path.exists(self.log), 'лог ЛІГИ чужий простір не пише')
 
     def test_an_existing_loose_log_dir_is_tightened(self):
         d = os.path.join(self.deai, 'logs')

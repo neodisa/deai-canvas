@@ -28,9 +28,8 @@ class NoOriginalsRead(unittest.TestCase):
     #: `preview_password` дозволено лише: імʼя функції; `.get`/`.pop('preview_password')`/`['preview_password']` на ЗАДАЧІ (`task`/`t`, також
     #: `(task or {})`); ключ літерала-словника (форма ВІДПОВІДІ API). Будь-що інше — читання кореня.
     TASK_VARS = {'task', 't'}
-    #: Єдині свідомі винятки (файл, значення), кожен — з причиною: `LEGACY_MARKERS` (охоронець маркера, живий до 4d-4c) і журнал синку
-    #: огляду `OVERVIEW_LOG` (шлях ЖУРНАЛУ, а не облікових).
-    ALLOWED = {('app/spaces.py', 'str:gitlab_host_ip'), ('app/spaces.py', 'str:gitlab_ssh_key'), ('app/serve.py', 'str:pipeline-feedback')}
+    #: Свідомих винятків нема (4d-4c): `LEGACY_MARKERS` переїхав у `liga_migrate`, `OVERVIEW_LOG` видалено.
+    ALLOWED = set()
 
     @staticmethod
     def _files():
