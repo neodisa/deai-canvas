@@ -3,6 +3,87 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.22.0] — 11.11.2026
+
+Stage 4d-4c: no runtime decision depends on the space flag `integrations` any more, and the API value `'legacy'` is gone. The
+question «may this space push outward?» is answered by a record: the space has an **enabled `vcs` record with the LIGA scheme**
+(`compat: design-canvas`), the same fact the browser already read as `isLegacyVcs`. `static-publish` becomes an explicit record
+instead of an implicit default, the dashboard sync log becomes one, and the JS fallback branches, `_liga_flow` and `_liga_like`
+leave. For a person nothing changes in the usual case (a migrated LIGA or a plain space); the differences are listed below.
+Design: `docs/superpowers/specs/2026-11-10-legacy-surface-gone-design.md`; plan: `docs/superpowers/plans/2026-11-10-legacy-surface-gone.md`;
+behaviour of 0.21.0 pinned by `tests/fixtures/outbound/before-4d4c.json`.
+
+### Added
+
+- **`deai_modules.vcs_outbound(space)`**: true only for an enabled `vcs` record with the LIGA scheme; any error (module, registry,
+  layer off, space not fixed) means false (fail-closed). It gates autopush, the push of the team registry, the shared ssh key, the
+  `gitlab` target of `task-new` and the comment channel.
+- **`spaces.ensure_static_publish` / `spaces.materialize_static_publish`** and **`spaces.RoleOff`**; `liga_migrate.liga_space`
+  (the predicate «is this space a LIGA», by the key or by the root markers).
+- **Headers `Deprecation: true` and `Link: </api/vcs-…>; rel="successor-version"`** on `/api/gitlab-status|sync|pull`.
+- **Error code `gitlab-needs-vcs-scheme`** (400) of `task-new`.
+- **Guards:** `NoIntegrationsFlag` (AST; per-function exceptions `spaces._validate` and `liga_migrate._liga_integrations`),
+  `NoLegacyApiValue`, `NoIntegrationsInClient`; a leaf-exact parity test against the 0.21 snapshot.
+
+### Changed
+
+- **`task-new` without `space`** goes to the first registry entry with `legacy: true`, otherwise to the current space.
+- **`from` is allowed in any space** (LIGA included); `from` together with `gitlab` is `400 bad-request`. **`gitlab` needs the LIGA
+  scheme**, otherwise `400 gitlab-needs-vcs-scheme`.
+- **`static-publish` is an explicit record** in `space.json`: new spaces get it, existing spaces get it at startup when they have
+  no enabled publisher (this includes a `legacy: true` space that is not a LIGA, an old pre-spaces install: parity with the 0.21
+  implicit publisher). A record disabled by a person is left alone.
+- **The dashboard sync log** moved from `~/.claude/pipeline-feedback/overview-sync.log` to `<DEAI_HOME>/logs/dashboard-sync.log`
+  (directory 0700, file 0600): one log for all spaces, each run starts with a header line `--- <ts> sync <target>`.
+- **`describe` has no `integrations`**; `/api/task` has `comment_channel: null` where the space has no comments provider.
+- The bin hints of `bin/state.py` point to `/api/vcs-*`.
+
+### Removed
+
+- `spaces.integrations_for`, `spaces.integrations_on`, `spaces.require_integrations`, `spaces.IntegrationsOff`, `serve._outbound_ok`,
+  `serve._liga_flow`, `serve._liga_like`, `OVERVIEW_LOG`, `API_IMPLICIT`, `IMPLICIT_MODULE`.
+- The responses 409 `no-integrations-space`, 400 `gitlab-needs-integrations`, 400 `from-needs-plain-space`.
+- The i18n keys `cnNowLegacy`, `cnDisableLegacy`, `wzErrFromPlain`.
+
+### Fixed
+
+- **A LIGA migration without the `integrations` key** decides by the root markers of the legacy `tasks.json` (Amendment 1), so a
+  fresh LIGA migrates instead of being stuck at `skip-integrations-off`. When the key is absent, a read error of the legacy root
+  counts as a LIGA (nothing is materialised; the migration gives `skip-tasks-unreadable`).
+
+### Differences for a person
+
+1. **A plain space:** nothing visible. Publishing works as before, but `space.json` now holds a `static-publish` record. Connections
+   shows it as an ordinary enabled module, not as a default, and it can be disabled like any other module.
+2. **A migrated LIGA:** nothing visible. The sync log moves (see above); the `gitlab-*` aliases answer with `Deprecation`.
+3. **An unmigrated LIGA:** as in 0.21, except for outbound actions. It no longer autopushes, pushes the team registry or uses the
+   shared ssh key until its migration completes. This is fail-closed: an outbound action needs an explicit `vcs` record with the
+   LIGA scheme. Migration normally runs at startup, so this is transient; if it is skipped or aborted, pushing stops until it is fixed.
+4. **A setup where dev-pipeline sends `task-new` with `jira`/`track` and there is no LIGA:** instead of 409 `no-integrations-space`
+   the task goes to the current space (or 400 `unknown-track` when it has no such track).
+5. **Developers and tests:** with the layer off (`DC_TASKS_FILE` without `DEAI_HOME`) there is no autopush (there was one).
+   A test that needs a push builds an explicit space with a `git-sync` record plus `compat`.
+6. **`comment_channel` in `/api/task` is null** where the space has no comments provider: layer off, an unmigrated LIGA, an
+   unreadable `space.json`. The Teams-mute toggle still uses the fallback channel.
+7. **`gitlab` in `task-new` needs the LIGA scheme**, otherwise 400 `gitlab-needs-vcs-scheme`; that includes an unmigrated LIGA and
+   layer-off. A plain `git-sync` space without `compat` no longer clones from `gitlab` alone (client and server agree).
+8. **Tasks home:** an unmigrated LIGA now shows the head buttons «Підключення / Нова задача», plus the empty-space hint when it has
+   no tasks; its Team tab was already hidden in 0.21 once data loaded, and it no longer flashes while loading. A plain space WITH
+   a dashboard module keeps its Team tab and no longer shows those head buttons or the hint.
+9. **`/api/gitlab-status|sync|pull`** return identical bodies and status codes, now with `Deprecation: true` and a `Link` to the
+   successor. Removal comes in 1.0, after the dev-pipeline skill switches over.
+
+### Rolling back 0.22 → 0.21
+
+Safe. The `integrations` key is not deleted from existing registry entries; 0.21 parses an entry without the key (pinned by a
+test), and 0.21 reads a materialised `static-publish` as an ordinary record. The old `overview-sync.log` is left in place (it is
+no longer written).
+
+### Left for 1.0
+
+- Removal of the `/api/gitlab-*` aliases (after the dev-pipeline skill uses `/api/vcs-*`), the `profile` record,
+  `design_work_roots` / `profile_repos`, the `implicit` key of `/api/modules`.
+
 ## [0.21.0] — 09.11.2026
 
 Stage 4d-4b: the originals of the LIGA space are gone from the runtime, and the implicit provider leaves. A **fifth migration step,

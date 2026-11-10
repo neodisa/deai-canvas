@@ -262,7 +262,7 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `POST /api/module-check` `{space?, id}` | run the module's `check` |
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists); for a space's own module `GET /api/module-client/<space>/<id>/<file>`, served from its trusted snapshot |
-| `POST /api/task-new` `{id, title?, space?, from?, vcs?, …}` | create a task. `vcs` — `{repo, path?, branch?}`, the task's own repository (needs a `vcs` module in the space: `400 vcs-needs-role`; the module checks the address, branch and folder: `400 vcs-bad-target`); if `path` of that repository already holds an `index.html`, the first iteration is taken from it, and if it cannot be fetched the task starts with a blank page. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (only in a space without integrations; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. Refusals: `400 from-needs-plain-space\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
+| `POST /api/task-new` `{id, title?, space?, from?, vcs?, …}` | create a task. `vcs` — `{repo, path?, branch?}`, the task's own repository (needs a `vcs` module in the space: `400 vcs-needs-role`; the module checks the address, branch and folder: `400 vcs-bad-target`); if `path` of that repository already holds an `index.html`, the first iteration is taken from it, and if it cannot be fetched the task starts with a blank page. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (any space; not together with `gitlab`; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. `gitlab` (clone a repository into the task) needs a space whose `vcs` record has the LIGA scheme, otherwise `400 gitlab-needs-vcs-scheme`; `from` with `gitlab` is `400 bad-request`. Without `space` the task goes to the first space marked `legacy`, otherwise to the current one. Refusals: `400 gitlab-needs-vcs-scheme\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
@@ -559,7 +559,7 @@ GitLab or Git.
 | `POST /api/autosync` | the quiet step for a Stop hook; `reason` says why nothing was sent (`no-gitlab`, `autosync-off`, `no-iterations`, `foreign-only`, `clean`, `offline`, `error`) |
 
 `GET /api/gitlab-status`, `POST /api/gitlab-sync` and `POST /api/gitlab-pull` are the old names of the first three and stay
-as aliases with the same answers. Codes: `vcs-offline`, `vcs-auth`, `vcs-bad-target`, `vcs-busy`, `vcs-error`. To write a
+as deprecated aliases with the same answers (they carry `Deprecation: true` and a `Link` to the `/api/vcs-*` successor; removal in 1.0). Codes: `vcs-offline`, `vcs-auth`, `vcs-bad-target`, `vcs-busy`, `vcs-error`. To write a
 provider of this role yourself, see [`docs/modules/authoring.md`](docs/modules/authoring.md), *The `vcs` role*.
 
 **Limits.** HTTPS works only when git already has the sign-in saved; the retry through `host_ip` covers only
@@ -718,8 +718,10 @@ migrated; a partial migration is final; the copies of the credentials are in the
          `vercel-publish`) by a fifth migration step (`liga-4d4b`), the implicit provider goes, the core stops reading the originals
          (the root of `tasks.json`, the environment, `pipeline-feedback`; deleting those is not Deai's job: they are shared with the
          separate LIGA tool); a LIGA that was not migrated has all six roles off, named at the start;
-       - **4d-4c** (0.22) — the `integrations` flag, the API value `'legacy'`, the fallback branches of the JS, `_liga_flow` and
-         the `/api/gitlab-*` route aliases.
+       - ✅ **4d-4c** (0.22) — the `integrations` flag, the API value `'legacy'`, the fallback branches of the JS, `_liga_flow`
+         and the `/api/gitlab-*` aliases leave the runtime: an outbound action (autopush, the team registry, the shared ssh key) is
+         decided by the `vcs` record with the LIGA scheme, `static-publish` is an explicit record, the dashboard sync log is one
+         (`<DEAI_HOME>/logs/dashboard-sync.log`); the `/api/gitlab-*` routes stay as deprecated aliases until 1.0.
 5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
 6. **Cross-platform start** — one command on macOS, Windows and Linux.
 

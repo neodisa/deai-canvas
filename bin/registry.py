@@ -449,7 +449,7 @@ def staleness(cfg, check_remote=True):
 
 def _track_of_entry(e):
     """Напрямок запису спільного реєстру (МЕЖА): `track`, коли непорожній рядок, інакше `profile` (колеги на старому
-    інструменті шлють лише `profile`). Одна з трьох меж, де `profile` ще читається (поряд із `task-new` і `_liga_flow`)."""
+    інструменті шлють лише `profile`). Одна з двох меж, де `profile` ще читається (поряд із `task-new`)."""
     if not isinstance(e, dict):
         return None
     for key in ('track', 'profile'):

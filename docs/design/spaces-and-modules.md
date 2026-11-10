@@ -127,11 +127,11 @@ canvas for their workflow without touching the core.
        express through `space.json` yet:
        - ✅ **4d-3a** (0.17.0) — the mechanism, the tracks and the roles `tracker`, `dashboard`, `notify`;
        - ✅ **4d-3b** (0.18.0) — `comments` (a schema of channels) and `vcs` (the flat mirrors of git sync);
-       - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stays for a non-migrated LIGA: it goes in 4d-4c, 0.22);
+       - ✅ **4d-3c** (0.19.0) — `publish` (the API value `'legacy'` stayed for a non-migrated LIGA: it went in 4d-4c, 0.22);
      - **4d-4** — the `integrations` flag and the old aliases (`profile`, `gitlab_*`) go. Three releases:
        - ✅ **4d-4a** (0.20.0) — the tracks of LIGA explicit (the fourth migration step), no adapter in the runtime, `profile` on the boundaries only;
        - ✅ **4d-4b** (0.21.0) — the last copies, the implicit provider, the core stops reading the originals;
-       - **4d-4c** (0.22.0) — the `integrations` flag, the API value `'legacy'`, the fallback JS branches, `_liga_flow`, the `/api/gitlab-*` aliases;
+       - ✅ **4d-4c** (0.22.0) — the `integrations` flag, the API value `'legacy'`, the fallback JS branches and `_liga_flow` are gone; outbound actions follow the `vcs` record with the LIGA scheme; `static-publish` is explicit; the `/api/gitlab-*` aliases are deprecated (`Deprecation`, removal in 1.0);
 5. Agent API + a lightweight Claude Code plugin (task → mockup → iterations → review → publish).
 
 Each stage gets its own spec, plan and tests.
@@ -709,14 +709,19 @@ Status: done. Spec: `docs/superpowers/specs/2026-11-07-liga-originals-gone-desig
 
 ### What stays for later
 
-- **Left for 4d-4c** (stage 4d; 4d-1, 4d-2, 4d-3a, 4d-3b, 4d-3c, 4d-4a and 4d-4b are done; what stays of the literal `'legacy'` —
-  the API value of `capabilities` for a non-migrated LIGA, the build manifest, the id of the implicit space — goes with 4d-4c):
+- **Left for 1.0** (stage 4d is done: 4d-1, 4d-2, 4d-3a/b/c, 4d-4a/b/c; the flag `integrations` and the API value `'legacy'` are gone from the runtime):
   - ✅ **4d-4a** (0.20.0, done): the tracks of LIGA are explicit (`liga-4d4a`), `tracks.of_task` reads `track` only, `profile` is
     read on three boundaries (`task-new`, the registry pull, `_liga_flow`), `legacy_*`/`profile_repos` live only inside
     `liga_migrate`. See `CHANGELOG.md`, `[0.20.0]`.
   - ✅ **4d-4b** (0.21.0, done): the last copies, the implicit provider gone, the core reads no original (see above).
-  - **4d-4c** (0.22.0, next): the `integrations` flag (the outgoing gate, `static-publish` by default, `task-new`), the API value `'legacy'`,
-    the fallback JS branches, `_liga_flow`, the `/api/gitlab-*` route aliases, `serve._liga_like`.
+  - ✅ **4d-4c** (0.22.0, done): no runtime decision depends on `integrations`. An outbound action (autopush, the team registry, the
+    shared ssh key, the `gitlab` target of `task-new`) is decided by the enabled `vcs` record with the LIGA scheme
+    (`deai_modules.vcs_outbound`); `static-publish` is an explicit record (new spaces get it, existing ones at startup);
+    `_liga_flow`, `_liga_like`, the 409 `no-integrations-space` and the JS fallback branches are gone; the dashboard sync log is
+    one (`<DEAI_HOME>/logs/dashboard-sync.log`); the `/api/gitlab-*` routes answer as before with `Deprecation` and `Link`.
+    See `CHANGELOG.md`, `[0.22.0]`.
+  - **Left for 1.0:** removal of the `/api/gitlab-*` aliases (after the dev-pipeline skill switches to `/api/vcs-*`), the `profile`
+    record, `design_work_roots` / `profile_repos`, the `implicit` key of `/api/modules`.
   Not planned in 4d-1: a UI to edit tracks, a track choice in the «New task» dialog.
 
 - No role is reserved any more (every role of the map is called by the core since 4c-3).
