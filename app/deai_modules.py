@@ -2162,6 +2162,22 @@ COMPAT_ROLES = (('comments', COMMENTS_MODULE), ('vcs', VCS_MODULE), ('publish', 
 COMPAT_ALLOWED = {'comments': COMPAT_COMMENT_LAYER, 'vcs': COMPAT_DESIGN_CANVAS, 'publish': COMPAT_DESIGN_CANVAS}
 
 
+def vcs_outbound(space):
+    """Чи може простір ходити назовні гітом за схемою ЛІГИ (4d-4c): простір має ВВІМКНЕНИЙ вбудований запис `git-sync` із
+    `compat == "design-canvas"` — той самий факт, який клієнт читає як `isLegacyVcs`. Замінює прапорець `integrations`: автопуш,
+    пуш у реєстр команди, `ssh_key`/`host_ip` цілі й `gitlab`-маппінг нової задачі питають лише це.
+    ТОТАЛЬНА: нема простору, неявний простір, шар вимкнено, `ModuleError`, нечитабельний `space.json`, збій відбитків — `False`
+    (закрито, не виняток). Кеш — той самий `_capabilities_full` (ключ `_caps_key` містить відбиток `space.json`)."""
+    try:
+        if not isinstance(space, dict) or not space or spaces._is_implicit(space) or not spaces.layer_on():
+            return False
+        p = _capabilities_full(space)[1].get('vcs')
+        return (isinstance(p, Module) and getattr(p, 'origin', 'builtin') == 'builtin' and p.id == VCS_MODULE
+                and compat_of(space, VCS_MODULE) == COMPAT_DESIGN_CANVAS)
+    except Exception:  # noqa: BLE001 — тотальність
+        return False
+
+
 def compat_view(space, caps):
     """Ключ `compat` обʼєкта простору: `{роль: значення}` лише для ролей, які веде ЯВНИЙ вбудований модуль (`caps[роль]` — його id)
     з непорожнім `compat` у `space.json`. Порожній словник — ключа в обʼєкті простору нема (Поправка 4). ТОТАЛЬНА: не кидає
