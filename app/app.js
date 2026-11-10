@@ -237,7 +237,7 @@ let tasksErrKey = null;
 
 /* ===== Простори (Deai 1.0, етап 1): стан, якого нема більш ніде ===== */
 /* Остання відповідь `/api/spaces`: `{current, spaces:[{id,name,color,path,legacy,
-   integrations,tasks,available}]}`; `{off:true,…}` — шар просторів вимкнено; `null` —
+   tasks,available}]}`; `{off:true,…}` — шар просторів вимкнено; `null` —
    ще не питали або реєстр не читається. Живе ТУТ, а не в `curTask.space`, бо потрібна
    й тоді, коли задачі нема зовсім (порожній простір, привітання, недоступний файл): без
    неї смузі не було б з чого намалювати фішку, а «просторів нема» не відрізнялось би
@@ -251,18 +251,18 @@ let spacesSeq = 0;
    на тому рядку, де був). Той самий прийом, що `taskDdWasOpen`. */
 let spaceDdWasOpen = false;
 
-/** Поточний простір (`{id, name, color, integrations, …}`) або `null`: шар вимкнено,
+/** Поточний простір (`{id, name, color, capabilities, …}`) або `null`: шар вимкнено,
  *  просторів нема. Джерело — задача, що відкрита (`curTask.space`), інакше реєстр. */
 const spaceNow = () => curTask?.space ?? currentSpace(spacesResp);
-/** Сповіщень Teams нема: роль `notify` (`hasNotify`: ключ `capabilities.notify`, без нього — `integrations`, рівно
- *  `=== false`: невідомість красти в людини Teams не має, так само, як `bar-model.js`). Тиша там не опитується взагалі
+/** Сповіщень Teams нема: роль `notify` (`hasNotify`: ключ `capabilities.notify`, без нього — не знаємо → не крадемо:
+ *  невідомість красти в людини Teams не має, так само, як `bar-model.js`). Тиша там не опитується взагалі
  *  (публікація йде на `hasPublish`, командний канал коментарів — на `noTeamComments`, синк із git — на `noVcs`, нижче:
  *  їх дають ролі модулів). Просторів на машині немає зовсім (привітання) — теж без сповіщень: задач нема, і опитувати
- *  нікого (`loadTeamsMute` без цього питав би порожнечу). ⛔ Не `integrations` напряму (було до 4c-3): простір без
- *  інтеграцій із модулем `notify` Teams має, а з інтеграціями й вимкненою роллю — ні (сервер там 409 `notify-off`). */
+ *  нікого (`loadTeamsMute` без цього питав би порожнечу). Простір із модулем `notify` Teams має,
+ *  а з вимкненою роллю — ні (сервер там 409 `notify-off`). */
 const noNotify = () => needsWelcome(spacesResp) || !hasNotify(spaceNow());
-/** Синку з git нема: роль `vcs` (`hasVcs`: ключ `capabilities.vcs`, без нього — `integrations`). Це НЕ `noNotify`:
- *  Teams — на ролі `notify`, а простір із модулем `git-sync` має синк і без інтеграцій. Просторів нема зовсім
+/** Синку з git нема: роль `vcs` (`hasVcs`: ключ `capabilities.vcs`, без нього — не знаємо → не крадемо). Це НЕ `noNotify`:
+ *  Teams — на ролі `notify`, а простір із модулем `git-sync` має синк. Просторів нема зовсім
  *  (привітання) — теж без синку: `refreshGitlab` питав би порожнечу. */
 const noVcs = () => needsWelcome(spacesResp) || !hasVcs(spaceNow());
 /** Командного каналу коментарів нема: вкладки «Команда» й аудиторії `project` — теж. Це НЕ `noNotify`: канал дає
@@ -2956,9 +2956,8 @@ async function connCheck(e) {
 async function connDisable(e) {
   const spaceId = connState.spaceId;
   const sp = connSpace();
-  const lines = disableConsequences(e, sp).map((c) => (c.kind === 'legacy'
-    ? t('cnDisableLegacy', roleTitle(c.role))
-    : (c.consKey ? t(c.consKey) : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : ''))));
+  const lines = disableConsequences(e, sp).map((c) =>
+    (c.consKey ? t(c.consKey) : t('cnDisableNone', roleTitle(c.role), c.noneKey ? t(c.noneKey) : '')));
   if (!(await askYesNo([t('cnDisableAsk', modName(e)), ...lines].join('\n\n'), { yes: t('cnDisable'), danger: true }))) return;
   if (!connOpen() || connState.spaceId !== spaceId) return;
   connState.busy.set(e.id, 'disable'); paintHome();
@@ -7173,7 +7172,7 @@ function paletteState() {
        постачальниками (`capabilities.publish`/`capabilities.comments`). */
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
-    space: st.space ? { id: st.space.id, integrations: st.space.integrations, capabilities: st.space.capabilities, compat: st.space.compat } : null,
+    space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat } : null,
   };
 }
 

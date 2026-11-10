@@ -763,9 +763,9 @@ class PublishCompatView(_PubWorld):
 
 
 class PublishJsGuard(unittest.TestCase):
-    """Клієнт питає «ЛІГА?» в ОДНОМУ місці (`isLegacyPublish`): другий літерал порівняння з `"legacy"` обійшов би `compat.publish`."""
+    """4d-4c: значення `"legacy"` у `capabilities.publish` сервер не шле — клієнт не порівнює з ним ніде (ЛІГА — це `compat.publish`)."""
 
-    def test_one_literal_in_spaces_model(self):
+    def test_no_legacy_literal_in_client(self):
         app = os.path.join(os.path.dirname(_HERE), 'app')
         found = {}
         for name in sorted(os.listdir(app)):
@@ -774,7 +774,7 @@ class PublishJsGuard(unittest.TestCase):
                     n = f.read().count('publish === "legacy"')
                 if n:
                     found[name] = n
-        self.assertEqual(found, {'spaces-model.js': 1})
+        self.assertEqual(found, {})
 
 
 # ------------------------------------------------------------------------------ Task 4: крок liga-4d3c

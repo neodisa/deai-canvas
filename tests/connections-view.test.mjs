@@ -7,7 +7,7 @@ import {
   builtinText, formFields, initialForm, refusalView, roleKeys, verdictText,
 } from "../app/connections-model.js";
 
-const SP = { id: "studio", name: "Studio", path: "/u/work/studio", integrations: false,
+const SP = { id: "studio", name: "Studio", path: "/u/work/studio",
   capabilities: { publish: "static-publish", comments: null, tokens: null } };
 const LIST = [
   { id: "css-tokens", name: "Токени з CSS", roles: ["tokens"], enabled: false, implicit: false, status: "unchecked",
@@ -53,11 +53,11 @@ test("сторінка: заголовок, тека, секції в поряд
   assert.doesNotMatch(h, /Не встановлені/, "секції missing нема, коли таких модулів нема");
 });
 
-test("сторінка: legacy, missing-секція, завантаження, помилка списку й нечитабельний space.json", () => {
-  const liga = { ...SP, integrations: true, capabilities: { publish: "legacy", comments: "legacy", tokens: null } };
+test("сторінка: ЛІГА-модулі, missing-секція, завантаження, помилка списку й нечитабельний space.json", () => {
+  const liga = { ...SP, capabilities: { publish: "vercel-publish", comments: "supabase-comments", tokens: null }, compat: { publish: "design-canvas" } };
   const missing = { id: "gone", name: "gone", roles: [], enabled: true, status: "missing", settings: [] };
   const h = connPageHTML(view({ space: liga, list: [...LIST, missing] }));
-  assert.match(h, /вбудована інтеграція ЛІГА/);
+  assert.doesNotMatch(h, /вбудована інтеграція ЛІГА/, "4d-4c: вбудованої інтеграції нема — рядок «Зараз» показує модуль");
   assert.match(h, /Не встановлені на цьому компʼютері/);
   assert.match(h, /data-cn="disable" data-id="gone"/);
   assert.match(connPageHTML(view({ list: null })), /class="cn-loading" role="status">Завантажую модулі…</,
@@ -106,21 +106,17 @@ test("тексти ролі notify (4c-3): усі ключі є в UK і EN, а 
   for (const k of [b.name, b.desc, ...Object.values(b.fields)]) assert.ok(DICT.uk[k] && DICT.en[k], k);
 });
 
-test("рядок «Зараз»: модуль, модуль без запису, legacy, нікого, space.json не читається, невідома роль", () => {
+test("рядок «Зараз»: модуль, модуль без запису, нікого, space.json не читається, невідома роль", () => {
   const v = (caps) => ({ space: { ...SP, capabilities: caps }, list: LIST });
   assert.match(nowHTML("publish", v({ publish: "static-publish" })), /Зараз: Публікація в теку/);
+  assert.doesNotMatch(nowHTML("publish", v({ publish: "legacy" })), /вбудована інтеграція ЛІГА/, "4d-4c: «legacy» — звичайний id, не особливий рядок");
   assert.match(nowHTML("publish", v({ publish: "ghost-id" })), /Зараз: ghost-id/, "нема в списку — показуємо id, а не падаємо");
-  assert.match(nowHTML("publish", v({ publish: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("comments", v({ comments: null })), /Зараз: нікого — коментарі лише локальні/);
   assert.match(nowHTML("alpha", v({ alpha: null })), /Зараз: нікого$|Зараз: нікого</, "роль без власного тексту — просто «нікого» (4c-3: приклад alpha — tracker і notify мають тексти)");
   assert.match(nowHTML("notify", v({ notify: null })), /Зараз: нікого — Без сповіщень — Teams мовчить\./, "4c-3: роль notify має власний текст «нікого»");
-  assert.match(nowHTML("notify", v({ notify: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("tracker", v({ tracker: null })), /Зараз: нікого — Без трекера — статусів задач нема\./, "4c-2: роль tracker має власний текст «нікого»");
-  assert.match(nowHTML("tracker", v({ tracker: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("vcs", v({ vcs: null })), /Зараз: нікого — макети лише на цьому компʼютері/, "роль vcs має власний текст «нікого»");
-  assert.match(nowHTML("vcs", v({ vcs: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("dashboard", v({ dashboard: null })), /Зараз: нікого — без дашборда — вкладки «Команда» нема/, "4c-1: роль dashboard має власний текст «нікого»");
-  assert.match(nowHTML("dashboard", v({ dashboard: "legacy" })), /вбудована інтеграція ЛІГА/);
   assert.match(nowHTML("vcs", { space: { ...SP, capabilities: { vcs: "git-sync" } }, list: [{ id: "git-sync", name: "Синхронізація з git", roles: ["vcs"] }] }),
     /Зараз: Git</, "постачальник — назва вбудованого модуля зі словника, а не сирий id чи назва з маніфесту");
   assert.match(nowHTML("publish", v({ error: "space-json-unreadable" })), /Зараз: невідомо — space\.json не читається/);
@@ -355,7 +351,7 @@ test("панель: ключі constructor / toString / __proto__ не лама�
 });
 
 test("сторінка: ворожі назва, тека й id простору — лише текстом, у заголовку, помилці й блоці агента", () => {
-  const sp = { id: '<q>"I', name: '<q>"N', path: '<q>"P', integrations: false, capabilities: { publish: null, comments: null, tokens: null } };
+  const sp = { id: '<q>"I', name: '<q>"N', path: '<q>"P', capabilities: { publish: null, comments: null, tokens: null } };
   const pages = [
     connPageHTML(view({ space: sp })),
     connPageHTML(view({ space: sp, list: null })),
@@ -580,13 +576,12 @@ test("сторінка: текст помилки списку обрізаєт�
   assert.equal(detail("&".repeat(500)), "&amp;".repeat(300));
 });
 
-test("англійською: назва вбудованої інтеграції — LIGA, не кирилицею", () => {
+test("англійською: вбудованої інтеграції ЛІГА в рядку «Зараз» нема (4d-4c)", () => {
   setLang("en");
-  const liga = { ...SP, integrations: true, capabilities: { publish: "legacy", comments: "legacy", tokens: null } };
+  const liga = { ...SP, capabilities: { publish: "static-publish", comments: "supabase-comments", tokens: null }, compat: { publish: "design-canvas" } };
   const h = connPageHTML(view({ space: liga }));
-  assert.match(h, /Now: the built-in LIGA integration \(a module in this role overrides it\)/);
+  assert.doesNotMatch(h, /built-in LIGA integration/);
   assert.doesNotMatch(h, /ЛІГА/);
-  assert.match(nowHTML("comments", { space: liga, list: LIST }), /LIGA/);
 });
 
 test("слова: ключі стирання й нові підписи — в обох мовах, застарілий «Не стирати» прибрано", () => {
@@ -599,7 +594,8 @@ test("слова: ключі стирання й нові підписи — в 
   assert.equal(DICT.en.cnNowNobody, "Now: none");
   assert.equal(DICT.en.cnNowNone("x"), "Now: none — x");
   assert.equal(DICT.en.cnDisableNone("publish", "x"), "After this, the “publish” role has no module: x.");
-  assert.equal(DICT.en.cnDisableLegacy("publish"), "The built-in LIGA integration takes the “publish” role back.");
+  assert.equal(DICT.uk.cnDisableLegacy, undefined);
+  assert.equal(DICT.en.cnNowLegacy, undefined);
   assert.equal(DICT.en.cnReplaceAsk("R", "H", "N"),
     "R is currently handled by “H”. Connect “N” instead? “H” will be turned off; its settings stay.");
   assert.equal(DICT.uk.cnLoading, "Завантажую модулі…");

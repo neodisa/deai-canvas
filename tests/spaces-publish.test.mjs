@@ -14,49 +14,45 @@ import {
    замість коду відмови. `app.js` у Node не імпортується (DOM на верхньому рівні), тому проводку
    стереже `tests/spaces-wiring.test.mjs`, а тут — самі правила.
 
-   `capabilities` приходить від сервера ТОТАЛЬНО: `{publish: '<id модуля>' | 'legacy' | null,
+   `capabilities` приходить від сервера ТОТАЛЬНО: `{publish: '<id модуля>' | null,
    tokens: …[, error]}`. Стара форма відповіді (без `capabilities`) лишається валідною: тоді
-   рішення — за `integrations`, як було до модулів. */
+   не знаємо → не крадемо (прапорця `integrations` сервер більше не шле, 4d-4c). ЛІГА — це `compat`. */
 
-const MOD = { id: "p", integrations: false, capabilities: { publish: "static-publish", tokens: null } };
-const LEG = { id: "liga", integrations: true, capabilities: { publish: "legacy", tokens: null } };
-const NONE = { id: "n", integrations: false, capabilities: { publish: null, tokens: null } };
+const MOD = { id: "p", capabilities: { publish: "static-publish", tokens: null } };
+const LEG = { id: "liga", capabilities: { publish: "vercel-publish", tokens: null }, compat: { publish: "design-canvas" } };
+const NONE = { id: "n", capabilities: { publish: null, tokens: null } };
 
 /* ── хто публікує ──────────────────────────────────────────────────────── */
 
-test("hasPublish: модуль — так, legacy — так, null — ні", () => {
+test("hasPublish: модуль — так, ЛІГА (compat) — так, null — ні", () => {
   assert.equal(hasPublish(MOD), true);
   assert.equal(hasPublish(LEG), true);
   assert.equal(hasPublish(NONE), false);
 });
 
-test("hasPublish: стара форма (без capabilities) — за `integrations`, невідомість публікації не краде", () => {
-  assert.equal(hasPublish({ integrations: false }), false, "старий простір без інтеграцій: публікації нема");
-  assert.equal(hasPublish({ integrations: true }), true);
+test("hasPublish: стара форма (без capabilities) — невідомість публікації не краде", () => {
   assert.equal(hasPublish({}), true, "відповідь без відомостей не краде публікацію");
   assert.equal(hasPublish(null), true);
   assert.equal(hasPublish(undefined), true);
 });
 
-test("hasPublish: capabilities ВАЖЧІ за integrations (простір без інтеграцій може публікувати модулем)", () => {
-  assert.equal(hasPublish({ integrations: false, capabilities: { publish: "static-publish" } }), true);
-  assert.equal(hasPublish({ integrations: true, capabilities: { publish: null } }), false,
-    "модуль публікації вимкнено — публікації нема, хоч би інтеграції й були");
+test("hasPublish: рішення — за capabilities (модуль публікує; вимкнено — публікації нема)", () => {
+  assert.equal(hasPublish({ capabilities: { publish: "static-publish" } }), true);
+  assert.equal(hasPublish({ capabilities: { publish: null } }), false, "модуль публікації вимкнено — публікації нема");
 });
 
 test("hasPublish: capabilities із помилкою (space.json не читається) — публікації нема", () => {
-  assert.equal(hasPublish({ integrations: false, capabilities: { publish: null, tokens: null, error: "space-json-unreadable" } }), false);
+  assert.equal(hasPublish({ capabilities: { publish: null, tokens: null, error: "space-json-unreadable" } }), false);
 });
 
-test("isLegacyPublish: лише 'legacy' (або стара форма з інтеграціями)", () => {
+test("isLegacyPublish: лише compat.publish === 'design-canvas' (або стара форма без capabilities)", () => {
   assert.equal(isLegacyPublish(LEG), true);
   assert.equal(isLegacyPublish(MOD), false);
   assert.equal(isLegacyPublish(NONE), false);
-  assert.equal(isLegacyPublish({ integrations: true }), true);
-  assert.equal(isLegacyPublish({ integrations: false }), false);
+  assert.equal(isLegacyPublish({ capabilities: { publish: "legacy" } }), false, "4d-4c: значення «legacy» більше не знак ЛІГИ");
   assert.equal(isLegacyPublish({}), true);
   assert.equal(isLegacyPublish(null), true);
-  assert.equal(isLegacyPublish({ integrations: true, capabilities: { publish: "static-publish" } }), false,
+  assert.equal(isLegacyPublish({ capabilities: { publish: "static-publish" } }), false,
     "модуль замість ЛІГА: пароль превʼю ЛІГА там нічого не значить");
 });
 
@@ -371,7 +367,7 @@ test("словник: publishErrBadTaskId називає зарезервова�
    `publish_gate_stale` і `publish_share_url` (= `publish_url` + `#k=<пароль>`, СКЛАДЕНИЙ сервером).
    UI нічого не складає сам: «Скопіювати» кладе `publish_share_url` дослівно. */
 
-const VER = { id: "v", integrations: false, capabilities: { publish: "vercel-publish", tokens: null } };
+const VER = { id: "v", capabilities: { publish: "vercel-publish", tokens: null } };
 const VURL = "https://pv-12345678.vercel.app";
 const REMOTE = (o = {}) => ({
   module: "vercel-publish", state: { project: "pv-12345678" }, published_at: "2026-10-16T10:00:00Z", url: VURL, gated: true, ...o,
@@ -384,8 +380,8 @@ const VTASK = (o = {}) => ({
 test("isRemotePublish: так лише коли постачальник — модуль, а слід `publish_remote` саме його і саме на цю адресу", () => {
   assert.equal(isRemotePublish(VTASK(), VER), true);
   assert.equal(isRemotePublish(VTASK(), LEG), false, "ЛІГА: слід модуля — не про ЛІГА-публікацію");
-  assert.equal(isRemotePublish(VTASK({ publish_remote: REMOTE({ module: "legacy" }) }), LEG), false,
-    "навіть якщо слід назвав постачальника «legacy»: у ЛІГА свій шлях посилання (`#k=` у `copyUrl`)");
+  assert.equal(isRemotePublish(VTASK({ publish_remote: REMOTE({ module: "design-canvas" }) }), LEG), false,
+    "навіть якщо слід назвав іншого постачальника: у ЛІГА свій шлях посилання (`#k=` у `copyUrl`)");
   assert.equal(isRemotePublish(VTASK(), MOD), false, "інший модуль-постачальник (static-publish): слід Vercel не його");
   assert.equal(isRemotePublish(VTASK(), NONE), false);
   assert.equal(isRemotePublish(VTASK({ publish_remote: REMOTE({ module: "other-publish" }) }), VER), false);
@@ -398,7 +394,7 @@ test("isRemotePublish: так лише коли постачальник — м�
   assert.equal(isRemotePublish(VTASK({ publish_remote: [REMOTE()] }), VER), false);
   assert.equal(isRemotePublish(null, VER), false);
   assert.equal(isRemotePublish(VTASK(), null), false);
-  assert.equal(isRemotePublish(VTASK(), { id: "x", integrations: false }), false, "стара форма: постачальник невідомий");
+  assert.equal(isRemotePublish(VTASK(), { id: "x" }), false, "стара форма: постачальник невідомий");
 });
 
 test("previewTarget: модуль «за адресою» — зовнішня адреса з `publish_url` і готовим посиланням для колег", () => {
@@ -457,7 +453,7 @@ test("copyUrl: ЛІГА і зовнішня без `remote` — як було (`
 test("copyUrl: залишок Vercel після перемикання на `static-publish`/інший модуль — гола адреса, без ЛІГА-шного `#k=…&p=…`", () => {
   /* `publish_url` лишився від Vercel, а простір вже публікує `static-publish` (або модуля нема): `previewTarget` дає «зовнішню» ціль, але
      ЛІГА-шний `preview_password` до цієї адреси не належить — раніше `copyUrl` дописував його як `#k=<пароль ЛІГА>&p=<сторінка>`. */
-  const other = { id: "o", integrations: false, capabilities: { publish: "other-publish", tokens: null } };
+  const other = { id: "o", capabilities: { publish: "other-publish", tokens: null } };
   for (const space of [MOD, NONE, other]) {
     for (const task of [VTASK({ publish_remote: REMOTE({ module: "vercel-publish" }) }),      // слід Vercel, постачальник — інший
                         { id: "blog", publish_url: VURL },                                      // сліду модуля нема взагалі
@@ -481,7 +477,7 @@ test("copyUrl: залишок із НЕбезпечною адресою — `nu
   }
 });
 
-test("copyUrl: ЛІГА-шний фрагмент `#k=…&p=…` — ЛИШЕ для постачальника `legacy` (і для залишку не з'являється)", () => {
+test("copyUrl: ЛІГА-шний фрагмент `#k=…&p=…` — ЛИШЕ для простору зі схемою ЛІГИ (і для залишку не з'являється)", () => {
   const task = { id: "blog", publish_url: VURL };
   assert.equal(copyUrl(previewTarget(task, LEG), { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`, "ЛІГА — як було");
   assert.equal(copyUrl(previewTarget({ ...task, publish_remote: REMOTE() }, LEG), { pageId: "it4", password: "1100" }), `${VURL}/#k=1100&p=it4`,
@@ -677,10 +673,10 @@ test("previewTarget: слід модуля з НЕбезпечною адрес�
 test("isVercelPublish: лише `capabilities.publish === 'vercel-publish'`", () => {
   assert.equal(isVercelPublish(VER), true);
   assert.equal(isVercelPublish(MOD), false);
-  assert.equal(isVercelPublish(LEG), false);
-  assert.equal(isVercelPublish({ id: "x", integrations: false, capabilities: { publish: "other-publish" } }), false);
+  assert.equal(isVercelPublish(LEG), true, "4d-4c: ЛІГА — теж `vercel-publish` (зі схемою в `compat`); ЛІГА-гілку вирішує `isLegacyPublish`, раніше");
+  assert.equal(isVercelPublish({ id: "x", capabilities: { publish: "other-publish" } }), false);
   assert.equal(isVercelPublish(null), false);
-  assert.equal(isVercelPublish({ integrations: true }), false);
+  assert.equal(isVercelPublish({ id: "x" }), false);
 });
 
 test("remoteOpenUrl: «Відкрити» веде на посилання з паролем (`#k=`), коли воно про цю адресу й безпечне; інакше — на адресу", () => {

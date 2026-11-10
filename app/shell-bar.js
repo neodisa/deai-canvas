@@ -531,7 +531,7 @@ function zonePublish(c, openDd) {
  * `state.taskList`/`state.curTaskId` (перелік задач для дропдауна крошки —
  * модель бачить лише ПОТОЧНУ задачу, список приходить окремим запитом),
  * `state.space`/`state.spaces` (ПОТОЧНИЙ простір і перелік для дропдауна
- * фішки: `space` — обʼєкт `{id, name, color, integrations}` з `/api/task`,
+ * фішки: `space` — обʼєкт `{id, name, color, capabilities}` з `/api/task`,
  * `spaces` — масив `/api/spaces`; без `space` фішки нема зовсім).
  *
  * ⛔ `state.commentMode` тут БІЛЬШЕ НЕ читається: смуга нічого не знає про

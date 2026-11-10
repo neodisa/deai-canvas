@@ -229,22 +229,22 @@ export const spaceErrField = (code) => {
 
 /**
  * Чи є в просторі командний канал коментарів — вкладка «Команда», аудиторія `project`, режим `project`.
- * Його дає РОЛЬ `comments` (етап 2b-2): зашитий Supabase ЛІГА (`'legacy'`, простір з інтеграціями) або модуль
- * (`capabilities.comments` = id модуля — навіть у просторі без інтеграцій); явний `null` — нікого, лише локальні.
+ * Його дає РОЛЬ `comments` (етап 2b-2): модуль (`capabilities.comments` = id модуля; ЛІГА — теж модуль, схема — у `compat`);
+ * явний `null` — нікого, лише локальні.
  *
  * Відсутність САМОГО ключа `comments` у `capabilities` — це «не знаємо», а не «нікого»: `capabilities` із форми 2а
  * (`{publish, tokens}`) віддає сервер, що ще не вміє роль `comments` (оновили `app.js`, а процес Python із попереднім
- * `serve.py` не перезапустили). Тоді, як і для відповідей без `capabilities`, рішення за `integrations`, рівно `=== false`:
- * простір без відомостей командного каналу в людини не краде (інакше ЛІГА мовчки втратила б «Команду»).
+ * `serve.py` не перезапустили). Тоді, як і для відповідей без `capabilities`, ключа нема → не знаємо → не крадемо
+ * (сервер прапорця простору більше не шле, 4d-4c): інакше ЛІГА мовчки втратила б «Команду».
  *
  * ⚠️ Це НЕ `noNotify` (`app.js`): Teams-тиша тепер на ролі `notify` (`hasNotify`), дашборд команди — на ролі `dashboard`.
- * Простір із модулем коментарів без інтеграцій має команду коментарів, але Teams має лише за модулем `notify`.
+ * Простір із модулем коментарів має команду коментарів, але Teams має лише за модулем `notify`.
  */
 export const hasTeamComments = (space) => {
   const caps = space?.capabilities;
   return caps && typeof caps === "object" && "comments" in caps
     ? caps.comments != null
-    : space?.integrations !== false;
+    : true;
 };
 
 /**
@@ -259,58 +259,53 @@ export const effectiveCommentMode = (space, mode) =>
   (!hasTeamComments(space) && mode === "project" ? "local" : mode);
 
 /**
- * Чи є в просторі синхронізація з git (роль `vcs`, етап 4a). Є ключ `capabilities.vcs` — він і вирішує (`'legacy'` —
- * зашитий шлях ЛІГА, id модуля — модуль, `null` — нема). Ключа нема (стара форма відповіді, шар вимкнено, фікстури
- * `legacy-golden`) — за `integrations`, як було до 4a: простір без відомостей не краде в людини синк.
+ * Чи є в просторі синхронізація з git (роль `vcs`, етап 4a). Є ключ `capabilities.vcs` — він і вирішує (id модуля —
+ * модуль, `null` — нема). Ключа нема (стара форма відповіді, шар вимкнено) — не знаємо → не крадемо: простір без
+ * відомостей не краде в людини синк.
  * `hasVcs(null)` — `true`, як `hasTeamComments(null)`: невідомий простір (шар вимкнено) синк не відбирає.
  *
  * ⚠️ Це НЕ `noNotify` (`app.js`): Teams-тиша — на ролі `notify`, а синк із git дає роль `vcs` — простір із
- * модулем `git-sync` має синк і без інтеграцій.
+ * модулем `git-sync` має синк.
  */
 export const hasVcs = (space) => {
   const caps = space?.capabilities;
-  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs != null : space?.integrations !== false;
+  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs != null : true;
 };
 
 /**
  * Чи є в просторі сповіщення Teams (роль `notify`, етап 4c-3): пункт «Сповіщати Teams» у дропдауні публікації й опит
- * `/api/teams-mute`. Є ключ `capabilities.notify` — він і вирішує (`'legacy'` — зашитий шлях ЛІГА, id модуля — модуль,
- * `null` — нема). Ключа нема (стара форма відповіді, сервер без ролі, шар вимкнено, фікстури `legacy-golden`) — за
- * `integrations`, рівно `=== false`, як було до 4c-3: невідомість Teams у людини не краде (інакше ЛІГА мовчки втратила б
- * перемикач тиші). `hasNotify(null)` — `true`, як `hasVcs(null)`.
+ * `/api/teams-mute`. Є ключ `capabilities.notify` — він і вирішує (id модуля — модуль, `null` — нема). Ключа нема
+ * (стара форма відповіді, сервер без ролі, шар вимкнено) — не знаємо → не крадемо: невідомість Teams у людини не краде
+ * (інакше ЛІГА мовчки втратила б перемикач тиші). `hasNotify(null)` — `true`, як `hasVcs(null)`.
  *
- * ⚠️ Це вже НЕ «Teams лишається на `integrations`»: простір без інтеграцій, але з модулем `notify`, має і пункт, і опит;
- * простір з інтеграціями, де роль вимкнено (`notify: null`), їх не має — інакше пункт висів би вічним «перевіряю стан у
+ * ⚠️ Простір, де роль вимкнено (`notify: null`), пункту й опиту не має — інакше пункт висів би вічним «перевіряю стан у
  * базі…», бо `/api/teams-mute` там відповідає 409 `notify-off`.
  */
 export const hasNotify = (space) => {
   const caps = space?.capabilities;
-  return caps && typeof caps === "object" && "notify" in caps ? caps.notify != null : space?.integrations !== false;
+  return caps && typeof caps === "object" && "notify" in caps ? caps.notify != null : true;
 };
 
-/** Синк простору — зашитий шлях ЛІГА (налаштовується в `tasks.json`, не на «Підключенні»). Правило ключа те саме, що в `hasVcs`. */
+/** Синк простору зі схемою ЛІГИ (налаштовується в `tasks.json`, не на «Підключенні»). «ЛІГА» живе в ключі `compat` простору (його кладе сервер); старого значення-маркера роль більше не має. Ролі невідомо — як було («ЛІГА»). */
 export const isLegacyVcs = (space) => {
   const caps = space?.capabilities;
-  // Після міграції 4d-3b `capabilities.vcs` — id модуля, а «ЛІГА» живе в ключі `compat` обʼєкта простору (його кладе сервер).
   if (space?.compat?.vcs === "design-canvas") return true;
-  return caps && typeof caps === "object" && "vcs" in caps ? caps.vcs === "legacy" : space?.integrations !== false;
+  return !(caps && typeof caps === "object" && "vcs" in caps);
 };
 
 /**
  * Чи справді запит `POST /api/task-new` клонує репозиторій — лише такому потрібна довга стеля (`TASK_VCS_POST_TIMEOUT_MS`) і
  * рядок «Перший клон може тривати кілька хвилин». Сервер (`_task_new_write`: `if gitlab or (vcs and adopt_src is None)`) клонує, коли:
  *  - у тілі є `vcs` (форма шле його лише з непорожнім полем «Репозиторій» і ніколи не шле `from`);
- *  - або `gitlab` задає профіль: простір з `integrations` (`integrations_for`) завжди ставить `profile` «united» → профільний
- *    `gitlab`, і коли роль `vcs` є (`vcs_provider()` не `None`), сервер тягне макет за ним — чи роль веде зашитий шлях ЛІГА, чи
- *    явно ввімкнений `git-sync` (ЛІГА з модулем, поле «Репозиторій» порожнє). Без ролі (`capabilities.vcs == null`: у просторі з
- *    інтеграціями це лише роль «на папері» за своїм модулем, що не працює) `vcs_provider()` відмовляє одразу (`VcsError`, 409) — клону нема.
- * Звичайний простір (`integrations: false`) профілю не має: без `vcs` у тілі клону нема.
+ *  - або `gitlab` задає профіль: простір зі схемою ЛІГИ (`compat.vcs`, предикат `vcs_outbound`) ставить `profile` «united» →
+ *    профільний `gitlab`, і коли роль `vcs` є, сервер тягне макет за ним. Без ролі (`capabilities.vcs == null`) клону нема.
+ * Звичайний простір (без `compat`) профілю не має: без `vcs` у тілі клону нема.
  *
- * Невідомий простір (`null`, стара форма відповіді без `integrations`/`capabilities`) — «клонує»: правило ключа те саме, що в
+ * Невідомий простір (`null`, стара форма відповіді без `capabilities`) — «клонує»: правило ключа те саме, що в
  * `hasVcs`/`isLegacyVcs` (синк не відбираємо), а довга стеля безпечніша за обрив посеред клону при вже створеній задачі.
  */
 export const taskCreateClones = (space, body) =>
-  (body != null && "vcs" in body) || (hasVcs(space) && space?.integrations !== false);
+  (body != null && "vcs" in body) || (hasVcs(space) && isLegacyVcs(space));
 
 /**
  * Підпис репозиторію для інтерфейсу — ЄДИНИЙ нормалізатор: смуга, палітра й усі дії синку беруть підпис звідси. Білий
@@ -545,22 +540,18 @@ export function peekRegistered(res, taken = []) {
 }
 
 /* ── що додав Task 8 (модулі 2а): публікація за `capabilities.publish` ──────────────────
-   До модулів «публікація» й «усе назовні» були одним питанням — `integrations`: простір без
-   інтеграцій не мав ні GitLab, ні кнопки «Опублікувати». Тепер у такому просторі публікує
-   вбудований `static-publish` (локальна тека, `/published/<простір>/<задача>/`), тож питань
-   стало два: чи є ХТОСЬ, хто публікує (`hasPublish`), і чи це саме ЛІГА (`isLegacyPublish`).
+   У просторі без ЛІГИ публікує вбудований `static-publish` (локальна тека,
+   `/published/<простір>/<задача>/`), тож питань два: чи є ХТОСЬ, хто публікує (`hasPublish`), і чи це саме ЛІГА (`isLegacyPublish`).
    Teams від 4c-3 — на `capabilities.notify` (`hasNotify`, вище); синк із git від 4a — на `capabilities.vcs` (`hasVcs`, вище); командний канал і вкладка «Команда» від 2b-2 — на
-   `capabilities.comments` (`hasTeamComments`, нижче: рішення за роллю `comments`, не за `integrations`).
+   `capabilities.comments` (`hasTeamComments`, нижче: рішення за роллю `comments`).
 
-   Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | 'legacy' | null, tokens,
+   Сервер віддає `capabilities` ТОТАЛЬНО (`{publish: '<id модуля>' | null, tokens,
    [error], [errors]}`): нечитабельний `space.json` лягає в `capabilities.error`, а не в 5xx;
    `errors` ({роль: код}) є лише коли збій — не `space-json-unreadable`. Відповіді
-   СТАРОЇ форми (без `capabilities`) лишаються валідними — тоді рішення за `integrations`, рівно
-   `=== false`, як скрізь: простір без відомостей публікації в людини не краде. */
+   СТАРОЇ форми (без `capabilities`) лишаються валідними — не знаємо → не крадемо. */
 
 /** Чи є в просторі постачальник публікації (модуль або ЗАШИТИЙ код ЛІГА). Предикат зі спеки 2а. */
-export const hasPublish = (space) =>
-  (space?.capabilities ? !!space.capabilities.publish : space?.integrations !== false);
+export const hasPublish = (space) => (space?.capabilities ? !!space.capabilities.publish : true);
 
 /**
  * Чи публікує саме ЛІГА (Vercel, пароль превʼю в `tasks.json`, Teams-канал задачі). Лише тоді мають
@@ -569,9 +560,8 @@ export const hasPublish = (space) =>
  * показав би чужий пароль під чужою публікацією.
  */
 export const isLegacyPublish = (space) =>
-  // Після міграції 4d-3c `capabilities.publish` — id модуля, а «ЛІГА» живе в ключі `compat` обʼєкта простору (його кладе сервер).
-  space?.compat?.publish === "design-canvas" ||
-  (space?.capabilities ? space.capabilities.publish === "legacy" : space?.integrations !== false);
+  // «ЛІГА» живе в ключі `compat` обʼєкта простору (його кладе сервер); старого значення-маркера в `capabilities` нема.
+  space?.compat?.publish === "design-canvas" || !space?.capabilities;
 
 /** Слід ЛОКАЛЬНОЇ публікації з `/api/task` (`{module, path, published_at}`) — обʼєкт або `null`. */
 const localOf = (task) => {

@@ -31,16 +31,12 @@ const src = readFileSync(new URL("../app/app.js", import.meta.url), "utf8");
 
 /* ── гейт: обидві форми відповіді ────────────────────────────────────────── */
 
-test("hasVcs: ключ capabilities.vcs вирішує, а без ключа — integrations, як було до 4a", () => {
-  assert.equal(hasVcs({ integrations: false, capabilities: { vcs: "git-sync" } }), true, "модуль у просторі без інтеграцій");
-  assert.equal(hasVcs({ integrations: true, capabilities: { vcs: null } }), false, "роль вимкнено — синку нема, хоч інтеграції є");
-  assert.equal(hasVcs({ integrations: true, capabilities: { publish: "legacy" } }), true, "ключа нема + інтеграції");
-  assert.equal(hasVcs({ integrations: false, capabilities: { publish: "static-publish" } }), false, "ключа нема + без інтеграцій");
-  assert.equal(hasVcs({ integrations: false }), false, "стара форма без capabilities");
-  assert.equal(hasVcs({ integrations: true }), true);
+test("hasVcs: ключ capabilities.vcs вирішує, а без ключа — не знаємо → не крадемо (4d-4c: прапорця integrations нема)", () => {
+  assert.equal(hasVcs({ capabilities: { vcs: "git-sync" } }), true, "модуль");
+  assert.equal(hasVcs({ capabilities: { vcs: null } }), false, "роль вимкнено — синку нема");
+  assert.equal(hasVcs({ capabilities: { publish: "vercel-publish" } }), true, "ключа нема (сервер ще без ролі)");
   assert.equal(hasVcs({ id: "x" }), true, "простір без відомостей не краде в людини синк");
-  assert.equal(hasVcs({ integrations: false, capabilities: { vcs: "legacy" } }), true, "'legacy' — це теж постачальник");
-  assert.equal(hasVcs({ integrations: true, capabilities: null }), true, "capabilities не обʼєкт — як без ключа");
+  assert.equal(hasVcs({ capabilities: null }), true, "capabilities не обʼєкт — як без ключа");
 });
 
 test("hasVcs(null) — true, як hasTeamComments(null): невідомий простір синк не відбирає", () => {
@@ -50,33 +46,27 @@ test("hasVcs(null) — true, як hasTeamComments(null): невідомий пр
   assert.equal(isLegacyVcs(undefined), true);
 });
 
-test("isLegacyVcs: 'legacy' і «ключа нема за інтеграцій» — так, модуль чи вимкнено — ні", () => {
-  assert.equal(isLegacyVcs({ capabilities: { vcs: "legacy" } }), true);
-  assert.equal(isLegacyVcs({ integrations: false, capabilities: { vcs: "legacy" } }), true, "ключ вирішує сам");
-  assert.equal(isLegacyVcs({ integrations: true }), true, "ключа нема, інтеграції не вимкнені");
-  assert.equal(isLegacyVcs({ id: "x" }), true);
+test("isLegacyVcs: ЛІГА — це compat.vcs; ролі невідомо — «ЛІГА» як було; модуль чи вимкнено — ні", () => {
+  assert.equal(isLegacyVcs({ id: "x" }), true, "ключа нема — не знаємо");
+  assert.equal(isLegacyVcs({ capabilities: { vcs: "legacy" } }), false, "4d-4c: значення «legacy» більше не знак ЛІГИ");
   assert.equal(isLegacyVcs({ capabilities: { vcs: "git-sync" } }), false);
-  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" } }), false, "модуль — не ЛІГА, хоч інтеграції є");
-  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: null } }), false);
-  assert.equal(isLegacyVcs({ integrations: false }), false);
-  assert.equal(isLegacyVcs({ integrations: false, capabilities: { publish: "static-publish" } }), false);
+  assert.equal(isLegacyVcs({ capabilities: { vcs: null } }), false);
+  assert.equal(isLegacyVcs({ capabilities: { publish: "static-publish" } }), true, "ключа vcs нема — не знаємо");
 });
 
 test("isLegacyVcs (4d-3b): явний git-sync із compat «design-canvas» — як ЛІГА; без compat чи з чужим значенням — модуль", () => {
-  const MIGRATED = { integrations: true, capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
+  const MIGRATED = { capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
   assert.equal(isLegacyVcs(MIGRATED), true);
-  assert.equal(isLegacyVcs({ ...MIGRATED, integrations: false }), true, "compat вирішує й без інтеграцій");
-  assert.equal(isLegacyVcs({ capabilities: { vcs: "legacy" }, compat: { comments: "comment-layer" } }), true, "'legacy' лишається");
-  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" } }), false, "без compat — модуль");
-  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" }, compat: {} }), false);
-  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" }, compat: { comments: "comment-layer" } }), false,
+  assert.equal(isLegacyVcs({ capabilities: { vcs: "git-sync" } }), false, "без compat — модуль");
+  assert.equal(isLegacyVcs({ capabilities: { vcs: "git-sync" }, compat: {} }), false);
+  assert.equal(isLegacyVcs({ capabilities: { vcs: "git-sync" }, compat: { comments: "comment-layer" } }), false,
     "compat лише коментарів не робить синк «ЛІГОЮ»");
-  assert.equal(isLegacyVcs({ integrations: true, capabilities: { vcs: "git-sync" }, compat: { vcs: "other" } }), false);
+  assert.equal(isLegacyVcs({ capabilities: { vcs: "git-sync" }, compat: { vcs: "other" } }), false);
 });
 
-test("мігрований запис: підписи, ключ відмови, форма «Нова задача» — як для 'legacy'", () => {
-  const MIGRATED = { integrations: true, capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
-  const LEGACY = { integrations: true, capabilities: { vcs: "legacy" } };
+test("мігрований запис: підписи, ключ відмови, форма «Нова задача» — як для простору без відомостей про ролі (ЛІГА за замовчуванням)", () => {
+  const MIGRATED = { capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
+  const LEGACY = { id: "old" };
   for (const x of ["", "zzz", null, undefined, 5]) assert.equal(vcsLabel(x, MIGRATED), vcsLabel(x, LEGACY), `vcsLabel ${String(x)}`);
   assert.equal(vcsLabel("", MIGRATED), "GitLab");
   assert.equal(vcsBrand("", MIGRATED), "");
@@ -101,30 +91,29 @@ test("стеля запиту створення задачі, що клонує
 
 /* ── підпис репозиторію: білий список GitLab/GitHub/Git, решта — за простором ─ */
 
-const LIGA = { id: "liga", integrations: true, capabilities: { vcs: "legacy" } };
-const PLAIN = { id: "plain", integrations: false, capabilities: { vcs: "git-sync" } };
-/** ЛІГА (простір з інтеграціями), де синк веде явно ввімкнений `git-sync`: поле «Репозиторій» є, але сервер усе одно бере профільний gitlab. */
-const LIGA_GIT = { id: "liga-git", integrations: true, capabilities: { vcs: "git-sync" } };
+const LIGA = { id: "liga", capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
+const PLAIN = { id: "plain", capabilities: { vcs: "git-sync" } };
+/** ЛІГА, де синк веде явно ввімкнений `git-sync` зі схемою ЛІГИ в `compat`: сервер бере профільний gitlab. */
+const LIGA_GIT = { id: "liga-git", capabilities: { vcs: "git-sync" }, compat: { vcs: "design-canvas" } };
 /** ЛІГА без ролі `vcs` (`capabilities.vcs == null`: роль «на папері» за своїм модулем, що не працює): `vcs_provider()` відмовляє одразу — клону нема. */
-const LIGA_NOVCS = { id: "liga-novcs", integrations: true, capabilities: { vcs: null } };
+const LIGA_NOVCS = { id: "liga-novcs", capabilities: { vcs: null }, compat: { vcs: "design-canvas" } };
 
-test("taskCreateClones: сервер клонує, коли в тілі є vcs або простір з інтеграціями має роль vcs (профільний gitlab); невідомий простір — довга стеля як безпечніша", () => {
-  /* `_task_new_write`: `if gitlab or (vcs and adopt_src is None)`. `gitlab` бере профіль простору з інтеграціями (`task-new`: `integrations_for(sp)` →
+test("taskCreateClones: сервер клонує, коли в тілі є vcs або простір зі схемою ЛІГИ має роль vcs (профільний gitlab); невідомий простір — довга стеля як безпечніша", () => {
+  /* `_task_new_write`: `if gitlab or (vcs and adopt_src is None)`. `gitlab` бере профіль простору зі схемою ЛІГИ (`task-new`: `vcs_outbound(sp)` →
      `profile 'united'`), а `vcs_provider()` без ролі дає `None` — клону нема. Форма не шле `from`. */
   const body = { id: "a", title: "A", space: "x" };
   const withVcs = { ...body, vcs: { repo: "git@h:o/r.git" } };
   for (const sp of [PLAIN, NOVCS, LIGA, LIGA_GIT, LIGA_NOVCS, null, undefined, { id: "old" }]) {
     assert.equal(taskCreateClones(sp, withVcs), true, `${sp?.id}: vcs у тілі — клон завжди`);
   }
-  assert.equal(taskCreateClones(LIGA, body), true, "ЛІГА, зашитий шлях");
+  assert.equal(taskCreateClones(LIGA, body), true, "ЛІГА (compat)");
   assert.equal(taskCreateClones(LIGA_GIT, body), true, "ЛІГА з явним git-sync: сервер бере профільний gitlab і клонує, хоч поле порожнє");
   assert.equal(taskCreateClones(PLAIN, body), false, "звичайний простір: без vcs профілю нема");
   assert.equal(taskCreateClones(NOVCS, body), false, "без ролі клонувати нічого");
   assert.equal(taskCreateClones(LIGA_NOVCS, body), false, "ЛІГА без ролі vcs: vcs_provider() = None");
   assert.equal(taskCreateClones(null, body), true, "простір невідомий: довга стеля безпечніша за обрив посеред клону");
   assert.equal(taskCreateClones(undefined, body), true);
-  assert.equal(taskCreateClones({ id: "old" }, body), true, "стара форма відповіді (без integrations і capabilities) — як hasVcs/isLegacyVcs: синк не відбираємо");
-  assert.equal(taskCreateClones({ id: "old", integrations: false }, body), false);
+  assert.equal(taskCreateClones({ id: "old" }, body), true, "стара форма відповіді (без capabilities) — як hasVcs/isLegacyVcs: синк не відбираємо");
   assert.equal(taskCreateClones(PLAIN, undefined), false, "тіла нема — vcs у ньому не лежить");
   assert.equal("vcs" in body, false, "тіло не мутується");
 });
@@ -140,8 +129,8 @@ test("vcsLabel: білий список; інше й порожнє — «GitLab
     assert.equal(vcsLabel(x, PLAIN), "Git", `звичайний: ${String(x).slice(0, 12)}`);
     assert.equal(vcsLabel(x, undefined), "GitLab", "невідомий простір (шар вимкнено) — як ЛІГА");
   }
-  assert.equal(vcsLabel("", { integrations: true }), "GitLab", "стара форма з інтеграціями — ЛІГА");
-  assert.equal(vcsLabel("", { integrations: false, capabilities: { vcs: "git-sync" } }), "Git");
+  assert.equal(vcsLabel("", { id: "old" }), "GitLab", "стара форма без capabilities — ЛІГА");
+  assert.equal(vcsLabel("", { capabilities: { vcs: "git-sync" } }), "Git");
 });
 
 test("vcsBrand: підпис, коли він не «GitLab» (GitHub, Git); для ЛІГИ й «GitLab» — порожньо", () => {
@@ -209,17 +198,17 @@ const base = {
 const glZone = (o) => barModel({ ...base, ...o }).zone3.find((x) => x.id === "gl");
 const ids3 = (o) => barModel({ ...base, ...o }).zone3.map((x) => x.id);
 
-test("зона синку — за hasVcs, а Teams лишається на integrations", () => {
-  assert.ok(ids3({ space: { integrations: false, capabilities: { vcs: "git-sync", publish: "static-publish" } } }).includes("gl"),
-    "модуль у просторі без інтеграцій дає зону синку");
-  assert.ok(!ids3({ space: { integrations: true, capabilities: { vcs: null, publish: "legacy" } } }).includes("gl"),
+test("зона синку — за hasVcs, а Teams — за hasNotify (окремі ролі)", () => {
+  assert.ok(ids3({ space: { capabilities: { vcs: "git-sync", publish: "static-publish", notify: null } } }).includes("gl"),
+    "модуль vcs дає зону синку");
+  assert.ok(!ids3({ space: { capabilities: { vcs: null, publish: "vercel-publish", notify: "supabase-teams" } } }).includes("gl"),
     "роль вимкнено — зони нема");
   const pubIds = (space) => barModel({ ...base, space, teams: { channel: "c", muted: false } })
     .zone3.find((x) => x.id === "publish").items.map((x) => x.id);
-  assert.ok(!pubIds({ integrations: false, capabilities: { vcs: "git-sync", publish: "static-publish" } }).includes("teamsnotify"),
-    "без інтеграцій Teams нема, хоч синк є");
-  assert.ok(pubIds({ integrations: true, capabilities: { vcs: null, publish: "legacy" } }).includes("teamsnotify"),
-    "з інтеграціями Teams є, хоч синку нема");
+  assert.ok(!pubIds({ capabilities: { vcs: "git-sync", publish: "static-publish", notify: null } }).includes("teamsnotify"),
+    "без ролі notify Teams нема, хоч синк є");
+  assert.ok(pubIds({ capabilities: { vcs: null, publish: "vercel-publish", notify: "supabase-teams" } }).includes("teamsnotify"),
+    "з роллю notify Teams є, хоч синку нема");
 });
 
 test("підпис зони: GitHub/Git — свої ключі й поле brand; GitLab чи порожньо — типовий і БЕЗ поля brand", () => {
@@ -354,19 +343,19 @@ test("палітра: причина «збігається» — з підпи�
   assert.equal(push({ glBrand: "GitHub", gl: "ahead" }).whyKey, "");
 });
 
-test("палітра: пункти синку — за hasVcs, не за integrations", () => {
+test("палітра: пункти синку — за hasVcs", () => {
   const ids = (space) => paletteActions(P({ space })).map((a) => a.id);
   const GL = ["glpush", "glpull"];
-  const mod = ids({ integrations: false, capabilities: { vcs: "git-sync", publish: "static-publish" } });
-  for (const id of GL) assert.ok(mod.includes(id), `${id}: модуль у просторі без інтеграцій`);
-  const off = ids({ integrations: true, capabilities: { vcs: null, publish: "legacy" } });
+  const mod = ids({ capabilities: { vcs: "git-sync", publish: "static-publish" } });
+  for (const id of GL) assert.ok(mod.includes(id), `${id}: модуль vcs`);
+  const off = ids({ capabilities: { vcs: null, publish: "vercel-publish" } });
   for (const id of GL) assert.ok(!off.includes(id), `${id}: роль вимкнено`);
-  assert.ok(!paletteActions(P({ gl: "off", space: { integrations: true, capabilities: { vcs: null } } })).some((a) => a.id === "glsetup"));
-  assert.ok(paletteActions(P({ gl: "off", space: { integrations: false, capabilities: { vcs: "git-sync" } } })).some((a) => a.id === "glsetup"));
-  for (const space of [undefined, null, { integrations: true }]) {
+  assert.ok(!paletteActions(P({ gl: "off", space: { capabilities: { vcs: null } } })).some((a) => a.id === "glsetup"));
+  assert.ok(paletteActions(P({ gl: "off", space: { capabilities: { vcs: "git-sync" } } })).some((a) => a.id === "glsetup"));
+  for (const space of [undefined, null, { id: "x" }]) {
     for (const id of GL) assert.ok(ids(space).includes(id), `${id}: ${JSON.stringify(space)}`);
   }
-  assert.ok(!ids({ integrations: false }).includes("glpush"), "стара форма без інтеграцій — синку нема");
+  assert.ok(!ids({ capabilities: { vcs: null } }).includes("glpush"), "роль vcs вимкнено — синку нема");
 });
 
 /* ── словник ─────────────────────────────────────────────────────────────── */
@@ -513,7 +502,7 @@ test("refreshGitlab питає /api/vcs-status за noVcs(), а loadTeamsMute �
   assert.match(fn("loadTeamsMute"), /^\{[^]*?\n  if \(noNotify\(\)\) \{ teamsMute = null; return; \}\n  try \{ teamsMute = await api\('\/api\/teams-mute'\)/);
   assert.match(src, /const noVcs = \(\) => needsWelcome\(spacesResp\) \|\| !hasVcs\(spaceNow\(\)\);/);
   assert.match(src, /const noNotify = \(\) => needsWelcome\(spacesResp\) \|\| !hasNotify\(spaceNow\(\)\);/,
-    "4c-3: Teams — на ролі notify (hasNotify), а не на integrations");
+    "4c-3: Teams — на ролі notify (hasNotify), а не на прапорці простору");
 });
 
 test("дії синку ходять на /api/vcs-*, старих адрес у клієнті нема", () => {
@@ -1253,7 +1242,7 @@ test("Task 7: «Підключення» не лишає мертвих vcs-кл
 const TASK_HELPERS = ["newTaskDialog", "showCreateWait"];
 const GIT_ENTRY = { id: "git-sync", enabled: true, roles: ["vcs"], settings: [{ key: "repo", value: "git@gh.example:o/r.git" }, { key: "branch", value: "main" }] };
 const PUB_ENTRY = { id: "static-publish", enabled: true, roles: ["publish"], settings: [{ key: "repo", value: "ЧУЖЕ" }] };
-const NOVCS = { id: "plain", integrations: false, capabilities: { vcs: null } };
+const NOVCS = { id: "plain", capabilities: { vcs: null } };
 
 /** Середовище `newTaskDialog`: усе, чого він торкається, — заглушки з журналом; `askForm` лише запамʼятовує параметри діалогу. */
 function mkTaskEnv(over = {}) {
@@ -1961,7 +1950,7 @@ test("довга стеля й рядок про клон — лише коли 
     ["ЛІГА з явним git-sync, поле не прийшло", LIGA_GIT, {}, true],
     ["ЛІГА з явним git-sync, заповнене поле", LIGA_GIT, { repo: "git@h:o/r.git" }, true],
     ["ЛІГА без ролі vcs", LIGA_NOVCS, {}, false],
-    ["простір зі старої форми відповіді (без integrations і capabilities)", { id: "old" }, {}, true],
+    ["простір зі старої форми відповіді (без capabilities)", { id: "old" }, {}, true],
     ["порожнє поле", PLAIN, { repo: "" }, false],
     ["самі пробіли", PLAIN, { repo: "   " }, false],
     ["поле не прийшло", PLAIN, {}, false],

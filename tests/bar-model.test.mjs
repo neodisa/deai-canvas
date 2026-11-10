@@ -496,10 +496,11 @@ test("«В Figma» в «Огляді» — лише іконка, у «Маке�
    Фішка простору — у зоні 1 («де я»), ПЕРЕД крошкою задачі: задача живе в
    просторі, тож шлях читається зліва направо. Без `space` (шар просторів
    вимкнено чи просторів ще нема) смуга така, як була, — жодного порожнього
-   місця під фішку. `integrations === false` прибирає з зони 3 рівно те, що
-   ходить назовні (GitLab і публікацію); «В Figma» лишається — вона працює по
-   живому макету, а не по зовнішній службі. */
-const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", integrations: false, ...o });
+   місця під фішку. Простір без жодної ролі (`capabilities` з порожніми ролями, 4d-4c;
+   було `integrations === false`) не має в зоні 3 того, що ходить назовні (GitLab і публікацію);
+   «В Figma» лишається — вона працює по живому макету, а не по зовнішній службі. */
+const NO_ROLES = { publish: null, tokens: null, comments: null, vcs: null, notify: null, dashboard: null, tracker: null };
+const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", capabilities: NO_ROLES, ...o });
 
 test("простір: фішка в зоні 1 між палітрою й задачею, з назвою і кольором", () => {
   const m = barModel({ ...base, space: SP() });
@@ -524,20 +525,18 @@ test("простір на екрані «Задачі»: фішка є, між �
   assert.equal(m.zone1[2].label, "P");
 });
 
-test("простір без інтеграцій: у зоні 3 нема GitLab і публікації, «В Figma» лишається", () => {
-  const m = barModel({ ...base, space: SP({ integrations: false }) });
+test("простір без ролей: у зоні 3 нема GitLab і публікації, «В Figma» лишається", () => {
+  const m = barModel({ ...base, space: SP() });
   assert.deepEqual(m.zone3.map((x) => x.id), ["figma"]);
 });
 
-test("простір З інтеграціями: зона 3 — як була", () => {
-  for (const integrations of [true, undefined]) {
-    const m = barModel({ ...base, space: SP({ integrations }) });
-    assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"], String(integrations));
-  }
+test("простір зі схемою ЛІГИ (compat): зона 3 — як була", () => {
+  const m = barModel({ ...base, space: SP({ capabilities: { publish: "vercel-publish", tokens: null }, compat: { publish: "design-canvas" } }) });
+  assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"]);
 });
 
-test("вимикач інтеграцій — рівно `integrations === false`, а не «нема значення»", () => {
-  // `space` без поля `integrations` (відповідь старої форми) не має красти GitLab у людини.
+test("вимикач ролей — лише за відомим `capabilities`, а не «нема значення»", () => {
+  // `space` без `capabilities` (відповідь старої форми) не має красти GitLab у людини.
   const m = barModel({ ...base, space: { id: "p", name: "P", color: "space-1" } });
   assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "gl", "publish"]);
 });
@@ -549,17 +548,23 @@ test("простір: id у всій смузі лишаються унікал�
 });
 
 /* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
-   Зона 3 більше не питає «є інтеграції?» про ВСЕ назовні разом: GitLab і Teams
-   лишились на `integrations`, а публікація пішла на `hasPublish`
-   (`spaces-model.js`) — простір без інтеграцій публікує вбудованим модулем у
-   теку. Пункти дропдауна фільтруються поштучно: пароль ЛІГА (`pubpw`) — лише
-   коли публікує саме ЛІГА, Teams — лише з інтеграціями. */
+   Зона 3 питає ролі поштучно: публікація — `hasPublish`, GitLab — `hasVcs`, Teams — `hasNotify`
+   (`spaces-model.js`). Пункти дропдауна фільтруються поштучно: пароль ЛІГА (`pubpw`) — лише
+   коли публікує саме ЛІГА (`compat`), Teams — лише з роллю `notify`.
+   `CAPS` — простір без зовнішніх ролей; `OUT` — з ролями vcs/notify (модуль + синк + Teams);
+   `LIGAISH` — ЛІГА: схема в `compat`, ключів `vcs`/`notify` у відповіді нема (не знаємо → не крадемо). */
 const CAPS = (publish, o = {}) => ({
-  id: "p", name: "P", color: "space-2", integrations: false, capabilities: { publish, tokens: null }, ...o,
+  id: "p", name: "P", color: "space-2", capabilities: { ...NO_ROLES, publish, tokens: null }, ...o,
+});
+const OUT = (publish, o = {}) => ({
+  id: "p", name: "P", color: "space-2", capabilities: { ...NO_ROLES, publish, tokens: null, vcs: "git-sync", notify: "supabase-teams" }, ...o,
+});
+const LIGAISH = (publish = "vercel-publish", o = {}) => ({
+  id: "p", name: "P", color: "space-2", capabilities: { publish, tokens: null }, compat: { publish: "design-canvas" }, ...o,
 });
 const pubItems = (s) => barModel({ ...base, ...s }).zone3.find((x) => x.id === "publish")?.items.map((x) => x.id);
 
-test("простір без інтеграцій з модулем публікації: публікація є, GitLab нема", () => {
+test("простір без зовнішніх ролей з модулем публікації: публікація є, GitLab нема", () => {
   const m = barModel({ ...base, space: CAPS("static-publish") });
   assert.deepEqual(m.zone3.map((x) => x.id), ["figma", "publish"]);
 });
@@ -567,61 +572,58 @@ test("простір без інтеграцій з модулем публік�
 test("публікація модулем: у дропдауні лише показ, відкриття й посилання — без пароля ЛІГА і без Teams", () => {
   assert.deepEqual(pubItems({ space: CAPS("static-publish"), teams: null }), ["togglepub", "openpreview", "copylink"]);
   assert.deepEqual(pubItems({ space: CAPS("static-publish"), teams: { channel: "dc/x", muted: false } }),
-    ["togglepub", "openpreview", "copylink"], "інтеграцій нема — Teams нема, хоч би дані й були");
+    ["togglepub", "openpreview", "copylink"], "ролі notify нема — Teams нема, хоч би дані й були");
 });
 
 test("простір без постачальника публікації (`publish: null`): ні публікації, ні GitLab — лишається «В Figma»", () => {
   assert.deepEqual(barModel({ ...base, space: CAPS(null) }).zone3.map((x) => x.id), ["figma"]);
-  assert.deepEqual(barModel({ ...base, space: CAPS(null, { integrations: true }) }).zone3.map((x) => x.id),
-    ["figma", "gl"], "публікації нема (її вимкнено), GitLab лишився на інтеграціях");
+  assert.deepEqual(barModel({ ...base, space: OUT(null) }).zone3.map((x) => x.id),
+    ["figma", "gl"], "публікації нема (її вимкнено), GitLab лишився на ролі vcs");
 });
 
-test("простір ЛІГА (`publish: 'legacy'`): усе як було, пароль превʼю й Teams — на місці", () => {
-  const sp = CAPS("legacy", { integrations: true });
+test("простір ЛІГА (compat.publish): усе як було, пароль превʼю й Teams — на місці", () => {
+  const sp = LIGAISH();
   assert.deepEqual(barModel({ ...base, space: sp }).zone3.map((x) => x.id), ["figma", "gl", "publish"]);
   assert.deepEqual(pubItems({ space: sp, teams: { channel: "dc/x", muted: false } }),
     ["togglepub", "openpreview", "copylink", "teamsnotify", "pubpw"]);
 });
 
 test("`pubpw`: нечитабельні секрети (`pwError`) — попередження замість пароля, вище за stale/ungated", () => {
-  const sp = CAPS("legacy", { integrations: true });
+  const sp = LIGAISH();
   const warn = (s) => barModel({ ...base, space: sp, ...s }).zone3.find((x) => x.id === "publish").items.find((x) => x.id === "pubpw").warnKey;
   assert.equal(warn({ pwError: true, pwStale: true }), "pwUnreadable");
   assert.equal(warn({ pwError: false, pwStale: true }), "pubPwStale");
   assert.equal(warn({}), "");
 });
 
-test("`pubpw` — лише коли публікує ЛІГА: ні для модуля, ні там, де модуль підмінив ЛІГА при інтеграціях", () => {
+test("`pubpw` — лише коли публікує ЛІГА: ні для модуля, ні там, де модуль підмінив ЛІГА при ролях vcs/notify", () => {
   assert.ok(!pubItems({ space: CAPS("static-publish") }).includes("pubpw"));
-  assert.ok(!pubItems({ space: CAPS("static-publish", { integrations: true }) }).includes("pubpw"));
-  assert.ok(pubItems({ space: CAPS("legacy", { integrations: true }) }).includes("pubpw"));
-  assert.ok(pubItems({ space: { id: "x", integrations: true } }).includes("pubpw"), "стара форма з інтеграціями");
+  assert.ok(!pubItems({ space: OUT("static-publish") }).includes("pubpw"));
+  assert.ok(pubItems({ space: LIGAISH() }).includes("pubpw"));
+  assert.ok(pubItems({ space: { id: "x" } }).includes("pubpw"), "стара форма без capabilities");
   assert.ok(pubItems({}).includes("pubpw"), "без `space` — як було");
 });
 
-test("Teams у дропдауні — лише з інтеграціями; без них пункт не висить вічним «перевіряю…»", () => {
-  // Без інтеграцій `app.js` тримає `teams: null` ВІЧНО (стану тиші там нема, `/api/teams-mute` → 409).
+test("Teams у дропдауні — лише з роллю notify; без неї пункт не висить вічним «перевіряю…»", () => {
+  // Без ролі `app.js` тримає `teams: null` ВІЧНО (стану тиші там нема, `/api/teams-mute` → 409).
   assert.ok(!pubItems({ space: CAPS("static-publish"), teams: null }).includes("teamsnotify"));
-  // З інтеграціями `null` — це коротка мить завантаження: пункт стоїть вимкненим з причиною.
-  const it = barModel({ ...base, space: CAPS("legacy", { integrations: true }), teams: null }).zone3
+  // З роллю `null` — це коротка мить завантаження: пункт стоїть вимкненим з причиною.
+  const it = barModel({ ...base, space: LIGAISH(), teams: null }).zone3
     .find((x) => x.id === "publish").items.find((x) => x.id === "teamsnotify");
   assert.equal(it.disabled, true);
   assert.equal(it.whyKey, "whyTeamsLoading");
-  // модуль при ввімкнених інтеграціях: Teams живий, пароля ЛІГА нема
-  assert.ok(pubItems({ space: CAPS("static-publish", { integrations: true }), teams: { channel: "c", muted: false } })
+  // модуль із роллю notify: Teams живий, пароля ЛІГА нема
+  assert.ok(pubItems({ space: OUT("static-publish"), teams: { channel: "c", muted: false } })
     .includes("teamsnotify"));
 });
 
-test("стара форма відповіді (без `capabilities`) — рішення за `integrations`, як і було", () => {
-  assert.deepEqual(barModel({ ...base, space: { id: "p", integrations: false } }).zone3.map((x) => x.id), ["figma"]);
-  assert.deepEqual(barModel({ ...base, space: { id: "p", integrations: true } }).zone3.map((x) => x.id),
-    ["figma", "gl", "publish"]);
+test("стара форма відповіді (без `capabilities`) — не знаємо → не крадемо, як і було", () => {
   assert.deepEqual(barModel({ ...base, space: { id: "p" } }).zone3.map((x) => x.id), ["figma", "gl", "publish"]);
 });
 
 test("публікація: `legacy` на контролі каже, чий це постачальник (розмітка ховає застереження про ЛІГА-гейт)", () => {
   const ctl = (space) => barModel({ ...base, space }).zone3.find((x) => x.id === "publish");
-  assert.equal(ctl(CAPS("legacy", { integrations: true })).legacy, true);
+  assert.equal(ctl(LIGAISH()).legacy, true);
   assert.equal(ctl(CAPS("static-publish")).legacy, false);
   assert.equal(ctl(undefined).legacy, true);
 });
@@ -681,7 +683,7 @@ test("поля від сервера НЕМАЄ (undefined/null/не булев�
 });
 
 test("ЛІГА: навіть із `pubGate: false`/`pubGateStale: true` у стані — жодних модульних застережень (в неї своє, `pubGateTruth`)", () => {
-  for (const space of [CAPS("legacy", { integrations: true }), undefined, { id: "x", integrations: true }]) {
+  for (const space of [LIGAISH(), undefined, { id: "x" }]) {
     assert.deepEqual(notesOf({ space, pubGate: false, pubGateStale: true }), [], JSON.stringify(space));
   }
 });
@@ -706,27 +708,41 @@ test("ключі застережень Vercel є у словнику обох �
 /* ── роль notify (4c-3): пункт «Сповіщати Teams» — за capabilities.notify ─────────────────── */
 
 test("дропдаун публікації 0.13.0 → тепер: той самий для всіх станів знімка (before-4c3.json, ключ `menu`)", () => {
-  /* Знімок знято на 0.13.0 (пункт за `integrations`). Простори знімка не несуть `capabilities.notify` — а без ключа
-     рішення за `integrations`, тож відповідь мусить збігтися ПОБАЙТНО, включно з вимкненими пунктами й причинами. */
+  /* Знімок знято на 0.13.0 (пункт за прапорцем простору). Простори знімка не несуть `capabilities.notify` — а без ключа
+     «не знаємо → не крадемо», тож відповідь мусить збігтися ПОБАЙТНО, включно з вимкненими пунктами й причинами. */
   const snap = JSON.parse(readFileSync(new URL("./fixtures/notify/before-4c3.json", import.meta.url), "utf8")).menu;
-  const keys = Object.keys(snap.input);
+  /* 4d-4c: прапорця `integrations` сервер не шле, тож заморожений вхід знімка переводимо у форму, яку шле сервер тепер:
+     `integrations: true` із `publish: "legacy"` → ЛІГА (compat, ключів vcs/notify нема); модуль із інтеграціями → ролі vcs/notify
+     є; `integrations: false` → ролей нема. Стара форма без `capabilities` й `integrations: false` більше не виражається. */
+  const adapt = (input) => {
+    const sp = input.space;
+    if (!sp || typeof sp !== "object" || !("integrations" in sp)) return input;
+    const { integrations, ...rest } = sp;
+    if (!rest.capabilities) return integrations === false ? null : { ...input, space: rest };
+    const caps = { ...rest.capabilities };
+    if (caps.publish === "legacy") return { ...input, space: { ...rest, capabilities: { ...caps, publish: "vercel-publish" }, compat: { publish: "design-canvas" } } };
+    const roles = integrations ? { vcs: "git-sync", notify: "supabase-teams" } : NO_ROLES;
+    return { ...input, space: { ...rest, capabilities: { ...roles, ...caps } } };
+  };
+  const keys = Object.keys(snap.input).filter((k) => adapt(snap.input[k]) !== null);
   assert.ok(keys.length >= 10, "знімок не порожній");
+  assert.deepEqual(Object.keys(snap.input).filter((k) => !keys.includes(k)), ["old_shape_false"]);
   for (const key of keys) {
-    const pub = barModel({ ...base, ...snap.input[key] }).zone3.find((x) => x.id === "publish");
+    const pub = barModel({ ...base, ...adapt(snap.input[key]) }).zone3.find((x) => x.id === "publish");
     const got = pub ? { items: pub.items.map((x) => x.id), teamsnotify: pub.items.find((x) => x.id === "teamsnotify") || null }
       : { items: null, teamsnotify: null };
     assert.deepEqual(got, snap.result[key], `стан «${key}» розійшовся зі знімком 0.13.0`);
   }
 });
 
-test("Teams у дропдауні — за роллю notify: модуль без інтеграцій його має, notify: null (роль вимкнено) — ні", () => {
-  const sp = (notify, o = {}) => ({ id: "p", name: "P", color: "space-2", integrations: false,
+test("Teams у дропдауні — за роллю notify: модуль його має, notify: null (роль вимкнено) — ні", () => {
+  const sp = (notify, o = {}) => ({ id: "p", name: "P", color: "space-2",
     capabilities: { publish: "static-publish", tokens: null, notify }, ...o });
   const teams = { channel: "dc/t1", muted: false };
-  assert.ok(pubItems({ space: sp("fake-notify"), teams }).includes("teamsnotify"), "модуль ролі notify у просторі без інтеграцій");
-  assert.ok(pubItems({ space: sp("legacy", { integrations: true }), teams }).includes("teamsnotify"));
-  assert.ok(!pubItems({ space: sp(null, { integrations: true }), teams }).includes("teamsnotify"),
-    "роль вимкнено — пункту нема, хоч інтеграції є (інакше вічне «перевіряю стан у базі…»)");
+  assert.ok(pubItems({ space: sp("fake-notify"), teams }).includes("teamsnotify"), "модуль ролі notify");
+  assert.ok(pubItems({ space: sp("supabase-teams"), teams }).includes("teamsnotify"));
+  assert.ok(!pubItems({ space: sp(null), teams }).includes("teamsnotify"),
+    "роль вимкнено — пункту нема (інакше вічне «перевіряю стан у базі…»)");
   assert.ok(!pubItems({ space: sp(null), teams }).includes("teamsnotify"));
   const it = barModel({ ...base, space: sp("fake-notify"), teams: null }).zone3.find((x) => x.id === "publish").items
     .find((x) => x.id === "teamsnotify");
@@ -734,7 +750,7 @@ test("Teams у дропдауні — за роллю notify: модуль бе�
 });
 
 test("`pubpw` є для мігрованого запису ЛІГА (compat.publish), хоч capabilities.publish — id модуля (4d-3c)", () => {
-  const mig = CAPS("vercel-publish", { integrations: true, compat: { publish: "design-canvas" } });
+  const mig = LIGAISH("vercel-publish");
   assert.ok(pubItems({ space: mig }).includes("pubpw"));
-  assert.ok(!pubItems({ space: CAPS("vercel-publish", { integrations: true }) }).includes("pubpw"), "без compat — модуль, пароля ЛІГА нема");
+  assert.ok(!pubItems({ space: OUT("vercel-publish") }).includes("pubpw"), "без compat — модуль, пароля ЛІГА нема");
 });

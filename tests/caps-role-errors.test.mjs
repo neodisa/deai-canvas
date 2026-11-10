@@ -9,7 +9,7 @@ import { providerLine, roleError, spaceJsonBad } from "../app/connections-model.
 /* r15-1: `capabilities.error` читався як «space.json не читається» для БУДЬ-ЯКОГО коду, тож збій одного модуля (напр. git-sync)
    ховав усі картки «Підключення». Простір-рівневий — лише `space-json-unreadable`; збій ролі — `capabilities.errors[роль]`. */
 
-const SP = (capabilities) => ({ id: "studio", name: "Studio", path: "/u/work/studio", integrations: true, capabilities });
+const SP = (capabilities) => ({ id: "studio", name: "Studio", path: "/u/work/studio", capabilities });
 const LIST = [
   { id: "git-sync", name: "Git", roles: ["vcs"], enabled: true, implicit: false, status: "error", settings: [] },
   { id: "vercel-publish", name: "Vercel", roles: ["publish"], enabled: true, implicit: false, status: "unchecked", settings: [] },

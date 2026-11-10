@@ -138,7 +138,7 @@ export function roleError(caps, role) {
 }
 
 /**
- * Рядок «Зараз» ролі з `capabilities` простору: `{kind: 'module', id, entry|null}`, `{kind: 'legacy'}`,
+ * Рядок «Зараз» ролі з `capabilities` простору: `{kind: 'module', id, entry|null}`,
  * `{kind: 'waiting', id, entry}`, `{kind: 'none', noneKey}`, `{kind: 'error'}`, `{kind: 'roleError', code}`; `null` — роль,
  * якої `capabilities` не знає (нема що казати).
  *
@@ -153,7 +153,6 @@ export function providerLine(role, caps, list) {
   const failed = roleError(caps, role);
   if (failed) return { kind: "roleError", code: failed };
   const v = caps[role];
-  if (v === "legacy") return { kind: "legacy" };
   if (typeof v !== "string" || !v) {
     /* Роль «на папері» за увімкненим своїм модулем, що тут не працює (3c): сервер віддає `null` без `error`
        (поправка 11), але це не «нікого» — роль чекає довіри. */
@@ -168,7 +167,7 @@ export function providerLine(role, caps, list) {
 
 /**
  * Картка, на яку сідає фокус, коли на «Підключення» йдуть «до ролі» (`role`; з «Налаштувати…» синку — `vcs`): постачальник
- * ролі з `capabilities` (модуль зі списку; `'legacy'` і невідомий id — не картка), інакше ПЕРША картка секції ролі —
+ * ролі з `capabilities` (модуль зі списку; невідомий id — не картка), інакше ПЕРША картка секції ролі —
  * модуль, чия перша роль і є `role` (так його групує `groupModules`), не `missing`. Нема нікого — `null`: викликач бере
  * першу кнопку сторінки.
  */
@@ -176,7 +175,7 @@ export function roleCardId(role, caps, list) {
   if (typeof role !== "string" || !role) return null;
   const mods = (Array.isArray(list) ? list : []).filter((e) => e && typeof e === "object" && typeof e.id === "string");
   const prov = caps && typeof caps === "object" && has(caps, role) ? caps[role] : null;
-  if (typeof prov === "string" && prov !== "legacy" && mods.some((e) => e.id === prov && e.status !== "missing")) return prov;
+  if (typeof prov === "string" && mods.some((e) => e.id === prov && e.status !== "missing")) return prov;
   return mods.find((e) => e.status !== "missing" && Array.isArray(e.roles) && e.roles[0] === role)?.id ?? null;
 }
 
@@ -322,7 +321,7 @@ export function roleHolders(e, list) {
  * Що станеться з ролями, які `e` зараз ВИКОНУЄ (`capabilities[role] === e.id`), якщо його вимкнути:
  * `[{role, kind: 'none', noneKey}]` — роль лишиться без модуля (для `tracker` і `notify` ще й `consKey` — свій текст наслідку:
  * статуси зникнуть; картки Teams перестануть надходити, а перемикач тиші зникне). 4d-4b: у ЛІГИ так само, як деінде, — запасного шляху
- * (`'legacy'`) після вимкнення запису вже нема, тож «повернеться до вбудованого» було б неправдою.
+ * після вимкнення запису вже нема, тож «повернеться до вбудованого» було б неправдою.
  */
 export function disableConsequences(e, space) {
   const caps = space?.capabilities;

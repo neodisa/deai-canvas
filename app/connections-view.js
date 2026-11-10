@@ -3,7 +3,7 @@
  * fetch. Логіка (що показати) — у `connections-model.js`; тут лише «стан → HTML» і слова (`t()`).
  *
  *   connPageHTML(v)  v = {space, list, notes, failed, busy}
- *                     space  — запис `/api/spaces` поточного простору ({id, name, path, integrations, capabilities});
+ *                     space  — запис `/api/spaces` поточного простору ({id, name, path, capabilities});
  *                     list   — записи `GET /api/modules` або `null` (вантажиться);
  *                     notes  — примітки своїх модулів (`GET /api/modules`, `[{folder, code}]`), може не бути;
  *                     failed — `{code, message}`, коли список не прочитався;
@@ -131,9 +131,8 @@ export function cardHTML(e, busy) {
 export function nowHTML(role, v) {
   const p = providerLine(role, v.space?.capabilities, v.list);
   if (!p) return "";
-  const txt = p.kind === "legacy" ? t("cnNowLegacy")
-    : p.kind === "error" ? t("cnNowError")
-      : p.kind === "roleError" ? t("cnNowRoleError")
+  const txt = p.kind === "error" ? t("cnNowError")
+    : p.kind === "roleError" ? t("cnNowRoleError")
       : p.kind === "waiting" ? t("cnNowWaiting", modName(p.entry))
         : p.kind === "none" ? (p.noneKey ? t("cnNowNone", t(p.noneKey)) : t("cnNowNobody"))
           : t("cnNow", p.entry ? modName(p.entry) : p.id);

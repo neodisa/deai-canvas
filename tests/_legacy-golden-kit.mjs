@@ -13,12 +13,13 @@
  * коміту (так еталон звіряли з минулим, а не з самим собою).
  */
 
-/** Простір ЛІГА в формі відповіді після модулів: інтеграції ввімкнено, публікує зашитий код. Форма 2а (без ключа
- *  `comments`) лишена свідомо: це відповідь сервера, що роль `comments` ще не знає, і ЛІГА з нею мусить лишитись такою
- *  самою (`hasTeamComments`: відсутній ключ = «не знаємо» → за `integrations`). */
+/** Простір ЛІГА в формі відповіді після 4d-4c: ЛІГА — це `compat` (схема `design-canvas`), прапорця `integrations` сервер не шле.
+ *  Форма 2а (без ключа `comments`) лишена свідомо: це відповідь сервера, що роль `comments` ще не знає, і ЛІГА з нею мусить
+ *  лишитись такою самою (`hasTeamComments`: відсутній ключ = «не знаємо» → не крадемо). */
 export const LIGA = {
-  id: "liga", name: "ЛІГА", color: "space-1", integrations: true,
-  capabilities: { publish: "legacy", tokens: null },
+  id: "liga", name: "ЛІГА", color: "space-1",
+  capabilities: { publish: "vercel-publish", tokens: null },
+  compat: { publish: "design-canvas" },
 };
 
 const STATE = (o = {}) => ({
@@ -60,7 +61,7 @@ const PALETTE = (o) => ({
   gl: "sync", iterLabel: "Іт.3",
   shots: { have: 3, stale: 0, total: 3, running: false, bad: false, done: 0 },
   lang: "uk", commentMode: "local",
-  space: { id: LIGA.id, integrations: true, capabilities: LIGA.capabilities },
+  space: { id: LIGA.id, capabilities: LIGA.capabilities, compat: LIGA.compat },
   ...o,
 });
 

@@ -441,15 +441,17 @@ test("вкладена кнопка «Відкрити в канвасі» ма�
 
 /* ── простори (Deai 1.0, етап 1) ──────────────────────────────────────────────
    `data.space` — те, що `/api/tasks-overview` віддає поруч з `mine`/`team`.
-   Простір без інтеграцій: дашборда команди нема (`team: null`) — вкладки
+   Простір без дашборда команди (`capabilities.dashboard == null`, 4d-4c; було `integrations === false`): дашборда команди нема (`team: null`) — вкладки
    «Команда» немає, а збережена в UI вкладка `team` читається як `mine` (інакше
    екран малював би порожній список під вкладкою, якої нема). «Нова задача» —
    єдиний спосіб завести задачу не з Jira-реєстру, тож кнопка стоїть у голові
    екрана саме там, де інтеграцій нема. */
-const OFF = { name: "P", integrations: false };
+const NO_DASH = { dashboard: null };
+const OFF = { name: "P", capabilities: NO_DASH };
+const WITH_DASH = { dashboard: "supabase-dashboard" };
 const D_OFF = (o = {}) => ({ current: null, mine: [], team: null, space: OFF, ...o });
 
-test("простір без інтеграцій: заголовок «Задачі · P», вкладки «Команда» нема, є «Нова задача»", () => {
+test("простір без дашборда: заголовок «Задачі · P», вкладки «Команда» нема, є «Нова задача»", () => {
   const h = homeHTML(UI(), D_OFF());
   assert.match(h, /<h1 class="th-h">Задачі · P<\/h1>/);
   assert.doesNotMatch(h, /data-v="team"/, "вкладка команди без дашборда");
@@ -463,17 +465,19 @@ test("простір без інтеграцій: заголовок «Зада�
    інтеграцій нема, — голова простору ЛІГА лишається побайтно як була (один `<h1>`). Обидві кнопки — в обгортці
    `.th-head-acts`: вона один флекс-елемент голови, тож коли довга назва простору не лишає місця, `.th-head`
    (`flex-wrap:wrap`, див. `tests/spaces-css.test.mjs`) переносить під заголовок обидві кнопки разом, а не по одній. */
-test("голова простору без інтеграцій: «Підключення» поряд із «Нова задача»; простір ЛІГА — без змін", () => {
+test("голова простору без дашборда: «Підключення» поряд із «Нова задача»; простір ЛІГА — без змін", () => {
   const off = homeHTML(UI(), D_OFF());
   assert.match(off, /<div class="th-head-acts"><button class="ctl ctl--out" data-th="conn">[\s\S]*?Підключення<\/button><button class="ctl ctl--pri" data-th="newtask">/);
-  const liga = homeHTML(UI(), { ...DATA, space: { name: "Liga", integrations: true } });
+  const liga = homeHTML(UI(), { ...DATA, space: { name: "Liga", capabilities: WITH_DASH } });
   assert.doesNotMatch(liga, /data-th="conn"/);
   /* Кнопка з іконкою `sliders`, а голова ЛІГА — як була: без обгортки й без `th-head`. */
   assert.match(/<button[^>]*data-th="conn">[\s\S]*?<\/button>/.exec(off)[0], /#i-sliders/);
   assert.doesNotMatch(liga, /th-head/);
   assert.match(liga, /<div class="th-in">\s*<h1 class="th-h">Задачі · Liga<\/h1>\s*<div class="th-tabs"/);
-  /* Без `space` і з відсутнім/невідомим `integrations` — теж без кнопки: вимикач лише рівно `integrations === false`. */
-  for (const space of [undefined, null, { name: "P" }, { name: "P", integrations: undefined }]) {
+  /* Без `space` і без відомостей про роль `dashboard` — теж без кнопки: вимикач лише коли відповідь знає `capabilities`
+     і роль у ній порожня (невідомість не краде в людини команду). */
+  for (const space of [undefined, null, { name: "P" }, { name: "P", capabilities: {} }, { name: "P", capabilities: "x" },
+    { name: "P", capabilities: { publish: null } }]) {
     assert.doesNotMatch(homeHTML(UI(), { ...DATA, space }), /data-th="conn"/, JSON.stringify(space));
   }
 });
@@ -495,7 +499,7 @@ test("«Підключення» в голові — англійською «Co
   } finally { setLang("uk"); }
 });
 
-test("простір без інтеграцій і без задач: порожній стан із підказкою агентові й кнопкою", () => {
+test("простір без дашборда і без задач: порожній стан із підказкою агентові й кнопкою", () => {
   const h = homeHTML(UI(), D_OFF());
   assert.match(h, /class="th-empty[ "]/);
   assert.match(h, /Тут ще нема задач/);
@@ -514,14 +518,14 @@ test("порожній стан простору — і в нижній част
   assert.match(g, /id="th-grid"/);
 });
 
-test("простір без інтеграцій із задачами: картки, без порожнього стану; «Нова задача» лише в голові", () => {
+test("простір без дашборда із задачами: картки, без порожнього стану; «Нова задача» лише в голові", () => {
   const h = homeHTML(UI(), D_OFF({ mine: [A, B], current: "edr" }));
   assert.equal(cards(h), 2);
   assert.doesNotMatch(h, /Тут ще нема задач/);
   assert.equal((h.match(/data-th="newtask"/g) || []).length, 1);
 });
 
-test("простір без інтеграцій: фільтр сховав усе — це «Нічого не знайдено», не «порожній простір»", () => {
+test("простір без дашборда: фільтр сховав усе — це «Нічого не знайдено», не «порожній простір»", () => {
   const h = homeHTML(UI({ q: "zzzнемає" }), D_OFF({ mine: [A, B] }));
   assert.match(h, /Нічого не знайдено/);
   assert.doesNotMatch(h, /Тут ще нема задач/);
@@ -552,7 +556,7 @@ test("effectiveTab: `team` лишається, коли команда є; мо�
   assert.equal(effectiveTab(UI({ tab: "team" }), err), "team");
 });
 
-test("до відповіді: вкладки на місці; відомий простір без інтеграцій ховає «Команду» одразу", () => {
+test("до відповіді: вкладки на місці; відомий простір без дашборда ховає «Команду» одразу", () => {
   // без відомостей про простір — як було (вкладки є «поки вантажиться»)
   assert.match(homeHTML(UI(), { loading: true }), /data-v="team"/);
   assert.match(homeHTML(UI(), null), /data-v="team"/);
@@ -564,8 +568,8 @@ test("до відповіді: вкладки на місці; відомий п
   assert.equal((h.match(/data-th="newtask"/g) || []).length, 1, "кнопка в голові є й до відповіді; порожнього стану ще нема");
 });
 
-test("з інтеграціями: кнопки «Нова задача» нема, вкладки й заголовок як були", () => {
-  const withInt = { name: "ЛІГА", integrations: true };
+test("з дашбордом: кнопки «Нова задача» нема, вкладки й заголовок як були", () => {
+  const withInt = { name: "ЛІГА", capabilities: WITH_DASH };
   const h = homeHTML(UI(), { ...DATA, space: withInt });
   assert.doesNotMatch(h, /data-th="newtask"/);
   assert.match(h, /data-v="team"/);
@@ -594,7 +598,7 @@ test("команда без ключа `team` (стара форма відпо�
 
 test("назва простору екранується в заголовку й у підказці агентові", () => {
   const evil = '<img src=x onerror=alert(1)>';
-  const h = homeHTML(UI(), D_OFF({ space: { name: evil, integrations: false } }));
+  const h = homeHTML(UI(), D_OFF({ space: { name: evil, capabilities: NO_DASH } }));
   assert.doesNotMatch(h, /<img src=x/);
   assert.match(h, /&lt;img src=x/);
 });
@@ -605,7 +609,7 @@ test("pruneFilters при `team: null` не кидає і не чіпає диз
   assert.ok(ui.designers.has("Хтось"), "дизайнерів без команди не чистимо: «не знаю» ≠ «нема»");
 });
 
-test("простір без інтеграцій: ключі словника екрана є в обох мовах", () => {
+test("простір без дашборда: ключі словника екрана є в обох мовах", () => {
   for (const k of ["tasksIn", "newTask", "spaceEmpty", "spaceEmptyAgent"]) {
     assert.ok(DICT.uk[k] !== undefined && DICT.en[k] !== undefined, k);
     assert.equal(typeof DICT.en[k], typeof DICT.uk[k], k);

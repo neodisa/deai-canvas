@@ -19,12 +19,12 @@
  *            tags: Set (ключі міток, `tagKey`), designers: Set, now?: мс }
  *          (`cursorId` екрана тут НЕ читається: фокус повертає `app.js`.)
  *   data = відповідь `/api/tasks-overview` (`{current, mine, team:{rows, error,
- *          fetchedAt, rowsAt}|null, space:{name, integrations}|null}`), АБО
+ *          fetchedAt, rowsAt}|null, space:{name, capabilities}|null}`), АБО
  *          `null`/`{loading:true[, space]}` до відповіді, АБО `{failed: "причина"}`,
  *          коли запит не вдався.
  *
  * Простори (Deai 1.0, етап 1): `data.space` дає заголовок «Задачі · <простір>».
- * Простір без інтеграцій (`integrations === false`) не має дашборда команди —
+ * Простір без дашборда команди (`capabilities.dashboard == null`) не має команди —
  * `team: null`: вкладки «Команда» нема, а збережена в UI вкладка `team`
  * читається як `mine` (`effectiveTab`; без цього екран малював би порожній
  * список під вкладкою, якої нема), і в голові зʼявляється «Нова задача» — єдиний
@@ -95,14 +95,17 @@ export function thumbBrokenHTML() {
 
 const ready = (data) => !!(data && Array.isArray(data.mine));
 
-/** Простір без інтеграцій: рівно `integrations === false` (див. `bar-model.js`, «Вимикач»). */
-const noIntegrations = (data) => data?.space?.integrations === false;
+/** Простір без дашборда команди: відповідь знає `capabilities` і роль `dashboard` у ній порожня (4d-4c; було `integrations === false`). */
+const noDashboard = (data) => {
+  const caps = data?.space?.capabilities;
+  return !!(caps && typeof caps === "object" && "dashboard" in caps && caps.dashboard == null);
+};
 
 /** Чи є в екрана вкладка «Команда». Є дані — рішає `team` (`null` або ключа нема =
  *  дашборда нема; обʼєкт, навіть із помилкою, = є). Даних ще нема — вкладка
- *  стоїть, як і раніше «поки вантажиться», АЛЕ відомий простір без інтеграцій
+ *  стоїть, як і раніше «поки вантажиться», АЛЕ відомий простір без дашборда
  *  ховає її вже зараз, щоб вона не мигала на мить завантаження. */
-const hasTeam = (data) => (ready(data) ? data.team != null : !noIntegrations(data));
+const hasTeam = (data) => (ready(data) ? data.team != null : !noDashboard(data));
 
 /** Вкладка, яка справді малюється: збережена `team` без вкладки «Команда» — `mine`.
  *  Експортована: `app.js` вибирає за нею ще й пошук/сортування/повторний запит. */
@@ -289,9 +292,9 @@ export function homeGridHTML(ui, data) {
   const banner = (data.loadError ? bannerHTML(t("thLoadErr", data.loadError)) : "")
     + (err ? bannerHTML(t("thTeamErr", err), stale ? t("thStale", stale) : "") : "")
     + trackerBanner(team, data);
-  /* Порожній простір без інтеграцій — не «порожня видача»: скидати нічого, і кнопка
+  /* Порожній простір без дашборда — не «порожня видача»: скидати нічого, і кнопка
      «Скинути фільтри» вела б у нікуди. Замість неї — шлях до першої задачі. */
-  const empty = noIntegrations(data) && !src.length
+  const empty = noDashboard(data) && !src.length
     ? `<div class="th-empty th-empty--space"><b>${esc(t("spaceEmpty"))}</b>`
       + `${esc(t("spaceEmptyAgent", data.space.name))}`
       + `<div class="th-empty-act">${newTaskBtn()}</div></div>`
@@ -317,11 +320,11 @@ export function homeHTML(ui, data) {
   const sort = effectiveSort(ui);
   const opts = sortsFor(ui.tab).map((k) =>
     `<option value="${k}"${sort === k ? " selected" : ""}>${esc(t(`sort_${k}`))}</option>`).join("");
-  /* Кнопки «Підключення» й «Нова задача» живуть у голові лише коли вони є (простір без інтеграцій), обидві в
-     обгортці `.th-head-acts`: без них розмітка голови — як була (один `<h1>`), і екран простору з інтеграціями
+  /* Кнопки «Підключення» й «Нова задача» живуть у голові лише коли вони є (простір без дашборда), обидві в
+     обгортці `.th-head-acts`: без них розмітка голови — як була (один `<h1>`), і екран простору з дашбордом
      (ЛІГА) не змінюється ні байтом. */
   const h1 = `<h1 class="th-h">${esc(data?.space ? t("tasksIn", data.space.name) : t("tasks"))}</h1>`;
-  const head = noIntegrations(data)
+  const head = noDashboard(data)
     ? `<div class="th-head">${h1}<div class="th-head-acts">${connBtn()}${newTaskBtn()}</div></div>` : h1;
   const tabs = tab("mine", t("thTabMine", nMine)) + (hasTeam(data) ? tab("team", t("thTabTeam", nTeam)) : "");
   return `<div class="th-in">

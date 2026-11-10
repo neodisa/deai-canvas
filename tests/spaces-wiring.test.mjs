@@ -326,8 +326,8 @@ test("палітра ⌘K: простори — масив лише коли ш�
   assert.match(body, /spaces: spacesResp && !spacesResp\.off \? spacesResp\.spaces : undefined,/);
   assert.match(body, /spaceId: st\.space\?\.id \?\? null,/);
   /* Task 8 (модулі 2а): до вимикача додано `capabilities` — на них тепер стоїть публікація в ⌘K
-     (`hasPublish`), а лише `integrations` не відрізняє «публікує модуль» від «публікації нема». */
-  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, integrations: st\.space\.integrations, capabilities: st\.space\.capabilities, compat: st\.space\.compat \} : null,/);
+     (`hasPublish`); прапорця `integrations` сервер більше не шле (4d-4c). */
+  assert.match(body, /space: st\.space \? \{ id: st\.space\.id, capabilities: st\.space\.capabilities, compat: st\.space\.compat \} : null,/);
   assert.match(fn("openPalette"), /loadSpaces\(\)\.then\(\(\) => \{ if \(paletteOverlay === 'pal'\) repaintPaletteList\(\); \}\);/);
 });
 
@@ -452,7 +452,7 @@ test("«Відкрити превью» і «Скопіювати посилан
 
 test("палітра й смуга: публікація — на hasPublish, командний канал — на hasTeamComments, GitLab — на hasVcs", () => {
   assert.match(pal, /import \{ hasPublish, hasTeamComments, hasVcs \} from "\.\/spaces-model\.js";/);
-  assert.match(pal, /const noVcs = !hasVcs\(s\.space\);/, "синк із git — на ролі `vcs`, не на integrations");
+  assert.match(pal, /const noVcs = !hasVcs\(s\.space\);/, "синк із git — на ролі `vcs`");
   assert.match(pal, /if \(hasPublish\(s\.space\)\) \{\n    out\.push\(\{\n      id: "publish"/);
   assert.match(pal, /if \(!noVcs\) \{\n    \/\/ Той самий трьохгілковий розгляд/);
   assert.match(pal, /if \(ch === "project" && !hasTeamComments\(s\.space\)\) continue;/, "командний канал — на `capabilities.comments`, не на інтеграціях");
@@ -567,7 +567,7 @@ test("публікація: кнопка оживає на ВСІХ шляхах
     "успіх Vercel (плашка)": { post: async () => ok },
     "людина перейшла на іншу задачу (тост, ранній return)": { post: async () => ok, spaceNow: flipSpace() },
     "публікація ЛІГА (`render()` і return)": { post: async () => ({ ok: true, url: "https://pv-1.example.app" }),
-      spaceNow: () => ({ id: "liga", integrations: true, capabilities: { publish: "legacy" } }) },
+      spaceNow: () => ({ id: "liga", capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } }) },
     "локальна публікація (плашка й return)": { post: async () => ({ ok: true, local: { path: "/x", url: "/published/p/t/" } }),
       spaceNow: () => ({ id: "p", capabilities: { publish: "static-publish" } }) },
     "відмова сервера (catch)": { post: async () => { throw Object.assign(new Error("boom"), { code: "module-error" }); } },

@@ -16,89 +16,74 @@ const has = (k) => DICT.uk[k] !== undefined && DICT.en[k] !== undefined;
 
 /* ── канал коментарів ──────────────────────────────────────────────────── */
 
-test("effectiveCommentMode: без інтеграцій `project` затискається в `local`, решта — як є", () => {
-  assert.equal(effectiveCommentMode({ integrations: false }, "project"), "local");
-  assert.equal(effectiveCommentMode({ integrations: false }, "local"), "local");
-  assert.equal(effectiveCommentMode({ integrations: true }, "project"), "project");
-  assert.equal(effectiveCommentMode({ integrations: true }, "local"), "local");
+const NOCOMM = { capabilities: { publish: null, tokens: null, comments: null } };
+const COMM = { capabilities: { publish: null, tokens: null, comments: "supabase-comments" } };
+
+test("effectiveCommentMode: без постачальника коментарів `project` затискається в `local`, решта — як є", () => {
+  assert.equal(effectiveCommentMode(NOCOMM, "project"), "local");
+  assert.equal(effectiveCommentMode(NOCOMM, "local"), "local");
+  assert.equal(effectiveCommentMode(COMM, "project"), "project");
+  assert.equal(effectiveCommentMode(COMM, "local"), "local");
 });
 
 test("effectiveCommentMode: затискається ЛИШЕ `project`; інше значення (і сміття зі сховища) — як є", () => {
-  assert.equal(effectiveCommentMode({ integrations: false }, "щось"), "щось");
-  assert.equal(effectiveCommentMode({ integrations: false }, undefined), undefined);
+  assert.equal(effectiveCommentMode(NOCOMM, "щось"), "щось");
+  assert.equal(effectiveCommentMode(NOCOMM, undefined), undefined);
 });
 
-test("effectiveCommentMode: невідомий простір каналу не відбирає (рівно `=== false`)", () => {
-  for (const space of [null, undefined, {}, { integrations: undefined }, { integrations: 0 },
-    { integrations: "" }, { integrations: null }]) {
+test("effectiveCommentMode: невідомий простір каналу не відбирає", () => {
+  for (const space of [null, undefined, {}]) {
     assert.equal(effectiveCommentMode(space, "project"), "project", JSON.stringify(space));
   }
 });
 
 /* ── командний канал за `capabilities.comments` (2b-2, Task 2) ──────────────────────────────────────
-   Командний канал дає РОЛЬ `comments`: зашитий ЛІГА (`'legacy'`) або модуль; `null` — нікого. Прапорець
-   `integrations` тепер тільки запасний (відповіді старої форми без `capabilities`). */
+   Командний канал дає РОЛЬ `comments`: id модуля; `null` — нікого. Прапорця `integrations` сервер більше не шле
+   (4d-4c): відповідь без ключа ролі — «не знаємо» → не крадемо. */
 
-test("hasTeamComments: capabilities.comments — null ні, 'legacy' і id модуля так, незалежно від integrations", () => {
-  const caps = (comments, integrations) => ({ integrations, capabilities: { publish: null, tokens: null, comments } });
-  for (const integrations of [true, false, undefined]) {
-    assert.equal(hasTeamComments(caps(null, integrations)), false, `null / ${integrations}`);
-    assert.equal(hasTeamComments(caps("legacy", integrations)), true, `legacy / ${integrations}`);
-    assert.equal(hasTeamComments(caps("memo-comments", integrations)), true, `module / ${integrations}`);
-  }
+test("hasTeamComments: capabilities.comments — null ні, id модуля так", () => {
+  const caps = (comments) => ({ capabilities: { publish: null, tokens: null, comments } });
+  assert.equal(hasTeamComments(caps(null)), false);
+  assert.equal(hasTeamComments(caps("memo-comments")), true);
+  assert.equal(hasTeamComments(caps("supabase-comments")), true);
 });
 
 test("hasTeamComments: capabilities з помилкою (space.json не читається) і явним `comments: null` — каналу нема", () => {
-  assert.equal(hasTeamComments({ integrations: false, capabilities: { publish: null, tokens: null, comments: null, error: "space-json-unreadable" } }), false);
-  assert.equal(hasTeamComments({ integrations: true, capabilities: { publish: null, tokens: null, comments: null, error: "module-error" } }), false,
-    "явний null — навіть у просторі з інтеграціями (приватність: зашитий спільний Supabase не підміняє зламаний модуль)");
+  assert.equal(hasTeamComments({ capabilities: { publish: null, tokens: null, comments: null, error: "space-json-unreadable" } }), false);
+  assert.equal(hasTeamComments({ capabilities: { publish: null, tokens: null, comments: null, error: "module-error" } }), false,
+    "явний null — приватність: спільний Supabase не підміняє зламаний модуль");
 });
 
 /* Форма 2а: `capabilities` без ключа `comments` віддає сервер, що роль `comments` ще не знає (оновили `app.js`, а процес
-   Python із попереднім `serve.py` не перезапустили). Відсутній ключ — «не знаємо» → за `integrations`; «нікого» каже лише
+   Python із попереднім `serve.py` не перезапустили). Відсутній ключ — «не знаємо» → не крадемо; «нікого» каже лише
    явний `null`. Без цього ЛІГА після оновлення мовчки втрачала б «Команду». */
-test("hasTeamComments: capabilities БЕЗ ключа `comments` (форма 2а) — за `integrations`, рівно `=== false`", () => {
-  const old = { publish: "legacy", tokens: null };
-  assert.equal(hasTeamComments({ integrations: true, capabilities: old }), true, "ЛІГА зі старим сервером зберігає «Команду»");
-  assert.equal(hasTeamComments({ integrations: false, capabilities: { publish: "static-publish", tokens: null } }), false);
-  assert.equal(hasTeamComments({ integrations: true, capabilities: {} }), true);
-  assert.equal(hasTeamComments({ integrations: false, capabilities: {} }), false);
-  for (const space of [{ capabilities: old }, { integrations: undefined, capabilities: old }, { integrations: 0, capabilities: old }]) {
-    assert.equal(hasTeamComments(space), true, `невідомість не краде канал: ${JSON.stringify(space)}`);
-  }
+test("hasTeamComments: capabilities БЕЗ ключа `comments` (форма 2а) — не крадемо", () => {
+  const old = { publish: "vercel-publish", tokens: null };
+  assert.equal(hasTeamComments({ capabilities: old }), true, "ЛІГА зі старим сервером зберігає «Команду»");
+  assert.equal(hasTeamComments({ capabilities: {} }), true);
 });
 
-test("hasTeamComments: сміття замість capabilities не кидає (рядок, число, масив) — за `integrations`", () => {
+test("hasTeamComments: сміття замість capabilities не кидає (рядок, число, масив) — не крадемо", () => {
   for (const caps of ["x", 5, [], true]) {
-    assert.doesNotThrow(() => hasTeamComments({ integrations: true, capabilities: caps }), String(caps));
+    assert.doesNotThrow(() => hasTeamComments({ capabilities: caps }), String(caps));
   }
-  assert.equal(hasTeamComments({ integrations: false, capabilities: "x" }), false);
-  assert.equal(hasTeamComments({ integrations: true, capabilities: "x" }), true);
+  assert.equal(hasTeamComments({ capabilities: "x" }), true);
 });
 
-test("hasTeamComments: стара форма (без capabilities) — за `integrations`, рівно `=== false`", () => {
-  assert.equal(hasTeamComments({ integrations: false }), false);
-  assert.equal(hasTeamComments({ integrations: true }), true);
-  for (const space of [null, undefined, {}, { integrations: undefined }, { integrations: 0 }, { integrations: "" }, { integrations: null }]) {
+test("hasTeamComments: стара форма (без capabilities) — не крадемо", () => {
+  for (const space of [null, undefined, {}]) {
     assert.equal(hasTeamComments(space), true, JSON.stringify(space));
   }
 });
 
-test("effectiveCommentMode: простір без інтеграцій, але з модулем коментарів, лишає `project`", () => {
-  const mod = { integrations: false, capabilities: { publish: "static-publish", tokens: null, comments: "memo-comments" } };
+test("effectiveCommentMode: простір із модулем коментарів лишає `project`", () => {
+  const mod = { capabilities: { publish: "static-publish", tokens: null, comments: "memo-comments" } };
   assert.equal(effectiveCommentMode(mod, "project"), "project");
   assert.equal(effectiveCommentMode(mod, "local"), "local");
 });
 
-test("effectiveCommentMode: форма 2а (capabilities без `comments`) у ЛІГА лишає `project`, у просторі без інтеграцій затискає", () => {
-  assert.equal(effectiveCommentMode({ integrations: true, capabilities: { publish: "legacy", tokens: null } }, "project"), "project");
-  assert.equal(effectiveCommentMode({ integrations: false, capabilities: { publish: "static-publish", tokens: null } }, "project"), "local");
-});
-
-test("effectiveCommentMode: простір з інтеграціями, але без постачальника коментарів, затискає `project`", () => {
-  const none = { integrations: true, capabilities: { publish: "legacy", tokens: null, comments: null } };
-  assert.equal(effectiveCommentMode(none, "project"), "local");
-  assert.equal(effectiveCommentMode({ ...none, capabilities: { ...none.capabilities, comments: "legacy" } }, "project"), "project");
+test("effectiveCommentMode: форма 2а (capabilities без `comments`) лишає `project` — невідомість не краде", () => {
+  assert.equal(effectiveCommentMode({ capabilities: { publish: "vercel-publish", tokens: null } }, "project"), "project");
 });
 
 /* ── зміна простору ────────────────────────────────────────────────────── */

@@ -71,18 +71,16 @@ test("групування: відомі ролі за порядком, дал�
   assert.deepEqual(groupModules(null), { sections: [], missing: [] });
 });
 
-test("рядок «Зараз»: модуль, legacy, нікого з наслідком, невідома роль, нема capabilities", () => {
+test("рядок «Зараз»: модуль, нікого з наслідком, невідома роль, нема capabilities", () => {
   const list = [M("vercel-publish", { name: "Vercel" })];
   assert.deepEqual(providerLine("publish", { publish: "vercel-publish" }, list),
     { kind: "module", id: "vercel-publish", entry: list[0] });
   assert.deepEqual(providerLine("publish", { publish: "ghost" }, list), { kind: "module", id: "ghost", entry: null });
-  assert.deepEqual(providerLine("comments", { comments: "legacy" }, list), { kind: "legacy" });
+  assert.deepEqual(providerLine("comments", { comments: "legacy" }, list), { kind: "module", id: "legacy", entry: null }, "4d-4c: «legacy» — не особливе значення, а звичайний невідомий id");
   assert.deepEqual(providerLine("tokens", { tokens: null }, list), { kind: "none", noneKey: "cnNoneTokens" });
   assert.equal(providerLine("alpha", { publish: null }, list), null, "роль, якої capabilities не знає (4c-3: tracker і notify уже в capabilities, тож приклад — alpha)");
   assert.deepEqual(providerLine("notify", { notify: null }, list), { kind: "none", noneKey: "cnNoneNotify" }, "4c-3: notify без модуля — «нікого» з власним текстом");
-  assert.deepEqual(providerLine("notify", { notify: "legacy" }, list), { kind: "legacy" });
   assert.deepEqual(providerLine("tracker", { tracker: null }, list), { kind: "none", noneKey: "cnNoneTracker" }, "4c-2: tracker без модуля — «нікого» з власним текстом");
-  assert.deepEqual(providerLine("tracker", { tracker: "legacy" }, list), { kind: "legacy" });
   assert.equal(providerLine("error", { error: "" }, list), null, "роль «error» — не постачальник; непорожній capabilities.error — окремий стан нижче");
   assert.equal(providerLine("publish", null, list), null);
   assert.equal(providerLine("__proto__", {}, list), null);
@@ -155,31 +153,31 @@ test("хто тримає ролі: увімкнені (і неявний) з п
 
 test("наслідки вимкнення: «нікого» і в ЛІГА (запасного шляху нема, 4d-4b), лише для ролей, які він тримає", () => {
   const e = M("vercel-publish");
-  assert.deepEqual(disableConsequences(e, { integrations: false, capabilities: { publish: "vercel-publish" } }),
+  assert.deepEqual(disableConsequences(e, { capabilities: { publish: "vercel-publish" } }),
     [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }]);
-  assert.deepEqual(disableConsequences(e, { integrations: true, capabilities: { publish: "vercel-publish" } }),
+  assert.deepEqual(disableConsequences(e, { capabilities: { publish: "vercel-publish" } }),
     [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }], "4d-4b: у ЛІГА так само, як деінде");
-  assert.deepEqual(disableConsequences(e, { integrations: false, capabilities: { publish: "static-publish" } }), []);
+  assert.deepEqual(disableConsequences(e, { capabilities: { publish: "static-publish" } }), []);
   const tok = M("css-tokens", { roles: ["tokens"] });
-  assert.deepEqual(disableConsequences(tok, { integrations: true, capabilities: { tokens: "css-tokens" } }),
-    [{ role: "tokens", kind: "none", noneKey: "cnNoneTokens" }], "токенів ЛІГА не має — legacy тут нема");
+  assert.deepEqual(disableConsequences(tok, { capabilities: { tokens: "css-tokens" } }),
+    [{ role: "tokens", kind: "none", noneKey: "cnNoneTokens" }], "токенів ЛІГА не має");
   assert.deepEqual(disableConsequences(e, null), []);
   const sd = M("supabase-dashboard", { roles: ["dashboard"] });
-  assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "supabase-dashboard" } }),
+  assert.deepEqual(disableConsequences(sd, { capabilities: { dashboard: "supabase-dashboard" } }),
     [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }], "4d-4b: у ЛІГА дашборд після вимкнення — «нікого», як деінде");
-  assert.deepEqual(disableConsequences(sd, { integrations: false, capabilities: { dashboard: "supabase-dashboard" } }),
+  assert.deepEqual(disableConsequences(sd, { capabilities: { dashboard: "supabase-dashboard" } }),
     [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }]);
-  assert.deepEqual(disableConsequences(sd, { integrations: true, capabilities: { dashboard: "legacy" } }), [],
-    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
+  assert.deepEqual(disableConsequences(sd, { capabilities: { dashboard: "other-module" } }), [],
+    "роль тримає інший модуль, а не цей — наслідків нема");
   /* 4c-2: tracker. У ЛІГА вимкнення повертає Jira з конфігу установки; деінде статуси зникають — свій текст наслідку. */
   const jt = M("jira-tracker", { roles: ["tracker"] });
-  assert.deepEqual(disableConsequences(jt, { integrations: true, capabilities: { tracker: "jira-tracker" } }),
+  assert.deepEqual(disableConsequences(jt, { capabilities: { tracker: "jira-tracker" } }),
     [{ role: "tracker", kind: "none", noneKey: "cnNoneTracker", consKey: "cnDisableTracker" }], "4d-4b: у ЛІГА статуси після вимкнення зникають, як деінде");
-  assert.deepEqual(disableConsequences(jt, { integrations: false, capabilities: { tracker: "jira-tracker" } }),
+  assert.deepEqual(disableConsequences(jt, { capabilities: { tracker: "jira-tracker" } }),
     [{ role: "tracker", kind: "none", noneKey: "cnNoneTracker", consKey: "cnDisableTracker" }],
     "4c-2: поза ЛІГА статуси зникають — наслідок власним текстом");
-  assert.deepEqual(disableConsequences(jt, { integrations: true, capabilities: { tracker: "legacy" } }), [],
-    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
+  assert.deepEqual(disableConsequences(jt, { capabilities: { tracker: "other-module" } }), [],
+    "роль тримає інший модуль, а не цей — наслідків нема");
 });
 
 const SETTINGS = [
@@ -390,13 +388,13 @@ test("код tracker-auth (4c-2): невірний email чи токен Jira �
 
 test("наслідки вимкнення notify (4c-3): у ЛІГА — вбудована тиша Teams, деінде — свій текст наслідку (картки й перемикач зникнуть)", () => {
   const st = M("supabase-teams", { roles: ["notify"] });
-  assert.deepEqual(disableConsequences(st, { integrations: true, capabilities: { notify: "supabase-teams" } }),
+  assert.deepEqual(disableConsequences(st, { capabilities: { notify: "supabase-teams" } }),
     [{ role: "notify", kind: "none", noneKey: "cnNoneNotify", consKey: "cnDisableNotify" }], "4d-4b: у ЛІГА картки Teams після вимкнення зникають, як деінде");
-  assert.deepEqual(disableConsequences(st, { integrations: false, capabilities: { notify: "supabase-teams" } }),
+  assert.deepEqual(disableConsequences(st, { capabilities: { notify: "supabase-teams" } }),
     [{ role: "notify", kind: "none", noneKey: "cnNoneNotify", consKey: "cnDisableNotify" }],
     "поза ЛІГА — наслідок власним текстом, а не загальним «роль лишиться без модуля»");
-  assert.deepEqual(disableConsequences(st, { integrations: true, capabilities: { notify: "legacy" } }), [],
-    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
+  assert.deepEqual(disableConsequences(st, { capabilities: { notify: "other-module" } }), [],
+    "роль тримає інший модуль, а не цей — наслідків нема");
 });
 
 test("коди перевірки supabase-teams (4c-3): кожен має свій текст, а не «Модуль упав» чи загальний «нема таблиці comments»", () => {
@@ -533,12 +531,12 @@ test("вердикт перевірки vcs-*: кожен код має свій
 
 test("наслідки вимкнення git-sync: у ЛІГА — «знову вбудований синк», без інтеграцій — «нікого» з текстом cnNoneVcs", () => {
   const gs = M("git-sync", { roles: ["vcs"], enabled: true });
-  assert.deepEqual(disableConsequences(gs, { integrations: true, capabilities: { vcs: "git-sync" } }),
+  assert.deepEqual(disableConsequences(gs, { capabilities: { vcs: "git-sync" } }),
     [{ role: "vcs", kind: "none", noneKey: "cnNoneVcs" }], "4d-4b: у ЛІГА при вимкненні роль лишається «нікого», запасного синку нема");
-  assert.deepEqual(disableConsequences(gs, { integrations: false, capabilities: { vcs: "git-sync" } }),
+  assert.deepEqual(disableConsequences(gs, { capabilities: { vcs: "git-sync" } }),
     [{ role: "vcs", kind: "none", noneKey: "cnNoneVcs" }]);
-  assert.deepEqual(disableConsequences(gs, { integrations: true, capabilities: { vcs: "legacy" } }), [],
-    "роль тримає неявний 'legacy', а не цей модуль — наслідків нема");
+  assert.deepEqual(disableConsequences(gs, { capabilities: { vcs: "other-module" } }), [],
+    "роль тримає інший модуль, а не цей — наслідків нема");
 });
 
 test("roleCardId: де сісти фокусу для ролі — постачальник, інакше перша картка секції; нема — null", () => {
@@ -548,7 +546,6 @@ test("roleCardId: де сісти фокусу для ролі — постач�
   const list = [pub, other, gs];
   assert.equal(roleCardId("vcs", { vcs: "git-sync" }, list), "git-sync", "постачальник — його картка, хоч не перша");
   assert.equal(roleCardId("vcs", { vcs: null }, list), "other-vcs", "ніхто не тримає — перша картка секції ролі");
-  assert.equal(roleCardId("vcs", { vcs: "legacy" }, list), "other-vcs", "'legacy' — не картка");
   assert.equal(roleCardId("vcs", { vcs: "ghost" }, list), "other-vcs", "постачальника нема в списку — як без нього");
   assert.equal(roleCardId("vcs", undefined, list), "other-vcs", "без capabilities — теж перша картка секції");
   assert.equal(roleCardId("vcs", { vcs: null }, [pub]), null, "модулів ролі нема — нема й картки");
@@ -588,8 +585,8 @@ test("vercel-publish: поле auth — select з варіантами token/cli
   assert.equal(f.find((x) => x.key === "token").type, "secret");
 });
 
-test("наслідки вимкнення мігрованого vercel-publish (4d-3c, 4d-4b): у просторі з інтеграціями — «нікого», запасного шляху нема", () => {
+test("наслідки вимкнення мігрованого vercel-publish (4d-3c, 4d-4b): у просторі зі схемою ЛІГИ — «нікого», запасного шляху нема", () => {
   const e = M("vercel-publish");
-  const sp = { integrations: true, capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
+  const sp = { capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
   assert.deepEqual(disableConsequences(e, sp), [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }]);
 });

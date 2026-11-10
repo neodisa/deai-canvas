@@ -117,11 +117,11 @@ import { ico } from "./icons.js";
  *   spaces: [{id, name, available?}] | undefined — перелік просторів з `/api/spaces`;
  *     без МАСИВУ пунктів просторів нема зовсім (шар вимкнено). spaceId: string|null —
  *     поточний простір (за його відсутності — `space.id`); поточний у переліку
- *     не пропонується. space: {id, integrations, capabilities}|null — поточний простір;
+ *     не пропонується. space: {id, capabilities}|null — поточний простір;
  *     синк із git, публікацію й командний канал дають їхні постачальники:
  *     `capabilities.vcs`, `capabilities.publish` і `capabilities.comments`
  *     (`hasVcs`, `hasPublish`, `hasTeamComments`; стара форма без `capabilities` —
- *     за `integrations`).
+ *     не знаємо → не крадемо).
  */
 /* Мова інтерфейсу — єдина група, що не залежить від задачі: її читає і звичайний
    реєстр, і екран «Задачі». Одна функція на обох, щоб два місця не розійшлись. */
@@ -202,8 +202,8 @@ export function paletteActions(state) {
   /* Простір без ролі `vcs`: палітра не пропонує того, чого немає в смузі, — синку з git
      (`bar-model.js`, «Вимикач»). ОМІТ, не «вимкнено з причиною» (той самий вибір, що для груп,
      безглуздих у режимі). Рішення — `hasVcs(space)`: ключ `capabilities.vcs`, а без нього
-     `integrations !== false` (4a; до того було `integrations === false`).
-     Командний канал коментарів (`aud-project`) НЕ на інтеграціях (2b-2): його
+     «не знаємо → не крадемо» (4a).
+     Командний канал коментарів (`aud-project`) — на ролі (2b-2): його
      дає роль `comments` — `hasTeamComments(space)`, див. групу `gSet` нижче.
      ПУБЛІКАЦІЯ (`publish`, `togglepub`, `copylink`, `openpreview`) від інтеграцій більше
      не залежить (модулі 2а, Task 8): вона йде на `hasPublish` (`capabilities.publish`) —
@@ -450,9 +450,9 @@ export function paletteActions(state) {
     ]) {
       /* Командного каналу в просторі без постачальника ролі `comments` нема (`GET /comments`,
          `?ch=project` → 409): локальний — єдиний, і аварійний вихід «до локального» лишається.
-         Постачальник — зашитий ЛІГА (інтеграції) АБО модуль, тож це `hasTeamComments`
-         (`capabilities.comments`), а не `integrations`: простір без інтеграцій із модулем
-         коментарів має канал `project`, хоч Teams у нього й нема. */
+         Постачальник — модуль, тож це `hasTeamComments`
+         (`capabilities.comments`): простір із модулем коментарів має канал `project`,
+         хоч Teams у нього й нема. */
       if (ch === "project" && !hasTeamComments(s.space)) continue;
       out.push({
         id, group: "gSet", labelKey, icon, act: "aud", val: ch,

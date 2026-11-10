@@ -763,10 +763,10 @@ test("простори: «Підключення простору «A»» для
   assert.ok(!paletteActions(S({ spaces: SPS })).some((a) => a.id === "space-conn"), "поточний невідомий — нема");
   assert.ok(!paletteActions(S({ spaces: SPS, spaceId: "zzz" })).some((a) => a.id === "space-conn"), "поточного нема в переліку");
   /* Поточний — і зі `space.id`, як для решти пунктів просторів. */
-  assert.equal(paletteActions(S({ spaces: SPS, space: { id: "b", integrations: true } }))
+  assert.equal(paletteActions(S({ spaces: SPS, space: { id: "b" } }))
     .find((a) => a.id === "space-conn")?.labelArgs[0], "B");
-  /* Простір без інтеграцій екрану підключень не позбавлений — навпаки, це його головний вхід. */
-  assert.ok(paletteActions(S({ spaces: SPS, spaceId: "a", space: { id: "a", integrations: false } }))
+  /* Простір без ролей екрану підключень не позбавлений — навпаки, це його головний вхід. */
+  assert.ok(paletteActions(S({ spaces: SPS, spaceId: "a", space: { id: "a", capabilities: NO_ROLES } }))
     .some((a) => a.id === "space-conn"));
   /* Без масиву просторів (шар вимкнено) — як і решта пунктів просторів, нема. */
   assert.ok(!paletteActions(S({ spaceId: "a" })).some((a) => a.id === "space-conn"));
@@ -852,7 +852,7 @@ test("простори: порожній масив — лише «Новий п
 test("простори: поточний — зі spaceId або зі space.id", () => {
   const byId = (o) => paletteActions(S({ spaces: SPS, ...o })).filter((a) => a.act === "space").map((a) => a.val);
   assert.deepEqual(byId({ spaceId: "a" }), ["b"]);
-  assert.deepEqual(byId({ space: { id: "b", integrations: true } }), ["a"]);
+  assert.deepEqual(byId({ space: { id: "b" } }), ["a"]);
   assert.deepEqual(byId({}), ["a", "b"], "поточний невідомий — усі пропонуємо");
 });
 
@@ -911,11 +911,13 @@ test("простори: кожна нова дія має labelKey в обох �
   }
 });
 
-test("простір без інтеграцій: з палітри йдуть публікація, посилання, превʼю, GitLab, аудиторія команди", () => {
-  const off = (o = {}) => paletteActions(S({ space: { integrations: false }, gl: "behind", ...o })).map((a) => a.id);
+const NO_ROLES = { publish: null, tokens: null, comments: null, vcs: null, notify: null, dashboard: null, tracker: null };
+
+test("простір без ролей: з палітри йдуть публікація, посилання, превʼю, GitLab, аудиторія команди", () => {
+  const off = (o = {}) => paletteActions(S({ space: { capabilities: NO_ROLES }, gl: "behind", ...o })).map((a) => a.id);
   const ids = off();
   for (const id of ["aud-project", "publish", "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup"]) {
-    assert.ok(!ids.includes(id), `«${id}» мусить піти з палітри простору без інтеграцій`);
+    assert.ok(!ids.includes(id), `«${id}» мусить піти з палітри простору без ролей`);
   }
   assert.ok(!off({ gl: "off" }).includes("glsetup"), "glsetup — теж GitLab");
   // що лишається: усе, що не ходить назовні
@@ -924,9 +926,9 @@ test("простір без інтеграцій: з палітри йдуть �
   }
 });
 
-test("простір З інтеграціями (або без відомостей): палітра ціла, як була", () => {
+test("простір зі схемою ЛІГИ (або без відомостей): палітра ціла, як була", () => {
   const baseIds = paletteActions(S({ gl: "behind" })).map((a) => a.id);
-  for (const space of [{ integrations: true }, {}, null, undefined]) {
+  for (const space of [{ capabilities: { publish: "vercel-publish", tokens: null }, compat: { publish: "design-canvas" } }, {}, null, undefined]) {
     const ids = paletteActions(S({ space, gl: "behind" })).map((a) => a.id);
     assert.deepEqual(ids, baseIds, JSON.stringify(space));
   }
@@ -935,9 +937,9 @@ test("простір З інтеграціями (або без відомост
   }
 });
 
-test("простір без інтеграцій: решта палітри не зачеплена — відрізняється рівно набором прихованих", () => {
+test("простір без ролей: решта палітри не зачеплена — відрізняється рівно набором прихованих", () => {
   const all = paletteActions(S({ gl: "behind" })).map((a) => a.id);
-  const off = paletteActions(S({ space: { integrations: false }, gl: "behind" })).map((a) => a.id);
+  const off = paletteActions(S({ space: { capabilities: NO_ROLES }, gl: "behind" })).map((a) => a.id);
   const gone = all.filter((id) => !off.includes(id)).sort();
   assert.deepEqual(gone, ["aud-project", "copylink", "glpull", "glpush", "openpreview", "publish", "togglepub"]);
 });
@@ -974,14 +976,15 @@ test("палітра: «Копіювати посилання» і «Відкр�
 
 /* ── публікація за `capabilities.publish` (модулі 2а, Task 8) ─────────────────
    Спільний `if (!noOutward)` розщеплено: `publish`/`togglepub`/`copylink`/`openpreview`
-   ходять на `hasPublish` (`spaces-model.js`), а GitLab (`gl*`) лишився на `integrations`;
+   ходять на `hasPublish` (`spaces-model.js`), а GitLab (`gl*`) — на `hasVcs`;
    командний канал (`aud-project`) від 2b-2 — на `hasTeamComments` (`capabilities.comments`).
-   Простір без інтеграцій, де публікує вбудований модуль, отримує публікацію, але не GitLab. */
+   Простір, де публікує вбудований модуль, отримує публікацію, але не GitLab. */
 {
-  /* `comments` у capabilities — командний канал (2b-2): ЛІГА має зашитий (`legacy`), решта в цих фікстурах — нікого. */
-  const MODS = { id: "p", integrations: false, capabilities: { publish: "static-publish", tokens: null, comments: null } };
-  const LEGS = { id: "liga", integrations: true, capabilities: { publish: "legacy", tokens: null, comments: "legacy" } };
-  const NOPUB = { id: "n", integrations: false, capabilities: { publish: null, tokens: null, comments: null } };
+  /* `comments` у capabilities — командний канал (2b-2): ЛІГА має свій (модуль зі схемою в `compat`), решта в цих фікстурах — нікого. */
+  const MODS = { id: "p", capabilities: { ...NO_ROLES, publish: "static-publish", tokens: null } };
+  const LEGS = { id: "liga", capabilities: { publish: "vercel-publish", tokens: null, comments: "supabase-comments" },
+    compat: { publish: "design-canvas", comments: "comment-layer" } };
+  const NOPUB = { id: "n", capabilities: NO_ROLES };
   const PUB = ["publish", "togglepub", "copylink", "openpreview"];
   const GL = ["glpush", "glpull", "glsetup"];
   const ids = (space, o = {}) => paletteActions(S({ space, gl: "behind", ...o })).map((a) => a.id);
@@ -989,7 +992,7 @@ test("палітра: «Копіювати посилання» і «Відкр�
   test("публікація модулем: у палітрі публікація, превʼю й посилання — без GitLab і командного каналу", () => {
     const got = ids(MODS);
     for (const id of PUB) assert.ok(got.includes(id), `«${id}» мусить бути в палітрі простору з модулем`);
-    for (const id of [...GL, "aud-project"]) assert.ok(!got.includes(id), `«${id}» — на інтеграціях, а їх тут нема`);
+    for (const id of [...GL, "aud-project"]) assert.ok(!got.includes(id), `«${id}» — на ролі vcs/comments, а їх тут нема`);
     assert.ok(got.includes("aud-local"), "аварійний вихід до локального каналу лишається");
     assert.ok(!ids(MODS, { gl: "off" }).includes("glsetup"));
   });
@@ -997,11 +1000,12 @@ test("палітра: «Копіювати посилання» і «Відкр�
   test("простір без постачальника публікації (`publish: null`): жодної з чотирьох дій публікації", () => {
     const got = ids(NOPUB);
     for (const id of [...PUB, ...GL, "aud-project"]) assert.ok(!got.includes(id), id);
-    assert.ok(ids({ ...NOPUB, integrations: true }).includes("glpush"), "GitLab — на інтеграціях, не на публікації");
-    assert.ok(!ids({ ...NOPUB, integrations: true }).includes("publish"));
+    const withVcs = { ...NOPUB, capabilities: { ...NOPUB.capabilities, vcs: "git-sync" } };
+    assert.ok(ids(withVcs).includes("glpush"), "GitLab — на ролі vcs, не на публікації");
+    assert.ok(!ids(withVcs).includes("publish"));
   });
 
-  test("простір ЛІГА (`legacy`): палітра ціла, як була", () => {
+  test("простір ЛІГА (compat): палітра ціла, як була", () => {
     const got = ids(LEGS);
     for (const id of [...PUB, ...GL.slice(0, 2), "aud-project"]) assert.ok(got.includes(id), id);
     assert.deepEqual(got, ids(null), "те саме, що без відомостей про простір");
@@ -1013,36 +1017,34 @@ test("палітра: «Копіювати посилання» і «Відкр�
     assert.deepEqual(gone, ["aud-project", "glpull", "glpush"]);
   });
 
-  test("модуль публікації при ввімкнених інтеграціях: GitLab і командний канал живі", () => {
-    const got = ids({ ...MODS, integrations: true, capabilities: { ...MODS.capabilities, comments: "legacy" } });
+  test("модуль публікації з ролями vcs і comments: GitLab і командний канал живі", () => {
+    const got = ids({ ...MODS, capabilities: { ...MODS.capabilities, vcs: "git-sync", comments: "supabase-comments" } });
     for (const id of [...PUB, "glpush", "glpull", "aud-project"]) assert.ok(got.includes(id), id);
   });
 
-  /* Командний канал — на `capabilities.comments` (роль `comments`, 2b-2), а не на `integrations`: GitLab лишається на
-     інтеграціях. Простір без інтеграцій із МОДУЛЕМ коментарів має канал `project`, але не GitLab; простір з
-     інтеграціями без постачальника коментарів — GitLab, але без каналу. */
-  test("модуль коментарів у просторі БЕЗ інтеграцій: `aud-project` є, GitLab нема", () => {
+  /* Командний канал — на `capabilities.comments` (роль `comments`, 2b-2), GitLab — на ролі `vcs`.
+     Простір із МОДУЛЕМ коментарів має канал `project`, але не GitLab; простір з роллю vcs без постачальника
+     коментарів — GitLab, але без каналу. */
+  test("модуль коментарів у просторі БЕЗ ролі vcs: `aud-project` є, GitLab нема", () => {
     const got = ids({ ...MODS, capabilities: { ...MODS.capabilities, comments: "memo-comments" } });
     assert.ok(got.includes("aud-project"));
     assert.ok(got.includes("aud-local"));
     for (const id of GL) assert.ok(!got.includes(id), id);
   });
 
-  test("простір З інтеграціями, але БЕЗ постачальника коментарів (`comments: null`): GitLab є, `aud-project` нема", () => {
+  test("простір ЛІГИ, але БЕЗ постачальника коментарів (`comments: null`): GitLab є, `aud-project` нема", () => {
     const got = ids({ ...LEGS, capabilities: { ...LEGS.capabilities, comments: null } });
     assert.ok(!got.includes("aud-project"));
     assert.ok(got.includes("aud-local"));
     for (const id of GL.slice(0, 2)) assert.ok(got.includes(id), id);
   });
 
-  test("`aud-project`: capabilities форми 2а (без ключа `comments`) — за `integrations`: ЛІГА зі старим сервером не губить «Команду»", () => {
-    assert.ok(ids({ id: "liga", integrations: true, capabilities: { publish: "legacy", tokens: null } }).includes("aud-project"));
-    assert.ok(!ids({ id: "p", integrations: false, capabilities: { publish: "static-publish", tokens: null } }).includes("aud-project"));
+  test("`aud-project`: capabilities форми 2а (без ключа `comments`) — не знаємо → не крадемо: ЛІГА зі старим сервером не губить «Команду»", () => {
+    assert.ok(ids({ id: "liga", capabilities: { publish: "vercel-publish", tokens: null } }).includes("aud-project"));
   });
 
-  test("`aud-project`: стара форма простору (без capabilities) — за `integrations`, рівно `=== false`", () => {
-    assert.ok(!ids({ id: "o", integrations: false }).includes("aud-project"));
-    for (const space of [{ id: "o", integrations: true }, {}, null, undefined]) {
+  test("`aud-project`: стара форма простору (без capabilities) — не крадемо", () => {
+    for (const space of [{ id: "o" }, {}, null, undefined]) {
       assert.ok(ids(space).includes("aud-project"), JSON.stringify(space));
     }
   });

@@ -889,7 +889,6 @@ const UK = {
   cnNow: (name) => `Зараз: ${name}`,
   cnNowNone: (why) => `Зараз: нікого — ${why}`,
   cnNowNobody: 'Зараз: нікого',
-  cnNowLegacy: 'Зараз: вбудована інтеграція ЛІГА (модуль у цій ролі її перекриє)',
   cnNowError: 'Зараз: невідомо — space.json не читається',
   cnNowRoleError: 'Зараз: не працює — модуль цієї ролі не завантажився',
   cnMissingSec: 'Не встановлені на цьому компʼютері',
@@ -982,7 +981,6 @@ const UK = {
   cnReplace: 'Замінити',
   cnDisableAsk: (name) => `Вимкнути «${name}»? Налаштування й секрети лишаться — підключити можна знову.`,
   cnDisableNone: (role, why) => `Після цього роль «${role}» лишиться без модуля: ${why}.`,
-  cnDisableLegacy: (role) => `Роль «${role}» знову виконуватиме вбудована інтеграція ЛІГА.`,
   cnDisableTracker: 'Статуси задач зникнуть з екрана «Задачі» й перестануть оновлюватись у дашборді.',
   cnDisableNotify: 'Нові коментарі перестануть надходити карткою в Teams, а перемикач тиші зникне.',
   // Коди перевірки (`last_check.error`) → людський текст.
@@ -1852,7 +1850,6 @@ const EN = {
   cnNow: (name) => `Now: ${name}`,
   cnNowNone: (why) => `Now: none — ${why}`,
   cnNowNobody: 'Now: none',
-  cnNowLegacy: 'Now: the built-in LIGA integration (a module in this role overrides it)',
   cnNowError: 'Now: unknown — space.json cannot be read',
   cnNowRoleError: "Now: not working — this role's module failed to load",
   cnMissingSec: 'Not installed on this computer',
@@ -1943,7 +1940,6 @@ const EN = {
   cnReplace: 'Replace',
   cnDisableAsk: (name) => `Turn off “${name}”? Its settings and secrets stay — you can connect it again.`,
   cnDisableNone: (role, why) => `After this, the “${role}” role has no module: ${why}.`,
-  cnDisableLegacy: (role) => `The built-in LIGA integration takes the “${role}” role back.`,
   cnDisableTracker: 'Task statuses will disappear from the Tasks screen and stop updating in the dashboard.',
   cnDisableNotify: 'New comments will stop arriving as Teams cards, and the silence switch will disappear.',
   // Check codes (`last_check.error`) → human text.

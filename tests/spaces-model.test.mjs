@@ -345,31 +345,26 @@ test("taskErrShowsReason: check-timeout / module-error / vcs-error — завж�
 
 /* ── роль notify (4c-3): пункт Teams і опит тиші — за capabilities.notify ───────────────── */
 
-test("hasNotify: ключ capabilities.notify вирішує (модуль чи 'legacy'), а без ключа — integrations, як hasVcs", () => {
-  assert.equal(hasNotify({ integrations: false, capabilities: { notify: "supabase-teams" } }), true, "модуль у просторі без інтеграцій");
-  assert.equal(hasNotify({ integrations: true, capabilities: { notify: "legacy" } }), true, "зашитий шлях ЛІГА");
-  assert.equal(hasNotify({ integrations: true, capabilities: { notify: null } }), false, "роль вимкнено — Teams нема, хоч інтеграції є");
-  assert.equal(hasNotify({ integrations: true, capabilities: { publish: "legacy" } }), true, "ключа нема + інтеграції (сервер ще без ролі)");
-  assert.equal(hasNotify({ integrations: false, capabilities: { publish: "static-publish" } }), false, "ключа нема + без інтеграцій");
-  assert.equal(hasNotify({ id: "p", integrations: true }), true, "стара форма: рівно за integrations");
-  assert.equal(hasNotify({ id: "p", integrations: false }), false);
-  assert.equal(hasNotify({ id: "p" }), true, "невідомість Teams не краде: лише рівно `=== false`");
+test("hasNotify: ключ capabilities.notify вирішує (id модуля), а без ключа — не знаємо → не крадемо, як hasVcs", () => {
+  assert.equal(hasNotify({ capabilities: { notify: "supabase-teams" } }), true, "модуль");
+  assert.equal(hasNotify({ capabilities: { notify: null } }), false, "роль вимкнено — Teams нема");
+  assert.equal(hasNotify({ capabilities: { publish: "static-publish" } }), true, "ключа нема (сервер ще без ролі) — не крадемо");
+  assert.equal(hasNotify({ id: "p" }), true, "стара форма: невідомість Teams не краде");
   assert.equal(hasNotify(null), true, "hasNotify(null) — true, як hasVcs(null): шар вимкнено");
   assert.equal(hasNotify(undefined), true);
-  assert.equal(hasNotify({ capabilities: "x", integrations: false }), false, "caps не обʼєкт — як без ключа");
+  assert.equal(hasNotify({ capabilities: "x" }), true, "caps не обʼєкт — як без ключа");
 });
 
 /* ── роль publish (4d-3c): «ЛІГА» живе в `compat.publish`, а `capabilities.publish` — id модуля ──────────── */
 
-const MIG = { id: "liga", integrations: true, capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
-const PLAIN = { id: "p", integrations: true, capabilities: { publish: "vercel-publish" } };
+const MIG = { id: "liga", capabilities: { publish: "vercel-publish" }, compat: { publish: "design-canvas" } };
+const PLAIN = { id: "p", capabilities: { publish: "vercel-publish" } };
 
 test("isLegacyPublish: compat.publish === design-canvas — ЛІГА, хоч capabilities.publish — id модуля", () => {
   assert.equal(isLegacyPublish(MIG), true);
   assert.equal(isLegacyPublish(PLAIN), false, "звичайний vercel-publish без compat — модуль-шлях");
-  assert.equal(isLegacyPublish({ capabilities: { publish: "legacy" } }), true);
-  assert.equal(isLegacyPublish({ integrations: true }), true, "стара відповідь без capabilities — за integrations");
-  assert.equal(isLegacyPublish({ integrations: false }), false);
+  assert.equal(isLegacyPublish({ capabilities: { publish: "legacy" } }), false, "4d-4c: значення «legacy» більше не знак ЛІГИ");
+  assert.equal(isLegacyPublish({ id: "p" }), true, "стара відповідь без capabilities — не знаємо → як було");
   assert.equal(isLegacyPublish({ capabilities: { publish: "vercel-publish" }, compat: { publish: "other" } }), false, "інше значення — не ЛІГА");
   assert.equal(isLegacyPublish({ capabilities: { publish: "static-publish" }, compat: { vcs: "design-canvas" } }), false, "compat чужої ролі");
 });
@@ -388,7 +383,7 @@ test("мігрований запис ЛІГА читається гілкою �
 });
 
 test("4d-4b: capabilities без запасного постачальника (збій → null, не 'legacy') читаються як «ролі нема», а не падають", () => {
-  const sp = { id: "legacy", integrations: true, capabilities: { publish: null, comments: null, vcs: null, dashboard: null, tracker: null, notify: null, error: "space-json-unreadable" } };
+  const sp = { id: "legacy", capabilities: { publish: null, comments: null, vcs: null, dashboard: null, tracker: null, notify: null, error: "space-json-unreadable" } };
   assert.equal(hasPublish(sp), false);
   assert.equal(hasVcs(sp), false);
   assert.equal(hasNotify(sp), false);

@@ -575,12 +575,13 @@ const SPACES = [
   { id: "p", name: "P", color: "space-2", path: "/w/p", tasks: 1, available: true },
   { id: "gone", name: "G", color: "space-3", path: "/w/gone", tasks: 0, available: false },
 ];
-const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", integrations: false, ...o });
+const NO_ROLES = { publish: null, tokens: null, comments: null, vcs: null, notify: null, dashboard: null, tracker: null };
+const SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", capabilities: NO_ROLES, ...o });
 const chip = (h) => /<button[^>]*data-dd="space"[\s\S]*?<\/button>/.exec(h)?.[0];
 
-test("простір без інтеграцій: розмітка не кидає, без GitLab і публікації, Figma лишається", () => {
+test("простір без ролей: розмітка не кидає, без GitLab і публікації, Figma лишається", () => {
   let h;
-  assert.doesNotThrow(() => { h = html({ space: { integrations: false } }); });
+  assert.doesNotThrow(() => { h = html({ space: { capabilities: NO_ROLES } }); });
   assert.doesNotMatch(h, /data-dd="gl"/);
   assert.doesNotMatch(h, /data-act="publish"/);
   assert.doesNotMatch(h, /data-dd="pub"/);
@@ -874,12 +875,12 @@ test("дропдаун просторів: роздільник перед «Н�
 
 /* Снапшот-страж: простір З інтеграціями змінює смугу рівно на фішку — ні байтом
    більше. Це те, що береже ЛІГА (legacy-простір) від випадкових змін розмітки. */
-test("розмітка зі space{integrations:true} = розмітка без space мінус блок фішки — побайтно", () => {
+test("розмітка зі space без відомостей про ролі = розмітка без space мінус блок фішки — побайтно", () => {
   const stripChip = (h) => h.replace(/<div class="ddhost space-h">[\s\S]*?<\/div>/, "");
   const iterList = [{ id: "it1", label: "Іт.1", note: "перша", pub: true, onGl: false }];
   for (const o of [{}, { homeOpen: true }, { openDd: "pub" }, { openDd: "gl", gl: "behind" },
     { openDd: "iter", iterList }, { openDd: "more" }, { hasIteration: false }, { tasksErr: true }]) {
-    const withSpace = html({ ...o, space: SP({ integrations: true }) });
+    const withSpace = html({ ...o, space: { id: "p", name: "P", color: "space-2" } });
     assert.ok(chip(withSpace), `фішки нема: ${JSON.stringify(o)}`);
     assert.equal(stripChip(withSpace), html(o), `розмітка розійшлась: ${JSON.stringify(o)}`);
   }
@@ -906,11 +907,13 @@ test("розмітка зі space збалансована: кожен <button> 
    застереження про «публічність» ЛІГА-посилання (воно про зовнішній URL). Підпис
    «локально» — на «Відкрити» й «Скопіювати». */
 const CAPS_SP = (publish, o = {}) => ({
-  id: "p", name: "P", color: "space-2", integrations: false, capabilities: { publish, tokens: null }, ...o,
+  id: "p", name: "P", color: "space-2", capabilities: { ...NO_ROLES, publish, tokens: null }, ...o,
 });
+const LIGA_SP = (o = {}) => ({ id: "p", name: "P", color: "space-2", capabilities: { publish: "vercel-publish", tokens: null },
+  compat: { publish: "design-canvas" }, ...o });
 const btn = (h, act) => (h.match(new RegExp(`<button[^>]*data-act="${act}"[^]*?</button>`)) || [null])[0];
 
-test("модуль публікації без інтеграцій: кнопка й дропдаун публікації є, GitLab нема", () => {
+test("модуль публікації без ролей vcs/notify: кнопка й дропдаун публікації є, GitLab нема", () => {
   const h = html({ space: CAPS_SP("static-publish"), openDd: "pub", teams: null });
   assert.ok(btn(h, "publish"), "кнопки «Опублікувати» нема");
   assert.match(h, /data-dd="pub"/);
@@ -922,7 +925,7 @@ test("модуль публікації без інтеграцій: кнопк�
 });
 
 test("ЛІГА-простір: застереження про публічність і пароль — на місці", () => {
-  const h = html({ space: CAPS_SP("legacy", { integrations: true }), openDd: "pub", pw: "1100", teams: { channel: "c", muted: false } });
+  const h = html({ space: LIGA_SP(), openDd: "pub", pw: "1100", teams: { channel: "c", muted: false } });
   assert.match(h, /class="dd-note"/);
   assert.ok(btn(h, "pubpw"));
   assert.ok(btn(h, "teamsnotify"));
@@ -1004,7 +1007,7 @@ test("застереження Vercel — англійською, коли мо�
 
 test("ЛІГА: `pubGate: false` у стані не дає модульних застережень — лишається одне `dd-note` про публічність ЛІГА", () => {
   setLang("uk");
-  const h = html({ space: CAPS_SP("legacy", { integrations: true }), openDd: "pub", pubGate: false, pubGateStale: true });
+  const h = html({ space: LIGA_SP(), openDd: "pub", pubGate: false, pubGateStale: true });
   assert.equal((h.match(/class="dd-note"/g) || []).length, 1);
   assert.doesNotMatch(h, /dd-note--/);
 });
