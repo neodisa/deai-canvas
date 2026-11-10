@@ -50,6 +50,8 @@
 - **Д5. `comment_channel` у `/api/task`:** є, коли `comments_provider(sp)` — модуль (не прапорець).
 - **Д6. Простір запиту не зафіксовано (`request_space_id() is None`, фонові воркери):** вихідне рішення бере простір **задачі**
   (`spaces.find_task`), не потоку; не знайдено → `False`. Це закриває стару пастку «воркер без `request_space` = інтеграції ввімкнено».
+  _Уточнено Поправкою 2 плану: рішення бере `spaces.effective_space()`; незафіксований простір — неявний, отже закрито (`False`);
+  фоновий воркер несе простір своєї задачі з собою, CLI фіксує його через `task_anywhere`._
 - **Д7. JS:** геть `=== "legacy"`/`!== "legacy"` (`connections-model.js`, `spaces-model.js`), `kind === "legacy"` у
   `connections-view.js`, i18n `cnNowLegacy`/`cnDisableLegacy`, усі `integrations !== false`-запасні. `tasks-home.js` `noIntegrations` і
   `spaces-model.js` `taskCreateClones` — через `capabilities` (`dashboard == null`; `compat.vcs`). `isLegacyVcs`/`isLegacyPublish` і

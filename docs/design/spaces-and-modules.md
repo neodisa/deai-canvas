@@ -679,7 +679,7 @@ sub-releases of 4d-3. What is built:
   `non-id-keys`). `restore` of the step returns `space.json` only.
 - **The runtime has no adapter:** `of_task` reads `track` only; `track_root(space, track_id)` has no `cfg`; `default_task_root(cfg)` is the
   fallback of `task-new`. The adapter lives on as private `_legacy_*` names in `liga_migrate`; an AST guard keeps it out of the rest.
-- **`profile` is a boundary:** the input of `task-new` (lenient), the pull of the shared registry (`_track_of_entry`) and `_liga_flow`;
+- **`profile` is a boundary:** the input of `task-new` (lenient) and the pull of the shared registry (`_track_of_entry`) (`_liga_flow` is gone since 0.22.0);
   it is still written into new LIGA records for old colleagues.
 - Details, differences and limits: `CHANGELOG.md`, `[0.20.0]`; design: `docs/superpowers/specs/2026-11-07-liga-tracks-final-design.md`.
 
