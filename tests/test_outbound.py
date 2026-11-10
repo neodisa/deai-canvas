@@ -79,3 +79,24 @@ class VcsOutbound(unittest.TestCase):
         self.assertIs(deai_modules.vcs_outbound(sp), True)
         with mock.patch.object(deai_modules, 'catalog', side_effect=AssertionError('каталог')):
             self.assertIs(deai_modules.vcs_outbound(sp), True)
+
+    def test_a_provider_with_another_id_is_closed_even_with_the_compat_record(self):
+        fx = lf.LigaFixture(self).env().build()
+        other = deai_modules.Module('other-vcs', roles=['vcs'])
+        with mock.patch.object(deai_modules, '_capabilities_full', return_value=({}, {'vcs': other})):
+            self.assertIs(deai_modules.vcs_outbound(_liga(fx)), False)
+
+    def test_a_non_builtin_provider_is_closed_even_with_the_compat_record(self):
+        fx = lf.LigaFixture(self).env().build()
+        own = deai_modules.Module(deai_modules.VCS_MODULE, roles=['vcs'], origin='space')
+        with mock.patch.object(deai_modules, '_capabilities_full', return_value=({}, {'vcs': own})):
+            self.assertIs(deai_modules.vcs_outbound(_liga(fx)), False)
+
+    def test_a_failure_while_reading_is_closed_not_an_exception(self):
+        fx = lf.LigaFixture(self).env().build()
+        with mock.patch.object(deai_modules, '_capabilities_full', side_effect=RuntimeError('boom')):
+            self.assertIs(deai_modules.vcs_outbound(_liga(fx)), False)
+
+    def test_a_compat_value_that_is_not_allowed_is_closed(self):
+        fx = lf.LigaFixture(self).env().build(overrides={'vcs': {'settings': {'compat': 'x'}}})
+        self.assertIs(deai_modules.vcs_outbound(_liga(fx)), False)

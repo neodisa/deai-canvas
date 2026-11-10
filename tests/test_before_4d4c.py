@@ -1,4 +1,5 @@
 """Форма знімка вихідних рішень 0.21.0 (етап 4d-4c, Task 1): сам знімок — еталон, цей тест лише стереже його форму й машинонезалежність."""
+import getpass
 import json
 import os
 import unittest
@@ -33,6 +34,8 @@ class Before4d4cShape(unittest.TestCase):
         self.assertEqual(s['liga']['task_new']['from']['code'], 'from-needs-plain-space')
 
     def test_machine_independent(self):
-        raw = open(FIX, encoding='utf-8').read()
-        for bad in (os.path.expanduser('~'), os.path.realpath(__import__('tempfile').gettempdir())):
+        with open(FIX, encoding='utf-8') as f:
+            raw = f.read()
+        for bad in (os.path.expanduser('~'), os.path.realpath(__import__('tempfile').gettempdir()),
+                    getpass.getuser()):
             self.assertNotIn(bad, raw)
