@@ -155,8 +155,6 @@ test("наслідки вимкнення: «нікого» і в ЛІГА (за
   const e = M("vercel-publish");
   assert.deepEqual(disableConsequences(e, { capabilities: { publish: "vercel-publish" } }),
     [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }]);
-  assert.deepEqual(disableConsequences(e, { capabilities: { publish: "vercel-publish" } }),
-    [{ role: "publish", kind: "none", noneKey: "cnNonePublish" }], "4d-4b: у ЛІГА так само, як деінде");
   assert.deepEqual(disableConsequences(e, { capabilities: { publish: "static-publish" } }), []);
   const tok = M("css-tokens", { roles: ["tokens"] });
   assert.deepEqual(disableConsequences(tok, { capabilities: { tokens: "css-tokens" } }),
@@ -165,8 +163,6 @@ test("наслідки вимкнення: «нікого» і в ЛІГА (за
   const sd = M("supabase-dashboard", { roles: ["dashboard"] });
   assert.deepEqual(disableConsequences(sd, { capabilities: { dashboard: "supabase-dashboard" } }),
     [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }], "4d-4b: у ЛІГА дашборд після вимкнення — «нікого», як деінде");
-  assert.deepEqual(disableConsequences(sd, { capabilities: { dashboard: "supabase-dashboard" } }),
-    [{ role: "dashboard", kind: "none", noneKey: "cnNoneDashboard" }]);
   assert.deepEqual(disableConsequences(sd, { capabilities: { dashboard: "other-module" } }), [],
     "роль тримає інший модуль, а не цей — наслідків нема");
   /* 4c-2: tracker. У ЛІГА вимкнення повертає Jira з конфігу установки; деінде статуси зникають — свій текст наслідку. */
