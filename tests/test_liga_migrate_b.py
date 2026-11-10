@@ -518,7 +518,7 @@ class ChannelCallSites(_ChanStand):
                         cb(cfg['tasks'][tid], tid)
             self.assertLessEqual(len(reads), 1, (compat, reads))
 
-    def test_decision_failure_falls_back_to_the_legacy_scheme(self):
+    def test_decision_failure_closes_the_task_channel_but_mute_keeps_the_fallback(self):
         """Збій рішення (нечитабельний `space.json`; id задачі, непридатний для `channel_for`) — схема comment-layer, не 5xx і не виняток."""
         serve = self.serve
         rig, space, cfg = self.stand(space_json='not json')
@@ -526,6 +526,7 @@ class ChannelCallSites(_ChanStand):
             self.assertEqual(serve._comment_channel_in(space, cfg['tasks']['a-1'], 'a-1'), 'liga-shared')
             self.assertEqual(serve._comment_channel_in(space, cfg['tasks']['a-2'], 'a-2', internal=True), 'dc/a-2/internal')
         out = self.http(rig)
+        # Д5: канал у `/api/task` є лише за постачальником `comments`, а збій рішення закриває його (fail-closed); teams-mute лишає запасну схему
         self.assertEqual(out['task'], {'a-1': None, 'a-2': None})      # 4d-4c: `/api/task` без постачальника `comments` каналу не має
         self.assertEqual(out['mute_get'], LAYER_CHANNELS)
         rig, space, cfg = self.stand(compat=None)

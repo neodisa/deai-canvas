@@ -181,6 +181,17 @@ class OutboundGates(unittest.TestCase):
         with spaces.request_space('legacy'):
             self.assertFalse(serve.registry_allowed())
 
+    def test_registry_fails_closed_when_the_space_is_unreadable(self):
+        """Збій читання простору (`SpacesError`) — реєстр ЗАКРИТО: `registry_allowed()` False, `push_tasks` не викликається."""
+        env = {k: v for k, v in os.environ.items() if k not in ('DC_TASKS_FILE', 'DC_NO_OVERVIEW')}   # гвард конфігу не мусить закривати замість воріт
+        fake = mock.MagicMock()
+        boom = spaces.SpacesError('spaces-unreadable', 'p')
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(spaces, 'effective_space', side_effect=boom), \
+                mock.patch.dict('sys.modules', {'registry': fake}):
+            self.assertFalse(serve.registry_allowed())
+            self.assertFalse(serve._registry_push('t1'))
+            fake.push_tasks.assert_not_called()
+
     def test_a_non_liga_space_with_the_liga_scheme_still_has_no_registry(self):
         """Реєстр команди — лише `legacy: true`: звичайний простір зі схемою ЛІГИ (`compat`) в нього не пише, хоча `vcs_outbound` для нього True."""
         self.add_plain({'git-sync': {'enabled': True, 'settings': {'compat': 'design-canvas', 'branch': 'main', 'path': 'm/{task}'}}})

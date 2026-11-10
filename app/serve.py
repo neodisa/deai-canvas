@@ -2771,7 +2771,8 @@ def _comment_channel_in(sp, task, tid, internal=False):
     """Канал коментарів задачі для місць, що раніше завжди рахували `comment_channel` (`api/task`, `teams-mute` GET/POST): рішення
     за постачальником ролі `comments` простору `sp` (з кешу `_capabilities_full`, не новим обходом каталогу), як і скрізь —
     через `deai_modules.comment_channel_of`. Збій рішення (нема постачальника, `ModuleError`, `channel_for` на непридатному id) —
-    схема comment-layer, як у 0.17.0: ні 5xx, ні `None`, помилку бачить сама роль коментарів."""
+    схема comment-layer, як у 0.17.0: ні 5xx, ні `None`. Помилку рішення тут ковтаємо: `/api/task` у такому разі каналу не віддає взагалі
+    (`_task_comment_channel` вимагає постачальника), а запасна схема лишається лише для teams-mute."""
     prov = deai_modules.comments_prov_cached(sp)
     if isinstance(prov, deai_modules.Module):
         try:

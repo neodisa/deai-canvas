@@ -2,6 +2,7 @@
 import getpass
 import json
 import os
+import re
 import unittest
 
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'outbound', 'before-4d4c.json')
@@ -36,6 +37,8 @@ class Before4d4cShape(unittest.TestCase):
     def test_machine_independent(self):
         with open(FIX, encoding='utf-8') as f:
             raw = f.read()
-        for bad in (os.path.expanduser('~'), os.path.realpath(__import__('tempfile').gettempdir()),
-                    getpass.getuser()):
+        for bad in (os.path.expanduser('~'), os.path.realpath(__import__('tempfile').gettempdir())):
             self.assertNotIn(bad, raw)
+        u = getpass.getuser()
+        if len(u) >= 4:       # коротке імʼя збігалося б із випадковими підрядками; шукаємо лише ціле слово
+            self.assertIsNone(re.search(r'(?<![A-Za-z0-9_.-])' + re.escape(u) + r'(?![A-Za-z0-9_.-])', raw))
