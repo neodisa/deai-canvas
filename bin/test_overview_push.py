@@ -450,8 +450,8 @@ class TestMigratedLigaIsStillLiga(unittest.TestCase):
                 fn(**kw)
         return calls
 
-    LIGA = {"id": "legacy", "path": "/x", "legacy": True, "integrations": True}
-    PLAIN = {"id": "alpha", "path": "/y", "legacy": False, "integrations": False}
+    LIGA = {"id": "legacy", "path": "/x", "legacy": True}
+    PLAIN = {"id": "alpha", "path": "/y", "legacy": False}
 
     def test_target_migrated_liga_keeps_legacy_flag_but_uses_module_ctx(self):
         module = FakeModule({})

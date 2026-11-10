@@ -900,7 +900,7 @@ R-C — лишити. Поправки 1–19 прийнято. `bin/state.py` (
 
 ### Task 6: прапорець геть з `spaces.py`; `RoleOff`; маркери — у `liga_migrate`
 
-> Примітка (Поправка 20): `liga_migrate._liga_integrations` і `liga_space` уже існують з T5. Task 6 лише переспрямовує на неї шість читань ключа й переносить маркери (`has_markers`).
+> Примітка (Поправка 20): збій читання кореня в `_liga_integrations` — це ЛІГА (`True`, безпечний бік: не чіпаємо), читання — `spaces._read_json(spaces.legacy_tasks_file())`; сніпет Кроку 3 нижче приведено до коду, а тести `test_a_broken_legacy_root_counts_as_liga` / `test_a_missing_legacy_root_counts_as_liga` пінять це (план тоді дає `skip-tasks-unreadable`). `liga_migrate._liga_integrations` і `liga_space` уже існують з T5. Task 6 лише переспрямовує на неї шість читань ключа й переносить маркери (`has_markers`).
 
 **Files:** Modify `app/spaces.py` (20, 44, 51, 82-85, 160, 281-285, 317, 365, 427-458, 808, 861-870), `app/liga_migrate.py` (470-481, 577-580, 610, 651, 686, 730, 1778-1780), `app/serve.py` (3110, 3396, 5198, 5791-5792 коментарі), `bin/inbox.py`, `bin/state.py`, `tests/liga_fixture.py`; Create `tests/test_no_integrations_flag.py` (Python-частина охоронця); тести.
 
@@ -959,10 +959,10 @@ R-C — лишити. Поправки 1–19 прийнято. `bin/state.py` (
       if isinstance(v, bool):
           return v
       try:
-          cfg = install_config.load_legacy_tasks()
-      except (OSError, ValueError, RecursionError):
-          return False
-      return isinstance(cfg, dict) and _has_markers(cfg)
+          cfg = spaces._read_json(spaces.legacy_tasks_file())
+          return bool(isinstance(cfg, dict) and _has_markers(cfg))
+      except Exception:  # noqa: BLE001 — будь-який збій = «ЛІГА» (Поправка 20)
+          return True
   ```
   `spaces.has_markers(cfg)` (577, 580) → `_has_markers`; `liga.get('integrations') is not True` (651, 1778) → `not _liga_integrations(liga)`; словники `space = {…, 'integrations': liga.get('integrations') is True}` (610, 686, 730) і `{…, 'integrations': True}` (1780) → без ключа.
 - [ ] **Step 4: `serve.py`/`bin`.** `IntegrationsOff` → `spaces.RoleOff` (`serve.py:3396`; `bin/inbox.py:377,482`; `bin/state.py:305`; коментарі 3110, 2624); `spaces_listing`: `sp = {'id': e['id'], 'path': e['path']}`; коментарі «`integrations_on()` без простору» (5098, 5791) — стерти. `tests/liga_fixture.py::registry` → без ключа (параметр `integrations` видалити), `tests/test_liga_fixture.py:20` — без ключа.

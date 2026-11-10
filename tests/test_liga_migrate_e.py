@@ -1225,6 +1225,23 @@ class LigaIntegrationsWithoutTheKey(unittest.TestCase):
         self.assertFalse(liga_migrate._liga_integrations({'id': 'legacy'}))
         self.assertFalse(liga_migrate._liga_integrations({'id': 'legacy', 'integrations': 'yes'}))    # не `bool` — ключ не рахується
 
+    def _unreadable_root_is_liga(self, fx):
+        """Запис без ключа + нечитний корінь: збій читання = ЛІГА (безпечний бік), а план упирається в `skip-tasks-unreadable`, не в `skip-integrations-off`."""
+        fx.registry()
+        fx._write(os.path.join(fx.space_dir, 'space.json'), {'name': 'Liga'})
+        self.assertTrue(liga_migrate._liga_integrations({'id': 'legacy', 'legacy': True, 'path': fx.space_dir}))
+        self.assertEqual(liga_migrate.plan()['status'], 'skip-tasks-unreadable')
+
+    def test_a_broken_legacy_root_counts_as_liga(self):
+        fx = lf.LigaFixture(self).env()
+        fx._write(fx.tasks_path, '{ not json')
+        self._unreadable_root_is_liga(fx)
+
+    def test_a_missing_legacy_root_counts_as_liga(self):
+        fx = lf.LigaFixture(self).env()
+        self.assertFalse(os.path.exists(fx.tasks_path))
+        self._unreadable_root_is_liga(fx)
+
     def test_a_fresh_liga_without_the_key_migrates(self):
         fx = lf.LigaFixture(self).env()
         res = fx.migrate()                                            # запис БЕЗ ключа + корінь із маркером `registry`

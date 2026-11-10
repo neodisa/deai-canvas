@@ -2588,7 +2588,7 @@ def notify_call(fn, *args, resolved=None):
     if fn == 'mute_set':
         notify.check_set_args(*args)
     if prov is None:
-        # Нікого: простір без інтеграцій і без модуля (раніше — `RoleOff`). Маршрут відповідає 409 ще до цього виклику.
+        # Нікого: роль `notify` у просторі ніхто не веде. Маршрут відповідає 409 ще до цього виклику.
         raise OSError('сповіщень Teams у просторі нема')
     if _shared_module(space, prov):
         kind, fake = isolation.route('notify')
@@ -3082,8 +3082,8 @@ def comments_route(space, prov):
 #
 #     постачальник        читання                                   закриття
 #     Module              `list` модуля → піни у формі REST         `resolve` модуля
-#     None               `RoleOff` (як у просторі без      `RoleOff`
-#                         інтеграцій: командних коментарів нема)
+#     None                `RoleOff` (роль ніхто не веде:            `RoleOff`
+#                         командних коментарів нема)
 #     ModuleError         `ModuleError` — лише локальні піни        `ModuleError`
 #
 # ⛔ `ModuleError` (явно ввімкнений модуль загубився чи `space.json` не прочитати) НІКОЛИ не перетворюється на запасного постачальника:
@@ -5159,7 +5159,7 @@ def space_view(sp):
 
 def spaces_listing():
     """`spaces.listing()` + `capabilities` і `tracks`/`default_track` у кожному записі. Запис реєстру відновлюється з самого запису
-    списку: запис реєстру відновлюється з самого запису списку (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
+    списку (вдруге реєстр не читаємо — списку вистачає одного знімка). Один збій простору не ламає список:
     `capabilities` і напрямки не кидають.
 
     `tracks` (4d-1) — `[{id, label}]` напрямків простору й `default_track`; ⛔ БЕЗ `root` і `repo`: шляхи й адреси репо не їдуть у
