@@ -31,7 +31,8 @@ missing or **public** (`sb_publishable_…`, or a JWT whose payload says `"role"
 * `rows` — `GET <url>/rest/v1/<table>?select=<team columns>&limit=500`, 4 s;
 * `push(cards, mode)` — `POST <url>/rest/v1/<table>?on_conflict=id`, `Prefer: resolution=merge-duplicates|ignore-duplicates,return=minimal`,
   up to 50 cards per request (cards with a different set of keys go in separate requests, so a missing key never turns into
-  `null`); a failed request puts all its card ids into `failed`, the rest are stored. A value `None` is never sent; ids are unique per call — when a card id repeats, the last card wins (one `POST` with the same id twice is refused by Postgres as a whole);
+  `null`). With `compat: comment-layer` a request carries at most 3 cards: that schema's trigger `ov_update_scope_guard` lets a
+  key under row-level security update at most 3 dashboard rows per request and refuses a bigger one whole (`23514`); a failed request puts all its card ids into `failed`, the rest are stored. A value `None` is never sent; ids are unique per call — when a card id repeats, the last card wins (one `POST` with the same id twice is refused by Postgres as a whole);
 * `open_comments` — `GET <url>/rest/v1/comments?status=eq.open&select=project_id`: the numbers of open comments per channel,
   read from the table of `supabase-comments` in the same project. No such table — `{}`. Supabase cuts any answer at its
   `max-rows` (default 1000), so with more open comments than that the numbers are lower than the truth.

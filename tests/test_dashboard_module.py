@@ -330,6 +330,17 @@ class PushTest(ModuleCase):
         self.assertEqual([len(c['body']) for c in self.calls], [50, 50, 20])
         self.assertEqual([c['body'][0]['id'] for c in self.calls], ['t0', 't50', 't100'])
 
+    def test_comment_layer_batches_of_three(self):
+        """ЛІГА (`compat: comment-layer`): схема comment-layer ставить на `overview_projects` тригер `ov_update_scope_guard` —
+        публічний ключ оновлює ≤ 3 рядки за запит, більше → 400 [23514] на ВЕСЬ пакет. Тож пакети — по `COMPAT_BATCH` = 3."""
+        self.net(Resp(201, b''))
+        ctx = self.ctx(settings={'table': 'overview_projects', 'compat': 'comment-layer'})
+        res = self.run_fn('push', ctx, self.cards(7), 'merge')
+        self.assertEqual(res, {'ok': 7, 'failed': {}})
+        self.assertEqual([len(c['body']) for c in self.calls], [3, 3, 1])
+        self.assertEqual([c['body'][0]['id'] for c in self.calls], ['t0', 't3', 't6'])
+        self.assertEqual((self.g['COMPAT_BATCH'], self.g['BATCH']), (3, 50))
+
     def test_request_shape_merge_and_insert(self):
         self.net(Resp(201, b''))
         self.run_fn('push', self.ctx(), self.cards(1), 'merge')

@@ -10,7 +10,7 @@
     "playwright": "^1.62.1"
   },
   "license": "MIT",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "engines": {
     "node": ">=20"
   }

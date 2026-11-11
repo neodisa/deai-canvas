@@ -406,7 +406,8 @@ plan: `docs/superpowers/plans/2026-11-02-dashboard-role.md`. What is built:
   (`bin/overview_push.py sync [--space ID | --legacy]`), one per space at a time, with a deadline of 600 s checked by the next
   trigger; the rows are cached per space. The Connections screen and the wizard carry the role.
 - **Conscious differences from 0.11.0:** batches of up to 50 cards grouped by their key set (the last card of a repeated id
-  wins); the core waits 6 s for `rows` and the module's own timeout is 4 s (was 3 s); the sync child is not started for LIGA
+  wins; 3 per batch with `compat: comment-layer` — the comment-layer trigger `ov_update_scope_guard` caps an update by a
+  public key at 3 rows, since 0.22.1); the core waits 6 s for `rows` and the module's own timeout is 4 s (was 3 s); the sync child is not started for LIGA
   under `DC_TASKS_FILE`; the config of the CLI is read from `tasks.json` before the environment.
 - **Known limits:** LIGA's key is not checked for being non-public; the registry and Jira steps are LIGA's until 4d / 4c-2 (Jira: done in 4c-2); one
   lock for the team rows of all spaces (a dead service holds another space for up to 6 s); no timer for a hung child; the sync

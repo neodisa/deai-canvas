@@ -30,7 +30,7 @@
 Форми запитів (знімок 0.11.0: `tests/fixtures/dashboard/before-4c1.json`, `team_read` і `upsert_http`)
   * `rows` — `GET <url>/rest/v1/<table>?select=<TEAM_KEYS>&limit=500`, тайм-аут `READ_TIMEOUT_S` = 4 (було 3);
   * `push` — `POST <url>/rest/v1/<table>?on_conflict=id`, `Prefer: resolution=merge-duplicates|ignore-duplicates,return=minimal`,
-    `Content-Type: application/json`, пакетами до `BATCH` = 50 карток (було по одній), тайм-аут `PUSH_TIMEOUT_S` = 15 на пакет;
+    `Content-Type: application/json`, пакетами до `BATCH` = 50 карток (було по одній; при `compat: comment-layer` — `COMPAT_BATCH` = 3, ліміт тригера ЛІГИ), тайм-аут `PUSH_TIMEOUT_S` = 15 на пакет;
   * `open_comments` — `GET <url>/rest/v1/comments?status=eq.open&select=project_id`.
 """
 import base64
@@ -45,10 +45,13 @@ TEAM_KEYS = ('id', 'name', 'jira', 'jira_status', 'jira_status_cat', 'open_comme
              'updated_at', 'designer', 'iterations', 'pages')
 #: Ядро чекає на `rows` трохи довше (`dashboard.READ_TIMEOUT` = 6 с): власний тайм-аут (на операцію сокета) коротший, щоб відповісти своїм текстом, а не `check-timeout`.
 READ_TIMEOUT_S = 4
-#: Пакет `push`; ядро дає на весь виклик 60 с.
+#: Тайм-аут одного запиту `push`; ядро дає на ВЕСЬ виклик 60 с (усі пакети разом: у ЛІГИ по 3 картки — ~30 карток ≈ 11 запитів).
 PUSH_TIMEOUT_S = 15
 OPEN_TIMEOUT_S = 10
 BATCH = 50
+#: Пакет `push` при `compat: comment-layer` (ЛІГА): схема comment-layer тримає на таблиці дашборда тригер `ov_update_scope_guard`
+#: — публічний ключ оновлює ≤ 3 рядки за запит; більший пакет відхиляється цілим (HTTP 400, `23514` check_violation).
+COMPAT_BATCH = 3
 MAX_ROWS = 500
 DEFAULT_TABLE = 'deai_dashboard'
 #: Таблиця коментарів `supabase-comments` у тому ж проєкті (лише читання лічильників).
@@ -316,8 +319,8 @@ def _prepare(cards):
     return list(ready.items()), bad
 
 
-def _batches(ready):
-    """Пакети до `BATCH` карток З ОДНАКОВИМ НАБОРОМ КЛЮЧІВ. ⚠️ PostgREST у масиві з різними наборами ключів заповнює відсутні
+def _batches(ready, size=BATCH):
+    """Пакети до `size` (`BATCH`, у ЛІГИ — `COMPAT_BATCH`) карток З ОДНАКОВИМ НАБОРОМ КЛЮЧІВ. ⚠️ PostgREST у масиві з різними наборами ключів заповнює відсутні
     `null`ом, а `merge-duplicates` тоді ЗАТЕРЛО б наявні значення (саме тому не шлемо `None`): тож картки без, скажімо,
     `jira_status` не можна класти в один запит із тими, що його мають. Порядок — за першою появою набору й карток."""
     groups = {}
@@ -325,8 +328,8 @@ def _batches(ready):
         groups.setdefault(frozenset(card), []).append((cid, card))
     out = []
     for items in groups.values():
-        for i in range(0, len(items), BATCH):
-            out.append(items[i:i + BATCH])
+        for i in range(0, len(items), size):
+            out.append(items[i:i + size])
     return out
 
 
@@ -339,7 +342,7 @@ def push(ctx, cards, mode):
     prefer = ('resolution=merge-duplicates' if mode == 'merge' else 'resolution=ignore-duplicates') + ',return=minimal'
     ready, failed = _prepare(cards)
     ok, down, reached = 0, None, False
-    for batch in _batches(ready):
+    for batch in _batches(ready, COMPAT_BATCH if _compat(ctx) else BATCH):
         ids = [cid for cid, _ in batch]
         if down is not None:                     # сервіс не відповів — решту пакетів не мучимо (15 с на кожен)
             failed.update({cid: down for cid in ids})

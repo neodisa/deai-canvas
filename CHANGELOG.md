@@ -3,6 +3,14 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.22.1] — 11.11.2026
+
+### Fixed
+- **The LIGA dashboard sync failed for most cards with `HTTP 400 [23514]`.** The comment-layer schema keeps the trigger
+  `ov_update_scope_guard` on `overview_projects`: a key under row-level security (the public key Deai uses) may update at most
+  3 dashboard rows per request, and a bigger request is refused whole (`check_violation`). `supabase-dashboard` sent up to 50 cards per request (design-office sent one).
+  With `compat: comment-layer` the module now sends batches of `COMPAT_BATCH` = 3; other spaces keep 50.
+
 ## [0.22.0] — 10.11.2026
 
 Stage 4d-4c: no runtime decision depends on the space flag `integrations` any more, and the API value `'legacy'` is gone. The
