@@ -1419,7 +1419,7 @@ class ServeTest(unittest.TestCase):
         routes = re.findall(r"self\.path == '(/api/[a-z-]+)'", src)
         names = sorted(set(re.findall(r"self\.(_\w+)\(payload\)", src)))
         self.assertGreater(len(routes), 20, 'не розібрали маршрути з do_POST')
-        for r in ('/api/update-check', '/api/update-apply', '/api/feedback-preview'):      # нові маршрути не лишаються сліпою плямою (кожна задача 0.23 дописує свої)
+        for r in ('/api/update-check', '/api/update-apply', '/api/feedback-preview', '/api/feedback'):      # нові маршрути не лишаються сліпою плямою (кожна задача 0.23 дописує свої)
             self.assertIn(r, routes)
         self.assertGreaterEqual(len(names), len(routes) - 2, 'не розібрали обробники з do_POST')
         ran = []

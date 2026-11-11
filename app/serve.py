@@ -6992,6 +6992,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get('Content-Length', 0))
+            if length > feedback.BODY_MAX and self.path in ('/api/feedback', '/api/feedback-preview'):
+                self._space_error(413, 'body-too-large', 'feedback body is too large')       # ДО читання: пам'ять не роздуваємо
+                return
             raw_body = self.rfile.read(length) if length else b''
             self._body_read = True      # далі центральна відмова тіло вже не вичитує
             payload = json.loads(raw_body) if length else {}
@@ -7102,6 +7105,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._update_apply(payload)
         elif self.path == '/api/feedback-preview':
             self._feedback_preview(payload)
+        elif self.path == '/api/feedback':
+            self._feedback(payload)
         else:
             self.send_error(404)
 
@@ -7146,6 +7151,25 @@ class Handler(SimpleHTTPRequestHandler):
         """`POST /api/feedback-preview` → `{ok, diag, shot: {available, bytes?, skipped?}}`: точно те, що піде з відгуком."""
         diag, shot = self._feedback_collect(payload)
         self._send_json({'ok': True, 'diag': diag, 'shot': feedback.shot_info(shot)})
+
+    def _feedback(self, payload):
+        """`POST /api/feedback` → `{ok, id, state: 'sent'|'queued', number, reason?}`. Origin вже перевірено. Спершу запис у локальну чергу, потім одна
+        спроба надіслати; мережа ніколи не дає `ok:false` — лише `queued`. Діагностику збирає ТА САМА функція, що й «Що буде надіслано»;
+        кадр клієнт називає (`task`/`it`/`node`), сервер перевіряє двома замками (`_shot_file`)."""
+        clean, bad = feedback.validate(payload)
+        if bad:
+            self._send_json({'ok': False, 'code': bad[0], 'error': bad[1]}, status=400)
+            return
+        diag, shot_file = self._feedback_collect(payload)
+        shot = None
+        if clean['include_shot'] and shot_file and feedback.shot_info(shot_file).get('available'):
+            try:
+                with open(shot_file, 'rb') as f:
+                    shot = (f.read(), 'webp')
+            except OSError:
+                shot = None
+        out = feedback.submit(clean, diag if clean['include_diag'] else {}, shot)
+        self._send_json({'ok': True, **out, 'number': out['id'][:8]})
 
     def _update_apply(self, payload):
         """`POST /api/update-apply`: застосувати `latest` зі стану. Тіло НЕ читається (версію/шлях/remote ззовні не приймаємо). Перезапуск
@@ -9176,6 +9200,10 @@ def serve_main(port):
         updater.start_background(_updater())          # перша перевірка тегів через ~5 с, далі раз на 6 год; не валить старт
     except Exception as e:  # noqa: BLE001
         print('оновлення: фонову перевірку не запущено (%s)' % type(e).__name__, file=sys.stderr)
+    try:
+        feedback.start_background()                    # дочищення черги відгуків: лише з налаштованим приймачем і не в ізольованому прогоні
+    except Exception as e:  # noqa: BLE001
+        print('відгук: фонову чергу не запущено (%s)' % type(e).__name__, file=sys.stderr)
     srv.serve_forever()
 
 
