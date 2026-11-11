@@ -13,6 +13,12 @@
 -- !! update or delete on the table or on the screenshots bucket, so a leaked key means spam, never reading. Reading happens
 -- !! in the dashboard or with the owner's own key.
 --
+-- !! THE PUBLISHABLE KEY IS PUBLIC, SO ANYONE CAN INSERT ROWS. Before going live set rate limits and quotas in the Supabase
+-- !! dashboard (Auth / API rate limits, storage and database size alerts); inside the database the table only has size checks and
+-- !! the Teams card is throttled (below), so a flood costs rows, never a flood of Teams messages.
+-- !! AFTER RUNNING THIS SCRIPT, CHECK WITH THE PUBLISHABLE KEY (anon) that: select, update and delete on `public.feedback` are
+-- !! refused, and reading or listing objects in the `feedback-shots` bucket is refused. Only insert may succeed.
+--
 -- !! Needs the `pg_net` extension and Vault (both ship with Supabase). The address of the Teams webhook lives in Vault only:
 -- !!   select vault.create_secret('<webhook address>', 'teams_feedback_webhook_url');
 create extension if not exists pg_net;
@@ -29,6 +35,10 @@ create table if not exists public.feedback (
   diag jsonb not null default '{}'::jsonb check (octet_length(diag::text) <= 65536),
   shot_path text check (shot_path is null or shot_path ~ '^[0-9a-f-]{36}\.(webp|png)$')
 );
+
+-- `diag` must be a JSON object (not a string, array or number): the Teams card and the dashboard read it as one.
+alter table public.feedback drop constraint if exists feedback_diag_object;
+alter table public.feedback add constraint feedback_diag_object check (jsonb_typeof(diag) = 'object');
 
 alter table public.feedback enable row level security;
 
@@ -51,9 +61,24 @@ create policy feedback_shots_insert_anon on storage.objects for insert to anon
   with check (bucket_id = 'feedback-shots' and name ~ '^[0-9a-f-]{36}\.(webp|png)$');
 
 -- ------------------------------------------------------------------------------------------------------------- Teams
+-- Message text and contact come from anyone holding the public key: before they go into a card, markdown and link syntax is
+-- neutralised (links -> a plain marker, then the characters [ ] ( ) * _ ` < > # \ ~ | are stripped), so nobody can inject a link,
+-- a mention-like heading or formatting into the team's channel.
+create or replace function public.feedback_plain(v text)
+returns text
+language sql
+immutable
+set search_path = pg_catalog
+as $f$
+  select regexp_replace(regexp_replace(v, '(https?|ftp|file)://\S+|www\.\S+', '[link removed]', 'gi'), '[][()*_`<>#\\~|]', '', 'g')
+$f$;
+
+revoke all on function public.feedback_plain(text) from public, anon, authenticated;
+
 -- A new row -> a card in Teams (through pg_net, address from Vault). Privileged function, but it takes nothing from the caller:
 -- it only reads the row that fired the trigger. The card is built with jsonb_build_object / jsonb_build_array only (the one
 -- text concatenation is the 500-character cut of the message). It swallows every error: a notification never rejects feedback.
+-- Throttle: when more than 10 rows arrived in the last 60 seconds (counted by created_at) the row is still stored, but no card is sent.
 create or replace function public.feedback_notify_teams()
 returns trigger
 language plpgsql
@@ -63,10 +88,17 @@ as $$
 declare
   hook text;
   req_id bigint;
-  txt text := left(new.text, 500) || case when length(new.text) > 500 then '…' else '' end;
+  plain text := public.feedback_plain(new.text);
+  txt text := left(plain, 500) || case when length(plain) > 500 then '…' else '' end;
+  recent integer;
   facts jsonb;
   card jsonb;
 begin
+  select count(*) into recent from public.feedback where created_at > now() - interval '60 seconds';
+  if recent > 10 then
+    return new;
+  end if;
+
   select decrypted_secret into hook from vault.decrypted_secrets
    where name = 'teams_feedback_webhook_url' limit 1;
   if hook is null or hook !~* '^https://' then
@@ -75,8 +107,8 @@ begin
   end if;
 
   select jsonb_agg(jsonb_build_object('title', f.t, 'value', f.v) order by f.n) into facts
-    from (values (1, 'Kind', new.kind), (2, 'Number', left(new.id::text, 8)), (3, 'Version', new.version),
-                 (4, 'System', new.os), (5, 'Contact', new.contact)) as f(n, t, v)
+    from (values (1, 'Kind', new.kind), (2, 'Number', left(new.id::text, 8)), (3, 'Version', public.feedback_plain(new.version)),
+                 (4, 'System', public.feedback_plain(new.os)), (5, 'Contact', public.feedback_plain(new.contact))) as f(n, t, v)
    where nullif(f.v, '') is not null;
 
   card := jsonb_build_object(

@@ -88,6 +88,26 @@ def findings(raw):
         if not re.search(pat, low):
             bad.append('table definition lacks %s' % pat)
 
+    if not re.search(r"alter\s+table\s+public\.feedback\s+add\s+constraint\s+feedback_diag_object\s+check\s*\(\s*jsonb_typeof\(diag\)\s*=\s*'object'\s*\)\s*;", low):
+        bad.append('diag is not required to be a json object')
+
+    # --- заголовок: публічний ключ → ліміти, перевірка відмов після запуску ---
+    if not re.search(r'rate\s+limits', raw, re.I) or not re.search(r'select,\s*update\s+and\s+delete', raw, re.I) or 'feedback-shots' not in raw.split('create extension', 1)[0]:
+        bad.append('header lacks the public-key warning (rate limits / post-run refusal check)')
+
+    # --- нейтралізація markdown для картки Teams ---
+    pf = re.search(r'create\s+or\s+replace\s+function\s+public\.feedback_plain\(\s*v\s+text\s*\)\s*returns\s+text(.*?)\$f\$(.*?)\$f\$\s*;', low, re.S)
+    if not pf:
+        bad.append('markdown neutralising function not found')
+    else:
+        pbody = pf.group(2)
+        if '[][()*_`<>#' not in pbody:
+            bad.append('markdown characters are not stripped')
+        if not re.search(r'https\?\|ftp\|file', pbody) or 'link removed' not in pbody:
+            bad.append('links are not neutralised')
+    if not re.search(r'revoke\s+all\s+on\s+function\s+public\.feedback_plain\(text\)\s+from\s+public,\s*anon,\s*authenticated\s*;', low):
+        bad.append('feedback_plain is executable by public roles')
+
     # --- бакет ---
     m = re.search(r"insert\s+into\s+storage\.buckets\s*\(([^)]*)\)\s*values\s*\(([^;]*?)\)\s*on\s+conflict\s*\(id\)\s+do\s+update\s+set\s+([^;]*);", low, re.S)
     if not m:
@@ -125,8 +145,20 @@ def findings(raw):
             bad.append('no https check of the webhook address')
         if 'jsonb_build_object' not in body or 'jsonb_build_array' not in body:
             bad.append('card is not built with jsonb_build_*')
-        if body.count('||') != 1 or not re.search(r'left\(new\.text,\s*500\)\s*\|\|', body):
+        if body.count('||') != 1 or not re.search(r'left\(plain,\s*500\)\s*\|\|', body):
             bad.append('the only concatenation allowed is the 500-character cut')
+        if not re.search(r'plain\s+text\s*:=\s*public\.feedback_plain\(new\.text\)', body):
+            bad.append('message text is not neutralised before the card')
+        for col in ('contact', 'version', 'os'):
+            if 'public.feedback_plain(new.%s)' % col not in body:
+                bad.append('new.%s is not neutralised before the card' % col)
+        if len(re.findall(r'\bnew\.(text|contact|version|os)\b', re.sub(r'public\.feedback_plain\(new\.\w+\)', '', body))):
+            bad.append('a user-supplied column reaches the card raw')
+        thr = re.search(r"select\s+count\(\*\)\s+into\s+recent\s+from\s+public\.feedback\s+where\s+created_at\s*>\s*now\(\)\s*-\s*interval\s+'60\s+seconds'\s*;\s*if\s+recent\s*>\s*10\s+then\s+return\s+new\s*;\s*end\s+if\s*;", body)
+        if not thr:
+            bad.append('no throttle: more than 10 rows in 60 seconds must skip the card')
+        elif thr.start() > body.find('net.http_post'):
+            bad.append('throttle comes after the request')
         for pat in (r'\bformat\(', r'\bconcat\(', r'\bconcat_ws\(', r'string_agg', r'\bexecute\b'):
             if re.search(pat, body):
                 bad.append('forbidden in the trigger function: %s' % pat)
@@ -167,6 +199,22 @@ class FeedbackSql(unittest.TestCase):
         self.assertCaught(raw.replace("raise warning 'feedback_notify_teams failed: sqlstate %', sqlstate;", "raise warning 'failed: %', sqlerrm;"), 'sqlerrm')
         self.assertCaught(raw.replace("revoke all on function public.feedback_notify_teams() from public, anon, authenticated;", ''), 'executable by public roles')
         self.assertCaught(raw.replace("'text', txt)", "'text', txt || new.contact)"), 'only concatenation')
+        # 0.23 review: throttle, markdown, json-object check, header
+        self.assertCaught(raw.replace('if recent > 10 then', 'if recent > 1000000 then'), 'no throttle')
+        self.assertCaught(raw.replace("interval '60 seconds'", "interval '60 days'"), 'no throttle')
+        self.assertCaught(raw.replace('select count(*) into recent', 'select count(*) into recent /* x */'), 'no throttle')
+        self.assertCaught(raw.replace('  if recent > 10 then\n    return new;\n  end if;\n', ''), 'no throttle')
+        self.assertCaught(raw.replace("[][()*_`<>#", "[][()*_`<>"), 'markdown characters')
+        self.assertCaught(raw.replace('[link removed]', '[link]'), 'links are not neutralised')
+        self.assertCaught(raw.replace('(https?|ftp|file)://', '(ftp)://'), 'links are not neutralised')
+        self.assertCaught(raw.replace('plain text := public.feedback_plain(new.text)', 'plain text := new.text'), 'message text is not neutralised')
+        self.assertCaught(raw.replace('public.feedback_plain(new.contact)', 'new.contact'), 'new.contact is not neutralised')
+        self.assertCaught(raw.replace('public.feedback_plain(new.version)', 'new.version'), 'new.version is not neutralised')
+        self.assertCaught(raw.replace('public.feedback_plain(new.os)', 'new.os'), 'new.os is not neutralised')
+        self.assertCaught(raw.replace('revoke all on function public.feedback_plain(text) from public, anon, authenticated;', ''), 'feedback_plain is executable')
+        self.assertCaught(raw.replace("check (jsonb_typeof(diag) = 'object')", "check (jsonb_typeof(diag) <> 'array')"), 'json object')
+        self.assertCaught(raw.replace('rate limits', 'limits'), 'header lacks')
+        self.assertCaught(raw.replace('select, update and delete', 'select'), 'header lacks')
         self.assertCaught(raw.replace('revoke all on public.feedback from anon, authenticated, public;\n', '') + '\nrevoke all on public.feedback from anon, authenticated, public;\n', 'revoke all must precede')
 
     def test_no_secret_or_address_in_the_file(self):
