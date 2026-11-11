@@ -750,7 +750,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    активному (`ctl--on`, екран «Задачі» відкритий) — теж, але фон не акцентний, як
    у сегмента: логотип — марка, а не перемикач режиму. Білий внутрішній
    прямокутник (`--logo-in`) лишається білим у всіх станах. */
-.logo-btn{color:var(--logo)}
+.logo-btn{color:var(--logo);flex:none}   /* 0.23.0: з кнопкою «Відгук» у смузі `min-width:0` стискав логотип до 26px у «Огляді» на 1024/1280 (ціль < 28px) */
 .logo-btn:hover,.logo-btn[aria-pressed=true]{color:var(--hi)}
 .logo-btn.ctl--on{background:var(--s3);border-color:var(--line2)}
 .logo-btn.ctl--on:hover{background:var(--s3);color:var(--hi)}

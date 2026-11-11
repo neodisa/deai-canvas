@@ -221,8 +221,11 @@ test("кожен контрол смуги щось робить на клік",
        («контрол «palette» не зробив нічого»), бо палітра малюється ПОЗА
        `#bar`. Тому міряємо всі три, а не робимо палітрі виняток: виняток
        зняв би з неї цю обіцянку зовсім. */
+    /* Четвертий спосіб (0.23.0): діалог `askForm` (`.cv-ask-scrim`) — «Відгук» малює його ПОЗА `#bar`, після відповіді попереднього
+       перегляду (`POST /api/feedback-preview`), тож для нього чекаємо зʼявлення явно, а не рівно 150 мс. */
+    if (key === "feedback") await page.waitForSelector(".cv-ask-scrim", { timeout: 5000 }).catch(() => {});
     const dd = await page.$$eval(".dd", (e) => e.length);
-    const overlay = await page.$$eval(".pal,.keysheet", (e) => e.length);
+    const overlay = await page.$$eval(".pal,.keysheet,.cv-ask-scrim", (e) => e.length);
     assert.ok(before !== after || dd > 0 || overlay > 0,
       `контрол «${name}» не зробив нічого`);
     await page.keyboard.press("Escape");
