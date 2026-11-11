@@ -342,15 +342,78 @@ class Check(Base):
     def test_run_git_scrubs_repo_and_config_overrides_from_the_environment(self):
         dirty = {'GIT_DIR': '/x', 'GIT_WORK_TREE': '/x', 'GIT_INDEX_FILE': '/x', 'GIT_OBJECT_DIRECTORY': '/x',
                  'GIT_ALTERNATE_OBJECT_DIRECTORIES': '/x', 'GIT_CONFIG': '/x', 'GIT_CONFIG_PARAMETERS': "'a=b'", 'GIT_CONFIG_COUNT': '1',
-                 'GIT_CONFIG_KEY_0': 'core.sshCommand', 'GIT_CONFIG_VALUE_0': 'evil', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_SSH_COMMAND': 'my-ssh'}
+                 'GIT_CONFIG_KEY_0': 'core.sshCommand', 'GIT_CONFIG_VALUE_0': 'evil', 'GIT_SSH': '/x/ssh', 'GIT_EXEC_PATH': '/x',
+                 'GIT_NAMESPACE': 'x', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_SSH_COMMAND': 'my-ssh'}
         _, kw = self._run_fake(dirty)
         env = kw['env']
-        for k in list(dirty)[:10]:
+        for k in list(dirty)[:13]:
             self.assertNotIn(k, env, k)
         self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')            # не з переліку — лишається
         self.assertEqual(env['GIT_SSH_COMMAND'], 'my-ssh')           # логіка GIT_SSH_COMMAND без змін
         _, kw = self._run_fake({}, env_extra={'GIT_DIR': '/explicit'})
         self.assertEqual(kw['env']['GIT_DIR'], '/explicit')           # явний env_extra виклику — дозволено
+
+    def test_run_git_undecodable_output_never_raises(self):
+        d = os.path.join(self.tmp, 'bin')
+        os.makedirs(d)
+        with open(os.path.join(d, 'git'), 'w') as f:
+            f.write("#!/bin/sh\nprintf '\\377\\376ok'\nprintf '\\377err' >&2\n")
+        os.chmod(os.path.join(d, 'git'), 0o755)
+        with mock.patch.dict(os.environ, {'PATH': d + os.pathsep + os.environ['PATH']}):
+            rc, out, err = updater.run_git(['x'], self.tmp, 5)
+        self.assertEqual(rc, 0)
+        self.assertIn('ok', out)
+        self.assertIn('err', err)
+
+    def test_run_git_popen_asks_for_replace_decoding(self):
+        _, kw = self._run_fake({})
+        self.assertEqual(kw.get('errors'), 'replace')
+
+    def test_run_git_reaps_even_when_the_second_communicate_times_out(self):
+        closed, waited = [], []
+
+        class Pipe:
+            def __init__(self, n):
+                self.n = n
+
+            def close(self):
+                closed.append(self.n)
+
+        class Stuck:
+            pid, returncode = 4242, None
+
+            def __init__(self, *a, **k):
+                self.stdout, self.stderr = Pipe('out'), Pipe('err')
+
+            def communicate(self, timeout=None):
+                raise subprocess.TimeoutExpired('git', timeout)
+
+            def wait(self, timeout=None):
+                waited.append(timeout)
+                raise subprocess.TimeoutExpired('git', timeout)
+        with mock.patch.object(updater.subprocess, 'Popen', Stuck), mock.patch.object(updater.os, 'killpg', lambda *a: None):
+            self.assertEqual(updater.run_git(['x'], self.tmp, 1), (124, '', 'timeout'))
+        self.assertEqual(waited, [1])
+        self.assertEqual(sorted(closed), ['err', 'out'])
+
+    def test_run_git_nul_in_argument_is_a_code_not_an_exception(self):
+        self.assertEqual(updater.run_git(['a\0b'], self.tmp, 2)[0], 126)
+
+    def test_status_never_raises_whatever_git_does(self):
+        remote, work = make_world(self.tmp)
+        push_tag(work, '0.2.0')
+        u = self.upd(work)
+        u.check()
+
+        def boom(*a, **k):
+            raise RuntimeError('git exploded')
+        u.run = boom
+        st = u.status()                                        # не кидає
+        self.assertEqual((st['available'], st['blocked']), (True, 'not-git'))
+        u.run = lambda *a, **k: (128, 'garbage\xff', 'fatal')
+        self.assertIsNotNone(u.status()['blocked'])
+        u.run = lambda *a, **k: (0, None, None)               # порожній/дивний вивід теж не кидає
+        u.status()
 
     def test_run_git_failure_codes(self):
         with mock.patch.object(updater.subprocess, 'Popen', side_effect=FileNotFoundError()):

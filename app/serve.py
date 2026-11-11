@@ -5413,6 +5413,7 @@ _SYNC_RUNS = {}
 # ---------- Оновлення інструмента (0.23.0) ----------
 #: Корінь, який оновлюємо (шов тестів: викидний git-світ).
 UPDATER_ROOT = ROOT
+_restart = updater.exec_restart          # шов тестів: після `202` викликається без аргументів
 _UPDATER = None
 _UPDATER_LOCK = threading.Lock()
 
@@ -7053,8 +7054,20 @@ class Handler(SimpleHTTPRequestHandler):
             self._module_untrust(payload)
         elif self.path == '/api/update-check':
             self._update_check(payload)
+        elif self.path == '/api/update-apply':
+            self._update_apply(payload)
         else:
             self.send_error(404)
+
+    def _update_apply(self, payload):
+        """`POST /api/update-apply`: застосувати `latest` зі стану. Тіло НЕ читається (версію/шлях/remote ззовні не приймаємо). Перезапуск
+        планується ПІСЛЯ відправки відповіді (~0,5 с): клієнт встигає її прочитати."""
+        status, body = _updater().apply()
+        self._send_json(body, status=status)
+        if status == 202 and body.get('restart') == 'auto':
+            t = threading.Timer(0.5, lambda: _restart())
+            t.daemon = True
+            t.start()
 
     def _update_check(self, payload):
         """`POST /api/update-check`: спитати remote зараз (ручна перевірка) → `{ok: true, …status}`. Тіло не читається."""
@@ -9062,6 +9075,7 @@ def serve_main(port):
     як був (старіший сервер, що тримає порт, не бачить простору, якого не розуміє). Далі міграція (не кидає, ізольовані прогони
     пропускає), далі явний запис `static-publish` наявним просторам (`spaces.materialize_static_publish`, ідемпотентно), і лише потім `serve_forever`: зʼєднання тим часом чекають у черзі, запит обслуговується вже після міграції."""
     srv = make_server(port)
+    updater.snapshot_restart()            # знімок «як запущено» — до будь-якого chdir (для `execv` після оновлення)
     import liga_migrate
     liga_migrate.startup()
     try:

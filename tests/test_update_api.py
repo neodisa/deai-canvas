@@ -17,6 +17,7 @@ sys.path.insert(0, HERE)
 import serve  # noqa: E402
 import spaces_guard  # noqa: E402
 import test_updater as tu  # noqa: E402  (лише помічники `make_world`/`push_tag`/`git`)
+import test_updater_apply as ta  # noqa: E402  (`make_app_world`/`release`/`head`)
 
 _REAL = None
 
@@ -54,7 +55,7 @@ class UpdateApi(unittest.TestCase):
     def setUp(self):
         """Свіжий git-світ на кожен тест (теги не тече між тестами); стан оновлення скинуто."""
         world = tempfile.mkdtemp(prefix='world-', dir=self.tmp)
-        self.remote, self.work = tu.make_world(world)
+        self.remote, self.work = ta.make_app_world(world)
         serve.UPDATER_ROOT, serve._UPDATER = self.work, None
         try:
             os.remove(os.path.join(self.deai_home, 'update.json'))
@@ -140,9 +141,95 @@ class UpdateApi(unittest.TestCase):
         self.assertIsNone(json.loads(raw)['blocked'])
 
     def test_machine_routes_table(self):
-        for r in ('/api/update', '/api/update-check'):
+        for r in ('/api/update', '/api/update-check', '/api/update-apply'):
             self.assertIn(r, serve.Handler._MACHINE_ROUTES)
             self.assertNotIn(r, serve.Handler._REGISTRY_ROUTES)
+
+    # --- застосування ---
+
+    class FakeTimer:
+        made = []
+
+        def __init__(self, delay, fn):
+            self.delay, self.fn, self.daemon, self.started = delay, fn, False, False
+            type(self).made.append(self)
+
+        def start(self):
+            self.started = True
+
+    def _ready(self, version='0.2.0', **rel):
+        ta.release(self.work, version, **rel)
+        self.call('POST', '/api/update-check')
+
+    def test_apply_updates_and_schedules_the_restart_after_the_response(self):
+        self._ready()
+        self.FakeTimer.made = []
+        restarts, order = [], []
+        real_send = serve.Handler._send_json
+
+        def send(h, obj, status=200):
+            real_send(h, obj, status)
+            order.append('response-sent')
+        orig_start = self.FakeTimer.start
+        self.FakeTimer.start = lambda t: (order.append('timer-started'), orig_start(t))
+        self.addCleanup(setattr, self.FakeTimer, 'start', orig_start)
+        with mock.patch.object(serve.threading, 'Timer', self.FakeTimer), mock.patch.object(serve, '_restart', lambda: restarts.append(1)), \
+                mock.patch.object(serve.Handler, '_send_json', send):
+            st, raw = self.call('POST', '/api/update-apply', {'version': '9.9.9', 'remote': '/evil', 'path': '/x'})
+            self.assertEqual((st, json.loads(raw)), (202, {'ok': True, 'to': '0.2.0', 'restart': 'auto'}))
+            self.assertEqual(restarts, [], 'рестарт не виконано до таймера')
+            self.assertEqual(order, ['response-sent', 'timer-started'], 'таймер рестарту — ПІСЛЯ відправки відповіді')
+            (t,) = self.FakeTimer.made
+            self.assertEqual((t.delay, t.started, t.daemon), (0.5, True, True))
+            t.fn()
+            self.assertEqual(restarts, [1])
+        self.assertEqual(ta.head(self.work), tu.git(['rev-parse', 'v0.2.0^{commit}'], self.work).strip())
+        st, raw = self.call('GET', '/api/update')
+        body = json.loads(raw)
+        self.assertEqual((body['current'], body['available']), ('0.2.0', False))
+        self.assertEqual(body['last_update']['to'], '0.2.0')
+        self.assertNotIn(self.tmp, raw)
+
+    def test_apply_restart_really_fires_once_after_about_half_a_second(self):
+        self._ready()
+        fired = threading.Event()
+        count = []
+        with mock.patch.object(serve, '_restart', lambda: (count.append(1), fired.set())):
+            st, _ = self.call('POST', '/api/update-apply')
+            self.assertEqual(st, 202)
+            self.assertTrue(fired.wait(5))
+            threading.Event().wait(0.8)
+        self.assertEqual(count, [1])
+
+    def test_apply_refusals_schedule_no_restart_and_change_nothing(self):
+        old = ta.head(self.work)
+        self.FakeTimer.made = []
+        with mock.patch.object(serve.threading, 'Timer', self.FakeTimer):
+            st, raw = self.call('POST', '/api/update-apply')                           # нема оновлення
+            self.assertEqual((st, json.loads(raw)['code']), (409, 'nothing-to-update'))
+            self._ready('0.2.0', files={'app/x.py': 'def broken(:\n'})
+            st, raw = self.call('POST', '/api/update-apply')                           # смоук не пройшов
+            self.assertEqual((st, json.loads(raw)['code']), (500, 'rolled-back'))
+            with mock.patch.object(serve.updater, '_is_windows', lambda: True):        # Windows: рестарт вручну
+                ta.release(self.work, '0.3.0')
+                self.call('POST', '/api/update-check')
+                st, raw = self.call('POST', '/api/update-apply')
+                self.assertEqual((st, json.loads(raw)['restart']), (202, 'manual'))
+        self.assertEqual(self.FakeTimer.made, [])
+        self.assertNotEqual(ta.head(self.work), old)                                   # 0.3.0 застосовано (Windows-гілка)
+
+    def test_apply_origin_gate_bad_body_and_task_prefix(self):
+        self._ready()
+        old = ta.head(self.work)
+        self.FakeTimer.made = []
+        with mock.patch.object(serve.threading, 'Timer', self.FakeTimer):
+            st, _ = self.call('POST', '/api/update-apply', origin='https://evil.example')
+            self.assertEqual(st, 403)
+            st, raw = self.call('POST', '/api/update-apply', body=[])
+            self.assertEqual((st, json.loads(raw)['code']), (400, 'bad-body'))
+            st, _ = self.call('POST', '/t/x/api/update-apply')
+            self.assertEqual(st, 400)
+        self.assertEqual((ta.head(self.work), self.FakeTimer.made), (old, []))
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 """Оновлення інструмента (0.23.0): версія, remote, перевірка тегів `vX.Y.Z`, файл стану `update.json`, фоновий потік.
 
-Це ядро ЧИТАННЯ: нічого не змінює в робочому дереві (`apply` — окрема задача). Правила, що тримають модуль безпечним:
+`check`/`status` — ЧИТАННЯ (нічого не змінюють у робочому дереві); `apply` — єдине місце, де модуль пише в дерево: `fetch` тега → перевірка
+`package.json` тега → `merge --ff-only` → смоук в ізольованому дочірньому процесі → відкат. Правила, що тримають модуль безпечним:
 
 * Тег — лише `^v\\d+\\.\\d+\\.\\d+\\Z` (без пре-релізів); усе інше з `ls-remote` ігнорується. Порівняння — за числами, не за рядками.
 * `remote` (змінна `DEAI_UPDATE_REMOTE`, upstream гілки) — недовірений рядок для `git`: дозволені імʼя remote, `https://`/`ssh://`,
@@ -10,6 +11,9 @@
   (`DEAI_NO_UPDATE_CHECK=1` або `isolation.isolated()`). Інакше `state: 'disabled'`, `git` не викликається.
 * Читальні виклики `git` мають `GIT_OPTIONAL_LOCKS=0`: `git status` не оновлює індекс живого дерева.
 * `update.json` (0600) не пишеться, коли `isolation.writes_allowed(home)` — стан тоді лише в памʼяті процесу.
+* `apply`: ціль — `latest` зі стану (не з запиту); тег перевіряється `TAG_RE` до будь-якого `git`; remote резолвиться ЗАРАЗ (не зі
+  збереженого); тег фіксується на sha (`rev-parse`), версія в його `package.json` мусить збігатись із `latest`; єдиний `reset` у модулі —
+  `reset --hard <old>`, лише після вдалого `merge --ff-only` і лише на 40-hex sha, перевірений регексом.
 * `BOOT` — випадковий токен, що виникає при ІМПОРТІ: після `execv` модуль імпортується наново, тож клієнт бачить, що процес інший.
 
 Імпортує лише `isolation`, `spaces`, `atomic_io` (без `serve`: цикл неможливий).
@@ -20,8 +24,11 @@ import os
 import random
 import re
 import secrets
+import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 
@@ -38,18 +45,21 @@ CHECK_EVERY_S = 6 * 3600
 LS_REMOTE_TIMEOUT_S = 15
 FETCH_TIMEOUT_S = 60
 LOCAL_GIT_TIMEOUT_S = 10
+MERGE_TIMEOUT_S = 60
+SMOKE_TIMEOUT_S = 30
 FIRST_CHECK_DELAY_S = 5
 FIRST_CHECK_JITTER_S = 25
 PERIOD_JITTER = 0.1
 STATES = ('ok', 'offline', 'no-git', 'error', 'disabled')
 BOOT = secrets.token_hex(8)
 
+_SHA_RE = re.compile(r'^[0-9a-f]{40}\Z')
 _NAME_RE = re.compile(r'^[A-Za-z0-9][\w.-]*\Z')
 _URL_RE = re.compile(r'^(?:https|ssh)://[^\s\x00-\x1f\\/-][^\s\x00-\x1f\\]*\Z')
 _HOST_START_RE = re.compile(r'^[A-Za-z0-9\[]')
 #: Змінні `git`, що перекривають репо/конфіг: з успадкованого оточення вилучаються.
 _GIT_SCRUB = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-              'GIT_CONFIG', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT')
+              'GIT_CONFIG', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_SSH', 'GIT_EXEC_PATH', 'GIT_NAMESPACE')
 _GIT_SCRUB_PREFIXES = ('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')
 _SCP_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s\x00-\x1f]+\Z')
 _PATH_RE = re.compile(r'^/[^\x00-\x1f]*\Z')
@@ -57,23 +67,16 @@ _HOST_URL_RE = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/\s]*@)?(\[[^\]]*\]|
 _HOST_SCP_RE = re.compile(r'^(?:[^@/\s]+@)?([^:/\s]+):')
 
 
-def run_git(args, cwd, timeout, env_extra=None):
-    """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (уся група процесів убивається: `ssh` теж), нема
-    `git` — `(127, '', 'no-git-binary')`. Оточення: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`)."""
-    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
-    env['GIT_TERMINAL_PROMPT'] = '0'
-    env['GCM_INTERACTIVE'] = 'never'
-    env['GIT_OPTIONAL_LOCKS'] = '0'
-    if 'GIT_SSH_COMMAND' not in env:
-        env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
-    env.update(env_extra or {})
+def _communicate(argv, cwd, env, timeout):
+    """Процес без оболонки в окремій групі → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (вбивається вся група: `ssh`, нащадки),
+    нема виконуваного — `(127, '', 'no-git-binary')`. Недекодований вивід не кидає (`errors='replace'`)."""
     try:
-        p = subprocess.Popen(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd=cwd, env=env, text=True,
+        p = subprocess.Popen(argv, cwd=cwd, env=env, text=True, errors='replace',
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              start_new_session=(os.name != 'nt'))
     except FileNotFoundError:
         return 127, '', 'no-git-binary'
-    except OSError as e:
+    except (OSError, ValueError, TypeError) as e:        # ValueError: NUL у аргументі
         return 126, '', type(e).__name__
     try:
         out, err = p.communicate(timeout=timeout)
@@ -88,9 +91,30 @@ def run_git(args, cwd, timeout, env_extra=None):
         try:
             p.communicate(timeout=5)
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                p.wait(timeout=1)
+            except Exception:  # noqa: BLE001
+                pass
+            for pipe in (getattr(p, 'stdout', None), getattr(p, 'stderr', None)):
+                try:
+                    pipe.close()
+                except Exception:  # noqa: BLE001
+                    pass
         return 124, '', 'timeout'
     return p.returncode, out, err
+
+
+def run_git(args, cwd, timeout, env_extra=None):
+    """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (уся група процесів убивається: `ssh` теж), нема
+    `git` — `(127, '', 'no-git-binary')`. Оточення: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`)."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    env['GCM_INTERACTIVE'] = 'never'
+    env['GIT_OPTIONAL_LOCKS'] = '0'
+    if 'GIT_SSH_COMMAND' not in env:
+        env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
+    env.update(env_extra or {})
+    return _communicate(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd, env, timeout)
 
 
 def parse_tag(tag):
@@ -199,6 +223,7 @@ class Updater:
         self.clock = clock
         self._lock = threading.RLock()           # короткий: лише читання/запис стану, НІКОЛИ не поверх git
         self._checking = threading.Lock()        # «перевірка триває»: друга `check()` не ставиться в чергу
+        self._apply_lock = threading.Lock()      # «застосування триває»: друге `apply()` — `409 busy`
         self._mem = {}
 
     # --- файл стану ---
@@ -293,11 +318,18 @@ class Updater:
             'checked_at': state.get('checked_at'),
             'state': state.get('state') if state.get('state') in STATES else None,
             'reason': state.get('reason') if isinstance(state.get('reason'), str) else None,
-            'blocked': self._blocked() if available else None,
+            'blocked': self._safe_blocked() if available else None,
             'remote_host': state.get('remote_host') if isinstance(state.get('remote_host'), str) else None,
             'last_update': state.get('last_update') if isinstance(state.get('last_update'), dict) else None,
             'boot': BOOT,
         }
+
+    def _safe_blocked(self):
+        """`_blocked` без винятків: `GET /api/update` не дає 500 за жодного збою `git` — відповідь `not-git` (клоном не вважаємо)."""
+        try:
+            return self._blocked()
+        except Exception:  # noqa: BLE001
+            return 'not-git'
 
     def _blocked(self):
         """Код причини, чому оновлення зараз не можна застосувати (`None` — можна). Лише читальні виклики `git`."""
@@ -324,6 +356,174 @@ class Updater:
         except Exception:  # noqa: BLE001 — зламаний датчик не блокує показ
             pass
         return None
+
+    # --- застосування ---
+
+    @staticmethod
+    def _fail(status, code, **extra):
+        return status, {'ok': False, 'code': code, **extra}
+
+    def apply(self):
+        """Застосувати `latest` зі стану → `(http_status, body)`. Не кидає. НІЧОГО не приймає ззовні (ні версії, ні шляху, ні remote).
+        Рестарт НЕ планує: `serve` робить це ПІСЛЯ відправки відповіді. Кожна відмова — код, робоче дерево при цьому не змінене (крім
+        `rolled-back`, де воно повернуте на старий HEAD)."""
+        try:
+            if (isolation.isolated() and not os.environ.get('DEAI_UPDATE_TEST_APPLY')
+                    and os.path.realpath(self.root) == os.path.realpath(PRODUCT_ROOT)):
+                return self._fail(409, 'isolated')       # ізольований прогін не міняє справжній код
+            if not self._apply_lock.acquire(blocking=False):
+                return self._fail(409, 'busy')
+            try:
+                return self._apply_locked()
+            finally:
+                self._apply_lock.release()
+        except Exception:  # noqa: BLE001
+            return self._fail(500, 'error')
+
+    def _apply_locked(self):
+        state = self._load()
+        latest = state.get('latest') if isinstance(state.get('latest'), str) else None
+        current = current_version(self.root)
+        lt, ct = (parse_tag('v' + latest) if latest else None), version_tuple(current)
+        if not (lt and ct and lt > ct):
+            return self._fail(409, 'nothing-to-update')
+        tag = 'v' + latest                                # TAG_RE (parse_tag вище) пройдено ДО будь-якого `git`
+        blocked = self._blocked()
+        if blocked:
+            return self._fail(409, blocked)
+        _, url, err = remote_for(self.root, self.run)      # адреса — ЗАРАЗ, не зі збереженого
+        if err:
+            return self._fail(409, 'not-git' if err == 'no-git-binary' else err)
+        if not network_allowed(url):
+            return self._fail(409, 'disabled')
+        rc, out, _ = self.run(['rev-parse', '--verify', 'HEAD'], self.root, LOCAL_GIT_TIMEOUT_S)
+        old = out.strip() if rc == 0 else ''
+        if not _SHA_RE.match(old):
+            return self._fail(500, 'error')
+        refspec = 'refs/tags/%s:refs/tags/%s' % (tag, tag)
+        rc, _, err_text = self.run(['fetch', '--no-tags', '--', url, refspec], self.root, FETCH_TIMEOUT_S, {'LC_ALL': 'C'})
+        if rc == 127:
+            return self._fail(409, 'not-git')
+        if rc != 0:
+            low = (err_text or '').lower()
+            if 'clobber' in low:
+                return self._fail(409, 'tag-conflict')
+            if "couldn't find remote ref" in low:
+                return self._fail(409, 'tag-missing')
+            return self._fail(503, 'offline')
+        rc, out, _ = self.run(['rev-parse', '--verify', '%s^{commit}' % tag], self.root, LOCAL_GIT_TIMEOUT_S)
+        target = out.strip() if rc == 0 else ''
+        if not _SHA_RE.match(target):
+            return self._fail(500, 'error')                # далі працюємо з sha, а не з рухомим іменем
+        rc, out, _ = self.run(['show', '%s:package.json' % target], self.root, LOCAL_GIT_TIMEOUT_S)
+        try:
+            tagged = str(json.loads(out).get('version')) if rc == 0 else None
+        except (ValueError, AttributeError):
+            tagged = None
+        if tagged != latest:
+            return self._fail(409, 'tag-mismatch')
+        rc, _, _ = self.run(['merge-base', '--is-ancestor', old, target], self.root, LOCAL_GIT_TIMEOUT_S)
+        if rc == 1:
+            return self._fail(409, 'diverged', hint='merge-hint')
+        if rc != 0:
+            return self._fail(500, 'error')
+        rc, _, _ = self.run(['merge', '--ff-only', target], self.root, MERGE_TIMEOUT_S)
+        if rc != 0:
+            return self._fail(500, 'merge-failed')          # ff-only атомарний: дерево не змінене, відкату нема чого робити
+        try:
+            smoke_ok = smoke_check(self.root)
+        except Exception:  # noqa: BLE001
+            smoke_ok = False
+        if not smoke_ok:
+            rc, _, _ = self.run(['reset', '--hard', old], self.root, MERGE_TIMEOUT_S)   # ЄДИНИЙ reset модуля: лише після вдалого merge
+            return self._fail(500, 'rolled-back' if rc == 0 else 'rollback-failed')
+        with self._lock:
+            state = self._load()
+            state['last_update'] = {'from': current, 'to': latest, 'at': int(self.clock())}
+            self._save(state)
+        return 202, {'ok': True, 'to': latest, 'restart': 'manual' if _is_windows() else 'auto'}
+
+
+#: Смоук нового коду в ДОЧІРНЬОМУ процесі (`python -B -I`: ні `.pyc`, ні `sys.path` старого процесу): усі `app/*.py` і `bin/*.py` компілюються
+#: (синтаксис), потім `import serve` (зламаний імпорт). `py_compile` не годиться: пише `.pyc` навіть при `-B`.
+_SMOKE_CODE = r"""
+import os, sys
+root = sys.argv[1]
+for sub in ('app', 'bin'):
+    d = os.path.join(root, sub)
+    if os.path.isdir(d):
+        for name in sorted(os.listdir(d)):
+            if name.endswith('.py'):
+                p = os.path.join(d, name)
+                with open(p, 'rb') as f:
+                    compile(f.read(), p, 'exec')
+sys.path.insert(0, os.path.join(root, 'app'))
+import serve
+"""
+
+
+def smoke_check(root):
+    """`True`, коли код у `root` компілюється й `serve` імпортується. Оточення дитини — вичищене й ізольоване: тимчасові `HOME`,
+    `DEAI_HOME`, `DC_TASKS_FILE`, `DEAI_NO_UPDATE_CHECK=1`; тимчасові теки видаляються після."""
+    tmp = tempfile.mkdtemp(prefix='deai-smoke-')
+    try:
+        home = os.path.join(tmp, 'home')
+        os.makedirs(home)
+        env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'SYSTEMROOT') if k in os.environ}
+        env.update({'HOME': home, 'USERPROFILE': home, 'TMPDIR': tmp, 'DEAI_HOME': os.path.join(tmp, 'deai'),
+                    'DC_TASKS_FILE': os.path.join(tmp, 'tasks.json'), 'DEAI_NO_UPDATE_CHECK': '1',
+                    'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONNOUSERSITE': '1'})
+        rc, _, _ = _communicate([sys.executable, '-B', '-I', '-c', _SMOKE_CODE, root], root, env, SMOKE_TIMEOUT_S)
+        return rc == 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- перезапуск ---
+
+_RESTART_SNAPSHOT = None
+
+
+def _is_windows():
+    return os.name == 'nt'
+
+
+def snapshot_restart():
+    """Знімок «як мене запустили» (викликати ПЕРШИМ у `serve_main`, до будь-якого `chdir`): `{cwd, argv}`. `orig_argv` (3.10+) зберігає
+    прапорці інтерпретатора; нижче — `sys.argv`."""
+    global _RESTART_SNAPSHOT
+    rest = list(sys.orig_argv[1:]) if getattr(sys, 'orig_argv', None) else list(sys.argv)
+    _RESTART_SNAPSHOT = {'cwd': os.getcwd(), 'argv': [sys.executable] + rest}
+    return _RESTART_SNAPSHOT
+
+
+def exec_restart(snapshot=None, execv=os.execv):
+    """Замінити процес собою ж (той самий PID, те саме оточення). `False` (і нічого не викликано), коли: ізольований прогін без шва
+    `DEAI_UPDATE_TEST_APPLY`; Windows (`execv` там не замінює процес — перезапуск вручну); знімка нема. Успіх не повертається."""
+    if isolation.isolated() and not os.environ.get('DEAI_UPDATE_TEST_APPLY'):
+        return False
+    if _is_windows():
+        return False
+    snap = snapshot or _RESTART_SNAPSHOT
+    if not snap or not snap.get('argv') or not isinstance(snap.get('cwd'), str):
+        return False
+    here = None
+    try:
+        here = os.getcwd()
+        os.chdir(snap['cwd'])
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:  # noqa: BLE001
+                pass
+        execv(snap['argv'][0], snap['argv'])
+    except OSError:
+        if here:
+            try:
+                os.chdir(here)
+            except OSError:
+                pass
+    return False
 
 
 def start_background(upd, stop=None, first_delay=FIRST_CHECK_DELAY_S, every=CHECK_EVERY_S, rand=random.random):
