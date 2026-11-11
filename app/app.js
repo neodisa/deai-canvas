@@ -885,6 +885,10 @@ function pubWhenText(at) {
 /* Стан оновлення інструмента (0.23.0): останній `GET /api/update` (`null` — ще не питали або сервер не відповів; тоді пігулки нема).
    Оголошено ДО `barState()`, що його читає: перше перемалювання смуги йде раніше за перший опит. */
 let updateInfo = null;
+/* Смугу вже намалював хтось, крім опиту оновлень (`render()`, «Задачі», дропдаун). До того опит лише запамʼятовує `updateInfo` —
+   перший `paintBar()` іде від старту й підхопить його сам. ⛔ Інакше опит, що відповів раніше за задачу, малював смугу з НЕДОЗАВАНТАЖЕНИМ
+   станом (дропдаун «Опублікувати» без пароля превʼю), і людина встигала його відкрити. */
+let barSeeded = false;
 
 function barState() {
   const its = (curTask && curTask.iterations) || [];
@@ -1054,6 +1058,7 @@ function barState() {
  * рівно та вада, від якої застерігає задача («два шляхи до одного стану»).
  */
 function paintBar() {
+  barSeeded = true;
   /* ⛔ Прапорець композиції не сміє пережити дропдаун. Закрили його посеред
      набору (клік повз, ⌘K) — вузол поля зник, і `compositionend` на ньому може
      так і не прийти: `taskComposing` лишався б `true`, і КОЖЕН наступний
@@ -2292,7 +2297,7 @@ async function pollUpdate() {
   const changed = JSON.stringify(st.info) !== JSON.stringify(updateInfo);
   updateInfo = st.info;
   tellRestartOnce(next);
-  if (changed) paintBar();
+  if (changed && barSeeded) paintBar();
   return next;
 }
 

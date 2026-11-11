@@ -48,6 +48,9 @@ test("apply → рестарт → перезавантаження у вики�
     // 1. викидні репо: remote (bare) і клон; нова версія лишається ЛИШЕ в remote
     git(tmp, "init", "--bare", "-q", remote);
     git(tmp, "clone", "-q", "--no-hardlinks", ROOT, work);
+    /* Джерело може стояти на відʼєднаному HEAD (релізний прогін іде з detached-дерева) — тоді й клон відʼєднаний, і апдейтер чесно
+       відмовляє `detached`. Апдейт перевіряємо на гілці, як у людини. */
+    git(work, "checkout", "-q", "-B", "main");
     git(work, "remote", "set-url", "origin", remote);
     const current = JSON.parse(readFileSync(path.join(work, "package.json"), "utf8")).version;
     assert.notEqual(current, TARGET, "перевірка недійсна: поточна версія вже цільова");

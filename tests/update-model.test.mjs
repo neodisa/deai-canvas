@@ -169,6 +169,9 @@ test("app.js: проводка — waitRestart, bootBefore перед POST (бе
   assert.match(appJs, /focusBack: \(\) => document\.querySelector\('\.upd-pill'\) \?\? document\.querySelector\('\.pal-open \.ctl'\)/);
   assert.match(appJs, /location\.reload\(\)/);
   assert.match(appJs, /setInterval\(pollUpdate, UPDATE_POLL_MS\)/);
+  /* Опит оновлень не малює смугу першим: до першого `paintBar()` від старту стан задачі ще не завантажений (пароль превʼю губився). */
+  assert.match(appJs, /if \(changed && barSeeded\) paintBar\(\);/);
+  assert.match(appJs, /function paintBar\(\) \{\n  barSeeded = true;/);
 });
 
 /* ── опис змін ───────────────────────────────────────────────────────────── */
