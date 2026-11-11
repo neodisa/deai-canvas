@@ -7089,7 +7089,7 @@ class Handler(SimpleHTTPRequestHandler):
         status, body = _updater().apply()
         self._send_json(body, status=status)
         if status == 202 and body.get('restart') == 'auto':
-            t = threading.Timer(0.5, _restart_or_flag)
+            t = threading.Timer(0.5, _in_space(_restart_or_flag))
             t.daemon = True
             t.start()
 
