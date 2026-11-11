@@ -77,6 +77,7 @@
 
 import { figmaWhyKey, flowWhyKey, linkWhyKey } from "./bar-model.js";
 import { hasPublish, hasTeamComments, hasVcs } from "./spaces-model.js";
+import { pillModel } from "./update-model.js";
 import { t } from "./i18n.js";
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
@@ -151,6 +152,19 @@ function installActions(s) {
   return [{ id: "pwa-install", group: "gSet", labelKey: "pwaInstall", icon: "download", act: "pwainstall" }];
 }
 
+/* Дії самого інструмента (0.23.0): «Перевірити оновлення» є завжди (ручна перевірка працює й до першої автоматичної, коли `s.update`
+   ще `null`), «Що нового» — лише коли пігулка в смузі показала б оновлення (`pillModel`: те саме рішення, що в `bar-model.js`, а не
+   друге). Читає і звичайний реєстр, і екран «Задачі» (де реєстр повертається раніше) — як мова й встановлення. Дії виконує `app.js`
+   через `BAR_ACTIONS` (`updatecheck`/`updatenotes`). Іконки — зі спрайта (`refresh`, `down`): `info` у ньому нема. */
+function appActions(s) {
+  /* `update` — ключ стану, який дає ЛИШЕ `paletteState()` (`null` = «ще не питали», обʼєкт = знімок сервера). Стан без ключа (еталони
+     `legacy-golden`, зроблені до 0.23.0, і шар, що оновлення не знає) дій оновлення не має: їхній склад сторожить еталон побайтово. */
+  if (s.update === undefined) return [];
+  const out = [{ id: "update-check", group: "gSet", labelKey: "upCheck", icon: "refresh", act: "updatecheck" }];
+  if (pillModel(s.update)) out.push({ id: "update-notes", group: "gSet", labelKey: "upWhatsNew", icon: "down", act: "updatenotes" });
+  return out;
+}
+
 /* Простори (Deai 1.0, етап 1) — «Простір: X» для кожного ІНШОГО простору й «Новий
    простір…», у `gGo`: це переходи, а не налаштування. Читає і звичайний реєстр, і
    екран «Задачі» — простір не залежить від задачі, як мова. Лише коли є МАСИВ
@@ -220,7 +234,7 @@ export function paletteActions(state) {
      причина поруч (принцип 2) потрібна контролу, що ЛИШАЄТЬСЯ в режимі. `go-tasks`
      теж не пропонуємо: людина вже там, а «відкрити екран, на якому ти є»
      значило б дію, що нічого не робить. */
-  if (s.homeOpen) return [...spaceActions(s), ...langActions(s), ...installActions(s)];
+  if (s.homeOpen) return [...spaceActions(s), ...langActions(s), ...installActions(s), ...appActions(s)];
 
   /* ── gGo: переходи. `go-iter`/`go-pages` — «лише перехід», немає в
      BAR_ACTIONS/PANEL_ACTIONS свідомо; `go-tasks` має `act` ───── */
@@ -414,6 +428,7 @@ export function paletteActions(state) {
      `BAR_ACTIONS`/`PANEL_ACTIONS` цього ключа немає — і не мало б бути. */
   out.push(...langActions(s));
   out.push(...installActions(s));
+  out.push(...appActions(s));
 
   /* Аудиторія коментарів — і це НЕ дубль вкладок у панелі коментатора, а
      АВАРІЙНИЙ ВИХІД. Записано тут, бо без цього абзацу наступний прибере

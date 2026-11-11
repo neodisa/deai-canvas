@@ -1074,3 +1074,44 @@ test("палітра: «Копіювати посилання» і «Відкр�
     assert.ok(!find({ published: true }, "openpreview").disabled);
   });
 }
+
+/* ── Оновлення інструмента (0.23.0): «Перевірити оновлення» і «Що нового» ────────────────────────────────
+   Дії самого інструмента, не задачі: є і на екрані «Задачі», де реєстр повертається раніше (Поправка 18). Стан без ключа `update`
+   (еталони `legacy-golden`) їх не має: ключ дає лише `paletteState()`. */
+const UPD = { current: "0.1.0", latest: "0.2.0", available: true, state: "ok", checked_at: 1, boot: "a", restart_failed: false };
+const upIds = (st) => paletteActions(S(st)).filter((a) => a.id.startsWith("update-")).map((a) => a.id);
+
+test("оновлення: «Перевірити оновлення» є, коли стан відомий (навіть `null` — ще не питали); «Що нового» — лише при available", () => {
+  assert.deepEqual(upIds({ update: null }), ["update-check"], "до першої перевірки ручна перевірка працює");
+  assert.deepEqual(upIds({ update: { ...UPD, available: false } }), ["update-check"]);
+  assert.deepEqual(upIds({ update: { ...UPD, state: "offline" } }), ["update-check"], "offline: пігулки нема — і «Що нового» нема");
+  assert.deepEqual(upIds({ update: UPD }), ["update-check", "update-notes"]);
+  assert.deepEqual(upIds({}), [], "стан без ключа update (еталони) дій оновлення не має");
+});
+
+test("оновлення: ті самі дії в `homeOpen` і поза ним (екран «Задачі», «Підключення», майстер)", () => {
+  for (const homeOpen of [true, false]) {
+    for (const homePage of homeOpen ? [undefined, "tasks", "conn", "wiz"] : [undefined]) {
+      assert.deepEqual(upIds({ homeOpen, homePage, update: UPD }), ["update-check", "update-notes"], `homeOpen=${homeOpen} ${homePage}`);
+    }
+  }
+});
+
+test("оновлення: дії мають act, групу gSet, іконку зі спрайта й підпис в обох словниках; act обробляє BAR_ACTIONS", () => {
+  const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app", "app.js"), "utf8");
+  for (const a of paletteActions(S({ update: UPD })).filter((x) => x.id.startsWith("update-"))) {
+    assert.equal(a.group, "gSet");
+    assert.ok(a.act, a.id);
+    assert.ok(ico(a.icon), `${a.id}: іконки нема у спрайті`);
+    for (const lang of ["uk", "en"]) assert.ok(DICT[lang][a.labelKey] !== undefined, `${lang}.${a.labelKey}`);
+    assert.match(src, new RegExp(`\\n  ${a.act}: \\(\\) =>`), `${a.act}: нема обробника в BAR_ACTIONS`);
+  }
+});
+
+test("оновлення: знаходяться в ⌘K обома мовами", () => {
+  const list = (lang, q) => { setLang(lang); return filterActions(paletteActions(S({ update: UPD, lang })), q).map((a) => a.id); };
+  assert.ok(list("uk", "оновлення").includes("update-check"));
+  assert.ok(list("en", "update").includes("update-check"));
+  assert.ok(list("en", "what").includes("update-notes"));
+  setLang("uk");
+});

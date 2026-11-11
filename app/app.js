@@ -54,6 +54,10 @@ import { initPwa } from './pwa.js';
 import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
+  RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, codeOfBody, restartStep,
+} from './update-model.js';
+import { updateDialogHTML, updateNotesHTML } from './update-view.js';
+import {
   disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
 } from './connections-model.js';
@@ -875,6 +879,10 @@ function pubWhenText(at) {
   return t(r.key, r.n);
 }
 
+/* Стан оновлення інструмента (0.23.0): останній `GET /api/update` (`null` — ще не питали або сервер не відповів; тоді пігулки нема).
+   Оголошено ДО `barState()`, що його читає: перше перемалювання смуги йде раніше за перший опит. */
+let updateInfo = null;
+
 function barState() {
   const its = (curTask && curTask.iterations) || [];
   /* Куди веде превʼю цієї задачі (ЛІГА-URL чи локальна адреса канваса) — одне рішення для смуги
@@ -1018,6 +1026,8 @@ function barState() {
        фішки в смузі нема зовсім: шар вимкнено або просторів ще нема. */
     space: spaceNow(),
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : [],
+    /* Оновлення інструмента: пігулка в смузі й дії ⌘K (`pillModel`). */
+    update: updateInfo,
   };
 }
 
@@ -2011,6 +2021,12 @@ const BAR_ACTIONS = {
 
   retry: () => { render(); },
 
+  /* Оновлення інструмента (0.23.0): пігулка в смузі (`update`) і пункт ⌘K «Що нового» (`updatenotes`) відкривають той самий діалог;
+     «Перевірити оновлення» (`updatecheck`) питає remote зараз. Логіка — `openUpdateDialog`/`checkUpdateNow` нижче. */
+  update: () => openUpdateDialog(),
+  updatenotes: () => openUpdateDialog(),
+  updatecheck: () => checkUpdateNow(),
+
   /* Аудиторія коментарів. У смузі цієї дії НЕМА жодного `data-act` — обидва
      входи зовнішні: вкладки в панелі коментатора (`postMessage`) і ⌘K
      (`shell-palette.js`, `act: "aud"`). Лежить у `BAR_ACTIONS`, бо саме тут
@@ -2227,6 +2243,184 @@ async function copyLinkText(url) {
        показуємо, а не питаємо. Поле лишається виділюваним для копіювання
        руками; на результат ніщо не спирається, тому без `await`. */
     ask(t('askCopyLinkPrompt'), url, { readOnly: true });
+  }
+}
+
+// ===== Оновлення інструмента (0.23.0): пігулка, діалог «Що нового», опит після рестарту =====
+
+/* Стеля запиту `POST /api/update-apply`: `fetch` тега (60 с) + merge (60 с) + самоперевірка (30 с) + дрібні виклики git. Обрив раніше
+   сказав би «не відповів» про оновлення, яке ще тривало. */
+const UPDATE_APPLY_TIMEOUT_MS = 240000;
+/* Стеля `GET /api/update-notes` (там один `fetch` тега, 60 с) і окремого кроку опиту після рестарту (сервер може саме підніматись). */
+const UPDATE_NOTES_TIMEOUT_MS = 90000;
+const UPDATE_STEP_TIMEOUT_MS = 3000;
+const UP_RF_KEY = 'dc-up-restart-told';
+
+/** `GET /api/update` → стан або `null` (сервер мовчить / чужа відповідь). Без шуму: оновлення — не головна справа екрана. */
+async function fetchUpdate() {
+  try {
+    const r = await api('/api/update');
+    return r && typeof r === 'object' && typeof r.boot === 'string' ? r : null;
+  } catch (e) { return null; }
+}
+
+/* Після невдалого рестарту — ОДИН тост на процес сервера (`boot`): без памʼяті він повторювався б кожні 30 хв. Памʼять — у
+   `sessionStorage` (переживає перезавантаження вкладки), а коли сховища нема — у змінній. */
+let upToldBoot = null;
+function tellRestartOnce(info) {
+  if (!info || info.restart_failed !== true) return;
+  let seen = upToldBoot;
+  try { seen = sessionStorage.getItem(UP_RF_KEY) ?? seen; } catch (e) { /* без сховища — лише змінна */ }
+  if (seen === info.boot) return;
+  upToldBoot = info.boot;
+  try { sessionStorage.setItem(UP_RF_KEY, info.boot); } catch (e) { /* див. вище */ }
+  toast(t('upRestartManual'));
+}
+
+/** Знімає стан оновлення й перемальовує смугу, коли він змінився. */
+async function pollUpdate() {
+  const next = await fetchUpdate();
+  const changed = JSON.stringify(next) !== JSON.stringify(updateInfo);
+  updateInfo = next;
+  tellRestartOnce(next);
+  if (changed) paintBar();
+  return next;
+}
+
+let updateChecking = false;
+/** «Перевірити оновлення» (⌘K): `POST /api/update-check` → тост. Сервер віддає ту саму форму, що `GET /api/update`, плюс `ok`. */
+async function checkUpdateNow() {
+  if (updateChecking) return;
+  updateChecking = true;
+  toast(t('upChecking'));
+  try {
+    const r = await api('/api/update-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (r && typeof r.boot === 'string') { updateInfo = r; paintBar(); tellRestartOnce(r); }
+    const good = r && r.state === 'ok';
+    toast(!good ? t('upCheckFailed') : (r.available ? t('upFound', r.latest) : t('upUpToDate', r.current)));
+  } catch (e) {
+    toast(t('upCheckFailed'));
+  } finally {
+    updateChecking = false;
+  }
+}
+
+/** `fetch` зі стелею часу; `null` — мережа/обрив. JSON розбирається тут (тіло відмов оновлення — `{ok:false, code}` без `error`,
+ *  тож `api()` з його `error`-логікою для відмов не годиться: код загубився б). */
+async function updateFetch(path, opts, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(path, { ...opts, signal: ctl.signal, cache: 'no-store' });
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* не JSON — лишається null */ }
+    return { status: res.status, body };
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Чекає, поки піднімається НОВИЙ процес сервера (`restartStep`): крок щосекунди, поки не `done`/`manual`/`fail`. Мережева помилка —
+ *  це «сервер ще лежить», а не відмова. Цикл послідовний (наступний крок після попереднього), тож накладок нема. */
+async function waitForRestart(prevBoot, target) {
+  const startedAt = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
+    const r = await updateFetch('/api/update', {}, UPDATE_STEP_TIMEOUT_MS);
+    const b = r && r.status === 200 && r.body && typeof r.body === 'object' ? r.body : null;
+    const o = b ? { ok: true, boot: b.boot, current: b.current, restart_failed: b.restart_failed } : { ok: false };
+    const step = restartStep({ prevBoot, target, startedAt, now: Date.now() }, o);
+    if (step !== 'wait') return step;
+  }
+}
+
+/** Людський текст відмови `apply` (код → словник). Для `dirty`/`diverged` команду дописано в сам текст: діалог лишається відкритим, а
+ *  кнопки «Копіювати» в рядку помилки нема. */
+function updateErrText(code, latest) {
+  const h = blockedHelp(code, latest);
+  return h.command ? `${t(h.key, h.code)} ${h.command}` : t(h.key, h.code);
+}
+
+/**
+ * Діалог «Оновлення»: малюється одразу (з `sections: null`), опис змін дотягується окремо й перемальовує ЛИШЕ свій блок
+ * (`[data-up-notes]`) — опис не умова оновлення, його затримка чи відмова кнопку не блокує. «Оновити» → `POST /api/update-apply`:
+ * `202` → «Оновлюю…» і опит нового процесу; `done` → перезавантаження сторінки. Форма на час запиту «зайнята» (`askForm`): Esc і
+ * «Скасувати» не діють, тож опит не лишається без діалогу.
+ */
+let updateDialogOpen = false;
+async function openUpdateDialog() {
+  if (updateDialogOpen) return;
+  updateDialogOpen = true;
+  try {
+    const info = (await pollUpdate()) || updateInfo;
+    if (!info) { toast(t('upCheckFailed')); return; }
+    let formEl = null;
+    const loadNotes = async () => {
+      const r = await updateFetch('/api/update-notes', {}, UPDATE_NOTES_TIMEOUT_MS);
+      const b = r && r.status === 200 && r.body && typeof r.body === 'object' ? r.body : null;
+      const view = !b || b.ok !== true ? { sections: [], reason: 'error' }
+        : { sections: Array.isArray(b.sections) ? b.sections : [], reason: typeof b.reason === 'string' ? b.reason : null };
+      const slot = formEl?.isConnected ? formEl.querySelector('[data-up-notes]') : null;
+      if (slot) slot.innerHTML = updateNotesHTML(view);
+    };
+    const status = (text) => {
+      const el = formEl?.querySelector('[data-up-status]');
+      if (!el) return;
+      el.textContent = text || '';
+      el.hidden = !text;
+    };
+    await askForm(() => updateDialogHTML({
+      current: info.current, latest: info.latest, blocked: info.blocked, state: info.state, reason: info.reason,
+      sections: null, restartFailed: info.restart_failed === true,
+    }), {
+      onMount(form) {
+        formEl = form;
+        /* «Копіювати» біля команди: буфер, а коли його нема (не-https, відмовлені права) — виділяємо команду, щоб скопіювати руками. */
+        form.addEventListener('click', async (ev) => {
+          const b = ev.target.closest?.('[data-copy]');
+          if (!b) return;
+          try {
+            await navigator.clipboard.writeText(b.dataset.copy);
+            b.textContent = t('upCopied');
+          } catch (e) {
+            const code = b.previousElementSibling;
+            if (code) getSelection()?.selectAllChildren(code);
+          }
+        });
+        loadNotes();
+      },
+      async onSubmit(_values, ctl) {
+        status(t('upApplying'));
+        /* Свіжий `boot` ПЕРЕД запитом: стан із моменту відкриття діалогу міг застаріти (сервер перезапускали вручну), і тоді опит
+           прийняв би старий процес за новий. */
+        const fresh = await fetchUpdate();
+        const prevBoot = (fresh || info).boot;
+        const r = await updateFetch('/api/update-apply', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        }, UPDATE_APPLY_TIMEOUT_MS);
+        if (!r) { status(''); return t('upErrNoAnswer'); }
+        if (r.status !== 202 || !r.body || r.body.ok !== true) {
+          status('');
+          pollUpdate();
+          return updateErrText(codeOfBody(r.body), info.latest);
+        }
+        if (r.body.restart === 'manual') {
+          /* Windows: сервер сам не перезапускається. Нове оновлення вже на диску, тож «Оновити» вдруге нічого б не дало — ховаємо її. */
+          status('');
+          ctl.form.querySelector('button[data-a="ok"]')?.setAttribute('hidden', '');
+          return t('upRestartManual');
+        }
+        const step = await waitForRestart(prevBoot, typeof r.body.to === 'string' ? r.body.to : info.latest);
+        status('');
+        if (step === 'done') { status(t('upDone')); location.reload(); return undefined; }
+        if (step === 'manual') return t('upRestartManual');
+        return t('upRestartLost');
+      },
+    });
+  } finally {
+    updateDialogOpen = false;
   }
 }
 
@@ -5206,6 +5400,11 @@ setInterval(pollClaude, CLAUDE_EVERY_MS);
    застарілий бейдж висів би, поки статус не зміниться. Потім — перший опит одразу. */
 paintClaude(true);
 pollClaude();
+/* Оновлення інструмента: перший знімок одразу, ще один — коли сервер вже встиг першу перевірку тегів (вона стартує за кілька секунд
+   після запуску; без цього пігулка зʼявилась би лише за півгодини), далі раз на півгодини. Сам remote питає сервер, не вкладка. */
+pollUpdate();
+setTimeout(pollUpdate, 20000);
+setInterval(pollUpdate, UPDATE_POLL_MS);
 /* Повернулись до вікна — правду одразу, не через 5 с; бейдж — ще раз, якщо система
    його скинула. */
 document.addEventListener('visibilitychange', () => {
@@ -7173,6 +7372,7 @@ function paletteState() {
     spaces: spacesResp && !spacesResp.off ? spacesResp.spaces : undefined,
     spaceId: st.space?.id ?? null,
     space: st.space ? { id: st.space.id, capabilities: st.space.capabilities, compat: st.space.compat } : null,
+    update: st.update,
   };
 }
 

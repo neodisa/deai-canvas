@@ -754,3 +754,36 @@ test("`pubpw` є для мігрованого запису ЛІГА (compat.pub
   assert.ok(pubItems({ space: mig }).includes("pubpw"));
   assert.ok(!pubItems({ space: OUT("vercel-publish") }).includes("pubpw"), "без compat — модуль, пароля ЛІГА нема");
 });
+
+/* ── Пігулка оновлення (0.23.0) ────────────────────────────────────────────
+   Нові контроли додаються в КІНЕЦЬ `zone1` кожного з трьох складів (екран «Задачі», майстер, звичайний): так індекси наявних
+   контролів ([0]…[3]) лишаються. Склад вирішує `pillModel`: лише коли оновлення Є й остання перевірка вдала. */
+const UPD = { current: "0.1.0", latest: "0.2.0", available: true, state: "ok", checked_at: 1, boot: "a", restart_failed: false };
+
+test("оновлення: контрол `update` у кінці zone1 лише коли available (три склади)", () => {
+  for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn" }, { homeOpen: true, homePage: "wiz" }, { hasIteration: false }]) {
+    const on = barModel({ ...base, ...o, update: UPD }).zone1;
+    assert.equal(on[on.length - 1].id, "update", `${JSON.stringify(o)}: контрол має стояти ОСТАННІМ у zone1`);
+    assert.equal(on[on.length - 1].version, "0.2.0");
+    assert.equal(on[on.length - 1].tier, 0, "ховати нікуди");
+    assert.equal(on[on.length - 1].labelTier, TIERS.mode, "підпис ховається з рештою на ярусі «режим»");
+    for (const off of [undefined, null, { ...UPD, available: false }, { ...UPD, state: "offline" }, { ...UPD, state: null }, { ...UPD, state: "error" }]) {
+      assert.ok(!barModel({ ...base, ...o, update: off }).zone1.some((x) => x.id === "update"), `${JSON.stringify(o)} / ${JSON.stringify(off)}: контролу бути не має`);
+    }
+  }
+});
+
+test("оновлення: наявні індекси zone1 не зсунуті присутністю пігулки", () => {
+  const a = barModel(base).zone1.map((x) => x.id);
+  const b = barModel({ ...base, update: UPD }).zone1.map((x) => x.id);
+  assert.deepEqual(b, [...a, "update"]);
+  const h1 = barModel({ ...base, homeOpen: true }).zone1.map((x) => x.id);
+  const h2 = barModel({ ...base, homeOpen: true, update: UPD }).zone1.map((x) => x.id);
+  assert.deepEqual(h2, [...h1, "update"]);
+  assert.deepEqual(h2.slice(0, 4), ["home", "palette", "crumb-tasks", "back"], "зміна: нові контроли в кінці zone1 — [0]…[3] ті самі");
+});
+
+test("оновлення: невдалий перезапуск дає пігулку-попередження (restart:true) навіть без available", () => {
+  const c = barModel({ ...base, update: { ...UPD, available: false, restart_failed: true } }).zone1.find((x) => x.id === "update");
+  assert.equal(c.restart, true);
+});

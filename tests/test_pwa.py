@@ -73,6 +73,15 @@ class PwaServing(unittest.TestCase):
         self.assertIn('no-cache', r.headers['Cache-Control'])
         self.assertIn(b'addEventListener', r.read())
 
+    def test_update_ui_modules_are_never_cached(self):
+        """0.23.0: після оновлення сторінка перезавантажується, і вона мусить узяти НОВИЙ код. Service worker нічого не кешує (див. вище),
+        тож «нова версія» залежить лише від заголовка статики: `no-cache` на `app.js` і на модулі оновлення."""
+        for name in ('app.js', 'update-model.js', 'update-view.js'):
+            r = self._get('/app/' + name)
+            self.assertEqual(r.status, 200, name)
+            self.assertIn('javascript', r.headers['Content-Type'], name)
+            self.assertIn('no-cache', r.headers['Cache-Control'], name)
+
     def test_icons_are_png(self):
         for name in ('icon-192.png', 'icon-512.png', 'icon-maskable-512.png'):
             r = self._get(f'/app/pwa/{name}')

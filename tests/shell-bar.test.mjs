@@ -1027,3 +1027,45 @@ test("застереження малюються лише у відкритом
     assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
   }
 });
+
+/* ── Пігулка оновлення (0.23.0) ────────────────────────────────────────────
+   Є лише при `available` (рішення — `pillModel`), стоїть ОДРАЗУ ПІСЛЯ дверей у палітру й перед крошками, і на екрані «Задачі»
+   теж. `data-act="update"` ↔ `id` контролу моделі. */
+const UPD = { current: "0.1.0", latest: "0.2.0", available: true, state: "ok", checked_at: 1, boot: "a", restart_failed: false };
+
+test("оновлення: пігулка є лише коли available; без нього вузла нема", () => {
+  assert.match(html({ update: UPD }), /data-act="update"/);
+  for (const update of [undefined, null, { ...UPD, available: false }, { ...UPD, state: "offline" }, { ...UPD, state: null }]) {
+    assert.doesNotMatch(html({ update }), /data-act="update"|upd-pill/, JSON.stringify(update));
+  }
+});
+
+test("оновлення: порядок — логотип, палітра, ПІГУЛКА, крошки, зона 2; на екрані «Задачі» так само", () => {
+  for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn", taskId: "t1" }, { space: { id: "a", name: "A", color: "space-1" } }]) {
+    const h = html({ update: UPD, ...o });
+    const pal = h.indexOf('data-act="palette"');
+    const upd = h.indexOf('data-act="update"');
+    const crumbs = h.indexOf('class="crumbs"');
+    assert.ok(pal !== -1 && upd !== -1 && crumbs !== -1, JSON.stringify(o));
+    assert.ok(pal < upd, "пігулка мусить стояти ПІСЛЯ дверей у палітру");
+    assert.ok(upd < crumbs, "пігулка мусить стояти ПЕРЕД крошками");
+    if (o.space) assert.ok(upd < h.indexOf('data-dd="space"'), "і перед фішкою простору");
+  }
+});
+
+test("оновлення: підпис пігулки — з версією, мовою інтерфейсу; ярус підпису — той самий, що в палітри", () => {
+  setLang("uk");
+  assert.match(html({ update: UPD }), /Оновлення 0\.2\.0/);
+  setLang("en");
+  assert.match(html({ update: UPD }), /Update 0\.2\.0/);
+  setLang("uk");
+  assert.equal(barModel(S({ update: UPD })).zone1.find((x) => x.id === "update").labelTier,
+    barModel(S()).zone1.find((x) => x.id === "palette").labelTier);
+});
+
+test("оновлення: розмітка смуги з пігулкою збалансована за тегами", () => {
+  const h = html({ update: UPD });
+  for (const tag of ["div", "button", "span"]) {
+    assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
+  }
+});

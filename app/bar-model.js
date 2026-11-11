@@ -34,6 +34,7 @@
  */
 
 import { hasNotify, hasPublish, hasVcs, isLegacyPublish, vcsBrand } from "./spaces-model.js";
+import { pillModel } from "./update-model.js";
 
 /**
  * Яруси зникнення в зоні 2, ширина вікна в пікселях. Значення підтверджені
@@ -173,6 +174,15 @@ export function barModel(s) {
     ? [{ id: "space", tier: 0, label: s.space.name, color: s.space.color }]
     : [];
 
+  /* Пігулка оновлення (0.23.0): склад вирішує `pillModel` (`update-model.js`) — лише коли оновлення Є й остання перевірка вдала (або
+     перезапуск після оновлення не вдався). Контрол додається в КІНЕЦЬ `zone1` у кожному з трьох складів (екран «Задачі», майстер,
+     звичайний): так індекси наявних контролів не зсуваються. Місце в РОЗМІТЦІ інше — одразу після дверей у палітру (`shell-bar.js`):
+     модель описує склад, а не порядок вузлів. `labelTier` — ярус, на якому ховається підпис (лишається іконка, як у палітри). */
+  const upd = pillModel(s.update);
+  const updateCtl = upd
+    ? [{ id: "update", tier: 0, labelTier: TIERS.mode, version: upd.version, restart: upd.restart }]
+    : [];
+
   /* Екран «Задачі» — склад смуги змінюється ЦІЛКОМ тут, а не приховуванням у
      розмітці: модель описує склад, розмітка його малює. Принцип 5 PRODUCT.md
      (контрол, безглуздий у цьому режимі, прихований): без задачі перед очима
@@ -190,13 +200,14 @@ export function barModel(s) {
        майстер привʼязаний до СВОГО простору (перемикач посеред кроків лише плутав би), а вихід із нього — свої кнопки
        й логотип, що лишається в моделі й веде на «Задачі». Лише рівно `"wiz"`, як і `"conn"`. */
     if (s.homePage === "wiz") {
-      return { zone1: [home, palette, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }], zone2: [], zone3: [], error: tasksError(s) };
+      return { zone1: [home, palette, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }, ...updateCtl], zone2: [], zone3: [], error: tasksError(s) };
     }
     const crumb = s.homePage === "conn"
       ? { id: "crumb-conn", tier: 0, labelKey: "cnTitle" }
       : { id: "crumb-tasks", tier: 0, labelKey: "tasks" };
     const zone1 = [home, palette, ...spaceChip, crumb];
     if (s.taskId) zone1.push({ id: "back", tier: 0, label: s.taskId });
+    zone1.push(...updateCtl);
     return { zone1, zone2: [], zone3: [], error: tasksError(s) };
   }
 
@@ -229,6 +240,7 @@ export function barModel(s) {
       })),
     });
   }
+  zone1.push(...updateCtl);
 
   const zone2 = [
     {

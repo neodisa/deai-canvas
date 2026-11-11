@@ -277,6 +277,29 @@ body.home-open .cv-hud{display:none!important}
 .tr .cv-form-h,.tr-asks,.tr .cv-form-err{overflow-wrap:anywhere}
 .tr .tr-wait{color:var(--g700)}
 .cv-ask button.tr-untrust{margin-right:auto;border-color:var(--bad-ink);background:var(--g50);color:var(--bad-ink)}
+/* Діалог оновлення інструмента (0.23.0, `update-view.js`): та сама біла картка `askForm`, що в діалогу довіри, і ті самі правила під
+   `.up` (специфічність: `.cv-ask p` вище забрав би в простого `.up-ver` розмір і колір). Опис змін — ПРОКРУТНИЙ блок із фокусом
+   (як `.tr-files`): без `tabindex` клавіатурою його не дочитати. Команда для копіювання — моноширинна, з кнопкою поруч. */
+.cv-ask--form:has(.up){width:560px}
+.up .up-ver{margin:-8px 0 0;font-size:12px;line-height:1.4;color:var(--g600)}
+.up .up-why{display:flex;gap:8px;padding:10px 12px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
+  font-size:13px;line-height:1.45;color:var(--g900);overflow-wrap:anywhere}
+.up .up-why .ico{flex:none;margin-top:2px;color:var(--bad-ink)}
+.up .up-cmd{display:flex;align-items:center;gap:8px;margin-top:-6px}
+.up .up-cmd code{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
+  color:var(--g900);overflow-wrap:anywhere}
+.up .up-h3{margin:0;font-weight:600;color:var(--g700)}
+.up .up-note{margin:0;font-size:13px;color:var(--g600)}
+.up .up-notes{max-height:240px;overflow:auto;padding:6px 10px;border:1px solid var(--g450);border-radius:6px;font-size:13px;line-height:1.45;
+  color:var(--g900);overflow-wrap:anywhere}
+.up .up-notes:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.up .up-sec-h{margin:6px 0 4px;font-size:13px;font-weight:600;color:var(--g900)}
+.up .up-notes p{margin:4px 0}
+.up .up-list{margin:4px 0;padding-left:18px}
+.up .up-st{margin:0;font-size:13px;color:var(--g700)}
+.up[aria-busy="true"] .up-notes{opacity:.6}
+/* Пігулка оновлення в смузі: звичайний контрол смуги з рамкою; підпис ховається з рештою на 1180 (`.lbl-upd`, див. контейнерні запити). */
+.upd-pill{flex:none;margin-right:2px}
 /* Кружки: `.cv-ask button` вище дає кожній кнопці падінг і рамку — перебиваємо
    специфічністю (клас + клас). Вибраний — кільце ЗОВНІ й галочка ВСЕРЕДИНІ: колір
    сам стан не оголошує. Рамка 1px `--g450` — на КОЖНОМУ кружку: світлі кольори токенів
@@ -1004,7 +1027,7 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    згаданий коментарем вище («на 1024 керування виглядом ставало недосяжним
    ЗОВСІМ»), лише для нового контролу. */
 @container (max-width:1300px){ .lbl-gl{display:none} }
-@container (max-width:1180px){ .lbl-mode,.lbl-pal{display:none} }
+@container (max-width:1180px){ .lbl-mode,.lbl-pal,.lbl-upd{display:none} }
 @container (max-width:1060px){
   .view-extra{display:none}
   .view-more{display:inline-flex}
