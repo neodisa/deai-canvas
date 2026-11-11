@@ -5943,6 +5943,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == '/api/update':
             self._send_json(_updater().status())
             return
+        if self.path.split('?')[0] == '/api/update-notes':
+            self._send_json(_updater().notes())
+            return
         if self.path.split('?')[0] == '/api/spaces':
             # Шар вимкнено → `{current: null, spaces: [], off: true}` (рішає `spaces.listing`).
             # Кожен запис ще й несе `capabilities` (див. `spaces_listing`).

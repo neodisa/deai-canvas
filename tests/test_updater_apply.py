@@ -491,6 +491,21 @@ class Apply(Base):
         self.assertNotIn('merge', verbs)
         self.assertEqual(head(self.work), old)
 
+    def test_a_truncated_transfer_is_offline_not_fetch_rejected(self):
+        """`index-pack failed`/`unpack-objects` без слів про зіпсований обʼєкт — це обірваний переказ (повторимо), а не відмова fsck."""
+        real = updater.run_git
+        for text in ('fatal: index-pack failed', 'fatal: unpack-objects failed', 'error: unable to read sha1 file\nfatal: index-pack failed'):
+            u = self.ready() if text.startswith('fatal: index') else u
+            u.run = lambda args, cwd, timeout, env_extra=None, t=text: (
+                (128, '', t) if V(args)[0] == 'fetch' else real(args, cwd, timeout, env_extra))
+            old = head(self.work)
+            self.assertEqual(u.apply(), (503, {'ok': False, 'code': 'offline'}), text)
+            self.assertEqual(head(self.work), old)
+        for text in ('error in object: foo', 'fatal: fsck error in packed object', 'fatal: bad object abc', 'corrupt loose object', 'invalid object x'):
+            u.run = lambda args, cwd, timeout, env_extra=None, t=text: (
+                (128, '', t) if V(args)[0] == 'fetch' else real(args, cwd, timeout, env_extra))
+            self.assertEqual(u.apply(), (409, {'ok': False, 'code': 'fetch-rejected'}), text)
+
     def test_a_new_successful_apply_clears_restart_failed(self):
         u = self.ready()
         u.mark_restart_failed()

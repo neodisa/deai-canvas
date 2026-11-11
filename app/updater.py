@@ -18,6 +18,7 @@
 
 Імпортує лише `isolation`, `spaces`, `atomic_io` (без `serve`: цикл неможливий).
 """
+import datetime
 import json
 import hashlib
 import os
@@ -31,6 +32,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 
 import isolation
 import spaces
@@ -48,7 +50,11 @@ LOCAL_GIT_TIMEOUT_S = 10
 MERGE_TIMEOUT_S = 60
 SMOKE_TIMEOUT_S = 30
 #: Підрядки stderr (`LC_ALL=C`) `git fetch`, коли `fsckObjects` чи розпакування відкинули обʼєкти.
-_FETCH_REJECTED_MARKERS = ('fsck', 'error in object', 'bad object', 'corrupt', 'invalid object', 'unpack-objects', 'index-pack')
+#: Голі `index-pack`/`unpack-objects` тут НЕ стоять: «index-pack failed» дає й обірваний переказ (це `offline`), а не лише відкинутий обʼєкт.
+_FETCH_REJECTED_MARKERS = ('fsck', 'error in object', 'bad object', 'corrupt', 'invalid object')
+NOTES_MAX_BYTES = 1024 * 1024        # з CHANGELOG віддаленого тега читається не більше 1 МБ
+NOTES_SECTION_MAX_BYTES = 8 * 1024
+NOTES_TOTAL_MAX_BYTES = 40 * 1024
 FIRST_CHECK_DELAY_S = 5
 FIRST_CHECK_JITTER_S = 25
 PERIOD_JITTER = 0.1
@@ -106,9 +112,8 @@ def _communicate(argv, cwd, env, timeout):
     return p.returncode, out, err
 
 
-def run_git(args, cwd, timeout, env_extra=None):
-    """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (уся група процесів убивається: `ssh` теж), нема
-    `git` — `(127, '', 'no-git-binary')`. Оточення: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`)."""
+def _git_env(env_extra=None):
+    """Оточення `git`: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`), без запитів, без оновлення індексу."""
     env = {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
     env['GIT_TERMINAL_PROMPT'] = '0'
     env['GCM_INTERACTIVE'] = 'never'
@@ -116,7 +121,67 @@ def run_git(args, cwd, timeout, env_extra=None):
     if 'GIT_SSH_COMMAND' not in env:
         env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
     env.update(env_extra or {})
+    return env
+
+
+def run_git(args, cwd, timeout, env_extra=None):
+    """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (уся група процесів убивається: `ssh` теж), нема
+    `git` — `(127, '', 'no-git-binary')`. Оточення: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`)."""
+    env = _git_env(env_extra)
     return _communicate(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd, env, timeout)
+
+
+def git_head(args, cwd, limit, timeout, env_extra=None):
+    """`git` → `(rc, bytes)`: читає з stdout НЕ БІЛЬШЕ `limit` байтів (пам'ять обмежена, на відміну від `communicate`) і вбиває процес, коли вивід
+    більший. Обрізання за лімітом — `rc == 0`; тайм-аут — `124`; нема `git` — `127`. stderr відкидається."""
+    try:
+        p = subprocess.Popen(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd=cwd, env=_git_env(env_extra),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             start_new_session=(os.name != 'nt'))
+    except FileNotFoundError:
+        return 127, b''
+    except (OSError, ValueError, TypeError):
+        return 126, b''
+    timed_out = []
+
+    def kill():
+        timed_out.append(1)
+        try:
+            if hasattr(os, 'killpg'):
+                os.killpg(p.pid, signal.SIGKILL)
+            else:
+                p.kill()
+        except (OSError, ProcessLookupError):
+            pass
+
+    timer = threading.Timer(timeout, kill)
+    timer.daemon = True
+    timer.start()
+    try:
+        data = p.stdout.read(limit)
+    finally:
+        timer.cancel()
+        if p.poll() is None:
+            try:
+                if hasattr(os, 'killpg'):
+                    os.killpg(p.pid, signal.SIGKILL)
+                else:
+                    p.kill()
+            except (OSError, ProcessLookupError):
+                pass
+        try:
+            p.stdout.close()
+        except OSError:
+            pass
+        try:
+            p.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+    if timed_out:
+        return 124, b''
+    if len(data) >= limit:
+        return 0, data
+    return p.returncode, data
 
 
 def parse_tag(tag):
@@ -214,6 +279,59 @@ def remote_for(root, run=run_git):
     return cand, url, None
 
 
+_CL_HEAD_RE = re.compile(r'^## \[([0-9][0-9.]*)\] [\u2014\u2013-] ([0-9]{2})\.([0-9]{2})\.([0-9]{4})[ \t]*\Z')
+
+
+def _plain(text):
+    """Лише текст: `\\r\\n`→`\\n`, табуляція → пробіл, решта керуючих/форматних символів (Unicode Cc/Cf) геть; `\\n` лишається."""
+    text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\t', ' ')
+    return ''.join(c for c in text if c == '\n' or unicodedata.category(c) not in ('Cc', 'Cf'))
+
+
+def _cap_bytes(text, limit):
+    raw = text.encode('utf-8')
+    return text if len(raw) <= limit else raw[:limit].decode('utf-8', 'ignore')
+
+
+def parse_changelog(text, after, upto):
+    """Розділи `## [X.Y.Z] — DD.MM.YYYY` у проміжку `(after, upto]` → `[{version, date, body}]` (порядок файла). Лише текст (HTML лишається
+    текстом); тіло розділу ≤ 8 КБ, усього ≤ 40 КБ; керуючі символи вирізано. Хибні заголовки (`## [0.2]`, без дати), `Unreleased` розділів не
+    відкривають, але ЗАКРИВАЮТЬ попередній (їхній вміст не прилипає до сусіда)."""
+    lo, hi = version_tuple(after), version_tuple(upto)
+    if not (lo and hi and isinstance(text, str)):
+        return []
+    sections, cur, total = [], None, 0
+    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+
+    def close():
+        nonlocal cur, total
+        if cur is None:
+            return
+        body = _cap_bytes(_plain('\n'.join(cur['lines'])).strip(), NOTES_SECTION_MAX_BYTES)
+        room = NOTES_TOTAL_MAX_BYTES - total
+        if room > 0:
+            body = _cap_bytes(body, room).rstrip()
+            total += len(body.encode('utf-8'))
+            sections.append({'version': cur['version'], 'date': cur['date'], 'body': body})
+        cur = None
+
+    for line in lines:
+        if line.startswith('## '):
+            close()
+            m = _CL_HEAD_RE.match(line)
+            vt = version_tuple(m.group(1)) if m else None
+            if m and vt and lo < vt <= hi:
+                try:
+                    datetime.date(int(m.group(4)), int(m.group(3)), int(m.group(2)))
+                except ValueError:
+                    continue
+                cur = {'version': m.group(1), 'date': '%s.%s.%s' % (m.group(2), m.group(3), m.group(4)), 'lines': []}
+        elif cur is not None:
+            cur['lines'].append(line)
+    close()
+    return sections
+
+
 class Updater:
     """Стан оновлення одного кореня: `check()` ходить у remote (за `network_allowed`), `status()` — відповідь `GET /api/update`."""
 
@@ -226,6 +344,7 @@ class Updater:
         self._lock = threading.RLock()           # короткий: лише читання/запис стану, НІКОЛИ не поверх git
         self._checking = threading.Lock()        # «перевірка триває»: друга `check()` не ставиться в чергу
         self._apply_lock = threading.Lock()      # «застосування триває»: друге `apply()` — `409 busy`
+        self._fetch_lock = threading.Lock()      # один `fetch` тега за раз (`apply` і `notes` не б'ються за `refs/tags/vX`)
         self._mem = {}
 
     # --- файл стану ---
@@ -403,21 +522,9 @@ class Updater:
         old = out.strip() if rc == 0 else ''
         if not _SHA_RE.match(old):
             return self._fail(500, 'error')
-        refspec = 'refs/tags/%s:refs/tags/%s' % (tag, tag)
-        rc, _, err_text = self.run(['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true', '-c', 'gc.auto=0',
-                                    'fetch', '--no-tags', '--no-recurse-submodules', '--', url, refspec],
-                                   self.root, FETCH_TIMEOUT_S, {'LC_ALL': 'C'})
-        if rc == 127:
-            return self._fail(409, 'not-git')
-        if rc != 0:
-            low = (err_text or '').lower()
-            if 'clobber' in low:
-                return self._fail(409, 'tag-conflict')
-            if "couldn't find remote ref" in low:
-                return self._fail(409, 'tag-missing')
-            if any(m in low for m in _FETCH_REJECTED_MARKERS):
-                return self._fail(409, 'fetch-rejected')      # fsck/пошкоджений обʼєкт: це не «нема мережі»
-            return self._fail(503, 'offline')
+        failure = self._fetch_tag(url, tag)
+        if failure:
+            return self._fail(*failure)
         rc, out, _ = self.run(['rev-parse', '--verify', '%s^{commit}' % tag], self.root, LOCAL_GIT_TIMEOUT_S)
         target = out.strip() if rc == 0 else ''
         if not _SHA_RE.match(target):
@@ -458,6 +565,93 @@ class Updater:
             pass
         return 202, {'ok': True, 'to': latest, 'restart': 'manual' if _is_windows() else 'auto'}
 
+
+    def _fetch_tag(self, url, tag):
+        """ЄДИНИЙ `fetch` тега (`apply` і `notes`): лише обʼєкти й `refs/tags/<tag>`, робоче дерево, індекс і HEAD не чіпаються. `None` — вдало;
+        інакше `(http_status, code)`. `tag` уже пройшов `TAG_RE`; `fsckObjects` відкидає зіпсовані обʼєкти; `LC_ALL=C` — стабільний stderr."""
+        refspec = 'refs/tags/%s:refs/tags/%s' % (tag, tag)
+        with self._fetch_lock:
+            rc, _, err_text = self.run(['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true', '-c', 'gc.auto=0',
+                                        'fetch', '--no-tags', '--no-recurse-submodules', '--', url, refspec],
+                                       self.root, FETCH_TIMEOUT_S, {'LC_ALL': 'C'})
+        if rc == 0:
+            return None
+        if rc == 127:
+            return 409, 'not-git'
+        low = (err_text or '').lower()
+        if 'clobber' in low:
+            return 409, 'tag-conflict'
+        if "couldn't find remote ref" in low:
+            return 409, 'tag-missing'
+        if any(m in low for m in _FETCH_REJECTED_MARKERS):
+            return 409, 'fetch-rejected'                  # fsck/пошкоджений обʼєкт: це не «нема мережі»
+        return 503, 'offline'
+
+    # --- «Що нового» ---
+
+    @staticmethod
+    def _notes_empty(reason, version=None):
+        out = {'ok': True, 'sections': [], 'reason': reason}
+        if version:
+            out['version'] = version
+        return out
+
+    def notes(self):
+        """`GET /api/update-notes` → `{ok, version, sections: [{version, date, body}], reason?}`. Не кидає. Розділи `(current, latest]` беруться з
+        CHANGELOG ВІДДАЛЕНОГО тега (локальний ще не має нової версії): `fetch` тега, `git show <sha>:CHANGELOG.md` (≤ 1 МБ), кеш у `update.json`.
+        Дерево/індекс/HEAD не чіпаються. У відповіді лише коди й текст — без адрес і шляхів."""
+        try:
+            return self._notes()
+        except Exception:  # noqa: BLE001
+            return self._notes_empty('error')
+
+    def _cached_notes(self, state, latest, current):
+        c = state.get('notes')
+        if not (isinstance(c, dict) and c.get('version') == latest and c.get('after') == current and isinstance(c.get('sections'), list)):
+            return None
+        out = []
+        for s in c['sections']:
+            if not (isinstance(s, dict) and all(isinstance(s.get(k), str) for k in ('version', 'date', 'body'))):
+                return None
+            out.append({'version': s['version'], 'date': s['date'], 'body': _cap_bytes(_plain(s['body']), NOTES_SECTION_MAX_BYTES)})
+        return out
+
+    def _notes(self):
+        state = self._load()
+        latest = state.get('latest') if isinstance(state.get('latest'), str) else None
+        current = current_version(self.root)
+        lt, ct = (parse_tag('v' + latest) if latest else None), version_tuple(current)      # TAG_RE ДО будь-якого `git`
+        if not (lt and ct and lt > ct):
+            return self._notes_empty('no-update')
+        cached = self._cached_notes(state, latest, current)
+        if cached is not None:
+            return {'ok': True, 'version': latest, 'sections': cached}
+        if not os.path.exists(os.path.join(self.root, '.git')):
+            return self._notes_empty('no-git', latest)
+        _, url, err = remote_for(self.root, self.run)
+        if err:
+            return self._notes_empty('no-git' if err == 'no-git-binary' else err, latest)
+        if not network_allowed(url):
+            return self._notes_empty('disabled', latest)
+        tag = 'v' + latest
+        failure = self._fetch_tag(url, tag)
+        if failure:
+            return self._notes_empty('no-git' if failure[1] == 'not-git' else failure[1], latest)
+        rc, out, _ = self.run(['rev-parse', '--verify', '%s^{commit}' % tag], self.root, LOCAL_GIT_TIMEOUT_S)
+        target = out.strip() if rc == 0 else ''
+        if not _SHA_RE.match(target):
+            return self._notes_empty('error', latest)      # далі — sha, а не рухоме імʼя
+        rc, data = git_head(['show', '%s:CHANGELOG.md' % target], self.root, NOTES_MAX_BYTES, LOCAL_GIT_TIMEOUT_S)
+        if rc == 127:
+            return self._notes_empty('no-git', latest)
+        if rc != 0:
+            return self._notes_empty('no-changelog', latest)
+        sections = parse_changelog(data.decode('utf-8', 'replace'), current, latest)
+        with self._lock:
+            state = self._load()
+            state['notes'] = {'version': latest, 'after': current, 'sections': sections}
+            self._save(state)
+        return {'ok': True, 'version': latest, 'sections': sections}
 
     def _rollback(self, old):
         """ЄДИНЕ місце з `reset` у модулі: `reset --hard <old>` (`old` — 40-hex, перевірений раніше). Лише після `merge`, що чіпав дерево."""

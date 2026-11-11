@@ -124,6 +124,22 @@ class UpdateApi(unittest.TestCase):
         st, raw = self.call('POST', '/api/update-check')
         self.assertEqual(st, 200, raw)
 
+    def test_get_update_notes_reads_the_remote_tag_and_leaks_no_paths(self):
+        ta.release(self.work, '0.2.0', files={'CHANGELOG.md': '## [0.2.0] — 11.11.2026\n\nTwo <b>.\n\n## [0.1.0] — 10.11.2026\n\nOne.\n'})
+        self.call('POST', '/api/update-check')
+        st, raw = self.call('GET', '/api/update-notes?x=1', headers={'X-Canvas-Task': 'no-such-task'})
+        self.assertEqual(st, 200, raw)
+        body = json.loads(raw)
+        self.assertEqual((body['ok'], body['version'], [s['version'] for s in body['sections']]), (True, '0.2.0', ['0.2.0']))
+        self.assertEqual(body['sections'][0]['body'], 'Two <b>.')
+        for needle in (self.tmp, self.remote, self.work):
+            self.assertNotIn(needle, raw)
+        self.assertEqual(self.call('GET', '/t/x/api/update-notes')[0], 400)
+
+    def test_get_update_notes_without_an_update_is_an_empty_reason(self):
+        st, raw = self.call('GET', '/api/update-notes')
+        self.assertEqual((st, json.loads(raw)), (200, {'ok': True, 'sections': [], 'reason': 'no-update'}))
+
     def test_task_prefix_form_is_refused(self):
         st, raw = self.call('GET', '/t/x/api/update')
         self.assertEqual(st, 400)
