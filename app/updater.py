@@ -15,9 +15,12 @@
 Імпортує лише `isolation`, `spaces`, `atomic_io` (без `serve`: цикл неможливий).
 """
 import json
+import hashlib
 import os
+import random
 import re
 import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -29,17 +32,25 @@ from atomic_io import atomic_write_json
 PRODUCT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 #: Тег релізу. `\Z`, а не `$`: `$` пропускає завершальний `\n`.
-TAG_RE = re.compile(r'^v(\d+)\.(\d+)\.(\d+)\Z')
+#: Без `\d` (він приймає нелатинські цифри) і без ведучих нулів; до 9 цифр на частину (ліміт `int` не дістати).
+TAG_RE = re.compile(r'^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\Z')
 CHECK_EVERY_S = 6 * 3600
 LS_REMOTE_TIMEOUT_S = 15
 FETCH_TIMEOUT_S = 60
 LOCAL_GIT_TIMEOUT_S = 10
 FIRST_CHECK_DELAY_S = 5
+FIRST_CHECK_JITTER_S = 25
+PERIOD_JITTER = 0.1
 STATES = ('ok', 'offline', 'no-git', 'error', 'disabled')
 BOOT = secrets.token_hex(8)
 
 _NAME_RE = re.compile(r'^[A-Za-z0-9][\w.-]*\Z')
-_URL_RE = re.compile(r'^(?:https|ssh)://[^\s\x00-\x1f/-][^\s\x00-\x1f]*\Z')
+_URL_RE = re.compile(r'^(?:https|ssh)://[^\s\x00-\x1f\\/-][^\s\x00-\x1f\\]*\Z')
+_HOST_START_RE = re.compile(r'^[A-Za-z0-9\[]')
+#: Змінні `git`, що перекривають репо/конфіг: з успадкованого оточення вилучаються.
+_GIT_SCRUB = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+              'GIT_CONFIG', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT')
+_GIT_SCRUB_PREFIXES = ('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')
 _SCP_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s\x00-\x1f]+\Z')
 _PATH_RE = re.compile(r'^/[^\x00-\x1f]*\Z')
 _HOST_URL_RE = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*://(?:[^/\s]*@)?(\[[^\]]*\]|[^/:?#\s]+)')
@@ -47,23 +58,39 @@ _HOST_SCP_RE = re.compile(r'^(?:[^@/\s]+@)?([^:/\s]+):')
 
 
 def run_git(args, cwd, timeout, env_extra=None):
-    """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')`, нема `git` — `(127, '', 'no-git-binary')`."""
-    env = dict(os.environ)
+    """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (уся група процесів убивається: `ssh` теж), нема
+    `git` — `(127, '', 'no-git-binary')`. Оточення: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`)."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
     env['GIT_TERMINAL_PROMPT'] = '0'
+    env['GCM_INTERACTIVE'] = 'never'
     env['GIT_OPTIONAL_LOCKS'] = '0'
     if 'GIT_SSH_COMMAND' not in env:
         env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
     env.update(env_extra or {})
     try:
-        p = subprocess.run(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd=cwd, capture_output=True, text=True,
-                           timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        return 124, '', 'timeout'
+        p = subprocess.Popen(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd=cwd, env=env, text=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=(os.name != 'nt'))
     except FileNotFoundError:
         return 127, '', 'no-git-binary'
     except OSError as e:
         return 126, '', type(e).__name__
-    return p.returncode, p.stdout, p.stderr
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            if hasattr(os, 'killpg'):
+                os.killpg(p.pid, signal.SIGKILL)
+            else:
+                p.kill()
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            p.communicate(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+        return 124, '', 'timeout'
+    return p.returncode, out, err
 
 
 def parse_tag(tag):
@@ -105,7 +132,10 @@ def check_remote(remote):
     """Чи `remote` безпечно віддавати `git`: імʼя remote, `https://`/`ssh://`, `git@host:path` або абсолютний шлях."""
     if not isinstance(remote, str):
         return False
-    return bool(_NAME_RE.match(remote) or _URL_RE.match(remote) or _SCP_RE.match(remote) or _PATH_RE.match(remote))
+    if _URL_RE.match(remote):
+        authority = remote.split('://', 1)[1].split('/', 1)[0]
+        return bool(_HOST_START_RE.match(authority.rsplit('@', 1)[-1]))      # `ssh://u@-oProxyCommand=x/` — не хост
+    return bool(_NAME_RE.match(remote) or _SCP_RE.match(remote) or _PATH_RE.match(remote))
 
 
 def remote_host(remote):
@@ -167,7 +197,8 @@ class Updater:
         self.home = home
         self.busy = busy
         self.clock = clock
-        self._lock = threading.RLock()
+        self._lock = threading.RLock()           # короткий: лише читання/запис стану, НІКОЛИ не поверх git
+        self._checking = threading.Lock()        # «перевірка триває»: друга `check()` не ставиться в чергу
         self._mem = {}
 
     # --- файл стану ---
@@ -201,22 +232,34 @@ class Updater:
     # --- перевірка ---
 
     def check(self):
-        """Спитати remote про теги й записати результат. Не кидає: будь-яка несподіванка — `state: 'error'`."""
-        with self._lock:
-            state = self._load()
+        """Спитати remote про теги й записати результат. Не кидає: будь-яка несподіванка — `state: 'error'`. Мережа/`git` — ПОЗА замком
+        стану (`GET /api/update` не чекає); друга `check()` під час першої повертає поточний стан одразу."""
+        if not self._checking.acquire(blocking=False):
+            return self._load()
+        try:
             try:
                 result = self._probe()
             except Exception:  # noqa: BLE001 — фонова перевірка не вмирає, а повідомляє
                 result = {'state': 'error', 'reason': 'internal'}
-            state['checked_at'] = int(self.clock())
-            state['state'] = result['state']
-            state['reason'] = result.get('reason')
-            if 'latest' in result:
-                state['latest'] = result['latest']
-            if 'remote_host' in result:
-                state['remote_host'] = result['remote_host']
-            self._save(state)
-            return state
+            with self._lock:
+                state = self._load()
+                state['checked_at'] = int(self.clock())
+                state['state'] = result['state']
+                state['reason'] = result.get('reason')
+                # `latest` переживає лише `offline` ТОГО Ж remote; інакше він застарів (інша адреса чи перевірка не відбулась).
+                if result['state'] == 'ok':
+                    state['latest'] = result.get('latest')
+                elif not (result['state'] == 'offline' and result.get('remote_id') and state.get('remote_id') == result['remote_id']):
+                    state.pop('latest', None)
+                for k in ('remote_host', 'remote_id'):
+                    if result.get(k):
+                        state[k] = result[k]
+                    else:
+                        state.pop(k, None)
+                self._save(state)
+                return state
+        finally:
+            self._checking.release()
 
     def _probe(self):
         if not os.path.exists(os.path.join(self.root, '.git')):
@@ -225,14 +268,15 @@ class Updater:
         if err:
             return {'state': 'no-git' if err == 'no-git-binary' else 'error', 'reason': err}
         host = remote_host(url)
+        rid = hashlib.sha256(url.encode('utf-8', 'replace')).hexdigest()[:16]      # впізнати зміну remote, не зберігаючи адресу
         if not network_allowed(url):
-            return {'state': 'disabled', 'reason': 'check-disabled', 'remote_host': host}
+            return {'state': 'disabled', 'reason': 'check-disabled', 'remote_host': host, 'remote_id': rid}
         rc, out, _ = self.run(['ls-remote', '--tags', '--refs', '--', url], self.root, LS_REMOTE_TIMEOUT_S)
         if rc == 127:
             return {'state': 'no-git', 'reason': 'no-git-binary'}
         if rc != 0:
-            return {'state': 'offline', 'reason': 'timeout' if rc == 124 else 'unreachable', 'remote_host': host}
-        return {'state': 'ok', 'reason': None, 'latest': latest_tag(out), 'remote_host': host}
+            return {'state': 'offline', 'reason': 'timeout' if rc == 124 else 'unreachable', 'remote_host': host, 'remote_id': rid}
+        return {'state': 'ok', 'reason': None, 'latest': latest_tag(out), 'remote_host': host, 'remote_id': rid}
 
     # --- відповідь ---
 
@@ -282,22 +326,23 @@ class Updater:
         return None
 
 
-def start_background(upd, stop=None, first_delay=FIRST_CHECK_DELAY_S, every=CHECK_EVERY_S):
+def start_background(upd, stop=None, first_delay=FIRST_CHECK_DELAY_S, every=CHECK_EVERY_S, rand=random.random):
     """Daemon-потік: перша перевірка через `first_delay` с (не блокує старт), далі кожні `every` с. З `DEAI_NO_UPDATE_CHECK=1` потік не
-    стартує (`None`), але `check()` лишається доступною вручну. Зупинка — `t.stop_event.set()`."""
+    стартує (`None`), але `check()` лишається доступною вручну. Зупинка — `t.stop_event.set()`. Розкид (`rand` — шов тестів): перша перевірка
+    `first_delay` + 0…25 с, період `every` ±10 %: сотні копій не б'ють у remote одночасно."""
     if os.environ.get('DEAI_NO_UPDATE_CHECK') == '1':
         return None
     stop = stop or threading.Event()
 
     def loop():
-        if stop.wait(first_delay):
+        if stop.wait(first_delay + rand() * FIRST_CHECK_JITTER_S):
             return
         while True:
             try:
                 upd.check()
             except Exception:  # noqa: BLE001
                 pass
-            if stop.wait(every):
+            if stop.wait(every * (1 - PERIOD_JITTER + 2 * PERIOD_JITTER * rand())):
                 return
 
     t = threading.Thread(target=loop, name='deai-update-check', daemon=True)

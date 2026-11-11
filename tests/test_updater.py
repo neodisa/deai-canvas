@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -103,6 +104,17 @@ class TagParsing(unittest.TestCase):
         for bad in ('v1.2.3 --upload-pack=x', '-v1.2.3', 'v1.2.3\n', 'v1.2', 'xv1.2.3', 'v1.2.3x', ' v1.2.3'):
             self.assertIsNone(updater.parse_tag(bad), repr(bad))
         self.assertEqual(updater.parse_tag('v1.22.3'), (1, 22, 3))
+        self.assertEqual(updater.parse_tag('v0.0.0'), (0, 0, 0))
+
+    def test_non_ascii_digits_leading_zeros_and_huge_numbers_are_not_tags(self):
+        for bad in ('v\u0661.\u0662.\u0663', 'v01.2.3', 'v1.02.3', 'v1.2.03', 'v' + '9' * 10 + '.0.0', 'v' + '1' * 5000 + '.0.0',
+                    'v0.' + '1' * 5000 + '.0', 'v0.0.' + '1' * 5000):
+            self.assertIsNone(updater.parse_tag(bad), repr(bad[:20]))
+
+    def test_one_hostile_tag_does_not_block_detection(self):
+        out = '\n'.join('%040d\trefs/tags/%s' % (i, t) for i, t in enumerate(
+            ['v0.9.0', 'v' + '1' * 5000 + '.0.0', 'v0.' + '1' * 5000 + '.0', 'v0.0.' + '1' * 5000, 'v\u0661.\u0662.\u0663', 'v01.2.3', 'v0.10.2']))
+        self.assertEqual(updater.latest_tag(out), '0.10.2')
 
     def test_version_tuple_numeric(self):
         self.assertGreater(updater.version_tuple('0.10.0'), updater.version_tuple('0.9.9'))
@@ -135,7 +147,8 @@ class RemoteChoice(Base):
 
     def test_bad_remote_is_refused_before_any_git_call(self):
         for r in ('-oProxyCommand=x', 'ext::sh -c id', 'file:///etc/passwd;x', '', 'https://', '--upload-pack=x', 'a b',
-                  'https://host/x\nfoo', 'ssh://-oProxyCommand=x/y'):
+                  'https://host/x\nfoo', 'ssh://-oProxyCommand=x/y', 'ssh://u@-oProxyCommand=x/', 'ssh://u:p@-o/x',
+                  'https://evil.example\\@good.example/x', 'https://good.example\\x/y'):
             self.assertEqual(updater.check_remote(r), False, repr(r))
         for r in ('origin', 'up-stream.1', 'https://git.example/o/r.git', 'ssh://git@git.example/o/r.git',
                   'git@git.example:o/r.git', '/tmp/x/remote.git'):
@@ -175,6 +188,7 @@ class Check(Base):
         self.assertIsNone(st['blocked'])
         p = os.path.join(self.home, 'update.json')
         self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.home).st_mode), 0o700)      # тека — нова, лише власник
         with open(p, encoding='utf-8') as f:
             data = json.load(f)
         for k in ('checked_at', 'latest', 'state', 'reason'):
@@ -299,25 +313,85 @@ class Check(Base):
         self.assertEqual(calls, [], 'git не викликається, коли оновлення нема')
         self.assertIsNone(u.status()['blocked'])
 
-    def test_status_uses_optional_locks_off(self):
-        """Читальні виклики `git` не оновлюють індекс живого дерева (`GIT_OPTIONAL_LOCKS=0`) і не пускають `ext::`."""
+    class FakePopen:
         seen = []
 
-        def fake_run(argv, **kw):
-            seen.append((argv, kw['env']))
-            return subprocess.CompletedProcess(argv, 0, '', '')
-        with mock.patch.object(updater.subprocess, 'run', fake_run):
-            updater.run_git(['status', '--porcelain'], self.tmp, 5)
-        argv, env = seen[0]
+        def __init__(self, argv, **kw):
+            type(self).seen.append((argv, kw))
+            self.pid, self.returncode = 4242, 0
+
+        def communicate(self, timeout=None):
+            return '', ''
+
+    def _run_fake(self, environ, **kw):
+        self.FakePopen.seen = []
+        with mock.patch.object(updater.subprocess, 'Popen', self.FakePopen), mock.patch.dict(os.environ, environ):
+            updater.run_git(['status', '--porcelain'], self.tmp, 5, **kw)
+        return self.FakePopen.seen[0]
+
+    def test_status_uses_optional_locks_off(self):
+        """Читальні виклики `git` не оновлюють індекс живого дерева (`GIT_OPTIONAL_LOCKS=0`), не питають паролів і не пускають `ext::`."""
+        argv, kw = self._run_fake({})
+        env = kw['env']
         self.assertEqual(env.get('GIT_OPTIONAL_LOCKS'), '0')
         self.assertEqual(env.get('GIT_TERMINAL_PROMPT'), '0')
+        self.assertEqual(env.get('GCM_INTERACTIVE'), 'never')
         self.assertEqual(argv[:3], ['git', '-c', 'protocol.ext.allow=never'])
+        self.assertTrue(kw['start_new_session'])
+
+    def test_run_git_scrubs_repo_and_config_overrides_from_the_environment(self):
+        dirty = {'GIT_DIR': '/x', 'GIT_WORK_TREE': '/x', 'GIT_INDEX_FILE': '/x', 'GIT_OBJECT_DIRECTORY': '/x',
+                 'GIT_ALTERNATE_OBJECT_DIRECTORIES': '/x', 'GIT_CONFIG': '/x', 'GIT_CONFIG_PARAMETERS': "'a=b'", 'GIT_CONFIG_COUNT': '1',
+                 'GIT_CONFIG_KEY_0': 'core.sshCommand', 'GIT_CONFIG_VALUE_0': 'evil', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_SSH_COMMAND': 'my-ssh'}
+        _, kw = self._run_fake(dirty)
+        env = kw['env']
+        for k in list(dirty)[:10]:
+            self.assertNotIn(k, env, k)
+        self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')            # не з переліку — лишається
+        self.assertEqual(env['GIT_SSH_COMMAND'], 'my-ssh')           # логіка GIT_SSH_COMMAND без змін
+        _, kw = self._run_fake({}, env_extra={'GIT_DIR': '/explicit'})
+        self.assertEqual(kw['env']['GIT_DIR'], '/explicit')           # явний env_extra виклику — дозволено
 
     def test_run_git_failure_codes(self):
-        with mock.patch.object(updater.subprocess, 'run', side_effect=subprocess.TimeoutExpired('git', 1)):
-            self.assertEqual(updater.run_git(['x'], self.tmp, 1), (124, '', 'timeout'))
-        with mock.patch.object(updater.subprocess, 'run', side_effect=FileNotFoundError()):
+        with mock.patch.object(updater.subprocess, 'Popen', side_effect=FileNotFoundError()):
             self.assertEqual(updater.run_git(['x'], self.tmp, 1), (127, '', 'no-git-binary'))
+
+    def test_run_git_kills_the_whole_process_group_on_timeout(self):
+        killed = []
+
+        class Slow:
+            pid, returncode = 4242, None
+            calls = 0
+
+            def __init__(self, *a, **k):
+                pass
+
+            def communicate(self, timeout=None):
+                Slow.calls += 1
+                if Slow.calls == 1:
+                    raise subprocess.TimeoutExpired('git', timeout)
+                return '', ''
+        with mock.patch.object(updater.subprocess, 'Popen', Slow), mock.patch.object(updater.os, 'killpg', lambda pid, sig: killed.append((pid, sig))):
+            self.assertEqual(updater.run_git(['x'], self.tmp, 1), (124, '', 'timeout'))
+        self.assertEqual(killed, [(4242, updater.signal.SIGKILL)])
+
+    def test_run_git_really_times_out_and_kills_children(self):
+        """Справжній процес: «git» — скрипт, що породжує нащадка; після тайм-ауту нащадка нема."""
+        d = os.path.join(self.tmp, 'bin')
+        os.makedirs(d)
+        marker = os.path.join(self.tmp, 'child.pid')
+        with open(os.path.join(d, 'git'), 'w') as f:
+            f.write('#!/bin/sh\nsleep 30 &\necho $! > "%s"\nwait\n' % marker)
+        os.chmod(os.path.join(d, 'git'), 0o755)
+        with mock.patch.dict(os.environ, {'PATH': d + os.pathsep + os.environ['PATH']}):
+            t0 = time.monotonic()
+            self.assertEqual(updater.run_git(['x'], self.tmp, 3), (124, '', 'timeout'))
+            self.assertLess(time.monotonic() - t0, 10)
+        with open(marker) as f:
+            pid = int(f.read())
+        time.sleep(0.3)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
 
     def test_network_remote_refused_when_isolated_or_disabled(self):
         remote, work = make_world(self.tmp)
@@ -388,6 +462,87 @@ class Check(Base):
         self.assertNotEqual(updater.current_version(updater.PRODUCT_ROOT), 'unknown')
         self.assertEqual(updater.current_version(self.tmp), 'unknown')
 
+    def test_git_calls_put_double_dash_before_the_address(self):
+        root = os.path.join(self.tmp, 'w')
+        os.makedirs(os.path.join(root, '.git'))
+        calls = []
+
+        def fake(args, cwd, timeout, env_extra=None):
+            calls.append(list(args))
+            if args[0] == 'symbolic-ref':
+                return 0, 'main\n', ''
+            if args[0] == 'config':
+                return 0, 'origin\n', ''
+            if args[0] == 'remote':
+                return 0, '/tmp/x/remote.git\n', ''
+            return 0, '', ''
+        self.upd(root, run=fake).check()
+        self.assertIn(['remote', 'get-url', '--', 'origin'], calls)
+        self.assertIn(['ls-remote', '--tags', '--refs', '--', '/tmp/x/remote.git'], calls)
+
+    def _blocking_runner(self):
+        entered, release, seen = threading.Event(), threading.Event(), []
+        real = updater.run_git
+
+        def runner(args, cwd, timeout, env_extra=None):
+            if args[0] == 'ls-remote':
+                seen.append(args)
+                entered.set()
+                release.wait(20)
+            return real(args, cwd, timeout, env_extra)
+        return runner, entered, release, seen
+
+    def test_status_and_second_check_do_not_wait_for_a_running_check(self):
+        remote, work = make_world(self.tmp)
+        push_tag(work, '0.2.0')
+        runner, entered, release, seen = self._blocking_runner()
+        u = self.upd(work, run=runner)
+        t = threading.Thread(target=u.check, daemon=True)
+        t.start()
+        self.addCleanup(release.set)
+        self.assertTrue(entered.wait(10))
+        t0 = time.monotonic()
+        st = u.status()                                   # (a) не чекає ls-remote
+        self.assertLess(time.monotonic() - t0, 1.0)
+        self.assertEqual(st['current'], '0.1.0')
+        t0 = time.monotonic()
+        u.check()                                         # (b) друга перевірка повертається одразу
+        self.assertLess(time.monotonic() - t0, 1.0)
+        release.set()
+        t.join(20)
+        self.assertEqual(len(seen), 1, 'ls-remote лише один')
+        self.assertEqual(u.status()['latest'], '0.2.0')
+        u.check()                                         # після завершення нова перевірка знову можлива
+        self.assertEqual(len(seen), 2)
+
+    def test_latest_survives_offline_of_the_same_remote_only(self):
+        remote, work = make_world(self.tmp)
+        push_tag(work, '0.2.0')
+        u = self.upd(work)
+        u.check()
+        self.assertEqual(u.status()['latest'], '0.2.0')
+        with open(os.path.join(self.home, 'update.json'), encoding='utf-8') as f:
+            raw = f.read()
+        self.assertNotIn(remote, raw)                    # адреса не зберігається, лише відбиток
+        self.assertIn('remote_id', raw)
+        # інший remote, недосяжний: latest застарів і зникає
+        git(['remote', 'set-url', 'origin', os.path.join(self.tmp, 'gone.git')], work)
+        u.check()
+        st = u.status()
+        self.assertEqual((st['state'], st['latest'], st['available']), ('offline', None, False))
+        # error / disabled / no-git теж стирають latest
+        for env, expect in (({'DEAI_UPDATE_REMOTE': '-oProxyCommand=x'}, 'error'),):
+            git(['remote', 'set-url', 'origin', remote], work)
+            u.check()
+            self.assertEqual(u.status()['latest'], '0.2.0')
+            with mock.patch.dict(os.environ, env):
+                u.check()
+            self.assertEqual((u.status()['state'], u.status()['latest'], u.status()['remote_host']), (expect, None, None))
+        git(['remote', 'set-url', 'origin', 'https://git.example/o/r.git'], work)
+        with mock.patch.dict(os.environ, {'DEAI_NO_UPDATE_CHECK': '1'}):
+            u.check()
+        self.assertEqual((u.status()['state'], u.status()['latest']), ('disabled', None))
+
     def test_check_never_raises(self):
         remote, work = make_world(self.tmp)
 
@@ -417,13 +572,30 @@ class Background(Base):
         done = threading.Event()
         upd = mock.Mock()
         upd.check.side_effect = lambda: done.set()
-        t = updater.start_background(upd, first_delay=0, every=3600)
+        t = updater.start_background(upd, first_delay=0, every=3600, rand=lambda: 0)
         self.addCleanup(t.stop_event.set)
         self.assertTrue(t.daemon)
         self.assertTrue(done.wait(5))
         t.stop_event.set()
         t.join(5)
         self.assertFalse(t.is_alive())
+
+    def test_jitter_bounds_are_deterministic_with_an_injected_rand(self):
+        for r, first, period in ((0.0, 5.0, 0.9 * updater.CHECK_EVERY_S), (1.0, 30.0, 1.1 * updater.CHECK_EVERY_S)):
+            waits = []
+
+            class Stop:
+                def wait(self, t):
+                    waits.append(t)
+                    return len(waits) >= 2
+
+                def set(self):
+                    pass
+            upd = mock.Mock()
+            t = updater.start_background(upd, stop=Stop(), rand=lambda: r)
+            t.join(5)
+            self.assertAlmostEqual(waits[0], first)
+            self.assertAlmostEqual(waits[1], period)
 
     def test_stop_before_first_check_means_no_check(self):
         upd = mock.Mock()
