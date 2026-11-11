@@ -35,6 +35,7 @@ _OTHER_HOME_POSIX = re.compile(r'(?<![\w.:~-])/(?:Users|home)/[^/\s]+')
 
 # --- абсолютні шляхи → `…/<імʼя>` (`paths`) ---
 _P_QUOTED = re.compile(r'([\'"])((?:/|~[\\/]|[A-Za-z]:[\\/]|\\\\)[^\'"\n]*)\1')
+_P_URL = re.compile(r'(https?://[^/\s\'"<>|?#]+)((?:/[^/\s\'"<>|?#]*)+)')
 _P_FILEURL = re.compile(r'file://[^\s\'"<>|]*')
 _P_ENCODED = re.compile(r'(?:[\w.~-]|%[0-9A-Fa-f]{2})*%(?:2[Ff]|5[Cc])(?:[\w.~-]|%[0-9A-Fa-f]{2})*')
 _P_UNC = re.compile(r'\\\\[^\s\\\'"]+(?:\\[^\s\\\'"]*)+')
@@ -90,18 +91,27 @@ def _tail_quoted(m):
     return m.group(1) + '…/' + _P_LAST.search(m.group(2)).group(0) + m.group(1)
 
 
+def _tail_url(m):
+    """`http://localhost:8765/t/acme/it1/Клієнт/x.png` → `http://localhost:8765/…/x.png`: лишаються схема, хост і останній сегмент."""
+    segs = [x for x in m.group(2).split('/') if x]
+    if len(segs) <= 1 and '…' not in m.group(2):
+        return m.group(0)
+    return m.group(1) + '/…/' + (segs[-1] if segs else '')
+
+
 def _tail_encoded(m):
     return '…/' + re.split(r'%(?:2[Ff]|5[Cc])', m.group(0))[-1]
 
 
 def paths(value):
     """Кожен абсолютний шлях (POSIX `/…`, `~/…`, `C:\\…`/`C:/…`, UNC, `file://…`, URL-кодований `%2F`) → `…/<останній сегмент>`: імена
-    тек (клієнт, користувач, простір) не їдуть із машини. Шлях у лапках (з пробілами) береться цілим. Мітки `<space>/…` не чіпає. Ідемпотентна."""
+    тек (клієнт, користувач, простір) не їдуть із машини. `http(s)://хост/…/<останній сегмент>` для локальних і зовнішніх адрес (query/hash відрізає `text`). Шлях у лапках (з пробілами) береться цілим. Мітки `<space>/…` не чіпає. Ідемпотентна."""
+    value = _P_URL.sub(_tail_url, value)
     value = _P_QUOTED.sub(_tail_quoted, value)
     value = _P_FILEURL.sub(_tail, value)
     value = _P_ENCODED.sub(_tail_encoded, value)
+    value = _P_WIN.sub(_tail, value)             # ДО UNC: `C:\\Users\\x` (подвійне екранування) не має лишити `C:`
     value = _P_UNC.sub(_tail, value)
-    value = _P_WIN.sub(_tail, value)
     value = _P_HOME.sub(_tail, value)
     return _P_POSIX.sub(_tail, value)
 

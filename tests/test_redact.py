@@ -120,8 +120,22 @@ class Redact(unittest.TestCase):
             self.assertEqual(out, 'open %s failed' % want, src)
             self.assertEqual(redact.paths(out), out, 'ідемпотентно')
         self.assertEqual(redact.paths('File "/a b/Client B/e.py", line 3'), 'File "…/e.py", line 3')
-        for keep in ('https://h.example/a/b', '<space>/x/y', '<task>/it1', 'iterations/it1/index.html', './x/y', '../x', 'and/or', 'a / b'):
+        for keep in ('https://h.example/a', 'http://h.example', '<space>/x/y', '<task>/it1', 'iterations/it1/index.html', './x/y', '../x', 'and/or', 'a / b'):
             self.assertEqual(redact.paths(keep), keep, keep)
+
+    def test_urls_keep_only_scheme_host_and_last_segment(self):
+        c = lambda v: redact.text(v, collapse=True)
+        self.assertEqual(c('fetch http://localhost:8765/t/acme-corp/it-assets/it1/Клієнт/x.png failed'), 'fetch http://localhost:8765/…/x.png failed')
+        out = c('http://localhost:8765/t/acme/it-assets/it1/%D0%9A%D0%BB%D1%96/%D1%84%D0%B0.png?v=1&token=zz')
+        self.assertEqual(out, 'http://localhost:8765/…/%D1%84%D0%B0.png')
+        self.assertNotIn('acme', out)
+        self.assertEqual(c('GET https://api.example.com/v1/users/42?token=abc#frag'), 'GET https://api.example.com/…/42')
+        for keep in ('https://h.example/a', 'http://h.example'):
+            self.assertEqual(c(keep), keep)
+        self.assertEqual(c(c('http://localhost:8765/t/a/b/c.png')), 'http://localhost:8765/…/c.png', 'ідемпотентно')
+
+    def test_double_escaped_windows_path_outside_quotes(self):
+        self.assertEqual(redact.paths('open C:\\\\Users\\\\bob\\\\Acme\\\\x now'), 'open …/x now')
 
     def test_text_collapse_flag(self):
         self.assertEqual(redact.text('open /Users/me/ClientB-Acme/x/y.json', collapse=True), 'open …/y.json')

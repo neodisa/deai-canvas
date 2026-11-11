@@ -7145,13 +7145,19 @@ class Handler(SimpleHTTPRequestHandler):
                 shot = _shot_file(task, ctx['iteration'], ctx['page'])
             except Exception:  # noqa: BLE001
                 shot = None
-        return feedback.build_diag(ctx, payload.get('client_errors')), shot
+        # Кільце сервера фіксується номером: перегляд бере поточний (`ring_seq`), відправка — той, що людина бачила; помилки, які
+        # зʼявились ПІСЛЯ перегляду, не відправляються (їх вона не бачила) і не можуть заблокувати відправку.
+        seq = payload.get('ring_seq')
+        if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2 ** 62:
+            seq = feedback.ring_seq()
+        return feedback.build_diag(ctx, payload.get('client_errors'), max_seq=seq), shot, seq
 
     def _feedback_preview(self, payload):
         """`POST /api/feedback-preview` → `{ok, diag, diag_hash, shot: {available, bytes?, skipped?}}`: точно те, що піде з відгуком;
         `diag_hash` — sha256 канонічного JSON цієї діагностики (відправка звіряє його: «що показано = що піде»)."""
-        diag, shot = self._feedback_collect(payload)
-        self._send_json({'ok': True, 'diag': diag, 'diag_hash': feedback.diag_hash(diag), 'shot': feedback.shot_info(shot)})
+        payload = dict(payload, ring_seq=None)                  # перегляд завжди бере кільце на цю мить
+        diag, shot, seq = self._feedback_collect(payload)
+        self._send_json({'ok': True, 'diag': diag, 'diag_hash': feedback.diag_hash(diag), 'ring_seq': seq, 'shot': feedback.shot_info(shot)})
 
     def _feedback(self, payload):
         """`POST /api/feedback` → `{ok, id, state: 'sent'|'queued', number, reason?}`; `409 {ok:false, code:'diag-changed', diag, diag_hash, shot}`, коли
@@ -7162,7 +7168,7 @@ class Handler(SimpleHTTPRequestHandler):
         if bad:
             self._send_json({'ok': False, 'code': bad[0], 'error': bad[1]}, status=400)
             return
-        diag, shot_file = self._feedback_collect(payload)
+        diag, shot_file, seq = self._feedback_collect(payload)
         if clean['include_diag']:
             # «що показано = що піде»: діагностика змінилась від перегляду (нова помилка сервера…) або перегляду не було → 409 з новою
             # діагностикою; клієнт показує її й просить натиснути «Надіслати» ще раз. Нічого не записано.
@@ -7170,7 +7176,7 @@ class Handler(SimpleHTTPRequestHandler):
             given = payload.get('diag_hash')
             if not isinstance(given, str) or given != h:
                 self._send_json({'ok': False, 'code': 'diag-changed', 'error': 'diagnostics changed since the preview',
-                                 'diag': diag, 'diag_hash': h, 'shot': feedback.shot_info(shot_file)}, status=409)
+                                 'diag': diag, 'diag_hash': h, 'ring_seq': seq, 'shot': feedback.shot_info(shot_file)}, status=409)
                 return
         shot = None
         if clean['include_shot'] and shot_file and feedback.shot_info(shot_file).get('available'):

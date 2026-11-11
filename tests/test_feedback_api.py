@@ -82,7 +82,7 @@ class FeedbackApi(unittest.TestCase):
         if (hashed and raw is None and path == '/api/feedback' and isinstance(body, dict) and body.get('include_diag', True) is True
                 and 'diag_hash' not in body and origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765')):
             _, pv = self.call(body, path='/api/feedback-preview', hashed=False)
-            body = dict(body, diag_hash=pv.get('diag_hash'))
+            body = dict(body, diag_hash=pv.get('diag_hash'), ring_seq=pv.get('ring_seq'))
         h = {'Content-Type': 'application/json', **(headers or {})}
         if origin:
             h['Origin'] = origin
@@ -245,26 +245,44 @@ class FeedbackApi(unittest.TestCase):
         self.make_task()
         body = {'kind': 'bug', 'text': TEXT, 'task': 'x', 'lang': 'uk', 'client_errors': [{'msg': 'a', 'file': 'app/a.js', 'line': 1}]}
         st, pv = self.call(body, path='/api/feedback-preview')
-        self.assertEqual(sorted(pv), ['diag', 'diag_hash', 'ok', 'shot'])
+        self.assertEqual(sorted(pv), ['diag', 'diag_hash', 'ok', 'ring_seq', 'shot'])
         self.assertEqual(pv['diag_hash'], feedback.diag_hash(pv['diag']))
         self.assertRegex(pv['diag_hash'], r'^[0-9a-f]{64}$')
-        # нова помилка сервера після перегляду → 409 з новою діагностикою, нічого не записано й не надіслано
-        feedback.record_error('/api/x', RuntimeError('later'))
-        st, got = self.call(dict(body, diag_hash=pv['diag_hash']))
+        self.assertIsInstance(pv['ring_seq'], int)
+        pinned = dict(body, diag_hash=pv['diag_hash'], ring_seq=pv['ring_seq'])
+        # не-кільцева зміна (мова, задача) → 409 з новою діагностикою; нічого не записано й не надіслано
+        st, got = self.call(dict(pinned, lang='en'), hashed=False)
         self.assertEqual((st, got['ok'], got['code']), (409, False, 'diag-changed'))
         self.assertEqual(got['diag_hash'], feedback.diag_hash(got['diag']))
         self.assertNotEqual(got['diag_hash'], pv['diag_hash'])
+        self.assertEqual(got['ring_seq'], pv['ring_seq'])
+        self.assertEqual(self.call(dict(pinned, task='no-such'), hashed=False)[1].get('code'), 'diag-changed')
         self.assertEqual((self.box(), self.box('sent'), rx.rows()), ([], [], []))
         # хеш відсутній чи чужий → теж 409
-        for bad in ({}, {'diag_hash': 5}, {'diag_hash': 'x' * 64}):
-            self.assertEqual(self.call(dict(body, **bad), hashed=False)[1].get('code'), 'diag-changed', bad)
+        for bad in ({'diag_hash': None}, {'diag_hash': 5}, {'diag_hash': 'x' * 64}):
+            self.assertEqual(self.call(dict(pinned, **bad), hashed=False)[1].get('code'), 'diag-changed', bad)
         self.assertEqual(self.box(), [])
         # свіжий хеш → відправка
-        st, ok = self.call(dict(body, diag_hash=got['diag_hash']), hashed=False)
+        st, ok = self.call(dict(pinned, lang='en', diag_hash=got['diag_hash']), hashed=False)
         self.assertEqual((st, ok['state']), (200, 'sent'))
         # без діагностики хеш не потрібен
         st, ok = self.call(dict(body, include_diag=False), hashed=False)
         self.assertEqual((st, ok['state']), (200, 'sent'))
+
+    def test_new_ring_entries_after_the_preview_never_block_the_send(self):
+        """Опитуваний маршрут, що падає на КОЖЕН запит: кільце змінюється між переглядом і відправкою, а відправка все одно йде з першого разу."""
+        rx = self.receiver()
+        body = {'kind': 'bug', 'text': TEXT, 'lang': 'uk'}
+        feedback.record_error('/api/poll', RuntimeError('x'))
+        for n in range(3):
+            st, pv = self.call(body, path='/api/feedback-preview')
+            feedback.record_error('/api/poll', RuntimeError('x'))          # дубль (count росте)…
+            feedback.record_error('/api/fresh%d' % n, RuntimeError('x'))   # …і зовсім новий запис
+            st, got = self.call(dict(body, diag_hash=pv['diag_hash'], ring_seq=pv['ring_seq']), hashed=False)
+            self.assertEqual((st, got['state']), (200, 'sent'), got)
+            sent = rx.rows()[-1]['diag']['errors']['server']
+            self.assertEqual(sent, pv['diag']['errors']['server'], 'надіслано рівно те, що бачили')
+            self.assertFalse(any(e['route'].startswith('/api/fresh') and e['route'] == '/api/fresh%d' % n for e in sent))
 
     def test_lone_surrogates_and_nul_never_break_the_queue(self):
         rx = self.receiver()

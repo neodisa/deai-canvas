@@ -39,6 +39,8 @@ SHOT_MAX_BYTES = 2 * 1024 * 1024
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 _RING = collections.deque(maxlen=ERRORS_MAX)
 _RING_LOCK = threading.Lock()
+_SEQ = [0]                   # монотонний лічильник подій кільця: перегляд фіксує його, відправка бере лише записи з seq ≤ зафіксованого
+SEQS_MAX = 200               # скільки номерів повторів тримає один дедубльований запис
 
 _SEG_RE = re.compile(r'^[A-Za-z0-9_.-]{1,40}$')
 _TASK_PREFIX = re.compile(r'^/t/[^/]+(?=/)')
@@ -98,12 +100,40 @@ def record_error(path, exc, code=None):
             pass
         entry['msg'] = redact.text(' '.join(p for p in parts if p), limit=MSG_MAX, collapse=True)
     with _RING_LOCK:
-        _RING.append(entry)
+        _SEQ[0] += 1
+        seq = _SEQ[0]
+        last = _RING[-1] if _RING else None
+        if last is not None and all(last.get(k) == entry.get(k) for k in ('route', 'type', 'msg', 'code')):
+            last['count'] += 1                  # той самий збій поспіль (опитуваний маршрут): один запис із лічильником
+            last['seqs'].append(seq)
+            if len(last['seqs']) > SEQS_MAX:
+                del last['seqs'][0]
+                last['dropped'] += 1
+        else:
+            entry.update(count=1, seqs=[seq], dropped=0)
+            _RING.append(entry)
 
 
-def server_errors():
+def ring_seq():
+    """Найбільший номер події кільця на цю мить (0 — порожнє)."""
     with _RING_LOCK:
-        return [dict(e) for e in _RING]
+        return _SEQ[0]
+
+
+def server_errors(max_seq=None):
+    """Знімок кільця для діагностики: `{route, type, msg, [code], count}`. `max_seq` — лише події з номером ≤ max_seq (те, що людина бачила
+    в перегляді): запис, що зʼявився пізніше, відкидається, а лічильник повторів урізається до тих, що були до цього номера."""
+    out = []
+    with _RING_LOCK:
+        for e in _RING:
+            seqs = e['seqs']
+            n = e['count'] if max_seq is None else e['dropped'] + sum(1 for q in seqs if q <= max_seq)
+            if n == 0:
+                continue                        # весь запис новіший за перегляд
+            d = {k: v for k, v in e.items() if k not in ('seqs', 'dropped', 'count')}
+            d['count'] = n
+            out.append(d)
+    return out
 
 
 def reset_errors():
@@ -176,7 +206,7 @@ def _space_part(sp):
     return {'kind': 'legacy' if sp.get('legacy') else 'regular', 'roles': roles, 'migration': migration}
 
 
-def build_diag(ctx, client_errors=None):
+def build_diag(ctx, client_errors=None, max_seq=None):
     """Діагностика, що піде з відгуком (і яку показує «Що буде надіслано»). `ctx` — готовий словник від `serve`:
     `{space, task_id, iteration, page, screen, lang, version, roots}`. Серверна частина перераховується тут, клієнтська проходить
     санітизацію. ≥ 64 КБ → кільця відкидаються першими. Тотальна: зламаний простір/задача — поля `None`."""
@@ -190,7 +220,7 @@ def build_diag(ctx, client_errors=None):
         task = {'id': _id(ctx.get('task_id')), 'iteration': _id(ctx.get('iteration')),
                 'page': _id(ctx.get('page'), _PAGE_RE), 'screen': _id(ctx.get('screen'))}
     lang = ctx.get('lang')
-    server = server_errors()
+    server = server_errors(max_seq)
     for e in server:                      # повторно, з коренями простору: ідемпотентно
         e['msg'] = redact.text(e.get('msg'), roots=roots, limit=MSG_MAX, collapse=True)
         for k in ('route', 'type', 'code'):

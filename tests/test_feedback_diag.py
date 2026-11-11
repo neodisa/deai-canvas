@@ -57,6 +57,30 @@ class ErrorRing(unittest.TestCase):
         feedback.record_error('/api/x', ValueError('secret detail /Users/me/ClientB-Acme/x.json 12345678'))
         self.assertEqual(feedback.server_errors()[-1]['msg'], '', 'без кадру всередині застосунку — порожньо')
 
+    def test_consecutive_identical_entries_dedupe_into_a_count(self):
+        for _ in range(3):
+            feedback.record_error('/api/poll', RuntimeError('x'))
+        feedback.record_error('/api/other', RuntimeError('x'))
+        feedback.record_error('/api/poll', RuntimeError('x'))                     # не поспіль із попередніми — окремий запис
+        got = feedback.server_errors()
+        self.assertEqual([(e['route'], e['count']) for e in got], [('/api/poll', 3), ('/api/other', 1), ('/api/poll', 1)])
+        self.assertNotIn('seqs', got[0])
+        feedback.record_error('/api/poll', RuntimeError('x'))
+        self.assertEqual(feedback.server_errors()[-1]['count'], 2)
+
+    def test_server_errors_up_to_a_ring_seq_ignore_what_came_later(self):
+        feedback.record_error('/api/a', RuntimeError('x'))
+        feedback.record_error('/api/poll', RuntimeError('x'))
+        mark = feedback.ring_seq()
+        feedback.record_error('/api/poll', RuntimeError('x'))                     # дедуплікується в той самий запис, але ПІСЛЯ мітки
+        feedback.record_error('/api/new', RuntimeError('x'))
+        got = feedback.server_errors(mark)
+        self.assertEqual([(e['route'], e['count']) for e in got], [('/api/a', 1), ('/api/poll', 1)])
+        self.assertEqual([(e['route'], e['count']) for e in feedback.server_errors()], [('/api/a', 1), ('/api/poll', 2), ('/api/new', 1)])
+        d1 = feedback.build_diag({'lang': 'uk', 'version': '0.23.0'}, max_seq=mark)
+        feedback.record_error('/api/later', RuntimeError('x'))
+        self.assertEqual(feedback.build_diag({'lang': 'uk', 'version': '0.23.0'}, max_seq=mark), d1)
+
     def test_oserror_keeps_the_errno_name_only_never_the_filename(self):
         import errno
         exc = OSError(errno.ENOENT, 'No such file', '/Users/me/ClientB-Acme/x/y.json')
@@ -75,7 +99,7 @@ class ErrorRing(unittest.TestCase):
     def test_thread_safe(self):
         def work():
             for i in range(100):
-                feedback.record_error('/api/t', RuntimeError('x%d' % i))
+                feedback.record_error('/api/t%d' % (i % 7), RuntimeError('x'))
                 feedback.server_errors()
         ts = [threading.Thread(target=work) for _ in range(8)]
         [t.start() for t in ts]
@@ -160,7 +184,8 @@ class BuildDiag(unittest.TestCase):
     def test_build_diag_recollapses_ring_entries_defence_in_depth(self):
         """Навіть запис у кільці, що потрапив туди неочищеним (старий код, шов), у діагностику йде зі згорнутими шляхами."""
         with feedback._RING_LOCK:
-            feedback._RING.append({'route': '/api/x', 'type': 'OSError', 'msg': 'open /Users/me/ClientB-Acme/x/y.json'})
+            feedback._SEQ[0] += 1
+            feedback._RING.append({'route': '/api/x', 'type': 'OSError', 'msg': 'open /Users/me/ClientB-Acme/x/y.json', 'count': 1, 'seqs': [feedback._SEQ[0]], 'dropped': 0})
         payload = json.dumps(feedback.build_diag(self.ctx()), ensure_ascii=False)
         self.assertNotIn('ClientB-Acme', payload)
         self.assertIn('…/y.json', payload)
