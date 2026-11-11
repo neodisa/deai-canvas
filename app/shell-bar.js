@@ -35,6 +35,7 @@ import { ico } from "./icons.js";
 import { cleanTitle, matches, taskKey } from "./tasks-model.js";
 import { spaceColorToken, spaceRows } from "./spaces-model.js";
 import { updatePillHTML } from "./update-view.js";
+import { feedbackBtnHTML } from "./feedback-view.js";
 
 /** Клас, яким контейнерний запит ховає лише ПІДПИС контролу (іконка лишається).
  *  Значення `labelTier` у моделі — це саме пороги `TIERS.mode`/`TIERS.gl`, а
@@ -562,6 +563,12 @@ function updateBtn(model) {
   return updatePillHTML(model.zone1.find((x) => x.id === "update"));
 }
 
+/* «Відгук» (0.23.0): іконка-кнопка одразу після дверей у палітру (і після пігулки оновлення, коли вона є), на ВСІХ екранах. Контрол
+   дає модель (`feedback`); розмітку веде `feedback-view.js`. */
+function feedbackBtn(model) {
+  return feedbackBtnHTML(model.zone1.find((x) => x.id === "feedback"));
+}
+
 /* Логотип — вхід на екран «Задачі». Імʼя несе `aria-label`: усередині лише
    декоративний SVG. `ctl--on` — «ми зараз там»; `aria-current="page"` дублює
    це для читача, бо колір сам по собі стану не оголошує. НЕ `aria-pressed`:
@@ -600,8 +607,8 @@ export function barHTML(model, state) {
   const openDd = state?.openDd ?? null;
   const home = model.zone1.some((x) => x.id === "crumb-tasks" || x.id === "crumb-conn" || x.id === "crumb-wiz");
   const zone1 = home
-    ? `${homeBtn(model)}${paletteBtn(model)}${updateBtn(model)}${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
-    : `${homeBtn(model)}${paletteBtn(model)}${updateBtn(model)}${spaceChip(model, state, openDd)}<div class="crumbs">`
+    ? `${homeBtn(model)}${paletteBtn(model)}${updateBtn(model)}${feedbackBtn(model)}${spaceChip(model, state, openDd)}${homeCrumbs(model)}`
+    : `${homeBtn(model)}${paletteBtn(model)}${updateBtn(model)}${feedbackBtn(model)}${spaceChip(model, state, openDd)}<div class="crumbs">`
       + `${crumbTask(model, state, openDd)}${crumbIter(model, openDd)}</div>`;
   /* Зони 2 і 3 екрана «Задачі» порожні в МОДЕЛІ — не малюємо їхніх контролів,
      але самі вузли лишаються (грид смуги на них тримається). */

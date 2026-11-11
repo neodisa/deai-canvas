@@ -160,7 +160,11 @@ function appActions(s) {
   /* `update` — ключ стану, який дає ЛИШЕ `paletteState()` (`null` = «ще не питали», обʼєкт = знімок сервера). Стан без ключа (еталони
      `legacy-golden`, зроблені до 0.23.0, і шар, що оновлення не знає) дій оновлення не має: їхній склад сторожить еталон побайтово. */
   if (s.update === undefined) return [];
-  const out = [{ id: "update-check", group: "gSet", labelKey: "upCheck", icon: "refresh", act: "updatecheck" }];
+  /* «Баг / ідея» (0.23.0): відкриває діалог відгуку на будь-якому екрані (тому лежить тут, де є і `homeOpen`-гілка). */
+  const out = [
+    { id: "feedback", group: "gSet", labelKey: "fbOpen", icon: "comment", act: "feedback" },
+    { id: "update-check", group: "gSet", labelKey: "upCheck", icon: "refresh", act: "updatecheck" },
+  ];
   if (pillModel(s.update)) out.push({ id: "update-notes", group: "gSet", labelKey: "upWhatsNew", icon: "down", act: "updatenotes" });
   return out;
 }

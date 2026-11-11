@@ -1798,3 +1798,20 @@ body:not(.home-open) .cn-drawer{display:none}
    по сусідству, а не новий вузол у розмітці смуги: порядок «логотип → палітра»
    стереже `tests/shell-bar.test.mjs`. */
 .logo-btn + .pal-open{margin-left:4px;padding-left:8px;border-left:1px solid var(--s4)}
+/* Відгук (0.23.0, `feedback-view.js`): кнопка в смузі — звичайний контрол-іконка; діалог — та сама біла картка `askForm`. Поле тексту й
+   «Що буде надіслано» (прокрутний `<pre>` із фокусом, як `.up-notes`) — лише наявні токени. */
+.fb-btn{flex:none;margin-right:2px}
+.cv-ask--form:has(.fb){width:560px}
+.fb .fb-kinds{display:flex;gap:16px}
+.fb textarea{font:inherit;font-size:14px;padding:8px 10px;min-width:0;resize:vertical;border:1px solid var(--border);border-radius:6px;
+  background:#fff;color:var(--g900)}
+.fb input[type=checkbox],.fb input[type=radio]{padding:0}
+.fb textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.fb textarea[aria-invalid="true"]{border-color:var(--bad-ink)}
+.fb .fb-opts{gap:8px}
+.fb .fb-why{font-size:12px;line-height:1.4;color:var(--g600)}
+.fb .fb-preview summary{cursor:pointer;font-weight:600;color:var(--g700)}
+.fb .fb-hint{margin:6px 0 0;font-size:12px;line-height:1.4;color:var(--g600)}
+.fb .fb-pre{margin:6px 0 0;max-height:220px;overflow:auto;padding:8px 10px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
+  font-size:12px;line-height:1.45;color:var(--g900);white-space:pre-wrap;overflow-wrap:anywhere}
+.fb .fb-pre:focus-visible{outline:2px solid var(--accent);outline-offset:1px}

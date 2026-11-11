@@ -1,6 +1,7 @@
 // Design Canvas v2 — менеджер итераций макета.
 // Открыл → текущий макет. «＋» фиксирует итерацию, зелёная точка = на превью.
 
+import { initErrRing } from './err-ring.js';  // ПЕРШИЙ імпорт: кільце помилок ловить і збої завантаження наступних модулів
 import { rowsLayout, worldBox } from './layout.js';
 import { fitBox, focusBox, quantScale, step, zoomAt } from './camera.js';
 import {
@@ -57,6 +58,8 @@ import {
   RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, waitRestart,
 } from './update-model.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
+import { createSession, errArg, errField, outcome, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
+import { feedbackDialogHTML } from './feedback-view.js';
 import {
   disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
   verdictText, writePayload,
@@ -2024,6 +2027,8 @@ const BAR_ACTIONS = {
   /* Оновлення інструмента (0.23.0): пігулка в смузі (`update`) і пункт ⌘K «Що нового» (`updatenotes`) відкривають той самий діалог;
      «Перевірити оновлення» (`updatecheck`) питає remote зараз. Логіка — `openUpdateDialog`/`checkUpdateNow` нижче. */
   update: () => openUpdateDialog(),
+  /* «Відгук» (смуга) і «Баг / ідея» (⌘K): той самий діалог, на будь-якому екрані й без задачі (`openFeedback`). */
+  feedback: () => openFeedback(),
   updatenotes: () => openUpdateDialog(),
   updatecheck: () => checkUpdateNow(),
 
@@ -2427,6 +2432,88 @@ async function openUpdateDialog() {
     });
   } finally {
     updateDialogOpen = false;
+  }
+}
+
+/* ── Відгук (0.23.0) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Діалог показує ТОЧНО те, що піде: `POST /api/feedback-preview` повертає діагностику й стан знімка, а `POST /api/feedback` збирає її
+   тією ж функцією сервера. Кільце помилок браузера (`err-ring.js`) знімається ОДИН раз при відкритті (`createSession`): і перегляд, і
+   відправка читають той самий масив. Усі рядки сервера потрапляють у DOM лише як `textContent`/через `esc` у розмітці. */
+const FEEDBACK_TIMEOUT_MS = 30000;
+const clientErrorList = initErrRing();   // `list()` кільця (слухачі вже стоять з імпорту; виклик ідемпотентний)
+const jsonPost = (path, body) => updateFetch(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+}, FEEDBACK_TIMEOUT_MS);
+
+/** Контекст екрана для відгуку: задача, екран і (коли є знімок поточної сторінки) пара `it`/`node`. Нічого не обовʼязкове. */
+function feedbackContext() {
+  const ctx = { task: curTask?.id || currentTaskId || '', screen: homeOpen ? (homePage || 'tasks') : mode };
+  if (!homeOpen && picked && pickedPage) {
+    const key = frameKey(pickedPage, canvasW);
+    if (shotManifest.shots?.[key]) { ctx.it = picked; ctx.node = key; }
+  }
+  return ctx;
+}
+
+/** `POST /api/feedback-preview` → тіло відповіді або `null` (мережа/відмова: діалог працює без «Що буде надіслано»). */
+async function fetchFeedbackPreview(sess) {
+  const r = await jsonPost('/api/feedback-preview', sess.previewBody());
+  return r && r.status === 200 && r.body && r.body.ok === true && r.body.diag && typeof r.body.diag === 'object' ? r.body : null;
+}
+
+let feedbackDialogOpen = false;
+async function openFeedback() {
+  if (feedbackDialogOpen) return;
+  feedbackDialogOpen = true;
+  try {
+    const sess = createSession({ ctx: feedbackContext(), clientErrors: clientErrorList(), lang: getLang() });
+    let preview = await fetchFeedbackPreview(sess);
+    let previewSeq = 0;
+    let formEl = null;
+    const shownText = (p, includeDiag, includeShot) => (p
+      ? previewText(sentView(p, { includeDiag, includeShot })) : t('fbPreviewFail'));
+    const checked = (id) => !!formEl?.querySelector(id)?.checked;
+    /* Перемалювати лише «Що буде надіслано» (і стан чекбокса знімка) за свіжим переглядом; застарілу відповідь відкидаємо. */
+    const repaint = async () => {
+      const seq = ++previewSeq;
+      const p = await fetchFeedbackPreview(sess);
+      if (seq !== previewSeq || !formEl?.isConnected) return;
+      preview = p;
+      const shot = shotState(preview);
+      const cb = formEl.querySelector('#fb-shot');
+      if (cb && !shot.available) { cb.checked = false; cb.disabled = true; }
+      const pre = formEl.querySelector('[data-fb-pre]');
+      if (pre) pre.textContent = shownText(preview, checked('#fb-diag'), checked('#fb-shot'));
+    };
+    await askForm(() => feedbackDialogHTML({
+      shot: shotState(preview), previewText: preview ? previewText(sentView(preview, { includeDiag: true, includeShot: false })) : t('fbPreviewFail'),
+    }), {
+      focusBack: () => document.querySelector('.fb-btn') ?? document.querySelector('.pal-open .ctl'),
+      onMount(form) {
+        formEl = form;
+        for (const id of ['#fb-diag', '#fb-shot']) form.querySelector(id)?.addEventListener('change', repaint);
+      },
+      async onSubmit(vals, ctl) {
+        const bad = validate({ kind: vals.kind, text: vals.text, contact: vals.contact });
+        if (bad) { ctl.focus(errField(bad)); return t(bad, errArg(bad)); }
+        const r = await jsonPost('/api/feedback', sess.sendBody({
+          kind: vals.kind, text: vals.text, contact: vals.contact,
+          includeDiag: vals.diag, includeShot: vals.shot, shotAvailable: shotState(preview).available,
+        }));
+        if (!r) return t('fbErrGeneric', t('fbErrNoAnswer'));
+        const b = r.body && typeof r.body === 'object' ? r.body : {};
+        if (r.status === 400 && b.ok === false) {
+          const key = serverErrKey(b.code);
+          if (key) { ctl.focus(errField(key)); return t(key, errArg(key)); }
+        }
+        if (r.status !== 200 || b.ok !== true) return t('fbErrGeneric', String(b.error || r.status));
+        const o = outcome(b);
+        toast(t(o.key, ...o.args) + (o.suffixKey ? ` ${t(o.suffixKey)}` : ''));
+        return undefined;
+      },
+    });
+  } finally {
+    feedbackDialogOpen = false;
   }
 }
 

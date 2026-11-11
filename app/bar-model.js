@@ -182,6 +182,12 @@ export function barModel(s) {
   const updateCtl = upd
     ? [{ id: "update", tier: 0, labelTier: TIERS.mode, version: upd.version, restart: upd.restart }]
     : [];
+  /* «Відгук» (0.23.0): є на КОЖНОМУ екрані (задача, «Задачі», «Підключення», майстер) — відгук потрібен саме тоді, коли щось не так, а
+     не лише на екрані задачі. Лише іконка (`tier: 0`, без `labelTier`): ярусів не множимо. Додається в КІНЕЦЬ `zone1` після пігулки
+     оновлення, як і вона: індекси наявних контролів не зсуваються. Місце в розмітці — одразу після дверей у палітру (`shell-bar.js`). */
+  /* Ключ `update` (його дає лише `barState()`: `null` або знімок сервера) — ознака «смуга справжнього застосунку»: стан без нього (еталони
+     `legacy-golden`, зроблені до 0.23.0) не має ні пігулки, ні кнопки «Відгук», і розмітка ЛІГИ лишається побайтово тією самою. */
+  const feedbackCtl = s.update === undefined ? [] : [{ id: "feedback", tier: 0 }];
 
   /* Екран «Задачі» — склад смуги змінюється ЦІЛКОМ тут, а не приховуванням у
      розмітці: модель описує склад, розмітка його малює. Принцип 5 PRODUCT.md
@@ -200,14 +206,14 @@ export function barModel(s) {
        майстер привʼязаний до СВОГО простору (перемикач посеред кроків лише плутав би), а вихід із нього — свої кнопки
        й логотип, що лишається в моделі й веде на «Задачі». Лише рівно `"wiz"`, як і `"conn"`. */
     if (s.homePage === "wiz") {
-      return { zone1: [home, palette, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }, ...updateCtl], zone2: [], zone3: [], error: tasksError(s) };
+      return { zone1: [home, palette, { id: "crumb-wiz", tier: 0, labelKey: "wzCrumb" }, ...updateCtl, ...feedbackCtl], zone2: [], zone3: [], error: tasksError(s) };
     }
     const crumb = s.homePage === "conn"
       ? { id: "crumb-conn", tier: 0, labelKey: "cnTitle" }
       : { id: "crumb-tasks", tier: 0, labelKey: "tasks" };
     const zone1 = [home, palette, ...spaceChip, crumb];
     if (s.taskId) zone1.push({ id: "back", tier: 0, label: s.taskId });
-    zone1.push(...updateCtl);
+    zone1.push(...updateCtl, ...feedbackCtl);
     return { zone1, zone2: [], zone3: [], error: tasksError(s) };
   }
 
@@ -240,7 +246,7 @@ export function barModel(s) {
       })),
     });
   }
-  zone1.push(...updateCtl);
+  zone1.push(...updateCtl, ...feedbackCtl);
 
   const zone2 = [
     {

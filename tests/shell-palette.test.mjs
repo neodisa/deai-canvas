@@ -1115,3 +1115,29 @@ test("оновлення: знаходяться в ⌘K обома мовами
   assert.ok(list("en", "what").includes("update-notes"));
   setLang("uk");
 });
+
+/* ── «Баг / ідея» (0.23.0, Task 8): відкриває діалог відгуку; є й на екрані «Задачі», де реєстр повертається раніше ─────────── */
+const fbIds = (st) => paletteActions(S(st)).filter((a) => a.id === "feedback").map((a) => a.act);
+
+test("відгук: «Баг / ідея» є на екрані задачі, «Задачі», «Підключення» й у майстрі; без ключа update (еталони) — нема", () => {
+  for (const homeOpen of [true, false]) {
+    for (const homePage of homeOpen ? [undefined, "tasks", "conn", "wiz"] : [undefined]) {
+      assert.deepEqual(fbIds({ homeOpen, homePage, update: null }), ["feedback"], `homeOpen=${homeOpen} ${homePage}`);
+    }
+  }
+  assert.deepEqual(fbIds({}), []);
+});
+
+test("відгук: дія має групу gSet, іконку зі спрайта, підпис в обох словниках і обробник у BAR_ACTIONS; знаходиться в ⌘K", () => {
+  const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "app", "app.js"), "utf8");
+  const a = paletteActions(S({ update: null })).find((x) => x.id === "feedback");
+  assert.equal(a.group, "gSet");
+  assert.ok(ico(a.icon));
+  for (const lang of ["uk", "en"]) assert.ok(DICT[lang][a.labelKey] !== undefined, `${lang}.${a.labelKey}`);
+  assert.match(src, /\n  feedback: \(\) => /);
+  const list = (lang, q) => { setLang(lang); return filterActions(paletteActions(S({ update: null, lang })), q).map((x) => x.id); };
+  assert.ok(list("uk", "баг").includes("feedback"));
+  assert.ok(list("uk", "ідея").includes("feedback"));
+  assert.ok(list("en", "bug").includes("feedback"));
+  setLang("uk");
+});

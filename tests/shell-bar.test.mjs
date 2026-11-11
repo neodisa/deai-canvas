@@ -1069,3 +1069,44 @@ test("оновлення: розмітка смуги з пігулкою зба
     assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
   }
 });
+
+/* ── «Відгук» (0.23.0, Task 8) ─────────────────────────────────────────────
+   Кнопка-іконка на ВСІХ екранах (задача, «Задачі», «Підключення», майстер): одразу після дверей у палітру, а коли є пігулка оновлення —
+   після неї; перед фішкою простору й крошками. Стан без ключа `update` (еталони ЛІГИ) кнопки не має. */
+test("«Відгук»: є на всіх екранах і доступний з клавіатури (нативна button, title/aria-label)", () => {
+  setLang("uk");
+  for (const o of [{}, { hasIteration: false }, { homeOpen: true }, { homeOpen: true, taskId: "" }, { homeOpen: true, homePage: "conn" }, { homeOpen: true, homePage: "wiz" }]) {
+    const h = html({ update: null, ...o });
+    const m = /<button[^>]*data-act="feedback"[^>]*>[\s\S]*?<\/button>/.exec(h);
+    assert.ok(m, `${JSON.stringify(o)}: кнопки «Відгук» нема`);
+    assert.match(m[0], /title="Баг \/ ідея"/);
+    assert.match(m[0], /aria-label="Баг \/ ідея"/);
+    assert.match(m[0], /<svg/);
+    assert.doesNotMatch(m[0], /tabindex="-1"/, "кнопка мусить бути досяжна клавіатурою");
+  }
+  assert.doesNotMatch(html(), /data-act="feedback"/, "стан без ключа update — еталон: кнопки нема");
+});
+
+test("«Відгук»: порядок — палітра, пігулка оновлення (коли є), «Відгук», фішка простору, крошки", () => {
+  for (const o of [{}, { homeOpen: true }, { homeOpen: true, homePage: "conn", taskId: "t1" }, { space: { id: "a", name: "A", color: "space-1" } }]) {
+    for (const update of [null, UPD]) {
+      const h = html({ update, ...o });
+      const pal = h.indexOf('data-act="palette"');
+      const upd = h.indexOf('data-act="update"');
+      const fb = h.indexOf('data-act="feedback"');
+      const crumbs = h.indexOf('class="crumbs"');
+      assert.ok(pal !== -1 && fb !== -1 && crumbs !== -1, JSON.stringify(o));
+      assert.ok(pal < fb, "«Відгук» — після дверей у палітру");
+      if (update) assert.ok(upd !== -1 && upd < fb, "і після пігулки оновлення");
+      assert.ok(fb < crumbs, "і перед крошками");
+      if (o.space) assert.ok(fb < h.indexOf('data-dd="space"'), "і перед фішкою простору");
+    }
+  }
+});
+
+test("«Відгук»: розмітка смуги збалансована за тегами", () => {
+  const h = html({ update: UPD });
+  for (const tag of ["div", "button", "span"]) {
+    assert.equal((h.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length, (h.match(new RegExp(`</${tag}>`, "g")) || []).length, tag);
+  }
+});
