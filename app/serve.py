@@ -5431,6 +5431,22 @@ def _update_busy():
     return None
 
 
+def _restart_or_flag():
+    """Перезапуск після оновлення. Успішний `execv` не повертається; `False` чи виняток — лишаємось на старому процесі: один рядок у
+    stderr (лише код) і прапорець у стані (`GET /api/update` → `restart_failed`), щоб інтерфейс попросив перезапустити канвас вручну."""
+    try:
+        ok = _restart()
+        code = 'refused'
+    except Exception as e:  # noqa: BLE001
+        ok, code = False, type(e).__name__
+    if ok is False:
+        print('оновлення: перезапуск не вдався (%s); перезапустіть канвас вручну' % code, file=sys.stderr)
+        try:
+            _updater().mark_restart_failed()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _updater():
     """Єдиний `Updater` процесу (ліниво: корінь читається при першому зверненні, тож тест підміняє `UPDATER_ROOT` до нього)."""
     global _UPDATER
@@ -7065,7 +7081,7 @@ class Handler(SimpleHTTPRequestHandler):
         status, body = _updater().apply()
         self._send_json(body, status=status)
         if status == 202 and body.get('restart') == 'auto':
-            t = threading.Timer(0.5, lambda: _restart())
+            t = threading.Timer(0.5, _restart_or_flag)
             t.daemon = True
             t.start()
 

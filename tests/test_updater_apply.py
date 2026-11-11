@@ -60,6 +60,14 @@ def release(work, version, files=None, tag=None, pkg_version=None):
     tu.git(['reset', '--hard', prev], work)
 
 
+def V(args):
+    """Аргументи `git` без ведучих `-c k=v` (дієслово — `V(args)[0]`)."""
+    args = list(args)
+    while args[:1] == ['-c']:
+        args = args[2:]
+    return args
+
+
 def head(work):
     return tu.git(['rev-parse', 'HEAD'], work).strip()
 
@@ -80,9 +88,11 @@ class Base(tu.Base):
     def counting(self):
         calls = []
         real = updater.run_git
+        self.raw = []
 
         def run(args, cwd, timeout, env_extra=None):
-            calls.append(list(args))
+            calls.append(V(args))
+            self.raw.append(list(args))
             return real(args, cwd, timeout, env_extra)
         return calls, run
 
@@ -271,7 +281,7 @@ class Apply(Base):
         self.assertEqual(head(self.work), old)
 
     def test_ff_only_is_enforced_even_if_history_moves_after_the_ancestor_check(self):
-        """Між `merge-base` і `merge` зʼявився локальний коміт: `--ff-only` відмовляє (`merge-failed`), merge-коміту нема."""
+        """Між `merge-base` і `merge` зʼявився локальний коміт: `--ff-only` відмовляє; HEAD чужий → `error`, без reset і без merge-коміту."""
         ident = {'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.com', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.com'}
         u = self.ready()
         real = updater.run_git
@@ -279,18 +289,19 @@ class Apply(Base):
 
         def run(args, cwd, timeout, env_extra=None):
             r = real(args, cwd, timeout, env_extra)
-            if args[0] == 'merge-base':
+            if V(args)[0] == 'merge-base':
                 with open(os.path.join(self.work, 'late.txt'), 'w') as f:
                     f.write('late')
                 tu.git(['add', '--', 'late.txt'], self.work)
                 tu.git(['commit', '-m', 'late'], self.work)
-            if args[0] == 'merge':
-                seen.append(args)
+            if V(args)[0] == 'merge':
+                seen.append(V(args))
             return r
         u.run = run
         with mock.patch.dict(os.environ, ident):
             code, body = u.apply()
-        self.assertEqual((code, body['code']), (500, 'merge-failed'))
+        self.assertEqual((code, body['code']), (500, 'error'))
+        self.assertTrue(os.path.exists(os.path.join(self.work, 'late.txt')))
         self.assertEqual(seen[0][:2], ['merge', '--ff-only'])
         self.assertTrue(re.match(r'^[0-9a-f]{40}$', seen[0][2]))
         self.assertEqual(tu.git(['rev-list', '--merges', 'HEAD'], self.work), '')
@@ -335,6 +346,7 @@ class Apply(Base):
         u.run = run
         self.assertEqual(u.apply()[1]['code'], 'rolled-back')
         resets = [i for i, c in enumerate(calls) if c[0] == 'reset']
+        self.assertIn(['-c', 'gc.auto=0', 'reset', '--hard', old], self.raw)
         merges = [i for i, c in enumerate(calls) if c[0] == 'merge']
         self.assertEqual([calls[i] for i in resets], [['reset', '--hard', old]])
         self.assertEqual(len(merges), 1)
@@ -363,7 +375,7 @@ class Apply(Base):
         real = updater.run_git
 
         def run(args, cwd, timeout, env_extra=None):
-            if args[0] == 'reset':
+            if V(args)[0] == 'reset':
                 return 1, '', 'nope'
             return real(args, cwd, timeout, env_extra)
         u.run = run
@@ -375,8 +387,8 @@ class Apply(Base):
         calls = []
 
         def run(args, cwd, timeout, env_extra=None):
-            calls.append(args[0])
-            if args[0] == 'merge':
+            calls.append(V(args)[0])
+            if V(args)[0] == 'merge':
                 return 1, '', 'refused'
             return real(args, cwd, timeout, env_extra)
         u.run = run
@@ -385,6 +397,96 @@ class Apply(Base):
         self.assertNotIn('reset', calls)
         self.assertEqual(head(self.work), old)
 
+    def test_fetch_and_merge_argv_are_hardened(self):
+        calls, run = self.counting()
+        u = self.ready(run=run)
+        self.assertEqual(u.apply()[0], 202)
+        fetch = [a for a in self.raw if V(a)[0] == 'fetch'][0]
+        self.assertEqual(fetch[:6], ['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true', '-c', 'gc.auto=0'])
+        for flag in ('--no-tags', '--no-recurse-submodules', '--'):
+            self.assertIn(flag, fetch)
+        self.assertLess(fetch.index('--'), len(fetch) - 2)
+        merge = [a for a in self.raw if V(a)[0] == 'merge'][0]
+        self.assertEqual(merge[:4], ['-c', 'gc.auto=0', 'merge', '--ff-only'])
+
+    def _merge_scenario(self, merge_effect):
+        """`merge` підроблено: `merge_effect(old, target)` міняє дерево/HEAD і повертає rc; решта git — справжній."""
+        u = self.ready()
+        old = head(self.work)
+        target = tu.git(['--git-dir', self.remote, 'rev-parse', 'v0.2.0^{commit}'], self.work).strip()
+        real = updater.run_git
+        verbs = []
+
+        def run(args, cwd, timeout, env_extra=None):
+            v = V(args)
+            verbs.append(v)
+            if v[0] == 'merge':
+                return merge_effect(old, target), '', ''
+            return real(args, cwd, timeout, env_extra)
+        u.run = run
+        return u, old, target, verbs
+
+    def test_merge_killed_after_dirtying_the_tree_rolls_back(self):
+        def effect(old, target):
+            with open(os.path.join(self.work, 'package.json'), 'a') as f:
+                f.write(' ')
+            return 124
+        u, old, target, verbs = self._merge_scenario(effect)
+        self.assertEqual(u.apply(), (500, {'ok': False, 'code': 'rolled-back'}))
+        self.assertEqual([v for v in verbs if v[0] == 'reset'], [['reset', '--hard', old]])
+        self.assertUntouched(old)
+
+    def test_merge_that_moved_head_then_failed_rolls_back(self):
+        def effect(old, target):
+            tu.git(['reset', '--hard', target], self.work)
+            return 1
+        u, old, target, verbs = self._merge_scenario(effect)
+        self.assertEqual(u.apply()[1]['code'], 'rolled-back')
+        self.assertEqual([v for v in verbs if v[0] == 'reset'], [['reset', '--hard', old]])
+        self.assertUntouched(old)
+
+    def test_merge_that_fails_cleanly_is_merge_failed_without_reset(self):
+        u, old, target, verbs = self._merge_scenario(lambda old, target: 1)
+        self.assertEqual(u.apply()[1]['code'], 'merge-failed')
+        self.assertEqual([v for v in verbs if v[0] == 'reset'], [])
+        self.assertUntouched(old)
+
+    def test_merge_failure_with_unexpected_head_is_error_without_reset(self):
+        def effect(old, target):
+            with open(os.path.join(self.work, 'other.txt'), 'w') as f:
+                f.write('x')
+            tu.git(['add', '--', 'other.txt'], self.work)
+            tu.git(['commit', '-m', 'someone else'], self.work)
+            return 1
+        u, old, target, verbs = self._merge_scenario(effect)
+        self.assertEqual(u.apply(), (500, {'ok': False, 'code': 'error'}))
+        self.assertEqual([v for v in verbs if v[0] == 'reset'], [])
+        self.assertNotEqual(head(self.work), old)                          # чужий коміт не чіпали
+        self.assertTrue(os.path.exists(os.path.join(self.work, 'other.txt')))
+
+    def test_failed_rollback_after_merge_failure_is_rollback_failed(self):
+        def effect(old, target):
+            with open(os.path.join(self.work, 'package.json'), 'a') as f:
+                f.write(' ')
+            return 124
+        u, old, target, verbs = self._merge_scenario(effect)
+        inner = u.run
+
+        def run(args, cwd, timeout, env_extra=None):
+            if V(args)[0] == 'reset':
+                return 1, '', 'index.lock'
+            return inner(args, cwd, timeout, env_extra)
+        u.run = run
+        self.assertEqual(u.apply()[1]['code'], 'rollback-failed')
+
+    def test_last_update_save_failure_still_succeeds(self):
+        u = self.ready()
+
+        def boom(state):
+            raise OSError('disk')
+        u._save = boom
+        self.assertEqual(u.apply(), (202, {'ok': True, 'to': '0.2.0', 'restart': 'auto'}))
+
     def test_garbage_head_never_reaches_merge_or_reset(self):
         """`old` — 40-hex sha, перевірений регексом, ДО fetch/merge: що завгодно інше — `500 error`, і жодного запису в дерево."""
         u = self.ready()
@@ -392,7 +494,7 @@ class Apply(Base):
         calls = []
 
         def run(args, cwd, timeout, env_extra=None):
-            calls.append(args[0])
+            calls.append(V(args)[0])
             if args[:2] == ['rev-parse', '--verify'] and args[2] == 'HEAD':
                 return 0, '--hard\n', ''
             return real(args, cwd, timeout, env_extra)
@@ -403,7 +505,8 @@ class Apply(Base):
 
     def test_the_module_has_exactly_one_reset(self):
         src = inspect.getsource(updater)
-        self.assertEqual(len(re.findall(r"'reset'", src)), 1)
+        self.assertEqual(len(re.findall(r"'reset'", src)), 1)          # одне місце — `_rollback`
+        self.assertEqual(len(re.findall(r"self\._rollback\(", src)), 2)  # викликається з двох місць, власного reset нема
         self.assertEqual(len(re.findall(r"'--hard'", src)), 1)
 
     def test_target_comes_from_state_not_request(self):
@@ -418,7 +521,7 @@ class Apply(Base):
         inside, release_it = threading.Event(), threading.Event()
 
         def run(args, cwd, timeout, env_extra=None):
-            if args[0] == 'fetch':
+            if V(args)[0] == 'fetch':
                 inside.set()
                 release_it.wait(10)
             return real(args, cwd, timeout, env_extra)

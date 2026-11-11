@@ -218,6 +218,36 @@ class UpdateApi(unittest.TestCase):
         self.assertEqual(self.FakeTimer.made, [])
         self.assertNotEqual(ta.head(self.work), old)                                   # 0.3.0 застосовано (Windows-гілка)
 
+    def test_failed_restart_is_logged_and_flagged_for_the_ui(self):
+        import contextlib
+        import io
+        self._ready()
+        self.FakeTimer.made = []
+        with mock.patch.object(serve.threading, 'Timer', self.FakeTimer):
+            self.assertEqual(self.call('POST', '/api/update-apply')[0], 202)
+        (t,) = self.FakeTimer.made
+        self.assertFalse(json.loads(self.call('GET', '/api/update')[1])['restart_failed'])
+        for fake in (lambda: False, mock.Mock(side_effect=FileNotFoundError('/secret/python'))):
+            err = io.StringIO()
+            with mock.patch.object(serve, '_restart', fake), contextlib.redirect_stderr(err):
+                t.fn()
+            self.assertEqual(err.getvalue().count('\n'), 1)
+            self.assertNotIn('/secret', err.getvalue())
+            body = json.loads(self.call('GET', '/api/update')[1])
+            self.assertTrue(body['restart_failed'])
+        # прапорець привʼязаний до процесу: «чужий» boot-токен не рахується
+        u = serve._updater()
+        st = u._load()
+        st['restart_failed'] = 'some-older-boot'
+        u._save(st)
+        self.assertFalse(json.loads(self.call('GET', '/api/update')[1])['restart_failed'])
+        # успішний (для тесту — «нічого не повернув») рестарт нічого не пише
+        err = io.StringIO()
+        with mock.patch.object(serve, '_restart', lambda: None), contextlib.redirect_stderr(err):
+            t.fn()
+        self.assertEqual(err.getvalue(), '')
+        self.assertFalse(json.loads(self.call('GET', '/api/update')[1])['restart_failed'])
+
     def test_apply_origin_gate_bad_body_and_task_prefix(self):
         self._ready()
         old = ta.head(self.work)

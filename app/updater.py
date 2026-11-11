@@ -322,6 +322,7 @@ class Updater:
             'remote_host': state.get('remote_host') if isinstance(state.get('remote_host'), str) else None,
             'last_update': state.get('last_update') if isinstance(state.get('last_update'), dict) else None,
             'boot': BOOT,
+            'restart_failed': state.get('restart_failed') == BOOT,
         }
 
     def _safe_blocked(self):
@@ -401,7 +402,9 @@ class Updater:
         if not _SHA_RE.match(old):
             return self._fail(500, 'error')
         refspec = 'refs/tags/%s:refs/tags/%s' % (tag, tag)
-        rc, _, err_text = self.run(['fetch', '--no-tags', '--', url, refspec], self.root, FETCH_TIMEOUT_S, {'LC_ALL': 'C'})
+        rc, _, err_text = self.run(['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true', '-c', 'gc.auto=0',
+                                    'fetch', '--no-tags', '--no-recurse-submodules', '--', url, refspec],
+                                   self.root, FETCH_TIMEOUT_S, {'LC_ALL': 'C'})
         if rc == 127:
             return self._fail(409, 'not-git')
         if rc != 0:
@@ -427,21 +430,54 @@ class Updater:
             return self._fail(409, 'diverged', hint='merge-hint')
         if rc != 0:
             return self._fail(500, 'error')
-        rc, _, _ = self.run(['merge', '--ff-only', target], self.root, MERGE_TIMEOUT_S)
+        rc, _, _ = self.run(['-c', 'gc.auto=0', 'merge', '--ff-only', target], self.root, MERGE_TIMEOUT_S)
         if rc != 0:
-            return self._fail(500, 'merge-failed')          # ff-only атомарний: дерево не змінене, відкату нема чого робити
+            return self._after_failed_merge(old, target)
         try:
             smoke_ok = smoke_check(self.root)
         except Exception:  # noqa: BLE001
             smoke_ok = False
         if not smoke_ok:
-            rc, _, _ = self.run(['reset', '--hard', old], self.root, MERGE_TIMEOUT_S)   # ЄДИНИЙ reset модуля: лише після вдалого merge
-            return self._fail(500, 'rolled-back' if rc == 0 else 'rollback-failed')
-        with self._lock:
-            state = self._load()
-            state['last_update'] = {'from': current, 'to': latest, 'at': int(self.clock())}
-            self._save(state)
+            return self._rollback(old)
+        try:                                               # оновлення вже вдалось: збій запису стану не скасовує ні 202, ні рестарт
+            with self._lock:
+                state = self._load()
+                state['last_update'] = {'from': current, 'to': latest, 'at': int(self.clock())}
+                self._save(state)
+        except Exception:  # noqa: BLE001
+            pass
         return 202, {'ok': True, 'to': latest, 'restart': 'manual' if _is_windows() else 'auto'}
+
+
+    def _rollback(self, old):
+        """ЄДИНЕ місце з `reset` у модулі: `reset --hard <old>` (`old` — 40-hex, перевірений раніше). Лише після `merge`, що чіпав дерево."""
+        rc, _, _ = self.run(['-c', 'gc.auto=0', 'reset', '--hard', old], self.root, MERGE_TIMEOUT_S)
+        return self._fail(500, 'rolled-back' if rc == 0 else 'rollback-failed')
+
+    def _after_failed_merge(self, old, target):
+        """`merge` не вдався (зокрема вбитий за тайм-аутом): правди про дерево не знаємо, тож перечитуємо. HEAD == old й дерево чисте →
+        справді нічого не змінилось (`merge-failed`); HEAD == target або HEAD == old із брудним деревом → відкат до `old`; HEAD будь-який
+        інший — хтось рухав гілку, НЕ чіпаємо (`error`). `index.lock` не видаляємо."""
+        rc, out, _ = self.run(['rev-parse', '--verify', 'HEAD'], self.root, LOCAL_GIT_TIMEOUT_S)
+        head = out.strip() if rc == 0 else ''
+        rc, out, _ = self.run(['status', '--porcelain', '--untracked-files=no'], self.root, LOCAL_GIT_TIMEOUT_S)
+        clean = rc == 0 and not (out or '').strip()
+        dirty = rc == 0 and not clean
+        if head == old and clean:
+            return self._fail(500, 'merge-failed')
+        if head == target or (head == old and dirty):
+            return self._rollback(old)
+        return self._fail(500, 'error')
+
+    def mark_restart_failed(self):
+        """Перезапуск після оновлення не вдався: прапорець (привʼязаний до ЦЬОГО процесу — після ручного перезапуску він застарів сам)."""
+        try:
+            with self._lock:
+                state = self._load()
+                state['restart_failed'] = BOOT
+                self._save(state)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 #: Смоук нового коду в ДОЧІРНЬОМУ процесі (`python -B -I`: ні `.pyc`, ні `sys.path` старого процесу): усі `app/*.py` і `bin/*.py` компілюються
