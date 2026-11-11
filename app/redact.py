@@ -91,9 +91,18 @@ def _tail_quoted(m):
     return m.group(1) + '…/' + _P_LAST.search(m.group(2)).group(0) + m.group(1)
 
 
+_LOOPBACK = re.compile(r'^https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$', re.I)
+_EXT = re.compile(r'\.([A-Za-z0-9]{1,5})$')
+
+
 def _tail_url(m):
-    """`http://localhost:8765/t/acme/it1/Клієнт/x.png` → `http://localhost:8765/…/x.png`: лишаються схема, хост і останній сегмент."""
+    """Зовнішній `https://h/a/b/42` → `https://h/…/42` (схема, хост, останній сегмент). Локальний (loopback або шлях з `/t/…`):
+    `http://localhost:8765/t/acme/it1/x.png` → `http://localhost:8765/…/*.png`: імена файлів канваса несуть імена клієнтів, тож лишається
+    лише розширення (нема розширення → `…`)."""
     segs = [x for x in m.group(2).split('/') if x]
+    if _LOOPBACK.match(m.group(1)) or (segs and segs[0] == 't'):
+        ext = _EXT.search(segs[-1]) if segs and segs[-1] != '…' else None
+        return m.group(1) + '/…/' + ('*.' + ext.group(1).lower() if ext else '…')
     if len(segs) <= 1 and '…' not in m.group(2):
         return m.group(0)
     return m.group(1) + '/…/' + (segs[-1] if segs else '')

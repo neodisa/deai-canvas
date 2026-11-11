@@ -125,14 +125,28 @@ class Redact(unittest.TestCase):
 
     def test_urls_keep_only_scheme_host_and_last_segment(self):
         c = lambda v: redact.text(v, collapse=True)
-        self.assertEqual(c('fetch http://localhost:8765/t/acme-corp/it-assets/it1/Клієнт/x.png failed'), 'fetch http://localhost:8765/…/x.png failed')
+        self.assertEqual(c('fetch http://localhost:8765/t/acme-corp/it-assets/it1/Клієнт/x.png failed'), 'fetch http://localhost:8765/…/*.png failed')
         out = c('http://localhost:8765/t/acme/it-assets/it1/%D0%9A%D0%BB%D1%96/%D1%84%D0%B0.png?v=1&token=zz')
-        self.assertEqual(out, 'http://localhost:8765/…/%D1%84%D0%B0.png')
+        self.assertEqual(out, 'http://localhost:8765/…/*.png')
         self.assertNotIn('acme', out)
         self.assertEqual(c('GET https://api.example.com/v1/users/42?token=abc#frag'), 'GET https://api.example.com/…/42')
         for keep in ('https://h.example/a', 'http://h.example'):
             self.assertEqual(c(keep), keep)
-        self.assertEqual(c(c('http://localhost:8765/t/a/b/c.png')), 'http://localhost:8765/…/c.png', 'ідемпотентно')
+        self.assertEqual(c(c('http://localhost:8765/t/a/b/c.png')), 'http://localhost:8765/…/*.png', 'ідемпотентно')
+
+    def test_local_urls_keep_only_the_file_extension(self):
+        c = lambda v: redact.text(v, collapse=True)
+        out = c('http://localhost:8765/t/acme-corp/it-assets/it1/LIGA-12345-acme-corp.PNG')
+        self.assertEqual(out, 'http://localhost:8765/…/*.png')
+        for bad in ('acme', 'LIGA-12345'):
+            self.assertNotIn(bad, out)
+        out = c('x http://127.0.0.1:8765/t/acme-corp y')
+        self.assertEqual(out, 'x http://127.0.0.1:8765/…/… y')
+        self.assertNotIn('acme', out)
+        self.assertNotIn('acme', c('http://[::1]:8765/acme-corp/report.pdf'))
+        self.assertEqual(c('https://ext.example/t/acme/x.png'), 'https://ext.example/…/*.png')
+        self.assertEqual(c('https://ext.example/v1/acme-corp.png'), 'https://ext.example/…/acme-corp.png')
+        self.assertEqual(c(c('http://127.0.0.1:8765/t/acme-corp')), 'http://127.0.0.1:8765/…/…', 'ідемпотентно')
 
     def test_double_escaped_windows_path_outside_quotes(self):
         self.assertEqual(redact.paths('open C:\\\\Users\\\\bob\\\\Acme\\\\x now'), 'open …/x now')
