@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 
 import { DICT, setLang } from "../app/i18n.js";
 import {
-  KNOWN_CODES, NOTES_REASONS, RESTART_DEADLINE_MS, blockedHelp, bodyToBlocks, codeKey, codeOfBody, notesToBlocks, pillModel, restartStep,
+  KNOWN_CODES, NOTES_REASONS, RESTART_DEADLINE_MS, UPDATE_MISS_LIMIT, blockedHelp, bodyToBlocks, bootBefore, codeKey, codeOfBody, nextUpdateInfo,
+  notesToBlocks, pillModel, restartStep, waitRestart,
 } from "../app/update-model.js";
 import { updateDialogHTML, updateNotesHTML, updatePillHTML } from "../app/update-view.js";
 
@@ -110,10 +111,62 @@ test("restartStep: сервер сам визнав невдалий перез�
   assert.equal(restartStep(ctx, { ok: true, boot: "b", current: "0.2.0", restart_failed: true }), "done", "новий процес: прапорець застарів сам");
 });
 
-test("app.js: опит після рестарту йде через restartStep, з прапорцем boot з ПОПЕРЕДНЬОГО запиту й без api() (відмова з кодом)", () => {
-  assert.match(appJs, /restartStep\(\{ prevBoot, target, startedAt, now: Date\.now\(\) \}, o\)/);
-  assert.match(appJs, /const prevBoot = \(fresh \|\| info\)\.boot;/);
-  assert.match(appJs, /updateFetch\('\/api\/update-apply'/);
+/* Цикл опиту з підробними швами: годинник, сон і відповіді сервера — послідовність, яку тест задає сам. */
+function runLoop(answers, { now0 = 0, tick = 1000 } = {}) {
+  let clock = now0; let inFlight = 0; let maxInFlight = 0; let calls = 0;
+  const fetchOnce = async () => {
+    inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
+    await Promise.resolve();
+    const a = answers[Math.min(calls, answers.length - 1)];
+    calls += 1; inFlight -= 1;
+    return a;
+  };
+  const sleep = async () => { clock += tick; };
+  const p = waitRestart({ fetchOnce, sleep, now: () => clock, prevBoot: "a", target: "0.2.0", startedAt: now0 });
+  return p.then((step) => ({ step, calls, maxInFlight }));
+}
+
+test("waitRestart: старий процес із новою версією на диску (той самий boot) — чекає далі, а не done", async () => {
+  const r = await runLoop([{ ok: true, boot: "a", current: "0.2.0" }, { ok: true, boot: "a", current: "0.2.0" }, { ok: true, boot: "b", current: "0.2.0" }]);
+  assert.equal(r.step, "done");
+  assert.equal(r.calls, 3, "два кроки старого процесу не завершили цикл");
+});
+
+test("waitRestart: новий boot + інша версія → fail; той самий boot + restart_failed → manual; мережа лежить → чекає, дедлайн → fail", async () => {
+  assert.equal((await runLoop([{ ok: false }, { ok: true, boot: "b", current: "0.1.0" }])).step, "fail");
+  assert.equal((await runLoop([{ ok: true, boot: "a", current: "0.2.0", restart_failed: true }])).step, "manual");
+  const dead = await runLoop([{ ok: false }], { tick: 10000 });
+  assert.equal(dead.step, "fail", "сервер так і не підвівся");
+  assert.ok(dead.calls >= 6, "до дедлайну опитували постійно");
+});
+
+test("waitRestart: запити не накладаються (наступний fetchOnce лише після відповіді попереднього)", async () => {
+  const r = await runLoop([{ ok: false }, { ok: false }, { ok: false }, { ok: true, boot: "b", current: "0.2.0" }]);
+  assert.equal(r.step, "done");
+  assert.equal(r.maxInFlight, 1);
+});
+
+test("bootBefore: без свіжої відповіді (null, без boot) запит apply не шлемо", () => {
+  assert.equal(bootBefore({ boot: "x1" }), "x1");
+  for (const bad of [null, undefined, {}, { boot: "" }, { boot: 5 }]) assert.equal(bootBefore(bad), null);
+});
+
+test("nextUpdateInfo: один промах не прибирає останній добрий стан; після UPDATE_MISS_LIMIT поспіль — скидає; вдалий опит обнуляє лічильник", () => {
+  let st = { info: OK, misses: 0 };
+  for (let i = 1; i < UPDATE_MISS_LIMIT; i += 1) {
+    st = nextUpdateInfo(st.info, null, st.misses);
+    assert.equal(st.info, OK, `промах ${i}`);
+  }
+  assert.equal(nextUpdateInfo(st.info, null, st.misses).info, null);
+  assert.deepEqual(nextUpdateInfo(OK, { ...OK, latest: "9.9.9" }, 2), { info: { ...OK, latest: "9.9.9" }, misses: 0 });
+});
+
+test("app.js: проводка — waitRestart, bootBefore перед POST (без fetch → не шлемо), nextUpdateInfo, focusBack, update-apply без api()", () => {
+  assert.match(appJs, /return waitRestart\(\{/);
+  assert.match(appJs, /const prevBoot = bootBefore\(await fetchUpdate\(\)\);\n\s*if \(!prevBoot\) \{ status\(''\); return t\('upErrNoAnswer'\); \}/);
+  assert.ok(appJs.indexOf("bootBefore(await fetchUpdate())") < appJs.indexOf("updateFetch('/api/update-apply'"), "guard мусить бути ДО запиту");
+  assert.match(appJs, /nextUpdateInfo\(updateInfo, next, updateMisses\)/);
+  assert.match(appJs, /focusBack: \(\) => document\.querySelector\('\.upd-pill'\) \?\? document\.querySelector\('\.pal-open \.ctl'\)/);
   assert.match(appJs, /location\.reload\(\)/);
   assert.match(appJs, /setInterval\(pollUpdate, UPDATE_POLL_MS\)/);
 });
@@ -177,7 +230,7 @@ test("діалог: форма askForm — role=dialog, aria-modal, aria-labelle
   assert.doesNotMatch(ok, /disabled/, "без blocked кнопка жива");
   assert.match(h, /data-form-error hidden/);
   assert.match(h, /data-up-status/);
-  assert.match(h, /data-up-notes/);
+  assert.match(h, /data-up-notes role="region" tabindex="0" aria-label=/);
   assert.match(h, /data-a="cancel" data-autofocus/, "фокус — на «Скасувати»");
   assert.match(h, /З версії 0\.1\.0 на 0\.2\.0/);
   assert.doesNotMatch(h, /class="up-why"/);
@@ -239,12 +292,17 @@ test("пігулка: data-act=update, підпис з версією, ікон�
   assert.match(updatePillHTML({ id: "update", version: `<i>`, restart: false }), /&lt;i&gt;/);
 });
 
-test("i18n: ключі up* є в обох мовах з однаковим типом", () => {
-  const ups = Object.keys(DICT.uk).filter((k) => k.startsWith("up"));
-  assert.ok(ups.length >= 40, `ключів лише ${ups.length}`);
+test("i18n: ключі оновлення є в обох мовах з однаковим типом", () => {
+  const OWN = ["upPill", "upPillRestart", "upPillTitle", "upPillRestartTitle", "upTitle", "upFromTo", "upWhatsNew", "upNotesLoading", "upNotesUnavail",
+    "upNotesNone", "upApply", "upApplying", "upDone", "upCopyCmd", "upCopied", "upCheck", "upChecking", "upUpToDate", "upFound", "upCheckFailed",
+    "upRestartManual", "upRestartLost", "upErrNoAnswer"];
+  const ours = (k) => OWN.includes(k) || k.startsWith("upCode_") || k.startsWith("upSt_");
+  const ups = Object.keys(DICT.uk).filter(ours);
+  assert.equal(ups.length, OWN.length + KNOWN_CODES.length + 1 + 4, "складено з OWN + upCode_(коди + generic) + upSt_(4)");
+  for (const k of OWN) assert.ok(DICT.uk[k] !== undefined, `uk.${k}`);
   for (const k of ups) {
     assert.ok(DICT.en[k] !== undefined, `en.${k}`);
     assert.equal(typeof DICT.en[k], typeof DICT.uk[k], k);
   }
-  for (const k of Object.keys(DICT.en).filter((x) => x.startsWith("up"))) assert.ok(DICT.uk[k] !== undefined, `uk.${k}`);
+  for (const k of Object.keys(DICT.en).filter(ours)) assert.ok(DICT.uk[k] !== undefined, `uk.${k}`);
 });

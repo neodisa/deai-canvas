@@ -79,7 +79,7 @@ export function updateDialogHTML(d) {
     ${why}
     ${stateKey ? `<p class="up-note">${esc(t(stateKey))}</p>` : ""}
     <p class="up-h3">${esc(t("upWhatsNew"))}</p>
-    <div class="up-notes" data-up-notes tabindex="0" aria-label="${esc(t("upWhatsNew"))}">${updateNotesHTML({ sections: x.sections ?? null, reason: x.notesReason ?? null })}</div>
+    <div class="up-notes" data-up-notes role="region" tabindex="0" aria-label="${esc(t("upWhatsNew"))}">${updateNotesHTML({ sections: x.sections ?? null, reason: x.notesReason ?? null })}</div>
     <p class="up-st" data-up-status role="status"${x.applying ? "" : " hidden"}>${x.applying ? esc(t("upApplying")) : ""}</p>
     <p class="cv-form-err" id="cv-form-err" role="alert" data-form-error${x.error ? "" : " hidden"}>${esc(x.error || "")}</p>
     <div class="cv-ask-row">

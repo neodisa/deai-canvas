@@ -54,7 +54,7 @@ import { initPwa } from './pwa.js';
 import { connPageHTML, drawerHTML, modName, roleTitle } from './connections-view.js';
 import { TRUST_POST_TIMEOUT_MS, trustDialogHTML } from './trust-view.js';
 import {
-  RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, codeOfBody, restartStep,
+  RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, waitRestart,
 } from './update-model.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
 import {
@@ -2267,6 +2267,7 @@ async function fetchUpdate() {
 /* Після невдалого рестарту — ОДИН тост на процес сервера (`boot`): без памʼяті він повторювався б кожні 30 хв. Памʼять — у
    `sessionStorage` (переживає перезавантаження вкладки), а коли сховища нема — у змінній. */
 let upToldBoot = null;
+let updateMisses = 0;
 function tellRestartOnce(info) {
   if (!info || info.restart_failed !== true) return;
   let seen = upToldBoot;
@@ -2280,8 +2281,11 @@ function tellRestartOnce(info) {
 /** Знімає стан оновлення й перемальовує смугу, коли він змінився. */
 async function pollUpdate() {
   const next = await fetchUpdate();
-  const changed = JSON.stringify(next) !== JSON.stringify(updateInfo);
-  updateInfo = next;
+  /* Одна крапка мережі не прибирає пігулку: останній добрий стан тримається, доки не набралось кілька промахів поспіль. */
+  const st = nextUpdateInfo(updateInfo, next, updateMisses);
+  updateMisses = st.misses;
+  const changed = JSON.stringify(st.info) !== JSON.stringify(updateInfo);
+  updateInfo = st.info;
   tellRestartOnce(next);
   if (changed) paintBar();
   return next;
@@ -2324,16 +2328,16 @@ async function updateFetch(path, opts, ms) {
 
 /** Чекає, поки піднімається НОВИЙ процес сервера (`restartStep`): крок щосекунди, поки не `done`/`manual`/`fail`. Мережева помилка —
  *  це «сервер ще лежить», а не відмова. Цикл послідовний (наступний крок після попереднього), тож накладок нема. */
-async function waitForRestart(prevBoot, target) {
-  const startedAt = Date.now();
-  for (;;) {
-    await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
-    const r = await updateFetch('/api/update', {}, UPDATE_STEP_TIMEOUT_MS);
-    const b = r && r.status === 200 && r.body && typeof r.body === 'object' ? r.body : null;
-    const o = b ? { ok: true, boot: b.boot, current: b.current, restart_failed: b.restart_failed } : { ok: false };
-    const step = restartStep({ prevBoot, target, startedAt, now: Date.now() }, o);
-    if (step !== 'wait') return step;
-  }
+function waitForRestart(prevBoot, target) {
+  return waitRestart({
+    prevBoot, target, startedAt: Date.now(), now: Date.now,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    fetchOnce: async () => {
+      const r = await updateFetch('/api/update', {}, UPDATE_STEP_TIMEOUT_MS);
+      const b = r && r.status === 200 && r.body && typeof r.body === 'object' ? r.body : null;
+      return b ? { ok: true, boot: b.boot, current: b.current, restart_failed: b.restart_failed } : { ok: false };
+    },
+  });
 }
 
 /** Людський текст відмови `apply` (код → словник). Для `dirty`/`diverged` команду дописано в сам текст: діалог лишається відкритим, а
@@ -2375,6 +2379,8 @@ async function openUpdateDialog() {
       current: info.current, latest: info.latest, blocked: info.blocked, state: info.state, reason: info.reason,
       sections: null, restartFailed: info.restart_failed === true,
     }), {
+      /* Пігулку перемальовує смуга, а після оновлення вона може зникнути: фокус — на пігулку, а коли її нема, на двері в палітру. */
+      focusBack: () => document.querySelector('.upd-pill') ?? document.querySelector('.pal-open .ctl'),
       onMount(form) {
         formEl = form;
         /* «Копіювати» біля команди: буфер, а коли його нема (не-https, відмовлені права) — виділяємо команду, щоб скопіювати руками. */
@@ -2395,8 +2401,8 @@ async function openUpdateDialog() {
         status(t('upApplying'));
         /* Свіжий `boot` ПЕРЕД запитом: стан із моменту відкриття діалогу міг застаріти (сервер перезапускали вручну), і тоді опит
            прийняв би старий процес за новий. */
-        const fresh = await fetchUpdate();
-        const prevBoot = (fresh || info).boot;
+        const prevBoot = bootBefore(await fetchUpdate());
+        if (!prevBoot) { status(''); return t('upErrNoAnswer'); }     // без свіжого boot запит НЕ шлемо (хибне `done` по застарілому)
         const r = await updateFetch('/api/update-apply', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
         }, UPDATE_APPLY_TIMEOUT_MS);

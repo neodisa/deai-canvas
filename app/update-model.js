@@ -117,3 +117,31 @@ export function notesToBlocks(sections) {
       blocks: bodyToBlocks(s.body),
     }));
 }
+
+/**
+ * Цикл очікування нового процесу після `202`. Усе зовнішнє — шви: `fetchOnce()` → `{ok, boot, current, restart_failed}` (мережева помилка =
+ * `{ok:false}`), `sleep(ms)`, `now()`. Кроки ПОСЛІДОВНІ (наступний `fetchOnce` лише після відповіді попереднього), тож накладок нема.
+ * Повертає `done` | `fail` | `manual` (`restartStep`).
+ */
+export async function waitRestart({ fetchOnce, sleep, now, prevBoot, target, startedAt }) {
+  for (;;) {
+    await sleep(RESTART_POLL_MS);
+    const step = restartStep({ prevBoot, target, startedAt, now: now() }, await fetchOnce());
+    if (step !== "wait") return step;
+  }
+}
+
+/** `boot` процесу ПЕРЕД `POST apply` зі свіжої відповіді; `null`, якщо свіжої нема — тоді запит НЕ шлемо: застарілий `boot` дав би
+ *  хибне `done` (старий процес із новою версією на диску, але іншим `boot`, ніж ми памʼятаємо). */
+export const bootBefore = (fresh) => (fresh && typeof fresh.boot === "string" && fresh.boot ? fresh.boot : null);
+
+/** Скільки поспіль невдалих опитів скидають стан оновлення (одна крапка мережі не прибирає пігулку). */
+export const UPDATE_MISS_LIMIT = 3;
+
+/** Наступний стан після опиту: `{info, misses}`. Вдалий — береться; невдалий — лишається останній добрий, доки не набралось
+ *  `UPDATE_MISS_LIMIT` промахів поспіль. */
+export function nextUpdateInfo(prev, next, misses) {
+  if (next) return { info: next, misses: 0 };
+  const m = misses + 1;
+  return { info: m >= UPDATE_MISS_LIMIT ? null : prev, misses: m };
+}
