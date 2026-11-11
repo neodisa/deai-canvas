@@ -91,8 +91,11 @@ def findings(raw):
     if not re.search(r"alter\s+table\s+public\.feedback\s+add\s+constraint\s+feedback_diag_object\s+check\s*\(\s*jsonb_typeof\(diag\)\s*=\s*'object'\s*\)\s*;", low):
         bad.append('diag is not required to be a json object')
 
+    if not re.search(r'create\s+index\s+if\s+not\s+exists\s+feedback_created_at_idx\s+on\s+public\.feedback\s*\(\s*created_at\s*\)\s*;', low):
+        bad.append('no index on created_at for the throttle count')
+
     # --- заголовок: публічний ключ → ліміти, перевірка відмов після запуску ---
-    if not re.search(r'rate\s+limits', raw, re.I) or not re.search(r'select,\s*update\s+and\s+delete', raw, re.I) or 'feedback-shots' not in raw.split('create extension', 1)[0]:
+    if not re.search(r'rate\s+limits', raw, re.I) or not re.search(r'select,\s*update\s+and\s+delete', raw, re.I) or 'feedback-shots' not in raw.split('create extension', 1)[0] or 'bare domain' not in raw:
         bad.append('header lacks the public-key warning (rate limits / post-run refusal check)')
 
     # --- нейтралізація markdown для картки Teams ---
@@ -147,13 +150,18 @@ def findings(raw):
             bad.append('card is not built with jsonb_build_*')
         if body.count('||') != 1 or not re.search(r'left\(plain,\s*500\)\s*\|\|', body):
             bad.append('the only concatenation allowed is the 500-character cut')
-        if not re.search(r'plain\s+text\s*:=\s*public\.feedback_plain\(new\.text\)', body):
+        if not re.search(r'\bplain\s*:=\s*public\.feedback_plain\(new\.text\)', body):
             bad.append('message text is not neutralised before the card')
         for col in ('contact', 'version', 'os'):
             if 'public.feedback_plain(new.%s)' % col not in body:
                 bad.append('new.%s is not neutralised before the card' % col)
         if len(re.findall(r'\bnew\.(text|contact|version|os)\b', re.sub(r'public\.feedback_plain\(new\.\w+\)', '', body))):
             bad.append('a user-supplied column reaches the card raw')
+        decl = re.search(r'\bdeclare\b(.*?)\bbegin\b', body, re.S)
+        if not decl or 'feedback_plain(' in decl.group(1):
+            bad.append('feedback_plain is called in DECLARE: its failure would fail the insert')
+        if not re.search(r'\bplain\s+text\s*;', body) or not re.search(r'\btxt\s*:=\s*left\(plain,', body):
+            bad.append('the message text is not assigned in the guarded body')
         thr = re.search(r"select\s+count\(\*\)\s+into\s+recent\s+from\s+public\.feedback\s+where\s+created_at\s*>\s*now\(\)\s*-\s*interval\s+'60\s+seconds'\s*;\s*if\s+recent\s*>\s*10\s+then\s+return\s+new\s*;\s*end\s+if\s*;", body)
         if not thr:
             bad.append('no throttle: more than 10 rows in 60 seconds must skip the card')
@@ -207,7 +215,11 @@ class FeedbackSql(unittest.TestCase):
         self.assertCaught(raw.replace("[][()*_`<>#", "[][()*_`<>"), 'markdown characters')
         self.assertCaught(raw.replace('[link removed]', '[link]'), 'links are not neutralised')
         self.assertCaught(raw.replace('(https?|ftp|file)://', '(ftp)://'), 'links are not neutralised')
-        self.assertCaught(raw.replace('plain text := public.feedback_plain(new.text)', 'plain text := new.text'), 'message text is not neutralised')
+        self.assertCaught(raw.replace('plain := public.feedback_plain(new.text)', 'plain := new.text'), 'message text is not neutralised')
+        self.assertCaught(raw.replace('  plain text;\n  txt text;\n', '  plain text := public.feedback_plain(new.text);\n  txt text;\n'), 'DECLARE')
+        self.assertCaught(raw.replace('create index if not exists feedback_created_at_idx on public.feedback (created_at);', ''), 'no index')
+        self.assertCaught(raw.replace('feedback_created_at_idx on public.feedback (created_at)', 'feedback_created_at_idx on public.feedback (kind)'), 'no index')
+        self.assertCaught(raw.replace('bare domain', 'domain'), 'header lacks')
         self.assertCaught(raw.replace('public.feedback_plain(new.contact)', 'new.contact'), 'new.contact is not neutralised')
         self.assertCaught(raw.replace('public.feedback_plain(new.version)', 'new.version'), 'new.version is not neutralised')
         self.assertCaught(raw.replace('public.feedback_plain(new.os)', 'new.os'), 'new.os is not neutralised')

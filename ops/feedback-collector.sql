@@ -19,6 +19,9 @@
 -- !! AFTER RUNNING THIS SCRIPT, CHECK WITH THE PUBLISHABLE KEY (anon) that: select, update and delete on `public.feedback` are
 -- !! refused, and reading or listing objects in the `feedback-shots` bucket is refused. Only insert may succeed.
 --
+-- !! Known limit: the Teams card neutralises links with a scheme (http, https, ftp, file) and `www.` ones; a bare domain without
+-- !! scheme or `www.` is NOT neutralised (accepted: Teams only auto-links what it recognises, and the card stays plain text).
+--
 -- !! Needs the `pg_net` extension and Vault (both ship with Supabase). The address of the Teams webhook lives in Vault only:
 -- !!   select vault.create_secret('<webhook address>', 'teams_feedback_webhook_url');
 create extension if not exists pg_net;
@@ -41,6 +44,9 @@ alter table public.feedback drop constraint if exists feedback_diag_object;
 alter table public.feedback add constraint feedback_diag_object check (jsonb_typeof(diag) = 'object');
 
 alter table public.feedback enable row level security;
+
+-- The Teams throttle counts rows by created_at on every insert: without an index that is a table scan per insert (quadratic under a flood).
+create index if not exists feedback_created_at_idx on public.feedback (created_at);
 
 -- The anonymous role may only INSERT, and only these columns: `created_at` is the database's own clock (nobody forges it).
 revoke all on public.feedback from anon, authenticated, public;
@@ -88,8 +94,8 @@ as $$
 declare
   hook text;
   req_id bigint;
-  plain text := public.feedback_plain(new.text);
-  txt text := left(plain, 500) || case when length(plain) > 500 then '…' else '' end;
+  plain text;
+  txt text;
   recent integer;
   facts jsonb;
   card jsonb;
@@ -99,6 +105,9 @@ begin
     return new;
   end if;
 
+  -- inside the block with the handler on purpose: a failure here must never fail the insert
+  plain := public.feedback_plain(new.text);
+  txt := left(plain, 500) || case when length(plain) > 500 then '…' else '' end;
   select decrypted_secret into hook from vault.decrypted_secrets
    where name = 'teams_feedback_webhook_url' limit 1;
   if hook is null or hook !~* '^https://' then
