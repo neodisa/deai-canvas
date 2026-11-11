@@ -436,6 +436,70 @@ class Apply(Base):
         self.assertEqual([v for v in verbs if v[0] == 'reset'], [['reset', '--hard', old]])
         self.assertUntouched(old)
 
+    def test_edit_saved_during_fetch_blocks_the_merge_and_survives(self):
+        u = self.ready()
+        old = head(self.work)
+        real = updater.run_git
+        verbs = []
+        pkg = os.path.join(self.work, 'package.json')
+
+        def run(args, cwd, timeout, env_extra=None):
+            v = V(args)
+            verbs.append(v[0])
+            r = real(args, cwd, timeout, env_extra)
+            if v[0] == 'fetch':
+                with open(pkg, 'a') as f:
+                    f.write('\n// my edit\n')
+            return r
+        u.run = run
+        with open(pkg, 'rb') as f:
+            before = f.read()
+        self.assertEqual(u.apply(), (409, {'ok': False, 'code': 'dirty'}))
+        self.assertNotIn('merge', verbs)
+        self.assertNotIn('reset', verbs)
+        with open(pkg, 'rb') as f:
+            self.assertEqual(f.read(), before + b'\n// my edit\n')
+        self.assertEqual(head(self.work), old)
+
+    def test_refused_merge_with_a_users_edit_never_resets_it(self):
+        pkg = os.path.join(self.work, 'package.json')
+
+        def effect(old, target):
+            with open(pkg, 'a') as f:
+                f.write('\n// my edit\n')
+            return 1                                       # ff-only відмовив атомарно: «local changes would be overwritten»
+        u, old, target, verbs = self._merge_scenario(effect)
+        self.assertEqual(u.apply(), (500, {'ok': False, 'code': 'merge-failed'}))
+        self.assertEqual([v for v in verbs if v[0] == 'reset'], [])
+        with open(pkg) as f:
+            self.assertTrue(f.read().endswith('\n// my edit\n'))
+        self.assertEqual(head(self.work), old)
+
+    def test_fetch_rejected_by_fsck_is_its_own_code(self):
+        u = self.ready()
+        real = updater.run_git
+        verbs = []
+
+        def run(args, cwd, timeout, env_extra=None):
+            verbs.append(V(args)[0])
+            if V(args)[0] == 'fetch':
+                return 128, '', 'error: object 1234: badTimezone: invalid author/committer line\nfatal: fsck error in packed object'
+            return real(args, cwd, timeout, env_extra)
+        u.run = run
+        old = head(self.work)
+        self.assertEqual(u.apply(), (409, {'ok': False, 'code': 'fetch-rejected'}))
+        self.assertNotIn('merge', verbs)
+        self.assertEqual(head(self.work), old)
+
+    def test_a_new_successful_apply_clears_restart_failed(self):
+        u = self.ready()
+        u.mark_restart_failed()
+        self.assertTrue(u.status()['restart_failed'])
+        self.assertEqual(u.apply()[0], 202)
+        self.assertFalse(u.status()['restart_failed'])
+        with open(os.path.join(self.home, 'update.json'), encoding='utf-8') as f:
+            self.assertNotIn('restart_failed', json.load(f))
+
     def test_merge_that_moved_head_then_failed_rolls_back(self):
         def effect(old, target):
             tu.git(['reset', '--hard', target], self.work)

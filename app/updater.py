@@ -47,6 +47,8 @@ FETCH_TIMEOUT_S = 60
 LOCAL_GIT_TIMEOUT_S = 10
 MERGE_TIMEOUT_S = 60
 SMOKE_TIMEOUT_S = 30
+#: Підрядки stderr (`LC_ALL=C`) `git fetch`, коли `fsckObjects` чи розпакування відкинули обʼєкти.
+_FETCH_REJECTED_MARKERS = ('fsck', 'error in object', 'bad object', 'corrupt', 'invalid object', 'unpack-objects', 'index-pack')
 FIRST_CHECK_DELAY_S = 5
 FIRST_CHECK_JITTER_S = 25
 PERIOD_JITTER = 0.1
@@ -413,6 +415,8 @@ class Updater:
                 return self._fail(409, 'tag-conflict')
             if "couldn't find remote ref" in low:
                 return self._fail(409, 'tag-missing')
+            if any(m in low for m in _FETCH_REJECTED_MARKERS):
+                return self._fail(409, 'fetch-rejected')      # fsck/пошкоджений обʼєкт: це не «нема мережі»
             return self._fail(503, 'offline')
         rc, out, _ = self.run(['rev-parse', '--verify', '%s^{commit}' % tag], self.root, LOCAL_GIT_TIMEOUT_S)
         target = out.strip() if rc == 0 else ''
@@ -430,9 +434,14 @@ class Updater:
             return self._fail(409, 'diverged', hint='merge-hint')
         if rc != 0:
             return self._fail(500, 'error')
+        rc, out, _ = self.run(['status', '--porcelain', '--untracked-files=no'], self.root, LOCAL_GIT_TIMEOUT_S)
+        if rc != 0:
+            return self._fail(500, 'error')
+        if out.strip():                                    # правка зʼявилась за час fetch: merge не робимо, reset не робимо
+            return self._fail(409, 'dirty')
         rc, _, _ = self.run(['-c', 'gc.auto=0', 'merge', '--ff-only', target], self.root, MERGE_TIMEOUT_S)
         if rc != 0:
-            return self._after_failed_merge(old, target)
+            return self._after_failed_merge(old, target, rc)
         try:
             smoke_ok = smoke_check(self.root)
         except Exception:  # noqa: BLE001
@@ -442,6 +451,7 @@ class Updater:
         try:                                               # оновлення вже вдалось: збій запису стану не скасовує ні 202, ні рестарт
             with self._lock:
                 state = self._load()
+                state.pop('restart_failed', None)
                 state['last_update'] = {'from': current, 'to': latest, 'at': int(self.clock())}
                 self._save(state)
         except Exception:  # noqa: BLE001
@@ -454,9 +464,10 @@ class Updater:
         rc, _, _ = self.run(['-c', 'gc.auto=0', 'reset', '--hard', old], self.root, MERGE_TIMEOUT_S)
         return self._fail(500, 'rolled-back' if rc == 0 else 'rollback-failed')
 
-    def _after_failed_merge(self, old, target):
+    def _after_failed_merge(self, old, target, merge_rc):
         """`merge` не вдався (зокрема вбитий за тайм-аутом): правди про дерево не знаємо, тож перечитуємо. HEAD == old й дерево чисте →
-        справді нічого не змінилось (`merge-failed`); HEAD == target або HEAD == old із брудним деревом → відкат до `old`; HEAD будь-який
+        справді нічого не змінилось (`merge-failed`); HEAD == target, або HEAD == old із брудним деревом І rc == 124 (вбили ми) → відкат до `old`; HEAD == old і інший rc → `merge-failed` (ff-only атомарний,
+        брудне дерево — правки користувача, їх не скидаємо); HEAD будь-який
         інший — хтось рухав гілку, НЕ чіпаємо (`error`). `index.lock` не видаляємо."""
         rc, out, _ = self.run(['rev-parse', '--verify', 'HEAD'], self.root, LOCAL_GIT_TIMEOUT_S)
         head = out.strip() if rc == 0 else ''
@@ -465,8 +476,10 @@ class Updater:
         dirty = rc == 0 and not clean
         if head == old and clean:
             return self._fail(500, 'merge-failed')
-        if head == target or (head == old and dirty):
+        if head == target or (head == old and dirty and merge_rc == 124):    # 124 — ми самі вбили merge; інакше ff-only атомарний
             return self._rollback(old)
+        if head == old:
+            return self._fail(500, 'merge-failed')          # дерево брудне через правку користувача: НЕ скидаємо
         return self._fail(500, 'error')
 
     def mark_restart_failed(self):
