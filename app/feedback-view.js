@@ -17,12 +17,19 @@ export function previewPreHTML(text) {
   return esc(text || t("fbPreviewNone"));
 }
 
-/** `d = {kind, text, contact, includeDiag, includeShot, shot:{available, bytes, reasonKey}, previewText}`. */
+/** `d = {kind, text, contact, includeDiag, includeShot, shot:{available, bytes, reasonKey}, shotUrl, previewText, previewFailed}`.
+ *  `shotUrl` — локальна адреса знімка (мініатюра показується, коли знімок прикладено); `previewFailed` — перегляду нема: діагностика
+ *  за замовчуванням ВИМКНЕНА (людина не бачила, що піде) і біля галочки стоїть примітка. */
 export function feedbackDialogHTML(d) {
   const x = d || {};
   const shot = x.shot || { available: false, reasonKey: "fbShotNone" };
   const kind = x.kind === "idea" ? "idea" : "bug";
-  const shotWhy = shot.available ? "" : `<span class="fb-why" id="fb-shot-why">${esc(t(shot.reasonKey || "fbShotNone"))}</span>`;
+  const shotWhy = `<span class="fb-why" id="fb-shot-why" data-fb-shot-why${shot.available ? " hidden" : ""}>${esc(t(shot.reasonKey || "fbShotNone"))}</span>`;
+  const thumb = x.shotUrl
+    ? `<img class="fb-thumb" data-fb-thumb src="${esc(x.shotUrl)}" alt="${esc(t("fbShotAlt"))}" decoding="async" loading="lazy"${shot.available && x.includeShot ? "" : " hidden"}>`
+    : "";
+  const diagOn = x.previewFailed ? false : x.includeDiag !== false;
+  const diagWhy = `<span class="fb-why" id="fb-diag-why" data-fb-diag-why${x.previewFailed ? "" : " hidden"}>${esc(t("fbDiagOff"))}</span>`;
   return `<form class="cv-form fb" data-form="feedback" novalidate role="dialog" aria-modal="true" aria-labelledby="fb-h">
     <h2 class="cv-form-h" id="fb-h">${esc(t("fbTitle"))}</h2>
     <div class="cv-field" role="radiogroup" aria-label="${esc(t("fbKind"))}">
@@ -41,9 +48,11 @@ export function feedbackDialogHTML(d) {
       <input id="fb-contact" name="contact" type="text" autocomplete="off" value="${esc(x.contact || "")}" placeholder="${esc(t("fbContactPh"))}">
     </div>
     <div class="cv-field fb-opts">
-      <label class="cn-check" for="fb-diag"><input type="checkbox" id="fb-diag" name="diag"${x.includeDiag === false ? "" : " checked"}>${esc(t("fbDiag"))}</label>
-      <label class="cn-check" for="fb-shot"><input type="checkbox" id="fb-shot" name="shot"${shot.available && x.includeShot ? " checked" : ""}${shot.available ? "" : ' disabled aria-describedby="fb-shot-why"'}>${esc(t("fbShot"))}</label>
+      <label class="cn-check" for="fb-diag"><input type="checkbox" id="fb-diag" name="diag"${diagOn ? " checked" : ""}${x.previewFailed ? ' aria-describedby="fb-diag-why"' : ""}>${esc(t("fbDiag"))}</label>
+      ${diagWhy}
+      <label class="cn-check" for="fb-shot"><input type="checkbox" id="fb-shot" name="shot"${shot.available && x.includeShot ? " checked" : ""}${shot.available ? "" : " disabled"} aria-describedby="fb-shot-why">${esc(t("fbShot"))}</label>
       ${shotWhy}
+      ${thumb}
     </div>
     <details class="fb-preview" data-fb-preview>
       <summary>${esc(t("fbWhat"))}</summary>

@@ -9,8 +9,8 @@
 
 /** Скільки останніх помилок тримає кільце (сервер приймає не більше стільки ж: `feedback.CLIENT_ERRORS_MAX`). */
 export const RING_MAX = 20;
-/** Найдовше повідомлення, символів (сервер ріже так само: `feedback.MSG_MAX`). */
-export const MSG_MAX = 300;
+/** Найдовше повідомлення, символів (сервер ріже так само: `feedback.CLIENT_MSG_MAX`). */
+export const MSG_MAX = 200;
 
 const ring = [];
 

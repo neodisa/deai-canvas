@@ -57,12 +57,19 @@ export function createSession({ ctx = {}, clientErrors = [], lang = "uk" } = {})
     clientErrors: errors,
     /** Тіло `POST /api/feedback-preview`. */
     previewBody: () => ({ ...base(), client_errors: errors }),
-    /** Тіло `POST /api/feedback`. `shotAvailable` — що сказав попередній перегляд; без кадру `include_shot` завжди `false`. */
-    sendBody: ({ kind, text, contact, includeDiag, includeShot, shotAvailable }) => {
+    /** Адреса знімка поточної сторінки (той самий `/shot`, що малює кадри) або `""`, коли `it`/`node` не названо. */
+    shotUrl: () => {
+      const b = base();
+      return b.it && b.node ? `/shot?it=${encodeURIComponent(b.it)}&node=${encodeURIComponent(b.node)}` : "";
+    },
+    /** Тіло `POST /api/feedback`. `shotAvailable` — що сказав попередній перегляд; без кадру `include_shot` завжди `false`.
+     *  `diagHash` — відбиток діагностики з ОСТАННЬОГО показаного перегляду: сервер звіряє його («що показано = що піде»). */
+    sendBody: ({ kind, text, contact, includeDiag, includeShot, shotAvailable, diagHash }) => {
       const o = { kind, text: String(text ?? "").trim(), ...base(), client_errors: errors };
       const c = String(contact ?? "").trim();
       if (c) o.contact = c;
       o.include_diag = includeDiag !== false;
+      if (typeof diagHash === "string" && diagHash) o.diag_hash = diagHash;
       o.include_shot = includeShot === true && shotAvailable === true;
       return o;
     },
@@ -74,6 +81,15 @@ export function shotState(preview) {
   const s = preview && typeof preview === "object" && preview.shot && typeof preview.shot === "object" ? preview.shot : null;
   if (s && s.available === true) return { available: true, bytes: Number.isInteger(s.bytes) ? s.bytes : 0, reasonKey: null };
   return { available: false, bytes: 0, reasonKey: s && s.skipped === "too-big" ? "fbShotTooBig" : "fbShotNone" };
+}
+
+/** `409 {code:'diag-changed', diag, diag_hash, shot?}` → новий перегляд (його треба ПОКАЗАТИ й попросити натиснути «Надіслати» ще раз) або
+ *  `null`, коли відповідь не така. Знімок бере зі старого перегляду, якщо сервер не прислав свого. */
+export function previewFromConflict(prev, body) {
+  const b = body && typeof body === "object" ? body : null;
+  if (!b || b.code !== "diag-changed" || !b.diag || typeof b.diag !== "object" || typeof b.diag_hash !== "string") return null;
+  const shot = b.shot && typeof b.shot === "object" ? b.shot : (prev && prev.shot) || { available: false };
+  return { ok: true, diag: b.diag, diag_hash: b.diag_hash, shot };
 }
 
 /** Результат `POST /api/feedback` → `{key, args, suffixKey}`: ключ тосту, його аргументи й (для памʼяті-лише) додаток. */

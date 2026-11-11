@@ -58,7 +58,7 @@ import {
   RESTART_POLL_MS, UPDATE_POLL_MS, blockedHelp, bootBefore, codeOfBody, nextUpdateInfo, waitRestart,
 } from './update-model.js';
 import { updateDialogHTML, updateNotesHTML } from './update-view.js';
-import { createSession, errArg, errField, outcome, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
+import { createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate } from './feedback-model.js';
 import { feedbackDialogHTML } from './feedback-view.js';
 import {
   disableConsequences, formFields, formPatch, initialForm, isDirty, missingRequired, refusalView, roleCardId, roleHolders,
@@ -2455,10 +2455,12 @@ function feedbackContext() {
   return ctx;
 }
 
-/** `POST /api/feedback-preview` → тіло відповіді або `null` (мережа/відмова: діалог працює без «Що буде надіслано»). */
+/** `POST /api/feedback-preview` → тіло відповіді або `null` (мережа/відмова: діалог працює без «Що буде надіслано»). Без `diag_hash`
+ *  відповідь не годиться: відправка з діагностикою без відбитка однаково дістала б 409. */
 async function fetchFeedbackPreview(sess) {
   const r = await jsonPost('/api/feedback-preview', sess.previewBody());
-  return r && r.status === 200 && r.body && r.body.ok === true && r.body.diag && typeof r.body.diag === 'object' ? r.body : null;
+  return r && r.status === 200 && r.body && r.body.ok === true && r.body.diag && typeof r.body.diag === 'object'
+    && typeof r.body.diag_hash === 'string' ? r.body : null;
 }
 
 let feedbackDialogOpen = false;
@@ -2473,35 +2475,65 @@ async function openFeedback() {
     const shownText = (p, includeDiag, includeShot) => (p
       ? previewText(sentView(p, { includeDiag, includeShot })) : t('fbPreviewFail'));
     const checked = (id) => !!formEl?.querySelector(id)?.checked;
-    /* Перемалювати лише «Що буде надіслано» (і стан чекбокса знімка) за свіжим переглядом; застарілу відповідь відкидаємо. */
+    /* Стан знімка за свіжим переглядом: чекбокс (знову вмикається, коли знімок зʼявився), причина, мініатюра (лише коли прикладено). */
+    const syncShot = () => {
+      if (!formEl) return;
+      const shot = shotState(preview);
+      const cb = formEl.querySelector('#fb-shot');
+      if (cb) { cb.disabled = !shot.available; if (!shot.available) cb.checked = false; }
+      const why = formEl.querySelector('[data-fb-shot-why]');
+      if (why) { why.textContent = t(shot.reasonKey || 'fbShotNone'); why.hidden = shot.available; }
+      const thumb = formEl.querySelector('[data-fb-thumb]');
+      if (thumb) thumb.hidden = !(shot.available && cb?.checked);
+    };
+    const paintPreview = () => {
+      if (!formEl) return;
+      syncShot();
+      const diagWhy = formEl.querySelector('[data-fb-diag-why]');
+      if (diagWhy) diagWhy.hidden = !!preview;
+      const pre = formEl.querySelector('[data-fb-pre]');
+      if (pre) pre.textContent = shownText(preview, checked('#fb-diag'), checked('#fb-shot'));
+    };
+    /* Перемалювати лише «Що буде надіслано» за свіжим переглядом; застарілу відповідь відкидаємо. */
     const repaint = async () => {
       const seq = ++previewSeq;
       const p = await fetchFeedbackPreview(sess);
       if (seq !== previewSeq || !formEl?.isConnected) return;
       preview = p;
-      const shot = shotState(preview);
-      const cb = formEl.querySelector('#fb-shot');
-      if (cb && !shot.available) { cb.checked = false; cb.disabled = true; }
-      const pre = formEl.querySelector('[data-fb-pre]');
-      if (pre) pre.textContent = shownText(preview, checked('#fb-diag'), checked('#fb-shot'));
+      paintPreview();
     };
     await askForm(() => feedbackDialogHTML({
-      shot: shotState(preview), previewText: preview ? previewText(sentView(preview, { includeDiag: true, includeShot: false })) : t('fbPreviewFail'),
+      shot: shotState(preview), shotUrl: sess.shotUrl(), previewFailed: !preview,
+      previewText: preview ? previewText(sentView(preview, { includeDiag: true, includeShot: false })) : t('fbPreviewFail'),
     }), {
       focusBack: () => document.querySelector('.fb-btn') ?? document.querySelector('.pal-open .ctl'),
       onMount(form) {
         formEl = form;
+        /* Перегляд не вдався: діагностика за замовчуванням ВИМКНЕНА (галочку знімає розмітка). Людина може ввімкнути — тоді `change` питає знову. */
         for (const id of ['#fb-diag', '#fb-shot']) form.querySelector(id)?.addEventListener('change', repaint);
+        form.querySelector('#fb-shot')?.addEventListener('change', syncShot);
       },
       async onSubmit(vals, ctl) {
         const bad = validate({ kind: vals.kind, text: vals.text, contact: vals.contact });
         if (bad) { ctl.focus(errField(bad)); return t(bad, errArg(bad)); }
         const r = await jsonPost('/api/feedback', sess.sendBody({
           kind: vals.kind, text: vals.text, contact: vals.contact,
-          includeDiag: vals.diag, includeShot: vals.shot, shotAvailable: shotState(preview).available,
+          includeDiag: vals.diag, includeShot: vals.shot, shotAvailable: shotState(preview).available, diagHash: preview?.diag_hash,
         }));
         if (!r) return t('fbErrGeneric', t('fbErrNoAnswer'));
         const b = r.body && typeof r.body === 'object' ? r.body : {};
+        if (r.status === 409) {
+          /* «Що показано = що піде»: діагностика змінилась (або перегляду не було). Показуємо НОВУ й просимо натиснути ще раз. */
+          const fresh = previewFromConflict(preview, b);
+          if (fresh) {
+            previewSeq += 1;
+            preview = fresh;
+            paintPreview();
+            const det = formEl?.querySelector('[data-fb-preview]');
+            if (det) det.open = true;
+            return t('fbDiagChanged');
+          }
+        }
         if (r.status === 400 && b.ok === false) {
           const key = serverErrKey(b.code);
           if (key) { ctl.focus(errField(key)); return t(key, errArg(key)); }

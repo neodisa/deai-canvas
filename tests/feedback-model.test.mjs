@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { DICT, setLang, t } from "../app/i18n.js";
 import {
-  CONTACT_MAX, TEXT_MAX, TEXT_MIN, createSession, errArg, errField, outcome, previewText, sentView, serverErrKey, shotState, validate,
+  CONTACT_MAX, TEXT_MAX, TEXT_MIN, createSession, errArg, errField, outcome, previewFromConflict, previewText, sentView, serverErrKey, shotState, validate,
 } from "../app/feedback-model.js";
 import { feedbackBtnHTML, feedbackDialogHTML } from "../app/feedback-view.js";
 
@@ -136,14 +136,14 @@ test("діалог: контракт askForm (форма, радіо, текст
   assert.match(h, /<input id="fb-contact" name="contact"/);
   assert.match(h, /<input type="checkbox" id="fb-diag" name="diag" checked>/);
   assert.match(h, /<input type="checkbox" id="fb-shot" name="shot" disabled aria-describedby="fb-shot-why">/);
-  assert.match(h, /id="fb-shot-why">Знімка поточної сторінки немає/, "причина вимкненого чекбокса видима");
+  assert.match(h, /id="fb-shot-why" data-fb-shot-why>Знімка поточної сторінки немає/, "причина вимкненого чекбокса видима");
   assert.match(h, /<details[^>]*data-fb-preview[^>]*>[\s\S]*<pre[^>]*data-fb-pre/);
   assert.match(h, /id="cv-form-err"[^>]*data-form-error[^>]*hidden/);
   assert.match(h, /data-a="cancel"/);
   assert.match(h, /type="submit" data-a="ok"/);
   const on = feedbackDialogHTML({ shot: { available: true, bytes: 5 }, previewText: "{}", includeShot: true });
-  assert.match(on, /id="fb-shot" name="shot" checked>/);
-  assert.doesNotMatch(on, /fb-shot-why/);
+  assert.match(on, /id="fb-shot" name="shot" checked aria-describedby="fb-shot-why">/);
+  assert.match(on, /id="fb-shot-why" data-fb-shot-why hidden>/, "причина лишається в розмітці прихованою: перемальовка може її показати");
 });
 
 test("діалог: усе з даних (діагностика, текст, контакт) — лише екрановане", () => {
@@ -189,4 +189,86 @@ test("усі ключі fb* є в обох словниках", () => {
   const en = Object.keys(DICT.en).filter((k) => k.startsWith("fb")).sort();
   assert.deepEqual(uk, en);
   assert.ok(uk.length >= 25);
+});
+
+/* ── 0.23 ревʼю: «що показано = що піде», мініатюра, діалог без перегляду ─────────────────────────────────────────────── */
+
+test("sendBody несе diag_hash лише коли він є; shotUrl — лише коли названо it і node", () => {
+  const s = createSession({ ctx: CTX, clientErrors: [], lang: "uk" });
+  assert.equal(s.sendBody(form({ diagHash: "ab".repeat(32) })).diag_hash, "ab".repeat(32));
+  assert.equal("diag_hash" in s.sendBody(form()), false);
+  assert.equal("diag_hash" in s.sendBody(form({ diagHash: 5 })), false);
+  const withShot = createSession({ ctx: { ...CTX, it: "it 1", node: "home@375" }, clientErrors: [], lang: "uk" });
+  assert.equal(withShot.shotUrl(), "/shot?it=it%201&node=home%40375");
+  assert.equal(createSession({ ctx: { task: "x" }, clientErrors: [], lang: "uk" }).shotUrl(), "");
+});
+
+test("previewFromConflict: 409 diag-changed → новий перегляд; інше → null", () => {
+  const prev = { ok: true, diag: { a: 1 }, diag_hash: "h1", shot: { available: true, bytes: 9 } };
+  const fresh = previewFromConflict(prev, { ok: false, code: "diag-changed", diag: { a: 2 }, diag_hash: "h2" });
+  assert.deepEqual(fresh, { ok: true, diag: { a: 2 }, diag_hash: "h2", shot: { available: true, bytes: 9 } });
+  assert.deepEqual(previewFromConflict(null, { code: "diag-changed", diag: {}, diag_hash: "h", shot: { available: false } }).shot, { available: false });
+  for (const bad of [null, {}, { code: "other", diag: {}, diag_hash: "h" }, { code: "diag-changed", diag: {} }, { code: "diag-changed", diag_hash: "h" }]) {
+    assert.equal(previewFromConflict(prev, bad), null, JSON.stringify(bad));
+  }
+});
+
+test("діалог: без перегляду діагностика ВИМКНЕНА з приміткою; з переглядом — увімкнена, примітка прихована", () => {
+  const off = feedbackDialogHTML({ shot: { available: false, reasonKey: "fbShotNone" }, previewText: "", previewFailed: true, includeDiag: true });
+  assert.doesNotMatch(off, /<input type="checkbox" id="fb-diag" name="diag" checked/);
+  assert.match(off, /data-fb-diag-why>/, "примітка видима");
+  assert.ok(off.includes(t("fbDiagOff")));
+  const on = feedbackDialogHTML({ shot: { available: false, reasonKey: "fbShotNone" }, previewText: "{}" });
+  assert.match(on, /<input type="checkbox" id="fb-diag" name="diag" checked/);
+  assert.match(on, /data-fb-diag-why hidden>/);
+});
+
+test("діалог: знімок — справжня мініатюра <img> з /shot, alt зі словника, прихована поки не прикладено; причина лишається в розмітці", () => {
+  const url = "/shot?it=it1&node=home";
+  const base = { shotUrl: url, previewText: "{}" };
+  const none = feedbackDialogHTML({ ...base, shot: { available: false, reasonKey: "fbShotNone" } });
+  assert.match(none, /<img class="fb-thumb" data-fb-thumb src="\/shot\?it=it1&amp;node=home" alt="[^"]+"[^>]* hidden>/);
+  assert.match(none, /<input type="checkbox" id="fb-shot" name="shot" disabled/);
+  assert.match(none, /data-fb-shot-why>/, "причина видима, поки знімка нема");
+  const avail = feedbackDialogHTML({ ...base, shot: { available: true, bytes: 900 }, includeShot: true });
+  assert.doesNotMatch(avail, /<img class="fb-thumb"[^>]* hidden>/, "прикладено — мініатюра видима");
+  assert.match(avail, /data-fb-shot-why hidden>/);
+  assert.match(avail, /<input type="checkbox" id="fb-shot" name="shot" checked aria-describedby/);
+  assert.ok(!feedbackDialogHTML({ previewText: "{}", shot: { available: true, bytes: 1 } }).includes("fb-thumb"), "без адреси — без <img>");
+});
+
+test("fbWhatHint переписано чесно в обох мовах", () => {
+  assert.equal(DICT.uk.fbWhatHint, "Шляхи, ключі, номери й e-mail у діагностиці приховано. Перегляньте нижче, що саме буде надіслано.");
+  assert.match(DICT.en.fbWhatHint, /hidden[\s\S]*exactly what will be sent/);
+  for (const lang of ["uk", "en"]) assert.doesNotMatch(DICT[lang].fbWhatHint, /замасковано|masked|не піде|not sent/);
+});
+
+test("app.js: перегляд без diag_hash не годиться; 409 показує новий перегляд; знімок знову вмикається після перемальовки", () => {
+  const fb = appJs.slice(appJs.indexOf("async function fetchFeedbackPreview"), appJs.indexOf("async function loadTeamsMute"));
+  assert.match(fb, /typeof r\.body\.diag_hash === 'string'/);
+  assert.match(fb, /diagHash: preview\?\.diag_hash/);
+  assert.match(fb, /r\.status === 409\) \{[\s\S]*previewFromConflict\(preview, b\)[\s\S]*t\('fbDiagChanged'\)/);
+  assert.match(fb, /previewFailed: !preview/);
+  assert.match(fb, /cb\.disabled = !shot\.available;/, "чекбокс знімка вмикається, коли знімок зʼявився");
+  assert.match(fb, /sess\.shotUrl\(\)/);
+});
+
+/* Кнопка «Відгук» стоїть за ключем `update` у стані смуги/палітри: без нього вона зникає мовчки (еталони ЛІГИ його не мають).
+   Поведінкового гону `barState()` тут нема (він читає десятки змінних модуля app.js), тож — текст-пін обох функцій. */
+test("barState() і paletteState() ЗАВЖДИ несуть ключ update (від нього залежить кнопка «Відгук»)", () => {
+  const body = (name) => {
+    const m = new RegExp(`function ${name}\\(`).exec(appJs);
+    assert.ok(m, `нема ${name}`);
+    const open = appJs.indexOf("{", appJs.indexOf(")", m.index));
+    let depth = 0;
+    for (let i = open; i < appJs.length; i += 1) {
+      if (appJs[i] === "{") depth += 1;
+      else if (appJs[i] === "}") { depth -= 1; if (depth === 0) return appJs.slice(open, i + 1); }
+    }
+    throw new Error("немає закриття");
+  };
+  assert.match(body("barState"), /^\s{4}update: updateInfo,$/m, "barState без update — кнопка зникла б");
+  assert.match(body("paletteState"), /^\s{4}update: st\.update,$/m, "paletteState без update — ⌘K «Баг / ідея» зникло б");
+  const model = readFileSync(path.join(APP, "bar-model.js"), "utf8");
+  assert.match(model, /s\.update === undefined \? \[\] : \[\{ id: "feedback", tier: 0 \}\]/);
 });

@@ -1810,6 +1810,8 @@ body:not(.home-open) .cn-drawer{display:none}
 .fb textarea[aria-invalid="true"]{border-color:var(--bad-ink)}
 .fb .fb-opts{gap:8px}
 .fb .fb-why{font-size:12px;line-height:1.4;color:var(--g600)}
+.fb .fb-why[hidden],.fb .fb-thumb[hidden]{display:none}
+.fb .fb-thumb{display:block;max-width:100%;max-height:120px;object-fit:contain;align-self:flex-start;border:1px solid var(--g450);border-radius:6px;background:var(--g50)}
 .fb .fb-preview summary{cursor:pointer;font-weight:600;color:var(--g700)}
 .fb .fb-hint{margin:6px 0 0;font-size:12px;line-height:1.4;color:var(--g600)}
 .fb .fb-pre{margin:6px 0 0;max-height:220px;overflow:auto;padding:8px 10px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
