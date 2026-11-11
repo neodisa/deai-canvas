@@ -262,7 +262,7 @@ class Outbox(Base):
         with open(path, encoding='utf-8') as f:
             rec = json.load(f)
         self.assertEqual(sorted(rec), sorted(['id', 'created_at', 'kind', 'text', 'contact', 'version', 'os', 'diag', 'shot_path', 'attempts', 'last_error']))
-        self.assertEqual((rec['kind'], rec['contact'], rec['attempts'], rec['last_error']), ('bug', 'a@example.com', 1, 'http-503'))
+        self.assertEqual((rec['kind'], rec['contact'], rec['attempts'], rec['last_error']), ('bug', 'a@example.com', 0, 'http-503'))        # мережа лежить — спробу не рахуємо
         self.assertTrue(re.match(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$', rec['created_at']))
 
     def test_shot_bytes_file_is_private_too(self):
@@ -280,13 +280,92 @@ class Outbox(Base):
         self.assertEqual(sent, {first['id']})
         self.assertEqual((self.box('outbox'), self.box('sent')), ([], [first['id'] + '.json']))
 
-    def test_submit_flushes_the_backlog_after_the_new_one(self):
+    def test_submit_tries_only_its_own_record_the_backlog_is_the_background_jobs(self):
         self.configure()
         a = feedback.submit(clean(), {}, sender=self.sender(FakeOpener(default=503)))
-        b = feedback.submit(clean(), {}, sender=self.sender(FakeOpener(default=201)))
+        op = FakeOpener(default=201)
+        b = feedback.submit(clean(), {}, sender=self.sender(op))
         self.assertEqual(b['state'], 'sent')
-        self.assertEqual(self.box('outbox'), [], 'решта черги дочищена тим самим проходом')
-        self.assertEqual(sorted(self.box('sent')), sorted([a['id'] + '.json', b['id'] + '.json']))
+        self.assertEqual(len(op.calls), 1, 'запит торкнувся лише свого запису')
+        self.assertEqual((self.box('outbox'), self.box('sent')), ([a['id'] + '.json'], [b['id'] + '.json']))
+        self.assertEqual(self.ob.flush(self.sender(FakeOpener(default=201))), {a['id']})       # фоновий прохід бере хвіст
+
+    def _rec(self, **kw):
+        return dict({'id': str(uuid.uuid4()), 'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'kind': 'bug',
+                     'text': 'Дуже важливий текст відгуку', 'contact': None, 'version': '0.23.0', 'os': 'x', 'diag': {}, 'shot_path': None,
+                     'attempts': 0, 'last_error': ''}, **kw)
+
+    def _attempts(self, rid, bucket='outbox'):
+        with open(os.path.join(self.home, 'feedback', bucket, rid + '.json'), encoding='utf-8') as f:
+            return json.load(f)['attempts']
+
+    def test_transient_failures_never_count_toward_the_attempt_cap(self):
+        r = self._rec()
+        self.ob.add(r)
+        for _ in range(25):
+            self.ob.flush(self.sender(FakeOpener(default=503)))
+        self.assertEqual((self.box('outbox'), self.box('failed')), ([r['id'] + '.json'], []))
+        self.assertEqual(self._attempts(r['id']), 0)
+        self.assertEqual(self.ob.flush(self.sender(FakeOpener(default=201))), {r['id']})       # мережа повернулась — іде
+
+    def test_only_permanent_failures_count_and_cap_at_20_then_failed(self):
+        r = self._rec()
+        self.ob.add(r)
+        for n in range(20):
+            self.ob.flush(self.sender(FakeOpener(default=400)))
+            self.assertEqual(self._attempts(r['id']), n + 1)
+        op = FakeOpener()
+        self.ob.flush(self.sender(op))
+        self.assertEqual((op.calls, self.box('outbox'), self.box('failed')), ([], [], [r['id'] + '.json']))
+
+    def test_expiry_is_by_age_only_even_with_zero_attempts(self):
+        old = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 31 * 24 * 3600))
+        young = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 29 * 24 * 3600))
+        a, b = self._rec(created_at=old), self._rec(created_at=young)
+        self.ob.add(a)
+        self.ob.add(b)
+        self.ob.flush(self.sender(FakeOpener(default=503)))
+        self.assertEqual((self.box('failed'), self.box('outbox')), ([a['id'] + '.json'], [b['id'] + '.json']))
+
+    def test_state_is_sent_even_when_moving_to_sent_fails(self):
+        r = self._rec()
+        self.ob.add(r)
+        op = FakeOpener()
+        with mock.patch.object(feedback.Outbox, 'move', side_effect=OSError('disk full')):
+            self.assertEqual(self.ob.flush(self.sender(op)), {r['id']})
+        self.assertEqual(self.ob.state_of(r['id']), 'sent', 'успіх записано першим')
+        self.assertEqual(self.box('outbox'), [r['id'] + '.json'], 'файл лишився в outbox')
+        self.assertEqual(self.ob.pending(), [], 'уже надісланий запис не повторюємо')
+        self.ob.flush(self.sender(op))
+        self.assertEqual(len(op.calls), 1)
+
+    def test_lone_surrogates_and_nul_never_raise_and_one_bad_record_never_blocks_the_queue(self):
+        bad = self._rec(text='abc \ud800 def', contact='a\x00b')
+        good = self._rec(created_at='2999-01-01T00:00:00Z')
+        self.assertTrue(self.ob.add(bad))
+        self.assertTrue(self.ob.add(good))
+        with open(os.path.join(self.home, 'feedback', 'outbox', bad['id'] + '.json'), 'rb') as f:
+            rec = json.loads(f.read().decode('utf-8'))
+        self.assertEqual((rec['text'], rec['contact']), ('abc ? def', 'ab'))
+        self.assertEqual(feedback.validate({'kind': 'bug', 'text': 'abc \ud800 def x', 'contact': 'a\x00b'})[0]['text'], 'abc ? def x')
+        self.assertEqual(feedback.validate({'kind': 'bug', 'text': 'a\x00b' * 5})[0]['text'], 'ab' * 5)
+        # неочікуваний виняток на записі: Permanent, решта черги йде
+        class Boom(feedback.SupabaseSender):
+            def send_row(self, row):
+                if row['id'] == bad['id']:
+                    raise UnicodeEncodeError('utf-8', 'x', 0, 1, 'boom')
+                super().send_row(row)
+        self.assertEqual(self.ob.flush(Boom(URL, KEY, opener=FakeOpener())), {good['id']})
+        self.assertEqual(self._attempts(bad['id']), 1)
+        # і справжній send_row на самотньому сурогаті не кидає
+        feedback.SupabaseSender(URL, KEY, opener=FakeOpener()).send_row(dict(bad, text='abc \ud800'))
+
+    def test_add_removes_the_shot_when_the_json_write_fails(self):
+        r = self._rec()
+        with mock.patch.object(feedback.Outbox, '_write_json', side_effect=OSError('no space')):
+            self.assertFalse(self.ob.add(r, shot=(WEBP, 'webp')))
+        self.assertEqual([n for n in self.box() if not n.endswith('.json')], [], 'файл знімка-сирота прибрано')
+        self.assertEqual(self.ob.shot_of(r['id']), (WEBP, 'webp'), 'а в памʼяті запис живий')
 
     def test_transient_failure_stops_the_pass_after_one_request(self):
         self.configure()

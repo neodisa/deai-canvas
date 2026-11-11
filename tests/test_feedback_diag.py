@@ -40,22 +40,36 @@ class ErrorRing(unittest.TestCase):
 
     def test_ring_keeps_last_50_newest_last(self):
         for i in range(70):
-            feedback.record_error('/api/x', ValueError('e%d' % i))
+            feedback.record_error('/api/r%d' % i, ValueError('e%d' % i))
         got = feedback.server_errors()
         self.assertEqual(len(got), 50)
-        self.assertEqual((got[0]['msg'], got[-1]['msg']), ('e20', 'e69'))
+        self.assertEqual((got[0]['route'], got[-1]['route']), ('/api/r20', '/api/r69'))
 
-    def test_entry_shape_route_type_message_redacted(self):
-        feedback.record_error('/api/task?it=it1&secret=zzz', OSError('open %s/x failed' % os.path.expanduser('~') + ' ' + 'a' * 400))
+    def test_unknown_exception_stores_type_and_inner_app_frame_never_the_text(self):
+        try:
+            feedback.validate(None)                     # AttributeError зсередини app/feedback.py
+        except AttributeError as e:
+            feedback.record_error('/api/task?it=it1&secret=zzz', e)
         e = feedback.server_errors()[-1]
-        self.assertEqual((e['route'], e['type']), ('/api/task', 'OSError'))
-        self.assertNotIn(os.path.expanduser('~'), e['msg'])
-        self.assertLessEqual(len(e['msg']), 300)
-        self.assertNotIn('secret', json.dumps(e))
+        self.assertEqual((e['route'], e['type']), ('/api/task', 'AttributeError'))
+        self.assertRegex(e['msg'], r'^at feedback\.py:\d+$')
+        self.assertNotIn('NoneType', json.dumps(e), 'текст винятку не зберігається')
+        feedback.record_error('/api/x', ValueError('secret detail /Users/me/ClientB-Acme/x.json 12345678'))
+        self.assertEqual(feedback.server_errors()[-1]['msg'], '', 'без кадру всередині застосунку — порожньо')
+
+    def test_oserror_keeps_the_errno_name_only_never_the_filename(self):
+        import errno
+        exc = OSError(errno.ENOENT, 'No such file', '/Users/me/ClientB-Acme/x/y.json')
+        feedback.record_error('/api/x', exc)
+        e = feedback.server_errors()[-1]
+        self.assertEqual((e['type'], e['msg']), ('FileNotFoundError', 'ENOENT'))
+        feedback.record_error('/api/x', PermissionError(errno.EACCES, 'denied', '/Volumes/Work/ClientB/z.py'))
+        self.assertEqual(feedback.server_errors()[-1]['msg'], 'EACCES')
+        self.assertNotIn('ClientB', json.dumps(feedback.server_errors()))
 
     def test_route_never_carries_names(self):
-        for path, want in (('/it-assets/it1/секретна-назва/x.png', '/it-assets'), ('/t/some-task/api/x', '/api/x'),
-                           ('/api/a/b/c/d', '/api/a/b'), ('/api/спільний/x', '/api/*/x'), ('/', '/'), ('', '/')):
+        for path, want in (('/it-assets/it1/секретна-назва/x.png', '/it-assets'), ('/t/some-task/api/x', '/api/x'), ('/api/task/it1/node/9', '/api/task'),
+                           ('/api/a/b/c/d', '/api/a'), ('/api/спільний/x', '/api/*'), ('/api', '/api'), ('/', '/'), ('', '/')):
             self.assertEqual(feedback.route_of(path), want, path)
 
     def test_thread_safe(self):
@@ -128,6 +142,35 @@ class BuildDiag(unittest.TestCase):
                        liga_fixture.JIRA_BASE, 'alpha@example.com'):
             self.assertNotIn(needle, raw, needle)
 
+    def test_foreign_space_paths_never_leave_the_machine(self):
+        """Помилка записана під ІНШИМ простором, відгук зібраний з цього: імена чужих тек і користувача в корисному навантаженні відсутні."""
+        feedback.record_error('/api/x', OSError('boom at /Users/me/ClientB-Acme/x/y.json'), code=None)
+        for raw in ('/Users/me/ClientB-Acme/x/y.json', '/Volumes/Work/ClientB/z.py', 'C:\\Users\\Іван\\proj\\a.py', '\\\\srv\\sh\\ClientB\\q.py',
+                    'file:///Users/me/ClientB-Acme/f.json', '%2FUsers%2Fme%2FClientB-Acme%2Fg.json'):
+            feedback.record_error('/api/x', RuntimeError('x'))
+        client = [{'msg': 'fetch failed for %s' % raw, 'file': 'app/a.js', 'line': 1} for raw in
+                  ('/Users/me/ClientB-Acme/x/y.json', '/Volumes/Work/ClientB/z.py', 'C:\\Users\\Іван\\proj\\a.py', '"/Users/me/Client B/e.py"')]
+        payload = json.dumps(feedback.build_diag(self.ctx(), client), ensure_ascii=False)
+        for needle in ('ClientB', 'Client B', 'Acme', '/Users/', 'Іван', 'proj', '/Volumes', 'Work/'):
+            self.assertNotIn(needle, payload, needle)
+        self.assertIn('…/y.json', payload)
+        self.assertIn('…/z.py', payload)
+        self.assertIn('…/a.py', payload)
+
+    def test_build_diag_recollapses_ring_entries_defence_in_depth(self):
+        """Навіть запис у кільці, що потрапив туди неочищеним (старий код, шов), у діагностику йде зі згорнутими шляхами."""
+        with feedback._RING_LOCK:
+            feedback._RING.append({'route': '/api/x', 'type': 'OSError', 'msg': 'open /Users/me/ClientB-Acme/x/y.json'})
+        payload = json.dumps(feedback.build_diag(self.ctx()), ensure_ascii=False)
+        self.assertNotIn('ClientB-Acme', payload)
+        self.assertIn('…/y.json', payload)
+
+    def test_client_messages_pass_the_extended_redaction(self):
+        got = feedback.sanitize_client_errors([{'msg': 'ЄДРПОУ 12345678 ІПН 1234567890 UA213223130000026007233566001 password=hunter2', 'file': '', 'line': 1}])
+        m = got[0]['msg']
+        for needle in ('12345678', '1234567890', 'UA2132', 'hunter2'):
+            self.assertNotIn(needle, m)
+
     def test_roles_are_ids_only_and_own_modules_are_anonymised(self):
         d = feedback.build_diag(self.ctx())
         self.assertEqual(d['space']['roles']['comments'], 'supabase-comments')
@@ -153,7 +196,7 @@ class BuildDiag(unittest.TestCase):
         got = feedback.sanitize_client_errors([{'msg': 'z' * 900, 'file': 'http://evil/x.js', 'line': 'NaN', 'extra': 'x'},
                                                {'msg': 'ok', 'file': 'app/ok.js', 'line': -3},
                                                {'msg': 'a', 'file': 'app/../../etc/passwd', 'line': 7}])
-        self.assertEqual(len(got[0]['msg']), 300)
+        self.assertEqual(len(got[0]['msg']), 200, 'клієнтський msg ≤ 200')
         self.assertEqual((got[0]['file'], got[0]['line']), ('', None))
         self.assertEqual(sorted(got[0]), ['file', 'line', 'msg'])
         self.assertEqual((got[1]['file'], got[1]['line']), ('app/ok.js', None))
@@ -196,7 +239,7 @@ class BuildDiag(unittest.TestCase):
         feedback.record_error('/api/x', RuntimeError('boom'))
         with mock.patch.object(feedback.redact, 'text', spy):
             feedback.build_diag(self.ctx(), [{'msg': 'client-msg', 'file': 'app/a.js', 'line': 1}])
-        for want in ('0.23.0', 'client-msg', 'boom', 'x', 'it1', 'home', 'canvas'):
+        for want in ('0.23.0', 'client-msg', 'RuntimeError', '/api/x', 'x', 'it1', 'home', 'canvas'):
             self.assertIn(want, calls)
 
 
@@ -241,8 +284,8 @@ class Hooks(unittest.TestCase):
                 self.post()
         e = feedback.server_errors()[-1]
         self.assertEqual((e['route'], e['type']), ('/api/feedback-preview', 'RuntimeError'))
-        self.assertNotIn(os.path.expanduser('~'), e['msg'])
-        self.assertIn('secret detail', e['msg'])
+        self.assertNotIn('secret detail', json.dumps(e), 'текст винятку не потрапляє в кільце')
+        self.assertRegex(e['msg'], r'^at serve\.py:\d+$')
 
     def test_disconnects_not_recorded(self):
         for exc in (BrokenPipeError(), ConnectionResetError(), ConnectionAbortedError()):

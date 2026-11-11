@@ -6,6 +6,8 @@
 import base64
 import calendar
 import collections
+import errno
+import hashlib
 import http.client
 import json
 import os
@@ -29,10 +31,12 @@ from atomic_io import atomic_write_json
 
 ERRORS_MAX = 50              # кільце сервера
 CLIENT_ERRORS_MAX = 20       # кільце клієнта (береться з тіла запиту)
-MSG_MAX = 300
+MSG_MAX = 300                # повідомлення сервера (тепер: код + кадр, не текст)
+CLIENT_MSG_MAX = 200         # повідомлення клієнта (вільний текст: коротше й через `redact.text(collapse=True)`)
 DIAG_MAX_BYTES = 64 * 1024
 SHOT_MAX_BYTES = 2 * 1024 * 1024
 
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
 _RING = collections.deque(maxlen=ERRORS_MAX)
 _RING_LOCK = threading.Lock()
 
@@ -48,31 +52,51 @@ _CODE_RE = re.compile(r'^[a-z0-9-]{1,40}$')
 # --------------------------------------------------------------------------------- кільце помилок сервера
 
 def route_of(path):
-    """Маршрут БЕЗ query, без префікса `/t/<id>` і без імен: `/api/…` — перші три сегменти, решта — лише перший (`/it-assets/it1/назва/x` →
-    `/it-assets`). Сегмент не з `[A-Za-z0-9_.-]` (назва кирилицею, пробіли) → `*`."""
+    """Лише ІМʼЯ маршруту, без query, префікса `/t/<id>`, id й зайвих сегментів: `/api/<name>`, інші — перший сегмент (`/it-assets/it1/назва/x`
+    → `/it-assets`, `/api/task/it1/x` → `/api/task`). Сегмент не з `[A-Za-z0-9_.-]` (назва кирилицею, пробіли) → `*`."""
     p = str(path or '').split('?', 1)[0].split('#', 1)[0]
     p = _TASK_PREFIX.sub('', p)
     parts = [s for s in p.split('/') if s]
     if not parts:
         return '/'
-    keep = 3 if parts[0] == 'api' else 1
+    keep = 2 if parts[0] == 'api' else 1
     segs = [s if _SEG_RE.match(s) else '*' for s in parts[:keep]]
     return '/' + '/'.join(segs)
 
 
+def _app_frame(exc):
+    """`файл.py:рядок` ВНУТРІШНЬОГО кадру трасування (останній, що лежить у теці застосунку) або `''`. Лише імʼя файла: тека не потрібна."""
+    last = ''
+    tb = getattr(exc, '__traceback__', None)
+    while tb is not None:
+        try:
+            fn = os.path.abspath(tb.tb_frame.f_code.co_filename)
+            if fn.startswith(_APP_DIR + os.sep):
+                last = '%s:%d' % (os.path.basename(fn), tb.tb_lineno)
+        except Exception:  # noqa: BLE001
+            pass
+        tb = tb.tb_next
+    return last
+
+
 def record_error(path, exc, code=None):
-    """Записати виняток у кільце. З `code` (операційна відмова: шляхи в тексті) — лише код, БЕЗ `str(exc)`; без коду — повідомлення
-    пройшло `redact.text` і обрізане до 300 символів."""
+    """Записати виняток у кільце. ⛔ Текст винятку НІКОЛИ не зберігається (там шляхи, імена файлів, фрагменти даних): лише ТИП і внутрішній
+    кадр `файл.py:рядок`; для `OSError` — ще імʼя errno (`ENOENT`), без імені файла. З `code` (операційна відмова) — лише код."""
     entry = {'route': route_of(path), 'type': redact.text(type(exc).__name__, limit=80)}
     if code is not None:
         entry['code'] = redact.text(code, limit=60)
         entry['msg'] = ''
     else:
+        parts = []
         try:
-            raw = str(exc)
+            if isinstance(exc, OSError) and isinstance(exc.errno, int):
+                parts.append(errno.errorcode.get(exc.errno, ''))
+            frame = _app_frame(exc)
+            if frame:
+                parts.append('at ' + frame)
         except Exception:  # noqa: BLE001
-            raw = ''
-        entry['msg'] = redact.text(raw, limit=MSG_MAX)
+            pass
+        entry['msg'] = redact.text(' '.join(p for p in parts if p), limit=MSG_MAX, collapse=True)
     with _RING_LOCK:
         _RING.append(entry)
 
@@ -104,8 +128,8 @@ def _with_home_forms(roots):
 
 
 def sanitize_client_errors(raw, roots=()):
-    """Кільце клієнта з тіла запиту → не більше 20 найновіших `{msg, file, line}`; недовірене: не-словники відкинуто, `msg` ≤ 300 і через
-    `redact.text`, `file` лише `app/…`, `line` — невідʼємне ціле."""
+    """Кільце клієнта з тіла запиту → не більше 20 найновіших `{msg, file, line}`; недовірене: не-словники відкинуто, `msg` ≤ 200 і через
+    `redact.text(collapse=True)` (шляхи → `…/імʼя`), `file` лише `app/…`, `line` — невідʼємне ціле."""
     if not isinstance(raw, list):
         return []
     out = []
@@ -117,7 +141,7 @@ def sanitize_client_errors(raw, roots=()):
         line = e.get('line')
         if isinstance(line, bool) or not isinstance(line, int) or not 0 <= line <= 10 ** 7:
             line = None
-        out.append({'msg': redact.text(e.get('msg'), roots=roots, limit=MSG_MAX), 'file': f if _FILE_RE.match(f) and '..' not in f else '', 'line': line})
+        out.append({'msg': redact.text(e.get('msg'), roots=roots, limit=CLIENT_MSG_MAX, collapse=True), 'file': f if _FILE_RE.match(f) and '..' not in f else '', 'line': line})
     return out[-CLIENT_ERRORS_MAX:]
 
 
@@ -168,7 +192,10 @@ def build_diag(ctx, client_errors=None):
     lang = ctx.get('lang')
     server = server_errors()
     for e in server:                      # повторно, з коренями простору: ідемпотентно
-        e['msg'] = redact.text(e.get('msg'), roots=roots, limit=MSG_MAX)
+        e['msg'] = redact.text(e.get('msg'), roots=roots, limit=MSG_MAX, collapse=True)
+        for k in ('route', 'type', 'code'):
+            if k in e:
+                e[k] = redact.text(e[k], limit=80)
     diag = {
         'version': redact.text(version, limit=40),
         'os': {'system': redact.text(platform.system(), limit=40), 'release': redact.text(platform.release(), limit=60),
@@ -181,6 +208,12 @@ def build_diag(ctx, client_errors=None):
     if len(json.dumps(diag, ensure_ascii=False).encode('utf-8')) > DIAG_MAX_BYTES:
         diag['errors'] = {'server': [], 'client': [], 'dropped': True}
     return diag
+
+
+def diag_hash(diag):
+    """sha256 (hex) канонічного JSON діагностики — відбиток того, що саме людина бачила в «Що буде надіслано»."""
+    raw = json.dumps(diag, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(raw.encode('utf-8', 'replace')).hexdigest()
 
 
 def shot_info(path):
@@ -313,6 +346,21 @@ def config(env=None, home=None):
 
 # --------------------------------------------------------------------------------- перевірка запиту
 
+def scrub_text(s):
+    """Самотні сурогати → `?`, NUL геть: такий рядок не кодується в UTF-8 і Postgres його не приймає."""
+    return s.encode('utf-8', 'replace').decode('utf-8').replace('\x00', '')
+
+
+def scrub_obj(o):
+    if isinstance(o, str):
+        return scrub_text(o)
+    if isinstance(o, dict):
+        return {(scrub_text(k) if isinstance(k, str) else k): scrub_obj(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [scrub_obj(v) for v in o]
+    return o
+
+
 def validate(payload):
     """`(чисте, None)` або `(None, (код, текст))`. `kind` ∈ bug/idea; `text` ≥ 10 (після trim) і ≤ 10 000; `contact` ≤ 200; прапорці — bool."""
     kind = payload.get('kind')
@@ -321,6 +369,7 @@ def validate(payload):
     text = payload.get('text')
     if not isinstance(text, str):
         return None, ('text-too-short', 'text is required')
+    text = scrub_text(text)
     if len(text.strip()) < TEXT_MIN:
         return None, ('text-too-short', 'text is too short')
     if len(text) > TEXT_MAX:
@@ -328,7 +377,7 @@ def validate(payload):
     contact = payload.get('contact')
     if contact is not None and not isinstance(contact, str):
         return None, ('bad-contact', 'contact must be a string')
-    contact = (contact or '').strip()
+    contact = scrub_text(contact or '').strip()
     if len(contact) > CONTACT_MAX:
         return None, ('contact-too-long', 'contact is too long')
     flags = {}
@@ -369,7 +418,8 @@ class Outbox:
     def __init__(self, home_fn=spaces.home):
         self.home_fn = home_fn
         self._lock = threading.RLock()          # короткий: структура черги
-        self._send_lock = threading.Lock()      # один прохід відправки за раз: кожен запис іде в мережу рівно раз
+        self._busy = set()                      # id записів, що зараз відправляються: кожен іде в мережу рівно раз (і фон, і запит)
+        self._sent_ok = set()                   # успіх фіксується ПЕРШИМ: навіть якщо перенос у `sent/` не вдався, запис «надіслано»
         self._mem = {'outbox': {}, 'sent': {}, 'failed': {}}
         self._mem_shots = {}
 
@@ -397,9 +447,12 @@ class Outbox:
 
     def add(self, rec, shot=None):
         """Записати відгук у `outbox`. `shot` — `(байти, 'webp'|'png')` або `None`. Повертає `True`, коли запис лягає на ДИСК
-        (`False` — лише памʼять: диск недоступний чи заборонений законом ізоляції)."""
+        (`False` — лише памʼять: диск недоступний чи заборонений законом ізоляції). Рядки очищені від самотніх сурогатів і NUL: кодування
+        ніколи не кидає. Не вдався запис JSON — файл скриншота, що вже лежить, прибирається (сирота без запису)."""
+        rec = scrub_obj(rec)
         with self._lock:
             if self._on_disk():
+                shot_file = None
                 try:
                     self._ensure()
                     if shot:
@@ -408,7 +461,8 @@ class Outbox:
                             with os.fdopen(fd, 'wb') as f:
                                 f.write(shot[0])
                             os.chmod(tmp, FILE_MODE)
-                            os.replace(tmp, os.path.join(self._dir('outbox'), rec['id'] + '.' + shot[1]))
+                            shot_file = os.path.join(self._dir('outbox'), rec['id'] + '.' + shot[1])
+                            os.replace(tmp, shot_file)
                         except BaseException:
                             try:
                                 os.remove(tmp)
@@ -417,8 +471,12 @@ class Outbox:
                             raise
                     self._write_json('outbox', rec)
                     return True
-                except OSError:
-                    pass
+                except (OSError, ValueError, TypeError):
+                    if shot_file:
+                        try:
+                            os.remove(shot_file)
+                        except OSError:
+                            pass
             self._mem['outbox'][rec['id']] = dict(rec)
             if shot:
                 self._mem_shots[rec['id']] = shot
@@ -439,6 +497,7 @@ class Outbox:
                         if rec.get('id') == n[:-5]:
                             out.append(rec)
             out.extend(dict(r) for r in self._mem['outbox'].values())
+            out = [r for r in out if r.get('id') not in self._sent_ok]
             return sorted(out, key=lambda r: str(r.get('created_at')))
 
     def _shot_path(self, rid):
@@ -473,6 +532,7 @@ class Outbox:
                     pass
 
     def update(self, rec):
+        rec = scrub_obj(rec)
         with self._lock:
             if rec['id'] in self._mem['outbox']:
                 self._mem['outbox'][rec['id']] = dict(rec)
@@ -480,11 +540,12 @@ class Outbox:
             if self._on_disk():
                 try:
                     self._write_json('outbox', rec)
-                except OSError:
+                except (OSError, ValueError, TypeError):
                     pass
 
     def move(self, rec, bucket):
         """`outbox` → `sent`/`failed`: файл переноситься, НЕ видаляється; байти скриншота після `sent` вже не потрібні."""
+        rec = scrub_obj(rec)
         with self._lock:
             if rec['id'] in self._mem['outbox']:
                 self._mem[bucket][rec['id']] = dict(self._mem['outbox'].pop(rec['id']), **rec)
@@ -497,12 +558,14 @@ class Outbox:
                     os.remove(os.path.join(self._dir('outbox'), rec['id'] + '.json'))
                     if bucket == 'sent':
                         self._drop_shot(rec['id'])
-                except OSError:
+                except (OSError, ValueError, TypeError):
                     pass
 
     def state_of(self, rid):
         """`'sent'` | `'failed'` | `'outbox'` | `None`."""
         with self._lock:
+            if rid in self._sent_ok:
+                return 'sent'
             for b in ('sent', 'failed', 'outbox'):
                 if rid in self._mem[b]:
                     return b
@@ -511,14 +574,34 @@ class Outbox:
             return None
 
     # --- відправка ---
-    def flush(self, sender, first=None, now=time.time):
-        """Один прохід: спершу `first` (щойно доданий), далі решта від найстарішої. Збій мережі (`Transient`) зупиняє прохід — решта теж не
-        дійде. Запис старший за 30 днів чи з 20 невдалими спробами — у `failed/` (цілий). Повертає множину id, надісланих цим проходом."""
+    def _claim(self, rid):
+        """Забрати запис на відправку: `False` — його вже шле інший потік або він уже не в `outbox` (хтось устиг раніше)."""
+        with self._lock:
+            if rid in self._busy or self.state_of(rid) != 'outbox':
+                return False
+            self._busy.add(rid)
+            return True
+
+    def _release(self, rid):
+        with self._lock:
+            self._busy.discard(rid)
+
+    def flush(self, sender, first=None, now=time.time, only=None):
+        """Один прохід: `only` — лише цей запис (запит НЕ чекає на чергу: хвіст дочищає фоновий потік); інакше `first` (щойно доданий)
+        першим, далі решта від найстарішої. Збій мережі (`Transient`) зупиняє прохід і НЕ рахується в спроби (мережа лежить — не провина
+        запису); лише `Permanent` (4xx, нечитабельний запис) додає спробу, 20 спроб — `failed/`. Дожиття — лише за віком (30 днів).
+        Будь-який інший виняток на записі = `Permanent`: один поганий запис не блокує чергу. Повертає множину id, надісланих цим проходом."""
         sent = set()
-        with self._send_lock:
-            recs = self.pending()
+        recs = self.pending()
+        if only is not None:
+            recs = [r for r in recs if r.get('id') == only]
+        else:
             recs.sort(key=lambda r: 0 if r.get('id') == first else 1)       # стабільно: далі порядок за віком
-            for rec in recs:
+        for rec in recs:
+            rid = rec.get('id')
+            if not self._claim(rid):
+                continue
+            try:
                 if _age(rec, now()) > MAX_AGE_S or int(rec.get('attempts') or 0) >= MAX_ATTEMPTS:
                     self.move(dict(rec, failed_reason='expired'), 'failed')
                     continue
@@ -527,13 +610,23 @@ class Outbox:
                 try:
                     self._deliver(sender, rec)
                 except Transient as e:
-                    self.update(dict(rec, attempts=int(rec.get('attempts') or 0) + 1, last_error=str(e)))
+                    self.update(dict(rec, last_error=str(e)))
                     break
                 except Permanent as e:
                     self.update(dict(rec, attempts=int(rec.get('attempts') or 0) + 1, last_error=str(e)))
                     continue
-                self.move(dict(rec, sent_at=_utc_now(now())), 'sent')
-                sent.add(rec['id'])
+                except Exception:  # noqa: BLE001 — кодування, неочікуване: цей запис не повинен заблокувати решту
+                    self.update(dict(rec, attempts=int(rec.get('attempts') or 0) + 1, last_error='error'))
+                    continue
+                with self._lock:
+                    self._sent_ok.add(rid)                                  # успіх — ПЕРШИМ, до будь-якого файлового кроку
+                sent.add(rid)
+                try:
+                    self.move(dict(rec, sent_at=_utc_now(now())), 'sent')
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                self._release(rid)
         return sent
 
     def _deliver(self, sender, rec):
@@ -619,7 +712,7 @@ class SupabaseSender:
         raise Permanent('http-%d' % status)
 
     def send_row(self, row):
-        body = json.dumps({k: row.get(k) for k in ROW_COLUMNS}, ensure_ascii=False).encode('utf-8')
+        body = json.dumps(scrub_obj({k: row.get(k) for k in ROW_COLUMNS}), ensure_ascii=False).encode('utf-8', 'replace')
         status, _ = self._post('/rest/v1/feedback', body, {'Content-Type': 'application/json', 'Prefer': 'return=minimal'})
         self._classify(status)
 
@@ -631,7 +724,7 @@ class SupabaseSender:
 # --------------------------------------------------------------------------------- вхід
 
 def submit(clean, diag, shot=None, sender=None, now=time.time):
-    """Прийняти відгук: ЗАПИС у чергу — до мережі; далі одна спроба (щойно доданий — першим) і дочищення решти. `clean` — результат
+    """Прийняти відгук: ЗАПИС у чергу — до мережі; далі одна спроба для ЦЬОГО запису (решту черги дочищає фоновий потік: запит ніколи не чекає на хвіст). `clean` — результат
     `validate`; `diag` — вже зібрана діагностика (`{}`, коли людина зняла галочку); `shot` — `(байти, ext)` або `None`.
     Повертає `{id, state: 'sent'|'queued', reason?}`; `reason` ∈ `no-collector` | `network-blocked` | `offline` | `rejected` | `memory-only`."""
     rid = str(uuid.uuid4())
@@ -650,7 +743,7 @@ def submit(clean, diag, shot=None, sender=None, now=time.time):
         reason = 'no-collector'
     elif not isolation.isolated() or is_loopback(cfg['url']):
         sender = sender or SupabaseSender(cfg['url'], cfg['key'])
-        OUTBOX.flush(sender, first=rid, now=now)
+        OUTBOX.flush(sender, only=rid, now=now)         # лише СВІЙ запис: хвіст черги — справа фонового потоку
         st = OUTBOX.state_of(rid)
         if st == 'sent':
             return {'id': rid, 'state': 'sent'}

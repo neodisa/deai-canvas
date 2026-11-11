@@ -77,7 +77,12 @@ class FeedbackApi(unittest.TestCase):
         os.environ['DEAI_FEEDBACK_URL'], os.environ['DEAI_FEEDBACK_KEY'] = rx.url, 'sb_publishable_test'
         return rx
 
-    def call(self, body, origin=None, path='/api/feedback', raw=None, headers=None):
+    def call(self, body, origin=None, path='/api/feedback', raw=None, headers=None, hashed=True):
+        """`hashed`: перед відправкою з діагностикою людина «бачить» перегляд, тож `diag_hash` береться з нього (як робить інтерфейс)."""
+        if (hashed and raw is None and path == '/api/feedback' and isinstance(body, dict) and body.get('include_diag', True) is True
+                and 'diag_hash' not in body and origin in (None, 'http://localhost:8765', 'http://127.0.0.1:8765')):
+            _, pv = self.call(body, path='/api/feedback-preview', hashed=False)
+            body = dict(body, diag_hash=pv.get('diag_hash'))
         h = {'Content-Type': 'application/json', **(headers or {})}
         if origin:
             h['Origin'] = origin
@@ -218,16 +223,61 @@ class FeedbackApi(unittest.TestCase):
         self.assertEqual((st, body['state']), (200, 'sent'))
         self.assertIsNone(rx.rows()[1]['shot_path'])
 
-    def test_network_down_is_queued_not_an_error_and_the_next_call_delivers_the_backlog(self):
+    def test_network_down_is_queued_and_the_request_never_drains_the_backlog(self):
+        """Запит пробує ЛИШЕ свій запис: хвіст черги — справа фонового потоку (`flush_pending`), запит ніколи на нього не чекає."""
         rx = self.receiver(rest_status=503)
         st, first = self.call({'kind': 'bug', 'text': TEXT})
         self.assertEqual((st, first['ok'], first['state'], first['reason']), (200, True, 'queued', 'offline'))
         self.assertEqual(self.box(), [first['id'] + '.json'])
         rx.rest_status = 201
+        n = len(rx.requests)
         st, second = self.call({'kind': 'idea', 'text': TEXT + ' (другий)'})
         self.assertEqual(second['state'], 'sent')
+        self.assertEqual(len(rx.requests) - n, 1, 'другий запит торкнувся лише свого запису')
+        self.assertEqual([r['id'] for r in rx.rows()], [second['id']])
+        self.assertEqual(self.box('outbox'), [first['id'] + '.json'])
+        self.assertEqual(feedback.flush_pending(), 1)                        # фоновий прохід дочищає хвіст
         self.assertEqual(sorted(r['id'] for r in rx.rows()), sorted([first['id'], second['id']]))
         self.assertEqual((self.box('outbox'), len(self.box('sent'))), ([], 2))
+
+    def test_diag_hash_must_match_the_preview(self):
+        rx = self.receiver()
+        self.make_task()
+        body = {'kind': 'bug', 'text': TEXT, 'task': 'x', 'lang': 'uk', 'client_errors': [{'msg': 'a', 'file': 'app/a.js', 'line': 1}]}
+        st, pv = self.call(body, path='/api/feedback-preview')
+        self.assertEqual(sorted(pv), ['diag', 'diag_hash', 'ok', 'shot'])
+        self.assertEqual(pv['diag_hash'], feedback.diag_hash(pv['diag']))
+        self.assertRegex(pv['diag_hash'], r'^[0-9a-f]{64}$')
+        # нова помилка сервера після перегляду → 409 з новою діагностикою, нічого не записано й не надіслано
+        feedback.record_error('/api/x', RuntimeError('later'))
+        st, got = self.call(dict(body, diag_hash=pv['diag_hash']))
+        self.assertEqual((st, got['ok'], got['code']), (409, False, 'diag-changed'))
+        self.assertEqual(got['diag_hash'], feedback.diag_hash(got['diag']))
+        self.assertNotEqual(got['diag_hash'], pv['diag_hash'])
+        self.assertEqual((self.box(), self.box('sent'), rx.rows()), ([], [], []))
+        # хеш відсутній чи чужий → теж 409
+        for bad in ({}, {'diag_hash': 5}, {'diag_hash': 'x' * 64}):
+            self.assertEqual(self.call(dict(body, **bad), hashed=False)[1].get('code'), 'diag-changed', bad)
+        self.assertEqual(self.box(), [])
+        # свіжий хеш → відправка
+        st, ok = self.call(dict(body, diag_hash=got['diag_hash']), hashed=False)
+        self.assertEqual((st, ok['state']), (200, 'sent'))
+        # без діагностики хеш не потрібен
+        st, ok = self.call(dict(body, include_diag=False), hashed=False)
+        self.assertEqual((st, ok['state']), (200, 'sent'))
+
+    def test_lone_surrogates_and_nul_never_break_the_queue(self):
+        rx = self.receiver()
+        st, a = self.call({'kind': 'bug', 'text': TEXT + ' abc \ud800 def', 'contact': 'a\x00b \udfff'})
+        self.assertEqual((st, a['state']), (200, 'sent'), a)
+        row = rx.rows()[0]
+        self.assertEqual(row['text'], TEXT + ' abc ? def')
+        self.assertEqual(row['contact'], 'ab ?')
+        rx.close()
+        st, b = self.call({'kind': 'bug', 'text': TEXT + ' a\x00b \ud800'})
+        self.assertEqual((st, b['state']), (200, 'queued'))
+        with open(os.path.join(self.deai, 'feedback', 'outbox', b['id'] + '.json'), 'rb') as f:
+            json.loads(f.read().decode('utf-8'))
 
     def test_unreachable_receiver_is_queued(self):
         rx = self.receiver()

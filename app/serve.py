@@ -7148,12 +7148,14 @@ class Handler(SimpleHTTPRequestHandler):
         return feedback.build_diag(ctx, payload.get('client_errors')), shot
 
     def _feedback_preview(self, payload):
-        """`POST /api/feedback-preview` → `{ok, diag, shot: {available, bytes?, skipped?}}`: точно те, що піде з відгуком."""
+        """`POST /api/feedback-preview` → `{ok, diag, diag_hash, shot: {available, bytes?, skipped?}}`: точно те, що піде з відгуком;
+        `diag_hash` — sha256 канонічного JSON цієї діагностики (відправка звіряє його: «що показано = що піде»)."""
         diag, shot = self._feedback_collect(payload)
-        self._send_json({'ok': True, 'diag': diag, 'shot': feedback.shot_info(shot)})
+        self._send_json({'ok': True, 'diag': diag, 'diag_hash': feedback.diag_hash(diag), 'shot': feedback.shot_info(shot)})
 
     def _feedback(self, payload):
-        """`POST /api/feedback` → `{ok, id, state: 'sent'|'queued', number, reason?}`. Origin вже перевірено. Спершу запис у локальну чергу, потім одна
+        """`POST /api/feedback` → `{ok, id, state: 'sent'|'queued', number, reason?}`; `409 {ok:false, code:'diag-changed', diag, diag_hash, shot}`, коли
+        `include_diag` і `diag_hash` не збігається з перерахованим (або його нема). Origin вже перевірено. Спершу запис у локальну чергу, потім одна
         спроба надіслати; мережа ніколи не дає `ok:false` — лише `queued`. Діагностику збирає ТА САМА функція, що й «Що буде надіслано»;
         кадр клієнт називає (`task`/`it`/`node`), сервер перевіряє двома замками (`_shot_file`)."""
         clean, bad = feedback.validate(payload)
@@ -7161,6 +7163,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': False, 'code': bad[0], 'error': bad[1]}, status=400)
             return
         diag, shot_file = self._feedback_collect(payload)
+        if clean['include_diag']:
+            # «що показано = що піде»: діагностика змінилась від перегляду (нова помилка сервера…) або перегляду не було → 409 з новою
+            # діагностикою; клієнт показує її й просить натиснути «Надіслати» ще раз. Нічого не записано.
+            h = feedback.diag_hash(diag)
+            given = payload.get('diag_hash')
+            if not isinstance(given, str) or given != h:
+                self._send_json({'ok': False, 'code': 'diag-changed', 'error': 'diagnostics changed since the preview',
+                                 'diag': diag, 'diag_hash': h, 'shot': feedback.shot_info(shot_file)}, status=409)
+                return
         shot = None
         if clean['include_shot'] and shot_file and feedback.shot_info(shot_file).get('available'):
             try:

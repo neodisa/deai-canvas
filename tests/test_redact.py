@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app'))
 import redact  # noqa: E402
@@ -38,7 +39,7 @@ class Redact(unittest.TestCase):
     def test_innocent_long_words_and_paths_survive(self):
         for s in ('internationalization-and-localization-settings',      # лише літери
                   '/very/long/path/segment/that/goes/on/and/on/file.js',
-                  'iterations/it1/holovna/index.html', '1234567890'):
+                  'iterations/it1/holovna/index.html', 'v0.23.0 at app.js:123 2026-11-11T10:20:30Z 1.2.3 :9999999 (7 digits)'):
             self.assertEqual(redact.text(s), s, s)
 
     def test_email_and_url_query(self):
@@ -61,6 +62,71 @@ class Redact(unittest.TestCase):
         self.assertEqual(redact.text(once), once)
         # userinfo має піти раніше за e-mail: інакше `pw@h.example` стає «e-mail», а `u:` лишається
         self.assertEqual(once, 'https://***@h.example/x %s %s' % (MAIL, HIDDEN))
+
+
+    # --- 0.23: PII (ЄДРПОУ/ІПН/картка/IBAN), мітки секретів, чужі домівки, шляхи ---
+    def test_long_digit_runs_hidden_but_lines_versions_dates_survive(self):
+        for s in ('ЄДРПОУ 12345678', 'ІПН 1234567890', 'phone 380441234567', 'card 4111111111111111', 'card 4111 1111 1111 1111', 'card 4111-1111-1111-1111'):
+            out = redact.text(s)
+            self.assertIn(HIDDEN, out, s)
+            self.assertFalse(any(c.isdigit() for c in out.replace('ЄДРПОУ', '')), out)
+        for s in ('at x.js:12345', 'version 0.23.0', 'ver 12.345.6789', '2026-11-11', '2026-11-11T10:20:30Z', 'line 1234567', 'ports 8765 4317'):
+            self.assertEqual(redact.text(s), s, s)
+
+    def test_iban_hidden_plain_and_spaced(self):
+        self.assertEqual(redact.text('pay UA213223130000026007233566001 now'), 'pay %s now' % HIDDEN)
+        self.assertEqual(redact.text('pay DE89370400440532013000 now'), 'pay %s now' % HIDDEN)
+        self.assertEqual(redact.text('pay UA21 3223 1300 0002 6007 2335 6600 1 now'), 'pay %s now' % HIDDEN)
+        self.assertEqual(redact.text('ERROR_CODE and HTTP2 stay'), 'ERROR_CODE and HTTP2 stay')
+
+    def test_labelled_secrets_keep_the_label_hide_the_value(self):
+        cases = {'api_key=abc123': 'api_key=%s', 'API-KEY: abc123': 'API-KEY: %s', 'token: tok': 'token: %s', 'secret = s3': 'secret = %s',
+                 'password=hunter2': 'password=%s', 'passwd: x': 'passwd: %s', 'Authorization: Bearer zzz.yyy': 'Authorization: %s',
+                 '{"token": "ab cd"}': '{"token": %s}', "password='a b'": 'password=%s', 'apikey=k': 'apikey=%s'}
+        for src, want in cases.items():
+            out = redact.text(src)
+            self.assertEqual(out.replace('}', '').replace(HIDDEN, 'H'), (want % 'H').replace('}', ''), src)
+            self.assertNotIn('hunter2', out)
+            self.assertEqual(redact.text(out), out, 'ідемпотентно: %s' % src)
+        self.assertNotIn('zzz', redact.text('Authorization: Bearer zzz.yyy'))
+        self.assertNotIn('cd', redact.text('{"token": "ab cd"}').replace('{', ''))
+
+    def test_other_users_homes_become_tilde(self):
+        self.assertEqual(redact.text('open /Users/zed/work/a.json'), 'open ~/work/a.json')
+        self.assertEqual(redact.text('open /home/zed/work/a.json'), 'open ~/work/a.json')
+        self.assertEqual(redact.text('open C:\\Users\\Іван\\proj\\a.py'), 'open ~\\proj\\a.py')
+        self.assertEqual(redact.text('open file:///Users/zed/a.json'), 'open file://~/a.json')
+
+    def test_windows_forward_slash_home_is_not_mangled(self):
+        self.assertEqual(redact.text('open C:/Users/zed/a.py'), 'open ~/a.py')
+        with mock.patch.object(redact, '_homes', return_value=['/Users/me']):
+            self.assertEqual(redact.text('open C:/Users/me/a.py'), 'open ~/a.py')
+            self.assertEqual(redact.text('open /Users/me/a.py'), 'open ~/a.py')
+        self.assertNotIn('C:~', redact.text('C:/Users/zed/a'))
+        # домівка Windows у зворотних слешах, а шлях — у прямих: лише форма з `/` його впізнає (правило `Users` тут не рятує)
+        with mock.patch.object(redact.os.path, 'expanduser', return_value='C:\\Work\\me'), mock.patch.object(redact, 'pwd', None):
+            self.assertEqual(redact.text('open C:/Work/me/a.py'), 'open ~/a.py')
+            self.assertEqual(redact.text('open C:\\Work\\me\\a.py'), 'open ~\\a.py')
+
+    def test_every_absolute_path_collapses_to_the_last_segment(self):
+        cases = {
+            '/Users/me/ClientB-Acme/x/y.json': '…/y.json', '/Volumes/Work/ClientB/z.py:12': '…/z.py:12', 'C:\\Users\\Іван\\proj\\a.py': '…/a.py',
+            'C:/proj/ClientB/a.py': '…/a.py', '\\\\srv\\share\\ClientB\\f.txt': '…/f.txt', 'file:///Users/me/ClientB/d.json': '…/d.json',
+            '~/ClientB/x/y': '…/y', '%2FUsers%2Fme%2FClientB%2Fx.json': '…/x.json', 'file%3A%2F%2F%2FUsers%2Fme%2FClientB%2Fx.json': '…/x.json',
+            '%5CUsers%5Cme%5CClientB%5Cx.json': '…/x.json',
+        }
+        for src, want in cases.items():
+            out = redact.paths('open %s failed' % src)
+            self.assertEqual(out, 'open %s failed' % want, src)
+            self.assertEqual(redact.paths(out), out, 'ідемпотентно')
+        self.assertEqual(redact.paths('File "/a b/Client B/e.py", line 3'), 'File "…/e.py", line 3')
+        for keep in ('https://h.example/a/b', '<space>/x/y', '<task>/it1', 'iterations/it1/index.html', './x/y', '../x', 'and/or', 'a / b'):
+            self.assertEqual(redact.paths(keep), keep, keep)
+
+    def test_text_collapse_flag(self):
+        self.assertEqual(redact.text('open /Users/me/ClientB-Acme/x/y.json', collapse=True), 'open …/y.json')
+        self.assertEqual(redact.text('open /data/space/a/tasks/x', roots=[('/data/space/a', '<space>')], collapse=True), 'open <space>/tasks/x')
+        self.assertIn('ClientB-Acme', redact.text('open /opt/ClientB-Acme/x'), 'без collapse шляхи лишаються (крім домівок)')
 
 
 if __name__ == '__main__':
