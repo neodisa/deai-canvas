@@ -55,6 +55,7 @@ _FETCH_REJECTED_MARKERS = ('fsck', 'error in object', 'bad object', 'corrupt', '
 NOTES_MAX_BYTES = 1024 * 1024        # з CHANGELOG віддаленого тега читається не більше 1 МБ
 NOTES_SECTION_MAX_BYTES = 8 * 1024
 NOTES_TOTAL_MAX_BYTES = 40 * 1024
+NOTES_FAIL_TTL_S = 60                # після невдалого `fetch` для «Що нового» стільки секунд відповідаємо без нового `fetch`
 FIRST_CHECK_DELAY_S = 5
 FIRST_CHECK_JITTER_S = 25
 PERIOD_JITTER = 0.1
@@ -284,6 +285,7 @@ _CL_HEAD_RE = re.compile(r'^## \[([0-9][0-9.]*)\] [\u2014\u2013-] ([0-9]{2})\.([
 
 def _plain(text):
     """Лише текст: `\\r\\n`→`\\n`, табуляція → пробіл, решта керуючих/форматних символів (Unicode Cc/Cf) геть; `\\n` лишається."""
+    text = text.encode('utf-8', 'replace').decode('utf-8')                 # самотні сурогати (`\ud800` з ручної правки кешу) → `?`, а не виняток
     text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\t', ' ')
     return ''.join(c for c in text if c == '\n' or unicodedata.category(c) not in ('Cc', 'Cf'))
 
@@ -529,7 +531,7 @@ class Updater:
         target = out.strip() if rc == 0 else ''
         if not _SHA_RE.match(target):
             return self._fail(500, 'error')                # далі працюємо з sha, а не з рухомим іменем
-        rc, out, _ = self.run(['show', '%s:package.json' % target], self.root, LOCAL_GIT_TIMEOUT_S)
+        rc, out, _ = self.run(['cat-file', 'blob', '%s:package.json' % target], self.root, LOCAL_GIT_TIMEOUT_S)
         try:
             tagged = str(json.loads(out).get('version')) if rc == 0 else None
         except (ValueError, AttributeError):
@@ -566,14 +568,18 @@ class Updater:
         return 202, {'ok': True, 'to': latest, 'restart': 'manual' if _is_windows() else 'auto'}
 
 
-    def _fetch_tag(self, url, tag):
+    def _fetch_tag(self, url, tag, blocking=True):
         """ЄДИНИЙ `fetch` тега (`apply` і `notes`): лише обʼєкти й `refs/tags/<tag>`, робоче дерево, індекс і HEAD не чіпаються. `None` — вдало;
         інакше `(http_status, code)`. `tag` уже пройшов `TAG_RE`; `fsckObjects` відкидає зіпсовані обʼєкти; `LC_ALL=C` — стабільний stderr."""
         refspec = 'refs/tags/%s:refs/tags/%s' % (tag, tag)
-        with self._fetch_lock:
+        if not self._fetch_lock.acquire(blocking=blocking):
+            return 503, 'busy'                            # лише для `notes`: його GET не стає в чергу за чужим `fetch`
+        try:
             rc, _, err_text = self.run(['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true', '-c', 'gc.auto=0',
                                         'fetch', '--no-tags', '--no-recurse-submodules', '--', url, refspec],
                                        self.root, FETCH_TIMEOUT_S, {'LC_ALL': 'C'})
+        finally:
+            self._fetch_lock.release()
         if rc == 0:
             return None
         if rc == 127:
@@ -607,7 +613,8 @@ class Updater:
 
     def _cached_notes(self, state, latest, current):
         c = state.get('notes')
-        if not (isinstance(c, dict) and c.get('version') == latest and c.get('after') == current and isinstance(c.get('sections'), list)):
+        if not (isinstance(c, dict) and c.get('version') == latest and c.get('after') == current
+                and c.get('remote_id') == state.get('remote_id') and isinstance(c.get('sections'), list)):
             return None
         out = []
         for s in c['sections']:
@@ -626,6 +633,11 @@ class Updater:
         cached = self._cached_notes(state, latest, current)
         if cached is not None:
             return {'ok': True, 'version': latest, 'sections': cached}
+        fail = state.get('notes_fail')
+        if (isinstance(fail, dict) and fail.get('version') == latest and fail.get('remote_id') == state.get('remote_id')
+                and isinstance(fail.get('reason'), str) and isinstance(fail.get('at'), (int, float))
+                and 0 <= self.clock() - fail['at'] < NOTES_FAIL_TTL_S):
+            return self._notes_empty(fail['reason'], latest)       # негативний кеш: GET не б'є в мережу частіше за раз на хвилину
         if not os.path.exists(os.path.join(self.root, '.git')):
             return self._notes_empty('no-git', latest)
         _, url, err = remote_for(self.root, self.run)
@@ -634,14 +646,20 @@ class Updater:
         if not network_allowed(url):
             return self._notes_empty('disabled', latest)
         tag = 'v' + latest
-        failure = self._fetch_tag(url, tag)
+        failure = self._fetch_tag(url, tag, blocking=False)
         if failure:
-            return self._notes_empty('no-git' if failure[1] == 'not-git' else failure[1], latest)
+            reason = 'no-git' if failure[1] == 'not-git' else failure[1]
+            if reason != 'busy':
+                with self._lock:
+                    state = self._load()
+                    state['notes_fail'] = {'version': latest, 'remote_id': state.get('remote_id'), 'reason': reason, 'at': int(self.clock())}
+                    self._save(state)
+            return self._notes_empty(reason, latest)
         rc, out, _ = self.run(['rev-parse', '--verify', '%s^{commit}' % tag], self.root, LOCAL_GIT_TIMEOUT_S)
         target = out.strip() if rc == 0 else ''
         if not _SHA_RE.match(target):
             return self._notes_empty('error', latest)      # далі — sha, а не рухоме імʼя
-        rc, data = git_head(['show', '%s:CHANGELOG.md' % target], self.root, NOTES_MAX_BYTES, LOCAL_GIT_TIMEOUT_S)
+        rc, data = git_head(['cat-file', 'blob', '%s:CHANGELOG.md' % target], self.root, NOTES_MAX_BYTES, LOCAL_GIT_TIMEOUT_S)
         if rc == 127:
             return self._notes_empty('no-git', latest)
         if rc != 0:
@@ -649,7 +667,8 @@ class Updater:
         sections = parse_changelog(data.decode('utf-8', 'replace'), current, latest)
         with self._lock:
             state = self._load()
-            state['notes'] = {'version': latest, 'after': current, 'sections': sections}
+            state['notes'] = {'version': latest, 'after': current, 'remote_id': state.get('remote_id'), 'sections': sections}
+            state.pop('notes_fail', None)
             self._save(state)
         return {'ok': True, 'version': latest, 'sections': sections}
 

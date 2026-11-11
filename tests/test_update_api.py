@@ -136,6 +136,20 @@ class UpdateApi(unittest.TestCase):
             self.assertNotIn(needle, raw)
         self.assertEqual(self.call('GET', '/t/x/api/update-notes')[0], 400)
 
+    def test_get_update_notes_refuses_cross_site_before_any_git(self):
+        ta.release(self.work, '0.2.0', files={'CHANGELOG.md': '## [0.2.0] — 11.11.2026\n\nTwo.\n'})
+        self.call('POST', '/api/update-check')
+        with mock.patch.object(serve.updater.Updater, '_fetch_tag', side_effect=AssertionError('no git for foreign requests')) as fetch:
+            for headers in ({'Sec-Fetch-Site': 'cross-site'}, {'Sec-Fetch-Site': 'same-site'}, {'Origin': 'https://evil.example'},
+                            {'Origin': 'null'}, {'Origin': 'https://evil.example', 'Sec-Fetch-Site': 'same-origin'}):
+                st, raw = self.call('GET', '/api/update-notes', headers=headers)
+                self.assertEqual((st, json.loads(raw)['ok']), (403, False), headers)
+            fetch.assert_not_called()
+        for headers in ({}, {'Sec-Fetch-Site': 'same-origin'}, {'Sec-Fetch-Site': 'none'}, {'Origin': 'http://127.0.0.1:8765'},
+                        {'Origin': 'http://localhost:8765', 'Sec-Fetch-Site': 'same-origin'}):
+            st, raw = self.call('GET', '/api/update-notes', headers=headers)
+            self.assertEqual((st, json.loads(raw)['sections'][0]['version']), (200, '0.2.0'), headers)
+
     def test_get_update_notes_without_an_update_is_an_empty_reason(self):
         st, raw = self.call('GET', '/api/update-notes')
         self.assertEqual((st, json.loads(raw)), (200, {'ok': True, 'sections': [], 'reason': 'no-update'}))

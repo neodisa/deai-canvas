@@ -5944,6 +5944,11 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(_updater().status())
             return
         if self.path.split('?')[0] == '/api/update-notes':
+            # ⛔ GET, що може піти в мережу (`fetch` тега): чужа сторінка (`<img src=…>`) не сміє його смикати. `Sec-Fetch-Site` cross-/same-site
+            # або чужий `Origin` → 403 до будь-якого `git`; без обох заголовків (curl, старі рушії) — пускаємо.
+            if self.headers.get('Sec-Fetch-Site') in ('cross-site', 'same-site') or not _local_origin(self.headers.get('Origin')):
+                self._send_json({'ok': False, 'error': 'foreign origin'}, status=403)
+                return
             self._send_json(_updater().notes())
             return
         if self.path.split('?')[0] == '/api/spaces':

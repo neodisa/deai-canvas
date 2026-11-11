@@ -147,8 +147,7 @@ class Notes(ta.Base):
             self.assertEqual(calls, [], repr(hostile))
         u._save(st)
         self.assertEqual(u.notes()['version'], '0.2.0')
-        shows = [r for r in self.raw if r[0] == 'show']
-        self.assertEqual(len(shows), 0)                              # `show` іде повз `self.run` (обмежене читання), див. нижче
+        self.assertEqual([r for r in self.raw if r[0] in ('show', 'cat-file')], [])      # читання CHANGELOG іде повз `self.run` (обмежене), див. нижче
         tag_sha = tu.git(['rev-parse', 'v0.2.0^{commit}'], self.work).strip()
         seen = []
         real = updater.git_head
@@ -159,8 +158,8 @@ class Notes(ta.Base):
         u._save({k: v for k, v in st.items() if k != 'notes'})
         with mock.patch.object(updater, 'git_head', spy):
             u.notes()
-        self.assertEqual(seen, [['show', tag_sha + ':CHANGELOG.md']])
-        self.assertRegex(seen[0][1], r'^[0-9a-f]{40}:CHANGELOG\.md$')
+        self.assertEqual(seen, [['cat-file', 'blob', tag_sha + ':CHANGELOG.md']])      # blob: без textconv/фільтрів, на відміну від `show`
+        self.assertRegex(seen[0][2], r'^[0-9a-f]{40}:CHANGELOG\.md$')
 
     def test_second_call_serves_the_cache_without_git_or_remote(self):
         u = self.ready_notes()
@@ -248,13 +247,86 @@ class Notes(ta.Base):
         tu.git(['add', '--', 'big.txt'], self.work)
         tu.git(['commit', '-m', 'big'], self.work)
         sha = ta.head(self.work)
-        rc, data = updater.git_head(['show', sha + ':big.txt'], self.work, 1024 * 1024, 30)
+        rc, data = updater.git_head(['cat-file', 'blob', sha + ':big.txt'], self.work, 1024 * 1024, 30)
         self.assertEqual((rc, len(data)), (0, 1024 * 1024))
-        rc, data = updater.git_head(['show', sha + ':package.json'], self.work, 1024 * 1024, 30)
+        rc, data = updater.git_head(['cat-file', 'blob', sha + ':package.json'], self.work, 1024 * 1024, 30)
         self.assertEqual(rc, 0)
         self.assertTrue(data.startswith(b'{'))
-        rc, data = updater.git_head(['show', sha + ':nope'], self.work, 1024 * 1024, 30)
+        rc, data = updater.git_head(['cat-file', 'blob', sha + ':nope'], self.work, 1024 * 1024, 30)
         self.assertNotEqual(rc, 0)
+
+    def test_second_notes_during_a_running_fetch_is_busy_not_queued(self):
+        import threading
+        import time
+        u = self.ready_notes()
+        real = updater.run_git
+        started, release, fetches = threading.Event(), threading.Event(), []
+
+        def run(args, cwd, timeout, env_extra=None):
+            if ta.V(args)[0] == 'fetch':
+                fetches.append(1)
+                started.set()
+                release.wait(20)
+            return real(args, cwd, timeout, env_extra)
+        u.run = run
+        first = []
+        t = threading.Thread(target=lambda: first.append(u.notes()), daemon=True)
+        t.start()
+        self.assertTrue(started.wait(10))
+        t0 = time.time()
+        second = u.notes()
+        self.assertLess(time.time() - t0, 1.0)
+        self.assertEqual(second, {'ok': True, 'sections': [], 'reason': 'busy', 'version': '0.2.0'})
+        self.assertEqual(len(fetches), 1)
+        self.assertNotIn('notes_fail', u._load())                    # «зайнято» — не збій remote: у негативний кеш не йде
+        release.set()
+        t.join(20)
+        self.assertEqual(first[0]['sections'][0]['version'], '0.2.0')
+
+    def test_failed_notes_fetch_is_not_retried_for_60_seconds(self):
+        import shutil
+        t = [1000.0]
+        u = self.ready_notes(clock=lambda: t[0])
+        shutil.rmtree(self.remote)
+        calls, run = self.counting()
+        u.run = run
+        fetch_count = lambda: len([c for c in calls if c[0] == 'fetch'])
+        self.assertEqual(u.notes()['reason'], 'offline')
+        self.assertEqual(fetch_count(), 1)
+        t[0] += 59
+        self.assertEqual(u.notes(), {'ok': True, 'sections': [], 'reason': 'offline', 'version': '0.2.0'})
+        self.assertEqual(fetch_count(), 1)
+        t[0] += 2                                                    # усього 61 с
+        self.assertEqual(u.notes()['reason'], 'offline')
+        self.assertEqual(fetch_count(), 2)
+
+    def test_notes_cached_for_one_remote_are_not_served_for_another(self):
+        import shutil
+        u = self.ready_notes()
+        u.notes()
+        other = os.path.join(self.tmp, 'other.git')
+        shutil.copytree(self.remote, other)
+        calls, run = self.counting()
+        u.run = run
+        with mock.patch.dict(os.environ, {'DEAI_UPDATE_REMOTE': other}):
+            u.check()
+            out = u.notes()
+        self.assertEqual(out['sections'][0]['version'], '0.2.0')
+        self.assertIn('fetch', [c[0] for c in calls])
+
+    def test_lone_surrogates_in_a_hand_edited_cache_do_not_raise(self):
+        u = self.ready_notes()
+        u.notes()
+        st = u._load()
+        st['notes']['sections'] = [{'version': '0.2.0', 'date': '11.11.2026', 'body': 'a@@b'}]
+        with open(os.path.join(self.home, 'update.json'), 'w', encoding='utf-8') as f:       # ручна правка: екранований сурогат у файлі
+            f.write(json.dumps(st).replace('@@', '\\ud800'))
+        self.assertEqual(u._load()['notes']['sections'][0]['body'], 'a\ud800b')
+        with mock.patch.object(updater, 'git_head', side_effect=AssertionError('cache expected')):
+            out = u.notes()
+        self.assertEqual(out['sections'][0]['body'], 'a?b')
+        json.dumps(out, ensure_ascii=False).encode('utf-8')          # серіалізується в UTF-8
+        self.assertEqual(updater.parse_changelog('## [0.2.0] — 11.11.2026\n\nx\ud800y\n', '0.1.0', '0.2.0')[0]['body'], 'x?y')
 
     def test_missing_changelog_is_a_reason_and_not_cached(self):
         u = self.ready()                                             # реліз без CHANGELOG.md

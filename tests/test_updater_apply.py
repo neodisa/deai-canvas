@@ -491,6 +491,15 @@ class Apply(Base):
         self.assertNotIn('merge', verbs)
         self.assertEqual(head(self.work), old)
 
+    def test_tag_package_json_is_read_with_cat_file_blob_by_sha(self):
+        u = self.ready()
+        calls, run = self.counting()
+        u.run = run
+        self.assertEqual(u.apply()[0], 202)
+        sha = tu.git(['rev-parse', 'v0.2.0^{commit}'], self.work).strip()
+        self.assertIn(['cat-file', 'blob', sha + ':package.json'], self.raw)
+        self.assertNotIn('show', [c[0] for c in calls])
+
     def test_a_truncated_transfer_is_offline_not_fetch_rejected(self):
         """`index-pack failed`/`unpack-objects` без слів про зіпсований обʼєкт — це обірваний переказ (повторимо), а не відмова fsck."""
         real = updater.run_git
