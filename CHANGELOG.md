@@ -3,6 +3,99 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.23.0] — 11.11.2026
+
+Feedback and updates. Two things a person asked for: tell the maintainer about a bug or an idea without leaving the canvas, and
+learn that a new release exists (and install it) without a terminal. The update side checks release tags `vX.Y.Z` of the
+remote the install came from; the feedback side queues a note locally and sends it to a collector the owner configures. Neither
+runs in an isolated process (tests) unless a test asks for it. Design: `docs/superpowers/specs/2026-11-11-feedback-and-updates-design.md`;
+plan: `docs/superpowers/plans/2026-11-11-feedback-and-updates.md`.
+
+### Added
+
+- **`app/updater.py`**: the version (`package.json` is the only source; `liga_migrate._tool_version` reads it, a test pins they agree),
+  the remote, the check of tags, the state file `<DEAI_HOME>/update.json` (0600; not written when the process is isolated: the
+  state then lives in memory), a background thread (first check 5-30 s after start, then every 6 h with jitter), and the apply.
+- **`app/feedback.py`**: the diagnostics builder, the ring of server errors, the local queue
+  `<DEAI_HOME>/feedback/{outbox,sent,failed}/<id>.json` (directories 0700, files 0600; the record is written BEFORE any network call;
+  `failed/` after 20 attempts or 30 days, never deleted), the sender (one insert into the table and, if asked, one screenshot into
+  the bucket), and the config chain `DEAI_FEEDBACK_URL`/`DEAI_FEEDBACK_KEY` > `<DEAI_HOME>/config.json` > `app/feedback.json`
+  (only `https://`; loopback `http://` only for an isolated test run).
+- **`app/redact.py`**: one filter for every line of the diagnostics (see *Privacy* below).
+- **Routes** (flat names, "machine" routes: no space is pinned, they work with a broken registry; the prefixed form `/t/<id>/api/…` is `400`):
+  `GET /api/update`, `GET /api/update-notes`, `POST /api/update-check`, `POST /api/update-apply`, `POST /api/feedback-preview`,
+  `POST /api/feedback`.
+  - Apply: `202 {ok, to, restart: auto|manual}`; `409 isolated|busy|nothing-to-update|not-git|dirty|detached|worktree|diverged|tag-conflict|tag-missing|tag-mismatch|fetch-rejected|disabled|bad-remote|no-remote`, `503 offline`, `500 error|merge-failed|rolled-back|rollback-failed`.
+  - Notes: `{ok, notes|reason}`, reasons `busy|offline|disabled|no-update|no-git|fetch-rejected|tag-missing|tag-conflict|no-changelog|error|bad-remote|no-remote`; a cross-site request is `403`.
+  - Feedback preview: `{ok, diag, diag_hash, ring_seq, shot}`; send: `{ok, id, state: sent|queued, reason?, memory_only?}`, queued reasons `no-collector|offline|rejected|network-blocked`; `409 diag-changed`, `413 body-too-large`.
+- **UI:** a pill in the bar when a release tag exists, a dialog «What's new» with the CHANGELOG sections between the installed version and the
+  latest (English, as in the repo), a button «Відгук» on every screen and ⌘K entries «Баг / ідея» and «Перевірити оновлення»
+  (also on the Tasks, Connections and wizard screens), a feedback dialog that shows exactly what will be sent, a ring of the last 20 client errors.
+- **`ops/feedback-collector.sql`** (the collector for the owner's own Supabase project), **`app/feedback.json`** (`{"url": "", "key": ""}` shipped empty).
+- **Environment:** `DEAI_NO_UPDATE_CHECK=1` (no checks, no network), `DEAI_UPDATE_REMOTE` (a remote name or an `https://`/`ssh://`
+  address instead of the default), `DEAI_FEEDBACK_URL`, `DEAI_FEEDBACK_KEY`; `DEAI_UPDATE_TEST_APPLY=1` is a seam for tests only
+  (without it an isolated process refuses `apply` and the restart).
+- **Tests:** a no-network check (the live fixture environment blocks the update check and the feedback sender, `tests/test_no_network.py`),
+  an insert-only check of the collector SQL (`tests/test_feedback_sql.py`), a check of the shipped `app/feedback.json`
+  (`tests/test_feedback_outbox.py`), and live tests of the pill, the update dialog, `apply` in a throwaway clone and the feedback dialog with a fake collector.
+
+### Changed
+
+- **`zone1` of the bar** gets two controls at the END (`feedback`, `update`), so the existing indexes are unchanged; the palette
+  gets `appActions` on the home, Connections and wizard screens too.
+- **`_guarded` records unexpected exceptions** into the error ring and re-raises (the response is unchanged); client disconnects are not recorded.
+- **`isolation.writes_allowed(home)`**: the new files are written only to a home that the process may really write to.
+- **Amendments to the spec, in one line:** flat route names (a nested path would be invisible to the `bad-body` guard); the
+  screenshot is `image/webp` or `png` up to 2 MB, a bigger one is skipped (`shot.skipped: too-big`); the response of `/api/update`
+  carries `boot` (the process id of the server) so the page can tell an old process from a restarted one; `disabled` is a state of the check.
+
+### Hardening decided in review
+
+- **Update.** The tag is verified again against the CURRENT remote at apply time, and `package.json` of the tag must carry the same
+  version (`tag-missing|tag-conflict|tag-mismatch`); the fetch runs with `fsck` and without submodules (`fetch-rejected`); the tree is
+  rechecked clean right before the merge; the merge is `--ff-only`. A rollback (`reset --hard` to the recorded old head) happens only
+  after a merge that succeeded or one that our own timeout killed — a user's edit is never reset. A failed restart sets
+  `restart_failed` for that boot. «What's new» fetches without blocking the apply, caches a failure for 60 s, and refuses cross-site pages.
+- **Smoke test.** After the merge a child `python3 -B` compiles every `app/*.py` and `bin/*.py` (no `.pyc` is written) and imports `serve`
+  in an isolated environment; a failure rolls back.
+- **Privacy (`redact`).** Absolute paths shrink to the last segment, local canvas URLs keep the file extension only, 8+ digit runs,
+  card numbers, IBANs and labelled secrets (`token=…`, `password: …`, `Authorization: Bearer …`) are hidden, e-mails and `user:pass@` are removed,
+  a key-like string is hidden. The server error ring stores the exception type and the application frame only, never the message.
+  The preview equals what is sent: `diag_hash` and `ring_seq` of the preview come back in the send, and a changed diagnostics is `409 diag-changed`.
+- **Collector (SQL).** The public key may only insert (rows and screenshot objects; no select, update, delete, no listing); the Teams
+  card is throttled (more than 10 rows in 60 s send no card), markdown and links are neutralised, a missing or non-https webhook secret never fails the insert.
+
+### Differences for a person
+
+1. A pill appears in the bar when a release tag newer than the installed version exists; a click opens «What's new» and «Update».
+   An install that is not a clean git checkout of a release line (local edits, a detached head, a local commit) gets an honest refusal and the command to run.
+2. A button «Відгук» is on every screen. Until the owner configures a collector the note is stored on this machine (`<DEAI_HOME>/feedback/outbox`)
+   and the dialog says so; it is sent by itself once a collector is configured.
+3. Nothing is sent without a click: the dialog shows the diagnostics and the screenshot choice first.
+4. `DEAI_NO_UPDATE_CHECK=1` turns the checks off completely.
+
+### Rolling back 0.23 → 0.22.1
+
+Safe: `git checkout v0.22.1` and restart. 0.22.x ignores `update.json` and the `feedback/` directory; both can be deleted.
+
+### Left for 1.0 / next
+
+- **Signed release tags.** The update trusts the remote tag: whoever can move or publish a tag on the remote runs code on every install. Verification of signatures belongs before 1.0.
+- Rate limits and quotas on the collector (the Teams card is throttled, rows are not).
+- A reader or an admin screen for the collected feedback (today: the Supabase dashboard).
+- A restart on Windows (the update applies and asks for a manual restart).
+- A persistent server error ring (it lives in memory and is reset by a restart, an update included).
+- Notes with `no-changelog` or `error` are not cached (each opening of the dialog tries again).
+- The dashboard push has a 60 s budget while compat batches are of 3 cards.
+
+### What the owner does
+
+1. Create a Supabase project «deai» (dedicated: the script does not check what is already in a project) and run `ops/feedback-collector.sql` in its SQL editor.
+2. Put the Teams webhook into Vault under the name the script uses: `select vault.create_secret('<webhook address>', 'teams_feedback_webhook_url');`
+3. Verify with the anon key that select, update and delete on `public.feedback`, and reading or listing objects of the `feedback-shots` bucket, are refused.
+4. Put the project URL and the publishable key into `app/feedback.json` (in a later release) or into `<DEAI_HOME>/config.json` as `{"feedback": {"url": "…", "key": "…"}}`.
+5. Make the GitLab mirror receive release tags (the update reads tags from the remote the install came from).
+
 ## [0.22.1] — 11.11.2026
 
 ### Fixed

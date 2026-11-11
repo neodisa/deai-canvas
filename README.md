@@ -263,6 +263,12 @@ the file, `@import` is not followed; the file must be a regular file up to 2 MiB
 | `GET /api/ds-tokens?space=<id>` | the space's tokens, as the inspector reads them |
 | `GET /api/module-client/<id>/<file>` | a browser file of a `comments` module (only the files its manifest lists); for a space's own module `GET /api/module-client/<space>/<id>/<file>`, served from its trusted snapshot |
 | `POST /api/task-new` `{id, title?, space?, from?, vcs?, …}` | create a task. `vcs` — `{repo, path?, branch?}`, the task's own repository (needs a `vcs` module in the space: `400 vcs-needs-role`; the module checks the address, branch and folder: `400 vcs-bad-target`); if `path` of that repository already holds an `index.html`, the first iteration is taken from it, and if it cannot be fetched the task starts with a blank page. `from` — an absolute path (`~` is expanded; a relative one is `from-not-found`) to a folder with an `index.html` that the server copies into the first iteration (any space; not together with `gitlab`; symlinks, `.git`, `node_modules` are not copied; ≤ 2000 files and 200 MB); the answer then carries `copied: {files, bytes, skipped_links}` — what was actually copied. `gitlab` (clone a repository into the task) needs a space whose `vcs` record has the LIGA scheme, otherwise `400 gitlab-needs-vcs-scheme`; `from` with `gitlab` is `400 bad-request`. Without `space` the task goes to the first space marked `legacy`, otherwise to the current one. Refusals: `400 gitlab-needs-vcs-scheme\|from-not-found\|from-no-index\|from-contains-space\|bad-request`, `409 task-dir-exists`, `413 from-too-big` |
+| `GET /api/update` | the update state: `{state, available, current, latest, blocked, checked_at, remote_host, boot, restart_failed, …}`. A "machine" route: it works with a broken registry; `/t/<id>/api/update` is `400` |
+| `POST /api/update-check` | check the remote's release tags now (a read-only `git ls-remote`); the same answer as `GET /api/update` |
+| `GET /api/update-notes` | the CHANGELOG sections between the installed version and the latest, read from the remote tag; `{ok, notes}` or `{ok: false, reason}` with `busy\|offline\|disabled\|no-update\|no-git\|fetch-rejected\|tag-missing\|tag-conflict\|no-changelog\|error\|bad-remote\|no-remote`; a cross-site request is `403` |
+| `POST /api/update-apply` | install the latest tag (fetch with fsck, a re-check of the tag, `--ff-only`, a smoke test, restart); `202 {ok, to, restart: auto\|manual}`; refusals `409 isolated\|busy\|nothing-to-update\|not-git\|dirty\|detached\|worktree\|diverged\|tag-conflict\|tag-missing\|tag-mismatch\|fetch-rejected\|disabled\|bad-remote\|no-remote`, `503 offline`, `500 error\|merge-failed\|rolled-back\|rollback-failed` |
+| `POST /api/feedback-preview` `{task?, it?, node?, screen?, lang?, client_errors?}` | exactly what a feedback would send: `{ok, diag, diag_hash, ring_seq, shot: {available, bytes?, skipped?}}` |
+| `POST /api/feedback` `{kind: bug\|idea, text, contact?, include_diag?, include_shot?, diag_hash?, ring_seq?, …}` | queue and send a note: `{ok, id, state: sent\|queued, reason?, memory_only?}`, `reason` is `no-collector\|offline\|rejected\|network-blocked`; `409 diag-changed` (the diagnostics changed since the preview), `413 body-too-large` |
 | `GET /published/<space-id>/<task>/…` | the local copy of a folder-published preview |
 
 ```bash
@@ -567,6 +573,31 @@ scp-style addresses (`[user@]host:path`); Windows is not checked on a real machi
 (`https://TOKEN@host/…`) is accepted and sits in the task file in plain text, though it is hidden from every answer and
 text. The full list is in `CHANGELOG.md`, 0.8.0.
 
+## Feedback and updates
+
+**Updates.** The canvas checks the release tags `vX.Y.Z` of the remote it was installed from (`git ls-remote`, read-only; first
+check shortly after start, then every 6 hours). When a newer tag exists, a pill appears in the bar; it opens «What's new» (the
+CHANGELOG sections of the new releases) and the button to update. Updating fetches the tag, fast-forwards the checkout, runs a smoke test
+and restarts; on a failed smoke test it goes back to the previous commit. It refuses, with the command to run by hand, when
+the folder is not a git checkout, has local edits, a detached head or local commits. Windows: the update applies, the restart is manual.
+- `DEAI_NO_UPDATE_CHECK=1` turns the checks off (no network at all).
+- `DEAI_UPDATE_REMOTE=<name or https:// or ssh:// address>` overrides the remote.
+- The update trusts the tag on the remote: use a remote you trust (tag signatures are planned).
+
+**Feedback.** The button «Відгук» (and ⌘K «Баг / ідея») opens a dialog: kind, text, optional contact, and a preview of the diagnostics
+that will be sent. Nothing leaves the machine before you press send.
+- *Collected, if you leave it on:* the Deai version, the operating system and Python version, the language, the kind of space and the ids of
+  its built-in modules (own modules show as `own`), the task, iteration and page ids, the last 50 server errors (the exception type and the application
+  frame only, no messages) and the last 20 errors of the page, and, if you tick it, the screenshot of the current page (webp or png up to 2 MB).
+- *Redacted:* absolute paths shrink to the last segment, local canvas URLs keep only the extension, e-mails, `user:pass@`, tokens and key-like
+  strings, labelled secrets, card and IBAN numbers and any run of 8 or more digits are hidden; no task titles, no settings, no secrets.
+- *Where the queue lives:* `<DEAI_HOME>/feedback/{outbox,sent,failed}/` (default `~/.deai`). The record is written before any
+  network call and retried every hour; after 20 attempts or 30 days it moves to `failed/` and is never deleted.
+- *The collector* is the owner's own Supabase project: run `ops/feedback-collector.sql` (insert-only for the public key, a private bucket for screenshots,
+  a throttled Teams card through a webhook kept in Vault). Point a copy of Deai at it with `DEAI_FEEDBACK_URL` and
+  `DEAI_FEEDBACK_KEY`, or `{"feedback": {"url": "https://…", "key": "…"}}` in `<DEAI_HOME>/config.json`; the order is environment, then `config.json`,
+  then `app/feedback.json`. Only `https://` addresses are used. Without a collector the notes stay in `outbox` and the dialog says so.
+
 ## Layout
 
 ```
@@ -574,7 +605,7 @@ app/          server (serve.py, stdlib only) + UI (ES modules, no build step)
 app/modules/  built-in modules (static-publish, vercel-publish, css-tokens, supabase-comments, supabase-dashboard, jira-tracker, supabase-teams, git-sync); the core is app/deai_modules.py
 docs/         design notes and the guides for module authors (docs/modules/authoring.md, docs/modules/comments.md)
 bin/          CLI tools: snapshots, pages, state, inbox
-ops/          macOS launcher (Design Canvas.app), preview gate tools
+ops/          macOS launcher, feedback collector SQL (Design Canvas.app), preview gate tools
 flows/demo    example flow
 tests/        unit, Python and live (Playwright) tests
 ```
@@ -722,8 +753,10 @@ migrated; a partial migration is final; the copies of the credentials are in the
          and the `/api/gitlab-*` aliases leave the runtime: an outbound action (autopush, the team registry, the shared ssh key) is
          decided by the `vcs` record with the LIGA scheme, `static-publish` is an explicit record, the dashboard sync log is one
          (`<DEAI_HOME>/logs/dashboard-sync.log`); the `/api/gitlab-*` routes stay as deprecated aliases until 1.0.
-5. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
-6. **Cross-platform start** — one command on macOS, Windows and Linux.
+5. ✅ **Feedback and updates** (0.23) — the «Відгук» button with a redacted diagnostics preview, a local queue and an owner-run Supabase collector;
+   the update pill, «What's new» and a one-click update from release tags of the remote.
+6. **Claude Code plugin** — a generic task → mockup → iterations → review → publish loop.
+7. **Cross-platform start** — one command on macOS, Windows and Linux.
 
 ## License
 
