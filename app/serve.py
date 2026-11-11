@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
+import feedback  # відгук (0.23.0): кільце помилок, збирач діагностики, черга відправки
 import updater  # оновлення інструмента (0.23.0): перевірка тегів у remote, `update.json`, `GET /api/update`
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
@@ -5386,6 +5387,18 @@ def ds_tokens_view(space):
             'source': source if isinstance(source, str) else ''}
 
 
+def _shot_file(task, it, node):
+    """Шлях до кадру `<ітерація>/shots/<node>.webp` або `None`: імʼя за `NAME_RE`/`SHOT_RE` (перший замок) і realpath усередині теки
+    кадрів (другий) — ціна помилки тут віддача будь-якого файла з диска. Спільна для `Handler._shot` і відгуку."""
+    if not isinstance(it, str) or not isinstance(node, str) or not NAME_RE.fullmatch(it) or not SHOT_RE.fullmatch(node):
+        return None
+    base = os.path.realpath(os.path.join(_iter_dir(task, it), 'shots'))
+    target = os.path.realpath(os.path.join(base, node + '.webp'))
+    if not target.startswith(base + os.sep) or not os.path.isfile(target):
+        return None
+    return target
+
+
 def _guarded_request(method):
     """Декоратор `do_GET`/`do_POST`: тіло методу виконується під `Handler._guarded` (центральні
     відповіді `no-task` / `space-unavailable` / `spaces-*` / `ambiguous-task`). Саме декоратор, а
@@ -5682,15 +5695,24 @@ class Handler(SimpleHTTPRequestHandler):
         except spaces.NoTask as e:
             self._space_error(404, 'no-task', 'no task in this space', space=e.space)
         except SpaceUnavailable as e:
+            feedback.record_error(self.path, e, code='space-unavailable')      # лише код: у тексті шляхи
             self._space_error(503, 'space-unavailable', str(e), path=e.path)
         except spaces.SpacesError as e:
+            feedback.record_error(self.path, e, code=e.code)
             self._space_error(503, e.code, str(e), path=e.path)
         except spaces.AmbiguousTask as e:
             tid = e.args[0] if e.args else ''
             self._space_error(409, 'ambiguous-task',
                               f'task {tid!r} exists in several spaces — rename one of them')
         except deai_modules.ModuleError as e:
+            if e.status >= 500:                                                # 4xx — очікувані відмови, не пишемо
+                feedback.record_error(self.path, e, code=e.code)
             self._space_error(e.status, e.code, e.message)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            raise                                                              # клієнт обірвав зʼєднання: шум, у кільце не пишемо
+        except Exception as e:  # noqa: BLE001
+            feedback.record_error(self.path, e)                                # невідомий виняток: у кільце й далі, як було
+            raise
         finally:
             spaces.clear_request_space()
 
@@ -6332,11 +6354,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(400, 'bad shot')
             return
         _, task = self._current_task()
-        base = os.path.realpath(os.path.join(_iter_dir(task, it), 'shots'))
-        target = os.path.realpath(os.path.join(base, node + '.webp'))
-        # NAME_RE вже не пускає '/' і '..'; realpath — другий замок, бо ціна
-        # помилки тут це віддача будь-якого файла з диска
-        if not target.startswith(base + os.sep) or not os.path.isfile(target):
+        target = _shot_file(task, it, node)
+        # NAME_RE вже не пускає '/' і '..'; realpath — другий замок (див. `_shot_file`)
+        if target is None:
             self.send_error(404, 'no shot')
             return
         with open(target, 'rb') as f:
@@ -7080,8 +7100,52 @@ class Handler(SimpleHTTPRequestHandler):
             self._update_check(payload)
         elif self.path == '/api/update-apply':
             self._update_apply(payload)
+        elif self.path == '/api/feedback-preview':
+            self._feedback_preview(payload)
         else:
             self.send_error(404)
+
+    def _feedback_collect(self, payload):
+        """`(діагностика, шлях кадру | None)` для відгуку — ТОТАЛЬНО (машинний маршрут: потрібен саме тоді, коли щось зламано). Простір і
+        задачу збираємо самі: задачу клієнт називає в тілі (`task`), сервер перевіряє `spaces.find_task`; дубль/невідома/битий реєстр —
+        поля `None`, не виняток. Той самий збирач і для «Що буде надіслано», і для самої відправки (клієнтська частина — лише санітизація)."""
+        tid = payload.get('task')
+        it, node, screen = payload.get('it'), payload.get('node'), payload.get('screen')
+        ctx = {'space': None, 'task_id': None, 'iteration': None, 'page': None, 'screen': screen, 'lang': payload.get('lang'),
+               'version': updater.current_version(UPDATER_ROOT), 'roots': [(UPDATER_ROOT, '<app>')]}
+        sp = task = None
+        try:
+            if isinstance(tid, str) and tid:
+                sp = spaces.find_task(tid)
+                if sp is not None:
+                    with spaces.request_space(sp['id']):
+                        _, task = task_for(load_tasks(), tid)
+                    ctx['task_id'] = tid
+            if sp is None:
+                sp = spaces.active_space()
+        except Exception:  # noqa: BLE001 — SpacesError/AmbiguousTask/UnknownTask/NoTask/OSError/ValueError: поля лишаються None
+            pass
+        ctx['space'] = sp
+        if isinstance(sp, dict) and sp.get('path'):
+            ctx['roots'].append((sp['path'], '<space>'))
+        if isinstance(task, dict) and task.get('dir'):
+            ctx['roots'].append((task['dir'], '<task>'))
+        if isinstance(it, str) and NAME_RE.fullmatch(it):
+            ctx['iteration'] = it
+        if isinstance(node, str) and SHOT_RE.fullmatch(node):
+            ctx['page'] = node
+        shot = None
+        if isinstance(task, dict) and ctx['iteration'] and ctx['page']:
+            try:
+                shot = _shot_file(task, ctx['iteration'], ctx['page'])
+            except Exception:  # noqa: BLE001
+                shot = None
+        return feedback.build_diag(ctx, payload.get('client_errors')), shot
+
+    def _feedback_preview(self, payload):
+        """`POST /api/feedback-preview` → `{ok, diag, shot: {available, bytes?, skipped?}}`: точно те, що піде з відгуком."""
+        diag, shot = self._feedback_collect(payload)
+        self._send_json({'ok': True, 'diag': diag, 'shot': feedback.shot_info(shot)})
 
     def _update_apply(self, payload):
         """`POST /api/update-apply`: застосувати `latest` зі стану. Тіло НЕ читається (версію/шлях/remote ззовні не приймаємо). Перезапуск
