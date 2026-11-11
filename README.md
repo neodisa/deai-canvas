@@ -580,8 +580,9 @@ check shortly after start, then every 6 hours). When a newer tag exists, a pill 
 CHANGELOG sections of the new releases) and the button to update. Updating fetches the tag, fast-forwards the checkout, runs a smoke test
 and restarts; on a failed smoke test it goes back to the previous commit. It refuses, with the command to run by hand, when
 the folder is not a git checkout, has local edits, a detached head or local commits. Windows: the update applies, the restart is manual.
-- `DEAI_NO_UPDATE_CHECK=1` turns the checks off (no network at all).
-- `DEAI_UPDATE_REMOTE=<name or https:// or ssh:// address>` overrides the remote.
+- `DEAI_NO_UPDATE_CHECK=1` turns the update checks and the background feedback retries off (no network from them; a feedback
+  you send by hand still goes to a configured collector).
+- `DEAI_UPDATE_REMOTE=<remote name, https:// or ssh:// address, user@host:path, or an absolute local path>` overrides the remote.
 - The update trusts the tag on the remote: use a remote you trust (tag signatures are planned).
 
 **Feedback.** The button «Відгук» (and ⌘K «Баг / ідея») opens a dialog: kind, text, optional contact, and a preview of the diagnostics

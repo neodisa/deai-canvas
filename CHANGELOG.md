@@ -7,8 +7,9 @@ All notable changes to Deai Canvas, newest first. Format follows
 
 Feedback and updates. Two things a person asked for: tell the maintainer about a bug or an idea without leaving the canvas, and
 learn that a new release exists (and install it) without a terminal. The update side checks release tags `vX.Y.Z` of the
-remote the install came from; the feedback side queues a note locally and sends it to a collector the owner configures. Neither
-runs in an isolated process (tests) unless a test asks for it. Design: `docs/superpowers/specs/2026-11-11-feedback-and-updates-design.md`;
+remote the install came from; the feedback side queues a note locally and sends it to a collector the owner configures. In an isolated
+process (tests) neither reaches the network: the update thread only records `disabled` (unless the remote is a local path),
+the feedback flush thread does not start, and `apply` refuses without the test seam. Design: `docs/superpowers/specs/2026-11-11-feedback-and-updates-design.md`;
 plan: `docs/superpowers/plans/2026-11-11-feedback-and-updates.md`.
 
 ### Added
