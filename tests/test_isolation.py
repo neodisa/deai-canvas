@@ -54,6 +54,20 @@ class IsolationCore(unittest.TestCase):
             with mock.patch.dict(os.environ, {'DC_TASKS_FILE': '1'}):
                 self.assertEqual(isolation.route('dashboard'), ('isolated', None))
 
+    def test_writes_allowed(self):
+        """Запис у `home` заборонено лише ізольованому прогону зі СПРАВЖНІМ `~/.deai` (Поправка 7)."""
+        import pwd
+        real = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.deai')
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__('shutil').rmtree(tmp, ignore_errors=True))
+        self.assertTrue(isolation.writes_allowed(tmp))
+        self.assertTrue(isolation.writes_allowed(real))              # не ізольований: звичайний користувач пише у свій дім
+        with mock.patch.dict(os.environ, {'DC_TASKS_FILE': '1'}):
+            self.assertFalse(isolation.writes_allowed(real))
+            self.assertTrue(isolation.writes_allowed(tmp))
+        with mock.patch.dict(os.environ, {'DC_NO_OVERVIEW': '1'}):
+            self.assertFalse(isolation.writes_allowed(real))
+
     def test_each_role_uses_its_own_seam(self):
         for role, env in isolation.FAKE_ENV.items():
             with mock.patch.dict(os.environ, {env: '/tmp/x.json'}):

@@ -59,3 +59,10 @@ def real_home(home):
             return False
     except (OSError, ValueError, TypeError):
         return True
+
+
+def writes_allowed(home):
+    """Чи можна писати файли машини (`update.json`, `feedback/`) у `home` (`DEAI_HOME`): НЕ (ізольований прогін І `home` — справжній
+    `~/.deai`). Той самий предикат, що в `serve_main` для `materialize_static_publish`; у ізольованого прогону з тимчасовим `home`
+    запис дозволено, а без нього (живі тести без `spaces`) стан лишається в памʼяті процесу."""
+    return not (isolated() and real_home(home))

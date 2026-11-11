@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 import pages_model as pm  # чиста модель сторінок ітерації (Task 1)
 import spaces  # простори машини: який файл задач діє для запиту (етап 1 Deai 1.0)
 import isolation  # закон ізоляції й шви тестів (4d-4b; раніше `implicit.py`)
+import updater  # оновлення інструмента (0.23.0): перевірка тегів у remote, `update.json`, `GET /api/update`
 import deai_modules  # вбудовані модулі (етап 2а): хто виконує роль `publish` у просторі запиту
 import dashboard  # командний дашборд (4c-1): збирання карток і читання рядків команди через постачальника ролі
 import tracker  # статуси задач у трекері (4c-2): ядро ролі `tracker` (ключі, пакети, нормалізація, адаптер ЛІГИ)
@@ -5409,6 +5410,35 @@ _SYNC_LOCK = threading.Lock()
 _SYNC_RUNS = {}
 
 
+# ---------- Оновлення інструмента (0.23.0) ----------
+#: Корінь, який оновлюємо (шов тестів: викидний git-світ).
+UPDATER_ROOT = ROOT
+_UPDATER = None
+_UPDATER_LOCK = threading.Lock()
+
+
+def _update_busy():
+    """Чому зараз не можна міняти код під ногами (`None` — можна): триває зʼємка чи живий процес синку дашборда."""
+    with _SHOOTS_LOCK:
+        if _SHOOTS:
+            return 'shooting'
+    with _SYNC_LOCK:
+        for run in list(_SYNC_RUNS.values()):
+            p = run.get('popen')
+            if p is not None and p.poll() is None:
+                return 'syncing'
+    return None
+
+
+def _updater():
+    """Єдиний `Updater` процесу (ліниво: корінь читається при першому зверненні, тож тест підміняє `UPDATER_ROOT` до нього)."""
+    global _UPDATER
+    with _UPDATER_LOCK:
+        if _UPDATER is None:
+            _UPDATER = updater.Updater(UPDATER_ROOT, busy=_update_busy)
+        return _UPDATER
+
+
 def _overview_target():
     """`(ключ синку, аргументи простору для CLI)`. Простір запиту фіксований — це його id: `--space <id>` (ключ = id). Не
     фіксований (інструменти ЛІГИ, тести): `provider` вирішує як для ЛІГИ без реєстру, тож і тут беремо ЇЇ — реальний id запису
@@ -5758,6 +5788,12 @@ class Handler(SimpleHTTPRequestHandler):
                         '/api/module-settings', '/api/module-check', '/api/ds-tokens',
                         '/api/module-trust', '/api/module-untrust')
 
+    #: Маршрути МАШИНИ (оновлення, відгук): потрібні саме тоді, коли щось зламано (порожня машина, битий реєстр, нечитабельний
+    #: `tasks.json`). `_take_task` для них НЕ фіксує простір і не читає задач; префіксна форма `/t/<id>/api/…` відхиляється 400.
+    #: Обробники самі й тотально збирають контекст (простір, задача). Точна відповідність (шлях без query), кожен маршрут окремо.
+    _MACHINE_ROUTES = ('/api/update', '/api/update-check', '/api/update-apply', '/api/update-notes',
+                       '/api/feedback', '/api/feedback-preview')
+
     def _pin_current_space(self):
         """Не названа задача: простір запиту — поточний простір машини НА ВХОДІ. Запит дочитує
         його, навіть коли хтось перемкне поточний посеред обробки (друге вікно канваса, агент).
@@ -5814,7 +5850,14 @@ class Handler(SimpleHTTPRequestHandler):
                                  '/api/space*, /api/modules, /api/module-* і /api/ds-tokens '
                                  'без префікса /t/<id>/'}, status=400)
                 return False
+            if self.path.split('?')[0] in self._MACHINE_ROUTES:
+                self._drain_body()
+                self._send_json({'ok': False, 'error': 'оновлення й відгук не привʼязані до задачі: '
+                                 'звертайся до /api/update*, /api/feedback* без префікса /t/<id>/'}, status=400)
+                return False
         else:
+            if self.path.split('?')[0] in self._MACHINE_ROUTES:
+                return True          # машина, не простір: без `_pin_current_space` і без читання задач (див. `_MACHINE_ROUTES`)
             if self.path.split('?')[0] in self._REGISTRY_ROUTES:
                 self._pin_current_space()
                 return True          # заголовок тут не діє (див. `_REGISTRY_ROUTES`)
@@ -5880,6 +5923,9 @@ class Handler(SimpleHTTPRequestHandler):
     # ---------- GET ----------
 
     def do_GET(self):
+        if self.path.split('?')[0] == '/api/update':
+            self._send_json(_updater().status())
+            return
         if self.path.split('?')[0] == '/api/spaces':
             # Шар вимкнено → `{current: null, spaces: [], off: true}` (рішає `spaces.listing`).
             # Кожен запис ще й несе `capabilities` (див. `spaces_listing`).
@@ -7005,8 +7051,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._module_trust_post(payload)
         elif self.path == '/api/module-untrust':
             self._module_untrust(payload)
+        elif self.path == '/api/update-check':
+            self._update_check(payload)
         else:
             self.send_error(404)
+
+    def _update_check(self, payload):
+        """`POST /api/update-check`: спитати remote зараз (ручна перевірка) → `{ok: true, …status}`. Тіло не читається."""
+        u = _updater()
+        u.check()
+        self._send_json({'ok': True, **u.status()})
 
     def _new_iteration(self, payload):
         """Створити ітерацію КОПІЄЮ з обраної (from) — форк. Без from: порожня стартова."""
@@ -9016,6 +9070,10 @@ def serve_main(port):
                 print('простір %s: публікація в теку тепер явний запис static-publish (екран «Підключення»)' % sid, file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — крок не валить старт
         print('static-publish: крок пропущено (%s)' % type(e).__name__, file=sys.stderr)
+    try:
+        updater.start_background(_updater())          # перша перевірка тегів через ~5 с, далі раз на 6 год; не валить старт
+    except Exception as e:  # noqa: BLE001
+        print('оновлення: фонову перевірку не запущено (%s)' % type(e).__name__, file=sys.stderr)
     srv.serve_forever()
 
 
