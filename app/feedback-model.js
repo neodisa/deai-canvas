@@ -64,12 +64,14 @@ export function createSession({ ctx = {}, clientErrors = [], lang = "uk" } = {})
     },
     /** Тіло `POST /api/feedback`. `shotAvailable` — що сказав попередній перегляд; без кадру `include_shot` завжди `false`.
      *  `diagHash` — відбиток діагностики з ОСТАННЬОГО показаного перегляду: сервер звіряє його («що показано = що піде»). */
-    sendBody: ({ kind, text, contact, includeDiag, includeShot, shotAvailable, diagHash }) => {
+    sendBody: ({ kind, text, contact, includeDiag, includeShot, shotAvailable, diagHash, ringSeq }) => {
       const o = { kind, text: String(text ?? "").trim(), ...base(), client_errors: errors };
       const c = String(contact ?? "").trim();
       if (c) o.contact = c;
       o.include_diag = includeDiag !== false;
       if (typeof diagHash === "string" && diagHash) o.diag_hash = diagHash;
+      /* Номер кільця помилок сервера з перегляду: відправка бере лише події до нього, тож нові помилки не ламають збіг відбитка. */
+      if (Number.isInteger(ringSeq) && ringSeq >= 0) o.ring_seq = ringSeq;
       o.include_shot = includeShot === true && shotAvailable === true;
       return o;
     },
@@ -89,7 +91,7 @@ export function previewFromConflict(prev, body) {
   const b = body && typeof body === "object" ? body : null;
   if (!b || b.code !== "diag-changed" || !b.diag || typeof b.diag !== "object" || typeof b.diag_hash !== "string") return null;
   const shot = b.shot && typeof b.shot === "object" ? b.shot : (prev && prev.shot) || { available: false };
-  return { ok: true, diag: b.diag, diag_hash: b.diag_hash, shot };
+  return { ok: true, diag: b.diag, diag_hash: b.diag_hash, ring_seq: Number.isInteger(b.ring_seq) ? b.ring_seq : (prev && prev.ring_seq), shot };
 }
 
 /** Результат `POST /api/feedback` → `{key, args, suffixKey}`: ключ тосту, його аргументи й (для памʼяті-лише) додаток. */

@@ -2460,7 +2460,7 @@ function feedbackContext() {
 async function fetchFeedbackPreview(sess) {
   const r = await jsonPost('/api/feedback-preview', sess.previewBody());
   return r && r.status === 200 && r.body && r.body.ok === true && r.body.diag && typeof r.body.diag === 'object'
-    && typeof r.body.diag_hash === 'string' ? r.body : null;
+    && typeof r.body.diag_hash === 'string' && Number.isInteger(r.body.ring_seq) ? r.body : null;
 }
 
 let feedbackDialogOpen = false;
@@ -2518,7 +2518,7 @@ async function openFeedback() {
         if (bad) { ctl.focus(errField(bad)); return t(bad, errArg(bad)); }
         const r = await jsonPost('/api/feedback', sess.sendBody({
           kind: vals.kind, text: vals.text, contact: vals.contact,
-          includeDiag: vals.diag, includeShot: vals.shot, shotAvailable: shotState(preview).available, diagHash: preview?.diag_hash,
+          includeDiag: vals.diag, includeShot: vals.shot, shotAvailable: shotState(preview).available, diagHash: preview?.diag_hash, ringSeq: preview?.ring_seq,
         }));
         if (!r) return t('fbErrGeneric', t('fbErrNoAnswer'));
         const b = r.body && typeof r.body === 'object' ? r.body : {};

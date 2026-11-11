@@ -198,15 +198,18 @@ test("sendBody несе diag_hash лише коли він є; shotUrl — ли�
   assert.equal(s.sendBody(form({ diagHash: "ab".repeat(32) })).diag_hash, "ab".repeat(32));
   assert.equal("diag_hash" in s.sendBody(form()), false);
   assert.equal("diag_hash" in s.sendBody(form({ diagHash: 5 })), false);
+  assert.equal(s.sendBody(form({ ringSeq: 12 })).ring_seq, 12);
+  assert.equal(s.sendBody(form({ ringSeq: 0 })).ring_seq, 0);
+  for (const bad of [undefined, -1, "3", 1.5, null]) assert.equal("ring_seq" in s.sendBody(form({ ringSeq: bad })), false, String(bad));
   const withShot = createSession({ ctx: { ...CTX, it: "it 1", node: "home@375" }, clientErrors: [], lang: "uk" });
   assert.equal(withShot.shotUrl(), "/shot?it=it%201&node=home%40375");
   assert.equal(createSession({ ctx: { task: "x" }, clientErrors: [], lang: "uk" }).shotUrl(), "");
 });
 
 test("previewFromConflict: 409 diag-changed → новий перегляд; інше → null", () => {
-  const prev = { ok: true, diag: { a: 1 }, diag_hash: "h1", shot: { available: true, bytes: 9 } };
+  const prev = { ok: true, diag: { a: 1 }, diag_hash: "h1", ring_seq: 7, shot: { available: true, bytes: 9 } };
   const fresh = previewFromConflict(prev, { ok: false, code: "diag-changed", diag: { a: 2 }, diag_hash: "h2" });
-  assert.deepEqual(fresh, { ok: true, diag: { a: 2 }, diag_hash: "h2", shot: { available: true, bytes: 9 } });
+  assert.deepEqual(fresh, { ok: true, diag: { a: 2 }, diag_hash: "h2", ring_seq: 7, shot: { available: true, bytes: 9 } });
   assert.deepEqual(previewFromConflict(null, { code: "diag-changed", diag: {}, diag_hash: "h", shot: { available: false } }).shot, { available: false });
   for (const bad of [null, {}, { code: "other", diag: {}, diag_hash: "h" }, { code: "diag-changed", diag: {} }, { code: "diag-changed", diag_hash: "h" }]) {
     assert.equal(previewFromConflict(prev, bad), null, JSON.stringify(bad));
@@ -245,7 +248,8 @@ test("fbWhatHint переписано чесно в обох мовах", () => 
 
 test("app.js: перегляд без diag_hash не годиться; 409 показує новий перегляд; знімок знову вмикається після перемальовки", () => {
   const fb = appJs.slice(appJs.indexOf("async function fetchFeedbackPreview"), appJs.indexOf("async function loadTeamsMute"));
-  assert.match(fb, /typeof r\.body\.diag_hash === 'string'/);
+  assert.match(fb, /typeof r\.body\.diag_hash === 'string' && Number\.isInteger\(r\.body\.ring_seq\)/);
+  assert.match(fb, /ringSeq: preview\?\.ring_seq/);
   assert.match(fb, /diagHash: preview\?\.diag_hash/);
   assert.match(fb, /r\.status === 409\) \{[\s\S]*previewFromConflict\(preview, b\)[\s\S]*t\('fbDiagChanged'\)/);
   assert.match(fb, /previewFailed: !preview/);
