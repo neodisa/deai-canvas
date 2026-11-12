@@ -16,7 +16,10 @@
 # Змінні (тести/розробка): CANVAS_APP_DIR (типово ~/Applications),
 # CANVAS_AGENTS_DIR (~/Library/LaunchAgents), CANVAS_LSREGISTER,
 # CANVAS_ALLOW_WORKTREE=1 — дозволити встановлення з git-ворктрі,
-# DEAI_WORK_DIR (абсолютний шлях) — тека живих джерел для :4317, запікається в автостарт.
+# DEAI_WORK_DIR — тека живих джерел для :4317; запікається і в автостарт, і в запускач .app
+# (щоб клік по іконці піднімав сервери з тією самою текою). Лише абсолютний шлях без керівних
+# символів, інакше ключа нема і буде попередження (start.command візьме ~/deai-work).
+# DEAI_PORT НЕ запікається: бойовий порт фіксований (8765), DEAI_PORT — лише для ізольованих запусків.
 # Спека: docs/superpowers/specs/2026-10-09-canvas-app-design.md
 set -euo pipefail
 
@@ -118,7 +121,11 @@ do_uninstall() {
   echo "🛑 Design Canvas.app і автостарт прибрано. Сервери, якщо працюють, лишились — ./stop.command."
 }
 
-valid_bundle_id() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] && [ "$1" != "$BUNDLE_ID" ]; }
+# Зворотний DNS: щонайменше дві мітки, без порожніх, без дефіса першим; і не наш власний id.
+valid_bundle_id() {
+  local re='^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$'
+  [[ "$1" =~ $re ]] && [[ "$1" != -* ]] && [ "$1" != "$BUNDLE_ID" ]
+}
 
 # --replace <старий bundle id>: знімає застосунок із ТОЧНО цим id і його агента `<id>.autostart`.
 # Застосунок з іншим id не чіпає (далі do_install відмовить «не наш»).
@@ -154,15 +161,14 @@ do_install() {
     echo "  Запусти з основного чекауту (для розробки — CANVAS_ALLOW_WORKTREE=1)." >&2
     exit 1
   fi
-  # Старе знімаємо лише тут — після всіх перевірок, що відмовили б у установці (інакше людина лишилась би без канваса).
-  if [ -n "$replace_id" ]; then replace_old "$replace_id"; fi
-  if [ -e "$APP" ] && ! ours; then
+  # Чужий застосунок на нашому місці — відмова. Виняток: його id = той, що просили замінити (--replace).
+  if [ -e "$APP" ] && ! ours && [ "$(plist_get "$INFO" CFBundleIdentifier)" != "$replace_id" ]; then
     echo "✗ $APP уже є, і це не наш застосунок — не перезаписую." >&2
     exit 1
   fi
 
   # Версія — з package.json у корені клону; нема/битий → 0, установка не падає.
-  local version
+  local version work=''
   version="$(python3 - "$PKG" 2>/dev/null <<'PY' || true
 import json, sys
 try:
@@ -173,7 +179,17 @@ except Exception:
 print(v.strip() if isinstance(v, str) and v.strip() else '0')
 PY
 )"
-  [ -n "$version" ] || version=0
+  # Лише безпечні символи (інакше plistlib падає на керівних, а версія йде в Info.plist).
+  [[ "$version" =~ ^[0-9A-Za-z.+-]+$ ]] || version=0
+  # DEAI_WORK_DIR: абсолютний шлях без керівних символів [\x00-\x1f\x7f]; інакше — без ключа й із попередженням.
+  local cntrl='[[:cntrl:]]'   # не grep: він бачить лише рядки, а \n теж керівний
+  if [ -n "${DEAI_WORK_DIR:-}" ]; then
+    if [[ "$DEAI_WORK_DIR" == /* ]] && ! [[ "$DEAI_WORK_DIR" =~ $cntrl ]]; then
+      work="$DEAI_WORK_DIR"
+    else
+      echo "⚠ DEAI_WORK_DIR ігнорую: потрібен абсолютний шлях без керівних символів — буде типовий ~/deai-work."
+    fi
+  fi
   # Сервер, що працював ДО встановлення, живе зі своїм старим оточенням.
   local was_up=0
   if [ "$(curl -s -o /dev/null -m 2 -w '%{http_code}' "$CANVAS_URL")" = "200" ]; then was_up=1; fi
@@ -181,8 +197,11 @@ PY
   # Збираємо поруч і підміняємо одним mv: збій посередині (іконка, python3,
   # Ctrl-C) раніше лишав .app без Info.plist, і далі install та --uninstall
   # відмовлялись — «не наш застосунок».
+  # План агента — так само тимчасовий файл (у ТІЙ САМІЙ теці, щоб mv був атомарним): чинний plist
+  # не обрізається, поки все не зібрано.
   BUILD="$APP_DIR/.Design Canvas.app.building.$$"
-  trap '[ -n "${BUILD:-}" ] && rm -rf "$BUILD"' EXIT
+  NEWPLIST="$AGENTS_DIR/.$LABEL.plist.new.$$"
+  trap '[ -n "${BUILD:-}" ] && rm -rf "$BUILD"; [ -n "${NEWPLIST:-}" ] && rm -f "$NEWPLIST"' EXIT
   mkdir -p "$BUILD/Contents/MacOS" "$BUILD/Contents/Resources" "$AGENTS_DIR" "$(dirname "$AGENT_LOG")"
   if [ -f "$ICON" ]; then
     cp "$ICON" "$BUILD/Contents/Resources/DesignCanvas.icns"
@@ -190,13 +209,13 @@ PY
     echo "⚠ нема $ICON — застосунок буде без іконки"
   fi
 
-  python3 - "$BUILD/Contents/Info.plist" "$PLIST" "$BUNDLE_ID" "$LABEL" "$LAUNCH" "$PATH" "$version" "$AGENT_LOG" "${DEAI_WORK_DIR:-}" <<'PY'
+  python3 - "$BUILD/Contents/Info.plist" "$NEWPLIST" "$BUNDLE_ID" "$LABEL" "$LAUNCH" "$PATH" "$version" "$AGENT_LOG" "$work" <<'PY'
 import plistlib, sys
 info, agent, bundle_id, label, launch, path, version, log = sys.argv[1:9]
 work = sys.argv[9] if len(sys.argv) > 9 else ''
 env = {'PATH': path}
-# Лише абсолютний шлях в один рядок; інакше ключа нема (типово start.command бере ~/deai-work).
-if work.startswith('/') and '\n' not in work:
+# Шлях уже перевірено в install.sh; тут лише страховка — інакше ключа нема.
+if work.startswith('/') and not any(ord(c) < 32 or ord(c) == 127 for c in work):
     env['DEAI_WORK_DIR'] = work
 with open(info, 'wb') as f:
     plistlib.dump({
@@ -230,12 +249,14 @@ with open(agent, 'wb') as f:
     }, f)
 PY
   # launchd відкидає plist, у який може писати група (umask 002).
-  chmod 644 "$PLIST"
+  chmod 644 "$NEWPLIST"
 
   {
     echo '#!/bin/bash'
     echo '# Згенеровано ops/canvas-app/install.sh — не правити руками, перевстанови.'
     printf 'export PATH=%q\n' "$PATH"
+    # Той самий DEAI_WORK_DIR, що в автостарті: клік по іконці піднімає сервери з тією ж текою.
+    if [ -n "$work" ]; then printf 'export DEAI_WORK_DIR=%q\n' "$work"; fi
     printf 'L=%q\n' "$LAUNCH"
     cat <<'SH'
 if [ ! -f "$L" ]; then
@@ -251,9 +272,13 @@ SH
   } > "$BUILD/Contents/MacOS/design-canvas"
   chmod +x "$BUILD/Contents/MacOS/design-canvas"
 
-  rm -rf "$APP"   # свій (перевірено вище) — підміняємо зібраним
+  # Усе зібрано — лише тепер знімаємо старе (інакше збій збирання лишив би людину без канваса).
+  if [ -n "$replace_id" ]; then replace_old "$replace_id"; fi
+  rm -rf "$APP"   # свій (перевірено вище) або знятий replace_old — підміняємо зібраним
   mv "$BUILD" "$APP"
   BUILD=""
+  mv -f "$NEWPLIST" "$PLIST"
+  NEWPLIST=""
   if [ -x "$LSREGISTER" ]; then "$LSREGISTER" -f "$APP" >/dev/null 2>&1 || true; fi
   echo "✅ $APP"
   echo "   Spotlight: ⌘Space → «Design Canvas». У Dock — перетягни з ~/Applications."
