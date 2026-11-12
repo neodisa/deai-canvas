@@ -3,6 +3,38 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.23.1] — 12.11.2026
+
+Before the team release: feedback now reaches the maintainer from every copy, and the tails of 0.23.0.
+
+### Added
+- **The feedback collector ships with the product.** `app/feedback.json` carries the address and the publishable key of the Deai
+  feedback project, so a note sent from any copy reaches the maintainer without setup; notes that waited in `outbox` since 0.23.0
+  go out on the first background retry after the update. The key is public by design: it can only insert (checked against the
+  live project with that key: insert is accepted; select, update, delete, a forged `created_at`, and listing, reading, overwriting or
+  deleting screenshots are refused). A fork points at its own collector as before (`DEAI_FEEDBACK_URL`/`DEAI_FEEDBACK_KEY` or
+  `config.json`).
+- **An empty `DEAI_FEEDBACK_URL` turns the collector off** (the variable is present, the value is blank): neither `config.json` nor
+  `app/feedback.json` is read. Tests and live fixtures rely on it; a guard (`tests/test_no_network.py`) fails any test that starts
+  the server without switching the collector off.
+
+### Fixed
+- **«What's new» fetched the tag again on every open** when the tag had no `CHANGELOG.md` or did not resolve: these outcomes are
+  now cached for a minute, like a failed fetch.
+- **The bar of Tasks, Connections and the new-space wizard at narrow widths**: the crumb collapsed to 20px and its label painted over
+  «Back», and a long task id in «Back» pushed the bar 219px past the window at 320px. These pages now give the whole bar to the left
+  zone; the decorative icon yields first, labels end in an ellipsis (the full id stays in the tooltip). The canvas task bar and the
+  external preview bar are unchanged.
+- **The fixture heuristic of the task registry** (`bin/registry.py`) took every task of a home folder that itself lives in a temporary
+  folder for a test fixture; a home equal to a temporary root (`HOME=/tmp`) still keeps the detection on.
+- `ops/feedback-collector.sql` creates `pg_net` in the `extensions` schema (Supabase security advisor «Extension in Public»). A
+  project that ran the 0.23.0 script keeps working; to move it: `drop extension pg_net; create extension pg_net with schema extensions;`
+  (the trigger calls `net.http_post`, which stays in schema `net`).
+
+### Tests
+- `inspector-ds` checks verdicts against the tokens of a space (`css-tokens`), not against the static snapshot, which is empty in
+  Deai by design; it got its own port band. New live test `bar-narrow` (320–520px, long task id).
+
 ## [0.23.0] — 11.11.2026
 
 Feedback and updates. Two things a person asked for: tell the maintainer about a bug or an idea without leaving the canvas, and
