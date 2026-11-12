@@ -778,6 +778,17 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
    файлі `.crumb{max-width:110px}` (крошки дерева шарів) перебиває ліміт 260px зверху, і в UK іконка стискалась до 0px.
    Два класи — щоб перемагати незалежно від порядку; `.crumb--flat` загалом НЕ чіпаємо: ним користується зовнішня оболонка превʼю. */
 .crumb.crumb--page{max-width:none}
+/* 0.23.1: пріоритети стиснення на сторінках оверлею (Задачі / Підключення / майстер). Зони 2 і 3 там порожні, але грид `1fr auto 1fr` усе одно
+   віддавав зоні 1 лише третину смуги, і крошка зі всіма сусідами (палітра, оновлення, відгук, фішка простору) стискалась до 20px: підпис
+   вилазив за крошку й малювався поверх «Назад». Тепер зона 1 бере всю смугу, а стискаються у такому порядку: ДЕКОРАТИВНА іконка крошки
+   (першою), потім підпис (трикрапка, але не менше ~3 символів), і лише тоді кнопка «Назад». Логотип не стискається ніколи (`.logo-btn{flex:none}`).
+   ⛔ `flex:none` на іконку крошки НЕ ставити: виміряно — підпис від того обрізається ще на 16px. */
+.bar--home{grid-template-columns:minmax(0,1fr)}
+.bar--home .zone-2,.bar--home .zone-3{display:none}
+.crumb.crumb--page{flex:0 1 auto;min-width:3.5em;overflow:hidden}
+.crumb--page .ico{flex:0 100 auto;min-width:0}
+.bar--home .zone-1>.space-h{flex:0 1 auto}   /* `>`, а не пробіл: `tests/spaces-css.test.mjs` шукає голе `.space-h{…}` і мусить знайти `flex:none` */
+.crumb--page .txt{min-width:0;overflow:hidden;text-overflow:ellipsis}
 
 .txt--fix{flex:none}
 .txt--soft{min-width:0;overflow:hidden;text-overflow:ellipsis}

@@ -622,7 +622,7 @@ export function barHTML(model, state) {
       <button class="ctl ctl--out" data-act="retry">${ico("refresh")}${esc(t("retry"))}</button></div>`
     : "";
 
-  return `<div class="bar">
+  return `<div class="bar${home ? " bar--home" : ""}">
     <div class="zone zone-1">${zone1}</div>
     <div class="zone zone-2">${zone2}</div>
     <div class="zone zone-3">${zone3}</div>
