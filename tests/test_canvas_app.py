@@ -451,7 +451,7 @@ class InstallTest(StubWorld):
     def setUp(self):
         super().setUp()
         self.repo = os.path.join(self.tmp, "Liga Tools's")
-        self.ops = os.path.join(self.repo, 'design-canvas', 'ops', 'canvas-app')
+        self.ops = os.path.join(self.repo, 'ops', 'canvas-app')
         os.makedirs(self.ops)
         shutil.copy(os.path.join(OPS, 'install.sh'), self.ops)
         with open(os.path.join(self.ops, 'DesignCanvas.icns'), 'wb') as f:
@@ -459,8 +459,8 @@ class InstallTest(StubWorld):
         self.launch = os.path.join(self.ops, 'launch.sh')
         self.path_seen = os.path.join(self.tmp, 'path-seen')
         write_exec(self.launch, f'echo "$PATH" > "{self.path_seen}"\n')
-        with open(os.path.join(self.repo, 'VERSION'), 'w') as f:
-            f.write('1.52.0\n')
+        with open(os.path.join(self.repo, 'package.json'), 'w') as f:
+            f.write('{"name": "deai-canvas", "version": "1.52.0"}\n')
         self.apps = os.path.join(self.tmp, 'Applications')
         self.agents = os.path.join(self.tmp, 'LaunchAgents')
         self.app = os.path.join(self.apps, 'Design Canvas.app')
@@ -498,7 +498,7 @@ class InstallTest(StubWorld):
         git('commit', '-qm', 'fixture')
         wt = os.path.join(self.tmp, 'wt')
         git('worktree', 'add', '-q', wt)
-        return os.path.join(wt, 'design-canvas', 'ops', 'canvas-app', 'install.sh')
+        return os.path.join(wt, 'ops', 'canvas-app', 'install.sh')
 
     # --- збирання ---
 
@@ -515,6 +515,25 @@ class InstallTest(StubWorld):
         icon = os.path.join(self.app, 'Contents', 'Resources', info['CFBundleIconFile'] + '.icns')
         self.assertTrue(os.path.isfile(icon))
         self.assertIn(f'lsregister -f {self.app}', self.calls())
+
+    def test_version_comes_from_package_json(self):
+        r = self.install()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.read_plist(self.info)['CFBundleShortVersionString'], '1.52.0')
+
+    def test_broken_or_missing_package_json_gives_version_zero_not_a_failure(self):
+        pkg = os.path.join(self.repo, 'package.json')
+        for body in (None, '{not json', '{"version": 7}', '[]', '{"version": "  "}'):
+            if body is None:
+                os.remove(pkg)
+            else:
+                with open(pkg, 'w') as f:
+                    f.write(body)
+            r = self.install()
+            self.assertEqual(r.returncode, 0, (body, r.stderr))
+            self.assertEqual(self.read_plist(self.info)['CFBundleShortVersionString'], '0', body)
+            with open(pkg, 'w') as f:        # відновити для наступного кола
+                f.write('{"version": "1.52.0"}')
 
     def test_launcher_brings_install_time_path_to_launch_sh(self):
         # Головна причина застосунку: з Dock нема ~/.zshrc, а з ним node/python.

@@ -6,9 +6,9 @@
 # Запускати З ТЕРМІНАЛА основного чекауту: вшиває поточний PATH (nvm, python з
 # /Library/Frameworks), якого не бачать ні Dock, ні launchd.
 #
-#   bash design-canvas/ops/canvas-app/install.sh              поставити / оновити
-#   bash design-canvas/ops/canvas-app/install.sh --check      перевірити
-#   bash design-canvas/ops/canvas-app/install.sh --uninstall  прибрати
+#   bash ops/canvas-app/install.sh              поставити / оновити
+#   bash ops/canvas-app/install.sh --check      перевірити
+#   bash ops/canvas-app/install.sh --uninstall  прибрати
 #
 # Змінні (тести/розробка): CANVAS_APP_DIR (типово ~/Applications),
 # CANVAS_AGENTS_DIR (~/Library/LaunchAgents), CANVAS_LSREGISTER,
@@ -20,7 +20,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SELF="$HERE/install.sh"
 LAUNCH="$HERE/launch.sh"
 ICON="$HERE/DesignCanvas.icns"
-VERSION_FILE="$HERE/../../../VERSION"
+PKG="$HERE/../../package.json"
 BUNDLE_ID="app.deai.designcanvas"
 LABEL="$BUNDLE_ID.autostart"
 APP_DIR="${CANVAS_APP_DIR:-$HOME/Applications}"
@@ -133,8 +133,19 @@ do_install() {
     exit 1
   fi
 
-  local version=0
-  if [ -f "$VERSION_FILE" ]; then version="$(tr -d '[:space:]' < "$VERSION_FILE")"; fi
+  # Версія — з package.json у корені клону; нема/битий → 0, установка не падає.
+  local version
+  version="$(python3 - "$PKG" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        v = json.load(f).get('version', '')
+except Exception:
+    v = ''
+print(v.strip() if isinstance(v, str) and v.strip() else '0')
+PY
+)"
+  [ -n "$version" ] || version=0
   # Сервер, що працював ДО встановлення, живе зі своїм старим оточенням.
   local was_up=0
   if [ "$(curl -s -o /dev/null -m 2 -w '%{http_code}' "$CANVAS_URL")" = "200" ]; then was_up=1; fi
@@ -190,14 +201,14 @@ PY
 
   {
     echo '#!/bin/bash'
-    echo '# Згенеровано design-canvas/ops/canvas-app/install.sh — не правити руками, перевстанови.'
+    echo '# Згенеровано ops/canvas-app/install.sh — не правити руками, перевстанови.'
     printf 'export PATH=%q\n' "$PATH"
     printf 'L=%q\n' "$LAUNCH"
     cat <<'SH'
 if [ ! -f "$L" ]; then
   osascript - "$L" >/dev/null 2>&1 <<'OSA'
 on run argv
-  display alert "Design Canvas не знайдено" message ("Нема " & (item 1 of argv) & return & "Репо переїхало чи видалене — перевстанови: bash design-canvas/ops/canvas-app/install.sh") as critical
+  display alert "Design Canvas не знайдено" message ("Нема " & (item 1 of argv) & return & "Репо переїхало чи видалене — перевстанови: bash ops/canvas-app/install.sh") as critical
 end run
 OSA
   exit 1
@@ -229,7 +240,7 @@ SH
   echo "   macOS може сповістити «Додано фонові обʼєкти» (від «bash») — це він; не вимикай його в Обʼєктах входу."
   if [ "$was_up" = 1 ]; then
     echo "ℹ Сервер канваса вже працював до встановлення — зі своїм старим оточенням. Якщо його"
-    echo "   піднято подвійним кліком з Finder (без node), перезапусти: design-canvas/stop.command, потім клік по іконці."
+    echo "   піднято подвійним кліком з Finder (без node), перезапусти: stop.command, потім клік по іконці."
   fi
   if ! in_path "$PATH" node; then
     echo "⚠ node у PATH нема — публікація превʼю з канваса не піде. Постав Node і перевстанови."
