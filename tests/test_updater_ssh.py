@@ -156,6 +156,15 @@ class LocalSshCommand(Base):
             'amp': 'ssh -i /k/id &',
             'backtick': 'ssh -i `id`',
             'dollar-paren': 'ssh -i $(id)',
+            # Після ревʼю П21: дозволений перелік символів замість забороненого — ловить і те, чого заборонений перелік не знав.
+            'redirect-out': 'ssh -i /k/id >',
+            'redirect-in': 'ssh -i /k/id <',
+            'subshell': '(ssh -i /k/id)',
+            'brace-group': '{ ssh -i /k/id; }',
+            'bang': 'ssh -i /k/id !x',
+            'glob': 'ssh -i /k/id*',
+            'dollar-var': 'ssh -i $HOME/k/id',
+            'tab': 'ssh\t-i /k/id',
         }
         for name, val in bad.items():
             with self.subTest(name):
@@ -166,6 +175,16 @@ class LocalSshCommand(Base):
                 self.assertEqual(env['GIT_SSH_COMMAND'], self.DEFAULT)
                 self.assertIn('updater: ssh-command-rejected', err.getvalue())
                 self.assertNotIn('/k/id', err.getvalue())
+
+    def test_typical_values_are_accepted(self):
+        _, work = make_world(self.tmp)
+        for val in ('ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o HostKeyAlias=gl.example.test',
+                    "ssh -p 2222 -F '/k/cfg' -o UserKnownHostsFile=/k/known_hosts",
+                    'ssh -i /Users/дизайнер/ключ_1 -o ProxyJump=git@jump.example.test:2222'):
+            with self.subTest(val):
+                git(['config', '--local', 'core.sshCommand', val], work)
+                self.assertEqual(updater._git_env(cwd=work, network=True)['GIT_SSH_COMMAND'],
+                                 val + ' -o BatchMode=yes -o ConnectTimeout=10')
 
     def test_quoted_path_with_space_is_accepted(self):
         _, work = make_world(self.tmp)
@@ -201,7 +220,9 @@ class LocalSshCommand(Base):
 
     # П21.3
     def test_subcommand_skips_values_of_space_form_global_options(self):
-        for opt in ('-C', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env'):
+        # `--exec-path` значення бере лише у формі `=` (без нього друкує шлях) — тому наступний аргумент не пропускається.
+        self.assertEqual(updater._subcommand(['--exec-path', 'fetch']), 'fetch')
+        for opt in ('-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env'):
             with self.subTest(opt):
                 self.assertEqual(updater._subcommand([opt, 'x', 'fetch']), 'fetch')
                 self.assertEqual(updater._subcommand(['-c', 'a=b', opt, 'x', 'ls-remote']), 'ls-remote')

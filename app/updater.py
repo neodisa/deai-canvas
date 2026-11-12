@@ -118,7 +118,7 @@ def _communicate(argv, cwd, env, timeout):
 _NETWORK_SUBCOMMANDS = ('ls-remote', 'fetch', 'clone', 'pull', 'push')
 
 
-_GLOBAL_OPTS_WITH_VALUE = ('-C', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env')
+_GLOBAL_OPTS_WITH_VALUE = ('-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env')  # `--exec-path` — лише `=`
 
 
 def _subcommand(args):
@@ -141,9 +141,14 @@ def _base_env():
     return {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
 
 
+#: Дозволений перелік для локального `core.sshCommand`: шляхи (і не-ASCII), прапорці `-i/-o/-F/-p`, лапки, `~`, `%`-токени ssh.
+#: Усе інше (`\ # ; | & ` $ ( ) { } < > * ? [ ] !`, таб, новий рядок, NUL) — відмова: заборонений перелік завжди чогось не знає.
+_SSH_SAFE_RE = re.compile(r'^[\w./ =:,@%+"\'~-]+\Z')
+
+
 def _ssh_value_unsafe(val):
     """`git` виконує `core.sshCommand` через `sh -c`: значення з метасимволами оболонки зламало б (чи поглинуло) дописані `-o BatchMode…`."""
-    if '\n' in val or '\x00' in val or val.endswith('\\') or any(c in val for c in '#;|&`') or '$(' in val:
+    if not _SSH_SAFE_RE.match(val):
         return True
     try:
         shlex.split(val)
