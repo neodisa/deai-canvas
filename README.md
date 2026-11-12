@@ -585,6 +585,17 @@ the folder is not a git checkout, has local edits, a detached head or local comm
 - `DEAI_UPDATE_REMOTE=<remote name, https:// or ssh:// address, user@host:path, or an absolute local path>` overrides the remote.
 - The update trusts the tag on the remote: use a remote you trust (tag signatures are planned).
 
+**Install & updates.** Deai installs and updates from the public GitHub repository over https: no account, no key, no VPN.
+
+    git clone https://github.com/neodisa/deai-canvas.git
+    cd deai-canvas && ops/canvas-app/install.sh
+
+After that the in-app button (the pill in the bar → «What's new» → update) is the way to update: it follows the release tags
+`vX.Y.Z` of the remote the checkout was cloned from. A release is published by pushing exactly the branch and the tag, by name:
+`git push <remote> main vX.Y.Z` (not `--tags`, `--mirror` or `--all`: local tags such as `backup-*` must not travel). A private
+mirror is optional: clone from it instead, and the updater honours the clone's own `core.sshCommand` (0.24.0), so a mirror behind
+its own SSH key works without any global setting.
+
 **Feedback.** The button «Відгук» (and ⌘K «Баг / ідея») opens a dialog: kind, text, optional contact, and a preview of the diagnostics
 that will be sent. Nothing leaves the machine before you press send.
 - *Collected, if you leave it on:* the Deai version, the operating system and Python version, the language, the kind of space and the ids of
