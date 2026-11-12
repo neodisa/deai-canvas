@@ -3,6 +3,50 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.24.0] — 12.11.2026
+
+Team rollout groundwork: a team copy is cloned from the public repository, installed over an older canvas app and kept up to date,
+with no team-specific address in this repository.
+
+### Added
+- **Install & updates from the public repository** (README): `git clone https://github.com/neodisa/deai-canvas.git`,
+  `ops/canvas-app/install.sh`, then the in-app update button follows the `vX.Y.Z` tags. A private mirror is optional.
+- **The task registry is configurable.** `bin/registry.py` takes the repository from `registry_repo` (root of `tasks.json`, or the
+  `space.json` of the legacy space) or `DEAI_REGISTRY_REPO`, and the SSH key from `registry_ssh_key` / `DEAI_REGISTRY_SSH_KEY`.
+  Without an address it says «registry is not configured» instead of cloning a placeholder, and an address of an unsupported form
+  gets its own message (the value is never echoed). Unsafe forms (`-o…`, `ext::…`, a host or login starting with `-`) are refused
+  before any `git` call, `--` precedes the address, `git` runs with `BatchMode`, a timeout and no prompts; an existing clone follows
+  a changed `registry_repo`. When the host name does not resolve, one retry goes to the `host_ip` of the git-sync module with
+  `HostKeyAlias`, so the host key is still checked against the real name.
+- **`ops/canvas-app/install.sh --replace <bundle-id>`** removes the app with exactly that old bundle id (and its `<id>.autostart`
+  agent). The new app and both plists are built first; the old app goes only right before the swap, so a failed install never leaves
+  you without a canvas. Any other foreign app — including one whose bundle id cannot be read — is left alone.
+- **`start.command`** takes the port from `DEAI_PORT` (1–65535, not 4317) and the folder served on :4317 from `DEAI_WORK_DIR`
+  (absolute; otherwise `~/deai-work`); without the folder it skips that server instead of failing. `install.sh` bakes
+  `DEAI_WORK_DIR` into the autostart agent and the app launcher when it is set at install time. `DEAI_PORT` is not baked: the
+  product port stays 8765, the variable is for isolated runs.
+- **Guard «no internal addresses»** (`tests/test_no_internal_addresses.py`): the public file holds only hashes of high-entropy values;
+  a maintainer's private list (`DEAI_FORBIDDEN_LIST`) is matched against every tracked file and the whole history, commit
+  metadata included, in the release run.
+
+### Changed
+- **The updater respects the checkout's own SSH setup.** A `core.sshCommand` in the clone's own `.git/config` is kept and
+  `-o BatchMode=yes -o ConnectTimeout=10` is appended; global/system config, `include` and inherited `GIT_CONFIG_*` are not read,
+  and a value with shell metacharacters (anything outside paths, flags and quotes) is ignored, so the appended options cannot be
+  swallowed. `url.*.insteadOf` works as git applies it. An explicit `GIT_SSH_COMMAND` in the environment still wins.
+- **«What's new» renders the changelog** instead of showing it literally: `**bold**` and `` `code` `` become formatting (everything
+  else stays escaped), and the indented continuation of a list item stays in that item.
+
+### Fixed
+- **`stop.command` could kill the browser** that had the canvas open: it looked up every process with a connection to the port.
+  It now stops only the listening server (`-sTCP:LISTEN`), every one of them if there are several; `start.command` no longer takes
+  a browser connection for a busy port either.
+- `install.sh` read the version from a `VERSION` file outside the clone; it now reads `package.json` (a broken value → `0`).
+- `install.sh` refuses a bundle id that is not reverse-DNS (`foo`, `a..b`) or is its own.
+
+### Known limits
+- `--replace` looks for the old app under the same file name («Design Canvas.app»).
+
 ## [0.23.2] — 12.11.2026
 
 ### Fixed
