@@ -113,14 +113,65 @@ def _communicate(argv, cwd, env, timeout):
     return p.returncode, out, err
 
 
-def _git_env(env_extra=None):
-    """Оточення `git`: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`), без запитів, без оновлення індексу."""
-    env = {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
+#: Підкоманди, що ходять у мережу: лише для них читається локальний `core.sshCommand` клону.
+_NETWORK_SUBCOMMANDS = ('ls-remote', 'fetch', 'clone', 'pull', 'push')
+
+
+def _subcommand(args):
+    """Перша підкоманда `git` у `args` (повз `-c <k=v>` і прапорці) або `None`."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '-c':
+            i += 2
+            continue
+        if a.startswith('-'):
+            i += 1
+            continue
+        return a
+    return None
+
+
+def _base_env():
+    """Успадковане оточення без змінних, що перекривають репо/конфіг `git` (`_GIT_SCRUB`)."""
+    return {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
+
+
+def _local_ssh_command(cwd):
+    """`core.sshCommand` ЛИШЕ з власного `.git/config` клону (`--local`: глобальний, системний і `include` не читаються; `GIT_CONFIG*` вичищені
+    через `_base_env`) або `None`. Багаторядкове/з NUL значення відкидається (у лог іде лише код `ssh-command-rejected`, не значення).
+    Це не розширює довіру: клон і так виконує код зі свого `.git` (hooks)."""
+    if not cwd:
+        return None
+    env = _base_env()
+    env['GIT_OPTIONAL_LOCKS'] = '0'
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    rc, out, _ = _communicate(['git', '-c', 'protocol.ext.allow=never', 'config', '--local', '--get', 'core.sshCommand'],
+                              cwd, env, LOCAL_GIT_TIMEOUT_S)
+    val = out.strip() if rc == 0 and isinstance(out, str) else ''
+    if not val:
+        return None
+    if '\n' in val or '\x00' in val:
+        try:
+            sys.stderr.write('updater: ssh-command-rejected\n')
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    return val
+
+
+def _git_env(env_extra=None, cwd=None, network=False):
+    """Оточення `git`: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`), без запитів, без оновлення індексу.
+    Для мережевих викликів у клоні зберігає його власний `core.sshCommand`, додаючи `BatchMode`/`ConnectTimeout` (явний `GIT_SSH_COMMAND`
+    в оточенні головніший)."""
+    env = _base_env()
     env['GIT_TERMINAL_PROMPT'] = '0'
     env['GCM_INTERACTIVE'] = 'never'
     env['GIT_OPTIONAL_LOCKS'] = '0'
     if 'GIT_SSH_COMMAND' not in env:
-        env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
+        local = _local_ssh_command(cwd) if (network and cwd) else None
+        env['GIT_SSH_COMMAND'] = ((local + ' -o BatchMode=yes -o ConnectTimeout=10') if local
+                                  else 'ssh -o BatchMode=yes -o ConnectTimeout=10')
     env.update(env_extra or {})
     return env
 
@@ -128,7 +179,7 @@ def _git_env(env_extra=None):
 def run_git(args, cwd, timeout, env_extra=None):
     """`git` без оболонки → `(rc, stdout, stderr)`. Тайм-аут — `(124, '', 'timeout')` (уся група процесів убивається: `ssh` теж), нема
     `git` — `(127, '', 'no-git-binary')`. Оточення: без успадкованих `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG*` тощо (`_GIT_SCRUB`)."""
-    env = _git_env(env_extra)
+    env = _git_env(env_extra, cwd=cwd, network=_subcommand(list(args)) in _NETWORK_SUBCOMMANDS)
     return _communicate(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd, env, timeout)
 
 
@@ -136,7 +187,7 @@ def git_head(args, cwd, limit, timeout, env_extra=None):
     """`git` → `(rc, bytes)`: читає з stdout НЕ БІЛЬШЕ `limit` байтів (пам'ять обмежена, на відміну від `communicate`) і вбиває процес, коли вивід
     більший. Обрізання за лімітом — `rc == 0`; тайм-аут — `124`; нема `git` — `127`. stderr відкидається."""
     try:
-        p = subprocess.Popen(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd=cwd, env=_git_env(env_extra),
+        p = subprocess.Popen(['git', '-c', 'protocol.ext.allow=never'] + list(args), cwd=cwd, env=_git_env(env_extra, cwd=cwd, network=_subcommand(list(args)) in _NETWORK_SUBCOMMANDS),
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              start_new_session=(os.name != 'nt'))
     except FileNotFoundError:
