@@ -325,6 +325,15 @@ class TestFixturePathReason(unittest.TestCase):
                 self.assertIsNone(rg.fixture_path_reason(
                     {'dir': os.path.join(home, 'design-work', 'courts')}), t)
 
+    def test_home_inside_system_tmp_is_not_a_fixture_but_sibling_is(self):
+        """`HOME=$(mktemp -d)` (набори на релізі): `/var/folders` накриває весь дім,
+        але робота під домом — справжня; фікстура поруч із домом — досі фікстура."""
+        from unittest import mock
+        h = '/var/folders/zz/abc/T/tmp.HOMEX'
+        with mock.patch.dict(os.environ, {'HOME': h}):
+            self.assertIsNone(rg.fixture_path_reason({'dir': h + '/design-work/courts'}))
+            self.assertIsNotNone(rg.fixture_path_reason({'dir': '/var/folders/zz/abc/T/dc-x/nova'}))
+
     def _linked(self):
         """(справжня тека, симлінк на неї) у tempfile — і вимкнені зашиті корені,
         щоб перевірити саме realpath, а не збіг із `/var/folders`."""

@@ -247,11 +247,20 @@ def fixture_path_reason(task):
     fields = [('dir', task.get('dir')),
               ('gitlab.repo', gl.get('repo') if isinstance(gl, dict) else None)]
     roots = _temp_roots()
+    homes = {os.path.normpath(os.path.expanduser('~')),
+             os.path.realpath(os.path.expanduser('~'))}
+    # Домашня тека сама може жити в тимчасовому корені (`HOME=$(mktemp -d)` —
+    # так ганяють набори на релізі). Усе під нею — справжня робота, не фікстура;
+    # фікстури лежать ПОРУЧ із домом, у `$TMPDIR`.
+    homes.discard(os.sep)
+    home_in_tmp = any(_under(h, r) for h in homes for r in roots)
     for field, value in fields:
         p = _local_path(value)
         if not p:
             continue
         for form in (os.path.normpath(p), os.path.realpath(p)):
+            if home_in_tmp and any(_under(form, h) for h in homes):
+                continue
             for root in roots:
                 if _under(form, root):
                     return (f'{field} = {value} лежить у тимчасовій теці {root} — '
