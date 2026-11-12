@@ -1,12 +1,38 @@
 #!/usr/bin/env python3
 """Тесты реестра задач (bin/registry.py) — чистая логика, без сети и без git."""
+import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import registry as rg  # noqa: E402
+
+_ISO = {}
+
+
+def setUpModule():
+    """Жоден тест цього файла не бачить живого tasks.json дерева, змінних реєстру і справжнього ~/.deai."""
+    tmp = tempfile.mkdtemp(prefix='reg-test-')
+    _ISO['tmp'] = tmp
+    _ISO['patches'] = [
+        mock.patch.object(rg, 'TASKS_PATH', os.path.join(tmp, 'absent-tasks.json')),
+        mock.patch.dict(os.environ, {}, clear=False),
+    ]
+    for p in _ISO['patches']:
+        p.start()
+    for k in ('DEAI_REGISTRY_REPO', 'DEAI_REGISTRY_SSH_KEY', 'DEAI_HOME', 'DC_TASKS_FILE'):
+        os.environ.pop(k, None)
+
+
+def tearDownModule():
+    for p in reversed(_ISO.get('patches', [])):
+        p.stop()
+    shutil.rmtree(_ISO.get('tmp', ''), ignore_errors=True)
 
 
 def stamp(hours_ago):
@@ -1074,3 +1100,197 @@ class TestGitQuotesSshKey(unittest.TestCase):
             rg._git(['status'], '.', {})
         argv = shlex.split(seen['env']['GIT_SSH_COMMAND'])
         self.assertEqual(argv[:3], ['ssh', '-i', '/tmp/dir with space/id key'])
+
+
+GOOD_REPO = 'git@gitlab.example.test:ORG/design-office.git'
+
+
+class TestRegistryConfig(unittest.TestCase):
+    """Реєстр налаштовується, а не вшитий: корінь tasks.json, змінні, чесне «не налаштовано»."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='reg-cfg-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tasks = os.path.join(self.tmp, 'tasks.json')
+        p = mock.patch.object(rg, 'TASKS_PATH', self.tasks)
+        p.start()
+        self.addCleanup(p.stop)
+        e = mock.patch.dict(os.environ)
+        e.start()
+        self.addCleanup(e.stop)
+        for k in ('DEAI_REGISTRY_REPO', 'DEAI_REGISTRY_SSH_KEY'):
+            os.environ.pop(k, None)
+
+    def write(self, data):
+        with open(self.tasks, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+
+    # G1
+    def test_nothing_configured_is_an_honest_error(self):
+        self.write({'tasks': {}})
+        self.assertIsNone(rg.registry_repo())
+        with self.assertRaises(rg.NotConfigured) as cm:
+            rg.require_repo()
+        msg = str(cm.exception)
+        self.assertIn('registry_repo', msg)
+        self.assertIn('DEAI_REGISTRY_REPO', msg)
+        self.assertNotIn('internal.example', msg, 'заглушку не показуємо як адресу')
+
+    def test_the_placeholder_itself_counts_as_not_configured(self):
+        self.write({'registry_repo': rg.PLACEHOLDER_REPO})
+        self.assertIsNone(rg.registry_repo())
+
+    def test_missing_tasks_file_is_not_configured_not_a_crash(self):
+        self.assertIsNone(rg.registry_repo())
+
+    def test_root_key_is_used(self):
+        self.write({'registry_repo': GOOD_REPO})
+        self.assertEqual(rg.registry_repo(), GOOD_REPO)
+        self.assertEqual(rg.require_repo(), GOOD_REPO)
+
+    def test_env_beats_the_file(self):
+        self.write({'registry_repo': GOOD_REPO})
+        os.environ['DEAI_REGISTRY_REPO'] = 'git@other.example.test:G/r.git'
+        self.assertEqual(rg.registry_repo(), 'git@other.example.test:G/r.git')
+
+    # G2
+    def test_unsafe_forms_are_refused_before_any_git(self):
+        for bad in ('-oProxyCommand=touch /tmp/x', '--upload-pack=x', 'ext::sh -c id', 'git@host:', 'http://h/r.git',
+                    'a b', 'git@host:p\nq', '\x00', 123):
+            self.write({'registry_repo': bad})
+            self.assertIsNone(rg.registry_repo(), repr(bad))
+            with self.assertRaises(rg.NotConfigured) as cm:
+                rg.require_repo()
+            self.assertIn('registry_repo', str(cm.exception))
+
+    def test_accepted_forms(self):
+        for ok in (GOOD_REPO, 'ssh://git@gitlab.example.test/ORG/r.git', 'https://gitlab.example.test/ORG/r.git',
+                   '/var/tmp/local-bare.git'):
+            self.write({'registry_repo': ok})
+            self.assertEqual(rg.registry_repo(), ok)
+
+    def test_clone_and_ls_remote_put_dashdash_before_the_address(self):
+        self.write({'registry_repo': GOOD_REPO})
+        seen = []
+        d = os.path.join(self.tmp, 'clone')
+        with mock.patch.object(rg, 'clone_dir', return_value=d), \
+                mock.patch.object(rg, '_git', side_effect=lambda a, c, cfg, **k: seen.append(a) or mock.Mock(stdout='')):
+            rg.ensure_clone({})
+            rg.remote_head({})
+        clone = next(a for a in seen if a[0] == 'clone')
+        self.assertEqual(clone[clone.index(GOOD_REPO) - 1], '--')
+        ls = next(a for a in seen if a[0] == 'ls-remote')
+        self.assertEqual(ls[ls.index(GOOD_REPO) - 1], '--')
+
+    def test_unconfigured_never_reaches_git(self):
+        self.write({'tasks': {}})
+        with mock.patch.object(rg, '_git', side_effect=AssertionError('git не мав викликатись')):
+            with self.assertRaises(rg.NotConfigured):
+                rg.ensure_clone({})
+            self.assertIsNone(rg.remote_head({}))
+
+    def test_staleness_says_not_configured(self):
+        self.write({'tasks': {}})
+        st = rg.staleness({}, check_remote=True)
+        self.assertEqual(st['state'], 'offline')
+        self.assertIn('не налаштовано', st['hint'])
+
+    # G3
+    def test_canonical_host_follows_the_configured_repo(self):
+        self.write({'registry_repo': GOOD_REPO})
+        self.assertEqual(rg.canonical_repo('git@10.0.0.7:ORG/x.git'), 'git@gitlab.example.test:ORG/x.git')
+        self.assertEqual(rg.canonical_repo('https://gitlab.example.test/ORG/x'), 'git@gitlab.example.test:ORG/x.git')
+        self.assertTrue(rg.same_project('git@10.0.0.7:ORG/x.git', 'https://gitlab.example.test/ORG/x.git'))
+
+    def test_canonical_host_without_config_is_the_placeholder_host(self):
+        self.write({'tasks': {}})
+        self.assertEqual(rg.canon_host(), 'gitlab.internal.example')
+
+    # ключ SSH
+    def test_ssh_key_order_env_then_root_then_default(self):
+        self.write({'registry_ssh_key': '~/.ssh/from_root'})
+        self.assertTrue(rg._ssh_key().endswith('/.ssh/from_root'))
+        os.environ['DEAI_REGISTRY_SSH_KEY'] = '/keys/from_env'
+        self.assertEqual(rg._ssh_key(), '/keys/from_env')
+        os.environ.pop('DEAI_REGISTRY_SSH_KEY')
+        self.write({'tasks': {}})
+        self.assertTrue(rg._ssh_key().endswith('/.ssh/gitlab_ed25519'))
+
+    def test_registry_settings_never_read_the_real_deai_home(self):
+        """Тимчасовий TASKS_PATH — не простір: space.json сусіда не читаємо (як `cross_check` у pull)."""
+        self.write({'tasks': {}})
+        self.assertFalse(rg._space_json_allowed())
+
+
+def _proc(rc=0, out='', err=''):
+    return mock.Mock(returncode=rc, stdout=out, stderr=err)
+
+
+class TestRegistryGitTransport(unittest.TestCase):
+    """П13: `_git` не висить без ключа (BatchMode/ConnectTimeout) і обходить split-DNS через `host_ip` модуля git-sync."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='reg-git-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tasks = os.path.join(self.tmp, 'tasks.json')
+        with open(self.tasks, 'w', encoding='utf-8') as f:
+            json.dump({'registry_repo': GOOD_REPO}, f)
+        for p in (mock.patch.object(rg, 'TASKS_PATH', self.tasks), mock.patch.dict(os.environ)):
+            p.start()
+            self.addCleanup(p.stop)
+        for k in ('DEAI_REGISTRY_REPO', 'DEAI_REGISTRY_SSH_KEY', 'GIT_SSH_COMMAND'):
+            os.environ.pop(k, None)
+
+    def _run(self, replies, host_ip='10.0.0.7', args=('ls-remote', '--', GOOD_REPO, 'x')):
+        calls = []
+
+        def fake(cmd, **kw):
+            calls.append((cmd, kw['env']))
+            return replies.pop(0)
+        with mock.patch.object(rg.subprocess, 'run', side_effect=fake), \
+                mock.patch.object(rg, '_gitsync_setting', side_effect=lambda n: host_ip if n == 'host_ip' else None):
+            try:
+                r = rg._git(list(args), self.tmp, {}, check=False)
+            except OSError as e:
+                r = e
+        return r, calls
+
+    def test_ssh_command_is_batch_with_connect_timeout(self):
+        _, calls = self._run([_proc()])
+        ssh = calls[0][1]['GIT_SSH_COMMAND']
+        self.assertIn('-o BatchMode=yes', ssh)
+        self.assertRegex(ssh, r'-o ConnectTimeout=\d+')
+        self.assertEqual(calls[0][0][0:2], ['git', 'ls-remote'], 'без `-c` перед першою спробою')
+
+    def test_resolver_failure_retries_once_via_ip_with_hostkeyalias(self):
+        _, calls = self._run([_proc(128, '', 'ssh: Could not resolve hostname gitlab.example.test'), _proc(0, 'ok')])
+        self.assertEqual(len(calls), 2)
+        cmd, env = calls[1]
+        self.assertEqual(cmd[:3], ['git', '-c', 'url.git@10.0.0.7:.insteadOf=git@gitlab.example.test:'])
+        self.assertIn('-o HostKeyAlias=gitlab.example.test', env['GIT_SSH_COMMAND'])
+
+    def test_other_failures_do_not_retry(self):
+        _, calls = self._run([_proc(128, '', 'Permission denied (publickey).')])
+        self.assertEqual(len(calls), 1)
+
+    def test_no_host_ip_no_retry(self):
+        _, calls = self._run([_proc(128, '', 'Could not resolve hostname x')], host_ip=None)
+        self.assertEqual(len(calls), 1)
+
+    def test_garbage_host_ip_is_ignored(self):
+        for bad in ('-oProxyCommand=x', 'not an ip', '10.0.0.7 -o x', 7):
+            _, calls = self._run([_proc(128, '', 'Could not resolve hostname x')], host_ip=bad)
+            self.assertEqual(len(calls), 1, repr(bad))
+
+    def test_non_scp_registry_has_no_ip_retry(self):
+        with open(self.tasks, 'w', encoding='utf-8') as f:
+            json.dump({'registry_repo': 'https://gitlab.example.test/ORG/r.git'}, f)
+        _, calls = self._run([_proc(128, '', 'Could not resolve host: gitlab.example.test')])
+        self.assertEqual(len(calls), 1)
+
+    def test_failure_after_retry_raises_when_checked(self):
+        replies = [_proc(128, '', 'Could not resolve hostname a'), _proc(128, '', 'still bad')]
+        with mock.patch.object(rg.subprocess, 'run', side_effect=lambda *a, **k: replies.pop(0)), \
+                mock.patch.object(rg, '_gitsync_setting', side_effect=lambda n: '10.0.0.7' if n == 'host_ip' else None):
+            with self.assertRaises(OSError):
+                rg._git(['ls-remote', '--', GOOD_REPO], self.tmp, {})

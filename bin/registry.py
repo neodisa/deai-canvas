@@ -28,7 +28,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # реєстр і сервер читали б РІЗНІ файли, а тест, який думає, що ізолювався,
 # мовчки правив би живий конфіг (03.08.2026 саме так фікстура поїхала в прод).
 TASKS_PATH = os.environ.get('DC_TASKS_FILE') or os.path.join(ROOT, 'tasks.json')
-REPO = 'git@gitlab.internal.example:ORG/design-office.git'
+#: Заглушка «реєстр не налаштовано». Справжню адресу задає людина/пайплайн: `registry_repo` у корені tasks.json (або в space.json
+#: простору ЛІГА) чи `DEAI_REGISTRY_REPO`. Внутрішніх адрес у цьому репо нема.
+PLACEHOLDER_REPO = 'git@gitlab.internal.example:ORG/design-office.git'
+REPO = PLACEHOLDER_REPO            # зворотна сумісність імпорту; логіка бере `registry_repo()`
+#: Безпечні форми адреси (потрапляє в `git clone`/`ls-remote`): scp-стиль, ssh/https, абсолютний шлях. Без `-` на початку,
+#: без пробілів і керуючих символів.
+_REPO_RE = re.compile(r'^(?:git@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9_][^\s\x00-\x1f]*'
+                      r'|(?:ssh|https)://[A-Za-z0-9][^\s\x00-\x1f]*'
+                      r'|/[^\s\x00-\x1f]*)\Z')
+NOT_CONFIGURED_MSG = ('реєстр не налаштовано: задай registry_repo у корені tasks.json (і за потреби registry_ssh_key) '
+                      'або змінні DEAI_REGISTRY_REPO / DEAI_REGISTRY_SSH_KEY')
+
+
+class NotConfigured(OSError):
+    """Реєстр без адреси: чесна відмова замість спроби клонувати заглушку."""
+
+
 BRANCH = 'registry'
 TTL_H = float(os.environ.get('DC_REGISTRY_TTL_H') or 6)
 
@@ -58,11 +74,75 @@ LOCAL_ONLY = ('dir', 'live')
 # Тепер: у реєстр іде канонічна адреса (SSH на імʼя хоста — та сама форма, що
 # репозиторії напрямків простору), без `ssh_key`/`host_ip`; з реєстру береться ЯКИЙ
 # проєкт і шлях, а локальна форма адреси того самого проєкту лишається.
-CANON_HOST = REPO.split('@', 1)[1].split(':', 1)[0]          # gitlab.internal.example
 GITLAB_MACHINE_KEYS = ('ssh_key', 'host_ip')
 _SCP = re.compile(r'^[^@/\s]+@([^:/\s]+):(.+)$')                 # git@host:path
 _URL = re.compile(r'^(?:ssh|https?)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$', re.I)
 _IPV4 = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
+
+
+def _space_json_allowed():
+    """Чи можна читати `space.json` простору ЛІГА: лише коли TASKS_PATH — справжній старий файл простору (так само, як
+    `cross_check` у pull). Тимчасовий TASKS_PATH тесту — не простір: лізти заради нього в справжній `~/.deai` не можна."""
+    app = os.path.join(ROOT, 'app')
+    if app not in sys.path:
+        sys.path.insert(0, app)
+    try:
+        import spaces
+        return bool(spaces.layer_on() and os.path.abspath(TASKS_PATH) == os.path.abspath(spaces.legacy_tasks_file()))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _setting(name):
+    """Значення налаштування реєстру: змінна `DEAI_<NAME>` → корінь tasks.json → `space.json` простору ЛІГА → `None`.
+    Лише непорожній рядок."""
+    env = os.environ.get('DEAI_' + name.upper())
+    if isinstance(env, str) and env.strip():
+        return env.strip()
+    try:
+        root = load_tasks()
+    except (OSError, ValueError):
+        root = {}
+    v = root.get(name) if isinstance(root, dict) else None
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    if _space_json_allowed():
+        try:
+            import deai_modules
+            import spaces
+            sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
+            if sp is not None:
+                v = deai_modules._load_space_json(os.path.join(sp['path'], 'space.json')).get(name)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        except Exception:  # noqa: BLE001 — нечитабельний space.json = «нема значення», не збій реєстру
+            pass
+    return None
+
+
+def registry_repo():
+    """Адреса репо реєстру або `None` (не налаштовано / заглушка / небезпечна форма)."""
+    v = _setting('registry_repo')
+    if not v or v == PLACEHOLDER_REPO or not _REPO_RE.match(v):
+        return None
+    return v
+
+
+def require_repo():
+    """Адреса або `NotConfigured` з чесним текстом."""
+    v = registry_repo()
+    if v is None:
+        raise NotConfigured(NOT_CONFIGURED_MSG)
+    return v
+
+
+def canon_host():
+    """Канонічний хост GitLab: хост налаштованого репо, інакше хост заглушки (тести й «не налаштовано»)."""
+    for repo in (registry_repo(), PLACEHOLDER_REPO):
+        m = _SCP.match(repo or '') or _URL.match(repo or '')
+        if m:
+            return m.group(1).lower()
+    return 'gitlab.internal.example'
 
 
 def _repo_parts(url):
@@ -77,7 +157,7 @@ def _repo_parts(url):
         return None
     host = m.group(1).lower()
     if _IPV4.match(host):
-        host = CANON_HOST
+        host = canon_host()
     path = m.group(2).strip('/')
     if path.endswith('.git'):
         path = path[:-4]
@@ -87,9 +167,10 @@ def _repo_parts(url):
 def canonical_repo(url):
     """Адреса проєкту на НАШОМУ GitLab → `git@<хост>:<шлях>.git`. Чуже й локальне — як є."""
     parts = _repo_parts(url)
-    if not parts or parts[0] != CANON_HOST:
+    host = canon_host()
+    if not parts or parts[0] != host:
         return url
-    return f'git@{CANON_HOST}:{parts[1]}.git'
+    return f'git@{host}:{parts[1]}.git'
 
 
 def same_project(a, b):
@@ -269,10 +350,9 @@ def fixture_path_reason(task):
     return None
 
 
-def _ssh_key():
-    """SSH-ключ git спільного реєстру: налаштування `ssh_key` запису `git-sync` простору ЛІГА (4d-4b: корінь `tasks.json` не читаємо), інакше
-    типовий `~/.ssh/gitlab_ed25519`. Простору/запису/шару нема, реєстр просторів чи `space.json` не читаються — типовий."""
-    key = None
+def _gitsync_setting(name):
+    """Налаштування запису `git-sync` простору ЛІГА (4d-4b: корінь `tasks.json` не читаємо) або `None`. Простору/запису/шару
+    нема, реєстр просторів чи `space.json` не читаються — `None`, а не збій синку реєстру."""
     app = os.path.join(ROOT, 'app')
     if app not in sys.path:
         sys.path.insert(0, app)
@@ -283,18 +363,56 @@ def _ssh_key():
             sp = next((s for s in spaces.read_registry()['spaces'] if s.get('legacy') is True), None)
             if sp is not None:
                 rec = deai_modules.space_modules(sp).get('git-sync') or {}
-                if rec.get('enabled') is not False:         # вимкнений запис ключа не дає (як `provider`)
-                    key = rec.get('settings', {}).get('ssh_key')
-    except Exception:  # noqa: BLE001 — реєстр/space.json не читаються: типовий ключ, а не збій синку реєстру
-        key = None
+                if rec.get('enabled') is not False:         # вимкнений запис налаштувань не дає (як `provider`)
+                    return rec.get('settings', {}).get(name)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _ssh_key():
+    """SSH-ключ git спільного реєстру: `DEAI_REGISTRY_SSH_KEY` → `registry_ssh_key` (корінь tasks.json) → `ssh_key` запису
+    `git-sync` простору ЛІГА → типовий `~/.ssh/gitlab_ed25519`."""
+    key = _setting('registry_ssh_key')
+    if not (isinstance(key, str) and key.strip()):
+        key = _gitsync_setting('ssh_key')
     return os.path.expanduser(key if isinstance(key, str) and key.strip() else '~/.ssh/gitlab_ed25519')
 
 
+#: Тайм-аут з'єднання ssh, с: без нього відсутній VPN/DNS вішає pull на системних ~2 хв.
+_CONNECT_TIMEOUT = 15
+_RESOLVER_FAIL = 'could not resolve host'        # ssh: «Could not resolve hostname», https: «Could not resolve host»
+_IP_RE = re.compile(r'^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f:]+:[0-9A-Fa-f:]*)\Z')
+
+
+def _host_ip():
+    """`host_ip` модуля `git-sync` — лише коли це IP-літерал (потрапляє в `-c url.…insteadOf`)."""
+    ip = _gitsync_setting('host_ip')
+    if isinstance(ip, str) and _IP_RE.match(ip.strip()):
+        return ip.strip()
+    return None
+
+
+def _git_once(args, cwd, pre=(), alias=None, timeout=120):
+    ssh = (f'ssh -i {shlex.quote(_ssh_key())} -o StrictHostKeyChecking=no -o BatchMode=yes '
+           f'-o ConnectTimeout={_CONNECT_TIMEOUT}')
+    if alias:
+        ssh += f' -o HostKeyAlias={shlex.quote(alias)}'      # ключ хоста — той самий, що вже в known_hosts
+    env = dict(os.environ, GIT_SSH_COMMAND=ssh, GIT_TERMINAL_PROMPT='0')
+    return subprocess.run(['git', *pre, *args], cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout)
+
+
 def _git(args, cwd, cfg, check=True, timeout=120):
-    env = dict(os.environ,
-               GIT_SSH_COMMAND=f'ssh -i {shlex.quote(_ssh_key())} -o StrictHostKeyChecking=no')
-    r = subprocess.run(['git', *args], cwd=cwd, env=env, text=True,
-                       capture_output=True, timeout=timeout)
+    r = _git_once(args, cwd, timeout=timeout)
+    if r.returncode != 0 and _RESOLVER_FAIL in (r.stderr or '').lower():
+        # split-DNS: імʼя GitLab не резолвиться, а IP доступний — один повтор через `host_ip` (як у модуля git-sync)
+        ip, repo = _host_ip(), registry_repo()
+        m = _SCP.match(repo or '')
+        if ip and m:
+            user = m.group(0).split('@', 1)[0]
+            addr = f'[{ip}]' if ':' in ip else ip
+            r = _git_once(args, cwd, pre=('-c', f'url.{user}@{addr}:.insteadOf={user}@{m.group(1)}:'),
+                          alias=m.group(1), timeout=timeout)
     if check and r.returncode != 0:
         raise OSError(f"git {' '.join(args)} → {(r.stderr or r.stdout)[-400:]}")
     return r
@@ -338,10 +456,11 @@ def _save_registry_state(task_updates, registry):
 
 def ensure_clone(cfg, fetch=True):
     """Локальный клон ветки registry. Бросает OSError, если недоступно (нет VPN)."""
+    repo = require_repo()
     d = clone_dir()
     if not os.path.isdir(os.path.join(d, '.git')):
         os.makedirs(os.path.dirname(d), exist_ok=True)
-        _git(['clone', '--quiet', '--branch', BRANCH, '--single-branch', REPO, d],
+        _git(['clone', '--quiet', '--branch', BRANCH, '--single-branch', '--', repo, d],
              os.path.dirname(d), cfg, timeout=180)
     elif fetch:
         _git(['fetch', '--quiet', 'origin', BRANCH], d, cfg)
@@ -351,7 +470,11 @@ def ensure_clone(cfg, fetch=True):
 def remote_head(cfg):
     """SHA головы origin/registry без клона. None, если недоступно."""
     try:
-        r = _git(['ls-remote', REPO, f'refs/heads/{BRANCH}'], ROOT, cfg, timeout=30)
+        repo = require_repo()
+    except NotConfigured:
+        return None
+    try:
+        r = _git(['ls-remote', '--', repo, f'refs/heads/{BRANCH}'], ROOT, cfg, timeout=30)
     except Exception:  # noqa: BLE001 — нет сети/VPN/ключа: трактуем как offline
         return None
     line = (r.stdout or '').split('\n')[0].strip()
@@ -442,6 +565,8 @@ def staleness(cfg, check_remote=True):
     local_head = (cfg.get('registry') or {}).get('head')
     if check_remote:
         rh = remote_head(cfg)
+        if rh is None and registry_repo() is None:
+            return {'state': 'offline', 'age_h': age, 'hint': NOT_CONFIGURED_MSG}
         if rh is None:
             return {'state': 'offline', 'age_h': age,
                     'hint': 'реєстр недоступний (VPN?) — працюю з локальним кешем'}
@@ -841,6 +966,8 @@ def main():
     a = ap.parse_args()
     try:
         return a.fn(a)
+    except NotConfigured as e:
+        sys.exit(f'⚠️ {e}')
     except OSError as e:
         sys.exit(f'⚠️ реєстр недоступний: {e}')
 
