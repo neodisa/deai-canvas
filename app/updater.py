@@ -623,6 +623,16 @@ class Updater:
             out.append({'version': s['version'], 'date': s['date'], 'body': _cap_bytes(_plain(s['body']), NOTES_SECTION_MAX_BYTES)})
         return out
 
+    def _notes_failed(self, reason, latest):
+        """Невдача ПІСЛЯ спроби мережі (`fetch`, далі `rev-parse`/`cat-file`): запамʼятовуємо її на `NOTES_FAIL_TTL_S`, щоб кожен `GET /api/update-notes`
+        не повторював `fetch`. `busy` (чужий `fetch` іде) не кешуємо — це не відповідь про тег, а чергу."""
+        if reason != 'busy':
+            with self._lock:
+                state = self._load()
+                state['notes_fail'] = {'version': latest, 'remote_id': state.get('remote_id'), 'reason': reason, 'at': int(self.clock())}
+                self._save(state)
+        return self._notes_empty(reason, latest)
+
     def _notes(self):
         state = self._load()
         latest = state.get('latest') if isinstance(state.get('latest'), str) else None
@@ -648,22 +658,16 @@ class Updater:
         tag = 'v' + latest
         failure = self._fetch_tag(url, tag, blocking=False)
         if failure:
-            reason = 'no-git' if failure[1] == 'not-git' else failure[1]
-            if reason != 'busy':
-                with self._lock:
-                    state = self._load()
-                    state['notes_fail'] = {'version': latest, 'remote_id': state.get('remote_id'), 'reason': reason, 'at': int(self.clock())}
-                    self._save(state)
-            return self._notes_empty(reason, latest)
+            return self._notes_failed('no-git' if failure[1] == 'not-git' else failure[1], latest)
         rc, out, _ = self.run(['rev-parse', '--verify', '%s^{commit}' % tag], self.root, LOCAL_GIT_TIMEOUT_S)
         target = out.strip() if rc == 0 else ''
         if not _SHA_RE.match(target):
-            return self._notes_empty('error', latest)      # далі — sha, а не рухоме імʼя
+            return self._notes_failed('error', latest)      # далі — sha, а не рухоме імʼя
         rc, data = git_head(['cat-file', 'blob', '%s:CHANGELOG.md' % target], self.root, NOTES_MAX_BYTES, LOCAL_GIT_TIMEOUT_S)
         if rc == 127:
-            return self._notes_empty('no-git', latest)
+            return self._notes_failed('no-git', latest)
         if rc != 0:
-            return self._notes_empty('no-changelog', latest)
+            return self._notes_failed('no-changelog', latest)
         sections = parse_changelog(data.decode('utf-8', 'replace'), current, latest)
         with self._lock:
             state = self._load()

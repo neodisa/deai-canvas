@@ -334,6 +334,35 @@ class Notes(ta.Base):
         self.assertEqual((out['sections'], out['reason']), ([], 'no-changelog'))
         self.assertNotIn('notes', u._load())
 
+    def _assert_failure_cached_for_ttl(self, make_u, reason, wrap=None):
+        """Невдача ПІСЛЯ успішного `fetch` теж негативно кешується: другий виклик у межах TTL не б'є в мережу, після TTL — б'є знову."""
+        t = [1000.0]
+        u = make_u(lambda: t[0])
+        calls, run = self.counting()
+        u.run = wrap(run) if wrap else run
+        fetch_count = lambda: len([c for c in calls if c[0] == 'fetch'])
+        self.assertEqual(u.notes()['reason'], reason)
+        self.assertEqual(fetch_count(), 1)
+        self.assertEqual(self.state()['notes_fail']['reason'], reason)
+        t[0] += 59
+        self.assertEqual(u.notes(), {'ok': True, 'sections': [], 'reason': reason, 'version': '0.2.0'})
+        self.assertEqual(fetch_count(), 1, 'другий GET у межах TTL повторив fetch')
+        t[0] += 2                                                    # усього 61 с
+        self.assertEqual(u.notes()['reason'], reason)
+        self.assertEqual(fetch_count(), 2)
+
+    def test_no_changelog_after_a_successful_fetch_is_not_refetched_within_ttl(self):
+        self._assert_failure_cached_for_ttl(lambda clock: self.ready(clock=clock), 'no-changelog')      # реліз без CHANGELOG.md
+
+    def test_unresolvable_tag_after_a_successful_fetch_is_not_refetched_within_ttl(self):
+        def wrap(real):
+            def run(args, cwd, timeout, env_extra=None):
+                if args[0] == 'rev-parse' and any('^{commit}' in a for a in args):
+                    return 0, 'not-a-sha\n', ''                      # fetch вдався, але тег не розв'язується в 40-hex
+                return real(args, cwd, timeout, env_extra)
+            return run
+        self._assert_failure_cached_for_ttl(lambda clock: self.ready_notes(clock=clock), 'error', wrap)
+
     def test_response_has_no_paths_or_remote(self):
         u = self.ready_notes()
         raw = json.dumps(u.notes())
