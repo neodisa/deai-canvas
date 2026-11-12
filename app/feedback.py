@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import re
+import ssl
 import stat
 import tempfile
 import threading
@@ -694,8 +695,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _tls():
+    """Перевірений TLS: сховище certifi, коли пакет є (Python з python.org на macOS не бачить системного — без цього кожна відправка
+    падала `CERTIFICATE_VERIFY_FAILED` і відгук назавжди лишався в `outbox` як `network`), інакше типове. Як `_tls` модуля дашборда."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001 — нема certifi чи зіпсований: типовий контекст
+        return ssl.create_default_context()
+
+
 def _default_opener(url):
-    handlers = [_NoRedirect()]
+    handlers = [_NoRedirect(), urllib.request.HTTPSHandler(context=_tls())]
     if is_loopback(url):
         handlers.append(urllib.request.ProxyHandler({}))
     return urllib.request.build_opener(*handlers).open

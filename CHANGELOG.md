@@ -3,6 +3,14 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.23.2] — 12.11.2026
+
+### Fixed
+- **Feedback never left a Mac with the Python from python.org.** The sender opened HTTPS with the default certificate store, which that
+  Python does not have, so every send failed with `CERTIFICATE_VERIFY_FAILED`, was counted as a network error and stayed in
+  `outbox` (retried every hour, never delivered). It now uses the `certifi` store when the package is present, like the dashboard
+  and the other modules; queued notes go out on the first retry after the update.
+
 ## [0.23.1] — 12.11.2026
 
 Before the team release: feedback now reaches the maintainer from every copy, and the tails of 0.23.0.

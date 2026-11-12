@@ -589,5 +589,43 @@ class Outbox(Base):
         self.assertIsNone(h.redirect_request(None, None, 302, 'x', {}, 'https://evil.example/'))
 
 
+
+class Tls(unittest.TestCase):
+    """0.23.2: Python з python.org на macOS не бачить системного сховища сертифікатів — без certifi HTTPS до приймача падав
+    `CERTIFICATE_VERIFY_FAILED`, відгук назавжди лишався в `outbox` як `network`. Відправник бере контекст certifi, як інші модулі."""
+
+    def _https_context(self, url):
+        handlers = feedback._default_opener(url).__self__.handlers
+        https = [h for h in handlers if isinstance(h, urllib.request.HTTPSHandler)]
+        self.assertEqual(len(https), 1, 'рівно один HTTPSHandler')
+        return https[0]._context
+
+    def test_the_sender_uses_the_certifi_store_when_present(self):
+        fake = type(sys)('certifi')
+        fake.where = lambda: '/fake/cacert.pem'
+        seen = []
+        sentinel = object()
+
+        def ctx(**kw):
+            seen.append(kw)
+            return sentinel
+        with mock.patch.dict(sys.modules, {'certifi': fake}), mock.patch.object(feedback.ssl, 'create_default_context', ctx):
+            got = self._https_context('https://abc.supabase.co')
+        self.assertIs(got, sentinel)
+        self.assertEqual(seen, [{'cafile': '/fake/cacert.pem'}])
+
+    def test_without_certifi_the_default_context(self):
+        seen = []
+        sentinel = object()
+
+        def ctx(**kw):
+            seen.append(kw)
+            return sentinel
+        with mock.patch.dict(sys.modules, {'certifi': None}), mock.patch.object(feedback.ssl, 'create_default_context', ctx):
+            got = self._https_context('https://abc.supabase.co')
+        self.assertIs(got, sentinel)
+        self.assertEqual(seen, [{}])
+
+
 if __name__ == '__main__':
     unittest.main()
