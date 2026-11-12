@@ -35,10 +35,12 @@ REPO = PLACEHOLDER_REPO            # зворотна сумісність ім�
 #: Безпечні форми адреси (потрапляє в `git clone`/`ls-remote`): scp-стиль, ssh/https, абсолютний шлях. Без `-` на початку,
 #: без пробілів і керуючих символів.
 _REPO_RE = re.compile(r'^(?:git@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9_][^\s\x00-\x1f]*'
-                      r'|(?:ssh|https)://[A-Za-z0-9][^\s\x00-\x1f]*'
+                      r'|(?:ssh|https)://(?:[^\s@/\x00-\x1f]+@)?[A-Za-z0-9][A-Za-z0-9.-]*(?::\d+)?/[^\s\x00-\x1f]+'
                       r'|/[^\s\x00-\x1f]*)\Z')
 NOT_CONFIGURED_MSG = ('реєстр не налаштовано: задай registry_repo у корені tasks.json (і за потреби registry_ssh_key) '
                       'або змінні DEAI_REGISTRY_REPO / DEAI_REGISTRY_SSH_KEY')
+INVALID_REPO_MSG = ('registry_repo має непідтримувану форму — потрібно git@host:group/repo.git, ssh:// або https:// '
+                    '(значення не показую)')
 
 
 class NotConfigured(OSError):
@@ -120,19 +122,32 @@ def _setting(name):
     return None
 
 
+def _repo_state():
+    """(`ok`|`unset`|`invalid`, значення). `invalid` — адресу задано, але форма небезпечна/непідтримувана."""
+    v = _setting('registry_repo')
+    if not v or v == PLACEHOLDER_REPO:
+        return 'unset', None
+    if not _REPO_RE.match(v):
+        return 'invalid', v
+    return 'ok', v
+
+
 def registry_repo():
     """Адреса репо реєстру або `None` (не налаштовано / заглушка / небезпечна форма)."""
-    v = _setting('registry_repo')
-    if not v or v == PLACEHOLDER_REPO or not _REPO_RE.match(v):
-        return None
-    return v
+    st, v = _repo_state()
+    return v if st == 'ok' else None
+
+
+def repo_problem_msg():
+    """Чесний текст, чому адреси нема: «не налаштовано» чи «форма не підтримується». Сирого значення не друкуємо."""
+    return INVALID_REPO_MSG if _repo_state()[0] == 'invalid' else NOT_CONFIGURED_MSG
 
 
 def require_repo():
     """Адреса або `NotConfigured` з чесним текстом."""
     v = registry_repo()
     if v is None:
-        raise NotConfigured(NOT_CONFIGURED_MSG)
+        raise NotConfigured(repo_problem_msg())
     return v
 
 
@@ -352,7 +367,10 @@ def fixture_path_reason(task):
 
 def _gitsync_setting(name):
     """Налаштування запису `git-sync` простору ЛІГА (4d-4b: корінь `tasks.json` не читаємо) або `None`. Простору/запису/шару
-    нема, реєстр просторів чи `space.json` не читаються — `None`, а не збій синку реєстру."""
+    нема, реєстр просторів чи `space.json` не читаються — `None`, а не збій синку реєстру.
+    Той самий шлюз, що в `_space_json_allowed`: тимчасовий TASKS_PATH тесту — не простір, справжній `~/.deai` не читаємо."""
+    if not _space_json_allowed():
+        return None
     app = os.path.join(ROOT, 'app')
     if app not in sys.path:
         sys.path.insert(0, app)
@@ -376,7 +394,8 @@ def _ssh_key():
     key = _setting('registry_ssh_key')
     if not (isinstance(key, str) and key.strip()):
         key = _gitsync_setting('ssh_key')
-    return os.path.expanduser(key if isinstance(key, str) and key.strip() else '~/.ssh/gitlab_ed25519')
+    # abspath: відносний шлях інакше залежав би від cwd git (clone — з теки-батька, fetch — з клону)
+    return os.path.abspath(os.path.expanduser(key if isinstance(key, str) and key.strip() else '~/.ssh/gitlab_ed25519'))
 
 
 #: Тайм-аут з'єднання ssh, с: без нього відсутній VPN/DNS вішає pull на системних ~2 хв.
@@ -394,8 +413,10 @@ def _host_ip():
 
 
 def _git_once(args, cwd, pre=(), alias=None, timeout=120):
-    ssh = (f'ssh -i {shlex.quote(_ssh_key())} -o StrictHostKeyChecking=no -o BatchMode=yes '
-           f'-o ConnectTimeout={_CONNECT_TIMEOUT}')
+    # accept-new (як у git-sync): перший ключ хоста запамʼятовуємо, змінений — відмова; `no` вимикав би захист саме на
+    # шляху повтору через IP, який може підмінити сусід по LAN. IdentitiesOnly — не пробувати чужі ключі агента.
+    ssh = (f'ssh -i {shlex.quote(_ssh_key())} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new '
+           f'-o BatchMode=yes -o ConnectTimeout={_CONNECT_TIMEOUT}')
     if alias:
         ssh += f' -o HostKeyAlias={shlex.quote(alias)}'      # ключ хоста — той самий, що вже в known_hosts
     env = dict(os.environ, GIT_SSH_COMMAND=ssh, GIT_TERMINAL_PROMPT='0')
@@ -462,8 +483,14 @@ def ensure_clone(cfg, fetch=True):
         os.makedirs(os.path.dirname(d), exist_ok=True)
         _git(['clone', '--quiet', '--branch', BRANCH, '--single-branch', '--', repo, d],
              os.path.dirname(d), cfg, timeout=180)
-    elif fetch:
-        _git(['fetch', '--quiet', 'origin', BRANCH], d, cfg)
+    else:
+        # Адресу реєстру змінили (заглушка → справжня, переїзд репо) — клон не має мовчки лишатись на старому origin.
+        cur = _git(['config', '--get', 'remote.origin.url'], d, cfg, check=False).stdout.strip()
+        if cur != repo:
+            _git(['remote', 'set-url', 'origin', '--', repo], d, cfg)
+            print('registry: origin клону переведено на нову адресу registry_repo (repoint)', file=sys.stderr)
+        if fetch:
+            _git(['fetch', '--quiet', 'origin', BRANCH], d, cfg)
     return d
 
 
@@ -566,7 +593,7 @@ def staleness(cfg, check_remote=True):
     if check_remote:
         rh = remote_head(cfg)
         if rh is None and registry_repo() is None:
-            return {'state': 'offline', 'age_h': age, 'hint': NOT_CONFIGURED_MSG}
+            return {'state': 'offline', 'age_h': age, 'hint': repo_problem_msg()}
         if rh is None:
             return {'state': 'offline', 'age_h': age,
                     'hint': 'реєстр недоступний (VPN?) — працюю з локальним кешем'}
