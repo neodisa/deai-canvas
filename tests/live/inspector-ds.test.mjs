@@ -39,6 +39,9 @@
  *                         почалось: «незрозуміло, як повернути до ДС».
  */
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { chromium } from "playwright";
@@ -123,6 +126,43 @@ const titleOf = (page, prop) => page.evaluate((p) => {
   return f ? f.getAttribute("title") : null;
 }, prop);
 
+/* ⛔ Контракт Deai: статична ДС (`DS_PROFILES` у `ds-tokens.js`) у продукті ПОРОЖНЯ — знімок united лишився в Ліга-репо.
+   Токени ДС приходять із простору: роль `tokens` (модуль `css-tokens`) → `GET /api/ds-tokens?space=<id>` → профіль
+   `space:<id>`. Значення — з реальної ДС united (як і було), але тепер лежать у CSS-файлі, який читає модуль. */
+const TOKENS_CSS = ":root{\n  --color-primary-400: #025CFF;\n  --color-neutral-alpha-100: #FBFBFF1A;\n}\n";
+
+/** Канвас ПРОСТОРУ з увімкненим `css-tokens` і дочекані токени: панель каже «Звірено з токенами простору». */
+async function withSpaceCanvas(body) {
+  const { dir } = taskFixture({ html: PAGE, pages: ["holovna"] });
+  const cssDir = mkdtempSync(path.join(tmpdir(), "dc-live-ds-"));
+  const cssFile = path.join(cssDir, "tokens.css");
+  writeFileSync(cssFile, TOKENS_CSS);
+  const { child, url } = await startServer(null, {
+    portBase: PORT_BASE + 50,
+    spaces: [{ name: "Ds", id: "ds", color: "space-2", tasks: { lab: { dir, title: "Лабораторія" } } }],
+  });
+  const browser = await chromium.launch();
+  try {
+    const enabled = await (await fetch(`${url}/api/module-enable`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ space: "ds", id: "css-tokens", settings: { file: cssFile } }),
+    })).json();
+    assert.equal(enabled.ok, true, JSON.stringify(enabled));
+    const page = await openInspector(browser, url);
+    await body(page, url);
+  } finally {
+    await browser.close();
+    child.kill();
+  }
+}
+
+/** Токени простору приходять у ФОНІ: чекаємо, поки панель це покаже, інакше вирок читав би порожню ДС. */
+const tokensArrived = async (page) => {
+  await pin(page, "#ok");
+  await page.waitForFunction(() => /Звірено з токенами простору/
+    .test(document.querySelector("#insp-panel .insp-note")?.textContent ?? ""), null, { timeout: 8000 });
+};
+
 async function withCanvas(profile, body) {
   const { dir } = taskFixture({ html: PAGE, pages: ["holovna"] });
   const { child, url } = await startServer(dir, { portBase: PORT_BASE, profile });
@@ -153,8 +193,8 @@ test("напрямок задачі доїжджає в документ мак�
 });
 
 test("три різні вироки на трьох var() — а не одна зелена крапка на всі", async () => {
-  await withCanvas("united", async (page) => {
-    await pin(page, "#ok");
+  await withSpaceCanvas(async (page) => {
+    await tokensArrived(page);
     assert.match(await dotOf(page, "color"), /insp-dot--tok\b/,
       "токен ДС із правильним значенням мусить лишитись зеленим");
 
@@ -192,7 +232,8 @@ test("напрямок без ДС каже про це словами і не �
 
 test("крапка вироку веде НАЗАД у ДС — і повернення доїжджає в пакет Клоду",
   async () => {
-    await withCanvas("united", async (page) => {
+    await withSpaceCanvas(async (page, url) => {
+      await tokensArrived(page);
       await pin(page, "#hard");
       assert.match(await dotOf(page, "color"), /insp-dot--hard\b/);
       const snap = await page.evaluate(() => {
@@ -214,7 +255,7 @@ test("крапка вироку веде НАЗАД у ДС — і поверн�
          міняються (токен пропонується саме тому, що значення те саме), тож
          правило «те саме значення — не правка» скинуло б цю правку мовчки:
          дизайнер бачить реакцію, а Клод не отримує замовлення. */
-      const body = await (await fetch(`${page.url().split("/app")[0]}/api/tuner`)).json();
+      const body = await (await fetch(`${url}/api/tuner`)).json();
       /* Сервер віддає пакет під ключем `package` — саме в тому вигляді, у
          якому він лежить на диску (`/api/tuner`, `serve.py`). */
       const pkg = body.package || body;
@@ -231,7 +272,7 @@ test("крапка вироку веде НАЗАД у ДС — і поверн�
         "пакет мусить сказати, що дизайнер вибрав ТОКЕН, а не число: інакше "
         + "Клод впише літерал і додасть ще один хардкод повз ДС");
       assert.equal(snap.val.toLowerCase(), "#025cff");
-      assert.equal(pkg.ds.profile, "united");
+      assert.equal(pkg.ds.profile, "space:ds");
       assert.equal(pkg.ds.known, true);
     });
   });
