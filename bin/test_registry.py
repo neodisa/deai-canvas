@@ -1161,7 +1161,7 @@ class TestRegistryConfig(unittest.TestCase):
         for bad in ('-oProxyCommand=touch /tmp/x', '--upload-pack=x', 'ext::sh -c id', 'git@host:', 'http://h/r.git',
                     'a b', 'git@host:p\nq', '\x00', 123,
                     'ssh://a@-oProxyCommand=x/p', 'https://u@-oProxyCommand=x/p', 'ssh://-oProxyCommand=x/p',
-                    'https://'):
+                    'https://', 'ssh://-oProxyCommand=x@h/p', 'https://-u@h/p'):
             self.write({'registry_repo': bad})
             self.assertIsNone(rg.registry_repo(), repr(bad))
             with self.assertRaises(rg.NotConfigured) as cm:
@@ -1170,6 +1170,7 @@ class TestRegistryConfig(unittest.TestCase):
 
     def test_accepted_forms(self):
         for ok in (GOOD_REPO, 'ssh://git@gitlab.example.test/ORG/r.git', 'https://gitlab.example.test/ORG/r.git',
+                   'ssh://git@gitlab.example.test:2222/group/sub/r.git', 'https://u_1:p@gitlab.example.test/g/r.git',
                    '/var/tmp/local-bare.git'):
             self.write({'registry_repo': ok})
             self.assertEqual(rg.registry_repo(), ok)

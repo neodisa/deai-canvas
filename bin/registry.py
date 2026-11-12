@@ -35,7 +35,7 @@ REPO = PLACEHOLDER_REPO            # зворотна сумісність ім�
 #: Безпечні форми адреси (потрапляє в `git clone`/`ls-remote`): scp-стиль, ssh/https, абсолютний шлях. Без `-` на початку,
 #: без пробілів і керуючих символів.
 _REPO_RE = re.compile(r'^(?:git@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9_][^\s\x00-\x1f]*'
-                      r'|(?:ssh|https)://(?:[^\s@/\x00-\x1f]+@)?[A-Za-z0-9][A-Za-z0-9.-]*(?::\d+)?/[^\s\x00-\x1f]+'
+                      r'|(?:ssh|https)://(?:[A-Za-z0-9_][^\s@/\x00-\x1f]*@)?[A-Za-z0-9][A-Za-z0-9.-]*(?::\d+)?/[^\s\x00-\x1f]+'
                       r'|/[^\s\x00-\x1f]*)\Z')
 NOT_CONFIGURED_MSG = ('реєстр не налаштовано: задай registry_repo у корені tasks.json (і за потреби registry_ssh_key) '
                       'або змінні DEAI_REGISTRY_REPO / DEAI_REGISTRY_SSH_KEY')
