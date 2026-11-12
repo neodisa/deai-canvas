@@ -39,7 +39,7 @@
  *                         почалось: «незрозуміло, як повернути до ДС».
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -51,6 +51,8 @@ import { startServer, taskFixture } from "./fixture.mjs";
 /* Своя смуга портів: `node --test` крутить файли паралельно, і спільна база
    дала б колізію. Найвище зайняте — 11290 (`tuner.test.mjs`), тож 11390. */
 const PORT_BASE = 11390;
+/* Окрема смуга портів для канваса-простору: PORT_BASE + 50 перетинався з figma.test.mjs (11490) при паралельному test:live. */
+const SPACE_PORT_BASE = 26000;
 const VIEW = { width: 1400, height: 900 };
 
 /**
@@ -138,7 +140,7 @@ async function withSpaceCanvas(body) {
   const cssFile = path.join(cssDir, "tokens.css");
   writeFileSync(cssFile, TOKENS_CSS);
   const { child, url } = await startServer(null, {
-    portBase: PORT_BASE + 50,
+    portBase: SPACE_PORT_BASE,
     spaces: [{ name: "Ds", id: "ds", color: "space-2", tasks: { lab: { dir, title: "Лабораторія" } } }],
   });
   const browser = await chromium.launch();
@@ -153,6 +155,7 @@ async function withSpaceCanvas(body) {
   } finally {
     await browser.close();
     child.kill();
+    rmSync(cssDir, { recursive: true, force: true });
   }
 }
 

@@ -44,6 +44,14 @@ const measure = (page) => page.evaluate(() => {
   };
 });
 
+/** «Назад» показує id задачі: довгий id (`fb-…-slug`) не має витіснити крошку чи переповнити смугу. */
+const backBox = (page) => page.evaluate(() => {
+  const bar = document.querySelector("#bar .bar");
+  const back = bar.querySelector('[data-act="back"]');
+  const b = bar.getBoundingClientRect(), r = back.getBoundingClientRect();
+  return { right: r.right - b.right, width: r.width, text: back.textContent.trim() };
+});
+
 const goHome = async (page) => {
   await page.click('#bar [data-act="home"]');
   await page.waitForSelector("#tasks-home", { state: "visible" });
@@ -84,6 +92,40 @@ for (const width of [320, 375, 520]) {
       assert.ok(m.spill <= 1, `(2) підпис вилазить за крошку: ${why}`);
       if (m.icon > 0.5) assert.ok(m.labSw - m.labCw <= 1, `(3) іконка жива, а підпис уже обрізано: ${why}`);
       assert.ok(m.overflow <= 0, `(4) смуга переповнена: ${why}`);
+    }
+  });
+}
+
+const LONG_ID = "fb-19102026-5882a8-very-long-slug-for-narrow-bar";
+for (const width of [320, 375]) {
+  test(`довгий id задачі в «Назад» на ${width}px: ті самі цілі (логотип, підпис, без переповнення)`, async (t) => {
+    const X = taskFixture({ html: () => "<!doctype html><html><body><h1>m</h1></body></html>" });
+    const spaces = [{ name: "Studio", id: "studio", color: "space-2", tasks: { [LONG_ID]: { dir: X.dir, title: "Задача" } } }];
+    const server = await startServer(null, { portBase: PORT_BASE, spaces });
+    t.after(() => stop(server.child));
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    t.after(() => context.close());
+    const page = await context.newPage();
+    await page.goto(`${server.url}/app/`);
+    await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+
+    const seen = {};
+    await goHome(page);
+    await page.waitForSelector('#bar [data-act="back"]');
+    seen.tasks = { ...(await measure(page)), back: await backBox(page) };
+    await openSpaceDd(page);
+    await page.click('#bar [data-act="conn"]');
+    await page.waitForSelector(".cn-card", { timeout: 15000 });
+    seen.conn = { ...(await measure(page)), back: await backBox(page) };
+
+    for (const [name, m] of Object.entries(seen)) {
+      const why = `${name}@${width}: ${JSON.stringify(m)}`;
+      assert.ok(m.back.text.includes("fb-"), `«Назад» мусить показувати id задачі: ${why}`);
+      assert.ok(m.logo >= 28, `(1) логотип стиснуто: ${why}`);
+      assert.ok(m.visible >= 20, `(2) підпис крошки не видно: ${why}`);
+      assert.ok(m.spill <= 1, `(2) підпис вилазить за крошку: ${why}`);
+      assert.ok(m.overflow <= 0, `(4) смуга переповнена: ${why}`);
+      assert.ok(m.back.right <= 1, `(4) «Назад» вилазить за смугу: ${why}`);
     }
   });
 }
