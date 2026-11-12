@@ -25,6 +25,7 @@ import os
 import random
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -117,12 +118,15 @@ def _communicate(argv, cwd, env, timeout):
 _NETWORK_SUBCOMMANDS = ('ls-remote', 'fetch', 'clone', 'pull', 'push')
 
 
+_GLOBAL_OPTS_WITH_VALUE = ('-C', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env')
+
+
 def _subcommand(args):
     """Перша підкоманда `git` у `args` (повз `-c <k=v>` і прапорці) або `None`."""
     i = 0
     while i < len(args):
         a = args[i]
-        if a == '-c':
+        if a == '-c' or a in _GLOBAL_OPTS_WITH_VALUE:      # значення в окремому аргументі (форма `--opt=v` — один аргумент)
             i += 2
             continue
         if a.startswith('-'):
@@ -137,11 +141,24 @@ def _base_env():
     return {k: v for k, v in os.environ.items() if k not in _GIT_SCRUB and not k.startswith(_GIT_SCRUB_PREFIXES)}
 
 
+def _ssh_value_unsafe(val):
+    """`git` виконує `core.sshCommand` через `sh -c`: значення з метасимволами оболонки зламало б (чи поглинуло) дописані `-o BatchMode…`."""
+    if '\n' in val or '\x00' in val or val.endswith('\\') or any(c in val for c in '#;|&`') or '$(' in val:
+        return True
+    try:
+        shlex.split(val)
+    except ValueError:
+        return True
+    return False
+
+
 def _local_ssh_command(cwd):
     """`core.sshCommand` ЛИШЕ з власного `.git/config` клону (`--local`: глобальний, системний і `include` не читаються; `GIT_CONFIG*` вичищені
     через `_base_env`) або `None`. Багаторядкове/з NUL значення відкидається (у лог іде лише код `ssh-command-rejected`, не значення).
     Це не розширює довіру: клон і так виконує код зі свого `.git` (hooks)."""
-    if not cwd:
+    # `config.worktree`-лише `core.sshCommand` ігнорується свідомо (`--local` читає тільки `.git/config`).
+    # Лише сам корінь клону (`.git` — тека або файл): з підтеки `git` піднявся б до батьківського репо.
+    if not cwd or not os.path.exists(os.path.join(cwd, '.git')):
         return None
     env = _base_env()
     env['GIT_OPTIONAL_LOCKS'] = '0'
@@ -151,7 +168,7 @@ def _local_ssh_command(cwd):
     val = out.strip() if rc == 0 and isinstance(out, str) else ''
     if not val:
         return None
-    if '\n' in val or '\x00' in val:
+    if _ssh_value_unsafe(val):
         try:
             sys.stderr.write('updater: ssh-command-rejected\n')
         except Exception:  # noqa: BLE001

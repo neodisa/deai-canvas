@@ -1,4 +1,5 @@
 """Апдейтер і локальний ssh клону (0.24.0): `core.sshCommand` з `.git/config` зберігається, `insteadOf` працює; лише викидні репо в тимчасових теках."""
+import io
 import os
 import shutil
 import stat
@@ -142,6 +143,91 @@ class LocalSshCommand(Base):
         self.assertIn('IdentitiesOnly=yes', line)
         self.assertIn('BatchMode=yes', line)
         self.assertIn('ConnectTimeout=10', line)
+
+    # П21.1: git виконує core.sshCommand через `sh -c`, тож метасимволи в локальному значенні ламають дописані опції.
+    def test_shell_metacharacters_in_the_local_value_are_rejected(self):
+        _, work = make_world(self.tmp)
+        bad = {
+            'comment': 'ssh -i "/k/id" # коментар',
+            'trailing-backslash': 'ssh -i /k/id\\',
+            'unbalanced-quote': 'ssh -i "/k/id',
+            'semicolon': 'ssh -i /k/id;',
+            'pipe': 'ssh -i /k/id |',
+            'amp': 'ssh -i /k/id &',
+            'backtick': 'ssh -i `id`',
+            'dollar-paren': 'ssh -i $(id)',
+        }
+        for name, val in bad.items():
+            with self.subTest(name):
+                git(['config', '--local', 'core.sshCommand', val], work)
+                err = io.StringIO()
+                with mock.patch('sys.stderr', err):
+                    env = updater._git_env(cwd=work, network=True)
+                self.assertEqual(env['GIT_SSH_COMMAND'], self.DEFAULT)
+                self.assertIn('updater: ssh-command-rejected', err.getvalue())
+                self.assertNotIn('/k/id', err.getvalue())
+
+    def test_quoted_path_with_space_is_accepted(self):
+        _, work = make_world(self.tmp)
+        git(['config', '--local', 'core.sshCommand', 'ssh -i "/path with space/key"'], work)
+        self.assertEqual(updater._git_env(cwd=work, network=True)['GIT_SSH_COMMAND'],
+                         'ssh -i "/path with space/key" -o BatchMode=yes -o ConnectTimeout=10')
+
+    def test_valid_value_with_identity_reaches_the_wrapper_with_hardening(self):
+        remote, work = make_world(self.tmp)
+        wrapper = os.path.join(self.tmp, 'echo-ssh.sh')
+        log = os.path.join(self.tmp, 'echo.log')
+        with open(wrapper, 'w') as f:
+            f.write('#!/bin/sh\necho "$@" >> "%s"\nexit 255\n' % log)
+        os.chmod(wrapper, os.stat(wrapper).st_mode | stat.S_IXUSR)
+        key = os.path.join(self.tmp, 'key')
+        git(['remote', 'set-url', 'origin', 'git@gl.example.test:o/r.git'], work)
+        git(['config', '--local', 'core.sshCommand', '%s -i %s -o IdentitiesOnly=yes' % (wrapper, key)], work)
+        updater.run_git(['ls-remote', '--tags', '--refs', '--', 'git@gl.example.test:o/r.git'], work, 20)
+        with open(log) as f:
+            line = f.read()
+        for part in ('-i ' + key, 'IdentitiesOnly=yes', 'BatchMode=yes', 'ConnectTimeout=10'):
+            self.assertIn(part, line)
+
+    # П21.2
+    def test_subdirectory_of_a_repo_does_not_read_the_parent_config(self):
+        _, work = make_world(self.tmp)
+        git(['config', '--local', 'core.sshCommand', 'ssh -i /k'], work)
+        sub = os.path.join(work, 'sub')
+        os.makedirs(sub, exist_ok=True)
+        self.assertIsNone(updater._local_ssh_command(sub))
+        self.assertEqual(updater._git_env(cwd=sub, network=True)['GIT_SSH_COMMAND'], self.DEFAULT)
+        self.assertEqual(updater._local_ssh_command(work), 'ssh -i /k')
+
+    # П21.3
+    def test_subcommand_skips_values_of_space_form_global_options(self):
+        for opt in ('-C', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env'):
+            with self.subTest(opt):
+                self.assertEqual(updater._subcommand([opt, 'x', 'fetch']), 'fetch')
+                self.assertEqual(updater._subcommand(['-c', 'a=b', opt, 'x', 'ls-remote']), 'ls-remote')
+
+    # П21.4
+    def test_inherited_git_config_environment_does_not_influence_the_result(self):
+        _, work = make_world(self.tmp)
+        for extra in ({'GIT_CONFIG_PARAMETERS': "'core.sshcommand'='ssh -i /evil'"},
+                      {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.sshCommand', 'GIT_CONFIG_VALUE_0': 'ssh -i /evil'}):
+            with self.subTest(sorted(extra)):
+                with mock.patch.dict(os.environ, extra):
+                    env = updater._git_env(cwd=work, network=True)
+                self.assertEqual(env['GIT_SSH_COMMAND'], self.DEFAULT)
+                self.assertNotIn('/evil', env['GIT_SSH_COMMAND'])
+                # `git config --local` сам не читає ці змінні, тож додатково: до дочірнього `git` вони не доходять
+                seen = []
+                real = updater._communicate
+
+                def spy(argv, cwd, e, timeout):
+                    seen.append(e)
+                    return real(argv, cwd, e, timeout)
+                with mock.patch.dict(os.environ, extra), mock.patch.object(updater, '_communicate', side_effect=spy):
+                    updater._local_ssh_command(work)
+                self.assertTrue(seen)
+                for e in seen:
+                    self.assertFalse([k for k in e if k in ('GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT') or k.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_'))])
 
 
 if __name__ == '__main__':
