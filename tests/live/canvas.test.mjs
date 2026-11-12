@@ -293,9 +293,16 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
        точно так само, як робочий, і всі перевірки лишаються зеленими — доведено
        мутаційно (перейменування параметра `node=` → `nd=` не зловив ніхто).
        Саме тут жив баг із `~` у ключі кадру: файл на диску є, сервер віддає 400,
-       картка мовчки порожня. */
+       картка мовчки порожня.
+       Чекаємо `load`/`error` (до 10 с), а не читаємо `complete` одразу: `overview()` чекає лише появи `<img>` у розмітці, а кадр — `loading="lazy"`
+       і `decoding="async"`, тож під навантаженням релізного прогону 0.24.0 він ще вантажився — плаваюче «не завантажилась». Битий URL дає
+       `error` → `false`, тож мутація `node=` → `nd=` червоніє так само. */
     const loaded = await page.locator(".cv-card img").first()
-      .evaluate((img) => img.complete && img.naturalWidth > 0);
+      .evaluate((img) => (img.complete ? img.naturalWidth > 0 : new Promise((done) => {
+        img.addEventListener("load", () => done(img.naturalWidth > 0), { once: true });
+        img.addEventListener("error", () => done(false), { once: true });
+        setTimeout(() => done(img.complete && img.naturalWidth > 0), 10000);
+      })));
     assert.ok(loaded, "кадр у розмітці є, але картинка не завантажилась");
   });
 
