@@ -9,10 +9,14 @@
 #   bash ops/canvas-app/install.sh              поставити / оновити
 #   bash ops/canvas-app/install.sh --check      перевірити
 #   bash ops/canvas-app/install.sh --uninstall  прибрати
+#   bash ops/canvas-app/install.sh --replace <bundle-id>
+#                                             зняти старий застосунок з ТОЧНО цим bundle id
+#                                             (і його автостарт <id>.autostart), поставити цей
 #
 # Змінні (тести/розробка): CANVAS_APP_DIR (типово ~/Applications),
 # CANVAS_AGENTS_DIR (~/Library/LaunchAgents), CANVAS_LSREGISTER,
-# CANVAS_ALLOW_WORKTREE=1 — дозволити встановлення з git-ворктрі.
+# CANVAS_ALLOW_WORKTREE=1 — дозволити встановлення з git-ворктрі,
+# DEAI_WORK_DIR (абсолютний шлях) — тека живих джерел для :4317, запікається в автостарт.
 # Спека: docs/superpowers/specs/2026-10-09-canvas-app-design.md
 set -euo pipefail
 
@@ -114,7 +118,29 @@ do_uninstall() {
   echo "🛑 Design Canvas.app і автостарт прибрано. Сервери, якщо працюють, лишились — ./stop.command."
 }
 
+valid_bundle_id() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] && [ "$1" != "$BUNDLE_ID" ]; }
+
+# --replace <старий bundle id>: знімає застосунок із ТОЧНО цим id і його агента `<id>.autostart`.
+# Застосунок з іншим id не чіпає (далі do_install відмовить «не наш»).
+replace_old() {
+  local old="$1" label="$1.autostart" cur
+  if [ -e "$APP" ]; then
+    cur="$(plist_get "$INFO" CFBundleIdentifier)"
+    if [ "$cur" = "$old" ]; then
+      launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
+      rm -f "$AGENTS_DIR/$label.plist"
+      rm -rf "$APP"
+      echo "↻ знято старий застосунок ($old) і його автостарт"
+    fi
+  else
+    # Застосунку нема, а агент міг лишитись — прибираємо тільки його.
+    launchctl bootout "$DOMAIN/$label" >/dev/null 2>&1 || true
+    rm -f "$AGENTS_DIR/$label.plist"
+  fi
+}
+
 do_install() {
+  local replace_id="${1:-}"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "✗ нема python3 у PATH — канвас без нього не працює." >&2
     exit 1
@@ -128,6 +154,8 @@ do_install() {
     echo "  Запусти з основного чекауту (для розробки — CANVAS_ALLOW_WORKTREE=1)." >&2
     exit 1
   fi
+  # Старе знімаємо лише тут — після всіх перевірок, що відмовили б у установці (інакше людина лишилась би без канваса).
+  if [ -n "$replace_id" ]; then replace_old "$replace_id"; fi
   if [ -e "$APP" ] && ! ours; then
     echo "✗ $APP уже є, і це не наш застосунок — не перезаписую." >&2
     exit 1
@@ -162,9 +190,14 @@ PY
     echo "⚠ нема $ICON — застосунок буде без іконки"
   fi
 
-  python3 - "$BUILD/Contents/Info.plist" "$PLIST" "$BUNDLE_ID" "$LABEL" "$LAUNCH" "$PATH" "$version" "$AGENT_LOG" <<'PY'
+  python3 - "$BUILD/Contents/Info.plist" "$PLIST" "$BUNDLE_ID" "$LABEL" "$LAUNCH" "$PATH" "$version" "$AGENT_LOG" "${DEAI_WORK_DIR:-}" <<'PY'
 import plistlib, sys
 info, agent, bundle_id, label, launch, path, version, log = sys.argv[1:9]
+work = sys.argv[9] if len(sys.argv) > 9 else ''
+env = {'PATH': path}
+# Лише абсолютний шлях в один рядок; інакше ключа нема (типово start.command бере ~/deai-work).
+if work.startswith('/') and '\n' not in work:
+    env['DEAI_WORK_DIR'] = work
 with open(info, 'wb') as f:
     plistlib.dump({
         'CFBundleName': 'Design Canvas',
@@ -186,7 +219,7 @@ with open(agent, 'wb') as f:
     plistlib.dump({
         'Label': label,
         'ProgramArguments': ['/bin/bash', launch, '--servers-only'],
-        'EnvironmentVariables': {'PATH': path},
+        'EnvironmentVariables': env,
         'RunAtLoad': True,
         # Сервери мають жити після виходу launch.sh — інакше launchd добʼє їх
         # разом із групою процесів. KeepAlive навмисно нема: він зламав би
@@ -251,6 +284,12 @@ SH
 case "${1:-}" in
   --check) do_check ;;
   --uninstall) do_uninstall ;;
+  --replace)
+    if [ -z "${2:-}" ] || ! valid_bundle_id "$2"; then
+      echo "✗ --replace потребує bundle id старого застосунку (літери, цифри, крапки, дефіси; не наш власний)" >&2
+      exit 2
+    fi
+    do_install "$2" ;;
   '') do_install ;;
-  *) echo "Невідомий аргумент: $1 (є --check, --uninstall)" >&2; exit 2 ;;
+  *) echo "Невідомий аргумент: $1 (є --check, --uninstall, --replace <bundle-id>)" >&2; exit 2 ;;
 esac

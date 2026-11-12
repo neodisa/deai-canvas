@@ -641,6 +641,84 @@ class InstallTest(StubWorld):
         r = self.install()
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    # --- --replace <bundle-id> і DEAI_WORK_DIR (0.24.0) ---
+
+    OLD_ID = 'net.example.oldcanvas'
+
+    def put_old_app(self, bundle_id=None):
+        bid = bundle_id or self.OLD_ID
+        os.makedirs(os.path.dirname(self.info))
+        with open(self.info, 'wb') as f:
+            plistlib.dump({'CFBundleIdentifier': bid}, f)
+        os.makedirs(self.agents, exist_ok=True)
+        old_plist = os.path.join(self.agents, bid + '.autostart.plist')
+        with open(old_plist, 'wb') as f:
+            plistlib.dump({'Label': bid + '.autostart'}, f)
+        return old_plist
+
+    # G1
+    def test_replace_removes_the_named_old_bundle_and_its_agent(self):
+        old_plist = self.put_old_app()
+        r = self.install('--replace', self.OLD_ID)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], self.BUNDLE_ID)
+        self.assertFalse(os.path.exists(old_plist))
+        self.assertIn(f'launchctl bootout {self.domain}/{self.OLD_ID}.autostart', self.calls())
+
+    def test_replace_also_cleans_a_stray_old_agent_when_the_app_is_gone(self):
+        old_plist = self.put_old_app()
+        shutil.rmtree(self.app)
+        r = self.install('--replace', self.OLD_ID)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(old_plist))
+
+    # G2
+    def test_replace_does_not_touch_a_different_foreign_bundle(self):
+        foreign_plist = self.put_old_app('com.example.other')
+        r = self.install('--replace', self.OLD_ID)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('не наш', r.stderr)
+        self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], 'com.example.other')
+        self.assertTrue(os.path.exists(foreign_plist))
+        self.assertNotIn(f'launchctl bootout {self.domain}/{self.OLD_ID}.autostart', self.calls())
+
+    # G3
+    def test_replace_refuses_bad_or_own_ids(self):
+        for bad in ('', '../x', 'a b', '-rf', self.BUNDLE_ID, 'x;y', 'a/b'):
+            r = self.install('--replace', bad)
+            self.assertEqual(r.returncode, 2, repr(bad))
+            self.assertFalse(os.path.exists(self.app), repr(bad))
+            self.assertEqual(self.calls(), [], repr(bad))
+        r = self.install('--replace')                      # без значення
+        self.assertEqual(r.returncode, 2)
+
+    # G4
+    def test_replace_keeps_the_old_app_when_the_install_would_refuse(self):
+        old_plist = self.put_old_app()
+        script = self.git_fixture()                        # ворктрі без CANVAS_ALLOW_WORKTREE → відмова
+        r = self.install('--replace', self.OLD_ID, script=script)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], self.OLD_ID)
+        self.assertTrue(os.path.exists(old_plist))
+
+    # G5
+    def test_without_the_flag_the_old_bundle_is_still_refused(self):
+        self.put_old_app()
+        r = self.install()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('не наш', r.stderr)
+
+    # G6
+    def test_work_dir_is_baked_into_the_agent(self):
+        self.install(DEAI_WORK_DIR='/Users/x/work')
+        self.assertEqual(self.read_plist(self.plist)['EnvironmentVariables']['DEAI_WORK_DIR'], '/Users/x/work')
+
+    def test_no_work_dir_means_no_key_and_relative_is_ignored(self):
+        self.install()
+        self.assertNotIn('DEAI_WORK_DIR', self.read_plist(self.plist)['EnvironmentVariables'])
+        self.install(DEAI_WORK_DIR='relative/path')
+        self.assertNotIn('DEAI_WORK_DIR', self.read_plist(self.plist)['EnvironmentVariables'])
+
     # --- ревʼю 09.10.2026 ---
 
     def test_failed_build_leaves_nothing_that_locks_reinstall(self):
