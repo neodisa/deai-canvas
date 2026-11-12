@@ -181,7 +181,7 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
       SUPABASE_URL: "", SUPABASE_KEY: "",
       /* ⛔ Те саме для Jira: після 4d-2 ядро в ізольованому прогоні їх не читає, а пояс і підтяжки лишаються. */
       JIRA_EMAIL: "", JIRA_TOKEN: "",
-      /* ⛔ Мережі в живих тестах нема: перевірка оновлень у remote вимкнена, а відгук не має адреси (T7 підставляє фейковий приймач). */
+      /* ⛔ Мережі в живих тестах нема: перевірка оновлень у remote вимкнена, а порожній DEAI_FEEDBACK_URL ВИМИКАЄ приймач, навіть той, що постачається в app/feedback.json (T7 підставляє фейковий приймач). */
       DEAI_NO_UPDATE_CHECK: "1", DEAI_FEEDBACK_URL: "", DEAI_FEEDBACK_KEY: "",
       /* Лише з `spaces`: домівка й реєстр — тимчасові, а git не питає про особу
          (інакше `git commit` у теці нової задачі мовчки не відбувся б). */

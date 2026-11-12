@@ -182,6 +182,17 @@ class Config(Base):
         env = {'DEAI_FEEDBACK_URL': 'https://env.example.com', 'DEAI_FEEDBACK_KEY': 'sb_publishable_env'}
         self.assertEqual(feedback.config(env=env, home=self.home), {'url': 'https://env.example.com', 'key': 'sb_publishable_env'})
 
+    def test_empty_env_url_switches_the_collector_off(self):
+        """Явно порожній `DEAI_FEEDBACK_URL` — вимикач, навіть коли постачальний файл і config.json мають адресу+ключ."""
+        self.write_shipped('https://shipped.example.com', 'sb_publishable_shipped')
+        self.write_home_cfg({'feedback': {'url': 'https://home.example.com', 'key': 'sb_publishable_home'}})
+        self.assertIsNotNone(feedback.config(env={}, home=self.home))
+        for blank in ('', '   '):
+            self.assertIsNone(feedback.config(env={'DEAI_FEEDBACK_URL': blank, 'DEAI_FEEDBACK_KEY': ''}, home=self.home))
+            self.assertIsNone(feedback.config(env={'DEAI_FEEDBACK_URL': blank}, home=self.home))
+        # лише порожній ключ без адреси — як раніше «не задано»: ланцюг іде далі
+        self.assertEqual(feedback.config(env={'DEAI_FEEDBACK_KEY': ''}, home=self.home)['url'], 'https://home.example.com')
+
     def test_pair_is_never_mixed_across_sources(self):
         """Ключ одного джерела не їде на адресу іншого: частково заданий env → `None`, а не URL з env + ключ із файла."""
         self.write_shipped('https://shipped.example.com', 'sb_publishable_shipped')

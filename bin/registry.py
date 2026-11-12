@@ -253,7 +253,8 @@ def fixture_path_reason(task):
     # так ганяють набори на релізі). Усе під нею — справжня робота, не фікстура;
     # фікстури лежать ПОРУЧ із домом, у `$TMPDIR`.
     homes.discard(os.sep)
-    home_in_tmp = any(_under(h, r) for h in homes for r in roots)
+    # СУВОРО нижче кореня: `HOME=/tmp` (дім збігається з коренем) не вимикає розпізнавання фікстур для всього `/tmp`.
+    home_in_tmp = any(_under(h, r) and h != (r.rstrip(os.sep) or os.sep) for h in homes for r in roots)
     for field, value in fields:
         p = _local_path(value)
         if not p:

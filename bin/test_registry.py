@@ -334,6 +334,13 @@ class TestFixturePathReason(unittest.TestCase):
             self.assertIsNone(rg.fixture_path_reason({'dir': h + '/design-work/courts'}))
             self.assertIsNotNone(rg.fixture_path_reason({'dir': '/var/folders/zz/abc/T/dc-x/nova'}))
 
+    def test_home_equal_to_temp_root_still_flags_fixtures(self):
+        """`HOME=/tmp` (дім ЗБІГАЄТЬСЯ з тимчасовим коренем, а не лежить під ним) не вимикає розпізнавання: `/tmp/dc-x/nova` — досі фікстура."""
+        from unittest import mock
+        for h in ('/tmp', '/private/tmp', '/var/folders'):
+            with mock.patch.dict(os.environ, {'HOME': h}):
+                self.assertIsNotNone(rg.fixture_path_reason({'dir': h + '/dc-x/nova'}), h)
+
     def _linked(self):
         """(справжня тека, симлінк на неї) у tempfile — і вимкнені зашиті корені,
         щоб перевірити саме realpath, а не збіг із `/var/folders`."""

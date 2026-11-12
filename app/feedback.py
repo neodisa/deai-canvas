@@ -352,8 +352,13 @@ def config(env=None, home=None):
     """`{url, key}` приймача або `None` (лише локальна черга). Ланцюг: `DEAI_FEEDBACK_URL`/`DEAI_FEEDBACK_KEY` > `<DEAI_HOME>/config.json`
     (`{"feedback": {"url", "key"}}`, лише читаємо) > `app/feedback.json`. ⛔ Пара — ЦІЛІСНА з одного джерела (ключ одного проєкту не
     їде на адресу іншого); перше джерело, що щось задає, вирішує: невалідне — `None` (а не мовчазний перехід до нижчого).
-    ⛔ НІКОЛИ не береться з налаштувань модулів простору (коментарі, дашборд, Teams ЛІГИ)."""
+    ⛔ НІКОЛИ не береться з налаштувань модулів простору (коментарі, дашборд, Teams ЛІГИ).
+    Явно присутній, але порожній `DEAI_FEEDBACK_URL` — ВИМИКАЧ: приймач вимкнено, без `config.json` і `app/feedback.json` (так тести й
+    живі фікстури гарантовано не б'ють у приймач, що постачається з застосунком). Порожній лише `DEAI_FEEDBACK_KEY` за відсутньої адреси
+    лишається «не задано» (ланцюг іде далі)."""
     env = os.environ if env is None else env
+    if 'DEAI_FEEDBACK_URL' in env and not str(env.get('DEAI_FEEDBACK_URL') or '').strip():
+        return None
     try:
         home = home if home is not None else spaces.home()
     except Exception:  # noqa: BLE001

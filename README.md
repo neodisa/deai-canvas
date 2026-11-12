@@ -597,7 +597,7 @@ that will be sent. Nothing leaves the machine before you press send.
 - *The collector* is the owner's own Supabase project: run `ops/feedback-collector.sql` (insert-only for the public key, a private bucket for screenshots,
   a throttled Teams card through a webhook kept in Vault). Point a copy of Deai at it with `DEAI_FEEDBACK_URL` and
   `DEAI_FEEDBACK_KEY`, or `{"feedback": {"url": "https://…", "key": "…"}}` in `<DEAI_HOME>/config.json`; the order is environment, then `config.json`,
-  then `app/feedback.json`. Only `https://` addresses are used. Without a collector the notes stay in `outbox` and the dialog says so.
+  then `app/feedback.json`. Only `https://` addresses are used. An empty `DEAI_FEEDBACK_URL` turns the collector off (nothing is read from `config.json` or `app/feedback.json`). Without a collector the notes stay in `outbox` and the dialog says so.
 
 ## Layout
 

@@ -1827,7 +1827,8 @@ class StartupTest(_WriteStand):
                 calls.append('serve')
 
         with self.mock.patch.object(serve, 'make_server', lambda port: calls.append('bind') or FakeSrv()), \
-                self.mock.patch.object(self.lm, 'startup', lambda: calls.append('migrate')):
+                self.mock.patch.object(self.lm, 'startup', lambda: calls.append('migrate')), \
+                self.mock.patch.object(serve.feedback, 'start_background'):
             serve.serve_main(0)
         self.assertEqual(calls, ['bind', 'migrate', 'serve'])
 
