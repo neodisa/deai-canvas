@@ -408,6 +408,108 @@ class LaunchInstalledPwaTest(StubWorld):
         self.assertLess(time.monotonic() - t0, 1.0, r.stderr)
 
 
+class StartCommandTest(StubWorld):
+    """start.command з підміненими lsof/python3: справжні сервери не стартують,
+    порти 8765/4317 не чіпаються. «Порт зайнятий» = файл $STUB_BUSY_DIR/<порт>."""
+
+    START = os.path.join(ROOT, 'start.command')
+
+    def setUp(self):
+        super().setUp()
+        write_exec(os.path.join(self.bin, 'lsof'),
+                   # Як справжній lsof: код 0 лише коли порт зайнятий, інакше 1.
+                   'for a in "$@"; do case "$a" in -ti:*) p="${a#-ti:}"; '
+                   '[ -f "$STUB_BUSY_DIR/$p" ] && { echo 4242; exit 0; };; esac; done\nexit 1\n')
+        write_exec(os.path.join(self.bin, 'python3'),
+                   'echo "python3 $* PORT=${PORT:-} cwd=$PWD" >> "$STUB_LOG"\n')
+        os.makedirs(os.path.join(self.home, 'Library', 'Logs'))
+        self.busy = os.path.join(self.tmp, 'busy')
+        os.makedirs(self.busy)
+        self.work = os.path.join(self.tmp, 'work')
+
+    def go(self, **extra):
+        extra.setdefault('STUB_BUSY_DIR', self.busy)
+        return subprocess.run(['/bin/zsh', self.START], env=self.env(**extra),
+                              capture_output=True, text=True, timeout=30)
+
+    @staticmethod
+    def cwd_of(call):
+        # $PWD у заглушці — логічний шлях (/var/…), а не realpath (/private/var/…).
+        return os.path.realpath(call.split(' cwd=', 1)[1])
+
+    def servers(self, needle):
+        return [c for c in self.calls() if needle in c]
+
+    # G1
+    def test_missing_work_dir_skips_the_4317_server_without_failing(self):
+        r = self.go()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.servers('http.server'), [], self.calls())
+        self.assertIn('4317', r.stdout)
+        self.assertIn('нема', r.stdout)
+
+    # G2
+    def test_work_dir_env_is_where_4317_serves_from(self):
+        os.makedirs(self.work)
+        r = self.go(DEAI_WORK_DIR=self.work)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = self.servers('http.server')
+        self.assertEqual(len(line), 1, self.calls())
+        self.assertIn('4317', line[0])
+        self.assertEqual(self.cwd_of(line[0]), os.path.realpath(self.work))
+
+    def test_default_work_dir_is_deai_work_in_home(self):
+        os.makedirs(os.path.join(self.home, 'deai-work'))
+        r = self.go()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = self.servers('http.server')
+        self.assertEqual(len(line), 1, self.calls())
+        self.assertEqual(self.cwd_of(line[0]), os.path.realpath(os.path.join(self.home, 'deai-work')))
+
+    # G3 / G5
+    def test_default_port_is_8765_and_custom_port_is_passed_to_the_server(self):
+        r = self.go()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.servers('app/serve.py PORT=8765 ')), 1, self.calls())
+        self.assertIn('localhost:8765/app/', r.stdout)
+        open(self.log, 'w').close()
+        r = self.go(DEAI_PORT='9123')
+        self.assertEqual(len(self.servers('app/serve.py PORT=9123 ')), 1, self.calls())
+        self.assertIn('localhost:9123/app/', r.stdout)
+        self.assertNotIn('8765', r.stdout)
+
+    def test_busy_custom_port_is_not_started_twice(self):
+        open(os.path.join(self.busy, '9123'), 'w').close()
+        r = self.go(DEAI_PORT='9123')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.servers('app/serve.py'), [])
+        self.assertIn('9123', r.stdout)
+
+    # G4
+    def test_bad_port_is_refused_before_anything_starts(self):
+        for bad in ('abc', '8765; touch x', '-1', '0', '65536', '99999999', '12 34'):
+            open(self.log, 'w').close()
+            r = self.go(DEAI_PORT=bad)
+            self.assertEqual(r.returncode, 2, repr(bad))
+            self.assertEqual(self.calls(), [], repr(bad))
+
+    # stop.command: той самий DEAI_PORT. lsof віддає pid ЛИШЕ дочірнього sleep, якого запустив тест
+    # (справжній kill — вбудована команда zsh, підмінити її не можна).
+    def test_stop_command_follows_deai_port(self):
+        write_exec(os.path.join(self.bin, 'lsof'),
+                   'case "$*" in *-ti:9123*) echo "$STUB_PID"; exit 0;; esac\nexit 1\n')
+        child = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        r = subprocess.run(['/bin/zsh', os.path.join(ROOT, 'stop.command')],
+                           env=self.env(DEAI_PORT='9123', STUB_PID=child.pid),
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('порт 9123 зупинено', r.stdout)
+        self.assertIn('порт 4317 і так вільний', r.stdout)
+        self.assertNotIn('8765', r.stdout)
+        child.wait(timeout=10)
+
+
 class AppleScriptCompilesTest(unittest.TestCase):
     """Кожен AppleScript-фрагмент (heredoc <<'OSA') компілюється.
 
