@@ -24,15 +24,26 @@ export function updatePillHTML(m) {
     + `${ico(m.restart ? "warn" : "down")}<span class="lbl-upd">${esc(label)}</span></button>`;
 }
 
+/* Мінімальне форматування рядка: ПЕРШЕ екранування (esc), потім на вже безпечному тексті — `код` і **жирне** (одним проходом зліва
+   направо: код не розбирається всередині, жирне може містити код). Маркер без пари лишається буквальним; пара не перетинає рядок
+   (`[^…\n]`), а порожні пари (`****`, ``` `` ```) форматуванням не вважаються. Нових тегів, окрім <strong>/<code>, не зʼявляється:
+   після esc у тексті немає `<`, а самі маркери `*`/`` ` `` esc не чіпає. */
+function inlineHTML(text) {
+  const safe = esc(text);
+  return safe.replace(/`([^`\n]+)`|\*\*([^*\n]+?)\*\*/g, (_m, code, bold) => (code !== undefined
+    ? `<code>${code}</code>`
+    : `<strong>${bold.replace(/`([^`\n]+)`/g, "<code>$1</code>")}</strong>`));
+}
+
 /* Блоки одного розділу: підряд ідучі пункти — один `<ul>`. Текст — лише `esc`. */
 function blocksHTML(blocks) {
   let out = "";
   let list = "";
   const flush = () => { if (list) { out += `<ul class="up-list">${list}</ul>`; list = ""; } };
   for (const b of blocks) {
-    if (b.kind === "li") { list += `<li>${esc(b.text)}</li>`; continue; }
+    if (b.kind === "li") { list += `<li>${inlineHTML(b.text)}</li>`; continue; }
     flush();
-    out += b.kind === "h" ? `<p class="up-h3">${esc(b.text)}</p>` : `<p class="up-p">${esc(b.text)}</p>`;
+    out += b.kind === "h" ? `<p class="up-h3">${esc(b.text)}</p>` : `<p class="up-p">${inlineHTML(b.text)}</p>`;
   }
   flush();
   return out;

@@ -90,18 +90,21 @@ export function restartStep(ctx, o) {
 
 /**
  * Тіло розділу CHANGELOG (звичайний текст) → блоки `{kind: "h" | "li" | "p", text}`. Рядок `### X` — заголовок, `- X`/`* X` — пункт,
- * решта непорожнє — абзац. ⛔ `text` — СИРИЙ текст (він може містити `<`/`>`): у розмітку він потрапляє лише через `esc` у
+ * рядок з відступом одразу під пунктом — продовження ТОГО Ж пункту (склеюється пробілом; порожній рядок чи заголовок
+ * продовження обривають), решта непорожнє — абзац. ⛔ `text` — СИРИЙ текст (він може містити `<`/`>`): у розмітку він потрапляє лише через `esc` у
  * `update-view.js`; тут нічого не екранується й нічого не розбирається як HTML.
  */
 export function bodyToBlocks(body) {
   const out = [];
+  let open = false; // true — попередній непорожній рядок був пунктом (або його продовженням): відступлений рядок далі — його частина
   for (const raw of String(body ?? "").split("\n")) {
     const line = raw.replace(/\s+$/, "");
-    if (!line.trim()) continue;
+    if (!line.trim()) { open = false; continue; }
     let m;
-    if ((m = /^#{2,6}\s+(.*)$/.exec(line))) out.push({ kind: "h", text: m[1] });
-    else if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) out.push({ kind: "li", text: m[1] });
-    else out.push({ kind: "p", text: line.trim() });
+    if ((m = /^#{2,6}\s+(.*)$/.exec(line))) { out.push({ kind: "h", text: m[1] }); open = false; }
+    else if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) { out.push({ kind: "li", text: m[1] }); open = true; }
+    else if (open && /^\s/.test(line)) out[out.length - 1].text += ` ${line.trim()}`; // продовження пункту (CHANGELOG переносить рядки з відступом)
+    else { out.push({ kind: "p", text: line.trim() }); open = false; }
   }
   return out;
 }

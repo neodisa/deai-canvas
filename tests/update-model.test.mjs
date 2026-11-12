@@ -309,3 +309,83 @@ test("i18n: ключі оновлення є в обох мовах з одна�
   }
   for (const k of Object.keys(DICT.en).filter(ours)) assert.ok(DICT.uk[k] !== undefined, `uk.${k}`);
 });
+
+/* ── «Що нового»: продовження пунктів і мінімальне форматування (0.24.0, П19) ───────────────────────────────────────── */
+
+/* Зразок за формою справжнього CHANGELOG 0.23.2/0.23.1: пункт із `**жирним**` на початку, продовження з відступом у 2 пробіли, `код`. */
+const REAL_BODY = [
+  "Before the team release: feedback now reaches the maintainer.",
+  "",
+  "### Added",
+  "- **The feedback collector ships with the product.** `app/feedback.json` carries the address and the publishable key of the Deai",
+  "  feedback project, so a note sent from any copy reaches the maintainer without setup; notes that waited in `outbox` since 0.23.0",
+  "  go out on the first background retry.",
+  "- **An empty `DEAI_FEEDBACK_URL` turns the collector off** (the variable is present, the value is blank).",
+  "",
+  "### Fixed",
+  "- **Feedback never left a Mac.** The sender opened HTTPS with the default store; it now uses `certifi`.",
+].join("\n");
+
+test("bodyToBlocks: рядки-продовження з відступом належать пункту й склеюються пробілом", () => {
+  const b = bodyToBlocks(REAL_BODY);
+  assert.deepEqual(b.map((x) => x.kind), ["p", "h", "li", "li", "h", "li"]);
+  assert.equal(
+    b[2].text,
+    "**The feedback collector ships with the product.** `app/feedback.json` carries the address and the publishable key of the Deai"
+      + " feedback project, so a note sent from any copy reaches the maintainer without setup; notes that waited in `outbox` since 0.23.0"
+      + " go out on the first background retry.",
+  );
+  assert.equal(b[3].text, "**An empty `DEAI_FEEDBACK_URL` turns the collector off** (the variable is present, the value is blank).");
+});
+
+test("bodyToBlocks: продовження не перетікає через порожній рядок, заголовок чи інший пункт; відступлений абзац без пункту лишається абзацом", () => {
+  assert.deepEqual(bodyToBlocks("- а\n  б\n\n  в\n- г"), [
+    { kind: "li", text: "а б" }, { kind: "p", text: "в" }, { kind: "li", text: "г" },
+  ]);
+  assert.deepEqual(bodyToBlocks("  самотній\n- а"), [{ kind: "p", text: "самотній" }, { kind: "li", text: "а" }]);
+  assert.deepEqual(bodyToBlocks("- а\n### H\n  б"), [{ kind: "li", text: "а" }, { kind: "h", text: "H" }, { kind: "p", text: "б" }]);
+  // вкладений пункт — свій пункт, як і раніше
+  assert.deepEqual(bodyToBlocks("- а\n  - вкладений"), [{ kind: "li", text: "а" }, { kind: "li", text: "вкладений" }]);
+});
+
+test("опис змін: пункт із продовженням — один <li>; **жирне** → <strong>, `код` → <code>", () => {
+  const html = updateNotesHTML({ sections: [{ version: "0.23.1", date: "12.11.2026", body: REAL_BODY }] });
+  assert.equal((html.match(/<li>/g) || []).length, 3, "два пункти Added + один Fixed, а не рядки-продовження окремими абзацами");
+  assert.ok(html.includes("<strong>The feedback collector ships with the product.</strong> <code>app/feedback.json</code> carries"));
+  assert.ok(html.includes("<strong>An empty <code>DEAI_FEEDBACK_URL</code> turns the collector off</strong>"), "код усередині жирного");
+  assert.ok(html.includes("<code>outbox</code>") && html.includes("<code>certifi</code>"));
+  assert.doesNotMatch(html, /\*\*|`/, "жодних буквальних маркерів, коли всі парні");
+});
+
+test("опис змін: <script>/<img onerror> усередині жирного й коду лишаються текстом", () => {
+  const body = `- **${EVIL} і <script>alert(1)</script>** та \`${EVIL}\` та \`<script>x</script>\``;
+  const html = updateNotesHTML({ sections: [{ version: "1", date: "2", body }] });
+  assert.doesNotMatch(html, /<img|<script/i, "сирий тег потрапив у розмітку");
+  assert.match(html, /<strong>&lt;img src=x onerror=alert\(1\)&gt; і &lt;script&gt;alert\(1\)&lt;\/script&gt;<\/strong>/);
+  assert.match(html, /<code>&lt;img src=x onerror=alert\(1\)&gt;<\/code>/);
+  assert.match(html, /<code>&lt;script&gt;x&lt;\/script&gt;<\/code>/);
+  // дозволені лише теги <strong>/<code>/<li>/<ul>/<p>/<section>/<h3>
+  const tags = new Set([...html.matchAll(/<\/?([a-z0-9]+)/gi)].map((m) => m[1].toLowerCase()));
+  assert.deepEqual([...tags].sort(), ["code", "h3", "li", "section", "strong", "ul"]);
+});
+
+test("опис змін: маркер без пари лишається буквальним; пари не склеюються між пунктами й абзацами", () => {
+  const html = updateNotesHTML({ sections: [{ version: "1", date: "2", body: "- a ** b\n- c ** d\n- e ` f\nабзац `g` і **h" }] });
+  assert.doesNotMatch(html, /<strong>|<code>[^<]*<\/code>.*<code>/s, "жодної жадібної пари через межі пунктів");
+  assert.equal((html.match(/\*\*/g) || []).length, 3);
+  assert.ok(html.includes("<li>a ** b</li>") && html.includes("<li>c ** d</li>") && html.includes("<li>e ` f</li>"));
+  assert.ok(html.includes("<code>g</code> і **h"), "парний код розібрано, непарне ** лишилось");
+  assert.ok(updateNotesHTML({ sections: [{ version: "1", date: "2", body: "- **не закрито" }] }).includes("<li>**не закрито</li>"));
+  assert.ok(updateNotesHTML({ sections: [{ version: "1", date: "2", body: "- **** і ``" }] }).includes("<li>**** і ``</li>"), "порожні пари — не форматування");
+});
+
+test("опис змін: код усередині не форматується (`**x**` у коді лишається буквальним); амперсанд і лапки екрануються", () => {
+  const html = updateNotesHTML({ sections: [{ version: "1", date: "2", body: "- `**x**` і **a & \"b\"**" }] });
+  assert.ok(html.includes("<code>**x**</code>"));
+  assert.ok(html.includes("<strong>a &amp; &quot;b&quot;</strong>") || html.includes("<strong>a &amp; \"b\"</strong>"));
+});
+
+test("опис змін: дві пари в одному рядку — два окремі <strong>/<code> (жодної жадібності)", () => {
+  const html = updateNotesHTML({ sections: [{ version: "1", date: "2", body: "- **a** і **b**, `c` та `d`" }] });
+  assert.ok(html.includes("<li><strong>a</strong> і <strong>b</strong>, <code>c</code> та <code>d</code></li>"), html);
+});

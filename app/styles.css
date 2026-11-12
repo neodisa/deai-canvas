@@ -296,6 +296,7 @@ body.home-open .cv-hud{display:none!important}
 .up .up-sec-h{margin:6px 0 4px;font-size:13px;font-weight:600;color:var(--g900)}
 .up .up-notes p{margin:4px 0}
 .up .up-list{margin:4px 0;padding-left:18px}
+.up .up-notes code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--g50);padding:0 3px;border-radius:3px;overflow-wrap:anywhere}
 .up .up-st{margin:0;font-size:13px;color:var(--g700)}
 .up[aria-busy="true"] .up-notes{opacity:.6}
 /* Пігулка оновлення в смузі: звичайний контрол смуги з рамкою; підпис ховається з рештою на 1180 (`.lbl-upd`, див. контейнерні запити). */
