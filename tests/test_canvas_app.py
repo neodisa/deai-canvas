@@ -737,6 +737,27 @@ class InstallTest(StubWorld):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], 'com.example.other')
 
+    def test_foreign_app_without_a_readable_bundle_id_is_left_alone(self):
+        """Регрес ревʼю 0.24.0: порожній id чужого застосунку дорівнював порожньому --replace, і install зносив його."""
+        for case in ('no-info-plist', 'no-bundle-id', 'broken-plist'):
+            with self.subTest(case):
+                shutil.rmtree(self.app, ignore_errors=True)
+                os.makedirs(os.path.dirname(self.info))
+                keep = os.path.join(os.path.dirname(self.info), 'data.txt')
+                with open(keep, 'w') as f:
+                    f.write('чуже')
+                if case == 'no-bundle-id':
+                    with open(self.info, 'wb') as f:
+                        plistlib.dump({'CFBundleName': 'Design Canvas'}, f)
+                elif case == 'broken-plist':
+                    with open(self.info, 'w') as f:
+                        f.write('<not a plist')
+                for args in ((), ('--replace', self.OLD_ID)):
+                    r = self.install(*args)
+                    self.assertEqual(r.returncode, 1, (case, args, r.stdout, r.stderr))
+                    self.assertIn('не наш', r.stderr)
+                    self.assertTrue(os.path.exists(keep), (case, args))
+
     def test_uninstall_removes_app_and_agent(self):
         self.install()
         r = self.install('--uninstall')

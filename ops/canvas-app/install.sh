@@ -161,10 +161,15 @@ do_install() {
     echo "  Запусти з основного чекауту (для розробки — CANVAS_ALLOW_WORKTREE=1)." >&2
     exit 1
   fi
-  # Чужий застосунок на нашому місці — відмова. Виняток: його id = той, що просили замінити (--replace).
-  if [ -e "$APP" ] && ! ours && [ "$(plist_get "$INFO" CFBundleIdentifier)" != "$replace_id" ]; then
-    echo "✗ $APP уже є, і це не наш застосунок — не перезаписую." >&2
-    exit 1
+  # Чужий застосунок на нашому місці — відмова. Єдиний виняток: --replace задано І його id точно = той id.
+  # (Порожній/нечитабельний id ніколи не дорівнює порожньому --replace — інакше звичайний install зносив чуже.)
+  if [ -e "$APP" ] && ! ours; then
+    local cur_id
+    cur_id="$(plist_get "$INFO" CFBundleIdentifier)"
+    if [ -z "$replace_id" ] || [ -z "$cur_id" ] || [ "$cur_id" != "$replace_id" ]; then
+      echo "✗ $APP уже є, і це не наш застосунок — не перезаписую." >&2
+      exit 1
+    fi
   fi
 
   # Версія — з package.json у корені клону; нема/битий → 0, установка не падає.
