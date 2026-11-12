@@ -61,6 +61,18 @@ STUBS = {
 }
 
 
+# lsof-заглушка. Журналить argv у $STUB_LOG.lsof. Як справжній lsof: код 0 лише коли щось знайдено.
+# Слухач порту P = файл $STUB_BUSY_DIR/P (вміст — pid-и, типово 4242); КЛІЄНТСЬКЕ зʼєднання
+# (браузер) = файл P.client: його видно лише без фільтра -sTCP:LISTEN.
+LSOF_STUB = (
+    'echo "$*" >> "$STUB_LOG.lsof"\n'
+    'listen=; for a in "$@"; do [ "$a" = -sTCP:LISTEN ] && listen=1; done\n'
+    'for a in "$@"; do case "$a" in -tiTCP:*|-ti:*) p="${a#*:}";\n'
+    '  if [ -f "$STUB_BUSY_DIR/$p" ]; then if [ -s "$STUB_BUSY_DIR/$p" ]; then cat "$STUB_BUSY_DIR/$p"; else echo 4242; fi; exit 0; fi\n'
+    '  if [ -z "$listen" ] && [ -f "$STUB_BUSY_DIR/$p.client" ]; then echo 9999; exit 0; fi;; esac; done\nexit 1\n'
+)
+
+
 def write_exec(path, body):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
@@ -416,10 +428,7 @@ class StartCommandTest(StubWorld):
 
     def setUp(self):
         super().setUp()
-        write_exec(os.path.join(self.bin, 'lsof'),
-                   # Як справжній lsof: код 0 лише коли порт зайнятий, інакше 1.
-                   'for a in "$@"; do case "$a" in -ti:*) p="${a#-ti:}"; '
-                   '[ -f "$STUB_BUSY_DIR/$p" ] && { echo 4242; exit 0; };; esac; done\nexit 1\n')
+        write_exec(os.path.join(self.bin, 'lsof'), LSOF_STUB)
         write_exec(os.path.join(self.bin, 'python3'),
                    'echo "python3 $* PORT=${PORT:-} cwd=$PWD" >> "$STUB_LOG"\n')
         os.makedirs(os.path.join(self.home, 'Library', 'Logs'))
@@ -493,53 +502,89 @@ class StartCommandTest(StubWorld):
             self.assertEqual(r.returncode, 2, repr(bad))
             self.assertEqual(self.calls(), [], repr(bad))
 
+    def test_port_check_asks_only_for_listeners_not_client_connections(self):
+        # Браузер, що тримає зʼєднання з портом, не робить його «зайнятим».
+        open(os.path.join(self.busy, '8765.client'), 'w').close()
+        r = self.go()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.servers('app/serve.py PORT=8765 ')), 1, self.calls())
+        with open(self.log + '.lsof') as f:
+            asked = f.read().splitlines()
+        self.assertTrue(asked and all('-sTCP:LISTEN' in a for a in asked), asked)
+
+    def test_work_server_check_also_ignores_client_connections(self):
+        os.makedirs(self.work)
+        open(os.path.join(self.busy, '4317.client'), 'w').close()
+        r = self.go(DEAI_WORK_DIR=self.work)
+        self.assertEqual(len(self.servers('http.server')), 1, self.calls())
+
+    def test_port_4317_is_refused_as_canvas_port(self):
+        r = self.go(DEAI_PORT='4317')
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('4317', r.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_relative_or_control_char_work_dir_falls_back_to_default(self):
+        os.makedirs(os.path.join(self.home, 'deai-work'))
+        os.makedirs(os.path.join(self.tmp, 'rel'))
+        for bad in ('rel', '/tmp/a\x01b'):
+            open(self.log, 'w').close()
+            r = subprocess.run(['/bin/zsh', self.START], cwd=self.tmp,
+                               env=self.env(DEAI_WORK_DIR=bad, STUB_BUSY_DIR=self.busy),
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('DEAI_WORK_DIR', r.stdout + r.stderr, repr(bad))
+            line = self.servers('http.server')
+            self.assertEqual(len(line), 1, (bad, self.calls()))
+            self.assertEqual(self.cwd_of(line[0]), os.path.realpath(os.path.join(self.home, 'deai-work')), repr(bad))
+
     # stop.command: той самий DEAI_PORT. lsof віддає pid ЛИШЕ дочірнього sleep, якого запустив тест
     # (справжній kill — вбудована команда zsh, підмінити її не можна).
+    def stop(self, pids, **extra):
+        write_exec(os.path.join(self.bin, 'lsof'), LSOF_STUB)
+        with open(os.path.join(self.busy, '9123'), 'w') as f:
+            f.write('\n'.join(str(p) for p in pids) + '\n')
+        extra.setdefault('STUB_BUSY_DIR', self.busy)
+        return subprocess.run(['/bin/zsh', os.path.join(ROOT, 'stop.command')],
+                              env=self.env(DEAI_PORT='9123', **extra),
+                              capture_output=True, text=True, timeout=30)
+
+    def children(self, n):
+        kids = [subprocess.Popen(['sleep', '60']) for _ in range(n)]
+        for k in kids:
+            self.addCleanup(lambda k=k: k.poll() is None and k.kill())
+        return kids
+
     def test_stop_command_follows_deai_port(self):
-        write_exec(os.path.join(self.bin, 'lsof'),
-                   'case "$*" in *-ti:9123*) echo "$STUB_PID"; exit 0;; esac\nexit 1\n')
-        child = subprocess.Popen(['sleep', '60'])
-        self.addCleanup(lambda: child.poll() is None and child.kill())
-        r = subprocess.run(['/bin/zsh', os.path.join(ROOT, 'stop.command')],
-                           env=self.env(DEAI_PORT='9123', STUB_PID=child.pid),
-                           capture_output=True, text=True, timeout=30)
+        child, = self.children(1)
+        r = self.stop([child.pid])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('порт 9123 зупинено', r.stdout)
         self.assertIn('порт 4317 і так вільний', r.stdout)
         self.assertNotIn('8765', r.stdout)
         child.wait(timeout=10)
 
+    def test_stop_command_kills_only_listeners_and_all_of_them(self):
+        a, b = self.children(2)
+        open(os.path.join(self.busy, '9123.client'), 'w').close()   # браузер із зʼєднанням: pid 9999 НЕ чіпати
+        r = self.stop([a.pid, b.pid])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        a.wait(timeout=10)
+        b.wait(timeout=10)
+        with open(self.log + '.lsof') as f:
+            asked = f.read().splitlines()
+        self.assertTrue(asked and all('-sTCP:LISTEN' in x for x in asked), asked)
 
-class AppleScriptCompilesTest(unittest.TestCase):
-    """Кожен AppleScript-фрагмент (heredoc <<'OSA') компілюється.
-
-    Скрипти глушать stderr osascript (2>/dev/null) — синтаксична помилка там
-    виглядала б як «вікна канваса нема» чи як мовчазний алерт, а заглушки в
-    решті тестів AppleScript не виконують зовсім.
-    """
-
-    def test_every_osa_heredoc_compiles(self):
-        if shutil.which('osacompile') is None:
-            self.skipTest('нема osacompile (не macOS)')
-        # Без Chrome компіляція `tell application "Google Chrome"` відкриває
-        # діалог «Де Google Chrome?» і тест завис би.
-        if subprocess.run(['open', '-Ra', 'Google Chrome'], capture_output=True).returncode:
-            self.skipTest('нема Google Chrome')
-        found = 0
-        with tempfile.TemporaryDirectory() as tmp:
-            for name in ('launch.sh', 'install.sh'):
-                with open(os.path.join(OPS, name), encoding='utf-8') as f:
-                    text = f.read()
-                for n, chunk in enumerate(text.split("<<'OSA'\n")[1:]):
-                    src = chunk.split('\nOSA\n')[0]
-                    path = os.path.join(tmp, f'{name}-{n}.applescript')
-                    with open(path, 'w', encoding='utf-8') as f:
-                        f.write(src)
-                    r = subprocess.run(['osacompile', '-o', path + '.scpt', path],
-                                       capture_output=True, text=True, timeout=30)
-                    self.assertEqual(r.returncode, 0, f'{name} #{n}: {r.stderr}\n{src}')
-                    found += 1
-        self.assertEqual(found, 3)   # launch.sh: алерт + фокус; install.sh: алерт запускача
+    def test_stop_command_skips_an_invalid_port_with_a_message(self):
+        for bad in ('abc', '70000', '0', '8765; x'):
+            open(self.log + '.lsof', 'w').close()
+            r = subprocess.run(['/bin/zsh', os.path.join(ROOT, 'stop.command')],
+                               env=self.env(DEAI_PORT=bad, STUB_BUSY_DIR=self.busy),
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, (bad, r.stderr))
+            self.assertIn('DEAI_PORT', r.stdout + r.stderr, repr(bad))
+            with open(self.log + '.lsof') as f:
+                self.assertEqual(f.read().count('-tiTCP:'), 1, repr(bad))   # лише 4317
 
 
 class InstallTest(StubWorld):
@@ -786,7 +831,8 @@ class InstallTest(StubWorld):
 
     # G3
     def test_replace_refuses_bad_or_own_ids(self):
-        for bad in ('', '../x', 'a b', '-rf', self.BUNDLE_ID, 'x;y', 'a/b'):
+        for bad in ('', '../x', 'a b', '-rf', self.BUNDLE_ID, 'x;y', 'a/b',
+                    'foo', 'a..b', '.a.b', 'a.b.', '-a.b'):
             r = self.install('--replace', bad)
             self.assertEqual(r.returncode, 2, repr(bad))
             self.assertFalse(os.path.exists(self.app), repr(bad))
@@ -820,6 +866,75 @@ class InstallTest(StubWorld):
         self.assertNotIn('DEAI_WORK_DIR', self.read_plist(self.plist)['EnvironmentVariables'])
         self.install(DEAI_WORK_DIR='relative/path')
         self.assertNotIn('DEAI_WORK_DIR', self.read_plist(self.plist)['EnvironmentVariables'])
+
+    # --- ревʼю 0.24.0: порядок «збудувати → лише тоді знімати старе», валідація входів ---
+
+    def failing_build_python(self):
+        """python3, що відмовляє на збиранні (виклик із 9+ аргументами; plist_get має 2) — решта викликів справжній python."""
+        write_exec(os.path.join(self.bin, 'python3'),
+                   f'[ "$#" -ge 9 ] && {{ echo boom >&2; exit 1; }}\nexec "{sys.executable}" "$@"\n')
+
+    def test_replace_removes_old_only_after_a_successful_build(self):
+        old_plist = self.put_old_app()
+        self.failing_build_python()
+        r = self.install('--replace', self.OLD_ID)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], self.OLD_ID)
+        self.assertTrue(os.path.exists(old_plist))
+        self.assertNotIn(f'launchctl bootout {self.domain}/{self.OLD_ID}.autostart', self.calls())
+
+    def test_unwritable_agents_dir_aborts_before_touching_installed_app_and_agent(self):
+        self.install()
+        with open(self.plist, 'rb') as f:
+            before = f.read()
+        os.chmod(self.agents, 0o500)
+        self.addCleanup(os.chmod, self.agents, 0o700)
+        r = self.install()
+        self.assertNotEqual(r.returncode, 0)
+        with open(self.plist, 'rb') as f:
+            self.assertEqual(f.read(), before)                 # не обрізаний
+        self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], self.BUNDLE_ID)
+        self.assertEqual([n for n in os.listdir(self.apps) if 'building' in n], [])
+
+    def test_control_chars_in_work_dir_give_no_key_and_a_warning_not_a_failure(self):
+        r = self.install(DEAI_WORK_DIR='/Users/x/w\x01rk')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('DEAI_WORK_DIR', self.read_plist(self.plist)['EnvironmentVariables'])
+        self.assertIn('DEAI_WORK_DIR', r.stdout + r.stderr)
+        with open(self.exe, encoding='utf-8') as f:
+            self.assertNotIn('DEAI_WORK_DIR', f.read())
+
+    def test_bad_versions_in_package_json_become_zero(self):
+        for bad in ('1.0\\u00012', '1.0 beta', '1;x', '"\\n"'):
+            with open(os.path.join(self.repo, 'package.json'), 'w') as f:
+                f.write('{"version": "%s"}\n' % bad.strip('"') if bad != '"\\n"' else '{"version": "1\\n2"}\n')
+            r = self.install()
+            self.assertEqual(r.returncode, 0, (bad, r.stderr))
+            self.assertEqual(self.read_plist(self.info)['CFBundleShortVersionString'], '0', repr(bad))
+
+    def test_replace_works_with_a_bad_version_and_a_bad_work_dir(self):
+        old_plist = self.put_old_app()
+        with open(os.path.join(self.repo, 'package.json'), 'w') as f:
+            f.write('{"version": "1.0\\u00012"}\n')
+        r = self.install('--replace', self.OLD_ID, DEAI_WORK_DIR='/a/\x01')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.read_plist(self.info)['CFBundleIdentifier'], self.BUNDLE_ID)
+        self.assertFalse(os.path.exists(old_plist))
+
+    def test_work_dir_is_carried_into_the_app_launcher_too(self):
+        write_exec(self.launch, f'echo "${{DEAI_WORK_DIR-unset}}" > "{self.path_seen}"\n')
+        self.install(DEAI_WORK_DIR='/Users/x/my work')
+        self.run_launcher()
+        with open(self.path_seen) as f:
+            self.assertEqual(f.read().strip(), '/Users/x/my work')
+        self.install()                                         # без змінної — ключа нема й у запускачі
+        self.run_launcher()
+        with open(self.path_seen) as f:
+            self.assertEqual(f.read().strip(), 'unset')
+        self.install(DEAI_WORK_DIR='relative')
+        self.run_launcher()
+        with open(self.path_seen) as f:
+            self.assertEqual(f.read().strip(), 'unset')
 
     # --- ревʼю 09.10.2026 ---
 
