@@ -12,6 +12,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "./_port.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -169,10 +170,8 @@ export async function startServer(taskDir, { portBase, extraTasks = {}, title = 
       tasks: { fixture: { dir: taskDir, title, ...(profile ? { profile, track: profile } : {}) }, ...extraTasks },
     }));
   }
-  // Number(), а не Math.floor(): Math.floor на BigInt кидає TypeError і тест упав
-  // би ще до підняття сервера. Порт із хвоста годинника — щоб два живі тести не
-  // сіли на один і той самий.
-  const port = portBase + Number(process.hrtime.bigint() % 100n);
+  // Вільний порт зі смуги файла: інакше другий сервер міг сісти на порт ще живого першого, а проба готовності відповідала б від чужого.
+  const port = await freePort(portBase);
   const child = spawn("python3", [path.join(root, "app", "serve.py")], {
     cwd: root,
     env: {

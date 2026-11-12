@@ -16,6 +16,9 @@ from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'app'))
+_BIN = os.path.join(os.path.dirname(_HERE), 'bin')
+if _BIN not in sys.path:
+    sys.path.append(_BIN)                                 # `registry` (env() вирівнює його TASKS_PATH)
 
 SB_URL, SB_KEY = 'https://sb.example.com', 'sb_fixture_key_alpha'
 JIRA_BASE, JIRA_EMAIL, JIRA_TOKEN = 'https://jira.example.com', 'alpha@example.com', 'jira_fixture_token_alpha'
@@ -77,8 +80,11 @@ class LigaFixture:
 
     # --- оточення
     def env(self, **extra):
-        """`HOME`/`DEAI_HOME` у тимчасовій теці, без жодних облікових оточення; `spaces.legacy_tasks_file` → `self.tasks_path`."""
+        """`HOME`/`DEAI_HOME` у тимчасовій теці, без жодних облікових оточення; `spaces.legacy_tasks_file` і `registry.TASKS_PATH` → `self.tasks_path`.
+        Обидва — той самий файл, як на машині власника (обидва = `DC_TASKS_FILE` або `<корінь>/tasks.json`): інакше шлюз `registry._space_json_allowed`
+        бачить «тимчасовий TASKS_PATH тесту» і не читає запис `git-sync` простору, хоча простір фікстури — справжній ЛІГИ."""
         import deai_modules
+        import registry
         import spaces
         e = mock.patch.dict(os.environ, dict({'HOME': self.home, 'DEAI_HOME': self.deai}, **extra))
         e.start()
@@ -90,6 +96,9 @@ class LigaFixture:
         lf = mock.patch.object(spaces, 'legacy_tasks_file', lambda: self.tasks_path)
         lf.start()
         self.test.addCleanup(lf.stop)
+        rp = mock.patch.object(registry, 'TASKS_PATH', self.tasks_path)
+        rp.start()
+        self.test.addCleanup(rp.stop)
         deai_modules.reset_caches()
         self.test.addCleanup(deai_modules.reset_caches)
         return self

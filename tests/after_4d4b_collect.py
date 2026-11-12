@@ -180,7 +180,10 @@ def _vcs_target(rig, sp):
 
 def _registry_ssh(rig):
     import registry
-    return rel(registry._ssh_key(), rig.home)
+    # Як на машині власника: tasks.json реєстру — той самий старий файл ЛІГИ, що й `spaces.legacy_tasks_file` (`rig.activate`). Інакше шлюз
+    # `registry._space_json_allowed` (0.24.0) бачить «тимчасовий TASKS_PATH тесту» і не читає запис `git-sync`.
+    with mock.patch.object(registry, 'TASKS_PATH', rig.tasks_path):
+        return rel(registry._ssh_key(), rig.home)
 
 
 def _startup_text(tmp, name):
