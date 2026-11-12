@@ -24,7 +24,8 @@
 --
 -- !! Needs the `pg_net` extension and Vault (both ship with Supabase). The address of the Teams webhook lives in Vault only:
 -- !!   select vault.create_secret('<webhook address>', 'teams_feedback_webhook_url');
-create extension if not exists pg_net;
+-- pg_net goes into the `extensions` schema, not `public` (Supabase security advisor 0014 "Extension in Public"); its functions live in `net`.
+create extension if not exists pg_net with schema extensions;
 
 -- ------------------------------------------------------------------------------------------------------------- table
 create table if not exists public.feedback (
