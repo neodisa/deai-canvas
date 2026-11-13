@@ -16,6 +16,13 @@
       };
     });
   }
+  /* ⛔ ЗНІМОК — окремі обʼєкти, яких шар не торкався і не торкнеться.
+     Шар кладе отримане від адаптера у `this.comments` і вішає на піни `c._el`
+     (DOM-вузол якоря), а на React-сторінці вузол через `__reactFiber$…` →
+     `stateNode` замикається в кільце. Тому все, що адаптер серіалізує або
+     тримає як базу злиття, — лише знімок, а шару йдуть окремі копії
+     (fb 05.11.2026, `portfolio`: `JSON.stringify` падав, POST не йшов). */
+  function snap(list) { return JSON.parse(JSON.stringify(clean(list))); }
   function byId(list) {
     var m = {};
     for (var i = 0; i < (list || []).length; i++) m[list[i].id] = list[i];
@@ -67,6 +74,18 @@
        пін не в курсі» — сервер із повного масиву цього не бачить. */
     var base = [];
     var subs = [];
+    /* ⛔ ЗАПИСИ ПО ЧЕРЗІ. Коментатор у `removeComment` кличе `remove([id])` і
+       одразу `save(list)`, не чекаючи першого. Обидва GET приходили ДО обох
+       POST: злиття `save` бачило пін на сервері, не бачило у вкладці — «не
+       чіпала» — і повертало видалений. Виграв той POST, що ліг останнім
+       (fb 05.11.2026). Кожен запис тепер стартує після попереднього, тож його
+       GET бачить уже записане. Невдача одного черги не зупиняє. */
+    var queue = Promise.resolve();
+    function serial(job) {
+      var p = queue.then(job);
+      queue = p.catch(function () {});
+      return p;
+    }
     function notify() { for (var i = 0; i < subs.length; i++) { try { subs[i](cache); } catch (e) {} } }
     function fetchServer() {
       return fetch(endpoint)
@@ -79,7 +98,9 @@
         body: JSON.stringify({ comments: list }),
       }).then(function (r) {
         if (!r.ok) throw new Error('local save failed');
-        cache = list; base = list.map(function (c) { return c; }); notify();
+        /* Шару — копія без `clean`: чужі поля піна (`replies` від Клода) він
+           має бачити, як бачив до цього; базі — знімок у формі `clean`. */
+        base = snap(list); cache = JSON.parse(JSON.stringify(list)); notify();
       });
     }
     /* ⛔ ТРЬОХСТОРОННЄ ЗЛИТТЯ ПЕРЕД ЗАПИСОМ.
@@ -121,8 +142,11 @@
         return write(out);
       }, function () { return write(list); });        // сервер не відповів — як раніше
     }
+    /* `cache` і `base` — РІЗНІ масиви: шар дописує новий пін прямо в масив
+       із `load()`, і коли це був масив бази, новий пін вважався «видаленим
+       іншою вкладкою» (рятував його досі лише `_el`, що робив рядки різними). */
     var ready = fetchServer()
-      .then(function (rows) { cache = rows; base = rows; notify(); })
+      .then(function (rows) { base = snap(rows); cache = rows; notify(); })
       .catch(function () { cache = []; base = []; });
     return {
       ready: ready,
@@ -130,7 +154,7 @@
       /* Перечитати файл зараз. Цей адаптер не опитує сервер сам, тож без цього
          вкладка «Огляду» не бачила пінів, лишених у живому виді (ревʼю T-45, D2). */
       refresh: function () {
-        return fetchServer().then(function (rows) { cache = rows; base = rows; notify(); });
+        return fetchServer().then(function (rows) { base = snap(rows); cache = rows; notify(); });
       },
       close: function () { subs.length = 0; },   // інстанс знищено — сповіщати нікого
       subscribe: function (f) { if (typeof f === 'function') subs.push(f); },
@@ -142,8 +166,9 @@
            ще «відкрито» — і злиття проти свіжої бази прочитало б це як «вкладка
            відкрила пін» (ревʼю батча 1.47, D2). */
         var known = base;
+        var sent = snap(next);                        // шар зараз обвішає `next` якорями
         cache = next; notify();                       // UI не мусить чекати мережі
-        return mergeThenWrite(next, known);
+        return serial(function () { return mergeThenWrite(sent, known); });
       },
       /* `remove` — ЯВНИЙ намір, на відміну від «пін просто відсутній у моєму
          знімку». Тому тут злиття не потрібне: беремо серверний список і
@@ -151,9 +176,11 @@
       remove: function (ids) {
         cache = cache.filter(function (c) { return ids.indexOf(c.id) < 0; });
         notify();
-        return fetchServer().then(function (server) {
-          return write(server.filter(function (c) { return ids.indexOf(c.id) < 0; }));
-        }, function () { return write(cache); });
+        return serial(function () {
+          return fetchServer().then(function (server) {
+            return write(server.filter(function (c) { return ids.indexOf(c.id) < 0; }));
+          }, function () { return write(snap(cache)); });
+        });
       },
     };
   }

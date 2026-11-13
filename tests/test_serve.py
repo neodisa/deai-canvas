@@ -678,6 +678,20 @@ class ServeTest(unittest.TestCase):
                 and n != '.dc-local-comments.json']
         self.assertEqual(junk, [], f'запис коментарів лишив по собі сміття: {junk}')
 
+    def test_local_comments_drop_runtime_fields_of_the_layer(self):
+        """`_el` / `_pending` — живі поля коментатора, а не дані піна (fb 05.11.2026).
+
+        `_el` — DOM-вузол якоря. Сервер — останній рубіж для БУДЬ-ЯКОГО писаря:
+        шар, адаптер «Огляду», ручний POST. Інші поля (`replies`, `x`) — чужі,
+        але ДАНІ, їх не чіпаємо.
+        """
+        pins = [{'id': 'c1', 'text': 't', '_el': None, '_pending': True, 'replies': [1]},
+                {'id': 'c2', 'text': 'u', '_el': {}}]
+        post(self.base + '/api/local-comments', {'comments': pins})
+        got = json.load(urllib.request.urlopen(self.base + '/api/local-comments'))
+        self.assertEqual(got['comments'], [{'id': 'c1', 'text': 't', 'replies': [1]},
+                                           {'id': 'c2', 'text': 'u'}])
+
     # ---------- Пакет тюнера (Task 16) ----------
     # ⛔ Тюнер НЕ ПИШЕ ні у файл макета, ні в шар коментарів: його вихід —
     # пакет РЕКОМЕНДАЦІЙ, який читає Клод і за яким робить правки в коді.

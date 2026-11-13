@@ -28,12 +28,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const VENDOR = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
                             "..", "app", "vendor", "local-adapter.js");
 
-/** Сервер у памʼяті: віддає свій список і приймає повний масив, як справжній. */
+/** Сервер у памʼяті: віддає свій список і приймає повний масив, як справжній.
+ *  ⛔ Віддає СВІЖУ КОПІЮ, як справжній `fetch`: віддача `state.rows` за
+ *  посиланням ховала спільні масиви між адаптером і шаром (fb 05.11.2026). */
 function fakeServer(initial) {
   const state = { rows: initial.map((c) => ({ ...c })), writes: 0 };
   globalThis.fetch = async (url, opts) => {
     if (!opts || opts.method !== "POST") {
-      return { ok: true, json: async () => ({ comments: state.rows }) };
+      const copy = JSON.parse(JSON.stringify(state.rows));
+      return { ok: true, json: async () => ({ comments: copy }) };
     }
     state.writes += 1;
     state.rows = JSON.parse(opts.body).comments;
@@ -236,4 +239,118 @@ test("два save() внахлест не відкривають закрити�
     s.save(seen.map((c) => ({ ...c, fp: { tag: "q" } }))),
   ]);
   assert.equal(server.rows[0].status, "resolved", "закриття відкотилось двома save() внахлест");
+});
+
+/* ── fb 05.11.2026: піни на React-сторінці не доходили до файла ───────────────
+   Шар (`comment-layer`) кладе отримані від адаптера обʼєкти у `this.comments` і
+   вішає на них `c._el` — DOM-вузол якоря. На React-сторінці у вузла є
+   `__reactFiber$…`, а файбер посилається назад через `stateNode`: кільце.
+   Адаптер серіалізував ТІ САМІ обʼєкти, що віддав шару, — `JSON.stringify`
+   падав, POST не йшов, пін жив лише в памʼяті вікна. На сторінках без React
+   те саме проходило мовчки, і `_el` осідав у файлах 21 задачі. */
+
+/** Вузол із кільцем, як у React: вузол → файбер → stateNode → вузол. */
+function reactNode() {
+  const el = { tagName: "SECTION" };
+  el.__reactFiber$x = { stateNode: el };
+  return el;
+}
+/** Шар коментаря в мініатюрі: тримає те, що дав адаптер, і чіпляє якорі. */
+function fakeLayer(s) {
+  const layer = { comments: s.load() };
+  const anchor = (list) => { for (const c of list) c._el = reactNode(); };
+  anchor(layer.comments);
+  s.subscribe((list) => { layer.comments = list; anchor(list); });
+  return layer;
+}
+
+test("пін на React-сторінці доходить до файла, а `_el` у файл не потрапляє", async () => {
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  const layer = fakeLayer(s);
+
+  await s.save([...layer.comments, pin("new")]);
+
+  const ids = server.rows.map((c) => c.id).sort();
+  assert.deepEqual(ids, ["a", "new"], `пін не доїхав: ${ids}`);
+  for (const c of server.rows) assert.equal("_el" in c, false, `_el у файлі (${c.id})`);
+  /* Другий save — уже з обʼєктами, що адаптер віддав шару після запису. */
+  await s.save([...layer.comments, pin("second")]);
+  assert.deepEqual(server.rows.map((c) => c.id).sort(), ["a", "new", "second"]);
+});
+
+test("новий пін, дописаний прямо в масив із load(), не губиться при злитті", async () => {
+  /* Шар бере `this.comments = store.load()` і дописує новий пін у той самий
+     масив. Коли масив адаптера = його база, новий пін опинявся «у базі», а на
+     сервері його нема → злиття вважало його видаленим іншою вкладкою. Досі
+     рятувало лише те, що `_el` робив рядки різними. */
+  const server = fakeServer([pin("a")]);
+  const s = await store(server);
+  const list = s.load();
+  list.push(pin("pushed"));
+
+  await s.save(list);
+
+  assert.deepEqual(server.rows.map((c) => c.id).sort(), ["a", "pushed"], "дописаний пін загубився");
+});
+
+test("remove при недоступному GET пише видалення, навіть коли в кеші якорі з кільцем", async () => {
+  const server = fakeServer([pin("a"), pin("b")]);
+  const s = await store(server);
+  fakeLayer(s);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (!opts || opts.method !== "POST") throw new Error("offline");
+    return realFetch(url, opts);
+  };
+
+  await s.remove(["a"]);
+
+  assert.deepEqual(server.rows.map((c) => c.id), ["b"], "видалення не записалось");
+  assert.equal("_el" in server.rows[0], false, "_el у файлі");
+});
+
+test("remove і save підряд без await: видалений пін не повертається (fb 05.11.2026, гонка)", async () => {
+  /* Коментатор у `removeComment` кличе `store.remove([id])`, а одразу за ним
+     `_persist()` → `store.save(list)`, не чекаючи першого. Обидва GET приходили
+     ДО обох POST: `remove` писав сервер мінус id, а злиття `save` бачило пін на
+     сервері, не бачило у вкладці — і лишало його як «вкладка не чіпала». Хто
+     з двох POST останній, той і виграв: видалення спрацьовувало через раз. */
+  const server = fakeServer([pin("a"), pin("b")]);
+  const realFetch = globalThis.fetch;
+  /* Мережа, як у браузері: сервер читає файл, коли ПРИЙНЯВ GET, а відповідь
+     доходить за кілька мс. Тож без черги обидва GET бачать пін — дослівна
+     послідовність зі звіту. (Знімок у момент ВІДПОВІДІ гонку б ховав.) */
+  globalThis.fetch = async (url, opts) => {
+    const res = await realFetch(url, opts);
+    if (!opts || opts.method !== "POST") await new Promise((r) => setTimeout(r, 5));
+    return res;
+  };
+  const s = await store(server);
+  const left = s.load().filter((c) => c.id !== "a").map((c) => ({ ...c }));
+
+  await Promise.all([s.remove(["a"]), s.save(left)]);
+  assert.deepEqual(server.rows.map((c) => c.id), ["b"], "видалений пін повернувся злиттям save()");
+
+  /* І в зворотному порядку: save, а за ним remove. */
+  const left2 = s.load().map((c) => ({ ...c }));
+  await Promise.all([s.save([...left2, pin("c")]), s.remove(["b"])]);
+  assert.deepEqual(server.rows.map((c) => c.id), ["c"], "remove після save не втримався");
+});
+
+test("впалий запис не зупиняє чергу: наступний save доходить", async () => {
+  const server = fakeServer([pin("a")]);
+  const realFetch = globalThis.fetch;
+  let failNext = true;
+  globalThis.fetch = async (url, opts) => {
+    if (opts && opts.method === "POST" && failNext) { failNext = false; return { ok: false, json: async () => ({}) }; }
+    return realFetch(url, opts);
+  };
+  const s = await store(server);
+  const seen = s.load().map((c) => ({ ...c }));
+
+  await assert.rejects(s.save([...seen, pin("lost")]));
+  await s.save([...seen, pin("next")]);
+
+  assert.ok(server.rows.some((c) => c.id === "next"), "після впалого запису черга стала");
 });
