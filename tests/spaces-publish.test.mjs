@@ -615,8 +615,8 @@ test("словник: плашка й застереження Vercel — оби
        обіцяє — крок «куди натиснути» живе в самому екрані й може змінитись. */
     assert.doesNotMatch(a, /натисніть|press|click|кнопк|button/i, `${lang}: обіцяє кнопку`);
   }
-  assert.match(DICT.uk.publishErrVercelAuth(""), /меню простору → «Підключення»/);
-  assert.match(DICT.en.publishErrVercelAuth(""), /space menu → Connections/);
+  assert.match(DICT.uk.publishErrVercelAuth(""), /шестерня вгорі праворуч → «Налаштування»/);
+  assert.match(DICT.en.publishErrVercelAuth(""), /the gear at the top right → Settings/);
   assert.doesNotMatch(DICT.uk.publishErrVercelAuth(""), /через API чи агента/, "старе формулювання «лише через API» прибрано");
   assert.doesNotMatch(DICT.en.publishErrVercelAuth(""), /through the API or the agent/, "старе формулювання «лише через API» прибрано");
   assert.match(DICT.uk.publishErrVercelAuth(""), /^Vercel відмовив у доступі/);

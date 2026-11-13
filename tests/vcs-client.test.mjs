@@ -437,7 +437,7 @@ test("нові ключі: підписи, причина, чотири поми
   assert.equal(t("vcsErrOffline", "GitHub"), "GitHub не відповідає — немає мережі чи VPN. Макет лишився на цьому компʼютері.");
   assert.equal(t("vcsErrAuth", "GitHub"), "GitHub не пускає — перевір SSH-ключ чи вхід у git на цьому компʼютері.");
   assert.equal(t("vcsErrBusy"), "Синхронізація вже йде — спробуй за хвилину.");
-  assert.equal(t("vcsErrTarget"), "Адреса репозиторію, гілка чи тека цієї задачі (або типові на «Підключенні») не підходять.");
+  assert.equal(t("vcsErrTarget"), "Адреса репозиторію, гілка чи тека цієї задачі (або типові в «Налаштуваннях») не підходять.");
   setLang("en");
   assert.equal(t("vcsGitHub"), "GitHub");
   assert.equal(t("vcsGit"), "Git");
@@ -445,7 +445,7 @@ test("нові ключі: підписи, причина, чотири поми
   assert.equal(t("vcsErrOffline", "GitHub"), "GitHub is not answering — no network or VPN. The layout stayed on this computer.");
   assert.equal(t("vcsErrAuth", "GitHub"), "GitHub refused access — check the SSH key or the git sign-in on this computer.");
   assert.equal(t("vcsErrBusy"), "A sync is already running — try again in a minute.");
-  assert.equal(t("vcsErrTarget"), "The repository address, branch or folder of this task (or the defaults on Connections) is not valid.");
+  assert.equal(t("vcsErrTarget"), "The repository address, branch or folder of this task (or the defaults in Settings) is not valid.");
 });
 
 /* ── мапер помилок дій ───────────────────────────────────────────────────── */
@@ -732,7 +732,7 @@ test("ЛІГА: vcs-bad-target — старе glSyncFailedMsg (ціль у tasks
   for (const act of ["glpush", "glpull"]) {
     let log = await run(act, { ok: false, error: "bad repo", code: "vcs-bad-target" }, liga);
     assert.deepEqual(log.tell, [t("glSyncFailedMsg", "bad repo", "GitLab")], `${act}: ЛІГА`);
-    assert.ok(!log.tell[0].includes("Підключенні"));
+    assert.ok(!log.tell[0].includes("Налаштуваннях"));
     log = await run(act, { ok: false, error: "bad repo", code: "vcs-bad-target" }, { space: PLAIN, glCache: { configured: true, label: "GitHub" } });
     assert.deepEqual(log.tell, [t("vcsErrTarget")], `${act}: звичайний простір`);
     log = await run(act, { ok: false, error: "e", code: "vcs-offline" }, liga);
@@ -1198,9 +1198,9 @@ test("Task 7: нові ключі «Підключень» і форми — о�
     cnErrVcsBusy: "Синхронізація вже йде — перевір за хвилину.",
     cnErrVcsError: "Git відмовив.",
     newTaskRepo: "Репозиторій (необовʼязково)",
-    newTaskRepoPh: "типовий з «Підключення»",
+    newTaskRepoPh: "типовий із «Налаштувань»",
     taskErrVcsTarget: "Адреса репозиторію не підходить: ssh://, https://, git@сервер:шлях або тека на диску.",
-    taskErrVcsRole: "У просторі немає синхронізації з git — підключи її на «Підключенні».",
+    taskErrVcsRole: "У просторі немає синхронізації з git — підключи її в «Налаштуваннях».",
   };
   const EN = {
     cnRoleVcs: "Git sync",
@@ -1220,9 +1220,9 @@ test("Task 7: нові ключі «Підключень» і форми — о�
     cnErrVcsBusy: "A sync is running — check again in a minute.",
     cnErrVcsError: "Git refused.",
     newTaskRepo: "Repository (optional)",
-    newTaskRepoPh: "the default from Connections",
+    newTaskRepoPh: "the default from Settings",
     taskErrVcsTarget: "The repository address is not valid: ssh://, https://, git@host:path or a local folder.",
-    taskErrVcsRole: "This space has no git sync — connect it on Connections.",
+    taskErrVcsRole: "This space has no git sync — connect it in Settings.",
   };
   for (const [lang, want] of [["uk", UK], ["en", EN]]) {
     setLang(lang);

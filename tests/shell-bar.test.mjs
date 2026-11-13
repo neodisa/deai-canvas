@@ -484,9 +484,9 @@ test("дропдаун просторів: закритий — нема; від
 /* Вхід на екран «Підключення» (етап 3a): пункт у футері дропдауна, ПІСЛЯ «Назва й колір…». Той самий `ddItem`, що
    решта футера, — тому roving focus по `.dd--spaces .dd-item` бере його сам. Пункт лише в ВІДКРИТОМУ дропдауні:
    закрита смуга (а з нею й ЛІГА-golden) лишається побайтно та сама. */
-test("дропдаун просторів: «Підключення…» після «Назва й колір…»", () => {
+test("дропдаун просторів: «Налаштування…» після «Назва й колір…»", () => {
   const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
-  assert.match(h, /data-act="spaceedit"[\s\S]*?<\/button>\s*<button[^>]*data-act="conn"[\s\S]*?Підключення…/);
+  assert.match(h, /data-act="spaceedit"[\s\S]*?<\/button>\s*<button[^>]*data-act="conn"[\s\S]*?Налаштування…/);
   const conn = /<button[^>]*data-act="conn"[\s\S]*?<\/button>/.exec(h)?.[0];
   assert.match(conn, /<svg/, "пункт без іконки");
   assert.equal((h.match(/data-act="conn"/g) || []).length, 1, "пункт один");
@@ -496,7 +496,7 @@ test("дропдаун просторів: «Підключення…» піс�
 
 /* Клавіатурний roving по дропдауну просторів іде за `.dd--spaces .dd-item` (`app.js`, `rovingIndex`): пункт без цього
    класу випав би зі стрілок. Тож «Підключення…» мусить бути саме `ddItem`, а не окремою кнопкою. */
-test("дропдаун просторів: «Підключення…» — `dd-item` у `.dd--spaces`, тож клавіатурний roving його бере", () => {
+test("дропдаун просторів: «Налаштування…» — `dd-item` у `.dd--spaces`, тож клавіатурний roving його бере", () => {
   const h = html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" });
   const conn = /<button[^>]*data-act="conn"[^>]*>/.exec(h)?.[0];
   assert.ok(conn, "пункту нема");
@@ -512,7 +512,7 @@ test("дропдаун просторів: «Підключення…» — `dd
 
 /* На самій сторінці «Підключення» пункт нічого б не робив — той самий принцип, що в ⌘K (`space-conn` там теж
    прихований). На «Задачах» і на смузі задачі він є: ведуть ВІД них. Лише рівно `homePage === "conn"`. */
-test("дропдаун просторів: «Підключення…» нема на самій сторінці «Підключення», є скрізь, де ведуть на неї", () => {
+test("дропдаун просторів: «Налаштування…» нема на самій сторінці «Налаштування», є скрізь, де ведуть на неї", () => {
   const on = (o) => /data-act="conn"/.test(html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space", ...o }));
   assert.equal(on({ homeOpen: true, homePage: "conn" }), false, "на сторінці — пункт, що нічого не робить");
   assert.equal(on({ homeOpen: true, homePage: "tasks" }), true, "на «Задачах» пункт є");
@@ -526,10 +526,10 @@ test("дропдаун просторів: «Підключення…» нем�
   assert.match(h, /data-act="space"/);
 });
 
-test("дропдаун просторів: «Connections…» англійською", () => {
+test("дропдаун просторів: «Settings…» англійською", () => {
   setLang("en");
   try {
-    assert.match(html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" }), /data-act="conn"[\s\S]*?Connections…/);
+    assert.match(html({ homeOpen: true, space: SP(), spaces: SPACES, openDd: "space" }), /data-act="conn"[\s\S]*?Settings…/);
   } finally { setLang("uk"); }
 });
 

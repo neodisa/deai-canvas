@@ -780,7 +780,7 @@ class RolesState(_StandE):
         self.rec_all(mods={'jira-tracker': {'enabled': False, 'shared_state': True, 'settings': {'base': self.JIRA_BASE, 'email': self.JIRA_EMAIL}}})
         r = self.by_role()['tracker']
         self.assertEqual((r['on'], r['reason']), (False, 'disabled'))
-        self.assertIn('«Підключення»', r['fix'])
+        self.assertIn('«Налаштування»', r['fix'])
 
     def test_no_record_with_skipped_code_from_the_last_report(self):
         self.rec_all(drop=('jira-tracker',), migrations={'liga-4d3a': {'at': 'x', 'roles': ['dashboard', 'notify'], 'tracks': False, 'backup': 'b'}})
@@ -845,7 +845,7 @@ class RolesState(_StandE):
         self.rec_all(drop=('jira-tracker',), migrations={'liga-4d3a': {'at': 'x', 'roles': ['dashboard', 'notify', 'tracker'], 'tracks': False, 'backup': 'b'}})
         r = self.by_role()['tracker']
         self.assertEqual(r['reason'], 'record-removed')
-        self.assertIn('«Підключення»', r['fix'])
+        self.assertIn('«Налаштування»', r['fix'])
         self.assertIn('restore', r['fix'])
         self.assertNotIn('migrate_liga.py run', r['fix'])
 
@@ -855,7 +855,7 @@ class RolesState(_StandE):
             r = self.by_role()[role]
             self.assertEqual(r['reason'], 'not-migrated', role)
             self.assertIn('migrate_liga.py run', r['fix'], role)
-            self.assertIn('«Підключення»', r['fix'], role)
+            self.assertIn('«Налаштування»', r['fix'], role)
 
     def test_role_served_by_another_explicit_module_is_on_with_that_module(self):
         """m5/I2: `publish` веде ІНШИЙ явний модуль (`static-publish`) — роль `on`, `served-by:<id>`, а не `no-record` з порадою `run`."""

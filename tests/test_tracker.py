@@ -237,7 +237,7 @@ class TrackerCore(unittest.TestCase):
         self.assertEqual(tracker.CATS, ('new', 'indeterminate', 'done'))
         self.assertEqual(tracker.LEGACY_MODULE, 'jira-tracker')
         self.assertTrue(tracker.UNCONFIGURED.startswith('Jira не налаштовано'))
-        self.assertIn('«Підключення»', tracker.UNCONFIGURED)       # 4d-4b (R5): текст веде на екран, а не в `tasks.json`
+        self.assertIn('«Налаштування»', tracker.UNCONFIGURED)       # 4d-4b (R5): текст веде на екран, а не в `tasks.json`
         self.assertNotIn('jira_base', tracker.UNCONFIGURED)
 
     def test_key_re_accepts_only_whole_well_formed_keys(self):

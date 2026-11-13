@@ -1760,7 +1760,7 @@ class TwoStepsStartupTest(_TwoSteps):
         self.assertEqual(err.splitlines(), [
             'ролі ЛІГИ вимкнено: publish (vercel-publish) — no-record; виправити: запустіть: python3 bin/migrate_liga.py run',
             'ролі ЛІГИ вимкнено: vcs (git-sync) — not-migrated; виправити: запустіть python3 bin/migrate_liga.py run '
-            '(або увімкніть модуль на екрані «Підключення»)'])
+            '(або увімкніть модуль на екрані «Налаштування»)'])
         self.assertEqual(self.snapshot_tree(), before)
 
     def test_run_all_returns_marks_statuses_infos(self):

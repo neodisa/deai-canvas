@@ -323,7 +323,7 @@ class NotifyCore(unittest.TestCase):
         self.assertEqual((notify.NOTIFY_TIMEOUT, notify.MAX_MUTES, notify.CHANNEL_MAX, notify.BY_MAX),
                          (10, 1000, 200, 200))
         self.assertEqual(notify.LEGACY_MODULE, 'supabase-teams')
-        self.assertEqual(notify.UNCONFIGURED, 'Supabase не налаштовано: додайте адресу й ключ на екрані «Підключення»')   # R5 (4d-4b)
+        self.assertEqual(notify.UNCONFIGURED, 'Supabase не налаштовано: додайте адресу й ключ на екрані «Налаштування»')   # R5 (4d-4b)
 
     def test_the_core_does_not_import_serve(self):
         """⛔ `serve` тягне сервер, мережу й увесь стан: ядро ролі його не імпортує (як `tracker.py`, `dashboard.py`)."""

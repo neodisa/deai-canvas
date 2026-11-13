@@ -689,7 +689,7 @@ class ReadParity(unittest.TestCase):
         self.league_record(settings={'url': ''})
         got = self.overview()
         self.same_as_snapshot(got, 'no_config', error='url: адресу проєкту Supabase не задано')   # текст МОДУЛЯ для запису без адреси
-        self.assertIn('«Підключення»', dashboard.UNCONFIGURED)                                    # а константа ядра веде на екран, не в tasks.json
+        self.assertIn('«Налаштування»', dashboard.UNCONFIGURED)                                    # а константа ядра веде на екран, не в tasks.json
         self.assertEqual(self.net.calls, [])
 
     def test_a_league_without_a_dashboard_record_has_no_team_and_asks_nothing(self):

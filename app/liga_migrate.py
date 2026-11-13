@@ -1714,11 +1714,11 @@ def _restore_locked(stamp, hold, home):
 #: Шість ролей ЛІГИ: `(роль, вбудований модуль, крок-власник)`. Запасного постачальника нема (4d-4b): роль працює лише через ЯВНИЙ запис.
 LIGA_ROLES = (('publish', 'vercel-publish', STEP_C), ('comments', 'supabase-comments', STEP_B), ('vcs', 'git-sync', STEP_B),
               ('dashboard', 'supabase-dashboard', STEP_A), ('tracker', 'jira-tracker', STEP_A), ('notify', 'supabase-teams', STEP_A))
-_ENTRY_FIX = 'додайте адресу й облікові на екрані «Підключення» (змінні оточення й pipeline-feedback більше не читаються)'
+_ENTRY_FIX = 'додайте адресу й облікові на екрані «Налаштування» (змінні оточення й pipeline-feedback більше не читаються)'
 _RUN_FIX = 'python3 bin/migrate_liga.py run'
 #: Код причини → що робити. Рядки без шляхів і значень (друкуються на КОЖНОМУ старті, поки роль вимкнена).
 _ROLE_FIX = {
-    'disabled': 'увімкніть запис на екрані «Підключення»',
+    'disabled': 'увімкніть запис на екрані «Налаштування»',
     'no-jira': _ENTRY_FIX, 'no-supabase': _ENTRY_FIX, 'bad-url': _ENTRY_FIX, 'not-migrated': _ENTRY_FIX,
     'publisher-present': 'публікацію веде інший модуль простору — так і було',
     'module-present': 'модуль ролі вже є в просторі — так і було',
@@ -1728,13 +1728,13 @@ _ROLE_FIX = {
     'skip-registry-unreadable': 'виправте реєстр просторів (spaces.json) і запустіть: ' + _RUN_FIX,
     'skip-no-path': 'теки простору ЛІГА не існує: відновіть її чи змініть шлях у реєстрі, далі: ' + _RUN_FIX,
     'skip-busy': 'повторіть старт: міграцію зараз виконує інший процес',
-    'module-error': 'модуль не завантажився: перевірте його на екрані «Підключення»',
-    'module-untrusted': 'довіртесь модулю на екрані «Підключення»',
-    'bad-settings': 'виправте налаштування запису на екрані «Підключення»',
+    'module-error': 'модуль не завантажився: перевірте його на екрані «Налаштування»',
+    'module-untrusted': 'довіртесь модулю на екрані «Налаштування»',
+    'bad-settings': 'виправте налаштування запису на екрані «Налаштування»',
     'secrets-unreadable': 'secrets.json не читається: виправте файл у домі Deai',
     'space-json-unreadable': 'space.json не читається: виправте файл простору ЛІГА',
     'no-record': 'запустіть: ' + _RUN_FIX,
-    'record-removed': 'запис видалено після міграції: додайте його на екрані «Підключення» чи поверніть простір з бекапу (bin/migrate_liga.py restore <бекап>)',
+    'record-removed': 'запис видалено після міграції: додайте його на екрані «Налаштування» чи поверніть простір з бекапу (bin/migrate_liga.py restore <бекап>)',
 }
 
 
@@ -1821,7 +1821,7 @@ def roles_state(home=None):
         elif reason.startswith('abort-'):
             fix = 'дивіться python3 bin/migrate_liga.py status (рядок кроку %s) і усуньте причину, далі: %s' % (owner.mark, _RUN_FIX)
         elif reason == 'not-migrated' and role in ('vcs', 'comments'):
-            fix = 'запустіть %s (або увімкніть модуль на екрані «Підключення»)' % _RUN_FIX
+            fix = 'запустіть %s (або увімкніть модуль на екрані «Налаштування»)' % _RUN_FIX
         else:
             fix = _ROLE_FIX.get(reason, _RUN_FIX)
         out.append({'role': role, 'module': mid, 'on': False, 'reason': reason, 'fix': fix})

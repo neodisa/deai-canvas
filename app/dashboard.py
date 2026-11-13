@@ -224,7 +224,7 @@ READ_TIMEOUT = 6
 #: Таблиця й модуль запису дашборда ЛІГИ (явний `supabase-dashboard`; запасного неявного постачальника більше нема, 4d-4b).
 LEGACY_TABLE = 'overview_projects'
 LEGACY_MODULE = 'supabase-dashboard'
-UNCONFIGURED = 'Supabase не налаштовано: додайте адресу й ключ на екрані «Підключення»'
+UNCONFIGURED = 'Supabase не налаштовано: додайте адресу й ключ на екрані «Налаштування»'
 
 
 def normalize_rows(data):

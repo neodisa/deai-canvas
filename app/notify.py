@@ -18,7 +18,7 @@ CHANNEL_MAX = BY_MAX = 200
 AT_MAX = 40
 #: Вбудований модуль, яким ходить запис ЛІГИ (явний `supabase-teams`; запасного неявного постачальника більше нема, 4d-4b).
 LEGACY_MODULE = 'supabase-teams'
-UNCONFIGURED = 'Supabase не налаштовано: додайте адресу й ключ на екрані «Підключення»'
+UNCONFIGURED = 'Supabase не налаштовано: додайте адресу й ключ на екрані «Налаштування»'
 
 
 def normalize_mutes(data):

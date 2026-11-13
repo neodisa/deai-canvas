@@ -3065,7 +3065,7 @@ COMMENTS_MODULE = 'supabase-comments'
 #: Кошик Storage ЛІГИ для скріншотів пінів: картка Teams бере `meta.shotUrl` звідти (як старий адаптер 0.9.0). Джерело правди —
 #: `install_config.LEGACY_SHOTS_BUCKET` (його ділить міграція ЛІГИ, 4d-3b); тут — аліас.
 LEGACY_SHOTS_BUCKET = install_config.LEGACY_SHOTS_BUCKET
-COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано: додайте адресу й ключ на екрані «Підключення»'
+COMMENTS_UNCONFIGURED = 'Supabase простору ЛІГА не налаштовано: додайте адресу й ключ на екрані «Налаштування»'
 #: Закон ізоляції (Д6): ізольований/тестовий прогін у справжньому домі спільних коментарів не читає. Це не «не налаштовано» — на «Підключення» не посилаємо.
 COMMENTS_ISOLATED = 'спільні коментарі вимкнено в тестовому (ізольованому) запуску: він не ходить у спільний проєкт'
 
@@ -8085,7 +8085,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._space_error(409, e.code, str(e)[:300])
                 return
             if prov is None:
-                self._space_error(400, 'vcs-needs-role', 'this space has no git sync — connect a module on Connections')
+                self._space_error(400, 'vcs-needs-role', 'this space has no git sync — connect a module in Settings')
                 return
             # `validate` — необовʼязкова функція ролі: свій модуль міг її не мати. Через `_vcs_call`: форма результату й межа часу
             # (`CHECK_TIMEOUT` каркаса). Поганий id (не рядок, не `NAME_RE`) відхилить `task_new` — `bad-task-id`, до будь-якого

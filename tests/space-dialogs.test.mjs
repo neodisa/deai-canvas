@@ -115,8 +115,8 @@ test("форма задачі: поле «Репозиторій» — лише 
   assert.ok(h.indexOf('id="tf-id"') < h.indexOf('id="tf-repo"') && h.indexOf('id="tf-repo"') < h.indexOf("data-form-error"),
     "поле — після id, до слота помилки");
   assert.equal([...h.matchAll(/id="cv-form-err"/g)].length, 1, "слот помилки один");
-  assert.match(taskFormHTML({ repo: {} }), /placeholder="типовий з «Підключення»"/, "без підказки — загальний текст зі словника");
-  assert.match(taskFormHTML({ repo: { placeholder: "" } }), /placeholder="типовий з «Підключення»"/);
+  assert.match(taskFormHTML({ repo: {} }), /placeholder="типовий із «Налаштувань»"/, "без підказки — загальний текст зі словника");
+  assert.match(taskFormHTML({ repo: { placeholder: "" } }), /placeholder="типовий із «Налаштувань»"/);
 });
 
 test("форма задачі: підказка репозиторію екранується (дані з налаштувань модуля — не розмітка)", () => {
@@ -133,7 +133,7 @@ test("форма задачі: поле «Репозиторій» англій�
     const h = taskFormHTML({ repo: {} });
     assert.ok(!CYR.test(h), `кирилиця в англійській розмітці: ${h.match(/.{0,30}[а-яіїєґ].{0,30}/i)?.[0]}`);
     assert.match(h, /Repository \(optional\)/);
-    assert.match(h, /placeholder="the default from Connections"/);
+    assert.match(h, /placeholder="the default from Settings"/);
   } finally { setLang(before); }
 });
 

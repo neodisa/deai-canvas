@@ -23,7 +23,7 @@ READ_TIMEOUT, READ_SOCKET_S = 6, 4
 SYNC_TIMEOUT, SYNC_SOCKET_S = 30, 15
 #: Вбудований модуль, яким ходить запис ЛІГИ (явний `jira-tracker`; запасного неявного постачальника більше нема, 4d-4b).
 LEGACY_MODULE = 'jira-tracker'
-UNCONFIGURED = 'Jira не налаштовано: додайте адресу й облікові на екрані «Підключення»'
+UNCONFIGURED = 'Jira не налаштовано: додайте адресу й облікові на екрані «Налаштування»'
 
 
 def keys_of(tasks):

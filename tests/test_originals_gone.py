@@ -729,7 +729,7 @@ class CommentsInIsolation(unittest.TestCase):
             with self.assertRaises(deai_modules.ModuleError) as cm:
                 self.route(fx)
         self.assertEqual(cm.exception.code, 'comments-isolated')           # m3: окремий код, не «не налаштовано»
-        self.assertNotIn('«Підключення»', cm.exception.message)
+        self.assertNotIn('«Налаштування»', cm.exception.message)
         self.assertEqual(deai_modules.STATUS['comments-isolated'], 409)
 
     def test_a_custom_shared_module_is_not_refused_by_the_isolation_law(self):
@@ -798,7 +798,7 @@ class TextsNameTheConnectionsScreen(unittest.TestCase):
         import notify
         import tracker
         for text in (serve.COMMENTS_UNCONFIGURED, dashboard.UNCONFIGURED, notify.UNCONFIGURED, tracker.UNCONFIGURED):
-            self.assertIn('«Підключення»', text)
+            self.assertIn('«Налаштування»', text)
             for bad in ('tasks.json', 'jira_base', 'JIRA_EMAIL', 'JIRA_TOKEN', 'supabase_url'):
                 self.assertNotIn(bad, text)
 
