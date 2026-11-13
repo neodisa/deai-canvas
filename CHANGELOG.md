@@ -3,6 +3,32 @@
 All notable changes to Deai Canvas, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/); dates are DD.MM.YYYY.
 
+## [0.25.0] — 13.11.2026
+
+Shell redesign, stage A: the top bar holds only what belongs to the current task, and open tasks get their own tabs row with an
+interactive island at the bottom of the work area.
+
+### Added
+- **A tabs row of open tasks.** Each tab has the space colour dot, a Claude state dot (read-only `GET /api/claude-statuses`), a close
+  button, and there is a «+» for a new task. The update pill and a gear to Settings sit in the same row. Tabs persist per window in
+  `localStorage` (`dc-tabs`), up to 12; a task deleted from the current space disappears from the tabs.
+- **An interactive island at the bottom of the work area:** the Claude status, the inspector (Layout) and the bug / idea button. On
+  the Tasks and Settings screens only the bug / idea button is shown.
+- **«Fit all»** — the zoom percentage is now a button that fits the whole canvas.
+
+### Changed
+- **The task bar** shows the iteration and the task title, then the view controls, then Figma / Git / Publish. The space chip lives
+  on the bar of the Tasks and Settings screens.
+- **Connections is now Settings** (opened with the gear). Every message that sent you to «Підключення» / «Connections» — dialogs,
+  the wizard, publish and sync errors, the server texts about an unconfigured dashboard, tracker, notifications and comments, the
+  migration hints — names the screen «Налаштування» / «Settings».
+- **Overview:** the wheel or two fingers pan, ⌘/Ctrl + wheel or a pinch zooms. The gesture hint is translated and sits above the
+  island; toasts and notices sit above the island too.
+
+### Removed
+- The task switcher dropdown in the bar (the tabs and the Tasks screen replace it), the palette button (⌘K / Ctrl+K stays) and the
+  «back to task» button.
+
 ## [0.24.0] — 12.11.2026
 
 Team rollout groundwork: a team copy is cloned from the public repository, installed over an older canvas app and kept up to date,

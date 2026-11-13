@@ -12,7 +12,7 @@ links for your team.
 > comments on your own Supabase (or any service, through a small module), and **git sync** —
 > iterations to and from any git repository, GitHub or GitLab or your own server — work in any
 > space. A **wizard** creates a space and takes you through its modules and a first task, and a
-> **Connections** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
+> **Settings** screen manages the modules afterwards — no command line. Your own Vercel can be reached with a token
 > or with the `vercel login` of the computer. The in-house publishing and comments of the legacy space now run on these same
 > modules, and so does the **team dashboard** (the «Team» tab of «Tasks»): any space can get it through the
 > `supabase-dashboard` module and its own Supabase project, and the **issue tracker** (task statuses from Jira Cloud) through
@@ -22,7 +22,7 @@ links for your team.
 > is now a general **track of a space** (a folder, a repository and a design system per line of work, described in
 > `space.json`), and the core no longer tells the in-house setup from a module by a string (since 0.21 there is no implicit
 > provider at all: a role without an explicit enabled record is off), and a test or demo run (`DC_TASKS_FILE`) never reads the credentials of the machine. Since 0.17 the legacy space moves its
-> tracker, dashboard and Teams config, since 0.18 its comments and git sync, and since 0.19 its publishing, into explicit modules of its own by itself, since 0.20 its tracks are explicit for good (no implicit adapter in the runtime), and since 0.21 the last originals (the git key, the preview password) are copied and **no original is read any more** (the root of `tasks.json`, the environment, `pipeline-feedback`) — credentials are entered on the Connections screen — all with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
+> tracker, dashboard and Teams config, since 0.18 its comments and git sync, and since 0.19 its publishing, into explicit modules of its own by itself, since 0.20 its tracks are explicit for good (no implicit adapter in the runtime), and since 0.21 the last originals (the git key, the preview password) are copied and **no original is read any more** (the root of `tasks.json`, the environment, `pipeline-feedback`) — credentials are entered on the Settings screen — all with a backup (see *LIGA migration*). A space can carry **its own modules** in `<space>/modules/`; their code runs only
 > after you trust it. See *Roadmap*.
 
 ## What it does
@@ -44,7 +44,7 @@ links for your team.
 | **Space tracks** | Several lines of work in one space — each with its own folder for the tasks, default repository, design system and label — described in `space.json`; a task carries its `track`. See *Space tracks*. |
 | **Tasks** | A home screen with all your tasks: search, sort, filters, and **tags** — give a task tags when you create it or with the «Мітки» button on its card, filter by them and find them with the search. See *Tasks and tags*. |
 | **New-space wizard** | Four steps — space, modules, settings, first task (a blank page, an existing mockup folder, or a phrase for the agent). The same wizard opens on the first run and for «New space…». See *Spaces*. |
-| **Connections** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, Teams notifications, design-system tokens) from the UI. See *Modules*. |
+| **Settings** | A page per space to connect, configure, check, replace and turn off modules (publishing, team comments, git sync, the team dashboard, the issue tracker, Teams notifications, design-system tokens) from the UI. See *Modules*. |
 | **App** | Installable as a PWA (own window and Dock/taskbar icon); macOS launcher with auto-start. |
 
 UI in English and Ukrainian.
@@ -74,7 +74,7 @@ suites (`tests/`, `bin/`, `app/`) were run for 0.8.0 on Python 3.9.6, the oldest
 
 A **space** is a company, a client or your own work: a folder on disk with a `space.json` (name,
 colour, the enabled modules and their settings) and the space's tasks. The spaces of a machine are
-listed in `~/.deai/spaces.json`; the space chip in the top bar switches between them.
+listed in `~/.deai/spaces.json`; the space chip on the Tasks screen switches between them.
 
 **Creating a space — the wizard.** The welcome screen (no spaces yet) and «New space…» in the
 space menu and in ⌘K open the same four-step page; the welcome screen also has «Open an existing
@@ -88,7 +88,7 @@ space folder», which starts with the cursor in the folder field.
 2. **Modules** — one choice per role (publishing, team comments, git sync, design-system tokens): a
    module, or «No module» with what that means. A choice that replaces the current provider says
    «instead of …». Nothing is required, and nothing is written yet; no git module is pre-selected.
-3. **Settings** — the fields of each chosen module, the same as in the Connections side panel
+3. **Settings** — the fields of each chosen module, the same as in the Settings side panel
    (secrets are written, never shown). One pass writes the choices and checks each module; if
    something fails, the wizard stays on the step with the reason in the card. If an agent changed a
    role while you were choosing, that module is not written and its card says so.
@@ -98,7 +98,7 @@ space folder», which starts with the cursor in the folder field.
 
 Unsaved settings are asked about before «Back» or «Close the wizard»; Esc does not close the page.
 Not part of the wizard: picking a folder with the system dialog, and resuming an unfinished wizard
-after a restart (what was created stays, and the rest is on «Connections»).
+after a restart (what was created stays, and the rest is on «Settings»).
 
 **A task from an existing folder** is also available over the API: `POST /api/task-new` with
 `from` (see *Module API* below). It works in a space without integrations only; symbolic links,
@@ -112,9 +112,9 @@ it asks for) and `server.py` (functions for its role). A *role* is an interface 
 calls: `publish`, `tokens`, `comments`, `vcs`, `dashboard`, `tracker` and `notify`; no role name is
 reserved any more. One provider per role per space.
 
-**Connecting a module — the Connections screen.** Open the space menu (the space chip in the
-top bar) → «Connections…», or press ⌘K and pick «Connections of the space …»; in a space
-without integrations the head of the Tasks page also has a «Connections» button. The page lists
+**Connecting a module — the Settings screen.** Click the gear at the top right, or open the space menu
+(the space chip on the Tasks screen) → «Settings…», or press ⌘K and pick «Settings of the space …»; in a space
+without integrations the head of the Tasks page also has a «Settings» button. The page lists
 the modules of the space by role (Publishing, Team comments, Git sync, Design-system tokens), says who
 provides each role now, shows the state of each module and, for one that fails, the reason in
 plain words. «Connect» and «Configure» open a side panel with the module's settings; secrets
@@ -126,7 +126,7 @@ are written there but never shown again — the panel only says «set» or «not
 command line is needed.
 
 **Own modules.** Put a module folder into `<space>/modules/<id>/` (by hand, from git, or ask the agent to write one —
-see `docs/modules/authoring.md`). Connections shows it with «own» and «Needs trust»; nothing of it runs yet. «Trust…»
+see `docs/modules/authoring.md`). Settings shows it with «own» and «Needs trust»; nothing of it runs yet. «Trust…»
 lists its files and settings, and «Trust» asks the operating system to confirm in its own window. The canvas then runs
 a read-only snapshot of exactly those bytes (`~/.deai/trusted/`); a later edit of the folder waits for a new trust
 («The folder has changes»), and «Revoke trust» stops it without touching `space.json`. A module a colleague turned on
@@ -174,7 +174,7 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
 - *Token.* In Vercel: Account Settings → Tokens → create a token. If you publish into a team,
   scope the token to that team and set the `team` setting (a slug such as `<slug>`, or an id
   `team_…`); empty means your personal account.
-- *Enable it* on the Connections screen (Publishing → Vercel → «Connect»: the token and,
+- *Enable it* on the Settings screen (Publishing → Vercel → «Connect»: the token and,
   for a team, its slug). A space has one publisher and a space without integrations publishes
   with `static-publish` by default, so the screen asks «Publishing is currently handled by …
   Connect “Vercel” instead?» and swaps them in one step. Over the API, pass `replace: true`:
@@ -227,7 +227,7 @@ default) needs only a token — no `vercel login`, no CLI, no Node on the machin
 - With a `comments` module enabled in the space, the preview carries the comment layer and
   talks to that module's service (see *Comments*); without one it has no comments.
 
-**System Vercel CLI.** Choose «System Vercel CLI» in the setting `auth` (labelled «Вхід у Vercel»; Connections → Vercel, or the wizard);
+**System Vercel CLI.** Choose «System Vercel CLI» in the setting `auth` (labelled «Вхід у Vercel»; Settings → Vercel, or the wizard);
 the token field is then ignored, and `team` is the `--scope` of the CLI (empty: your personal account). Run
 `npx vercel login` once in a terminal; «Check» asks `vercel whoami` and says `no Node.js` or `not logged in` in plain
 words. A publish runs `link` and `deploy --prod` in the built folder, takes the shortest `*.vercel.app` address and
@@ -319,7 +319,7 @@ notes are in [the module README](app/modules/supabase-comments/README.md):
 3. Take the project URL (`https://<ref>.supabase.co`) and the **public** key (`anon` or
    `publishable`) from Project Settings → API — never the `service_role` / `secret` key (the
    module refuses it: this key goes into every page).
-4. Enable the module on the Connections screen (Team comments → Supabase → «Connect»: the
+4. Enable the module on the Settings screen (Team comments → Supabase → «Connect»: the
    project URL and the public key), or over the API:
 
    ```bash
@@ -336,7 +336,7 @@ uploaded screenshot. The bucket and its policies are yours to create (details in
 
 **The legacy (LIGA) space** keeps the address and the **public** key of its shared Supabase in its
 `supabase-comments` record (the address in the settings, the key as a secret) — the migration of
-0.17–0.21 copies them there, and you enter or rotate them on the **Connections** screen. **The old
+0.17–0.21 copies them there, and you enter or rotate them on the **Settings** screen. **The old
 sources are not read any more** (since 0.21): not the root of `tasks.json` (`supabase_url`,
 `supabase_key`), not the environment variables `SUPABASE_URL` and `SUPABASE_KEY`, not
 `pipeline-feedback`; a key added to the root by hand has no effect. The same address and key feed the
@@ -444,7 +444,7 @@ returns: what a card is, and when to send it, is decided by the core (`app/dashb
 3. Take the project URL and a **non-public** key from Project Settings → API (`service_role`, or the key of a role of your own
    with explicit grants and policies on the table). The module refuses a public (anon / publishable) key: that one is inside
    every published preview.
-4. Connections → «Team dashboard» → «Supabase dashboard» → «Connect» (or the same step of the new-space wizard). The key is
+4. Settings → «Team dashboard» → «Supabase dashboard» → «Connect» (or the same step of the new-space wizard). The key is
    kept in `~/.deai/secrets.json` (owner only) and never goes into a page.
 
 **When the cards are sent.** After a publish, after a git sync that pushed and after an autosync that changed something —
@@ -464,7 +464,7 @@ the badge; without the module the screen shows no status from a tracker, and sta
 that also has the dashboard sends the same statuses on its cards. The module only reads: it creates and changes nothing in
 Jira. Jira Cloud only; Jira Server / Data Center is a separate module later.
 
-**Connect it:** Connections → «Issue tracker» → «Jira Cloud» → «Connect» (or the same step of the new-space wizard) with the
+**Connect it:** Settings → «Issue tracker» → «Jira Cloud» → «Connect» (or the same step of the new-space wizard) with the
 site address (`https://<site>.atlassian.net`), the e-mail of your Atlassian account and an **API token** (create it in the
 security settings of the Atlassian account; the key is kept in `~/.deai/secrets.json`, owner only, and never goes into a page).
 «Check» says «connected», or «Jira rejected the email or token» for a wrong pair. The details and the network calls are in
@@ -475,7 +475,7 @@ statuses are still shown); «Try again» asks again, and the badges of the last 
 know fails the whole batch of keys (Jira answers HTTP 400 to the query) — fix that key.
 
 **The LIGA space** reaches its Jira through the same module, and since 0.21 only through its explicit `jira-tracker` record: the
-address, the email and the token are entered on the **Connections** screen (the migration copied the old values there). The old
+address, the email and the token are entered on the **Settings** screen (the migration copied the old values there). The old
 sources — `jira_base`, `jira_email`, `jira_token` in the root of `tasks.json`, `JIRA_EMAIL` and `JIRA_TOKEN` in the environment, the
 two files in `~/.claude/pipeline-feedback/` — are not read any more. Without the record that space has no statuses, and when its
 tasks carry Jira keys «Mine» says that Jira is not configured.
@@ -498,7 +498,7 @@ cards nor the switch, and the Teams item of the menu is not shown.
    `select vault.create_secret('<webhook address>', 'teams_webhook_url');`
 3. Create the receiving side in Teams — usually a Power Automate flow «When a Teams webhook request is received» that posts
    the Adaptive Card it gets as it is.
-4. Connections → «Teams notifications» → «Supabase Teams» → «Connect» (or the same step of the new-space wizard) with the project
+4. Settings → «Teams notifications» → «Supabase Teams» → «Connect» (or the same step of the new-space wizard) with the project
    address and a **non-public** key (`service_role` or the key of a role of your own; kept in `~/.deai/secrets.json`, never put
    into a page — a public key is refused, because the public key goes into every published preview).
 
@@ -518,7 +518,7 @@ so a colleague gets your mockup and you get theirs. It works in any space. It is
 to take what arrives (a new iteration, a fork from a colleague's one) is the core's job, the same for every provider of
 the role.
 
-**Connect it.** Connections → «Git sync» → «Git» → «Connect»: the repository (the default for the tasks of the space; it
+**Connect it.** Settings → «Git sync» → «Git» → «Connect»: the repository (the default for the tasks of the space; it
 may stay empty and be given per task), the branch (`main`), the folder in the repository (`mockup/{task}` — `{task}` is the
 task id), and, optionally, an SSH key and a server IP (for a VPN where the server's name does not resolve; only for
 scp-style addresses, `[user@]host:path` — not for `ssh://`, `https://`, `file://` or a local path). «Check» asks the repository for the branch (`git ls-remote`, 4 seconds). The same section is
@@ -528,7 +528,7 @@ in the new-space wizard, step 2.
 the default of the module for the later sync, but the task starts from a blank page. Only a filled field (or a space
 with integrations) makes the first iteration come from the repository: if `<path>` of the
 new task already holds an `index.html` there, it is taken. A task without any repository has no sync, and the task bar offers «Configure repository…»,
-which opens Connections on the Git card. Addresses: `ssh://`, `https://`, `file://`, `user@host:path` or an absolute local path.
+which opens Settings on the Git card. Addresses: `ssh://`, `https://`, `file://`, `user@host:path` or an absolute local path.
 
 **Access is git's, not Deai's.** The module runs the git that is on your computer and never asks for a password
 (`GIT_TERMINAL_PROMPT=0`): use an SSH key (in the agent, in `~/.ssh/config`, or the module's `ssh_key`) or a saved HTTPS
@@ -634,17 +634,17 @@ python3 bin/migrate_liga.py run                         # migrate now (backup ->
 python3 bin/migrate_liga.py restore <stamp> [--hold]    # put back space.json and the LIGA secrets from <DEAI_HOME>/backups/<stamp>
 ```
 
-Credentials go in on the **Connections** screen. Before the first start of the migration the old values must be in the root of
+Credentials go in on the **Settings** screen. Before the first start of the migration the old values must be in the root of
 `tasks.json` (a first start from the Dock/PWA has no environment, so the shell variables are not enough, and `pipeline-feedback` is
 not read by the runtime any more); a role that had nothing to migrate from (`no-jira`, `no-supabase`) is not retried — add its card on
-Connections. The start line and `status` list every role that is **off**, with its reason code and the command to fix it (a role that was
+Settings. The start line and `status` list every role that is **off**, with its reason code and the command to fix it (a role that was
 not migrated is simply off since 0.21; `python3 bin/migrate_liga.py unhold <mark>` lifts a manual hold).
 Upgrading: after the migration the Jira token, the Supabase key and the preview password of LIGA live in `secrets.json`, and the
 git key and the host IP in the settings of `git-sync`; **the old sources (the root of `tasks.json`, the environment, `pipeline-feedback`) are
-not read by Deai any more**, and a root key edited by hand after the migration has no effect. Rotate on the Connections screen.
+not read by Deai any more**, and a root key edited by hand after the migration has no effect. Rotate on the Settings screen.
 Migrated tracks are a snapshot: edit `tracks` in the LIGA `space.json`, not `design_work_roots`/`profile_repos` in the old file.
 
-**Where a value lives now (the map «key → holder»).** Look for it on the Connections screen:
+**Where a value lives now (the map «key → holder»).** Look for it on the Settings screen:
 
 | Old place (root of `tasks.json`, environment, `pipeline-feedback`) | Holder since 0.21 |
 |---|---|
@@ -690,7 +690,7 @@ and `tasks.json.bak` is a manual copy.
 for every published task, and the preview without the gate. To 0.17: `restore <stamp-c> --hold`, then `restore <stamp-b> --hold`
 (0.17 ignores `compat` of the comments and git sync, so the comment channels would switch to `deai/<space>/<task>` and the git mirrors would
 be cloned again under `<DEAI_HOME>/cache`). Rotation: the Supabase key of the comments is a copy in `secrets.json` too (rotate it on
-Connections); since 0.21 `gitlab_ssh_key` / `gitlab_host_ip` of the root are copied into `git-sync` by the fifth step and the root is not read.
+Settings); since 0.21 `gitlab_ssh_key` / `gitlab_host_ip` of the root are copied into `git-sync` by the fifth step and the root is not read.
 
 Known limits: a downgrade needs the `restore ... --hold` above (to 0.16: `restore <stamp-d> --hold`, `<stamp-c>`, `<stamp-b>`, then `<stamp-a>`, since an earlier step is refused while a later one is applied); a `vercel-publish` card enabled by hand without `compat` publishes through the module path (new URLs, no gate); the fourth step writes the tracks even when they differ from the old adapter (the differences are notes of the step, see `CHANGELOG.md`), except for more than 20 track ids, which stays `abort-tracks` until `profile_repos` / `design_work_roots` are cleaned; a LIGA folder inside a git work tree is not
 migrated; a partial migration is final; the copies of the credentials are in the Deai home (`secrets.json` and `backups/`) and in `tasks.json.bak` (mode 0600), and `skip-path-in-git` keeps the roles of LIGA off until the folder leaves the git work tree. The full list and the status codes are in `CHANGELOG.md`, `[0.21.0]`, `[0.20.0]`, `[0.19.0]`, `[0.18.0]` and `[0.17.0]`.
@@ -706,7 +706,7 @@ migrated; a partial migration is final; the copies of the credentials are in the
    - Later — team dashboard, issue tracker, notifications: modules you connect per
      project (stage 4).
 3. **Onboarding**
-   - ✅ **3a** (0.5) — the Connections screen: connect, configure, check, replace and turn off
+   - ✅ **3a** (0.5) — the Connections screen (called Settings since 0.25): connect, configure, check, replace and turn off
      modules from the UI; `replace` in `module-enable`.
    - ✅ **3b** (0.6) — the new-space wizard: space → modules → settings → first task, and a task
      from an existing mockup folder (`from` in `task-new`).
