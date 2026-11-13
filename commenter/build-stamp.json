@@ -1,0 +1,8 @@
+{
+  "src": "f941d93ec7f149913d144ab5c3cd2b2161cd3fe40f6c1dfb03bec8dcdd1ef0a1",
+  "esbuild": "0.25.12",
+  "out": {
+    "comment-layer.min.js": "69026e4f4683e407c65d7b6c6d2a285113ce2b3c67730ec9a49c61be6a372b9c",
+    "anchor.min.js": "1478f9c69d124b3d918c3d85778d1b6a38fd284b2ac7a54b985f58b9a15d9c3c"
+  }
+}

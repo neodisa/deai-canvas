@@ -6,6 +6,7 @@ __pycache__/
 # живі тести). Релізний скрипт робить `git add -A`, тож забутий симлінк
 # поїхав би в реліз. Знайдено 25.08.2026, той самий клас, що tasks.json.bak*.
 node_modules
+commenter/node_modules/
 .DS_Store
 .mirrors/
 

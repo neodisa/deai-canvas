@@ -2,7 +2,7 @@
  * Збірка бандлів + штамп джерела.
  *
  * Штамп — content-hash файлів `src/`, а НЕ mtime і не git: форматер міняє mtime
- * (доктор сварився б на незмінений код), а git не бачить незакоміченої правки —
+ * (охоронець сварився б на незмінений код), а git не бачить незакоміченої правки —
  * саме в такому стані живе розробка, і саме там бандл найлегше лишити старим.
  */
 import { createHash } from "node:crypto";
@@ -14,21 +14,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 /**
- * ⚠️ Рахує РІВНО так само, як `comment_layer_src_hash` у design-canvas/bin/doctor.py:
- * відносний POSIX-шлях файлу, потім байти; обхід рекурсивний, крапкові елементи
- * пропущені на будь-якому рівні. Розійдуться — інваріант стане вічно червоним,
- * а інваріант, що свариться дарма, привчає ігнорувати доктора. Правиш тут —
- * правь і там; обидві реалізації приколоті тестом test_hash_matches_js_implementation.
+ * Хеш `src/`: відносний POSIX-шлях файлу, потім байти; обхід рекурсивний, крапкові елементи
+ * пропущені на будь-якому рівні. Рахується лише тут; охоронець — `tests/commenter-stamp.test.mjs`.
  *
  * ⛔ РЕКУРСИВНО: `esbuild --bundle` збирає й те, що лежить у `src/modules/`.
- * Плаский обхід означав би, що правка в підкаталозі не міняє хеш і доктор мовчки
- * зеленіє на рівно тому інциденті, заради якого інваріант написаний.
+ * Плаский обхід означав би, що правка в підкаталозі не міняє хеш і охоронець мовчки
+ * зеленіє на рівно тому інциденті, заради якого він написаний.
  *
  * ⛔ Обхід власноруч, а не `readdirSync(dir, { recursive: true })`: той СПУСКАЄТЬСЯ
- * в симлінк-каталоги, а `os.walk` на Python-боці — ні, і хеші розійшлися б. Тут
- * рішення «спускатись» приймає Dirent.isDirectory() (для симлінка false, як в
- * os.walk), а рішення «рахувати файл» — statSync, який за посиланням ЙДЕ, як
- * os.path.isfile. Битий симлінк не стає ні тим, ні тим — statSync віддає undefined.
+ * в симлінк-каталоги. Тут рішення «спускатись» приймає Dirent.isDirectory() (для симлінка
+ * false), а рішення «рахувати файл» — statSync, який за посиланням ЙДЕ. Битий симлінк
+ * не стає ні тим, ні тим — statSync віддає undefined.
  */
 function srcFiles(dir, prefix = "") {
   const out = [];
@@ -68,8 +64,8 @@ function esbuildVersion() {
 // ⛔ pathToFileURL, а не `file://${argv[1]}`: шлях цього репозиторію містить
 // пробіл («Liga Tools»), і import.meta.url приходить перекодованим (%20). Рядкове
 // порівняння давало false — `npm run build` мовчки не збирав НІЧОГО й не казав ні
-// слова, лишаючи dist старим назавжди. Той самий мовчазний пропуск, проти якого
-// написані обидва інваріанти нижче за течією.
+// слова, лишаючи вендорні бандли старими назавжди. Той самий мовчазний пропуск, проти якого
+// написаний охоронець `tests/commenter-stamp.test.mjs`.
 //
 // argv[1] може бути відсутнім (`node -e`, чистий import заради srcHash) — тоді це
 // точно не запуск скрипта. Без цієї перевірки pathToFileURL кидає, і файл, який
@@ -77,14 +73,18 @@ function esbuildVersion() {
 const invokedAs = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
 if (import.meta.url === invokedAs) {
   const bin = path.join(ROOT, "node_modules", ".bin", "esbuild");
-  for (const [entry, out] of [["comment-layer.js", "comment-layer.min.js"],
-                              ["supabase-adapter.js", "supabase-adapter.min.js"],
-                              ["anchor-global.js", "anchor.min.js"]]) {
-    execFileSync(bin, [path.join("src", entry), "--bundle", "--format=iife",
-                       "--minify", `--outfile=dist/${out}`],
+  /* Вихід — прямо у вендор Deai: окремої `dist/` нема, щоб не було двох копій бандла, одна з яких застаріє.
+     `supabase-adapter` не збираємо: у Deai свій адаптер модуля `supabase-comments`. */
+  const VENDOR = path.join(ROOT, "..", "app", "vendor");
+  const ENTRIES = [["comment-layer.js", "comment-layer.min.js"], ["anchor-global.js", "anchor.min.js"]];
+  const out = {};
+  for (const [entry, file] of ENTRIES) {
+    const dest = path.join(VENDOR, file);
+    execFileSync(bin, [path.join("src", entry), "--bundle", "--format=iife", "--minify", `--outfile=${dest}`],
                  { cwd: ROOT, stdio: "inherit" });
+    out[file] = createHash("sha256").update(readFileSync(dest)).digest("hex");
   }
-  writeFileSync(path.join(ROOT, "dist", ".build-stamp.json"),
-    `${JSON.stringify({ src: srcHash(), esbuild: esbuildVersion() }, null, 2)}\n`);
-  console.log("dist зібрано, штамп записано");
+  writeFileSync(path.join(ROOT, "build-stamp.json"),
+    `${JSON.stringify({ src: srcHash(), esbuild: esbuildVersion(), out }, null, 2)}\n`);
+  console.log("app/vendor зібрано, штамп записано");
 }
