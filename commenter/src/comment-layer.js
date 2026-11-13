@@ -550,7 +550,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       }
       this._inited = true;
       this._emit('onReady');
-      this._emit('onChange', this.snapshot());
+      this._emitChange();
       return this;
     },
 
@@ -1516,7 +1516,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         : '';
       this._list.innerHTML = mainHtml + prevSection;
       this._placePins();
-      if (this._inited) this._emit('onChange', this.snapshot());
+      this._emitChange();
     },
     _card(c, isHist) {
       // Inline edit mode for this card.
@@ -1710,12 +1710,20 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (!h || typeof h[name] !== 'function') return;
       try { h[name](arg); } catch (e) { /* хост не сміє зламати коментатор */ }
     },
+    /** `onChange` зі знімком — лише з хостом і після `init`; збій знімка не ламає ні `init`, ні `_render`. */
+    _emitChange() {
+      if (!this._hostOpts || !this._inited) return;
+      let s;
+      try { s = this.snapshot(); } catch (e) { return; }
+      this._emit('onChange', s);
+    },
     /** Знімок для панелі хоста: копії без `_el`/`_pending`/`fp`/`htmlSnapshot` + `n` (номер піна), `scope`
      *  (`current` — ця ітерація чи legacy, `earlier` — інша відома ітерація, `other` — решта), `where` (`here` /
      *  `elsewhere` — інша сторінка / `offscreen` — елемента нема на екрані), `iter` (ітерація піна), `pending`. */
     snapshot() {
       const route = location.pathname + location.hash;
       const where = (c) => {
+        if (!this._inScope(c)) return 'here';   // не якоримо поза скоупом (_relocate) — «поза кадром» тут не про них
         if (!this.anchors && c.meta && c.meta.route && c.meta.route !== route) return 'elsewhere';
         if (!this.anchors && c.status === 'open' && this._offscreen(c)) return 'offscreen';
         return 'here';
@@ -1725,13 +1733,16 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         version: this.appVersion, iteration: this._curIter(), pinsHidden: !!this._pinsHidden,
         comments: this.comments.map((c) => {
           const { _el, _pending, fp, htmlSnapshot, ...rest } = c;
-          return Object.assign(JSON.parse(JSON.stringify(rest)),
+          return Object.assign({}, rest, rest.meta && typeof rest.meta === 'object' ? { meta: Object.assign({}, rest.meta) } : {},
             { n: this._seqOf(c), scope: scope(c), where: where(c), iter: this._pinIter(c), pending: !!_pending });
         }),
       };
     },
     /** Те саме, що клік по картці в панелі коментатора: скрол і спалах елемента (полотно — камера до піна). */
-    focus(id) { if (this._inited && this.comments.some((x) => x.id === id)) this._focusElement(id); },
+    focus(id) {
+      const c = this._inited && this.comments.find((x) => x.id === id);
+      if (c && this._inScope(c)) this._focusElement(id);   // поза скоупом елемент не якорений: нечіткий збіг блимнув би чужим
+    },
     carry(id) { if (this._inited) this._carryToCurrent(id); },
     editComment(id, text) {
       const v = String(text == null ? '' : text).trim();

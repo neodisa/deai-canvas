@@ -21,23 +21,25 @@ test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
 /** `seed` — коментарі, що вже лежать у сховищі; `withHost` — чи передати `host`. */
-async function boot({ withHost, seed = [], version = "2" }) {
+async function boot({ withHost, seed = [], version = "2", throwOnChange = false, spy = false }) {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.setContent(PAGE);
   await page.addScriptTag({ content: BUNDLE });
-  await page.evaluate(({ withHost, seed, version }) => {
+  await page.evaluate(({ withHost, seed, version, throwOnChange, spy }) => {
     window.__ev = [];
     const mem = seed.slice();
     const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } };
     window.__mem = mem;
     const host = withHost ? {
       onReady: () => window.__ev.push(["ready"]),
-      onChange: (s) => window.__ev.push(["change", s]),
+      onChange: (s) => { if (throwOnChange) throw new Error("хост зламався"); window.__ev.push(["change", s]); },
       onSelect: (id) => window.__ev.push(["select", id]),
       onMode: (on) => window.__ev.push(["mode", on]),
     } : undefined;
+    window.__snapCalls = 0;
+    if (spy) { const orig = window.CommentLayer.snapshot; window.CommentLayer.snapshot = function (...a) { window.__snapCalls++; return orig.apply(this, a); }; }
     window.CommentLayer.init({ projectId: "t", storage: store, version, user: { name: "Тест" }, host });
-  }, { withHost, seed, version });
+  }, { withHost, seed, version, throwOnChange, spy });
   return page;
 }
 const root = (page, sel) => page.evaluate((s) => {
@@ -125,14 +127,41 @@ test("з host: editComment, resolve/reopen, togglePins, openShot", async () => {
 
 test("з host: пін попередньої ітерації — scope earlier, carry переносить копією в поточну", async () => {
   const page = await boot({ withHost: true, version: "3", seed: [
-    { id: "o1", author: "Тест", text: "з другої", status: "open", meta: { seq: 4, iteration: "2", version: "2" }, ts: "12.11.2026 09:00" },
+    { id: "o1", author: "Тест", text: "з другої", status: "open", meta: { seq: 4, iteration: "2", version: "2", shot: "data:image/png;base64,iVBORw0KGgo=" }, ts: "12.11.2026 09:00" },
   ] });
   const before = (await lastSnap(page)).comments;
   assert.deepEqual(before.map((c) => [c.id, c.scope, c.iter]), [["o1", "earlier", "2"]]);
+  const nEv = await page.evaluate(() => window.__ev.length);
+  await page.evaluate(() => window.CommentLayer.focus("o1"));
+  assert.equal(await page.evaluate((n) => window.__ev.slice(n).filter((e) => e[0] === "select").length, nEv), 0);
+  // Без захисту нечіткий збіг не знайшов би елемента й відкрив би лайтбокс зі знімком чужого піна.
+  assert.equal(await page.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".cllb")), false);
   await page.evaluate(() => window.CommentLayer.carry("o1"));
   const after = (await lastSnap(page)).comments;
   assert.equal(after.length, 2);
   assert.equal(after.find((c) => c.id !== "o1").scope, "current");
   assert.equal(after.find((c) => c.id === "o1").scope, "earlier");
+  assert.equal(after.find((c) => c.id === "o1").where, "here");
+  assert.equal(before[0].where, "here");
+  await page.close();
+});
+
+test("без host: snapshot не викликається ні на init, ні на рендерах", async () => {
+  const page = await boot({ withHost: false, spy: true, seed: [
+    { id: "a1", author: "Тест", text: "один", status: "open", meta: { seq: 1, iteration: "2", version: "2" }, ts: "13.11.2026 10:00" },
+  ] });
+  await page.evaluate(() => window.CommentLayer.resolveComment("a1"));
+  await page.evaluate(() => window.CommentLayer.reopenComment("a1"));
+  assert.equal(await page.evaluate(() => window.__snapCalls), 0);
+  await page.close();
+});
+
+test("з host: onChange, що кидає виняток, не ламає ні init, ні збереження піна", async () => {
+  const page = await boot({ withHost: true, throwOnChange: true });
+  assert.deepEqual(await page.evaluate(() => window.__ev.map((e) => e[0])), ["ready"]);
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  await addComment(page, "Пін попри збій хоста");
+  assert.equal(await page.evaluate(() => window.__mem.length), 1);
+  assert.equal(await page.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".pin")), true);
   await page.close();
 });
