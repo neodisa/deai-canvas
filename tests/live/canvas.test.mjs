@@ -130,17 +130,23 @@ async function press(page, locator) {
    елементом; тепер це сегмент із ДВОХ окремих кнопок
    (`[data-act="mode"][data-val="overview"]`/`…="layout"]`), тому «вийти й
    вернутись» — це клік по РІЗНИХ елементах, а не той самий елемент двічі.
-   Старий `#task-sel` (`<select>`) став пунктом дропдауна крошки задачі
-   (`[data-dd="task"]`), тож вибір спершу відкриває дропдаун, а тоді клікає
-   пункт усередині нього. Перемикач режиму коментарів (`[data-cmode="…"]`,
+   Перемикач режиму коментарів (`[data-cmode="…"]`,
    пізніше `[data-act="cmode"]` у дропдаунах смуги) зі смуги пішов зовсім —
    див. `setCommentMode` нижче. */
 const toOverview = (page) => page.locator('[data-act="mode"][data-val="overview"]');
 const toLayout = (page) => page.locator('[data-act="mode"][data-val="layout"]');
 
+/* Перемикача задач у смузі більше нема (0.25.0): задачу відкривають з екрана «Задачі» карткою (або вкладкою). */
 async function selectTask(page, id) {
-  await page.locator('[data-dd="task"]').click();
-  await page.locator(`[data-act="task"][data-val="${id}"]`).click();
+  await page.locator('#tabs [data-act="home"]').click();
+  await page.locator(`#tasks-home .th-card[data-id="${id}"]`).click();
+}
+
+/* Колесо в «Огляді» (0.25.0): просто колесо РУХАЄ полотно, а масштабує ⌘ + колесо. Масштабні тести крутять колесо з ⌘,
+   щоб delta лишалась тією самою (Ctrl — щипок — підсилюється ×6). */
+async function zoomWheel(page, dx, dy) {
+  await page.keyboard.down("Meta");
+  try { await page.mouse.wheel(dx, dy); } finally { await page.keyboard.up("Meta"); }
 }
 
 /** Запити сторінок, що перейшли в канал «Команда» (`setCommentMode`): `outside` мусить лишитись порожнім. */
@@ -254,7 +260,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
       const c = document.getElementById("canvas");
       const r = c.getBoundingClientRect();
       c.dispatchEvent(new WheelEvent("wheel", {
-        deltaY: -240, cancelable: true,
+        deltaY: -240, metaKey: true, cancelable: true,
         clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
       }));
       /* Смуга (Task 3): старий `#view-toggle` був перемикачем — той самий
@@ -276,7 +282,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
        порівняння зелене не тому, що рухати нічого. */
     const box = await page.locator("#canvas").boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.wheel(0, -240);
+    await zoomWheel(page, 0, -240);
     await page.waitForTimeout(800);
     assert.notEqual(await transform(page), fit, "колесо мусить змінювати трансформ");
   });
@@ -812,7 +818,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
       `панель не прокручується: overflow-y = ${geom.overflow}`);
 
     /* І прокрутка мусить справді працювати КОЛЕСОМ. Холст ловить `wheel` і кличе
-       `preventDefault` — без окремої гілки для панелі колесо над нею зумить
+       `preventDefault` — без окремої гілки для панелі колесо над нею рухає
        полотно, а скарги за стелею лишаються недосяжними, тобто стеля просто
        ховає частину переліку замість того, щоб дати до неї дійти. */
     const before = await transform(page);
@@ -1252,7 +1258,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
 
     const box = await page.locator("#canvas").boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.wheel(0, -240);
+    await zoomWheel(page, 0, -240);
     await page.waitForTimeout(900);            // довше за життя циклу камери
     const zoomed = await gap();
     // Не порожня перевірка: камера справді поїхала, отже стик міряємо на іншому зумі.
@@ -1260,9 +1266,10 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
     near(zoomed, "після зуму");
 
     // І пан: кадри й стрілки мусять їхати одним рухом, а не двома.
-    await page.mouse.move(box.x + 24, box.y + box.height - 24);
+    // Поза кнопкою «Вмістити все» (вона з 0.25.0 ловить вказівник у лівому нижньому куті).
+    await page.mouse.move(box.x + 24, box.y + box.height - 100);
     await page.mouse.down();
-    await page.mouse.move(box.x + 220, box.y + box.height - 140, { steps: 8 });
+    await page.mouse.move(box.x + 220, box.y + box.height - 200, { steps: 8 });
     await page.mouse.up();
     const panned = await gap();
     assert.notEqual(panned.t, zoomed.t, "драг мусить зсувати трансформ");
@@ -1448,7 +1455,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
       .locator(".cv-card-head").boundingBox();
     const grab = [head.x + 30, head.y + head.height / 2];
     await page.mouse.move(grab[0], grab[1]);
-    await page.mouse.wheel(0, -240);
+    await zoomWheel(page, 0, -240);
     await page.mouse.down();                       // ЖОДНОГО чекання: цикл ще їде
     const atDown = await transform(page);
     await page.mouse.move(grab[0] + 40, grab[1] + 15);
@@ -1895,7 +1902,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
     // Наставляємо камеру рукою і даємо циклу доїхати — саме її колись і збивало
     const box = await page.locator("#canvas").boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.wheel(0, -240);
+    await zoomWheel(page, 0, -240);
     await page.waitForTimeout(900);
 
     /* Мітки на самих елементах кадрів. `buildCanvas` починається з
@@ -1953,7 +1960,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       const before = await scaleNow(page);
       for (let i = 0; i < N; i += 1) {
-        await page.mouse.wheel(0, -120);
+        await zoomWheel(page, 0, -120);
         if (pauseMs) await page.waitForTimeout(pauseMs);
       }
       await page.waitForTimeout(1200);          // хай цикл доїде
@@ -2075,12 +2082,25 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
     // І він ЖИВИЙ: колесо мусить його змінити разом із камерою.
     await page.mouse.move(fit.canvas.left + fit.canvas.width / 2,
                           fit.canvas.top + fit.canvas.height / 2);
-    await page.mouse.wheel(0, -240);
+    await zoomWheel(page, 0, -240);
     await page.waitForTimeout(900);
     const zoomed = await shown();
     assert.notEqual(zoomed.text, fit.text, "індикатор не помітив зуму");
     assert.equal(parseInt(zoomed.text, 10), Math.round(zoomed.scale * 100),
       `після зуму індикатор каже ${zoomed.text}, а камера ${(zoomed.scale * 100).toFixed(1)}%`);
+
+    /* Просто колесо (0.25.0) РУХАЄ полотно і масштабу не чіпає: відсоток той самий, а трансформ світу інший. */
+    const worldT = () => page.evaluate(() => document.getElementById("world").style.transform);
+    const beforePan = await worldT();
+    await page.mouse.wheel(0, 120);
+    await page.waitForTimeout(300);
+    assert.equal((await shown()).text, zoomed.text, "колесо без модифікатора змінило масштаб");
+    assert.notEqual(await worldT(), beforePan, "колесо без модифікатора не зрушило полотно");
+
+    // Кнопка «Вмістити все»: клік повертає камеру у fit, а не лишає її де була.
+    await page.locator("#cv-zoom").click();
+    await page.waitForTimeout(300);
+    assert.equal((await shown()).text, fit.text, "клік по індикатору не вписав усе");
     await page.close();
   });
 
@@ -2111,7 +2131,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
 
     const canvas = await page.locator("#canvas").boundingBox();
     await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
-    for (let i = 0; i < 8; i += 1) await page.mouse.wheel(0, -120);
+    for (let i = 0; i < 8; i += 1) await zoomWheel(page, 0, -120);
     await page.waitForTimeout(900);
     const near = await title();
     assert.ok(near.scale > fit.scale * 2, `зум не поїхав: ${fit.scale} → ${near.scale}`);
@@ -2143,7 +2163,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
 
     // А зум змінну таки МУСИТЬ писати, інакше кегль підпису замерз би.
     await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
-    for (let i = 0; i < 6; i += 1) await page.mouse.wheel(0, 120);
+    for (let i = 0; i < 6; i += 1) await zoomWheel(page, 0, 120);
     await page.waitForTimeout(900);
     const zoomWrites = await page.evaluate(() => window.__cvVarWrites);
     assert.ok(zoomWrites > 0, "зум не оновив змінну масштабу — підпис замерз");
@@ -2209,7 +2229,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
     assertHairline("шов голови на fit", await screenPx(grid, ".cv-card-head"));
     const gc = await grid.locator("#canvas").boundingBox();
     await grid.mouse.move(gc.x + gc.width / 2, gc.y + gc.height / 2);
-    for (let i = 0; i < 8; i += 1) await grid.mouse.wheel(0, -120);
+    for (let i = 0; i < 8; i += 1) await zoomWheel(grid, 0, -120);
     // Хай камера ОСЯДЕ (а не щойно зрушить) — той самий прийом, що в P.
     await grid.waitForTimeout(1200);
     assertHairline("межа кадру на зумі", await screenPx(grid, ".cv-card"));
@@ -2223,7 +2243,7 @@ test("холст «Огляд»: кадри, кнопка і камера", asyn
     assertHairline("рамка смуги на fit", await screenPx(flow, ".cv-band"));
     const fc = await flow.locator("#canvas").boundingBox();
     await flow.mouse.move(fc.x + fc.width / 2, fc.y + fc.height / 2);
-    for (let i = 0; i < 8; i += 1) await flow.mouse.wheel(0, -120);
+    for (let i = 0; i < 8; i += 1) await zoomWheel(flow, 0, -120);
     await flow.waitForTimeout(1200);
     assertHairline("рамка смуги на зумі", await screenPx(flow, ".cv-band"));
     await flow.close();
@@ -2773,7 +2793,7 @@ test("AC. сітка: ряд = сторінка з її станами й діт
     const c = document.getElementById("canvas");
     const r = c.getBoundingClientRect();
     for (let i = 0; i < 20; i += 1) {
-      c.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, cancelable: true,
+      c.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, metaKey: true, cancelable: true,
         clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
     }
   });

@@ -71,6 +71,20 @@ export function quantScale(scale) {
   return 2 ** (Math.round(Math.log2(scale) * SCALE_QUANT) / SCALE_QUANT);
 }
 
+/** Підсилення щипка трекпада: він приходить як `wheel` з `ctrlKey` і крихітним `deltaY` (1–10), а колесо — 100. */
+export const PINCH_GAIN = 6;
+const LINE_PX = 16;
+
+/** Колесо в «Огляді» (0.25.0, як у Figma): ⌘/Ctrl + колесо і щипок — масштаб, просто колесо / два пальці — рух. */
+export function wheelIntent(e, viewH) {
+  const k = e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? viewH : 1;
+  if (e.ctrlKey || e.metaKey) return { kind: "zoom", delta: e.deltaY * k * (e.ctrlKey && !e.metaKey ? PINCH_GAIN : 1) };
+  return { kind: "pan", dx: (e.deltaX || 0) * k, dy: (e.deltaY || 0) * k };
+}
+
+/** Зсунути камеру на (dx, dy) пікселів екрана. */
+export const panBy = (cam, dx, dy) => ({ x: cam.x - dx, y: cam.y - dy, scale: cam.scale });
+
 /**
  * Крок згладжування до цілі. `dt` у мілісекундах, тому крок не залежить від
  * частоти кадрів: на 120Hz рух не стає вдвічі швидшим.

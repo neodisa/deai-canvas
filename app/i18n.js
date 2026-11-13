@@ -70,6 +70,9 @@ const UK = {
   askCancel: "Скасувати",
 
   // camera.js — повідомлення охоронців непридатних чисел
+  // «Огляд»: підказка жестів і кнопка «Вмістити все» (0.25.0)
+  canvasHint: 'колесо — рух · ⌘ + колесо чи щипок — масштаб · клік по кадру — відкрити',
+  fitAll: 'Вмістити все',
   camQuantScaleInvalid: (scale) => `масштаб непридатний: ${scale}`,
   camTargetInvalid: (key, val) => `ціль камери непридатна: ${key} = ${val}`,
   camZoomScaleInvalid: (scale) => `масштаб камери непридатний: ${scale}`,
@@ -1317,6 +1320,9 @@ const EN = {
   askClose: "Close",
   askCancel: "Cancel",
 
+  // Overview: gesture hint and the «Fit all» button (0.25.0)
+  canvasHint: 'wheel — pan · ⌘ + wheel or pinch — zoom · click a frame — open',
+  fitAll: 'Fit all',
   camQuantScaleInvalid: (scale) => `scale invalid: ${scale}`,
   camTargetInvalid: (key, val) => `camera target invalid: ${key} = ${val}`,
   camZoomScaleInvalid: (scale) => `camera scale invalid: ${scale}`,

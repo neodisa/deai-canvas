@@ -200,9 +200,9 @@ html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!importan
    (клас ставить `app.js`, `layerModesShown`). 76px = 20 + 42 + проміжок 14px, той
    самий, що в спокої між острівцем і краєм вікна. */
 body.claude-lift .island{bottom:76px}
-/* Поки є сегмент Клода, підказка «Огляду» стоїть на тому самому місці — ховаємо (Task 8 переносить її над острівець);
-   тост і стійкі плашки піднімаються над острівцем завжди — він видно на кожному екрані, крім чистого перегляду. */
-body.claude-on #canvas-hint{visibility:hidden}
+/* Підказка «Огляду» стоїть над острівцем (bottom:66px); коли острівець піднято над сегментом Клода — вона б лягла на нього, тож ховаємо.
+   Тост і стійкі плашки піднімаються над острівцем завжди — він видно на кожному екрані, крім чистого перегляду. */
+body.claude-lift #canvas-hint{visibility:hidden}
 html:not(.cv-clean) .cv-toast{bottom:64px}
 html:not(.cv-clean) .cv-notice{bottom:106px}
 /* Екран «Задачі»/«Налаштування» (оверлей `#tasks-home`): острівець лишається з одним «Баг / ідея»; панелей шарів нема, тож
@@ -662,10 +662,14 @@ body.vp-fixed .cv-frame{width:var(--cv-vpw);
 /* Індикатор масштабу — у канвасі, тобто в екранних координатах: він мусить стояти
    на місці й читатись на будь-якому зумі. Ліворуч унизу, бо центр низу зайняла
    підказка, а правий верх — панель скарг на `flow.json`. */
-.cv-zoom{position:absolute;left:14px;bottom:14px;min-width:52px;text-align:center;
-  background:rgba(26,35,30,.82);color:#fff;font-size:12px;font-variant-numeric:tabular-nums;
-  padding:6px 10px;border-radius:20px;pointer-events:none}
-.cv-canvas-hint{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+/* Від 0.25.0 це кнопка «Вмістити все»: клік вписує все полотно. Висота ≥ 28px, видиме кільце фокуса; лежить у канвасі, тому
+   ні острівець (по центру), ні панель сторінок (поза канвасом) її не перекривають. */
+.cv-zoom{position:absolute;left:14px;bottom:14px;min-width:52px;min-height:28px;text-align:center;
+  background:rgba(26,35,30,.82);color:#fff;font:inherit;font-size:12px;font-variant-numeric:tabular-nums;
+  padding:6px 10px;border:0;border-radius:20px;cursor:pointer}
+.cv-zoom:hover{background:rgba(26,35,30,.95)}
+.cv-zoom:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.cv-canvas-hint{position:absolute;left:50%;bottom:66px;transform:translateX(-50%);
   background:rgba(26,35,30,.82);color:#fff;font-size:12px;padding:6px 14px;
   border-radius:20px;pointer-events:none;white-space:nowrap}
 /* --- панель шарів (ітерація + сторінки) --- */

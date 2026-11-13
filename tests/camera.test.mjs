@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   FIT_MAX_SCALE, FIT_MIN_SCALE, MAX_SCALE, MIN_SCALE, clamp, fitBox, focusBox,
-  quantScale, step,
+  PINCH_GAIN, panBy, quantScale, step, wheelIntent,
   zoomAt,
 } from "../app/camera.js";
 
@@ -228,4 +228,19 @@ test("«вписати все» мусить ВПИСАТИ, а не вперт�
 test("вписування не роздуває дрібний світ понад 1:1", () => {
   // Стеля лишається як була: кадр знято 1:1, роздувати нема чого.
   assert.equal(fitBox({ w: 100, h: 100 }, { w: 1700, h: 900 }).scale, FIT_MAX_SCALE);
+});
+
+test("wheelIntent: без модифікатора — рух на deltaX/deltaY", () => {
+  assert.deepEqual(wheelIntent({ deltaX: 3, deltaY: 40, deltaMode: 0 }, 800), { kind: "pan", dx: 3, dy: 40 });
+});
+test("wheelIntent: ⌘ — масштаб тим самим delta; Ctrl (щипок) — підсилений", () => {
+  assert.deepEqual(wheelIntent({ deltaY: 100, metaKey: true, deltaMode: 0 }, 800), { kind: "zoom", delta: 100 });
+  assert.deepEqual(wheelIntent({ deltaY: 2, ctrlKey: true, deltaMode: 0 }, 800), { kind: "zoom", delta: 2 * PINCH_GAIN });
+});
+test("wheelIntent: рядки ×16, сторінки × висоту вьюпорта", () => {
+  assert.deepEqual(wheelIntent({ deltaX: 0, deltaY: 3, deltaMode: 1 }, 800), { kind: "pan", dx: 0, dy: 48 });
+  assert.deepEqual(wheelIntent({ deltaX: 0, deltaY: 1, deltaMode: 2 }, 800), { kind: "pan", dx: 0, dy: 800 });
+});
+test("panBy: рух камери проти напрямку прокрутки, масштаб не змінюється", () => {
+  assert.deepEqual(panBy({ x: 10, y: 20, scale: 0.5 }, 3, 40), { x: 7, y: -20, scale: 0.5 });
 });

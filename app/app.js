@@ -3,7 +3,7 @@
 
 import { initErrRing } from './err-ring.js';  // ПЕРШИЙ імпорт: кільце помилок ловить і збої завантаження наступних модулів
 import { rowsLayout, worldBox } from './layout.js';
-import { fitBox, focusBox, quantScale, step, zoomAt } from './camera.js';
+import { fitBox, focusBox, panBy, quantScale, step, wheelIntent, zoomAt } from './camera.js';
 import {
   BAND_PAD_BOTTOM, BAND_PAD_TOP, BAND_PAD_X, FLOW_LEFT, FLOW_TOP, GAP, HEAD,
   ROW_TITLE_TOP,
@@ -7241,7 +7241,8 @@ function wireCanvas() {
     // холст отримає pointer capture, mouseup прийде на нього, і click народиться
     // на ХОЛСТІ, а не на кнопці — обробник кнопки не вистрілить (виміряно
     // мутаційно), і вона «працює» лише завдяки випадковому шляху через pointerup.
-    if (e.target.closest('.cv-open')) return;
+    // Те саме для «Вмістити все» (`#cv-zoom`): без виходу її клік теж народжувався б на холсті.
+    if (e.target.closest('.cv-open, .cv-zoom')) return;
     /* Шар коментатора живе в `#canvas` (T-45), тож його події доходять сюди.
        `setPointerCapture` нижче забрав би в піна/панелі і `pointerup`, і
        `click` — клік не дійшов би ніколи (та сама пастка, що з `.cv-open`). */
@@ -7315,13 +7316,13 @@ function wireCanvas() {
     if (card) openCard(card);
   });
   canvasEl.addEventListener('wheel', (e) => {
-    /* Колесо над панеллю скарг — це ЇЇ прокрутка, а не зум полотна: у панелі є
+    /* Колесо над панеллю скарг — це ЇЇ прокрутка, а не рух полотна: у панелі є
        стеля висоти й власний скрол, а `preventDefault` нижче забрав би в неї
        колесо цілком — і скарги за стелею стали б недосяжні, тобто стеля просто
        ховала б частину переліку. Панель лежить у канвасі (щоб не їздити зі
        світом), тому її подія сюди й доходить. */
     if (e.target.closest?.('#cv-flow-problems')) return;
-    /* Колесо над панеллю коментатора — ЇЇ прокрутка; над піном — зум полотна, як
+    /* Колесо над панеллю коментатора — ЇЇ прокрутка; над піном — рух і зум полотна, як
        над кадром: пін не сміє красти основний жест. Справжня ціль — всередині
        shadow root, тому `composedPath()[0]`, а не ретаргетований `target`. */
     if (e.target.closest?.('[data-comment-layer]') && !e.composedPath()[0]?.closest?.('.cp')) return;
@@ -7341,10 +7342,22 @@ function wireCanvas() {
        від того, де камера ЗАРАЗ, ламає накопичення щигликів (перевірка P,
        розбіжність була 5.5 раза), а зʼїзд на пів секунди перельоту людина
        довертає тим самим колесом. */
+    const w = wheelIntent(e, r.height);
+    if (w.kind === 'pan') {
+      /* Рух — МИТТЄВО, тим самим шляхом, що й тягнення мишею (`cvx/cvy` + `applyT`),
+         а не через `camTo`: згладжування (~90мс «хвіст») на трекпаді, де події йдуть
+         щокадру, давало б відчуття, що полотно пливе за пальцями. Накопичення при
+         цьому лишається правильним: якщо камера ще їде (зум чи переліт), зсуваємо
+         на (dx, dy) і ПОТОЧНУ позицію, і ЦІЛЬ — цикл доїде туди, куди їхав, але вже
+         зі зсувом, без стрибка, і наступний зум рахується від сумісної цілі. */
+      const now = panBy({ x: cvx, y: cvy, scale: cvscale }, w.dx, w.dy);
+      cvx = now.x; cvy = now.y;
+      if (camTarget) camTarget = panBy(camTarget, w.dx, w.dy);
+      applyT();
+      return;
+    }
     const from = camTarget || { x: cvx, y: cvy, scale: cvscale };
-    const cam = zoomAt(from,
-                       { cx: e.clientX - r.left, cy: e.clientY - r.top, delta: e.deltaY });
-    camTo(cam);
+    camTo(zoomAt(from, { cx: e.clientX - r.left, cy: e.clientY - r.top, delta: w.delta }));
   }, { passive: false });
 
   // Вписати заново при зміні розміру вікна: без цього розгорнуте вікно лишає
@@ -7460,12 +7473,22 @@ function paletteState() {
  *  оголошена іменованою функцією, а не інлайном у `execPaletteAction`, —
  *  щоб мутація «забув перемалювати панель/інспектор після зміни мови» була
  *  видима одним рядком, а не похована в гілці виконання. */
+/* Підпис і підказка полотна «Огляду»: текст ставить код, а не розмітка, щоб мова перемикалась без перезавантаження. */
+function paintCanvasChrome() {
+  const hint = document.getElementById('canvas-hint');
+  if (hint) hint.textContent = t('canvasHint');
+  if (zoomEl) { zoomEl.title = t('fitAll'); zoomEl.setAttribute('aria-label', t('fitAll')); }
+}
+paintCanvasChrome();
+// «Вмістити все»: як після перемикання вигляду — камера знову слідкує за вікном.
+if (zoomEl) zoomEl.addEventListener('click', () => { userMoved = false; fitAll(); });
+
 function switchLang(v) {
   if (v === getLang()) return;      // дропдаун-пункт і так вимкнений, але подвійна безпека дешева
   setLang(v);
   try { localStorage.setItem(LANG_KEY, v); } catch (e) {}
   toast(t('langDone'));
-  paintBar(); renderPanel(); paintInsp();
+  paintBar(); renderPanel(); paintInsp(); paintCanvasChrome();
   /* Екран «Задачі» — окремий вузол зі своєю розміткою: без цього він лишався б
      старою мовою, поки його щось не змусить перемалюватись. */
   if (homeOpen) paintHome();
