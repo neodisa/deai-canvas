@@ -113,35 +113,13 @@ function closeQuietly(store) {
 }
 
 /**
- * Композер коментатора рахує праву межу за ВЛАСНОЮ панеллю (`_panel.show`), а в режимі хоста її нема — панель оболонки
- * стоїть праворуч від полотна, і кнопка «Comment» ховалась би під нею (клік не доходив). Підтискаємо композер до
- * правого краю ПОЛОТНА, щойно він зʼявився: `MutationObserver` відпрацьовує після синхронного `style.left` коментатора.
- * Шар без `_sh` (підставний у юнітах) чи середовище без `MutationObserver` — тихо без підтискання.
- */
-function keepComposeInView(layer, canvasEl) {
-  const sh = layer && layer._sh;
-  if (!sh || typeof MutationObserver !== "function") return;
-  new MutationObserver((list) => {
-    for (const m of list) {
-      for (const n of m.addedNodes) {
-        if (!n.classList || !n.classList.contains("compose")) continue;
-        const r = canvasEl.getBoundingClientRect();
-        const max = r.left + r.width - (n.offsetWidth || 290) - 12;
-        const left = parseFloat(n.style.left);
-        if (Number.isFinite(left) && left > max) n.style.left = `${Math.max(8, max)}px`;
-      }
-    }
-  }).observe(sh, { childList: true });
-}
-
-/**
  * @param env {{
  *   canvasEl: Element, cam: () => {x,y,scale}, cards: () => Array, cardW: () => number,
  *   picked: () => string|null, channel: () => 'local'|'project',
  *   frameKeyOf: (card) => string, shotOf: (card) => object|null,
  *   camTo: (target) => void, focusCard: (card) => void,
  *   audiences: () => Array, onAudience: (ch) => void, fail: (err) => void,
- *   host?: {onReady, onChange, onSelect, onMode},
+ *   host?: {rightInset?, onReady, onChange, onSelect, onMode},
  * }} env
  */
 export function overviewComments(env) {
@@ -393,7 +371,6 @@ export function overviewComments(env) {
       // колбеки панелі оболонки (0.26.0); ручку й панель полотна тримає оболонка
       host: env.host || undefined,
     });
-    keepComposeInView(cl, env.canvasEl);
     tick();
   }
   const fail = (e) => env.fail(e);

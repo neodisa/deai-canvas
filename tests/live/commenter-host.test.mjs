@@ -21,16 +21,17 @@ test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser?.close(); });
 
 /** `seed` — коментарі, що вже лежать у сховищі; `withHost` — чи передати `host`. */
-async function boot({ withHost, seed = [], version = "2", throwOnChange = false, spy = false }) {
+async function boot({ withHost, seed = [], version = "2", throwOnChange = false, spy = false, rightInset }) {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.setContent(PAGE);
   await page.addScriptTag({ content: BUNDLE });
-  await page.evaluate(({ withHost, seed, version, throwOnChange, spy }) => {
+  await page.evaluate(({ withHost, seed, version, throwOnChange, spy, rightInset }) => {
     window.__ev = [];
     const mem = seed.slice();
     const store = { load: () => mem.slice(), save: (l) => { mem.length = 0; mem.push(...l); } };
     window.__mem = mem;
     const host = withHost ? {
+      ...(rightInset === undefined ? {} : { rightInset: () => rightInset }),
       onReady: () => window.__ev.push(["ready"]),
       onChange: (s) => { if (throwOnChange) throw new Error("хост зламався"); window.__ev.push(["change", s]); },
       onSelect: (id) => window.__ev.push(["select", id]),
@@ -39,7 +40,7 @@ async function boot({ withHost, seed = [], version = "2", throwOnChange = false,
     window.__snapCalls = 0;
     if (spy) { const orig = window.CommentLayer.snapshot; window.CommentLayer.snapshot = function (...a) { window.__snapCalls++; return orig.apply(this, a); }; }
     window.CommentLayer.init({ projectId: "t", storage: store, version, user: { name: "Тест" }, host });
-  }, { withHost, seed, version, throwOnChange, spy });
+  }, { withHost, seed, version, throwOnChange, spy, rightInset });
   return page;
 }
 const root = (page, sel) => page.evaluate((s) => {
@@ -163,5 +164,55 @@ test("з host: onChange, що кидає виняток, не ламає ні in
   await addComment(page, "Пін попри збій хоста");
   assert.equal(await page.evaluate(() => window.__mem.length), 1);
   assert.equal(await page.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".pin")), true);
+  await page.close();
+});
+
+test("з host.rightInset: композер біля правого краю не заходить під панель хоста (правий край ≤ innerWidth − 400)", async () => {
+  const page = await boot({ withHost: true, rightInset: 400 });
+  await page.evaluate(() => {
+    const p = document.createElement("p");
+    p.id = "r"; p.textContent = "Біля краю";
+    p.style.cssText = "position:absolute;right:10px;top:200px;width:160px;margin:0";
+    document.body.appendChild(p);
+    window.CommentLayer.setCommentMode(true);
+  });
+  await page.click("#r");
+  await page.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose"));
+  const edge = await page.evaluate(() => ({
+    right: document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose").getBoundingClientRect().right,
+    w: window.innerWidth }));
+  assert.ok(edge.right <= edge.w - 400 + 0.5, `композер заходить під панель хоста: right=${edge.right}, innerWidth=${edge.w}`);
+  await page.close();
+});
+
+test("з host: клавіші з поля ХОСТА (textarea поза шаром) не належать коментатору — Esc лишає режим; зі своєї форми — шарований Esc", async () => {
+  const page = await boot({ withHost: true });
+  await page.evaluate(() => {
+    const t = document.createElement("textarea"); t.id = "hostfield"; document.body.appendChild(t);
+    window.CommentLayer.setCommentMode(true);
+  });
+  const modes = () => page.evaluate(() => window.__ev.filter((e) => e[0] === "mode").map((e) => e[1]));
+  assert.deepEqual(await modes(), [true]);
+  await page.focus("#hostfield");
+  await page.keyboard.press("Escape");
+  assert.deepEqual(await modes(), [true], "Esc із поля хоста вийшов із режиму коментування");
+  // Власна форма коментатора: Esc закриває лише її, режим лишається; наступний Esc (фокус на сторінці) — виходить.
+  await page.click("#p");
+  await page.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea"));
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => !!document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose")), false);
+  assert.deepEqual(await modes(), [true]);
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press("Escape");
+  assert.deepEqual(await modes(), [true, false]);
+  await page.close();
+});
+
+test("з host: destroy() не кличе колбеків (хост сам почав знищення) — onMode(false) не летить", async () => {
+  const page = await boot({ withHost: true });
+  await page.evaluate(() => window.CommentLayer.setCommentMode(true));
+  const n = await page.evaluate(() => window.__ev.length);
+  await page.evaluate(() => window.CommentLayer.destroy());
+  assert.deepEqual(await page.evaluate((k) => window.__ev.slice(k), n), [], "destroy() у режимі хоста кликав колбеки");
   await page.close();
 });

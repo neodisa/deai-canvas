@@ -845,6 +845,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
            вікні оболонки (ми вішаємось на всі same-origin предки нижче) і
            відкривав свою невидиму панель поверх полотна. */
         if (this.anchors ? !this.anchors.active() : hiddenFrame()) return;
+        /* Хост: клавіші з полів ХОСТА (пошук, редагування в його панелі — поза нашим shadow root) — його, не наші:
+           інакше Esc у його полі виходив би з режиму коментування. Своя форма/редагування лишаються за шарованим Escape. */
+        if (this._hostOpts) { const o = keyOrigin(e); if (isTypingField(o) && !(this._sh && this._sh.contains(o))) return; }
         const eaten = () => { e.preventDefault(); e.stopImmediatePropagation(); }; // ours — the host must not also act on it
         if (e.key === 'Escape') {
           const lb = this._sh.querySelector('.cllb');
@@ -1120,7 +1123,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       /* Права межа — за СПРАВЖНІМИ ширинами композера й панелі. Числа 260/340
          DOM-режиму менші за 290/372, і біля панелі кнопка «Comment» ховалась під
          нею — знайдено живим тестом K (клік по «Comment» не доходив). */
-      const pw = this._panel.classList.contains('show') ? this._panel.getBoundingClientRect().width : 0;
+      const pw = this._hostOpts ? this._hostInset() : (this._panel.classList.contains('show') ? this._panel.getBoundingClientRect().width : 0);
       const bw = box.offsetWidth || 290;
       box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pw - bw - 12)) + 'px';
       const top = composeTop({ top: r.top, bottom: r.top + r.height }, box.offsetHeight || 170,
@@ -1177,7 +1180,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const r = el.getBoundingClientRect();
       const box = document.createElement('div');
       box.className = 'compose';
-      const rightBound = window.innerWidth - 260 - (this._panel.classList.contains('show') ? 340 : 0);
+      const rightBound = window.innerWidth - 260 - (this._hostOpts ? this._hostInset() : (this._panel.classList.contains('show') ? 340 : 0));
       box.style.left = Math.max(8, Math.min(r.left, rightBound)) + 'px';
       const m = extra && extra.mode;
       // What is being commented on — shown in every mode (like the text quote), so the target is always clear.
@@ -1189,6 +1192,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       box.innerHTML = `<div class="csel">${note}</div><textarea placeholder="Leave a change request…"></textarea>
         <div class="row"><button class="cancel">Cancel</button><button class="primary save">Comment</button></div>`;
       this._sh.appendChild(box);
+      /* Хост: праву межу рахуємо за СПРАВЖНЬОЮ шириною композера (260 — менше за неї) і за місцем, яке тримає хост. */
+      if (this._hostOpts) box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - this._hostInset() - (box.offsetWidth || 290) - 12)) + 'px';
       // Vertical placement: below the element, but flip above / clamp so it never runs off-screen.
       const top = composeTop(r, box.offsetHeight || 170, window.innerHeight, this._composeFloor());
       box.style.top = top + 'px';
@@ -1396,7 +1401,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       const r = pin.getBoundingClientRect(), gap = 10, pad = 10;
       const pw = pop.offsetWidth, ph = pop.offsetHeight;
       let left = r.right + gap;
-      if (left + pw > window.innerWidth - pad) left = r.left - pw - gap;   // flip to the left near the edge
+      if (left + pw > window.innerWidth - this._hostInset() - pad) left = r.left - pw - gap;   // flip to the left near the edge
       left = Math.max(pad, left);
       let top = r.top + r.height / 2 - ph / 2;
       top = Math.max(pad, Math.min(top, window.innerHeight - ph - pad));
@@ -1705,6 +1710,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     getComments() { return this.comments.map(stripRuntime); },
 
     /* ---- API хоста (Deai 0.26.0) ---- */
+    /** Скільки px справа у вікні коментатора займає ХОСТ (його панель): композер і підказки не лягають під неї. Без хоста,
+     *  без колбека, нечисло чи виняток — 0. */
+    _hostInset() {
+      const h = this._hostOpts;
+      if (!h || typeof h.rightInset !== 'function') return 0;
+      try { const n = +h.rightInset(); return Number.isFinite(n) && n > 0 ? n : 0; } catch (e) { return 0; }
+    },
     _emit(name, arg) {
       const h = this._hostOpts;
       if (!h || typeof h[name] !== 'function') return;
@@ -1906,6 +1918,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     /* Режим коментування — ПЕРШИМ: `_armComment(false)` каже хосту `armed(false)`.
        Без цього прапорець оболонки лишався піднятим, і клік по кадру після
        перемикання каналу вже не відкривав кадр (ревʼю T-45, D3). */
+    /* Хост сам почав знищення (зміна каналу, вихід з «Огляду») і про нього знає: колбеків із destroy нема — інакше
+       `onMode(false)` закривав би панель оболонки при кожному перемиканні каналу. */
+    this._hostOpts = null;
     if (this.commentMode) this._armComment(false);
     this._dead = true;   // підписки сховища без відписки гасить _onExternalChange
     if (this.store && typeof this.store.close === 'function') { try { this.store.close(); } catch (e) {} }

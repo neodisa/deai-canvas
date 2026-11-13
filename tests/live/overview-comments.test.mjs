@@ -569,8 +569,16 @@ test("P (D3): перемикання каналу посеред режиму к
   await page.keyboard.press("c");
   await page.waitForTimeout(450);
   await switchAudience(page, "project");
+  /* 0.26.0: панель при зміні каналу лишається відкритою (destroy у режимі хоста без колбеків), а новий шар перезвімкнув
+     режим — «панель відкрита ⇔ режим увімкнено». Раніше режим мусив бути вимкнений; охорона та сама (прапорець не
+     «залипає»): після закриття панелі прапорець гасне, і клік по кадру знову відкриває кадр. */
+  assert.equal(await shellPanelOpen(page), true, "зміна каналу закрила панель");
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true,
+    "новий шар не перезвімкнув режим при відкритій панелі");
+  await page.keyboard.press("c");
+  await page.waitForFunction(() => document.getElementById("cmt-panel").hidden);
   assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), false,
-    "режим коментування лишився після знищення інстансу");
+    "режим коментування лишився після закриття панелі");
   // клік по кадру знову відкриває кадр
   const card = await page.evaluate(() => { const r = document.querySelector('.cv-card[data-key="poshuk"] .cv-card-body').getBoundingClientRect(); return { x: r.left + 40, y: r.top + 40 }; });
   await pressAt(page, card.x, card.y);

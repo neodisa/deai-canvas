@@ -17,6 +17,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { MODULE_ADAPTER_GLOB, hermeticLiga } from "./_liga-supabase.mjs";
 import { seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 
 const PORT_BASE = 26100;
@@ -130,7 +131,7 @@ test("4: «Закрити» → розділ «Закриті (1)», числа 
   await page.click('#cmt-panel .cmt-fold[data-val="closed"]');
   await page.click('#cmt-panel [data-act="cmtreopen"]');
   await until(async () => (await islCount(page)) === "1");
-  assert.equal(await page.$('#cmt-panel .cmt-fold[data-val="closed"]'), null, "після «Повернути» закритих не лишилось");
+  assert.equal(!!(await page.$('#cmt-panel .cmt-fold[data-val="closed"]')), false, "після «Повернути» закритих не лишилось");
 });
 
 test("5: «Редагувати» → textarea.cmt-edit → нова думка → «Зберегти» → картка й файл задачі з новим текстом", async () => {
@@ -146,14 +147,14 @@ test("5: «Редагувати» → textarea.cmt-edit → нова думка 
   assert.equal(await page.inputValue("#cmt-panel textarea.cmt-edit"), "Зробити значно ширшим", "чернетка редагування загубилась на перемальовці");
   await page.click('#cmt-panel [data-act="cmteditsave"]');
   await until(async () => (await cardTexts(page)).join() === "Зробити значно ширшим");
-  assert.equal(await page.$("#cmt-panel textarea.cmt-edit"), null);
+  assert.equal(!!(await page.$("#cmt-panel textarea.cmt-edit")), false);
   const file = path.join(dir, ".dc-local-comments.json");
   await until(() => { try { return JSON.parse(readFileSync(file, "utf8")).some((c) => c.text === "Зробити значно ширшим"); } catch (e) { return false; } });
 });
 
 test("6: клік по піну в рамці → .cmt-card--sel на цій картці", async () => {
   const { page, frame } = A;
-  assert.equal(await page.$("#cmt-panel .cmt-card--sel"), null, "до кліку вибраної картки нема");
+  assert.equal(!!(await page.$("#cmt-panel .cmt-card--sel")), false, "до кліку вибраної картки нема");
   await frame.evaluate(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".pin").click());
   await page.waitForSelector("#cmt-panel .cmt-card--sel");
   assert.equal(await panelOpen(page), true);
@@ -470,4 +471,39 @@ test("19: назад у «Макет» — панель лишається ві�
   await page.evaluate(() => window.postMessage({ type: "dc-comments", ev: "mode", on: false }, "*"));
   await settle(page);
   assert.equal(await panelOpen(page), true);
+});
+
+test("20: «Огляд» — зміна каналу з відкритою панеллю: панель лишається, новий шар знову в режимі, картки — нового каналу (і назад)", async (t) => {
+  const { dir } = t45Task();
+  const server = await startServer(dir, { portBase: OVR_PORT_BASE + 50, title: "Огляд-канал", supabase: true });
+  t.after(() => server.child.kill());
+  const comments = await seedPins(browser, server.url);
+  assert.ok((await shootAll(server.url)).ok);
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  t.after(() => page.close());
+  /* Канал «Команда» ЛІГИ — без мережі: заглушка supabase-js (порожня база), справжній `supabase.min.js` модуля підмінено порожнім. */
+  await hermeticLiga(page);
+  await page.route(MODULE_ADAPTER_GLOB.replace("adapter.js", "supabase.min.js"), (r) => r.fulfill({ status: 200, contentType: "application/javascript", body: "" }));
+  await page.addInitScript(() => {
+    window.supabase = { createClient: () => {
+      const q = { select() { return q; }, eq() { return q; }, in() { return q; }, delete() { return q; },
+        order() { return Promise.resolve({ data: [], error: null }); }, upsert: async () => ({ error: null }) };
+      return { from: () => q, channel: () => ({ on() { return this; }, subscribe() { return this; } }), removeChannel() {} };
+    } };
+  });
+  await page.goto(`${server.url}/app/`);
+  await page.getByRole("button", { name: /Огляд/ }).click();
+  await page.locator(".cv-card img").first().waitFor();
+  await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelectorAll(".cp").length);
+  await page.keyboard.press("c");
+  await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === comments.length);
+  const armed = () => page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting"));
+  for (const [ch, n] of [["project", 0], ["local", comments.length]]) {
+    await page.click(`#cmt-panel [data-act="cmtch"][data-val="${ch}"]`);
+    await page.waitForFunction(() => { const hs = document.querySelectorAll("#canvas [data-comment-layer]"); return hs.length === 1 && hs[0].shadowRoot.querySelector(".handle"); });
+    await until(async () => (await page.$$("#cmt-panel .cmt-card")).length === n);
+    assert.equal(await panelOpen(page), true, `зміна каналу на ${ch} закрила панель`);
+    await until(armed);   // новий шар знову в режимі коментування
+    assert.equal(await page.$eval(`#cmt-panel [data-act="cmtch"][data-val="${ch}"]`, (b) => b.getAttribute("aria-pressed")), "true");
+  }
 });

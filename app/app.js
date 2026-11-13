@@ -1848,15 +1848,6 @@ function typingIn(ev, doc) {
   return isEd(o) || isEd(a);
 }
 const frameTyping = (ev) => typingIn(ev, frame.contentDocument);
-/* Esc у панелі оболонки на «Огляді». Коментатор полотна живе в ЦЬОМУ вікні й слухає Escape на `window` у фазі захоплення
-   (шаровано: лайтбокс → форма → режим → панель); без цього слухача Esc у полі редагування картки доходив би до нього
-   першим, виходив із режиму й закривав усю панель разом із недописаною правкою. Реєструється при завантаженні, тобто РАНІШЕ
-   за слухача коментатора (той — при `init`), тож перехоплює першим: Esc із фокусом у панелі — справа панелі. */
-window.addEventListener('keydown', (ev) => {
-  if (ev.key !== 'Escape' || mode !== 'canvas' || !cmtOpen || !cmtEl.contains(document.activeElement)) return;
-  ev.stopImmediatePropagation();
-  if (cmtEditing && !ev.isComposing) { ev.preventDefault(); cmtEditing = null; cmtDraft = null; paintComments(); }
-}, true);
 function frameCmtKey(ev) {
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
   if (frameTyping(ev)) return;
@@ -5247,6 +5238,8 @@ const ovc = overviewComments({
   onArmed: (on) => { commentArmed = !!on; canvasEl.classList.toggle('cv-commenting', commentArmed); },
   /* Панель коментарів — оболонки (0.26.0): коментатор полотна живе в цьому ж вікні й кличе приймач напряму. */
   host: {
+    /* Скільки справа у вікні займає панель оболонки: композер коментатора не лягає під неї. */
+    rightInset: () => (cmtOpen && !cmtEl.hidden ? cmtEl.getBoundingClientRect().width : 0),
     /* `onReady` летить ВСЕРЕДИНІ `init()`, коли `ovc.layer` ще не присвоєно (присвоєння — після повернення з `init`):
        мікрозадача дає присвоїти, і `cmtLayer()` уже бачить шар (знімок, режим коментування при відкритій панелі). */
     onReady: () => queueMicrotask(() => onCommentsEvent('canvas', { ev: 'ready' })),
