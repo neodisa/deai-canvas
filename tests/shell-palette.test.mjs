@@ -776,12 +776,12 @@ test("простори: «Підключення простору «A»» для
 test("простори: «Підключення простору» — підпис в обох мовах, ім'я екрановане, пошук знаходить за назвою екрана", () => {
   const acts = paletteActions(S({ spaces: [{ id: "a", name: "<b>A</b>" }, { id: "b", name: "B" }], spaceId: "a" }));
   const html = paletteListHTML(acts, "", 0);
-  assert.match(html, /<span>Підключення простору «&lt;b&gt;A&lt;\/b&gt;»<\/span>/);
+  assert.match(html, /<span>Налаштування простору «&lt;b&gt;A&lt;\/b&gt;»<\/span>/);
   assert.doesNotMatch(html, /<b>A<\/b>/);
   const plain = paletteActions(S({ spaces: SPS, spaceId: "a" }));
   assert.deepEqual(filterActions(plain, "підключення").map((a) => a.id), ["space-conn"]);
   setLang("en");
-  assert.match(paletteListHTML(plain, "", 0), /<span>Connections of the space “A”<\/span>/);
+  assert.match(paletteListHTML(plain, "", 0), /<span>Settings of the space “A”<\/span>/);
   assert.deepEqual(filterActions(plain, "connections").map((a) => a.id), ["space-conn"]);
 });
 

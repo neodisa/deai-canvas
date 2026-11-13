@@ -43,7 +43,7 @@ const btnText = (h, act) => {
 
 test("сторінка: заголовок, тека, секції в порядку ролей, рядок «Зараз», агент з id простору", () => {
   const h = connPageHTML(view());
-  assert.match(h, /Підключення · Studio/);
+  assert.match(h, /Налаштування · Studio/);
   assert.match(h, /\/u\/work\/studio\/space\.json/);
   const order = ["Публікація", "Командні коментарі", "Токени дизайн-системи"].map((s) => h.indexOf(`>${s}<`));
   assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], String(order));

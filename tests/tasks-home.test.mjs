@@ -467,7 +467,7 @@ test("простір без дашборда: заголовок «Задачі 
    (`flex-wrap:wrap`, див. `tests/spaces-css.test.mjs`) переносить під заголовок обидві кнопки разом, а не по одній. */
 test("голова простору без дашборда: «Підключення» поряд із «Нова задача»; простір ЛІГА — без змін", () => {
   const off = homeHTML(UI(), D_OFF());
-  assert.match(off, /<div class="th-head-acts"><button class="ctl ctl--out" data-th="conn">[\s\S]*?Підключення<\/button><button class="ctl ctl--pri" data-th="newtask">/);
+  assert.match(off, /<div class="th-head-acts"><button class="ctl ctl--out" data-th="conn">[\s\S]*?Налаштування<\/button><button class="ctl ctl--pri" data-th="newtask">/);
   const liga = homeHTML(UI(), { ...DATA, space: { name: "Liga", capabilities: WITH_DASH } });
   assert.doesNotMatch(liga, /data-th="conn"/);
   /* Кнопка з іконкою `sliders`, а голова ЛІГА — як була: без обгортки й без `th-head`. */
@@ -492,10 +492,10 @@ test("«Підключення» в голові — і поки дані ван
   assert.doesNotMatch(homeGridHTML(UI(), D_OFF()), /data-th="conn"/);
 });
 
-test("«Підключення» в голові — англійською «Connections»", () => {
+test("«Підключення» в голові — англійською «Settings»", () => {
   setLang("en");
   try {
-    assert.match(homeHTML(UI(), D_OFF()), /data-th="conn">[\s\S]*?Connections<\/button>/);
+    assert.match(homeHTML(UI(), D_OFF()), /data-th="conn">[\s\S]*?Settings<\/button>/);
   } finally { setLang("uk"); }
 });
 

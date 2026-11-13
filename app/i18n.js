@@ -855,10 +855,10 @@ const UK = {
   // вбудованих модулів (назва, опис, підписи полів), кодів перевірки (`cnErr*`) і відмов HTTP (`cnRef*`). Ключі кодів
   // і ролей приходять із чистої моделі ІМЕНАМИ (`cn…`), а `t()` кличе лише розмітка. Чужі модулі (3c) підписи беруть
   // зі свого маніфесту, тож тут їх нема.
-  spaceConn: (name) => `Підключення простору «${name}»`,
-  cnTitle: 'Підключення',
+  spaceConn: (name) => `Налаштування простору «${name}»`,
+  cnTitle: 'Налаштування',
   cnOpen: 'Підключення…',
-  cnTitleIn: (name) => `Підключення · ${name}`,
+  cnTitleIn: (name) => `Налаштування · ${name}`,
   cnLead: 'Модулі цього простору: куди публікувати превʼю, де зберігати коментарі команди, звідки брати токени. Без жодного модуля канвас працює.',
   cnLeadWhere: (path) => `Налаштування — у ${path}/space.json, секрети — окремо, у сховищі Deai на цьому компʼютері.`,
   cnLoading: 'Завантажую модулі…',
@@ -1266,6 +1266,18 @@ const UK = {
   upCode_error: 'Оновлення не вдалося через внутрішню помилку. Спробуйте ще раз.',
   // feedback-view.js, shell-bar.js, shell-palette.js — відгук (0.23.0): кнопка «Відгук» у смузі, ⌘K «Баг / ідея», діалог з переглядом того, що піде.
   fbOpen: 'Баг / ідея',
+  // tabs-view.js, island.js — рядок вкладок і острівець (0.25.0).
+  tabOpen: 'Відкрити задачу',
+  tabClose: (id) => `Закрити вкладку ${id}`,
+  tabTitle: (id, title) => (title ? `${id} · ${title}` : id),
+  settings: 'Налаштування',
+  logoTitle: 'Усі задачі · ⌘K — усі дії',
+  fbIsland: 'Баг / ідея',
+  inspectorKey: 'Інспектор · I',
+  claudeTab_working: 'Claude працює',
+  claudeTab_waiting: 'Claude чекає на вас',
+  claudeTab_blocked: 'Claude заблоковано',
+  claudeTab_done: 'Claude завершив',
   fbTitle: 'Відгук про Deai Canvas',
   fbKind: 'Тип відгуку',
   fbKindBug: 'Баг',
@@ -1898,10 +1910,10 @@ const EN = {
   // roles, the built-in modules (name, description, field labels), the check codes (`cnErr*`) and HTTP refusals
   // (`cnRef*`). The pure model hands over KEY NAMES; only the markup calls `t()`. Foreign modules (3c) take their
   // labels from their own manifest, so they are not here.
-  spaceConn: (name) => `Connections of the space “${name}”`,
-  cnTitle: 'Connections',
+  spaceConn: (name) => `Settings of the space “${name}”`,
+  cnTitle: 'Settings',
   cnOpen: 'Connections…',
-  cnTitleIn: (name) => `Connections · ${name}`,
+  cnTitleIn: (name) => `Settings · ${name}`,
   cnLead: 'Modules of this space: where to publish, where team comments live, where tokens come from. The canvas works without any module.',
   cnLeadWhere: (path) => `Settings live in ${path}/space.json; secrets are kept apart, in the Deai store on this computer.`,
   cnLoading: 'Loading modules…',
@@ -2306,6 +2318,18 @@ const EN = {
   upCode_error: 'The update failed because of an internal error. Try again.',
   // feedback-view.js, shell-bar.js, shell-palette.js — feedback (0.23.0): the "Feedback" bar button, ⌘K "Bug / idea", a dialog that previews what will be sent.
   fbOpen: 'Bug / idea',
+  // tabs-view.js, island.js — the tab row and the island (0.25.0).
+  tabOpen: 'Open a task',
+  tabClose: (id) => `Close tab ${id}`,
+  tabTitle: (id, title) => (title ? `${id} · ${title}` : id),
+  settings: 'Settings',
+  logoTitle: 'All tasks · ⌘K — all actions',
+  fbIsland: 'Bug / idea',
+  inspectorKey: 'Inspector · I',
+  claudeTab_working: 'Claude is working',
+  claudeTab_waiting: 'Claude is waiting for you',
+  claudeTab_blocked: 'Claude is blocked',
+  claudeTab_done: 'Claude is done',
   fbTitle: 'Feedback on Deai Canvas',
   fbKind: 'Feedback type',
   fbKindBug: 'Bug',

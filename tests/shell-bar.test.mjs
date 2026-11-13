@@ -730,7 +730,7 @@ test("дропдаун просторів: «Connections…» англійськ
    лишається (вона про задачу, з якої прийшли, а не про сторінку). */
 test("смуга на сторінці «Підключення»: плоска крошка «Підключення», «назад до задачі» лишається", () => {
   const h = html({ space: SP(), homeOpen: true, homePage: "conn", taskId: "t1" });
-  assert.match(h, /crumb crumb--flat[\s\S]*?Підключення</);
+  assert.match(h, /crumb crumb--flat[\s\S]*?Налаштування</);
   assert.doesNotMatch(h, /<span class="txt">Задачі</);
   assert.match(h, /data-act="back"/);
   /* Екран, а не смуга задачі: зони 2 і 3 порожні, як на «Задачах». Логотип тут НЕ «поточний»: сторінка названа крошкою. */
