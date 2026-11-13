@@ -545,7 +545,7 @@ test("8: запис модулів → логотип → ІНША задача:
   assert.equal(await frameMark(page), "ЗАДАЧА-2", "у рамці — документ нової задачі, а не 404 старого");
   assert.equal(await frameLoads(page), 1, "рамка завантажилась рівно один раз після виходу");
   assert.equal(commentedRequests(requests) - before, 1, "рівно один запит /commented");
-  assert.equal(await page.locator("#bar .crumb--task .txt").textContent(), "t2", "смуга й рамка — про одну задачу");
+  assert.equal(await page.locator("#bar .crumb--title .txt").textContent(), "Інша", "смуга й рамка — про одну задачу");
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
 });

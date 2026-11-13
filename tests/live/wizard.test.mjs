@@ -75,7 +75,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText, goTasks } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText, goTasks, waitBarReady } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не збігається з
@@ -263,7 +263,8 @@ async function boot(t, { spaces = [], viewport = VIEW } = {}) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await page.goto(`${server.url}/app/`);
-  await page.waitForSelector(spaces.length ? "#bar .space-chip" : "#tasks-home .th-welcome", { timeout: 15000 });
+  /* 0.25.0: на виді задачі фішки простору нема (вона на смузі «Задач») — «готово» каже `waitBarReady`. */
+  if (spaces.length) await waitBarReady(page); else await page.waitForSelector("#tasks-home .th-welcome", { timeout: 15000 });
   await watchLeaks(page);
   await plantLeak(page);
   await plantUrlLeak(page, requests);
@@ -403,7 +404,7 @@ test("W1: перший запуск — «Особисте», заміна по�
   await page.click('#tasks-home .wz [data-a="ok"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
   assert.equal((await (await fetch(`${url}/api/tasks`)).json()).current, "onboarding");
-  await waitText(page, "#bar .space-name", "Особисте");
+  await waitText(page, "#bar .crumb--title .txt", "Onboarding");
   /* Підсумок: «Підключення» нового простору називає нового постачальника. Це свідчить про запис і читання з сервера, а НЕ про
      легкий шлях `afterModulesChange`: вхід на екран і так перечитує простори, тож у того живого свідка нема (див. «Вижили»). */
   await goTasks(page);
@@ -479,12 +480,27 @@ test("W3: крок 1 — відмова (перетин) лишає форму, 
   assert.equal(await page.getAttribute("#sp-path", "aria-invalid"), null, "правка теки знімає позначку");
   assert.equal((await spacesApi(url)).spaces.length, 1, "відмовлений простір не зʼявився");
 
+  /* Майстер відкрито з екрана «Задачі» (фішка простору живе лише там) — «Скасувати» вертає туди ж, фокус — на фішці. */
   await page.click('#tasks-home .wz [data-a="cancel"]');
-  await page.waitForFunction(() => !document.querySelector(".wz") && !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await page.waitForFunction(() => !document.querySelector(".wz") && document.body.classList.contains("home-open"), null, { timeout: 15000 });
   await page.waitForFunction(() => document.activeElement === document.querySelector("#bar .space-chip"), null, { timeout: 5000 })
     .catch(() => { throw new Error("«Скасувати» не вернуло фокус на фішку простору"); });
   assert.equal((await spacesApi(url)).spaces.length, 1);
-  await waitText(page, "#bar .crumb--task .txt", "t1");
+
+  /* Майстер із ⌘K на виді задачі (оверлей був закритий): «Скасувати» вертає на полотно задачі, а фокус — на її вкладку
+     (фішки на цьому виді нема; `leaveHome` ставить фокус на активну вкладку). */
+  await page.click('#tabs [data-act="tab"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await page.keyboard.press("Control+k");
+  await page.locator("#palq").waitFor({ state: "visible" });
+  await page.fill("#palq", "Новий простір");
+  await page.keyboard.press("Enter");
+  await step(page, 1);
+  await page.click('#tasks-home .wz [data-a="cancel"]');
+  await page.waitForFunction(() => !document.querySelector(".wz") && !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.activeElement === document.querySelector('#tabs [data-act="tab"][aria-current]'), null, { timeout: 5000 })
+    .catch(() => { throw new Error("«Скасувати» з полотна не вернуло фокус на активну вкладку"); });
+  await waitText(page, "#bar .crumb--title .txt", "Задача");
 
   /* Зайнята форма: запит створення летить повільно. */
   await page.route("**/api/space-new", async (route) => { await sleep(1500); await route.continue(); });
@@ -815,7 +831,7 @@ test("W14: «Без модуля» у ролі публікації — рядо
   const barActs = () => page.$$eval("#bar [data-act], #bar [data-dd]", (els) => els.map((e) => e.dataset.act || `dd:${e.dataset.dd}`));
   /* Позитивний контроль смуги: у просторі з публікацією (Studio, типовий постачальник) кнопки публікації Є — інакше
      перевірка «нема» нижче збігалась би й зі зламаним способом їх шукати. */
-  await page.waitForSelector("#bar .crumb--task");
+  await page.waitForSelector("#bar .crumb--title");
   const control = await barActs();
   assert.ok(control.includes("publish") && control.includes("dd:pub"), `свідок: смуга простору з публікацією мусить мати кнопки публікації: ${control}`);
 
@@ -842,8 +858,7 @@ test("W14: «Без модуля» у ролі публікації — рядо
   await page.fill("#tf-title", "Без публікації");
   await next(page);
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
-  await waitText(page, "#bar .space-name", "Без публікації");
-  await page.waitForSelector("#bar .crumb--task");
+  await waitText(page, "#bar .crumb--title .txt", "Без публікації");
   const acts = await barActs();
   assert.ok(!acts.includes("publish") && !acts.includes("dd:pub"), `смуга новоствореної задачі лишила кнопки публікації: ${acts}`);
   assert.deepEqual(outside, []);

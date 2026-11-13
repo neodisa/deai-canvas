@@ -135,6 +135,14 @@ const markLoaded = (page, mark) => page.waitForFunction((m) => {
   return !!(doc && doc.body && doc.body.dataset.mark === m && f.contentWindow.CanvasInspector);
 }, mark, { timeout: 15000 });
 
+/* Фішка простору (0.25.0) живе лише на смузі екрана «Задачі»: назву простору читаємо звідти й вертаємось на вкладку задачі. */
+async function spaceNameOnTasks(page, want) {
+  await goTasks(page);
+  await waitText(page, "#bar .space-name", want);
+  await page.click('#tabs [data-act="tab"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+}
+
 async function turnInspectorOn(page) {
   await page.waitForFunction(() => {
     const f = document.getElementById("frame");
@@ -247,12 +255,14 @@ test("T1 висячий current на старті: екран лікується
   const tr = trackTuner(page);
   await page.reload();
   await markLoaded(page, "X");
-  await waitText(page, "#bar .space-name", "P");
+  await waitBarReady(page);
   await page.waitForTimeout(500);
   /* Перший GET — до першого рендера (задачі нема), другий — після лікування, коли пер-задачний
      стан скинуто й пакет читається ЗНОВУ. Третій означав би зайве читання, нуль чи один —
      що пакет вилікуваної задачі не прочитано взагалі. */
   assert.equal(tr.gets.length, 2, `GET /api/tuner після лікування: ${tr.gets.length} (очікувалось рівно 2)`);
+  await spaceNameOnTasks(page, "P");
+  await markLoaded(page, "X");
 
   await turnInspectorOn(page);
   await pin(page, "#target");
@@ -280,7 +290,6 @@ test("T2 агент (або інша вкладка) перемкнув ПРОС
   await page.waitForTimeout(600);
   await page.click('#bar [data-act="mode"][data-val="layout"]');
   await markLoaded(page, "Y");
-  await waitText(page, "#bar .space-name", "Q");
   assert.ok(tr.gets.length >= 1, "пакет нової задачі не читався після зміни простору");
 
   await turnInspectorOn(page);
@@ -290,6 +299,7 @@ test("T2 агент (або інша вкладка) перемкнув ПРОС
   assert.ok("base_rev" in tr.posts[tr.posts.length - 1], "запис у новому просторі без base_rev");
   assert.deepEqual(props(py), ["padding-left"], "правка з пакета ЧУЖОЇ задачі протекла в пакет Y");
   assert.equal(pkg(X.dir).editCount, 1, "пакет задачі старого простору хтось чіпав");
+  await spaceNameOnTasks(page, "Q");                          // смуга «Задач» теж показує новий простір
 });
 
 test("T3 повтор після збою читання (смуга помилки → «Спробувати ще»): пакет перечитано, запис іде з base_rev, не затирає", async (t) => {
@@ -562,6 +572,7 @@ test("T7 фокус після діалогу: фішка («Скасувати�
   };
   const openDd = async () => {
     await goTasks(page);
+    await page.waitForSelector("#tasks-home .th-card");        // екран догрузив огляд — смуга далі не перемальовується
     await page.click("#bar .space-chip");
     await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   };
@@ -614,18 +625,17 @@ test("T7 фокус після діалогу: фішка («Скасувати�
   await page.waitForFunction(() => !document.querySelector('form[data-form="task"]'));
   assert.equal((await active(page))?.th, "newtask", `після «Скасувати» у формі задачі фокус не на кнопці «Нова задача»: ${JSON.stringify(await active(page))}`);
 
-  /* (iii) фокус У РАМЦІ макета: діалог (що лишився, — «Назва й колір…») закривається, фокус лишається там, куди людина
-     його віддала. «Новий простір» тут уже не діалог, а сторінка майстра: рамки під нею нема, охоронець — про діалог. */
-  await page.click('#tabs [data-act="tab"]');
-  await page.waitForFunction(() => !document.body.classList.contains("home-open"));
+  /* (iii) фокус НЕ крадеться: діалог (що лишився, — «Назва й колір…») закривається, фокус лишається там, куди людина його віддала.
+     З 0.25.0 фішка простору живе лише на екрані «Задачі», а діалог відкривається тільки нею, тож рамки макета під діалогом нема
+     (вона схована) — фокус віддаємо картці задачі на тому ж екрані. «Новий простір» тут уже не діалог, а сторінка майстра. */
   await openDd();
   await page.click('.dd--spaces [data-act="spaceedit"]');
   await page.waitForSelector('form[data-mode="edit"]');
-  await page.evaluate(() => document.getElementById("frame").focus());
-  assert.equal((await active(page))?.id, "frame", "свідок: фокус не перейшов у рамку");
+  await page.evaluate(() => document.querySelector("#tasks-home .th-card").focus());
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("th-card")), true, "свідок: фокус не перейшов на картку");
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await page.waitForFunction(() => !document.querySelector('form[data-form="space"]'));
-  assert.equal((await active(page))?.id, "frame", "діалог украв фокус у рамки макета");
+  await page.waitForFunction(() => !document.querySelector('form[data-mode="edit"]'));
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("th-card")), true, "діалог украв фокус у картки задачі");
 });
 
 test("T7b майстер не перемальовується на focus вікна: привітання → майстер → focus → той самий вузол, нуль перечитувань → «Скасувати» → фокус на кнопці привітання", async (t) => {
@@ -749,7 +759,7 @@ test("T10 агент завів першу задачу в порожньому 
 
   await page.click('#tasks-home .th-card[data-id="t1"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"));
-  await waitText(page, "#bar .crumb--task .txt", "t1");
+  await waitText(page, "#bar .crumb--title .txt", "T1");
   await turnInspectorOn(page);
   const box = await page.frameLocator("#frame").locator("h1").boundingBox();
   assert.ok(box, "стартовий макет задачі без заголовка: нема що закріпити");
@@ -770,8 +780,11 @@ test("T11 лічильники запитів: дропдаун, перемик�
   const seen = watchApi(page);
   const spacesN = () => count(seen, "GET /api/spaces");
 
-  seen.length = 0;
+  /* Фішка простору (0.25.0) — лише на екрані «Задачі»: вхід на екран (його запити міряє третій крок) — окремо від дропдауна. */
   await goTasks(page);
+  await page.waitForSelector("#tasks-home .th-card");
+  await page.waitForTimeout(800);
+  seen.length = 0;
   await page.click("#bar .space-chip");
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   await page.waitForTimeout(300);

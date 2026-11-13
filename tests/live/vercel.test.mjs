@@ -399,7 +399,7 @@ test("d: публікація довга, людина перейшла на і�
   fake.hold = new Promise((done) => { release = done; });
   const arrived = new Promise((done) => { fake.arrived = done; });
   await openCanvas(page, url);
-  assert.equal(await text(page, "#bar .crumb--task .txt"), "a", "свідок: публікуємо задачу a");
+  assert.equal(await text(page, "#bar .crumb--title .txt"), "Задача A", "свідок: публікуємо задачу a");
 
   await page.click('#bar [data-act="publish"]');
   await arrived;
@@ -410,7 +410,7 @@ test("d: публікація довга, людина перейшла на і�
   /* Перехід на b — поки запит висить. */
   await page.click('#tabs [data-act="home"]');
   await page.click('#tasks-home .th-card[data-id="b"]');
-  await page.waitForFunction(() => document.querySelector("#bar .crumb--task .txt")?.textContent.trim() === "b", null, { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector("#bar .crumb--title .txt")?.textContent.trim() === "Задача B", null, { timeout: 10000 });
   await waitText(page, "#bar .lbl-pub", "Опублікувати");
   assert.equal(fake.last, "b", "свідок: канвас уже на задачі b");
 
@@ -420,7 +420,7 @@ test("d: публікація довга, людина перейшла на і�
   await sleep(600);                                       // запізніла перемальовка чи плашка встигли б зʼявитись
   assert.equal(await page.locator(PLASH).count(), 0, "плашка про публікацію задачі a висить на задачі b");
   assert.equal(await page.locator(".cv-ask").count(), 0, "діалог помилки на успішній публікації");
-  assert.equal(await text(page, "#bar .crumb--task .txt"), "b", "публікація перекинула канвас на іншу задачу");
+  assert.equal(await text(page, "#bar .crumb--title .txt"), "Задача B", "публікація перекинула канвас на іншу задачу");
   assert.equal(await pubLabel(page), "Опублікувати", "задача b стала «опублікованою» чужою публікацією");
   assert.equal(fake.posts.length, 1);
 

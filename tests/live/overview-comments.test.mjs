@@ -156,6 +156,12 @@ test("A: findMatchIn по геометрії вибирає ТОЙ САМИЙ е
   await page.close();
 });
 
+/* Колесо в «Огляді» (0.25.0): просто колесо РУХАЄ полотно, а масштабує ⌘ + колесо (Ctrl — щипок — підсилюється ×6, тому ⌘). */
+async function zoomWheel(page, dx, dy) {
+  await page.keyboard.down("Meta");
+  try { await page.mouse.wheel(dx, dy); } finally { await page.keyboard.up("Meta"); }
+}
+
 test("B: пін стоїть на своєму елементі — кут +10/+10 з геометрії кадру, за будь-якого зуму", async () => {
   const page = await overview();
   const cam = await settleCam(page);
@@ -189,7 +195,7 @@ test("B: пін стоїть на своєму елементі — кут +10/+
   if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: `${SHOTS}/overview-pins.png` }); }
   // Зум колесом — піни їдуть разом із кадрами, а не лишаються на старих місцях.
   await page.mouse.move(700, 400);
-  for (let i = 0; i < 4; i += 1) await page.mouse.wheel(0, -120);
+  for (let i = 0; i < 4; i += 1) await zoomWheel(page, 0, -120);
   const cam2 = await settleCam(page);
   assert.ok(cam2.scale > cam.scale * 1.3, "зум не відбувся");
   check(cam2, (await pinsOf(page)).filter((p) => !p.cluster && !p.off && p.vis));
@@ -200,7 +206,7 @@ test("B: пін стоїть на своєму елементі — кут +10/+
 test("C: на дрібному зумі піни злипаються в лічильник на кадр; клік — переліт до кадру", async () => {
   const page = await overview();
   await page.mouse.move(700, 400);
-  for (let i = 0; i < 30; i += 1) await page.mouse.wheel(0, 120);
+  for (let i = 0; i < 30; i += 1) await zoomWheel(page, 0, 120);
   const cam = await settleCam(page);
   assert.ok(1280 * cam.scale < CLUSTER_W, `не віддалились (масштаб ${cam.scale})`);
   const pins = await pinsOf(page);
@@ -254,7 +260,7 @@ test("F: колесо над піном зумить полотно; над сп
   const pin = (await pinsOf(page)).find((p) => !p.cluster && !p.off && p.vis);
   const before = (await settleCam(page)).scale;
   await page.mouse.move(pin.cx, pin.cy);
-  await page.mouse.wheel(0, -120);
+  await zoomWheel(page, 0, -120);
   const mid = (await settleCam(page)).scale;
   assert.ok(mid > before * 1.05, "колесо над піном не дійшло до полотна");
   await page.keyboard.press("p");   // панель коментатора полотна
@@ -272,7 +278,7 @@ test("F: колесо над піном зумить полотно; над сп
   });
   assert.ok(list.onPanel, `точка колеса не на панелі: ${JSON.stringify(list)}`);
   await page.mouse.move(list.x, list.y);
-  await page.mouse.wheel(0, 120);
+  await zoomWheel(page, 0, 120);
   const after = (await settleCam(page)).scale;
   assert.equal(after, mid, "колесо над панеллю зумнуло полотно");
   await page.close();
@@ -378,7 +384,11 @@ test("K: коментар на «Огляді» — підсвітка, клік
   for (const k of ["left", "top", "width", "height"]) {
     assert.ok(Math.abs(hov[k] - tgt.rect[k]) <= 2, `рамка наведення ${k}: ${hov[k].toFixed(1)} ≠ ${tgt.rect[k].toFixed(1)}`);
   }
-  await pressAt(page, tgt.x, tgt.y);
+  /* Події миші несуть ЦІЛІ екранні координати: клік у дробову точку Chrome округлює вниз, і на низькому елементі (тут ~9 екранних
+     пікселів) частка кліку їде на ~0.1. Тож клікаємо в цілий піксель і чекаємо частку САМЕ цього пікселя (допуск 0.03 лишився). */
+  const cx = Math.round(tgt.x), cy = Math.round(tgt.y);
+  const want = { fx: (cx - tgt.rect.left) / tgt.rect.width, fy: (cy - tgt.rect.top) / tgt.rect.height };
+  await pressAt(page, cx, cy);
   assert.equal(await page.evaluate(() => document.getElementById("canvas").hidden), false, "клік відкрив кадр замість коментаря");
   assert.ok(await shadow(page, "return !!root.querySelector('.compose textarea');"), "композер не відкрився");
   await page.keyboard.type("Правка з Огляду: заголовок третьої картки");
@@ -396,13 +406,13 @@ test("K: коментар на «Огляді» — підсвітка, клік
   assert.equal(mine.meta.version, "1/holovna");
   assert.match(mine.meta.url, /\/commented\?it=it1&page=holovna&ch=local$/);
   assert.equal(mine.meta.via, "overview");
-  assert.ok(Math.abs(mine.meta.anchor.fx - 0.3) < 0.03 && Math.abs(mine.meta.anchor.fy - 0.5) < 0.03,
+  assert.ok(Math.abs(mine.meta.anchor.fx - want.fx) < 0.03 && Math.abs(mine.meta.anchor.fy - want.fy) < 0.03,
     `частка кліку ${JSON.stringify(mine.meta.anchor)}`);
   assert.match(mine.htmlSnapshot.outerHTML, /^<h2[\s>]/, "HTML елемента не дописано");
   assert.match(mine.meta.shot || "", /^data:image\/jpeg/, "скриншот не вирізано з кадру");
   // Пін стоїть у точці кліку
   const pin = (await pinsOf(page)).find((p) => p.ids[0] === mine.id && !p.cluster);
-  assert.ok(pin && Math.abs(pin.cx - tgt.x) <= 2 && Math.abs(pin.cy - tgt.y) <= 2,
+  assert.ok(pin && Math.abs(pin.cx - cx) <= 2 && Math.abs(pin.cy - cy) <= 2,
     `пін не в точці кліку: ${pin && `${pin.cx.toFixed(1)},${pin.cy.toFixed(1)}`} проти ${tgt.x.toFixed(1)},${tgt.y.toFixed(1)}`);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/overview-create.png` });
   // Живий вид: той самий пін на тому самому елементі

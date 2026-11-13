@@ -211,6 +211,9 @@ async function warmSpaces(page) {
   await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => !document.querySelector(".dd--spaces"), null, { timeout: 15000 });
+  /* Фішка простору живе лише на екрані «Задачі»: назад до відкритої задачі — клік по її вкладці (там і зона синку). */
+  await page.click('#tabs [data-act="tab"][aria-current]').catch(() => page.click('#tabs [data-act="tab"]'));
+  await page.waitForSelector(GL, { timeout: 15000 });
 }
 
 /** Тост ПОКАЗАНО (`.show`) і говорить те саме: застарілий текст схованого тоста не рахується. */
@@ -430,7 +433,7 @@ test("6: нова задача — з «Репозиторієм»: рядок �
   await page.waitForFunction(() => /Перший клон репозиторію/.test(document.querySelector("p.cv-form-note")?.textContent ?? ""), null, { timeout: 5000 });
   assert.equal((await page.locator('form[data-form="task"] [data-a="ok"]').textContent()).trim(), "Створюю…");
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 20000 });
-  await page.waitForFunction(() => document.querySelector("#bar .crumb--task .txt")?.textContent.trim() === "t2", null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelector("#bar .crumb--title .txt")?.textContent.trim() === "Від колеги", null, { timeout: 15000 });
 
   const tasks = readJson(path.join(s.spacePath, "tasks.json")).tasks;
   assert.deepEqual(tasks.t2.vcs, { repo: s.originUrl }, "ціль задачі — у tasks.json");
@@ -496,7 +499,7 @@ test("7: ЛІГА без змін — підпис «GitLab», «Налашту�
   assert.match(msg, /GitLab налаштовується в tasks\.json/);
   assert.match(msg, /gitlab\.repo/);
   assert.equal(await page.locator(".cn-card").count(), 0, "сторінка «Підключення» не відкрилась");
-  assert.equal(await page.locator("#bar .crumb--flat").count(), 0, "крихти «Підключення» нема");
+  assert.equal(await page.locator("#bar .crumb--page").count(), 0, "крихти «Підключення» нема");
   await page.click('.cv-ask [data-a="ok"]');
   await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
 

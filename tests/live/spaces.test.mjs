@@ -119,14 +119,15 @@ test("1: перемикання на «P» без інтеграцій — см�
 
   /* Початок: поточний — старий простір з інтеграціями. Те, чого нема в «P», тут ЄСТЬ —
      без цих свідків «нема» в «P» нічого б не доводило. */
-  assert.equal(await text(page, "#bar .space-name"), "Liga", "фішка не показує поточний простір");
-  assert.match(await page.getAttribute("#bar .space-dot", "style"), /var\(--space-2\)/, "крапка не кольору простору");
-  assert.equal(await text(page, "#bar .crumb--task .txt"), "a");
+  /* Вигляд задачі (0.25.0): смуга несе лише назву задачі; фішка простору й перемикач задач живуть на екрані «Задачі». */
+  assert.equal(await text(page, "#bar .crumb--title .txt"), "Задача A");
   const before = await barActs(page);
   assert.ok(before.includes("dd:gl"), `свідок: у просторі з інтеграціями є зона GitLab (${before})`);
   assert.ok(before.includes("publish"), "свідок: у просторі з інтеграціями є публікація");
 
   await openSpaces(page);
+  assert.equal(await text(page, "#bar .space-name"), "Liga", "фішка не показує поточний простір");
+  assert.match(await page.getAttribute("#bar .space-dot", "style"), /var\(--space-2\)/, "крапка не кольору простору");
   assert.equal(await page.getAttribute("#bar .space-chip", "aria-expanded"), "true");
   assert.deepEqual(await page.$$eval('.dd--spaces .dd-item[data-act="space"]', (els) => els.map((e) => e.dataset.val)),
     ["liga", "p"], "перелік просторів");
@@ -136,18 +137,23 @@ test("1: перемикання на «P» без інтеграцій — см�
 
   await page.click('.dd--spaces .dd-item[data-val="p"]');
   await waitText(page, "#bar .space-name", "P");
-  await waitText(page, "#bar .crumb--task .txt", "x");
   assert.equal((await spacesApi(url)).current, "p", "вибір не дійшов до реєстру");
   assert.match(await page.getAttribute("#bar .space-dot", "style"), /var\(--space-3\)/);
-  assert.equal(await homeOpen(page), false, "у просторі з поточною задачею екран «Задачі» не відкривається сам");
-  await page.waitForFunction(() => /\/commented\?/.test(document.getElementById("frame")?.getAttribute("src") ?? ""));
 
-  /* Перемикач задач — лише з x (задачі іншого простору тут нема). */
-  await page.click("#bar .crumb--task");
-  await page.waitForSelector(".dd--tasks .dd-item--task");
-  assert.deepEqual(await page.$$eval(".dd--tasks .dd-item--task", (els) => els.map((e) => e.dataset.val)), ["x"],
-    "у перемикачі задач чужі задачі іншого простору");
-  await page.keyboard.press("Escape");
+  /* Екран «Задачі» (перемикання йшло з нього, тож він лишається): заголовок із простором, лише x — задачі іншого простору тут
+     нема (це й замінює колишній перемикач задач на смузі), без «Команди». */
+  await waitText(page, "#tasks-home h1.th-h", "Задачі · P");
+  await page.waitForSelector("#tasks-home .th-card");
+  assert.deepEqual(await page.$$eval("#tasks-home .th-card", (els) => els.map((e) => e.dataset.id)), ["x"],
+    "на екрані задач чужі задачі іншого простору");
+  assert.equal(await page.locator('#tasks-home .th-tab[data-v="team"]').count(), 0, "вкладка «Команда» без інтеграцій");
+  assert.equal(await page.locator('#tasks-home .th-tab[data-v="mine"]').count(), 1);
+
+  /* Задача простору «P» відкривається карткою; смуга задачі — лише з x. */
+  await page.click('#tasks-home .th-card[data-id="x"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
+  await waitText(page, "#bar .crumb--title .txt", "Задача X");
+  await page.waitForFunction(() => /\/commented\?/.test(document.getElementById("frame")?.getAttribute("src") ?? ""));
 
   /* Зони назовні: GitLab — немає (він на `capabilities.vcs`). Публікація — Є: з модулями 2а (Task 8) вона
      стоїть на `capabilities.publish`, а в «P» без синку публікує явний `static-publish` (локальна
@@ -161,14 +167,6 @@ test("1: перемикання на «P» без інтеграцій — см�
     ["togglepub", "openpreview", "copylink"], "дропдаун публікації модулем: пароль ЛІГА чи Teams там не мають бути");
   await page.keyboard.press("Escape");
 
-  /* Екран «Задачі»: заголовок із простором, лише x, без «Команди». */
-  await openHome(page);
-  await waitText(page, "#tasks-home h1.th-h", "Задачі · P");
-  await page.waitForSelector("#tasks-home .th-card");
-  assert.deepEqual(await page.$$eval("#tasks-home .th-card", (els) => els.map((e) => e.dataset.id)), ["x"]);
-  assert.equal(await page.locator('#tasks-home .th-tab[data-v="team"]').count(), 0, "вкладка «Команда» без інтеграцій");
-  assert.equal(await page.locator('#tasks-home .th-tab[data-v="mine"]').count(), 1);
-
   /* Назад у простір з інтеграціями: «Команда» повертається (свідок для «нема» вище). */
   await pickSpace(page, "liga");
   await waitText(page, "#bar .space-name", "Liga");
@@ -179,6 +177,7 @@ test("1: перемикання на «P» без інтеграцій — см�
 
 test("2: у «P» — «Нова задача» → «Landing» → id landing → «Створити» → відкрилась landing, тека з першою ітерацією на диску", async (t) => {
   const { page, url, byId } = await boot(t, { first: "p" });
+  await goTasks(page);
   await waitText(page, "#bar .space-name", "P");
   await openHome(page);
   await waitText(page, "#tasks-home h1.th-h", "Задачі · P");
@@ -190,7 +189,7 @@ test("2: у «P» — «Нова задача» → «Landing» → id landing �
   assert.equal(await page.inputValue("#tf-id"), "landing", "id не виведено з назви");
   await page.click('form[data-form="task"] [data-a="ok"]');
 
-  await waitText(page, "#bar .crumb--task .txt", "landing");
+  await waitText(page, "#bar .crumb--title .txt", "Landing");
   await page.waitForFunction(() => !document.body.classList.contains("home-open"));
   assert.equal(await homeOpen(page), false, "екран «Задачі» не закрився після створення");
   assert.equal(await page.locator('form[data-form="task"]').count(), 0, "форма лишилась");
@@ -308,7 +307,10 @@ test("4б: порожній DEAI_HOME і зіпсований старий tasks
 test("5: у «P» жодного запиту за межі машини — рамка макета, коментатор, «Огляд», прямий ch=project", async (t) => {
   const requests = [];
   const { page, context, url } = await boot(t, { first: "p", requests });
+  await goTasks(page);
   await waitText(page, "#bar .space-name", "P");
+  await page.click('#tabs [data-act="tab"]');
+  await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
 
   /* Збережений вибір ЛІГА («Проєкт») не мусить вести назовні: рамка й коментатор
      просять лише локальний канал. Ставимо вибір ДО перезавантаження — затискання
