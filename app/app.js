@@ -119,7 +119,7 @@ const inspEl = document.getElementById('insp-panel');
 /* Панель «Коментарі» (0.26.0). Відкрита панель = увімкнений режим коментування (як у Figma). Знімок — від
    коментатора поточного виду (рамка в «Макеті», полотно в «Огляді»); сховища панель не читає (спека Б-Р4). */
 const cmtEl = document.getElementById('cmt-panel');
-let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, frameCmtReady = false;
+let cmtOpen = false, cmtSnap = null, cmtSel = null, cmtQuery = '', cmtEditing = null, cmtDraft = null, frameCmtReady = false;
 const cmtExpanded = { earlier: false, closed: false };
 const CMT_EVENTS = new Set(['ready', 'change', 'select', 'mode']);
 let picked = null; // обрана ітерація (id); нормалізується в render() до останньої
@@ -1754,19 +1754,18 @@ function paintComments() {
   /* Фокус і каретку поля пошуку / редагування — назад після перезапису (той самий прийом, що в `paintInsp`). */
   const act = document.activeElement;
   const keep = act && cmtEl.contains(act) && (act.id === 'cmt-q' || act.classList.contains('cmt-edit'))
-    ? { sel: act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit', range: [act.selectionStart, act.selectionEnd],
-      /* Чернетку редагування теж: шаблон малює textarea зі ЗБЕРЕЖЕНИМ текстом, а знімок коментатора приходить і сам
-         (збереження піна, збагачення) — без цього набране посеред тексту мовчки поверталось би до старого. */
-      draft: act.classList.contains('cmt-edit') ? act.value : null } : null;
+    ? { sel: act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit', range: [act.selectionStart, act.selectionEnd] } : null;
   const top = cmtEl.querySelector('.cmt-body')?.scrollTop || 0;
   cmtEl.hidden = !html;
   document.body.classList.toggle('with-cmt', !!html);
   cmtEl.innerHTML = html;
   const body = cmtEl.querySelector('.cmt-body');
   if (body && top) body.scrollTop = top;
+  /* Чернетка редагування: шаблон малює textarea зі ЗБЕРЕЖЕНИМ текстом, а знімок коментатора приходить і сам (збереження
+     піна, збагачення) — без цього набране мовчки поверталось би до старого. Тримаємо в `cmtDraft` (оновлює `input`). */
+  if (cmtEditing && cmtDraft != null) { const ed = cmtEl.querySelector('.cmt-edit'); if (ed) ed.value = cmtDraft; }
   if (keep) {
     const el = cmtEl.querySelector(keep.sel);
-    if (el && keep.draft != null) el.value = keep.draft;
     el?.focus(); try { el?.setSelectionRange(...keep.range); } catch (e) {}
   }
   if (cmtSel) cmtEl.querySelector(`[data-cid="${CSS.escape(cmtSel)}"]`)?.scrollIntoView({ block: 'nearest' });
@@ -1777,7 +1776,7 @@ function setCommentsOpen(on) {
   /* Інспектор і коментарі — взаємно виключні: обидва ділять праву панель і обидва ловлять клік по макету. */
   if (on) { const api = inspectorApi(); if (api?.on) { api.set(false); paintBar(); } }
   cmtOpen = on;
-  if (!on) { cmtSel = null; cmtEditing = null; }
+  if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; }
   const L = cmtLayer();
   if (L && !!L.commentMode !== on) L.setCommentMode(on);
   paintComments();
@@ -1785,6 +1784,9 @@ function setCommentsOpen(on) {
 /** Подія коментатора: `src` — 'frame' чи 'canvas'; чужий вид — ігнор (поправка 11). */
 function onCommentsEvent(src, m) {
   if ((src === 'canvas') !== (mode === 'canvas')) return;
+  /* `ev.source` не відрізняє документів (WindowProxy переживає навігацію): запізніла посилка СТАРОЇ сторінки після
+     скидання рамки не мусить повернути старих карток. Коментатор завжди шле `ready` до першого `change`. */
+  if (src === 'frame' && !frameCmtReady && m.ev !== 'ready') return;
   if (m.ev === 'ready') {
     if (src === 'frame') frameCmtReady = true;
     const L = cmtLayer();
@@ -1796,7 +1798,7 @@ function onCommentsEvent(src, m) {
     cmtSel = typeof m.id === 'string' ? m.id : null;
     if (!cmtOpen) setCommentsOpen(true); else paintComments();
   } else if (m.ev === 'mode') {
-    if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; paintComments(); }
+    if (!m.on && cmtOpen) { cmtOpen = false; cmtSel = null; cmtEditing = null; cmtDraft = null; paintComments(); }
     else if (m.on && !cmtOpen) { cmtOpen = true; paintComments(); }
   }
 }
@@ -1809,10 +1811,22 @@ window.addEventListener('message', (ev) => {
   onCommentsEvent('frame', m);
 });
 /* C і H — клавіші оболонки (поправка 4): коментатор у режимі хоста їх не слухає, тож ловимо й тоді, коли фокус у макеті. */
+/** Поле вводу чи contenteditable — за СПРАВЖНІМ походженням події й за глибоким активним елементом: форма й редагування
+ *  коментатора живуть у його shadow DOM, де `ev.target` на вікні рамки ретаргетиться на хост (DIV). Те саме робить
+ *  інспектор (`deepTarget`/`activeDeep`/`isEditable` у `vendor/inspector.js`). */
+function frameTyping(ev) {
+  const isEd = (n) => !!n && n.nodeType === 1 && (/^(input|textarea|select)$/i.test(n.localName || '') || !!n.isContentEditable);
+  const o = (typeof ev.composedPath === 'function' && ev.composedPath()[0]) || ev.target;
+  let a = null;
+  try {
+    a = frame.contentDocument?.activeElement || null;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  } catch (e) { a = null; }
+  return isEd(o) || isEd(a);
+}
 function frameCmtKey(ev) {
-  if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return;
-  const tg = ev.target;
-  if (tg && (['INPUT', 'TEXTAREA', 'SELECT'].includes(tg.tagName) || tg.isContentEditable)) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
+  if (frameTyping(ev)) return;
   const k = (ev.key || '').toLowerCase();
   if (k === 'c' || ev.code === 'KeyC') { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.comments(); }
   else if ((k === 'h' || ev.code === 'KeyH') && cmtOpen) { ev.preventDefault(); ev.stopPropagation(); BAR_ACTIONS.cmtpins(); }
@@ -1824,9 +1838,13 @@ frame.addEventListener('load', () => {
      рамка піднялась би без колбеків і з власною ручкою. Дописуємо `host=1` без запису в історію. */
   try {
     const loc = w.location;
-    if (loc.pathname === '/commented' && new URLSearchParams(loc.search).get('host') !== '1') {
-      frameCmtReady = false;
-      loc.replace(`${loc.pathname}${loc.search || '?'}${loc.search ? '&' : ''}host=1${loc.hash}`);
+    const q = new URLSearchParams(loc.search);
+    if (loc.pathname === '/commented' && q.get('host') !== '1') {
+      frameCmtReady = false; cmtSnap = null;
+      /* `set`, а не дописування: при `host=0` чи `host=&…` другий `host=1` не перебив би першого (його й читає сервер) —
+         рамка йшла б у нескінченне перезавантаження. */
+      q.set('host', '1');
+      loc.replace(`${loc.pathname}?${q}${loc.hash}`);
     }
   } catch (e) { /* чужий документ */ }
 });
@@ -2008,13 +2026,13 @@ const BAR_ACTIONS = {
   cmtres: (id) => { cmtLayer()?.resolveComment(id); },
   cmtreopen: (id) => { cmtLayer()?.reopenComment(id); },
   cmtdel: (id) => { cmtLayer()?.removeComment(id); },
-  cmtedit: (id) => { cmtEditing = id; paintComments(); cmtEl.querySelector('.cmt-edit')?.focus(); },
+  cmtedit: (id) => { cmtEditing = id; cmtDraft = null; paintComments(); cmtEl.querySelector('.cmt-edit')?.focus(); },
   cmteditsave: (id) => {
     const ta = cmtEl.querySelector('.cmt-edit');
-    if (cmtLayer()?.editComment(id, ta?.value)) cmtEditing = null;
+    if (cmtLayer()?.editComment(id, ta?.value)) { cmtEditing = null; cmtDraft = null; }
     paintComments();
   },
-  cmteditcancel: () => { cmtEditing = null; paintComments(); },
+  cmteditcancel: () => { cmtEditing = null; cmtDraft = null; paintComments(); },
   cmtcarry: (id) => { cmtLayer()?.carry(id); },
   cmtshot: (id) => { cmtLayer()?.openShot(id); },
   cmtsec: (k) => { if (k in cmtExpanded) { cmtExpanded[k] = !cmtExpanded[k]; paintComments(); } },
@@ -6227,6 +6245,7 @@ cmtEl.addEventListener('click', (ev) => {
   BAR_ACTIONS[el.dataset.act]?.(el.dataset.val, el, ev);
 });
 cmtEl.addEventListener('input', (ev) => {
+  if (ev.target.classList?.contains('cmt-edit')) { cmtDraft = ev.target.value; return; }
   if (ev.target.id !== 'cmt-q') return;
   cmtQuery = ev.target.value;
   paintComments();
@@ -7832,13 +7851,14 @@ document.addEventListener('keydown', (ev) => {
 
   /* Коментарі (0.26.0): `C` — панель (і режим коментування), `H` — сховати піни, поки панель відкрита, `Esc` — закрити.
      Після `typing` вище: у полі пошуку панелі `c` друкується. */
-  if (!meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'c' || ev.code === 'KeyC')) {
+  const cmtFree = !ev.repeat && !ev.isComposing && !ev.defaultPrevented && !document.querySelector('.cv-ask-scrim');
+  if (cmtFree && !meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'c' || ev.code === 'KeyC')) {
     ev.preventDefault(); BAR_ACTIONS.comments(); return;
   }
-  if (cmtOpen && !meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'h' || ev.code === 'KeyH')) {
+  if (cmtFree && cmtOpen && !meta && !ev.altKey && !ev.shiftKey && (ev.key.toLowerCase() === 'h' || ev.code === 'KeyH')) {
     ev.preventDefault(); BAR_ACTIONS.cmtpins(); return;
   }
-  if (cmtOpen && ev.key === 'Escape') { setCommentsOpen(false); return; }
+  if (cmtFree && cmtOpen && ev.key === 'Escape') { setCommentsOpen(false); return; }
 
   /* ⌥M (режим) і ⌘\ (панель шарів) — акорди із ЗАТВЕРДЖЕНОГО прототипу
    * (`docs/proto/shell.html`, обробник клавіш: `ev.altKey && k === 'm'` і

@@ -69,6 +69,12 @@ const cardTexts = (page) => page.$$eval("#cmt-panel .cmt-card .cmt-text", (els) 
 const panelText = (page) => page.textContent("#cmt-panel");
 const islCount = (page) => page.evaluate(() => document.querySelector('#hud [data-act="comments"] .isl-count')?.textContent ?? null);
 const inspectorOn = (page) => page.evaluate(() => !!document.getElementById("frame").contentWindow.CanvasInspector?.on);
+/** Усі посилки коментатора до сторінки оболонки зараховуються з `addInitScript`; чекаємо, поки їх стане більше. */
+const msgCount = (page, ev) => page.evaluate((e) => window.__cmtMsgs.filter((x) => x === e).length, ev);
+/** Повідомлення вже в лічильнику, але обробник оболонки міг ще не відпрацювати: віддаємо йому кадр. */
+const settle = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+const fromFrame = (frame, snap) => frame.evaluate((sn) => parent.postMessage({ type: "dc-comments", ev: "change", snapshot: sn }, location.origin), snap);
+const FAKE = { iteration: "1", comments: [{ id: "f", n: 99, text: "фейк", status: "open", scope: "current" }] };
 const waitSnap = (page) => page.waitForSelector("#cmt-panel .cmt-sec");
 
 async function addComment(frame, text) {
@@ -131,8 +137,10 @@ test("5: «Редагувати» → textarea.cmt-edit → нова думка 
   await page.waitForSelector("#cmt-panel textarea.cmt-edit");
   await page.fill("#cmt-panel textarea.cmt-edit", "Зробити значно ширшим");
   // Знімок коментатора приходить і сам (тут — від перемикача пінів): перемальовка не смій з'їсти набране.
+  const n0 = await msgCount(page, "change");
   await A.frame.evaluate(() => { window.CommentLayer.togglePins(); window.CommentLayer.togglePins(); });
-  await pause(300);
+  await until(async () => (await msgCount(page, "change")) >= n0 + 2);
+  await settle(page);
   assert.equal(await page.inputValue("#cmt-panel textarea.cmt-edit"), "Зробити значно ширшим", "чернетка редагування загубилась на перемальовці");
   await page.click('#cmt-panel [data-act="cmteditsave"]');
   await until(async () => (await cardTexts(page)).join() === "Зробити значно ширшим");
@@ -183,11 +191,64 @@ test("9: кнопка інспектора закриває панель; C зн
   assert.equal(await inspectorOn(page), false, "інспектор лишився ввімкненим поруч із режимом коментування");
 });
 
+test("9б: набір у формі коментатора й у полі редагування (C/H/Esc-літери, кирилиця) не закриває панель і не губить текст", async () => {
+  const { page, frame } = A;
+  assert.equal(await panelOpen(page), true);
+  await frame.click("#p");
+  await frame.waitForFunction(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea"));
+  await page.keyboard.type("cc hh");
+  // Українська розкладка: `code` лишається KeyC/KeyH, а `key` — «с»/«р». Подія з shadow DOM, як від справжнього набору.
+  await frame.evaluate(() => {
+    const ta = document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea");
+    for (const [key, code] of [["с", "KeyC"], ["р", "KeyH"], ["с", "KeyC"]]) {
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, composed: true, cancelable: true }));
+    }
+  });
+  assert.equal(await panelOpen(page), true, "набір у формі коментатора закрив панель");
+  assert.equal(await modesShown(frame), true, "набір у формі вимкнув режим коментування");
+  assert.equal(await frame.evaluate(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose textarea")?.value), "cc hh");
+  await frame.evaluate(() => document.querySelector("[data-comment-layer]").shadowRoot.querySelector(".compose .cancel").click());
+  // Поле редагування в панелі оболонки.
+  await page.click('#cmt-panel [data-act="cmtedit"]');
+  await page.waitForSelector("#cmt-panel textarea.cmt-edit");
+  await page.fill("#cmt-panel textarea.cmt-edit", "");
+  await page.keyboard.type("cc hh");
+  assert.equal(await panelOpen(page), true);
+  assert.equal(await page.inputValue("#cmt-panel textarea.cmt-edit"), "cc hh");
+  await page.click('#cmt-panel [data-act="cmteditcancel"]');
+});
+
+test("9в: адреса рамки з host=0 повертається в режим хоста одним переходом, без петлі й без двох host", async () => {
+  const { page, frame } = A;
+  const base = (await page.getAttribute("#frame", "src")).replace(/&host=1/, "");
+  let navs = 0;
+  const onNav = (f) => { if (f === frame) navs += 1; };
+  page.on("framenavigated", onNav);
+  await page.evaluate(() => { window.__cmtMsgs.length = 0; });
+  await frame.evaluate((u) => { location.href = u; }, `${base}&host=0`);
+  await until(() => page.evaluate(() => window.__cmtMsgs.includes("ready")));
+  await pause(1500); // петля дала б нові переходи
+  page.off("framenavigated", onNav);
+  assert.equal([...frame.url().matchAll(/host=/g)].length, 1, `кілька host у ${frame.url()}`);
+  assert.match(frame.url(), /host=1/);
+  assert.ok(navs <= 2, `рамка перезавантажується знову й знову: ${navs} переходів`);
+});
+
 test("12: підроблена посилка від самої оболонки (не від рамки) панель не змінює", async () => {
-  const { page } = A;
-  await page.evaluate(() => window.postMessage({ type: "dc-comments", ev: "change",
-    snapshot: { iteration: "1", comments: [{ id: "f", n: 99, text: "фейк", status: "open", scope: "current" }] } }, "*"));
-  await pause(400);
+  const { page, frame } = A;
+  // Контроль: ТА САМА посилка від рамки — доходить (інакше відсутність нижче нічого не доводила б).
+  const n0 = await msgCount(page, "change");
+  await fromFrame(frame, FAKE);
+  await until(async () => (await msgCount(page, "change")) > n0);
+  await until(async () => (await panelText(page)).includes("фейк"));
+  // Справжній знімок від коментатора витісняє підробку.
+  await frame.evaluate(() => { window.CommentLayer.togglePins(); window.CommentLayer.togglePins(); });
+  await until(async () => !(await panelText(page)).includes("фейк"));
+  // Від самої оболонки — ігнорується.
+  const n1 = await msgCount(page, "change");
+  await page.evaluate((sn) => window.postMessage({ type: "dc-comments", ev: "change", snapshot: sn }, "*"), FAKE);
+  await until(async () => (await msgCount(page, "change")) > n1);
+  await settle(page);
   assert.equal((await panelText(page)).includes("фейк"), false, "чужа посилка потрапила в панель");
 });
 
@@ -240,4 +301,22 @@ test("11: відкритий пін ітерації 1 при відкритій
   await until(async () => (await islCount(page)) === "1");
   const open = await page.$$eval('#cmt-panel .cmt-sec[aria-label="Відкриті"] .cmt-card .cmt-text', (els) => els.map((e) => e.textContent));
   assert.deepEqual(open, ["Лишилось з першої"]);
+});
+
+/* ───────── Сервер A, останній сценарій: запізніла посилка старого документа ───────── */
+test("14: поки готовності нового документа нема, `change` із рамки не повертає старих карток", async () => {
+  const { page, frame } = A;
+  /* Детерміновано: скрипт коментатора не віддаємо → нова сторінка рамки (після повернення в host=1) НІКОЛИ не пошле
+     `ready`, тобто `frameCmtReady` лишається false. Посилку «старого документа» шлемо з неї ж самої. */
+  await page.route("**/comment-layer.min.js", (r) => r.abort());
+  const base = (await page.getAttribute("#frame", "src")).replace(/&host=1/, "");
+  await frame.evaluate((u) => { location.href = u; }, base);
+  await until(() => frame.url().includes("host=1") && frame.evaluate(() => document.readyState === "complete").catch(() => false));
+  await pause(500);
+  const n0 = await msgCount(page, "change");
+  await fromFrame(frame, { ...FAKE, comments: [{ ...FAKE.comments[0], text: "застарілий" }] });
+  await until(async () => (await msgCount(page, "change")) > n0);
+  await settle(page);
+  assert.equal((await panelText(page)).includes("застарілий"), false, "запізніла посилка старого документа повернула картку");
+  await page.unroute("**/comment-layer.min.js");
 });
