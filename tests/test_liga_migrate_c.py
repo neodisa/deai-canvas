@@ -1496,6 +1496,18 @@ def _is_seen(path):
     return path.startswith(_SEEN_PREFIXES) and not path.endswith(_NOT_SEEN_LEAVES)
 
 
+#: Етап А редизайну оболонки (0.25.0) свідомо змінив склад смуги для ВСІХ просторів, а не міграцією: логотип і пігулка
+#: оновлення переїхали в рядок вкладок, перемикач задач і фішка простору — у вкладки й екран «Задачі», інспектор і відгук —
+#: в острівець, кнопку палітри прибрано (⌘K лишився); натомість зʼявилась назва задачі. Знімок 0.18.0 записано зі старою
+#: смугою, тож ці id прибираються з ОБОХ боків порівняння — і лише вони (`test_stage_a_normalisation_is_narrow`).
+_STAGE_A_MOVED = frozenset(('home', 'palette', 'space', 'task', 'update', 'feedback', 'inspector'))
+_STAGE_A_ADDED = frozenset(('title',))
+
+
+def _stage_a_bar(js):
+    js['bar_item_ids'] = [i for i in js['bar_item_ids'] if i not in _STAGE_A_MOVED | _STAGE_A_ADDED]
+
+
 class AfterMigrationParity4d3c(unittest.TestCase):
     """Сценарії знімка 0.18.0 (`before-4d3c.json`) на МІГРОВАНІЙ ЛІЗІ у тимчасовому домі: стенд `unmigrated` — `run_all()` (a, b, c),
     стенд `ab` — a+b КОДОМ кроків (пін `STEPS[:2]`, як у знімку) і далі `run(step='liga-4d3c')`. Знімання — той самий генератор
@@ -1530,6 +1542,18 @@ class AfterMigrationParity4d3c(unittest.TestCase):
             return rig
         with mock.patch.object(g, '_stand', migrated):
             cls.after = g.make()
+        for name in ('unmigrated', 'ab'):
+            _stage_a_bar(cls.before['stands'][name]['js'])
+            _stage_a_bar(cls.after['stands'][name]['js'])
+
+    def test_stage_a_normalisation_is_narrow(self):
+        """Нормалізація смуги 0.25.0 прибирає РІВНО контроли, що переїхали з неї (і нову назву задачі), — решта складу смуги
+        лишається в порівнянні: мігрована ЛІГА не сміє втратити чи отримати жоден інший контрол."""
+        for name in ('unmigrated', 'ab'):
+            ids = self.before['stands'][name]['js']['bar_item_ids']
+            self.assertEqual(ids, self.after['stands'][name]['js']['bar_item_ids'], name)
+            for kept in ('iter', 'mode', 'vp', 'figma', 'gl', 'publish', 'pubpw', 'teamsnotify'):
+                self.assertIn(kept, ids, name)
 
     def test_all_steps_ran(self):
         """Обидва стенди справді мігровано (a, b, c = `done`; ролі c = `['publish']`): порівняння — з МІГРОВАНОЮ лігою."""
