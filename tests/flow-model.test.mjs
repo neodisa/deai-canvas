@@ -24,11 +24,12 @@ test("різні стани — різні кадри", () => {
 });
 
 test("стан не сміє захопити наші власні параметри", () => {
-  for (const bad of ["it", "page", "bare", "ch", "v"]) {
+  for (const bad of ["it", "page", "bare", "ch", "v", "host"]) {
     assert.throws(() => checkState({ [bad]: "x" }), { message: t("flowStateReserved", bad) },
       `${bad} мусить бути відхилений`);
   }
   assert.ok(RESERVED_Q.has("page"));
+  assert.ok(RESERVED_Q.has("host"), "host=1 — службовий параметр режиму хоста коментатора, не стан сторінки");
 });
 
 test("stateQuery дає кусок URL у стабільному порядку", () => {

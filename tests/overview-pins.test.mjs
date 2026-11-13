@@ -41,6 +41,16 @@ test("B: стан — хвіст url без наших параметрів, т�
   assert.equal(cardMatches({ page: "poshuk", state: null }, null), false);
 });
 
+test("B2: host=1 у url піна (створений у рамці режиму хоста) — той самий стан і вузол, що без нього", () => {
+  const base = "http://h/commented?it=it3&page=poshuk&ch=local&tab=b";
+  const plain = pinTarget(pin("h", "3/poshuk", base));
+  const hosted = pinTarget(pin("i", "3/poshuk", base + "&host=1"));
+  assert.deepEqual(hosted, plain);
+  assert.equal(hosted.stateQ, "&tab=b");
+  assert.equal(cardMatches({ page: "poshuk", state: { tab: "b" } }, hosted), true);
+  assert.equal(pinTarget(pin("j", "3", "http://h/commented?it=it3&host=1")).stateQ, "", "лише host=1 — стану нема");
+});
+
 test("C: світова точка — кут елемента +10/+10 під головою кадру; 0×0 і нижче обрізу — null", () => {
   const card = { x: 100, y: 200, h: 900 };            // h — висота ЗНІМКА, голова окремо
   assert.deepEqual(pinWorld(card, { x: 50, y: 60, w: 10, h: 10 }, null, HEAD),

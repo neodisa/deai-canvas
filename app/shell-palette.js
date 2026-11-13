@@ -274,6 +274,8 @@ export function paletteActions(state) {
   out.push({ id: "vp-desktop", group: "gView", labelKey: "vpDesktop", icon: "desktop", act: "vp", val: "desktop" });
   out.push({ id: "vp-tablet", group: "gView", labelKey: "vpTablet", icon: "tablet", act: "vp", val: "tablet" });
   out.push({ id: "vp-mobile", group: "gView", labelKey: "vpMobile", icon: "mobile", act: "vp", val: "mobile" });
+  // Коментарі — в обох видах: «Макет» (коментатор у рамці) і «Огляд» (коментатор полотна). 0.26.0.
+  out.push({ id: "comments", group: "gView", labelKey: "cmtTitle", icon: "comment", kbd: "C", act: "comments" });
   if (s.mode === "layout") {
     // Інспектор працює по живому DOM макета — немає в «Огляді», той самий
     // гейт, що ховає кнопку інспектора зі смуги (`TIERS.view`, bar-model.js).
@@ -606,11 +608,8 @@ export function paletteHTML(actions, query, cursor) {
  *     фокус у РАМЦІ макета: інспектор слухає своє `window` і за межі iframe
  *     не виходить — те саме структурне обмеження, що вже описане в `app.js`
  *     («Драбинка Escape»);
- *   · `C`/`P`/`H` — коментатор, і вони лишаються ІНФОРМАЦІЙНИМ рядком під
- *     зіркою (`keysWidget`): «коментатор лишається окремим» — той самий
- *     принцип, що тримає перемикач аудиторії осторонь від смуги
- *     (`shell-bar.js`, коментар над `crumbIter`). Довідка ЗГАДУЄ його
- *     клавіші, не КЕРУЄ ними.
+ *   · `C`/`H` — оболонка (0.26.0, панель «Коментарі»): глобальний обробник `app.js` і обробник на вікні рамки
+ *     (`frameCmtKey`); коментатор у режимі хоста слухає лише Escape. `P` прибрано — панель і є режим.
  *
  * `⌘⏎` (публікація) звідси прибрано СВІДОМО і не реалізовано: публікація
  * деплоїть на Vercel, одноклавішний деплой — погана ідея, власник його не
@@ -633,9 +632,7 @@ export function keysHTML() {
         ${row(t("kPanel"), "⌘\\")}${row(t("kClean"), "⇧⌘\\")}${row(t("kEsc"), "Esc")}</dl></div>
       <div><h6>${esc(t("keysLayout"))}</h6><dl>
         ${row(t("kInspector"), "I")}${row(`${t("inspCascade")} / ${t("inspRuler")}`, "M")}
-        ${row(`${t("cmArm")} *`, "C")}${row(`${t("comments")} *`, "P")}
-        ${row(`${t("cmHidePins")} *`, "H")}</dl></div>
+        ${row(t("cmtTitle"), "C")}${row(t("cmtPins"), "H")}</dl></div>
     </div>
-    <p class="cm-note" style="margin:16px 0 0">* ${esc(t("keysWidget"))}</p>
   </div></div>`;
 }

@@ -54,6 +54,14 @@
     "val": "mobile"
   },
   {
+    "id": "comments",
+    "group": "gView",
+    "labelKey": "cmtTitle",
+    "icon": "comment",
+    "kbd": "C",
+    "act": "comments"
+  },
+  {
     "id": "inspector",
     "group": "gView",
     "labelKey": "inspector",

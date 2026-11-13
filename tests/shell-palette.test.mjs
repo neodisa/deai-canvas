@@ -515,6 +515,16 @@ test("інспектор і сегмент Сітка/Флоу існують л
   assert.ok(paletteActions(S({ mode: "overview" })).some((a) => a.id === "view-grid"));
 });
 
+test("«Коментарі» — у палітрі в обох видах з підказкою C; на екрані «Задачі» немає", () => {
+  for (const mode of ["layout", "overview"]) {
+    const a = paletteActions(S({ mode })).find((x) => x.id === "comments");
+    assert.ok(a, `«Коментарі» немає в палітрі (${mode})`);
+    assert.equal(a.kbd, "C");
+    assert.equal(a.act, "comments");
+  }
+  assert.ok(!paletteActions(S({ homeOpen: true })).some((a) => a.id === "comments"));
+});
+
 test("GitLab: off показує лише glsetup, behind додає glpull, sync вимикає glpush", () => {
   const off = paletteActions(S({ gl: "off" }));
   assert.ok(off.some((a) => a.id === "glsetup"));
@@ -649,7 +659,7 @@ test("groupsel: вибір є — дозволено навіть без ціл�
 test("екран «Задачі»: палітра не пропонує жодної дії над задачею", () => {
   const ids = paletteActions(S({ homeOpen: true })).map((a) => a.id);
   const taskScoped = ["mode", "view-grid", "view-flow", "vp-desktop", "vp-tablet", "vp-mobile",
-    "inspector", "panel", "clean", "newit", "renit", "dupit", "newfolder", "renpage", "hidepage",
+    "inspector", "comments", "panel", "clean", "newit", "renit", "dupit", "newfolder", "renpage", "hidepage",
     "groupsel", "ungroup", "outdent", "focusbranch", "togglekind", "shoot", "figma", "publish",
     "togglepub", "copylink", "openpreview", "glpush", "glpull", "glsetup", "aud-local",
     "aud-project", "delit", "delpage", "go-iter", "go-pages"];

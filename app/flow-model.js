@@ -7,7 +7,7 @@ import { t } from "./i18n.js";
 import { kindOf } from "./tree-model.js";
 
 /** Наші власні параметри URL. Стан екрана не сміє їх захопити. */
-export const RESERVED_Q = new Set(["it", "page", "bare", "ch", "v"]);
+export const RESERVED_Q = new Set(["it", "page", "bare", "ch", "v", "host"]);
 
 /**
  * Ключ кадру: сторінка + стан. НЕ штамп вмісту — штампи рахує лише

@@ -166,14 +166,14 @@ test("6б: шість вкладок у вікні 420px — рядок прок
   assert.ok(g.listScroll > g.listClient, `перевірка недійсна: вкладки вміщаються без прокрутки (${g.listScroll} ≤ ${g.listClient})`);
 });
 
-test("7: острівець за екранами — «Макет»: інспектор і баг; «Огляд» і «Задачі»: лише баг", async (t) => {
+test("7: острівець за екранами — «Макет»: коментарі, інспектор і баг; «Огляд»: коментарі й баг; «Задачі»: лише баг", async (t) => {
   const { page, url } = await boot(t, PORT_BASE + 700);
   await frameReady(page);
-  assert.deepEqual(await islandActs(page), ["inspector", "feedback"], "«Макет»");
+  assert.deepEqual(await islandActs(page), ["comments", "inspector", "feedback"], "«Макет»");
 
   await page.click('#bar [data-act="mode"][data-val="overview"]');
-  await page.waitForFunction(() => document.querySelectorAll("#hud .isl-btn").length === 1);
-  assert.deepEqual(await islandActs(page), ["feedback"], "«Огляд»");
+  await page.waitForFunction(() => document.querySelectorAll("#hud .isl-btn").length === 2);
+  assert.deepEqual(await islandActs(page), ["comments", "feedback"], "«Огляд»");
 
   await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");

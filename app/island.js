@@ -1,18 +1,24 @@
 /**
- * Інструменти острівця внизу робочої зони (етап А, 0.25.0): інспектор (лише «Макет» — він працює по живому DOM,
- * у «Огляді» кадри — знімки) | баг/ідея останнім. Сегмент стану Claude — окремий вузол `#claude-hud` (`role="status"`,
- * його веде `paintClaude` в `app.js`), бо жива область не сміє містити кнопок. Кнопка коментарів — етап Б.
- * Дії — ті самі `BAR_ACTIONS` (`inspector`, `feedback`): делегація з `#hud` в `app.js`.
+ * Інструменти острівця внизу робочої зони (0.25.0 / 0.26.0): коментарі (обидва види) | інспектор (лише «Макет» —
+ * він працює по живому DOM, у «Огляді» кадри — знімки) | баг/ідея останнім. Сегмент стану Claude — окремий вузол `#claude-hud` (`role="status"`,
+ * його веде `paintClaude` в `app.js`), бо жива область не сміє містити кнопок.
+ * Дії — ті самі `BAR_ACTIONS` (`comments`, `inspector`, `feedback`): делегація з `#hud` в `app.js`.
  */
 import { esc } from "./esc.js";
 import { ico } from "./icons.js";
 import { t } from "./i18n.js";
 
-export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false } = {}) {
+export function islandToolsHTML({ screen = "task", mode = "layout", inspectorOn = false, commentsOn = false, commentsCount = 0 } = {}) {
   const parts = [];
-  if (screen === "task" && mode === "layout") {
-    parts.push(`<button class="isl-btn${inspectorOn ? " isl-btn--on" : ""}" data-act="inspector" aria-pressed="${inspectorOn}"`
-      + ` aria-label="${esc(t("inspector"))}" title="${esc(t("inspectorKey"))}">${ico("inspect")}</button>`);
+  if (screen === "task") {
+    const n = commentsCount > 0
+      ? `<span class="isl-count" aria-hidden="true">${commentsCount > 99 ? "99+" : commentsCount}</span>` : "";
+    parts.push(`<button class="isl-btn${commentsOn ? " isl-btn--on" : ""}" data-act="comments" aria-pressed="${commentsOn}"`
+      + ` aria-label="${esc(t("cmtIsland", commentsCount))}" title="${esc(t("cmtKey"))}">${ico("comment")}${n}</button>`);
+    if (mode === "layout") {
+      parts.push(`<button class="isl-btn${inspectorOn ? " isl-btn--on" : ""}" data-act="inspector" aria-pressed="${inspectorOn}"`
+        + ` aria-label="${esc(t("inspector"))}" title="${esc(t("inspectorKey"))}">${ico("inspect")}</button>`);
+    }
     parts.push('<span class="isl-sep" aria-hidden="true"></span>');
   }
   const fb = esc(t("fbIsland"));

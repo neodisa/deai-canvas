@@ -134,7 +134,7 @@ body{margin:0;font-family:system-ui,sans-serif;font-size:13px;color:var(--text);
 /* Чистий перегляд макета (fb-01102026-7f7b6d): лише макет, без оболонки й пінів.
    !important — бо розкладку сцени ставлять правила `body.with-panel…` вищої
    специфічності; чистий режим мусить перекрити їх усі разом. */
-html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean .cv-notice,
+html.cv-clean #tabs,html.cv-clean .bar-mount,html.cv-clean #tasks-home,html.cv-clean .pages-panel,html.cv-clean #pages-panel,html.cv-clean #insp-panel,html.cv-clean #cmt-panel,html.cv-clean .cv-notice,
 html.cv-clean .errbar,html.cv-clean .cv-zoom,html.cv-clean .cv-canvas-hint,html.cv-clean .cv-hud,
 html.cv-clean [data-comment-layer],html.cv-clean .cn-drawer{display:none!important}
 html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!important;width:100%!important}
@@ -195,6 +195,8 @@ html.cv-clean .cv-stage,html.cv-clean .cv-canvas{top:0!important;left:0!importan
 .isl-btn:hover{background:rgba(255,255,255,.1)}
 .isl-btn--on{background:rgba(255,255,255,.18)}
 .isl-btn:focus-visible{outline:2px solid var(--sel);outline-offset:1px}
+.isl-btn{position:relative}
+.isl-count{position:absolute;top:1px;right:0;min-width:15px;height:15px;padding:0 4px;border-radius:999px;background:var(--sel);color:var(--on-sel);font-size:10px;font-weight:600;line-height:15px;text-align:center;box-sizing:border-box}
 .isl-sep{width:1px;height:20px;margin:0 4px;background:rgba(255,255,255,.18)}
 /* Смужка режимів коментатора (`.modes.show`: низ на 20px, висота 42px — виміряно
    на 1440 і 1024) стоїть там само, де острівець, — тоді він піднімається над нею
@@ -709,6 +711,13 @@ body.with-panel.with-insp .cv-hud{width:calc(100% - var(--panel-w) - var(--insp-
 body.with-panel.panel-collapsed.with-insp .cv-stage,
 body.with-panel.panel-collapsed.with-insp .cv-canvas,
 body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
+body.with-cmt .cv-stage,body.with-cmt .cv-canvas,body.with-cmt .cv-hud{width:calc(100% - var(--insp-w))}
+body.with-panel.with-cmt .cv-stage,
+body.with-panel.with-cmt .cv-canvas,
+body.with-panel.with-cmt .cv-hud{width:calc(100% - var(--panel-w) - var(--insp-w))}
+body.with-panel.panel-collapsed.with-cmt .cv-stage,
+body.with-panel.panel-collapsed.with-cmt .cv-canvas,
+body.with-panel.panel-collapsed.with-cmt .cv-hud{width:calc(100% - var(--panel-rail-w) - var(--insp-w))}
 /* `.pages-panel`/`.pp-*` нижче — розмітка старої панелі (План B Task 4 її
    замінив на `.panel`/`.panel--rail`/`.row*`/`.shots*`, кінець файла).
    Лишені НЕ вживаними свідомо, тим самим рядком думки, що вже стоїть для
@@ -1842,3 +1851,34 @@ body:not(.home-open) .cn-drawer{display:none}
 .fb .fb-pre{margin:6px 0 0;max-height:220px;overflow:auto;padding:8px 10px;border:1px solid var(--g450);border-radius:6px;background:var(--g50);
   font-size:12px;line-height:1.45;color:var(--g900);white-space:pre-wrap;overflow-wrap:anywhere}
 .fb .fb-pre:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* Панель «Коментарі» (0.26.0): та сама права панель, що й інспектор (`.insp`); вони взаємно виключні. */
+.cmt-top .cmt-total{font-size:11px;color:var(--dim);margin-right:auto}
+.cmt-ch{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.cmt-ch button{border:0;background:none;color:var(--dim);cursor:pointer;font-size:11px;padding:3px 8px}
+.cmt-ch button[aria-pressed="true"]{background:var(--sel-tint-2);color:var(--hi)}
+.cmt-search{padding:8px 10px 0}
+.cmt-search input{width:100%;box-sizing:border-box;background:var(--s1);color:var(--hi);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:12px}
+.cmt-search input:focus{outline:none;border-color:var(--sel)}
+.cmt-h{margin:0 0 8px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.cmt-sec{margin-bottom:12px}
+.cmt-fold{display:flex;align-items:center;gap:4px;width:100%;border:0;background:none;color:var(--dim);cursor:pointer;font-size:12px;padding:4px 0;text-align:left}
+.cmt-fold:hover{color:var(--hi)}
+.cmt-card{background:var(--s3);border:1px solid var(--line);border-radius:8px;padding:9px 10px;margin-bottom:8px;font-size:12px;color:var(--hi)}
+.cmt-card--sel{border-color:var(--sel);background:var(--sel-tint)}
+.cmt-card--closed{color:var(--dim)}
+.cmt-head{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.cmt-n{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:var(--sel);color:var(--on-sel);font-size:11px;font-weight:600}
+.cmt-who{font-weight:600}
+.cmt-when{margin-left:auto;font-size:11px;color:var(--dim)}
+.cmt-tag{font-size:10.5px;color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
+.cmt-text,.cmt-sel,.cmt-vp,.cmt-note,.cmt-done,.cmt-reason,.cmt-iter{margin:0 0 5px;line-height:1.45;overflow-wrap:anywhere}
+.cmt-sel,.cmt-vp,.cmt-note,.cmt-iter{color:var(--dim);font-size:11px}
+.cmt-done{color:var(--ok);font-size:11px}
+.cmt-edit{width:100%;box-sizing:border-box;min-height:64px;background:var(--s1);color:var(--hi);border:1px solid var(--sel);border-radius:6px;padding:6px 8px;font:inherit;font-size:12px;resize:vertical}
+.cmt-shot{display:block;border:0;padding:0;margin:0 0 5px;background:none;cursor:zoom-in}
+.cmt-shot img{max-width:100%;max-height:120px;border-radius:4px;border:1px solid var(--line)}
+.cmt-acts{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.cmt-act{border:1px solid var(--line2);background:var(--s2);color:var(--hi);border-radius:6px;cursor:pointer;font-size:11px;padding:3px 7px;display:inline-flex;align-items:center;gap:4px}
+.cmt-act:hover{background:var(--s4)}
+.cmt-down{margin:0;font-size:12px;color:var(--open)}
