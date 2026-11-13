@@ -98,7 +98,7 @@ test("A+B: удар → острівець «Claude працює» внизу п
   /* Унизу й по центру ВИДИМОЇ робочої області: панель шарів відкрита, тож центр
      області зсунутий праворуч від центру вікна. */
   const geo = await page.evaluate(() => {
-    const i = document.querySelector("#claude-hud .claude-island").getBoundingClientRect();
+    const i = document.querySelector("#hud .island").getBoundingClientRect();
     const s = document.getElementById("stage").getBoundingClientRect();
     return { gap: innerHeight - i.bottom, delta: Math.abs((i.left + i.right) / 2 - (s.left + s.right) / 2) };
   });
@@ -282,7 +282,7 @@ test("M: сторінку повернули з bfcache — опит одраз�
   assert.equal(ctl.polls, before + 1, "опитів не рівно один: годинник не завмер, тест не міряє те, що має");
 });
 
-test("F: острівець є в «Огляді» (підказка схована), немає на «Задачах» і в чистому перегляді", async (t) => {
+test("F: сегмент Claude є в «Огляді» (підказка видима), немає на «Задачах»; острівця немає в чистому перегляді", async (t) => {
   const { page, url } = await boot(t, 400);
   await stubWorking(page);
   await page.goto(`${url}/app/`);
@@ -307,13 +307,14 @@ test("F: острівець є в «Огляді» (підказка схова�
     notice.remove();
     return out;
   });
-  assert.deepEqual(await lifts(), { toast: "58px", notice: "100px" }, "тост і плашка не піднялись над острівцем");
+  /* 0.25.0: острівець (інструменти) стоїть завжди, крім чистого перегляду, тож тост і плашка підняті над ним і без Claude. */
+  assert.deepEqual(await lifts(), { toast: "64px", notice: "106px" }, "тост і плашка не піднялись над острівцем");
 
   await page.click('[data-act="mode"][data-val="overview"]');
   await page.waitForSelector("#canvas:not([hidden])");
   assert.equal(await shown(), true, "острівця немає в «Огляді»");
   assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById("canvas-hint")).visibility),
-    "hidden", "підказка «Огляду» стоїть під острівцем");
+    "visible", "підказка «Огляду» схована без причини: ховає її лише claude-lift (смужка режимів коментатора)");
   await page.click('[data-act="mode"][data-val="layout"]');
   await page.waitForSelector("#stage:not([hidden])");
 
@@ -325,10 +326,11 @@ test("F: острівець є в «Огляді» (підказка схова�
   await page.waitForFunction(() => !document.documentElement.classList.contains("cv-clean"), null, { timeout: 3000 });
   assert.equal(await shown(), true, "острівець не повернувся після чистого перегляду");
 
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForFunction(() => document.body.classList.contains("home-open"));
-  assert.equal(await shown(), false, "острівець на екрані «Задачі» — статус про макет, якого тут немає");
-  assert.deepEqual(await lifts(), BASE, "тост/плашка підняті над острівцем, якого на «Задачах» немає");
+  assert.equal(await shown(), false, "сегмент Claude на екрані «Задачі» — статус про макет, якого тут немає");
+  assert.equal(await page.locator("#hud .island").count(), 1, "острівець (інструменти) мав лишитись на «Задачах»");
+  assert.deepEqual(await page.$$eval("#hud .isl-btn", (els) => els.map((e) => e.dataset.act)), ["feedback"]);
 });
 
 /* Геометрія смужки режимів коментатора й острівця в координатах вікна. Смужка живе в
@@ -337,7 +339,7 @@ const geometry = (page) => page.evaluate(() => {
   const f = document.getElementById("frame");
   const fr = f.getBoundingClientRect();
   const bar = f.contentDocument.querySelector("[data-comment-layer]").shadowRoot.querySelector(".modes").getBoundingClientRect();
-  const i = document.querySelector("#claude-hud .claude-island").getBoundingClientRect();
+  const i = document.querySelector("#hud .island").getBoundingClientRect();
   return { barTop: fr.top + bar.top, barBottom: fr.top + bar.bottom, barLeft: fr.left + bar.left, barRight: fr.left + bar.right,
     islTop: i.top, islBottom: i.bottom, islLeft: i.left, islRight: i.right, winH: innerHeight };
 });
@@ -396,7 +398,7 @@ test("G: острівець над смужкою режимів комента�
   let gap = 0;
   for (let i = 0; i < 20 && gap < 70; i += 1) {
     await page.waitForTimeout(150);
-    gap = await page.evaluate(() => innerHeight - document.querySelector("#claude-hud .claude-island").getBoundingClientRect().bottom);
+    gap = await page.evaluate(() => innerHeight - document.querySelector("#hud .island").getBoundingClientRect().bottom);
   }
   assert.ok(gap >= 70, `в «Огляді» острівець не піднявся над смужкою режимів коментатора: відступ ${gap}px`);
 });
@@ -410,7 +412,7 @@ test("H: острівець по центру робочої області за
   const check = async (what) => {
     await page.waitForTimeout(300);
     const g = await page.evaluate(() => {
-      const i = document.querySelector("#claude-hud .claude-island").getBoundingClientRect();
+      const i = document.querySelector("#hud .island").getBoundingClientRect();
       const s = document.getElementById("stage").getBoundingClientRect();
       return { delta: Math.abs((i.left + i.right) / 2 - (s.left + s.right) / 2), stage: [s.left, s.right] };
     });
@@ -422,7 +424,7 @@ test("H: острівець по центру робочої області за
   await collapse();
   await page.waitForFunction(() => document.body.classList.contains("panel-collapsed"), null, { timeout: 3000 });
   await check("панель згорнута");
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForFunction(() => document.body.classList.contains("with-insp"), null, { timeout: 3000 });
   await check("панель згорнута, інспектор відкритий");
   await collapse();

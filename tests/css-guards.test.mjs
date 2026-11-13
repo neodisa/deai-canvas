@@ -817,3 +817,76 @@ test("фільтр: input розтягнутий на висоту рамки, �
   assert.match(inp, /padding:0 8px 0 0/);
   assert.match(rule(".tree-filter"), /padding:0 0 0 8px/);
 });
+
+/* ===================================================================
+   0.25.0 — макет рядка вкладок і острівця
+   ------------------------------------------------------------------
+   Висоти верху — лише токенами (`--h-top` = вкладки + смуга); цілі кліку
+   ≥ 28px; рядок вкладок не розпирає вікно; шар острівця — між віджетами
+   й смугою. Кожну перевірку доведено мутацією одного рядка CSS.
+   =================================================================== */
+function cssRuleBodies(css, sel) {
+  const esc = sel.replace(/[.#:[\]()>+~*]/g, "\\$&");
+  const re = new RegExp(`(?:^|[}{;\\n])\\s*${esc}\\s*\\{([^}]*)\\}`, "g");
+  return [...stripComments(css).matchAll(re)].map((m) => m[1]);
+}
+function cssRule(css, sel) {
+  const bodies = cssRuleBodies(css, sel);
+  assert.ok(bodies.length, `у styles.css немає правила ${sel}`);
+  return bodies.join(";");
+}
+function cssPx(body, prop) {
+  const m = new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*(\\d+(?:\\.\\d+)?)px`).exec(body);
+  return m ? Number(m[1]) : null;
+}
+
+test("жоден селектор не фіксує верх числом 46px — лише токени висот", () => {
+  const css = stripComments(readCss());
+  const hits = css.split("\n").filter((l) => /\btop\s*:\s*46px/.test(l));
+  assert.deepEqual(hits, [], `top:46px живе в селекторі: ${hits.join(" | ")}`);
+});
+
+test("поверхні під рядками верху стоять на var(--h-top)", () => {
+  const css = readCss();
+  for (const sel of [".cv-stage", ".cv-canvas", ".pages-panel", ".errbar", ".panel", ".insp", "#tasks-home", ".cn-drawer"]) {
+    assert.match(cssRule(css, sel), /top\s*:\s*var\(--h-top\)/, `${sel} не стоїть на var(--h-top)`);
+  }
+});
+
+test("рядок вкладок: висота — токен, список не розпирає вікно", () => {
+  const css = readCss();
+  assert.match(cssRule(css, ".tabs"), /(?:^|[;\s])height\s*:\s*var\(--h-tabs\)/);
+  const list = cssRule(css, ".tabs-list");
+  assert.match(list, /overflow-x\s*:\s*auto/, ".tabs-list не прокручується вбік");
+  assert.match(list, /min-width\s*:\s*0/, ".tabs-list без min-width:0 розпирає flex-батька");
+});
+
+test("цілі кліку острівця, хрестика вкладки й «Вмістити все» не нижчі за 28px", () => {
+  const css = readCss();
+  const isl = cssRule(css, ".isl-btn"), x = cssRule(css, ".tab-x"), z = cssRule(css, ".cv-zoom");
+  for (const [name, body, props] of [[".isl-btn", isl, ["width", "height"]], [".tab-x", x, ["width", "height"]]]) {
+    for (const p of props) {
+      const v = cssPx(body, p);
+      assert.ok(v !== null && v >= 28, `${name} ${p}: ${v}px < 28px`);
+    }
+  }
+  const zh = Math.max(cssPx(z, "min-height") ?? 0, cssPx(z, "height") ?? 0);
+  assert.ok(zh >= 28, `.cv-zoom min-height/height: ${zh}px < 28px`);
+});
+
+test("острівець: смужка крізь порожнє пропускає клік, сам острівець його приймає", () => {
+  const css = readCss();
+  assert.match(cssRule(css, ".cv-hud"), /pointer-events\s*:\s*none/);
+  assert.match(cssRule(css, ".island"), /pointer-events\s*:\s*auto/);
+});
+
+test("шар острівця: вище за --z-widget, нижче за --z-bar (випадаючі меню його накривають)", () => {
+  const css = readCss();
+  const z = (n) => Number((new RegExp(`--${n}\\s*:\\s*(\\d+)`).exec(stripComments(css)) || [])[1]);
+  const widget = z("z-widget"), bar = z("z-bar");
+  assert.ok(widget > 0 && bar > widget, `токени шарів не розібрано: widget=${widget} bar=${bar}`);
+  const m = /z-index\s*:\s*calc\(\s*var\(--z-widget\)\s*\+\s*(\d+)\s*\)/.exec(cssRule(css, ".cv-hud"));
+  assert.ok(m, ".cv-hud має z-index calc(var(--z-widget) + N)");
+  const hud = widget + Number(m[1]);
+  assert.ok(hud > widget && hud < bar, `шар острівця ${hud} поза (${widget}, ${bar})`);
+});
