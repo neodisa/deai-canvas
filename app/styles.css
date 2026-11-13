@@ -817,6 +817,16 @@ body.with-panel.panel-collapsed.with-insp .cv-hud{width:calc(100% - var(--panel-
 /* Назва задачі в смузі — приглушена: «де я» каже вкладка. `.txt` усередині тримає колір крошки (`.crumb .txt` нижче дав би `--hi`). */
 .crumb--title{color:var(--dim)}
 .crumb--title .txt{color:inherit}
+/* Етап А (0.25.0): у зоні 1 смуги задачі лишились тільки ітерація й назва, тож вільне місце (~450px на 1280) — їхнє, а не ліміт 110px
+   крошок дерева шарів (`.crumb{max-width:110px}` нижче у файлі різав обидві; знайдено перевіркою проти живого канвасу, живий тест
+   `tabs` 12). Два класи — щоб перемагати незалежно від порядку, як `.crumb.crumb--page`. Стискається першою назва (еліпсис, повна —
+   у `title`), потім підписи ітерації; тег «Іт.N» не обрізається ніколи (`.txt--fix`). `#bar` — бо `.crumb--iter` є й у зовнішній
+   оболонці превʼю, її не чіпаємо. */
+#bar .crumb.crumb--title{max-width:none;flex:0 3 auto;min-width:3em;overflow:hidden}
+#bar .crumb--title .txt{min-width:0;overflow:hidden;text-overflow:ellipsis}
+#bar .crumb.crumb--iter{max-width:none}
+#bar .crumb-h.crumb--iter{flex-shrink:1}
+#bar .crumb--iter .txt--soft{max-width:200px}
 /* Крошка СТОРІНКИ оверлею `#tasks-home` («Задачі», «Підключення», «Новий простір»): назва коротка й обрізати її нічим. Пізніше в
    файлі `.crumb{max-width:110px}` (крошки дерева шарів) перебиває ліміт 260px зверху, і в UK іконка стискалась до 0px.
    Два класи — щоб перемагати незалежно від порядку; `.crumb--flat` загалом НЕ чіпаємо: ним користується зовнішня оболонка превʼю. */

@@ -14,13 +14,15 @@ import { startServer, taskFixture } from "./fixture.mjs";
 const PORT_BASE = 19000;
 const HTML = () => "<!doctype html><h1>Фікстура</h1>";
 
-/** Сервер із задачею `fixture` (поточна) і п'ятьма додатковими `t0…t4` (усі з текою). */
+/** Сервер із задачею `fixture` (поточна), пʼятьма додатковими `t0…t4` і `long` з довгою назвою (усі з текою). */
 async function boot(t, portBase, { viewport = { width: 1440, height: 900 } } = {}) {
   const { dir } = taskFixture({ html: HTML });
   const extraTasks = {};
   for (let i = 0; i < 5; i += 1) {
     extraTasks[`t${i}`] = { dir, jira: `LIGA-${10000 + i}`, title: `LIGA-${10000 + i} · Задача ${i} для вкладок` };
   }
+  /* Довга назва (тест 12): на живому канвасі назва «Інтерактив «Перевір свою бізнес-інтуїцію» · 4K-тач» різалась до 110px. */
+  extraTasks.long = { dir, jira: "LIGA-10099", title: "LIGA-10099 · Інтерактив «Перевір свою бізнес-інтуїцію» · 4K-тач для стенду" };
   const { child, url } = await startServer(dir, { portBase, extraTasks });
   t.after(() => child.kill());
   const browser = await chromium.launch();
@@ -248,4 +250,22 @@ test("11: швидкі кліки по двох вкладках — одна з
   assert.equal(await cur(url), "t2", "виграла не остання вкладка");
   assert.equal(maxInflight, 1, `одночасних task-switch: ${maxInflight}`);
   assert.equal(posts, 2, `зайвих task-switch: ${posts} (мало бути перший і останній)`);
+});
+
+test("12: смуга задачі віддає назві й ітерації вільне місце зони 1, а не ліміт 110px дерева шарів", async (t) => {
+  /* Знайдено перевіркою проти живого (13.11.2026): глобальне `.crumb{max-width:110px}` (крошки дерева шарів) різало і назву,
+     і ітерацію, хоча після етапу А в зоні 1 лише вони дві й місця ~450px. */
+  const { page, url } = await boot(t, PORT_BASE + 1200, { viewport: { width: 1280, height: 800 } });
+  await openFromHome(page, url, "long");
+  const w = await page.evaluate(() => {
+    const el = document.querySelector("#bar .crumb--title");
+    const txt = el.querySelector(".txt");
+    const zone = document.querySelector("#bar .zone-1").getBoundingClientRect();
+    return { box: el.getBoundingClientRect().width, full: txt.scrollWidth, shown: txt.clientWidth,
+      free: zone.right - el.getBoundingClientRect().right };
+  });
+  assert.ok(w.box > 200, `назва задачі в смузі завузька: ${Math.round(w.box)}px`);
+  /* Назва довша за зону — обрізатись їй можна, але лише тоді, коли місце в зоні 1 скінчилось. */
+  if (w.shown < w.full - 1) assert.ok(w.free < 16, `назва обрізана, а в зоні 1 лишилось ${Math.round(w.free)}px вільного`);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "смуга розперла сторінку");
 });
