@@ -8,7 +8,8 @@
  * виключні, що чужа посилка панелі не вірить, і що рамка, яка перейшла на адресу без `host=1`, повертається в режим хоста.
  *
  * Три сервери: A — звичайний (сценарії 1–9, 12, 13; піни створюються живою формою), B — із засіяним закритим піном
- * (10), C — з двома ітераціями й відкритим піном першої (11).
+ * (10), C — з двома ітераціями й відкритим піном першої (11). Сервер D (Task 8, «Огляд») — фікстура T-45 із кадрами й
+ * 9 посіяними пінами (сценарії 15–19): коментатор «Огляду» живе у вікні оболонки, а панель — та сама.
  */
 import assert from "node:assert/strict";
 import { cpSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,6 +17,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { seedPins, shootAll, t45Task } from "./_t45-fixture.mjs";
 
 const PORT_BASE = 26100;
 const SEEDED_PORT_BASE = 26200;
@@ -319,4 +321,153 @@ test("14: поки готовності нового документа нема
   await settle(page);
   assert.equal((await panelText(page)).includes("застарілий"), false, "запізніла посилка старого документа повернула картку");
   await page.unroute("**/comment-layer.min.js");
+});
+
+/* ───────── Сервер D: «Огляд» (Task 8). Коментатор полотна — у вікні оболонки; панель — та сама, що в «Макеті» ───────── */
+const D = {};
+const OVR_PORT_BASE = 26400;
+const canvasHost = () => document.querySelector("#canvas [data-comment-layer]");
+const camNow = (page) => page.evaluate(() => {
+  const m = /translate\(([-\d.e]+)px,\s*([-\d.e]+)px\)\s*scale\(([-\d.e]+)\)/.exec(document.getElementById("world").style.transform);
+  return { x: +m[1], y: +m[2], s: +m[3] };
+});
+const composeText = (page) => page.evaluate(() => document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".compose textarea")?.value ?? null);
+const cmtNotes = (page) => page.$$eval("#cmt-panel .cmt-note", (els) => els.length);
+const pressAt = async (page, x, y) => { await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.up(); };
+
+test("15: «Огляд» — з відкритою панеллю ті самі картки, але полотна (без приміток «на іншій сторінці»); ручка коментатора полотна схована", async () => {
+  const { dir } = t45Task();
+  const server = await startServer(dir, { portBase: OVR_PORT_BASE, title: "Огляд" });
+  aCleanup.push(() => server.child.kill());
+  const comments = await seedPins(browser, server.url);
+  const shot = await shootAll(server.url);
+  assert.ok(shot.ok, `зʼємка: ${JSON.stringify(shot).slice(0, 300)}`);
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  aCleanup.push(() => page.close());
+  await page.addInitScript(() => {
+    window.__cmtMsgs = [];
+    window.addEventListener("message", (e) => { if (e.data && e.data.type === "dc-comments") window.__cmtMsgs.push(e.data.ev); });
+  });
+  await page.goto(`${server.url}/app/`);
+  const frame = await (await page.waitForSelector("#frame")).contentFrame();
+  await frame.waitForFunction(() => window.CommentLayer && window.CommentLayer._inited, null, { timeout: 20000 });
+  await until(() => page.evaluate(() => window.__cmtMsgs.includes("ready")));
+  Object.assign(D, { page, frame, server, comments });
+  // Макет: панель відкрита, у рамці є примітки «на іншій сторінці» (піни «Пошуку» при відкритій «Головній»).
+  await page.click('#hud [data-act="comments"]');
+  await waitSnap(page);
+  await until(async () => (await cmtNotes(page)) > 0);
+  // Вибір і редагування в Макеті — не мусять переживати перемикання виду.
+  await page.click('#cmt-panel [data-act="cmtedit"]');
+  await page.waitForSelector("#cmt-panel textarea.cmt-edit");
+  await page.fill("#cmt-panel textarea.cmt-edit", "чернетка з Макета");
+  await page.getByRole("button", { name: /Огляд/ }).click();
+  await page.locator(".cv-card img").first().waitFor();
+  await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]")?.shadowRoot?.querySelectorAll(".cp").length);
+  await until(async () => (await cmtNotes(page)) === 0);
+  assert.equal(await panelOpen(page), true, "панель закрилась при вході в «Огляд»");
+  assert.equal(!!(await page.$("#cmt-panel textarea.cmt-edit")), false, "редагування Макета пережило перемикання виду");
+  assert.equal(!!(await page.$("#cmt-panel .cmt-card--sel")), false, "вибір Макета пережив перемикання виду");
+  assert.equal((await page.$$("#cmt-panel .cmt-card")).length, comments.length, "картки — не ті, що в пінів полотна");
+  assert.equal(await islCount(page), String(comments.length));
+  // Режим коментування: у полотна ввімкнено, у рамки вимкнено; ручка й панель коментатора полотна схованi.
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true);
+  assert.equal(await frame.evaluate(() => !!window.CommentLayer.commentMode), false, "коментатор рамки лишився в режимі на «Огляді»");
+  const hidden = await page.evaluate(() => {
+    const r = document.querySelector("#canvas [data-comment-layer]").shadowRoot;
+    return ["handle", "panel"].map((c) => getComputedStyle(r.querySelector("." + c)).display);
+  });
+  assert.deepEqual(hidden, ["none", "none"]);
+});
+
+test("16: «Огляд» — «Показати» рухає камеру; C закриває й знову відкриває панель; закрити/повернути ведуть коментатор полотна", async () => {
+  const { page } = D;
+  const target = "t45-poshuk-1";
+  const cam0 = await camNow(page);
+  await page.click(`#cmt-panel [data-cid="${target}"] [data-act="cmtshow"]`);
+  await until(async () => { const c = await camNow(page); return Math.abs(c.x - cam0.x) > 20 || Math.abs(c.y - cam0.y) > 20 || Math.abs(c.s - cam0.s) > 0.01; });
+  await page.waitForSelector(`#cmt-panel [data-cid="${target}"].cmt-card--sel`);
+  // Закрити → картка в «Закриті»; повернути → знову відкрита (дії ідуть у шар полотна, а не в рамку).
+  await page.click(`#cmt-panel [data-cid="${target}"] [data-act="cmtres"]`);
+  await page.waitForSelector('#cmt-panel .cmt-fold[data-val="closed"]');
+  assert.equal(await islCount(page), String(D.comments.length - 1));
+  await page.click('#cmt-panel .cmt-fold[data-val="closed"]');
+  await page.click(`#cmt-panel [data-cid="${target}"] [data-act="cmtreopen"]`);
+  await until(async () => (await islCount(page)) === String(D.comments.length));
+  // C із фокусом в оболонці.
+  await page.click("#bar", { position: { x: 3, y: 3 } });
+  await page.keyboard.press("c");
+  await until(async () => !(await panelOpen(page)));
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), false, "C не вимкнув режим полотна");
+  await page.keyboard.press("c");
+  await until(() => panelOpen(page));
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true);
+});
+
+test("17: «Огляд» — клік по кадру в режимі коментування → форма; набір «с/р/cc hh» у формі не перемикає панель і не губить текст (shadow DOM документа оболонки)", async () => {
+  const { page } = D;
+  await page.waitForTimeout(450);
+  /* Після «Показати» камера стоїть на піні «Пошуку» — клікаємо в центр видимої частини його кадру. */
+  const at = await page.evaluate(() => {
+    const r = document.querySelector('.cv-card[data-key="poshuk"] .cv-card-body').getBoundingClientRect();
+    const c = document.getElementById("canvas").getBoundingClientRect();
+    const l = Math.max(r.left, c.left), rr = Math.min(r.right, c.right), tp = Math.max(r.top, c.top), bt = Math.min(r.bottom, c.bottom);
+    return { x: (l + rr) / 2, y: (tp + bt) / 2 };
+  });
+  await page.mouse.move(at.x, at.y); await page.waitForTimeout(100);
+  await pressAt(page, at.x, at.y);
+  await until(async () => (await composeText(page)) !== null);
+  await page.keyboard.type("cc hh");
+  // Українська розкладка: `code` лишається KeyC/KeyH, а `key` — «с»/«р»; подія — з тіньового DOM, як від справжнього набору.
+  await page.evaluate(() => {
+    const ta = document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".compose textarea");
+    for (const [key, code] of [["с", "KeyC"], ["р", "KeyH"], ["с", "KeyC"]]) {
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, composed: true, cancelable: true }));
+    }
+  });
+  assert.equal(await panelOpen(page), true, "набір у формі коментатора полотна закрив панель");
+  assert.equal(await composeText(page), "cc hh", "форма зникла або текст втрачено");
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true, "режим вимкнено під час набору");
+});
+
+test("18: «Огляд» — Esc із формою закриває ЛИШЕ форму; наступний Esc виходить із режиму й закриває панель", async () => {
+  const { page } = D;
+  assert.notEqual(await composeText(page), null, "форма з попереднього сценарію зникла");
+  await page.keyboard.press("Escape");
+  await until(async () => (await composeText(page)) === null);
+  assert.equal(await panelOpen(page), true, "перший Esc закрив усю панель разом із формою");
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true, "перший Esc вимкнув режим");
+  await page.keyboard.press("Escape");
+  await until(async () => !(await panelOpen(page)));
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), false);
+});
+
+test("18б: «Огляд» — Esc у полі редагування картки скасовує редагування, а не виходить із режиму й не закриває панель", async () => {
+  const { page } = D;
+  await page.keyboard.press("c");
+  await until(() => panelOpen(page));
+  await page.click('#cmt-panel [data-act="cmtedit"]');
+  await page.waitForSelector("#cmt-panel textarea.cmt-edit");
+  await page.fill("#cmt-panel textarea.cmt-edit", "правка");
+  await page.press("#cmt-panel textarea.cmt-edit", "Escape");
+  await page.waitForFunction(() => !document.querySelector("#cmt-panel textarea.cmt-edit"));
+  assert.equal(await panelOpen(page), true, "Esc у редагуванні закрив панель");
+  assert.equal(await page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting")), true, "Esc у редагуванні вимкнув режим");
+});
+
+test("19: назад у «Макет» — панель лишається відкритою, режим рамки знову увімкнено, картки — рамки; подія полотна в Макеті не діє", async () => {
+  const { page, frame } = D;
+  assert.equal(await panelOpen(page), true);
+  await page.getByRole("button", { name: /Макет/ }).click();
+  await page.waitForFunction(() => document.getElementById("canvas").hidden);
+  await until(async () => (await cmtNotes(page)) > 0);
+  assert.equal(await panelOpen(page), true, "панель закрилась при поверненні в «Макет»");
+  await until(() => modesShown(frame));
+  const own = await frame.evaluate(() => window.CommentLayer.snapshot().comments.map((c) => c.text).sort());
+  const shown = (await cardTexts(page)).slice().sort();
+  assert.deepEqual(shown, own, "картки Макета ≠ знімок коментатора рамки");
+  // Запізніла подія коментатора полотна в Макеті ігнорується (поправка 11).
+  await page.evaluate(() => window.postMessage({ type: "dc-comments", ev: "mode", on: false }, "*"));
+  await settle(page);
+  assert.equal(await panelOpen(page), true);
 });

@@ -214,6 +214,30 @@ test("H: «Огляд» із відповіддю модуля вантажит�
   } finally { b.restore(); }
 });
 
+test("H1: host оболонки (0.26.0) долітає в init коментатора тим самим обʼєктом; без host — поля нема", async () => {
+  const R = resp({ module: "m-h", client: ["/api/module-client/m-h/adapter.js"] });
+  const mk = (b) => ({ "/api/module-client/m-h/adapter.js": (el) => {
+    globalThis.DeaiComments = { create: () => ({ ready: Promise.resolve(), load: () => [], save() {}, subscribe() {}, close() {} }) };
+    el.onload();
+  } });
+  const b = browser({ resp: R, scripts: mk() });
+  try {
+    const host = { onReady() {}, onChange() {}, onSelect() {}, onMode() {} };
+    const oc = overviewComments({ ...envFor(b), host });
+    oc.enter();
+    await settle();
+    assert.deepEqual(b.errors, []);
+    assert.equal(b.inits.length, 1);
+    assert.equal(b.inits[0].host, host, "init отримує host оболонки як є");
+    oc.leave();
+    oc.invalidate();
+    const oc2 = overviewComments(envFor(b));
+    oc2.enter();
+    await settle();
+    assert.equal(b.inits.at(-1).host, undefined, "без env.host — undefined (поведінка до 0.26.0)");
+  } finally { b.restore(); }
+});
+
 test("H2: адаптер не завантажився — без винятку назовні: помилка в fail(), шар не піднято, наступний вхід пробує знову", async () => {
   const R = resp({ module: "m-h2", client: ["/api/module-client/m-h2/adapter.js"] });
   const b = browser({ resp: R });             // scripts порожні → onerror

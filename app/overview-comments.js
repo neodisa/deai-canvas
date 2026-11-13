@@ -3,7 +3,7 @@
  * «полотно» (`init({anchors})`).
  *
  * Межа та сама, що в Claude Design: оболонка дає координати й камеру,
- * коментатор малює все своє — піни, прев'ю, панель, вкладки «Клод/Команда».
+ * коментатор малює піни й форму; панель — оболонки (0.26.0, `env.host`).
  * Уся математика — в `overview-pins.js` (чиста, під юнітами); тут лише стан,
  * мережа й життєвий цикл інстансу.
  *
@@ -113,12 +113,35 @@ function closeQuietly(store) {
 }
 
 /**
+ * Композер коментатора рахує праву межу за ВЛАСНОЮ панеллю (`_panel.show`), а в режимі хоста її нема — панель оболонки
+ * стоїть праворуч від полотна, і кнопка «Comment» ховалась би під нею (клік не доходив). Підтискаємо композер до
+ * правого краю ПОЛОТНА, щойно він зʼявився: `MutationObserver` відпрацьовує після синхронного `style.left` коментатора.
+ * Шар без `_sh` (підставний у юнітах) чи середовище без `MutationObserver` — тихо без підтискання.
+ */
+function keepComposeInView(layer, canvasEl) {
+  const sh = layer && layer._sh;
+  if (!sh || typeof MutationObserver !== "function") return;
+  new MutationObserver((list) => {
+    for (const m of list) {
+      for (const n of m.addedNodes) {
+        if (!n.classList || !n.classList.contains("compose")) continue;
+        const r = canvasEl.getBoundingClientRect();
+        const max = r.left + r.width - (n.offsetWidth || 290) - 12;
+        const left = parseFloat(n.style.left);
+        if (Number.isFinite(left) && left > max) n.style.left = `${Math.max(8, max)}px`;
+      }
+    }
+  }).observe(sh, { childList: true });
+}
+
+/**
  * @param env {{
  *   canvasEl: Element, cam: () => {x,y,scale}, cards: () => Array, cardW: () => number,
  *   picked: () => string|null, channel: () => 'local'|'project',
  *   frameKeyOf: (card) => string, shotOf: (card) => object|null,
  *   camTo: (target) => void, focusCard: (card) => void,
  *   audiences: () => Array, onAudience: (ch) => void, fail: (err) => void,
+ *   host?: {onReady, onChange, onSelect, onMode},
  * }} env
  */
 export function overviewComments(env) {
@@ -367,7 +390,10 @@ export function overviewComments(env) {
       anchors: provider, audiences: env.audiences(), onAudience: env.onAudience,
       // особа машини — запасне імʼя автора, коли браузер не показує діалог імені (вбудований)
       defaultUser: cfg.user || null,
+      // колбеки панелі оболонки (0.26.0); ручку й панель полотна тримає оболонка
+      host: env.host || undefined,
     });
+    keepComposeInView(cl, env.canvasEl);
     tick();
   }
   const fail = (e) => env.fail(e);
@@ -391,6 +417,8 @@ export function overviewComments(env) {
     leave() { active = false; if (cl && cl.commentMode) cl.setCommentMode(false); },
     /** Полотно перебудоване (кадри, розкладка, канал, ітерація). */
     rebuild() { if (!active) return; measure(); ensure().catch(fail); tick(); },
+    /** Полотно змінило розмір БЕЗ `resize` вікна (панель оболонки стисла чи розтягла його): перемірити габарит. */
+    remeasure() { if (active) { measure(); tick(); } },
     /** Кадр камери. */
     tick,
     /**

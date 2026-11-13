@@ -42,6 +42,10 @@
  *        .closest» виживала, доки не зʼявився Q2 (повторне ревʼю).
  *   R (NEW-1) — `if (!shot) return undefined` у `geoOf`. Мутація «null» червонить R.
  *   S (NEW-3) — `retryAt` + таймер повтору. Обидві мутації червонять S.
+ *
+ * 0.26.0 (Task 8): панель коментарів — оболонки (`#cmt-panel`), а не коментатора полотна: картки, лічильник і вибраний
+ * пін перевіряються там; піни й форма (`.cp`, `.compose`, `.clhov`) і далі малює коментатор у тіньовому DOM полотна.
+ * Ручка й панель коментатора ховаються класом `hosted`; клавіша P зникла (панель = режим, C/H — оболонки).
  */
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -75,6 +79,11 @@ test.after(async () => {
   await browser?.close();
   server?.child.kill();
 });
+
+const SHELL_PANEL = "#cmt-panel:not([hidden])";
+const shellPanelOpen = (page) => page.evaluate(() => !document.getElementById("cmt-panel").hidden);
+const islCount = (page) => page.evaluate(() => document.querySelector('#isl-tools [data-act="comments"] .isl-count')?.textContent ?? null);
+const commenting = (page) => page.evaluate(() => document.getElementById("canvas").classList.contains("cv-commenting"));
 
 /** Справжнє натискання: `mouse.down/up`, не `locator.click()` — див. шапку. */
 async function pressAt(page, x, y) {
@@ -227,24 +236,12 @@ test("D+E: клік по піну відкриває картку; клік по
   const pin = (await pinsOf(page)).find((p) => !p.cluster && p.vis && p.ids[0] === "t45-holovna-2");
   assert.ok(pin, "пін кнопки «Підписатися» не на екрані");
   await pressAt(page, pin.cx, pin.cy);
-  const opened = await page.evaluate((id) => {
-    const root = document.querySelector("#canvas [data-comment-layer]").shadowRoot;
-    return { panel: root.querySelector(".panel").classList.contains("show"),
-             flash: root.querySelector(`#c${id}`)?.classList.contains("flash") };
-  }, pin.ids[0]);
-  assert.deepEqual(opened, { panel: true, flash: true }, "клік по піну не дійшов до панелі");
-  // Панель виїжджає переходом — міряти картку до кінця виїзду означає цілитись
-  // у точку за правим краєм вікна (так і впала перша редакція цього кроку).
+  await page.waitForSelector(`${SHELL_PANEL} [data-cid="${pin.ids[0]}"].cmt-card--sel`, { timeout: 5000 });
+  // Полотно стискається під панель — міряти вже після того, як камера й розмір стали.
   await page.waitForTimeout(450);
-  // Картка ІНШОГО піна (сторінка «Пошук») — переліт через пів полотна.
+  // Картка ІНШОГО піна (сторінка «Пошук») — «Показати» → переліт через пів полотна.
   const target = "t45-poshuk-1";
-  const box = await page.evaluate((id) => {
-    const el = document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(`#c${id} .who`);
-    el.scrollIntoView({ block: "center" });   // картка могла бути за прокруткою списку
-    const r = el.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-  }, target);
-  await pressAt(page, box.x, box.y);
+  await page.click(`${SHELL_PANEL} [data-cid="${target}"] [data-act="cmtshow"]`);
   const cam = await settleCam(page);
   assert.ok(cam.scale >= 0.5 - 1e-6, `переліт лишив дрібний масштаб ${cam.scale}`);
   const p = (await pinsOf(page)).find((x) => x.ids[0] === target && !x.cluster);
@@ -263,18 +260,16 @@ test("F: колесо над піном зумить полотно; над сп
   await zoomWheel(page, 0, -120);
   const mid = (await settleCam(page)).scale;
   assert.ok(mid > before * 1.05, "колесо над піном не дійшло до полотна");
-  await page.keyboard.press("p");   // панель коментатора полотна
-  await page.waitForFunction(() => document.querySelector("#canvas [data-comment-layer]")
-    .shadowRoot.querySelector(".panel").classList.contains("show"));
-  // Панель виїжджає переходом. Без паузи точка лягала за правий край вікна, колесо
-  // крутилось у порожнечі, і перевірка зеленіла навіть без фільтра колеса — її
-  // власна мутація це й показала. Тому ще й доводимо, що точка — НА панелі.
+  await page.keyboard.press("c");   // панель оболонки (P зникла — панель = режим)
+  await page.waitForSelector(SHELL_PANEL);
+  // Без паузи точка могла б лягти за край вікна, а колесо крутилось би в порожнечі й перевірка
+  // зеленіла б без охорони. Тому ще й доводимо, що точка — НА панелі.
   await page.waitForTimeout(450);
   const list = await page.evaluate(() => {
-    const host = document.querySelector("#canvas [data-comment-layer]");
-    const r = host.shadowRoot.querySelector(".list").getBoundingClientRect();
-    const x = r.left + r.width / 2, y = r.top + 60;
-    return { x, y, onPanel: document.elementFromPoint(x, y) === host && x < innerWidth };
+    const body = document.querySelector("#cmt-panel .cmt-body");
+    const r = body.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + Math.min(60, r.height / 2);
+    return { x, y, onPanel: !!document.elementFromPoint(x, y)?.closest("#cmt-panel") && x < innerWidth };
   });
   assert.ok(list.onPanel, `точка колеса не на панелі: ${JSON.stringify(list)}`);
   await page.mouse.move(list.x, list.y);
@@ -284,42 +279,46 @@ test("F: колесо над піном зумить полотно; над сп
   await page.close();
 });
 
-test("G: на «Огляді» клавіші бере коментатор полотна, а прихований живий iframe мовчить", async () => {
+test("G: на «Огляді» C бере коментатор полотна (панель оболонки + режим), а прихований живий iframe мовчить", async () => {
   const page = await overview();
   await page.mouse.move(700, 450);
-  await page.keyboard.press("p");
-  const st = await page.evaluate(() => ({
-    canvas: document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".panel").classList.contains("show"),
-    frame: document.getElementById("frame").contentWindow.CommentLayer._panel.classList.contains("show"),
-  }));
-  assert.deepEqual(st, { canvas: true, frame: false });
+  await page.keyboard.press("c");
+  await page.waitForSelector(SHELL_PANEL);
+  const st = await page.evaluate(() => {
+    const F = document.getElementById("frame").contentWindow.CommentLayer;
+    return { shell: !document.getElementById("cmt-panel").hidden,
+             canvasMode: document.getElementById("canvas").classList.contains("cv-commenting"),
+             frameMode: !!F.commentMode, framePanel: F._panel.classList.contains("show") };
+  });
+  assert.deepEqual(st, { shell: true, canvasMode: true, frameMode: false, framePanel: false });
   await page.close();
 });
 
-test("I: лічильник на ручці коментатора — усі відкриті піни ітерації, а не «цього маршруту»", async () => {
+test("I: число на кнопці острівця — усі відкриті піни ітерації, а не «цього маршруту»", async () => {
   // Оболонка живе на `/app/`, піни народжені на `/commented`: рахунок по маршруту
   // давав 0 при восьми пінах на полотні (знайдено скриншотом першого прогону).
   const page = await overview();
-  const n = await page.evaluate(() => document.querySelector("#canvas [data-comment-layer]")
-    .shadowRoot.querySelector(".cbadge").textContent);
-  assert.equal(n, String(comments.length));
+  await page.waitForFunction(() => document.querySelector('#isl-tools [data-act="comments"] .isl-count'), null, { timeout: 10000 });
+  assert.equal(await islCount(page), String(comments.length));
   await page.close();
 });
 
-test("J: шапка панелі коментатора — під смугою оболонки, а не під нею сховано", async () => {
-  // Панель прибита до верху вікна; в оболонці це верх СМУГИ. Знайдено живим
-  // оглядом на boss-interface: вкладки «Клод/Команда» й ✕ були недосяжні.
+test("J: шапка панелі коментарів — під смугою оболонки, а не під нею сховано", async () => {
+  // Знайдено живим оглядом на boss-interface: вкладки «Клод/Команда» й ✕ були недосяжні.
+  // Тепер панель оболонки: її шапка (перемикач каналу, ✕) мусить ловити клік, а не смуга.
   const page = await overview();
-  await page.keyboard.press("p");
+  await page.keyboard.press("c");
+  await page.waitForSelector(SHELL_PANEL);
   await page.waitForTimeout(450);
   const r = await page.evaluate(() => {
-    const head = document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".panel .head");
+    const head = document.querySelector("#cmt-panel .cmt-top, #cmt-panel .cmt-body");
+    const x = document.querySelector('#cmt-panel [data-act="comments"]').getBoundingClientRect();
     const h = head.getBoundingClientRect();
     return { head: h.top, canvas: document.getElementById("canvas").getBoundingClientRect().top,
-             hit: document.elementFromPoint(h.left + 12, h.top + h.height / 2)?.hasAttribute?.("data-comment-layer") };
+             hit: !!document.elementFromPoint(x.left + x.width / 2, x.top + x.height / 2)?.closest('#cmt-panel [data-act="comments"]') };
   });
   assert.ok(r.head >= r.canvas - 0.5, `шапка панелі вище полотна: ${JSON.stringify(r)}`);
-  assert.equal(r.hit, true, "шапку панелі накриває смуга оболонки");
+  assert.equal(r.hit, true, "✕ панелі накриває смуга оболонки");
   await page.close();
 });
 
@@ -473,11 +472,10 @@ async function withSupabaseStub(page) {
 }
 const hosts = (page) => page.evaluate(() => document.querySelectorAll("#canvas [data-comment-layer]").length);
 async function switchAudience(page, id) {
-  if (!(await shadow(page, "return root.querySelector('.panel').classList.contains('show');"))) {
-    await page.mouse.move(700, 450); await page.keyboard.press("p"); await page.waitForTimeout(450);
+  if (!(await shellPanelOpen(page))) {
+    await page.mouse.move(700, 450); await page.keyboard.press("c"); await page.waitForSelector(SHELL_PANEL); await page.waitForTimeout(450);
   }
-  const b = await shadow(page, `const r = root.querySelector('[data-aud="${id}"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };`);
-  await pressAt(page, b.x, b.y);
+  await page.click(`#cmt-panel [data-act="cmtch"][data-val="${id}"]`);
   await page.waitForFunction(() => {
     const hs = document.querySelectorAll("#canvas [data-comment-layer]");
     return hs.length === 1 && hs[0].shadowRoot.querySelector(".handle");
@@ -495,8 +493,7 @@ test("M: пін без місця на кадрі — лічильник «по�
   assert.equal(off.text, "поза кадром: 1");
   await pressAt(page, off.cx, off.cy);
   await page.waitForTimeout(100);
-  const st = await shadow(page, "return { panel: root.querySelector('.panel').classList.contains('show'), flash: root.querySelector('#ct45-ghost')?.classList.contains('flash') };");
-  assert.deepEqual(st, { panel: true, flash: true });
+  await page.waitForSelector(`${SHELL_PANEL} [data-cid="t45-ghost"].cmt-card--sel`, { timeout: 5000 });
   await page.close();
 });
 
@@ -548,7 +545,8 @@ test("N (D1): перемикання каналу на «Огляді» лиша
 
 test("O (D2): пін, лишений у живому виді, видно на «Огляді» після повернення — канал перечитується", async () => {
   const page = await overview();
-  const before = await shadow(page, "return root.querySelector('.cbadge').textContent;");
+  await page.waitForFunction(() => document.querySelector('#isl-tools [data-act="comments"] .isl-count'), null, { timeout: 10000 });
+  const before = await islCount(page);
   // запис живого виду — той самий ендпоінт, що бере local-adapter рамки
   const list = (await (await fetch(`${server.url}/api/local-comments`)).json()).comments;
   const src = list.find((c) => c.id === "t45-poshuk-0");
@@ -556,7 +554,7 @@ test("O (D2): пін, лишений у живому виді, видно на �
     body: JSON.stringify({ comments: [...list, { ...src, id: "t45-live", text: "лишено в живому виді", meta: { ...src.meta, seq: 999 } }] }) });
   await page.getByRole("button", { name: /Макет/ }).click();
   await page.getByRole("button", { name: /Огляд/ }).click();
-  await page.waitForFunction((b) => document.querySelector("#canvas [data-comment-layer]").shadowRoot.querySelector(".cbadge").textContent === String(Number(b) + 1), before, { timeout: 10000 });
+  await page.waitForFunction((b) => document.querySelector('#isl-tools [data-act="comments"] .isl-count')?.textContent === String(Number(b) + 1), before, { timeout: 10000 });
   await page.close();
 });
 

@@ -1757,7 +1757,11 @@ function paintComments() {
     ? { sel: act.id === 'cmt-q' ? '#cmt-q' : '.cmt-edit', range: [act.selectionStart, act.selectionEnd] } : null;
   const top = cmtEl.querySelector('.cmt-body')?.scrollTop || 0;
   cmtEl.hidden = !html;
+  const wasWith = document.body.classList.contains('with-cmt');
   document.body.classList.toggle('with-cmt', !!html);
+  /* Панель стискає полотно БЕЗ події `resize` вікна, а коментатор «Огляду» міряє габарит лише на ній: стара ширина
+     збивала б переліт до піна (центр — не центр видимого полотна). */
+  if (wasWith !== !!html && mode === 'canvas') ovc.remeasure();
   cmtEl.innerHTML = html;
   const body = cmtEl.querySelector('.cmt-body');
   if (body && top) body.scrollTop = top;
@@ -1779,6 +1783,25 @@ function setCommentsOpen(on) {
   if (!on) { cmtSel = null; cmtEditing = null; cmtDraft = null; }
   const L = cmtLayer();
   if (L && !!L.commentMode !== on) L.setCommentMode(on);
+  paintComments();
+}
+/** Вид (Макет ↔ Огляд) змінився: панель показує коментатора НОВОГО виду — знімок, вибране, редагування й чернетка старого
+ *  не про нього (дії йшли б у чужий шар із чужими id). Коментатор рамки на «Огляді» мовчить (режим вимкнено), а на
+ *  поверненні перезвімкнеться, якщо панель відкрита. Той самий вид (повторний `render`) — нічого не скидає. */
+let cmtView = null;
+function cmtViewSwitch() {
+  if (cmtView === mode) return;
+  const was = cmtView;
+  cmtView = mode;
+  cmtSel = null; cmtEditing = null; cmtDraft = null;
+  if (mode === 'canvas') {
+    if (was) try { const FL = frame.contentWindow?.CommentLayer; if (FL?.commentMode) FL.setCommentMode(false); } catch (e) {}
+    cmtSnap = ovc.layer ? ovc.layer.snapshot() : null;
+  } else {
+    const L = cmtLayer();
+    cmtSnap = L ? L.snapshot() : null;
+    if (L && cmtOpen && !L.commentMode) L.setCommentMode(true);
+  }
   paintComments();
 }
 /** Подія коментатора: `src` — 'frame' чи 'canvas'; чужий вид — ігнор (поправка 11). */
@@ -1814,16 +1837,26 @@ window.addEventListener('message', (ev) => {
 /** Поле вводу чи contenteditable — за СПРАВЖНІМ походженням події й за глибоким активним елементом: форма й редагування
  *  коментатора живуть у його shadow DOM, де `ev.target` на вікні рамки ретаргетиться на хост (DIV). Те саме робить
  *  інспектор (`deepTarget`/`activeDeep`/`isEditable` у `vendor/inspector.js`). */
-function frameTyping(ev) {
+function typingIn(ev, doc) {
   const isEd = (n) => !!n && n.nodeType === 1 && (/^(input|textarea|select)$/i.test(n.localName || '') || !!n.isContentEditable);
   const o = (typeof ev.composedPath === 'function' && ev.composedPath()[0]) || ev.target;
   let a = null;
   try {
-    a = frame.contentDocument?.activeElement || null;
+    a = doc?.activeElement || null;
     while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   } catch (e) { a = null; }
   return isEd(o) || isEd(a);
 }
+const frameTyping = (ev) => typingIn(ev, frame.contentDocument);
+/* Esc у панелі оболонки на «Огляді». Коментатор полотна живе в ЦЬОМУ вікні й слухає Escape на `window` у фазі захоплення
+   (шаровано: лайтбокс → форма → режим → панель); без цього слухача Esc у полі редагування картки доходив би до нього
+   першим, виходив із режиму й закривав усю панель разом із недописаною правкою. Реєструється при завантаженні, тобто РАНІШЕ
+   за слухача коментатора (той — при `init`), тож перехоплює першим: Esc із фокусом у панелі — справа панелі. */
+window.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape' || mode !== 'canvas' || !cmtOpen || !cmtEl.contains(document.activeElement)) return;
+  ev.stopImmediatePropagation();
+  if (cmtEditing && !ev.isComposing) { ev.preventDefault(); cmtEditing = null; cmtDraft = null; paintComments(); }
+}, true);
 function frameCmtKey(ev) {
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.repeat || ev.isComposing) return;
   if (frameTyping(ev)) return;
@@ -5212,6 +5245,15 @@ const ovc = overviewComments({
   ]),
   onAudience: (ch) => setAudience(ch),
   onArmed: (on) => { commentArmed = !!on; canvasEl.classList.toggle('cv-commenting', commentArmed); },
+  /* Панель коментарів — оболонки (0.26.0): коментатор полотна живе в цьому ж вікні й кличе приймач напряму. */
+  host: {
+    /* `onReady` летить ВСЕРЕДИНІ `init()`, коли `ovc.layer` ще не присвоєно (присвоєння — після повернення з `init`):
+       мікрозадача дає присвоїти, і `cmtLayer()` уже бачить шар (знімок, режим коментування при відкритій панелі). */
+    onReady: () => queueMicrotask(() => onCommentsEvent('canvas', { ev: 'ready' })),
+    onChange: (snapshot) => onCommentsEvent('canvas', { ev: 'change', snapshot }),
+    onSelect: (id) => onCommentsEvent('canvas', { ev: 'select', id }),
+    onMode: (on) => onCommentsEvent('canvas', { ev: 'mode', on: !!on }),
+  },
   offLabel: (n) => t('pinsOffFrame', n),
   fail: (e) => toast(t('toastOverviewCommentsDown', (e && e.message) || String(e))),
 });
@@ -6509,7 +6551,9 @@ function applyMode(task, { keepFrame = false } = {}) {
     // накрила б полотно «Огляду» світлим прямокутником
     stage.hidden = true; canvasEl.hidden = false;
     buildCanvas(task);
+    cmtViewSwitch();
     ovc.enter();
+    if (cmtOpen && ovc.layer && !ovc.layer.commentMode) ovc.layer.setCommentMode(true);   // шару ще нема — його `onReady` зробить те саме
   } else {
     ovc.leave();
     canvasEl.hidden = true; stage.hidden = false;
@@ -6524,6 +6568,7 @@ function applyMode(task, { keepFrame = false } = {}) {
       /* Нова сторінка в рамці — новий коментатор: старий знімок і готовність уже не про неї (`ready` поверне нове). */
       frameCmtReady = false; cmtSnap = null;
     }
+    cmtViewSwitch();
   }
 }
 
@@ -7840,8 +7885,9 @@ document.addEventListener('keydown', (ev) => {
     return; // палітра відкрита — інші клавіші (зокрема «?») їй не належать, фокус усе одно в полі пошуку
   }
   if (paletteOverlay) return; // довідка клавіш відкрита — так само не мовчить лише про Escape (капчер-слухач нижче)
-  const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(ev.target.tagName) || ev.target.isContentEditable;
-  if (typing) return;
+  /* Глибока перевірка (як у рамці): на «Огляді» форма коментатора — у тіньовому DOM ЦЬОГО документа, і `ev.target` тут —
+     її хост (DIV), а не textarea: без цього «с»/«р» у тексті коментаря перемикали б панель і знищували форму. */
+  if (typingIn(ev, document)) return;
   if (!meta && !ev.altKey && ev.key === '?') { openKeys(); return; }
   /* Екран «Задачі»: усе нижче — ⌥M, ⇧⌘\\, ⌘\\ — діє на задачу, якої людина зараз
      не бачить (режим, чистий перегляд, панель під екраном). ⌘G вище має власну
