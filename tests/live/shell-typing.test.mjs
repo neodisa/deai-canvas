@@ -3,16 +3,16 @@
  *
  * ЩО ЛАМАЛОСЬ. comment-layer вішає keydown на вікно рамки І на кожен same-origin
  * предок — отже й на вікно оболонки. А «друкуємо?» він питав лише в
- * `document.activeElement` ДОКУМЕНТА РАМКИ. Коли фокус у `#task-q` (пошук задач)
- * чи `#palq` (⌘K), activeElement рамки — `body`: c/p/h з'їдались і вмикали режим
- * коментування. «chip» у пошуку лишало «i».
+ * `document.activeElement` ДОКУМЕНТА РАМКИ. Коли фокус у `#palq` (⌘K), activeElement рамки — `body`:
+ * c/p/h з'їдались і вмикали режим коментування. «chip» у палітрі лишало «i».
+ * (Поле `#task-q` перемикача задач прибрано в 0.25.0 — його перевірка видалена.)
  *
  * Мапа «перевірка → запобіжник» (мутація: прибрати — перевірка червоніє):
- *   A, B (набір у `#task-q`, `#palq`) — елемент-походження події в `_isTyping(e)`
+ *   A (набір у `#palq`) — елемент-походження події в `_isTyping(e)`
  *        (`keyOrigin`/`typingIn` у comment-layer). Мутація «typingIn дивиться лише
- *        на active» червонить обидві.
- *   C (контроль) — клік у тіло рамки й `c` ВМИКАЄ режим: виправлення не вбило
- *        шорткат. Без C «нічого не вмикається» зеленіло б і на `return` у
+ *        на active» червонить A.
+ *   B (контроль) — клік у тіло рамки й `c` ВМИКАЄ режим: виправлення не вбило
+ *        шорткат. Без B «нічого не вмикається» зеленіло б і на `return` у
  *        першому рядку обробника.
  *
  * ⛔ Supabase ЛІГИ — вигаданий хост із `tasks.json` фікстури (`supabase: true`), перехоплений у браузері (`hermeticLiga`, як у
@@ -74,19 +74,7 @@ async function boot(t) {
   return page;
 }
 
-test("A. набір «chip» у пошуку задач не вмикає коментування й не губить літери", async (t) => {
-  const page = await boot(t);
-  await page.click('[data-dd="task"]');
-  await page.waitForSelector("#task-q");
-  await page.locator("#task-q").focus();
-  await page.keyboard.type("chip");
-  assert.equal(await page.inputValue("#task-q"), "chip",
-    "літери c/p/h з'їдені шорткатом коментатора");
-  assert.deepEqual(await armed(page), { arming: false, freeze: false },
-    "набір у полі оболонки увімкнув режим коментування");
-});
-
-test("B. набір «chip» у палітрі ⌘K не вмикає коментування й не губить літери", async (t) => {
+test("A. набір «chip» у палітрі ⌘K не вмикає коментування й не губить літери", async (t) => {
   const page = await boot(t);
   await page.keyboard.press("Control+k");
   await page.locator("#palq").waitFor({ state: "visible", timeout: 5000 });
@@ -97,7 +85,7 @@ test("B. набір «chip» у палітрі ⌘K не вмикає комен
     "набір у палітрі увімкнув режим коментування");
 });
 
-test("C. контроль: фокус у тілі рамки — `c` вмикає коментування", async (t) => {
+test("B. контроль: фокус у тілі рамки — `c` вмикає коментування", async (t) => {
   const page = await boot(t);
   /* Клік у тіло рамки: activeElement рамки — body, подія — з рамки. */
   await page.frameLocator("#frame").locator("h1").click();

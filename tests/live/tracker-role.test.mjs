@@ -25,7 +25,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, postJson, stop } from "./_spaces-kit.mjs";
+import { guardRealDeai, postJson, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
@@ -93,7 +93,7 @@ async function newPage(t, url) {
   page.on("dialog", async (d) => { errors.push(`нативний діалог: ${d.message()}`); await d.dismiss(); });
   page.errors = errors;
   await page.goto(`${url}/app/`);
-  await page.waitForSelector('#bar [data-act="home"]', { timeout: 15000 });
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout: 15000 });
   return page;
 }
 
@@ -112,7 +112,7 @@ const overview = async (url, qs = "") => (await fetch(`${url}/api/tasks-overview
  * статусом категорії `done`, а нам треба бачити й їхні бейджі.
  */
 async function openHome(page, { all = false } = {}) {
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
   if (!all) return;
   await page.click('#tasks-home [data-th="status"][data-v="all"]');
@@ -188,7 +188,7 @@ test("3: трекер у режимі «збій» після успіху — �
     "збій НЕ стирає останні відомі статуси");
 
   await page.reload();
-  await page.waitForSelector('#bar [data-act="home"]', { timeout: 15000 });
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout: 15000 });
   await openHome(page, { all: true });
   const banner = trackerBanner(page);
   await banner.waitFor({ timeout: 15000 });
@@ -212,6 +212,7 @@ test("3: трекер у режимі «збій» після успіху — �
 test("4: «Підключення» — секція «Трекер задач» з jira-tracker і фейковим модулем; вимкнення називає наслідок (діалог, не нативний), «Скасувати» нічого не міняє", async (t) => {
   const w = workDir(t);
   const { page, url } = await bootPlain(t, { portOffset: 300 });
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');

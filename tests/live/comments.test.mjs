@@ -55,7 +55,7 @@ import { chromium } from "playwright";
 
 import { LIGA_SB_HOST, hermeticLiga } from "./_liga-supabase.mjs";
 import { ANCHOR, shootAll, t45Task } from "./_t45-fixture.mjs";
-import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop } from "./_spaces-kit.mjs";
+import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
@@ -712,6 +712,7 @@ test("e2: адресу сервісу коментарів змінили на �
   assert.deepEqual(shell.B, [], "до зміни оболонка вже ходить у B");
 
   /* Екран «Підключення» (з дропдауна простору) → «Налаштувати» → нова адреса → «Зберегти». Секрети лишаються (порожнє = лишити). */
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]');
   await page.click('#bar [data-act="conn"]');
@@ -729,7 +730,7 @@ test("e2: адресу сервісу коментарів змінили на �
   const cutA = shell.A.length;
 
   /* Назад до задачі (вона на «Огляді»): піни — сервісу B. */
-  await page.click('#bar [data-act="back"]');
+  await page.click('#tabs [data-act="tab"]');
   await page.locator(".cv-card img").first().waitFor();
   /* Чекаємо САМЕ пін B (а не «будь-який»): поки шар перебудовується, на полотні можуть на мить стояти й старі піни. Якщо
      коментатор лишився на старому сервісі, остання побачена відповідь — `["memo-seed-A"]`, і ця помилка так і скаже. */

@@ -32,6 +32,25 @@ export async function stop(child) {
   clearTimeout(timer);
 }
 
+/**
+ * Смуга готова (0.25.0): рядок вкладок є, а в смузі — або фішка простору (екран «Задачі»), або назва задачі (вигляд задачі:
+ * фішки простору там НЕМАЄ, вона живе лише на смузі «Задач»). Нікуди не переходить; хто чекає саме фішку — спершу `goTasks`.
+ */
+export async function waitBarReady(page, timeout = 15000) {
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout });
+  await page.waitForFunction(
+    () => !!(document.querySelector("#bar .space-chip") || document.querySelector("#bar .crumb--title")),
+    null, { timeout },
+  );
+}
+
+/** Іти на екран «Задачі» (де живе фішка простору), якщо ще не там; чекає фішку. */
+export async function goTasks(page, timeout = 15000) {
+  await waitBarReady(page, timeout);
+  if (!(await page.locator("#bar .space-chip").count())) await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector("#bar .space-chip", { timeout });
+}
+
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 /** Текст першого збігу, обрізаний; `null`, коли вузла нема. */

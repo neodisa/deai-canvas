@@ -33,7 +33,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, sleep, spacesApi, stop, text, waitText } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, sleep, spacesApi, stop, text, waitText, waitBarReady } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
@@ -164,7 +164,7 @@ async function boot(t, { legacy = false, fakeVercel = !legacy } = {}) {
 /** Відкрити канвас і дочекатись смуги з кнопкою публікації. */
 async function openCanvas(page, url) {
   await page.goto(`${url}/app/`);
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await waitBarReady(page, 15000);
   await page.waitForSelector('#bar [data-act="publish"]', { timeout: 15000 });
 }
 
@@ -408,9 +408,8 @@ test("d: публікація довга, людина перейшла на і�
   assert.equal(await pubLabel(page), "Публікую…", "свідок: публікація триває");
 
   /* Перехід на b — поки запит висить. */
-  await page.click('[data-dd="task"]');
-  await page.waitForSelector('.crumb-h.crumb--task .dd [data-act="task"][data-val="b"]');
-  await page.click('.crumb-h.crumb--task .dd [data-act="task"][data-val="b"]');
+  await page.click('#tabs [data-act="home"]');
+  await page.click('#tasks-home .th-card[data-id="b"]');
   await page.waitForFunction(() => document.querySelector("#bar .crumb--task .txt")?.textContent.trim() === "b", null, { timeout: 10000 });
   await waitText(page, "#bar .lbl-pub", "Опублікувати");
   assert.equal(fake.last, "b", "свідок: канвас уже на задачі b");

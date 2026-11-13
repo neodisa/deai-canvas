@@ -99,8 +99,8 @@ async function homeView(t, url, id) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await page.goto(`${url}/app/`);
-  await page.waitForSelector('#bar [data-act="home"]', { timeout: 15000 });
-  await page.click('#bar [data-act="home"]');
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout: 15000 });
+  await page.click('#tabs [data-act="home"]');
   /* Картка поточної задачі (`t1` чи щойно створена) вже є на екрані, коли він наповнений: чекаємо хоч одну. */
   await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
   const card = page.locator(`#tasks-home .th-card[data-id="${id}"]`);

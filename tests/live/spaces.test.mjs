@@ -41,7 +41,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, spacesApi, stop, text, waitText } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, spacesApi, stop, text, waitText, waitBarReady, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Свої бази: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs`
@@ -74,7 +74,7 @@ async function boot(t, { first = "liga", portBase = PORT_BASE, requests = null }
   if (requests) context.on("request", (r) => requests.push(r.url()));
   const page = await context.newPage();
   await page.goto(`${server.url}/app/`);
-  await page.waitForSelector("#bar .space-chip");
+  await waitBarReady(page);
   return { page, context, ...server, byId: Object.fromEntries(server.spaces.map((s) => [s.id, s])) };
 }
 
@@ -96,6 +96,7 @@ const barActs = (page) => page.$$eval("#bar [data-act], #bar [data-dd]",
  * означає гонку з тією перемальовкою (на практиці — раз на десяток прогонів).
  */
 async function openSpaces(page, rows = 2) {
+  await goTasks(page);
   await page.click("#bar .space-chip");
   await page.waitForFunction((n) => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === n,
     rows, { timeout: 15000 });
@@ -109,7 +110,7 @@ async function pickSpace(page, id) {
 
 /** Відкрити екран «Задачі» логотипом. */
 async function openHome(page) {
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home h1.th-h");
 }
 
@@ -290,7 +291,7 @@ test("4б: порожній DEAI_HOME і зіпсований старий tasks
   assert.match(await text(page, "#bar .errbar"), /Файл задач цього простору не читається/, "причина смуги — не про простір");
   assert.equal(await page.locator("#tasks-home .th-welcome").count(), 0, "зіпсований файл показано як чисту машину (привітання)");
   /* Екран «Задачі» теж не зводиться до привітання. */
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home h1.th-h");
   await page.waitForTimeout(600);
   assert.equal(await page.locator("#tasks-home .th-welcome").count(), 0, "екран «Задачі» привітав замість помилки");
@@ -299,7 +300,7 @@ test("4б: порожній DEAI_HOME і зіпсований старий tasks
   /* Полагодили — наступне читання мігрує як завжди: зʼявляється простір і його фішка. */
   writeFileSync(server.legacyFile, JSON.stringify({ design_work_root: path.join(server.home, "Liga"), registry: {}, tasks: {} }));
   await page.reload();
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await waitBarReady(page, 15000);
   assert.equal(await page.locator("#bar .errbar").count(), 0, "смуга помилки лишилась після ремонту файла");
   assert.equal((await spacesApi(server.url)).spaces.length, 1, "старий файл не мігрував після ремонту");
 });
@@ -314,7 +315,7 @@ test("5: у «P» жодного запиту за межі машини — р�
      читає його при завантаженні рамки. */
   await page.evaluate(() => localStorage.setItem("dc-comment-mode", "project"));
   await page.reload();
-  await page.waitForSelector("#bar .space-chip");
+  await waitBarReady(page);
   await page.waitForFunction(() => {
     const w = document.getElementById("frame")?.contentWindow;
     return Boolean(w && w.CommentLayer && w.CommentLayer._inited);

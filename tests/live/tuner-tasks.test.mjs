@@ -82,7 +82,7 @@ async function turnInspectorOn(page) {
     const f = document.getElementById("frame");
     return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
   }, null, { timeout: 15000 });
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForFunction(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on === true, null, { timeout: 5000 });
 }
@@ -99,11 +99,11 @@ async function pin(page, sel) {
   }, sel, { timeout: 5000 });
 }
 
-/* Перемикач задачі — той самий шлях, що в `tests/live/canvas.test.mjs`: крихта
-   задачі розкриває дропдаун, а вибір робить пункт усередині нього. */
+/* Перемикача задач у смузі більше нема (0.25.0) — той самий шлях, що в `tests/live/canvas.test.mjs`:
+   екран «Задачі» (логотип у рядку вкладок) і картка задачі. */
 async function selectTask(page, id) {
-  await page.locator('[data-dd="task"]').click();
-  await page.locator(`[data-act="task"][data-val="${id}"]`).click();
+  await page.locator('#tabs [data-act="home"]').click();
+  await page.locator(`#tasks-home .th-card[data-id="${id}"]`).click();
 }
 
 /** Дочекатись, поки рамка візьме документ ІНШОЇ задачі. Позначка в розмітці —

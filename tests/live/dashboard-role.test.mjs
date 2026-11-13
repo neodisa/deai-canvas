@@ -29,7 +29,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, postJson, sleep, stop } from "./_spaces-kit.mjs";
+import { guardRealDeai, postJson, sleep, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
@@ -124,7 +124,7 @@ async function newPage(t, url) {
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   page.errors = errors;
   await page.goto(`${url}/app/`);
-  await page.waitForSelector('#bar [data-act="home"]', { timeout: 15000 });
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout: 15000 });
   return page;
 }
 
@@ -147,7 +147,7 @@ async function vcsPush(url) {
 
 /** Відкрити екран «Задачі» (логотип) і дочекатись карток «Моїх». */
 async function openHome(page) {
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
 }
 
@@ -179,7 +179,7 @@ test("1: звичайний простір — без модуля вкладк�
   assert.ok(calls(w.logFile).some((c) => c.fn === "rows"), "рядки команди не пройшли через модуль простору");
 
   await page.reload();
-  await page.waitForSelector('#bar [data-act="home"]', { timeout: 15000 });
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout: 15000 });
   await openHome(page);
   assert.match(await tabTeam(page).textContent(), /Команда · 2/);
   await tabTeam(page).click();
@@ -219,6 +219,7 @@ test("2: модуль відмовив — банер із ЙОГО тексто
 test("3: «Підключення» — секція «Командний дашборд» з картками supabase-dashboard і фейкового модуля; підключення з екрана дає роль", async (t) => {
   const w = workDir();
   const { page, url } = await bootPlain(t, { portOffset: 200 });
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');

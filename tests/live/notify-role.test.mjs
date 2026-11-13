@@ -26,7 +26,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, postJson, stop } from "./_spaces-kit.mjs";
+import { guardRealDeai, postJson, stop, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
@@ -205,6 +205,7 @@ test("3: модуль у режимі «збій» — пункт вимкнен
 test("4: «Підключення» — секція «Сповіщення Teams» з supabase-teams і фейковим модулем; вимкнення називає наслідок (діалог, не нативний), «Скасувати» нічого не міняє", async (t) => {
   const w = workDir(t);
   const { page, url } = await bootPlain(t, { portOffset: 300 });
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');

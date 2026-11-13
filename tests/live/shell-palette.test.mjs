@@ -129,16 +129,10 @@ test("A. Control+K відкриває палітру з фокусом у пол
   assert.ok(texts.some((s) => s.includes("English")), "серед відфільтрованого немає пункту «English»");
 });
 
-test("A2. видимі двері в смузі відкривають ту саму палітру — і мова в ній є", async (t) => {
-  /* Тест A вище доводить, що палітра відкривається АКОРДОМ. Цього виявилось
-     недосить: до 02.09.2026 акорд був ЄДИНИМ входом, і власник шукав палітру
-     словами «поиск по функционалам, куда-то он делся, потерялся… там, где
-     можно менять языки». Схована дія без видимих дверей — це не схована дія,
-     а зникла.
-
-     Тому тут перевіряється не розмітка кнопки (це роблять юніти
-     `shell-bar.test.mjs`), а вимога власника цілком: КЛІК по видимій кнопці
-     дає ту саму палітру, і в ній знаходиться мова інтерфейсу. */
+test("A2. кнопки палітри в смузі більше нема (0.25.0) — єдиний вхід акорд, і мова в палітрі є", async (t) => {
+  /* Із 0.25.0 смуга задачі схудла: кнопку палітри прибрано, ⌘K/Ctrl+K лишився.
+     Тест A вище доводить акорд; тут — що двері справді прибрані (не загубились
+     у DOM прихованими) і що акорд знаходить мову інтерфейсу. */
   const { dir } = taskFixture({ html: PAGE });
   const { child, url } = await startServer(dir, { portBase: PORT_BASE + 50 });
   t.after(() => child.kill());
@@ -146,57 +140,13 @@ test("A2. видимі двері в смузі відкривають ту са
   t.after(() => browser.close());
   const page = await openCanvas(browser, url);
 
-  const door = page.locator('#bar [data-act="palette"]');
-  assert.equal(await door.count(), 1, "видимих дверей у палітру немає");
-  assert.ok(await door.isVisible(), "двері в палітру є в DOM, але не видимі");
-
-  /* Ціль мусить бути влучною: правило проєкту — не менша за 28px по короткій
-     стороні. Двері, які видно й неможливо натиснути, лишаються зниклою дією.
-
-     ⚠️ Міряємо ЩОРАЗУ СВІЖИЙ вузол, а не той, що вже тримає локатор. Смуга на
-     старті малюється двічі (перший рендер і `paintBar()` після завантаження
-     рамки), обидва рази ПОВНИМ перезаписом розмітки, — і кнопка, знайдена
-     першим рендером, до заміру буває вже відчеплена від документа. Відчеплений
-     вузол чесно віддає 0×0 (а `locator.boundingBox()` на ньому — `null`, і
-     тоді перевірка падала з `Cannot read properties of null`).
-
-     Вада НЕ від цієї гілки: на c5351de (реліз v1.37.1) ця перевірка падає
-     приблизно раз на шість прогонів, виміряно шістьма прогонами поспіль.
-     Сама вимога не змінилась: та сама кнопка, та сама підлога 28px. Якби
-     двері справді були нульові, цикл нижче не дочекався б розміру й
-     перевірка впала б за таймаутом — тобто послаблення тут немає. */
-  const box = await page.waitForFunction(() => {
-    const el = document.querySelector('#bar [data-act="palette"]');
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 ? { width: r.width, height: r.height } : null;
-  }, null, { timeout: 5000 }).then((h) => h.jsonValue());
-  assert.ok(Math.min(box.width, box.height) >= 28,
-    `двері ${Math.round(box.width)}×${Math.round(box.height)} — коротка сторона `
-    + `${Math.round(Math.min(box.width, box.height))}px, підлога 28px`);
-
+  assert.equal(await page.locator('#bar [data-act="palette"]').count(), 0, "кнопка палітри лишилась у смузі");
   assert.equal(await page.locator(".pal").count(), 0, "палітра не мусить бути видима заздалегідь");
-  await door.click();
-  try {
-    /* 10с — це про НАВАНТАЖЕННЯ машини, не про фічу: `openPalette()`
-       синхронна (жодного await до `paintOverlay()`), і виміряно, що смуга в
-       спокої дає одну мутацію DOM за 5 секунд, тобто гонки з перемальовкою
-       тут немає. Але повний `test:live` тримає кілька Chromium одночасно, і
-       на 4с ця перевірка падала саме там, лишаючись зеленою поодинці.
-       Довгий таймаут тут нічого не маскує: під мутацією (прибрати рядок
-       проводки) вона червоніє з точним станом, а не голим таймаутом. */
-    await page.locator("#palq").waitFor({ state: "visible", timeout: 10000 });
-  } catch (e) {
-    const dbg = await page.evaluate(() => ({
-      palq: !!document.getElementById("palq"),
-      overlay: !!document.querySelector(".pal"),
-      door: !!document.querySelector('#bar [data-act="palette"]'),
-    }));
-    throw new Error(`клік по дверях не відкрив палітру: ${JSON.stringify(dbg)} · ${e.message}`);
-  }
+  await page.keyboard.press("Control+k");
+  await page.locator("#palq").waitFor({ state: "visible", timeout: 10000 });
   assert.ok(
     await page.locator("#palq").evaluate((el) => el === document.activeElement),
-    "клік по дверях мусить дати фокус у полі так само, як акорд",
+    "акорд мусить дати фокус у полі",
   );
 
   await page.fill("#palq", "мова");
@@ -206,7 +156,7 @@ test("A2. видимі двері в смузі відкривають ту са
   );
   const texts = await page.$$eval(".pal-it", (els) => els.map((e) => e.textContent));
   assert.ok(texts.some((x) => x.includes("українська")) && texts.some((x) => x.includes("English")),
-    "у палітрі, відкритій кліком, немає мови інтерфейсу — саме того, що шукали");
+    "у палітрі, відкритій акордом, немає мови інтерфейсу — саме того, що шукали");
 });
 
 test("B. Enter виконує САМУ дію (перемикає вьюпорт на планшет), а не лише закриває палітру", async (t) => {

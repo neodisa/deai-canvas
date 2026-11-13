@@ -21,6 +21,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 import { startFakeFeedback } from "./_fake-feedback.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { waitBarReady, goTasks } from "./_spaces-kit.mjs";
 
 const PORT_BASE = 24200;
 const LOCAL = new Set(["127.0.0.1", "localhost"]);
@@ -59,8 +60,8 @@ async function boot(t) {
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   const open = async () => {
     await page.goto(`${server.url}/app/`);
-    await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
-    await page.waitForSelector('#bar [data-act="feedback"]', { timeout: 15000 });
+    await waitBarReady(page, 15000);
+    await page.waitForSelector('#hud [data-act="feedback"]', { timeout: 15000 });
   };
   return { ...server, fake, page, hosts, errors, open };
 }
@@ -90,32 +91,34 @@ test("діалог відгуку: екрани, валідація, черга 
 
   await t.test("кнопка «Відгук» є на екрані задачі, «Задачах», «Підключеннях», у майстрі; ⌘K → «Баг / ідея» — той самий діалог", async () => {
     await s.open();
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     assert.match(await page.textContent(`${FORM} h2`), /Відгук про Deai Canvas/);
     await closeForm(page);
 
-    await page.click('#bar [data-act="home"]');
+    await page.click('#tabs [data-act="home"]');
     await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await closeForm(page);
 
     await s.open();
+    await goTasks(page);
     await page.click('#bar [data-dd="space"]');
     await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
     await page.click('.dd--spaces [data-act="conn"]');
     await page.waitForSelector('.cn-card[data-id="static-publish"]', { timeout: 15000 });
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await closeForm(page);
 
     await s.open();
+    await goTasks(page);
     await page.click('#bar [data-dd="space"]');
     await page.waitForSelector('.dd--spaces [data-act="spacenew"]', { timeout: 15000 });
     await page.click('.dd--spaces [data-act="spacenew"]');
     await page.waitForSelector("#tasks-home .wz", { timeout: 15000 });
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await closeForm(page);
 
@@ -132,7 +135,7 @@ test("діалог відгуку: екрани, валідація, черга 
 
   await t.test("валідація: пусто й менше 10 знаків → помилка під полем, фокус у полі, нічого не надіслано", async () => {
     await s.open();
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     for (const text of ["", "коротко"]) {
       await page.fill("#fb-text", text);
@@ -150,7 +153,7 @@ test("діалог відгуку: екрани, валідація, черга 
   await t.test("приймач down: «Збережено локально (№…)», в outbox/ один файл 0600", async () => {
     fake.setMode("down");
     await s.open();
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await previewJson(page);
     await page.fill("#fb-text", TEXT);
@@ -168,7 +171,7 @@ test("діалог відгуку: екрани, валідація, черга 
   await t.test("приймач up: другий відгук надійшов; діагностика без назви задачі, дому й теки простору; те саме, що в «Що буде надіслано»", async () => {
     fake.setMode("up");
     await s.open();
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     const shown = await previewJson(page);
     await page.fill("#fb-text", `${TEXT} (другий)`);
@@ -200,7 +203,7 @@ test("діалог відгуку: екрани, валідація, черга 
 
   await t.test("знята галочка «Додати діагностику» → diag: {}", async () => {
     await s.open();
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await previewJson(page);
     await page.uncheck("#fb-diag");
@@ -216,7 +219,7 @@ test("діалог відгуку: екрани, валідація, черга 
 
   await t.test("знімок: чекбокс доступний, байти в Storage збігаються, shot_path = <id>.webp; без кадру чекбокс вимкнений з причиною", async () => {
     await s.open();
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await previewJson(page);
     assert.equal(await page.locator("#fb-shot").isDisabled(), false, "знімок поточної сторінки не знайдено");
@@ -234,9 +237,9 @@ test("діалог відгуку: екрани, валідація, черга 
 
     /* На «Задачах» поточної сторінки нема → знімка нема. */
     await s.open();
-    await page.click('#bar [data-act="home"]');
+    await page.click('#tabs [data-act="home"]');
     await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     await previewJson(page);
     assert.equal(await page.locator("#fb-shot").isDisabled(), true, "чекбокс знімка активний без кадру");
@@ -249,7 +252,7 @@ test("діалог відгуку: екрани, валідація, черга 
     await s.open();
     await page.evaluate(() => setTimeout(() => { throw new Error("boom"); }));
     await page.waitForTimeout(300);
-    await page.click('#bar [data-act="feedback"]');
+    await page.click('#hud [data-act="feedback"]');
     await waitForm(page);
     const shown = await previewJson(page);
     assert.match(shown.diag.errors.client[0].msg, /^(Uncaught )?(Error: )?boom$/);

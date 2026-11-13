@@ -49,7 +49,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, postJson, sleep, stop } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, postJson, sleep, stop, waitBarReady, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга. ⚠️ Не 13600: ту займає `own-modules.test.mjs`, а `tests/live-ports.test.mjs` забороняє дві бази на одну смугу
@@ -166,7 +166,7 @@ async function boot(t, { enable = "repo", legacy = false, open = true } = {}) {
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   if (open) {
     await page.goto(`${server.url}/app/`);
-    await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+    await waitBarReady(page, 15000);
   }
   const originRefs = () => git(tmp, origin, "for-each-ref", "--format=%(refname)");
   let peers = 0;
@@ -196,6 +196,7 @@ async function boot(t, { enable = "repo", legacy = false, open = true } = {}) {
 
 /** Вхід на «Підключення»: дропдаун простору → «Підключення…» → сторінка з картками. */
 async function openConnections(page) {
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length >= 1, null, { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
@@ -204,8 +205,10 @@ async function openConnections(page) {
 
 /** Дропдаун простору відкрито й закрито: список просторів (`spacesResp`) завантажено — на старті сторінка його не питає. */
 async function warmSpaces(page) {
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length >= 1, null, { timeout: 15000 });
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => !document.querySelector(".dd--spaces"), null, { timeout: 15000 });
 }
@@ -290,7 +293,7 @@ test("2: «Підключення» — секція «Синхронізаці�
   await page.waitForSelector("#cn-drawer", { state: "hidden" });
 
   /* Назад до задачі: зона синку з підписом «Git» (не «GitLab»), незапушений макет — крапка «попереду». */
-  await page.click('#bar [data-act="back"]');
+  await page.click('#tabs [data-act="tab"]');
   await page.waitForSelector(GL, { timeout: 15000 });
   assert.equal((await glLabel(page)).trim(), "Git");
   await page.waitForSelector(`${GL} .dot--warn`, { timeout: 15000 });
@@ -403,7 +406,7 @@ test("5: автосинк — autosync-off за замовчуванням (orig
 
 /** «Нова задача» на екрані «Задачі»: форма з полем «Репозиторій». */
 async function openTaskForm(page) {
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   await page.click('#tasks-home .th-head [data-th="newtask"]');
   await page.waitForSelector('form[data-form="task"]');
@@ -529,7 +532,7 @@ test("8: «Налаштувати…» поза ЛІГОЮ (модуль без 
   await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 15000 });
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "повідомлення про tasks.json не показано");
   await page.waitForFunction(() => document.activeElement?.closest?.(".cn-card")?.dataset?.id === "git-sync", null, { timeout: 15000 });
-  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Підключення/);
+  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Налаштування/);
   assert.deepEqual(s.outside, []);
   assert.deepEqual(s.errors, []);
 });
@@ -549,7 +552,7 @@ test("8b: «Налаштувати…» на свіжозавантаженій 
   await page.waitForSelector('.cn-card[data-id="git-sync"]', { timeout: 15000 });
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "повідомлення про tasks.json не показано");
   await page.waitForFunction(() => document.activeElement?.closest?.(".cn-card")?.dataset?.id === "git-sync", null, { timeout: 15000 });
-  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Підключення/);
+  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Налаштування/);
   assert.ok(s.requests.some((u) => new URL(u).pathname === "/api/spaces"), "вхід сам прочитав перелік просторів");
   assert.deepEqual(s.outside, []);
   assert.deepEqual(s.errors, []);
@@ -558,6 +561,7 @@ test("8b: «Налаштувати…» на свіжозавантаженій 
 test("9: майстер нового простору — на кроці 2 секція «Синхронізація з git», модуль типово не вибраний; вибраний — картка з repo, запис у space.json, зона в новому просторі", async (t) => {
   const s = await boot(t, { enable: null });
   const { page } = s;
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 1);
   await page.click('.dd--spaces [data-act="spacenew"]');

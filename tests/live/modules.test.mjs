@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText } from "./_spaces-kit.mjs";
+import { REAL_DEAI, VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText, waitBarReady } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
@@ -108,7 +108,7 @@ async function boot(t, { spaces, beforeOpen = null, supabase = false } = {}) {
 /** Відкрити канвас і дочекатись смуги. */
 async function openCanvas(page, url) {
   await page.goto(`${url}/app/`);
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await waitBarReady(page, 15000);
 }
 
 const pubLabel = (page) => text(page, "#bar .lbl-pub");
@@ -394,7 +394,7 @@ test("2: css-tokens через POST /api/module-enable — інспектор у
     .map((s) => s.src).find((s) => s.includes("inspector.js")) || "");
   assert.ok(tag.includes("sp=tok") && tag.includes("ds=tool"), `тег інспектора без простору чи напрямку: ${tag}`);
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForFunction(() => document.getElementById("frame").contentWindow.CanvasInspector.on === true,
     null, { timeout: 3000 });
   const t0 = Date.now();

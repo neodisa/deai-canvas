@@ -131,7 +131,7 @@ test("A. кнопка смуги відкриває панель і вмикає
   assert.equal(await page.evaluate(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on), false, "оверлей не мусить бути увімкнений заздалегідь");
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   /* БЕЗ `waitFor`/таймауту: перевіряємо стан ОДРАЗУ, щойно клік повернув
      керування. `BAR_ACTIONS.inspector` (`app.js`) синхронний (жодного
      `await` на цьому шляху), тож до моменту, коли Playwright віддає
@@ -171,7 +171,7 @@ test("B. перемикач режиму панелі міняє РЕЖИМ ОВ
   t.after(() => browser.close());
   const page = await openCanvas(browser, url);
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.locator("#insp-panel").waitFor({ state: "visible" });
   assert.equal(await page.evaluate(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.mode), "cascade", "інспектор мусить починати в каскаді");
@@ -201,7 +201,7 @@ test("C. Escape у макеті вимикає інспектор драбинк
   t.after(() => browser.close());
   const page = await openCanvas(browser, url);
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.locator("#insp-panel").waitFor({ state: "visible" });
 
   /* Фокус УСЕРЕДИНІ iframe, БЕЗ кліку по його вмісту: клік, поки інспектор
@@ -248,7 +248,7 @@ test("D. «Огляд» ховає панель, навіть коли овер�
   t.after(() => browser.close());
   const page = await openCanvas(browser, url);
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.locator("#insp-panel").waitFor({ state: "visible" });
 
   await page.click('#bar [data-act="mode"][data-val="overview"]');
@@ -277,7 +277,7 @@ test("D. «Огляд» ховає панель, навіть коли овер�
   assert.equal(await page.locator("#insp-panel").isVisible(), false,
     "після повернення в «Макет» інспектор мусить бути вимкнений (макет перезавантажився) — панелі не місце");
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.locator("#insp-panel").waitFor({ state: "visible", timeout: 3000 });
   assert.equal(await page.evaluate(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on), true, "після повернення інспектор мусить УМІТИ ввімкнутись знову");
@@ -291,7 +291,7 @@ test("E. клавіша M УСЕРЕДИНІ iframe доходить до пан
   t.after(() => browser.close());
   const page = await openCanvas(browser, url);
 
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.locator("#insp-panel").waitFor({ state: "visible" });
   assert.equal(await page.locator('[data-act="insptab"][data-val="cascade"]').getAttribute("aria-pressed"), "true");
 

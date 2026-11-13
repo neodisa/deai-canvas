@@ -11,11 +11,9 @@
  *
  * Мапа «перевірка → запобіжник → що станеться, якщо запобіжник прибрати»:
  *
- *   task (крошка задачі)   — обробник `data-dd` у делегації (`app.js`)
- *                            відкриває дропдаун крошки. Прибери гілку
- *                            `if (el.dataset.dd) {...}` — клік не додасть
- *                            жодного `.dd`, а розмітка бару лишиться тією
- *                            самою: падає на «task».
+ *   (0.25.0) крошки-перемикача задач у смузі більше нема — лише назва задачі;
+ *   логотип, вкладки й «назад» переїхали в `#tabs`, інспектор і «Відгук» — в
+ *   острівець `#hud`. Цикл нижче обходить `#bar` ТА `#hud`.
  *   iter (крошка ітерації) — та сама гілка `data-dd`, інший тригер.
  *   mode[overview]         — рядок `mode:` у `BAR_ACTIONS`. Прибери його —
  *                            `BAR_ACTIONS.mode` стане `undefined`, делегація
@@ -55,7 +53,7 @@
  *   gl                     — `data-dd="gl"`; дропдаун непорожній навіть при
  *                            вимкненому GitLab (пункт «Налаштувати»).
  *   pub (▾ біля публікації)— `data-dd="pub"`, дропдаун меню публікації.
- *   home (логотип)         — рядок `home:` у `BAR_ACTIONS`. Прибери його —
+ *   home (логотип у `#tabs`) — окремий блок ПІСЛЯ циклу. Рядок `home:` у `BAR_ACTIONS`. Прибери його —
  *                            `BAR_ACTIONS.home` стане `undefined`, делегація
  *                            мовчки нічого не зробить, а смуга лишиться тією
  *                            самою: падає на «home». Ефект кліку — склад
@@ -179,7 +177,8 @@ test("кожен контрол смуги щось робить на клік",
      виміряно, — тож вона вклинюється частіше), лишала б функції ВІДЧЕПЛЕНІ вузли: `offsetParent === null` у всіх, «0 контролів». `evaluate` вибирає й
      фільтрує в одному завданні сторінки — перемальовка вклинитись не може. */
   const controls = await page.evaluate(() =>
-    [...document.querySelectorAll("#bar [data-act],#bar [data-dd]")].filter((e) => e.offsetParent !== null).map((e) => ({
+    [...document.querySelectorAll("#bar [data-act],#bar [data-dd],#hud [data-act]")].filter((e) => e.offsetParent !== null).map((e) => ({
+      root: e.closest("#hud") ? "#hud" : "#bar",
       act: e.dataset.act || null,
       dd: e.dataset.dd || null,
       val: e.dataset.val || null,
@@ -189,15 +188,18 @@ test("кожен контрол смуги щось робить на клік",
   assert.ok(controls.length >= 6,
     `у смузі лише ${controls.length} контролів — розмітка не та`);
   assert.ok(controls.some((c) => c.act === "mode"), "немає сегмента «як дивлюсь»");
-  assert.ok(controls.some((c) => c.dd === "task"), "немає крошки задачі");
+  /* 0.25.0: крошки-перемикача задач у смузі нема — лише назва задачі (текст), а керування
+     острівцем (інспектор, «Відгук») живе в `#hud`, не в `#bar`. */
+  assert.ok(await page.locator("#bar .crumb--title").count() > 0, "немає назви задачі в смузі");
+  assert.equal(controls.some((c) => c.dd === "task"), false, "перемикач задач повернувся в смугу");
+  assert.ok(controls.some((c) => c.root === "#hud" && c.act === "feedback"), "у острівці немає «Відгук»");
+  assert.ok(controls.some((c) => c.root === "#hud" && c.act === "inspector"), "у острівці немає інспектора");
 
   // `mode` — останнім у циклі, і саме тому окремим проходом: див. шапку файлу.
   const ordered = [
-    ...controls.filter((c) => c.act !== "mode" && c.act !== "home"),
+    ...controls.filter((c) => c.act !== "mode"),
     ...controls.filter((c) => c.act === "mode"),
-    ...controls.filter((c) => c.act === "home"),
   ];
-  assert.ok(controls.some((c) => c.act === "home"), "немає логотипа-входу на «Задачі»");
 
   for (const c of ordered) {
     const key = c.act || c.dd;
@@ -206,14 +208,15 @@ test("кожен контрол смуги щось робить на клік",
     if (c.pressed === "true") continue;   // уже активний сегмент — свідомий ноп
 
     const sel = c.val
-      ? `#bar [data-act="${key}"][data-val="${c.val}"]`
-      : (c.act ? `#bar [data-act="${key}"]` : `#bar [data-dd="${key}"]`);
+      ? `${c.root} [data-act="${key}"][data-val="${c.val}"]`
+      : (c.act ? `${c.root} [data-act="${key}"]` : `${c.root} [data-dd="${key}"]`);
     const name = c.val ? `${key}[${c.val}]` : key;
 
-    const before = await page.$eval("#bar", (e) => e.innerHTML);
+    const snap = () => page.evaluate(() => document.getElementById("bar").innerHTML + document.getElementById("hud").innerHTML);
+    const before = await snap();
     await page.click(sel);
     await page.waitForTimeout(150);
-    const after = await page.$eval("#bar", (e) => e.innerHTML);
+    const after = await snap();
     /* Контрол смуги може подіяти ТРЬОМА способами, і всі три однаково
        законні: перемалювати смугу, відкрити дропдаун, або відкрити оверлей на
        весь екран. Третій зʼявився 02.09.2026 разом із дверима в палітру — і
@@ -232,16 +235,18 @@ test("кожен контрол смуги щось робить на клік",
     await page.waitForTimeout(50);
   }
 
-  /* Останнім у циклі був `home`: смуга зараз на екрані «Задачі». Звідси
-     видно те, чого в закритій смузі не було, — «Назад до задачі». Тиснемо
-     його тим самим мірилом: смуга мусить повернути крошку задачі, а логотип —
-     перестати бути активним. */
-  assert.ok(await page.$("#bar [data-act=\"back\"]"), "на екрані «Задачі» немає «Назад»");
-  await page.click("#bar [data-act=\"back\"]");
-  await page.waitForSelector("#bar [data-dd=\"task\"]", { timeout: 5000 });
-  assert.equal(await page.$("#bar [data-act=\"back\"]"), null, "«Назад» не вивів зі стану «Задачі»");
-  assert.equal(await page.getAttribute("#bar [data-act=\"home\"]", "aria-current"), null,
-    "після «Назад» логотип лишився активним");
+  /* Логотип-вхід на «Задачі» (0.25.0 переїхав у рядок вкладок `#tabs`) і вихід назад: «Назад до
+     задачі» прибрано, повернення — клік по вкладці задачі. Без рядка `home:` / `tab:` у делегації
+     смуга лишилась би назавжди на екрані «Задачі». */
+  assert.ok(await page.$('#tabs [data-act="home"]'), "немає логотипа-входу на «Задачі»");
+  await page.click('#tabs [data-act="home"]');
+  await page.waitForSelector("#tasks-home", { timeout: 5000 });
+  assert.equal(await page.getAttribute('#tabs [data-act="home"]', "aria-current"), "page");
+  assert.equal(await page.$('#bar [data-act="back"]'), null, "кнопка «Назад» повернулась у смугу");
+  await page.click('#tabs [data-act="tab"]');
+  await page.waitForSelector("#bar .crumb--title", { timeout: 5000 });
+  assert.equal(await page.getAttribute('#tabs [data-act="home"]', "aria-current"), null,
+    "після кліку по вкладці логотип лишився активним");
 });
 
 /* Другий бік тієї самої обіцянки. Перший тест тисне те, що видно на широкій

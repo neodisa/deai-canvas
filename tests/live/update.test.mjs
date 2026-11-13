@@ -15,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { waitBarReady, goTasks } from "./_spaces-kit.mjs";
 
 const PORT_BASE = 24000;
 const LOCAL = new Set(["127.0.0.1", "localhost"]);
@@ -46,13 +47,13 @@ async function boot(t) {
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   const open = async () => {
     await page.goto(`${server.url}/app/`);
-    await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+    await waitBarReady(page, 15000);
   };
   return { ...server, page, hosts, errors, open };
 }
 
-const pill = (page) => page.locator("#bar .upd-pill");
-const waitPill = (page) => page.waitForSelector("#bar .upd-pill", { timeout: 15000 });
+const pill = (page) => page.locator("#tabs .upd-pill");
+const waitPill = (page) => page.waitForSelector("#tabs .upd-pill", { timeout: 15000 });
 const noPillFor = async (page, ms = 1500) => {
   await page.waitForTimeout(ms);           // пігулка малюється після відповіді `GET /api/update`: даємо їй час зʼявитись, якщо вона є
   return pill(page).count();
@@ -65,7 +66,7 @@ test("пігулка й діалог оновлення: без файла — �
   await t.test("без update.json пігулки нема", async () => {
     await s.open();
     assert.equal(await noPillFor(page), 0, "пігулка є до першої перевірки");
-    assert.equal(await page.locator('#bar [data-act="feedback"]').count(), 1, "перевірка недійсна: смуга не малюється");
+    assert.equal(await page.locator('#hud [data-act="feedback"]').count(), 1, "перевірка недійсна: смуга не малюється");
   });
 
   await t.test("стан ok + перезавантаження: пігулка «Оновлення 99.0.0» на екрані задачі, «Задачах» і «Підключеннях»", async () => {
@@ -77,13 +78,14 @@ test("пігулка й діалог оновлення: без файла — �
     await waitPill(page);
     assert.match(await pill(page).textContent(), /Оновлення 99\.0\.0/, "екран задачі");
 
-    await page.click('#bar [data-act="home"]');
+    await page.click('#tabs [data-act="home"]');
     await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
     assert.equal(await pill(page).count(), 1, "екран «Задачі»");
     assert.match(await pill(page).textContent(), /99\.0\.0/);
 
     await s.open();
     await waitPill(page);
+    await goTasks(page);
     await page.click('#bar [data-dd="space"]');
     await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
     await page.click('.dd--spaces [data-act="conn"]');

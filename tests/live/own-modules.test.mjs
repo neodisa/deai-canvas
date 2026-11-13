@@ -36,7 +36,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, postJson, stop } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, postJson, stop, waitBarReady, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs` стереже, що бази не збігаються). */
@@ -103,12 +103,13 @@ async function boot(t, { seam = "yes", committed = false, extraFolder = null } =
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await page.goto(`${server.url}/app/`);
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await waitBarReady(page, 15000);
   const ran = () => { try { return readFileSync(canary, "utf8").split("\n").filter(Boolean); } catch { return []; } };
   return { ...server, page, errors, spacePath, ownDir, ran };
 }
 
 async function openConnections(page) {
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 1, null, { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
@@ -216,6 +217,7 @@ test("3: колега закомітив — «Увімкнено, але не �
 test("4: майстер — «Довіритись…» у рядку кроку 2 робить модуль доступним для вибору", async (t) => {
   const s = await boot(t, { extraFolder: path.join("work", "fresh") });
   const { page } = s;
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 1);
   await page.click('.dd--spaces [data-act="spacenew"]');
@@ -304,7 +306,7 @@ test("7: «Забрати довіру» з діалогу нової версі
   await page.waitForSelector(`${CARD} [data-cn="enable"]`);
   writeFileSync(path.join(s.ownDir, "server.py"), SERVER_PY("v2"));
   await page.goto(`${s.url}/app/`);                              // свіже «Підключення»: картка бачить зміну теки
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await waitBarReady(page, 15000);
   await openConnections(page);
   await page.click(`${CARD} [data-cn="trust"]`);
   await page.waitForSelector('form.tr [data-tr="untrust"]');
@@ -354,6 +356,7 @@ test("9: майстер — колега ввімкнув недовірений
     const p = new URL(r.url()).pathname;
     if (r.method() === "POST" && p.startsWith("/api/module-")) posts.push(p);
   });
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 1);
   await page.click('.dd--spaces [data-act="spacenew"]');

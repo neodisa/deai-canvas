@@ -20,6 +20,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { startServer, taskFixture } from "./fixture.mjs";
+import { waitBarReady } from "./_spaces-kit.mjs";
 
 const PORT_BASE = 24100;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -106,11 +107,11 @@ test("apply → рестарт → перезавантаження у вики�
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
     await page.goto(`${url}/app/`);
-    await page.waitForSelector("#bar .upd-pill", { timeout: 20000 });
-    assert.match(await page.textContent("#bar .upd-pill"), new RegExp(`Оновлення ${TARGET.replace(/\./g, "\\.")}`));
+    await page.waitForSelector("#tabs .upd-pill", { timeout: 20000 });
+    assert.match(await page.textContent("#tabs .upd-pill"), new RegExp(`Оновлення ${TARGET.replace(/\./g, "\\.")}`));
 
     // 4. діалог: версії й «Що нового» з CHANGELOG ВІДДАЛЕНОГО тега
-    await page.click("#bar .upd-pill");
+    await page.click("#tabs .upd-pill");
     const form = page.locator(".cv-ask-scrim form.up");
     await form.waitFor({ timeout: 15000 });
     assert.match(await form.locator(".up-ver").textContent(), new RegExp(`${current.replace(/\./g, "\\.")}.*${TARGET.replace(/\./g, "\\.")}`));
@@ -125,7 +126,7 @@ test("apply → рестарт → перезавантаження у вики�
     await page.waitForFunction(() => /Оновлюю/.test(document.querySelector("[data-up-status]")?.textContent ?? "")
       || !window.__beforeReload, null, { timeout: 30000 });
     await page.waitForFunction(() => !window.__beforeReload, null, { timeout: 90000 });
-    await page.waitForSelector("#bar .space-chip", { timeout: 30000 });
+    await waitBarReady(page, 30000);
 
     // 6. новий процес із новою версією, той самий PID
     const after = await (await fetch(`${url}/api/update`)).json();
@@ -135,7 +136,7 @@ test("apply → рестарт → перезавантаження у вики�
     assert.equal(after.restart_failed, false);
     assert.equal(child.exitCode, null, "дочірній процес завершився");
     assert.ok(alive(pid), "PID сервера зник: execv мусить заміщувати процес, а не породжувати новий");
-    assert.equal(await page.locator("#bar .upd-pill").count(), 0, "пігулка лишилась після оновлення");
+    assert.equal(await page.locator("#tabs .upd-pill").count(), 0, "пігулка лишилась після оновлення");
     assert.equal(JSON.parse(readFileSync(pkgPath, "utf8")).version, TARGET, "робоче дерево клону не оновилось");
 
     // 7. другий apply — нічого оновлювати

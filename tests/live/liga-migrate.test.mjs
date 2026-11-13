@@ -62,7 +62,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { guardRealDeai, sleep, stop } from "./_spaces-kit.mjs";
+import { guardRealDeai, sleep, stop, goTasks } from "./_spaces-kit.mjs";
 import { LIGA_SUPABASE_ORIGINALS, startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга (`tests/live-ports.test.mjs`): тести ЦЬОГО файла йдуть послідовно, тож одна база на всі. */
@@ -125,7 +125,7 @@ async function newPage(t, url) {
   page.errors = errors;
   page.outside = outside;
   await page.goto(`${url}/app/`);
-  await page.waitForSelector('#bar [data-act="home"]', { timeout: 15000 });
+  await page.waitForSelector('#tabs [data-act="home"]', { timeout: 15000 });
   return page;
 }
 
@@ -300,6 +300,7 @@ test("2: «Підключення» ЛІГИ — шість модулів вв�
   assert.deepEqual(mods.filter((m) => m.enabled && (m.roles ?? []).includes("publish")).map((m) => m.id), ["vercel-publish"],
     `роль publish: ${JSON.stringify(mods.filter((m) => (m.roles ?? []).includes("publish")).map((m) => [m.id, m.enabled, m.implicit]))}`);
   const page = await newPage(t, url);
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');
@@ -316,7 +317,7 @@ test("2: «Підключення» ЛІГИ — шість модулів вв�
 test("3: «Задачі» ЛІГИ — статус Jira на картці й вкладка «Команда»", async (t) => {
   const { url } = S.first;
   const page = await newPage(t, url);
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
   const bdg = await page.$$eval("#tasks-home .th-card", (els) => Object.fromEntries(els
     .map((e) => [e.dataset.id, e.querySelector(".th-bdg[class*='th-bdg--']:not(.th-bdg--com)")?.textContent?.trim() ?? null])
@@ -337,7 +338,7 @@ test("3: «Задачі» ЛІГИ — статус Jira на картці й в
 test("3b: форма «Нова задача» мігрованої ЛІГИ — без поля «Репозиторій» (ціль синку живе в tasks.json, як до міграції)", async (t) => {
   const { url } = S.first;
   const page = await newPage(t, url);
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card", { timeout: 15000 });
   /* ⚠️ У ЛІГА (інтеграції ввімкнені) голова екрана без кнопки «Нова задача» (`noIntegrations` у `tasks-home.js`), тож форму відкриваємо тим
      самим делегованим обробником, що й кнопка: вузол `data-th="newtask"` доданий у `#tasks-home` і натиснутий — `newTaskDialog()` справжній. */
@@ -548,6 +549,7 @@ test("6: «Перевірити» на картці vercel-publish — верд�
   const callsBefore = npxCalls(S.fakeAfter).length;
   assert.ok(callsBefore >= 2, `свідок: тест 5 мусив лишити виклики link/deploy (${callsBefore})`);
   const page = await newPage(t, S.third.url);
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');                   // «Підключення» живуть у випадайці простору (як у тесті 2)
   await page.waitForSelector('.dd--spaces .dd-item[data-act="space"]', { timeout: 15000 });
   await page.click('#bar [data-act="conn"]');

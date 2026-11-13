@@ -65,7 +65,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, postJson, sleep, stop } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, postJson, sleep, stop, waitBarReady, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не
@@ -241,7 +241,7 @@ async function boot(t, { two = false, marked = false } = {}) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e.message ?? e)));
   await page.goto(`${server.url}/app/`);
-  await page.waitForSelector("#bar .space-chip", { timeout: 15000 });
+  await waitBarReady(page, 15000);
   await watchLeaks(page);
   await plantLeak(page);
   await plantUrlLeak(page, requests);
@@ -260,6 +260,7 @@ const tokenOf = (list, id = "memo-publish") => list.find((m) => m.id === id).set
 
 /** Відкрити дропдаун простору й дочекатись РЯДКІВ просторів (перший показ малюється зі старою відповіддю). */
 async function openSpaceDd(page, rows = 1) {
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction((n) => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === n,
     rows, { timeout: 15000 });
@@ -310,7 +311,7 @@ test("1: вхід із дропдауна, секції за ролями, яв�
   assert.match(await badge(page, "supabase-dashboard"), /cn-badge--off/, "вбудований supabase-dashboard: не підключений за замовчуванням");
   assert.doesNotMatch(await page.locator('.cn-card[data-id="static-publish"]').textContent(), /типово/, "0.22: static-publish — явний запис, не «типово»");
   assert.match(await badge(page, "css-tokens"), /cn-badge--off/);
-  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Підключення/);
+  assert.match(await page.locator("#bar .crumb--flat").textContent(), /Налаштування/);
   assert.equal(await page.evaluate(() => document.activeElement?.dataset?.cn ?? null) !== null, true, "фокус на кнопці картки");
   assert.deepEqual(outside, []);
   assert.deepEqual(errors, []);
@@ -485,7 +486,7 @@ test("7: простір перемкнули з відкритою панелл�
   const atelierBefore = readFileSync(path.join(atelier.path, "space.json"), "utf8");
 
   await openConnections(page, 2);
-  assert.match(await page.locator("#cn-title").textContent(), /Підключення · Studio/);
+  assert.match(await page.locator("#cn-title").textContent(), /Налаштування · Studio/);
   assert.match(await badge(page, "memo-publish"), /cn-badge--off/, "у Studio memo-publish вимкнено");
   await page.click('[data-cn="enable"][data-id="memo-publish"]');
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
@@ -497,7 +498,7 @@ test("7: простір перемкнули з відкритою панелл�
   await page.waitForSelector('.cn-card[data-id="memo-publish"] [data-cn="configure"]', { timeout: 15000 });
   assert.equal(await page.locator("#cn-drawer").isHidden(), true, "панель з чужого простору не лишилась");
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "перехід свідомий — питання «Відкинути?» нема");
-  assert.match(await page.locator("#cn-title").textContent(), /Підключення · Atelier/);
+  assert.match(await page.locator("#cn-title").textContent(), /Налаштування · Atelier/);
   assert.ok((await page.locator(".cn-lead").textContent()).includes(atelier.path), "теки в заголовку — нового простору");
   assert.match(await badge(page, "memo-publish"), /cn-badge--unchecked/, "картки — нового простору (memo-publish там увімкнено)");
   assert.match(await page.locator(".cn-sec").first().textContent(), /Зараз: Memo publish \(test\)/);
@@ -535,7 +536,7 @@ test("8: запис модулів → логотип → ІНША задача:
   await disableStaticPublish(page);
   await countFrameLoads(page);
   const before = commentedRequests(requests);
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.click('#tasks-home .th-card[data-id="t2"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
   await page.waitForFunction(() => document.getElementById("frame").contentDocument?.getElementById("mark")?.textContent === "ЗАДАЧА-2",
@@ -553,11 +554,11 @@ test("9: запис модулів → логотип → «назад до за
   const { page, requests, outside, errors } = await boot(t, { marked: true });
   await openConnections(page);
   await disableStaticPublish(page);
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   await countFrameLoads(page);
   const before = commentedRequests(requests);
-  await page.click('#bar [data-act="back"]');
+  await page.click('#tabs [data-act="tab"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
   await page.waitForFunction(() => document.getElementById("frame").contentDocument?.getElementById("mark")?.textContent === "ЗАДАЧА-1",
     null, { timeout: 15000 });
@@ -780,14 +781,14 @@ test("17: логотип і «назад до задачі» з брудною �
   await page.click('[data-cn="enable"][data-id="memo-publish"]');
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
   await page.fill('#cn-drawer [data-cn-field="note"]', "x");
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector(".cv-ask-scrim");
   assert.match(await askText(page), /Відкинути/);
   await page.click('.cv-ask-scrim button[data-a="cancel"]');
   await page.waitForSelector(".cv-ask-scrim", { state: "detached" });
   assert.equal(await page.locator("#cn-title").count(), 1, "відмова — лишились на «Підключенні»");
   assert.equal(await page.inputValue('#cn-drawer [data-cn-field="note"]'), "x", "набране збережено");
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector(".cv-ask-scrim");
   await page.click('.cv-ask-scrim button[data-a="ok"]');
   await page.waitForSelector("#tasks-home .th-card");
@@ -799,19 +800,19 @@ test("17: логотип і «назад до задачі» з брудною �
   await page.click('[data-cn="enable"][data-id="memo-publish"]');
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
   await page.fill('#cn-drawer [data-cn-field="note"]', "y");
-  await page.click('#bar [data-act="back"]');
+  await page.click('#tabs [data-act="tab"]');
   await page.waitForSelector(".cv-ask-scrim");
   assert.match(await askText(page), /Відкинути/);
   assert.equal(await page.evaluate(() => document.body.classList.contains("home-open")), true, "поки питання — екран на місці");
   await page.click('.cv-ask-scrim button[data-a="ok"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"), null, { timeout: 15000 });
   /* Чиста панель: без питання. */
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.click('#tasks-home [data-th="conn"]');
   await page.waitForSelector('.cn-card[data-id="static-publish"]');
   await page.click('[data-cn="enable"][data-id="memo-publish"]');
   await page.waitForSelector('#cn-drawer:not([hidden]) [data-cn-field="note"]');
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "чиста панель — без питання");
   assert.equal(await page.locator("#cn-drawer").isHidden(), true);

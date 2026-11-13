@@ -236,7 +236,7 @@ async function openCanvas(browser, url, view = VIEW) {
 /** Інспектор увімкнено з кнопки СМУГИ — тим самим шляхом, що й дизайнер. */
 async function openInspector(browser, url, view = VIEW) {
   const page = await openCanvas(browser, url, view);
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForFunction(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on === true, null, { timeout: 3000 });
   return page;
@@ -1113,7 +1113,7 @@ test("M. «Надіслати» ставить ready, будь-яка правк
   }, null, { timeout: 15000 });
   assert.equal(await page.evaluate(() => document.getElementById("frame").contentWindow.CanvasInspector.on), false,
     "новий документ — новий інспектор, вимкнений (так задумано)");
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForSelector("#insp-panel .insp-send", { timeout: 15000 });
   assert.equal(await page.locator('#insp-panel [data-act="insptunedrop"]').count(), 1,
     "перезавантаження рамки знесло список змін — стан жив у документі макета");

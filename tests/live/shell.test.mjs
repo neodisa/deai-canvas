@@ -683,11 +683,8 @@ test('8. з обома панелями на 1024 у «Макеті» лишає
       return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
     }, null, { timeout: 15000 });
 
-    // На 1024 (≤1060) інспектор живе в «⋯»: та сама причина, що в
-    // `shell-bar.test.mjs` («керування виглядом переїжджає в «⋯»…»).
-    await page.click('#bar [data-dd="more"]');
-    await page.locator(".dd").waitFor({ timeout: 3000 });
-    await page.click('.dd [data-act="inspector"]');
+    // З 0.25.0 інспектор живе в острівці `#hud` на будь-якій ширині (у «⋯» його нема).
+    await page.click('#hud [data-act="inspector"]');
     await page.locator("#insp-panel .insp-top").waitFor({ timeout: 5000 });
 
     const info = await page.evaluate(() => {

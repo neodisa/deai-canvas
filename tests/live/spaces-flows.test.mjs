@@ -43,7 +43,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import {
-  VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, waitText,
+  VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, waitText, waitBarReady, goTasks
 } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
@@ -87,7 +87,7 @@ async function twoSpaces(t, { open = true, extra = {} } = {}) {
   const page = await context.newPage();
   if (open) {
     await page.goto(`${server.url}/app/`);
-    await page.waitForSelector("#bar .space-chip");
+    await waitBarReady(page);
   }
   return { X, Y, server, page, context, url: server.url, home: server.home };
 }
@@ -140,7 +140,7 @@ async function turnInspectorOn(page) {
     const f = document.getElementById("frame");
     return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
   }, null, { timeout: 15000 });
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForFunction(() => document.getElementById("frame").contentWindow.CanvasInspector.on === true, null, { timeout: 5000 });
 }
 
@@ -195,6 +195,7 @@ async function closeWizard(page) {
 
 /** Відкрити «Новий простір…» з дропдауна фішки — крок 1 майстра (рядки дропдауна дочекатись: див. `spaces.test.mjs`). */
 async function openNewSpace(page, rows = 1) {
+  await goTasks(page);
   await page.click("#bar .space-chip");
   await page.waitForFunction((n) => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length >= n,
     rows, { timeout: 15000 });
@@ -510,6 +511,7 @@ test("T6d зайнятий діалог «Назва й колір…»: Esc, к
   const { page } = await twoSpaces(t);
   await page.route("**/api/space-update", async (route) => { await sleep(1500); await route.continue(); });
   const seen = watchApi(page);
+  await goTasks(page);
   await page.click("#bar .space-chip");
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   await page.click('.dd--spaces [data-act="spaceedit"]');
@@ -559,6 +561,7 @@ test("T7 фокус після діалогу: фішка («Скасувати�
     assert.ok(a && a.cls.split(" ").includes("space-chip"), `${what}: фокус не на фішці простору, а на ${JSON.stringify(a)}`);
   };
   const openDd = async () => {
+    await goTasks(page);
     await page.click("#bar .space-chip");
     await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   };
@@ -603,7 +606,7 @@ test("T7 фокус після діалогу: фішка («Скасувати�
   await chipFocused("збереження в діалозі правки");
 
   /* (ii) екран «Задачі»: «Нова задача» → «Скасувати» — фокус на кнопці, якою діалог відкрили. */
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   await page.click('#tasks-home .th-head [data-th="newtask"]');
   await page.waitForSelector('form[data-form="task"]');
@@ -613,7 +616,7 @@ test("T7 фокус після діалогу: фішка («Скасувати�
 
   /* (iii) фокус У РАМЦІ макета: діалог (що лишився, — «Назва й колір…») закривається, фокус лишається там, куди людина
      його віддала. «Новий простір» тут уже не діалог, а сторінка майстра: рамки під нею нема, охоронець — про діалог. */
-  await page.click('#bar [data-act="back"]');
+  await page.click('#tabs [data-act="tab"]');
   await page.waitForFunction(() => !document.body.classList.contains("home-open"));
   await openDd();
   await page.click('.dd--spaces [data-act="spaceedit"]');
@@ -680,7 +683,7 @@ test("T8 повернення до вікна: простір, який заві
 
 test("T8b «Спробувати ще» (`loadHome(true)`) у польоті — перечитування з фокуса його не перебиває: один запит, з refresh=1", async (t) => {
   const { page } = await twoSpaces(t);
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
 
   /* Збій огляду: дані вже є — зверху банер із кнопкою повтору. */
@@ -714,7 +717,7 @@ test("T9 червона смуга «простір не читається» з
   await page.reload();
   await page.waitForSelector(".errbar", { timeout: 15000 });
 
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home", { state: "visible" });
   await page.waitForTimeout(800);
   assert.equal(await page.locator(".errbar").count(), 1, "свідок: смуга помилки зникла ще до виправлення файла");
@@ -768,6 +771,7 @@ test("T11 лічильники запитів: дропдаун, перемик�
   const spacesN = () => count(seen, "GET /api/spaces");
 
   seen.length = 0;
+  await goTasks(page);
   await page.click("#bar .space-chip");
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   await page.waitForTimeout(300);
@@ -782,13 +786,14 @@ test("T11 лічильники запитів: дропдаун, перемик�
   assert.equal(count(seen, "GET /api/task"), 1, `перемикання: GET /api/task ×${count(seen, "GET /api/task")}`);
 
   seen.length = 0;
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector("#tasks-home .th-card");
   await page.waitForTimeout(800);
   assert.equal(spacesN(), 1, `вхід на екран: GET /api/spaces ×${spacesN()}`);
   assert.equal(count(seen, "GET /api/tasks-overview"), 1, `вхід на екран: GET /api/tasks-overview ×${count(seen, "GET /api/tasks-overview")}`);
 
   /* Перемикання, коли екран «Задачі» відкритий: він лишається екраном і не питає зайвого. */
+  await goTasks(page);
   await page.click("#bar .space-chip");
   await page.waitForFunction(() => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === 2);
   seen.length = 0;

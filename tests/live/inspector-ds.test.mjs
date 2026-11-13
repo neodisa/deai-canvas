@@ -99,7 +99,7 @@ async function openInspector(browser, url) {
     const f = document.getElementById("frame");
     return !!(f && f.contentWindow && f.contentWindow.CanvasInspector);
   }, null, { timeout: 15000 });
-  await page.click('#bar [data-act="inspector"]');
+  await page.click('#hud [data-act="inspector"]');
   await page.waitForFunction(() => document.getElementById("frame")
     .contentWindow.CanvasInspector.on === true, null, { timeout: 3000 });
   return page;

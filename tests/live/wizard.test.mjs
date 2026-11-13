@@ -75,7 +75,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText } from "./_spaces-kit.mjs";
+import { VIEW, guardRealDeai, postJson, sleep, spacesApi, stop, text, waitText, goTasks } from "./_spaces-kit.mjs";
 import { startServer, taskFixture } from "./fixture.mjs";
 
 /* Своя смуга: `node --test` крутить файли паралельно (`tests/live-ports.test.mjs` стереже, що жодна база не збігається з
@@ -298,6 +298,7 @@ const noChip = async (page, what) => assert.equal(await page.locator("#bar .spac
 
 /** «Новий простір…» з дропдауна фішки (дочекатись рядків — перший показ малюється зі старою відповіддю). */
 async function openFromMenu(page, rows = 1) {
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForFunction((n) => document.querySelectorAll('.dd--spaces .dd-item[data-act="space"]').length === n, rows);
   await page.click('.dd--spaces [data-act="spacenew"]');
@@ -405,6 +406,7 @@ test("W1: перший запуск — «Особисте», заміна по�
   await waitText(page, "#bar .space-name", "Особисте");
   /* Підсумок: «Підключення» нового простору називає нового постачальника. Це свідчить про запис і читання з сервера, а НЕ про
      легкий шлях `afterModulesChange`: вхід на екран і так перечитує простори, тож у того живого свідка нема (див. «Вижили»). */
+  await goTasks(page);
   await page.click('#bar [data-dd="space"]');
   await page.waitForSelector('.dd--spaces [data-act="conn"]');
   await page.click('.dd--spaces [data-act="conn"]');
@@ -541,7 +543,7 @@ test("W5: незбережене на кроці 3 — Esc не закриває
   assert.equal(await page.locator('#tasks-home .wz[data-step="3"]').count(), 1, "Esc лишає на кроці 3");
   assert.equal(await page.locator(".cv-ask-scrim").count(), 0, "Esc нічого не питає");
 
-  await page.click('#bar [data-act="home"]');
+  await page.click('#tabs [data-act="home"]');
   await page.waitForSelector(".cv-ask-scrim");
   assert.match(await askText(page), /Відкинути незбережені налаштування/);
   await page.click('.cv-ask-scrim button[data-a="cancel"]');
@@ -860,7 +862,7 @@ test("W15: ⌘K під запитом створення (space-new летить
   await page.locator("#palq").waitFor({ state: "visible" });
   const items = await page.locator(".pal-it").allInnerTexts();
   assert.ok(items.length > 0, "свідок: палітра відкрилась і щось пропонує (мова)");
-  assert.ok(!items.some((x) => /Studio|Новий простір|Підключення/.test(x)), `на сторінці майстра палітра не веде в інші простори: ${items.join(" | ")}`);
+  assert.ok(!items.some((x) => /Studio|Новий простір|Підключення|Налаштування/.test(x)), `на сторінці майстра палітра не веде в інші простори: ${items.join(" | ")}`);
   await page.fill("#palq", "Studio");
   await page.waitForSelector(".pal-none");
   await page.keyboard.press("Escape");
