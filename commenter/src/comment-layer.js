@@ -482,6 +482,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       .search{font-size:16px}
       .pin{min-width:30px;height:30px}                  /* larger tap target */
     }
+    .root.hosted .handle,.root.hosted .panel,.root.hosted .sheetscrim,.root.hosted .sheetpeek{display:none !important}
   `;
 
   /* ===========================================================================
@@ -519,6 +520,9 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       this.freeze = opts.freeze !== false;   // hold the host page still while commenting; opt out with freeze:false
       if (this.anchors) this.freeze = false;  // полотно — не сторінка: заморожувати нічого
       this.appLocal = !!opts.local;   // «Локальні · мені» — інший колір піна, без номера
+      /* Режим хоста (Deai 0.26.0): ручку й власну панель тримає ОБОЛОНКА; коментатор малює піни, форму й рядок режимів
+         і повідомляє хоста колбеками (`onReady`/`onChange`/`onSelect`/`onMode`). Без `host` — поведінка як до 0.26.0. */
+      this._hostOpts = opts.host && typeof opts.host === 'object' ? opts.host : null;
       this.comments = this.store.load();
       this._backupKey = 'comment-layer:backup:' + this.projectId;
       this._recoverBackup();          // resurrect anything a failed write left behind
@@ -545,6 +549,8 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         window.addEventListener('resize', () => this._placePins());
       }
       this._inited = true;
+      this._emit('onReady');
+      this._emit('onChange', this.snapshot());
       return this;
     },
 
@@ -579,7 +585,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       ((this.anchors && this.anchors.mount) || document.body).appendChild(host);
       const sh = host.attachShadow({ mode: 'open' });
       const style = document.createElement('style'); style.textContent = STYLE; sh.appendChild(style);
-      const root = document.createElement('div'); root.className = 'root' + (this.appLocal ? ' local' : '') + (this.anchors ? ' canvas' : ''); sh.appendChild(root);
+      const root = document.createElement('div'); root.className = 'root' + (this.appLocal ? ' local' : '') + (this.anchors ? ' canvas' : '') + (this._hostOpts ? ' hosted' : ''); sh.appendChild(root);
       root.innerHTML = `
         <div class="pins"></div>
         <div class="pinpop"></div>
@@ -854,6 +860,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
           if (this._panel.classList.contains('show')) { this._closePanel(); eaten(); }
           return;
         }
+        if (this._hostOpts) return;   // C/P/H — клавіші хоста
         if (this._isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
         const k = e.key.toLowerCase();
         if (k === 'c') { this._toggleComment(); eaten(); }
@@ -868,10 +875,13 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       // inside an iframe, and keys go to whichever document holds focus — without this
       // the shortcut only works after clicking inside the frame.
       const keyTargets = [window];
-      try {
-        let w = window;
-        while (w !== w.parent) { w = w.parent; void w.document.documentElement; keyTargets.push(w); }
-      } catch (err) { /* cross-origin ancestor — can't listen there, ignore */ }
+      /* Хост сам тримає C/H на своєму вікні й на вікні рамки: предків коментатор не чіпає. */
+      if (!this._hostOpts) {
+        try {
+          let w = window;
+          while (w !== w.parent) { w = w.parent; void w.document.documentElement; keyTargets.push(w); }
+        } catch (err) { /* cross-origin ancestor — can't listen there, ignore */ }
+      }
       keyTargets.forEach((w) => w.addEventListener('keydown', this._keyHandler, true));
       this._keyTargets = keyTargets;   // для destroy()
       if (!this.anchors) this._installShield();   // щит — про сторінку-хоста, на полотні його нема від чого ставити
@@ -894,6 +904,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     // Panel open/close also shifts the host page (margin) so the panel sits
     // beside content instead of covering it, and moves the FAB clear of the panel.
     _openPanel() {
+      if (this._hostOpts) return;   // панель — оболонки
       this._panel.classList.add('show');
       this._sh.classList.add('panelopen'); // mobile: full-screen overlay → hide the floating controls behind it
       // On mobile the panel is a full-screen overlay, so the page must NOT be pushed
@@ -1001,6 +1012,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
       if (!on) { this._clearMulti(); this._clearArea(); if (this._mcompose) this._mcompose.classList.remove('show'); }
       this._syncFreeze();   // the shield is only active while commenting
       this._setHover(on);
+      this._emit('onMode', !!on);
     },
     // Публічна ручка режиму коментування. Потрібна сусіднім оверлеям (інспектор
     // канваса), щоб не тягнутись у приватне й не лишати панель режимів висіти.
@@ -1394,6 +1406,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
     // Кілька карток разом (лічильник «поза кадром» на полотні): до першої, блимають усі.
     _focusCards(ids) {
+      if (this._hostOpts) { if (ids && ids.length) this._emit('onSelect', ids[0]); return; }
       if (!ids || !ids.length) return;
       this._focusCard(ids[0]);
       for (const id of ids.slice(1)) {
@@ -1406,6 +1419,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
 
     // Clicking a pin opens the panel, scrolls to its card and flashes it.
     _focusCard(id) {
+      if (this._hostOpts) { this._emit('onSelect', id); return; }
       this._openPanel();
       const el = this._sh.querySelector('#c' + id);
       if (!el) return;
@@ -1502,6 +1516,7 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
         : '';
       this._list.innerHTML = mainHtml + prevSection;
       this._placePins();
+      if (this._inited) this._emit('onChange', this.snapshot());
     },
     _card(c, isHist) {
       // Inline edit mode for this card.
@@ -1688,6 +1703,50 @@ import { fingerprint, findMatch, classify, MATCH_THRESHOLD } from './anchor.js';
     open() { this._openPanel(); },
     toggle() { this._panel.classList.contains('show') ? this._closePanel() : this._openPanel(); },
     getComments() { return this.comments.map(stripRuntime); },
+
+    /* ---- API хоста (Deai 0.26.0) ---- */
+    _emit(name, arg) {
+      const h = this._hostOpts;
+      if (!h || typeof h[name] !== 'function') return;
+      try { h[name](arg); } catch (e) { /* хост не сміє зламати коментатор */ }
+    },
+    /** Знімок для панелі хоста: копії без `_el`/`_pending`/`fp`/`htmlSnapshot` + `n` (номер піна), `scope`
+     *  (`current` — ця ітерація чи legacy, `earlier` — інша відома ітерація, `other` — решта), `where` (`here` /
+     *  `elsewhere` — інша сторінка / `offscreen` — елемента нема на екрані), `iter` (ітерація піна), `pending`. */
+    snapshot() {
+      const route = location.pathname + location.hash;
+      const where = (c) => {
+        if (!this.anchors && c.meta && c.meta.route && c.meta.route !== route) return 'elsewhere';
+        if (!this.anchors && c.status === 'open' && this._offscreen(c)) return 'offscreen';
+        return 'here';
+      };
+      const scope = (c) => (this._inScope(c) ? 'current' : (this._pinIter(c) != null ? 'earlier' : 'other'));
+      return {
+        version: this.appVersion, iteration: this._curIter(), pinsHidden: !!this._pinsHidden,
+        comments: this.comments.map((c) => {
+          const { _el, _pending, fp, htmlSnapshot, ...rest } = c;
+          return Object.assign(JSON.parse(JSON.stringify(rest)),
+            { n: this._seqOf(c), scope: scope(c), where: where(c), iter: this._pinIter(c), pending: !!_pending });
+        }),
+      };
+    },
+    /** Те саме, що клік по картці в панелі коментатора: скрол і спалах елемента (полотно — камера до піна). */
+    focus(id) { if (this._inited && this.comments.some((x) => x.id === id)) this._focusElement(id); },
+    carry(id) { if (this._inited) this._carryToCurrent(id); },
+    editComment(id, text) {
+      const v = String(text == null ? '' : text).trim();
+      const c = this.comments.find((x) => x.id === id);
+      if (!c || !v) return false;
+      c.text = v; c._pending = true;
+      this._persist(); this._render();
+      return true;
+    },
+    openShot(id) {
+      const c = this.comments.find((x) => x.id === id);
+      const src = c && c.meta && (c.meta.shot || c.meta.shotUrl);
+      if (src) this._openLightbox(src);
+    },
+    togglePins() { if (!this._inited) return false; this._togglePins(); this._render(); return !!this._pinsHidden; },
     reset() { this.comments = []; this._ver = 1; this._persist(); this._render(); this._placePins(); },
   };
 
